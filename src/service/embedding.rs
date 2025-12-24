@@ -3,13 +3,13 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use crate::config::model::ModelConfig;
 use crate::domain::{
     EmbedRequest, EmbedResponse, SearchRequest, SearchResponse, SearchResult, SimilarityRequest,
     SimilarityResponse,
 };
 use crate::engine::InferenceEngine;
 use crate::error::AppError;
-use crate::model::config::ModelConfig;
 use crate::utils::{
     cosine_similarity, normalize_l2, InputValidator, TextValidator, DEFAULT_TOP_K, MAX_BATCH_SIZE,
     MAX_TOP_K,
@@ -246,7 +246,7 @@ impl EmbeddingService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::config::{DeviceType, EngineType};
+    use crate::config::model::{DeviceType, EngineType};
     use std::path::PathBuf;
     use tempfile::tempdir;
 

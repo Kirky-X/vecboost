@@ -3,8 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use crate::config::model::{EngineType, ModelConfig};
 use crate::error::AppError;
-use crate::model::config::{EngineType, ModelConfig};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -151,7 +151,7 @@ mod tests {
             engine_type: EngineType::Candle,
             model_path: PathBuf::from("/nonexistent/path"),
             tokenizer_path: None,
-            device: crate::model::config::DeviceType::Cpu,
+            device: crate::config::model::DeviceType::Cpu,
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,

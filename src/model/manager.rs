@@ -3,8 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use crate::config::model::{EngineType, ModelConfig};
 use crate::error::AppError;
-use crate::model::config::{EngineType, ModelConfig};
 use crate::model::loader::{LoadedModel, LocalModelLoader, ModelLoader};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -100,7 +100,7 @@ impl ModelManager {
                 engine_type: model.engine_type(),
                 model_path: model.path().to_path_buf(),
                 tokenizer_path: None,
-                device: crate::model::config::DeviceType::Cpu,
+                device: crate::config::model::DeviceType::Cpu,
                 max_batch_size: 32,
                 pooling_mode: None,
                 expected_dimension: None,
@@ -235,7 +235,7 @@ mod tests {
             engine_type: EngineType::Candle,
             model_path,
             tokenizer_path: None,
-            device: crate::model::config::DeviceType::Cpu,
+            device: crate::config::model::DeviceType::Cpu,
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
@@ -261,7 +261,7 @@ mod tests {
             engine_type: EngineType::Candle,
             model_path: cache_dir.path().join("model-1"),
             tokenizer_path: None,
-            device: crate::model::config::DeviceType::Cpu,
+            device: crate::config::model::DeviceType::Cpu,
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
@@ -272,7 +272,7 @@ mod tests {
             engine_type: EngineType::Onnx,
             model_path: cache_dir.path().join("model-2"),
             tokenizer_path: None,
-            device: crate::model::config::DeviceType::Cpu,
+            device: crate::config::model::DeviceType::Cpu,
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
@@ -313,7 +313,7 @@ mod tests {
             engine_type: EngineType::Candle,
             model_path: cache_dir.path().join("test-model"),
             tokenizer_path: None,
-            device: crate::model::config::DeviceType::Cpu,
+            device: crate::config::model::DeviceType::Cpu,
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,

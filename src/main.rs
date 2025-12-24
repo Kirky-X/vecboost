@@ -10,11 +10,11 @@ use axum::{
 use std::sync::{Arc, RwLock};
 use tower_http::trace::TraceLayer;
 use vecboost::{
-    config::AppConfig,
+    config::model::ModelConfig,
     domain::{EmbedRequest, SimilarityRequest},
     engine::candle_engine::CandleEngine,
-    model::config::ModelConfig,
     service::embedding::EmbeddingService,
+    AppConfig,
 };
 
 #[tokio::main]
@@ -30,13 +30,13 @@ async fn main() -> anyhow::Result<()> {
     // 3. 创建模型配置用于维度验证
     let model_config = ModelConfig {
         name: config.model.model_repo.clone(),
-        engine_type: vecboost::model::config::EngineType::Candle,
+        engine_type: vecboost::config::model::EngineType::Candle,
         model_path: std::path::PathBuf::from(&config.model.model_repo),
         tokenizer_path: None,
         device: if config.model.use_gpu {
-            vecboost::model::config::DeviceType::Cuda
+            vecboost::config::model::DeviceType::Cuda
         } else {
-            vecboost::model::config::DeviceType::Cpu
+            vecboost::config::model::DeviceType::Cpu
         },
         max_batch_size: config.model.batch_size,
         pooling_mode: None,
@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     // 4. 初始化推理引擎
     tracing::info!("Initializing Inference Engine (this may take a while to download models)...");
     let engine: Arc<RwLock<dyn vecboost::engine::InferenceEngine + Send + Sync>> =
-        Arc::new(RwLock::new(CandleEngine::new(&config.model)?));
+        Arc::new(RwLock::new(CandleEngine::new(&model_config)?));
     let service = Arc::new(EmbeddingService::new(engine, Some(model_config)));
 
     // 4. 构建路由

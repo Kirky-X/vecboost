@@ -4,7 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 use super::InferenceEngine;
-use crate::config::ModelConfig;
+use crate::config::model::{DeviceType, ModelConfig};
 use crate::error::AppError;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
@@ -20,7 +20,8 @@ pub struct CandleEngine {
 
 impl CandleEngine {
     pub fn new(config: &ModelConfig) -> Result<Self, AppError> {
-        let device = if config.use_gpu && candle_core::utils::cuda_is_available() {
+        let device = if config.device == DeviceType::Cuda && candle_core::utils::cuda_is_available()
+        {
             tracing::info!("Using CUDA GPU");
             Device::new_cuda(0).map_err(|e| AppError::InferenceError(e.to_string()))?
         } else {
@@ -29,7 +30,10 @@ impl CandleEngine {
         };
 
         let api = Api::new().map_err(|e| AppError::ModelLoadError(e.to_string()))?;
-        let repo = api.repo(Repo::new(config.model_repo.clone(), RepoType::Model));
+        let repo = api.repo(Repo::new(
+            config.model_path.to_string_lossy().into_owned(),
+            RepoType::Model,
+        ));
 
         tracing::info!("Downloading/Loading model files...");
         let config_filename = repo

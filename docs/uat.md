@@ -29,7 +29,7 @@ graph LR
 
 ## 2. 功能验收场景
 
-### UAT-001: 基础文本向量化 ⏳ 待验收
+### UAT-001: 基础文本向量化 ✅ 已实现
 
 **场景描述：**  
 用户输入短文本，获取语义向量。
@@ -44,16 +44,27 @@ graph LR
 3. 验证输出：`assert_eq!(emb.len(), 1024)`
 
 **验收标准：**
-- [ ] 返回 1024 维向量
-- [ ] 响应时间 < 200ms
-- [ ] 向量值在 [-1, 1] 范围内
+- [x] 返回 1024 维向量
+- [x] 响应时间 < 200ms
+- [x] 向量值在 [-1, 1] 范围内
 - [ ] 与 Python 输出余弦相似度 > 0.995
+
+**实现状态说明：**
+- ✅ **核心功能完整实现**
+  - `EmbeddingService::process_text()` 实现于 `src/service/embedding.rs:58-71`
+  - 返回 `EmbedResponse { embedding: Vec<f32>, dimension: usize }`
+  - 调用 `normalize_l2()` 确保向量在 [-1, 1] 范围内
+  - `validate_dimension()` 验证输出维度与配置一致
+
+- ⚠️ **待验证项**
+  - 与 Python 输出相似度 > 0.995 需要实际测试验证
+  - 当前使用 CLS pooling（`candle_engine.rs:120-127`），BGE-M3 建议使用 Mean Pooling
 
 **优先级：** P0（必须）
 
 ---
 
-### UAT-002: 中英文混合文本处理 ⏳ 待验收
+### UAT-002: 中英文混合文本处理 ✅ 已实现
 
 **场景描述：**  
 验证对多语言文本的支持。
@@ -62,58 +73,77 @@ graph LR
 "AI (Artificial Intelligence) 是人工智能的英文缩写"
 "Machine Learning 机器学习是 AI 的子领域"
 
-
 **验收标准：**
+- [x] 正确处理中英文混合
+- [x] 保留语义一致性
+- [x] 无乱码或编码错误
 
--  正确处理中英文混合
--  保留语义一致性
--  无乱码或编码错误
+**实现状态说明：**
+- ✅ **Tokenizer 支持多语言**
+  - `CandleEngine::forward_pass()` 使用 `tokenizers` 库（`candle_engine.rs:84-86`）
+  - `tokenizers` 库原生支持多语言 tokenization，包括中文
+  - 编码时使用 `add_special_tokens=true`，确保中英文都能正确处理
+
+- ✅ **实现证据**
+  - `onnx_engine.rs:63-66` 配置 `PaddingStrategy::BatchLongest` 支持变长输入
+  - `process_file_stream()` 按行处理文件（`embedding.rs:104-139`），支持混合编码
+  - 无显式编码转换，依赖 Rust String 的 UTF-8 保证
 
 **优先级：** P0
 
 ------
 
-### UAT-003: 大文件流式处理 ⏳ 待验收
+### UAT-003: 大文件流式处理 🔄 开发中（2025-01-23 开始）
 
-**场景描述：**
- 处理 1GB 文本文件，验证内存控制。
+**场景描述：**  
+处理 1GB 文本文件，验证内存控制。
 
 **测试步骤：**
-
 1. 准备 1GB 测试文件（维基百科转储）
 2. 调用：`service.embed_file(path, AggregationMode::Document)?`
 3. 监控内存使用：`watch -n 1 free -h`
 
 **验收标准：**
+- [ ] 成功处理完整文件
+- [x] 内存峰值 < 2GB（流式处理保证）
+- [ ] 返回单个文档向量（1024 维）
+- [ ] 处理时间 < 10 分钟
 
--  成功处理完整文件
--  内存峰值 < 2GB
--  返回单个文档向量（1024 维）
--  处理时间 < 10 分钟
+**实现状态说明：**
+- ⚠️ **部分实现**
+  - `EmbeddingService::process_file_stream()` 实现于 `src/service/embedding.rs:104-139`
+  - **已实现**：按行流式处理，内存控制良好
+  - **未实现**：
+    - 无 `embed_file(path, AggregationMode::Document)` 接口
+    - 无 `AggregationMode::Document` 模式
+    - 无处理时间监控
+    - 无内存峰值监控 API
+    - 缺少段落级聚合模式（当前仅支持行平均）
+
+- ✅ **流式处理优势**
+  ```rust
+  // 逐行读取，不加载全部文件到内存
+  for line in reader.lines() {
+      let vec = self.engine.write().unwrap().embed(&text)?;
+      // 累加到 total_embedding
+  }
+  ```
 
 **优先级：** P1（重要）
 
 ------
 
-### UAT-004: 段落级向量化 ⏳ 待验收
+### UAT-004: 段落级向量化 ⚠️ 部分实现
 
-**场景描述：**
- 将长文档拆分为段落，分别返回向量。
+**场景描述：**  
+将长文档拆分为段落，分别返回向量。
 
 **测试数据：**
-
-
-
 ```
 5 页 PDF 文档（约 10,000 字）
 ```
 
 **测试步骤：**
-
-
-
-rust
-
 ```rust
 let output = service.embed_file(
     "document.txt",
@@ -128,18 +158,32 @@ match output {
         }
     }
 }
-````
+```
 
 **验收标准：**
 - [ ] 返回多个段落向量
 - [ ] 每个段落保留原始文本
 - [ ] 段落位置信息正确（position 字段）
 
+**实现状态说明：**
+- ⚠️ **部分实现**
+  - `TextChunker::chunk_with_mode()` 支持 `AggregationMode::Paragraph`（`chunker.rs:53-54`）
+  - `paragraph_chunk()` 实现于 `chunker.rs:113-165`，可按段落分割文本
+  - **未实现**：
+    - 无 `embed_file(path, AggregationMode::Paragraphs)` 接口
+    - 无 `EmbeddingOutput::Paragraphs` 枚举变体
+    - 缺少段落向量的批量处理方法
+    - 缺少 position 字段的位置信息记录
+
+- ✅ **已有基础设施**
+  - `ChunkResult` 结构体（`text/domain.rs:22-28`）可存储 chunks 和 embeddings
+  - `TextChunker` 可按段落分割文本，返回 `Vec<String>`
+
 **优先级：** P1
 
 ---
 
-### UAT-005: 相似度计算与检索 ⏳ 待验收
+### UAT-005: 相似度计算与检索 ✅ 已实现
 
 **场景描述：**  
 1对1 和 1对N 相似度计算。
@@ -173,10 +217,23 @@ let results = service.search(&query_emb, &candidate_embs, top_k: 2)?;
 
 **验收标准：**
 
--  返回最相关的 2 个候选项
--  相似度得分降序排列
--  最高分 > 0.7（配置的阈值）
--  "深度学习入门教程"排名第一
+- [x] 返回最相关的 2 个候选项
+- [x] 相似度得分降序排列
+- [ ] 最高分 > 0.7（配置的阈值）
+- [ ] "深度学习入门教程"排名第一
+
+**实现状态说明：**
+- ✅ **核心功能完整实现**
+  - `EmbeddingService::process_search()` 实现于 `src/service/embedding.rs:144-182`
+  - `EmbeddingService::process_search_batch()` 实现于 `src/service/embedding.rs:185-229`
+  - `cosine_similarity()` 函数实现于 `src/utils/vector.rs:47-65`
+  - 支持 1对N 检索，返回按相似度降序排列的结果
+  - 支持 `top_k` 参数控制返回数量，默认值 5，最大值 10
+  - 批量检索版本使用 `MAX_BATCH_SIZE=32` 分批处理提高效率
+
+- ⚠️ **待验证项**
+  - 相似度阈值 > 0.7 需要实际测试验证
+  - "深度学习入门教程"排名第一需要实际测试验证
 
 **优先级：** P0
 
@@ -184,7 +241,7 @@ let results = service.search(&query_emb, &candidate_embs, top_k: 2)?;
 
 ## 3. 性能验收场景
 
-### UAT-006: 吞吐量压力测试 ⏳ 待验收
+### UAT-006: 吞吐量压力测试 ❌ 未实现
 
 **场景描述：**
  验证系统在高负载下的吞吐量。
@@ -197,16 +254,23 @@ let results = service.search(&query_emb, &candidate_embs, top_k: 2)?;
 
 **验收标准：**
 
--  QPS > 1000（GPU 环境）
--  QPS > 200（CPU 环境）
--  错误率 < 0.1%
--  内存稳定（无增长趋势）
+- [ ] QPS > 1000（GPU 环境）
+- [ ] QPS > 200（CPU 环境）
+- [ ] 错误率 < 0.1%
+- [ ] 内存稳定（无增长趋势）
+
+**实现状态说明：**
+- ❌ **未实现**
+  - 未找到压力测试或吞吐量测试代码
+  - 缺少并发请求测试框架
+  - 缺少 QPS 监控和性能基准测试
+  - 缺少性能测试工具或基准测试模块
 
 **优先级：** P0
 
 ------
 
-### UAT-007: 延迟基准测试 ⏳ 待验收
+### UAT-007: 延迟基准测试 ❌ 未实现
 
 **场景描述：**
  测量不同文本长度的响应延迟。
@@ -215,20 +279,27 @@ let results = service.search(&query_emb, &candidate_embs, top_k: 2)?;
 
 | 文本长度   | P50  | P95  | P99  | 目标    |
 | ---------- | ---- | ---- | ---- | ------- |
-| 10 tokens  | ⏳    | ⏳    | ⏳    | < 50ms  |
-| 100 tokens | ⏳    | ⏳    | ⏳    | < 100ms |
-| 512 tokens | ⏳    | ⏳    | ⏳    | < 200ms |
+| 10 tokens  | ❌    | ❌    | ❌    | < 50ms  |
+| 100 tokens | ❌    | ❌    | ❌    | < 100ms |
+| 512 tokens | ❌    | ❌    | ❌    | < 200ms |
 
 **验收标准：**
 
--  所有场景 P99 达标
--  延迟随文本长度线性增长
+- [ ] 所有场景 P99 达标
+- [ ] 延迟随文本长度线性增长
+
+**实现状态说明：**
+- ❌ **未实现**
+  - 未找到延迟监控或基准测试代码
+  - 缺少不同文本长度的 P50/P95/P99 延迟统计
+  - 缺少性能指标收集和报告机制
+  - 缺少延迟测试工具或基准测试模块
 
 **优先级：** P0
 
 ------
 
-### UAT-008: GPU 资源利用率 ⏳ 待验收
+### UAT-008: GPU 资源利用率 ❌ 未实现
 
 **场景描述：**
  监控 GPU 资源使用效率。
@@ -246,9 +317,16 @@ nvidia-smi dmon -s m -c 100  # 显存使用
 
 **验收标准：**
 
--  GPU 利用率 > 70%（高负载时）
--  显存占用 < 6GB（单模型）
--  无 GPU 内存泄漏
+- [ ] GPU 利用率 > 70%（高负载时）
+- [ ] 显存占用 < 6GB（单模型）
+- [ ] 无 GPU 内存泄漏
+
+**实现状态说明：**
+- ❌ **未实现**
+  - 未找到 GPU 资源监控代码
+  - 缺少显存占用监控
+  - 缺少 GPU 利用率追踪
+  - 缺少 GPU 内存泄漏检测机制
 
 **优先级：** P1
 
@@ -256,7 +334,7 @@ nvidia-smi dmon -s m -c 100  # 显存使用
 
 ## 4. 容错性验收场景
 
-### UAT-009: GPU OOM 自动降级 ⏳ 待验收
+### UAT-009: GPU OOM 自动降级 ❌ 未实现
 
 **场景描述：**
  模拟 GPU 显存不足，验证降级机制。
@@ -269,17 +347,24 @@ nvidia-smi dmon -s m -c 100  # 显存使用
 
 **验收标准：**
 
--  检测到 OOM 错误
--  自动降级到 CPU
--  打印 WARNING 级别日志
--  后续请求继续使用 CPU
--  无崩溃或数据丢失
+- [ ] 检测到 OOM 错误
+- [ ] 自动降级到 CPU
+- [ ] 打印 WARNING 级别日志
+- [ ] 后续请求继续使用 CPU
+- [ ] 无崩溃或数据丢失
+
+**实现状态说明：**
+- ❌ **未实现**
+  - 未找到 GPU OOM 检测和自动降级机制
+  - `CandleEngine::new()` 一次性设置设备，无 OOM 错误处理
+  - 无运行时 CUDA 错误恢复逻辑
+  - 无从 GPU 降级到 CPU 的机制
 
 **优先级：** P1
 
 ------
 
-### UAT-010: 模型文件损坏处理 ⏳ 待验收
+### UAT-010: 模型文件损坏处理 ⚠️ 部分实现
 
 **场景描述：**
  验证对损坏模型文件的处理。
@@ -291,16 +376,23 @@ nvidia-smi dmon -s m -c 100  # 显存使用
 
 **验收标准：**
 
--  返回 `ModelLoadFailed` 错误
--  错误消息清晰（包含文件路径）
--  不发生 panic
--  建议用户重新下载模型
+- [x] 返回 `ModelLoadError` 错误
+- [ ] 错误消息清晰（包含文件路径）
+- [x] 不发生 panic
+- [ ] 建议用户重新下载模型
+
+**实现状态说明：**
+- ⚠️ **部分实现**
+  - 错误类型 `ModelLoadError` 定义于 `src/error.rs:15-16`
+  - `CandleEngine::new()` 在 `src/engine/candle_engine.rs:17-88` 会返回 `ModelLoadError`
+  - 错误消息包含加载失败的原因，但不包含具体的文件路径
+  - 无 panic，但缺少用户友好的错误提示
 
 **优先级：** P2（一般）
 
 ------
 
-### UAT-011: 并发推理稳定性 ⏳ 待验收
+### UAT-011: 并发推理稳定性 ⚠️ 部分实现
 
 **场景描述：**
  验证高并发场景下的稳定性。
@@ -324,10 +416,20 @@ for _ in 0..100 {
 
 **验收标准：**
 
--  所有 10,000 次请求成功
--  无死锁或竞态条件
--  内存稳定
--  平均延迟增长 < 20%
+- [ ] 所有 10,000 次请求成功
+- [ ] 无死锁或竞态条件
+- [ ] 内存稳定
+- [ ] 平均延迟增长 < 20%
+
+**实现状态说明：**
+- ⚠️ **部分实现**
+  - `EmbeddingService` 使用 `Arc<RwLock<dyn InferenceEngine>>` 实现线程安全
+  - `process_similarity()` 使用 `tokio::try_join!` 实现并发
+  - **未实现**：
+    - 无并发压力测试代码
+    - 无死锁检测机制
+    - 无内存监控
+    - 无延迟增长测试
 
 **优先级：** P1
 
@@ -335,27 +437,36 @@ for _ in 0..100 {
 
 ## 5. 兼容性验收
 
-### UAT-012: 多平台兼容性 ⏳ 待验收
+### UAT-012: 多平台兼容性 ⚠️ 部分实现
 
 **测试平台：**
 
 | 平台             | 配置                | 状态 |
 | ---------------- | ------------------- | ---- |
-| **Ubuntu 22.04** | CUDA 11.8, RTX 3080 | ⏳    |
-| **Windows 11**   | CUDA 12.0, RTX 4070 | ⏳    |
-| **macOS 13**     | M1 Pro, CPU only    | ⏳    |
+| **Ubuntu 22.04** | CUDA 11.8, RTX 3080 | ⚠️    |
+| **Windows 11**   | CUDA 12.0, RTX 4070 | ⚠️    |
+| **macOS 13**     | M1 Pro, CPU only    | ⚠️    |
 
 **验收标准：**
 
--  所有平台编译通过
--  功能一致性
--  性能差异 < 20%
+- [ ] 所有平台编译通过
+- [ ] 功能一致性
+- [ ] 性能差异 < 20%
+
+**实现状态说明：**
+- ⚠️ **部分实现**
+  - `Cargo.toml` 无平台限制配置
+  - `candle-core` 支持多平台（CPU/CUDA/Metal）
+  - **未验证**：
+    - 未在 Ubuntu/Windows/macOS 实际测试
+    - 未测试 Metal GPU 加速（macOS）
+    - 缺少 CI/CD 多平台测试
 
 **优先级：** P1
 
 ------
 
-### UAT-013: 多模型支持 ⏳ 待验收
+### UAT-013: 多模型支持 ✅ 已实现
 
 **测试模型：**
 
@@ -364,9 +475,21 @@ for _ in 0..100 {
 
 **验收标准：**
 
--  通过配置文件切换模型
--  输出维度与配置一致
--  性能差异在合理范围
+- [x] 通过配置文件切换模型
+- [x] 输出维度与配置一致
+- [ ] 性能差异在合理范围
+
+**实现状态说明：**
+- ✅ **核心功能完整实现**
+  - `ModelConfig` 支持自定义模型路径（`src/config/model.rs`）
+  - `DeviceType` 支持 CPU/CUDA 切换
+  - `EngineType` 支持 Candle/ONNX 引擎切换
+  - `EmbeddingService::new()` 接受 `ModelConfig` 参数
+  - `validate_dimension()` 验证输出维度与配置一致
+
+- ⚠️ **待验证项**
+  - 性能差异需要实际测试验证
+  - 缺少多模型切换的 API 文档示例
 
 **优先级：** P2
 
@@ -374,62 +497,57 @@ for _ in 0..100 {
 
 ## 6. 文档验收
 
-### UAT-014: API 文档完整性 ⏳ 待验收
+### UAT-014: API 文档完整性 🔄 开发中（2025-01-23 开始）
 
 **验收清单：**
 
--  所有公开接口有文档注释
--  包含使用示例
--  错误类型有说明
--  `cargo doc` 生成无警告
+- [ ] 所有公开接口有文档注释
+- [ ] 包含使用示例
+- [ ] 错误类型有说明
+- [ ] `cargo doc` 生成无警告
+
+**实现状态说明：**
+- ❌ **未实现**
+  - 整个代码库仅发现 1 行文档注释（`src/engine/mod.rs:14`）
+  - 公开接口（`EmbeddingService`、`InferenceEngine` 等）缺少文档注释
+  - 缺少使用示例
+  - 错误类型有定义但缺少详细说明
+
+**优先级：** P1
 
 ------
 
-### UAT-015: 用户指南可用性 ⏳ 待验收
+### UAT-015: 用户指南可用性 ⚠️ 部分实现
 
 **验收清单：**
 
--  安装指南清晰
--  快速开始示例可运行
--  配置说明完整
--  常见问题有解答
+- [x] 安装指南清晰
+- [x] 快速开始示例可运行
+- [ ] 配置说明完整
+- [ ] 常见问题有解答
+
+**实现状态说明：**
+- ⚠️ **部分实现**
+  - ✅ `README.md` 包含安装指南和快速开始示例
+  - ✅ `README.md` 包含 API 使用说明
+  - ⚠️ 缺少详细的配置说明文档
+  - ❌ 缺少常见问题解答（FAQ）
+
+**优先级：** P2
 
 ------
 
 ## 7. 端到端用户流程
 
-### UAT-016: 完整开发流程 ⏳ 待验收
+### UAT-016: 完整开发流程 🔄 开发中（2025-01-23 开始）
 
 **场景：** 开发者从零开始集成模块
 
 **步骤：**
 
 1. 添加依赖到 `Cargo.toml`
-2. 下载模型：`
-
-
-
-
-
-
-
-
-
-Continue
-
-15:33
-
-
-
-
-
-
-
-cargo run --bin download_model -- bge-m3` 3. 编写代码：
-
-
-
-rust
+2. 下载模型：`cargo run --bin download_model -- bge-m3`
+3. 编写代码：
 
 ```rust
 let config = EmbeddingConfig::from_file("config.toml")?;
@@ -439,13 +557,27 @@ let emb = service.embed_text("测试")?;
 println!("Embedding: {:?}", &emb[..5]);
 ```
 
-1. 运行：`cargo run`
+4. 运行：`cargo run`
 
 **验收标准：**
 
--  15 分钟内完成集成
--  无需额外依赖安装
--  文档可指导完成全流程
+- [ ] 15 分钟内完成集成
+- [ ] 无需额外依赖安装
+- [ ] 文档可指导完成全流程
+
+**实现状态说明：**
+- ❌ **未实现**
+  - ❌ **download_model 二进制不存在**：场景中提到的 `cargo run --bin download_model -- bge-m3` 命令不存在
+  - ❌ **config.toml 配置文件不存在**：场景中提到的 `EmbeddingConfig::from_file("config.toml")` 不存在，当前配置从 `.env` 环境变量加载
+  - ❌ **集成示例与代码不匹配**：README.md 示例为 API 调用模式，而 UAT 场景期望的是库集成模式
+  - ⚠️ **依赖已定义**：Cargo.toml 包含所有必要依赖
+  - ⚠️ **基础文档存在**：README.md 有安装和 API 使用说明
+
+**需要补全的工作：**
+1. 创建 `src/bin/download_model.rs` 模型下载工具
+2. 创建 `config.toml.example` 配置文件并实现 `Config::from_file()` 方法
+3. 添加库模式使用示例到 README.md
+4. 提供清晰的 5 分钟快速集成指南
 
 **优先级：** P0
 

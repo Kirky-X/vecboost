@@ -553,7 +553,11 @@ impl EmbeddingService {
             }
         }
 
-        let new_engine = AnyEngine::new(&model_config, model_config.engine_type.clone())?;
+        let new_engine = AnyEngine::new(
+            &model_config,
+            model_config.engine_type.clone(),
+            crate::config::model::Precision::Fp32,
+        )?;
 
         self.engine = Arc::new(RwLock::new(new_engine));
         self.model_config = Some(model_config);
@@ -626,7 +630,7 @@ impl EmbeddingService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::{DeviceType, EngineType};
+    use crate::config::model::{DeviceType, EngineType, Precision};
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -649,6 +653,14 @@ mod tests {
 
         fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
             Ok(vec![self.embedding.clone(); texts.len()])
+        }
+
+        fn precision(&self) -> Precision {
+            Precision::Fp32
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
         }
     }
 

@@ -813,8 +813,8 @@ async fn search(State(service): State<Arc<EmbeddingService>>) -> Result<Json<Sea
 | **批处理**         | 动态 batch 合并         | 3-5x 吞吐量     | ⚠️ 部分 |
 | **模型缓存**       | 单例模式 + lazy_static  | 消除重复加载    | ✅ 已实现 |
 | **Tokenizer 缓存** | LRU 缓存 token ids      | 20-30% 延迟降低 | ✅ 已实现 |
-| **混合精度**       | FP16 推理（Ampere+）    | 2x 速度提升     | ❌ 未实现 |
-| **KV Cache**       | 缓存 attention 中间结果 | 长文本加速      | ❌ 未实现 |
+| **混合精度**       | FP16 推理（Ampere+）    | 2x 速度提升     | ⚠️ 部分实现 |
+| **KV Cache**       | 缓存 attention 中间结果 | 长文本加速      | ✅ 已实现 |
 
 ### 7.2 内存优化
 

@@ -8,7 +8,7 @@ pub mod candle_engine;
 #[cfg(feature = "onnx")]
 pub mod onnx_engine;
 
-use crate::config::model::{EngineType, ModelConfig};
+use crate::config::model::{EngineType, ModelConfig, Precision};
 use crate::error::AppError;
 use async_trait::async_trait;
 
@@ -20,6 +20,12 @@ pub trait InferenceEngine: Send + Sync {
 
     /// 批量推理
     fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError>;
+
+    /// 获取当前精度设置
+    fn precision(&self) -> Precision;
+
+    /// 检查是否支持混合精度
+    fn supports_mixed_precision(&self) -> bool;
 }
 
 pub enum AnyEngine {
@@ -29,11 +35,11 @@ pub enum AnyEngine {
 }
 
 impl AnyEngine {
-    pub fn new(config: &ModelConfig, engine_type: EngineType) -> Result<Self, AppError> {
+    pub fn new(config: &ModelConfig, engine_type: EngineType, precision: Precision) -> Result<Self, AppError> {
         match engine_type {
-            EngineType::Candle => Ok(AnyEngine::Candle(candle_engine::CandleEngine::new(config)?)),
+            EngineType::Candle => Ok(AnyEngine::Candle(candle_engine::CandleEngine::new(config, precision)?)),
             #[cfg(feature = "onnx")]
-            EngineType::Onnx => Ok(AnyEngine::Onnx(onnx_engine::OnnxEngine::new(config)?)),
+            EngineType::Onnx => Ok(AnyEngine::Onnx(onnx_engine::OnnxEngine::new(config, precision)?)),
         }
     }
 }
@@ -52,6 +58,22 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Candle(engine) => engine.embed_batch(texts),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.embed_batch(texts),
+        }
+    }
+
+    fn precision(&self) -> Precision {
+        match self {
+            AnyEngine::Candle(engine) => engine.precision(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.precision(),
+        }
+    }
+
+    fn supports_mixed_precision(&self) -> bool {
+        match self {
+            AnyEngine::Candle(engine) => engine.supports_mixed_precision(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.supports_mixed_precision(),
         }
     }
 }

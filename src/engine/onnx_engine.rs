@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use super::InferenceEngine;
+use super::{InferenceEngine, Precision};
 use crate::config::model::ModelConfig;
 use crate::error::AppError;
 use crate::monitor::MemoryMonitor;
@@ -19,13 +19,17 @@ pub struct OnnxEngine {
     tokenizer: Tokenizer,
     hidden_size: usize,
     max_input_length: usize,
+    precision: Precision,
     memory_monitor: Option<Arc<MemoryMonitor>>,
 }
 
 impl OnnxEngine {
-    pub fn new(config: &ModelConfig) -> Result<Self, AppError> {
+    pub fn new(config: &ModelConfig, precision: Precision) -> Result<Self, AppError> {
         let api = Api::new().map_err(|e| AppError::ModelLoadError(e.to_string()))?;
-        let repo = api.repo(Repo::new(config.model_repo.clone(), RepoType::Model));
+        let repo = api.repo(Repo::new(
+            config.model_path.to_string_lossy().into_owned(),
+            RepoType::Model,
+        ));
 
         tracing::info!("Downloading/Loading ONNX model files...");
         let onnx_filename = repo
@@ -69,17 +73,35 @@ impl OnnxEngine {
         let hidden_size = 768;
         let max_input_length = std::cmp::min(vocab_size, 512);
 
+        let supports_cuda = session
+            .execution_providers()
+            .contains(&"CUDAExecutionProvider".to_string());
+
+        let actual_precision = match precision {
+            Precision::Fp16 => {
+                if supports_cuda {
+                    tracing::info!("Using FP16 precision with CUDA");
+                    Precision::Fp16
+                } else {
+                    tracing::warn!("FP16 not supported without CUDA, falling back to FP32");
+                    Precision::Fp32
+                }
+            }
+            _ => {
+                tracing::info!("Using {} precision", precision);
+                precision
+            }
+        };
+
         tracing::info!(
-            "ONNX Engine initialized: hidden_size={}, max_input_length={}, vocab_size={}",
+            "ONNX Engine initialized: hidden_size={}, max_input_length={}, vocab_size={}, precision={:?}",
             hidden_size,
             max_input_length,
-            vocab_size
+            vocab_size,
+            actual_precision
         );
 
-        let memory_monitor = if session
-            .execution_providers()
-            .contains(&"CUDAExecutionProvider".to_string())
-        {
+        let memory_monitor = if supports_cuda {
             Some(Arc::new(MemoryMonitor::new()))
         } else {
             None
@@ -90,16 +112,12 @@ impl OnnxEngine {
             tokenizer,
             hidden_size,
             max_input_length,
+            precision: actual_precision,
             memory_monitor,
         })
     }
 
     fn forward_pass(&mut self, text: &str) -> Result<Vec<f32>, AppError> {
-        if let Some(ref _monitor) = self.memory_monitor {
-            #[cfg(feature = "onnx")]
-            _monitor.update_gpu_memory_from_ort().await;
-        }
-
         let tokens = self
             .tokenizer
             .encode(text, true)
@@ -144,7 +162,12 @@ impl OnnxEngine {
         attention_mask: &[i64],
         hidden_size: usize,
     ) -> Result<Vec<f32>, AppError> {
-        let last_hidden_state = outputs["last_hidden_state"]
+        let outputs_map = outputs.as_hash_map();
+        let last_hidden_state_array = outputs_map
+            .get("last_hidden_state")
+            .ok_or_else(|| AppError::InferenceError("Missing last_hidden_state in outputs".to_string()))?;
+
+        let last_hidden_state = last_hidden_state_array
             .try_extract_array::<f32>()
             .map_err(|e| AppError::InferenceError(e.to_string()))?;
 
@@ -186,11 +209,6 @@ impl InferenceEngine for OnnxEngine {
     fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
         if texts.is_empty() {
             return Ok(vec![]);
-        }
-
-        if let Some(ref _monitor) = self.memory_monitor {
-            #[cfg(feature = "onnx")]
-            _monitor.update_gpu_memory_from_ort().await;
         }
 
         let batch_size = texts.len();
@@ -297,5 +315,13 @@ impl InferenceEngine for OnnxEngine {
         }
 
         Ok(results)
+    }
+
+    fn precision(&self) -> Precision {
+        self.precision.clone()
+    }
+
+    fn supports_mixed_precision(&self) -> bool {
+        self.memory_monitor.is_some()
     }
 }

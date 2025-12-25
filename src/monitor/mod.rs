@@ -175,17 +175,7 @@ impl MemoryMonitor {
 
     #[cfg(feature = "onnx")]
     pub async fn update_gpu_memory_from_ort(&self) {
-        use ort::ExecutionProviderDispatch;
-
-        if let Ok(ep) = ort::ExecutionProviderDispatch::CUDA {
-            if ep.is_available() {
-                let memory_info = ep.get_memory_info();
-                if let Ok(info) = memory_info {
-                    self.update_gpu_memory(info.used_memory() as u64, info.total_memory() as u64)
-                        .await;
-                }
-            }
-        }
+        tracing::debug!("GPU memory update from ONNX Runtime not yet implemented");
     }
 
     #[cfg(not(feature = "onnx"))]

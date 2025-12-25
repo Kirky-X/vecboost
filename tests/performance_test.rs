@@ -14,6 +14,7 @@ mod performance_tests {
     use vecboost::metrics::collector::MetricsCollector;
     use vecboost::metrics::domain::PerformanceTestConfig;
     use vecboost::metrics::performance::{generate_test_text, PerformanceTester};
+    use vecboost::config::model::Precision;
 
     #[derive(Debug, Clone)]
     struct MockEngine;
@@ -32,6 +33,14 @@ mod performance_tests {
 
         fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
             texts.iter().map(|t| self.embed(t)).collect()
+        }
+
+        fn precision(&self) -> Precision {
+            Precision::Fp32
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
         }
     }
 

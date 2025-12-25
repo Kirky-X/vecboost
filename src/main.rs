@@ -112,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
     let engine: Arc<RwLock<AnyEngine>> = Arc::new(RwLock::new(AnyEngine::new(
         &model_config,
         EngineType::Candle,
+        vecboost::config::model::Precision::Fp32,
     )?));
     let service = EmbeddingService::new(engine, Some(model_config));
     let service = Arc::new(RwLock::new(service));

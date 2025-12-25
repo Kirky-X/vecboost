@@ -10,6 +10,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 
 use vecboost::{
+    config::model::Precision,
     domain::{EmbedRequest, SearchRequest, SimilarityRequest},
     engine::InferenceEngine,
     service::embedding::EmbeddingService,
@@ -72,6 +73,14 @@ impl InferenceEngine for MockEngine {
             .map(|t| self.generate_deterministic_embedding(t))
             .collect();
         Ok(embeddings)
+    }
+
+    fn precision(&self) -> Precision {
+        Precision::Fp32
+    }
+
+    fn supports_mixed_precision(&self) -> bool {
+        false
     }
 }
 

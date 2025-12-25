@@ -55,7 +55,7 @@
 | SimilarityMetric | ✅ | ❌ 未实现 | 无枚举定义 |
 | InferenceEngine Trait | ✅ | ✅ 已实现 | 符合设计 |
 | EmbeddingOutput | ✅ | ❌ 未实现 | 无枚举定义 |
-| ModelMetadata | ✅ | ❌ 未实现 | 无结构体定义 |
+| ModelMetadata | ✅ | ✅ 已实现 | src/domain/mod.rs |
 | PerformanceMetrics | ✅ | ❌ 未实现 | 无结构体定义 |
 
 ### 1.4 数据模型符合性
@@ -66,8 +66,8 @@
 | EmbedResponse | ✅ | ✅ 已实现 | src/domain/mod.rs |
 | SimilarityRequest | ✅ | ✅ 已实现 | src/domain/mod.rs |
 | SimilarityResponse | ✅ | ✅ 已实现 | src/domain/mod.rs |
-| ModelMetadata | ✅ | ❌ 未实现 | 无此结构体 |
-| InferenceContext | ✅ | ❌ 未实现 | 无此结构体 |
+| ModelMetadata | ✅ | ✅ 已实现 | src/domain/mod.rs |
+| InferenceContext | ✅ | ❌ 未实现 | 无结构体 |
 | PerformanceMetrics | ✅ | ❌ 未实现 | 无此结构体 |
 
 ### 1.5 安全性设计符合性
@@ -77,7 +77,7 @@
 | 文本长度限制 | ✅ | ✅ 已实现 |
 | 文件大小检查 | ✅ | ⚠️ 部分实现 |
 | UTF-8 编码验证 | ✅ | ⚠️ 部分实现 |
-| GPU 内存监控 | ✅ | ❌ 未实现 |
+| GPU 内存监控 | ✅ | ✅ 已实现 |
 | 并发请求限制 | ✅ | ✅ 已实现 |
 
 ### 1.6 检查总结
@@ -102,7 +102,7 @@
 **安全性设计符合性**: ⚠️ 部分实现
 - ✅ 输入验证机制已实现（InputValidator 模块）
 - ✅ 并发请求限制已实现
-- ❌ 无 GPU 内存监控
+- ❌ 无 GPU 内存监控 (部分实现: MemoryMonitor 结构已创建)
 - ⚠️ 文件大小检查部分实现
 - ⚠️ UTF-8 编码验证部分实现
 
@@ -117,7 +117,7 @@
 - ✅ 已完成: 添加模型配置文件支持 (ModelRepository)
 - ✅ 已完成: 添加多种相似度度量方式 (SimilarityMetric 枚举)
 - ✅ 已完成: 实现 MetricsCollector 性能指标收集
-- ⏳ 待实现: 实现 MemoryMonitor 内存监控
+- ⏳ 待实现: 实现 MemoryMonitor 内存监控 (CPU部分已完成, GPU部分待集成)
 - ⏳ 待实现: 实现 ModelDownloader 模块封装 ModelScope SDK
 ```mermaid
 graph TB
@@ -673,7 +673,7 @@ async fn search(State(service): State<Arc<EmbeddingService>>) -> Result<Json<Sea
 | ------------------ | ----------------------- | --------------- | -------- |
 | **批处理**         | 动态 batch 合并         | 3-5x 吞吐量     | ⚠️ 部分 |
 | **模型缓存**       | 单例模式 + lazy_static  | 消除重复加载    | ✅ 已实现 |
-| **Tokenizer 缓存** | LRU 缓存 token ids      | 20-30% 延迟降低 | ❌ 未实现 |
+| **Tokenizer 缓存** | LRU 缓存 token ids      | 20-30% 延迟降低 | ✅ 已实现 |
 | **混合精度**       | FP16 推理（Ampere+）    | 2x 速度提升     | ❌ 未实现 |
 | **KV Cache**       | 缓存 attention 中间结果 | 长文本加速      | ❌ 未实现 |
 

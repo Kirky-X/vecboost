@@ -42,6 +42,12 @@ ort = { version = "2.0.0-rc.10", optional = true }
 uuid = { version = "1.7", features = ["v4"] }
 clap = { version = "4.4", features = ["derive"] }
 tempfile = "3.12"
+futures = "0.3"
+sys-info = "0.9"
+num_cpus = "1.16"
+lru = "0.12"
+hashbrown = "0.14"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [features]
 default = []

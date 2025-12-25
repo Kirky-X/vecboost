@@ -14,6 +14,6 @@ pub use constants::{
 };
 pub use validator::{FileValidator, InputValidator, TextValidator, ValidationConfig};
 pub use vector::{
-    calculate_similarity, cosine_similarity, dot_product, euclidean_distance,
-    manhattan_distance, normalize_l2, AggregationMode, SimilarityMetric,
+    calculate_similarity, cosine_similarity, dot_product, euclidean_distance, manhattan_distance,
+    normalize_l2, AggregationMode, SimilarityMetric,
 };

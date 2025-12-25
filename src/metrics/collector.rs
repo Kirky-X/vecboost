@@ -128,11 +128,8 @@ impl MetricsCollector {
     }
 
     pub async fn record_error(&self, model_name: &str, input_length: usize, error: &str) {
-        let record = InferenceRecord::failure(
-            model_name.to_string(),
-            input_length,
-            error.to_string(),
-        );
+        let record =
+            InferenceRecord::failure(model_name.to_string(), input_length, error.to_string());
 
         self.record_inference_full(record).await;
 
@@ -169,11 +166,8 @@ impl MetricsCollector {
     }
 
     pub async fn record_inference_error(&self, model_name: &str) {
-        let record = InferenceRecord::failure(
-            model_name.to_string(),
-            0,
-            "Inference error".to_string(),
-        );
+        let record =
+            InferenceRecord::failure(model_name.to_string(), 0, "Inference error".to_string());
 
         self.record_inference_full(record).await;
 
@@ -194,7 +188,9 @@ impl MetricsCollector {
     pub async fn collect_resource_utilization(&self) -> ResourceUtilization {
         let memory_stats = self.memory_monitor.refresh().await;
 
-        let cpu_usage = sys_info::loadavg().map(|load| load.one * 10.0).unwrap_or(0.0);
+        let cpu_usage = sys_info::loadavg()
+            .map(|load| load.one * 10.0)
+            .unwrap_or(0.0);
 
         let memory_usage_percent = if memory_stats.total_bytes > 0 {
             (memory_stats.current_bytes as f64 / memory_stats.total_bytes as f64) * 100.0
@@ -203,7 +199,10 @@ impl MetricsCollector {
         };
 
         let gpu_utilization = if self.config.enable_gpu_metrics {
-            self.memory_monitor.get_gpu_stats().await.map(|gpu| gpu.utilization_percent)
+            self.memory_monitor
+                .get_gpu_stats()
+                .await
+                .map(|gpu| gpu.utilization_percent)
         } else {
             None
         };
@@ -272,13 +271,21 @@ impl MetricsCollector {
 
         let min = samples
             .iter()
-            .min_by(|a, b| a.inference_time_ms.partial_cmp(&b.inference_time_ms).unwrap())
+            .min_by(|a, b| {
+                a.inference_time_ms
+                    .partial_cmp(&b.inference_time_ms)
+                    .unwrap()
+            })
             .cloned()
             .unwrap_or_default();
 
         let max = samples
             .iter()
-            .max_by(|a, b| a.inference_time_ms.partial_cmp(&b.inference_time_ms).unwrap())
+            .max_by(|a, b| {
+                a.inference_time_ms
+                    .partial_cmp(&b.inference_time_ms)
+                    .unwrap()
+            })
             .cloned()
             .unwrap_or_default();
 
@@ -563,9 +570,7 @@ mod tests {
             )
             .await;
 
-        collector
-            .record_error("test-model", 100, "Error")
-            .await;
+        collector.record_error("test-model", 100, "Error").await;
 
         let summary = collector.get_summary().await;
         assert!((summary.success_rate() - 50.0).abs() < 0.001);

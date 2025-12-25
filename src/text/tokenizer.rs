@@ -201,11 +201,7 @@ impl CachedTokenizer {
         format!("{:016x}_{}", hash, add_special_tokens)
     }
 
-    pub async fn encode(
-        &self,
-        text: &str,
-        add_special_tokens: bool,
-    ) -> Result<Encoding, AppError> {
+    pub async fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, AppError> {
         let key = self.hash_key(text, add_special_tokens);
 
         {

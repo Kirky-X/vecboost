@@ -14,9 +14,7 @@ use tokio::sync::{Barrier, Semaphore};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::metrics::domain::{
-    LatencyBenchmarkResult, PerformanceTestConfig, ThroughputResult,
-};
+use crate::metrics::domain::{LatencyBenchmarkResult, PerformanceTestConfig, ThroughputResult};
 
 pub struct PerformanceTester<E: InferenceEngine + Send + Sync> {
     engine: Arc<tokio::sync::RwLock<E>>,

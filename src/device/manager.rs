@@ -151,17 +151,15 @@ impl DeviceManager {
         }
     }
 
-    pub async fn select_device(
-        &self,
-        preferred: &DeviceType,
-        require_gpu: bool,
-    ) -> DeviceType {
+    pub async fn select_device(&self, preferred: &DeviceType, require_gpu: bool) -> DeviceType {
         self.ensure_initialized().await;
         let devices = self.devices.read().await;
 
         if require_gpu {
             for device in devices.iter() {
-                if device.device_type == DeviceType::Cuda && device.status == DeviceStatus::Available {
+                if device.device_type == DeviceType::Cuda
+                    && device.status == DeviceStatus::Available
+                {
                     debug!("Selected GPU device: {}", device.name);
                     return device.device_type.clone();
                 }
@@ -191,9 +189,9 @@ impl DeviceManager {
     pub async fn check_device_available(&self, device: &DeviceType) -> bool {
         self.ensure_initialized().await;
         let devices = self.devices.read().await;
-        devices.iter().any(|d| {
-            d.device_type == *device && d.status == DeviceStatus::Available
-        })
+        devices
+            .iter()
+            .any(|d| d.device_type == *device && d.status == DeviceStatus::Available)
     }
 
     pub async fn get_device_info(&self, device: &DeviceType) -> Option<DeviceInfo> {

@@ -161,11 +161,7 @@ impl InferenceRecord {
         }
     }
 
-    pub fn failure(
-        model_name: String,
-        input_length: usize,
-        error_message: String,
-    ) -> Self {
+    pub fn failure(model_name: String, input_length: usize, error_message: String) -> Self {
         Self {
             model_name,
             input_length,
@@ -253,28 +249,14 @@ mod tests {
 
     #[test]
     fn test_performance_metrics_throughput() {
-        let metrics = PerformanceMetrics::new(
-            Duration::from_secs(2),
-            1000,
-            0,
-            0,
-            1,
-            512,
-        );
+        let metrics = PerformanceMetrics::new(Duration::from_secs(2), 1000, 0, 0, 1, 512);
 
         assert!((metrics.throughput() - 500.0).abs() < 0.1);
     }
 
     #[test]
     fn test_performance_metrics_latency() {
-        let metrics = PerformanceMetrics::new(
-            Duration::from_millis(150),
-            512,
-            0,
-            0,
-            1,
-            512,
-        );
+        let metrics = PerformanceMetrics::new(Duration::from_millis(150), 512, 0, 0, 1, 512);
 
         let latency = metrics.latency();
         assert!((latency.as_secs_f64() - 0.15).abs() < 0.001);
@@ -282,13 +264,8 @@ mod tests {
 
     #[test]
     fn test_inference_record_success() {
-        let record = InferenceRecord::success(
-            "test-model".to_string(),
-            100,
-            512,
-            50.0,
-            1024 * 1024,
-        );
+        let record =
+            InferenceRecord::success("test-model".to_string(), 100, 512, 50.0, 1024 * 1024);
 
         assert!(record.success);
         assert!(record.error_message.is_none());
@@ -298,11 +275,8 @@ mod tests {
 
     #[test]
     fn test_inference_record_failure() {
-        let record = InferenceRecord::failure(
-            "test-model".to_string(),
-            100,
-            "Out of memory".to_string(),
-        );
+        let record =
+            InferenceRecord::failure("test-model".to_string(), 100, "Out of memory".to_string());
 
         assert!(!record.success);
         assert!(record.error_message.is_some());

@@ -7,9 +7,7 @@ use crate::error::AppError;
 #[cfg(test)]
 use crate::text::domain::ChunkResult;
 use crate::text::domain::{ChunkRequest, ChunkResponse};
-use crate::utils::constants::{
-    DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP_RATIO, MIN_CHUNK_SIZE_RATIO,
-};
+use crate::utils::constants::{DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP_RATIO, MIN_CHUNK_SIZE_RATIO};
 use crate::utils::AggregationMode;
 use tokenizers::Tokenizer;
 

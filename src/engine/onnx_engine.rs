@@ -232,11 +232,12 @@ impl InferenceEngine for OnnxEngine {
         let mut batch_input_ids = vec![0i64; padded_batch_size * max_seq_len];
         let mut batch_attention_mask = vec![0i64; padded_batch_size * max_seq_len];
 
-        for (batch_idx, (input_ids, attention_mask)) in
-            all_input_ids.iter().zip(all_attention_masks.iter()).enumerate()
+        for (batch_idx, (input_ids, attention_mask)) in all_input_ids
+            .iter()
+            .zip(all_attention_masks.iter())
+            .enumerate()
         {
-            for (seq_idx, (&id, &mask)) in input_ids.iter().zip(attention_mask.iter()).enumerate()
-            {
+            for (seq_idx, (&id, &mask)) in input_ids.iter().zip(attention_mask.iter()).enumerate() {
                 let pos = batch_idx * max_seq_len + seq_idx;
                 batch_input_ids[pos] = id;
                 batch_attention_mask[pos] = mask;

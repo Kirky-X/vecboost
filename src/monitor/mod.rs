@@ -181,11 +181,8 @@ impl MemoryMonitor {
             if ep.is_available() {
                 let memory_info = ep.get_memory_info();
                 if let Ok(info) = memory_info {
-                    self.update_gpu_memory(
-                        info.used_memory() as u64,
-                        info.total_memory() as u64,
-                    )
-                    .await;
+                    self.update_gpu_memory(info.used_memory() as u64, info.total_memory() as u64)
+                        .await;
                 }
             }
         }
@@ -260,7 +257,9 @@ mod tests {
     async fn test_gpu_memory_update() {
         let monitor = MemoryMonitor::new();
 
-        monitor.update_gpu_memory(4 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024).await;
+        monitor
+            .update_gpu_memory(4 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024)
+            .await;
 
         let stats = monitor.get_gpu_stats().await;
         assert!(stats.is_some());

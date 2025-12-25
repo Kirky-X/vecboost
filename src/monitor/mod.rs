@@ -25,19 +25,14 @@ pub struct GpuMemoryStats {
     pub utilization_percent: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum DeviceType {
+    #[default]
     Cpu,
     Gpu {
         device_id: usize,
         device_name: String,
     },
-}
-
-impl Default for DeviceType {
-    fn default() -> Self {
-        DeviceType::Cpu
-    }
 }
 
 #[derive(Debug, Clone)]

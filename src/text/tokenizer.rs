@@ -180,8 +180,7 @@ impl CachedTokenizer {
         let capacity = std::cmp::min(
             NonZeroUsize::new(std::cmp::max(cache_size, 1)).unwrap(),
             NonZeroUsize::new(MAX_CACHE_SIZE).unwrap(),
-        )
-        .into();
+        );
         Self {
             tokenizer,
             max_length,
@@ -375,7 +374,6 @@ mod tests {
         let tokenizer = Tokenizer::from_file_with_max_length(&path, 512).unwrap();
 
         let encoding = tokenizer.encode("Hello world", true).unwrap();
-        assert!(encoding.len() > 0);
         assert!(!encoding.is_empty());
         assert_eq!(encoding.ids[0], 101);
     }
@@ -386,7 +384,6 @@ mod tests {
         let tokenizer = Tokenizer::from_file_with_max_length(&path, 512).unwrap();
 
         let encoding = tokenizer.encode("你好世界", false).unwrap();
-        assert!(encoding.len() > 0);
         assert!(!encoding.is_empty());
     }
 
@@ -396,7 +393,7 @@ mod tests {
         let tokenizer = Tokenizer::from_file_with_max_length(&path, 512).unwrap();
 
         let encoding = tokenizer.encode("Hello 你好 world 世界", false).unwrap();
-        assert!(encoding.len() > 0);
+        assert!(!encoding.is_empty());
         assert!(!encoding.is_empty());
     }
 
@@ -438,8 +435,8 @@ mod tests {
 
         assert_eq!(encoding.len(), encoding.ids.len());
         assert!(!encoding.is_empty());
-        assert!(encoding.get_ids().len() > 0);
-        assert!(encoding.get_tokens().len() > 0);
+        assert!(!encoding.get_ids().is_empty());
+        assert!(!encoding.get_tokens().is_empty());
     }
 
     #[tokio::test]
@@ -449,7 +446,7 @@ mod tests {
         let cached = CachedTokenizer::with_default_cache(tokenizer.tokenizer, 512);
 
         let encoding1 = cached.encode("Hello world", true).await.unwrap();
-        assert!(encoding1.len() > 0);
+        assert!(!encoding1.is_empty());
 
         let stats = cached.get_cache_stats().await;
         assert_eq!(stats.misses, 1);
@@ -513,8 +510,6 @@ mod tests {
         let encodings = cached.encode_batch(&texts, true).await.unwrap();
 
         assert_eq!(encodings.len(), 3);
-        for encoding in &encodings {
-            assert!(encoding.len() > 0);
-        }
+        assert!(!encodings.is_empty());
     }
 }

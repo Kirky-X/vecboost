@@ -161,11 +161,9 @@ impl DeviceManager {
 
         if require_gpu {
             for device in devices.iter() {
-                if device.device_type == DeviceType::Cuda {
-                    if device.status == DeviceStatus::Available {
-                        debug!("Selected GPU device: {}", device.name);
-                        return device.device_type.clone();
-                    }
+                if device.device_type == DeviceType::Cuda && device.status == DeviceStatus::Available {
+                    debug!("Selected GPU device: {}", device.name);
+                    return device.device_type.clone();
                 }
             }
             warn!("No available GPU, falling back to CPU");

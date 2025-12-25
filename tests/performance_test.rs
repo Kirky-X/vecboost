@@ -80,7 +80,7 @@ mod performance_tests {
         };
 
         let result = tester
-            .run_throughput_test(config, |len| generate_test_text(len))
+            .run_throughput_test(config, generate_test_text)
             .await
             .expect("Throughput test should complete");
 
@@ -93,7 +93,7 @@ mod performance_tests {
         );
 
         assert!(
-            result.qps >= threshold as f64,
+            result.qps >= threshold,
             "QPS {} is below threshold {}",
             result.qps,
             threshold
@@ -115,7 +115,7 @@ mod performance_tests {
         };
 
         let result = tester
-            .run_throughput_test(config, |len| generate_test_text(len))
+            .run_throughput_test(config, generate_test_text)
             .await
             .expect("Throughput test should complete");
 
@@ -240,7 +240,7 @@ mod performance_tests {
         let tester = create_tester();
 
         let result = tester
-            .run_latency_benchmark(|len| generate_test_text(len))
+            .run_latency_benchmark(generate_test_text)
             .await
             .expect("Latency benchmark should complete");
 
@@ -306,7 +306,7 @@ mod performance_tests {
             };
 
             let _ = tester
-                .run_throughput_test(config, |len| generate_test_text(len))
+                .run_throughput_test(config, generate_test_text)
                 .await;
         }
 

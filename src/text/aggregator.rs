@@ -238,7 +238,7 @@ mod tests {
         ];
         let result = aggregator.aggregate(&embeddings).unwrap();
 
-        let expected = vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
+        let expected = [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
         assert!(result
             .iter()
             .zip(expected.iter())

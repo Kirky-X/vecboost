@@ -36,23 +36,12 @@ impl From<&ConfigDeviceType> for DeviceCategory {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct DeviceCapability {
     pub supports_float16: bool,
     pub supports_tensor_cores: bool,
     pub max_memory_bytes: u64,
     pub compute_capability: Option<(u8, u8)>,
-}
-
-impl Default for DeviceCapability {
-    fn default() -> Self {
-        Self {
-            supports_float16: false,
-            supports_tensor_cores: false,
-            max_memory_bytes: 0,
-            compute_capability: None,
-        }
-    }
 }
 
 #[cfg(test)]

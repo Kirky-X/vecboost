@@ -3,8 +3,10 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use crate::config::model::{DeviceType, PoolingMode};
 use crate::utils::AggregationMode;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 pub struct EmbedRequest {
@@ -62,10 +64,10 @@ pub enum EmbeddingOutput {
 
 #[derive(Debug, Serialize)]
 pub struct FileProcessingStats {
-    pub lines_processed: usize,
-    pub paragraphs_processed: usize,
+    pub total_chunks: usize,
+    pub successful_chunks: usize,
+    pub failed_chunks: usize,
     pub processing_time_ms: u128,
-    pub memory_peak_mb: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,9 +103,15 @@ pub struct BatchEmbeddingResult {
     pub embedding: Vec<f32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ModelSwitchRequest {
     pub model_name: String,
+    pub model_path: Option<PathBuf>,
+    pub tokenizer_path: Option<PathBuf>,
+    pub device: Option<DeviceType>,
+    pub max_batch_size: Option<usize>,
+    pub pooling_mode: Option<PoolingMode>,
+    pub expected_dimension: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]

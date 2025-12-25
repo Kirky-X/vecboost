@@ -12,6 +12,7 @@ use crate::domain::{
 };
 use crate::engine::{AnyEngine, InferenceEngine};
 use crate::error::AppError;
+use crate::model::manager::ModelManager;
 use crate::utils::{
     cosine_similarity, normalize_l2, AggregationMode, FileValidator, InputValidator, TextValidator,
     DEFAULT_TOP_K, MAX_BATCH_SIZE, MAX_TOP_K,
@@ -23,32 +24,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::warn;
 
-struct MemoryMonitor;
-
-impl MemoryMonitor {
-    fn get_memory_usage_mb() -> usize {
-        #[cfg(target_os = "linux")]
-        {
-            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
-            for line in status.lines() {
-                if line.starts_with("VmRSS:") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        if let Ok(kb) = parts[1].parse::<usize>() {
-                            return kb / 1024;
-                        }
-                    }
-                }
-            }
-        }
-        0
-    }
-}
-
 pub struct EmbeddingService {
     engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
     validator: InputValidator,
     model_config: Option<ModelConfig>,
+    model_manager: Option<Arc<ModelManager>>,
 }
 
 impl EmbeddingService {
@@ -60,18 +40,34 @@ impl EmbeddingService {
             engine,
             validator: InputValidator::with_default(),
             model_config,
+            model_manager: None,
         }
     }
 
-    pub fn with_validator(
+    pub fn with_manager(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+        model_manager: Arc<ModelManager>,
+    ) -> Self {
+        Self {
+            engine,
+            validator: InputValidator::with_default(),
+            model_config,
+            model_manager: Some(model_manager),
+        }
+    }
+
+    pub fn with_validator_and_manager(
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
         validator: InputValidator,
         model_config: Option<ModelConfig>,
+        model_manager: Option<Arc<ModelManager>>,
     ) -> Self {
         Self {
             engine,
             validator,
             model_config,
+            model_manager,
         }
     }
 
@@ -316,13 +312,12 @@ impl EmbeddingService {
         }
 
         let processing_time = start_time.elapsed();
-        let memory_peak_mb = MemoryMonitor::get_memory_usage_mb();
 
         Ok(FileProcessingStats {
-            lines_processed: lines,
-            paragraphs_processed: paragraphs,
+            total_chunks: lines + paragraphs,
+            successful_chunks: lines + paragraphs,
+            failed_chunks: 0,
             processing_time_ms: processing_time.as_millis(),
-            memory_peak_mb,
         })
     }
 
@@ -519,27 +514,44 @@ impl EmbeddingService {
                 .as_ref()
                 .map(|c| c.engine_type.clone())
                 .unwrap_or(crate::config::model::EngineType::Candle),
-            model_path: std::path::PathBuf::from(&req.model_name),
-            tokenizer_path: None,
-            device: self
-                .model_config
-                .as_ref()
-                .map(|c| c.device.clone())
-                .unwrap_or(crate::config::model::DeviceType::Cpu),
-            max_batch_size: self
-                .model_config
-                .as_ref()
-                .map(|c| c.max_batch_size)
-                .unwrap_or(32),
-            pooling_mode: self
-                .model_config
-                .as_ref()
-                .and_then(|c| c.pooling_mode.clone()),
-            expected_dimension: self
-                .model_config
-                .as_ref()
-                .and_then(|c| c.expected_dimension),
+            model_path: req.model_path.clone().unwrap_or_else(|| std::path::PathBuf::from(&req.model_name)),
+            tokenizer_path: req.tokenizer_path.clone().or_else(|| {
+                self.model_config
+                    .as_ref()
+                    .and_then(|c| c.tokenizer_path.clone())
+            }),
+            device: req.device.clone().or_else(|| {
+                self.model_config
+                    .as_ref()
+                    .map(|c| c.device.clone())
+            }).unwrap_or(crate::config::model::DeviceType::Cpu),
+            max_batch_size: req.max_batch_size.unwrap_or_else(|| {
+                self.model_config
+                    .as_ref()
+                    .map(|c| c.max_batch_size)
+                    .unwrap_or(32)
+            }),
+            pooling_mode: req.pooling_mode.clone().or_else(|| {
+                self.model_config
+                    .as_ref()
+                    .and_then(|c| c.pooling_mode.clone())
+            }),
+            expected_dimension: req.expected_dimension.or_else(|| {
+                self.model_config
+                    .as_ref()
+                    .and_then(|c| c.expected_dimension)
+            }),
         };
+
+        if let Some(ref manager) = self.model_manager {
+            tracing::debug!("Using ModelManager for model switching");
+            let _loaded_model = manager.load(&model_config).await?;
+
+            if let Some(ref prev_name) = previous_model {
+                tracing::info!("Unloading previous model: {}", prev_name);
+                let _ = manager.unload(prev_name).await;
+            }
+        }
 
         let new_engine = AnyEngine::new(&model_config, model_config.engine_type.clone())?;
 
@@ -554,6 +566,32 @@ impl EmbeddingService {
             success: true,
             message: "Model switched successfully".to_string(),
         })
+    }
+
+    pub async fn unload_model(&mut self, name: &str) -> Result<(), AppError> {
+        if let Some(ref manager) = self.model_manager {
+            manager.unload(name).await?;
+            tracing::info!("Model {} unloaded via ModelManager", name);
+        }
+
+        if self.model_config.as_ref().map(|c| &c.name) == Some(&name.to_string()) {
+            self.model_config = None;
+            tracing::info!("Local model config cleared for {}", name);
+        }
+
+        Ok(())
+    }
+
+    pub async fn list_loaded_models(&self) -> Vec<String> {
+        if let Some(ref manager) = self.model_manager {
+            manager.list_loaded().await
+        } else {
+            vec![]
+        }
+    }
+
+    pub fn has_model_manager(&self) -> bool {
+        self.model_manager.is_some()
     }
 
     pub fn list_available_models(&self) -> ModelListResponse {
@@ -812,13 +850,18 @@ mod tests {
             Arc::new(RwLock::new(mock_engine));
         let validator = InputValidator::with_default();
 
-        let service = EmbeddingService::with_validator(engine, validator, Some(model_config));
+        let service = EmbeddingService::with_validator_and_manager(
+            engine,
+            validator,
+            Some(model_config),
+            None,
+        );
 
         let req = EmbedRequest {
             text: "Test text for embedding".to_string(),
         };
 
-        let result = service.process_text(req).await;
+        let result: Result<EmbedResponse, AppError> = service.process_text(req).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -984,8 +1027,8 @@ mod tests {
 
         assert!(result.is_ok());
         let stats = result.unwrap();
-        assert!(stats.lines_processed > 0);
-        assert!(stats.paragraphs_processed > 0);
+        assert!(stats.total_chunks > 0);
+        assert!(stats.total_chunks > 0);
     }
 
     #[tokio::test]

@@ -9,15 +9,20 @@ use crate::model::loader::{LoadedModel, LocalModelLoader, ModelLoader};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio::time::timeout;
 use tracing::info;
 use tracing::warn;
+
+const DEFAULT_MODEL_LOAD_TIMEOUT_SECS: u64 = 300;
 
 #[derive(Clone)]
 pub struct ModelManager {
     models: Arc<RwLock<HashMap<String, Arc<dyn LoadedModel>>>>,
     loader: Arc<dyn ModelLoader>,
     default_config: ModelConfig,
+    timeout_duration: Duration,
 }
 
 impl ModelManager {
@@ -32,7 +37,13 @@ impl ModelManager {
             models: Arc::new(RwLock::new(HashMap::new())),
             loader,
             default_config: ModelConfig::default(),
+            timeout_duration: Duration::from_secs(DEFAULT_MODEL_LOAD_TIMEOUT_SECS),
         }
+    }
+
+    pub fn with_timeout(mut self, timeout_secs: u64) -> Self {
+        self.timeout_duration = Duration::from_secs(timeout_secs);
+        self
     }
 
     pub async fn load(&self, config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, AppError> {
@@ -46,14 +57,39 @@ impl ModelManager {
             return Ok(existing);
         }
 
-        info!("Loading model: {} from {:?}", model_name, config.model_path);
-        let model = self.loader.load(config).await?;
+        info!(
+            "Loading model: {} from {:?} (timeout: {:?})",
+            model_name,
+            config.model_path,
+            self.timeout_duration
+        );
 
-        let mut models = self.models.write().await;
-        models.insert(model_name.clone(), Arc::clone(&model));
+        let load_future = self.loader.load(config);
+        match timeout(self.timeout_duration, load_future).await {
+            Ok(Ok(model)) => {
+                let mut models = self.models.write().await;
+                models.insert(model_name.clone(), Arc::clone(&model));
 
-        info!("Model {} loaded successfully", model_name);
-        Ok(model)
+                info!("Model {} loaded successfully", model_name);
+                Ok(model)
+            }
+            Ok(Err(e)) => {
+                warn!("Model {} loading failed: {}", model_name, e);
+                Err(AppError::ModelLoadError(format!(
+                    "Failed to load model {}: {}",
+                    model_name,
+                    e
+                )))
+            }
+            Err(_) => {
+                warn!("Model {} loading timed out after {:?}", model_name, self.timeout_duration);
+                Err(AppError::ModelLoadError(format!(
+                    "Model loading timed out after {} seconds: {}",
+                    self.timeout_duration.as_secs(),
+                    model_name
+                )))
+            }
+        }
     }
 
     pub async fn get(&self, name: &str) -> Option<Arc<dyn LoadedModel>> {
@@ -209,7 +245,64 @@ impl ModelStats {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
     use tempfile::tempdir;
+    use async_trait::async_trait;
+
+    struct SlowModelLoader {
+        delay_ms: u64,
+    }
+
+    impl SlowModelLoader {
+        fn new(delay_ms: u64) -> Self {
+            Self { delay_ms }
+        }
+    }
+
+    #[async_trait]
+    impl ModelLoader for SlowModelLoader {
+        async fn load(&self, config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, AppError> {
+            tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
+
+            let model: Arc<dyn LoadedModel> = Arc::new(CandleModel {
+                path: config.model_path.clone(),
+                name: config.name.clone(),
+            });
+
+            Ok(model)
+        }
+
+        async fn get_model_path(&self, config: &ModelConfig) -> Result<PathBuf, AppError> {
+            Ok(config.model_path.clone())
+        }
+
+        async fn is_model_cached(&self, _config: &ModelConfig) -> bool {
+            true
+        }
+    }
+
+    struct CandleModel {
+        path: PathBuf,
+        name: String,
+    }
+
+    impl LoadedModel for CandleModel {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn engine_type(&self) -> EngineType {
+            EngineType::Candle
+        }
+
+        fn reload(&self) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
 
     fn create_test_model_file(path: &PathBuf) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -368,5 +461,121 @@ mod tests {
         };
 
         assert_eq!(stats.format_size(), "1 KB");
+    }
+
+    #[tokio::test]
+    async fn test_model_manager_with_timeout() {
+        let cache_dir = tempdir().unwrap();
+        let loader = Arc::new(LocalModelLoader::new(cache_dir.path().to_path_buf()));
+        let manager = ModelManager::with_loader(loader).with_timeout(1);
+
+        assert_eq!(manager.timeout_duration.as_secs(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_model_manager_load_timeout_success() {
+        let cache_dir = tempdir().unwrap();
+        let loader = Arc::new(LocalModelLoader::new(cache_dir.path().to_path_buf()));
+        let manager = ModelManager::with_loader(loader).with_timeout(30);
+
+        let config = ModelConfig {
+            name: "timeout-test-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: cache_dir.path().join("timeout-test-model"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+        };
+
+        fs::create_dir_all(&config.model_path).unwrap();
+
+        let result = manager.load(&config).await;
+        assert!(result.is_ok());
+        assert_eq!(manager.count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_model_manager_load_reuses_existing() {
+        let cache_dir = tempdir().unwrap();
+        let loader = Arc::new(LocalModelLoader::new(cache_dir.path().to_path_buf()));
+        let manager = ModelManager::with_loader(loader).with_timeout(30);
+
+        let config = ModelConfig {
+            name: "reuse-test-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: cache_dir.path().join("reuse-test-model"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+        };
+
+        fs::create_dir_all(&config.model_path).unwrap();
+
+        let first = manager.load(&config).await.unwrap();
+        let second = manager.load(&config).await.unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(manager.count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_model_manager_load_timeout_failure() {
+        let cache_dir = tempdir().unwrap();
+        let slow_loader = Arc::new(SlowModelLoader::new(2000));
+        let manager = ModelManager::with_loader(slow_loader).with_timeout(1);
+
+        let config = ModelConfig {
+            name: "slow-timeout-test-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: cache_dir.path().join("slow-timeout-test-model"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+        };
+
+        fs::create_dir_all(&config.model_path).unwrap();
+
+        let result = manager.load(&config).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(e) => {
+                let error_msg = e.to_string();
+                assert!(error_msg.contains("timed out"), "Expected 'timed out' in error message, got: {}", error_msg);
+            }
+            Ok(_) => panic!("Expected error, but got success"),
+        }
+        assert_eq!(manager.count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_model_manager_load_success_after_timeout() {
+        let cache_dir = tempdir().unwrap();
+        let slow_loader = Arc::new(SlowModelLoader::new(100));
+        let manager = ModelManager::with_loader(slow_loader).with_timeout(5);
+
+        let config = ModelConfig {
+            name: "success-after-timeout-test-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: cache_dir.path().join("success-after-timeout-test-model"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+        };
+
+        fs::create_dir_all(&config.model_path).unwrap();
+
+        let result = manager.load(&config).await;
+
+        assert!(result.is_ok());
+        assert_eq!(manager.count().await, 1);
     }
 }

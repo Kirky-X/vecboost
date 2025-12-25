@@ -305,9 +305,7 @@ mod performance_tests {
                 timeout_seconds: 30,
             };
 
-            let _ = tester
-                .run_throughput_test(config, generate_test_text)
-                .await;
+            let _ = tester.run_throughput_test(config, generate_test_text).await;
         }
 
         println!("Memory stability test completed - no memory leaks detected");

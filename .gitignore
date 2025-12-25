@@ -1,0 +1,6 @@
+.trae/
+docs/prd.md
+docs/tdd.md
+docs/test.md
+docs/uat.md
+Cargo.lock

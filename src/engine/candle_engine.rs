@@ -69,6 +69,9 @@ impl CandleEngine {
         }
 
         // Load Model
+        // SAFETY: The weights_filename comes from hf-hub which is a trusted source.
+        // The safetensors format is designed to be memory-safe with explicit bounds checking.
+        // We only mmap read-only and the data format is validated by candle-core.
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[weights_filename], DType::F32, &device)
         }

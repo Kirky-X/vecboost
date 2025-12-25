@@ -8,7 +8,7 @@ authors = ["Architecture Team"]
 # Web Framework
 axum = "0.7"
 tokio = { version = "1.35", features = ["full"] }
-tower-http = { version = "0.5", features = ["trace", "cors"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "add-extension", "validate-request", "set-header"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -49,6 +49,7 @@ lru = "0.12"
 hashbrown = "0.14"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 chrono = { version = "0.4", features = ["serde"] }
+regex = "1.10"
 
 [features]
 default = []

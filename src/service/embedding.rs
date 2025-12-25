@@ -13,8 +13,8 @@ use crate::domain::{
 use crate::engine::{AnyEngine, InferenceEngine};
 use crate::error::AppError;
 use crate::utils::{
-    cosine_similarity, normalize_l2, AggregationMode, FileValidator, InputValidator, TextValidator, DEFAULT_TOP_K,
-    MAX_BATCH_SIZE, MAX_TOP_K,
+    cosine_similarity, normalize_l2, AggregationMode, FileValidator, InputValidator, TextValidator,
+    DEFAULT_TOP_K, MAX_BATCH_SIZE, MAX_TOP_K,
 };
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -131,7 +131,10 @@ impl EmbeddingService {
 
     /// 处理大文件流式向量化 (简单实现：按行平均)
     pub async fn process_file_stream(&self, path: &Path) -> Result<EmbedResponse, AppError> {
-        self.validator.validate_file(path.to_str().unwrap_or(""))?;
+        let path_str = path.to_str().ok_or_else(|| {
+            AppError::InvalidInput("Invalid path encoding: path contains invalid UTF-8".to_string())
+        })?;
+        self.validator.validate_file(path_str)?;
 
         let start_time = std::time::Instant::now();
         let file = File::open(path)?;
@@ -152,7 +155,10 @@ impl EmbeddingService {
         path: &Path,
         mode: AggregationMode,
     ) -> Result<EmbeddingOutput, AppError> {
-        self.validator.validate_file(path.to_str().unwrap_or(""))?;
+        let path_str = path.to_str().ok_or_else(|| {
+            AppError::InvalidInput("Invalid path encoding: path contains invalid UTF-8".to_string())
+        })?;
+        self.validator.validate_file(path_str)?;
 
         let start_time = std::time::Instant::now();
         let file = File::open(path)?;
@@ -430,11 +436,7 @@ impl EmbeddingService {
             for (text, mut embedding) in chunk.iter().zip(chunk_embeddings.into_iter()) {
                 normalize_l2(&mut embedding);
 
-                let text_preview = if text.len() > 100 {
-                    &text[..100]
-                } else {
-                    text
-                }.to_string();
+                let text_preview = if text.len() > 100 { &text[..100] } else { text }.to_string();
 
                 let dim = embedding.len();
                 if dimension.is_none() {
@@ -529,7 +531,10 @@ impl EmbeddingService {
                 .as_ref()
                 .map(|c| c.max_batch_size)
                 .unwrap_or(32),
-            pooling_mode: self.model_config.as_ref().and_then(|c| c.pooling_mode.clone()),
+            pooling_mode: self
+                .model_config
+                .as_ref()
+                .and_then(|c| c.pooling_mode.clone()),
             expected_dimension: self
                 .model_config
                 .as_ref()
@@ -563,7 +568,10 @@ impl EmbeddingService {
                 .as_ref()
                 .map(|c| c.engine_type.to_string())
                 .unwrap_or_else(|| "candle".to_string()),
-            dimension: self.model_config.as_ref().and_then(|c| c.expected_dimension),
+            dimension: self
+                .model_config
+                .as_ref()
+                .and_then(|c| c.expected_dimension),
             is_loaded: true,
         };
 
@@ -1093,10 +1101,7 @@ mod tests {
 
         let texts = vec!["Single text".to_string()];
 
-        let req = BatchEmbedRequest {
-            texts,
-            mode: None,
-        };
+        let req = BatchEmbedRequest { texts, mode: None };
 
         let result = service.process_batch(req).await;
 
@@ -1119,10 +1124,7 @@ mod tests {
         let long_text = "A".repeat(200);
         let texts = vec![long_text.clone()];
 
-        let req = BatchEmbedRequest {
-            texts,
-            mode: None,
-        };
+        let req = BatchEmbedRequest { texts, mode: None };
 
         let result = service.process_batch(req).await;
 

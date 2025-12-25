@@ -4,12 +4,33 @@
 // See LICENSE file in the project root for full license information.
 
 use crate::error::AppError;
+use std::io::BufRead;
 use std::num::NonZeroUsize;
 
 pub use super::constants::{
     MAX_BATCH_SIZE, MAX_CONCURRENT_REQUESTS, MAX_FILE_SIZE_BYTES, MAX_SEARCH_RESULTS,
     MAX_TEXT_LENGTH, MIN_TEXT_LENGTH,
 };
+
+const ALLOWED_FILE_EXTENSIONS: &[&str] = &[
+    "txt", "md", "json", "csv", "xml", "html", "htm", "rst", "py", "rs", "js", "ts",
+];
+
+const TEXT_FILE_MAGIC_NUMBERS: &[(&[u8], &[u8], &str)] = &[
+    (&[0xEF, 0xBB, 0xBF], &[], "UTF-8 BOM"),
+    (&[0xFF, 0xFE], &[], "UTF-16 LE BOM"),
+    (&[0xFE, 0xFF], &[], "UTF-16 BE BOM"),
+    (
+        &[0x3C, 0x21, 0x64, 0x6F, 0x63, 0x74, 0x79, 0x70, 0x65],
+        &[],
+        "HTML/DOCTYPE",
+    ),
+    (&[0x3C, 0x68, 0x74, 0x6D, 0x6C], &[], "HTML"),
+    (&[0x7B, 0x22], &[], "JSON"),
+    (&[0x3C, 0x3F, 0x78, 0x6D, 0x6C], &[], "XML"),
+];
+
+const MAX_MAGIC_BYTES: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ValidationConfig {
@@ -212,6 +233,84 @@ impl InputValidator {
             ))),
         }
     }
+
+    fn validate_file_extension(&self, path: &str) -> Result<(), AppError> {
+        let ext = path
+            .rsplit('.')
+            .next()
+            .ok_or_else(|| AppError::InvalidInput("File has no extension".to_string()))?;
+
+        let ext_lower = ext.to_ascii_lowercase();
+        if !ALLOWED_FILE_EXTENSIONS.contains(&ext_lower.as_str()) {
+            return Err(AppError::InvalidInput(format!(
+                "File extension '.{}' is not allowed. Allowed extensions: {:?}",
+                ext, ALLOWED_FILE_EXTENSIONS
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn validate_file_content(&self, path: &str) -> Result<(), AppError> {
+        use std::fs::File;
+        use std::io::Read;
+
+        let file = File::open(path)
+            .map_err(|e| AppError::InvalidInput(format!("Cannot open file: {}", e)))?;
+
+        let mut buffer = [0u8; MAX_MAGIC_BYTES];
+        let mut reader = std::io::BufReader::new(file);
+
+        reader
+            .read(&mut buffer)
+            .map_err(|e| AppError::InvalidInput(format!("Cannot read file: {}", e)))?;
+
+        let bytes_read = reader
+            .fill_buf()
+            .map_err(|e| AppError::InvalidInput(format!("Cannot read file buffer: {}", e)))?;
+
+        if bytes_read.is_empty() {
+            return Ok(());
+        }
+
+        let mut has_text_marker = false;
+        for (magic, mask, _name) in TEXT_FILE_MAGIC_NUMBERS {
+            let magic_len = magic.len();
+            if bytes_read.len() >= magic_len {
+                let mut matches = true;
+                for (i, &magic_byte) in magic.iter().enumerate() {
+                    let mask_byte = mask.get(i).copied().unwrap_or(0xFF);
+                    if (bytes_read[i] & mask_byte) != magic_byte {
+                        matches = false;
+                        break;
+                    }
+                }
+                if matches {
+                    has_text_marker = true;
+                    break;
+                }
+            }
+        }
+
+        if !has_text_marker {
+            for &byte in bytes_read.iter().take(256) {
+                if byte < 0x09 || (byte > 0x0A && byte < 0x20 && byte != 0x1E && byte != 0x1F) {
+                    return Err(AppError::InvalidInput(
+                        "File contains non-text binary data".to_string(),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_file_path(&self, path: &str) -> Result<(), AppError> {
+        self.validate_file_extension(path)?;
+        self.validate_file_size(path)?;
+        self.validate_file_content(path)?;
+        Ok(())
+    }
 }
 
 pub trait FileValidator {
@@ -275,8 +374,6 @@ mod validator_tests {
         assert!(validator
             .validate_search("", &["text1".to_string()], Some(5))
             .is_err());
-        assert!(validator
-            .validate_search("query", &[], Some(5))
-            .is_err());
+        assert!(validator.validate_search("query", &[], Some(5)).is_err());
     }
 }

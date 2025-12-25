@@ -8,11 +8,56 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use regex::Regex;
 use serde_json::json;
 use thiserror::Error;
 
 unsafe impl Send for AppError {}
 unsafe impl Sync for AppError {}
+
+const MAX_ERROR_MESSAGE_LENGTH: usize = 200;
+
+static SANITIZE_PATTERNS: std::sync::OnceLock<Vec<(Regex, &'static str)>> =
+    std::sync::OnceLock::new();
+
+fn get_sanitize_patterns() -> &'static Vec<(Regex, &'static str)> {
+    SANITIZE_PATTERNS.get_or_init(|| {
+        vec![
+            (
+                Regex::new(r#"/[a-zA-Z0-9/_.-]+/[a-zA-Z0-9/_.-]+\.\w+"#).unwrap(),
+                "[REDACTED_PATH]",
+            ),
+            (
+                Regex::new(r#"C:\\[a-zA-Z0-9_\\]+\.\w+"#).unwrap(),
+                "[REDACTED_WINDOWS_PATH]",
+            ),
+            (Regex::new(r#"token \d+"#).unwrap(), "token [ID]"),
+            (
+                Regex::new(r#"at position \d+"#).unwrap(),
+                "at position [REDACTED]",
+            ),
+            (Regex::new(r#"\.unwrap\(\)"#).unwrap(), "[INTERNAL_ERROR]"),
+            (
+                Regex::new(r#"expect\([^)]+\)"#).unwrap(),
+                "[INTERNAL_ERROR]",
+            ),
+        ]
+    })
+}
+
+fn sanitize_error_message(msg: &str) -> String {
+    let mut sanitized = msg.to_string();
+    for (pattern, replacement) in get_sanitize_patterns() {
+        sanitized = pattern.replace_all(&sanitized, *replacement).to_string();
+    }
+
+    if sanitized.len() > MAX_ERROR_MESSAGE_LENGTH {
+        sanitized.truncate(MAX_ERROR_MESSAGE_LENGTH);
+        sanitized.push_str("...");
+    }
+
+    sanitized
+}
 
 #[derive(Error, Debug, Clone)]
 pub enum AppError {
@@ -80,8 +125,10 @@ impl IntoResponse for AppError {
             AppError::ModelNotLoaded(_) => StatusCode::FAILED_DEPENDENCY,
         };
 
+        let sanitized_message = sanitize_error_message(&self.to_string());
+
         let body = Json(json!({
-            "error": self.to_string(),
+            "error": sanitized_message,
             "code": status.as_u16()
         }));
 

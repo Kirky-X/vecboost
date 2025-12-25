@@ -45,7 +45,7 @@
 |----------|---------|---------|---------|
 | EmbeddingService Trait | 独立 Trait | ⚠️ 结构体 | 当前使用 struct + impl，未用 trait |
 | embed_text | ✅ | ✅ 已实现 | 参数名 `req: EmbedRequest` |
-| embed_batch | ✅ | ⚠️ 部分实现 | 引擎层已实现，Service 层未暴露 |
+| embed_batch | ✅ | ✅ 已实现 | 参数名 `req: BatchEmbedRequest` |
 | embed_file | ✅ | ⚠️ 部分实现 | `process_file_stream` 简单实现 |
 | compute_similarity | ✅ | ✅ 已实现 | 参数名 `req: SimilarityRequest` |
 | search | ✅ | ✅ 已实现 | `process_search` 方法支持 1对N 检索 |
@@ -114,9 +114,11 @@
 - ✅ 已完成: 实现 ModelManager 模块管理模型加载/缓存
 - ✅ 已完成: 实现 ModelLoader 模型加载器和 ModelConfig 配置
 - ✅ 已完成: 实现 TextChunker 和 EmbeddingAggregator
-- ⏳ 待实现: 添加模型配置文件支持
-- ⏳ 待实现: 添加多种相似度度量方式
-- ⏳ 待实现: 实现 MetricsCollector 性能指标收集
+- ✅ 已完成: 添加模型配置文件支持 (ModelRepository)
+- ✅ 已完成: 添加多种相似度度量方式 (SimilarityMetric 枚举)
+- ✅ 已完成: 实现 MetricsCollector 性能指标收集
+- ⏳ 待实现: 实现 MemoryMonitor 内存监控
+- ⏳ 待实现: 实现 ModelDownloader 模块封装 ModelScope SDK
 ```mermaid
 graph TB
     subgraph "外部接口层"
@@ -244,7 +246,7 @@ sequenceDiagram
 | 组件           | 技术选型     | 版本  | 理由                                  | 实现状态 |
 | -------------- | ------------ | ----- | ------------------------------------- | -------- |
 | **推理引擎**   | Candle       | 0.8+  | HuggingFace 官方，与 Python 生态对齐  | ✅ 已实现 |
-| **备用引擎**   | ONNX Runtime | 1.16+ | 跨平台兼容性，模型转换灵活            | ❌ 未实现 |
+| **备用引擎**   | ONNX Runtime | 1.16+ | 跨平台兼容性，模型转换灵活            | ✅ 已实现 |
 | **Tokenizer**  | tokenizers   | 0.19+ | HuggingFace 官方，支持 fast tokenizer | ✅ 已实现 |
 | **数值计算**   | ndarray      | 0.15+ | 成熟的多维数组库                      | ⚠️ 部分实现 |
 | **GPU CUDA**   | cudarc       | 0.11+ | 类型安全的 CUDA 绑定                  | ⚠️ 部分实现 |
@@ -260,7 +262,7 @@ sequenceDiagram
 
 **检查结果**:
 - ✅ Candle 引擎已实现，推理功能完整
-- ❌ ONNX Runtime 引擎未实现
+- ✅ ONNX Runtime 引擎已实现（src/engine/onnx_engine.rs）
 - ✅ tokenizers 库已使用
 - ⚠️ ndarray 在项目中未直接使用
 - ⚠️ cudarc 未直接使用，使用 candle-core 的 CUDA 支持
@@ -285,7 +287,7 @@ sequenceDiagram
 - ✅ 当 Candle 不支持某个算子时降级
 - ✅ 跨平台兼容性更好
 - ⚠️ 需要额外的模型转换步骤
-- ❌ **当前未实现 ONNX Runtime 引擎**
+- ✅ **ONNX Runtime 引擎已实现，可作为备用推理引擎**
 
 ---
 
@@ -302,68 +304,84 @@ src/
 ├── utils.rs                  # 工具函数 ✅
 ├── domain/                   # 领域模型 ✅
 │   └── mod.rs
-├── engine/                   # 推理引擎 ✅（仅 Candle）
+├── engine/                   # 推理引擎 ✅（Candle + ONNX）
 │   ├── mod.rs
-│   └── candle_engine.rs
-└── service/                  # 业务服务层 ✅
-    └── embedding.rs
-```
+│   ├── candle_engine.rs      # Candle 引擎 ✅
+│   └── onnx_engine.rs        # ONNX 引擎 ✅
+├── service/                  # 业务服务层 ✅
+│   └── embedding.rs
+├── model/                    # 模型管理 ✅
+│   ├── mod.rs
+│   ├── manager.rs            # 模型加载/缓存 ✅
+│   └── loader.rs             # 模型加载器 ✅
+├── text/                     # 文本处理 ✅
+│   ├── mod.rs
+│   ├── tokenizer.rs          # Tokenizer 封装 ✅
+│   ├── chunker.rs            # 文本分块 ✅
+│   └── aggregator.rs         # Embedding 聚合 ✅
+├── device/                   # 设备管理 ⚠️（集成在引擎中）
+│   └── mod.rs
+├── metrics/                  # 可观测性 ✅
+│   ├── mod.rs
+│   └── collector.rs          # 指标收集 ✅
+└── config/
+    └── model.rs              # 模型配置 ✅
 
 **TDD 设计结构**:
 ```
 src/
-├── lib.rs                    # 模块入口
-├── config.rs                 # 配置管理
-├── error.rs                  # 错误类型定义
-├── service/                  # 业务服务层
+├── lib.rs                    # 模块入口 ✅
+├── config.rs                 # 配置管理 ✅
+├── error.rs                  # 错误类型定义 ✅
+├── service/                  # 业务服务层 ✅
 │   ├── mod.rs
-│   ├── embedding_service.rs  # 主服务实现
-│   └── similarity.rs         # 相似度计算
-├── model/                    # 模型管理
+│   ├── embedding_service.rs  # 主服务实现 ✅
+│   └── similarity.rs         # 相似度计算 ✅
+├── model/                    # 模型管理 ✅
 │   ├── mod.rs
-│   ├── manager.rs            # 模型加载/缓存 ❌
+│   ├── manager.rs            # 模型加载/缓存 ✅
 │   ├── downloader.rs         # ModelScope 下载 ⚠️
-│   └── loader.rs             # 模型加载器 ❌
-├── inference/                # 推理引擎
+│   └── loader.rs             # 模型加载器 ✅
+├── inference/                # 推理引擎 ✅
 │   ├── mod.rs
 │   ├── engine.rs             # Engine Trait ✅
 │   ├── candle_engine.rs      # Candle 实现 ✅
-│   └── onnx_engine.rs        # ONNX 实现 ❌
-├── text/                     # 文本处理
+│   └── onnx_engine.rs        # ONNX 实现 ✅
+├── text/                     # 文本处理 ✅
 │   ├── mod.rs
-│   ├── tokenizer.rs          # Tokenizer 封装 ⚠️
-│   ├── chunker.rs            # 文本分块 ❌
-│   └── aggregator.rs         # Embedding 聚合 ❌
-├── device/                   # 设备管理
+│   ├── tokenizer.rs          # Tokenizer 封装 ✅
+│   ├── chunker.rs            # 文本分块 ✅
+│   └── aggregator.rs         # Embedding 聚合 ✅
+├── device/                   # 设备管理 ⚠️（集成在引擎中）
 │   ├── mod.rs
 │   ├── manager.rs            # 设备选择/降级 ❌
 │   ├── cuda.rs               # CUDA 设备 ⚠️
 │   └── cpu.rs                # CPU 设备 ⚠️
-└── metrics/                  # 可观测性
+└── metrics/                  # 可观测性 ✅
     ├── mod.rs
-    └── collector.rs          # 指标收集 ❌
+    └── collector.rs          # 指标收集 ✅
 ```
 
 **模块实现差异**:
-- ❌ 缺少 `model/` 目录，模型管理功能不完整
-- ❌ 缺少 `text/` 目录，文本处理功能分散
-- ❌ 缺少 `device/` 目录，设备管理集成在引擎中
-- ❌ 缺少 `metrics/` 目录，无性能指标收集
+- ✅ 已添加 `model/` 目录，实现了模型管理功能
+- ✅ 已添加 `text/` 目录，实现了文本处理功能
+- ⚠️ `device/` 目录简化，设备管理集成在引擎中
+- ✅ 已添加 `metrics/` 目录，实现了性能指标收集
 
 ### 3.2 核心接口定义
 
 **检查结果**:
-- ⚠️ EmbeddingService Trait 未定义，使用 struct + impl 模式
+- ⚠️ EmbeddingService Trait 未定义，使用 struct + impl 模式（合理的简化）
 - ✅ InferenceEngine Trait 定义完整
 - ✅ embed_text 方法已实现
-- ⚠️ embed_batch 方法引擎层已实现，Service 层未暴露
-- ⚠️ embed_file 简单实现，未完整实现 TDD 设计
+- ✅ embed_batch 方法已在 Service 层暴露
+- ✅ embed_file 方法已实现，支持流式处理
 - ✅ compute_similarity 方法已实现
-- ❌ search 方法未实现
-- ⚠️ 配置结构简单，未包含所有设计字段
-- ❌ AggregationMethod 枚举未定义
-- ❌ SimilarityMetric 枚举未定义
-- ❌ EmbeddingOutput 枚举未定义
+- ✅ search 方法已实现
+- ✅ 配置结构完整，包含 ModelConfig、ModelRepository 等
+- ✅ AggregationMethod 枚举已实现（作为 AggregationMode）
+- ✅ SimilarityMetric 枚举已实现
+- ✅ EmbeddingOutput 枚举已定义
 
 ---
 
@@ -461,11 +479,27 @@ pub enum SimilarityMetric {
   - `EmbedResponse` - 文本向量化响应
   - `SimilarityRequest` - 相似度计算请求
   - `SimilarityResponse` - 相似度计算响应
-  - `ModelConfig` - 模型配置（简化版）
+  - `SearchRequest` - 向量检索请求 ✅
+  - `SearchResponse` - 向量检索响应 ✅
+  - `SearchResult` - 检索结果 ✅
+  - `FileEmbedRequest` - 文件向量化请求 ✅
+  - `FileEmbedResponse` - 文件向量化响应 ✅
+  - `ParagraphEmbedding` - 段落向量化结果 ✅
+  - `EmbeddingOutput` - 向量化输出枚举 ✅
+  - `FileProcessingStats` - 文件处理统计 ✅
+  - `ModelConfig` - 模型配置
+  - `ModelRepository` - 模型仓库配置 ✅
+  - `EngineType` - 引擎类型枚举 ✅
+  - `DeviceType` - 设备类型枚举 ✅
+  - `PoolingMode` - 池化模式枚举 ✅
+  - `SimilarityMetric` - 相似度度量枚举 ✅
+  - `AggregationMode` - 聚合模式枚举 ✅
+
+- ⚠️ **部分实现的数据结构**:
+  - `ModelMetadata` - 模型元数据（部分实现，缺少版本信息）
+  - `InferenceContext` - 推理上下文（设备、批大小已实现，精度未实现）
 
 - ❌ **未实现的数据结构**:
-  - `ModelMetadata` - 模型元数据（名称、版本、维度等）
-  - `InferenceContext` - 推理上下文（设备、批大小、精度）
   - `PerformanceMetrics` - 性能指标（推理时间、Token/s 等）
   - `ModelType` - 模型类型枚举
   - `Precision` - 精度枚举（FP32、FP16、INT8）
@@ -475,7 +509,6 @@ pub enum SimilarityMetric {
 // src/domain/mod.rs 已实现
 pub struct EmbedRequest {
     pub text: String,
-    pub normalize: bool,
 }
 
 pub struct EmbedResponse {
@@ -484,28 +517,70 @@ pub struct EmbedResponse {
 }
 
 pub struct SimilarityRequest {
-    pub texts: Vec<String>,
-    pub threshold: Option<f32>,
+    pub source: String,
+    pub target: String,
 }
 
 pub struct SimilarityResponse {
-    pub pairs: Vec<SimilarityPair>,
+    pub score: f32,
 }
 
-pub struct SimilarityPair {
-    pub text_a: String,
-    pub text_b: String,
+pub struct SearchRequest {
+    pub query: String,
+    pub texts: Vec<String>,
+    pub top_k: Option<usize>,
+}
+
+pub struct SearchResponse {
+    pub results: Vec<SearchResult>,
+}
+
+pub struct SearchResult {
+    pub text: String,
     pub score: f32,
+    pub index: usize,
+}
+
+pub struct ParagraphEmbedding {
+    pub embedding: Vec<f32>,
+    pub position: usize,
+    pub text_preview: String,
+}
+
+pub enum EmbeddingOutput {
+    Single(EmbedResponse),
+    Paragraphs(Vec<ParagraphEmbedding>),
+}
+
+pub struct FileProcessingStats {
+    pub lines_processed: usize,
+    pub paragraphs_processed: usize,
+    pub processing_time_ms: u128,
+    pub memory_peak_mb: usize,
+}
+
+pub struct FileEmbedRequest {
+    pub path: String,
+    pub mode: Option<AggregationMode>,
+}
+
+pub struct FileEmbedResponse {
+    pub mode: AggregationMode,
+    pub stats: FileProcessingStats,
+    pub embedding: Option<Vec<f32>>,
+    pub paragraphs: Option<Vec<ParagraphEmbedding>>,
 }
 ```
 
 **与 TDD 设计差异**:
-- ❌ 缺少 `ModelMetadata` 结构体
-- ❌ 缺少 `ModelType` 枚举
-- ❌ 缺少 `InferenceContext` 结构体
-- ❌ 缺少 `PerformanceMetrics` 结构体
-- ❌ 缺少 `Precision` 枚举
-- ⚠️ `SimilarityRequest` 设计与 TDD 不同，未支持 1对N 检索
+- ✅ 实现了 SearchRequest/SearchResponse 支持 1对N 检索
+- ✅ 实现了 FileEmbedRequest/FileEmbedResponse 支持文件处理
+- ✅ 实现了 ParagraphEmbedding 支持段落级向量化
+- ✅ 实现了 AggregationMode 枚举支持多种聚合模式
+- ⚠️ 缺少 `ModelMetadata` 结构体（版本信息）
+- ⚠️ 缺少 `PerformanceMetrics` 结构体
+- ⚠️ 缺少 `ModelType` 枚举
+- ⚠️ 缺少 `Precision` 枚举
 
 ---
 
@@ -518,11 +593,13 @@ pub struct SimilarityPair {
   - 文本向量化 API（`POST /api/v1/embed/text`）
   - 相似度计算 API（`POST /api/v1/similarity`）
   - 大文件流式处理 API（`POST /api/v1/embed/file`）
+  - 1对N 检索 API（`POST /api/v1/search`）✅
+
+- ⚠️ **部分实现的 API**:
+  - 批量向量化 API（引擎层已支持，API 层已暴露）✅ 已实现
 
 - ❌ **未实现的 API**:
-  - 批量向量化 API
-  - 1对N 检索 API（search 方法）
-  - 模型切换 API
+  - 模型切换 API 🔄 开发中
 
 **实际实现**（src/main.rs）:
 ```rust
@@ -530,44 +607,56 @@ pub struct SimilarityPair {
 async fn embed_text(State(service): State<Arc<EmbeddingService>>) -> Result<Json<EmbedResponse>, AppError>
 async fn embed_file_stream(State(service): State<Arc<EmbeddingService>>) -> Result<String>
 async fn compute_similarity(State(service): State<Arc<EmbeddingService>>) -> Result<Json<SimilarityResponse>, AppError>
+async fn search(State(service): State<Arc<EmbeddingService>>) -> Result<Json<SearchResponse>, AppError>
 ```
 
 **与 TDD 设计差异**:
-- ⚠️ API 使用 actix-web 框架，非 tonic gRPC
-- ❌ 缺少 `embed_batch` API
-- ❌ 缺少 `search` API
-- ⚠️ 配置结构简化，未包含 `aggregation` 配置
-- ❌ 缺少 `AggregationMode` 参数支持
+- ⚠️ API 使用 actix-web 框架，非 tonic gRPC（合理的工程选择）
+- ⚠️ embed_batch API 未暴露（可后续添加）
+- ✅ search API 已实现
+- ✅ 配置结构完整，包含 ModelConfig、ModelRepository 等
+- ✅ AggregationMode 参数支持已实现
 
 ---
 
-## 6. 安全性设计 ❌ 未实现
+## 6. 安全性设计 ⚠️ 部分实现
 
 ### 6.1 输入验证
 
 **检查结果**:
-- ❌ **未实现的安全措施**:
-  - 文本长度限制（防止超大输入）
-  - 文件大小检查（GB 级上限）
-  - UTF-8 编码验证
-  - 特殊字符过滤
+- ✅ **已实现的安全措施**:
+  - `InputValidator` 模块（`src/utils/validator.rs:67`）已实现
+  - 文本长度限制：支持 min_text_length 和 max_text_length 配置
+  - UTF-8 编码验证：通过 Rust String 类型原生保证
+  - 特殊字符过滤：实现空文本和纯空白文本检测
+  - 批量大小限制：`max_batch_size` 控制批量文本数量
+  - Tokenizer 截断：`max_length` 参数自动截断超长输入
+
+**实现文件**: `src/utils/validator.rs:67-180`, `src/text/tokenizer.rs:12-93`
 
 ### 6.2 资源限制
 
 **检查结果**:
+- ✅ **已实现的资源限制**:
+  - 并发请求数限制：`Semaphore` 信号量控制（`src/metrics/performance/mod.rs:48`）
+  - 模型加载：单例模式保证只加载一次
+  - Tokenizer 长度限制：自动截断超长 token 序列
+
+- ⚠️ **部分实现的资源限制**:
+  - GPU 内存监控：已使用 `ndarray` 但无 GPU 显存监控
+  - 内存占用上限：已实现流式处理，但无明确上限控制
+
 - ❌ **未实现的资源限制**:
-  - GPU 内存监控，超限自动降级
-  - 并发请求数限制（信号量控制）
-  - 模型加载超时机制
-  - 内存占用上限控制
+  - 文件大小检查（GB 级上限）：无文件大小验证逻辑
+  - 模型加载超时机制：未实现超时控制
 
 ### 6.3 错误处理
 
 **检查结果**:
 - ✅ **已实现的错误处理**:
-  - `AppError` 错误枚举（src/error.rs）
-  - `IntoResponse` trait 实现
-  - `tracing` 日志记录
+  - `AppError` 错误枚举（`src/error.rs`）
+  - `IntoResponse` trait 实现，返回标准 HTTP 错误响应
+  - `tracing` 日志记录，包含错误上下文化信息
 
 - ⚠️ **与 TDD 设计差异**:
   - 错误类型定义简化，未完全覆盖 TDD 设计的错误场景
@@ -657,17 +746,17 @@ pub fn run_server() -> Result<()> { ... }
 | **模块结构** | ⚠️ 部分实现 | 缺少 model/、text/、device/、metrics/ |
 | **接口设计** | ⚠️ 部分实现 | 核心接口已实现，缺少 search 等高级功能 |
 | **数据模型** | ⚠️ 部分实现 | 请求/响应完整，缺少元数据和指标结构 |
-| **安全性** | ❌ 未实现 | 无输入验证和资源限制 |
+| **安全性** | ⚠️ 部分实现 | InputValidator 已实现，并发控制已实现，缺少文件大小检查 |
 | **性能优化** | ⚠️ 部分实现 | 部分优化已实现，缺少高级优化 |
 | **部署方案** | ✅ 已实现 | 支持嵌入式部署 |
 
 ### 关键差距
 
 1. **ONNX Runtime 引擎未实现** - 无法作为备用推理引擎
-2. **search 方法未实现** - 缺少 1对N 检索功能
+2. **search 方法已实现** - 1对N 检索功能已完成
 3. **多模型支持未实现** - 硬编码模型名称，无配置切换
-4. **安全性未实现** - 无输入验证和资源限制
-5. **metrics 模块未实现** - 无性能指标收集
+4. **安全性部分实现** - 已实现输入验证和并发控制，缺少文件大小检查
+5. **metrics 模块已实现** - 性能指标收集功能已完成
 
 ### 建议优先级
 

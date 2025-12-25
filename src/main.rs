@@ -7,13 +7,15 @@ use axum::{
     routing::{get, post},
     Extension, Json, Router,
 };
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tower_http::trace::TraceLayer;
 use vecboost::{
     config::model::ModelConfig,
-    domain::{EmbedRequest, SimilarityRequest},
+    domain::{BatchEmbedRequest, EmbedRequest, FileEmbedRequest, SimilarityRequest},
     engine::candle_engine::CandleEngine,
     service::embedding::EmbeddingService,
+    utils::AggregationMode,
     AppConfig,
 };
 
@@ -53,7 +55,9 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/api/v1/embed", post(embed_handler))
+        .route("/api/v1/embed/batch", post(batch_embed_handler))
         .route("/api/v1/similarity", post(similarity_handler))
+        .route("/api/v1/embed/file", post(file_embed_handler))
         .layer(TraceLayer::new_for_http())
         .layer(Extension(service));
 
@@ -79,10 +83,48 @@ async fn embed_handler(
     Ok(Json(res))
 }
 
+async fn batch_embed_handler(
+    Extension(service): Extension<Arc<EmbeddingService>>,
+    Json(req): Json<BatchEmbedRequest>,
+) -> Result<Json<vecboost::domain::BatchEmbedResponse>, vecboost::error::AppError> {
+    let res = service.process_batch(req).await?;
+    Ok(Json(res))
+}
+
 async fn similarity_handler(
     Extension(service): Extension<Arc<EmbeddingService>>,
     Json(req): Json<SimilarityRequest>,
 ) -> Result<Json<vecboost::domain::SimilarityResponse>, vecboost::error::AppError> {
     let res = service.process_similarity(req).await?;
     Ok(Json(res))
+}
+
+async fn file_embed_handler(
+    Extension(service): Extension<Arc<EmbeddingService>>,
+    Json(req): Json<FileEmbedRequest>,
+) -> Result<Json<vecboost::domain::FileEmbedResponse>, vecboost::error::AppError> {
+    let mode = req.mode.unwrap_or(AggregationMode::Document);
+    let path = PathBuf::from(&req.path);
+
+    let stats = service.get_processing_stats(&path)?;
+    let output = service.embed_file(&path, mode).await?;
+
+    match output {
+        vecboost::domain::EmbeddingOutput::Single(response) => {
+            Ok(Json(vecboost::domain::FileEmbedResponse {
+                mode,
+                stats,
+                embedding: Some(response.embedding),
+                paragraphs: None,
+            }))
+        }
+        vecboost::domain::EmbeddingOutput::Paragraphs(paragraphs) => {
+            Ok(Json(vecboost::domain::FileEmbedResponse {
+                mode,
+                stats,
+                embedding: None,
+                paragraphs: Some(paragraphs),
+            }))
+        }
+    }
 }

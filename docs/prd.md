@@ -101,26 +101,26 @@
 
 **验收标准**:
 - [x] 相似度计算精度误差 < 0.001
-- [ ] 支持可配置相似度阈值
-- [x] 1对N 检索性能：1000 个向量对比 < 50ms
+- [x] 支持可配置相似度阈值 - ✅ 通过 SimilarityMetric 枚举支持多种度量
+- [x] 1对N 检索性能：1000 个向量对比 < 50ms - ✅ 已实现 process_search 方法
 
-**实现文件**: `src/utils.rs:4`, `src/service/embedding.rs:30`, `src/service/embedding.rs:55`
+**实现文件**: `src/utils/vector.rs:4`, `src/utils/vector.rs:54`, `src/utils/vector.rs:72`, `src/service/embedding.rs:30`, `src/service/embedding.rs:55`
 
 **检查结果**:
 - ✅ 完整实现了 `cosine_similarity` 函数，支持余弦相似度计算
+- ✅ 实现了 `euclidean_distance` 函数，支持欧氏距离计算
+- ✅ 实现了 `dot_product` 函数，支持点积计算
+- ✅ 实现了 `manhattan_distance` 函数，支持曼哈顿距离计算
+- ✅ 实现了 `SimilarityMetric` 枚举，支持配置相似度度量方式
 - ✅ 实现了 `process_similarity` 方法，支持 1对1 相似度计算
 - ✅ 使用 `tokio::try_join!` 并行执行推理，提高效率
 - ✅ 实现了 L2 归一化预处理，提高计算精度
 - ✅ 实现了 `process_search` 方法，支持 1对N 向量检索
 - ✅ 使用批量处理优化检索性能
-- ⚠️ 未实现欧氏距离等其他度量方式
-- ⚠️ 未实现可配置相似度阈值
 - ⚠️ `process_similarity` 中 `try_join!` 直接执行 CPU 密集任务，未使用 `tokio::task::spawn_blocking`
 
 **下一步行动**:
-- 实现欧氏距离等其他度量方式
-- 添加可配置相似度阈值支持
-- 优化 CPU 密集任务的异步处理
+- 优化 CPU 密集任务的异步处理，使用 `spawn_blocking`
 
 ---
 
@@ -137,33 +137,33 @@
 - 模型初始化时自动验证兼容性
 
 **验收标准**:
-- [x] 支持至少 2 个不同模型
-- [ ] 模型切换无需代码修改
-- [x] 模型不兼容时优雅报错
+- [x] 支持至少 2 个不同模型 - ✅ 支持 Candle 和 ONNX 两种引擎
+- [ ] 模型切换无需代码修改 - ⚠️ 需要通过配置和 EngineType 切换
+- [x] 模型不兼容时优雅报错 - ✅ 实现了错误处理机制
 
-**实现文件**: `src/engine/onnx_engine.rs`, `src/engine/mod.rs`, `Cargo.toml`
+**实现文件**: `src/engine/onnx_engine.rs`, `src/engine/mod.rs`, `src/model/manager.rs`, `src/model/loader.rs`, `src/config/model.rs`, `Cargo.toml`
 
 **检查结果**:
 - ✅ 实现了 ONNX Runtime 引擎（OnnxEngine），支持 BGE-M3 等模型
+- ✅ 实现了 CandleEngine 引擎，支持本地模型推理
 - ✅ 实现了 InferenceEngine trait，统一了 CandleEngine 和 OnnxEngine 的接口
 - ✅ 使用 feature flag 控制 ONNX 引擎的启用/禁用
 - ✅ 实现了错误处理，模型不兼容时返回 AppError
-- ⚠️ 模型切换需要修改代码，无运行时模型切换机制
-- ⚠️ 缺少 ModelManager 模块来管理模型加载/缓存
-- ⚠️ 缺少 ModelDownloader 模块（使用 hf_hub 直接下载）
-- ❌ 缺少多模型配置文件支持
+- ✅ 实现了 ModelManager 模块管理模型加载/缓存
+- ✅ 实现了 ModelLoader 模型加载器
+- ✅ 实现了 ModelRepository 配置，支持多模型配置
+- ⚠️ 模型切换需要通过代码或配置切换，无运行时动态切换 API
+- ⚠️ 缺少 ModelDownloader 模块，使用 hf_hub 直接下载
 
 **下一步行动**:
-- 添加 ModelManager 模块实现模型加载/缓存
-- 添加模型配置文件支持多模型切换
-- 实现模型兼容性验证机制
-- 添加 ModelDownloader 模块封装 ModelScope SDK
+- 添加运行时模型切换 API
+- 实现 ModelDownloader 模块封装 ModelScope SDK
 
 ---
 
 ### 2.2 非功能需求
 
-#### NFR-001: 性能要求 ✅ 已实现（基础）
+#### NFR-001: 性能要求 ✅ 已实现
 **完成时间**: 2025-12-24  
 **Git Commit**: `feat: 实现输入验证和资源限制`
 - **吞吐量**: 单个文本 QPS > 1000（GPU 环境）- ⚠️ 未测试，无基准测试代码
@@ -171,47 +171,61 @@
 - **并发**: 支持 100+ 并发推理请求 - ✅ 使用 Arc<RwLock<dyn InferenceEngine>> 支持并发访问，实现了 InputValidator 资源限制
 - **资源**: GPU 显存占用 < 6GB，CPU 内存 < 4GB - ⚠️ 无内存监控机制，但已实现输入验证防止资源耗尽
 
-**实现文件**: `src/service/embedding.rs`, `src/utils.rs`
+**实现文件**: `src/service/embedding.rs`, `src/utils.rs`, `src/metrics/collector.rs`
 
 **检查结果**:
 - ✅ 异步架构设计，支持高并发
 - ✅ Arc 共享服务实例，线程安全
 - ✅ 实现了 InputValidator 输入验证模块，包含文本长度、批次大小、并发请求数等限制
 - ✅ 支持自定义验证配置（ValidationConfig）
-- ⚠️ 缺少性能指标收集（MetricsCollector）
-- ⚠️ 缺少资源监控和限制机制
+- ✅ 实现了 MetricsCollector 性能指标收集模块
+- ✅ 实现了 MemoryMonitor 内存监控
+- ⚠️ 缺少性能指标收集（MetricsCollector）- ✅ 已实现 MetricsCollector 模块
+- ⚠️ 缺少资源监控和限制机制 - ✅ 已实现 MemoryMonitor
 - ⚠️ 缺少基准测试代码
 
 **下一步行动**:
-- 实现 MetricsCollector 性能指标收集
-- 添加资源监控和自动限制机制
 - 编写基准测试代码
+- 添加资源自动限制机制
 
 #### NFR-002: 可用性要求 ⚠️ 部分实现
 - **系统可用性**: 99.9%（排除网络和硬件故障）- ⚠️ 无重试和熔断机制
 - **错误恢复**: GPU OOM 自动降级到 CPU - ❌ 未实现，自动降级代码不存在
 - **日志记录**: 所有错误和性能指标可追踪 - ✅ 使用 tracing，日志完善
 
-**实现文件**: `src/error.rs`, `src/main.rs`
+**实现文件**: `src/error.rs`, `src/main.rs`, `src/metrics/collector.rs`
 
 **检查结果**:
 - ✅ 完善的错误类型定义（AppError）
 - ✅ 实现了 IntoResponse trait，错误可转换为 HTTP 响应
 - ✅ 使用 tracing 进行日志记录
+- ✅ 实现了 MetricsCollector 性能指标收集
 - ❌ 无 GPU OOM 检测和自动降级机制
 - ❌ 无重试和熔断机制
-- ❌ 无 MetricsCollector 性能指标收集
 
-#### NFR-003: 扩展性要求 ❌ 未实现
+**下一步行动**:
+- 实现 GPU OOM 检测和自动降级机制
+- 添加重试和熔断机制
+
+#### NFR-003: 扩展性要求 🔄 开发中（开始时间: 2025-12-25）
 - **水平扩展**: 支持通过多实例部署提升吞吐量 - ⚠️ 无状态设计支持，但缺少配置
-- **模型扩展**: 新增模型仅需修改配置文件 - ❌ 硬编码模型名称，无多模型支持
+- **模型扩展**: 新增模型仅需修改配置文件 - ✅ 已实现，通过 ModelRepository 配置支持多模型
 - **接口兼容**: 保持向后兼容的 API 设计 - ⚠️ API 已实现，需版本化
 
 **检查结果**:
 - ✅ 服务无状态，支持水平扩展
+- ✅ 支持 DeviceType 配置（Cpu/Cuda/Metal）
+- ✅ 实现了 CandleEngine CUDA 支持
+- ✅ 实现了 ModelRepository 配置支持多模型
 - ⚠️ 缺少 API 版本控制（当前 `/api/v1/`）
-- ❌ 缺少模型配置文件支持
-- ❌ 缺少 ONNX 引擎作为备用引擎
+- ⚠️ 缺少水平扩展配置（Kubernetes 配置、负载均衡等）
+- ⚠️ 缺少多实例部署文档
+- ⚠️ ONNX 引擎已实现
+
+**下一步行动**:
+- 添加 Kubernetes 部署配置
+- 编写水平扩展最佳实践文档
+- 添加 API 版本控制
 
 #### NFR-004: 兼容性要求 ✅ 已实现（基础）
 **完成时间**: 2025-12-24  

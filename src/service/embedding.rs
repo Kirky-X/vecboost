@@ -5,20 +5,43 @@
 
 use crate::config::model::ModelConfig;
 use crate::domain::{
-    EmbedRequest, EmbedResponse, SearchRequest, SearchResponse, SearchResult, SimilarityRequest,
-    SimilarityResponse,
+    BatchEmbedRequest, BatchEmbedResponse, BatchEmbeddingResult, EmbedRequest, EmbedResponse,
+    EmbeddingOutput, FileProcessingStats, ParagraphEmbedding, SearchRequest, SearchResponse,
+    SearchResult, SimilarityRequest, SimilarityResponse,
 };
 use crate::engine::InferenceEngine;
 use crate::error::AppError;
 use crate::utils::{
-    cosine_similarity, normalize_l2, InputValidator, TextValidator, DEFAULT_TOP_K, MAX_BATCH_SIZE,
-    MAX_TOP_K,
+    cosine_similarity, normalize_l2, AggregationMode, InputValidator, TextValidator, DEFAULT_TOP_K,
+    MAX_BATCH_SIZE, MAX_TOP_K,
 };
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tracing::warn;
+
+struct MemoryMonitor;
+
+impl MemoryMonitor {
+    fn get_memory_usage_mb() -> usize {
+        #[cfg(target_os = "linux")]
+        {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            for line in status.lines() {
+                if line.starts_with("VmRSS:") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let Ok(kb) = parts[1].parse::<usize>() {
+                            return kb / 1024;
+                        }
+                    }
+                }
+            }
+        }
+        0
+    }
+}
 
 pub struct EmbeddingService {
     engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
@@ -106,9 +129,52 @@ impl EmbeddingService {
 
     /// 处理大文件流式向量化 (简单实现：按行平均)
     pub async fn process_file_stream(&self, path: &Path) -> Result<EmbedResponse, AppError> {
+        let start_time = std::time::Instant::now();
         let file = File::open(path)?;
         let reader = BufReader::new(file);
 
+        let result = self.process_stream_internal(reader, start_time).await;
+
+        if let Err(ref e) = result {
+            tracing::error!("File streaming failed: {:?}", e);
+        }
+
+        result
+    }
+
+    /// 处理文件向量化，支持多种聚合模式
+    pub async fn embed_file(
+        &self,
+        path: &Path,
+        mode: AggregationMode,
+    ) -> Result<EmbeddingOutput, AppError> {
+        let start_time = std::time::Instant::now();
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        match mode {
+            AggregationMode::Document => {
+                let result = self.process_stream_internal(reader, start_time).await?;
+                Ok(EmbeddingOutput::Single(result))
+            }
+            AggregationMode::Paragraph => self.process_paragraphs(reader, start_time).await,
+            AggregationMode::Paragraphs => self.process_paragraphs(reader, start_time).await,
+            AggregationMode::Average => {
+                let result = self.process_stream_internal(reader, start_time).await?;
+                Ok(EmbeddingOutput::Single(result))
+            }
+            _ => {
+                let result = self.process_stream_internal(reader, start_time).await?;
+                Ok(EmbeddingOutput::Single(result))
+            }
+        }
+    }
+
+    async fn process_stream_internal(
+        &self,
+        reader: BufReader<File>,
+        start_time: std::time::Instant,
+    ) -> Result<EmbedResponse, AppError> {
         let mut total_embedding: Option<Vec<f32>> = None;
         let mut count = 0;
 
@@ -142,6 +208,13 @@ impl EmbeddingService {
             let dimension = final_vec.len();
             self.validate_dimension(dimension);
 
+            let processing_time = start_time.elapsed();
+            tracing::info!(
+                "Processed {} lines in {:.2}ms",
+                count,
+                processing_time.as_millis() as f64
+            );
+
             Ok(EmbedResponse {
                 dimension,
                 embedding: final_vec,
@@ -149,6 +222,96 @@ impl EmbeddingService {
         } else {
             Err(AppError::InvalidInput("File is empty".to_string()))
         }
+    }
+
+    async fn process_paragraphs(
+        &self,
+        reader: BufReader<File>,
+        start_time: std::time::Instant,
+    ) -> Result<EmbeddingOutput, AppError> {
+        use std::io::Read;
+        let mut content = String::new();
+        reader.into_inner().read_to_string(&mut content)?;
+
+        let paragraphs: Vec<String> = content
+            .split("\n\n")
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+
+        if paragraphs.is_empty() {
+            return Err(AppError::InvalidInput(
+                "No paragraphs found in file".to_string(),
+            ));
+        }
+
+        let mut paragraph_embeddings: Vec<ParagraphEmbedding> =
+            Vec::with_capacity(paragraphs.len());
+
+        for (idx, para) in paragraphs.iter().enumerate() {
+            if para.trim().is_empty() {
+                continue;
+            }
+
+            let mut embedding = self.engine.write().unwrap().embed(para)?;
+            normalize_l2(&mut embedding);
+
+            let preview = if para.len() > 100 { &para[..100] } else { para };
+
+            paragraph_embeddings.push(ParagraphEmbedding {
+                embedding,
+                position: idx,
+                text_preview: preview.to_string(),
+            });
+        }
+
+        let processing_time = start_time.elapsed();
+        tracing::info!(
+            "Processed {} paragraphs in {:.2}ms",
+            paragraph_embeddings.len(),
+            processing_time.as_millis() as f64
+        );
+
+        Ok(EmbeddingOutput::Paragraphs(paragraph_embeddings))
+    }
+
+    /// 获取处理统计信息
+    pub fn get_processing_stats(&self, path: &Path) -> Result<FileProcessingStats, AppError> {
+        let start_time = std::time::Instant::now();
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        let mut lines = 0;
+        let mut paragraphs = 0;
+        let mut current_para_empty = true;
+
+        for line in reader.lines() {
+            let line = line?;
+            lines += 1;
+
+            if line.trim().is_empty() {
+                if !current_para_empty {
+                    paragraphs += 1;
+                    current_para_empty = true;
+                }
+            } else {
+                current_para_empty = false;
+            }
+        }
+
+        if !current_para_empty {
+            paragraphs += 1;
+        }
+
+        let processing_time = start_time.elapsed();
+        let memory_peak_mb = MemoryMonitor::get_memory_usage_mb();
+
+        Ok(FileProcessingStats {
+            lines_processed: lines,
+            paragraphs_processed: paragraphs,
+            processing_time_ms: processing_time.as_millis(),
+            memory_peak_mb,
+        })
     }
 
     /// 处理 1对N 检索：给定查询文本，在候选文本列表中找到最相似的文本
@@ -241,6 +404,53 @@ impl EmbeddingService {
             results: top_results,
         })
     }
+
+    /// 处理批量向量化请求
+    pub async fn process_batch(
+        &self,
+        req: BatchEmbedRequest,
+    ) -> Result<BatchEmbedResponse, AppError> {
+        let start_time = std::time::Instant::now();
+
+        self.validator.validate_batch(&req.texts)?;
+
+        let texts = req.texts;
+        let mut results: Vec<BatchEmbeddingResult> = Vec::with_capacity(texts.len());
+        let mut dimension: Option<usize> = None;
+
+        for chunk in texts.chunks(MAX_BATCH_SIZE) {
+            let chunk_embeddings = self.engine.write().unwrap().embed_batch(chunk)?;
+
+            for (text, mut embedding) in chunk.iter().zip(chunk_embeddings.into_iter()) {
+                normalize_l2(&mut embedding);
+
+                let text_preview = if text.len() > 100 {
+                    &text[..100]
+                } else {
+                    text
+                }.to_string();
+
+                let dim = embedding.len();
+                if dimension.is_none() {
+                    dimension = Some(dim);
+                }
+                self.validate_dimension(dim);
+
+                results.push(BatchEmbeddingResult {
+                    text_preview: text_preview.to_string(),
+                    embedding,
+                });
+            }
+        }
+
+        let processing_time = start_time.elapsed();
+
+        Ok(BatchEmbedResponse {
+            embeddings: results,
+            dimension: dimension.unwrap_or(0),
+            processing_time_ms: processing_time.as_millis(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -273,7 +483,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_embedding_service_with_matching_dimension() {
+    async fn test_process_text_with_model_config() {
         let temp_dir = tempdir().unwrap();
         let mock_engine = MockEngine::new(384);
 
@@ -370,7 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedding_service_without_model_config() {
-        let temp_dir = tempdir().unwrap();
+        let _temp_dir = tempdir().unwrap();
         let mock_engine = MockEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -439,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_dimension_validation_with_none_config() {
-        let temp_dir = tempdir().unwrap();
+        let _temp_dir = tempdir().unwrap();
         let mock_engine = MockEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -482,5 +692,319 @@ mod tests {
         let response = result.unwrap();
         assert_eq!(response.dimension, 384);
         assert_eq!(response.embedding.len(), 384);
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_document_mode() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = MockEngine::new(384);
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+
+        let service = EmbeddingService::new(engine, None);
+
+        let test_file_path = temp_dir.path().join("test.txt");
+        std::fs::write(&test_file_path, "Line 1\nLine 2\nLine 3").unwrap();
+
+        let result = service
+            .embed_file(&test_file_path, AggregationMode::Document)
+            .await;
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            EmbeddingOutput::Single(response) => {
+                assert_eq!(response.dimension, 384);
+                assert_eq!(response.embedding.len(), 384);
+            }
+            _ => panic!("Expected Single embedding output"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_paragraph_mode() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = MockEngine::new(384);
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+
+        let service = EmbeddingService::new(engine, None);
+
+        let test_content =
+            "This is paragraph one.\n\nThis is paragraph two.\n\nThis is paragraph three.";
+        let test_file_path = temp_dir.path().join("test_paragraphs.txt");
+        std::fs::write(&test_file_path, test_content).unwrap();
+
+        let result = service
+            .embed_file(&test_file_path, AggregationMode::Paragraph)
+            .await;
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            EmbeddingOutput::Paragraphs(paragraphs) => {
+                assert_eq!(paragraphs.len(), 3);
+                for (idx, para) in paragraphs.iter().enumerate() {
+                    assert_eq!(para.position, idx);
+                    assert!(para.embedding.len() == 384);
+                    assert!(!para.text_preview.is_empty());
+                }
+            }
+            _ => panic!("Expected Paragraphs embedding output"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_paragraphs_mode() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = MockEngine::new(384);
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+
+        let service = EmbeddingService::new(engine, None);
+
+        let test_content =
+            "First paragraph here.\n\nSecond paragraph here.\n\nThird paragraph here.";
+        let test_file_path = temp_dir.path().join("test_multi_para.txt");
+        std::fs::write(&test_file_path, test_content).unwrap();
+
+        let result = service
+            .embed_file(&test_file_path, AggregationMode::Paragraphs)
+            .await;
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            EmbeddingOutput::Paragraphs(paragraphs) => {
+                assert_eq!(paragraphs.len(), 3);
+                for para in &paragraphs {
+                    assert_eq!(para.embedding.len(), 384);
+                }
+            }
+            _ => panic!("Expected Paragraphs embedding output"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_average_mode() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = MockEngine::new(384);
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+
+        let service = EmbeddingService::new(engine, None);
+
+        let test_file_path = temp_dir.path().join("test_avg.txt");
+        std::fs::write(&test_file_path, "Line 1\nLine 2\nLine 3").unwrap();
+
+        let result = service
+            .embed_file(&test_file_path, AggregationMode::Average)
+            .await;
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            EmbeddingOutput::Single(response) => {
+                assert_eq!(response.dimension, 384);
+                assert_eq!(response.embedding.len(), 384);
+            }
+            _ => panic!("Expected Single embedding output"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_paragraphs_empty_file() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = MockEngine::new(384);
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+
+        let service = EmbeddingService::new(engine, None);
+
+        let test_file_path = temp_dir.path().join("empty.txt");
+        std::fs::write(&test_file_path, "").unwrap();
+
+        let file = std::fs::File::open(&test_file_path).unwrap();
+        let reader = std::io::BufReader::new(file);
+        let start_time = std::time::Instant::now();
+
+        let result = service.process_paragraphs(reader, start_time).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_processing_stats() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = MockEngine::new(384);
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+
+        let service = EmbeddingService::new(engine, None);
+
+        let test_content = "Line 1\nLine 2\n\nParagraph 2 Line 1\nParagraph 2 Line 2";
+        let test_file_path = temp_dir.path().join("stats_test.txt");
+        std::fs::write(&test_file_path, test_content).unwrap();
+
+        let result = service.get_processing_stats(&test_file_path);
+
+        assert!(result.is_ok());
+        let stats = result.unwrap();
+        assert!(stats.lines_processed > 0);
+        assert!(stats.paragraphs_processed > 0);
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_basic() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = MockEngine::new(384);
+
+        let model_config = ModelConfig {
+            name: "test-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from(temp_dir.path()),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+        };
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+
+        let service = EmbeddingService::new(engine, Some(model_config));
+
+        let texts = vec![
+            "Hello world".to_string(),
+            "Rust is great".to_string(),
+            "Embedding vectors".to_string(),
+        ];
+
+        let req = BatchEmbedRequest {
+            texts: texts.clone(),
+            mode: None,
+        };
+
+        let result = service.process_batch(req).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.embeddings.len(), 3);
+        assert_eq!(response.dimension, 384);
+
+        for (i, emb) in response.embeddings.iter().enumerate() {
+            assert_eq!(emb.embedding.len(), 384);
+            assert_eq!(emb.text_preview, texts[i]);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_empty() {
+        let _temp_dir = tempdir().unwrap();
+        let mock_engine = MockEngine::new(384);
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+
+        let service = EmbeddingService::new(engine, None);
+
+        let req = BatchEmbedRequest {
+            texts: vec![],
+            mode: None,
+        };
+
+        let result = service.process_batch(req).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_large_with_chunking() {
+        let _temp_dir = tempdir().unwrap();
+        let mock_engine = MockEngine::new(384);
+
+        let model_config = ModelConfig {
+            name: "test-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from(_temp_dir.path()),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 3,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+        };
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+
+        let service = EmbeddingService::new(engine, Some(model_config));
+
+        let texts: Vec<String> = (0..10).map(|i| format!("Test text {}", i)).collect();
+
+        let req = BatchEmbedRequest {
+            texts: texts.clone(),
+            mode: None,
+        };
+
+        let result = service.process_batch(req).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.embeddings.len(), 10);
+        assert_eq!(response.dimension, 384);
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_single() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = MockEngine::new(384);
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+
+        let service = EmbeddingService::new(engine, None);
+
+        let texts = vec!["Single text".to_string()];
+
+        let req = BatchEmbedRequest {
+            texts,
+            mode: None,
+        };
+
+        let result = service.process_batch(req).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.embeddings.len(), 1);
+        assert_eq!(response.dimension, 384);
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_with_long_text_preview() {
+        let _temp_dir = tempdir().unwrap();
+        let mock_engine = MockEngine::new(384);
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+
+        let service = EmbeddingService::new(engine, None);
+
+        let long_text = "A".repeat(200);
+        let texts = vec![long_text.clone()];
+
+        let req = BatchEmbedRequest {
+            texts,
+            mode: None,
+        };
+
+        let result = service.process_batch(req).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.embeddings.len(), 1);
+        assert_eq!(response.embeddings[0].text_preview.len(), 100);
     }
 }

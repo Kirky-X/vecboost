@@ -4,7 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 use super::{InferenceEngine, Precision};
-use crate::config::model::ModelConfig;
+use crate::config::model::{DeviceType, ModelConfig};
 use crate::error::AppError;
 use crate::monitor::MemoryMonitor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -21,10 +21,17 @@ pub struct OnnxEngine {
     max_input_length: usize,
     precision: Precision,
     memory_monitor: Option<Arc<MemoryMonitor>>,
+    fallback_triggered: bool,
+    device_type: DeviceType,
+    supports_cuda: bool,
 }
 
 impl OnnxEngine {
     pub fn new(config: &ModelConfig, precision: Precision) -> Result<Self, AppError> {
+        Self::with_device(config, precision, config.device.clone())
+    }
+
+    pub fn with_device(config: &ModelConfig, precision: Precision, device_type: DeviceType) -> Result<Self, AppError> {
         let api = Api::new().map_err(|e| AppError::ModelLoadError(e.to_string()))?;
         let repo = api.repo(Repo::new(
             config.model_path.to_string_lossy().into_owned(),
@@ -44,6 +51,8 @@ impl OnnxEngine {
         let num_threads = std::thread::available_parallelism()
             .map(|p| p.get())
             .unwrap_or(4);
+
+        let supports_cuda = device_type == DeviceType::Cuda;
 
         tracing::info!("Initializing ONNX Runtime session...");
         let session = Session::builder()
@@ -72,10 +81,6 @@ impl OnnxEngine {
         let vocab_size = tokenizer.get_vocab_size(false);
         let hidden_size = 768;
         let max_input_length = std::cmp::min(vocab_size, 512);
-
-        let supports_cuda = session
-            .execution_providers()
-            .contains(&"CUDAExecutionProvider".to_string());
 
         let actual_precision = match precision {
             Precision::Fp16 => {
@@ -114,47 +119,42 @@ impl OnnxEngine {
             max_input_length,
             precision: actual_precision,
             memory_monitor,
+            fallback_triggered: false,
+            device_type,
+            supports_cuda,
         })
     }
 
-    fn forward_pass(&mut self, text: &str) -> Result<Vec<f32>, AppError> {
-        let tokens = self
-            .tokenizer
-            .encode(text, true)
-            .map_err(|e| AppError::TokenizationError(e.to_string()))?;
+    pub fn device_type(&self) -> DeviceType {
+        self.device_type.clone()
+    }
 
-        let input_ids: Vec<i64> = tokens
-            .get_ids()
-            .iter()
-            .take(self.max_input_length)
-            .map(|&id| id as i64)
-            .collect();
+    pub fn is_fallback_triggered(&self) -> bool {
+        self.fallback_triggered
+    }
 
-        let attention_mask: Vec<i64> = tokens
-            .get_attention_mask()
-            .iter()
-            .take(self.max_input_length)
-            .map(|&v| v as i64)
-            .collect();
+    pub fn check_memory_pressure(&self, threshold_percent: u64) -> bool {
+        if let Some(ref monitor) = self.memory_monitor {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let stats = monitor.get_memory_stats().await;
+                let usage_percent = if stats.total_bytes > 0 {
+                    (stats.current_bytes * 100) / stats.total_bytes
+                } else {
+                    0
+                };
+                usage_percent >= threshold_percent
+            })
+        } else {
+            false
+        }
+    }
 
-        let attention_mask_clone = attention_mask.clone();
-        let input_ids_array = Array1::from(input_ids);
-        let attention_mask_array = Array1::from(attention_mask);
-
-        let input_ids_tensor = Tensor::from_array(input_ids_array.into_dyn())
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
-        let attention_mask_tensor = Tensor::from_array(attention_mask_array.into_dyn())
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
-
-        let outputs = self
-            .session
-            .run(ort::inputs![
-                "input_ids" => input_ids_tensor,
-                "attention_mask" => attention_mask_tensor
-            ])
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
-
-        Self::extract_embedding_from_output(&outputs, &attention_mask_clone, self.hidden_size)
+    pub async fn update_gpu_memory(&self) {
+        if let Some(ref monitor) = self.memory_monitor {
+            #[cfg(feature = "onnx")]
+            monitor.update_gpu_memory_from_ort().await;
+        }
     }
 
     fn extract_embedding_from_output(
@@ -199,16 +199,118 @@ impl OnnxEngine {
 
         Ok(weighted_sum)
     }
+
+    fn forward_pass(&mut self, text: &str) -> Result<Vec<f32>, AppError> {
+        let tokens = self
+            .tokenizer
+            .encode(text, true)
+            .map_err(|e| AppError::TokenizationError(e.to_string()))?;
+
+        let input_ids: Vec<i64> = tokens
+            .get_ids()
+            .iter()
+            .take(self.max_input_length)
+            .map(|&id| id as i64)
+            .collect();
+
+        let attention_mask: Vec<i64> = tokens
+            .get_attention_mask()
+            .iter()
+            .take(self.max_input_length)
+            .map(|&v| v as i64)
+            .collect();
+
+        let attention_mask_clone = attention_mask.clone();
+        let input_ids_array = Array1::from(input_ids);
+        let attention_mask_array = Array1::from(attention_mask);
+
+        let input_ids_tensor = Tensor::from_array(input_ids_array.into_dyn())
+            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+        let attention_mask_tensor = Tensor::from_array(attention_mask_array.into_dyn())
+            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+        let outputs = self
+            .session
+            .run(ort::inputs![
+                "input_ids" => input_ids_tensor,
+                "attention_mask" => attention_mask_tensor
+            ])
+            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+        Self::extract_embedding_from_output(&outputs, &attention_mask_clone, self.hidden_size)
+    }
+
+    pub async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError> {
+        if self.fallback_triggered {
+            return Ok(());
+        }
+
+        tracing::info!("Attempting fallback from GPU to CPU for ONNX engine");
+
+        self.memory_monitor = None;
+        self.device_type = DeviceType::Cpu;
+        self.supports_cuda = false;
+        self.fallback_triggered = true;
+
+        let api = Api::new().map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+        let repo = api.repo(Repo::new(
+            config.model_path.to_string_lossy().into_owned(),
+            RepoType::Model,
+        ));
+
+        let onnx_filename = repo
+            .get("model.onnx")
+            .or_else(|_| repo.get("model_quantized.onnx"))
+            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+
+        let num_threads = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4);
+
+        self.session = Session::builder()
+            .map_err(|e| AppError::ModelLoadError(e.to_string()))?
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .map_err(|e| AppError::ModelLoadError(e.to_string()))?
+            .with_intra_threads(num_threads)
+            .map_err(|e| AppError::ModelLoadError(e.to_string()))?
+            .commit_from_file(onnx_filename)
+            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+
+        self.precision = Precision::Fp32;
+
+        tracing::info!("Successfully fell back to CPU for ONNX engine");
+        Ok(())
+    }
 }
 
 impl InferenceEngine for OnnxEngine {
     fn embed(&mut self, text: &str) -> Result<Vec<f32>, AppError> {
+        if self.supports_cuda && self.check_memory_pressure(90) {
+            tracing::warn!("High memory pressure detected before ONNX inference, attempting fallback to CPU");
+            let config = ModelConfig::default();
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| AppError::InferenceError(e.to_string()))?;
+            if let Err(e) = rt.block_on(async { self.try_fallback_to_cpu(&config).await }) {
+                tracing::error!("Failed to fallback to CPU: {}", e);
+            }
+        }
+
         self.forward_pass(text)
     }
 
     fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
         if texts.is_empty() {
             return Ok(vec![]);
+        }
+
+        if self.supports_cuda && self.check_memory_pressure(90) {
+            tracing::warn!("High memory pressure detected before ONNX batch inference, attempting fallback to CPU");
+            let config = ModelConfig::default();
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| AppError::InferenceError(e.to_string()))?;
+            if let Err(e) = rt.block_on(async { self.try_fallback_to_cpu(&config).await }) {
+                tracing::error!("Failed to fallback to CPU: {}", e);
+            }
         }
 
         let batch_size = texts.len();

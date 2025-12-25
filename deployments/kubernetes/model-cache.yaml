@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vecboost-model-cache
+  labels:
+    app: vecboost-model-cache
+spec:
+  serviceName: vecboost-model-cache
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vecboost-model-cache
+  template:
+    metadata:
+      labels:
+        app: vecboost-model-cache
+    spec:
+      containers:
+      - name: model-cache
+        image: vecboost:latest
+        command: ["sleep", "infinity"]
+        volumeMounts:
+        - name: model-storage
+          mountPath: /models
+      volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: vecboost-models-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vecboost-models-pvc
+  labels:
+    app: vecboost
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi

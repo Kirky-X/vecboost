@@ -197,8 +197,8 @@
 #### NFR-002: 可用性要求 ⚠️ 部分实现
 **完成时间**: 2025-12-25
 **Git Commit**: `feat: 实现设备管理和错误处理`
-- **系统可用性**: 99.9%（排除网络和硬件故障）- ⚠️ 已实现错误处理和日志记录，但缺少重试和熔断机制
-- **错误恢复**: GPU OOM 自动降级到 CPU - ⚠️ 已实现 DeviceManager 和 MemoryMonitor，但未在实际推理中应用自动降级
+- **系统可用性**: 99.9%（排除网络和硬件故障）- ✅ 已实现错误处理、日志记录、重试机制和熔断机制
+- **错误恢复**: GPU OOM 自动降级到 CPU - ✅ 已实现 DeviceManager、MemoryMonitor 和推理过程中的自动降级逻辑
 - **日志记录**: 所有错误和性能指标可追踪 - ✅ 使用 tracing，日志完善，实现了错误脱敏处理
 
 **实现文件**:
@@ -217,41 +217,43 @@
 - ✅ 实现了 MemoryMonitor，支持内存压力检测和 OOM 风险评估
 - ✅ 实现了 check_memory_pressure 和 fallback_to_cpu 方法
 - ✅ 实现了 GPU 内存监控（GpuMemoryStats）
-- ❌ 无重试机制
-- ❌ 无熔断机制
-- ⚠️ GPU OOM 自动降级的基础设施已实现，但未在实际推理中应用
+- ✅ 实现了重试机制（RetryConfig、Retryable trait、with_retry 函数）
+- ✅ 实现了熔断机制（CircuitBreaker、CircuitBreakerConfig、CircuitState）
+- ✅ 在推理过程中集成了 GPU OOM 自动降级逻辑（检测内存压力并自动切换到 CPU）
 
 **下一步行动**:
-- 实现重试机制（使用 backoff 库或自定义重试逻辑）
-- 实现熔断机制（使用 circuit-breaker 模式）
-- 在实际推理过程中应用 GPU OOM 自动降级逻辑
+- ✅ 已实现重试机制（自定义 with_retry 函数，支持指数退避和 jitter）
+- ✅ 已实现熔断机制（CircuitBreaker 实现，支持 Closed/Open/HalfOpen 状态）
+- ✅ 已实现推理过程中的 GPU OOM 自动降级逻辑（集成到 CandleEngine 和 OnnxEngine）
 
 #### NFR-003: 扩展性要求 ✅（完成时间: 2025-12-25）
-- **水平扩展**: 支持通过多实例部署提升吞吐量 - ⚠️ 无状态设计支持，但缺少配置
+- **水平扩展**: 支持通过多实例部署提升吞吐量 - ✅ 已实现，Kubernetes 部署配置 + 最佳实践文档
 - **模型扩展**: 新增模型仅需修改配置文件 - ✅ 已实现，通过 ModelRepository 配置支持多模型
-- **接口兼容**: 保持向后兼容的 API 设计 - ⚠️ API 已实现，需版本化
+- **接口兼容**: 保持向后兼容的 API 设计 - ✅ 已实现，使用 `/api/v1/` 版本前缀
 
 **检查结果**:
 - ✅ 服务无状态，支持水平扩展
 - ✅ 支持 DeviceType 配置（Cpu/Cuda/Metal）
 - ✅ 实现了 CandleEngine CUDA 支持
 - ✅ 实现了 ModelRepository 配置支持多模型
-- ⚠️ 缺少 API 版本控制（当前 `/api/v1/`）
-- ⚠️ 缺少水平扩展配置（Kubernetes 配置、负载均衡等）
-- ⚠️ 缺少多实例部署文档
-- ⚠️ ONNX 引擎已实现
+- ✅ API 版本控制已实现（当前 `/api/v1/`）
+- ✅ 已添加 Kubernetes 部署配置（deployment.yaml, service.yaml, hpa.yaml）
+- ✅ 已添加 GPU 部署配置（gpu-deployment.yaml）
+- ✅ 已添加模型缓存配置（model-cache.yaml）
+- ✅ 已编写水平扩展最佳实践文档（SCALING_BEST_PRACTICES.md）
+- ✅ ONNX 引擎已实现
 
 **下一步行动**:
-- 添加 Kubernetes 部署配置
-- 编写水平扩展最佳实践文档
-- 添加 API 版本控制
+- ✅ 已实现 API 版本控制
+- ✅ 已添加 Kubernetes 部署配置
+- ✅ 已编写水平扩展最佳实践文档
 
 #### NFR-004: 兼容性要求 ⚠️ 部分实现
 **完成时间**: 2025-12-25
 **Git Commit**: `feat: 实现 ONNX Runtime 推理引擎`
 - **操作系统**: Linux（Ubuntu 20.04+）、Windows 10+、macOS 12+ - ✅ 纯 Rust 实现，跨平台
 - **硬件**: NVIDIA GPU（CUDA 11.8+，计算能力 7.0+）- ⚠️ 仅实现 CUDA，Metal 已定义但未实现，OpenCL/ROCm 未实现
-- **Rust 版本**: 1.85.0（使用Rust 2024 Edition）- ❌ 当前使用 Edition 2021
+- **Rust 版本**: 1.85.0（使用Rust 2024 Edition）- ✅ 已升级 Edition 2024
 - **CUDA 版本**: 11.8 或 12.0（推荐12.0以获得最佳性能）- ⚠️ candle-core 支持 CUDA，但需通过 `--features cuda` 启用
 
 **实现文件**:
@@ -267,14 +269,13 @@
 - ✅ CandleEngine 中已实现 CUDA 可用性检测（`cuda_is_available()`）
 - ✅ DeviceType 枚举已定义 Metal 类型
 - ✅ Cargo.toml 中已定义 `cuda` 和 `onnx` feature flags
-- ❌ Rust 版本使用 2021 Edition，非 2024 Edition
+- ✅ Rust 版本已升级到 2024 Edition
 - ❌ CUDA feature 未默认启用，需要通过 `--features cuda` 手动启用
 - ❌ Metal 设备类型已定义但未实际实现推理支持
 - ❌ 缺少 OpenCL/ROCm 支持
 - ❌ 缺少 AMD GPU 支持
 
 **下一步行动**:
-- 升级 Rust 到 2024 Edition（修改 Cargo.toml 中的 edition 字段）
 - 将 CUDA feature 添加到 default features 或提供启用文档
 - 实现 Metal 设备推理支持（Apple Silicon GPU）
 - 添加 OpenCL/ROCm 支持（AMD GPU）

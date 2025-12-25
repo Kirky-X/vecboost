@@ -6,6 +6,7 @@
 pub mod constants;
 pub mod validator;
 pub mod vector;
+pub mod resilience;
 
 pub use constants::{
     DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP_RATIO, DEFAULT_TOP_K, MAX_BATCH_SIZE,
@@ -16,4 +17,8 @@ pub use validator::{FileValidator, InputValidator, TextValidator, ValidationConf
 pub use vector::{
     calculate_similarity, cosine_similarity, dot_product, euclidean_distance, manhattan_distance,
     normalize_l2, AggregationMode, SimilarityMetric,
+};
+pub use resilience::{
+    RetryConfig, Retryable, with_retry,
+    CircuitBreaker, CircuitBreakerConfig, CircuitState,
 };

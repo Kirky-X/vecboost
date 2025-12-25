@@ -118,10 +118,13 @@ impl EmbeddingService {
 
         let (mut v1, mut v2) = tokio::try_join!(f1, f2)?;
 
-        normalize_l2(&mut v1);
-        normalize_l2(&mut v2);
+        let score = tokio::task::spawn_blocking(move || {
+            normalize_l2(&mut v1);
+            normalize_l2(&mut v2);
+            cosine_similarity(&v1, &v2)
+        })
+        .await??;
 
-        let score = cosine_similarity(&v1, &v2)?;
         Ok(SimilarityResponse { score })
     }
 

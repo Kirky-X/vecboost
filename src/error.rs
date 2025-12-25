@@ -147,3 +147,9 @@ impl From<candle_core::Error> for AppError {
         AppError::inference_error(e.to_string())
     }
 }
+
+impl From<tokio::task::JoinError> for AppError {
+    fn from(e: tokio::task::JoinError) -> Self {
+        AppError::inference_error(e.to_string())
+    }
+}

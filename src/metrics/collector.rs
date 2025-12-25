@@ -3,320 +3,387 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use crate::metrics::domain::{
+    InferenceRecord, MetricType, MetricValue, MetricsSnapshot, PerformanceMetrics,
+    ResourceUtilization,
+};
+use crate::monitor::MemoryMonitor;
+use serde::Serialize;
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::info;
 
-use super::domain::{InferenceRecord, MetricsSnapshot, PerformanceMetrics, ResourceUtilization};
+#[derive(Debug, Clone, Serialize)]
+pub struct CollectionConfig {
+    pub max_samples: usize,
+    pub collection_interval_ms: u64,
+    pub enable_gpu_metrics: bool,
+    pub enable_memory_tracking: bool,
+}
 
-#[derive(Debug, Clone)]
+impl Default for CollectionConfig {
+    fn default() -> Self {
+        Self {
+            max_samples: 1000,
+            collection_interval_ms: 1000,
+            enable_gpu_metrics: true,
+            enable_memory_tracking: true,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct MetricsCollector {
-    inner: Arc<MetricsCollectorInner>,
-}
-
-#[derive(Debug)]
-struct MetricsCollectorInner {
-    global_metrics: RwLock<PerformanceMetrics>,
-    model_metrics: RwLock<HashMap<String, ModelMetrics>>,
-    inference_records: RwLock<Vec<InferenceRecord>>,
-    error_count: AtomicU64,
-    request_count: AtomicU64,
-    active_requests: AtomicUsize,
-    queued_requests: AtomicUsize,
-    max_records: usize,
-}
-
-#[derive(Debug, Default)]
-struct ModelMetrics {
-    inference_count: AtomicU64,
-    total_inference_time_ms: AtomicU64,
-    total_tokens: AtomicU64,
-    peak_batch_size: AtomicUsize,
-    current_batch_size: AtomicUsize,
-    last_inference_time_ms: AtomicU64,
+    config: Arc<CollectionConfig>,
+    memory_monitor: Arc<MemoryMonitor>,
+    inference_records: Arc<RwLock<VecDeque<InferenceRecord>>>,
+    performance_samples: Arc<RwLock<VecDeque<PerformanceMetrics>>>,
+    metric_history: Arc<RwLock<VecDeque<MetricValue>>>,
+    collection_start: Arc<RwLock<Instant>>,
+    total_inferences: Arc<RwLock<u64>>,
+    total_tokens: Arc<RwLock<u64>>,
+    total_errors: Arc<RwLock<u64>>,
 }
 
 impl MetricsCollector {
     pub fn new() -> Self {
+        Self::with_config(CollectionConfig::default())
+    }
+
+    pub fn with_config(config: CollectionConfig) -> Self {
         Self {
-            inner: Arc::new(MetricsCollectorInner {
-                global_metrics: RwLock::new(PerformanceMetrics::default()),
-                model_metrics: RwLock::new(HashMap::new()),
-                inference_records: RwLock::new(Vec::new()),
-                error_count: AtomicU64::new(0),
-                request_count: AtomicU64::new(0),
-                active_requests: AtomicUsize::new(0),
-                queued_requests: AtomicUsize::new(0),
-                max_records: 10000,
-            }),
+            config: Arc::new(config),
+            memory_monitor: Arc::new(MemoryMonitor::new()),
+            inference_records: Arc::new(RwLock::new(VecDeque::new())),
+            performance_samples: Arc::new(RwLock::new(VecDeque::new())),
+            metric_history: Arc::new(RwLock::new(VecDeque::new())),
+            collection_start: Arc::new(RwLock::new(Instant::now())),
+            total_inferences: Arc::new(RwLock::new(0)),
+            total_tokens: Arc::new(RwLock::new(0)),
+            total_errors: Arc::new(RwLock::new(0)),
         }
     }
 
-    pub fn with_max_records(max_records: usize) -> Self {
-        Self {
-            inner: Arc::new(MetricsCollectorInner {
-                global_metrics: RwLock::new(PerformanceMetrics::default()),
-                model_metrics: RwLock::new(HashMap::new()),
-                inference_records: RwLock::new(Vec::new()),
-                error_count: AtomicU64::new(0),
-                request_count: AtomicU64::new(0),
-                active_requests: AtomicUsize::new(0),
-                queued_requests: AtomicUsize::new(0),
-                max_records,
-            }),
+    pub fn with_memory_monitor(memory_monitor: Arc<MemoryMonitor>) -> Self {
+        let mut collector = Self::new();
+        collector.memory_monitor = memory_monitor;
+        collector
+    }
+
+    pub async fn record_inference(
+        &self,
+        model_name: &str,
+        input_length: usize,
+        output_length: usize,
+        inference_time: Duration,
+        memory_bytes: u64,
+    ) {
+        let record = InferenceRecord::success(
+            model_name.to_string(),
+            input_length,
+            output_length,
+            inference_time.as_secs_f64() * 1000.0,
+            memory_bytes,
+        );
+
+        self.record_inference_full(record.clone()).await;
+
+        let metrics = PerformanceMetrics::new(
+            inference_time,
+            input_length + output_length,
+            memory_bytes,
+            self.memory_monitor.get_peak_memory(),
+            1,
+            input_length + output_length,
+        );
+
+        self.add_performance_sample(metrics).await;
+
+        {
+            let mut total = self.total_inferences.write().await;
+            *total += 1;
+        }
+
+        {
+            let mut tokens = self.total_tokens.write().await;
+            *tokens += (input_length + output_length) as u64;
         }
     }
 
-    pub async fn record_inference_start(&self, model_name: &str, batch_size: usize) {
-        self.inner.active_requests.fetch_add(1, Ordering::SeqCst);
+    pub async fn record_inference_full(&self, record: InferenceRecord) {
+        let mut records = self.inference_records.write().await;
 
-        let mut model_metrics = self.inner.model_metrics.write().await;
-        let metrics = model_metrics
-            .entry(model_name.to_string())
-            .or_insert_with(ModelMetrics::default);
-
-        metrics
-            .current_batch_size
-            .store(batch_size, Ordering::SeqCst);
-
-        let current_peak = metrics.peak_batch_size.load(Ordering::SeqCst);
-        if batch_size > current_peak {
-            metrics.peak_batch_size.store(batch_size, Ordering::SeqCst);
+        while records.len() >= self.config.max_samples {
+            records.pop_front();
         }
 
-        self.inner.request_count.fetch_add(1, Ordering::SeqCst);
+        records.push_back(record.clone());
+
+        if !record.success {
+            let mut errors = self.total_errors.write().await;
+            *errors += 1;
+        }
+    }
+
+    pub async fn record_error(&self, model_name: &str, input_length: usize, error: &str) {
+        let record = InferenceRecord::failure(
+            model_name.to_string(),
+            input_length,
+            error.to_string(),
+        );
+
+        self.record_inference_full(record).await;
+
+        let mut total = self.total_inferences.write().await;
+        *total += 1;
     }
 
     pub async fn record_inference_complete(
         &self,
         model_name: &str,
-        duration: Duration,
+        duration: std::time::Duration,
         batch_size: usize,
-        tokens_count: usize,
+        token_count: usize,
     ) {
-        let duration_ms = duration.as_millis() as u64;
-
-        self.inner.active_requests.fetch_sub(1, Ordering::SeqCst);
-
-        let mut global = self.inner.global_metrics.write().await;
-        global.inference_count += 1;
-        global.total_inference_time_ms += duration_ms;
-        global.total_tokens_processed += tokens_count as u64;
-        global.current_batch_size = batch_size;
-        global.last_inference_time_ms = Some(duration_ms);
-
-        if batch_size > global.peak_batch_size {
-            global.peak_batch_size = batch_size;
-        }
-        drop(global);
-
-        let mut model_metrics = self.inner.model_metrics.write().await;
-        if let Some(metrics) = model_metrics.get_mut(model_name) {
-            metrics.inference_count.fetch_add(1, Ordering::SeqCst);
-            metrics
-                .total_inference_time_ms
-                .fetch_add(duration_ms, Ordering::SeqCst);
-            metrics
-                .total_tokens
-                .fetch_add(tokens_count as u64, Ordering::SeqCst);
-            metrics
-                .last_inference_time_ms
-                .store(duration_ms, Ordering::SeqCst);
-        }
-        drop(model_metrics);
-
-        let record = InferenceRecord {
-            timestamp: std::time::Instant::now(),
-            duration_ms,
+        let record = InferenceRecord::success(
+            model_name.to_string(),
             batch_size,
-            tokens_count,
-            model_name: model_name.to_string(),
-            success: true,
-        };
-
-        let mut records = self.inner.inference_records.write().await;
-        if records.len() >= self.inner.max_records {
-            records.remove(0);
-        }
-        records.push(record);
-
-        debug!(
-            model = model_name,
-            duration_ms = duration_ms,
-            batch_size = batch_size,
-            tokens = tokens_count,
-            "Inference completed"
+            token_count,
+            duration.as_secs_f64() * 1000.0,
+            self.memory_monitor.get_peak_memory(),
         );
+
+        self.record_inference_full(record).await;
+
+        {
+            let mut total = self.total_inferences.write().await;
+            *total += 1;
+        }
+
+        {
+            let mut tokens = self.total_tokens.write().await;
+            *tokens += token_count as u64;
+        }
     }
 
     pub async fn record_inference_error(&self, model_name: &str) {
-        self.inner.active_requests.fetch_sub(1, Ordering::SeqCst);
-        self.inner.error_count.fetch_add(1, Ordering::SeqCst);
+        let record = InferenceRecord::failure(
+            model_name.to_string(),
+            0,
+            "Inference error".to_string(),
+        );
 
-        let record = InferenceRecord {
-            timestamp: std::time::Instant::now(),
-            duration_ms: 0,
-            batch_size: 0,
-            tokens_count: 0,
-            model_name: model_name.to_string(),
-            success: false,
+        self.record_inference_full(record).await;
+
+        let mut total = self.total_inferences.write().await;
+        *total += 1;
+    }
+
+    async fn add_performance_sample(&self, metrics: PerformanceMetrics) {
+        let mut samples = self.performance_samples.write().await;
+
+        while samples.len() >= self.config.max_samples {
+            samples.pop_front();
+        }
+
+        samples.push_back(metrics);
+    }
+
+    pub async fn collect_resource_utilization(&self) -> ResourceUtilization {
+        let memory_stats = self.memory_monitor.refresh().await;
+
+        let cpu_usage = sys_info::loadavg().map(|load| load.one * 10.0).unwrap_or(0.0);
+
+        let memory_usage_percent = if memory_stats.total_bytes > 0 {
+            (memory_stats.current_bytes as f64 / memory_stats.total_bytes as f64) * 100.0
+        } else {
+            0.0
         };
 
-        let mut records = self.inner.inference_records.write().await;
-        if records.len() >= self.inner.max_records {
-            records.remove(0);
-        }
-        records.push(record);
+        let gpu_utilization = if self.config.enable_gpu_metrics {
+            self.memory_monitor.get_gpu_stats().await.map(|gpu| gpu.utilization_percent)
+        } else {
+            None
+        };
 
-        warn!(model = model_name, "Inference error recorded");
-    }
-
-    pub async fn record_request_queued(&self) {
-        self.inner.queued_requests.fetch_add(1, Ordering::SeqCst);
-    }
-
-    pub async fn record_request_dequeued(&self) {
-        self.inner.queued_requests.fetch_sub(1, Ordering::SeqCst);
-    }
-
-    pub async fn get_metrics(&self) -> PerformanceMetrics {
-        self.inner.global_metrics.read().await.clone()
-    }
-
-    pub async fn get_model_metrics(&self, model_name: &str) -> Option<PerformanceMetrics> {
-        let model_metrics = self.inner.model_metrics.read().await;
-        model_metrics
-            .get(model_name)
-            .map(|metrics| PerformanceMetrics {
-                inference_count: metrics.inference_count.load(Ordering::SeqCst),
-                total_inference_time_ms: metrics.total_inference_time_ms.load(Ordering::SeqCst),
-                total_tokens_processed: metrics.total_tokens.load(Ordering::SeqCst),
-                current_batch_size: metrics.current_batch_size.load(Ordering::SeqCst),
-                peak_batch_size: metrics.peak_batch_size.load(Ordering::SeqCst),
-                memory_usage_bytes: 0,
-                last_inference_time_ms: Some(metrics.last_inference_time_ms.load(Ordering::SeqCst)),
-                model_name: model_name.to_string(),
-                engine_type: String::new(),
+        let gpu_memory = if self.config.enable_gpu_metrics {
+            self.memory_monitor.get_gpu_stats().await.map(|gpu| {
+                if gpu.total_bytes > 0 {
+                    (gpu.used_bytes as f64 / gpu.total_bytes as f64) * 100.0
+                } else {
+                    0.0
+                }
             })
-    }
+        } else {
+            None
+        };
 
-    pub async fn get_all_model_metrics(&self) -> Vec<PerformanceMetrics> {
-        let model_metrics = self.inner.model_metrics.read().await;
-        model_metrics
-            .iter()
-            .map(|(name, m)| PerformanceMetrics {
-                inference_count: m.inference_count.load(Ordering::SeqCst),
-                total_inference_time_ms: m.total_inference_time_ms.load(Ordering::SeqCst),
-                total_tokens_processed: m.total_tokens.load(Ordering::SeqCst),
-                current_batch_size: m.current_batch_size.load(Ordering::SeqCst),
-                peak_batch_size: m.peak_batch_size.load(Ordering::SeqCst),
-                memory_usage_bytes: 0,
-                last_inference_time_ms: Some(m.last_inference_time_ms.load(Ordering::SeqCst)),
-                model_name: name.clone(),
-                engine_type: String::new(),
-            })
-            .collect()
-    }
-
-    pub async fn get_resource_utilization(&self) -> ResourceUtilization {
         ResourceUtilization {
-            cpu_usage_percent: 0.0,
-            memory_usage_bytes: 0,
-            active_requests: self.inner.active_requests.load(Ordering::SeqCst),
-            queued_requests: self.inner.queued_requests.load(Ordering::SeqCst),
+            cpu_percent: cpu_usage,
+            memory_percent: memory_usage_percent,
+            gpu_utilization_percent: gpu_utilization,
+            gpu_memory_percent: gpu_memory,
+            timestamp: chrono::Utc::now(),
         }
+    }
+
+    pub async fn record_metric(&self, metric_type: MetricType, value: f64, unit: &str) {
+        let metric = MetricValue {
+            metric_type,
+            value,
+            unit: unit.to_string(),
+            timestamp: chrono::Utc::now(),
+        };
+
+        let mut history = self.metric_history.write().await;
+
+        while history.len() >= self.config.max_samples {
+            history.pop_front();
+        }
+
+        history.push_back(metric);
     }
 
     pub async fn get_snapshot(&self) -> MetricsSnapshot {
-        let metrics = self.inner.global_metrics.read().await.clone();
-        let resource = self.get_resource_utilization().await;
+        let samples = self.performance_samples.read().await;
+
+        if samples.is_empty() {
+            return MetricsSnapshot::default();
+        }
+
+        let current = samples.back().cloned().unwrap_or_default();
+
+        let count = samples.len() as f64;
+        let total_inference_time: f64 = samples.iter().map(|s| s.inference_time_ms).sum();
+        let total_throughput: f64 = samples.iter().map(|s| s.tokens_per_second).sum();
+        let total_memory: u64 = samples.iter().map(|s| s.memory_usage_bytes).sum();
+        let total_peak_memory: u64 = samples.iter().map(|s| s.peak_memory_bytes).sum();
+        let total_batch: usize = samples.iter().map(|s| s.batch_size).sum();
+        let total_seq: usize = samples.iter().map(|s| s.sequence_length).sum();
+
+        let avg_inference_time = total_inference_time / count;
+        let avg_throughput = total_throughput / count;
+        let avg_memory = total_memory / samples.len() as u64;
+        let avg_peak_memory = total_peak_memory / samples.len() as u64;
+        let avg_batch = total_batch / samples.len();
+        let avg_seq = total_seq / samples.len();
+
+        let min = samples
+            .iter()
+            .min_by(|a, b| a.inference_time_ms.partial_cmp(&b.inference_time_ms).unwrap())
+            .cloned()
+            .unwrap_or_default();
+
+        let max = samples
+            .iter()
+            .max_by(|a, b| a.inference_time_ms.partial_cmp(&b.inference_time_ms).unwrap())
+            .cloned()
+            .unwrap_or_default();
 
         MetricsSnapshot {
-            timestamp: std::time::Instant::now(),
-            metrics,
-            resource,
+            current,
+            average: PerformanceMetrics {
+                inference_time_ms: avg_inference_time,
+                tokens_per_second: avg_throughput,
+                memory_usage_bytes: avg_memory,
+                peak_memory_bytes: avg_peak_memory,
+                batch_size: avg_batch,
+                sequence_length: avg_seq,
+                timestamp: chrono::Utc::now(),
+            },
+            min,
+            max,
+            sample_count: samples.len(),
+            collected_at: chrono::Utc::now(),
         }
     }
 
-    pub async fn get_throughput(&self, window_secs: u64) -> f64 {
-        let records = self.inner.inference_records.read().await;
-        let now = std::time::Instant::now();
-
-        let window_start = now - Duration::from_secs(window_secs);
-        let tokens_in_window: u64 = records
-            .iter()
-            .filter(|r| r.timestamp >= window_start && r.success)
-            .map(|r| r.tokens_count as u64)
-            .sum();
-
-        tokens_in_window as f64 / window_secs as f64
+    pub async fn get_inference_records(&self, limit: Option<usize>) -> Vec<InferenceRecord> {
+        let records = self.inference_records.read().await;
+        let limit = limit.unwrap_or(100);
+        records.iter().rev().take(limit).cloned().collect()
     }
 
-    pub async fn get_error_rate(&self) -> f64 {
-        let total = self.inner.request_count.load(Ordering::SeqCst);
-        if total == 0 {
-            return 0.0;
-        }
-        let errors = self.inner.error_count.load(Ordering::SeqCst);
-        errors as f64 / total as f64
-    }
-
-    pub async fn get_recent_inference_times(&self, count: usize) -> Vec<u64> {
-        let records = self.inner.inference_records.read().await;
-        records
+    pub async fn get_metrics_history(&self, metric_type: MetricType) -> Vec<MetricValue> {
+        let history = self.metric_history.read().await;
+        history
             .iter()
-            .filter(|r| r.success)
-            .rev()
-            .take(count)
-            .map(|r| r.duration_ms)
+            .filter(|m| m.metric_type == metric_type)
+            .cloned()
             .collect()
     }
 
-    pub async fn get_latency_percentile(&self, percentile: f64, count: usize) -> Option<u64> {
-        let times = self.get_recent_inference_times(count).await;
-        if times.is_empty() {
-            return None;
+    pub async fn get_summary(&self) -> MetricsSummary {
+        let records = self.inference_records.read().await;
+        let samples = self.performance_samples.read().await;
+
+        let successful_inferences = records.iter().filter(|r| r.success).count() as u64;
+        let failed_inferences = records.iter().filter(|r| !r.success).count() as u64;
+
+        let avg_latency = if !samples.is_empty() {
+            samples.iter().map(|s| s.inference_time_ms).sum::<f64>() / samples.len() as f64
+        } else {
+            0.0
+        };
+
+        let avg_throughput = if !samples.is_empty() {
+            samples.iter().map(|s| s.tokens_per_second).sum::<f64>() / samples.len() as f64
+        } else {
+            0.0
+        };
+
+        let total_inferences = *self.total_inferences.read().await;
+        let total_tokens = *self.total_tokens.read().await;
+        let total_errors = *self.total_errors.read().await;
+
+        MetricsSummary {
+            total_inferences,
+            successful_inferences,
+            failed_inferences,
+            total_tokens_processed: total_tokens,
+            total_errors,
+            average_latency_ms: avg_latency,
+            average_throughput_tokens_per_sec: avg_throughput,
+            collection_duration_seconds: self.collection_duration().await.as_secs(),
+            sample_count: samples.len(),
         }
+    }
 
-        let mut sorted = times;
-        sorted.sort_unstable();
-
-        let index = ((percentile / 100.0) * (sorted.len() - 1) as f64) as usize;
-        Some(sorted[index])
+    pub async fn collection_duration(&self) -> Duration {
+        self.collection_start.read().await.elapsed()
     }
 
     pub async fn reset(&self) {
-        let mut global = self.inner.global_metrics.write().await;
-        *global = PerformanceMetrics::default();
-        drop(global);
+        let mut records = self.inference_records.write().await;
+        records.clear();
 
-        self.inner.model_metrics.write().await.clear();
-        self.inner.inference_records.write().await.clear();
-        self.inner.error_count.store(0, Ordering::SeqCst);
-        self.inner.request_count.store(0, Ordering::SeqCst);
-        self.inner.active_requests.store(0, Ordering::SeqCst);
-        self.inner.queued_requests.store(0, Ordering::SeqCst);
+        let mut samples = self.performance_samples.write().await;
+        samples.clear();
+
+        let mut history = self.metric_history.write().await;
+        history.clear();
+
+        let mut start = self.collection_start.write().await;
+        *start = Instant::now();
+
+        let mut total = self.total_inferences.write().await;
+        *total = 0;
+
+        let mut tokens = self.total_tokens.write().await;
+        *tokens = 0;
+
+        let mut errors = self.total_errors.write().await;
+        *errors = 0;
+
+        self.memory_monitor.reset_peak();
 
         info!("Metrics collector reset");
     }
 
-    pub fn request_count(&self) -> u64 {
-        self.inner.request_count.load(Ordering::SeqCst)
-    }
-
-    pub fn error_count(&self) -> u64 {
-        self.inner.error_count.load(Ordering::SeqCst)
-    }
-
-    pub fn active_requests(&self) -> usize {
-        self.inner.active_requests.load(Ordering::SeqCst)
-    }
-
-    pub fn queued_requests(&self) -> usize {
-        self.inner.queued_requests.load(Ordering::SeqCst)
+    pub fn config(&self) -> &CollectionConfig {
+        &self.config
     }
 }
 
@@ -326,161 +393,191 @@ impl Default for MetricsCollector {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricsSummary {
+    pub total_inferences: u64,
+    pub successful_inferences: u64,
+    pub failed_inferences: u64,
+    pub total_tokens_processed: u64,
+    pub total_errors: u64,
+    pub average_latency_ms: f64,
+    pub average_throughput_tokens_per_sec: f64,
+    pub collection_duration_seconds: u64,
+    pub sample_count: usize,
+}
+
+impl MetricsSummary {
+    pub fn success_rate(&self) -> f64 {
+        if self.total_inferences == 0 {
+            0.0
+        } else {
+            self.successful_inferences as f64 / self.total_inferences as f64 * 100.0
+        }
+    }
+
+    pub fn tokens_per_inference(&self) -> f64 {
+        if self.total_inferences == 0 {
+            0.0
+        } else {
+            self.total_tokens_processed as f64 / self.total_inferences as f64
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
 
     #[tokio::test]
+    async fn test_metrics_collector_creation() {
+        let collector = MetricsCollector::new();
+        let summary = collector.get_summary().await;
+
+        assert_eq!(summary.total_inferences, 0);
+        assert_eq!(summary.sample_count, 0);
+    }
+
+    #[tokio::test]
     async fn test_record_inference() {
         let collector = MetricsCollector::new();
 
-        collector.record_inference_start("test-model", 4).await;
         collector
-            .record_inference_complete("test-model", Duration::from_millis(100), 4, 128)
+            .record_inference(
+                "test-model",
+                100,
+                512,
+                Duration::from_millis(50),
+                1024 * 1024,
+            )
             .await;
 
-        let metrics = collector.get_metrics().await;
-        assert_eq!(metrics.inference_count, 1);
-        assert_eq!(metrics.total_inference_time_ms, 100);
-        assert_eq!(metrics.total_tokens_processed, 128);
-        assert_eq!(metrics.peak_batch_size, 4);
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_inferences, 1);
+        assert_eq!(summary.successful_inferences, 1);
+        assert_eq!(summary.failed_inferences, 0);
     }
 
     #[tokio::test]
     async fn test_record_error() {
         let collector = MetricsCollector::new();
 
-        collector.record_inference_start("test-model", 1).await;
-        collector.record_inference_error("test-model").await;
+        collector
+            .record_error("test-model", 100, "Out of memory")
+            .await;
 
-        assert_eq!(collector.error_count(), 1);
-        assert_eq!(collector.active_requests(), 0);
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_inferences, 1);
+        assert_eq!(summary.total_errors, 1);
+        assert_eq!(summary.failed_inferences, 1);
     }
 
     #[tokio::test]
-    async fn test_throughput_calculation() {
+    async fn test_get_snapshot() {
         let collector = MetricsCollector::new();
 
-        collector
-            .record_inference_complete("model1", Duration::from_millis(100), 4, 128)
-            .await;
-        collector
-            .record_inference_complete("model1", Duration::from_millis(100), 4, 128)
-            .await;
-        collector
-            .record_inference_complete("model2", Duration::from_millis(100), 4, 64)
-            .await;
-
-        let throughput = collector.get_throughput(60).await;
-        assert!(throughput > 0.0);
-    }
-
-    #[tokio::test]
-    async fn test_error_rate() {
-        let collector = MetricsCollector::new();
-
-        for _ in 0..9 {
-            collector.record_inference_start("test-model", 1).await;
+        for i in 0..5 {
             collector
-                .record_inference_complete("test-model", Duration::from_millis(10), 1, 32)
+                .record_inference(
+                    "test-model",
+                    100,
+                    512,
+                    Duration::from_millis(50 + i as u64),
+                    1024 * 1024,
+                )
                 .await;
         }
 
-        collector.record_inference_start("test-model", 1).await;
-        collector.record_inference_error("test-model").await;
+        let snapshot = collector.get_snapshot().await;
 
-        let error_rate = collector.get_error_rate().await;
-        assert!((error_rate - 0.1).abs() < 0.001);
+        assert_eq!(snapshot.sample_count, 5);
+        assert!(snapshot.min.inference_time_ms <= snapshot.average.inference_time_ms);
+        assert!(snapshot.max.inference_time_ms >= snapshot.average.inference_time_ms);
     }
 
     #[tokio::test]
-    async fn test_latency_percentile() {
+    async fn test_get_inference_records() {
         let collector = MetricsCollector::new();
 
-        for i in 1..=10 {
+        for _ in 0..10 {
             collector
-                .record_inference_complete("test-model", Duration::from_millis(i * 10), 1, 32)
+                .record_inference(
+                    "test-model",
+                    100,
+                    512,
+                    Duration::from_millis(50),
+                    1024 * 1024,
+                )
                 .await;
         }
 
-        let p50 = collector.get_latency_percentile(50.0, 10).await;
-        let p90 = collector.get_latency_percentile(90.0, 10).await;
-
-        assert_eq!(p50, Some(50));
-        assert_eq!(p90, Some(90));
+        let records = collector.get_inference_records(Some(5)).await;
+        assert_eq!(records.len(), 5);
     }
 
     #[tokio::test]
-    async fn test_model_metrics() {
+    async fn test_record_metric() {
         let collector = MetricsCollector::new();
 
-        collector.record_inference_start("model-a", 2).await;
         collector
-            .record_inference_complete("model-a", Duration::from_millis(50), 2, 64)
+            .record_metric(MetricType::Throughput, 1000.0, "tokens/s")
             .await;
 
-        collector.record_inference_start("model-a", 2).await;
-        collector
-            .record_inference_complete("model-a", Duration::from_millis(60), 2, 64)
-            .await;
-
-        collector.record_inference_start("model-b", 1).await;
-        collector
-            .record_inference_complete("model-b", Duration::from_millis(100), 1, 32)
-            .await;
-
-        let model_a_metrics = collector.get_model_metrics("model-a").await.unwrap();
-        assert_eq!(model_a_metrics.inference_count, 2);
-        assert_eq!(model_a_metrics.total_inference_time_ms, 110);
-
-        let model_b_metrics = collector.get_model_metrics("model-b").await.unwrap();
-        assert_eq!(model_b_metrics.inference_count, 1);
-
-        let all_metrics = collector.get_all_model_metrics().await;
-        assert_eq!(all_metrics.len(), 2);
+        let history = collector.get_metrics_history(MetricType::Throughput).await;
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].value, 1000.0);
     }
 
     #[tokio::test]
     async fn test_reset() {
         let collector = MetricsCollector::new();
 
-        collector.record_inference_start("test-model", 4).await;
         collector
-            .record_inference_complete("test-model", Duration::from_millis(100), 4, 128)
+            .record_inference(
+                "test-model",
+                100,
+                512,
+                Duration::from_millis(50),
+                1024 * 1024,
+            )
             .await;
-
-        assert_eq!(collector.request_count(), 1);
 
         collector.reset().await;
 
-        let metrics = collector.get_metrics().await;
-        assert_eq!(metrics.inference_count, 0);
-        assert_eq!(collector.active_requests(), 0);
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_inferences, 0);
+        assert_eq!(summary.sample_count, 0);
     }
 
     #[tokio::test]
-    async fn test_request_queue_tracking() {
+    async fn test_success_rate() {
         let collector = MetricsCollector::new();
 
-        collector.record_request_queued().await;
-        collector.record_request_queued().await;
-        collector.record_request_dequeued().await;
+        collector
+            .record_inference(
+                "test-model",
+                100,
+                512,
+                Duration::from_millis(50),
+                1024 * 1024,
+            )
+            .await;
 
-        assert_eq!(collector.queued_requests(), 1);
+        collector
+            .record_error("test-model", 100, "Error")
+            .await;
+
+        let summary = collector.get_summary().await;
+        assert!((summary.success_rate() - 50.0).abs() < 0.001);
     }
 
     #[tokio::test]
-    async fn test_throughput_calculation_empty() {
+    async fn test_collection_duration() {
         let collector = MetricsCollector::new();
-        let throughput = collector.get_throughput(60).await;
-        assert_eq!(throughput, 0.0);
-    }
 
-    #[tokio::test]
-    async fn test_latency_percentile_empty() {
-        let collector = MetricsCollector::new();
-        let p50 = collector.get_latency_percentile(50.0, 10).await;
-        assert_eq!(p50, None);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let duration = collector.collection_duration().await;
+        assert!(duration.as_millis() >= 100);
     }
 }

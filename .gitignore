@@ -1,6 +1,38 @@
+# IDE and Editor
 .trae/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Rust
+target/
+Cargo.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Testing
+test_report*.json
+.benchmarks
+coverage.xml
+htmlcov/
+
+# Documentation (templates)
 docs/prd.md
 docs/tdd.md
 docs/test.md
 docs/uat.md
-Cargo.lock

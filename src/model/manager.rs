@@ -134,7 +134,16 @@ impl ModelManager {
 
         let onnx_count = models
             .values()
-            .filter(|m| m.engine_type() == EngineType::Onnx)
+            .filter(|_m| {
+                #[cfg(feature = "onnx")]
+                {
+                    _m.engine_type() == EngineType::Onnx
+                }
+                #[cfg(not(feature = "onnx"))]
+                {
+                    false
+                }
+            })
             .count();
 
         let mut total_model_size = 0;
@@ -269,7 +278,10 @@ mod tests {
 
         let config2 = ModelConfig {
             name: "model-2".to_string(),
+            #[cfg(feature = "onnx")]
             engine_type: EngineType::Onnx,
+            #[cfg(not(feature = "onnx"))]
+            engine_type: EngineType::Candle,
             model_path: cache_dir.path().join("model-2"),
             tokenizer_path: None,
             device: crate::config::model::DeviceType::Cpu,
@@ -282,12 +294,21 @@ mod tests {
         fs::create_dir_all(&config2.model_path).unwrap();
 
         manager.load(&config1).await.unwrap();
+        #[cfg(feature = "onnx")]
         manager.load(&config2).await.unwrap();
 
         let loaded = manager.list_loaded().await;
-        assert_eq!(loaded.len(), 2);
-        assert!(loaded.contains(&"model-1".to_string()));
-        assert!(loaded.contains(&"model-2".to_string()));
+        #[cfg(feature = "onnx")]
+        {
+            assert_eq!(loaded.len(), 2);
+            assert!(loaded.contains(&"model-1".to_string()));
+            assert!(loaded.contains(&"model-2".to_string()));
+        }
+        #[cfg(not(feature = "onnx"))]
+        {
+            assert_eq!(loaded.len(), 1);
+            assert!(loaded.contains(&"model-1".to_string()));
+        }
     }
 
     #[tokio::test]

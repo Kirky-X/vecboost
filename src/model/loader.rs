@@ -29,6 +29,7 @@ struct CandleModel {
     name: String,
 }
 
+#[allow(dead_code)]
 struct OnnxModel {
     path: PathBuf,
     name: String,

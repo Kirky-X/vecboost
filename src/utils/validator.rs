@@ -7,7 +7,8 @@ use crate::error::AppError;
 use std::num::NonZeroUsize;
 
 pub use super::constants::{
-    MAX_BATCH_SIZE, MAX_CONCURRENT_REQUESTS, MAX_SEARCH_RESULTS, MAX_TEXT_LENGTH, MIN_TEXT_LENGTH,
+    MAX_BATCH_SIZE, MAX_CONCURRENT_REQUESTS, MAX_FILE_SIZE_BYTES, MAX_SEARCH_RESULTS,
+    MAX_TEXT_LENGTH, MIN_TEXT_LENGTH,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -185,6 +186,41 @@ impl TextValidator for InputValidator {
         }
 
         Ok(())
+    }
+}
+
+impl InputValidator {
+    fn validate_file_size(&self, path: &str) -> Result<(), AppError> {
+        use std::fs;
+
+        match fs::metadata(path) {
+            Ok(metadata) => {
+                let file_size = metadata.len();
+                if file_size > MAX_FILE_SIZE_BYTES {
+                    let size_mb = file_size as f64 / (1024.0 * 1024.0);
+                    let max_mb = MAX_FILE_SIZE_BYTES as f64 / (1024.0 * 1024.0);
+                    return Err(AppError::InvalidInput(format!(
+                        "File size {:.2} MB exceeds maximum allowed size {:.2} MB",
+                        size_mb, max_mb
+                    )));
+                }
+                Ok(())
+            }
+            Err(e) => Err(AppError::InvalidInput(format!(
+                "Cannot access file {}: {}",
+                path, e
+            ))),
+        }
+    }
+}
+
+pub trait FileValidator {
+    fn validate_file(&self, path: &str) -> Result<(), AppError>;
+}
+
+impl FileValidator for InputValidator {
+    fn validate_file(&self, path: &str) -> Result<(), AppError> {
+        self.validate_file_size(path)
     }
 }
 

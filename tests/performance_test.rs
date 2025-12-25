@@ -46,11 +46,11 @@ mod performance_tests {
             || std::path::Path::new("/usr/local/cuda").exists()
     }
 
-    fn get_expected_qps_threshold() -> u64 {
+    fn get_expected_qps_threshold() -> f64 {
         if is_gpu_available() {
-            1000
+            1000.0
         } else {
-            200
+            200.0
         }
     }
 

@@ -7,12 +7,11 @@ use crate::error::AppError;
 #[cfg(test)]
 use crate::text::domain::ChunkResult;
 use crate::text::domain::{ChunkRequest, ChunkResponse};
+use crate::utils::constants::{
+    DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP_RATIO, MIN_CHUNK_SIZE_RATIO,
+};
 use crate::utils::AggregationMode;
 use tokenizers::Tokenizer;
-
-const DEFAULT_CHUNK_SIZE: usize = 512;
-const DEFAULT_OVERLAP_RATIO: f32 = 0.2;
-const MIN_CHUNK_SIZE_RATIO: usize = 4;
 
 #[derive(Debug, Clone)]
 pub struct TextChunker {
@@ -51,10 +50,12 @@ impl TextChunker {
         match mode {
             AggregationMode::SlidingWindow => self.sliding_window_chunk(text),
             AggregationMode::Paragraph => self.paragraph_chunk(text),
+            AggregationMode::Paragraphs => self.paragraph_chunk(text),
             AggregationMode::FixedSize => self.fixed_size_chunk(text),
             AggregationMode::Average
             | AggregationMode::MaxPooling
-            | AggregationMode::MinPooling => self.sliding_window_chunk(text),
+            | AggregationMode::MinPooling
+            | AggregationMode::Document => self.sliding_window_chunk(text),
         }
     }
 

@@ -4,7 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 use crate::error::AppError;
-use crate::utils::{l2_normalize, AggregationMode};
+use crate::utils::{normalize_l2, AggregationMode};
 
 pub struct EmbeddingAggregator {
     mode: AggregationMode,
@@ -34,7 +34,7 @@ impl EmbeddingAggregator {
         if embeddings.len() == 1 {
             let mut result = embeddings[0].clone();
             if self.normalize {
-                l2_normalize(&mut result);
+                normalize_l2(&mut result);
             }
             return Ok(result);
         }
@@ -43,7 +43,9 @@ impl EmbeddingAggregator {
         let result = match self.mode {
             AggregationMode::Average
             | AggregationMode::SlidingWindow
-            | AggregationMode::Paragraph => self.average_pooling(embeddings, dimension),
+            | AggregationMode::Paragraph
+            | AggregationMode::Paragraphs
+            | AggregationMode::Document => self.average_pooling(embeddings, dimension),
             AggregationMode::MaxPooling => self.max_pooling(embeddings, dimension),
             AggregationMode::MinPooling => self.min_pooling(embeddings, dimension),
             AggregationMode::FixedSize => self.average_pooling(embeddings, dimension),
@@ -51,7 +53,7 @@ impl EmbeddingAggregator {
 
         if self.normalize {
             let mut normalized = result;
-            l2_normalize(&mut normalized);
+            normalize_l2(&mut normalized);
             Ok(normalized)
         } else {
             Ok(result)
@@ -91,7 +93,7 @@ impl EmbeddingAggregator {
         }
 
         if self.normalize {
-            l2_normalize(&mut aggregated);
+            normalize_l2(&mut aggregated);
         }
 
         Ok(aggregated)

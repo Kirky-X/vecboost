@@ -6,14 +6,14 @@
 use crate::config::model::ModelConfig;
 use crate::domain::{
     BatchEmbedRequest, BatchEmbedResponse, BatchEmbeddingResult, EmbedRequest, EmbedResponse,
-    EmbeddingOutput, FileProcessingStats, ModelInfo, ModelListResponse, ModelSwitchRequest,
-    ModelSwitchResponse, ParagraphEmbedding, SearchRequest, SearchResponse, SearchResult,
-    SimilarityRequest, SimilarityResponse,
+    EmbeddingOutput, FileProcessingStats, ModelInfo, ModelListResponse, ModelMetadata,
+    ModelSwitchRequest, ModelSwitchResponse, ParagraphEmbedding, SearchRequest, SearchResponse,
+    SearchResult, SimilarityRequest, SimilarityResponse,
 };
 use crate::engine::{AnyEngine, InferenceEngine};
 use crate::error::AppError;
 use crate::utils::{
-    cosine_similarity, normalize_l2, AggregationMode, InputValidator, TextValidator, DEFAULT_TOP_K,
+    cosine_similarity, normalize_l2, AggregationMode, FileValidator, InputValidator, TextValidator, DEFAULT_TOP_K,
     MAX_BATCH_SIZE, MAX_TOP_K,
 };
 use std::fs::File;
@@ -131,6 +131,8 @@ impl EmbeddingService {
 
     /// 处理大文件流式向量化 (简单实现：按行平均)
     pub async fn process_file_stream(&self, path: &Path) -> Result<EmbedResponse, AppError> {
+        self.validator.validate_file(path.to_str().unwrap_or(""))?;
+
         let start_time = std::time::Instant::now();
         let file = File::open(path)?;
         let reader = BufReader::new(file);
@@ -150,6 +152,8 @@ impl EmbeddingService {
         path: &Path,
         mode: AggregationMode,
     ) -> Result<EmbeddingOutput, AppError> {
+        self.validator.validate_file(path.to_str().unwrap_or(""))?;
+
         let start_time = std::time::Instant::now();
         let file = File::open(path)?;
         let reader = BufReader::new(file);
@@ -460,6 +464,26 @@ impl EmbeddingService {
             engine_type: config.engine_type.to_string(),
             dimension: config.expected_dimension,
             is_loaded: true,
+        })
+    }
+
+    pub fn get_model_metadata(&self) -> Option<ModelMetadata> {
+        self.model_config.as_ref().map(|config| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let loaded_at = Some(format!("{}", now));
+
+            ModelMetadata {
+                name: config.name.clone(),
+                version: "1.0.0".to_string(),
+                engine_type: config.engine_type.to_string(),
+                dimension: config.expected_dimension,
+                max_input_length: 512,
+                is_loaded: true,
+                loaded_at,
+            }
         })
     }
 
@@ -1059,7 +1083,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_batch_single() {
-        let temp_dir = tempdir().unwrap();
+        let _temp_dir = tempdir().unwrap();
         let mock_engine = MockEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =

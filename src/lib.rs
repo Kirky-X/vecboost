@@ -4,6 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 pub mod config;
+pub mod device;
 pub mod domain;
 pub mod engine;
 pub mod error;

@@ -480,8 +480,8 @@ mod tests {
         let cached = CachedTokenizer::with_default_cache(tokenizer.tokenizer, 512);
 
         let text = "Test text";
-        let encoding1 = cached.encode(text, true).await.unwrap();
-        let encoding2 = cached.encode(text, false).await.unwrap();
+        let _encoding1 = cached.encode(text, true).await.unwrap();
+        let _encoding2 = cached.encode(text, false).await.unwrap();
 
         let stats = cached.get_cache_stats().await;
         assert_eq!(stats.misses, 2);

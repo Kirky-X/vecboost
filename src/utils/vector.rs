@@ -36,7 +36,9 @@ impl FromStr for SimilarityMetric {
 pub enum AggregationMode {
     #[default]
     SlidingWindow,
+    Document,
     Paragraph,
+    Paragraphs,
     FixedSize,
     Average,
     MaxPooling,
@@ -131,10 +133,6 @@ pub fn normalize_l2(v: &mut [f32]) {
             *x /= norm;
         }
     }
-}
-
-pub fn l2_normalize(v: &mut [f32]) {
-    normalize_l2(v)
 }
 
 #[cfg(test)]

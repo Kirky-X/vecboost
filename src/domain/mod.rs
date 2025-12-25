@@ -122,6 +122,17 @@ pub struct ModelInfo {
     pub is_loaded: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelMetadata {
+    pub name: String,
+    pub version: String,
+    pub engine_type: String,
+    pub dimension: Option<usize>,
+    pub max_input_length: usize,
+    pub is_loaded: bool,
+    pub loaded_at: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ModelListResponse {
     pub models: Vec<ModelInfo>,

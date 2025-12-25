@@ -5,6 +5,7 @@
 
 pub mod collector;
 pub mod domain;
+pub mod performance;
 
 pub use collector::MetricsCollector;
 pub use domain::{

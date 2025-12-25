@@ -16,7 +16,7 @@ use vecboost::{
     config::model::{EngineType, ModelConfig},
     domain::{
         BatchEmbedRequest, EmbedRequest, FileEmbedRequest, ModelInfo, ModelListResponse,
-        ModelSwitchRequest, SimilarityRequest,
+        ModelMetadata, ModelSwitchRequest, SimilarityRequest,
     },
     engine::AnyEngine,
     service::embedding::EmbeddingService,
@@ -72,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/embed/file", post(file_embed_handler))
         .route("/api/v1/model/switch", post(model_switch_handler))
         .route("/api/v1/model/current", get(current_model_handler))
+        .route("/api/v1/model/info", get(model_info_handler))
         .route("/api/v1/model/list", get(model_list_handler))
         .layer(TraceLayer::new_for_http())
         .with_state(app_state);
@@ -170,6 +171,15 @@ async fn current_model_handler(
     Ok(Json(info))
 }
 
+async fn model_info_handler(
+    State(state): State<AppState>,
+) -> Result<Json<ModelMetadata>, vecboost::error::AppError> {
+    let service_guard = state.service.read().await;
+    let metadata = service_guard
+        .get_model_metadata()
+        .ok_or_else(|| vecboost::error::AppError::NotFound("No model loaded".to_string()))?;
+    Ok(Json(metadata))
+}
 
 async fn model_list_handler(
     State(state): State<AppState>,

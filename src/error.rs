@@ -94,3 +94,9 @@ impl From<std::io::Error> for AppError {
         AppError::inference_error(e.to_string())
     }
 }
+
+impl From<candle_core::Error> for AppError {
+    fn from(e: candle_core::Error) -> Self {
+        AppError::inference_error(e.to_string())
+    }
+}

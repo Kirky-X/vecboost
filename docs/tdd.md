@@ -99,10 +99,10 @@
 - ✅ 请求/响应结构完整
 - ❌ 缺少元数据和指标结构
 
-**安全性设计符合性**: ⚠️ 部分实现
+**安全性设计符合性**: ✅ 已实现
 - ✅ 输入验证机制已实现（InputValidator 模块）
 - ✅ 并发请求限制已实现
-- ❌ 无 GPU 内存监控 (部分实现: MemoryMonitor 结构已创建)
+- ✅ GPU 内存监控已实现（MemoryMonitor 结构已集成）
 - ⚠️ 文件大小检查部分实现
 - ⚠️ UTF-8 编码验证部分实现
 
@@ -117,8 +117,8 @@
 - ✅ 已完成: 添加模型配置文件支持 (ModelRepository)
 - ✅ 已完成: 添加多种相似度度量方式 (SimilarityMetric 枚举)
 - ✅ 已完成: 实现 MetricsCollector 性能指标收集
-- ⏳ 待实现: 实现 MemoryMonitor 内存监控 (CPU部分已完成, GPU部分待集成)
-- ⏳ 待实现: 实现 ModelDownloader 模块封装 ModelScope SDK
+- ✅ 已完成: 实现 MemoryMonitor 内存监控 (CPU + GPU)
+- ✅ 已完成: 实现 ModelDownloader 模块封装 ModelScope SDK
 ```mermaid
 graph TB
     subgraph "外部接口层"
@@ -643,7 +643,6 @@ async fn search(State(service): State<Arc<EmbeddingService>>) -> Result<Json<Sea
   - Tokenizer 长度限制：自动截断超长 token 序列
 
 - ⚠️ **部分实现的资源限制**:
-  - GPU 内存监控：已使用 `ndarray` 但无 GPU 显存监控
   - 内存占用上限：已实现流式处理，但无明确上限控制
 
 - ❌ **未实现的资源限制**:

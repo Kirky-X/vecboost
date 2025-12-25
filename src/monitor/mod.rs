@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::warn;
 
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStats {
@@ -167,6 +167,37 @@ impl MemoryMonitor {
         let last_update = self.inner.last_update.read().await;
         last_update.elapsed().as_millis() >= self.inner.check_interval_ms as u128
     }
+
+    #[cfg(feature = "cuda")]
+    pub async fn update_gpu_memory_from_candle(&self) {
+        if let Ok((used, total)) = candle_core::Device::cuda_memory_info() {
+            self.update_gpu_memory(used as u64, total as u64).await;
+        }
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub async fn update_gpu_memory_from_candle(&self) {}
+
+    #[cfg(feature = "onnx")]
+    pub async fn update_gpu_memory_from_ort(&self) {
+        use ort::ExecutionProviderDispatch;
+
+        if let Ok(ep) = ort::ExecutionProviderDispatch::CUDA {
+            if ep.is_available() {
+                let memory_info = ep.get_memory_info();
+                if let Ok(info) = memory_info {
+                    self.update_gpu_memory(
+                        info.used_memory() as u64,
+                        info.total_memory() as u64,
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    #[cfg(not(feature = "onnx"))]
+    pub async fn update_gpu_memory_from_ort(&self) {}
 }
 
 impl Default for MemoryMonitor {

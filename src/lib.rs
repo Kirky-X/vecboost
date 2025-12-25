@@ -9,6 +9,7 @@ pub mod engine;
 pub mod error;
 pub mod metrics;
 pub mod model;
+pub mod monitor;
 pub mod service;
 pub mod text;
 pub mod utils;

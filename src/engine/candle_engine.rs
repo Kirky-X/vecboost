@@ -6,16 +6,19 @@
 use super::InferenceEngine;
 use crate::config::model::{DeviceType, ModelConfig};
 use crate::error::AppError;
+use crate::monitor::MemoryMonitor;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 use hf_hub::{api::sync::Api, Repo, RepoType};
+use std::sync::Arc;
 use tokenizers::{PaddingParams, Tokenizer};
 
 pub struct CandleEngine {
     model: BertModel,
     tokenizer: Tokenizer,
     device: Device,
+    memory_monitor: Option<Arc<MemoryMonitor>>,
 }
 
 impl CandleEngine {
@@ -74,10 +77,17 @@ impl CandleEngine {
         let model = BertModel::load(vb, &bert_config)
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
+        let memory_monitor = if device.is_cuda() {
+            Some(Arc::new(MemoryMonitor::new()))
+        } else {
+            None
+        };
+
         Ok(Self {
             model,
             tokenizer,
             device,
+            memory_monitor,
         })
     }
 
@@ -101,14 +111,12 @@ impl CandleEngine {
             .forward(&token_ids, &token_type_ids, None)
             .map_err(|e| AppError::InferenceError(e.to_string()))?;
 
-        // Perform Mean Pooling (taking the first token [CLS] is another strategy, but mean is common for BGE)
-        // Here we implement CLS pooling for simplicity as BGE-M3 often works well with it,
-        // but for strict correctness with BGE, we usually do Mean Pooling over attention mask.
-        // Let's do CLS (index 0) for this implementation to keep it fast and standard for BERT-likes.
-        let (_n_sentence, _n_tokens, _hidden_size) = embeddings
-            .dims3()
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+        if let Some(ref _monitor) = self.memory_monitor {
+            #[cfg(feature = "cuda")]
+            _monitor.update_gpu_memory_from_candle().await;
+        }
 
+        // Use CLS pooling (first token) for simplicity and reliability
         let cls_embedding = embeddings
             .get(0)
             .map_err(|e| AppError::InferenceError(e.to_string()))?

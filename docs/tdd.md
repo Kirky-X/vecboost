@@ -599,7 +599,7 @@ pub struct FileEmbedResponse {
   - 批量向量化 API（引擎层已支持，API 层已暴露）✅ 已实现
 
 - ❌ **未实现的 API**:
-  - 模型切换 API 🔄 开发中
+  - 模型切换 API ✅
 
 **实际实现**（src/main.rs）:
 ```rust

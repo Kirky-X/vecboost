@@ -100,3 +100,30 @@ pub struct BatchEmbeddingResult {
     pub text_preview: String,
     pub embedding: Vec<f32>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ModelSwitchRequest {
+    pub model_name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelSwitchResponse {
+    pub previous_model: Option<String>,
+    pub current_model: String,
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelInfo {
+    pub name: String,
+    pub engine_type: String,
+    pub dimension: Option<usize>,
+    pub is_loaded: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelListResponse {
+    pub models: Vec<ModelInfo>,
+    pub total_count: usize,
+}

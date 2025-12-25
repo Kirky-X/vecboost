@@ -6,10 +6,11 @@
 use crate::config::model::ModelConfig;
 use crate::domain::{
     BatchEmbedRequest, BatchEmbedResponse, BatchEmbeddingResult, EmbedRequest, EmbedResponse,
-    EmbeddingOutput, FileProcessingStats, ParagraphEmbedding, SearchRequest, SearchResponse,
-    SearchResult, SimilarityRequest, SimilarityResponse,
+    EmbeddingOutput, FileProcessingStats, ModelInfo, ModelListResponse, ModelSwitchRequest,
+    ModelSwitchResponse, ParagraphEmbedding, SearchRequest, SearchResponse, SearchResult,
+    SimilarityRequest, SimilarityResponse,
 };
-use crate::engine::InferenceEngine;
+use crate::engine::{AnyEngine, InferenceEngine};
 use crate::error::AppError;
 use crate::utils::{
     cosine_similarity, normalize_l2, AggregationMode, InputValidator, TextValidator, DEFAULT_TOP_K,
@@ -18,7 +19,8 @@ use crate::utils::{
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::warn;
 
 struct MemoryMonitor;
@@ -92,7 +94,7 @@ impl EmbeddingService {
     pub async fn process_text(&self, req: EmbedRequest) -> Result<EmbedResponse, AppError> {
         self.validator.validate_text(&req.text)?;
 
-        let mut embedding = self.engine.write().unwrap().embed(&req.text)?;
+        let mut embedding = self.engine.write().await.embed(&req.text)?;
         normalize_l2(&mut embedding);
 
         let dimension = embedding.len();
@@ -115,8 +117,8 @@ impl EmbeddingService {
         let engine1 = Arc::clone(&self.engine);
         let engine2 = Arc::clone(&self.engine);
 
-        let f1 = async move { engine1.write().unwrap().embed(&req.source) };
-        let f2 = async move { engine2.write().unwrap().embed(&req.target) };
+        let f1 = async move { engine1.write().await.embed(&req.source) };
+        let f2 = async move { engine2.write().await.embed(&req.target) };
 
         let (mut v1, mut v2) = tokio::try_join!(f1, f2)?;
 
@@ -184,7 +186,7 @@ impl EmbeddingService {
                 continue;
             }
 
-            let vec = self.engine.write().unwrap().embed(&text)?;
+            let vec = self.engine.write().await.embed(&text)?;
 
             match &mut total_embedding {
                 None => total_embedding = Some(vec),
@@ -253,7 +255,7 @@ impl EmbeddingService {
                 continue;
             }
 
-            let mut embedding = self.engine.write().unwrap().embed(para)?;
+            let mut embedding = self.engine.write().await.embed(para)?;
             normalize_l2(&mut embedding);
 
             let preview = if para.len() > 100 { &para[..100] } else { para };
@@ -322,7 +324,7 @@ impl EmbeddingService {
         let top_k = std::cmp::min(req.top_k.unwrap_or(DEFAULT_TOP_K), MAX_TOP_K);
 
         let query_embedding = {
-            let mut embedding = self.engine.write().unwrap().embed(&req.query)?;
+            let mut embedding = self.engine.write().await.embed(&req.query)?;
             normalize_l2(&mut embedding);
             embedding
         };
@@ -330,7 +332,7 @@ impl EmbeddingService {
         let mut results: Vec<(usize, f32, String)> = Vec::with_capacity(req.texts.len());
 
         for (idx, text) in req.texts.iter().enumerate() {
-            let mut embedding = self.engine.write().unwrap().embed(text)?;
+            let mut embedding = self.engine.write().await.embed(text)?;
             normalize_l2(&mut embedding);
 
             let score = cosine_similarity(&query_embedding, &embedding)?;
@@ -366,7 +368,7 @@ impl EmbeddingService {
         let top_k = std::cmp::min(top_k.unwrap_or(DEFAULT_TOP_K), MAX_TOP_K);
 
         let query_embedding = {
-            let mut embedding = self.engine.write().unwrap().embed(query)?;
+            let mut embedding = self.engine.write().await.embed(query)?;
             normalize_l2(&mut embedding);
             embedding
         };
@@ -374,7 +376,7 @@ impl EmbeddingService {
         let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
 
         for chunk in texts.chunks(MAX_BATCH_SIZE) {
-            let chunk_embeddings = self.engine.write().unwrap().embed_batch(chunk)?;
+            let chunk_embeddings = self.engine.write().await.embed_batch(chunk)?;
             for mut emb in chunk_embeddings {
                 normalize_l2(&mut emb);
                 embeddings.push(emb);
@@ -419,7 +421,7 @@ impl EmbeddingService {
         let mut dimension: Option<usize> = None;
 
         for chunk in texts.chunks(MAX_BATCH_SIZE) {
-            let chunk_embeddings = self.engine.write().unwrap().embed_batch(chunk)?;
+            let chunk_embeddings = self.engine.write().await.embed_batch(chunk)?;
 
             for (text, mut embedding) in chunk.iter().zip(chunk_embeddings.into_iter()) {
                 normalize_l2(&mut embedding);
@@ -450,6 +452,104 @@ impl EmbeddingService {
             dimension: dimension.unwrap_or(0),
             processing_time_ms: processing_time.as_millis(),
         })
+    }
+
+    pub fn get_model_info(&self) -> Option<ModelInfo> {
+        self.model_config.as_ref().map(|config| ModelInfo {
+            name: config.name.clone(),
+            engine_type: config.engine_type.to_string(),
+            dimension: config.expected_dimension,
+            is_loaded: true,
+        })
+    }
+
+    pub async fn switch_model(
+        &mut self,
+        req: ModelSwitchRequest,
+    ) -> Result<ModelSwitchResponse, AppError> {
+        let previous_model = self.model_config.as_ref().map(|c| c.name.clone());
+
+        tracing::info!(
+            "Switching model from {:?} to {}",
+            previous_model,
+            req.model_name
+        );
+
+        if let Some(ref prev_name) = previous_model {
+            if prev_name == &req.model_name {
+                return Ok(ModelSwitchResponse {
+                    previous_model: previous_model.clone(),
+                    current_model: req.model_name,
+                    success: true,
+                    message: "Already using this model".to_string(),
+                });
+            }
+        }
+
+        let model_config = ModelConfig {
+            name: req.model_name.clone(),
+            engine_type: self
+                .model_config
+                .as_ref()
+                .map(|c| c.engine_type.clone())
+                .unwrap_or(crate::config::model::EngineType::Candle),
+            model_path: std::path::PathBuf::from(&req.model_name),
+            tokenizer_path: None,
+            device: self
+                .model_config
+                .as_ref()
+                .map(|c| c.device.clone())
+                .unwrap_or(crate::config::model::DeviceType::Cpu),
+            max_batch_size: self
+                .model_config
+                .as_ref()
+                .map(|c| c.max_batch_size)
+                .unwrap_or(32),
+            pooling_mode: self.model_config.as_ref().and_then(|c| c.pooling_mode.clone()),
+            expected_dimension: self
+                .model_config
+                .as_ref()
+                .and_then(|c| c.expected_dimension),
+        };
+
+        let new_engine = AnyEngine::new(&model_config, model_config.engine_type.clone())?;
+
+        self.engine = Arc::new(RwLock::new(new_engine));
+        self.model_config = Some(model_config);
+
+        tracing::info!("Model switched successfully to {}", req.model_name);
+
+        Ok(ModelSwitchResponse {
+            previous_model,
+            current_model: req.model_name,
+            success: true,
+            message: "Model switched successfully".to_string(),
+        })
+    }
+
+    pub fn list_available_models(&self) -> ModelListResponse {
+        let model_info = ModelInfo {
+            name: self
+                .model_config
+                .as_ref()
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| "default".to_string()),
+            engine_type: self
+                .model_config
+                .as_ref()
+                .map(|c| c.engine_type.to_string())
+                .unwrap_or_else(|| "candle".to_string()),
+            dimension: self.model_config.as_ref().and_then(|c| c.expected_dimension),
+            is_loaded: true,
+        };
+
+        let models = vec![model_info];
+        let total_count = models.len();
+
+        ModelListResponse {
+            models,
+            total_count,
+        }
     }
 }
 

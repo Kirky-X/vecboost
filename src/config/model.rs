@@ -4,13 +4,25 @@
 // See LICENSE file in the project root for full license information.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EngineType {
     Candle,
+    #[cfg(feature = "onnx")]
     Onnx,
+}
+
+impl fmt::Display for EngineType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EngineType::Candle => write!(f, "candle"),
+            #[cfg(feature = "onnx")]
+            EngineType::Onnx => write!(f, "onnx"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -87,7 +99,7 @@ mod tests {
     fn test_model_config_with_dimension() {
         let config = ModelConfig {
             name: "bge-m3".to_string(),
-            engine_type: EngineType::Onnx,
+            engine_type: EngineType::Candle,
             model_path: PathBuf::from("/models/bge-m3"),
             tokenizer_path: Some(PathBuf::from("/models/bge-m3-tokenizer")),
             device: DeviceType::Cuda,
@@ -104,7 +116,7 @@ mod tests {
     fn test_model_config_serialization() {
         let config = ModelConfig {
             name: "bge-m3".to_string(),
-            engine_type: EngineType::Onnx,
+            engine_type: EngineType::Candle,
             model_path: PathBuf::from("/models/bge-m3"),
             tokenizer_path: Some(PathBuf::from("/models/bge-m3-tokenizer")),
             device: DeviceType::Cuda,
@@ -117,7 +129,7 @@ mod tests {
         let decoded: ModelConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(decoded.name, "bge-m3");
-        assert_eq!(decoded.engine_type, EngineType::Onnx);
+        assert_eq!(decoded.engine_type, EngineType::Candle);
         assert_eq!(decoded.device, DeviceType::Cuda);
         assert_eq!(decoded.expected_dimension, Some(1024));
     }
@@ -132,13 +144,17 @@ mod tests {
     #[test]
     fn test_engine_type_serialization() {
         let candle = EngineType::Candle;
-        let onnx = EngineType::Onnx;
 
         let candle_json = serde_json::to_string(&candle).unwrap();
-        let onnx_json = serde_json::to_string(&onnx).unwrap();
 
         assert_eq!(candle_json, "\"candle\"");
-        assert_eq!(onnx_json, "\"onnx\"");
+
+        #[cfg(feature = "onnx")]
+        {
+            let onnx = EngineType::Onnx;
+            let onnx_json = serde_json::to_string(&onnx).unwrap();
+            assert_eq!(onnx_json, "\"onnx\"");
+        }
     }
 
     #[test]

@@ -63,7 +63,14 @@ impl LoadedModel for OnnxModel {
     }
 
     fn engine_type(&self) -> EngineType {
-        EngineType::Onnx
+        #[cfg(feature = "onnx")]
+        {
+            EngineType::Onnx
+        }
+        #[cfg(not(feature = "onnx"))]
+        {
+            unreachable!()
+        }
     }
 
     fn reload(&self) -> Result<(), AppError> {
@@ -97,6 +104,7 @@ impl ModelLoader for LocalModelLoader {
                 path: config.model_path.clone(),
                 name: config.name.clone(),
             }),
+            #[cfg(feature = "onnx")]
             EngineType::Onnx => Arc::new(OnnxModel {
                 path: config.model_path.clone(),
                 name: config.name.clone(),
@@ -176,6 +184,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "onnx")]
     fn test_onnx_model_properties() {
         let path = PathBuf::from("/test/model");
         let model = OnnxModel {

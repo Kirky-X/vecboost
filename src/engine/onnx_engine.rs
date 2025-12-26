@@ -165,16 +165,34 @@ impl OnnxEngine {
 
     pub fn check_memory_pressure(&self, threshold_percent: u64) -> bool {
         if let Some(ref monitor) = self.memory_monitor {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                let stats = monitor.get_memory_stats().await;
-                let usage_percent = if stats.total_bytes > 0 {
-                    (stats.current_bytes * 100) / stats.total_bytes
-                } else {
-                    0
-                };
-                usage_percent >= threshold_percent
-            })
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.block_on(async {
+                    let stats = monitor.get_memory_stats().await;
+                    let usage_percent = if stats.total_bytes > 0 {
+                        (stats.current_bytes * 100) / stats.total_bytes
+                    } else {
+                        0
+                    };
+                    usage_percent >= threshold_percent
+                })
+            } else {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap_or_else(|_| {
+                        tracing::error!("Failed to create Tokio runtime for memory check");
+                        std::process::exit(1);
+                    });
+                rt.block_on(async {
+                    let stats = monitor.get_memory_stats().await;
+                    let usage_percent = if stats.total_bytes > 0 {
+                        (stats.current_bytes * 100) / stats.total_bytes
+                    } else {
+                        0
+                    };
+                    usage_percent >= threshold_percent
+                })
+            }
         } else {
             false
         }

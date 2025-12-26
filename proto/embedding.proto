@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+package vecboost;
+
+option go_package = "vecboost/proto";
+
+service EmbeddingService {
+  rpc Embed(EmbedRequest) returns (EmbedResponse);
+  rpc EmbedBatch(BatchEmbedRequest) returns (BatchEmbedResponse);
+  rpc ComputeSimilarity(SimilarityRequest) returns (SimilarityResponse);
+  rpc EmbedFile(FileEmbedRequest) returns (FileEmbedResponse);
+  rpc ModelSwitch(ModelSwitchRequest) returns (ModelSwitchResponse);
+  rpc GetCurrentModel(Empty) returns (ModelInfo);
+  rpc GetModelInfo(Empty) returns (ModelMetadata);
+  rpc ListModels(Empty) returns (ModelListResponse);
+  rpc HealthCheck(Empty) returns (HealthResponse);
+}
+
+message Empty {}
+
+message EmbedRequest {
+  string text = 1;
+  optional bool normalize = 2;
+}
+
+message EmbedResponse {
+  repeated float embedding = 1;
+  int64 dimension = 2;
+  double processing_time_ms = 3;
+}
+
+message BatchEmbedRequest {
+  repeated string texts = 1;
+  optional bool normalize = 2;
+}
+
+message BatchEmbedResponse {
+  repeated EmbedResponse embeddings = 1;
+  int64 total_count = 2;
+  double processing_time_ms = 3;
+}
+
+message SimilarityRequest {
+  repeated float vector1 = 1;
+  repeated float vector2 = 2;
+  string metric = 3;
+}
+
+message SimilarityResponse {
+  double score = 1;
+  string metric = 2;
+}
+
+message FileEmbedRequest {
+  string path = 1;
+  optional string mode = 2;
+  optional int32 chunk_size = 3;
+  optional int32 overlap = 4;
+}
+
+message FileEmbedResponse {
+  string mode = 1;
+  FileStats stats = 2;
+  repeated float embedding = 3;
+  repeated ParagraphEmbedding paragraphs = 4;
+}
+
+message FileStats {
+  int64 total_lines = 1;
+  int64 total_chars = 2;
+  int64 total_paragraphs = 3;
+  int64 processed_chunks = 4;
+  double processing_time_ms = 5;
+}
+
+message ParagraphEmbedding {
+  int32 index = 1;
+  string text = 2;
+  repeated float embedding = 3;
+}
+
+message ModelSwitchRequest {
+  string model_name = 1;
+  optional string engine_type = 2;
+  optional string device_type = 3;
+}
+
+message ModelSwitchResponse {
+  bool success = 1;
+  string message = 2;
+  ModelInfo model_info = 3;
+}
+
+message ModelInfo {
+  string name = 1;
+  string engine_type = 2;
+  string device_type = 3;
+  int64 dimension = 4;
+  string precision = 5;
+  int64 max_batch_size = 6;
+  bool cache_enabled = 7;
+  int64 cache_size = 8;
+}
+
+message ModelMetadata {
+  string model_name = 1;
+  string version = 2;
+  string architecture = 3;
+  int64 max_position_embeddings = 4;
+  int64 vocab_size = 5;
+  int64 hidden_size = 6;
+  int64 num_hidden_layers = 7;
+  int64 num_attention_heads = 8;
+  int64 intermediate_size = 9;
+  repeated string supported_devices = 10;
+  repeated string supported_precisions = 11;
+}
+
+message ModelListResponse {
+  repeated ModelMetadata models = 1;
+  string current_model = 2;
+}
+
+message HealthResponse {
+  string status = 1;
+  string version = 2;
+  string uptime = 3;
+  optional string model_loaded = 4;
+}

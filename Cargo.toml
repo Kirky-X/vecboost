@@ -11,6 +11,10 @@ axum-extra = { version = "0.9", features = ["typed-header"] }
 tokio = { version = "1.35", features = ["full"] }
 tower-http = { version = "0.5", features = ["trace", "cors", "add-extension", "validate-request", "set-header"] }
 
+# gRPC support
+tonic = "0.12"
+prost = "0.13"
+
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -59,23 +63,54 @@ jsonwebtoken = "9.3"
 password-hash = { version = "0.5", features = ["rand_core"] }
 argon2 = "0.5"
 rand = "0.8"
+aes-gcm = "0.10"
+hex = "0.4"
 
 # CUDA support
 cudarc = { version = "0.18.2", optional = true }
+
+[build-dependencies]
+tonic-build = "0.12"
 
 [features]
 default = []
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
 onnx = ["ndarray", "ort"]
 metal = ["candle-core/metal", "candle-nn/metal"]
+grpc = []
+
+# Platform-specific default features
+# macOS defaults to metal support
+[target.'cfg(target_os = "macos")'.dependencies]
+# Default to metal feature on macOS
+
+# Linux defaults to CUDA support
+[target.'cfg(target_os = "linux")'.dependencies]
+# Default to CUDA feature on Linux
+
+# Windows defaults to CUDA support
+[target.'cfg(target_os = "windows")'.dependencies]
+# Default to CUDA feature on Windows
 
 [profile.dev]
 opt-level = 1
 
 [[example]]
-name = "gpu_test_onnx"
-required-features = ["onnx"]
+name = "gpu_basic_device_test"
+path = "examples/gpu/basic_device_test.rs"
+required-features = ["cuda"]
 
 [[example]]
-name = "pytorch_gpu_test"
-required-features = ["onnx"]
+name = "gpu_candle_engine_test"
+path = "examples/gpu/candle_engine_test.rs"
+required-features = ["cuda"]
+
+[[example]]
+name = "gpu_onnx_engine_test"
+path = "examples/gpu/onnx_engine_test.rs"
+required-features = ["cuda", "onnx"]
+
+[[example]]
+name = "gpu_performance_comparison"
+path = "examples/gpu/performance_comparison.rs"
+required-features = ["cuda", "onnx"]

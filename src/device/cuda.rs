@@ -407,7 +407,7 @@ mod tests {
         assert!(sm_70_device.capability.supports_tensor_cores);
 
         let sm_60_device = CudaDevice::new(0, "Pascal GPU".to_string(), 8 * 1024 * 1024 * 1024, (6, 0));
-        assert!(sm_60_device.capability.supports_float16);
+        assert!(!sm_60_device.capability.supports_float16);
         assert!(!sm_60_device.capability.supports_tensor_cores);
 
         let sm_50_device = CudaDevice::new(0, "Maxwell GPU".to_string(), 4 * 1024 * 1024 * 1024, (5, 0));

@@ -108,14 +108,17 @@ impl DeviceManager {
     }
 
     pub fn with_memory_limit_config(config: MemoryLimitConfig) -> Self {
-        let manager = Self::new();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            manager.memory_limit_controller.set_limit(config.limit_bytes).await;
-            manager.memory_limit_controller.set_warning_threshold(config.warning_threshold_percent).await;
-            manager.memory_limit_controller.set_critical_threshold(config.critical_threshold_percent).await;
-        });
-        manager
+        let memory_limit_controller = Arc::new(MemoryLimitController::with_config(config));
+        Self {
+            devices: Arc::new(RwLock::new(Vec::new())),
+            memory_monitor: Arc::new(MemoryMonitor::new()),
+            memory_limit_controller,
+            amd_device_manager: Arc::new(AmdDeviceManager::new()),
+            cuda_device_manager: Arc::new(CudaDeviceManager::new()),
+            auto_fallback_enabled: true,
+            memory_threshold_percent: 85,
+            initialized: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     async fn ensure_initialized(&self) {

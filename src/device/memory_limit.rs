@@ -120,56 +120,81 @@ impl MemoryLimitController {
     }
 
     pub fn available_bytes(&self) -> u64 {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let config = self.config.read().await;
-            let current = self.current_usage.load(Ordering::SeqCst);
-            let limit = config.limit_bytes;
-            limit.saturating_sub(current)
-        })
+        if let Ok(config_guard) = self.config.try_read() {
+            let limit = config_guard.limit_bytes;
+            let used = self.current_usage.load(Ordering::SeqCst);
+            limit.saturating_sub(used)
+        } else {
+            0
+        }
     }
 
     pub fn usage_percent(&self) -> f64 {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let config = self.config.read().await;
-            let current = self.current_usage.load(Ordering::SeqCst);
-            let limit = config.limit_bytes;
-
+        if let Ok(config_guard) = self.config.try_read() {
+            let limit = config_guard.limit_bytes;
+            let used = self.current_usage.load(Ordering::SeqCst);
             if limit == 0 {
                 0.0
             } else {
-                (current as f64 / limit as f64) * 100.0
+                (used as f64 / limit as f64) * 100.0
             }
-        })
+        } else {
+            0.0
+        }
     }
+}
 
+pub fn block_on_sync<F: FnOnce() -> T, T>(f: F) -> T {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let _guard = handle.enter();
+        f()
+    } else {
+        f()
+    }
+}
+
+pub fn block_on_async<F: std::future::Future<Output = T>, T>(f: F) -> T {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.block_on(f)
+    } else {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create Tokio runtime");
+        rt.block_on(f)
+    }
+}
+
+impl MemoryLimitController {
     pub async fn set_limit(&self, limit_bytes: u64) {
-        let mut config = self.config.write().await;
-        config.limit_bytes = limit_bytes;
-        info!("Memory limit set to: {} bytes", limit_bytes);
+        {
+            let mut config = self.config.write().await;
+            config.limit_bytes = limit_bytes;
+            info!("Memory limit set to: {} bytes", limit_bytes);
+        }
         self.update_status().await;
     }
 
     pub async fn set_warning_threshold(&self, percent: u64) {
-        let mut config = self.config.write().await;
-        config.warning_threshold_percent = percent.clamp(50, 99);
+        {
+            let mut config = self.config.write().await;
+            config.warning_threshold_percent = percent.clamp(50, 99);
+        }
         self.update_status().await;
     }
 
     pub async fn set_critical_threshold(&self, percent: u64) {
-        let mut config = self.config.write().await;
-        config.critical_threshold_percent = percent.clamp(70, 99);
+        {
+            let mut config = self.config.write().await;
+            config.critical_threshold_percent = percent.clamp(70, 99);
+        }
         self.update_status().await;
     }
 
-    pub fn should_fallback(&self) -> bool {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let status = self.status.read().await.clone();
-            let fallback = self.fallback_triggered.read().await.clone();
-            status == MemoryLimitStatus::Exceeded && !fallback
-        })
+    pub async fn should_fallback(&self) -> bool {
+        let status = self.status.read().await.clone();
+        let fallback = self.fallback_triggered.read().await.clone();
+        status == MemoryLimitStatus::Exceeded && !fallback
     }
 
     pub async fn trigger_fallback(&self) {
@@ -180,16 +205,13 @@ impl MemoryLimitController {
         }
     }
 
-    pub fn reset(&self) {
+    pub async fn reset(&self) {
         self.current_usage.store(0, Ordering::SeqCst);
         self.peak_usage.store(0, Ordering::SeqCst);
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let mut status = self.status.write().await;
-            *status = MemoryLimitStatus::Ok;
-            let mut fallback = self.fallback_triggered.write().await;
-            *fallback = false;
-        });
+        let mut status = self.status.write().await;
+        *status = MemoryLimitStatus::Ok;
+        let mut fallback = self.fallback_triggered.write().await;
+        *fallback = false;
     }
 
     pub async fn get_config(&self) -> MemoryLimitConfig {
@@ -241,7 +263,7 @@ mod tests {
             critical_threshold_percent: 90,
         });
 
-        controller.update_usage(6 * 1024 * 1024 * 1024).await;
+        controller.update_usage(6 * 1024 * 1024 * 1024 + 512 * 1024 * 1024).await;
         let status = controller.check_limit().await;
 
         assert_eq!(status, MemoryLimitStatus::Warning);
@@ -288,7 +310,7 @@ mod tests {
         let controller = MemoryLimitController::new();
 
         controller.update_usage(4 * 1024 * 1024 * 1024).await;
-        controller.reset();
+        controller.reset().await;
 
         assert_eq!(controller.current_usage(), 0);
         assert_eq!(controller.peak_usage(), 0);

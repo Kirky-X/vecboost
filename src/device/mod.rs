@@ -9,7 +9,7 @@ pub mod amd;
 pub mod cuda;
 
 pub use manager::{DeviceInfo, DeviceManager, DeviceStatus, GpuInfo};
-pub use memory_limit::{MemoryLimitConfig, MemoryLimitController, MemoryLimitStatus};
+pub use memory_limit::{MemoryLimitConfig, MemoryLimitController, MemoryLimitStatus, block_on_async, block_on_sync};
 pub use amd::{AmdDevice, AmdDeviceManager, AmdGpuInfo};
 pub use cuda::{CudaDevice, CudaDeviceManager, CudaGpuInfo};
 

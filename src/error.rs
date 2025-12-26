@@ -12,9 +12,6 @@ use regex::Regex;
 use serde_json::json;
 use thiserror::Error;
 
-unsafe impl Send for AppError {}
-unsafe impl Sync for AppError {}
-
 const MAX_ERROR_MESSAGE_LENGTH: usize = 200;
 
 static SANITIZE_PATTERNS: std::sync::OnceLock<Vec<(Regex, &'static str)>> =

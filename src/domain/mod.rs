@@ -11,12 +11,14 @@ use std::path::PathBuf;
 #[derive(Debug, Deserialize)]
 pub struct EmbedRequest {
     pub text: String,
+    pub normalize: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct EmbedResponse {
     pub embedding: Vec<f32>,
     pub dimension: usize,
+    pub processing_time_ms: u128,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +90,7 @@ pub struct FileEmbedResponse {
 pub struct BatchEmbedRequest {
     pub texts: Vec<String>,
     pub mode: Option<AggregationMode>,
+    pub normalize: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

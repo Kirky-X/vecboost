@@ -12,6 +12,7 @@ use axum::{
     routing::{get, post},
 };
 use std::{
+    net::SocketAddr,
     path::PathBuf,
     sync::{
         Arc,
@@ -32,6 +33,8 @@ use vecboost::{
         ModelMetadata, ModelSwitchRequest, SimilarityRequest,
     },
     engine::AnyEngine,
+    grpc::server::GrpcServer,
+    security::{KeyStore, KeyType, SecretKey, SecurityConfig, StorageType, create_key_store},
     service::embedding::EmbeddingService,
     utils::AggregationMode,
 };
@@ -169,15 +172,38 @@ async fn main() -> anyhow::Result<()> {
     let rate_limit_state = RateLimitState::new();
 
     let (jwt_manager, user_store) = if config.auth.enabled {
-        let jwt_secret = config.auth.jwt_secret.unwrap_or_else(|| {
+        let security_config = SecurityConfig {
+            storage_type: match config.auth.security.storage_type.as_str() {
+                "encrypted_file" => StorageType::EncryptedFile,
+                _ => StorageType::Environment,
+            },
+            encryption_key: config.auth.security.encryption_key.clone(),
+            key_file_path: config.auth.security.key_file_path.clone(),
+        };
+
+        let key_store: Arc<dyn KeyStore> = {
+            let boxed = create_key_store(&security_config)?;
+            Arc::from(boxed)
+        };
+
+        let jwt_secret_name = "jwt_secret";
+        let _jwt_secret = if let Some(secret) = config.auth.jwt_secret {
+            let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, secret);
+            key_store.set(&key).await?;
+            key.value
+        } else {
             tracing::warn!(
                 "No JWT secret provided, using default (not recommended for production)"
             );
-            "default_jwt_secret_change_me_in_production".to_string()
-        });
+            let default_secret = "default_jwt_secret_change_me_in_production".to_string();
+            let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, default_secret);
+            key_store.set(&key).await?;
+            key.value
+        };
 
         let jwt_manager = Arc::new(
-            JwtManager::new(jwt_secret)
+            JwtManager::new_with_key_store(Arc::clone(&key_store), Some(jwt_secret_name))
+                .await?
                 .with_expiration(config.auth.token_expiration_hours.unwrap_or(24)),
         );
 
@@ -198,7 +224,10 @@ async fn main() -> anyhow::Result<()> {
             .add_user(admin_user)
             .expect("Failed to add default admin user");
 
-        tracing::info!("JWT authentication enabled");
+        tracing::info!(
+            "JWT authentication enabled with {} storage",
+            config.auth.security.storage_type
+        );
         tracing::info!("Default admin user created: {}", admin_username);
         tracing::warn!("Please change the default admin password in production!");
 
@@ -215,6 +244,8 @@ async fn main() -> anyhow::Result<()> {
         user_store: user_store.clone(),
         auth_enabled: config.auth.enabled,
     };
+
+    let grpc_service = app_state.service.clone();
 
     let mut app = Router::new().route("/health", get(health_check));
 
@@ -275,6 +306,27 @@ async fn main() -> anyhow::Result<()> {
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("Server listening on {}", addr);
+
+    if config.server.grpc_enabled {
+        let grpc_host = config
+            .server
+            .grpc_host
+            .unwrap_or_else(|| config.server.host.clone());
+        let grpc_port = config.server.grpc_port.unwrap_or(50051);
+        let grpc_addr: SocketAddr = format!("{}:{}", grpc_host, grpc_port)
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid gRPC address: {}", e))?;
+
+        let grpc_server = GrpcServer::new(grpc_addr, grpc_service);
+
+        tokio::spawn(async move {
+            if let Err(e) = grpc_server.run().await {
+                tracing::error!("gRPC server error: {}", e);
+            }
+        });
+
+        tracing::info!("gRPC server enabled on {}", grpc_addr);
+    }
 
     axum::serve(listener, app).await?;
 

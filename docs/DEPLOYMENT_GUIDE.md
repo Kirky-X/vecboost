@@ -33,6 +33,19 @@ cargo build --release --features metal
 
 ### AMD GPU 支持（ROCm/OpenCL）
 
+#### 架构概述
+
+VecBoost 提供完整的 AMD GPU 支持，通过以下两种后端实现：
+
+- **ROCm**: AMD 的开源计算平台，提供高性能 CUDA 兼容的 GPU 加速
+- **OpenCL**: 跨平台并行计算标准，提供广泛的 AMD GPU 兼容性
+
+**设备检测策略**：
+1. 优先检测 ROCm 设备（索引 0-3）
+2. 如果未找到 ROCm 设备，则回退到 OpenCL 检测
+3. 自动选择第一个可用设备作为主设备
+4. 支持多 GPU 环境和设备切换
+
 #### 环境要求
 
 **ROCm 支持**
@@ -123,6 +136,156 @@ cargo build --release --features onnx,rocm
 cargo build --release --features rocm,opencl,onnx
 ```
 
+#### 设备管理
+
+**设备初始化**
+
+系统启动时会自动初始化 AMD GPU 设备管理器，执行以下步骤：
+
+1. 扫描 ROCm 设备（索引 0-3）
+2. 如果未找到 ROCm 设备，扫描 OpenCL 设备（索引 0-3）
+3. 记录每个设备的详细信息（名称、显存、计算能力等）
+4. 设置第一个可用设备为主设备
+5. 初始化内存跟踪和状态监控
+
+**设备信息**
+
+每个 AMD GPU 设备包含以下信息：
+
+- `name`: 设备名称（如 "AMD GPU (ROCm) - Device 0"）
+- `device_id`: 设备索引
+- `vram_bytes`: 显存大小（字节）
+- `compute_capability`: 计算能力版本
+- `opencl_version`: OpenCL 版本
+- `roc_version`: ROCm 版本（如适用）
+- `driver_version`: 驱动版本
+
+**多 GPU 支持**
+
+系统支持多 AMD GPU 环境：
+
+```rust
+// 获取所有可用设备
+let devices = manager.devices().await;
+
+// 获取主设备
+let primary = manager.primary_device().await;
+
+// 获取特定索引的设备
+let device = manager.get_device(index).await;
+
+// 设置主设备
+manager.set_primary(index).await;
+
+// 获取设备数量
+let count = manager.device_count().await;
+```
+
+#### 内存管理
+
+**显存分配与释放**
+
+系统提供精细的显存管理：
+
+```rust
+// 分配显存（检查可用性）
+let success = device.allocate(bytes);
+
+// 释放显存
+device.deallocate(bytes);
+
+// 获取可用显存
+let available = device.available_memory();
+
+// 获取显存使用率
+let usage_percent = device.memory_usage_percent();
+```
+
+**内存监控**
+
+实时监控所有 AMD GPU 的内存使用：
+
+```rust
+// 获取总显存
+let total_vram = manager.total_vram().await;
+
+// 获取可用显存
+let available_vram = manager.available_vram().await;
+
+// 获取内存使用摘要
+let summary = manager.memory_usage_summary().await;
+// 输出示例: "AMD GPU Memory: 4294967296 bytes used / 17179869184 bytes total (25.0%)"
+```
+
+**OOM 防护**
+
+系统内置显存不足防护：
+
+- 分配前检查可用显存
+- 超过显存限制时拒绝分配
+- 记录警告日志
+- 支持自动回退到 CPU
+
+#### 设备状态管理
+
+**设备忙状态**
+
+系统跟踪每个设备的使用状态：
+
+```rust
+// 检查设备是否忙碌
+let busy = device.is_busy();
+
+// 设置设备忙碌状态
+device.set_busy(true);  // 标记为忙碌
+device.set_busy(false); // 标记为空闲
+```
+
+**设备重置**
+
+重置所有设备的状态和内存：
+
+```rust
+// 重置所有设备（清除内存使用和忙碌状态）
+manager.reset().await;
+```
+
+#### 精度支持
+
+AMD GPU 支持以下精度模式：
+
+| 精度 | 说明 | 性能 | 内存占用 |
+|------|------|------|----------|
+| `fp32` | 单精度浮点 | 标准 | 高 |
+| `fp16` | 半精度浮点 | 2x 提升 | 50% |
+| `bf16` | BFloat16 | 接近 fp16 | 50% |
+
+```rust
+// 检查设备是否支持特定精度
+let supported = device.supports_precision("fp16");
+```
+
+**推荐配置**：
+
+- **高性能场景**: 使用 `fp16` 或 `bf16`
+- **高精度场景**: 使用 `fp32`
+- **显存受限**: 使用 `fp16` 或 `bf16`
+
+#### 操作支持
+
+AMD GPU 支持以下计算操作：
+
+- `matrix_multiply`: 矩阵乘法
+- `convolution`: 卷积运算
+- `activation`: 激活函数
+- `normalization`: 归一化
+- `reduction`: 归约操作
+
+```rust
+// 检查设备是否支持特定操作
+let supported = device.supports_operation("matrix_multiply");
+```
+
 #### 设备配置
 
 ```bash
@@ -171,48 +334,358 @@ export VECBOOST_PIPE_BUF=4096
 
 **问题**: ROCm 设备未检测
 
+**原因分析**:
+- ROCm 运行时未正确安装
+- 驱动版本不兼容
+- 内核模块未加载
+- 用户权限不足
+
+**诊断步骤**:
+
 ```bash
-# 检查内核模块
+# 1. 检查 ROCm 安装
+rocminfo
+
+# 2. 检查 GPU 信息
+rocm-smi
+
+# 3. 检查内核模块
 lsmod | grep amdgpu
 
+# 4. 检查设备节点
+ls -la /dev/dri/
+ls -la /dev/kfd
+
+# 5. 检查用户组权限
+groups $USER
+```
+
+**解决方案**:
+
+```bash
 # 重新加载驱动
+sudo modprobe -r amdgpu
 sudo modprobe amdgpu
 
-# 检查权限
+# 添加用户到必要组
 sudo usermod -aG video $USER
 sudo usermod -aG render $USER
+
+# 重新登录使权限生效
 ```
 
 **问题**: OpenCL 初始化失败
 
+**原因分析**:
+- OpenCL ICD 加载器未安装
+- 驱动不支持 OpenCL
+- ICD 配置文件缺失
+
+**诊断步骤**:
+
 ```bash
-# 检查 ICD 加载器
+# 1. 检查 OpenCL 平台
+clinfo -l
+
+# 2. 检查 ICD 加载器
 clinfo | grep "Number of platforms"
 
-# 验证 OpenCL 安装
+# 3. 检查 ICD 配置
 ls /etc/OpenCL/vendors/
 
-# 安装 ICD 配置文件
-sudo apt install ocl-icd-libopencl1
+# 4. 检查 OpenCL 库
+ldconfig -p | grep libOpenCL
 ```
 
-**问题**: 显存不足
+**解决方案**:
 
 ```bash
-# 监控显存使用
+# Ubuntu/Debian
+sudo apt install ocl-icd-opencl-dev ocl-icd-libopencl1
+
+# Fedora/RHEL
+sudo dnf install ocl-icd-devel ocl-icd
+
+# 验证安装
+clinfo
+```
+
+**问题**: 显存不足（OOM）
+
+**原因分析**:
+- 批处理大小过大，单次推理显存占用超过可用显存
+- 模型权重加载占用大量显存
+- 多个并发任务同时执行
+- 显存碎片化导致无法分配连续内存块
+- 其他进程占用显存
+
+**诊断步骤**:
+
+```bash
+# 1. 检查当前显存使用情况
 rocm-smi
 
-# 减小批处理大小
-export VECBOOST_BATCH_SIZE=8
+# 2. 查看详细显存信息
+rocm-smi --showmemuse
 
-# 启用 CPU 回退
+# 3. 监控显存使用趋势
+watch -n 1 rocm-smi
+
+# 4. 检查系统日志中的 OOM 错误
+journalctl -xe | grep -i "out of memory"
+
+# 5. 检查 VecBoost 日志中的内存分配失败
+grep -i "memory allocation failed" /var/log/vecboost/*.log
+```
+
+**解决方案**:
+
+```bash
+# 方案 1: 减小批处理大小
+export VECBOOST_BATCH_SIZE=4  # 从默认值减小
+
+# 方案 2: 启用 CPU 回退
 export VECBOOST_FALLBACK_ENABLED=true
-export VECBOOST_MEMORY_THRESHOLD=90
+export VECBOOST_MEMORY_THRESHOLD=90  # 显存使用率超过 90% 时回退
+
+# 方案 3: 使用低精度模型
+export VECBOOST_PRECISION=fp16  # 或 bf16
+
+# 方案 4: 限制并发任务数
+export VECBOOST_MAX_CONCURRENT_TASKS=2
+
+# 方案 5: 清理显存
+# 重启 VecBoost 服务
+sudo systemctl restart vecboost
+
+# 或者在代码中手动释放显存
+# AmdDevice::deallocate() 会自动跟踪和释放
+```
+
+**代码示例**:
+
+```rust
+// 监控显存使用
+let manager = AmdDeviceManager::new().await?;
+manager.initialize().await?;
+
+// 获取显存使用摘要
+let summary = manager.memory_usage_summary().await;
+println!("{}", summary);
+
+// 检查可用显存
+let available = manager.available_vram().await;
+if available < required_memory {
+    // 减小批处理大小或启用 CPU 回退
+}
+```
+
+**问题**: 设备初始化失败
+
+**原因分析**:
+- 设备索引超出范围
+- 设备被其他进程占用
+- 驱动版本不兼容
+- 硬件故障
+- 权限问题
+
+**诊断步骤**:
+
+```bash
+# 1. 检查设备列表
+rocminfo | grep "Device Name"
+
+# 2. 检查设备状态
+rocm-smi --showuse
+
+# 3. 检查设备占用
+lsof /dev/dri/card*
+lsof /dev/kfd
+
+# 4. 检查驱动版本
+rocm-smi --showdriverversion
+
+# 5. 检查内核日志
+dmesg | grep -i amdgpu
+```
+
+**解决方案**:
+
+```bash
+# 方案 1: 检查并释放设备占用
+# 查找占用进程
+fuser -v /dev/dri/card0
+
+# 终止占用进程（谨慎操作）
+sudo kill -9 <PID>
+
+# 方案 2: 更新驱动
+# Ubuntu/Debian
+sudo apt update
+sudo apt install amdgpu-dkms rocm-dev
+
+# 方案 3: 检查设备索引
+# 确保设备索引在有效范围内（0-3）
+# 使用 rocm-smi 查看可用设备数量
+
+# 方案 4: 重置设备
+sudo rmmod amdgpu
+sudo modprobe amdgpu
+```
+
+**问题**: 性能低于预期
+
+**原因分析**:
+- 使用了 CPU 回退而非 GPU
+- 批处理大小过小，GPU 利用率低
+- 精度设置不当（fp32 vs fp16/bf16）
+- 数据传输瓶颈（CPU-GPU）
+- 多 GPU 负载不均衡
+
+**诊断步骤**:
+
+```bash
+# 1. 检查设备使用情况
+rocm-smi --showuse
+
+# 2. 检查 GPU 利用率
+rocm-smi --showgpuclocks
+
+# 3. 监控性能指标
+# 查看 VecBoost 性能日志
+tail -f /var/log/vecboost/metrics.log
+
+# 4. 检查当前配置
+env | grep VECBOOST
+```
+
+**解决方案**:
+
+```bash
+# 方案 1: 确保使用 GPU
+export VECBOOST_DEVICE_TYPE=gpu
+export VECBOOST_FALLBACK_ENABLED=false
+
+# 方案 2: 优化批处理大小
+# 根据显存大小调整
+export VECBOOST_BATCH_SIZE=16  # 8GB 显存推荐 16-32
+
+# 方案 3: 使用半精度
+export VECBOOST_PRECISION=fp16  # 提升吞吐量约 2 倍
+
+# 方案 4: 启用缓存
+export VECBOOST_CACHE_ENABLED=true
+export VECBOOST_CACHE_SIZE=10000
+
+# 方案 5: 多 GPU 负载均衡
+export VECBOOST_MULTI_GPU_ENABLED=true
+```
+
+**性能优化代码示例**:
+
+```rust
+// 使用性能监控
+let manager = AmdDeviceManager::new().await?;
+manager.initialize().await?;
+
+// 获取设备信息
+let device = manager.primary_device().await.unwrap();
+println!("Device: {}", device.name());
+println!("Compute Units: {}", device.compute_units());
+println!("Max Work Group Size: {}", device.max_work_group_size());
+
+// 检查设备是否忙碌
+if !device.is_busy() {
+    // 执行推理任务
+}
 ```
 
 **问题**: 构建失败（ROCm）
 
+**原因分析**:
+- ROCm 工具链未正确安装
+- CUDA feature 与 ROCm 冲突
+- 依赖库版本不匹配
+- 编译器版本不兼容
+- 环境变量未正确设置
+
+**诊断步骤**:
+
 ```bash
+# 1. 检查 ROCm 安装
+which hipcc
+hipcc --version
+
+# 2. 检查 ROCm 库
+ls /opt/rocm/lib/
+
+# 3. 检查环境变量
+echo $ROCM_HOME
+echo $LD_LIBRARY_PATH
+
+# 4. 检查 Cargo feature
+cargo tree -i candle-core
+
+# 5. 查看详细编译错误
+cargo build --features rocm 2>&1 | tee build.log
+```
+
+**解决方案**:
+
+```bash
+# 方案 1: 安装 ROCm 工具链
+# Ubuntu/Debian
+sudo apt install rocm-dev rocm-libs rocm-utils
+
+# 设置环境变量
+export ROCM_HOME=/opt/rocm
+export PATH=$ROCM_HOME/bin:$PATH
+export LD_LIBRARY_PATH=$ROCM_HOME/lib:$LD_LIBRARY_PATH
+
+# 方案 2: 确保不启用 CUDA feature
+cargo build --features rocm --no-default-features
+
+# 方案 3: 更新 Rust 工具链
+rustup update
+rustup default stable
+
+# 方案 4: 清理并重新构建
+cargo clean
+cargo build --features rocm
+
+# 方案 5: 检查依赖版本
+# 确保 candle-core 版本支持 ROCm
+cargo update -p candle-core
+```
+
+**构建配置示例**:
+
+```toml
+# Cargo.toml
+[dependencies]
+candle-core = { version = "0.4", features = ["rocm"] }
+candle-nn = { version = "0.4", features = ["rocm"] }
+
+# 确保不同时启用 cuda 和 rocm
+# [dependencies]
+# candle-core = { version = "0.4", features = ["cuda"] }  # ❌ 与 rocm 冲突
+```
+
+**常见构建错误及修复**:
+
+```bash
+# 错误: hipcc not found
+# 修复: 安装 ROCm 工具链
+sudo apt install rocm-dev
+
+# 错误: undefined reference to hip*
+# 修复: 设置 LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/opt/rocm/lib:$LD_LIBRARY_PATH
+
+# 错误: feature conflict
+# 修复: 移除冲突的 feature
+cargo build --features rocm --no-default-features
+```
 # 清理并重新构建
 cargo clean
 rm -rf target

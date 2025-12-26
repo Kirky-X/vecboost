@@ -69,8 +69,8 @@ class RealEmbeddingService:
     def embed(self, text: str) -> Dict[str, Any]:
         """生成文本向量"""
         if self.model is None:
-            from tests.services import MockEmbeddingService
-            return MockEmbeddingService.embed(text)
+            from tests.services import TestEmbeddingService
+            return TestEmbeddingService.embed(text)
 
         embeddings = self.model.encode(text, normalize_embeddings=True)
         embedding = embeddings.tolist()
@@ -83,8 +83,8 @@ class RealEmbeddingService:
     def embed_batch(self, texts: List[str]) -> List[Dict[str, Any]]:
         """批量生成文本向量"""
         if self.model is None:
-            from tests.services import MockEmbeddingService
-            return [MockEmbeddingService.embed(text) for text in texts]
+            from tests.services import TestEmbeddingService
+            return [TestEmbeddingService.embed(text) for text in texts]
 
         embeddings = self.model.encode(texts, normalize_embeddings=True)
 
@@ -294,14 +294,14 @@ class TestRealModelSimilarity:
             assert -1.0 <= response["score"] <= 1.0
 
 
-class TestMockFallback:
-    """Mock 服务回退测试"""
+class TestTestFallback:
+    """测试服务回退测试"""
 
-    def test_embed_with_mock(
+    def test_embed_with_test(
         self, api_client: Any, embedding_service: RealEmbeddingService
     ):
-        """当模型不可用时使用 Mock 服务"""
-        from tests.services import MockEmbeddingService
+        """当模型不可用时使用测试服务"""
+        from tests.services import TestEmbeddingService
 
         if embedding_service.is_available:
             # 如果模型可用，验证 API 仍然正常工作
@@ -312,13 +312,13 @@ class TestMockFallback:
             assert "embedding" in response
             assert "dimension" in response
         else:
-            # 模型不可用时，验证 Mock 服务正常工作
+            # 模型不可用时，验证测试服务正常工作
             status_code, response = api_client.post(
                 "/api/v1/embed", {"text": "Test text"}
             )
             assert status_code == 200
             assert "embedding" in response
-            assert response["dimension"] == MockEmbeddingService.get_dimension()
+            assert response["dimension"] == TestEmbeddingService.get_dimension()
 
 
 def run_real_model_tests():

@@ -7,14 +7,17 @@ use super::InferenceEngine;
 use crate::config::model::{DeviceType, ModelConfig, Precision};
 use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
 use crate::error::AppError;
+use crate::model::recovery::{ModelRecovery, RecoveryConfig};
 use crate::monitor::MemoryMonitor;
 use crate::text::{CachedTokenizer, Encoding};
-use crate::utils::hash::verify_sha256;
+use crate::utils::hash::{check_model_integrity, verify_sha256};
+use async_trait::async_trait;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 use futures::executor::block_on;
 use hf_hub::{Repo, RepoType, api::sync::Api};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokenizers::Tokenizer as HfTokenizer;
 
@@ -122,11 +125,11 @@ impl CandleEngine {
             (config_filename, tokenizer_filename, weights_filename)
         };
 
-        let config_content = std::fs::read_to_string(config_filename)?;
+        let config_content = std::fs::read_to_string(&config_filename)?;
         let bert_config: BertConfig = serde_json::from_str(&config_content)
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
-        let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename)
+        let hf_tokenizer = HfTokenizer::from_file(&tokenizer_filename)
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
         let tokenizer =
@@ -134,13 +137,114 @@ impl CandleEngine {
 
         let is_pytorch = weights_filename.to_string_lossy().ends_with(".bin");
 
+        let config_str = config_filename.to_string_lossy().to_string();
+        let tokenizer_str = tokenizer_filename.to_string_lossy().to_string();
+        let weights_str = weights_filename.to_string_lossy().to_string();
+
+        let files_to_check = vec![
+            (config_str.clone(), None),
+            (tokenizer_str.clone(), None),
+            (weights_str.clone(), config.model_sha256.clone()),
+        ];
+
+        let min_sizes = {
+            let mut sizes = HashMap::new();
+            sizes.insert(config_str.clone(), 100);
+            sizes.insert(tokenizer_str.clone(), 1000);
+            sizes.insert(weights_str.clone(), 1024 * 1024);
+            sizes
+        };
+
+        tracing::info!("Checking model file integrity...");
+        let integrity_report = check_model_integrity(&config.name, files_to_check, Some(min_sizes))
+            .map_err(|e| AppError::ModelIntegrityError(format!("Integrity check failed: {}", e)))?;
+
+        if !integrity_report.overall_valid {
+            tracing::error!("Model file integrity check failed!");
+            for check in &integrity_report.files_checked {
+                if !check.is_valid {
+                    tracing::error!(
+                        "  File: {}, Error: {}",
+                        check.file_path,
+                        check.error_message.as_deref().unwrap_or("Unknown error")
+                    );
+                }
+            }
+
+            tracing::info!("Attempting automatic recovery of corrupted files...");
+            let recovery_config = RecoveryConfig::default();
+            let recovery = ModelRecovery::new(recovery_config);
+
+            let repo_id_str = if !is_local_path {
+                Some(config.model_path.to_string_lossy().to_string())
+            } else {
+                None
+            };
+
+            let repo_id = repo_id_str.as_deref();
+
+            let recovery_result = recovery
+                .recover_corrupted_files(
+                    &config.name,
+                    model_path,
+                    repo_id,
+                    &integrity_report.corrupted_files,
+                )
+                .map_err(|e| AppError::ModelIntegrityError(format!("Recovery failed: {}", e)))?;
+
+            if recovery_result.success {
+                tracing::info!("Successfully recovered all corrupted files");
+                tracing::info!("Re-running integrity check after recovery...");
+
+                let files_to_check = vec![
+                    (config_str.clone(), None),
+                    (tokenizer_str.clone(), None),
+                    (weights_str.clone(), config.model_sha256.clone()),
+                ];
+
+                let min_sizes = {
+                    let mut sizes = HashMap::new();
+                    sizes.insert(config_str, 100);
+                    sizes.insert(tokenizer_str, 1000);
+                    sizes.insert(weights_str, 1024 * 1024);
+                    sizes
+                };
+
+                let recovery_integrity_report =
+                    check_model_integrity(&config.name, files_to_check, Some(min_sizes)).map_err(
+                        |e| {
+                            AppError::ModelIntegrityError(format!(
+                                "Post-recovery integrity check failed: {}",
+                                e
+                            ))
+                        },
+                    )?;
+
+                if !recovery_integrity_report.overall_valid {
+                    return Err(AppError::ModelFileCorrupted(format!(
+                        "Model files still corrupted after recovery. Corrupted files: {:?}",
+                        recovery_integrity_report.corrupted_files
+                    )));
+                }
+
+                tracing::info!("Post-recovery integrity check passed");
+            } else {
+                return Err(AppError::ModelFileCorrupted(format!(
+                    "Failed to recover corrupted files after {} attempts. Corrupted files: {:?}",
+                    recovery_result.attempts, recovery_result.failed_files
+                )));
+            }
+        }
+
+        tracing::info!("Model file integrity check passed");
+
         if let Some(ref expected_hash) = config.model_sha256 {
             tracing::info!("Verifying model file SHA256 hash...");
             let is_valid = verify_sha256(&weights_filename, expected_hash)
                 .map_err(|e| AppError::ModelLoadError(format!("Failed to verify SHA256: {}", e)))?;
 
             if !is_valid {
-                return Err(AppError::ModelLoadError(format!(
+                return Err(AppError::ModelFileCorrupted(format!(
                     "Model file SHA256 verification failed. Expected: {}, File: {:?}",
                     expected_hash, weights_filename
                 )));
@@ -511,8 +615,38 @@ impl CandleEngine {
 
         Ok(results)
     }
+}
 
-    pub async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError> {
+#[async_trait]
+impl InferenceEngine for CandleEngine {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
+        block_on(async { self.forward_pass(text).await })
+    }
+
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+        let texts_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        block_on(async { self.forward_pass_batch(&texts_refs).await })
+    }
+
+    fn precision(&self) -> &Precision {
+        &self.precision
+    }
+
+    fn supports_mixed_precision(&self) -> bool {
+        self.device.is_cuda()
+    }
+
+    fn is_fallback_triggered(&self) -> bool {
+        self.fallback_triggered
+    }
+
+    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError> {
+        self.try_fallback_to_cpu_impl(config).await
+    }
+}
+
+impl CandleEngine {
+    async fn try_fallback_to_cpu_impl(&mut self, config: &ModelConfig) -> Result<(), AppError> {
         if self.fallback_triggered {
             return Ok(());
         }
@@ -596,24 +730,5 @@ impl CandleEngine {
 
         tracing::info!("Successfully fell back to CPU");
         Ok(())
-    }
-}
-
-impl InferenceEngine for CandleEngine {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
-        block_on(async { self.forward_pass(text).await })
-    }
-
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
-        let texts_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-        block_on(async { self.forward_pass_batch(&texts_refs).await })
-    }
-
-    fn precision(&self) -> &Precision {
-        &self.precision
-    }
-
-    fn supports_mixed_precision(&self) -> bool {
-        self.device.is_cuda()
     }
 }

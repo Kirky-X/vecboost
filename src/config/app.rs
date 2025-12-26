@@ -20,6 +20,9 @@ pub struct AppConfig {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    pub grpc_host: Option<String>,
+    pub grpc_port: Option<u16>,
+    pub grpc_enabled: bool,
     pub workers: Option<usize>,
     pub timeout: Option<u64>,
 }
@@ -59,6 +62,24 @@ pub struct AuthConfig {
     pub token_expiration_hours: Option<i64>,
     pub default_admin_username: Option<String>,
     pub default_admin_password: Option<String>,
+    pub security: SecurityConfig,
+}
+
+#[derive(Debug, Deserialize, Clone, Serialize)]
+pub struct SecurityConfig {
+    pub storage_type: String,
+    pub encryption_key: Option<String>,
+    pub key_file_path: Option<String>,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            storage_type: "environment".to_string(),
+            encryption_key: None,
+            key_file_path: None,
+        }
+    }
 }
 
 impl Default for ServerConfig {
@@ -66,6 +87,9 @@ impl Default for ServerConfig {
         Self {
             host: "0.0.0.0".to_string(),
             port: 3000,
+            grpc_host: None,
+            grpc_port: Some(50051),
+            grpc_enabled: false,
             workers: None,
             timeout: Some(30),
         }
@@ -117,6 +141,7 @@ impl Default for AuthConfig {
             token_expiration_hours: Some(24),
             default_admin_username: Some("admin".to_string()),
             default_admin_password: Some("admin123".to_string()),
+            security: SecurityConfig::default(),
         }
     }
 }
@@ -159,6 +184,8 @@ impl ConfigLoader {
         config = config.set_default("server.host", "0.0.0.0")?;
         config = config.set_default("server.port", 3000)?;
         config = config.set_default("server.timeout", 30)?;
+        config = config.set_default("server.grpc_enabled", false)?;
+        config = config.set_default("server.grpc_port", 50051)?;
 
         config = config.set_default("model.model_repo", "BAAI/bge-m3")?;
         config = config.set_default("model.model_revision", "main")?;
@@ -182,6 +209,7 @@ impl ConfigLoader {
         config = config.set_default("auth.token_expiration_hours", 24)?;
         config = config.set_default("auth.default_admin_username", "admin")?;
         config = config.set_default("auth.default_admin_password", "admin123")?;
+        config = config.set_default("auth.security.storage_type", "environment")?;
 
         if let Some(path) = &self.config_path {
             if path.exists() {
@@ -243,6 +271,15 @@ impl AppConfig {
             .unwrap_or_else(|_| "3000".to_string())
             .parse()
             .unwrap_or(3000);
+        let grpc_enabled = env::var("VECBOOST_SERVER_GRPC_ENABLED")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false);
+        let grpc_host = env::var("VECBOOST_SERVER_GRPC_HOST").ok();
+        let grpc_port = env::var("VECBOOST_SERVER_GRPC_PORT")
+            .unwrap_or_else(|_| "50051".to_string())
+            .parse()
+            .ok();
 
         let model_repo =
             env::var("VECBOOST_MODEL_REPO").unwrap_or_else(|_| "BAAI/bge-m3".to_string());
@@ -265,6 +302,9 @@ impl AppConfig {
             server: ServerConfig {
                 host,
                 port,
+                grpc_host,
+                grpc_port,
+                grpc_enabled,
                 workers: None,
                 timeout: Some(30),
             },
@@ -302,6 +342,12 @@ impl AppConfig {
                     .ok(),
                 default_admin_username: env::var("VECBOOST_AUTH_DEFAULT_ADMIN_USERNAME").ok(),
                 default_admin_password: env::var("VECBOOST_AUTH_DEFAULT_ADMIN_PASSWORD").ok(),
+                security: SecurityConfig {
+                    storage_type: env::var("VECBOOST_SECURITY_STORAGE_TYPE")
+                        .unwrap_or_else(|_| "environment".to_string()),
+                    encryption_key: env::var("VECBOOST_SECURITY_ENCRYPTION_KEY").ok(),
+                    key_file_path: env::var("VECBOOST_SECURITY_KEY_FILE_PATH").ok(),
+                },
             },
         })
     }

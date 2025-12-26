@@ -22,16 +22,16 @@ use vecboost::error::AppError;
 const MOCK_DIMENSION: usize = 1024;
 
 #[derive(Clone)]
-struct MockEngine {
+struct TestEngine {
     dimension: usize,
 }
 
-impl MockEngine {
+impl TestEngine {
     fn new(dimension: usize) -> Self {
         Self { dimension }
     }
 
-    fn generate_deterministic_embedding(&self, text: &str) -> Vec<f32> {
+    fn generate_embedding(&self, text: &str) -> Vec<f32> {
         let mut embedding = vec![0.0; self.dimension];
         let bytes = text.as_bytes();
 
@@ -62,16 +62,13 @@ impl MockEngine {
 }
 
 #[async_trait]
-impl InferenceEngine for MockEngine {
+impl InferenceEngine for TestEngine {
     fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
-        Ok(self.generate_deterministic_embedding(text))
+        Ok(self.generate_embedding(text))
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
-        let embeddings: Vec<Vec<f32>> = texts
-            .iter()
-            .map(|t| self.generate_deterministic_embedding(t))
-            .collect();
+        let embeddings: Vec<Vec<f32>> = texts.iter().map(|t| self.generate_embedding(t)).collect();
         Ok(embeddings)
     }
 
@@ -82,16 +79,18 @@ impl InferenceEngine for MockEngine {
     fn supports_mixed_precision(&self) -> bool {
         false
     }
-}
 
-fn create_mock_engine()
--> Result<Arc<RwLock<dyn InferenceEngine + Send + Sync>>, Box<dyn std::error::Error>> {
-    Ok(Arc::new(RwLock::new(MockEngine::new(MOCK_DIMENSION))))
+    async fn try_fallback_to_cpu(
+        &mut self,
+        _config: &vecboost::config::model::ModelConfig,
+    ) -> Result<(), AppError> {
+        Ok(())
+    }
 }
 
 fn create_test_engine()
 -> Result<Arc<RwLock<dyn InferenceEngine + Send + Sync>>, Box<dyn std::error::Error>> {
-    create_mock_engine()
+    Ok(Arc::new(RwLock::new(TestEngine::new(MOCK_DIMENSION))))
 }
 
 #[tokio::test]
@@ -102,6 +101,7 @@ async fn test_e2e_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
     let result = service
         .process_text(EmbedRequest {
             text: "人工智能是未来的发展方向".to_string(),
+            normalize: Some(true),
         })
         .await?;
 
@@ -127,6 +127,7 @@ async fn test_e2e_english_embedding() -> Result<(), Box<dyn std::error::Error>> 
     let result = service
         .process_text(EmbedRequest {
             text: "Machine learning is transforming the technology industry".to_string(),
+            normalize: Some(true),
         })
         .await?;
 
@@ -145,6 +146,7 @@ async fn test_e2e_mixed_text_embedding() -> Result<(), Box<dyn std::error::Error
     let result = service
         .process_text(EmbedRequest {
             text: "AI人工智能技术正在快速发展".to_string(),
+            normalize: Some(true),
         })
         .await?;
 
@@ -349,9 +351,17 @@ async fn test_embedding_consistency() -> Result<(), Box<dyn std::error::Error>> 
     let text = "一致性测试文本".to_string();
 
     let result1 = service
-        .process_text(EmbedRequest { text: text.clone() })
+        .process_text(EmbedRequest {
+            text: text.clone(),
+            normalize: Some(true),
+        })
         .await?;
-    let result2 = service.process_text(EmbedRequest { text }).await?;
+    let result2 = service
+        .process_text(EmbedRequest {
+            text,
+            normalize: Some(true),
+        })
+        .await?;
 
     assert_eq!(result1.embedding.len(), result2.embedding.len());
     assert!(
@@ -375,6 +385,7 @@ async fn test_embedding_normalization() -> Result<(), Box<dyn std::error::Error>
     let result = service
         .process_text(EmbedRequest {
             text: "测试归一化功能的向量".to_string(),
+            normalize: Some(true),
         })
         .await?;
 
@@ -401,7 +412,12 @@ async fn test_concurrent_embedding_requests() -> Result<(), Box<dyn std::error::
         let text = text.clone();
         let handle = tokio::spawn(async move {
             let service = EmbeddingService::new(engine, None);
-            service.process_text(EmbedRequest { text }).await
+            service
+                .process_text(EmbedRequest {
+                    text,
+                    normalize: Some(true),
+                })
+                .await
         });
         handles.push(handle);
     }
@@ -428,7 +444,10 @@ async fn test_long_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
         vec!["这是一个很长的文本，用于测试模型处理长文本的能力。"; 50].join(" ");
 
     let result = service
-        .process_text(EmbedRequest { text: long_text })
+        .process_text(EmbedRequest {
+            text: long_text,
+            normalize: Some(true),
+        })
         .await?;
 
     assert_eq!(result.embedding.len(), 1024);

@@ -26,6 +26,14 @@ pub trait InferenceEngine: Send + Sync {
 
     /// 检查是否支持混合精度
     fn supports_mixed_precision(&self) -> bool;
+
+    /// 检查是否已触发降级
+    fn is_fallback_triggered(&self) -> bool {
+        false
+    }
+
+    /// 尝试降级到 CPU（在 OOM 时调用）
+    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError>;
 }
 
 pub enum AnyEngine {
@@ -52,6 +60,7 @@ impl AnyEngine {
     }
 }
 
+#[async_trait]
 impl InferenceEngine for AnyEngine {
     fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
         match self {
@@ -82,6 +91,24 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Candle(engine) => engine.supports_mixed_precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.supports_mixed_precision(),
+        }
+    }
+
+    fn is_fallback_triggered(&self) -> bool {
+        match self {
+            AnyEngine::Candle(engine) => engine.is_fallback_triggered(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(_engine) => false,
+        }
+    }
+
+    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError> {
+        match self {
+            AnyEngine::Candle(engine) => engine.try_fallback_to_cpu(config).await,
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(_engine) => Err(AppError::InferenceError(
+                "ONNX engine does not support CPU fallback".to_string(),
+            )),
         }
     }
 }

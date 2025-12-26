@@ -64,11 +64,20 @@ pub enum AppError {
     #[error("Model load error: {0}")]
     ModelLoadError(String),
 
+    #[error("Model file corrupted: {0}")]
+    ModelFileCorrupted(String),
+
+    #[error("Model file integrity check failed: {0}")]
+    ModelIntegrityError(String),
+
     #[error("Tokenization error: {0}")]
     TokenizationError(String),
 
     #[error("Inference error: {0}")]
     InferenceError(String),
+
+    #[error("Out of memory error: {0}")]
+    OutOfMemory(String),
 
     #[error("Invalid input: {0}")]
     InvalidInput(String),
@@ -81,6 +90,12 @@ pub enum AppError {
 
     #[error("Authentication error: {0}")]
     AuthenticationError(String),
+
+    #[error("Security error: {0}")]
+    SecurityError(String),
+
+    #[error("IO error: {0}")]
+    IoError(String),
 }
 
 impl AppError {
@@ -90,6 +105,14 @@ impl AppError {
 
     pub fn model_load_error(message: String) -> Self {
         AppError::ModelLoadError(message)
+    }
+
+    pub fn model_file_corrupted(message: String) -> Self {
+        AppError::ModelFileCorrupted(message)
+    }
+
+    pub fn model_integrity_error(message: String) -> Self {
+        AppError::ModelIntegrityError(message)
     }
 
     pub fn tokenization_error(message: String) -> Self {
@@ -115,6 +138,14 @@ impl AppError {
     pub fn authentication_error(message: String) -> Self {
         AppError::AuthenticationError(message)
     }
+
+    pub fn security_error(message: String) -> Self {
+        AppError::SecurityError(message)
+    }
+
+    pub fn io_error(message: String) -> Self {
+        AppError::IoError(message)
+    }
 }
 
 impl IntoResponse for AppError {
@@ -122,12 +153,17 @@ impl IntoResponse for AppError {
         let status = match self {
             AppError::ConfigError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::ModelLoadError(_) => StatusCode::FAILED_DEPENDENCY,
+            AppError::ModelFileCorrupted(_) => StatusCode::FAILED_DEPENDENCY,
+            AppError::ModelIntegrityError(_) => StatusCode::FAILED_DEPENDENCY,
             AppError::TokenizationError(_) => StatusCode::UNPROCESSABLE_ENTITY,
             AppError::InferenceError(_) => StatusCode::SERVICE_UNAVAILABLE,
+            AppError::OutOfMemory(_) => StatusCode::INSUFFICIENT_STORAGE,
             AppError::InvalidInput(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::ModelNotLoaded(_) => StatusCode::FAILED_DEPENDENCY,
             AppError::AuthenticationError(_) => StatusCode::UNAUTHORIZED,
+            AppError::SecurityError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         let sanitized_message = sanitize_error_message(&self.to_string());

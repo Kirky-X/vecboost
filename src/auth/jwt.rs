@@ -1,11 +1,13 @@
 use crate::auth::types::User;
 use crate::error::AppError;
+use crate::security::{KeyStore, KeyType};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 const DEFAULT_TOKEN_EXPIRATION_HOURS: i64 = 24;
+const DEFAULT_JWT_SECRET_NAME: &str = "jwt_secret";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -22,6 +24,7 @@ pub struct JwtManager {
     encoding_key: Arc<EncodingKey>,
     decoding_key: Arc<DecodingKey>,
     expiration_hours: i64,
+    key_store: Option<Arc<dyn KeyStore>>,
 }
 
 impl JwtManager {
@@ -33,12 +36,60 @@ impl JwtManager {
             encoding_key,
             decoding_key,
             expiration_hours: DEFAULT_TOKEN_EXPIRATION_HOURS,
+            key_store: None,
         }
+    }
+
+    pub async fn new_with_key_store(
+        key_store: Arc<dyn KeyStore>,
+        secret_name: Option<&str>,
+    ) -> Result<Self, AppError> {
+        let name = secret_name.unwrap_or(DEFAULT_JWT_SECRET_NAME);
+
+        let secret = key_store
+            .get(&KeyType::JwtSecret, name)
+            .await?
+            .ok_or_else(|| {
+                AppError::security_error(format!("JWT secret '{}' not found in key store", name))
+            })?;
+
+        let encoding_key = Arc::new(EncodingKey::from_secret(secret.value.as_ref()));
+        let decoding_key = Arc::new(DecodingKey::from_secret(secret.value.as_ref()));
+
+        Ok(Self {
+            encoding_key,
+            decoding_key,
+            expiration_hours: DEFAULT_TOKEN_EXPIRATION_HOURS,
+            key_store: Some(key_store),
+        })
     }
 
     pub fn with_expiration(mut self, hours: i64) -> Self {
         self.expiration_hours = hours;
         self
+    }
+
+    pub async fn rotate_secret(&mut self) -> Result<(), AppError> {
+        if let Some(key_store) = &self.key_store {
+            let secret_name = DEFAULT_JWT_SECRET_NAME;
+            let secret = key_store
+                .get(&KeyType::JwtSecret, secret_name)
+                .await?
+                .ok_or_else(|| {
+                    AppError::security_error(format!(
+                        "JWT secret '{}' not found in key store",
+                        secret_name
+                    ))
+                })?;
+
+            self.encoding_key = Arc::new(EncodingKey::from_secret(secret.value.as_ref()));
+            self.decoding_key = Arc::new(DecodingKey::from_secret(secret.value.as_ref()));
+            Ok(())
+        } else {
+            Err(AppError::security_error(
+                "Cannot rotate secret: key store not configured".to_string(),
+            ))
+        }
     }
 
     pub fn generate_token(&self, user: &User) -> Result<String, AppError> {

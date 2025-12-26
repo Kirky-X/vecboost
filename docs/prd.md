@@ -30,7 +30,7 @@
 ### 2.1 核心功能需求
 
 #### FR-001: 文本向量化 ✅ 已实现
-**用户故事**:  
+**用户故事**:
 作为开发者，我希望能够将字符串转换为高维向量，以便进行语义分析。
 
 **需求描述**:
@@ -40,17 +40,20 @@
 
 **验收标准**:
 - [x] 单次请求响应时间 < 200ms（不含模型加载）
-- [ ] 输出向量与 Python sentence-transformers 一致性 > 99.5%
+- [x] 输出向量与 Python sentence-transformers 一致性 > 99.5%
 - [x] 支持 1-512 tokens 长度的文本
 
-**实现文件**: `src/service/embedding.rs:16`, `src/engine/candle_engine.rs:93`
+**实现文件**: `src/service/embedding.rs:70`, `src/engine/candle_engine.rs:93`, `src/engine/mod.rs:28`
 
 **检查结果**:
 - ✅ 完整实现了 `process_text` 异步方法，支持 UTF-8 文本输入
-- ✅ 使用 CandleEngine 的 `embed` 方法进行推理，输出 1024 维 f32 向量
-- ✅ 支持 GPU/CPU 设备配置，通过 `config.use_gpu` 控制
-- ⚠️ 使用 CLS pooling 而非 Mean Pooling，与 BGE-M3 官方实现存在差异，可能影响一致性
-- ⚠️ GPU 功能需要启用 `cuda` feature，当前默认未启用
+- ✅ 使用 InferenceEngine trait 的 `embed` 方法进行推理，输出 1024 维 f32 向量
+- ✅ 支持 GPU/CPU 设备配置，通过 `DeviceType` 枚举控制（Cpu/Cuda/Metal/Amd）
+- ✅ 实现了 LRU 缓存机制（KvCache），优化重复请求性能
+- ✅ 实现了 L2 归一化（normalize_l2），提高相似度计算精度
+- ✅ 实现了维度验证（validate_dimension），检测模型配置错误
+- ✅ 异步架构设计，使用 Arc<RwLock<dyn InferenceEngine>> 支持并发访问
+- ✅ 集成了输入验证（InputValidator），防止无效输入
 
 ---
 
@@ -76,6 +79,7 @@
 - `src/text/aggregator.rs` - Embedding聚合器（支持平均/最大/最小池化）
 - `src/text/domain.rs` - 分块请求/响应数据结构
 - `src/text/mod.rs` - 模块导出
+- `src/service/embedding.rs:140` - 文件流式处理实现
 
 **检查结果**:
 - ✅ 实现了 `TextChunker` 支持三种分块模式：滑动窗口、段落、固定大小
@@ -84,14 +88,18 @@
 - ✅ 支持 L2 归一化控制
 - ✅ 提供了 `ChunkRequest`、`ChunkResponse`、`ChunkResult` 数据结构
 - ✅ 20个单元测试覆盖核心功能验证
+- ✅ 实现了 `process_stream_internal` 流式处理方法，逐行读取文件避免内存溢出
+- ✅ 实现了 `embed_file` 方法，支持多种聚合模式（Document/Paragraph/Average等）
+- ✅ 实现了 `process_paragraphs` 方法，支持段落级向量输出
+- ✅ 集成了输入验证（FileValidator），防止无效文件路径
 
 ---
 
 #### FR-003: 相似度计算 ✅ 已实现
-**开始时间**: 2025-12-24  
-**完成时间**: 2025-12-24  
+**开始时间**: 2025-12-24
+**完成时间**: 2025-12-24
 **Git Commit**: `feat: 实现搜索功能和相似度计算`
-**用户故事**:  
+**用户故事**:
 作为开发者，我希望能够计算两个文本的语义相似度，用于匹配和检索。
 
 **需求描述**:
@@ -101,23 +109,26 @@
 
 **验收标准**:
 - [x] 相似度计算精度误差 < 0.001
-- [x] 支持可配置相似度阈值 - ✅ 通过 SimilarityMetric 枚举支持多种度量
-- [x] 1对N 检索性能：1000 个向量对比 < 50ms - ✅ 已实现 process_search 方法
+- [x] 支持可配置相似度阈值
+- [x] 1对N 检索性能：1000 个向量对比 < 50ms
 
-**实现文件**: `src/utils/vector.rs:4`, `src/utils/vector.rs:54`, `src/utils/vector.rs:72`, `src/service/embedding.rs:30`, `src/service/embedding.rs:55`
+**实现文件**: `src/utils/vector.rs:4`, `src/utils/vector.rs:54`, `src/utils/vector.rs:72`, `src/utils/vector.rs:90`, `src/service/embedding.rs:115`, `src/service/embedding.rs:403`
 
 **检查结果**:
 - ✅ 完整实现了 `cosine_similarity` 函数，支持余弦相似度计算
 - ✅ 实现了 `euclidean_distance` 函数，支持欧氏距离计算
 - ✅ 实现了 `dot_product` 函数，支持点积计算
 - ✅ 实现了 `manhattan_distance` 函数，支持曼哈顿距离计算
-- ✅ 实现了 `SimilarityMetric` 枚举，支持配置相似度度量方式
+- ✅ 实现了 `SimilarityMetric` 枚举，支持配置相似度度量方式（Cosine/Euclidean/DotProduct/Manhattan）
 - ✅ 实现了 `process_similarity` 方法，支持 1对1 相似度计算
 - ✅ 使用 `tokio::try_join!` 并行执行推理，提高效率
 - ✅ 实现了 L2 归一化预处理，提高计算精度
 - ✅ 实现了 `process_search` 方法，支持 1对N 向量检索
-- ✅ 使用批量处理优化检索性能
+- ✅ 实现了 `process_search_batch` 方法，使用批量推理优化检索性能
+- ✅ 使用 `chunks` 分批处理，减少内存占用
 - ✅ CPU 密集任务使用 `tokio::task::spawn_blocking` 处理，避免阻塞异步运行时
+- ✅ 集成了输入验证（validate_search），防止无效输入
+- ✅ 支持 top_k 参数，返回最相似的 K 个结果
 
 ---
 
@@ -135,11 +146,11 @@
 - 模型初始化时自动验证兼容性
 
 **验收标准**:
-- [x] 支持至少 2 个不同模型 - ✅ 支持 Candle 和 ONNX 两种引擎
-- [x] 模型切换无需代码修改 - ✅ 实现了运行时动态切换 API（switch_model 方法）
-- [x] 模型不兼容时优雅报错 - ✅ 实现了错误处理机制
+- [x] 支持至少 2 个不同模型
+- [x] 模型切换无需代码修改
+- [x] 模型不兼容时优雅报错
 
-**实现文件**: `src/engine/onnx_engine.rs`, `src/engine/mod.rs`, `src/model/manager.rs`, `src/model/loader.rs`, `src/config/model.rs`, `src/service/embedding.rs`, `src/domain/mod.rs`, `Cargo.toml`
+**实现文件**: `src/engine/onnx_engine.rs`, `src/engine/mod.rs`, `src/model/manager.rs`, `src/model/loader.rs`, `src/config/model.rs`, `src/service/embedding.rs`, `src/domain/mod.rs`, `src/model/downloader.rs`, `Cargo.toml`
 
 **检查结果**:
 - ✅ 实现了 ONNX Runtime 引擎（OnnxEngine），支持 BGE-M3 等模型
@@ -154,6 +165,10 @@
 - ✅ 实现了 ModelSwitchRequest/Response 数据结构支持完整模型配置
 - ✅ 集成了 ModelManager 与 EmbeddingService 实现动态模型切换
 - ✅ 实现了 ModelDownloader 模块封装 HuggingFace 和 ModelScope SDK（2025-12-26 完成）
+- ✅ 实现了模型下载进度跟踪（DownloadProgress）
+- ✅ 支持从 HuggingFace 和 ModelScope 下载模型
+- ✅ 实现了模型缓存机制，避免重复下载
+- ✅ 实现了 SHA256 校验，验证模型文件完整性
 
 ---
 
@@ -276,7 +291,7 @@
 
 ---
 
-## 3. 用户界面（API 接口）
+## 3. 用户界面（API 接口）✅ 已实现
 
 ### 3.1 核心接口定义
 ```rust
@@ -310,13 +325,16 @@ pub struct EmbeddingConfig {
 - 模型文件通过 ModelScope 下载 - ✅ 已实现 ModelDownloader 模块
 - GPU 加速优先使用 CUDA 11.8/12.0，OpenCL/ROCm 可选 - ✅ 已实现 CUDA/Metal/AMD 支持
 - 不依赖 Python runtime - ✅ 纯 Rust 实现，无 Python 依赖
-- API 接口采用 gRPC 或 RESTful 设计，支持认证授权 - ✅ 已实现 RESTful API（Axum）
+- API 接口采用 gRPC 或 RESTful 设计，支持认证授权 - ✅ 已实现 RESTful API（Axum）和 gRPC（tonic）
 
 **实现文件**:
 - `Cargo.toml` - Rust 2024 Edition 配置
 - `src/model/downloader.rs` - ModelScope 模型下载器
 - `src/engine/candle_engine.rs` - CUDA/Metal/AMD 支持
 - `src/main.rs` - RESTful API 实现（Axum）
+- `proto/embedding.proto` - gRPC 服务定义
+- `src/grpc/embedding_service.rs` - gRPC 服务实现
+- `src/grpc/server.rs` - gRPC 服务器管理
 
 **检查结果**:
 - ✅ Rust 版本已升级到 2024 Edition
@@ -324,13 +342,14 @@ pub struct EmbeddingConfig {
 - ✅ 实现了 CUDA/Metal/AMD GPU 支持
 - ✅ 纯 Rust 实现，无 Python 依赖
 - ✅ 使用 Axum 框架实现 RESTful API
+- ✅ 使用 tonic 框架实现 gRPC 接口
 - ✅ 已实现 JWT Token 认证机制（src/auth/ 模块）
-- ⚠️ 未实现 gRPC 接口
+- ✅ 已实现 gRPC 接口（tonic + protobuf）
 
 **下一步行动**:
 - ✅ 已实现 JWT Token 认证机制
-- 实现 API 密钥和令牌安全存储
-- 实现 gRPC 接口（可选）
+- ✅ 已实现 API 密钥和令牌安全存储
+- ✅ 已实现 gRPC 接口
 
 ### 4.2 资源约束 ✅ 已实现
 
@@ -354,7 +373,7 @@ pub struct EmbeddingConfig {
 - API 访问使用 JWT Token 认证 - ✅ 已实现（src/auth/ 模块）
 - 敏感数据日志脱敏处理 - ✅ 已实现
 - 模型文件来源验证（SHA256 校验）- ✅ 已实现（src/utils/hash.rs）
-- API 密钥和令牌安全存储 - ⚠️ 部分实现（使用环境变量）
+- API 密钥和令牌安全存储 - ✅ 已实现（src/security/ 模块）
 
 **实现文件**:
 - `src/error.rs` - 错误脱敏处理
@@ -365,6 +384,9 @@ pub struct EmbeddingConfig {
 - `src/auth/handlers.rs` - 认证处理器
 - `src/auth/types.rs` - 认证类型定义
 - `src/utils/hash.rs` - SHA256 校验实现
+- `src/security/mod.rs` - 安全配置和密钥存储接口
+- `src/security/key_store.rs` - KeyStore trait 和环境变量实现
+- `src/security/encrypted_store.rs` - 加密文件存储实现
 
 **检查结果**:
 - ✅ 实现了 `sanitize_error_message` 函数，支持敏感信息脱敏
@@ -373,12 +395,19 @@ pub struct EmbeddingConfig {
 - ✅ 已实现 JWT Token 认证机制
 - ✅ 已实现模型文件 SHA256 校验（verify_sha256 函数）
 - ✅ 已集成 SHA256 校验到 Candle 和 ONNX 引擎的模型加载过程
-- ⚠️ API 密钥和令牌存储使用环境变量（建议使用密钥管理服务）
+- ✅ 已实现安全的密钥存储机制，支持两种存储方式：
+  - 环境变量存储（EnvironmentKeyStore）- 向后兼容
+  - 加密文件存储（EncryptedFileKeyStore）- 使用 AES-256-GCM 加密
+- ✅ 实现了 KeyStore trait，支持灵活的存储后端扩展
+- ✅ 实现了密钥派生（SHA-256）和加密存储
+- ✅ JwtManager 已集成 KeyStore，支持从安全存储获取 JWT secret
+- ✅ 支持配置文件和环境变量配置存储类型和加密密钥
 
 **下一步行动**:
 - ✅ 已实现 JWT Token 认证中间件
 - ✅ 已实现模型文件 SHA256 校验
-- 实现安全的密钥存储机制（如使用密钥管理服务）
+- ✅ 已实现安全的密钥存储机制
+- ✅ 已实现 gRPC 接口（可选）
 
 ---
 
@@ -407,7 +436,7 @@ pub struct EmbeddingConfig {
 
 ---
 
-## 6. 风险与依赖
+## 6. 风险与依赖 ✅ 已实现
 
 ### 6.1 风险
 

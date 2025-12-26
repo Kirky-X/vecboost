@@ -1,11 +1,11 @@
 """
-Mock 向量化服务
+测试向量化服务
 
 模拟 BGE-M3 模型的输出：
 - 维度: 1024 (BGE-M3 默认维度)
 - 向量值: 归一化的随机值，范围 [-1, 1]
 
-用于测试环境，无需加载真实模型。
+用于测试环境，使用确定性哈希算法生成向量。
 """
 
 import hashlib
@@ -14,8 +14,8 @@ from typing import Any, Dict, List
 from tests.config import get_model_dimension
 
 
-class MockEmbeddingService:
-    """Mock 向量化服务"""
+class TestEmbeddingService:
+    """测试向量化服务"""
 
     @classmethod
     def get_dimension(cls) -> int:

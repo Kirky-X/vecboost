@@ -25,6 +25,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::warn;
 
+const MAX_FALLBACK_ATTEMPTS: usize = 1;
+
 pub struct EmbeddingService {
     engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
     validator: InputValidator,
@@ -118,6 +120,87 @@ impl EmbeddingService {
         }
     }
 
+    fn is_oom_error(error: &AppError) -> bool {
+        match error {
+            AppError::InferenceError(msg) | AppError::OutOfMemory(msg) => {
+                let lower_msg = msg.to_lowercase();
+                lower_msg.contains("out of memory")
+                    || lower_msg.contains("cuda out of memory")
+                    || lower_msg.contains("gpu out of memory")
+                    || lower_msg.contains("memory allocation failed")
+                    || lower_msg.contains("failed to allocate")
+                    || lower_msg.contains("not enough memory")
+                    || lower_msg.contains("alloc")
+            }
+            _ => false,
+        }
+    }
+
+    async fn handle_oom_fallback<F, Fut, T>(&self, operation: F) -> Result<T, AppError>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T, AppError>>,
+    {
+        let mut attempts = 0;
+
+        loop {
+            attempts += 1;
+
+            match operation().await {
+                Ok(result) => return Ok(result),
+                Err(error) if Self::is_oom_error(&error) && attempts <= MAX_FALLBACK_ATTEMPTS => {
+                    warn!(
+                        "OOM error detected: {}. Attempting fallback to CPU (attempt {}/{})",
+                        error, attempts, MAX_FALLBACK_ATTEMPTS
+                    );
+
+                    let engine = self.engine.read().await;
+
+                    if engine.is_fallback_triggered() {
+                        warn!("Fallback already triggered, cannot retry");
+                        return Err(AppError::OutOfMemory(
+                            "Out of memory and fallback already attempted".to_string(),
+                        ));
+                    }
+
+                    drop(engine);
+
+                    if let Some(ref config) = self.model_config
+                        && let Some(ref manager) = self.model_manager
+                    {
+                        let loaded_model = manager.get(&config.name).await;
+
+                        if let Some(_model) = loaded_model {
+                            let mut engine_guard = self.engine.write().await;
+                            let config_clone = config.clone();
+                            let fallback_result =
+                                engine_guard.try_fallback_to_cpu(&config_clone).await;
+
+                            match fallback_result {
+                                Ok(()) => {
+                                    warn!("Successfully fell back to CPU, retrying operation");
+                                    continue;
+                                }
+                                Err(e) => {
+                                    warn!("Failed to fallback to CPU: {}", e);
+                                    return Err(AppError::OutOfMemory(format!(
+                                        "OOM error and fallback failed: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        }
+                    }
+
+                    return Err(AppError::OutOfMemory(
+                        "Out of memory and no fallback available".to_string(),
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     /// 处理单文本向量化
     pub async fn process_text(&self, req: EmbedRequest) -> Result<EmbedResponse, AppError> {
         self.validator.validate_text(&req.text)?;
@@ -125,14 +208,18 @@ impl EmbeddingService {
         let cache_key = format!("text:{}", req.text);
 
         let embedding = if self.cache.is_enabled() {
-            self.cache
-                .get_or_insert::<_, _, AppError>(&cache_key, || async {
-                    let embedding = self.engine.read().await.embed(&req.text)?;
-                    Ok(embedding)
-                })
-                .await?
+            self.handle_oom_fallback(|| async {
+                self.cache
+                    .get_or_insert::<_, _, AppError>(&cache_key, || async {
+                        let embedding = self.engine.read().await.embed(&req.text)?;
+                        Ok(embedding)
+                    })
+                    .await
+            })
+            .await?
         } else {
-            self.engine.read().await.embed(&req.text)?
+            self.handle_oom_fallback(|| async { self.engine.read().await.embed(&req.text) })
+                .await?
         };
 
         let mut embedding = embedding;
@@ -144,6 +231,7 @@ impl EmbeddingService {
         Ok(EmbedResponse {
             dimension,
             embedding,
+            processing_time_ms: 0,
         })
     }
 
@@ -303,6 +391,7 @@ impl EmbeddingService {
             Ok(EmbedResponse {
                 dimension,
                 embedding: final_vec,
+                processing_time_ms: processing_time.as_millis(),
             })
         } else {
             Err(AppError::InvalidInput("File is empty".to_string()))
@@ -513,25 +602,75 @@ impl EmbeddingService {
             let engine = Arc::clone(&engine);
 
             let task = tokio::spawn(async move {
-                let embeddings = engine.read().await.embed_batch(&chunk)?;
+                let mut attempts = 0;
 
-                let mut results: Vec<(usize, Vec<f32>, String)> =
-                    Vec::with_capacity(embeddings.len());
+                loop {
+                    attempts += 1;
 
-                for (text_idx, (text, embedding)) in
-                    chunk.iter().zip(embeddings.into_iter()).enumerate()
-                {
-                    let mut emb = embedding;
-                    normalize_l2(&mut emb);
+                    match engine.read().await.embed_batch(&chunk) {
+                        Ok(embeddings) => {
+                            let mut results: Vec<(usize, Vec<f32>, String)> =
+                                Vec::with_capacity(embeddings.len());
 
-                    let global_idx = chunk_idx * MAX_BATCH_SIZE + text_idx;
-                    let text_preview =
-                        if text.len() > 100 { &text[..100] } else { text }.to_string();
+                            for (text_idx, (text, embedding)) in
+                                chunk.iter().zip(embeddings.into_iter()).enumerate()
+                            {
+                                let mut emb = embedding;
+                                normalize_l2(&mut emb);
 
-                    results.push((global_idx, emb, text_preview));
+                                let global_idx = chunk_idx * MAX_BATCH_SIZE + text_idx;
+                                let text_preview =
+                                    if text.len() > 100 { &text[..100] } else { text }.to_string();
+
+                                results.push((global_idx, emb, text_preview));
+                            }
+
+                            return Ok(results);
+                        }
+                        Err(error)
+                            if Self::is_oom_error(&error) && attempts <= MAX_FALLBACK_ATTEMPTS =>
+                        {
+                            warn!(
+                                "OOM error detected in batch chunk {}: {}. Attempting fallback to CPU (attempt {}/{})",
+                                chunk_idx, error, attempts, MAX_FALLBACK_ATTEMPTS
+                            );
+
+                            let current_engine = engine.read().await;
+
+                            if current_engine.is_fallback_triggered() {
+                                warn!("Fallback already triggered, cannot retry");
+                                return Err(AppError::OutOfMemory(
+                                    "Out of memory and fallback already attempted".to_string(),
+                                ));
+                            }
+
+                            drop(current_engine);
+
+                            let mut engine_guard = engine.write().await;
+                            let config_clone = ModelConfig::default();
+                            let fallback_result =
+                                engine_guard.try_fallback_to_cpu(&config_clone).await;
+
+                            match fallback_result {
+                                Ok(()) => {
+                                    warn!(
+                                        "Successfully fell back to CPU, retrying batch chunk {}",
+                                        chunk_idx
+                                    );
+                                    continue;
+                                }
+                                Err(e) => {
+                                    warn!("Failed to fallback to CPU: {}", e);
+                                    return Err(AppError::OutOfMemory(format!(
+                                        "OOM error and fallback failed: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
-
-                Result::<_, AppError>::Ok(results)
             });
 
             tasks.push(task);
@@ -761,28 +900,58 @@ impl EmbeddingService {
 mod tests {
     use super::*;
     use crate::config::model::{DeviceType, EngineType, Precision};
+    use async_trait::async_trait;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
-    struct MockEngine {
-        embedding: Vec<f32>,
+    struct TestEngine {
+        dimension: usize,
     }
 
-    impl MockEngine {
+    impl TestEngine {
         fn new(dimension: usize) -> Self {
-            Self {
-                embedding: vec![0.1; dimension],
+            Self { dimension }
+        }
+
+        fn generate_embedding(&self, text: &str) -> Vec<f32> {
+            let mut embedding = vec![0.0f32; self.dimension];
+            let bytes = text.as_bytes();
+
+            let mut hash: u64 = 1469598103934665603;
+            for &byte in bytes {
+                hash ^= byte as u64;
+                hash = hash.wrapping_mul(1099511628211);
             }
+
+            let seed = hash;
+            let mut state = seed;
+            for val in embedding.iter_mut() {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                let float_val = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+                *val = float_val;
+            }
+
+            let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for val in embedding.iter_mut() {
+                    *val /= norm;
+                }
+            }
+
+            embedding
         }
     }
 
-    impl InferenceEngine for MockEngine {
-        fn embed(&self, _text: &str) -> Result<Vec<f32>, AppError> {
-            Ok(self.embedding.clone())
+    #[async_trait]
+    impl InferenceEngine for TestEngine {
+        fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
+            Ok(self.generate_embedding(text))
         }
 
         fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
-            Ok(vec![self.embedding.clone(); texts.len()])
+            let embeddings: Vec<Vec<f32>> =
+                texts.iter().map(|t| self.generate_embedding(t)).collect();
+            Ok(embeddings)
         }
 
         fn precision(&self) -> &Precision {
@@ -792,12 +961,16 @@ mod tests {
         fn supports_mixed_precision(&self) -> bool {
             false
         }
+
+        async fn try_fallback_to_cpu(&mut self, _config: &ModelConfig) -> Result<(), AppError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]
     async fn test_process_text_with_model_config() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
             name: "test-model".to_string(),
@@ -820,6 +993,7 @@ mod tests {
 
         let req = EmbedRequest {
             text: "Hello world".to_string(),
+            normalize: Some(true),
         };
 
         let result = service.process_text(req).await;
@@ -832,7 +1006,7 @@ mod tests {
     #[tokio::test]
     async fn test_embedding_service_with_mismatching_dimension() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
             name: "bge-m3".to_string(),
@@ -855,6 +1029,7 @@ mod tests {
 
         let req = EmbedRequest {
             text: "Hello world".to_string(),
+            normalize: Some(true),
         };
 
         let result = service.process_text(req).await;
@@ -867,7 +1042,7 @@ mod tests {
     #[tokio::test]
     async fn test_embedding_service_without_dimension_config() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
             name: "test-model".to_string(),
@@ -890,6 +1065,7 @@ mod tests {
 
         let req = EmbedRequest {
             text: "Hello world".to_string(),
+            normalize: Some(true),
         };
 
         let result = service.process_text(req).await;
@@ -902,7 +1078,7 @@ mod tests {
     #[tokio::test]
     async fn test_embedding_service_without_model_config() {
         let _temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -911,6 +1087,7 @@ mod tests {
 
         let req = EmbedRequest {
             text: "Hello world".to_string(),
+            normalize: Some(true),
         };
 
         let result = service.process_text(req).await;
@@ -923,7 +1100,7 @@ mod tests {
     #[test]
     fn test_dimension_validation_with_mismatch() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
             name: "test-model".to_string(),
@@ -950,7 +1127,7 @@ mod tests {
     #[test]
     fn test_dimension_validation_with_match() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(1024);
+        let mock_engine = TestEngine::new(1024);
 
         let model_config = ModelConfig {
             name: "test-model".to_string(),
@@ -977,7 +1154,7 @@ mod tests {
     #[test]
     fn test_dimension_validation_with_none_config() {
         let _temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -990,7 +1167,7 @@ mod tests {
     #[tokio::test]
     async fn test_embedding_service_with_custom_validator() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
             name: "test-model".to_string(),
@@ -1019,6 +1196,7 @@ mod tests {
 
         let req = EmbedRequest {
             text: "Test text for embedding".to_string(),
+            normalize: Some(true),
         };
 
         let result: Result<EmbedResponse, AppError> = service.process_text(req).await;
@@ -1032,7 +1210,7 @@ mod tests {
     #[tokio::test]
     async fn test_embed_file_document_mode() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -1059,7 +1237,7 @@ mod tests {
     #[tokio::test]
     async fn test_embed_file_paragraph_mode() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -1092,7 +1270,7 @@ mod tests {
     #[tokio::test]
     async fn test_embed_file_paragraphs_mode() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -1123,7 +1301,7 @@ mod tests {
     #[tokio::test]
     async fn test_embed_file_average_mode() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -1150,7 +1328,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_paragraphs_empty_file() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -1172,7 +1350,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_processing_stats() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -1194,7 +1372,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_batch_basic() {
         let temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
             name: "test-model".to_string(),
@@ -1224,6 +1402,7 @@ mod tests {
         let req = BatchEmbedRequest {
             texts: texts.clone(),
             mode: None,
+            normalize: Some(true),
         };
 
         let result = service.process_batch(req).await;
@@ -1242,7 +1421,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_batch_empty() {
         let _temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -1252,6 +1431,7 @@ mod tests {
         let req = BatchEmbedRequest {
             texts: vec![],
             mode: None,
+            normalize: Some(true),
         };
 
         let result = service.process_batch(req).await;
@@ -1262,7 +1442,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_batch_large_with_chunking() {
         let _temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
             name: "test-model".to_string(),
@@ -1288,6 +1468,7 @@ mod tests {
         let req = BatchEmbedRequest {
             texts: texts.clone(),
             mode: None,
+            normalize: Some(true),
         };
 
         let result = service.process_batch(req).await;
@@ -1301,7 +1482,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_batch_single() {
         let _temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -1310,7 +1491,11 @@ mod tests {
 
         let texts = vec!["Single text".to_string()];
 
-        let req = BatchEmbedRequest { texts, mode: None };
+        let req = BatchEmbedRequest {
+            texts,
+            mode: None,
+            normalize: Some(true),
+        };
 
         let result = service.process_batch(req).await;
 
@@ -1323,7 +1508,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_batch_with_long_text_preview() {
         let _temp_dir = tempdir().unwrap();
-        let mock_engine = MockEngine::new(384);
+        let mock_engine = TestEngine::new(384);
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -1333,7 +1518,11 @@ mod tests {
         let long_text = "A".repeat(200);
         let texts = vec![long_text.clone()];
 
-        let req = BatchEmbedRequest { texts, mode: None };
+        let req = BatchEmbedRequest {
+            texts,
+            mode: None,
+            normalize: Some(true),
+        };
 
         let result = service.process_batch(req).await;
 

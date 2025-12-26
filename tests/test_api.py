@@ -14,25 +14,25 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.services import MockEmbeddingService
+from tests.services import TestEmbeddingService
 from tests.api_simulator import BaseAPISimulator, APIClient, create_api_client
 from tests.conftest import model_dimension
 
 
-class MockAPISimulator(BaseAPISimulator):
-    """Mock API 模拟器"""
+class TestAPISimulator(BaseAPISimulator):
+    """测试 API 模拟器"""
 
     pass
 
 
 @pytest.fixture
-def api_simulator() -> MockAPISimulator:
+def api_simulator() -> TestAPISimulator:
     """提供 API 模拟器实例"""
-    return MockAPISimulator(MockEmbeddingService)
+    return TestAPISimulator(TestEmbeddingService)
 
 
 @pytest.fixture
-def api_client(api_simulator: MockAPISimulator) -> APIClient:
+def api_client(api_simulator: TestAPISimulator) -> APIClient:
     """提供 API 客户端，用于发送测试请求"""
     return create_api_client(api_simulator)
 

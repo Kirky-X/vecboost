@@ -111,8 +111,8 @@ class BaseAPISimulator:
         return 404, {"error": "Not Found", "message": f"Endpoint {endpoint} not found"}
 
 
-class MockAPISimulator(BaseAPISimulator):
-    """Mock API 模拟器"""
+class TestAPISimulator(BaseAPISimulator):
+    """测试 API 模拟器"""
 
     pass
 

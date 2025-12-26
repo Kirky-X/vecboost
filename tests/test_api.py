@@ -19,20 +19,20 @@ from tests.api_simulator import BaseAPISimulator, APIClient, create_api_client
 from tests.conftest import model_dimension
 
 
-class TestAPISimulator(BaseAPISimulator):
-    """测试 API 模拟器"""
+class APISimulatorImpl(BaseAPISimulator):
+    """测试 API 模拟器实现"""
 
     pass
 
 
 @pytest.fixture
-def api_simulator() -> TestAPISimulator:
+def api_simulator() -> APISimulatorImpl:
     """提供 API 模拟器实例"""
-    return TestAPISimulator(TestEmbeddingService)
+    return APISimulatorImpl(TestEmbeddingService)
 
 
 @pytest.fixture
-def api_client(api_simulator: TestAPISimulator) -> APIClient:
+def api_client(api_simulator: APISimulatorImpl) -> APIClient:
     """提供 API 客户端，用于发送测试请求"""
     return create_api_client(api_simulator)
 

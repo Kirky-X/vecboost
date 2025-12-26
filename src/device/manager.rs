@@ -9,8 +9,8 @@ use crate::device::cuda::{CudaDeviceManager, CudaGpuInfo};
 use crate::device::memory_limit::{MemoryLimitConfig, MemoryLimitController, MemoryLimitStatus};
 use crate::monitor::{GpuMemoryStats, MemoryMonitor};
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -180,7 +180,10 @@ impl DeviceManager {
                 name: info.name.clone(),
                 status: DeviceStatus::Available,
                 memory_bytes: Some(info.vram_bytes),
-                is_default: index == 0 && !devices.iter().any(|d| d.is_default && d.device_type != DeviceType::Cpu),
+                is_default: index == 0
+                    && !devices
+                        .iter()
+                        .any(|d| d.is_default && d.device_type != DeviceType::Cpu),
             });
         }
 
@@ -209,7 +212,10 @@ impl DeviceManager {
 
         let amd_devices = self.amd_device_manager.devices().await;
         for (device_info, amd_device) in devices.iter_mut().zip(amd_devices.iter()) {
-            if matches!(device_info.device_type, DeviceType::Amd | DeviceType::OpenCL) {
+            if matches!(
+                device_info.device_type,
+                DeviceType::Amd | DeviceType::OpenCL
+            ) {
                 device_info.memory_bytes = Some(amd_device.vram_bytes());
                 device_info.status = if amd_device.is_busy() {
                     DeviceStatus::Busy
@@ -228,8 +234,10 @@ impl DeviceManager {
 
         if require_gpu {
             for device in devices.iter() {
-                if matches!(device.device_type, DeviceType::Cuda | DeviceType::Metal | DeviceType::Amd | DeviceType::OpenCL)
-                    && device.status == DeviceStatus::Available
+                if matches!(
+                    device.device_type,
+                    DeviceType::Cuda | DeviceType::Metal | DeviceType::Amd | DeviceType::OpenCL
+                ) && device.status == DeviceStatus::Available
                 {
                     debug!("Selected GPU device: {}", device.name);
                     return device.device_type.clone();
@@ -308,7 +316,9 @@ impl DeviceManager {
                 cuda_cores_count: 0,
             };
 
-            let existing = gpu_infos.iter_mut().find(|g| g.device_id == cuda_info.device_id);
+            let existing = gpu_infos
+                .iter_mut()
+                .find(|g| g.device_id == cuda_info.device_id);
             if let Some(existing_info) = existing {
                 existing_info.total_memory_bytes = cuda_info.total_memory_bytes;
                 existing_info.compute_capability = Some(cuda_info.compute_capability);

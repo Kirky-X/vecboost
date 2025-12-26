@@ -368,12 +368,16 @@ mod validator_tests {
     #[test]
     fn test_search_validation() {
         let validator = InputValidator::with_default();
-        assert!(validator
-            .validate_search("query", &["text1".to_string()], Some(5))
-            .is_ok());
-        assert!(validator
-            .validate_search("", &["text1".to_string()], Some(5))
-            .is_err());
+        assert!(
+            validator
+                .validate_search("query", &["text1".to_string()], Some(5))
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate_search("", &["text1".to_string()], Some(5))
+                .is_err()
+        );
         assert!(validator.validate_search("query", &[], Some(5)).is_err());
     }
 }

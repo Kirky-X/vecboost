@@ -13,5 +13,5 @@ pub use aggregator::EmbeddingAggregator;
 pub use chunker::TextChunker;
 pub use domain::{ChunkRequest, ChunkResponse, ChunkResult};
 pub use tokenizer::{
-    CacheStats, CachedTokenizer, Encoding, Tokenizer, DEFAULT_CACHE_SIZE, MAX_CACHE_SIZE,
+    CacheStats, CachedTokenizer, DEFAULT_CACHE_SIZE, Encoding, MAX_CACHE_SIZE, Tokenizer,
 };

@@ -7,8 +7,8 @@ use crate::engine::InferenceEngine;
 use crate::error::AppError;
 use crate::metrics::collector::MetricsCollector;
 use crate::utils::normalize_l2;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Barrier, Semaphore};
 use tokio::time::sleep;
@@ -89,7 +89,7 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
 
                     let req_start = Instant::now();
                     let result = {
-                        let mut engine = engine.write().await;
+                        let engine = engine.write().await;
                         engine.embed(&text)
                     };
 
@@ -201,7 +201,7 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
 
                 let start = Instant::now();
                 let result = {
-                    let mut engine = self.engine.write().await;
+                    let engine = self.engine.write().await;
                     engine.embed(&text)
                 };
                 let elapsed = start.elapsed();
@@ -304,7 +304,7 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
                     let req_start = Instant::now();
 
                     let result = {
-                        let mut engine = engine.write().await;
+                        let engine = engine.write().await;
                         engine.embed(&text)
                     };
 

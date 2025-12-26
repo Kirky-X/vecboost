@@ -4,8 +4,8 @@
 // See LICENSE file in the project root for full license information.
 
 use serde::Serialize;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -62,7 +62,8 @@ impl MemoryLimitController {
         self.current_usage.store(used_bytes, Ordering::SeqCst);
 
         let peak = self.peak_usage.fetch_max(used_bytes, Ordering::SeqCst);
-        self.peak_usage.store(std::cmp::max(used_bytes, peak), Ordering::SeqCst);
+        self.peak_usage
+            .store(std::cmp::max(used_bytes, peak), Ordering::SeqCst);
 
         self.update_status().await;
     }
@@ -93,13 +94,22 @@ impl MemoryLimitController {
 
         match new_status {
             MemoryLimitStatus::Exceeded => {
-                warn!("Memory usage exceeded limit: {} bytes (limit: {} bytes)", current, limit);
+                warn!(
+                    "Memory usage exceeded limit: {} bytes (limit: {} bytes)",
+                    current, limit
+                );
             }
             MemoryLimitStatus::Critical => {
-                warn!("Memory usage critical: {} bytes ({}%)", current, usage_percent);
+                warn!(
+                    "Memory usage critical: {} bytes ({}%)",
+                    current, usage_percent
+                );
             }
             MemoryLimitStatus::Warning => {
-                debug!("Memory usage warning: {} bytes ({}%)", current, usage_percent);
+                debug!(
+                    "Memory usage warning: {} bytes ({}%)",
+                    current, usage_percent
+                );
             }
             MemoryLimitStatus::Ok => {
                 debug!("Memory usage OK: {} bytes ({}%)", current, usage_percent);
@@ -192,9 +202,9 @@ impl MemoryLimitController {
     }
 
     pub async fn should_fallback(&self) -> bool {
-        let status = self.status.read().await.clone();
-        let fallback = self.fallback_triggered.read().await.clone();
-        status == MemoryLimitStatus::Exceeded && !fallback
+        let status = self.status.read().await;
+        let fallback = self.fallback_triggered.read().await;
+        *status == MemoryLimitStatus::Exceeded && !*fallback
     }
 
     pub async fn trigger_fallback(&self) {
@@ -263,7 +273,9 @@ mod tests {
             critical_threshold_percent: 90,
         });
 
-        controller.update_usage(6 * 1024 * 1024 * 1024 + 512 * 1024 * 1024).await;
+        controller
+            .update_usage(6 * 1024 * 1024 * 1024 + 512 * 1024 * 1024)
+            .await;
         let status = controller.check_limit().await;
 
         assert_eq!(status, MemoryLimitStatus::Warning);

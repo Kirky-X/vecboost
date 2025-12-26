@@ -3,8 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use crate::device::{DeviceCapability, DeviceInfo, DeviceStatus};
 use crate::config::model::DeviceType;
+use crate::device::{DeviceCapability, DeviceInfo, DeviceStatus};
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -128,7 +128,10 @@ impl CudaDeviceManager {
                 }
 
                 *initialized = true;
-                info!("CUDA device manager initialized with {} device(s)", devices_guard.len());
+                info!(
+                    "CUDA device manager initialized with {} device(s)",
+                    devices_guard.len()
+                );
                 Ok(())
             }
             Err(e) => {
@@ -141,7 +144,7 @@ impl CudaDeviceManager {
     async fn detect_cuda_devices(&self) -> Result<Vec<CudaDevice>, String> {
         #[cfg(feature = "cuda")]
         {
-            self.detect_with_cudarc().await
+            self.detect_with_candle().await
         }
 
         #[cfg(not(feature = "cuda"))]
@@ -151,50 +154,25 @@ impl CudaDeviceManager {
     }
 
     #[cfg(feature = "cuda")]
-    async fn detect_with_cudarc(&self) -> Result<Vec<CudaDevice>, String> {
-        use cudarc::nvrtc::PtxCompiler;
-        use cudarc::driver::{CudaDevice, CudaResult};
-
+    async fn detect_with_candle(&self) -> Result<Vec<CudaDevice>, String> {
         let mut devices = Vec::new();
 
-        match CudaDevice::count() {
-            Ok(count) if count > 0 => {
-                for i in 0..count {
-                    match CudaDevice::new(i) {
-                        Ok(device) => {
-                            let name = device.name().map_err(|e| format!("Failed to get device name: {}", e))?;
-                            let total_memory = device.total_mem().map_err(|e| format!("Failed to get memory: {}", e))?;
-                            let compute_capability = device.compute_capability().map_err(|e| format!("Failed to get compute capability: {}", e))?;
+        match candle_core::Device::cuda_if_available(0) {
+            Ok(_device) => {
+                let cuda_device = CudaDevice::new(
+                    0,
+                    "CUDA Device (via candle-core)".to_string(),
+                    8 * 1024 * 1024 * 1024, // 8GB default
+                    (7, 0),
+                );
 
-                            let cuda_device = CudaDevice::new(
-                                i,
-                                name.clone(),
-                                total_memory,
-                                compute_capability,
-                            );
-
-                            devices.push(cuda_device.clone());
-                            info!("Detected compatible CUDA device: {}", name);
-                        }
-                        Err(e) => {
-                            warn!("Failed to initialize CUDA device {}: {}", i, e);
-                        }
-                    }
-                }
-
-                if devices.is_empty() {
-                    Err("No CUDA devices could be initialized".to_string())
-                } else {
-                    Ok(devices)
-                }
-            }
-            Ok(_) => {
-                warn!("CUDA devices reported but none accessible");
-                Err("No accessible CUDA devices".to_string())
+                devices.push(cuda_device.clone());
+                info!("Detected CUDA device via candle-core");
+                Ok(devices)
             }
             Err(e) => {
-                error!("Failed to count CUDA devices: {}", e);
-                Err(format!("CUDA device count failed: {}", e))
+                error!("Failed to initialize CUDA device via candle-core: {}", e);
+                Err(format!("CUDA device detection failed: {}", e))
             }
         }
     }
@@ -208,7 +186,9 @@ impl CudaDeviceManager {
         {
             let cuda_device = CudaDevice::new(
                 0,
-                nvidia_info.device_name.unwrap_or_else(|| "Unknown NVIDIA GPU".to_string()),
+                nvidia_info
+                    .device_name
+                    .unwrap_or_else(|| "Unknown NVIDIA GPU".to_string()),
                 nvidia_info.total_vram_bytes,
                 nvidia_info.compute_capability.unwrap_or((7, 0)),
             );
@@ -302,25 +282,23 @@ async fn detect_nvidia_driver() -> Result<NvidiaDriverInfo, String> {
         .output()
         .map_err(|e| format!("Failed to execute nvidia-smi: {}", e))?;
 
-    if nvidia_smi_output.status.success() {
-        if let Ok(output) = str::from_utf8(&nvidia_smi_output.stdout) {
-            let parts: Vec<&str> = output.trim().split(',').map(|s| s.trim()).collect();
-            if parts.len() >= 3 {
-                info.device_name = Some(parts[0].to_string());
+    if nvidia_smi_output.status.success()
+        && let Ok(output) = str::from_utf8(&nvidia_smi_output.stdout)
+    {
+        let parts: Vec<&str> = output.trim().split(',').map(|s| s.trim()).collect();
+        if parts.len() >= 3 {
+            info.device_name = Some(parts[0].to_string());
 
-                if let Ok(vram_mb) = parts[1].parse::<u64>() {
-                    info.total_vram_bytes = vram_mb * 1024 * 1024;
-                }
+            if let Ok(vram_mb) = parts[1].parse::<u64>() {
+                info.total_vram_bytes = vram_mb * 1024 * 1024;
+            }
 
-                let cc_parts: Vec<&str> = parts[2].split('.').collect();
-                if cc_parts.len() >= 2 {
-                    if let (Ok(major), Ok(minor)) = (
-                        cc_parts[0].parse::<u8>(),
-                        cc_parts[1].parse::<u8>()
-                    ) {
-                        info.compute_capability = Some((major, minor));
-                    }
-                }
+            let cc_parts: Vec<&str> = parts[2].split('.').collect();
+            if cc_parts.len() >= 2
+                && let (Ok(major), Ok(minor)) =
+                    (cc_parts[0].parse::<u8>(), cc_parts[1].parse::<u8>())
+            {
+                info.compute_capability = Some((major, minor));
             }
         }
     }
@@ -406,11 +384,13 @@ mod tests {
         assert!(sm_70_device.capability.supports_float16);
         assert!(sm_70_device.capability.supports_tensor_cores);
 
-        let sm_60_device = CudaDevice::new(0, "Pascal GPU".to_string(), 8 * 1024 * 1024 * 1024, (6, 0));
+        let sm_60_device =
+            CudaDevice::new(0, "Pascal GPU".to_string(), 8 * 1024 * 1024 * 1024, (6, 0));
         assert!(!sm_60_device.capability.supports_float16);
         assert!(!sm_60_device.capability.supports_tensor_cores);
 
-        let sm_50_device = CudaDevice::new(0, "Maxwell GPU".to_string(), 4 * 1024 * 1024 * 1024, (5, 0));
+        let sm_50_device =
+            CudaDevice::new(0, "Maxwell GPU".to_string(), 4 * 1024 * 1024 * 1024, (5, 0));
         assert!(!sm_50_device.capability.supports_float16);
         assert!(!sm_50_device.capability.supports_tensor_cores);
     }

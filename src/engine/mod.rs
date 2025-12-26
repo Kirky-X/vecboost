@@ -16,13 +16,13 @@ use async_trait::async_trait;
 #[async_trait]
 pub trait InferenceEngine: Send + Sync {
     /// 执行推理，返回未归一化的向量
-    fn embed(&mut self, text: &str) -> Result<Vec<f32>, AppError>;
+    fn embed(&self, text: &str) -> Result<Vec<f32>, AppError>;
 
     /// 批量推理
-    fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError>;
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError>;
 
     /// 获取当前精度设置
-    fn precision(&self) -> Precision;
+    fn precision(&self) -> &Precision;
 
     /// 检查是否支持混合精度
     fn supports_mixed_precision(&self) -> bool;
@@ -35,17 +35,25 @@ pub enum AnyEngine {
 }
 
 impl AnyEngine {
-    pub fn new(config: &ModelConfig, engine_type: EngineType, precision: Precision) -> Result<Self, AppError> {
+    pub fn new(
+        config: &ModelConfig,
+        engine_type: EngineType,
+        precision: Precision,
+    ) -> Result<Self, AppError> {
         match engine_type {
-            EngineType::Candle => Ok(AnyEngine::Candle(candle_engine::CandleEngine::new(config, precision)?)),
+            EngineType::Candle => Ok(AnyEngine::Candle(candle_engine::CandleEngine::new(
+                config, precision,
+            )?)),
             #[cfg(feature = "onnx")]
-            EngineType::Onnx => Ok(AnyEngine::Onnx(onnx_engine::OnnxEngine::new(config, precision)?)),
+            EngineType::Onnx => Ok(AnyEngine::Onnx(onnx_engine::OnnxEngine::new(
+                config, precision,
+            )?)),
         }
     }
 }
 
 impl InferenceEngine for AnyEngine {
-    fn embed(&mut self, text: &str) -> Result<Vec<f32>, AppError> {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
         match self {
             AnyEngine::Candle(engine) => engine.embed(text),
             #[cfg(feature = "onnx")]
@@ -53,7 +61,7 @@ impl InferenceEngine for AnyEngine {
         }
     }
 
-    fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
         match self {
             AnyEngine::Candle(engine) => engine.embed_batch(texts),
             #[cfg(feature = "onnx")]
@@ -61,7 +69,7 @@ impl InferenceEngine for AnyEngine {
         }
     }
 
-    fn precision(&self) -> Precision {
+    fn precision(&self) -> &Precision {
         match self {
             AnyEngine::Candle(engine) => engine.precision(),
             #[cfg(feature = "onnx")]

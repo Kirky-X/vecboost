@@ -4,7 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 use crate::error::AppError;
-use crate::utils::{normalize_l2, AggregationMode};
+use crate::utils::{AggregationMode, normalize_l2};
 
 pub struct EmbeddingAggregator {
     mode: AggregationMode,
@@ -239,10 +239,12 @@ mod tests {
         let result = aggregator.aggregate(&embeddings).unwrap();
 
         let expected = [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
-        assert!(result
-            .iter()
-            .zip(expected.iter())
-            .all(|(a, b)| (a - b).abs() < 1e-6));
+        assert!(
+            result
+                .iter()
+                .zip(expected.iter())
+                .all(|(a, b)| (a - b).abs() < 1e-6)
+        );
     }
 
     #[test]

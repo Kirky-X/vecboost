@@ -33,7 +33,10 @@ impl<'de> Deserialize<'de> for PredefinedModelType {
             "roberta" => Ok(PredefinedModelType::Roberta),
             "m2-bert" | "m2bert" => Ok(PredefinedModelType::M2Bert),
             "sentence-bert" => Ok(PredefinedModelType::SentenceBert),
-            _ => Err(serde::de::Error::unknown_variant(&s, &["bert", "roberta", "m2-bert", "sentence-bert"])),
+            _ => Err(serde::de::Error::unknown_variant(
+                &s,
+                &["bert", "roberta", "m2-bert", "sentence-bert"],
+            )),
         }
     }
 }
@@ -179,6 +182,7 @@ pub struct ModelConfig {
     pub expected_dimension: Option<usize>,
     pub memory_limit_bytes: Option<u64>,
     pub oom_fallback_enabled: bool,
+    pub model_sha256: Option<String>,
 }
 
 impl Default for ModelConfig {
@@ -194,6 +198,7 @@ impl Default for ModelConfig {
             expected_dimension: None,
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
+            model_sha256: None,
         }
     }
 }
@@ -240,6 +245,7 @@ mod tests {
             expected_dimension: Some(1024),
             memory_limit_bytes: Some(8 * 1024 * 1024 * 1024),
             oom_fallback_enabled: true,
+            model_sha256: None,
         };
 
         assert_eq!(config.name, "bge-m3");
@@ -260,6 +266,7 @@ mod tests {
             expected_dimension: Some(1024),
             memory_limit_bytes: Some(8 * 1024 * 1024 * 1024),
             oom_fallback_enabled: true,
+            model_sha256: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -321,7 +328,10 @@ mod tests {
         assert_eq!(serde_json::to_string(&bert).unwrap(), "\"bert\"");
         assert_eq!(serde_json::to_string(&roberta).unwrap(), "\"roberta\"");
         assert_eq!(serde_json::to_string(&m2_bert).unwrap(), "\"m2-bert\"");
-        assert_eq!(serde_json::to_string(&sentence_bert).unwrap(), "\"sentence-bert\"");
+        assert_eq!(
+            serde_json::to_string(&sentence_bert).unwrap(),
+            "\"sentence-bert\""
+        );
         assert_eq!(serde_json::to_string(&custom).unwrap(), "\"custom_model\"");
     }
 
@@ -341,7 +351,10 @@ mod tests {
         let context = InferenceContext::default();
 
         assert_eq!(context.model_name, "default");
-        assert_eq!(context.model_type, ModelType::Predefined(PredefinedModelType::M2Bert));
+        assert_eq!(
+            context.model_type,
+            ModelType::Predefined(PredefinedModelType::M2Bert)
+        );
         assert_eq!(context.engine_type, EngineType::Candle);
         assert_eq!(context.device, DeviceType::Cpu);
         assert_eq!(context.precision, Precision::Fp32);
@@ -362,6 +375,7 @@ mod tests {
             expected_dimension: Some(1024),
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
+            model_sha256: None,
         };
 
         let context = InferenceContext::with_config(&config, Precision::Fp16);
@@ -380,17 +394,35 @@ mod tests {
         let decoded: InferenceContext = serde_json::from_str(&json).unwrap();
 
         assert_eq!(decoded.model_name, "default");
-        assert_eq!(decoded.model_type, ModelType::Predefined(PredefinedModelType::M2Bert));
+        assert_eq!(
+            decoded.model_type,
+            ModelType::Predefined(PredefinedModelType::M2Bert)
+        );
         assert_eq!(decoded.precision, Precision::Fp32);
     }
 
     #[test]
     fn test_model_type_display() {
-        assert_eq!(ModelType::Predefined(PredefinedModelType::Bert).to_string(), "bert");
-        assert_eq!(ModelType::Predefined(PredefinedModelType::Roberta).to_string(), "roberta");
-        assert_eq!(ModelType::Predefined(PredefinedModelType::M2Bert).to_string(), "m2-bert");
-        assert_eq!(ModelType::Predefined(PredefinedModelType::SentenceBert).to_string(), "sentence-bert");
-        assert_eq!(ModelType::Custom("custom".to_string()).to_string(), "custom");
+        assert_eq!(
+            ModelType::Predefined(PredefinedModelType::Bert).to_string(),
+            "bert"
+        );
+        assert_eq!(
+            ModelType::Predefined(PredefinedModelType::Roberta).to_string(),
+            "roberta"
+        );
+        assert_eq!(
+            ModelType::Predefined(PredefinedModelType::M2Bert).to_string(),
+            "m2-bert"
+        );
+        assert_eq!(
+            ModelType::Predefined(PredefinedModelType::SentenceBert).to_string(),
+            "sentence-bert"
+        );
+        assert_eq!(
+            ModelType::Custom("custom".to_string()).to_string(),
+            "custom"
+        );
     }
 
     #[test]

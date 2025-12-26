@@ -63,7 +63,7 @@ pub fn validate_utf8(text: &str) -> Utf8ValidationResult {
                 return Utf8ValidationResult::invalid(
                     position,
                     byte,
-                    "Invalid UTF-8 lead byte (not a valid start of multi-byte sequence)"
+                    "Invalid UTF-8 lead byte (not a valid start of multi-byte sequence)",
                 );
             }
         };
@@ -72,7 +72,10 @@ pub fn validate_utf8(text: &str) -> Utf8ValidationResult {
             return Utf8ValidationResult::invalid(
                 position,
                 byte,
-                &format!("Incomplete UTF-8 sequence: expected {} continuation bytes, but data ends", expected_continuation)
+                &format!(
+                    "Incomplete UTF-8 sequence: expected {} continuation bytes, but data ends",
+                    expected_continuation
+                ),
             );
         }
 
@@ -82,7 +85,7 @@ pub fn validate_utf8(text: &str) -> Utf8ValidationResult {
                 return Utf8ValidationResult::invalid(
                     position + j,
                     cont_byte,
-                    "Invalid UTF-8 continuation byte (expected 0x80-0xBF range)"
+                    "Invalid UTF-8 continuation byte (expected 0x80-0xBF range)",
                 );
             }
         }
@@ -107,22 +110,18 @@ pub fn validate_utf8_bytes(bytes: &[u8]) -> Utf8ValidationResult {
                 return Utf8ValidationResult::invalid(
                     position,
                     byte,
-                    "Unexpected UTF-8 continuation byte (found outside valid sequence)"
+                    "Unexpected UTF-8 continuation byte (found outside valid sequence)",
                 );
             }
             0xF5..=0xFF => {
                 return Utf8ValidationResult::invalid(
                     position,
                     byte,
-                    "Invalid UTF-8 lead byte (reserved for future use)"
+                    "Invalid UTF-8 lead byte (reserved for future use)",
                 );
             }
             _ => {
-                return Utf8ValidationResult::invalid(
-                    position,
-                    byte,
-                    "Invalid UTF-8 byte value"
-                );
+                return Utf8ValidationResult::invalid(position, byte, "Invalid UTF-8 byte value");
             }
         };
 
@@ -130,7 +129,11 @@ pub fn validate_utf8_bytes(bytes: &[u8]) -> Utf8ValidationResult {
             return Utf8ValidationResult::invalid(
                 position,
                 byte,
-                &format!("Incomplete UTF-8 sequence at end of data: expected {} continuation bytes, got {}", expected_continuation, bytes.len() - position - 1)
+                &format!(
+                    "Incomplete UTF-8 sequence at end of data: expected {} continuation bytes, got {}",
+                    expected_continuation,
+                    bytes.len() - position - 1
+                ),
             );
         }
 
@@ -140,7 +143,7 @@ pub fn validate_utf8_bytes(bytes: &[u8]) -> Utf8ValidationResult {
                 return Utf8ValidationResult::invalid(
                     position + j,
                     cont_byte,
-                    "Invalid UTF-8 continuation byte (expected 0x80-0xBF range)"
+                    "Invalid UTF-8 continuation byte (expected 0x80-0xBF range)",
                 );
             }
         }
@@ -161,12 +164,14 @@ impl Tokenizer {
         max_length: usize,
     ) -> Result<Self, AppError> {
         HfTokenizer::from_pretrained(model_id, None)
-            .map_err(|e| AppError::tokenization_error(format!(
-                "Failed to load tokenizer from model '{}': {}. \
+            .map_err(|e| {
+                AppError::tokenization_error(format!(
+                    "Failed to load tokenizer from model '{}': {}. \
                 Please check that the model ID is correct and the model is available. \
                 For local models, ensure the tokenizer.json file exists.",
-                model_id, e
-            )))
+                    model_id, e
+                ))
+            })
             .and_then(|tokenizer| {
                 if max_length == 0 {
                     Err(AppError::invalid_input(format!(
@@ -174,7 +179,10 @@ impl Tokenizer {
                         max_length
                     )))
                 } else {
-                    Ok(Self { tokenizer, max_length })
+                    Ok(Self {
+                        tokenizer,
+                        max_length,
+                    })
                 }
             })
     }
@@ -185,11 +193,13 @@ impl Tokenizer {
 
     pub fn from_file_with_max_length(path: &str, max_length: usize) -> Result<Self, AppError> {
         HfTokenizer::from_file(path)
-            .map_err(|e| AppError::tokenization_error(format!(
-                "Failed to load tokenizer from file '{}': {}. \
+            .map_err(|e| {
+                AppError::tokenization_error(format!(
+                    "Failed to load tokenizer from file '{}': {}. \
                 Please ensure the file exists and is a valid tokenizer file.",
-                path, e
-            )))
+                    path, e
+                ))
+            })
             .and_then(|tokenizer| {
                 if max_length == 0 {
                     Err(AppError::invalid_input(format!(
@@ -197,7 +207,10 @@ impl Tokenizer {
                         max_length
                     )))
                 } else {
-                    Ok(Self { tokenizer, max_length })
+                    Ok(Self {
+                        tokenizer,
+                        max_length,
+                    })
                 }
             })
     }
@@ -205,7 +218,7 @@ impl Tokenizer {
     pub fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, AppError> {
         if text.is_empty() {
             return Err(AppError::invalid_input(
-                "Cannot encode empty text".to_string()
+                "Cannot encode empty text".to_string(),
             ));
         }
 
@@ -216,18 +229,23 @@ impl Tokenizer {
                 The input contains invalid or incomplete UTF-8 sequences.",
                 utf8_result.invalid_byte_position.unwrap_or(0),
                 utf8_result.invalid_byte_value.unwrap_or(0),
-                utf8_result.error_message.unwrap_or_else(|| "Unknown UTF-8 error".to_string())
+                utf8_result
+                    .error_message
+                    .unwrap_or_else(|| "Unknown UTF-8 error".to_string())
             )));
         }
 
         let encoding = self
             .tokenizer
             .encode(text, add_special_tokens)
-            .map_err(|e| AppError::tokenization_error(format!(
-                "Failed to encode text (length={}): {}. \
+            .map_err(|e| {
+                AppError::tokenization_error(format!(
+                    "Failed to encode text (length={}): {}. \
                 The text may contain unsupported characters or be too long.",
-                text.len(), e
-            )))?;
+                    text.len(),
+                    e
+                ))
+            })?;
 
         let ids = encoding.get_ids().to_vec();
         let truncated_ids: Vec<u32> = if ids.len() > self.max_length {
@@ -261,11 +279,14 @@ impl Tokenizer {
     pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String, AppError> {
         if ids.is_empty() {
             return Err(AppError::invalid_input(
-                "Cannot decode empty token ids".to_string()
+                "Cannot decode empty token ids".to_string(),
             ));
         }
 
-        if ids.iter().any(|&id| id >= self.tokenizer.get_vocab_size(true) as u32) {
+        if ids
+            .iter()
+            .any(|&id| id >= self.tokenizer.get_vocab_size(true) as u32)
+        {
             return Err(AppError::tokenization_error(format!(
                 "Invalid token id found: one or more ids exceed vocabulary size ({}). \
                 This may indicate corrupted or incompatible token ids.",
@@ -275,11 +296,14 @@ impl Tokenizer {
 
         self.tokenizer
             .decode(ids, skip_special_tokens)
-            .map_err(|e| AppError::tokenization_error(format!(
-                "Failed to decode {} token ids: {}. \
+            .map_err(|e| {
+                AppError::tokenization_error(format!(
+                    "Failed to decode {} token ids: {}. \
                 The ids may be invalid or incompatible with this tokenizer.",
-                ids.len(), e
-            )))
+                    ids.len(),
+                    e
+                ))
+            })
     }
 
     pub fn get_vocab_size(&self) -> usize {
@@ -315,7 +339,9 @@ impl Tokenizer {
                     utf8_result.invalid_byte_position.unwrap_or(0),
                     utf8_result.invalid_byte_value.unwrap_or(0),
                     i,
-                    utf8_result.error_message.unwrap_or_else(|| "Unknown UTF-8 error".to_string())
+                    utf8_result
+                        .error_message
+                        .unwrap_or_else(|| "Unknown UTF-8 error".to_string())
                 )));
             }
         }
@@ -325,11 +351,14 @@ impl Tokenizer {
         let batch = self
             .tokenizer
             .encode_batch(texts_str, add_special_tokens)
-            .map_err(|e| AppError::tokenization_error(format!(
-                "Failed to encode batch of {} texts: {}. \
+            .map_err(|e| {
+                AppError::tokenization_error(format!(
+                    "Failed to encode batch of {} texts: {}. \
                 Some texts may be invalid or too long.",
-                texts.len(), e
-            )))?;
+                    texts.len(),
+                    e
+                ))
+            })?;
 
         let mut encodings = Vec::with_capacity(batch.len());
 
@@ -407,6 +436,10 @@ impl CachedTokenizer {
         Self::new(tokenizer, max_length, DEFAULT_CACHE_SIZE)
     }
 
+    pub fn max_length(&self) -> usize {
+        self.max_length
+    }
+
     fn hash_key(&self, text: &str, add_special_tokens: bool) -> String {
         let mut hasher = Xxh3::new();
         text.hash(&mut hasher);
@@ -444,7 +477,7 @@ impl CachedTokenizer {
     ) -> Result<Encoding, AppError> {
         if text.is_empty() {
             return Err(AppError::invalid_input(
-                "Cannot encode empty text".to_string()
+                "Cannot encode empty text".to_string(),
             ));
         }
 
@@ -455,18 +488,23 @@ impl CachedTokenizer {
                 The input contains invalid or incomplete UTF-8 sequences.",
                 utf8_result.invalid_byte_position.unwrap_or(0),
                 utf8_result.invalid_byte_value.unwrap_or(0),
-                utf8_result.error_message.unwrap_or_else(|| "Unknown UTF-8 error".to_string())
+                utf8_result
+                    .error_message
+                    .unwrap_or_else(|| "Unknown UTF-8 error".to_string())
             )));
         }
 
         let encoding = self
             .tokenizer
             .encode(text, add_special_tokens)
-            .map_err(|e| AppError::tokenization_error(format!(
-                "Failed to encode text (length={}): {}. \
+            .map_err(|e| {
+                AppError::tokenization_error(format!(
+                    "Failed to encode text (length={}): {}. \
                 The text may contain unsupported characters or be too long.",
-                text.len(), e
-            )))?;
+                    text.len(),
+                    e
+                ))
+            })?;
 
         let ids = encoding.get_ids().to_vec();
         let truncated_ids: Vec<u32> = if ids.len() > self.max_length {
@@ -534,11 +572,14 @@ impl CachedTokenizer {
     pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String, AppError> {
         if ids.is_empty() {
             return Err(AppError::invalid_input(
-                "Cannot decode empty token ids".to_string()
+                "Cannot decode empty token ids".to_string(),
             ));
         }
 
-        if ids.iter().any(|&id| id >= self.tokenizer.get_vocab_size(true) as u32) {
+        if ids
+            .iter()
+            .any(|&id| id >= self.tokenizer.get_vocab_size(true) as u32)
+        {
             return Err(AppError::tokenization_error(format!(
                 "Invalid token id found: one or more ids exceed vocabulary size ({}). \
                 This may indicate corrupted or incompatible token ids.",
@@ -548,11 +589,14 @@ impl CachedTokenizer {
 
         self.tokenizer
             .decode(ids, skip_special_tokens)
-            .map_err(|e| AppError::tokenization_error(format!(
-                "Failed to decode {} token ids: {}. \
+            .map_err(|e| {
+                AppError::tokenization_error(format!(
+                    "Failed to decode {} token ids: {}. \
                 The ids may be invalid or incompatible with this tokenizer.",
-                ids.len(), e
-            )))
+                    ids.len(),
+                    e
+                ))
+            })
     }
 
     pub fn get_vocab_size(&self) -> usize {

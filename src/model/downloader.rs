@@ -4,7 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 use crate::error::AppError;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::{Repo, RepoType, api::sync::Api};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -122,10 +122,7 @@ impl ModelDownloader {
             ));
         };
 
-        let repo = api.repo(Repo::new(
-            self.config.repo_id.clone(),
-            RepoType::Model,
-        ));
+        let repo = api.repo(Repo::new(self.config.repo_id.clone(), RepoType::Model));
 
         let mut downloaded_files = Vec::new();
 
@@ -146,8 +143,7 @@ impl ModelDownloader {
     async fn download_from_modelscope(&self) -> Result<Vec<PathBuf>, AppError> {
         let ms_url = format!(
             "https://modelscope.cn/api/v1/models/{}/repo?Revision={}",
-            self.config.repo_id,
-            self.config.revision
+            self.config.repo_id, self.config.revision
         );
 
         info!("ModelScope URL: {}", ms_url);
@@ -172,10 +168,14 @@ impl ModelDownloader {
 
             if response.status().is_success() {
                 let cache_dir = self.config.cache_dir.clone().unwrap_or_else(|| {
-                    PathBuf::from(home::home_dir().unwrap_or_default()).join(".cache/vecboost/models")
+                    home::home_dir()
+                        .unwrap_or_default()
+                        .join(".cache/vecboost/models")
                 });
 
-                let file_path = cache_dir.join(&self.config.repo_id.replace('/', "_")).join(pattern);
+                let file_path = cache_dir
+                    .join(self.config.repo_id.replace('/', "_"))
+                    .join(pattern);
 
                 if let Some(parent) = file_path.parent() {
                     std::fs::create_dir_all(parent)

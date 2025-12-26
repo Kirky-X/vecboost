@@ -59,9 +59,7 @@ impl ModelManager {
 
         info!(
             "Loading model: {} from {:?} (timeout: {:?})",
-            model_name,
-            config.model_path,
-            self.timeout_duration
+            model_name, config.model_path, self.timeout_duration
         );
 
         let load_future = self.loader.load(config);
@@ -77,12 +75,14 @@ impl ModelManager {
                 warn!("Model {} loading failed: {}", model_name, e);
                 Err(AppError::ModelLoadError(format!(
                     "Failed to load model {}: {}",
-                    model_name,
-                    e
+                    model_name, e
                 )))
             }
             Err(_) => {
-                warn!("Model {} loading timed out after {:?}", model_name, self.timeout_duration);
+                warn!(
+                    "Model {} loading timed out after {:?}",
+                    model_name, self.timeout_duration
+                );
                 Err(AppError::ModelLoadError(format!(
                     "Model loading timed out after {} seconds: {}",
                     self.timeout_duration.as_secs(),
@@ -142,6 +142,7 @@ impl ModelManager {
                 expected_dimension: None,
                 memory_limit_bytes: None,
                 oom_fallback_enabled: false,
+                model_sha256: None,
             }
         };
 
@@ -246,10 +247,10 @@ impl ModelStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
-    use async_trait::async_trait;
 
     struct SlowModelLoader {
         delay_ms: u64,
@@ -343,8 +344,9 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
-                memory_limit_bytes: None,
-                oom_fallback_enabled: false,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
         };
 
         let _model = manager.load(&config).await.unwrap();
@@ -371,8 +373,9 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
-                memory_limit_bytes: None,
-                oom_fallback_enabled: false,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
         };
 
         let config2 = ModelConfig {
@@ -387,8 +390,9 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
-                memory_limit_bytes: None,
-                oom_fallback_enabled: false,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
         };
 
         fs::create_dir_all(&config1.model_path).unwrap();
@@ -439,8 +443,9 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
-                memory_limit_bytes: None,
-                oom_fallback_enabled: false,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -497,8 +502,9 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
-                memory_limit_bytes: None,
-                oom_fallback_enabled: false,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -523,8 +529,9 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
-                memory_limit_bytes: None,
-                oom_fallback_enabled: false,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -551,8 +558,9 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
-                memory_limit_bytes: None,
-                oom_fallback_enabled: false,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -563,7 +571,11 @@ mod tests {
         match result {
             Err(e) => {
                 let error_msg = e.to_string();
-                assert!(error_msg.contains("timed out"), "Expected 'timed out' in error message, got: {}", error_msg);
+                assert!(
+                    error_msg.contains("timed out"),
+                    "Expected 'timed out' in error message, got: {}",
+                    error_msg
+                );
             }
             Ok(_) => panic!("Expected error, but got success"),
         }
@@ -585,8 +597,9 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
-                memory_limit_bytes: None,
-                oom_fallback_enabled: false,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();

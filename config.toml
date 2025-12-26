@@ -7,15 +7,13 @@
 [server]
 host = "0.0.0.0"
 port = 3000
-workers = null
 timeout = 30
 
 # ============ 模型配置 ============
 [model]
 model_repo = "BAAI/bge-m3"
 model_revision = "main"
-model_path = null
-use_gpu = false
+use_gpu = true
 batch_size = 32
 expected_dimension = 1024
 max_sequence_length = 8192

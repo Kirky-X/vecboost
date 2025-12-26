@@ -3,6 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use crate::cache::KvCache;
 use crate::config::model::ModelConfig;
 use crate::domain::{
     BatchEmbedRequest, BatchEmbedResponse, BatchEmbeddingResult, EmbedRequest, EmbedResponse,
@@ -14,8 +15,8 @@ use crate::engine::{AnyEngine, InferenceEngine};
 use crate::error::AppError;
 use crate::model::manager::ModelManager;
 use crate::utils::{
-    cosine_similarity, normalize_l2, AggregationMode, FileValidator, InputValidator, TextValidator,
-    DEFAULT_TOP_K, MAX_BATCH_SIZE, MAX_TOP_K,
+    AggregationMode, DEFAULT_TOP_K, FileValidator, InputValidator, MAX_BATCH_SIZE, MAX_TOP_K,
+    TextValidator, cosine_similarity, normalize_l2,
 };
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -29,6 +30,7 @@ pub struct EmbeddingService {
     validator: InputValidator,
     model_config: Option<ModelConfig>,
     model_manager: Option<Arc<ModelManager>>,
+    cache: Arc<KvCache>,
 }
 
 impl EmbeddingService {
@@ -41,6 +43,7 @@ impl EmbeddingService {
             validator: InputValidator::with_default(),
             model_config,
             model_manager: None,
+            cache: Arc::new(KvCache::disabled()),
         }
     }
 
@@ -54,6 +57,7 @@ impl EmbeddingService {
             validator: InputValidator::with_default(),
             model_config,
             model_manager: Some(model_manager),
+            cache: Arc::new(KvCache::disabled()),
         }
     }
 
@@ -68,6 +72,37 @@ impl EmbeddingService {
             validator,
             model_config,
             model_manager,
+            cache: Arc::new(KvCache::disabled()),
+        }
+    }
+
+    pub fn with_cache(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+        cache_size: usize,
+    ) -> Self {
+        Self {
+            engine,
+            validator: InputValidator::with_default(),
+            model_config,
+            model_manager: None,
+            cache: Arc::new(KvCache::new(cache_size)),
+        }
+    }
+
+    pub fn with_all(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        validator: InputValidator,
+        model_config: Option<ModelConfig>,
+        model_manager: Option<Arc<ModelManager>>,
+        cache_size: usize,
+    ) -> Self {
+        Self {
+            engine,
+            validator,
+            model_config,
+            model_manager,
+            cache: Arc::new(KvCache::new(cache_size)),
         }
     }
 
@@ -78,9 +113,7 @@ impl EmbeddingService {
         {
             warn!(
                 "Dimension mismatch: expected {}, got {}. Model '{}' may have been configured incorrectly or the wrong model was loaded.",
-                expected,
-                actual_dimension,
-                config.name
+                expected, actual_dimension, config.name
             );
         }
     }
@@ -89,7 +122,20 @@ impl EmbeddingService {
     pub async fn process_text(&self, req: EmbedRequest) -> Result<EmbedResponse, AppError> {
         self.validator.validate_text(&req.text)?;
 
-        let mut embedding = self.engine.write().await.embed(&req.text)?;
+        let cache_key = format!("text:{}", req.text);
+
+        let embedding = if self.cache.is_enabled() {
+            self.cache
+                .get_or_insert::<_, _, AppError>(&cache_key, || async {
+                    let embedding = self.engine.read().await.embed(&req.text)?;
+                    Ok(embedding)
+                })
+                .await?
+        } else {
+            self.engine.read().await.embed(&req.text)?
+        };
+
+        let mut embedding = embedding;
         normalize_l2(&mut embedding);
 
         let dimension = embedding.len();
@@ -109,11 +155,40 @@ impl EmbeddingService {
         self.validator.validate_text(&req.source)?;
         self.validator.validate_text(&req.target)?;
 
-        let engine1 = Arc::clone(&self.engine);
-        let engine2 = Arc::clone(&self.engine);
+        let cache_key_source = format!("text:{}", req.source);
+        let cache_key_target = format!("text:{}", req.target);
 
-        let f1 = async move { engine1.write().await.embed(&req.source) };
-        let f2 = async move { engine2.write().await.embed(&req.target) };
+        let engine = Arc::clone(&self.engine);
+        let cache = Arc::clone(&self.cache);
+
+        let f1 = async move {
+            if cache.is_enabled() {
+                cache
+                    .get_or_insert::<_, _, AppError>(&cache_key_source, || async {
+                        let embedding = engine.read().await.embed(&req.source)?;
+                        Ok(embedding)
+                    })
+                    .await
+            } else {
+                engine.read().await.embed(&req.source)
+            }
+        };
+
+        let engine = Arc::clone(&self.engine);
+        let cache = Arc::clone(&self.cache);
+
+        let f2 = async move {
+            if cache.is_enabled() {
+                cache
+                    .get_or_insert::<_, _, AppError>(&cache_key_target, || async {
+                        let embedding = engine.read().await.embed(&req.target)?;
+                        Ok(embedding)
+                    })
+                    .await
+            } else {
+                engine.read().await.embed(&req.target)
+            }
+        };
 
         let (mut v1, mut v2) = tokio::try_join!(f1, f2)?;
 
@@ -194,7 +269,7 @@ impl EmbeddingService {
                 continue;
             }
 
-            let vec = self.engine.write().await.embed(&text)?;
+            let vec = self.engine.read().await.embed(&text)?;
 
             match &mut total_embedding {
                 None => total_embedding = Some(vec),
@@ -263,7 +338,7 @@ impl EmbeddingService {
                 continue;
             }
 
-            let mut embedding = self.engine.write().await.embed(para)?;
+            let mut embedding = self.engine.read().await.embed(para)?;
             normalize_l2(&mut embedding);
 
             let preview = if para.len() > 100 { &para[..100] } else { para };
@@ -331,7 +406,7 @@ impl EmbeddingService {
         let top_k = std::cmp::min(req.top_k.unwrap_or(DEFAULT_TOP_K), MAX_TOP_K);
 
         let query_embedding = {
-            let mut embedding = self.engine.write().await.embed(&req.query)?;
+            let mut embedding = self.engine.read().await.embed(&req.query)?;
             normalize_l2(&mut embedding);
             embedding
         };
@@ -339,7 +414,7 @@ impl EmbeddingService {
         let mut results: Vec<(usize, f32, String)> = Vec::with_capacity(req.texts.len());
 
         for (idx, text) in req.texts.iter().enumerate() {
-            let mut embedding = self.engine.write().await.embed(text)?;
+            let mut embedding = self.engine.read().await.embed(text)?;
             normalize_l2(&mut embedding);
 
             let score = cosine_similarity(&query_embedding, &embedding)?;
@@ -375,7 +450,7 @@ impl EmbeddingService {
         let top_k = std::cmp::min(top_k.unwrap_or(DEFAULT_TOP_K), MAX_TOP_K);
 
         let query_embedding = {
-            let mut embedding = self.engine.write().await.embed(query)?;
+            let mut embedding = self.engine.read().await.embed(query)?;
             normalize_l2(&mut embedding);
             embedding
         };
@@ -383,7 +458,7 @@ impl EmbeddingService {
         let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
 
         for chunk in texts.chunks(MAX_BATCH_SIZE) {
-            let chunk_embeddings = self.engine.write().await.embed_batch(chunk)?;
+            let chunk_embeddings = self.engine.read().await.embed_batch(chunk)?;
             for mut emb in chunk_embeddings {
                 normalize_l2(&mut emb);
                 embeddings.push(emb);
@@ -438,16 +513,20 @@ impl EmbeddingService {
             let engine = Arc::clone(&engine);
 
             let task = tokio::spawn(async move {
-                let embeddings = engine.write().await.embed_batch(&chunk)?;
+                let embeddings = engine.read().await.embed_batch(&chunk)?;
 
-                let mut results: Vec<(usize, Vec<f32>, String)> = Vec::with_capacity(embeddings.len());
+                let mut results: Vec<(usize, Vec<f32>, String)> =
+                    Vec::with_capacity(embeddings.len());
 
-                for (text_idx, (text, embedding)) in chunk.iter().zip(embeddings.into_iter()).enumerate() {
+                for (text_idx, (text, embedding)) in
+                    chunk.iter().zip(embeddings.into_iter()).enumerate()
+                {
                     let mut emb = embedding;
                     normalize_l2(&mut emb);
 
                     let global_idx = chunk_idx * MAX_BATCH_SIZE + text_idx;
-                    let text_preview = if text.len() > 100 { &text[..100] } else { text }.to_string();
+                    let text_preview =
+                        if text.len() > 100 { &text[..100] } else { text }.to_string();
 
                     results.push((global_idx, emb, text_preview));
                 }
@@ -550,17 +629,20 @@ impl EmbeddingService {
                 .as_ref()
                 .map(|c| c.engine_type.clone())
                 .unwrap_or(crate::config::model::EngineType::Candle),
-            model_path: req.model_path.clone().unwrap_or_else(|| std::path::PathBuf::from(&req.model_name)),
+            model_path: req
+                .model_path
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from(&req.model_name)),
             tokenizer_path: req.tokenizer_path.clone().or_else(|| {
                 self.model_config
                     .as_ref()
                     .and_then(|c| c.tokenizer_path.clone())
             }),
-            device: req.device.clone().or_else(|| {
-                self.model_config
-                    .as_ref()
-                    .map(|c| c.device.clone())
-            }).unwrap_or(crate::config::model::DeviceType::Cpu),
+            device: req
+                .device
+                .clone()
+                .or_else(|| self.model_config.as_ref().map(|c| c.device.clone()))
+                .unwrap_or(crate::config::model::DeviceType::Cpu),
             max_batch_size: req.max_batch_size.unwrap_or_else(|| {
                 self.model_config
                     .as_ref()
@@ -588,6 +670,7 @@ impl EmbeddingService {
                     .map(|c| c.oom_fallback_enabled)
                     .unwrap_or(false)
             }),
+            model_sha256: None,
         };
 
         if let Some(ref manager) = self.model_manager {
@@ -694,16 +777,16 @@ mod tests {
     }
 
     impl InferenceEngine for MockEngine {
-        fn embed(&mut self, _text: &str) -> Result<Vec<f32>, AppError> {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, AppError> {
             Ok(self.embedding.clone())
         }
 
-        fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
             Ok(vec![self.embedding.clone(); texts.len()])
         }
 
-        fn precision(&self) -> Precision {
-            Precision::Fp32
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
         }
 
         fn supports_mixed_precision(&self) -> bool {
@@ -727,6 +810,7 @@ mod tests {
             expected_dimension: Some(384),
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
+            model_sha256: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -761,6 +845,7 @@ mod tests {
             expected_dimension: Some(1024),
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
+            model_sha256: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -795,6 +880,7 @@ mod tests {
             expected_dimension: None,
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
+            model_sha256: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -850,6 +936,7 @@ mod tests {
             expected_dimension: Some(1024),
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
+            model_sha256: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -876,6 +963,7 @@ mod tests {
             expected_dimension: Some(1024),
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
+            model_sha256: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -915,6 +1003,7 @@ mod tests {
             expected_dimension: Some(384),
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
+            model_sha256: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1118,6 +1207,7 @@ mod tests {
             expected_dimension: Some(384),
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
+            model_sha256: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1185,6 +1275,7 @@ mod tests {
             expected_dimension: Some(384),
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
+            model_sha256: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =

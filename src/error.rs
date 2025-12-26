@@ -4,9 +4,9 @@
 // See LICENSE file in the project root for full license information.
 
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use regex::Regex;
 use serde_json::json;
@@ -78,6 +78,9 @@ pub enum AppError {
 
     #[error("Model not loaded: {0}")]
     ModelNotLoaded(String),
+
+    #[error("Authentication error: {0}")]
+    AuthenticationError(String),
 }
 
 impl AppError {
@@ -108,6 +111,10 @@ impl AppError {
     pub fn model_not_loaded(message: String) -> Self {
         AppError::ModelNotLoaded(message)
     }
+
+    pub fn authentication_error(message: String) -> Self {
+        AppError::AuthenticationError(message)
+    }
 }
 
 impl IntoResponse for AppError {
@@ -120,6 +127,7 @@ impl IntoResponse for AppError {
             AppError::InvalidInput(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::ModelNotLoaded(_) => StatusCode::FAILED_DEPENDENCY,
+            AppError::AuthenticationError(_) => StatusCode::UNAUTHORIZED,
         };
 
         let sanitized_message = sanitize_error_message(&self.to_string());

@@ -7,12 +7,13 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::PathBuf;
 
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, Default)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub model: ModelConfig,
     pub embedding: EmbeddingConfig,
     pub monitoring: MonitoringConfig,
+    pub auth: AuthConfig,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
@@ -49,6 +50,15 @@ pub struct MonitoringConfig {
     pub memory_warning_threshold: Option<f64>,
     pub metrics_enabled: bool,
     pub log_level: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Serialize)]
+pub struct AuthConfig {
+    pub enabled: bool,
+    pub jwt_secret: Option<String>,
+    pub token_expiration_hours: Option<i64>,
+    pub default_admin_username: Option<String>,
+    pub default_admin_password: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -99,13 +109,14 @@ impl Default for MonitoringConfig {
     }
 }
 
-impl Default for AppConfig {
+impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            server: ServerConfig::default(),
-            model: ModelConfig::default(),
-            embedding: EmbeddingConfig::default(),
-            monitoring: MonitoringConfig::default(),
+            enabled: false,
+            jwt_secret: None,
+            token_expiration_hours: Some(24),
+            default_admin_username: Some("admin".to_string()),
+            default_admin_password: Some("admin123".to_string()),
         }
     }
 }
@@ -123,7 +134,15 @@ impl ConfigLoader {
             env_prefix: "VECBOOST".to_string(),
         }
     }
+}
 
+impl Default for ConfigLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConfigLoader {
     pub fn with_config_path<P: Into<PathBuf>>(mut self, path: P) -> Self {
         self.config_path = Some(path.into());
         self
@@ -159,9 +178,15 @@ impl ConfigLoader {
         config = config.set_default("monitoring.metrics_enabled", true)?;
         config = config.set_default("monitoring.log_level", "info")?;
 
+        config = config.set_default("auth.enabled", false)?;
+        config = config.set_default("auth.token_expiration_hours", 24)?;
+        config = config.set_default("auth.default_admin_username", "admin")?;
+        config = config.set_default("auth.default_admin_password", "admin123")?;
+
         if let Some(path) = &self.config_path {
             if path.exists() {
-                config = config.add_source(config::File::with_name(path.to_string_lossy().as_ref()));
+                config =
+                    config.add_source(config::File::with_name(path.to_string_lossy().as_ref()));
             }
         } else {
             let default_config = PathBuf::from("config.toml");
@@ -170,10 +195,12 @@ impl ConfigLoader {
             }
         }
 
-        config = config.add_source(config::Environment::with_prefix(&self.env_prefix)
-            .prefix_separator("_")
-            .separator("__")
-            .ignore_empty(true));
+        config = config.add_source(
+            config::Environment::with_prefix(&self.env_prefix)
+                .prefix_separator("_")
+                .separator("__")
+                .ignore_empty(true),
+        );
 
         config.build()?.try_deserialize().map_err(ConfigError::from)
     }
@@ -217,8 +244,10 @@ impl AppConfig {
             .parse()
             .unwrap_or(3000);
 
-        let model_repo = env::var("VECBOOST_MODEL_REPO").unwrap_or_else(|_| "BAAI/bge-m3".to_string());
-        let model_revision = env::var("VECBOOST_MODEL_REVISION").unwrap_or_else(|_| "main".to_string());
+        let model_repo =
+            env::var("VECBOOST_MODEL_REPO").unwrap_or_else(|_| "BAAI/bge-m3".to_string());
+        let model_revision =
+            env::var("VECBOOST_MODEL_REVISION").unwrap_or_else(|_| "main".to_string());
         let use_gpu = env::var("VECBOOST_MODEL_USE_GPU")
             .unwrap_or_else(|_| "false".to_string())
             .parse()
@@ -233,7 +262,12 @@ impl AppConfig {
             .ok();
 
         Ok(AppConfig {
-            server: ServerConfig { host, port, workers: None, timeout: Some(30) },
+            server: ServerConfig {
+                host,
+                port,
+                workers: None,
+                timeout: Some(30),
+            },
             model: ModelConfig {
                 model_repo,
                 model_revision,
@@ -256,6 +290,19 @@ impl AppConfig {
                 metrics_enabled: true,
                 log_level: Some("info".to_string()),
             },
+            auth: AuthConfig {
+                enabled: env::var("VECBOOST_AUTH_ENABLED")
+                    .unwrap_or_else(|_| "false".to_string())
+                    .parse()
+                    .unwrap_or(false),
+                jwt_secret: env::var("VECBOOST_AUTH_JWT_SECRET").ok(),
+                token_expiration_hours: env::var("VECBOOST_AUTH_TOKEN_EXPIRATION_HOURS")
+                    .unwrap_or_else(|_| "24".to_string())
+                    .parse()
+                    .ok(),
+                default_admin_username: env::var("VECBOOST_AUTH_DEFAULT_ADMIN_USERNAME").ok(),
+                default_admin_password: env::var("VECBOOST_AUTH_DEFAULT_ADMIN_PASSWORD").ok(),
+            },
         })
     }
 
@@ -264,7 +311,7 @@ impl AppConfig {
     }
 
     pub fn save_to_file<P: Into<PathBuf>>(&self, path: P) -> Result<(), std::io::Error> {
-        let content = self.to_toml_string().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let content = self.to_toml_string().map_err(std::io::Error::other)?;
         std::fs::write(path.into(), content)
     }
 }

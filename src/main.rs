@@ -4,21 +4,28 @@
 // See LICENSE file in the project root for full license information.
 
 use axum::{
-    body::Body,
-    extract::State,
-    routing::{get, post},
     Json, Router,
+    body::Body,
+    extract::FromRef,
+    extract::State,
+    middleware,
+    routing::{get, post},
 };
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 use tokio::sync::RwLock;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use vecboost::{
+    AppConfig,
+    auth::{
+        JwtManager, UserStore, auth_middleware, create_default_admin_user, login_handler,
+        logout_handler,
+    },
     config::model::{EngineType, ModelConfig},
     domain::{
         BatchEmbedRequest, EmbedRequest, FileEmbedRequest, ModelInfo, ModelListResponse,
@@ -27,7 +34,6 @@ use vecboost::{
     engine::AnyEngine,
     service::embedding::EmbeddingService,
     utils::AggregationMode,
-    AppConfig,
 };
 
 const RATE_LIMIT_REQUESTS: u64 = 100;
@@ -43,6 +49,36 @@ struct RateLimitState {
 struct AppState {
     service: Arc<RwLock<EmbeddingService>>,
     rate_limit: RateLimitState,
+    jwt_manager: Option<Arc<JwtManager>>,
+    user_store: Option<Arc<UserStore>>,
+    auth_enabled: bool,
+}
+
+impl FromRef<AppState> for Arc<RwLock<EmbeddingService>> {
+    fn from_ref(state: &AppState) -> Self {
+        state.service.clone()
+    }
+}
+
+impl FromRef<AppState> for RateLimitState {
+    fn from_ref(state: &AppState) -> Self {
+        state.rate_limit.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<JwtManager> {
+    fn from_ref(state: &AppState) -> Self {
+        state
+            .jwt_manager
+            .clone()
+            .expect("JWT manager not available")
+    }
+}
+
+impl FromRef<AppState> for Arc<UserStore> {
+    fn from_ref(state: &AppState) -> Self {
+        state.user_store.clone().expect("User store not available")
+    }
 }
 
 impl RateLimitState {
@@ -108,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
         expected_dimension: config.model.expected_dimension,
         memory_limit_bytes: None,
         oom_fallback_enabled: false,
+        model_sha256: None,
     };
 
     tracing::info!("Initializing Inference Engine (this may take a while to download models)...");
@@ -116,25 +153,106 @@ async fn main() -> anyhow::Result<()> {
         EngineType::Candle,
         vecboost::config::model::Precision::Fp32,
     )?));
-    let service = EmbeddingService::new(engine, Some(model_config));
+
+    let cache_enabled = config.embedding.cache_enabled;
+    let cache_size = config.embedding.cache_size;
+
+    let service = if cache_enabled && cache_size > 0 {
+        tracing::info!("KV Cache enabled with size: {}", cache_size);
+        EmbeddingService::with_cache(engine, Some(model_config), cache_size)
+    } else {
+        tracing::info!("KV Cache disabled");
+        EmbeddingService::new(engine, Some(model_config))
+    };
     let service = Arc::new(RwLock::new(service));
 
     let rate_limit_state = RateLimitState::new();
+
+    let (jwt_manager, user_store) = if config.auth.enabled {
+        let jwt_secret = config.auth.jwt_secret.unwrap_or_else(|| {
+            tracing::warn!(
+                "No JWT secret provided, using default (not recommended for production)"
+            );
+            "default_jwt_secret_change_me_in_production".to_string()
+        });
+
+        let jwt_manager = Arc::new(
+            JwtManager::new(jwt_secret)
+                .with_expiration(config.auth.token_expiration_hours.unwrap_or(24)),
+        );
+
+        let user_store = Arc::new(UserStore::new());
+
+        let admin_username = config
+            .auth
+            .default_admin_username
+            .unwrap_or_else(|| "admin".to_string());
+        let admin_password = config
+            .auth
+            .default_admin_password
+            .unwrap_or_else(|| "admin123".to_string());
+
+        let admin_user = create_default_admin_user(&admin_username, &admin_password)
+            .expect("Failed to create default admin user");
+        user_store
+            .add_user(admin_user)
+            .expect("Failed to add default admin user");
+
+        tracing::info!("JWT authentication enabled");
+        tracing::info!("Default admin user created: {}", admin_username);
+        tracing::warn!("Please change the default admin password in production!");
+
+        (Some(jwt_manager), Some(user_store))
+    } else {
+        tracing::info!("JWT authentication disabled");
+        (None, None)
+    };
+
     let app_state = AppState {
         service,
         rate_limit: rate_limit_state.clone(),
+        jwt_manager: jwt_manager.clone(),
+        user_store: user_store.clone(),
+        auth_enabled: config.auth.enabled,
     };
 
-    let app = Router::new()
-        .route("/health", get(health_check))
-        .route("/api/v1/embed", post(embed_handler))
-        .route("/api/v1/embed/batch", post(batch_embed_handler))
-        .route("/api/v1/similarity", post(similarity_handler))
-        .route("/api/v1/embed/file", post(file_embed_handler))
-        .route("/api/v1/model/switch", post(model_switch_handler))
-        .route("/api/v1/model/current", get(current_model_handler))
-        .route("/api/v1/model/info", get(model_info_handler))
-        .route("/api/v1/model/list", get(model_list_handler))
+    let mut app = Router::new().route("/health", get(health_check));
+
+    if app_state.auth_enabled {
+        let auth_routes = Router::new()
+            .route("/api/v1/auth/login", post(login_handler))
+            .route("/api/v1/auth/logout", post(logout_handler))
+            .with_state(app_state.clone());
+
+        let protected_routes = Router::new()
+            .route("/api/v1/embed", post(embed_handler))
+            .route("/api/v1/embed/batch", post(batch_embed_handler))
+            .route("/api/v1/similarity", post(similarity_handler))
+            .route("/api/v1/embed/file", post(file_embed_handler))
+            .route("/api/v1/model/switch", post(model_switch_handler))
+            .route("/api/v1/model/current", get(current_model_handler))
+            .route("/api/v1/model/info", get(model_info_handler))
+            .route("/api/v1/model/list", get(model_list_handler))
+            .route_layer(middleware::from_fn_with_state(
+                app_state.clone(),
+                auth_middleware,
+            ))
+            .with_state(app_state.clone());
+
+        app = app.merge(auth_routes).merge(protected_routes);
+    } else {
+        app = app
+            .route("/api/v1/embed", post(embed_handler))
+            .route("/api/v1/embed/batch", post(batch_embed_handler))
+            .route("/api/v1/similarity", post(similarity_handler))
+            .route("/api/v1/embed/file", post(file_embed_handler))
+            .route("/api/v1/model/switch", post(model_switch_handler))
+            .route("/api/v1/model/current", get(current_model_handler))
+            .route("/api/v1/model/info", get(model_info_handler))
+            .route("/api/v1/model/list", get(model_list_handler));
+    }
+
+    let app = app
         .layer(TraceLayer::new_for_http())
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::X_CONTENT_TYPE_OPTIONS,

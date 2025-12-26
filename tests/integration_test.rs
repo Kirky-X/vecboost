@@ -63,11 +63,11 @@ impl MockEngine {
 
 #[async_trait]
 impl InferenceEngine for MockEngine {
-    fn embed(&mut self, text: &str) -> Result<Vec<f32>, AppError> {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
         Ok(self.generate_deterministic_embedding(text))
     }
 
-    fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
         let embeddings: Vec<Vec<f32>> = texts
             .iter()
             .map(|t| self.generate_deterministic_embedding(t))
@@ -75,8 +75,8 @@ impl InferenceEngine for MockEngine {
         Ok(embeddings)
     }
 
-    fn precision(&self) -> Precision {
-        Precision::Fp32
+    fn precision(&self) -> &Precision {
+        &Precision::Fp32
     }
 
     fn supports_mixed_precision(&self) -> bool {
@@ -84,13 +84,13 @@ impl InferenceEngine for MockEngine {
     }
 }
 
-fn create_mock_engine(
-) -> Result<Arc<RwLock<dyn InferenceEngine + Send + Sync>>, Box<dyn std::error::Error>> {
+fn create_mock_engine()
+-> Result<Arc<RwLock<dyn InferenceEngine + Send + Sync>>, Box<dyn std::error::Error>> {
     Ok(Arc::new(RwLock::new(MockEngine::new(MOCK_DIMENSION))))
 }
 
-fn create_test_engine(
-) -> Result<Arc<RwLock<dyn InferenceEngine + Send + Sync>>, Box<dyn std::error::Error>> {
+fn create_test_engine()
+-> Result<Arc<RwLock<dyn InferenceEngine + Send + Sync>>, Box<dyn std::error::Error>> {
     create_mock_engine()
 }
 

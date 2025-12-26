@@ -3,15 +3,17 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-pub mod manager;
-pub mod memory_limit;
 pub mod amd;
 pub mod cuda;
+pub mod manager;
+pub mod memory_limit;
 
-pub use manager::{DeviceInfo, DeviceManager, DeviceStatus, GpuInfo};
-pub use memory_limit::{MemoryLimitConfig, MemoryLimitController, MemoryLimitStatus, block_on_async, block_on_sync};
 pub use amd::{AmdDevice, AmdDeviceManager, AmdGpuInfo};
 pub use cuda::{CudaDevice, CudaDeviceManager, CudaGpuInfo};
+pub use manager::{DeviceInfo, DeviceManager, DeviceStatus, GpuInfo};
+pub use memory_limit::{
+    MemoryLimitConfig, MemoryLimitController, MemoryLimitStatus, block_on_async, block_on_sync,
+};
 
 use crate::config::model::DeviceType as ConfigDeviceType;
 use serde::Serialize;

@@ -4,8 +4,8 @@
 // See LICENSE file in the project root for full license information.
 
 use std::future::Future;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -139,7 +139,10 @@ impl CircuitBreaker {
                 let success_count = self.success_count.load(Ordering::SeqCst);
                 if success_count >= self.config.success_threshold as usize {
                     self.reset().await;
-                    info!("Circuit breaker '{}' closed after successful half-open checks", self.name);
+                    info!(
+                        "Circuit breaker '{}' closed after successful half-open checks",
+                        self.name
+                    );
                 }
             }
             CircuitState::Closed => {

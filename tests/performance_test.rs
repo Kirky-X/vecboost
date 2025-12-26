@@ -9,19 +9,19 @@ mod performance_tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::RwLock;
+    use vecboost::config::model::Precision;
     use vecboost::engine::InferenceEngine;
     use vecboost::error::AppError;
     use vecboost::metrics::collector::MetricsCollector;
     use vecboost::metrics::domain::PerformanceTestConfig;
-    use vecboost::metrics::performance::{generate_test_text, PerformanceTester};
-    use vecboost::config::model::Precision;
+    use vecboost::metrics::performance::{PerformanceTester, generate_test_text};
 
     #[derive(Debug, Clone)]
     struct MockEngine;
 
     #[async_trait]
     impl InferenceEngine for MockEngine {
-        fn embed(&mut self, text: &str) -> Result<Vec<f32>, AppError> {
+        fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
             let dim = 384;
             let tokens_count = text.split_whitespace().count().max(1);
             let mut embedding = vec![0.1f32; dim.min(tokens_count * 10)];
@@ -31,12 +31,12 @@ mod performance_tests {
             Ok(embedding)
         }
 
-        fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
             texts.iter().map(|t| self.embed(t)).collect()
         }
 
-        fn precision(&self) -> Precision {
-            Precision::Fp32
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
         }
 
         fn supports_mixed_precision(&self) -> bool {
@@ -56,11 +56,7 @@ mod performance_tests {
     }
 
     fn get_expected_qps_threshold() -> f64 {
-        if is_gpu_available() {
-            1000.0
-        } else {
-            200.0
-        }
+        if is_gpu_available() { 1000.0 } else { 200.0 }
     }
 
     fn get_latency_threshold(tokens: usize) -> u64 {

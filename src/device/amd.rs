@@ -4,8 +4,8 @@
 // See LICENSE file in the project root for full license information.
 
 use crate::config::model::DeviceType;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,7 +171,8 @@ impl AmdDevice {
 
     pub fn deallocate(&self, bytes: u64) {
         let current = self.memory_allocated.load(Ordering::SeqCst);
-        self.memory_allocated.store(current.saturating_sub(bytes), Ordering::SeqCst);
+        self.memory_allocated
+            .store(current.saturating_sub(bytes), Ordering::SeqCst);
         self.memory_used.store(
             self.memory_allocated.load(Ordering::SeqCst),
             Ordering::SeqCst,
@@ -193,11 +194,7 @@ impl AmdDevice {
     pub fn supports_operation(&self, operation: &str) -> bool {
         matches!(
             operation,
-            "matrix_multiply"
-                | "convolution"
-                | "activation"
-                | "normalization"
-                | "reduction"
+            "matrix_multiply" | "convolution" | "activation" | "normalization" | "reduction"
         )
     }
 }
@@ -340,7 +337,10 @@ impl AmdDeviceManager {
 
     pub async fn memory_usage_summary(&self) -> String {
         let devices = self.devices.read().await;
-        let total_used: u64 = devices.iter().map(|d| d.memory_used.load(Ordering::SeqCst)).sum();
+        let total_used: u64 = devices
+            .iter()
+            .map(|d| d.memory_used.load(Ordering::SeqCst))
+            .sum();
         let total_vram: u64 = devices.iter().map(|d| d.vram_bytes()).sum();
 
         format!(

@@ -133,9 +133,7 @@ pub async fn with_retry<T, R: Retryable<T>>(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        AppError::inference_error("Unknown retry error".to_string())
-    }))
+    Err(last_error.unwrap_or_else(|| AppError::inference_error("Unknown retry error".to_string())))
 }
 
 fn is_retryable_error(error: &AppError, config: &RetryConfig) -> bool {
@@ -158,7 +156,9 @@ fn calculate_delay(attempt: u32, config: &RetryConfig) -> Duration {
         .mul_add(config.exponent_base.powi(attempt as i32), 0.0)
         .min(config.max_delay_ms as f64);
 
-    let jitter_ms = (delay_ms * 0.1 * (Instant::now().elapsed().subsec_nanos() as f64 / u32::MAX as f64)) as u64;
+    let jitter_ms =
+        (delay_ms * 0.1 * (Instant::now().elapsed().subsec_nanos() as f64 / u32::MAX as f64))
+            as u64;
     let total_ms = (delay_ms as u64).saturating_add(jitter_ms);
 
     Duration::from_millis(total_ms)

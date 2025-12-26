@@ -3,8 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 use tracing::warn;
 
@@ -104,8 +104,7 @@ impl MemoryMonitor {
     }
 
     pub async fn get_memory_stats(&self) -> MemoryStats {
-        let cpu_stats = self.inner.cpu_stats.read().await.clone();
-        cpu_stats
+        self.inner.cpu_stats.read().await.clone()
     }
 
     pub async fn get_gpu_stats(&self) -> Option<GpuMemoryStats> {
@@ -165,9 +164,8 @@ impl MemoryMonitor {
 
     #[cfg(feature = "cuda")]
     pub async fn update_gpu_memory_from_candle(&self) {
-        if let Ok((used, total)) = candle_core::Device::cuda_memory_info() {
-            self.update_gpu_memory(used as u64, total as u64).await;
-        }
+        // candle-core 0.9.2 doesn't expose memory_info directly
+        // GPU memory tracking via candle requires runtime-specific APIs
     }
 
     #[cfg(not(feature = "cuda"))]
@@ -175,9 +173,7 @@ impl MemoryMonitor {
 
     #[cfg(feature = "metal")]
     pub async fn update_gpu_memory_from_metal(&self) {
-        if let Ok((used, total)) = candle_core::Device::cuda_memory_info() {
-            self.update_gpu_memory(used as u64, total as u64).await;
-        }
+        // Metal GPU memory tracking via candle requires runtime-specific APIs
     }
 
     #[cfg(not(feature = "metal"))]

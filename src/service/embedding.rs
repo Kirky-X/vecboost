@@ -72,17 +72,16 @@ impl EmbeddingService {
     }
 
     fn validate_dimension(&self, actual_dimension: usize) {
-        if let Some(ref config) = self.model_config {
-            if let Some(expected) = config.expected_dimension {
-                if actual_dimension != expected {
-                    warn!(
-                        "Dimension mismatch: expected {}, got {}. Model '{}' may have been configured incorrectly or the wrong model was loaded.",
-                        expected,
-                        actual_dimension,
-                        config.name
-                    );
-                }
-            }
+        if let Some(ref config) = self.model_config
+            && let Some(expected) = config.expected_dimension
+            && actual_dimension != expected
+        {
+            warn!(
+                "Dimension mismatch: expected {}, got {}. Model '{}' may have been configured incorrectly or the wrong model was loaded.",
+                expected,
+                actual_dimension,
+                config.name
+            );
         }
     }
 
@@ -415,7 +414,7 @@ impl EmbeddingService {
         })
     }
 
-    /// 处理批量向量化请求
+    /// 处理批量向量化请求（优化版本：使用并行处理）
     pub async fn process_batch(
         &self,
         req: BatchEmbedRequest,
@@ -425,29 +424,63 @@ impl EmbeddingService {
         self.validator.validate_batch(&req.texts)?;
 
         let texts = req.texts;
-        let mut results: Vec<BatchEmbeddingResult> = Vec::with_capacity(texts.len());
+        let texts_len = texts.len();
+
+        let chunks: Vec<&[String]> = texts.chunks(MAX_BATCH_SIZE).collect();
+        let num_chunks = chunks.len();
+
+        let engine = Arc::clone(&self.engine);
+
+        let mut tasks = Vec::with_capacity(num_chunks);
+
+        for (chunk_idx, chunk) in chunks.iter().enumerate() {
+            let chunk = chunk.to_vec();
+            let engine = Arc::clone(&engine);
+
+            let task = tokio::spawn(async move {
+                let embeddings = engine.write().await.embed_batch(&chunk)?;
+
+                let mut results: Vec<(usize, Vec<f32>, String)> = Vec::with_capacity(embeddings.len());
+
+                for (text_idx, (text, embedding)) in chunk.iter().zip(embeddings.into_iter()).enumerate() {
+                    let mut emb = embedding;
+                    normalize_l2(&mut emb);
+
+                    let global_idx = chunk_idx * MAX_BATCH_SIZE + text_idx;
+                    let text_preview = if text.len() > 100 { &text[..100] } else { text }.to_string();
+
+                    results.push((global_idx, emb, text_preview));
+                }
+
+                Result::<_, AppError>::Ok(results)
+            });
+
+            tasks.push(task);
+        }
+
+        let mut all_results: Vec<(usize, Vec<f32>, String)> = Vec::with_capacity(texts_len);
         let mut dimension: Option<usize> = None;
 
-        for chunk in texts.chunks(MAX_BATCH_SIZE) {
-            let chunk_embeddings = self.engine.write().await.embed_batch(chunk)?;
-
-            for (text, mut embedding) in chunk.iter().zip(chunk_embeddings.into_iter()) {
-                normalize_l2(&mut embedding);
-
-                let text_preview = if text.len() > 100 { &text[..100] } else { text }.to_string();
-
+        for task in tasks {
+            let chunk_results = task.await??;
+            for (idx, embedding, preview) in chunk_results {
                 let dim = embedding.len();
                 if dimension.is_none() {
                     dimension = Some(dim);
                 }
-                self.validate_dimension(dim);
-
-                results.push(BatchEmbeddingResult {
-                    text_preview: text_preview.to_string(),
-                    embedding,
-                });
+                all_results.push((idx, embedding, preview));
             }
         }
+
+        all_results.sort_by_key(|r| r.0);
+
+        let results: Vec<BatchEmbeddingResult> = all_results
+            .into_iter()
+            .map(|(_, embedding, preview)| BatchEmbeddingResult {
+                text_preview: preview,
+                embedding,
+            })
+            .collect();
 
         let processing_time = start_time.elapsed();
 
@@ -499,15 +532,15 @@ impl EmbeddingService {
             req.model_name
         );
 
-        if let Some(ref prev_name) = previous_model {
-            if prev_name == &req.model_name {
-                return Ok(ModelSwitchResponse {
-                    previous_model: previous_model.clone(),
-                    current_model: req.model_name,
-                    success: true,
-                    message: "Already using this model".to_string(),
-                });
-            }
+        if let Some(ref prev_name) = previous_model
+            && prev_name == &req.model_name
+        {
+            return Ok(ModelSwitchResponse {
+                previous_model: previous_model.clone(),
+                current_model: req.model_name,
+                success: true,
+                message: "Already using this model".to_string(),
+            });
         }
 
         let model_config = ModelConfig {
@@ -543,6 +576,17 @@ impl EmbeddingService {
                 self.model_config
                     .as_ref()
                     .and_then(|c| c.expected_dimension)
+            }),
+            memory_limit_bytes: req.memory_limit_bytes.or_else(|| {
+                self.model_config
+                    .as_ref()
+                    .and_then(|c| c.memory_limit_bytes)
+            }),
+            oom_fallback_enabled: req.oom_fallback_enabled.unwrap_or_else(|| {
+                self.model_config
+                    .as_ref()
+                    .map(|c| c.oom_fallback_enabled)
+                    .unwrap_or(false)
             }),
         };
 
@@ -681,6 +725,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -713,6 +759,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: Some(1024),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -745,6 +793,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -798,6 +848,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: Some(1024),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -822,6 +874,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: Some(1024),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -859,6 +913,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1060,6 +1116,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1125,6 +1183,8 @@ mod tests {
             max_batch_size: 3,
             pooling_mode: None,
             expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =

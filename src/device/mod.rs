@@ -4,8 +4,14 @@
 // See LICENSE file in the project root for full license information.
 
 pub mod manager;
+pub mod memory_limit;
+pub mod amd;
+pub mod cuda;
 
 pub use manager::{DeviceInfo, DeviceManager, DeviceStatus, GpuInfo};
+pub use memory_limit::{MemoryLimitConfig, MemoryLimitController, MemoryLimitStatus};
+pub use amd::{AmdDevice, AmdDeviceManager, AmdGpuInfo};
+pub use cuda::{CudaDevice, CudaDeviceManager, CudaGpuInfo};
 
 use crate::config::model::DeviceType as ConfigDeviceType;
 use serde::Serialize;
@@ -32,11 +38,13 @@ impl From<&ConfigDeviceType> for DeviceCategory {
             ConfigDeviceType::Cpu => DeviceCategory::Cpu,
             ConfigDeviceType::Cuda => DeviceCategory::Gpu,
             ConfigDeviceType::Metal => DeviceCategory::Gpu,
+            ConfigDeviceType::Amd => DeviceCategory::Gpu,
+            ConfigDeviceType::OpenCL => DeviceCategory::Gpu,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct DeviceCapability {
     pub supports_float16: bool,
     pub supports_tensor_cores: bool,

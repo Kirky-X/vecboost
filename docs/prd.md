@@ -156,10 +156,7 @@
 - ✅ 实现了运行时模型切换 API（switch_model 方法）
 - ✅ 实现了 ModelSwitchRequest/Response 数据结构支持完整模型配置
 - ✅ 集成了 ModelManager 与 EmbeddingService 实现动态模型切换
-- ⚠️ 缺少 ModelDownloader 模块，使用 hf_hub 直接下载
-
-**下一步行动**:
-- 实现 ModelDownloader 模块封装 ModelScope SDK
+- ✅ 实现了 ModelDownloader 模块封装 HuggingFace 和 ModelScope SDK（2025-12-26 完成）
 
 ---
 
@@ -252,9 +249,9 @@
 **完成时间**: 2025-12-25
 **Git Commit**: `feat: 实现 ONNX Runtime 推理引擎`
 - **操作系统**: Linux（Ubuntu 20.04+）、Windows 10+、macOS 12+ - ✅ 纯 Rust 实现，跨平台
-- **硬件**: NVIDIA GPU（CUDA 11.8+，计算能力 7.0+）- ⚠️ 仅实现 CUDA，Metal 已定义但未实现，OpenCL/ROCm 未实现
+- **硬件**: NVIDIA GPU（CUDA 11.8+，计算能力 7.0+）- ✅ CUDA 已实现，Apple Silicon GPU（Metal）已实现，AMD GPU（OpenCL/ROCm）已实现
 - **Rust 版本**: 1.85.0（使用Rust 2024 Edition）- ✅ 已升级 Edition 2024
-- **CUDA 版本**: 11.8 或 12.0（推荐12.0以获得最佳性能）- ⚠️ candle-core 支持 CUDA，但需通过 `--features cuda` 启用
+- **CUDA 版本**: 11.8 或 12.0（推荐12.0以获得最佳性能）- ✅ candle-core 支持 CUDA，通过 `--features cuda` 启用，详见 `docs/DEPLOYMENT_GUIDE.md`
 
 **实现文件**:
 - `Cargo.toml` - 项目配置和 feature 定义
@@ -270,16 +267,15 @@
 - ✅ DeviceType 枚举已定义 Metal 类型
 - ✅ Cargo.toml 中已定义 `cuda` 和 `onnx` feature flags
 - ✅ Rust 版本已升级到 2024 Edition
-- ❌ CUDA feature 未默认启用，需要通过 `--features cuda` 手动启用
-- ❌ Metal 设备类型已定义但未实际实现推理支持
-- ❌ 缺少 OpenCL/ROCm 支持
-- ❌ 缺少 AMD GPU 支持
+- ✅ CUDA feature 已通过 `cargo build --features cuda` 启用
+- ✅ Metal 设备类型已实现推理支持（在 Candle 引擎中初始化 Metal 设备）
+- ⚠️ OpenCL/ROCm 支持已实现（AMD GPU，src/device/amd.rs）
 
 **下一步行动**:
-- 将 CUDA feature 添加到 default features 或提供启用文档
-- 实现 Metal 设备推理支持（Apple Silicon GPU）
-- 添加 OpenCL/ROCm 支持（AMD GPU）
-- 完善 AMD GPU 支持文档
+- ✅ 已实现 CUDA feature 并通过 `cargo build --features cuda` 启用
+- ✅ 已实现 Metal 设备推理支持（Apple Silicon GPU）
+- ✅ 已实现 OpenCL/ROCm 支持（AMD GPU）
+- 完善 AMD GPU 支持文档 - 待实现
 
 ---
 

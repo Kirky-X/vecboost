@@ -140,6 +140,8 @@ impl ModelManager {
                 max_batch_size: 32,
                 pooling_mode: None,
                 expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: false,
             }
         };
 
@@ -341,6 +343,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: false,
         };
 
         let _model = manager.load(&config).await.unwrap();
@@ -367,6 +371,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: false,
         };
 
         let config2 = ModelConfig {
@@ -381,6 +387,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: false,
         };
 
         fs::create_dir_all(&config1.model_path).unwrap();
@@ -431,6 +439,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: false,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -487,6 +497,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: false,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -511,6 +523,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: false,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -537,6 +551,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: false,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -569,6 +585,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: false,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();

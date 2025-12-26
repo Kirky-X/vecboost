@@ -5,6 +5,7 @@
 
 use super::InferenceEngine;
 use crate::config::model::{DeviceType, ModelConfig, Precision};
+use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
 use crate::error::AppError;
 use crate::monitor::MemoryMonitor;
 use crate::text::{CachedTokenizer, Encoding};
@@ -21,6 +22,7 @@ pub struct CandleEngine {
     device: Device,
     precision: Precision,
     memory_monitor: Option<Arc<MemoryMonitor>>,
+    memory_limit_controller: Option<Arc<MemoryLimitController>>,
     fallback_triggered: bool,
     device_type: DeviceType,
 }
@@ -35,6 +37,14 @@ impl CandleEngine {
         {
             tracing::info!("Using CUDA GPU");
             Device::new_cuda(0).map_err(|e| AppError::InferenceError(e.to_string()))?
+        } else if device_type == DeviceType::Metal && candle_core::utils::metal_is_available()
+        {
+            tracing::info!("Using Metal GPU");
+            Device::new_metal(0).map_err(|e| AppError::InferenceError(e.to_string()))?
+        } else if matches!(device_type, DeviceType::Amd | DeviceType::OpenCL)
+        {
+            tracing::warn!("Candle engine does not natively support AMD GPUs. AMD GPU support requires ROCm-enabled Candle build or ONNX Runtime. Falling back to CPU.");
+            Device::Cpu
         } else {
             tracing::info!("Using CPU");
             Device::Cpu
@@ -47,7 +57,7 @@ impl CandleEngine {
                     tracing::info!("Using FP16 precision");
                     DType::F16
                 } else {
-                    tracing::warn!("FP16 not supported on CPU, falling back to FP32");
+                    tracing::warn!("FP16 not supported on non-CUDA devices, falling back to FP32");
                     DType::F32
                 }
             }
@@ -91,7 +101,7 @@ impl CandleEngine {
         let model = BertModel::load(vb, &bert_config)
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
-        let memory_monitor = if device.is_cuda() {
+        let memory_monitor = if device.is_cuda() || device.is_metal() {
             Some(Arc::new(MemoryMonitor::new()))
         } else {
             None
@@ -103,9 +113,14 @@ impl CandleEngine {
             device,
             precision,
             memory_monitor,
+            memory_limit_controller: None,
             fallback_triggered: false,
             device_type,
         })
+    }
+
+    pub fn set_memory_limit_controller(&mut self, controller: Arc<MemoryLimitController>) {
+        self.memory_limit_controller = Some(controller);
     }
 
     pub fn device_type(&self) -> DeviceType {
@@ -133,10 +148,50 @@ impl CandleEngine {
         }
     }
 
+    pub async fn check_memory_limit_and_fallback(&mut self, config: &ModelConfig) -> Result<bool, AppError> {
+        if self.fallback_triggered {
+            return Ok(false);
+        }
+
+        if let Some(ref controller) = self.memory_limit_controller {
+            let status = controller.check_limit().await;
+
+            if status == MemoryLimitStatus::Exceeded {
+                tracing::warn!("Memory limit exceeded, attempting fallback to CPU");
+                self.try_fallback_to_cpu(config).await?;
+                return Ok(true);
+            } else if status == MemoryLimitStatus::Critical {
+                tracing::warn!("Memory limit critical, checking memory pressure for fallback");
+                if self.check_memory_pressure(90) {
+                    self.try_fallback_to_cpu(config).await?;
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    pub async fn update_memory_limit(&self, used_bytes: u64) {
+        if let Some(ref controller) = self.memory_limit_controller {
+            controller.update_usage(used_bytes).await;
+        }
+    }
+
+    pub async fn get_memory_status(&self) -> Option<MemoryLimitStatus> {
+        if let Some(ref controller) = self.memory_limit_controller {
+            Some(controller.check_limit().await)
+        } else {
+            None
+        }
+    }
+
     pub async fn update_gpu_memory(&self) {
         if let Some(ref _monitor) = self.memory_monitor {
             #[cfg(feature = "cuda")]
             _monitor.update_gpu_memory_from_candle().await;
+            #[cfg(feature = "metal")]
+            _monitor.update_gpu_memory_from_metal().await;
         }
     }
 
@@ -309,35 +364,25 @@ impl CandleEngine {
 
 impl InferenceEngine for CandleEngine {
     fn embed(&mut self, text: &str) -> Result<Vec<f32>, AppError> {
-        if self.device_type == DeviceType::Cuda && self.check_memory_pressure(90) {
-            tracing::warn!("High memory pressure detected before inference, attempting fallback to CPU");
-            let config = ModelConfig::default();
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
-            if let Err(e) = rt.block_on(async { self.try_fallback_to_cpu(&config).await }) {
-                tracing::error!("Failed to fallback to CPU: {}", e);
-            }
-        }
-
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
-        rt.block_on(async { self.forward_pass(text).await })
-    }
-
-    fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
-        if self.device_type == DeviceType::Cuda && self.check_memory_pressure(90) {
-            tracing::warn!("High memory pressure detected before batch inference, attempting fallback to CPU");
-            let config = ModelConfig::default();
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
-            if let Err(e) = rt.block_on(async { self.try_fallback_to_cpu(&config).await }) {
-                tracing::error!("Failed to fallback to CPU: {}", e);
-            }
-        }
-
+        let config = ModelConfig::default();
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| AppError::InferenceError(e.to_string()))?;
         rt.block_on(async {
+            if let Err(e) = self.check_memory_limit_and_fallback(&config).await {
+                tracing::error!("Memory limit check failed: {}", e);
+            }
+            self.forward_pass(text).await
+        })
+    }
+
+    fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+        let config = ModelConfig::default();
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+        rt.block_on(async {
+            if let Err(e) = self.check_memory_limit_and_fallback(&config).await {
+                tracing::error!("Memory limit check failed: {}", e);
+            }
             self.forward_pass_batch(texts.iter().map(|s| s.as_str()).collect::<Vec<_>>().as_slice()).await
         })
     }
@@ -347,6 +392,6 @@ impl InferenceEngine for CandleEngine {
     }
 
     fn supports_mixed_precision(&self) -> bool {
-        self.device.is_cuda()
+        self.device.is_cuda() || self.device.is_metal()
     }
 }

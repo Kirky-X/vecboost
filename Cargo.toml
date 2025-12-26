@@ -16,6 +16,7 @@ serde_json = "1.0"
 
 # Configuration
 config = "0.13"
+toml = "0.8"
 dotenvy = "0.15"
 
 # Logging & Tracing
@@ -50,8 +51,11 @@ hashbrown = "0.14"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1.10"
+home = "0.5"
+reqwest = { version = "0.11", features = ["stream"] }
 
 [features]
 default = []
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
 onnx = ["ndarray", "ort"]
+metal = ["candle-core/metal", "candle-nn/metal"]

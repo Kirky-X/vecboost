@@ -113,7 +113,7 @@
 - ✅ GPU 内存监控已实现（MemoryMonitor 结构已集成）
 - ✅ 文件大小检查已实现（InputValidator 的 validate_file_size 方法）
 - ✅ 模型加载超时机制已实现（ModelManager 的 with_timeout 方法）
-- ⚠️ UTF-8 编码验证部分实现（依赖 Rust String 类型原生保证）
+- ✅ UTF-8 编码验证已实现（Tokenizer 层的 validate_utf8_bytes 函数）
 
 **下一步行动**:
 - ✅ 已完成: ONNX Engine 作为备用推理引擎
@@ -260,12 +260,13 @@ sequenceDiagram
 | **推理引擎**   | Candle       | 0.8+  | HuggingFace 官方，与 Python 生态对齐  | ✅ 已实现 |
 | **备用引擎**   | ONNX Runtime | 1.16+ | 跨平台兼容性，模型转换灵活            | ✅ 已实现 |
 | **Tokenizer**  | tokenizers   | 0.19+ | HuggingFace 官方，支持 fast tokenizer | ✅ 已实现 |
-| **数值计算**   | ndarray      | 0.15+ | 成熟的多维数组库                      | ⚠️ 部分实现 |
-| **GPU CUDA**   | cudarc       | 0.11+ | 类型安全的 CUDA 绑定                  | ⚠️ 部分实现 |
-| **GPU OpenCL** | ocl          | 0.19+ | 跨厂商 GPU 支持（可选）               | ❌ 未实现 |
+| **数值计算**   | ndarray      | 0.15+ | 成熟的多维数组库                      | ✅ 已实现 |
+| **GPU CUDA**   | cudarc       | 0.11+ | 类型安全的 CUDA 绑定                  | ✅ 已实现 |
+| **GPU OpenCL** | ocl          | 0.19+ | 跨厂商 GPU 支持（可选）               | ⚠️ 部分实现 |
+| **GPU AMD**    | ROCm/OpenCL  | -     | AMD GPU 支持（ROCm/OpenCL）           | ✅ 已实现 |
 | **并发**       | tokio        | 1.35+ | 异步运行时                            | ✅ 已实现 |
 | **日志**       | tracing      | 0.1+  | 结构化日志                            | ✅ 已实现 |
-| **配置**       | serde + toml | -     | 配置文件解析                          | ⚠️ 部分实现 |
+| **配置**       | serde + toml | -     | 配置文件解析                          | ✅ 已实现 |
 
 **依赖更新策略**:
 - 每月检查安全更新
@@ -276,12 +277,13 @@ sequenceDiagram
 - ✅ Candle 引擎已实现，推理功能完整
 - ✅ ONNX Runtime 引擎已实现（src/engine/onnx_engine.rs）
 - ✅ tokenizers 库已使用
-- ⚠️ ndarray 在项目中未直接使用
-- ⚠️ cudarc 未直接使用，使用 candle-core 的 CUDA 支持
-- ❌ OpenCL/ocl 未实现
+- ✅ ndarray 已实现向量运算模块（src/utils/ndarray_ops.rs）
+- ✅ cudarc 已用于 CUDA 设备管理（src/device/cuda.rs）
+- ⚠️ OpenCL/ocl 部分实现（通过自定义 AMD 设备管理器实现）
+- ✅ AMD GPU 支持已实现（ROCm/OpenCL，src/device/amd.rs）
 - ✅ tokio 异步运行时已使用
 - ✅ tracing 日志已实现
-- ⚠️ serde+toml 已引入但配置简单
+- ✅ serde+toml 已完善配置系统（src/config/app.rs，包含 Serialize/Deserialize）
 
 ### 2.2 选型理由
 
@@ -366,7 +368,7 @@ src/
 ├── device/                   # 设备管理 ⚠️（集成在引擎中）
 │   ├── mod.rs
 │   ├── manager.rs            # 设备选择/降级 ✅
-│   ├── cuda.rs               # CUDA 设备 ⚠️
+│   ├── cuda.rs               # CUDA 设备 ✅
 │   └── cpu.rs                # CPU 设备 ⚠️
 └── metrics/                  # 可观测性 ✅
     ├── mod.rs
@@ -722,8 +724,8 @@ pub struct FileEmbedResponse {
 - ✅ 实现了 FileEmbedRequest/FileEmbedResponse 支持文件处理
 - ✅ 实现了 ParagraphEmbedding 支持段落级向量化
 - ✅ 实现了 AggregationMode 枚举支持多种聚合模式
-- ⚠️ 缺少 `ModelMetadata` 结构体（版本信息）
-- ⚠️ 缺少 `PerformanceMetrics` 结构体
+- ✅ 实现了 `ModelMetadata` 结构体（版本信息）- src/domain/mod.rs:136
+- ✅ 实现了 `PerformanceMetrics` 结构体 - src/metrics/domain.rs:10
 - ✅ 实现了 `ModelType` 枚举
 - ✅ 实现了 `Precision` 枚举
 
@@ -787,9 +789,7 @@ async fn search(State(service): State<Arc<EmbeddingService>>) -> Result<Json<Sea
   - 模型加载：单例模式保证只加载一次
   - Tokenizer 长度限制：自动截断超长 token 序列
   - ✅ **文件大小检查（GB 级上限）**: `InputValidator` 模块的 `validate_file_size` 方法已实现
-
-- ⚠️ **部分实现的资源限制**:
-  - 内存占用上限：已实现流式处理，但无明确上限控制
+  - ✅ **内存占用上限控制**: `MemoryLimitController` 实现（`src/device/memory_limit.rs`），支持状态跟踪（Ok/Warning/Critical/Exceeded）和自动降级
 
 - ❌ **未实现的资源限制**:
   - 模型加载超时机制：未实现超时控制
@@ -830,9 +830,7 @@ async fn search(State(service): State<Arc<EmbeddingService>>) -> Result<Json<Sea
   - 滑动窗口分块（overlap=20%）
   - 加权聚合策略（Average/MaxPooling/MinPooling）
   - 即用即释（每个 chunk 推理后释放显存）
-
-- ❌ **未实现**:
-  - 内存占用上限控制
+  - 内存占用上限控制：`MemoryLimitController` 实现（`src/device/memory_limit.rs`），支持阈值配置（Warning/Critical/Exceeded）和自动降级到 CPU
 
 ### 7.3 并发优化
 
@@ -840,11 +838,8 @@ async fn search(State(service): State<Arc<EmbeddingService>>) -> Result<Json<Sea
 - ✅ **已实现**:
   - 使用 tokio 异步运行时
   - `Arc<EmbeddingService>` 支持多线程并发访问
-  - `process_similarity` 使用 `try_join!` 并行推理
-
-- ⚠️ **问题**:
-  - `try_join!` 直接执行 CPU 密集任务，可能阻塞异步线程
-  - 建议使用 `tokio::task::spawn_blocking`
+  - `process_similarity` 使用 `try_join!` 并行推理和 `spawn_blocking` 处理 CPU 密集任务
+  - `process_batch` 使用 `tokio::spawn` 并行处理多个批次
 
 ---
 
@@ -911,13 +906,14 @@ pub fn run_server() -> Result<()> { ... }
 **中优先级**:
 1. ✅ 已完成: 实现滑动窗口分块和聚合器
 2. ✅ 已完成: 实现 ModelManager 模块
-3. 实现运行时模型切换功能
-3. 实现 MetricsCollector
+3. ✅ 已完成: 实现运行时模型切换功能
+4. ✅ 已完成: 实现 MetricsCollector
+5. ✅ 已完成: 实现 GPU OOM 自动降级
+6. ✅ 已完成: 添加 OpenCL/ROCm 支持（AMD GPU）
 
 **低优先级**:
-1. 添加多种相似度度量方式
-2. 实现 GPU OOM 自动降级
-3. 添加 OpenCL/ROCm 支持
+1. ✅ 已完成: 添加多种相似度度量方式（Cosine/Euclidean/DotProduct/Manhattan/MinPooling）
+2. ✅ 已完成: 优化 tokenizers 错误处理
 
 ```toml
 # 最小配置

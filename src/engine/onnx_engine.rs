@@ -5,6 +5,7 @@
 
 use super::{InferenceEngine, Precision};
 use crate::config::model::{DeviceType, ModelConfig};
+use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
 use crate::error::AppError;
 use crate::monitor::MemoryMonitor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -21,6 +22,7 @@ pub struct OnnxEngine {
     max_input_length: usize,
     precision: Precision,
     memory_monitor: Option<Arc<MemoryMonitor>>,
+    memory_limit_controller: Option<Arc<MemoryLimitController>>,
     fallback_triggered: bool,
     device_type: DeviceType,
     supports_cuda: bool,
@@ -53,6 +55,7 @@ impl OnnxEngine {
             .unwrap_or(4);
 
         let supports_cuda = device_type == DeviceType::Cuda;
+        let supports_amd = matches!(device_type, DeviceType::Amd | DeviceType::OpenCL);
 
         tracing::info!("Initializing ONNX Runtime session...");
         let session = Session::builder()
@@ -60,7 +63,29 @@ impl OnnxEngine {
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?
             .with_intra_threads(num_threads)
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?
+            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+
+        let session = if supports_cuda {
+            tracing::info!("Attempting to configure CUDA execution provider for ONNX Runtime");
+            let cuda_provider = ort::execution_providers::CUDA::default();
+            session.with_execution_provider(cuda_provider)
+        } else if supports_amd {
+            tracing::info!("Attempting to configure ROCm execution provider for ONNX Runtime");
+            #[cfg(feature = "rocm")]
+            {
+                let rocm_provider = ort::execution_providers::ROCM::default();
+                session.with_execution_provider(rocm_provider)
+            }
+            #[cfg(not(feature = "rocm"))]
+            {
+                tracing::warn!("ROCM execution provider not available. ONNX Runtime AMD support requires rocm feature flag. Using CPU execution provider.");
+                session
+            }
+        } else {
+            session
+        };
+
+        let session = session
             .commit_from_file(onnx_filename)
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
@@ -84,11 +109,11 @@ impl OnnxEngine {
 
         let actual_precision = match precision {
             Precision::Fp16 => {
-                if supports_cuda {
-                    tracing::info!("Using FP16 precision with CUDA");
+                if supports_cuda || supports_amd {
+                    tracing::info!("Using FP16 precision with GPU acceleration");
                     Precision::Fp16
                 } else {
-                    tracing::warn!("FP16 not supported without CUDA, falling back to FP32");
+                    tracing::warn!("FP16 not supported without GPU acceleration, falling back to FP32");
                     Precision::Fp32
                 }
             }
@@ -106,7 +131,7 @@ impl OnnxEngine {
             actual_precision
         );
 
-        let memory_monitor = if supports_cuda {
+        let memory_monitor = if supports_cuda || supports_amd {
             Some(Arc::new(MemoryMonitor::new()))
         } else {
             None
@@ -119,10 +144,15 @@ impl OnnxEngine {
             max_input_length,
             precision: actual_precision,
             memory_monitor,
+            memory_limit_controller: None,
             fallback_triggered: false,
             device_type,
             supports_cuda,
         })
+    }
+
+    pub fn set_memory_limit_controller(&mut self, controller: Arc<MemoryLimitController>) {
+        self.memory_limit_controller = Some(controller);
     }
 
     pub fn device_type(&self) -> DeviceType {
@@ -147,6 +177,44 @@ impl OnnxEngine {
             })
         } else {
             false
+        }
+    }
+
+    pub async fn check_memory_limit_and_fallback(&mut self, config: &ModelConfig) -> Result<bool, AppError> {
+        if self.fallback_triggered {
+            return Ok(false);
+        }
+
+        if let Some(ref controller) = self.memory_limit_controller {
+            let status = controller.check_limit().await;
+
+            if status == MemoryLimitStatus::Exceeded {
+                tracing::warn!("Memory limit exceeded for ONNX engine, attempting fallback to CPU");
+                self.try_fallback_to_cpu(config).await?;
+                return Ok(true);
+            } else if status == MemoryLimitStatus::Critical {
+                tracing::warn!("Memory limit critical for ONNX engine, checking memory pressure for fallback");
+                if self.check_memory_pressure(90) {
+                    self.try_fallback_to_cpu(config).await?;
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    pub async fn update_memory_limit(&self, used_bytes: u64) {
+        if let Some(ref controller) = self.memory_limit_controller {
+            controller.update_usage(used_bytes).await;
+        }
+    }
+
+    pub async fn get_memory_status(&self) -> Option<MemoryLimitStatus> {
+        if let Some(ref controller) = self.memory_limit_controller {
+            Some(controller.check_limit().await)
+        } else {
+            None
         }
     }
 
@@ -285,17 +353,15 @@ impl OnnxEngine {
 
 impl InferenceEngine for OnnxEngine {
     fn embed(&mut self, text: &str) -> Result<Vec<f32>, AppError> {
-        if self.supports_cuda && self.check_memory_pressure(90) {
-            tracing::warn!("High memory pressure detected before ONNX inference, attempting fallback to CPU");
-            let config = ModelConfig::default();
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
-            if let Err(e) = rt.block_on(async { self.try_fallback_to_cpu(&config).await }) {
-                tracing::error!("Failed to fallback to CPU: {}", e);
+        let config = ModelConfig::default();
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+        rt.block_on(async {
+            if let Err(e) = self.check_memory_limit_and_fallback(&config).await {
+                tracing::error!("Memory limit check failed: {}", e);
             }
-        }
-
-        self.forward_pass(text)
+            self.forward_pass(text)
+        })
     }
 
     fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
@@ -303,18 +369,16 @@ impl InferenceEngine for OnnxEngine {
             return Ok(vec![]);
         }
 
-        if self.supports_cuda && self.check_memory_pressure(90) {
-            tracing::warn!("High memory pressure detected before ONNX batch inference, attempting fallback to CPU");
-            let config = ModelConfig::default();
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
-            if let Err(e) = rt.block_on(async { self.try_fallback_to_cpu(&config).await }) {
-                tracing::error!("Failed to fallback to CPU: {}", e);
+        let config = ModelConfig::default();
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+        rt.block_on(async {
+            if let Err(e) = self.check_memory_limit_and_fallback(&config).await {
+                tracing::error!("Memory limit check failed: {}", e);
             }
-        }
-
-        let batch_size = texts.len();
-        tracing::debug!("Processing batch of {} texts with ONNX Runtime", batch_size);
+            self.forward_pass_batch(texts).await
+        })
+    }
 
         let mut all_input_ids: Vec<Vec<i64>> = Vec::with_capacity(batch_size);
         let mut all_attention_masks: Vec<Vec<i64>> = Vec::with_capacity(batch_size);

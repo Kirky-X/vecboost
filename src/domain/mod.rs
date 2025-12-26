@@ -112,6 +112,8 @@ pub struct ModelSwitchRequest {
     pub max_batch_size: Option<usize>,
     pub pooling_mode: Option<PoolingMode>,
     pub expected_dimension: Option<usize>,
+    pub memory_limit_bytes: Option<u64>,
+    pub oom_fallback_enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

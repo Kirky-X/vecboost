@@ -164,6 +164,8 @@ mod tests {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();

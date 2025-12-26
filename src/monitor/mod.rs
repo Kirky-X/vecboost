@@ -173,6 +173,16 @@ impl MemoryMonitor {
     #[cfg(not(feature = "cuda"))]
     pub async fn update_gpu_memory_from_candle(&self) {}
 
+    #[cfg(feature = "metal")]
+    pub async fn update_gpu_memory_from_metal(&self) {
+        if let Ok((used, total)) = candle_core::Device::cuda_memory_info() {
+            self.update_gpu_memory(used as u64, total as u64).await;
+        }
+    }
+
+    #[cfg(not(feature = "metal"))]
+    pub async fn update_gpu_memory_from_metal(&self) {}
+
     #[cfg(feature = "onnx")]
     pub async fn update_gpu_memory_from_ort(&self) {
         tracing::debug!("GPU memory update from ONNX Runtime not yet implemented");

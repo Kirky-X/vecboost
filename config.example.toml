@@ -1,0 +1,132 @@
+# VecBoost 配置文件
+# =================
+# 本文件包含 VecBoost 文本向量化的所有配置选项
+# 修改后需要重启服务使配置生效
+
+# ============ 服务配置 ============
+[server]
+# 服务绑定地址
+host = "0.0.0.0"
+
+# 服务端口号
+port = 3000
+
+# 工作线程数 (None 表示使用 CPU 核心数)
+workers = null
+
+# 请求超时时间 (秒)
+timeout = 30
+
+# ============ 模型配置 ============
+[model]
+# HuggingFace 模型仓库 ID
+model_repo = "BAAI/bge-m3"
+
+# 模型版本/分支
+model_revision = "main"
+
+# 本地模型路径 (可选，设置后优先使用本地模型)
+model_path = null
+
+# 是否使用 GPU 加速
+# 注意：需要启用相应的 cargo feature
+# - CUDA: cargo build --features cuda
+# - Metal (macOS): cargo build --features metal
+use_gpu = false
+
+# 批处理大小
+batch_size = 32
+
+# 期望的向量维度 (BGE-M3 为 1024)
+expected_dimension = 1024
+
+# 最大序列长度 (token 数)
+max_sequence_length = 8192
+
+# ============ 向量化配置 ============
+[embedding]
+# 默认聚合模式
+# 可选值:
+#   - mean: 平均池化 (加权平均，考虑重叠)
+#   - max: 最大池化
+#   - min: 最小池化
+default_aggregation = "mean"
+
+# 默认相似度度量方法
+# 可选值:
+#   - cosine: 余弦相似度 (推荐)
+#   - euclidean: 欧氏距离
+#   - dot_product: 点积
+#   - manhattan: 曼哈顿距离
+similarity_metric = "cosine"
+
+# 是否启用结果缓存
+cache_enabled = true
+
+# 缓存大小 (最大缓存条目数)
+cache_size = 1024
+
+# 最大批处理大小
+max_batch_size = 64
+
+# ============ 监控配置 ============
+[monitoring]
+# 内存限制 (MB), None 表示不限制
+memory_limit_mb = 4096
+
+# 内存警告阈值 (0.0-1.0), 达到此比例时发出警告
+memory_warning_threshold = 0.8
+
+# 是否启用性能指标收集
+metrics_enabled = true
+
+# 日志级别
+# 可选值: trace, debug, info, warn, error
+log_level = "info"
+
+# ============ 设备配置 ============
+[device]
+# 优先使用的设备类型
+# 可选值:
+#   - cpu: CPU 计算
+#   - cuda: NVIDIA GPU (需要 CUDA support)
+#   - metal: Apple Silicon GPU (需要 Metal support)
+#   - auto: 自动检测并选择最佳设备
+preferred = "auto"
+
+# GPU 内存保留比例 (0.0-1.0)
+# 用于防止 GPU OOM，保留部分显存
+gpu_memory_reservation = 0.1
+
+# ============ 高级配置 ============
+[advanced]
+# 是否启用 ONNX Runtime 作为备用引擎
+onnx_fallback_enabled = true
+
+# 是否启用 GPU OOM 自动降级
+gpu_oom_fallback_enabled = true
+
+# 重试配置
+[advanced.retry]
+# 最大重试次数
+max_attempts = 3
+
+# 重试间隔 (毫秒)
+delay_ms = 1000
+
+# 指数退避倍率
+exponential_base = 2.0
+
+# 熔断器配置
+[advanced.circuit_breaker]
+# 失败率阈值 (0.0-1.0)
+failure_threshold = 0.5
+
+# 最小请求数
+min_requests = 10
+
+# 半开状态请求数
+half_open_requests = 3
+
+# 熔断恢复超时 (秒)
+recovery_timeout = 30

@@ -106,6 +106,8 @@ async fn main() -> anyhow::Result<()> {
         max_batch_size: config.model.batch_size,
         pooling_mode: None,
         expected_dimension: config.model.expected_dimension,
+        memory_limit_bytes: None,
+        oom_fallback_enabled: false,
     };
 
     tracing::info!("Initializing Inference Engine (this may take a while to download models)...");

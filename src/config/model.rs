@@ -153,6 +153,10 @@ pub enum DeviceType {
     Cpu,
     Cuda,
     Metal,
+    #[serde(rename = "amd")]
+    Amd,
+    #[serde(rename = "opencl")]
+    OpenCL,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -173,6 +177,8 @@ pub struct ModelConfig {
     pub max_batch_size: usize,
     pub pooling_mode: Option<PoolingMode>,
     pub expected_dimension: Option<usize>,
+    pub memory_limit_bytes: Option<u64>,
+    pub oom_fallback_enabled: bool,
 }
 
 impl Default for ModelConfig {
@@ -186,6 +192,8 @@ impl Default for ModelConfig {
             max_batch_size: 32,
             pooling_mode: None,
             expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
         }
     }
 }
@@ -215,6 +223,8 @@ mod tests {
         assert_eq!(config.device, DeviceType::Cpu);
         assert_eq!(config.max_batch_size, 32);
         assert_eq!(config.expected_dimension, None);
+        assert_eq!(config.memory_limit_bytes, None);
+        assert!(config.oom_fallback_enabled);
     }
 
     #[test]
@@ -228,10 +238,13 @@ mod tests {
             max_batch_size: 64,
             pooling_mode: Some(PoolingMode::Mean),
             expected_dimension: Some(1024),
+            memory_limit_bytes: Some(8 * 1024 * 1024 * 1024),
+            oom_fallback_enabled: true,
         };
 
         assert_eq!(config.name, "bge-m3");
         assert_eq!(config.expected_dimension, Some(1024));
+        assert_eq!(config.memory_limit_bytes, Some(8 * 1024 * 1024 * 1024));
     }
 
     #[test]
@@ -245,6 +258,8 @@ mod tests {
             max_batch_size: 64,
             pooling_mode: Some(PoolingMode::Mean),
             expected_dimension: Some(1024),
+            memory_limit_bytes: Some(8 * 1024 * 1024 * 1024),
+            oom_fallback_enabled: true,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -254,6 +269,7 @@ mod tests {
         assert_eq!(decoded.engine_type, EngineType::Candle);
         assert_eq!(decoded.device, DeviceType::Cuda);
         assert_eq!(decoded.expected_dimension, Some(1024));
+        assert_eq!(decoded.memory_limit_bytes, Some(8 * 1024 * 1024 * 1024));
     }
 
     #[test]
@@ -344,6 +360,8 @@ mod tests {
             max_batch_size: 64,
             pooling_mode: Some(PoolingMode::Mean),
             expected_dimension: Some(1024),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
         };
 
         let context = InferenceContext::with_config(&config, Precision::Fp16);

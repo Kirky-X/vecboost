@@ -200,8 +200,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cross-
 
-      - name: Run tests
+      - name: Run tests (macOS with all features)
+        if: runner.os == 'macOS'
         run: cargo test --all-features --all-targets -- --test-threads=${{ matrix.threads }}
+
+      - name: Run tests (Linux with workspace)
+        if: runner.os == 'Linux'
+        run: cargo test --workspace --all-targets -- --test-threads=${{ matrix.threads }}
 
   test-windows:
     name: Test (Windows)
@@ -312,10 +317,20 @@ jobs:
             ${{ runner.os }}-doc-
 
       - name: Build documentation
+        if: runner.os == 'macOS'
         run: cargo doc --all-features --no-deps
 
+      - name: Build documentation (Linux)
+        if: runner.os == 'Linux'
+        run: cargo doc --workspace --no-deps
+
       - name: Check for broken links
+        if: runner.os == 'macOS'
         run: cargo doc --all-features --no-deps --document-private-items
+
+      - name: Check for broken links (Linux)
+        if: runner.os == 'Linux'
+        run: cargo doc --workspace --no-deps --document-private-items
 
   audit:
     name: Security Audit
@@ -350,8 +365,8 @@ jobs:
 
       - name: Check minimal version
         run: |
-          cargo +1.75 build --all-features
-          cargo +1.75 test --all-features --all-targets
+          cargo +1.75 build --workspace
+          cargo +1.75 test --workspace --all-targets
 
   benchmark:
     name: Benchmark
@@ -380,7 +395,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bench-
 
-      - name: Run benchmarks
+      - name: Run benchmarks (Linux with workspace)
+        if: runner.os == 'Linux'
+        run: cargo bench --workspace
+
+      - name: Run benchmarks (macOS with all features)
+        if: runner.os == 'macOS'
         run: cargo bench --all-features
 
       - name: Upload benchmark results

@@ -36,7 +36,6 @@ async-trait = "0.1"
 candle-core = { version = "0.9.2-alpha.2", features = [] }
 candle-nn = "0.9.2-alpha.2"
 candle-transformers = "0.9.2-alpha.2"
-tokenizers = { version = "0.15", features = ["http"], optional = true }
 hf-hub = "0.3"
 
 # Utilities
@@ -65,8 +64,8 @@ rand = "0.8"
 aes-gcm = "0.10"
 hex = "0.4"
 
-# CUDA support
-cudarc = { version = "0.18.2", optional = true }
+# CUDA support - only available on Linux with CUDA toolkit
+cudarc = { version = "0.18.2", optional = true, default-features = false }
 
 [build-dependencies]
 tonic-build = "0.12"
@@ -81,7 +80,7 @@ grpc = []
 # Platform-specific default features
 # macOS defaults to metal support
 [target.'cfg(target_os = "macos")'.dependencies]
-# Default to metal feature on macOS
+tokenizers = { version = "0.15", features = ["http"] }
 
 # Linux defaults to CUDA support
 [target.'cfg(target_os = "linux")'.dependencies]

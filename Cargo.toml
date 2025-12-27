@@ -43,8 +43,6 @@ ndarray = { version = "0.16", optional = true }
 ort = { version = "2.0.0-rc.10", optional = true }
 
 # Utilities
-uuid = { version = "1.7", features = ["v4"] }
-clap = { version = "4.4", features = ["derive"] }
 tempfile = "3.12"
 futures = "0.3"
 sys-info = "0.9"

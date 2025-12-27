@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use crate::auth::types::User;
 use crate::error::AppError;
 use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};

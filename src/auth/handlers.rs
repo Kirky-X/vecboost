@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use crate::auth::JwtManager;
 use crate::auth::types::{AuthResponse, LoginRequest};
 use crate::auth::user_store::UserStore;

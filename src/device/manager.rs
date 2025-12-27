@@ -3,6 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#![allow(unused)]
+
 use crate::config::model::{DeviceType, PoolingMode};
 use crate::device::amd::AmdDeviceManager;
 use crate::device::cuda::{CudaDeviceManager, CudaGpuInfo};

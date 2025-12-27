@@ -3,6 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#![allow(unused)]
+
 use crate::error::AppError;
 use crate::utils::{AggregationMode, normalize_l2};
 

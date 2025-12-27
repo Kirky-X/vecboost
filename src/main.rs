@@ -171,71 +171,72 @@ async fn main() -> anyhow::Result<()> {
 
     let rate_limit_state = RateLimitState::new();
 
-    let (jwt_manager, user_store) = if config.auth.enabled {
-        let security_config = SecurityConfig {
-            storage_type: match config.auth.security.storage_type.as_str() {
-                "encrypted_file" => StorageType::EncryptedFile,
-                _ => StorageType::Environment,
-            },
-            encryption_key: config.auth.security.encryption_key.clone(),
-            key_file_path: config.auth.security.key_file_path.clone(),
-        };
+    let (jwt_manager, user_store): (Option<Arc<JwtManager>>, Option<Arc<UserStore>>) =
+        if config.auth.enabled {
+            let security_config = SecurityConfig {
+                storage_type: match config.auth.security.storage_type.as_str() {
+                    "encrypted_file" => StorageType::EncryptedFile,
+                    _ => StorageType::Environment,
+                },
+                encryption_key: config.auth.security.encryption_key.clone(),
+                key_file_path: config.auth.security.key_file_path.clone(),
+            };
 
-        let key_store: Arc<dyn KeyStore> = {
-            let boxed = create_key_store(&security_config)?;
-            Arc::from(boxed)
-        };
+            let key_store: Arc<dyn KeyStore> = {
+                let boxed = create_key_store(&security_config)?;
+                Arc::from(boxed)
+            };
 
-        let jwt_secret_name = "jwt_secret";
-        let _jwt_secret = if let Some(secret) = config.auth.jwt_secret {
-            let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, secret);
-            key_store.set(&key).await?;
-            key.value
-        } else {
-            tracing::warn!(
-                "No JWT secret provided, using default (not recommended for production)"
+            let jwt_secret_name = "jwt_secret";
+            let _jwt_secret = if let Some(secret) = config.auth.jwt_secret {
+                let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, secret);
+                key_store.set(&key).await?;
+                key.value
+            } else {
+                tracing::warn!(
+                    "No JWT secret provided, using default (not recommended for production)"
+                );
+                let default_secret = "default_jwt_secret_change_me_in_production".to_string();
+                let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, default_secret);
+                key_store.set(&key).await?;
+                key.value
+            };
+
+            let jwt_manager = Arc::new(
+                JwtManager::new_with_key_store(Arc::clone(&key_store), Some(jwt_secret_name))
+                    .await?
+                    .with_expiration(config.auth.token_expiration_hours.unwrap_or(24)),
             );
-            let default_secret = "default_jwt_secret_change_me_in_production".to_string();
-            let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, default_secret);
-            key_store.set(&key).await?;
-            key.value
+
+            let user_store = Arc::new(UserStore::new());
+
+            let admin_username = config
+                .auth
+                .default_admin_username
+                .unwrap_or_else(|| "admin".to_string());
+            let admin_password = config
+                .auth
+                .default_admin_password
+                .unwrap_or_else(|| "admin123".to_string());
+
+            let admin_user = create_default_admin_user(&admin_username, &admin_password)
+                .expect("Failed to create default admin user");
+            user_store
+                .add_user(admin_user)
+                .expect("Failed to add default admin user");
+
+            tracing::info!(
+                "JWT authentication enabled with {} storage",
+                config.auth.security.storage_type
+            );
+            tracing::info!("Default admin user created: {}", admin_username);
+            tracing::warn!("Please change the default admin password in production!");
+
+            (Some(jwt_manager), Some(user_store))
+        } else {
+            tracing::info!("JWT authentication disabled");
+            (None, None)
         };
-
-        let jwt_manager = Arc::new(
-            JwtManager::new_with_key_store(Arc::clone(&key_store), Some(jwt_secret_name))
-                .await?
-                .with_expiration(config.auth.token_expiration_hours.unwrap_or(24)),
-        );
-
-        let user_store = Arc::new(UserStore::new());
-
-        let admin_username = config
-            .auth
-            .default_admin_username
-            .unwrap_or_else(|| "admin".to_string());
-        let admin_password = config
-            .auth
-            .default_admin_password
-            .unwrap_or_else(|| "admin123".to_string());
-
-        let admin_user = create_default_admin_user(&admin_username, &admin_password)
-            .expect("Failed to create default admin user");
-        user_store
-            .add_user(admin_user)
-            .expect("Failed to add default admin user");
-
-        tracing::info!(
-            "JWT authentication enabled with {} storage",
-            config.auth.security.storage_type
-        );
-        tracing::info!("Default admin user created: {}", admin_username);
-        tracing::warn!("Please change the default admin password in production!");
-
-        (Some(jwt_manager), Some(user_store))
-    } else {
-        tracing::info!("JWT authentication disabled");
-        (None, None)
-    };
 
     let app_state = AppState {
         service,

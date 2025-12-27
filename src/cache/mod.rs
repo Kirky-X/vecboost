@@ -5,4 +5,4 @@
 
 pub mod kv_cache;
 
-pub use kv_cache::{CacheEntry, CacheMetrics, CacheStats, KvCache};
+pub use kv_cache::KvCache;

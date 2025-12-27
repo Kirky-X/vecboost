@@ -19,9 +19,8 @@ pub mod service;
 pub mod text;
 pub mod utils;
 
-pub use config::app::{AppConfig, AuthConfig, ModelConfig as AppModelConfig, ServerConfig};
-pub use config::model::{DeviceType, EngineType, ModelConfig, PoolingMode};
+pub use config::app::{AppConfig, AuthConfig, ServerConfig};
+pub use config::model::ModelConfig;
 pub use domain::{EmbedRequest, EmbedResponse, SimilarityRequest, SimilarityResponse};
-pub use engine::candle_engine::CandleEngine;
 pub use service::embedding::EmbeddingService;
 pub use utils::SimilarityMetric;

@@ -48,10 +48,10 @@ impl ModelConfigJson {
                 }
             }
         }
-        if let Some(t) = &self.model_type {
-            if t.contains("xlm-roberta") || t.contains("xlm_roberta") {
-                return ModelArchitecture::XlmRoberta;
-            }
+        if let Some(t) = &self.model_type
+            && (t.contains("xlm-roberta") || t.contains("xlm_roberta"))
+        {
+            return ModelArchitecture::XlmRoberta;
         }
         ModelArchitecture::Bert
     }

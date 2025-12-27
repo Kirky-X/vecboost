@@ -3,6 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#![allow(unused)]
+
 use crate::engine::InferenceEngine;
 use crate::error::AppError;
 use crate::metrics::collector::MetricsCollector;

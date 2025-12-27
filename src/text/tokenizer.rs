@@ -3,6 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#![allow(unused)]
+
 use crate::error::AppError;
 use lru::LruCache;
 use regex::Regex;
@@ -906,13 +908,11 @@ impl Tokenizer {
         let mut attention_mask = Vec::new();
         let mut type_ids = Vec::new();
 
-        if add_special_tokens {
-            if let Some(&id) = self.special_tokens.get("[CLS]") {
-                tokens.push("[CLS]".to_string());
-                ids.push(id);
-                attention_mask.push(1);
-                type_ids.push(0);
-            }
+        if add_special_tokens && let Some(&id) = self.special_tokens.get("[CLS]") {
+            tokens.push("[CLS]".to_string());
+            ids.push(id);
+            attention_mask.push(1);
+            type_ids.push(0);
         }
 
         let words = self.wordpiece_tokenize(text);
@@ -934,13 +934,11 @@ impl Tokenizer {
             }
         }
 
-        if add_special_tokens {
-            if let Some(&id) = self.special_tokens.get("[SEP]") {
-                tokens.push("[SEP]".to_string());
-                ids.push(id);
-                attention_mask.push(1);
-                type_ids.push(0);
-            }
+        if add_special_tokens && let Some(&id) = self.special_tokens.get("[SEP]") {
+            tokens.push("[SEP]".to_string());
+            ids.push(id);
+            attention_mask.push(1);
+            type_ids.push(0);
         }
 
         let truncated_ids: Vec<u32> = if ids.len() > self.max_length {

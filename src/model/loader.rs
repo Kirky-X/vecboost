@@ -3,6 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#![allow(unused)]
+
 use crate::config::model::{EngineType, ModelConfig};
 use crate::error::AppError;
 use async_trait::async_trait;

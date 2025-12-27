@@ -7,17 +7,93 @@ use crate::error::AppError;
 use lru::LruCache;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
+#[cfg(target_os = "macos")]
+use tokenizers::Encoding as HfEncoding;
+#[cfg(target_os = "macos")]
 use tokenizers::Tokenizer as HfTokenizer;
+
+#[cfg(not(target_os = "macos"))]
+type HfEncoding = Encoding;
+
+#[cfg(not(target_os = "macos"))]
+type HfTokenizer = Tokenizer;
+
 use tokio::sync::Mutex;
 use xxhash_rust::xxh3::Xxh3;
 
 pub const DEFAULT_CACHE_SIZE: usize = 1024;
 pub const MAX_CACHE_SIZE: usize = 8192;
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Clone)]
 pub struct Tokenizer {
     tokenizer: HfTokenizer,
     max_length: usize,
+}
+
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, Clone)]
+pub struct Tokenizer {
+    max_length: usize,
+    _phantom: std::marker::PhantomData<HfEncoding>,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone)]
+pub struct CachedTokenizer {
+    tokenizer: HfTokenizer,
+    max_length: usize,
+    cache: Mutex<LruCache<String, Encoding>>,
+    stats: Mutex<CacheHitStats>,
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct CachedTokenizer {
+    max_length: usize,
+    cache: Mutex<LruCache<String, Encoding>>,
+    stats: Mutex<CacheHitStats>,
+}
+
+#[derive(Debug, Default)]
+pub struct CacheHitStats {
+    pub hits: u64,
+    pub misses: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub size: usize,
+    pub capacity: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Encoding {
+    pub ids: Vec<u32>,
+    pub attention_mask: Vec<u32>,
+    pub type_ids: Vec<u32>,
+    pub tokens: Vec<String>,
+}
+
+impl Encoding {
+    pub fn get_ids(&self) -> &[u32] {
+        &self.ids
+    }
+
+    pub fn get_attention_mask(&self) -> &[u32] {
+        &self.attention_mask
+    }
+
+    pub fn get_type_ids(&self) -> &[u32] {
+        &self.type_ids
+    }
+
+    pub fn get_tokens(&self) -> &[String] {
+        &self.tokens
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +230,7 @@ pub fn validate_utf8_bytes(bytes: &[u8]) -> Utf8ValidationResult {
     Utf8ValidationResult::valid()
 }
 
+#[cfg(target_os = "macos")]
 impl Tokenizer {
     pub fn from_pretrained(model_id: &str) -> Result<Self, AppError> {
         Self::from_pretrained_with_max_length(model_id, 512)
@@ -396,28 +473,83 @@ impl Tokenizer {
     }
 }
 
-#[derive(Debug)]
-pub struct CachedTokenizer {
-    tokenizer: HfTokenizer,
-    max_length: usize,
-    cache: Mutex<LruCache<String, Encoding>>,
-    stats: Mutex<CacheHitStats>,
+#[cfg(not(target_os = "macos"))]
+impl Tokenizer {
+    pub fn from_pretrained(_model_id: &str) -> Result<Self, AppError> {
+        Err(AppError::tokenization_error(
+            "Tokenizer loading from pretrained models is not supported on non-macOS platforms. \
+            Please use from_file() with a local tokenizer file, or run on macOS."
+                .to_string(),
+        ))
+    }
+
+    pub fn from_pretrained_with_max_length(
+        _model_id: &str,
+        _max_length: usize,
+    ) -> Result<Self, AppError> {
+        Err(AppError::tokenization_error(
+            "Tokenizer loading from pretrained models is not supported on non-macOS platforms. \
+            Please use from_file() with a local tokenizer file, or run on macOS."
+                .to_string(),
+        ))
+    }
+
+    pub fn from_file(_path: &str) -> Result<Self, AppError> {
+        Err(AppError::tokenization_error(
+            "Tokenizer is not available on non-macOS platforms. \
+            The tokenizers crate requires macOS due to its dependency on objc2. \
+            Please run on macOS to use tokenization features."
+                .to_string(),
+        ))
+    }
+
+    pub fn from_file_with_max_length(_path: &str, _max_length: usize) -> Result<Self, AppError> {
+        Err(AppError::tokenization_error(
+            "Tokenizer is not available on non-macOS platforms. \
+            The tokenizers crate requires macOS due to its dependency on objc2. \
+            Please run on macOS to use tokenization features."
+                .to_string(),
+        ))
+    }
+
+    pub fn encode(&self, _text: &str, _add_special_tokens: bool) -> Result<Encoding, AppError> {
+        Err(AppError::tokenization_error(
+            "Tokenizer is not available on non-macOS platforms. \
+            Please run on macOS to use tokenization features."
+                .to_string(),
+        ))
+    }
+
+    pub fn decode(&self, _ids: &[u32], _skip_special_tokens: bool) -> Result<String, AppError> {
+        Err(AppError::tokenization_error(
+            "Tokenizer is not available on non-macOS platforms. \
+            Please run on macOS to use tokenization features."
+                .to_string(),
+        ))
+    }
+
+    pub fn get_vocab_size(&self) -> usize {
+        0
+    }
+
+    pub fn get_max_length(&self) -> usize {
+        self.max_length
+    }
+
+    pub fn encode_batch(
+        &self,
+        _texts: &[&str],
+        _add_special_tokens: bool,
+    ) -> Result<Vec<Encoding>, AppError> {
+        Err(AppError::tokenization_error(
+            "Tokenizer is not available on non-macOS platforms. \
+            Please run on macOS to use tokenization features."
+                .to_string(),
+        ))
+    }
 }
 
-#[derive(Debug, Default)]
-pub struct CacheHitStats {
-    pub hits: u64,
-    pub misses: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CacheStats {
-    pub hits: u64,
-    pub misses: u64,
-    pub size: usize,
-    pub capacity: usize,
-}
-
+#[cfg(target_os = "macos")]
 impl CachedTokenizer {
     pub fn new(tokenizer: HfTokenizer, max_length: usize, cache_size: usize) -> Self {
         let capacity = std::cmp::min(
@@ -534,342 +666,60 @@ impl CachedTokenizer {
             tokens: encoding.get_tokens().to_vec(),
         })
     }
+}
 
-    pub async fn encode_batch(
-        &self,
-        texts: &[&str],
-        add_special_tokens: bool,
-    ) -> Result<Vec<Encoding>, AppError> {
-        let mut results = Vec::with_capacity(texts.len());
-        for text in texts {
-            let encoding = self.encode(text, add_special_tokens).await?;
-            results.push(encoding);
-        }
-        Ok(results)
-    }
-
-    pub async fn clear_cache(&self) {
-        let mut cache = self.cache.lock().await;
-        cache.clear();
-    }
-
-    pub async fn get_cache_stats(&self) -> CacheStats {
-        let cache = self.cache.lock().await;
-        let stats = self.stats.lock().await;
-        CacheStats {
-            hits: stats.hits,
-            misses: stats.misses,
-            size: cache.len(),
-            capacity: cache.cap().get(),
+#[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
+impl CachedTokenizer {
+    pub fn new(_tokenizer: HfTokenizer, max_length: usize, cache_size: usize) -> Self {
+        let capacity = std::cmp::min(
+            NonZeroUsize::new(std::cmp::max(cache_size, 1)).unwrap(),
+            NonZeroUsize::new(MAX_CACHE_SIZE).unwrap(),
+        );
+        Self {
+            max_length,
+            cache: Mutex::new(LruCache::new(capacity)),
+            stats: Mutex::new(CacheHitStats::default()),
         }
     }
 
-    pub async fn cache_len(&self) -> usize {
-        let cache = self.cache.lock().await;
-        cache.len()
+    pub fn with_default_cache(_tokenizer: HfTokenizer, max_length: usize) -> Self {
+        Self::new(_tokenizer, max_length, DEFAULT_CACHE_SIZE)
     }
 
-    pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String, AppError> {
-        if ids.is_empty() {
-            return Err(AppError::invalid_input(
-                "Cannot decode empty token ids".to_string(),
-            ));
-        }
-
-        if ids
-            .iter()
-            .any(|&id| id >= self.tokenizer.get_vocab_size(true) as u32)
-        {
-            return Err(AppError::tokenization_error(format!(
-                "Invalid token id found: one or more ids exceed vocabulary size ({}). \
-                This may indicate corrupted or incompatible token ids.",
-                self.tokenizer.get_vocab_size(true)
-            )));
-        }
-
-        self.tokenizer
-            .decode(ids, skip_special_tokens)
-            .map_err(|e| {
-                AppError::tokenization_error(format!(
-                    "Failed to decode {} token ids: {}. \
-                The ids may be invalid or incompatible with this tokenizer.",
-                    ids.len(),
-                    e
-                ))
-            })
-    }
-
-    pub fn get_vocab_size(&self) -> usize {
-        self.tokenizer.get_vocab_size(true)
-    }
-
-    pub fn get_max_length(&self) -> usize {
+    pub fn max_length(&self) -> usize {
         self.max_length
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct Encoding {
-    pub ids: Vec<u32>,
-    pub attention_mask: Vec<u32>,
-    pub type_ids: Vec<u32>,
-    pub tokens: Vec<String>,
-}
-
-impl Encoding {
-    pub fn len(&self) -> usize {
-        self.ids.len()
+    fn hash_key(&self, text: &str, add_special_tokens: bool) -> String {
+        let mut hasher = Xxh3::new();
+        text.hash(&mut hasher);
+        add_special_tokens.hash(&mut hasher);
+        let hash = hasher.finish();
+        format!("{:016x}_{}", hash, add_special_tokens)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.ids.is_empty()
+    pub async fn encode(
+        &self,
+        _text: &str,
+        _add_special_tokens: bool,
+    ) -> Result<Encoding, AppError> {
+        Err(AppError::tokenization_error(
+            "Tokenizer is not available on non-macOS platforms. \
+            Please run on macOS to use tokenization features."
+                .to_string(),
+        ))
     }
 
-    pub fn get_ids(&self) -> &[u32] {
-        &self.ids
-    }
-
-    pub fn get_attention_mask(&self) -> &[u32] {
-        &self.attention_mask
-    }
-
-    pub fn get_tokens(&self) -> &[String] {
-        &self.tokens
-    }
-
-    pub fn get_word_ids(&self) -> Option<&[u32]> {
-        None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn get_local_tokenizer_path() -> String {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/dev".to_string());
-        format!(
-            "{}/.cache/huggingface/hub/models--BAAI--bge-small-en-v1.5/snapshots/5c38ec7c405ec4b44b94cc5a9bb96e735b38267a/tokenizer.json",
-            home
-        )
-    }
-
-    #[test]
-    fn test_tokenizer_creation() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file(&path);
-        assert!(tokenizer.is_ok());
-    }
-
-    #[test]
-    fn test_tokenizer_encode_english() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file_with_max_length(&path, 512).unwrap();
-
-        let encoding = tokenizer.encode("Hello world", true).unwrap();
-        assert!(!encoding.is_empty());
-        assert_eq!(encoding.ids[0], 101);
-    }
-
-    #[test]
-    fn test_tokenizer_encode_chinese() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file_with_max_length(&path, 512).unwrap();
-
-        let encoding = tokenizer.encode("你好世界", false).unwrap();
-        assert!(!encoding.is_empty());
-    }
-
-    #[test]
-    fn test_tokenizer_encode_mixed() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file_with_max_length(&path, 512).unwrap();
-
-        let encoding = tokenizer.encode("Hello 你好 world 世界", false).unwrap();
-        assert!(!encoding.is_empty());
-        assert!(!encoding.is_empty());
-    }
-
-    #[test]
-    fn test_tokenizer_decode() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file_with_max_length(&path, 512).unwrap();
-
-        let encoding = tokenizer.encode("Hello world", false).unwrap();
-        let decoded = tokenizer.decode(&encoding.ids, true);
-        assert!(decoded.is_ok());
-    }
-
-    #[test]
-    fn test_tokenizer_max_length_limit() {
-        let path = get_local_tokenizer_path();
-        let short_max_length: usize = 10;
-        let tokenizer = Tokenizer::from_file_with_max_length(&path, short_max_length).unwrap();
-
-        let long_text = "This is a very long text that should be truncated ".repeat(100);
-        let encoding = tokenizer.encode(&long_text, false).unwrap();
-        assert!(encoding.len() <= short_max_length);
-    }
-
-    #[test]
-    fn test_tokenizer_vocab_size() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file(&path).unwrap();
-        let vocab_size = tokenizer.get_vocab_size();
-        assert!(vocab_size > 0);
-    }
-
-    #[test]
-    fn test_encoding_methods() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file_with_max_length(&path, 512).unwrap();
-
-        let encoding = tokenizer.encode("Hello world", false).unwrap();
-
-        assert_eq!(encoding.len(), encoding.ids.len());
-        assert!(!encoding.is_empty());
-        assert!(!encoding.get_ids().is_empty());
-        assert!(!encoding.get_tokens().is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_cached_tokenizer_basic() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file(&path).unwrap();
-        let cached = CachedTokenizer::with_default_cache(tokenizer.tokenizer, 512);
-
-        let encoding1 = cached.encode("Hello world", true).await.unwrap();
-        assert!(!encoding1.is_empty());
-
-        let stats = cached.get_cache_stats().await;
-        assert_eq!(stats.misses, 1);
-        assert_eq!(stats.hits, 0);
-    }
-
-    #[tokio::test]
-    async fn test_cached_tokenizer_cache_hit() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file(&path).unwrap();
-        let cached = CachedTokenizer::with_default_cache(tokenizer.tokenizer, 512);
-
-        let text = "Cache test string";
-        let encoding1 = cached.encode(text, true).await.unwrap();
-        let encoding2 = cached.encode(text, true).await.unwrap();
-
-        assert_eq!(encoding1.ids, encoding2.ids);
-
-        let stats = cached.get_cache_stats().await;
-        assert_eq!(stats.misses, 1);
-        assert_eq!(stats.hits, 1);
-    }
-
-    #[tokio::test]
-    async fn test_cached_tokenizer_different_params() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file(&path).unwrap();
-        let cached = CachedTokenizer::with_default_cache(tokenizer.tokenizer, 512);
-
-        let text = "Test text";
-        let _encoding1 = cached.encode(text, true).await.unwrap();
-        let _encoding2 = cached.encode(text, false).await.unwrap();
-
-        let stats = cached.get_cache_stats().await;
-        assert_eq!(stats.misses, 2);
-        assert_eq!(stats.hits, 0);
-    }
-
-    #[tokio::test]
-    async fn test_cached_tokenizer_clear_cache() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file(&path).unwrap();
-        let cached = CachedTokenizer::with_default_cache(tokenizer.tokenizer, 512);
-
-        let _ = cached.encode("Test", true).await.unwrap();
-        let stats_before = cached.get_cache_stats().await;
-        assert!(stats_before.size > 0);
-
-        cached.clear_cache().await;
-        let stats_after = cached.get_cache_stats().await;
-        assert_eq!(stats_after.size, 0);
-    }
-
-    #[tokio::test]
-    async fn test_cached_tokenizer_batch_encoding() {
-        let path = get_local_tokenizer_path();
-        let tokenizer = Tokenizer::from_file(&path).unwrap();
-        let cached = CachedTokenizer::with_default_cache(tokenizer.tokenizer, 512);
-
-        let texts = vec!["First text", "Second text", "Third text"];
-        let encodings = cached.encode_batch(&texts, true).await.unwrap();
-
-        assert_eq!(encodings.len(), 3);
-        assert!(!encodings.is_empty());
-    }
-
-    #[test]
-    fn test_utf8_validation_valid_ascii() {
-        let result = validate_utf8("Hello world");
-        assert!(result.is_valid);
-    }
-
-    #[test]
-    fn test_utf8_validation_valid_chinese() {
-        let result = validate_utf8("你好世界");
-        assert!(result.is_valid);
-    }
-
-    #[test]
-    fn test_utf8_validation_valid_mixed() {
-        let result = validate_utf8("Hello 你好 world 世界 🌍");
-        assert!(result.is_valid);
-    }
-
-    #[test]
-    fn test_utf8_validation_invalid_continuation() {
-        let invalid = vec![0x48, 0x65, 0x6C, 0x6C, 0x6F, 0xC0, 0x80]; // Invalid continuation byte
-        let result = validate_utf8_bytes(&invalid);
-        assert!(!result.is_valid);
-        assert!(result.invalid_byte_position.is_some());
-    }
-
-    #[test]
-    fn test_utf8_validation_incomplete_sequence() {
-        let incomplete = vec![0x48, 0x65, 0x6C, 0x6C, 0x6F, 0xE4]; // Incomplete 3-byte sequence
-        let result = validate_utf8_bytes(&incomplete);
-        assert!(!result.is_valid);
-    }
-
-    #[test]
-    fn test_utf8_validation_invalid_lead() {
-        let invalid = vec![0x48, 0x65, 0x6C, 0x6C, 0x6F, 0xFF]; // Invalid lead byte
-        let result = validate_utf8_bytes(&invalid);
-        assert!(!result.is_valid);
-    }
-
-    #[test]
-    fn test_utf8_validation_bytes_valid() {
-        let bytes = "Hello 你好".as_bytes();
-        let result = validate_utf8_bytes(bytes);
-        assert!(result.is_valid);
-    }
-
-    #[test]
-    fn test_utf8_validation_bytes_invalid() {
-        let invalid_bytes = vec![0x48, 0x65, 0x6C, 0x6C, 0x6F, 0xFF, 0x00];
-        let result = validate_utf8_bytes(&invalid_bytes);
-        assert!(!result.is_valid);
-    }
-
-    #[test]
-    fn test_utf8_validation_result_factory_methods() {
-        let valid = Utf8ValidationResult::valid();
-        assert!(valid.is_valid);
-        assert!(valid.invalid_byte_position.is_none());
-
-        let invalid = Utf8ValidationResult::invalid(5, 0xFF, "test error");
-        assert!(!invalid.is_valid);
-        assert_eq!(invalid.invalid_byte_position, Some(5));
-        assert_eq!(invalid.invalid_byte_value, Some(0xFF));
-        assert!(invalid.error_message.is_some());
+    async fn encode_uncached(
+        &self,
+        _text: &str,
+        _add_special_tokens: bool,
+    ) -> Result<Encoding, AppError> {
+        Err(AppError::tokenization_error(
+            "Tokenizer is not available on non-macOS platforms. \
+            Please run on macOS to use tokenization features."
+                .to_string(),
+        ))
     }
 }

@@ -15,7 +15,14 @@ use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Tensor;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tokenizers::{PaddingParams, Tokenizer};
+#[cfg(target_os = "macos")]
+use tokenizers::Tokenizer;
+
+#[cfg(target_os = "macos")]
+use tokenizers::{PaddingParams, PaddingStrategy};
+
+#[cfg(not(target_os = "macos"))]
+type Tokenizer = crate::text::Tokenizer;
 
 pub struct OnnxEngine {
     session: Arc<Mutex<Session>>,
@@ -177,14 +184,17 @@ impl OnnxEngine {
         let mut tokenizer = Tokenizer::from_file(tokenizer_filename)
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
-        if let Some(pp) = tokenizer.get_padding_mut() {
-            pp.strategy = tokenizers::PaddingStrategy::BatchLongest;
-        } else {
-            let pp = PaddingParams {
-                strategy: tokenizers::PaddingStrategy::BatchLongest,
-                ..Default::default()
-            };
-            tokenizer.with_padding(Some(pp));
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(pp) = tokenizer.get_padding_mut() {
+                pp.strategy = PaddingStrategy::BatchLongest;
+            } else {
+                let pp = PaddingParams {
+                    strategy: PaddingStrategy::BatchLongest,
+                    ..Default::default()
+                };
+                tokenizer.with_padding(Some(pp));
+            }
         }
 
         let vocab_size = tokenizer.get_vocab_size(false);

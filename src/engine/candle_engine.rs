@@ -19,7 +19,11 @@ use futures::executor::block_on;
 use hf_hub::{Repo, RepoType, api::sync::Api};
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(target_os = "macos")]
 use tokenizers::Tokenizer as HfTokenizer;
+
+#[cfg(not(target_os = "macos"))]
+type HfTokenizer = crate::text::Tokenizer;
 
 pub struct CandleEngine {
     model: BertModel,
@@ -129,7 +133,7 @@ impl CandleEngine {
         let bert_config: BertConfig = serde_json::from_str(&config_content)
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
-        let hf_tokenizer = HfTokenizer::from_file(&tokenizer_filename)
+        let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
         let tokenizer =
@@ -714,7 +718,7 @@ impl CandleEngine {
         let bert_config: BertConfig = serde_json::from_str(&config_content)
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
-        let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename)
+        let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
         self.tokenizer =

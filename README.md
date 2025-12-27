@@ -7,6 +7,7 @@
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build">
   <img src="https://img.shields.io/badge/coverage-85%25-success.svg" alt="Coverage">
+  <a href="https://github.com/Kirky-X/vecboost/actions/workflows/health-check.yml"><img src="https://github.com/Kirky-X/vecboost/actions/workflows/health-check.yml/badge.svg" alt="Health Check"></a>
 </p>
 
 <p align="center">

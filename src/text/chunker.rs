@@ -9,7 +9,12 @@ use crate::text::domain::ChunkResult;
 use crate::text::domain::{ChunkRequest, ChunkResponse};
 use crate::utils::AggregationMode;
 use crate::utils::constants::{DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP_RATIO, MIN_CHUNK_SIZE_RATIO};
+
+#[cfg(target_os = "macos")]
 use tokenizers::Tokenizer;
+
+#[cfg(not(target_os = "macos"))]
+use crate::text::Tokenizer;
 
 #[derive(Debug, Clone)]
 pub struct TextChunker {

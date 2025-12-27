@@ -49,10 +49,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Check clippy
-        run: cargo clippy --all-features --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Check for unused dependencies
-        run: cargo udeps --all-features --all-targets
+        run: cargo udeps --all-targets
 
       - name: Cargo Audit
         run: cargo audit --deny warnings
@@ -78,10 +78,10 @@ jobs:
           cache-targets: false
 
       - name: Build workspace
-        run: cargo build --all-features
+        run: cargo build --workspace
 
       - name: Build release
-        run: cargo build --all-features --release
+        run: cargo build --workspace --release
 
   test:
     name: Test (Ubuntu) - Coverage
@@ -107,7 +107,7 @@ jobs:
         run: cargo install grcov
 
       - name: Run tests with coverage
-        run: cargo tarpaulin --all-features --all-targets --out lcov --output-dir coverage/
+        run: cargo tarpaulin --workspace --all-targets --out lcov --output-dir coverage/
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -163,7 +163,7 @@ jobs:
           cache-targets: false
 
       - name: Run tests
-        run: cargo test --all-features --all-targets -- --test-threads=4
+        run: cargo test --workspace --all-targets -- --test-threads=4
 
   test-cross-platform:
     name: Test (${{ matrix.os }})

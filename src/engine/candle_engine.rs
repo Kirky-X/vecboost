@@ -15,8 +15,10 @@ use async_trait::async_trait;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
+use candle_transformers::models::xlm_roberta::{Config as XlmRobertaConfig, XLMRobertaModel};
 use futures::executor::block_on;
 use hf_hub::{Repo, RepoType, api::sync::Api};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
@@ -25,8 +27,43 @@ use tokenizers::Tokenizer as HfTokenizer;
 #[cfg(not(target_os = "macos"))]
 type HfTokenizer = crate::text::Tokenizer;
 
+#[derive(Debug, Clone)]
+pub enum ModelArchitecture {
+    Bert,
+    XlmRoberta,
+}
+
+#[derive(Deserialize)]
+struct ModelConfigJson {
+    pub architectures: Option<Vec<String>>,
+    pub model_type: Option<String>,
+}
+
+impl ModelConfigJson {
+    pub fn get_architecture(&self) -> ModelArchitecture {
+        if let Some(arch) = &self.architectures {
+            for a in arch {
+                if a.contains("XLMRoberta") || a.contains("xlm_roberta") {
+                    return ModelArchitecture::XlmRoberta;
+                }
+            }
+        }
+        if let Some(t) = &self.model_type {
+            if t.contains("xlm-roberta") || t.contains("xlm_roberta") {
+                return ModelArchitecture::XlmRoberta;
+            }
+        }
+        ModelArchitecture::Bert
+    }
+}
+
+enum ModelWrapper {
+    Bert(BertModel),
+    XlmRoberta(XLMRobertaModel),
+}
+
 pub struct CandleEngine {
-    model: BertModel,
+    model: ModelWrapper,
     tokenizer: CachedTokenizer,
     device: Device,
     precision: Precision,
@@ -34,6 +71,7 @@ pub struct CandleEngine {
     memory_limit_controller: Option<Arc<MemoryLimitController>>,
     fallback_triggered: bool,
     device_type: DeviceType,
+    model_architecture: ModelArchitecture,
 }
 
 impl CandleEngine {
@@ -130,14 +168,34 @@ impl CandleEngine {
         };
 
         let config_content = std::fs::read_to_string(&config_filename)?;
-        let bert_config: BertConfig = serde_json::from_str(&config_content)
+        let model_config_json: ModelConfigJson = serde_json::from_str(&config_content)
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+        let model_architecture = model_config_json.get_architecture();
+
+        tracing::info!("Detected model architecture: {:?}", model_architecture);
+
+        let (bert_config, xlm_config) = match &model_architecture {
+            ModelArchitecture::Bert => {
+                let bert_config: BertConfig = serde_json::from_str(&config_content)
+                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                (Some(bert_config), None)
+            }
+            ModelArchitecture::XlmRoberta => {
+                let xlm_config: XlmRobertaConfig = serde_json::from_str(&config_content)
+                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                (None, Some(xlm_config))
+            }
+        };
 
         let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
-        let tokenizer =
-            CachedTokenizer::new(hf_tokenizer, bert_config.max_position_embeddings, 2048);
+        let max_position_embeddings = match &model_architecture {
+            ModelArchitecture::Bert => bert_config.as_ref().unwrap().max_position_embeddings,
+            ModelArchitecture::XlmRoberta => xlm_config.as_ref().unwrap().max_position_embeddings,
+        };
+
+        let tokenizer = CachedTokenizer::new(hf_tokenizer, max_position_embeddings, 2048);
 
         let is_pytorch = weights_filename.to_string_lossy().ends_with(".bin");
 
@@ -317,8 +375,24 @@ impl CandleEngine {
             tracing::info!("Loaded safetensors model weights successfully");
         }
 
-        let model = BertModel::load(vb, &bert_config)
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+        let model = match &model_architecture {
+            ModelArchitecture::Bert => {
+                let config = bert_config.ok_or_else(|| {
+                    AppError::ModelLoadError("Bert config is required for Bert model".to_string())
+                })?;
+                let bert_model = BertModel::load(vb, &config)
+                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                ModelWrapper::Bert(bert_model)
+            }
+            ModelArchitecture::XlmRoberta => {
+                let config = xlm_config.ok_or_else(|| {
+                    AppError::ModelLoadError("XLM-RoBERTa config is required".to_string())
+                })?;
+                let xlm_model = XLMRobertaModel::new(&config, vb)
+                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                ModelWrapper::XlmRoberta(xlm_model)
+            }
+        };
 
         let memory_monitor = if device.is_cuda() || device.is_metal() {
             Some(Arc::new(MemoryMonitor::new()))
@@ -335,6 +409,7 @@ impl CandleEngine {
             memory_limit_controller: None,
             fallback_triggered: false,
             device_type,
+            model_architecture,
         })
     }
 
@@ -414,6 +489,7 @@ impl CandleEngine {
         }
     }
 
+    #[allow(dead_code)]
     fn create_padded_batch_tensor(
         &self,
         encodings: &[Encoding],
@@ -431,6 +507,27 @@ impl CandleEngine {
             };
 
             for (seq_idx, &value) in data.iter().enumerate().take(max_seq_len) {
+                batch_data[batch_idx * max_seq_len + seq_idx] = value as i64;
+            }
+        }
+
+        Tensor::new(batch_data.as_slice(), &self.device)
+            .map_err(|e| AppError::InferenceError(e.to_string()))?
+            .reshape(&[batch_size, max_seq_len])
+            .map_err(|e| AppError::InferenceError(e.to_string()))
+    }
+
+    #[allow(dead_code)]
+    fn create_type_ids_tensor(
+        &self,
+        encodings: &[Encoding],
+        max_seq_len: usize,
+    ) -> Result<Tensor, AppError> {
+        let batch_size = encodings.len();
+        let mut batch_data = vec![0i64; batch_size * max_seq_len];
+
+        for (batch_idx, encoding) in encodings.iter().enumerate() {
+            for (seq_idx, &value) in encoding.type_ids.iter().enumerate().take(max_seq_len) {
                 batch_data[batch_idx * max_seq_len + seq_idx] = value as i64;
             }
         }
@@ -489,37 +586,76 @@ impl CandleEngine {
             .unsqueeze(0)
             .map_err(|e| AppError::InferenceError(e.to_string()))?;
 
-        let embeddings = self
-            .model
-            .forward(&token_ids, &attention_mask_tensor, None)
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+        let embeddings = match &self.model {
+            ModelWrapper::Bert(bert_model) => bert_model
+                .forward(&token_ids, &attention_mask_tensor, None)
+                .map_err(|e| AppError::InferenceError(e.to_string()))?,
+            ModelWrapper::XlmRoberta(xlm_model) => {
+                let type_ids_slice: Vec<u32> =
+                    encoding.type_ids.iter().take(max_len).cloned().collect();
+                let token_type_ids = Tensor::new(type_ids_slice, &self.device)
+                    .map_err(|e| AppError::InferenceError(e.to_string()))?
+                    .unsqueeze(0)
+                    .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                xlm_model
+                    .forward(
+                        &token_ids,
+                        &attention_mask_tensor,
+                        &token_type_ids,
+                        None,
+                        None,
+                        None,
+                    )
+                    .map_err(|e| AppError::InferenceError(e.to_string()))?
+            }
+        };
 
         tracing::debug!("Embeddings shape: {:?}", embeddings.shape());
         tracing::debug!("Embeddings dims: {}", embeddings.dims().len());
+        tracing::debug!("Embeddings dims array: {:?}", embeddings.dims());
 
         self.update_gpu_memory().await;
 
         let embedding_result: Tensor;
-        if embeddings.dims().len() == 2 {
+        let dims = embeddings.dims();
+        tracing::debug!("Processing embedding with {} dimensions", dims.len());
+
+        if dims.len() == 1 {
+            tracing::debug!("1D embedding, using directly");
+            embedding_result = embeddings.clone();
+        } else if dims.len() == 2 {
+            if dims[0] == 1 && dims[1] > 1 {
+                tracing::debug!("2D embedding [1, hidden_size], extracting batch 0");
+                embedding_result = embeddings
+                    .get(0)
+                    .map_err(|e| AppError::InferenceError(format!("Failed to get batch 0: {}", e)))?
+                    .clone();
+            } else {
+                tracing::debug!(
+                    "2D embedding [seq_len, hidden_size], extracting CLS token (index 0)"
+                );
+                embedding_result = embeddings
+                    .get(0)
+                    .map_err(|e| AppError::InferenceError(format!("Failed to get token 0: {}", e)))?
+                    .clone();
+            }
+        } else if dims.len() == 3 {
+            tracing::debug!("3D embedding [batch, seq_len, hidden], extracting batch 0, token 0");
             embedding_result = embeddings
                 .get(0)
-                .map_err(|e| AppError::InferenceError(e.to_string()))?
-                .clone();
-        } else if embeddings.dims().len() == 3 {
-            embedding_result = embeddings
+                .map_err(|e| AppError::InferenceError(format!("Failed to get batch 0: {}", e)))?
                 .get(0)
-                .map_err(|e| AppError::InferenceError(e.to_string()))?
-                .get(0)
-                .map_err(|e| AppError::InferenceError(e.to_string()))?
+                .map_err(|e| AppError::InferenceError(format!("Failed to get token 0: {}", e)))?
                 .clone();
         } else {
             return Err(AppError::InferenceError(format!(
-                "Unexpected embedding dimensions: {}",
-                embeddings.dims().len()
+                "Unsupported embedding dimensions: {} (shape: {:?})",
+                dims.len(),
+                embeddings.shape()
             )));
         }
 
-        tracing::debug!("Selected embedding shape: {:?}", embedding_result.shape());
+        tracing::debug!("Final embedding shape: {:?}", embedding_result.shape());
 
         let vec = embedding_result
             .to_vec1::<f32>()
@@ -533,90 +669,23 @@ impl CandleEngine {
             return Ok(vec![]);
         }
 
-        let batch_size = texts.len();
         tracing::debug!(
-            "Processing batch of {} texts with true batch inference",
-            batch_size
+            "Processing batch of {} texts using sequential processing fallback",
+            texts.len()
         );
 
-        let max_len = self.tokenizer.max_length().min(512);
-        let mut encodings: Vec<Encoding> = Vec::with_capacity(batch_size);
-
+        let mut results = Vec::with_capacity(texts.len());
         for (i, &text) in texts.iter().enumerate() {
-            tracing::debug!("Batch[{}] text: '{}' (len={})", i, text, text.len());
-            let encoding = self
-                .tokenizer
-                .encode(text, true)
-                .await
-                .map_err(|e| AppError::TokenizationError(e.to_string()))?;
-
-            let ids = encoding.get_ids();
-            tracing::debug!(
-                "Batch[{}] token IDs count: {}, max_id: {}",
-                i,
-                ids.len(),
-                ids.iter().max().copied().unwrap_or(0)
-            );
-
-            let truncated_encoding = Encoding {
-                ids: encoding.ids.iter().take(max_len).cloned().collect(),
-                attention_mask: encoding
-                    .attention_mask
-                    .iter()
-                    .take(max_len)
-                    .cloned()
-                    .collect(),
-                type_ids: encoding.type_ids.iter().take(max_len).cloned().collect(),
-                tokens: encoding.tokens.iter().take(max_len).cloned().collect(),
-            };
-            encodings.push(truncated_encoding);
+            tracing::debug!("Batch[{}] processing: '{}' (len={})", i, text, text.len());
+            let embedding = self.forward_pass(text).await?;
+            tracing::debug!("Batch[{}] embedding vector len: {}", i, embedding.len());
+            results.push(embedding);
         }
 
-        let max_seq_len = max_len;
-        tracing::debug!("max_seq_len: {}", max_seq_len);
-
-        let batch_input_ids = self.create_padded_batch_tensor(&encodings, max_seq_len, true)?;
-        let batch_attention_mask =
-            self.create_padded_batch_tensor(&encodings, max_seq_len, false)?;
-        tracing::debug!("batch_input_ids shape: {:?}", batch_input_ids.shape());
         tracing::debug!(
-            "batch_attention_mask shape: {:?}",
-            batch_attention_mask.shape()
+            "Batch processing completed, {} embeddings generated",
+            results.len()
         );
-
-        let embeddings = self
-            .model
-            .forward(&batch_input_ids, &batch_attention_mask, None)
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
-
-        tracing::debug!("Model output embeddings shape: {:?}", embeddings.shape());
-
-        self.update_gpu_memory().await;
-
-        let mut results = Vec::with_capacity(batch_size);
-        for batch_idx in 0..batch_size {
-            tracing::debug!("Extracting embedding for batch[{}]", batch_idx);
-            let embedding_slice = embeddings.get(batch_idx).map_err(|e| {
-                AppError::InferenceError(format!("Failed to get batch {}: {}", batch_idx, e))
-            })?;
-            tracing::debug!(
-                "Batch[{}] slice shape: {:?}",
-                batch_idx,
-                embedding_slice.shape()
-            );
-
-            let cls_embedding = embedding_slice
-                .get(0)
-                .map_err(|e| AppError::InferenceError(format!("Failed to get CLS token: {}", e)))?;
-
-            let vec = cls_embedding
-                .to_vec1::<f32>()
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
-            tracing::debug!("Batch[{}] embedding vector len: {}", batch_idx, vec.len());
-
-            results.push(vec);
-        }
-
         Ok(results)
     }
 }
@@ -715,22 +784,63 @@ impl CandleEngine {
         };
 
         let config_content = std::fs::read_to_string(config_filename)?;
-        let bert_config: BertConfig = serde_json::from_str(&config_content)
+        let model_config_json: ModelConfigJson = serde_json::from_str(&config_content)
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+        let fallback_architecture = model_config_json.get_architecture();
+
+        tracing::info!(
+            "Fallback: Detected model architecture: {:?}",
+            fallback_architecture
+        );
+
+        let (bert_config, xlm_config) = match &fallback_architecture {
+            ModelArchitecture::Bert => {
+                let bert_config: BertConfig = serde_json::from_str(&config_content)
+                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                (Some(bert_config), None)
+            }
+            ModelArchitecture::XlmRoberta => {
+                let xlm_config: XlmRobertaConfig = serde_json::from_str(&config_content)
+                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                (None, Some(xlm_config))
+            }
+        };
 
         let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
-        self.tokenizer =
-            CachedTokenizer::new(hf_tokenizer, bert_config.max_position_embeddings, 2048);
+        let max_position_embeddings = match &fallback_architecture {
+            ModelArchitecture::Bert => bert_config.as_ref().unwrap().max_position_embeddings,
+            ModelArchitecture::XlmRoberta => xlm_config.as_ref().unwrap().max_position_embeddings,
+        };
+
+        self.tokenizer = CachedTokenizer::new(hf_tokenizer, max_position_embeddings, 2048);
 
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[weights_filename], DType::F32, &self.device)
         }
         .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
-        self.model = BertModel::load(vb, &bert_config)
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+        self.model = match &fallback_architecture {
+            ModelArchitecture::Bert => {
+                let config = bert_config.ok_or_else(|| {
+                    AppError::ModelLoadError("Bert config is required".to_string())
+                })?;
+                let bert_model = BertModel::load(vb, &config)
+                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                ModelWrapper::Bert(bert_model)
+            }
+            ModelArchitecture::XlmRoberta => {
+                let config = xlm_config.ok_or_else(|| {
+                    AppError::ModelLoadError("XLM-RoBERTa config is required".to_string())
+                })?;
+                let xlm_model = XLMRobertaModel::new(&config, vb)
+                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                ModelWrapper::XlmRoberta(xlm_model)
+            }
+        };
+
+        self.model_architecture = fallback_architecture;
 
         tracing::info!("Successfully fell back to CPU");
         Ok(())

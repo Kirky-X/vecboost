@@ -39,6 +39,9 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -71,6 +74,9 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -96,6 +102,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
@@ -156,6 +165,9 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -186,6 +198,10 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
+
+      - name: Install Protocol Buffers compiler (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4
@@ -303,6 +319,9 @@ jobs:
           toolchain: stable
           components: rust-docs
 
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Cache cargo dependencies
         uses: actions/cache@v4
         with:
@@ -363,6 +382,9 @@ jobs:
         with:
           toolchain: 1.75
 
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Check minimal version
         run: |
           cargo +1.75 build --workspace
@@ -381,6 +403,9 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
+
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4

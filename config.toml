@@ -9,10 +9,7 @@
 host = "0.0.0.0"
 
 # 服务端口号
-port = 3000
-
-# 工作线程数 (None 表示使用 CPU 核心数)
-workers = null
+port = 9000
 
 # 请求超时时间 (秒)
 timeout = 30
@@ -26,13 +23,13 @@ model_repo = "BAAI/bge-m3"
 model_revision = "main"
 
 # 本地模型路径 (可选，设置后优先使用本地模型)
-model_path = null
+model_path = ""
 
 # 是否使用 GPU 加速
 # 注意：需要启用相应的 cargo feature
 # - CUDA: cargo build --features cuda
 # - Metal (macOS): cargo build --features metal
-use_gpu = true
+use_gpu = false
 
 # 批处理大小
 batch_size = 32
@@ -83,6 +80,31 @@ metrics_enabled = true
 # 日志级别
 # 可选值: trace, debug, info, warn, error
 log_level = "info"
+
+# ============ 认证配置 ============
+[auth]
+# 是否启用认证
+enabled = true
+
+# JWT 密钥 (生产环境请使用复杂密钥)
+jwt_secret = "your-super-secret-jwt-key-change-in-production"
+
+# Token 过期时间 (小时)
+token_expiration_hours = 24
+
+# 默认管理员用户名
+default_admin_username = "admin"
+
+# 默认管理员密码 (生产环境请修改)
+default_admin_password = "admin123"
+
+# ============ 密钥存储配置 ============
+[auth.security]
+# 密钥存储类型: environment, encrypted_file
+storage_type = "environment"
+
+# 加密密钥 (用于 encrypted_file 存储类型)
+encryption_key = ""
 
 # ============ 设备配置 ============
 [device]

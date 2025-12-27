@@ -4,7 +4,6 @@
 // See LICENSE file in the project root for full license information.
 
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::path::PathBuf;
 
 #[derive(Debug, Deserialize, Clone, Serialize, Default)]
@@ -261,95 +260,6 @@ impl AppConfig {
     pub fn load_with_path<P: Into<PathBuf>>(path: P) -> Result<Self, ConfigError> {
         let loader = ConfigLoader::new().with_config_path(path);
         loader.load()
-    }
-
-    pub fn load_env_only() -> Result<Self, ConfigError> {
-        dotenvy::dotenv().ok();
-
-        let host = env::var("VECBOOST_SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-        let port = env::var("VECBOOST_SERVER_PORT")
-            .unwrap_or_else(|_| "3000".to_string())
-            .parse()
-            .unwrap_or(3000);
-        let grpc_enabled = env::var("VECBOOST_SERVER_GRPC_ENABLED")
-            .unwrap_or_else(|_| "false".to_string())
-            .parse()
-            .unwrap_or(false);
-        let grpc_host = env::var("VECBOOST_SERVER_GRPC_HOST").ok();
-        let grpc_port = env::var("VECBOOST_SERVER_GRPC_PORT")
-            .unwrap_or_else(|_| "50051".to_string())
-            .parse()
-            .ok();
-
-        let model_repo =
-            env::var("VECBOOST_MODEL_REPO").unwrap_or_else(|_| "BAAI/bge-m3".to_string());
-        let model_revision =
-            env::var("VECBOOST_MODEL_REVISION").unwrap_or_else(|_| "main".to_string());
-        let use_gpu = env::var("VECBOOST_MODEL_USE_GPU")
-            .unwrap_or_else(|_| "false".to_string())
-            .parse()
-            .unwrap_or(false);
-        let batch_size = env::var("VECBOOST_MODEL_BATCH_SIZE")
-            .unwrap_or_else(|_| "32".to_string())
-            .parse()
-            .unwrap_or(32);
-        let expected_dimension = env::var("VECBOOST_MODEL_DIMENSION")
-            .unwrap_or_else(|_| "".to_string())
-            .parse()
-            .ok();
-
-        Ok(AppConfig {
-            server: ServerConfig {
-                host,
-                port,
-                grpc_host,
-                grpc_port,
-                grpc_enabled,
-                workers: None,
-                timeout: Some(30),
-            },
-            model: ModelConfig {
-                model_repo,
-                model_revision,
-                model_path: None,
-                use_gpu,
-                batch_size,
-                expected_dimension,
-                max_sequence_length: Some(8192),
-            },
-            embedding: EmbeddingConfig {
-                default_aggregation: "mean".to_string(),
-                similarity_metric: "cosine".to_string(),
-                cache_enabled: true,
-                cache_size: 1024,
-                max_batch_size: 64,
-            },
-            monitoring: MonitoringConfig {
-                memory_limit_mb: Some(4096),
-                memory_warning_threshold: Some(0.8),
-                metrics_enabled: true,
-                log_level: Some("info".to_string()),
-            },
-            auth: AuthConfig {
-                enabled: env::var("VECBOOST_AUTH_ENABLED")
-                    .unwrap_or_else(|_| "false".to_string())
-                    .parse()
-                    .unwrap_or(false),
-                jwt_secret: env::var("VECBOOST_AUTH_JWT_SECRET").ok(),
-                token_expiration_hours: env::var("VECBOOST_AUTH_TOKEN_EXPIRATION_HOURS")
-                    .unwrap_or_else(|_| "24".to_string())
-                    .parse()
-                    .ok(),
-                default_admin_username: env::var("VECBOOST_AUTH_DEFAULT_ADMIN_USERNAME").ok(),
-                default_admin_password: env::var("VECBOOST_AUTH_DEFAULT_ADMIN_PASSWORD").ok(),
-                security: SecurityConfig {
-                    storage_type: env::var("VECBOOST_SECURITY_STORAGE_TYPE")
-                        .unwrap_or_else(|_| "environment".to_string()),
-                    encryption_key: env::var("VECBOOST_SECURITY_ENCRYPTION_KEY").ok(),
-                    key_file_path: env::var("VECBOOST_SECURITY_KEY_FILE_PATH").ok(),
-                },
-            },
-        })
     }
 
     pub fn to_toml_string(&self) -> Result<String, toml::ser::Error> {

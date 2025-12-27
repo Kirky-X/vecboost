@@ -22,7 +22,6 @@ serde_json = "1.0"
 # Configuration
 config = "0.14"
 toml = "0.8"
-dotenvy = "0.15"
 
 # Logging & Tracing
 tracing = "0.1"

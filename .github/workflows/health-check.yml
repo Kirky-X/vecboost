@@ -1,0 +1,432 @@
+name: Health Check
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE*'
+  pull_request:
+    branches: [main, develop]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE*'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "check-shared"
+          cache-targets: false
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check clippy
+        run: cargo clippy --all-features --all-targets -- -D warnings
+
+      - name: Check for unused dependencies
+        run: cargo udeps --all-features --all-targets
+
+      - name: Cargo Audit
+        run: cargo audit --deny warnings
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: check
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "build-shared"
+          cache-targets: false
+
+      - name: Build workspace
+        run: cargo build --all-features
+
+      - name: Build release
+        run: cargo build --all-features --release
+
+  test:
+    name: Test (Ubuntu) - Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "test-coverage-shared"
+          cache-targets: false
+
+      - name: Install grcov
+        run: cargo install grcov
+
+      - name: Run tests with coverage
+        run: cargo tarpaulin --all-features --all-targets --out lcov --output-dir coverage/
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage/lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+          verbose: true
+
+      - name: Generate Cobertura XML for GitHub
+        run: grcov . --binary-path ./target/debug/ --source-dir . --output-type cobertura-xml --output-path cobertura.xml
+
+      - name: Check coverage threshold
+        run: |
+          total=$(grep -oP '(?<=line-rate=")[0-9.]+' cobertura.xml | head -1)
+          threshold=0.80
+          echo "Coverage: $total"
+          echo "Threshold: $threshold"
+          if (( $(echo "$total >= $threshold" | bc -l) )); then
+            echo "Coverage requirement met (>= 80%)"
+          else
+            echo "Coverage requirement NOT met (>= 80%)"
+            exit 1
+          fi
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage/
+            cobertura.xml
+          retention-days: 7
+
+  test-fast:
+    name: Test (Ubuntu) - Fast
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "test-fast-shared"
+          cache-targets: false
+
+      - name: Run tests
+        run: cargo test --all-features --all-targets -- --test-threads=4
+
+  test-cross-platform:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            threads: 2
+          - os: ubuntu-latest
+            threads: 4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cross-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cross-
+
+      - name: Run tests
+        run: cargo test --all-features --all-targets -- --test-threads=${{ matrix.threads }}
+
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, nightly]
+        include:
+          - toolchain: stable
+            features: all
+          - toolchain: nightly
+            features: all
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-windows-${{ matrix.toolchain }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-windows-${{ matrix.toolchain }}-
+
+      - name: Set Windows environment
+        shell: pwsh
+        run: |
+          echo "CARGO_TERM_COLOR=always" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "RUSTFLAGS=-D warnings" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Check formatting
+        if: matrix.toolchain == 'stable'
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        if: matrix.toolchain == 'stable'
+        run: cargo clippy --all-features --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-features --all-targets -- --test-threads=2
+
+      - name: Run tests with release profile
+        run: cargo test --all-features --all-targets --release -- --test-threads=2
+
+      - name: Test file watching on Windows
+        shell: pwsh
+        run: |
+          cargo test --test hot_reload_latency_test --all-features -- --nocapture
+
+      - name: Test memory limits on Windows
+        shell: pwsh
+        run: |
+          cargo test --test memory_limit_test --all-features -- --nocapture
+
+      - name: Test Windows-specific paths
+        shell: pwsh
+        run: |
+          $env:TEST_WINDOWS_PATHS = "1"
+          cargo test --all-features --all-targets -- windows_paths
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-windows-${{ matrix.toolchain }}
+          path: |
+            target/debug/deps/
+            target/release/deps/
+
+  doc:
+    name: Documentation
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rust-docs
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-doc-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-doc-
+
+      - name: Build documentation
+        run: cargo doc --all-features --no-deps
+
+      - name: Check for broken links
+        run: cargo doc --all-features --no-deps --document-private-items
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Run cargo-audit
+        uses: actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  minimal-versions:
+    name: Minimal Versions
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.75
+
+      - name: Check minimal version
+        run: |
+          cargo +1.75 build --all-features
+          cargo +1.75 test --all-features --all-targets
+
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, test-fast]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-
+
+      - name: Run benchmarks
+        run: cargo bench --all-features
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: target/criterion/report/
+
+  dependencies:
+    name: Dependency Updates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Check for outdated dependencies
+        run: |
+          cargo install cargo-outdated --locked 2>/dev/null || true
+          cargo outdated --root-deps-only || echo "cargo-outdated not available, skipping"
+
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [check, build, test, test-fast, test-windows, doc, audit, minimal-versions]
+    if: always()
+    steps:
+      - name: Check job status
+        run: |
+          if [[ "${{ needs.check.result }}" == "failure" ]] || \
+             [[ "${{ needs.build.result }}" == "failure" ]] || \
+             [[ "${{ needs.test.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-fast.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-windows.result }}" == "failure" ]]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+        id: status
+
+      - name: Notify on failure
+        if: steps.status.outputs.status == 'failure'
+        run: |
+          echo "CI pipeline failed. Please check the workflow logs for details."
+        shell: /bin/bash -e

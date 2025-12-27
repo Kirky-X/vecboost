@@ -5,14 +5,22 @@
 *.swp
 *.swo
 *~
+.DS_Store
+Thumbs.db
 
 # Environment
 .env
 .env.local
+.env.*
+!.env.example
+!.env.test
 
 # Rust
 target/
+*.rs.bk
+*.rmeta
 Cargo.lock
+.cargo/config.toml
 
 # Python
 __pycache__/
@@ -24,12 +32,22 @@ __pycache__/
 dist/
 build/
 *.egg
+pip-wheel-metadata/
+*.whl
+.tox/
+.venv/
+venv/
+env/
+.Python
 
 # Testing
 test_report*.json
 .benchmarks
 coverage.xml
 htmlcov/
+.coverage
+.coverage.*
+.cache/
 
 # Documentation (templates)
 docs/prd.md
@@ -37,3 +55,31 @@ docs/tdd.md
 docs/test.md
 docs/uat.md
 temp/
+docs/_build/
+docs/.doctrees/
+
+# Build and Runtime
+*.o
+*.a
+*.so
+*.dll
+*.dylib
+
+# Logs
+logs/
+*.log
+
+# Temporary Files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# OS Generated
+.DS_Store
+Thumbs.db
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db

@@ -1,28 +1,69 @@
-# IDE and Editor
-.trae/
+# =============================================================================
+# VecBoost .gitignore - Optimized and Well-Organized
+# =============================================================================
+#
+# Structure:
+# 1. IDE & Editors
+# 2. AI Assistant Tools
+# 3. Operating System Files
+# 4. Environment & Configuration
+# 5. Rust Build Artifacts
+# 6. Python Dependencies
+# 7. Testing & Coverage
+# 8. Binary & Library Files
+# 9. Temporary Files
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. IDE & Editors
+# -----------------------------------------------------------------------------
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+
+# -----------------------------------------------------------------------------
+# 2. AI Assistant Tools
+# -----------------------------------------------------------------------------
+.claude/
+.opencode/
+.trae/
+
+# -----------------------------------------------------------------------------
+# 3. Operating System Files
+# -----------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 
-# Environment
+# -----------------------------------------------------------------------------
+# 4. Environment & Configuration
+# -----------------------------------------------------------------------------
 .env
 .env.local
 .env.*
 !.env.example
 !.env.test
 
-# Rust
+# -----------------------------------------------------------------------------
+# 5. Rust Build Artifacts
+# -----------------------------------------------------------------------------
 target/
 *.rs.bk
 *.rmeta
-Cargo.lock
 .cargo/config.toml
 
-# Python
+# Note: Cargo.lock SHOULD be tracked - DO NOT add it here
+# Keeping Cargo.lock in version control ensures reproducible builds
+
+# -----------------------------------------------------------------------------
+# 6. Python Dependencies
+# -----------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
@@ -38,58 +79,43 @@ pip-wheel-metadata/
 venv/
 env/
 .Python
+.pytest_cache/
 
-# Testing
-test_report*.json
-.benchmarks
+# -----------------------------------------------------------------------------
+# 7. Testing & Coverage
+# -----------------------------------------------------------------------------
+.benchmarks/
 coverage.xml
 htmlcov/
 .coverage
 .coverage.*
-.cache/
+coverage/
+test_report*.json
 
-# Documentation (templates)
-docs/prd.md
-docs/tdd.md
-docs/test.md
-docs/uat.md
-docs/_build/
-docs/.doctrees/
-
-# Build and Runtime
+# -----------------------------------------------------------------------------
+# 8. Binary & Library Files
+# -----------------------------------------------------------------------------
 *.o
 *.a
 *.so
 *.dll
 *.dylib
 models/
+*.wasm
 
-# Logs
+# -----------------------------------------------------------------------------
+# 9. Temporary Files
+# -----------------------------------------------------------------------------
 logs/
 *.log
-
-# Temporary Files
 *.tmp
 *.temp
 *.bak
 *.backup
+temp/
 
-# OS Generated
-.DS_Store
-Thumbs.db
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-
-# Project Documentation
-AGENTS.md
-README.md
-USER_GUIDE.md
-
-# Claude Code
-.claude/
-
-# OpenCode
-.opencode/
+# -----------------------------------------------------------------------------
+# 10. Documentation Build (Sphinx, mdBook, etc.)
+# -----------------------------------------------------------------------------
+docs/_build/
+docs/.doctrees/

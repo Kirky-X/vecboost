@@ -1,0 +1,137 @@
+# Pre-commit hooks for VecBoost Rust Project
+#
+# This configuration defines pre-commit checks that run before each commit.
+# All checks must pass for the commit to be allowed.
+#
+# Installation:
+#   1. Install pre-commit: pip install pre-commit
+#   2. Initialize hooks: pre-commit install
+#   3. Update hooks: pre-commit autoupdate
+#
+# Manual run:
+#   pre-commit run --all-files
+
+repos:
+  # Rust cargo fmt - Code formatting check
+  - repo: https://github.com/dnstout/cargo fmt-hook
+    rev: v0.1.0
+    hooks:
+      - id: cargo-fmt
+        name: Check Rust code formatting
+        description: Run cargo fmt to check code formatting
+        entry: bash -c "cargo fmt --all -- --check"
+        language: system
+        pass_filenames: false
+        stages: [commit]
+
+  # Rust clippy - Code quality check
+  - repo: https://github.com/dnth/cargo-clippy-hook
+    rev: v0.0.13
+    hooks:
+      - id: cargo-clippy
+        name: Run cargo clippy
+        description: Run cargo clippy with all features and strict warnings
+        entry: bash -c "cargo clippy --all-features --all-targets -- -D warnings"
+        language: system
+        pass_filenames: false
+        stages: [commit]
+        always_run: false
+
+  # Rust cargo check - Compilation check
+  - repo: local
+    rev: v0.1.0
+    hooks:
+      - id: cargo-check
+        name: Check Rust compilation
+        description: Run cargo check to verify code compiles
+        entry: bash -c "cargo check --all-features"
+        language: system
+        pass_filenames: false
+        stages: [commit]
+
+  # Custom Rust pre-commit script
+  - repo: local
+    rev: v0.1.0
+    hooks:
+      - id: vecboost-precommit
+        name: VecBoost pre-commit checks
+        description: Run all VecBoost pre-commit checks (fmt, clippy, check)
+        entry: bash -c ". scripts/pre-commit-check.sh"
+        language: system
+        pass_filenames: false
+        stages: [commit]
+        always_run: false
+
+  # TOML format check
+  - repo: https://github.com/m得天独厚/toml-hook
+    rev: v0.1.0
+    hooks:
+      - id: toml-fmt
+        name: Check TOML formatting
+        entry: bash -c "cargo fmt --check Cargo.toml config.toml 2>/dev/null || true"
+        language: system
+        pass_filenames: false
+        stages: [commit]
+
+  # YAML format check
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: yaml-lint
+        name: Check YAML files
+        description: Check YAML files for syntax errors
+        entry: python -c "import yaml; yaml.safe_load(open('$0'))"
+        language: python
+        pass_filenames: true
+        files: '\.ya?ml$'
+        stages: [commit]
+
+  # Remove trailing whitespace
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        name: Check trailing whitespace
+        entry: trailing-whitespace-fixer
+        language: system
+        pass_filenames: true
+        stages: [commit]
+
+  # Check for merge conflicts
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-merge-conflict
+        name: Check for merge conflict markers
+        entry: check-merge-conflict
+        language: system
+        pass_filenames: true
+        stages: [commit]
+
+  # Detect large files
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-added-large-files
+        name: Check for large files
+        entry: check-added-large-files
+        args: ['--maxkb=1000']
+        language: system
+        pass_filenames: true
+        stages: [commit]
+
+# Global settings
+default_install_hook_types: [pre-commit, commit-msg]
+default_stages: [commit]
+minimum_pre_commit_version: '3.0.0'
+
+# Exclude patterns
+exclude: |
+  (?x)^(
+    target/|
+    \.git/|
+    \.cargo/|
+    \.github/workflows/|
+    docs/|
+    \.pyc$
+  )

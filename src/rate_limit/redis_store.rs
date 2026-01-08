@@ -21,6 +21,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Redis 连接配置
+#[cfg(feature = "redis")]
 #[derive(Debug, Clone)]
 pub struct RedisConfig {
     pub url: String,
@@ -50,6 +51,7 @@ impl RedisConfig {
 }
 
 /// Redis 计数器值
+#[cfg(feature = "redis")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CounterValue {
     count: u64,

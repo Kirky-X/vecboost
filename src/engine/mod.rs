@@ -36,6 +36,7 @@ pub trait InferenceEngine: Send + Sync {
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError>;
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum AnyEngine {
     Candle(candle_engine::CandleEngine),
     #[cfg(feature = "onnx")]
@@ -106,9 +107,7 @@ impl InferenceEngine for AnyEngine {
         match self {
             AnyEngine::Candle(engine) => engine.try_fallback_to_cpu(config).await,
             #[cfg(feature = "onnx")]
-            AnyEngine::Onnx(_engine) => Err(AppError::InferenceError(
-                "ONNX engine does not support CPU fallback".to_string(),
-            )),
+            AnyEngine::Onnx(engine) => engine.try_fallback_to_cpu(config).await,
         }
     }
 }

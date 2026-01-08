@@ -35,7 +35,7 @@ impl Default for CollectionConfig {
 }
 
 #[derive(Clone)]
-pub struct MetricsCollector {
+pub struct InferenceCollector {
     config: Arc<CollectionConfig>,
     memory_monitor: Arc<MemoryMonitor>,
     inference_records: Arc<RwLock<VecDeque<InferenceRecord>>>,
@@ -47,7 +47,7 @@ pub struct MetricsCollector {
     total_errors: Arc<RwLock<u64>>,
 }
 
-impl MetricsCollector {
+impl InferenceCollector {
     pub fn new() -> Self {
         Self::with_config(CollectionConfig::default())
     }
@@ -394,7 +394,7 @@ impl MetricsCollector {
     }
 }
 
-impl Default for MetricsCollector {
+impl Default for InferenceCollector {
     fn default() -> Self {
         Self::new()
     }
@@ -438,7 +438,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_collector_creation() {
-        let collector = MetricsCollector::new();
+        let collector = InferenceCollector::new();
         let summary = collector.get_summary().await;
 
         assert_eq!(summary.total_inferences, 0);
@@ -447,7 +447,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_inference() {
-        let collector = MetricsCollector::new();
+        let collector = InferenceCollector::new();
 
         collector
             .record_inference(
@@ -467,7 +467,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_error() {
-        let collector = MetricsCollector::new();
+        let collector = InferenceCollector::new();
 
         collector
             .record_error("test-model", 100, "Out of memory")
@@ -481,7 +481,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_snapshot() {
-        let collector = MetricsCollector::new();
+        let collector = InferenceCollector::new();
 
         for i in 0..5 {
             collector
@@ -504,7 +504,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_inference_records() {
-        let collector = MetricsCollector::new();
+        let collector = InferenceCollector::new();
 
         for _ in 0..10 {
             collector
@@ -524,7 +524,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_metric() {
-        let collector = MetricsCollector::new();
+        let collector = InferenceCollector::new();
 
         collector
             .record_metric(MetricType::Throughput, 1000.0, "tokens/s")
@@ -537,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reset() {
-        let collector = MetricsCollector::new();
+        let collector = InferenceCollector::new();
 
         collector
             .record_inference(
@@ -558,7 +558,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_success_rate() {
-        let collector = MetricsCollector::new();
+        let collector = InferenceCollector::new();
 
         collector
             .record_inference(
@@ -578,7 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_collection_duration() {
-        let collector = MetricsCollector::new();
+        let collector = InferenceCollector::new();
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 

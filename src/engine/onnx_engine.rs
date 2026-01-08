@@ -9,11 +9,11 @@ use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
 use crate::error::AppError;
 use crate::monitor::MemoryMonitor;
 use crate::utils::hash::verify_sha256;
+use async_trait::async_trait;
 use hf_hub::{Repo, RepoType, api::sync::Api};
 use ndarray::{Array1, Array2};
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Tensor;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 #[cfg(target_os = "macos")]
 use tokenizers::Tokenizer;
@@ -33,6 +33,7 @@ pub struct OnnxEngine {
     memory_monitor: Option<Arc<MemoryMonitor>>,
     memory_limit_controller: Option<Arc<MemoryLimitController>>,
     fallback_triggered: bool,
+    fallback_lock: Arc<Mutex<()>>, // 保护降级过程的互斥锁
     device_type: DeviceType,
     supports_cuda: bool,
 }
@@ -141,22 +142,10 @@ impl OnnxEngine {
                 session
             }
         } else if supports_amd {
-            tracing::info!("Attempting to configure ROCm execution provider for ONNX Runtime");
-            #[cfg(feature = "rocm")]
-            {
-                let rocm_provider =
-                    ort::execution_providers::ROCMExecutionProvider::default().build();
-                session
-                    .with_execution_providers([rocm_provider])
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?
-            }
-            #[cfg(not(feature = "rocm"))]
-            {
-                tracing::warn!(
-                    "ROCM execution provider not available. ONNX Runtime AMD support requires rocm feature flag. Using CPU execution provider."
-                );
-                session
-            }
+            tracing::info!(
+                "AMD GPU detected but ROCm execution provider is not configured in this build. Using CPU execution provider."
+            );
+            session
         } else {
             session
         };
@@ -181,7 +170,8 @@ impl OnnxEngine {
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
         tracing::info!("Loading tokenizer...");
-        let mut tokenizer = Tokenizer::from_file(tokenizer_filename)
+        #[allow(unused_mut)]
+        let mut tokenizer = Tokenizer::from_file(&tokenizer_filename.to_string_lossy())
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
         #[cfg(target_os = "macos")]
@@ -197,7 +187,7 @@ impl OnnxEngine {
             }
         }
 
-        let vocab_size = tokenizer.get_vocab_size(false);
+        let vocab_size = tokenizer.get_vocab_size();
         let hidden_size = config.expected_dimension.unwrap_or(1024);
         tracing::info!(
             "Using hidden_size from configuration: {:?}",
@@ -247,6 +237,7 @@ impl OnnxEngine {
             memory_monitor,
             memory_limit_controller: None,
             fallback_triggered: false,
+            fallback_lock: Arc::new(Mutex::new(())),
             device_type,
             supports_cuda,
         })
@@ -417,15 +408,19 @@ impl OnnxEngine {
         }
 
         if mask_sum > 0.0 {
-            for h in 0..self.hidden_size {
-                weighted_sum[h] /= mask_sum;
-            }
+            weighted_sum.iter_mut().for_each(|v| *v /= mask_sum);
         }
 
         Ok(weighted_sum)
     }
 
     pub async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError> {
+        // 使用互斥锁确保只有一个线程执行降级
+        let _lock = self.fallback_lock.lock().map_err(|e| {
+            AppError::InferenceError(format!("Failed to acquire fallback lock: {}", e))
+        })?;
+
+        // 双重检查：获取锁后再次检查是否已经降级
         if self.fallback_triggered {
             return Ok(());
         }
@@ -585,9 +580,10 @@ impl OnnxEngine {
             }
 
             if mask_sum > 0.0 {
-                for h in 0..self.hidden_size {
-                    weighted_sum[h] /= mask_sum;
-                }
+                weighted_sum
+                    .iter_mut()
+                    .take(self.hidden_size)
+                    .for_each(|v| *v /= mask_sum);
             }
 
             results.push(weighted_sum);
@@ -597,6 +593,7 @@ impl OnnxEngine {
     }
 }
 
+#[async_trait]
 impl InferenceEngine for OnnxEngine {
     fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
         self.forward_pass(text)
@@ -612,5 +609,13 @@ impl InferenceEngine for OnnxEngine {
 
     fn supports_mixed_precision(&self) -> bool {
         self.memory_monitor.is_some()
+    }
+
+    fn is_fallback_triggered(&self) -> bool {
+        self.fallback_triggered
+    }
+
+    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError> {
+        OnnxEngine::try_fallback_to_cpu(self, config).await
     }
 }

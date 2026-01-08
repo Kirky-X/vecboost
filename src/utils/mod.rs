@@ -17,7 +17,9 @@ pub use constants::{
 pub use resilience::{
     CircuitBreaker, CircuitBreakerConfig, CircuitState, RetryConfig, Retryable, with_retry,
 };
-pub use validator::{FileValidator, InputValidator, TextValidator, ValidationConfig};
+pub use validator::{
+    FileValidator, InputValidator, PathValidator, TextValidator, ValidationConfig,
+};
 pub use vector::{
     AggregationMode, SimilarityMetric, calculate_similarity, cosine_similarity, dot_product,
     euclidean_distance, manhattan_distance, normalize_l2,

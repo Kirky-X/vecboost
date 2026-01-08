@@ -4,9 +4,12 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, AeadCore, KeyInit},
 };
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -60,11 +63,34 @@ impl EncryptedFileKeyStore {
     }
 
     fn derive_key(password: &str) -> Result<[u8; 32], AppError> {
-        let mut hasher = Sha256::new();
-        hasher.update(password.as_bytes());
-        hasher.update(b"vecboost-key-derivation");
-        let result = hasher.finalize();
-        Ok(result.into())
+        // 使用 Argon2id 进行安全的密钥派生
+        // Argon2id 是 Argon2 的混合版本，平衡了抗侧信道攻击和抗 GPU/ASIC 攻击
+        let argon2 = Argon2::default();
+
+        // 生成随机盐值
+        let salt = SaltString::generate(&mut OsRng);
+
+        // 创建密码哈希
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), &salt)
+            .map_err(|e| AppError::security_error(format!("Failed to derive key: {}", e)))?;
+
+        // 从哈希中提取 32 字节作为密钥
+        let hash_bytes = password_hash
+            .hash
+            .ok_or_else(|| AppError::security_error("Password hash is missing".to_string()))?;
+
+        // 确保我们有足够的字节
+        if hash_bytes.len() < 32 {
+            return Err(AppError::security_error(
+                "Derived key is too short".to_string(),
+            ));
+        }
+
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&hash_bytes.as_bytes()[..32]);
+
+        Ok(key)
     }
 
     fn load_from_file(file_path: &str, key: &[u8; 32]) -> Result<KeyStoreData, AppError> {

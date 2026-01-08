@@ -1,3 +1,4 @@
+use utoipa::ToSchema;
 // Copyright (c) 2025 Kirky.X
 //
 // Licensed under the MIT License
@@ -7,7 +8,7 @@ use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SimilarityMetric {
     #[default]
@@ -31,7 +32,7 @@ impl FromStr for SimilarityMetric {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AggregationMode {
     #[default]

@@ -6,11 +6,20 @@
 #![allow(unused)]
 
 pub mod amd;
+pub mod batch_scheduler;
 pub mod cuda;
 pub mod manager;
 pub mod memory_limit;
+pub mod memory_optimizer;
+pub mod memory_pool;
 
+pub use batch_scheduler::{
+    BatchConfig, BatchPerformanceStats, BatchPriority, BatchRequest, DynamicBatchScheduler,
+};
 pub use manager::{DeviceInfo, DeviceStatus};
+pub use memory_pool::{
+    BufferPool, CudaMemoryPool, MemoryPoolConfig, MemoryPoolManager, ModelWeightPool, TensorPool,
+};
 
 use crate::config::model::DeviceType as ConfigDeviceType;
 use serde::Serialize;

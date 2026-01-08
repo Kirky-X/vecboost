@@ -1,0 +1,177 @@
+{
+  "dashboard": {
+    "title": "VecBoost 监控仪表板",
+    "uid": "vecboost-monitoring",
+    "tags": ["vecboost", "inference", "performance"],
+    "timezone": "browser",
+    "refresh": "10s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "请求速率 (QPS)",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(vecboost_requests_total[1m])",
+            "legendFormat": "QPS"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "请求/秒"}
+        ]
+      },
+      {
+        "id": 2,
+        "title": "请求延迟分布",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(vecboost_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "P50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(vecboost_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "P95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(vecboost_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "P99"
+          }
+        ],
+        "yaxes": [
+          {"format": "s", "label": "延迟（秒）"}
+        ]
+      },
+      {
+        "id": 3,
+        "title": "错误率",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(vecboost_requests_total{status=~\"5..\"}[5m]) / rate(vecboost_requests_total[5m]) * 100",
+            "legendFormat": "错误率"
+          }
+        ],
+        "yaxes": [
+          {"format": "percent", "label": "错误率"}
+        ]
+      },
+      {
+        "id": 4,
+        "title": "内存使用",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "process_resident_memory_bytes{job=\"vecboost\"} / 1024 / 1024 / 1024",
+            "legendFormat": "内存使用 (GB)"
+          }
+        ],
+        "yaxes": [
+          {"format": "gbytes", "label": "内存 (GB)"}
+        ]
+      },
+      {
+        "id": 5,
+        "title": "CPU 使用率",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(process_cpu_seconds_total{job=\"vecboost\"}[5m]) * 100",
+            "legendFormat": "CPU 使用率"
+          }
+        ],
+        "yaxes": [
+          {"format": "percent", "label": "CPU 使用率"}
+        ]
+      },
+      {
+        "id": 6,
+        "title": "内存池使用情况",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "vecboost_memory_pool_usage_bytes / 1024 / 1024",
+            "legendFormat": "已使用 (MB)"
+          },
+          {
+            "expr": "vecboost_memory_pool_capacity_bytes / 1024 / 1024",
+            "legendFormat": "总容量 (MB)"
+          }
+        ],
+        "yaxes": [
+          {"format": "decmbytes", "label": "内存 (MB)"}
+        ]
+      },
+      {
+        "id": 7,
+        "title": "请求队列大小",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 24, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "vecboost_queue_size",
+            "legendFormat": "队列大小"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "请求数"}
+        ]
+      },
+      {
+        "id": 8,
+        "title": "缓存命中率",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 24, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(vecboost_cache_hits_total[5m]) / rate(vecboost_cache_requests_total[5m]) * 100",
+            "legendFormat": "缓存命中率"
+          }
+        ],
+        "yaxes": [
+          {"format": "percent", "label": "命中率"}
+        ]
+      },
+      {
+        "id": 9,
+        "title": "GPU 内存使用（如果有 GPU）",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 32, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "vecboost_gpu_memory_usage_bytes / 1024 / 1024 / 1024",
+            "legendFormat": "GPU 内存使用 (GB)"
+          },
+          {
+            "expr": "vecboost_gpu_memory_total_bytes / 1024 / 1024 / 1024",
+            "legendFormat": "GPU 内存总量 (GB)"
+          }
+        ],
+        "yaxes": [
+          {"format": "gbytes", "label": "GPU 内存 (GB)"}
+        ]
+      },
+      {
+        "id": 10,
+        "title": "活跃 Worker 数量",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 32, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "vecboost_active_workers",
+            "legendFormat": "活跃 Worker"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Worker 数量"}
+        ]
+      }
+    ]
+  }
+}

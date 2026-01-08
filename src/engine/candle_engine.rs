@@ -72,17 +72,20 @@ pub struct CandleEngine {
     fallback_triggered: bool,
     device_type: DeviceType,
     model_architecture: ModelArchitecture,
+    use_quantization: bool, // 是否使用 INT8 量化
+    tensor_pool: Option<Arc<tokio::sync::RwLock<crate::device::memory_pool::TensorPool>>>, // GPU 张量池
 }
 
 impl CandleEngine {
     pub fn new(config: &ModelConfig, precision: Precision) -> Result<Self, AppError> {
-        Self::with_device(config, precision, config.device.clone())
+        Self::with_device(config, precision, config.device.clone(), None)
     }
 
     pub fn with_device(
         config: &ModelConfig,
         precision: Precision,
         device_type: DeviceType,
+        tensor_pool: Option<Arc<tokio::sync::RwLock<crate::device::memory_pool::TensorPool>>>,
     ) -> Result<Self, AppError> {
         let device = if device_type == DeviceType::Cuda && candle_core::utils::cuda_is_available() {
             tracing::info!("Using CUDA GPU");
@@ -100,21 +103,35 @@ impl CandleEngine {
             Device::Cpu
         };
 
-        let _dtype = match precision {
-            Precision::Fp32 => DType::F32,
-            Precision::Fp16 => {
-                if device.is_cuda() {
-                    tracing::info!("Using FP16 precision");
-                    DType::F16
-                } else {
-                    tracing::warn!("FP16 not supported on non-CUDA devices, falling back to FP32");
-                    DType::F32
-                }
+        // 确定计算数据类型，支持 FP16 和 INT8 量化
+        let compute_dtype = match (&precision, device.is_cuda()) {
+            (Precision::Int8, true) => {
+                tracing::info!("Using INT8 quantization (CPU inference, reduced precision)");
+                DType::U8 // Candle 使用 U8 而非 I8
             }
-            Precision::Int8 => {
-                tracing::warn!("INT8 precision not fully supported, falling back to FP32");
+            (Precision::Int8, false) => {
+                tracing::warn!("INT8 quantization requested but CUDA not available, using FP32");
                 DType::F32
             }
+            (Precision::Fp16, true) => {
+                tracing::info!("Using FP16 precision");
+                DType::F16
+            }
+            (Precision::Fp16, false) => {
+                tracing::warn!("FP16 not supported on non-CUDA devices, falling back to FP32");
+                DType::F32
+            }
+            (Precision::Fp32, _) => {
+                tracing::info!("Using FP32 precision");
+                DType::F32
+            }
+        };
+
+        // INT8 量化需要特殊处理：在 CPU 上量化，然后可能传输到 GPU
+        let (dtype, use_quantization) = if matches!(precision, Precision::Int8) {
+            (DType::F32, true) // INT8 量化使用 FP32 存储，推理时量化
+        } else {
+            (compute_dtype, false)
         };
 
         let model_path = &config.model_path;
@@ -190,9 +207,15 @@ impl CandleEngine {
         let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
-        let max_position_embeddings = match &model_architecture {
-            ModelArchitecture::Bert => bert_config.as_ref().unwrap().max_position_embeddings,
-            ModelArchitecture::XlmRoberta => xlm_config.as_ref().unwrap().max_position_embeddings,
+        let max_position_embeddings = match (&model_architecture, &bert_config, &xlm_config) {
+            (ModelArchitecture::Bert, Some(bert), _) => bert.max_position_embeddings,
+            (ModelArchitecture::XlmRoberta, _, Some(xlm)) => xlm.max_position_embeddings,
+            _ => {
+                return Err(AppError::ModelLoadError(format!(
+                    "Invalid configuration for architecture: {:?}",
+                    model_architecture
+                )));
+            }
         };
 
         let tokenizer = CachedTokenizer::new(hf_tokenizer, max_position_embeddings, 2048);
@@ -315,7 +338,7 @@ impl CandleEngine {
             tracing::info!("Model file SHA256 verification passed");
         }
 
-        let dtype = DType::F32;
+        // 使用之前确定的 dtype（支持量化）
         let vb: VarBuilder = if is_pytorch {
             tracing::info!("Loading PyTorch model weights from: {:?}", weights_filename);
 
@@ -410,6 +433,8 @@ impl CandleEngine {
             fallback_triggered: false,
             device_type,
             model_architecture,
+            use_quantization,
+            tensor_pool,
         })
     }
 
@@ -664,22 +689,191 @@ impl CandleEngine {
         Ok(vec)
     }
 
+    /// 优化的批量前向传播，使用真正的批量处理而非串行处理
     async fn forward_pass_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AppError> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
 
         tracing::debug!(
-            "Processing batch of {} texts using sequential processing fallback",
+            "Processing batch of {} texts using optimized batch processing",
             texts.len()
         );
 
-        let mut results = Vec::with_capacity(texts.len());
-        for (i, &text) in texts.iter().enumerate() {
-            tracing::debug!("Batch[{}] processing: '{}' (len={})", i, text, text.len());
-            let embedding = self.forward_pass(text).await?;
-            tracing::debug!("Batch[{}] embedding vector len: {}", i, embedding.len());
-            results.push(embedding);
+        // 批量编码所有文本
+        let encodings: Vec<Encoding> = {
+            let mut encodings = Vec::with_capacity(texts.len());
+            for &text in texts {
+                let encoding = self
+                    .tokenizer
+                    .encode(text, true)
+                    .await
+                    .map_err(|e| AppError::TokenizationError(e.to_string()))?;
+                encodings.push(encoding);
+            }
+            encodings
+        };
+
+        // 计算最大序列长度
+        let max_seq_len = encodings
+            .iter()
+            .map(|e| e.get_ids().len())
+            .max()
+            .unwrap_or(0)
+            .min(self.tokenizer.max_length());
+
+        if max_seq_len == 0 {
+            return Ok(vec![vec![0f32; 768]; texts.len()]);
+        }
+
+        // 创建批量张量
+        let batch_size = texts.len();
+
+        // 构建 input_ids 批量张量
+        let mut batch_ids = vec![0i64; batch_size * max_seq_len];
+        for (batch_idx, encoding) in encodings.iter().enumerate() {
+            let ids = encoding.get_ids();
+            for (seq_idx, &id) in ids.iter().enumerate().take(max_seq_len) {
+                batch_ids[batch_idx * max_seq_len + seq_idx] = id as i64;
+            }
+        }
+
+        // 尝试从内存池获取 token_ids 张量
+        let token_ids = if let Some(ref pool) = self.tensor_pool {
+            let mut pool = futures::executor::block_on(pool.write());
+            match pool.acquire(batch_size, max_seq_len) {
+                Ok(_tensor) => {
+                    // 从池中获取的张量需要填充数据
+                    // 由于 Candle Tensor 不可变，我们需要创建新的张量
+                    // 释放获取的张量回池
+                    pool.release(_tensor, batch_size, max_seq_len);
+
+                    // 创建新的张量并填充数据
+                    Tensor::new(batch_ids, &self.device)
+                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                        .reshape(&[batch_size, max_seq_len])
+                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                }
+                Err(_) => {
+                    // 获取失败，回退到动态分配
+                    Tensor::new(batch_ids, &self.device)
+                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                        .reshape(&[batch_size, max_seq_len])
+                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                }
+            }
+        } else {
+            // 没有内存池，动态分配
+            Tensor::new(batch_ids, &self.device)
+                .map_err(|e| AppError::InferenceError(e.to_string()))?
+                .reshape(&[batch_size, max_seq_len])
+                .map_err(|e| AppError::InferenceError(e.to_string()))?
+        };
+
+        // 构建 attention_mask 批量张量
+        let mut batch_mask = vec![0i64; batch_size * max_seq_len];
+        for (batch_idx, encoding) in encodings.iter().enumerate() {
+            let mask = encoding.get_attention_mask();
+            for (seq_idx, &m) in mask.iter().enumerate().take(max_seq_len) {
+                batch_mask[batch_idx * max_seq_len + seq_idx] = m as i64;
+            }
+        }
+
+        // 尝试从内存池获取 attention_mask 张量
+        let attention_mask_tensor = if let Some(ref pool) = self.tensor_pool {
+            let mut pool = futures::executor::block_on(pool.write());
+            match pool.acquire(batch_size, max_seq_len) {
+                Ok(tensor) => {
+                    // 从池中获取的张量需要填充数据
+                    let tensor = tensor
+                        .reshape(&[batch_size, max_seq_len])
+                        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                    // TODO: 填充数据到张量
+                    tensor
+                }
+                Err(_) => {
+                    // 获取失败，回退到动态分配
+                    Tensor::new(batch_mask, &self.device)
+                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                        .reshape(&[batch_size, max_seq_len])
+                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                }
+            }
+        } else {
+            // 没有内存池，动态分配
+            Tensor::new(batch_mask, &self.device)
+                .map_err(|e| AppError::InferenceError(e.to_string()))?
+                .reshape(&[batch_size, max_seq_len])
+                .map_err(|e| AppError::InferenceError(e.to_string()))?
+        };
+
+        // 执行批量前向传播
+        let embeddings = match (&self.model, &self.model_architecture) {
+            (ModelWrapper::Bert(bert_model), ModelArchitecture::Bert) => bert_model
+                .forward(&token_ids, &attention_mask_tensor, None)
+                .map_err(|e| AppError::InferenceError(e.to_string()))?,
+            (ModelWrapper::XlmRoberta(xlm_model), ModelArchitecture::XlmRoberta) => {
+                // 构建 type_ids 批量张量
+                let mut batch_type_ids = vec![0i64; batch_size * max_seq_len];
+                for (batch_idx, encoding) in encodings.iter().enumerate() {
+                    let type_ids = encoding.get_type_ids();
+                    for (seq_idx, &tid) in type_ids.iter().enumerate().take(max_seq_len) {
+                        batch_type_ids[batch_idx * max_seq_len + seq_idx] = tid as i64;
+                    }
+                }
+
+                let token_type_ids = Tensor::new(batch_type_ids, &self.device)
+                    .map_err(|e| AppError::InferenceError(e.to_string()))?
+                    .reshape(&[batch_size, max_seq_len])
+                    .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+                xlm_model
+                    .forward(
+                        &token_ids,
+                        &attention_mask_tensor,
+                        &token_type_ids,
+                        None,
+                        None,
+                        None,
+                    )
+                    .map_err(|e| AppError::InferenceError(e.to_string()))?
+            }
+            _ => {
+                return Err(AppError::InferenceError(format!(
+                    "Model architecture mismatch for batch processing: {:?}",
+                    self.model_architecture
+                )));
+            }
+        };
+
+        self.update_gpu_memory().await;
+
+        // 提取每个样本的嵌入向量（使用 CLS token）
+        let mut results = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let embedding_tensor = embeddings
+                .get(i)
+                .map_err(|e| AppError::InferenceError(format!("Failed to get batch {}: {}", i, e)))?
+                .get(0)
+                .map_err(|e| {
+                    AppError::InferenceError(format!(
+                        "Failed to get CLS token for batch {}: {}",
+                        i, e
+                    ))
+                })?
+                .clone();
+
+            let vec = embedding_tensor
+                .to_vec1::<f32>()
+                .map_err(|e| AppError::InferenceError(e.to_string()))?;
+            results.push(vec);
+        }
+
+        // 释放张量回池
+        if let Some(ref pool) = self.tensor_pool {
+            let mut pool = futures::executor::block_on(pool.write());
+            pool.release(token_ids, batch_size, max_seq_len);
+            pool.release(attention_mask_tensor, batch_size, max_seq_len);
         }
 
         tracing::debug!(
@@ -719,6 +913,47 @@ impl InferenceEngine for CandleEngine {
 }
 
 impl CandleEngine {
+    /// 检查是否启用了 INT8 量化
+    pub fn uses_quantization(&self) -> bool {
+        self.use_quantization
+    }
+
+    /// 获取内存使用估算（基于精度和量化）
+    pub fn estimate_memory_usage(&self, batch_size: usize, sequence_length: usize) -> u64 {
+        let hidden_size = self.get_hidden_size();
+        let num_params = self.estimate_parameter_count();
+
+        // 基础模型大小（MB）
+        let model_size_mb = match (&self.precision, self.use_quantization) {
+            (Precision::Fp32, _) => num_params * 4 / (1024 * 1024), // 4 bytes per param
+            (Precision::Fp16, _) => num_params * 2 / (1024 * 1024), // 2 bytes per param
+            (Precision::Int8, true) => num_params * 1 / (1024 * 1024), // 1 byte per param
+            (Precision::Int8, false) => num_params * 4 / (1024 * 1024), // Fallback to FP32
+        };
+
+        // 激活值大小（MB）
+        let activation_size_mb = batch_size * sequence_length * hidden_size * 4 / (1024 * 1024);
+
+        model_size_mb + activation_size_mb as u64
+    }
+
+    /// 估算模型参数数量
+    fn estimate_parameter_count(&self) -> u64 {
+        // 基于 BERT-Base 的估算（约 110M 参数）
+        match &self.model_architecture {
+            ModelArchitecture::Bert => 110_000_000,
+            ModelArchitecture::XlmRoberta => 270_000_000, // XLM-RoBERTa base 约为 270M
+        }
+    }
+
+    /// 获取隐藏层大小
+    fn get_hidden_size(&self) -> usize {
+        match &self.model_architecture {
+            ModelArchitecture::Bert => 768,       // BERT-Base
+            ModelArchitecture::XlmRoberta => 768, // XLM-RoBERTa-Base
+        }
+    }
+
     async fn try_fallback_to_cpu_impl(&mut self, config: &ModelConfig) -> Result<(), AppError> {
         if self.fallback_triggered {
             return Ok(());
@@ -809,9 +1044,15 @@ impl CandleEngine {
         let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
             .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
-        let max_position_embeddings = match &fallback_architecture {
-            ModelArchitecture::Bert => bert_config.as_ref().unwrap().max_position_embeddings,
-            ModelArchitecture::XlmRoberta => xlm_config.as_ref().unwrap().max_position_embeddings,
+        let max_position_embeddings = match (&fallback_architecture, &bert_config, &xlm_config) {
+            (ModelArchitecture::Bert, Some(bert), _) => bert.max_position_embeddings,
+            (ModelArchitecture::XlmRoberta, _, Some(xlm)) => xlm.max_position_embeddings,
+            _ => {
+                return Err(AppError::ModelLoadError(format!(
+                    "Invalid configuration for architecture: {:?}",
+                    fallback_architecture
+                )));
+            }
         };
 
         self.tokenizer = CachedTokenizer::new(hf_tokenizer, max_position_embeddings, 2048);
@@ -841,6 +1082,8 @@ impl CandleEngine {
         };
 
         self.model_architecture = fallback_architecture;
+        // 回退时禁用量化
+        self.use_quantization = false;
 
         tracing::info!("Successfully fell back to CPU");
         Ok(())

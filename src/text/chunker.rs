@@ -3,19 +3,22 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#[cfg(test)]
 use crate::error::AppError;
 #[cfg(test)]
-use crate::text::domain::ChunkResult;
-use crate::text::domain::{ChunkRequest, ChunkResponse};
+use crate::text::domain::{ChunkRequest, ChunkResponse, ChunkResult};
+#[cfg(test)]
 use crate::utils::AggregationMode;
+#[cfg(test)]
 use crate::utils::constants::{DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP_RATIO, MIN_CHUNK_SIZE_RATIO};
 
-#[cfg(target_os = "macos")]
+#[cfg(all(test, target_os = "macos"))]
 use tokenizers::Tokenizer;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(test, not(target_os = "macos")))]
 use crate::text::Tokenizer;
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct TextChunker {
     tokenizer: Tokenizer,
@@ -24,6 +27,7 @@ pub struct TextChunker {
     min_chunk_size: usize,
 }
 
+#[cfg(test)]
 impl TextChunker {
     pub fn new(tokenizer: Tokenizer) -> Self {
         Self::with_config(tokenizer, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP_RATIO)
@@ -195,16 +199,6 @@ impl TextChunker {
         }
 
         Ok(chunks)
-    }
-
-    pub fn chunk_request(&self, request: &ChunkRequest) -> Result<ChunkResponse, AppError> {
-        let mode = request.mode.unwrap_or(AggregationMode::SlidingWindow);
-        let chunks = self.chunk_with_mode(&request.text, mode)?;
-
-        Ok(ChunkResponse {
-            chunks: chunks.clone(),
-            chunk_count: chunks.len(),
-        })
     }
 
     pub fn get_chunk_size(&self) -> usize {

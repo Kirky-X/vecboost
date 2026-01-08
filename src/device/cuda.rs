@@ -6,11 +6,15 @@
 #![allow(unused)]
 
 use crate::config::model::DeviceType;
+use crate::device::memory_optimizer::{
+    GpuMemoryConfig, ModelMemoryRequirements, SharedGpuMemoryManager,
+};
 use crate::device::{DeviceCapability, DeviceInfo, DeviceStatus};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CudaGpuInfo {
@@ -101,6 +105,7 @@ impl CudaDevice {
 pub struct CudaDeviceManager {
     devices: Arc<RwLock<Vec<CudaDevice>>>,
     primary_device_id: Arc<RwLock<Option<usize>>>,
+    memory_managers: Arc<RwLock<HashMap<usize, SharedGpuMemoryManager>>>,
     initialized: Arc<RwLock<bool>>,
 }
 
@@ -109,6 +114,7 @@ impl CudaDeviceManager {
         Self {
             devices: Arc::new(RwLock::new(Vec::new())),
             primary_device_id: Arc::new(RwLock::new(None)),
+            memory_managers: Arc::new(RwLock::new(HashMap::new())),
             initialized: Arc::new(RwLock::new(false)),
         }
     }
@@ -123,6 +129,22 @@ impl CudaDeviceManager {
             Ok(devices) => {
                 let mut devices_guard = self.devices.write().await;
                 *devices_guard = devices;
+
+                // 为每个设备创建内存管理器
+                let mut memory_managers = self.memory_managers.write().await;
+                memory_managers.clear();
+
+                for device in &*devices_guard {
+                    let memory_config = GpuMemoryConfig::default();
+                    let memory_manager =
+                        SharedGpuMemoryManager::new(device.total_memory(), memory_config);
+                    memory_managers.insert(device.device_id(), memory_manager);
+                    info!(
+                        "Created memory manager for device {}: {} MB",
+                        device.device_id(),
+                        device.total_memory() / (1024 * 1024)
+                    );
+                }
 
                 if !devices_guard.is_empty() {
                     let mut primary = self.primary_device_id.write().await;
@@ -235,11 +257,78 @@ impl CudaDeviceManager {
     }
 
     pub async fn get_optimal_batch_size(&self, device_id: usize) -> usize {
-        if let Some(device) = self.get_device(device_id).await {
-            let available_mb = device.total_memory() / (1024 * 1024);
-            return std::cmp::min(32, (available_mb / 2048) as usize + 1);
+        if let Some(_device) = self.get_device(device_id).await {
+            if let Some(memory_manager) = self.memory_managers.read().await.get(&device_id).cloned()
+            {
+                // 使用智能内存管理器计算批量大小（需要先注册模型需求）
+                // 如果没有模型需求注册，使用原始的简单算法
+                let stats = memory_manager.get_performance_stats().await;
+                if stats.current_batch_size > 0 {
+                    stats.current_batch_size
+                } else {
+                    // 降级到简单算法
+                    let available = memory_manager.get_available_memory().await;
+                    let available_mb = available / (1024 * 1024);
+                    std::cmp::min(32, (available_mb / 2048) as usize + 1)
+                }
+            } else {
+                16
+            }
+        } else {
+            16
         }
-        16
+    }
+
+    /// 注册模型的内存需求
+    pub async fn register_model_memory_requirements(
+        &self,
+        device_id: usize,
+        requirements: ModelMemoryRequirements,
+    ) -> Result<(), String> {
+        let memory_managers = self.memory_managers.read().await;
+        let memory_manager = memory_managers
+            .get(&device_id)
+            .ok_or_else(|| format!("Device {} not found", device_id))?
+            .clone();
+        drop(memory_managers);
+
+        memory_manager.register_model(requirements).await;
+        Ok(())
+    }
+
+    /// 获取设备的内存使用率
+    pub async fn get_memory_usage_percent(&self, device_id: usize) -> f64 {
+        if let Some(memory_manager) = self.memory_managers.read().await.get(&device_id).cloned() {
+            memory_manager.get_memory_usage_percent().await
+        } else {
+            0.0
+        }
+    }
+
+    /// 动态调整批量大小
+    pub async fn adjust_batch_size_dynamically(
+        &self,
+        device_id: usize,
+        latency_ms: f64,
+        memory_usage_percent: f64,
+    ) {
+        if let Some(memory_manager) = self.memory_managers.read().await.get(&device_id).cloned() {
+            memory_manager
+                .adjust_batch_size_dynamically(latency_ms, memory_usage_percent)
+                .await
+        }
+    }
+
+    /// 获取性能统计
+    pub async fn get_performance_stats(
+        &self,
+        device_id: usize,
+    ) -> Option<crate::device::memory_optimizer::PerformanceStats> {
+        if let Some(manager) = self.memory_managers.read().await.get(&device_id).cloned() {
+            Some(manager.get_performance_stats().await)
+        } else {
+            None
+        }
     }
 
     pub async fn is_supported(&self) -> bool {

@@ -96,6 +96,15 @@ pub enum AppError {
 
     #[error("IO error: {0}")]
     IoError(String),
+
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+
+    #[error("Rate limit exceeded: {0}")]
+    RateLimitExceeded(String),
+
+    #[error("Internal error: {0}")]
+    InternalError(String),
 }
 
 impl AppError {
@@ -146,6 +155,10 @@ impl AppError {
     pub fn io_error(message: String) -> Self {
         AppError::IoError(message)
     }
+
+    pub fn validation_error(message: String) -> Self {
+        AppError::ValidationError(message)
+    }
 }
 
 impl IntoResponse for AppError {
@@ -164,6 +177,9 @@ impl IntoResponse for AppError {
             AppError::AuthenticationError(_) => StatusCode::UNAUTHORIZED,
             AppError::SecurityError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::ValidationError(_) => StatusCode::BAD_REQUEST,
+            AppError::RateLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
+            AppError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         let sanitized_message = sanitize_error_message(&self.to_string());

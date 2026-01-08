@@ -1,0 +1,44 @@
+# Rust 构建产物
+target/
+Cargo.lock
+
+# 开发工具
+.vscode/
+.idea/
+.claude/
+.trae/
+
+# 测试和文档
+tests/
+examples/
+docs/
+benchmarks/
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# 临时文件
+*.log
+*.tmp
+*.swp
+*~
+.DS_Store
+
+# Python 相关
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+requirements.db
+
+# 其他
+.env
+.env.local
+*.bak
+temp/
+tmp/

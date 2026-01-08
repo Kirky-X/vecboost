@@ -8,7 +8,7 @@ use crate::domain::{
     ModelSwitchRequest as DomainModelSwitchRequest,
 };
 use crate::service::embedding::EmbeddingService;
-use crate::utils::AggregationMode;
+use crate::utils::{AggregationMode, PathValidator};
 
 tonic::include_proto!("vecboost");
 
@@ -157,13 +157,26 @@ impl embedding_service_server::EmbeddingService for VecboostEmbeddingService {
 
         let path = PathBuf::from(&req.path);
 
+        // 创建路径验证器，防止路径遍历攻击
+        let current_dir = std::env::current_dir()
+            .map_err(|e| Status::internal(format!("Failed to get current directory: {}", e)))?;
+
+        let path_validator = PathValidator::new()
+            .add_allowed_root(&current_dir)
+            .add_allowed_root("/tmp"); // 允许临时目录访问
+
+        // 验证路径
+        let validated_path = path_validator
+            .validate_file(&path)
+            .map_err(|e| Status::invalid_argument(format!("Path validation failed: {}", e)))?;
+
         let service_guard = self.service.read().await;
         let stats = service_guard
-            .get_processing_stats(&path)
+            .get_processing_stats(&validated_path)
             .map_err(|e| Status::invalid_argument(format!("Failed to get file stats: {}", e)))?;
 
         let output = service_guard
-            .embed_file(&path, mode)
+            .embed_file(&validated_path, mode)
             .await
             .map_err(|e| Status::internal(format!("File embedding failed: {}", e)))?;
 

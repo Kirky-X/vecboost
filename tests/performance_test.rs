@@ -12,8 +12,8 @@ mod performance_tests {
     use vecboost::config::model::Precision;
     use vecboost::engine::InferenceEngine;
     use vecboost::error::AppError;
-    use vecboost::metrics::collector::MetricsCollector;
     use vecboost::metrics::domain::PerformanceTestConfig;
+    use vecboost::metrics::inference::InferenceCollector;
     use vecboost::metrics::performance::{PerformanceTester, generate_test_text};
 
     #[derive(Debug, Clone)]
@@ -83,7 +83,7 @@ mod performance_tests {
     }
 
     fn create_tester() -> PerformanceTester<TestEngine> {
-        let metrics = Arc::new(MetricsCollector::new());
+        let metrics = Arc::new(InferenceCollector::new());
         let engine = Arc::new(RwLock::new(TestEngine::new(384)));
         PerformanceTester::new(engine, metrics)
     }

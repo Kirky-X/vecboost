@@ -4,6 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 use lru::LruCache;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -19,6 +20,7 @@ pub struct CacheEntry {
 
 pub struct KvCache {
     cache: Arc<RwLock<LruCache<u64, CacheEntry>>>,
+    #[allow(dead_code)]
     max_size: NonZeroUsize,
     enabled: bool,
 }
@@ -34,6 +36,7 @@ impl KvCache {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_capacity(max_size: usize) -> Self {
         Self::new(max_size)
     }
@@ -50,6 +53,7 @@ impl KvCache {
         self.enabled
     }
 
+    #[allow(dead_code)]
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
@@ -101,6 +105,7 @@ impl KvCache {
         Ok(embedding)
     }
 
+    #[allow(dead_code)]
     pub async fn contains(&self, key: &str) -> bool {
         if !self.enabled {
             return false;
@@ -111,6 +116,7 @@ impl KvCache {
         cache.contains(&hash)
     }
 
+    #[allow(dead_code)]
     pub async fn remove(&self, key: &str) -> bool {
         if !self.enabled {
             return false;
@@ -121,25 +127,30 @@ impl KvCache {
         cache.pop(&hash).is_some()
     }
 
+    #[allow(dead_code)]
     pub async fn clear(&self) {
         let mut cache = self.cache.write().await;
         cache.clear();
     }
 
+    #[allow(dead_code)]
     pub async fn len(&self) -> usize {
         let cache = self.cache.read().await;
         cache.len()
     }
 
+    #[allow(dead_code)]
     pub async fn is_empty(&self) -> bool {
         let cache = self.cache.read().await;
         cache.is_empty()
     }
 
+    #[allow(dead_code)]
     pub fn capacity(&self) -> usize {
         self.max_size.get()
     }
 
+    #[cfg(test)]
     pub async fn stats(&self) -> CacheStats {
         let cache = self.cache.read().await;
         let total_access_count: u64 = cache.iter().map(|(_, e)| e.access_count).sum();
@@ -157,6 +168,32 @@ impl KvCache {
         }
     }
 
+    /// 缓存预热：批量插入缓存条目
+    /// 用于在服务启动时预加载热点数据
+    pub async fn warm_up(&self, entries: HashMap<String, Vec<f32>>) {
+        if !self.enabled {
+            return;
+        }
+
+        let mut cache = self.cache.write().await;
+
+        let now = Self::current_timestamp();
+
+        let entries_count = entries.len();
+
+        for (key, embedding) in entries {
+            let hash = self.compute_hash(&key);
+            let entry = CacheEntry {
+                embedding,
+                timestamp: now,
+                access_count: 1,
+            };
+            cache.put(hash, entry);
+        }
+
+        tracing::info!("Cache warmed up with {} entries", entries_count);
+    }
+
     fn compute_hash(&self, key: &str) -> u64 {
         let mut hasher = Xxh3::default();
         key.hash(&mut hasher);
@@ -172,6 +209,7 @@ impl KvCache {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct CacheStats {
     pub size: usize,
@@ -183,12 +221,14 @@ pub struct CacheStats {
     pub miss_count: Option<u64>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct CacheMetrics {
     hits: u64,
     misses: u64,
 }
 
+#[cfg(test)]
 impl CacheMetrics {
     pub fn new() -> Self {
         Self::default()

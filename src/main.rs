@@ -3,126 +3,27 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use axum::{
-    Json, Router,
-    body::Body,
-    extract::FromRef,
-    extract::State,
-    middleware,
-    routing::{get, post},
-};
-use std::{
-    net::SocketAddr,
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use vecboost::{
-    AppConfig,
+    AppConfig, AppState,
+    audit::{AuditConfig, AuditLogger},
     auth::{
-        JwtManager, UserStore, auth_middleware, create_default_admin_user, login_handler,
-        logout_handler,
+        CsrfConfig, CsrfTokenStore, JwtManager, UserStore, create_default_admin_user,
+        validate_password_complexity,
     },
     config::model::{EngineType, ModelConfig},
-    domain::{
-        BatchEmbedRequest, EmbedRequest, FileEmbedRequest, ModelInfo, ModelListResponse,
-        ModelMetadata, ModelSwitchRequest, SimilarityRequest,
-    },
     engine::AnyEngine,
     grpc::server::GrpcServer,
+    pipeline::{PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel},
+    rate_limit::{MemoryRateLimitStore, RateLimitConfig, RateLimiter},
     security::{KeyStore, KeyType, SecretKey, SecurityConfig, StorageType, create_key_store},
     service::embedding::EmbeddingService,
-    utils::AggregationMode,
 };
 
-const RATE_LIMIT_REQUESTS: u64 = 100;
-const RATE_LIMIT_WINDOW_SECS: u64 = 60;
-
-#[derive(Clone)]
-struct RateLimitState {
-    requests: Arc<AtomicU64>,
-    window_start: Arc<AtomicU64>,
-}
-
-#[derive(Clone)]
-struct AppState {
-    service: Arc<RwLock<EmbeddingService>>,
-    rate_limit: RateLimitState,
-    jwt_manager: Option<Arc<JwtManager>>,
-    user_store: Option<Arc<UserStore>>,
-    auth_enabled: bool,
-}
-
-impl FromRef<AppState> for Arc<RwLock<EmbeddingService>> {
-    fn from_ref(state: &AppState) -> Self {
-        state.service.clone()
-    }
-}
-
-impl FromRef<AppState> for RateLimitState {
-    fn from_ref(state: &AppState) -> Self {
-        state.rate_limit.clone()
-    }
-}
-
-impl FromRef<AppState> for Arc<JwtManager> {
-    fn from_ref(state: &AppState) -> Self {
-        state
-            .jwt_manager
-            .clone()
-            .expect("JWT manager not available")
-    }
-}
-
-impl FromRef<AppState> for Arc<UserStore> {
-    fn from_ref(state: &AppState) -> Self {
-        state.user_store.clone().expect("User store not available")
-    }
-}
-
-impl RateLimitState {
-    fn new() -> Self {
-        Self {
-            requests: Arc::new(AtomicU64::new(0)),
-            window_start: Arc::new(AtomicU64::new(0)),
-        }
-    }
-
-    async fn check_rate_limit(&self) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let window_start = self.window_start.load(Ordering::Relaxed);
-        if now - window_start > RATE_LIMIT_WINDOW_SECS {
-            self.window_start.store(now, Ordering::Relaxed);
-            self.requests.store(0, Ordering::Relaxed);
-        }
-
-        let requests = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
-        requests <= RATE_LIMIT_REQUESTS
-    }
-}
-
-#[allow(dead_code)]
-async fn rate_limit_middleware(
-    State(state): State<RateLimitState>,
-    request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> Result<axum::response::Response, std::convert::Infallible> {
-    if !state.check_rate_limit().await {
-        return Ok(axum::response::Response::builder()
-            .status(429)
-            .body(Body::from("Too Many Requests"))
-            .unwrap());
-    }
-    Ok(next.run(request).await)
-}
+// 使用 vecboost crate 中的路由模块
+use vecboost::routes;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -169,120 +70,192 @@ async fn main() -> anyhow::Result<()> {
     };
     let service = Arc::new(RwLock::new(service));
 
-    let rate_limit_state = RateLimitState::new();
+    // 创建限流器
+    let rate_limiter = Arc::new(RateLimiter::new(Arc::new(MemoryRateLimitStore::new())));
 
-    let (jwt_manager, user_store): (Option<Arc<JwtManager>>, Option<Arc<UserStore>>) =
-        if config.auth.enabled {
-            let security_config = SecurityConfig {
-                storage_type: match config.auth.security.storage_type.as_str() {
-                    "encrypted_file" => StorageType::EncryptedFile,
-                    _ => StorageType::Environment,
-                },
-                encryption_key: config.auth.security.encryption_key.clone(),
-                key_file_path: config.auth.security.key_file_path.clone(),
-            };
+    let (jwt_manager, user_store): (Option<Arc<JwtManager>>, Option<Arc<UserStore>>) = if config
+        .auth
+        .enabled
+    {
+        let security_config = SecurityConfig {
+            storage_type: match config.auth.security.storage_type.as_str() {
+                "encrypted_file" => StorageType::EncryptedFile,
+                _ => StorageType::Environment,
+            },
+            encryption_key: config.auth.security.encryption_key.clone(),
+            key_file_path: config.auth.security.key_file_path.clone(),
+        };
 
-            let key_store: Arc<dyn KeyStore> = {
-                let boxed = create_key_store(&security_config)?;
-                Arc::from(boxed)
-            };
+        let key_store: Arc<dyn KeyStore> = {
+            let boxed = create_key_store(&security_config)?;
+            Arc::from(boxed)
+        };
 
-            let jwt_secret_name = "jwt_secret";
-            let _jwt_secret = if let Some(secret) = config.auth.jwt_secret {
-                let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, secret);
-                key_store.set(&key).await?;
-                key.value
-            } else {
-                tracing::warn!(
-                    "No JWT secret provided, using default (not recommended for production)"
-                );
-                let default_secret = "default_jwt_secret_change_me_in_production".to_string();
-                let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, default_secret);
-                key_store.set(&key).await?;
-                key.value
-            };
-
-            let jwt_manager = Arc::new(
-                JwtManager::new_with_key_store(Arc::clone(&key_store), Some(jwt_secret_name))
-                    .await?
-                    .with_expiration(config.auth.token_expiration_hours.unwrap_or(24)),
-            );
-
-            let user_store = Arc::new(UserStore::new());
-
-            let admin_username = config
-                .auth
-                .default_admin_username
-                .unwrap_or_else(|| "admin".to_string());
-            let admin_password = config
-                .auth
-                .default_admin_password
-                .unwrap_or_else(|| "admin123".to_string());
-
-            let admin_user = create_default_admin_user(&admin_username, &admin_password)
-                .expect("Failed to create default admin user");
-            user_store
-                .add_user(admin_user)
-                .expect("Failed to add default admin user");
-
-            tracing::info!(
-                "JWT authentication enabled with {} storage",
-                config.auth.security.storage_type
-            );
-            tracing::info!("Default admin user created: {}", admin_username);
-            tracing::warn!("Please change the default admin password in production!");
-
-            (Some(jwt_manager), Some(user_store))
+        let jwt_secret_name = "jwt_secret";
+        let _jwt_secret = if let Some(secret) = config.auth.jwt_secret {
+            // 验证 JWT 密钥强度（至少 32 字节）
+            if secret.len() < 32 {
+                return Err(anyhow::anyhow!(
+                    "JWT secret must be at least 32 characters long for security. Current length: {}",
+                    secret.len()
+                ));
+            }
+            let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, secret);
+            key_store.set(&key).await?;
+            key.value
         } else {
-            tracing::info!("JWT authentication disabled");
+            return Err(anyhow::anyhow!(
+                "JWT secret is required when authentication is enabled. \
+                     Please provide a strong JWT secret (at least 32 characters) in the configuration."
+            ));
+        };
+
+        let jwt_manager = Arc::new(
+            JwtManager::new_with_key_store(Arc::clone(&key_store), Some(jwt_secret_name))
+                .await?
+                .with_expiration(config.auth.token_expiration_hours.unwrap_or(24)),
+        );
+
+        let user_store = Arc::new(UserStore::new());
+
+        // 强制用户提供管理员凭证，不再使用默认值
+        let admin_username = config.auth.default_admin_username.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Administrator username is required when authentication is enabled. \
+                     Please set 'default_admin_username' in the configuration."
+            )
+        })?;
+
+        let admin_password = config.auth.default_admin_password.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Administrator password is required when authentication is enabled. \
+                     Please set 'default_admin_password' in the configuration."
+            )
+        })?;
+
+        // 验证密码复杂度
+        validate_password_complexity(&admin_password)
+            .map_err(|e| anyhow::anyhow!("Administrator password validation failed: {}", e))?;
+
+        let admin_user = create_default_admin_user(&admin_username, &admin_password)
+            .expect("Failed to create default admin user");
+        user_store
+            .add_user(admin_user)
+            .expect("Failed to add default admin user");
+
+        tracing::info!(
+            "JWT authentication enabled with {} storage",
+            config.auth.security.storage_type
+        );
+        tracing::info!("Default admin user created: {}", admin_username);
+
+        (Some(jwt_manager), Some(user_store))
+    } else {
+        tracing::info!("JWT authentication disabled");
+        (None, None)
+    };
+
+    // Initialize CSRF protection
+    let (csrf_config, csrf_token_store): (Option<Arc<CsrfConfig>>, Option<Arc<CsrfTokenStore>>) =
+        if config.auth.csrf.enabled {
+            tracing::info!("CSRF protection enabled");
+
+            let csrf_config =
+                CsrfConfig::new(config.auth.csrf.allowed_origins.clone().unwrap_or_default())
+                    .with_token_validation(config.auth.csrf.token_validation_enabled)
+                    .with_token_expiration(config.auth.csrf.token_expiration_secs.unwrap_or(3600))
+                    .with_allow_same_origin(config.auth.csrf.allow_same_origin);
+
+            let csrf_token_store = if config.auth.csrf.token_validation_enabled {
+                tracing::info!("CSRF token validation enabled");
+                Some(Arc::new(CsrfTokenStore::new()))
+            } else {
+                tracing::info!("CSRF token validation disabled (using Origin validation only)");
+                None
+            };
+
+            (Some(Arc::new(csrf_config)), csrf_token_store)
+        } else {
+            tracing::info!("CSRF protection disabled");
             (None, None)
+        };
+
+    // Initialize audit logging
+    let audit_logger = if config.audit.enabled {
+        tracing::info!("Audit logging enabled");
+        let audit_config = AuditConfig {
+            enabled: true,
+            log_file_path: std::path::PathBuf::from(&config.audit.log_file_path),
+            log_level: config.audit.log_level.clone(),
+            max_file_size_mb: config.audit.max_file_size_mb,
+            max_files: config.audit.max_files,
+            async_write: true,
+        };
+        Some(Arc::new(AuditLogger::new(audit_config)))
+    } else {
+        tracing::warn!("Audit logging is DISABLED - security events will not be logged!");
+        None
+    };
+
+    // Initialize pipeline if enabled
+    let (pipeline_enabled, pipeline_queue, response_channel, priority_calculator) =
+        if config.pipeline.enabled {
+            tracing::info!(
+                "Request pipeline enabled with queue_size={}",
+                config.pipeline.queue.max_queue_size
+            );
+
+            let pipeline_queue = Arc::new(PriorityRequestQueue::new(
+                config.pipeline.queue.max_queue_size,
+            ));
+            let response_channel = Arc::new(ResponseChannel::new());
+            let priority_config = PriorityConfig {
+                base_priority: config.pipeline.priority.base_priority,
+                timeout_boost_factor: config.pipeline.priority.timeout_boost_factor,
+                user_tier_weights: config.pipeline.priority.user_tier_weights,
+                source_weights: config.pipeline.priority.source_weights,
+            };
+            let priority_calculator = Arc::new(PriorityCalculator::new(priority_config));
+
+            tracing::info!("Pipeline components initialized successfully");
+
+            (true, pipeline_queue, response_channel, priority_calculator)
+        } else {
+            tracing::info!("Request pipeline disabled");
+            (
+                false,
+                Arc::new(PriorityRequestQueue::new(0)),
+                Arc::new(ResponseChannel::new()),
+                Arc::new(PriorityCalculator::new(PriorityConfig::default())),
+            )
         };
 
     let app_state = AppState {
         service,
-        rate_limit: rate_limit_state.clone(),
         jwt_manager: jwt_manager.clone(),
         user_store: user_store.clone(),
         auth_enabled: config.auth.enabled,
+        csrf_config,
+        csrf_token_store,
+        metrics_collector: Some(Arc::new(vecboost::metrics::InferenceCollector::new())),
+        prometheus_collector: Some(Arc::new(
+            vecboost::metrics::PrometheusCollector::new()
+                .map_err(|e| anyhow::anyhow!("Failed to create PrometheusCollector: {}", e))?,
+        )),
+        rate_limiter,
+        ip_whitelist: config.rate_limit.ip_whitelist,
+        rate_limit_enabled: config.rate_limit.enabled,
+        audit_logger,
+        pipeline_enabled,
+        pipeline_queue,
+        response_channel,
+        priority_calculator,
     };
 
     let grpc_service = app_state.service.clone();
 
-    let mut app = Router::new().route("/health", get(health_check));
-
-    if app_state.auth_enabled {
-        let auth_routes = Router::new()
-            .route("/api/v1/auth/login", post(login_handler))
-            .route("/api/v1/auth/logout", post(logout_handler))
-            .with_state(app_state.clone());
-
-        let protected_routes = Router::new()
-            .route("/api/v1/embed", post(embed_handler))
-            .route("/api/v1/embed/batch", post(batch_embed_handler))
-            .route("/api/v1/similarity", post(similarity_handler))
-            .route("/api/v1/embed/file", post(file_embed_handler))
-            .route("/api/v1/model/switch", post(model_switch_handler))
-            .route("/api/v1/model/current", get(current_model_handler))
-            .route("/api/v1/model/info", get(model_info_handler))
-            .route("/api/v1/model/list", get(model_list_handler))
-            .route_layer(middleware::from_fn_with_state(
-                app_state.clone(),
-                auth_middleware,
-            ))
-            .with_state(app_state.clone());
-
-        app = app.merge(auth_routes).merge(protected_routes);
-    } else {
-        app = app
-            .route("/api/v1/embed", post(embed_handler))
-            .route("/api/v1/embed/batch", post(batch_embed_handler))
-            .route("/api/v1/similarity", post(similarity_handler))
-            .route("/api/v1/embed/file", post(file_embed_handler))
-            .route("/api/v1/model/switch", post(model_switch_handler))
-            .route("/api/v1/model/current", get(current_model_handler))
-            .route("/api/v1/model/info", get(model_info_handler))
-            .route("/api/v1/model/list", get(model_list_handler));
-    }
+    // Using the new routing module to create the router
+    let app = routes::create_router(app_state);
 
     let app = app
         .layer(TraceLayer::new_for_http())
@@ -301,8 +274,10 @@ async fn main() -> anyhow::Result<()> {
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::STRICT_TRANSPORT_SECURITY,
             axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
-        ))
-        .with_state(app_state);
+        ));
+
+    // ConnectInfo is automatically available when using axum::serve with a TcpListener
+    // No additional layer needed
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -332,125 +307,4 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
-}
-
-async fn health_check() -> &'static str {
-    "OK"
-}
-
-async fn embed_handler(
-    State(state): State<AppState>,
-    Json(req): Json<EmbedRequest>,
-) -> Result<Json<vecboost::domain::EmbedResponse>, vecboost::error::AppError> {
-    if !state.rate_limit.check_rate_limit().await {
-        return Err(vecboost::error::AppError::InvalidInput(
-            "Rate limit exceeded".to_string(),
-        ));
-    }
-    let service_guard = state.service.read().await;
-    let res = service_guard.process_text(req).await?;
-    Ok(Json(res))
-}
-
-async fn batch_embed_handler(
-    State(state): State<AppState>,
-    Json(req): Json<BatchEmbedRequest>,
-) -> Result<Json<vecboost::domain::BatchEmbedResponse>, vecboost::error::AppError> {
-    if !state.rate_limit.check_rate_limit().await {
-        return Err(vecboost::error::AppError::InvalidInput(
-            "Rate limit exceeded".to_string(),
-        ));
-    }
-    let service_guard = state.service.read().await;
-    let res = service_guard.process_batch(req).await?;
-    Ok(Json(res))
-}
-
-async fn similarity_handler(
-    State(state): State<AppState>,
-    Json(req): Json<SimilarityRequest>,
-) -> Result<Json<vecboost::domain::SimilarityResponse>, vecboost::error::AppError> {
-    if !state.rate_limit.check_rate_limit().await {
-        return Err(vecboost::error::AppError::InvalidInput(
-            "Rate limit exceeded".to_string(),
-        ));
-    }
-    let service_guard = state.service.read().await;
-    let res = service_guard.process_similarity(req).await?;
-    Ok(Json(res))
-}
-
-async fn file_embed_handler(
-    State(state): State<AppState>,
-    Json(req): Json<FileEmbedRequest>,
-) -> Result<Json<vecboost::domain::FileEmbedResponse>, vecboost::error::AppError> {
-    if !state.rate_limit.check_rate_limit().await {
-        return Err(vecboost::error::AppError::InvalidInput(
-            "Rate limit exceeded".to_string(),
-        ));
-    }
-    let mode = req.mode.unwrap_or(AggregationMode::Document);
-    let path = PathBuf::from(&req.path);
-
-    let service_guard = state.service.read().await;
-    let stats = service_guard.get_processing_stats(&path)?;
-    let output = service_guard.embed_file(&path, mode).await?;
-
-    drop(service_guard);
-
-    match output {
-        vecboost::domain::EmbeddingOutput::Single(response) => {
-            Ok(Json(vecboost::domain::FileEmbedResponse {
-                mode,
-                stats,
-                embedding: Some(response.embedding),
-                paragraphs: None,
-            }))
-        }
-        vecboost::domain::EmbeddingOutput::Paragraphs(paragraphs) => {
-            Ok(Json(vecboost::domain::FileEmbedResponse {
-                mode,
-                stats,
-                embedding: None,
-                paragraphs: Some(paragraphs),
-            }))
-        }
-    }
-}
-
-async fn model_switch_handler(
-    State(state): State<AppState>,
-    Json(req): Json<ModelSwitchRequest>,
-) -> Result<Json<vecboost::domain::ModelSwitchResponse>, vecboost::error::AppError> {
-    let mut service_guard = state.service.write().await;
-    let result = service_guard.switch_model(req).await?;
-    Ok(Json(result))
-}
-
-async fn current_model_handler(
-    State(state): State<AppState>,
-) -> Result<Json<ModelInfo>, vecboost::error::AppError> {
-    let service_guard = state.service.read().await;
-    let info = service_guard
-        .get_model_info()
-        .ok_or_else(|| vecboost::error::AppError::NotFound("No model loaded".to_string()))?;
-    Ok(Json(info))
-}
-
-async fn model_info_handler(
-    State(state): State<AppState>,
-) -> Result<Json<ModelMetadata>, vecboost::error::AppError> {
-    let service_guard = state.service.read().await;
-    let metadata = service_guard
-        .get_model_metadata()
-        .ok_or_else(|| vecboost::error::AppError::NotFound("No model loaded".to_string()))?;
-    Ok(Json(metadata))
-}
-
-async fn model_list_handler(
-    State(state): State<AppState>,
-) -> Result<Json<ModelListResponse>, vecboost::error::AppError> {
-    let service_guard = state.service.read().await;
-    let result = service_guard.list_available_models();
-    Ok(Json(result))
 }

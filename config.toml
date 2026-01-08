@@ -9,7 +9,7 @@
 host = "0.0.0.0"
 
 # 服务端口号
-port = 9000
+port = 9002
 
 # 请求超时时间 (秒)
 timeout = 30
@@ -86,17 +86,19 @@ log_level = "info"
 # 是否启用认证
 enabled = true
 
-# JWT 密钥 (生产环境请使用复杂密钥)
-jwt_secret = "your-super-secret-jwt-key-change-in-production"
+# JWT 密钥 (生产环境请使用复杂密钥，至少 32 字符)
+# 注意：首次启动时必须设置此值，否则服务将拒绝启动
+jwt_secret = "this-is-a-very-strong-random-jwt-secret-key-at-least-32-chars-long"
 
 # Token 过期时间 (小时)
-token_expiration_hours = 24
+# 访问 token 有效期: 1 小时
+token_expiration_hours = 1
 
-# 默认管理员用户名
+# 默认管理员用户名 (首次启动时必须设置)
 default_admin_username = "admin"
 
-# 默认管理员密码 (生产环境请修改)
-default_admin_password = "admin123"
+# 默认管理员密码 (首次启动时必须设置，至少 12 字符)
+default_admin_password = "Secure@Passw0rd!2026"
 
 # ============ 密钥存储配置 ============
 [auth.security]
@@ -105,6 +107,48 @@ storage_type = "environment"
 
 # 加密密钥 (用于 encrypted_file 存储类型)
 encryption_key = ""
+
+# ============ 审计日志配置 ============
+[audit]
+# 是否启用审计日志
+enabled = true
+
+# 审计日志文件路径
+log_file_path = "logs/audit.log"
+
+# 日志级别
+# 可选值: trace, debug, info, warn, error
+log_level = "info"
+
+# 单个日志文件最大大小 (MB)
+max_file_size_mb = 100
+
+# 保留的日志文件数量
+max_files = 10
+
+# ============ 限流配置 ============
+[rate_limit]
+# 是否启用限流
+enabled = true
+
+# 全局请求限制 (每分钟)
+global_requests_per_minute = 1000
+
+# IP 请求限制 (每分钟)
+ip_requests_per_minute = 100
+
+# 用户请求限制 (每分钟)
+user_requests_per_minute = 200
+
+# API Key 请求限制 (每分钟)
+api_key_requests_per_minute = 500
+
+# 时间窗口大小 (秒)
+window_secs = 60
+
+# IP 白名单 (这些 IP 不受限流限制)
+# 支持单个 IP 和 CIDR 表示法，例如: "127.0.0.1", "192.168.1.0/24"
+ip_whitelist = ["127.0.0.1", "::1"]
 
 # ============ 设备配置 ============
 [device]

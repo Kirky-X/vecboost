@@ -1,0 +1,45 @@
+# Prometheus 配置文件
+# 用于监控 VecBoost 服务
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'vecboost-test'
+    environment: 'development'
+
+# 告警管理器配置
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# 告警规则
+rule_files:
+  - 'alerts.yml'
+
+# 抓取配置
+scrape_configs:
+  # VecBoost 主服务监控
+  - job_name: 'vecboost'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'vecboost'
+          component: 'inference'
+
+  # Docker 容器监控（需要 cAdvisor）
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['localhost:8080']
+        labels:
+          service: 'docker'
+          component: 'containers'
+
+  # Node Exporter（可选，用于监控主机资源）
+  - job_name: 'node'
+    static_configs:
+      - targets: ['localhost:9100']
+        labels:
+          service: 'node'
+          component: 'host'

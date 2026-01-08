@@ -150,7 +150,7 @@ impl fmt::Display for EngineType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DeviceType {
     Cpu,
@@ -162,9 +162,9 @@ pub enum DeviceType {
     OpenCL,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum PoolingMode {
+    #[default]
     Mean,
     Max,
     Cls,

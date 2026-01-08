@@ -26,7 +26,6 @@ Cargo.lock
 __pycache__/
 *.py[cod]
 *$py.class
-.pytest_cache/
 *.egg-info/
 .eggs/
 dist/
@@ -54,7 +53,6 @@ docs/prd.md
 docs/tdd.md
 docs/test.md
 docs/uat.md
-temp/
 docs/_build/
 docs/.doctrees/
 
@@ -84,3 +82,14 @@ Thumbs.db
 .Spotlight-V100
 .Trashes
 ehthumbs.db
+
+# Project Documentation
+AGENTS.md
+README.md
+USER_GUIDE.md
+
+# Claude Code
+.claude/
+
+# OpenCode
+.opencode/

@@ -7,7 +7,7 @@
 
 use crate::engine::InferenceEngine;
 use crate::error::AppError;
-use crate::metrics::collector::MetricsCollector;
+use crate::metrics::inference::InferenceCollector;
 use crate::utils::normalize_l2;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -20,11 +20,11 @@ use crate::metrics::domain::{LatencyBenchmarkResult, PerformanceTestConfig, Thro
 
 pub struct PerformanceTester<E: InferenceEngine + Send + Sync> {
     engine: Arc<tokio::sync::RwLock<E>>,
-    metrics: Arc<MetricsCollector>,
+    metrics: Arc<InferenceCollector>,
 }
 
 impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
-    pub fn new(engine: Arc<tokio::sync::RwLock<E>>, metrics: Arc<MetricsCollector>) -> Self {
+    pub fn new(engine: Arc<tokio::sync::RwLock<E>>, metrics: Arc<InferenceCollector>) -> Self {
         Self { engine, metrics }
     }
 

@@ -3,9 +3,12 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#[cfg(test)]
 use crate::utils::AggregationMode;
+#[cfg(test)]
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 pub struct ChunkRequest {
     pub text: String,
@@ -14,12 +17,14 @@ pub struct ChunkRequest {
     pub mode: Option<AggregationMode>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct ChunkResponse {
     pub chunks: Vec<String>,
     pub chunk_count: usize,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct ChunkResult {
     pub chunks: Vec<String>,

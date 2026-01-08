@@ -5,6 +5,9 @@
 
 use crate::cache::KvCache;
 use crate::config::model::ModelConfig;
+use crate::device::DynamicBatchScheduler;
+use crate::device::memory_optimizer::SharedGpuMemoryManager;
+use crate::device::memory_pool::BufferPool;
 use crate::domain::{
     BatchEmbedRequest, BatchEmbedResponse, BatchEmbeddingResult, EmbedRequest, EmbedResponse,
     EmbeddingOutput, FileProcessingStats, ModelInfo, ModelListResponse, ModelMetadata,
@@ -22,8 +25,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::warn;
+use tracing::{debug, warn};
 
 const MAX_FALLBACK_ATTEMPTS: usize = 1;
 
@@ -33,6 +37,9 @@ pub struct EmbeddingService {
     model_config: Option<ModelConfig>,
     model_manager: Option<Arc<ModelManager>>,
     cache: Arc<KvCache>,
+    memory_manager: Option<SharedGpuMemoryManager>,
+    batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
+    buffer_pool: Option<Arc<tokio::sync::RwLock<BufferPool>>>,
 }
 
 impl EmbeddingService {
@@ -46,6 +53,9 @@ impl EmbeddingService {
             model_config,
             model_manager: None,
             cache: Arc::new(KvCache::disabled()),
+            memory_manager: None,
+            batch_scheduler: None,
+            buffer_pool: None,
         }
     }
 
@@ -60,6 +70,9 @@ impl EmbeddingService {
             model_config,
             model_manager: Some(model_manager),
             cache: Arc::new(KvCache::disabled()),
+            memory_manager: None,
+            batch_scheduler: None,
+            buffer_pool: None,
         }
     }
 
@@ -75,6 +88,9 @@ impl EmbeddingService {
             model_config,
             model_manager,
             cache: Arc::new(KvCache::disabled()),
+            memory_manager: None,
+            batch_scheduler: None,
+            buffer_pool: None,
         }
     }
 
@@ -89,6 +105,9 @@ impl EmbeddingService {
             model_config,
             model_manager: None,
             cache: Arc::new(KvCache::new(cache_size)),
+            memory_manager: None,
+            batch_scheduler: None,
+            buffer_pool: None,
         }
     }
 
@@ -98,6 +117,8 @@ impl EmbeddingService {
         model_config: Option<ModelConfig>,
         model_manager: Option<Arc<ModelManager>>,
         cache_size: usize,
+        memory_manager: Option<SharedGpuMemoryManager>,
+        batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     ) -> Self {
         Self {
             engine,
@@ -105,7 +126,16 @@ impl EmbeddingService {
             model_config,
             model_manager,
             cache: Arc::new(KvCache::new(cache_size)),
+            memory_manager,
+            batch_scheduler,
+            buffer_pool: None,
         }
+    }
+
+    /// 设置 BufferPool
+    pub fn with_buffer_pool(mut self, buffer_pool: Arc<tokio::sync::RwLock<BufferPool>>) -> Self {
+        self.buffer_pool = Some(buffer_pool);
+        self
     }
 
     fn validate_dimension(&self, actual_dimension: usize) {
@@ -118,6 +148,82 @@ impl EmbeddingService {
                 expected, actual_dimension, config.name
             );
         }
+    }
+
+    /// 获取当前最优的批量大小
+    /// 优先使用 memory_manager 计算，其次使用 batch_scheduler，最后回退到 MAX_BATCH_SIZE
+    async fn get_optimal_batch_size(
+        &self,
+        sequence_length: usize,
+        output_dimension: usize,
+    ) -> usize {
+        // 尝试使用 memory_manager 计算最优批量大小
+        if let Some(ref mm) = self.memory_manager {
+            if let Some(ref config) = self.model_config {
+                match mm
+                    .calculate_optimal_batch_size(&config.name, sequence_length, output_dimension)
+                    .await
+                {
+                    Ok(size) if size > 0 => {
+                        debug!("Using memory manager calculated batch size: {}", size);
+                        return size;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // 尝试使用 batch_scheduler 的当前批量大小
+        if let Some(ref scheduler) = self.batch_scheduler {
+            let size = scheduler.current_batch_size().await;
+            if size > 0 {
+                debug!("Using batch scheduler size: {}", size);
+                return size;
+            }
+        }
+
+        // 回退到默认值
+        debug!("Using default MAX_BATCH_SIZE: {}", MAX_BATCH_SIZE);
+        MAX_BATCH_SIZE
+    }
+
+    /// 缓存预热：批量预加载常用文本的向量
+    /// 用于在服务启动时预加载热点数据，提高首次请求的响应速度
+    pub async fn warm_up_cache(&self, texts: Vec<String>) -> Result<(), AppError> {
+        if !self.cache.is_enabled() {
+            debug!("Cache is disabled, skipping warm-up");
+            return Ok(());
+        }
+
+        let total_texts = texts.len();
+        let mut embeddings = std::collections::HashMap::with_capacity(total_texts);
+        let mut processed = 0;
+
+        for text in texts {
+            if let Ok(embedding) = self.engine.read().await.embed(&text) {
+                embeddings.insert(text, embedding);
+                processed += 1;
+
+                if processed % 100 == 0 {
+                    debug!("Warm-up progress: {}/{}", processed, total_texts);
+                }
+            }
+        }
+
+        // 在移动 embeddings 之前记录处理数量
+        let processed_count = processed;
+
+        // 使用 HashMap 将预热数据转换为缓存预期的格式
+        let cache_entries: std::collections::HashMap<String, Vec<f32>> =
+            embeddings.into_iter().collect();
+
+        self.cache.warm_up(cache_entries).await;
+
+        tracing::info!(
+            "Cache warm-up completed: {} entries preloaded",
+            processed_count
+        );
+        Ok(())
     }
 
     fn is_oom_error(error: &AppError) -> bool {
@@ -179,6 +285,13 @@ impl EmbeddingService {
                             match fallback_result {
                                 Ok(()) => {
                                     warn!("Successfully fell back to CPU, retrying operation");
+                                    // 检查是否还有重试次数
+                                    if attempts >= MAX_FALLBACK_ATTEMPTS {
+                                        warn!("Max fallback attempts reached, aborting");
+                                        return Err(AppError::OutOfMemory(
+                                            "Max fallback attempts exceeded".to_string(),
+                                        ));
+                                    }
                                     continue;
                                 }
                                 Err(e) => {
@@ -527,7 +640,7 @@ impl EmbeddingService {
         })
     }
 
-    /// 批量处理 1对N 检索（更高效的版本，使用批量推理）
+    /// 批量处理 1对N 检索（更高效的版本，使用批量推理和动态批量大小）
     pub async fn process_search_batch(
         &self,
         query: &str,
@@ -544,9 +657,26 @@ impl EmbeddingService {
             embedding
         };
 
+        // 计算最优批量大小
+        let sequence_length = texts.first().map_or(0, |t| t.len());
+        let output_dimension = self
+            .model_config
+            .as_ref()
+            .and_then(|c| c.expected_dimension)
+            .unwrap_or(768);
+        let optimal_batch_size = self
+            .get_optimal_batch_size(sequence_length, output_dimension)
+            .await;
+
+        debug!(
+            "Processing search batch: {} texts, optimal_batch_size={}",
+            texts.len(),
+            optimal_batch_size
+        );
+
         let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
 
-        for chunk in texts.chunks(MAX_BATCH_SIZE) {
+        for chunk in texts.chunks(optimal_batch_size) {
             let chunk_embeddings = self.engine.read().await.embed_batch(chunk)?;
             for mut emb in chunk_embeddings {
                 normalize_l2(&mut emb);
@@ -578,20 +708,58 @@ impl EmbeddingService {
         })
     }
 
-    /// 处理批量向量化请求（优化版本：使用并行处理）
+    /// 处理批量向量化请求（优化版本：使用并行处理和智能批量大小调整）
     pub async fn process_batch(
         &self,
+
         req: BatchEmbedRequest,
     ) -> Result<BatchEmbedResponse, AppError> {
-        let start_time = std::time::Instant::now();
+        let start_time = Instant::now();
 
         self.validator.validate_batch(&req.texts)?;
 
         let texts = req.texts;
+
         let texts_len = texts.len();
 
-        let chunks: Vec<&[String]> = texts.chunks(MAX_BATCH_SIZE).collect();
+        // 检测一个示例文本的序列长度（用于计算内存需求）
+        let sequence_length = texts.first().map_or(0, |t| t.len());
+
+        // 检测输出维度（如果有模型配置则使用配置值）
+        let output_dimension = self
+            .model_config
+            .as_ref()
+            .and_then(|c| c.expected_dimension)
+            .unwrap_or(768);
+
+        // 获取最优批量大小
+        let optimal_batch_size = self
+            .get_optimal_batch_size(sequence_length, output_dimension)
+            .await;
+
+        // 使用动态批量大小进行分块
+        let chunks: Vec<&[String]> = texts.chunks(optimal_batch_size).collect();
+
         let num_chunks = chunks.len();
+
+        debug!(
+            "Processing batch: {} texts, optimal_batch_size={}, chunks={}",
+            texts_len, optimal_batch_size, num_chunks
+        );
+
+        // 根据实际负载和系统资源动态调整并发数
+        let cpu_count = num_cpus::get();
+        let max_concurrent_chunks = std::cmp::min(
+            cpu_count * 2,                                    // 每个 CPU 核心最多处理 2 个并发任务
+            std::cmp::max(4, texts_len / optimal_batch_size), // 至少 4 个并发
+        );
+
+        debug!(
+            "Processing batch with concurrent chunks: {} (CPU cores: {}, chunks: {})",
+            max_concurrent_chunks, cpu_count, num_chunks
+        );
+
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent_chunks));
 
         let engine = Arc::clone(&self.engine);
 
@@ -599,9 +767,18 @@ impl EmbeddingService {
 
         for (chunk_idx, chunk) in chunks.iter().enumerate() {
             let chunk = chunk.to_vec();
+
             let engine = Arc::clone(&engine);
 
+            let semaphore = Arc::clone(&semaphore);
+
             let task = tokio::spawn(async move {
+                // 获取信号量许可，限制并发数
+
+                let _permit = semaphore.acquire().await.map_err(|e| {
+                    AppError::InferenceError(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
                 let mut attempts = 0;
 
                 loop {
@@ -616,9 +793,11 @@ impl EmbeddingService {
                                 chunk.iter().zip(embeddings.into_iter()).enumerate()
                             {
                                 let mut emb = embedding;
+
                                 normalize_l2(&mut emb);
 
-                                let global_idx = chunk_idx * MAX_BATCH_SIZE + text_idx;
+                                let global_idx = chunk_idx * optimal_batch_size + text_idx;
+
                                 let text_preview =
                                     if text.len() > 100 { &text[..100] } else { text }.to_string();
 
@@ -627,6 +806,7 @@ impl EmbeddingService {
 
                             return Ok(results);
                         }
+
                         Err(error)
                             if Self::is_oom_error(&error) && attempts <= MAX_FALLBACK_ATTEMPTS =>
                         {
@@ -639,6 +819,7 @@ impl EmbeddingService {
 
                             if current_engine.is_fallback_triggered() {
                                 warn!("Fallback already triggered, cannot retry");
+
                                 return Err(AppError::OutOfMemory(
                                     "Out of memory and fallback already attempted".to_string(),
                                 ));
@@ -647,7 +828,9 @@ impl EmbeddingService {
                             drop(current_engine);
 
                             let mut engine_guard = engine.write().await;
+
                             let config_clone = ModelConfig::default();
+
                             let fallback_result =
                                 engine_guard.try_fallback_to_cpu(&config_clone).await;
 
@@ -657,10 +840,13 @@ impl EmbeddingService {
                                         "Successfully fell back to CPU, retrying batch chunk {}",
                                         chunk_idx
                                     );
+
                                     continue;
                                 }
+
                                 Err(e) => {
                                     warn!("Failed to fallback to CPU: {}", e);
+
                                     return Err(AppError::OutOfMemory(format!(
                                         "OOM error and fallback failed: {}",
                                         e
@@ -668,6 +854,7 @@ impl EmbeddingService {
                                 }
                             }
                         }
+
                         Err(error) => return Err(error),
                     }
                 }
@@ -701,6 +888,29 @@ impl EmbeddingService {
             .collect();
 
         let processing_time = start_time.elapsed();
+        let processing_time_ms = processing_time.as_millis() as f64;
+
+        // 记录批量完成性能，用于动态调整
+        if let Some(ref scheduler) = self.batch_scheduler {
+            scheduler
+                .record_batch_completion(texts_len, processing_time_ms)
+                .await;
+            debug!(
+                "Recorded batch completion: size={}, latency={:.2}ms",
+                texts_len, processing_time_ms
+            );
+        }
+
+        // 记录内存使用情况，用于动态调整
+        if let Some(ref mm) = self.memory_manager {
+            let memory_usage = mm.get_memory_usage_percent().await;
+            mm.adjust_batch_size_dynamically(processing_time_ms, memory_usage)
+                .await;
+            debug!(
+                "Adjusted batch size based on: latency={:.2}ms, memory_usage={:.1}%",
+                processing_time_ms, memory_usage
+            );
+        }
 
         Ok(BatchEmbedResponse {
             embeddings: results,
@@ -771,7 +981,7 @@ impl EmbeddingService {
             model_path: req
                 .model_path
                 .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from(&req.model_name)),
+                .unwrap_or_else(|| std::path::PathBuf::from(req.model_name.clone())),
             tokenizer_path: req.tokenizer_path.clone().or_else(|| {
                 self.model_config
                     .as_ref()

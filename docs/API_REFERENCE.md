@@ -1,638 +1,623 @@
 <div align="center">
 
-# 📘 API Reference
+# 📘 VecBoost API 参考文档
 
-### Complete API Documentation
-
-[🏠 Home](../README.md) • [📖 User Guide](USER_GUIDE.md) • [🏗️ Architecture](ARCHITECTURE.md)
-
-______________________________________________________________________
+本文档提供 VecBoost 所有 API 的详细说明，包括 HTTP REST API 和 gRPC API。
 
 </div>
 
-## 📋 Table of Contents
+---
 
-- [Overview](#overview)
-- [Core API](#core-api)
-  - [EmbeddingService (gRPC)](#embeddingservice-grpc)
-  - [InferenceEngine](#inferenceengine)
-  - [Engine Implementations](#engine-implementations)
-    - [CandleEngine](#candleengine)
-    - [OnnxEngine](#onnxengine)
-- [Error Handling](#error-handling)
-- [Type Definitions](#type-definitions)
-- [Examples](#examples)
+## 📋 目录
 
-______________________________________________________________________
+- [🔗 API 概览](#api-概览)
+- [🌐 HTTP REST API](#http-rest-api)
+- [🔧 gRPC API](#grpc-api)
+- [📊 公共数据类型](#公共数据类型)
+- [⚠️ 错误处理](#错误处理)
+- [📝 请求示例](#请求示例)
 
-## Overview
+---
 
-<div align="center">
+## 🔗 API 概览
 
-### 🎯 API Design Principles
+### 服务端点
 
-</div>
+| 协议 | 地址 | 描述 |
+|------|------|------|
+| HTTP REST | `http://localhost:9002` | REST API 服务 |
+| gRPC | `grpc://localhost:50051` | gRPC API 服务 |
+| Prometheus | `http://localhost:9090` | 指标监控端口 |
 
-<table>
-<tr>
-<td width="25%" align="center">
-<img src="https://img.icons8.com/fluency/96/000000/easy.png" width="64"><br>
-<b>Simple</b><br>
-Intuitive and easy to use gRPC API
-</td>
-<td width="25%" align="center">
-<img src="https://img.icons8.com/fluency/96/000000/security-checked.png" width="64"><br>
-<b>High Performance</b><br>
-GPU-accelerated embedding generation
-</td>
-<td width="25%" align="center">
-<img src="https://img.icons8.com/fluency/96/000000/module.png" width="64"><br>
-<b>Flexible</b><br>
-Multi-engine support (Candle/ONNX)
-</td>
-<td width="25%" align="center">
-<img src="https://img.icons8.com/fluency/96/000000/documentation.png" width="64"><br>
-<b>Well-documented</b><br>
-Comprehensive API reference
-</td>
-</tr>
-</table>
+### API 列表
 
-VecBoost provides a high-performance gRPC API for text embedding generation with support for multiple inference engines, GPU acceleration, and batch processing capabilities.
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/embed` | POST | 生成文本嵌入向量 |
+| `/embed/batch` | POST | 批量生成嵌入向量 |
+| `/similarity` | POST | 计算两文本相似度 |
+| `/search` | POST | 语义搜索 |
+| `/health` | GET | 健康检查 |
+| `/metrics` | GET | Prometheus 指标 |
 
-______________________________________________________________________
+---
 
-## Core API
+## 🌐 HTTP REST API
 
-### EmbeddingService (gRPC)
+### 1. 生成文本嵌入
 
-`EmbeddingService` is the main gRPC service for vecboost, providing methods for text embedding, batch processing, similarity computation, and model management.
+生成单个文本的向量嵌入。
 
-#### `Embed(EmbedRequest)`
+**端点**: `POST /embed`
 
-Generate an embedding for a single text string.
+**请求体**:
 
-**Request:**
-
-```rust
-pub struct EmbedRequest {
-  pub text: String,          // Text to embed
-  pub normalize: Option<bool>,  // Whether to normalize the embedding (default: true)
+```json
+{
+  "text": "要向量化的文本内容",
+  "normalize": true
 }
 ```
 
-**Response:**
+| 字段 | 类型 | 必填 | 描述 |
+|------|------|------|------|
+| `text` | string | 是 | 输入文本，最大长度 8192 tokens |
+| `normalize` | boolean | 否 | 是否归一化向量，默认为 true |
 
-```rust
-pub struct EmbedResponse {
-  pub embedding: Vec<f32>,          // The generated embedding vector
-  pub dimension: usize,                   // Dimension of the embedding
-  pub processing_time_ms: u128,         // Processing time in milliseconds
+**响应体**:
+
+```json
+{
+  "embedding": [0.123, 0.456, ...],
+  "dimension": 1024,
+  "processing_time_ms": 15.5
 }
 ```
 
-**Usage:**
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `embedding` | number[] | 生成的向量数组 |
+| `dimension` | integer | 向量维度 |
+| `processing_time_ms` | number | 处理时间（毫秒） |
+
+**示例请求**:
+
+```bash
+curl -X POST http://localhost:9002/embed \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"text": "人工智能是未来的发展方向", "normalize": true}'
+```
+
+### 2. 批量生成嵌入
+
+批量生成多个文本的向量嵌入。
+
+**端点**: `POST /embed/batch`
+
+**请求体**:
+
+```json
+{
+  "texts": ["文本1", "文本2", "文本3"],
+  "normalize": true
+}
+```
+
+| 字段 | 类型 | 必填 | 描述 |
+|------|------|------|------|
+| `texts` | string[] | 是 | 文本数组，最大 64 条 |
+| `normalize` | boolean | 否 | 是否归一化向量 |
+
+**响应体**:
+
+```json
+{
+  "embeddings": [
+    [0.123, 0.456, ...],
+    [0.789, 0.012, ...]
+  ],
+  "total_count": 2,
+  "processing_time_ms": 25.0
+}
+```
+
+**示例请求**:
+
+```bash
+curl -X POST http://localhost:9002/embed/batch \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"texts": ["机器学习", "深度学习", "神经网络"]}'
+```
+
+### 3. 计算相似度
+
+计算两个文本之间的相似度。
+
+**端点**: `POST /similarity`
+
+**请求体**:
+
+```json
+{
+  "source": "文本A",
+  "target": "文本B",
+  "metric": "cosine"
+}
+```
+
+| 字段 | 类型 | 必填 | 描述 |
+|------|------|------|------|
+| `source` | string | 是 | 源文本 |
+| `target` | string | 是 | 目标文本 |
+| `metric` | string | 否 | 相似度算法: `cosine`, `euclidean`, `dot_product`, `manhattan` |
+
+**响应体**:
+
+```json
+{
+  "score": 0.8567,
+  "metric": "cosine"
+}
+```
+
+**示例请求**:
+
+```bash
+curl -X POST http://localhost:9002/similarity \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"source": "人工智能", "target": "机器学习", "metric": "cosine"}'
+```
+
+### 4. 语义搜索
+
+在文本集合中搜索与查询最相似的文本。
+
+**端点**: `POST /search`
+
+**请求体**:
+
+```json
+{
+  "query": "搜索查询文本",
+  "texts": ["文本1", "文本2", "文本3", "文本4"],
+  "top_k": 5,
+  "metric": "cosine"
+}
+```
+
+| 字段 | 类型 | 必填 | 描述 |
+|------|------|------|------|
+| `query` | string | 是 | 查询文本 |
+| `texts` | string[] | 是 | 待搜索的文本列表 |
+| `top_k` | integer | 否 | 返回结果数量，默认为 10 |
+| `metric` | string | 否 | 相似度算法 |
+
+**响应体**:
+
+```json
+{
+  "results": [
+    {
+      "text": "匹配的文本",
+      "score": 0.9231,
+      "index": 1
+    }
+  ],
+  "query_embedding": [0.123, ...]
+}
+```
+
+**示例请求**:
+
+```bash
+curl -X POST http://localhost:9002/search \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{
+    "query": "关于编程语言的选择",
+    "texts": ["Python是一门易学的语言", "Java是企业级首选", "Rust注重安全"],
+    "top_k": 2
+  }'
+```
+
+### 5. 健康检查
+
+检查服务健康状态。
+
+**端点**: `GET /health`
+
+**响应体**:
+
+```json
+{
+  "status": "healthy",
+  "version": "0.1.0",
+  "model": "BAAI/bge-m3",
+  "device": "cpu",
+  "uptime_seconds": 3600
+}
+```
+
+**示例请求**:
+
+```bash
+curl http://localhost:9002/health
+```
+
+### 6. Prometheus 指标
+
+获取 Prometheus 格式的监控指标。
+
+**端点**: `GET /metrics`
+
+**示例请求**:
+
+```bash
+curl http://localhost:9002/metrics
+```
+
+**常用指标**:
+
+```
+# 帮助信息
+vecboost_requests_total{endpoint="embed"} 1234
+vecboost_request_duration_seconds_bucket{endpoint="embed",le="0.005"} 1000
+vecboost_embedding_duration_seconds 0.015
+vecboost_cache_hits_total 567
+vecboost_cache_misses_total 123
+```
+
+---
+
+## 🔧 gRPC API
+
+### 服务定义
+
+```protobuf
+service EmbeddingService {
+  // 单文本嵌入
+  rpc Embed(EmbedRequest) returns (EmbedResponse);
+  
+  // 批量嵌入
+  rpc EmbedBatch(BatchEmbedRequest) returns (BatchEmbedResponse);
+  
+  // 计算相似度
+  rpc ComputeSimilarity(SimilarityRequest) returns (SimilarityResponse);
+  
+  // 语义搜索
+  rpc Search(SearchRequest) returns (SearchResponse);
+  
+  // 健康检查
+  rpc HealthCheck(Empty) returns (HealthResponse);
+}
+```
+
+### 消息类型
+
+#### EmbedRequest
+
+```protobuf
+message EmbedRequest {
+  string text = 1;
+  bool normalize = 2;
+}
+```
+
+#### EmbedResponse
+
+```protobuf
+message EmbedResponse {
+  repeated float embedding = 1;
+  int64 dimension = 2;
+  double processing_time_ms = 3;
+}
+```
+
+#### BatchEmbedRequest
+
+```protobuf
+message BatchEmbedRequest {
+  repeated string texts = 1;
+  bool normalize = 2;
+}
+```
+
+#### BatchEmbedResponse
+
+```protobuf
+message BatchEmbedResponse {
+  repeated EmbedResponse embeddings = 1;
+  int64 total_count = 2;
+  double processing_time_ms = 3;
+}
+```
+
+#### SimilarityRequest
+
+```protobuf
+message SimilarityRequest {
+  string source = 1;
+  string target = 2;
+  string metric = 3;  // cosine, euclidean, dot_product, manhattan
+}
+```
+
+#### SimilarityResponse
+
+```protobuf
+message SimilarityResponse {
+  double score = 1;
+  string metric = 2;
+}
+```
+
+#### SearchRequest
+
+```protobuf
+message SearchRequest {
+  string query = 1;
+  repeated string texts = 2;
+  int32 top_k = 3;
+  string metric = 4;
+}
+```
+
+#### SearchResponse
+
+```protobuf
+message SearchResponse {
+  repeated SearchResult results = 1;
+  int64 query_dimension = 2;
+}
+
+message SearchResult {
+  string text = 1;
+  double score = 2;
+  int32 index = 3;
+}
+```
+
+#### HealthResponse
+
+```protobuf
+message HealthResponse {
+  string status = 1;  // healthy, degraded, unhealthy
+  string version = 2;
+  string model = 3;
+  string device = 4;
+  int64 uptime_seconds = 5;
+}
+```
+
+### gRPC 客户端示例
 
 ```rust
-// Rust client example (using tonic)
-use vecboost::embedding_service_client::EmbeddingServiceClient;
-use vecboost::EmbedRequest;
+use vecboost::grpc::embedding_service_client::EmbeddingServiceClient;
+use vecboost::grpc::{EmbedRequest, BatchEmbedRequest};
 
-async fn embed_text() -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = EmbeddingServiceClient::connect("http://[::1]:50051").await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = EmbeddingServiceClient::connect("http://localhost:50051").await?;
     
+    // 单文本嵌入
     let request = tonic::Request::new(EmbedRequest {
-        text: "Hello, world!".to_string(),
-        normalize: Some(true),
+        text: "人工智能是未来的发展方向".to_string(),
+        normalize: true,
     });
     
     let response = client.embed(request).await?;
     println!("Embedding: {:?}", response.into_inner().embedding);
-    Ok(())
-}
-```
-
-#### `EmbedBatch(BatchEmbedRequest)`
-
-Generate embeddings for multiple text strings in a batch.
-
-**Request:**
-
-```rust
-pub struct BatchEmbedRequest {
-  pub texts: Vec<String>,                // Texts to embed
-  pub mode: Option<AggregationMode>,     // Aggregation mode (for document-level embeddings)
-  pub normalize: Option<bool>,           // Whether to normalize embeddings (default: true)
-}
-```
-
-**Response:**
-
-```rust
-pub struct BatchEmbedResponse {
-  pub embeddings: Vec<BatchEmbeddingResult>,  // Generated embeddings
-  pub dimension: usize,                       // Dimension of each embedding
-  pub processing_time_ms: u128,               // Processing time in milliseconds
-}
-
-pub struct BatchEmbeddingResult {
-  pub text_preview: String,   // Preview of the text (first few characters)
-  pub embedding: Vec<f32>,    // The generated embedding vector
-}
-```
-
-#### `ComputeSimilarity(SimilarityRequest)`
-
-Compute similarity between two texts.
-
-**Request:**
-
-```rust
-pub struct SimilarityRequest {
-  pub source: String,  // Source text
-  pub target: String,  // Target text
-}
-```
-
-**Response:**
-
-```rust
-pub struct SimilarityResponse {
-  pub score: f32,      // Similarity score
-}
-```
-
-#### `EmbedFile(FileEmbedRequest)`
-
-Generate embeddings for a file with support for different aggregation modes.
-
-**Request:**
-
-```rust
-pub struct FileEmbedRequest {
-  pub path: String,              // Path to the file
-  pub mode: Option<AggregationMode>,  // Aggregation mode
-}
-```
-
-**Response:**
-
-```rust
-pub struct FileEmbedResponse {
-  pub mode: AggregationMode,     // Aggregation mode used
-  pub stats: FileProcessingStats, // Processing statistics
-  pub embedding: Option<Vec<f32>>,  // Document-level embedding (if applicable)
-  pub paragraphs: Option<Vec<ParagraphEmbedding>>,  // Paragraph-level embeddings (if applicable)
-}
-
-pub struct FileProcessingStats {
-  pub total_chunks: usize,       // Total chunks processed
-  pub successful_chunks: usize,  // Successfully processed chunks
-  pub failed_chunks: usize,      // Failed chunks
-  pub processing_time_ms: u128,  // Processing time in milliseconds
-}
-
-pub struct ParagraphEmbedding {
-  pub embedding: Vec<f32>,       // Paragraph embedding
-  pub position: usize,           // Position in file
-  pub text_preview: String,      // Preview of the paragraph
-}
-```
-
-#### `ModelSwitch(ModelSwitchRequest)`
-
-Switch to a different embedding model and/or device.
-
-**Request:**
-
-```rust
-pub struct ModelSwitchRequest {
-    pub model_name: String,                // Name of the model to switch to
-    pub model_path: Option<PathBuf>,       // Path to the model files
-    pub tokenizer_path: Option<PathBuf>,   // Path to the tokenizer files
-    pub device: Option<DeviceType>,        // Device type: Cpu, Cuda, Metal, etc.
-    pub max_batch_size: Option<usize>,     // Maximum batch size
-    pub pooling_mode: Option<PoolingMode>, // Pooling mode for embeddings
-    pub expected_dimension: Option<usize>, // Expected embedding dimension
-    pub memory_limit_bytes: Option<u64>,   // Memory limit for the model
-    pub oom_fallback_enabled: Option<bool>,// Enable OOM fallback to CPU
-}
-```
-
-**Response:**
-
-```rust
-pub struct ModelSwitchResponse {
-    pub previous_model: Option<String>,   // Name of the previously used model
-    pub current_model: String,            // Name of the currently active model
-    pub success: bool,                    // Whether the switch was successful
-    pub message: String,                  // Status message
-}
-```
-
-#### `GetCurrentModel(Empty)`
-
-Get information about the currently loaded model.
-
-**Response:**
-
-```rust
-pub struct ModelInfo {
-  pub name: String,              // Model name
-  pub engine_type: String,       // Engine type
-  pub dimension: Option<usize>,  // Embedding dimension
-  pub is_loaded: bool,           // Whether the model is loaded
-}
-```
-
-#### `GetModelInfo(Empty)`
-
-Get detailed metadata about the currently loaded model.
-
-**Response:**
-
-```rust
-pub struct ModelMetadata {
-  pub name: String,                // Model name
-  pub version: String,             // Model version
-  pub engine_type: String,         // Engine type
-  pub dimension: Option<usize>,    // Embedding dimension
-  pub max_input_length: usize,     // Maximum input length
-  pub is_loaded: bool,             // Whether the model is loaded
-  pub loaded_at: Option<String>,   // Timestamp when the model was loaded
-}
-```
-
-#### `ListModels(Empty)`
-
-List all available models.
-
-**Response:**
-
-```rust
-pub struct ModelListResponse {
-  pub models: Vec<ModelInfo>,    // List of available models
-  pub total_count: usize,        // Total number of models
-}
-```
-
-#### `HealthCheck(Empty)`
-
-Check the health status of the service.
-
-**Response:**
-
-```rust
-pub struct HealthResponse {
-  pub status: String,            // Health status ("OK", "ERROR")
-  pub version: String,           // Service version
-  pub uptime: String,            // Service uptime
-  pub model_loaded: Option<String>,  // Name of loaded model (if any)
-}
-```
-
-______________________________________________________________________
-
-### InferenceEngine
-
-`InferenceEngine` is the abstract interface for all embedding engines in vecboost. It provides a unified API for generating embeddings regardless of the underlying implementation.
-
-```rust
-#[async_trait]
-pub trait InferenceEngine: Send + Sync {
-    /// Generate embedding for a single text
-    fn embed(&self, text: &str) -> Result<Vec<f32>, AppError>;
     
-    /// Generate embeddings for multiple texts in a batch
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError>;
+    // 批量嵌入
+    let batch_request = tonic::Request::new(BatchEmbedRequest {
+        texts: vec!["机器学习".to_string(), "深度学习".to_string()],
+        normalize: true,
+    });
     
-    /// Get current precision setting
-    fn precision(&self) -> &Precision;
-    
-    /// Check if mixed precision is supported
-    fn supports_mixed_precision(&self) -> bool;
-    
-    /// Check if fallback to CPU has been triggered
-    fn is_fallback_triggered(&self) -> bool {
-        false
-    }
-    
-    /// Try to fallback to CPU in case of OOM errors
-    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError>;
-}
-```
-
-______________________________________________________________________
-
-### Engine Implementations
-
-#### CandleEngine
-
-CandleEngine is the native Rust implementation using the Candle ML framework, optimized for performance and GPU acceleration.
-
-**Features:**
-
-- Native Rust implementation
-- GPU acceleration (CUDA/Metal)
-- Mixed precision support
-- Automatic CPU fallback on OOM errors
-- Model recovery mechanisms
-
-**Usage:**
-
-```rust
-use vecboost::engine::candle_engine::CandleEngine;
-use vecboost::config::model::{ModelConfig, Precision, EngineType, DeviceType, PathBuf};
-
-fn create_candle_engine() -> Result<CandleEngine, AppError> {
-    let config = ModelConfig {
-        name: "BAAI/bge-small-en-v1.5".to_string(),
-        engine_type: EngineType::Candle,
-        model_path: PathBuf::from("models/bge-small-en-v1.5"),
-        tokenizer_path: None,
-        device: DeviceType::Cuda,
-        max_batch_size: 32,
-        pooling_mode: None,
-        expected_dimension: None,
-        memory_limit_bytes: None,
-        oom_fallback_enabled: true,
-        model_sha256: None,
-    };
-    
-    let engine = CandleEngine::new(&config, Precision::Fp16)?;
-    Ok(engine)
-}
-```
-
-#### OnnxEngine
-
-OnnxEngine provides support for ONNX models, enabling compatibility with models from various frameworks.
-
-**Features:**
-
-- ONNX model support
-- Cross-framework compatibility
-- CPU and GPU support
-- Batch processing optimization
-
-**Usage:**
-
-```rust
-use vecboost::engine::onnx_engine::OnnxEngine;
-use vecboost::config::model::{ModelConfig, Precision, EngineType, DeviceType, PathBuf};
-
-#[cfg(feature = "onnx")]
-fn create_onnx_engine() -> Result<OnnxEngine, AppError> {
-    let config = ModelConfig {
-        name: "BAAI/bge-small-en-v1.5".to_string(),
-        engine_type: EngineType::Onnx,
-        model_path: PathBuf::from("/path/to/model.onnx"),
-        tokenizer_path: None,
-        device: DeviceType::Cpu,
-        max_batch_size: 32,
-        pooling_mode: None,
-        expected_dimension: None,
-        memory_limit_bytes: None,
-        oom_fallback_enabled: true,
-        model_sha256: None,
-    };
-    
-    let engine = OnnxEngine::new(&config, Precision::Fp32)?;
-    Ok(engine)
-}
-```
-
-______________________________________________________________________
-
-## Error Handling
-
-### `AppError`
-
-Common error variants encountered during embedding operations.
-
-| Variant | Description |
-|---------|-------------|
-| `ConfigError` | Error related to configuration |
-| `ModelLoadError` | Error loading the model |
-| `ModelFileCorrupted` | Corrupted model file |
-| `ModelIntegrityError` | Model integrity check failed |
-| `TokenizationError` | Error during text tokenization |
-| `InferenceError` | Error during embedding generation |
-| `OutOfMemory` | Out-of-memory error |
-| `InvalidInput` | Invalid input validation |
-| `NotFound` | Resource not found |
-| `ModelNotLoaded` | Model not loaded |
-| `AuthenticationError` | Authentication error |
-| `SecurityError` | Security-related error |
-| `IoError` | Input/output error |
-
-______________________________________________________________________
-
-## Type Definitions
-
-### `Precision`
-
-```rust
-pub enum Precision {
-    Fp32,  // Single precision float
-    Fp16,  // Half precision float
-    Int8,  // 8-bit integer quantization
-}
-```
-
-### `EngineType`
-
-```rust
-pub enum EngineType {
-    Candle, // Native Rust Candle engine
-    #[cfg(feature = "onnx")]
-    Onnx,   // ONNX engine (requires "onnx" feature)
-}
-```
-
-### `DeviceType`
-
-```rust
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DeviceType {
-    Cpu,     // CPU
-    Cuda,    // NVIDIA GPU
-    Metal,   // Apple Silicon GPU
-    #[serde(rename = "amd")]
-    Amd,     // AMD GPU (ROCm)
-    #[serde(rename = "opencl")]
-    OpenCL,  // OpenCL devices
-}
-```
-
-### `AggregationMode`
-
-```rust
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum AggregationMode {
-    Document,     // Aggregate to a single document embedding
-    Paragraph,    // Generate embeddings for each paragraph
-    Chunk,        // Generate embeddings for each chunk
-    Average,      // Average embeddings across all chunks
-    Max,          // Take max value across embeddings
-    Min,          // Take min value across embeddings
-}
-```
-
-### `PoolingMode`
-
-```rust
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum PoolingMode {
-    Mean,         // Mean pooling (default)
-    Max,          // Max pooling
-    MeanMax,      // Concatenation of mean and max
-    cls,          // CLS token pooling
-    last,         // Last token pooling
-}
-```
-
-______________________________________________________________________
-
-## Examples
-
-### Basic Embedding Generation
-
-```rust
-use vecboost::service::embedding::EmbeddingService;
-use vecboost::engine::candle_engine::CandleEngine;
-use vecboost::config::model::{ModelConfig, Precision, EngineType, DeviceType, PathBuf};
-use vecboost::domain::EmbedRequest;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-
-async fn generate_embedding() -> Result<(), Box<dyn std::error::Error>> {
-    let config = ModelConfig {
-        name: "BAAI/bge-small-en-v1.5".to_string(),
-        engine_type: EngineType::Candle,
-        model_path: PathBuf::from("models/bge-small-en-v1.5"),
-        tokenizer_path: None,
-        device: DeviceType::Cpu,
-        max_batch_size: 32,
-        pooling_mode: None,
-        expected_dimension: None,
-        memory_limit_bytes: None,
-        oom_fallback_enabled: true,
-        model_sha256: None,
-    };
-    
-    let engine = Arc::new(RwLock::new(CandleEngine::new(&config, Precision::Fp32)?));
-    let embedding_service = EmbeddingService::new(engine, Some(config));
-    
-    let request = EmbedRequest {
-        text: "The quick brown fox jumps over the lazy dog".to_string(),
-        normalize: Some(true),
-    };
-    
-    let response = embedding_service.process_text(request).await?;
-    println!("Embedding dimension: {}", response.dimension);
-    println!("Processing time: {}ms", response.processing_time_ms);
+    let batch_response = client.embed_batch(batch_request).await?;
+    println!("Batch embeddings: {:?}", batch_response.into_inner().embeddings);
     
     Ok(())
 }
 ```
 
-### Batch Embedding with GPU Acceleration
+---
 
-```rust
-use vecboost::service::embedding::EmbeddingService;
-use vecboost::engine::candle_engine::CandleEngine;
-use vecboost::config::model::{ModelConfig, Precision, EngineType, DeviceType, PathBuf};
-use vecboost::domain::BatchEmbedRequest;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+## 📊 公共数据类型
 
-async fn generate_batch_embeddings() -> Result<(), Box<dyn std::error::Error>> {
-    let config = ModelConfig {
-        name: "BAAI/bge-small-en-v1.5".to_string(),
-        engine_type: EngineType::Candle,
-        model_path: PathBuf::from("models/bge-small-en-v1.5"),
-        tokenizer_path: None,
-        device: DeviceType::Cuda,
-        max_batch_size: 32,
-        pooling_mode: None,
-        expected_dimension: None,
-        memory_limit_bytes: None,
-        oom_fallback_enabled: true,
-        model_sha256: None,
-    };
-    
-    let engine = Arc::new(RwLock::new(CandleEngine::new(&config, Precision::Fp16)?));
-    let embedding_service = EmbeddingService::new(engine, Some(config));
-    
-    let texts = vec![
-        "First sentence".to_string(),
-        "Second sentence".to_string(),
-        "Third sentence".to_string(),
-    ];
-    
-    let request = BatchEmbedRequest {
-        texts,
-        normalize: Some(true),
-    };
-    
-    let response = embedding_service.process_batch(request).await?;
-    println!("Generated {} embeddings", response.embeddings.len());
-    println!("Total processing time: {}ms", response.processing_time_ms);
-    
-    Ok(())
+### 相似度算法
+
+| 算法 | 描述 | 值范围 |
+|------|------|--------|
+| `cosine` | 余弦相似度 | [-1, 1] |
+| `euclidean` | 欧氏距离 | [0, ∞) |
+| `dot_product` | 点积 | (-∞, ∞) |
+| `manhattan` | 曼哈顿距离 | [0, ∞) |
+
+### 优先级
+
+| 值 | 描述 |
+|------|------|
+| `low` | 低优先级 |
+| `normal` | 普通优先级 |
+| `high` | 高优先级 |
+| `critical` | 最高优先级 |
+
+### 设备类型
+
+| 值 | 描述 |
+|------|------|
+| `cpu` | CPU 计算 |
+| `cuda` | NVIDIA GPU |
+| `metal` | Apple Silicon GPU |
+
+### 模型精度
+
+| 值 | 描述 |
+|------|------|
+| `fp32` | 32位浮点 |
+| `fp16` | 16位浮点 |
+| `int8` | 8位整数 |
+
+---
+
+## ⚠️ 错误处理
+
+### 错误响应格式
+
+```json
+{
+  "error": {
+    "code": "INVALID_TEXT",
+    "message": "文本内容不能为空",
+    "details": {...}
+  }
 }
 ```
 
-### Model Switching
+### 错误码
 
-```rust
-use vecboost::service::embedding::EmbeddingService;
-use vecboost::engine::candle_engine::CandleEngine;
-use vecboost::model::manager::ModelManager;
-use vecboost::config::model::{ModelConfig, Precision, EngineType, DeviceType, PathBuf};
-use vecboost::domain::ModelSwitchRequest;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+| 错误码 | HTTP 状态码 | 描述 |
+|--------|-------------|------|
+| `SUCCESS` | 200 | 成功 |
+| `INVALID_TEXT` | 400 | 无效的文本输入 |
+| `TEXT_TOO_LONG` | 400 | 文本超出长度限制 |
+| `BATCH_TOO_LARGE` | 400 | 批量请求超出限制 |
+| `INVALID_METRIC` | 400 | 无效的相似度算法 |
+| `UNAUTHORIZED` | 401 | 未授权 |
+| `FORBIDDEN` | 403 | 禁止访问 |
+| `RATE_LIMITED` | 429 | 请求过于频繁 |
+| `MODEL_NOT_LOADED` | 503 | 模型未加载 |
+| `INFERENCE_ERROR` | 500 | 推理错误 |
+| `GPU_OUT_OF_MEMORY` | 507 | GPU 内存不足 |
+| `INTERNAL_ERROR` | 500 | 内部错误 |
 
-async fn switch_model() -> Result<(), Box<dyn std::error::Error>> {
-    let config = ModelConfig {
-        name: "BAAI/bge-small-en-v1.5".to_string(),
-        engine_type: EngineType::Candle,
-        model_path: PathBuf::from("models/bge-small-en-v1.5"),
-        tokenizer_path: None,
-        device: DeviceType::Cuda,
-        max_batch_size: 32,
-        pooling_mode: None,
-        expected_dimension: None,
-        memory_limit_bytes: None,
-        oom_fallback_enabled: true,
-        model_sha256: None,
-    };
-    
-    let engine = Arc::new(RwLock::new(CandleEngine::new(&config, Precision::Fp16)?));
-    let model_manager = Arc::new(ModelManager::new()?);
-    let embedding_service = EmbeddingService::with_manager(engine, Some(config), model_manager);
-    
-    let request = ModelSwitchRequest {
-        model_name: "BAAI/bge-large-en-v1.5".to_string(),
-        model_path: Some(PathBuf::from("models/bge-large-en-v1.5")),
-        tokenizer_path: None,
-        device: Some(DeviceType::Cuda),
-        max_batch_size: None,
-        pooling_mode: None,
-        expected_dimension: None,
-        memory_limit_bytes: None,
-        oom_fallback_enabled: None,
-    };
-    
-    let response = embedding_service.switch_model(request).await?;
-    println!("Model switch successful: {}", response.success);
-    println!("Previous model: {:?}", response.previous_model);
-    println!("Current model: {}", response.current_model);
-    println!("Message: {}", response.message);
-    
-    Ok(())
+### gRPC 状态码
+
+| 状态码 | 描述 |
+|--------|------|
+| `OK` | 成功 |
+| `INVALID_ARGUMENT` | 无效参数 |
+| `UNAUTHENTICATED` | 未认证 |
+| `PERMISSION_DENIED` | 权限不足 |
+| `RESOURCE_EXHAUSTED` | 资源耗尽（限流）|
+| `UNAVAILABLE` | 服务不可用 |
+| `INTERNAL` | 内部错误 |
+
+---
+
+## 📝 请求示例
+
+### Python 请求示例
+
+```python
+import requests
+
+API_BASE = "http://localhost:9002"
+HEADERS = {"Authorization": "Bearer your-token-here"}
+
+def embed(text, normalize=True):
+    response = requests.post(
+        f"{API_BASE}/embed",
+        json={"text": text, "normalize": normalize},
+        headers=HEADERS
+    )
+    return response.json()
+
+def batch_embed(texts, normalize=True):
+    response = requests.post(
+        f"{API_BASE}/embed/batch",
+        json={"texts": texts, "normalize": normalize},
+        headers=HEADERS
+    )
+    return response.json()
+
+def similarity(source, target, metric="cosine"):
+    response = requests.post(
+        f"{API_BASE}/similarity",
+        json={"source": source, "target": target, "metric": metric},
+        headers=HEADERS
+    )
+    return response.json()
+
+def search(query, texts, top_k=5):
+    response = requests.post(
+        f"{API_BASE}/search",
+        json={"query": query, "texts": texts, "top_k": top_k},
+        headers=HEADERS
+    )
+    return response.json()
+```
+
+### JavaScript/Node.js 请求示例
+
+```javascript
+const API_BASE = 'http://localhost:9002';
+const HEADERS = { 'Authorization': 'Bearer your-token-here' };
+
+async function embed(text, normalize = true) {
+    const response = await fetch(`${API_BASE}/embed`, {
+        method: 'POST',
+        headers: { ...HEADERS, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, normalize })
+    });
+    return response.json();
+}
+
+async function batchEmbed(texts, normalize = true) {
+    const response = await fetch(`${API_BASE}/embed/batch`, {
+        method: 'POST',
+        headers: { ...HEADERS, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts, normalize })
+    });
+    return response.json();
 }
 ```
+
+---
+
+## 🔐 认证
+
+### Bearer Token 认证
+
+所有 API 端点（除 `/health` 和 `/metrics` 外）都需要认证：
+
+```bash
+curl -H "Authorization: Bearer <your-jwt-token>" http://localhost:9002/embed
+```
+
+### 获取 Token
+
+```bash
+# 登录获取 Token
+curl -X POST http://localhost:9002/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "your-password"}'
+
+# 响应
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}
+```
+
+---
+
+## 📖 相关文档
+
+- [🏗️ 架构设计](ARCHITECTURE.md)
+- [📝 用户指南](USER_GUIDE.md)
+- [🤝 贡献指南](CONTRIBUTING.md)
+
+---
+
+<div align="center">
+
+**文档版本**: 1.0.0  
+**最后更新**: 2026-01-08
+
+</div>

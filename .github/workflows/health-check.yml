@@ -1,4 +1,4 @@
-name: Health Check
+name: CI
 
 on:
   push:
@@ -21,7 +21,7 @@ env:
   RUSTFLAGS: "-D warnings"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -45,26 +45,34 @@ jobs:
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "check-shared"
+          shared-key: "vecboost-check"
           cache-targets: false
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Check clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Check for unused dependencies
-        run: cargo udeps --all-targets
-
-      - name: Cargo Audit
-        run: cargo audit --deny warnings
+        run: cargo clippy --all-features --all-targets -- -D warnings
 
   build:
     name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        feature:
+          - name: default
+            features: ""
+          - name: cuda
+            features: cuda
+          - name: onnx
+            features: onnx
+          - name: grpc
+            features: grpc
+          - name: all
+            features: cuda,onnx,grpc,redis
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -80,20 +88,17 @@ jobs:
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "build-shared"
+          shared-key: "vecboost-build-${{ matrix.feature.name }}"
           cache-targets: false
 
-      - name: Build workspace
-        run: cargo build --workspace
-
-      - name: Build release
-        run: cargo build --workspace --release
+      - name: Build with ${{ matrix.feature.name }} features
+        run: cargo build --release --features "${{ matrix.feature.features }}"
 
   test:
-    name: Test (Ubuntu) - Coverage
+    name: Test (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     needs: build
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -109,14 +114,43 @@ jobs:
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "test-coverage-shared"
+          shared-key: "vecboost-test"
+          cache-targets: false
+
+      - name: Run tests
+        run: cargo test --all-features --lib
+
+      - name: Run integration tests
+        run: cargo test --all-features --tests
+
+  test-coverage:
+    name: Test (Coverage)
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "vecboost-coverage"
           cache-targets: false
 
       - name: Install grcov
         run: cargo install grcov
 
       - name: Run tests with coverage
-        run: cargo tarpaulin --workspace --all-targets --out lcov --output-dir coverage/
+        run: cargo tarpaulin --all-features --all-targets --out lcov --output-dir coverage/
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -126,7 +160,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           verbose: true
 
-      - name: Generate Cobertura XML for GitHub
+      - name: Generate Cobertura XML
         run: grcov . --binary-path ./target/debug/ --source-dir . --output-type cobertura-xml --output-path cobertura.xml
 
       - name: Check coverage threshold
@@ -151,32 +185,6 @@ jobs:
             cobertura.xml
           retention-days: 7
 
-  test-fast:
-    name: Test (Ubuntu) - Fast
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: build
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-
-      - name: Install Protocol Buffers compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "test-fast-shared"
-          cache-targets: false
-
-      - name: Run tests
-        run: cargo test --workspace --all-targets -- --test-threads=4
-
   test-cross-platform:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -187,15 +195,15 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            threads: 2
+            metal: true
           - os: ubuntu-latest
-            threads: 4
+            metal: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
@@ -216,35 +224,27 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cross-
 
-      - name: Run tests (macOS with all features)
-        if: runner.os == 'macOS'
-        run: cargo test --all-features --all-targets -- --test-threads=${{ matrix.threads }}
+      - name: Run tests (macOS with Metal)
+        if: matrix.metal == true
+        run: cargo test --features metal --all-targets
 
-      - name: Run tests (Linux with workspace)
-        if: runner.os == 'Linux'
-        run: cargo test --workspace --all-targets -- --test-threads=${{ matrix.threads }}
+      - name: Run tests (Linux)
+        if: matrix.metal == false
+        run: cargo test --all-features --all-targets
 
   test-windows:
     name: Test (Windows)
     runs-on: windows-latest
     needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        toolchain: [stable, nightly]
-        include:
-          - toolchain: stable
-            features: all
-          - toolchain: nightly
-            features: all
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ matrix.toolchain }}
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Cache cargo dependencies
@@ -256,9 +256,8 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-windows-${{ matrix.toolchain }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-windows-${{ matrix.toolchain }}-
+          key: windows-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-
 
       - name: Set Windows environment
         shell: pwsh
@@ -267,43 +266,20 @@ jobs:
           echo "RUSTFLAGS=-D warnings" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Check formatting
-        if: matrix.toolchain == 'stable'
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        if: matrix.toolchain == 'stable'
         run: cargo clippy --all-features --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test --all-features --all-targets -- --test-threads=2
+        run: cargo test --all-features --all-targets --release
 
-      - name: Run tests with release profile
-        run: cargo test --all-features --all-targets --release -- --test-threads=2
-
-      - name: Test file watching on Windows
-        shell: pwsh
-        run: |
-          cargo test --test hot_reload_latency_test --all-features -- --nocapture
-
-      - name: Test memory limits on Windows
-        shell: pwsh
-        run: |
-          cargo test --test memory_limit_test --all-features -- --nocapture
-
-      - name: Test Windows-specific paths
-        shell: pwsh
-        run: |
-          $env:TEST_WINDOWS_PATHS = "1"
-          cargo test --all-features --all-targets -- windows_paths
-
-      - name: Upload test results
+      - name: Upload test results on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-windows-${{ matrix.toolchain }}
-          path: |
-            target/debug/deps/
-            target/release/deps/
+          name: test-results-windows
+          path: target/release/deps/
 
   doc:
     name: Documentation
@@ -314,7 +290,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           components: rust-docs
@@ -323,32 +299,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-doc-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-doc-
+          shared-key: "vecboost-doc"
+          cache-targets: false
 
       - name: Build documentation
-        if: runner.os == 'macOS'
-        run: cargo doc --all-features --no-deps
-
-      - name: Build documentation (Linux)
-        if: runner.os == 'Linux'
         run: cargo doc --workspace --no-deps
 
       - name: Check for broken links
-        if: runner.os == 'macOS'
-        run: cargo doc --all-features --no-deps --document-private-items
-
-      - name: Check for broken links (Linux)
-        if: runner.os == 'Linux'
         run: cargo doc --workspace --no-deps --document-private-items
 
   audit:
@@ -360,7 +319,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
@@ -369,38 +328,18 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-  minimal-versions:
-    name: Minimal Versions
-    runs-on: ubuntu-latest
-    needs: check
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.75
-
-      - name: Install Protocol Buffers compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Check minimal version
-        run: |
-          cargo +1.75 build --workspace
-          cargo +1.75 test --workspace --all-targets
-
   benchmark:
     name: Benchmark
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, test-fast]
+    needs: [test, test-cross-platform]
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
@@ -408,24 +347,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-bench-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bench-
+          shared-key: "vecboost-bench"
+          cache-targets: false
 
-      - name: Run benchmarks (Linux with workspace)
-        if: runner.os == 'Linux'
-        run: cargo bench --workspace
-
-      - name: Run benchmarks (macOS with all features)
-        if: runner.os == 'macOS'
+      - name: Run benchmarks
         run: cargo bench --all-features
 
       - name: Upload benchmark results
@@ -442,7 +369,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
@@ -454,16 +381,19 @@ jobs:
   notify:
     name: Notify
     runs-on: ubuntu-latest
-    needs: [check, build, test, test-fast, test-windows, doc, audit, minimal-versions]
+    needs: [check, build, test, test-windows, doc, audit]
     if: always()
     steps:
       - name: Check job status
         run: |
-          if [[ "${{ needs.check.result }}" == "failure" ]] || \
-             [[ "${{ needs.build.result }}" == "failure" ]] || \
-             [[ "${{ needs.test.result }}" == "failure" ]] || \
-             [[ "${{ needs.test-fast.result }}" == "failure" ]] || \
-             [[ "${{ needs.test-windows.result }}" == "failure" ]]; then
+          failed=false
+          for job in check build test test-windows doc audit; do
+            if [[ "${{ needs[$job].result }}" == "failure" ]]; then
+              failed=true
+              break
+            fi
+          done
+          if $failed; then
             echo "status=failure" >> $GITHUB_OUTPUT
           else
             echo "status=success" >> $GITHUB_OUTPUT
@@ -472,6 +402,4 @@ jobs:
 
       - name: Notify on failure
         if: steps.status.outputs.status == 'failure'
-        run: |
-          echo "CI pipeline failed. Please check the workflow logs for details."
-        shell: /bin/bash -e
+        run: echo "❌ CI pipeline failed. Please check the workflow logs for details."

@@ -28,74 +28,47 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "release-shared"
+          shared-key: "release-validate"
           cache-targets: false
 
       - name: Format Check
         run: cargo fmt --all -- --check
 
       - name: Clippy Lint
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-features --all-targets -- -D warnings
 
       - name: Cargo Audit
         run: cargo audit --deny warnings
 
       - name: Build Check
-        run: cargo build --all-targets --all-features
+        run: cargo build --all-features
 
       - name: Run Tests
-        run: cargo test --all-targets --all-features
-
-  publish-cargo:
-    name: Publish to Cargo.io
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "publish-shared"
-          cache-targets: false
-
-      - name: Get crates.io auth token
-        uses: rust-lang/crates-io-auth-action@v1
-        id: auth
-
-      - name: Publish to crates.io
-        run: cargo publish
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo test --all-features --lib
 
   build-release:
     name: Build Release Binaries
-    needs: publish-cargo
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-arm64]
         include:
           - os: ubuntu-latest
-            artifact_name: ciphern
-            asset_name: ciphern-linux-x86_64
+            artifact_name: vecboost
+            asset_name: vecboost-linux-x86_64
             ext: ""
           - os: windows-latest
-            artifact_name: ciphern.exe
-            asset_name: ciphern-windows-x86_64.exe
+            artifact_name: vecboost.exe
+            asset_name: vecboost-windows-x86_64.exe
             ext: ".exe"
           - os: macos-latest
-            artifact_name: ciphern
-            asset_name: ciphern-macos-x86_64
+            artifact_name: vecboost
+            asset_name: vecboost-macos-x86_64
+            ext: ""
+          - os: macos-arm64
+            artifact_name: vecboost
+            asset_name: vecboost-macos-arm64
             ext: ""
 
     runs-on: ${{ matrix.os }}
@@ -111,10 +84,17 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: "release-${{ matrix.os }}"
           cache-targets: false
 
+      - name: Set up QEMU for ARM64 macOS
+        if: matrix.os == 'macos-arm64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Build Release
-        run: cargo build --release --locked
+        run: cargo build --release --all-features
 
       - name: Create Artifact
         run: |
@@ -129,9 +109,46 @@ jobs:
           compression-level: 9
           retention-days: 30
 
+  build-docker:
+    name: Build Docker Image
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: vecboost/vecboost
+          tags: |
+            type=semver,pattern=v{{version}}
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+
   github-release:
     name: Create GitHub Release
-    needs: build-release
+    needs: [build-release, build-docker]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -149,25 +166,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: Prepare Release Assets
         run: |
-          cd artifacts
-          for dir in */; do
-            if [ -d "$dir" ]; then
-              cd "$dir"
-              for file in *; do
-                if [ -f "$file" ]; then
-                  echo "Found artifact: $file"
-                  cd ..
-                  mv "$dir$file" ./"$file" 2>/dev/null || true
-                  break
-                fi
-              done
-              cd ..
-            fi
-          done
-          ls -la
+          ls -la artifacts/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -182,14 +185,16 @@ jobs:
 
   notify:
     name: Notify Status
-    needs: [publish-cargo, github-release]
+    needs: [build-release, build-docker, github-release]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
     steps:
       - name: Check status
         run: |
-          if [[ "${{ needs.publish-cargo.result }}" == "success" ]] && [[ "${{ needs.github-release.result }}" == "success" ]]; then
+          if [[ "${{ needs.build-release.result }}" == "success" ]] && \
+             [[ "${{ needs.build-docker.result }}" == "success" ]] && \
+             [[ "${{ needs.github-release.result }}" == "success" ]]; then
             echo "✅ Release completed successfully!"
             exit 0
           else

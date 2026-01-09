@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Kirky.X
 //
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Licensed under MIT License
+// See LICENSE file in the project root for full license information
 
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -9,15 +9,12 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 
-use vecboost::{
-    config::model::Precision,
-    domain::{EmbedRequest, SearchRequest, SimilarityRequest},
-    engine::InferenceEngine,
-    service::embedding::EmbeddingService,
-};
-
 use async_trait::async_trait;
+use vecboost::config::model::Precision;
+use vecboost::domain::{EmbedRequest, SearchRequest, SimilarityRequest};
+use vecboost::engine::InferenceEngine;
 use vecboost::error::AppError;
+use vecboost::service::embedding::EmbeddingService;
 
 const MOCK_DIMENSION: usize = 1024;
 
@@ -41,9 +38,7 @@ impl TestEngine {
             hash = hash.wrapping_mul(1099511628211);
         }
 
-        let seed = hash;
-
-        let mut state = seed;
+        let mut state = hash;
         for val in embedding.iter_mut() {
             state = state.wrapping_mul(1664525).wrapping_add(1013904223);
             let float_val = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
@@ -100,14 +95,14 @@ async fn test_e2e_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
 
     let result = service
         .process_text(EmbedRequest {
-            text: "人工智能是未来的发展方向".to_string(),
+            text: "Artificial intelligence is the future of technology".to_string(),
             normalize: Some(true),
         })
         .await?;
 
     assert_eq!(
         result.embedding.len(),
-        1024,
+        MOCK_DIMENSION,
         "Embedding dimension should be 1024"
     );
     assert!(
@@ -115,26 +110,32 @@ async fn test_e2e_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
         "All values should be finite"
     );
 
-    println!("✅ 端到端文本向量化测试通过 - 维度: {}", result.dimension);
+    println!(
+        "[PASS] End-to-end text embedding test passed - dimension: {}",
+        result.dimension
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn test_e2e_english_embedding() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_e2e_chinese_embedding() -> Result<(), Box<dyn std::error::Error>> {
     let engine = create_test_engine()?;
     let service = EmbeddingService::new(engine, None);
 
     let result = service
         .process_text(EmbedRequest {
-            text: "Machine learning is transforming the technology industry".to_string(),
+            text: "人工智能是未来的发展方向".to_string(),
             normalize: Some(true),
         })
         .await?;
 
-    assert_eq!(result.embedding.len(), 1024);
+    assert_eq!(result.embedding.len(), MOCK_DIMENSION);
     assert!(result.embedding.iter().all(|&x| x.is_finite()));
 
-    println!("✅ 英文文本向量化测试通过");
+    println!(
+        "[PASS] Chinese text embedding test passed - dimension: {}",
+        result.dimension
+    );
     Ok(())
 }
 
@@ -150,10 +151,10 @@ async fn test_e2e_mixed_text_embedding() -> Result<(), Box<dyn std::error::Error
         })
         .await?;
 
-    assert_eq!(result.embedding.len(), 1024);
+    assert_eq!(result.embedding.len(), MOCK_DIMENSION);
     assert!(result.embedding.iter().all(|&x| x.is_finite()));
 
-    println!("✅ 混合文本向量化测试通过");
+    println!("[PASS] Mixed text embedding test passed");
     Ok(())
 }
 
@@ -163,8 +164,8 @@ async fn test_similarity_calculation() -> Result<(), Box<dyn std::error::Error>>
     let service = EmbeddingService::new(engine, None);
 
     let req = SimilarityRequest {
-        source: "机器学习".to_string(),
-        target: "深度学习".to_string(),
+        source: "machine learning".to_string(),
+        target: "deep learning".to_string(),
     };
 
     let result = service.process_similarity(req).await?;
@@ -178,12 +179,15 @@ async fn test_similarity_calculation() -> Result<(), Box<dyn std::error::Error>>
         "Similarity score should be finite"
     );
 
-    println!("✅ 相似度计算测试通过 - 相似度: {:.4}", result.score);
+    println!(
+        "[PASS] Similarity calculation test passed - score: {:.4}",
+        result.score
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn test_similarity_semantic_coherence() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_embedding_determinism() -> Result<(), Box<dyn std::error::Error>> {
     let engine = create_test_engine()?;
     let service = EmbeddingService::new(engine, None);
 
@@ -202,13 +206,13 @@ async fn test_similarity_semantic_coherence() -> Result<(), Box<dyn std::error::
 
     assert!(
         sim_similar > sim_different,
-        "Similar texts should have higher similarity. Got similar: {:.4}, different: {:.4}",
+        "Same seed should produce higher similarity. Got similar: {:.4}, different: {:.4}",
         sim_similar,
         sim_different
     );
 
     println!(
-        "✅ 相似度一致性测试通过 - 相似文本: {:.4}, 不同文本: {:.4}",
+        "[PASS] Embedding determinism test passed - similar: {:.4}, different: {:.4}",
         sim_similar, sim_different
     );
     Ok(())
@@ -220,12 +224,12 @@ async fn test_search_functionality() -> Result<(), Box<dyn std::error::Error>> {
     let service = EmbeddingService::new(engine, None);
 
     let req = SearchRequest {
-        query: "关于编程语言的选择".to_string(),
+        query: "programming language selection".to_string(),
         texts: vec![
-            "Python是一门易学的编程语言".to_string(),
-            "Java是企业级应用的首选".to_string(),
-            "今天天气很好，适合外出".to_string(),
-            "Rust是一门注重安全的系统编程语言".to_string(),
+            "Python is an easy-to-learn programming language".to_string(),
+            "Java is the首选 for enterprise applications".to_string(),
+            "The weather is nice today, good for going outside".to_string(),
+            "Rust is a systems programming language focused on safety".to_string(),
         ],
         top_k: Some(2),
     };
@@ -240,7 +244,7 @@ async fn test_search_functionality() -> Result<(), Box<dyn std::error::Error>> {
     assert!(result.results[0].score.is_finite());
 
     println!(
-        "✅ 搜索功能测试通过 - Top结果: {:.4}, {:.4}",
+        "[PASS] Search functionality test passed - top scores: {:.4}, {:.4}",
         result.results[0].score, result.results[1].score
     );
     Ok(())
@@ -252,8 +256,11 @@ async fn test_search_with_less_results_than_topk() -> Result<(), Box<dyn std::er
     let service = EmbeddingService::new(engine, None);
 
     let req = SearchRequest {
-        query: "技术话题".to_string(),
-        texts: vec!["人工智能很热门".to_string(), "区块链技术".to_string()],
+        query: "tech topic".to_string(),
+        texts: vec![
+            "AI is popular".to_string(),
+            "blockchain technology".to_string(),
+        ],
         top_k: Some(10),
     };
 
@@ -265,7 +272,7 @@ async fn test_search_with_less_results_than_topk() -> Result<(), Box<dyn std::er
         "Should return all available results"
     );
     println!(
-        "✅ 搜索结果数量测试通过 - 返回 {} 个结果",
+        "[PASS] Search result count test passed - returned {} results",
         result.results.len()
     );
     Ok(())
@@ -277,9 +284,9 @@ async fn test_batch_search_functionality() -> Result<(), Box<dyn std::error::Err
     let service = EmbeddingService::new(engine, None);
 
     let texts: Vec<String> = (0..20)
-        .map(|i| format!("这是第{}个测试文档，内容关于技术主题{}", i, i))
+        .map(|i| format!("This is test document #{} about technical topics{}", i, i))
         .collect();
-    let query = "技术主题相关内容".to_string();
+    let query = "technical topics related content".to_string();
 
     let result = service
         .process_search_batch(&query, &texts, Some(5))
@@ -288,7 +295,10 @@ async fn test_batch_search_functionality() -> Result<(), Box<dyn std::error::Err
     assert_eq!(result.results.len(), 5, "Should return top 5 results");
     assert!(result.results[0].score >= result.results[1].score);
 
-    println!("✅ 批量搜索测试通过 - 返回 {} 个结果", result.results.len());
+    println!(
+        "[PASS] Batch search test passed - returned {} results",
+        result.results.len()
+    );
     Ok(())
 }
 
@@ -301,11 +311,11 @@ async fn test_file_streaming_processing() -> Result<(), Box<dyn std::error::Erro
     let file_path = temp_dir.path().join("test_text.txt");
 
     let content = vec![
-        "第一行文本，关于机器学习的内容",
-        "第二行文本，关于深度学习的应用",
-        "第三行文本，关于自然语言处理",
-        "第四行文本，关于计算机视觉",
-        "第五行文本，关于强化学习",
+        "First line of text, about machine learning content",
+        "Second line, about deep learning applications",
+        "Third line, about natural language processing",
+        "Fourth line, about computer vision",
+        "Fifth line, about reinforcement learning",
     ];
 
     let mut file = File::create(&file_path).await?;
@@ -317,10 +327,13 @@ async fn test_file_streaming_processing() -> Result<(), Box<dyn std::error::Erro
 
     let result = service.process_file_stream(&file_path).await?;
 
-    assert_eq!(result.embedding.len(), 1024);
+    assert_eq!(result.embedding.len(), MOCK_DIMENSION);
     assert!(result.embedding.iter().all(|&x| x.is_finite()));
 
-    println!("✅ 文件流式处理测试通过 - 维度: {}", result.dimension);
+    println!(
+        "[PASS] File streaming processing test passed - dimension: {}",
+        result.dimension
+    );
     Ok(())
 }
 
@@ -339,7 +352,7 @@ async fn test_empty_file_processing() -> Result<(), Box<dyn std::error::Error>> 
     let result = service.process_file_stream(&file_path).await;
     assert!(result.is_err(), "Empty file should return error");
 
-    println!("✅ 空文件处理测试通过 - 正确返回错误");
+    println!("[PASS] Empty file processing test passed - correctly returned error");
     Ok(())
 }
 
@@ -348,7 +361,7 @@ async fn test_embedding_consistency() -> Result<(), Box<dyn std::error::Error>> 
     let engine = create_test_engine()?;
     let service = EmbeddingService::new(engine, None);
 
-    let text = "一致性测试文本".to_string();
+    let text = "Consistency test text".to_string();
 
     let result1 = service
         .process_text(EmbedRequest {
@@ -373,7 +386,7 @@ async fn test_embedding_consistency() -> Result<(), Box<dyn std::error::Error>> 
         "Same input should produce same embedding"
     );
 
-    println!("✅ 向量一致性测试通过");
+    println!("[PASS] Embedding consistency test passed");
     Ok(())
 }
 
@@ -384,7 +397,7 @@ async fn test_embedding_normalization() -> Result<(), Box<dyn std::error::Error>
 
     let result = service
         .process_text(EmbedRequest {
-            text: "测试归一化功能的向量".to_string(),
+            text: "Test normalized embedding vector".to_string(),
             normalize: Some(true),
         })
         .await?;
@@ -396,7 +409,10 @@ async fn test_embedding_normalization() -> Result<(), Box<dyn std::error::Error>
         norm
     );
 
-    println!("✅ 向量归一化测试通过 - L2范数: {:.6}", norm);
+    println!(
+        "[PASS] Embedding normalization test passed - L2 norm: {:.6}",
+        norm
+    );
     Ok(())
 }
 
@@ -404,7 +420,9 @@ async fn test_embedding_normalization() -> Result<(), Box<dyn std::error::Error>
 async fn test_concurrent_embedding_requests() -> Result<(), Box<dyn std::error::Error>> {
     let engine = create_test_engine()?;
 
-    let texts: Vec<String> = (0..4).map(|i| format!("并发测试文本 {}", i)).collect();
+    let texts: Vec<String> = (0..4)
+        .map(|i| format!("Concurrent test text {}", i))
+        .collect();
 
     let mut handles = Vec::new();
     for text in texts {
@@ -431,7 +449,10 @@ async fn test_concurrent_embedding_requests() -> Result<(), Box<dyn std::error::
     }
 
     assert_eq!(embeddings_count, 4);
-    println!("✅ 并发请求测试通过 - 成功处理 {} 个请求", embeddings_count);
+    println!(
+        "[PASS] Concurrent embedding requests test passed - {} requests processed",
+        embeddings_count
+    );
     Ok(())
 }
 
@@ -440,8 +461,11 @@ async fn test_long_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
     let engine = create_test_engine()?;
     let service = EmbeddingService::new(engine, None);
 
-    let long_text =
-        vec!["这是一个很长的文本，用于测试模型处理长文本的能力。"; 50].join(" ");
+    let long_text = vec![
+        "This is a very long text used to test the model's ability to handle long text inputs.";
+        50
+    ]
+    .join(" ");
 
     let result = service
         .process_text(EmbedRequest {
@@ -450,9 +474,12 @@ async fn test_long_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
 
-    assert_eq!(result.embedding.len(), 1024);
+    assert_eq!(result.embedding.len(), MOCK_DIMENSION);
     assert!(result.embedding.iter().all(|&x| x.is_finite()));
 
-    println!("✅ 长文本处理测试通过 - 维度: {}", result.dimension);
+    println!(
+        "[PASS] Long text embedding test passed - dimension: {}",
+        result.dimension
+    );
     Ok(())
 }

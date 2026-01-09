@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Kirky.X
 //
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Licensed under MIT License
+// See LICENSE file in the project root for full license information
 
 #[cfg(test)]
 mod performance_tests {
@@ -15,6 +15,8 @@ mod performance_tests {
     use vecboost::metrics::domain::PerformanceTestConfig;
     use vecboost::metrics::inference::InferenceCollector;
     use vecboost::metrics::performance::{PerformanceTester, generate_test_text};
+
+    const MOCK_DIMENSION: usize = 384;
 
     #[derive(Debug, Clone)]
     struct TestEngine {
@@ -36,9 +38,7 @@ mod performance_tests {
                 hash = hash.wrapping_mul(1099511628211);
             }
 
-            let seed = hash;
-
-            let mut state = seed;
+            let mut state = hash;
             for val in embedding.iter_mut() {
                 state = state.wrapping_mul(1664525).wrapping_add(1013904223);
                 let float_val = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
@@ -84,7 +84,7 @@ mod performance_tests {
 
     fn create_tester() -> PerformanceTester<TestEngine> {
         let metrics = Arc::new(InferenceCollector::new());
-        let engine = Arc::new(RwLock::new(TestEngine::new(384)));
+        let engine = Arc::new(RwLock::new(TestEngine::new(MOCK_DIMENSION)));
         PerformanceTester::new(engine, metrics)
     }
 

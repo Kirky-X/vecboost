@@ -1,7 +1,10 @@
 // Copyright (c) 2025 Kirky.X
 //
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Licensed under MIT License
+// See LICENSE file in the project root for full license information
+
+#![allow(dead_code)]
+#![allow(clippy::all)]
 
 pub mod arc_cache;
 pub mod kv_cache;
@@ -24,9 +27,11 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 /// 缓存策略
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)]
 pub enum CacheStrategy {
     /// 最近最少使用
+    #[default]
     Lru,
     /// 最不经常使用
     Lfu,
@@ -36,14 +41,9 @@ pub enum CacheStrategy {
     TwoQueue,
 }
 
-impl Default for CacheStrategy {
-    fn default() -> Self {
-        Self::Lru
-    }
-}
-
 /// 缓存配置
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CacheConfig {
     /// 缓存容量
     pub capacity: usize,

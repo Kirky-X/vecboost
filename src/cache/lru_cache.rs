@@ -78,10 +78,10 @@ where
         let mut to_remove = Vec::new();
 
         for key in order.iter() {
-            if let Some(entry) = store.get(key) {
-                if entry.is_expired(self.config.ttl_secs) {
-                    to_remove.push(key.clone());
-                }
+            if let Some(entry) = store.get(key)
+                && entry.is_expired(self.config.ttl_secs)
+            {
+                to_remove.push(key.clone());
             }
         }
 

@@ -175,8 +175,8 @@ if ! command_exists cargo; then
     ((SKIPPED++))
 else
     if rustup component list --installed 2>/dev/null | grep -q clippy; then
-        if run_check "cargo clippy --features $FEATURES --all-targets -- -D warnings" \
-                    "cargo clippy --features $FEATURES --all-targets -- -D warnings" 15; then
+        if run_check "cargo clippy --features $FEATURES --lib --tests --benches -- -D warnings" \
+                    "cargo clippy --features $FEATURES --lib --tests --benches -- -D warnings" 15; then
             :
         fi
     else

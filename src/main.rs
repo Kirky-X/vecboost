@@ -17,7 +17,7 @@ use vecboost::{
     engine::AnyEngine,
     grpc::server::GrpcServer,
     pipeline::{PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel},
-    rate_limit::{MemoryRateLimitStore, RateLimitConfig, RateLimiter},
+    rate_limit::{MemoryRateLimitStore, RateLimiter},
     security::{KeyStore, KeyType, SecretKey, SecurityConfig, StorageType, create_key_store},
     service::embedding::EmbeddingService,
 };

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ChunkRequest {
     pub text: String,
     pub chunk_size: Option<usize>,
@@ -19,6 +20,7 @@ pub struct ChunkRequest {
 
 #[cfg(test)]
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 pub struct ChunkResponse {
     pub chunks: Vec<String>,
     pub chunk_count: usize,
@@ -26,6 +28,7 @@ pub struct ChunkResponse {
 
 #[cfg(test)]
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 pub struct ChunkResult {
     pub chunks: Vec<String>,
     pub embeddings: Option<Vec<Vec<f32>>>,

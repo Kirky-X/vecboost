@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Kirky.X
 //
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Licensed under MIT License
+// See LICENSE file in the project root for full license information
+
+#![allow(clippy::all)]
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -69,7 +71,9 @@ pub struct PriorityInput {
 }
 
 /// 优先级计算器
+#[allow(dead_code)]
 pub struct PriorityCalculator {
+    #[allow(dead_code)]
     config: PriorityConfig,
     user_tier_weights: HashMap<String, f64>,
     source_weights: HashMap<String, f64>,

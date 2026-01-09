@@ -86,9 +86,7 @@ impl TensorPool {
                 }
 
                 let key = (batch_size, seq_len);
-                if !self.pools.contains_key(&key) {
-                    self.pools.insert(key, VecDeque::new());
-                }
+                self.pools.entry(key).or_default();
 
                 let pool = self.pools.get_mut(&key).unwrap();
                 let pool_size = self.config.pool_size_per_shape;
@@ -158,16 +156,16 @@ impl TensorPool {
         let key = (batch_size, seq_len);
 
         // 尝试从池中获取
-        if let Some(pool) = self.pools.get_mut(&key) {
-            if let Some(tensor) = pool.pop_front() {
-                self.stats.cache_hits += 1;
-                self.stats.total_allocations += 1;
-                debug!(
-                    "Acquired tensor from pool for shape ({}, {})",
-                    batch_size, seq_len
-                );
-                return Ok(tensor);
-            }
+        if let Some(pool) = self.pools.get_mut(&key)
+            && let Some(tensor) = pool.pop_front()
+        {
+            self.stats.cache_hits += 1;
+            self.stats.total_allocations += 1;
+            debug!(
+                "Acquired tensor from pool for shape ({}, {})",
+                batch_size, seq_len
+            );
+            return Ok(tensor);
         }
 
         // 池中没有，创建新的
@@ -185,9 +183,7 @@ impl TensorPool {
     pub fn release(&mut self, tensor: Tensor, batch_size: usize, seq_len: usize) {
         let key = (batch_size, seq_len);
 
-        if !self.pools.contains_key(&key) {
-            self.pools.insert(key, VecDeque::new());
-        }
+        self.pools.entry(key).or_default();
 
         let pool = self.pools.get_mut(&key).unwrap();
 

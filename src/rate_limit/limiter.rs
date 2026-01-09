@@ -12,18 +12,13 @@ use crate::rate_limit::token_bucket::{TokenBucketConfig, TokenBucketStore};
 use std::sync::Arc;
 
 /// 限流算法类型
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum RateLimitAlgorithm {
     /// 滑动窗口算法（固定窗口改进版）
     SlidingWindow,
     /// 令牌桶算法（允许突发流量）
+    #[default]
     TokenBucket,
-}
-
-impl Default for RateLimitAlgorithm {
-    fn default() -> Self {
-        Self::TokenBucket
-    }
 }
 
 /// 限流维度

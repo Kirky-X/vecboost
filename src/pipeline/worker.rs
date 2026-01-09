@@ -16,6 +16,7 @@ use crate::error::AppError;
 
 /// Worker 任务
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum WorkerTask {
     ProcessRequest {
         request_id: String,
@@ -70,6 +71,7 @@ pub struct WorkerManager {
     /// 任务发送器
     task_sender: mpsc::Sender<WorkerTask>,
     /// 任务接收器
+    #[allow(dead_code)]
     task_receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<WorkerTask>>>,
     /// 配置
     config: WorkerConfig,

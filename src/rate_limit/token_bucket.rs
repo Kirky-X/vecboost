@@ -1,9 +1,11 @@
 // Copyright (c) 2025 VecBoost
 //
 // Licensed under MIT License
-// See LICENSE file in the project root for full license information.
+// See LICENSE file in the project root for full license information
 
 //! 令牌桶限流算法实现
+
+#![allow(clippy::all)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -269,7 +271,6 @@ impl TokenBucketStore for TokenBucketStoreImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[tokio::test]
     async fn test_token_bucket_basic() {

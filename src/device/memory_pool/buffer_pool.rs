@@ -73,9 +73,7 @@ impl BufferPool {
 
         // 预分配文本缓冲区
         for &size in &self.config.text_buffer_sizes {
-            if !self.text_buffers.contains_key(&size) {
-                self.text_buffers.insert(size, VecDeque::new());
-            }
+            self.text_buffers.entry(size).or_default();
 
             let pool = self.text_buffers.get_mut(&size).unwrap();
             let pool_size = self.config.pool_size_per_size;
@@ -89,9 +87,7 @@ impl BufferPool {
 
         // 预分配向量缓冲区
         for &size in &self.config.vector_buffer_sizes {
-            if !self.vector_buffers.contains_key(&size) {
-                self.vector_buffers.insert(size, VecDeque::new());
-            }
+            self.vector_buffers.entry(size).or_default();
 
             let pool = self.vector_buffers.get_mut(&size).unwrap();
             let pool_size = self.config.pool_size_per_size;
@@ -123,13 +119,13 @@ impl BufferPool {
         }
 
         // 尝试从池中获取
-        if let Some(pool) = self.text_buffers.get_mut(&size) {
-            if let Some(buffer) = pool.pop_front() {
-                self.stats.text_cache_hits += 1;
-                self.stats.text_allocations += 1;
-                debug!("Acquired text buffer from pool, size={}", size);
-                return buffer;
-            }
+        if let Some(pool) = self.text_buffers.get_mut(&size)
+            && let Some(buffer) = pool.pop_front()
+        {
+            self.stats.text_cache_hits += 1;
+            self.stats.text_allocations += 1;
+            debug!("Acquired text buffer from pool, size={}", size);
+            return buffer;
         }
 
         // 池中没有，创建新的
@@ -146,9 +142,7 @@ impl BufferPool {
         // 清空缓冲区内容
         buffer.clear();
 
-        if !self.text_buffers.contains_key(&size) {
-            self.text_buffers.insert(size, VecDeque::new());
-        }
+        self.text_buffers.entry(size).or_default();
 
         let pool = self.text_buffers.get_mut(&size).unwrap();
 
@@ -176,13 +170,13 @@ impl BufferPool {
         }
 
         // 尝试从池中获取
-        if let Some(pool) = self.vector_buffers.get_mut(&size) {
-            if let Some(buffer) = pool.pop_front() {
-                self.stats.vector_cache_hits += 1;
-                self.stats.vector_allocations += 1;
-                debug!("Acquired vector buffer from pool, size={}", size);
-                return buffer;
-            }
+        if let Some(pool) = self.vector_buffers.get_mut(&size)
+            && let Some(buffer) = pool.pop_front()
+        {
+            self.stats.vector_cache_hits += 1;
+            self.stats.vector_allocations += 1;
+            debug!("Acquired vector buffer from pool, size={}", size);
+            return buffer;
         }
 
         // 池中没有，创建新的
@@ -199,9 +193,7 @@ impl BufferPool {
         // 清空缓冲区内容
         buffer.clear();
 
-        if !self.vector_buffers.contains_key(&size) {
-            self.vector_buffers.insert(size, VecDeque::new());
-        }
+        self.vector_buffers.entry(size).or_default();
 
         let pool = self.vector_buffers.get_mut(&size).unwrap();
 

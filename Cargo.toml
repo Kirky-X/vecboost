@@ -9,7 +9,7 @@ authors = ["Architecture Team"]
 axum = "0.7"
 axum-extra = { version = "0.9", features = ["typed-header"] }
 tokio = { version = "1.35", features = ["full"] }
-tower-http = { version = "0.5", features = ["trace", "cors", "add-extension", "validate-request", "set-header"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "add-extension", "validate-request", "set-header", "timeout"] }
 
 # gRPC support
 tonic = "0.12"

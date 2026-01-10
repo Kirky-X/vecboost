@@ -74,13 +74,13 @@ impl SecurityConfig {
     }
 }
 
-pub fn create_key_store(config: &SecurityConfig) -> Result<Box<dyn KeyStore>, AppError> {
+pub async fn create_key_store(config: &SecurityConfig) -> Result<Box<dyn KeyStore>, AppError> {
     config.validate()?;
 
     match (&config.storage_type, &config.key_file_path, &config.encryption_key) {
         (StorageType::Environment, _, _) => Ok(Box::new(key_store::EnvironmentKeyStore::new())),
         (StorageType::EncryptedFile, Some(key_file_path), Some(encryption_key)) => {
-            Ok(Box::new(EncryptedFileKeyStore::new(key_file_path, encryption_key)?))
+            Ok(Box::new(EncryptedFileKeyStore::new(key_file_path, encryption_key).await?))
         }
         _ => Err(AppError::ConfigError(
             "Invalid configuration: key_file_path and encryption_key are required for encrypted file storage".to_string(),

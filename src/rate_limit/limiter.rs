@@ -260,6 +260,11 @@ impl RateLimiter {
             }
         }
     }
+
+    /// 获取给定维度的剩余请求数
+    pub async fn get_remaining(&self, dimension: RateLimitDimension) -> u64 {
+        self.get_status(dimension).await.remaining
+    }
 }
 
 /// 限流状态

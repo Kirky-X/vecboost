@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
         };
 
         let key_store: Arc<dyn KeyStore> = {
-            let boxed = create_key_store(&security_config)?;
+            let boxed = create_key_store(&security_config).await?;
             Arc::from(boxed)
         };
 

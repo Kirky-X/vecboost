@@ -10,9 +10,10 @@ use argon2::{
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use tokio::fs::{self, File};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,11 +47,14 @@ pub struct EncryptedFileKeyStore {
 }
 
 impl EncryptedFileKeyStore {
-    pub fn new(file_path: &str, encryption_key: &str) -> Result<Self, AppError> {
+    pub async fn new(file_path: &str, encryption_key: &str) -> Result<Self, AppError> {
         let key_bytes = Self::derive_key(encryption_key)?;
 
-        let data = if Path::new(file_path).exists() {
-            Self::load_from_file(file_path, &key_bytes)?
+        let data = if tokio::fs::try_exists(file_path)
+            .await
+            .map_err(|e| AppError::IoError(format!("Failed to check key file: {}", e)))?
+        {
+            Self::load_from_file(file_path, &key_bytes).await?
         } else {
             KeyStoreData::default()
         };
@@ -93,8 +97,14 @@ impl EncryptedFileKeyStore {
         Ok(key)
     }
 
-    fn load_from_file(file_path: &str, key: &[u8; 32]) -> Result<KeyStoreData, AppError> {
-        let encrypted_content = fs::read_to_string(file_path)
+    async fn load_from_file(file_path: &str, key: &[u8; 32]) -> Result<KeyStoreData, AppError> {
+        let mut file = File::open(file_path)
+            .await
+            .map_err(|e| AppError::IoError(format!("Failed to open key file: {}", e)))?;
+
+        let mut encrypted_content = String::new();
+        file.read_to_string(&mut encrypted_content)
+            .await
             .map_err(|e| AppError::IoError(format!("Failed to read key file: {}", e)))?;
 
         let parts: Vec<&str> = encrypted_content.splitn(2, ':').collect();
@@ -124,8 +134,8 @@ impl EncryptedFileKeyStore {
             .map_err(|e| AppError::security_error(format!("Invalid key data: {}", e)))
     }
 
-    fn save_to_file(&self) -> Result<(), AppError> {
-        let data = self.data.blocking_read();
+    async fn save_to_file(&self) -> Result<(), AppError> {
+        let data = self.data.read().await;
         let json_str = serde_json::to_string(&*data)
             .map_err(|e| AppError::security_error(format!("Serialization failed: {}", e)))?;
 
@@ -138,8 +148,17 @@ impl EncryptedFileKeyStore {
         let nonce_hex = hex::encode(nonce_bytes);
         let encrypted_content = format!("{}:{}", nonce_hex, hex::encode(&ciphertext));
 
-        fs::write(&self.file_path, encrypted_content)
+        let mut file = File::create(&self.file_path)
+            .await
+            .map_err(|e| AppError::io_error(format!("Failed to create key file: {}", e)))?;
+
+        file.write_all(encrypted_content.as_bytes())
+            .await
             .map_err(|e| AppError::io_error(format!("Failed to write key file: {}", e)))?;
+
+        file.flush()
+            .await
+            .map_err(|e| AppError::io_error(format!("Failed to flush key file: {}", e)))?;
 
         Ok(())
     }
@@ -220,7 +239,7 @@ impl KeyStore for EncryptedFileKeyStore {
         data.keys.push(entry);
 
         drop(data);
-        self.save_to_file()?;
+        self.save_to_file().await?;
 
         Ok(())
     }
@@ -235,7 +254,7 @@ impl KeyStore for EncryptedFileKeyStore {
 
         if data.keys.len() != original_len {
             drop(data);
-            self.save_to_file()?;
+            self.save_to_file().await?;
         }
 
         Ok(())

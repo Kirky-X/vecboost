@@ -13,7 +13,8 @@ use crate::domain::{
 };
 use crate::error::AppError;
 use crate::utils::{AggregationMode, PathValidator};
-use axum::{Json, extract::ConnectInfo, extract::State};
+use axum::http::HeaderMap;
+use axum::{Json, extract::ConnectInfo, extract::State, response::IntoResponse};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -73,6 +74,35 @@ fn is_ip_whitelisted(ip: &str, whitelist: &[String]) -> bool {
     })
 }
 
+/// Add rate limit headers to response
+async fn add_rate_limit_headers(headers: &mut HeaderMap, state: &AppState, ip: &str) {
+    use axum::http::HeaderValue;
+
+    if state.rate_limit_enabled {
+        let global_remaining = state
+            .rate_limiter
+            .get_remaining(crate::rate_limit::RateLimitDimension::Global)
+            .await;
+        let ip_remaining = state
+            .rate_limiter
+            .get_remaining(crate::rate_limit::RateLimitDimension::Ip(ip.to_string()))
+            .await;
+
+        // Use the more restrictive limit
+        let remaining = std::cmp::min(global_remaining, ip_remaining);
+
+        if let Ok(limit_val) = HeaderValue::from_str("1000") {
+            headers.insert("x-ratelimit-limit", limit_val);
+        }
+        if let Ok(remaining_val) = HeaderValue::from_str(&remaining.to_string()) {
+            headers.insert("x-ratelimit-remaining", remaining_val);
+        }
+        if let Ok(reset_val) = HeaderValue::from_str("60") {
+            headers.insert("x-ratelimit-reset", reset_val);
+        }
+    }
+}
+
 /// Single text embedding handler
 ///
 /// Converts a single text to vector representation
@@ -95,7 +125,7 @@ pub async fn embed_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<EmbedRequest>,
-) -> Result<Json<crate::domain::EmbedResponse>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     // Extract real client IP
     let ip = extract_real_ip(addr);
 
@@ -119,13 +149,21 @@ pub async fn embed_handler(
     // 如果启用了流水线，使用流水线处理
     if state.pipeline_enabled {
         let ip_clone = ip.clone();
-        return crate::pipeline::handle_pipeline_request(state, req, ip_clone).await;
+        let res = crate::pipeline::handle_pipeline_request(state.clone(), req, ip_clone).await?;
+        let mut response = res.into_response();
+        add_rate_limit_headers(response.headers_mut(), &state, &ip).await;
+        return Ok(response);
     }
 
     // 否则直接调用服务
     let service_guard = state.service.read().await;
     let res = service_guard.process_text(req).await?;
-    Ok(Json(res))
+
+    // Create response with rate limit headers
+    let mut response = Json(res).into_response();
+    add_rate_limit_headers(response.headers_mut(), &state, &ip).await;
+
+    Ok(response)
 }
 
 /// Batch text embedding handler
@@ -150,7 +188,7 @@ pub async fn batch_embed_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<BatchEmbedRequest>,
-) -> Result<Json<crate::domain::BatchEmbedResponse>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     // Extract real client IP
     let ip = extract_real_ip(addr);
 
@@ -161,7 +199,7 @@ pub async fn batch_embed_handler(
             .rate_limiter
             .check_rate_limit(vec![
                 crate::rate_limit::RateLimitDimension::Global,
-                crate::rate_limit::RateLimitDimension::Ip(ip),
+                crate::rate_limit::RateLimitDimension::Ip(ip.clone()),
             ])
             .await
         {
@@ -171,7 +209,12 @@ pub async fn batch_embed_handler(
 
     let service_guard = state.service.read().await;
     let res = service_guard.process_batch(req).await?;
-    Ok(Json(res))
+
+    // Create response with rate limit headers
+    let mut response = Json(res).into_response();
+    add_rate_limit_headers(response.headers_mut(), &state, &ip).await;
+
+    Ok(response)
 }
 
 /// Similarity calculation handler
@@ -196,7 +239,7 @@ pub async fn similarity_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<SimilarityRequest>,
-) -> Result<Json<crate::domain::SimilarityResponse>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     // Extract real client IP
     let ip = extract_real_ip(addr);
 
@@ -207,7 +250,7 @@ pub async fn similarity_handler(
             .rate_limiter
             .check_rate_limit(vec![
                 crate::rate_limit::RateLimitDimension::Global,
-                crate::rate_limit::RateLimitDimension::Ip(ip),
+                crate::rate_limit::RateLimitDimension::Ip(ip.clone()),
             ])
             .await
         {
@@ -217,7 +260,12 @@ pub async fn similarity_handler(
 
     let service_guard = state.service.read().await;
     let res = service_guard.process_similarity(req).await?;
-    Ok(Json(res))
+
+    // Create response with rate limit headers
+    let mut response = Json(res).into_response();
+    add_rate_limit_headers(response.headers_mut(), &state, &ip).await;
+
+    Ok(response)
 }
 
 /// File embedding handler
@@ -242,7 +290,7 @@ pub async fn file_embed_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<FileEmbedRequest>,
-) -> Result<Json<crate::domain::FileEmbedResponse>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     // Extract real client IP
     let ip = extract_real_ip(addr);
 
@@ -253,7 +301,7 @@ pub async fn file_embed_handler(
             .rate_limiter
             .check_rate_limit(vec![
                 crate::rate_limit::RateLimitDimension::Global,
-                crate::rate_limit::RateLimitDimension::Ip(ip),
+                crate::rate_limit::RateLimitDimension::Ip(ip.clone()),
             ])
             .await
         {
@@ -283,22 +331,26 @@ pub async fn file_embed_handler(
 
     drop(service_guard);
 
-    match output {
-        crate::domain::EmbeddingOutput::Single(response) => {
-            Ok(Json(crate::domain::FileEmbedResponse {
-                mode,
-                stats,
-                embedding: Some(response.embedding),
-                paragraphs: None,
-            }))
-        }
+    let response = match output {
+        crate::domain::EmbeddingOutput::Single(response) => crate::domain::FileEmbedResponse {
+            mode,
+            stats,
+            embedding: Some(response.embedding),
+            paragraphs: None,
+        },
         crate::domain::EmbeddingOutput::Paragraphs(paragraphs) => {
-            Ok(Json(crate::domain::FileEmbedResponse {
+            crate::domain::FileEmbedResponse {
                 mode,
                 stats,
                 embedding: None,
                 paragraphs: Some(paragraphs),
-            }))
+            }
         }
-    }
+    };
+
+    // Create response with rate limit headers
+    let mut resp = Json(response).into_response();
+    add_rate_limit_headers(resp.headers_mut(), &state, &ip).await;
+
+    Ok(resp)
 }

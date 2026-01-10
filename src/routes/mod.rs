@@ -12,10 +12,15 @@ pub(crate) mod embedding;
 pub(crate) mod health;
 
 use axum::{Router, middleware, routing::get, routing::post};
+use tower_http::timeout::TimeoutLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::AppState;
+use std::time::Duration;
+
+/// Default request timeout (30 seconds)
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// VecBoost API OpenAPI 文档
 ///
@@ -103,7 +108,7 @@ pub fn create_router(app_state: AppState) -> Router {
         .with_state(app_state.clone());
 
     if app_state.auth_enabled {
-        // Authentication routes
+        // Authentication routes (with timeout)
         let auth_routes = Router::new()
             .route("/api/v1/auth/login", post(crate::auth::login_handler))
             .route("/api/v1/auth/logout", post(crate::auth::logout_handler))
@@ -111,9 +116,10 @@ pub fn create_router(app_state: AppState) -> Router {
                 "/api/v1/auth/refresh",
                 post(crate::auth::refresh_token_handler),
             )
+            .layer(TimeoutLayer::new(DEFAULT_TIMEOUT))
             .with_state(app_state.clone());
 
-        // Protected routes (require authentication)
+        // Protected routes (require authentication, with timeout)
         let protected_routes = Router::new()
             .route("/api/v1/embed", post(embedding::embed_handler))
             .route("/api/v1/embed/batch", post(embedding::batch_embed_handler))
@@ -123,7 +129,8 @@ pub fn create_router(app_state: AppState) -> Router {
             .layer(middleware::from_fn_with_state(
                 app_state.clone(),
                 crate::auth::auth_middleware,
-            ));
+            ))
+            .layer(TimeoutLayer::new(DEFAULT_TIMEOUT));
 
         // Apply CSRF protection (if enabled)
         let protected_routes = if let (Some(csrf_config), Some(csrf_token_store)) = (
@@ -156,12 +163,13 @@ pub fn create_router(app_state: AppState) -> Router {
         // Merge routes
         app = app.merge(auth_routes).merge(protected_routes);
     } else {
-        // No authentication mode - all routes public
+        // No authentication mode - all routes public (with timeout)
         app = app
             .route("/api/v1/embed", post(embedding::embed_handler))
             .route("/api/v1/embed/batch", post(embedding::batch_embed_handler))
             .route("/api/v1/similarity", post(embedding::similarity_handler))
             .route("/api/v1/embed/file", post(embedding::file_embed_handler))
+            .layer(TimeoutLayer::new(DEFAULT_TIMEOUT))
     }
 
     app.with_state(app_state)

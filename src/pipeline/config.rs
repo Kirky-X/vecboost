@@ -3,18 +3,15 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::HashMap;
 
-/// 流水线配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineConfig {
-    /// 是否启用
     pub enabled: bool,
-    /// 队列配置
     pub queue: QueueConfig,
-    /// Worker 配置
     pub worker: WorkerConfig,
-    /// 优先级配置
+    #[serde(default)]
     pub priority: PriorityConfig,
 }
 
@@ -29,12 +26,9 @@ impl Default for PipelineConfig {
     }
 }
 
-/// 队列配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueConfig {
-    /// 最大队列大小
     pub max_queue_size: usize,
-    /// 是否启用优先级
     pub enable_priority: bool,
 }
 
@@ -47,20 +41,13 @@ impl Default for QueueConfig {
     }
 }
 
-/// Worker 配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerConfig {
-    /// 最小 Worker 数量
     pub min_workers: usize,
-    /// 最大 Worker 数量
     pub max_workers: usize,
-    /// 扩容阈值
     pub scale_up_threshold: usize,
-    /// 缩容阈值
     pub scale_down_threshold: usize,
-    /// 空闲超时（秒）
     pub idle_timeout_secs: u64,
-    /// 检查间隔（秒）
     pub scale_check_interval_secs: u64,
 }
 
@@ -77,17 +64,38 @@ impl Default for WorkerConfig {
     }
 }
 
-/// 优先级配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PriorityConfig {
-    /// 基础优先级
     pub base_priority: i32,
-    /// 超时提升因子
     pub timeout_boost_factor: f64,
-    /// 用户等级权重
-    pub user_tier_weights: Vec<(String, f64)>,
-    /// 来源权重
-    pub source_weights: Vec<(String, f64)>,
+    #[serde(default)]
+    pub user_tier_weights: HashMap<String, f64>,
+    #[serde(default)]
+    pub source_weights: HashMap<String, f64>,
+}
+
+impl<'de> Deserialize<'de> for PriorityConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct InnerPriorityConfig {
+            base_priority: Option<i32>,
+            timeout_boost_factor: Option<f64>,
+            user_tier_weights: Option<HashMap<String, f64>>,
+            source_weights: Option<HashMap<String, f64>>,
+        }
+
+        let inner = InnerPriorityConfig::deserialize(deserializer)?;
+
+        Ok(Self {
+            base_priority: inner.base_priority.unwrap_or(50),
+            timeout_boost_factor: inner.timeout_boost_factor.unwrap_or(2.0),
+            user_tier_weights: inner.user_tier_weights.unwrap_or_default(),
+            source_weights: inner.source_weights.unwrap_or_default(),
+        })
+    }
 }
 
 impl Default for PriorityConfig {
@@ -95,16 +103,20 @@ impl Default for PriorityConfig {
         Self {
             base_priority: 50,
             timeout_boost_factor: 2.0,
-            user_tier_weights: vec![
+            user_tier_weights: [
                 ("free".to_string(), 1.0),
                 ("pro".to_string(), 1.5),
                 ("enterprise".to_string(), 2.0),
-            ],
-            source_weights: vec![
+            ]
+            .into_iter()
+            .collect(),
+            source_weights: [
                 ("http".to_string(), 1.0),
                 ("grpc".to_string(), 1.2),
                 ("internal".to_string(), 1.5),
-            ],
+            ]
+            .into_iter()
+            .collect(),
         }
     }
 }

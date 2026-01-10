@@ -23,7 +23,7 @@ pub mod service;
 pub mod utils;
 
 // 导出 config::app 中的类型
-pub use config::app::PriorityConfig;
+pub use crate::pipeline::config::PriorityConfig;
 
 // 内部实现模块 - 只在 crate 内部使用，不暴露给外部
 pub(crate) mod cache;

@@ -81,10 +81,17 @@ pub struct PriorityCalculator {
 
 impl PriorityCalculator {
     pub fn new(config: PriorityConfig) -> Self {
-        let user_tier_weights: HashMap<String, f64> =
-            config.user_tier_weights.iter().cloned().collect();
+        let user_tier_weights: HashMap<String, f64> = config
+            .user_tier_weights
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
 
-        let source_weights: HashMap<String, f64> = config.source_weights.iter().cloned().collect();
+        let source_weights: HashMap<String, f64> = config
+            .source_weights
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
 
         Self {
             config,

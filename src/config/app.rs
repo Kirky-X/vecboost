@@ -8,6 +8,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub use crate::pipeline::config::{PipelineConfig, PriorityConfig, QueueConfig, WorkerConfig};
+
 #[derive(Debug, Deserialize, Clone, Serialize, Default)]
 pub struct AppConfig {
     pub server: ServerConfig,
@@ -481,7 +483,49 @@ impl ConfigLoader {
                 .ignore_empty(true),
         );
 
-        config.build()?.try_deserialize().map_err(ConfigError::from)
+        config
+            .build()?
+            .try_deserialize()
+            .map_err(ConfigError::from)
+            .map(|mut cfg| {
+                apply_priority_defaults(&mut cfg);
+                cfg
+            })
+    }
+}
+
+fn apply_priority_defaults(cfg: &mut AppConfig) {
+    if cfg.pipeline.priority.user_tier_weights.is_empty() {
+        cfg.pipeline
+            .priority
+            .user_tier_weights
+            .insert("free".to_string(), 1.0);
+        cfg.pipeline
+            .priority
+            .user_tier_weights
+            .insert("basic".to_string(), 1.5);
+        cfg.pipeline
+            .priority
+            .user_tier_weights
+            .insert("premium".to_string(), 2.0);
+        cfg.pipeline
+            .priority
+            .user_tier_weights
+            .insert("enterprise".to_string(), 3.0);
+    }
+    if cfg.pipeline.priority.source_weights.is_empty() {
+        cfg.pipeline
+            .priority
+            .source_weights
+            .insert("http".to_string(), 1.0);
+        cfg.pipeline
+            .priority
+            .source_weights
+            .insert("grpc".to_string(), 1.2);
+        cfg.pipeline
+            .priority
+            .source_weights
+            .insert("internal".to_string(), 1.5);
     }
 }
 
@@ -500,111 +544,6 @@ pub enum ConfigError {
 impl From<config::ConfigError> for ConfigError {
     fn from(e: config::ConfigError) -> Self {
         ConfigError::Message(e.to_string())
-    }
-}
-
-/// 流水线配置
-#[derive(Debug, Deserialize, Clone, Serialize)]
-pub struct PipelineConfig {
-    /// 是否启用流水线
-    pub enabled: bool,
-    /// 队列配置
-    pub queue: QueueConfig,
-    /// Worker 配置
-    pub worker: WorkerConfig,
-    /// 优先级配置
-    pub priority: PriorityConfig,
-}
-
-impl Default for PipelineConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            queue: QueueConfig::default(),
-            worker: WorkerConfig::default(),
-            priority: PriorityConfig::default(),
-        }
-    }
-}
-
-/// 队列配置
-#[derive(Debug, Deserialize, Clone, Serialize)]
-pub struct QueueConfig {
-    /// 最大队列大小
-    pub max_queue_size: usize,
-    /// 是否启用优先级
-    pub enable_priority: bool,
-}
-
-impl Default for QueueConfig {
-    fn default() -> Self {
-        Self {
-            max_queue_size: 10000,
-            enable_priority: true,
-        }
-    }
-}
-
-/// Worker 配置
-#[derive(Debug, Deserialize, Clone, Serialize)]
-pub struct WorkerConfig {
-    /// 最小 Worker 数量
-    pub min_workers: usize,
-    /// 最大 Worker 数量
-    pub max_workers: usize,
-    /// 扩容阈值
-    pub scale_up_threshold: usize,
-    /// 缩容阈值
-    pub scale_down_threshold: usize,
-    /// 空闲超时（秒）
-    pub idle_timeout_secs: u64,
-    /// 检查间隔（秒）
-    pub scale_check_interval_secs: u64,
-}
-
-impl Default for WorkerConfig {
-    fn default() -> Self {
-        Self {
-            min_workers: 2,
-            max_workers: 16,
-            scale_up_threshold: 100,
-            scale_down_threshold: 10,
-            idle_timeout_secs: 60,
-            scale_check_interval_secs: 5,
-        }
-    }
-}
-
-/// 优先级配置
-#[derive(Debug, Deserialize, Clone, Serialize)]
-pub struct PriorityConfig {
-    /// 基础优先级
-    pub base_priority: i32,
-    /// 超时提升因子
-    pub timeout_boost_factor: f64,
-    /// 用户等级权重
-    pub user_tier_weights: Vec<(String, f64)>,
-    /// 来源权重
-    pub source_weights: Vec<(String, f64)>,
-}
-
-impl Default for PriorityConfig {
-    fn default() -> Self {
-        Self {
-            base_priority: 50,
-            timeout_boost_factor: 2.0,
-            user_tier_weights: vec![
-                ("free".to_string(), 1.0),
-                ("basic".to_string(), 1.5),
-                ("premium".to_string(), 2.0),
-                ("enterprise".to_string(), 3.0),
-            ],
-            source_weights: vec![
-                ("http".to_string(), 1.0),
-                ("grpc".to_string(), 1.2),
-                ("internal".to_string(), 1.5),
-            ],
-        }
     }
 }
 

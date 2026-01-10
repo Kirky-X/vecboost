@@ -1,0 +1,46 @@
+[server]
+host = "127.0.0.1"
+port = 9002
+timeout = 30
+
+[model]
+model_repo = "BAAI/bge-m3"
+use_gpu = false
+batch_size = 8
+expected_dimension = 1024
+
+[embedding]
+default_aggregation = "mean"
+similarity_metric = "cosine"
+cache_enabled = false
+cache_size = 0
+max_batch_size = 32
+
+[monitoring]
+memory_limit_mb = 512
+metrics_enabled = false
+log_level = "info"
+
+[rate_limit]
+enabled = false
+
+[pipeline]
+enabled = false
+
+[pipeline.priority]
+base_priority = 50
+timeout_boost_factor = 2.0
+
+[pipeline.priority.user_tier_weights]
+free = 1.0
+basic = 1.5
+premium = 2.0
+enterprise = 3.0
+
+[pipeline.priority.source_weights]
+http = 1.0
+grpc = 1.2
+internal = 1.5
+
+[audit]
+enabled = false

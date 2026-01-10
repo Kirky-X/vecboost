@@ -7,7 +7,7 @@
 //!
 //! 实现请求流水线处理，包括优先级队列、动态 Worker 管理等
 
-mod config;
+pub mod config;
 mod priority;
 mod queue;
 mod response_channel;

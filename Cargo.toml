@@ -87,6 +87,7 @@ onnx = ["ndarray", "ort"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 grpc = []
 redis = ["dep:redis"]
+auth = []
 
 # Platform-specific default features
 # macOS defaults to metal support

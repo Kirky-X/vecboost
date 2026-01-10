@@ -2,7 +2,14 @@
 name = "vecboost"
 version = "0.1.0"
 edition = "2024"
-authors = ["Architecture Team"]
+authors = ["Kirky-X <kirky-x@outlook.com>"]
+description = "High-performance embedding vector service written in Rust"
+repository = "https://github.com/Kirky-X/vecboost"
+documentation = "https://github.com/Kirky-X/vecboost"
+homepage = "https://github.com/Kirky-X/vecboost"
+license = "MIT"
+keywords = ["embedding", "vector", "ml", "ai", "inference"]
+categories = ["asynchronous", "science", "web-programming::http-server"]
 
 [dependencies]
 # Web Framework

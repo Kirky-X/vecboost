@@ -1,141 +1,134 @@
-<div align="center">
+# VecBoost
 
-# 🚀 VecBoost
-
-<p>
-  <img src="https://img.shields.io/badge/version-0.1.0-blue.svg" alt="Version">
-  <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
-  <img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build">
+<p align="left">
+    <img src="https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=flat-square" alt="Rust Edition">
+    <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="MIT License">
+    <img src="https://img.shields.io/badge/Version-0.1.0-green.svg?style=flat-square" alt="Version">
 </p>
 
-<p align="center">
-  <strong>A high-performance Rust vector embedding service optimized for production</strong>
-</p>
-
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#architecture">Architecture</a> •
-  <a href="#configuration">Configuration</a> •
-  <a href="#api-reference">API</a>
-</p>
-
-</div>
-
----
+A high-performance, production-ready embedding vector service written in Rust. VecBoost provides efficient text vectorization with support for multiple inference engines, GPU acceleration, and enterprise-grade features.
 
 ## ✨ Features
 
-| Core Features | Advanced Features |
-|--------------|-------------------|
-| ✅ **High Performance** - Rust + Tokio for maximum throughput | 🚀 **Batching** - Efficient batch processing |
-| ✅ **Multi-Engine** - Candle (default) and ONNX Runtime | 🔐 **Authentication** - JWT, CSRF, API Key |
-| ✅ **GPU Acceleration** - CUDA, Metal, ROCm support | 📊 **Monitoring** - Prometheus metrics |
-| ✅ **Dual Protocol** - HTTP REST and gRPC APIs | 📦 **Rate Limiting** - Multi-dimensional throttling |
-| ✅ **Auto-Scaling** - Priority request queue with pipeline | 🔍 **Audit Logging** - Complete operation tracking |
-| ✅ **Caching** - Multi-level cache (ARC, LFU, LRU) | 🛡️ **Security** - Argon2, AES-GCM encryption |
-
----
+- **🚀 High Performance**: Optimized Rust codebase with batch processing and concurrent request handling
+- **🔧 Multiple Engines**: Support for Candle (native Rust) and ONNX Runtime inference engines
+- **🎮 GPU Acceleration**: Native CUDA support (NVIDIA) and Metal support (Apple Silicon)
+- **📊 Smart Caching**: Multi-tier caching with LRU, LFU, and KV cache strategies
+- **🔐 Enterprise Security**: JWT authentication, CSRF protection, and audit logging
+- **⚡ Rate Limiting**: Configurable rate limiting with token bucket algorithm
+- **📈 Priority Queue**: Request prioritization with configurable priority weights
+- **🌐 Dual APIs**: gRPC and HTTP/REST interfaces with OpenAPI documentation
+- **📦 Kubernetes Ready**: Production deployment configurations included
 
 ## 🚀 Quick Start
+
+### Prerequisites
+
+- Rust 1.75+ (edition 2024)
+- CUDA Toolkit 12.x (for GPU support on Linux)
+- Metal (for GPU support on macOS)
 
 ### Installation
 
 ```bash
-# CPU-only release build
+# Clone the repository
+git clone https://github.com/Kirky-X/vecboost.git
+cd vecboost
+
+# Build with default features (CPU only)
 cargo build --release
 
-# With GPU support
-cargo build --release --features cuda      # NVIDIA CUDA
-cargo build --release --features metal     # Apple Silicon
-cargo build --release --features onnx      # ONNX Runtime
-cargo build --release --features grpc      # gRPC server
+# Build with CUDA support (Linux)
+cargo build --release --features cuda
 
-# All features
-cargo build --release --features cuda,metal,onnx,grpc
+# Build with Metal support (macOS)
+cargo build --release --features metal
+
+# Build with all features
+cargo build --release --features cuda,onnx,grpc,auth,redis
+```
+
+### Configuration
+
+Copy the example configuration and customize:
+
+```bash
+cp config.toml config_custom.toml
+# Edit config_custom.toml with your settings
 ```
 
 ### Running
 
 ```bash
-# Default configuration
-cargo run --release
+# Run with default configuration
+./target/release/vecboost
 
-# Custom configuration
-cargo run --release -- --config config.toml
+# Run with custom configuration
+./target/release/vecboost --config config_custom.toml
 ```
+
+The service will start on `http://localhost:9002` by default.
 
 ### Docker
 
 ```bash
-docker build -t vecboost .
-docker run -p 9002:9002 -p 50051:50051 -p 9090:9090 vecboost
+# Build the image
+docker build -t vecboost:latest .
+
+# Run the container
+docker run -p 9002:9002 -v $(pwd)/config.toml:/app/config.toml vecboost:latest
 ```
 
----
+## 📖 Documentation
 
-## 📚 Documentation
+- [📋 User Guide](USER_GUIDE.md) - Detailed usage instructions
+- [🔌 API Reference](API_REFERENCE.md) - REST API and gRPC documentation
+- [🏗️ Architecture](ARCHITECTURE.md) - System design and components
+- [🤝 Contributing](docs/CONTRIBUTING.md) - Contribution guidelines
 
-- [📖 User Guide](docs/USER_GUIDE.md)
-- [🏗️ Architecture](docs/ARCHITECTURE.md)
-- [📘 API Reference](docs/API_REFERENCE.md)
-- [🤝 Contributing Guide](docs/CONTRIBUTING.md)
+## 🔌 API Usage
 
----
+### HTTP REST API
 
-## 🏗️ Architecture
+Generate embeddings via HTTP:
 
-```mermaid
-graph TB
-    Client --> HTTP[HTTP API :9002]
-    Client --> gRPC[gRPC API :50051]
-    
-    HTTP --> Auth[Auth Middleware]
-    gRPC --> Auth
-    
-    Auth --> RateLimit[Rate Limiting]
-    RateLimit --> Router[Request Router]
-    
-    Router --> Embedding[/embed]
-    Router --> Similarity[/similarity]
-    Router --> Search[/search]
-    Router --> Health[/health]
-    
-    Embedding --> Service[Embedding Service]
-    Similarity --> Service
-    Search --> Service
-    
-    Service --> Engine[Inference Engine]
-    Engine --> Candle[Candle Engine]
-    Engine --> ONNX[ONNX Engine]
-    
-    Engine --> Device[Device Manager]
-    Device --> GPU[GPU/CUDA]
-    Device --> CPU[CPU]
-    
-    Service --> Cache[KV Cache]
-    Service --> Pipeline[Priority Pipeline]
-    
-    Pipeline --> Queue[Request Queue]
-    Queue --> Scheduler[Batch Scheduler]
-    
-    Service --> Metrics[Metrics Collector]
-    Metrics --> Prometheus[:9090]
+```bash
+curl -X POST http://localhost:9002/api/v1/embed \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello, world!"}'
 ```
 
----
+Response:
+
+```json
+{
+  "embedding": [0.123, 0.456, ...],
+  "dimension": 1024,
+  "processing_time_ms": 15.5
+}
+```
+
+### gRPC API
+
+The service also exposes a gRPC interface on port 50051 (configurable):
+
+```protobuf
+service EmbeddingService {
+  rpc Embed(EmbedRequest) returns (EmbedResponse);
+  rpc EmbedBatch(BatchEmbedRequest) returns (BatchEmbedResponse);
+  rpc ComputeSimilarity(SimilarityRequest) returns (SimilarityResponse);
+}
+```
+
+### OpenAPI Documentation
+
+Access the interactive API documentation at:
+- Swagger UI: `http://localhost:9002/swagger-ui/`
+- ReDoc: `http://localhost:9002/redoc/`
 
 ## ⚙️ Configuration
 
-### Default Ports
-
-| Service | Port |
-|---------|------|
-| HTTP API | 9002 |
-| gRPC API | 50051 |
-| Prometheus | 9090 |
-
-### Example config.toml
+### Key Configuration Options
 
 ```toml
 [server]
@@ -143,86 +136,154 @@ host = "0.0.0.0"
 port = 9002
 
 [model]
-model_repo = "BAAI/bge-m3"
-use_gpu = false
+model_repo = "BAAI/bge-m3"  # HuggingFace model ID
+use_gpu = true
 batch_size = 32
+expected_dimension = 1024
+
+[embedding]
+cache_enabled = true
+cache_size = 1024
 
 [auth]
 enabled = true
-jwt_secret = "your-secret-key-min-32-chars"
-
-[rate_limit]
-enabled = true
-global_requests_per_minute = 1000
+jwt_secret = "your-secret-key"
 ```
 
----
+See [Configuration Guide](config.toml) for all options.
 
-## 📊 Performance
+## 🏗️ Architecture
 
-| Metric | Value |
-|--------|-------|
-| Throughput | 10,000+ req/sec |
-| P95 Latency | < 50ms |
-| P99 Latency | < 100ms |
-| Error Rate | < 0.1% |
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      VecBoost Service                        │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │   HTTP/gRPC │  │  Auth Layer │  │  Rate Limiting      │  │
+│  │   Endpoints │  │  (JWT/CSRF) │  │  (Token Bucket)     │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+│         │                │                   │               │
+│         └────────────────┴───────────────────┘               │
+│                          │                                   │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              Request Pipeline                        │    │
+│  │  ┌─────────┐  ┌───────────┐  ┌─────────────────┐   │    │
+│  │  │ Priority│  │ Request   │  │ Response        │   │    │
+│  │  │ Queue   │→ │ Workers   │→ │ Channel         │   │    │
+│  │  └─────────┘  └───────────┘  └─────────────────┘   │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                          │                                   │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              Embedding Service                       │    │
+│  │  ┌─────────┐  ┌───────────┐  ┌─────────────────┐   │    │
+│  │  │ Text    │  │ Inference │  │ Vector Cache    │   │    │
+│  │  │ Chunking│→ │ Engine    │→ │ (LRU/LFU/KV)    │   │    │
+│  │  └─────────┘  └───────────┘  └─────────────────┘   │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                          │                                   │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              Inference Engine                        │    │
+│  │    ┌─────────────┐  ┌─────────────┐                 │    │
+│  │    │   Candle    │  │    ONNX     │                 │    │
+│  │    │  (Native)   │  │  Runtime    │                 │    │
+│  │    └─────────────┘  └─────────────┘                 │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                          │                                   │
+│         ┌────────────────┼────────────────┐                 │
+│         ▼                ▼                ▼                 │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐              │
+│  │   CPU    │    │   CUDA   │    │  Metal   │              │
+│  └──────────┘    └──────────┘    └──────────┘              │
+└─────────────────────────────────────────────────────────────┘
+```
 
----
-
-## 📁 Project Structure
+## 📦 Project Structure
 
 ```
 vecboost/
 ├── src/
 │   ├── audit/          # Audit logging
-│   ├── auth/           # Authentication (JWT, CSRF, User Store)
-│   ├── cache/          # Multi-level caching
+│   ├── auth/           # Authentication (JWT, CSRF)
+│   ├── cache/          # Multi-tier caching (LRU, LFU, KV)
 │   ├── config/         # Configuration management
-│   ├── device/         # GPU/CPU device management
-│   ├── domain/         # Domain types
+│   ├── device/         # Device management (CPU, CUDA, Metal)
 │   ├── engine/         # Inference engines (Candle, ONNX)
 │   ├── grpc/           # gRPC server
 │   ├── metrics/        # Prometheus metrics
-│   ├── pipeline/       # Request queue & scheduling
+│   ├── model/          # Model downloading and management
+│   ├── pipeline/       # Request pipeline and prioritization
 │   ├── rate_limit/     # Rate limiting
-│   ├── routes/         # HTTP handlers
-│   ├── security/       # Encryption, key store
-│   ├── service/        # Business logic
-│   └── text/           # Text processing
-├── tests/              # Integration & performance tests
-├── examples/           # Example code
-├── deployments/        # Docker, Kubernetes configs
-└── docs/               # Documentation
+│   ├── routes/         # HTTP routes
+│   ├── security/       # Security utilities
+│   ├── service/        # Core embedding service
+│   └── text/           # Text processing and tokenization
+├── examples/gpu/       # GPU example programs
+├── proto/              # gRPC protocol definitions
+├── deployments/        # Kubernetes deployment configs
+├── tests/              # Integration tests
+└── config.toml         # Default configuration
 ```
 
----
+## 🎯 Performance
 
-## 🧪 Testing
+| Metric | Value |
+|--------|-------|
+| Embedding Dimension | Up to 4096 |
+| Batch Size | Up to 256 |
+| Requests/Second | 1000+ (CPU) |
+| Latency (p99) | < 50ms (GPU) |
+| Cache Hit Ratio | > 90% (with 1024 entries) |
+
+## 🔒 Security
+
+- **Authentication**: JWT tokens with configurable expiration
+- **Authorization**: Role-based access control
+- **Audit Logging**: All requests logged with user and action details
+- **Rate Limiting**: Per-IP, per-user, and global rate limits
+- **Encryption**: AES-256-GCM for sensitive data at rest
+
+## 📈 Monitoring
+
+- **Prometheus Metrics**: `/metrics` endpoint for Prometheus scraping
+- **Health Checks**: `/health` endpoint for liveness/readiness
+- **OpenAPI Docs**: Swagger UI at `/swagger-ui/`
+- **Grafana Dashboards**: Pre-configured dashboards in `deployments/`
+
+## 🚀 Deployment
+
+### Kubernetes
 
 ```bash
-# All tests with all features
-cargo test --all-features
-
-# Unit tests
-cargo test --lib
-
-# Integration tests
-cargo test --tests
-
-# Performance benchmarks
-cargo test --features cuda,grpc --test performance_test
+# Deploy to Kubernetes
+kubectl apply -f deployments/kubernetes/
 ```
 
----
+See [Deployment Guide](deployments/kubernetes/README.md) for detailed instructions.
+
+### Docker Compose
+
+```yaml
+services:
+  vecboost:
+    image: vecboost:latest
+    ports:
+      - "9002:9002"
+    volumes:
+      - ./config.toml:/app/config.toml
+    environment:
+      - MODEL_REPO=BAAI/bge-m3
+```
+
+## 🤝 Contributing
+
+Contributions are welcome! Please read our [Contributing Guide](docs/CONTRIBUTING.md) for details.
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
----
+## 🙏 Acknowledgments
 
-<div align="center">
-
-**Built with ❤️ by the VecBoost Team**
-
-</div>
+- [Candle](https://github.com/huggingface/candle) - Native Rust ML framework
+- [ONNX Runtime](https://onnxruntime.ai/) - Cross-platform ML inference
+- [Hugging Face Hub](https://huggingface.co/models) - Model repository

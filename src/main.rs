@@ -138,10 +138,10 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Administrator password validation failed: {}", e))?;
 
         let admin_user = create_default_admin_user(&admin_username, &admin_password)
-            .expect("Failed to create default admin user");
+            .map_err(|e| anyhow::anyhow!("Failed to create default admin user: {}", e))?;
         user_store
             .add_user(admin_user)
-            .expect("Failed to add default admin user");
+            .map_err(|e| anyhow::anyhow!("Failed to add default admin user: {}", e))?;
 
         tracing::info!(
             "JWT authentication enabled with {} storage",

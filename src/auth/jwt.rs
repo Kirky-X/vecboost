@@ -94,13 +94,13 @@ impl JwtManager {
         Ok(())
     }
 
-    pub fn new(secret: String) -> Self {
-        Self::validate_secret(&secret).expect("JWT secret validation failed");
+    pub fn new(secret: String) -> Result<Self, AppError> {
+        Self::validate_secret(&secret)?;
 
         let encoding_key = Arc::new(EncodingKey::from_secret(secret.as_ref()));
         let decoding_key = Arc::new(DecodingKey::from_secret(secret.as_ref()));
 
-        Self {
+        Ok(Self {
             encoding_key,
             decoding_key,
             expiration_hours: DEFAULT_TOKEN_EXPIRATION_HOURS,
@@ -108,7 +108,7 @@ impl JwtManager {
             key_store: None,
             token_blacklist: Arc::new(RwLock::new(HashSet::new())),
             refresh_counts: Arc::new(RwLock::new(HashMap::new())),
-        }
+        })
     }
 
     pub async fn new_with_key_store(
@@ -319,7 +319,7 @@ mod tests {
     async fn test_token_generation_and_validation() {
         // 使用符合熵值要求的测试密钥（至少 32 字节，高熵值）
         let secret = "test_secret_key_for_jwt_validation_must_be_long_enough_12345678";
-        let manager = JwtManager::new(secret.to_string());
+        let manager = JwtManager::new(secret.to_string()).unwrap();
 
         let user = User {
             username: "testuser".to_string(),
@@ -340,7 +340,7 @@ mod tests {
     async fn test_refresh_token_generation() {
         // 使用符合熵值要求的测试密钥
         let secret = "test_secret_key_for_jwt_refresh_must_be_long_enough_87654321";
-        let manager = JwtManager::new(secret.to_string());
+        let manager = JwtManager::new(secret.to_string()).unwrap();
 
         let user = User {
             username: "testuser".to_string(),
@@ -359,7 +359,7 @@ mod tests {
     async fn test_token_revocation() {
         // 使用符合熵值要求的测试密钥
         let secret = "test_secret_key_for_jwt_revocation_must_be_long_enough_abc123xyz";
-        let manager = JwtManager::new(secret.to_string());
+        let manager = JwtManager::new(secret.to_string()).unwrap();
 
         let user = User {
             username: "testuser".to_string(),
@@ -381,7 +381,7 @@ mod tests {
     async fn test_invalid_token() {
         // 使用符合熵值要求的测试密钥
         let secret = "test_secret_key_for_jwt_invalid_must_be_long_enough_999888777";
-        let manager = JwtManager::new(secret.to_string());
+        let manager = JwtManager::new(secret.to_string()).unwrap();
 
         let invalid_token = "invalid.token.here";
         let result = manager.validate_token(invalid_token).await;
@@ -394,8 +394,8 @@ mod tests {
         let secret1 = "test_secret_key_1_for_jwt_different_must_be_long_enough_111222";
         let secret2 = "test_secret_key_2_for_jwt_different_must_be_long_enough_333444";
 
-        let manager1 = JwtManager::new(secret1.to_string());
-        let manager2 = JwtManager::new(secret2.to_string());
+        let manager1 = JwtManager::new(secret1.to_string()).unwrap();
+        let manager2 = JwtManager::new(secret2.to_string()).unwrap();
 
         let user = User {
             username: "testuser".to_string(),

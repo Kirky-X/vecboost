@@ -3,8 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-#![allow(unused)]
-
+use crate::audit::AuditLogger;
 use crate::auth::csrf::{CsrfConfig, CsrfProtection, CsrfTokenStore, OriginValidator};
 use crate::auth::jwt::JwtManager;
 use crate::auth::types::User;
@@ -35,8 +34,8 @@ impl JwtAuthLayer {
 
 pub async fn auth_middleware(
     State(jwt_manager): State<Arc<JwtManager>>,
-    // State(audit_logger): State<Arc<AuditLogger>>,
-    mut request: Request,
+    State(audit_logger): State<Option<Arc<AuditLogger>>>,
+    request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
     // 从 Authorization 头获取 token
@@ -45,14 +44,24 @@ pub async fn auth_middleware(
         .get("authorization")
         .and_then(|h| h.to_str().ok());
 
+    let ip = request
+        .headers()
+        .get("x-forwarded-for")
+        .or_else(|| request.headers().get("x-real-ip"))
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    let path = request.uri().path().to_string();
+
     let token = match auth_header {
         Some(header) if header.starts_with("Bearer ") => {
             &header[7..] // 跳过 "Bearer "
         }
         _ => {
             // Log unauthorized access
-            // let path = request.uri().path().to_string();
-            // audit_logger.log_unauthorized_access(None, &path);
+            if let Some(ref logger) = audit_logger {
+                logger.log_unauthorized_access(ip.clone(), &path);
+            }
             return Err(StatusCode::UNAUTHORIZED);
         }
     };
@@ -72,8 +81,9 @@ pub async fn auth_middleware(
         }
         Err(_) => {
             // Log unauthorized access for invalid token
-            // let path = request.uri().path().to_string();
-            // audit_logger.log_unauthorized_access(None, &path);
+            if let Some(ref logger) = audit_logger {
+                logger.log_unauthorized_access(ip.clone(), &path);
+            }
             Err(StatusCode::UNAUTHORIZED)
         }
     }
@@ -290,7 +300,7 @@ pub async fn csrf_combined_middleware(
 
     // Step 1: Validate Origin header (if allowed origins are configured)
     if !csrf_config.allowed_origins.is_empty() {
-        let origin = OriginValidator::validate_origin(request.headers(), &csrf_config, &uri)?;
+        let _origin = OriginValidator::validate_origin(request.headers(), &csrf_config, &uri)?;
         tracing::debug!("CSRF origin validation passed for {}", uri);
     }
 

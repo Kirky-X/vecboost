@@ -214,8 +214,8 @@ mod tests {
         let normalized_result = aggregator_normalized.aggregate(&embeddings).unwrap();
         let not_normalized_result = aggregator_not_normalized.aggregate(&embeddings).unwrap();
 
-        println!("Normalized: {:?}", normalized_result);
-        println!("Not normalized: {:?}", not_normalized_result);
+        tracing::debug!("Normalized: {:?}", normalized_result);
+        tracing::debug!("Not normalized: {:?}", not_normalized_result);
 
         assert!((normalized_result[0] - 1.0).abs() < 1e-6);
         assert!((not_normalized_result[0] - 2.0).abs() < 1e-6);
@@ -286,8 +286,8 @@ mod tests {
             .aggregate_with_weights(&embeddings, &weights)
             .unwrap();
 
-        println!("Weighted aggregation result: {:?}", result);
-        println!("Weight sum: {}", weights.iter().sum::<f32>());
+        tracing::debug!("Weighted aggregation result: {:?}", result);
+        tracing::debug!("Weight sum: {}", weights.iter().sum::<f32>());
 
         assert!(
             (result[0] - 1.0).abs() < 1e-6,

@@ -1,36 +1,45 @@
-# API 参考文档
+<div align="center">
 
-本文档提供 VecBoost API 的完整文档，包括 REST HTTP 端点和 gRPC 服务方法。
+# 📚 VecBoost API 参考文档
 
-## 目录
+**完整的 REST HTTP 端点和 gRPC 服务方法文档**
 
-- [基础 URL](#基础-url)
-- [认证](#认证)
-- [REST API](#rest-api)
-  - [嵌入向量](#嵌入向量)
-  - [相似度计算](#相似度计算)
-  - [模型管理](#模型管理)
-  - [健康检查](#健康检查)
-- [gRPC API](#grpc-api)
-  - [服务方法](#服务方法)
-  - [消息类型](#消息类型)
-- [错误处理](#错误处理)
-- [速率限制](#速率限制)
+[![Version 0.1.0](https://img.shields.io/badge/Version-0.1.0-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002) [![gRPC](https://img.shields.io/badge/gRPC-50051-green.svg?style=for-the-badge)](localhost:50051)
+
+*VecBoost API 的完整文档，包括 REST HTTP 端点和 gRPC 服务方法。*
+
+</div>
 
 ---
 
-## 基础 URL
+## 📋 目录
 
-| 环境 | URL |
-|------|-----|
-| 生产环境 | `http://localhost:9002` |
-| gRPC | `localhost:50051` |
+| 章节 | 说明 |
+|------|------|
+| [基础 URL](#基础-url) | API 端点基础地址 |
+| [认证](#认证) | JWT 认证和令牌管理 |
+| [REST API](#rest-api) | HTTP REST 接口文档 |
+| [gRPC API](#grpc-api) | gRPC 服务定义和消息类型 |
+| [错误处理](#错误处理) | 错误码和响应格式 |
+| [速率限制](#速率限制) | 速率限制策略和响应头 |
 
 ---
 
-## 认证
+## 🌍 基础 URL
 
-启用认证时，请在 Authorization 头中包含 Bearer 令牌：
+| 环境 | 协议 | URL | 端口 |
+|------|------|-----|------|
+| **REST API** | HTTP | `http://localhost:9002` | `9002` |
+| **gRPC API** | HTTP/2 | `localhost:50051` | `50051` |
+| **Prometheus** | HTTP | `http://localhost:9090` | `9090` |
+
+> **💡 提示**: 所有 REST API 端点都以 `/api/v1/` 为前缀。
+
+---
+
+## 🔐 认证
+
+启用认证时，请在 `Authorization` 头中包含 Bearer 令牌：
 
 ```bash
 curl -X POST http://localhost:9002/api/v1/embed \
@@ -41,17 +50,18 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 ### 获取令牌
 
-```bash
-POST /api/v1/auth/login
-Content-Type: application/json
+**端点:** `POST /api/v1/auth/login`
 
+**请求体:**
+
+```json
 {
   "username": "admin",
   "password": "Secure@Passw0rd!"
 }
 ```
 
-响应：
+**响应:**
 
 ```json
 {
@@ -61,9 +71,17 @@ Content-Type: application/json
 }
 ```
 
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `access_token` | string | JWT 访问令牌 |
+| `token_type` | string | 令牌类型（始终为 `bearer`） |
+| `expires_in` | integer | 令牌过期时间（秒） |
+
+> **⚠️ 注意**: 令牌默认 1 小时后过期，可在配置中调整。
+
 ---
 
-## REST API
+## 🌐 REST API
 
 ### 嵌入向量
 
@@ -73,13 +91,20 @@ Content-Type: application/json
 
 **端点:** `POST /api/v1/embed`
 
-**请求体:**
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `text` | string | ✅ | 要嵌入的文本 |
+| `normalize` | boolean | ❌ | 是否归一化向量（默认: false） |
 
-```json
-{
-  "text": "string",
-  "normalize": "boolean (可选)"
-}
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/v1/embed \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "The quick brown fox jumps over the lazy dog",
+    "normalize": true
+  }'
 ```
 
 **响应:**
@@ -92,13 +117,13 @@ Content-Type: application/json
 }
 ```
 
-**示例:**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `embedding` | array | 嵌入向量数组 |
+| `dimension` | integer | 向量维度 |
+| `processing_time_ms` | number | 处理时间（毫秒） |
 
-```bash
-curl -X POST http://localhost:9002/api/v1/embed \
-  -H "Content-Type: application/json" \
-  -d '{"text": "The quick brown fox jumps over the lazy dog"}'
-```
+---
 
 #### 批量嵌入
 
@@ -106,13 +131,20 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 **端点:** `POST /api/v1/embed/batch`
 
-**请求体:**
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `texts` | array | ✅ | 文本数组 |
+| `normalize` | boolean | ❌ | 是否归一化向量 |
 
-```json
-{
-  "texts": ["string", "string", ...],
-  "normalize": "boolean (可选)"
-}
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/v1/embed/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "texts": ["第一个文档", "第二个文档", "第三个文档"],
+    "normalize": true
+  }'
 ```
 
 **响应:**
@@ -120,13 +152,23 @@ curl -X POST http://localhost:9002/api/v1/embed \
 ```json
 {
   "embeddings": [
-    {"embedding": [...], "dimension": 1024, "processing_time_ms": 12.3},
-    {"embedding": [...], "dimension": 1024, "processing_time_ms": 11.8}
+    {
+      "embedding": [...],
+      "dimension": 1024,
+      "processing_time_ms": 12.3
+    },
+    {
+      "embedding": [...],
+      "dimension": 1024,
+      "processing_time_ms": 11.8
+    }
   ],
   "total_count": 2,
   "processing_time_ms": 25.5
 }
 ```
+
+---
 
 #### 文件嵌入
 
@@ -134,15 +176,22 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 **端点:** `POST /api/v1/embed/file`
 
-**请求体:**
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | ✅ | 文件路径 |
+| `mode` | string | ❌ | 嵌入模式 (`paragraph` 或 `chunk`) |
+| `chunk_size` | integer | ❌ | 分块大小（默认: 512） |
+| `overlap` | integer | ❌ | 重叠大小（默认: 50） |
 
-```json
-{
-  "path": "/path/to/file.txt",
-  "mode": "paragraph | chunk",
-  "chunk_size": 512,
-  "overlap": 50
-}
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/v1/embed/file \
+  -H "Content-Type: application/json" \
+  -d '{
+    "path": "/path/to/document.txt",
+    "mode": "paragraph"
+  }'
 ```
 
 **响应:**
@@ -178,14 +227,22 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 **端点:** `POST /api/v1/similarity`
 
-**请求体:**
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `vector1` | array | ✅ | 第一个向量 |
+| `vector2` | array | ✅ | 第二个向量 |
+| `metric` | string | ❌ | 相似度度量 (`cosine`, `euclidean`, `dot_product`, `manhattan`) |
 
-```json
-{
-  "vector1": [0.1, 0.2, 0.3, ...],
-  "vector2": [0.1, 0.2, 0.3, ...],
-  "metric": "cosine | euclidean | dot_product | manhattan"
-}
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/v1/similarity \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vector1": [0.1, 0.2, 0.3, ...],
+    "vector2": [0.1, 0.2, 0.3, ...],
+    "metric": "cosine"
+  }'
 ```
 
 **响应:**
@@ -197,21 +254,36 @@ curl -X POST http://localhost:9002/api/v1/embed \
 }
 ```
 
+---
+
 #### 相似文档搜索
 
-从集合中找到最相似的向量。
+从文档集合中找到最相似的向量。
 
 **端点:** `POST /api/v1/search`
 
-**请求体:**
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `query` | string | ✅ | 搜索查询文本 |
+| `documents` | array | ✅ | 文档数组 |
+| `top_k` | integer | ❌ | 返回结果数量（默认: 5） |
+| `metric` | string | ❌ | 相似度度量 |
 
-```json
-{
-  "query": "search text",
-  "documents": ["doc1", "doc2", "doc3"],
-  "top_k": 5,
-  "metric": "cosine"
-}
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "AI 技术发展",
+    "documents": [
+      "关于人工智能的文档",
+      "关于机器学习的文档",
+      "关于深度学习的文档"
+    ],
+    "top_k": 2,
+    "metric": "cosine"
+  }'
 ```
 
 **响应:**
@@ -221,8 +293,13 @@ curl -X POST http://localhost:9002/api/v1/embed \
   "results": [
     {
       "index": 0,
-      "text": "doc1",
+      "text": "关于人工智能的文档",
       "score": 0.95
+    },
+    {
+      "index": 1,
+      "text": "关于机器学习的文档",
+      "score": 0.87
     }
   ],
   "query_embedding": [0.123, ...]
@@ -254,6 +331,17 @@ curl -X POST http://localhost:9002/api/v1/embed \
 }
 ```
 
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | string | 模型名称（HuggingFace ID） |
+| `engine_type` | string | 引擎类型 (`candle` 或 `onnx`) |
+| `device_type` | string | 设备类型 (`cpu`, `cuda`, `metal`) |
+| `dimension` | integer | 嵌入向量维度 |
+| `precision` | string | 模型精度 (`fp16`, `fp32`) |
+| `max_batch_size` | integer | 最大批处理大小 |
+
+---
+
 #### 列出可用模型
 
 列出所有可用模型。
@@ -270,11 +358,19 @@ curl -X POST http://localhost:9002/api/v1/embed \
       "version": "main",
       "dimension": 1024,
       "supported_devices": ["cpu", "cuda", "metal"]
+    },
+    {
+      "name": "BAAI/bge-small-en-v1.5",
+      "version": "main",
+      "dimension": 384,
+      "supported_devices": ["cpu", "cuda", "metal"]
     }
   ],
   "current_model": "BAAI/bge-m3"
 }
 ```
+
+---
 
 #### 切换模型
 
@@ -282,14 +378,23 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 **端点:** `POST /api/v1/model/switch`
 
-**请求体:**
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `model_name` | string | ✅ | 模型名称 |
+| `engine_type` | string | ❌ | 引擎类型 (`candle`, `onnx`) |
+| `device_type` | string | ❌ | 设备类型 (`auto`, `cpu`, `cuda`, `metal`) |
 
-```json
-{
-  "model_name": "BAAI/bge-small-en-v1.5",
-  "engine_type": "candle",
-  "device_type": "auto"
-}
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/v1/model/switch \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{
+    "model_name": "BAAI/bge-small-en-v1.5",
+    "engine_type": "candle",
+    "device_type": "auto"
+  }'
 ```
 
 **响应:**
@@ -326,6 +431,15 @@ curl -X POST http://localhost:9002/api/v1/embed \
 }
 ```
 
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | string | 健康状态 (`healthy`, `degraded`, `unhealthy`) |
+| `version` | string | 服务版本 |
+| `uptime` | string | 运行时间 |
+| `model_loaded` | string | 当前加载的模型名称 |
+
+---
+
 #### 就绪检查
 
 检查服务是否准备好接收请求。
@@ -340,50 +454,99 @@ curl -X POST http://localhost:9002/api/v1/embed \
 }
 ```
 
-#### 指标
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ready` | boolean | 是否准备好接收请求 |
+
+---
+
+#### Prometheus 指标
 
 Prometheus 指标端点。
 
 **端点:** `GET /metrics`
 
-返回 Prometheus 格式的指标，包括：
-- `vecboost_requests_total` - 总请求数
-- `vecboost_embedding_latency_seconds` - 嵌入延迟
-- `vecboost_cache_hit_ratio` - 缓存命中率
-- `vecboost_batch_size` - 批处理大小
+| 指标名称 | 类型 | 说明 |
+|----------|------|------|
+| `vecboost_requests_total` | counter | 总请求数 |
+| `vecboost_embedding_latency_seconds` | histogram | 嵌入延迟分布 |
+| `vecboost_cache_hit_ratio` | gauge | 缓存命中率 |
+| `vecboost_batch_size` | histogram | 批处理大小分布 |
+| `vecboost_model_load_duration_seconds` | histogram | 模型加载时间 |
+| `vecboost_active_requests` | gauge | 活跃请求数 |
 
----
+**示例查询:**
 
-## gRPC API
+```promql
+# 请求率
+rate(vecboost_requests_total[5m])
 
-### 服务定义
+# p99 延迟
+histogram_quantile(0.99, rate(vecboost_embedding_latency_seconds_bucket[5m]))
 
-```protobuf
-service EmbeddingService {
-  rpc Embed(EmbedRequest) returns (EmbedResponse);
-  rpc EmbedBatch(BatchEmbedRequest) returns (BatchEmbedResponse);
-  rpc ComputeSimilarity(SimilarityRequest) returns (SimilarityResponse);
-  rpc EmbedFile(FileEmbedRequest) returns (FileEmbedResponse);
-  rpc ModelSwitch(ModelSwitchRequest) returns (ModelSwitchResponse);
-  rpc GetCurrentModel(Empty) returns (ModelInfo);
-  rpc GetModelInfo(Empty) returns (ModelMetadata);
-  rpc ListModels(Empty) returns (ModelListResponse);
-  rpc HealthCheck(Empty) returns (HealthResponse);
-}
+# 缓存命中率
+vecboost_cache_hit_ratio
 ```
 
 ---
 
-### 服务方法
+## 🔌 gRPC API
 
-#### Embed
+### 服务定义
 
-为单个文本生成嵌入向量。
+```protobuf
+syntax = "proto3";
+
+package vecboost;
+
+service EmbeddingService {
+  // 嵌入相关
+  rpc Embed(EmbedRequest) returns (EmbedResponse);
+  rpc EmbedBatch(BatchEmbedRequest) returns (BatchEmbedResponse);
+  rpc EmbedFile(FileEmbedRequest) returns (FileEmbedResponse);
+  
+  // 相似度计算
+  rpc ComputeSimilarity(SimilarityRequest) returns (SimilarityResponse);
+  
+  // 模型管理
+  rpc ModelSwitch(ModelSwitchRequest) returns (ModelSwitchResponse);
+  rpc GetCurrentModel(Empty) returns (ModelInfo);
+  rpc GetModelInfo(Empty) returns (ModelMetadata);
+  rpc ListModels(Empty) returns (ModelListResponse);
+  
+  // 健康检查
+  rpc HealthCheck(Empty) returns (HealthResponse);
+}
+```
+
+> **💡 提示**: 使用 `proto/embedding.proto` 文件生成客户端存根。
+
+---
+
+### 服务方法概览
+
+| 方法 | 输入类型 | 输出类型 | 说明 |
+|------|----------|----------|------|
+| `Embed` | `EmbedRequest` | `EmbedResponse` | 生成单个嵌入向量 |
+| `EmbedBatch` | `BatchEmbedRequest` | `BatchEmbedResponse` | 批量生成嵌入向量 |
+| `EmbedFile` | `FileEmbedRequest` | `FileEmbedResponse` | 文件嵌入 |
+| `ComputeSimilarity` | `SimilarityRequest` | `SimilarityResponse` | 计算相似度 |
+| `ModelSwitch` | `ModelSwitchRequest` | `ModelSwitchResponse` | 切换模型 |
+| `GetCurrentModel` | `Empty` | `ModelInfo` | 获取当前模型信息 |
+| `GetModelInfo` | `Empty` | `ModelMetadata` | 获取模型元数据 |
+| `ListModels` | `Empty` | `ModelListResponse` | 列出可用模型 |
+| `HealthCheck` | `Empty` | `HealthResponse` | 健康检查 |
+
+---
+
+### 消息类型定义
+
+#### 嵌入请求/响应
 
 ```protobuf
 message EmbedRequest {
   string text = 1;
-  optional bool normalize = 2;
+  bool normalize = 2;
 }
 
 message EmbedResponse {
@@ -391,26 +554,10 @@ message EmbedResponse {
   int64 dimension = 2;
   double processing_time_ms = 3;
 }
-```
 
-**示例 (Go):**
-
-```go
-client := embedding.NewEmbeddingServiceClient(conn)
-resp, err := client.Embed(ctx, &embedding.EmbedRequest{
-    Text: "Hello, world!",
-    Normalize: proto.Bool(true),
-})
-```
-
-#### EmbedBatch
-
-为多个文本生成嵌入向量。
-
-```protobuf
 message BatchEmbedRequest {
   repeated string texts = 1;
-  optional bool normalize = 2;
+  bool normalize = 2;
 }
 
 message BatchEmbedResponse {
@@ -420,15 +567,13 @@ message BatchEmbedResponse {
 }
 ```
 
-#### ComputeSimilarity
-
-计算两个向量之间的相似度。
+#### 相似度请求/响应
 
 ```protobuf
 message SimilarityRequest {
   repeated float vector1 = 1;
   repeated float vector2 = 2;
-  string metric = 3;
+  string metric = 3;  // cosine, euclidean, dot_product, manhattan
 }
 
 message SimilarityResponse {
@@ -437,16 +582,14 @@ message SimilarityResponse {
 }
 ```
 
-#### EmbedFile
-
-为文件生成嵌入向量。
+#### 文件嵌入
 
 ```protobuf
 message FileEmbedRequest {
   string path = 1;
-  optional string mode = 2;
-  optional int32 chunk_size = 3;
-  optional int32 overlap = 4;
+  string mode = 2;       // paragraph | chunk
+  int32 chunk_size = 3;
+  int32 overlap = 4;
 }
 
 message FileEmbedResponse {
@@ -471,15 +614,13 @@ message ParagraphEmbedding {
 }
 ```
 
-#### ModelSwitch
-
-切换活动模型。
+#### 模型管理
 
 ```protobuf
 message ModelSwitchRequest {
   string model_name = 1;
-  optional string engine_type = 2;
-  optional string device_type = 3;
+  string engine_type = 2;   // candle | onnx
+  string device_type = 3;   // auto | cpu | cuda | metal
 }
 
 message ModelSwitchResponse {
@@ -498,21 +639,7 @@ message ModelInfo {
   bool cache_enabled = 7;
   int64 cache_size = 8;
 }
-```
 
-#### GetCurrentModel
-
-获取当前加载模型的信息。
-
-```protobuf
-rpc GetCurrentModel(Empty) returns (ModelInfo);
-```
-
-#### GetModelInfo
-
-获取当前模型的详细元数据。
-
-```protobuf
 message ModelMetadata {
   string model_name = 1;
   string version = 2;
@@ -527,54 +654,117 @@ message ModelMetadata {
   repeated string supported_precisions = 11;
 }
 
-rpc GetModelInfo(Empty) returns (ModelMetadata);
-```
-
-#### ListModels
-
-列出所有可用模型。
-
-```protobuf
 message ModelListResponse {
   repeated ModelMetadata models = 1;
   string current_model = 2;
 }
-
-rpc ListModels(Empty) returns (ModelListResponse);
 ```
 
-#### HealthCheck
-
-检查服务健康状态。
+#### 健康检查
 
 ```protobuf
 message HealthResponse {
   string status = 1;
   string version = 2;
   string uptime = 3;
-  optional string model_loaded = 4;
+  string model_loaded = 4;
 }
 
-rpc HealthCheck(Empty) returns (HealthResponse);
+message Empty {}
 ```
 
 ---
 
-## 错误处理
+### SDK 使用示例
+
+#### Python
+
+```python
+import grpc
+import embedding_pb2
+import embedding_pb2_grpc
+
+# 连接 gRPC 服务
+channel = grpc.insecure_channel('localhost:50051')
+stub = embedding_pb2_grpc.EmbeddingServiceStub(channel)
+
+# 单个嵌入请求
+request = embedding_pb2.EmbedRequest(
+    text="Hello, world!",
+    normalize=True
+)
+response = stub.Embed(request)
+print(f"Embedding dimension: {response.dimension}")
+print(f"Processing time: {response.processing_time_ms:.2f}ms")
+
+# 批量嵌入请求
+batch_request = embedding_pb2.BatchEmbedRequest(
+    texts=["文档1", "文档2", "文档3"],
+    normalize=True
+)
+batch_response = stub.EmbedBatch(batch_request)
+print(f"Processed {batch_response.total_count} embeddings")
+```
+
+#### Go
+
+```go
+import (
+    "context"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials/insecure"
+    pb "vecboost/proto"
+)
+
+func main() {
+    // 连接 gRPC 服务
+    conn, err := grpc.Dial("localhost:50051", 
+        grpc.WithTransportCredentials(insecure.NewCredentials()))
+    if err != nil {
+        log.Fatalf("Failed to connect: %v", err)
+    }
+    defer conn.Close()
+    
+    client := pb.NewEmbeddingServiceClient(conn)
+    
+    // 单个嵌入请求
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    
+    resp, err := client.Embed(ctx, &pb.EmbedRequest{
+        Text: "Hello, world!",
+        Normalize: true,
+    })
+    if err != nil {
+        log.Fatalf("Embed failed: %v", err)
+    }
+    
+    fmt.Printf("Dimension: %d, Time: %.2fms\n", 
+        resp.Dimension, resp.ProcessingTimeMs)
+}
+```
+
+---
+
+## ⚠️ 错误处理
 
 ### HTTP 状态码
 
-| 码 | 含义 |
-|----|------|
-| 200 | 成功 |
-| 400 | 请求错误 |
-| 401 | 未授权 |
-| 403 | 禁止访问 |
-| 429 | 请求过多 |
-| 500 | 服务器内部错误 |
-| 503 | 服务不可用 |
+| 状态码 | 说明 |
+|--------|------|
+| `200` | ✅ 成功 |
+| `400` | ❌ 请求参数错误 |
+| `401` | 🔒 未授权（缺少或无效令牌） |
+| `403` | 🚫 禁止访问（权限不足） |
+| `429` | ⚡ 请求过于频繁（速率限制） |
+| `500` | 💥 服务器内部错误 |
+| `503` | ⏸️ 服务不可用 |
+
+---
 
 ### 错误响应格式
+
+所有错误响应遵循统一格式：
 
 ```json
 {
@@ -586,34 +776,56 @@ rpc HealthCheck(Empty) returns (HealthResponse);
 }
 ```
 
-### 常见错误码
-
-| 码 | 消息 |
-|----|------|
-| `INVALID_INPUT` | 无效的请求体 |
-| `UNAUTHORIZED` | 缺少或无效的认证令牌 |
-| `FORBIDDEN` | 权限不足 |
-| `RATE_LIMITED` | 超出请求速率 |
-| `MODEL_NOT_FOUND` | 未找到模型 |
-| `INFERENCE_ERROR` | 模型推理失败 |
-| `GPU_OOM` | GPU 内存不足 |
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `code` | string | 错误码 |
+| `message` | string | 错误描述 |
+| `details` | object | 错误详情（可选） |
 
 ---
 
-## 速率限制
+### 常见错误码
 
-### 默认限制
+| 错误码 | HTTP 状态码 | 说明 | 解决方案 |
+|--------|-------------|------|----------|
+| `INVALID_INPUT` | 400 | 请求参数无效 | 检查请求体格式 |
+| `UNAUTHORIZED` | 401 | 认证失败 | 获取并使用有效令牌 |
+| `FORBIDDEN` | 403 | 权限不足 | 联系管理员提升权限 |
+| `RATE_LIMITED` | 429 | 超出速率限制 | 使用指数退避重试 |
+| `MODEL_NOT_FOUND` | 404 | 模型不存在 | 检查模型名称 |
+| `INFERENCE_ERROR` | 500 | 推理失败 | 检查模型状态 |
+| `GPU_OOM` | 500 | GPU 内存不足 | 减小批处理大小或使用 CPU |
+| `FILE_NOT_FOUND` | 404 | 文件不存在 | 检查文件路径 |
+| `CONFIG_ERROR` | 500 | 配置错误 | 检查配置文件 |
 
-| 范围 | 请求数 | 时间窗口 |
-|------|--------|----------|
-| 全局 | 1000 | 每分钟 |
-| 每 IP | 100 | 每分钟 |
-| 每用户 | 200 | 每分钟 |
-| 每 API 密钥 | 500 | 每分钟 |
+> **💡 提示**: 启用认证时，401 错误也可能表示令牌已过期。
 
-### 速率限制头
+---
 
-响应包含速率限制信息：
+## ⚡ 速率限制
+
+### 默认限制策略
+
+| 限制类型 | 请求数 | 时间窗口 | 适用场景 |
+|----------|--------|----------|----------|
+| **全局** | 1,000 | 每分钟 | 保护整体服务 |
+| **每 IP** | 100 | 每分钟 | 防止单 IP 攻击 |
+| **每用户** | 200 | 每分钟 | 用户级别限制 |
+| **每 API Key** | 500 | 每分钟 | API 密钥级别 |
+
+---
+
+### 速率限制响应头
+
+所有响应包含速率限制信息：
+
+| 头信息 | 说明 |
+|--------|------|
+| `X-RateLimit-Limit` | 当前限制的最大请求数 |
+| `X-RateLimit-Remaining` | 剩余请求数 |
+| `X-RateLimit-Reset` | 限制重置时间戳（Unix） |
+
+**示例:**
 
 ```
 X-RateLimit-Limit: 100
@@ -623,47 +835,59 @@ X-RateLimit-Reset: 1640995200
 
 ---
 
-## SDK
+### 超出速率限制
 
-### Python
+当超出速率限制时，返回 `429 Too Many Requests` 错误：
 
-```python
-import grpc
-import embedding_pb2
-import embedding_pb2_grpc
-
-channel = grpc.insecure_channel('localhost:50051')
-stub = embedding_pb2_grpc.EmbeddingServiceStub(channel)
-
-request = embedding_pb2.EmbedRequest(
-    text="Hello, world!",
-    normalize=True
-)
-response = stub.Embed(request)
-print(response.embedding)
-```
-
-### Go
-
-```go
-import (
-    "context"
-    "google.golang.org/grpc"
-    pb "vecboost/proto"
-)
-
-conn, _ := grpc.Dial("localhost:50051")
-client := pb.NewEmbeddingServiceClient(conn)
-
-resp, err := client.Embed(context.Background(), &pb.EmbedRequest{
-    Text: "Hello, world!",
-})
+```json
+{
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Rate limit exceeded. Try again in 30 seconds.",
+    "details": {
+      "retry_after": 30,
+      "limit": 100,
+      "current": 100
+    }
+  }
+}
 ```
 
 ---
 
-## 版本历史
+### 自定义速率限制
 
-| 版本 | 日期 | 变更 |
-|------|------|------|
-| 0.1.0 | 2026-01-10 | 初始发布 |
+在配置文件中调整速率限制：
+
+```toml
+[rate_limit]
+enabled = true
+
+[rate_limit.global]
+requests = 2000
+window_seconds = 60
+
+[rate_limit.ip]
+requests = 200
+window_seconds = 60
+
+[rate_limit.user]
+requests = 500
+window_seconds = 60
+
+[rate_limit.api_key]
+requests = 1000
+window_seconds = 60
+```
+
+---
+
+## 📊 版本历史
+
+| 版本 | 日期 | 变更说明 |
+|------|------|----------|
+| `0.1.0` | 2026-01-10 | ✨ 初始发布，支持 REST 和 gRPC API |
+
+---
+
+> **📝 最后更新**: 2026-01-14 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

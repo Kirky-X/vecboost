@@ -152,6 +152,17 @@ impl EncryptedFileKeyStore {
             .await
             .map_err(|e| AppError::io_error(format!("Failed to create key file: {}", e)))?;
 
+        // Set restrictive file permissions (owner read/write only: 0o600)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = file.metadata().await.unwrap().permissions();
+            perms.set_mode(0o600);
+            if let Err(e) = file.set_permissions(perms).await {
+                tracing::warn!("Failed to set restrictive permissions on key file: {}", e);
+            }
+        }
+
         file.write_all(encrypted_content.as_bytes())
             .await
             .map_err(|e| AppError::io_error(format!("Failed to write key file: {}", e)))?;
@@ -159,7 +170,6 @@ impl EncryptedFileKeyStore {
         file.flush()
             .await
             .map_err(|e| AppError::io_error(format!("Failed to flush key file: {}", e)))?;
-
         Ok(())
     }
 

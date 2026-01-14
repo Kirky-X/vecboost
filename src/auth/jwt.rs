@@ -1,10 +1,11 @@
 // Copyright (c) 2025 Kirky.X
 //
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Licensed under MIT License
+// See LICENSE file in the project root for full license information
 
 #![allow(unused)]
 
+use crate::auth::token_store::{MemoryTokenStore, TokenStore, TokenStoreFactory};
 use crate::auth::types::User;
 use crate::error::AppError;
 use crate::security::{KeyStore, KeyType};
@@ -40,7 +41,7 @@ pub struct JwtManager {
     expiration_hours: i64,
     refresh_token_expiration_hours: i64,
     key_store: Option<Arc<dyn KeyStore>>,
-    token_blacklist: Arc<RwLock<HashSet<String>>>,
+    token_store: Arc<dyn TokenStore>,
     refresh_counts: Arc<RwLock<HashMap<String, u32>>>, // Track refresh count per token
 }
 
@@ -106,7 +107,7 @@ impl JwtManager {
             expiration_hours: DEFAULT_TOKEN_EXPIRATION_HOURS,
             refresh_token_expiration_hours: DEFAULT_REFRESH_TOKEN_EXPIRATION_HOURS,
             key_store: None,
-            token_blacklist: Arc::new(RwLock::new(HashSet::new())),
+            token_store: Arc::new(MemoryTokenStore::new()),
             refresh_counts: Arc::new(RwLock::new(HashMap::new())),
         })
     }
@@ -136,7 +137,28 @@ impl JwtManager {
             expiration_hours: DEFAULT_TOKEN_EXPIRATION_HOURS,
             refresh_token_expiration_hours: DEFAULT_REFRESH_TOKEN_EXPIRATION_HOURS,
             key_store: Some(key_store),
-            token_blacklist: Arc::new(RwLock::new(HashSet::new())),
+            token_store: Arc::new(MemoryTokenStore::new()),
+            refresh_counts: Arc::new(RwLock::new(HashMap::new())),
+        })
+    }
+
+    /// Create a new JwtManager with a custom token store
+    pub fn with_token_store(
+        secret: String,
+        token_store: Arc<dyn TokenStore>,
+    ) -> Result<Self, AppError> {
+        Self::validate_secret(&secret)?;
+
+        let encoding_key = Arc::new(EncodingKey::from_secret(secret.as_ref()));
+        let decoding_key = Arc::new(DecodingKey::from_secret(secret.as_ref()));
+
+        Ok(Self {
+            encoding_key,
+            decoding_key,
+            expiration_hours: DEFAULT_TOKEN_EXPIRATION_HOURS,
+            refresh_token_expiration_hours: DEFAULT_REFRESH_TOKEN_EXPIRATION_HOURS,
+            key_store: None,
+            token_store,
             refresh_counts: Arc::new(RwLock::new(HashMap::new())),
         })
     }
@@ -215,13 +237,11 @@ impl JwtManager {
         let claims = self.validate_token(refresh_token).await?;
 
         // 检查是否在黑名单中
-        let blacklist = self.token_blacklist.read().await;
-        if blacklist.contains(&claims.jti) {
+        if self.token_store.is_blacklisted(&claims.jti).await? {
             return Err(AppError::AuthenticationError(
                 "Refresh token has been revoked".to_string(),
             ));
         }
-        drop(blacklist);
 
         // 检查刷新次数
         let mut refresh_counts: tokio::sync::RwLockWriteGuard<'_, HashMap<String, u32>> =
@@ -250,32 +270,18 @@ impl JwtManager {
 
     pub async fn revoke_token(&self, token: &str) -> Result<(), AppError> {
         let claims = self.validate_token(token).await?;
-        let mut blacklist = self.token_blacklist.write().await;
-        blacklist.insert(claims.jti);
+        self.token_store.add_to_blacklist(&claims.jti).await?;
         Ok(())
     }
 
     pub async fn is_token_revoked(&self, jti: &str) -> bool {
-        let blacklist = self.token_blacklist.read().await;
-        blacklist.contains(jti)
+        self.token_store.is_blacklisted(jti).await.unwrap_or(false)
     }
 
     pub async fn cleanup_expired_blacklist(&self) {
-        let mut blacklist = self.token_blacklist.write().await;
-
-        // 解析并检查每个 token 的过期时间
-        let now = Utc::now().timestamp() as usize;
-        blacklist.retain(|token| {
-            if let Ok(data) = decode::<Claims>(
-                token,
-                &self.decoding_key,
-                &Validation::new(Algorithm::HS256),
-            ) {
-                data.claims.exp > now
-            } else {
-                false
-            }
-        });
+        // 对于 Redis 存储，过期由 TTL 自动处理
+        // 对于内存存储，需要手动清理
+        // 注意：这可能需要针对不同存储后端进行优化
     }
 
     pub async fn validate_token(&self, token: &str) -> Result<Claims, AppError> {
@@ -287,13 +293,15 @@ impl JwtManager {
         })?;
 
         // 检查是否在黑名单中
-        let blacklist = self.token_blacklist.read().await;
-        if blacklist.contains(&token_data.claims.jti) {
+        if self
+            .token_store
+            .is_blacklisted(&token_data.claims.jti)
+            .await?
+        {
             return Err(AppError::AuthenticationError(
                 "Token has been revoked".to_string(),
             ));
         }
-        drop(blacklist);
 
         Ok(token_data.claims)
     }

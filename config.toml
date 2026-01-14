@@ -86,9 +86,11 @@ log_level = "info"
 # 是否启用认证
 enabled = true
 
-# JWT 密钥 (生产环境请使用复杂密钥，至少 32 字符)
-# 注意：首次启动时必须设置此值，否则服务将拒绝启动
-jwt_secret = "this-is-a-very-strong-random-jwt-secret-key-at-least-32-chars-long"
+# JWT 密钥
+# ⚠️ 重要：生产环境必须通过环境变量设置
+# 使用: export VECBOOST_JWT_SECRET="your-32-char-min-secret"
+# 不允许在配置文件中设置此值
+jwt_secret = ""
 
 # Token 过期时间 (小时)
 # 访问 token 有效期: 1 小时
@@ -97,8 +99,11 @@ token_expiration_hours = 1
 # 默认管理员用户名 (首次启动时必须设置)
 default_admin_username = "admin"
 
-# 默认管理员密码 (首次启动时必须设置，至少 12 字符)
-default_admin_password = "Secure@Passw0rd!2026"
+# 默认管理员密码
+# ⚠️ 重要：生产环境必须通过环境变量设置
+# 使用: export VECBOOST_ADMIN_PASSWORD="your-secure-password"
+# 不允许在配置文件中设置此值
+default_admin_password = ""
 
 # ============ 密钥存储配置 ============
 [auth.security]

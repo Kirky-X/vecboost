@@ -24,6 +24,7 @@
 //! - Works seamlessly with JWT authentication
 //! - Compatible with CORS policies
 
+use crate::error::AppError;
 use axum::http::{HeaderMap, StatusCode, header::ORIGIN};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -143,48 +144,182 @@ impl CsrfToken {
     }
 }
 
-/// CSRF Token Store
-///
-/// Stores CSRF tokens for validation. In a production environment,
-/// this should be backed by Redis or a similar caching system.
+/// CSRF Token Store trait for different storage backends
+#[async_trait::async_trait]
+pub trait CsrfTokenStorage: Send + Sync {
+    async fn store_token(&self, token: &str) -> Result<(), AppError>;
+    async fn validate_token(&self, token: &str) -> bool;
+    async fn token_count(&self) -> usize;
+}
+
+/// In-memory CSRF token storage
 #[derive(Clone)]
-pub struct CsrfTokenStore {
-    /// In-memory token storage (for development/testing)
-    /// In production, replace with Redis or similar
+pub struct MemoryCsrfStore {
     tokens: Arc<tokio::sync::RwLock<HashSet<String>>>,
 }
 
-impl CsrfTokenStore {
-    /// Create a new CSRF token store
+impl MemoryCsrfStore {
     pub fn new() -> Self {
         Self {
             tokens: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
         }
     }
+}
 
-    /// Store a token
-    pub async fn store_token(&self, token: &str) {
+impl Default for MemoryCsrfStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl CsrfTokenStorage for MemoryCsrfStore {
+    async fn store_token(&self, token: &str) -> Result<(), AppError> {
         let mut tokens = self.tokens.write().await;
         tokens.insert(token.to_string());
+        Ok(())
     }
 
-    /// Validate a token and remove it if valid (one-time use)
-    pub async fn validate_token(&self, token: &str) -> bool {
+    async fn validate_token(&self, token: &str) -> bool {
         let mut tokens = self.tokens.write().await;
         tokens.remove(token)
     }
 
-    /// Clean up expired tokens (should be called periodically)
+    async fn token_count(&self) -> usize {
+        self.tokens.read().await.len()
+    }
+}
+
+/// Redis-backed CSRF token storage
+#[cfg(feature = "redis")]
+#[derive(Clone)]
+pub struct RedisCsrfStore {
+    client: Arc<redis::Client>,
+    key_prefix: String,
+    expiration_secs: u64,
+}
+
+#[cfg(feature = "redis")]
+impl RedisCsrfStore {
+    pub fn new(client: redis::Client, key_prefix: Option<String>, expiration_secs: u64) -> Self {
+        Self {
+            client: Arc::new(client),
+            key_prefix: key_prefix.unwrap_or_else(|| "vecboost:csrf:".to_string()),
+            expiration_secs,
+        }
+    }
+
+    fn get_key(&self, token: &str) -> String {
+        format!("{}{}", self.key_prefix, token)
+    }
+}
+
+#[cfg(feature = "redis")]
+#[async_trait::async_trait]
+impl CsrfTokenStorage for RedisCsrfStore {
+    async fn store_token(&self, token: &str) -> Result<(), AppError> {
+        let mut conn = self
+            .client
+            .get_async_connection()
+            .await
+            .map_err(|e| AppError::ConfigError(e.to_string()))?;
+
+        let key = self.get_key(token);
+        redis::Cmd::set_ex(&key, "1", self.expiration_secs)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| AppError::ConfigError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn validate_token(&self, token: &str) -> bool {
+        let mut conn = match self.client.get_async_connection().await {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+
+        let key = self.get_key(token);
+        let existed: bool = match redis::Cmd::exists(&key).query_async(&mut conn).await {
+            Ok(e) => e,
+            Err(_) => return false,
+        };
+
+        if existed {
+            // Remove the token after validation (one-time use)
+            let _ = redis::Cmd::del(&key).query_async::<()>(&mut conn).await;
+        }
+
+        existed
+    }
+
+    async fn token_count(&self) -> usize {
+        // SCAN would be needed for accurate count - simplified for now
+        0
+    }
+}
+
+/// CSRF Token Store - now wraps a configurable storage backend
+#[derive(Clone)]
+pub struct CsrfTokenStore {
+    storage: Arc<dyn CsrfTokenStorage>,
+}
+
+impl CsrfTokenStore {
+    /// Create a new CSRF token store with the specified storage backend
+    pub fn new() -> Self {
+        Self::with_storage(Arc::new(MemoryCsrfStore::new()) as Arc<dyn CsrfTokenStorage>)
+    }
+
+    /// Create with a custom storage backend
+    pub fn with_storage(storage: Arc<dyn CsrfTokenStorage>) -> Self {
+        Self { storage }
+    }
+
+    /// Create a CSRF token store with Redis backend
+    #[cfg(feature = "redis")]
+    pub async fn with_redis(
+        redis_url: &str,
+        key_prefix: Option<String>,
+        expiration_secs: u64,
+    ) -> Option<Self> {
+        let client = redis::Client::open(redis_url).ok()?;
+        if client.get_async_connection().await.is_ok() {
+            let storage = Arc::new(RedisCsrfStore::new(client, key_prefix, expiration_secs));
+            Some(Self::with_storage(storage))
+        } else {
+            None
+        }
+    }
+
+    #[cfg(not(feature = "redis"))]
+    pub async fn with_redis(
+        _redis_url: &str,
+        _key_prefix: Option<String>,
+        _expiration_secs: u64,
+    ) -> Option<Self> {
+        None
+    }
+
+    /// Store a token
+    pub async fn store_token(&self, token: &str) {
+        let _ = self.storage.store_token(token).await;
+    }
+
+    /// Validate a token and remove it if valid (one-time use)
+    pub async fn validate_token(&self, token: &str) -> bool {
+        self.storage.validate_token(token).await
+    }
+
+    /// Clean up expired tokens
     pub async fn cleanup_expired(&self, _current_timestamp: u64) {
-        // In a production implementation with Redis, this would
-        // remove expired tokens based on their expiration time
-        // For the in-memory store, we rely on the token size limit
+        // For Redis, expiration is handled by TTL
+        // For memory store, this is a no-op
     }
 
     /// Get the current number of stored tokens
     pub async fn token_count(&self) -> usize {
-        let tokens = self.tokens.read().await;
-        tokens.len()
+        self.storage.token_count().await
     }
 }
 

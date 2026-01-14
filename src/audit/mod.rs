@@ -51,6 +51,8 @@ pub struct SecurityEvent {
     pub event_type: String,
     pub user: Option<String>,
     pub ip: Option<String>,
+    pub request_id: Option<String>,
+    pub user_agent: Option<String>,
     pub details: serde_json::Value,
     pub success: bool,
 }
@@ -68,6 +70,31 @@ impl SecurityEvent {
             event_type: event_type.as_str().to_string(),
             user,
             ip,
+            request_id: None,
+            user_agent: None,
+            details,
+            success,
+        }
+    }
+
+    /// Create a new event with extended context
+    #[allow(dead_code)]
+    pub fn new_with_context(
+        event_type: SecurityEventType,
+        user: Option<String>,
+        ip: Option<String>,
+        request_id: Option<String>,
+        user_agent: Option<String>,
+        details: serde_json::Value,
+        success: bool,
+    ) -> Self {
+        Self {
+            timestamp: Utc::now(),
+            event_type: event_type.as_str().to_string(),
+            user,
+            ip,
+            request_id,
+            user_agent,
             details,
             success,
         }

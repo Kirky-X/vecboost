@@ -7,9 +7,11 @@
 
 mod encrypted_store;
 mod key_store;
+mod sanitize;
 
 pub use encrypted_store::EncryptedFileKeyStore;
 pub use key_store::{KeyStore, KeyType, SecretKey};
+pub use sanitize::{sanitize_api_key, sanitize_jwt_secret, sanitize_password, sanitize_secret};
 
 use crate::error::AppError;
 

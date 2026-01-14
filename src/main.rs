@@ -31,7 +31,16 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting Rust Embedding Service...");
 
     let config = AppConfig::load()?;
-    tracing::info!("Configuration loaded: {:?}", config);
+    tracing::info!(
+        "Configuration loaded: {} auth={} audit={}",
+        if config.auth.enabled {
+            "auth enabled"
+        } else {
+            "auth disabled"
+        },
+        config.auth.enabled,
+        config.audit.enabled
+    );
 
     let model_config = ModelConfig {
         name: config.model.model_repo.clone(),

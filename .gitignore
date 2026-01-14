@@ -124,6 +124,7 @@ docs/.doctrees/
 # 11. Project Documentation
 # -----------------------------------------------------------------------------
 AGENTS.md
+openspec/
 CLAUDE.md
 IFLOW.md
 

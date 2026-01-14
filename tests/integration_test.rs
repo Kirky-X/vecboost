@@ -3,90 +3,23 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
+//! 集成测试
+//!
+//! 使用 RealTestEngine 进行集成测试，支持真实推理和 Mock 回退。
+
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::RwLock;
 
-use async_trait::async_trait;
-use vecboost::config::model::Precision;
 use vecboost::domain::{EmbedRequest, SearchRequest, SimilarityRequest};
-use vecboost::engine::InferenceEngine;
-use vecboost::error::AppError;
 use vecboost::service::embedding::EmbeddingService;
 
+// 使用新的 RealTestEngine
+mod real_engine;
+use real_engine::create_test_engine;
+
 const MOCK_DIMENSION: usize = 1024;
-
-#[derive(Clone)]
-struct TestEngine {
-    dimension: usize,
-}
-
-impl TestEngine {
-    fn new(dimension: usize) -> Self {
-        Self { dimension }
-    }
-
-    fn generate_embedding(&self, text: &str) -> Vec<f32> {
-        let mut embedding = vec![0.0; self.dimension];
-        let bytes = text.as_bytes();
-
-        let mut hash: u64 = 1469598103934665603;
-        for &byte in bytes {
-            hash ^= byte as u64;
-            hash = hash.wrapping_mul(1099511628211);
-        }
-
-        let mut state = hash;
-        for val in embedding.iter_mut() {
-            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
-            let float_val = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
-            *val = float_val;
-        }
-
-        let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            for val in embedding.iter_mut() {
-                *val /= norm;
-            }
-        }
-
-        embedding
-    }
-}
-
-#[async_trait]
-impl InferenceEngine for TestEngine {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
-        Ok(self.generate_embedding(text))
-    }
-
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
-        let embeddings: Vec<Vec<f32>> = texts.iter().map(|t| self.generate_embedding(t)).collect();
-        Ok(embeddings)
-    }
-
-    fn precision(&self) -> &Precision {
-        &Precision::Fp32
-    }
-
-    fn supports_mixed_precision(&self) -> bool {
-        false
-    }
-
-    async fn try_fallback_to_cpu(
-        &mut self,
-        _config: &vecboost::config::model::ModelConfig,
-    ) -> Result<(), AppError> {
-        Ok(())
-    }
-}
-
-fn create_test_engine()
--> Result<Arc<RwLock<dyn InferenceEngine + Send + Sync>>, Box<dyn std::error::Error>> {
-    Ok(Arc::new(RwLock::new(TestEngine::new(MOCK_DIMENSION))))
-}
 
 #[tokio::test]
 async fn test_e2e_text_embedding() -> Result<(), Box<dyn std::error::Error>> {

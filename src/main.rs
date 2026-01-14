@@ -313,7 +313,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("gRPC server enabled on {}", grpc_addr);
     }
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

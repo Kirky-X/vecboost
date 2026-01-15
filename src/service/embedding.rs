@@ -21,7 +21,7 @@ use crate::error::AppError;
 use crate::model::manager::ModelManager;
 use crate::utils::{
     AggregationMode, DEFAULT_TOP_K, FileValidator, InputValidator, MAX_BATCH_SIZE, MAX_TOP_K,
-    TextValidator, cosine_similarity, normalize_l2,
+    TextValidator, cosine_similarity, normalize_l2, truncate_vector, validate_dimension,
 };
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -317,7 +317,12 @@ impl EmbeddingService {
     }
 
     /// 处理单文本向量化
-    pub async fn process_text(&self, req: EmbedRequest) -> Result<EmbedResponse, AppError> {
+    /// 如果提供了 target_dimension，则对输出向量进行截断（Matryoshka 风格）
+    pub async fn process_text(
+        &self,
+        req: EmbedRequest,
+        target_dimension: Option<usize>,
+    ) -> Result<EmbedResponse, AppError> {
         self.validator.validate_text(&req.text)?;
 
         let cache_key = format!("text:{}", req.text);
@@ -339,6 +344,17 @@ impl EmbeddingService {
 
         let mut embedding = embedding;
         normalize_l2(&mut embedding);
+
+        // Apply Matryoshka dimension reduction if requested
+        if let Some(target_dim) = target_dimension {
+            let max_dim = self
+                .model_config
+                .as_ref()
+                .and_then(|c| c.expected_dimension)
+                .unwrap_or(1024);
+            validate_dimension(Some(target_dim), max_dim).map_err(|e| AppError::InvalidInput(e))?;
+            embedding = truncate_vector(&embedding, target_dim);
+        }
 
         let dimension = embedding.len();
         self.validate_dimension(dimension);
@@ -711,10 +727,11 @@ impl EmbeddingService {
     }
 
     /// 处理批量向量化请求（优化版本：使用并行处理和智能批量大小调整）
+    /// 如果提供了 target_dimension，则对每个输出向量进行截断（Matryoshka 风格）
     pub async fn process_batch(
         &self,
-
         req: BatchEmbedRequest,
+        target_dimension: Option<usize>,
     ) -> Result<BatchEmbedResponse, AppError> {
         let start_time = Instant::now();
 
@@ -866,28 +883,46 @@ impl EmbeddingService {
         }
 
         let mut all_results: Vec<(usize, Vec<f32>, String)> = Vec::with_capacity(texts_len);
-        let mut dimension: Option<usize> = None;
 
         for task in tasks {
             let chunk_results = task.await??;
             for (idx, embedding, preview) in chunk_results {
-                let dim = embedding.len();
-                if dimension.is_none() {
-                    dimension = Some(dim);
-                }
                 all_results.push((idx, embedding, preview));
             }
         }
 
         all_results.sort_by_key(|r| r.0);
 
+        // Apply Matryoshka dimension reduction if requested
+        let effective_dimension = if let Some(target_dim) = target_dimension {
+            let max_dim = self
+                .model_config
+                .as_ref()
+                .and_then(|c| c.expected_dimension)
+                .unwrap_or(1024);
+            validate_dimension(Some(target_dim), max_dim).map_err(|e| AppError::InvalidInput(e))?;
+            Some(target_dim)
+        } else {
+            None
+        };
+
         let results: Vec<BatchEmbeddingResult> = all_results
             .into_iter()
-            .map(|(_, embedding, preview)| BatchEmbeddingResult {
-                text_preview: preview,
-                embedding,
+            .map(|(_, embedding, preview)| {
+                let embedding = if let Some(dim) = effective_dimension {
+                    truncate_vector(&embedding, dim)
+                } else {
+                    embedding
+                };
+                BatchEmbeddingResult {
+                    text_preview: preview,
+                    embedding,
+                }
             })
             .collect();
+
+        let dimension =
+            effective_dimension.unwrap_or_else(|| results.first().map_or(0, |r| r.embedding.len()));
 
         let processing_time = start_time.elapsed();
         let processing_time_ms = processing_time.as_millis() as f64;
@@ -916,7 +951,7 @@ impl EmbeddingService {
 
         Ok(BatchEmbedResponse {
             embeddings: results,
-            dimension: dimension.unwrap_or(0),
+            dimension,
             processing_time_ms: processing_time.as_millis(),
         })
     }
@@ -1208,7 +1243,7 @@ mod tests {
             normalize: Some(true),
         };
 
-        let result = service.process_text(req).await;
+        let result = service.process_text(req, None).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -1244,7 +1279,7 @@ mod tests {
             normalize: Some(true),
         };
 
-        let result = service.process_text(req).await;
+        let result = service.process_text(req, None).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -1280,7 +1315,7 @@ mod tests {
             normalize: Some(true),
         };
 
-        let result = service.process_text(req).await;
+        let result = service.process_text(req, None).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -1302,7 +1337,7 @@ mod tests {
             normalize: Some(true),
         };
 
-        let result = service.process_text(req).await;
+        let result = service.process_text(req, None).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -1411,7 +1446,7 @@ mod tests {
             normalize: Some(true),
         };
 
-        let result: Result<EmbedResponse, AppError> = service.process_text(req).await;
+        let result: Result<EmbedResponse, AppError> = service.process_text(req, None).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -1617,7 +1652,7 @@ mod tests {
             normalize: Some(true),
         };
 
-        let result = service.process_batch(req).await;
+        let result = service.process_batch(req, None).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -1646,7 +1681,7 @@ mod tests {
             normalize: Some(true),
         };
 
-        let result = service.process_batch(req).await;
+        let result = service.process_batch(req, None).await;
 
         assert!(result.is_err());
     }
@@ -1683,7 +1718,7 @@ mod tests {
             normalize: Some(true),
         };
 
-        let result = service.process_batch(req).await;
+        let result = service.process_batch(req, None).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -1709,7 +1744,7 @@ mod tests {
             normalize: Some(true),
         };
 
-        let result = service.process_batch(req).await;
+        let result = service.process_batch(req, None).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -1736,7 +1771,7 @@ mod tests {
             normalize: Some(true),
         };
 
-        let result = service.process_batch(req).await;
+        let result = service.process_batch(req, None).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();

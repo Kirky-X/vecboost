@@ -37,7 +37,7 @@ impl embedding_service_server::EmbeddingService for VecboostEmbeddingService {
 
         let service_guard = self.service.read().await;
         let domain_res = service_guard
-            .process_text(domain_req)
+            .process_text(domain_req, None)
             .await
             .map_err(|e| Status::internal(format!("Embedding failed: {}", e)))?;
 
@@ -64,7 +64,7 @@ impl embedding_service_server::EmbeddingService for VecboostEmbeddingService {
 
         let service_guard = self.service.read().await;
         let domain_res = service_guard
-            .process_batch(domain_req)
+            .process_batch(domain_req, None)
             .await
             .map_err(|e| Status::internal(format!("Batch embedding failed: {}", e)))?;
 

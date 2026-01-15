@@ -82,7 +82,9 @@ pub async fn openai_embed_handler(
         normalize: Some(true),
     };
 
-    let batch_response = service_guard.process_batch(batch_req).await?;
+    let batch_response = service_guard
+        .process_batch(batch_req, req.dimensions)
+        .await?;
 
     // Build OpenAI-formatted response
     let embedding_objects: Vec<EmbeddingObject> = batch_response

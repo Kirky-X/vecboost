@@ -136,6 +136,28 @@ pub fn normalize_l2(v: &mut [f32]) {
     }
 }
 
+/// Truncate a vector to the specified dimension.
+/// Returns original vector if target >= original or target == 0.
+pub fn truncate_vector(vector: &[f32], target_dimension: usize) -> Vec<f32> {
+    if target_dimension == 0 || target_dimension >= vector.len() {
+        vector.to_vec()
+    } else {
+        vector[..target_dimension].to_vec()
+    }
+}
+
+/// Validate dimension parameter against maximum allowed dimension.
+pub fn validate_dimension(target: Option<usize>, max_dimension: usize) -> Result<(), String> {
+    match target {
+        Some(0) => Err("dimensions must be greater than 0".to_string()),
+        Some(d) if d > max_dimension => Err(format!(
+            "dimensions {} exceeds model maximum {}",
+            d, max_dimension
+        )),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod similarity_tests {
     use super::*;
@@ -248,5 +270,56 @@ mod similarity_tests {
             (calculate_similarity(&v1, &v2, SimilarityMetric::Euclidean).unwrap() - 1.0).abs()
                 < 1e-6
         );
+    }
+
+    // Truncation tests
+    #[test]
+    fn test_truncate_vector_smaller() {
+        let v = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let truncated = truncate_vector(&v, 3);
+        assert_eq!(truncated, vec![1.0, 2.0, 3.0]);
+        assert_eq!(truncated.len(), 3);
+    }
+
+    #[test]
+    fn test_truncate_vector_same() {
+        let v = vec![1.0, 2.0, 3.0];
+        let truncated = truncate_vector(&v, 3);
+        assert_eq!(truncated, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_truncate_vector_larger() {
+        let v = vec![1.0, 2.0, 3.0];
+        let truncated = truncate_vector(&v, 10);
+        assert_eq!(truncated, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_truncate_vector_zero() {
+        let v = vec![1.0, 2.0, 3.0];
+        let truncated = truncate_vector(&v, 0);
+        assert_eq!(truncated, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_validate_dimension_valid() {
+        assert!(validate_dimension(Some(512), 1024).is_ok());
+        assert!(validate_dimension(None, 1024).is_ok());
+        assert!(validate_dimension(Some(1024), 1024).is_ok());
+    }
+
+    #[test]
+    fn test_validate_dimension_invalid_too_small() {
+        let result = validate_dimension(Some(0), 1024);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("greater than 0"));
+    }
+
+    #[test]
+    fn test_validate_dimension_invalid_too_large() {
+        let result = validate_dimension(Some(2048), 1024);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("exceeds model maximum"));
     }
 }

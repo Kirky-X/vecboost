@@ -157,7 +157,7 @@ pub async fn embed_handler(
 
     // 否则直接调用服务
     let service_guard = state.service.read().await;
-    let res = service_guard.process_text(req).await?;
+    let res = service_guard.process_text(req, None).await?;
 
     // Create response with rate limit headers
     let mut response = Json(res).into_response();
@@ -208,7 +208,7 @@ pub async fn batch_embed_handler(
     }
 
     let service_guard = state.service.read().await;
-    let res = service_guard.process_batch(req).await?;
+    let res = service_guard.process_batch(req, None).await?;
 
     // Create response with rate limit headers
     let mut response = Json(res).into_response();

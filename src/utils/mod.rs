@@ -22,5 +22,5 @@ pub use validator::{
 };
 pub use vector::{
     AggregationMode, SimilarityMetric, calculate_similarity, cosine_similarity, dot_product,
-    euclidean_distance, manhattan_distance, normalize_l2,
+    euclidean_distance, manhattan_distance, normalize_l2, truncate_vector, validate_dimension,
 };

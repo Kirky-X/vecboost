@@ -84,7 +84,7 @@ log_level = "info"
 # ============ 认证配置 ============
 [auth]
 # 是否启用认证
-enabled = true
+enabled = false
 
 # JWT 密钥
 # ⚠️ 重要：生产环境必须通过环境变量设置

@@ -10,6 +10,7 @@
 // 内部子模块 - 只在 routes 模块内使用，不暴露给外部
 pub(crate) mod embedding;
 pub(crate) mod health;
+pub(crate) mod openai_embedding;
 
 use axum::{Router, middleware, routing::get, routing::post};
 use tower_http::timeout::TimeoutLayer;
@@ -116,7 +117,10 @@ pub fn create_router(app_state: AppState) -> Router {
                 "/api/v1/auth/refresh",
                 post(crate::auth::refresh_token_handler),
             )
-            .layer(TimeoutLayer::new(DEFAULT_TIMEOUT))
+            .layer(
+                #[allow(deprecated)]
+                TimeoutLayer::new(DEFAULT_TIMEOUT),
+            )
             .with_state(app_state.clone());
 
         // Protected routes (require authentication, with timeout)
@@ -130,7 +134,22 @@ pub fn create_router(app_state: AppState) -> Router {
                 app_state.clone(),
                 crate::auth::auth_middleware,
             ))
-            .layer(TimeoutLayer::new(DEFAULT_TIMEOUT));
+            .layer(
+                #[allow(deprecated)]
+                TimeoutLayer::new(DEFAULT_TIMEOUT),
+            );
+
+        // OpenAI compatible routes (always public, like OpenAI API)
+        let openai_routes = Router::new()
+            .route(
+                "/v1/embeddings",
+                post(openai_embedding::openai_embed_handler),
+            )
+            .layer(
+                #[allow(deprecated)]
+                TimeoutLayer::new(DEFAULT_TIMEOUT),
+            )
+            .with_state(app_state.clone());
 
         // Apply CSRF protection (if enabled)
         let protected_routes = if let (Some(csrf_config), Some(csrf_token_store)) = (
@@ -161,7 +180,10 @@ pub fn create_router(app_state: AppState) -> Router {
         };
 
         // Merge routes
-        app = app.merge(auth_routes).merge(protected_routes);
+        app = app
+            .merge(auth_routes)
+            .merge(protected_routes)
+            .merge(openai_routes);
     } else {
         // No authentication mode - all routes public (with timeout)
         app = app
@@ -169,7 +191,15 @@ pub fn create_router(app_state: AppState) -> Router {
             .route("/api/v1/embed/batch", post(embedding::batch_embed_handler))
             .route("/api/v1/similarity", post(embedding::similarity_handler))
             .route("/api/v1/embed/file", post(embedding::file_embed_handler))
-            .layer(TimeoutLayer::new(DEFAULT_TIMEOUT))
+            .layer(
+                #[allow(deprecated)]
+                TimeoutLayer::new(DEFAULT_TIMEOUT),
+            )
+            // OpenAI compatible routes (always public)
+            .route(
+                "/v1/embeddings",
+                post(openai_embedding::openai_embed_handler),
+            )
     }
 
     app.with_state(app_state)

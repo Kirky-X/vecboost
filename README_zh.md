@@ -2,7 +2,7 @@
 
 <img src="image/vecboost.png" alt="VecBoost Logo" width="200"/>
 
-[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![Version 0.1.0](https://img.shields.io/badge/Version-0.1.0-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rustc 1.75+](https://img.shields.io/badge/Rustc-1.75+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
+[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![Version 0.1.2](https://img.shields.io/badge/Version-0.1.2-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rustc 1.75+](https://img.shields.io/badge/Rustc-1.75+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
 
 *高性能、生产级嵌入向量服务，使用 Rust 编写。VecBoost 提供高效的文本向量化服务，支持多种推理引擎、GPU 加速和企业级功能。*
 
@@ -24,6 +24,7 @@
 | **🌐 双 API 接口** | gRPC 和 HTTP/REST 接口，支持 OpenAPI/Swagger 文档 |
 | **📦 云原生部署** | 生产环境 Kubernetes、Docker 和云平台部署配置 |
 | **📈 可观测性** | Prometheus 指标、健康检查、结构化日志和 Grafana 仪表板 |
+| **🧊 Matryoshka 支持** | 动态维度约简，支持更小更快的嵌入向量（OpenAI 兼容） |
 
 > **💡 快速上手**: 2 分钟内启动服务！[查看快速开始](#-快速开始)
 
@@ -150,6 +151,72 @@ service EmbeddingService {
 |------|-----|
 | **Swagger UI** | `http://localhost:9002/swagger-ui/` |
 | **ReDoc** | `http://localhost:9002/redoc/` |
+
+### 🌐 OpenAI 兼容 API
+
+VecBoost 提供 OpenAI 兼容的 embeddings API 端点：
+
+```bash
+curl -X POST http://localhost:9002/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "Hello, world!",
+    "model": "text-embedding-ada-002"
+  }'
+```
+
+**响应：**
+
+```json
+{
+  "object": "list",
+  "data": [{
+    "object": "embedding",
+    "embedding": [0.123, 0.456, 0.789, ...],
+    "index": 0
+  }],
+  "model": "text-embedding-ada-002",
+  "usage": {
+    "prompt_tokens": 2,
+    "total_tokens": 2
+  }
+}
+```
+
+### 🧊 Matryoshka 维度约简
+
+降低嵌入向量维度以获得更小、更快的嵌入，同时保持质量：
+
+```bash
+# 请求 256 维嵌入向量
+curl -X POST http://localhost:9002/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "Hello, world!",
+    "model": "text-embedding-ada-002",
+    "dimensions": 256
+  }'
+```
+
+**支持的维度**（BGE-M3 模型，最大 1024）：
+
+| 请求维度 | 返回维度 | 使用场景 |
+|---------|---------|----------|
+| `256` | 256 | 最大速度，最小存储 |
+| `512` | 512 | 平衡性能 |
+| `1024` | 1024 | 最大质量（默认） |
+
+**批量请求带维度约简：**
+
+```bash
+curl -X POST http://localhost:9002/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": ["文本1", "文本2", "文本3"],
+    "model": "text-embedding-ada-002",
+    "dimensions": 512
+  }'
+```
 
 ## ⚙️ 配置
 

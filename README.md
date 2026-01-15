@@ -2,7 +2,7 @@
 
 <img src="image/vecboost.png" alt="VecBoost Logo" width="200"/>
 
-[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![Version 0.1.0](https://img.shields.io/badge/Version-0.1.0-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rustc 1.75+](https://img.shields.io/badge/Rustc-1.75+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
+[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![Version 0.1.2](https://img.shields.io/badge/Version-0.1.2-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rustc 1.75+](https://img.shields.io/badge/Rustc-1.75+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
 
 *A high-performance, production-ready embedding vector service written in Rust. VecBoost provides efficient text vectorization with support for multiple inference engines, GPU acceleration, and enterprise-grade features.*
 
@@ -24,6 +24,7 @@
 | **🌐 Dual APIs** | gRPC and HTTP/REST interfaces with OpenAPI/Swagger documentation |
 | **📦 Cloud Ready** | Production deployment configurations for Kubernetes, Docker, and cloud platforms |
 | **📈 Observability** | Prometheus metrics, health checks, structured logging, and Grafana dashboards |
+| **🧊 Matryoshka Support** | Dynamic dimension reduction for smaller, faster embeddings (OpenAI compatible) |
 
 > **💡 Quick Start**: Get up and running in 2 minutes! [See Quick Start](#-quick-start)
 
@@ -150,6 +151,72 @@ Access interactive API documentation:
 |------|-----|
 | **Swagger UI** | `http://localhost:9002/swagger-ui/` |
 | **ReDoc** | `http://localhost:9002/redoc/` |
+
+### 🌐 OpenAI-Compatible API
+
+VecBoost provides an OpenAI-compatible embeddings API endpoint:
+
+```bash
+curl -X POST http://localhost:9002/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "Hello, world!",
+    "model": "text-embedding-ada-002"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "object": "list",
+  "data": [{
+    "object": "embedding",
+    "embedding": [0.123, 0.456, 0.789, ...],
+    "index": 0
+  }],
+  "model": "text-embedding-ada-002",
+  "usage": {
+    "prompt_tokens": 2,
+    "total_tokens": 2
+  }
+}
+```
+
+### 🧊 Matryoshka Dimension Reduction
+
+Reduce embedding dimensions for smaller, faster embeddings while maintaining quality:
+
+```bash
+# Request 256-dimensional embeddings
+curl -X POST http://localhost:9002/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "Hello, world!",
+    "model": "text-embedding-ada-002",
+    "dimensions": 256
+  }'
+```
+
+**Supported dimensions** (BGE-M3 model, max 1024):
+
+| Requested | Returned | Use Case |
+|-----------|----------|----------|
+| `256` | 256 | Maximum speed, smaller storage |
+| `512` | 512 | Balanced performance |
+| `1024` | 1024 | Maximum quality (default) |
+
+**Batch with dimension reduction:**
+
+```bash
+curl -X POST http://localhost:9002/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": ["text1", "text2", "text3"],
+    "model": "text-embedding-ada-002",
+    "dimensions": 512
+  }'
+```
 
 ## ⚙️ Configuration
 

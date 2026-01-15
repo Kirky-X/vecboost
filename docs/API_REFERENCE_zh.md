@@ -4,7 +4,7 @@
 
 **完整的 REST HTTP 端点和 gRPC 服务方法文档**
 
-[![Version 0.1.0](https://img.shields.io/badge/Version-0.1.0-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002) [![gRPC](https://img.shields.io/badge/gRPC-50051-green.svg?style=for-the-badge)](localhost:50051)
+[![Version 0.1.2](https://img.shields.io/badge/Version-0.1.2-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002) [![gRPC](https://img.shields.io/badge/gRPC-50051-green.svg?style=for-the-badge)](localhost:50051)
 
 *VecBoost API 的完整文档，包括 REST HTTP 端点和 gRPC 服务方法。*
 
@@ -219,6 +219,99 @@ curl -X POST http://localhost:9002/api/v1/embed/file \
 
 ---
 
+### 🌐 OpenAI 兼容 API
+
+VecBoost 提供 OpenAI 兼容的 embeddings API 端点，支持 `dimensions` 参数进行 Matryoshka 维度约简。
+
+#### 生成嵌入向量（OpenAI 兼容）
+
+**端点:** `POST /v1/embeddings`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `input` | string \| array | ✅ | 要嵌入的文本或文本数组（最多 2048 项） |
+| `model` | string | ✅ | 模型 ID（支持 `text-embedding-ada-002` 映射） |
+| `encoding_format` | string | ❌ | 编码格式 (`float`, `base64`) |
+| `dimensions` | integer | ❌ | 输出维度（支持 1-1024，BGE-M3 最大 1024） |
+| `user` | string | ❌ | 用户标识符 |
+
+**请求示例（单文本）：**
+
+```bash
+curl -X POST http://localhost:9002/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "Hello, world!",
+    "model": "text-embedding-ada-002",
+    "dimensions": 256
+  }'
+```
+
+**请求示例（批量）：**
+
+```bash
+curl -X POST http://localhost:9002/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": ["文本1", "文本2", "文本3"],
+    "model": "text-embedding-ada-002",
+    "dimensions": 512
+  }'
+```
+
+**响应：**
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "embedding": [0.123, 0.456, 0.789, ...],
+      "index": 0
+    },
+    {
+      "object": "embedding",
+      "embedding": [0.111, 0.222, 0.333, ...],
+      "index": 1
+    }
+  ],
+  "model": "text-embedding-ada-002",
+  "usage": {
+    "prompt_tokens": 10,
+    "total_tokens": 10
+  }
+}
+```
+
+#### 🧊 Matryoshka 维度约简
+
+通过 `dimensions` 参数控制输出向量维度，实现更小更快的嵌入：
+
+| 请求 `dimensions` | 实际返回维度 | 使用场景 |
+|-------------------|-------------|----------|
+| `256` | 256 | 最大速度，最小存储 |
+| `512` | 512 | 平衡性能 |
+| `1024` | 1024 | 最大质量（默认值） |
+
+**维度限制：**
+- 最小值: 1
+- 最大值: 模型最大维度（BGE-M3 为 1024）
+- 无 `dimensions` 参数时返回完整维度
+
+**错误响应（维度超限）：**
+
+```json
+{
+  "error": {
+    "message": "dimensions 2048 exceeds model maximum 1024",
+    "type": "invalid_request_error"
+  }
+}
+```
+
+---
+
 ### 相似度计算
 
 #### 计算相似度
@@ -425,7 +518,7 @@ curl -X POST http://localhost:9002/api/v1/model/switch \
 ```json
 {
   "status": "healthy",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "uptime": "2h30m45s",
   "model_loaded": "BAAI/bge-m3"
 }
@@ -886,8 +979,9 @@ window_seconds = 60
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| `0.1.2` | 2026-01-16 | ✨ 添加 Matryoshka 维度约简支持、OpenAI 兼容 API |
 | `0.1.0` | 2026-01-10 | ✨ 初始发布，支持 REST 和 gRPC API |
 
 ---
 
-> **📝 最后更新**: 2026-01-14 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-01-16 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

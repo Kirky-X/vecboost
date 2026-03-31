@@ -366,7 +366,7 @@ mod tests {
         cache
             .put("key1".to_string(), "value1".to_string(), 10)
             .await
-            .unwrap();
+            .expect("Failed to put key1");
 
         assert_eq!(
             cache.get(&"key1".to_string()).await,
@@ -383,7 +383,7 @@ mod tests {
         cache
             .put("key1".to_string(), "value1".to_string(), 10)
             .await
-            .unwrap();
+            .expect("Failed to put key1");
 
         assert!(cache.get(&"key1".to_string()).await.is_some());
         assert!(cache.get(&"key2".to_string()).await.is_none());
@@ -403,7 +403,10 @@ mod tests {
         entries.insert("key2".to_string(), ("value2".to_string(), 10));
         entries.insert("key3".to_string(), ("value3".to_string(), 10));
 
-        cache.warm_up(entries).await.unwrap();
+        cache
+            .warm_up(entries)
+            .await
+            .expect("Failed to warm up cache");
 
         assert!(cache.get(&"key1".to_string()).await.is_some());
         assert!(cache.get(&"key2".to_string()).await.is_some());

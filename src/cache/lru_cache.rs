@@ -103,8 +103,7 @@ where
         self.cleanup_expired().await;
 
         let mut store = self.store.write().await;
-        if store.contains_key(key) {
-            let entry = store.get_mut(key).unwrap();
+        if let Some(entry) = store.get_mut(key) {
             entry.record_access();
             let value = entry.value.clone();
             drop(store);
@@ -264,15 +263,15 @@ mod tests {
         cache
             .put("key1".to_string(), "value1".to_string(), 10)
             .await
-            .unwrap();
+            .expect("Failed to put key1");
         cache
             .put("key2".to_string(), "value2".to_string(), 10)
             .await
-            .unwrap();
+            .expect("Failed to put key2");
         cache
             .put("key3".to_string(), "value3".to_string(), 10)
             .await
-            .unwrap();
+            .expect("Failed to put key3");
 
         assert_eq!(cache.len().await, 3);
 
@@ -286,7 +285,7 @@ mod tests {
         cache
             .put("key4".to_string(), "value4".to_string(), 10)
             .await
-            .unwrap();
+            .expect("Failed to put key4");
         assert_eq!(cache.len().await, 3);
         assert!(cache.get(&"key2".to_string()).await.is_none());
         assert!(cache.get(&"key1".to_string()).await.is_some());
@@ -300,7 +299,7 @@ mod tests {
         cache
             .put("key1".to_string(), "value1".to_string(), 10)
             .await
-            .unwrap();
+            .expect("Failed to put key1");
 
         assert!(cache.get(&"key1".to_string()).await.is_some());
         assert!(cache.get(&"key2".to_string()).await.is_none());

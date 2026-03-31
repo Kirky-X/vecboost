@@ -30,6 +30,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use url::Url;
 
 /// CSRF Configuration
 ///
@@ -120,16 +121,23 @@ impl CsrfToken {
         let value = Self::generate_token();
         let expires_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .expect("SystemTime before UNIX EPOCH")
             .as_secs()
             + expires_in_secs;
 
         Self { value, expires_at }
     }
 
-    /// Generate a cryptographically secure random token
+    /// Generate a cryptographically secure random token using OS entropy source
     fn generate_token() -> String {
-        let bytes: [u8; 32] = rand::random();
+        let mut bytes = [0u8; 32];
+
+        // 使用加密安全的随机数生成器（操作系统熵源）
+        use rand::Rng;
+        use rand::rngs::OsRng;
+        let mut rng = OsRng;
+        rng.fill(&mut bytes[..]);
+
         let hash = Sha256::digest(bytes);
         hex::encode(hash)
     }
@@ -138,7 +146,7 @@ impl CsrfToken {
     pub fn is_expired(&self) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .expect("SystemTime before UNIX EPOCH")
             .as_secs();
         now > self.expires_at
     }
@@ -205,6 +213,18 @@ impl RedisCsrfStore {
         Self {
             client: Arc::new(client),
             key_prefix: key_prefix.unwrap_or_else(|| "vecboost:csrf:".to_string()),
+            expiration_secs,
+        }
+    }
+
+    pub fn with_custom_prefix(
+        client: redis::Client,
+        key_prefix: String,
+        expiration_secs: u64,
+    ) -> Self {
+        Self {
+            client: Arc::new(client),
+            key_prefix,
             expiration_secs,
         }
     }
@@ -379,18 +399,24 @@ impl OriginValidator {
 
     /// Parse Origin header to extract scheme, host, and port
     fn parse_origin(origin: &str) -> Result<String, StatusCode> {
-        // Basic URL parsing
-        if let Some(start) = origin.find("://") {
-            let after_scheme = &origin[start + 3..];
-            if let Some(end) = after_scheme.find('/') {
-                Ok(origin[..start + 3 + end].to_string())
-            } else {
-                Ok(origin.to_string())
-            }
-        } else {
-            // Invalid origin format
-            Err(StatusCode::BAD_REQUEST)
-        }
+        // Use url crate for robust URL parsing
+        Url::parse(origin)
+            .ok()
+            .and_then(|url| {
+                url.host_str().map(|host| {
+                    // Reconstruct origin without path
+                    let scheme = url.scheme();
+                    if let Some(port) = url.port() {
+                        format!("{}://{}:{}", scheme, host, port)
+                    } else {
+                        format!("{}://{}", scheme, host)
+                    }
+                })
+            })
+            .ok_or_else(|| {
+                tracing::warn!("Invalid Origin header format: {}", origin);
+                StatusCode::BAD_REQUEST
+            })
     }
 
     /// Extract the Referer header as a fallback

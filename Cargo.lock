@@ -4722,10 +4722,12 @@ dependencies = [
  "tower-http 0.6.8",
  "tracing",
  "tracing-subscriber",
+ "url",
  "utoipa",
  "utoipa-swagger-ui",
  "uuid",
  "xxhash-rust",
+ "zeroize",
 ]
 
 [[package]]

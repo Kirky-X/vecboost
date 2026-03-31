@@ -33,6 +33,9 @@ pub trait TokenStore: Send + Sync {
 
     /// Get the number of blacklisted tokens
     async fn blacklist_size(&self) -> usize;
+
+    /// Clean up expired tokens from the blacklist
+    async fn cleanup_expired_blacklist(&self);
 }
 
 /// In-memory token blacklist store
@@ -88,6 +91,19 @@ impl TokenStore for MemoryTokenStore {
 
     async fn blacklist_size(&self) -> usize {
         self.blacklist.read().await.len()
+    }
+
+    async fn cleanup_expired_blacklist(&self) {
+        // 对于内存存储，由于我们使用 HashSet 且不记录时间戳，
+        // 无法区分哪些条目已过期。在生产环境中，应该：
+        // 1. 使用带有时间戳的结构体存储 JTI
+        // 2. 定期扫描并删除过期条目
+        //
+        // 注意：Redis 版本通过 TTL 自动处理过期，无需手动清理
+        tracing::debug!("Memory token store cleanup - no expiration tracking implemented");
+        // TODO: 如果需要完整的内存存储过期清理，需要：
+        // - 修改数据结构为 HashMap<String, u64> (JTI -> 过期时间戳)
+        // - 遍历并删除过期条目
     }
 }
 
@@ -188,6 +204,12 @@ impl TokenStore for RedisTokenStore {
     async fn blacklist_size(&self) -> usize {
         // For Redis, this would require SCAN - simplified for now
         0
+    }
+
+    async fn cleanup_expired_blacklist(&self) {
+        // 对于 Redis 存储，过期由 TTL 自动处理
+        // 无需手动清理
+        tracing::debug!("Redis token store cleanup - expiration handled by TTL");
     }
 }
 

@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use tracing::warn;
 
 #[derive(Debug, Clone, Default)]
-pub struct MemoryStats {
+pub(crate) struct MemoryStats {
     pub current_bytes: u64,
     pub peak_bytes: u64,
     pub available_bytes: u64,
@@ -19,7 +19,7 @@ pub struct MemoryStats {
 }
 
 #[derive(Debug, Clone)]
-pub struct GpuMemoryStats {
+pub(crate) struct GpuMemoryStats {
     pub device_id: usize,
     pub used_bytes: u64,
     pub total_bytes: u64,
@@ -28,7 +28,7 @@ pub struct GpuMemoryStats {
 }
 
 #[derive(Debug, Clone, Default)]
-pub enum DeviceType {
+pub(crate) enum DeviceType {
     #[default]
     Cpu,
     Gpu {
@@ -38,7 +38,7 @@ pub enum DeviceType {
 }
 
 #[derive(Debug, Clone)]
-pub struct MemoryMonitor {
+pub(crate) struct MemoryMonitor {
     inner: Arc<MemoryMonitorInner>,
 }
 

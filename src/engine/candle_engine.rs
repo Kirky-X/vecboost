@@ -139,6 +139,20 @@ impl CandleEngine {
         let model_path = &config.model_path;
         let is_local_path = model_path.exists() && model_path.is_dir();
 
+        // 安全增强：如果是本地路径，进行路径遍历攻击检测
+        if is_local_path {
+            // 检查路径是否包含 ".." 或其他可疑模式
+            let model_path_str = model_path.to_string_lossy();
+            if model_path_str.contains("..") || model_path_str.contains('~') {
+                tracing::warn!(
+                    "Potential path traversal attempt detected in model path: {:?}",
+                    model_path
+                );
+                // 注意：这里不直接拒绝，因为可能是合法的相对路径
+                // 但会记录警告日志用于安全审计
+            }
+        }
+
         let (config_filename, tokenizer_filename, weights_filename): (
             std::path::PathBuf,
             std::path::PathBuf,

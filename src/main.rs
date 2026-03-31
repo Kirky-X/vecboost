@@ -15,12 +15,17 @@ use vecboost::{
     },
     config::model::{EngineType, ModelConfig},
     engine::AnyEngine,
-    grpc::server::GrpcServer,
-    pipeline::{PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel},
+    pipeline::{
+        PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
+        WorkerManager,
+    },
     rate_limit::{MemoryRateLimitStore, RateLimiter},
     security::{KeyStore, KeyType, SecretKey, SecurityConfig, StorageType, create_key_store},
     service::embedding::EmbeddingService,
 };
+
+#[cfg(feature = "grpc")]
+use vecboost::grpc::server::GrpcServer;
 
 // 使用 vecboost crate 中的路由模块
 use vecboost::routes;
@@ -207,7 +212,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Initialize pipeline if enabled
-    let (pipeline_enabled, pipeline_queue, response_channel, priority_calculator) =
+    let (pipeline_enabled, pipeline_queue, response_channel, priority_calculator, worker_manager) =
         if config.pipeline.enabled {
             tracing::info!(
                 "Request pipeline enabled with queue_size={}",
@@ -226,16 +231,51 @@ async fn main() -> anyhow::Result<()> {
             };
             let priority_calculator = Arc::new(PriorityCalculator::new(priority_config));
 
+            // Create WorkerManager with EmbeddingService
+            let worker_config = vecboost::pipeline::WorkerConfig {
+                min_workers: config.pipeline.worker.min_workers,
+                max_workers: config.pipeline.worker.max_workers,
+                scale_up_threshold: config.pipeline.worker.scale_up_threshold,
+                scale_down_threshold: config.pipeline.worker.scale_down_threshold,
+                scale_check_interval_secs: config.pipeline.worker.scale_check_interval_secs,
+                idle_timeout_secs: config.pipeline.worker.idle_timeout_secs,
+            };
+
+            let worker_manager = Arc::new(WorkerManager::new(
+                pipeline_queue.clone(),
+                response_channel.clone(),
+                worker_config.clone(),
+                service.clone(), // Pass the Arc<RwLock<EmbeddingService>>
+            ));
+
+            // Start minimum workers
+            for _ in 0..worker_config.min_workers {
+                worker_manager.spawn_worker().await;
+            }
+
             tracing::info!("Pipeline components initialized successfully");
 
-            (true, pipeline_queue, response_channel, priority_calculator)
+            (
+                true,
+                pipeline_queue,
+                response_channel,
+                priority_calculator,
+                worker_manager,
+            )
         } else {
             tracing::info!("Request pipeline disabled");
+
             (
                 false,
                 Arc::new(PriorityRequestQueue::new(0)),
                 Arc::new(ResponseChannel::new()),
                 Arc::new(PriorityCalculator::new(PriorityConfig::default())),
+                Arc::new(WorkerManager::new(
+                    Arc::new(PriorityRequestQueue::new(0)),
+                    Arc::new(ResponseChannel::new()),
+                    WorkerConfig::default(),
+                    service.clone(), // Pass the Arc<RwLock<EmbeddingService>>
+                )),
             )
         };
 
@@ -259,9 +299,10 @@ async fn main() -> anyhow::Result<()> {
         pipeline_queue,
         response_channel,
         priority_calculator,
+        worker_manager,
     };
 
-    let grpc_service = app_state.service.clone();
+    let _grpc_service = app_state.service.clone();
 
     // Using the new routing module to create the router
     let app = routes::create_router(app_state);
@@ -292,6 +333,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("Server listening on {}", addr);
 
+    #[cfg(feature = "grpc")]
     if config.server.grpc_enabled {
         let grpc_host = config
             .server

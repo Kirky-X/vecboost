@@ -3,10 +3,10 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-pub mod candle_engine;
+pub(crate) mod candle_engine;
 
 #[cfg(feature = "onnx")]
-pub mod onnx_engine;
+pub(crate) mod onnx_engine;
 
 use crate::config::model::{EngineType, ModelConfig, Precision};
 use crate::error::AppError;

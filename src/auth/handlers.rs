@@ -1,12 +1,9 @@
-#![allow(unused)]
-
 use crate::auth::JwtManager;
 use crate::auth::types::{AuthResponse, LoginRequest, RefreshTokenRequest};
 use crate::auth::user_store::{UserStore, validate_username_format};
 use crate::error::AppError;
 use axum::{Json, extract::State};
 use std::sync::Arc;
-use utoipa::ToSchema;
 
 /// 用户登录处理器
 ///

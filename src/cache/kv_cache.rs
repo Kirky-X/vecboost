@@ -20,7 +20,6 @@ pub struct CacheEntry {
 
 pub struct KvCache {
     cache: Arc<RwLock<LruCache<u64, CacheEntry>>>,
-    #[allow(dead_code)]
     max_size: NonZeroUsize,
     enabled: bool,
 }
@@ -36,7 +35,6 @@ impl KvCache {
         }
     }
 
-    #[allow(dead_code)]
     pub fn with_capacity(max_size: usize) -> Self {
         Self::new(max_size)
     }
@@ -51,11 +49,6 @@ impl KvCache {
 
     pub fn is_enabled(&self) -> bool {
         self.enabled
-    }
-
-    #[allow(dead_code)]
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
     }
 
     pub async fn get(&self, key: &str) -> Option<Vec<f32>> {
@@ -105,18 +98,6 @@ impl KvCache {
         Ok(embedding)
     }
 
-    #[allow(dead_code)]
-    pub async fn contains(&self, key: &str) -> bool {
-        if !self.enabled {
-            return false;
-        }
-
-        let hash = self.compute_hash(key);
-        let cache = self.cache.read().await;
-        cache.contains(&hash)
-    }
-
-    #[allow(dead_code)]
     pub async fn remove(&self, key: &str) -> bool {
         if !self.enabled {
             return false;
@@ -127,13 +108,11 @@ impl KvCache {
         cache.pop(&hash).is_some()
     }
 
-    #[allow(dead_code)]
     pub async fn clear(&self) {
         let mut cache = self.cache.write().await;
         cache.clear();
     }
 
-    #[allow(dead_code)]
     pub async fn len(&self) -> usize {
         let cache = self.cache.read().await;
         cache.len()

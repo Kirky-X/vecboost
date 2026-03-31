@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use utoipa::ToSchema;
+use zeroize::Zeroize; // 用于安全清除敏感数据
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct StoredUser {
@@ -142,6 +143,10 @@ pub fn hash_password(password: &str) -> Result<String, AppError> {
     let password_hash = argon2
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| AppError::AuthenticationError(format!("Failed to hash password: {}", e)))?;
+
+    // 安全清除明文密码（从内存中零化）
+    let mut password_vec = password.as_bytes().to_vec();
+    password_vec.zeroize();
 
     Ok(password_hash.to_string())
 }

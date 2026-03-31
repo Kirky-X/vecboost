@@ -80,6 +80,8 @@ argon2 = "0.5"
 rand = "0.8"
 aes-gcm = "0.10"
 hex = "0.4"
+url = "2.5"
+zeroize = "1.8" # 用于安全清除敏感数据
 
 # CUDA support - only available on Linux with CUDA toolkit
 cudarc = { version = "0.18.2", optional = true, default-features = false }

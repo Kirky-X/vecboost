@@ -5,19 +5,20 @@
 
 #![allow(unused)]
 
-pub mod amd;
-pub mod batch_scheduler;
-pub mod cuda;
-pub mod manager;
-pub mod memory_limit;
-pub mod memory_optimizer;
-pub mod memory_pool;
+pub(crate) mod amd;
+pub(crate) mod batch_scheduler;
+pub(crate) mod cuda;
+pub(crate) mod manager;
+pub(crate) mod memory_limit;
+pub(crate) mod memory_optimizer;
+pub(crate) mod memory_pool;
 
-pub use batch_scheduler::{
+// 重新导出必要的类型供内部使用
+pub(crate) use batch_scheduler::{
     BatchConfig, BatchPerformanceStats, BatchPriority, BatchRequest, DynamicBatchScheduler,
 };
-pub use manager::{DeviceInfo, DeviceStatus};
-pub use memory_pool::{
+pub(crate) use manager::{DeviceInfo, DeviceStatus};
+pub(crate) use memory_pool::{
     BufferPool, CudaMemoryPool, MemoryPoolConfig, MemoryPoolManager, ModelWeightPool, TensorPool,
 };
 

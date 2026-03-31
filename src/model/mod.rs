@@ -5,7 +5,7 @@
 
 #![allow(unused)]
 
-pub mod downloader;
-pub mod loader;
-pub mod manager;
-pub mod recovery;
+pub(crate) mod downloader;
+pub(crate) mod loader;
+pub(crate) mod manager;
+pub(crate) mod recovery;

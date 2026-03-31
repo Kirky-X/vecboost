@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
+use tracing::{error, info, warn};
 
 use crate::domain::{
     BatchEmbedRequest as DomainBatchEmbedRequest, EmbedRequest as DomainEmbedRequest,
@@ -28,7 +29,13 @@ impl embedding_service_server::EmbeddingService for VecboostEmbeddingService {
         &self,
         request: Request<EmbedRequest>,
     ) -> Result<Response<EmbedResponse>, Status> {
+        let start_time = std::time::Instant::now();
         let req = request.into_inner();
+
+        // 输入验证
+        if req.text.is_empty() {
+            return Err(Status::invalid_argument("Text cannot be empty"));
+        }
 
         let domain_req = DomainEmbedRequest {
             text: req.text,
@@ -39,12 +46,24 @@ impl embedding_service_server::EmbeddingService for VecboostEmbeddingService {
         let domain_res = service_guard
             .process_text(domain_req, None)
             .await
-            .map_err(|e| Status::internal(format!("Embedding failed: {}", e)))?;
+            .map_err(|e| {
+                error!("gRPC embed request failed: {}", e);
+                Status::internal(format!("Embedding failed: {}", e))
+            })?;
+
+        let processing_time = start_time.elapsed();
+
+        // 记录成功请求的指标
+        info!(
+            "gRPC embed completed in {:.2}ms, dimension: {}",
+            processing_time.as_secs_f64() * 1000.0,
+            domain_res.dimension
+        );
 
         let res = EmbedResponse {
             embedding: domain_res.embedding,
             dimension: domain_res.dimension as i64,
-            processing_time_ms: domain_res.processing_time_ms as f64,
+            processing_time_ms: processing_time.as_secs_f64() * 1000.0,
         };
 
         Ok(Response::new(res))
@@ -54,7 +73,13 @@ impl embedding_service_server::EmbeddingService for VecboostEmbeddingService {
         &self,
         request: Request<BatchEmbedRequest>,
     ) -> Result<Response<BatchEmbedResponse>, Status> {
+        let start_time = std::time::Instant::now();
         let req = request.into_inner();
+
+        // 输入验证
+        if req.texts.is_empty() {
+            return Err(Status::invalid_argument("Texts cannot be empty"));
+        }
 
         let domain_req = DomainBatchEmbedRequest {
             texts: req.texts,
@@ -66,9 +91,22 @@ impl embedding_service_server::EmbeddingService for VecboostEmbeddingService {
         let domain_res = service_guard
             .process_batch(domain_req, None)
             .await
-            .map_err(|e| Status::internal(format!("Batch embedding failed: {}", e)))?;
+            .map_err(|e| {
+                error!("gRPC embed_batch request failed: {}", e);
+                Status::internal(format!("Batch embedding failed: {}", e))
+            })?;
 
+        let processing_time = start_time.elapsed();
         let total_count = domain_res.embeddings.len();
+
+        // 记录成功请求的指标
+        info!(
+            "gRPC embed_batch completed in {:.2}ms, count: {}, dimension: {}",
+            processing_time.as_secs_f64() * 1000.0,
+            total_count,
+            domain_res.dimension
+        );
+
         let embeddings: Vec<EmbedResponse> = domain_res
             .embeddings
             .into_iter()
@@ -82,7 +120,7 @@ impl embedding_service_server::EmbeddingService for VecboostEmbeddingService {
         let res = BatchEmbedResponse {
             embeddings,
             total_count: total_count as i64,
-            processing_time_ms: domain_res.processing_time_ms as f64,
+            processing_time_ms: processing_time.as_secs_f64() * 1000.0,
         };
 
         Ok(Response::new(res))

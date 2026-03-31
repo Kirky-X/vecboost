@@ -166,8 +166,7 @@ where
         self.cleanup_expired().await;
 
         let mut store = self.store.write().await;
-        if store.contains_key(key) {
-            let entry = store.get_mut(key).unwrap();
+        if let Some(entry) = store.get_mut(key) {
             entry.record_access();
             let value = entry.value.clone();
             drop(store);

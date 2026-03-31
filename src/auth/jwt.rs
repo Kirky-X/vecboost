@@ -3,18 +3,17 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-#![allow(unused)]
-
-use crate::auth::token_store::{MemoryTokenStore, TokenStore, TokenStoreFactory};
+use crate::auth::token_store::{MemoryTokenStore, TokenStore};
 use crate::auth::types::User;
 use crate::error::AppError;
 use crate::security::{KeyStore, KeyType};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use zeroize::Zeroize;
 
 const DEFAULT_TOKEN_EXPIRATION_HOURS: i64 = 1; // 1 hour
 const DEFAULT_REFRESH_TOKEN_EXPIRATION_HOURS: i64 = 24; // 24 hours
@@ -152,6 +151,10 @@ impl JwtManager {
         let encoding_key = Arc::new(EncodingKey::from_secret(secret.as_ref()));
         let decoding_key = Arc::new(DecodingKey::from_secret(secret.as_ref()));
 
+        // 安全清除明文 secret（从内存中零化）
+        let mut secret_vec = secret.as_bytes().to_vec();
+        secret_vec.zeroize();
+
         Ok(Self {
             encoding_key,
             decoding_key,
@@ -243,12 +246,14 @@ impl JwtManager {
             ));
         }
 
-        // 检查刷新次数
-        let mut refresh_counts: tokio::sync::RwLockWriteGuard<'_, HashMap<String, u32>> =
-            self.refresh_counts.write().await;
+        // 检查刷新次数 - 使用原子操作避免竞态条件
+        let mut refresh_counts = self.refresh_counts.write().await;
         let refresh_count = refresh_counts.entry(claims.jti.clone()).or_insert(0);
 
         if *refresh_count >= MAX_REFRESH_COUNT {
+            // 达到最大刷新次数，将令牌加入黑名单
+            drop(refresh_counts);
+            let _ = self.token_store.add_to_blacklist(&claims.jti).await;
             return Err(AppError::AuthenticationError(format!(
                 "Refresh token has been used too many times (maximum {} times)",
                 MAX_REFRESH_COUNT
@@ -265,7 +270,12 @@ impl JwtManager {
             permissions: claims.permissions.clone(),
         };
 
-        self.generate_token(&user)
+        let new_token = self.generate_token(&user)?;
+
+        // 记录刷新成功（用于审计）
+        tracing::debug!("Token refreshed for user: {}", claims.username);
+
+        Ok(new_token)
     }
 
     pub async fn revoke_token(&self, token: &str) -> Result<(), AppError> {
@@ -280,8 +290,27 @@ impl JwtManager {
 
     pub async fn cleanup_expired_blacklist(&self) {
         // 对于 Redis 存储，过期由 TTL 自动处理
-        // 对于内存存储，需要手动清理
-        // 注意：这可能需要针对不同存储后端进行优化
+        // 对于内存存储，需要手动清理过期条目
+        self.token_store.cleanup_expired_blacklist().await;
+        tracing::debug!("JWT blacklist cleanup executed");
+    }
+
+    /// 启动定期黑名单清理任务
+    pub fn start_periodic_cleanup(
+        &self,
+        cleanup_interval_hours: u64,
+    ) -> tokio::task::JoinHandle<()> {
+        let token_store = self.token_store.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+                cleanup_interval_hours * 3600,
+            ));
+            loop {
+                interval.tick().await;
+                token_store.cleanup_expired_blacklist().await;
+                tracing::debug!("Periodic JWT blacklist cleanup executed");
+            }
+        })
     }
 
     pub async fn validate_token(&self, token: &str) -> Result<Claims, AppError> {
@@ -327,7 +356,7 @@ mod tests {
     async fn test_token_generation_and_validation() {
         // 使用符合熵值要求的测试密钥（至少 32 字节，高熵值）
         let secret = "test_secret_key_for_jwt_validation_must_be_long_enough_12345678";
-        let manager = JwtManager::new(secret.to_string()).unwrap();
+        let manager = JwtManager::new(secret.to_string()).expect("Failed to create JwtManager");
 
         let user = User {
             username: "testuser".to_string(),
@@ -335,10 +364,15 @@ mod tests {
             permissions: vec!["read".to_string(), "write".to_string()],
         };
 
-        let token = manager.generate_token(&user).unwrap();
+        let token = manager
+            .generate_token(&user)
+            .expect("Failed to generate token");
         assert!(!token.is_empty());
 
-        let claims = manager.validate_token(&token).await.unwrap();
+        let claims = manager
+            .validate_token(&token)
+            .await
+            .expect("Token validation failed");
         assert_eq!(claims.username, "testuser");
         assert_eq!(claims.role, "user");
         assert_eq!(claims.permissions, vec!["read", "write"]);
@@ -348,7 +382,7 @@ mod tests {
     async fn test_refresh_token_generation() {
         // 使用符合熵值要求的测试密钥
         let secret = "test_secret_key_for_jwt_refresh_must_be_long_enough_87654321";
-        let manager = JwtManager::new(secret.to_string()).unwrap();
+        let manager = JwtManager::new(secret.to_string()).expect("Failed to create JwtManager");
 
         let user = User {
             username: "testuser".to_string(),
@@ -356,10 +390,15 @@ mod tests {
             permissions: vec!["read".to_string()],
         };
 
-        let refresh_token = manager.generate_refresh_token(&user).unwrap();
+        let refresh_token = manager
+            .generate_refresh_token(&user)
+            .expect("Failed to generate refresh token");
         assert!(!refresh_token.is_empty());
 
-        let new_token = manager.refresh_token(&refresh_token).await.unwrap();
+        let new_token = manager
+            .refresh_token(&refresh_token)
+            .await
+            .expect("Token refresh failed");
         assert!(!new_token.is_empty());
     }
 
@@ -367,7 +406,7 @@ mod tests {
     async fn test_token_revocation() {
         // 使用符合熵值要求的测试密钥
         let secret = "test_secret_key_for_jwt_revocation_must_be_long_enough_abc123xyz";
-        let manager = JwtManager::new(secret.to_string()).unwrap();
+        let manager = JwtManager::new(secret.to_string()).expect("Failed to create JwtManager");
 
         let user = User {
             username: "testuser".to_string(),
@@ -375,10 +414,15 @@ mod tests {
             permissions: vec!["read".to_string()],
         };
 
-        let token = manager.generate_token(&user).unwrap();
+        let token = manager
+            .generate_token(&user)
+            .expect("Failed to generate token");
 
         // 撤销令牌
-        manager.revoke_token(&token).await.unwrap();
+        manager
+            .revoke_token(&token)
+            .await
+            .expect("Token revocation failed");
 
         // 验证令牌应该失败
         let result = manager.validate_token(&token).await;
@@ -389,7 +433,7 @@ mod tests {
     async fn test_invalid_token() {
         // 使用符合熵值要求的测试密钥
         let secret = "test_secret_key_for_jwt_invalid_must_be_long_enough_999888777";
-        let manager = JwtManager::new(secret.to_string()).unwrap();
+        let manager = JwtManager::new(secret.to_string()).expect("Failed to create JwtManager");
 
         let invalid_token = "invalid.token.here";
         let result = manager.validate_token(invalid_token).await;
@@ -402,8 +446,8 @@ mod tests {
         let secret1 = "test_secret_key_1_for_jwt_different_must_be_long_enough_111222";
         let secret2 = "test_secret_key_2_for_jwt_different_must_be_long_enough_333444";
 
-        let manager1 = JwtManager::new(secret1.to_string()).unwrap();
-        let manager2 = JwtManager::new(secret2.to_string()).unwrap();
+        let manager1 = JwtManager::new(secret1.to_string()).expect("Failed to create JwtManager 1");
+        let manager2 = JwtManager::new(secret2.to_string()).expect("Failed to create JwtManager 2");
 
         let user = User {
             username: "testuser".to_string(),
@@ -411,7 +455,9 @@ mod tests {
             permissions: vec!["read".to_string()],
         };
 
-        let token = manager1.generate_token(&user).unwrap();
+        let token = manager1
+            .generate_token(&user)
+            .expect("Failed to generate token");
         let result = manager2.validate_token(&token).await;
         assert!(result.is_err());
     }

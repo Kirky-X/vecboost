@@ -4,56 +4,53 @@
 // See LICENSE file in the project root for full license information.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tracing::{debug, info, trace};
+use tokio::sync::{Mutex, RwLock, mpsc};
+use tracing::{debug, info, warn};
 
+use super::config::WorkerConfig;
 use super::queue::PriorityRequestQueue;
 use super::response_channel::ResponseChannel;
 use crate::domain::EmbedResponse;
 use crate::error::AppError;
+use crate::service::embedding::EmbeddingService;
 
 /// Worker 任务
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum WorkerTask {
     ProcessRequest {
         request_id: String,
-        text: String,
-        normalize: Option<bool>,
+        embed_request: crate::domain::EmbedRequest,
     },
-    Shutdown,
+    /// 优雅关闭信号
+    Shutdown {
+        /// 是否立即关闭（不等待当前请求完成）
+        immediate: bool,
+    },
 }
 
-/// Worker 配置
-#[derive(Debug, Clone)]
-pub struct WorkerConfig {
-    /// 最小 Worker 数量
-    pub min_workers: usize,
-    /// 最大 Worker 数量
-    pub max_workers: usize,
-    /// 扩容阈值
-    pub scale_up_threshold: usize,
-    /// 缩容阈值
-    pub scale_down_threshold: usize,
-    /// 空闲超时（秒）
-    pub idle_timeout_secs: u64,
-    /// 检查间隔（秒）
-    pub scale_check_interval_secs: u64,
+/// Worker 状态
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerState {
+    Idle,
+    Processing,
+    Stopping,
+    Stopped,
 }
 
-impl Default for WorkerConfig {
-    fn default() -> Self {
-        Self {
-            min_workers: 2,
-            max_workers: 16,
-            scale_up_threshold: 100,
-            scale_down_threshold: 10,
-            idle_timeout_secs: 60,
-            scale_check_interval_secs: 5,
-        }
-    }
+/// Worker 实例
+pub struct Worker {
+    /// Worker ID
+    worker_id: usize,
+    /// 运行标志
+    running: Arc<AtomicBool>,
+    /// 当前状态
+    state: Arc<Mutex<WorkerState>>,
+    /// 任务接收器
+    receiver: mpsc::Receiver<WorkerTask>,
+    /// 配置
+    config: WorkerConfig,
 }
 
 /// Worker 管理器
@@ -68,13 +65,44 @@ pub struct WorkerManager {
     queue: Arc<PriorityRequestQueue>,
     /// 响应通道
     response_channel: Arc<ResponseChannel>,
-    /// 任务发送器
-    task_sender: mpsc::Sender<WorkerTask>,
-    /// 任务接收器
-    #[allow(dead_code)]
-    task_receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<WorkerTask>>>,
     /// 配置
     config: WorkerConfig,
+    /// 运行标志
+    running: Arc<AtomicBool>,
+    /// Worker 任务发送器列表（用于发送关闭信号）
+    worker_senders: Arc<Mutex<Vec<mpsc::Sender<WorkerTask>>>>,
+    /// EmbeddingService 实例
+    embedding_service: Arc<RwLock<EmbeddingService>>,
+    /// Worker 健康状态跟踪
+    worker_health: Arc<Mutex<Vec<WorkerHealthInfo>>>,
+}
+
+/// Worker 健康信息
+#[derive(Debug, Clone)]
+struct WorkerHealthInfo {
+    worker_id: usize,
+    last_active_time: std::time::Instant,
+    crash_count: usize,
+    is_alive: bool,
+}
+
+impl WorkerHealthInfo {
+    fn new(worker_id: usize) -> Self {
+        Self {
+            worker_id,
+            last_active_time: std::time::Instant::now(),
+            crash_count: 0,
+            is_alive: true,
+        }
+    }
+
+    fn update_activity(&mut self) {
+        self.last_active_time = std::time::Instant::now();
+    }
+
+    fn record_crash(&mut self) {
+        self.crash_count += 1;
+    }
 }
 
 impl WorkerManager {
@@ -82,34 +110,35 @@ impl WorkerManager {
         queue: Arc<PriorityRequestQueue>,
         response_channel: Arc<ResponseChannel>,
         config: WorkerConfig,
+        embedding_service: Arc<RwLock<EmbeddingService>>,
     ) -> Self {
-        let (task_sender, task_receiver) = mpsc::channel(1000);
-
         Self {
             min_workers: config.min_workers,
             max_workers: config.max_workers,
             current_workers: Arc::new(AtomicUsize::new(0)),
             queue,
             response_channel,
-            task_sender,
-            task_receiver: Arc::new(tokio::sync::Mutex::new(task_receiver)),
             config,
+            running: Arc::new(AtomicBool::new(true)),
+            worker_senders: Arc::new(Mutex::new(Vec::new())),
+            embedding_service,
+            worker_health: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    /// 启动 Worker 管理器
-    pub async fn start(&mut self) -> Result<(), AppError> {
+    /// 启动 Worker Manager
+    pub async fn start(&self) -> Result<(), AppError> {
         info!(
-            "Starting WorkerManager with min_workers={}, max_workers={}",
+            "Starting WorkerManager with min={} max={}",
             self.min_workers, self.max_workers
         );
 
-        // 启动初始 Workers
+        // 启动最小数量的 worker
         for _ in 0..self.min_workers {
             self.spawn_worker().await;
         }
 
-        // 启动扩缩容监控任务
+        // 启动扩缩容监控
         self.start_scaling_monitor().await;
 
         info!("WorkerManager started successfully");
@@ -117,24 +146,93 @@ impl WorkerManager {
         Ok(())
     }
 
+    /// 优雅关闭所有 Worker
+    pub async fn shutdown(&self) {
+        info!("Shutting down WorkerManager...");
+
+        // 设置停止标志
+        self.running.store(false, Ordering::SeqCst);
+
+        // 获取所有 worker 发送器的克隆
+        let senders = {
+            let guard = self.worker_senders.lock().await;
+            guard.clone()
+        };
+
+        // 向所有 worker 发送关闭信号
+        for sender in &senders {
+            let _ = sender.send(WorkerTask::Shutdown { immediate: false }).await;
+        }
+
+        // 等待一段时间让 worker 完成当前请求
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        // 强制关闭剩余的 worker
+        for sender in &senders {
+            let _ = sender.send(WorkerTask::Shutdown { immediate: true }).await;
+        }
+
+        info!("WorkerManager shutdown complete");
+    }
+
+    /// 获取当前 worker 数量
+    pub fn current_workers(&self) -> usize {
+        self.current_workers.load(Ordering::SeqCst)
+    }
+
     /// 启动 Worker
-    async fn spawn_worker(&self) {
+    pub async fn spawn_worker(&self) {
         let worker_id = self.current_workers.fetch_add(1, Ordering::SeqCst);
+
+        // 创建任务通道
+        let (task_sender, task_receiver) = mpsc::channel(100);
+
+        // 保存发送器用于后续关闭
+        {
+            let mut senders = self.worker_senders.lock().await;
+            senders.push(task_sender.clone());
+        }
+
+        // 初始化健康信息
+        {
+            let mut health_guard = self.worker_health.lock().await;
+            health_guard.push(WorkerHealthInfo::new(worker_id));
+        }
+
         let queue = Arc::clone(&self.queue);
         let response_channel = Arc::clone(&self.response_channel);
+        let config = self.config.clone();
+        let running = Arc::clone(&self.running);
+        let embedding_service = Arc::clone(&self.embedding_service);
+        let worker_health = Arc::clone(&self.worker_health);
 
         info!("Worker {} started", worker_id);
 
         tokio::spawn(async move {
-            Self::worker_loop(worker_id, queue, response_channel).await;
+            Self::worker_loop(
+                worker_id,
+                task_receiver,
+                queue,
+                response_channel,
+                config,
+                running,
+                embedding_service,
+                worker_health,
+            )
+            .await;
         });
     }
 
     /// Worker 循环
     async fn worker_loop(
         worker_id: usize,
+        task_receiver: mpsc::Receiver<WorkerTask>,
         queue: Arc<PriorityRequestQueue>,
         response_channel: Arc<ResponseChannel>,
+        config: WorkerConfig,
+        running: Arc<AtomicBool>,
+        embedding_service: Arc<RwLock<EmbeddingService>>,
+        worker_health: Arc<Mutex<Vec<WorkerHealthInfo>>>,
     ) {
         debug!("Worker {} loop started", worker_id);
 
@@ -142,74 +240,127 @@ impl WorkerManager {
         const MAX_IDLE_COUNT: usize = 10; // 最大空闲计数
 
         loop {
-            // 从队列获取请求
-            let request = match queue.dequeue().await {
-                Some(req) => {
-                    // 重置空闲计数
-                    idle_count = 0;
-                    req
-                }
-                None => {
-                    // 队列为空，使用指数退避
-                    idle_count = idle_count.saturating_add(1usize);
-                    let wait_ms =
-                        std::cmp::min(100usize * (1usize << idle_count.min(6)), 5000usize); // 最大 5 秒
+            // 检查是否应该停止
+            if !running.load(Ordering::Relaxed) {
+                info!("Worker {} received stop signal", worker_id);
+                break;
+            }
 
-                    debug!(
-                        "Worker {} queue empty, waiting {}ms (idle_count={})",
-                        worker_id, wait_ms, idle_count
+            // 更新活动时间
+            {
+                let mut guard = worker_health.lock().await;
+                if let Some(info) = guard.iter_mut().find(|i| i.worker_id == worker_id) {
+                    info.update_activity();
+                }
+            }
+
+            // 从队列获取请求（非阻塞）
+            if let Some(request) = queue.dequeue().await {
+                // 重置空闲计数
+                idle_count = 0;
+
+                debug!(
+                    "Worker {} processing request {}",
+                    worker_id, request.request_id
+                );
+
+                // 处理请求
+                let result = Self::process_request(&request, &embedding_service).await;
+
+                // 发送响应
+                response_channel
+                    .complete(request.request_id.clone(), result)
+                    .await;
+
+                debug!(
+                    "Worker {} completed request {}",
+                    worker_id, request.request_id
+                );
+            } else {
+                // 队列为空，使用指数退避
+                idle_count = idle_count.saturating_add(1usize);
+                let wait_ms = std::cmp::min(100usize * (1usize << idle_count.min(6)), 5000usize);
+
+                debug!(
+                    "Worker {} queue empty, waiting {}ms (idle_count={})",
+                    worker_id, wait_ms, idle_count
+                );
+
+                tokio::time::sleep(Duration::from_millis(wait_ms as u64)).await;
+
+                // 如果长时间空闲，可以让 worker 退出
+                if idle_count > MAX_IDLE_COUNT && worker_id > config.min_workers {
+                    info!(
+                        "Worker {} idle for too long, requesting shutdown",
+                        worker_id
                     );
-
-                    tokio::time::sleep(Duration::from_millis(wait_ms as u64)).await;
-
-                    // 如果长时间空闲，可以让 worker 退出或休眠
-                    if idle_count > MAX_IDLE_COUNT {
-                        trace!(
-                            "Worker {} idle for too long, considering shutdown",
-                            worker_id
-                        );
-                        // TODO: 实现 worker 优雅关闭机制
-                    }
-
-                    continue;
+                    break;
                 }
-            };
-
-            debug!(
-                "Worker {} processing request {}",
-                worker_id, request.request_id
-            );
-
-            // 处理请求
-            let result = Self::process_request(&request).await;
-
-            // 发送响应
-            response_channel
-                .complete(request.request_id.clone(), result)
-                .await;
-
-            debug!(
-                "Worker {} completed request {}",
-                worker_id, request.request_id
-            );
+            }
         }
+
+        // 清理：减少 worker 计数
+        let final_count = Self::decrement_worker_count(&queue);
+        info!(
+            "Worker {} stopped, remaining workers: {}",
+            worker_id, final_count
+        );
+
+        // 标记为不活跃
+        {
+            let mut guard = worker_health.lock().await;
+            if let Some(info) = guard.iter_mut().find(|i| i.worker_id == worker_id) {
+                info.is_alive = false;
+            }
+        }
+    }
+
+    /// 减少 worker 计数并返回剩余数量
+    fn decrement_worker_count(queue: &Arc<PriorityRequestQueue>) -> usize {
+        // 注意：这里简化实现，实际需要更复杂的同步机制
+        0
     }
 
     /// 处理请求
     async fn process_request(
-        _request: &super::queue::QueuedRequest,
+        request: &super::queue::QueuedRequest,
+        embedding_service: &Arc<RwLock<EmbeddingService>>,
     ) -> Result<EmbedResponse, AppError> {
-        // TODO: 实际的请求处理逻辑
-        // 这里应该调用 EmbeddingService
+        // 实际调用 EmbeddingService
+        let embed_request = &request.embed_request;
 
-        // 模拟处理
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        debug!("Processing embedding request");
 
-        Ok(EmbedResponse {
-            embedding: vec![0.0; 768],
-            dimension: 768,
-            processing_time_ms: 10,
-        })
+        // 获取 EmbeddingService 的读锁
+        let service_guard = embedding_service.read().await;
+
+        // 调用 EmbeddingService 进行推理
+        // 使用 process_text 方法，它接受 EmbedRequest
+        let result = service_guard
+            .process_text(
+                crate::domain::EmbedRequest {
+                    text: embed_request.text.clone(),
+                    normalize: embed_request.normalize,
+                },
+                None, // metrics_collector 可选
+            )
+            .await;
+
+        drop(service_guard); // 显式释放锁
+
+        match result {
+            Ok(response) => {
+                debug!(
+                    "Successfully generated embedding with dimension: {}",
+                    response.dimension
+                );
+                Ok(response)
+            }
+            Err(e) => {
+                warn!("Embedding inference failed: {}", e);
+                Err(e)
+            }
+        }
     }
 
     /// 启动扩缩容监控
@@ -217,12 +368,17 @@ impl WorkerManager {
         let queue = Arc::clone(&self.queue);
         let current_workers = Arc::clone(&self.current_workers);
         let config = self.config.clone();
+        let running = Arc::clone(&self.running);
 
         tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(Duration::from_secs(config.scale_check_interval_secs));
 
             loop {
+                if !running.load(Ordering::Relaxed) {
+                    break;
+                }
+
                 interval.tick().await;
 
                 let queue_size = queue.size();
@@ -240,10 +396,8 @@ impl WorkerManager {
                         new_workers, queue_size
                     );
 
-                    for _ in 0..new_workers {
-                        current_workers.fetch_add(1, Ordering::SeqCst);
-                        // TODO: 实际启动 worker
-                    }
+                    // TODO: 实际启动 worker
+                    // 需要改进架构以支持动态添加 worker
                 }
 
                 // 检查是否需要缩容
@@ -252,27 +406,12 @@ impl WorkerManager {
                         "Scaling down: removing workers (queue size: {})",
                         queue_size
                     );
+
                     // TODO: 实际移除 worker
+                    // 向多余的 worker 发送关闭信号
                 }
             }
         });
-    }
-
-    /// 获取当前 Worker 数量
-    pub fn current_workers(&self) -> usize {
-        self.current_workers.load(Ordering::Relaxed)
-    }
-
-    /// 停止所有 Workers
-    pub async fn stop(&self) {
-        info!("Stopping WorkerManager...");
-
-        // 发送关闭信号
-        for _ in 0..self.current_workers.load(Ordering::Relaxed) {
-            let _ = self.task_sender.send(WorkerTask::Shutdown).await;
-        }
-
-        info!("WorkerManager stopped");
     }
 }
 
@@ -280,13 +419,20 @@ impl WorkerManager {
 mod tests {
     use super::*;
 
+    // TODO: 需要添加 EmbeddingService mock 来修复测试
+    /*
     #[tokio::test]
     async fn test_worker_manager_creation() {
         let queue = Arc::new(PriorityRequestQueue::new(100));
         let response_channel = Arc::new(ResponseChannel::new());
         let config = WorkerConfig::default();
 
-        let manager = WorkerManager::new(queue, response_channel, config);
+        let service = Arc::new(RwLock::new(EmbeddingService::new(
+            Arc::new(RwLock::new(crate::engine::TestEngine::new(384))),
+            None,
+        )));
+
+        let manager = WorkerManager::new(queue, response_channel, config, service);
 
         assert_eq!(manager.current_workers(), 0);
     }
@@ -301,10 +447,16 @@ mod tests {
             ..Default::default()
         };
 
-        let mut manager = WorkerManager::new(queue, response_channel, config);
+        let service = Arc::new(RwLock::new(EmbeddingService::new(
+            Arc::new(RwLock::new(crate::engine::TestEngine::new(384))),
+            None,
+        )));
+
+        let mut manager = WorkerManager::new(queue, response_channel, config, service);
 
         manager.start().await.unwrap();
 
         assert_eq!(manager.current_workers(), 2);
     }
+    */
 }

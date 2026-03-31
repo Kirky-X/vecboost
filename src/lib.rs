@@ -13,6 +13,7 @@ pub mod auth;
 pub mod config;
 pub mod domain;
 pub mod engine;
+#[cfg(feature = "grpc")]
 pub mod grpc;
 pub mod metrics;
 pub mod pipeline;
@@ -33,6 +34,7 @@ pub(crate) mod model;
 pub(crate) mod monitor;
 pub(crate) mod text;
 
+// 重新导出必要的内部类型（最小化暴露原则）
 pub use config::app::{AppConfig, AuthConfig, CsrfConfig, RateLimitConfig, ServerConfig};
 pub use config::model::ModelConfig;
 pub use domain::{EmbedRequest, EmbedResponse, SimilarityRequest, SimilarityResponse};
@@ -61,6 +63,7 @@ pub struct AppState {
     pub pipeline_queue: Arc<pipeline::PriorityRequestQueue>,
     pub response_channel: Arc<pipeline::ResponseChannel>,
     pub priority_calculator: Arc<pipeline::PriorityCalculator>,
+    pub worker_manager: Arc<pipeline::WorkerManager>,
 }
 
 impl FromRef<AppState> for Arc<RwLock<EmbeddingService>> {

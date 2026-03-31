@@ -225,10 +225,26 @@ impl DynamicBatchScheduler {
             return;
         }
 
-        let recent_samples: Vec<&PerformanceSample> = history.iter().rev().take(10).collect();
+        let recent_samples: Vec<&PerformanceSample> = history.iter().rev().take(20).collect();
 
+        // 计算平均延迟
         let avg_latency: f64 =
             recent_samples.iter().map(|s| s.latency_ms).sum::<f64>() / recent_samples.len() as f64;
+
+        // 计算 P95 和 P99 延迟（更准确地反映长尾延迟）
+        let mut latencies: Vec<f64> = recent_samples.iter().map(|s| s.latency_ms).collect();
+        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let p95_index = (latencies.len() as f64 * 0.95).round() as usize - 1;
+        let p99_index = (latencies.len() as f64 * 0.99).round() as usize - 1;
+        let p95_latency = latencies
+            .get(p95_index.clamp(0, latencies.len() - 1))
+            .copied()
+            .unwrap_or(avg_latency);
+        let p99_latency = latencies
+            .get(p99_index.clamp(0, latencies.len() - 1))
+            .copied()
+            .unwrap_or(avg_latency);
 
         let avg_throughput: f64 = recent_samples
             .iter()
@@ -238,27 +254,46 @@ impl DynamicBatchScheduler {
 
         drop(history);
 
-        // 调整逻辑
+        // 调整逻辑：使用 P99 延迟作为主要指标（更保守）
         let current_batch = *self.current_batch_size.read().await;
         let mut new_batch_size = current_batch;
 
-        if avg_latency < 30.0 && avg_throughput > 200.0 {
-            // 性能良好，增加批量
-            new_batch_size = std::cmp::min(new_batch_size * 2, self.config.max_batch_size);
-            info!(
-                "Increasing batch size to {} (latency: {:.1}ms, throughput: {:.1} req/s)",
-                new_batch_size, avg_latency, avg_throughput
+        // 目标：P99 延迟 < 80ms 且 吞吐量 > 150 req/s
+        const TARGET_P99_LATENCY: f64 = 80.0;
+        const TARGET_THROUGHPUT: f64 = 150.0;
+
+        if p99_latency < TARGET_P99_LATENCY && avg_throughput > TARGET_THROUGHPUT {
+            // 性能良好，增加批量（但更保守，每次增加 25%）
+            new_batch_size = std::cmp::min(
+                (current_batch as f64 * 1.25).round() as usize,
+                self.config.max_batch_size,
             );
-        } else if avg_latency > 100.0 {
-            // 延迟过高，减少批量
-            new_batch_size = std::cmp::max(new_batch_size / 2, self.config.min_batch_size);
+            info!(
+                "Increasing batch size to {} (avg: {:.1}ms, P95: {:.1}ms, P99: {:.1}ms, throughput: {:.1} req/s)",
+                new_batch_size, avg_latency, p95_latency, p99_latency, avg_throughput
+            );
+        } else if p99_latency > TARGET_P99_LATENCY * 1.5 {
+            // P99 延迟过高，快速减少批量
+            new_batch_size = std::cmp::max(current_batch / 2, self.config.min_batch_size);
             warn!(
-                "Decreasing batch size to {} (latency: {:.1}ms, throughput: {:.1} req/s)",
-                new_batch_size, avg_latency, avg_throughput
+                "Decreasing batch size to {} (P99 latency too high: {:.1}ms)",
+                new_batch_size, p99_latency
+            );
+        } else if p99_latency > TARGET_P99_LATENCY {
+            // P99 延迟略高，缓慢减少批量
+            new_batch_size = std::cmp::max(
+                (current_batch as f64 * 0.75).round() as usize,
+                self.config.min_batch_size,
+            );
+            warn!(
+                "Decreasing batch size to {} (P99: {:.1}ms, target: {:.1}ms)",
+                new_batch_size, p99_latency, TARGET_P99_LATENCY
             );
         }
 
-        *self.current_batch_size.write().await = new_batch_size;
+        if new_batch_size != current_batch {
+            *self.current_batch_size.write().await = new_batch_size;
+        }
     }
 
     /// 手动设置批量大小（用于外部控制）

@@ -5815,6 +5815,7 @@ dependencies = [
  "home",
  "inklog",
  "jsonwebtoken",
+ "log",
  "lru",
  "ndarray",
  "num_cpus",

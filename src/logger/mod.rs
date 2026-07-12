@@ -18,3 +18,6 @@ pub(crate) mod impl_;
 
 #[cfg(feature = "inklog")]
 pub use impl_::LoggerModule;
+
+#[cfg(all(test, feature = "inklog"))]
+mod tests;

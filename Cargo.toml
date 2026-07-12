@@ -55,6 +55,7 @@ confers = { version = "0.4", optional = true, default-features = false, features
 
 # Logging infrastructure (inklog feature)
 inklog = { version = "0.1", optional = true, default-features = false }
+log = { version = "0.4", optional = true, default-features = false }
 
 # AI & Math (base)
 candle-core = { version = "0.9", features = [] }
@@ -116,7 +117,7 @@ db = []
 postgres = ["db"]
 
 # 基础设施特性(Phase 3 添加依赖)
-inklog = ["dep:inklog"]
+inklog = ["dep:inklog", "dep:log"]
 limiteron = []
 oxcache = []
 

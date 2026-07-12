@@ -11,3 +11,6 @@ pub mod app_config;
 
 #[cfg(feature = "config")]
 pub use app_config::AppConfig as ConfersAppConfig;
+
+#[cfg(all(test, feature = "config"))]
+mod tests;

@@ -13,7 +13,7 @@ categories = ["asynchronous", "science", "web-programming::http-server"]
 
 [dependencies]
 # Base async runtime & utilities (always required)
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.50", features = ["full"] }
 async-trait = "0.1"
 futures = "0.3"
 tempfile = "3.14"
@@ -51,7 +51,7 @@ anyhow = "1.0"
 trait-kit = "0.2"
 
 # Configuration library (config feature)
-confers = { version = "0.4", optional = true, default-features = false, features = ["toml", "env"] }
+confers = { version = "0.4", optional = true, default-features = false, features = ["toml", "env", "config-bus"] }
 
 # AI & Math (base)
 candle-core = { version = "0.9", features = [] }

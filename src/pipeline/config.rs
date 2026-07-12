@@ -7,6 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PipelineConfig {
     pub enabled: bool,
     pub queue: QueueConfig,
@@ -27,6 +28,7 @@ impl Default for PipelineConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct QueueConfig {
     pub max_queue_size: usize,
     pub enable_priority: bool,
@@ -42,6 +44,7 @@ impl Default for QueueConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WorkerConfig {
     pub min_workers: usize,
     pub max_workers: usize,

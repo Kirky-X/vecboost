@@ -27,6 +27,7 @@ pub struct AppConfig {
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
@@ -38,6 +39,7 @@ pub struct ServerConfig {
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct ModelConfig {
     pub model_repo: String,
     pub model_revision: String,
@@ -49,6 +51,7 @@ pub struct ModelConfig {
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct EmbeddingConfig {
     pub default_aggregation: String,
     pub similarity_metric: String,
@@ -58,6 +61,7 @@ pub struct EmbeddingConfig {
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct MonitoringConfig {
     pub memory_limit_mb: Option<usize>,
     pub memory_warning_threshold: Option<f64>,
@@ -66,6 +70,7 @@ pub struct MonitoringConfig {
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct AuthConfig {
     pub enabled: bool,
     pub jwt_secret: Option<String>,
@@ -78,6 +83,7 @@ pub struct AuthConfig {
 
 /// Rate limiting configuration
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct RateLimitConfig {
     /// Enable rate limiting
     pub enabled: bool,
@@ -110,6 +116,7 @@ impl Default for RateLimitConfig {
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct SecurityConfig {
     pub storage_type: String,
     pub encryption_key: Option<String>,
@@ -117,6 +124,7 @@ pub struct SecurityConfig {
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct CsrfConfig {
     pub enabled: bool,
     pub allowed_origins: Option<Vec<String>>,
@@ -148,6 +156,7 @@ impl Default for CsrfConfig {
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct AuditConfig {
     pub enabled: bool,
     pub log_file_path: String,
@@ -158,6 +167,7 @@ pub struct AuditConfig {
 
 /// 内存池配置
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct MemoryPoolConfig {
     /// 是否启用内存池
     pub enabled: bool,
@@ -173,6 +183,7 @@ pub struct MemoryPoolConfig {
 
 /// Tensor 池配置
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct TensorPoolConfig {
     /// 是否启用
     pub enabled: bool,
@@ -188,6 +199,7 @@ pub struct TensorPoolConfig {
 
 /// 缓冲区池配置
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct BufferPoolConfig {
     /// 是否启用
     pub enabled: bool,
@@ -201,6 +213,7 @@ pub struct BufferPoolConfig {
 
 /// 模型权重池配置
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct ModelPoolConfig {
     /// 是否启用
     pub enabled: bool,
@@ -212,6 +225,7 @@ pub struct ModelPoolConfig {
 
 /// CUDA 池配置
 #[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
 pub struct CudaPoolConfig {
     /// 是否启用
     pub enabled: bool,

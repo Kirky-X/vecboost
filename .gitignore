@@ -102,6 +102,7 @@ test_report*.json
 *.dylib
 models/
 *.wasm
+.gitnexus
 
 # -----------------------------------------------------------------------------
 # 9. Temporary Files
@@ -125,6 +126,7 @@ docs/.doctrees/
 # -----------------------------------------------------------------------------
 AGENTS.md
 openspec/
+specmark/
 CLAUDE.md
 IFLOW.md
 

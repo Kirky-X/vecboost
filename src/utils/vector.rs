@@ -1,10 +1,15 @@
-use utoipa::ToSchema;
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use crate::error::AppError;
+use utoipa::ToSchema;
+// Copyright (c) 2025-2026 Kirky.X
+//
+// Licensed under the MIT License
+// See LICENSE file in the project root for full license information.
+
+use crate::error::VecboostError;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -46,9 +51,9 @@ pub enum AggregationMode {
     MinPooling,
 }
 
-pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> Result<f32, AppError> {
+pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
-        return Err(AppError::InvalidInput(format!(
+        return Err(VecboostError::InvalidInput(format!(
             "Vector dimensions mismatch: {} vs {}",
             v1.len(),
             v2.len()
@@ -66,9 +71,9 @@ pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> Result<f32, AppError> {
     Ok(dot_product / (norm_a * norm_b))
 }
 
-pub fn euclidean_distance(v1: &[f32], v2: &[f32]) -> Result<f32, AppError> {
+pub fn euclidean_distance(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
-        return Err(AppError::InvalidInput(format!(
+        return Err(VecboostError::InvalidInput(format!(
             "Vector dimensions mismatch: {} vs {}",
             v1.len(),
             v2.len()
@@ -84,9 +89,9 @@ pub fn euclidean_distance(v1: &[f32], v2: &[f32]) -> Result<f32, AppError> {
     Ok(squared_distance.sqrt())
 }
 
-pub fn dot_product(v1: &[f32], v2: &[f32]) -> Result<f32, AppError> {
+pub fn dot_product(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
-        return Err(AppError::InvalidInput(format!(
+        return Err(VecboostError::InvalidInput(format!(
             "Vector dimensions mismatch: {} vs {}",
             v1.len(),
             v2.len()
@@ -96,9 +101,9 @@ pub fn dot_product(v1: &[f32], v2: &[f32]) -> Result<f32, AppError> {
     Ok(v1.iter().zip(v2.iter()).map(|(a, b)| a * b).sum())
 }
 
-pub fn manhattan_distance(v1: &[f32], v2: &[f32]) -> Result<f32, AppError> {
+pub fn manhattan_distance(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
-        return Err(AppError::InvalidInput(format!(
+        return Err(VecboostError::InvalidInput(format!(
             "Vector dimensions mismatch: {} vs {}",
             v1.len(),
             v2.len()
@@ -112,7 +117,7 @@ pub fn calculate_similarity(
     v1: &[f32],
     v2: &[f32],
     metric: SimilarityMetric,
-) -> Result<f32, AppError> {
+) -> Result<f32, VecboostError> {
     match metric {
         SimilarityMetric::Cosine => cosine_similarity(v1, v2),
         SimilarityMetric::Euclidean => {

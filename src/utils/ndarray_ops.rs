@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
@@ -32,7 +32,7 @@ use ndarray::{s, Array1, Array2, ArrayBase, Axis, Data, Dim, Ix1, Ix2, LinalgSca
 use std::ops::{Add, Div, Mul, Sub};
 
 #[cfg(feature = "onnx")]
-use crate::error::AppError;
+use crate::error::VecboostError;
 
 pub type NdArrayVector = Array1<f32>;
 pub type NdArrayMatrix = Array2<f32>;
@@ -276,17 +276,17 @@ pub fn batch_similarity_search(
 }
 
 #[cfg(feature = "onnx")]
-pub fn convert_ort_to_ndarray(ort_embedding: &ort::Tensor) -> Result<NdArrayVector, AppError> {
+pub fn convert_ort_to_ndarray(ort_embedding: &ort::Tensor) -> Result<NdArrayVector, VecboostError> {
     use ort::TensorElementDataType;
 
     match ort_embedding.data_type() {
         TensorElementDataType::Float32 => {
             let values = ort_embedding
                 .as_slice::<f32>()
-                .map_err(|e| AppError::InferenceError(format!("Failed to cast ORT tensor: {}", e)))?;
+                .map_err(|e| VecboostError::InferenceError(format!("Failed to cast ORT tensor: {}", e)))?;
             Ok(NdArrayVector::from(values.to_vec()))
         }
-        _ => Err(AppError::InferenceError(format!(
+        _ => Err(VecboostError::InferenceError(format!(
             "Unsupported tensor data type for ndarray conversion: {:?}",
             ort_embedding.data_type()
         ))),

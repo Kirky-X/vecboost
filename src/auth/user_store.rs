@@ -1,10 +1,10 @@
-// Copyright (c) 2025 Kirky.X
-use crate::auth::types::User;
+// Copyright (c) 2025-2026 Kirky.X
+use crate::auth::User;
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information.
 
-use crate::error::AppError;
+use crate::error::VecboostError;
 use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -46,16 +46,16 @@ impl UserStore {
         }
     }
 
-    pub fn add_user(&self, user: StoredUser) -> Result<(), AppError> {
+    pub fn add_user(&self, user: StoredUser) -> Result<(), VecboostError> {
         // 验证用户名格式
         validate_username_format(&user.username)?;
 
         let mut users = self.users.write().map_err(|e| {
-            AppError::AuthenticationError(format!("Failed to acquire write lock: {}", e))
+            VecboostError::AuthenticationError(format!("Failed to acquire write lock: {}", e))
         })?;
 
         if users.contains_key(&user.username) {
-            return Err(AppError::AuthenticationError(format!(
+            return Err(VecboostError::AuthenticationError(format!(
                 "User {} already exists",
                 user.username
             )));
@@ -65,26 +65,26 @@ impl UserStore {
         Ok(())
     }
 
-    pub fn get_user(&self, username: &str) -> Result<Option<StoredUser>, AppError> {
+    pub fn get_user(&self, username: &str) -> Result<Option<StoredUser>, VecboostError> {
         let users = self.users.read().map_err(|e| {
-            AppError::AuthenticationError(format!("Failed to acquire read lock: {}", e))
+            VecboostError::AuthenticationError(format!("Failed to acquire read lock: {}", e))
         })?;
 
         Ok(users.get(username).cloned())
     }
 
-    pub fn verify_password(&self, username: &str, password: &str) -> Result<User, AppError> {
+    pub fn verify_password(&self, username: &str, password: &str) -> Result<User, VecboostError> {
         let stored_user = self
             .get_user(username)?
-            .ok_or_else(|| AppError::AuthenticationError("User not found".to_string()))?;
+            .ok_or_else(|| VecboostError::AuthenticationError("User not found".to_string()))?;
 
         let parsed_hash = PasswordHash::new(&stored_user.password_hash).map_err(|e| {
-            AppError::AuthenticationError(format!("Invalid password hash format: {}", e))
+            VecboostError::AuthenticationError(format!("Invalid password hash format: {}", e))
         })?;
 
         argon2::Argon2::default()
             .verify_password(password.as_bytes(), &parsed_hash)
-            .map_err(|_| AppError::AuthenticationError("Invalid password".to_string()))?;
+            .map_err(|_| VecboostError::AuthenticationError("Invalid password".to_string()))?;
 
         Ok(User {
             username: stored_user.username,
@@ -93,30 +93,34 @@ impl UserStore {
         })
     }
 
-    pub fn list_users(&self) -> Result<Vec<String>, AppError> {
+    pub fn list_users(&self) -> Result<Vec<String>, VecboostError> {
         let users = self.users.read().map_err(|e| {
-            AppError::AuthenticationError(format!("Failed to acquire read lock: {}", e))
+            VecboostError::AuthenticationError(format!("Failed to acquire read lock: {}", e))
         })?;
 
         Ok(users.keys().cloned().collect())
     }
 
-    pub fn remove_user(&self, username: &str) -> Result<bool, AppError> {
+    pub fn remove_user(&self, username: &str) -> Result<bool, VecboostError> {
         let mut users = self.users.write().map_err(|e| {
-            AppError::AuthenticationError(format!("Failed to acquire write lock: {}", e))
+            VecboostError::AuthenticationError(format!("Failed to acquire write lock: {}", e))
         })?;
 
         Ok(users.remove(username).is_some())
     }
 
-    pub fn update_user(&self, username: &str, request: UpdateUserRequest) -> Result<(), AppError> {
+    pub fn update_user(
+        &self,
+        username: &str,
+        request: UpdateUserRequest,
+    ) -> Result<(), VecboostError> {
         let mut users = self.users.write().map_err(|e| {
-            AppError::AuthenticationError(format!("Failed to acquire write lock: {}", e))
+            VecboostError::AuthenticationError(format!("Failed to acquire write lock: {}", e))
         })?;
 
-        let stored_user = users
-            .get_mut(username)
-            .ok_or_else(|| AppError::AuthenticationError(format!("User {} not found", username)))?;
+        let stored_user = users.get_mut(username).ok_or_else(|| {
+            VecboostError::AuthenticationError(format!("User {} not found", username))
+        })?;
 
         if let Some(role) = request.role {
             stored_user.role = role;
@@ -136,13 +140,15 @@ impl Default for UserStore {
     }
 }
 
-pub fn hash_password(password: &str) -> Result<String, AppError> {
+pub fn hash_password(password: &str) -> Result<String, VecboostError> {
     let salt = SaltString::generate(&mut rand::thread_rng());
     let argon2 = argon2::Argon2::default();
 
     let password_hash = argon2
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| AppError::AuthenticationError(format!("Failed to hash password: {}", e)))?;
+        .map_err(|e| {
+            VecboostError::AuthenticationError(format!("Failed to hash password: {}", e))
+        })?;
 
     // 安全清除明文密码（从内存中零化）
     let mut password_vec = password.as_bytes().to_vec();
@@ -151,7 +157,10 @@ pub fn hash_password(password: &str) -> Result<String, AppError> {
     Ok(password_hash.to_string())
 }
 
-pub fn create_default_admin_user(username: &str, password: &str) -> Result<StoredUser, AppError> {
+pub fn create_default_admin_user(
+    username: &str,
+    password: &str,
+) -> Result<StoredUser, VecboostError> {
     let password_hash = hash_password(password)?;
 
     Ok(StoredUser {
@@ -180,31 +189,31 @@ pub fn create_default_admin_user(username: &str, password: &str) -> Result<Store
 /// - 包含数字
 /// - 包含特殊字符
 /// - 不包含常见弱密码模式
-pub fn validate_password_complexity(password: &str) -> Result<(), AppError> {
+pub fn validate_password_complexity(password: &str) -> Result<(), VecboostError> {
     // 检查最小长度
     if password.len() < 12 {
-        return Err(AppError::ValidationError(
+        return Err(VecboostError::ValidationError(
             "密码长度必须至少为 12 个字符".to_string(),
         ));
     }
 
     // 检查是否包含大写字母
     if !password.chars().any(|c| c.is_uppercase()) {
-        return Err(AppError::ValidationError(
+        return Err(VecboostError::ValidationError(
             "密码必须包含至少一个大写字母".to_string(),
         ));
     }
 
     // 检查是否包含小写字母
     if !password.chars().any(|c| c.is_lowercase()) {
-        return Err(AppError::ValidationError(
+        return Err(VecboostError::ValidationError(
             "密码必须包含至少一个小写字母".to_string(),
         ));
     }
 
     // 检查是否包含数字
     if !password.chars().any(|c| c.is_ascii_digit()) {
-        return Err(AppError::ValidationError(
+        return Err(VecboostError::ValidationError(
             "密码必须包含至少一个数字".to_string(),
         ));
     }
@@ -212,7 +221,7 @@ pub fn validate_password_complexity(password: &str) -> Result<(), AppError> {
     // 检查是否包含特殊字符
     let special_chars = "!@#$%^&*()_+-=[]{}|;:,.<>?/~`";
     if !password.chars().any(|c| special_chars.contains(c)) {
-        return Err(AppError::ValidationError(
+        return Err(VecboostError::ValidationError(
             "密码必须包含至少一个特殊字符 (!@#$%^&*()_+-=[]{}|;:,.<>?/~`)".to_string(),
         ));
     }
@@ -253,7 +262,7 @@ pub fn validate_password_complexity(password: &str) -> Result<(), AppError> {
     let lower_password = password.to_lowercase();
     for pattern in weak_patterns {
         if lower_password.contains(&pattern.to_lowercase()) {
-            return Err(AppError::ValidationError(format!(
+            return Err(VecboostError::ValidationError(format!(
                 "密码不能包含常见弱密码模式: {}",
                 pattern
             )));
@@ -278,7 +287,7 @@ pub fn validate_password_complexity(password: &str) -> Result<(), AppError> {
         });
 
         if is_consecutive_digits || is_consecutive_letters {
-            return Err(AppError::ValidationError(
+            return Err(VecboostError::ValidationError(
                 "密码不能包含连续的字符序列（如 12345 或 abcde）".to_string(),
             ));
         }
@@ -291,7 +300,7 @@ pub fn validate_password_complexity(password: &str) -> Result<(), AppError> {
 
         let is_repeated = slice.windows(2).all(|w| w[0] == w[1]);
         if is_repeated {
-            return Err(AppError::ValidationError(
+            return Err(VecboostError::ValidationError(
                 "密码不能包含重复的字符序列（如 aaaaa 或 11111）".to_string(),
             ));
         }
@@ -306,10 +315,10 @@ pub fn validate_password_complexity(password: &str) -> Result<(), AppError> {
 /// - 长度 3-32 个字符
 /// - 只允许字母、数字、下划线和连字符
 /// - 必须以字母开头
-pub fn validate_username_format(username: &str) -> Result<(), AppError> {
+pub fn validate_username_format(username: &str) -> Result<(), VecboostError> {
     // 检查长度
     if username.len() < 3 || username.len() > 32 {
-        return Err(AppError::ValidationError(
+        return Err(VecboostError::ValidationError(
             "用户名长度必须在 3 到 32 个字符之间".to_string(),
         ));
     }
@@ -321,7 +330,7 @@ pub fn validate_username_format(username: &str) -> Result<(), AppError> {
         .map(|c| c.is_ascii_alphabetic())
         .unwrap_or(false)
     {
-        return Err(AppError::ValidationError(
+        return Err(VecboostError::ValidationError(
             "用户名必须以字母开头".to_string(),
         ));
     }
@@ -329,7 +338,7 @@ pub fn validate_username_format(username: &str) -> Result<(), AppError> {
     // 检查字符格式：只允许字母、数字、下划线和连字符
     let username_regex = Regex::new(r"^[a-zA-Z][a-zA-Z0-9_-]*$").unwrap();
     if !username_regex.is_match(username) {
-        return Err(AppError::ValidationError(
+        return Err(VecboostError::ValidationError(
             "用户名只能包含字母、数字、下划线和连字符".to_string(),
         ));
     }

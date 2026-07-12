@@ -1,4 +1,9 @@
-use crate::error::AppError;
+// Copyright (c) 2025-2026 Kirky.X
+//
+// Licensed under the MIT License
+// See LICENSE file in the project root for full license information.
+
+use crate::error::VecboostError;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::File;
@@ -22,18 +27,19 @@ pub struct ModelIntegrityReport {
     pub corrupted_files: Vec<String>,
 }
 
-pub fn compute_sha256<P: AsRef<Path>>(file_path: P) -> Result<String, AppError> {
+pub fn compute_sha256<P: AsRef<Path>>(file_path: P) -> Result<String, VecboostError> {
     let path = file_path.as_ref();
 
-    let mut file = File::open(path)
-        .map_err(|e| AppError::ModelLoadError(format!("Failed to open file {:?}: {}", path, e)))?;
+    let mut file = File::open(path).map_err(|e| {
+        VecboostError::ModelLoadError(format!("Failed to open file {:?}: {}", path, e))
+    })?;
 
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
 
     loop {
         let bytes_read = file.read(&mut buffer).map_err(|e| {
-            AppError::ModelLoadError(format!("Failed to read file {:?}: {}", path, e))
+            VecboostError::ModelLoadError(format!("Failed to read file {:?}: {}", path, e))
         })?;
 
         if bytes_read == 0 {
@@ -46,7 +52,10 @@ pub fn compute_sha256<P: AsRef<Path>>(file_path: P) -> Result<String, AppError> 
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-pub fn verify_sha256<P: AsRef<Path>>(file_path: P, expected_hash: &str) -> Result<bool, AppError> {
+pub fn verify_sha256<P: AsRef<Path>>(
+    file_path: P,
+    expected_hash: &str,
+) -> Result<bool, VecboostError> {
     let actual_hash = compute_sha256(file_path)?;
 
     let normalized_expected = expected_hash.trim().to_lowercase();
@@ -55,25 +64,26 @@ pub fn verify_sha256<P: AsRef<Path>>(file_path: P, expected_hash: &str) -> Resul
     Ok(normalized_expected == normalized_actual)
 }
 
-pub fn verify_file_exists<P: AsRef<Path>>(file_path: P) -> Result<bool, AppError> {
+pub fn verify_file_exists<P: AsRef<Path>>(file_path: P) -> Result<bool, VecboostError> {
     let path = file_path.as_ref();
     Ok(path.exists())
 }
 
-pub fn verify_file_readable<P: AsRef<Path>>(file_path: P) -> Result<bool, AppError> {
+pub fn verify_file_readable<P: AsRef<Path>>(file_path: P) -> Result<bool, VecboostError> {
     let path = file_path.as_ref();
-    File::open(path)
-        .map_err(|e| AppError::ModelLoadError(format!("Failed to open file {:?}: {}", path, e)))?;
+    File::open(path).map_err(|e| {
+        VecboostError::ModelLoadError(format!("Failed to open file {:?}: {}", path, e))
+    })?;
     Ok(true)
 }
 
 pub fn verify_file_size<P: AsRef<Path>>(
     file_path: P,
     min_size_bytes: u64,
-) -> Result<bool, AppError> {
+) -> Result<bool, VecboostError> {
     let path = file_path.as_ref();
     let metadata = std::fs::metadata(path).map_err(|e| {
-        AppError::ModelLoadError(format!("Failed to get metadata for {:?}: {}", path, e))
+        VecboostError::ModelLoadError(format!("Failed to get metadata for {:?}: {}", path, e))
     })?;
 
     Ok(metadata.len() >= min_size_bytes)
@@ -83,7 +93,7 @@ pub fn check_model_integrity(
     model_name: &str,
     files: Vec<(String, Option<String>)>,
     min_file_sizes: Option<HashMap<String, u64>>,
-) -> Result<ModelIntegrityReport, AppError> {
+) -> Result<ModelIntegrityReport, VecboostError> {
     let mut checks = Vec::new();
     let mut corrupted_files = Vec::new();
 

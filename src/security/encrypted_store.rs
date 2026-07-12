@@ -1,4 +1,9 @@
-use crate::error::AppError;
+// Copyright (c) 2025-2026 Kirky.X
+//
+// Licensed under the MIT License
+// See LICENSE file in the project root for full license information.
+
+use crate::error::VecboostError;
 use crate::security::key_store::{KeyStore, KeyType, SecretKey};
 use aes_gcm::{
     Aes256Gcm, Nonce,
@@ -47,12 +52,12 @@ pub struct EncryptedFileKeyStore {
 }
 
 impl EncryptedFileKeyStore {
-    pub async fn new(file_path: &str, encryption_key: &str) -> Result<Self, AppError> {
+    pub async fn new(file_path: &str, encryption_key: &str) -> Result<Self, VecboostError> {
         let key_bytes = Self::derive_key(encryption_key)?;
 
         let data = if tokio::fs::try_exists(file_path)
             .await
-            .map_err(|e| AppError::IoError(format!("Failed to check key file: {}", e)))?
+            .map_err(|e| VecboostError::IoError(format!("Failed to check key file: {}", e)))?
         {
             Self::load_from_file(file_path, &key_bytes).await?
         } else {
@@ -66,7 +71,7 @@ impl EncryptedFileKeyStore {
         })
     }
 
-    fn derive_key(password: &str) -> Result<[u8; 32], AppError> {
+    fn derive_key(password: &str) -> Result<[u8; 32], VecboostError> {
         // 使用 Argon2id 进行安全的密钥派生
         // Argon2id 是 Argon2 的混合版本，平衡了抗侧信道攻击和抗 GPU/ASIC 攻击
         let argon2 = Argon2::default();
@@ -77,16 +82,16 @@ impl EncryptedFileKeyStore {
         // 创建密码哈希
         let password_hash = argon2
             .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| AppError::security_error(format!("Failed to derive key: {}", e)))?;
+            .map_err(|e| VecboostError::security_error(format!("Failed to derive key: {}", e)))?;
 
         // 从哈希中提取 32 字节作为密钥
         let hash_bytes = password_hash
             .hash
-            .ok_or_else(|| AppError::security_error("Password hash is missing".to_string()))?;
+            .ok_or_else(|| VecboostError::security_error("Password hash is missing".to_string()))?;
 
         // 确保我们有足够的字节
         if hash_bytes.len() < 32 {
-            return Err(AppError::security_error(
+            return Err(VecboostError::security_error(
                 "Derived key is too short".to_string(),
             ));
         }
@@ -97,19 +102,22 @@ impl EncryptedFileKeyStore {
         Ok(key)
     }
 
-    async fn load_from_file(file_path: &str, key: &[u8; 32]) -> Result<KeyStoreData, AppError> {
+    async fn load_from_file(
+        file_path: &str,
+        key: &[u8; 32],
+    ) -> Result<KeyStoreData, VecboostError> {
         let mut file = File::open(file_path)
             .await
-            .map_err(|e| AppError::IoError(format!("Failed to open key file: {}", e)))?;
+            .map_err(|e| VecboostError::IoError(format!("Failed to open key file: {}", e)))?;
 
         let mut encrypted_content = String::new();
         file.read_to_string(&mut encrypted_content)
             .await
-            .map_err(|e| AppError::IoError(format!("Failed to read key file: {}", e)))?;
+            .map_err(|e| VecboostError::IoError(format!("Failed to read key file: {}", e)))?;
 
         let parts: Vec<&str> = encrypted_content.splitn(2, ':').collect();
         if parts.len() != 2 {
-            return Err(AppError::security_error(
+            return Err(VecboostError::security_error(
                 "Invalid key file format".to_string(),
             ));
         }
@@ -118,39 +126,39 @@ impl EncryptedFileKeyStore {
         let ciphertext = parts[1];
 
         let nonce_bytes = hex::decode(nonce_hex)
-            .map_err(|e| AppError::security_error(format!("Invalid nonce: {}", e)))?;
+            .map_err(|e| VecboostError::security_error(format!("Invalid nonce: {}", e)))?;
 
         let cipher = Aes256Gcm::new(key.into());
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let plaintext = cipher
             .decrypt(nonce, ciphertext.as_bytes())
-            .map_err(|e| AppError::security_error(format!("Decryption failed: {}", e)))?;
+            .map_err(|e| VecboostError::security_error(format!("Decryption failed: {}", e)))?;
 
         let json_str = String::from_utf8(plaintext)
-            .map_err(|e| AppError::security_error(format!("Invalid UTF-8: {}", e)))?;
+            .map_err(|e| VecboostError::security_error(format!("Invalid UTF-8: {}", e)))?;
 
         serde_json::from_str(&json_str)
-            .map_err(|e| AppError::security_error(format!("Invalid key data: {}", e)))
+            .map_err(|e| VecboostError::security_error(format!("Invalid key data: {}", e)))
     }
 
-    async fn save_to_file(&self) -> Result<(), AppError> {
+    async fn save_to_file(&self) -> Result<(), VecboostError> {
         let data = self.data.read().await;
         let json_str = serde_json::to_string(&*data)
-            .map_err(|e| AppError::security_error(format!("Serialization failed: {}", e)))?;
+            .map_err(|e| VecboostError::security_error(format!("Serialization failed: {}", e)))?;
 
         let cipher = Aes256Gcm::new(self.encryption_key.as_ref().into());
         let nonce_bytes = Aes256Gcm::generate_nonce(&mut rand::thread_rng());
         let ciphertext = cipher
             .encrypt(&nonce_bytes, json_str.as_bytes())
-            .map_err(|e| AppError::security_error(format!("Encryption failed: {}", e)))?;
+            .map_err(|e| VecboostError::security_error(format!("Encryption failed: {}", e)))?;
 
         let nonce_hex = hex::encode(nonce_bytes);
         let encrypted_content = format!("{}:{}", nonce_hex, hex::encode(&ciphertext));
 
         let mut file = File::create(&self.file_path)
             .await
-            .map_err(|e| AppError::io_error(format!("Failed to create key file: {}", e)))?;
+            .map_err(|e| VecboostError::io_error(format!("Failed to create key file: {}", e)))?;
 
         // Set restrictive file permissions (owner read/write only: 0o600)
         #[cfg(unix)]
@@ -165,11 +173,11 @@ impl EncryptedFileKeyStore {
 
         file.write_all(encrypted_content.as_bytes())
             .await
-            .map_err(|e| AppError::io_error(format!("Failed to write key file: {}", e)))?;
+            .map_err(|e| VecboostError::io_error(format!("Failed to write key file: {}", e)))?;
 
         file.flush()
             .await
-            .map_err(|e| AppError::io_error(format!("Failed to flush key file: {}", e)))?;
+            .map_err(|e| VecboostError::io_error(format!("Failed to flush key file: {}", e)))?;
         Ok(())
     }
 
@@ -184,21 +192,28 @@ impl EncryptedFileKeyStore {
     }
 
     #[allow(dead_code)]
-    fn string_to_key_type(s: &str) -> Result<KeyType, AppError> {
+    fn string_to_key_type(s: &str) -> Result<KeyType, VecboostError> {
         match s {
             "jwt_secret" => Ok(KeyType::JwtSecret),
             "api_key" => Ok(KeyType::ApiKey),
             "database_password" => Ok(KeyType::DatabasePassword),
             "model_api_key" => Ok(KeyType::ModelApiKey),
             custom if custom.starts_with("custom_") => Ok(KeyType::Custom(custom[7..].to_string())),
-            _ => Err(AppError::security_error(format!("Unknown key type: {}", s))),
+            _ => Err(VecboostError::security_error(format!(
+                "Unknown key type: {}",
+                s
+            ))),
         }
     }
 }
 
 #[async_trait]
 impl KeyStore for EncryptedFileKeyStore {
-    async fn get(&self, key_type: &KeyType, name: &str) -> Result<Option<SecretKey>, AppError> {
+    async fn get(
+        &self,
+        key_type: &KeyType,
+        name: &str,
+    ) -> Result<Option<SecretKey>, VecboostError> {
         let type_str = Self::key_type_to_string(key_type);
         let data = self.data.read().await;
 
@@ -206,18 +221,19 @@ impl KeyStore for EncryptedFileKeyStore {
             if entry.key_type == type_str && entry.name == name {
                 let cipher = Aes256Gcm::new(self.encryption_key.as_ref().into());
                 let nonce_bytes = hex::decode(&entry.nonce)
-                    .map_err(|e| AppError::security_error(format!("Invalid nonce: {}", e)))?;
+                    .map_err(|e| VecboostError::security_error(format!("Invalid nonce: {}", e)))?;
                 let nonce = Nonce::from_slice(&nonce_bytes);
 
-                let ciphertext = hex::decode(&entry.encrypted_value)
-                    .map_err(|e| AppError::security_error(format!("Invalid ciphertext: {}", e)))?;
+                let ciphertext = hex::decode(&entry.encrypted_value).map_err(|e| {
+                    VecboostError::security_error(format!("Invalid ciphertext: {}", e))
+                })?;
 
-                let plaintext = cipher
-                    .decrypt(nonce, ciphertext.as_ref())
-                    .map_err(|e| AppError::security_error(format!("Decryption failed: {}", e)))?;
+                let plaintext = cipher.decrypt(nonce, ciphertext.as_ref()).map_err(|e| {
+                    VecboostError::security_error(format!("Decryption failed: {}", e))
+                })?;
 
                 let value = String::from_utf8(plaintext)
-                    .map_err(|e| AppError::security_error(format!("Invalid UTF-8: {}", e)))?;
+                    .map_err(|e| VecboostError::security_error(format!("Invalid UTF-8: {}", e)))?;
 
                 return Ok(Some(SecretKey::new(key_type.clone(), name, value)));
             }
@@ -226,14 +242,14 @@ impl KeyStore for EncryptedFileKeyStore {
         Ok(None)
     }
 
-    async fn set(&self, key: &SecretKey) -> Result<(), AppError> {
+    async fn set(&self, key: &SecretKey) -> Result<(), VecboostError> {
         let type_str = Self::key_type_to_string(&key.key_type);
         let cipher = Aes256Gcm::new(self.encryption_key.as_ref().into());
         let nonce_bytes = Aes256Gcm::generate_nonce(&mut rand::thread_rng());
 
         let ciphertext = cipher
             .encrypt(&nonce_bytes, key.value.as_bytes())
-            .map_err(|e| AppError::security_error(format!("Encryption failed: {}", e)))?;
+            .map_err(|e| VecboostError::security_error(format!("Encryption failed: {}", e)))?;
 
         let entry = EncryptedEntry {
             key_type: type_str,
@@ -254,7 +270,7 @@ impl KeyStore for EncryptedFileKeyStore {
         Ok(())
     }
 
-    async fn delete(&self, key_type: &KeyType, name: &str) -> Result<(), AppError> {
+    async fn delete(&self, key_type: &KeyType, name: &str) -> Result<(), VecboostError> {
         let type_str = Self::key_type_to_string(key_type);
         let mut data = self.data.write().await;
 
@@ -270,7 +286,7 @@ impl KeyStore for EncryptedFileKeyStore {
         Ok(())
     }
 
-    async fn list(&self, key_type: &KeyType) -> Result<Vec<String>, AppError> {
+    async fn list(&self, key_type: &KeyType) -> Result<Vec<String>, VecboostError> {
         let type_str = Self::key_type_to_string(key_type);
         let data = self.data.read().await;
 
@@ -284,7 +300,7 @@ impl KeyStore for EncryptedFileKeyStore {
         Ok(keys)
     }
 
-    async fn exists(&self, key_type: &KeyType, name: &str) -> Result<bool, AppError> {
+    async fn exists(&self, key_type: &KeyType, name: &str) -> Result<bool, VecboostError> {
         let type_str = Self::key_type_to_string(key_type);
         let data = self.data.read().await;
 

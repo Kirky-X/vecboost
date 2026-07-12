@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
@@ -11,7 +11,7 @@ use super::queue::QueuedRequest;
 use super::response_channel::ResponseChannel;
 use super::worker::WorkerManager;
 use crate::domain::EmbedResponse;
-use crate::error::AppError;
+use crate::error::VecboostError;
 
 /// 流水线调度器
 pub struct PipelineScheduler {
@@ -39,7 +39,10 @@ impl PipelineScheduler {
     }
 
     /// 处理请求
-    pub async fn process_request(&self, request: QueuedRequest) -> Result<EmbedResponse, AppError> {
+    pub async fn process_request(
+        &self,
+        request: QueuedRequest,
+    ) -> Result<EmbedResponse, VecboostError> {
         debug!("Processing request {}", request.request_id);
 
         // TODO: 实际的请求处理逻辑

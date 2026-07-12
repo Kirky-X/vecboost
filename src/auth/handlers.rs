@@ -1,7 +1,13 @@
-use crate::auth::JwtManager;
-use crate::auth::types::{AuthResponse, LoginRequest, RefreshTokenRequest};
-use crate::auth::user_store::{UserStore, validate_username_format};
-use crate::error::AppError;
+// Copyright (c) 2025-2026 Kirky.X
+//
+// Licensed under the MIT License
+// See LICENSE file in the project root for full license information.
+
+use crate::auth::{
+    AuthResponse, JwtManager, LoginRequest, RefreshTokenRequest, UserStore,
+    validate_username_format,
+};
+use crate::error::VecboostError;
 use axum::{Json, extract::State};
 use std::sync::Arc;
 
@@ -24,7 +30,7 @@ pub async fn login_handler(
     State(jwt_manager): State<Arc<JwtManager>>,
     State(audit_logger): State<Option<Arc<crate::audit::AuditLogger>>>,
     Json(login_request): Json<LoginRequest>,
-) -> Result<Json<AuthResponse>, AppError> {
+) -> Result<Json<AuthResponse>, VecboostError> {
     // 验证用户名格式
     validate_username_format(&login_request.username)?;
 
@@ -97,7 +103,7 @@ pub async fn refresh_token_handler(
     State(jwt_manager): State<Arc<JwtManager>>,
     State(audit_logger): State<Option<Arc<crate::audit::AuditLogger>>>,
     Json(refresh_request): Json<RefreshTokenRequest>,
-) -> Result<Json<AuthResponse>, AppError> {
+) -> Result<Json<AuthResponse>, VecboostError> {
     let new_token = jwt_manager
         .refresh_token(&refresh_request.refresh_token)
         .await?;
@@ -138,12 +144,12 @@ pub async fn me_handler(
     State(user_store): State<Arc<UserStore>>,
     State(jwt_manager): State<Arc<JwtManager>>,
     Json(refresh_request): Json<RefreshTokenRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<serde_json::Value>, VecboostError> {
     let claims = jwt_manager
         .validate_token(&refresh_request.refresh_token)
         .await?;
     let user = user_store.get_user(&claims.username)?.ok_or_else(|| {
-        AppError::AuthenticationError(format!("User '{}' not found", claims.username))
+        VecboostError::AuthenticationError(format!("User '{}' not found", claims.username))
     })?;
 
     Ok(Json(serde_json::json!({

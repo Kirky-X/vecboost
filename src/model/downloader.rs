@@ -1,11 +1,11 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
 #![allow(unused)]
 
-use crate::error::AppError;
+use crate::error::VecboostError;
 use hf_hub::{Repo, RepoType, api::sync::Api};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -70,9 +70,9 @@ pub struct ModelDownloader {
 }
 
 impl ModelDownloader {
-    pub fn new(config: ModelDownloadConfig) -> Result<Self, AppError> {
+    pub fn new(config: ModelDownloadConfig) -> Result<Self, VecboostError> {
         let hf_api = if config.source == ModelSource::HuggingFace {
-            let api = Api::new().map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             Some(api)
         } else {
             None
@@ -90,7 +90,7 @@ impl ModelDownloader {
         })
     }
 
-    pub fn with_huggingface(repo_id: &str, revision: &str) -> Result<Self, AppError> {
+    pub fn with_huggingface(repo_id: &str, revision: &str) -> Result<Self, VecboostError> {
         let config = ModelDownloadConfig {
             source: ModelSource::HuggingFace,
             repo_id: repo_id.to_string(),
@@ -100,7 +100,7 @@ impl ModelDownloader {
         Self::new(config)
     }
 
-    pub fn with_modelscope(repo_id: &str, revision: &str) -> Result<Self, AppError> {
+    pub fn with_modelscope(repo_id: &str, revision: &str) -> Result<Self, VecboostError> {
         let config = ModelDownloadConfig {
             source: ModelSource::ModelScope,
             repo_id: repo_id.to_string(),
@@ -110,16 +110,16 @@ impl ModelDownloader {
         Self::new(config)
     }
 
-    pub async fn download(&self) -> Result<Vec<PathBuf>, AppError> {
+    pub async fn download(&self) -> Result<Vec<PathBuf>, VecboostError> {
         match self.config.source {
             ModelSource::HuggingFace => self.download_from_huggingface().await,
             ModelSource::ModelScope => self.download_from_modelscope().await,
         }
     }
 
-    async fn download_from_huggingface(&self) -> Result<Vec<PathBuf>, AppError> {
+    async fn download_from_huggingface(&self) -> Result<Vec<PathBuf>, VecboostError> {
         let Some(ref api) = self.hf_api else {
-            return Err(AppError::ModelLoadError(
+            return Err(VecboostError::ModelLoadError(
                 "HuggingFace API not initialized".to_string(),
             ));
         };
@@ -133,7 +133,7 @@ impl ModelDownloader {
 
             let file_path = repo
                 .get(pattern)
-                .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
             downloaded_files.push(file_path);
             info!("Downloaded: {}", pattern);
@@ -142,7 +142,7 @@ impl ModelDownloader {
         Ok(downloaded_files)
     }
 
-    async fn download_from_modelscope(&self) -> Result<Vec<PathBuf>, AppError> {
+    async fn download_from_modelscope(&self) -> Result<Vec<PathBuf>, VecboostError> {
         let ms_url = format!(
             "https://modelscope.cn/api/v1/models/{}/repo?Revision={}",
             self.config.repo_id, self.config.revision
@@ -166,7 +166,7 @@ impl ModelDownloader {
                 .get(&file_url)
                 .send()
                 .await
-                .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
             if response.status().is_success() {
                 let cache_dir = self.config.cache_dir.clone().unwrap_or_else(|| {
@@ -181,16 +181,16 @@ impl ModelDownloader {
 
                 if let Some(parent) = file_path.parent() {
                     std::fs::create_dir_all(parent)
-                        .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
                 }
 
                 let bytes = response
                     .bytes()
                     .await
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
                 std::fs::write(&file_path, &bytes)
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
                 let display_path = file_path.clone();
                 downloaded_files.push(file_path);
@@ -201,7 +201,7 @@ impl ModelDownloader {
         }
 
         if downloaded_files.is_empty() {
-            return Err(AppError::ModelLoadError(
+            return Err(VecboostError::ModelLoadError(
                 "No files could be downloaded from ModelScope".to_string(),
             ));
         }

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 VecBoost
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
@@ -8,20 +8,21 @@
 //! 提供多维度限流功能，支持全局、IP、用户、API Key 等维度的限流
 //! 支持滑动窗口和令牌桶两种限流算法
 
-pub mod limiter;
+pub(crate) mod limiter;
 
 #[cfg(feature = "redis")]
-pub mod redis_store;
+pub(crate) mod redis_store;
 
-pub mod store;
-pub mod token_bucket;
+pub(crate) mod store;
+pub(crate) mod token_bucket;
 
-pub use limiter::{
-    RateLimitAlgorithm, RateLimitConfig, RateLimitDimension, RateLimitStatus, RateLimiter,
-};
+pub use limiter::{RateLimitConfig, RateLimitDimension, RateLimitStatus, RateLimiter};
+
+pub(crate) use limiter::RateLimitAlgorithm;
 
 #[cfg(feature = "redis")]
-pub use redis_store::{RedisConfig, RedisRateLimitStore};
+pub(crate) use redis_store::{RedisConfig, RedisRateLimitStore};
 
+// MemoryRateLimitStore 和 RateLimitStore 需要被二进制 crate (main.rs) 使用，因此保持 pub
 pub use store::{MemoryRateLimitStore, RateLimitStore};
-pub use token_bucket::{TokenBucket, TokenBucketConfig, TokenBucketStore};
+pub(crate) use token_bucket::{TokenBucket, TokenBucketConfig, TokenBucketStore};

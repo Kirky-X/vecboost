@@ -1,4 +1,4 @@
-// Copyright (c) 2025 VecBoost
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information.
@@ -11,7 +11,7 @@ use crate::AppState;
 use crate::domain::{
     BatchEmbedRequest, EmbedRequest, FileEmbedRequest, FileEmbedResponse, SimilarityRequest,
 };
-use crate::error::AppError;
+use crate::error::VecboostError;
 use crate::utils::{AggregationMode, PathValidator};
 use axum::http::HeaderMap;
 use axum::{Json, extract::ConnectInfo, extract::State, response::IntoResponse};
@@ -125,7 +125,7 @@ pub async fn embed_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<EmbedRequest>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<impl IntoResponse, VecboostError> {
     // Extract real client IP
     let ip = extract_real_ip(addr);
 
@@ -140,7 +140,7 @@ pub async fn embed_handler(
             ])
             .await
         {
-            return Err(AppError::RateLimitExceeded(
+            return Err(VecboostError::RateLimitExceeded(
                 "Rate limit exceeded".to_string(),
             ));
         }
@@ -188,7 +188,7 @@ pub async fn batch_embed_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<BatchEmbedRequest>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<impl IntoResponse, VecboostError> {
     // Extract real client IP
     let ip = extract_real_ip(addr);
 
@@ -203,7 +203,9 @@ pub async fn batch_embed_handler(
             ])
             .await
         {
-            return Err(AppError::InvalidInput("Rate limit exceeded".to_string()));
+            return Err(VecboostError::InvalidInput(
+                "Rate limit exceeded".to_string(),
+            ));
         }
     }
 
@@ -239,7 +241,7 @@ pub async fn similarity_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<SimilarityRequest>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<impl IntoResponse, VecboostError> {
     // Extract real client IP
     let ip = extract_real_ip(addr);
 
@@ -254,7 +256,9 @@ pub async fn similarity_handler(
             ])
             .await
         {
-            return Err(AppError::InvalidInput("Rate limit exceeded".to_string()));
+            return Err(VecboostError::InvalidInput(
+                "Rate limit exceeded".to_string(),
+            ));
         }
     }
 
@@ -290,7 +294,7 @@ pub async fn file_embed_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<FileEmbedRequest>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<impl IntoResponse, VecboostError> {
     // Extract real client IP
     let ip = extract_real_ip(addr);
 
@@ -305,7 +309,9 @@ pub async fn file_embed_handler(
             ])
             .await
         {
-            return Err(AppError::InvalidInput("Rate limit exceeded".to_string()));
+            return Err(VecboostError::InvalidInput(
+                "Rate limit exceeded".to_string(),
+            ));
         }
     }
 
@@ -314,7 +320,7 @@ pub async fn file_embed_handler(
 
     // Create path validator, only allow file access within current working directory
     let current_dir = std::env::current_dir()
-        .map_err(|e| AppError::IoError(format!("Failed to get current directory: {}", e)))?;
+        .map_err(|e| VecboostError::IoError(format!("Failed to get current directory: {}", e)))?;
 
     let path_validator = PathValidator::new()
         .add_allowed_root(&current_dir)
@@ -323,7 +329,7 @@ pub async fn file_embed_handler(
     // Validate path to prevent path traversal attacks
     let validated_path = path_validator
         .validate_file(&path)
-        .map_err(|e| AppError::InvalidInput(format!("Path validation failed: {}", e)))?;
+        .map_err(|e| VecboostError::InvalidInput(format!("Path validation failed: {}", e)))?;
 
     let service_guard = state.service.read().await;
     let stats = service_guard.get_processing_stats(&validated_path)?;

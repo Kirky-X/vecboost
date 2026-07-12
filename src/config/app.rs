@@ -1,14 +1,17 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
+
+// Deprecated: 使用 confers 加载的版本请见 app_config.rs(需启用 `config` feature)
+// 此文件将在 v0.3.0 移除
 
 #![allow(clippy::all)]
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub use crate::pipeline::config::{PipelineConfig, PriorityConfig, QueueConfig, WorkerConfig};
+pub use crate::pipeline::{PipelineConfig, PriorityConfig, QueueConfig, WorkerConfig};
 
 #[derive(Debug, Deserialize, Clone, Serialize, Default)]
 pub struct AppConfig {

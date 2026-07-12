@@ -1,11 +1,11 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
 #![allow(unused)]
 
-use crate::error::AppError;
+use crate::error::VecboostError;
 use lru::LruCache;
 use regex::Regex;
 use std::collections::HashMap;
@@ -235,17 +235,17 @@ pub fn validate_utf8_bytes(bytes: &[u8]) -> Utf8ValidationResult {
 
 #[cfg(target_os = "macos")]
 impl Tokenizer {
-    pub fn from_pretrained(model_id: &str) -> Result<Self, AppError> {
+    pub fn from_pretrained(model_id: &str) -> Result<Self, VecboostError> {
         Self::from_pretrained_with_max_length(model_id, 512)
     }
 
     pub fn from_pretrained_with_max_length(
         model_id: &str,
         max_length: usize,
-    ) -> Result<Self, AppError> {
+    ) -> Result<Self, VecboostError> {
         HfTokenizer::from_pretrained(model_id, None)
             .map_err(|e| {
-                AppError::tokenization_error(format!(
+                VecboostError::tokenization_error(format!(
                     "Failed to load tokenizer from model '{}': {}. \
                 Please check that the model ID is correct and the model is available. \
                 For local models, ensure the tokenizer.json file exists.",
@@ -254,7 +254,7 @@ impl Tokenizer {
             })
             .and_then(|tokenizer| {
                 if max_length == 0 {
-                    Err(AppError::invalid_input(format!(
+                    Err(VecboostError::invalid_input(format!(
                         "max_length must be greater than 0, got {}",
                         max_length
                     )))
@@ -267,14 +267,14 @@ impl Tokenizer {
             })
     }
 
-    pub fn from_file(path: &str) -> Result<Self, AppError> {
+    pub fn from_file(path: &str) -> Result<Self, VecboostError> {
         Self::from_file_with_max_length(path, 512)
     }
 
-    pub fn from_file_with_max_length(path: &str, max_length: usize) -> Result<Self, AppError> {
+    pub fn from_file_with_max_length(path: &str, max_length: usize) -> Result<Self, VecboostError> {
         HfTokenizer::from_file(path)
             .map_err(|e| {
-                AppError::tokenization_error(format!(
+                VecboostError::tokenization_error(format!(
                     "Failed to load tokenizer from file '{}': {}. \
                 Please ensure the file exists and is a valid tokenizer file.",
                     path, e
@@ -282,7 +282,7 @@ impl Tokenizer {
             })
             .and_then(|tokenizer| {
                 if max_length == 0 {
-                    Err(AppError::invalid_input(format!(
+                    Err(VecboostError::invalid_input(format!(
                         "max_length must be greater than 0, got {}",
                         max_length
                     )))
@@ -295,16 +295,16 @@ impl Tokenizer {
             })
     }
 
-    pub fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, AppError> {
+    pub fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, VecboostError> {
         if text.is_empty() {
-            return Err(AppError::invalid_input(
+            return Err(VecboostError::invalid_input(
                 "Cannot encode empty text".to_string(),
             ));
         }
 
         let utf8_result = validate_utf8(text);
         if !utf8_result.is_valid {
-            return Err(AppError::invalid_input(format!(
+            return Err(VecboostError::invalid_input(format!(
                 "UTF-8 encoding validation failed at byte {} (value 0x{:02x}): {}. \
                 The input contains invalid or incomplete UTF-8 sequences.",
                 utf8_result.invalid_byte_position.unwrap_or(0),
@@ -319,7 +319,7 @@ impl Tokenizer {
             .tokenizer
             .encode(text, add_special_tokens)
             .map_err(|e| {
-                AppError::tokenization_error(format!(
+                VecboostError::tokenization_error(format!(
                     "Failed to encode text (length={}): {}. \
                 The text may contain unsupported characters or be too long.",
                     text.len(),
@@ -356,9 +356,9 @@ impl Tokenizer {
         })
     }
 
-    pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String, AppError> {
+    pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String, VecboostError> {
         if ids.is_empty() {
-            return Err(AppError::invalid_input(
+            return Err(VecboostError::invalid_input(
                 "Cannot decode empty token ids".to_string(),
             ));
         }
@@ -367,7 +367,7 @@ impl Tokenizer {
             .iter()
             .any(|&id| id >= self.tokenizer.get_vocab_size(true) as u32)
         {
-            return Err(AppError::tokenization_error(format!(
+            return Err(VecboostError::tokenization_error(format!(
                 "Invalid token id found: one or more ids exceed vocabulary size ({}). \
                 This may indicate corrupted or incompatible token ids.",
                 self.tokenizer.get_vocab_size(true)
@@ -377,7 +377,7 @@ impl Tokenizer {
         self.tokenizer
             .decode(ids, skip_special_tokens)
             .map_err(|e| {
-                AppError::tokenization_error(format!(
+                VecboostError::tokenization_error(format!(
                     "Failed to decode {} token ids: {}. \
                 The ids may be invalid or incompatible with this tokenizer.",
                     ids.len(),
@@ -398,14 +398,14 @@ impl Tokenizer {
         &self,
         texts: &[&str],
         add_special_tokens: bool,
-    ) -> Result<Vec<Encoding>, AppError> {
+    ) -> Result<Vec<Encoding>, VecboostError> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
         for (i, &text) in texts.iter().enumerate() {
             if text.is_empty() {
-                return Err(AppError::invalid_input(format!(
+                return Err(VecboostError::invalid_input(format!(
                     "Cannot encode empty text at batch index {}",
                     i
                 )));
@@ -413,7 +413,7 @@ impl Tokenizer {
 
             let utf8_result = validate_utf8(text);
             if !utf8_result.is_valid {
-                return Err(AppError::invalid_input(format!(
+                return Err(VecboostError::invalid_input(format!(
                     "UTF-8 encoding validation failed at byte {} (value 0x{:02x}) in text at batch index {}: {}. \
                     The input contains invalid or incomplete UTF-8 sequences.",
                     utf8_result.invalid_byte_position.unwrap_or(0),
@@ -432,7 +432,7 @@ impl Tokenizer {
             .tokenizer
             .encode_batch(texts_str, add_special_tokens)
             .map_err(|e| {
-                AppError::tokenization_error(format!(
+                VecboostError::tokenization_error(format!(
                     "Failed to encode batch of {} texts: {}. \
                 Some texts may be invalid or too long.",
                     texts.len(),
@@ -478,26 +478,29 @@ impl Tokenizer {
 
 #[cfg(not(target_os = "macos"))]
 impl Tokenizer {
-    pub fn from_pretrained(_model_id: &str) -> Result<Self, AppError> {
+    pub fn from_pretrained(_model_id: &str) -> Result<Self, VecboostError> {
         Self::new(512)
     }
 
     pub fn from_pretrained_with_max_length(
         _model_id: &str,
         max_length: usize,
-    ) -> Result<Self, AppError> {
+    ) -> Result<Self, VecboostError> {
         Self::new(max_length)
     }
 
-    pub fn from_file(_path: &str) -> Result<Self, AppError> {
+    pub fn from_file(_path: &str) -> Result<Self, VecboostError> {
         Self::new(512)
     }
 
-    pub fn from_file_with_max_length(_path: &str, max_length: usize) -> Result<Self, AppError> {
+    pub fn from_file_with_max_length(
+        _path: &str,
+        max_length: usize,
+    ) -> Result<Self, VecboostError> {
         Self::new(max_length)
     }
 
-    pub fn new(max_length: usize) -> Result<Self, AppError> {
+    pub fn new(max_length: usize) -> Result<Self, VecboostError> {
         let mut vocab = HashMap::new();
         let mut special_tokens = HashMap::new();
 
@@ -883,16 +886,16 @@ impl Tokenizer {
             .collect()
     }
 
-    pub fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, AppError> {
+    pub fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, VecboostError> {
         if text.is_empty() {
-            return Err(AppError::invalid_input(
+            return Err(VecboostError::invalid_input(
                 "Cannot encode empty text".to_string(),
             ));
         }
 
         let utf8_result = validate_utf8(text);
         if !utf8_result.is_valid {
-            return Err(AppError::invalid_input(format!(
+            return Err(VecboostError::invalid_input(format!(
                 "UTF-8 encoding validation failed at byte {} (value 0x{:02x}): {}. \
                 The input contains invalid or incomplete UTF-8 sequences.",
                 utf8_result.invalid_byte_position.unwrap_or(0),
@@ -973,9 +976,9 @@ impl Tokenizer {
         })
     }
 
-    pub fn decode(&self, ids: &[u32], _skip_special_tokens: bool) -> Result<String, AppError> {
+    pub fn decode(&self, ids: &[u32], _skip_special_tokens: bool) -> Result<String, VecboostError> {
         if ids.is_empty() {
-            return Err(AppError::invalid_input(
+            return Err(VecboostError::invalid_input(
                 "Cannot decode empty token ids".to_string(),
             ));
         }
@@ -1019,14 +1022,14 @@ impl Tokenizer {
         &self,
         texts: &[&str],
         add_special_tokens: bool,
-    ) -> Result<Vec<Encoding>, AppError> {
+    ) -> Result<Vec<Encoding>, VecboostError> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
         for (i, &text) in texts.iter().enumerate() {
             if text.is_empty() {
-                return Err(AppError::invalid_input(format!(
+                return Err(VecboostError::invalid_input(format!(
                     "Cannot encode empty text at batch index {}",
                     i
                 )));
@@ -1034,7 +1037,7 @@ impl Tokenizer {
 
             let utf8_result = validate_utf8(text);
             if !utf8_result.is_valid {
-                return Err(AppError::invalid_input(format!(
+                return Err(VecboostError::invalid_input(format!(
                     "UTF-8 encoding validation failed at byte {} (value 0x{:02x}) in text at batch index {}: {}. \
                     The input contains invalid or incomplete UTF-8 sequences.",
                     utf8_result.invalid_byte_position.unwrap_or(0),
@@ -1088,7 +1091,11 @@ impl CachedTokenizer {
         format!("{:016x}_{}", hash, add_special_tokens)
     }
 
-    pub async fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, AppError> {
+    pub async fn encode(
+        &self,
+        text: &str,
+        add_special_tokens: bool,
+    ) -> Result<Encoding, VecboostError> {
         let key = self.hash_key(text, add_special_tokens);
 
         {
@@ -1114,16 +1121,16 @@ impl CachedTokenizer {
         &self,
         text: &str,
         add_special_tokens: bool,
-    ) -> Result<Encoding, AppError> {
+    ) -> Result<Encoding, VecboostError> {
         if text.is_empty() {
-            return Err(AppError::invalid_input(
+            return Err(VecboostError::invalid_input(
                 "Cannot encode empty text".to_string(),
             ));
         }
 
         let utf8_result = validate_utf8(text);
         if !utf8_result.is_valid {
-            return Err(AppError::invalid_input(format!(
+            return Err(VecboostError::invalid_input(format!(
                 "UTF-8 encoding validation failed at byte {} (value 0x{:02x}): {}. \
                 The input contains invalid or incomplete UTF-8 sequences.",
                 utf8_result.invalid_byte_position.unwrap_or(0),
@@ -1138,7 +1145,7 @@ impl CachedTokenizer {
             .tokenizer
             .encode(text, add_special_tokens)
             .map_err(|e| {
-                AppError::tokenization_error(format!(
+                VecboostError::tokenization_error(format!(
                     "Failed to encode text (length={}): {}. \
                 The text may contain unsupported characters or be too long.",
                     text.len(),
@@ -1208,7 +1215,11 @@ impl CachedTokenizer {
         format!("{:016x}_{}", hash, add_special_tokens)
     }
 
-    pub async fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, AppError> {
+    pub async fn encode(
+        &self,
+        text: &str,
+        add_special_tokens: bool,
+    ) -> Result<Encoding, VecboostError> {
         let key = self.hash_key(text, add_special_tokens);
 
         {
@@ -1234,16 +1245,16 @@ impl CachedTokenizer {
         &self,
         text: &str,
         add_special_tokens: bool,
-    ) -> Result<Encoding, AppError> {
+    ) -> Result<Encoding, VecboostError> {
         if text.is_empty() {
-            return Err(AppError::invalid_input(
+            return Err(VecboostError::invalid_input(
                 "Cannot encode empty text".to_string(),
             ));
         }
 
         let utf8_result = validate_utf8(text);
         if !utf8_result.is_valid {
-            return Err(AppError::invalid_input(format!(
+            return Err(VecboostError::invalid_input(format!(
                 "UTF-8 encoding validation failed at byte {} (value 0x{:02x}): {}. \
                 The input contains invalid or incomplete UTF-8 sequences.",
                 utf8_result.invalid_byte_position.unwrap_or(0),
@@ -1257,7 +1268,7 @@ impl CachedTokenizer {
         self.tokenizer
             .encode(text, add_special_tokens)
             .map_err(|e| {
-                AppError::tokenization_error(format!(
+                VecboostError::tokenization_error(format!(
                     "Failed to encode text (length={}): {}. \
                 The text may contain unsupported characters or be too long.",
                     text.len(),

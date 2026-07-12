@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
@@ -8,7 +8,7 @@
 use super::InferenceEngine;
 use crate::config::model::{DeviceType, ModelConfig, Precision};
 use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
-use crate::error::AppError;
+use crate::error::VecboostError;
 use crate::model::recovery::{ModelRecovery, RecoveryConfig};
 use crate::monitor::MemoryMonitor;
 use crate::text::{CachedTokenizer, Encoding};
@@ -79,7 +79,7 @@ pub struct CandleEngine {
 }
 
 impl CandleEngine {
-    pub fn new(config: &ModelConfig, precision: Precision) -> Result<Self, AppError> {
+    pub fn new(config: &ModelConfig, precision: Precision) -> Result<Self, VecboostError> {
         Self::with_device(config, precision, config.device.clone(), None)
     }
 
@@ -88,13 +88,13 @@ impl CandleEngine {
         precision: Precision,
         device_type: DeviceType,
         tensor_pool: Option<Arc<tokio::sync::RwLock<crate::device::memory_pool::TensorPool>>>,
-    ) -> Result<Self, AppError> {
+    ) -> Result<Self, VecboostError> {
         let device = if device_type == DeviceType::Cuda && candle_core::utils::cuda_is_available() {
             tracing::info!("Using CUDA GPU");
-            Device::new_cuda(0).map_err(|e| AppError::InferenceError(e.to_string()))?
+            Device::new_cuda(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?
         } else if device_type == DeviceType::Metal && candle_core::utils::metal_is_available() {
             tracing::info!("Using Metal GPU");
-            Device::new_metal(0).map_err(|e| AppError::InferenceError(e.to_string()))?
+            Device::new_metal(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?
         } else if matches!(device_type, DeviceType::Amd | DeviceType::OpenCL) {
             tracing::warn!(
                 "Candle engine does not natively support AMD GPUs. AMD GPU support requires ROCm-enabled Candle build or ONNX Runtime. Falling back to CPU."
@@ -169,7 +169,7 @@ impl CandleEngine {
             } else if alt_weights_path.exists() {
                 alt_weights_path
             } else {
-                return Err(AppError::ModelLoadError(
+                return Err(VecboostError::ModelLoadError(
                     "No model weights file found (model.safetensors or pytorch_model.bin)"
                         .to_string(),
                 ));
@@ -181,7 +181,7 @@ impl CandleEngine {
                 "Downloading/Loading model from HuggingFace Hub: {:?}",
                 model_path
             );
-            let api = Api::new().map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let repo = api.repo(Repo::new(
                 model_path.to_string_lossy().into_owned(),
                 RepoType::Model,
@@ -189,20 +189,20 @@ impl CandleEngine {
 
             let config_filename = repo
                 .get("config.json")
-                .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let tokenizer_filename = repo
                 .get("tokenizer.json")
-                .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let weights_filename = repo
                 .get("model.safetensors")
-                .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
             (config_filename, tokenizer_filename, weights_filename)
         };
 
         let config_content = std::fs::read_to_string(&config_filename)?;
         let model_config_json: ModelConfigJson = serde_json::from_str(&config_content)
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
         let model_architecture = model_config_json.get_architecture();
 
         tracing::info!("Detected model architecture: {:?}", model_architecture);
@@ -210,24 +210,24 @@ impl CandleEngine {
         let (bert_config, xlm_config) = match &model_architecture {
             ModelArchitecture::Bert => {
                 let bert_config: BertConfig = serde_json::from_str(&config_content)
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
                 (Some(bert_config), None)
             }
             ModelArchitecture::XlmRoberta => {
                 let xlm_config: XlmRobertaConfig = serde_json::from_str(&config_content)
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
                 (None, Some(xlm_config))
             }
         };
 
         let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
         let max_position_embeddings = match (&model_architecture, &bert_config, &xlm_config) {
             (ModelArchitecture::Bert, Some(bert), _) => bert.max_position_embeddings,
             (ModelArchitecture::XlmRoberta, _, Some(xlm)) => xlm.max_position_embeddings,
             _ => {
-                return Err(AppError::ModelLoadError(format!(
+                return Err(VecboostError::ModelLoadError(format!(
                     "Invalid configuration for architecture: {:?}",
                     model_architecture
                 )));
@@ -258,7 +258,9 @@ impl CandleEngine {
 
         tracing::info!("Checking model file integrity...");
         let integrity_report = check_model_integrity(&config.name, files_to_check, Some(min_sizes))
-            .map_err(|e| AppError::ModelIntegrityError(format!("Integrity check failed: {}", e)))?;
+            .map_err(|e| {
+                VecboostError::ModelIntegrityError(format!("Integrity check failed: {}", e))
+            })?;
 
         if !integrity_report.overall_valid {
             tracing::error!("Model file integrity check failed!");
@@ -291,7 +293,9 @@ impl CandleEngine {
                     repo_id,
                     &integrity_report.corrupted_files,
                 )
-                .map_err(|e| AppError::ModelIntegrityError(format!("Recovery failed: {}", e)))?;
+                .map_err(|e| {
+                    VecboostError::ModelIntegrityError(format!("Recovery failed: {}", e))
+                })?;
 
             if recovery_result.success {
                 tracing::info!("Successfully recovered all corrupted files");
@@ -314,7 +318,7 @@ impl CandleEngine {
                 let recovery_integrity_report =
                     check_model_integrity(&config.name, files_to_check, Some(min_sizes)).map_err(
                         |e| {
-                            AppError::ModelIntegrityError(format!(
+                            VecboostError::ModelIntegrityError(format!(
                                 "Post-recovery integrity check failed: {}",
                                 e
                             ))
@@ -322,7 +326,7 @@ impl CandleEngine {
                     )?;
 
                 if !recovery_integrity_report.overall_valid {
-                    return Err(AppError::ModelFileCorrupted(format!(
+                    return Err(VecboostError::ModelFileCorrupted(format!(
                         "Model files still corrupted after recovery. Corrupted files: {:?}",
                         recovery_integrity_report.corrupted_files
                     )));
@@ -330,7 +334,7 @@ impl CandleEngine {
 
                 tracing::info!("Post-recovery integrity check passed");
             } else {
-                return Err(AppError::ModelFileCorrupted(format!(
+                return Err(VecboostError::ModelFileCorrupted(format!(
                     "Failed to recover corrupted files after {} attempts. Corrupted files: {:?}",
                     recovery_result.attempts, recovery_result.failed_files
                 )));
@@ -341,11 +345,12 @@ impl CandleEngine {
 
         if let Some(ref expected_hash) = config.model_sha256 {
             tracing::info!("Verifying model file SHA256 hash...");
-            let is_valid = verify_sha256(&weights_filename, expected_hash)
-                .map_err(|e| AppError::ModelLoadError(format!("Failed to verify SHA256: {}", e)))?;
+            let is_valid = verify_sha256(&weights_filename, expected_hash).map_err(|e| {
+                VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e))
+            })?;
 
             if !is_valid {
-                return Err(AppError::ModelFileCorrupted(format!(
+                return Err(VecboostError::ModelFileCorrupted(format!(
                     "Model file SHA256 verification failed. Expected: {}, File: {:?}",
                     expected_hash, weights_filename
                 )));
@@ -359,7 +364,7 @@ impl CandleEngine {
             tracing::info!("Loading PyTorch model weights from: {:?}", weights_filename);
 
             let file_size = std::fs::metadata(&weights_filename)
-                .map_err(|e| AppError::ModelLoadError(e.to_string()))?
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
                 .len();
 
             if file_size > 2 * 1024 * 1024 * 1024 {
@@ -391,7 +396,7 @@ impl CandleEngine {
                         "  optimum-cli export onnx --model {} --task feature-extraction ./model_safetensors",
                         config.model_path.to_string_lossy()
                     );
-                    return Err(AppError::ModelLoadError(format!(
+                    return Err(VecboostError::ModelLoadError(format!(
                         "Failed to load PyTorch weights: {}. Please convert the model to safetensors format.",
                         e
                     )));
@@ -405,7 +410,7 @@ impl CandleEngine {
             );
             let vb =
                 unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], dtype, &device) };
-            vb.map_err(|e| AppError::ModelLoadError(e.to_string()))?
+            vb.map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
         };
 
         if is_pytorch {
@@ -417,18 +422,20 @@ impl CandleEngine {
         let model = match &model_architecture {
             ModelArchitecture::Bert => {
                 let config = bert_config.ok_or_else(|| {
-                    AppError::ModelLoadError("Bert config is required for Bert model".to_string())
+                    VecboostError::ModelLoadError(
+                        "Bert config is required for Bert model".to_string(),
+                    )
                 })?;
                 let bert_model = BertModel::load(vb, &config)
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
                 ModelWrapper::Bert(bert_model)
             }
             ModelArchitecture::XlmRoberta => {
                 let config = xlm_config.ok_or_else(|| {
-                    AppError::ModelLoadError("XLM-RoBERTa config is required".to_string())
+                    VecboostError::ModelLoadError("XLM-RoBERTa config is required".to_string())
                 })?;
                 let xlm_model = XLMRobertaModel::new(&config, vb)
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
                 ModelWrapper::XlmRoberta(xlm_model)
             }
         };
@@ -483,7 +490,7 @@ impl CandleEngine {
     pub async fn check_memory_limit_and_fallback(
         &mut self,
         config: &ModelConfig,
-    ) -> Result<bool, AppError> {
+    ) -> Result<bool, VecboostError> {
         if self.fallback_triggered {
             return Ok(false);
         }
@@ -536,7 +543,7 @@ impl CandleEngine {
         encodings: &[Encoding],
         max_seq_len: usize,
         is_input_ids: bool,
-    ) -> Result<Tensor, AppError> {
+    ) -> Result<Tensor, VecboostError> {
         let batch_size = encodings.len();
         let mut batch_data = vec![0i64; batch_size * max_seq_len];
 
@@ -553,9 +560,9 @@ impl CandleEngine {
         }
 
         Tensor::new(batch_data.as_slice(), &self.device)
-            .map_err(|e| AppError::InferenceError(e.to_string()))?
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
             .reshape(&[batch_size, max_seq_len])
-            .map_err(|e| AppError::InferenceError(e.to_string()))
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))
     }
 
     #[allow(dead_code)]
@@ -563,7 +570,7 @@ impl CandleEngine {
         &self,
         encodings: &[Encoding],
         max_seq_len: usize,
-    ) -> Result<Tensor, AppError> {
+    ) -> Result<Tensor, VecboostError> {
         let batch_size = encodings.len();
         let mut batch_data = vec![0i64; batch_size * max_seq_len];
 
@@ -574,17 +581,17 @@ impl CandleEngine {
         }
 
         Tensor::new(batch_data.as_slice(), &self.device)
-            .map_err(|e| AppError::InferenceError(e.to_string()))?
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
             .reshape(&[batch_size, max_seq_len])
-            .map_err(|e| AppError::InferenceError(e.to_string()))
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))
     }
 
-    async fn forward_pass(&self, text: &str) -> Result<Vec<f32>, AppError> {
+    async fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         let encoding = self
             .tokenizer
             .encode(text, true)
             .await
-            .map_err(|e| AppError::TokenizationError(e.to_string()))?;
+            .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
 
         let ids = encoding.get_ids();
         let attention_mask = encoding.get_attention_mask();
@@ -618,26 +625,26 @@ impl CandleEngine {
             .collect();
 
         let token_ids = Tensor::new(ids_slice, &self.device)
-            .map_err(|e| AppError::InferenceError(e.to_string()))?
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
             .unsqueeze(0)
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
         let attention_mask_tensor = Tensor::new(mask_slice, &self.device)
-            .map_err(|e| AppError::InferenceError(e.to_string()))?
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
             .unsqueeze(0)
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
         let embeddings = match &self.model {
             ModelWrapper::Bert(bert_model) => bert_model
                 .forward(&token_ids, &attention_mask_tensor, None)
-                .map_err(|e| AppError::InferenceError(e.to_string()))?,
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
             ModelWrapper::XlmRoberta(xlm_model) => {
                 let type_ids_slice: Vec<u32> =
                     encoding.type_ids.iter().take(max_len).cloned().collect();
                 let token_type_ids = Tensor::new(type_ids_slice, &self.device)
-                    .map_err(|e| AppError::InferenceError(e.to_string()))?
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                     .unsqueeze(0)
-                    .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
                 xlm_model
                     .forward(
                         &token_ids,
@@ -647,7 +654,7 @@ impl CandleEngine {
                         None,
                         None,
                     )
-                    .map_err(|e| AppError::InferenceError(e.to_string()))?
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
             }
         };
 
@@ -669,7 +676,9 @@ impl CandleEngine {
                 tracing::debug!("2D embedding [1, hidden_size], extracting batch 0");
                 embedding_result = embeddings
                     .get(0)
-                    .map_err(|e| AppError::InferenceError(format!("Failed to get batch 0: {}", e)))?
+                    .map_err(|e| {
+                        VecboostError::InferenceError(format!("Failed to get batch 0: {}", e))
+                    })?
                     .clone();
             } else {
                 tracing::debug!(
@@ -677,19 +686,25 @@ impl CandleEngine {
                 );
                 embedding_result = embeddings
                     .get(0)
-                    .map_err(|e| AppError::InferenceError(format!("Failed to get token 0: {}", e)))?
+                    .map_err(|e| {
+                        VecboostError::InferenceError(format!("Failed to get token 0: {}", e))
+                    })?
                     .clone();
             }
         } else if dims.len() == 3 {
             tracing::debug!("3D embedding [batch, seq_len, hidden], extracting batch 0, token 0");
             embedding_result = embeddings
                 .get(0)
-                .map_err(|e| AppError::InferenceError(format!("Failed to get batch 0: {}", e)))?
+                .map_err(|e| {
+                    VecboostError::InferenceError(format!("Failed to get batch 0: {}", e))
+                })?
                 .get(0)
-                .map_err(|e| AppError::InferenceError(format!("Failed to get token 0: {}", e)))?
+                .map_err(|e| {
+                    VecboostError::InferenceError(format!("Failed to get token 0: {}", e))
+                })?
                 .clone();
         } else {
-            return Err(AppError::InferenceError(format!(
+            return Err(VecboostError::InferenceError(format!(
                 "Unsupported embedding dimensions: {} (shape: {:?})",
                 dims.len(),
                 embeddings.shape()
@@ -700,13 +715,13 @@ impl CandleEngine {
 
         let vec = embedding_result
             .to_vec1::<f32>()
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
         Ok(vec)
     }
 
     /// 优化的批量前向传播，使用真正的批量处理而非串行处理
-    async fn forward_pass_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AppError> {
+    async fn forward_pass_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VecboostError> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -724,7 +739,7 @@ impl CandleEngine {
                     .tokenizer
                     .encode(text, true)
                     .await
-                    .map_err(|e| AppError::TokenizationError(e.to_string()))?;
+                    .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
                 encodings.push(encoding);
             }
             encodings
@@ -766,24 +781,24 @@ impl CandleEngine {
 
                     // 创建新的张量并填充数据
                     Tensor::new(batch_ids, &self.device)
-                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                         .reshape(&[batch_size, max_seq_len])
-                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                 }
                 Err(_) => {
                     // 获取失败，回退到动态分配
                     Tensor::new(batch_ids, &self.device)
-                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                         .reshape(&[batch_size, max_seq_len])
-                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                 }
             }
         } else {
             // 没有内存池，动态分配
             Tensor::new(batch_ids, &self.device)
-                .map_err(|e| AppError::InferenceError(e.to_string()))?
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                 .reshape(&[batch_size, max_seq_len])
-                .map_err(|e| AppError::InferenceError(e.to_string()))?
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
         };
 
         // 构建 attention_mask 批量张量
@@ -803,31 +818,31 @@ impl CandleEngine {
                     // 从池中获取的张量需要填充数据
                     let tensor = tensor
                         .reshape(&[batch_size, max_seq_len])
-                        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
                     // TODO: 填充数据到张量
                     tensor
                 }
                 Err(_) => {
                     // 获取失败，回退到动态分配
                     Tensor::new(batch_mask, &self.device)
-                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                         .reshape(&[batch_size, max_seq_len])
-                        .map_err(|e| AppError::InferenceError(e.to_string()))?
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                 }
             }
         } else {
             // 没有内存池，动态分配
             Tensor::new(batch_mask, &self.device)
-                .map_err(|e| AppError::InferenceError(e.to_string()))?
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                 .reshape(&[batch_size, max_seq_len])
-                .map_err(|e| AppError::InferenceError(e.to_string()))?
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
         };
 
         // 执行批量前向传播
         let embeddings = match (&self.model, &self.model_architecture) {
             (ModelWrapper::Bert(bert_model), ModelArchitecture::Bert) => bert_model
                 .forward(&token_ids, &attention_mask_tensor, None)
-                .map_err(|e| AppError::InferenceError(e.to_string()))?,
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
             (ModelWrapper::XlmRoberta(xlm_model), ModelArchitecture::XlmRoberta) => {
                 // 构建 type_ids 批量张量
                 let mut batch_type_ids = vec![0i64; batch_size * max_seq_len];
@@ -839,9 +854,9 @@ impl CandleEngine {
                 }
 
                 let token_type_ids = Tensor::new(batch_type_ids, &self.device)
-                    .map_err(|e| AppError::InferenceError(e.to_string()))?
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                     .reshape(&[batch_size, max_seq_len])
-                    .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
                 xlm_model
                     .forward(
@@ -852,10 +867,10 @@ impl CandleEngine {
                         None,
                         None,
                     )
-                    .map_err(|e| AppError::InferenceError(e.to_string()))?
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
             }
             _ => {
-                return Err(AppError::InferenceError(format!(
+                return Err(VecboostError::InferenceError(format!(
                     "Model architecture mismatch for batch processing: {:?}",
                     self.model_architecture
                 )));
@@ -869,10 +884,12 @@ impl CandleEngine {
         for i in 0..batch_size {
             let embedding_tensor = embeddings
                 .get(i)
-                .map_err(|e| AppError::InferenceError(format!("Failed to get batch {}: {}", i, e)))?
+                .map_err(|e| {
+                    VecboostError::InferenceError(format!("Failed to get batch {}: {}", i, e))
+                })?
                 .get(0)
                 .map_err(|e| {
-                    AppError::InferenceError(format!(
+                    VecboostError::InferenceError(format!(
                         "Failed to get CLS token for batch {}: {}",
                         i, e
                     ))
@@ -881,7 +898,7 @@ impl CandleEngine {
 
             let vec = embedding_tensor
                 .to_vec1::<f32>()
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
             results.push(vec);
         }
 
@@ -902,11 +919,11 @@ impl CandleEngine {
 
 #[async_trait]
 impl InferenceEngine for CandleEngine {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         block_on(async { self.forward_pass(text).await })
     }
 
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
         let texts_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
         block_on(async { self.forward_pass_batch(&texts_refs).await })
     }
@@ -923,7 +940,7 @@ impl InferenceEngine for CandleEngine {
         self.fallback_triggered
     }
 
-    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError> {
+    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         self.try_fallback_to_cpu_impl(config).await
     }
 }
@@ -970,7 +987,10 @@ impl CandleEngine {
         }
     }
 
-    async fn try_fallback_to_cpu_impl(&mut self, config: &ModelConfig) -> Result<(), AppError> {
+    async fn try_fallback_to_cpu_impl(
+        &mut self,
+        config: &ModelConfig,
+    ) -> Result<(), VecboostError> {
         if self.fallback_triggered {
             return Ok(());
         }
@@ -1004,7 +1024,7 @@ impl CandleEngine {
             } else if alt_weights_path.exists() {
                 alt_weights_path
             } else {
-                return Err(AppError::ModelLoadError(
+                return Err(VecboostError::ModelLoadError(
                     "No model weights file found during fallback".to_string(),
                 ));
             };
@@ -1015,7 +1035,7 @@ impl CandleEngine {
                 "Loading model from HuggingFace Hub for fallback: {:?}",
                 model_path
             );
-            let api = Api::new().map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let repo = api.repo(Repo::new(
                 model_path.to_string_lossy().into_owned(),
                 RepoType::Model,
@@ -1023,20 +1043,20 @@ impl CandleEngine {
 
             let config_filename = repo
                 .get("config.json")
-                .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let tokenizer_filename = repo
                 .get("tokenizer.json")
-                .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let weights_filename = repo
                 .get("model.safetensors")
-                .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
             (config_filename, tokenizer_filename, weights_filename)
         };
 
         let config_content = std::fs::read_to_string(config_filename)?;
         let model_config_json: ModelConfigJson = serde_json::from_str(&config_content)
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
         let fallback_architecture = model_config_json.get_architecture();
 
         tracing::info!(
@@ -1047,24 +1067,24 @@ impl CandleEngine {
         let (bert_config, xlm_config) = match &fallback_architecture {
             ModelArchitecture::Bert => {
                 let bert_config: BertConfig = serde_json::from_str(&config_content)
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
                 (Some(bert_config), None)
             }
             ModelArchitecture::XlmRoberta => {
                 let xlm_config: XlmRobertaConfig = serde_json::from_str(&config_content)
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
                 (None, Some(xlm_config))
             }
         };
 
         let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
         let max_position_embeddings = match (&fallback_architecture, &bert_config, &xlm_config) {
             (ModelArchitecture::Bert, Some(bert), _) => bert.max_position_embeddings,
             (ModelArchitecture::XlmRoberta, _, Some(xlm)) => xlm.max_position_embeddings,
             _ => {
-                return Err(AppError::ModelLoadError(format!(
+                return Err(VecboostError::ModelLoadError(format!(
                     "Invalid configuration for architecture: {:?}",
                     fallback_architecture
                 )));
@@ -1076,23 +1096,23 @@ impl CandleEngine {
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[weights_filename], DType::F32, &self.device)
         }
-        .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
         self.model = match &fallback_architecture {
             ModelArchitecture::Bert => {
                 let config = bert_config.ok_or_else(|| {
-                    AppError::ModelLoadError("Bert config is required".to_string())
+                    VecboostError::ModelLoadError("Bert config is required".to_string())
                 })?;
                 let bert_model = BertModel::load(vb, &config)
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
                 ModelWrapper::Bert(bert_model)
             }
             ModelArchitecture::XlmRoberta => {
                 let config = xlm_config.ok_or_else(|| {
-                    AppError::ModelLoadError("XLM-RoBERTa config is required".to_string())
+                    VecboostError::ModelLoadError("XLM-RoBERTa config is required".to_string())
                 })?;
                 let xlm_model = XLMRobertaModel::new(&config, vb)
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
                 ModelWrapper::XlmRoberta(xlm_model)
             }
         };

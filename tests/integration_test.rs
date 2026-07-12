@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
@@ -27,10 +27,13 @@ async fn test_e2e_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
     let service = EmbeddingService::new(engine, None);
 
     let result = service
-        .process_text(EmbedRequest {
-            text: "Artificial intelligence is the future of technology".to_string(),
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: "Artificial intelligence is the future of technology".to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
         .await?;
 
     assert_eq!(
@@ -56,10 +59,13 @@ async fn test_e2e_chinese_embedding() -> Result<(), Box<dyn std::error::Error>> 
     let service = EmbeddingService::new(engine, None);
 
     let result = service
-        .process_text(EmbedRequest {
-            text: "人工智能是未来的发展方向".to_string(),
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: "人工智能是未来的发展方向".to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
         .await?;
 
     assert_eq!(result.embedding.len(), MOCK_DIMENSION);
@@ -78,10 +84,13 @@ async fn test_e2e_mixed_text_embedding() -> Result<(), Box<dyn std::error::Error
     let service = EmbeddingService::new(engine, None);
 
     let result = service
-        .process_text(EmbedRequest {
-            text: "AI人工智能技术正在快速发展".to_string(),
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: "AI人工智能技术正在快速发展".to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
         .await?;
 
     assert_eq!(result.embedding.len(), MOCK_DIMENSION);
@@ -297,16 +306,22 @@ async fn test_embedding_consistency() -> Result<(), Box<dyn std::error::Error>> 
     let text = "Consistency test text".to_string();
 
     let result1 = service
-        .process_text(EmbedRequest {
-            text: text.clone(),
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: text.clone(),
+                normalize: Some(true),
+            },
+            None,
+        )
         .await?;
     let result2 = service
-        .process_text(EmbedRequest {
-            text,
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text,
+                normalize: Some(true),
+            },
+            None,
+        )
         .await?;
 
     assert_eq!(result1.embedding.len(), result2.embedding.len());
@@ -329,10 +344,13 @@ async fn test_embedding_normalization() -> Result<(), Box<dyn std::error::Error>
     let service = EmbeddingService::new(engine, None);
 
     let result = service
-        .process_text(EmbedRequest {
-            text: "Test normalized embedding vector".to_string(),
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: "Test normalized embedding vector".to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
         .await?;
 
     let norm: f32 = result.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -364,10 +382,13 @@ async fn test_concurrent_embedding_requests() -> Result<(), Box<dyn std::error::
         let handle = tokio::spawn(async move {
             let service = EmbeddingService::new(engine, None);
             service
-                .process_text(EmbedRequest {
-                    text,
-                    normalize: Some(true),
-                })
+                .process_text(
+                    EmbedRequest {
+                        text,
+                        normalize: Some(true),
+                    },
+                    None,
+                )
                 .await
         });
         handles.push(handle);
@@ -401,10 +422,13 @@ async fn test_long_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
     .join(" ");
 
     let result = service
-        .process_text(EmbedRequest {
-            text: long_text,
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: long_text,
+                normalize: Some(true),
+            },
+            None,
+        )
         .await?;
 
     assert_eq!(result.embedding.len(), MOCK_DIMENSION);

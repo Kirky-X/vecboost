@@ -1,4 +1,9 @@
-use crate::error::AppError;
+// Copyright (c) 2025-2026 Kirky.X
+//
+// Licensed under the MIT License
+// See LICENSE file in the project root for full license information.
+
+use crate::error::VecboostError;
 use async_trait::async_trait;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,15 +62,16 @@ impl SecretKey {
 
 #[async_trait]
 pub trait KeyStore: Send + Sync {
-    async fn get(&self, key_type: &KeyType, name: &str) -> Result<Option<SecretKey>, AppError>;
+    async fn get(&self, key_type: &KeyType, name: &str)
+    -> Result<Option<SecretKey>, VecboostError>;
 
-    async fn set(&self, key: &SecretKey) -> Result<(), AppError>;
+    async fn set(&self, key: &SecretKey) -> Result<(), VecboostError>;
 
-    async fn delete(&self, key_type: &KeyType, name: &str) -> Result<(), AppError>;
+    async fn delete(&self, key_type: &KeyType, name: &str) -> Result<(), VecboostError>;
 
-    async fn list(&self, key_type: &KeyType) -> Result<Vec<String>, AppError>;
+    async fn list(&self, key_type: &KeyType) -> Result<Vec<String>, VecboostError>;
 
-    async fn exists(&self, key_type: &KeyType, name: &str) -> Result<bool, AppError>;
+    async fn exists(&self, key_type: &KeyType, name: &str) -> Result<bool, VecboostError>;
 }
 
 pub struct EnvironmentKeyStore;
@@ -90,7 +96,11 @@ impl EnvironmentKeyStore {
 
 #[async_trait]
 impl KeyStore for EnvironmentKeyStore {
-    async fn get(&self, key_type: &KeyType, name: &str) -> Result<Option<SecretKey>, AppError> {
+    async fn get(
+        &self,
+        key_type: &KeyType,
+        name: &str,
+    ) -> Result<Option<SecretKey>, VecboostError> {
         let env_key = Self::env_key_name(key_type, name);
         match std::env::var(&env_key) {
             Ok(value) => Ok(Some(SecretKey::new(key_type.clone(), name, value))),
@@ -98,7 +108,7 @@ impl KeyStore for EnvironmentKeyStore {
         }
     }
 
-    async fn set(&self, key: &SecretKey) -> Result<(), AppError> {
+    async fn set(&self, key: &SecretKey) -> Result<(), VecboostError> {
         let env_key = Self::env_key_name(&key.key_type, &key.name);
         unsafe {
             std::env::set_var(env_key, key.value.clone());
@@ -106,7 +116,7 @@ impl KeyStore for EnvironmentKeyStore {
         Ok(())
     }
 
-    async fn delete(&self, key_type: &KeyType, name: &str) -> Result<(), AppError> {
+    async fn delete(&self, key_type: &KeyType, name: &str) -> Result<(), VecboostError> {
         let env_key = Self::env_key_name(key_type, name);
         unsafe {
             std::env::remove_var(env_key);
@@ -114,7 +124,7 @@ impl KeyStore for EnvironmentKeyStore {
         Ok(())
     }
 
-    async fn list(&self, key_type: &KeyType) -> Result<Vec<String>, AppError> {
+    async fn list(&self, key_type: &KeyType) -> Result<Vec<String>, VecboostError> {
         let prefix = match key_type {
             KeyType::JwtSecret => "VECBOOST_JWT_SECRET".to_string(),
             KeyType::ApiKey => "VECBOOST_API_KEY_".to_string(),
@@ -132,7 +142,7 @@ impl KeyStore for EnvironmentKeyStore {
         Ok(keys)
     }
 
-    async fn exists(&self, key_type: &KeyType, name: &str) -> Result<bool, AppError> {
+    async fn exists(&self, key_type: &KeyType, name: &str) -> Result<bool, VecboostError> {
         let env_key = Self::env_key_name(key_type, name);
         Ok(std::env::var(&env_key).is_ok())
     }

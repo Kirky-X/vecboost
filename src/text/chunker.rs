@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 #[cfg(test)]
-use crate::error::AppError;
+use crate::error::VecboostError;
 #[cfg(test)]
 use crate::text::domain::{ChunkRequest, ChunkResponse, ChunkResult};
 #[cfg(test)]
@@ -48,7 +48,7 @@ impl TextChunker {
         }
     }
 
-    pub fn chunk(&self, text: &str) -> Result<Vec<String>, AppError> {
+    pub fn chunk(&self, text: &str) -> Result<Vec<String>, VecboostError> {
         self.chunk_with_mode(text, AggregationMode::SlidingWindow)
     }
 
@@ -56,7 +56,7 @@ impl TextChunker {
         &self,
         text: &str,
         mode: AggregationMode,
-    ) -> Result<Vec<String>, AppError> {
+    ) -> Result<Vec<String>, VecboostError> {
         match mode {
             AggregationMode::SlidingWindow => self.sliding_window_chunk(text),
             AggregationMode::Paragraph => self.paragraph_chunk(text),
@@ -69,11 +69,11 @@ impl TextChunker {
         }
     }
 
-    fn sliding_window_chunk(&self, text: &str) -> Result<Vec<String>, AppError> {
+    fn sliding_window_chunk(&self, text: &str) -> Result<Vec<String>, VecboostError> {
         let tokens = self
             .tokenizer
             .encode(text, false)
-            .map_err(|e| AppError::TokenizationError(e.to_string()))?;
+            .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
 
         let token_ids = tokens.get_ids();
         let num_tokens = token_ids.len();
@@ -92,7 +92,7 @@ impl TextChunker {
             let chunk_text = self
                 .tokenizer
                 .decode(chunk_tokens, true)
-                .map_err(|e| AppError::TokenizationError(e.to_string()))?;
+                .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
 
             if !chunk_text.is_empty() {
                 chunks.push(chunk_text);
@@ -112,7 +112,7 @@ impl TextChunker {
         Ok(chunks)
     }
 
-    fn paragraph_chunk(&self, text: &str) -> Result<Vec<String>, AppError> {
+    fn paragraph_chunk(&self, text: &str) -> Result<Vec<String>, VecboostError> {
         let paragraphs: Vec<String> = text
             .split("\n\n")
             .map(|p| p.trim())
@@ -128,7 +128,7 @@ impl TextChunker {
             let para_tokens = self
                 .tokenizer
                 .encode(paragraph.as_str(), false)
-                .map_err(|e| AppError::TokenizationError(e.to_string()))?;
+                .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
             let para_token_count = para_tokens.get_ids().len();
 
             if para_token_count > self.chunk_size {
@@ -165,7 +165,7 @@ impl TextChunker {
         Ok(chunks)
     }
 
-    fn fixed_size_chunk(&self, text: &str) -> Result<Vec<String>, AppError> {
+    fn fixed_size_chunk(&self, text: &str) -> Result<Vec<String>, VecboostError> {
         let chars: Vec<char> = text.chars().collect();
         let char_count = chars.len();
         let chunk_chars = (self.chunk_size * 4).min(char_count);

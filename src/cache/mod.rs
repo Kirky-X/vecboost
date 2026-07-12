@@ -1,14 +1,16 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
 pub(crate) mod arc_cache;
 pub(crate) mod bloom_filter;
+pub(crate) mod entry;
 pub(crate) mod kv_cache;
 pub(crate) mod lfu_cache;
 pub(crate) mod lru_cache;
 pub(crate) mod tiered_cache;
+pub(crate) mod trait_impl;
 
 // 内部使用，不对外暴露
 pub(crate) use kv_cache::KvCache;
@@ -45,102 +47,45 @@ pub enum CacheStrategy {
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
     /// 缓存容量
-    pub capacity: usize,
+    pub(crate) capacity: usize,
     /// TTL（秒），0 表示永不过期
-    pub ttl_secs: u64,
+    pub(crate) ttl_secs: u64,
     /// 是否启用统计
-    pub enable_stats: bool,
+    pub(crate) enable_stats: bool,
     /// 缓存策略
-    pub strategy: CacheStrategy,
-}
-
-impl Default for CacheConfig {
-    fn default() -> Self {
-        Self {
-            capacity: 10000,
-            ttl_secs: 3600, // 1小时
-            enable_stats: true,
-            strategy: CacheStrategy::Lru,
-        }
-    }
+    pub(crate) strategy: CacheStrategy,
 }
 
 /// 缓存统计
 #[derive(Debug, Clone, Default)]
 pub struct CacheStats {
     /// 命中次数
-    pub hits: u64,
+    pub(crate) hits: u64,
     /// 未命中次数
-    pub misses: u64,
+    pub(crate) misses: u64,
     /// 总请求数
-    pub total_requests: u64,
+    pub(crate) total_requests: u64,
     /// 命中率
-    pub hit_rate: f64,
+    pub(crate) hit_rate: f64,
     /// 当前条目数
-    pub current_size: usize,
+    pub(crate) current_size: usize,
     /// 驱逐次数
-    pub evictions: u64,
-}
-
-impl CacheStats {
-    /// 计算命中率
-    pub fn calculate_hit_rate(&mut self) {
-        if self.total_requests > 0 {
-            self.hit_rate = self.hits as f64 / self.total_requests as f64;
-        }
-    }
+    pub(crate) evictions: u64,
 }
 
 /// 缓存条目
 #[derive(Debug, Clone)]
 pub struct CacheEntry<V> {
     /// 值
-    pub value: V,
+    pub(crate) value: V,
     /// 创建时间戳
-    pub created_at: u64,
+    pub(crate) created_at: u64,
     /// 最后访问时间戳
-    pub last_accessed: u64,
+    pub(crate) last_accessed: u64,
     /// 访问次数
-    pub access_count: u64,
+    pub(crate) access_count: u64,
     /// 条目大小（字节）
-    pub size: usize,
-}
-
-impl<V> CacheEntry<V> {
-    /// 创建新的缓存条目
-    pub fn new(value: V, size: usize) -> Self {
-        let now = Self::current_timestamp();
-        Self {
-            value,
-            created_at: now,
-            last_accessed: now,
-            access_count: 1,
-            size,
-        }
-    }
-
-    /// 检查是否过期
-    pub fn is_expired(&self, ttl_secs: u64) -> bool {
-        if ttl_secs == 0 {
-            return false;
-        }
-        let now = Self::current_timestamp();
-        now - self.last_accessed > ttl_secs
-    }
-
-    /// 更新访问信息
-    pub fn record_access(&mut self) {
-        self.last_accessed = Self::current_timestamp();
-        self.access_count += 1;
-    }
-
-    /// 获取当前时间戳（秒）
-    fn current_timestamp() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("SystemTime before UNIX EPOCH")
-            .as_secs()
-    }
+    pub(crate) size: usize,
 }
 
 /// 通用缓存接口
@@ -188,26 +133,4 @@ where
         value: V,
         size: usize,
     ) -> Result<V, Box<dyn std::error::Error + Send + Sync>>;
-}
-
-/// 所有缓存实现默认实现 get_or_insert
-#[async_trait::async_trait]
-impl<K, V, C> CacheGetOrInsert<K, V> for C
-where
-    K: Hash + Eq + Send + Sync + std::fmt::Debug + Clone + 'static,
-    V: Clone + Send + Sync + 'static,
-    C: Cache<K, V>,
-{
-    async fn get_or_insert(
-        &self,
-        key: K,
-        value: V,
-        size: usize,
-    ) -> Result<V, Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(v) = self.get(&key).await {
-            return Ok(v);
-        }
-        self.put(key.clone(), value, size).await?;
-        Ok(self.get(&key).await.ok_or("Value not found after insert")?)
-    }
 }

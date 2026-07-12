@@ -1,4 +1,4 @@
-// Copyright (c) 2025 VecBoost
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information

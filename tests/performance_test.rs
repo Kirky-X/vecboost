@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
@@ -11,7 +11,7 @@ mod performance_tests {
     use tokio::sync::RwLock;
     use vecboost::config::model::Precision;
     use vecboost::engine::InferenceEngine;
-    use vecboost::error::AppError;
+    use vecboost::error::VecboostError;
     use vecboost::metrics::domain::PerformanceTestConfig;
     use vecboost::metrics::inference::InferenceCollector;
     use vecboost::metrics::performance::{PerformanceTester, generate_test_text};
@@ -58,11 +58,11 @@ mod performance_tests {
 
     #[async_trait]
     impl InferenceEngine for TestEngine {
-        fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
+        fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
             Ok(self.generate_embedding(text))
         }
 
-        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
             texts.iter().map(|t| self.embed(t)).collect()
         }
 
@@ -77,7 +77,7 @@ mod performance_tests {
         async fn try_fallback_to_cpu(
             &mut self,
             _config: &vecboost::config::model::ModelConfig,
-        ) -> Result<(), AppError> {
+        ) -> Result<(), VecboostError> {
             Ok(())
         }
     }

@@ -1,14 +1,16 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#[cfg(feature = "http")]
 use axum::extract::FromRef;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 // 公共 API 模块 - 被 main.rs 使用或作为库的公共接口
 pub mod audit;
+#[cfg(feature = "auth")]
 pub mod auth;
 pub mod config;
 pub mod domain;
@@ -16,6 +18,7 @@ pub mod engine;
 #[cfg(feature = "grpc")]
 pub mod grpc;
 pub mod metrics;
+pub mod module_registry;
 pub mod pipeline;
 pub mod rate_limit;
 pub mod routes;
@@ -24,7 +27,7 @@ pub mod service;
 pub mod utils;
 
 // 导出 config::app 中的类型
-pub use crate::pipeline::config::PriorityConfig;
+pub use crate::pipeline::PriorityConfig;
 
 // 内部实现模块 - 只在 crate 内部使用，不暴露给外部
 pub(crate) mod cache;
@@ -48,10 +51,14 @@ pub use utils::SimilarityMetric;
 #[derive(Clone)]
 pub struct AppState {
     pub service: Arc<RwLock<EmbeddingService>>,
+    #[cfg(feature = "auth")]
     pub jwt_manager: Option<Arc<auth::JwtManager>>,
+    #[cfg(feature = "auth")]
     pub user_store: Option<Arc<auth::UserStore>>,
     pub auth_enabled: bool,
+    #[cfg(feature = "auth")]
     pub csrf_config: Option<Arc<auth::CsrfConfig>>,
+    #[cfg(feature = "auth")]
     pub csrf_token_store: Option<Arc<auth::CsrfTokenStore>>,
     pub metrics_collector: Option<Arc<metrics::InferenceCollector>>,
     pub prometheus_collector: Option<Arc<metrics::PrometheusCollector>>,
@@ -66,12 +73,14 @@ pub struct AppState {
     pub worker_manager: Arc<pipeline::WorkerManager>,
 }
 
+#[cfg(feature = "http")]
 impl FromRef<AppState> for Arc<RwLock<EmbeddingService>> {
     fn from_ref(state: &AppState) -> Self {
         state.service.clone()
     }
 }
 
+#[cfg(all(feature = "http", feature = "auth"))]
 impl FromRef<AppState> for Arc<auth::JwtManager> {
     fn from_ref(state: &AppState) -> Self {
         state
@@ -81,12 +90,14 @@ impl FromRef<AppState> for Arc<auth::JwtManager> {
     }
 }
 
+#[cfg(all(feature = "http", feature = "auth"))]
 impl FromRef<AppState> for Arc<auth::UserStore> {
     fn from_ref(state: &AppState) -> Self {
         state.user_store.clone().expect("User store not available")
     }
 }
 
+#[cfg(feature = "http")]
 impl FromRef<AppState> for Arc<metrics::InferenceCollector> {
     fn from_ref(state: &AppState) -> Self {
         state
@@ -96,6 +107,7 @@ impl FromRef<AppState> for Arc<metrics::InferenceCollector> {
     }
 }
 
+#[cfg(feature = "http")]
 impl FromRef<AppState> for Arc<metrics::PrometheusCollector> {
     fn from_ref(state: &AppState) -> Self {
         state
@@ -105,12 +117,14 @@ impl FromRef<AppState> for Arc<metrics::PrometheusCollector> {
     }
 }
 
+#[cfg(feature = "http")]
 impl FromRef<AppState> for Arc<rate_limit::RateLimiter> {
     fn from_ref(state: &AppState) -> Self {
         state.rate_limiter.clone()
     }
 }
 
+#[cfg(feature = "http")]
 impl FromRef<AppState> for Option<Arc<audit::AuditLogger>> {
     fn from_ref(state: &AppState) -> Self {
         state.audit_logger.clone()

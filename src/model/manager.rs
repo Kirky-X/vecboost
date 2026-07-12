@@ -1,10 +1,10 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
 use crate::config::model::{EngineType, ModelConfig};
-use crate::error::AppError;
+use crate::error::VecboostError;
 use crate::model::loader::{LoadedModel, LocalModelLoader, ModelLoader};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -46,7 +46,7 @@ impl ModelManager {
         self
     }
 
-    pub async fn load(&self, config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, AppError> {
+    pub async fn load(&self, config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, VecboostError> {
         let model_name = config.name.clone();
 
         if let Some(existing) = self.get(&model_name).await {
@@ -73,7 +73,7 @@ impl ModelManager {
             }
             Ok(Err(e)) => {
                 warn!("Model {} loading failed: {}", model_name, e);
-                Err(AppError::ModelLoadError(format!(
+                Err(VecboostError::ModelLoadError(format!(
                     "Failed to load model {}: {}",
                     model_name, e
                 )))
@@ -83,7 +83,7 @@ impl ModelManager {
                     "Model {} loading timed out after {:?}",
                     model_name, self.timeout_duration
                 );
-                Err(AppError::ModelLoadError(format!(
+                Err(VecboostError::ModelLoadError(format!(
                     "Model loading timed out after {} seconds: {}",
                     self.timeout_duration.as_secs(),
                     model_name
@@ -97,7 +97,7 @@ impl ModelManager {
         models.get(name).map(Arc::clone)
     }
 
-    pub async fn unload(&self, name: &str) -> Result<(), AppError> {
+    pub async fn unload(&self, name: &str) -> Result<(), VecboostError> {
         let mut models = self.models.write().await;
 
         if let Some(model) = models.remove(name) {
@@ -106,7 +106,10 @@ impl ModelManager {
             Ok(())
         } else {
             warn!("Model {} not found for unloading", name);
-            Err(AppError::NotFound(format!("Model not found: {}", name)))
+            Err(VecboostError::NotFound(format!(
+                "Model not found: {}",
+                name
+            )))
         }
     }
 
@@ -124,12 +127,12 @@ impl ModelManager {
         info!("All models unloaded");
     }
 
-    pub async fn reload(&self, name: &str) -> Result<Arc<dyn LoadedModel>, AppError> {
+    pub async fn reload(&self, name: &str) -> Result<Arc<dyn LoadedModel>, VecboostError> {
         let config = {
             let models = self.models.read().await;
             let model = models
                 .get(name)
-                .ok_or_else(|| AppError::NotFound(format!("Model not found: {}", name)))?;
+                .ok_or_else(|| VecboostError::NotFound(format!("Model not found: {}", name)))?;
 
             ModelConfig {
                 name: name.to_string(),
@@ -204,7 +207,7 @@ impl ModelManager {
         self.default_config = config;
     }
 
-    pub async fn load_default(&self) -> Result<Arc<dyn LoadedModel>, AppError> {
+    pub async fn load_default(&self) -> Result<Arc<dyn LoadedModel>, VecboostError> {
         self.load(&self.default_config).await
     }
 }
@@ -264,7 +267,7 @@ mod tests {
 
     #[async_trait]
     impl ModelLoader for SlowModelLoader {
-        async fn load(&self, config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, AppError> {
+        async fn load(&self, config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, VecboostError> {
             tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
 
             let model: Arc<dyn LoadedModel> = Arc::new(CandleModel {
@@ -275,7 +278,7 @@ mod tests {
             Ok(model)
         }
 
-        async fn get_model_path(&self, config: &ModelConfig) -> Result<PathBuf, AppError> {
+        async fn get_model_path(&self, config: &ModelConfig) -> Result<PathBuf, VecboostError> {
             Ok(config.model_path.clone())
         }
 
@@ -302,7 +305,7 @@ mod tests {
             EngineType::Candle
         }
 
-        fn reload(&self) -> Result<(), AppError> {
+        fn reload(&self) -> Result<(), VecboostError> {
             Ok(())
         }
     }

@@ -1,9 +1,9 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use crate::error::AppError;
+use crate::error::VecboostError;
 use std::path::{Path, PathBuf};
 
 /// 路径验证器，用于防止路径遍历攻击
@@ -49,14 +49,14 @@ impl PathValidator {
     ///
     /// # 返回
     /// - `Ok(PathBuf)`: 规范化后的绝对路径
-    /// - `Err(AppError)`: 如果路径遍历攻击或不在允许的目录内
-    pub fn validate_path<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, AppError> {
+    /// - `Err(VecboostError)`: 如果路径遍历攻击或不在允许的目录内
+    pub fn validate_path<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, VecboostError> {
         let path = path.as_ref();
 
         // 检查路径是否包含明显的路径遍历模式
         let path_str = path.to_string_lossy();
         if path_str.contains("..") || path_str.contains("~") {
-            return Err(AppError::security_error(format!(
+            return Err(VecboostError::security_error(format!(
                 "Path traversal attempt detected: {}",
                 path_str
             )));
@@ -65,12 +65,12 @@ impl PathValidator {
         // 规范化路径
         let canonical = path
             .canonicalize()
-            .map_err(|e| AppError::security_error(format!("Invalid path: {}", e)))?;
+            .map_err(|e| VecboostError::security_error(format!("Invalid path: {}", e)))?;
 
         // 明确限制对 /tmp 目录的访问（安全考虑）
         let canonical_str = canonical.to_string_lossy();
         if canonical_str.starts_with("/tmp") || canonical_str.starts_with("/var/tmp") {
-            return Err(AppError::security_error(format!(
+            return Err(VecboostError::security_error(format!(
                 "Access to temporary directories is not allowed: {}",
                 canonical.display()
             )));
@@ -78,7 +78,7 @@ impl PathValidator {
 
         // 检查路径是否在允许的根目录内
         if self.allowed_roots.is_empty() {
-            return Err(AppError::security_error(
+            return Err(VecboostError::security_error(
                 "No allowed root directories configured for file access".to_string(),
             ));
         }
@@ -89,7 +89,7 @@ impl PathValidator {
             .any(|root| canonical.starts_with(root));
 
         if !is_allowed {
-            return Err(AppError::security_error(format!(
+            return Err(VecboostError::security_error(format!(
                 "Access denied: path '{}' is not within allowed directories. Allowed roots: {:?}",
                 canonical.display(),
                 self.allowed_roots
@@ -103,11 +103,11 @@ impl PathValidator {
     }
 
     /// 验证路径是否为文件
-    pub fn validate_file<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, AppError> {
+    pub fn validate_file<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, VecboostError> {
         let canonical = self.validate_path(path)?;
 
         if !canonical.is_file() {
-            return Err(AppError::security_error(format!(
+            return Err(VecboostError::security_error(format!(
                 "Path is not a file: {}",
                 canonical.display()
             )));
@@ -117,11 +117,11 @@ impl PathValidator {
     }
 
     /// 验证路径是否为目录
-    pub fn validate_directory<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, AppError> {
+    pub fn validate_directory<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, VecboostError> {
         let canonical = self.validate_path(path)?;
 
         if !canonical.is_dir() {
-            return Err(AppError::security_error(format!(
+            return Err(VecboostError::security_error(format!(
                 "Path is not a directory: {}",
                 canonical.display()
             )));

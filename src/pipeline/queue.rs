@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
@@ -14,7 +14,7 @@ use tracing::{debug, warn};
 
 use super::priority::{Priority, RequestSource};
 use crate::domain::EmbedRequest;
-use crate::error::AppError;
+use crate::error::VecboostError;
 
 /// 队列请求
 #[derive(Debug)]
@@ -32,7 +32,7 @@ pub struct QueuedRequest {
     /// 请求来源
     pub source: RequestSource,
     /// 响应发送器
-    pub response_tx: oneshot::Sender<Result<crate::domain::EmbedResponse, AppError>>,
+    pub response_tx: oneshot::Sender<Result<crate::domain::EmbedResponse, VecboostError>>,
 }
 
 /// 优先级请求队列
@@ -60,13 +60,13 @@ impl PriorityRequestQueue {
     }
 
     /// 入队
-    pub async fn enqueue(&self, request: QueuedRequest) -> Result<(), AppError> {
+    pub async fn enqueue(&self, request: QueuedRequest) -> Result<(), VecboostError> {
         // 使用原子操作确保检查和入队的原子性
         loop {
             let current_size = self.current_size.load(Ordering::Acquire);
 
             if current_size >= self.max_queue_size {
-                return Err(AppError::RateLimitExceeded(
+                return Err(VecboostError::RateLimitExceeded(
                     "Queue is full, request rejected".to_string(),
                 ));
             }

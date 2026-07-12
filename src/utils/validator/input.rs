@@ -1,9 +1,9 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use crate::error::AppError;
+use crate::error::VecboostError;
 use crate::utils::constants::{
     MAX_BATCH_SIZE, MAX_CONCURRENT_REQUESTS, MAX_FILE_SIZE_BYTES, MAX_SEARCH_RESULTS,
     MAX_TEXT_LENGTH, MIN_TEXT_LENGTH,
@@ -75,14 +75,14 @@ impl ValidationConfig {
 }
 
 pub trait TextValidator {
-    fn validate_text(&self, text: &str) -> Result<(), AppError>;
-    fn validate_batch(&self, texts: &[String]) -> Result<(), AppError>;
+    fn validate_text(&self, text: &str) -> Result<(), VecboostError>;
+    fn validate_batch(&self, texts: &[String]) -> Result<(), VecboostError>;
     fn validate_search(
         &self,
         query: &str,
         texts: &[String],
         top_k: Option<usize>,
-    ) -> Result<(), AppError>;
+    ) -> Result<(), VecboostError>;
 }
 
 pub struct InputValidator {
@@ -98,21 +98,23 @@ impl InputValidator {
         Self::new(ValidationConfig::default())
     }
 
-    fn validate_text_content(&self, text: &str) -> Result<(), AppError> {
+    fn validate_text_content(&self, text: &str) -> Result<(), VecboostError> {
         if text.is_empty() {
-            return Err(AppError::InvalidInput("Text cannot be empty".to_string()));
+            return Err(VecboostError::InvalidInput(
+                "Text cannot be empty".to_string(),
+            ));
         }
 
         let char_count = text.chars().count();
         if char_count < self.config.min_text_length {
-            return Err(AppError::InvalidInput(format!(
+            return Err(VecboostError::InvalidInput(format!(
                 "Text too short: {} characters (minimum: {})",
                 char_count, self.config.min_text_length
             )));
         }
 
         if char_count > self.config.max_text_length.get() {
-            return Err(AppError::InvalidInput(format!(
+            return Err(VecboostError::InvalidInput(format!(
                 "Text too long: {} characters (maximum: {})",
                 char_count,
                 self.config.max_text_length.get()
@@ -120,7 +122,7 @@ impl InputValidator {
         }
 
         if text.trim().is_empty() {
-            return Err(AppError::InvalidInput(
+            return Err(VecboostError::InvalidInput(
                 "Text contains only whitespace".to_string(),
             ));
         }
@@ -130,17 +132,19 @@ impl InputValidator {
 }
 
 impl TextValidator for InputValidator {
-    fn validate_text(&self, text: &str) -> Result<(), AppError> {
+    fn validate_text(&self, text: &str) -> Result<(), VecboostError> {
         self.validate_text_content(text)
     }
 
-    fn validate_batch(&self, texts: &[String]) -> Result<(), AppError> {
+    fn validate_batch(&self, texts: &[String]) -> Result<(), VecboostError> {
         if texts.is_empty() {
-            return Err(AppError::InvalidInput("Batch cannot be empty".to_string()));
+            return Err(VecboostError::InvalidInput(
+                "Batch cannot be empty".to_string(),
+            ));
         }
 
         if texts.len() > self.config.max_batch_size.get() {
-            return Err(AppError::InvalidInput(format!(
+            return Err(VecboostError::InvalidInput(format!(
                 "Batch size {} exceeds maximum {}",
                 texts.len(),
                 self.config.max_batch_size.get()
@@ -149,7 +153,7 @@ impl TextValidator for InputValidator {
 
         for (idx, text) in texts.iter().enumerate() {
             self.validate_text_content(text).map_err(|e| {
-                AppError::InvalidInput(format!(
+                VecboostError::InvalidInput(format!(
                     "Validation failed for text at index {}: {}",
                     idx, e
                 ))
@@ -164,17 +168,17 @@ impl TextValidator for InputValidator {
         query: &str,
         texts: &[String],
         top_k: Option<usize>,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), VecboostError> {
         self.validate_text_content(query)?;
 
         if texts.is_empty() {
-            return Err(AppError::InvalidInput(
+            return Err(VecboostError::InvalidInput(
                 "Search texts list cannot be empty".to_string(),
             ));
         }
 
         if texts.len() > self.config.max_search_results.get() {
-            return Err(AppError::InvalidInput(format!(
+            return Err(VecboostError::InvalidInput(format!(
                 "Search results count {} exceeds maximum {}",
                 texts.len(),
                 self.config.max_search_results.get()
@@ -183,12 +187,12 @@ impl TextValidator for InputValidator {
 
         if let Some(k) = top_k {
             if k == 0 {
-                return Err(AppError::InvalidInput(
+                return Err(VecboostError::InvalidInput(
                     "top_k must be at least 1".to_string(),
                 ));
             }
             if k > self.config.max_search_results.get() {
-                return Err(AppError::InvalidInput(format!(
+                return Err(VecboostError::InvalidInput(format!(
                     "top_k {} exceeds maximum {}",
                     k,
                     self.config.max_search_results.get()
@@ -198,7 +202,7 @@ impl TextValidator for InputValidator {
 
         for (idx, text) in texts.iter().enumerate() {
             self.validate_text_content(text).map_err(|e| {
-                AppError::InvalidInput(format!(
+                VecboostError::InvalidInput(format!(
                     "Validation failed for search text at index {}: {}",
                     idx, e
                 ))
@@ -210,7 +214,7 @@ impl TextValidator for InputValidator {
 }
 
 impl InputValidator {
-    fn validate_file_size(&self, path: &str) -> Result<(), AppError> {
+    fn validate_file_size(&self, path: &str) -> Result<(), VecboostError> {
         use std::fs;
 
         match fs::metadata(path) {
@@ -219,29 +223,29 @@ impl InputValidator {
                 if file_size > MAX_FILE_SIZE_BYTES {
                     let size_mb = file_size as f64 / (1024.0 * 1024.0);
                     let max_mb = MAX_FILE_SIZE_BYTES as f64 / (1024.0 * 1024.0);
-                    return Err(AppError::InvalidInput(format!(
+                    return Err(VecboostError::InvalidInput(format!(
                         "File size {:.2} MB exceeds maximum allowed size {:.2} MB",
                         size_mb, max_mb
                     )));
                 }
                 Ok(())
             }
-            Err(e) => Err(AppError::InvalidInput(format!(
+            Err(e) => Err(VecboostError::InvalidInput(format!(
                 "Cannot access file {}: {}",
                 path, e
             ))),
         }
     }
 
-    fn validate_file_extension(&self, path: &str) -> Result<(), AppError> {
+    fn validate_file_extension(&self, path: &str) -> Result<(), VecboostError> {
         let ext = path
             .rsplit('.')
             .next()
-            .ok_or_else(|| AppError::InvalidInput("File has no extension".to_string()))?;
+            .ok_or_else(|| VecboostError::InvalidInput("File has no extension".to_string()))?;
 
         let ext_lower = ext.to_ascii_lowercase();
         if !ALLOWED_FILE_EXTENSIONS.contains(&ext_lower.as_str()) {
-            return Err(AppError::InvalidInput(format!(
+            return Err(VecboostError::InvalidInput(format!(
                 "File extension '.{}' is not allowed. Allowed extensions: {:?}",
                 ext, ALLOWED_FILE_EXTENSIONS
             )));
@@ -250,23 +254,23 @@ impl InputValidator {
         Ok(())
     }
 
-    fn validate_file_content(&self, path: &str) -> Result<(), AppError> {
+    fn validate_file_content(&self, path: &str) -> Result<(), VecboostError> {
         use std::fs::File;
         use std::io::Read;
 
         let file = File::open(path)
-            .map_err(|e| AppError::InvalidInput(format!("Cannot open file: {}", e)))?;
+            .map_err(|e| VecboostError::InvalidInput(format!("Cannot open file: {}", e)))?;
 
         let mut buffer = [0u8; MAX_MAGIC_BYTES];
         let mut reader = std::io::BufReader::new(file);
 
         reader
             .read(&mut buffer)
-            .map_err(|e| AppError::InvalidInput(format!("Cannot read file: {}", e)))?;
+            .map_err(|e| VecboostError::InvalidInput(format!("Cannot read file: {}", e)))?;
 
         let bytes_read = reader
             .fill_buf()
-            .map_err(|e| AppError::InvalidInput(format!("Cannot read file buffer: {}", e)))?;
+            .map_err(|e| VecboostError::InvalidInput(format!("Cannot read file buffer: {}", e)))?;
 
         if bytes_read.is_empty() {
             return Ok(());
@@ -294,7 +298,7 @@ impl InputValidator {
         if !has_text_marker {
             for &byte in bytes_read.iter().take(256) {
                 if byte < 0x09 || (byte > 0x0A && byte < 0x20 && byte != 0x1E && byte != 0x1F) {
-                    return Err(AppError::InvalidInput(
+                    return Err(VecboostError::InvalidInput(
                         "File contains non-text binary data".to_string(),
                     ));
                 }
@@ -304,7 +308,7 @@ impl InputValidator {
         Ok(())
     }
 
-    pub fn validate_file_path(&self, path: &str) -> Result<(), AppError> {
+    pub fn validate_file_path(&self, path: &str) -> Result<(), VecboostError> {
         self.validate_file_extension(path)?;
         self.validate_file_size(path)?;
         self.validate_file_content(path)?;
@@ -313,11 +317,11 @@ impl InputValidator {
 }
 
 pub trait FileValidator {
-    fn validate_file(&self, path: &str) -> Result<(), AppError>;
+    fn validate_file(&self, path: &str) -> Result<(), VecboostError>;
 }
 
 impl FileValidator for InputValidator {
-    fn validate_file(&self, path: &str) -> Result<(), AppError> {
+    fn validate_file(&self, path: &str) -> Result<(), VecboostError> {
         self.validate_file_size(path)
     }
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
@@ -6,7 +6,7 @@
 #![allow(unused)]
 
 use crate::engine::InferenceEngine;
-use crate::error::AppError;
+use crate::error::VecboostError;
 use crate::metrics::inference::InferenceCollector;
 use crate::utils::normalize_l2;
 use std::sync::Arc;
@@ -36,7 +36,7 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
         &self,
         config: PerformanceTestConfig,
         text_generator: impl Fn(usize) -> String + Send + Sync + 'static,
-    ) -> Result<ThroughputResult, AppError> {
+    ) -> Result<ThroughputResult, VecboostError> {
         let start_time = Instant::now();
         let total_requests = Arc::new(AtomicUsize::new(0));
         let successful_requests = Arc::new(AtomicUsize::new(0));
@@ -182,7 +182,7 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
     pub async fn run_latency_benchmark(
         &self,
         text_generator: impl Fn(usize) -> String + Send + Sync,
-    ) -> Result<LatencyBenchmarkResult, AppError> {
+    ) -> Result<LatencyBenchmarkResult, VecboostError> {
         let test_cases = vec![
             (10, "10 tokens"),
             (50, "50 tokens"),
@@ -264,7 +264,7 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
         concurrent_requests: usize,
         duration_seconds: u64,
         text_generator: impl Fn(usize) -> String + Send + Sync + 'static,
-    ) -> Result<ThroughputResult, AppError> {
+    ) -> Result<ThroughputResult, VecboostError> {
         let start_time = Instant::now();
         let total_requests = Arc::new(AtomicUsize::new(0));
         let successful_requests = Arc::new(AtomicUsize::new(0));

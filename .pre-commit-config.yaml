@@ -23,6 +23,18 @@ repos:
         pass_filenames: false
         always_run: false
 
+  # Copyright header check
+  - repo: local
+    hooks:
+      - id: copyright-header
+        name: Check copyright headers
+        description: Verify all .rs files have MIT copyright headers (Kirky.X)
+        entry: bash scripts/check_copyright.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        types: [rust]
+
   # Remove trailing whitespace
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0

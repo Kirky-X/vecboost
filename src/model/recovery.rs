@@ -1,9 +1,9 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use crate::error::AppError;
+use crate::error::VecboostError;
 use crate::utils::hash::{ModelIntegrityReport, check_model_integrity};
 use hf_hub::{Repo, RepoType, api::sync::Api};
 use std::collections::HashMap;
@@ -58,7 +58,7 @@ impl ModelRecovery {
         model_path: &Path,
         repo_id: Option<&str>,
         corrupted_files: &[String],
-    ) -> Result<RecoveryResult, AppError> {
+    ) -> Result<RecoveryResult, VecboostError> {
         info!(
             "Starting recovery for model '{}', {} corrupted files detected",
             model_name,
@@ -115,7 +115,7 @@ impl ModelRecovery {
         })
     }
 
-    fn backup_corrupted_file(&self, file_path: &Path) -> Result<Option<String>, AppError> {
+    fn backup_corrupted_file(&self, file_path: &Path) -> Result<Option<String>, VecboostError> {
         if !file_path.exists() {
             return Ok(None);
         }
@@ -127,8 +127,9 @@ impl ModelRecovery {
                 .join(".corrupted_backup")
         });
 
-        fs::create_dir_all(&backup_dir)
-            .map_err(|e| AppError::io_error(format!("Failed to create backup directory: {}", e)))?;
+        fs::create_dir_all(&backup_dir).map_err(|e| {
+            VecboostError::io_error(format!("Failed to create backup directory: {}", e))
+        })?;
 
         let file_name = file_path
             .file_name()
@@ -138,8 +139,9 @@ impl ModelRecovery {
         let backup_name = format!("{}_{}.corrupted", file_name, timestamp);
         let backup_path = backup_dir.join(&backup_name);
 
-        fs::copy(file_path, &backup_path)
-            .map_err(|e| AppError::io_error(format!("Failed to backup corrupted file: {}", e)))?;
+        fs::copy(file_path, &backup_path).map_err(|e| {
+            VecboostError::io_error(format!("Failed to backup corrupted file: {}", e))
+        })?;
 
         info!("Backed up corrupted file to: {:?}", backup_path);
         Ok(Some(backup_path.to_string_lossy().to_string()))
@@ -151,7 +153,7 @@ impl ModelRecovery {
         repo_id: Option<&str>,
         file_name: &str,
         attempts: &mut usize,
-    ) -> Result<bool, AppError> {
+    ) -> Result<bool, VecboostError> {
         let is_local_path = model_path.exists() && model_path.is_dir();
 
         if is_local_path {
@@ -165,7 +167,7 @@ impl ModelRecovery {
                 return Ok(false);
             }
         } else {
-            let api = Api::new().map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let repo = api.repo(Repo::new(
                 model_path.to_string_lossy().into_owned(),
                 RepoType::Model,
@@ -181,7 +183,10 @@ impl ModelRecovery {
                     Ok(downloaded_path) => {
                         if downloaded_path != file_path {
                             fs::copy(&downloaded_path, &file_path).map_err(|e| {
-                                AppError::io_error(format!("Failed to copy downloaded file: {}", e))
+                                VecboostError::io_error(format!(
+                                    "Failed to copy downloaded file: {}",
+                                    e
+                                ))
                             })?;
                         }
                         return Ok(true);
@@ -192,7 +197,7 @@ impl ModelRecovery {
                             attempt, file_name, e
                         );
                         if attempt == self.config.max_retries {
-                            return Err(AppError::ModelLoadError(format!(
+                            return Err(VecboostError::ModelLoadError(format!(
                                 "Failed to recover file {} after {} attempts: {}",
                                 file_name, self.config.max_retries, e
                             )));
@@ -211,8 +216,8 @@ impl ModelRecovery {
         model_path: &Path,
         file_name: &str,
         attempts: &mut usize,
-    ) -> Result<bool, AppError> {
-        let api = Api::new().map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+    ) -> Result<bool, VecboostError> {
+        let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
         let repo = api.repo(Repo::new(repo_id.to_string(), RepoType::Model));
 
         let file_path = model_path.join(file_name);
@@ -225,7 +230,10 @@ impl ModelRecovery {
                 Ok(downloaded_path) => {
                     if downloaded_path != file_path {
                         fs::copy(&downloaded_path, &file_path).map_err(|e| {
-                            AppError::io_error(format!("Failed to copy downloaded file: {}", e))
+                            VecboostError::io_error(format!(
+                                "Failed to copy downloaded file: {}",
+                                e
+                            ))
                         })?;
                     }
                     return Ok(true);
@@ -236,7 +244,7 @@ impl ModelRecovery {
                         attempt, file_name, e
                     );
                     if attempt == self.config.max_retries {
-                        return Err(AppError::ModelLoadError(format!(
+                        return Err(VecboostError::ModelLoadError(format!(
                             "Failed to download file {} after {} attempts: {}",
                             file_name, self.config.max_retries, e
                         )));
@@ -253,7 +261,7 @@ impl ModelRecovery {
         model_name: &str,
         _model_path: &Path,
         recovered_files: &[String],
-    ) -> Result<(), AppError> {
+    ) -> Result<(), VecboostError> {
         let mut files_to_check = Vec::new();
         let mut min_sizes = HashMap::new();
 
@@ -278,7 +286,7 @@ impl ModelRecovery {
         let integrity_report = check_model_integrity(model_name, files_to_check, Some(min_sizes))?;
 
         if !integrity_report.overall_valid {
-            return Err(AppError::ModelIntegrityError(format!(
+            return Err(VecboostError::ModelIntegrityError(format!(
                 "Verification failed after recovery. Corrupted files: {:?}",
                 integrity_report.corrupted_files
             )));
@@ -294,7 +302,7 @@ impl ModelRecovery {
         model_path: &Path,
         repo_id: Option<&str>,
         integrity_report: &ModelIntegrityReport,
-    ) -> Result<RecoveryResult, AppError> {
+    ) -> Result<RecoveryResult, VecboostError> {
         if integrity_report.overall_valid {
             info!("Model integrity check passed, no recovery needed");
             return Ok(RecoveryResult {

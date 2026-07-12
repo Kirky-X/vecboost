@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
@@ -6,7 +6,7 @@
 use super::{InferenceEngine, Precision};
 use crate::config::model::{DeviceType, ModelConfig};
 use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
-use crate::error::AppError;
+use crate::error::VecboostError;
 use crate::monitor::MemoryMonitor;
 use crate::utils::hash::verify_sha256;
 use async_trait::async_trait;
@@ -39,7 +39,7 @@ pub struct OnnxEngine {
 }
 
 impl OnnxEngine {
-    pub fn new(config: &ModelConfig, precision: Precision) -> Result<Self, AppError> {
+    pub fn new(config: &ModelConfig, precision: Precision) -> Result<Self, VecboostError> {
         Self::with_device(config, precision, config.device.clone())
     }
 
@@ -47,7 +47,7 @@ impl OnnxEngine {
         config: &ModelConfig,
         precision: Precision,
         device_type: DeviceType,
-    ) -> Result<Self, AppError> {
+    ) -> Result<Self, VecboostError> {
         let model_path = &config.model_path;
         let is_local_path = model_path.exists() && model_path.is_dir();
 
@@ -58,7 +58,7 @@ impl OnnxEngine {
             } else if model_path.join("model.onnx").exists() {
                 model_path.join("model.onnx")
             } else {
-                return Err(AppError::ModelLoadError(format!(
+                return Err(VecboostError::ModelLoadError(format!(
                     "No ONNX model found in {:?}",
                     model_path
                 )));
@@ -68,7 +68,7 @@ impl OnnxEngine {
             } else {
                 let parent = model_path.parent().and_then(|p| p.parent());
                 let cache_path = parent.ok_or_else(|| {
-                    AppError::ModelLoadError(format!(
+                    VecboostError::ModelLoadError(format!(
                         "Cannot determine HuggingFace cache path from {:?}",
                         model_path
                     ))
@@ -81,7 +81,7 @@ impl OnnxEngine {
                     );
                     cache_tokenizer
                 } else {
-                    return Err(AppError::ModelLoadError(format!(
+                    return Err(VecboostError::ModelLoadError(format!(
                         "Tokenizer not found at {:?} or {:?}",
                         model_path.join("tokenizer.json"),
                         cache_tokenizer
@@ -91,7 +91,7 @@ impl OnnxEngine {
             (onnx_filename, tokenizer_filename)
         } else {
             tracing::info!("Using HuggingFace Hub for model: {:?}", model_path);
-            let api = Api::new().map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let repo = api.repo(Repo::new(
                 model_path.to_string_lossy().into_owned(),
                 RepoType::Model,
@@ -101,11 +101,11 @@ impl OnnxEngine {
             let onnx_filename = repo
                 .get("model.onnx")
                 .or_else(|_| repo.get("model_quantized.onnx"))
-                .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
             let tokenizer_filename = repo
                 .get("tokenizer.json")
-                .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             (onnx_filename, tokenizer_filename)
         };
 
@@ -118,11 +118,11 @@ impl OnnxEngine {
 
         tracing::info!("Initializing ONNX Runtime session...");
         let session = Session::builder()
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
             .with_intra_threads(num_threads)
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
         let session = if supports_cuda {
             tracing::info!("Attempting to configure CUDA execution provider for ONNX Runtime");
@@ -132,7 +132,7 @@ impl OnnxEngine {
                     ort::execution_providers::CUDAExecutionProvider::default().build();
                 session
                     .with_execution_providers([cuda_provider])
-                    .map_err(|e| AppError::ModelLoadError(e.to_string()))?
+                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
             }
             #[cfg(not(feature = "cuda"))]
             {
@@ -152,11 +152,12 @@ impl OnnxEngine {
 
         if let Some(ref expected_hash) = config.model_sha256 {
             tracing::info!("Verifying model file SHA256 hash...");
-            let is_valid = verify_sha256(&onnx_filename, expected_hash)
-                .map_err(|e| AppError::ModelLoadError(format!("Failed to verify SHA256: {}", e)))?;
+            let is_valid = verify_sha256(&onnx_filename, expected_hash).map_err(|e| {
+                VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e))
+            })?;
 
             if !is_valid {
-                return Err(AppError::ModelLoadError(format!(
+                return Err(VecboostError::ModelLoadError(format!(
                     "Model file SHA256 verification failed. Expected: {}, File: {:?}",
                     expected_hash, onnx_filename
                 )));
@@ -167,12 +168,12 @@ impl OnnxEngine {
 
         let session = session
             .commit_from_file(onnx_filename)
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
         tracing::info!("Loading tokenizer...");
         #[allow(unused_mut)]
         let mut tokenizer = Tokenizer::from_file(&tokenizer_filename.to_string_lossy())
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
         #[cfg(target_os = "macos")]
         {
@@ -293,7 +294,7 @@ impl OnnxEngine {
     pub async fn check_memory_limit_and_fallback(
         &mut self,
         config: &ModelConfig,
-    ) -> Result<bool, AppError> {
+    ) -> Result<bool, VecboostError> {
         if self.fallback_triggered {
             return Ok(false);
         }
@@ -340,11 +341,11 @@ impl OnnxEngine {
         }
     }
 
-    fn forward_pass(&self, text: &str) -> Result<Vec<f32>, AppError> {
+    fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         let tokens = self
             .tokenizer
             .encode(text, true)
-            .map_err(|e| AppError::TokenizationError(e.to_string()))?;
+            .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
 
         let input_ids: Vec<i64> = tokens
             .get_ids()
@@ -364,24 +365,24 @@ impl OnnxEngine {
         let attention_mask_array = Array1::from(attention_mask.clone());
 
         let input_ids_tensor = Tensor::from_array(input_ids_array.into_dyn())
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
         let attention_mask_tensor = Tensor::from_array(attention_mask_array.into_dyn())
-            .map_err(|e: ort::Error| AppError::InferenceError(e.to_string()))?;
+            .map_err(|e: ort::Error| VecboostError::InferenceError(e.to_string()))?;
 
         let last_hidden_state = {
             let mut session_guard = self
                 .session
                 .lock()
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
             let outputs = session_guard
                 .run(ort::inputs![
                     "input_ids" => input_ids_tensor,
                     "attention_mask" => attention_mask_tensor
                 ])
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
             let output_array = outputs["last_hidden_state"]
                 .try_extract_array::<f32>()
-                .map_err(|e| AppError::InferenceError(e.to_string()))?
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                 .to_owned();
             tracing::debug!("ONNX model output shape: {:?}", output_array.shape());
             output_array
@@ -389,7 +390,7 @@ impl OnnxEngine {
 
         let seq_len = attention_mask.iter().filter(|&&v| v == 1).count();
         if seq_len == 0 {
-            return Err(AppError::InferenceError(
+            return Err(VecboostError::InferenceError(
                 "Empty sequence after mask".to_string(),
             ));
         }
@@ -414,10 +415,10 @@ impl OnnxEngine {
         Ok(weighted_sum)
     }
 
-    pub async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError> {
+    pub async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         // 使用互斥锁确保只有一个线程执行降级
         let _lock = self.fallback_lock.lock().map_err(|e| {
-            AppError::InferenceError(format!("Failed to acquire fallback lock: {}", e))
+            VecboostError::InferenceError(format!("Failed to acquire fallback lock: {}", e))
         })?;
 
         // 双重检查：获取锁后再次检查是否已经降级
@@ -432,7 +433,7 @@ impl OnnxEngine {
         self.supports_cuda = false;
         self.fallback_triggered = true;
 
-        let api = Api::new().map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+        let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
         let repo = api.repo(Repo::new(
             config.model_path.to_string_lossy().into_owned(),
             RepoType::Model,
@@ -441,25 +442,25 @@ impl OnnxEngine {
         let onnx_filename = repo
             .get("model.onnx")
             .or_else(|_| repo.get("model_quantized.onnx"))
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
         let num_threads = std::thread::available_parallelism()
             .map(|p| p.get())
             .unwrap_or(4);
 
         let new_session = Session::builder()
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
             .with_intra_threads(num_threads)
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
             .commit_from_file(onnx_filename)
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
         let mut session_guard = self
             .session
             .lock()
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
         *session_guard = new_session;
         drop(session_guard);
 
@@ -469,7 +470,7 @@ impl OnnxEngine {
         Ok(())
     }
 
-    fn forward_pass_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+    fn forward_pass_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
         let batch_size = texts.len();
         if batch_size == 0 {
             return Ok(vec![]);
@@ -484,7 +485,7 @@ impl OnnxEngine {
             let tokens = self
                 .tokenizer
                 .encode(text_ref, true)
-                .map_err(|e| AppError::TokenizationError(e.to_string()))?;
+                .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
 
             let input_ids: Vec<i64> = tokens
                 .get_ids()
@@ -526,30 +527,30 @@ impl OnnxEngine {
 
         let input_ids_array =
             Array2::from_shape_vec((padded_batch_size, max_seq_len), batch_input_ids)
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
         let attention_mask_array =
             Array2::from_shape_vec((padded_batch_size, max_seq_len), batch_attention_mask)
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
         let input_ids_tensor = Tensor::from_array(input_ids_array.into_dyn())
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
         let attention_mask_tensor = Tensor::from_array(attention_mask_array.into_dyn())
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
         let last_hidden_state = {
             let mut session_guard = self
                 .session
                 .lock()
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
             let outputs = session_guard
                 .run(ort::inputs![
                     "input_ids" => input_ids_tensor,
                     "attention_mask" => attention_mask_tensor
                 ])
-                .map_err(|e| AppError::InferenceError(e.to_string()))?;
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
             outputs["last_hidden_state"]
                 .try_extract_array::<f32>()
-                .map_err(|e| AppError::InferenceError(e.to_string()))?
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                 .to_owned()
         };
 
@@ -595,11 +596,11 @@ impl OnnxEngine {
 
 #[async_trait]
 impl InferenceEngine for OnnxEngine {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         self.forward_pass(text)
     }
 
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
         self.forward_pass_batch(texts)
     }
 
@@ -615,7 +616,7 @@ impl InferenceEngine for OnnxEngine {
         self.fallback_triggered
     }
 
-    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError> {
+    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         OnnxEngine::try_fallback_to_cpu(self, config).await
     }
 }

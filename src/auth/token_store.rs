@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
@@ -20,13 +20,13 @@ use tokio::sync::RwLock;
 #[async_trait]
 pub trait TokenStore: Send + Sync {
     /// Add a token to the blacklist
-    async fn add_to_blacklist(&self, jti: &str) -> Result<(), crate::error::AppError>;
+    async fn add_to_blacklist(&self, jti: &str) -> Result<(), crate::error::VecboostError>;
 
     /// Check if a token is blacklisted
-    async fn is_blacklisted(&self, jti: &str) -> Result<bool, crate::error::AppError>;
+    async fn is_blacklisted(&self, jti: &str) -> Result<bool, crate::error::VecboostError>;
 
     /// Remove a token from the blacklist
-    async fn remove_from_blacklist(&self, jti: &str) -> Result<(), crate::error::AppError>;
+    async fn remove_from_blacklist(&self, jti: &str) -> Result<(), crate::error::VecboostError>;
 
     /// Check if a token is blacklisted (同步版本，用于验证）
     fn is_blacklisted_sync(&self, jti: &str) -> bool;
@@ -64,18 +64,18 @@ impl Default for MemoryTokenStore {
 
 #[async_trait]
 impl TokenStore for MemoryTokenStore {
-    async fn add_to_blacklist(&self, jti: &str) -> Result<(), crate::error::AppError> {
+    async fn add_to_blacklist(&self, jti: &str) -> Result<(), crate::error::VecboostError> {
         let mut blacklist = self.blacklist.write().await;
         blacklist.insert(jti.to_string());
         Ok(())
     }
 
-    async fn is_blacklisted(&self, jti: &str) -> Result<bool, crate::error::AppError> {
+    async fn is_blacklisted(&self, jti: &str) -> Result<bool, crate::error::VecboostError> {
         let blacklist = self.blacklist.read().await;
         Ok(blacklist.contains(jti))
     }
 
-    async fn remove_from_blacklist(&self, jti: &str) -> Result<(), crate::error::AppError> {
+    async fn remove_from_blacklist(&self, jti: &str) -> Result<(), crate::error::VecboostError> {
         let mut blacklist = self.blacklist.write().await;
         blacklist.remove(jti);
         Ok(())
@@ -140,51 +140,51 @@ impl RedisTokenStore {
 #[cfg(feature = "redis")]
 #[async_trait]
 impl TokenStore for RedisTokenStore {
-    async fn add_to_blacklist(&self, jti: &str) -> Result<(), crate::error::AppError> {
+    async fn add_to_blacklist(&self, jti: &str) -> Result<(), crate::error::VecboostError> {
         let mut conn = self
             .client
-            .get_async_connection()
+            .get_multiplexed_async_connection()
             .await
-            .map_err(|e| crate::error::AppError::ConfigError(e.to_string()))?;
+            .map_err(|e| crate::error::VecboostError::ConfigError(e.to_string()))?;
 
         let key = self.get_key(jti);
         // Store with 24-hour TTL (token expiration)
         redis::Cmd::set_ex(&key, "1", 86400)
             .query_async::<()>(&mut conn)
             .await
-            .map_err(|e| crate::error::AppError::ConfigError(e.to_string()))?;
+            .map_err(|e| crate::error::VecboostError::ConfigError(e.to_string()))?;
 
         Ok(())
     }
 
-    async fn is_blacklisted(&self, jti: &str) -> Result<bool, crate::error::AppError> {
+    async fn is_blacklisted(&self, jti: &str) -> Result<bool, crate::error::VecboostError> {
         let mut conn = self
             .client
-            .get_async_connection()
+            .get_multiplexed_async_connection()
             .await
-            .map_err(|e| crate::error::AppError::ConfigError(e.to_string()))?;
+            .map_err(|e| crate::error::VecboostError::ConfigError(e.to_string()))?;
 
         let key = self.get_key(jti);
         let exists: bool = redis::Cmd::exists(&key)
             .query_async(&mut conn)
             .await
-            .map_err(|e| crate::error::AppError::ConfigError(e.to_string()))?;
+            .map_err(|e| crate::error::VecboostError::ConfigError(e.to_string()))?;
 
         Ok(exists)
     }
 
-    async fn remove_from_blacklist(&self, jti: &str) -> Result<(), crate::error::AppError> {
+    async fn remove_from_blacklist(&self, jti: &str) -> Result<(), crate::error::VecboostError> {
         let mut conn = self
             .client
-            .get_async_connection()
+            .get_multiplexed_async_connection()
             .await
-            .map_err(|e| crate::error::AppError::ConfigError(e.to_string()))?;
+            .map_err(|e| crate::error::VecboostError::ConfigError(e.to_string()))?;
 
         let key = self.get_key(jti);
         redis::Cmd::del(&key)
             .query_async::<()>(&mut conn)
             .await
-            .map_err(|e| crate::error::AppError::ConfigError(e.to_string()))?;
+            .map_err(|e| crate::error::VecboostError::ConfigError(e.to_string()))?;
 
         Ok(())
     }
@@ -231,7 +231,7 @@ impl TokenStoreFactory {
         key_prefix: Option<String>,
     ) -> Option<RedisTokenStore> {
         let client = redis::Client::open(redis_url).ok()?;
-        if client.get_async_connection().await.is_ok() {
+        if client.get_multiplexed_async_connection().await.is_ok() {
             Some(RedisTokenStore::new(client, key_prefix))
         } else {
             None

@@ -1,11 +1,11 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
 #![allow(unused)]
 
-use crate::error::AppError;
+use crate::error::VecboostError;
 use crate::utils::{AggregationMode, normalize_l2};
 
 pub struct EmbeddingAggregator {
@@ -26,9 +26,9 @@ impl EmbeddingAggregator {
         self
     }
 
-    pub fn aggregate(&self, embeddings: &[Vec<f32>]) -> Result<Vec<f32>, AppError> {
+    pub fn aggregate(&self, embeddings: &[Vec<f32>]) -> Result<Vec<f32>, VecboostError> {
         if embeddings.is_empty() {
-            return Err(AppError::InvalidInput(
+            return Err(VecboostError::InvalidInput(
                 "Cannot aggregate empty embeddings".to_string(),
             ));
         }
@@ -66,15 +66,15 @@ impl EmbeddingAggregator {
         &self,
         embeddings: &[Vec<f32>],
         weights: &[f32],
-    ) -> Result<Vec<f32>, AppError> {
+    ) -> Result<Vec<f32>, VecboostError> {
         if embeddings.is_empty() {
-            return Err(AppError::InvalidInput(
+            return Err(VecboostError::InvalidInput(
                 "Cannot aggregate empty embeddings".to_string(),
             ));
         }
 
         if embeddings.len() != weights.len() {
-            return Err(AppError::InvalidInput(
+            return Err(VecboostError::InvalidInput(
                 "Embeddings and weights must have the same length".to_string(),
             ));
         }

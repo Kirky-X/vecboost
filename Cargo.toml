@@ -1,6 +1,6 @@
 [package]
 name = "vecboost"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 authors = ["Kirky-X <kirky-x@outlook.com>"]
 description = "High-performance embedding vector service written in Rust"
@@ -12,58 +12,11 @@ keywords = ["embedding", "vector", "ml", "ai", "inference"]
 categories = ["asynchronous", "science", "web-programming::http-server"]
 
 [dependencies]
-# Web Framework
-axum = "0.7"
-axum-extra = { version = "0.9", features = ["typed-header"] }
+# Base async runtime & utilities (always required)
 tokio = { version = "1.40", features = ["full"] }
-tower-http = { version = "0.6", features = ["trace", "cors", "add-extension", "validate-request", "set-header", "timeout"] }
-
-# gRPC support
-tonic = "0.12"
-prost = "0.13"
-
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# OpenAPI Documentation
-utoipa = { version = "5.1", features = ["axum_extras", "chrono", "uuid"] }
-utoipa-swagger-ui = { version = "8.0", features = ["axum"] }
-uuid = { version = "1.11", features = ["v4", "serde"] }
-
-# Monitoring
-prometheus = { version = "0.13", features = ["process"] }
-axum-prometheus = "0.7"
-
-# Rate Limiting
 async-trait = "0.1"
-redis = { version = "1.0.0-rc.5", optional = true, features = ["tokio-comp", "connection-manager"] }
-
-# Configuration
-config = "0.14"
-toml = "0.8"
-
-# Logging & Tracing
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Error Handling
-thiserror = "2.0"
-anyhow = "1.0"
-
-# AI & Math
-candle-core = { version = "0.9", features = [] }
-candle-nn = "0.9"
-candle-transformers = "0.9"
-hf-hub = "0.3"
-
-# Utilities
-ndarray = { version = "0.16", optional = true }
-ort = { version = "2.0.0-rc.11", optional = true }
-
-# Utilities
-tempfile = "3.14"
 futures = "0.3"
+tempfile = "3.14"
 sys-info = "0.9"
 num_cpus = "1.16"
 lru = "0.12"
@@ -72,44 +25,119 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1.11"
 home = "0.5"
-reqwest = { version = "0.12", features = ["stream"] }
 sha2 = "0.10"
-jsonwebtoken = "9.3"
-password-hash = { version = "0.5", features = ["rand_core"] }
-argon2 = "0.5"
 rand = "0.8"
-aes-gcm = "0.10"
 hex = "0.4"
 url = "2.5"
-zeroize = "1.8" # 用于安全清除敏感数据
+zeroize = "1.8"
 
-# CUDA support - only available on Linux with CUDA toolkit
-cudarc = { version = "0.18.2", optional = true, default-features = false }
+# Serialization (base)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Configuration (base)
+config = "0.14"
+toml = "0.8"
+
+# Logging & Tracing (base)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error Handling (base)
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Module Registry (always required)
+trait-kit = "0.2"
+
+# Configuration library (config feature)
+confers = { version = "0.4", optional = true, default-features = false, features = ["toml", "env"] }
+
+# AI & Math (base)
+candle-core = { version = "0.9", features = [] }
+candle-nn = "0.9"
+candle-transformers = "0.9"
+hf-hub = "0.3"
+
+# Web Framework (http feature)
+axum = { version = "0.7", optional = true, default-features = false, features = ["http1", "json", "tokio", "tracing", "macros", "matched-path", "original-uri", "query"] }
+axum-extra = { version = "0.9", optional = true, default-features = false, features = ["typed-header"] }
+tower-http = { version = "0.6", optional = true, default-features = false, features = ["trace", "cors", "add-extension", "validate-request", "set-header", "timeout"] }
+
+# OpenAPI Documentation (http feature)
+utoipa = { version = "5.1", optional = true, default-features = false, features = ["axum_extras", "chrono", "uuid"] }
+utoipa-swagger-ui = { version = "8.0", optional = true, default-features = false, features = ["axum"] }
+uuid = { version = "1.11", optional = true, default-features = false, features = ["v4", "serde"] }
+
+# Monitoring (http feature)
+prometheus = { version = "0.13", optional = true, default-features = false, features = ["process"] }
+axum-prometheus = { version = "0.7", optional = true, default-features = false }
+
+# HTTP client (http feature)
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["stream", "charset", "http2", "default-tls"] }
+
+# gRPC support (grpc feature)
+tonic = { version = "0.12", optional = true, default-features = false, features = ["transport", "codegen", "prost"] }
+prost = { version = "0.13", optional = true, default-features = false, features = ["std", "prost-derive"] }
+
+# Auth feature
+jsonwebtoken = { version = "9.3", optional = true, default-features = false }
+password-hash = { version = "0.5", optional = true, default-features = false, features = ["rand_core", "alloc"] }
+argon2 = { version = "0.5", optional = true, default-features = false, features = ["alloc", "password-hash"] }
+aes-gcm = { version = "0.10", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
+
+# Redis feature
+redis = { version = "1.0.0-rc.5", optional = true, default-features = false, features = ["tokio-comp", "connection-manager"] }
+
+# ONNX feature
+ndarray = { version = "0.16", optional = true, default-features = false }
+ort = { version = "2.0.0-rc.11", optional = true, default-features = false }
+
+# CUDA feature
+cudarc = { version = "0.18", optional = true, default-features = false }
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-build = { version = "0.12", optional = true, default-features = false, features = ["transport", "prost"] }
 
 [features]
-default = []
-cuda = ["candle-core/cuda", "candle-nn/cuda"]
-onnx = ["ndarray", "ort"]
-metal = ["candle-core/metal", "candle-nn/metal"]
-grpc = []
-redis = ["dep:redis"]
-auth = []
+default = ["http"]
 
-# Platform-specific default features
-# macOS defaults to metal support
+# 协议特性
+http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "dep:utoipa", "dep:utoipa-swagger-ui", "dep:uuid", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest"]
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-build"]
+mcp = []
+cli = []
+
+# 存储特性
+db = []
+postgres = ["db"]
+
+# 基础设施特性(Phase 3 添加依赖)
+inklog = []
+limiteron = []
+oxcache = []
+
+# 配置特性(Phase 3.2 confers 集成)
+config = ["dep:confers"]
+
+# 功能特性
+auth = ["dep:jsonwebtoken", "dep:password-hash", "dep:argon2", "dep:aes-gcm"]
+redis = ["dep:redis"]
+
+# 引擎特性
+cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:cudarc"]
+metal = ["candle-core/metal", "candle-nn/metal"]
+onnx = ["dep:ndarray", "dep:ort"]
+tensorrt = []
+openvino = []
+
+# Platform-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
 tokenizers = { version = "0.15", features = ["http"] }
 
-# Linux defaults to CUDA support
 [target.'cfg(target_os = "linux")'.dependencies]
-# Default to CUDA feature on Linux
 
-# Windows defaults to CUDA support
 [target.'cfg(target_os = "windows")'.dependencies]
-# Default to CUDA feature on Windows
 
 [profile.dev]
 opt-level = 1

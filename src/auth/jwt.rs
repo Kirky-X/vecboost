@@ -1,11 +1,10 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-use crate::auth::token_store::{MemoryTokenStore, TokenStore};
-use crate::auth::types::User;
-use crate::error::AppError;
+use crate::auth::{MemoryTokenStore, TokenStore, User};
+use crate::error::VecboostError;
 use crate::security::{KeyStore, KeyType};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
@@ -71,10 +70,10 @@ impl JwtManager {
     }
 
     /// 验证密钥强度
-    fn validate_secret(secret: &str) -> Result<(), AppError> {
+    fn validate_secret(secret: &str) -> Result<(), VecboostError> {
         // 检查最小长度
         if secret.len() < MIN_SECRET_LENGTH {
-            return Err(AppError::security_error(format!(
+            return Err(VecboostError::security_error(format!(
                 "JWT secret too short: {} bytes (minimum {} bytes required)",
                 secret.len(),
                 MIN_SECRET_LENGTH
@@ -84,7 +83,7 @@ impl JwtManager {
         // 检查熵值
         let entropy = Self::calculate_entropy(secret);
         if entropy < MIN_SECRET_ENTROPY_BITS {
-            return Err(AppError::security_error(format!(
+            return Err(VecboostError::security_error(format!(
                 "JWT secret has insufficient entropy: {:.2} bits (minimum {:.2} bits required). \
                  Please use a cryptographically secure random key.",
                 entropy, MIN_SECRET_ENTROPY_BITS
@@ -94,7 +93,7 @@ impl JwtManager {
         Ok(())
     }
 
-    pub fn new(secret: String) -> Result<Self, AppError> {
+    pub fn new(secret: String) -> Result<Self, VecboostError> {
         Self::validate_secret(&secret)?;
 
         let encoding_key = Arc::new(EncodingKey::from_secret(secret.as_ref()));
@@ -114,14 +113,17 @@ impl JwtManager {
     pub async fn new_with_key_store(
         key_store: Arc<dyn KeyStore>,
         secret_name: Option<&str>,
-    ) -> Result<Self, AppError> {
+    ) -> Result<Self, VecboostError> {
         let name = secret_name.unwrap_or(DEFAULT_JWT_SECRET_NAME);
 
         let secret = key_store
             .get(&KeyType::JwtSecret, name)
             .await?
             .ok_or_else(|| {
-                AppError::security_error(format!("JWT secret '{}' not found in key store", name))
+                VecboostError::security_error(format!(
+                    "JWT secret '{}' not found in key store",
+                    name
+                ))
             })?;
 
         // 验证密钥强度
@@ -145,7 +147,7 @@ impl JwtManager {
     pub fn with_token_store(
         secret: String,
         token_store: Arc<dyn TokenStore>,
-    ) -> Result<Self, AppError> {
+    ) -> Result<Self, VecboostError> {
         Self::validate_secret(&secret)?;
 
         let encoding_key = Arc::new(EncodingKey::from_secret(secret.as_ref()));
@@ -171,14 +173,14 @@ impl JwtManager {
         self
     }
 
-    pub async fn rotate_secret(&mut self) -> Result<(), AppError> {
+    pub async fn rotate_secret(&mut self) -> Result<(), VecboostError> {
         if let Some(key_store) = &self.key_store {
             let secret_name = DEFAULT_JWT_SECRET_NAME;
             let secret = key_store
                 .get(&KeyType::JwtSecret, secret_name)
                 .await?
                 .ok_or_else(|| {
-                    AppError::security_error(format!(
+                    VecboostError::security_error(format!(
                         "JWT secret '{}' not found in key store",
                         secret_name
                     ))
@@ -188,13 +190,13 @@ impl JwtManager {
             self.decoding_key = Arc::new(DecodingKey::from_secret(secret.value.as_ref()));
             Ok(())
         } else {
-            Err(AppError::security_error(
+            Err(VecboostError::security_error(
                 "Cannot rotate secret: key store not configured".to_string(),
             ))
         }
     }
 
-    pub fn generate_token(&self, user: &User) -> Result<String, AppError> {
+    pub fn generate_token(&self, user: &User) -> Result<String, VecboostError> {
         let now = Utc::now();
         let exp = now + Duration::hours(self.expiration_hours);
         let jti = uuid::Uuid::new_v4().to_string();
@@ -210,11 +212,12 @@ impl JwtManager {
         };
 
         let header = Header::default();
-        encode(&header, &claims, &self.encoding_key)
-            .map_err(|e| AppError::AuthenticationError(format!("Failed to generate token: {}", e)))
+        encode(&header, &claims, &self.encoding_key).map_err(|e| {
+            VecboostError::AuthenticationError(format!("Failed to generate token: {}", e))
+        })
     }
 
-    pub fn generate_refresh_token(&self, user: &User) -> Result<String, AppError> {
+    pub fn generate_refresh_token(&self, user: &User) -> Result<String, VecboostError> {
         let now = Utc::now();
         let exp = now + Duration::hours(self.refresh_token_expiration_hours);
         let jti = uuid::Uuid::new_v4().to_string();
@@ -231,17 +234,17 @@ impl JwtManager {
 
         let header = Header::default();
         encode(&header, &claims, &self.encoding_key).map_err(|e| {
-            AppError::AuthenticationError(format!("Failed to generate refresh token: {}", e))
+            VecboostError::AuthenticationError(format!("Failed to generate refresh token: {}", e))
         })
     }
 
-    pub async fn refresh_token(&self, refresh_token: &str) -> Result<String, AppError> {
+    pub async fn refresh_token(&self, refresh_token: &str) -> Result<String, VecboostError> {
         // 验证 refresh token
         let claims = self.validate_token(refresh_token).await?;
 
         // 检查是否在黑名单中
         if self.token_store.is_blacklisted(&claims.jti).await? {
-            return Err(AppError::AuthenticationError(
+            return Err(VecboostError::AuthenticationError(
                 "Refresh token has been revoked".to_string(),
             ));
         }
@@ -254,7 +257,7 @@ impl JwtManager {
             // 达到最大刷新次数，将令牌加入黑名单
             drop(refresh_counts);
             let _ = self.token_store.add_to_blacklist(&claims.jti).await;
-            return Err(AppError::AuthenticationError(format!(
+            return Err(VecboostError::AuthenticationError(format!(
                 "Refresh token has been used too many times (maximum {} times)",
                 MAX_REFRESH_COUNT
             )));
@@ -278,7 +281,7 @@ impl JwtManager {
         Ok(new_token)
     }
 
-    pub async fn revoke_token(&self, token: &str) -> Result<(), AppError> {
+    pub async fn revoke_token(&self, token: &str) -> Result<(), VecboostError> {
         let claims = self.validate_token(token).await?;
         self.token_store.add_to_blacklist(&claims.jti).await?;
         Ok(())
@@ -313,12 +316,12 @@ impl JwtManager {
         })
     }
 
-    pub async fn validate_token(&self, token: &str) -> Result<Claims, AppError> {
+    pub async fn validate_token(&self, token: &str) -> Result<Claims, VecboostError> {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = true;
 
         let token_data = decode::<Claims>(token, &self.decoding_key, &validation).map_err(|e| {
-            AppError::AuthenticationError(format!("Token validation failed: {}", e))
+            VecboostError::AuthenticationError(format!("Token validation failed: {}", e))
         })?;
 
         // 检查是否在黑名单中
@@ -327,7 +330,7 @@ impl JwtManager {
             .is_blacklisted(&token_data.claims.jti)
             .await?
         {
-            return Err(AppError::AuthenticationError(
+            return Err(VecboostError::AuthenticationError(
                 "Token has been revoked".to_string(),
             ));
         }
@@ -335,7 +338,7 @@ impl JwtManager {
         Ok(token_data.claims)
     }
 
-    pub async fn extract_claims(&self, token: &str) -> Result<Claims, AppError> {
+    pub async fn extract_claims(&self, token: &str) -> Result<Claims, VecboostError> {
         self.validate_token(token).await
     }
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
@@ -24,10 +24,13 @@ async fn test_real_test_engine_basic() {
     let service = EmbeddingService::new(engine, None);
 
     let result = service
-        .process_text(EmbedRequest {
-            text: "Hello, world!".to_string(),
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: "Hello, world!".to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -50,10 +53,13 @@ async fn test_real_test_engine_different_dimensions() {
         let service = EmbeddingService::new(engine, None);
 
         let result = service
-            .process_text(EmbedRequest {
-                text: "Test text".to_string(),
-                normalize: Some(true),
-            })
+            .process_text(
+                EmbedRequest {
+                    text: "Test text".to_string(),
+                    normalize: Some(true),
+                },
+                None,
+            )
             .await
             .unwrap();
 
@@ -70,18 +76,24 @@ async fn test_real_test_engine_determinism() {
     let text = "Deterministic test text";
 
     let result1 = service
-        .process_text(EmbedRequest {
-            text: text.to_string(),
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: text.to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
         .await
         .unwrap();
 
     let result2 = service
-        .process_text(EmbedRequest {
-            text: text.to_string(),
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: text.to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -138,10 +150,13 @@ async fn test_real_test_engine_fallback() {
 
     // 由于没有真实模型，应该使用回退
     let result = service
-        .process_text(EmbedRequest {
-            text: "Fallback test".to_string(),
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: "Fallback test".to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -156,10 +171,13 @@ async fn test_real_test_engine_chinese() {
     let service = EmbeddingService::new(engine, None);
 
     let result = service
-        .process_text(EmbedRequest {
-            text: "人工智能是未来的发展方向".to_string(),
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: "人工智能是未来的发展方向".to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -174,10 +192,13 @@ async fn test_real_test_engine_normalization() {
     let service = EmbeddingService::new(engine, None);
 
     let result = service
-        .process_text(EmbedRequest {
-            text: "Test normalized embedding vector".to_string(),
-            normalize: Some(true),
-        })
+        .process_text(
+            EmbedRequest {
+                text: "Test normalized embedding vector".to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
         .await
         .unwrap();
 
@@ -206,10 +227,13 @@ async fn test_real_test_engine_concurrent() {
         let handle = tokio::spawn(async move {
             let service = EmbeddingService::new(engine, None);
             service
-                .process_text(EmbedRequest {
-                    text,
-                    normalize: Some(true),
-                })
+                .process_text(
+                    EmbedRequest {
+                        text,
+                        normalize: Some(true),
+                    },
+                    None,
+                )
                 .await
         });
         handles.push(handle);
@@ -268,10 +292,13 @@ async fn test_real_test_engine_performance() {
     let start = std::time::Instant::now();
     for text in texts {
         let _ = service
-            .process_text(EmbedRequest {
-                text,
-                normalize: Some(true),
-            })
+            .process_text(
+                EmbedRequest {
+                    text,
+                    normalize: Some(true),
+                },
+                None,
+            )
             .await;
     }
     let elapsed = start.elapsed();

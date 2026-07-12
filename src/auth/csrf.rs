@@ -1,4 +1,4 @@
-// Copyright (c) 2025 VecBoost
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information.
@@ -24,7 +24,7 @@
 //! - Works seamlessly with JWT authentication
 //! - Compatible with CORS policies
 
-use crate::error::AppError;
+use crate::error::VecboostError;
 use axum::http::{HeaderMap, StatusCode, header::ORIGIN};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -155,7 +155,7 @@ impl CsrfToken {
 /// CSRF Token Store trait for different storage backends
 #[async_trait::async_trait]
 pub trait CsrfTokenStorage: Send + Sync {
-    async fn store_token(&self, token: &str) -> Result<(), AppError>;
+    async fn store_token(&self, token: &str) -> Result<(), VecboostError>;
     async fn validate_token(&self, token: &str) -> bool;
     async fn token_count(&self) -> usize;
 }
@@ -182,7 +182,7 @@ impl Default for MemoryCsrfStore {
 
 #[async_trait::async_trait]
 impl CsrfTokenStorage for MemoryCsrfStore {
-    async fn store_token(&self, token: &str) -> Result<(), AppError> {
+    async fn store_token(&self, token: &str) -> Result<(), VecboostError> {
         let mut tokens = self.tokens.write().await;
         tokens.insert(token.to_string());
         Ok(())
@@ -237,24 +237,24 @@ impl RedisCsrfStore {
 #[cfg(feature = "redis")]
 #[async_trait::async_trait]
 impl CsrfTokenStorage for RedisCsrfStore {
-    async fn store_token(&self, token: &str) -> Result<(), AppError> {
+    async fn store_token(&self, token: &str) -> Result<(), VecboostError> {
         let mut conn = self
             .client
-            .get_async_connection()
+            .get_multiplexed_async_connection()
             .await
-            .map_err(|e| AppError::ConfigError(e.to_string()))?;
+            .map_err(|e| VecboostError::ConfigError(e.to_string()))?;
 
         let key = self.get_key(token);
         redis::Cmd::set_ex(&key, "1", self.expiration_secs)
             .query_async::<()>(&mut conn)
             .await
-            .map_err(|e| AppError::ConfigError(e.to_string()))?;
+            .map_err(|e| VecboostError::ConfigError(e.to_string()))?;
 
         Ok(())
     }
 
     async fn validate_token(&self, token: &str) -> bool {
-        let mut conn = match self.client.get_async_connection().await {
+        let mut conn = match self.client.get_multiplexed_async_connection().await {
             Ok(c) => c,
             Err(_) => return false,
         };
@@ -304,7 +304,7 @@ impl CsrfTokenStore {
         expiration_secs: u64,
     ) -> Option<Self> {
         let client = redis::Client::open(redis_url).ok()?;
-        if client.get_async_connection().await.is_ok() {
+        if client.get_multiplexed_async_connection().await.is_ok() {
             let storage = Arc::new(RedisCsrfStore::new(client, key_prefix, expiration_secs));
             Some(Self::with_storage(storage))
         } else {

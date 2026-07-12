@@ -1,4 +1,4 @@
-// Copyright (c) 2025 VecBoost
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information.
@@ -10,7 +10,7 @@
 use crate::domain::openai_embedding::{
     EmbeddingObject, EncodingFormat, OpenAIEmbedRequest, OpenAIEmbedResponse, Usage,
 };
-use crate::{AppState, error::AppError};
+use crate::{AppState, error::VecboostError};
 use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::response::IntoResponse;
@@ -29,15 +29,17 @@ pub async fn openai_embed_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<OpenAIEmbedRequest>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<impl IntoResponse, VecboostError> {
     // Validate input
     if req.input.is_empty() {
-        return Err(AppError::InvalidInput("input cannot be empty".to_string()));
+        return Err(VecboostError::InvalidInput(
+            "input cannot be empty".to_string(),
+        ));
     }
 
     // Validate input array size (OpenAI limit is 2048)
     if req.input.len() > 2048 {
-        return Err(AppError::InvalidInput(
+        return Err(VecboostError::InvalidInput(
             "input array too large (max 2048 items)".to_string(),
         ));
     }
@@ -64,7 +66,7 @@ pub async fn openai_embed_handler(
             .await;
 
         if global_remaining == 0 || ip_remaining == 0 {
-            return Err(AppError::RateLimitExceeded(
+            return Err(VecboostError::RateLimitExceeded(
                 "Rate limit exceeded".to_string(),
             ));
         }

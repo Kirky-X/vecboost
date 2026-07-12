@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 use vecboost::config::model::{EngineType, ModelConfig, Precision};
 use vecboost::engine::{AnyEngine, InferenceEngine};
-use vecboost::error::AppError;
+use vecboost::error::VecboostError;
 
 /// 测试模式配置
 #[derive(Debug, Clone, PartialEq)]
@@ -131,11 +131,11 @@ impl MockEngine {
 
 #[async_trait]
 impl InferenceEngine for MockEngine {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         Ok(self.generate_embedding(text))
     }
 
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
         let embeddings: Vec<Vec<f32>> = texts.iter().map(|t| self.generate_embedding(t)).collect();
         Ok(embeddings)
     }
@@ -148,7 +148,7 @@ impl InferenceEngine for MockEngine {
         false
     }
 
-    async fn try_fallback_to_cpu(&mut self, _config: &ModelConfig) -> Result<(), AppError> {
+    async fn try_fallback_to_cpu(&mut self, _config: &ModelConfig) -> Result<(), VecboostError> {
         Ok(())
     }
 }
@@ -253,7 +253,7 @@ impl Default for RealTestEngine {
 #[async_trait]
 #[allow(clippy::collapsible_if)]
 impl InferenceEngine for RealTestEngine {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         if let Some(ref engine) = self.real_engine
             && !self.use_fallback
         {
@@ -279,7 +279,7 @@ impl InferenceEngine for RealTestEngine {
         Ok(self.mock_engine.generate_embedding(text))
     }
 
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
         if let Some(ref engine) = self.real_engine
             && !self.use_fallback
         {
@@ -335,7 +335,7 @@ impl InferenceEngine for RealTestEngine {
         self.use_fallback
     }
 
-    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), AppError> {
+    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         if self.use_fallback {
             return Ok(()); // 已经使用回退
         }

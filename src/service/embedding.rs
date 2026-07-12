@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
@@ -17,7 +17,7 @@ use crate::domain::{
     SearchResult, SimilarityRequest, SimilarityResponse,
 };
 use crate::engine::{AnyEngine, InferenceEngine};
-use crate::error::AppError;
+use crate::error::VecboostError;
 use crate::model::manager::ModelManager;
 use crate::utils::{
     AggregationMode, DEFAULT_TOP_K, FileValidator, InputValidator, MAX_BATCH_SIZE, MAX_TOP_K,
@@ -191,7 +191,7 @@ impl EmbeddingService {
 
     /// 缓存预热：批量预加载常用文本的向量
     /// 用于在服务启动时预加载热点数据，提高首次请求的响应速度
-    pub async fn warm_up_cache(&self, texts: Vec<String>) -> Result<(), AppError> {
+    pub async fn warm_up_cache(&self, texts: Vec<String>) -> Result<(), VecboostError> {
         if !self.cache.is_enabled() {
             debug!("Cache is disabled, skipping warm-up");
             return Ok(());
@@ -228,9 +228,9 @@ impl EmbeddingService {
         Ok(())
     }
 
-    fn is_oom_error(error: &AppError) -> bool {
+    fn is_oom_error(error: &VecboostError) -> bool {
         match error {
-            AppError::InferenceError(msg) | AppError::OutOfMemory(msg) => {
+            VecboostError::InferenceError(msg) | VecboostError::OutOfMemory(msg) => {
                 let lower_msg = msg.to_lowercase();
                 lower_msg.contains("out of memory")
                     || lower_msg.contains("cuda out of memory")
@@ -244,10 +244,10 @@ impl EmbeddingService {
         }
     }
 
-    async fn handle_oom_fallback<F, Fut, T>(&self, operation: F) -> Result<T, AppError>
+    async fn handle_oom_fallback<F, Fut, T>(&self, operation: F) -> Result<T, VecboostError>
     where
         F: Fn() -> Fut,
-        Fut: std::future::Future<Output = Result<T, AppError>>,
+        Fut: std::future::Future<Output = Result<T, VecboostError>>,
     {
         let mut attempts = 0;
 
@@ -266,7 +266,7 @@ impl EmbeddingService {
 
                     if engine.is_fallback_triggered() {
                         warn!("Fallback already triggered, cannot retry");
-                        return Err(AppError::OutOfMemory(
+                        return Err(VecboostError::OutOfMemory(
                             "Out of memory and fallback already attempted".to_string(),
                         ));
                     }
@@ -290,7 +290,7 @@ impl EmbeddingService {
                                     // 检查是否还有重试次数
                                     if attempts >= MAX_FALLBACK_ATTEMPTS {
                                         warn!("Max fallback attempts reached, aborting");
-                                        return Err(AppError::OutOfMemory(
+                                        return Err(VecboostError::OutOfMemory(
                                             "Max fallback attempts exceeded".to_string(),
                                         ));
                                     }
@@ -298,7 +298,7 @@ impl EmbeddingService {
                                 }
                                 Err(e) => {
                                     warn!("Failed to fallback to CPU: {}", e);
-                                    return Err(AppError::OutOfMemory(format!(
+                                    return Err(VecboostError::OutOfMemory(format!(
                                         "OOM error and fallback failed: {}",
                                         e
                                     )));
@@ -307,7 +307,7 @@ impl EmbeddingService {
                         }
                     }
 
-                    return Err(AppError::OutOfMemory(
+                    return Err(VecboostError::OutOfMemory(
                         "Out of memory and no fallback available".to_string(),
                     ));
                 }
@@ -322,7 +322,7 @@ impl EmbeddingService {
         &self,
         req: EmbedRequest,
         target_dimension: Option<usize>,
-    ) -> Result<EmbedResponse, AppError> {
+    ) -> Result<EmbedResponse, VecboostError> {
         self.validator.validate_text(&req.text)?;
 
         let cache_key = format!("text:{}", req.text);
@@ -330,7 +330,7 @@ impl EmbeddingService {
         let embedding = if self.cache.is_enabled() {
             self.handle_oom_fallback(|| async {
                 self.cache
-                    .get_or_insert::<_, _, AppError>(&cache_key, || async {
+                    .get_or_insert::<_, _, VecboostError>(&cache_key, || async {
                         let embedding = self.engine.read().await.embed(&req.text)?;
                         Ok(embedding)
                     })
@@ -352,7 +352,8 @@ impl EmbeddingService {
                 .as_ref()
                 .and_then(|c| c.expected_dimension)
                 .unwrap_or(1024);
-            validate_dimension(Some(target_dim), max_dim).map_err(|e| AppError::InvalidInput(e))?;
+            validate_dimension(Some(target_dim), max_dim)
+                .map_err(|e| VecboostError::InvalidInput(e))?;
             embedding = truncate_vector(&embedding, target_dim);
         }
 
@@ -370,7 +371,7 @@ impl EmbeddingService {
     pub async fn process_similarity(
         &self,
         req: SimilarityRequest,
-    ) -> Result<SimilarityResponse, AppError> {
+    ) -> Result<SimilarityResponse, VecboostError> {
         self.validator.validate_text(&req.source)?;
         self.validator.validate_text(&req.target)?;
 
@@ -383,7 +384,7 @@ impl EmbeddingService {
         let f1 = async move {
             if cache.is_enabled() {
                 cache
-                    .get_or_insert::<_, _, AppError>(&cache_key_source, || async {
+                    .get_or_insert::<_, _, VecboostError>(&cache_key_source, || async {
                         let embedding = engine.read().await.embed(&req.source)?;
                         Ok(embedding)
                     })
@@ -399,7 +400,7 @@ impl EmbeddingService {
         let f2 = async move {
             if cache.is_enabled() {
                 cache
-                    .get_or_insert::<_, _, AppError>(&cache_key_target, || async {
+                    .get_or_insert::<_, _, VecboostError>(&cache_key_target, || async {
                         let embedding = engine.read().await.embed(&req.target)?;
                         Ok(embedding)
                     })
@@ -422,9 +423,11 @@ impl EmbeddingService {
     }
 
     /// 处理大文件流式向量化 (简单实现：按行平均)
-    pub async fn process_file_stream(&self, path: &Path) -> Result<EmbedResponse, AppError> {
+    pub async fn process_file_stream(&self, path: &Path) -> Result<EmbedResponse, VecboostError> {
         let path_str = path.to_str().ok_or_else(|| {
-            AppError::InvalidInput("Invalid path encoding: path contains invalid UTF-8".to_string())
+            VecboostError::InvalidInput(
+                "Invalid path encoding: path contains invalid UTF-8".to_string(),
+            )
         })?;
         self.validator.validate_file(path_str)?;
 
@@ -446,9 +449,11 @@ impl EmbeddingService {
         &self,
         path: &Path,
         mode: AggregationMode,
-    ) -> Result<EmbeddingOutput, AppError> {
+    ) -> Result<EmbeddingOutput, VecboostError> {
         let path_str = path.to_str().ok_or_else(|| {
-            AppError::InvalidInput("Invalid path encoding: path contains invalid UTF-8".to_string())
+            VecboostError::InvalidInput(
+                "Invalid path encoding: path contains invalid UTF-8".to_string(),
+            )
         })?;
         self.validator.validate_file(path_str)?;
 
@@ -478,7 +483,7 @@ impl EmbeddingService {
         &self,
         reader: BufReader<File>,
         start_time: std::time::Instant,
-    ) -> Result<EmbedResponse, AppError> {
+    ) -> Result<EmbedResponse, VecboostError> {
         let mut total_embedding: Option<Vec<f32>> = None;
         let mut count = 0;
 
@@ -525,7 +530,7 @@ impl EmbeddingService {
                 processing_time_ms: processing_time.as_millis(),
             })
         } else {
-            Err(AppError::InvalidInput("File is empty".to_string()))
+            Err(VecboostError::InvalidInput("File is empty".to_string()))
         }
     }
 
@@ -533,7 +538,7 @@ impl EmbeddingService {
         &self,
         reader: BufReader<File>,
         start_time: std::time::Instant,
-    ) -> Result<EmbeddingOutput, AppError> {
+    ) -> Result<EmbeddingOutput, VecboostError> {
         use std::io::Read;
         let mut content = String::new();
         reader.into_inner().read_to_string(&mut content)?;
@@ -545,7 +550,7 @@ impl EmbeddingService {
             .collect();
 
         if paragraphs.is_empty() {
-            return Err(AppError::InvalidInput(
+            return Err(VecboostError::InvalidInput(
                 "No paragraphs found in file".to_string(),
             ));
         }
@@ -581,7 +586,7 @@ impl EmbeddingService {
     }
 
     /// 获取处理统计信息
-    pub fn get_processing_stats(&self, path: &Path) -> Result<FileProcessingStats, AppError> {
+    pub fn get_processing_stats(&self, path: &Path) -> Result<FileProcessingStats, VecboostError> {
         let start_time = std::time::Instant::now();
         let file = File::open(path)?;
         let reader = BufReader::new(file);
@@ -619,7 +624,10 @@ impl EmbeddingService {
     }
 
     /// 处理 1对N 检索：给定查询文本，在候选文本列表中找到最相似的文本
-    pub async fn process_search(&self, req: SearchRequest) -> Result<SearchResponse, AppError> {
+    pub async fn process_search(
+        &self,
+        req: SearchRequest,
+    ) -> Result<SearchResponse, VecboostError> {
         self.validator
             .validate_search(&req.query, &req.texts, req.top_k)?;
 
@@ -664,7 +672,7 @@ impl EmbeddingService {
         query: &str,
         texts: &[String],
         top_k: Option<usize>,
-    ) -> Result<SearchResponse, AppError> {
+    ) -> Result<SearchResponse, VecboostError> {
         self.validator.validate_search(query, texts, top_k)?;
 
         let top_k = std::cmp::min(top_k.unwrap_or(DEFAULT_TOP_K), MAX_TOP_K);
@@ -732,7 +740,7 @@ impl EmbeddingService {
         &self,
         req: BatchEmbedRequest,
         target_dimension: Option<usize>,
-    ) -> Result<BatchEmbedResponse, AppError> {
+    ) -> Result<BatchEmbedResponse, VecboostError> {
         let start_time = Instant::now();
 
         self.validator.validate_batch(&req.texts)?;
@@ -795,7 +803,7 @@ impl EmbeddingService {
                 // 获取信号量许可，限制并发数
 
                 let _permit = semaphore.acquire().await.map_err(|e| {
-                    AppError::InferenceError(format!("Failed to acquire semaphore: {}", e))
+                    VecboostError::InferenceError(format!("Failed to acquire semaphore: {}", e))
                 })?;
 
                 let mut attempts = 0;
@@ -839,7 +847,7 @@ impl EmbeddingService {
                             if current_engine.is_fallback_triggered() {
                                 warn!("Fallback already triggered, cannot retry");
 
-                                return Err(AppError::OutOfMemory(
+                                return Err(VecboostError::OutOfMemory(
                                     "Out of memory and fallback already attempted".to_string(),
                                 ));
                             }
@@ -866,7 +874,7 @@ impl EmbeddingService {
                                 Err(e) => {
                                     warn!("Failed to fallback to CPU: {}", e);
 
-                                    return Err(AppError::OutOfMemory(format!(
+                                    return Err(VecboostError::OutOfMemory(format!(
                                         "OOM error and fallback failed: {}",
                                         e
                                     )));
@@ -900,7 +908,8 @@ impl EmbeddingService {
                 .as_ref()
                 .and_then(|c| c.expected_dimension)
                 .unwrap_or(1024);
-            validate_dimension(Some(target_dim), max_dim).map_err(|e| AppError::InvalidInput(e))?;
+            validate_dimension(Some(target_dim), max_dim)
+                .map_err(|e| VecboostError::InvalidInput(e))?;
             Some(target_dim)
         } else {
             None
@@ -988,7 +997,7 @@ impl EmbeddingService {
     pub async fn switch_model(
         &mut self,
         req: ModelSwitchRequest,
-    ) -> Result<ModelSwitchResponse, AppError> {
+    ) -> Result<ModelSwitchResponse, VecboostError> {
         let previous_model = self.model_config.as_ref().map(|c| c.name.clone());
 
         tracing::info!(
@@ -1088,7 +1097,7 @@ impl EmbeddingService {
         })
     }
 
-    pub async fn unload_model(&mut self, name: &str) -> Result<(), AppError> {
+    pub async fn unload_model(&mut self, name: &str) -> Result<(), VecboostError> {
         if let Some(ref manager) = self.model_manager {
             manager.unload(name).await?;
             tracing::info!("Model {} unloaded via ModelManager", name);
@@ -1191,11 +1200,11 @@ mod tests {
 
     #[async_trait]
     impl InferenceEngine for TestEngine {
-        fn embed(&self, text: &str) -> Result<Vec<f32>, AppError> {
+        fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
             Ok(self.generate_embedding(text))
         }
 
-        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
             let embeddings: Vec<Vec<f32>> =
                 texts.iter().map(|t| self.generate_embedding(t)).collect();
             Ok(embeddings)
@@ -1209,7 +1218,10 @@ mod tests {
             false
         }
 
-        async fn try_fallback_to_cpu(&mut self, _config: &ModelConfig) -> Result<(), AppError> {
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
             Ok(())
         }
     }
@@ -1446,7 +1458,7 @@ mod tests {
             normalize: Some(true),
         };
 
-        let result: Result<EmbedResponse, AppError> = service.process_text(req, None).await;
+        let result: Result<EmbedResponse, VecboostError> = service.process_text(req, None).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();

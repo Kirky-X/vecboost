@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
@@ -10,12 +10,12 @@ use tokio::sync::{RwLock, oneshot};
 use tracing::{debug, warn};
 
 use crate::domain::EmbedResponse;
-use crate::error::AppError;
+use crate::error::VecboostError;
 
 /// 待处理的响应
 pub struct PendingResponse {
     /// 响应发送器
-    pub tx: oneshot::Sender<Result<EmbedResponse, AppError>>,
+    pub tx: oneshot::Sender<Result<EmbedResponse, VecboostError>>,
     /// 提交时间
     pub submitted_at: Instant,
     /// 超时时间
@@ -54,7 +54,7 @@ impl ResponseChannel {
     pub async fn register(
         &self,
         request_id: String,
-    ) -> oneshot::Receiver<Result<EmbedResponse, AppError>> {
+    ) -> oneshot::Receiver<Result<EmbedResponse, VecboostError>> {
         let (tx, rx) = oneshot::channel();
 
         let pending = PendingResponse {
@@ -74,7 +74,11 @@ impl ResponseChannel {
     }
 
     /// 完成响应
-    pub async fn complete(&self, request_id: String, response: Result<EmbedResponse, AppError>) {
+    pub async fn complete(
+        &self,
+        request_id: String,
+        response: Result<EmbedResponse, VecboostError>,
+    ) {
         let mut pending = self.pending.write().await;
 
         if let Some(pending_response) = pending.remove(&request_id) {

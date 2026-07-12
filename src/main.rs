@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
@@ -9,10 +9,6 @@ use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use vecboost::{
     AppConfig, AppState,
     audit::{AuditConfig, AuditLogger},
-    auth::{
-        CsrfConfig, CsrfTokenStore, JwtManager, UserStore, create_default_admin_user,
-        validate_password_complexity,
-    },
     config::model::{EngineType, ModelConfig},
     engine::AnyEngine,
     pipeline::{
@@ -20,8 +16,16 @@ use vecboost::{
         WorkerManager,
     },
     rate_limit::{MemoryRateLimitStore, RateLimiter},
-    security::{KeyStore, KeyType, SecretKey, SecurityConfig, StorageType, create_key_store},
     service::embedding::EmbeddingService,
+};
+
+#[cfg(feature = "auth")]
+use vecboost::{
+    auth::{
+        CsrfConfig, CsrfTokenStore, JwtManager, UserStore, create_default_admin_user,
+        validate_password_complexity,
+    },
+    security::{KeyStore, KeyType, SecretKey, SecurityConfig, StorageType, create_key_store},
 };
 
 #[cfg(feature = "grpc")]
@@ -87,6 +91,7 @@ async fn main() -> anyhow::Result<()> {
     // 创建限流器
     let rate_limiter = Arc::new(RateLimiter::new(Arc::new(MemoryRateLimitStore::new())));
 
+    #[cfg(feature = "auth")]
     let (jwt_manager, user_store): (Option<Arc<JwtManager>>, Option<Arc<UserStore>>) = if config
         .auth
         .enabled
@@ -170,29 +175,32 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Initialize CSRF protection
-    let (csrf_config, csrf_token_store): (Option<Arc<CsrfConfig>>, Option<Arc<CsrfTokenStore>>) =
-        if config.auth.csrf.enabled {
-            tracing::info!("CSRF protection enabled");
+    #[cfg(feature = "auth")]
+    let (csrf_config, csrf_token_store): (
+        Option<Arc<CsrfConfig>>,
+        Option<Arc<CsrfTokenStore>>,
+    ) = if config.auth.csrf.enabled {
+        tracing::info!("CSRF protection enabled");
 
-            let csrf_config =
-                CsrfConfig::new(config.auth.csrf.allowed_origins.clone().unwrap_or_default())
-                    .with_token_validation(config.auth.csrf.token_validation_enabled)
-                    .with_token_expiration(config.auth.csrf.token_expiration_secs.unwrap_or(3600))
-                    .with_allow_same_origin(config.auth.csrf.allow_same_origin);
+        let csrf_config =
+            CsrfConfig::new(config.auth.csrf.allowed_origins.clone().unwrap_or_default())
+                .with_token_validation(config.auth.csrf.token_validation_enabled)
+                .with_token_expiration(config.auth.csrf.token_expiration_secs.unwrap_or(3600))
+                .with_allow_same_origin(config.auth.csrf.allow_same_origin);
 
-            let csrf_token_store = if config.auth.csrf.token_validation_enabled {
-                tracing::info!("CSRF token validation enabled");
-                Some(Arc::new(CsrfTokenStore::new()))
-            } else {
-                tracing::info!("CSRF token validation disabled (using Origin validation only)");
-                None
-            };
-
-            (Some(Arc::new(csrf_config)), csrf_token_store)
+        let csrf_token_store = if config.auth.csrf.token_validation_enabled {
+            tracing::info!("CSRF token validation enabled");
+            Some(Arc::new(CsrfTokenStore::new()))
         } else {
-            tracing::info!("CSRF protection disabled");
-            (None, None)
+            tracing::info!("CSRF token validation disabled (using Origin validation only)");
+            None
         };
+
+        (Some(Arc::new(csrf_config)), csrf_token_store)
+    } else {
+        tracing::info!("CSRF protection disabled");
+        (None, None)
+    };
 
     // Initialize audit logging
     let audit_logger = if config.audit.enabled {
@@ -279,12 +287,35 @@ async fn main() -> anyhow::Result<()> {
             )
         };
 
+    // ---------------------------------------------------------------------------
+    // Module Registry (trait-kit) — 未来重构基础
+    //
+    // trait-kit 用于管理模块依赖关系和能力构建。由于 Kit 基于 RefCell 且 !Sync，
+    // 不能放入 AppState（AppState 需要 Send + Sync）。
+    //
+    // 未来重构方向：在启动时用 Kit 构建各模块，提取能力填充 AppState 字段：
+    //   let mut kit = trait_kit::Kit::new();
+    //   kit.set_config(service.clone());
+    //   kit.set_config(rate_limiter.clone());
+    //   kit.register::<vecboost::module_registry::EmbeddingModule>().unwrap();
+    //   kit.register::<vecboost::module_registry::RateLimitModule>().unwrap();
+    //   let kit = kit.build().unwrap();
+    //   let service = kit.require::<vecboost::module_registry::EmbeddingModule>().unwrap();
+    //   let rate_limiter = kit.require::<vecboost::module_registry::RateLimitModule>().unwrap();
+    //
+    // 当前保持现有 AppState 结构不变，module_registry 作为未来重构的基础。
+    // ---------------------------------------------------------------------------
+
     let app_state = AppState {
         service,
+        #[cfg(feature = "auth")]
         jwt_manager: jwt_manager.clone(),
+        #[cfg(feature = "auth")]
         user_store: user_store.clone(),
         auth_enabled: config.auth.enabled,
+        #[cfg(feature = "auth")]
         csrf_config,
+        #[cfg(feature = "auth")]
         csrf_token_store,
         metrics_collector: Some(Arc::new(vecboost::metrics::InferenceCollector::new())),
         prometheus_collector: Some(Arc::new(
@@ -344,7 +375,7 @@ async fn main() -> anyhow::Result<()> {
             .parse()
             .map_err(|e| anyhow::anyhow!("Invalid gRPC address: {}", e))?;
 
-        let grpc_server = GrpcServer::new(grpc_addr, grpc_service);
+        let grpc_server = GrpcServer::new(grpc_addr, _grpc_service);
 
         tokio::spawn(async move {
             if let Err(e) = grpc_server.run().await {

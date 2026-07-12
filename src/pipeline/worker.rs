@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
@@ -13,7 +13,7 @@ use super::config::WorkerConfig;
 use super::queue::PriorityRequestQueue;
 use super::response_channel::ResponseChannel;
 use crate::domain::EmbedResponse;
-use crate::error::AppError;
+use crate::error::VecboostError;
 use crate::service::embedding::EmbeddingService;
 
 /// Worker 任务
@@ -127,7 +127,7 @@ impl WorkerManager {
     }
 
     /// 启动 Worker Manager
-    pub async fn start(&self) -> Result<(), AppError> {
+    pub async fn start(&self) -> Result<(), VecboostError> {
         info!(
             "Starting WorkerManager with min={} max={}",
             self.min_workers, self.max_workers
@@ -325,7 +325,7 @@ impl WorkerManager {
     async fn process_request(
         request: &super::queue::QueuedRequest,
         embedding_service: &Arc<RwLock<EmbeddingService>>,
-    ) -> Result<EmbedResponse, AppError> {
+    ) -> Result<EmbedResponse, VecboostError> {
         // 实际调用 EmbeddingService
         let embed_request = &request.embed_request;
 

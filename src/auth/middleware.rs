@@ -1,12 +1,10 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
 use crate::audit::AuditLogger;
-use crate::auth::csrf::{CsrfConfig, CsrfProtection, CsrfTokenStore, OriginValidator};
-use crate::auth::jwt::JwtManager;
-use crate::auth::types::User;
+use crate::auth::{CsrfConfig, CsrfProtection, CsrfTokenStore, JwtManager, OriginValidator, User};
 use axum::{
     extract::{Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode},

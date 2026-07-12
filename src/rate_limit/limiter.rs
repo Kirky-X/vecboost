@@ -1,4 +1,4 @@
-// Copyright (c) 2025 VecBoost
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information.
@@ -7,8 +7,7 @@
 //!
 //! 提供多维度限流功能，支持滑动窗口和令牌桶两种算法
 
-use crate::rate_limit::store::RateLimitStore;
-use crate::rate_limit::token_bucket::{TokenBucketConfig, TokenBucketStore};
+use crate::rate_limit::{RateLimitStore, TokenBucketConfig, TokenBucketStore};
 use std::sync::Arc;
 
 /// 限流算法类型

@@ -1,9 +1,9 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use crate::error::AppError;
+use crate::error::VecboostError;
 use std::future::Future;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -64,14 +64,14 @@ impl RetryConfig {
 }
 
 pub trait Retryable<T> {
-    type Future: Future<Output = Result<T, AppError>>;
+    type Future: Future<Output = Result<T, VecboostError>>;
     fn call(&self) -> Self::Future;
 }
 
 impl<F, T, Fut> Retryable<T> for F
 where
     F: Fn() -> Fut,
-    Fut: Future<Output = Result<T, AppError>>,
+    Fut: Future<Output = Result<T, VecboostError>>,
 {
     type Future = Fut;
     fn call(&self) -> Self::Future {
@@ -82,9 +82,9 @@ where
 pub async fn with_retry<T, R: Retryable<T>>(
     retryable: &R,
     config: Option<RetryConfig>,
-) -> Result<T, AppError> {
+) -> Result<T, VecboostError> {
     let config = config.unwrap_or_default();
-    let mut last_error: Option<AppError> = None;
+    let mut last_error: Option<VecboostError> = None;
     let start_time = Instant::now();
 
     for attempt in 0..=config.max_retries {
@@ -133,10 +133,11 @@ pub async fn with_retry<T, R: Retryable<T>>(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| AppError::inference_error("Unknown retry error".to_string())))
+    Err(last_error
+        .unwrap_or_else(|| VecboostError::inference_error("Unknown retry error".to_string())))
 }
 
-fn is_retryable_error(error: &AppError, config: &RetryConfig) -> bool {
+fn is_retryable_error(error: &VecboostError, config: &RetryConfig) -> bool {
     let error_msg = error.to_string();
 
     for pattern in &config.retryable_errors {
@@ -147,7 +148,7 @@ fn is_retryable_error(error: &AppError, config: &RetryConfig) -> bool {
 
     matches!(
         error,
-        AppError::InferenceError(_) | AppError::TokenizationError(_)
+        VecboostError::InferenceError(_) | VecboostError::TokenizationError(_)
     )
 }
 

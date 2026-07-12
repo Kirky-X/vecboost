@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
@@ -13,7 +13,7 @@ use super::config::{BufferPoolConfig, CudaPoolConfig, ModelWeightPoolConfig, Ten
 use super::{
     BufferPool, BufferPoolStats, CudaMemoryPool, ModelPoolStats, ModelWeightPool, TensorPool,
 };
-use crate::error::AppError;
+use crate::error::VecboostError;
 
 /// 内存池管理器
 ///
@@ -65,7 +65,7 @@ impl MemoryPoolManager {
     pub async fn initialize_tensor_pool(
         &mut self,
         device: candle_core::Device,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), VecboostError> {
         if !self.config.tensor_pool.enabled {
             info!("Tensor pool disabled, skipping initialization");
             return Ok(());
@@ -86,7 +86,7 @@ impl MemoryPoolManager {
     }
 
     /// 初始化 CUDA 池
-    pub async fn initialize_cuda_pool(&mut self, device_id: i32) -> Result<(), AppError> {
+    pub async fn initialize_cuda_pool(&mut self, device_id: i32) -> Result<(), VecboostError> {
         if !self.config.cuda_pool.enabled {
             info!("CUDA pool disabled, skipping initialization");
             return Ok(());
@@ -94,8 +94,9 @@ impl MemoryPoolManager {
 
         info!("Initializing CUDA pool for device {}...", device_id);
 
-        let pool = CudaMemoryPool::new(device_id, self.config.cuda_pool.clone())
-            .map_err(|e| AppError::ConfigError(format!("Failed to initialize CUDA pool: {}", e)))?;
+        let pool = CudaMemoryPool::new(device_id, self.config.cuda_pool.clone()).map_err(|e| {
+            VecboostError::ConfigError(format!("Failed to initialize CUDA pool: {}", e))
+        })?;
 
         self.cuda_pool = Some(Arc::new(RwLock::new(pool)));
 
@@ -109,19 +110,19 @@ impl MemoryPoolManager {
         &mut self,
         device: Option<candle_core::Device>,
         cuda_device_id: Option<i32>,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), VecboostError> {
         info!("Initializing all memory pools...");
 
         // 先验证所有必需的参数
 
         if self.config.tensor_pool.enabled && device.is_none() {
-            return Err(AppError::ConfigError(
+            return Err(VecboostError::ConfigError(
                 "Tensor pool requires device but none provided".to_string(),
             ));
         }
 
         if self.config.cuda_pool.enabled && cuda_device_id.is_none() {
-            return Err(AppError::ConfigError(
+            return Err(VecboostError::ConfigError(
                 "CUDA pool requires device_id but none provided".to_string(),
             ));
         }
@@ -167,7 +168,7 @@ impl MemoryPoolManager {
 
                     self.clear_all().await;
 
-                    return Err(AppError::ConfigError(format!(
+                    return Err(VecboostError::ConfigError(format!(
                         "Failed to initialize tensor pool: {}. Rollback completed.",
                         e
                     )));
@@ -192,7 +193,7 @@ impl MemoryPoolManager {
 
                     self.clear_all().await;
 
-                    return Err(AppError::ConfigError(format!(
+                    return Err(VecboostError::ConfigError(format!(
                         "Failed to initialize CUDA pool: {}. Rollback completed.",
                         e
                     )));

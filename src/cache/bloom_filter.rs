@@ -1,4 +1,4 @@
-// Copyright (c) 2025 VecBoost
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information.
@@ -69,7 +69,6 @@ impl BloomFilter {
     fn optimal_m(n: usize, p: f64) -> usize {
         // m = -n * ln(p) / (ln(2)^2)
         let n = n as f64;
-        let p = p;
         let ln2_sq = std::f64::consts::LN_2 * std::f64::consts::LN_2;
         (-n * p.ln() / ln2_sq).ceil() as usize
     }

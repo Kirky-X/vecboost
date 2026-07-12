@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
@@ -234,7 +234,7 @@ impl AmdDeviceManager {
         }
     }
 
-    pub async fn initialize(&self) -> Result<(), crate::error::AppError> {
+    pub async fn initialize(&self) -> Result<(), crate::error::VecboostError> {
         if self.initialized.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -378,7 +378,7 @@ impl AmdDeviceManager {
     }
 }
 
-pub async fn create_amd_device_manager() -> Result<AmdDeviceManager, crate::error::AppError> {
+pub async fn create_amd_device_manager() -> Result<AmdDeviceManager, crate::error::VecboostError> {
     let manager = AmdDeviceManager::new();
     manager.initialize().await?;
     Ok(manager)

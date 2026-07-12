@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
 
 use super::config::TensorPoolConfig;
-use crate::error::AppError;
+use crate::error::VecboostError;
 
 /// 池统计信息
 #[derive(Debug, Clone, Default)]
@@ -68,7 +68,7 @@ impl TensorPool {
     }
 
     /// 预分配张量
-    pub fn preallocate(&mut self) -> Result<(), AppError> {
+    pub fn preallocate(&mut self) -> Result<(), VecboostError> {
         info!("Preallocating tensors...");
 
         // 预分配常用的批量大小
@@ -93,14 +93,17 @@ impl TensorPool {
 
                 for _ in 0..pool_size {
                     // 先创建张量
-                    let tensor_result: Result<Tensor, AppError> = {
+                    let tensor_result: Result<Tensor, VecboostError> = {
                         let size = batch_size * seq_len;
                         let data = vec![0i64; size];
 
                         let tensor = Tensor::new(data, &self.device)
                             .and_then(|t| t.reshape(&[batch_size, seq_len]))
                             .map_err(|e| {
-                                AppError::InferenceError(format!("Failed to create tensor: {}", e))
+                                VecboostError::InferenceError(format!(
+                                    "Failed to create tensor: {}",
+                                    e
+                                ))
                             })?;
 
                         // 更新内存统计
@@ -137,17 +140,17 @@ impl TensorPool {
     }
 
     /// 获取张量
-    pub fn acquire(&mut self, batch_size: usize, seq_len: usize) -> Result<Tensor, AppError> {
+    pub fn acquire(&mut self, batch_size: usize, seq_len: usize) -> Result<Tensor, VecboostError> {
         // 验证参数
         if batch_size > self.max_batch_size {
-            return Err(AppError::InvalidInput(format!(
+            return Err(VecboostError::InvalidInput(format!(
                 "Batch size {} exceeds maximum {}",
                 batch_size, self.max_batch_size
             )));
         }
 
         if seq_len > self.max_sequence_length {
-            return Err(AppError::InvalidInput(format!(
+            return Err(VecboostError::InvalidInput(format!(
                 "Sequence length {} exceeds maximum {}",
                 seq_len, self.max_sequence_length
             )));
@@ -210,14 +213,16 @@ impl TensorPool {
     }
 
     /// 创建新张量
-    fn create_tensor(&self, batch_size: usize, seq_len: usize) -> Result<Tensor, AppError> {
+    fn create_tensor(&self, batch_size: usize, seq_len: usize) -> Result<Tensor, VecboostError> {
         let size = batch_size * seq_len;
         let data = vec![0i64; size];
 
         let tensor = Tensor::new(data, &self.device)
-            .map_err(|e| AppError::InferenceError(format!("Failed to create tensor: {}", e)))?
+            .map_err(|e| VecboostError::InferenceError(format!("Failed to create tensor: {}", e)))?
             .reshape(&[batch_size, seq_len])
-            .map_err(|e| AppError::InferenceError(format!("Failed to reshape tensor: {}", e)))?;
+            .map_err(|e| {
+                VecboostError::InferenceError(format!("Failed to reshape tensor: {}", e))
+            })?;
 
         // 更新内存统计
         let tensor_size = (batch_size * seq_len * 8) as u64; // i64 = 8 bytes

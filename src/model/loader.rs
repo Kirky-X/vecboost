@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
@@ -6,7 +6,7 @@
 #![allow(unused)]
 
 use crate::config::model::{EngineType, ModelConfig};
-use crate::error::AppError;
+use crate::error::VecboostError;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,8 +14,8 @@ use tracing::info;
 
 #[async_trait]
 pub trait ModelLoader: Send + Sync {
-    async fn load(&self, config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, AppError>;
-    async fn get_model_path(&self, config: &ModelConfig) -> Result<PathBuf, AppError>;
+    async fn load(&self, config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, VecboostError>;
+    async fn get_model_path(&self, config: &ModelConfig) -> Result<PathBuf, VecboostError>;
     async fn is_model_cached(&self, config: &ModelConfig) -> bool;
 }
 
@@ -23,7 +23,7 @@ pub trait LoadedModel: Send + Sync {
     fn name(&self) -> &str;
     fn path(&self) -> &Path;
     fn engine_type(&self) -> EngineType;
-    fn reload(&self) -> Result<(), AppError>;
+    fn reload(&self) -> Result<(), VecboostError>;
 }
 
 struct CandleModel {
@@ -50,7 +50,7 @@ impl LoadedModel for CandleModel {
         EngineType::Candle
     }
 
-    fn reload(&self) -> Result<(), AppError> {
+    fn reload(&self) -> Result<(), VecboostError> {
         info!("Reloading Candle model from: {}", self.path.display());
         Ok(())
     }
@@ -76,7 +76,7 @@ impl LoadedModel for OnnxModel {
         }
     }
 
-    fn reload(&self) -> Result<(), AppError> {
+    fn reload(&self) -> Result<(), VecboostError> {
         info!("Reloading ONNX model from: {}", self.path.display());
         Ok(())
     }
@@ -94,9 +94,9 @@ impl LocalModelLoader {
 
 #[async_trait]
 impl ModelLoader for LocalModelLoader {
-    async fn load(&self, config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, AppError> {
+    async fn load(&self, config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, VecboostError> {
         if !config.model_path.exists() {
-            return Err(AppError::NotFound(format!(
+            return Err(VecboostError::NotFound(format!(
                 "Model not found at: {}",
                 config.model_path.display()
             )));
@@ -117,7 +117,7 @@ impl ModelLoader for LocalModelLoader {
         Ok(model)
     }
 
-    async fn get_model_path(&self, config: &ModelConfig) -> Result<PathBuf, AppError> {
+    async fn get_model_path(&self, config: &ModelConfig) -> Result<PathBuf, VecboostError> {
         if config.model_path.exists() {
             return Ok(config.model_path.clone());
         }
@@ -127,7 +127,7 @@ impl ModelLoader for LocalModelLoader {
             return Ok(local_path);
         }
 
-        Err(AppError::NotFound(format!(
+        Err(VecboostError::NotFound(format!(
             "Model not found: {} (checked: {} and {})",
             config.name,
             config.model_path.display(),

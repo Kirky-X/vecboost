@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Kirky.X
+// Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
@@ -57,7 +57,7 @@ fn sanitize_error_message(msg: &str) -> String {
 }
 
 #[derive(Error, Debug, Clone)]
-pub enum AppError {
+pub enum VecboostError {
     #[error("Config error: {0}")]
     ConfigError(String),
 
@@ -107,79 +107,79 @@ pub enum AppError {
     InternalError(String),
 }
 
-impl AppError {
+impl VecboostError {
     pub fn config_error(message: String) -> Self {
-        AppError::ConfigError(message)
+        VecboostError::ConfigError(message)
     }
 
     pub fn model_load_error(message: String) -> Self {
-        AppError::ModelLoadError(message)
+        VecboostError::ModelLoadError(message)
     }
 
     pub fn model_file_corrupted(message: String) -> Self {
-        AppError::ModelFileCorrupted(message)
+        VecboostError::ModelFileCorrupted(message)
     }
 
     pub fn model_integrity_error(message: String) -> Self {
-        AppError::ModelIntegrityError(message)
+        VecboostError::ModelIntegrityError(message)
     }
 
     pub fn tokenization_error(message: String) -> Self {
-        AppError::TokenizationError(message)
+        VecboostError::TokenizationError(message)
     }
 
     pub fn inference_error(message: String) -> Self {
-        AppError::InferenceError(message)
+        VecboostError::InferenceError(message)
     }
 
     pub fn invalid_input(message: String) -> Self {
-        AppError::InvalidInput(message)
+        VecboostError::InvalidInput(message)
     }
 
     pub fn not_found(message: String) -> Self {
-        AppError::NotFound(message)
+        VecboostError::NotFound(message)
     }
 
     pub fn model_not_loaded(message: String) -> Self {
-        AppError::ModelNotLoaded(message)
+        VecboostError::ModelNotLoaded(message)
     }
 
     pub fn authentication_error(message: String) -> Self {
-        AppError::AuthenticationError(message)
+        VecboostError::AuthenticationError(message)
     }
 
     pub fn security_error(message: String) -> Self {
-        AppError::SecurityError(message)
+        VecboostError::SecurityError(message)
     }
 
     pub fn io_error(message: String) -> Self {
-        AppError::IoError(message)
+        VecboostError::IoError(message)
     }
 
     pub fn validation_error(message: String) -> Self {
-        AppError::ValidationError(message)
+        VecboostError::ValidationError(message)
     }
 }
 
-impl IntoResponse for AppError {
+impl IntoResponse for VecboostError {
     fn into_response(self) -> Response {
         let status = match self {
-            AppError::ConfigError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            AppError::ModelLoadError(_) => StatusCode::FAILED_DEPENDENCY,
-            AppError::ModelFileCorrupted(_) => StatusCode::FAILED_DEPENDENCY,
-            AppError::ModelIntegrityError(_) => StatusCode::FAILED_DEPENDENCY,
-            AppError::TokenizationError(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            AppError::InferenceError(_) => StatusCode::SERVICE_UNAVAILABLE,
-            AppError::OutOfMemory(_) => StatusCode::INSUFFICIENT_STORAGE,
-            AppError::InvalidInput(_) => StatusCode::BAD_REQUEST,
-            AppError::NotFound(_) => StatusCode::NOT_FOUND,
-            AppError::ModelNotLoaded(_) => StatusCode::FAILED_DEPENDENCY,
-            AppError::AuthenticationError(_) => StatusCode::UNAUTHORIZED,
-            AppError::SecurityError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            AppError::IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            AppError::ValidationError(_) => StatusCode::BAD_REQUEST,
-            AppError::RateLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
-            AppError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            VecboostError::ConfigError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            VecboostError::ModelLoadError(_) => StatusCode::FAILED_DEPENDENCY,
+            VecboostError::ModelFileCorrupted(_) => StatusCode::FAILED_DEPENDENCY,
+            VecboostError::ModelIntegrityError(_) => StatusCode::FAILED_DEPENDENCY,
+            VecboostError::TokenizationError(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            VecboostError::InferenceError(_) => StatusCode::SERVICE_UNAVAILABLE,
+            VecboostError::OutOfMemory(_) => StatusCode::INSUFFICIENT_STORAGE,
+            VecboostError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+            VecboostError::NotFound(_) => StatusCode::NOT_FOUND,
+            VecboostError::ModelNotLoaded(_) => StatusCode::FAILED_DEPENDENCY,
+            VecboostError::AuthenticationError(_) => StatusCode::UNAUTHORIZED,
+            VecboostError::SecurityError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            VecboostError::IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            VecboostError::ValidationError(_) => StatusCode::BAD_REQUEST,
+            VecboostError::RateLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
+            VecboostError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         let sanitized_message = sanitize_error_message(&self.to_string());
@@ -193,20 +193,25 @@ impl IntoResponse for AppError {
     }
 }
 
-impl From<std::io::Error> for AppError {
+impl From<std::io::Error> for VecboostError {
     fn from(e: std::io::Error) -> Self {
-        AppError::inference_error(e.to_string())
+        VecboostError::inference_error(e.to_string())
     }
 }
 
-impl From<candle_core::Error> for AppError {
+impl From<candle_core::Error> for VecboostError {
     fn from(e: candle_core::Error) -> Self {
-        AppError::inference_error(e.to_string())
+        VecboostError::inference_error(e.to_string())
     }
 }
 
-impl From<tokio::task::JoinError> for AppError {
+impl From<tokio::task::JoinError> for VecboostError {
     fn from(e: tokio::task::JoinError) -> Self {
-        AppError::inference_error(e.to_string())
+        VecboostError::inference_error(e.to_string())
     }
 }
+
+/// Deprecated alias for backward compatibility.
+/// Use [`VecboostError`] instead.
+#[deprecated(note = "Use VecboostError instead")]
+pub type AppError = VecboostError;

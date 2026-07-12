@@ -2,113 +2,113 @@
 
 <img src="image/vecboost.png" alt="VecBoost Logo" width="200"/>
 
-[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![Version 0.1.2](https://img.shields.io/badge/Version-0.1.2-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rustc 1.75+](https://img.shields.io/badge/Rustc-1.75+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
+[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![Version 0.2.0](https://img.shields.io/badge/Version-0.2.0-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rustc 1.75+](https://img.shields.io/badge/Rustc-1.75+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
 
-*A high-performance, production-ready embedding vector service written in Rust. VecBoost provides efficient text vectorization with support for multiple inference engines, GPU acceleration, and enterprise-grade features.*
+*高性能、生产级嵌入向量服务，使用 Rust 编写。VecBoost 提供高效的文本向量化服务，支持多种推理引擎、GPU 加速和企业级功能。*
 
 </div>
 
 ---
 
-## ✨ Core Features
+## ✨ 核心功能
 
-| Category | Features |
-|----------|----------|
-| **🚀 Performance** | Optimized Rust codebase with batch processing and concurrent request handling |
-| **🔧 Multi-Engine** | Support for Candle (native Rust) and ONNX Runtime inference engines |
-| **🎮 GPU Support** | Native CUDA (NVIDIA), Metal (Apple Silicon), and ROCm (AMD) acceleration |
-| **📊 Smart Caching** | Multi-tier caching with LRU, LFU, ARC, and KV cache strategies |
-| **🔐 Enterprise Security** | JWT authentication, CSRF protection, role-based access control, and audit logging |
-| **⚡ Rate Limiting** | Configurable rate limiting with token bucket algorithm (global/IP/user/API key) |
-| **📈 Priority Queue** | Request prioritization with configurable priority weights and weighted fair queuing |
-| **🌐 Dual APIs** | gRPC and HTTP/REST interfaces with OpenAPI/Swagger documentation |
-| **📦 Cloud Ready** | Production deployment configurations for Kubernetes, Docker, and cloud platforms |
-| **📈 Observability** | Prometheus metrics, health checks, structured logging, and Grafana dashboards |
-| **🧊 Matryoshka Support** | Dynamic dimension reduction for smaller, faster embeddings (OpenAI compatible) |
+| 分类 | 功能特性 |
+|------|----------|
+| **🚀 高性能** | 优化的 Rust 代码库，支持批处理和并发请求处理 |
+| **🔧 多引擎支持** | Candle（原生 Rust）和 ONNX Runtime 推理引擎 |
+| **🎮 GPU 加速** | NVIDIA CUDA、Apple Metal 和 AMD ROCm 原生支持 |
+| **📊 智能缓存** | 多层缓存策略（LRU、LFU、ARC、KV） |
+| **🔐 企业级安全** | JWT 认证、CSRF 保护、基于角色的访问控制和审计日志 |
+| **⚡ 速率限制** | 可配置的令牌桶算法速率限制（全局/IP/用户/API 密钥） |
+| **📈 优先级队列** | 可配置优先级的请求队列和加权公平调度 |
+| **🌐 双 API 接口** | gRPC 和 HTTP/REST 接口，支持 OpenAPI/Swagger 文档 |
+| **📦 云原生部署** | 生产环境 Kubernetes、Docker 和云平台部署配置 |
+| **📈 可观测性** | Prometheus 指标、健康检查、结构化日志和 Grafana 仪表板 |
+| **🧊 Matryoshka 支持** | 动态维度约简，支持更小更快的嵌入向量（OpenAI 兼容） |
 
-> **💡 Quick Start**: Get up and running in 2 minutes! [See Quick Start](#-quick-start)
+> **💡 快速上手**: 2 分钟内启动服务！[查看快速开始](#-快速开始)
 
-## 🚀 Quick Start
+## 🚀 快速开始
 
-### 📋 Prerequisites
+### 📋 前置条件
 
-| Requirement | Version | Description |
-|-------------|---------|-------------|
-| **Rust** | 1.75+ | Edition 2024 required |
-| **Cargo** | 1.75+ | Comes with Rust |
-| **CUDA Toolkit** | 12.x | Optional, for NVIDIA GPU support |
-| **Metal SDK** | Latest | Optional, for Apple Silicon GPU |
+| 依赖项 | 版本 | 说明 |
+|--------|------|------|
+| **Rust** | 1.75+ | 需要 2024 版 |
+| **Cargo** | 1.75+ | 随 Rust 附带 |
+| **CUDA Toolkit** | 12.x | 可选，NVIDIA GPU 支持 |
+| **Metal SDK** | 最新版 | 可选，Apple Silicon GPU 支持 |
 
-> **💡 Tip**: Run `rustc --version` to verify your Rust installation.
+> **💡 提示**: 运行 `rustc --version` 验证 Rust 安装。
 
-### 🔧 Installation
+### 🔧 安装
 
 ```bash
-# 1. Clone the repository
+# 1. 克隆仓库
 git clone https://github.com/Kirky-X/vecboost.git
 cd vecboost
 
-# 2. Build with default features (CPU only)
+# 2. 默认构建（仅 CPU）
 cargo build --release
 
-# 3. Build with GPU support
+# 3. 构建 GPU 支持
 #    Linux (CUDA):
 cargo build --release --features cuda
 
 #    macOS (Metal):
 cargo build --release --features metal
 
-# 4. Build with all features enabled
+# 4. 构建全部功能
 cargo build --release --features cuda,onnx,grpc,auth,redis
 ```
 
-### ⚙️ Configuration
+### ⚙️ 配置
 
 ```bash
-# Copy and customize the configuration
+# 复制并自定义配置
 cp config.toml config_custom.toml
-# Edit config_custom.toml with your settings
+# 编辑 config_custom.toml
 ```
 
-### ▶️ Running
+### ▶️ 运行
 
 ```bash
-# Run with default configuration
+# 使用默认配置运行
 ./target/release/vecboost
 
-# Run with custom configuration
+# 使用自定义配置
 ./target/release/vecboost --config config_custom.toml
 ```
 
-> **✅ Success**: The service will start on `http://localhost:9002` by default.
+> **✅ 成功**: 服务默认在 `http://localhost:9002` 启动。
 
 ### 🐳 Docker
 
 ```bash
-# Build the image
+# 构建镜像
 docker build -t vecboost:latest .
 
-# Run the container
+# 运行容器
 docker run -p 9002:9002 -p 50051:50051 \
   -v $(pwd)/config.toml:/app/config.toml \
   -v $(pwd)/models:/app/models \
   vecboost:latest
 ```
 
-## 📖 Documentation
+## 📖 文档
 
-| Document | Description | Link |
-|----------|-------------|------|
-| **📋 User Guide** | Detailed usage instructions, configuration, and deployment | [USER_GUIDE.md](USER_GUIDE.md) |
-| **🔌 API Reference** | Complete REST API and gRPC documentation | [API_REFERENCE.md](API_REFERENCE.md) |
-| **🏗️ Architecture** | System design, components, and data flow | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| **🤝 Contributing** | Contribution guidelines and best practices | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) |
+| 文档 | 说明 | 链接 |
+|------|------|------|
+| **📋 用户指南** | 详细使用说明、配置和部署指南 | [USER_GUIDE_zh.md](USER_GUIDE_zh.md) |
+| **🔌 API 参考** | 完整的 REST API 和 gRPC 文档 | [API_REFERENCE_zh.md](API_REFERENCE_zh.md) |
+| **🏗️ 架构设计** | 系统设计、组件和数据流 | [ARCHITECTURE_zh.md](ARCHITECTURE_zh.md) |
+| **🤝 贡献指南** | 贡献代码指南和最佳实践 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) |
 
-## 🔌 API Usage
+## 🔌 API 使用
 
 ### 🌐 HTTP REST API
 
-**Generate embeddings via HTTP:**
+**通过 HTTP 生成嵌入向量：**
 
 ```bash
 curl -X POST http://localhost:9002/api/v1/embed \
@@ -116,7 +116,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
   -d '{"text": "Hello, world!"}'
 ```
 
-**Response:**
+**响应：**
 
 ```json
 {
@@ -128,33 +128,33 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 ### 📡 gRPC API
 
-The service exposes a gRPC interface on port `50051` (configurable):
+服务在 `50051` 端口（可配置）暴露 gRPC 接口：
 
 ```protobuf
 service EmbeddingService {
-  // Single text embedding
+  // 单文本嵌入
   rpc Embed(EmbedRequest) returns (EmbedResponse);
 
-  // Batch text embeddings
+  // 批量文本嵌入
   rpc EmbedBatch(BatchEmbedRequest) returns (BatchEmbedResponse);
 
-  // Compute similarity between vectors
+  // 计算向量相似度
   rpc ComputeSimilarity(SimilarityRequest) returns (SimilarityResponse);
 }
 ```
 
-### 📚 OpenAPI Documentation
+### 📚 OpenAPI 文档
 
-Access interactive API documentation:
+访问交互式 API 文档：
 
-| Tool | URL |
+| 工具 | URL |
 |------|-----|
 | **Swagger UI** | `http://localhost:9002/swagger-ui/` |
 | **ReDoc** | `http://localhost:9002/redoc/` |
 
-### 🌐 OpenAI-Compatible API
+### 🌐 OpenAI 兼容 API
 
-VecBoost provides an OpenAI-compatible embeddings API endpoint:
+VecBoost 提供 OpenAI 兼容的 embeddings API 端点：
 
 ```bash
 curl -X POST http://localhost:9002/v1/embeddings \
@@ -165,7 +165,7 @@ curl -X POST http://localhost:9002/v1/embeddings \
   }'
 ```
 
-**Response:**
+**响应：**
 
 ```json
 {
@@ -183,12 +183,12 @@ curl -X POST http://localhost:9002/v1/embeddings \
 }
 ```
 
-### 🧊 Matryoshka Dimension Reduction
+### 🧊 Matryoshka 维度约简
 
-Reduce embedding dimensions for smaller, faster embeddings while maintaining quality:
+降低嵌入向量维度以获得更小、更快的嵌入，同时保持质量：
 
 ```bash
-# Request 256-dimensional embeddings
+# 请求 256 维嵌入向量
 curl -X POST http://localhost:9002/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{
@@ -198,29 +198,29 @@ curl -X POST http://localhost:9002/v1/embeddings \
   }'
 ```
 
-**Supported dimensions** (BGE-M3 model, max 1024):
+**支持的维度**（BGE-M3 模型，最大 1024）：
 
-| Requested | Returned | Use Case |
-|-----------|----------|----------|
-| `256` | 256 | Maximum speed, smaller storage |
-| `512` | 512 | Balanced performance |
-| `1024` | 1024 | Maximum quality (default) |
+| 请求维度 | 返回维度 | 使用场景 |
+|---------|---------|----------|
+| `256` | 256 | 最大速度，最小存储 |
+| `512` | 512 | 平衡性能 |
+| `1024` | 1024 | 最大质量（默认） |
 
-**Batch with dimension reduction:**
+**批量请求带维度约简：**
 
 ```bash
 curl -X POST http://localhost:9002/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{
-    "input": ["text1", "text2", "text3"],
+    "input": ["文本1", "文本2", "文本3"],
     "model": "text-embedding-ada-002",
     "dimensions": 512
   }'
 ```
 
-## ⚙️ Configuration
+## ⚙️ 配置
 
-### Key Configuration Options
+### 主要配置选项
 
 ```toml
 [server]
@@ -228,7 +228,7 @@ host = "0.0.0.0"
 port = 9002
 
 [model]
-model_repo = "BAAI/bge-m3"  # HuggingFace model ID
+model_repo = "BAAI/bge-m3"  # HuggingFace 模型 ID
 use_gpu = true
 batch_size = 32
 expected_dimension = 1024
@@ -242,52 +242,52 @@ enabled = true
 jwt_secret = "your-secret-key"
 ```
 
-| Section | Key | Default | Description |
-|---------|-----|---------|-------------|
-| **server** | `host` | `"0.0.0.0"` | Bind address |
-| | `port` | `9002` | HTTP server port |
-| **model** | `model_repo` | `"BAAI/bge-m3"` | HuggingFace model ID |
-| | `use_gpu` | `false` | Enable GPU acceleration |
-| | `batch_size` | `32` | Batch processing size |
-| **embedding** | `cache_enabled` | `true` | Enable response caching |
-| | `cache_size` | `1024` | Maximum cache entries |
-| **auth** | `enabled` | `false` | Enable authentication |
-| | `jwt_secret` | - | JWT signing secret |
+| 区块 | 键名 | 默认值 | 说明 |
+|------|------|--------|------|
+| **server** | `host` | `"0.0.0.0"` | 绑定地址 |
+| | `port` | `9002` | HTTP 服务端口 |
+| **model** | `model_repo` | `"BAAI/bge-m3"` | HuggingFace 模型 ID |
+| | `use_gpu` | `false` | 启用 GPU 加速 |
+| | `batch_size` | `32` | 批处理大小 |
+| **embedding** | `cache_enabled` | `true` | 启用响应缓存 |
+| | `cache_size` | `1024` | 最大缓存条目数 |
+| **auth** | `enabled` | `false` | 启用认证 |
+| | `jwt_secret` | - | JWT 签名密钥 |
 
-> **📖 Full Configuration**: See [`config.toml`](config.toml) for all available options.
+> **📖 完整配置**: 查看 [`config.toml`](config.toml) 了解所有可用选项。
 
-## 🏗️ Architecture
+## 🏗️ 架构
 
 ```mermaid
 graph TB
-    subgraph Client_Layer["Client Layer"]
-        Client[Client Requests]
+    subgraph Client_Layer["客户端层"]
+        Client[客户端请求]
     end
 
-    subgraph Gateway["Gateway Layer"]
-        HTTP["HTTP/gRPC Endpoints"]
-        Auth["Auth (JWT/CSRF)"]
-        RateLim["Rate Limiting"]
+    subgraph Gateway["网关层"]
+        HTTP["HTTP/gRPC 端点"]
+        Auth["认证 (JWT/CSRF)"]
+        RateLim["限流 (令牌桶)"]
     end
 
-    subgraph Pipeline["Request Pipeline"]
-        Queue["Priority Queue"]
-        Workers["Request Workers"]
-        Response["Response Channel"]
+    subgraph Pipeline["请求管道"]
+        Queue["优先级队列"]
+        Workers["请求工作线程"]
+        Response["响应通道"]
     end
 
-    subgraph Service["Embedding Service"]
-        Text["Text Chunking"]
-        Engine["Inference Engine"]
-        Cache["Vector Cache LRU/LFU/ARC/KV"]
+    subgraph Service["嵌入服务"]
+        Text["文本分块"]
+        Engine["推理引擎"]
+        Cache["向量缓存 LRU/LFU/ARC/KV"]
     end
 
-    subgraph Engine["Inference Engine"]
-        Candle["Candle (Native Rust)"]
+    subgraph Engine["推理引擎"]
+        Candle["Candle (原生 Rust)"]
         ONNX["ONNX Runtime"]
     end
 
-    subgraph Device["Compute Devices"]
+    subgraph Device["计算设备"]
         CPU["CPU"]
         CUDA["CUDA GPU"]
         Metal["Metal GPU"]
@@ -314,108 +314,108 @@ graph TB
     ONNX --> Metal
 ```
 
-## 📦 Project Structure
+## 📦 项目结构
 
 ```
 vecboost/
-├── src/                          # Core source code
-│   ├── audit/          # Audit logging & compliance
-│   ├── auth/           # Authentication (JWT, CSRF, RBAC)
-│   ├── cache/          # Multi-tier caching (LRU, LFU, ARC, KV)
-│   ├── config/         # Configuration management
-│   ├── device/         # Device management (CPU, CUDA, Metal, ROCm)
-│   ├── engine/         # Inference engines (Candle, ONNX Runtime)
-│   ├── grpc/           # gRPC server & protocol
-│   ├── metrics/        # Prometheus metrics & observability
-│   ├── model/          # Model downloading, loading & recovery
-│   ├── pipeline/       # Request pipeline, priority & scheduling
-│   ├── rate_limit/     # Rate limiting (token bucket, sliding window)
-│   ├── routes/         # HTTP routes & handlers
-│   ├── security/       # Security utilities (encryption, sanitization)
-│   ├── service/        # Core embedding service & business logic
-│   └── text/           # Text processing (chunking, tokenization)
-├── examples/           # Example programs
-│   └── gpu/            # GPU-specific examples & benchmarks
-├── proto/              # gRPC protocol definitions (`.proto` files)
-├── deployments/        # Kubernetes & Docker deployment configs
-├── tests/              # Integration & performance tests
-└── config.toml         # Default configuration file
+├── src/                          # 核心源代码
+│   ├── audit/          # 审计日志与合规
+│   ├── auth/           # 认证 (JWT, CSRF, RBAC)
+│   ├── cache/          # 多层缓存 (LRU, LFU, ARC, KV)
+│   ├── config/         # 配置管理
+│   ├── device/         # 设备管理 (CPU, CUDA, Metal, ROCm)
+│   ├── engine/         # 推理引擎 (Candle, ONNX Runtime)
+│   ├── grpc/           # gRPC 服务器与协议
+│   ├── metrics/        # Prometheus 指标与可观测性
+│   ├── model/          # 模型下载、加载与恢复
+│   ├── pipeline/       # 请求管道、优先级与调度
+│   ├── rate_limit/     # 速率限制 (令牌桶、滑窗)
+│   ├── routes/         # HTTP 路由与处理器
+│   ├── security/       # 安全工具 (加密、清理)
+│   ├── service/        # 核心嵌入服务与业务逻辑
+│   └── text/           # 文本处理 (分块、分词)
+├── examples/           # 示例程序
+│   └── gpu/            # GPU 相关示例与基准测试
+├── proto/              # gRPC 协议定义 (`.proto` 文件)
+├── deployments/        # Kubernetes 与 Docker 部署配置
+├── tests/              # 集成与性能测试
+└── config.toml         # 默认配置文件
 ```
 
-## 🎯 Performance Benchmarks
+## 🎯 性能基准
 
-| Metric | CPU | GPU (CUDA) | Notes |
-|--------|-----|------------|-------|
-| **Embedding Dimension** | Up to 4096 | Up to 4096 | Model dependent |
-| **Max Batch Size** | 64 | 256 | Memory dependent |
-| **Requests/Second** | 1,000+ | 10,000+ | Throughput |
-| **Latency (p50)** | < 25ms | < 5ms | Single request |
-| **Latency (p99)** | < 100ms | < 50ms | Single request |
-| **Cache Hit Ratio** | > 90% | > 90% | With 1024 entries |
+| 指标 | CPU | GPU (CUDA) | 说明 |
+|------|-----|------------|------|
+| **嵌入维度** | 最高 4096 | 最高 4096 | 模型依赖 |
+| **最大批处理** | 64 | 256 | 内存依赖 |
+| **请求/秒** | 1,000+ | 10,000+ | 吞吐量 |
+| **延迟 (p50)** | < 25ms | < 5ms | 单请求 |
+| **延迟 (p99)** | < 100ms | < 50ms | 单请求 |
+| **缓存命中率** | > 90% | > 90% | 1024 条目 |
 
-### 🚀 Optimization Features
+### 🚀 优化特性
 
-- **⚡ Batch Processing**: Dynamic batching with configurable wait timeout
-- **💾 Memory Pool**: Pre-allocated tensor buffers to reduce allocation overhead
-- **🔄 Zero-Copy**: Shared references where possible
-- **📊 Adaptive Batching**: Automatic batch size adjustment based on load
+- **⚡ 批处理**: 带可配置等待超时的动态批处理
+- **💾 内存池**: 预分配张量缓冲区，减少分配开销
+- **🔄 零拷贝**: 尽可能使用共享引用
+- **📊 自适应批处理**: 根据负载自动调整批大小
 
-## 🔒 Security Features
+## 🔒 安全特性
 
-| Layer | Feature | Description |
-|-------|---------|-------------|
-| **🔐 Authentication** | JWT Tokens | Configurable expiration, refresh tokens |
-| **👥 Authorization** | Role-Based Access | User tiers: free, basic, pro, enterprise |
-| **📝 Audit Logging** | Request Tracking | User, action, resource, IP, timestamp |
-| **⚡ Rate Limiting** | Multi-Layer | Global, per-IP, per-user, per-API key |
-| **🔒 Encryption** | AES-256-GCM | Sensitive data at rest |
-| **🛡️ Input Sanitization** | XSS/CSRF Protection | Request validation & sanitization |
+| 层级 | 特性 | 说明 |
+|------|------|------|
+| **🔐 认证** | JWT 令牌 | 可配置过期时间、刷新令牌 |
+| **👥 授权** | 基于角色 | 用户层级：free、basic、pro、enterprise |
+| **📝 审计日志** | 请求跟踪 | 用户、操作、资源、IP、时间戳 |
+| **⚡ 速率限制** | 多层限制 | 全局、每 IP、每用户、每 API 密钥 |
+| **🔒 加密** | AES-256-GCM | 静态敏感数据加密 |
+| **🛡️ 输入清理** | XSS/CSRF 防护 | 请求验证与清理 |
 
-> **⚠️ Security Best Practice**: Always use HTTPS in production and rotate JWT secrets regularly.
+> **⚠️ 安全最佳实践**: 生产环境始终使用 HTTPS，并定期轮换 JWT 密钥。
 
-## 📈 Observability
+## 📈 可观测性
 
-| Tool | Endpoint | Description |
-|------|----------|-------------|
-| **Prometheus** | `/metrics` | Metrics endpoint for Prometheus scraping |
-| **Health Check** | `/health` | Service liveness and readiness probe |
-| **Detailed Health** | `/health/detailed` | Full health status with component checks |
-| **OpenAPI Docs** | `/swagger-ui/` | Interactive Swagger UI documentation |
-| **Grafana** | - | Pre-configured dashboards in `deployments/` |
+| 工具 | 端点 | 说明 |
+|------|------|------|
+| **Prometheus** | `/metrics` | Prometheus 抓取指标端点 |
+| **健康检查** | `/health` | 服务存活和就绪探针 |
+| **详细健康** | `/health/detailed` | 完整健康状态与组件检查 |
+| **OpenAPI 文档** | `/swagger-ui/` | 交互式 Swagger UI 文档 |
+| **Grafana** | - | `deployments/` 中的预配置仪表板 |
 
-### 📊 Key Metrics
+### 📊 关键指标
 
-- `vecboost_requests_total` - Total request count by endpoint
-- `vecboost_embedding_latency_seconds` - Embedding generation latency
-- `vecboost_cache_hit_ratio` - Cache hit ratio percentage
-- `vecboost_batch_size` - Current batch processing size
-- `vecboost_gpu_memory_bytes` - GPU memory usage
+- `vecboost_requests_total` - 按端点统计的总请求数
+- `vecboost_embedding_latency_seconds` - 嵌入生成延迟
+- `vecboost_cache_hit_ratio` - 缓存命中率
+- `vecboost_batch_size` - 当前批处理大小
+- `vecboost_gpu_memory_bytes` - GPU 内存使用量
 
-## 🚀 Deployment Options
+## 🚀 部署选项
 
 ### ☸️ Kubernetes
 
 ```bash
-# Deploy to Kubernetes
+# 部署到 Kubernetes
 kubectl apply -f deployments/kubernetes/
 
-# Deploy with GPU support
+# 部署 GPU 支持
 kubectl apply -f deployments/kubernetes/gpu-deployment.yaml
 
-# View deployment status
+# 查看部署状态
 kubectl get pods -n vecboost
 ```
 
-| Resource | Description |
-|----------|-------------|
-| `configmap.yaml` | Configuration as code |
-| `deployment.yaml` | Main deployment manifest |
-| `gpu-deployment.yaml` | GPU node selector deployment |
-| `hpa.yaml` | Horizontal Pod Autoscaler |
-| `model-cache.yaml` | Persistent volume for model caching |
-| `service.yaml` | Cluster IP service |
+| 资源 | 说明 |
+|------|------|
+| `configmap.yaml` | 配置即代码 |
+| `deployment.yaml` | 主部署清单 |
+| `gpu-deployment.yaml` | GPU 节点选择器部署 |
+| `hpa.yaml` | 水平 Pod 自动扩缩容 |
+| `model-cache.yaml` | 模型缓存持久化卷 |
+| `service.yaml` | 集群 IP 服务 |
 
-> **📖 Full Guide**: See [Deployment Guide](deployments/kubernetes/README.md) for detailed instructions.
+> **📖 完整指南**: 查看[部署指南](deployments/kubernetes/README.md)了解更多详情。
 
 ### 🐳 Docker Compose
 
@@ -428,7 +428,7 @@ services:
     ports:
       - "9002:9002"    # HTTP API
       - "50051:50051"  # gRPC
-      - "9090:9090"    # Prometheus metrics
+      - "9090:9090"    # Prometheus 指标
     volumes:
       - ./config.toml:/app/config.toml
       - ./models:/app/models
@@ -446,45 +446,45 @@ services:
               capabilities: [gpu]
 ```
 
-## 🤝 Contributing
+## 🤝 贡献
 
-Contributions are welcome! Please read our [Contributing Guide](docs/CONTRIBUTING.md) for details.
+欢迎贡献代码！请阅读[贡献指南](docs/CONTRIBUTING.md)了解更多。
 
-### 🛠️ Development Setup
+### 🛠️ 开发环境设置
 
 ```bash
-# Install development dependencies
-cargo install cargo-audit cargo-clippy cargo fmt
+# 安装开发依赖
+cargo install cargo-audit cargo-clippy cargo-fmt
 
-# Run tests
+# 运行测试
 cargo test --all-features
 
-# Run linter
+# 运行 linter
 cargo clippy --all-targets --all-features -- -D warnings
 
-# Format code
+# 格式化代码
 cargo fmt --all
 ```
 
-## 📄 License
+## 📄 许可证
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+本项目采用 **MIT 许可证** - 查看 [LICENSE](LICENSE) 文件了解更多。
 
-## 🙏 Acknowledgments
+## 🙏 致谢
 
-| Project | Description | Link |
-|---------|-------------|------|
-| **Candle** | Native Rust ML framework | [GitHub](https://github.com/huggingface/candle) |
-| **ONNX Runtime** | Cross-platform ML inference runtime | [Website](https://onnxruntime.ai/) |
-| **Hugging Face Hub** | Model repository and distribution | [Website](https://huggingface.co/models) |
-| **Axum** | Ergonomic web framework for Rust | [GitHub](https://github.com/tokio-rs/axum) |
-| **Tonic** | gRPC implementation for Rust | [GitHub](https://github.com/hyperium/tonic) |
+| 项目 | 说明 | 链接 |
+|------|------|------|
+| **Candle** | 原生 Rust ML 框架 | [GitHub](https://github.com/huggingface/candle) |
+| **ONNX Runtime** | 跨平台 ML 推理运行时 | [官网](https://onnxruntime.ai/) |
+| **Hugging Face Hub** | 模型仓库与分发 | [官网](https://huggingface.co/models) |
+| **Axum** | Rust  ergonomic Web 框架 | [GitHub](https://github.com/tokio-rs/axum) |
+| **Tonic** | Rust gRPC 实现 | [GitHub](https://github.com/hyperium/tonic) |
 
 ---
 
 <div align="center">
 
-**⭐ Star us on GitHub if you find VecBoost useful!**
+**⭐ 如果 VecBoost 对您有帮助，请在 GitHub 上给我们一个星标！**
 
 [![GitHub stars](https://img.shields.io/github/stars/Kirky-X/vecboost?style=social)](https://github.com/Kirky-X/vecboost)
 

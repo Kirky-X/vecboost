@@ -3,30 +3,16 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-pub(crate) mod arc_cache;
-pub(crate) mod bloom_filter;
 pub(crate) mod entry;
-pub(crate) mod kv_cache;
-pub(crate) mod lfu_cache;
-pub(crate) mod lru_cache;
-pub(crate) mod tiered_cache;
 pub(crate) mod trait_impl;
 
 // oxcache 后端(oxcache feature 启用时可用)
 #[cfg(feature = "oxcache")]
 pub(crate) mod oxcache_backend;
 
-// 内部使用，不对外暴露
-pub(crate) use kv_cache::KvCache;
-
-// 导出 LRU/LFU/ARC/Tiered 缓存（仅内部使用）
-pub(crate) use arc_cache::ArcCache;
-// Bloom Filter 暂未使用，保留供将来扩展
-// pub(crate) use bloom_filter::{BloomFilter, BloomFilterConfig};
-pub(crate) use lfu_cache::LfuCache;
-pub(crate) use lru_cache::LruCache;
-// TieredCache 暂未使用，保留供将来扩展
-// pub(crate) use tiered_cache::{TieredCache, TieredCacheConfig, CacheLevel};
+// 内部使用,不对外暴露
+#[cfg(feature = "oxcache")]
+pub(crate) use oxcache_backend::OxCacheBackend;
 
 // === 通用缓存类型和接口 ===
 

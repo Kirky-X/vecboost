@@ -5,7 +5,7 @@
 
 #![allow(clippy::all)]
 
-use crate::cache::KvCache;
+use crate::cache::OxCacheBackend;
 use crate::config::model::ModelConfig;
 use crate::device::DynamicBatchScheduler;
 use crate::device::memory_optimizer::SharedGpuMemoryManager;
@@ -38,7 +38,7 @@ pub struct EmbeddingService {
     validator: InputValidator,
     model_config: Option<ModelConfig>,
     model_manager: Option<Arc<ModelManager>>,
-    cache: Arc<KvCache>,
+    cache: Arc<OxCacheBackend>,
     memory_manager: Option<SharedGpuMemoryManager>,
     batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     buffer_pool: Option<Arc<tokio::sync::RwLock<BufferPool>>>,
@@ -54,7 +54,7 @@ impl EmbeddingService {
             validator: InputValidator::with_default(),
             model_config,
             model_manager: None,
-            cache: Arc::new(KvCache::disabled()),
+            cache: Arc::new(OxCacheBackend::disabled()),
             memory_manager: None,
             batch_scheduler: None,
             buffer_pool: None,
@@ -71,7 +71,7 @@ impl EmbeddingService {
             validator: InputValidator::with_default(),
             model_config,
             model_manager: Some(model_manager),
-            cache: Arc::new(KvCache::disabled()),
+            cache: Arc::new(OxCacheBackend::disabled()),
             memory_manager: None,
             batch_scheduler: None,
             buffer_pool: None,
@@ -89,7 +89,7 @@ impl EmbeddingService {
             validator,
             model_config,
             model_manager,
-            cache: Arc::new(KvCache::disabled()),
+            cache: Arc::new(OxCacheBackend::disabled()),
             memory_manager: None,
             batch_scheduler: None,
             buffer_pool: None,
@@ -106,7 +106,7 @@ impl EmbeddingService {
             validator: InputValidator::with_default(),
             model_config,
             model_manager: None,
-            cache: Arc::new(KvCache::new(cache_size)),
+            cache: Arc::new(OxCacheBackend::new(cache_size)),
             memory_manager: None,
             batch_scheduler: None,
             buffer_pool: None,
@@ -127,7 +127,7 @@ impl EmbeddingService {
             validator,
             model_config,
             model_manager,
-            cache: Arc::new(KvCache::new(cache_size)),
+            cache: Arc::new(OxCacheBackend::new(cache_size)),
             memory_manager,
             batch_scheduler,
             buffer_pool: None,

@@ -107,7 +107,7 @@ cudarc = { version = "0.18", optional = true, default-features = false }
 tonic-build = { version = "0.12", optional = true, default-features = false, features = ["transport", "prost"] }
 
 [features]
-default = ["http"]
+default = ["http", "oxcache"]
 
 # 协议特性
 http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "dep:utoipa", "dep:utoipa-swagger-ui", "dep:uuid", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest"]

@@ -1,11 +1,11 @@
-# VecBoost 配置文件
-# =================
-# 本文件包含 VecBoost 文本向量化的所有配置选项
-# 修改后需要重启服务使配置生效
+# VecBoost 完整配置示例
+# =======================
+# 本文件展示 VecBoost 所有配置选项，适合生产环境参考
+# 实际部署时建议复制为 config.toml 并按需调整
 
 # ============ 服务配置 ============
 [server]
-# 服务绑定地址
+# 服务绑定地址 (0.0.0.0 允许外部访问，127.0.0.1 仅本机)
 host = "0.0.0.0"
 
 # 服务端口号
@@ -31,8 +31,8 @@ model_path = ""
 # - Metal (macOS): cargo build --features metal
 use_gpu = false
 
-# 批处理大小
-batch_size = 32
+# 批处理大小 (GPU 显存充足时可增大)
+batch_size = 64
 
 # 期望的向量维度 (BGE-M3 为 1024)
 expected_dimension = 1024
@@ -61,15 +61,15 @@ similarity_metric = "cosine"
 cache_enabled = true
 
 # 缓存大小 (最大缓存条目数)
-cache_size = 1024
+cache_size = 4096
 
 # 最大批处理大小
-max_batch_size = 64
+max_batch_size = 128
 
 # ============ 监控配置 ============
 [monitoring]
 # 内存限制 (MB), None 表示不限制
-memory_limit_mb = 4096
+memory_limit_mb = 8192
 
 # 内存警告阈值 (0.0-1.0), 达到此比例时发出警告
 memory_warning_threshold = 0.8
@@ -84,7 +84,7 @@ log_level = "info"
 # ============ 认证配置 ============
 [auth]
 # 是否启用认证
-enabled = false
+enabled = true
 
 # JWT 密钥
 # ⚠️ 重要：生产环境必须通过环境变量设置
@@ -137,36 +137,36 @@ max_files = 10
 enabled = true
 
 # 全局请求限制 (每分钟)
-global_requests_per_minute = 1000
+global_requests_per_minute = 5000
 
 # IP 请求限制 (每分钟)
-ip_requests_per_minute = 100
+ip_requests_per_minute = 200
 
 # 用户请求限制 (每分钟)
-user_requests_per_minute = 200
+user_requests_per_minute = 500
 
 # API Key 请求限制 (每分钟)
-api_key_requests_per_minute = 500
+api_key_requests_per_minute = 1000
 
 # 时间窗口大小 (秒)
 window_secs = 60
 
 # IP 白名单 (这些 IP 不受限流限制)
 # 支持单个 IP 和 CIDR 表示法，例如: "127.0.0.1", "192.168.1.0/24"
-ip_whitelist = ["127.0.0.1", "::1"]
+ip_whitelist = ["127.0.0.1", "::1", "10.0.0.0/8"]
 
 # ============ 数据库配置 (dbnexus, 需要 db feature) ============
 [database]
 # 数据库连接 URL
 # SQLite: "sqlite:vecboost.db"
 # PostgreSQL: "postgres://user:pass@localhost:5432/vecboost"
-url = "sqlite:vecboost.db"
+url = "postgres://vecboost:securepassword@localhost:5432/vecboost"
 
 # 连接池大小
-max_connections = 10
+max_connections = 20
 
 # 连接超时 (秒)
-connect_timeout_secs = 5
+connect_timeout_secs = 10
 
 # ============ 日志配置 (inklog, 需要 inklog feature) ============
 [logging]
@@ -183,7 +183,7 @@ file_path = "logs/vecboost.log"
 rotation_size_mb = 100
 
 # 保留的日志文件数量
-max_files = 10
+max_files = 30
 
 # ============ 流控配置 (limiteron, 需要 limiteron feature) ============
 [flow_control]
@@ -191,10 +191,10 @@ max_files = 10
 enabled = true
 
 # 令牌桶容量
-token_capacity = 100
+token_capacity = 200
 
 # 令牌补充速率 (每秒)
-token_refill_rate = 50
+token_refill_rate = 100
 
 # 熔断器失败率阈值 (0.0-1.0)
 circuit_breaker_failure_threshold = 0.5
@@ -208,13 +208,13 @@ circuit_breaker_recovery_secs = 30
 enabled = true
 
 # 缓存后端类型: memory, redis
-backend = "memory"
+backend = "redis"
 
 # 最大缓存条目数
-max_entries = 10000
+max_entries = 50000
 
 # 缓存 TTL (秒, 0 表示永不过期)
-ttl_secs = 3600
+ttl_secs = 7200
 
 # 驱逐策略: lru, lfu, fifo
 eviction_policy = "lru"

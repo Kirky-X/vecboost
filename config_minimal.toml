@@ -44,3 +44,21 @@ internal = 1.5
 
 [audit]
 enabled = false
+
+[database]
+url = "sqlite:vecboost.db"
+max_connections = 5
+connect_timeout_secs = 5
+
+[logging]
+level = "info"
+console = true
+file_path = ""
+rotation_size_mb = 10
+max_files = 3
+
+[flow_control]
+enabled = false
+
+[cache]
+enabled = false

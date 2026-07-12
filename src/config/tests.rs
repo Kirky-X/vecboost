@@ -11,8 +11,17 @@
 //! 3. Hot-reload subscribe callback via `confers::bus::InMemoryBus`
 
 use std::io::Write;
+use std::sync::Mutex;
 
 use super::app_config::AppConfig;
+
+/// Serialises tests that touch process-global environment variables.
+///
+/// Rust runs tests in parallel by default; without this lock, a test that
+/// sets `VECBOOST_JWT_SECRET` can pollute another test's env-var snapshot
+/// between cleanup and config load. Each env-var-touching test must hold
+/// this lock for its entire body.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Helper: write a minimal TOML config to a temp file and return its path.
 fn write_temp_toml(content: &str) -> (tempfile::TempDir, std::path::PathBuf) {
@@ -102,6 +111,8 @@ enabled = false
 /// the window.
 #[test]
 fn test_confers_env_var_jwt_secret_override() {
+    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+
     // Ensure clean state before test
     unsafe {
         std::env::remove_var("VECBOOST_JWT_SECRET");
@@ -226,6 +237,8 @@ async fn test_confers_inmemorybus_subscribe_publish() {
 /// back to `Default` implementations for all sub-configs.
 #[test]
 fn test_confers_defaults_when_no_file() {
+    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+
     // Ensure clean env state
     unsafe {
         std::env::remove_var("VECBOOST_JWT_SECRET");

@@ -23,7 +23,7 @@ pub struct EmbeddingModule;
 #[cfg(feature = "auth")]
 pub struct AuthModule;
 
-/// 限流模块 — 提供 `Arc<RateLimiter>` 能力
+/// 限流模块 — 提供 `Arc<LimiteronAdapter>` 能力
 pub struct RateLimitModule;
 
 /// 缓存模块 — 提供缓存启用状态能力

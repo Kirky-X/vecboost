@@ -17,7 +17,7 @@ use super::*;
 use crate::config::model::{ModelConfig, Precision};
 use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
-use crate::rate_limit::{MemoryRateLimitStore, RateLimiter};
+use crate::rate_limit::LimiteronAdapter;
 use crate::service::embedding::EmbeddingService;
 
 // ---------------------------------------------------------------------------
@@ -94,8 +94,8 @@ fn make_service() -> Arc<RwLock<EmbeddingService>> {
     Arc::new(RwLock::new(EmbeddingService::new(engine, None)))
 }
 
-fn make_rate_limiter() -> Arc<RateLimiter> {
-    Arc::new(RateLimiter::new(Arc::new(MemoryRateLimitStore::new())))
+fn make_rate_limiter() -> Arc<LimiteronAdapter> {
+    Arc::new(LimiteronAdapter::with_default_config())
 }
 
 // ---------------------------------------------------------------------------

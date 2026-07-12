@@ -15,7 +15,7 @@ use super::{
     AuditModule, CacheConfig, CacheModule, DbConfig, DbModule, EmbeddingModule, RateLimitModule,
 };
 use crate::audit::AuditLogger;
-use crate::rate_limit::RateLimiter;
+use crate::rate_limit::LimiteronAdapter;
 use crate::service::embedding::EmbeddingService;
 
 // ---------------------------------------------------------------------------
@@ -75,7 +75,7 @@ impl ModuleMeta for RateLimitModule {
 }
 
 impl AutoBuilder for RateLimitModule {
-    type Capability = Arc<RateLimiter>;
+    type Capability = Arc<LimiteronAdapter>;
     type Error = TraitKitError;
 
     fn build(kit: &Kit) -> Result<Self::Capability, Self::Error> {

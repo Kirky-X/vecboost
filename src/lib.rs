@@ -66,7 +66,7 @@ pub struct AppState {
     pub csrf_token_store: Option<Arc<auth::CsrfTokenStore>>,
     pub metrics_collector: Option<Arc<metrics::InferenceCollector>>,
     pub prometheus_collector: Option<Arc<metrics::PrometheusCollector>>,
-    pub rate_limiter: Arc<rate_limit::RateLimiter>,
+    pub rate_limiter: Arc<rate_limit::LimiteronAdapter>,
     pub ip_whitelist: Vec<String>,
     pub rate_limit_enabled: bool,
     pub audit_logger: Option<Arc<audit::AuditLogger>>,
@@ -122,7 +122,7 @@ impl FromRef<AppState> for Arc<metrics::PrometheusCollector> {
 }
 
 #[cfg(feature = "http")]
-impl FromRef<AppState> for Arc<rate_limit::RateLimiter> {
+impl FromRef<AppState> for Arc<rate_limit::LimiteronAdapter> {
     fn from_ref(state: &AppState) -> Self {
         state.rate_limiter.clone()
     }

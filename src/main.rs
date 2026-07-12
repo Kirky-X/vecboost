@@ -15,7 +15,7 @@ use vecboost::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
         WorkerManager,
     },
-    rate_limit::{MemoryRateLimitStore, RateLimiter},
+    rate_limit::LimiteronAdapter,
     service::embedding::EmbeddingService,
 };
 
@@ -102,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
     let service = Arc::new(RwLock::new(service));
 
     // 创建限流器
-    let rate_limiter = Arc::new(RateLimiter::new(Arc::new(MemoryRateLimitStore::new())));
+    let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
 
     #[cfg(feature = "auth")]
     let (jwt_manager, user_store): (Option<Arc<JwtManager>>, Option<Arc<UserStore>>) = if config

@@ -16,7 +16,7 @@ use limiteron::limiters::{Limiter, TokenBucketLimiter};
 use crate::rate_limit::{RateLimitConfig, RateLimitDimension, RateLimitStatus};
 
 /// limiteron 后端,包装多个 `limiteron::TokenBucketLimiter`(按维度 key 管理)。
-pub(crate) struct LimiteronAdapter {
+pub struct LimiteronAdapter {
     buckets: Mutex<HashMap<String, Arc<TokenBucketLimiter>>>,
     config: RateLimitConfig,
 }

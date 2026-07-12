@@ -188,13 +188,13 @@ fn test_db_module_with_config() {
 }
 
 #[test]
-fn test_logger_module_with_none() {
+fn test_audit_module_with_none() {
     let mut kit = Kit::new();
     kit.set_config(Option::<Arc<crate::audit::AuditLogger>>::None);
-    kit.register::<LoggerModule>().unwrap();
+    kit.register::<AuditModule>().unwrap();
 
     let kit = kit.build().unwrap();
-    let capability = kit.require::<LoggerModule>().unwrap();
+    let capability = kit.require::<AuditModule>().unwrap();
     assert!(capability.is_none());
 }
 
@@ -217,7 +217,7 @@ fn test_multiple_modules_build_together() {
     kit.register::<RateLimitModule>().unwrap();
     kit.register::<CacheModule>().unwrap();
     kit.register::<DbModule>().unwrap();
-    kit.register::<LoggerModule>().unwrap();
+    kit.register::<AuditModule>().unwrap();
 
     let kit = kit.build().unwrap();
 
@@ -225,7 +225,7 @@ fn test_multiple_modules_build_together() {
     assert!(kit.contains::<RateLimitModule>());
     assert!(kit.contains::<CacheModule>());
     assert!(kit.contains::<DbModule>());
-    assert!(kit.contains::<LoggerModule>());
+    assert!(kit.contains::<AuditModule>());
 
     let svc = kit.require::<EmbeddingModule>().unwrap();
     assert!(Arc::ptr_eq(&svc, &service));

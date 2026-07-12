@@ -12,7 +12,7 @@ use trait_kit::prelude::*;
 #[cfg(feature = "auth")]
 use super::AuthModule;
 use super::{
-    CacheConfig, CacheModule, DbConfig, DbModule, EmbeddingModule, LoggerModule, RateLimitModule,
+    AuditModule, CacheConfig, CacheModule, DbConfig, DbModule, EmbeddingModule, RateLimitModule,
 };
 use crate::audit::AuditLogger;
 use crate::rate_limit::RateLimiter;
@@ -129,18 +129,18 @@ impl AutoBuilder for DbModule {
 }
 
 // ---------------------------------------------------------------------------
-// LoggerModule
+// AuditModule
 // ---------------------------------------------------------------------------
 
-impl ModuleMeta for LoggerModule {
-    const NAME: &'static str = "logger";
+impl ModuleMeta for AuditModule {
+    const NAME: &'static str = "audit";
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
     }
 }
 
-impl AutoBuilder for LoggerModule {
+impl AutoBuilder for AuditModule {
     type Capability = Option<Arc<AuditLogger>>;
     type Error = TraitKitError;
 

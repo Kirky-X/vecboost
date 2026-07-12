@@ -53,6 +53,9 @@ trait-kit = "0.2"
 # Configuration library (config feature)
 confers = { version = "0.4", optional = true, default-features = false, features = ["toml", "env", "config-bus"] }
 
+# Logging infrastructure (inklog feature)
+inklog = { version = "0.1", optional = true, default-features = false }
+
 # AI & Math (base)
 candle-core = { version = "0.9", features = [] }
 candle-nn = "0.9"
@@ -113,7 +116,7 @@ db = []
 postgres = ["db"]
 
 # 基础设施特性(Phase 3 添加依赖)
-inklog = []
+inklog = ["dep:inklog"]
 limiteron = []
 oxcache = []
 

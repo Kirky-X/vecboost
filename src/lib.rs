@@ -26,6 +26,10 @@ pub mod security;
 pub mod service;
 pub mod utils;
 
+// 条件编译模块 — 仅在对应 feature 启用时可见
+#[cfg(feature = "inklog")]
+pub mod logger;
+
 // 导出 config::app 中的类型
 pub use crate::pipeline::PriorityConfig;
 

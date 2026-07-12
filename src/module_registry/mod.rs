@@ -32,8 +32,8 @@ pub struct CacheModule;
 /// 数据库模块 — 提供数据库启用状态能力（占位，db feature 未实现）
 pub struct DbModule;
 
-/// 日志模块 — 提供 `Option<Arc<AuditLogger>>` 能力
-pub struct LoggerModule;
+/// 审计模块 — 提供 `Option<Arc<AuditLogger>>` 能力
+pub struct AuditModule;
 
 /// 缓存配置（通过 `Kit::set_config` 注入）
 #[derive(Clone, Debug)]

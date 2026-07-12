@@ -16,9 +16,16 @@ pub(crate) mod redis_store;
 pub(crate) mod store;
 pub(crate) mod token_bucket;
 
+// limiteron 后端(limiteron feature 启用时可用)
+#[cfg(feature = "limiteron")]
+pub(crate) mod limiteron_adapter;
+
 pub use limiter::{RateLimitConfig, RateLimitDimension, RateLimitStatus, RateLimiter};
 
 pub(crate) use limiter::RateLimitAlgorithm;
+
+#[cfg(feature = "limiteron")]
+pub(crate) use limiteron_adapter::LimiteronAdapter;
 
 #[cfg(feature = "redis")]
 pub(crate) use redis_store::{RedisConfig, RedisRateLimitStore};

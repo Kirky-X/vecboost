@@ -60,6 +60,9 @@ log = { version = "0.4", optional = true, default-features = false }
 # Cache infrastructure (oxcache feature)
 oxcache = { version = "0.3", optional = true, default-features = false, features = ["core"] }
 
+# Rate limiting infrastructure (limiteron feature)
+limiteron = { version = "0.2", optional = true, default-features = false }
+
 # AI & Math (base)
 candle-core = { version = "0.9", features = [] }
 candle-nn = "0.9"
@@ -107,7 +110,7 @@ cudarc = { version = "0.18", optional = true, default-features = false }
 tonic-build = { version = "0.12", optional = true, default-features = false, features = ["transport", "prost"] }
 
 [features]
-default = ["http", "oxcache"]
+default = ["http", "oxcache", "limiteron"]
 
 # 协议特性
 http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "dep:utoipa", "dep:utoipa-swagger-ui", "dep:uuid", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest"]
@@ -121,7 +124,7 @@ postgres = ["db"]
 
 # 基础设施特性(Phase 3 添加依赖)
 inklog = ["dep:inklog", "dep:log"]
-limiteron = []
+limiteron = ["dep:limiteron"]
 oxcache = ["dep:oxcache"]
 
 # 配置特性(Phase 3.2 confers 集成)

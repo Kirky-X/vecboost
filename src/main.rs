@@ -36,7 +36,20 @@ use vecboost::routes;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // 日志初始化:inklog feature 启用时用 inklog,否则用 tracing_subscriber
+    #[cfg(feature = "inklog")]
+    let _logger_manager = inklog::LoggerManager::builder()
+        .level("info")
+        .console(true)
+        .file("logs/vecboost.log")
+        .build()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to initialize inklog logger: {}", e))?;
+    // _logger_manager 保持存活至 main 结束,避免 LoggerManager shutdown 导致日志停止
+
+    #[cfg(not(feature = "inklog"))]
     tracing_subscriber::fmt::init();
+
     tracing::info!("Starting Rust Embedding Service...");
 
     let config = AppConfig::load()?;

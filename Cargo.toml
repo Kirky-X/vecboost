@@ -57,6 +57,9 @@ confers = { version = "0.4", optional = true, default-features = false, features
 inklog = { version = "0.1", optional = true, default-features = false }
 log = { version = "0.4", optional = true, default-features = false }
 
+# Cache infrastructure (oxcache feature)
+oxcache = { version = "0.3", optional = true, default-features = false, features = ["core"] }
+
 # AI & Math (base)
 candle-core = { version = "0.9", features = [] }
 candle-nn = "0.9"
@@ -119,7 +122,7 @@ postgres = ["db"]
 # 基础设施特性(Phase 3 添加依赖)
 inklog = ["dep:inklog", "dep:log"]
 limiteron = []
-oxcache = []
+oxcache = ["dep:oxcache"]
 
 # 配置特性(Phase 3.2 confers 集成)
 config = ["dep:confers"]

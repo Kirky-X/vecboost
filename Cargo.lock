@@ -2625,7 +2625,7 @@ dependencies = [
  "num_cpus",
  "once_cell",
  "owo-colors",
- "oxcache",
+ "oxcache 0.2.0",
  "parking_lot",
  "parquet",
  "pbkdf2",
@@ -3531,6 +3531,38 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tokio-util",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "oxcache"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "765b237d7356fac5941c8a0f1eb74ca3e75f943120ef9dbce6fcf73e70a03b1a"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dashmap",
+ "futures",
+ "lazy_static",
+ "moka",
+ "once_cell",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "rand 0.10.2",
+ "redis",
+ "regex",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -5820,6 +5852,7 @@ dependencies = [
  "ndarray",
  "num_cpus",
  "ort",
+ "oxcache 0.3.8",
  "password-hash",
  "prometheus",
  "prost 0.13.5",

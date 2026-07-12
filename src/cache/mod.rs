@@ -12,6 +12,10 @@ pub(crate) mod lru_cache;
 pub(crate) mod tiered_cache;
 pub(crate) mod trait_impl;
 
+// oxcache 后端(oxcache feature 启用时可用)
+#[cfg(feature = "oxcache")]
+pub(crate) mod oxcache_backend;
+
 // 内部使用，不对外暴露
 pub(crate) use kv_cache::KvCache;
 

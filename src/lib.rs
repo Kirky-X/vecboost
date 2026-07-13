@@ -13,6 +13,8 @@ pub mod audit;
 #[cfg(feature = "auth")]
 pub mod auth;
 pub mod config;
+#[cfg(feature = "db")]
+pub mod db;
 pub mod domain;
 pub mod engine;
 #[cfg(feature = "grpc")]

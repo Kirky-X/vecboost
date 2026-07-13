@@ -63,6 +63,9 @@ oxcache = { version = "0.3", optional = true, default-features = false, features
 # Rate limiting infrastructure (limiteron feature)
 limiteron = { version = "0.2", optional = true, default-features = false }
 
+# Database infrastructure (db feature)
+dbnexus = { version = "0.4", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache"] }
+
 # AI & Math (base)
 candle-core = { version = "0.9", features = [] }
 candle-nn = "0.9"
@@ -119,8 +122,8 @@ mcp = []
 cli = []
 
 # 存储特性
-db = []
-postgres = ["db"]
+db = ["dep:dbnexus"]
+postgres = ["db", "dbnexus/postgres"]
 
 # 基础设施特性(Phase 3 添加依赖)
 inklog = ["dep:inklog", "dep:log"]

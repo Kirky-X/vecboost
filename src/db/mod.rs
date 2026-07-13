@@ -9,7 +9,7 @@
 //! 仅在 `db` feature 启用时可用。
 
 use crate::error::VecboostError;
-use dbnexus::{DatabaseSession, DbPool as NexusDbPool, Session};
+use dbnexus::{DbPool as NexusDbPool, Session};
 
 /// VecBoost 数据库连接池 wrapper
 ///

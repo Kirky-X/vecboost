@@ -4,12 +4,20 @@
 // See LICENSE file in the project root for full license information
 
 pub(crate) mod candle_engine;
+pub mod factory;
+pub use factory::EngineFactory;
 pub(crate) mod impl_;
 
 #[cfg(feature = "onnx")]
 pub(crate) mod onnx_engine;
 
-use crate::config::model::{EngineType, ModelConfig, Precision};
+#[cfg(feature = "tensorrt")]
+pub(crate) mod tensorrt_engine;
+
+#[cfg(feature = "openvino")]
+pub(crate) mod openvino_engine;
+
+use crate::config::model::{ModelConfig, Precision};
 use crate::error::VecboostError;
 use async_trait::async_trait;
 
@@ -42,4 +50,8 @@ pub enum AnyEngine {
     Candle(candle_engine::CandleEngine),
     #[cfg(feature = "onnx")]
     Onnx(onnx_engine::OnnxEngine),
+    #[cfg(feature = "tensorrt")]
+    TensorRt(tensorrt_engine::TensorRtEngine),
+    #[cfg(feature = "openvino")]
+    OpenVino(openvino_engine::OpenVinoEngine),
 }

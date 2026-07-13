@@ -3,6 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#![allow(dead_code)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -224,9 +226,10 @@ impl WorkerManager {
     }
 
     /// Worker 循环
+    #[allow(clippy::too_many_arguments)]
     async fn worker_loop(
         worker_id: usize,
-        task_receiver: mpsc::Receiver<WorkerTask>,
+        _task_receiver: mpsc::Receiver<WorkerTask>,
         queue: Arc<PriorityRequestQueue>,
         response_channel: Arc<ResponseChannel>,
         config: WorkerConfig,
@@ -316,7 +319,7 @@ impl WorkerManager {
     }
 
     /// 减少 worker 计数并返回剩余数量
-    fn decrement_worker_count(queue: &Arc<PriorityRequestQueue>) -> usize {
+    fn decrement_worker_count(_queue: &Arc<PriorityRequestQueue>) -> usize {
         // 注意：这里简化实现，实际需要更复杂的同步机制
         0
     }
@@ -417,8 +420,6 @@ impl WorkerManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // TODO: 需要添加 EmbeddingService mock 来修复测试
     /*
     #[tokio::test]

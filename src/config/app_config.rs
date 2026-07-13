@@ -16,6 +16,8 @@ use std::path::PathBuf;
 
 use confers::Config;
 
+#[cfg(feature = "db")]
+use super::app::DatabaseConfig;
 use super::app::{
     AuditConfig, AuthConfig, EmbeddingConfig, MemoryPoolConfig, ModelConfig, MonitoringConfig,
     RateLimitConfig, ServerConfig,
@@ -48,6 +50,8 @@ pub struct AppConfig {
     pub audit: AuditConfig,
     pub memory_pool: MemoryPoolConfig,
     pub pipeline: PipelineConfig,
+    #[cfg(feature = "db")]
+    pub database: DatabaseConfig,
 }
 
 impl AppConfig {
@@ -73,6 +77,7 @@ impl AppConfig {
             .env_prefix("VECBOOST_")
             .build()?;
         apply_security_env_overrides(&mut config);
+        super::app::apply_priority_defaults(&mut config.pipeline.priority);
         Ok(config)
     }
 }

@@ -244,7 +244,7 @@ impl ModelWeightPool {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        slots.sort_by(|a, b| a.1.last_used.cmp(&b.1.last_used));
+        slots.sort_by_key(|a| a.1.last_used);
 
         for (model_name, slot) in slots {
             if !slot.is_loaded {

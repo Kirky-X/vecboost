@@ -123,11 +123,11 @@ impl MemoryMonitor {
 
     pub async fn check_oom_risk(&self, threshold_percent: u64) -> bool {
         let stats = self.get_memory_stats().await;
-        let usage_percent = if stats.total_bytes > 0 {
-            (stats.current_bytes * 100) / stats.total_bytes
-        } else {
-            0
-        };
+        let usage_percent = stats
+            .current_bytes
+            .checked_mul(100)
+            .and_then(|v| v.checked_div(stats.total_bytes))
+            .unwrap_or(0);
         usage_percent >= threshold_percent
     }
 

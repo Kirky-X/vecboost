@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.config import get_api_base_url, is_mock_mode
+from perf.config import get_api_base_url, is_mock_mode
 
 
 class APIClient:
@@ -50,8 +50,8 @@ class MockAPIClient(APIClient):
         return 404, {"error": "Not Found", "message": f"Endpoint {endpoint} not found"}
 
     def post(self, endpoint: str, data: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
-        from tests.services import AdaptiveEmbeddingService
-        from tests.config import MAX_TEXT_LENGTH
+        from perf.services import AdaptiveEmbeddingService
+        from perf.config import MAX_TEXT_LENGTH
 
         service = AdaptiveEmbeddingService()
 

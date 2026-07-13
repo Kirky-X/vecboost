@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.config import get_api_base_url, get_model_dimension, get_model_name
+from perf.config import get_api_base_url, get_model_dimension, get_model_name
 
 
 class RealEmbeddingService:
@@ -166,7 +166,7 @@ class RealEmbeddingServiceWithFallback:
     def _get_mock_service(self):
         """获取 Mock 服务实例"""
         if self._mock_service is None:
-            from tests.services import TestEmbeddingService
+            from perf.services import TestEmbeddingService
 
             self._mock_service = TestEmbeddingService
         return self._mock_service

@@ -537,55 +537,6 @@ impl CandleEngine {
         }
     }
 
-    #[allow(dead_code)]
-    fn create_padded_batch_tensor(
-        &self,
-        encodings: &[Encoding],
-        max_seq_len: usize,
-        is_input_ids: bool,
-    ) -> Result<Tensor, VecboostError> {
-        let batch_size = encodings.len();
-        let mut batch_data = vec![0i64; batch_size * max_seq_len];
-
-        for (batch_idx, encoding) in encodings.iter().enumerate() {
-            let data = if is_input_ids {
-                encoding.get_ids()
-            } else {
-                encoding.get_attention_mask()
-            };
-
-            for (seq_idx, &value) in data.iter().enumerate().take(max_seq_len) {
-                batch_data[batch_idx * max_seq_len + seq_idx] = value as i64;
-            }
-        }
-
-        Tensor::new(batch_data.as_slice(), &self.device)
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-            .reshape(&[batch_size, max_seq_len])
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))
-    }
-
-    #[allow(dead_code)]
-    fn create_type_ids_tensor(
-        &self,
-        encodings: &[Encoding],
-        max_seq_len: usize,
-    ) -> Result<Tensor, VecboostError> {
-        let batch_size = encodings.len();
-        let mut batch_data = vec![0i64; batch_size * max_seq_len];
-
-        for (batch_idx, encoding) in encodings.iter().enumerate() {
-            for (seq_idx, &value) in encoding.type_ids.iter().enumerate().take(max_seq_len) {
-                batch_data[batch_idx * max_seq_len + seq_idx] = value as i64;
-            }
-        }
-
-        Tensor::new(batch_data.as_slice(), &self.device)
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-            .reshape(&[batch_size, max_seq_len])
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))
-    }
-
     async fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         let encoding = self
             .tokenizer

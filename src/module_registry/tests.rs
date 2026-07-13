@@ -5,12 +5,16 @@
 
 //! module_registry 单元测试
 //!
-//! 注意：trait-kit 基于 RefCell，!Sync，测试在单线程中运行，使用 #[test] 而非 #[tokio::test]。
+//! 基于 trait-kit 0.3 的 `AsyncKit`（`Send + Sync`）。`build()` 是异步的，
+//! 测试使用 `#[tokio::test]`。`require` / `config` / `register` 均为同步方法。
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use async_trait::async_trait;
+use trait_kit::AsyncKit;
 use trait_kit::prelude::*;
 
 use super::*;
@@ -61,11 +65,13 @@ impl ModuleMeta for CycleA {
         DEPS
     }
 }
-impl AutoBuilder for CycleA {
+impl AsyncAutoBuilder for CycleA {
     type Capability = ();
     type Error = TraitKitError;
-    fn build(_kit: &Kit) -> Result<Self::Capability, Self::Error> {
-        Ok(())
+    fn build<'a>(
+        _kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { Ok(()) })
     }
 }
 
@@ -77,11 +83,13 @@ impl ModuleMeta for CycleB {
         DEPS
     }
 }
-impl AutoBuilder for CycleB {
+impl AsyncAutoBuilder for CycleB {
     type Capability = ();
     type Error = TraitKitError;
-    fn build(_kit: &Kit) -> Result<Self::Capability, Self::Error> {
-        Ok(())
+    fn build<'a>(
+        _kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { Ok(()) })
     }
 }
 
@@ -99,108 +107,108 @@ fn make_rate_limiter() -> Arc<LimiteronAdapter> {
 }
 
 // ---------------------------------------------------------------------------
-// T013 测试：注册、构建、require
+// T013 测试：注册、构建、require（基于 AsyncKit）
 // ---------------------------------------------------------------------------
 
-#[test]
-fn test_embedding_module_register_and_build() {
-    let mut kit = Kit::new();
+#[tokio::test]
+async fn test_embedding_module_register_and_build() {
+    let mut kit = AsyncKit::new();
 
     let service = make_service();
     kit.set_config(service.clone());
     kit.register::<EmbeddingModule>().unwrap();
 
-    let kit = kit.build().unwrap();
+    let kit = kit.build().await.unwrap();
 
     let capability = kit.require::<EmbeddingModule>().unwrap();
     assert!(Arc::ptr_eq(&capability, &service));
     assert!(kit.contains::<EmbeddingModule>());
 }
 
-#[test]
-fn test_embedding_module_missing_config_fails() {
-    let mut kit = Kit::new();
+#[tokio::test]
+async fn test_embedding_module_missing_config_fails() {
+    let mut kit = AsyncKit::new();
     kit.register::<EmbeddingModule>().unwrap();
 
-    let result = kit.build();
+    let result = kit.build().await;
     assert!(
         result.is_err(),
         "build should fail when EmbeddingService config is missing"
     );
 }
 
-#[test]
-fn test_rate_limit_module_build() {
-    let mut kit = Kit::new();
+#[tokio::test]
+async fn test_rate_limit_module_build() {
+    let mut kit = AsyncKit::new();
 
     let rate_limiter = make_rate_limiter();
     kit.set_config(rate_limiter.clone());
     kit.register::<RateLimitModule>().unwrap();
 
-    let kit = kit.build().unwrap();
+    let kit = kit.build().await.unwrap();
     let capability = kit.require::<RateLimitModule>().unwrap();
     assert!(Arc::ptr_eq(&capability, &rate_limiter));
 }
 
-#[test]
-fn test_cache_module_default_disabled() {
-    let mut kit = Kit::new();
+#[tokio::test]
+async fn test_cache_module_default_disabled() {
+    let mut kit = AsyncKit::new();
     kit.register::<CacheModule>().unwrap();
 
-    let kit = kit.build().unwrap();
+    let kit = kit.build().await.unwrap();
     let enabled = kit.require::<CacheModule>().unwrap();
     assert!(!enabled, "Cache should be disabled by default");
 }
 
-#[test]
-fn test_cache_module_with_config() {
-    let mut kit = Kit::new();
+#[tokio::test]
+async fn test_cache_module_with_config() {
+    let mut kit = AsyncKit::new();
     kit.set_config(CacheConfig {
         enabled: true,
         size: 1024,
     });
     kit.register::<CacheModule>().unwrap();
 
-    let kit = kit.build().unwrap();
+    let kit = kit.build().await.unwrap();
     let enabled = kit.require::<CacheModule>().unwrap();
     assert!(enabled, "Cache should be enabled when configured");
 }
 
-#[test]
-fn test_db_module_default_disabled() {
-    let mut kit = Kit::new();
+#[tokio::test]
+async fn test_db_module_default_disabled() {
+    let mut kit = AsyncKit::new();
     kit.register::<DbModule>().unwrap();
 
-    let kit = kit.build().unwrap();
+    let kit = kit.build().await.unwrap();
     let enabled = kit.require::<DbModule>().unwrap();
     assert!(!enabled, "DB should be disabled by default");
 }
 
-#[test]
-fn test_db_module_with_config() {
-    let mut kit = Kit::new();
+#[tokio::test]
+async fn test_db_module_with_config() {
+    let mut kit = AsyncKit::new();
     kit.set_config(DbConfig { enabled: true });
     kit.register::<DbModule>().unwrap();
 
-    let kit = kit.build().unwrap();
+    let kit = kit.build().await.unwrap();
     let enabled = kit.require::<DbModule>().unwrap();
     assert!(enabled, "DB should be enabled when configured");
 }
 
-#[test]
-fn test_audit_module_with_none() {
-    let mut kit = Kit::new();
+#[tokio::test]
+async fn test_audit_module_with_none() {
+    let mut kit = AsyncKit::new();
     kit.set_config(Option::<Arc<crate::audit::AuditLogger>>::None);
     kit.register::<AuditModule>().unwrap();
 
-    let kit = kit.build().unwrap();
+    let kit = kit.build().await.unwrap();
     let capability = kit.require::<AuditModule>().unwrap();
     assert!(capability.is_none());
 }
 
-#[test]
-fn test_multiple_modules_build_together() {
-    let mut kit = Kit::new();
+#[tokio::test]
+async fn test_multiple_modules_build_together() {
+    let mut kit = AsyncKit::new();
 
     let service = make_service();
     let rate_limiter = make_rate_limiter();
@@ -219,7 +227,7 @@ fn test_multiple_modules_build_together() {
     kit.register::<DbModule>().unwrap();
     kit.register::<AuditModule>().unwrap();
 
-    let kit = kit.build().unwrap();
+    let kit = kit.build().await.unwrap();
 
     assert!(kit.contains::<EmbeddingModule>());
     assert!(kit.contains::<RateLimitModule>());
@@ -237,9 +245,9 @@ fn test_multiple_modules_build_together() {
     assert!(!db_enabled);
 }
 
-#[test]
-fn test_duplicate_registration_fails() {
-    let mut kit = Kit::new();
+#[tokio::test]
+async fn test_duplicate_registration_fails() {
+    let mut kit = AsyncKit::new();
     kit.set_config(make_service());
     kit.register::<EmbeddingModule>().unwrap();
 
@@ -254,21 +262,21 @@ fn test_duplicate_registration_fails() {
 // T013 测试：循环依赖检测
 // ---------------------------------------------------------------------------
 
-#[test]
-fn test_circular_dependency_detected() {
-    let mut kit = Kit::new();
+#[tokio::test]
+async fn test_circular_dependency_detected() {
+    let mut kit = AsyncKit::new();
     kit.register::<CycleA>().unwrap();
     kit.register::<CycleB>().unwrap();
 
-    let result = kit.build();
+    let result = kit.build().await;
     assert!(
         result.is_err(),
         "Circular dependency should be detected and return Err"
     );
 }
 
-#[test]
-fn test_missing_dependency_detected() {
+#[tokio::test]
+async fn test_missing_dependency_detected() {
     struct DependentModule;
     impl ModuleMeta for DependentModule {
         const NAME: &'static str = "dependent";
@@ -278,20 +286,50 @@ fn test_missing_dependency_detected() {
             DEPS
         }
     }
-    impl AutoBuilder for DependentModule {
+    impl AsyncAutoBuilder for DependentModule {
         type Capability = ();
         type Error = TraitKitError;
-        fn build(_kit: &Kit) -> Result<Self::Capability, Self::Error> {
-            Ok(())
+        fn build<'a>(
+            _kit: &'a AsyncKit,
+        ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>>
+        {
+            Box::pin(async move { Ok(()) })
         }
     }
 
-    let mut kit = Kit::new();
+    let mut kit = AsyncKit::new();
     kit.register::<DependentModule>().unwrap();
 
-    let result = kit.build();
+    let result = kit.build().await;
     assert!(
         result.is_err(),
         "Missing dependency should be detected and return Err"
     );
+}
+
+// ---------------------------------------------------------------------------
+// AsyncKit Send + Sync 验证（编译期断言）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_async_kit_is_send_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<AsyncKit>();
+    assert_send_sync::<trait_kit::AsyncReady>();
+}
+
+#[tokio::test]
+async fn test_async_kit_can_be_wrapped_in_arc() {
+    let mut kit = AsyncKit::new();
+    kit.set_config(make_service());
+    kit.register::<EmbeddingModule>().unwrap();
+
+    let kit = kit.build().await.unwrap();
+    let kit_arc = Arc::new(kit);
+
+    // 验证 Arc<AsyncKit<Ready>> 可以跨线程克隆，且 require 返回正确的能力
+    let kit_clone = Arc::clone(&kit_arc);
+    let svc = kit_clone.require::<EmbeddingModule>().unwrap();
+    let _guard = svc.read().await;
+    // 只需验证能成功获取读写锁即可，不访问私有字段
 }

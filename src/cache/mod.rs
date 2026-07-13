@@ -1,7 +1,9 @@
 // Copyright (c) 2025-2026 Kirky.X
 //
-// Licensed under MIT License
+// Licensed under the MIT License
 // See LICENSE file in the project root for full license information
+
+#![allow(dead_code)]
 
 pub(crate) mod entry;
 pub(crate) mod trait_impl;
@@ -13,6 +15,13 @@ pub(crate) mod oxcache_backend;
 // 内部使用,不对外暴露
 #[cfg(feature = "oxcache")]
 pub(crate) use oxcache_backend::OxCacheBackend;
+
+// oxcache feature 关闭时的 no-op stub,保持 EmbeddingService API 一致
+#[cfg(not(feature = "oxcache"))]
+mod oxcache_stub;
+
+#[cfg(not(feature = "oxcache"))]
+pub(crate) use oxcache_stub::OxCacheBackend;
 
 // === 通用缓存类型和接口 ===
 

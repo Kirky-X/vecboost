@@ -34,7 +34,10 @@ pub async fn login_handler(
     // 验证用户名格式
     validate_username_format(&login_request.username)?;
 
-    match user_store.verify_password(&login_request.username, &login_request.password) {
+    match user_store
+        .verify_password(&login_request.username, &login_request.password)
+        .await
+    {
         Ok(user) => {
             let token = jwt_manager.generate_token(&user)?;
 
@@ -148,9 +151,12 @@ pub async fn me_handler(
     let claims = jwt_manager
         .validate_token(&refresh_request.refresh_token)
         .await?;
-    let user = user_store.get_user(&claims.username)?.ok_or_else(|| {
-        VecboostError::AuthenticationError(format!("User '{}' not found", claims.username))
-    })?;
+    let user = user_store
+        .get_user(&claims.username)
+        .await?
+        .ok_or_else(|| {
+            VecboostError::AuthenticationError(format!("User '{}' not found", claims.username))
+        })?;
 
     Ok(Json(serde_json::json!({
         "username": user.username,

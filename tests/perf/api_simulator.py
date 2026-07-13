@@ -6,7 +6,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, Type, TypeVar, Callable
 
-from tests.config import MAX_TEXT_LENGTH
+from perf.config import MAX_TEXT_LENGTH
 
 T = TypeVar("T")
 

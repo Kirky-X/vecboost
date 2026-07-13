@@ -66,7 +66,8 @@ impl InferenceCollector {
         }
     }
 
-    pub fn with_memory_monitor(memory_monitor: Arc<MemoryMonitor>) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn with_memory_monitor(memory_monitor: Arc<MemoryMonitor>) -> Self {
         let mut collector = Self::new();
         collector.memory_monitor = memory_monitor;
         collector

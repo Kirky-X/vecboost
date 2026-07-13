@@ -76,8 +76,6 @@ impl PipelineScheduler {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // TODO: 需要添加 EmbeddingService mock 来修复测试
     /*
     #[tokio::test]

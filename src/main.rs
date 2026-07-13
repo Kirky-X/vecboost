@@ -6,11 +6,20 @@
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
+#[cfg(not(feature = "config"))]
+use vecboost::AppConfig;
+#[cfg(feature = "config")]
+use vecboost::config::ConfersAppConfig;
+#[cfg(feature = "auth")]
+use vecboost::module_registry::AuthModule;
+#[cfg(feature = "limiteron")]
+use vecboost::module_registry::RateLimitModule;
 use vecboost::{
-    AppConfig, AppState,
+    AppState,
     audit::{AuditConfig, AuditLogger},
     config::model::{EngineType, ModelConfig},
     engine::AnyEngine,
+    module_registry::{AuditModule, CacheConfig, CacheModule, DbConfig, DbModule, EmbeddingModule},
     pipeline::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
         WorkerManager,
@@ -18,6 +27,9 @@ use vecboost::{
     rate_limit::LimiteronAdapter,
     service::embedding::EmbeddingService,
 };
+
+#[cfg(feature = "db")]
+use vecboost::db::{DbPool, init_schema};
 
 #[cfg(feature = "auth")]
 use vecboost::{
@@ -52,6 +64,10 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Starting Rust Embedding Service...");
 
+    #[cfg(feature = "config")]
+    let config = ConfersAppConfig::load_via_confers()
+        .map_err(|e| anyhow::anyhow!("Failed to load config via confers: {}", e))?;
+    #[cfg(not(feature = "config"))]
     let config = AppConfig::load()?;
     tracing::info!(
         "Configuration loaded: {} auth={} audit={}",
@@ -63,6 +79,23 @@ async fn main() -> anyhow::Result<()> {
         config.auth.enabled,
         config.audit.enabled
     );
+
+    // 初始化数据库连接池（db feature 启用时）
+    #[cfg(feature = "db")]
+    let db_pool = {
+        tracing::info!(
+            "Initializing database pool with url={}",
+            config.database.url
+        );
+        let pool = DbPool::new(&config.database.url)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create database pool: {}", e))?;
+        init_schema(&pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize database schema: {}", e))?;
+        tracing::info!("Database pool initialized and schema verified");
+        pool
+    };
 
     let model_config = ModelConfig {
         name: config.model.model_repo.clone(),
@@ -83,11 +116,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     tracing::info!("Initializing Inference Engine (this may take a while to download models)...");
-    let engine: Arc<RwLock<AnyEngine>> = Arc::new(RwLock::new(AnyEngine::new(
-        &model_config,
-        EngineType::Candle,
-        vecboost::config::model::Precision::Fp32,
-    )?));
+    let engine: Arc<RwLock<AnyEngine>> = Arc::new(RwLock::new(
+        vecboost::engine::EngineFactory::create(EngineType::Candle, &model_config)?,
+    ));
 
     let cache_enabled = config.embedding.cache_enabled;
     let cache_size = config.embedding.cache_size;
@@ -100,6 +131,10 @@ async fn main() -> anyhow::Result<()> {
         EmbeddingService::new(engine, Some(model_config))
     };
     let service = Arc::new(RwLock::new(service));
+
+    // Initialize the global service reference for sdforge #[forge] functions (D5)
+    #[cfg(feature = "http")]
+    vecboost::api::init_service(service.clone());
 
     // 创建限流器
     let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
@@ -148,6 +183,9 @@ async fn main() -> anyhow::Result<()> {
                 .with_expiration(config.auth.token_expiration_hours.unwrap_or(24)),
         );
 
+        #[cfg(feature = "db")]
+        let user_store = Arc::new(UserStore::new(Arc::new(db_pool.clone())));
+        #[cfg(not(feature = "db"))]
         let user_store = Arc::new(UserStore::new());
 
         // 强制用户提供管理员凭证，不再使用默认值
@@ -173,6 +211,7 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Failed to create default admin user: {}", e))?;
         user_store
             .add_user(admin_user)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to add default admin user: {}", e))?;
 
         tracing::info!(
@@ -226,6 +265,14 @@ async fn main() -> anyhow::Result<()> {
             max_files: config.audit.max_files,
             async_write: true,
         };
+        #[cfg(feature = "db")]
+        {
+            Some(Arc::new(AuditLogger::new_with_db(
+                audit_config,
+                db_pool.clone(),
+            )))
+        }
+        #[cfg(not(feature = "db"))]
         Some(Arc::new(AuditLogger::new(audit_config)))
     } else {
         tracing::warn!("Audit logging is DISABLED - security events will not be logged!");
@@ -301,23 +348,61 @@ async fn main() -> anyhow::Result<()> {
         };
 
     // ---------------------------------------------------------------------------
-    // Module Registry (trait-kit) — 未来重构基础
+    // Module Registry (trait-kit AsyncKit) — D1 集成
     //
-    // trait-kit 用于管理模块依赖关系和能力构建。由于 Kit 基于 RefCell 且 !Sync，
-    // 不能放入 AppState（AppState 需要 Send + Sync）。
+    // 使用 trait-kit 0.3 的 AsyncKit 构建模块依赖图。AsyncKit 是 Send + Sync
+    // （基于 Arc<RwLock>），可安全存入 AppState 并跨线程共享。
     //
-    // 未来重构方向：在启动时用 Kit 构建各模块，提取能力填充 AppState 字段：
-    //   let mut kit = trait_kit::Kit::new();
-    //   kit.set_config(service.clone());
-    //   kit.set_config(rate_limiter.clone());
-    //   kit.register::<vecboost::module_registry::EmbeddingModule>().unwrap();
-    //   kit.register::<vecboost::module_registry::RateLimitModule>().unwrap();
-    //   let kit = kit.build().unwrap();
-    //   let service = kit.require::<vecboost::module_registry::EmbeddingModule>().unwrap();
-    //   let rate_limiter = kit.require::<vecboost::module_registry::RateLimitModule>().unwrap();
-    //
-    // 当前保持现有 AppState 结构不变，module_registry 作为未来重构的基础。
+    // 模块采用"预构建能力注入"模式：需要异步构造的复杂对象（如 EmbeddingService）
+    // 在上方已预构建，此处通过 kit.set_config() 注入，模块的 build() 从 config 检索。
     // ---------------------------------------------------------------------------
+
+    let mut kit = trait_kit::AsyncKit::new();
+
+    // 注入预构建的能力对象（clone Arc 以保留原始变量给 AppState）
+    kit.set_config(service.clone());
+    #[cfg(feature = "limiteron")]
+    kit.set_config(rate_limiter.clone());
+    kit.set_config(CacheConfig {
+        enabled: config.embedding.cache_enabled,
+        size: config.embedding.cache_size,
+    });
+    kit.set_config(DbConfig {
+        enabled: cfg!(feature = "db"),
+    });
+    kit.set_config(audit_logger.clone());
+    #[cfg(feature = "auth")]
+    {
+        if let Some(ref jwt) = jwt_manager {
+            kit.set_config(Some(Arc::clone(jwt)) as Option<Arc<vecboost::auth::JwtManager>>);
+        } else {
+            kit.set_config(None::<Arc<vecboost::auth::JwtManager>>);
+        }
+    }
+
+    // 注册模块
+    kit.register::<EmbeddingModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
+    #[cfg(feature = "limiteron")]
+    kit.register::<RateLimitModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register RateLimitModule: {}", e))?;
+    kit.register::<CacheModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register CacheModule: {}", e))?;
+    kit.register::<DbModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register DbModule: {}", e))?;
+    kit.register::<AuditModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register AuditModule: {}", e))?;
+    #[cfg(feature = "auth")]
+    kit.register::<AuthModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register AuthModule: {}", e))?;
+
+    let kit = kit
+        .build()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
+    let kit = Arc::new(kit);
+
+    tracing::info!("AsyncKit module registry built successfully");
 
     let app_state = AppState {
         service,
@@ -344,6 +429,7 @@ async fn main() -> anyhow::Result<()> {
         response_channel,
         priority_calculator,
         worker_manager,
+        kit: Some(kit),
     };
 
     let _grpc_service = app_state.service.clone();

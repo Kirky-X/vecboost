@@ -193,7 +193,7 @@ pub struct OpenAIErrorDetail {
 }
 
 /// Encoding format for embeddings.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncodingFormat {
     /// Standard float array
     Float,
@@ -214,5 +214,131 @@ impl EncodingFormat {
     /// Returns true if this is base64 encoding
     pub fn is_base64(&self) -> bool {
         matches!(self, EncodingFormat::Base64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_openai_input_single() {
+        let input = OpenAIInput::Single("hello".to_string());
+        assert!(input.is_single());
+        assert!(!input.is_multiple());
+        assert_eq!(input.as_single(), Some("hello"));
+        assert!(input.as_multiple().is_none());
+        assert_eq!(input.len(), 1);
+        assert!(!input.is_empty());
+    }
+
+    #[test]
+    fn test_openai_input_multiple() {
+        let input = OpenAIInput::Multiple(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert!(!input.is_single());
+        assert!(input.is_multiple());
+        assert!(input.as_single().is_none());
+        assert_eq!(input.as_multiple().map(|v| v.len()), Some(3));
+        assert_eq!(input.len(), 3);
+        assert!(!input.is_empty());
+    }
+
+    #[test]
+    fn test_openai_input_empty_multiple() {
+        let input = OpenAIInput::Multiple(vec![]);
+        assert!(input.is_multiple());
+        assert_eq!(input.len(), 0);
+        assert!(input.is_empty());
+    }
+
+    #[test]
+    fn test_openai_input_to_vec_single() {
+        let input = OpenAIInput::Single("world".to_string());
+        let v = input.to_vec();
+        assert_eq!(v, vec!["world".to_string()]);
+    }
+
+    #[test]
+    fn test_openai_input_to_vec_multiple() {
+        let input = OpenAIInput::Multiple(vec!["x".to_string(), "y".to_string()]);
+        let v = input.to_vec();
+        assert_eq!(v, vec!["x".to_string(), "y".to_string()]);
+    }
+
+    #[test]
+    fn test_openai_input_deserialize_single() {
+        let json = "\"single text\"";
+        let input: OpenAIInput = serde_json::from_str(json).unwrap();
+        assert!(input.is_single());
+        assert_eq!(input.as_single(), Some("single text"));
+    }
+
+    #[test]
+    fn test_openai_input_deserialize_multiple() {
+        let json = "[\"text1\", \"text2\"]";
+        let input: OpenAIInput = serde_json::from_str(json).unwrap();
+        assert!(input.is_multiple());
+        assert_eq!(input.len(), 2);
+    }
+
+    #[test]
+    fn test_encoding_format_parse_float() {
+        assert_eq!(EncodingFormat::parse("float"), Some(EncodingFormat::Float));
+        assert_eq!(EncodingFormat::parse("FLOAT"), Some(EncodingFormat::Float));
+        assert_eq!(EncodingFormat::parse("Float"), Some(EncodingFormat::Float));
+    }
+
+    #[test]
+    fn test_encoding_format_parse_base64() {
+        assert_eq!(
+            EncodingFormat::parse("base64"),
+            Some(EncodingFormat::Base64)
+        );
+        assert_eq!(
+            EncodingFormat::parse("BASE64"),
+            Some(EncodingFormat::Base64)
+        );
+    }
+
+    #[test]
+    fn test_encoding_format_parse_invalid() {
+        assert_eq!(EncodingFormat::parse("binary"), None);
+        assert_eq!(EncodingFormat::parse(""), None);
+    }
+
+    #[test]
+    fn test_encoding_format_is_base64() {
+        assert!(EncodingFormat::Base64.is_base64());
+        assert!(!EncodingFormat::Float.is_base64());
+    }
+
+    #[test]
+    fn test_openai_embed_request_deserialize() {
+        let json = r#"{
+            "input": "hello world",
+            "model": "text-embedding-ada-002"
+        }"#;
+        let req: OpenAIEmbedRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.model, "text-embedding-ada-002");
+        assert!(req.input.is_single());
+        assert_eq!(req.encoding_format, None);
+        assert_eq!(req.dimensions, None);
+        assert_eq!(req.user, None);
+    }
+
+    #[test]
+    fn test_openai_embed_request_deserialize_with_optional() {
+        let json = r#"{
+            "input": ["text1", "text2"],
+            "model": "text-embedding-3-small",
+            "encoding_format": "base64",
+            "dimensions": 512,
+            "user": "user-123"
+        }"#;
+        let req: OpenAIEmbedRequest = serde_json::from_str(json).unwrap();
+        assert!(req.input.is_multiple());
+        assert_eq!(req.encoding_format, Some("base64".to_string()));
+        assert_eq!(req.dimensions, Some(512));
+        assert_eq!(req.user, Some("user-123".to_string()));
     }
 }

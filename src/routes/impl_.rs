@@ -5,7 +5,9 @@
 
 //! 路由实现块
 
-use axum::{Router, middleware, routing::get, routing::post};
+#[cfg(feature = "auth")]
+use axum::middleware;
+use axum::{Router, routing::get, routing::post};
 use tower_http::timeout::TimeoutLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;

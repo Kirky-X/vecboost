@@ -190,21 +190,6 @@ impl EncryptedFileKeyStore {
             KeyType::Custom(s) => format!("custom_{}", s),
         }
     }
-
-    #[allow(dead_code)]
-    fn string_to_key_type(s: &str) -> Result<KeyType, VecboostError> {
-        match s {
-            "jwt_secret" => Ok(KeyType::JwtSecret),
-            "api_key" => Ok(KeyType::ApiKey),
-            "database_password" => Ok(KeyType::DatabasePassword),
-            "model_api_key" => Ok(KeyType::ModelApiKey),
-            custom if custom.starts_with("custom_") => Ok(KeyType::Custom(custom[7..].to_string())),
-            _ => Err(VecboostError::security_error(format!(
-                "Unknown key type: {}",
-                s
-            ))),
-        }
-    }
 }
 
 #[async_trait]

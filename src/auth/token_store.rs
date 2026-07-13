@@ -246,10 +246,10 @@ impl TokenStoreFactory {
         redis_url: Option<&str>,
         key_prefix: Option<String>,
     ) -> Arc<dyn TokenStore> {
-        if let Some(url) = redis_url {
-            if let Some(redis_store) = Self::create_redis_store(url, key_prefix).await {
-                return Arc::new(redis_store);
-            }
+        if let Some(url) = redis_url
+            && let Some(redis_store) = Self::create_redis_store(url, key_prefix).await
+        {
+            return Arc::new(redis_store);
         }
         // Fallback to memory store
         Arc::new(MemoryTokenStore::new())

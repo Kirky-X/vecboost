@@ -24,6 +24,8 @@ pub struct AppConfig {
     pub audit: AuditConfig,
     pub memory_pool: MemoryPoolConfig,
     pub pipeline: PipelineConfig,
+    #[cfg(feature = "db")]
+    pub database: DatabaseConfig,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
@@ -163,6 +165,32 @@ pub struct AuditConfig {
     pub log_level: String,
     pub max_file_size_mb: usize,
     pub max_files: usize,
+}
+
+/// 数据库配置（dbnexus，需启用 `db` feature）
+#[cfg(feature = "db")]
+#[derive(Debug, Deserialize, Clone, Serialize)]
+#[serde(default)]
+pub struct DatabaseConfig {
+    /// 数据库连接 URL
+    /// SQLite: "sqlite:vecboost.db" / "sqlite::memory:"
+    /// PostgreSQL: "postgres://user:pass@localhost:5432/vecboost"
+    pub url: String,
+    /// 连接池大小
+    pub max_connections: u32,
+    /// 连接超时（秒）
+    pub connect_timeout_secs: u64,
+}
+
+#[cfg(feature = "db")]
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: "sqlite:vecboost.db".to_string(),
+            max_connections: 10,
+            connect_timeout_secs: 5,
+        }
+    }
 }
 
 /// 内存池配置
@@ -507,8 +535,8 @@ impl ConfigLoader {
             .build()?
             .try_deserialize()
             .map_err(ConfigError::from)
-            .map(|mut cfg| {
-                apply_priority_defaults(&mut cfg);
+            .map(|mut cfg: AppConfig| {
+                apply_priority_defaults(&mut cfg.pipeline.priority);
                 cfg
             })?;
 
@@ -519,38 +547,21 @@ impl ConfigLoader {
     }
 }
 
-fn apply_priority_defaults(cfg: &mut AppConfig) {
-    if cfg.pipeline.priority.user_tier_weights.is_empty() {
-        cfg.pipeline
-            .priority
-            .user_tier_weights
-            .insert("free".to_string(), 1.0);
-        cfg.pipeline
-            .priority
-            .user_tier_weights
-            .insert("basic".to_string(), 1.5);
-        cfg.pipeline
-            .priority
+pub(crate) fn apply_priority_defaults(priority: &mut PriorityConfig) {
+    if priority.user_tier_weights.is_empty() {
+        priority.user_tier_weights.insert("free".to_string(), 1.0);
+        priority.user_tier_weights.insert("basic".to_string(), 1.5);
+        priority
             .user_tier_weights
             .insert("premium".to_string(), 2.0);
-        cfg.pipeline
-            .priority
+        priority
             .user_tier_weights
             .insert("enterprise".to_string(), 3.0);
     }
-    if cfg.pipeline.priority.source_weights.is_empty() {
-        cfg.pipeline
-            .priority
-            .source_weights
-            .insert("http".to_string(), 1.0);
-        cfg.pipeline
-            .priority
-            .source_weights
-            .insert("grpc".to_string(), 1.2);
-        cfg.pipeline
-            .priority
-            .source_weights
-            .insert("internal".to_string(), 1.5);
+    if priority.source_weights.is_empty() {
+        priority.source_weights.insert("http".to_string(), 1.0);
+        priority.source_weights.insert("grpc".to_string(), 1.2);
+        priority.source_weights.insert("internal".to_string(), 1.5);
     }
 }
 
@@ -696,5 +707,217 @@ mod tests {
         cfg.auth.default_admin_password = Some("Secure@Pass123!".to_string());
         assert!(cfg.auth.default_admin_password.is_some());
         assert!(cfg.auth.default_admin_password.unwrap().len() >= 12);
+    }
+
+    #[test]
+    fn test_server_config_default() {
+        let config = ServerConfig::default();
+        assert_eq!(config.host, "0.0.0.0");
+        assert_eq!(config.port, 3000);
+        assert!(!config.grpc_enabled);
+        assert_eq!(config.grpc_port, Some(50051));
+        assert_eq!(config.timeout, Some(30));
+    }
+
+    #[test]
+    fn test_model_config_default() {
+        let config = ModelConfig::default();
+        assert_eq!(config.model_repo, "BAAI/bge-m3");
+        assert_eq!(config.model_revision, "main");
+        assert!(!config.use_gpu);
+        assert_eq!(config.batch_size, 32);
+        assert_eq!(config.expected_dimension, Some(1024));
+        assert_eq!(config.max_sequence_length, Some(8192));
+    }
+
+    #[test]
+    fn test_embedding_config_default() {
+        let config = EmbeddingConfig::default();
+        assert_eq!(config.default_aggregation, "mean");
+        assert_eq!(config.similarity_metric, "cosine");
+        assert!(config.cache_enabled);
+        assert_eq!(config.cache_size, 1024);
+        assert_eq!(config.max_batch_size, 64);
+    }
+
+    #[test]
+    fn test_monitoring_config_default() {
+        let config = MonitoringConfig::default();
+        assert_eq!(config.memory_limit_mb, Some(4096));
+        assert_eq!(config.memory_warning_threshold, Some(0.8));
+        assert!(config.metrics_enabled);
+    }
+
+    #[test]
+    fn test_auth_config_default() {
+        let config = AuthConfig::default();
+        assert!(!config.enabled);
+        assert!(config.jwt_secret.is_none());
+        assert_eq!(config.token_expiration_hours, Some(24));
+    }
+
+    #[test]
+    fn test_audit_config_default() {
+        let config = AuditConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.log_file_path, "logs/audit.log");
+        assert_eq!(config.log_level, "info");
+        assert_eq!(config.max_file_size_mb, 100);
+        assert_eq!(config.max_files, 10);
+    }
+
+    #[test]
+    fn test_rate_limit_config_default() {
+        let config = RateLimitConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.global_requests_per_minute, 1000);
+        assert_eq!(config.ip_requests_per_minute, 100);
+        assert_eq!(config.user_requests_per_minute, 200);
+        assert_eq!(config.api_key_requests_per_minute, 500);
+        assert_eq!(config.window_secs, 60);
+        assert!(config.ip_whitelist.is_empty());
+    }
+
+    #[test]
+    fn test_security_config_default() {
+        let config = SecurityConfig::default();
+        assert_eq!(config.storage_type, "environment");
+        assert!(config.encryption_key.is_none());
+        assert!(config.key_file_path.is_none());
+    }
+
+    #[test]
+    fn test_csrf_config_default() {
+        let config = CsrfConfig::default();
+        assert!(!config.enabled);
+        assert!(config.allowed_origins.is_none());
+        assert!(!config.token_validation_enabled);
+        assert_eq!(config.token_expiration_secs, Some(3600));
+        assert!(config.allow_same_origin);
+    }
+
+    #[test]
+    fn test_memory_pool_config_default() {
+        let config = MemoryPoolConfig::default();
+        assert!(config.enabled);
+        assert!(config.tensor_pool.enabled);
+        assert!(config.buffer_pool.enabled);
+        assert!(config.model_pool.enabled);
+        assert!(config.cuda_pool.enabled);
+        assert_eq!(config.tensor_pool.max_batch_size, 128);
+        assert_eq!(config.tensor_pool.max_sequence_length, 8192);
+        assert_eq!(config.model_pool.max_memory_mb, 8192);
+        assert_eq!(config.cuda_pool.max_memory_mb, 4096);
+    }
+
+    #[test]
+    fn test_config_loader_new() {
+        let loader = ConfigLoader::new();
+        assert!(loader.config_path.is_none());
+        assert_eq!(loader.env_prefix, "VECBOOST");
+    }
+
+    #[test]
+    fn test_config_loader_default() {
+        let loader = ConfigLoader::default();
+        assert!(loader.config_path.is_none());
+        assert_eq!(loader.env_prefix, "VECBOOST");
+    }
+
+    #[test]
+    fn test_config_loader_with_config_path() {
+        let loader = ConfigLoader::new().with_config_path("/custom/path.toml");
+        assert_eq!(loader.config_path, Some(PathBuf::from("/custom/path.toml")));
+    }
+
+    #[test]
+    fn test_config_loader_with_env_prefix() {
+        let loader = ConfigLoader::new().with_env_prefix("CUSTOM");
+        assert_eq!(loader.env_prefix, "CUSTOM");
+    }
+
+    #[test]
+    fn test_config_loader_builder_chain() {
+        let loader = ConfigLoader::new()
+            .with_config_path("config.toml")
+            .with_env_prefix("MYAPP");
+        assert_eq!(loader.config_path, Some(PathBuf::from("config.toml")));
+        assert_eq!(loader.env_prefix, "MYAPP");
+    }
+
+    #[test]
+    fn test_app_config_default() {
+        let config = AppConfig::default();
+        assert_eq!(config.server.port, 3000);
+        assert_eq!(config.model.model_repo, "BAAI/bge-m3");
+        assert!(config.embedding.cache_enabled);
+        assert!(config.audit.enabled);
+        assert!(config.rate_limit.enabled);
+        assert!(config.memory_pool.enabled);
+    }
+
+    #[test]
+    fn test_app_config_to_toml_string() {
+        let config = AppConfig::default();
+        let toml_str = config.to_toml_string();
+        assert!(toml_str.is_ok());
+        let toml_content = toml_str.unwrap();
+        assert!(toml_content.contains("[server]"));
+        assert!(toml_content.contains("[model]"));
+        assert!(toml_content.contains("[embedding]"));
+    }
+
+    #[test]
+    fn test_apply_priority_defaults_with_empty_weights() {
+        let mut cfg = AppConfig::default();
+        cfg.pipeline.priority.user_tier_weights.clear();
+        cfg.pipeline.priority.source_weights.clear();
+        apply_priority_defaults(&mut cfg.pipeline.priority);
+        assert_eq!(cfg.pipeline.priority.user_tier_weights.len(), 4);
+        assert!(cfg.pipeline.priority.user_tier_weights.contains_key("free"));
+        assert!(
+            cfg.pipeline
+                .priority
+                .user_tier_weights
+                .contains_key("premium")
+        );
+        assert_eq!(cfg.pipeline.priority.source_weights.len(), 3);
+        assert!(cfg.pipeline.priority.source_weights.contains_key("http"));
+    }
+
+    #[test]
+    fn test_apply_priority_defaults_preserves_existing() {
+        let mut cfg = AppConfig::default();
+        cfg.pipeline
+            .priority
+            .user_tier_weights
+            .insert("custom".to_string(), 5.0);
+        apply_priority_defaults(&mut cfg.pipeline.priority);
+        assert!(
+            cfg.pipeline
+                .priority
+                .user_tier_weights
+                .contains_key("custom")
+        );
+        assert_eq!(
+            cfg.pipeline.priority.user_tier_weights.get("custom"),
+            Some(&5.0)
+        );
+    }
+
+    #[test]
+    fn test_config_error_from_config_error() {
+        let config_err = config::ConfigError::Message("test error".to_string());
+        let app_err: ConfigError = config_err.into();
+        match app_err {
+            ConfigError::Message(msg) => assert!(msg.contains("test error")),
+            _ => panic!("Expected Message variant"),
+        }
+    }
+
+    #[test]
+    fn test_config_error_display() {
+        let err = ConfigError::Message("display test".to_string());
+        assert_eq!(format!("{}", err), "Configuration error: display test");
     }
 }

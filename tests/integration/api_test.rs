@@ -1,9 +1,9 @@
 // Copyright (c) 2025-2026 Kirky.X
 //
-// Licensed under MIT License
-// See LICENSE file in the project root for full license information
+// Licensed under the MIT License
+// See LICENSE file in the project root for full license information.
 
-//! 集成测试
+//! 集成测试（合并自 integration_test.rs + test_real_inference.rs）
 //!
 //! 使用 RealTestEngine 进行集成测试，支持真实推理和 Mock 回退。
 
@@ -11,13 +11,12 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
 
 use vecboost::domain::{EmbedRequest, SearchRequest, SimilarityRequest};
 use vecboost::service::embedding::EmbeddingService;
 
-// 使用新的 RealTestEngine
-mod real_engine;
-use real_engine::create_test_engine;
+use crate::common::{RealTestEngine, create_test_engine, create_test_engine_with_dimension};
 
 const MOCK_DIMENSION: usize = 1024;
 
@@ -439,4 +438,241 @@ async fn test_long_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
         result.dimension
     );
     Ok(())
+}
+
+// === 以下测试合并自 test_real_inference.rs ===
+
+/// 测试 RealTestEngine 基本功能
+#[tokio::test]
+async fn test_real_test_engine_basic() {
+    let engine = create_test_engine().unwrap();
+    let service = EmbeddingService::new(engine, None);
+
+    let result = service
+        .process_text(
+            EmbedRequest {
+                text: "Hello, world!".to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.embedding.is_empty());
+    assert!(result.embedding.iter().all(|&x| x.is_finite()));
+}
+
+/// 测试不同维度
+#[tokio::test]
+async fn test_real_test_engine_different_dimensions() {
+    let dimensions = [384, 768, 1024];
+
+    for dim in dimensions {
+        let engine = create_test_engine_with_dimension(dim).unwrap();
+        let service = EmbeddingService::new(engine, None);
+
+        let result = service
+            .process_text(
+                EmbedRequest {
+                    text: "Test text".to_string(),
+                    normalize: Some(true),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.embedding.len(), dim, "Dimension should be {}", dim);
+    }
+}
+
+/// 测试确定性
+#[tokio::test]
+async fn test_real_test_engine_determinism() {
+    let engine = create_test_engine().unwrap();
+    let service = EmbeddingService::new(engine, None);
+
+    let text = "Deterministic test text";
+
+    let result1 = service
+        .process_text(
+            EmbedRequest {
+                text: text.to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let result2 = service
+        .process_text(
+            EmbedRequest {
+                text: text.to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result1.embedding, result2.embedding,
+        "Same text should produce same embedding"
+    );
+}
+
+/// 测试相似度计算
+///
+/// `#[ignore]`: 此测试断言语义相似度(相似文本 > 不相关文本),
+/// MockEngine(FNV-1a 哈希 + LCG)生成确定性但语义随机的向量,
+/// 无法满足该断言。仅在真实引擎(TEST_MODE=light/full)下有意义。
+#[tokio::test]
+#[ignore = "requires real engine for semantic similarity; mock vectors are semantically random"]
+async fn test_real_test_engine_similarity() {
+    let engine = create_test_engine().unwrap();
+    let service = EmbeddingService::new(engine, None);
+
+    let similar_text1 = "Machine learning is a subset of artificial intelligence";
+    let similar_text2 = "ML is part of AI technology";
+    let different_text = "The weather is nice today";
+
+    let sim_similar = service
+        .process_similarity(SimilarityRequest {
+            source: similar_text1.to_string(),
+            target: similar_text2.to_string(),
+        })
+        .await
+        .unwrap();
+
+    let sim_different = service
+        .process_similarity(SimilarityRequest {
+            source: similar_text1.to_string(),
+            target: different_text.to_string(),
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        sim_similar.score > sim_different.score,
+        "Similar texts should have higher similarity"
+    );
+    assert!(sim_similar.score >= -1.0 && sim_similar.score <= 1.0);
+    assert!(sim_different.score >= -1.0 && sim_different.score <= 1.0);
+}
+
+/// 测试回退机制
+#[tokio::test]
+async fn test_real_test_engine_fallback() {
+    let engine = RealTestEngine::with_dimension(384);
+    let service = EmbeddingService::new(Arc::new(RwLock::new(engine)), None);
+
+    let result = service
+        .process_text(
+            EmbedRequest {
+                text: "Fallback test".to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.embedding.len(), 384);
+    assert!(result.embedding.iter().all(|&x| x.is_finite()));
+}
+
+/// 测试归一化
+#[tokio::test]
+async fn test_real_test_engine_normalization() {
+    let engine = create_test_engine().unwrap();
+    let service = EmbeddingService::new(engine, None);
+
+    let result = service
+        .process_text(
+            EmbedRequest {
+                text: "Test normalized embedding vector".to_string(),
+                normalize: Some(true),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    let norm: f32 = result.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+    assert!(
+        (norm - 1.0).abs() < 1e-5,
+        "Embedding should be normalized, got norm: {}",
+        norm
+    );
+}
+
+/// 测试并发请求
+#[tokio::test]
+async fn test_real_test_engine_concurrent() {
+    let engine = create_test_engine().unwrap();
+
+    let texts: Vec<String> = (0..10)
+        .map(|i| format!("Concurrent test text {}", i))
+        .collect();
+
+    let mut handles = Vec::new();
+    for text in texts {
+        let engine = Arc::clone(&engine);
+        let text = text.clone();
+        let handle = tokio::spawn(async move {
+            let service = EmbeddingService::new(engine, None);
+            service
+                .process_text(
+                    EmbedRequest {
+                        text,
+                        normalize: Some(true),
+                    },
+                    None,
+                )
+                .await
+        });
+        handles.push(handle);
+    }
+
+    let mut success_count = 0;
+    for handle in handles {
+        if handle.await.unwrap().is_ok() {
+            success_count += 1;
+        }
+    }
+
+    assert_eq!(success_count, 10, "All concurrent requests should succeed");
+}
+
+/// 性能测试（仅在 full 模式下运行较慢）
+#[tokio::test]
+async fn test_real_test_engine_performance() {
+    let engine = create_test_engine().unwrap();
+    let service = EmbeddingService::new(engine, None);
+
+    let texts: Vec<String> = (0..100)
+        .map(|i| format!("Performance test text number {}", i))
+        .collect();
+
+    let start = std::time::Instant::now();
+    for text in texts {
+        let _ = service
+            .process_text(
+                EmbedRequest {
+                    text,
+                    normalize: Some(true),
+                },
+                None,
+            )
+            .await;
+    }
+    let elapsed = start.elapsed();
+
+    println!("Processed 100 embeddings in {:.2?}", elapsed);
+
+    if RealTestEngine::new().is_using_fallback() {
+        assert!(elapsed < std::time::Duration::from_secs(1));
+    }
 }

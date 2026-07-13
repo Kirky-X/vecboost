@@ -18,18 +18,6 @@ pub struct AuthContext {
     pub user: User,
 }
 
-#[derive(Clone)]
-pub struct JwtAuthLayer {
-    #[allow(dead_code)]
-    jwt_manager: Arc<JwtManager>,
-}
-
-impl JwtAuthLayer {
-    pub fn new(jwt_manager: Arc<JwtManager>) -> Self {
-        Self { jwt_manager }
-    }
-}
-
 pub async fn auth_middleware(
     State(jwt_manager): State<Arc<JwtManager>>,
     State(audit_logger): State<Option<Arc<AuditLogger>>>,

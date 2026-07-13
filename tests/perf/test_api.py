@@ -14,9 +14,9 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.services import TestEmbeddingService
-from tests.api_simulator import BaseAPISimulator, APIClient, create_api_client
-from tests.conftest import model_dimension
+from perf.services import TestEmbeddingService
+from perf.api_simulator import BaseAPISimulator, APIClient, create_api_client
+from perf.conftest import model_dimension
 
 
 class APISimulatorImpl(BaseAPISimulator):

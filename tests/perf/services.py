@@ -16,7 +16,7 @@
 import hashlib
 import random
 from typing import Any, Dict, List, Optional
-from tests.config import get_model_dimension, get_test_mode, is_mock_mode
+from perf.config import get_model_dimension, get_test_mode, is_mock_mode
 
 
 class TestEmbeddingService:
@@ -90,7 +90,7 @@ class AdaptiveEmbeddingService:
         """获取真实服务实例（懒加载）"""
         if self._real_service is None:
             try:
-                from tests.real_service import RealEmbeddingServiceWithFallback
+                from perf.real_service import RealEmbeddingServiceWithFallback
 
                 self._real_service = RealEmbeddingServiceWithFallback()
             except ImportError:

@@ -3,18 +3,26 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! ModuleMeta + AutoBuilder trait 实现
+//! ModuleMeta + AsyncAutoBuilder trait 实现
+//!
+//! 基于 trait-kit 0.3 的 `AsyncKit`（`Send + Sync`，基于 `Arc<RwLock>`）。
+//! 所有模块实现 `AsyncAutoBuilder`，`build` 返回 `Pin<Box<dyn Future>>`，
+//! 在 `AsyncKit::build().await` 时按拓扑序异步构造。
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use trait_kit::AsyncKit;
 use trait_kit::prelude::*;
 
 #[cfg(feature = "auth")]
 use super::AuthModule;
-use super::{
-    AuditModule, CacheConfig, CacheModule, DbConfig, DbModule, EmbeddingModule, RateLimitModule,
-};
+#[cfg(feature = "limiteron")]
+use super::RateLimitModule;
+use super::{AuditModule, CacheConfig, CacheModule, DbConfig, DbModule, EmbeddingModule};
 use crate::audit::AuditLogger;
+#[cfg(feature = "limiteron")]
 use crate::rate_limit::LimiteronAdapter;
 use crate::service::embedding::EmbeddingService;
 
@@ -30,12 +38,14 @@ impl ModuleMeta for EmbeddingModule {
     }
 }
 
-impl AutoBuilder for EmbeddingModule {
+impl AsyncAutoBuilder for EmbeddingModule {
     type Capability = Arc<RwLock<EmbeddingService>>;
     type Error = TraitKitError;
 
-    fn build(kit: &Kit) -> Result<Self::Capability, Self::Error> {
-        kit.config::<Self::Capability>()
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { kit.config::<Self::Capability>() })
     }
 }
 
@@ -53,12 +63,14 @@ impl ModuleMeta for AuthModule {
 }
 
 #[cfg(feature = "auth")]
-impl AutoBuilder for AuthModule {
+impl AsyncAutoBuilder for AuthModule {
     type Capability = Option<Arc<crate::auth::JwtManager>>;
     type Error = TraitKitError;
 
-    fn build(kit: &Kit) -> Result<Self::Capability, Self::Error> {
-        kit.config::<Self::Capability>()
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { kit.config::<Self::Capability>() })
     }
 }
 
@@ -74,12 +86,14 @@ impl ModuleMeta for RateLimitModule {
     }
 }
 
-impl AutoBuilder for RateLimitModule {
+impl AsyncAutoBuilder for RateLimitModule {
     type Capability = Arc<LimiteronAdapter>;
     type Error = TraitKitError;
 
-    fn build(kit: &Kit) -> Result<Self::Capability, Self::Error> {
-        kit.config::<Self::Capability>()
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { kit.config::<Self::Capability>() })
     }
 }
 
@@ -95,15 +109,19 @@ impl ModuleMeta for CacheModule {
     }
 }
 
-impl AutoBuilder for CacheModule {
+impl AsyncAutoBuilder for CacheModule {
     type Capability = bool;
     type Error = TraitKitError;
 
-    fn build(kit: &Kit) -> Result<Self::Capability, Self::Error> {
-        Ok(kit
-            .config::<CacheConfig>()
-            .map(|c| c.enabled)
-            .unwrap_or(false))
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(kit
+                .config::<CacheConfig>()
+                .map(|c| c.enabled)
+                .unwrap_or(false))
+        })
     }
 }
 
@@ -119,12 +137,14 @@ impl ModuleMeta for DbModule {
     }
 }
 
-impl AutoBuilder for DbModule {
+impl AsyncAutoBuilder for DbModule {
     type Capability = bool;
     type Error = TraitKitError;
 
-    fn build(kit: &Kit) -> Result<Self::Capability, Self::Error> {
-        Ok(kit.config::<DbConfig>().map(|c| c.enabled).unwrap_or(false))
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { Ok(kit.config::<DbConfig>().map(|c| c.enabled).unwrap_or(false)) })
     }
 }
 
@@ -140,11 +160,13 @@ impl ModuleMeta for AuditModule {
     }
 }
 
-impl AutoBuilder for AuditModule {
+impl AsyncAutoBuilder for AuditModule {
     type Capability = Option<Arc<AuditLogger>>;
     type Error = TraitKitError;
 
-    fn build(kit: &Kit) -> Result<Self::Capability, Self::Error> {
-        kit.config::<Self::Capability>()
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { kit.config::<Self::Capability>() })
     }
 }

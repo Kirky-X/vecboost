@@ -236,3 +236,184 @@ impl CircuitBreakerStats {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_circuit_state_equality() {
+        assert_eq!(CircuitState::Closed, CircuitState::Closed);
+        assert_ne!(CircuitState::Closed, CircuitState::Open);
+        assert_ne!(CircuitState::HalfOpen, CircuitState::Open);
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_default() {
+        let config = CircuitBreakerConfig::default();
+        assert_eq!(config.failure_threshold, 5);
+        assert_eq!(config.success_threshold, 2);
+        assert_eq!(config.timeout_ms, 30000);
+        assert_eq!(config.volume_threshold, 10);
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_new_equals_default() {
+        let new_config = CircuitBreakerConfig::new();
+        let default_config = CircuitBreakerConfig::default();
+        assert_eq!(
+            new_config.failure_threshold,
+            default_config.failure_threshold
+        );
+        assert_eq!(new_config.timeout_ms, default_config.timeout_ms);
+    }
+
+    #[test]
+    fn test_circuit_breaker_config_builders() {
+        let config = CircuitBreakerConfig::new()
+            .with_failure_threshold(10)
+            .with_timeout(5000);
+        assert_eq!(config.failure_threshold, 10);
+        assert_eq!(config.timeout_ms, 5000);
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_starts_closed() {
+        let breaker = CircuitBreaker::new("test", None);
+        assert_eq!(breaker.state().await, CircuitState::Closed);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_circuit_breaker_call_success() {
+        let breaker = CircuitBreaker::new("test", None);
+        let result: Result<i32, String> = breaker.call(async { Ok(42) }).await;
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(breaker.state().await, CircuitState::Closed);
+
+        let stats = tokio::task::block_in_place(|| breaker.stats());
+        assert_eq!(stats.total_calls, 1);
+        assert_eq!(stats.total_successes, 1);
+        assert_eq!(stats.total_failures, 0);
+        assert_eq!(stats.success_rate(), 1.0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_circuit_breaker_call_failure() {
+        let breaker = CircuitBreaker::new("test", None);
+        let result: Result<i32, String> = breaker.call(async { Err("boom".to_string()) }).await;
+        assert!(result.is_err());
+        assert_eq!(breaker.state().await, CircuitState::Closed);
+
+        let stats = tokio::task::block_in_place(|| breaker.stats());
+        assert_eq!(stats.total_failures, 1);
+        assert_eq!(stats.failure_rate, 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_opens_after_threshold() {
+        // failure_threshold = 2, opens after 2 failures
+        let config = CircuitBreakerConfig::new().with_failure_threshold(2);
+        let breaker = CircuitBreaker::new("test", Some(config));
+
+        // First failure
+        let _: Result<i32, String> = breaker.call(async { Err("e1".to_string()) }).await;
+        assert_eq!(breaker.state().await, CircuitState::Closed);
+
+        // Second failure - should open
+        let _: Result<i32, String> = breaker.call(async { Err("e2".to_string()) }).await;
+        assert_eq!(breaker.state().await, CircuitState::Open);
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_rejects_when_open() {
+        let config = CircuitBreakerConfig::new().with_failure_threshold(1);
+        let breaker = CircuitBreaker::new("test", Some(config));
+
+        // Trigger open state
+        let _: Result<i32, String> = breaker.call(async { Err("boom".to_string()) }).await;
+        assert_eq!(breaker.state().await, CircuitState::Open);
+
+        // Next call should be rejected without running operation
+        let result: Result<i32, String> = breaker.call(async { Ok(99) }).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("is open"));
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_half_open_after_timeout() {
+        let config = CircuitBreakerConfig::new()
+            .with_failure_threshold(1)
+            .with_timeout(50);
+        let breaker = CircuitBreaker::new("test", Some(config));
+
+        // Open the breaker
+        let _: Result<i32, String> = breaker.call(async { Err("boom".to_string()) }).await;
+        assert_eq!(breaker.state().await, CircuitState::Open);
+
+        // Wait for timeout
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        // Next call should transition to HalfOpen and run
+        let result: Result<i32, String> = breaker.call(async { Ok(7) }).await;
+        assert_eq!(result.unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_closes_after_success_threshold() {
+        let config = CircuitBreakerConfig::new()
+            .with_failure_threshold(1)
+            .with_timeout(50);
+        let breaker = CircuitBreaker::new("test", Some(config));
+
+        // Open the breaker
+        let _: Result<i32, String> = breaker.call(async { Err("boom".to_string()) }).await;
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        // success_threshold defaults to 2
+        let _: Result<i32, String> = breaker.call(async { Ok(1) }).await;
+        assert_eq!(breaker.state().await, CircuitState::HalfOpen);
+
+        let _: Result<i32, String> = breaker.call(async { Ok(2) }).await;
+        assert_eq!(breaker.state().await, CircuitState::Closed);
+    }
+
+    #[test]
+    fn test_circuit_breaker_stats_is_open() {
+        let stats = CircuitBreakerStats {
+            name: "test".to_string(),
+            state: CircuitState::Open,
+            total_calls: 10,
+            total_successes: 5,
+            total_failures: 5,
+            failure_rate: 0.5,
+        };
+        assert!(stats.is_open());
+
+        let stats_closed = CircuitBreakerStats {
+            state: CircuitState::Closed,
+            ..stats
+        };
+        assert!(!stats_closed.is_open());
+    }
+
+    #[test]
+    fn test_circuit_breaker_stats_success_rate() {
+        let stats = CircuitBreakerStats {
+            name: "test".to_string(),
+            state: CircuitState::Closed,
+            total_calls: 4,
+            total_successes: 3,
+            total_failures: 1,
+            failure_rate: 0.25,
+        };
+        assert_eq!(stats.success_rate(), 0.75);
+
+        let empty_stats = CircuitBreakerStats {
+            total_calls: 0,
+            total_successes: 0,
+            total_failures: 0,
+            ..stats
+        };
+        assert_eq!(empty_stats.success_rate(), 0.0);
+    }
+}

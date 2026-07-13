@@ -9,9 +9,10 @@
 //! 每个维度维护独立的令牌桶,容量等于该维度的每分钟限额,补充速率为 限额/60(令牌/秒)。
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use limiteron::limiters::{Limiter, TokenBucketLimiter};
+use tokio::sync::Mutex;
 
 use crate::rate_limit::{RateLimitConfig, RateLimitDimension, RateLimitStatus};
 
@@ -38,7 +39,7 @@ impl LimiteronAdapter {
         for dimension in dimensions {
             let key = dimension_to_key(&dimension);
             let max_requests = dimension_limit(&self.config, &dimension);
-            let bucket = self.get_or_create_bucket(&key, max_requests);
+            let bucket = self.get_or_create_bucket(&key, max_requests).await;
             match bucket.allow(1).await {
                 Ok(true) => continue,
                 _ => return false,
@@ -51,7 +52,7 @@ impl LimiteronAdapter {
     pub async fn get_status(&self, dimension: RateLimitDimension) -> RateLimitStatus {
         let key = dimension_to_key(&dimension);
         let max_requests = dimension_limit(&self.config, &dimension);
-        let bucket = self.get_or_create_bucket(&key, max_requests);
+        let bucket = self.get_or_create_bucket(&key, max_requests).await;
         let tokens = bucket.tokens();
         RateLimitStatus {
             dimension: format!("{:?}", dimension),
@@ -68,8 +69,8 @@ impl LimiteronAdapter {
         self.get_status(dimension).await.remaining
     }
 
-    fn get_or_create_bucket(&self, key: &str, max_requests: u64) -> Arc<TokenBucketLimiter> {
-        let mut buckets = self.buckets.lock().unwrap();
+    async fn get_or_create_bucket(&self, key: &str, max_requests: u64) -> Arc<TokenBucketLimiter> {
+        let mut buckets = self.buckets.lock().await;
         buckets
             .entry(key.to_string())
             .or_insert_with(|| {

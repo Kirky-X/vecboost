@@ -10,6 +10,11 @@ use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
+#[cfg(feature = "db")]
+use crate::error::VecboostError;
+#[cfg(feature = "db")]
+use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
+
 /// Security event type
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SecurityEventType {
@@ -76,29 +81,6 @@ impl SecurityEvent {
             success,
         }
     }
-
-    /// Create a new event with extended context
-    #[allow(dead_code)]
-    pub fn new_with_context(
-        event_type: SecurityEventType,
-        user: Option<String>,
-        ip: Option<String>,
-        request_id: Option<String>,
-        user_agent: Option<String>,
-        details: serde_json::Value,
-        success: bool,
-    ) -> Self {
-        Self {
-            timestamp: Utc::now(),
-            event_type: event_type.as_str().to_string(),
-            user,
-            ip,
-            request_id,
-            user_agent,
-            details,
-            success,
-        }
-    }
 }
 
 /// Audit log configuration
@@ -128,12 +110,8 @@ impl Default for AuditConfig {
 /// Audit logger for security events
 pub struct AuditLogger {
     config: AuditConfig,
-    sender: Option<mpsc::UnboundedSender<SecurityEvent>>,
+    sender: Option<mpsc::Sender<SecurityEvent>>,
     _handle: Option<tokio::task::JoinHandle<()>>,
-    #[allow(dead_code)]
-    error_count: std::sync::atomic::AtomicU64,
-    #[allow(dead_code)]
-    fallback_mode: std::sync::atomic::AtomicBool,
 }
 
 impl AuditLogger {
@@ -144,12 +122,10 @@ impl AuditLogger {
                 config,
                 sender: None,
                 _handle: None,
-                error_count: std::sync::atomic::AtomicU64::new(0),
-                fallback_mode: std::sync::atomic::AtomicBool::new(false),
             };
         }
 
-        let (sender, mut receiver) = mpsc::unbounded_channel::<SecurityEvent>();
+        let (sender, mut receiver) = mpsc::channel::<SecurityEvent>(1000);
         let log_file_path = config.log_file_path.clone();
         let max_file_size = config.max_file_size_mb * 1024 * 1024;
         let max_files = config.max_files;
@@ -243,9 +219,69 @@ impl AuditLogger {
             config,
             sender: Some(sender),
             _handle: Some(handle),
-            error_count: std::sync::atomic::AtomicU64::new(0),
-            fallback_mode: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Create a new audit logger with database backend
+    #[cfg(feature = "db")]
+    pub fn new_with_db(config: AuditConfig, db_pool: crate::db::DbPool) -> Self {
+        if !config.enabled {
+            return Self {
+                config,
+                sender: None,
+                _handle: None,
+            };
+        }
+
+        let (sender, mut receiver) = mpsc::channel::<SecurityEvent>(1000);
+        let pool = db_pool.clone();
+
+        let handle = tokio::spawn(async move {
+            while let Some(event) = receiver.recv().await {
+                if let Err(e) = Self::write_to_db(&pool, &event).await {
+                    eprintln!("Failed to write audit log to db: {}", e);
+                }
+            }
+        });
+
+        Self {
+            config,
+            sender: Some(sender),
+            _handle: Some(handle),
+        }
+    }
+
+    /// Write audit event to database
+    #[cfg(feature = "db")]
+    async fn write_to_db(
+        pool: &crate::db::DbPool,
+        event: &SecurityEvent,
+    ) -> Result<(), VecboostError> {
+        let session = pool.get_session("admin").await?;
+        let conn = session
+            .connection()
+            .map_err(|e| VecboostError::InternalError(format!("Failed to get connection: {e}")))?;
+        let details_json =
+            serde_json::to_string(&event.details).unwrap_or_else(|_| "{}".to_string());
+        let timestamp = event.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+        let stmt = Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO audit_logs (event_type, user, ip, request_id, user_agent, details, success, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                Value::String(Some(event.event_type.clone())),
+                Value::String(event.user.clone()),
+                Value::String(event.ip.clone()),
+                Value::String(event.request_id.clone()),
+                Value::String(event.user_agent.clone()),
+                Value::String(Some(details_json)),
+                Value::Int(Some(if event.success { 1 } else { 0 })),
+                Value::String(Some(timestamp)),
+            ],
+        );
+        conn.execute_raw(stmt).await.map_err(|e| {
+            VecboostError::InternalError(format!("Failed to insert audit log: {e}"))
+        })?;
+        Ok(())
     }
 
     /// Write a log entry to the file
@@ -271,10 +307,15 @@ impl AuditLogger {
             return;
         }
 
-        #[allow(clippy::collapsible_if)]
         if let Some(sender) = &self.sender {
-            if let Err(e) = sender.send(event) {
-                eprintln!("Failed to send audit log event: {}", e);
+            match sender.try_send(event) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    eprintln!("Audit log channel full, event dropped");
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    eprintln!("Audit log channel closed, event dropped");
+                }
             }
         }
     }
@@ -437,18 +478,6 @@ impl AuditLogger {
     }
 }
 
-impl Clone for AuditLogger {
-    fn clone(&self) -> Self {
-        Self {
-            config: self.config.clone(),
-            sender: self.sender.clone(),
-            _handle: None,
-            error_count: std::sync::atomic::AtomicU64::new(0),
-            fallback_mode: std::sync::atomic::AtomicBool::new(false),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +535,49 @@ mod tests {
             SecurityEventType::PermissionDenied.as_str(),
             "permission_denied"
         );
+    }
+}
+
+#[cfg(all(test, feature = "db"))]
+mod db_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_audit_logger_with_db() {
+        let pool = crate::db::DbPool::new("sqlite::memory:")
+            .await
+            .expect("Failed to create db pool");
+        crate::db::init_schema(&pool)
+            .await
+            .expect("Failed to init schema");
+
+        let config = AuditConfig::default();
+        let logger = AuditLogger::new_with_db(config, pool.clone());
+
+        logger.log_login_success("db_test_user", Some("127.0.0.1".to_string()));
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        let session = pool.get_session("admin").await.unwrap();
+        let result = session
+            .execute_raw("SELECT event_type, user, ip FROM audit_logs")
+            .await
+            .expect("Failed to query audit logs");
+
+        assert!(result.rows_affected() >= 1, "Audit log should have entries");
+    }
+
+    #[tokio::test]
+    async fn test_audit_logger_db_disabled() {
+        let config = AuditConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let pool = crate::db::DbPool::new("sqlite::memory:")
+            .await
+            .expect("Failed to create db pool");
+
+        let logger = AuditLogger::new_with_db(config, pool);
+        assert!(!logger.is_enabled());
     }
 }

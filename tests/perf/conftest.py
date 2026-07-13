@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.config import get_model_name, get_model_dimension
+from perf.config import get_model_name, get_model_dimension
 
 
 @pytest.fixture(scope="session")

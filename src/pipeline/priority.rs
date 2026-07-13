@@ -71,10 +71,7 @@ pub struct PriorityInput {
 }
 
 /// 优先级计算器
-#[allow(dead_code)]
 pub struct PriorityCalculator {
-    #[allow(dead_code)]
-    config: PriorityConfig,
     user_tier_weights: HashMap<String, f64>,
     source_weights: HashMap<String, f64>,
 }
@@ -94,7 +91,6 @@ impl PriorityCalculator {
             .collect();
 
         Self {
-            config,
             user_tier_weights,
             source_weights,
         }

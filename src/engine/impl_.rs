@@ -24,6 +24,14 @@ impl AnyEngine {
             EngineType::Onnx => Ok(AnyEngine::Onnx(super::onnx_engine::OnnxEngine::new(
                 config, precision,
             )?)),
+            #[cfg(feature = "tensorrt")]
+            EngineType::TensorRt => Ok(AnyEngine::TensorRt(
+                super::tensorrt_engine::TensorRtEngine::new(config, precision)?,
+            )),
+            #[cfg(feature = "openvino")]
+            EngineType::OpenVino => Ok(AnyEngine::OpenVino(
+                super::openvino_engine::OpenVinoEngine::new(config, precision)?,
+            )),
         }
     }
 }
@@ -35,6 +43,10 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Candle(engine) => engine.embed(text),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.embed(text),
+            #[cfg(feature = "tensorrt")]
+            AnyEngine::TensorRt(engine) => engine.embed(text),
+            #[cfg(feature = "openvino")]
+            AnyEngine::OpenVino(engine) => engine.embed(text),
         }
     }
 
@@ -43,6 +55,10 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Candle(engine) => engine.embed_batch(texts),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.embed_batch(texts),
+            #[cfg(feature = "tensorrt")]
+            AnyEngine::TensorRt(engine) => engine.embed_batch(texts),
+            #[cfg(feature = "openvino")]
+            AnyEngine::OpenVino(engine) => engine.embed_batch(texts),
         }
     }
 
@@ -51,6 +67,10 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Candle(engine) => engine.precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.precision(),
+            #[cfg(feature = "tensorrt")]
+            AnyEngine::TensorRt(engine) => engine.precision(),
+            #[cfg(feature = "openvino")]
+            AnyEngine::OpenVino(engine) => engine.precision(),
         }
     }
 
@@ -59,6 +79,10 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Candle(engine) => engine.supports_mixed_precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.supports_mixed_precision(),
+            #[cfg(feature = "tensorrt")]
+            AnyEngine::TensorRt(engine) => engine.supports_mixed_precision(),
+            #[cfg(feature = "openvino")]
+            AnyEngine::OpenVino(engine) => engine.supports_mixed_precision(),
         }
     }
 
@@ -66,7 +90,11 @@ impl InferenceEngine for AnyEngine {
         match self {
             AnyEngine::Candle(engine) => engine.is_fallback_triggered(),
             #[cfg(feature = "onnx")]
-            AnyEngine::Onnx(_engine) => false,
+            AnyEngine::Onnx(engine) => engine.is_fallback_triggered(),
+            #[cfg(feature = "tensorrt")]
+            AnyEngine::TensorRt(engine) => engine.is_fallback_triggered(),
+            #[cfg(feature = "openvino")]
+            AnyEngine::OpenVino(engine) => engine.is_fallback_triggered(),
         }
     }
 
@@ -75,6 +103,10 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Candle(engine) => engine.try_fallback_to_cpu(config).await,
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.try_fallback_to_cpu(config).await,
+            #[cfg(feature = "tensorrt")]
+            AnyEngine::TensorRt(engine) => engine.try_fallback_to_cpu(config).await,
+            #[cfg(feature = "openvino")]
+            AnyEngine::OpenVino(engine) => engine.try_fallback_to_cpu(config).await,
         }
     }
 }

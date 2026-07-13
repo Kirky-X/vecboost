@@ -23,6 +23,18 @@ repos:
         pass_filenames: false
         always_run: false
 
+  # Cargo fmt check
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        description: Check Rust code formatting with cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        always_run: true
+        types: [rust]
+
   # Copyright header check
   - repo: local
     hooks:

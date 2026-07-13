@@ -68,8 +68,8 @@ fn list_supported_models() {
 
 fn get_model_files(model_id: &str) -> &'static [&'static str] {
     match model_id {
-        "BAAI/bge-small-en-v1.5" | "sentence-transformers/all-MiniLM-L6-v2" => &SMALL_MODEL_FILES,
-        _ => &FULL_MODEL_FILES,
+        "BAAI/bge-small-en-v1.5" | "sentence-transformers/all-MiniLM-L6-v2" => SMALL_MODEL_FILES,
+        _ => FULL_MODEL_FILES,
     }
 }
 
@@ -102,13 +102,13 @@ async fn main() {
             "--small" => {
                 println!("=== VecBoost 模型下载工具 ===\n");
                 println!("下载测试用小模型: {}", DEFAULT_TEST_MODEL);
-                download_model(DEFAULT_TEST_MODEL, &SMALL_MODEL_FILES).await;
+                download_model(DEFAULT_TEST_MODEL, SMALL_MODEL_FILES).await;
                 return;
             }
             "--full" => {
                 println!("=== VecBoost 模型下载工具 ===\n");
                 println!("下载完整模型: {}", DEFAULT_FULL_MODEL);
-                download_model(DEFAULT_FULL_MODEL, &FULL_MODEL_FILES).await;
+                download_model(DEFAULT_FULL_MODEL, FULL_MODEL_FILES).await;
                 return;
             }
             "--model" if args.len() > 2 => {
@@ -131,7 +131,7 @@ async fn main() {
     println!("=== VecBoost 模型下载工具 ===\n");
     println!("下载测试用小模型: {}", DEFAULT_TEST_MODEL);
     println!("(使用 --full 下载完整模型，--list 查看支持的模型)\n");
-    download_model(DEFAULT_TEST_MODEL, &SMALL_MODEL_FILES).await;
+    download_model(DEFAULT_TEST_MODEL, SMALL_MODEL_FILES).await;
 }
 
 async fn download_model(model_id: &str, files: &[&str]) {

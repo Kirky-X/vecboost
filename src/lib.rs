@@ -9,9 +9,13 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 // 公共 API 模块 - 被 main.rs 使用或作为库的公共接口
+#[cfg(feature = "http")]
+pub mod api;
 pub mod audit;
 #[cfg(feature = "auth")]
 pub mod auth;
+#[cfg(feature = "cli")]
+pub mod cli;
 pub mod config;
 #[cfg(feature = "db")]
 pub mod db;
@@ -38,17 +42,23 @@ pub use crate::pipeline::PriorityConfig;
 // 内部实现模块 - 只在 crate 内部使用，不暴露给外部
 pub(crate) mod cache;
 pub(crate) mod device;
-pub mod error; // 暴露给测试文件使用
+pub mod error;
 pub(crate) mod model;
 pub(crate) mod monitor;
 pub(crate) mod text;
 
 // 重新导出必要的内部类型（最小化暴露原则）
+#[cfg(feature = "db")]
+pub use config::app::DatabaseConfig;
 pub use config::app::{AppConfig, AuthConfig, CsrfConfig, RateLimitConfig, ServerConfig};
 pub use config::model::ModelConfig;
 pub use domain::{EmbedRequest, EmbedResponse, SimilarityRequest, SimilarityResponse};
+pub use error::VecboostError;
 pub use service::embedding::EmbeddingService;
 pub use utils::SimilarityMetric;
+
+#[allow(deprecated)]
+pub use error::AppError;
 
 /// Application state
 ///
@@ -77,6 +87,12 @@ pub struct AppState {
     pub response_channel: Arc<pipeline::ResponseChannel>,
     pub priority_calculator: Arc<pipeline::PriorityCalculator>,
     pub worker_manager: Arc<pipeline::WorkerManager>,
+    /// trait-kit AsyncKit — 模块能力管理中心（D1 集成）
+    ///
+    /// `AsyncKit<Ready>` 是 `Send + Sync`（基于 `Arc<RwLock>`），可安全存入
+    /// `AppState` 并跨线程共享。启动时由 `main.rs` 构建后注入。
+    /// 使用 `Option` 以兼容非 http feature 下可能不构建 kit 的场景。
+    pub kit: Option<Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>>,
 }
 
 #[cfg(feature = "http")]

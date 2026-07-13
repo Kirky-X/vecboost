@@ -1,0 +1,108 @@
+name: Feature Matrix
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE*'
+  pull_request:
+    branches: [main, develop]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+concurrency:
+  group: feature-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  feature-matrix:
+    name: Test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+          - name: grpc
+            features: "grpc"
+          - name: ecosystem
+            features: "auth,redis,db,inklog,limiteron,oxcache"
+          - name: cuda-network
+            features: "cuda,grpc,auth,redis"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "feature-matrix-${{ matrix.name }}"
+          cache-targets: false
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check all features compile
+        run: cargo check --all-features
+
+      - name: Run clippy
+        if: matrix.features != ''
+        run: cargo clippy --features "${{ matrix.features }}" --all-targets -- -D warnings
+
+      - name: Run clippy (default features)
+        if: matrix.features == ''
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build
+        if: matrix.features != ''
+        run: cargo build --features "${{ matrix.features }}"
+
+      - name: Build (default features)
+        if: matrix.features == ''
+        run: cargo build
+
+      - name: Run tests
+        if: matrix.features != ''
+        run: cargo test --features "${{ matrix.features }}" --lib
+
+      - name: Run tests (default features)
+        if: matrix.features == ''
+        run: cargo test --lib
+
+  summary:
+    name: Feature Matrix Summary
+    runs-on: ubuntu-latest
+    needs: feature-matrix
+    if: always()
+    steps:
+      - name: Check matrix status
+        run: |
+          if [[ "${{ needs.feature-matrix.result }}" == "success" ]]; then
+            echo "✅ All feature matrix combinations passed!"
+            exit 0
+          else
+            echo "❌ One or more feature matrix combinations failed!"
+            exit 1
+          fi

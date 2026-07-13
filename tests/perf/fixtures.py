@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Type
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.config import (
+from perf.config import (
     get_api_base_url,
     get_model_dimension,
     get_model_name,
@@ -49,18 +49,18 @@ def get_embedding_service_class() -> Type[EmbeddingServiceInterface]:
     mode = get_test_mode()
 
     if is_mock_mode():
-        from tests.services import TestEmbeddingService
+        from perf.services import TestEmbeddingService
 
         return TestEmbeddingService
     else:
         # 使用真实服务
         try:
-            from tests.real_service import RealEmbeddingService
+            from perf.real_service import RealEmbeddingService
 
             return RealEmbeddingService
         except ImportError:
             print("Warning: RealEmbeddingService not available, falling back to mock")
-            from tests.services import TestEmbeddingService
+            from perf.services import TestEmbeddingService
 
             return TestEmbeddingService
 
@@ -69,7 +69,7 @@ class MockEmbeddingService:
     """Mock 嵌入服务（用于 fixture）"""
 
     def __init__(self):
-        from tests.services import TestEmbeddingService
+        from perf.services import TestEmbeddingService
 
         self._service = TestEmbeddingService
 

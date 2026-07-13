@@ -112,6 +112,18 @@ impl ModelLoader for LocalModelLoader {
                 path: config.model_path.clone(),
                 name: config.name.clone(),
             }),
+            #[cfg(feature = "tensorrt")]
+            EngineType::TensorRt => {
+                return Err(VecboostError::InferenceError(
+                    "TensorRT runtime not available".to_string(),
+                ));
+            }
+            #[cfg(feature = "openvino")]
+            EngineType::OpenVino => {
+                return Err(VecboostError::InferenceError(
+                    "OpenVINO runtime not available".to_string(),
+                ));
+            }
         };
 
         Ok(model)

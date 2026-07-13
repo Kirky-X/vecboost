@@ -75,11 +75,10 @@ impl MemoryLimitController {
         let current = self.current_usage.load(Ordering::SeqCst);
         let limit = config.limit_bytes;
 
-        let usage_percent = if limit > 0 {
-            (current * 100) / limit
-        } else {
-            0
-        };
+        let usage_percent = current
+            .checked_mul(100)
+            .and_then(|v| v.checked_div(limit))
+            .unwrap_or(0);
 
         let new_status = if current >= limit {
             MemoryLimitStatus::Exceeded

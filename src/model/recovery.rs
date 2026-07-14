@@ -331,6 +331,8 @@ impl ModelRecovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_recovery_config_default() {
@@ -338,6 +340,21 @@ mod tests {
         assert_eq!(config.max_retries, 3);
         assert!(config.backup_corrupted_files);
         assert!(config.verify_after_recovery);
+        assert!(config.backup_dir.is_none());
+    }
+
+    #[test]
+    fn test_recovery_config_custom() {
+        let config = RecoveryConfig {
+            max_retries: 5,
+            backup_corrupted_files: false,
+            backup_dir: Some(PathBuf::from("/tmp/backups")),
+            verify_after_recovery: false,
+        };
+        assert_eq!(config.max_retries, 5);
+        assert!(!config.backup_corrupted_files);
+        assert!(!config.verify_after_recovery);
+        assert_eq!(config.backup_dir, Some(PathBuf::from("/tmp/backups")));
     }
 
     #[test]
@@ -352,12 +369,687 @@ mod tests {
 
         assert!(result.success);
         assert_eq!(result.recovered_files.len(), 1);
+        assert_eq!(result.failed_files.len(), 0);
+        assert_eq!(result.backup_paths.len(), 1);
         assert_eq!(result.attempts, 1);
+    }
+
+    #[test]
+    fn test_recovery_result_failed() {
+        let result = RecoveryResult {
+            success: false,
+            recovered_files: vec![],
+            failed_files: vec!["bad.txt".to_string()],
+            backup_paths: vec![],
+            attempts: 3,
+        };
+
+        assert!(!result.success);
+        assert!(result.recovered_files.is_empty());
+        assert_eq!(result.failed_files.len(), 1);
+        assert_eq!(result.attempts, 3);
     }
 
     #[test]
     fn test_model_recovery_creation() {
         let recovery = ModelRecovery::with_default_config();
         assert_eq!(recovery.config.max_retries, 3);
+        assert!(recovery.config.backup_corrupted_files);
+        assert!(recovery.config.verify_after_recovery);
+        assert!(recovery.config.backup_dir.is_none());
+    }
+
+    #[test]
+    fn test_model_recovery_new_with_custom_config() {
+        let config = RecoveryConfig {
+            max_retries: 10,
+            backup_corrupted_files: false,
+            backup_dir: Some(PathBuf::from("/custom/backup")),
+            verify_after_recovery: false,
+        };
+        let recovery = ModelRecovery::new(config);
+        assert_eq!(recovery.config.max_retries, 10);
+        assert!(!recovery.config.backup_corrupted_files);
+        assert!(!recovery.config.verify_after_recovery);
+        assert_eq!(
+            recovery.config.backup_dir,
+            Some(PathBuf::from("/custom/backup"))
+        );
+    }
+
+    #[test]
+    fn test_backup_corrupted_file_nonexistent() {
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .backup_corrupted_file(Path::new("/nonexistent/file.txt"))
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_backup_corrupted_file_default_backup_dir() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("corrupt.bin");
+        fs::write(&file_path, b"corrupted data").unwrap();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery.backup_corrupted_file(&file_path).unwrap();
+
+        assert!(result.is_some());
+        let backup_path = result.unwrap();
+        let backup = Path::new(&backup_path);
+        assert!(backup.exists());
+        assert!(backup.starts_with(temp_dir.path().join(".corrupted_backup")));
+        assert!(
+            backup
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("corrupt.bin")
+        );
+        assert!(
+            backup
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .ends_with(".corrupted")
+        );
+        assert!(file_path.exists());
+        assert_eq!(fs::read_to_string(backup).unwrap(), "corrupted data");
+    }
+
+    #[test]
+    fn test_backup_corrupted_file_custom_backup_dir() {
+        let temp_dir = tempdir().unwrap();
+        let backup_dir = temp_dir.path().join("custom_backups");
+        let file_path = temp_dir.path().join("corrupt.bin");
+        fs::write(&file_path, b"corrupted data").unwrap();
+
+        let config = RecoveryConfig {
+            backup_dir: Some(backup_dir.clone()),
+            ..RecoveryConfig::default()
+        };
+        let recovery = ModelRecovery::new(config);
+        let result = recovery.backup_corrupted_file(&file_path).unwrap();
+
+        assert!(result.is_some());
+        let backup_path = result.unwrap();
+        let backup = Path::new(&backup_path);
+        assert!(backup.starts_with(&backup_dir));
+        assert!(backup.exists());
+    }
+
+    #[test]
+    fn test_backup_corrupted_file_copies_content() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("model.safetensors");
+        let content = b"some binary content here";
+        fs::write(&file_path, content).unwrap();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery.backup_corrupted_file(&file_path).unwrap();
+
+        assert!(result.is_some());
+        let backup_path = result.unwrap();
+        assert_eq!(fs::read(backup_path).unwrap(), content);
+    }
+
+    #[test]
+    fn test_backup_corrupted_file_preserves_original() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("keep.bin");
+        fs::write(&file_path, b"original").unwrap();
+
+        let recovery = ModelRecovery::with_default_config();
+        let _ = recovery.backup_corrupted_file(&file_path).unwrap();
+
+        assert!(file_path.exists());
+        assert_eq!(fs::read_to_string(&file_path).unwrap(), "original");
+    }
+
+    #[test]
+    fn test_recover_single_file_local_dir_no_repo_id() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let mut attempts = 0;
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .recover_single_file(model_path, None, "config.json", &mut attempts)
+            .unwrap();
+
+        assert!(!result);
+        assert_eq!(attempts, 0);
+    }
+
+    #[test]
+    #[ignore = "Requires network access to HuggingFace Hub"]
+    fn test_recover_single_file_local_dir_with_repo_id() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let mut attempts = 0;
+
+        let recovery = ModelRecovery::with_default_config();
+        let _ = recovery.recover_single_file(
+            model_path,
+            Some("nonexistent/repo-12345"),
+            "config.json",
+            &mut attempts,
+        );
+    }
+
+    #[test]
+    #[ignore = "Requires network access to HuggingFace Hub"]
+    fn test_recover_single_file_non_local_path() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path().join("nonexistent-repo-id");
+        let mut attempts = 0;
+
+        let recovery = ModelRecovery::with_default_config();
+        let _ = recovery.recover_single_file(&model_path, None, "config.json", &mut attempts);
+    }
+
+    #[test]
+    fn test_verify_recovered_files_empty() {
+        let temp_dir = tempdir().unwrap();
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery.verify_recovered_files("test_model", temp_dir.path(), &[]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_recovered_files_valid_large_file() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("config.json");
+        fs::write(&file_path, b"x".repeat(200)).unwrap();
+        let file_path_str = file_path.to_string_lossy().to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result =
+            recovery.verify_recovered_files("test_model", temp_dir.path(), &[file_path_str]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_recovered_files_missing_file() {
+        let temp_dir = tempdir().unwrap();
+        let missing_file = temp_dir
+            .path()
+            .join("missing.json")
+            .to_string_lossy()
+            .to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result =
+            recovery.verify_recovered_files("test_model", temp_dir.path(), &[missing_file]);
+        assert!(result.is_err());
+        match result {
+            Err(VecboostError::ModelIntegrityError(msg)) => {
+                assert!(msg.contains("Verification failed"));
+            }
+            Err(e) => panic!("Expected ModelIntegrityError, got: {:?}", e),
+            Ok(_) => panic!("Expected error"),
+        }
+    }
+
+    #[test]
+    fn test_verify_recovered_files_too_small_config() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("config.json");
+        fs::write(&file_path, b"x".repeat(50)).unwrap();
+        let file_path_str = file_path.to_string_lossy().to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result =
+            recovery.verify_recovered_files("test_model", temp_dir.path(), &[file_path_str]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_verify_recovered_files_config_json_exact_min_size() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("config.json");
+        fs::write(&file_path, b"x".repeat(100)).unwrap();
+        let file_path_str = file_path.to_string_lossy().to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result =
+            recovery.verify_recovered_files("test_model", temp_dir.path(), &[file_path_str]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_recovered_files_tokenizer_min_size() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("tokenizer.json");
+        fs::write(&file_path, b"x".repeat(999)).unwrap();
+        let file_path_str = file_path.to_string_lossy().to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery.verify_recovered_files(
+            "test_model",
+            temp_dir.path(),
+            &[file_path_str.clone()],
+        );
+        assert!(result.is_err());
+
+        fs::write(&file_path, b"x".repeat(1000)).unwrap();
+        let result =
+            recovery.verify_recovered_files("test_model", temp_dir.path(), &[file_path_str]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_recovered_files_model_min_size() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("model.safetensors");
+        fs::write(&file_path, b"x".repeat(1024 * 1024 - 1)).unwrap();
+        let file_path_str = file_path.to_string_lossy().to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery.verify_recovered_files(
+            "test_model",
+            temp_dir.path(),
+            &[file_path_str.clone()],
+        );
+        assert!(result.is_err());
+
+        fs::write(&file_path, b"x".repeat(1024 * 1024)).unwrap();
+        let result =
+            recovery.verify_recovered_files("test_model", temp_dir.path(), &[file_path_str]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_recovered_files_other_file_min_size() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("random.txt");
+        fs::write(&file_path, b"x".repeat(99)).unwrap();
+        let file_path_str = file_path.to_string_lossy().to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery.verify_recovered_files(
+            "test_model",
+            temp_dir.path(),
+            &[file_path_str.clone()],
+        );
+        assert!(result.is_err());
+
+        fs::write(&file_path, b"x".repeat(100)).unwrap();
+        let result =
+            recovery.verify_recovered_files("test_model", temp_dir.path(), &[file_path_str]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_recovered_files_multiple_files_all_valid() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.json");
+        let tokenizer_path = temp_dir.path().join("tokenizer.json");
+        fs::write(&config_path, b"x".repeat(200)).unwrap();
+        fs::write(&tokenizer_path, b"x".repeat(2000)).unwrap();
+
+        let files = vec![
+            config_path.to_string_lossy().to_string(),
+            tokenizer_path.to_string_lossy().to_string(),
+        ];
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery.verify_recovered_files("test_model", temp_dir.path(), &files);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_recovered_files_multiple_files_one_invalid() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.json");
+        let tokenizer_path = temp_dir.path().join("tokenizer.json");
+        fs::write(&config_path, b"x".repeat(200)).unwrap();
+        fs::write(&tokenizer_path, b"x".repeat(100)).unwrap();
+
+        let files = vec![
+            config_path.to_string_lossy().to_string(),
+            tokenizer_path.to_string_lossy().to_string(),
+        ];
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery.verify_recovered_files("test_model", temp_dir.path(), &files);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_empty_list() {
+        let temp_dir = tempdir().unwrap();
+        let recovery = ModelRecovery::with_default_config();
+
+        let result = recovery
+            .recover_corrupted_files("test_model", temp_dir.path(), None, &[])
+            .unwrap();
+
+        assert!(result.success);
+        assert!(result.recovered_files.is_empty());
+        assert!(result.failed_files.is_empty());
+        assert!(result.backup_paths.is_empty());
+        assert_eq!(result.attempts, 0);
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_local_no_repo_id_fails() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let corrupted_file = temp_dir.path().join("config.json");
+        fs::write(&corrupted_file, b"corrupted").unwrap();
+        let corrupted_file_str = corrupted_file.to_string_lossy().to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .recover_corrupted_files(
+                "test_model",
+                model_path,
+                None,
+                &[corrupted_file_str.clone()],
+            )
+            .unwrap();
+
+        assert!(!result.success);
+        assert!(result.recovered_files.is_empty());
+        assert_eq!(result.failed_files, vec![corrupted_file_str]);
+        assert_eq!(result.backup_paths.len(), 1);
+        assert_eq!(result.attempts, 0);
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_backup_disabled() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let corrupted_file = temp_dir.path().join("config.json");
+        fs::write(&corrupted_file, b"corrupted").unwrap();
+        let corrupted_file_str = corrupted_file.to_string_lossy().to_string();
+
+        let config = RecoveryConfig {
+            backup_corrupted_files: false,
+            ..RecoveryConfig::default()
+        };
+        let recovery = ModelRecovery::new(config);
+        let result = recovery
+            .recover_corrupted_files("test_model", model_path, None, &[corrupted_file_str])
+            .unwrap();
+
+        assert!(!result.success);
+        assert!(result.backup_paths.is_empty());
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_verify_disabled() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let corrupted_file = temp_dir.path().join("config.json");
+        fs::write(&corrupted_file, b"corrupted").unwrap();
+        let corrupted_file_str = corrupted_file.to_string_lossy().to_string();
+
+        let config = RecoveryConfig {
+            verify_after_recovery: false,
+            ..RecoveryConfig::default()
+        };
+        let recovery = ModelRecovery::new(config);
+        let result = recovery
+            .recover_corrupted_files("test_model", model_path, None, &[corrupted_file_str])
+            .unwrap();
+
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_custom_backup_dir() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let backup_dir = temp_dir.path().join("my_backups");
+        let corrupted_file = temp_dir.path().join("config.json");
+        fs::write(&corrupted_file, b"corrupted").unwrap();
+        let corrupted_file_str = corrupted_file.to_string_lossy().to_string();
+
+        let config = RecoveryConfig {
+            backup_dir: Some(backup_dir.clone()),
+            ..RecoveryConfig::default()
+        };
+        let recovery = ModelRecovery::new(config);
+        let result = recovery
+            .recover_corrupted_files("test_model", model_path, None, &[corrupted_file_str])
+            .unwrap();
+
+        assert_eq!(result.backup_paths.len(), 1);
+        let backup_path = Path::new(&result.backup_paths[0]);
+        assert!(backup_path.starts_with(&backup_dir));
+        assert!(backup_path.exists());
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_nonexistent_file_no_backup() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let corrupted_file_str = temp_dir
+            .path()
+            .join("nonexistent.json")
+            .to_string_lossy()
+            .to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .recover_corrupted_files(
+                "test_model",
+                model_path,
+                None,
+                &[corrupted_file_str.clone()],
+            )
+            .unwrap();
+
+        assert!(!result.success);
+        assert!(result.backup_paths.is_empty());
+        assert_eq!(result.failed_files, vec![corrupted_file_str]);
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_multiple_files_mixed() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let file1 = temp_dir.path().join("config.json");
+        let file2 = temp_dir.path().join("tokenizer.json");
+        fs::write(&file1, b"corrupted1").unwrap();
+        fs::write(&file2, b"corrupted2").unwrap();
+        let file1_str = file1.to_string_lossy().to_string();
+        let file2_str = file2.to_string_lossy().to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .recover_corrupted_files(
+                "test_model",
+                model_path,
+                None,
+                &[file1_str.clone(), file2_str.clone()],
+            )
+            .unwrap();
+
+        assert!(!result.success);
+        assert!(result.recovered_files.is_empty());
+        assert_eq!(result.failed_files.len(), 2);
+        assert!(result.failed_files.contains(&file1_str));
+        assert!(result.failed_files.contains(&file2_str));
+        assert_eq!(result.backup_paths.len(), 2);
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_preserves_original_after_backup() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let corrupted_file = temp_dir.path().join("config.json");
+        fs::write(&corrupted_file, b"original corrupted content").unwrap();
+        let corrupted_file_str = corrupted_file.to_string_lossy().to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let _ = recovery
+            .recover_corrupted_files("test_model", model_path, None, &[corrupted_file_str])
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&corrupted_file).unwrap(),
+            "original corrupted content"
+        );
+    }
+
+    #[test]
+    fn test_attempt_recovery_overall_valid() {
+        let temp_dir = tempdir().unwrap();
+        let integrity_report = ModelIntegrityReport {
+            model_name: "test_model".to_string(),
+            files_checked: vec![],
+            overall_valid: true,
+            corrupted_files: vec![],
+        };
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .attempt_recovery_with_integrity_check(
+                "test_model",
+                temp_dir.path(),
+                None,
+                &integrity_report,
+            )
+            .unwrap();
+
+        assert!(result.success);
+        assert!(result.recovered_files.is_empty());
+        assert!(result.failed_files.is_empty());
+        assert!(result.backup_paths.is_empty());
+        assert_eq!(result.attempts, 0);
+    }
+
+    #[test]
+    fn test_attempt_recovery_invalid_empty_corrupted() {
+        let temp_dir = tempdir().unwrap();
+        let integrity_report = ModelIntegrityReport {
+            model_name: "test_model".to_string(),
+            files_checked: vec![],
+            overall_valid: false,
+            corrupted_files: vec![],
+        };
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .attempt_recovery_with_integrity_check(
+                "test_model",
+                temp_dir.path(),
+                None,
+                &integrity_report,
+            )
+            .unwrap();
+
+        assert!(result.success);
+        assert!(result.recovered_files.is_empty());
+        assert!(result.failed_files.is_empty());
+        assert_eq!(result.attempts, 0);
+    }
+
+    #[test]
+    fn test_attempt_recovery_invalid_with_corrupted_files() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let corrupted_file = temp_dir.path().join("config.json");
+        fs::write(&corrupted_file, b"corrupted").unwrap();
+        let corrupted_file_str = corrupted_file.to_string_lossy().to_string();
+
+        let integrity_report = ModelIntegrityReport {
+            model_name: "test_model".to_string(),
+            files_checked: vec![],
+            overall_valid: false,
+            corrupted_files: vec![corrupted_file_str.clone()],
+        };
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .attempt_recovery_with_integrity_check(
+                "test_model",
+                model_path,
+                None,
+                &integrity_report,
+            )
+            .unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.failed_files, vec![corrupted_file_str]);
+    }
+
+    #[test]
+    fn test_attempt_recovery_invalid_with_corrupted_files_no_repo() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let file1 = temp_dir.path().join("config.json");
+        let file2 = temp_dir.path().join("tokenizer.json");
+        fs::write(&file1, b"bad1").unwrap();
+        fs::write(&file2, b"bad2").unwrap();
+        let file1_str = file1.to_string_lossy().to_string();
+        let file2_str = file2.to_string_lossy().to_string();
+
+        let integrity_report = ModelIntegrityReport {
+            model_name: "test_model".to_string(),
+            files_checked: vec![],
+            overall_valid: false,
+            corrupted_files: vec![file1_str, file2_str],
+        };
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .attempt_recovery_with_integrity_check(
+                "test_model",
+                model_path,
+                None,
+                &integrity_report,
+            )
+            .unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.failed_files.len(), 2);
+        assert_eq!(result.backup_paths.len(), 2);
+    }
+
+    #[test]
+    #[ignore = "Requires network access to HuggingFace Hub"]
+    fn test_download_from_huggingface_invalid_repo() {
+        let temp_dir = tempdir().unwrap();
+        let mut attempts = 0;
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery.download_from_huggingface(
+            "nonexistent/repo-12345",
+            temp_dir.path(),
+            "config.json",
+            &mut attempts,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(attempts, 3);
+    }
+
+    #[test]
+    #[ignore = "Requires network access to HuggingFace Hub"]
+    fn test_download_from_huggingface_max_retries_one() {
+        let temp_dir = tempdir().unwrap();
+        let mut attempts = 0;
+
+        let config = RecoveryConfig {
+            max_retries: 1,
+            ..RecoveryConfig::default()
+        };
+        let recovery = ModelRecovery::new(config);
+        let result = recovery.download_from_huggingface(
+            "nonexistent/repo-12345",
+            temp_dir.path(),
+            "config.json",
+            &mut attempts,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(attempts, 1);
     }
 }

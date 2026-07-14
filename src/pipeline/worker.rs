@@ -521,7 +521,10 @@ impl WorkerManager {
 mod tests {
     use super::*;
     use crate::config::model::{ModelConfig, Precision};
+    use crate::domain::EmbedRequest;
     use crate::engine::InferenceEngine;
+    use crate::pipeline::priority::{Priority, RequestSource};
+    use crate::pipeline::queue::QueuedRequest;
     use async_trait::async_trait;
 
     /// 测试用 Mock 推理引擎——返回固定 8 维零向量,不依赖任何外部模型。
@@ -535,6 +538,35 @@ mod tests {
         }
         fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
             Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    /// 测试用错误引擎——始终返回 InferenceError,用于验证错误传播。
+    struct ErrorEngine;
+
+    #[async_trait]
+    impl InferenceEngine for ErrorEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Err(VecboostError::InferenceError(
+                "mock inference failure".to_string(),
+            ))
+        }
+        fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Err(VecboostError::InferenceError(
+                "mock batch inference failure".to_string(),
+            ))
         }
         fn precision(&self) -> &Precision {
             &Precision::Fp32
@@ -833,5 +865,373 @@ mod tests {
                 "sender must be closed after worker exit (required for retain cleanup in scaling_monitor)"
             );
         }
+    }
+
+    /// 验证 WorkerManager::new 初始化所有字段为正确默认值。
+    #[tokio::test]
+    async fn test_worker_manager_new_initial_state() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig::default();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+
+        let manager = WorkerManager::new(queue, response_channel, config, service);
+
+        assert_eq!(manager.current_workers(), 0);
+        assert!(manager.running.load(Ordering::SeqCst));
+        assert!(manager.worker_senders.lock().await.is_empty());
+        assert!(manager.worker_health.lock().await.is_empty());
+    }
+
+    /// 验证 start() 启动 min_workers 个 worker 并记录健康信息。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_worker_manager_start_spawns_min_workers() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig {
+            min_workers: 3,
+            max_workers: 8,
+            ..Default::default()
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+
+        let manager = WorkerManager::new(queue, response_channel, config, service);
+
+        manager.start().await.unwrap();
+
+        assert_eq!(
+            manager.current_workers(),
+            3,
+            "start() must spawn min_workers workers"
+        );
+        assert_eq!(
+            manager.worker_senders.lock().await.len(),
+            3,
+            "must have 3 senders"
+        );
+        assert_eq!(
+            manager.worker_health.lock().await.len(),
+            3,
+            "must have 3 health entries"
+        );
+
+        // 清理:停止所有 worker
+        manager.running.store(false, Ordering::SeqCst);
+        let senders = manager.worker_senders.lock().await.clone();
+        for s in &senders {
+            let _ = s.send(WorkerTask::Shutdown { immediate: true }).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    /// 验证 shutdown() 设置 running=false 并让所有 worker 退出。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_worker_manager_shutdown_stops_workers() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig::default();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+
+        let manager = WorkerManager::new(queue, response_channel, config, service);
+
+        manager.spawn_worker().await;
+        manager.spawn_worker().await;
+        assert_eq!(manager.current_workers(), 2);
+
+        // shutdown 内部 sleep 5s,用 timeout 包装避免无限等待
+        tokio::time::timeout(Duration::from_secs(15), manager.shutdown())
+            .await
+            .expect("shutdown should complete within 15s");
+
+        assert!(
+            !manager.running.load(Ordering::SeqCst),
+            "running flag must be false after shutdown"
+        );
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if manager.current_workers() == 0 {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "workers did not exit after shutdown, remaining: {}",
+                    manager.current_workers()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// 验证 process_request 成功路径——调用 EmbeddingService 返回 EmbedResponse。
+    #[tokio::test]
+    async fn test_process_request_success() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let request = QueuedRequest {
+            request_id: "test-process-1".to_string(),
+            embed_request: EmbedRequest {
+                text: "hello world".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Normal,
+            submitted_at: std::time::Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::http("127.0.0.1".to_string()),
+            response_tx: tx,
+        };
+
+        let result = WorkerManager::process_request(&request, &service).await;
+        assert!(result.is_ok(), "process_request should succeed");
+        let response = result.unwrap();
+        assert_eq!(response.dimension, 8);
+        assert_eq!(response.embedding.len(), 8);
+    }
+
+    /// 验证 process_request 在引擎返回错误时传播 InferenceError。
+    #[tokio::test]
+    async fn test_process_request_engine_error() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(ErrorEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let request = QueuedRequest {
+            request_id: "test-process-err".to_string(),
+            embed_request: EmbedRequest {
+                text: "hello".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Normal,
+            submitted_at: std::time::Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::http("127.0.0.1".to_string()),
+            response_tx: tx,
+        };
+
+        let result = WorkerManager::process_request(&request, &service).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InferenceError(msg) => {
+                assert!(msg.contains("mock inference failure"));
+            }
+            other => panic!("expected InferenceError, got {:?}", other),
+        }
+    }
+
+    /// 验证 worker_loop 从队列消费请求并通过 response_channel 发送响应。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_worker_loop_processes_queued_request() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig::default();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+
+        let manager = WorkerManager::new(
+            Arc::clone(&queue),
+            Arc::clone(&response_channel),
+            config,
+            service,
+        );
+
+        let rx = response_channel.register("test-loop-1".to_string()).await;
+
+        let (tx, _) = tokio::sync::oneshot::channel();
+        let request = QueuedRequest {
+            request_id: "test-loop-1".to_string(),
+            embed_request: EmbedRequest {
+                text: "hello world".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Normal,
+            submitted_at: std::time::Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::http("127.0.0.1".to_string()),
+            response_tx: tx,
+        };
+        queue.enqueue(request).await.unwrap();
+
+        manager.spawn_worker().await;
+
+        let result = tokio::time::timeout(Duration::from_secs(5), rx).await;
+        assert!(result.is_ok(), "response should arrive within 5s");
+        let response_result = result.unwrap().unwrap();
+        assert!(response_result.is_ok());
+        let response = response_result.unwrap();
+        assert_eq!(response.dimension, 8);
+
+        // 清理
+        manager.running.store(false, Ordering::SeqCst);
+        let senders = manager.worker_senders.lock().await.clone();
+        for s in &senders {
+            let _ = s.send(WorkerTask::Shutdown { immediate: true }).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    /// 验证 worker_loop 处理请求时引擎出错,response_channel 收到错误响应。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_worker_loop_propagates_engine_error() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig::default();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(ErrorEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+
+        let manager = WorkerManager::new(
+            Arc::clone(&queue),
+            Arc::clone(&response_channel),
+            config,
+            service,
+        );
+
+        let rx = response_channel.register("test-loop-err".to_string()).await;
+
+        let (tx, _) = tokio::sync::oneshot::channel();
+        let request = QueuedRequest {
+            request_id: "test-loop-err".to_string(),
+            embed_request: EmbedRequest {
+                text: "hello".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Normal,
+            submitted_at: std::time::Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::http("127.0.0.1".to_string()),
+            response_tx: tx,
+        };
+        queue.enqueue(request).await.unwrap();
+
+        manager.spawn_worker().await;
+
+        let result = tokio::time::timeout(Duration::from_secs(5), rx).await;
+        assert!(result.is_ok(), "response should arrive within 5s");
+        let response_result = result.unwrap().unwrap();
+        assert!(response_result.is_err());
+        match response_result.unwrap_err() {
+            VecboostError::InferenceError(msg) => {
+                assert!(msg.contains("mock inference failure"));
+            }
+            other => panic!("expected InferenceError, got {:?}", other),
+        }
+
+        // 清理
+        manager.running.store(false, Ordering::SeqCst);
+        let senders = manager.worker_senders.lock().await.clone();
+        for s in &senders {
+            let _ = s.send(WorkerTask::Shutdown { immediate: true }).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    /// 验证 worker 退出后健康信息标记为 is_alive=false。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_worker_exit_marks_health_dead() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig::default();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+
+        let manager = WorkerManager::new(queue, response_channel, config, service);
+
+        manager.spawn_worker().await;
+        assert_eq!(manager.current_workers(), 1);
+
+        {
+            let senders = manager.worker_senders.lock().await;
+            senders[0]
+                .send(WorkerTask::Shutdown { immediate: false })
+                .await
+                .unwrap();
+        }
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if manager.current_workers() == 0 {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("worker did not exit within 2s");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let health = manager.worker_health.lock().await;
+        assert_eq!(health.len(), 1);
+        assert!(
+            !health[0].is_alive,
+            "worker must be marked as dead after exit"
+        );
+    }
+
+    /// 验证 WorkerHealthInfo::new 初始化字段。
+    #[test]
+    fn test_worker_health_info_new() {
+        let health = WorkerHealthInfo::new(42);
+        assert_eq!(health.worker_id, 42);
+        assert_eq!(health.crash_count, 0);
+        assert!(health.is_alive);
+    }
+
+    /// 验证 update_activity 更新 last_active_time。
+    #[test]
+    fn test_worker_health_info_update_activity() {
+        let mut health = WorkerHealthInfo::new(0);
+        let original = health.last_active_time;
+        std::thread::sleep(Duration::from_millis(5));
+        health.update_activity();
+        assert!(health.last_active_time > original);
+    }
+
+    /// 验证 record_crash 递增 crash_count。
+    #[test]
+    fn test_worker_health_info_record_crash() {
+        let mut health = WorkerHealthInfo::new(0);
+        assert_eq!(health.crash_count, 0);
+        health.record_crash();
+        assert_eq!(health.crash_count, 1);
+        health.record_crash();
+        assert_eq!(health.crash_count, 2);
+    }
+
+    /// 验证 WorkerTask::Shutdown 变体 immediate 字段。
+    #[test]
+    fn test_worker_task_shutdown_variants() {
+        let graceful = WorkerTask::Shutdown { immediate: false };
+        let immediate = WorkerTask::Shutdown { immediate: true };
+
+        match graceful {
+            WorkerTask::Shutdown { immediate: false } => {}
+            _ => panic!("graceful shutdown should have immediate=false"),
+        }
+        match immediate {
+            WorkerTask::Shutdown { immediate: true } => {}
+            _ => panic!("immediate shutdown should have immediate=true"),
+        }
+    }
+
+    /// 验证 WorkerState 所有变体的相等性。
+    #[test]
+    fn test_worker_state_variants() {
+        assert_eq!(WorkerState::Idle, WorkerState::Idle);
+        assert_eq!(WorkerState::Processing, WorkerState::Processing);
+        assert_eq!(WorkerState::Stopping, WorkerState::Stopping);
+        assert_eq!(WorkerState::Stopped, WorkerState::Stopped);
+        assert_ne!(WorkerState::Idle, WorkerState::Processing);
+        assert_ne!(WorkerState::Stopping, WorkerState::Stopped);
     }
 }

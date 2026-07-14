@@ -172,6 +172,7 @@ tokenizers = { version = "0.15", features = ["http"] }
 [dev-dependencies]
 mockall = "0.15"
 tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1", features = ["test-util", "macros", "rt-multi-thread"] }
 
 [profile.dev]
 opt-level = 1

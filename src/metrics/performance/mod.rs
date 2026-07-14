@@ -444,3 +444,429 @@ pub fn generate_test_text(length: usize) -> String {
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::Precision;
+    use async_trait::async_trait;
+    use tokio::sync::RwLock;
+
+    struct MockEngine {
+        dimension: usize,
+    }
+
+    impl MockEngine {
+        fn new(dimension: usize) -> Self {
+            Self { dimension }
+        }
+    }
+
+    #[async_trait]
+    impl InferenceEngine for MockEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.5; self.dimension])
+        }
+
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.5; self.dimension]).collect())
+        }
+
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &crate::config::model::ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    struct FailingMockEngine;
+
+    #[async_trait]
+    impl InferenceEngine for FailingMockEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Err(VecboostError::InferenceError("mock failure".to_string()))
+        }
+
+        fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Err(VecboostError::InferenceError("mock failure".to_string()))
+        }
+
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &crate::config::model::ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    fn make_tester(dimension: usize) -> PerformanceTester<MockEngine> {
+        let engine = Arc::new(RwLock::new(MockEngine::new(dimension)));
+        let metrics = Arc::new(InferenceCollector::new());
+        PerformanceTester::new(engine, metrics)
+    }
+
+    fn make_failing_tester() -> PerformanceTester<FailingMockEngine> {
+        let engine = Arc::new(RwLock::new(FailingMockEngine));
+        let metrics = Arc::new(InferenceCollector::new());
+        PerformanceTester::new(engine, metrics)
+    }
+
+    fn small_config() -> PerformanceTestConfig {
+        PerformanceTestConfig {
+            concurrent_requests: 1,
+            total_requests: 2,
+            warmup_requests: 0,
+            min_text_length: 5,
+            max_text_length: 10,
+            target_qps: None,
+            timeout_seconds: 60,
+        }
+    }
+
+    // === calculate_percentile ===
+
+    #[test]
+    fn test_calculate_percentile_empty() {
+        let latencies: Vec<u64> = vec![];
+        assert_eq!(calculate_percentile(&latencies, 50.0), 0);
+        assert_eq!(calculate_percentile(&latencies, 95.0), 0);
+    }
+
+    #[test]
+    fn test_calculate_percentile_single_element() {
+        let latencies = vec![42u64];
+        assert_eq!(calculate_percentile(&latencies, 0.0), 42);
+        assert_eq!(calculate_percentile(&latencies, 50.0), 42);
+        assert_eq!(calculate_percentile(&latencies, 100.0), 42);
+    }
+
+    #[test]
+    fn test_calculate_percentile_multiple_elements() {
+        let latencies = vec![10u64, 20, 30, 40, 50];
+        assert_eq!(calculate_percentile(&latencies, 0.0), 10);
+        assert_eq!(calculate_percentile(&latencies, 50.0), 30);
+        assert_eq!(calculate_percentile(&latencies, 95.0), 40);
+        assert_eq!(calculate_percentile(&latencies, 99.0), 40);
+        assert_eq!(calculate_percentile(&latencies, 100.0), 50);
+    }
+
+    #[test]
+    fn test_calculate_percentile_unsorted_input() {
+        let latencies = vec![50u64, 10, 40, 20, 30];
+        assert_eq!(calculate_percentile(&latencies, 0.0), 10);
+        assert_eq!(calculate_percentile(&latencies, 50.0), 30);
+        assert_eq!(calculate_percentile(&latencies, 100.0), 50);
+    }
+
+    #[test]
+    fn test_calculate_percentile_two_elements() {
+        let latencies = vec![10u64, 20];
+        assert_eq!(calculate_percentile(&latencies, 0.0), 10);
+        assert_eq!(calculate_percentile(&latencies, 50.0), 10);
+        assert_eq!(calculate_percentile(&latencies, 100.0), 20);
+    }
+
+    // === generate_test_text ===
+
+    #[test]
+    fn test_generate_test_text_zero_length() {
+        let text = generate_test_text(0);
+        assert!(text.is_empty());
+    }
+
+    #[test]
+    fn test_generate_test_text_small_length() {
+        let text = generate_test_text(3);
+        assert_eq!(text, "the");
+    }
+
+    #[test]
+    fn test_generate_test_text_uses_known_words() {
+        let text = generate_test_text(6);
+        assert!(text.contains("the"));
+        assert!(text.contains("fox"));
+    }
+
+    #[test]
+    fn test_generate_test_text_grows_with_length() {
+        let short = generate_test_text(10);
+        let long = generate_test_text(100);
+        assert!(long.len() > short.len());
+    }
+
+    #[test]
+    fn test_generate_test_text_repeats_words() {
+        let text = generate_test_text(1000);
+        assert!(text.len() >= 1000);
+        assert!(text.matches("lazy").count() > 1);
+    }
+
+    // === PerformanceTester::new / engine() ===
+
+    #[test]
+    fn test_performance_tester_new() {
+        let engine = Arc::new(RwLock::new(MockEngine::new(384)));
+        let metrics = Arc::new(InferenceCollector::new());
+        let tester = PerformanceTester::new(engine, metrics);
+        assert!(Arc::strong_count(tester.engine()) >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_performance_tester_engine_accessor() {
+        let engine = Arc::new(RwLock::new(MockEngine::new(128)));
+        let metrics = Arc::new(InferenceCollector::new());
+        let tester = PerformanceTester::new(engine, metrics);
+
+        let engine_arc = tester.engine().clone();
+        let guard = engine_arc.read().await;
+        let result = guard.embed("test");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 128);
+    }
+
+    // === run_throughput_test ===
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_throughput_test_success() {
+        let tester = make_tester(4);
+
+        let result = tester
+            .run_throughput_test(small_config(), |n| "a".repeat(n))
+            .await
+            .expect("throughput test should succeed");
+
+        assert_eq!(result.total_requests, 2);
+        assert_eq!(result.successful_requests, 2);
+        assert_eq!(result.failed_requests, 0);
+        assert_eq!(result.error_rate, 0.0);
+        assert!(result.total_tokens_processed > 0);
+        assert!(result.tokens_per_second >= 0.0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_throughput_test_failing_engine() {
+        let tester = make_failing_tester();
+
+        let result = tester
+            .run_throughput_test(small_config(), |n| "a".repeat(n))
+            .await
+            .expect("throughput test should return result even with failures");
+
+        assert_eq!(result.total_requests, 2);
+        assert_eq!(result.successful_requests, 0);
+        assert_eq!(result.failed_requests, 2);
+        assert_eq!(result.error_rate, 1.0);
+        assert_eq!(result.total_tokens_processed, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_run_throughput_test_concurrent() {
+        let tester = make_tester(8);
+        let config = PerformanceTestConfig {
+            concurrent_requests: 2,
+            total_requests: 4,
+            warmup_requests: 0,
+            min_text_length: 5,
+            max_text_length: 10,
+            target_qps: None,
+            timeout_seconds: 60,
+        };
+
+        let result = tester
+            .run_throughput_test(config, |n| "a".repeat(n))
+            .await
+            .expect("concurrent throughput test should succeed");
+
+        assert_eq!(result.total_requests, 4);
+        assert_eq!(result.successful_requests, 4);
+        assert_eq!(result.failed_requests, 0);
+        assert_eq!(result.error_rate, 0.0);
+        assert!(result.total_tokens_processed > 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_throughput_test_with_warmup() {
+        let tester = make_tester(4);
+        let config = PerformanceTestConfig {
+            concurrent_requests: 1,
+            total_requests: 4,
+            warmup_requests: 2,
+            min_text_length: 5,
+            max_text_length: 10,
+            target_qps: None,
+            timeout_seconds: 60,
+        };
+
+        let result = tester
+            .run_throughput_test(config, |n| "a".repeat(n))
+            .await
+            .expect("throughput test with warmup should succeed");
+
+        assert_eq!(result.total_requests, 4);
+        assert_eq!(result.successful_requests, 4);
+        assert_eq!(result.failed_requests, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_run_throughput_test_default_config() {
+        let tester = make_tester(4);
+
+        let result = tester
+            .run_throughput_test(PerformanceTestConfig::default(), generate_test_text)
+            .await
+            .expect("default config throughput test should succeed");
+
+        assert_eq!(result.total_requests, 100);
+        assert_eq!(result.successful_requests, 100);
+        assert_eq!(result.failed_requests, 0);
+        assert!(result.qps > 0.0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_throughput_test_zero_requests() {
+        let tester = make_tester(4);
+        let config = PerformanceTestConfig {
+            concurrent_requests: 1,
+            total_requests: 0,
+            warmup_requests: 0,
+            min_text_length: 5,
+            max_text_length: 10,
+            target_qps: None,
+            timeout_seconds: 60,
+        };
+
+        let result = tester
+            .run_throughput_test(config, |n| "a".repeat(n))
+            .await
+            .expect("zero-request throughput test should succeed");
+
+        assert_eq!(result.total_requests, 0);
+        assert_eq!(result.successful_requests, 0);
+        assert_eq!(result.failed_requests, 0);
+        assert_eq!(result.error_rate, 0.0);
+        assert_eq!(result.total_tokens_processed, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_throughput_test_all_warmup_skips_metrics() {
+        let engine = Arc::new(RwLock::new(MockEngine::new(4)));
+        let metrics = Arc::new(InferenceCollector::new());
+        let tester = PerformanceTester::new(engine, metrics.clone());
+        let config = PerformanceTestConfig {
+            concurrent_requests: 1,
+            total_requests: 2,
+            warmup_requests: 2,
+            min_text_length: 5,
+            max_text_length: 10,
+            target_qps: None,
+            timeout_seconds: 60,
+        };
+
+        let result = tester
+            .run_throughput_test(config, |n| "a".repeat(n))
+            .await
+            .expect("all-warmup throughput test should succeed");
+
+        assert_eq!(result.total_requests, 2);
+        assert_eq!(result.successful_requests, 2);
+        let summary = metrics.get_summary().await;
+        assert_eq!(summary.total_inferences, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_throughput_test_records_metrics() {
+        let engine = Arc::new(RwLock::new(MockEngine::new(4)));
+        let metrics = Arc::new(InferenceCollector::new());
+        let tester = PerformanceTester::new(engine, metrics.clone());
+
+        tester
+            .run_throughput_test(small_config(), |n| "a".repeat(n))
+            .await
+            .expect("throughput test should succeed");
+
+        let summary = metrics.get_summary().await;
+        assert_eq!(summary.total_inferences, 2);
+    }
+
+    // === run_latency_benchmark ===
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_latency_benchmark_success() {
+        let tester = make_tester(4);
+
+        let result = tester
+            .run_latency_benchmark(|n| "a".repeat(n))
+            .await
+            .expect("latency benchmark should succeed");
+
+        assert!(result.min_ms <= result.max_ms);
+        assert!(result.avg_ms >= 0.0);
+        assert!(result.std_dev_ms >= 0.0);
+        assert!(result.min_ms <= result.p50_ms);
+        assert!(result.p50_ms <= result.max_ms);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_latency_benchmark_failing_engine() {
+        let tester = make_failing_tester();
+
+        let result = tester
+            .run_latency_benchmark(|n| "a".repeat(n))
+            .await
+            .expect("latency benchmark should return result even on failure");
+
+        assert!(result.avg_ms >= 0.0);
+        assert!(result.std_dev_ms >= 0.0);
+    }
+
+    // === run_stress_test ===
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_stress_test_success() {
+        let tester = make_tester(4);
+
+        let result = tester
+            .run_stress_test(2, 1, |n| "a".repeat(n))
+            .await
+            .expect("stress test should succeed");
+
+        assert!(result.total_requests > 0);
+        assert!(result.successful_requests > 0);
+        assert_eq!(result.failed_requests, 0);
+        assert_eq!(result.error_rate, 0.0);
+        assert!(result.total_tokens_processed > 0);
+        assert!(result.qps > 0.0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_stress_test_failing_engine() {
+        let tester = make_failing_tester();
+
+        let result = tester
+            .run_stress_test(1, 1, |n| "a".repeat(n))
+            .await
+            .expect("stress test should return result even with failures");
+
+        assert!(result.total_requests > 0);
+        assert_eq!(result.successful_requests, 0);
+        assert!(result.failed_requests > 0);
+        assert_eq!(result.error_rate, 1.0);
+    }
+}

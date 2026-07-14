@@ -1219,3 +1219,741 @@ impl CachedTokenizer {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(invalid_from_utf8_unchecked)]
+    use super::*;
+
+    #[test]
+    fn test_encoding_getters_return_correct_slices() {
+        let encoding = Encoding {
+            ids: vec![1, 2, 3],
+            attention_mask: vec![1, 1, 1],
+            type_ids: vec![0, 0, 0],
+            tokens: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        };
+        assert_eq!(encoding.get_ids(), &[1, 2, 3]);
+        assert_eq!(encoding.get_attention_mask(), &[1, 1, 1]);
+        assert_eq!(encoding.get_type_ids(), &[0, 0, 0]);
+        assert_eq!(
+            encoding.get_tokens(),
+            &["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_encoding_getters_on_empty() {
+        let encoding = Encoding {
+            ids: vec![],
+            attention_mask: vec![],
+            type_ids: vec![],
+            tokens: vec![],
+        };
+        assert!(encoding.get_ids().is_empty());
+        assert!(encoding.get_attention_mask().is_empty());
+        assert!(encoding.get_type_ids().is_empty());
+        assert!(encoding.get_tokens().is_empty());
+    }
+
+    #[test]
+    fn test_encoding_eq_clone_debug() {
+        let encoding = Encoding {
+            ids: vec![1],
+            attention_mask: vec![1],
+            type_ids: vec![0],
+            tokens: vec!["x".to_string()],
+        };
+        let cloned = encoding.clone();
+        assert_eq!(encoding, cloned);
+        let debug_str = format!("{:?}", encoding);
+        assert!(debug_str.contains("Encoding"));
+    }
+
+    #[test]
+    fn test_utf8_validation_result_valid_constructor() {
+        let r = Utf8ValidationResult::valid();
+        assert!(r.is_valid);
+        assert_eq!(r.invalid_byte_position, None);
+        assert_eq!(r.invalid_byte_value, None);
+        assert_eq!(r.error_message, None);
+    }
+
+    #[test]
+    fn test_utf8_validation_result_invalid_constructor() {
+        let r = Utf8ValidationResult::invalid(7, 0xFF, "bad lead byte");
+        assert!(!r.is_valid);
+        assert_eq!(r.invalid_byte_position, Some(7));
+        assert_eq!(r.invalid_byte_value, Some(0xFF));
+        assert_eq!(r.error_message.as_deref(), Some("bad lead byte"));
+    }
+
+    #[test]
+    fn test_validate_utf8_empty_string_is_valid() {
+        let r = validate_utf8("");
+        assert!(r.is_valid);
+    }
+
+    #[test]
+    fn test_validate_utf8_ascii() {
+        let r = validate_utf8("Hello, World! 123 \t\n");
+        assert!(r.is_valid);
+    }
+
+    #[test]
+    fn test_validate_utf8_two_byte_sequence() {
+        let r = validate_utf8("éñüΩ");
+        assert!(r.is_valid);
+    }
+
+    #[test]
+    fn test_validate_utf8_three_byte_sequence() {
+        let r = validate_utf8("中文日本語한국어");
+        assert!(r.is_valid);
+    }
+
+    #[test]
+    fn test_validate_utf8_four_byte_sequence_emoji() {
+        let r = validate_utf8("🚀🎉🦀😀");
+        assert!(r.is_valid);
+    }
+
+    #[test]
+    fn test_validate_utf8_invalid_lead_byte_0x80() {
+        let bytes = [0x80u8];
+        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
+        let r = validate_utf8(s);
+        assert!(!r.is_valid);
+        assert_eq!(r.invalid_byte_position, Some(0));
+        assert_eq!(r.invalid_byte_value, Some(0x80));
+        assert!(r.error_message.as_deref().unwrap().contains("lead byte"));
+    }
+
+    #[test]
+    fn test_validate_utf8_invalid_lead_byte_0xc0() {
+        let bytes = [0xC0u8];
+        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
+        let r = validate_utf8(s);
+        assert!(!r.is_valid);
+        assert_eq!(r.invalid_byte_position, Some(0));
+        assert_eq!(r.invalid_byte_value, Some(0xC0));
+    }
+
+    #[test]
+    fn test_validate_utf8_invalid_lead_byte_0xff() {
+        let bytes = [0xFFu8];
+        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
+        let r = validate_utf8(s);
+        assert!(!r.is_valid);
+        assert_eq!(r.invalid_byte_value, Some(0xFF));
+    }
+
+    #[test]
+    fn test_validate_utf8_incomplete_two_byte_sequence() {
+        let bytes = [0xC2u8];
+        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
+        let r = validate_utf8(s);
+        assert!(!r.is_valid);
+        assert_eq!(r.invalid_byte_position, Some(0));
+        assert_eq!(r.invalid_byte_value, Some(0xC2));
+        assert!(
+            r.error_message
+                .as_deref()
+                .unwrap()
+                .contains("Incomplete UTF-8 sequence")
+        );
+    }
+
+    #[test]
+    fn test_validate_utf8_incomplete_three_byte_sequence() {
+        let bytes = [0xE0u8, 0x80u8];
+        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
+        let r = validate_utf8(s);
+        assert!(!r.is_valid);
+        assert_eq!(r.invalid_byte_position, Some(0));
+        assert!(
+            r.error_message
+                .as_deref()
+                .unwrap()
+                .contains("expected 2 continuation")
+        );
+    }
+
+    #[test]
+    fn test_validate_utf8_incomplete_four_byte_sequence() {
+        let bytes = [0xF0u8, 0x80u8, 0x80u8];
+        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
+        let r = validate_utf8(s);
+        assert!(!r.is_valid);
+        assert_eq!(r.invalid_byte_position, Some(0));
+        assert!(
+            r.error_message
+                .as_deref()
+                .unwrap()
+                .contains("expected 3 continuation")
+        );
+    }
+
+    #[test]
+    fn test_validate_utf8_invalid_continuation_byte() {
+        let bytes = [0xC2u8, 0xFFu8];
+        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
+        let r = validate_utf8(s);
+        assert!(!r.is_valid);
+        assert_eq!(r.invalid_byte_position, Some(1));
+        assert_eq!(r.invalid_byte_value, Some(0xFF));
+        assert!(
+            r.error_message
+                .as_deref()
+                .unwrap()
+                .contains("continuation byte")
+        );
+    }
+
+    #[test]
+    fn test_validate_utf8_valid_then_invalid_continuation_byte() {
+        let bytes = [b'a', 0xE0u8, 0x80u8, 0x00u8];
+        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
+        let r = validate_utf8(s);
+        assert!(!r.is_valid);
+        assert_eq!(r.invalid_byte_position, Some(3));
+        assert_eq!(r.invalid_byte_value, Some(0x00));
+    }
+
+    #[test]
+    fn test_cache_constants() {
+        assert_eq!(DEFAULT_CACHE_SIZE, 1024);
+        assert_eq!(MAX_CACHE_SIZE, 8192);
+        assert!(DEFAULT_CACHE_SIZE < MAX_CACHE_SIZE);
+    }
+
+    #[test]
+    fn test_cache_hit_stats_default() {
+        let stats = CacheHitStats::default();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 0);
+    }
+
+    #[test]
+    fn test_cache_stats_struct() {
+        let stats = CacheStats {
+            hits: 5,
+            misses: 3,
+            size: 2,
+            capacity: 1024,
+        };
+        assert_eq!(stats.hits, 5);
+        assert_eq!(stats.misses, 3);
+        assert_eq!(stats.size, 2);
+        assert_eq!(stats.capacity, 1024);
+        let cloned = stats.clone();
+        assert_eq!(stats, cloned);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    mod non_macos {
+        use super::*;
+
+        fn make_tokenizer() -> Tokenizer {
+            Tokenizer::new(512).expect("Failed to create tokenizer")
+        }
+
+        #[test]
+        fn test_tokenizer_new_success() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            assert_eq!(tokenizer.get_max_length(), 512);
+            assert!(tokenizer.get_vocab_size() > 0);
+        }
+
+        #[test]
+        fn test_tokenizer_new_populates_vocab_and_specials() {
+            let tokenizer = Tokenizer::new(64).unwrap();
+            assert!(tokenizer.vocab.contains_key("the"));
+            assert!(tokenizer.vocab.contains_key("be"));
+            assert!(tokenizer.special_tokens.contains_key("[CLS]"));
+            assert!(tokenizer.special_tokens.contains_key("[SEP]"));
+            assert!(tokenizer.special_tokens.contains_key("[PAD]"));
+            assert!(tokenizer.special_tokens.contains_key("[UNK]"));
+            assert_eq!(
+                tokenizer.get_vocab_size(),
+                tokenizer.vocab.len() + tokenizer.special_tokens.len()
+            );
+        }
+
+        #[test]
+        fn test_tokenizer_from_pretrained_default_max_length() {
+            let tokenizer = Tokenizer::from_pretrained("bert-base-uncased").unwrap();
+            assert_eq!(tokenizer.get_max_length(), 512);
+        }
+
+        #[test]
+        fn test_tokenizer_from_pretrained_with_max_length() {
+            let tokenizer = Tokenizer::from_pretrained_with_max_length("any-model", 128).unwrap();
+            assert_eq!(tokenizer.get_max_length(), 128);
+        }
+
+        #[test]
+        fn test_tokenizer_from_file_default_max_length() {
+            let tokenizer = Tokenizer::from_file("/nonexistent/path.json").unwrap();
+            assert_eq!(tokenizer.get_max_length(), 512);
+        }
+
+        #[test]
+        fn test_tokenizer_from_file_with_max_length() {
+            let tokenizer =
+                Tokenizer::from_file_with_max_length("/nonexistent/path.json", 256).unwrap();
+            assert_eq!(tokenizer.get_max_length(), 256);
+        }
+
+        #[test]
+        fn test_tokenizer_get_max_length() {
+            let tokenizer = Tokenizer::new(42).unwrap();
+            assert_eq!(tokenizer.get_max_length(), 42);
+        }
+
+        #[test]
+        fn test_tokenizer_get_vocab_size_includes_specials() {
+            let tokenizer = make_tokenizer();
+            let vocab_only = tokenizer.vocab.len();
+            let specials_only = tokenizer.special_tokens.len();
+            assert_eq!(tokenizer.get_vocab_size(), vocab_only + specials_only);
+        }
+
+        #[test]
+        fn test_tokenizer_encode_empty_text_returns_error() {
+            let tokenizer = make_tokenizer();
+            let result = tokenizer.encode("", true);
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
+            assert!(err.to_string().contains("empty text"));
+        }
+
+        #[test]
+        fn test_tokenizer_encode_known_words_without_special_tokens() {
+            let tokenizer = make_tokenizer();
+            let encoding = tokenizer.encode("the be to", false).unwrap();
+            assert_eq!(encoding.tokens, vec!["the", "be", "to"]);
+            assert_eq!(encoding.ids.len(), 3);
+            assert_eq!(encoding.attention_mask, vec![1, 1, 1]);
+            assert_eq!(encoding.type_ids, vec![0, 0, 0]);
+        }
+
+        #[test]
+        fn test_tokenizer_encode_known_words_ids_match_vocab() {
+            let tokenizer = make_tokenizer();
+            let encoding = tokenizer.encode("the be to", false).unwrap();
+            assert_eq!(encoding.ids[0], *tokenizer.vocab.get("the").unwrap());
+            assert_eq!(encoding.ids[1], *tokenizer.vocab.get("be").unwrap());
+            assert_eq!(encoding.ids[2], *tokenizer.vocab.get("to").unwrap());
+        }
+
+        #[test]
+        fn test_tokenizer_encode_with_special_tokens_wraps_cls_sep() {
+            let tokenizer = make_tokenizer();
+            let encoding = tokenizer.encode("the be", true).unwrap();
+            assert_eq!(encoding.tokens.len(), 4);
+            assert_eq!(encoding.tokens[0], "[CLS]");
+            assert_eq!(encoding.tokens[1], "the");
+            assert_eq!(encoding.tokens[2], "be");
+            assert_eq!(encoding.tokens[3], "[SEP]");
+            assert_eq!(
+                encoding.ids[0],
+                *tokenizer.special_tokens.get("[CLS]").unwrap()
+            );
+            assert_eq!(
+                encoding.ids[3],
+                *tokenizer.special_tokens.get("[SEP]").unwrap()
+            );
+            assert_eq!(encoding.attention_mask, vec![1, 1, 1, 1]);
+        }
+
+        #[test]
+        fn test_tokenizer_encode_unknown_word_becomes_unk() {
+            let tokenizer = make_tokenizer();
+            let encoding = tokenizer.encode("xyzqwerty", false).unwrap();
+            assert_eq!(encoding.tokens, vec!["[UNK]"]);
+            assert_eq!(
+                encoding.ids,
+                vec![*tokenizer.special_tokens.get("[UNK]").unwrap()]
+            );
+        }
+
+        #[test]
+        fn test_tokenizer_encode_mixed_known_unknown() {
+            let tokenizer = make_tokenizer();
+            let encoding = tokenizer.encode("the zzzz be", false).unwrap();
+            assert_eq!(encoding.tokens, vec!["the", "[UNK]", "be"]);
+            assert_eq!(encoding.ids.len(), 3);
+        }
+
+        #[test]
+        fn test_tokenizer_encode_punctuation_tokens() {
+            let tokenizer = make_tokenizer();
+            let encoding = tokenizer.encode("!!!", false).unwrap();
+            assert_eq!(encoding.tokens.len(), 1);
+            assert_eq!(encoding.tokens[0], "[UNK]");
+        }
+
+        #[test]
+        fn test_tokenizer_encode_lowercase_normalization() {
+            let tokenizer = make_tokenizer();
+            let upper = tokenizer.encode("THE", false).unwrap();
+            let lower = tokenizer.encode("the", false).unwrap();
+            assert_eq!(upper.ids, lower.ids);
+            assert_eq!(upper.tokens, lower.tokens);
+        }
+
+        #[test]
+        fn test_tokenizer_encode_truncation_applies_to_all_fields() {
+            let tokenizer = Tokenizer::new(3).unwrap();
+            let encoding = tokenizer.encode("the be to of and", true).unwrap();
+            assert_eq!(encoding.ids.len(), 3);
+            assert_eq!(encoding.attention_mask.len(), 3);
+            assert_eq!(encoding.type_ids.len(), 3);
+            assert_eq!(encoding.tokens.len(), 3);
+            assert_eq!(encoding.tokens[0], "[CLS]");
+        }
+
+        #[test]
+        fn test_tokenizer_encode_truncation_without_special_tokens() {
+            let tokenizer = Tokenizer::new(2).unwrap();
+            let encoding = tokenizer.encode("the be to of and", false).unwrap();
+            assert_eq!(encoding.ids.len(), 2);
+            assert_eq!(encoding.tokens.len(), 2);
+            assert_eq!(encoding.tokens, vec!["the", "be"]);
+        }
+
+        #[test]
+        fn test_tokenizer_encode_truncation_when_text_fits() {
+            let tokenizer = Tokenizer::new(100).unwrap();
+            let encoding = tokenizer.encode("the be", true).unwrap();
+            assert_eq!(encoding.tokens.len(), 4);
+            assert_eq!(encoding.ids.len(), 4);
+        }
+
+        #[test]
+        fn test_tokenizer_decode_empty_ids_returns_error() {
+            let tokenizer = make_tokenizer();
+            let result = tokenizer.decode(&[], true);
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
+            assert!(err.to_string().contains("empty token ids"));
+        }
+
+        #[test]
+        fn test_tokenizer_decode_known_id() {
+            let tokenizer = make_tokenizer();
+            let the_id = *tokenizer.vocab.get("the").unwrap();
+            let result = tokenizer.decode(&[the_id], false).unwrap();
+            assert_eq!(result, "the");
+        }
+
+        #[test]
+        fn test_tokenizer_decode_multiple_known_ids() {
+            let tokenizer = make_tokenizer();
+            let the_id = *tokenizer.vocab.get("the").unwrap();
+            let be_id = *tokenizer.vocab.get("be").unwrap();
+            let to_id = *tokenizer.vocab.get("to").unwrap();
+            let result = tokenizer.decode(&[the_id, be_id, to_id], false).unwrap();
+            assert_eq!(result, "the be to");
+        }
+
+        #[test]
+        fn test_tokenizer_decode_special_token_id() {
+            let tokenizer = make_tokenizer();
+            let cls_id = *tokenizer.special_tokens.get("[CLS]").unwrap();
+            let result = tokenizer.decode(&[cls_id], false).unwrap();
+            assert_eq!(result, "[CLS]");
+        }
+
+        #[test]
+        fn test_tokenizer_decode_unknown_id_returns_unk_placeholder() {
+            let tokenizer = make_tokenizer();
+            let result = tokenizer.decode(&[u32::MAX], false).unwrap();
+            assert_eq!(result, format!("[UNK:{}]", u32::MAX));
+        }
+
+        #[test]
+        fn test_tokenizer_decode_mixed_known_special_unknown() {
+            let tokenizer = make_tokenizer();
+            let the_id = *tokenizer.vocab.get("the").unwrap();
+            let cls_id = *tokenizer.special_tokens.get("[CLS]").unwrap();
+            let result = tokenizer
+                .decode(&[cls_id, the_id, 99_999_999], false)
+                .unwrap();
+            assert_eq!(result, format!("[CLS] the [UNK:{}]", 99_999_999));
+        }
+
+        #[test]
+        fn test_tokenizer_decode_skip_special_tokens_param_does_not_affect_output() {
+            let tokenizer = make_tokenizer();
+            let cls_id = *tokenizer.special_tokens.get("[CLS]").unwrap();
+            let with_skip = tokenizer.decode(&[cls_id], true).unwrap();
+            let without_skip = tokenizer.decode(&[cls_id], false).unwrap();
+            assert_eq!(with_skip, without_skip);
+            assert_eq!(with_skip, "[CLS]");
+        }
+
+        #[test]
+        fn test_tokenizer_encode_batch_empty_returns_empty_vec() {
+            let tokenizer = make_tokenizer();
+            let result = tokenizer.encode_batch(&[], true).unwrap();
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn test_tokenizer_encode_batch_with_empty_text_at_index_returns_error() {
+            let tokenizer = make_tokenizer();
+            let result = tokenizer.encode_batch(&["the", "", "be"], false);
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
+            assert!(err.to_string().contains("batch index 1"));
+        }
+
+        #[test]
+        fn test_tokenizer_encode_batch_success() {
+            let tokenizer = make_tokenizer();
+            let result = tokenizer.encode_batch(&["the be", "to of"], true).unwrap();
+            assert_eq!(result.len(), 2);
+            assert_eq!(result[0].tokens, vec!["[CLS]", "the", "be", "[SEP]"]);
+            assert_eq!(result[1].tokens, vec!["[CLS]", "to", "of", "[SEP]"]);
+        }
+
+        #[test]
+        fn test_tokenizer_encode_batch_without_special_tokens() {
+            let tokenizer = make_tokenizer();
+            let result = tokenizer.encode_batch(&["the be", "to of"], false).unwrap();
+            assert_eq!(result.len(), 2);
+            assert_eq!(result[0].tokens, vec!["the", "be"]);
+            assert_eq!(result[1].tokens, vec!["to", "of"]);
+        }
+
+        #[test]
+        fn test_tokenizer_encode_batch_propagates_truncation() {
+            let tokenizer = Tokenizer::new(2).unwrap();
+            let result = tokenizer
+                .encode_batch(&["the be to of and"], false)
+                .unwrap();
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].tokens.len(), 2);
+        }
+
+        #[test]
+        fn test_tokenizer_encode_batch_invalid_utf8_returns_error() {
+            let tokenizer = make_tokenizer();
+            let bytes = [0xC2u8];
+            let bad = unsafe { std::str::from_utf8_unchecked(&bytes) };
+            let result = tokenizer.encode_batch(&["the", bad], false);
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
+            assert!(err.to_string().contains("batch index 1"));
+        }
+
+        #[test]
+        fn test_tokenizer_clone_is_equal() {
+            let tokenizer = make_tokenizer();
+            let cloned = tokenizer.clone();
+            assert_eq!(tokenizer.get_max_length(), cloned.get_max_length());
+            assert_eq!(tokenizer.get_vocab_size(), cloned.get_vocab_size());
+        }
+
+        #[test]
+        fn test_tokenizer_wordpiece_tokenize_via_encode_mixed_alphanum_and_punct() {
+            let tokenizer = make_tokenizer();
+            let encoding = tokenizer.encode("the, be.", false).unwrap();
+            assert_eq!(encoding.tokens.len(), 4);
+            assert_eq!(encoding.tokens[0], "the");
+            assert_eq!(encoding.tokens[1], "[UNK]");
+            assert_eq!(encoding.tokens[2], "be");
+            assert_eq!(encoding.tokens[3], "[UNK]");
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_new_max_length_preserved() {
+            let tokenizer = Tokenizer::new(256).unwrap();
+            let cached = CachedTokenizer::new(tokenizer, 256, 64);
+            assert_eq!(cached.max_length(), 256);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_with_default_cache() {
+            let tokenizer = Tokenizer::new(128).unwrap();
+            let cached = CachedTokenizer::with_default_cache(tokenizer, 128);
+            assert_eq!(cached.max_length(), 128);
+            let cap = cached.cache.lock().await.cap();
+            assert_eq!(cap.get(), DEFAULT_CACHE_SIZE);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_cache_size_clamped_to_max() {
+            let tokenizer = Tokenizer::new(128).unwrap();
+            let cached = CachedTokenizer::new(tokenizer, 128, 100_000);
+            let cap = cached.cache.lock().await.cap();
+            assert_eq!(cap.get(), MAX_CACHE_SIZE);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_cache_size_zero_becomes_one() {
+            let tokenizer = Tokenizer::new(128).unwrap();
+            let cached = CachedTokenizer::new(tokenizer, 128, 0);
+            let cap = cached.cache.lock().await.cap();
+            assert_eq!(cap.get(), 1);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_encode_cache_miss_then_hit_stats() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
+
+            let first = cached.encode("the be to", true).await.unwrap();
+            {
+                let stats = cached.stats.lock().await;
+                assert_eq!(stats.hits, 0);
+                assert_eq!(stats.misses, 1);
+            }
+
+            let second = cached.encode("the be to", true).await.unwrap();
+            {
+                let stats = cached.stats.lock().await;
+                assert_eq!(stats.hits, 1);
+                assert_eq!(stats.misses, 1);
+            }
+            assert_eq!(first, second);
+
+            let third = cached.encode("the be to", true).await.unwrap();
+            {
+                let stats = cached.stats.lock().await;
+                assert_eq!(stats.hits, 2);
+                assert_eq!(stats.misses, 1);
+            }
+            assert_eq!(third, first);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_encode_different_special_tokens_not_shared() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
+
+            let _ = cached.encode("the", false).await.unwrap();
+            let _ = cached.encode("the", true).await.unwrap();
+
+            let stats = cached.stats.lock().await;
+            assert_eq!(stats.hits, 0);
+            assert_eq!(stats.misses, 2);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_encode_different_text_separate_entries() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
+
+            let _ = cached.encode("the", false).await.unwrap();
+            let _ = cached.encode("be", false).await.unwrap();
+            let _ = cached.encode("the", false).await.unwrap();
+
+            let stats = cached.stats.lock().await;
+            assert_eq!(stats.hits, 1);
+            assert_eq!(stats.misses, 2);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_encode_empty_text_returns_error() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
+            let result = cached.encode("", true).await;
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
+            assert!(err.to_string().contains("empty text"));
+            let stats = cached.stats.lock().await;
+            assert_eq!(stats.hits, 0);
+            assert_eq!(stats.misses, 0);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_encode_invalid_utf8_returns_error() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
+            let bytes = [0xC2u8];
+            let bad = unsafe { std::str::from_utf8_unchecked(&bytes) };
+            let result = cached.encode(bad, false).await;
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
+            assert!(err.to_string().contains("UTF-8"));
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_encode_returns_correct_encoding_content() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
+            let encoding = cached.encode("the be", true).await.unwrap();
+            assert_eq!(encoding.tokens, vec!["[CLS]", "the", "be", "[SEP]"]);
+            assert_eq!(encoding.attention_mask, vec![1, 1, 1, 1]);
+            assert_eq!(encoding.type_ids, vec![0, 0, 0, 0]);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_encode_failure_does_not_consume_cache_slot() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
+
+            let _ = cached.encode("", true).await;
+            let cache_size_after_failure = {
+                let cache = cached.cache.lock().await;
+                cache.len()
+            };
+            assert_eq!(cache_size_after_failure, 0);
+            let stats = cached.stats.lock().await;
+            assert_eq!(stats.misses, 0);
+            assert_eq!(stats.hits, 0);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_lru_eviction_when_capacity_exceeded() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            let cached = CachedTokenizer::new(tokenizer, 512, 1);
+
+            let _ = cached.encode("the", false).await.unwrap();
+            let _ = cached.encode("be", false).await.unwrap();
+            let _ = cached.encode("the", false).await.unwrap();
+
+            let stats = cached.stats.lock().await;
+            assert_eq!(stats.misses, 3);
+            assert_eq!(stats.hits, 0);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_hash_key_differs_by_special_tokens() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
+            let key_false = cached.hash_key("the", false);
+            let key_true = cached.hash_key("the", true);
+            assert_ne!(key_false, key_true);
+            assert!(key_false.ends_with("_false"));
+            assert!(key_true.ends_with("_true"));
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_hash_key_differs_by_text() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
+            let key_a = cached.hash_key("the", false);
+            let key_b = cached.hash_key("be", false);
+            assert_ne!(key_a, key_b);
+        }
+
+        #[tokio::test]
+        async fn test_cached_tokenizer_hash_key_same_input_same_hash() {
+            let tokenizer = Tokenizer::new(512).unwrap();
+            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
+            let k1 = cached.hash_key("the be to", true);
+            let k2 = cached.hash_key("the be to", true);
+            assert_eq!(k1, k2);
+        }
+    }
+}

@@ -360,3 +360,403 @@ pub async fn file_embed_handler(
 
     Ok(resp)
 }
+
+#[cfg(all(test, feature = "http"))]
+mod tests {
+    use super::*;
+    use crate::config::model::{DeviceType, EngineType, ModelConfig, Precision};
+    use crate::engine::InferenceEngine;
+    use crate::pipeline::{
+        PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
+        WorkerManager,
+    };
+    use crate::rate_limit::{LimiteronAdapter, RateLimitConfig};
+    use crate::service::embedding::EmbeddingService;
+    use async_trait::async_trait;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::RwLock;
+
+    struct TestEngine {
+        dimension: usize,
+    }
+
+    impl TestEngine {
+        fn new(dimension: usize) -> Self {
+            Self { dimension }
+        }
+    }
+
+    #[async_trait]
+    impl InferenceEngine for TestEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.5; self.dimension])
+        }
+
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.5; self.dimension]).collect())
+        }
+
+        fn precision(&self) -> &Precision {
+            static PRECISION: Precision = Precision::Fp32;
+            &PRECISION
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    fn make_test_state() -> AppState {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = TestEngine::new(384);
+        let model_config = ModelConfig {
+            name: "test-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from(temp_dir.path()),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(
+            engine,
+            Some(model_config),
+        )));
+        std::mem::forget(temp_dir);
+
+        let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
+        let pipeline_queue = Arc::new(PriorityRequestQueue::new(0));
+        let response_channel = Arc::new(ResponseChannel::new());
+
+        #[cfg(feature = "auth")]
+        {
+            AppState {
+                service,
+                jwt_manager: None,
+                user_store: None,
+                auth_enabled: false,
+                csrf_config: None,
+                csrf_token_store: None,
+                metrics_collector: None,
+                prometheus_collector: None,
+                rate_limiter,
+                ip_whitelist: vec![],
+                rate_limit_enabled: false,
+                audit_logger: None,
+                pipeline_enabled: false,
+                pipeline_queue,
+                response_channel,
+                priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
+                worker_manager: Arc::new(WorkerManager::new(
+                    Arc::new(PriorityRequestQueue::new(0)),
+                    Arc::new(ResponseChannel::new()),
+                    WorkerConfig::default(),
+                    Arc::new(RwLock::new(EmbeddingService::new(
+                        Arc::new(RwLock::new(TestEngine::new(384))),
+                        None,
+                    ))),
+                )),
+                kit: None,
+            }
+        }
+
+        #[cfg(not(feature = "auth"))]
+        {
+            AppState {
+                service,
+                auth_enabled: false,
+                metrics_collector: None,
+                prometheus_collector: None,
+                rate_limiter,
+                ip_whitelist: vec![],
+                rate_limit_enabled: false,
+                audit_logger: None,
+                pipeline_enabled: false,
+                pipeline_queue,
+                response_channel,
+                priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
+                worker_manager: Arc::new(WorkerManager::new(
+                    Arc::new(PriorityRequestQueue::new(0)),
+                    Arc::new(ResponseChannel::new()),
+                    WorkerConfig::default(),
+                    Arc::new(RwLock::new(EmbeddingService::new(
+                        Arc::new(RwLock::new(TestEngine::new(384))),
+                        None,
+                    ))),
+                )),
+                kit: None,
+            }
+        }
+    }
+
+    fn make_rate_limited_state() -> AppState {
+        let mut state = make_test_state();
+        state.rate_limit_enabled = true;
+        state.rate_limiter = Arc::new(LimiteronAdapter::new(RateLimitConfig {
+            global_requests_per_minute: 0,
+            ip_requests_per_minute: 0,
+            ..Default::default()
+        }));
+        state
+    }
+
+    fn test_addr() -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9002)
+    }
+
+    #[test]
+    fn test_extract_real_ip_ipv4() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), 8080);
+        assert_eq!(extract_real_ip(addr), "192.168.1.1");
+    }
+
+    #[test]
+    fn test_extract_real_ip_ipv6() {
+        let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 8080);
+        assert_eq!(extract_real_ip(addr), "::1");
+    }
+
+    #[test]
+    fn test_is_ip_whitelisted_exact_match() {
+        assert!(is_ip_whitelisted("127.0.0.1", &["127.0.0.1".to_string()]));
+        assert!(!is_ip_whitelisted("127.0.0.2", &["127.0.0.1".to_string()]));
+    }
+
+    #[test]
+    fn test_is_ip_whitelisted_cidr_v4_match() {
+        assert!(is_ip_whitelisted(
+            "192.168.1.100",
+            &["192.168.1.0/24".to_string()]
+        ));
+        assert!(!is_ip_whitelisted(
+            "192.168.2.100",
+            &["192.168.1.0/24".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_is_ip_whitelisted_cidr_v6_match() {
+        assert!(is_ip_whitelisted(
+            "2001:db8::1",
+            &["2001:db8::/32".to_string()]
+        ));
+        assert!(!is_ip_whitelisted(
+            "2001:db9::1",
+            &["2001:db8::/32".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_is_ip_whitelisted_empty_whitelist() {
+        assert!(!is_ip_whitelisted("127.0.0.1", &[]));
+    }
+
+    #[test]
+    fn test_is_ip_whitelisted_mismatched_ip_version() {
+        assert!(!is_ip_whitelisted("127.0.0.1", &["::1/128".to_string()]));
+        assert!(!is_ip_whitelisted("::1", &["127.0.0.1/32".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn test_add_rate_limit_headers_disabled() {
+        let state = make_test_state();
+        let mut headers = HeaderMap::new();
+        add_rate_limit_headers(&mut headers, &state, "127.0.0.1").await;
+        assert!(!headers.contains_key("x-ratelimit-limit"));
+        assert!(!headers.contains_key("x-ratelimit-remaining"));
+        assert!(!headers.contains_key("x-ratelimit-reset"));
+    }
+
+    #[tokio::test]
+    async fn test_add_rate_limit_headers_enabled() {
+        let state = make_rate_limited_state();
+        let mut headers = HeaderMap::new();
+        add_rate_limit_headers(&mut headers, &state, "127.0.0.1").await;
+        assert!(headers.contains_key("x-ratelimit-limit"));
+        assert!(headers.contains_key("x-ratelimit-remaining"));
+        assert!(headers.contains_key("x-ratelimit-reset"));
+    }
+
+    #[tokio::test]
+    async fn test_embed_handler_success() {
+        let state = make_test_state();
+        let req = EmbedRequest {
+            text: "hello world".to_string(),
+            normalize: None,
+        };
+        let result = embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_ok());
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_embed_handler_empty_text_returns_bad_request() {
+        let state = make_test_state();
+        let req = EmbedRequest {
+            text: "".to_string(),
+            normalize: None,
+        };
+        let result = embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        match result.as_ref().err().unwrap() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("empty")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_embed_handler_whitespace_only_returns_bad_request() {
+        let state = make_test_state();
+        let req = EmbedRequest {
+            text: "   ".to_string(),
+            normalize: None,
+        };
+        let result = embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_embed_handler_rate_limit_exceeded_returns_429() {
+        let state = make_rate_limited_state();
+        let req = EmbedRequest {
+            text: "hello world".to_string(),
+            normalize: None,
+        };
+        let result = embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        match result.as_ref().err().unwrap() {
+            VecboostError::RateLimitExceeded(_) => {}
+            other => panic!("expected RateLimitExceeded, got {:?}", other),
+        }
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_batch_embed_handler_success() {
+        let state = make_test_state();
+        let req = BatchEmbedRequest {
+            texts: vec!["hello world".to_string(), "second text".to_string()],
+            mode: None,
+            normalize: None,
+        };
+        let result = batch_embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_ok());
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_batch_embed_handler_empty_batch_returns_bad_request() {
+        let state = make_test_state();
+        let req = BatchEmbedRequest {
+            texts: vec![],
+            mode: None,
+            normalize: None,
+        };
+        let result = batch_embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        match result.as_ref().err().unwrap() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("empty")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_similarity_handler_success() {
+        let state = make_test_state();
+        let req = SimilarityRequest {
+            source: "hello world".to_string(),
+            target: "hello there".to_string(),
+        };
+        let result = similarity_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_ok());
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_similarity_handler_empty_source_returns_bad_request() {
+        let state = make_test_state();
+        let req = SimilarityRequest {
+            source: "".to_string(),
+            target: "hello there".to_string(),
+        };
+        let result = similarity_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        match result.as_ref().err().unwrap() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("empty")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_file_embed_handler_path_traversal_returns_bad_request() {
+        let state = make_test_state();
+        let req = FileEmbedRequest {
+            path: "../../../etc/passwd".to_string(),
+            mode: None,
+        };
+        let result = file_embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_file_embed_handler_nonexistent_file_returns_error() {
+        let state = make_test_state();
+        let req = FileEmbedRequest {
+            path: "nonexistent_file_xyz_123.txt".to_string(),
+            mode: None,
+        };
+        let result = file_embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_file_embed_handler_success() {
+        let temp_dir = tempfile::tempdir_in(".").unwrap();
+        let file_path = temp_dir.path().join("test_embed.txt");
+        std::fs::write(&file_path, "hello world\nsecond line\n").unwrap();
+
+        let state = make_test_state();
+        let req = FileEmbedRequest {
+            path: file_path.to_string_lossy().to_string(),
+            mode: None,
+        };
+        let result = file_embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_ok());
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}

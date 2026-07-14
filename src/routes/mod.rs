@@ -26,7 +26,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 #[openapi(
     info(
         title = "VecBoost API",
-        version = "0.1.0",
+        version = "0.2.0",
         description = "高性能向量嵌入服务 API 文档",
         contact(
             name = "VecBoost Team",
@@ -68,7 +68,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
         )
     ),
     servers(
-        (url = "http://localhost:9000", description = "本地开发服务器")
+        (url = "http://localhost:9002", description = "本地开发服务器")
     ),
     tags(
         (name = "health", description = "健康检查"),

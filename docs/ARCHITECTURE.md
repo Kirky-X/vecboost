@@ -77,11 +77,11 @@ The ecosystem is composed of 7 Rust libraries. `trait-kit` is the always-enabled
 |---------|---------|---------|------|--------|
 | **trait-kit** | `0.3` | always | Module registry & typestate dependency management | (registry host) |
 | **confers** | `0.4` | `config` | Config loading (TOML + env override + hot reload) | EmbeddingModule |
-| **inklog** | `0.1` | `inklog` | Structured logging (console + file rotation) | LoggerModule |
+| **inklog** | `0.1` | `inklog` | Structured logging (console + file rotation) | AuditModule |
 | **oxcache** | `0.3` | `oxcache` | Cache backend (LRU/LFU/FIFO + TTL eviction) | CacheModule |
 | **limiteron** | `0.2` | `limiteron` | Token bucket rate limiter (multi-dimension) | RateLimitModule |
 | **dbnexus** | `0.4` | `db` | Database persistence (SQLite/PostgreSQL + roles) | DbModule |
-| **sdforge** | `0.4` | `http`/`mcp`/`cli` | Multi-protocol interface generation | (API layer) |
+| **sdforge** | `0.4` | `http`/`cli` | Multi-protocol interface generation | (API layer) |
 
 ### 2.1 trait-kit Module Registry
 
@@ -95,7 +95,7 @@ graph LR
     UB3 -->|register::&lt;RateLimitModule&gt;| UB4["Kit&lt;Unbuilt&gt;"]
     UB4 -->|register::&lt;CacheModule&gt;| UB5["Kit&lt;Unbuilt&gt;"]
     UB5 -->|register::&lt;DbModule&gt;| UB6["Kit&lt;Unbuilt&gt;"]
-    UB6 -->|register::&lt;LoggerModule&gt;| UB7["Kit&lt;Unbuilt&gt;"]
+    UB6 -->|register::&lt;AuditModule&gt;| UB7["Kit&lt;Unbuilt&gt;"]
     UB7 -->|build()| Ready["Kit&lt;Ready&gt;"]
     Ready -->|require::&lt;T&gt;| Arc["Arc&lt;T&gt;"]
 ```
@@ -109,7 +109,7 @@ The 6 registered modules:
 | `RateLimitModule` | `ModuleMeta + AutoBuilder` | limiteron | `LimiteronAdapter` |
 | `CacheModule` | `ModuleMeta + AutoBuilder` | oxcache | `Cache` backend |
 | `DbModule` | `ModuleMeta + AutoBuilder` | dbnexus | `DbPool` |
-| `LoggerModule` | `ModuleMeta + AutoBuilder` | inklog | `LoggerManager` |
+| `AuditModule` | `ModuleMeta + AutoBuilder` | inklog | `AuditLogger` |
 
 ## 3. Module Dependency Graph
 
@@ -190,7 +190,7 @@ VecBoost v0.2.0 uses `sdforge` to generate multiple protocol bindings from a sin
 > - HTTP 路由由 `src/routes/embedding.rs` 手写 Axum handler(非 sdforge 生成)
 > - CLI 由 `src/cli/mod.rs` 手写 clap `#[derive(Parser)]`(非 sdforge 生成)
 > - MCP 协议**完全未实现**(无 `rmcp` 依赖,无 MCP server 代码)
-> - `Cargo.toml` 已声明 `sdforge = { version = "0.4", optional = true }` 依赖 + `http`/`mcp`/`cli` 三个 feature 透传,仅作为依赖声明保留
+> - `Cargo.toml` 已声明 `sdforge = { version = "0.4", optional = true }` 依赖 + `http`/`cli` 两个 feature 透传(`mcp` 因 sdforge 0.4 集成未完成而未启用),仅作为依赖声明保留
 > - 完整 sdforge 宏生成机制推迟到 **v0.3.0**
 > - 详见 `specmark/changes/vecboost-v0.2.0-ecosystem-refactor/design.md` D5 决策 + "实施偏离记录"
 
@@ -207,7 +207,7 @@ sequenceDiagram
     Dev->>API: Define embed/embed_batch/compute_similarity
     Note over API: #[service_api] macro<br/>annotates function signatures
 
-    Dev->>sdforge: Enable feature (http/mcp/cli)
+    Dev->>sdforge: Enable feature (http/cli)
     sdforge->>HTTP: Generate Axum routes + OpenAPI
     sdforge->>MCP: Generate MCP tool bindings
     sdforge->>CLI: Generate clap subcommands

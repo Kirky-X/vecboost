@@ -41,7 +41,7 @@ VecBoost v0.2.0 adopts a modular ecosystem architecture composed of 7 independen
 | **oxcache** | `0.3` | High-performance cache backend (LRU/LFU/FIFO + TTL eviction) | `oxcache` |
 | **limiteron** | `0.2` | Token bucket rate limiter (multi-dimension independent counting) | `limiteron` |
 | **dbnexus** | `0.4` | Database persistence (SQLite/PostgreSQL + permission roles) | `db` |
-| **sdforge** | `0.4` | Multi-protocol interface generation (HTTP/MCP/CLI from single source) | `http`/`mcp`/`cli` |
+| **sdforge** | `0.4` | Multi-protocol interface generation (HTTP/CLI from single source) | `http`/`cli` |
 
 ```mermaid
 graph LR
@@ -50,7 +50,7 @@ graph LR
     Kit --> RateLimitMod["RateLimitModule"]
     Kit --> CacheMod["CacheModule"]
     Kit --> DbMod["DbModule"]
-    Kit --> LoggerMod["LoggerModule"]
+    Kit --> LoggerMod["AuditModule"]
 
     CacheMod -.->|uses| oxcache
     RateLimitMod -.->|uses| limiteron
@@ -90,14 +90,14 @@ cargo build --release --features cuda
 #    macOS (Metal):
 cargo build --release --features metal
 
-# 4. Build multi-protocol interfaces (HTTP + MCP + CLI)
-cargo build --release --features http,mcp,cli
+# 4. Build multi-protocol interfaces (HTTP + CLI)
+cargo build --release --features http,cli
 
 # 5. Build full ecosystem (DB + logging + auth + all protocols)
-cargo build --release --features http,mcp,cli,db,inklog,auth,oxcache,limiteron
+cargo build --release --features http,cli,db,inklog,auth,oxcache,limiteron
 
 # 6. Build all features (incl. GPU + ONNX)
-cargo build --release --features cuda,onnx,grpc,auth,redis,db,inklog,mcp,cli
+cargo build --release --features cuda,onnx,grpc,auth,redis,db,inklog,cli
 ```
 
 ### ⚙️ Configuration
@@ -416,7 +416,7 @@ graph TB
         Kit --> RateLimitMod["RateLimitModule"]
         Kit --> CacheMod["CacheModule"]
         Kit --> DbMod["DbModule"]
-        Kit --> LoggerMod["LoggerModule"]
+        Kit --> LoggerMod["AuditModule"]
     end
 
     subgraph Pipeline["Request Pipeline"]
@@ -596,7 +596,7 @@ services:
     ports:
       - "9002:9002"    # HTTP API
       - "50051:50051"  # gRPC
-      - "9090:9090"    # Prometheus metrics
+      # Prometheus metrics are exposed on the 9002 /metrics path, no separate port
     volumes:
       - ./config.toml:/app/config.toml
       - ./models:/app/models

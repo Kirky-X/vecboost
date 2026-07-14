@@ -12,8 +12,7 @@ source "$SCRIPT_DIR/common.sh"
 # 配置变量
 IMAGE_NAME="vecboost:latest"
 CONTAINER_NAME="vecboost-test"
-HOST_PORT=8080
-METRICS_PORT=9090
+HOST_PORT=9002
 GRPC_PORT=50051
 LOG_DIR="./logs"
 MODEL_DIR="./models"
@@ -60,15 +59,14 @@ start_container() {
     print_info "启动新容器..."
     docker run -d \
         --name "$CONTAINER_NAME" \
-        -p "${HOST_PORT}:8080" \
-        -p "${METRICS_PORT}:9090" \
+        -p "${HOST_PORT}:9002" \
         -p "${GRPC_PORT}:50051" \
         -v "$(pwd)/${LOG_DIR}:/app/logs" \
         -v "$(pwd)/${MODEL_DIR}:/app/models" \
         -v "$(pwd)/${CACHE_DIR}:/app/cache" \
         -e RUST_LOG=vecboost=debug \
         -e VECBOOST_HOST=0.0.0.0 \
-        -e VECBOOST_PORT=8080 \
+        -e VECBOOST_PORT=9002 \
         -e VECBOOST_MEMORY_POOL_ENABLED=true \
         -e VECBOOST_PIPELINE_ENABLED=true \
         "$IMAGE_NAME" || {
@@ -125,7 +123,7 @@ test_health_endpoint() {
 # 测试 Prometheus 指标
 test_metrics_endpoint() {
     print_info "测试 Prometheus 指标端点..."
-    local response=$(curl -s http://localhost:${METRICS_PORT}/metrics 2>/dev/null || echo "")
+    local response=$(curl -s http://localhost:${HOST_PORT}/metrics 2>/dev/null || echo "")
     if [ -n "$response" ]; then
         print_success "Prometheus 指标端点正常"
         echo "指标数量: $(echo "$response" | wc -l)"

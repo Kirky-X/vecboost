@@ -4,7 +4,7 @@
 
 **内部架构、关键组件、数据流和设计决策详解**
 
-[![Version 0.1.2](https://img.shields.io/badge/Version-0.1.2-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![Version 0.2.0](https://img.shields.io/badge/Version-0.2.0-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
 *VecBoost 的内部架构，解释关键组件、数据流和设计决策。*
 
@@ -718,7 +718,7 @@ pub trait Engine: Send + Sync {
 
 ---
 
-> **📝 最后更新**: 2026-01-16 | **版本**: 0.1.2 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-01-16 | **版本**: 0.2.0 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
 
 ---
 

@@ -4,7 +4,7 @@
 
 **完整的 REST HTTP 端点和 gRPC 服务方法文档**
 
-[![Version 0.1.2](https://img.shields.io/badge/Version-0.1.2-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002) [![gRPC](https://img.shields.io/badge/gRPC-50051-green.svg?style=for-the-badge)](localhost:50051)
+[![Version 0.2.0](https://img.shields.io/badge/Version-0.2.0-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002) [![gRPC](https://img.shields.io/badge/gRPC-50051-green.svg?style=for-the-badge)](localhost:50051)
 
 *VecBoost API 的完整文档，包括 REST HTTP 端点和 gRPC 服务方法。*
 
@@ -31,7 +31,7 @@
 |------|------|-----|------|
 | **REST API** | HTTP | `http://localhost:9002` | `9002` |
 | **gRPC API** | HTTP/2 | `localhost:50051` | `50051` |
-| **Prometheus** | HTTP | `http://localhost:9090` | `9090` |
+| **Prometheus** | HTTP | `http://localhost:9002/metrics` | `9002` |
 
 > **💡 提示**: 所有 REST API 端点都以 `/api/v1/` 为前缀。
 
@@ -518,7 +518,7 @@ curl -X POST http://localhost:9002/api/v1/model/switch \
 ```json
 {
   "status": "healthy",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "uptime": "2h30m45s",
   "model_loaded": "BAAI/bge-m3"
 }
@@ -979,6 +979,7 @@ window_seconds = 60
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| `0.2.0` | 2026-02-01 | ✨ 生态重构：7 库架构、trait-kit 模块注册、多协议接口 |
 | `0.1.2` | 2026-01-16 | ✨ 添加 Matryoshka 维度约简支持、OpenAI 兼容 API |
 | `0.1.0` | 2026-01-10 | ✨ 初始发布，支持 REST 和 gRPC API |
 

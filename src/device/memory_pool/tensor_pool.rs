@@ -347,8 +347,184 @@ mod tests {
 
         let mut pool = TensorPool::new(device, config);
 
-        // 尝试获取超过最大序列长度的张量
         let result = pool.acquire(16, 512);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_release_pool_full_drops_tensor() {
+        let device = Device::Cpu;
+        let config = TensorPoolConfig {
+            max_batch_size: 32,
+            max_sequence_length: 256,
+            pool_size_per_shape: 1,
+            ..Default::default()
+        };
+        let mut pool = TensorPool::new(device, config);
+
+        let t1 = pool.acquire(8, 128).unwrap();
+        let t2 = pool.acquire(8, 128).unwrap();
+        let stats_after_acquire = pool.get_stats();
+        let mem_after_acquire = stats_after_acquire.total_memory_bytes;
+        assert_eq!(stats_after_acquire.cache_misses, 2);
+        assert_eq!(stats_after_acquire.total_allocations, 2);
+
+        pool.release(t1, 8, 128);
+        assert_eq!(pool.get_stats().current_pool_size, 1);
+        assert_eq!(pool.get_stats().total_releases, 1);
+
+        pool.release(t2, 8, 128);
+        assert_eq!(pool.get_stats().current_pool_size, 1);
+        assert_eq!(pool.get_stats().total_releases, 2);
+        let mem_after_drop = pool.get_stats().total_memory_bytes;
+        assert_eq!(mem_after_drop, mem_after_acquire - (8 * 128 * 8) as u64);
+    }
+
+    #[test]
+    fn test_clear_resets_pool() {
+        let device = Device::Cpu;
+        let config = TensorPoolConfig {
+            max_batch_size: 32,
+            max_sequence_length: 512,
+            pool_size_per_shape: 2,
+            preallocate_on_startup: true,
+            ..Default::default()
+        };
+        let mut pool = TensorPool::new(device, config);
+        pool.preallocate().unwrap();
+        assert!(pool.get_stats().current_pool_size > 0);
+        assert!(pool.get_stats().total_memory_bytes > 0);
+
+        pool.clear();
+
+        let stats = pool.get_stats();
+        assert_eq!(stats.current_pool_size, 0);
+        assert_eq!(stats.total_memory_bytes, 0);
+        assert!(stats.total_allocations > 0);
+    }
+
+    #[test]
+    fn test_device_getter() {
+        let device = Device::Cpu;
+        let config = TensorPoolConfig::default();
+        let pool = TensorPool::new(device, config);
+
+        let returned_device = pool.device();
+        assert!(matches!(returned_device, Device::Cpu));
+    }
+
+    #[test]
+    fn test_acquire_after_clear_creates_new() {
+        let device = Device::Cpu;
+        let config = TensorPoolConfig {
+            max_batch_size: 32,
+            max_sequence_length: 256,
+            pool_size_per_shape: 2,
+            ..Default::default()
+        };
+        let mut pool = TensorPool::new(device, config);
+
+        let t = pool.acquire(8, 128).unwrap();
+        pool.release(t, 8, 128);
+        assert_eq!(pool.get_stats().current_pool_size, 1);
+
+        pool.clear();
+        assert_eq!(pool.get_stats().current_pool_size, 0);
+
+        let _ = pool.acquire(8, 128).unwrap();
+        let stats = pool.get_stats();
+        assert_eq!(stats.cache_misses, 2);
+        assert_eq!(stats.cache_hits, 0);
+    }
+
+    #[test]
+    fn test_preallocate_skips_oversized_shapes() {
+        let device = Device::Cpu;
+        let config = TensorPoolConfig {
+            max_batch_size: 8,
+            max_sequence_length: 256,
+            pool_size_per_shape: 1,
+            preallocate_on_startup: true,
+            ..Default::default()
+        };
+        let mut pool = TensorPool::new(device, config);
+        pool.preallocate().unwrap();
+
+        let stats = pool.get_stats();
+        assert_eq!(stats.current_pool_size, 6);
+        assert_eq!(stats.total_allocations, 6);
+    }
+
+    #[test]
+    fn test_release_different_shapes_independent() {
+        let device = Device::Cpu;
+        let config = TensorPoolConfig {
+            max_batch_size: 32,
+            max_sequence_length: 256,
+            pool_size_per_shape: 2,
+            ..Default::default()
+        };
+        let mut pool = TensorPool::new(device, config);
+
+        let t1 = pool.acquire(8, 128).unwrap();
+        let t2 = pool.acquire(16, 256).unwrap();
+
+        pool.release(t1, 8, 128);
+        pool.release(t2, 16, 256);
+        assert_eq!(pool.get_stats().current_pool_size, 2);
+
+        let _ = pool.acquire(8, 128).unwrap();
+        let _ = pool.acquire(16, 256).unwrap();
+        let stats = pool.get_stats();
+        assert_eq!(stats.cache_hits, 2);
+        assert_eq!(stats.cache_misses, 2);
+    }
+
+    #[test]
+    fn test_preallocate_then_acquire_hits_cache() {
+        let device = Device::Cpu;
+        let config = TensorPoolConfig {
+            max_batch_size: 32,
+            max_sequence_length: 512,
+            pool_size_per_shape: 2,
+            preallocate_on_startup: true,
+            ..Default::default()
+        };
+        let mut pool = TensorPool::new(device, config);
+        pool.preallocate().unwrap();
+
+        let pre_stats = pool.get_stats();
+        let _ = pool.acquire(8, 128).unwrap();
+        let post_stats = pool.get_stats();
+        assert_eq!(post_stats.cache_hits, 1);
+        assert_eq!(post_stats.cache_misses, 0);
+        assert_eq!(
+            post_stats.total_allocations,
+            pre_stats.total_allocations + 1
+        );
+    }
+
+    #[test]
+    fn test_repeated_acquire_release_cycle() {
+        let device = Device::Cpu;
+        let config = TensorPoolConfig {
+            max_batch_size: 32,
+            max_sequence_length: 256,
+            pool_size_per_shape: 3,
+            ..Default::default()
+        };
+        let mut pool = TensorPool::new(device, config);
+
+        for _ in 0..5 {
+            let t = pool.acquire(4, 64).unwrap();
+            pool.release(t, 4, 64);
+        }
+
+        let stats = pool.get_stats();
+        assert_eq!(stats.cache_misses, 1);
+        assert_eq!(stats.cache_hits, 4);
+        assert_eq!(stats.total_allocations, 5);
+        assert_eq!(stats.total_releases, 5);
+        assert_eq!(stats.current_pool_size, 1);
     }
 }

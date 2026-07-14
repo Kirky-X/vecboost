@@ -324,4 +324,193 @@ mod tests {
 
         consumer.await.unwrap();
     }
+
+    /// 验证 handle_pipeline_request 在超时时返回 ValidationError。
+    /// 使用 start_paused 模拟时间流逝,不启动 consumer 让 response 永远 pending。
+    #[tokio::test(start_paused = true)]
+    async fn test_handle_pipeline_request_timeout() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(100, engine);
+
+        let req = EmbedRequest {
+            text: "hello".to_string(),
+            normalize: Some(true),
+        };
+        let result = handle_pipeline_request(state, req, "127.0.0.1".to_string()).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::ValidationError(msg) => {
+                assert!(msg.contains("timeout"), "got: {}", msg);
+            }
+            other => panic!("expected ValidationError, got {:?}", other),
+        }
+    }
+
+    /// 验证 handle_pipeline_request 在 normalize=false 时不做归一化。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_normalize_false() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(4)));
+        let state = create_test_state(100, engine);
+        let queue = Arc::clone(&state.pipeline_queue);
+        let response_channel = Arc::clone(&state.response_channel);
+        let service = Arc::clone(&state.service);
+
+        let consumer = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue.dequeue().await {
+                    let request_id = req.request_id.clone();
+                    let service_guard = service.read().await;
+                    let result = service_guard.process_text(req.embed_request, None).await;
+                    drop(service_guard);
+                    response_channel.complete(request_id, result).await;
+                    return;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        let req = EmbedRequest {
+            text: "hello world".to_string(),
+            normalize: Some(false),
+        };
+        let result = handle_pipeline_request(state, req, "127.0.0.1".to_string()).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.0.dimension, 4);
+
+        consumer.await.unwrap();
+    }
+
+    /// 验证 handle_pipeline_request 支持不同维度的引擎。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_different_dimensions() {
+        for dim in &[1usize, 2, 16, 128] {
+            let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+                Arc::new(RwLock::new(TestEngine::new(*dim)));
+            let state = create_test_state(100, engine);
+            let queue = Arc::clone(&state.pipeline_queue);
+            let response_channel = Arc::clone(&state.response_channel);
+            let service = Arc::clone(&state.service);
+
+            let consumer = tokio::spawn(async move {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                loop {
+                    if let Some(req) = queue.dequeue().await {
+                        let request_id = req.request_id.clone();
+                        let service_guard = service.read().await;
+                        let result = service_guard.process_text(req.embed_request, None).await;
+                        drop(service_guard);
+                        response_channel.complete(request_id, result).await;
+                        return;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            });
+
+            let req = EmbedRequest {
+                text: format!("test dim {}", dim),
+                normalize: Some(true),
+            };
+            let result = handle_pipeline_request(state, req, "127.0.0.1".to_string()).await;
+            assert!(result.is_ok(), "dim {} should succeed", dim);
+            let response = result.unwrap();
+            assert_eq!(response.0.embedding.len(), *dim);
+            assert_eq!(response.0.dimension, *dim);
+
+            consumer.await.unwrap();
+        }
+    }
+
+    /// 验证 handle_pipeline_request 空文本返回 ValidationError。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_empty_text() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(100, engine);
+        let queue = Arc::clone(&state.pipeline_queue);
+        let response_channel = Arc::clone(&state.response_channel);
+        let service = Arc::clone(&state.service);
+
+        let consumer = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue.dequeue().await {
+                    let request_id = req.request_id.clone();
+                    let service_guard = service.read().await;
+                    let result = service_guard.process_text(req.embed_request, None).await;
+                    drop(service_guard);
+                    response_channel.complete(request_id, result).await;
+                    return;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        let req = EmbedRequest {
+            text: "".to_string(),
+            normalize: Some(true),
+        };
+        let result = handle_pipeline_request(state, req, "127.0.0.1".to_string()).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(_) => {}
+            other => panic!("expected InvalidInput for empty text, got {:?}", other),
+        }
+
+        consumer.await.unwrap();
+    }
+
+    /// 验证 handle_pipeline_request 空白文本返回 ValidationError。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_whitespace_text() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(100, engine);
+        let queue = Arc::clone(&state.pipeline_queue);
+        let response_channel = Arc::clone(&state.response_channel);
+        let service = Arc::clone(&state.service);
+
+        let consumer = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue.dequeue().await {
+                    let request_id = req.request_id.clone();
+                    let service_guard = service.read().await;
+                    let result = service_guard.process_text(req.embed_request, None).await;
+                    drop(service_guard);
+                    response_channel.complete(request_id, result).await;
+                    return;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        let req = EmbedRequest {
+            text: "   ".to_string(),
+            normalize: Some(true),
+        };
+        let result = handle_pipeline_request(state, req, "127.0.0.1".to_string()).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(_) => {}
+            other => panic!("expected InvalidInput for whitespace text, got {:?}", other),
+        }
+
+        consumer.await.unwrap();
+    }
 }

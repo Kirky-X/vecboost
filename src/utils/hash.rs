@@ -376,4 +376,149 @@ mod tests {
         assert!(!report.overall_valid);
         assert_eq!(report.corrupted_files.len(), 1);
     }
+
+    #[test]
+    fn test_check_model_integrity_size_check_pass() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"enough data here").unwrap();
+        let path = temp_file.path().to_str().unwrap().to_string();
+
+        let mut min_sizes = HashMap::new();
+        min_sizes.insert(path.clone(), 4_u64);
+
+        let files = vec![(path, None)];
+        let report = check_model_integrity("test_model", files, Some(min_sizes)).unwrap();
+
+        assert!(report.overall_valid);
+        assert!(report.corrupted_files.is_empty());
+    }
+
+    #[test]
+    fn test_check_model_integrity_multiple_files_all_valid() {
+        let mut temp_a = NamedTempFile::new().unwrap();
+        temp_a.write_all(b"file a content").unwrap();
+        let path_a = temp_a.path().to_str().unwrap().to_string();
+        let hash_a = compute_sha256(&path_a).unwrap();
+
+        let mut temp_b = NamedTempFile::new().unwrap();
+        temp_b.write_all(b"file b content").unwrap();
+        let path_b = temp_b.path().to_str().unwrap().to_string();
+        let hash_b = compute_sha256(&path_b).unwrap();
+
+        let files = vec![
+            (path_a.clone(), Some(hash_a)),
+            (path_b.clone(), Some(hash_b)),
+        ];
+        let report = check_model_integrity("multi_model", files, None).unwrap();
+
+        assert!(report.overall_valid);
+        assert!(report.corrupted_files.is_empty());
+        assert_eq!(report.files_checked.len(), 2);
+        assert!(report.files_checked.iter().all(|c| c.is_valid));
+    }
+
+    #[test]
+    fn test_check_model_integrity_mixed_files() {
+        let mut temp_valid = NamedTempFile::new().unwrap();
+        temp_valid.write_all(b"valid content").unwrap();
+        let valid_path = temp_valid.path().to_str().unwrap().to_string();
+        let valid_hash = compute_sha256(&valid_path).unwrap();
+
+        let files = vec![
+            (valid_path.clone(), Some(valid_hash)),
+            ("/nonexistent/missing.bin".to_string(), None),
+            (valid_path.clone(), Some("wrong_hash".to_string())),
+        ];
+        let report = check_model_integrity("mixed_model", files, None).unwrap();
+
+        assert!(!report.overall_valid);
+        assert_eq!(report.corrupted_files.len(), 2);
+        assert_eq!(report.files_checked.len(), 3);
+        assert!(report.files_checked[0].is_valid);
+        assert!(!report.files_checked[1].is_valid);
+        assert!(!report.files_checked[2].is_valid);
+    }
+
+    #[test]
+    fn test_check_model_integrity_empty_files_list() {
+        let report = check_model_integrity("empty_model", vec![], None).unwrap();
+        assert!(report.overall_valid);
+        assert!(report.files_checked.is_empty());
+        assert!(report.corrupted_files.is_empty());
+    }
+
+    #[test]
+    fn test_compute_sha256_empty_file() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let hash = compute_sha256(temp_file.path()).unwrap();
+        assert_eq!(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn test_compute_sha256_known_content() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"Hello, World!").unwrap();
+        let hash = compute_sha256(temp_file.path()).unwrap();
+        assert_eq!(
+            hash,
+            "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"
+        );
+    }
+
+    #[test]
+    fn test_compute_sha256_large_content() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let large_content = vec![0xABu8; 100_000];
+        temp_file.write_all(&large_content).unwrap();
+        let hash = compute_sha256(temp_file.path()).unwrap();
+        assert_eq!(hash.len(), 64);
+        let hash2 = compute_sha256(temp_file.path()).unwrap();
+        assert_eq!(hash, hash2);
+    }
+
+    #[test]
+    fn test_verify_sha256_empty_expected() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"data").unwrap();
+        let result = verify_sha256(temp_file.path(), "").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_verify_file_size_exact_minimum() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"1234").unwrap();
+        assert!(verify_file_size(temp_file.path(), 4).unwrap());
+    }
+
+    #[test]
+    fn test_check_model_integrity_report_model_name() {
+        let files = vec![("/nonexistent/file.bin".to_string(), None)];
+        let report = check_model_integrity("my_custom_model", files, None).unwrap();
+        assert_eq!(report.model_name, "my_custom_model");
+    }
+
+    #[test]
+    fn test_check_model_integrity_missing_with_min_size() {
+        let missing_path = "/nonexistent/missing_with_size.bin".to_string();
+        let mut min_sizes = HashMap::new();
+        min_sizes.insert(missing_path.clone(), 100_u64);
+
+        let files = vec![(missing_path.clone(), None)];
+        let report = check_model_integrity("test_model", files, Some(min_sizes)).unwrap();
+
+        assert!(!report.overall_valid);
+        assert_eq!(report.corrupted_files.len(), 1);
+        assert!(report.files_checked[0].error_message.is_some());
+        assert!(
+            report.files_checked[0]
+                .error_message
+                .as_ref()
+                .unwrap()
+                .contains("does not exist")
+        );
+    }
 }

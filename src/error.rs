@@ -516,4 +516,154 @@ mod tests {
             _ => panic!("Expected ConfigError"),
         }
     }
+
+    #[test]
+    fn test_into_response_model_file_corrupted() {
+        let err = VecboostError::ModelFileCorrupted("test".to_string());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::FAILED_DEPENDENCY);
+    }
+
+    #[test]
+    fn test_into_response_model_integrity_error() {
+        let err = VecboostError::ModelIntegrityError("test".to_string());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::FAILED_DEPENDENCY);
+    }
+
+    #[test]
+    fn test_into_response_model_not_loaded() {
+        let err = VecboostError::ModelNotLoaded("test".to_string());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::FAILED_DEPENDENCY);
+    }
+
+    #[test]
+    fn test_into_response_security_error() {
+        let err = VecboostError::SecurityError("test".to_string());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_into_response_io_error_variant() {
+        let err = VecboostError::IoError("test".to_string());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_into_response_database_error() {
+        let err = VecboostError::DatabaseError("test".to_string());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_into_response_internal_error() {
+        let err = VecboostError::InternalError("test".to_string());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_vecboost_error_database_error_constructor() {
+        let err = VecboostError::database_error("db failed".to_string());
+        match err {
+            VecboostError::DatabaseError(msg) => assert_eq!(msg, "db failed"),
+            _ => panic!("Expected DatabaseError"),
+        }
+    }
+
+    #[test]
+    fn test_from_candle_error() {
+        let candle_err = candle_core::Error::Msg("candle failure".to_string());
+        let vecboost_err: VecboostError = candle_err.into();
+        match vecboost_err {
+            VecboostError::InferenceError(msg) => {
+                assert!(msg.contains("candle failure"), "got: {}", msg)
+            }
+            _ => panic!("Expected InferenceError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_from_join_error() {
+        let handle = tokio::spawn(async {
+            panic!("test panic");
+        });
+        let join_err = handle.await.unwrap_err();
+        let vecboost_err: VecboostError = join_err.into();
+        match vecboost_err {
+            VecboostError::InferenceError(_) => {}
+            other => panic!("Expected InferenceError, got {:?}", other),
+        }
+    }
+
+    #[cfg(feature = "db")]
+    #[test]
+    fn test_from_db_error() {
+        let db_err = sea_orm::DbErr::RecordNotFound("not found".to_string());
+        let vecboost_err: VecboostError = db_err.into();
+        match vecboost_err {
+            VecboostError::DatabaseError(msg) => {
+                assert!(msg.contains("not found"), "got: {}", msg)
+            }
+            _ => panic!("Expected DatabaseError"),
+        }
+    }
+
+    #[test]
+    fn test_sanitize_error_message_multiple_patterns() {
+        let msg = "Error at position 42 in value.unwrap() for token 12345 at /home/user/model/file.safetensors";
+        let sanitized = sanitize_error_message(msg);
+        assert!(sanitized.contains("at position [REDACTED]"));
+        assert!(sanitized.contains("[INTERNAL_ERROR]"));
+        assert!(sanitized.contains("token [ID]"));
+        assert!(sanitized.contains("[REDACTED_PATH]"));
+    }
+
+    #[test]
+    fn test_sanitize_error_message_exact_boundary() {
+        let msg = "x".repeat(MAX_ERROR_MESSAGE_LENGTH);
+        let sanitized = sanitize_error_message(&msg);
+        assert_eq!(sanitized.len(), MAX_ERROR_MESSAGE_LENGTH);
+        assert!(!sanitized.ends_with("..."));
+    }
+
+    #[test]
+    fn test_sanitize_error_message_one_char_over_boundary() {
+        let msg = "x".repeat(MAX_ERROR_MESSAGE_LENGTH + 1);
+        let sanitized = sanitize_error_message(&msg);
+        assert!(sanitized.ends_with("..."));
+        assert!(sanitized.len() <= MAX_ERROR_MESSAGE_LENGTH + 3);
+    }
+
+    #[test]
+    fn test_error_debug_format() {
+        let err = VecboostError::ConfigError("debug test".to_string());
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("ConfigError"));
+        assert!(debug_str.contains("debug test"));
+    }
+
+    #[test]
+    fn test_all_error_variants_display() {
+        assert_eq!(
+            format!("{}", VecboostError::OutOfMemory("oom".to_string())),
+            "Out of memory error: oom"
+        );
+        assert_eq!(
+            format!("{}", VecboostError::DatabaseError("db".to_string())),
+            "Database error: db"
+        );
+        assert_eq!(
+            format!("{}", VecboostError::InternalError("int".to_string())),
+            "Internal error: int"
+        );
+        assert_eq!(
+            format!("{}", VecboostError::RateLimitExceeded("rl".to_string())),
+            "Rate limit exceeded: rl"
+        );
+    }
 }

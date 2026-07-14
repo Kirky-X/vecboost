@@ -408,4 +408,173 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_scheduler_accessors() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            queue.clone(),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel.clone(),
+            worker_manager.clone(),
+            service,
+        );
+
+        let wm = scheduler.worker_manager();
+        assert!(Arc::ptr_eq(&wm, &worker_manager));
+
+        let rc = scheduler.response_channel();
+        assert!(Arc::ptr_eq(&rc, &response_channel));
+
+        let _pc = scheduler.priority_calculator();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_request_with_normalize_true() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let request = QueuedRequest {
+            request_id: "test-norm-true".to_string(),
+            embed_request: EmbedRequest {
+                text: "hello world".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tokio::sync::oneshot::channel().0,
+        };
+
+        let result = scheduler.process_request(request).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.dimension, 384);
+
+        let norm: f32 = response.embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-5,
+            "L2 norm should be 1.0, got {}",
+            norm
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_request_with_normalize_false() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let request = QueuedRequest {
+            request_id: "test-norm-false".to_string(),
+            embed_request: EmbedRequest {
+                text: "hello world".to_string(),
+                normalize: Some(false),
+            },
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tokio::sync::oneshot::channel().0,
+        };
+
+        let result = scheduler.process_request(request).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.dimension, 384);
+
+        let norm: f32 = response.embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-5,
+            "process_text always applies L2 normalization regardless of normalize flag, got {}",
+            norm
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_request_whitespace_only_returns_error() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let request = QueuedRequest {
+            request_id: "test-ws".to_string(),
+            embed_request: EmbedRequest {
+                text: "   ".to_string(),
+                normalize: None,
+            },
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tokio::sync::oneshot::channel().0,
+        };
+
+        let result = scheduler.process_request(request).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(_) => {}
+            other => panic!("expected InvalidInput for whitespace-only, got {:?}", other),
+        }
+    }
 }

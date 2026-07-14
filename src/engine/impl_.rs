@@ -210,4 +210,122 @@ mod tests {
         assert_eq!(Precision::Fp16.to_string(), "fp16");
         assert_eq!(Precision::Int8.to_string(), "int8");
     }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_any_engine_new_onnx_all_precisions_fail() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_onnx();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let precisions = [Precision::Fp32, Precision::Fp16, Precision::Int8];
+        for (idx, precision) in precisions.iter().enumerate() {
+            let result = AnyEngine::new(&config, EngineType::Onnx, precision.clone());
+            assert!(
+                result.is_err(),
+                "AnyEngine::new with Onnx should fail for precision at index {}",
+                idx
+            );
+        }
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_any_engine_new_onnx_cuda_device_fails() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_onnx();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.device = DeviceType::Cuda;
+
+        let result = AnyEngine::new(&config, EngineType::Onnx, Precision::Fp32);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError, got {:?}",
+                e
+            );
+        }
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_any_engine_new_onnx_amd_device_fails() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_onnx();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.device = DeviceType::Amd;
+
+        let result = AnyEngine::new(&config, EngineType::Onnx, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_any_engine_new_onnx_opencl_device_fails() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_onnx();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.device = DeviceType::OpenCL;
+
+        let result = AnyEngine::new(&config, EngineType::Onnx, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_any_engine_new_candle_with_sha256() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_candle();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.model_sha256 = Some("abcdef1234567890".to_string());
+
+        let result = AnyEngine::new(&config, EngineType::Candle, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_any_engine_new_onnx_with_sha256() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_onnx();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.model_sha256 = Some("abcdef1234567890".to_string());
+
+        let result = AnyEngine::new(&config, EngineType::Onnx, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_engine_type_candle_serde_roundtrip() {
+        let json = serde_json::to_string(&EngineType::Candle).expect("serialize");
+        assert_eq!(json, "\"candle\"");
+        let deserialized: EngineType = serde_json::from_str(&json).expect("deserialize");
+        assert!(matches!(deserialized, EngineType::Candle));
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_engine_type_onnx_serde_roundtrip() {
+        let json = serde_json::to_string(&EngineType::Onnx).expect("serialize");
+        assert_eq!(json, "\"onnx\"");
+        let deserialized: EngineType = serde_json::from_str(&json).expect("deserialize");
+        assert!(matches!(deserialized, EngineType::Onnx));
+    }
+
+    #[test]
+    fn test_precision_clone_and_eq() {
+        let p1 = Precision::Fp32;
+        let p2 = p1.clone();
+        assert_eq!(p1, p2);
+        assert_ne!(Precision::Fp32, Precision::Fp16);
+        assert_ne!(Precision::Fp16, Precision::Int8);
+    }
+
+    #[test]
+    fn test_device_type_cuda_and_metal_serde() {
+        let cuda_json = serde_json::to_string(&DeviceType::Cuda).expect("serialize Cuda");
+        assert_eq!(cuda_json, "\"cuda\"");
+        let metal_json = serde_json::to_string(&DeviceType::Metal).expect("serialize Metal");
+        assert_eq!(metal_json, "\"metal\"");
+    }
 }

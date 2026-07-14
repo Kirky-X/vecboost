@@ -275,4 +275,49 @@ mod tests {
         let ptr = pool.allocate(1024);
         assert!(ptr.is_err());
     }
+
+    #[test]
+    #[cfg(not(feature = "cuda"))]
+    fn test_cuda_pool_no_cuda_memory_usage() {
+        let config = CudaPoolConfig {
+            max_memory_mb: 2048,
+            ..Default::default()
+        };
+        let pool = CudaMemoryPool::new(0, config).unwrap();
+
+        let (used, total) = pool.get_memory_usage();
+        assert_eq!(used, 0);
+        assert_eq!(total, 0);
+
+        let percent = pool.get_memory_usage_percent();
+        assert_eq!(percent, 0.0);
+    }
+
+    #[test]
+    #[cfg(not(feature = "cuda"))]
+    fn test_cuda_pool_no_cuda_clear_noop() {
+        let config = CudaPoolConfig::default();
+        let mut pool = CudaMemoryPool::new(1, config).unwrap();
+
+        pool.clear();
+        pool.clear();
+
+        let (used, total) = pool.get_memory_usage();
+        assert_eq!(used, 0);
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    #[cfg(not(feature = "cuda"))]
+    fn test_cuda_pool_no_cuda_new_with_different_device_ids() {
+        for device_id in [0, 1, -1, 42] {
+            let config = CudaPoolConfig::default();
+            let pool = CudaMemoryPool::new(device_id, config);
+            assert!(
+                pool.is_ok(),
+                "Failed to create pool for device {}",
+                device_id
+            );
+        }
+    }
 }

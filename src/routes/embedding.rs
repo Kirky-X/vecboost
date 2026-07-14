@@ -759,4 +759,322 @@ mod tests {
         let response = result.unwrap().into_response();
         assert_eq!(response.status(), StatusCode::OK);
     }
+
+    #[test]
+    fn test_extract_real_ip_ipv4_mapped_ipv6() {
+        let addr = SocketAddr::new(
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0xffff, 0xc0a8)),
+            8080,
+        );
+        let ip = extract_real_ip(addr);
+        assert!(!ip.is_empty());
+    }
+
+    #[test]
+    fn test_is_ip_whitelisted_cidr_v4_exact_32() {
+        assert!(is_ip_whitelisted(
+            "192.168.1.5",
+            &["192.168.1.5/32".to_string()]
+        ));
+        assert!(!is_ip_whitelisted(
+            "192.168.1.6",
+            &["192.168.1.5/32".to_string()]
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "shift left with overflow")]
+    fn test_is_ip_whitelisted_cidr_v4_prefix_zero_panics() {
+        let _ = is_ip_whitelisted("10.0.0.1", &["0.0.0.0/0".to_string()]);
+    }
+
+    #[test]
+    fn test_is_ip_whitelisted_cidr_v6_exact_128() {
+        assert!(is_ip_whitelisted(
+            "2001:db8::1",
+            &["2001:db8::1/128".to_string()]
+        ));
+        assert!(!is_ip_whitelisted(
+            "2001:db8::2",
+            &["2001:db8::1/128".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_is_ip_whitelisted_invalid_cidr_prefix() {
+        assert!(!is_ip_whitelisted(
+            "192.168.1.1",
+            &["192.168.1.0/abc".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_is_ip_whitelisted_invalid_ip_in_whitelist() {
+        assert!(!is_ip_whitelisted(
+            "192.168.1.1",
+            &["not-an-ip/24".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_is_ip_whitelisted_multiple_entries() {
+        let whitelist = vec![
+            "10.0.0.1".to_string(),
+            "192.168.0.0/16".to_string(),
+            "2001:db8::/32".to_string(),
+        ];
+        assert!(is_ip_whitelisted("10.0.0.1", &whitelist));
+        assert!(is_ip_whitelisted("192.168.5.5", &whitelist));
+        assert!(is_ip_whitelisted("2001:db8::abc", &whitelist));
+        assert!(!is_ip_whitelisted("172.16.0.1", &whitelist));
+    }
+
+    #[tokio::test]
+    async fn test_similarity_handler_empty_target_returns_bad_request() {
+        let state = make_test_state();
+        let req = SimilarityRequest {
+            source: "hello world".to_string(),
+            target: "".to_string(),
+        };
+        let result = similarity_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        match result.as_ref().err().unwrap() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("empty")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_similarity_handler_rate_limit_exceeded() {
+        let state = make_rate_limited_state();
+        let req = SimilarityRequest {
+            source: "hello".to_string(),
+            target: "world".to_string(),
+        };
+        let result = similarity_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        match result.as_ref().err().unwrap() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("Rate limit")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_batch_embed_handler_rate_limit_exceeded() {
+        let state = make_rate_limited_state();
+        let req = BatchEmbedRequest {
+            texts: vec!["hello".to_string()],
+            mode: None,
+            normalize: None,
+        };
+        let result = batch_embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        match result.as_ref().err().unwrap() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("Rate limit")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_file_embed_handler_rate_limit_exceeded() {
+        let state = make_rate_limited_state();
+        let req = FileEmbedRequest {
+            path: "test.txt".to_string(),
+            mode: None,
+        };
+        let result = file_embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        match result.as_ref().err().unwrap() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("Rate limit")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_embed_handler_with_whitelisted_ip_bypasses_rate_limit() {
+        let mut state = make_rate_limited_state();
+        state.ip_whitelist = vec!["127.0.0.1".to_string()];
+        let req = EmbedRequest {
+            text: "hello world".to_string(),
+            normalize: None,
+        };
+        let result = embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_ok(), "whitelisted IP should bypass rate limit");
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_file_embed_handler_with_paragraph_mode() {
+        let temp_dir = tempfile::tempdir_in(".").unwrap();
+        let file_path = temp_dir.path().join("test_para.txt");
+        std::fs::write(&file_path, "first paragraph\n\nsecond paragraph\n").unwrap();
+
+        let state = make_test_state();
+        let req = FileEmbedRequest {
+            path: file_path.to_string_lossy().to_string(),
+            mode: Some(AggregationMode::Paragraph),
+        };
+        let result = file_embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_ok());
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_embed_handler_with_pipeline_enabled() {
+        use crate::config::model::{ModelConfig, Precision};
+        use crate::engine::InferenceEngine;
+        use crate::pipeline::{
+            PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel,
+            WorkerConfig, WorkerManager,
+        };
+        use crate::rate_limit::LimiteronAdapter;
+        use crate::service::embedding::EmbeddingService;
+        use async_trait::async_trait;
+        use std::time::Duration;
+
+        struct PipeEngine {
+            dimension: usize,
+        }
+
+        #[async_trait]
+        impl InferenceEngine for PipeEngine {
+            fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+                Ok(vec![0.5; self.dimension])
+            }
+            fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+                Ok(texts.iter().map(|_| vec![0.5; self.dimension]).collect())
+            }
+            fn precision(&self) -> &Precision {
+                static PRECISION: Precision = Precision::Fp32;
+                &PRECISION
+            }
+            fn supports_mixed_precision(&self) -> bool {
+                false
+            }
+            async fn try_fallback_to_cpu(
+                &mut self,
+                _config: &ModelConfig,
+            ) -> Result<(), VecboostError> {
+                Ok(())
+            }
+        }
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(PipeEngine { dimension: 8 }));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let queue = Arc::new(PriorityRequestQueue::new(10));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let priority_calculator = Arc::new(PriorityCalculator::new(PriorityConfig::default()));
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::clone(&queue),
+            Arc::clone(&response_channel),
+            WorkerConfig::default(),
+            Arc::clone(&service),
+        ));
+
+        let state = AppState {
+            service,
+            #[cfg(feature = "auth")]
+            jwt_manager: None,
+            #[cfg(feature = "auth")]
+            user_store: None,
+            auth_enabled: false,
+            #[cfg(feature = "auth")]
+            csrf_config: None,
+            #[cfg(feature = "auth")]
+            csrf_token_store: None,
+            metrics_collector: None,
+            prometheus_collector: None,
+            rate_limiter: Arc::new(LimiteronAdapter::with_default_config()),
+            ip_whitelist: vec![],
+            rate_limit_enabled: false,
+            audit_logger: None,
+            pipeline_enabled: true,
+            pipeline_queue: queue,
+            response_channel: response_channel.clone(),
+            priority_calculator,
+            worker_manager,
+            kit: None,
+        };
+
+        let svc_clone = Arc::clone(&state.service);
+        let queue_clone = Arc::clone(&state.pipeline_queue);
+        let rc_clone = Arc::clone(&state.response_channel);
+        let consumer = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue_clone.dequeue().await {
+                    let request_id = req.request_id.clone();
+                    let guard = svc_clone.read().await;
+                    let result = guard.process_text(req.embed_request, None).await;
+                    drop(guard);
+                    rc_clone.complete(request_id, result).await;
+                    return;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        let req = EmbedRequest {
+            text: "hello pipeline".to_string(),
+            normalize: Some(true),
+        };
+        let result = embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_ok(), "pipeline path should succeed");
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        consumer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_batch_embed_handler_with_normalize() {
+        let state = make_test_state();
+        let req = BatchEmbedRequest {
+            texts: vec!["hello".to_string(), "world".to_string()],
+            mode: None,
+            normalize: Some(true),
+        };
+        let result = batch_embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_ok());
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_similarity_handler_whitespace_source_returns_bad_request() {
+        let state = make_test_state();
+        let req = SimilarityRequest {
+            source: "   ".to_string(),
+            target: "hello there".to_string(),
+        };
+        let result = similarity_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_err());
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_file_embed_handler_with_document_mode() {
+        let temp_dir = tempfile::tempdir_in(".").unwrap();
+        let file_path = temp_dir.path().join("test_doc.txt");
+        std::fs::write(&file_path, "document content here").unwrap();
+
+        let state = make_test_state();
+        let req = FileEmbedRequest {
+            path: file_path.to_string_lossy().to_string(),
+            mode: Some(AggregationMode::Document),
+        };
+        let result = file_embed_handler(State(state), ConnectInfo(test_addr()), Json(req)).await;
+        assert!(result.is_ok());
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }

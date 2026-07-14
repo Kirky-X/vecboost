@@ -183,4 +183,68 @@ mod tests {
 
         drop(listener);
     }
+
+    #[test]
+    fn test_server_new_with_ipv6_addr() {
+        let addr: SocketAddr = "[::1]:0".parse().unwrap();
+        let service = make_service();
+        let server = GrpcServer::new(addr, service);
+        drop(server);
+    }
+
+    #[test]
+    fn test_server_new_with_loopback_addr() {
+        let addr: SocketAddr = "127.0.0.1:50051".parse().unwrap();
+        let service = make_service();
+        let server = GrpcServer::new(addr, service);
+        drop(server);
+    }
+
+    #[test]
+    fn test_server_new_with_different_dimensions() {
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let mock_engine = MockEngine::new(768);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let server = GrpcServer::new(addr, service);
+        drop(server);
+    }
+
+    #[test]
+    fn test_server_new_with_multiple_instances() {
+        let addr1: SocketAddr = "127.0.0.1:50051".parse().unwrap();
+        let addr2: SocketAddr = "127.0.0.1:50052".parse().unwrap();
+        let service1 = make_service();
+        let service2 = make_service();
+        let server1 = GrpcServer::new(addr1, service1);
+        let server2 = GrpcServer::new(addr2, service2);
+        drop(server1);
+        drop(server2);
+    }
+
+    #[tokio::test]
+    async fn test_server_run_returns_io_error_on_connect_to_used_port() {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("failed to bind for port probe");
+        let addr = listener
+            .local_addr()
+            .expect("failed to get local addr for occupied port");
+
+        let mock_engine = MockEngine::new(128);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let server = GrpcServer::new(addr, service);
+
+        let result = server.run().await;
+        assert!(result.is_err());
+        let err_msg = match result.unwrap_err() {
+            VecboostError::IoError(msg) => msg,
+            other => panic!("expected IoError, got {:?}", other),
+        };
+        assert!(err_msg.contains("gRPC server error"));
+
+        drop(listener);
+    }
 }

@@ -326,16 +326,163 @@ mod tests {
 
         let mut pool = BufferPool::new(config);
 
-        // 获取缓冲区并修改
         let mut buffer = pool.acquire_text_buffer(16);
         buffer[0] = "test".to_string();
         let capacity = buffer.capacity();
 
-        // 释放缓冲区
         pool.release_text_buffer(buffer);
 
-        // 再次获取，应该复用之前的容量
         let buffer2 = pool.acquire_text_buffer(16);
         assert_eq!(buffer2.capacity(), capacity);
+    }
+
+    #[test]
+    fn test_release_text_buffer_pool_full_drop() {
+        let config = BufferPoolConfig {
+            text_buffer_sizes: vec![16],
+            pool_size_per_size: 2,
+            ..Default::default()
+        };
+        let mut pool = BufferPool::new(config);
+
+        let b1 = pool.acquire_text_buffer(16);
+        let b2 = pool.acquire_text_buffer(16);
+        let b3 = pool.acquire_text_buffer(16);
+        assert_eq!(pool.get_stats().text_cache_misses, 3);
+
+        pool.release_text_buffer(b1);
+        pool.release_text_buffer(b2);
+        assert_eq!(pool.get_stats().current_text_pool_size, 2);
+
+        pool.release_text_buffer(b3);
+        assert_eq!(pool.get_stats().current_text_pool_size, 2);
+        assert_eq!(pool.get_stats().text_releases, 3);
+    }
+
+    #[test]
+    fn test_release_vector_buffer_pool_full_drop() {
+        let config = BufferPoolConfig {
+            vector_buffer_sizes: vec![16],
+            pool_size_per_size: 1,
+            ..Default::default()
+        };
+        let mut pool = BufferPool::new(config);
+
+        let b1 = pool.acquire_vector_buffer(16);
+        let b2 = pool.acquire_vector_buffer(16);
+
+        pool.release_vector_buffer(b1);
+        assert_eq!(pool.get_stats().current_vector_pool_size, 1);
+
+        pool.release_vector_buffer(b2);
+        assert_eq!(pool.get_stats().current_vector_pool_size, 1);
+        assert_eq!(pool.get_stats().vector_releases, 2);
+    }
+
+    #[test]
+    fn test_acquire_text_buffer_exceeds_max_size() {
+        let config = BufferPoolConfig::default();
+        let mut pool = BufferPool::new(config);
+
+        let buffer = pool.acquire_text_buffer(MAX_BUFFER_SIZE + 1);
+        assert_eq!(buffer.len(), MAX_BUFFER_SIZE);
+    }
+
+    #[test]
+    fn test_acquire_vector_buffer_exceeds_max_size() {
+        let config = BufferPoolConfig::default();
+        let mut pool = BufferPool::new(config);
+
+        let buffer = pool.acquire_vector_buffer(MAX_BUFFER_SIZE + 1);
+        assert_eq!(buffer.len(), MAX_BUFFER_SIZE);
+    }
+
+    #[test]
+    fn test_clear_empties_pools() {
+        let config = BufferPoolConfig {
+            text_buffer_sizes: vec![16, 32],
+            vector_buffer_sizes: vec![16, 32],
+            pool_size_per_size: 2,
+            ..Default::default()
+        };
+        let mut pool = BufferPool::new(config);
+        pool.preallocate();
+        assert!(pool.get_stats().current_text_pool_size > 0);
+        assert!(pool.get_stats().current_vector_pool_size > 0);
+
+        pool.clear();
+
+        let stats = pool.get_stats();
+        assert_eq!(stats.current_text_pool_size, 0);
+        assert_eq!(stats.current_vector_pool_size, 0);
+        assert!(stats.text_allocations > 0);
+    }
+
+    #[test]
+    fn test_preallocate_default_config_all_sizes() {
+        let config = BufferPoolConfig::default();
+        let mut pool = BufferPool::new(config);
+        pool.preallocate();
+
+        let stats = pool.get_stats();
+        assert_eq!(stats.current_text_pool_size, 5 * 8);
+        assert_eq!(stats.current_vector_pool_size, 5 * 8);
+        assert_eq!(stats.text_allocations, 5 * 8);
+        assert_eq!(stats.vector_allocations, 5 * 8);
+    }
+
+    #[test]
+    fn test_acquire_release_mixed_sizes() {
+        let config = BufferPoolConfig {
+            text_buffer_sizes: vec![16, 32],
+            pool_size_per_size: 2,
+            ..Default::default()
+        };
+        let mut pool = BufferPool::new(config);
+
+        let b16 = pool.acquire_text_buffer(16);
+        let b32 = pool.acquire_text_buffer(32);
+        assert_eq!(b16.len(), 16);
+        assert_eq!(b32.len(), 32);
+
+        pool.release_text_buffer(b16);
+        pool.release_text_buffer(b32);
+
+        let _ = pool.acquire_text_buffer(16);
+        let _ = pool.acquire_text_buffer(32);
+        assert_eq!(pool.get_stats().text_cache_hits, 2);
+        assert_eq!(pool.get_stats().text_cache_misses, 2);
+    }
+
+    #[test]
+    fn test_stats_reflect_operations() {
+        let config = BufferPoolConfig {
+            text_buffer_sizes: vec![16],
+            vector_buffer_sizes: vec![16],
+            pool_size_per_size: 2,
+            ..Default::default()
+        };
+        let mut pool = BufferPool::new(config);
+
+        let s = pool.get_stats();
+        assert_eq!((s.text_allocations, s.vector_allocations), (0, 0));
+        assert_eq!((s.text_cache_hits, s.vector_cache_hits), (0, 0));
+
+        let tb = pool.acquire_text_buffer(16);
+        let vb = pool.acquire_vector_buffer(16);
+        let s = pool.get_stats();
+        assert_eq!(s.text_cache_misses, 1);
+        assert_eq!(s.vector_cache_misses, 1);
+
+        pool.release_text_buffer(tb);
+        pool.release_vector_buffer(vb);
+
+        let _ = pool.acquire_text_buffer(16);
+        let _ = pool.acquire_vector_buffer(16);
+        let s = pool.get_stats();
+        assert_eq!(s.text_cache_hits, 1);
+        assert_eq!(s.vector_cache_hits, 1);
+        assert_eq!(s.text_releases, 1);
+        assert_eq!(s.vector_releases, 1);
     }
 }

@@ -436,4 +436,259 @@ mod tests {
         assert_eq!(stats.loaded_models, 2);
         assert!((stats.memory_usage_percent - 75.0).abs() < 0.1);
     }
+
+    #[test]
+    fn test_can_load_model_cache_disabled_insufficient() {
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 512,
+            cache_models: false,
+            ..Default::default()
+        };
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.allocate_for_model("model1", 512 * 1024 * 1024)
+            .unwrap();
+        pool.mark_model_unloaded("model1");
+
+        assert!(!pool.can_load_model(1 * 1024 * 1024));
+    }
+
+    #[test]
+    fn test_can_load_model_cache_disabled_sufficient() {
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 1024,
+            cache_models: false,
+            ..Default::default()
+        };
+        let pool = ModelWeightPool::new("test".to_string(), config);
+
+        assert!(pool.can_load_model(512 * 1024 * 1024));
+        assert!(!pool.can_load_model(2048 * 1024 * 1024));
+    }
+
+    #[test]
+    fn test_lru_reclaim_single_model() {
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 1024,
+            cache_models: true,
+            ..Default::default()
+        };
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.allocate_for_model("model1", 512 * 1024 * 1024)
+            .unwrap();
+        pool.allocate_for_model("model2", 256 * 1024 * 1024)
+            .unwrap();
+
+        pool.mark_model_unloaded("model1");
+
+        let result = pool.allocate_for_model("model3", 512 * 1024 * 1024);
+        assert!(result.is_ok(), "LRU reclaim should succeed");
+
+        assert!(pool.get_model_slot("model1").is_none());
+        assert!(pool.get_model_slot("model2").is_some());
+        assert!(pool.get_model_slot("model3").is_some());
+        let stats = pool.get_stats();
+        assert_eq!(stats.total_models, 2);
+        assert_eq!(stats.loaded_models, 2);
+    }
+
+    #[test]
+    fn test_lru_reclaim_multiple_models() {
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 512,
+            cache_models: true,
+            ..Default::default()
+        };
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.allocate_for_model("model1", 256 * 1024 * 1024)
+            .unwrap();
+        pool.allocate_for_model("model2", 256 * 1024 * 1024)
+            .unwrap();
+
+        pool.mark_model_unloaded("model1");
+        pool.mark_model_unloaded("model2");
+
+        let result = pool.allocate_for_model("model3", 512 * 1024 * 1024);
+        assert!(result.is_ok(), "multi-model reclaim should succeed");
+
+        assert!(pool.get_model_slot("model1").is_none());
+        assert!(pool.get_model_slot("model2").is_none());
+        assert!(pool.get_model_slot("model3").is_some());
+    }
+
+    #[test]
+    fn test_lru_reclaim_insufficient_returns_error() {
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 256,
+            cache_models: true,
+            ..Default::default()
+        };
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.allocate_for_model("model1", 128 * 1024 * 1024)
+            .unwrap();
+        pool.allocate_for_model("model2", 128 * 1024 * 1024)
+            .unwrap();
+        pool.mark_model_unloaded("model1");
+
+        let result = pool.allocate_for_model("model3", 512 * 1024 * 1024);
+        assert!(result.is_err(), "should fail when reclaim insufficient");
+    }
+
+    #[test]
+    fn test_allocate_for_model_already_exists_noop() {
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 1024,
+            ..Default::default()
+        };
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.allocate_for_model("model1", 256 * 1024 * 1024)
+            .unwrap();
+        let (used_after_first, _) = pool.get_memory_usage();
+        assert_eq!(used_after_first, 256 * 1024 * 1024);
+
+        let result = pool.allocate_for_model("model1", 512 * 1024 * 1024);
+        assert!(result.is_ok());
+        let (used_after_second, _) = pool.get_memory_usage();
+        assert_eq!(
+            used_after_second, used_after_first,
+            "re-allocate should not change memory"
+        );
+        let slot = pool.get_model_slot("model1").unwrap();
+        assert_eq!(slot.memory_allocated, 256 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_release_model_nonexistent_noop() {
+        let config = ModelWeightPoolConfig::default();
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        let (used_before, _) = pool.get_memory_usage();
+        pool.release_model("nonexistent");
+        let (used_after, _) = pool.get_memory_usage();
+        assert_eq!(used_before, used_after);
+    }
+
+    #[test]
+    fn test_update_model_usage_nonexistent_noop() {
+        let config = ModelWeightPoolConfig::default();
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.update_model_usage("nonexistent");
+        assert_eq!(pool.get_model_slots().len(), 0);
+    }
+
+    #[test]
+    fn test_mark_model_unloaded_nonexistent_noop() {
+        let config = ModelWeightPoolConfig::default();
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.mark_model_unloaded("nonexistent");
+        assert_eq!(pool.get_model_slots().len(), 0);
+    }
+
+    #[test]
+    fn test_mark_model_unloaded_then_loaded_via_update() {
+        let config = ModelWeightPoolConfig::default();
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.allocate_for_model("model1", 128 * 1024 * 1024)
+            .unwrap();
+        assert!(pool.get_model_slot("model1").unwrap().is_loaded);
+
+        pool.mark_model_unloaded("model1");
+        assert!(!pool.get_model_slot("model1").unwrap().is_loaded);
+        assert_eq!(pool.get_stats().loaded_models, 0);
+
+        pool.update_model_usage("model1");
+        assert!(pool.get_model_slot("model1").unwrap().is_loaded);
+        assert_eq!(pool.get_stats().loaded_models, 1);
+    }
+
+    #[test]
+    fn test_get_model_slots_returns_all() {
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 2048,
+            ..Default::default()
+        };
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.allocate_for_model("m1", 128 * 1024 * 1024).unwrap();
+        pool.allocate_for_model("m2", 256 * 1024 * 1024).unwrap();
+        pool.allocate_for_model("m3", 512 * 1024 * 1024).unwrap();
+
+        let slots = pool.get_model_slots();
+        assert_eq!(slots.len(), 3);
+        let names: Vec<String> = slots.iter().map(|s| s.model_name.clone()).collect();
+        assert!(names.contains(&"m1".to_string()));
+        assert!(names.contains(&"m2".to_string()));
+        assert!(names.contains(&"m3".to_string()));
+    }
+
+    #[test]
+    fn test_get_model_slot_nonexistent_returns_none() {
+        let config = ModelWeightPoolConfig::default();
+        let pool = ModelWeightPool::new("test".to_string(), config);
+
+        assert!(pool.get_model_slot("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_clear_resets_pool() {
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 1024,
+            ..Default::default()
+        };
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.allocate_for_model("m1", 256 * 1024 * 1024).unwrap();
+        pool.allocate_for_model("m2", 256 * 1024 * 1024).unwrap();
+        assert_eq!(pool.get_stats().total_models, 2);
+        assert_eq!(pool.get_memory_usage().0, 512 * 1024 * 1024);
+
+        pool.clear();
+
+        let stats = pool.get_stats();
+        assert_eq!(stats.total_models, 0);
+        assert_eq!(stats.loaded_models, 0);
+        assert_eq!(stats.used_memory_mb, 0);
+        let (used, _) = pool.get_memory_usage();
+        assert_eq!(used, 0);
+    }
+
+    #[test]
+    fn test_memory_usage_percent() {
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 1024,
+            ..Default::default()
+        };
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        assert!((pool.get_memory_usage_percent() - 0.0).abs() < 0.001);
+
+        pool.allocate_for_model("m1", 512 * 1024 * 1024).unwrap();
+        assert!((pool.get_memory_usage_percent() - 50.0).abs() < 0.001);
+
+        pool.allocate_for_model("m2", 512 * 1024 * 1024).unwrap();
+        assert!((pool.get_memory_usage_percent() - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_can_load_model_with_reclaimable_memory() {
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 1024,
+            cache_models: true,
+            ..Default::default()
+        };
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.allocate_for_model("m1", 1024 * 1024 * 1024).unwrap();
+        pool.mark_model_unloaded("m1");
+
+        assert!(pool.can_load_model(512 * 1024 * 1024));
+        assert!(!pool.can_load_model(2048 * 1024 * 1024));
+    }
 }

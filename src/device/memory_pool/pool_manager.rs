@@ -409,7 +409,394 @@ mod tests {
 
         let manager = MemoryPoolManager::new(config);
         manager.clear_all().await;
+    }
 
-        // 应该没有错误
+    #[tokio::test]
+    async fn test_initialize_tensor_pool_disabled() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            buffer_pool: BufferPoolConfig::default(),
+            model_pool: ModelWeightPoolConfig::default(),
+            cuda_pool: CudaPoolConfig::default(),
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        let result = manager
+            .initialize_tensor_pool(candle_core::Device::Cpu)
+            .await;
+        assert!(result.is_ok());
+        assert!(manager.tensor_pool.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_tensor_pool_enabled_with_preallocate() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig {
+                enabled: true,
+                max_batch_size: 8,
+                max_sequence_length: 256,
+                pool_size_per_shape: 1,
+                preallocate_on_startup: true,
+            },
+            buffer_pool: BufferPoolConfig::default(),
+            model_pool: ModelWeightPoolConfig::default(),
+            cuda_pool: CudaPoolConfig::default(),
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        let result = manager
+            .initialize_tensor_pool(candle_core::Device::Cpu)
+            .await;
+        assert!(result.is_ok());
+        assert!(manager.tensor_pool.is_some());
+
+        let pool = manager.get_tensor_pool().await;
+        assert!(pool.is_some());
+        let stats = pool.unwrap().read().await.get_stats();
+        assert!(stats.current_pool_size > 0);
+    }
+
+    #[tokio::test]
+    async fn test_initialize_tensor_pool_enabled_without_preallocate() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig {
+                enabled: true,
+                preallocate_on_startup: false,
+                ..Default::default()
+            },
+            buffer_pool: BufferPoolConfig::default(),
+            model_pool: ModelWeightPoolConfig::default(),
+            cuda_pool: CudaPoolConfig::default(),
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        let result = manager
+            .initialize_tensor_pool(candle_core::Device::Cpu)
+            .await;
+        assert!(result.is_ok());
+        assert!(manager.tensor_pool.is_some());
+
+        let pool = manager.get_tensor_pool().await.unwrap();
+        let stats = pool.read().await.get_stats();
+        assert_eq!(stats.current_pool_size, 0);
+        assert_eq!(stats.total_allocations, 0);
+    }
+
+    #[tokio::test]
+    async fn test_initialize_cuda_pool_disabled() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig::default(),
+            buffer_pool: BufferPoolConfig::default(),
+            model_pool: ModelWeightPoolConfig::default(),
+            cuda_pool: CudaPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        let result = manager.initialize_cuda_pool(0).await;
+        assert!(result.is_ok());
+        assert!(manager.cuda_pool.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_cuda_pool_enabled() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig::default(),
+            buffer_pool: BufferPoolConfig::default(),
+            model_pool: ModelWeightPoolConfig::default(),
+            cuda_pool: CudaPoolConfig {
+                enabled: true,
+                max_memory_mb: 1024,
+            },
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        let result = manager.initialize_cuda_pool(0).await;
+        assert!(result.is_ok());
+        assert!(manager.cuda_pool.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_tensor_pool_returns_none_before_init() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig::default(),
+            buffer_pool: BufferPoolConfig::default(),
+            model_pool: ModelWeightPoolConfig::default(),
+            cuda_pool: CudaPoolConfig::default(),
+        };
+        let manager = MemoryPoolManager::new(config);
+
+        assert!(manager.get_tensor_pool().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_cuda_pool_returns_none_before_init() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig::default(),
+            buffer_pool: BufferPoolConfig::default(),
+            model_pool: ModelWeightPoolConfig::default(),
+            cuda_pool: CudaPoolConfig::default(),
+        };
+        let manager = MemoryPoolManager::new(config);
+
+        assert!(manager.get_cuda_pool().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_all_error_tensor_enabled_no_device() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            buffer_pool: BufferPoolConfig::default(),
+            model_pool: ModelWeightPoolConfig::default(),
+            cuda_pool: CudaPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        let result = manager.initialize_all(None, None).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::ConfigError(msg) => {
+                assert!(msg.contains("Tensor pool requires device"));
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_initialize_all_error_cuda_enabled_no_device_id() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            buffer_pool: BufferPoolConfig::default(),
+            model_pool: ModelWeightPoolConfig::default(),
+            cuda_pool: CudaPoolConfig {
+                enabled: true,
+                ..Default::default()
+            },
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        let result = manager.initialize_all(None, None).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::ConfigError(msg) => {
+                assert!(msg.contains("CUDA pool requires device_id"));
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_initialize_all_all_enabled() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig {
+                enabled: true,
+                max_batch_size: 8,
+                max_sequence_length: 256,
+                pool_size_per_shape: 1,
+                preallocate_on_startup: true,
+            },
+            buffer_pool: BufferPoolConfig {
+                enabled: true,
+                text_buffer_sizes: vec![16],
+                vector_buffer_sizes: vec![16],
+                pool_size_per_size: 2,
+            },
+            model_pool: ModelWeightPoolConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            cuda_pool: CudaPoolConfig {
+                enabled: true,
+                max_memory_mb: 1024,
+            },
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        let result = manager
+            .initialize_all(Some(candle_core::Device::Cpu), Some(0))
+            .await;
+        assert!(result.is_ok(), "initialize_all failed: {:?}", result);
+
+        assert!(manager.tensor_pool.is_some());
+        assert!(manager.cuda_pool.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_memory_stats_with_all_pools() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig {
+                enabled: true,
+                max_batch_size: 8,
+                max_sequence_length: 256,
+                pool_size_per_shape: 1,
+                preallocate_on_startup: true,
+            },
+            buffer_pool: BufferPoolConfig {
+                enabled: true,
+                text_buffer_sizes: vec![16],
+                vector_buffer_sizes: vec![16],
+                pool_size_per_size: 2,
+            },
+            model_pool: ModelWeightPoolConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            cuda_pool: CudaPoolConfig {
+                enabled: true,
+                max_memory_mb: 1024,
+            },
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        manager
+            .initialize_all(Some(candle_core::Device::Cpu), Some(0))
+            .await
+            .unwrap();
+
+        let stats = manager.get_memory_stats().await;
+        assert!(stats.tensor_pool_enabled);
+        assert!(stats.buffer_pool_enabled);
+        assert!(stats.model_pool_enabled);
+        assert!(stats.cuda_pool_enabled);
+        assert!(stats.tensor_pool_stats.is_some());
+        assert!(stats.buffer_pool_stats.is_some());
+        assert!(stats.model_pool_stats.is_some());
+        assert!(stats.cuda_pool_stats.is_some());
+
+        let tensor_stats = stats.tensor_pool_stats.unwrap();
+        assert!(tensor_stats.current_pool_size > 0);
+        assert!(tensor_stats.total_memory_bytes > 0);
+
+        let buffer_stats = stats.buffer_pool_stats.unwrap();
+        assert!(buffer_stats.current_text_pool_size > 0);
+
+        let cuda_stats = stats.cuda_pool_stats.unwrap();
+        assert_eq!(cuda_stats.used_memory_mb, 0);
+        assert_eq!(cuda_stats.total_memory_mb, 0);
+        assert!((cuda_stats.memory_usage_percent - 0.0).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn test_get_memory_stats_disabled_pools() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            buffer_pool: BufferPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            model_pool: ModelWeightPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            cuda_pool: CudaPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        };
+        let manager = MemoryPoolManager::new(config);
+
+        let stats = manager.get_memory_stats().await;
+        assert!(!stats.tensor_pool_enabled);
+        assert!(!stats.buffer_pool_enabled);
+        assert!(!stats.model_pool_enabled);
+        assert!(!stats.cuda_pool_enabled);
+        assert!(stats.tensor_pool_stats.is_none());
+        assert!(stats.cuda_pool_stats.is_none());
+        assert!(stats.buffer_pool_stats.is_some());
+        assert!(stats.model_pool_stats.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_clear_all_after_initialization() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig {
+                enabled: true,
+                max_batch_size: 8,
+                max_sequence_length: 256,
+                pool_size_per_shape: 1,
+                preallocate_on_startup: true,
+            },
+            buffer_pool: BufferPoolConfig {
+                enabled: true,
+                text_buffer_sizes: vec![16],
+                vector_buffer_sizes: vec![16],
+                pool_size_per_size: 2,
+            },
+            model_pool: ModelWeightPoolConfig::default(),
+            cuda_pool: CudaPoolConfig {
+                enabled: true,
+                ..Default::default()
+            },
+        };
+        let mut manager = MemoryPoolManager::new(config);
+        manager
+            .initialize_all(Some(candle_core::Device::Cpu), Some(0))
+            .await
+            .unwrap();
+
+        manager.clear_all().await;
+
+        let stats = manager.get_memory_stats().await;
+        let tensor_stats = stats.tensor_pool_stats.as_ref().unwrap();
+        assert_eq!(tensor_stats.current_pool_size, 0);
+        assert_eq!(tensor_stats.total_memory_bytes, 0);
+        let buffer_stats = stats.buffer_pool_stats.as_ref().unwrap();
+        assert_eq!(buffer_stats.current_text_pool_size, 0);
+        assert_eq!(buffer_stats.current_vector_pool_size, 0);
+    }
+
+    #[tokio::test]
+    async fn test_initialize_all_with_tensor_only() {
+        let config = MemoryPoolConfig {
+            tensor_pool: TensorPoolConfig {
+                enabled: true,
+                max_batch_size: 8,
+                max_sequence_length: 256,
+                pool_size_per_shape: 1,
+                preallocate_on_startup: false,
+            },
+            buffer_pool: BufferPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            model_pool: ModelWeightPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            cuda_pool: CudaPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        let result = manager
+            .initialize_all(Some(candle_core::Device::Cpu), None)
+            .await;
+        assert!(result.is_ok());
+        assert!(manager.tensor_pool.is_some());
+        assert!(manager.cuda_pool.is_none());
+
+        let stats = manager.get_memory_stats().await;
+        assert!(!stats.buffer_pool_enabled);
+        let buffer_stats = stats.buffer_pool_stats.as_ref().unwrap();
+        assert_eq!(buffer_stats.current_text_pool_size, 0);
     }
 }

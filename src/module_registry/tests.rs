@@ -333,3 +333,172 @@ async fn test_async_kit_can_be_wrapped_in_arc() {
     let _guard = svc.read().await;
     // 只需验证能成功获取读写锁即可，不访问私有字段
 }
+
+#[tokio::test]
+async fn test_rate_limit_module_missing_config_fails() {
+    let mut kit = AsyncKit::new();
+    kit.register::<RateLimitModule>().unwrap();
+
+    let result = kit.build().await;
+    assert!(
+        result.is_err(),
+        "build should fail when RateLimitModule config is missing"
+    );
+}
+
+#[tokio::test]
+async fn test_cache_module_disabled_when_configured_disabled() {
+    let mut kit = AsyncKit::new();
+    kit.set_config(CacheConfig {
+        enabled: false,
+        size: 0,
+    });
+    kit.register::<CacheModule>().unwrap();
+
+    let kit = kit.build().await.unwrap();
+    let enabled = kit.require::<CacheModule>().unwrap();
+    assert!(!enabled, "Cache should be disabled when configured false");
+}
+
+#[tokio::test]
+async fn test_db_module_disabled_when_configured_disabled() {
+    let mut kit = AsyncKit::new();
+    kit.set_config(DbConfig { enabled: false });
+    kit.register::<DbModule>().unwrap();
+
+    let kit = kit.build().await.unwrap();
+    let enabled = kit.require::<DbModule>().unwrap();
+    assert!(!enabled, "DB should be disabled when configured false");
+}
+
+#[tokio::test]
+async fn test_audit_module_missing_config_fails() {
+    let mut kit = AsyncKit::new();
+    kit.register::<AuditModule>().unwrap();
+
+    let result = kit.build().await;
+    assert!(
+        result.is_err(),
+        "build should fail when AuditModule config is missing"
+    );
+}
+
+#[tokio::test]
+async fn test_audit_module_with_some_logger() {
+    use crate::audit::{AuditConfig, AuditLogger};
+    let config = AuditConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let logger = Arc::new(AuditLogger::new(config));
+    let mut kit = AsyncKit::new();
+    kit.set_config(Some(logger.clone()));
+    kit.register::<AuditModule>().unwrap();
+
+    let kit = kit.build().await.unwrap();
+    let capability = kit.require::<AuditModule>().unwrap();
+    assert!(capability.is_some());
+    assert!(Arc::ptr_eq(capability.as_ref().unwrap(), &logger));
+}
+
+#[tokio::test]
+async fn test_embedding_and_rate_limit_independent_build() {
+    let mut kit_a = AsyncKit::new();
+    let service_a = make_service();
+    kit_a.set_config(service_a.clone());
+    kit_a.register::<EmbeddingModule>().unwrap();
+    let kit_a = kit_a.build().await.unwrap();
+
+    let mut kit_b = AsyncKit::new();
+    let service_b = make_service();
+    kit_b.set_config(service_b.clone());
+    kit_b.register::<EmbeddingModule>().unwrap();
+    let kit_b = kit_b.build().await.unwrap();
+
+    let cap_a = kit_a.require::<EmbeddingModule>().unwrap();
+    let cap_b = kit_b.require::<EmbeddingModule>().unwrap();
+    assert!(!Arc::ptr_eq(&cap_a, &cap_b));
+}
+
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn test_auth_module_with_none_config() {
+    let mut kit = AsyncKit::new();
+    kit.set_config(Option::<Arc<crate::auth::JwtManager>>::None);
+    kit.register::<AuthModule>().unwrap();
+
+    let kit = kit.build().await.unwrap();
+    let capability = kit.require::<AuthModule>().unwrap();
+    assert!(capability.is_none());
+}
+
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn test_auth_module_with_some_config() {
+    use crate::auth::JwtManager;
+    let secret = "0123456789abcdef0123456789abcdef01234567".to_string();
+    let jwt = Arc::new(JwtManager::new(secret).unwrap());
+
+    let mut kit = AsyncKit::new();
+    kit.set_config(Some(jwt.clone()));
+    kit.register::<AuthModule>().unwrap();
+
+    let kit = kit.build().await.unwrap();
+    let capability = kit.require::<AuthModule>().unwrap();
+    assert!(capability.is_some());
+    assert!(Arc::ptr_eq(capability.as_ref().unwrap(), &jwt));
+}
+
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn test_auth_module_missing_config_fails() {
+    let mut kit = AsyncKit::new();
+    kit.register::<AuthModule>().unwrap();
+
+    let result = kit.build().await;
+    assert!(
+        result.is_err(),
+        "build should fail when AuthModule config is missing"
+    );
+}
+
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn test_all_modules_build_together_with_auth() {
+    let mut kit = AsyncKit::new();
+
+    let service = make_service();
+    let rate_limiter = make_rate_limiter();
+    kit.set_config(service.clone());
+    kit.set_config(rate_limiter.clone());
+    kit.set_config(CacheConfig {
+        enabled: true,
+        size: 256,
+    });
+    kit.set_config(DbConfig { enabled: true });
+    kit.set_config(Option::<Arc<crate::audit::AuditLogger>>::None);
+    kit.set_config(Option::<Arc<crate::auth::JwtManager>>::None);
+
+    kit.register::<EmbeddingModule>().unwrap();
+    kit.register::<RateLimitModule>().unwrap();
+    kit.register::<CacheModule>().unwrap();
+    kit.register::<DbModule>().unwrap();
+    kit.register::<AuditModule>().unwrap();
+    kit.register::<AuthModule>().unwrap();
+
+    let kit = kit.build().await.unwrap();
+
+    assert!(kit.contains::<EmbeddingModule>());
+    assert!(kit.contains::<AuthModule>());
+    assert!(kit.contains::<RateLimitModule>());
+    assert!(kit.contains::<CacheModule>());
+    assert!(kit.contains::<DbModule>());
+    assert!(kit.contains::<AuditModule>());
+
+    let auth_cap = kit.require::<AuthModule>().unwrap();
+    assert!(auth_cap.is_none());
+    let cache_enabled = kit.require::<CacheModule>().unwrap();
+    assert!(cache_enabled);
+    let db_enabled = kit.require::<DbModule>().unwrap();
+    assert!(db_enabled);
+}

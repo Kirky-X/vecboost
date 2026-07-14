@@ -1052,4 +1052,230 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(attempts, 1);
     }
+
+    #[test]
+    fn test_backup_corrupted_file_backup_dir_under_file_fails() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("corrupt.bin");
+        fs::write(&file_path, b"corrupted data").unwrap();
+        let blocking_file = temp_dir.path().join("blocking_file");
+        fs::write(&blocking_file, b"data").unwrap();
+        let backup_dir = blocking_file.join("subdir");
+
+        let config = RecoveryConfig {
+            backup_dir: Some(backup_dir),
+            ..RecoveryConfig::default()
+        };
+        let recovery = ModelRecovery::new(config);
+        let result = recovery.backup_corrupted_file(&file_path);
+        assert!(result.is_err());
+        match result {
+            Err(VecboostError::IoError(msg)) => {
+                assert!(msg.contains("Failed to create backup directory"));
+            }
+            Err(e) => panic!("Expected IoError, got: {:?}", e),
+            Ok(_) => panic!("Expected error"),
+        }
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_backup_error_propagates() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let corrupted_file = temp_dir.path().join("config.json");
+        fs::write(&corrupted_file, b"corrupted").unwrap();
+        let blocking_file = temp_dir.path().join("blocking_file");
+        fs::write(&blocking_file, b"data").unwrap();
+        let backup_dir = blocking_file.join("subdir");
+
+        let config = RecoveryConfig {
+            backup_dir: Some(backup_dir),
+            ..RecoveryConfig::default()
+        };
+        let recovery = ModelRecovery::new(config);
+        let result = recovery.recover_corrupted_files(
+            "test_model",
+            model_path,
+            None,
+            &[corrupted_file.to_string_lossy().to_string()],
+        );
+        assert!(result.is_err());
+        match result {
+            Err(VecboostError::IoError(msg)) => {
+                assert!(msg.contains("Failed to create backup directory"));
+            }
+            Err(e) => panic!("Expected IoError, got: {:?}", e),
+            Ok(_) => panic!("Expected error"),
+        }
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_mixed_existing_and_nonexisting() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let existing_file = temp_dir.path().join("config.json");
+        fs::write(&existing_file, b"corrupted").unwrap();
+        let nonexisting_file = temp_dir
+            .path()
+            .join("nonexistent.json")
+            .to_string_lossy()
+            .to_string();
+        let existing_file_str = existing_file.to_string_lossy().to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .recover_corrupted_files(
+                "test_model",
+                model_path,
+                None,
+                &[existing_file_str.clone(), nonexisting_file.clone()],
+            )
+            .unwrap();
+
+        assert!(!result.success);
+        assert!(result.recovered_files.is_empty());
+        assert_eq!(result.failed_files.len(), 2);
+        assert!(result.failed_files.contains(&existing_file_str));
+        assert!(result.failed_files.contains(&nonexisting_file));
+        assert_eq!(result.backup_paths.len(), 1);
+    }
+
+    #[test]
+    fn test_verify_recovered_files_with_file_in_subdirectory() {
+        let temp_dir = tempdir().unwrap();
+        let subdir = temp_dir.path().join("subdir");
+        fs::create_dir(&subdir).unwrap();
+        let file_path = subdir.join("config.json");
+        fs::write(&file_path, b"x".repeat(200)).unwrap();
+        let file_path_str = file_path.to_string_lossy().to_string();
+
+        let recovery = ModelRecovery::with_default_config();
+        let result =
+            recovery.verify_recovered_files("test_model", temp_dir.path(), &[file_path_str]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_recovered_files_empty_path_string() {
+        let temp_dir = tempdir().unwrap();
+        let recovery = ModelRecovery::with_default_config();
+        let result =
+            recovery.verify_recovered_files("test_model", temp_dir.path(), &["".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_attempt_recovery_overall_valid_with_nonempty_corrupted_list() {
+        let temp_dir = tempdir().unwrap();
+        let integrity_report = ModelIntegrityReport {
+            model_name: "test_model".to_string(),
+            files_checked: vec![],
+            overall_valid: true,
+            corrupted_files: vec!["some/file.json".to_string()],
+        };
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .attempt_recovery_with_integrity_check(
+                "test_model",
+                temp_dir.path(),
+                None,
+                &integrity_report,
+            )
+            .unwrap();
+
+        assert!(result.success);
+        assert!(result.recovered_files.is_empty());
+        assert!(result.failed_files.is_empty());
+        assert!(result.backup_paths.is_empty());
+        assert_eq!(result.attempts, 0);
+    }
+
+    #[test]
+    fn test_attempt_recovery_invalid_with_nonexisting_corrupted_files() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let corrupted_file_str = temp_dir
+            .path()
+            .join("nonexistent.json")
+            .to_string_lossy()
+            .to_string();
+
+        let integrity_report = ModelIntegrityReport {
+            model_name: "test_model".to_string(),
+            files_checked: vec![],
+            overall_valid: false,
+            corrupted_files: vec![corrupted_file_str.clone()],
+        };
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .attempt_recovery_with_integrity_check(
+                "test_model",
+                model_path,
+                None,
+                &integrity_report,
+            )
+            .unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.failed_files, vec![corrupted_file_str]);
+        assert!(result.backup_paths.is_empty());
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_all_file_types_backed_up() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let config_file = temp_dir.path().join("config.json");
+        let tokenizer_file = temp_dir.path().join("tokenizer.json");
+        let model_file = temp_dir.path().join("model.safetensors");
+        let other_file = temp_dir.path().join("vocab.txt");
+        fs::write(&config_file, b"bad").unwrap();
+        fs::write(&tokenizer_file, b"bad").unwrap();
+        fs::write(&model_file, b"bad").unwrap();
+        fs::write(&other_file, b"bad").unwrap();
+
+        let files = vec![
+            config_file.to_string_lossy().to_string(),
+            tokenizer_file.to_string_lossy().to_string(),
+            model_file.to_string_lossy().to_string(),
+            other_file.to_string_lossy().to_string(),
+        ];
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .recover_corrupted_files("test_model", model_path, None, &files)
+            .unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.failed_files.len(), 4);
+        assert_eq!(result.backup_paths.len(), 4);
+        for backup_path in &result.backup_paths {
+            assert!(Path::new(backup_path).exists());
+        }
+    }
+
+    #[test]
+    fn test_recover_corrupted_files_preserves_multiple_originals() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let file1 = temp_dir.path().join("config.json");
+        let file2 = temp_dir.path().join("tokenizer.json");
+        fs::write(&file1, b"original1").unwrap();
+        fs::write(&file2, b"original2").unwrap();
+
+        let files = vec![
+            file1.to_string_lossy().to_string(),
+            file2.to_string_lossy().to_string(),
+        ];
+
+        let recovery = ModelRecovery::with_default_config();
+        let _ = recovery
+            .recover_corrupted_files("test_model", model_path, None, &files)
+            .unwrap();
+
+        assert_eq!(fs::read_to_string(&file1).unwrap(), "original1");
+        assert_eq!(fs::read_to_string(&file2).unwrap(), "original2");
+    }
 }

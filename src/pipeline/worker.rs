@@ -1249,7 +1249,9 @@ mod tests {
         manager.running.store(false, Ordering::SeqCst);
 
         manager.spawn_worker().await;
-        assert_eq!(manager.current_workers(), 1);
+        // Note: current_workers() may already be 0 here because worker_loop
+        // checks running=false and exits immediately. The race between spawn
+        // and exit makes asserting current_workers()==1 unreliable.
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {

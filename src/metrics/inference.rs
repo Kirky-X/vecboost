@@ -600,13 +600,17 @@ mod tests {
     /// T007 H7: 验证 add_performance_sample 清理超过 max_sample_age_secs 的过期样本。
     #[tokio::test]
     async fn test_add_performance_sample_expires_old_samples() {
-        let mut config = CollectionConfig::default();
-        config.max_sample_age_secs = 60; // 1 分钟过期
+        let config = CollectionConfig {
+            max_sample_age_secs: 60, // 1 分钟过期
+            ..Default::default()
+        };
         let collector = InferenceCollector::with_config(config);
 
         // 注入一个 2 分钟前的样本(已过期)
-        let mut expired_sample = PerformanceMetrics::default();
-        expired_sample.timestamp = chrono::Utc::now() - chrono::Duration::seconds(120);
+        let expired_sample = PerformanceMetrics {
+            timestamp: chrono::Utc::now() - chrono::Duration::seconds(120),
+            ..Default::default()
+        };
         {
             let mut samples = collector.performance_samples.write().await;
             samples.push_back(expired_sample);
@@ -637,13 +641,17 @@ mod tests {
     /// T007 H7: 验证未过期的样本被保留(边界场景)。
     #[tokio::test]
     async fn test_add_performance_sample_keeps_unexpired_samples() {
-        let mut config = CollectionConfig::default();
-        config.max_sample_age_secs = 300; // 5 分钟过期
+        let config = CollectionConfig {
+            max_sample_age_secs: 300, // 5 分钟过期
+            ..Default::default()
+        };
         let collector = InferenceCollector::with_config(config);
 
         // 注入一个 1 分钟前的样本(未过期)
-        let mut recent_sample = PerformanceMetrics::default();
-        recent_sample.timestamp = chrono::Utc::now() - chrono::Duration::seconds(60);
+        let recent_sample = PerformanceMetrics {
+            timestamp: chrono::Utc::now() - chrono::Duration::seconds(60),
+            ..Default::default()
+        };
         {
             let mut samples = collector.performance_samples.write().await;
             samples.push_back(recent_sample);

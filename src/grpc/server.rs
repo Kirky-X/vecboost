@@ -152,4 +152,35 @@ mod tests {
             addr
         );
     }
+
+    #[tokio::test]
+    async fn test_server_run_bind_error() {
+        // Occupy a TCP port so tonic's bind to the same addr fails.
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("failed to bind for port probe");
+        let addr = listener
+            .local_addr()
+            .expect("failed to get local addr for occupied port");
+
+        let service = make_service();
+        let server = GrpcServer::new(addr, service);
+
+        let result = server.run().await;
+        assert!(
+            result.is_err(),
+            "run() should fail when the port is already occupied"
+        );
+        match result.unwrap_err() {
+            VecboostError::IoError(msg) => {
+                assert!(
+                    msg.contains("gRPC server error"),
+                    "expected 'gRPC server error' in message, got: {}",
+                    msg
+                );
+            }
+            other => panic!("expected IoError, got {:?}", other),
+        }
+
+        drop(listener);
+    }
 }

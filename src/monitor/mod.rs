@@ -278,4 +278,162 @@ mod tests {
         monitor.reset_peak();
         assert_eq!(monitor.get_peak_memory(), 0);
     }
+
+    #[tokio::test]
+    async fn test_with_interval_sets_custom_interval() {
+        let monitor = MemoryMonitor::with_interval(500);
+        assert_eq!(monitor.check_interval(), 500);
+    }
+
+    #[tokio::test]
+    async fn test_new_default_interval_is_1000ms() {
+        let monitor = MemoryMonitor::new();
+        assert_eq!(monitor.check_interval(), 1000);
+    }
+
+    #[tokio::test]
+    async fn test_default_uses_new() {
+        let monitor = MemoryMonitor::default();
+        assert_eq!(monitor.check_interval(), 1000);
+    }
+
+    #[tokio::test]
+    async fn test_get_peak_memory_starts_at_zero() {
+        let monitor = MemoryMonitor::new();
+        assert_eq!(monitor.get_peak_memory(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_gpu_stats_returns_none_initially() {
+        let monitor = MemoryMonitor::new();
+        assert!(monitor.get_gpu_stats().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_gpu_memory_with_zero_total() {
+        let monitor = MemoryMonitor::new();
+        monitor.update_gpu_memory(100, 0).await;
+
+        let stats = monitor.get_gpu_stats().await;
+        assert!(stats.is_some());
+        let gpu = stats.unwrap();
+        assert_eq!(gpu.total_bytes, 0);
+        assert_eq!(gpu.utilization_percent, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_update_gpu_memory_full_usage() {
+        let monitor = MemoryMonitor::new();
+        let total = 4 * 1024 * 1024 * 1024;
+        monitor.update_gpu_memory(total, total).await;
+
+        let gpu = monitor.get_gpu_stats().await.unwrap();
+        assert_eq!(gpu.used_bytes, total);
+        assert_eq!(gpu.total_bytes, total);
+        assert_eq!(gpu.utilization_percent, 100.0);
+        assert_eq!(gpu.available_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn test_update_gpu_memory_overwrites_previous() {
+        let monitor = MemoryMonitor::new();
+        monitor
+            .update_gpu_memory(1 * 1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024)
+            .await;
+        monitor
+            .update_gpu_memory(2 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024)
+            .await;
+
+        let gpu = monitor.get_gpu_stats().await.unwrap();
+        assert_eq!(gpu.used_bytes, 2 * 1024 * 1024 * 1024);
+        assert_eq!(gpu.total_bytes, 8 * 1024 * 1024 * 1024);
+        assert_eq!(gpu.utilization_percent, 25.0);
+    }
+
+    #[tokio::test]
+    async fn test_should_refresh_returns_false_immediately_after_creation() {
+        let monitor = MemoryMonitor::with_interval(1000);
+        assert!(
+            !monitor.should_refresh().await,
+            "should not need refresh immediately after creation"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_should_refresh_returns_true_after_interval_elapsed() {
+        let monitor = MemoryMonitor::with_interval(1);
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(
+            monitor.should_refresh().await,
+            "should need refresh after interval elapsed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_should_refresh_resets_after_refresh_call() {
+        let monitor = MemoryMonitor::with_interval(1000);
+        let _ = monitor.refresh().await;
+        assert!(
+            !monitor.should_refresh().await,
+            "should not need refresh immediately after refresh() call"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_oom_risk_with_zero_threshold_returns_true() {
+        let monitor = MemoryMonitor::new();
+        let is_risk = monitor.check_oom_risk(0).await;
+        assert!(is_risk, "0% threshold should always be OOM risk");
+    }
+
+    #[tokio::test]
+    async fn test_is_memory_low_with_zero_threshold_returns_false() {
+        let monitor = MemoryMonitor::new();
+        let is_low = monitor.is_memory_low(0).await;
+        assert!(!is_low, "0MB threshold should never be low");
+    }
+
+    #[tokio::test]
+    async fn test_is_memory_low_with_huge_threshold_returns_true_after_refresh() {
+        let monitor = MemoryMonitor::new();
+        let _ = monitor.refresh().await;
+        let is_low = monitor.is_memory_low(1_000_000).await;
+        assert!(
+            is_low,
+            "1TB threshold should be considered low on any real machine"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_gpu_memory_from_candle_is_safe() {
+        let monitor = MemoryMonitor::new();
+        monitor.update_gpu_memory_from_candle().await;
+    }
+
+    #[tokio::test]
+    async fn test_update_gpu_memory_from_metal_is_safe() {
+        let monitor = MemoryMonitor::new();
+        monitor.update_gpu_memory_from_metal().await;
+    }
+
+    #[tokio::test]
+    async fn test_update_gpu_memory_from_ort_is_safe() {
+        let monitor = MemoryMonitor::new();
+        monitor.update_gpu_memory_from_ort().await;
+    }
+
+    #[test]
+    fn test_memory_stats_default_is_all_zero() {
+        let stats = MemoryStats::default();
+        assert_eq!(stats.current_bytes, 0);
+        assert_eq!(stats.peak_bytes, 0);
+        assert_eq!(stats.available_bytes, 0);
+        assert_eq!(stats.total_bytes, 0);
+    }
+
+    #[test]
+    fn test_device_type_default_is_cpu() {
+        let dt = DeviceType::default();
+        assert!(matches!(dt, DeviceType::Cpu));
+    }
 }

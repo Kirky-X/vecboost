@@ -417,11 +417,12 @@ impl embedding_service_server::EmbeddingService for VecboostEmbeddingService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::Precision;
+    use crate::config::model::{DeviceType, EngineType, ModelConfig, Precision};
     use crate::engine::InferenceEngine;
     use crate::error::VecboostError;
     use crate::service::embedding::EmbeddingService;
     use async_trait::async_trait;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tonic::{Request, Status};
@@ -471,6 +472,29 @@ mod tests {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
         let embedding_service = EmbeddingService::new(engine, None);
+        VecboostEmbeddingService::new(Arc::new(RwLock::new(embedding_service)))
+    }
+
+    /// Build a `VecboostEmbeddingService` with a `ModelConfig` so that model-info /
+    /// metadata / list / health RPCs return populated data.
+    fn make_service_with_config(name: &str, dimension: usize) -> VecboostEmbeddingService {
+        let mock_engine = MockEngine::new(dimension);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let model_config = ModelConfig {
+            name: name.to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from("."),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(dimension),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        let embedding_service = EmbeddingService::new(engine, Some(model_config));
         VecboostEmbeddingService::new(Arc::new(RwLock::new(embedding_service)))
     }
 
@@ -571,5 +595,525 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code(), Status::invalid_argument("").code());
+    }
+
+    #[tokio::test]
+    async fn test_embed_batch_rpc_empty_texts() {
+        let service = make_service();
+
+        let req = Request::new(BatchEmbedRequest {
+            texts: vec![],
+            normalize: Some(true),
+        });
+
+        let result = service.embed_batch(req).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), Status::invalid_argument("").code());
+    }
+
+    #[tokio::test]
+    async fn test_compute_similarity_rpc_empty_vectors() {
+        let service = make_service();
+
+        let req = Request::new(SimilarityRequest {
+            vector1: vec![],
+            vector2: vec![],
+            metric: "cosine".to_string(),
+        });
+
+        let result = service.compute_similarity(req).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), Status::invalid_argument("").code());
+    }
+
+    #[tokio::test]
+    async fn test_compute_similarity_rpc_euclidean() {
+        let service = make_service();
+
+        let req = Request::new(SimilarityRequest {
+            vector1: vec![1.0, 2.0, 3.0],
+            vector2: vec![1.0, 2.0, 3.0],
+            metric: "euclidean".to_string(),
+        });
+
+        let response = service
+            .compute_similarity(req)
+            .await
+            .expect("euclidean should succeed");
+        let response = response.into_inner();
+
+        assert!(
+            response.score.abs() < 1e-6,
+            "euclidean distance of identical vectors should be 0, got {}",
+            response.score
+        );
+        assert_eq!(response.metric, "euclidean");
+    }
+
+    #[tokio::test]
+    async fn test_compute_similarity_rpc_manhattan() {
+        let service = make_service();
+
+        let req = Request::new(SimilarityRequest {
+            vector1: vec![1.0, 2.0, 3.0],
+            vector2: vec![1.0, 2.0, 3.0],
+            metric: "manhattan".to_string(),
+        });
+
+        let response = service
+            .compute_similarity(req)
+            .await
+            .expect("manhattan should succeed");
+        let response = response.into_inner();
+
+        assert!(
+            response.score.abs() < 1e-6,
+            "manhattan distance of identical vectors should be 0, got {}",
+            response.score
+        );
+        assert_eq!(response.metric, "manhattan");
+    }
+
+    #[tokio::test]
+    async fn test_compute_similarity_rpc_dot() {
+        let service = make_service();
+
+        let req = Request::new(SimilarityRequest {
+            vector1: vec![1.0, 2.0, 3.0],
+            vector2: vec![1.0, 2.0, 3.0],
+            metric: "dot".to_string(),
+        });
+
+        let response = service
+            .compute_similarity(req)
+            .await
+            .expect("dot product should succeed");
+        let response = response.into_inner();
+
+        // dot([1,2,3], [1,2,3]) = 1+4+9 = 14
+        assert!(
+            (response.score - 14.0).abs() < 1e-6,
+            "dot product of [1,2,3]·[1,2,3] should be 14, got {}",
+            response.score
+        );
+        assert_eq!(response.metric, "dot");
+    }
+
+    #[tokio::test]
+    async fn test_compute_similarity_rpc_default_metric() {
+        let service = make_service();
+
+        let req = Request::new(SimilarityRequest {
+            vector1: vec![1.0, 0.0],
+            vector2: vec![1.0, 0.0],
+            metric: "".to_string(),
+        });
+
+        let response = service
+            .compute_similarity(req)
+            .await
+            .expect("default metric should succeed");
+        let response = response.into_inner();
+
+        assert_eq!(
+            response.metric, "cosine",
+            "empty metric should default to cosine"
+        );
+        assert!(
+            (response.score - 1.0).abs() < 1e-6,
+            "cosine of identical vectors should be ~1.0, got {}",
+            response.score
+        );
+    }
+
+    #[tokio::test]
+    async fn test_compute_similarity_rpc_unknown_metric() {
+        let service = make_service();
+
+        let req = Request::new(SimilarityRequest {
+            vector1: vec![1.0, 0.0],
+            vector2: vec![1.0, 0.0],
+            metric: "unknown_metric".to_string(),
+        });
+
+        let response = service
+            .compute_similarity(req)
+            .await
+            .expect("unknown metric should fall back to cosine");
+        let response = response.into_inner();
+
+        // Unknown metric falls back to cosine; the returned metric string is
+        // the raw input, not the fallback, so we only verify a score is
+        // produced.
+        assert_eq!(response.metric, "unknown_metric");
+        assert!(
+            (response.score - 1.0).abs() < 1e-6,
+            "unknown metric should fall back to cosine (~1.0), got {}",
+            response.score
+        );
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_rpc_document_mode() {
+        let service = make_service();
+        let dir = tempfile::tempdir_in(".").expect("failed to create temp dir");
+        let file_path = dir.path().join("doc.txt");
+        std::fs::write(&file_path, "hello world\nsecond line\n").unwrap();
+
+        let req = Request::new(FileEmbedRequest {
+            path: file_path.to_string_lossy().into_owned(),
+            mode: Some("document".to_string()),
+            chunk_size: None,
+            overlap: None,
+        });
+
+        let response = service
+            .embed_file(req)
+            .await
+            .expect("document mode embed_file should succeed");
+        let response = response.into_inner();
+
+        assert_eq!(response.mode, "Document");
+        assert!(
+            !response.embedding.is_empty(),
+            "document mode yields single embedding"
+        );
+        assert!(response.paragraphs.is_empty());
+        assert!(response.stats.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_rpc_paragraph_mode() {
+        let service = make_service();
+        let dir = tempfile::tempdir_in(".").expect("failed to create temp dir");
+        let file_path = dir.path().join("paragraphs.txt");
+        std::fs::write(&file_path, "para one\n\npara two\n\npara three\n").unwrap();
+
+        let req = Request::new(FileEmbedRequest {
+            path: file_path.to_string_lossy().into_owned(),
+            mode: Some("paragraph".to_string()),
+            chunk_size: None,
+            overlap: None,
+        });
+
+        let response = service
+            .embed_file(req)
+            .await
+            .expect("paragraph mode embed_file should succeed");
+        let response = response.into_inner();
+
+        assert_eq!(response.mode, "Paragraph");
+        assert!(
+            !response.paragraphs.is_empty(),
+            "paragraph mode yields paragraph embeddings"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_rpc_average_mode() {
+        let service = make_service();
+        let dir = tempfile::tempdir_in(".").expect("failed to create temp dir");
+        let file_path = dir.path().join("avg.txt");
+        std::fs::write(&file_path, "first line\nsecond line\n").unwrap();
+
+        let req = Request::new(FileEmbedRequest {
+            path: file_path.to_string_lossy().into_owned(),
+            mode: Some("average".to_string()),
+            chunk_size: None,
+            overlap: None,
+        });
+
+        let response = service
+            .embed_file(req)
+            .await
+            .expect("average mode embed_file should succeed");
+        let response = response.into_inner();
+
+        assert_eq!(response.mode, "Average");
+        assert!(
+            !response.embedding.is_empty(),
+            "average mode yields single averaged embedding"
+        );
+        assert!(response.paragraphs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_rpc_default_mode() {
+        let service = make_service();
+        let dir = tempfile::tempdir_in(".").expect("failed to create temp dir");
+        let file_path = dir.path().join("default.txt");
+        std::fs::write(&file_path, "some content\n").unwrap();
+
+        let req = Request::new(FileEmbedRequest {
+            path: file_path.to_string_lossy().into_owned(),
+            mode: None,
+            chunk_size: None,
+            overlap: None,
+        });
+
+        let response = service
+            .embed_file(req)
+            .await
+            .expect("default mode embed_file should succeed");
+        let response = response.into_inner();
+
+        // None mode falls back to Document
+        assert_eq!(response.mode, "Document");
+        assert!(!response.embedding.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_rpc_unknown_mode_defaults_document() {
+        let service = make_service();
+        let dir = tempfile::tempdir_in(".").expect("failed to create temp dir");
+        let file_path = dir.path().join("unknown.txt");
+        std::fs::write(&file_path, "content\n").unwrap();
+
+        let req = Request::new(FileEmbedRequest {
+            path: file_path.to_string_lossy().into_owned(),
+            mode: Some("bogus_mode".to_string()),
+            chunk_size: None,
+            overlap: None,
+        });
+
+        let response = service
+            .embed_file(req)
+            .await
+            .expect("unknown mode should fall back to document");
+        let response = response.into_inner();
+
+        assert_eq!(response.mode, "Document");
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_rpc_nonexistent_file() {
+        let service = make_service();
+        let dir = tempfile::tempdir_in(".").expect("failed to create temp dir");
+        let file_path = dir.path().join("does_not_exist.txt");
+
+        let req = Request::new(FileEmbedRequest {
+            path: file_path.to_string_lossy().into_owned(),
+            mode: Some("document".to_string()),
+            chunk_size: None,
+            overlap: None,
+        });
+
+        let result = service.embed_file(req).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), Status::invalid_argument("").code());
+        assert!(
+            err.message().contains("Path validation failed"),
+            "expected path validation failure, got: {}",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_rpc_path_traversal() {
+        let service = make_service();
+
+        let req = Request::new(FileEmbedRequest {
+            path: "../etc/passwd".to_string(),
+            mode: Some("document".to_string()),
+            chunk_size: None,
+            overlap: None,
+        });
+
+        let result = service.embed_file(req).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), Status::invalid_argument("").code());
+        assert!(
+            err.message().contains("Path validation failed"),
+            "path traversal should be rejected, got: {}",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_model_switch_rpc_same_model() {
+        let service = make_service_with_config("test-model", 384);
+
+        let req = Request::new(ModelSwitchRequest {
+            model_name: "test-model".to_string(),
+            engine_type: None,
+            device_type: None,
+        });
+
+        let response = service
+            .model_switch(req)
+            .await
+            .expect("same-model switch should short-circuit");
+        let response = response.into_inner();
+
+        assert!(response.success);
+        assert_eq!(response.message, "Already using this model");
+        assert!(response.model_info.is_some());
+        assert_eq!(response.model_info.unwrap().name, "test-model");
+    }
+
+    #[tokio::test]
+    async fn test_model_switch_rpc_device_types() {
+        // device_type parsing happens before the same-model short-circuit;
+        // by switching to the same model name with varying device_type strings
+        // we exercise the parse branches without triggering AnyEngine::new
+        // (which would attempt a real model load / HF Hub download).
+        for dt in ["cpu", "cuda", "metal", "rocm", "amd", "unknown_device"] {
+            let service = make_service_with_config("dev-model", 8);
+            let req = Request::new(ModelSwitchRequest {
+                model_name: "dev-model".to_string(),
+                engine_type: None,
+                device_type: Some(dt.to_string()),
+            });
+
+            let response = service.model_switch(req).await.expect(&format!(
+                "same-model switch with device_type={} should succeed",
+                dt
+            ));
+            let inner = response.into_inner();
+            assert!(
+                inner.success,
+                "same-model switch should succeed for device_type={}",
+                dt
+            );
+            assert_eq!(inner.message, "Already using this model");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_model_switch_rpc_no_device() {
+        let service = make_service_with_config("nodev-model", 8);
+
+        let req = Request::new(ModelSwitchRequest {
+            model_name: "nodev-model".to_string(),
+            engine_type: None,
+            device_type: None,
+        });
+
+        let response = service
+            .model_switch(req)
+            .await
+            .expect("same-model switch with no device should succeed");
+        let inner = response.into_inner();
+        assert!(inner.success);
+        assert_eq!(inner.message, "Already using this model");
+    }
+
+    #[tokio::test]
+    async fn test_get_current_model_rpc_with_config() {
+        let service = make_service_with_config("cur-model", 128);
+
+        let response = service
+            .get_current_model(Request::new(Empty {}))
+            .await
+            .expect("get_current_model with config should succeed");
+        let inner = response.into_inner();
+
+        assert_eq!(inner.name, "cur-model");
+        assert_eq!(inner.dimension, 128);
+        assert!(inner.cache_enabled);
+    }
+
+    #[tokio::test]
+    async fn test_get_current_model_rpc_no_config() {
+        let service = make_service();
+
+        let result = service.get_current_model(Request::new(Empty {})).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), Status::not_found("").code());
+    }
+
+    #[tokio::test]
+    async fn test_get_model_info_rpc_with_config() {
+        let service = make_service_with_config("info-model", 64);
+
+        let response = service
+            .get_model_info(Request::new(Empty {}))
+            .await
+            .expect("get_model_info with config should succeed");
+        let inner = response.into_inner();
+
+        assert_eq!(inner.model_name, "info-model");
+        assert_eq!(inner.architecture, "candle");
+    }
+
+    #[tokio::test]
+    async fn test_get_model_info_rpc_no_config() {
+        let service = make_service();
+
+        let result = service.get_model_info(Request::new(Empty {})).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), Status::not_found("").code());
+    }
+
+    #[tokio::test]
+    async fn test_list_models_rpc_with_config() {
+        let service = make_service_with_config("list-model", 32);
+
+        let response = service
+            .list_models(Request::new(Empty {}))
+            .await
+            .expect("list_models with config should succeed");
+        let inner = response.into_inner();
+
+        assert_eq!(inner.models.len(), 1);
+        assert_eq!(inner.models[0].model_name, "list-model");
+        assert_eq!(inner.current_model, "list-model");
+    }
+
+    #[tokio::test]
+    async fn test_list_models_rpc_no_config() {
+        let service = make_service();
+
+        let response = service
+            .list_models(Request::new(Empty {}))
+            .await
+            .expect("list_models with no config should still succeed");
+        let inner = response.into_inner();
+
+        // Without a config, list_available_models falls back to a default
+        // "default" model entry.
+        assert_eq!(inner.models.len(), 1);
+        assert_eq!(inner.models[0].model_name, "default");
+        // current_model comes from get_model_info() which returns None
+        // without a config, so current_model is the proto default (empty).
+        assert_eq!(inner.current_model, "");
+    }
+
+    #[tokio::test]
+    async fn test_health_check_rpc_with_model() {
+        let service = make_service_with_config("health-model", 16);
+
+        let response = service
+            .health_check(Request::new(Empty {}))
+            .await
+            .expect("health_check with model should succeed");
+        let inner = response.into_inner();
+
+        assert_eq!(inner.status, "OK");
+        assert_eq!(inner.version, env!("CARGO_PKG_VERSION"));
+        assert!(inner.uptime.ends_with('s'));
+        assert_eq!(inner.model_loaded, Some("health-model".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_health_check_rpc_no_model() {
+        let service = make_service();
+
+        let response = service
+            .health_check(Request::new(Empty {}))
+            .await
+            .expect("health_check with no model should still succeed");
+        let inner = response.into_inner();
+
+        assert_eq!(inner.status, "OK");
+        assert_eq!(inner.version, env!("CARGO_PKG_VERSION"));
+        assert!(inner.uptime.ends_with('s'));
+        assert_eq!(inner.model_loaded, None);
     }
 }

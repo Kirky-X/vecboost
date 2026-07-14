@@ -2675,4 +2675,685 @@ mod tests {
             assert_eq!(emb.embedding.len(), 128);
         }
     }
+
+    // ===== 构造器与 builder 测试 =====
+
+    #[tokio::test]
+    async fn test_with_manager_constructor_sets_manager() {
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let manager = Arc::new(ModelManager::new());
+        let service = EmbeddingService::with_manager(engine, None, manager);
+        assert!(service.has_model_manager());
+    }
+
+    #[test]
+    fn test_with_all_constructor_sets_fields() {
+        let mock_engine = TestEngine::new(64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let model_config = make_model_config("all-fields-model", 64);
+        let memory_manager = SharedGpuMemoryManager::new(
+            8 * 1024 * 1024 * 1024,
+            crate::device::memory_optimizer::GpuMemoryConfig::default(),
+        );
+        let scheduler = Arc::new(DynamicBatchScheduler::new(
+            crate::device::BatchConfig::default(),
+        ));
+        let service = EmbeddingService::with_all(
+            engine,
+            InputValidator::with_default(),
+            Some(model_config),
+            None,
+            16,
+            Some(memory_manager),
+            Some(scheduler),
+        );
+        let list = service.list_available_models();
+        assert_eq!(list.models[0].name, "all-fields-model");
+    }
+
+    #[tokio::test]
+    async fn test_with_buffer_pool_builder() {
+        let mock_engine = TestEngine::new(64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let buffer_pool = Arc::new(tokio::sync::RwLock::new(BufferPool::new(
+            crate::device::memory_pool::BufferPoolConfig::default(),
+        )));
+        let service = EmbeddingService::new(engine, None).with_buffer_pool(buffer_pool);
+        let req = EmbedRequest {
+            text: "buffer pool test".to_string(),
+            normalize: Some(true),
+        };
+        let result = service.process_text(req, None).await;
+        assert!(result.is_ok());
+    }
+
+    // ===== 可配置 OOM 引擎 =====
+
+    struct ConfigurableOomEngine {
+        fallback_triggered: bool,
+        fallback_succeeds: bool,
+    }
+
+    impl ConfigurableOomEngine {
+        fn new(fallback_triggered: bool, fallback_succeeds: bool) -> Self {
+            Self {
+                fallback_triggered,
+                fallback_succeeds,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl InferenceEngine for ConfigurableOomEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Err(VecboostError::OutOfMemory(
+                "CUDA out of memory: allocation failed".to_string(),
+            ))
+        }
+
+        fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Err(VecboostError::OutOfMemory(
+                "CUDA out of memory: allocation failed".to_string(),
+            ))
+        }
+
+        fn precision(&self) -> &Precision {
+            static PRECISION: Precision = Precision::Fp32;
+            &PRECISION
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        fn is_fallback_triggered(&self) -> bool {
+            self.fallback_triggered
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            if self.fallback_succeeds {
+                Ok(())
+            } else {
+                Err(VecboostError::InferenceError(
+                    "CPU fallback unavailable".to_string(),
+                ))
+            }
+        }
+    }
+
+    async fn make_manager_with_model(model_name: &str) -> Arc<ModelManager> {
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join(model_name);
+        std::fs::create_dir_all(&model_path).unwrap();
+        let loader = Arc::new(crate::model::loader::LocalModelLoader::new(
+            cache_dir.path().to_path_buf(),
+        ));
+        let manager = Arc::new(ModelManager::with_loader(loader));
+        let config = ModelConfig {
+            name: model_name.to_string(),
+            engine_type: EngineType::Candle,
+            model_path,
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+        };
+        manager.load(&config).await.unwrap();
+        manager
+    }
+
+    // ===== OOM fallback 路径测试 =====
+
+    #[tokio::test]
+    async fn test_handle_oom_fallback_already_triggered() {
+        let engine = ConfigurableOomEngine::new(true, true);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
+        let model_config = make_model_config("oom-fb-triggered", 384);
+        let manager = Arc::new(ModelManager::new());
+        let service = EmbeddingService::with_manager(engine, Some(model_config), manager);
+
+        let req = EmbedRequest {
+            text: "hello".to_string(),
+            normalize: Some(true),
+        };
+        let result = service.process_text(req, None).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::OutOfMemory(msg) => {
+                assert!(msg.contains("fallback already attempted"), "got: {}", msg);
+            }
+            other => panic!("expected OutOfMemory, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_oom_fallback_failure() {
+        let engine = ConfigurableOomEngine::new(false, false);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
+        let model_config = make_model_config("oom-fb-fail", 384);
+        let manager = make_manager_with_model("oom-fb-fail").await;
+        let service = EmbeddingService::with_manager(engine, Some(model_config), manager);
+
+        let req = EmbedRequest {
+            text: "hello".to_string(),
+            normalize: Some(true),
+        };
+        let result = service.process_text(req, None).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::OutOfMemory(msg) => {
+                assert!(msg.contains("fallback failed"), "got: {}", msg);
+            }
+            other => panic!("expected OutOfMemory, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_oom_fallback_success_max_attempts_exceeded() {
+        let engine = ConfigurableOomEngine::new(false, true);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
+        let model_config = make_model_config("oom-fb-success", 384);
+        let manager = make_manager_with_model("oom-fb-success").await;
+        let service = EmbeddingService::with_manager(engine, Some(model_config), manager);
+
+        let req = EmbedRequest {
+            text: "hello".to_string(),
+            normalize: Some(true),
+        };
+        let result = service.process_text(req, None).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::OutOfMemory(msg) => {
+                assert!(
+                    msg.contains("Max fallback attempts exceeded"),
+                    "got: {}",
+                    msg
+                );
+            }
+            other => panic!("expected OutOfMemory, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_oom_fallback_model_not_in_manager() {
+        let engine = ConfigurableOomEngine::new(false, true);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
+        let model_config = make_model_config("oom-model-missing", 384);
+        let manager = Arc::new(ModelManager::new());
+        let service = EmbeddingService::with_manager(engine, Some(model_config), manager);
+
+        let req = EmbedRequest {
+            text: "hello".to_string(),
+            normalize: Some(true),
+        };
+        let result = service.process_text(req, None).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::OutOfMemory(msg) => {
+                assert!(msg.contains("no fallback available"), "got: {}", msg);
+            }
+            other => panic!("expected OutOfMemory, got {:?}", other),
+        }
+    }
+
+    // ===== process_batch OOM fallback 测试 =====
+
+    #[tokio::test]
+    async fn test_process_batch_oom_fallback_already_triggered() {
+        let engine = ConfigurableOomEngine::new(true, true);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let req = BatchEmbedRequest {
+            texts: vec!["a".to_string(), "b".to_string()],
+            mode: None,
+            normalize: Some(true),
+        };
+        let result = service.process_batch(req, None).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::OutOfMemory(msg) => {
+                assert!(msg.contains("fallback already attempted"), "got: {}", msg);
+            }
+            other => panic!("expected OutOfMemory, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_oom_fallback_success_then_still_oom() {
+        let engine = ConfigurableOomEngine::new(false, true);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let req = BatchEmbedRequest {
+            texts: vec!["a".to_string(), "b".to_string()],
+            mode: None,
+            normalize: Some(true),
+        };
+        let result = service.process_batch(req, None).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::OutOfMemory(msg) => {
+                assert!(msg.contains("CUDA out of memory"), "got: {}", msg);
+            }
+            other => panic!("expected OutOfMemory, got {:?}", other),
+        }
+    }
+
+    // ===== warm_up_cache 边界测试 =====
+
+    #[tokio::test]
+    async fn test_warm_up_cache_skips_failed_embeddings() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(OomEngine));
+        let service = EmbeddingService::with_cache(engine, None, 32);
+
+        let texts = vec!["fail1".to_string(), "fail2".to_string()];
+        let result = service.warm_up_cache(texts).await;
+        assert!(
+            result.is_ok(),
+            "warm_up should succeed even if all embeddings fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_warm_up_cache_progress_logging() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mock_engine = CountingEngine::new(64, Arc::clone(&counter));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::with_cache(engine, None, 256);
+
+        let texts: Vec<String> = (0..150).map(|i| format!("text{}", i)).collect();
+        let result = service.warm_up_cache(texts).await;
+        assert!(result.is_ok());
+        assert_eq!(counter.load(Ordering::SeqCst), 150);
+    }
+
+    // ===== get_optimal_batch_size 路径测试 =====
+
+    #[tokio::test]
+    async fn test_get_optimal_batch_size_uses_scheduler() {
+        let mock_engine = TestEngine::new(64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let scheduler = Arc::new(DynamicBatchScheduler::new(
+            crate::device::BatchConfig::default(),
+        ));
+        scheduler.set_batch_size(3).await;
+
+        let service = EmbeddingService::with_all(
+            engine,
+            InputValidator::with_default(),
+            None,
+            None,
+            16,
+            None,
+            Some(scheduler),
+        );
+
+        let texts: Vec<String> = (0..10).map(|i| format!("sched text {}", i)).collect();
+        let req = BatchEmbedRequest {
+            texts,
+            mode: None,
+            normalize: Some(true),
+        };
+        let result = service.process_batch(req, None).await;
+        assert!(result.is_ok());
+        let resp = result.unwrap();
+        assert_eq!(resp.embeddings.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_get_optimal_batch_size_memory_manager_unregistered() {
+        let mock_engine = TestEngine::new(64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let model_config = make_model_config("unregistered-model", 64);
+        let memory_manager = SharedGpuMemoryManager::new(
+            8 * 1024 * 1024 * 1024,
+            crate::device::memory_optimizer::GpuMemoryConfig::default(),
+        );
+
+        let service = EmbeddingService::with_all(
+            engine,
+            InputValidator::with_default(),
+            Some(model_config),
+            None,
+            16,
+            Some(memory_manager),
+            None,
+        );
+
+        let texts: Vec<String> = (0..5).map(|i| format!("mem text {}", i)).collect();
+        let req = BatchEmbedRequest {
+            texts,
+            mode: None,
+            normalize: Some(true),
+        };
+        let result = service.process_batch(req, None).await;
+        assert!(result.is_ok());
+        let resp = result.unwrap();
+        assert_eq!(resp.embeddings.len(), 5);
+    }
+
+    // ===== 文件处理边界测试 =====
+
+    #[tokio::test]
+    async fn test_get_processing_stats_nonexistent_file() {
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let result =
+            service.get_processing_stats(std::path::Path::new("/nonexistent/stats_test.txt"));
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_sliding_window_mode() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let test_file_path = temp_dir.path().join("sliding.txt");
+        std::fs::write(&test_file_path, "Line 1\nLine 2\nLine 3").unwrap();
+
+        let result = service
+            .embed_file(&test_file_path, AggregationMode::SlidingWindow)
+            .await;
+        assert!(result.is_ok());
+        match result.unwrap() {
+            EmbeddingOutput::Single(response) => {
+                assert_eq!(response.dimension, 384);
+            }
+            _ => panic!("Expected Single embedding output"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_fixed_size_mode() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let test_file_path = temp_dir.path().join("fixed.txt");
+        std::fs::write(&test_file_path, "Line 1\nLine 2\nLine 3").unwrap();
+
+        let result = service
+            .embed_file(&test_file_path, AggregationMode::FixedSize)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_embed_file_max_pooling_mode() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let test_file_path = temp_dir.path().join("maxpool.txt");
+        std::fs::write(&test_file_path, "Line 1\nLine 2").unwrap();
+
+        let result = service
+            .embed_file(&test_file_path, AggregationMode::MaxPooling)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_paragraphs_long_paragraph_preview() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let long_paragraph = "A".repeat(200);
+        let test_content = format!("{}\n\nShort paragraph", long_paragraph);
+        let test_file_path = temp_dir.path().join("long_para.txt");
+        std::fs::write(&test_file_path, test_content).unwrap();
+
+        let result = service
+            .embed_file(&test_file_path, AggregationMode::Paragraph)
+            .await;
+        assert!(result.is_ok());
+        match result.unwrap() {
+            EmbeddingOutput::Paragraphs(paragraphs) => {
+                assert_eq!(paragraphs.len(), 2);
+                assert_eq!(
+                    paragraphs[0].text_preview.len(),
+                    100,
+                    "long paragraph preview should be truncated to 100"
+                );
+                assert_eq!(paragraphs[1].text_preview, "Short paragraph");
+            }
+            _ => panic!("Expected Paragraphs embedding output"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_stream_internal_skips_blank_lines() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let test_file_path = temp_dir.path().join("blanks.txt");
+        std::fs::write(&test_file_path, "Line 1\n\n   \nLine 2\n\nLine 3").unwrap();
+
+        let result = service.process_file_stream(&test_file_path).await;
+        assert!(result.is_ok());
+        let resp = result.unwrap();
+        assert_eq!(resp.dimension, 384);
+        let norm: f32 = resp.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "normalized norm should be 1, got {}",
+            norm
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_file_stream_engine_error_logs_failure() {
+        let temp_dir = tempdir().unwrap();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(OomEngine));
+        let service = EmbeddingService::new(engine, None);
+
+        let test_file = temp_dir.path().join("error.txt");
+        std::fs::write(&test_file, "Line 1\nLine 2").unwrap();
+
+        let result = service.process_file_stream(&test_file).await;
+        assert!(result.is_err());
+    }
+
+    // ===== 缓存启用路径测试 =====
+
+    #[tokio::test]
+    async fn test_process_similarity_with_cache_enabled() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mock_engine = CountingEngine::new(64, Arc::clone(&counter));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::with_cache(engine, None, 32);
+
+        let req = SimilarityRequest {
+            source: "source text".to_string(),
+            target: "target text".to_string(),
+        };
+        let result = service.process_similarity(req).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            2,
+            "should call engine twice for source and target"
+        );
+    }
+
+    // ===== 模型管理测试 =====
+
+    #[tokio::test]
+    async fn test_unload_model_with_manager() {
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let manager = make_manager_with_model("unload-mgr-model").await;
+        let model_config = make_model_config("unload-mgr-model", 384);
+        let mut service = EmbeddingService::with_manager(engine, Some(model_config), manager);
+
+        assert!(service.get_model_info().is_some());
+        let result = service.unload_model("unload-mgr-model").await;
+        assert!(result.is_ok());
+        assert!(service.get_model_info().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_list_loaded_models_with_manager() {
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let manager = make_manager_with_model("list-mgr-model").await;
+        let model_config = make_model_config("list-mgr-model", 384);
+        let service = EmbeddingService::with_manager(engine, Some(model_config), manager);
+
+        let loaded = service.list_loaded_models().await;
+        assert!(!loaded.is_empty(), "with manager, list should not be empty");
+        assert!(loaded.contains(&"list-mgr-model".to_string()));
+    }
+
+    // ===== 搜索边界测试 =====
+
+    #[tokio::test]
+    async fn test_process_search_batch_default_top_k() {
+        let mock_engine = TestEngine::new(64);
+        let model_config = make_model_config("search-batch-default", 64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, Some(model_config));
+
+        let texts: Vec<String> = (0..10).map(|i| format!("candidate {}", i)).collect();
+        let result = service.process_search_batch("query", &texts, None).await;
+        assert!(result.is_ok());
+        let resp = result.unwrap();
+        assert_eq!(resp.results.len(), DEFAULT_TOP_K);
+    }
+
+    #[tokio::test]
+    async fn test_process_search_batch_empty_texts() {
+        let mock_engine = TestEngine::new(64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let result = service.process_search_batch("query", &[], Some(3)).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("empty"), "got: {}", msg),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_search_batch_clamped_top_k() {
+        let mock_engine = TestEngine::new(64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let texts: Vec<String> = (0..3).map(|i| format!("candidate {}", i)).collect();
+        let result = service
+            .process_search_batch("query", &texts, Some(MAX_TOP_K + 50))
+            .await;
+        assert!(result.is_ok());
+        let resp = result.unwrap();
+        assert_eq!(
+            resp.results.len(),
+            3,
+            "top_k should be clamped to available texts"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_search_zero_top_k_rejected() {
+        let mock_engine = TestEngine::new(64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let req = SearchRequest {
+            query: "query text".to_string(),
+            texts: vec!["candidate".to_string()],
+            top_k: Some(0),
+        };
+        let result = service.process_search(req).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => {
+                assert!(msg.contains("top_k must be at least 1"), "got: {}", msg)
+            }
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    // ===== similarity 边界测试 =====
+
+    #[tokio::test]
+    async fn test_process_similarity_empty_target() {
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let req = SimilarityRequest {
+            source: "valid source".to_string(),
+            target: "".to_string(),
+        };
+        let result = service.process_similarity(req).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(_) => {}
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_similarity_whitespace_target() {
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let req = SimilarityRequest {
+            source: "valid source".to_string(),
+            target: "   \n\t  ".to_string(),
+        };
+        let result = service.process_similarity(req).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => {
+                assert!(msg.contains("whitespace"), "got: {}", msg)
+            }
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
 }

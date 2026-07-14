@@ -612,4 +612,411 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(manager.count().await, 1);
     }
+
+    #[tokio::test]
+    async fn test_get_returns_none_for_unknown_model() {
+        let manager = ModelManager::new();
+        assert!(manager.get("does-not-exist").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_returns_loaded_model() {
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join("get-model");
+        create_test_model_file(&model_path);
+
+        let loader = Arc::new(LocalModelLoader::new(cache_dir.path().to_path_buf()));
+        let manager = ModelManager::with_loader(loader);
+
+        let config = ModelConfig {
+            name: "get-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path,
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+
+        let loaded = manager.load(&config).await.unwrap();
+        let fetched = manager.get("get-model").await;
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().name(), loaded.name());
+    }
+
+    #[tokio::test]
+    async fn test_is_loaded_returns_false_for_unknown() {
+        let manager = ModelManager::new();
+        assert!(!manager.is_loaded("unknown").await);
+    }
+
+    #[tokio::test]
+    async fn test_default_creates_empty_manager() {
+        let manager = ModelManager::default();
+        assert_eq!(manager.count().await, 0);
+        assert!(manager.list_loaded().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_unload_all_on_empty_manager_is_noop() {
+        let manager = ModelManager::new();
+        manager.unload_all().await;
+        assert_eq!(manager.count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_unload_all_removes_multiple_models() {
+        let cache_dir = tempdir().unwrap();
+        let loader = Arc::new(LocalModelLoader::new(cache_dir.path().to_path_buf()));
+        let manager = ModelManager::with_loader(loader);
+
+        for name in ["multi-1", "multi-2", "multi-3"] {
+            let model_path = cache_dir.path().join(name);
+            create_test_model_file(&model_path);
+            let config = ModelConfig {
+                name: name.to_string(),
+                engine_type: EngineType::Candle,
+                model_path,
+                tokenizer_path: None,
+                device: crate::config::model::DeviceType::Cpu,
+                max_batch_size: 32,
+                pooling_mode: None,
+                expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: false,
+                model_sha256: None,
+            };
+            manager.load(&config).await.unwrap();
+        }
+
+        assert_eq!(manager.count().await, 3);
+        manager.unload_all().await;
+        assert_eq!(manager.count().await, 0);
+        assert!(manager.list_loaded().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_reload_existing_model_succeeds() {
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join("reload-model");
+        create_test_model_file(&model_path);
+
+        let loader = Arc::new(LocalModelLoader::new(cache_dir.path().to_path_buf()));
+        let manager = ModelManager::with_loader(loader);
+
+        let config = ModelConfig {
+            name: "reload-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path,
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+
+        let _ = manager.load(&config).await.unwrap();
+        assert_eq!(manager.count().await, 1);
+
+        let reloaded = manager.reload("reload-model").await;
+        assert!(reloaded.is_ok());
+        assert_eq!(manager.count().await, 1);
+        assert!(manager.is_loaded("reload-model").await);
+    }
+
+    #[tokio::test]
+    async fn test_reload_unknown_model_returns_not_found() {
+        let manager = ModelManager::new();
+        let result = manager.reload("no-such-model").await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            VecboostError::NotFound(msg) => {
+                assert!(msg.contains("no-such-model"));
+            }
+            other => panic!("expected NotFound, got {:?}", other),
+        }
+    }
+
+    struct FailingLoader;
+
+    #[async_trait]
+    impl ModelLoader for FailingLoader {
+        async fn load(&self, _config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, VecboostError> {
+            Err(VecboostError::ModelLoadError(
+                "intentional failure".to_string(),
+            ))
+        }
+
+        async fn get_model_path(&self, config: &ModelConfig) -> Result<PathBuf, VecboostError> {
+            Ok(config.model_path.clone())
+        }
+
+        async fn is_model_cached(&self, _config: &ModelConfig) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn test_load_with_loader_failure_returns_model_load_error() {
+        let loader = Arc::new(FailingLoader);
+        let manager = ModelManager::with_loader(loader);
+
+        let cache_dir = tempdir().unwrap();
+        let config = ModelConfig {
+            name: "fail-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: cache_dir.path().join("fail-model"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+
+        let result = manager.load(&config).await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            VecboostError::ModelLoadError(msg) => {
+                assert!(msg.contains("fail-model"));
+                assert!(msg.contains("intentional failure"));
+            }
+            other => panic!("expected ModelLoadError, got {:?}", other),
+        }
+        assert_eq!(manager.count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_load_default_uses_default_config() {
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join("default-test-model");
+        create_test_model_file(&model_path);
+
+        let loader = Arc::new(LocalModelLoader::new(cache_dir.path().to_path_buf()));
+        let mut manager = ModelManager::with_loader(loader);
+
+        let config = ModelConfig {
+            name: "default-test-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path,
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        manager.set_default_config(config);
+
+        let result = manager.load_default().await;
+        assert!(result.is_ok());
+        assert_eq!(manager.count().await, 1);
+        assert!(manager.is_loaded("default-test-model").await);
+    }
+
+    #[tokio::test]
+    async fn test_stats_counts_candle_models() {
+        let cache_dir = tempdir().unwrap();
+        let loader = Arc::new(LocalModelLoader::new(cache_dir.path().to_path_buf()));
+        let manager = ModelManager::with_loader(loader);
+
+        for name in ["stat-1", "stat-2"] {
+            let model_path = cache_dir.path().join(name);
+            create_test_model_file(&model_path);
+            let config = ModelConfig {
+                name: name.to_string(),
+                engine_type: EngineType::Candle,
+                model_path,
+                tokenizer_path: None,
+                device: crate::config::model::DeviceType::Cpu,
+                max_batch_size: 32,
+                pooling_mode: None,
+                expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: false,
+                model_sha256: None,
+            };
+            manager.load(&config).await.unwrap();
+        }
+
+        let stats = manager.stats().await;
+        assert_eq!(stats.total_models, 2);
+        assert_eq!(stats.candle_models, 2);
+        assert_eq!(stats.onnx_models, 0);
+        assert!(stats.total_size_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_loads_distinct_models() {
+        let cache_dir = tempdir().unwrap();
+        let cache_root = cache_dir.path().to_path_buf();
+
+        let mut handles = Vec::new();
+        let loader = Arc::new(LocalModelLoader::new(cache_root.clone()));
+        let manager = std::sync::Arc::new(ModelManager::with_loader(loader));
+
+        for i in 0..5 {
+            let mgr = std::sync::Arc::clone(&manager);
+            let root = cache_root.clone();
+            handles.push(tokio::spawn(async move {
+                let name = format!("conc-{}", i);
+                let model_path = root.join(&name);
+                fs::create_dir_all(model_path.parent().unwrap()).unwrap();
+                fs::write(&model_path, "content").unwrap();
+
+                let config = ModelConfig {
+                    name: name.clone(),
+                    engine_type: EngineType::Candle,
+                    model_path,
+                    tokenizer_path: None,
+                    device: crate::config::model::DeviceType::Cpu,
+                    max_batch_size: 32,
+                    pooling_mode: None,
+                    expected_dimension: None,
+                    memory_limit_bytes: None,
+                    oom_fallback_enabled: false,
+                    model_sha256: None,
+                };
+                mgr.load(&config).await.unwrap();
+            }));
+        }
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        assert_eq!(manager.count().await, 5);
+        let loaded = manager.list_loaded().await;
+        for i in 0..5 {
+            assert!(loaded.contains(&format!("conc-{}", i)));
+        }
+    }
+
+    #[test]
+    fn test_model_stats_total_size_mb() {
+        let stats = ModelStats {
+            total_models: 1,
+            candle_models: 1,
+            onnx_models: 0,
+            total_size_bytes: 2 * 1024 * 1024,
+        };
+        assert_eq!(stats.total_size_mb(), 2.0);
+    }
+
+    #[test]
+    fn test_model_stats_format_size_bytes() {
+        let stats = ModelStats {
+            total_models: 0,
+            candle_models: 0,
+            onnx_models: 0,
+            total_size_bytes: 512,
+        };
+        assert_eq!(stats.format_size(), "512 B");
+    }
+
+    #[test]
+    fn test_model_stats_format_size_kb() {
+        let stats = ModelStats {
+            total_models: 0,
+            candle_models: 0,
+            onnx_models: 0,
+            total_size_bytes: 2048,
+        };
+        assert_eq!(stats.format_size(), "2 KB");
+    }
+
+    #[test]
+    fn test_model_stats_format_size_mb() {
+        let stats = ModelStats {
+            total_models: 0,
+            candle_models: 0,
+            onnx_models: 0,
+            total_size_bytes: 1024 * 1024,
+        };
+        assert!(stats.format_size().ends_with("MB"));
+    }
+
+    #[test]
+    fn test_model_stats_format_size_gb() {
+        let stats = ModelStats {
+            total_models: 0,
+            candle_models: 0,
+            onnx_models: 0,
+            total_size_bytes: 1024 * 1024 * 1024,
+        };
+        assert!(stats.format_size().ends_with("GB"));
+    }
+
+    #[tokio::test]
+    async fn test_load_already_loaded_returns_same_instance() {
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join("reuse-model");
+        create_test_model_file(&model_path);
+
+        let loader = Arc::new(LocalModelLoader::new(cache_dir.path().to_path_buf()));
+        let manager = ModelManager::with_loader(loader);
+
+        let config = ModelConfig {
+            name: "reuse-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path,
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+
+        let first = manager.load(&config).await.unwrap();
+        let second = manager.load(&config).await.unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(manager.count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_unload_then_load_recreates_model() {
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join("recreate-model");
+        create_test_model_file(&model_path);
+
+        let loader = Arc::new(LocalModelLoader::new(cache_dir.path().to_path_buf()));
+        let manager = ModelManager::with_loader(loader);
+
+        let config = ModelConfig {
+            name: "recreate-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path,
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+
+        let _first = manager.load(&config).await.unwrap();
+        manager.unload("recreate-model").await.unwrap();
+        assert_eq!(manager.count().await, 0);
+
+        let second = manager.load(&config).await;
+        assert!(second.is_ok());
+        assert_eq!(manager.count().await, 1);
+        assert!(manager.is_loaded("recreate-model").await);
+    }
 }

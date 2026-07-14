@@ -132,7 +132,7 @@ mod tests {
     use crate::service::embedding::EmbeddingService;
     use async_trait::async_trait;
     use axum::http::StatusCode;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -319,6 +319,128 @@ mod tests {
     #[tokio::test]
     async fn test_metrics_endpoint_whitelisted_ip_bypasses_rate_limit() {
         let state = make_rate_limited_state_with_whitelist();
+        let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    fn test_addr_with(ip: IpAddr) -> SocketAddr {
+        SocketAddr::new(ip, 9002)
+    }
+
+    fn make_rate_limited_state_with_whitelist_ips(whitelist: Vec<String>) -> AppState {
+        let mut state = make_rate_limited_state();
+        state.ip_whitelist = whitelist;
+        state
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_whitelist_cidr_32_matches() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["127.0.0.1/32".to_string()]);
+        let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        let response = metrics_endpoint(State(state), ConnectInfo(addr))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_whitelist_cidr_32_does_not_match_other_ip() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["127.0.0.1/32".to_string()]);
+        let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)));
+        let response = metrics_endpoint(State(state), ConnectInfo(addr))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_whitelist_cidr_24_matches_subnet() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["10.0.0/24".to_string()]);
+        let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)));
+        let response = metrics_endpoint(State(state), ConnectInfo(addr))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_whitelist_cidr_24_does_not_match_other_subnet() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["10.0.0/24".to_string()]);
+        let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)));
+        let response = metrics_endpoint(State(state), ConnectInfo(addr))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_whitelist_ipv6_cidr_128_matches() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["::1/128".to_string()]);
+        let addr = test_addr_with(IpAddr::V6(Ipv6Addr::LOCALHOST));
+        let response = metrics_endpoint(State(state), ConnectInfo(addr))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_multiple_whitelist_entries_one_match() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec![
+            "192.168.1.1/32".to_string(),
+            "127.0.0.1/32".to_string(),
+        ]);
+        let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_returns_text_content_type() {
+        let state = make_test_state();
+        let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            content_type.contains("text/plain"),
+            "expected text/plain content-type, got {}",
+            content_type
+        );
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_rate_limit_disabled_returns_ok() {
+        let state = make_test_state();
+        assert!(!state.rate_limit_enabled);
+        let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_health_check_returns_exact_ok_string() {
+        let result = health_check().await;
+        assert_eq!(result, "OK");
+    }
+
+    #[tokio::test]
+    async fn test_health_check_is_static_str() {
+        let result: &'static str = health_check().await;
+        assert_eq!(result, "OK");
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_under_normal_limit_returns_ok() {
+        let state = make_test_state();
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();

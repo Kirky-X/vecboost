@@ -191,4 +191,194 @@ mod tests {
 
         assert_eq!(channel.pending_count().await, 0);
     }
+
+    #[tokio::test]
+    async fn test_with_timeout_and_get_default_timeout() {
+        let channel = ResponseChannel::with_timeout(Duration::from_secs(10));
+        assert_eq!(channel.get_default_timeout(), Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn test_default_uses_30_secs_timeout() {
+        let channel = ResponseChannel::default();
+        assert_eq!(channel.get_default_timeout(), Duration::from_secs(30));
+        assert_eq!(channel.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_complete_with_error_response_propagates() {
+        let channel = ResponseChannel::new();
+        let rx = channel.register("err-1".to_string()).await;
+
+        let error_response: Result<EmbedResponse, VecboostError> =
+            Err(VecboostError::InferenceError("boom".to_string()));
+
+        channel.complete("err-1".to_string(), error_response).await;
+
+        let result = rx.await;
+        assert!(result.is_ok(), "receiver should not be dropped");
+        match result.unwrap() {
+            Err(VecboostError::InferenceError(msg)) => {
+                assert!(msg.contains("boom"));
+            }
+            other => panic!("expected InferenceError, got {:?}", other),
+        }
+        assert_eq!(channel.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_complete_unknown_request_id_is_noop() {
+        let channel = ResponseChannel::new();
+        channel
+            .complete(
+                "unknown".to_string(),
+                Ok(EmbedResponse {
+                    embedding: vec![0.0; 4],
+                    dimension: 4,
+                    processing_time_ms: 1,
+                }),
+            )
+            .await;
+        assert_eq!(channel.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_complete_after_receiver_dropped_logs_warning() {
+        let channel = ResponseChannel::new();
+        {
+            let _rx = channel.register("drop-1".to_string()).await;
+        }
+        assert_eq!(channel.pending_count().await, 1);
+
+        channel
+            .complete(
+                "drop-1".to_string(),
+                Ok(EmbedResponse {
+                    embedding: vec![0.0; 4],
+                    dimension: 4,
+                    processing_time_ms: 1,
+                }),
+            )
+            .await;
+        assert_eq!(channel.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_removes_timed_out_entries() {
+        let channel = ResponseChannel::with_timeout(Duration::from_millis(10));
+
+        channel.register("expired-1".to_string()).await;
+        channel.register("expired-2".to_string()).await;
+        assert_eq!(channel.pending_count().await, 2);
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        channel.cleanup_expired().await;
+        assert_eq!(
+            channel.pending_count().await,
+            0,
+            "expired entries must be cleaned up"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_keeps_unexpired_entries() {
+        let channel = ResponseChannel::with_timeout(Duration::from_secs(60));
+
+        channel.register("alive-1".to_string()).await;
+        channel.register("alive-2".to_string()).await;
+        assert_eq!(channel.pending_count().await, 2);
+
+        channel.cleanup_expired().await;
+        assert_eq!(
+            channel.pending_count().await,
+            2,
+            "unexpired entries must be kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_on_empty_channel_is_noop() {
+        let channel = ResponseChannel::new();
+        assert_eq!(channel.pending_count().await, 0);
+        channel.cleanup_expired().await;
+        assert_eq!(channel.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_register_and_complete() {
+        let channel = std::sync::Arc::new(ResponseChannel::new());
+        let mut handles = Vec::new();
+
+        for i in 0..20 {
+            let channel_clone = std::sync::Arc::clone(&channel);
+            let request_id = format!("conc-{}", i);
+            handles.push(tokio::spawn(async move {
+                let rx = channel_clone.register(request_id.clone()).await;
+                let response = Ok(EmbedResponse {
+                    embedding: vec![0.0; 8],
+                    dimension: 8,
+                    processing_time_ms: 1,
+                });
+                channel_clone.complete(request_id, response).await;
+                rx.await
+            }));
+        }
+
+        for handle in handles {
+            let result = handle.await.expect("task must not panic");
+            assert!(result.is_ok(), "receiver should receive Ok response");
+            assert!(result.unwrap().is_ok());
+        }
+
+        assert_eq!(channel.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_register_replaces_same_request_id() {
+        let channel = ResponseChannel::new();
+
+        let _rx1 = channel.register("dup-1".to_string()).await;
+        assert_eq!(channel.pending_count().await, 1);
+
+        let rx2 = channel.register("dup-1".to_string()).await;
+        assert_eq!(channel.pending_count().await, 1);
+
+        channel
+            .complete(
+                "dup-1".to_string(),
+                Ok(EmbedResponse {
+                    embedding: vec![1.0; 4],
+                    dimension: 4,
+                    processing_time_ms: 0,
+                }),
+            )
+            .await;
+
+        let result = rx2.await;
+        assert!(result.is_ok());
+        let response = result.unwrap().unwrap();
+        assert_eq!(response.embedding, vec![1.0; 4]);
+    }
+
+    #[tokio::test]
+    async fn test_complete_returns_no_pending_after_clear() {
+        let channel = ResponseChannel::new();
+        let _rx = channel.register("cleared-1".to_string()).await;
+        assert_eq!(channel.pending_count().await, 1);
+
+        channel.clear().await;
+        assert_eq!(channel.pending_count().await, 0);
+
+        channel
+            .complete(
+                "cleared-1".to_string(),
+                Ok(EmbedResponse {
+                    embedding: vec![],
+                    dimension: 0,
+                    processing_time_ms: 0,
+                }),
+            )
+            .await;
+    }
 }

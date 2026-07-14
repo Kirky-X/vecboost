@@ -1083,6 +1083,26 @@ impl CandleEngine {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::config::model::{EngineType, ModelConfig};
+    use std::path::PathBuf;
+
+    fn test_config() -> ModelConfig {
+        ModelConfig {
+            name: "test-candle".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from("/nonexistent/model"),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(768),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+        }
+    }
+
     /// T006 H6: 验证 `tokio::task::block_in_place(|| Handle::current().block_on(...))` 模式
     /// 在 multi-thread runtime 下不 panic。
     ///
@@ -1132,5 +1152,251 @@ mod tests {
             guard.is_ok(),
             "RwLock must be released after block_on completes"
         );
+    }
+
+    /// 验证 `ModelConfigJson::get_architecture` 从 architectures 字段识别 XLM-RoBERTa
+    #[test]
+    fn test_get_architecture_xlm_roberta_from_architectures() {
+        let config = ModelConfigJson {
+            architectures: Some(vec!["XLMRobertaForMaskedLM".to_string()]),
+            model_type: None,
+        };
+        assert!(matches!(
+            config.get_architecture(),
+            ModelArchitecture::XlmRoberta
+        ));
+    }
+
+    /// 验证 architectures 字段中的小写 "xlm_roberta" 也能被识别
+    #[test]
+    fn test_get_architecture_xlm_roberta_from_lowercase_arch() {
+        let config = ModelConfigJson {
+            architectures: Some(vec!["xlm_roberta".to_string()]),
+            model_type: None,
+        };
+        assert!(matches!(
+            config.get_architecture(),
+            ModelArchitecture::XlmRoberta
+        ));
+    }
+
+    /// 验证 model_type 字段为 "xlm-roberta" 时识别为 XLM-RoBERTa
+    #[test]
+    fn test_get_architecture_xlm_roberta_from_model_type_hyphen() {
+        let config = ModelConfigJson {
+            architectures: None,
+            model_type: Some("xlm-roberta".to_string()),
+        };
+        assert!(matches!(
+            config.get_architecture(),
+            ModelArchitecture::XlmRoberta
+        ));
+    }
+
+    /// 验证 model_type 字段为 "xlm_roberta" 时识别为 XLM-RoBERTa
+    #[test]
+    fn test_get_architecture_xlm_roberta_from_model_type_underscore() {
+        let config = ModelConfigJson {
+            architectures: None,
+            model_type: Some("xlm_roberta".to_string()),
+        };
+        assert!(matches!(
+            config.get_architecture(),
+            ModelArchitecture::XlmRoberta
+        ));
+    }
+
+    /// 验证空字段时默认返回 Bert
+    #[test]
+    fn test_get_architecture_bert_default_when_all_none() {
+        let config = ModelConfigJson {
+            architectures: None,
+            model_type: None,
+        };
+        assert!(matches!(config.get_architecture(), ModelArchitecture::Bert));
+    }
+
+    /// 验证 architectures 仅含 Bert 类项时返回 Bert
+    #[test]
+    fn test_get_architecture_bert_when_no_xlm_in_architectures() {
+        let config = ModelConfigJson {
+            architectures: Some(vec!["BertForMaskedLM".to_string()]),
+            model_type: Some("bert".to_string()),
+        };
+        assert!(matches!(config.get_architecture(), ModelArchitecture::Bert));
+    }
+
+    /// 验证 architectures 字段优先级高于 model_type
+    #[test]
+    fn test_get_architecture_architectures_takes_precedence_over_model_type() {
+        let config = ModelConfigJson {
+            architectures: Some(vec!["XLMRobertaModel".to_string()]),
+            model_type: Some("bert".to_string()),
+        };
+        assert!(matches!(
+            config.get_architecture(),
+            ModelArchitecture::XlmRoberta
+        ));
+    }
+
+    /// 验证 ModelArchitecture 的 Clone 行为
+    #[test]
+    fn test_model_architecture_clone_preserves_variant() {
+        let bert = ModelArchitecture::Bert;
+        let bert_clone = bert.clone();
+        assert!(matches!(bert_clone, ModelArchitecture::Bert));
+
+        let xlm = ModelArchitecture::XlmRoberta;
+        let xlm_clone = xlm.clone();
+        assert!(matches!(xlm_clone, ModelArchitecture::XlmRoberta));
+    }
+
+    /// 验证 CandleEngine::new 在空目录上返回 ModelLoadError(不依赖网络)
+    #[test]
+    fn test_candle_engine_new_returns_error_for_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = CandleEngine::new(&config, Precision::Fp32);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 with_device 在空目录(CPU)上返回带特定消息的 ModelLoadError
+    #[test]
+    fn test_candle_engine_with_device_empty_dir_cpu() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        assert!(result.is_err());
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(
+                msg.contains("No model weights file found"),
+                "Expected 'No model weights file found', got: {}",
+                msg
+            );
+        }
+    }
+
+    /// 验证 FP16 精度在空目录上仍返回错误(覆盖 dtype 分支)
+    #[test]
+    fn test_candle_engine_with_device_fp16_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = CandleEngine::with_device(&config, Precision::Fp16, DeviceType::Cpu, None);
+        assert!(result.is_err());
+    }
+
+    /// 验证 INT8 精度在空目录上仍返回错误(覆盖 INT8 量化分支)
+    #[test]
+    fn test_candle_engine_with_device_int8_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = CandleEngine::with_device(&config, Precision::Int8, DeviceType::Cpu, None);
+        assert!(result.is_err());
+    }
+
+    /// 验证 AMD 设备类型会回退到 CPU 并在空目录上返回 ModelLoadError
+    #[test]
+    fn test_candle_engine_with_device_amd_falls_back_to_cpu() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Amd, None);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 OpenCL 设备类型同样回退到 CPU 并在空目录上返回错误
+    #[test]
+    fn test_candle_engine_with_device_opencl_falls_back_to_cpu() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::OpenCL, None);
+        assert!(result.is_err());
+    }
+
+    /// 验证存在 model.safetensors 但缺失 config.json 时返回错误
+    #[test]
+    fn test_candle_engine_with_safetensors_but_no_config() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.safetensors"), b"fake")
+            .expect("Failed to write fake safetensors");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("config.json")
+                    || msg.contains("No such file")
+                    || matches!(
+                        e,
+                        VecboostError::IoError(_) | VecboostError::ModelLoadError(_)
+                    ),
+                "Expected IO/ModelLoadError related to config.json, got: {}",
+                msg
+            );
+        }
+    }
+
+    /// 验证存在 pytorch_model.bin 但缺失 config.json 时返回错误
+    #[test]
+    fn test_candle_engine_with_pytorch_bin_but_no_config() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("pytorch_model.bin"), b"fake")
+            .expect("Failed to write fake pytorch_model.bin");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        assert!(result.is_err());
+    }
+
+    /// 验证 `Precision` 的 Display 实现
+    #[test]
+    fn test_precision_display() {
+        assert_eq!(Precision::Fp32.to_string(), "fp32");
+        assert_eq!(Precision::Fp16.to_string(), "fp16");
+        assert_eq!(Precision::Int8.to_string(), "int8");
+    }
+
+    /// 验证 `DeviceType` 的序列化形式(serde rename)
+    #[test]
+    fn test_device_type_serialization() {
+        let cpu_json = serde_json::to_string(&DeviceType::Cpu).expect("serialize Cpu");
+        assert_eq!(cpu_json, "\"cpu\"");
+
+        let amd_json = serde_json::to_string(&DeviceType::Amd).expect("serialize Amd");
+        assert_eq!(amd_json, "\"amd\"");
+
+        let opencl_json = serde_json::to_string(&DeviceType::OpenCL).expect("serialize OpenCL");
+        assert_eq!(opencl_json, "\"opencl\"");
     }
 }

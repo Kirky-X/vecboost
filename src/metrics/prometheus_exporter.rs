@@ -166,3 +166,274 @@ impl Default for PrometheusCollector {
         Self::new().expect("Failed to create PrometheusCollector")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_creates_collector() {
+        let collector = PrometheusCollector::new();
+        assert!(collector.is_ok());
+    }
+
+    #[test]
+    fn test_default_creates_collector() {
+        let collector = PrometheusCollector::default();
+        let registry = collector.registry();
+        let families = registry.gather();
+        assert!(
+            families.is_empty(),
+            "gather should return empty when no metrics have been recorded yet"
+        );
+    }
+
+    #[test]
+    fn test_registry_returns_shared_arc() {
+        let collector = PrometheusCollector::new().unwrap();
+        let registry1 = collector.registry();
+        let registry2 = collector.registry();
+        assert!(
+            Arc::ptr_eq(&registry1, &registry2),
+            "registry() should return clones of the same Arc"
+        );
+    }
+
+    #[test]
+    fn test_record_http_request_increments_counter() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.record_http_request("GET", "/embed", 200);
+        collector.record_http_request("GET", "/embed", 200);
+        collector.record_http_request("POST", "/embed", 500);
+
+        let families = collector.registry().gather();
+        let http_metric = families
+            .iter()
+            .find(|m| m.get_name() == "http_requests_total")
+            .expect("http_requests_total should be registered");
+
+        let counters = http_metric.get_metric();
+        assert_eq!(counters.len(), 2, "should have 2 unique label combinations");
+
+        let get_200: f64 = counters
+            .iter()
+            .filter(|m| {
+                let labels = m.get_label();
+                labels.iter().any(|l| l.get_value() == "GET")
+                    && labels.iter().any(|l| l.get_value() == "200")
+            })
+            .map(|m| m.get_counter().get_value())
+            .sum();
+        assert_eq!(get_200, 2.0, "GET 200 counter should be 2");
+    }
+
+    #[test]
+    fn test_start_http_request_timer_records_observation() {
+        let collector = PrometheusCollector::new().unwrap();
+        let timer = collector.start_http_request_timer("POST", "/embed");
+        timer.observe_duration();
+
+        let families = collector.registry().gather();
+        let duration_metric = families
+            .iter()
+            .find(|m| m.get_name() == "http_request_duration_seconds")
+            .expect("http_request_duration_seconds should be registered");
+
+        let samples = duration_metric.get_metric();
+        assert!(!samples.is_empty(), "should have at least one observation");
+        assert!(
+            samples[0].get_histogram().get_sample_count() >= 1,
+            "histogram sample count should be at least 1"
+        );
+    }
+
+    #[test]
+    fn test_update_active_connections_sets_gauge() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.update_active_connections("http", 42);
+        collector.update_active_connections("grpc", 7);
+
+        let families = collector.registry().gather();
+        let gauge_metric = families
+            .iter()
+            .find(|m| m.get_name() == "active_connections")
+            .expect("active_connections should be registered");
+
+        let gauges = gauge_metric.get_metric();
+        assert_eq!(gauges.len(), 2, "should have 2 connection types");
+
+        let http_value: f64 = gauges
+            .iter()
+            .filter(|m| m.get_label().iter().any(|l| l.get_value() == "http"))
+            .map(|m| m.get_gauge().get_value())
+            .sum();
+        assert_eq!(http_value, 42.0, "http connections gauge should be 42");
+
+        let grpc_value: f64 = gauges
+            .iter()
+            .filter(|m| m.get_label().iter().any(|l| l.get_value() == "grpc"))
+            .map(|m| m.get_gauge().get_value())
+            .sum();
+        assert_eq!(grpc_value, 7.0, "grpc connections gauge should be 7");
+    }
+
+    #[test]
+    fn test_update_active_connections_overwrites_previous_value() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.update_active_connections("http", 10);
+        collector.update_active_connections("http", 25);
+
+        let families = collector.registry().gather();
+        let gauge_metric = families
+            .iter()
+            .find(|m| m.get_name() == "active_connections")
+            .unwrap();
+        let gauge = &gauge_metric.get_metric()[0];
+        assert_eq!(
+            gauge.get_gauge().get_value(),
+            25.0,
+            "gauge should reflect the latest set value"
+        );
+    }
+
+    #[test]
+    fn test_record_batch_size_observes_histogram() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.record_batch_size("embed", 8.0);
+        collector.record_batch_size("embed", 16.0);
+        collector.record_batch_size("search", 4.0);
+
+        let families = collector.registry().gather();
+        let batch_metric = families
+            .iter()
+            .find(|m| m.get_name() == "batch_size")
+            .expect("batch_size should be registered");
+
+        let histograms = batch_metric.get_metric();
+        assert_eq!(histograms.len(), 2, "should have 2 operations");
+
+        let embed_count: u64 = histograms
+            .iter()
+            .filter(|m| m.get_label().iter().any(|l| l.get_value() == "embed"))
+            .map(|m| m.get_histogram().get_sample_count())
+            .sum();
+        assert_eq!(embed_count, 2, "embed operation should have 2 observations");
+    }
+
+    #[test]
+    fn test_record_cache_hit_and_miss() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.record_cache_hit("embedding");
+        collector.record_cache_hit("embedding");
+        collector.record_cache_miss("embedding");
+
+        let families = collector.registry().gather();
+
+        let hits_metric = families
+            .iter()
+            .find(|m| m.get_name() == "cache_hits_total")
+            .expect("cache_hits_total should be registered");
+        let hits_value: f64 = hits_metric
+            .get_metric()
+            .iter()
+            .filter(|m| m.get_label().iter().any(|l| l.get_value() == "embedding"))
+            .map(|m| m.get_counter().get_value())
+            .sum();
+        assert_eq!(hits_value, 2.0, "should have 2 cache hits");
+
+        let misses_metric = families
+            .iter()
+            .find(|m| m.get_name() == "cache_misses_total")
+            .expect("cache_misses_total should be registered");
+        let misses_value: f64 = misses_metric
+            .get_metric()
+            .iter()
+            .filter(|m| m.get_label().iter().any(|l| l.get_value() == "embedding"))
+            .map(|m| m.get_counter().get_value())
+            .sum();
+        assert_eq!(misses_value, 1.0, "should have 1 cache miss");
+    }
+
+    #[test]
+    fn test_get_cache_hit_rate_empty() {
+        let collector = PrometheusCollector::new().unwrap();
+        let rate = collector.get_cache_hit_rate("embedding");
+        assert_eq!(rate, 0.0, "hit rate should be 0 when no hits or misses");
+    }
+
+    #[test]
+    fn test_get_cache_hit_rate_all_hits() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.record_cache_hit("embedding");
+        collector.record_cache_hit("embedding");
+        let rate = collector.get_cache_hit_rate("embedding");
+        assert_eq!(rate, 1.0, "hit rate should be 1.0 when all hits");
+    }
+
+    #[test]
+    fn test_get_cache_hit_rate_all_misses() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.record_cache_miss("embedding");
+        collector.record_cache_miss("embedding");
+        let rate = collector.get_cache_hit_rate("embedding");
+        assert_eq!(rate, 0.0, "hit rate should be 0.0 when all misses");
+    }
+
+    #[test]
+    fn test_get_cache_hit_rate_mixed() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.record_cache_hit("embedding");
+        collector.record_cache_hit("embedding");
+        collector.record_cache_miss("embedding");
+        collector.record_cache_miss("embedding");
+        let rate = collector.get_cache_hit_rate("embedding");
+        assert_eq!(rate, 0.5, "hit rate should be 0.5 for 2 hits / 4 total");
+    }
+
+    #[test]
+    fn test_get_cache_hit_rate_independent_per_type() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.record_cache_hit("type_a");
+        collector.record_cache_miss("type_a");
+        collector.record_cache_hit("type_b");
+        collector.record_cache_hit("type_b");
+
+        let rate_a = collector.get_cache_hit_rate("type_a");
+        let rate_b = collector.get_cache_hit_rate("type_b");
+        assert_eq!(rate_a, 0.5, "type_a should have 0.5 hit rate");
+        assert_eq!(rate_b, 1.0, "type_b should have 1.0 hit rate");
+    }
+
+    #[test]
+    fn test_metrics_export_format() {
+        use prometheus::Encoder;
+        let collector = PrometheusCollector::new().unwrap();
+        collector.record_http_request("GET", "/health", 200);
+        collector.update_active_connections("http", 1);
+
+        let encoder = prometheus::TextEncoder::new();
+        let families = collector.registry().gather();
+        let mut buffer = Vec::new();
+        encoder
+            .encode(&families, &mut buffer)
+            .expect("encode failed");
+        let output = String::from_utf8(buffer).expect("output should be valid UTF-8");
+
+        assert!(
+            output.contains("http_requests_total"),
+            "output should contain http_requests_total"
+        );
+        assert!(
+            output.contains("active_connections"),
+            "output should contain active_connections"
+        );
+        assert!(
+            output.contains("# HELP"),
+            "output should contain HELP lines"
+        );
+        assert!(
+            output.contains("# TYPE"),
+            "output should contain TYPE lines"
+        );
+    }
+}

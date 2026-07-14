@@ -616,3 +616,196 @@ impl InferenceEngine for OnnxEngine {
         OnnxEngine::try_fallback_to_cpu(self, config).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::{EngineType, ModelConfig};
+    use std::path::PathBuf;
+
+    fn test_config() -> ModelConfig {
+        ModelConfig {
+            name: "test-onnx".to_string(),
+            engine_type: EngineType::Onnx,
+            model_path: PathBuf::from("/nonexistent/onnx-model"),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(1024),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+        }
+    }
+
+    /// 验证 OnnxEngine::new 在空目录上返回 ModelLoadError
+    #[test]
+    fn test_onnx_engine_new_returns_error_for_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::new(&config, Precision::Fp32);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 with_device 在空目录(CPU)上返回带特定消息的 ModelLoadError
+    #[test]
+    fn test_onnx_engine_with_device_empty_dir_cpu() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
+        assert!(result.is_err());
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(
+                msg.contains("No ONNX model found"),
+                "Expected 'No ONNX model found', got: {}",
+                msg
+            );
+        }
+    }
+
+    /// 验证 FP16 精度在空目录上仍返回错误
+    #[test]
+    fn test_onnx_engine_with_device_fp16_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp16, DeviceType::Cpu);
+        assert!(result.is_err());
+    }
+
+    /// 验证 INT8 精度在空目录上仍返回错误
+    #[test]
+    fn test_onnx_engine_with_device_int8_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Int8, DeviceType::Cpu);
+        assert!(result.is_err());
+    }
+
+    /// 验证 CUDA 设备类型在空目录上返回错误(覆盖 supports_cuda 分支)
+    #[test]
+    fn test_onnx_engine_with_device_cuda_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cuda);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 AMD 设备类型在空目录上返回错误(覆盖 supports_amd 分支)
+    #[test]
+    fn test_onnx_engine_with_device_amd_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Amd);
+        assert!(result.is_err());
+    }
+
+    /// 验证 OpenCL 设备类型在空目录上返回错误
+    #[test]
+    fn test_onnx_engine_with_device_opencl_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::OpenCL);
+        assert!(result.is_err());
+    }
+
+    /// 验证存在 model.onnx 但缺失 tokenizer.json 时返回 "Tokenizer not found" 错误
+    #[test]
+    fn test_onnx_engine_with_model_but_no_tokenizer() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
+        assert!(result.is_err());
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(
+                msg.contains("Tokenizer not found"),
+                "Expected 'Tokenizer not found', got: {}",
+                msg
+            );
+        }
+    }
+
+    /// 验证存在 model_quantized.onnx(优先于 model.onnx)但缺失 tokenizer.json 时返回错误
+    #[test]
+    fn test_onnx_engine_prefers_quantized_model_but_no_tokenizer() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(
+            temp_dir.path().join("model_quantized.onnx"),
+            b"fake quantized",
+        )
+        .expect("Failed to write fake model_quantized.onnx");
+        std::fs::write(temp_dir.path().join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
+        assert!(result.is_err());
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(
+                msg.contains("Tokenizer not found"),
+                "Expected 'Tokenizer not found', got: {}",
+                msg
+            );
+        }
+    }
+
+    /// 验证 `Precision` 的 Display 实现
+    #[test]
+    fn test_precision_display() {
+        assert_eq!(Precision::Fp32.to_string(), "fp32");
+        assert_eq!(Precision::Fp16.to_string(), "fp16");
+        assert_eq!(Precision::Int8.to_string(), "int8");
+    }
+
+    /// 验证 `DeviceType` 的序列化形式(serde rename)
+    #[test]
+    fn test_device_type_serialization() {
+        assert_eq!(
+            serde_json::to_string(&DeviceType::Cpu).expect("serialize Cpu"),
+            "\"cpu\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DeviceType::Amd).expect("serialize Amd"),
+            "\"amd\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DeviceType::OpenCL).expect("serialize OpenCL"),
+            "\"opencl\""
+        );
+    }
+}

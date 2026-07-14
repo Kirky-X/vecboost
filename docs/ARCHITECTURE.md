@@ -186,12 +186,9 @@ graph TB
 VecBoost v0.2.0 uses `sdforge` to generate multiple protocol bindings from a single API definition source. This eliminates duplicated interface code across HTTP, MCP, and CLI.
 
 > **⚠️ v0.2.0 实际实施状态(Converge 阶段偏离)**:
-> - `sdforge` 宏注解(`#[service_api]`/`#[forge]`)**未在 `src/api/mod.rs` 实际使用**,3 个 API 函数均为普通 `async fn`,签名接收 `service: &EmbeddingService` 而非 `kit: &Kit`
-> - HTTP 路由由 `src/routes/embedding.rs` 手写 Axum handler(非 sdforge 生成)
-> - CLI 由 `src/cli/mod.rs` 手写 clap `#[derive(Parser)]`(非 sdforge 生成)
-> - MCP 协议**完全未实现**(无 `rmcp` 依赖,无 MCP server 代码)
-> - `Cargo.toml` 已声明 `sdforge = { version = "0.4", optional = true }` 依赖 + `http`/`cli` 两个 feature 透传(`mcp` 因 sdforge 0.4 集成未完成而未启用),仅作为依赖声明保留
-> - 完整 sdforge 宏生成机制推迟到 **v0.3.0**
+> - `sdforge` 宏注解(`#[forge]`)**未在 HTTP/CLI 生成中使用**——HTTP 路由由 `src/routes/embedding.rs` 手写 Axum handler,CLI 由 `src/cli/mod.rs` 手写 clap `#[derive(Parser)]`
+> - **但 MCP 协议已用 sdforge 宏生成**:`src/api/mod.rs` 的 3 个 `#[forge(tool_name=...)]` 函数(embed/embed_batch/compute_similarity)在 `mcp` feature 下经 `sdforge::mcp::build()` 收集为 MCP 工具并走 stdio;工具逻辑复用 `src/api/mod.rs` 的 `forge_*` 函数,通过全局 `SERVICE` 单例访问 `EmbeddingService`
+> - `mcp` feature 透传 `sdforge/mcp`,后者依赖 `rmcp ~2.1`(本 crate 声明同版本 `rmcp = { version = "2.1", optional = true }` 以复用 sdforge 内部的 rmcp,避免版本冲突);HTTP/CLI 的 sdforge 宏生成机制仍推迟到 **v0.3.0**
 > - 详见 `specmark/changes/vecboost-v0.2.0-ecosystem-refactor/design.md` D5 决策 + "实施偏离记录"
 
 ```mermaid
@@ -228,7 +225,7 @@ sequenceDiagram
 |----------|-------------|---------|---------------|-------------|----------|
 | HTTP/REST | `http` | ✅ | ✅ Implemented (hand-written Axum) | `src/routes/` + Axum | Web/API integration, OpenAPI docs |
 | gRPC | `grpc` | - | ✅ Implemented (tonic) | `src/grpc/` + tonic | High-performance binary RPC |
-| MCP | `mcp` | - | ⏳ Deferred to v0.3.0 | sdforge MCP binding (planned) | LLM tool integration (AI Agents) |
+| MCP | `mcp` | - | ✅ Implemented (sdforge `#[forge]` → `sdforge::mcp`, stdio) | `src/api/mod.rs` `#[forge(tool_name=...)]` | LLM tool integration (AI Agents) |
 | CLI | `cli` | - | ✅ Implemented (hand-written clap) | `src/cli/` + clap | Command-line usage, scripting |
 
 ### 4.2 API Definition Pattern
@@ -249,7 +246,7 @@ pub async fn embed_batch(texts: Vec<String>) -> Result<BatchEmbedResponse, Vecbo
 pub async fn compute_similarity(source: String, target: String) -> Result<SimilarityResponse, VecboostError> { ... }
 ```
 
-> **⚠️ v0.2.0 实际实施状态**: 上述 `#[service_api]` 宏注解 **未在 `src/api/mod.rs` 实际使用**。v0.2.0 中 `src/api/mod.rs:33-66` 的 3 个函数(embed/embed_batch/compute_similarity)均为普通 `async fn`,签名接收 `service: &EmbeddingService` 而非 `kit: &Kit`。HTTP 路由由 `src/routes/embedding.rs` 手写,CLI 由 `src/cli/mod.rs` 手写 clap,MCP 协议未实现。完整 sdforge 宏生成机制推迟到 v0.3.0。
+> **⚠️ v0.2.0 实际实施状态**: `#[service_api]` 宏注解 **未在 HTTP/CLI 中使用**;`src/api/mod.rs` 的 3 个 `#[forge]` 函数(embed/embed_batch/compute_similarity)为普通 `async fn`,签名接收 `service: &EmbeddingService`。HTTP 路由由 `src/routes/embedding.rs` 手写,CLI 由 `src/cli/mod.rs` 手写 clap。但 **MCP 协议已用 sdforge `#[forge]` 宏生成**(`src/api/mod.rs` 在 `mcp` feature 下经 `sdforge::mcp::build()` 收集工具),不再走独立手写 `rmcp`。完整 HTTP/CLI 的 sdforge 宏生成机制推迟到 v0.3.0。
 
 ## 5. Engine Abstraction
 

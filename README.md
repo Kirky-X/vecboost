@@ -93,11 +93,14 @@ cargo build --release --features metal
 # 4. 构建多协议接口（HTTP + CLI）
 cargo build --release --features http,cli
 
+# 4b. 构建 MCP 接口（stdio 模式，--mcp 启动）
+cargo build --release --features mcp
+
 # 5. 构建完整生态（数据库 + 日志 + 认证 + 全协议）
 cargo build --release --features http,cli,db,inklog,auth,oxcache,limiteron
 
-# 6. 构建全部功能（含 GPU + ONNX）
-cargo build --release --features cuda,onnx,grpc,auth,redis,db,inklog,cli
+# 6. 构建全部功能（含 GPU + ONNX + MCP）
+cargo build --release --features cuda,onnx,grpc,mcp,auth,redis,db,inklog,cli
 ```
 
 ### ⚙️ 配置
@@ -261,13 +264,13 @@ curl -X POST http://localhost:9002/v1/embeddings \
 
 VecBoost v0.2.0 通过 `sdforge` 从单一源定义生成 4 种协议接口，启用对应 feature 即可获得。
 
-> **⚠️ v0.2.0 实施状态说明**: `sdforge` 宏注解（`#[service_api]`/`#[forge]`）在 v0.2.0 **未实际落地**，HTTP 路由由 `src/routes/` 手写 Axum handler，CLI 由 `src/cli/` 手写 clap，MCP 协议未实现。完整 sdforge 宏生成机制推迟到 v0.3.0。详见 `specmark/changes/vecboost-v0.2.0-ecosystem-refactor/design.md` D5 决策。
+> **⚠️ v0.2.0 实施状态说明**: `sdforge` 的 `#[forge]` 宏 **已用于 MCP 生成**(在 `src/api/mod.rs` 为 embed/embed_batch/compute_similarity 标注 `#[forge(tool_name=...)]`，由 `mcp` feature 经 `sdforge::mcp::build()` 收集为 MCP 工具并经 stdio 暴露)。HTTP 路由仍由 `src/routes/` 手写 Axum handler，CLI 由 `src/cli/` 手写 clap。完整 HTTP/CLI 的 sdforge 宏生成机制推迟到 v0.3.0。详见 `specmark/changes/vecboost-v0.2.0-ecosystem-refactor/design.md` D5 决策。
 
 | 协议 | Feature | 端口 | v0.2.0 状态 | 说明 |
 |------|---------|------|------------|------|
 | **HTTP/REST** | `http` | `9002` | ✅ 已实现(手写 Axum) | RESTful API + OpenAPI 文档 |
 | **gRPC** | `grpc` | `50051` | ✅ 已实现(tonic) | 高性能二进制协议（proto 定义见 `proto/`） |
-| **MCP** | `mcp` | - | ⏳ 推迟到 v0.3.0 | Model Context Protocol（LLM 工具集成） |
+| **MCP** | `mcp` | stdio | ✅ 已实现(sdforge `#[forge]` 生成) | Model Context Protocol（LLM 工具集成），`--mcp` 以 stdio 模式启动 |
 | **CLI** | `cli` | - | ✅ 已实现(手写 clap) | 命令行工具（`vecboost embed --text "Hello"`） |
 
 **CLI 使用示例：**
@@ -283,7 +286,23 @@ cargo run --features cli -- batch --input texts.txt
 cargo run --features cli -- similarity --text1 "机器学习" --text2 "人工智能"
 ```
 
-> **💡 说明**: MCP 协议用于将 VecBoost 嵌入能力暴露为 LLM 可调用的工具，适用于 AI Agent 场景。v0.3.0 将基于 `rmcp` 实现。
+**MCP 使用示例（stdio 模式）：**
+
+```bash
+# 以 stdio 模式启动 MCP 服务器（stdout 为 JSON-RPC 流，不启动 HTTP/gRPC）
+cargo run --features mcp -- --mcp
+
+# 在 MCP 客户端（如 Claude Desktop / 任意 MCP host）中配置 stdio 启动命令：
+# vecboost --mcp
+#
+# 暴露的工具：
+#   - embed        单文本向量化
+#   - embed_batch  批量文本向量化
+#   - similarity   两文本余弦相似度
+#   - list_models  列出可用/已加载模型
+```
+
+> **💡 说明**: MCP 协议用于将 VecBoost 嵌入能力暴露为 LLM 可调用的工具，适用于 AI Agent 场景。v0.2.0 基于 `sdforge` `#[forge]` 生成，提供 `embed_text` / `embed_batch` / `compute_similarity` 三个工具（由 `src/api/mod.rs` 的 `#[forge(tool_name=...)]` 经 `sdforge::mcp::build()` 收集），通过 `cargo run --features mcp -- --mcp` 以 stdio 模式启动（stdout 专用于 JSON-RPC 流，此时不启动 HTTP/gRPC 服务）。
 
 ### 🔧 新引擎支持
 
@@ -308,7 +327,7 @@ VecBoost 采用特性化构建，按需启用功能模块：
 | `oxcache` | ✅ | oxcache 缓存后端 | oxcache |
 | `limiteron` | ✅ | limiteron 限流器 | limiteron |
 | `grpc` | - | gRPC 服务器 | tonic |
-| `mcp` | - | MCP 协议接口（LLM 工具集成） | sdforge |
+| `mcp` | - | MCP 协议接口（LLM 工具集成，sdforge `#[forge]` 生成） | sdforge (`sdforge/mcp` → rmcp) |
 | `cli` | - | CLI 命令行工具 | sdforge, clap |
 | `db` | - | dbnexus 数据库持久化（SQLite） | dbnexus |
 | `postgres` | - | PostgreSQL 支持（含 db） | dbnexus |

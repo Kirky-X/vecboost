@@ -489,4 +489,288 @@ mod tests {
         let stats = manager.get_performance_stats().await;
         assert_eq!(stats.current_batch_size, 16);
     }
+
+    #[test]
+    fn test_gpu_memory_config_default() {
+        let config = GpuMemoryConfig::default();
+        assert!((config.safety_threshold - 0.8).abs() < f64::EPSILON);
+        assert_eq!(config.min_batch_size, 1);
+        assert_eq!(config.max_batch_size, 256);
+        assert!(config.dynamic_adjustment);
+        assert_eq!(config.monitor_interval_secs, 5);
+    }
+
+    #[test]
+    fn test_calculate_optimal_batch_size_unregistered_model_errors() {
+        let manager =
+            SmartGpuMemoryManager::new(8 * 1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        let result = manager.calculate_optimal_batch_size("nonexistent", 256, 1024);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not registered"));
+    }
+
+    #[test]
+    fn test_calculate_optimal_batch_size_uses_min_when_insufficient() {
+        let config = GpuMemoryConfig {
+            min_batch_size: 1,
+            max_batch_size: 256,
+            ..Default::default()
+        };
+        let mut manager = SmartGpuMemoryManager::new(1024, config);
+
+        let requirements = ModelMemoryRequirements {
+            model_name: "big-model".to_string(),
+            base_memory_bytes: 2 * 1024,
+            per_token_memory_bytes: 100,
+            per_vector_memory_bytes: 100,
+            max_sequence_length: 512,
+        };
+        manager.register_model(requirements);
+
+        let batch_size = manager
+            .calculate_optimal_batch_size("big-model", 256, 1024)
+            .expect("Should return minimum batch size");
+        assert_eq!(batch_size, 1);
+    }
+
+    #[test]
+    fn test_calculate_optimal_batch_size_caps_sequence_length() {
+        let mut manager =
+            SmartGpuMemoryManager::new(8 * 1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        let requirements = ModelMemoryRequirements {
+            model_name: "test-model".to_string(),
+            base_memory_bytes: 100_000_000,
+            per_token_memory_bytes: 1000,
+            per_vector_memory_bytes: 4000,
+            max_sequence_length: 128,
+        };
+        manager.register_model(requirements);
+
+        let result = manager
+            .calculate_optimal_batch_size("test-model", 1024, 768)
+            .expect("Should calculate");
+
+        let capped_result = manager
+            .calculate_optimal_batch_size("test-model", 128, 768)
+            .expect("Should calculate");
+
+        assert_eq!(result, capped_result);
+    }
+
+    #[test]
+    fn test_adjust_batch_size_dynamically_disabled() {
+        let config = GpuMemoryConfig {
+            dynamic_adjustment: false,
+            ..Default::default()
+        };
+        let mut manager = SmartGpuMemoryManager::new(8 * 1024 * 1024 * 1024, config);
+
+        let initial = manager.current_batch_size;
+        manager.adjust_batch_size_dynamically(20.0, 60.0);
+        assert_eq!(manager.current_batch_size, initial);
+    }
+
+    #[test]
+    fn test_adjust_batch_size_dynamically_insufficient_samples() {
+        let mut manager =
+            SmartGpuMemoryManager::new(8 * 1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        let initial = manager.current_batch_size;
+        for _ in 0..4 {
+            manager.adjust_batch_size_dynamically(20.0, 60.0);
+        }
+        assert_eq!(manager.current_batch_size, initial);
+    }
+
+    #[test]
+    fn test_adjust_batch_size_dynamically_no_change_in_middle_range() {
+        let mut manager =
+            SmartGpuMemoryManager::new(8 * 1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        let initial = manager.current_batch_size;
+        for _ in 0..6 {
+            manager.adjust_batch_size_dynamically(50.0, 80.0);
+        }
+        assert_eq!(manager.current_batch_size, initial);
+    }
+
+    #[test]
+    fn test_adjust_batch_size_dynamically_increases_on_good_performance() {
+        let mut manager =
+            SmartGpuMemoryManager::new(8 * 1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        let initial = manager.current_batch_size;
+        for _ in 0..6 {
+            manager.adjust_batch_size_dynamically(20.0, 60.0);
+        }
+        assert!(manager.current_batch_size > initial);
+    }
+
+    #[test]
+    fn test_adjust_batch_size_dynamically_decreases_on_poor_performance() {
+        let mut manager =
+            SmartGpuMemoryManager::new(8 * 1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        for _ in 0..6 {
+            manager.adjust_batch_size_dynamically(20.0, 60.0);
+        }
+        let increased = manager.current_batch_size;
+
+        for _ in 0..6 {
+            manager.adjust_batch_size_dynamically(150.0, 95.0);
+        }
+        assert!(manager.current_batch_size <= increased);
+    }
+
+    #[test]
+    fn test_allocate_success() {
+        let mut manager =
+            SmartGpuMemoryManager::new(1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        assert!(manager.allocate(512 * 1024 * 1024).is_ok());
+        assert_eq!(manager.available_memory(), 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_allocate_insufficient_memory() {
+        let mut manager =
+            SmartGpuMemoryManager::new(1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        let result = manager.allocate(2 * 1024 * 1024 * 1024);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Insufficient"));
+    }
+
+    #[test]
+    fn test_deallocate_normal() {
+        let mut manager =
+            SmartGpuMemoryManager::new(1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        manager.allocate(512 * 1024 * 1024).unwrap();
+        manager.deallocate(256 * 1024 * 1024);
+        assert_eq!(manager.available_memory(), 768 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_deallocate_more_than_allocated_resets_to_zero() {
+        let mut manager =
+            SmartGpuMemoryManager::new(1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        manager.allocate(256 * 1024 * 1024).unwrap();
+        manager.deallocate(512 * 1024 * 1024);
+        assert_eq!(manager.available_memory(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_get_performance_stats_empty_history() {
+        let manager = SmartGpuMemoryManager::new(1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        let stats = manager.get_performance_stats();
+        assert_eq!(stats.avg_latency_ms, 0.0);
+        assert_eq!(stats.p95_latency_ms, 0.0);
+        assert_eq!(stats.p99_latency_ms, 0.0);
+        assert_eq!(stats.avg_throughput_req_per_sec, 0.0);
+        assert_eq!(stats.max_throughput_req_per_sec, 0.0);
+        assert_eq!(stats.current_batch_size, 16);
+        assert_eq!(stats.memory_usage_percent, 0.0);
+    }
+
+    #[test]
+    fn test_get_performance_stats_with_history() {
+        let mut manager =
+            SmartGpuMemoryManager::new(1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        for _ in 0..6 {
+            manager.adjust_batch_size_dynamically(30.0, 50.0);
+        }
+        let stats = manager.get_performance_stats();
+        assert!(stats.avg_latency_ms > 0.0);
+        assert!(stats.p95_latency_ms > 0.0);
+        assert!(stats.p99_latency_ms > 0.0);
+        assert!(stats.avg_throughput_req_per_sec > 0.0);
+        assert!(stats.max_throughput_req_per_sec > 0.0);
+    }
+
+    #[test]
+    fn test_memory_usage_percent() {
+        let mut manager =
+            SmartGpuMemoryManager::new(1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        assert!((manager.memory_usage_percent() - 0.0).abs() < 0.1);
+
+        manager.allocate(512 * 1024 * 1024).unwrap();
+        assert!((manager.memory_usage_percent() - 50.0).abs() < 0.1);
+    }
+
+    #[tokio::test]
+    async fn test_shared_manager_allocate_and_deallocate() {
+        let manager = SharedGpuMemoryManager::new(1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        assert!(manager.allocate(256 * 1024 * 1024).await.is_ok());
+        assert_eq!(manager.get_available_memory().await, 768 * 1024 * 1024);
+
+        manager.deallocate(128 * 1024 * 1024).await;
+        assert_eq!(manager.get_available_memory().await, 896 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn test_shared_manager_allocate_insufficient() {
+        let manager = SharedGpuMemoryManager::new(1024, GpuMemoryConfig::default());
+
+        let result = manager.allocate(2048).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_shared_manager_get_memory_usage_percent() {
+        let manager = SharedGpuMemoryManager::new(1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        assert!((manager.get_memory_usage_percent().await - 0.0).abs() < 0.1);
+
+        manager.allocate(512 * 1024 * 1024).await.unwrap();
+        assert!((manager.get_memory_usage_percent().await - 50.0).abs() < 0.1);
+    }
+
+    #[tokio::test]
+    async fn test_shared_manager_register_model_and_calculate() {
+        let manager =
+            SharedGpuMemoryManager::new(8 * 1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        let requirements = ModelMemoryRequirements {
+            model_name: "test-model".to_string(),
+            base_memory_bytes: 100_000_000,
+            per_token_memory_bytes: 1000,
+            per_vector_memory_bytes: 4000,
+            max_sequence_length: 512,
+        };
+        manager.register_model(requirements).await;
+
+        let result = manager
+            .calculate_optimal_batch_size("test-model", 256, 1024)
+            .await;
+        assert!(result.is_ok());
+        assert!(result.unwrap() >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_shared_manager_calculate_unregistered_model_errors() {
+        let manager =
+            SharedGpuMemoryManager::new(8 * 1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        let result = manager
+            .calculate_optimal_batch_size("nonexistent", 256, 1024)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_shared_manager_get_performance_stats_empty() {
+        let manager = SharedGpuMemoryManager::new(1024 * 1024 * 1024, GpuMemoryConfig::default());
+
+        let stats = manager.get_performance_stats().await;
+        assert_eq!(stats.avg_latency_ms, 0.0);
+        assert_eq!(stats.current_batch_size, 16);
+    }
 }

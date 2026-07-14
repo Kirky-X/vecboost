@@ -1278,4 +1278,125 @@ mod tests {
         assert_eq!(fs::read_to_string(&file1).unwrap(), "original1");
         assert_eq!(fs::read_to_string(&file2).unwrap(), "original2");
     }
+
+    /// 验证 recover_corrupted_files 处理空字符串路径时使用 "unknown" 作为文件名。
+    #[test]
+    fn test_recover_corrupted_files_empty_string_path() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let recovery = ModelRecovery::with_default_config();
+
+        let result = recovery
+            .recover_corrupted_files("test_model", model_path, None, &["".to_string()])
+            .unwrap();
+
+        assert!(!result.success);
+        assert!(result.recovered_files.is_empty());
+        assert_eq!(result.failed_files, vec!["".to_string()]);
+        assert!(result.backup_paths.is_empty());
+        assert_eq!(result.attempts, 0);
+    }
+
+    /// 验证 backup_corrupted_file 对目录路径返回错误(fs::copy 不支持目录)。
+    #[test]
+    fn test_backup_corrupted_file_directory_path_fails() {
+        let temp_dir = tempdir().unwrap();
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery.backup_corrupted_file(temp_dir.path());
+        assert!(result.is_err());
+        match result {
+            Err(VecboostError::IoError(msg)) => {
+                assert!(msg.contains("Failed to backup corrupted file"));
+            }
+            Err(e) => panic!("Expected IoError, got: {:?}", e),
+            Ok(_) => panic!("Expected error for directory backup"),
+        }
+    }
+
+    /// 验证 recover_single_file 在 max_retries=0 时不进入重试循环,
+    /// 直接返回 Ok(false)(本地路径无 repo_id 分支)。
+    #[test]
+    fn test_recover_single_file_local_no_repo_zero_retries() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let mut attempts = 0;
+
+        let config = RecoveryConfig {
+            max_retries: 0,
+            ..RecoveryConfig::default()
+        };
+        let recovery = ModelRecovery::new(config);
+        let result = recovery
+            .recover_single_file(model_path, None, "config.json", &mut attempts)
+            .unwrap();
+
+        assert!(!result);
+        assert_eq!(attempts, 0, "attempts must remain 0 with max_retries=0");
+    }
+
+    /// 验证 recover_corrupted_files 在 recovered_files 为空时跳过 verify_after_recovery,
+    /// 即使 verify_after_recovery=true 也不调用 verify_recovered_files。
+    #[test]
+    fn test_recover_corrupted_files_verify_skipped_when_no_recovered() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let corrupted_file = temp_dir.path().join("config.json");
+        fs::write(&corrupted_file, b"corrupted").unwrap();
+        let corrupted_file_str = corrupted_file.to_string_lossy().to_string();
+
+        let config = RecoveryConfig {
+            verify_after_recovery: true,
+            ..RecoveryConfig::default()
+        };
+        let recovery = ModelRecovery::new(config);
+        let result = recovery
+            .recover_corrupted_files("test_model", model_path, None, &[corrupted_file_str])
+            .unwrap();
+
+        assert!(!result.success);
+        assert!(result.recovered_files.is_empty());
+        assert_eq!(result.failed_files.len(), 1);
+    }
+
+    /// 验证 recover_corrupted_files 处理无文件名路径(如 "/")时使用 "unknown"。
+    #[test]
+    fn test_recover_corrupted_files_root_path_uses_unknown_filename() {
+        let temp_dir = tempdir().unwrap();
+        let model_path = temp_dir.path();
+        let recovery = ModelRecovery::with_default_config();
+
+        // "/" 是目录,backup 会失败(fs::copy 不支持目录),错误通过 ? 传播
+        let result =
+            recovery.recover_corrupted_files("test_model", model_path, None, &["/".to_string()]);
+        assert!(
+            result.is_err(),
+            "backup of directory '/' should propagate error"
+        );
+    }
+
+    /// 验证 attempt_recovery_with_integrity_check 在 corrupted_files 含空字符串时正确处理。
+    #[test]
+    fn test_attempt_recovery_with_empty_string_corrupted_file() {
+        let temp_dir = tempdir().unwrap();
+        let integrity_report = ModelIntegrityReport {
+            model_name: "test_model".to_string(),
+            files_checked: vec![],
+            overall_valid: false,
+            corrupted_files: vec!["".to_string()],
+        };
+
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .attempt_recovery_with_integrity_check(
+                "test_model",
+                temp_dir.path(),
+                None,
+                &integrity_report,
+            )
+            .unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.failed_files, vec!["".to_string()]);
+        assert!(result.backup_paths.is_empty());
+    }
 }

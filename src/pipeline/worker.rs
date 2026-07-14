@@ -1568,4 +1568,201 @@ mod tests {
         assert_eq!(health[0].worker_id, 0);
         assert!(!health[0].is_alive);
     }
+
+    /// 验证 start_scaling_monitor 在队列压力超过阈值时扩容 worker。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_scaling_monitor_scales_up_workers() {
+        let queue = Arc::new(PriorityRequestQueue::new(500));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig {
+            min_workers: 0,
+            max_workers: 4,
+            scale_up_threshold: 10,
+            scale_down_threshold: 5,
+            idle_timeout_secs: 60,
+            scale_check_interval_secs: 1,
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let manager = WorkerManager::new(
+            Arc::clone(&queue),
+            Arc::clone(&response_channel),
+            config,
+            service,
+        );
+
+        for i in 0..200 {
+            let (tx, _) = tokio::sync::oneshot::channel();
+            let request = QueuedRequest {
+                request_id: format!("scale-up-{}", i),
+                embed_request: EmbedRequest {
+                    text: format!("text-{}", i),
+                    normalize: Some(true),
+                },
+                priority: Priority::Normal,
+                submitted_at: std::time::Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::http("127.0.0.1".to_string()),
+                response_tx: tx,
+            };
+            queue.enqueue(request).await.unwrap();
+        }
+
+        manager.start().await.unwrap();
+        assert_eq!(manager.current_workers(), 0, "start() spawns min_workers=0");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if manager.current_workers() > 0 {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "scaling monitor did not scale up within 10s (current_workers={})",
+                    manager.current_workers()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            manager.current_workers() > 0,
+            "workers should have been scaled up"
+        );
+
+        manager.running.store(false, Ordering::SeqCst);
+        let senders = manager.worker_senders.lock().await.clone();
+        for s in &senders {
+            let _ = s.send(WorkerTask::Shutdown { immediate: true }).await;
+        }
+        let stop_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if manager.current_workers() == 0 {
+                break;
+            }
+            if tokio::time::Instant::now() >= stop_deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// 验证 start_scaling_monitor 在队列空闲时缩容 worker。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_scaling_monitor_scales_down_workers() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig {
+            min_workers: 1,
+            max_workers: 4,
+            scale_up_threshold: 100,
+            scale_down_threshold: 10,
+            idle_timeout_secs: 60,
+            scale_check_interval_secs: 1,
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let manager = WorkerManager::new(
+            Arc::clone(&queue),
+            Arc::clone(&response_channel),
+            config,
+            service,
+        );
+
+        manager.start().await.unwrap();
+        assert_eq!(manager.current_workers(), 1, "start() spawns min_workers=1");
+
+        manager.spawn_worker().await;
+        manager.spawn_worker().await;
+        assert_eq!(manager.current_workers(), 3);
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if manager.current_workers() < 3 {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "scaling monitor did not scale down within 10s (current_workers={})",
+                    manager.current_workers()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            manager.current_workers() < 3,
+            "workers should have been scaled down"
+        );
+
+        manager.running.store(false, Ordering::SeqCst);
+        let senders = manager.worker_senders.lock().await.clone();
+        for s in &senders {
+            let _ = s.send(WorkerTask::Shutdown { immediate: true }).await;
+        }
+        let stop_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if manager.current_workers() == 0 {
+                break;
+            }
+            if tokio::time::Instant::now() >= stop_deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// 验证 worker_loop 在队列空且 task channel 关闭时进入 idle backoff else 分支。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_worker_loop_enters_idle_backoff_when_channel_closed() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig {
+            min_workers: 0,
+            max_workers: 2,
+            ..Default::default()
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let manager = WorkerManager::new(queue, response_channel, config, service);
+
+        manager.spawn_worker().await;
+        assert_eq!(manager.current_workers(), 1);
+
+        // 关闭 task channel:清空 senders 使 task_receiver.recv() 返回 None,
+        // 同时队列为空 → select! 进入 else 分支(idle backoff)
+        {
+            let mut senders = manager.worker_senders.lock().await;
+            senders.clear();
+        }
+
+        // 等待 idle backoff 首次执行(首次 sleep = 100 * 2^1 = 200ms)
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // worker 仍在运行(idle_count 未超 MAX_IDLE_COUNT=10 或 worker_id 不大于 min_workers)
+        assert_eq!(
+            manager.current_workers(),
+            1,
+            "worker should still be running after idle backoff"
+        );
+
+        // 设置 running=false,worker 在下次循环顶部退出
+        manager.running.store(false, Ordering::SeqCst);
+
+        // 轮询等待退出(idle backoff sleep 可能达 5s,给 10s 余量)
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if manager.current_workers() == 0 {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "worker did not exit within 10s after running=false (current_workers={})",
+                    manager.current_workers()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }

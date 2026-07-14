@@ -340,4 +340,195 @@ mod tests {
 
         assert!((controller.usage_percent() - 50.0).abs() < 0.1);
     }
+
+    #[test]
+    fn test_memory_limit_config_default() {
+        let config = MemoryLimitConfig::default();
+        assert_eq!(config.limit_bytes, 8 * 1024 * 1024 * 1024);
+        assert_eq!(config.warning_threshold_percent, 80);
+        assert_eq!(config.critical_threshold_percent, 90);
+    }
+
+    #[tokio::test]
+    async fn test_critical_status() {
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 10 * 1024 * 1024 * 1024,
+            warning_threshold_percent: 80,
+            critical_threshold_percent: 90,
+        });
+
+        controller.update_usage(9 * 1024 * 1024 * 1024).await;
+        let status = controller.check_limit().await;
+        assert_eq!(status, MemoryLimitStatus::Critical);
+    }
+
+    #[tokio::test]
+    async fn test_usage_percent_zero_limit() {
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 0,
+            ..Default::default()
+        });
+
+        controller.update_usage(1024).await;
+        assert_eq!(controller.usage_percent(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_available_bytes_saturating_sub() {
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 1024,
+            ..Default::default()
+        });
+
+        controller.update_usage(2048).await;
+        assert_eq!(controller.available_bytes(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_set_warning_threshold_clamping() {
+        let controller = MemoryLimitController::new();
+
+        controller.set_warning_threshold(10).await;
+        let config = controller.get_config().await;
+        assert_eq!(config.warning_threshold_percent, 50);
+
+        controller.set_warning_threshold(150).await;
+        let config = controller.get_config().await;
+        assert_eq!(config.warning_threshold_percent, 99);
+    }
+
+    #[tokio::test]
+    async fn test_set_critical_threshold_clamping() {
+        let controller = MemoryLimitController::new();
+
+        controller.set_critical_threshold(10).await;
+        let config = controller.get_config().await;
+        assert_eq!(config.critical_threshold_percent, 70);
+
+        controller.set_critical_threshold(150).await;
+        let config = controller.get_config().await;
+        assert_eq!(config.critical_threshold_percent, 99);
+    }
+
+    #[tokio::test]
+    async fn test_set_warning_threshold_updates_status() {
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 10 * 1024 * 1024 * 1024,
+            warning_threshold_percent: 80,
+            critical_threshold_percent: 90,
+        });
+
+        controller.update_usage(5 * 1024 * 1024 * 1024).await;
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Ok);
+
+        controller.set_warning_threshold(40).await;
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Warning);
+    }
+
+    #[tokio::test]
+    async fn test_set_critical_threshold_updates_status() {
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 10 * 1024 * 1024 * 1024,
+            warning_threshold_percent: 80,
+            critical_threshold_percent: 90,
+        });
+
+        controller.update_usage(8 * 1024 * 1024 * 1024).await;
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Warning);
+
+        controller.set_critical_threshold(70).await;
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Critical);
+    }
+
+    #[tokio::test]
+    async fn test_should_fallback_initially_false() {
+        let controller = MemoryLimitController::new();
+        assert!(!controller.should_fallback().await);
+    }
+
+    #[tokio::test]
+    async fn test_should_fallback_after_exceeded_and_trigger() {
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 1024,
+            ..Default::default()
+        });
+
+        controller.update_usage(2048).await;
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Exceeded);
+        assert!(controller.should_fallback().await);
+
+        controller.trigger_fallback().await;
+        assert!(!controller.should_fallback().await);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_fallback_idempotent() {
+        let controller = MemoryLimitController::new();
+
+        controller.trigger_fallback().await;
+        controller.trigger_fallback().await;
+
+        let fallback = controller.should_fallback().await;
+        assert!(!fallback);
+    }
+
+    #[tokio::test]
+    async fn test_reset_clears_fallback_flag() {
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 1024,
+            ..Default::default()
+        });
+
+        controller.update_usage(2048).await;
+        controller.trigger_fallback().await;
+        assert!(!controller.should_fallback().await);
+
+        controller.reset().await;
+        assert_eq!(controller.current_usage(), 0);
+        assert_eq!(controller.peak_usage(), 0);
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Ok);
+
+        controller.update_usage(2048).await;
+        assert!(controller.should_fallback().await);
+    }
+
+    #[tokio::test]
+    async fn test_set_limit_updates_status() {
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 10 * 1024 * 1024 * 1024,
+            ..Default::default()
+        });
+
+        controller.update_usage(5 * 1024 * 1024 * 1024).await;
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Ok);
+
+        controller.set_limit(4 * 1024 * 1024 * 1024).await;
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Exceeded);
+    }
+
+    #[test]
+    fn test_block_on_sync_without_runtime() {
+        let result = block_on_sync(|| 42);
+        assert_eq!(result, 42);
+    }
+
+    #[tokio::test]
+    async fn test_block_on_sync_with_runtime() {
+        let result = block_on_sync(|| 42);
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn test_block_on_async_without_runtime() {
+        let result = block_on_async(async { 42 });
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn test_block_on_async_with_runtime_context() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let result = block_on_async(async { 42 });
+        assert_eq!(result, 42);
+    }
 }

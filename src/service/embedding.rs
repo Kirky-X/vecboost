@@ -3356,4 +3356,74 @@ mod tests {
             other => panic!("expected InvalidInput, got {:?}", other),
         }
     }
+
+    #[tokio::test]
+    async fn test_embed_file_min_pooling_mode() {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let test_file_path = temp_dir.path().join("minpool.txt");
+        std::fs::write(&test_file_path, "Line 1\nLine 2").unwrap();
+
+        let result = service
+            .embed_file(&test_file_path, AggregationMode::MinPooling)
+            .await;
+        assert!(result.is_ok());
+        match result.unwrap() {
+            EmbeddingOutput::Single(response) => {
+                assert_eq!(response.dimension, 384);
+            }
+            _ => panic!("Expected Single embedding output"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_oom_fallback_failure() {
+        let engine = ConfigurableOomEngine::new(false, false);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let req = BatchEmbedRequest {
+            texts: vec!["a".to_string(), "b".to_string()],
+            mode: None,
+            normalize: Some(true),
+        };
+        let result = service.process_batch(req, None).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::OutOfMemory(msg) => {
+                assert!(msg.contains("fallback failed"), "got: {}", msg);
+            }
+            other => panic!("expected OutOfMemory, got {:?}", other),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_embed_file_invalid_utf8_path() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid_bytes = [0xFF, 0xFE, 0xFD];
+        let os_str = std::ffi::OsStr::from_bytes(&invalid_bytes);
+        let invalid_path = std::path::Path::new(os_str);
+
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let result = service
+            .embed_file(invalid_path, AggregationMode::Document)
+            .await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => {
+                assert!(msg.contains("Invalid path encoding"), "got: {}", msg);
+            }
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
 }

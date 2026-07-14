@@ -79,4 +79,48 @@ mod tests {
         assert_eq!(capability.max_memory_bytes, 0);
         assert!(capability.compute_capability.is_none());
     }
+
+    #[test]
+    fn test_device_category_from_config_cpu() {
+        let category = DeviceCategory::from(&ConfigDeviceType::Cpu);
+        assert_eq!(category, DeviceCategory::Cpu);
+    }
+
+    #[test]
+    fn test_device_category_from_config_cuda() {
+        let category = DeviceCategory::from(&ConfigDeviceType::Cuda);
+        assert_eq!(category, DeviceCategory::Gpu);
+    }
+
+    #[test]
+    fn test_device_category_from_config_metal() {
+        let category = DeviceCategory::from(&ConfigDeviceType::Metal);
+        assert_eq!(category, DeviceCategory::Gpu);
+    }
+
+    #[test]
+    fn test_device_category_from_config_amd() {
+        let category = DeviceCategory::from(&ConfigDeviceType::Amd);
+        assert_eq!(category, DeviceCategory::Gpu);
+    }
+
+    #[test]
+    fn test_device_category_from_config_opencl() {
+        let category = DeviceCategory::from(&ConfigDeviceType::OpenCL);
+        assert_eq!(category, DeviceCategory::Gpu);
+    }
+
+    #[test]
+    fn test_device_capability_with_values() {
+        let capability = DeviceCapability {
+            supports_float16: true,
+            supports_tensor_cores: true,
+            max_memory_bytes: 8 * 1024 * 1024 * 1024,
+            compute_capability: Some((7, 5)),
+        };
+        assert!(capability.supports_float16);
+        assert!(capability.supports_tensor_cores);
+        assert_eq!(capability.max_memory_bytes, 8 * 1024 * 1024 * 1024);
+        assert_eq!(capability.compute_capability, Some((7, 5)));
+    }
 }

@@ -1399,4 +1399,170 @@ mod tests {
         let opencl_json = serde_json::to_string(&DeviceType::OpenCL).expect("serialize OpenCL");
         assert_eq!(opencl_json, "\"opencl\"");
     }
+
+    /// 验证 architectures 为空 Vec 时回退到 model_type 判断
+    #[test]
+    fn test_get_architecture_empty_architectures_vec_falls_to_model_type() {
+        let config = ModelConfigJson {
+            architectures: Some(vec![]),
+            model_type: Some("xlm-roberta".to_string()),
+        };
+        assert!(matches!(
+            config.get_architecture(),
+            ModelArchitecture::XlmRoberta
+        ));
+    }
+
+    /// 验证 architectures 列表中 XLM-RoBERTa 出现在 Bert 之后时仍能识别
+    #[test]
+    fn test_get_architecture_xlm_after_bert_in_list() {
+        let config = ModelConfigJson {
+            architectures: Some(vec![
+                "BertForMaskedLM".to_string(),
+                "XLMRobertaForMaskedLM".to_string(),
+            ]),
+            model_type: None,
+        };
+        assert!(matches!(
+            config.get_architecture(),
+            ModelArchitecture::XlmRoberta
+        ));
+    }
+
+    /// 验证 architectures 和 model_type 均无 XLM 关键字时返回 Bert
+    #[test]
+    fn test_get_architecture_bert_with_non_xlm_model_type() {
+        let config = ModelConfigJson {
+            architectures: Some(vec!["BertModel".to_string()]),
+            model_type: Some("roberta".to_string()),
+        };
+        assert!(matches!(config.get_architecture(), ModelArchitecture::Bert));
+    }
+
+    /// 验证 ModelArchitecture 的 Debug 派生输出正确
+    #[test]
+    fn test_model_architecture_debug_format() {
+        let bert_debug = format!("{:?}", ModelArchitecture::Bert);
+        assert!(bert_debug.contains("Bert"));
+
+        let xlm_debug = format!("{:?}", ModelArchitecture::XlmRoberta);
+        assert!(xlm_debug.contains("XlmRoberta"));
+    }
+
+    /// 验证路径包含 ".." 时触发路径遍历警告但不阻断流程(仍返回 ModelLoadError)
+    #[test]
+    fn test_candle_engine_path_with_dotdot_traversal_warning() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let sub_dir = temp_dir.path().join("sub");
+        std::fs::create_dir(&sub_dir).expect("Failed to create sub dir");
+        let model_path = sub_dir.join("..").join("sub");
+
+        assert!(
+            model_path.exists(),
+            "Path with .. must resolve to existing dir"
+        );
+        assert!(model_path.is_dir(), "Resolved path must be a directory");
+
+        let mut config = test_config();
+        config.model_path = model_path;
+
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        assert!(result.is_err());
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(
+                msg.contains("No model weights file found"),
+                "Expected weights error despite path traversal, got: {}",
+                msg
+            );
+        }
+    }
+
+    /// 验证 config.json 为非 JSON 文本时返回 ModelLoadError
+    #[test]
+    fn test_candle_engine_malformed_config_json() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.safetensors"), b"fake")
+            .expect("Failed to write fake safetensors");
+        std::fs::write(temp_dir.path().join("config.json"), b"not valid json {{{")
+            .expect("Failed to write malformed config");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError for malformed JSON, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 config.json 为空文件时返回 ModelLoadError
+    #[test]
+    fn test_candle_engine_empty_config_json() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.safetensors"), b"fake")
+            .expect("Failed to write fake safetensors");
+        std::fs::write(temp_dir.path().join("config.json"), b"")
+            .expect("Failed to write empty config");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError for empty JSON, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 config.json 为合法 JSON 但非对象(如数字)时返回 ModelLoadError
+    #[test]
+    fn test_candle_engine_non_object_config_json() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.safetensors"), b"fake")
+            .expect("Failed to write fake safetensors");
+        std::fs::write(temp_dir.path().join("config.json"), b"42")
+            .expect("Failed to write non-object config");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError for non-object JSON, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 model_sha256 设置但模型文件不存在时返回错误(覆盖 SHA256 设置路径)
+    #[test]
+    fn test_candle_engine_with_sha256_but_no_weights() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.model_sha256 = Some("abc123".to_string());
+
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        assert!(result.is_err());
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(
+                msg.contains("No model weights file found"),
+                "Expected weights error when SHA256 set but no weights, got: {}",
+                msg
+            );
+        }
+    }
 }

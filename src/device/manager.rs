@@ -566,4 +566,368 @@ mod tests {
         let status = manager.check_memory_limit().await;
         assert_eq!(status, MemoryLimitStatus::Ok);
     }
+
+    #[test]
+    fn test_device_info_default() {
+        let info = DeviceInfo::default();
+        assert_eq!(info.device_type, DeviceType::Cpu);
+        assert_eq!(info.name, "CPU");
+        assert_eq!(info.status, DeviceStatus::Available);
+        assert_eq!(info.memory_bytes, None);
+        assert!(info.is_default);
+    }
+
+    #[test]
+    fn test_device_status_equality() {
+        assert_eq!(DeviceStatus::Available, DeviceStatus::Available);
+        assert_ne!(DeviceStatus::Available, DeviceStatus::Busy);
+        assert_ne!(DeviceStatus::LowMemory, DeviceStatus::Unsupported);
+        assert_ne!(DeviceStatus::Unknown, DeviceStatus::Available);
+    }
+
+    #[tokio::test]
+    async fn test_gpu_info_from_stats_available() {
+        let stats = crate::monitor::GpuMemoryStats {
+            device_id: 0,
+            used_bytes: 1 * 1024 * 1024 * 1024,
+            total_bytes: 8 * 1024 * 1024 * 1024,
+            available_bytes: 7 * 1024 * 1024 * 1024,
+            utilization_percent: 12.5,
+        };
+
+        let gpu_info = GpuInfo::from_gpu_memory_stats(0, "GPU 0".to_string(), stats);
+        assert_eq!(gpu_info.device_id, 0);
+        assert_eq!(gpu_info.name, "GPU 0");
+        assert_eq!(gpu_info.total_memory_bytes, 8 * 1024 * 1024 * 1024);
+        assert_eq!(gpu_info.available_memory_bytes, 7 * 1024 * 1024 * 1024);
+        assert!((gpu_info.utilization_percent - 12.5).abs() < 0.1);
+        assert_eq!(gpu_info.compute_capability, None);
+        assert!(gpu_info.supports_float16);
+        assert_eq!(gpu_info.status, DeviceStatus::Available);
+    }
+
+    #[tokio::test]
+    async fn test_gpu_info_from_stats_busy() {
+        let stats = crate::monitor::GpuMemoryStats {
+            device_id: 0,
+            used_bytes: 9 * 1024 * 1024 * 1024,
+            total_bytes: 10 * 1024 * 1024 * 1024,
+            available_bytes: 1 * 1024 * 1024 * 1024,
+            utilization_percent: 95.0,
+        };
+
+        let gpu_info = GpuInfo::from_gpu_memory_stats(0, "Busy GPU".to_string(), stats);
+        assert_eq!(gpu_info.status, DeviceStatus::Busy);
+    }
+
+    #[tokio::test]
+    async fn test_gpu_info_from_stats_low_memory() {
+        let stats = crate::monitor::GpuMemoryStats {
+            device_id: 0,
+            used_bytes: 1 * 1024 * 1024 * 1024,
+            total_bytes: 2 * 1024 * 1024 * 1024,
+            available_bytes: 512 * 1024 * 1024,
+            utilization_percent: 50.0,
+        };
+
+        let gpu_info = GpuInfo::from_gpu_memory_stats(0, "Low Mem GPU".to_string(), stats);
+        assert_eq!(gpu_info.status, DeviceStatus::LowMemory);
+    }
+
+    #[tokio::test]
+    async fn test_device_manager_with_memory_limit_config() {
+        let config = MemoryLimitConfig {
+            limit_bytes: 4 * 1024 * 1024 * 1024,
+            warning_threshold_percent: 70,
+            critical_threshold_percent: 85,
+        };
+        let manager = DeviceManager::with_memory_limit_config(config);
+
+        let controller = manager.get_memory_limit_controller();
+        let cfg = controller.get_config().await;
+        assert_eq!(cfg.limit_bytes, 4 * 1024 * 1024 * 1024);
+        assert_eq!(cfg.warning_threshold_percent, 70);
+        assert_eq!(cfg.critical_threshold_percent, 85);
+    }
+
+    #[tokio::test]
+    async fn test_device_manager_default() {
+        let manager = DeviceManager::default();
+        let devices = manager.list_devices().await;
+        assert!(!devices.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_select_device_require_gpu_finds_amd() {
+        let manager = DeviceManager::new();
+        let device = manager.select_device(&DeviceType::Cpu, true).await;
+
+        assert!(
+            matches!(
+                device,
+                DeviceType::Amd | DeviceType::OpenCL | DeviceType::Cuda | DeviceType::Metal
+            ),
+            "require_gpu should select a GPU device, got {:?}",
+            device
+        );
+    }
+
+    #[tokio::test]
+    async fn test_select_device_preferred_amd() {
+        let manager = DeviceManager::new();
+        let device = manager.select_device(&DeviceType::Amd, false).await;
+        assert_eq!(device, DeviceType::Amd);
+    }
+
+    #[tokio::test]
+    async fn test_select_device_preferred_metal_falls_back() {
+        let manager = DeviceManager::new();
+        let device = manager.select_device(&DeviceType::Metal, false).await;
+        assert!(
+            device == DeviceType::Cpu || device == DeviceType::Amd,
+            "Metal not present, should fall back to available device"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_select_device_preferred_opencl_falls_back() {
+        let manager = DeviceManager::new();
+        let device = manager.select_device(&DeviceType::OpenCL, false).await;
+        assert!(
+            device == DeviceType::Cpu || device == DeviceType::Amd,
+            "OpenCL not present, should fall back to available device"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_optimal_batch_size_cuda_no_gpu_stats() {
+        let manager = DeviceManager::new();
+        let batch = manager.get_optimal_batch_size(&DeviceType::Cuda).await;
+        assert_eq!(batch, 16);
+    }
+
+    #[tokio::test]
+    async fn test_get_optimal_batch_size_metal() {
+        let manager = DeviceManager::new();
+        let batch = manager.get_optimal_batch_size(&DeviceType::Metal).await;
+        assert_eq!(batch, 16);
+    }
+
+    #[tokio::test]
+    async fn test_get_optimal_batch_size_amd() {
+        let manager = DeviceManager::new();
+        let batch = manager.get_optimal_batch_size(&DeviceType::Amd).await;
+        assert!(batch > 0 && batch <= 24);
+    }
+
+    #[tokio::test]
+    async fn test_get_optimal_batch_size_opencl() {
+        let manager = DeviceManager::new();
+        let batch = manager.get_optimal_batch_size(&DeviceType::OpenCL).await;
+        assert!(batch > 0 && batch <= 24);
+    }
+
+    #[tokio::test]
+    async fn test_get_optimal_pooling_mode_all_variants() {
+        let manager = DeviceManager::new();
+        assert_eq!(
+            manager.get_optimal_pooling_mode(&DeviceType::Cpu).await,
+            PoolingMode::Mean
+        );
+        assert_eq!(
+            manager.get_optimal_pooling_mode(&DeviceType::Cuda).await,
+            PoolingMode::Mean
+        );
+        assert_eq!(
+            manager.get_optimal_pooling_mode(&DeviceType::Metal).await,
+            PoolingMode::Mean
+        );
+        assert_eq!(
+            manager.get_optimal_pooling_mode(&DeviceType::Amd).await,
+            PoolingMode::Mean
+        );
+        assert_eq!(
+            manager.get_optimal_pooling_mode(&DeviceType::OpenCL).await,
+            PoolingMode::Mean
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_gpu_info_empty_without_stats() {
+        let manager = DeviceManager::new();
+        let _ = manager.list_devices().await;
+        let gpu_infos = manager.get_gpu_info().await;
+        let cuda_count = manager.get_cuda_gpu_info().await.len();
+        assert_eq!(gpu_infos.len(), cuda_count);
+    }
+
+    #[tokio::test]
+    async fn test_get_gpu_info_with_stats_and_cuda_device() {
+        let monitor = Arc::new(MemoryMonitor::new());
+        monitor
+            .update_gpu_memory(1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024)
+            .await;
+        let manager = DeviceManager::with_monitor(monitor);
+        let _ = manager.list_devices().await;
+
+        let gpu_infos = manager.get_gpu_info().await;
+        assert!(!gpu_infos.is_empty());
+        assert_eq!(gpu_infos[0].device_id, 0);
+        assert!(gpu_infos[0].total_memory_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_cuda_gpu_info_empty() {
+        let manager = DeviceManager::new();
+        let _ = manager.list_devices().await;
+        let cuda_infos = manager.get_cuda_gpu_info().await;
+        let has_cuda = manager.check_device_available(&DeviceType::Cuda).await;
+        assert_eq!(cuda_infos.is_empty(), !has_cuda);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_devices_no_panic() {
+        let manager = DeviceManager::new();
+        let _ = manager.list_devices().await;
+        manager.refresh_devices().await;
+        let devices = manager.list_devices().await;
+        assert!(!devices.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_refresh_devices_with_gpu_stats() {
+        let monitor = Arc::new(MemoryMonitor::new());
+        monitor
+            .update_gpu_memory(7 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024)
+            .await;
+        let manager = DeviceManager::with_monitor(monitor);
+        let _ = manager.list_devices().await;
+        manager.refresh_devices().await;
+        let devices = manager.list_devices().await;
+        let cuda_device = devices.iter().find(|d| d.device_type == DeviceType::Cuda);
+        assert!(cuda_device.is_some());
+        assert_eq!(
+            cuda_device.unwrap().memory_bytes,
+            Some(8 * 1024 * 1024 * 1024)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_memory_pressure() {
+        let manager = DeviceManager::new();
+        let pressure = manager.check_memory_pressure().await;
+        let _ = pressure;
+    }
+
+    #[tokio::test]
+    async fn test_fallback_to_cpu_returns_cpu() {
+        let manager = DeviceManager::new();
+        let device = manager.fallback_to_cpu().await;
+        assert_eq!(device, DeviceType::Cpu);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_fallback_returns_cpu() {
+        let manager = DeviceManager::new();
+        let device = manager.trigger_fallback().await;
+        assert_eq!(device, DeviceType::Cpu);
+    }
+
+    #[tokio::test]
+    async fn test_update_memory_usage() {
+        let manager = DeviceManager::new();
+        manager.update_memory_usage(2 * 1024 * 1024 * 1024).await;
+        assert_eq!(manager.current_memory_usage(), 2 * 1024 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn test_check_device_available_cuda_not_available() {
+        let manager = DeviceManager::new();
+        let _ = manager.list_devices().await;
+        let available = manager.check_device_available(&DeviceType::Cuda).await;
+        let has_cuda = manager
+            .get_cuda_gpu_info()
+            .await
+            .iter()
+            .any(|d| d.device_id == 0);
+        assert_eq!(available, has_cuda);
+    }
+
+    #[tokio::test]
+    async fn test_check_device_available_metal_not_available() {
+        let manager = DeviceManager::new();
+        let _ = manager.list_devices().await;
+        let available = manager.check_device_available(&DeviceType::Metal).await;
+        assert!(!available);
+    }
+
+    #[tokio::test]
+    async fn test_check_device_available_amd_is_available() {
+        let manager = DeviceManager::new();
+        let _ = manager.list_devices().await;
+        let available = manager.check_device_available(&DeviceType::Amd).await;
+        assert!(available);
+    }
+
+    #[tokio::test]
+    async fn test_get_device_info_returns_none_for_missing() {
+        let manager = DeviceManager::new();
+        let _ = manager.list_devices().await;
+        let info = manager.get_device_info(&DeviceType::Metal).await;
+        assert!(info.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_device_info_amd_returns_some() {
+        let manager = DeviceManager::new();
+        let info = manager.get_device_info(&DeviceType::Amd).await;
+        assert!(info.is_some());
+        assert_eq!(info.unwrap().device_type, DeviceType::Amd);
+    }
+
+    #[tokio::test]
+    async fn test_available_memory_bytes_after_set_limit() {
+        let manager = DeviceManager::new();
+        manager.set_memory_limit(8 * 1024 * 1024 * 1024).await;
+        assert_eq!(manager.available_memory_bytes(), 8 * 1024 * 1024 * 1024);
+        manager.update_memory_usage(3 * 1024 * 1024 * 1024).await;
+        assert_eq!(manager.available_memory_bytes(), 5 * 1024 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn test_set_memory_threshold_lower_bound() {
+        let mut manager = DeviceManager::new();
+        manager.set_memory_threshold(10);
+        assert_eq!(manager.memory_threshold(), 50);
+        manager.set_memory_threshold(49);
+        assert_eq!(manager.memory_threshold(), 50);
+    }
+
+    #[tokio::test]
+    async fn test_set_memory_threshold_upper_bound() {
+        let mut manager = DeviceManager::new();
+        manager.set_memory_threshold(100);
+        assert_eq!(manager.memory_threshold(), 99);
+        manager.set_memory_threshold(200);
+        assert_eq!(manager.memory_threshold(), 99);
+    }
+
+    #[tokio::test]
+    async fn test_list_devices_contains_amd() {
+        let manager = DeviceManager::new();
+        let devices = manager.list_devices().await;
+        assert!(devices.iter().any(|d| d.device_type == DeviceType::Amd));
+    }
+
+    #[tokio::test]
+    async fn test_check_memory_limit_after_update() {
+        let manager = DeviceManager::with_memory_limit_config(MemoryLimitConfig {
+            limit_bytes: 1024 * 1024 * 1024,
+            warning_threshold_percent: 50,
+            critical_threshold_percent: 80,
+        });
+        manager.update_memory_usage(600 * 1024 * 1024).await;
+        let status = manager.check_memory_limit().await;
+        assert_eq!(status, MemoryLimitStatus::Warning);
+    }
 }

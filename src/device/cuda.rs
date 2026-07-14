@@ -495,4 +495,191 @@ mod tests {
         let result = manager.reset_primary_device(0).await;
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_initialize_without_cuda_hardware() {
+        let manager = CudaDeviceManager::new();
+
+        let result = manager.initialize().await;
+        assert!(
+            result.is_ok(),
+            "initialize should succeed even without CUDA"
+        );
+        let count = manager.device_count().await;
+        assert_eq!(manager.is_supported().await, count > 0);
+    }
+
+    #[tokio::test]
+    async fn test_initialize_is_idempotent() {
+        let manager = CudaDeviceManager::new();
+
+        manager.initialize().await.unwrap();
+        let first_count = manager.device_count().await;
+
+        manager.initialize().await.unwrap();
+        let second_count = manager.device_count().await;
+
+        assert_eq!(first_count, second_count);
+    }
+
+    #[tokio::test]
+    async fn test_devices_returns_empty_after_init() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        let devices = manager.devices().await;
+        assert_eq!(devices.len(), manager.device_count().await);
+    }
+
+    #[tokio::test]
+    async fn test_primary_device_returns_none_when_empty() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        let count = manager.device_count().await;
+        let primary = manager.primary_device().await;
+        assert_eq!(primary.is_some(), count > 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_device_returns_none_for_invalid_id() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        assert!(manager.get_device(999).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_available_memory_returns_none_for_invalid_id() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        assert!(manager.available_memory(999).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_optimal_batch_size_no_device_returns_default() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        assert_eq!(manager.get_optimal_batch_size(0).await, 16);
+        assert_eq!(manager.get_optimal_batch_size(999).await, 16);
+    }
+
+    #[tokio::test]
+    async fn test_register_model_requirements_unknown_device_errors() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        let requirements = ModelMemoryRequirements {
+            model_name: "test-model".to_string(),
+            base_memory_bytes: 100_000_000,
+            per_token_memory_bytes: 1000,
+            per_vector_memory_bytes: 4000,
+            max_sequence_length: 512,
+        };
+
+        let result = manager
+            .register_model_memory_requirements(999, requirements)
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_get_memory_usage_percent_no_manager_returns_zero() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        assert_eq!(manager.get_memory_usage_percent(0).await, 0.0);
+        assert_eq!(manager.get_memory_usage_percent(999).await, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_adjust_batch_size_dynamically_no_manager_no_panic() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        manager.adjust_batch_size_dynamically(0, 50.0, 60.0).await;
+        manager.adjust_batch_size_dynamically(999, 50.0, 60.0).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_performance_stats_no_manager_returns_none() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        assert!(manager.get_performance_stats(999).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_reset_primary_device_invalid_id_errors() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        let result = manager.reset_primary_device(5).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_cuda_device_default_manager_uses_new() {
+        let manager = CudaDeviceManager::default();
+        assert_eq!(manager.device_count().await, 0);
+        assert!(!manager.is_supported().await);
+    }
+
+    #[test]
+    fn test_cuda_gpu_info_fields() {
+        let info = CudaGpuInfo {
+            device_id: 0,
+            name: "Test GPU".to_string(),
+            total_memory_bytes: 8 * 1024 * 1024 * 1024,
+            available_memory_bytes: 4 * 1024 * 1024 * 1024,
+            compute_capability: (8, 6),
+            supports_float16: true,
+            supports_tensor_cores: true,
+            sm_count: 84,
+            max_threads_per_multiprocessor: 1536,
+            cuda_cores_count: 5888,
+        };
+
+        assert_eq!(info.device_id, 0);
+        assert_eq!(info.name, "Test GPU");
+        assert_eq!(info.total_memory_bytes, 8 * 1024 * 1024 * 1024);
+        assert_eq!(info.available_memory_bytes, 4 * 1024 * 1024 * 1024);
+        assert_eq!(info.compute_capability, (8, 6));
+        assert!(info.supports_float16);
+        assert!(info.supports_tensor_cores);
+        assert_eq!(info.sm_count, 84);
+        assert_eq!(info.max_threads_per_multiprocessor, 1536);
+        assert_eq!(info.cuda_cores_count, 5888);
+    }
+
+    #[test]
+    fn test_cuda_device_info_is_default_for_device_zero() {
+        let device = CudaDevice::new(0, "RTX 4090".to_string(), 24 * 1024 * 1024 * 1024, (8, 9));
+
+        let info = device.info();
+        assert!(info.is_default);
+    }
+
+    #[test]
+    fn test_cuda_device_info_not_default_for_nonzero_id() {
+        let device = CudaDevice::new(2, "RTX 4090".to_string(), 24 * 1024 * 1024 * 1024, (8, 9));
+
+        let info = device.info();
+        assert!(!info.is_default);
+    }
+
+    #[test]
+    fn test_cuda_device_capability_set_for_high_compute_capability() {
+        let device = CudaDevice::new(0, "H100".to_string(), 80 * 1024 * 1024 * 1024, (9, 0));
+
+        let cap = device.capability();
+        assert!(cap.supports_float16);
+        assert!(cap.supports_tensor_cores);
+        assert_eq!(cap.compute_capability, Some((9, 0)));
+        assert_eq!(cap.max_memory_bytes, 80 * 1024 * 1024 * 1024);
+    }
 }

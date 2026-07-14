@@ -12,7 +12,7 @@ use tracing::debug;
 use super::config::PriorityConfig;
 
 /// 优先级枚举
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Priority {
     Critical = 100,
     High = 75,

@@ -808,4 +808,232 @@ mod tests {
             "\"opencl\""
         );
     }
+
+    /// 验证 model.onnx + tokenizer.json 同时存在时,在 commit_from_file 阶段失败
+    /// (fake ONNX 文件无法被 ONNX Runtime 解析)
+    #[ignore = "ort crate environment cleanup crashes test runner when Session::builder() is called"]
+    #[test]
+    fn test_onnx_engine_model_and_tokenizer_fails_at_session() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+        std::fs::write(temp_dir.path().join("tokenizer.json"), b"{}")
+            .expect("Failed to write fake tokenizer.json");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError from session commit, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 model_quantized.onnx 优先于 model.onnx 被选择,且在 session 阶段失败
+    #[ignore = "ort crate environment cleanup crashes test runner when Session::builder() is called"]
+    #[test]
+    fn test_onnx_engine_quantized_preferred_with_tokenizer() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(
+            temp_dir.path().join("model_quantized.onnx"),
+            b"fake quantized",
+        )
+        .expect("Failed to write fake model_quantized.onnx");
+        std::fs::write(temp_dir.path().join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+        std::fs::write(temp_dir.path().join("tokenizer.json"), b"{}")
+            .expect("Failed to write fake tokenizer.json");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError from session commit, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 tokenizer.json 不在 model_path 中但从 HuggingFace cache 路径(parent's parent)加载
+    #[ignore = "ort crate environment cleanup crashes test runner when Session::builder() is called"]
+    #[test]
+    fn test_onnx_engine_tokenizer_from_cache_path() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let cache_dir = temp_dir.path();
+        let intermediate = cache_dir.join("intermediate");
+        let model_dir = intermediate.join("model_dir");
+        std::fs::create_dir_all(&model_dir).expect("Failed to create model_dir");
+        std::fs::write(model_dir.join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+        std::fs::write(cache_dir.join("tokenizer.json"), b"{}")
+            .expect("Failed to write cache tokenizer.json");
+
+        let mut config = test_config();
+        config.model_path = model_dir;
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError after cache tokenizer load, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证设置 model_sha256 时,SHA256 校验失败返回 ModelLoadError
+    #[ignore = "ort crate environment cleanup crashes test runner when Session::builder() is called"]
+    #[test]
+    fn test_onnx_engine_sha256_verification_mismatch() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+        std::fs::write(temp_dir.path().join("tokenizer.json"), b"{}")
+            .expect("Failed to write fake tokenizer.json");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.model_sha256 =
+            Some("0000000000000000000000000000000000000000000000000000000000000000".to_string());
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
+        assert!(result.is_err());
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(
+                msg.contains("SHA256 verification failed"),
+                "Expected SHA256 verification failure, got: {}",
+                msg
+            );
+        }
+    }
+
+    /// 验证 CUDA 设备类型在 model.onnx + tokenizer.json 存在时,
+    /// 进入 CUDA 配置分支(非 cuda feature 下走 warn 路径)后在 commit_from_file 失败
+    #[ignore = "ort crate environment cleanup crashes test runner when Session::builder() is called"]
+    #[test]
+    fn test_onnx_engine_cuda_device_with_model_and_tokenizer() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+        std::fs::write(temp_dir.path().join("tokenizer.json"), b"{}")
+            .expect("Failed to write fake tokenizer.json");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cuda);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError from CUDA path, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 AMD 设备类型在 model.onnx + tokenizer.json 存在时,
+    /// 进入 AMD 配置分支后在 commit_from_file 失败
+    #[ignore = "ort crate environment cleanup crashes test runner when Session::builder() is called"]
+    #[test]
+    fn test_onnx_engine_amd_device_with_model_and_tokenizer() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+        std::fs::write(temp_dir.path().join("tokenizer.json"), b"{}")
+            .expect("Failed to write fake tokenizer.json");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Amd);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError from AMD path, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 OpenCL 设备类型在 model.onnx + tokenizer.json 存在时,
+    /// 进入 AMD/OpenCL 配置分支后在 commit_from_file 失败
+    #[ignore = "ort crate environment cleanup crashes test runner when Session::builder() is called"]
+    #[test]
+    fn test_onnx_engine_opencl_device_with_model_and_tokenizer() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+        std::fs::write(temp_dir.path().join("tokenizer.json"), b"{}")
+            .expect("Failed to write fake tokenizer.json");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::OpenCL);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError from OpenCL path, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 FP16 + CUDA 设备在 model.onnx + tokenizer.json 存在时进入 CUDA 分支后失败
+    #[ignore = "ort crate environment cleanup crashes test runner when Session::builder() is called"]
+    #[test]
+    fn test_onnx_engine_fp16_cuda_device_with_model() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+        std::fs::write(temp_dir.path().join("tokenizer.json"), b"{}")
+            .expect("Failed to write fake tokenizer.json");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp16, DeviceType::Cuda);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                matches!(e, VecboostError::ModelLoadError(_)),
+                "Expected ModelLoadError from FP16+CUDA path, got {:?}",
+                e
+            );
+        }
+    }
+
+    /// 验证 model_path 无 parent's parent 时返回 "Cannot determine HuggingFace cache path" 错误
+    #[test]
+    fn test_onnx_engine_no_cache_path_determinable() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(temp_dir.path().join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
+        assert!(result.is_err());
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(
+                msg.contains("Tokenizer not found") || msg.contains("Cannot determine"),
+                "Expected tokenizer/cache path error, got: {}",
+                msg
+            );
+        }
+    }
 }

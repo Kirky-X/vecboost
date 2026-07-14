@@ -484,12 +484,29 @@ impl WorkerManager {
 
                 // 缩容:队列压力低于阈值且超过最小值
                 if queue_size < config.scale_down_threshold && current > config.min_workers {
+                    // 先清理已退出 worker 的失效 sender(receiver 已 drop),
+                    // 避免 take(to_remove) 取到失效 sender 导致缩容数量不足
+                    let mut senders = worker_senders.lock().await;
+                    let before = senders.len();
+                    senders.retain(|s| !s.is_closed());
+                    let cleaned = before - senders.len();
+                    if cleaned > 0 {
+                        debug!(
+                            "Cleaned {} stale worker senders (before: {}, after: {})",
+                            cleaned,
+                            before,
+                            senders.len()
+                        );
+                    }
+
                     let to_remove = current - config.min_workers;
+                    if to_remove == 0 || senders.is_empty() {
+                        continue;
+                    }
                     info!(
                         "Scaling down: removing {} workers (queue size: {})",
                         to_remove, queue_size
                     );
-                    let senders = worker_senders.lock().await;
                     // 从最新加入的 worker 开始发送关闭信号(保留 min_workers 个最早的)
                     for sender in senders.iter().rev().take(to_remove) {
                         let _ = sender.send(WorkerTask::Shutdown { immediate: false }).await;
@@ -766,6 +783,55 @@ mod tests {
                 );
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// T009-补: 验证 worker 退出后 sender 变为 closed,
+    /// start_scaling_monitor 的 retain(!s.is_closed()) 能正确清理失效 sender。
+    ///
+    /// T009 修复后 worker 会因 Shutdown 退出,但 sender 留在 worker_senders 中。
+    /// 若不清理,下次缩容 take(to_remove) 可能取到失效 sender,导致缩容数量不足。
+    #[tokio::test]
+    async fn test_worker_exit_marks_sender_closed_for_cleanup() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig::default();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let manager = WorkerManager::new(queue, response_channel, config, service);
+
+        manager.spawn_worker().await;
+        assert_eq!(manager.current_workers(), 1);
+
+        // 发送 Shutdown 让 worker 退出
+        {
+            let senders = manager.worker_senders.lock().await;
+            senders[0]
+                .send(WorkerTask::Shutdown { immediate: false })
+                .await
+                .expect("send Shutdown must succeed");
+        }
+
+        // 等待 worker 退出
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if manager.current_workers() == 0 {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("worker did not exit within 2s");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // 验证 sender 已 closed(worker 退出后 receiver drop,is_closed 返回 true)
+        {
+            let senders = manager.worker_senders.lock().await;
+            assert!(
+                senders[0].is_closed(),
+                "sender must be closed after worker exit (required for retain cleanup in scaling_monitor)"
+            );
         }
     }
 }

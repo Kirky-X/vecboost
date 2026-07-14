@@ -1,16 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # VecBoost 部署和监控脚本
 # 用于在测试环境部署服务并监控运行情况
 
 set -e
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
 
 # 配置变量
 IMAGE_NAME="vecboost:latest"
@@ -21,23 +18,6 @@ GRPC_PORT=50051
 LOG_DIR="./logs"
 MODEL_DIR="./models"
 CACHE_DIR="./cache"
-
-# 打印带颜色的消息
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
 
 # 检查 Docker 是否安装
 check_docker() {

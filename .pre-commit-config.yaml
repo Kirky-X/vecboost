@@ -18,7 +18,7 @@ repos:
       - id: vecboost-precommit
         name: VecBoost pre-commit checks
         description: Run all VecBoost pre-commit checks (fmt, clippy, check, build)
-        entry: bash -c ". scripts/pre-commit-check.sh"
+        entry: bash scripts/pre-commit.sh check
         language: system
         pass_filenames: false
         always_run: false
@@ -41,7 +41,7 @@ repos:
       - id: copyright-header
         name: Check copyright headers
         description: Verify all .rs files have MIT copyright headers (Kirky.X)
-        entry: bash scripts/check_copyright.sh
+        entry: bash scripts/pre-commit.sh copyright
         language: system
         pass_filenames: false
         always_run: true

@@ -1432,12 +1432,28 @@ mod tests {
             health[0].last_active_time
         };
 
-        tokio::time::sleep(Duration::from_millis(2000)).await;
-
-        let updated_time = {
-            let health = manager.worker_health.lock().await;
-            health[0].last_active_time
-        };
+        // Poll for last_active_time refresh instead of fixed sleep.
+        // Worker loop updates activity at the start of each iteration; under coverage
+        // instrumentation the loop may be slow to schedule, so poll up to 10s.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut updated_time = initial_time;
+        loop {
+            {
+                let health = manager.worker_health.lock().await;
+                updated_time = health[0].last_active_time;
+            }
+            if updated_time > initial_time {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "last_active_time was not refreshed within 10s \
+                     (initial={:?}, current={:?})",
+                    initial_time, updated_time
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         assert!(
             updated_time > initial_time,
             "last_active_time must be refreshed during worker loop"
@@ -1448,7 +1464,21 @@ mod tests {
         for s in &senders {
             let _ = s.send(WorkerTask::Shutdown { immediate: true }).await;
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Poll for worker to stop (up to 5s) instead of fixed sleep.
+        let stop_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let all_stopped = {
+                let health = manager.worker_health.lock().await;
+                health.iter().all(|h| !h.is_alive)
+            };
+            if all_stopped {
+                break;
+            }
+            if tokio::time::Instant::now() >= stop_deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// 验证 process_request 处理 normalize=None 的请求也能成功。

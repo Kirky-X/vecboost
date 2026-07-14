@@ -1,6 +1,6 @@
 [package]
 name = "vecboost"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Kirky-X <kirky-x@outlook.com>"]
 description = "High-performance embedding vector service written in Rust"
@@ -63,6 +63,8 @@ oxcache = { version = "0.3", optional = true, default-features = false, features
 limiteron = { version = "0.2", optional = true, default-features = false }
 
 # Database infrastructure (db feature)
+# dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
+# Direct sea-orm dependency is still required for those types.
 dbnexus = { version = "0.4", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache"] }
 sea-orm = { version = "2.0.0-rc.42", optional = true, default-features = false }
 

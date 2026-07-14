@@ -126,7 +126,8 @@ docs/.doctrees/
 # -----------------------------------------------------------------------------
 AGENTS.md
 openspec/
-specmark/
+specmark/changes/
+specmark/.locks/
 CLAUDE.md
 IFLOW.md
 

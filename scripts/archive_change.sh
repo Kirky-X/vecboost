@@ -61,9 +61,9 @@ done
 
 [[ -n "$CHANGE_NAME" ]] || { err "需要 change 名"; usage; exit 1; }
 
-# kebab-case 校验，防路径穿越
-if [[ ! "$CHANGE_NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
-  err "非法 change 名（须 kebab-case）: $CHANGE_NAME"
+# kebab-case 校验（允许点号用于版本号），防路径穿越
+if [[ ! "$CHANGE_NAME" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+  err "非法 change 名（须 kebab-case，可含版本号点号）: $CHANGE_NAME"
   exit 1
 fi
 

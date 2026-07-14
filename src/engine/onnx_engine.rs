@@ -261,11 +261,9 @@ impl OnnxEngine {
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.block_on(async {
                     let stats = monitor.get_memory_stats().await;
-                    let usage_percent = if stats.total_bytes > 0 {
-                        (stats.current_bytes * 100) / stats.total_bytes
-                    } else {
-                        0
-                    };
+                    let usage_percent = (stats.current_bytes * 100)
+                        .checked_div(stats.total_bytes)
+                        .unwrap_or(0);
                     usage_percent >= threshold_percent
                 })
             } else {
@@ -278,11 +276,9 @@ impl OnnxEngine {
                     });
                 rt.block_on(async {
                     let stats = monitor.get_memory_stats().await;
-                    let usage_percent = if stats.total_bytes > 0 {
-                        (stats.current_bytes * 100) / stats.total_bytes
-                    } else {
-                        0
-                    };
+                    let usage_percent = (stats.current_bytes * 100)
+                        .checked_div(stats.total_bytes)
+                        .unwrap_or(0);
                     usage_percent >= threshold_percent
                 })
             }

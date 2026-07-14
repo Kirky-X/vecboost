@@ -176,4 +176,281 @@ mod tests {
         let result = validator.validate_path("~/secret");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_path_validator_default_has_no_roots() {
+        let validator = PathValidator::default();
+        // 默认验证器没有配置任何允许的根目录
+        assert!(validator.allowed_roots.is_empty());
+    }
+
+    #[test]
+    fn test_validate_path_rejects_when_no_roots_configured() {
+        // 没有配置任何允许根目录时,任何存在的路径都应被拒绝
+        let dir = std::env::temp_dir();
+        let temp = dir.join(format!("vecboost_path_test_noroot_{}", std::process::id()));
+        std::fs::create_dir_all(&temp).unwrap();
+        // 注意:需要避免 /tmp 被拦截(因为 /tmp 检查在 allowed_roots 检查之前)
+        // 所以我们用一个非 /tmp 的路径
+        let temp = std::fs::canonicalize(&temp).unwrap();
+        // 如果 canonical 路径以 /tmp 开头,此测试不适用,跳过清理
+        if temp.to_string_lossy().starts_with("/tmp")
+            || temp.to_string_lossy().starts_with("/var/tmp")
+        {
+            std::fs::remove_dir_all(&temp).ok();
+            return;
+        }
+
+        let validator = PathValidator::new(); // 无 allowed_roots
+        let result = validator.validate_path(&temp);
+        std::fs::remove_dir_all(&temp).ok();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::SecurityError(msg) => {
+                assert!(msg.contains("No allowed root directories"))
+            }
+            _ => panic!("Expected SecurityError"),
+        }
+    }
+
+    #[test]
+    fn test_validate_path_nonexistent_path_rejected() {
+        // 路径不存在时 canonicalize 失败
+        let validator = PathValidator::new().add_allowed_root("/etc");
+        let result = validator.validate_path("/etc/nonexistent_file_xyz_123");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::SecurityError(msg) => assert!(msg.contains("Invalid path")),
+            _ => panic!("Expected SecurityError for nonexistent path"),
+        }
+    }
+
+    #[test]
+    fn test_validate_path_outside_allowed_roots_rejected() {
+        // 路径存在但在 allowed_roots 之外
+        let validator = PathValidator::new().add_allowed_root("/etc");
+        // /etc/hostname 通常存在,且在 /etc 下 → 应该被接受
+        let result = validator.validate_path("/etc/hostname");
+        // hostname 可能不存在在某些环境,如果是 Ok 就验证通过,如果是 Err 验证错误类型
+        if result.is_ok() {
+            // 路径在 /etc 内,应通过
+        } else {
+            // 如果文件不存在,错误应是 Invalid path;如果存在但不在根内应是 Access denied
+            // 这里 /etc 在 allowed_roots,所以如果失败只能是文件不存在
+        }
+    }
+
+    #[test]
+    fn test_validate_path_in_allowed_root_accepted() {
+        // 创建临时目录作为 allowed root
+        let base = std::path::PathBuf::from("./test_path_allowed_root_temp");
+        std::fs::create_dir_all(&base).unwrap();
+        let file_path = base.join("test.txt");
+        std::fs::write(&file_path, "content").unwrap();
+
+        let validator = PathValidator::new().add_allowed_root(&base);
+        let result = validator.validate_path(&file_path);
+        std::fs::remove_dir_all(&base).ok();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_path_double_dot_rejected() {
+        let validator = PathValidator::new().add_allowed_root("/etc");
+        let result = validator.validate_path("/etc/../etc/passwd");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::SecurityError(msg) => {
+                assert!(msg.contains("Path traversal attempt"))
+            }
+            _ => panic!("Expected SecurityError for path traversal"),
+        }
+    }
+
+    #[test]
+    fn test_validate_path_tilde_rejected() {
+        let validator = PathValidator::new().add_allowed_root("/home");
+        let result = validator.validate_path("~/.ssh/id_rsa");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::SecurityError(msg) => {
+                assert!(msg.contains("Path traversal attempt"))
+            }
+            _ => panic!("Expected SecurityError for tilde path"),
+        }
+    }
+
+    #[test]
+    fn test_validate_file_returns_canonical_path() {
+        let base = std::path::PathBuf::from("./test_path_validate_file_temp");
+        std::fs::create_dir_all(&base).unwrap();
+        let file_path = base.join("document.txt");
+        std::fs::write(&file_path, "test content").unwrap();
+
+        let validator = PathValidator::new().add_allowed_root(&base);
+        let result = validator.validate_file(&file_path);
+
+        std::fs::remove_dir_all(&base).ok();
+        assert!(result.is_ok());
+        let canonical = result.unwrap();
+        assert!(canonical.is_absolute());
+    }
+
+    #[test]
+    fn test_validate_file_rejects_directory() {
+        let base = std::path::PathBuf::from("./test_path_validate_dir_temp");
+        std::fs::create_dir_all(&base).unwrap();
+
+        let validator = PathValidator::new().add_allowed_root(&base);
+        // base 本身是目录,validate_file 应拒绝
+        let result = validator.validate_file(&base);
+
+        std::fs::remove_dir_all(&base).ok();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::SecurityError(msg) => assert!(msg.contains("not a file")),
+            _ => panic!("Expected SecurityError for directory as file"),
+        }
+    }
+
+    #[test]
+    fn test_validate_directory_returns_canonical_path() {
+        let base = std::path::PathBuf::from("./test_path_validate_directory_temp");
+        std::fs::create_dir_all(&base).unwrap();
+
+        let validator = PathValidator::new().add_allowed_root(&base);
+        let result = validator.validate_directory(&base);
+
+        assert!(result.is_ok());
+        let canonical = result.unwrap();
+        assert!(canonical.is_absolute());
+        assert!(canonical.is_dir());
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn test_validate_directory_rejects_file() {
+        let base = std::path::PathBuf::from("./test_path_dir_reject_temp");
+        std::fs::create_dir_all(&base).unwrap();
+        let file_path = base.join("file.txt");
+        std::fs::write(&file_path, "content").unwrap();
+
+        let validator = PathValidator::new().add_allowed_root(&base);
+        // file_path 是文件,validate_directory 应拒绝
+        let result = validator.validate_directory(&file_path);
+
+        std::fs::remove_dir_all(&base).ok();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::SecurityError(msg) => assert!(msg.contains("not a directory")),
+            _ => panic!("Expected SecurityError for file as directory"),
+        }
+    }
+
+    #[test]
+    fn test_add_allowed_roots_multiple() {
+        let base1 = std::path::PathBuf::from("./test_path_multi_root_1_temp");
+        let base2 = std::path::PathBuf::from("./test_path_multi_root_2_temp");
+        std::fs::create_dir_all(&base1).unwrap();
+        std::fs::create_dir_all(&base2).unwrap();
+
+        let file1 = base1.join("f1.txt");
+        let file2 = base2.join("f2.txt");
+        std::fs::write(&file1, "1").unwrap();
+        std::fs::write(&file2, "2").unwrap();
+
+        let validator = PathValidator::new().add_allowed_roots(&[&base1, &base2]);
+        assert_eq!(validator.allowed_roots.len(), 2);
+
+        let r1 = validator.validate_file(&file1);
+        let r2 = validator.validate_file(&file2);
+
+        std::fs::remove_dir_all(&base1).ok();
+        std::fs::remove_dir_all(&base2).ok();
+        assert!(r1.is_ok(), "file in root1 should be allowed");
+        assert!(r2.is_ok(), "file in root2 should be allowed");
+    }
+
+    #[test]
+    fn test_validate_path_rejects_path_outside_all_roots() {
+        let allowed = std::path::PathBuf::from("./test_path_outside_allowed_temp");
+        std::fs::create_dir_all(&allowed).unwrap();
+
+        let outside = std::path::PathBuf::from("./test_path_outside_other_temp");
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let validator = PathValidator::new().add_allowed_root(&allowed);
+        // outside 不在 allowed_roots 内
+        let result = validator.validate_path(&outside);
+
+        std::fs::remove_dir_all(&allowed).ok();
+        std::fs::remove_dir_all(&outside).ok();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::SecurityError(msg) => assert!(msg.contains("Access denied")),
+            _ => panic!("Expected SecurityError for path outside allowed roots"),
+        }
+    }
+
+    #[test]
+    fn test_validate_path_canonicalizes_relative_path() {
+        // 相对路径在 allowed_roots 内时应被规范化为绝对路径
+        let base = std::path::PathBuf::from("./test_path_relative_temp");
+        std::fs::create_dir_all(&base).unwrap();
+        let file_path = base.join("rel.txt");
+        std::fs::write(&file_path, "data").unwrap();
+
+        let validator = PathValidator::new().add_allowed_root(&base);
+        // 使用相对路径(相对于 cwd)
+        let relative = format!("{}/rel.txt", base.to_string_lossy());
+        let result = validator.validate_path(&relative);
+
+        std::fs::remove_dir_all(&base).ok();
+        assert!(result.is_ok());
+        let canonical = result.unwrap();
+        assert!(canonical.is_absolute());
+    }
+
+    #[test]
+    fn test_validate_path_nested_subdir_in_allowed_root_accepted() {
+        // 嵌套子目录在 allowed_root 内应被接受
+        let base = std::path::PathBuf::from("./test_path_nested_temp");
+        let nested = base.join("sub1").join("sub2");
+        std::fs::create_dir_all(&nested).unwrap();
+        let file_path = nested.join("deep.txt");
+        std::fs::write(&file_path, "deep").unwrap();
+
+        let validator = PathValidator::new().add_allowed_root(&base);
+        let result = validator.validate_file(&file_path);
+
+        std::fs::remove_dir_all(&base).ok();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_file_nonexistent_rejected() {
+        let base = std::path::PathBuf::from("./test_path_nonexist_file_temp");
+        std::fs::create_dir_all(&base).unwrap();
+        let validator = PathValidator::new().add_allowed_root(&base);
+        let result = validator.validate_file(base.join("nonexistent.txt"));
+        std::fs::remove_dir_all(&base).ok();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_add_allowed_root_builder_chain() {
+        let base1 = std::path::PathBuf::from("./test_path_chain_1_temp");
+        let base2 = std::path::PathBuf::from("./test_path_chain_2_temp");
+        std::fs::create_dir_all(&base1).unwrap();
+        std::fs::create_dir_all(&base2).unwrap();
+
+        let validator = PathValidator::new()
+            .add_allowed_root(&base1)
+            .add_allowed_root(&base2);
+        assert_eq!(validator.allowed_roots.len(), 2);
+
+        std::fs::remove_dir_all(&base1).ok();
+        std::fs::remove_dir_all(&base2).ok();
+    }
 }

@@ -591,4 +591,329 @@ mod tests {
             &axum::http::Method::OPTIONS
         ));
     }
+
+    // ===== CsrfConfig 边界测试 =====
+
+    #[test]
+    fn test_csrf_config_default() {
+        let config = CsrfConfig::default();
+        assert!(config.allowed_origins.is_empty());
+        assert!(!config.token_validation_enabled);
+        assert_eq!(config.token_expiration_secs, 3600);
+        assert!(config.allow_same_origin);
+    }
+
+    #[test]
+    fn test_csrf_config_builder_chain() {
+        let config = CsrfConfig::new(vec!["https://api.example.com".to_string()])
+            .with_token_validation(true)
+            .with_token_expiration(7200)
+            .with_allow_same_origin(false);
+
+        assert!(config.token_validation_enabled);
+        assert_eq!(config.token_expiration_secs, 7200);
+        assert!(!config.allow_same_origin);
+        assert!(config.is_origin_allowed("https://api.example.com"));
+    }
+
+    #[test]
+    fn test_is_origin_allowed_empty_set() {
+        // 空集合表示不限制 — 所有 origin 均允许
+        let config = CsrfConfig::default();
+        assert!(config.is_origin_allowed("https://anything.com"));
+        assert!(config.is_origin_allowed("http://localhost:1234"));
+        assert!(config.is_origin_allowed(""));
+    }
+
+    #[test]
+    fn test_is_origin_allowed_non_empty_set_rejects_unknown() {
+        let config = CsrfConfig::new(vec!["https://trusted.com".to_string()]);
+        assert!(!config.is_origin_allowed("https://untrusted.com"));
+        assert!(!config.is_origin_allowed(""));
+    }
+
+    // ===== CsrfToken 边界测试 =====
+
+    #[test]
+    fn test_csrf_token_zero_expiration() {
+        // 0 秒过期 — 边界条件,token 立即过期
+        let token = CsrfToken::new(0);
+        // 由于时间精度为秒,0 秒后可能已过期或刚好未过期
+        // 关键属性:value 仍应是有效的 SHA256 hex
+        assert_eq!(token.value.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn test_memory_csrf_store_replay_attack_protection() {
+        // 一次性使用 token — 重放攻击防护
+        let store = MemoryCsrfStore::new();
+        let token = "replay-test-token";
+
+        store.store_token(token).await.unwrap();
+        assert_eq!(store.token_count().await, 1);
+
+        // 第一次验证 — 应成功并移除 token
+        let first_validation = store.validate_token(token).await;
+        assert!(first_validation);
+
+        // 第二次验证 — 重放攻击,应失败
+        let second_validation = store.validate_token(token).await;
+        assert!(!second_validation);
+
+        assert_eq!(store.token_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_memory_csrf_store_validate_nonexistent_token() {
+        let store = MemoryCsrfStore::new();
+        // 验证不存在的 token — 应返回 false
+        assert!(!store.validate_token("nonexistent").await);
+        assert_eq!(store.token_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_memory_csrf_store_multiple_tokens() {
+        let store = MemoryCsrfStore::new();
+        store.store_token("token1").await.unwrap();
+        store.store_token("token2").await.unwrap();
+        store.store_token("token3").await.unwrap();
+        assert_eq!(store.token_count().await, 3);
+
+        // 重复存储同一 token 不应增加计数 (HashSet)
+        store.store_token("token1").await.unwrap();
+        assert_eq!(store.token_count().await, 3);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_token_store_default() {
+        let store = CsrfTokenStore::default();
+        assert_eq!(store.token_count().await, 0);
+
+        store.store_token("default-store-token").await;
+        assert_eq!(store.token_count().await, 1);
+        assert!(store.validate_token("default-store-token").await);
+        // 一次性使用后应失效
+        assert!(!store.validate_token("default-store-token").await);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_token_store_cleanup_expired_no_op() {
+        // cleanup_expired 对内存存储是 no-op,不应 panic 也不应影响 token
+        let store = CsrfTokenStore::new();
+        store.store_token("cleanup-test").await;
+        store.cleanup_expired(0).await;
+        assert_eq!(store.token_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_token_store_with_redis_returns_none_without_feature() {
+        // 未启用 redis feature 时,with_redis 应返回 None
+        let result = CsrfTokenStore::with_redis("redis://localhost:6379", None, 3600).await;
+        assert!(result.is_none());
+    }
+
+    // ===== OriginValidator 错误路径测试 =====
+
+    #[test]
+    fn test_validate_origin_missing_header() {
+        let headers = HeaderMap::new();
+        let config = CsrfConfig::new(vec!["https://example.com".to_string()]);
+        let result = OriginValidator::validate_origin(&headers, &config, "/api/test");
+        assert_eq!(result, Err(StatusCode::BAD_REQUEST));
+    }
+
+    #[test]
+    fn test_validate_origin_invalid_format() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "not-a-valid-url".parse().unwrap());
+        let config = CsrfConfig::new(vec!["https://example.com".to_string()]);
+        let result = OriginValidator::validate_origin(&headers, &config, "/api/test");
+        assert_eq!(result, Err(StatusCode::BAD_REQUEST));
+    }
+
+    #[test]
+    fn test_validate_origin_not_in_allowed_list() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "https://evil.com".parse().unwrap());
+        let config = CsrfConfig::new(vec!["https://example.com".to_string()]);
+        let result = OriginValidator::validate_origin(&headers, &config, "/api/test");
+        assert_eq!(result, Err(StatusCode::FORBIDDEN));
+    }
+
+    #[test]
+    fn test_validate_origin_allowed() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "https://example.com".parse().unwrap());
+        let config = CsrfConfig::new(vec!["https://example.com".to_string()]);
+        let result = OriginValidator::validate_origin(&headers, &config, "/api/test");
+        assert_eq!(result, Ok("https://example.com".to_string()));
+    }
+
+    #[test]
+    fn test_validate_origin_empty_allowed_set_allows_all() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "https://any-origin.com".parse().unwrap());
+        // 空集合表示不限制
+        let config = CsrfConfig::default();
+        let result = OriginValidator::validate_origin(&headers, &config, "/api/test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_origin_with_port() {
+        let parsed = OriginValidator::parse_origin("http://localhost:8080/path?q=1").unwrap();
+        assert_eq!(parsed, "http://localhost:8080");
+    }
+
+    #[test]
+    fn test_parse_origin_no_path() {
+        let parsed = OriginValidator::parse_origin("https://api.example.com").unwrap();
+        assert_eq!(parsed, "https://api.example.com");
+    }
+
+    #[test]
+    fn test_parse_origin_invalid_no_host() {
+        // 无 host 的 URL 应解析失败
+        let result = OriginValidator::parse_origin("file:///path/to/file");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_origin_empty_string() {
+        let result = OriginValidator::parse_origin("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_referer_present() {
+        let mut headers = HeaderMap::new();
+        headers.insert("referer", "https://example.com/page".parse().unwrap());
+        let referer = OriginValidator::get_referer(&headers);
+        assert_eq!(referer, Some("https://example.com/page".to_string()));
+    }
+
+    #[test]
+    fn test_get_referer_absent() {
+        let headers = HeaderMap::new();
+        let referer = OriginValidator::get_referer(&headers);
+        assert_eq!(referer, None);
+    }
+
+    // ===== CsrfProtection 边界测试 =====
+
+    #[test]
+    fn test_is_same_origin_with_matching_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "https://example.com".parse().unwrap());
+        assert!(CsrfProtection::is_same_origin(&headers, "example.com"));
+    }
+
+    #[test]
+    fn test_is_same_origin_with_matching_origin_and_port() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "https://example.com:8443".parse().unwrap());
+        assert!(CsrfProtection::is_same_origin(&headers, "example.com"));
+    }
+
+    #[test]
+    fn test_is_same_origin_with_mismatching_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "https://evil.com".parse().unwrap());
+        assert!(!CsrfProtection::is_same_origin(&headers, "example.com"));
+    }
+
+    #[test]
+    fn test_is_same_origin_fallback_to_referer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("referer", "https://example.com/some/path".parse().unwrap());
+        assert!(CsrfProtection::is_same_origin(&headers, "example.com"));
+    }
+
+    #[test]
+    fn test_is_same_origin_no_headers_assumes_same_origin() {
+        // 无 Origin 和 Referer — 默认同源
+        let headers = HeaderMap::new();
+        assert!(CsrfProtection::is_same_origin(&headers, "example.com"));
+    }
+
+    #[test]
+    fn test_is_same_origin_invalid_origin_format() {
+        // 格式错误的 Origin (无 "://") 应返回 false
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "invalid-origin".parse().unwrap());
+        assert!(!CsrfProtection::is_same_origin(&headers, "example.com"));
+    }
+
+    #[test]
+    fn test_validate_token_from_headers_x_csrf_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-CSRF-Token", "expected-token".parse().unwrap());
+        assert!(CsrfProtection::validate_token_from_headers(
+            &headers,
+            "expected-token"
+        ));
+    }
+
+    #[test]
+    fn test_validate_token_from_headers_lowercase() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-csrf-token", "expected-token".parse().unwrap());
+        assert!(CsrfProtection::validate_token_from_headers(
+            &headers,
+            "expected-token"
+        ));
+    }
+
+    #[test]
+    fn test_validate_token_from_headers_mismatch() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-CSRF-Token", "wrong-token".parse().unwrap());
+        assert!(!CsrfProtection::validate_token_from_headers(
+            &headers,
+            "expected-token"
+        ));
+    }
+
+    #[test]
+    fn test_validate_token_from_headers_missing() {
+        let headers = HeaderMap::new();
+        assert!(!CsrfProtection::validate_token_from_headers(
+            &headers,
+            "expected-token"
+        ));
+    }
+
+    #[test]
+    fn test_validate_token_from_headers_empty_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-CSRF-Token", "".parse().unwrap());
+        // 空 token 不等于 expected_token
+        assert!(!CsrfProtection::validate_token_from_headers(
+            &headers,
+            "expected-token"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_csrf_token_store_concurrent_access() {
+        // 并发存储和验证 — 确保线程安全
+        let store = CsrfTokenStore::new();
+        let mut handles = Vec::new();
+
+        for i in 0..10 {
+            let store_clone = store.clone();
+            handles.push(tokio::spawn(async move {
+                let token = format!("concurrent-token-{i}");
+                store_clone.store_token(&token).await;
+                assert!(store_clone.validate_token(&token).await);
+            }));
+        }
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // 所有 token 验证后应已被移除 (一次性使用)
+        assert_eq!(store.token_count().await, 0);
+    }
 }

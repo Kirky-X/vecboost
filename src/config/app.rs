@@ -511,6 +511,13 @@ impl ConfigLoader {
         config = config.set_default("pipeline.priority.base_priority", 50)?;
         config = config.set_default("pipeline.priority.timeout_boost_factor", 2.0)?;
 
+        #[cfg(feature = "db")]
+        {
+            config = config.set_default("database.url", "sqlite:vecboost.db")?;
+            config = config.set_default("database.max_connections", 10)?;
+            config = config.set_default("database.connect_timeout_secs", 5)?;
+        }
+
         if let Some(path) = &self.config_path {
             if path.exists() {
                 config =
@@ -659,6 +666,14 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    /// 串行化 env var 测试,避免并行 set_var/remove_var 竞争
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_lock() -> &'static Mutex<()> {
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_apply_security_env_overrides_empty_jwt_secret() {
@@ -919,5 +934,388 @@ mod tests {
     fn test_config_error_display() {
         let err = ConfigError::Message("display test".to_string());
         assert_eq!(format!("{}", err), "Configuration error: display test");
+    }
+
+    #[test]
+    fn test_config_error_io_variant_display() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "missing file");
+        let err = ConfigError::Io(io_err);
+        assert!(format!("{}", err).contains("IO error"));
+        assert!(format!("{}", err).contains("missing file"));
+    }
+
+    #[test]
+    fn test_config_error_parse_variant_display() {
+        let toml_str = "invalid = [unclosed";
+        let parse_err = toml::from_str::<toml::Value>(toml_str).unwrap_err();
+        let err = ConfigError::Parse(parse_err);
+        assert!(format!("{}", err).contains("Parse error"));
+    }
+
+    #[test]
+    fn test_tensor_pool_config_default() {
+        let config = TensorPoolConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.max_batch_size, 128);
+        assert_eq!(config.max_sequence_length, 8192);
+        assert_eq!(config.pool_size_per_shape, 4);
+        assert!(config.preallocate_on_startup);
+    }
+
+    #[test]
+    fn test_buffer_pool_config_default() {
+        let config = BufferPoolConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.text_buffer_sizes, vec![16, 32, 64, 128, 256]);
+        assert_eq!(config.vector_buffer_sizes, vec![16, 32, 64, 128, 256]);
+        assert_eq!(config.pool_size_per_size, 8);
+    }
+
+    #[test]
+    fn test_model_pool_config_default() {
+        let config = ModelPoolConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.max_memory_mb, 8192);
+        assert!(config.cache_models);
+    }
+
+    #[test]
+    fn test_cuda_pool_config_default() {
+        let config = CudaPoolConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.max_memory_mb, 4096);
+    }
+
+    #[test]
+    fn test_app_config_default_full_structure() {
+        let config = AppConfig::default();
+        // 验证所有子配置默认值
+        assert_eq!(config.server.host, "0.0.0.0");
+        assert_eq!(config.server.port, 3000);
+        assert!(!config.server.grpc_enabled);
+        assert_eq!(config.server.grpc_port, Some(50051));
+        assert_eq!(config.server.timeout, Some(30));
+
+        assert_eq!(config.model.model_repo, "BAAI/bge-m3");
+        assert_eq!(config.model.batch_size, 32);
+        assert!(!config.model.use_gpu);
+
+        assert_eq!(config.embedding.default_aggregation, "mean");
+        assert_eq!(config.embedding.similarity_metric, "cosine");
+
+        assert_eq!(config.monitoring.memory_limit_mb, Some(4096));
+        assert!(config.monitoring.metrics_enabled);
+
+        assert!(!config.auth.enabled);
+        assert_eq!(config.auth.token_expiration_hours, Some(24));
+        assert!(!config.auth.csrf.enabled);
+        assert!(config.auth.csrf.allow_same_origin);
+
+        assert!(config.audit.enabled);
+        assert!(config.rate_limit.enabled);
+        assert!(config.memory_pool.enabled);
+    }
+
+    #[test]
+    fn test_app_config_to_toml_string_contains_sections() {
+        let config = AppConfig::default();
+        let toml_str = config.to_toml_string().unwrap();
+        assert!(toml_str.contains("[server]"));
+        assert!(toml_str.contains("[model]"));
+        assert!(toml_str.contains("[embedding]"));
+        assert!(toml_str.contains("[monitoring]"));
+        assert!(toml_str.contains("[auth]"));
+        assert!(toml_str.contains("[audit]"));
+        assert!(toml_str.contains("[rate_limit]"));
+        assert!(toml_str.contains("[memory_pool]"));
+        assert!(toml_str.contains("BAAI/bge-m3"));
+        assert!(toml_str.contains("0.0.0.0"));
+    }
+
+    #[test]
+    fn test_app_config_toml_roundtrip_preserves_values() {
+        let original = AppConfig::default();
+        let toml_str = original.to_toml_string().unwrap();
+        let parsed: AppConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.server.host, original.server.host);
+        assert_eq!(parsed.server.port, original.server.port);
+        assert_eq!(parsed.model.model_repo, original.model.model_repo);
+        assert_eq!(parsed.model.batch_size, original.model.batch_size);
+        assert_eq!(parsed.embedding.cache_size, original.embedding.cache_size);
+        assert_eq!(
+            parsed.rate_limit.window_secs,
+            original.rate_limit.window_secs
+        );
+        assert_eq!(parsed.audit.log_file_path, original.audit.log_file_path);
+    }
+
+    #[test]
+    fn test_app_config_toml_roundtrip_custom_values() {
+        let mut original = AppConfig::default();
+        original.server.port = 8080;
+        original.server.host = "127.0.0.1".to_string();
+        original.model.batch_size = 64;
+        original.embedding.cache_size = 2048;
+        original.rate_limit.global_requests_per_minute = 5000;
+        original.audit.log_level = "debug".to_string();
+
+        let toml_str = original.to_toml_string().unwrap();
+        let parsed: AppConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.server.port, 8080);
+        assert_eq!(parsed.server.host, "127.0.0.1");
+        assert_eq!(parsed.model.batch_size, 64);
+        assert_eq!(parsed.embedding.cache_size, 2048);
+        assert_eq!(parsed.rate_limit.global_requests_per_minute, 5000);
+        assert_eq!(parsed.audit.log_level, "debug");
+    }
+
+    #[test]
+    fn test_app_config_save_to_file_writes_valid_toml() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("vecboost_test_config_{}.toml", std::process::id()));
+        let config = AppConfig::default();
+        let save_result = config.save_to_file(&path);
+        assert!(save_result.is_ok(), "save should succeed");
+        assert!(path.exists(), "config file should be created");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("[server]"));
+        assert!(content.contains("[model]"));
+
+        // 验证写入的文件可以被反序列化
+        let parsed: AppConfig = toml::from_str(&content).unwrap();
+        assert_eq!(parsed.server.port, 3000);
+        assert_eq!(parsed.model.model_repo, "BAAI/bge-m3");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_app_config_save_to_file_invalid_path_fails() {
+        let config = AppConfig::default();
+        // 写入一个不存在的目录下的文件应失败
+        let path = PathBuf::from("/nonexistent_dir_xyz/vecboost_config.toml");
+        let result = config.save_to_file(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_app_config_load_with_nonexistent_path_uses_defaults() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        // 提供不存在的配置文件路径,load() 应使用默认值
+        let result = AppConfig::load_with_path("/nonexistent_path_xyz/config.toml");
+        assert!(result.is_ok(), "load should succeed with defaults");
+        let cfg = result.unwrap();
+        assert_eq!(cfg.server.port, 3000);
+        assert_eq!(cfg.model.model_repo, "BAAI/bge-m3");
+    }
+
+    #[test]
+    fn test_app_config_load_uses_defaults() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        // 默认 load(),不指定路径。如果 config.toml 不存在于当前目录则用默认值。
+        // 此测试仅验证不 panic 且返回有效配置。
+        let result = AppConfig::load();
+        if let Ok(cfg) = result {
+            assert!(!cfg.server.host.is_empty());
+            assert!(cfg.server.port > 0);
+        }
+    }
+
+    #[test]
+    fn test_apply_security_env_overrides_no_env_vars_is_noop() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        // 确保不设置环境变量时,函数不修改配置
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+
+        let mut cfg = AppConfig::default();
+        cfg.auth.jwt_secret = None;
+        cfg.auth.default_admin_password = None;
+        let result = apply_security_env_overrides(&mut cfg);
+        assert!(result.is_ok());
+        assert!(cfg.auth.jwt_secret.is_none());
+        assert!(cfg.auth.default_admin_password.is_none());
+    }
+
+    #[test]
+    fn test_apply_security_env_overrides_empty_jwt_rejected() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("VECBOOST_JWT_SECRET", "");
+        }
+        let mut cfg = AppConfig::default();
+        let result = apply_security_env_overrides(&mut cfg);
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+        }
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("VECBOOST_JWT_SECRET cannot be empty"));
+    }
+
+    #[test]
+    fn test_apply_security_env_overrides_short_jwt_rejected() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("VECBOOST_JWT_SECRET", "tooshort");
+        }
+        let mut cfg = AppConfig::default();
+        let result = apply_security_env_overrides(&mut cfg);
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+        }
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("at least 32 characters"));
+    }
+
+    #[test]
+    fn test_apply_security_env_overrides_valid_jwt_applied() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let secret = "this-is-a-valid-jwt-secret-32chars!!".to_string();
+        unsafe {
+            std::env::set_var("VECBOOST_JWT_SECRET", &secret);
+        }
+        let mut cfg = AppConfig::default();
+        let result = apply_security_env_overrides(&mut cfg);
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+        }
+        assert!(result.is_ok());
+        assert_eq!(cfg.auth.jwt_secret, Some(secret));
+    }
+
+    #[test]
+    fn test_apply_security_env_overrides_empty_password_rejected() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("VECBOOST_ADMIN_PASSWORD", "");
+        }
+        let mut cfg = AppConfig::default();
+        let result = apply_security_env_overrides(&mut cfg);
+        unsafe {
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("VECBOOST_ADMIN_PASSWORD cannot be empty"));
+    }
+
+    #[test]
+    fn test_apply_security_env_overrides_short_password_rejected() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("VECBOOST_ADMIN_PASSWORD", "short");
+        }
+        let mut cfg = AppConfig::default();
+        let result = apply_security_env_overrides(&mut cfg);
+        unsafe {
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("at least 12 characters"));
+    }
+
+    #[test]
+    fn test_apply_security_env_overrides_valid_password_applied() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let password = "SuperSecurePass123!".to_string();
+        unsafe {
+            std::env::set_var("VECBOOST_ADMIN_PASSWORD", &password);
+        }
+        let mut cfg = AppConfig::default();
+        let result = apply_security_env_overrides(&mut cfg);
+        unsafe {
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        assert!(result.is_ok());
+        assert_eq!(cfg.auth.default_admin_password, Some(password));
+    }
+
+    #[test]
+    fn test_apply_priority_defaults_idempotent() {
+        let mut cfg = AppConfig::default();
+        // 第一次应用
+        apply_priority_defaults(&mut cfg.pipeline.priority);
+        let tier_count = cfg.pipeline.priority.user_tier_weights.len();
+        let source_count = cfg.pipeline.priority.source_weights.len();
+        // 第二次应用不应改变(non-empty 时跳过)
+        apply_priority_defaults(&mut cfg.pipeline.priority);
+        assert_eq!(cfg.pipeline.priority.user_tier_weights.len(), tier_count);
+        assert_eq!(cfg.pipeline.priority.source_weights.len(), source_count);
+    }
+
+    #[test]
+    fn test_apply_priority_defaults_source_weights_values() {
+        let mut cfg = AppConfig::default();
+        cfg.pipeline.priority.source_weights.clear();
+        apply_priority_defaults(&mut cfg.pipeline.priority);
+        assert_eq!(cfg.pipeline.priority.source_weights.get("http"), Some(&1.0));
+        assert_eq!(cfg.pipeline.priority.source_weights.get("grpc"), Some(&1.2));
+        assert_eq!(
+            cfg.pipeline.priority.source_weights.get("internal"),
+            Some(&1.5)
+        );
+    }
+
+    #[test]
+    fn test_rate_limit_config_with_whitelist() {
+        let mut config = RateLimitConfig::default();
+        config.ip_whitelist = vec!["127.0.0.1".to_string(), "10.0.0.0/8".to_string()];
+        assert_eq!(config.ip_whitelist.len(), 2);
+        assert!(config.ip_whitelist.contains(&"127.0.0.1".to_string()));
+    }
+
+    #[test]
+    fn test_config_loader_with_config_path_builder() {
+        let loader = ConfigLoader::new().with_config_path("/custom/path.toml");
+        assert_eq!(loader.config_path, Some(PathBuf::from("/custom/path.toml")));
+        assert_eq!(loader.env_prefix, "VECBOOST");
+    }
+
+    #[test]
+    fn test_config_loader_with_env_prefix_builder() {
+        let loader = ConfigLoader::new().with_env_prefix("MYAPP");
+        assert!(loader.config_path.is_none());
+        assert_eq!(loader.env_prefix, "MYAPP");
+    }
+
+    #[test]
+    fn test_config_loader_chained_builders() {
+        let loader = ConfigLoader::new()
+            .with_config_path("/path/to/config.toml")
+            .with_env_prefix("CUSTOM");
+        assert_eq!(
+            loader.config_path,
+            Some(PathBuf::from("/path/to/config.toml"))
+        );
+        assert_eq!(loader.env_prefix, "CUSTOM");
+    }
+
+    #[test]
+    fn test_app_config_clone_preserves_values() {
+        let original = AppConfig::default();
+        let cloned = original.clone();
+        assert_eq!(original.server.port, cloned.server.port);
+        assert_eq!(original.model.model_repo, cloned.model.model_repo);
+        assert_eq!(
+            original.rate_limit.window_secs,
+            cloned.rate_limit.window_secs
+        );
+    }
+
+    #[test]
+    fn test_app_config_serialize_to_toml_valid() {
+        let config = AppConfig::default();
+        let toml_str = config.to_toml_string();
+        assert!(toml_str.is_ok());
+        let content = toml_str.unwrap();
+        // 验证 TOML 内容是有效的语法
+        let parsed: toml::Value = toml::from_str(&content).unwrap();
+        assert!(parsed.is_table());
     }
 }

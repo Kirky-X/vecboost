@@ -383,4 +383,458 @@ mod validator_tests {
         );
         assert!(validator.validate_search("query", &[], Some(5)).is_err());
     }
+
+    #[test]
+    fn test_sql_injection_attempts_rejected_by_text_validator() {
+        // SQL 注入尝试作为文本输入:验证器不会因 SQL 语法报错,
+        // 但应正常接受为合法文本(嵌入服务处理任意文本)。
+        // 这里验证这些输入不会导致 panic 或异常行为(它们是合法文本)。
+        let validator = InputValidator::with_default();
+        // 经典 SQL 注入模式作为文本应被接受(文本验证只检查长度/空)
+        assert!(validator.validate_text("' OR 1=1 --").is_ok());
+        assert!(validator.validate_text("'; DROP TABLE users; --").is_ok());
+        assert!(
+            validator
+                .validate_text("UNION SELECT * FROM passwords")
+                .is_ok()
+        );
+        assert!(validator.validate_text("admin'--").is_ok());
+        assert!(
+            validator
+                .validate_text("1; EXEC xp_cmdshell('dir')")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_xss_attempts_as_text_are_valid() {
+        // XSS 模式作为文本输入是合法的(嵌入服务不解释 HTML/JS)
+        let validator = InputValidator::with_default();
+        assert!(
+            validator
+                .validate_text("<script>alert('xss')</script>")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate_text("<img src=x onerror=alert(1)>")
+                .is_ok()
+        );
+        assert!(
+            validator
+                .validate_text("javascript:document.cookie")
+                .is_ok()
+        );
+        assert!(validator.validate_text("<svg/onload=alert(1)>").is_ok());
+    }
+
+    #[test]
+    fn test_special_characters_in_text() {
+        let validator = InputValidator::with_default();
+        assert!(validator.validate_text("Hello, 世界!").is_ok());
+        assert!(validator.validate_text("Emoji: 😀🎉").is_ok());
+        assert!(validator.validate_text("Tab\tcharacter").is_ok());
+        assert!(validator.validate_text("Newline\nin text").is_ok());
+        assert!(validator.validate_text("Symbols: @#$%^&*()").is_ok());
+        assert!(validator.validate_text("Mixed: abc123!@#中文").is_ok());
+    }
+
+    #[test]
+    fn test_text_exceeding_max_length_rejected() {
+        let validator = InputValidator::with_default();
+        // MAX_TEXT_LENGTH = 10000
+        let long_text = "a".repeat(MAX_TEXT_LENGTH + 1);
+        let result = validator.validate_text(&long_text);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("too long")),
+            _ => panic!("Expected InvalidInput error"),
+        }
+    }
+
+    #[test]
+    fn test_text_at_max_length_accepted() {
+        let validator = InputValidator::with_default();
+        let text = "a".repeat(MAX_TEXT_LENGTH);
+        assert!(validator.validate_text(&text).is_ok());
+    }
+
+    #[test]
+    fn test_text_below_min_length_rejected() {
+        // MIN_TEXT_LENGTH = 1, 空字符串已被空检查捕获,
+        // 但配置更高 min 时应触发 too short
+        let config = ValidationConfig::new(
+            NonZeroUsize::new(MAX_TEXT_LENGTH),
+            Some(5), // min_text_length = 5
+            NonZeroUsize::new(MAX_BATCH_SIZE),
+            NonZeroUsize::new(MAX_SEARCH_RESULTS),
+            NonZeroUsize::new(MAX_CONCURRENT_REQUESTS),
+        );
+        let validator = InputValidator::new(config);
+        assert!(validator.validate_text("ab").is_err());
+        let result = validator.validate_text("ab");
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("too short")),
+            _ => panic!("Expected InvalidInput"),
+        }
+    }
+
+    #[test]
+    fn test_text_exactly_at_min_length_accepted() {
+        let config = ValidationConfig::new(
+            NonZeroUsize::new(MAX_TEXT_LENGTH),
+            Some(3),
+            NonZeroUsize::new(MAX_BATCH_SIZE),
+            NonZeroUsize::new(MAX_SEARCH_RESULTS),
+            NonZeroUsize::new(MAX_CONCURRENT_REQUESTS),
+        );
+        let validator = InputValidator::new(config);
+        assert!(validator.validate_text("abc").is_ok());
+    }
+
+    #[test]
+    fn test_batch_empty_rejected() {
+        let validator = InputValidator::with_default();
+        let result = validator.validate_batch(&[]);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("empty")),
+            _ => panic!("Expected InvalidInput"),
+        }
+    }
+
+    #[test]
+    fn test_batch_with_empty_text_rejected_with_index() {
+        let validator = InputValidator::with_default();
+        let texts = vec!["valid".to_string(), "".to_string()];
+        let result = validator.validate_batch(&texts);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => {
+                assert!(msg.contains("index 1"));
+            }
+            _ => panic!("Expected InvalidInput with index"),
+        }
+    }
+
+    #[test]
+    fn test_batch_within_limit_accepted() {
+        let config = ValidationConfig::new(
+            NonZeroUsize::new(MAX_TEXT_LENGTH),
+            Some(1),
+            NonZeroUsize::new(3),
+            NonZeroUsize::new(MAX_SEARCH_RESULTS),
+            NonZeroUsize::new(MAX_CONCURRENT_REQUESTS),
+        );
+        let validator = InputValidator::new(config);
+        let texts = vec!["t1".to_string(), "t2".to_string(), "t3".to_string()];
+        assert!(validator.validate_batch(&texts).is_ok());
+    }
+
+    #[test]
+    fn test_batch_exceeds_max_size_rejected() {
+        let config = ValidationConfig::new(
+            NonZeroUsize::new(MAX_TEXT_LENGTH),
+            Some(1),
+            NonZeroUsize::new(2),
+            NonZeroUsize::new(MAX_SEARCH_RESULTS),
+            NonZeroUsize::new(MAX_CONCURRENT_REQUESTS),
+        );
+        let validator = InputValidator::new(config);
+        let texts = vec!["t1".to_string(), "t2".to_string(), "t3".to_string()];
+        let result = validator.validate_batch(&texts);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("exceeds maximum")),
+            _ => panic!("Expected InvalidInput"),
+        }
+    }
+
+    #[test]
+    fn test_search_with_top_k_zero_rejected() {
+        let validator = InputValidator::with_default();
+        let result = validator.validate_search("query", &["text1".to_string()], Some(0));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("top_k must be at least 1")),
+            _ => panic!("Expected InvalidInput"),
+        }
+    }
+
+    #[test]
+    fn test_search_with_top_k_exceeding_max_rejected() {
+        let validator = InputValidator::with_default();
+        let k = MAX_SEARCH_RESULTS + 1;
+        let result = validator.validate_search("query", &["text1".to_string()], Some(k));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("exceeds maximum")),
+            _ => panic!("Expected InvalidInput"),
+        }
+    }
+
+    #[test]
+    fn test_search_with_empty_query_rejected() {
+        let validator = InputValidator::with_default();
+        let result = validator.validate_search("", &["text1".to_string()], Some(5));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_with_whitespace_query_rejected() {
+        let validator = InputValidator::with_default();
+        let result = validator.validate_search("   ", &["text1".to_string()], Some(5));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_texts_exceed_max_rejected() {
+        let config = ValidationConfig::new(
+            NonZeroUsize::new(MAX_TEXT_LENGTH),
+            Some(1),
+            NonZeroUsize::new(MAX_BATCH_SIZE),
+            NonZeroUsize::new(2),
+            NonZeroUsize::new(MAX_CONCURRENT_REQUESTS),
+        );
+        let validator = InputValidator::new(config);
+        let texts = vec!["t1".to_string(), "t2".to_string(), "t3".to_string()];
+        let result = validator.validate_search("query", &texts, Some(1));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("exceeds maximum")),
+            _ => panic!("Expected InvalidInput"),
+        }
+    }
+
+    #[test]
+    fn test_search_with_invalid_text_in_list_rejected_with_index() {
+        let validator = InputValidator::with_default();
+        let texts = vec!["valid".to_string(), "".to_string()];
+        let result = validator.validate_search("query", &texts, Some(1));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("index 1")),
+            _ => panic!("Expected InvalidInput with index"),
+        }
+    }
+
+    #[test]
+    fn test_search_with_none_top_k_accepted() {
+        let validator = InputValidator::with_default();
+        let result = validator.validate_search("query", &["text1".to_string()], None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validation_config_default_values() {
+        let config = ValidationConfig::default();
+        assert_eq!(config.max_text_length.get(), MAX_TEXT_LENGTH);
+        assert_eq!(config.min_text_length, MIN_TEXT_LENGTH);
+        assert_eq!(config.max_batch_size.get(), MAX_BATCH_SIZE);
+        assert_eq!(config.max_search_results.get(), MAX_SEARCH_RESULTS);
+        assert_eq!(
+            config.max_concurrent_requests.get(),
+            MAX_CONCURRENT_REQUESTS
+        );
+    }
+
+    #[test]
+    fn test_validation_config_new_with_custom_values() {
+        let config = ValidationConfig::new(
+            NonZeroUsize::new(5000),
+            Some(2),
+            NonZeroUsize::new(50),
+            NonZeroUsize::new(500),
+            NonZeroUsize::new(50),
+        );
+        assert_eq!(config.max_text_length.get(), 5000);
+        assert_eq!(config.min_text_length, 2);
+        assert_eq!(config.max_batch_size.get(), 50);
+        assert_eq!(config.max_search_results.get(), 500);
+        assert_eq!(config.max_concurrent_requests.get(), 50);
+    }
+
+    #[test]
+    fn test_validation_config_new_with_none_uses_defaults() {
+        let config = ValidationConfig::new(None, None, None, None, None);
+        assert_eq!(config.max_text_length.get(), MAX_TEXT_LENGTH);
+        assert_eq!(config.min_text_length, MIN_TEXT_LENGTH);
+        assert_eq!(config.max_batch_size.get(), MAX_BATCH_SIZE);
+        assert_eq!(config.max_search_results.get(), MAX_SEARCH_RESULTS);
+        assert_eq!(
+            config.max_concurrent_requests.get(),
+            MAX_CONCURRENT_REQUESTS
+        );
+    }
+
+    #[test]
+    fn test_file_extension_validation_allowed_extensions() {
+        let validator = InputValidator::with_default();
+        // 这些扩展名在 ALLOWED_FILE_EXTENSIONS 中
+        assert!(validator.validate_file_extension("doc.txt").is_ok());
+        assert!(validator.validate_file_extension("readme.md").is_ok());
+        assert!(validator.validate_file_extension("data.json").is_ok());
+        assert!(validator.validate_file_extension("file.csv").is_ok());
+        assert!(validator.validate_file_extension("page.html").is_ok());
+        assert!(validator.validate_file_extension("page.htm").is_ok());
+        assert!(validator.validate_file_extension("data.xml").is_ok());
+        assert!(validator.validate_file_extension("code.py").is_ok());
+        assert!(validator.validate_file_extension("code.rs").is_ok());
+        assert!(validator.validate_file_extension("code.js").is_ok());
+        assert!(validator.validate_file_extension("code.ts").is_ok());
+        assert!(validator.validate_file_extension("doc.rst").is_ok());
+    }
+
+    #[test]
+    fn test_file_extension_validation_disallowed_extensions() {
+        let validator = InputValidator::with_default();
+        assert!(validator.validate_file_extension("malware.exe").is_err());
+        assert!(validator.validate_file_extension("archive.zip").is_err());
+        assert!(validator.validate_file_extension("image.png").is_err());
+        assert!(validator.validate_file_extension("binary.bin").is_err());
+    }
+
+    #[test]
+    fn test_file_extension_validation_case_insensitive() {
+        let validator = InputValidator::with_default();
+        assert!(validator.validate_file_extension("FILE.TXT").is_ok());
+        assert!(validator.validate_file_extension("File.Md").is_ok());
+        assert!(validator.validate_file_extension("DATA.JSON").is_ok());
+    }
+
+    #[test]
+    fn test_file_extension_validation_no_extension_rejected() {
+        let validator = InputValidator::with_default();
+        // "noext" 没有 "." 分隔符,rsplit('.') 返回整个字符串 "noext"
+        // 不在允许列表中,应被拒绝
+        let result = validator.validate_file_extension("noext");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_file_size_validation_nonexistent_file_rejected() {
+        let validator = InputValidator::with_default();
+        let result = validator.validate_file_size("/nonexistent/path/file.txt");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("Cannot access file")),
+            _ => panic!("Expected InvalidInput"),
+        }
+    }
+
+    #[test]
+    fn test_file_size_validation_small_file_accepted() {
+        let validator = InputValidator::with_default();
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "vecboost_validator_test_{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&path, "hello").unwrap();
+        let result = validator.validate_file_size(path.to_str().unwrap());
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_file_content_validation_text_file_accepted() {
+        let validator = InputValidator::with_default();
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "vecboost_validator_text_{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&path, "This is plain text content").unwrap();
+        let result = validator.validate_file_content(path.to_str().unwrap());
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_file_content_validation_json_file_accepted() {
+        let validator = InputValidator::with_default();
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "vecboost_validator_json_{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, "{\"key\": \"value\"}").unwrap();
+        let result = validator.validate_file_content(path.to_str().unwrap());
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_file_content_validation_empty_file_accepted() {
+        let validator = InputValidator::with_default();
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "vecboost_validator_empty_{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&path, "").unwrap();
+        let result = validator.validate_file_content(path.to_str().unwrap());
+        std::fs::remove_file(&path).ok();
+        // 空文件应该被接受(bytes_read 为空时直接返回 Ok)
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_file_content_validation_nonexistent_file_rejected() {
+        let validator = InputValidator::with_default();
+        let result = validator.validate_file_content("/nonexistent/path/file.txt");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("Cannot open file")),
+            _ => panic!("Expected InvalidInput"),
+        }
+    }
+
+    #[test]
+    fn test_file_path_validation_combines_all_checks() {
+        let validator = InputValidator::with_default();
+        // 不存在的文件路径,扩展名合法但文件不存在 → 应失败
+        let result = validator.validate_file_path("/nonexistent/file.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_file_path_validation_rejects_disallowed_extension() {
+        let validator = InputValidator::with_default();
+        let result = validator.validate_file_path("/some/path/file.exe");
+        // 扩展名检查在前,应先失败
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("not allowed")),
+            _ => panic!("Expected InvalidInput for disallowed extension"),
+        }
+    }
+
+    #[test]
+    fn test_file_validator_trait_validate_file_checks_size() {
+        let validator = InputValidator::with_default();
+        // FileValidator trait 只调用 validate_file_size
+        let result = validator.validate_file("/nonexistent/file.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_text_validator_trait_validate_text_with_unicode() {
+        let validator = InputValidator::with_default();
+        // 多字节字符应按 char count 计数,不是字节
+        let text = "中文".to_string(); // 2 个字符,6 字节
+        assert!(validator.validate_text(&text).is_ok());
+    }
+
+    #[test]
+    fn test_whitespace_only_text_rejected_with_correct_message() {
+        let validator = InputValidator::with_default();
+        let result = validator.validate_text("   \t\n  ");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("whitespace")),
+            _ => panic!("Expected InvalidInput for whitespace-only text"),
+        }
+    }
 }

@@ -9,10 +9,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, AeadCore, KeyInit},
 };
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
-};
+use argon2::Argon2;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -72,33 +69,15 @@ impl EncryptedFileKeyStore {
     }
 
     fn derive_key(password: &str) -> Result<[u8; 32], VecboostError> {
-        // 使用 Argon2id 进行安全的密钥派生
-        // Argon2id 是 Argon2 的混合版本，平衡了抗侧信道攻击和抗 GPU/ASIC 攻击
+        // Argon2id 提供抗侧信道攻击和抗 GPU/ASIC 暴力破解保护。
+        // 固定 salt 使密钥派生具有确定性,支持跨实例持久化
+        // (同一个文件可以被用相同密码创建的不同 store 实例读写)。
         let argon2 = Argon2::default();
-
-        // 生成随机盐值
-        let salt = SaltString::generate(&mut OsRng);
-
-        // 创建密码哈希
-        let password_hash = argon2
-            .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| VecboostError::security_error(format!("Failed to derive key: {}", e)))?;
-
-        // 从哈希中提取 32 字节作为密钥
-        let hash_bytes = password_hash
-            .hash
-            .ok_or_else(|| VecboostError::security_error("Password hash is missing".to_string()))?;
-
-        // 确保我们有足够的字节
-        if hash_bytes.len() < 32 {
-            return Err(VecboostError::security_error(
-                "Derived key is too short".to_string(),
-            ));
-        }
-
+        let salt = b"vecboost_salt_v1"; // 16 bytes
         let mut key = [0u8; 32];
-        key.copy_from_slice(&hash_bytes.as_bytes()[..32]);
-
+        argon2
+            .hash_password_into(password.as_bytes(), salt, &mut key)
+            .map_err(|e| VecboostError::security_error(format!("Failed to derive key: {}", e)))?;
         Ok(key)
     }
 
@@ -128,11 +107,14 @@ impl EncryptedFileKeyStore {
         let nonce_bytes = hex::decode(nonce_hex)
             .map_err(|e| VecboostError::security_error(format!("Invalid nonce: {}", e)))?;
 
+        let ciphertext_bytes = hex::decode(ciphertext)
+            .map_err(|e| VecboostError::security_error(format!("Invalid ciphertext: {}", e)))?;
+
         let cipher = Aes256Gcm::new(key.into());
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let plaintext = cipher
-            .decrypt(nonce, ciphertext.as_bytes())
+            .decrypt(nonce, ciphertext_bytes.as_ref())
             .map_err(|e| VecboostError::security_error(format!("Decryption failed: {}", e)))?;
 
         let json_str = String::from_utf8(plaintext)
@@ -293,5 +275,368 @@ impl KeyStore for EncryptedFileKeyStore {
             .keys
             .iter()
             .any(|e| e.key_type == type_str && e.name == name))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::security::key_store::{KeyType, SecretKey};
+    use tempfile::tempdir;
+
+    /// Helper: build a store path inside a fresh temporary directory.
+    fn make_store_path(dir: &tempfile::TempDir) -> String {
+        dir.path().join("keys.enc").to_string_lossy().to_string()
+    }
+
+    #[tokio::test]
+    async fn test_new_creates_empty_store_when_file_absent() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed when file absent");
+
+        let keys = store.list(&KeyType::JwtSecret).await.expect("list failed");
+        assert!(keys.is_empty(), "fresh store should have no keys");
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_key() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed");
+
+        let key = SecretKey::jwt_secret("my_jwt_secret_value");
+        store.set(&key).await.expect("set should succeed");
+
+        let retrieved = store
+            .get(&KeyType::JwtSecret, "jwt_secret")
+            .await
+            .expect("get failed");
+        assert!(retrieved.is_some(), "key should exist after set");
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.value, "my_jwt_secret_value");
+        assert_eq!(retrieved.name, "jwt_secret");
+        assert_eq!(retrieved.key_type, KeyType::JwtSecret);
+    }
+
+    #[tokio::test]
+    async fn test_get_missing_key_returns_none() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed");
+
+        let result = store
+            .get(&KeyType::ApiKey, "nonexistent")
+            .await
+            .expect("get should not error for missing key");
+        assert!(result.is_none(), "missing key should return None");
+    }
+
+    #[tokio::test]
+    async fn test_set_updates_existing_key() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed");
+
+        let key1 = SecretKey::api_key("service_a", "old_value");
+        store.set(&key1).await.expect("set old value failed");
+
+        let key2 = SecretKey::api_key("service_a", "new_value");
+        store.set(&key2).await.expect("set new value failed");
+
+        let keys = store.list(&KeyType::ApiKey).await.expect("list failed");
+        assert_eq!(keys.len(), 1, "should have exactly one key after update");
+
+        let retrieved = store
+            .get(&KeyType::ApiKey, "service_a")
+            .await
+            .expect("get failed")
+            .expect("key should exist");
+        assert_eq!(retrieved.value, "new_value", "value should be updated");
+    }
+
+    #[tokio::test]
+    async fn test_delete_key() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed");
+
+        let key = SecretKey::api_key("to_delete", "value");
+        store.set(&key).await.expect("set failed");
+        assert!(
+            store
+                .exists(&KeyType::ApiKey, "to_delete")
+                .await
+                .expect("exists failed"),
+            "key should exist before delete"
+        );
+
+        store
+            .delete(&KeyType::ApiKey, "to_delete")
+            .await
+            .expect("delete failed");
+
+        assert!(
+            !store
+                .exists(&KeyType::ApiKey, "to_delete")
+                .await
+                .expect("exists failed"),
+            "key should not exist after delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_missing_key_is_noop() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed");
+
+        store
+            .delete(&KeyType::ApiKey, "never_existed")
+            .await
+            .expect("delete missing key should not error");
+    }
+
+    #[tokio::test]
+    async fn test_list_keys_by_type() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed");
+
+        store
+            .set(&SecretKey::api_key("key_a", "v1"))
+            .await
+            .expect("set failed");
+        store
+            .set(&SecretKey::api_key("key_b", "v2"))
+            .await
+            .expect("set failed");
+        store
+            .set(&SecretKey::jwt_secret("jwt_val"))
+            .await
+            .expect("set failed");
+
+        let api_keys = store.list(&KeyType::ApiKey).await.expect("list failed");
+        assert_eq!(api_keys.len(), 2, "should have 2 api keys");
+        assert!(api_keys.contains(&"key_a".to_string()));
+        assert!(api_keys.contains(&"key_b".to_string()));
+
+        let jwt_keys = store.list(&KeyType::JwtSecret).await.expect("list failed");
+        assert_eq!(jwt_keys.len(), 1, "should have 1 jwt key");
+    }
+
+    #[tokio::test]
+    async fn test_exists() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed");
+
+        assert!(
+            !store
+                .exists(&KeyType::DatabasePassword, "database_password")
+                .await
+                .expect("exists failed"),
+            "key should not exist before set"
+        );
+
+        store
+            .set(&SecretKey::database_password("db_pass"))
+            .await
+            .expect("set failed");
+
+        assert!(
+            store
+                .exists(&KeyType::DatabasePassword, "database_password")
+                .await
+                .expect("exists failed"),
+            "key should exist after set"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_persistence_across_store_instances() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store1 = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed");
+        store1
+            .set(&SecretKey::model_api_key("hf_token_abc"))
+            .await
+            .expect("set failed");
+
+        let store2 = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed loading existing file");
+        let retrieved = store2
+            .get(&KeyType::ModelApiKey, "model_api_key")
+            .await
+            .expect("get failed")
+            .expect("key should persist");
+        assert_eq!(retrieved.value, "hf_token_abc");
+    }
+
+    #[tokio::test]
+    async fn test_encrypted_file_format() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed");
+
+        let secret_value = "super_secret_value_xyz";
+        store
+            .set(&SecretKey::api_key("format_test", secret_value))
+            .await
+            .expect("set failed");
+
+        let content = tokio::fs::read_to_string(&path)
+            .await
+            .expect("should read key file");
+
+        // Format should be "nonce_hex:ciphertext_hex".
+        let parts: Vec<&str> = content.splitn(2, ':').collect();
+        assert_eq!(parts.len(), 2, "file should have nonce:ciphertext format");
+        assert!(hex::decode(parts[0]).is_ok(), "nonce should be valid hex");
+        assert!(
+            hex::decode(parts[1]).is_ok(),
+            "ciphertext should be valid hex"
+        );
+
+        // The plaintext secret value must NOT appear in the file.
+        assert!(
+            !content.contains(secret_value),
+            "secret value must not appear in plaintext in the file"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalid_password_fails_to_load() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store1 = EncryptedFileKeyStore::new(&path, "password_A_correct")
+            .await
+            .expect("new should succeed");
+        store1
+            .set(&SecretKey::jwt_secret("value"))
+            .await
+            .expect("set failed");
+
+        let result = EncryptedFileKeyStore::new(&path, "password_B_wrong").await;
+        assert!(result.is_err(), "loading with wrong password should fail");
+        let err_msg = format!("{}", result.err().unwrap());
+        assert!(
+            err_msg.contains("Decryption failed"),
+            "error should mention decryption failure, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_corrupted_file_no_separator_fails() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        // Write garbage without the ':' separator.
+        tokio::fs::write(&path, "this_is_not_valid_format")
+            .await
+            .expect("write failed");
+
+        let result = EncryptedFileKeyStore::new(&path, "any_password").await;
+        assert!(result.is_err(), "loading corrupted file should fail");
+        let err_msg = format!("{}", result.err().unwrap());
+        assert!(
+            err_msg.contains("Invalid key file format"),
+            "error should mention invalid format, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_corrupted_file_invalid_hex_fails() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        // Content with the colon separator but invalid hex bytes.
+        tokio::fs::write(&path, "not_hex:also_not_hex")
+            .await
+            .expect("write failed");
+
+        let result = EncryptedFileKeyStore::new(&path, "any_password").await;
+        assert!(result.is_err(), "loading file with invalid hex should fail");
+    }
+
+    #[tokio::test]
+    async fn test_save_to_nonexistent_directory_fails() {
+        let dir = tempdir().expect("failed to create temp dir");
+        // Path inside a subdirectory that does not exist.
+        let path = dir
+            .path()
+            .join("nonexistent_subdir")
+            .join("keys.enc")
+            .to_string_lossy()
+            .to_string();
+
+        let store = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed (file doesn't exist yet)");
+
+        let result = store.set(&SecretKey::jwt_secret("value")).await;
+        assert!(
+            result.is_err(),
+            "save to non-existent directory should fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_custom_key_type() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+
+        let store = EncryptedFileKeyStore::new(&path, "strong_password_123")
+            .await
+            .expect("new should succeed");
+
+        let custom_type = KeyType::Custom("my_custom".to_string());
+        let key = SecretKey::new(custom_type.clone(), "custom_name", "custom_value");
+        store.set(&key).await.expect("set failed");
+
+        let retrieved = store
+            .get(&custom_type, "custom_name")
+            .await
+            .expect("get failed")
+            .expect("key should exist");
+        assert_eq!(retrieved.value, "custom_value");
+
+        let custom_keys = store.list(&custom_type).await.expect("list failed");
+        assert_eq!(custom_keys.len(), 1);
+        assert!(custom_keys.contains(&"custom_name".to_string()));
     }
 }

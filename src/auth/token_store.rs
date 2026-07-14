@@ -337,4 +337,198 @@ mod tests {
         assert!(store.is_blacklisted("valid-jti").await.unwrap());
         assert_eq!(store.blacklist_size().await, 1);
     }
+
+    // ===== MemoryTokenStore 边界测试 =====
+
+    #[tokio::test]
+    async fn test_memory_token_store_default() {
+        let store = MemoryTokenStore::default();
+        assert_eq!(store.blacklist_size().await, 0);
+        assert!(!store.is_blacklisted("any").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_add_duplicate_jti_idempotent() {
+        // 重复添加同一 jti 不应增加计数
+        let store = MemoryTokenStore::new();
+        store.add_to_blacklist("dup-jti").await.unwrap();
+        store.add_to_blacklist("dup-jti").await.unwrap();
+        assert_eq!(store.blacklist_size().await, 1);
+        assert!(store.is_blacklisted("dup-jti").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_remove_nonexistent_jti_succeeds() {
+        // 删除不存在的 jti 不应报错
+        let store = MemoryTokenStore::new();
+        let result = store.remove_from_blacklist("nonexistent").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_blacklist_size_with_expired_entries() {
+        let store = MemoryTokenStore::new();
+        // 注入一个已过期和一个有效条目
+        {
+            let mut bl = store.blacklist.write().await;
+            bl.insert("expired".to_string(), now_secs().saturating_sub(100));
+            bl.insert("valid".to_string(), now_secs() + 3600);
+        }
+        // blacklist_size 只计算未过期的
+        assert_eq!(store.blacklist_size().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_is_blacklisted_with_expired_entry() {
+        // 已过期的条目应返回 false
+        let store = MemoryTokenStore::new();
+        {
+            let mut bl = store.blacklist.write().await;
+            bl.insert("expired-jti".to_string(), now_secs().saturating_sub(1));
+        }
+        assert!(!store.is_blacklisted("expired-jti").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_empty_jti_handled() {
+        let store = MemoryTokenStore::new();
+        // 空 jti 应正常处理
+        store.add_to_blacklist("").await.unwrap();
+        assert!(store.is_blacklisted("").await.unwrap());
+        assert_eq!(store.blacklist_size().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_long_jti_handled() {
+        let store = MemoryTokenStore::new();
+        let long_jti = "j".repeat(1000);
+        store.add_to_blacklist(&long_jti).await.unwrap();
+        assert!(store.is_blacklisted(&long_jti).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_special_chars_jti_handled() {
+        let store = MemoryTokenStore::new();
+        let special_jti = "jti-with-special:chars/and.symbols#";
+        store.add_to_blacklist(special_jti).await.unwrap();
+        assert!(store.is_blacklisted(special_jti).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_is_blacklisted_sync_with_expired_entry() {
+        // is_blacklisted_sync 应正确处理过期条目
+        let store = MemoryTokenStore::new();
+        {
+            let mut bl = store.blacklist.write().await;
+            bl.insert("expired-sync".to_string(), now_secs().saturating_sub(1));
+        }
+        assert!(!store.is_blacklisted_sync("expired-sync"));
+    }
+
+    #[tokio::test]
+    async fn test_is_blacklisted_sync_empty_jti() {
+        let store = MemoryTokenStore::new();
+        assert!(!store.is_blacklisted_sync(""));
+        store.add_to_blacklist("").await.unwrap();
+        assert!(store.is_blacklisted_sync(""));
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_on_empty_store() {
+        // 对空存储执行清理不应 panic
+        let store = MemoryTokenStore::new();
+        store.cleanup_expired_blacklist().await;
+        assert_eq!(store.blacklist_size().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_all_entries() {
+        // 所有条目都过期时,清理后应为空
+        let store = MemoryTokenStore::new();
+        {
+            let mut bl = store.blacklist.write().await;
+            bl.insert("exp1".to_string(), now_secs().saturating_sub(1));
+            bl.insert("exp2".to_string(), now_secs().saturating_sub(100));
+            bl.insert("exp3".to_string(), 0); // epoch 时间,已过期
+        }
+        store.cleanup_expired_blacklist().await;
+        assert_eq!(store.blacklist_size().await, 0);
+    }
+
+    // ===== TokenStoreFactory 测试 =====
+
+    #[test]
+    fn test_create_memory_store() {
+        let store = TokenStoreFactory::create_memory_store();
+        // MemoryTokenStore 创建后应为空 (需要 async 检查,但 struct 创建本身不失败)
+        let _ = store;
+    }
+
+    #[tokio::test]
+    async fn test_create_with_fallback_no_redis() {
+        // 未启用 redis feature 时,始终返回内存存储
+        let store = TokenStoreFactory::create_with_fallback(None, None).await;
+        assert_eq!(store.blacklist_size().await, 0);
+        store.add_to_blacklist("fallback-test").await.unwrap();
+        assert!(store.is_blacklisted("fallback-test").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_create_with_fallback_some_url_no_redis() {
+        // 传入 URL 但无 redis feature,仍应回退到内存存储
+        let store =
+            TokenStoreFactory::create_with_fallback(Some("redis://localhost:6379"), None).await;
+        assert_eq!(store.blacklist_size().await, 0);
+    }
+
+    // ===== 并发访问测试 =====
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_concurrent_blacklist_operations() {
+        // 并发添加和查询 — 确保线程安全
+        let store = Arc::new(MemoryTokenStore::new());
+        let mut handles = Vec::new();
+
+        for i in 0..20 {
+            let store_clone = store.clone();
+            handles.push(tokio::spawn(async move {
+                let jti = format!("concurrent-jti-{i}");
+                store_clone.add_to_blacklist(&jti).await.unwrap();
+                assert!(store_clone.is_blacklisted(&jti).await.unwrap());
+            }));
+        }
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        assert_eq!(store.blacklist_size().await, 20);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_concurrent_add_and_remove() {
+        // 并发添加和删除同一 jti — 不应 panic
+        let store = Arc::new(MemoryTokenStore::new());
+        let jti = "race-jti";
+
+        let store_add = store.clone();
+        let store_remove = store.clone();
+
+        let h1 = tokio::spawn(async move {
+            for _ in 0..10 {
+                store_add.add_to_blacklist(jti).await.unwrap();
+            }
+        });
+
+        let h2 = tokio::spawn(async move {
+            for _ in 0..10 {
+                let _ = store_remove.remove_from_blacklist(jti).await;
+            }
+        });
+
+        h1.await.unwrap();
+        h2.await.unwrap();
+        // 最终状态不确定 (取决于调度),但不应 panic
+        let _ = store.is_blacklisted(jti).await.unwrap();
+    }
 }

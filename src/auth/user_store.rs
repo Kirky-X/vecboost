@@ -553,8 +553,12 @@ mod tests {
 
     #[cfg(feature = "db")]
     async fn make_store_with_users() -> UserStore {
-        let pool = crate::db::DbPool::new("sqlite::memory:").await.unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_user_store.db");
+        let url = format!("sqlite://{}?mode=rwc", db_path.display());
+        let pool = crate::db::DbPool::new(&url).await.unwrap();
         crate::db::init_schema(&pool).await.unwrap();
+        std::mem::forget(temp_dir);
         UserStore::new(Arc::new(pool))
     }
 
@@ -724,5 +728,453 @@ mod tests {
             .verify_password("verifyuser2", "WrongPassword123!")
             .await;
         assert!(result.is_err());
+    }
+
+    // ===== hash_password 测试 =====
+
+    #[test]
+    fn test_hash_password_returns_valid_hash() {
+        let hash = hash_password("MySecurePwd123!").unwrap();
+        assert!(!hash.is_empty());
+        // 应是有效的 argon2 hash (以 $argon2 开头)
+        assert!(hash.starts_with("$argon2"));
+    }
+
+    #[test]
+    fn test_hash_password_different_passwords_different_hashes() {
+        let hash1 = hash_password("PasswordOne123!").unwrap();
+        let hash2 = hash_password("PasswordTwo456!").unwrap();
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_password_same_password_different_hashes() {
+        // 相同密码因随机盐应产生不同 hash
+        let hash1 = hash_password("SamePassword789!").unwrap();
+        let hash2 = hash_password("SamePassword789!").unwrap();
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_password_empty_password() {
+        // 空密码也应能被 hash (不调用 complexity 验证)
+        let hash = hash_password("").unwrap();
+        assert!(hash.starts_with("$argon2"));
+    }
+
+    // ===== create_default_admin_user 测试 =====
+
+    #[test]
+    fn test_create_default_admin_user() {
+        let user = create_default_admin_user("admin", "AdminPassword123!").unwrap();
+        assert_eq!(user.username, "admin");
+        assert_eq!(user.role, "admin");
+        assert_eq!(user.permissions.len(), 8);
+        assert!(user.permissions.contains(&"embedding:read".to_string()));
+        assert!(user.permissions.contains(&"embedding:write".to_string()));
+        assert!(user.permissions.contains(&"model:read".to_string()));
+        assert!(user.permissions.contains(&"model:write".to_string()));
+        assert!(user.permissions.contains(&"model:switch".to_string()));
+        assert!(user.permissions.contains(&"user:read".to_string()));
+        assert!(user.permissions.contains(&"user:write".to_string()));
+        assert!(user.permissions.contains(&"user:delete".to_string()));
+        assert!(user.password_hash.starts_with("$argon2"));
+    }
+
+    // ===== validate_password_complexity 测试 =====
+
+    #[test]
+    fn test_password_complexity_valid() {
+        // 满足所有要求的复杂密码
+        assert!(validate_password_complexity("Xy9!kM2#pQ7&zL").is_ok());
+    }
+
+    #[test]
+    fn test_password_complexity_too_short() {
+        let result = validate_password_complexity("Xy9!kM2#");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            VecboostError::ValidationError(_)
+        ));
+    }
+
+    #[test]
+    fn test_password_complexity_no_uppercase() {
+        let result = validate_password_complexity("xy9!km2#pq7&zl");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_password_complexity_no_lowercase() {
+        let result = validate_password_complexity("XY9!KM2#PQ7&ZL");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_password_complexity_no_digit() {
+        let result = validate_password_complexity("Xy!kM#pQ&zLaXy");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_password_complexity_no_special_char() {
+        let result = validate_password_complexity("Xy9kM2pQ7zLaXy");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_password_complexity_weak_pattern_password() {
+        // 包含 "password" 弱模式
+        let result = validate_password_complexity("Xy9!Password12#z");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_password_complexity_weak_pattern_123456() {
+        // 包含 "123456" 弱模式
+        let result = validate_password_complexity("Xy9!abcDEF123456");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_password_complexity_consecutive_digits() {
+        // 包含连续数字序列 "12345"
+        let result = validate_password_complexity("Xy9!12345abc");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_password_complexity_consecutive_letters() {
+        // 包含连续字母序列 "abcde"
+        let result = validate_password_complexity("Xy9!abcde123");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_password_complexity_repeated_chars() {
+        // 包含重复字符序列 "aaaaa"
+        let result = validate_password_complexity("Xy9!aaaaa123");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_password_complexity_empty() {
+        let result = validate_password_complexity("");
+        assert!(result.is_err());
+    }
+
+    // ===== validate_username_format 测试 =====
+
+    #[test]
+    fn test_username_format_valid() {
+        assert!(validate_username_format("abc").is_ok());
+        assert!(validate_username_format("username").is_ok());
+        assert!(validate_username_format("user_name").is_ok());
+        assert!(validate_username_format("user-name").is_ok());
+        assert!(validate_username_format("User123").is_ok());
+        assert!(validate_username_format("a").is_err()); // 太短
+        assert!(validate_username_format(&"a".repeat(32)).is_ok());
+    }
+
+    #[test]
+    fn test_username_format_too_short() {
+        let result = validate_username_format("ab");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_username_format_too_long() {
+        let result = validate_username_format(&"a".repeat(33));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_username_format_not_letter_start() {
+        assert!(validate_username_format("1username").is_err());
+        assert!(validate_username_format("_username").is_err());
+        assert!(validate_username_format("-username").is_err());
+    }
+
+    #[test]
+    fn test_username_format_invalid_chars() {
+        assert!(validate_username_format("user@name").is_err());
+        assert!(validate_username_format("user.name").is_err());
+        assert!(validate_username_format("user name").is_err());
+    }
+
+    #[test]
+    fn test_username_format_empty() {
+        let result = validate_username_format("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_username_format_boundary_length_3() {
+        // 长度 3 是边界 — 应通过
+        assert!(validate_username_format("abc").is_ok());
+    }
+
+    #[test]
+    fn test_username_format_boundary_length_32() {
+        // 长度 32 是边界 — 应通过
+        assert!(validate_username_format(&"a".repeat(32)).is_ok());
+    }
+
+    // ===== UserStore 错误路径测试 =====
+
+    #[tokio::test]
+    async fn test_add_user_invalid_username() {
+        let store = make_store_with_users().await;
+        let result = store
+            .add_user(StoredUser {
+                username: "1invalid".to_string(),
+                password_hash: "hash".to_string(),
+                role: "user".to_string(),
+                permissions: vec![],
+            })
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            VecboostError::ValidationError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_verify_password_user_not_found() {
+        let store = make_store_with_users().await;
+        let result = store.verify_password("nonexistent", "anypassword").await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            VecboostError::AuthenticationError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_verify_password_invalid_hash_format() {
+        let store = make_store_with_users().await;
+        store
+            .add_user(StoredUser {
+                username: "badhash".to_string(),
+                password_hash: "not-a-valid-hash".to_string(),
+                role: "user".to_string(),
+                permissions: vec![],
+            })
+            .await
+            .unwrap();
+        let result = store.verify_password("badhash", "anypassword").await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            VecboostError::AuthenticationError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_list_users_empty() {
+        let store = make_store_with_users().await;
+        let users = store.list_users().await.unwrap();
+        assert!(users.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_remove_user_nonexistent() {
+        let store = make_store_with_users().await;
+        let removed = store.remove_user("ghost").await.unwrap();
+        assert!(!removed);
+    }
+
+    #[tokio::test]
+    async fn test_update_user_nonexistent() {
+        let store = make_store_with_users().await;
+        let result = store
+            .update_user(
+                "ghost",
+                UpdateUserRequest {
+                    username: "ghost".to_string(),
+                    role: Some("user".to_string()),
+                    permissions: None,
+                },
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            VecboostError::AuthenticationError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_update_user_only_role() {
+        let store = make_store_with_users().await;
+        store
+            .add_user(StoredUser {
+                username: "roleonly".to_string(),
+                password_hash: "h".to_string(),
+                role: "user".to_string(),
+                permissions: vec!["read".to_string()],
+            })
+            .await
+            .unwrap();
+        store
+            .update_user(
+                "roleonly",
+                UpdateUserRequest {
+                    username: "roleonly".to_string(),
+                    role: Some("admin".to_string()),
+                    permissions: None,
+                },
+            )
+            .await
+            .unwrap();
+        let updated = store.get_user("roleonly").await.unwrap().unwrap();
+        assert_eq!(updated.role, "admin");
+        // permissions 应保持不变
+        assert_eq!(updated.permissions, vec!["read".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_update_user_only_permissions() {
+        let store = make_store_with_users().await;
+        store
+            .add_user(StoredUser {
+                username: "permonly".to_string(),
+                password_hash: "h".to_string(),
+                role: "user".to_string(),
+                permissions: vec!["read".to_string()],
+            })
+            .await
+            .unwrap();
+        store
+            .update_user(
+                "permonly",
+                UpdateUserRequest {
+                    username: "permonly".to_string(),
+                    role: None,
+                    permissions: Some(vec!["read".to_string(), "write".to_string()]),
+                },
+            )
+            .await
+            .unwrap();
+        let updated = store.get_user("permonly").await.unwrap().unwrap();
+        // role 应保持不变
+        assert_eq!(updated.role, "user");
+        assert_eq!(
+            updated.permissions,
+            vec!["read".to_string(), "write".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_user_no_changes() {
+        // role 和 permissions 都为 None — 不更新任何字段
+        let store = make_store_with_users().await;
+        store
+            .add_user(StoredUser {
+                username: "nochange".to_string(),
+                password_hash: "h".to_string(),
+                role: "user".to_string(),
+                permissions: vec!["read".to_string()],
+            })
+            .await
+            .unwrap();
+        store
+            .update_user(
+                "nochange",
+                UpdateUserRequest {
+                    username: "nochange".to_string(),
+                    role: None,
+                    permissions: None,
+                },
+            )
+            .await
+            .unwrap();
+        let user = store.get_user("nochange").await.unwrap().unwrap();
+        assert_eq!(user.role, "user");
+        assert_eq!(user.permissions, vec!["read".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_add_and_remove_multiple_users() {
+        let store = make_store_with_users().await;
+        // 添加多个用户
+        for i in 0..5 {
+            store
+                .add_user(StoredUser {
+                    username: format!("multi{i}"),
+                    password_hash: "h".to_string(),
+                    role: "user".to_string(),
+                    permissions: vec![],
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.list_users().await.unwrap().len(), 5);
+
+        // 删除部分用户
+        store.remove_user("multi0").await.unwrap();
+        store.remove_user("multi1").await.unwrap();
+        let remaining = store.list_users().await.unwrap();
+        assert_eq!(remaining.len(), 3);
+        assert!(!remaining.contains(&"multi0".to_string()));
+        assert!(!remaining.contains(&"multi1".to_string()));
+        assert!(remaining.contains(&"multi2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_verify_password_correct_after_hash() {
+        // 端到端:hash → store → verify
+        let store = make_store_with_users().await;
+        let password = "End2EndPwd99!xy";
+        let hash = hash_password(password).unwrap();
+        store
+            .add_user(StoredUser {
+                username: "e2euser".to_string(),
+                password_hash: hash,
+                role: "user".to_string(),
+                permissions: vec!["read".to_string()],
+            })
+            .await
+            .unwrap();
+        let user = store.verify_password("e2euser", password).await.unwrap();
+        assert_eq!(user.username, "e2euser");
+        assert_eq!(user.role, "user");
+        assert_eq!(user.permissions, vec!["read".to_string()]);
+    }
+
+    // ===== 并发访问测试 =====
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_concurrent_user_operations() {
+        let store = Arc::new(make_store_with_users().await);
+        let mut handles = Vec::new();
+
+        for i in 0..10 {
+            let store_clone = store.clone();
+            handles.push(tokio::spawn(async move {
+                let username = format!("concurrent_user_{i}");
+                store_clone
+                    .add_user(StoredUser {
+                        username: username.clone(),
+                        password_hash: "h".to_string(),
+                        role: "user".to_string(),
+                        permissions: vec![],
+                    })
+                    .await
+                    .unwrap();
+                // 添加后应能获取
+                let user = store_clone.get_user(&username).await.unwrap();
+                assert!(user.is_some());
+            }));
+        }
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        let users = store.list_users().await.unwrap();
+        assert_eq!(users.len(), 10);
     }
 }

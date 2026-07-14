@@ -159,3 +159,452 @@ pub fn create_router(app_state: AppState) -> Router {
 
     app.with_state(app_state)
 }
+
+#[cfg(all(test, feature = "http"))]
+mod tests {
+    use super::*;
+    use crate::config::model::{DeviceType, EngineType, ModelConfig, Precision};
+    use crate::engine::InferenceEngine;
+    use crate::error::VecboostError;
+    use crate::pipeline::{
+        PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
+        WorkerManager,
+    };
+    use crate::rate_limit::LimiteronAdapter;
+    use crate::service::embedding::EmbeddingService;
+    use async_trait::async_trait;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    /// Deterministic mock engine that returns a fixed-dimension vector.
+    struct TestEngine {
+        dimension: usize,
+    }
+
+    impl TestEngine {
+        fn new(dimension: usize) -> Self {
+            Self { dimension }
+        }
+    }
+
+    #[async_trait]
+    impl InferenceEngine for TestEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.5; self.dimension])
+        }
+
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.5; self.dimension]).collect())
+        }
+
+        fn precision(&self) -> &Precision {
+            static PRECISION: Precision = Precision::Fp32;
+            &PRECISION
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    /// Build an `Arc<UserStore>` for testing (conditional on `db` feature).
+    #[cfg(all(feature = "db", feature = "auth"))]
+    async fn make_user_store_arc() -> Arc<crate::auth::UserStore> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_routes.db");
+        let url = format!("sqlite://{}?mode=rwc", db_path.display());
+        let pool = crate::db::DbPool::new(&url).await.unwrap();
+        crate::db::init_schema(&pool).await.unwrap();
+        std::mem::forget(temp_dir);
+        Arc::new(crate::auth::UserStore::new(Arc::new(pool)))
+    }
+
+    #[cfg(all(not(feature = "db"), feature = "auth"))]
+    async fn make_user_store_arc() -> Arc<crate::auth::UserStore> {
+        Arc::new(crate::auth::UserStore::new())
+    }
+
+    /// Build a minimal `AppState` for testing, with auth optionally enabled.
+    async fn make_test_app_state(auth_enabled: bool) -> AppState {
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = TestEngine::new(384);
+        let model_config = ModelConfig {
+            name: "test-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from(temp_dir.path()),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(
+            engine,
+            Some(model_config),
+        )));
+
+        // Keep temp dir alive for the test duration
+        std::mem::forget(temp_dir);
+
+        let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
+        let pipeline_queue = Arc::new(PriorityRequestQueue::new(0));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let priority_calculator = Arc::new(PriorityCalculator::new(PriorityConfig::default()));
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(0)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        #[cfg(feature = "auth")]
+        {
+            let jwt_secret = "test_secret_key_for_router_tests_must_be_long_enough_abcdef123456";
+            let jwt_manager = if auth_enabled {
+                Some(Arc::new(
+                    crate::auth::JwtManager::new(jwt_secret.to_string()).unwrap(),
+                ))
+            } else {
+                None
+            };
+            let user_store = if auth_enabled {
+                Some(make_user_store_arc().await)
+            } else {
+                None
+            };
+
+            AppState {
+                service,
+                jwt_manager,
+                user_store,
+                auth_enabled,
+                csrf_config: None,
+                csrf_token_store: None,
+                metrics_collector: None,
+                prometheus_collector: None,
+                rate_limiter,
+                ip_whitelist: vec![],
+                rate_limit_enabled: false,
+                audit_logger: None,
+                pipeline_enabled: false,
+                pipeline_queue,
+                response_channel,
+                priority_calculator,
+                worker_manager,
+                kit: None,
+            }
+        }
+
+        #[cfg(not(feature = "auth"))]
+        {
+            let _ = auth_enabled;
+            AppState {
+                service,
+                auth_enabled: false,
+                metrics_collector: None,
+                prometheus_collector: None,
+                rate_limiter,
+                ip_whitelist: vec![],
+                rate_limit_enabled: false,
+                audit_logger: None,
+                pipeline_enabled: false,
+                pipeline_queue,
+                response_channel,
+                priority_calculator,
+                worker_manager,
+                kit: None,
+            }
+        }
+    }
+
+    fn build_request(method: Method, uri: &str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[test]
+    fn test_create_openapi_returns_valid_doc() {
+        let openapi = create_openapi();
+        let info = openapi.info.clone();
+        assert_eq!(info.title, "VecBoost API");
+        assert!(!info.version.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_router_no_auth_health_endpoint() {
+        let state = make_test_app_state(false).await;
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(build_request(Method::GET, "/health"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_create_router_no_auth_embed_route_exists() {
+        let state = make_test_app_state(false).await;
+        let app = create_router(state);
+
+        // Sending an empty body should produce a 400 (bad JSON) rather than 404,
+        // proving the route is registered.
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/v1/embed")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_create_router_no_auth_openai_route_exists() {
+        let state = make_test_app_state(false).await;
+        let app = create_router(state);
+
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/embeddings")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[cfg(feature = "auth")]
+    #[tokio::test]
+    async fn test_create_router_with_auth_protects_embed_endpoint() {
+        let state = make_test_app_state(true).await;
+        let app = create_router(state);
+
+        // POST /api/v1/embed without Authorization header should be blocked
+        // by auth_middleware with 401 Unauthorized.
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/v1/embed")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[cfg(feature = "auth")]
+    #[tokio::test]
+    async fn test_create_router_with_auth_login_endpoint_exists() {
+        let state = make_test_app_state(true).await;
+        let app = create_router(state);
+
+        // POST /api/v1/auth/login with empty body should produce a non-404 response,
+        // proving the auth route is registered.
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/v1/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[cfg(feature = "auth")]
+    #[tokio::test]
+    async fn test_create_router_with_auth_openai_route_public() {
+        let state = make_test_app_state(true).await;
+        let app = create_router(state);
+
+        // OpenAI-compatible route should remain public even when auth is enabled.
+        // An empty-body request should produce 400 (bad request) not 401 (unauthorized),
+        // proving the auth middleware is NOT applied to /v1/embeddings.
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/embeddings")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[cfg(feature = "auth")]
+    #[tokio::test]
+    async fn test_create_router_with_csrf_origin_only() {
+        // Build state with CSRF config (Origin validation only, no token validation)
+        let jwt_secret = "test_secret_key_for_csrf_origin_tests_long_enough_abc";
+        let csrf_config = Arc::new(crate::auth::CsrfConfig::new(vec![
+            "https://example.com".to_string(),
+        ]));
+
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = TestEngine::new(384);
+        let model_config = ModelConfig {
+            name: "test-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from(temp_dir.path()),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(
+            engine,
+            Some(model_config),
+        )));
+        std::mem::forget(temp_dir);
+
+        let state = AppState {
+            service,
+            jwt_manager: Some(Arc::new(
+                crate::auth::JwtManager::new(jwt_secret.to_string()).unwrap(),
+            )),
+            user_store: Some(make_user_store_arc().await),
+            auth_enabled: true,
+            csrf_config: Some(csrf_config),
+            csrf_token_store: None,
+            metrics_collector: None,
+            prometheus_collector: None,
+            rate_limiter: Arc::new(LimiteronAdapter::with_default_config()),
+            ip_whitelist: vec![],
+            rate_limit_enabled: false,
+            audit_logger: None,
+            pipeline_enabled: false,
+            pipeline_queue: Arc::new(PriorityRequestQueue::new(0)),
+            response_channel: Arc::new(ResponseChannel::new()),
+            priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
+            worker_manager: Arc::new(WorkerManager::new(
+                Arc::new(PriorityRequestQueue::new(0)),
+                Arc::new(ResponseChannel::new()),
+                WorkerConfig::default(),
+                Arc::new(RwLock::new(EmbeddingService::new(
+                    Arc::new(RwLock::new(TestEngine::new(384))),
+                    None,
+                ))),
+            )),
+            kit: None,
+        };
+
+        // Router should build successfully with CSRF Origin-only config
+        let app = create_router(state);
+
+        // POST /api/v1/embed without Origin → 400 (CSRF middleware is the outer
+        // layer and runs before auth_middleware, so it rejects first)
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/v1/embed")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[cfg(feature = "auth")]
+    #[tokio::test]
+    async fn test_create_router_with_csrf_token_validation() {
+        // Build state with CSRF config (both Origin + token validation enabled)
+        let jwt_secret = "test_secret_key_for_csrf_token_tests_long_enough_xyz";
+        let csrf_config = Arc::new(
+            crate::auth::CsrfConfig::new(vec!["https://example.com".to_string()])
+                .with_token_validation(true),
+        );
+        let csrf_token_store = Arc::new(crate::auth::CsrfTokenStore::new());
+
+        let temp_dir = tempdir().unwrap();
+        let mock_engine = TestEngine::new(384);
+        let model_config = ModelConfig {
+            name: "test-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from(temp_dir.path()),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(
+            engine,
+            Some(model_config),
+        )));
+        std::mem::forget(temp_dir);
+
+        let state = AppState {
+            service,
+            jwt_manager: Some(Arc::new(
+                crate::auth::JwtManager::new(jwt_secret.to_string()).unwrap(),
+            )),
+            user_store: Some(make_user_store_arc().await),
+            auth_enabled: true,
+            csrf_config: Some(csrf_config),
+            csrf_token_store: Some(csrf_token_store),
+            metrics_collector: None,
+            prometheus_collector: None,
+            rate_limiter: Arc::new(LimiteronAdapter::with_default_config()),
+            ip_whitelist: vec![],
+            rate_limit_enabled: false,
+            audit_logger: None,
+            pipeline_enabled: false,
+            pipeline_queue: Arc::new(PriorityRequestQueue::new(0)),
+            response_channel: Arc::new(ResponseChannel::new()),
+            priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
+            worker_manager: Arc::new(WorkerManager::new(
+                Arc::new(PriorityRequestQueue::new(0)),
+                Arc::new(ResponseChannel::new()),
+                WorkerConfig::default(),
+                Arc::new(RwLock::new(EmbeddingService::new(
+                    Arc::new(RwLock::new(TestEngine::new(384))),
+                    None,
+                ))),
+            )),
+            kit: None,
+        };
+
+        // Router should build successfully with CSRF token validation config
+        let app = create_router(state);
+
+        // POST /api/v1/embed without Origin → 400 (CSRF combined middleware is
+        // the outer layer and runs before auth_middleware, so it rejects first)
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/v1/embed")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}

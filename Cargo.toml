@@ -171,6 +171,7 @@ tokenizers = { version = "0.15", features = ["http"] }
 
 [dev-dependencies]
 mockall = "0.15"
+tower = { version = "0.5", features = ["util"] }
 
 [profile.dev]
 opt-level = 1

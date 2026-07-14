@@ -380,3 +380,769 @@ pub fn create_csrf_cors(allowed_origins: Vec<String>) -> tower_http::cors::CorsL
             .expose_headers([header::CONTENT_TYPE])
     }
 }
+
+#[cfg(all(test, feature = "auth", feature = "http"))]
+mod tests {
+    use super::*;
+    use crate::auth::JwtManager;
+    use crate::auth::types::User;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::extract::FromRef;
+    use axum::http::{Method, Request, StatusCode};
+    use axum::middleware;
+    use axum::routing::any;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    const TEST_JWT_SECRET: &str = "test_secret_key_for_middleware_tests_must_be_long_enough_abcdef";
+
+    fn make_jwt_manager() -> Arc<JwtManager> {
+        Arc::new(JwtManager::new(TEST_JWT_SECRET.to_string()).unwrap())
+    }
+
+    fn make_test_user() -> User {
+        User {
+            username: "testuser".to_string(),
+            role: "user".to_string(),
+            permissions: vec!["embedding:read".to_string()],
+        }
+    }
+
+    fn make_admin_user() -> User {
+        User {
+            username: "admin".to_string(),
+            role: "admin".to_string(),
+            permissions: vec![],
+        }
+    }
+
+    fn build_request(method: Method, uri: &str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn build_request_with_headers(
+        method: Method,
+        uri: &str,
+        headers: &[(&str, &str)],
+    ) -> Request<Body> {
+        let mut builder = Request::builder().method(method).uri(uri);
+        for (key, value) in headers {
+            builder = builder.header(*key, *value);
+        }
+        builder.body(Body::empty()).unwrap()
+    }
+
+    fn build_request_with_extensions(
+        method: Method,
+        uri: &str,
+        auth_ctx: Option<AuthContext>,
+    ) -> Request<Body> {
+        let mut request = build_request(method, uri);
+        if let Some(ctx) = auth_ctx {
+            request.extensions_mut().insert(ctx);
+        }
+        request
+    }
+
+    /// Test-only state that provides `FromRef` impls for `auth_middleware`'s
+    /// two `State<T>` extractors. axum-core 0.4 has no blanket tuple `FromRef`
+    /// impls, so a dedicated struct is required.
+    #[derive(Clone)]
+    struct AuthTestState {
+        jwt: Arc<JwtManager>,
+        audit: Option<Arc<AuditLogger>>,
+    }
+
+    impl FromRef<AuthTestState> for Arc<JwtManager> {
+        fn from_ref(s: &AuthTestState) -> Self {
+            s.jwt.clone()
+        }
+    }
+
+    impl FromRef<AuthTestState> for Option<Arc<AuditLogger>> {
+        fn from_ref(s: &AuthTestState) -> Self {
+            s.audit.clone()
+        }
+    }
+
+    fn make_auth_state() -> AuthTestState {
+        AuthTestState {
+            jwt: make_jwt_manager(),
+            audit: None,
+        }
+    }
+
+    // =========================================================================
+    // auth_middleware tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_auth_middleware_missing_authorization_header_returns_401() {
+        let state = make_auth_state();
+        let app = Router::new()
+            .route("/protected", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(state, auth_middleware))
+            .with_state(());
+
+        let response = app
+            .oneshot(build_request(Method::GET, "/protected"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_non_bearer_header_returns_401() {
+        let state = make_auth_state();
+        let app = Router::new()
+            .route("/protected", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(state, auth_middleware))
+            .with_state(());
+
+        let request = build_request_with_headers(
+            Method::GET,
+            "/protected",
+            &[("authorization", "Basic dXNlcjpwYXNz")],
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_invalid_token_returns_401() {
+        let state = make_auth_state();
+        let app = Router::new()
+            .route("/protected", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(state, auth_middleware))
+            .with_state(());
+
+        let request = build_request_with_headers(
+            Method::GET,
+            "/protected",
+            &[("authorization", "Bearer invalid.token.here")],
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_valid_token_passes_through() {
+        let jwt_manager = make_jwt_manager();
+        let token = jwt_manager.generate_token(&make_test_user()).unwrap();
+        let state = AuthTestState {
+            jwt: jwt_manager,
+            audit: None,
+        };
+        let app = Router::new()
+            .route("/protected", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(state, auth_middleware))
+            .with_state(());
+
+        let request = build_request_with_headers(
+            Method::GET,
+            "/protected",
+            &[("authorization", &format!("Bearer {}", token))],
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // =========================================================================
+    // optional_auth_middleware tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_optional_auth_middleware_without_token_passes_through() {
+        let state = make_jwt_manager();
+        let app = Router::new()
+            .route("/api", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state,
+                optional_auth_middleware,
+            ))
+            .with_state(());
+
+        let response = app
+            .oneshot(build_request(Method::GET, "/api"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_optional_auth_middleware_with_valid_token_passes_through() {
+        let jwt_manager = make_jwt_manager();
+        let token = jwt_manager.generate_token(&make_test_user()).unwrap();
+        let state = jwt_manager;
+        let app = Router::new()
+            .route("/api", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state,
+                optional_auth_middleware,
+            ))
+            .with_state(());
+
+        let request = build_request_with_headers(
+            Method::GET,
+            "/api",
+            &[("authorization", &format!("Bearer {}", token))],
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_optional_auth_middleware_with_invalid_token_passes_through() {
+        let state = make_jwt_manager();
+        let app = Router::new()
+            .route("/api", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state,
+                optional_auth_middleware,
+            ))
+            .with_state(());
+
+        let request = build_request_with_headers(
+            Method::GET,
+            "/api",
+            &[("authorization", "Bearer invalid.token")],
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // =========================================================================
+    // require_role_middleware tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_require_role_middleware_admin_passes() {
+        let app = Router::new()
+            .route("/admin", any(|| async { "ok" }))
+            .layer(middleware::from_fn(require_role_middleware))
+            .with_state(());
+
+        let request = build_request_with_extensions(
+            Method::GET,
+            "/admin",
+            Some(AuthContext {
+                user: make_admin_user(),
+            }),
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_require_role_middleware_non_admin_returns_403() {
+        let app = Router::new()
+            .route("/admin", any(|| async { "ok" }))
+            .layer(middleware::from_fn(require_role_middleware))
+            .with_state(());
+
+        let request = build_request_with_extensions(
+            Method::GET,
+            "/admin",
+            Some(AuthContext {
+                user: make_test_user(),
+            }),
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_require_role_middleware_no_auth_context_returns_401() {
+        let app = Router::new()
+            .route("/admin", any(|| async { "ok" }))
+            .layer(middleware::from_fn(require_role_middleware))
+            .with_state(());
+
+        let response = app
+            .oneshot(build_request(Method::GET, "/admin"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // =========================================================================
+    // require_permission_middleware tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_require_permission_middleware_with_permission_passes() {
+        let app = Router::new()
+            .route("/resource", any(|| async { "ok" }))
+            .layer(middleware::from_fn(|req, next| {
+                require_permission_middleware("embedding:read", req, next)
+            }))
+            .with_state(());
+
+        let request = build_request_with_extensions(
+            Method::GET,
+            "/resource",
+            Some(AuthContext {
+                user: make_test_user(),
+            }),
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_require_permission_middleware_without_permission_returns_403() {
+        let app = Router::new()
+            .route("/resource", any(|| async { "ok" }))
+            .layer(middleware::from_fn(|req, next| {
+                require_permission_middleware("model:write", req, next)
+            }))
+            .with_state(());
+
+        let request = build_request_with_extensions(
+            Method::GET,
+            "/resource",
+            Some(AuthContext {
+                user: make_test_user(),
+            }),
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_require_permission_middleware_admin_role_grants_all() {
+        // Admin role should bypass permission check (User::has_permission returns true for admin)
+        let app = Router::new()
+            .route("/resource", any(|| async { "ok" }))
+            .layer(middleware::from_fn(|req, next| {
+                require_permission_middleware("any:permission", req, next)
+            }))
+            .with_state(());
+
+        let request = build_request_with_extensions(
+            Method::GET,
+            "/resource",
+            Some(AuthContext {
+                user: make_admin_user(),
+            }),
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_require_permission_middleware_no_auth_context_returns_401() {
+        let app = Router::new()
+            .route("/resource", any(|| async { "ok" }))
+            .layer(middleware::from_fn(|req, next| {
+                require_permission_middleware("embedding:read", req, next)
+            }))
+            .with_state(());
+
+        let response = app
+            .oneshot(build_request(Method::GET, "/resource"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // =========================================================================
+    // csrf_origin_middleware tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_csrf_origin_middleware_get_passes() {
+        // GET requests don't require CSRF protection
+        let csrf_config = Arc::new(CsrfConfig::new(vec!["https://example.com".to_string()]));
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                csrf_config,
+                csrf_origin_middleware,
+            ))
+            .with_state(());
+
+        let response = app
+            .oneshot(build_request(Method::GET, "/data"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_origin_middleware_post_without_origin_returns_400() {
+        let csrf_config = Arc::new(CsrfConfig::new(vec!["https://example.com".to_string()]));
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                csrf_config,
+                csrf_origin_middleware,
+            ))
+            .with_state(());
+
+        let response = app
+            .oneshot(build_request(Method::POST, "/data"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_origin_middleware_post_with_allowed_origin_passes() {
+        let csrf_config = Arc::new(CsrfConfig::new(vec!["https://example.com".to_string()]));
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                csrf_config,
+                csrf_origin_middleware,
+            ))
+            .with_state(());
+
+        let request =
+            build_request_with_headers(Method::POST, "/data", &[("origin", "https://example.com")]);
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_origin_middleware_post_with_disallowed_origin_returns_403() {
+        let csrf_config = Arc::new(CsrfConfig::new(vec!["https://example.com".to_string()]));
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                csrf_config,
+                csrf_origin_middleware,
+            ))
+            .with_state(());
+
+        let request =
+            build_request_with_headers(Method::POST, "/data", &[("origin", "https://evil.com")]);
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_origin_middleware_empty_allowed_origins_allows_all() {
+        // Empty allowed_origins means no restriction (development mode)
+        let csrf_config = Arc::new(CsrfConfig::new(vec![]));
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                csrf_config,
+                csrf_origin_middleware,
+            ))
+            .with_state(());
+
+        // POST with any origin should pass when allowed_origins is empty
+        let request = build_request_with_headers(
+            Method::POST,
+            "/data",
+            &[("origin", "https://any-site.com")],
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // =========================================================================
+    // csrf_middleware tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_csrf_middleware_get_passes() {
+        let token_store = Arc::new(CsrfTokenStore::new());
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(token_store, csrf_middleware))
+            .with_state(());
+
+        let response = app
+            .oneshot(build_request(Method::GET, "/data"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_middleware_post_without_token_returns_400() {
+        let token_store = Arc::new(CsrfTokenStore::new());
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(token_store, csrf_middleware))
+            .with_state(());
+
+        let response = app
+            .oneshot(build_request(Method::POST, "/data"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_middleware_post_with_valid_token_passes() {
+        let token_store = Arc::new(CsrfTokenStore::new());
+        token_store.store_token("valid-csrf-token").await;
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(token_store, csrf_middleware))
+            .with_state(());
+
+        let request = build_request_with_headers(
+            Method::POST,
+            "/data",
+            &[("x-csrf-token", "valid-csrf-token")],
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_middleware_post_with_invalid_token_returns_403() {
+        let token_store = Arc::new(CsrfTokenStore::new());
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(token_store, csrf_middleware))
+            .with_state(());
+
+        let request = build_request_with_headers(
+            Method::POST,
+            "/data",
+            &[("x-csrf-token", "nonexistent-token")],
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_middleware_token_is_one_time_use() {
+        let token_store = Arc::new(CsrfTokenStore::new());
+        token_store.store_token("one-time-token").await;
+
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                token_store.clone(),
+                csrf_middleware,
+            ))
+            .with_state(());
+
+        // First use: token should be valid and consumed
+        let request1 = build_request_with_headers(
+            Method::POST,
+            "/data",
+            &[("x-csrf-token", "one-time-token")],
+        );
+        let response1 = app.clone().oneshot(request1).await.unwrap();
+        assert_eq!(response1.status(), StatusCode::OK);
+
+        // Second use: token should be invalid (already consumed)
+        let request2 = build_request_with_headers(
+            Method::POST,
+            "/data",
+            &[("x-csrf-token", "one-time-token")],
+        );
+        let response2 = app.oneshot(request2).await.unwrap();
+        assert_eq!(response2.status(), StatusCode::FORBIDDEN);
+    }
+
+    // =========================================================================
+    // csrf_combined_middleware tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_csrf_combined_middleware_get_passes() {
+        let csrf_config = Arc::new(
+            CsrfConfig::new(vec!["https://example.com".to_string()]).with_token_validation(true),
+        );
+        let token_store = Arc::new(CsrfTokenStore::new());
+        let state = (csrf_config, token_store);
+
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state,
+                csrf_combined_middleware,
+            ))
+            .with_state(());
+
+        let response = app
+            .oneshot(build_request(Method::GET, "/data"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_combined_middleware_post_without_origin_returns_400() {
+        let csrf_config = Arc::new(
+            CsrfConfig::new(vec!["https://example.com".to_string()]).with_token_validation(true),
+        );
+        let token_store = Arc::new(CsrfTokenStore::new());
+        let state = (csrf_config, token_store);
+
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state,
+                csrf_combined_middleware,
+            ))
+            .with_state(());
+
+        let response = app
+            .oneshot(build_request(Method::POST, "/data"))
+            .await
+            .unwrap();
+        // Missing Origin header → BAD_REQUEST
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_combined_middleware_post_with_origin_but_no_token_returns_400() {
+        let csrf_config = Arc::new(
+            CsrfConfig::new(vec!["https://example.com".to_string()]).with_token_validation(true),
+        );
+        let token_store = Arc::new(CsrfTokenStore::new());
+        let state = (csrf_config, token_store);
+
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state,
+                csrf_combined_middleware,
+            ))
+            .with_state(());
+
+        let request =
+            build_request_with_headers(Method::POST, "/data", &[("origin", "https://example.com")]);
+        let response = app.oneshot(request).await.unwrap();
+        // Origin OK but missing CSRF token → BAD_REQUEST
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_combined_middleware_post_with_valid_origin_and_token_passes() {
+        let csrf_config = Arc::new(
+            CsrfConfig::new(vec!["https://example.com".to_string()]).with_token_validation(true),
+        );
+        let token_store = Arc::new(CsrfTokenStore::new());
+        token_store.store_token("valid-combined-token").await;
+        let state = (csrf_config, token_store);
+
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state,
+                csrf_combined_middleware,
+            ))
+            .with_state(());
+
+        let request = build_request_with_headers(
+            Method::POST,
+            "/data",
+            &[
+                ("origin", "https://example.com"),
+                ("x-csrf-token", "valid-combined-token"),
+            ],
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_combined_middleware_post_with_disallowed_origin_returns_403() {
+        let csrf_config = Arc::new(
+            CsrfConfig::new(vec!["https://example.com".to_string()]).with_token_validation(true),
+        );
+        let token_store = Arc::new(CsrfTokenStore::new());
+        let state = (csrf_config, token_store);
+
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state,
+                csrf_combined_middleware,
+            ))
+            .with_state(());
+
+        let request =
+            build_request_with_headers(Method::POST, "/data", &[("origin", "https://evil.com")]);
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_combined_middleware_post_with_valid_origin_invalid_token_returns_403() {
+        let csrf_config = Arc::new(
+            CsrfConfig::new(vec!["https://example.com".to_string()]).with_token_validation(true),
+        );
+        let token_store = Arc::new(CsrfTokenStore::new());
+        let state = (csrf_config, token_store);
+
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state,
+                csrf_combined_middleware,
+            ))
+            .with_state(());
+
+        let request = build_request_with_headers(
+            Method::POST,
+            "/data",
+            &[
+                ("origin", "https://example.com"),
+                ("x-csrf-token", "invalid-token"),
+            ],
+        );
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_combined_middleware_no_token_validation_only_checks_origin() {
+        // When token_validation_enabled is false, only Origin is checked
+        let csrf_config = Arc::new(
+            CsrfConfig::new(vec!["https://example.com".to_string()]).with_token_validation(false),
+        );
+        let token_store = Arc::new(CsrfTokenStore::new());
+        let state = (csrf_config, token_store);
+
+        let app = Router::new()
+            .route("/data", any(|| async { "ok" }))
+            .layer(middleware::from_fn_with_state(
+                state,
+                csrf_combined_middleware,
+            ))
+            .with_state(());
+
+        // POST with valid Origin but no CSRF token should pass
+        let request =
+            build_request_with_headers(Method::POST, "/data", &[("origin", "https://example.com")]);
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // =========================================================================
+    // create_csrf_cors tests
+    // =========================================================================
+
+    #[test]
+    fn test_create_csrf_cors_empty_origins_allows_any() {
+        // Empty origins → development mode, allow any
+        let _cors = create_csrf_cors(vec![]);
+        // Should not panic; CorsLayer is created successfully
+    }
+
+    #[test]
+    fn test_create_csrf_cors_specific_origins() {
+        let _cors = create_csrf_cors(vec![
+            "https://example.com".to_string(),
+            "http://localhost:3000".to_string(),
+        ]);
+        // Should not panic; CorsLayer is created successfully
+    }
+}

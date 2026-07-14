@@ -243,4 +243,169 @@ mod tests {
         let result = scheduler.process_request(request).await;
         assert!(result.is_err(), "empty text should return validation error");
     }
+
+    /// 测试用 mock 引擎,始终返回错误
+    struct ErrorEngine;
+
+    impl ErrorEngine {
+        fn new() -> Self {
+            Self
+        }
+    }
+
+    #[async_trait]
+    impl InferenceEngine for ErrorEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Err(VecboostError::InferenceError(
+                "mock inference failure".to_string(),
+            ))
+        }
+
+        fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Err(VecboostError::InferenceError(
+                "mock batch inference failure".to_string(),
+            ))
+        }
+
+        fn precision(&self) -> &Precision {
+            static PRECISION: Precision = Precision::Fp32;
+            &PRECISION
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    fn create_error_service() -> Arc<RwLock<EmbeddingService>> {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(ErrorEngine::new()));
+        Arc::new(RwLock::new(EmbeddingService::new(engine, None)))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_request_engine_error() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_error_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let request = QueuedRequest {
+            request_id: "test-err-001".to_string(),
+            embed_request: EmbedRequest {
+                text: "hello world".to_string(),
+                normalize: None,
+            },
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tokio::sync::oneshot::channel().0,
+        };
+
+        let result = scheduler.process_request(request).await;
+        assert!(
+            result.is_err(),
+            "process_request should propagate engine error"
+        );
+        match result.unwrap_err() {
+            VecboostError::InferenceError(msg) => {
+                assert!(
+                    msg.contains("mock inference failure"),
+                    "error should come from ErrorEngine, got: {}",
+                    msg
+                );
+            }
+            other => panic!("expected InferenceError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_request_concurrent() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = Arc::new(PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        ));
+
+        let total = 10;
+        let mut handles = Vec::with_capacity(total);
+        for i in 0..total {
+            let scheduler = Arc::clone(&scheduler);
+            handles.push(tokio::spawn(async move {
+                let request = QueuedRequest {
+                    request_id: format!("test-concurrent-{:03}", i),
+                    embed_request: EmbedRequest {
+                        text: format!("hello world {}", i),
+                        normalize: None,
+                    },
+                    priority: Priority::Normal,
+                    submitted_at: Instant::now(),
+                    timeout: Duration::from_secs(30),
+                    source: RequestSource::Http {
+                        ip: "127.0.0.1".to_string(),
+                    },
+                    response_tx: tokio::sync::oneshot::channel().0,
+                };
+                scheduler.process_request(request).await
+            }));
+        }
+
+        let results = futures::future::join_all(handles).await;
+        assert_eq!(results.len(), total, "all tasks should complete");
+        for (i, result) in results.into_iter().enumerate() {
+            assert!(
+                result.is_ok(),
+                "task {} panicked or was cancelled: {:?}",
+                i,
+                result.err()
+            );
+            let response = result.unwrap().unwrap();
+            assert_eq!(
+                response.dimension, 384,
+                "task {} should return 384-dim embedding",
+                i
+            );
+            assert_eq!(
+                response.embedding.len(),
+                384,
+                "task {} embedding length mismatch",
+                i
+            );
+        }
+    }
 }

@@ -413,3 +413,163 @@ impl embedding_service_server::EmbeddingService for VecboostEmbeddingService {
         Ok(Response::new(res))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::Precision;
+    use crate::engine::InferenceEngine;
+    use crate::error::VecboostError;
+    use crate::service::embedding::EmbeddingService;
+    use async_trait::async_trait;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tonic::{Request, Status};
+
+    use embedding_service_server::EmbeddingService as _;
+
+    /// Mock engine that returns deterministic embeddings for testing.
+    struct MockEngine {
+        dimension: usize,
+    }
+
+    impl MockEngine {
+        fn new(dimension: usize) -> Self {
+            Self { dimension }
+        }
+    }
+
+    #[async_trait]
+    impl InferenceEngine for MockEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.5; self.dimension])
+        }
+
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.5; self.dimension]).collect())
+        }
+
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &crate::config::model::ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    /// Build a `VecboostEmbeddingService` backed by a 384-dim `MockEngine`.
+    fn make_service() -> VecboostEmbeddingService {
+        let mock_engine = MockEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let embedding_service = EmbeddingService::new(engine, None);
+        VecboostEmbeddingService::new(Arc::new(RwLock::new(embedding_service)))
+    }
+
+    #[tokio::test]
+    async fn test_embed_rpc_success() {
+        let service = make_service();
+
+        let req = Request::new(EmbedRequest {
+            text: "hello world".to_string(),
+            normalize: Some(true),
+        });
+
+        let response = service.embed(req).await.expect("embed should succeed");
+        let response = response.into_inner();
+
+        assert_eq!(response.dimension, 384);
+        assert_eq!(response.embedding.len(), 384);
+    }
+
+    #[tokio::test]
+    async fn test_embed_batch_rpc_success() {
+        let service = make_service();
+
+        let req = Request::new(BatchEmbedRequest {
+            texts: vec![
+                "hello world".to_string(),
+                "foo bar".to_string(),
+                "test text".to_string(),
+            ],
+            normalize: Some(true),
+        });
+
+        let response = service
+            .embed_batch(req)
+            .await
+            .expect("embed_batch should succeed");
+        let response = response.into_inner();
+
+        assert_eq!(response.total_count, 3);
+        assert_eq!(response.embeddings.len(), 3);
+        for emb in &response.embeddings {
+            assert_eq!(emb.dimension, 384);
+            assert_eq!(emb.embedding.len(), 384);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_embed_rpc_invalid_input() {
+        let service = make_service();
+
+        let req = Request::new(EmbedRequest {
+            text: "".to_string(),
+            normalize: Some(true),
+        });
+
+        let result = service.embed(req).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), Status::invalid_argument("").code());
+    }
+
+    #[tokio::test]
+    async fn test_compute_similarity_rpc_success() {
+        let service = make_service();
+
+        let req = Request::new(SimilarityRequest {
+            vector1: vec![1.0, 0.0, 0.0],
+            vector2: vec![1.0, 0.0, 0.0],
+            metric: "cosine".to_string(),
+        });
+
+        let response = service
+            .compute_similarity(req)
+            .await
+            .expect("compute_similarity should succeed");
+        let response = response.into_inner();
+
+        assert!(
+            (response.score - 1.0).abs() < 1e-6,
+            "cosine similarity of identical vectors should be ~1.0, got {}",
+            response.score
+        );
+    }
+
+    #[tokio::test]
+    async fn test_compute_similarity_rpc_mismatched_dimensions() {
+        let service = make_service();
+
+        let req = Request::new(SimilarityRequest {
+            vector1: vec![1.0, 0.0],
+            vector2: vec![1.0, 0.0, 0.0],
+            metric: "cosine".to_string(),
+        });
+
+        let result = service.compute_similarity(req).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), Status::invalid_argument("").code());
+    }
+}

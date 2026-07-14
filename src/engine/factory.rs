@@ -62,6 +62,20 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_create_onnx_engine_missing_model() {
+        let mut config = test_config();
+        config.engine_type = EngineType::Onnx;
+        config.model_path = PathBuf::from("/nonexistent/onnx/model");
+        let result = EngineFactory::create(EngineType::Onnx, &config);
+        // ONNX 引擎会因模型路径不存在而返回错误
+        assert!(
+            result.is_err(),
+            "ONNX engine should return error for missing model path"
+        );
+    }
+
     #[test]
     fn test_engine_type_display() {
         assert_eq!(EngineType::Candle.to_string(), "candle");

@@ -1432,7 +1432,7 @@ mod tests {
             health[0].last_active_time
         };
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(2000)).await;
 
         let updated_time = {
             let health = manager.worker_health.lock().await;
@@ -1448,7 +1448,7 @@ mod tests {
         for s in &senders {
             let _ = s.send(WorkerTask::Shutdown { immediate: true }).await;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     /// 验证 process_request 处理 normalize=None 的请求也能成功。

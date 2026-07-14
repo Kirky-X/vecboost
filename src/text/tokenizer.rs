@@ -175,64 +175,6 @@ pub fn validate_utf8(text: &str) -> Utf8ValidationResult {
     Utf8ValidationResult::valid()
 }
 
-pub fn validate_utf8_bytes(bytes: &[u8]) -> Utf8ValidationResult {
-    let mut position = 0;
-
-    while position < bytes.len() {
-        let byte = bytes[position];
-        let (expected_continuation, char_len) = match byte {
-            0x00..=0x7F => (0, 1),
-            0xC2..=0xDF => (1, 2),
-            0xE0..=0xEF => (2, 3),
-            0xF0..=0xF4 => (3, 4),
-            0x80..=0xBF => {
-                return Utf8ValidationResult::invalid(
-                    position,
-                    byte,
-                    "Unexpected UTF-8 continuation byte (found outside valid sequence)",
-                );
-            }
-            0xF5..=0xFF => {
-                return Utf8ValidationResult::invalid(
-                    position,
-                    byte,
-                    "Invalid UTF-8 lead byte (reserved for future use)",
-                );
-            }
-            _ => {
-                return Utf8ValidationResult::invalid(position, byte, "Invalid UTF-8 byte value");
-            }
-        };
-
-        if position + char_len > bytes.len() {
-            return Utf8ValidationResult::invalid(
-                position,
-                byte,
-                &format!(
-                    "Incomplete UTF-8 sequence at end of data: expected {} continuation bytes, got {}",
-                    expected_continuation,
-                    bytes.len() - position - 1
-                ),
-            );
-        }
-
-        for j in 1..char_len {
-            let cont_byte = bytes[position + j];
-            if !matches!(cont_byte, 0x80..=0xBF) {
-                return Utf8ValidationResult::invalid(
-                    position + j,
-                    cont_byte,
-                    "Invalid UTF-8 continuation byte (expected 0x80-0xBF range)",
-                );
-            }
-        }
-
-        position += char_len;
-    }
-
-    Utf8ValidationResult::valid()
-}
-
 #[cfg(target_os = "macos")]
 impl Tokenizer {
     pub fn from_pretrained(model_id: &str) -> Result<Self, VecboostError> {

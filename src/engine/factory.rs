@@ -62,36 +62,25 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg(feature = "tensorrt")]
-    #[test]
-    fn test_create_tensorrt_returns_runtime_error() {
-        let config = test_config();
-        let result = EngineFactory::create(EngineType::TensorRt, &config);
-        match result {
-            Err(VecboostError::InferenceError(msg)) => {
-                assert!(msg.contains("TensorRT runtime not available"));
-            }
-            Err(other) => panic!("Expected InferenceError, got {:?}", other),
-            Ok(_) => panic!("Expected error, got Ok"),
-        }
-    }
-
-    #[cfg(feature = "openvino")]
-    #[test]
-    fn test_create_openvino_returns_runtime_error() {
-        let config = test_config();
-        let result = EngineFactory::create(EngineType::OpenVino, &config);
-        match result {
-            Err(VecboostError::InferenceError(msg)) => {
-                assert!(msg.contains("OpenVINO runtime not available"));
-            }
-            Err(other) => panic!("Expected InferenceError, got {:?}", other),
-            Ok(_) => panic!("Expected error, got Ok"),
-        }
-    }
-
     #[test]
     fn test_engine_type_display() {
         assert_eq!(EngineType::Candle.to_string(), "candle");
+    }
+
+    #[test]
+    fn test_removed_engine_types_return_error() {
+        let json = "\"tensorrt\"";
+        let result: Result<EngineType, _> = serde_json::from_str(json);
+        assert!(
+            result.is_err(),
+            "tensorrt should not deserialize after removal"
+        );
+
+        let json = "\"openvino\"";
+        let result: Result<EngineType, _> = serde_json::from_str(json);
+        assert!(
+            result.is_err(),
+            "openvino should not deserialize after removal"
+        );
     }
 }

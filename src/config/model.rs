@@ -138,10 +138,6 @@ pub enum EngineType {
     Candle,
     #[cfg(feature = "onnx")]
     Onnx,
-    #[cfg(feature = "tensorrt")]
-    TensorRt,
-    #[cfg(feature = "openvino")]
-    OpenVino,
 }
 
 impl fmt::Display for EngineType {
@@ -150,10 +146,6 @@ impl fmt::Display for EngineType {
             EngineType::Candle => write!(f, "candle"),
             #[cfg(feature = "onnx")]
             EngineType::Onnx => write!(f, "onnx"),
-            #[cfg(feature = "tensorrt")]
-            EngineType::TensorRt => write!(f, "tensorrt"),
-            #[cfg(feature = "openvino")]
-            EngineType::OpenVino => write!(f, "openvino"),
         }
     }
 }

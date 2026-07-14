@@ -158,8 +158,6 @@ redis = ["dep:redis"]
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/alternative-backend"]
-tensorrt = []
-openvino = []
 
 # Platform-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]

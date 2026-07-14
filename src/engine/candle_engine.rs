@@ -18,7 +18,6 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 use candle_transformers::models::xlm_roberta::{Config as XlmRobertaConfig, XLMRobertaModel};
-use futures::executor::block_on;
 use hf_hub::{Repo, RepoType, api::sync::Api};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -722,7 +721,7 @@ impl CandleEngine {
 
         // 尝试从内存池获取 token_ids 张量
         let token_ids = if let Some(ref pool) = self.tensor_pool {
-            let mut pool = futures::executor::block_on(pool.write());
+            let mut pool = pool.write().await;
             match pool.acquire(batch_size, max_seq_len) {
                 Ok(_tensor) => {
                     // 从池中获取的张量需要填充数据
@@ -763,7 +762,7 @@ impl CandleEngine {
 
         // 尝试从内存池获取 attention_mask 张量
         let attention_mask_tensor = if let Some(ref pool) = self.tensor_pool {
-            let mut pool = futures::executor::block_on(pool.write());
+            let mut pool = pool.write().await;
             match pool.acquire(batch_size, max_seq_len) {
                 Ok(tensor) => {
                     // 从池中获取的张量需要填充数据
@@ -855,7 +854,7 @@ impl CandleEngine {
 
         // 释放张量回池
         if let Some(ref pool) = self.tensor_pool {
-            let mut pool = futures::executor::block_on(pool.write());
+            let mut pool = pool.write().await;
             pool.release(token_ids, batch_size, max_seq_len);
             pool.release(attention_mask_tensor, batch_size, max_seq_len);
         }
@@ -871,12 +870,17 @@ impl CandleEngine {
 #[async_trait]
 impl InferenceEngine for CandleEngine {
     fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
-        block_on(async { self.forward_pass(text).await })
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async { self.forward_pass(text).await })
+        })
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
         let texts_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-        block_on(async { self.forward_pass_batch(&texts_refs).await })
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { self.forward_pass_batch(&texts_refs).await })
+        })
     }
 
     fn precision(&self) -> &Precision {
@@ -1074,5 +1078,59 @@ impl CandleEngine {
 
         tracing::info!("Successfully fell back to CPU");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// T006 H6: 验证 `tokio::task::block_in_place(|| Handle::current().block_on(...))` 模式
+    /// 在 multi-thread runtime 下不 panic。
+    ///
+    /// 此前 `embed`/`embed_batch` 使用 `futures::executor::block_on`,在 Tokio 异步上下文中
+    /// 会阻塞当前 worker 线程并可能死锁(若 future 需要 Tokio 资源)。
+    /// 改用 `block_in_place` 后,Tokio 会将其他任务调度到其他 worker,避免死锁。
+    ///
+    /// 注:CandleEngine 构造需要真实模型文件,无法在单元测试中实例化;
+    /// 此测试验证 block_in_place 调用模式本身的正确性——这是 H6 修复的核心。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_block_in_place_pattern_completes_without_panic() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // 模拟 forward_pass 内部的异步操作
+                tokio::task::yield_now().await;
+                42
+            })
+        });
+        assert_eq!(
+            result, 42,
+            "block_in_place pattern must complete without panic in multi-thread runtime"
+        );
+    }
+
+    /// T006 H6: 验证 block_in_place 内部的 block_on 可以正确 await Tokio 异步原语
+    /// (如 tokio::sync::RwLock)。这模拟了 forward_pass_batch 中 pool.write().await 的场景。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_block_in_place_with_tokio_rwlock_does_not_deadlock() {
+        let lock = std::sync::Arc::new(tokio::sync::RwLock::new(0i32));
+        let lock_clone = std::sync::Arc::clone(&lock);
+
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let mut guard = lock_clone.write().await;
+                *guard = 42;
+                *guard
+            })
+        });
+
+        assert_eq!(
+            result, 42,
+            "block_in_place must allow Tokio RwLock acquisition"
+        );
+        // 验证锁已释放
+        let guard = lock.try_read();
+        assert!(
+            guard.is_ok(),
+            "RwLock must be released after block_on completes"
+        );
     }
 }

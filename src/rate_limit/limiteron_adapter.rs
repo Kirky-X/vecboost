@@ -39,6 +39,10 @@ impl LimiteronAdapter {
         for dimension in dimensions {
             let key = dimension_to_key(&dimension);
             let max_requests = dimension_limit(&self.config, &dimension);
+            // limit=0 表示禁止该维度所有请求
+            if max_requests == 0 {
+                return false;
+            }
             let bucket = self.get_or_create_bucket(&key, max_requests).await;
             match bucket.allow(1).await {
                 Ok(true) => continue,
@@ -59,7 +63,7 @@ impl LimiteronAdapter {
             max_requests,
             current_count: max_requests.saturating_sub(tokens),
             remaining: tokens,
-            window_secs: self.config.token_bucket_refill_rate,
+            window_secs: 60, // 限流窗口固定 60 秒(每分钟限额)
             algorithm: "token_bucket".to_string(),
         }
     }
@@ -244,6 +248,30 @@ mod tests {
         assert!(
             adapter.check_rate_limit(vec![dim.clone()]).await,
             "expected refill to allow request after wait"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_limit_zero_rejects_all() {
+        let mut config = small_config();
+        config.global_requests_per_minute = 0;
+        let adapter = LimiteronAdapter::new(config);
+        // limit=0 时所有请求被拒绝
+        assert!(
+            !adapter
+                .check_rate_limit(vec![RateLimitDimension::Global])
+                .await,
+            "limit=0 must reject all requests"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_window_secs_is_60() {
+        let adapter = LimiteronAdapter::new(small_config());
+        let status = adapter.get_status(RateLimitDimension::Global).await;
+        assert_eq!(
+            status.window_secs, 60,
+            "window_secs must be 60 (per-minute window)"
         );
     }
 }

@@ -124,7 +124,7 @@ impl OnnxEngine {
             .with_intra_threads(num_threads)
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
-        let session = if supports_cuda {
+        let mut session = if supports_cuda {
             tracing::info!("Attempting to configure CUDA execution provider for ONNX Runtime");
             #[cfg(feature = "cuda")]
             {

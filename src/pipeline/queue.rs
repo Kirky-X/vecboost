@@ -104,9 +104,14 @@ impl PriorityRequestQueue {
         Ok(())
     }
 
-    /// 出队（按优先级）
+    /// 出队（按优先级,含老化机制防止低优先级饥饿）
+    ///
+    /// 当高优先级队列队首请求等待超过 30s 时,跳过该优先级处理下级队列,
+    /// 防止低优先级请求永久饥饿。`Priority::Low` 不参与老化跳过。
     pub async fn dequeue(&self) -> Option<QueuedRequest> {
         let mut queues = self.queues.write().await;
+        let now = Instant::now();
+        const AGING_THRESHOLD: Duration = Duration::from_secs(30);
 
         // 按优先级从高到低查找
         for priority in [
@@ -116,6 +121,13 @@ impl PriorityRequestQueue {
             Priority::Low,
         ] {
             if let Some(queue) = queues.get_mut(&priority) {
+                // 老化检查:高优先级队列队首请求已超时 → 跳到下一优先级
+                if priority != Priority::Low
+                    && let Some(front) = queue.front()
+                    && now.duration_since(front.submitted_at) > AGING_THRESHOLD
+                {
+                    continue;
+                }
                 if let Some(request) = queue.pop_front() {
                     let new_size = self.current_size.fetch_sub(1, Ordering::Relaxed) - 1;
 
@@ -351,5 +363,57 @@ mod tests {
         queue.clear().await;
 
         assert_eq!(queue.size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_aging_prevents_low_priority_starvation() {
+        let queue = PriorityRequestQueue::new(100);
+
+        // 入队 Critical 请求(会老化)
+        let (tx1, _rx1) = oneshot::channel();
+        let critical_req = QueuedRequest {
+            request_id: "critical-1".to_string(),
+            embed_request: EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Critical,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(60),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tx1,
+        };
+        queue.enqueue(critical_req).await.unwrap();
+
+        // 入队 Low 请求
+        let (tx2, _rx2) = oneshot::channel();
+        let low_req = QueuedRequest {
+            request_id: "low-1".to_string(),
+            embed_request: EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Low,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(60),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tx2,
+        };
+        queue.enqueue(low_req).await.unwrap();
+
+        // 等待超过老化阈值(30s)
+        tokio::time::sleep(Duration::from_secs(31)).await;
+
+        // dequeue 应先返回 Low(Critical 已老化,跳过)
+        let dequeued = queue.dequeue().await.unwrap();
+        assert_eq!(
+            dequeued.priority,
+            Priority::Low,
+            "aged Critical should be skipped, Low should be dequeued first"
+        );
     }
 }

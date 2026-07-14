@@ -118,8 +118,8 @@ get_features() {
 
     case "$platform" in
         Linux)
-            # Linux: cuda, onnx, grpc (skip redis - has platform-specific deps)
-            features="cuda,onnx,grpc"
+            # Linux: onnx, grpc (cuda 需 CUDA 13+ 环境,不作为默认)
+            features="onnx,grpc"
             ;;
         Darwin)
             # macOS: metal, onnx, grpc, redis (all work on macOS)

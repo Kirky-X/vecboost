@@ -40,12 +40,27 @@ impl LimiteronAdapter {
             max_requests,
             current_count: 0,
             remaining: max_requests,
-            window_secs: self.config.token_bucket_refill_rate,
+            window_secs: 60, // 限流窗口固定 60 秒(每分钟限额)
             algorithm: "noop".to_string(),
         }
     }
 
     pub async fn get_remaining(&self, dimension: RateLimitDimension) -> u64 {
         self.get_status(dimension).await.remaining
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_window_secs_is_60() {
+        let adapter = LimiteronAdapter::with_default_config();
+        let status = adapter.get_status(RateLimitDimension::Global).await;
+        assert_eq!(
+            status.window_secs, 60,
+            "window_secs must be 60 (per-minute window)"
+        );
     }
 }

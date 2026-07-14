@@ -67,9 +67,9 @@ dbnexus = { version = "0.4", optional = true, default-features = false, features
 sea-orm = { version = "2.0.0-rc.42", optional = true, default-features = false }
 
 # AI & Math (base)
-candle-core = { version = "0.9", features = [] }
-candle-nn = "0.9"
-candle-transformers = "0.9"
+candle-core = { version = "0.11", features = [] }
+candle-nn = "0.11"
+candle-transformers = "0.11"
 hf-hub = "0.3"
 
 # Web Framework (http feature)
@@ -103,11 +103,11 @@ aes-gcm = { version = "0.10", optional = true, default-features = false, feature
 redis = { version = "1", optional = true, default-features = false, features = ["tokio-comp", "connection-manager"] }
 
 # ONNX feature
-ndarray = { version = "0.16", optional = true, default-features = false }
+ndarray = { version = "0.17", optional = true, default-features = false, features = ["std"] }
 ort = { version = "2.0.0-rc.12", optional = true, default-features = false }
 
-# CUDA feature
-cudarc = { version = "0.18", optional = true, default-features = false }
+# CUDA feature (candle-core/cuda 传递依赖 cudarc 0.19,支持 CUDA 13)
+# 注意:项目代码不直接使用 cudarc,无需在此声明
 
 # Multi-protocol SDK framework (sdforge feature)
 sdforge = { version = "0.4", optional = true, default-features = false }
@@ -124,7 +124,8 @@ default = ["http", "oxcache", "limiteron"]
 # 协议特性
 http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "dep:utoipa", "dep:utoipa-swagger-ui", "dep:uuid", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest", "sdforge/http"]
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-build"]
-mcp = ["sdforge/mcp"]
+# mcp feature 推迟到 v0.3.0:sdforge 0.4 的 mcp 集成需要 rmcp crate,
+# 当前 sdforge/mcp 透传不完整,启用会导致编译错误(unresolved crate `rmcp`)
 cli = ["sdforge/cli", "dep:clap"]
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
 
@@ -145,9 +146,9 @@ auth = ["dep:jsonwebtoken", "dep:password-hash", "dep:argon2", "dep:aes-gcm"]
 redis = ["dep:redis"]
 
 # 引擎特性
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:cudarc"]
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
 metal = ["candle-core/metal", "candle-nn/metal"]
-onnx = ["dep:ndarray", "dep:ort"]
+onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/alternative-backend"]
 tensorrt = []
 openvino = []
 

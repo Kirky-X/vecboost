@@ -9,9 +9,21 @@
 //! Redis storage (for production deployments).
 
 use async_trait::async_trait;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
+
+/// 内存黑名单默认 TTL(秒)— 与 Redis 版本的 24h TTL 保持一致
+const MEMORY_BLACKLIST_TTL_SECS: u64 = 86_400;
+
+/// 获取当前 Unix 时间戳(秒)
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 /// Trait for token storage backends
 ///
@@ -44,14 +56,15 @@ pub trait TokenStore: Send + Sync {
 /// In production, use `RedisTokenStore` instead.
 #[derive(Clone)]
 pub struct MemoryTokenStore {
-    blacklist: Arc<RwLock<HashSet<String>>>,
+    /// JTI → 过期 Unix 时间戳(秒)
+    blacklist: Arc<RwLock<HashMap<String, u64>>>,
 }
 
 impl MemoryTokenStore {
     /// Create a new in-memory token store
     pub fn new() -> Self {
         Self {
-            blacklist: Arc::new(RwLock::new(HashSet::new())),
+            blacklist: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -66,13 +79,18 @@ impl Default for MemoryTokenStore {
 impl TokenStore for MemoryTokenStore {
     async fn add_to_blacklist(&self, jti: &str) -> Result<(), crate::error::VecboostError> {
         let mut blacklist = self.blacklist.write().await;
-        blacklist.insert(jti.to_string());
+        blacklist.insert(jti.to_string(), now_secs() + MEMORY_BLACKLIST_TTL_SECS);
         Ok(())
     }
 
     async fn is_blacklisted(&self, jti: &str) -> Result<bool, crate::error::VecboostError> {
         let blacklist = self.blacklist.read().await;
-        Ok(blacklist.contains(jti))
+        if let Some(expiry) = blacklist.get(jti)
+            && *expiry > now_secs()
+        {
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     async fn remove_from_blacklist(&self, jti: &str) -> Result<(), crate::error::VecboostError> {
@@ -81,29 +99,28 @@ impl TokenStore for MemoryTokenStore {
         Ok(())
     }
 
-    fn is_blacklisted_sync(&self, _jti: &str) -> bool {
-        // 同步版本用于非异步路径
-        // 注意：在 Tokio 运行时中不应使用 blocking_read
-        // 生产环境中应使用 Redis 的非阻塞查询
-        // 这里返回 false 作为安全默认值
+    fn is_blacklisted_sync(&self, jti: &str) -> bool {
+        // 使用 try_read 避免在异步上下文中阻塞 panic
+        // 锁竞争时返回 false(安全默认值,异步路径会再次校验)
+        if let Ok(blacklist) = self.blacklist.try_read()
+            && let Some(expiry) = blacklist.get(jti)
+            && *expiry > now_secs()
+        {
+            return true;
+        }
         false
     }
 
     async fn blacklist_size(&self) -> usize {
-        self.blacklist.read().await.len()
+        let blacklist = self.blacklist.read().await;
+        let now = now_secs();
+        blacklist.values().filter(|exp| **exp > now).count()
     }
 
     async fn cleanup_expired_blacklist(&self) {
-        // 对于内存存储，由于我们使用 HashSet 且不记录时间戳，
-        // 无法区分哪些条目已过期。在生产环境中，应该：
-        // 1. 使用带有时间戳的结构体存储 JTI
-        // 2. 定期扫描并删除过期条目
-        //
-        // 注意：Redis 版本通过 TTL 自动处理过期，无需手动清理
-        tracing::debug!("Memory token store cleanup - no expiration tracking implemented");
-        // TODO: 如果需要完整的内存存储过期清理，需要：
-        // - 修改数据结构为 HashMap<String, u64> (JTI -> 过期时间戳)
-        // - 遍历并删除过期条目
+        let mut blacklist = self.blacklist.write().await;
+        let now = now_secs();
+        blacklist.retain(|_, exp| *exp > now);
     }
 }
 
@@ -290,5 +307,34 @@ mod tests {
 
         // Check size
         assert_eq!(store.blacklist_size().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_is_blacklisted_sync_queries_actual_blacklist() {
+        let store = MemoryTokenStore::new();
+        assert!(!store.is_blacklisted_sync("sync-jti"));
+        store.add_to_blacklist("sync-jti").await.unwrap();
+        assert!(store.is_blacklisted_sync("sync-jti"));
+        store.remove_from_blacklist("sync-jti").await.unwrap();
+        assert!(!store.is_blacklisted_sync("sync-jti"));
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_removes_expired_entries() {
+        let store = MemoryTokenStore::new();
+        // 手动注入已过期条目
+        {
+            let mut bl = store.blacklist.write().await;
+            bl.insert("expired-jti".to_string(), now_secs().saturating_sub(1));
+            bl.insert(
+                "valid-jti".to_string(),
+                now_secs() + MEMORY_BLACKLIST_TTL_SECS,
+            );
+        }
+        assert_eq!(store.blacklist_size().await, 1);
+        store.cleanup_expired_blacklist().await;
+        assert!(!store.is_blacklisted("expired-jti").await.unwrap());
+        assert!(store.is_blacklisted("valid-jti").await.unwrap());
+        assert_eq!(store.blacklist_size().await, 1);
     }
 }

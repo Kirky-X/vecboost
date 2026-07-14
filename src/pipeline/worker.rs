@@ -182,31 +182,60 @@ impl WorkerManager {
         self.current_workers.load(Ordering::SeqCst)
     }
 
-    /// 启动 Worker
+    /// 启动 Worker(对外入口,委托给 spawn_single_worker)
     pub async fn spawn_worker(&self) {
-        let worker_id = self.current_workers.fetch_add(1, Ordering::SeqCst);
+        Self::spawn_single_worker(
+            &self.current_workers,
+            &self.worker_senders,
+            &self.worker_health,
+            &self.queue,
+            &self.response_channel,
+            &self.embedding_service,
+            &self.config,
+            &self.running,
+        )
+        .await;
+    }
+
+    /// 启动单个 Worker(静态方法,供 spawn_worker 和 start_scaling_monitor 复用)
+    ///
+    /// 设计理由:`start_scaling_monitor` 内部 `tokio::spawn` 闭包无法持有 `&self`,
+    /// 故按 `worker_loop` 既有惯例以静态方法 + Arc 引用形式暴露。
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_single_worker(
+        current_workers: &Arc<AtomicUsize>,
+        worker_senders: &Arc<Mutex<Vec<mpsc::Sender<WorkerTask>>>>,
+        worker_health: &Arc<Mutex<Vec<WorkerHealthInfo>>>,
+        queue: &Arc<PriorityRequestQueue>,
+        response_channel: &Arc<ResponseChannel>,
+        embedding_service: &Arc<RwLock<EmbeddingService>>,
+        config: &WorkerConfig,
+        running: &Arc<AtomicBool>,
+    ) {
+        let worker_id = current_workers.fetch_add(1, Ordering::SeqCst);
 
         // 创建任务通道
         let (task_sender, task_receiver) = mpsc::channel(100);
 
         // 保存发送器用于后续关闭
         {
-            let mut senders = self.worker_senders.lock().await;
+            let mut senders = worker_senders.lock().await;
             senders.push(task_sender.clone());
         }
 
         // 初始化健康信息
         {
-            let mut health_guard = self.worker_health.lock().await;
+            let mut health_guard = worker_health.lock().await;
             health_guard.push(WorkerHealthInfo::new(worker_id));
         }
 
-        let queue = Arc::clone(&self.queue);
-        let response_channel = Arc::clone(&self.response_channel);
-        let config = self.config.clone();
-        let running = Arc::clone(&self.running);
-        let embedding_service = Arc::clone(&self.embedding_service);
-        let worker_health = Arc::clone(&self.worker_health);
+        let queue = Arc::clone(queue);
+        let response_channel = Arc::clone(response_channel);
+        let config = config.clone();
+        let running = Arc::clone(running);
+        let embedding_service = Arc::clone(embedding_service);
+        let worker_health = Arc::clone(worker_health);
+        let current_workers = Arc::clone(current_workers);
 
         info!("Worker {} started", worker_id);
 
@@ -220,6 +249,7 @@ impl WorkerManager {
                 running,
                 embedding_service,
                 worker_health,
+                current_workers,
             )
             .await;
         });
@@ -229,13 +259,14 @@ impl WorkerManager {
     #[allow(clippy::too_many_arguments)]
     async fn worker_loop(
         worker_id: usize,
-        _task_receiver: mpsc::Receiver<WorkerTask>,
+        mut task_receiver: mpsc::Receiver<WorkerTask>,
         queue: Arc<PriorityRequestQueue>,
         response_channel: Arc<ResponseChannel>,
         config: WorkerConfig,
         running: Arc<AtomicBool>,
         embedding_service: Arc<RwLock<EmbeddingService>>,
         worker_health: Arc<Mutex<Vec<WorkerHealthInfo>>>,
+        current_workers: Arc<AtomicUsize>,
     ) {
         debug!("Worker {} loop started", worker_id);
 
@@ -257,53 +288,86 @@ impl WorkerManager {
                 }
             }
 
-            // 从队列获取请求（非阻塞）
-            if let Some(request) = queue.dequeue().await {
-                // 重置空闲计数
-                idle_count = 0;
+            // 同时等待队列请求和关闭信号(T009: 消费 task_receiver 的 Shutdown 信号,
+            // 使 start_scaling_monitor 缩容发送的 Shutdown 能及时被 worker 接收)
+            tokio::select! {
+                Some(task) = task_receiver.recv() => {
+                    match task {
+                        WorkerTask::Shutdown { immediate } => {
+                            if immediate {
+                                info!(
+                                    "Worker {} received immediate shutdown signal",
+                                    worker_id
+                                );
+                            } else {
+                                info!(
+                                    "Worker {} received graceful shutdown signal",
+                                    worker_id
+                                );
+                            }
+                            break;
+                        }
+                        WorkerTask::ProcessRequest { .. } => {
+                            // 当前请求通过 queue 路由,task_receiver 仅承载 Shutdown 信号。
+                            // 保留分支以防未来切换到直接派发模式。
+                            debug!(
+                                "Worker {} received ProcessRequest via task_receiver \
+                                 (ignored, queue is primary route)",
+                                worker_id
+                            );
+                        }
+                    }
+                }
+                // 从队列获取请求
+                Some(request) = queue.dequeue() => {
+                    // 重置空闲计数
+                    idle_count = 0;
 
-                debug!(
-                    "Worker {} processing request {}",
-                    worker_id, request.request_id
-                );
-
-                // 处理请求
-                let result = Self::process_request(&request, &embedding_service).await;
-
-                // 发送响应
-                response_channel
-                    .complete(request.request_id.clone(), result)
-                    .await;
-
-                debug!(
-                    "Worker {} completed request {}",
-                    worker_id, request.request_id
-                );
-            } else {
-                // 队列为空，使用指数退避
-                idle_count = idle_count.saturating_add(1usize);
-                let wait_ms = std::cmp::min(100usize * (1usize << idle_count.min(6)), 5000usize);
-
-                debug!(
-                    "Worker {} queue empty, waiting {}ms (idle_count={})",
-                    worker_id, wait_ms, idle_count
-                );
-
-                tokio::time::sleep(Duration::from_millis(wait_ms as u64)).await;
-
-                // 如果长时间空闲，可以让 worker 退出
-                if idle_count > MAX_IDLE_COUNT && worker_id > config.min_workers {
-                    info!(
-                        "Worker {} idle for too long, requesting shutdown",
-                        worker_id
+                    debug!(
+                        "Worker {} processing request {}",
+                        worker_id, request.request_id
                     );
-                    break;
+
+                    // 处理请求
+                    let result = Self::process_request(&request, &embedding_service).await;
+
+                    // 发送响应
+                    response_channel
+                        .complete(request.request_id.clone(), result)
+                        .await;
+
+                    debug!(
+                        "Worker {} completed request {}",
+                        worker_id, request.request_id
+                    );
+                }
+                // 队列为空且无关闭信号:指数退避
+                else => {
+                    idle_count = idle_count.saturating_add(1usize);
+                    let wait_ms =
+                        std::cmp::min(100usize * (1usize << idle_count.min(6)), 5000usize);
+
+                    debug!(
+                        "Worker {} queue empty, waiting {}ms (idle_count={})",
+                        worker_id, wait_ms, idle_count
+                    );
+
+                    tokio::time::sleep(Duration::from_millis(wait_ms as u64)).await;
+
+                    // 如果长时间空闲，可以让 worker 退出
+                    if idle_count > MAX_IDLE_COUNT && worker_id > config.min_workers {
+                        info!(
+                            "Worker {} idle for too long, requesting shutdown",
+                            worker_id
+                        );
+                        break;
+                    }
                 }
             }
         }
 
         // 清理：减少 worker 计数
-        let final_count = Self::decrement_worker_count(&queue);
+        let final_count = Self::decrement_worker_count(&current_workers);
         info!(
             "Worker {} stopped, remaining workers: {}",
             worker_id, final_count
@@ -319,9 +383,8 @@ impl WorkerManager {
     }
 
     /// 减少 worker 计数并返回剩余数量
-    fn decrement_worker_count(_queue: &Arc<PriorityRequestQueue>) -> usize {
-        // 注意：这里简化实现，实际需要更复杂的同步机制
-        0
+    fn decrement_worker_count(current_workers: &Arc<AtomicUsize>) -> usize {
+        current_workers.fetch_sub(1, Ordering::SeqCst) - 1
     }
 
     /// 处理请求
@@ -372,6 +435,10 @@ impl WorkerManager {
         let current_workers = Arc::clone(&self.current_workers);
         let config = self.config.clone();
         let running = Arc::clone(&self.running);
+        let worker_senders = Arc::clone(&self.worker_senders);
+        let worker_health = Arc::clone(&self.worker_health);
+        let response_channel = Arc::clone(&self.response_channel);
+        let embedding_service = Arc::clone(&self.embedding_service);
 
         tokio::spawn(async move {
             let mut interval =
@@ -387,31 +454,46 @@ impl WorkerManager {
                 let queue_size = queue.size();
                 let current = current_workers.load(Ordering::SeqCst);
 
-                // 检查是否需要扩容
+                // 扩容:队列压力超过阈值且未达上限
                 if queue_size > config.scale_up_threshold && current < config.max_workers {
                     let new_workers = std::cmp::min(
                         (queue_size / config.scale_up_threshold).saturating_sub(1),
                         config.max_workers - current,
                     );
 
-                    info!(
-                        "Scaling up: adding {} workers (queue size: {})",
-                        new_workers, queue_size
-                    );
-
-                    // TODO: 实际启动 worker
-                    // 需要改进架构以支持动态添加 worker
+                    if new_workers > 0 {
+                        info!(
+                            "Scaling up: adding {} workers (queue size: {})",
+                            new_workers, queue_size
+                        );
+                        for _ in 0..new_workers {
+                            Self::spawn_single_worker(
+                                &current_workers,
+                                &worker_senders,
+                                &worker_health,
+                                &queue,
+                                &response_channel,
+                                &embedding_service,
+                                &config,
+                                &running,
+                            )
+                            .await;
+                        }
+                    }
                 }
 
-                // 检查是否需要缩容
+                // 缩容:队列压力低于阈值且超过最小值
                 if queue_size < config.scale_down_threshold && current > config.min_workers {
+                    let to_remove = current - config.min_workers;
                     info!(
-                        "Scaling down: removing workers (queue size: {})",
-                        queue_size
+                        "Scaling down: removing {} workers (queue size: {})",
+                        to_remove, queue_size
                     );
-
-                    // TODO: 实际移除 worker
-                    // 向多余的 worker 发送关闭信号
+                    let senders = worker_senders.lock().await;
+                    // 从最新加入的 worker 开始发送关闭信号(保留 min_workers 个最早的)
+                    for sender in senders.iter().rev().take(to_remove) {
+                        let _ = sender.send(WorkerTask::Shutdown { immediate: false }).await;
+                    }
                 }
             }
         });
@@ -420,7 +502,38 @@ impl WorkerManager {
 
 #[cfg(test)]
 mod tests {
-    // TODO: 需要添加 EmbeddingService mock 来修复测试
+    use super::*;
+    use crate::config::model::{ModelConfig, Precision};
+    use crate::engine::InferenceEngine;
+    use async_trait::async_trait;
+
+    /// 测试用 Mock 推理引擎——返回固定 8 维零向量,不依赖任何外部模型。
+    /// 定义在测试模块内,遵循 embedding.rs::tests 的 TestEngine 既有惯例。
+    struct MockEngine;
+
+    #[async_trait]
+    impl InferenceEngine for MockEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.0; 8])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    // TODO: 需要添加 EmbeddingService mock 来修复以下集成测试
     /*
     #[tokio::test]
     async fn test_worker_manager_creation() {
@@ -460,4 +573,199 @@ mod tests {
         assert_eq!(manager.current_workers(), 2);
     }
     */
+
+    /// T004 H1: 验证 decrement_worker_count 真实递减(非硬编码 0)。
+    #[test]
+    fn test_decrement_worker_count_actually_decrements() {
+        let counter = Arc::new(AtomicUsize::new(5));
+        let remaining = WorkerManager::decrement_worker_count(&counter);
+        assert_eq!(
+            remaining, 4,
+            "decrement_worker_count must return new count (old-1), not hardcoded 0"
+        );
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            4,
+            "counter must be decremented from 5 to 4"
+        );
+    }
+
+    /// T004 H1: 边界场景——单 worker 停止后计数归零。
+    #[test]
+    fn test_decrement_worker_count_from_one_to_zero() {
+        let counter = Arc::new(AtomicUsize::new(1));
+        let remaining = WorkerManager::decrement_worker_count(&counter);
+        assert_eq!(remaining, 0, "single worker stop should bring count to 0");
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    /// T004 H1: 连续递减多次,确认每次都生效(排除"只减一次"的假实现)。
+    #[test]
+    fn test_decrement_worker_count_multiple_times() {
+        let counter = Arc::new(AtomicUsize::new(3));
+        assert_eq!(WorkerManager::decrement_worker_count(&counter), 2);
+        assert_eq!(WorkerManager::decrement_worker_count(&counter), 1);
+        assert_eq!(WorkerManager::decrement_worker_count(&counter), 0);
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    /// T005 H2: 验证 spawn_worker(对外入口)真实递增 current_workers。
+    /// 此前 start_scaling_monitor 中的扩容逻辑是 TODO 注释,无法实际增加 worker;
+    /// 现已通过 spawn_single_worker 落地。
+    #[tokio::test]
+    async fn test_spawn_worker_increments_current_workers() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig::default();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let manager = WorkerManager::new(queue, response_channel, config, service);
+
+        assert_eq!(manager.current_workers(), 0, "initial count must be 0");
+        manager.spawn_worker().await;
+        assert_eq!(
+            manager.current_workers(),
+            1,
+            "spawn_worker must increment counter via fetch_add (H2 fix)"
+        );
+        manager.spawn_worker().await;
+        assert_eq!(manager.current_workers(), 2);
+
+        // 清理:停止 spawned workers,避免任务泄漏
+        manager.running.store(false, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    /// T005 H2: 验证 spawn_single_worker(静态方法,被 start_scaling_monitor 调用)
+    /// 真实递增计数器——这是扩容逻辑落地的核心证据。
+    #[tokio::test]
+    async fn test_spawn_single_worker_increments_counter() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig::default();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let manager = WorkerManager::new(queue, response_channel, config, service);
+
+        let running = Arc::clone(&manager.running);
+        let current_workers = Arc::clone(&manager.current_workers);
+        let worker_senders = Arc::clone(&manager.worker_senders);
+        let worker_health = Arc::clone(&manager.worker_health);
+        let queue_clone = Arc::clone(&manager.queue);
+        let response_channel_clone = Arc::clone(&manager.response_channel);
+        let embedding_service_clone = Arc::clone(&manager.embedding_service);
+        let config_clone = manager.config.clone();
+
+        assert_eq!(current_workers.load(Ordering::SeqCst), 0);
+        WorkerManager::spawn_single_worker(
+            &current_workers,
+            &worker_senders,
+            &worker_health,
+            &queue_clone,
+            &response_channel_clone,
+            &embedding_service_clone,
+            &config_clone,
+            &running,
+        )
+        .await;
+        assert_eq!(
+            current_workers.load(Ordering::SeqCst),
+            1,
+            "spawn_single_worker (used by scaling monitor) must increment counter"
+        );
+
+        // 清理
+        running.store(false, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    /// T009 H2-补: 验证 worker_loop 消费 task_receiver 的 Shutdown 信号,
+    /// 在 2s 内退出(而非等 idle timeout ~30s 或永不退出)。
+    ///
+    /// 此前 worker_loop 的 _task_receiver 参数带下划线(未使用),
+    /// start_scaling_monitor 缩容发送的 Shutdown 信号被忽略;
+    /// 且 worker_id=0 < min_workers=2,idle timeout 也不触发,
+    /// worker 实际上永远不会因 Shutdown 退出。
+    #[tokio::test]
+    async fn test_worker_loop_consumes_graceful_shutdown_within_2s() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig::default();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let manager = WorkerManager::new(queue, response_channel, config, service);
+
+        manager.spawn_worker().await;
+        assert_eq!(manager.current_workers(), 1, "worker must be spawned");
+
+        // 发送优雅关闭信号(模拟 start_scaling_monitor 缩容)
+        {
+            let senders = manager.worker_senders.lock().await;
+            assert!(
+                !senders.is_empty(),
+                "worker_senders must contain spawned worker's sender"
+            );
+            senders[0]
+                .send(WorkerTask::Shutdown { immediate: false })
+                .await
+                .expect("send graceful Shutdown must succeed");
+        }
+
+        // 验证 worker 在 2s 内退出(current_workers 归零)
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if manager.current_workers() == 0 {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "worker did not shut down within 2s after graceful Shutdown signal \
+                     (current_workers={}) — worker_loop is not consuming task_receiver (T009 regression)",
+                    manager.current_workers()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// T009 H2-补: 验证 immediate=true 时 worker 也退出(立即关闭路径)。
+    #[tokio::test]
+    async fn test_worker_loop_consumes_immediate_shutdown_within_2s() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig::default();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let manager = WorkerManager::new(queue, response_channel, config, service);
+
+        manager.spawn_worker().await;
+        assert_eq!(manager.current_workers(), 1);
+
+        {
+            let senders = manager.worker_senders.lock().await;
+            senders[0]
+                .send(WorkerTask::Shutdown { immediate: true })
+                .await
+                .expect("send immediate Shutdown must succeed");
+        }
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if manager.current_workers() == 0 {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "worker did not shut down within 2s after immediate Shutdown \
+                     (current_workers={}) — worker_loop is not consuming task_receiver",
+                    manager.current_workers()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
 }

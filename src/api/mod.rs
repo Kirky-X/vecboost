@@ -14,6 +14,10 @@
 //! enabled, they are registered as MCP tools. When `cli` is enabled, they
 //! back the CLI subcommands.
 
+// sdforge #[forge] 宏内部引用 `feature = "mcp"` 门控,但项目未声明 mcp feature
+// (推迟到 v0.3.0,需 sdforge 完整 mcp + rmcp 支持)。此 allow 抑制第三方宏的 check-cfg 警告。
+#![allow(unexpected_cfgs)]
+
 #[cfg(test)]
 mod tests;
 
@@ -26,8 +30,8 @@ use crate::error::VecboostError;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 
-// sdforge imports (available when http, mcp, or cli feature is enabled)
-#[cfg(any(feature = "http", feature = "mcp", feature = "cli"))]
+// sdforge imports (available when http or cli feature is enabled)
+#[cfg(any(feature = "http", feature = "cli"))]
 use sdforge::prelude::*;
 
 /// Global service holder — set once during startup by `init_service`.
@@ -117,7 +121,7 @@ pub async fn compute_similarity(
 // ---------------------------------------------------------------------------
 
 /// Convert `VecboostError` to `sdforge::prelude::ApiError`.
-#[cfg(any(feature = "http", feature = "mcp", feature = "cli"))]
+#[cfg(any(feature = "http", feature = "cli"))]
 fn to_api_error(e: &VecboostError) -> ApiError {
     match e {
         VecboostError::InvalidInput(msg) => ApiError::InvalidInput {
@@ -141,7 +145,7 @@ fn to_api_error(e: &VecboostError) -> ApiError {
 }
 
 /// Generate a simple error ID (without uuid dependency for non-http features).
-#[cfg(any(feature = "http", feature = "mcp", feature = "cli"))]
+#[cfg(any(feature = "http", feature = "cli"))]
 fn uuid_like_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
@@ -161,7 +165,7 @@ fn uuid_like_id() -> String {
 /// Generate embedding vector for input text.
 ///
 /// HTTP: POST /api/v1/embed
-/// MCP: tool "embed_text"
+/// MCP: tool "embed_text" (v0.3.0 实现,需 sdforge 完整 mcp 支持)
 #[cfg(feature = "http")]
 #[forge(
     name = "embed",
@@ -180,7 +184,7 @@ pub async fn forge_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
 /// Embed multiple texts in batch.
 ///
 /// HTTP: POST /api/v1/embed_batch
-/// MCP: tool "embed_batch"
+/// MCP: tool "embed_batch" (v0.3.0 实现,需 sdforge 完整 mcp 支持)
 #[cfg(feature = "http")]
 #[forge(
     name = "embed_batch",
@@ -201,7 +205,7 @@ pub async fn forge_embed_batch(req: BatchEmbedRequest) -> Result<BatchEmbedRespo
 /// Compute cosine similarity between two texts.
 ///
 /// HTTP: POST /api/v1/similarity
-/// MCP: tool "compute_similarity"
+/// MCP: tool "compute_similarity" (v0.3.0 实现,需 sdforge 完整 mcp 支持)
 #[cfg(feature = "http")]
 #[forge(
     name = "compute_similarity",

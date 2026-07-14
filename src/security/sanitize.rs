@@ -10,11 +10,11 @@
 ///
 /// # Examples
 /// ```
-/// use vecboost::security::sanitize::sanitize_secret;
+/// use vecboost::security::sanitize_secret;
 ///
 /// let secret = "my_super_secret_key_12345";
 /// let sanitized = sanitize_secret(&secret);
-/// assert_eq!(sanitized, "my******************45");
+/// assert_eq!(sanitized, "my*********************45");
 /// ```
 pub fn sanitize_secret(s: &str) -> String {
     if s.len() <= 4 {

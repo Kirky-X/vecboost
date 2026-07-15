@@ -97,7 +97,10 @@ async fn main() -> anyhow::Result<()> {
     let model_config = ModelConfig {
         name: config.model.model_repo.clone(),
         engine_type: EngineType::Candle,
-        model_path: std::path::PathBuf::from(&config.model.model_repo),
+        model_path: match &config.model.model_path {
+            Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+            _ => std::path::PathBuf::from(&config.model.model_repo),
+        },
         tokenizer_path: None,
         device: if config.model.use_gpu {
             vecboost::config::model::DeviceType::Cuda

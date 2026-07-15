@@ -196,7 +196,14 @@ impl CandleEngine {
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let weights_filename = repo
                 .get("model.safetensors")
-                .or_else(|_| repo.get("pytorch_model.bin"))
+                .or_else(|_| {
+                    log::warn!(
+                        "model.safetensors unavailable, falling back to pytorch_model.bin; \
+                         pickle format carries code-execution risk — only load .bin models \
+                         from trusted sources, prefer safetensors"
+                    );
+                    repo.get("pytorch_model.bin")
+                })
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
             (config_filename, tokenizer_filename, weights_filename)
@@ -1005,7 +1012,14 @@ impl CandleEngine {
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let weights_filename = repo
                 .get("model.safetensors")
-                .or_else(|_| repo.get("pytorch_model.bin"))
+                .or_else(|_| {
+                    log::warn!(
+                        "model.safetensors unavailable, falling back to pytorch_model.bin; \
+                         pickle format carries code-execution risk — only load .bin models \
+                         from trusted sources, prefer safetensors"
+                    );
+                    repo.get("pytorch_model.bin")
+                })
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
             (config_filename, tokenizer_filename, weights_filename)

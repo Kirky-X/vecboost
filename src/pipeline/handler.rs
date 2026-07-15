@@ -5,7 +5,7 @@
 
 //! 流水线请求处理函数
 
-use crate::AppState;
+use crate::VecboostState;
 use crate::domain::EmbedRequest;
 use crate::error::VecboostError;
 use std::time::Duration;
@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 /// 处理流水线请求
 pub async fn handle_pipeline_request(
-    state: AppState,
+    state: VecboostState,
     req: EmbedRequest,
     ip: String,
 ) -> Result<axum::Json<crate::domain::EmbedResponse>, VecboostError> {
@@ -142,7 +142,7 @@ mod tests {
     fn create_test_state(
         queue_capacity: usize,
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
-    ) -> AppState {
+    ) -> VecboostState {
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
         let queue = Arc::new(PriorityRequestQueue::new(queue_capacity));
         let response_channel = Arc::new(ResponseChannel::new());
@@ -154,7 +154,7 @@ mod tests {
             Arc::clone(&service),
         ));
 
-        AppState {
+        VecboostState {
             service,
             #[cfg(feature = "auth")]
             jwt_manager: None,

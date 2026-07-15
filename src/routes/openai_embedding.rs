@@ -10,7 +10,7 @@
 use crate::domain::openai_embedding::{
     EmbeddingObject, EncodingFormat, OpenAIEmbedRequest, OpenAIEmbedResponse, Usage,
 };
-use crate::{AppState, error::VecboostError};
+use crate::{VecboostState, error::VecboostError};
 use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::response::IntoResponse;
@@ -26,7 +26,7 @@ fn extract_real_ip(addr: SocketAddr) -> String {
 /// This handler provides an endpoint that conforms to the OpenAI Embeddings API.
 /// See: https://platform.openai.com/docs/api-reference/embeddings
 pub async fn openai_embed_handler(
-    State(state): State<AppState>,
+    State(state): State<VecboostState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<OpenAIEmbedRequest>,
 ) -> Result<impl IntoResponse, VecboostError> {
@@ -175,7 +175,7 @@ mod tests {
         }
     }
 
-    fn make_test_state() -> AppState {
+    fn make_test_state() -> VecboostState {
         let temp_dir = tempdir().unwrap();
         let mock_engine = TestEngine::new(384);
         let model_config = ModelConfig {
@@ -205,7 +205,7 @@ mod tests {
 
         #[cfg(feature = "auth")]
         {
-            AppState {
+            VecboostState {
                 service,
                 jwt_manager: None,
                 user_store: None,
@@ -237,7 +237,7 @@ mod tests {
 
         #[cfg(not(feature = "auth"))]
         {
-            AppState {
+            VecboostState {
                 service,
                 auth_enabled: false,
                 metrics_collector: None,

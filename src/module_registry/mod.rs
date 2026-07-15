@@ -7,7 +7,7 @@
 //!
 //! 通过 trait-kit 0.3 的 `AsyncKit`（`Send + Sync`，基于 `Arc<RwLock>`）管理
 //! 模块依赖关系和能力构建。`AsyncKit` 可以放入 `Arc<AsyncKit<Ready>>` 共享
-//! 跨线程，也可存入 `AppState`。
+//! 跨线程，也可存入 `VecboostState`。
 //!
 //! 模块采用"预构建能力注入"模式：需要异步构造的复杂对象（如 EmbeddingService）
 //! 在 main.rs 中预构建后通过 `kit.set_config()` 注入，模块的 `build()` 从 config 检索。

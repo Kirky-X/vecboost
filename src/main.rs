@@ -15,7 +15,7 @@ use vecboost::module_registry::AuthModule;
 #[cfg(feature = "limiteron")]
 use vecboost::module_registry::RateLimitModule;
 use vecboost::{
-    AppState,
+    VecboostState,
     audit::{AuditConfig, AuditLogger},
     config::model::{EngineType, ModelConfig},
     engine::AnyEngine,
@@ -367,7 +367,7 @@ async fn main() -> anyhow::Result<()> {
     // Module Registry (trait-kit AsyncKit) — D1 集成
     //
     // 使用 trait-kit 0.3 的 AsyncKit 构建模块依赖图。AsyncKit 是 Send + Sync
-    // （基于 Arc<RwLock>），可安全存入 AppState 并跨线程共享。
+    // （基于 Arc<RwLock>），可安全存入 VecboostState 并跨线程共享。
     //
     // 模块采用"预构建能力注入"模式：需要异步构造的复杂对象（如 EmbeddingService）
     // 在上方已预构建，此处通过 kit.set_config() 注入，模块的 build() 从 config 检索。
@@ -375,7 +375,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut kit = trait_kit::AsyncKit::new();
 
-    // 注入预构建的能力对象（clone Arc 以保留原始变量给 AppState）
+    // 注入预构建的能力对象（clone Arc 以保留原始变量给 VecboostState）
     kit.set_config(service.clone());
     #[cfg(feature = "limiteron")]
     kit.set_config(rate_limiter.clone());
@@ -420,7 +420,7 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("AsyncKit module registry built successfully");
 
-    let app_state = AppState {
+    let app_state = VecboostState {
         service,
         #[cfg(feature = "auth")]
         jwt_manager: jwt_manager.clone(),

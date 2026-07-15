@@ -12,7 +12,7 @@ use tower_http::timeout::TimeoutLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::AppState;
+use crate::VecboostState;
 
 use super::{ApiDoc, DEFAULT_TIMEOUT};
 
@@ -30,7 +30,7 @@ pub(crate) fn create_openapi() -> utoipa::openapi::OpenApi {
 /// - If authentication is disabled, all routes are public
 ///
 /// Note: This function is exposed to main.rs and other crates using this library
-pub fn create_router(app_state: AppState) -> Router {
+pub fn create_router(app_state: VecboostState) -> Router {
     let openapi = create_openapi();
 
     // Add ConnectInfo middleware to capture client IP addresses
@@ -236,8 +236,8 @@ mod tests {
         Arc::new(crate::auth::UserStore::new())
     }
 
-    /// Build a minimal `AppState` for testing, with auth optionally enabled.
-    async fn make_test_app_state(auth_enabled: bool) -> AppState {
+    /// Build a minimal `VecboostState` for testing, with auth optionally enabled.
+    async fn make_test_app_state(auth_enabled: bool) -> VecboostState {
         let temp_dir = tempdir().unwrap();
         let mock_engine = TestEngine::new(384);
         let model_config = ModelConfig {
@@ -290,7 +290,7 @@ mod tests {
                 None
             };
 
-            AppState {
+            VecboostState {
                 service,
                 jwt_manager,
                 user_store,
@@ -315,7 +315,7 @@ mod tests {
         #[cfg(not(feature = "auth"))]
         {
             let _ = auth_enabled;
-            AppState {
+            VecboostState {
                 service,
                 auth_enabled: false,
                 metrics_collector: None,
@@ -482,7 +482,7 @@ mod tests {
         )));
         std::mem::forget(temp_dir);
 
-        let state = AppState {
+        let state = VecboostState {
             service,
             jwt_manager: Some(Arc::new(
                 crate::auth::JwtManager::new(jwt_secret.to_string()).unwrap(),
@@ -562,7 +562,7 @@ mod tests {
         )));
         std::mem::forget(temp_dir);
 
-        let state = AppState {
+        let state = VecboostState {
             service,
             jwt_manager: Some(Arc::new(
                 crate::auth::JwtManager::new(jwt_secret.to_string()).unwrap(),

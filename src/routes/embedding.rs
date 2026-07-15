@@ -7,7 +7,7 @@
 //!
 //! Provides API endpoints for text embedding, batch embedding, similarity calculation, and file embedding
 
-use crate::AppState;
+use crate::VecboostState;
 use crate::domain::{
     BatchEmbedRequest, EmbedRequest, FileEmbedRequest, FileEmbedResponse, SimilarityRequest,
 };
@@ -75,7 +75,7 @@ fn is_ip_whitelisted(ip: &str, whitelist: &[String]) -> bool {
 }
 
 /// Add rate limit headers to response
-async fn add_rate_limit_headers(headers: &mut HeaderMap, state: &AppState, ip: &str) {
+async fn add_rate_limit_headers(headers: &mut HeaderMap, state: &VecboostState, ip: &str) {
     use axum::http::HeaderValue;
 
     if state.rate_limit_enabled {
@@ -122,7 +122,7 @@ async fn add_rate_limit_headers(headers: &mut HeaderMap, state: &AppState, ip: &
     )
 )]
 pub async fn embed_handler(
-    State(state): State<AppState>,
+    State(state): State<VecboostState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<EmbedRequest>,
 ) -> Result<impl IntoResponse, VecboostError> {
@@ -185,7 +185,7 @@ pub async fn embed_handler(
     )
 )]
 pub async fn batch_embed_handler(
-    State(state): State<AppState>,
+    State(state): State<VecboostState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<BatchEmbedRequest>,
 ) -> Result<impl IntoResponse, VecboostError> {
@@ -238,7 +238,7 @@ pub async fn batch_embed_handler(
     )
 )]
 pub async fn similarity_handler(
-    State(state): State<AppState>,
+    State(state): State<VecboostState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<SimilarityRequest>,
 ) -> Result<impl IntoResponse, VecboostError> {
@@ -291,7 +291,7 @@ pub async fn similarity_handler(
     )
 )]
 pub async fn file_embed_handler(
-    State(state): State<AppState>,
+    State(state): State<VecboostState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<FileEmbedRequest>,
 ) -> Result<impl IntoResponse, VecboostError> {
@@ -418,7 +418,7 @@ mod tests {
         }
     }
 
-    fn make_test_state() -> AppState {
+    fn make_test_state() -> VecboostState {
         let temp_dir = tempdir().unwrap();
         let mock_engine = TestEngine::new(384);
         let model_config = ModelConfig {
@@ -448,7 +448,7 @@ mod tests {
 
         #[cfg(feature = "auth")]
         {
-            AppState {
+            VecboostState {
                 service,
                 jwt_manager: None,
                 user_store: None,
@@ -480,7 +480,7 @@ mod tests {
 
         #[cfg(not(feature = "auth"))]
         {
-            AppState {
+            VecboostState {
                 service,
                 auth_enabled: false,
                 metrics_collector: None,
@@ -507,7 +507,7 @@ mod tests {
         }
     }
 
-    fn make_rate_limited_state() -> AppState {
+    fn make_rate_limited_state() -> VecboostState {
         let mut state = make_test_state();
         state.rate_limit_enabled = true;
         state.rate_limiter = Arc::new(LimiteronAdapter::new(RateLimitConfig {
@@ -976,7 +976,7 @@ mod tests {
             Arc::clone(&service),
         ));
 
-        let state = AppState {
+        let state = VecboostState {
             service,
             #[cfg(feature = "auth")]
             jwt_manager: None,

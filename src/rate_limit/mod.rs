@@ -15,7 +15,7 @@ pub(crate) mod limiteron_adapter;
 #[cfg(feature = "limiteron")]
 pub use limiteron_adapter::LimiteronAdapter;
 
-// limiteron feature 关闭时的 no-op stub,保持 AppState/路由 API 一致
+// limiteron feature 关闭时的 no-op stub,保持 VecboostState/路由 API 一致
 #[cfg(not(feature = "limiteron"))]
 mod limiteron_stub;
 

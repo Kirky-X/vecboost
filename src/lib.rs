@@ -65,7 +65,7 @@ pub use error::AppError;
 /// Contains shared state needed by all route handlers
 /// Note: This struct is exposed to main.rs and other crates using this library
 #[derive(Clone)]
-pub struct AppState {
+pub struct VecboostState {
     pub service: Arc<RwLock<EmbeddingService>>,
     #[cfg(feature = "auth")]
     pub jwt_manager: Option<Arc<auth::JwtManager>>,
@@ -90,21 +90,21 @@ pub struct AppState {
     /// trait-kit AsyncKit — 模块能力管理中心（D1 集成）
     ///
     /// `AsyncKit<Ready>` 是 `Send + Sync`（基于 `Arc<RwLock>`），可安全存入
-    /// `AppState` 并跨线程共享。启动时由 `main.rs` 构建后注入。
+    /// `VecboostState` 并跨线程共享。启动时由 `main.rs` 构建后注入。
     /// 使用 `Option` 以兼容非 http feature 下可能不构建 kit 的场景。
     pub kit: Option<Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>>,
 }
 
 #[cfg(feature = "http")]
-impl FromRef<AppState> for Arc<RwLock<EmbeddingService>> {
-    fn from_ref(state: &AppState) -> Self {
+impl FromRef<VecboostState> for Arc<RwLock<EmbeddingService>> {
+    fn from_ref(state: &VecboostState) -> Self {
         state.service.clone()
     }
 }
 
 #[cfg(all(feature = "http", feature = "auth"))]
-impl FromRef<AppState> for Arc<auth::JwtManager> {
-    fn from_ref(state: &AppState) -> Self {
+impl FromRef<VecboostState> for Arc<auth::JwtManager> {
+    fn from_ref(state: &VecboostState) -> Self {
         state
             .jwt_manager
             .clone()
@@ -113,15 +113,15 @@ impl FromRef<AppState> for Arc<auth::JwtManager> {
 }
 
 #[cfg(all(feature = "http", feature = "auth"))]
-impl FromRef<AppState> for Arc<auth::UserStore> {
-    fn from_ref(state: &AppState) -> Self {
+impl FromRef<VecboostState> for Arc<auth::UserStore> {
+    fn from_ref(state: &VecboostState) -> Self {
         state.user_store.clone().expect("User store not available")
     }
 }
 
 #[cfg(feature = "http")]
-impl FromRef<AppState> for Arc<metrics::InferenceCollector> {
-    fn from_ref(state: &AppState) -> Self {
+impl FromRef<VecboostState> for Arc<metrics::InferenceCollector> {
+    fn from_ref(state: &VecboostState) -> Self {
         state
             .metrics_collector
             .clone()
@@ -130,8 +130,8 @@ impl FromRef<AppState> for Arc<metrics::InferenceCollector> {
 }
 
 #[cfg(feature = "http")]
-impl FromRef<AppState> for Arc<metrics::PrometheusCollector> {
-    fn from_ref(state: &AppState) -> Self {
+impl FromRef<VecboostState> for Arc<metrics::PrometheusCollector> {
+    fn from_ref(state: &VecboostState) -> Self {
         state
             .prometheus_collector
             .clone()
@@ -140,15 +140,15 @@ impl FromRef<AppState> for Arc<metrics::PrometheusCollector> {
 }
 
 #[cfg(feature = "http")]
-impl FromRef<AppState> for Arc<rate_limit::LimiteronAdapter> {
-    fn from_ref(state: &AppState) -> Self {
+impl FromRef<VecboostState> for Arc<rate_limit::LimiteronAdapter> {
+    fn from_ref(state: &VecboostState) -> Self {
         state.rate_limiter.clone()
     }
 }
 
 #[cfg(feature = "http")]
-impl FromRef<AppState> for Option<Arc<audit::AuditLogger>> {
-    fn from_ref(state: &AppState) -> Self {
+impl FromRef<VecboostState> for Option<Arc<audit::AuditLogger>> {
+    fn from_ref(state: &VecboostState) -> Self {
         state.audit_logger.clone()
     }
 }
@@ -189,7 +189,7 @@ mod tests {
         }
     }
 
-    fn make_app_state() -> AppState {
+    fn make_app_state() -> VecboostState {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
@@ -212,7 +212,7 @@ mod tests {
             metrics::PrometheusCollector::new().expect("Failed to create PrometheusCollector"),
         ));
 
-        AppState {
+        VecboostState {
             service,
             #[cfg(feature = "auth")]
             jwt_manager: None,

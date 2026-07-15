@@ -41,7 +41,7 @@ pub async fn health_check() -> &'static str {
     operation_id = "metrics"
 )]
 pub async fn metrics_endpoint(
-    State(app_state): State<crate::AppState>,
+    State(app_state): State<crate::VecboostState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
     use prometheus::Encoder;
@@ -119,7 +119,7 @@ pub async fn metrics_endpoint(
 #[cfg(all(test, feature = "http"))]
 mod tests {
     use super::*;
-    use crate::AppState;
+    use crate::VecboostState;
     use crate::config::model::{DeviceType, EngineType, ModelConfig, Precision};
     use crate::engine::InferenceEngine;
     use crate::error::VecboostError;
@@ -175,7 +175,7 @@ mod tests {
         }
     }
 
-    fn make_test_state() -> AppState {
+    fn make_test_state() -> VecboostState {
         let temp_dir = tempdir().unwrap();
         let mock_engine = TestEngine::new(384);
         let model_config = ModelConfig {
@@ -206,7 +206,7 @@ mod tests {
 
         #[cfg(feature = "auth")]
         {
-            AppState {
+            VecboostState {
                 service,
                 jwt_manager: None,
                 user_store: None,
@@ -238,7 +238,7 @@ mod tests {
 
         #[cfg(not(feature = "auth"))]
         {
-            AppState {
+            VecboostState {
                 service,
                 auth_enabled: false,
                 metrics_collector: None,
@@ -265,7 +265,7 @@ mod tests {
         }
     }
 
-    fn make_rate_limited_state() -> AppState {
+    fn make_rate_limited_state() -> VecboostState {
         let mut state = make_test_state();
         state.rate_limit_enabled = true;
         state.rate_limiter = Arc::new(LimiteronAdapter::new(RateLimitConfig {
@@ -276,7 +276,7 @@ mod tests {
         state
     }
 
-    fn make_rate_limited_state_with_whitelist() -> AppState {
+    fn make_rate_limited_state_with_whitelist() -> VecboostState {
         let mut state = make_rate_limited_state();
         state.ip_whitelist = vec!["127.0.0.1".to_string()];
         state
@@ -329,7 +329,7 @@ mod tests {
         SocketAddr::new(ip, 9002)
     }
 
-    fn make_rate_limited_state_with_whitelist_ips(whitelist: Vec<String>) -> AppState {
+    fn make_rate_limited_state_with_whitelist_ips(whitelist: Vec<String>) -> VecboostState {
         let mut state = make_rate_limited_state();
         state.ip_whitelist = whitelist;
         state

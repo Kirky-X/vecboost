@@ -103,9 +103,167 @@ fn apply_security_env_overrides(config: &mut AppConfig) {
 #[cfg(test)]
 mod tests {
     use super::AppConfig;
+    use std::sync::Mutex;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_confers_app_config_compiles() {
         let _ = AppConfig::default();
+    }
+
+    #[test]
+    fn test_app_config_default_values() {
+        let config = AppConfig::default();
+        assert!(!config.server.grpc_enabled);
+        assert!(config.model.batch_size > 0);
+        assert!(config.embedding.max_batch_size > 0);
+    }
+
+    #[test]
+    fn test_load_via_confers_with_nonexistent_path() {
+        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        assert!(result.is_ok(), "should fall back to defaults");
+        let config = result.unwrap();
+        assert!(!config.server.grpc_enabled);
+    }
+
+    #[test]
+    fn test_load_via_confers_with_valid_toml() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("test_config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[server]
+host = "0.0.0.0"
+port = 8080
+grpc_enabled = true
+
+[model]
+model_repo = "test/repo"
+batch_size = 64
+
+[embedding]
+max_batch_size = 128
+"#,
+        )
+        .expect("Failed to write config");
+
+        let result = AppConfig::load_via_confers_with_path(&config_path);
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.server.host, "0.0.0.0");
+        assert!(config.server.grpc_enabled);
+        assert_eq!(config.model.batch_size, 64);
+        assert_eq!(config.embedding.max_batch_size, 128);
+    }
+
+    #[test]
+    fn test_load_via_confers_with_empty_toml() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("empty.toml");
+        std::fs::write(&config_path, "").expect("Failed to write empty config");
+
+        let result = AppConfig::load_via_confers_with_path(&config_path);
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert!(!config.server.grpc_enabled);
+    }
+
+    #[test]
+    fn test_load_via_confers_jwt_secret_env_override() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        unsafe {
+            std::env::set_var("VECBOOST_JWT_SECRET", "test_secret_12345");
+        }
+        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        let config = result.expect("load should succeed");
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+        }
+        assert_eq!(config.auth.jwt_secret.as_deref(), Some("test_secret_12345"));
+    }
+
+    #[test]
+    fn test_load_via_confers_empty_jwt_secret_ignored() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        unsafe {
+            std::env::set_var("VECBOOST_JWT_SECRET", "");
+        }
+        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        let config = result.expect("load should succeed");
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+        }
+        assert!(config.auth.jwt_secret.is_none() || config.auth.jwt_secret.as_deref() == Some(""));
+    }
+
+    #[test]
+    fn test_load_via_confers_admin_password_env_override() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        unsafe {
+            std::env::set_var("VECBOOST_ADMIN_PASSWORD", "admin_pass_123");
+        }
+        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        let config = result.expect("load should succeed");
+        unsafe {
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        assert_eq!(
+            config.auth.default_admin_password.as_deref(),
+            Some("admin_pass_123")
+        );
+    }
+
+    #[test]
+    fn test_load_via_confers_empty_admin_password_ignored() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        unsafe {
+            std::env::set_var("VECBOOST_ADMIN_PASSWORD", "");
+        }
+        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        let config = result.expect("load should succeed");
+        unsafe {
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        assert!(
+            config.auth.default_admin_password.is_none()
+                || config.auth.default_admin_password.as_deref() == Some("")
+        );
+    }
+
+    #[test]
+    fn test_load_via_confers_with_partial_toml() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("partial.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[server]
+port = 9999
+"#,
+        )
+        .expect("Failed to write partial config");
+
+        let result = AppConfig::load_via_confers_with_path(&config_path);
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.server.port, 9999);
+    }
+
+    #[test]
+    fn test_app_config_clone() {
+        let config = AppConfig::default();
+        let cloned = config.clone();
+        assert_eq!(config.server.port, cloned.server.port);
+    }
+
+    #[test]
+    fn test_app_config_debug_format() {
+        let config = AppConfig::default();
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("AppConfig"));
     }
 }

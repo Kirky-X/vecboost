@@ -436,4 +436,266 @@ mod tests {
         assert!(state.ip_whitelist.contains(&"192.168.1.1".to_string()));
         assert!(state.ip_whitelist.contains(&"10.0.0.1".to_string()));
     }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_from_ref_metrics_collector_panics_when_none() {
+        let mut state = make_app_state();
+        state.metrics_collector = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Arc<metrics::InferenceCollector> = FromRef::from_ref(&state);
+        }));
+        assert!(
+            result.is_err(),
+            "from_ref should panic when metrics_collector is None"
+        );
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_from_ref_prometheus_collector_panics_when_none() {
+        let mut state = make_app_state();
+        state.prometheus_collector = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Arc<metrics::PrometheusCollector> = FromRef::from_ref(&state);
+        }));
+        assert!(
+            result.is_err(),
+            "from_ref should panic when prometheus_collector is None"
+        );
+    }
+
+    #[test]
+    fn test_app_state_pipeline_enabled_mutability() {
+        let mut state = make_app_state();
+        assert!(!state.pipeline_enabled);
+        state.pipeline_enabled = true;
+        assert!(state.pipeline_enabled);
+        state.pipeline_enabled = false;
+        assert!(!state.pipeline_enabled);
+    }
+
+    #[test]
+    fn test_app_state_rate_limit_enabled_mutability() {
+        let mut state = make_app_state();
+        assert!(!state.rate_limit_enabled);
+        state.rate_limit_enabled = true;
+        assert!(state.rate_limit_enabled);
+    }
+
+    #[test]
+    fn test_app_state_service_arc_shared_after_clone() {
+        let state = make_app_state();
+        let cloned = state.clone();
+        // Modifying through the original should be visible through the clone
+        // (since Arc shares the underlying data)
+        assert!(Arc::ptr_eq(&state.service, &cloned.service));
+    }
+
+    #[test]
+    fn test_app_state_kit_is_none_by_default() {
+        let state = make_app_state();
+        assert!(state.kit.is_none());
+    }
+
+    #[test]
+    fn test_app_state_kit_field_mutability() {
+        let mut state = make_app_state();
+        // kit remains None; verify we can assign None again
+        state.kit = None;
+        assert!(state.kit.is_none());
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_from_ref_audit_logger_clone_preserves_arc() {
+        let mut state = make_app_state();
+        let config = audit::AuditConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let logger = Arc::new(audit::AuditLogger::new(config));
+        state.audit_logger = Some(Arc::clone(&logger));
+
+        let extracted: Option<Arc<audit::AuditLogger>> = FromRef::from_ref(&state);
+        assert!(extracted.is_some());
+        assert!(Arc::ptr_eq(&extracted.unwrap(), &logger));
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_from_ref_service_after_clone() {
+        let state = make_app_state();
+        let cloned = state.clone();
+        let service: Arc<RwLock<EmbeddingService>> = FromRef::from_ref(&cloned);
+        assert!(Arc::ptr_eq(&service, &state.service));
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_from_ref_rate_limiter_after_clone() {
+        let state = make_app_state();
+        let cloned = state.clone();
+        let limiter: Arc<rate_limit::LimiteronAdapter> = FromRef::from_ref(&cloned);
+        assert!(Arc::ptr_eq(&limiter, &state.rate_limiter));
+    }
+
+    #[test]
+    fn test_app_state_all_bool_fields() {
+        let mut state = make_app_state();
+        state.auth_enabled = true;
+        state.rate_limit_enabled = true;
+        state.pipeline_enabled = true;
+
+        assert!(state.auth_enabled);
+        assert!(state.rate_limit_enabled);
+        assert!(state.pipeline_enabled);
+
+        // Toggle all off
+        state.auth_enabled = false;
+        state.rate_limit_enabled = false;
+        state.pipeline_enabled = false;
+
+        assert!(!state.auth_enabled);
+        assert!(!state.rate_limit_enabled);
+        assert!(!state.pipeline_enabled);
+    }
+
+    #[test]
+    fn test_app_state_ip_whitelist_empty_by_default() {
+        let state = make_app_state();
+        assert!(state.ip_whitelist.is_empty());
+    }
+
+    #[test]
+    fn test_app_state_ip_whitelist_with_cidr_entries() {
+        let mut state = make_app_state();
+        state.ip_whitelist = vec![
+            "127.0.0.1".to_string(),
+            "10.0.0.0/8".to_string(),
+            "192.168.1.0/24".to_string(),
+            "::1/128".to_string(),
+        ];
+        assert_eq!(state.ip_whitelist.len(), 4);
+        assert!(state.ip_whitelist.iter().any(|ip| ip.contains("/8")));
+        assert!(state.ip_whitelist.iter().any(|ip| ip.contains("/24")));
+        assert!(state.ip_whitelist.iter().any(|ip| ip.contains("/128")));
+    }
+
+    #[test]
+    fn test_app_state_clone_preserves_ip_whitelist() {
+        let mut state = make_app_state();
+        state.ip_whitelist = vec!["127.0.0.1".to_string(), "10.0.0.1".to_string()];
+        let cloned = state.clone();
+        assert_eq!(cloned.ip_whitelist, state.ip_whitelist);
+    }
+
+    #[test]
+    fn test_app_state_clone_preserves_bool_fields() {
+        let mut state = make_app_state();
+        state.auth_enabled = true;
+        state.rate_limit_enabled = true;
+        state.pipeline_enabled = true;
+        let cloned = state.clone();
+        assert_eq!(cloned.auth_enabled, state.auth_enabled);
+        assert_eq!(cloned.rate_limit_enabled, state.rate_limit_enabled);
+        assert_eq!(cloned.pipeline_enabled, state.pipeline_enabled);
+    }
+
+    #[test]
+    fn test_app_state_clone_preserves_kit() {
+        let state = make_app_state();
+        let cloned = state.clone();
+        assert_eq!(state.kit.is_none(), cloned.kit.is_none());
+    }
+
+    #[cfg(all(feature = "http", feature = "auth"))]
+    #[test]
+    fn test_app_state_auth_fields_can_be_set() {
+        let mut state = make_app_state();
+        let secret = "test_secret_key_for_jwt_validation_must_be_long_enough_12345678";
+        let jwt_manager = Arc::new(
+            auth::JwtManager::new(secret.to_string()).expect("Failed to create JwtManager"),
+        );
+        state.jwt_manager = Some(Arc::clone(&jwt_manager));
+
+        assert!(state.jwt_manager.is_some());
+        assert!(Arc::ptr_eq(
+            state.jwt_manager.as_ref().unwrap(),
+            &jwt_manager
+        ));
+    }
+
+    #[test]
+    fn test_app_state_multiple_clones_share_arcs() {
+        let state = make_app_state();
+        let clone1 = state.clone();
+        let clone2 = state.clone();
+        let clone3 = state.clone();
+
+        assert!(Arc::ptr_eq(&state.service, &clone1.service));
+        assert!(Arc::ptr_eq(&state.service, &clone2.service));
+        assert!(Arc::ptr_eq(&state.service, &clone3.service));
+        assert!(Arc::ptr_eq(&state.rate_limiter, &clone1.rate_limiter));
+        assert!(Arc::ptr_eq(&state.rate_limiter, &clone2.rate_limiter));
+    }
+
+    #[test]
+    fn test_app_state_with_none_metrics_and_prometheus() {
+        let mut state = make_app_state();
+        state.metrics_collector = None;
+        state.prometheus_collector = None;
+        assert!(state.metrics_collector.is_none());
+        assert!(state.prometheus_collector.is_none());
+    }
+
+    #[test]
+    fn test_app_state_audit_logger_can_be_set_and_cleared() {
+        let mut state = make_app_state();
+        assert!(state.audit_logger.is_none());
+
+        let config = audit::AuditConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        state.audit_logger = Some(Arc::new(audit::AuditLogger::new(config)));
+        assert!(state.audit_logger.is_some());
+
+        state.audit_logger = None;
+        assert!(state.audit_logger.is_none());
+    }
+
+    #[test]
+    fn test_app_state_worker_manager_arc_shared() {
+        let state = make_app_state();
+        let cloned = state.clone();
+        assert!(Arc::ptr_eq(&state.worker_manager, &cloned.worker_manager));
+    }
+
+    #[test]
+    fn test_app_state_priority_calculator_arc_shared() {
+        let state = make_app_state();
+        let cloned = state.clone();
+        assert!(Arc::ptr_eq(
+            &state.priority_calculator,
+            &cloned.priority_calculator
+        ));
+    }
+
+    #[test]
+    fn test_app_state_pipeline_queue_arc_shared() {
+        let state = make_app_state();
+        let cloned = state.clone();
+        assert!(Arc::ptr_eq(&state.pipeline_queue, &cloned.pipeline_queue));
+    }
+
+    #[test]
+    fn test_app_state_response_channel_arc_shared() {
+        let state = make_app_state();
+        let cloned = state.clone();
+        assert!(Arc::ptr_eq(
+            &state.response_channel,
+            &cloned.response_channel
+        ));
+    }
 }

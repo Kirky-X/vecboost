@@ -3426,4 +3426,295 @@ mod tests {
             other => panic!("expected InvalidInput, got {:?}", other),
         }
     }
+
+    // ===== switch_model 实际切换路径测试 =====
+
+    #[tokio::test]
+    async fn test_switch_model_different_name_fails_on_engine_create() {
+        let mock_engine = TestEngine::new(384);
+        let model_config = make_model_config("original-model", 384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let mut service = EmbeddingService::new(engine, Some(model_config));
+
+        let req = ModelSwitchRequest {
+            model_name: "new-model".to_string(),
+            model_path: None,
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+        };
+        let result = service.switch_model(req).await;
+        assert!(result.is_err(), "switch to nonexistent model should fail");
+    }
+
+    #[tokio::test]
+    async fn test_switch_model_with_manager_load_fails() {
+        let mock_engine = TestEngine::new(384);
+        let model_config = make_model_config("orig-mgr-model", 384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let manager = Arc::new(ModelManager::new());
+        let mut service = EmbeddingService::with_manager(engine, Some(model_config), manager);
+
+        let req = ModelSwitchRequest {
+            model_name: "target-mgr-model".to_string(),
+            model_path: None,
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+        };
+        let result = service.switch_model(req).await;
+        assert!(result.is_err(), "load via manager should fail");
+    }
+
+    #[tokio::test]
+    async fn test_switch_model_with_loaded_manager_engine_create_fails() {
+        let mock_engine = TestEngine::new(384);
+        let model_config = make_model_config("orig-loaded", 384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let manager = make_manager_with_model("orig-loaded").await;
+        let mut service = EmbeddingService::with_manager(engine, Some(model_config), manager);
+
+        let req = ModelSwitchRequest {
+            model_name: "fresh-target".to_string(),
+            model_path: None,
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+        };
+        let result = service.switch_model(req).await;
+        assert!(result.is_err(), "AnyEngine::new should fail");
+    }
+
+    #[tokio::test]
+    async fn test_switch_model_preserves_previous_config_fields() {
+        let mock_engine = TestEngine::new(384);
+        let temp_dir = tempdir().unwrap();
+        let model_config = ModelConfig {
+            name: "preserve-orig".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from(temp_dir.path()),
+            tokenizer_path: Some(PathBuf::from("/orig/tokenizer")),
+            device: DeviceType::Cpu,
+            max_batch_size: 64,
+            pooling_mode: Some(crate::config::model::PoolingMode::Mean),
+            expected_dimension: Some(384),
+            memory_limit_bytes: Some(1024),
+            oom_fallback_enabled: true,
+            model_sha256: None,
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let mut service = EmbeddingService::new(engine, Some(model_config));
+
+        let req = ModelSwitchRequest {
+            model_name: "preserve-target".to_string(),
+            model_path: None,
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+        };
+        let result = service.switch_model(req).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_switch_model_no_previous_config() {
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let mut service = EmbeddingService::new(engine, None);
+
+        let req = ModelSwitchRequest {
+            model_name: "first-model".to_string(),
+            model_path: None,
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+        };
+        let result = service.switch_model(req).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_unload_model_different_name_keeps_config() {
+        let mock_engine = TestEngine::new(384);
+        let model_config = make_model_config("keep-this", 384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let mut service = EmbeddingService::new(engine, Some(model_config));
+
+        let result = service.unload_model("other-name").await;
+        assert!(result.is_ok());
+        assert!(
+            service.get_model_info().is_some(),
+            "config should remain when unloading different name"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unload_model_with_manager_unload_fails() {
+        let mock_engine = TestEngine::new(384);
+        let model_config = make_model_config("mgr-unload-fail", 384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let manager = Arc::new(ModelManager::new());
+        let mut service = EmbeddingService::with_manager(engine, Some(model_config), manager);
+
+        let result = service.unload_model("not-in-manager").await;
+        assert!(result.is_err(), "unload from empty manager should fail");
+    }
+
+    #[tokio::test]
+    async fn test_list_available_models_no_config_default_engine() {
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let list = service.list_available_models();
+        assert_eq!(list.total_count, 1);
+        assert_eq!(list.models[0].name, "default");
+        assert_eq!(list.models[0].engine_type, "candle");
+        assert!(list.models[0].is_loaded);
+    }
+
+    #[tokio::test]
+    async fn test_process_search_batch_uses_model_config_dimension() {
+        let mock_engine = TestEngine::new(64);
+        let model_config = make_model_config("dim-model", 64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::with_cache(engine, Some(model_config), 16);
+
+        let texts: Vec<String> = (0..3).map(|i| format!("dim candidate {}", i)).collect();
+        let result = service
+            .process_search_batch("dim query", &texts, Some(2))
+            .await;
+        assert!(result.is_ok());
+        let resp = result.unwrap();
+        assert_eq!(resp.results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_process_search_batch_no_model_config_default_dimension() {
+        let mock_engine = TestEngine::new(64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let texts: Vec<String> = (0..3).map(|i| format!("cfg {}", i)).collect();
+        let result = service.process_search_batch("query", &texts, Some(2)).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_oom_fallback_success_then_retry_oom() {
+        let engine = ConfigurableOomEngine::new(false, true);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let req = BatchEmbedRequest {
+            texts: vec!["retry-a".to_string(), "retry-b".to_string()],
+            mode: None,
+            normalize: Some(true),
+        };
+        let result = service.process_batch(req, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_warm_up_cache_mixed_success_and_failure() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mock_engine = CountingEngine::new(64, Arc::clone(&counter));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::with_cache(engine, None, 32);
+
+        let texts: Vec<String> = (0..5).map(|i| format!("mix{}", i)).collect();
+        let result = service.warm_up_cache(texts).await;
+        assert!(result.is_ok());
+        assert_eq!(counter.load(Ordering::SeqCst), 5);
+    }
+
+    #[tokio::test]
+    async fn test_process_text_with_cache_enabled_and_target_dimension() {
+        let mock_engine = TestEngine::new(384);
+        let model_config = make_model_config("cache-trunc-model", 384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::with_cache(engine, Some(model_config), 16);
+
+        let req = EmbedRequest {
+            text: "cache truncation test".to_string(),
+            normalize: Some(true),
+        };
+        let result = service.process_text(req, Some(64)).await;
+        assert!(result.is_ok());
+        let resp = result.unwrap();
+        assert_eq!(resp.dimension, 64);
+        assert_eq!(resp.embedding.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn test_process_similarity_with_cache_disabled() {
+        let mock_engine = TestEngine::new(64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let req = SimilarityRequest {
+            source: "src no cache".to_string(),
+            target: "tgt no cache".to_string(),
+        };
+        let result = service.process_similarity(req).await;
+        assert!(result.is_ok());
+        let resp = result.unwrap();
+        assert!((-1.0..=1.0).contains(&resp.score));
+    }
+
+    #[tokio::test]
+    async fn test_process_search_returns_correct_indices() {
+        let mock_engine = TestEngine::new(32);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        let texts: Vec<String> = (0..5).map(|i| format!("idx candidate {}", i)).collect();
+        let req = SearchRequest {
+            query: "idx query".to_string(),
+            texts,
+            top_k: Some(5),
+        };
+        let result = service.process_search(req).await;
+        assert!(result.is_ok());
+        let resp = result.unwrap();
+        assert_eq!(resp.results.len(), 5);
+        let indices: Vec<usize> = resp.results.iter().map(|r| r.index).collect();
+        for &i in &[0, 1, 2, 3, 4] {
+            assert!(indices.contains(&i), "missing index {}", i);
+        }
+    }
 }

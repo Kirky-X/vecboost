@@ -383,3 +383,364 @@ pub async fn create_amd_device_manager() -> Result<AmdDeviceManager, crate::erro
     manager.initialize().await?;
     Ok(manager)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_amd_gpu_info_default() {
+        let info = AmdGpuInfo::default();
+        assert_eq!(info.name, "Unknown AMD GPU");
+        assert_eq!(info.device_id, 0);
+        assert_eq!(info.vram_bytes, 0);
+        assert_eq!(info.compute_capability, (0, 0));
+        assert_eq!(info.opencl_version, "3.0");
+        assert!(info.roc_version.is_none());
+        assert_eq!(info.driver_version, "unknown");
+        assert!(!info.is_available);
+    }
+
+    #[test]
+    fn test_amd_gpu_info_default_eq() {
+        let a = AmdGpuInfo::default();
+        let b = AmdGpuInfo::default();
+        assert_eq!(a, b);
+    }
+
+    fn make_info(vram_bytes: u64) -> AmdGpuInfo {
+        AmdGpuInfo {
+            name: "AMD Radeon RX 7900 XTX".to_string(),
+            device_id: 0x73BF,
+            vram_bytes,
+            compute_capability: (9, 0),
+            opencl_version: "3.0".to_string(),
+            roc_version: Some("6.0.0".to_string()),
+            driver_version: "24.0.0".to_string(),
+            is_available: true,
+        }
+    }
+
+    #[test]
+    fn test_amd_device_new_compute_units_cap_at_80() {
+        let info = make_info(64 * 1024 * 1024 * 1024);
+        let device = AmdDevice::new(info);
+        assert_eq!(device.compute_units(), 80);
+        assert_eq!(device.max_work_group_size(), 256);
+    }
+
+    #[test]
+    fn test_amd_device_new_small_vram_compute_units() {
+        let info = make_info(1 * 1024 * 1024 * 1024);
+        let device = AmdDevice::new(info);
+        assert_eq!(device.compute_units(), 64);
+    }
+
+    #[test]
+    fn test_amd_device_new_medium_vram_compute_units_capped() {
+        let info = make_info(4 * 1024 * 1024 * 1024);
+        let device = AmdDevice::new(info);
+        assert_eq!(device.compute_units(), 80);
+    }
+
+    #[test]
+    fn test_amd_device_new_zero_vram_compute_units() {
+        let info = make_info(0);
+        let device = AmdDevice::new(info);
+        assert_eq!(device.compute_units(), 0);
+    }
+
+    #[test]
+    fn test_amd_device_from_opencl() {
+        let device = AmdDevice::from_opencl(2).expect("from_opencl should return Some");
+        assert!(device.info().is_available);
+        assert_eq!(device.device_type(), DeviceType::Amd);
+        assert!(device.name().contains("OpenCL"));
+        assert!(device.name().contains("Device 2"));
+        assert_eq!(device.vram_bytes(), 8 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_amd_device_from_rocm() {
+        let device = AmdDevice::from_rocm(1).expect("from_rocm should return Some");
+        assert!(device.info().is_available);
+        assert_eq!(device.device_type(), DeviceType::Amd);
+        assert!(device.name().contains("ROCm"));
+        assert!(device.name().contains("Device 1"));
+        assert_eq!(device.vram_bytes(), 16 * 1024 * 1024 * 1024);
+        assert!(device.info().roc_version.is_some());
+    }
+
+    #[test]
+    fn test_amd_device_info_accessors() {
+        let info = make_info(16 * 1024 * 1024 * 1024);
+        let device = AmdDevice::new(info.clone());
+        assert_eq!(device.info().name, info.name);
+        assert_eq!(device.info().device_id, info.device_id);
+        assert_eq!(device.info().vram_bytes, info.vram_bytes);
+        assert_eq!(device.name(), info.name);
+        assert_eq!(device.vram_bytes(), info.vram_bytes);
+    }
+
+    #[test]
+    fn test_amd_device_available_memory_initial() {
+        let device = AmdDevice::new(make_info(1024));
+        assert_eq!(device.available_memory(), 1024);
+    }
+
+    #[test]
+    fn test_amd_device_memory_usage_percent_zero_vram() {
+        let device = AmdDevice::new(make_info(0));
+        assert_eq!(device.memory_usage_percent(), 0.0);
+    }
+
+    #[test]
+    fn test_amd_device_memory_usage_percent_after_allocate() {
+        let device = AmdDevice::new(make_info(1024));
+        assert!(device.allocate(256));
+        assert!((device.memory_usage_percent() - 25.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_amd_device_allocate_success() {
+        let device = AmdDevice::new(make_info(1024));
+        assert!(device.allocate(512));
+        assert_eq!(device.available_memory(), 512);
+    }
+
+    #[test]
+    fn test_amd_device_allocate_exceeds_vram() {
+        let device = AmdDevice::new(make_info(1024));
+        assert!(device.allocate(512));
+        assert!(!device.allocate(1024));
+    }
+
+    #[test]
+    fn test_amd_device_deallocate() {
+        let device = AmdDevice::new(make_info(1024));
+        assert!(device.allocate(512));
+        device.deallocate(256);
+        assert_eq!(device.available_memory(), 768);
+    }
+
+    #[test]
+    fn test_amd_device_deallocate_saturating() {
+        let device = AmdDevice::new(make_info(1024));
+        device.deallocate(2048);
+        assert_eq!(device.available_memory(), 1024);
+    }
+
+    #[test]
+    fn test_amd_device_is_busy_set_busy() {
+        let device = AmdDevice::new(make_info(1024));
+        assert!(!device.is_busy());
+        device.set_busy(true);
+        assert!(device.is_busy());
+        device.set_busy(false);
+        assert!(!device.is_busy());
+    }
+
+    #[test]
+    fn test_amd_device_supports_precision() {
+        let device = AmdDevice::new(make_info(1024));
+        assert!(device.supports_precision("fp32"));
+        assert!(device.supports_precision("fp16"));
+        assert!(device.supports_precision("bf16"));
+        assert!(!device.supports_precision("int8"));
+        assert!(!device.supports_precision("fp64"));
+    }
+
+    #[test]
+    fn test_amd_device_supports_operation() {
+        let device = AmdDevice::new(make_info(1024));
+        assert!(device.supports_operation("matrix_multiply"));
+        assert!(device.supports_operation("convolution"));
+        assert!(device.supports_operation("activation"));
+        assert!(device.supports_operation("normalization"));
+        assert!(device.supports_operation("reduction"));
+        assert!(!device.supports_operation("unknown"));
+    }
+
+    #[test]
+    fn test_amd_device_clone_preserves_state() {
+        let device = AmdDevice::new(make_info(1024));
+        assert!(device.allocate(128));
+        device.set_busy(true);
+
+        let cloned = device.clone();
+        assert_eq!(cloned.name(), device.name());
+        assert_eq!(cloned.vram_bytes(), device.vram_bytes());
+        assert_eq!(cloned.compute_units(), device.compute_units());
+        assert_eq!(cloned.available_memory(), device.available_memory());
+        assert!(cloned.is_busy());
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_new_default() {
+        let manager = AmdDeviceManager::new();
+        assert!(!manager.is_initialized());
+        assert!(!manager.is_opencl_available());
+        assert!(!manager.is_rocm_available());
+        assert_eq!(manager.device_count().await, 0);
+
+        let default_mgr = AmdDeviceManager::default();
+        assert!(!default_mgr.is_initialized());
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_initialize_finds_rocm_devices() {
+        let manager = AmdDeviceManager::new();
+        manager
+            .initialize()
+            .await
+            .expect("initialize should succeed");
+
+        assert!(manager.is_initialized());
+        assert!(manager.is_rocm_available());
+        assert!(!manager.is_opencl_available());
+        assert_eq!(manager.device_count().await, 4);
+
+        let total = manager.total_vram().await;
+        assert_eq!(total, 4 * 16 * 1024 * 1024 * 1024u64);
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_initialize_idempotent() {
+        let manager = AmdDeviceManager::new();
+        manager.initialize().await.unwrap();
+        let count_after_first = manager.device_count().await;
+
+        manager.initialize().await.unwrap();
+        let count_after_second = manager.device_count().await;
+
+        assert_eq!(count_after_first, count_after_second);
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_primary_device() {
+        let manager = AmdDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        let primary = manager.primary_device().await;
+        assert!(primary.is_some());
+        assert!(primary.as_ref().unwrap().name().contains("ROCm"));
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_primary_device_none_when_empty() {
+        let manager = AmdDeviceManager::new();
+        let primary = manager.primary_device().await;
+        assert!(primary.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_get_device_in_range() {
+        let manager = AmdDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        let device = manager.get_device(1).await;
+        assert!(device.is_some());
+        assert!(device.as_ref().unwrap().name().contains("Device 1"));
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_get_device_out_of_range() {
+        let manager = AmdDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        let device = manager.get_device(100).await;
+        assert!(device.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_available_vram() {
+        let manager = AmdDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        let available = manager.available_vram().await;
+        assert_eq!(available, manager.total_vram().await);
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_memory_usage_summary_empty() {
+        let manager = AmdDeviceManager::new();
+        let summary = manager.memory_usage_summary().await;
+        assert!(summary.contains("0 bytes used"));
+        assert!(summary.contains("0.0%"));
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_memory_usage_summary_with_devices() {
+        let manager = AmdDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        let summary = manager.memory_usage_summary().await;
+        assert!(summary.contains("AMD GPU Memory"));
+        assert!(summary.contains("0.0%"));
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_set_primary_valid() {
+        let manager = AmdDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        assert!(manager.set_primary(2).await);
+        let primary = manager.primary_device().await;
+        assert!(primary.is_some());
+        assert!(primary.as_ref().unwrap().name().contains("Device 2"));
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_set_primary_out_of_range() {
+        let manager = AmdDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        assert!(!manager.set_primary(100).await);
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_reset() {
+        let manager = AmdDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        let primary = manager.primary_device().await.unwrap();
+        assert!(primary.allocate(1024));
+        assert!(primary.is_busy() == false);
+        primary.set_busy(true);
+
+        manager.reset().await;
+
+        let primary_after = manager.primary_device().await.unwrap();
+        assert_eq!(primary_after.available_memory(), primary_after.vram_bytes());
+        assert!(!primary_after.is_busy());
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_devices_returns_clone() {
+        let manager = AmdDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        let devices = manager.devices().await;
+        assert_eq!(devices.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_create_amd_device_manager() {
+        let manager = create_amd_device_manager()
+            .await
+            .expect("create_amd_device_manager should succeed");
+        assert!(manager.is_initialized());
+        assert!(manager.is_rocm_available());
+    }
+
+    #[tokio::test]
+    async fn test_amd_device_manager_primary_device_index_out_of_range_falls_back() {
+        let manager = AmdDeviceManager::new();
+        manager.initialize().await.unwrap();
+
+        manager.set_primary(100).await;
+        let primary = manager.primary_device().await;
+        assert!(primary.is_some());
+        assert!(primary.as_ref().unwrap().name().contains("Device 0"));
+    }
+}

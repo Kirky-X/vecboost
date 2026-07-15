@@ -669,4 +669,321 @@ mod tests {
             "unexpired sample must be kept alongside fresh sample"
         );
     }
+
+    #[tokio::test]
+    async fn test_record_inference_full_success() {
+        let collector = InferenceCollector::new();
+        let record = InferenceRecord::success("model".to_string(), 10, 20, 5.0, 1024);
+        collector.record_inference_full(record).await;
+
+        let records = collector.get_inference_records(None).await;
+        assert_eq!(records.len(), 1);
+        assert!(records[0].success);
+    }
+
+    #[tokio::test]
+    async fn test_record_inference_full_failure_increments_errors() {
+        let collector = InferenceCollector::new();
+        let record = InferenceRecord::failure("model".to_string(), 10, "error".to_string());
+        collector.record_inference_full(record).await;
+
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_errors, 1);
+        assert_eq!(summary.failed_inferences, 1);
+    }
+
+    #[tokio::test]
+    async fn test_record_inference_full_evicts_oldest_when_full() {
+        let config = CollectionConfig {
+            max_samples: 2,
+            ..Default::default()
+        };
+        let collector = InferenceCollector::with_config(config);
+
+        for i in 0..3 {
+            let record = InferenceRecord::success(format!("model-{}", i), 1, 1, 1.0, 1);
+            collector.record_inference_full(record).await;
+        }
+
+        let records = collector.get_inference_records(None).await;
+        assert_eq!(records.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_record_inference_complete() {
+        let collector = InferenceCollector::new();
+        collector
+            .record_inference_complete("model", Duration::from_millis(100), 4, 256)
+            .await;
+
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_inferences, 1);
+        assert_eq!(summary.total_tokens_processed, 256);
+        assert_eq!(summary.successful_inferences, 1);
+    }
+
+    #[tokio::test]
+    async fn test_record_inference_error() {
+        let collector = InferenceCollector::new();
+        collector.record_inference_error("model").await;
+
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_inferences, 1);
+        assert_eq!(summary.failed_inferences, 1);
+        assert_eq!(summary.total_errors, 1);
+    }
+
+    #[tokio::test]
+    async fn test_collect_resource_utilization() {
+        let collector = InferenceCollector::new();
+        let util = collector.collect_resource_utilization().await;
+
+        assert!(util.cpu_percent >= 0.0);
+        assert!(util.memory_percent >= 0.0);
+        assert_eq!(util.gpu_utilization_percent, None);
+        assert_eq!(util.gpu_memory_percent, None);
+    }
+
+    #[tokio::test]
+    async fn test_collect_resource_utilization_gpu_disabled() {
+        let config = CollectionConfig {
+            enable_gpu_metrics: false,
+            ..Default::default()
+        };
+        let collector = InferenceCollector::with_config(config);
+        let util = collector.collect_resource_utilization().await;
+
+        assert_eq!(util.gpu_utilization_percent, None);
+        assert_eq!(util.gpu_memory_percent, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_snapshot_empty_returns_default() {
+        let collector = InferenceCollector::new();
+        let snapshot = collector.get_snapshot().await;
+
+        assert_eq!(snapshot.sample_count, 0);
+        assert_eq!(snapshot.current.inference_time_ms, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_get_snapshot_single_sample() {
+        let collector = InferenceCollector::new();
+        collector
+            .record_inference("model", 100, 512, Duration::from_millis(50), 1024)
+            .await;
+
+        let snapshot = collector.get_snapshot().await;
+        assert_eq!(snapshot.sample_count, 1);
+        assert_eq!(
+            snapshot.min.inference_time_ms,
+            snapshot.max.inference_time_ms
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_metrics_history_filter_by_type() {
+        let collector = InferenceCollector::new();
+        collector
+            .record_metric(MetricType::Throughput, 100.0, "tokens/s")
+            .await;
+        collector
+            .record_metric(MetricType::InferenceTime, 50.0, "ms")
+            .await;
+        collector
+            .record_metric(MetricType::Throughput, 200.0, "tokens/s")
+            .await;
+
+        let throughput_history = collector.get_metrics_history(MetricType::Throughput).await;
+        assert_eq!(throughput_history.len(), 2);
+
+        let inference_history = collector
+            .get_metrics_history(MetricType::InferenceTime)
+            .await;
+        assert_eq!(inference_history.len(), 1);
+
+        let empty_history = collector.get_metrics_history(MetricType::BatchSize).await;
+        assert!(empty_history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_metrics_history_evicts_oldest() {
+        let config = CollectionConfig {
+            max_samples: 2,
+            ..Default::default()
+        };
+        let collector = InferenceCollector::with_config(config);
+
+        for i in 0..3 {
+            collector
+                .record_metric(MetricType::Throughput, i as f64, "tokens/s")
+                .await;
+        }
+
+        let history = collector.get_metrics_history(MetricType::Throughput).await;
+        assert_eq!(history.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_inference_records_default_limit() {
+        let collector = InferenceCollector::new();
+
+        for _ in 0..150 {
+            collector
+                .record_inference("model", 10, 20, Duration::from_millis(1), 1)
+                .await;
+        }
+
+        let records = collector.get_inference_records(None).await;
+        assert_eq!(records.len(), 100);
+    }
+
+    #[tokio::test]
+    async fn test_get_inference_records_returns_newest_first() {
+        let collector = InferenceCollector::new();
+
+        for i in 0..5 {
+            collector
+                .record_inference(&format!("model-{}", i), 1, 1, Duration::from_millis(1), 1)
+                .await;
+        }
+
+        let records = collector.get_inference_records(Some(3)).await;
+        assert_eq!(records.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_tokens_per_inference_zero() {
+        let summary = MetricsSummary {
+            total_inferences: 0,
+            successful_inferences: 0,
+            failed_inferences: 0,
+            total_tokens_processed: 0,
+            total_errors: 0,
+            average_latency_ms: 0.0,
+            average_throughput_tokens_per_sec: 0.0,
+            collection_duration_seconds: 0,
+            sample_count: 0,
+        };
+        assert_eq!(summary.tokens_per_inference(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_tokens_per_inference_with_data() {
+        let summary = MetricsSummary {
+            total_inferences: 10,
+            successful_inferences: 8,
+            failed_inferences: 2,
+            total_tokens_processed: 1000,
+            total_errors: 2,
+            average_latency_ms: 50.0,
+            average_throughput_tokens_per_sec: 100.0,
+            collection_duration_seconds: 60,
+            sample_count: 8,
+        };
+        assert!((summary.tokens_per_inference() - 100.0).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn test_success_rate_zero_inferences() {
+        let summary = MetricsSummary {
+            total_inferences: 0,
+            successful_inferences: 0,
+            failed_inferences: 0,
+            total_tokens_processed: 0,
+            total_errors: 0,
+            average_latency_ms: 0.0,
+            average_throughput_tokens_per_sec: 0.0,
+            collection_duration_seconds: 0,
+            sample_count: 0,
+        };
+        assert_eq!(summary.success_rate(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_config_accessor() {
+        let config = CollectionConfig {
+            max_samples: 500,
+            collection_interval_ms: 2000,
+            enable_gpu_metrics: false,
+            enable_memory_tracking: true,
+            max_sample_age_secs: 600,
+        };
+        let collector = InferenceCollector::with_config(config);
+        let cfg = collector.config();
+        assert_eq!(cfg.max_samples, 500);
+        assert_eq!(cfg.collection_interval_ms, 2000);
+        assert!(!cfg.enable_gpu_metrics);
+        assert!(cfg.enable_memory_tracking);
+        assert_eq!(cfg.max_sample_age_secs, 600);
+    }
+
+    #[tokio::test]
+    async fn test_with_memory_monitor() {
+        let monitor = Arc::new(MemoryMonitor::new());
+        let collector = InferenceCollector::with_memory_monitor(monitor);
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_inferences, 0);
+    }
+
+    #[tokio::test]
+    async fn test_reset_clears_all_counters() {
+        let collector = InferenceCollector::new();
+
+        collector
+            .record_inference("model", 100, 512, Duration::from_millis(50), 1024)
+            .await;
+        collector.record_error("model", 100, "err").await;
+        collector
+            .record_metric(MetricType::Throughput, 100.0, "tokens/s")
+            .await;
+
+        collector.reset().await;
+
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_inferences, 0);
+        assert_eq!(summary.total_errors, 0);
+        assert_eq!(summary.sample_count, 0);
+
+        let history = collector.get_metrics_history(MetricType::Throughput).await;
+        assert!(history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_record_inference_increments_tokens() {
+        let collector = InferenceCollector::new();
+        collector
+            .record_inference("model", 100, 200, Duration::from_millis(10), 1024)
+            .await;
+
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_tokens_processed, 300);
+    }
+
+    #[tokio::test]
+    async fn test_collection_config_default() {
+        let config = CollectionConfig::default();
+        assert_eq!(config.max_samples, 1000);
+        assert_eq!(config.collection_interval_ms, 1000);
+        assert!(config.enable_gpu_metrics);
+        assert!(config.enable_memory_tracking);
+        assert_eq!(config.max_sample_age_secs, 300);
+    }
+
+    #[tokio::test]
+    async fn test_get_summary_avg_latency_and_throughput() {
+        let collector = InferenceCollector::new();
+
+        collector
+            .record_inference("model", 100, 100, Duration::from_millis(10), 1024)
+            .await;
+        collector
+            .record_inference("model", 100, 100, Duration::from_millis(30), 1024)
+            .await;
+
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.sample_count, 2);
+        assert!(summary.average_latency_ms > 0.0);
+        assert!(summary.average_throughput_tokens_per_sec > 0.0);
+    }
 }

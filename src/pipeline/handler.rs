@@ -513,4 +513,331 @@ mod tests {
 
         consumer.await.unwrap();
     }
+
+    /// Verify TestEngine::embed returns the expected dimension.
+    #[test]
+    fn test_test_engine_embed_returns_correct_dimension() {
+        let engine = TestEngine::new(256);
+        let result = engine.embed("test").expect("embed should succeed");
+        assert_eq!(result.len(), 256);
+        assert!(result.iter().all(|&v| v == 0.5));
+    }
+
+    /// Verify TestEngine::embed_batch returns one vector per input.
+    #[test]
+    fn test_test_engine_embed_batch_returns_correct_count() {
+        let engine = TestEngine::new(128);
+        let texts = vec!["a".to_string(), "b".to_string()];
+        let result = engine
+            .embed_batch(&texts)
+            .expect("embed_batch should succeed");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].len(), 128);
+    }
+
+    /// Verify TestEngine::embed_batch with empty input returns empty vec.
+    #[test]
+    fn test_test_engine_embed_batch_empty() {
+        let engine = TestEngine::new(64);
+        let texts: Vec<String> = vec![];
+        let result = engine
+            .embed_batch(&texts)
+            .expect("embed_batch should succeed");
+        assert!(result.is_empty());
+    }
+
+    /// Verify TestEngine::precision returns Fp32.
+    #[test]
+    fn test_test_engine_precision() {
+        let engine = TestEngine::new(8);
+        assert_eq!(engine.precision(), &Precision::Fp32);
+    }
+
+    /// Verify TestEngine::supports_mixed_precision returns false.
+    #[test]
+    fn test_test_engine_supports_mixed_precision() {
+        let engine = TestEngine::new(8);
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    /// Verify TestEngine::try_fallback_to_cpu returns Ok.
+    #[tokio::test]
+    async fn test_test_engine_try_fallback_to_cpu() {
+        let mut engine = TestEngine::new(8);
+        let config = ModelConfig::default();
+        let result = engine.try_fallback_to_cpu(&config).await;
+        assert!(result.is_ok());
+    }
+
+    /// Verify ErrorEngine::embed returns InferenceError.
+    #[test]
+    fn test_error_engine_embed_fails() {
+        let engine = ErrorEngine;
+        let result = engine.embed("test");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InferenceError(msg) => {
+                assert!(msg.contains("mock inference failure"));
+            }
+            other => panic!("expected InferenceError, got {:?}", other),
+        }
+    }
+
+    /// Verify ErrorEngine::embed_batch returns InferenceError.
+    #[test]
+    fn test_error_engine_embed_batch_fails() {
+        let engine = ErrorEngine;
+        let texts = vec!["a".to_string(), "b".to_string()];
+        let result = engine.embed_batch(&texts);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InferenceError(msg) => {
+                assert!(msg.contains("mock batch inference failure"));
+            }
+            other => panic!("expected InferenceError, got {:?}", other),
+        }
+    }
+
+    /// Verify ErrorEngine::precision returns Fp32.
+    #[test]
+    fn test_error_engine_precision() {
+        let engine = ErrorEngine;
+        assert_eq!(engine.precision(), &Precision::Fp32);
+    }
+
+    /// Verify ErrorEngine::supports_mixed_precision returns false.
+    #[test]
+    fn test_error_engine_supports_mixed_precision() {
+        let engine = ErrorEngine;
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    /// Verify ErrorEngine::try_fallback_to_cpu returns Ok.
+    #[tokio::test]
+    async fn test_error_engine_try_fallback_to_cpu() {
+        let mut engine = ErrorEngine;
+        let config = ModelConfig::default();
+        let result = engine.try_fallback_to_cpu(&config).await;
+        assert!(result.is_ok());
+    }
+
+    /// Verify handle_pipeline_request with a longer text succeeds.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_long_text() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(100, engine);
+        let queue = Arc::clone(&state.pipeline_queue);
+        let response_channel = Arc::clone(&state.response_channel);
+        let service = Arc::clone(&state.service);
+
+        let consumer = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue.dequeue().await {
+                    let request_id = req.request_id.clone();
+                    let service_guard = service.read().await;
+                    let result = service_guard.process_text(req.embed_request, None).await;
+                    drop(service_guard);
+                    response_channel.complete(request_id, result).await;
+                    return;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        let req = EmbedRequest {
+            text: "a".repeat(1000),
+            normalize: Some(true),
+        };
+        let result = handle_pipeline_request(state, req, "192.168.1.1".to_string()).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.0.embedding.len(), 8);
+
+        consumer.await.unwrap();
+    }
+
+    /// Verify handle_pipeline_request with normalize=None uses default (true).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_normalize_none() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(4)));
+        let state = create_test_state(100, engine);
+        let queue = Arc::clone(&state.pipeline_queue);
+        let response_channel = Arc::clone(&state.response_channel);
+        let service = Arc::clone(&state.service);
+
+        let consumer = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue.dequeue().await {
+                    let request_id = req.request_id.clone();
+                    let service_guard = service.read().await;
+                    let result = service_guard.process_text(req.embed_request, None).await;
+                    drop(service_guard);
+                    response_channel.complete(request_id, result).await;
+                    return;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        let req = EmbedRequest {
+            text: "hello".to_string(),
+            normalize: None,
+        };
+        let result = handle_pipeline_request(state, req, "10.0.0.1".to_string()).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.0.dimension, 4);
+
+        consumer.await.unwrap();
+    }
+
+    /// Verify handle_pipeline_request with different IP addresses works.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_different_ips() {
+        for ip in &["127.0.0.1", "192.168.0.1", "10.0.0.1", "172.16.0.1"] {
+            let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+                Arc::new(RwLock::new(TestEngine::new(4)));
+            let state = create_test_state(100, engine);
+            let queue = Arc::clone(&state.pipeline_queue);
+            let response_channel = Arc::clone(&state.response_channel);
+            let service = Arc::clone(&state.service);
+
+            let consumer = tokio::spawn(async move {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                loop {
+                    if let Some(req) = queue.dequeue().await {
+                        let request_id = req.request_id.clone();
+                        let service_guard = service.read().await;
+                        let result = service_guard.process_text(req.embed_request, None).await;
+                        drop(service_guard);
+                        response_channel.complete(request_id, result).await;
+                        return;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            });
+
+            let req = EmbedRequest {
+                text: format!("test from {}", ip),
+                normalize: Some(true),
+            };
+            let result = handle_pipeline_request(state, req, ip.to_string()).await;
+            assert!(result.is_ok(), "request from {} should succeed", ip);
+
+            consumer.await.unwrap();
+        }
+    }
+
+    /// Verify handle_pipeline_request generates unique request IDs.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_unique_request_ids() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(4)));
+        let state = create_test_state(100, engine);
+        let queue = Arc::clone(&state.pipeline_queue);
+        let response_channel = Arc::clone(&state.response_channel);
+        let service = Arc::clone(&state.service);
+
+        let consumer = tokio::spawn(async move {
+            let mut ids = Vec::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue.dequeue().await {
+                    ids.push(req.request_id.clone());
+                    let request_id = req.request_id.clone();
+                    let service_guard = service.read().await;
+                    let result = service_guard.process_text(req.embed_request, None).await;
+                    drop(service_guard);
+                    response_channel.complete(request_id, result).await;
+                    if ids.len() >= 2 {
+                        assert_ne!(ids[0], ids[1], "request IDs should be unique");
+                        return;
+                    }
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        // Send first request
+        let req1 = EmbedRequest {
+            text: "first".to_string(),
+            normalize: Some(true),
+        };
+        let state1 = state.clone();
+        let handle1 = tokio::spawn(async move {
+            handle_pipeline_request(state1, req1, "127.0.0.1".to_string()).await
+        });
+
+        // Send second request
+        let req2 = EmbedRequest {
+            text: "second".to_string(),
+            normalize: Some(true),
+        };
+        let handle2 = tokio::spawn(async move {
+            handle_pipeline_request(state, req2, "127.0.0.1".to_string()).await
+        });
+
+        let r1 = handle1.await.unwrap();
+        let r2 = handle2.await.unwrap();
+        assert!(r1.is_ok());
+        assert!(r2.is_ok());
+
+        consumer.await.unwrap();
+    }
+
+    /// Verify handle_pipeline_request with unicode text succeeds.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_unicode_text() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(100, engine);
+        let queue = Arc::clone(&state.pipeline_queue);
+        let response_channel = Arc::clone(&state.response_channel);
+        let service = Arc::clone(&state.service);
+
+        let consumer = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue.dequeue().await {
+                    let request_id = req.request_id.clone();
+                    let service_guard = service.read().await;
+                    let result = service_guard.process_text(req.embed_request, None).await;
+                    drop(service_guard);
+                    response_channel.complete(request_id, result).await;
+                    return;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        let req = EmbedRequest {
+            text: "你好世界 🌍 Привет мир".to_string(),
+            normalize: Some(true),
+        };
+        let result = handle_pipeline_request(state, req, "127.0.0.1".to_string()).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.0.embedding.len(), 8);
+
+        consumer.await.unwrap();
+    }
 }

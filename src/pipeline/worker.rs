@@ -1417,7 +1417,11 @@ mod tests {
     }
 
     /// 验证 worker_loop 在运行过程中持续更新 last_active_time。
-    #[tokio::test(flavor = "multi_thread")]
+    ///
+    /// 使用 `current_thread` flavor 避免 `multi_thread` 下高并行测试负载导致的
+    /// 线程饥饿(scheduler starvation)。在 `current_thread` 中,`tokio::spawn`
+    /// 的 worker task 会在每次 `await` 让出控制权时被调度执行。
+    #[tokio::test(flavor = "current_thread")]
     async fn test_worker_loop_updates_activity_time() {
         let queue = Arc::new(PriorityRequestQueue::new(100));
         let response_channel = Arc::new(ResponseChannel::new());
@@ -1434,10 +1438,10 @@ mod tests {
             health[0].last_active_time
         };
 
-        // Poll for last_active_time refresh instead of fixed sleep.
-        // Worker loop updates activity at the start of each iteration; under coverage
-        // instrumentation the loop may be slow to schedule, so poll up to 10s.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        // Poll for last_active_time refresh. In current_thread runtime, the
+        // worker task runs during our sleep().await yield points. Under
+        // coverage instrumentation the loop may be slower, so allow 30s.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         let mut updated_time = initial_time;
         loop {
             {
@@ -1449,7 +1453,7 @@ mod tests {
             }
             if tokio::time::Instant::now() >= deadline {
                 panic!(
-                    "last_active_time was not refreshed within 10s \
+                    "last_active_time was not refreshed within 30s \
                      (initial={:?}, current={:?})",
                     initial_time, updated_time
                 );

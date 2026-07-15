@@ -1019,4 +1019,96 @@ mod tests {
         assert_eq!(manager.count().await, 1);
         assert!(manager.is_loaded("recreate-model").await);
     }
+
+    #[tokio::test]
+    async fn test_slow_model_loader_get_model_path_and_cached() {
+        let loader = SlowModelLoader::new(10);
+        let config = ModelConfig {
+            name: "slow-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from("/slow/path"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        let path = loader.get_model_path(&config).await.unwrap();
+        assert_eq!(path, PathBuf::from("/slow/path"));
+        assert!(loader.is_model_cached(&config).await);
+    }
+
+    #[tokio::test]
+    async fn test_slow_model_loader_load_succeeds() {
+        let cache_dir = tempdir().unwrap();
+        let loader = SlowModelLoader::new(10);
+        let config = ModelConfig {
+            name: "slow-load".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: cache_dir.path().join("slow-load"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        let model = loader.load(&config).await.unwrap();
+        assert_eq!(model.name(), "slow-load");
+        assert_eq!(model.engine_type(), EngineType::Candle);
+        assert!(model.reload().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_failing_loader_get_model_path_and_cached() {
+        let loader = FailingLoader;
+        let config = ModelConfig {
+            name: "fail-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from("/fail/path"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        let path = loader.get_model_path(&config).await.unwrap();
+        assert_eq!(path, PathBuf::from("/fail/path"));
+        assert!(!loader.is_model_cached(&config).await);
+    }
+
+    #[tokio::test]
+    async fn test_unload_all_on_manager_with_single_model_logs() {
+        let cache_dir = tempdir().unwrap();
+        let loader = Arc::new(LocalModelLoader::new(cache_dir.path().to_path_buf()));
+        let manager = ModelManager::with_loader(loader);
+
+        let model_path = cache_dir.path().join("unload-single");
+        create_test_model_file(&model_path);
+        let config = ModelConfig {
+            name: "unload-single".to_string(),
+            engine_type: EngineType::Candle,
+            model_path,
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        manager.load(&config).await.unwrap();
+        assert_eq!(manager.count().await, 1);
+        manager.unload_all().await;
+        assert_eq!(manager.count().await, 0);
+    }
 }

@@ -202,4 +202,248 @@ mod tests {
         assert_eq!(model.path(), path.as_path());
         assert_eq!(model.engine_type(), EngineType::Onnx);
     }
+
+    #[test]
+    fn test_candle_model_reload_succeeds() {
+        let path = PathBuf::from("/test/model");
+        let model = CandleModel {
+            path,
+            name: "test-candle".to_string(),
+        };
+        assert!(model.reload().is_ok());
+    }
+
+    #[test]
+    #[cfg(feature = "onnx")]
+    fn test_onnx_model_reload_succeeds() {
+        let path = PathBuf::from("/test/model");
+        let model = OnnxModel {
+            path,
+            name: "test-onnx".to_string(),
+        };
+        assert!(model.reload().is_ok());
+    }
+
+    fn make_config(name: &str, model_path: PathBuf) -> ModelConfig {
+        ModelConfig {
+            name: name.to_string(),
+            engine_type: EngineType::Candle,
+            model_path,
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_load_candle_success() {
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join("candle-model");
+        std::fs::create_dir_all(&model_path).unwrap();
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let config = make_config("candle-model", model_path.clone());
+
+        let model = loader.load(&config).await.unwrap();
+        assert_eq!(model.name(), "candle-model");
+        assert_eq!(model.path(), model_path.as_path());
+        assert_eq!(model.engine_type(), EngineType::Candle);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "onnx")]
+    async fn test_load_onnx_success() {
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join("onnx-model");
+        std::fs::create_dir_all(&model_path).unwrap();
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let mut config = make_config("onnx-model", model_path.clone());
+        config.engine_type = EngineType::Onnx;
+
+        let model = loader.load(&config).await.unwrap();
+        assert_eq!(model.name(), "onnx-model");
+        assert_eq!(model.path(), model_path.as_path());
+        assert_eq!(model.engine_type(), EngineType::Onnx);
+    }
+
+    #[tokio::test]
+    async fn test_load_nonexistent_path_fails() {
+        let cache_dir = tempdir().unwrap();
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let config = make_config("missing", PathBuf::from("/nonexistent/model"));
+
+        let result = loader.load(&config).await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            VecboostError::NotFound(msg) => assert!(msg.contains("Model not found")),
+            other => panic!("expected NotFound, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_model_path_from_config_path() {
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join("direct-model");
+        std::fs::create_dir_all(&model_path).unwrap();
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let config = make_config("direct-model", model_path.clone());
+
+        let path = loader.get_model_path(&config).await.unwrap();
+        assert_eq!(path, model_path);
+    }
+
+    #[tokio::test]
+    async fn test_get_model_path_from_cache_dir() {
+        let cache_dir = tempdir().unwrap();
+        let cached_model = cache_dir.path().join("cached-model");
+        std::fs::create_dir_all(&cached_model).unwrap();
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let config = make_config("cached-model", PathBuf::from("/nonexistent/direct"));
+
+        let path = loader.get_model_path(&config).await.unwrap();
+        assert_eq!(path, cached_model);
+    }
+
+    #[tokio::test]
+    async fn test_get_model_path_not_found_anywhere() {
+        let cache_dir = tempdir().unwrap();
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let config = make_config("missing", PathBuf::from("/nonexistent/direct"));
+
+        let result = loader.get_model_path(&config).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::NotFound(msg) => {
+                assert!(msg.contains("Model not found"));
+                assert!(msg.contains("missing"));
+            }
+            other => panic!("expected NotFound, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_is_model_cached_true_via_config_path() {
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join("cached-via-config");
+        std::fs::create_dir_all(&model_path).unwrap();
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let config = make_config("any", model_path);
+
+        assert!(loader.is_model_cached(&config).await);
+    }
+
+    #[tokio::test]
+    async fn test_is_model_cached_true_via_cache_dir() {
+        let cache_dir = tempdir().unwrap();
+        let cached_model = cache_dir.path().join("in-cache-dir");
+        std::fs::create_dir_all(&cached_model).unwrap();
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let config = make_config("in-cache-dir", PathBuf::from("/nonexistent/direct"));
+
+        assert!(loader.is_model_cached(&config).await);
+    }
+
+    #[tokio::test]
+    async fn test_load_candle_model_with_file_path() {
+        let cache_dir = tempdir().unwrap();
+        let model_file = cache_dir.path().join("model.safetensors");
+        std::fs::write(&model_file, "dummy").unwrap();
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let config = make_config("file-model", model_file.clone());
+
+        let model = loader.load(&config).await.unwrap();
+        assert_eq!(model.name(), "file-model");
+        assert_eq!(model.path(), model_file.as_path());
+    }
+
+    #[tokio::test]
+    async fn test_get_model_path_prefers_config_path_over_cache() {
+        let cache_dir = tempdir().unwrap();
+        let config_path = cache_dir.path().join("config-model");
+        std::fs::create_dir_all(&config_path).unwrap();
+        let cached_path = cache_dir.path().join("dual-model");
+        std::fs::create_dir_all(&cached_path).unwrap();
+
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let config = make_config("dual-model", config_path.clone());
+
+        let path = loader.get_model_path(&config).await.unwrap();
+        assert_eq!(path, config_path);
+    }
+
+    #[tokio::test]
+    async fn test_is_model_cached_both_paths_exist() {
+        let cache_dir = tempdir().unwrap();
+        let config_path = cache_dir.path().join("config-path");
+        std::fs::create_dir_all(&config_path).unwrap();
+        let cached_path = cache_dir.path().join("both-model");
+        std::fs::create_dir_all(&cached_path).unwrap();
+
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let config = make_config("both-model", config_path);
+
+        assert!(loader.is_model_cached(&config).await);
+    }
+
+    #[tokio::test]
+    async fn test_candle_model_reload_ok() {
+        let path = PathBuf::from("/test/candle/reload");
+        let model = CandleModel {
+            path,
+            name: "reload-test".to_string(),
+        };
+        assert!(model.reload().is_ok());
+    }
+
+    #[test]
+    #[cfg(feature = "onnx")]
+    fn test_onnx_model_reload_ok() {
+        let path = PathBuf::from("/test/onnx/reload");
+        let model = OnnxModel {
+            path,
+            name: "onnx-reload-test".to_string(),
+        };
+        assert!(model.reload().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_load_multiple_models_independently() {
+        let cache_dir = tempdir().unwrap();
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+
+        let path1 = cache_dir.path().join("model-1");
+        let path2 = cache_dir.path().join("model-2");
+        std::fs::create_dir_all(&path1).unwrap();
+        std::fs::create_dir_all(&path2).unwrap();
+
+        let config1 = make_config("model-1", path1.clone());
+        let config2 = make_config("model-2", path2.clone());
+
+        let model1 = loader.load(&config1).await.unwrap();
+        let model2 = loader.load(&config2).await.unwrap();
+
+        assert_ne!(model1.name(), model2.name());
+        assert_ne!(model1.path(), model2.path());
+    }
+
+    #[tokio::test]
+    async fn test_get_model_path_error_contains_both_paths() {
+        let cache_dir = tempdir().unwrap();
+        let loader = LocalModelLoader::new(cache_dir.path().to_path_buf());
+        let config = make_config("missing-model", PathBuf::from("/nonexistent/one"));
+
+        let result = loader.get_model_path(&config).await;
+        let err = result.err().expect("should error");
+        match err {
+            VecboostError::NotFound(msg) => {
+                assert!(msg.contains("/nonexistent/one"));
+                assert!(msg.contains("missing-model"));
+            }
+            other => panic!("expected NotFound, got {:?}", other),
+        }
+    }
 }

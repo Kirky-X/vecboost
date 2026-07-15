@@ -328,4 +328,301 @@ mod tests {
         let metal_json = serde_json::to_string(&DeviceType::Metal).expect("serialize Metal");
         assert_eq!(metal_json, "\"metal\"");
     }
+
+    #[test]
+    fn test_device_type_amd_serde_roundtrip() {
+        let json = serde_json::to_string(&DeviceType::Amd).expect("serialize Amd");
+        assert_eq!(json, "\"amd\"");
+        let decoded: DeviceType = serde_json::from_str(&json).expect("deserialize Amd");
+        assert_eq!(decoded, DeviceType::Amd);
+    }
+
+    #[test]
+    fn test_device_type_opencl_serde_roundtrip() {
+        let json = serde_json::to_string(&DeviceType::OpenCL).expect("serialize OpenCL");
+        assert_eq!(json, "\"opencl\"");
+        let decoded: DeviceType = serde_json::from_str(&json).expect("deserialize OpenCL");
+        assert_eq!(decoded, DeviceType::OpenCL);
+    }
+
+    #[test]
+    fn test_device_type_cpu_serde_roundtrip() {
+        let json = serde_json::to_string(&DeviceType::Cpu).expect("serialize Cpu");
+        assert_eq!(json, "\"cpu\"");
+        let decoded: DeviceType = serde_json::from_str(&json).expect("deserialize Cpu");
+        assert_eq!(decoded, DeviceType::Cpu);
+    }
+
+    #[test]
+    fn test_device_type_clone_and_equality() {
+        let cpu = DeviceType::Cpu;
+        let cpu_clone = cpu.clone();
+        assert_eq!(cpu, cpu_clone);
+        assert_ne!(DeviceType::Cpu, DeviceType::Cuda);
+        assert_ne!(DeviceType::Cuda, DeviceType::Metal);
+        assert_ne!(DeviceType::Metal, DeviceType::Amd);
+        assert_ne!(DeviceType::Amd, DeviceType::OpenCL);
+        assert_ne!(DeviceType::OpenCL, DeviceType::Cpu);
+    }
+
+    #[test]
+    fn test_pooling_mode_default_is_mean() {
+        let mode = crate::config::model::PoolingMode::default();
+        assert!(matches!(mode, crate::config::model::PoolingMode::Mean));
+    }
+
+    #[test]
+    fn test_pooling_mode_clone_and_equality() {
+        use crate::config::model::PoolingMode;
+        let mean = PoolingMode::Mean;
+        let max = PoolingMode::Max;
+        let cls = PoolingMode::Cls;
+        assert_eq!(mean.clone(), mean);
+        assert_eq!(max.clone(), max);
+        assert_eq!(cls.clone(), cls);
+        assert_ne!(mean, max);
+        assert_ne!(max, cls);
+        assert_ne!(cls, mean);
+    }
+
+    #[test]
+    fn test_pooling_mode_serde_roundtrip() {
+        use crate::config::model::PoolingMode;
+        let modes = [PoolingMode::Mean, PoolingMode::Max, PoolingMode::Cls];
+        for mode in &modes {
+            let json = serde_json::to_string(mode).expect("serialize PoolingMode");
+            let decoded: PoolingMode =
+                serde_json::from_str(&json).expect("deserialize PoolingMode");
+            assert_eq!(*mode, decoded);
+        }
+    }
+
+    #[test]
+    fn test_engine_type_clone_and_equality() {
+        let candle1 = EngineType::Candle;
+        let candle2 = candle1.clone();
+        assert_eq!(candle1, candle2);
+    }
+
+    #[test]
+    fn test_engine_type_debug_format() {
+        let format = format!("{:?}", EngineType::Candle);
+        assert!(format.contains("Candle"));
+    }
+
+    #[test]
+    fn test_precision_debug_format() {
+        let format = format!("{:?}", Precision::Fp32);
+        assert!(format.contains("Fp32"));
+    }
+
+    #[test]
+    fn test_precision_serde_roundtrip() {
+        let precisions = [Precision::Fp32, Precision::Fp16, Precision::Int8];
+        for p in &precisions {
+            let json = serde_json::to_string(p).expect("serialize Precision");
+            let decoded: Precision = serde_json::from_str(&json).expect("deserialize Precision");
+            assert_eq!(*p, decoded);
+        }
+    }
+
+    #[test]
+    fn test_inference_context_with_config_candle() {
+        use crate::config::model::{DeviceType, InferenceContext, PoolingMode};
+        let config = ModelConfig {
+            name: "ctx-test".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from("/test/model"),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 16,
+            pooling_mode: Some(PoolingMode::Max),
+            expected_dimension: Some(768),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+        };
+        let ctx = InferenceContext::with_config(&config, Precision::Fp16);
+        assert_eq!(ctx.model_name, "ctx-test");
+        assert_eq!(ctx.engine_type, EngineType::Candle);
+        assert_eq!(ctx.device, DeviceType::Cpu);
+        assert_eq!(ctx.precision, Precision::Fp16);
+        assert_eq!(ctx.batch_size, 16);
+    }
+
+    #[test]
+    fn test_inference_context_default_values() {
+        use crate::config::model::InferenceContext;
+        let ctx = InferenceContext::default();
+        assert_eq!(ctx.batch_size, 32);
+        assert_eq!(ctx.max_sequence_length, 8192);
+        assert_eq!(ctx.precision, Precision::Fp32);
+    }
+
+    #[test]
+    fn test_model_config_default() {
+        let config = ModelConfig::default();
+        assert_eq!(config.name, "default");
+        assert_eq!(config.max_batch_size, 32);
+        assert!(config.oom_fallback_enabled);
+        assert_eq!(config.expected_dimension, None);
+    }
+
+    #[test]
+    fn test_model_repository_default() {
+        use crate::config::model::ModelRepository;
+        let repo = ModelRepository::default();
+        assert_eq!(repo.models.len(), 1);
+        assert_eq!(repo.models[0].name, "default");
+    }
+
+    #[test]
+    fn test_any_engine_new_candle_cuda_device_fails() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_candle();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.device = DeviceType::Cuda;
+
+        let result = AnyEngine::new(&config, EngineType::Candle, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_any_engine_new_candle_metal_device_fails() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_candle();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.device = DeviceType::Metal;
+
+        let result = AnyEngine::new(&config, EngineType::Candle, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_any_engine_new_candle_amd_device_fails() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_candle();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.device = DeviceType::Amd;
+
+        let result = AnyEngine::new(&config, EngineType::Candle, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_any_engine_new_candle_opencl_device_fails() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_candle();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.device = DeviceType::OpenCL;
+
+        let result = AnyEngine::new(&config, EngineType::Candle, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_engine_factory_create_candle_missing_model() {
+        let config = test_config_candle();
+        let result = crate::engine::EngineFactory::create(EngineType::Candle, &config);
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_engine_factory_create_onnx_missing_model() {
+        let config = test_config_onnx();
+        let result = crate::engine::EngineFactory::create(EngineType::Onnx, &config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_any_engine_new_candle_with_pooling_mode() {
+        use crate::config::model::PoolingMode;
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_candle();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.pooling_mode = Some(PoolingMode::Cls);
+
+        let result = AnyEngine::new(&config, EngineType::Candle, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_any_engine_new_candle_with_memory_limit() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_candle();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.memory_limit_bytes = Some(1024 * 1024 * 1024);
+
+        let result = AnyEngine::new(&config, EngineType::Candle, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_any_engine_new_candle_with_tokenizer_path() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_candle();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.tokenizer_path = Some(PathBuf::from("/nonexistent/tokenizer"));
+
+        let result = AnyEngine::new(&config, EngineType::Candle, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_any_engine_new_candle_oom_fallback_disabled() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_candle();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.oom_fallback_enabled = false;
+
+        let result = AnyEngine::new(&config, EngineType::Candle, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_any_engine_new_onnx_metal_device_fails() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_onnx();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.device = DeviceType::Metal;
+
+        let result = AnyEngine::new(&config, EngineType::Onnx, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_any_engine_new_onnx_with_large_batch_size() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_onnx();
+        config.model_path = temp_dir.path().to_path_buf();
+        config.max_batch_size = 512;
+
+        let result = AnyEngine::new(&config, EngineType::Onnx, Precision::Fp32);
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_any_engine_new_onnx_int8_precision() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_onnx();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = AnyEngine::new(&config, EngineType::Onnx, Precision::Int8);
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_any_engine_new_onnx_fp16_precision() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config_onnx();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = AnyEngine::new(&config, EngineType::Onnx, Precision::Fp16);
+        assert!(result.is_err());
+    }
 }

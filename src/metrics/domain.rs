@@ -284,4 +284,263 @@ mod tests {
         assert!(record.error_message.is_some());
         assert_eq!(record.error_message.unwrap(), "Out of memory");
     }
+
+    #[test]
+    fn test_performance_metrics_default() {
+        let metrics = PerformanceMetrics::default();
+        assert_eq!(metrics.inference_time_ms, 0.0);
+        assert_eq!(metrics.tokens_per_second, 0.0);
+        assert_eq!(metrics.memory_usage_bytes, 0);
+        assert_eq!(metrics.peak_memory_bytes, 0);
+        assert_eq!(metrics.batch_size, 0);
+        assert_eq!(metrics.sequence_length, 0);
+        assert_eq!(metrics.timestamp, chrono::DateTime::from_timestamp_nanos(0));
+    }
+
+    #[test]
+    fn test_performance_metrics_new_zero_duration() {
+        let metrics = PerformanceMetrics::new(Duration::from_secs(0), 100, 1024, 2048, 1, 10);
+        assert_eq!(metrics.inference_time_ms, 0.0);
+        assert_eq!(metrics.tokens_per_second, 0.0);
+        assert_eq!(metrics.memory_usage_bytes, 1024);
+        assert_eq!(metrics.peak_memory_bytes, 2048);
+    }
+
+    #[test]
+    fn test_performance_metrics_throughput_equals_tokens_per_second() {
+        let metrics = PerformanceMetrics::new(Duration::from_secs(1), 1000, 0, 0, 1, 100);
+        assert!((metrics.throughput() - 1000.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_resource_utilization_default() {
+        let util = ResourceUtilization::default();
+        assert_eq!(util.cpu_percent, 0.0);
+        assert_eq!(util.memory_percent, 0.0);
+        assert!(util.gpu_utilization_percent.is_none());
+        assert!(util.gpu_memory_percent.is_none());
+        assert_eq!(util.timestamp, chrono::DateTime::from_timestamp_nanos(0));
+    }
+
+    #[test]
+    fn test_resource_utilization_with_values() {
+        let util = ResourceUtilization {
+            cpu_percent: 45.5,
+            memory_percent: 60.0,
+            gpu_utilization_percent: Some(80.0),
+            gpu_memory_percent: Some(50.0),
+            timestamp: chrono::Utc::now(),
+        };
+        assert!((util.cpu_percent - 45.5).abs() < 0.001);
+        assert_eq!(util.gpu_utilization_percent, Some(80.0));
+    }
+
+    #[test]
+    fn test_resource_utilization_serialize() {
+        let util = ResourceUtilization::default();
+        let json = serde_json::to_string(&util).expect("serialize failed");
+        assert!(json.contains("cpu_percent"));
+        assert!(json.contains("memory_percent"));
+    }
+
+    #[test]
+    fn test_metrics_snapshot_default() {
+        let snapshot = MetricsSnapshot::default();
+        assert_eq!(snapshot.sample_count, 0);
+        assert_eq!(snapshot.current.inference_time_ms, 0.0);
+        assert_eq!(snapshot.average.inference_time_ms, 0.0);
+    }
+
+    #[test]
+    fn test_metrics_snapshot_serialize() {
+        let snapshot = MetricsSnapshot::default();
+        let json = serde_json::to_string(&snapshot).expect("serialize failed");
+        assert!(json.contains("sample_count"));
+        assert!(json.contains("current"));
+        assert!(json.contains("average"));
+    }
+
+    #[test]
+    fn test_metric_type_equality() {
+        assert_eq!(MetricType::InferenceTime, MetricType::InferenceTime);
+        assert_ne!(MetricType::InferenceTime, MetricType::Throughput);
+        assert_ne!(MetricType::MemoryUsage, MetricType::GpuMemory);
+        assert_ne!(MetricType::BatchSize, MetricType::SequenceLength);
+    }
+
+    #[test]
+    fn test_metric_type_serialize() {
+        let json = serde_json::to_string(&MetricType::InferenceTime).expect("serialize");
+        assert_eq!(json, "\"InferenceTime\"");
+        let json = serde_json::to_string(&MetricType::Throughput).expect("serialize");
+        assert_eq!(json, "\"Throughput\"");
+    }
+
+    #[test]
+    fn test_metric_value_construction() {
+        let mv = MetricValue {
+            metric_type: MetricType::MemoryUsage,
+            value: 1024.0,
+            unit: "bytes".to_string(),
+            timestamp: chrono::Utc::now(),
+        };
+        assert_eq!(mv.metric_type, MetricType::MemoryUsage);
+        assert_eq!(mv.value, 1024.0);
+        assert_eq!(mv.unit, "bytes");
+    }
+
+    #[test]
+    fn test_metric_value_serialize() {
+        let mv = MetricValue {
+            metric_type: MetricType::BatchSize,
+            value: 32.0,
+            unit: "count".to_string(),
+            timestamp: chrono::Utc::now(),
+        };
+        let json = serde_json::to_string(&mv).expect("serialize");
+        assert!(json.contains("BatchSize"));
+        assert!(json.contains("count"));
+    }
+
+    #[test]
+    fn test_inference_record_serialize() {
+        let record =
+            InferenceRecord::success("test-model".to_string(), 100, 512, 50.0, 1024 * 1024);
+        let json = serde_json::to_string(&record).expect("serialize");
+        assert!(json.contains("test-model"));
+        assert!(json.contains("\"success\":true"));
+    }
+
+    #[test]
+    fn test_inference_record_failure_output_length_zero() {
+        let record = InferenceRecord::failure("model".to_string(), 50, "error".to_string());
+        assert_eq!(record.output_length, 0);
+        assert_eq!(record.inference_time_ms, 0.0);
+        assert_eq!(record.memory_bytes, 0);
+    }
+
+    #[test]
+    fn test_performance_test_config_default() {
+        let config = PerformanceTestConfig::default();
+        assert_eq!(config.concurrent_requests, 4);
+        assert_eq!(config.total_requests, 100);
+        assert_eq!(config.warmup_requests, 10);
+        assert_eq!(config.min_text_length, 50);
+        assert_eq!(config.max_text_length, 500);
+        assert!(config.target_qps.is_none());
+        assert_eq!(config.timeout_seconds, 60);
+    }
+
+    #[test]
+    fn test_performance_test_config_custom() {
+        let config = PerformanceTestConfig {
+            concurrent_requests: 8,
+            total_requests: 500,
+            warmup_requests: 20,
+            min_text_length: 10,
+            max_text_length: 1000,
+            target_qps: Some(100.0),
+            timeout_seconds: 120,
+        };
+        assert_eq!(config.concurrent_requests, 8);
+        assert_eq!(config.target_qps, Some(100.0));
+    }
+
+    #[test]
+    fn test_throughput_result_construction() {
+        let result = ThroughputResult {
+            total_requests: 100,
+            successful_requests: 95,
+            failed_requests: 5,
+            total_duration_ms: 10000,
+            qps: 9.5,
+            error_rate: 0.05,
+            total_tokens_processed: 95000,
+            tokens_per_second: 9500.0,
+        };
+        assert_eq!(result.total_requests, 100);
+        assert_eq!(result.successful_requests, 95);
+        assert_eq!(result.failed_requests, 5);
+        assert!((result.qps - 9.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_throughput_result_serialize() {
+        let result = ThroughputResult {
+            total_requests: 10,
+            successful_requests: 10,
+            failed_requests: 0,
+            total_duration_ms: 1000,
+            qps: 10.0,
+            error_rate: 0.0,
+            total_tokens_processed: 1000,
+            tokens_per_second: 1000.0,
+        };
+        let json = serde_json::to_string(&result).expect("serialize");
+        assert!(json.contains("qps"));
+        assert!(json.contains("tokens_per_second"));
+    }
+
+    #[test]
+    fn test_latency_benchmark_result_construction() {
+        let result = LatencyBenchmarkResult {
+            p50_ms: 10,
+            p95_ms: 20,
+            p99_ms: 50,
+            min_ms: 5,
+            max_ms: 100,
+            avg_ms: 15.0,
+            std_dev_ms: 5.0,
+        };
+        assert_eq!(result.p50_ms, 10);
+        assert_eq!(result.p99_ms, 50);
+        assert!((result.avg_ms - 15.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_latency_benchmark_result_serialize() {
+        let result = LatencyBenchmarkResult {
+            p50_ms: 1,
+            p95_ms: 2,
+            p99_ms: 3,
+            min_ms: 1,
+            max_ms: 3,
+            avg_ms: 2.0,
+            std_dev_ms: 0.5,
+        };
+        let json = serde_json::to_string(&result).expect("serialize");
+        assert!(json.contains("p50_ms"));
+        assert!(json.contains("p99_ms"));
+        assert!(json.contains("std_dev_ms"));
+    }
+
+    #[test]
+    fn test_performance_metrics_latency_round_trip() {
+        let metrics = PerformanceMetrics::new(Duration::from_millis(250), 100, 0, 0, 1, 50);
+        let latency = metrics.latency();
+        assert_eq!(latency.as_millis(), 250);
+    }
+
+    #[test]
+    fn test_inference_record_success_has_no_error() {
+        let record = InferenceRecord::success("m".to_string(), 1, 1, 1.0, 1);
+        assert!(record.error_message.is_none());
+        assert!(record.success);
+        assert_eq!(record.output_length, 1);
+    }
+
+    #[test]
+    fn test_performance_metrics_large_batch() {
+        let metrics = PerformanceMetrics::new(
+            Duration::from_millis(1000),
+            10000,
+            1024 * 1024 * 1024,
+            2 * 1024 * 1024 * 1024,
+            128,
+            8192,
+        );
+        assert!((metrics.inference_time_ms - 1000.0).abs() < 0.1);
+        assert_eq!(metrics.batch_size, 128);
+        assert_eq!(metrics.sequence_length, 8192);
+    }
 }

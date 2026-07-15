@@ -446,4 +446,109 @@ mod tests {
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_whitelist_cidr_128_does_not_match_other_ipv6() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["::1/128".to_string()]);
+        let addr = test_addr_with(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 2)));
+        let response = metrics_endpoint(State(state), ConnectInfo(addr))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_empty_whitelist_with_rate_limit() {
+        let state = make_rate_limited_state();
+        let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_whitelist_exact_ip_match() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["127.0.0.1".to_string()]);
+        let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_whitelist_exact_ip_no_match() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["192.168.1.1".to_string()]);
+        let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_whitelist_cidr_24_exact_boundary() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["10.0.0/24".to_string()]);
+        let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 255)));
+        let response = metrics_endpoint(State(state), ConnectInfo(addr))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_multiple_whitelist_none_match() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec![
+            "192.168.1.1/32".to_string(),
+            "10.0.0/24".to_string(),
+        ]);
+        let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1)));
+        let response = metrics_endpoint(State(state), ConnectInfo(addr))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_returns_body_with_metrics() {
+        let state = make_test_state();
+        let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_health_check_response_body_is_ok() {
+        let response = health_check().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_with_ipv6_addr() {
+        let state = make_test_state();
+        let addr = test_addr_with(IpAddr::V6(Ipv6Addr::LOCALHOST));
+        let response = metrics_endpoint(State(state), ConnectInfo(addr))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_rate_limited_with_ipv6() {
+        let state = make_rate_limited_state();
+        let addr = test_addr_with(IpAddr::V6(Ipv6Addr::LOCALHOST));
+        let response = metrics_endpoint(State(state), ConnectInfo(addr))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_whitelist_ipv6_exact_match() {
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["::1".to_string()]);
+        let addr = test_addr_with(IpAddr::V6(Ipv6Addr::LOCALHOST));
+        let response = metrics_endpoint(State(state), ConnectInfo(addr))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }

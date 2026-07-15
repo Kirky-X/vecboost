@@ -83,9 +83,7 @@ impl SecurityConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 序列化所有操作环境变量的测试，防止并行运行时的竞态条件
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::config::app::test_support::ENV_LOCK;
 
     #[test]
     fn test_security_config_default() {

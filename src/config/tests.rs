@@ -11,17 +11,9 @@
 //! 3. Hot-reload subscribe callback via `confers::bus::InMemoryBus`
 
 use std::io::Write;
-use std::sync::Mutex;
 
+use super::app::test_support::ENV_LOCK;
 use super::app_config::AppConfig;
-
-/// Serialises tests that touch process-global environment variables.
-///
-/// Rust runs tests in parallel by default; without this lock, a test that
-/// sets `VECBOOST_JWT_SECRET` can pollute another test's env-var snapshot
-/// between cleanup and config load. Each env-var-touching test must hold
-/// this lock for its entire body.
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Helper: write a minimal TOML config to a temp file and return its path.
 fn write_temp_toml(content: &str) -> (tempfile::TempDir, std::path::PathBuf) {

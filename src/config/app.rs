@@ -663,16 +663,25 @@ impl AppConfig {
     }
 }
 
+/// 全局 env var 测试锁。
+///
+/// 串行化所有使用 `std::env::set_var` / `remove_var` 的测试,避免并行测试
+/// 之间的环境变量污染。crate 内所有 env-touching 测试必须通过此锁,
+/// 不允许在其它模块再定义独立的 ENV_LOCK,否则会破坏串行化保证。
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::Mutex;
+
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    /// 串行化 env var 测试,避免并行 set_var/remove_var 竞争
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    use std::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
-        ENV_LOCK.get_or_init(|| Mutex::new(()))
+        &super::test_support::ENV_LOCK
     }
 
     #[test]

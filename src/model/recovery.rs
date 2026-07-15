@@ -5,7 +5,7 @@
 
 use crate::error::VecboostError;
 use crate::utils::hash::{ModelIntegrityReport, check_model_integrity};
-use hf_hub::{Repo, RepoType, api::sync::Api};
+use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use log::{error, info, warn};
 use std::collections::HashMap;
 use std::fs;
@@ -167,7 +167,9 @@ impl ModelRecovery {
                 return Ok(false);
             }
         } else {
-            let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+            let api = ApiBuilder::from_env()
+                .build()
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let repo = api.repo(Repo::new(
                 model_path.to_string_lossy().into_owned(),
                 RepoType::Model,
@@ -217,7 +219,9 @@ impl ModelRecovery {
         file_name: &str,
         attempts: &mut usize,
     ) -> Result<bool, VecboostError> {
-        let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+        let api = ApiBuilder::from_env()
+            .build()
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
         let repo = api.repo(Repo::new(repo_id.to_string(), RepoType::Model));
 
         let file_path = model_path.join(file_name);

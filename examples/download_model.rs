@@ -148,7 +148,9 @@ async fn download_model(model_id: &str, files: &[&str]) {
 
     println!("开始下载模型文件...\n");
 
-    let api = hf_hub::api::sync::Api::new().expect("Failed to create HF API");
+    let api = hf_hub::api::sync::ApiBuilder::from_env()
+        .build()
+        .expect("Failed to create HF API");
     let repo = api.repo(hf_hub::Repo::new(
         model_id.to_string(),
         hf_hub::RepoType::Model,

@@ -10,7 +10,7 @@ use crate::error::VecboostError;
 use crate::monitor::MemoryMonitor;
 use crate::utils::hash::verify_sha256;
 use async_trait::async_trait;
-use hf_hub::{Repo, RepoType, api::sync::Api};
+use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use ndarray::{Array1, Array2};
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Tensor;
@@ -91,7 +91,9 @@ impl OnnxEngine {
             (onnx_filename, tokenizer_filename)
         } else {
             log::info!("Using HuggingFace Hub for model: {:?}", model_path);
-            let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+            let api = ApiBuilder::from_env()
+                .build()
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let repo = api.repo(Repo::new(
                 model_path.to_string_lossy().into_owned(),
                 RepoType::Model,
@@ -427,7 +429,9 @@ impl OnnxEngine {
         self.supports_cuda = false;
         self.fallback_triggered = true;
 
-        let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+        let api = ApiBuilder::from_env()
+            .build()
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
         let repo = api.repo(Repo::new(
             config.model_path.to_string_lossy().into_owned(),
             RepoType::Model,

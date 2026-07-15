@@ -18,7 +18,7 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 use candle_transformers::models::xlm_roberta::{Config as XlmRobertaConfig, XLMRobertaModel};
-use hf_hub::{Repo, RepoType, api::sync::Api};
+use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -180,7 +180,9 @@ impl CandleEngine {
                 "Downloading/Loading model from HuggingFace Hub: {:?}",
                 model_path
             );
-            let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+            let api = ApiBuilder::from_env()
+                .build()
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let repo = api.repo(Repo::new(
                 model_path.to_string_lossy().into_owned(),
                 RepoType::Model,
@@ -986,7 +988,9 @@ impl CandleEngine {
                 "Loading model from HuggingFace Hub for fallback: {:?}",
                 model_path
             );
-            let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+            let api = ApiBuilder::from_env()
+                .build()
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let repo = api.repo(Repo::new(
                 model_path.to_string_lossy().into_owned(),
                 RepoType::Model,

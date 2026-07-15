@@ -62,7 +62,7 @@ sea-orm = { version = "2.0.0-rc.42", optional = true, default-features = false }
 candle-core = { version = "0.11", default-features = false, features = [] }
 candle-nn = { version = "0.11", default-features = false }
 candle-transformers = { version = "0.11", default-features = false }
-hf-hub = { version = "0.3", default-features = false, features = ["tokio", "online"] }
+hf-hub = { version = "0.4", default-features = false, features = ["tokio", "ureq"] }
 
 # Web Framework (http feature)
 axum = { version = "0.7", optional = true, default-features = false, features = ["http1", "json", "tokio", "tracing", "macros", "matched-path", "original-uri", "query"] }

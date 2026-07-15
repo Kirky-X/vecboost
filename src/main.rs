@@ -6,11 +6,7 @@
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
-#[cfg(not(feature = "config"))]
 use vecboost::AppConfig;
-#[cfg(feature = "config")]
-use vecboost::config::ConfersAppConfig;
-#[cfg(feature = "limiteron")]
 use vecboost::module_registry::RateLimitModule;
 #[cfg(feature = "auth")]
 use vecboost::module_registry::{
@@ -56,8 +52,7 @@ use vecboost::routes;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 日志初始化:inklog feature 启用时用 inklog,否则用 tracing_subscriber
-    #[cfg(feature = "inklog")]
+    // 日志初始化:inklog 完全接管日志输出(通过 log crate 宏 + inklog LogLogger 适配器)
     let _logger_manager = inklog::LoggerManager::builder()
         .level("info")
         .console(true)
@@ -67,17 +62,11 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to initialize inklog logger: {}", e))?;
     // _logger_manager 保持存活至 main 结束,避免 LoggerManager shutdown 导致日志停止
 
-    #[cfg(not(feature = "inklog"))]
-    tracing_subscriber::fmt::init();
+    log::info!("Starting Rust Embedding Service...");
 
-    tracing::info!("Starting Rust Embedding Service...");
-
-    #[cfg(feature = "config")]
-    let config = ConfersAppConfig::load_via_confers()
+    let config = AppConfig::load_via_confers()
         .map_err(|e| anyhow::anyhow!("Failed to load config via confers: {}", e))?;
-    #[cfg(not(feature = "config"))]
-    let config = AppConfig::load()?;
-    tracing::info!(
+    log::info!(
         "Configuration loaded: {} auth={} audit={}",
         if config.auth.enabled {
             "auth enabled"
@@ -91,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     // 初始化数据库连接池（db feature 启用时）
     #[cfg(feature = "db")]
     let db_pool = {
-        tracing::info!(
+        log::info!(
             "Initializing database pool with url={}",
             config.database.url
         );
@@ -101,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
         init_schema(&pool)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to initialize database schema: {}", e))?;
-        tracing::info!("Database pool initialized and schema verified");
+        log::info!("Database pool initialized and schema verified");
         pool
     };
 
@@ -123,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
         model_sha256: None,
     };
 
-    tracing::info!("Initializing Inference Engine (this may take a while to download models)...");
+    log::info!("Initializing Inference Engine (this may take a while to download models)...");
     let engine: Arc<RwLock<AnyEngine>> = Arc::new(RwLock::new(
         vecboost::engine::EngineFactory::create(EngineType::Candle, &model_config)?,
     ));
@@ -132,10 +121,10 @@ async fn main() -> anyhow::Result<()> {
     let cache_size = config.embedding.cache_size;
 
     let service = if cache_enabled && cache_size > 0 {
-        tracing::info!("KV Cache enabled with size: {}", cache_size);
+        log::info!("KV Cache enabled with size: {}", cache_size);
         EmbeddingService::with_cache(engine, Some(model_config), cache_size)
     } else {
-        tracing::info!("KV Cache disabled");
+        log::info!("KV Cache disabled");
         EmbeddingService::new(engine, Some(model_config))
     };
     let service = Arc::new(RwLock::new(service));
@@ -148,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
     if std::env::args().any(|a| a == "--mcp") {
         use rmcp::{ServiceExt, transport::io::stdio};
 
-        tracing::info!("Starting VecBoost MCP server over stdio");
+        log::info!("Starting VecBoost MCP server over stdio");
         vecboost::api::init_service(service.clone());
         let server = sdforge::mcp::build();
         let running = server.serve(stdio()).await?;
@@ -238,15 +227,15 @@ async fn main() -> anyhow::Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to add default admin user: {}", e))?;
 
-        tracing::info!(
+        log::info!(
             "JWT authentication enabled with {} storage",
             config.auth.security.storage_type
         );
-        tracing::info!("Default admin user created: {}", admin_username);
+        log::info!("Default admin user created: {}", admin_username);
 
         (Some(jwt_manager), Some(user_store))
     } else {
-        tracing::info!("JWT authentication disabled");
+        log::info!("JWT authentication disabled");
         (None, None)
     };
 
@@ -256,7 +245,7 @@ async fn main() -> anyhow::Result<()> {
         Option<Arc<CsrfConfig>>,
         Option<Arc<CsrfTokenStore>>,
     ) = if config.auth.csrf.enabled {
-        tracing::info!("CSRF protection enabled");
+        log::info!("CSRF protection enabled");
 
         let csrf_config =
             CsrfConfig::new(config.auth.csrf.allowed_origins.clone().unwrap_or_default())
@@ -265,22 +254,22 @@ async fn main() -> anyhow::Result<()> {
                 .with_allow_same_origin(config.auth.csrf.allow_same_origin);
 
         let csrf_token_store = if config.auth.csrf.token_validation_enabled {
-            tracing::info!("CSRF token validation enabled");
+            log::info!("CSRF token validation enabled");
             Some(Arc::new(CsrfTokenStore::new()))
         } else {
-            tracing::info!("CSRF token validation disabled (using Origin validation only)");
+            log::info!("CSRF token validation disabled (using Origin validation only)");
             None
         };
 
         (Some(Arc::new(csrf_config)), csrf_token_store)
     } else {
-        tracing::info!("CSRF protection disabled");
+        log::info!("CSRF protection disabled");
         (None, None)
     };
 
     // Initialize audit logging
     let audit_logger = if config.audit.enabled {
-        tracing::info!("Audit logging enabled");
+        log::info!("Audit logging enabled");
         let audit_config = AuditConfig {
             enabled: true,
             log_file_path: std::path::PathBuf::from(&config.audit.log_file_path),
@@ -299,14 +288,14 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(not(feature = "db"))]
         Some(Arc::new(AuditLogger::new(audit_config)))
     } else {
-        tracing::warn!("Audit logging is DISABLED - security events will not be logged!");
+        log::warn!("Audit logging is DISABLED - security events will not be logged!");
         None
     };
 
     // Initialize pipeline if enabled
     let (pipeline_enabled, pipeline_queue, response_channel, priority_calculator, worker_manager) =
         if config.pipeline.enabled {
-            tracing::info!(
+            log::info!(
                 "Request pipeline enabled with queue_size={}",
                 config.pipeline.queue.max_queue_size
             );
@@ -345,7 +334,7 @@ async fn main() -> anyhow::Result<()> {
                 worker_manager.spawn_worker().await;
             }
 
-            tracing::info!("Pipeline components initialized successfully");
+            log::info!("Pipeline components initialized successfully");
 
             (
                 true,
@@ -355,7 +344,7 @@ async fn main() -> anyhow::Result<()> {
                 worker_manager,
             )
         } else {
-            tracing::info!("Request pipeline disabled");
+            log::info!("Request pipeline disabled");
 
             (
                 false,
@@ -385,7 +374,6 @@ async fn main() -> anyhow::Result<()> {
 
     // 注入预构建的能力对象（kit 是 single source of truth）
     kit.set_config(service.clone());
-    #[cfg(feature = "limiteron")]
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {
         enabled: config.embedding.cache_enabled,
@@ -424,7 +412,6 @@ async fn main() -> anyhow::Result<()> {
     // 注册模块（15 个非 auth + 4 个 auth feature = 19 个 Module）
     kit.register::<EmbeddingModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
-    #[cfg(feature = "limiteron")]
     kit.register::<RateLimitModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RateLimitModule: {}", e))?;
     kit.register::<CacheModule>()
@@ -472,7 +459,7 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
     let kit = Arc::new(kit);
 
-    tracing::info!("AsyncKit module registry built successfully");
+    log::info!("AsyncKit module registry built successfully");
 
     // v0.3.0 D3: VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
     let app_state = VecboostState { kit };
@@ -510,7 +497,7 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("Server listening on {}", addr);
+    log::info!("Server listening on {}", addr);
 
     #[cfg(feature = "grpc")]
     if config.server.grpc_enabled {
@@ -527,11 +514,11 @@ async fn main() -> anyhow::Result<()> {
 
         tokio::spawn(async move {
             if let Err(e) = grpc_server.run().await {
-                tracing::error!("gRPC server error: {}", e);
+                log::error!("gRPC server error: {}", e);
             }
         });
 
-        tracing::info!("gRPC server enabled on {}", grpc_addr);
+        log::info!("gRPC server enabled on {}", grpc_addr);
     }
 
     axum::serve(

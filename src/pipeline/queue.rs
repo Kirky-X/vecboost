@@ -5,12 +5,12 @@
 
 #![allow(clippy::all)]
 
+use log::{debug, warn};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
-use tracing::{debug, warn};
 
 use super::priority::{Priority, RequestSource};
 use crate::domain::EmbedRequest;

@@ -3,10 +3,10 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
 
 /// GPU 内存管理配置
 #[derive(Debug, Clone)]

@@ -4,13 +4,10 @@
 // See LICENSE file in the project root for full license information.
 
 pub mod app;
+pub mod app_config;
 pub mod model;
 
-#[cfg(feature = "config")]
-pub mod app_config;
+pub use app_config::AppConfig;
 
-#[cfg(feature = "config")]
-pub use app_config::AppConfig as ConfersAppConfig;
-
-#[cfg(all(test, feature = "config"))]
+#[cfg(test)]
 mod tests;

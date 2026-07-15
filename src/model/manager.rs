@@ -6,14 +6,14 @@
 use crate::config::model::{EngineType, ModelConfig};
 use crate::error::VecboostError;
 use crate::model::loader::{LoadedModel, LocalModelLoader, ModelLoader};
+use log::info;
+use log::warn;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
-use tracing::info;
-use tracing::warn;
 
 const DEFAULT_MODEL_LOAD_TIMEOUT_SECS: u64 = 300;
 

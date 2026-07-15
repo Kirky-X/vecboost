@@ -5,11 +5,11 @@
 
 #![allow(dead_code)]
 
+use log::{debug, info, warn};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, mpsc};
-use tracing::{debug, info, warn};
 
 use super::config::WorkerConfig;
 use super::queue::PriorityRequestQueue;

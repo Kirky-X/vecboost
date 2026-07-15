@@ -3,30 +3,20 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-// Deprecated: 使用 confers 加载的版本请见 app_config.rs(需启用 `config` feature)
-// 此文件将在 v0.3.0 移除
+//! 配置子结构体定义(数据结构层)。
+//!
+//! `AppConfig` 的 confers 加载逻辑见 `app_config.rs`(confers 完全接管配置加载,
+//! 禁止手写 config/toml 解析)。本文件只保留子结构体定义、默认值实现、
+//! 安全环境变量覆盖和优先级默认值。
 
 #![allow(clippy::all)]
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 pub use crate::pipeline::{PipelineConfig, PriorityConfig, QueueConfig, WorkerConfig};
 
-#[derive(Debug, Deserialize, Clone, Serialize, Default)]
-pub struct AppConfig {
-    pub server: ServerConfig,
-    pub model: ModelConfig,
-    pub embedding: EmbeddingConfig,
-    pub monitoring: MonitoringConfig,
-    pub auth: AuthConfig,
-    pub rate_limit: RateLimitConfig,
-    pub audit: AuditConfig,
-    pub memory_pool: MemoryPoolConfig,
-    pub pipeline: PipelineConfig,
-    #[cfg(feature = "db")]
-    pub database: DatabaseConfig,
-}
+// 注:AppConfig 定义已迁移至 app_config.rs(由 confers #[derive(Config)] 接管)。
+// 本文件保留所有子结构体定义,供 app_config.rs 引用。
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
 #[serde(default)]
@@ -392,168 +382,6 @@ impl Default for AuthConfig {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ConfigLoader {
-    config_path: Option<PathBuf>,
-    env_prefix: String,
-}
-
-impl ConfigLoader {
-    pub fn new() -> Self {
-        Self {
-            config_path: None,
-            env_prefix: "VECBOOST".to_string(),
-        }
-    }
-}
-
-impl Default for ConfigLoader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ConfigLoader {
-    pub fn with_config_path<P: Into<PathBuf>>(mut self, path: P) -> Self {
-        self.config_path = Some(path.into());
-        self
-    }
-
-    pub fn with_env_prefix<S: Into<String>>(mut self, prefix: S) -> Self {
-        self.env_prefix = prefix.into();
-        self
-    }
-
-    pub fn load(&self) -> Result<AppConfig, ConfigError> {
-        let mut config = config::Config::builder();
-
-        config = config.set_default("server.host", "0.0.0.0")?;
-        config = config.set_default("server.port", 3000)?;
-        config = config.set_default("server.timeout", 30)?;
-        config = config.set_default("server.grpc_enabled", false)?;
-        config = config.set_default("server.grpc_port", 50051)?;
-
-        config = config.set_default("model.model_repo", "BAAI/bge-m3")?;
-        config = config.set_default("model.model_revision", "main")?;
-        config = config.set_default("model.use_gpu", false)?;
-        config = config.set_default("model.batch_size", 32)?;
-        config = config.set_default("model.expected_dimension", 1024)?;
-        config = config.set_default("model.max_sequence_length", 8192)?;
-
-        config = config.set_default("embedding.default_aggregation", "mean")?;
-        config = config.set_default("embedding.similarity_metric", "cosine")?;
-        config = config.set_default("embedding.cache_enabled", true)?;
-        config = config.set_default("embedding.cache_size", 1024)?;
-        config = config.set_default("embedding.max_batch_size", 64)?;
-
-        config = config.set_default("monitoring.memory_limit_mb", 4096)?;
-        config = config.set_default("monitoring.memory_warning_threshold", 0.8)?;
-        config = config.set_default("monitoring.metrics_enabled", true)?;
-        config = config.set_default("monitoring.log_level", "info")?;
-
-        config = config.set_default("auth.enabled", false)?;
-        config = config.set_default("auth.token_expiration_hours", 24)?;
-        config = config.set_default("auth.default_admin_username", "admin")?;
-        // Default password is empty - must be set via VECBOOST_ADMIN_PASSWORD environment variable
-        // For development/testing, you can set a password in config, but production MUST use env var
-        config = config.set_default("auth.default_admin_password", "")?;
-        config = config.set_default("auth.security.storage_type", "environment")?;
-
-        config = config.set_default("audit.enabled", true)?;
-        config = config.set_default("audit.log_file_path", "logs/audit.log")?;
-        config = config.set_default("audit.log_level", "info")?;
-        config = config.set_default("audit.max_file_size_mb", 100)?;
-        config = config.set_default("audit.max_files", 10)?;
-        config = config.set_default("auth.csrf.enabled", false)?;
-        config = config.set_default("auth.csrf.token_validation_enabled", false)?;
-        config = config.set_default("auth.csrf.token_expiration_secs", 3600)?;
-        config = config.set_default("auth.csrf.allow_same_origin", true)?;
-
-        config = config.set_default("rate_limit.enabled", true)?;
-        config = config.set_default("rate_limit.global_requests_per_minute", 1000)?;
-        config = config.set_default("rate_limit.ip_requests_per_minute", 100)?;
-        config = config.set_default("rate_limit.user_requests_per_minute", 200)?;
-        config = config.set_default("rate_limit.api_key_requests_per_minute", 500)?;
-        config = config.set_default("rate_limit.window_secs", 60)?;
-        config = config.set_default("rate_limit.ip_whitelist", Vec::<String>::new())?;
-
-        config = config.set_default("memory_pool.enabled", true)?;
-        config = config.set_default("memory_pool.tensor_pool.enabled", true)?;
-        config = config.set_default("memory_pool.tensor_pool.max_batch_size", 128)?;
-        config = config.set_default("memory_pool.tensor_pool.max_sequence_length", 8192)?;
-        config = config.set_default("memory_pool.tensor_pool.pool_size_per_shape", 4)?;
-        config = config.set_default("memory_pool.tensor_pool.preallocate_on_startup", true)?;
-        config = config.set_default("memory_pool.buffer_pool.enabled", true)?;
-        config = config.set_default(
-            "memory_pool.buffer_pool.text_buffer_sizes",
-            vec![16, 32, 64, 128, 256],
-        )?;
-        config = config.set_default(
-            "memory_pool.buffer_pool.vector_buffer_sizes",
-            vec![16, 32, 64, 128, 256],
-        )?;
-        config = config.set_default("memory_pool.buffer_pool.pool_size_per_size", 8)?;
-        config = config.set_default("memory_pool.model_pool.enabled", true)?;
-        config = config.set_default("memory_pool.model_pool.max_memory_mb", 8192)?;
-        config = config.set_default("memory_pool.model_pool.cache_models", true)?;
-        config = config.set_default("memory_pool.cuda_pool.enabled", true)?;
-        config = config.set_default("memory_pool.cuda_pool.max_memory_mb", 4096)?;
-
-        config = config.set_default("pipeline.enabled", false)?;
-        config = config.set_default("pipeline.queue.max_queue_size", 10000)?;
-        config = config.set_default("pipeline.queue.enable_priority", true)?;
-        config = config.set_default("pipeline.worker.min_workers", 2)?;
-        config = config.set_default("pipeline.worker.max_workers", 16)?;
-        config = config.set_default("pipeline.worker.scale_up_threshold", 100)?;
-        config = config.set_default("pipeline.worker.scale_down_threshold", 10)?;
-        config = config.set_default("pipeline.worker.idle_timeout_secs", 60)?;
-        config = config.set_default("pipeline.worker.scale_check_interval_secs", 5)?;
-        config = config.set_default("pipeline.priority.base_priority", 50)?;
-        config = config.set_default("pipeline.priority.timeout_boost_factor", 2.0)?;
-
-        #[cfg(feature = "db")]
-        {
-            config = config.set_default("database.url", "sqlite:vecboost.db")?;
-            config = config.set_default("database.max_connections", 10)?;
-            config = config.set_default("database.connect_timeout_secs", 5)?;
-        }
-
-        if let Some(path) = &self.config_path {
-            if path.exists() {
-                config =
-                    config.add_source(config::File::with_name(path.to_string_lossy().as_ref()));
-            }
-        } else {
-            let default_config = PathBuf::from("config.toml");
-            if default_config.exists() {
-                config = config.add_source(config::File::with_name("config"));
-            }
-        }
-
-        config = config.add_source(
-            config::Environment::with_prefix(&self.env_prefix)
-                .prefix_separator("_")
-                .separator("__")
-                .ignore_empty(true),
-        );
-
-        // Build config and apply environment variable overrides
-        let mut cfg = config
-            .build()?
-            .try_deserialize()
-            .map_err(ConfigError::from)
-            .map(|mut cfg: AppConfig| {
-                apply_priority_defaults(&mut cfg.pipeline.priority);
-                cfg
-            })?;
-
-        // Validate and apply environment variables for sensitive config
-        apply_security_env_overrides(&mut cfg)?;
-
-        Ok(cfg)
-    }
-}
-
 pub(crate) fn apply_priority_defaults(priority: &mut PriorityConfig) {
     if priority.user_tier_weights.is_empty() {
         priority.user_tier_weights.insert("free".to_string(), 1.0);
@@ -580,14 +408,8 @@ pub enum ConfigError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Parse error: {0}")]
-    Parse(#[from] toml::de::Error),
-}
-
-impl From<config::ConfigError> for ConfigError {
-    fn from(e: config::ConfigError) -> Self {
-        ConfigError::Message(e.to_string())
-    }
+    #[error("confers error: {0}")]
+    Confers(#[from] confers::ConfigError),
 }
 
 /// Apply environment variable overrides for sensitive configuration
@@ -598,8 +420,10 @@ impl From<config::ConfigError> for ConfigError {
 /// 3. Default values (lowest priority)
 ///
 /// For sensitive values like JWT secrets and passwords, environment variables
-/// are required for production deployments.
-fn apply_security_env_overrides(cfg: &mut AppConfig) -> Result<(), ConfigError> {
+/// are required for production deployments. Validates minimum length constraints.
+pub(crate) fn apply_security_env_overrides(
+    cfg: &mut super::app_config::AppConfig,
+) -> Result<(), ConfigError> {
     use std::env;
 
     const MIN_JWT_SECRET_LENGTH: usize = 32;
@@ -642,27 +466,6 @@ fn apply_security_env_overrides(cfg: &mut AppConfig) -> Result<(), ConfigError> 
     Ok(())
 }
 
-impl AppConfig {
-    pub fn load() -> Result<Self, ConfigError> {
-        let loader = ConfigLoader::new();
-        loader.load()
-    }
-
-    pub fn load_with_path<P: Into<PathBuf>>(path: P) -> Result<Self, ConfigError> {
-        let loader = ConfigLoader::new().with_config_path(path);
-        loader.load()
-    }
-
-    pub fn to_toml_string(&self) -> Result<String, toml::ser::Error> {
-        toml::to_string_pretty(self)
-    }
-
-    pub fn save_to_file<P: Into<PathBuf>>(&self, path: P) -> Result<(), std::io::Error> {
-        let content = self.to_toml_string().map_err(std::io::Error::other)?;
-        std::fs::write(path.into(), content)
-    }
-}
-
 /// 全局 env var 测试锁。
 ///
 /// 串行化所有使用 `std::env::set_var` / `remove_var` 的测试,避免并行测试
@@ -678,59 +481,11 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::app_config::AppConfig;
     use std::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
         &super::test_support::ENV_LOCK
-    }
-
-    #[test]
-    fn test_apply_security_env_overrides_empty_jwt_secret() {
-        // This test verifies that empty JWT secret from env var is rejected
-        // We can't actually test the env var in unit tests without affecting other tests
-        // So we just verify the function signature and behavior
-        let mut cfg = AppConfig::default();
-        cfg.auth.jwt_secret = Some(String::new());
-        // The validation happens in JwtManager, not here
-        assert!(cfg.auth.jwt_secret == Some(String::new()));
-    }
-
-    #[test]
-    fn test_apply_security_env_overrides_short_jwt_secret() {
-        let mut cfg = AppConfig::default();
-        cfg.auth.jwt_secret = Some("short".to_string());
-        assert!(cfg.auth.jwt_secret == Some("short".to_string()));
-    }
-
-    #[test]
-    fn test_apply_security_env_overrides_valid_jwt_secret() {
-        let mut cfg = AppConfig::default();
-        cfg.auth.jwt_secret =
-            Some("this-is-a-valid-secret-at-least-32-characters-long".to_string());
-        assert!(cfg.auth.jwt_secret.is_some());
-        assert!(cfg.auth.jwt_secret.unwrap().len() >= 32);
-    }
-
-    #[test]
-    fn test_apply_security_env_overrides_empty_password() {
-        let mut cfg = AppConfig::default();
-        cfg.auth.default_admin_password = Some(String::new());
-        assert!(cfg.auth.default_admin_password == Some(String::new()));
-    }
-
-    #[test]
-    fn test_apply_security_env_overrides_short_password() {
-        let mut cfg = AppConfig::default();
-        cfg.auth.default_admin_password = Some("short".to_string());
-        assert!(cfg.auth.default_admin_password == Some("short".to_string()));
-    }
-
-    #[test]
-    fn test_apply_security_env_overrides_valid_password() {
-        let mut cfg = AppConfig::default();
-        cfg.auth.default_admin_password = Some("Secure@Pass123!".to_string());
-        assert!(cfg.auth.default_admin_password.is_some());
-        assert!(cfg.auth.default_admin_password.unwrap().len() >= 12);
     }
 
     #[test]
@@ -835,41 +590,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_loader_new() {
-        let loader = ConfigLoader::new();
-        assert!(loader.config_path.is_none());
-        assert_eq!(loader.env_prefix, "VECBOOST");
-    }
-
-    #[test]
-    fn test_config_loader_default() {
-        let loader = ConfigLoader::default();
-        assert!(loader.config_path.is_none());
-        assert_eq!(loader.env_prefix, "VECBOOST");
-    }
-
-    #[test]
-    fn test_config_loader_with_config_path() {
-        let loader = ConfigLoader::new().with_config_path("/custom/path.toml");
-        assert_eq!(loader.config_path, Some(PathBuf::from("/custom/path.toml")));
-    }
-
-    #[test]
-    fn test_config_loader_with_env_prefix() {
-        let loader = ConfigLoader::new().with_env_prefix("CUSTOM");
-        assert_eq!(loader.env_prefix, "CUSTOM");
-    }
-
-    #[test]
-    fn test_config_loader_builder_chain() {
-        let loader = ConfigLoader::new()
-            .with_config_path("config.toml")
-            .with_env_prefix("MYAPP");
-        assert_eq!(loader.config_path, Some(PathBuf::from("config.toml")));
-        assert_eq!(loader.env_prefix, "MYAPP");
-    }
-
-    #[test]
     fn test_app_config_default() {
         let config = AppConfig::default();
         assert_eq!(config.server.port, 3000);
@@ -878,17 +598,6 @@ mod tests {
         assert!(config.audit.enabled);
         assert!(config.rate_limit.enabled);
         assert!(config.memory_pool.enabled);
-    }
-
-    #[test]
-    fn test_app_config_to_toml_string() {
-        let config = AppConfig::default();
-        let toml_str = config.to_toml_string();
-        assert!(toml_str.is_ok());
-        let toml_content = toml_str.unwrap();
-        assert!(toml_content.contains("[server]"));
-        assert!(toml_content.contains("[model]"));
-        assert!(toml_content.contains("[embedding]"));
     }
 
     #[test]
@@ -930,16 +639,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_error_from_config_error() {
-        let config_err = config::ConfigError::Message("test error".to_string());
-        let app_err: ConfigError = config_err.into();
-        match app_err {
-            ConfigError::Message(msg) => assert!(msg.contains("test error")),
-            _ => panic!("Expected Message variant"),
-        }
-    }
-
-    #[test]
     fn test_config_error_display() {
         let err = ConfigError::Message("display test".to_string());
         assert_eq!(format!("{}", err), "Configuration error: display test");
@@ -951,14 +650,6 @@ mod tests {
         let err = ConfigError::Io(io_err);
         assert!(format!("{}", err).contains("IO error"));
         assert!(format!("{}", err).contains("missing file"));
-    }
-
-    #[test]
-    fn test_config_error_parse_variant_display() {
-        let toml_str = "invalid = [unclosed";
-        let parse_err = toml::from_str::<toml::Value>(toml_str).unwrap_err();
-        let err = ConfigError::Parse(parse_err);
-        assert!(format!("{}", err).contains("Parse error"));
     }
 
     #[test]
@@ -1023,112 +714,6 @@ mod tests {
         assert!(config.audit.enabled);
         assert!(config.rate_limit.enabled);
         assert!(config.memory_pool.enabled);
-    }
-
-    #[test]
-    fn test_app_config_to_toml_string_contains_sections() {
-        let config = AppConfig::default();
-        let toml_str = config.to_toml_string().unwrap();
-        assert!(toml_str.contains("[server]"));
-        assert!(toml_str.contains("[model]"));
-        assert!(toml_str.contains("[embedding]"));
-        assert!(toml_str.contains("[monitoring]"));
-        assert!(toml_str.contains("[auth]"));
-        assert!(toml_str.contains("[audit]"));
-        assert!(toml_str.contains("[rate_limit]"));
-        assert!(toml_str.contains("[memory_pool]"));
-        assert!(toml_str.contains("BAAI/bge-m3"));
-        assert!(toml_str.contains("0.0.0.0"));
-    }
-
-    #[test]
-    fn test_app_config_toml_roundtrip_preserves_values() {
-        let original = AppConfig::default();
-        let toml_str = original.to_toml_string().unwrap();
-        let parsed: AppConfig = toml::from_str(&toml_str).unwrap();
-        assert_eq!(parsed.server.host, original.server.host);
-        assert_eq!(parsed.server.port, original.server.port);
-        assert_eq!(parsed.model.model_repo, original.model.model_repo);
-        assert_eq!(parsed.model.batch_size, original.model.batch_size);
-        assert_eq!(parsed.embedding.cache_size, original.embedding.cache_size);
-        assert_eq!(
-            parsed.rate_limit.window_secs,
-            original.rate_limit.window_secs
-        );
-        assert_eq!(parsed.audit.log_file_path, original.audit.log_file_path);
-    }
-
-    #[test]
-    fn test_app_config_toml_roundtrip_custom_values() {
-        let mut original = AppConfig::default();
-        original.server.port = 8080;
-        original.server.host = "127.0.0.1".to_string();
-        original.model.batch_size = 64;
-        original.embedding.cache_size = 2048;
-        original.rate_limit.global_requests_per_minute = 5000;
-        original.audit.log_level = "debug".to_string();
-
-        let toml_str = original.to_toml_string().unwrap();
-        let parsed: AppConfig = toml::from_str(&toml_str).unwrap();
-        assert_eq!(parsed.server.port, 8080);
-        assert_eq!(parsed.server.host, "127.0.0.1");
-        assert_eq!(parsed.model.batch_size, 64);
-        assert_eq!(parsed.embedding.cache_size, 2048);
-        assert_eq!(parsed.rate_limit.global_requests_per_minute, 5000);
-        assert_eq!(parsed.audit.log_level, "debug");
-    }
-
-    #[test]
-    fn test_app_config_save_to_file_writes_valid_toml() {
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("vecboost_test_config_{}.toml", std::process::id()));
-        let config = AppConfig::default();
-        let save_result = config.save_to_file(&path);
-        assert!(save_result.is_ok(), "save should succeed");
-        assert!(path.exists(), "config file should be created");
-
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("[server]"));
-        assert!(content.contains("[model]"));
-
-        // 验证写入的文件可以被反序列化
-        let parsed: AppConfig = toml::from_str(&content).unwrap();
-        assert_eq!(parsed.server.port, 3000);
-        assert_eq!(parsed.model.model_repo, "BAAI/bge-m3");
-
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn test_app_config_save_to_file_invalid_path_fails() {
-        let config = AppConfig::default();
-        // 写入一个不存在的目录下的文件应失败
-        let path = PathBuf::from("/nonexistent_dir_xyz/vecboost_config.toml");
-        let result = config.save_to_file(&path);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_app_config_load_with_nonexistent_path_uses_defaults() {
-        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        // 提供不存在的配置文件路径,load() 应使用默认值
-        let result = AppConfig::load_with_path("/nonexistent_path_xyz/config.toml");
-        assert!(result.is_ok(), "load should succeed with defaults");
-        let cfg = result.unwrap();
-        assert_eq!(cfg.server.port, 3000);
-        assert_eq!(cfg.model.model_repo, "BAAI/bge-m3");
-    }
-
-    #[test]
-    fn test_app_config_load_uses_defaults() {
-        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        // 默认 load(),不指定路径。如果 config.toml 不存在于当前目录则用默认值。
-        // 此测试仅验证不 panic 且返回有效配置。
-        let result = AppConfig::load();
-        if let Ok(cfg) = result {
-            assert!(!cfg.server.host.is_empty());
-            assert!(cfg.server.port > 0);
-        }
     }
 
     #[test]
@@ -1280,32 +865,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_loader_with_config_path_builder() {
-        let loader = ConfigLoader::new().with_config_path("/custom/path.toml");
-        assert_eq!(loader.config_path, Some(PathBuf::from("/custom/path.toml")));
-        assert_eq!(loader.env_prefix, "VECBOOST");
-    }
-
-    #[test]
-    fn test_config_loader_with_env_prefix_builder() {
-        let loader = ConfigLoader::new().with_env_prefix("MYAPP");
-        assert!(loader.config_path.is_none());
-        assert_eq!(loader.env_prefix, "MYAPP");
-    }
-
-    #[test]
-    fn test_config_loader_chained_builders() {
-        let loader = ConfigLoader::new()
-            .with_config_path("/path/to/config.toml")
-            .with_env_prefix("CUSTOM");
-        assert_eq!(
-            loader.config_path,
-            Some(PathBuf::from("/path/to/config.toml"))
-        );
-        assert_eq!(loader.env_prefix, "CUSTOM");
-    }
-
-    #[test]
     fn test_app_config_clone_preserves_values() {
         let original = AppConfig::default();
         let cloned = original.clone();
@@ -1315,156 +874,6 @@ mod tests {
             original.rate_limit.window_secs,
             cloned.rate_limit.window_secs
         );
-    }
-
-    #[test]
-    fn test_app_config_serialize_to_toml_valid() {
-        let config = AppConfig::default();
-        let toml_str = config.to_toml_string();
-        assert!(toml_str.is_ok());
-        let content = toml_str.unwrap();
-        // 验证 TOML 内容是有效的语法
-        let parsed: toml::Value = toml::from_str(&content).unwrap();
-        assert!(parsed.is_table());
-    }
-
-    #[test]
-    fn test_load_with_valid_config_file_overrides_defaults() {
-        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            std::env::remove_var("VECBOOST_JWT_SECRET");
-            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
-        }
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("vecboost_test_load_{}.toml", std::process::id()));
-        let toml_content = r#"
-[server]
-host = "127.0.0.1"
-port = 8080
-
-[model]
-model_repo = "custom/model"
-batch_size = 64
-
-[embedding]
-cache_size = 2048
-"#;
-        std::fs::write(&path, toml_content).unwrap();
-        let result = AppConfig::load_with_path(&path);
-        std::fs::remove_file(&path).ok();
-        assert!(result.is_ok(), "load should succeed: {:?}", result.err());
-        let cfg = result.unwrap();
-        assert_eq!(cfg.server.host, "127.0.0.1");
-        assert_eq!(cfg.server.port, 8080);
-        assert_eq!(cfg.model.model_repo, "custom/model");
-        assert_eq!(cfg.model.batch_size, 64);
-        assert_eq!(cfg.embedding.cache_size, 2048);
-    }
-
-    #[test]
-    fn test_load_with_config_loader_and_path() {
-        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            std::env::remove_var("VECBOOST_JWT_SECRET");
-            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
-        }
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("vecboost_test_loader_{}.toml", std::process::id()));
-        let toml_content = r#"
-[server]
-port = 9999
-
-[rate_limit]
-enabled = false
-"#;
-        std::fs::write(&path, toml_content).unwrap();
-        let loader = ConfigLoader::new().with_config_path(&path);
-        let result = loader.load();
-        std::fs::remove_file(&path).ok();
-        assert!(result.is_ok());
-        let cfg = result.unwrap();
-        assert_eq!(cfg.server.port, 9999);
-        assert!(!cfg.rate_limit.enabled);
-    }
-
-    #[test]
-    fn test_load_with_custom_env_prefix() {
-        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            std::env::remove_var("VECBOOST_JWT_SECRET");
-            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
-        }
-        let loader = ConfigLoader::new().with_env_prefix("CUSTOMPREFIX");
-        let result = loader.load();
-        assert!(result.is_ok(), "load with custom prefix should succeed");
-    }
-
-    #[test]
-    fn test_load_with_env_var_override() {
-        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        // prefix_separator "_" + separator "__" => VECBOOST_SERVER__PORT
-        unsafe {
-            std::env::set_var("VECBOOST_SERVER__PORT", "7777");
-            std::env::remove_var("VECBOOST_JWT_SECRET");
-            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
-        }
-        let result = AppConfig::load();
-        unsafe {
-            std::env::remove_var("VECBOOST_SERVER__PORT");
-        }
-        assert!(result.is_ok());
-        let cfg = result.unwrap();
-        assert_eq!(
-            cfg.server.port, 7777,
-            "env var should override default port"
-        );
-    }
-
-    #[test]
-    fn test_load_with_valid_jwt_and_password_env() {
-        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            std::env::set_var(
-                "VECBOOST_JWT_SECRET",
-                "this-is-a-valid-jwt-secret-32chars!!",
-            );
-            std::env::set_var("VECBOOST_ADMIN_PASSWORD", "SuperSecurePass123!");
-        }
-        let result = AppConfig::load();
-        unsafe {
-            std::env::remove_var("VECBOOST_JWT_SECRET");
-            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
-        }
-        assert!(result.is_ok(), "load should succeed with valid env vars");
-        let cfg = result.unwrap();
-        assert!(cfg.auth.jwt_secret.is_some());
-        assert!(cfg.auth.default_admin_password.is_some());
-    }
-
-    #[test]
-    fn test_load_fails_with_empty_jwt_env() {
-        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            std::env::set_var("VECBOOST_JWT_SECRET", "");
-        }
-        let result = AppConfig::load();
-        unsafe {
-            std::env::remove_var("VECBOOST_JWT_SECRET");
-        }
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_load_fails_with_short_password_env() {
-        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            std::env::set_var("VECBOOST_ADMIN_PASSWORD", "short");
-        }
-        let result = AppConfig::load();
-        unsafe {
-            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
-        }
-        assert!(result.is_err());
     }
 
     #[test]

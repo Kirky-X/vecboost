@@ -52,7 +52,7 @@ impl OnnxEngine {
         let is_local_path = model_path.exists() && model_path.is_dir();
 
         let (onnx_filename, tokenizer_filename) = if is_local_path {
-            tracing::info!("Using local model path: {:?}", model_path);
+            log::info!("Using local model path: {:?}", model_path);
             let onnx_filename = if model_path.join("model_quantized.onnx").exists() {
                 model_path.join("model_quantized.onnx")
             } else if model_path.join("model.onnx").exists() {
@@ -75,7 +75,7 @@ impl OnnxEngine {
                 })?;
                 let cache_tokenizer = cache_path.join("tokenizer.json");
                 if cache_tokenizer.exists() {
-                    tracing::info!(
+                    log::info!(
                         "Using tokenizer from HuggingFace cache: {:?}",
                         cache_tokenizer
                     );
@@ -90,14 +90,14 @@ impl OnnxEngine {
             };
             (onnx_filename, tokenizer_filename)
         } else {
-            tracing::info!("Using HuggingFace Hub for model: {:?}", model_path);
+            log::info!("Using HuggingFace Hub for model: {:?}", model_path);
             let api = Api::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let repo = api.repo(Repo::new(
                 model_path.to_string_lossy().into_owned(),
                 RepoType::Model,
             ));
 
-            tracing::info!("Downloading/Loading ONNX model files...");
+            log::info!("Downloading/Loading ONNX model files...");
             let onnx_filename = repo
                 .get("model.onnx")
                 .or_else(|_| repo.get("model_quantized.onnx"))
@@ -116,7 +116,7 @@ impl OnnxEngine {
         let supports_cuda = device_type == DeviceType::Cuda;
         let supports_amd = matches!(device_type, DeviceType::Amd | DeviceType::OpenCL);
 
-        tracing::info!("Initializing ONNX Runtime session...");
+        log::info!("Initializing ONNX Runtime session...");
         let session = Session::builder()
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
@@ -125,7 +125,7 @@ impl OnnxEngine {
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
         let mut session = if supports_cuda {
-            tracing::info!("Attempting to configure CUDA execution provider for ONNX Runtime");
+            log::info!("Attempting to configure CUDA execution provider for ONNX Runtime");
             #[cfg(feature = "cuda")]
             {
                 let cuda_provider =
@@ -136,13 +136,13 @@ impl OnnxEngine {
             }
             #[cfg(not(feature = "cuda"))]
             {
-                tracing::warn!(
+                log::warn!(
                     "CUDA execution provider not available. ONNX Runtime CUDA support requires cuda feature flag. Using CPU execution provider."
                 );
                 session
             }
         } else if supports_amd {
-            tracing::info!(
+            log::info!(
                 "AMD GPU detected but ROCm execution provider is not configured in this build. Using CPU execution provider."
             );
             session
@@ -151,7 +151,7 @@ impl OnnxEngine {
         };
 
         if let Some(ref expected_hash) = config.model_sha256 {
-            tracing::info!("Verifying model file SHA256 hash...");
+            log::info!("Verifying model file SHA256 hash...");
             let is_valid = verify_sha256(&onnx_filename, expected_hash).map_err(|e| {
                 VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e))
             })?;
@@ -163,14 +163,14 @@ impl OnnxEngine {
                 )));
             }
 
-            tracing::info!("Model file SHA256 verification passed");
+            log::info!("Model file SHA256 verification passed");
         }
 
         let session = session
             .commit_from_file(onnx_filename)
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
-        tracing::info!("Loading tokenizer...");
+        log::info!("Loading tokenizer...");
         #[allow(unused_mut)]
         let mut tokenizer = Tokenizer::from_file(&tokenizer_filename.to_string_lossy())
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
@@ -190,32 +190,30 @@ impl OnnxEngine {
 
         let vocab_size = tokenizer.get_vocab_size();
         let hidden_size = config.expected_dimension.unwrap_or(1024);
-        tracing::info!(
+        log::info!(
             "Using hidden_size from configuration: {:?}",
             config.expected_dimension
         );
-        tracing::info!("Final hidden_size value: {}", hidden_size);
+        log::info!("Final hidden_size value: {}", hidden_size);
         let max_input_length = std::cmp::min(vocab_size, 512);
 
         let actual_precision = match precision {
             Precision::Fp16 => {
                 if supports_cuda || supports_amd {
-                    tracing::info!("Using FP16 precision with GPU acceleration");
+                    log::info!("Using FP16 precision with GPU acceleration");
                     Precision::Fp16
                 } else {
-                    tracing::warn!(
-                        "FP16 not supported without GPU acceleration, falling back to FP32"
-                    );
+                    log::warn!("FP16 not supported without GPU acceleration, falling back to FP32");
                     Precision::Fp32
                 }
             }
             _ => {
-                tracing::info!("Using {} precision", precision);
+                log::info!("Using {} precision", precision);
                 precision
             }
         };
 
-        tracing::info!(
+        log::info!(
             "ONNX Engine initialized: hidden_size={}, max_input_length={}, vocab_size={}, precision={:?}",
             hidden_size,
             max_input_length,
@@ -271,7 +269,7 @@ impl OnnxEngine {
                     .enable_all()
                     .build()
                     .unwrap_or_else(|_| {
-                        tracing::error!("Failed to create Tokio runtime for memory check");
+                        log::error!("Failed to create Tokio runtime for memory check");
                         std::process::exit(1);
                     });
                 rt.block_on(async {
@@ -299,11 +297,11 @@ impl OnnxEngine {
             let status = controller.check_limit().await;
 
             if status == MemoryLimitStatus::Exceeded {
-                tracing::warn!("Memory limit exceeded for ONNX engine, attempting fallback to CPU");
+                log::warn!("Memory limit exceeded for ONNX engine, attempting fallback to CPU");
                 self.try_fallback_to_cpu(config).await?;
                 return Ok(true);
             } else if status == MemoryLimitStatus::Critical {
-                tracing::warn!(
+                log::warn!(
                     "Memory limit critical for ONNX engine, checking memory pressure for fallback"
                 );
                 if self.check_memory_pressure(90) {
@@ -380,7 +378,7 @@ impl OnnxEngine {
                 .try_extract_array::<f32>()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                 .to_owned();
-            tracing::debug!("ONNX model output shape: {:?}", output_array.shape());
+            log::debug!("ONNX model output shape: {:?}", output_array.shape());
             output_array
         };
 
@@ -422,7 +420,7 @@ impl OnnxEngine {
             return Ok(());
         }
 
-        tracing::info!("Attempting fallback from GPU to CPU for ONNX engine");
+        log::info!("Attempting fallback from GPU to CPU for ONNX engine");
 
         self.memory_monitor = None;
         self.device_type = DeviceType::Cpu;
@@ -462,7 +460,7 @@ impl OnnxEngine {
 
         self.precision = Precision::Fp32;
 
-        tracing::info!("Successfully fell back to CPU for ONNX engine");
+        log::info!("Successfully fell back to CPU for ONNX engine");
         Ok(())
     }
 
@@ -554,7 +552,7 @@ impl OnnxEngine {
         for batch_idx in 0..padded_batch_size {
             let attention_mask = &all_attention_masks[batch_idx];
             let actual_seq_len = attention_mask.len();
-            tracing::debug!(
+            log::debug!(
                 "batch_idx: {}, max_seq_len: {}, actual_seq_len: {}",
                 batch_idx,
                 max_seq_len,

@@ -125,7 +125,7 @@ impl OxCacheBackend {
     }
 }
 
-#[cfg(all(test, feature = "oxcache"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;

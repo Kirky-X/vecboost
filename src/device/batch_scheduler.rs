@@ -3,11 +3,11 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use log::{debug, info, warn};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, Semaphore, mpsc};
-use tracing::{debug, info, warn};
 
 /// 批量请求
 #[derive(Debug, Clone)]

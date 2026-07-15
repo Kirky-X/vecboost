@@ -276,7 +276,7 @@ impl JwtManager {
         let new_token = self.generate_token(&user)?;
 
         // 记录刷新成功（用于审计）
-        tracing::debug!("Token refreshed for user: {}", claims.username);
+        log::debug!("Token refreshed for user: {}", claims.username);
 
         Ok(new_token)
     }
@@ -295,7 +295,7 @@ impl JwtManager {
         // 对于 Redis 存储，过期由 TTL 自动处理
         // 对于内存存储，需要手动清理过期条目
         self.token_store.cleanup_expired_blacklist().await;
-        tracing::debug!("JWT blacklist cleanup executed");
+        log::debug!("JWT blacklist cleanup executed");
     }
 
     /// 启动定期黑名单清理任务
@@ -311,7 +311,7 @@ impl JwtManager {
             loop {
                 interval.tick().await;
                 token_store.cleanup_expired_blacklist().await;
-                tracing::debug!("Periodic JWT blacklist cleanup executed");
+                log::debug!("Periodic JWT blacklist cleanup executed");
             }
         })
     }

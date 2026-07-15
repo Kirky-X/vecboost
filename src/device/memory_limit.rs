@@ -5,11 +5,11 @@
 
 #![allow(unused)]
 
+use log::{debug, info, warn};
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum MemoryLimitStatus {

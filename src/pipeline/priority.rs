@@ -5,9 +5,9 @@
 
 #![allow(clippy::all)]
 
+use log::debug;
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::debug;
 
 use super::config::PriorityConfig;
 

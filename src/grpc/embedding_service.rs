@@ -3,11 +3,11 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use log::{error, info};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
-use tracing::{error, info};
 
 use crate::domain::{
     BatchEmbedRequest as DomainBatchEmbedRequest, EmbedRequest as DomainEmbedRequest,

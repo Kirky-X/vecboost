@@ -8,19 +8,10 @@
 //! 基于 limiteron 提供多维度限流功能,支持全局、IP、用户、API Key 等维度。
 //! 内部使用令牌桶算法,每个维度维护独立的令牌桶。
 
-// limiteron 后端(limiteron feature 启用时可用)
-#[cfg(feature = "limiteron")]
+// limiteron 后端(limiteron 必选,完全接管速率限制)
 pub(crate) mod limiteron_adapter;
 
-#[cfg(feature = "limiteron")]
 pub use limiteron_adapter::LimiteronAdapter;
-
-// limiteron feature 关闭时的 no-op stub,保持 VecboostState/路由 API 一致
-#[cfg(not(feature = "limiteron"))]
-mod limiteron_stub;
-
-#[cfg(not(feature = "limiteron"))]
-pub use limiteron_stub::LimiteronAdapter;
 
 // === 限流类型定义 ===
 

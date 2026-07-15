@@ -4,9 +4,9 @@
 // See LICENSE file in the project root for full license information.
 
 use candle_core::{Device, Result as CandleResult, Tensor};
+use log::{debug, info, warn};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{debug, info, warn};
 
 use super::config::TensorPoolConfig;
 use crate::error::VecboostError;

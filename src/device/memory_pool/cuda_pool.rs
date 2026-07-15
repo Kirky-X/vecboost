@@ -3,8 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use log::{debug, info, warn};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{debug, info, warn};
 
 use super::config::CudaPoolConfig;
 

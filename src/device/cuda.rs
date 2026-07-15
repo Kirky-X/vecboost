@@ -10,11 +10,11 @@ use crate::device::memory_optimizer::{
     GpuMemoryConfig, ModelMemoryRequirements, SharedGpuMemoryManager,
 };
 use crate::device::{DeviceCapability, DeviceInfo, DeviceStatus};
+use log::{debug, error, info, warn};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CudaGpuInfo {

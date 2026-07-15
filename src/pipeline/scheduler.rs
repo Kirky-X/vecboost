@@ -3,9 +3,9 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use log::debug;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::debug;
 
 use super::priority::PriorityCalculator;
 use super::queue::QueuedRequest;

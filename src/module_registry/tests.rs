@@ -967,7 +967,6 @@ async fn test_all_seventeen_modules_build_together() {
     let service = make_service();
     let rate_limiter = make_rate_limiter();
     kit.set_config(service.clone());
-    #[cfg(feature = "limiteron")]
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {
         enabled: true,
@@ -1011,7 +1010,6 @@ async fn test_all_seventeen_modules_build_together() {
     kit.register::<CacheModule>().unwrap();
     kit.register::<DbModule>().unwrap();
     kit.register::<AuditModule>().unwrap();
-    #[cfg(feature = "limiteron")]
     kit.register::<RateLimitModule>().unwrap();
     #[cfg(feature = "auth")]
     {
@@ -1038,7 +1036,6 @@ async fn test_all_seventeen_modules_build_together() {
     assert!(kit.contains::<CacheModule>());
     assert!(kit.contains::<DbModule>());
     assert!(kit.contains::<AuditModule>());
-    #[cfg(feature = "limiteron")]
     assert!(kit.contains::<RateLimitModule>());
     #[cfg(feature = "auth")]
     {

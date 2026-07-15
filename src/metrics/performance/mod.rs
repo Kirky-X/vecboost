@@ -9,12 +9,12 @@ use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
 use crate::metrics::inference::InferenceCollector;
 use crate::utils::normalize_l2;
+use log::{info, warn};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Barrier, Semaphore};
 use tokio::time::sleep;
-use tracing::{info, warn};
 
 use crate::metrics::domain::{LatencyBenchmarkResult, PerformanceTestConfig, ThroughputResult};
 

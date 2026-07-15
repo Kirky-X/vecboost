@@ -149,7 +149,7 @@ impl EncryptedFileKeyStore {
             let mut perms = file.metadata().await.unwrap().permissions();
             perms.set_mode(0o600);
             if let Err(e) = file.set_permissions(perms).await {
-                tracing::warn!("Failed to set restrictive permissions on key file: {}", e);
+                log::warn!("Failed to set restrictive permissions on key file: {}", e);
             }
         }
 

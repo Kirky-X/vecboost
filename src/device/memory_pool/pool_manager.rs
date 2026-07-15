@@ -5,9 +5,9 @@
 
 #![allow(clippy::all)]
 
+use log::{debug, error, info, warn};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
 
 use super::config::{BufferPoolConfig, CudaPoolConfig, ModelWeightPoolConfig, TensorPoolConfig};
 use super::{

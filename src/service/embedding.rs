@@ -23,13 +23,13 @@ use crate::utils::{
     AggregationMode, DEFAULT_TOP_K, FileValidator, InputValidator, MAX_BATCH_SIZE, MAX_TOP_K,
     TextValidator, cosine_similarity, normalize_l2, truncate_vector, validate_dimension,
 };
+use log::{debug, warn};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::{debug, warn};
 
 const MAX_FALLBACK_ATTEMPTS: usize = 1;
 
@@ -221,7 +221,7 @@ impl EmbeddingService {
 
         self.cache.warm_up(cache_entries).await;
 
-        tracing::info!(
+        log::info!(
             "Cache warm-up completed: {} entries preloaded",
             processed_count
         );
@@ -438,7 +438,7 @@ impl EmbeddingService {
         let result = self.process_stream_internal(reader, start_time).await;
 
         if let Err(ref e) = result {
-            tracing::error!("File streaming failed: {:?}", e);
+            log::error!("File streaming failed: {:?}", e);
         }
 
         result
@@ -518,7 +518,7 @@ impl EmbeddingService {
             self.validate_dimension(dimension);
 
             let processing_time = start_time.elapsed();
-            tracing::info!(
+            log::info!(
                 "Processed {} lines in {:.2}ms",
                 count,
                 processing_time.as_millis() as f64
@@ -576,7 +576,7 @@ impl EmbeddingService {
         }
 
         let processing_time = start_time.elapsed();
-        tracing::info!(
+        log::info!(
             "Processed {} paragraphs in {:.2}ms",
             paragraph_embeddings.len(),
             processing_time.as_millis() as f64
@@ -1005,7 +1005,7 @@ impl EmbeddingService {
     ) -> Result<ModelSwitchResponse, VecboostError> {
         let previous_model = self.model_config.as_ref().map(|c| c.name.clone());
 
-        tracing::info!(
+        log::info!(
             "Switching model from {:?} to {}",
             previous_model,
             req.model_name
@@ -1074,11 +1074,11 @@ impl EmbeddingService {
         };
 
         if let Some(ref manager) = self.model_manager {
-            tracing::debug!("Using ModelManager for model switching");
+            log::debug!("Using ModelManager for model switching");
             let _loaded_model = manager.load(&model_config).await?;
 
             if let Some(ref prev_name) = previous_model {
-                tracing::info!("Unloading previous model: {}", prev_name);
+                log::info!("Unloading previous model: {}", prev_name);
                 let _ = manager.unload(prev_name).await;
             }
         }
@@ -1092,7 +1092,7 @@ impl EmbeddingService {
         self.engine = Arc::new(RwLock::new(new_engine));
         self.model_config = Some(model_config);
 
-        tracing::info!("Model switched successfully to {}", req.model_name);
+        log::info!("Model switched successfully to {}", req.model_name);
 
         Ok(ModelSwitchResponse {
             previous_model,
@@ -1105,12 +1105,12 @@ impl EmbeddingService {
     pub async fn unload_model(&mut self, name: &str) -> Result<(), VecboostError> {
         if let Some(ref manager) = self.model_manager {
             manager.unload(name).await?;
-            tracing::info!("Model {} unloaded via ModelManager", name);
+            log::info!("Model {} unloaded via ModelManager", name);
         }
 
         if self.model_config.as_ref().map(|c| &c.name) == Some(&name.to_string()) {
             self.model_config = None;
-            tracing::info!("Local model config cleared for {}", name);
+            log::info!("Local model config cleared for {}", name);
         }
 
         Ok(())

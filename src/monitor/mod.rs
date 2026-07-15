@@ -5,10 +5,10 @@
 
 #![allow(unused)]
 
+use log::warn;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
-use tracing::warn;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MemoryStats {
@@ -183,7 +183,7 @@ impl MemoryMonitor {
 
     #[cfg(feature = "onnx")]
     pub async fn update_gpu_memory_from_ort(&self) {
-        tracing::debug!("GPU memory update from ONNX Runtime not yet implemented");
+        log::debug!("GPU memory update from ONNX Runtime not yet implemented");
     }
 
     #[cfg(not(feature = "onnx"))]

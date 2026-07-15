@@ -8,9 +8,9 @@
 use crate::config::model::{EngineType, ModelConfig};
 use crate::error::VecboostError;
 use async_trait::async_trait;
+use log::info;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::info;
 
 #[async_trait]
 pub trait ModelLoader: Send + Sync {

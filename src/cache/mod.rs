@@ -8,20 +8,10 @@
 pub(crate) mod entry;
 pub(crate) mod trait_impl;
 
-// oxcache 后端(oxcache feature 启用时可用)
-#[cfg(feature = "oxcache")]
+// oxcache 后端(oxcache 必选,完全接管缓存)
 pub(crate) mod oxcache_backend;
 
-// 内部使用,不对外暴露
-#[cfg(feature = "oxcache")]
 pub(crate) use oxcache_backend::OxCacheBackend;
-
-// oxcache feature 关闭时的 no-op stub,保持 EmbeddingService API 一致
-#[cfg(not(feature = "oxcache"))]
-mod oxcache_stub;
-
-#[cfg(not(feature = "oxcache"))]
-pub(crate) use oxcache_stub::OxCacheBackend;
 
 // === 通用缓存类型和接口 ===
 

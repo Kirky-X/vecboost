@@ -33,7 +33,6 @@ pub mod service;
 pub mod utils;
 
 // 条件编译模块 — 仅在对应 feature 启用时可见
-#[cfg(feature = "inklog")]
 pub mod logger;
 
 // 导出 config::app 中的类型
@@ -48,9 +47,10 @@ pub(crate) mod monitor;
 pub(crate) mod text;
 
 // 重新导出必要的内部类型（最小化暴露原则）
+pub use config::AppConfig;
 #[cfg(feature = "db")]
 pub use config::app::DatabaseConfig;
-pub use config::app::{AppConfig, AuthConfig, CsrfConfig, RateLimitConfig, ServerConfig};
+pub use config::app::{AuthConfig, CsrfConfig, RateLimitConfig, ServerConfig};
 pub use config::model::ModelConfig;
 pub use domain::{EmbedRequest, EmbedResponse, SimilarityRequest, SimilarityResponse};
 pub use error::VecboostError;

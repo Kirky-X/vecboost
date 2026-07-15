@@ -10,11 +10,11 @@ use crate::device::amd::AmdDeviceManager;
 use crate::device::cuda::{CudaDeviceManager, CudaGpuInfo};
 use crate::device::memory_limit::{MemoryLimitConfig, MemoryLimitController, MemoryLimitStatus};
 use crate::monitor::{GpuMemoryStats, MemoryMonitor};
+use log::{debug, info, warn};
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum DeviceStatus {
@@ -143,14 +143,14 @@ impl DeviceManager {
         });
 
         if let Err(e) = self.cuda_device_manager.initialize().await {
-            tracing::warn!("Failed to initialize CUDA device manager: {}", e);
+            log::warn!("Failed to initialize CUDA device manager: {}", e);
         }
 
         if self.cuda_device_manager.is_supported().await
             && let Some(cuda_device) = self.cuda_device_manager.primary_device().await
         {
             devices.push(cuda_device.info());
-            tracing::info!("CUDA device initialized: {}", cuda_device.name());
+            log::info!("CUDA device initialized: {}", cuda_device.name());
         }
 
         if let Some(gpu_stats) = self.memory_monitor.get_gpu_stats().await
@@ -166,7 +166,7 @@ impl DeviceManager {
         }
 
         if let Err(e) = self.amd_device_manager.initialize().await {
-            tracing::warn!("Failed to initialize AMD device manager: {}", e);
+            log::warn!("Failed to initialize AMD device manager: {}", e);
         }
 
         let amd_devices = self.amd_device_manager.devices().await;

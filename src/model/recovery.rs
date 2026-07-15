@@ -6,10 +6,10 @@
 use crate::error::VecboostError;
 use crate::utils::hash::{ModelIntegrityReport, check_model_integrity};
 use hf_hub::{Repo, RepoType, api::sync::Api};
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{error, info, warn};
 
 #[derive(Debug, Clone)]
 pub struct RecoveryConfig {

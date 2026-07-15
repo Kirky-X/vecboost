@@ -13,11 +13,9 @@
 //! 注意:与 `module_registry::AuditModule`(提供 `Option<Arc<AuditLogger>>` 审计能力)
 //! 不同,本模块提供 `Arc<inklog::LoggerManager>` 应用日志能力。
 
-#[cfg(feature = "inklog")]
 pub(crate) mod impl_;
 
-#[cfg(feature = "inklog")]
 pub use impl_::LoggerModule;
 
-#[cfg(all(test, feature = "inklog"))]
+#[cfg(test)]
 mod tests;

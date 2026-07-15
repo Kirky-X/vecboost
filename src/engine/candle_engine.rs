@@ -89,41 +89,41 @@ impl CandleEngine {
         tensor_pool: Option<Arc<tokio::sync::RwLock<crate::device::memory_pool::TensorPool>>>,
     ) -> Result<Self, VecboostError> {
         let device = if device_type == DeviceType::Cuda && candle_core::utils::cuda_is_available() {
-            tracing::info!("Using CUDA GPU");
+            log::info!("Using CUDA GPU");
             Device::new_cuda(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?
         } else if device_type == DeviceType::Metal && candle_core::utils::metal_is_available() {
-            tracing::info!("Using Metal GPU");
+            log::info!("Using Metal GPU");
             Device::new_metal(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?
         } else if matches!(device_type, DeviceType::Amd | DeviceType::OpenCL) {
-            tracing::warn!(
+            log::warn!(
                 "Candle engine does not natively support AMD GPUs. AMD GPU support requires ROCm-enabled Candle build or ONNX Runtime. Falling back to CPU."
             );
             Device::Cpu
         } else {
-            tracing::info!("Using CPU");
+            log::info!("Using CPU");
             Device::Cpu
         };
 
         // 确定计算数据类型，支持 FP16 和 INT8 量化
         let compute_dtype = match (&precision, device.is_cuda()) {
             (Precision::Int8, true) => {
-                tracing::info!("Using INT8 quantization (CPU inference, reduced precision)");
+                log::info!("Using INT8 quantization (CPU inference, reduced precision)");
                 DType::U8 // Candle 使用 U8 而非 I8
             }
             (Precision::Int8, false) => {
-                tracing::warn!("INT8 quantization requested but CUDA not available, using FP32");
+                log::warn!("INT8 quantization requested but CUDA not available, using FP32");
                 DType::F32
             }
             (Precision::Fp16, true) => {
-                tracing::info!("Using FP16 precision");
+                log::info!("Using FP16 precision");
                 DType::F16
             }
             (Precision::Fp16, false) => {
-                tracing::warn!("FP16 not supported on non-CUDA devices, falling back to FP32");
+                log::warn!("FP16 not supported on non-CUDA devices, falling back to FP32");
                 DType::F32
             }
             (Precision::Fp32, _) => {
-                tracing::info!("Using FP32 precision");
+                log::info!("Using FP32 precision");
                 DType::F32
             }
         };
@@ -143,7 +143,7 @@ impl CandleEngine {
             // 检查路径是否包含 ".." 或其他可疑模式
             let model_path_str = model_path.to_string_lossy();
             if model_path_str.contains("..") || model_path_str.contains('~') {
-                tracing::warn!(
+                log::warn!(
                     "Potential path traversal attempt detected in model path: {:?}",
                     model_path
                 );
@@ -157,7 +157,7 @@ impl CandleEngine {
             std::path::PathBuf,
             std::path::PathBuf,
         ) = if is_local_path {
-            tracing::info!("Loading model from local path: {:?}", model_path);
+            log::info!("Loading model from local path: {:?}", model_path);
             let config_path = model_path.join("config.json");
             let tokenizer_path = model_path.join("tokenizer.json");
             let weights_path = model_path.join("model.safetensors");
@@ -176,7 +176,7 @@ impl CandleEngine {
 
             (config_path, tokenizer_path, weights_filename)
         } else {
-            tracing::info!(
+            log::info!(
                 "Downloading/Loading model from HuggingFace Hub: {:?}",
                 model_path
             );
@@ -204,7 +204,7 @@ impl CandleEngine {
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
         let model_architecture = model_config_json.get_architecture();
 
-        tracing::info!("Detected model architecture: {:?}", model_architecture);
+        log::info!("Detected model architecture: {:?}", model_architecture);
 
         let (bert_config, xlm_config) = match &model_architecture {
             ModelArchitecture::Bert => {
@@ -255,17 +255,17 @@ impl CandleEngine {
             sizes
         };
 
-        tracing::info!("Checking model file integrity...");
+        log::info!("Checking model file integrity...");
         let integrity_report = check_model_integrity(&config.name, files_to_check, Some(min_sizes))
             .map_err(|e| {
                 VecboostError::ModelIntegrityError(format!("Integrity check failed: {}", e))
             })?;
 
         if !integrity_report.overall_valid {
-            tracing::error!("Model file integrity check failed!");
+            log::error!("Model file integrity check failed!");
             for check in &integrity_report.files_checked {
                 if !check.is_valid {
-                    tracing::error!(
+                    log::error!(
                         "  File: {}, Error: {}",
                         check.file_path,
                         check.error_message.as_deref().unwrap_or("Unknown error")
@@ -273,7 +273,7 @@ impl CandleEngine {
                 }
             }
 
-            tracing::info!("Attempting automatic recovery of corrupted files...");
+            log::info!("Attempting automatic recovery of corrupted files...");
             let recovery_config = RecoveryConfig::default();
             let recovery = ModelRecovery::new(recovery_config);
 
@@ -297,8 +297,8 @@ impl CandleEngine {
                 })?;
 
             if recovery_result.success {
-                tracing::info!("Successfully recovered all corrupted files");
-                tracing::info!("Re-running integrity check after recovery...");
+                log::info!("Successfully recovered all corrupted files");
+                log::info!("Re-running integrity check after recovery...");
 
                 let files_to_check = vec![
                     (config_str.clone(), None),
@@ -331,7 +331,7 @@ impl CandleEngine {
                     )));
                 }
 
-                tracing::info!("Post-recovery integrity check passed");
+                log::info!("Post-recovery integrity check passed");
             } else {
                 return Err(VecboostError::ModelFileCorrupted(format!(
                     "Failed to recover corrupted files after {} attempts. Corrupted files: {:?}",
@@ -340,10 +340,10 @@ impl CandleEngine {
             }
         }
 
-        tracing::info!("Model file integrity check passed");
+        log::info!("Model file integrity check passed");
 
         if let Some(ref expected_hash) = config.model_sha256 {
-            tracing::info!("Verifying model file SHA256 hash...");
+            log::info!("Verifying model file SHA256 hash...");
             let is_valid = verify_sha256(&weights_filename, expected_hash).map_err(|e| {
                 VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e))
             })?;
@@ -355,43 +355,41 @@ impl CandleEngine {
                 )));
             }
 
-            tracing::info!("Model file SHA256 verification passed");
+            log::info!("Model file SHA256 verification passed");
         }
 
         // 使用之前确定的 dtype（支持量化）
         let vb: VarBuilder = if is_pytorch {
-            tracing::info!("Loading PyTorch model weights from: {:?}", weights_filename);
+            log::info!("Loading PyTorch model weights from: {:?}", weights_filename);
 
             let file_size = std::fs::metadata(&weights_filename)
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
                 .len();
 
             if file_size > 2 * 1024 * 1024 * 1024 {
-                tracing::warn!(
+                log::warn!(
                     "PyTorch model file is large ({} GB). Large PyTorch files may have loading issues.",
                     file_size as f64 / 1024.0 / 1024.0 / 1024.0
                 );
-                tracing::info!("Consider converting to safetensors format for better performance:");
-                tracing::info!(
+                log::info!("Consider converting to safetensors format for better performance:");
+                log::info!(
                     "  python -c \"from transformers import AutoModel; AutoModel.from_pretrained('{}').save_pretrained('./model_converted')\"",
                     config.model_path.to_string_lossy()
                 );
-                tracing::info!("  Then use './model_converted' as the model_path in config.toml");
+                log::info!("  Then use './model_converted' as the model_path in config.toml");
             }
 
             let mut varmap = VarMap::new();
             match varmap.load(&weights_filename) {
                 Ok(_) => {
-                    tracing::info!("PyTorch weights loaded successfully");
+                    log::info!("PyTorch weights loaded successfully");
                 }
                 Err(e) => {
-                    tracing::error!("Failed to load PyTorch weights: {}", e);
-                    tracing::error!(
-                        "This is often due to large model files or incompatible formats."
-                    );
-                    tracing::error!("Please convert the model to safetensors format:");
-                    tracing::error!("  pip install optimum");
-                    tracing::error!(
+                    log::error!("Failed to load PyTorch weights: {}", e);
+                    log::error!("This is often due to large model files or incompatible formats.");
+                    log::error!("Please convert the model to safetensors format:");
+                    log::error!("  pip install optimum");
+                    log::error!(
                         "  optimum-cli export onnx --model {} --task feature-extraction ./model_safetensors",
                         config.model_path.to_string_lossy()
                     );
@@ -403,7 +401,7 @@ impl CandleEngine {
             }
             VarBuilder::from_varmap(&varmap, dtype, &device)
         } else {
-            tracing::info!(
+            log::info!(
                 "Loading safetensors model weights from: {:?}",
                 weights_filename
             );
@@ -413,9 +411,9 @@ impl CandleEngine {
         };
 
         if is_pytorch {
-            tracing::info!("Loaded PyTorch model weights successfully");
+            log::info!("Loaded PyTorch model weights successfully");
         } else {
-            tracing::info!("Loaded safetensors model weights successfully");
+            log::info!("Loaded safetensors model weights successfully");
         }
 
         let model = match &model_architecture {
@@ -498,11 +496,11 @@ impl CandleEngine {
             let status = controller.check_limit().await;
 
             if status == MemoryLimitStatus::Exceeded {
-                tracing::warn!("Memory limit exceeded, attempting fallback to CPU");
+                log::warn!("Memory limit exceeded, attempting fallback to CPU");
                 self.try_fallback_to_cpu(config).await?;
                 return Ok(true);
             } else if status == MemoryLimitStatus::Critical {
-                tracing::warn!("Memory limit critical, checking memory pressure for fallback");
+                log::warn!("Memory limit critical, checking memory pressure for fallback");
                 if self.check_memory_pressure(90).await {
                     self.try_fallback_to_cpu(config).await?;
                     return Ok(true);
@@ -546,14 +544,14 @@ impl CandleEngine {
         let ids = encoding.get_ids();
         let attention_mask = encoding.get_attention_mask();
 
-        tracing::debug!("Token IDs: {:?}", ids);
-        tracing::debug!("Max token ID: {}", ids.iter().max().copied().unwrap_or(0));
-        tracing::debug!("Attention mask: {:?}", attention_mask);
+        log::debug!("Token IDs: {:?}", ids);
+        log::debug!("Max token ID: {}", ids.iter().max().copied().unwrap_or(0));
+        log::debug!("Attention mask: {:?}", attention_mask);
 
         let vocab_size = 250002;
         let max_id = ids.iter().max().copied().unwrap_or(0);
         if max_id >= vocab_size {
-            tracing::warn!(
+            log::warn!(
                 "Token ID {} exceeds vocab_size {}, clamping",
                 max_id,
                 vocab_size
@@ -608,22 +606,22 @@ impl CandleEngine {
             }
         };
 
-        tracing::debug!("Embeddings shape: {:?}", embeddings.shape());
-        tracing::debug!("Embeddings dims: {}", embeddings.dims().len());
-        tracing::debug!("Embeddings dims array: {:?}", embeddings.dims());
+        log::debug!("Embeddings shape: {:?}", embeddings.shape());
+        log::debug!("Embeddings dims: {}", embeddings.dims().len());
+        log::debug!("Embeddings dims array: {:?}", embeddings.dims());
 
         self.update_gpu_memory().await;
 
         let embedding_result: Tensor;
         let dims = embeddings.dims();
-        tracing::debug!("Processing embedding with {} dimensions", dims.len());
+        log::debug!("Processing embedding with {} dimensions", dims.len());
 
         if dims.len() == 1 {
-            tracing::debug!("1D embedding, using directly");
+            log::debug!("1D embedding, using directly");
             embedding_result = embeddings.clone();
         } else if dims.len() == 2 {
             if dims[0] == 1 && dims[1] > 1 {
-                tracing::debug!("2D embedding [1, hidden_size], extracting batch 0");
+                log::debug!("2D embedding [1, hidden_size], extracting batch 0");
                 embedding_result = embeddings
                     .get(0)
                     .map_err(|e| {
@@ -631,9 +629,7 @@ impl CandleEngine {
                     })?
                     .clone();
             } else {
-                tracing::debug!(
-                    "2D embedding [seq_len, hidden_size], extracting CLS token (index 0)"
-                );
+                log::debug!("2D embedding [seq_len, hidden_size], extracting CLS token (index 0)");
                 embedding_result = embeddings
                     .get(0)
                     .map_err(|e| {
@@ -642,7 +638,7 @@ impl CandleEngine {
                     .clone();
             }
         } else if dims.len() == 3 {
-            tracing::debug!("3D embedding [batch, seq_len, hidden], extracting batch 0, token 0");
+            log::debug!("3D embedding [batch, seq_len, hidden], extracting batch 0, token 0");
             embedding_result = embeddings
                 .get(0)
                 .map_err(|e| {
@@ -661,7 +657,7 @@ impl CandleEngine {
             )));
         }
 
-        tracing::debug!("Final embedding shape: {:?}", embedding_result.shape());
+        log::debug!("Final embedding shape: {:?}", embedding_result.shape());
 
         let vec = embedding_result
             .to_vec1::<f32>()
@@ -676,7 +672,7 @@ impl CandleEngine {
             return Ok(vec![]);
         }
 
-        tracing::debug!(
+        log::debug!(
             "Processing batch of {} texts using optimized batch processing",
             texts.len()
         );
@@ -859,7 +855,7 @@ impl CandleEngine {
             pool.release(attention_mask_tensor, batch_size, max_seq_len);
         }
 
-        tracing::debug!(
+        log::debug!(
             "Batch processing completed, {} embeddings generated",
             results.len()
         );
@@ -950,7 +946,7 @@ impl CandleEngine {
             return Ok(());
         }
 
-        tracing::info!("Attempting fallback from GPU to CPU due to memory pressure");
+        log::info!("Attempting fallback from GPU to CPU due to memory pressure");
 
         self.memory_monitor = None;
         self.device = Device::Cpu;
@@ -965,7 +961,7 @@ impl CandleEngine {
             std::path::PathBuf,
             std::path::PathBuf,
         ) = if is_local_path {
-            tracing::info!(
+            log::info!(
                 "Loading model from local path for fallback: {:?}",
                 model_path
             );
@@ -986,7 +982,7 @@ impl CandleEngine {
 
             (config_path, tokenizer_path, weights_filename)
         } else {
-            tracing::info!(
+            log::info!(
                 "Loading model from HuggingFace Hub for fallback: {:?}",
                 model_path
             );
@@ -1014,7 +1010,7 @@ impl CandleEngine {
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
         let fallback_architecture = model_config_json.get_architecture();
 
-        tracing::info!(
+        log::info!(
             "Fallback: Detected model architecture: {:?}",
             fallback_architecture
         );
@@ -1076,7 +1072,7 @@ impl CandleEngine {
         // 回退时禁用量化
         self.use_quantization = false;
 
-        tracing::info!("Successfully fell back to CPU");
+        log::info!("Successfully fell back to CPU");
         Ok(())
     }
 }

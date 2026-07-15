@@ -103,7 +103,7 @@ fn dimension_limit(config: &RateLimitConfig, dimension: &RateLimitDimension) -> 
     }
 }
 
-#[cfg(all(test, feature = "limiteron"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

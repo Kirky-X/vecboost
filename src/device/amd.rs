@@ -81,7 +81,7 @@ impl AmdDevice {
     }
 
     pub fn from_opencl(index: usize) -> Option<Self> {
-        tracing::debug!("Attempting to detect AMD GPU via OpenCL at index {}", index);
+        log::debug!("Attempting to detect AMD GPU via OpenCL at index {}", index);
 
         let info = AmdGpuInfo {
             name: format!("AMD GPU (OpenCL) - Device {}", index),
@@ -98,7 +98,7 @@ impl AmdDevice {
     }
 
     pub fn from_rocm(index: usize) -> Option<Self> {
-        tracing::debug!("Attempting to detect AMD GPU via ROCm at index {}", index);
+        log::debug!("Attempting to detect AMD GPU via ROCm at index {}", index);
 
         let vram = detect_rocm_vram(index);
 
@@ -158,7 +158,7 @@ impl AmdDevice {
         let new_allocated = current + bytes;
 
         if new_allocated > self.info.vram_bytes {
-            tracing::warn!(
+            log::warn!(
                 "GPU memory allocation failed: requested {} bytes, available {} bytes",
                 bytes,
                 self.available_memory()
@@ -239,7 +239,7 @@ impl AmdDeviceManager {
             return Ok(());
         }
 
-        tracing::info!("Initializing AMD GPU device manager...");
+        log::info!("Initializing AMD GPU device manager...");
 
         let mut devices = self.devices.write().await;
         devices.clear();
@@ -249,7 +249,7 @@ impl AmdDeviceManager {
 
         for i in 0..4 {
             if let Some(device) = AmdDevice::from_rocm(i) {
-                tracing::info!(
+                log::info!(
                     "Found ROCm-compatible AMD GPU: {} with {} bytes VRAM",
                     device.name(),
                     device.vram_bytes()
@@ -262,7 +262,7 @@ impl AmdDeviceManager {
         if !rocm_found {
             for i in 0..4 {
                 if let Some(device) = AmdDevice::from_opencl(i) {
-                    tracing::info!(
+                    log::info!(
                         "Found OpenCL-compatible AMD GPU: {} with {} bytes VRAM",
                         device.name(),
                         device.vram_bytes()
@@ -283,7 +283,7 @@ impl AmdDeviceManager {
 
         self.initialized.store(true, Ordering::SeqCst);
 
-        tracing::info!(
+        log::info!(
             "AMD GPU initialization complete. Found {} device(s) (ROCm: {}, OpenCL: {})",
             devices.len(),
             rocm_found,

@@ -226,7 +226,7 @@ impl TokenStore for RedisTokenStore {
     async fn cleanup_expired_blacklist(&self) {
         // 对于 Redis 存储，过期由 TTL 自动处理
         // 无需手动清理
-        tracing::debug!("Redis token store cleanup - expiration handled by TTL");
+        log::debug!("Redis token store cleanup - expiration handled by TTL");
     }
 }
 

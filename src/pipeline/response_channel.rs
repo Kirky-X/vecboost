@@ -3,11 +3,11 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use log::{debug, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, oneshot};
-use tracing::{debug, warn};
 
 use crate::domain::EmbedResponse;
 use crate::error::VecboostError;

@@ -1,15 +1,17 @@
 // Copyright (c) 2025-2026 Kirky.X
 //
 // Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// See LICENSE file in the project root for full license information
 
 //! confers-based configuration loader for VecBoost.
 //!
-//! This module provides `AppConfig` with `#[derive(Config)]` from the `confers`
-//! crate, enabling TOML file loading and environment variable overrides via a
-//! unified builder API. The legacy loader in `app.rs` is retained for one
-//! release cycle; new code should prefer `load_via_confers` once the `config`
-//! feature is stabilized.
+//! `AppConfig` 通过 `#[derive(Config)]` 从 `confers` crate 派生,统一接管 TOML
+//! 文件加载与环境变量覆盖。confers 是必选依赖(`Cargo.toml` 中无 `optional`),
+//! 禁止任何手写 `config`/`toml` 解析逻辑。
+//!
+//! 敏感字段(JWT secret / admin password)的最小长度校验由
+//! `app::apply_security_env_overrides` 负责(单一真相源);本模块仅负责
+//! confers 加载与默认值填充,不重复实现校验逻辑。
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -19,24 +21,17 @@ use confers::Config;
 #[cfg(feature = "db")]
 use super::app::DatabaseConfig;
 use super::app::{
-    AuditConfig, AuthConfig, EmbeddingConfig, MemoryPoolConfig, ModelConfig, MonitoringConfig,
-    RateLimitConfig, ServerConfig,
+    AuditConfig, AuthConfig, ConfigError, EmbeddingConfig, MemoryPoolConfig, ModelConfig,
+    MonitoringConfig, RateLimitConfig, ServerConfig, apply_priority_defaults,
+    apply_security_env_overrides,
 };
 use crate::pipeline::PipelineConfig;
 
-/// Top-level VecBoost configuration loaded via the `confers` crate.
+/// VecBoost 顶层配置,由 confers 完全接管加载。
 ///
-/// Field types reuse the existing sub-configuration structs from `app.rs` so
-/// that downstream consumers (services, middleware) are unaffected by the
-/// loader swap. The `env_prefix` attribute maps environment variables such as
-/// `VECBOOST_JWT_SECRET` onto nested fields using confers' standard separator
-/// rules.
-///
-/// Note on `sensitive` fields: confers 0.4 requires `SecretString` /
-/// `SecretBytes` types for `#[config(sensitive = true)]`, which is
-/// incompatible with the existing `AuthConfig` composite struct defined in
-/// `app.rs`. Sensitive-field redaction is therefore deferred until the
-/// sub-structs are migrated to secrecy wrappers in a follow-up task.
+/// 子结构体复用 `app.rs` 中的定义,确保下游消费者(services / middleware)
+/// 不受加载器切换影响。`env_prefix = "VECBOOST_"` 将环境变量如
+/// `VECBOOST_JWT_SECRET` 映射到嵌套字段。
 #[derive(Config, Debug, Clone, Serialize, Deserialize)]
 #[config(env_prefix = "VECBOOST_")]
 #[serde(default)]
@@ -55,57 +50,37 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// Load configuration via confers using the default `config.toml` path.
+    /// 通过 confers 从默认路径 `config.toml` 加载配置。
     ///
-    /// Mirrors the behaviour of `app::AppConfig::load()` while delegating
-    /// source merging (file + env) to `confers::ConfigBuilder`.
-    pub fn load_via_confers() -> Result<Self, confers::ConfigError> {
+    /// 文件不存在时回退到 `Default` 实现 + `VECBOOST_` 前缀环境变量。
+    /// 敏感字段校验由 `app::apply_security_env_overrides` 执行,
+    /// 校验失败时返回 `ConfigError::Message`。
+    pub fn load_via_confers() -> Result<Self, ConfigError> {
         Self::load_via_confers_with_path("config.toml")
     }
 
-    /// Load configuration via confers from an explicit path.
+    /// 通过 confers 从显式路径加载配置。
     ///
-    /// The path is treated as optional: when the file does not exist, confers
-    /// falls back to defaults derived from `Default` plus environment
-    /// variables prefixed with `VECBOOST_`.
-    pub fn load_via_confers_with_path<P: Into<PathBuf>>(
-        path: P,
-    ) -> Result<Self, confers::ConfigError> {
+    /// 路径是可选的:文件不存在时 confers 回退到 `Default` + 环境变量。
+    /// 敏感环境变量(`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD`)
+    /// 的最小长度校验由 `app::apply_security_env_overrides` 强制执行,
+    /// 失败时通过 `?` 显式传播(规则12:错误必须显性化)。
+    pub fn load_via_confers_with_path<P: Into<PathBuf>>(path: P) -> Result<Self, ConfigError> {
         let mut config = confers::ConfigBuilder::<Self>::new()
             .allow_absolute_paths()
             .file_optional(path)
             .env_prefix("VECBOOST_")
             .build()?;
-        apply_security_env_overrides(&mut config);
-        super::app::apply_priority_defaults(&mut config.pipeline.priority);
+        apply_security_env_overrides(&mut config)?;
+        apply_priority_defaults(&mut config.pipeline.priority);
         Ok(config)
-    }
-}
-
-/// Apply environment variable overrides for sensitive configuration.
-///
-/// Mirrors the legacy `app::apply_security_env_overrides` behaviour: the
-/// flat env var `VECBOOST_JWT_SECRET` is mapped onto `auth.jwt_secret`
-/// because confers' nested env mapping would require `VECBOOST_AUTH__JWT_SECRET`.
-fn apply_security_env_overrides(config: &mut AppConfig) {
-    if let Ok(jwt_secret) = std::env::var("VECBOOST_JWT_SECRET")
-        && !jwt_secret.is_empty()
-    {
-        config.auth.jwt_secret = Some(jwt_secret);
-    }
-    if let Ok(admin_password) = std::env::var("VECBOOST_ADMIN_PASSWORD")
-        && !admin_password.is_empty()
-    {
-        config.auth.default_admin_password = Some(admin_password);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::AppConfig;
-    use std::sync::Mutex;
-
-    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+    use crate::config::app::test_support::ENV_LOCK;
 
     #[test]
     fn test_confers_app_config_compiles() {
@@ -122,6 +97,11 @@ mod tests {
 
     #[test]
     fn test_load_via_confers_with_nonexistent_path() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
         let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
         assert!(result.is_ok(), "should fall back to defaults");
         let config = result.unwrap();
@@ -130,6 +110,11 @@ mod tests {
 
     #[test]
     fn test_load_via_confers_with_valid_toml() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let config_path = temp_dir.path().join("test_config.toml");
         std::fs::write(
@@ -162,6 +147,11 @@ max_batch_size = 128
 
     #[test]
     fn test_load_via_confers_with_empty_toml() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let config_path = temp_dir.path().join("empty.toml");
         std::fs::write(&config_path, "").expect("Failed to write empty config");
@@ -174,68 +164,112 @@ max_batch_size = 128
 
     #[test]
     fn test_load_via_confers_jwt_secret_env_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
-            std::env::set_var("VECBOOST_JWT_SECRET", "test_secret_12345");
+            std::env::set_var(
+                "VECBOOST_JWT_SECRET",
+                "this-is-a-valid-jwt-secret-32chars!!",
+            );
         }
         let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
-        let config = result.expect("load should succeed");
+        let config = result.expect("load should succeed with valid JWT secret");
         unsafe {
             std::env::remove_var("VECBOOST_JWT_SECRET");
         }
-        assert_eq!(config.auth.jwt_secret.as_deref(), Some("test_secret_12345"));
+        assert_eq!(
+            config.auth.jwt_secret.as_deref(),
+            Some("this-is-a-valid-jwt-secret-32chars!!")
+        );
     }
 
     #[test]
-    fn test_load_via_confers_empty_jwt_secret_ignored() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+    fn test_load_via_confers_empty_jwt_secret_rejected() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var("VECBOOST_JWT_SECRET", "");
         }
         let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
-        let config = result.expect("load should succeed");
         unsafe {
             std::env::remove_var("VECBOOST_JWT_SECRET");
         }
-        assert!(config.auth.jwt_secret.is_none() || config.auth.jwt_secret.as_deref() == Some(""));
+        assert!(
+            result.is_err(),
+            "empty JWT secret must be rejected by apply_security_env_overrides"
+        );
+    }
+
+    #[test]
+    fn test_load_via_confers_short_jwt_secret_rejected() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("VECBOOST_JWT_SECRET", "tooshort");
+        }
+        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+        }
+        assert!(
+            result.is_err(),
+            "JWT secret shorter than 32 chars must be rejected"
+        );
     }
 
     #[test]
     fn test_load_via_confers_admin_password_env_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
-            std::env::set_var("VECBOOST_ADMIN_PASSWORD", "admin_pass_123");
+            std::env::set_var("VECBOOST_ADMIN_PASSWORD", "SuperSecurePass123!");
         }
         let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
-        let config = result.expect("load should succeed");
+        let config = result.expect("load should succeed with valid admin password");
         unsafe {
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
         }
         assert_eq!(
             config.auth.default_admin_password.as_deref(),
-            Some("admin_pass_123")
+            Some("SuperSecurePass123!")
         );
     }
 
     #[test]
-    fn test_load_via_confers_empty_admin_password_ignored() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+    fn test_load_via_confers_empty_admin_password_rejected() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var("VECBOOST_ADMIN_PASSWORD", "");
         }
         let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
-        let config = result.expect("load should succeed");
         unsafe {
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
         }
         assert!(
-            config.auth.default_admin_password.is_none()
-                || config.auth.default_admin_password.as_deref() == Some("")
+            result.is_err(),
+            "empty admin password must be rejected by apply_security_env_overrides"
+        );
+    }
+
+    #[test]
+    fn test_load_via_confers_short_admin_password_rejected() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("VECBOOST_ADMIN_PASSWORD", "short");
+        }
+        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        unsafe {
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        assert!(
+            result.is_err(),
+            "admin password shorter than 12 chars must be rejected"
         );
     }
 
     #[test]
     fn test_load_via_confers_with_partial_toml() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let config_path = temp_dir.path().join("partial.toml");
         std::fs::write(

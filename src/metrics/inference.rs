@@ -8,12 +8,12 @@ use crate::metrics::domain::{
     ResourceUtilization,
 };
 use crate::monitor::MemoryMonitor;
+use log::info;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::info;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CollectionConfig {

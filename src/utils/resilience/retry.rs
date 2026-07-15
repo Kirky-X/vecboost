@@ -91,7 +91,7 @@ pub async fn with_retry<T, R: Retryable<T>>(
         match retryable.call().await {
             Ok(result) => {
                 if attempt > 0 {
-                    tracing::info!(
+                    log::info!(
                         "Operation succeeded after {} retries in {:.2}ms",
                         attempt,
                         start_time.elapsed().as_millis() as f64
@@ -103,29 +103,25 @@ pub async fn with_retry<T, R: Retryable<T>>(
                 last_error = Some(e.clone());
 
                 if !is_retryable_error(&e, &config) {
-                    tracing::warn!(
-                        "Non-retryable error on attempt {}: {}",
-                        attempt + 1,
-                        e.to_string()
-                    );
+                    log::warn!("Non-retryable error on attempt {}: {}", attempt + 1, e);
                     return Err(e);
                 }
 
                 if attempt < config.max_retries {
                     let delay = calculate_delay(attempt, &config);
-                    tracing::warn!(
+                    log::warn!(
                         "Retryable error on attempt {}: {}. Retrying in {:.2}ms...",
                         attempt + 1,
-                        e.to_string(),
+                        e,
                         delay.as_millis() as f64
                     );
                     sleep(delay).await;
                 } else {
-                    tracing::error!(
+                    log::error!(
                         "Operation failed after {} attempts in {:.2}ms: {}",
                         attempt + 1,
                         start_time.elapsed().as_millis() as f64,
-                        e.to_string()
+                        e
                     );
                     return Err(e);
                 }

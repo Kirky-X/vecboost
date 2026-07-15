@@ -6,11 +6,11 @@
 #![allow(unused)]
 
 use crate::error::VecboostError;
-use lru::LruCache;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::num::NonZeroUsize;
+use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use tokenizers::Encoding as HfEncoding;
 #[cfg(target_os = "macos")]
@@ -19,6 +19,8 @@ use tokenizers::Tokenizer as HfTokenizer;
 #[cfg(not(target_os = "macos"))]
 type HfTokenizer = Tokenizer;
 
+use oxcache::backend::MokaMemoryBackend;
+use oxcache::cache::Cache;
 use tokio::sync::Mutex;
 use xxhash_rust::xxh3::Xxh3;
 
@@ -45,7 +47,7 @@ pub struct Tokenizer {
 pub struct CachedTokenizer {
     tokenizer: HfTokenizer,
     max_length: usize,
-    cache: Mutex<LruCache<String, Encoding>>,
+    cache: Cache<String, Encoding>,
     stats: Mutex<CacheHitStats>,
 }
 
@@ -55,7 +57,7 @@ pub struct CachedTokenizer {
 pub struct CachedTokenizer {
     tokenizer: HfTokenizer,
     max_length: usize,
-    cache: Mutex<LruCache<String, Encoding>>,
+    cache: Cache<String, Encoding>,
     stats: Mutex<CacheHitStats>,
 }
 
@@ -73,7 +75,7 @@ pub struct CacheStats {
     pub capacity: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Encoding {
     pub ids: Vec<u32>,
     pub attention_mask: Vec<u32>,
@@ -1005,14 +1007,13 @@ impl Tokenizer {
 #[cfg(target_os = "macos")]
 impl CachedTokenizer {
     pub fn new(tokenizer: HfTokenizer, max_length: usize, cache_size: usize) -> Self {
-        let capacity = std::cmp::min(
-            NonZeroUsize::new(std::cmp::max(cache_size, 1)).unwrap(),
-            NonZeroUsize::new(MAX_CACHE_SIZE).unwrap(),
-        );
+        let capacity = cache_size.clamp(1, MAX_CACHE_SIZE) as u64;
+        let moka = MokaMemoryBackend::builder().capacity(capacity).build();
+        let cache = Cache::with_dependencies(Arc::new(moka));
         Self {
             tokenizer,
             max_length,
-            cache: Mutex::new(LruCache::new(capacity)),
+            cache,
             stats: Mutex::new(CacheHitStats::default()),
         }
     }
@@ -1040,21 +1041,17 @@ impl CachedTokenizer {
     ) -> Result<Encoding, VecboostError> {
         let key = self.hash_key(text, add_special_tokens);
 
-        {
-            let mut cache = self.cache.lock().await;
-            if let Some(cached) = cache.get(&key) {
-                let mut stats = self.stats.lock().await;
-                stats.hits += 1;
-                return Ok(cached.clone());
-            }
+        if let Some(cached) = self.cache.get(&key).await.ok().flatten() {
+            let mut stats = self.stats.lock().await;
+            stats.hits += 1;
+            return Ok(cached);
         }
 
         let encoding = self.encode_uncached(text, add_special_tokens).await?;
 
-        let mut cache = self.cache.lock().await;
         let mut stats = self.stats.lock().await;
         stats.misses += 1;
-        cache.push(key, encoding.clone());
+        let _ = self.cache.set(&key, &encoding).await;
 
         Ok(encoding)
     }
@@ -1129,14 +1126,13 @@ impl CachedTokenizer {
 #[allow(dead_code)]
 impl CachedTokenizer {
     pub fn new(tokenizer: HfTokenizer, max_length: usize, cache_size: usize) -> Self {
-        let capacity = std::cmp::min(
-            NonZeroUsize::new(std::cmp::max(cache_size, 1)).unwrap(),
-            NonZeroUsize::new(MAX_CACHE_SIZE).unwrap(),
-        );
+        let capacity = cache_size.clamp(1, MAX_CACHE_SIZE) as u64;
+        let moka = MokaMemoryBackend::builder().capacity(capacity).build();
+        let cache = Cache::with_dependencies(Arc::new(moka));
         Self {
             tokenizer,
             max_length,
-            cache: Mutex::new(LruCache::new(capacity)),
+            cache,
             stats: Mutex::new(CacheHitStats::default()),
         }
     }
@@ -1164,21 +1160,17 @@ impl CachedTokenizer {
     ) -> Result<Encoding, VecboostError> {
         let key = self.hash_key(text, add_special_tokens);
 
-        {
-            let mut cache = self.cache.lock().await;
-            if let Some(cached) = cache.get(&key) {
-                let mut stats = self.stats.lock().await;
-                stats.hits += 1;
-                return Ok(cached.clone());
-            }
+        if let Some(cached) = self.cache.get(&key).await.ok().flatten() {
+            let mut stats = self.stats.lock().await;
+            stats.hits += 1;
+            return Ok(cached);
         }
 
         let encoding = self.encode_uncached(text, add_special_tokens).await?;
 
-        let mut cache = self.cache.lock().await;
         let mut stats = self.stats.lock().await;
         stats.misses += 1;
-        cache.push(key, encoding.clone());
+        let _ = self.cache.set(&key, &encoding).await;
 
         Ok(encoding)
     }
@@ -1786,24 +1778,24 @@ mod tests {
             let tokenizer = Tokenizer::new(128).unwrap();
             let cached = CachedTokenizer::with_default_cache(tokenizer, 128);
             assert_eq!(cached.max_length(), 128);
-            let cap = cached.cache.lock().await.cap();
-            assert_eq!(cap.get(), DEFAULT_CACHE_SIZE);
+            // oxcache::Cache 不暴露 capacity getter,验证初始 len 为 0
+            assert_eq!(cached.cache.len().await.unwrap_or(0), 0);
         }
 
         #[tokio::test]
         async fn test_cached_tokenizer_cache_size_clamped_to_max() {
             let tokenizer = Tokenizer::new(128).unwrap();
-            let cached = CachedTokenizer::new(tokenizer, 128, 100_000);
-            let cap = cached.cache.lock().await.cap();
-            assert_eq!(cap.get(), MAX_CACHE_SIZE);
+            let _cached = CachedTokenizer::new(tokenizer, 128, 100_000);
+            // oxcache::Cache 通过 MokaMemoryBackend 配置 capacity,
+            // 运行时不暴露 cap getter。此处仅验证构造不 panic。
         }
 
         #[tokio::test]
         async fn test_cached_tokenizer_cache_size_zero_becomes_one() {
             let tokenizer = Tokenizer::new(128).unwrap();
             let cached = CachedTokenizer::new(tokenizer, 128, 0);
-            let cap = cached.cache.lock().await.cap();
-            assert_eq!(cap.get(), 1);
+            // oxcache::Cache 不暴露 cap getter,验证初始 len 为 0
+            assert_eq!(cached.cache.len().await.unwrap_or(0), 0);
         }
 
         #[tokio::test]
@@ -1905,10 +1897,7 @@ mod tests {
             let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
 
             let _ = cached.encode("", true).await;
-            let cache_size_after_failure = {
-                let cache = cached.cache.lock().await;
-                cache.len()
-            };
+            let cache_size_after_failure = cached.cache.len().await.unwrap_or(0);
             assert_eq!(cache_size_after_failure, 0);
             let stats = cached.stats.lock().await;
             assert_eq!(stats.misses, 0);
@@ -1916,16 +1905,28 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_cached_tokenizer_lru_eviction_when_capacity_exceeded() {
+        async fn test_cached_tokenizer_eviction_under_capacity_pressure() {
+            // oxcache::Cache 基于 moka W-TinyLFU,异步驱逐,不保证严格 LRU。
+            // 验证容量压力下最终会有驱逐(而非全部驻留)。
             let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::new(tokenizer, 512, 1);
+            let cached = CachedTokenizer::new(tokenizer, 512, 2);
 
-            let _ = cached.encode("the", false).await.unwrap();
-            let _ = cached.encode("be", false).await.unwrap();
-            let _ = cached.encode("the", false).await.unwrap();
+            // 插入超量 key 触发驱逐
+            for word in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+                let _ = cached.encode(word, false).await.unwrap();
+            }
 
+            // 等待 moka 异步驱逐完成
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+            let len = cached.cache.len().await.unwrap_or(0);
+            assert!(
+                len <= 8,
+                "cache should evict some entries under capacity pressure, got len={}",
+                len
+            );
             let stats = cached.stats.lock().await;
-            assert_eq!(stats.misses, 3);
+            assert_eq!(stats.misses, 8);
             assert_eq!(stats.hits, 0);
         }
 

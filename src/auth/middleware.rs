@@ -178,7 +178,7 @@ pub async fn csrf_origin_middleware(
     // Extract and validate Origin header
     let origin = OriginValidator::validate_origin(request.headers(), &csrf_config, &uri)?;
 
-    tracing::debug!(
+    log::debug!(
         "CSRF origin validation passed for origin '{}' on {}",
         origin,
         uri
@@ -235,7 +235,7 @@ pub async fn csrf_middleware(
         .or_else(|| request.headers().get("x-csrf-token"))
         .and_then(|h| h.to_str().ok())
         .ok_or_else(|| {
-            tracing::warn!("Missing CSRF token for request to {}", uri);
+            log::warn!("Missing CSRF token for request to {}", uri);
             StatusCode::BAD_REQUEST
         })?;
 
@@ -243,11 +243,11 @@ pub async fn csrf_middleware(
     let is_valid = token_store.validate_token(csrf_token).await;
 
     if !is_valid {
-        tracing::warn!("Invalid CSRF token for request to {}", uri);
+        log::warn!("Invalid CSRF token for request to {}", uri);
         return Err(StatusCode::FORBIDDEN);
     }
 
-    tracing::debug!("CSRF token validation passed for {}", uri);
+    log::debug!("CSRF token validation passed for {}", uri);
 
     Ok(next.run(request).await)
 }
@@ -287,7 +287,7 @@ pub async fn csrf_combined_middleware(
     // Step 1: Validate Origin header (if allowed origins are configured)
     if !csrf_config.allowed_origins.is_empty() {
         let _origin = OriginValidator::validate_origin(request.headers(), &csrf_config, &uri)?;
-        tracing::debug!("CSRF origin validation passed for {}", uri);
+        log::debug!("CSRF origin validation passed for {}", uri);
     }
 
     // Step 2: Validate CSRF token (if token validation is enabled)
@@ -298,18 +298,18 @@ pub async fn csrf_combined_middleware(
             .or_else(|| request.headers().get("x-csrf-token"))
             .and_then(|h| h.to_str().ok())
             .ok_or_else(|| {
-                tracing::warn!("Missing CSRF token for request to {}", uri);
+                log::warn!("Missing CSRF token for request to {}", uri);
                 StatusCode::BAD_REQUEST
             })?;
 
         let is_valid = token_store.validate_token(csrf_token).await;
 
         if !is_valid {
-            tracing::warn!("Invalid CSRF token for request to {}", uri);
+            log::warn!("Invalid CSRF token for request to {}", uri);
             return Err(StatusCode::FORBIDDEN);
         }
 
-        tracing::debug!("CSRF token validation passed for {}", uri);
+        log::debug!("CSRF token validation passed for {}", uri);
     }
 
     Ok(next.run(request).await)

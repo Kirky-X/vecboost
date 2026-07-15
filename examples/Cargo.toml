@@ -10,33 +10,30 @@ description = "Functional examples for the VecBoost embedding service"
 [dependencies]
 # 通过 path 依赖主 crate,默认开启所有非引擎 features
 # 引擎 features(cuda/onnx/metal)通过本 crate 的 features 透传,可选启用
+# 注:oxcache/limiteron/inklog/confers 在主 crate 中已是必选依赖,无需在此声明 feature
 vecboost = { path = "..", default-features = false, features = [
     "http",
-    "oxcache",
-    "limiteron",
     "auth",
     "cli",
     "grpc",
     "db",
-    "inklog",
-    "config",
     "redis",
 ] }
 
 # 示例直接使用的第三方 crate
-tokio = { version = "1", features = ["full"] }
-async-trait = "0.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+tokio = { version = "1.0", default-features = false, features = ["full"] }
+async-trait = { version = "0.1", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
 reqwest = { version = "0.12", default-features = false, features = ["default-tls"] }
-hf-hub = "0.3"
-tempfile = "3"
+hf-hub = { version = "0.3", default-features = false }
+tempfile = { version = "3.0", default-features = false }
 prometheus = { version = "0.13", default-features = false, features = ["process"] }
 
 # GPU 示例直接使用 candle 系列(cuda feature 下启用)
-candle-core = { version = "0.11", optional = true }
-candle-nn = { version = "0.11", optional = true }
-candle-transformers = { version = "0.11", optional = true }
+candle-core = { version = "0.11", optional = true, default-features = false }
+candle-nn = { version = "0.11", optional = true, default-features = false }
+candle-transformers = { version = "0.11", optional = true, default-features = false }
 
 [features]
 default = []

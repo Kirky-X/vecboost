@@ -18,7 +18,6 @@ use trait_kit::prelude::*;
 
 #[cfg(feature = "auth")]
 use super::AuthModule;
-#[cfg(feature = "limiteron")]
 use super::RateLimitModule;
 use super::{
     AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, DbConfig, DbModule,
@@ -33,7 +32,6 @@ use crate::audit::AuditLogger;
 #[cfg(feature = "auth")]
 use crate::auth::{CsrfConfig, CsrfTokenStore, UserStore};
 use crate::metrics::PrometheusCollector;
-#[cfg(feature = "limiteron")]
 use crate::rate_limit::LimiteronAdapter;
 use crate::service::embedding::EmbeddingService;
 use crate::{

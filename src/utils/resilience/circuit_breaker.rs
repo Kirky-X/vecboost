@@ -3,12 +3,12 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use log::{debug, info, warn};
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CircuitState {

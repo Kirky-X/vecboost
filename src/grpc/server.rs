@@ -26,7 +26,7 @@ impl GrpcServer {
     pub async fn run(self) -> Result<(), VecboostError> {
         let embedding_service = VecboostEmbeddingService::new(self.service.clone());
 
-        tracing::info!("Starting gRPC server on {}", self.addr);
+        log::info!("Starting gRPC server on {}", self.addr);
 
         Server::builder()
             .add_service(EmbeddingServiceServer::new(embedding_service))

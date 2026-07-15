@@ -368,13 +368,13 @@ impl OriginValidator {
             .get(ORIGIN)
             .and_then(|h| h.to_str().ok())
             .ok_or_else(|| {
-                tracing::warn!("Missing Origin header for request to {}", request_uri);
+                log::warn!("Missing Origin header for request to {}", request_uri);
                 StatusCode::BAD_REQUEST
             })?;
 
         // Parse the origin to extract the scheme, host, and port
         let parsed_origin = Self::parse_origin(origin).map_err(|_| {
-            tracing::warn!("Invalid Origin header: {}", origin);
+            log::warn!("Invalid Origin header: {}", origin);
             StatusCode::BAD_REQUEST
         })?;
 
@@ -388,7 +388,7 @@ impl OriginValidator {
         if config.is_origin_allowed(&parsed_origin) {
             Ok(parsed_origin)
         } else {
-            tracing::warn!(
+            log::warn!(
                 "Origin '{}' not in allowed list for request to {}",
                 parsed_origin,
                 request_uri
@@ -414,7 +414,7 @@ impl OriginValidator {
                 })
             })
             .ok_or_else(|| {
-                tracing::warn!("Invalid Origin header format: {}", origin);
+                log::warn!("Invalid Origin header format: {}", origin);
                 StatusCode::BAD_REQUEST
             })
     }

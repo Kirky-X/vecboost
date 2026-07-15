@@ -35,7 +35,7 @@ fn print_usage() {
     println!(
         r#"VecBoost 模型下载工具
 
-用法: cargo run --example download_model [选项]
+用法: cargo run -p vecboost-examples --bin download_model [选项]
 
 选项:
   --model <MODEL_ID>    指定要下载的模型 ID (默认: {})"#,
@@ -48,8 +48,8 @@ fn print_usage() {
   --help, -h            显示此帮助信息
 
 示例:
-  cargo run --example download_model --small
-  cargo run --example download_model --model sentence-transformers/all-MiniLM-L6-v2
+  cargo run -p vecboost-examples --bin download_model --small
+  cargo run -p vecboost-examples --bin download_model --model sentence-transformers/all-MiniLM-L6-v2
 "#
     );
 }

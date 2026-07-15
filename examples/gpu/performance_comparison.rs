@@ -5,7 +5,6 @@
 
 use std::path::PathBuf;
 use vecboost::config::model::{DeviceType, EngineType, ModelConfig, Precision};
-use vecboost::engine::candle_engine::CandleEngine;
 use vecboost::engine::{AnyEngine, InferenceEngine};
 
 mod utils;
@@ -29,8 +28,9 @@ fn run_onnx_test(
         model_sha256: None,
     };
 
-    let mut engine = AnyEngine::new(&model_config, EngineType::Onnx, Precision::Fp32)?;
-    let (embeddings, duration) = utils::measure_time(|| engine.embed_batch(texts))?;
+    let engine = AnyEngine::new(&model_config, EngineType::Onnx, Precision::Fp32)?;
+    let (result, duration) = utils::measure_time(|| engine.embed_batch(texts));
+    let embeddings = result?;
     Ok((embeddings, duration))
 }
 
@@ -52,8 +52,9 @@ fn run_candle_test(
         model_sha256: None,
     };
 
-    let engine = CandleEngine::new(&config, Precision::Fp16)?;
-    let (embeddings, duration) = utils::measure_time(|| engine.embed_batch(texts))?;
+    let engine = AnyEngine::new(&config, EngineType::Candle, Precision::Fp16)?;
+    let (result, duration) = utils::measure_time(|| engine.embed_batch(texts));
+    let embeddings = result?;
     Ok((embeddings, duration))
 }
 
@@ -90,6 +91,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let onnx_metrics = utils::calculate_metrics(onnx_duration, texts.len());
     utils::print_metrics(&onnx_metrics, "ONNX Runtime 引擎");
 
+    println!("\n📊 维度验证:");
+    println!("  Candle: {} 维", candle_embeddings[0].len());
+    println!("  ONNX: {} 维", onnx_embeddings[0].len());
+
     println!("\n📈 性能对比:");
     let speedup = onnx_duration / candle_duration;
     if speedup > 1.0 {
@@ -105,5 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(not(feature = "onnx"))]
 fn main() {
     println!("❌ 此示例需要启用 'onnx' feature");
-    println!("   运行命令: cargo run --example performance_comparison --features onnx");
+    println!(
+        "   运行命令: cargo run -p vecboost-examples --bin performance_comparison --features onnx"
+    );
 }

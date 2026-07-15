@@ -1,0 +1,180 @@
+[package]
+name = "vecboost-examples"
+version = "0.3.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+description = "Functional examples for the VecBoost embedding service"
+
+[dependencies]
+# 通过 path 依赖主 crate,默认开启所有非引擎 features
+# 引擎 features(cuda/onnx/metal)通过本 crate 的 features 透传,可选启用
+vecboost = { path = "..", default-features = false, features = [
+    "http",
+    "oxcache",
+    "limiteron",
+    "auth",
+    "cli",
+    "grpc",
+    "db",
+    "inklog",
+    "config",
+    "redis",
+] }
+
+# 示例直接使用的第三方 crate
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["default-tls"] }
+hf-hub = "0.3"
+tempfile = "3"
+prometheus = { version = "0.13", default-features = false, features = ["process"] }
+
+# GPU 示例直接使用 candle 系列(cuda feature 下启用)
+candle-core = { version = "0.11", optional = true }
+candle-nn = { version = "0.11", optional = true }
+candle-transformers = { version = "0.11", optional = true }
+
+[features]
+default = []
+# 引擎特性透传
+cuda = ["vecboost/cuda", "dep:candle-core", "dep:candle-nn", "dep:candle-transformers"]
+onnx = ["vecboost/onnx"]
+metal = ["vecboost/metal"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Binaries — 27 个示例
+# ─────────────────────────────────────────────────────────────────────────────
+
+# download_model — 模型下载工具
+[[bin]]
+name = "download_model"
+path = "download_model.rs"
+
+# gpu — GPU 引擎示例(需要 CUDA/ONNX feature)
+[[bin]]
+name = "gpu_basic_device_test"
+path = "gpu/basic_device_test.rs"
+required-features = ["cuda"]
+
+[[bin]]
+name = "gpu_candle_engine_test"
+path = "gpu/candle_engine_test.rs"
+required-features = ["cuda"]
+
+[[bin]]
+name = "gpu_onnx_engine_test"
+path = "gpu/onnx_engine_test.rs"
+required-features = ["cuda", "onnx"]
+
+[[bin]]
+name = "gpu_performance_comparison"
+path = "gpu/performance_comparison.rs"
+required-features = ["cuda", "onnx"]
+
+# basic — 基础用法(MockEngine + api::embed/embed_batch/compute_similarity)
+[[bin]]
+name = "embed"
+path = "basic/embed.rs"
+
+[[bin]]
+name = "batch"
+path = "basic/batch.rs"
+
+[[bin]]
+name = "similarity"
+path = "basic/similarity.rs"
+
+# engine — Candle/Onnx 引擎初始化与运行时切换
+[[bin]]
+name = "candle"
+path = "engine/candle.rs"
+
+[[bin]]
+name = "onnx"
+path = "engine/onnx.rs"
+required-features = ["onnx"]
+
+[[bin]]
+name = "switch"
+path = "engine/switch.rs"
+
+# http — HTTP API 客户端(reqwest 调用本地服务)
+[[bin]]
+name = "embed_api"
+path = "http/embed_api.rs"
+
+[[bin]]
+name = "batch_api"
+path = "http/batch_api.rs"
+
+[[bin]]
+name = "similarity_api"
+path = "http/similarity_api.rs"
+
+# cli — 命令行子进程调用
+[[bin]]
+name = "embed_cli"
+path = "cli/embed_cli.rs"
+
+[[bin]]
+name = "batch_cli"
+path = "cli/batch_cli.rs"
+
+# auth — JWT/CSRF/Refresh 流程
+[[bin]]
+name = "jwt_auth"
+path = "auth/jwt_auth.rs"
+
+[[bin]]
+name = "csrf"
+path = "auth/csrf.rs"
+
+[[bin]]
+name = "refresh"
+path = "auth/refresh.rs"
+
+# cache — oxcache 配置与 TTL 验证
+[[bin]]
+name = "cache_config"
+path = "cache/cache_config.rs"
+
+[[bin]]
+name = "ttl"
+path = "cache/ttl.rs"
+
+# rate-limiting — limiteron 多维度限流
+[[bin]]
+name = "rate_limit"
+path = "rate-limiting/rate_limit.rs"
+
+[[bin]]
+name = "multi_dimension"
+path = "rate-limiting/multi_dimension.rs"
+
+# pipeline — 优先级队列与 WorkerManager
+[[bin]]
+name = "priority_queue"
+path = "pipeline/priority_queue.rs"
+
+[[bin]]
+name = "workers"
+path = "pipeline/workers.rs"
+
+# grpc — 客户端调用 embedding_service(注:当前实现走 HTTP API,
+# 与任务描述的"gRPC 客户端"存在偏差,后续可重构为 tonic gRPC 客户端)
+[[bin]]
+name = "grpc_client"
+path = "grpc/grpc_client.rs"
+
+# monitoring — Prometheus 指标与推理性能监控
+[[bin]]
+name = "metrics"
+path = "monitoring/metrics.rs"
+
+[[bin]]
+name = "performance"
+path = "monitoring/performance.rs"

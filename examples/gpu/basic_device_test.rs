@@ -5,7 +5,7 @@
 
 use candle_core::{Device, Result as CandleResult};
 use candle_nn::VarBuilder;
-use candle_transformers::models::bert::{BertConfig, BertModel};
+use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 
 mod utils;
 
@@ -62,7 +62,7 @@ fn main() -> CandleResult<()> {
     println!("  层数: {}", bert_config.num_hidden_layers);
 
     println!("\n🔧 创建模型...");
-    let model = BertModel::load(vb, &bert_config).expect("无法创建模型");
+    let _model = BertModel::load(vb, &bert_config).expect("无法创建模型");
     println!("✅ 模型创建成功");
 
     println!("\n📝 测试文本编码...");

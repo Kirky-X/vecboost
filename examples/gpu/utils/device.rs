@@ -21,7 +21,7 @@ pub fn create_cpu_device() -> CandleResult<Device> {
 pub fn get_device_info(device: &Device) -> String {
     match device {
         Device::Cpu => "CPU".to_string(),
-        Device::Cuda(id) => format!("CUDA (Device {})", id),
+        Device::Cuda(id) => format!("CUDA (Device {:?})", id),
         Device::Metal(_) => "Metal".to_string(),
     }
 }

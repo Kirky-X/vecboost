@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 use vecboost::config::model::{DeviceType, EngineType, ModelConfig, Precision};
-use vecboost::engine::candle_engine::CandleEngine;
+use vecboost::engine::{AnyEngine, InferenceEngine};
 
 mod utils;
 
@@ -47,14 +47,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  期望维度: {:?}", config.expected_dimension);
 
     println!("\n🔧 初始化 Candle 引擎...");
-    let engine = CandleEngine::new(&config, Precision::Fp16)?;
+    let engine = AnyEngine::new(&config, EngineType::Candle, Precision::Fp16)?;
     println!("✅ 引擎初始化成功");
 
     println!("\n📝 单文本嵌入测试...");
     let single_text = utils::get_single_test_text();
     println!("  文本: \"{}\"", single_text);
 
-    let (embedding, duration) = utils::measure_time(|| engine.embed(single_text))?;
+    let (result, duration) = utils::measure_time(|| engine.embed(&single_text));
+    let embedding = result?;
     println!("  耗时: {:.2} ms", duration);
 
     utils::validate_embedding(&embedding, config.expected_dimension.unwrap_or(1024));
@@ -64,7 +65,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let texts = utils::get_test_texts();
     println!("  文本数量: {}", texts.len());
 
-    let (embeddings, duration) = utils::measure_time(|| engine.embed_batch(&texts))?;
+    let (result, duration) = utils::measure_time(|| engine.embed_batch(&texts));
+    let embeddings = result?;
     println!("  耗时: {:.2} ms", duration);
 
     let metrics = utils::calculate_metrics(duration, texts.len());

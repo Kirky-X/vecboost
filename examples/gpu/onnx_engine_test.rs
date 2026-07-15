@@ -47,14 +47,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  期望维度: {:?}", model_config.expected_dimension);
 
     println!("\n🔧 初始化 ONNX 引擎...");
-    let mut engine = AnyEngine::new(&model_config, EngineType::Onnx, Precision::Fp32)?;
+    let engine = AnyEngine::new(&model_config, EngineType::Onnx, Precision::Fp32)?;
     println!("✅ 引擎初始化成功");
 
     println!("\n📝 单文本嵌入测试...");
     let single_text = utils::get_single_test_text();
     println!("  文本: \"{}\"", single_text);
 
-    let (embedding, duration) = utils::measure_time(|| engine.embed(single_text))?;
+    let (result, duration) = utils::measure_time(|| engine.embed(&single_text));
+    let embedding = result?;
     println!("  耗时: {:.2} ms", duration);
 
     utils::validate_embedding(&embedding, model_config.expected_dimension.unwrap_or(1024));
@@ -64,7 +65,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let texts = utils::get_test_texts();
     println!("  文本数量: {}", texts.len());
 
-    let (embeddings, duration) = utils::measure_time(|| engine.embed_batch(&texts))?;
+    let (result, duration) = utils::measure_time(|| engine.embed_batch(&texts));
+    let embeddings = result?;
     println!("  耗时: {:.2} ms", duration);
 
     let metrics = utils::calculate_metrics(duration, texts.len());
@@ -82,5 +84,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(not(feature = "onnx"))]
 fn main() {
     println!("❌ 此示例需要启用 'onnx' feature");
-    println!("   运行命令: cargo run --example onnx_engine_test --features onnx");
+    println!("   运行命令: cargo run -p vecboost-examples --bin onnx_engine_test --features onnx");
 }

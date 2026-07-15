@@ -177,22 +177,14 @@ tokio = { version = "1", features = ["test-util", "macros", "rt-multi-thread"] }
 [profile.dev]
 opt-level = 1
 
-[[example]]
-name = "gpu_basic_device_test"
-path = "examples/gpu/basic_device_test.rs"
-required-features = ["cuda"]
+# ─────────────────────────────────────────────────────────────────────────────
+# Workspace — examples 作为独立 crate(member),不发布
+# ─────────────────────────────────────────────────────────────────────────────
+[workspace]
+members = [".", "examples"]
+resolver = "2"
 
-[[example]]
-name = "gpu_candle_engine_test"
-path = "examples/gpu/candle_engine_test.rs"
-required-features = ["cuda"]
-
-[[example]]
-name = "gpu_onnx_engine_test"
-path = "examples/gpu/onnx_engine_test.rs"
-required-features = ["cuda", "onnx"]
-
-[[example]]
-name = "gpu_performance_comparison"
-path = "examples/gpu/performance_comparison.rs"
-required-features = ["cuda", "onnx"]
+[workspace.package]
+license = "MIT"
+edition = "2024"
+authors = ["Kirky-X <kirky-x@outlook.com>"]

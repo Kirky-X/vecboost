@@ -3,6 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use std::path::PathBuf;
+
 use vecboost::config::model::{DeviceType, EngineType, ModelConfig, Precision};
 
 pub const DEFAULT_MODEL_PATHS: &[&str] = &[
@@ -11,6 +13,7 @@ pub const DEFAULT_MODEL_PATHS: &[&str] = &[
     "./model",
 ];
 
+#[cfg(feature = "onnx")]
 pub fn create_onnx_config(
     model_path: String,
     use_gpu: bool,
@@ -20,7 +23,7 @@ pub fn create_onnx_config(
     ModelConfig {
         name: "bge-m3".to_string(),
         engine_type: EngineType::Onnx,
-        model_path,
+        model_path: PathBuf::from(model_path),
         tokenizer_path: None,
         device: if use_gpu {
             DeviceType::Cuda
@@ -29,9 +32,10 @@ pub fn create_onnx_config(
         },
         max_batch_size: batch_size,
         pooling_mode: None,
-        expected_dimension,
+        expected_dimension: Some(expected_dimension),
         memory_limit_bytes: None,
         oom_fallback_enabled: false,
+        model_sha256: None,
     }
 }
 
@@ -40,12 +44,12 @@ pub fn create_candle_config(
     use_gpu: bool,
     batch_size: usize,
     expected_dimension: usize,
-    precision: Precision,
+    _precision: Precision,
 ) -> ModelConfig {
     ModelConfig {
         name: "bge-m3".to_string(),
         engine_type: EngineType::Candle,
-        model_path,
+        model_path: PathBuf::from(model_path),
         tokenizer_path: None,
         device: if use_gpu {
             DeviceType::Cuda
@@ -54,9 +58,10 @@ pub fn create_candle_config(
         },
         max_batch_size: batch_size,
         pooling_mode: None,
-        expected_dimension,
+        expected_dimension: Some(expected_dimension),
         memory_limit_bytes: None,
         oom_fallback_enabled: false,
+        model_sha256: None,
     }
 }
 

@@ -62,43 +62,30 @@ pub use error::AppError;
 
 /// Application state
 ///
-/// Contains shared state needed by all route handlers
-/// Note: This struct is exposed to main.rs and other crates using this library
+/// v0.3.0 D3 重构：所有能力通过 `AsyncKit<Ready>` 查询。
+/// 启动时由 `main.rs` 通过 `kit.set_config()` 注入预构建对象 + `kit.register::<M>()`
+/// 注册 17 个 Module,`kit.build().await` 后注入到 `VecboostState`。
+///
+/// 路由 handler 通过 `state.kit.require::<M>().expect("...")` 检索能力,
+/// 或通过 Axum `FromRef` 自动注入(`FromRef` impl 也走 `kit.require`)。
 #[derive(Clone)]
 pub struct VecboostState {
-    pub service: Arc<RwLock<EmbeddingService>>,
-    #[cfg(feature = "auth")]
-    pub jwt_manager: Option<Arc<auth::JwtManager>>,
-    #[cfg(feature = "auth")]
-    pub user_store: Option<Arc<auth::UserStore>>,
-    pub auth_enabled: bool,
-    #[cfg(feature = "auth")]
-    pub csrf_config: Option<Arc<auth::CsrfConfig>>,
-    #[cfg(feature = "auth")]
-    pub csrf_token_store: Option<Arc<auth::CsrfTokenStore>>,
-    pub metrics_collector: Option<Arc<metrics::InferenceCollector>>,
-    pub prometheus_collector: Option<Arc<metrics::PrometheusCollector>>,
-    pub rate_limiter: Arc<rate_limit::LimiteronAdapter>,
-    pub ip_whitelist: Vec<String>,
-    pub rate_limit_enabled: bool,
-    pub audit_logger: Option<Arc<audit::AuditLogger>>,
-    pub pipeline_enabled: bool,
-    pub pipeline_queue: Arc<pipeline::PriorityRequestQueue>,
-    pub response_channel: Arc<pipeline::ResponseChannel>,
-    pub priority_calculator: Arc<pipeline::PriorityCalculator>,
-    pub worker_manager: Arc<pipeline::WorkerManager>,
-    /// trait-kit AsyncKit — 模块能力管理中心（D1 集成）
+    /// trait-kit AsyncKit — 模块能力管理中心
     ///
-    /// `AsyncKit<Ready>` 是 `Send + Sync`（基于 `Arc<RwLock>`），可安全存入
-    /// `VecboostState` 并跨线程共享。启动时由 `main.rs` 构建后注入。
-    /// 使用 `Option` 以兼容非 http feature 下可能不构建 kit 的场景。
-    pub kit: Option<Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>>,
+    /// `AsyncKit<Ready>` 是 `Send + Sync`(基于 `Arc<RwLock>`),可安全存入
+    /// `VecboostState` 并跨线程共享。包含 17 个 Module 的能力查询入口:
+    /// - 4 现有:EmbeddingModule/AuthModule/RateLimitModule/AuditModule
+    /// - 13 新增:覆盖原 14 字段剩余 13 个(详见 module_registry/mod.rs)
+    pub kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,
 }
 
 #[cfg(feature = "http")]
 impl FromRef<VecboostState> for Arc<RwLock<EmbeddingService>> {
     fn from_ref(state: &VecboostState) -> Self {
-        state.service.clone()
+        state
+            .kit
+            .require::<module_registry::EmbeddingModule>()
+            .expect("EmbeddingService capability not registered in kit")
     }
 }
 
@@ -106,16 +93,29 @@ impl FromRef<VecboostState> for Arc<RwLock<EmbeddingService>> {
 impl FromRef<VecboostState> for Arc<auth::JwtManager> {
     fn from_ref(state: &VecboostState) -> Self {
         state
-            .jwt_manager
-            .clone()
-            .expect("JWT manager not available")
+            .kit
+            .require::<module_registry::AuthModule>()
+            .and_then(|opt| {
+                opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
+                    key: "jwt_manager (auth disabled at runtime)",
+                })
+            })
+            .expect("JWT manager capability not available")
     }
 }
 
 #[cfg(all(feature = "http", feature = "auth"))]
 impl FromRef<VecboostState> for Arc<auth::UserStore> {
     fn from_ref(state: &VecboostState) -> Self {
-        state.user_store.clone().expect("User store not available")
+        state
+            .kit
+            .require::<module_registry::UserStoreModule>()
+            .and_then(|opt| {
+                opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
+                    key: "user_store (auth disabled at runtime)",
+                })
+            })
+            .expect("UserStore capability not available")
     }
 }
 
@@ -123,9 +123,14 @@ impl FromRef<VecboostState> for Arc<auth::UserStore> {
 impl FromRef<VecboostState> for Arc<metrics::InferenceCollector> {
     fn from_ref(state: &VecboostState) -> Self {
         state
-            .metrics_collector
-            .clone()
-            .expect("Metrics collector not available")
+            .kit
+            .require::<module_registry::MetricsCollectorModule>()
+            .and_then(|opt| {
+                opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
+                    key: "metrics_collector (not configured)",
+                })
+            })
+            .expect("InferenceCollector capability not available")
     }
 }
 
@@ -133,23 +138,34 @@ impl FromRef<VecboostState> for Arc<metrics::InferenceCollector> {
 impl FromRef<VecboostState> for Arc<metrics::PrometheusCollector> {
     fn from_ref(state: &VecboostState) -> Self {
         state
-            .prometheus_collector
-            .clone()
-            .expect("Prometheus collector not available")
+            .kit
+            .require::<module_registry::PrometheusCollectorModule>()
+            .and_then(|opt| {
+                opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
+                    key: "prometheus_collector (not configured)",
+                })
+            })
+            .expect("PrometheusCollector capability not available")
     }
 }
 
 #[cfg(feature = "http")]
 impl FromRef<VecboostState> for Arc<rate_limit::LimiteronAdapter> {
     fn from_ref(state: &VecboostState) -> Self {
-        state.rate_limiter.clone()
+        state
+            .kit
+            .require::<module_registry::RateLimitModule>()
+            .expect("RateLimitModule capability not registered in kit")
     }
 }
 
 #[cfg(feature = "http")]
 impl FromRef<VecboostState> for Option<Arc<audit::AuditLogger>> {
     fn from_ref(state: &VecboostState) -> Self {
-        state.audit_logger.clone()
+        state
+            .kit
+            .require::<module_registry::AuditModule>()
+            .expect("AuditModule capability not registered in kit")
     }
 }
 
@@ -158,6 +174,17 @@ mod tests {
     use super::*;
     use crate::config::model::Precision;
     use crate::engine::InferenceEngine;
+    use crate::module_registry::{
+        AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, DbConfig, DbModule,
+        EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
+        PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule,
+        PrometheusCollectorModule, RateLimitEnabled, RateLimitEnabledModule, RateLimitModule,
+        ResponseChannelModule, WorkerManagerModule,
+    };
+    #[cfg(feature = "auth")]
+    use crate::module_registry::{
+        AuthModule, CsrfConfigModule, CsrfTokenStoreModule, UserStoreModule,
+    };
     use crate::pipeline::{PriorityConfig, WorkerConfig};
     use async_trait::async_trait;
 
@@ -189,13 +216,20 @@ mod tests {
         }
     }
 
-    fn make_app_state() -> VecboostState {
+    /// 参数化构建 VecboostState：可选注入 metrics/prometheus/audit 能力
+    ///
+    /// `metrics` / `prometheus` / `audit` 为 None 时,Module 仍注册但能力查询返回 None,
+    /// 用于测试 FromRef panic 路径。其他能力（service/rate_limiter/pipeline 组件）
+    /// 始终注入,因为这些是必需能力（missing config = build 失败）。
+    async fn make_app_state_with_options(
+        metrics: Option<Arc<metrics::InferenceCollector>>,
+        prometheus: Option<Arc<metrics::PrometheusCollector>>,
+        audit: Option<Arc<audit::AuditLogger>>,
+    ) -> VecboostState {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
-
         let rate_limiter = Arc::new(rate_limit::LimiteronAdapter::with_default_config());
-
         let pipeline_queue = Arc::new(pipeline::PriorityRequestQueue::new(100));
         let response_channel = Arc::new(pipeline::ResponseChannel::new());
         let priority_calculator =
@@ -207,241 +241,284 @@ mod tests {
             service.clone(),
         ));
 
-        let metrics_collector = Some(Arc::new(metrics::InferenceCollector::new()));
-        let prometheus_collector = Some(Arc::new(
-            metrics::PrometheusCollector::new().expect("Failed to create PrometheusCollector"),
-        ));
+        let mut kit = trait_kit::AsyncKit::new();
+        // 注入复杂类型能力（预构建对象）
+        kit.set_config(service.clone());
+        kit.set_config(rate_limiter.clone());
+        kit.set_config(metrics.clone());
+        kit.set_config(prometheus.clone());
+        kit.set_config(audit.clone());
+        kit.set_config(pipeline_queue.clone());
+        kit.set_config(response_channel.clone());
+        kit.set_config(priority_calculator.clone());
+        kit.set_config(worker_manager.clone());
+        kit.set_config(Vec::<String>::new());
+        // bool newtype 配置（missing = false，与 CacheModule/DbModule 一致）
+        kit.set_config(AuthEnabled(false));
+        kit.set_config(RateLimitEnabled(false));
+        kit.set_config(PipelineEnabled(false));
+        kit.set_config(CacheConfig {
+            enabled: false,
+            size: 0,
+        });
+        kit.set_config(DbConfig { enabled: false });
 
-        VecboostState {
-            service,
-            #[cfg(feature = "auth")]
-            jwt_manager: None,
-            #[cfg(feature = "auth")]
-            user_store: None,
-            auth_enabled: false,
-            #[cfg(feature = "auth")]
-            csrf_config: None,
-            #[cfg(feature = "auth")]
-            csrf_token_store: None,
-            metrics_collector,
-            prometheus_collector,
-            rate_limiter,
-            ip_whitelist: vec![],
-            rate_limit_enabled: false,
-            audit_logger: None,
-            pipeline_enabled: false,
-            pipeline_queue,
-            response_channel,
-            priority_calculator,
-            worker_manager,
-            kit: None,
-        }
-    }
-
-    #[test]
-    fn test_app_state_construction() {
-        let state = make_app_state();
-        assert!(!state.auth_enabled);
-        assert!(!state.rate_limit_enabled);
-        assert!(!state.pipeline_enabled);
-        assert!(state.ip_whitelist.is_empty());
-        assert!(state.metrics_collector.is_some());
-        assert!(state.prometheus_collector.is_some());
-        assert!(state.audit_logger.is_none());
-        assert!(state.kit.is_none());
-    }
-
-    #[test]
-    fn test_app_state_clone_preserves_arcs() {
-        let state = make_app_state();
-        let cloned = state.clone();
-        assert!(Arc::ptr_eq(&state.service, &cloned.service));
-        assert!(Arc::ptr_eq(&state.rate_limiter, &cloned.rate_limiter));
-        assert!(Arc::ptr_eq(
-            state.metrics_collector.as_ref().unwrap(),
-            cloned.metrics_collector.as_ref().unwrap()
-        ));
-        assert!(Arc::ptr_eq(
-            state.prometheus_collector.as_ref().unwrap(),
-            cloned.prometheus_collector.as_ref().unwrap()
-        ));
-        assert!(Arc::ptr_eq(&state.pipeline_queue, &cloned.pipeline_queue));
-        assert!(Arc::ptr_eq(
-            &state.response_channel,
-            &cloned.response_channel
-        ));
-        assert!(Arc::ptr_eq(
-            &state.priority_calculator,
-            &cloned.priority_calculator
-        ));
-        assert!(Arc::ptr_eq(&state.worker_manager, &cloned.worker_manager));
-    }
-
-    #[test]
-    fn test_app_state_field_access_and_mutation() {
-        let mut state = make_app_state();
-        state.auth_enabled = true;
-        state.rate_limit_enabled = true;
-        state.pipeline_enabled = true;
-        state.ip_whitelist = vec!["127.0.0.1".to_string(), "10.0.0.0/8".to_string()];
-
-        assert!(state.auth_enabled);
-        assert!(state.rate_limit_enabled);
-        assert!(state.pipeline_enabled);
-        assert_eq!(state.ip_whitelist.len(), 2);
-        assert_eq!(state.ip_whitelist[0], "127.0.0.1");
-    }
-
-    #[test]
-    fn test_app_state_auth_fields_default_none() {
-        let state = make_app_state();
+        // auth feature 能力（全部 None — 默认禁用）
         #[cfg(feature = "auth")]
         {
-            assert!(state.jwt_manager.is_none());
-            assert!(state.user_store.is_none());
-            assert!(state.csrf_config.is_none());
-            assert!(state.csrf_token_store.is_none());
+            kit.set_config(Option::<Arc<auth::JwtManager>>::None);
+            kit.set_config(Option::<Arc<auth::UserStore>>::None);
+            kit.set_config(Option::<Arc<auth::CsrfConfig>>::None);
+            kit.set_config(Option::<Arc<auth::CsrfTokenStore>>::None);
         }
+
+        // 注册所有 Module（15 个非 auth + 4 个 auth feature）
+        kit.register::<EmbeddingModule>().unwrap();
+        kit.register::<RateLimitModule>().unwrap();
+        kit.register::<CacheModule>().unwrap();
+        kit.register::<DbModule>().unwrap();
+        kit.register::<AuditModule>().unwrap();
+        kit.register::<MetricsCollectorModule>().unwrap();
+        kit.register::<PrometheusCollectorModule>().unwrap();
+        kit.register::<IpWhitelistModule>().unwrap();
+        kit.register::<AuthEnabledModule>().unwrap();
+        kit.register::<RateLimitEnabledModule>().unwrap();
+        kit.register::<PipelineEnabledModule>().unwrap();
+        kit.register::<PipelineQueueModule>().unwrap();
+        kit.register::<ResponseChannelModule>().unwrap();
+        kit.register::<PriorityCalculatorModule>().unwrap();
+        kit.register::<WorkerManagerModule>().unwrap();
+
+        #[cfg(feature = "auth")]
+        {
+            kit.register::<AuthModule>().unwrap();
+            kit.register::<UserStoreModule>().unwrap();
+            kit.register::<CsrfConfigModule>().unwrap();
+            kit.register::<CsrfTokenStoreModule>().unwrap();
+        }
+
+        let kit = kit.build().await.expect("Failed to build AsyncKit");
+        VecboostState { kit: Arc::new(kit) }
     }
 
+    /// 默认完整 VecboostState：metrics=Some, prometheus=Some, audit=None
+    async fn make_app_state() -> VecboostState {
+        make_app_state_with_options(
+            Some(Arc::new(metrics::InferenceCollector::new())),
+            Some(Arc::new(
+                metrics::PrometheusCollector::new().expect("Failed to create PrometheusCollector"),
+            )),
+            None,
+        )
+        .await
+    }
+
+    // -------------------------------------------------------------------------
+    // 构建与 Clone 测试
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_app_state_construction() {
+        let state = make_app_state().await;
+        assert!(state.kit.contains::<EmbeddingModule>());
+        assert!(state.kit.contains::<RateLimitModule>());
+        assert!(state.kit.contains::<AuditModule>());
+        assert!(state.kit.contains::<MetricsCollectorModule>());
+        assert!(state.kit.contains::<PrometheusCollectorModule>());
+        assert!(state.kit.contains::<IpWhitelistModule>());
+        assert!(state.kit.contains::<PipelineQueueModule>());
+        assert!(state.kit.contains::<WorkerManagerModule>());
+    }
+
+    #[tokio::test]
+    async fn test_app_state_clone_preserves_kit_arc() {
+        let state = make_app_state().await;
+        let cloned = state.clone();
+        assert!(Arc::ptr_eq(&state.kit, &cloned.kit));
+    }
+
+    #[tokio::test]
+    async fn test_app_state_multiple_clones_share_kit() {
+        let state = make_app_state().await;
+        let clone1 = state.clone();
+        let clone2 = state.clone();
+        let clone3 = state.clone();
+        assert!(Arc::ptr_eq(&state.kit, &clone1.kit));
+        assert!(Arc::ptr_eq(&state.kit, &clone2.kit));
+        assert!(Arc::ptr_eq(&state.kit, &clone3.kit));
+    }
+
+    // -------------------------------------------------------------------------
+    // kit.require 能力查询测试
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_kit_require_embedding_service() {
+        let state = make_app_state().await;
+        let service = state.kit.require::<EmbeddingModule>().unwrap();
+        let _guard = service.read().await;
+    }
+
+    #[tokio::test]
+    async fn test_kit_require_rate_limiter() {
+        let state = make_app_state().await;
+        let _limiter = state.kit.require::<RateLimitModule>().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_kit_require_metrics_collector_returns_some() {
+        let state = make_app_state().await;
+        let collector = state.kit.require::<MetricsCollectorModule>().unwrap();
+        assert!(collector.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_kit_require_prometheus_collector_returns_some() {
+        let state = make_app_state().await;
+        let collector = state.kit.require::<PrometheusCollectorModule>().unwrap();
+        assert!(collector.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_kit_require_audit_logger_returns_none() {
+        let state = make_app_state().await;
+        let logger = state.kit.require::<AuditModule>().unwrap();
+        assert!(logger.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_kit_require_ip_whitelist_empty() {
+        let state = make_app_state().await;
+        let whitelist = state.kit.require::<IpWhitelistModule>().unwrap();
+        assert!(whitelist.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_kit_require_bool_flags_default_false() {
+        let state = make_app_state().await;
+        let auth_enabled = state.kit.require::<AuthEnabledModule>().unwrap();
+        let rate_limit_enabled = state.kit.require::<RateLimitEnabledModule>().unwrap();
+        let pipeline_enabled = state.kit.require::<PipelineEnabledModule>().unwrap();
+        assert!(!auth_enabled);
+        assert!(!rate_limit_enabled);
+        assert!(!pipeline_enabled);
+    }
+
+    #[tokio::test]
+    async fn test_kit_require_pipeline_components() {
+        let state = make_app_state().await;
+        let _queue = state.kit.require::<PipelineQueueModule>().unwrap();
+        let _channel = state.kit.require::<ResponseChannelModule>().unwrap();
+        let _calculator = state.kit.require::<PriorityCalculatorModule>().unwrap();
+        let _manager = state.kit.require::<WorkerManagerModule>().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_kit_require_cache_and_db_default_false() {
+        let state = make_app_state().await;
+        let cache_enabled = state.kit.require::<CacheModule>().unwrap();
+        let db_enabled = state.kit.require::<DbModule>().unwrap();
+        assert!(!cache_enabled);
+        assert!(!db_enabled);
+    }
+
+    // -------------------------------------------------------------------------
+    // FromRef 测试（http feature）
+    // -------------------------------------------------------------------------
+
     #[cfg(feature = "http")]
-    #[test]
-    fn test_from_ref_service() {
-        let state = make_app_state();
+    #[tokio::test]
+    async fn test_from_ref_service() {
+        let state = make_app_state().await;
         let service: Arc<RwLock<EmbeddingService>> = FromRef::from_ref(&state);
-        assert!(Arc::ptr_eq(&service, &state.service));
+        let kit_service = state.kit.require::<EmbeddingModule>().unwrap();
+        assert!(Arc::ptr_eq(&service, &kit_service));
     }
 
     #[cfg(feature = "http")]
-    #[test]
-    fn test_from_ref_rate_limiter() {
-        let state = make_app_state();
+    #[tokio::test]
+    async fn test_from_ref_rate_limiter() {
+        let state = make_app_state().await;
         let limiter: Arc<rate_limit::LimiteronAdapter> = FromRef::from_ref(&state);
-        assert!(Arc::ptr_eq(&limiter, &state.rate_limiter));
+        let kit_limiter = state.kit.require::<RateLimitModule>().unwrap();
+        assert!(Arc::ptr_eq(&limiter, &kit_limiter));
     }
 
     #[cfg(feature = "http")]
-    #[test]
-    fn test_from_ref_metrics_collector() {
-        let state = make_app_state();
+    #[tokio::test]
+    async fn test_from_ref_metrics_collector() {
+        let state = make_app_state().await;
         let collector: Arc<metrics::InferenceCollector> = FromRef::from_ref(&state);
-        assert!(Arc::ptr_eq(
-            &collector,
-            state.metrics_collector.as_ref().unwrap()
-        ));
+        let kit_collector = state.kit.require::<MetricsCollectorModule>().unwrap();
+        assert!(Arc::ptr_eq(&collector, kit_collector.as_ref().unwrap()));
     }
 
     #[cfg(feature = "http")]
-    #[test]
-    fn test_from_ref_prometheus_collector() {
-        let state = make_app_state();
+    #[tokio::test]
+    async fn test_from_ref_prometheus_collector() {
+        let state = make_app_state().await;
         let collector: Arc<metrics::PrometheusCollector> = FromRef::from_ref(&state);
-        assert!(Arc::ptr_eq(
-            &collector,
-            state.prometheus_collector.as_ref().unwrap()
-        ));
+        let kit_collector = state.kit.require::<PrometheusCollectorModule>().unwrap();
+        assert!(Arc::ptr_eq(&collector, kit_collector.as_ref().unwrap()));
     }
 
     #[cfg(feature = "http")]
-    #[test]
-    fn test_from_ref_audit_logger_returns_none() {
-        let state = make_app_state();
+    #[tokio::test]
+    async fn test_from_ref_audit_logger_returns_none() {
+        let state = make_app_state().await;
         let logger: Option<Arc<audit::AuditLogger>> = FromRef::from_ref(&state);
         assert!(logger.is_none());
     }
 
     #[cfg(feature = "http")]
-    #[test]
-    fn test_from_ref_audit_logger_returns_some() {
-        let mut state = make_app_state();
+    #[tokio::test]
+    async fn test_from_ref_audit_logger_returns_some() {
         let config = audit::AuditConfig {
             enabled: false,
             ..Default::default()
         };
-        state.audit_logger = Some(Arc::new(audit::AuditLogger::new(config)));
-        let logger: Option<Arc<audit::AuditLogger>> = FromRef::from_ref(&state);
-        assert!(logger.is_some());
-        assert!(Arc::ptr_eq(
-            logger.as_ref().unwrap(),
-            state.audit_logger.as_ref().unwrap()
-        ));
-    }
-
-    #[cfg(all(feature = "http", feature = "auth"))]
-    #[test]
-    fn test_from_ref_jwt_manager_with_some() {
-        let mut state = make_app_state();
-        let secret = "test_secret_key_for_jwt_validation_must_be_long_enough_12345678";
-        state.jwt_manager = Some(Arc::new(
-            auth::JwtManager::new(secret.to_string()).expect("Failed to create JwtManager"),
-        ));
-        let manager: Arc<auth::JwtManager> = FromRef::from_ref(&state);
-        assert!(Arc::ptr_eq(&manager, state.jwt_manager.as_ref().unwrap()));
-    }
-
-    #[cfg(all(feature = "http", feature = "auth", feature = "db"))]
-    #[tokio::test]
-    async fn test_from_ref_user_store_with_some() {
-        let pool = crate::db::DbPool::new("sqlite::memory:")
-            .await
-            .expect("Failed to create in-memory db pool");
-        let mut state = make_app_state();
-        state.user_store = Some(Arc::new(auth::UserStore::new(Arc::new(pool))));
-        let store: Arc<auth::UserStore> = FromRef::from_ref(&state);
-        assert!(Arc::ptr_eq(&store, state.user_store.as_ref().unwrap()));
-    }
-
-    #[cfg(all(feature = "http", feature = "auth"))]
-    #[test]
-    fn test_from_ref_jwt_manager_panics_when_none() {
-        let state = make_app_state();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _: Arc<auth::JwtManager> = FromRef::from_ref(&state);
-        }));
-        assert!(
-            result.is_err(),
-            "from_ref should panic when jwt_manager is None"
-        );
-    }
-
-    #[cfg(all(feature = "http", feature = "auth"))]
-    #[test]
-    fn test_from_ref_user_store_panics_when_none() {
-        let state = make_app_state();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _: Arc<auth::UserStore> = FromRef::from_ref(&state);
-        }));
-        assert!(
-            result.is_err(),
-            "from_ref should panic when user_store is None"
-        );
-    }
-
-    #[test]
-    fn test_app_state_with_auth_enabled_flag() {
-        let mut state = make_app_state();
-        state.auth_enabled = true;
-        assert!(state.auth_enabled);
-
-        state.auth_enabled = false;
-        assert!(!state.auth_enabled);
-    }
-
-    #[test]
-    fn test_app_state_ip_whitelist_mutability() {
-        let mut state = make_app_state();
-        state.ip_whitelist.push("192.168.1.1".to_string());
-        state.ip_whitelist.push("10.0.0.1".to_string());
-        assert_eq!(state.ip_whitelist.len(), 2);
-        assert!(state.ip_whitelist.contains(&"192.168.1.1".to_string()));
-        assert!(state.ip_whitelist.contains(&"10.0.0.1".to_string()));
+        let logger = Arc::new(audit::AuditLogger::new(config));
+        let state = make_app_state_with_options(
+            Some(Arc::new(metrics::InferenceCollector::new())),
+            Some(Arc::new(
+                metrics::PrometheusCollector::new().expect("Failed to create PrometheusCollector"),
+            )),
+            Some(logger.clone()),
+        )
+        .await;
+        let extracted: Option<Arc<audit::AuditLogger>> = FromRef::from_ref(&state);
+        assert!(extracted.is_some());
+        assert!(Arc::ptr_eq(&extracted.unwrap(), &logger));
     }
 
     #[cfg(feature = "http")]
-    #[test]
-    fn test_from_ref_metrics_collector_panics_when_none() {
-        let mut state = make_app_state();
-        state.metrics_collector = None;
+    #[tokio::test]
+    async fn test_from_ref_service_after_clone() {
+        let state = make_app_state().await;
+        let cloned = state.clone();
+        let service: Arc<RwLock<EmbeddingService>> = FromRef::from_ref(&cloned);
+        let kit_service = state.kit.require::<EmbeddingModule>().unwrap();
+        assert!(Arc::ptr_eq(&service, &kit_service));
+    }
+
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_from_ref_rate_limiter_after_clone() {
+        let state = make_app_state().await;
+        let cloned = state.clone();
+        let limiter: Arc<rate_limit::LimiteronAdapter> = FromRef::from_ref(&cloned);
+        let kit_limiter = state.kit.require::<RateLimitModule>().unwrap();
+        assert!(Arc::ptr_eq(&limiter, &kit_limiter));
+    }
+
+    // -------------------------------------------------------------------------
+    // FromRef panic 测试（None 能力触发 panic）
+    // -------------------------------------------------------------------------
+
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_from_ref_metrics_collector_panics_when_none() {
+        let state = make_app_state_with_options(None, None, None).await;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _: Arc<metrics::InferenceCollector> = FromRef::from_ref(&state);
         }));
@@ -452,10 +529,9 @@ mod tests {
     }
 
     #[cfg(feature = "http")]
-    #[test]
-    fn test_from_ref_prometheus_collector_panics_when_none() {
-        let mut state = make_app_state();
-        state.prometheus_collector = None;
+    #[tokio::test]
+    async fn test_from_ref_prometheus_collector_panics_when_none() {
+        let state = make_app_state_with_options(None, None, None).await;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _: Arc<metrics::PrometheusCollector> = FromRef::from_ref(&state);
         }));
@@ -465,237 +541,45 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_app_state_pipeline_enabled_mutability() {
-        let mut state = make_app_state();
-        assert!(!state.pipeline_enabled);
-        state.pipeline_enabled = true;
-        assert!(state.pipeline_enabled);
-        state.pipeline_enabled = false;
-        assert!(!state.pipeline_enabled);
-    }
-
-    #[test]
-    fn test_app_state_rate_limit_enabled_mutability() {
-        let mut state = make_app_state();
-        assert!(!state.rate_limit_enabled);
-        state.rate_limit_enabled = true;
-        assert!(state.rate_limit_enabled);
-    }
-
-    #[test]
-    fn test_app_state_service_arc_shared_after_clone() {
-        let state = make_app_state();
-        let cloned = state.clone();
-        // Modifying through the original should be visible through the clone
-        // (since Arc shares the underlying data)
-        assert!(Arc::ptr_eq(&state.service, &cloned.service));
-    }
-
-    #[test]
-    fn test_app_state_kit_is_none_by_default() {
-        let state = make_app_state();
-        assert!(state.kit.is_none());
-    }
-
-    #[test]
-    fn test_app_state_kit_field_mutability() {
-        let mut state = make_app_state();
-        // kit remains None; verify we can assign None again
-        state.kit = None;
-        assert!(state.kit.is_none());
-    }
-
-    #[cfg(feature = "http")]
-    #[test]
-    fn test_from_ref_audit_logger_clone_preserves_arc() {
-        let mut state = make_app_state();
-        let config = audit::AuditConfig {
-            enabled: false,
-            ..Default::default()
-        };
-        let logger = Arc::new(audit::AuditLogger::new(config));
-        state.audit_logger = Some(Arc::clone(&logger));
-
-        let extracted: Option<Arc<audit::AuditLogger>> = FromRef::from_ref(&state);
-        assert!(extracted.is_some());
-        assert!(Arc::ptr_eq(&extracted.unwrap(), &logger));
-    }
-
-    #[cfg(feature = "http")]
-    #[test]
-    fn test_from_ref_service_after_clone() {
-        let state = make_app_state();
-        let cloned = state.clone();
-        let service: Arc<RwLock<EmbeddingService>> = FromRef::from_ref(&cloned);
-        assert!(Arc::ptr_eq(&service, &state.service));
-    }
-
-    #[cfg(feature = "http")]
-    #[test]
-    fn test_from_ref_rate_limiter_after_clone() {
-        let state = make_app_state();
-        let cloned = state.clone();
-        let limiter: Arc<rate_limit::LimiteronAdapter> = FromRef::from_ref(&cloned);
-        assert!(Arc::ptr_eq(&limiter, &state.rate_limiter));
-    }
-
-    #[test]
-    fn test_app_state_all_bool_fields() {
-        let mut state = make_app_state();
-        state.auth_enabled = true;
-        state.rate_limit_enabled = true;
-        state.pipeline_enabled = true;
-
-        assert!(state.auth_enabled);
-        assert!(state.rate_limit_enabled);
-        assert!(state.pipeline_enabled);
-
-        // Toggle all off
-        state.auth_enabled = false;
-        state.rate_limit_enabled = false;
-        state.pipeline_enabled = false;
-
-        assert!(!state.auth_enabled);
-        assert!(!state.rate_limit_enabled);
-        assert!(!state.pipeline_enabled);
-    }
-
-    #[test]
-    fn test_app_state_ip_whitelist_empty_by_default() {
-        let state = make_app_state();
-        assert!(state.ip_whitelist.is_empty());
-    }
-
-    #[test]
-    fn test_app_state_ip_whitelist_with_cidr_entries() {
-        let mut state = make_app_state();
-        state.ip_whitelist = vec![
-            "127.0.0.1".to_string(),
-            "10.0.0.0/8".to_string(),
-            "192.168.1.0/24".to_string(),
-            "::1/128".to_string(),
-        ];
-        assert_eq!(state.ip_whitelist.len(), 4);
-        assert!(state.ip_whitelist.iter().any(|ip| ip.contains("/8")));
-        assert!(state.ip_whitelist.iter().any(|ip| ip.contains("/24")));
-        assert!(state.ip_whitelist.iter().any(|ip| ip.contains("/128")));
-    }
-
-    #[test]
-    fn test_app_state_clone_preserves_ip_whitelist() {
-        let mut state = make_app_state();
-        state.ip_whitelist = vec!["127.0.0.1".to_string(), "10.0.0.1".to_string()];
-        let cloned = state.clone();
-        assert_eq!(cloned.ip_whitelist, state.ip_whitelist);
-    }
-
-    #[test]
-    fn test_app_state_clone_preserves_bool_fields() {
-        let mut state = make_app_state();
-        state.auth_enabled = true;
-        state.rate_limit_enabled = true;
-        state.pipeline_enabled = true;
-        let cloned = state.clone();
-        assert_eq!(cloned.auth_enabled, state.auth_enabled);
-        assert_eq!(cloned.rate_limit_enabled, state.rate_limit_enabled);
-        assert_eq!(cloned.pipeline_enabled, state.pipeline_enabled);
-    }
-
-    #[test]
-    fn test_app_state_clone_preserves_kit() {
-        let state = make_app_state();
-        let cloned = state.clone();
-        assert_eq!(state.kit.is_none(), cloned.kit.is_none());
+    #[cfg(all(feature = "http", feature = "auth"))]
+    #[tokio::test]
+    async fn test_from_ref_jwt_manager_panics_when_none() {
+        let state = make_app_state().await;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Arc<auth::JwtManager> = FromRef::from_ref(&state);
+        }));
+        assert!(
+            result.is_err(),
+            "from_ref should panic when jwt_manager is None"
+        );
     }
 
     #[cfg(all(feature = "http", feature = "auth"))]
-    #[test]
-    fn test_app_state_auth_fields_can_be_set() {
-        let mut state = make_app_state();
-        let secret = "test_secret_key_for_jwt_validation_must_be_long_enough_12345678";
-        let jwt_manager = Arc::new(
-            auth::JwtManager::new(secret.to_string()).expect("Failed to create JwtManager"),
+    #[tokio::test]
+    async fn test_from_ref_user_store_panics_when_none() {
+        let state = make_app_state().await;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Arc<auth::UserStore> = FromRef::from_ref(&state);
+        }));
+        assert!(
+            result.is_err(),
+            "from_ref should panic when user_store is None"
         );
-        state.jwt_manager = Some(Arc::clone(&jwt_manager));
+    }
 
-        assert!(state.jwt_manager.is_some());
-        assert!(Arc::ptr_eq(
-            state.jwt_manager.as_ref().unwrap(),
-            &jwt_manager
-        ));
+    // -------------------------------------------------------------------------
+    // VecboostState Send + Sync 编译期断言
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_vecboost_state_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<VecboostState>();
     }
 
     #[test]
-    fn test_app_state_multiple_clones_share_arcs() {
-        let state = make_app_state();
-        let clone1 = state.clone();
-        let clone2 = state.clone();
-        let clone3 = state.clone();
-
-        assert!(Arc::ptr_eq(&state.service, &clone1.service));
-        assert!(Arc::ptr_eq(&state.service, &clone2.service));
-        assert!(Arc::ptr_eq(&state.service, &clone3.service));
-        assert!(Arc::ptr_eq(&state.rate_limiter, &clone1.rate_limiter));
-        assert!(Arc::ptr_eq(&state.rate_limiter, &clone2.rate_limiter));
-    }
-
-    #[test]
-    fn test_app_state_with_none_metrics_and_prometheus() {
-        let mut state = make_app_state();
-        state.metrics_collector = None;
-        state.prometheus_collector = None;
-        assert!(state.metrics_collector.is_none());
-        assert!(state.prometheus_collector.is_none());
-    }
-
-    #[test]
-    fn test_app_state_audit_logger_can_be_set_and_cleared() {
-        let mut state = make_app_state();
-        assert!(state.audit_logger.is_none());
-
-        let config = audit::AuditConfig {
-            enabled: false,
-            ..Default::default()
-        };
-        state.audit_logger = Some(Arc::new(audit::AuditLogger::new(config)));
-        assert!(state.audit_logger.is_some());
-
-        state.audit_logger = None;
-        assert!(state.audit_logger.is_none());
-    }
-
-    #[test]
-    fn test_app_state_worker_manager_arc_shared() {
-        let state = make_app_state();
-        let cloned = state.clone();
-        assert!(Arc::ptr_eq(&state.worker_manager, &cloned.worker_manager));
-    }
-
-    #[test]
-    fn test_app_state_priority_calculator_arc_shared() {
-        let state = make_app_state();
-        let cloned = state.clone();
-        assert!(Arc::ptr_eq(
-            &state.priority_calculator,
-            &cloned.priority_calculator
-        ));
-    }
-
-    #[test]
-    fn test_app_state_pipeline_queue_arc_shared() {
-        let state = make_app_state();
-        let cloned = state.clone();
-        assert!(Arc::ptr_eq(&state.pipeline_queue, &cloned.pipeline_queue));
-    }
-
-    #[test]
-    fn test_app_state_response_channel_arc_shared() {
-        let state = make_app_state();
-        let cloned = state.clone();
-        assert!(Arc::ptr_eq(
-            &state.response_channel,
-            &cloned.response_channel
-        ));
+    fn test_vecboost_state_is_clone() {
+        fn assert_clone<T: Clone>() {}
+        assert_clone::<VecboostState>();
     }
 }

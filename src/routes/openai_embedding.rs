@@ -55,13 +55,19 @@ pub async fn openai_embed_handler(
     let ip = extract_real_ip(addr);
 
     // Check rate limiting if enabled
-    if state.rate_limit_enabled {
-        let global_remaining = state
-            .rate_limiter
+    if state
+        .kit
+        .require::<crate::module_registry::RateLimitEnabledModule>()
+        .expect("RateLimitEnabledModule not registered")
+    {
+        let rate_limiter = state
+            .kit
+            .require::<crate::module_registry::RateLimitModule>()
+            .expect("RateLimitModule not registered");
+        let global_remaining = rate_limiter
             .get_remaining(crate::rate_limit::RateLimitDimension::Global)
             .await;
-        let ip_remaining = state
-            .rate_limiter
+        let ip_remaining = rate_limiter
             .get_remaining(crate::rate_limit::RateLimitDimension::Ip(ip.clone()))
             .await;
 
@@ -73,7 +79,11 @@ pub async fn openai_embed_handler(
     }
 
     // Process the embedding request using existing service
-    let service_guard = state.service.read().await;
+    let service = state
+        .kit
+        .require::<crate::module_registry::EmbeddingModule>()
+        .expect("EmbeddingModule not registered");
+    let service_guard = service.read().await;
 
     let texts = req.input.to_vec();
 
@@ -175,7 +185,7 @@ mod tests {
         }
     }
 
-    fn make_test_state() -> VecboostState {
+    async fn make_test_state() -> VecboostState {
         let temp_dir = tempdir().unwrap();
         let mock_engine = TestEngine::new(384);
         let model_config = ModelConfig {
@@ -202,66 +212,82 @@ mod tests {
         let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
         let pipeline_queue = Arc::new(PriorityRequestQueue::new(0));
         let response_channel = Arc::new(ResponseChannel::new());
+        let priority_calculator = Arc::new(PriorityCalculator::new(PriorityConfig::default()));
+        let worker_manager = Arc::new(WorkerManager::new(
+            pipeline_queue.clone(),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
 
+        let mut kit = trait_kit::AsyncKit::new();
+        kit.set_config(service.clone());
+        kit.set_config(rate_limiter.clone());
+        kit.set_config(pipeline_queue.clone());
+        kit.set_config(response_channel.clone());
+        kit.set_config(priority_calculator.clone());
+        kit.set_config(worker_manager.clone());
+        kit.set_config(Vec::<String>::new());
+        kit.set_config(crate::module_registry::AuthEnabled(false));
+        kit.set_config(crate::module_registry::RateLimitEnabled(false));
+        kit.set_config(crate::module_registry::PipelineEnabled(false));
+        kit.set_config(crate::module_registry::CacheConfig {
+            enabled: false,
+            size: 0,
+        });
+        kit.set_config(crate::module_registry::DbConfig { enabled: false });
+        kit.set_config(None::<Arc<crate::audit::AuditLogger>>);
+        kit.set_config(None::<Arc<crate::metrics::InferenceCollector>>);
+        kit.set_config(None::<Arc<crate::metrics::PrometheusCollector>>);
         #[cfg(feature = "auth")]
         {
-            VecboostState {
-                service,
-                jwt_manager: None,
-                user_store: None,
-                auth_enabled: false,
-                csrf_config: None,
-                csrf_token_store: None,
-                metrics_collector: None,
-                prometheus_collector: None,
-                rate_limiter,
-                ip_whitelist: vec![],
-                rate_limit_enabled: false,
-                audit_logger: None,
-                pipeline_enabled: false,
-                pipeline_queue,
-                response_channel,
-                priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
-                worker_manager: Arc::new(WorkerManager::new(
-                    Arc::new(PriorityRequestQueue::new(0)),
-                    Arc::new(ResponseChannel::new()),
-                    WorkerConfig::default(),
-                    Arc::new(RwLock::new(EmbeddingService::new(
-                        Arc::new(RwLock::new(TestEngine::new(384))),
-                        None,
-                    ))),
-                )),
-                kit: None,
-            }
+            kit.set_config(Option::<Arc<crate::auth::JwtManager>>::None);
+            kit.set_config(Option::<Arc<crate::auth::UserStore>>::None);
+            kit.set_config(Option::<Arc<crate::auth::CsrfConfig>>::None);
+            kit.set_config(Option::<Arc<crate::auth::CsrfTokenStore>>::None);
         }
-
-        #[cfg(not(feature = "auth"))]
+        kit.register::<crate::module_registry::EmbeddingModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::RateLimitModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::CacheModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::DbModule>().unwrap();
+        kit.register::<crate::module_registry::AuditModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::MetricsCollectorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PrometheusCollectorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::IpWhitelistModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::AuthEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::RateLimitEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PipelineEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PipelineQueueModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::ResponseChannelModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PriorityCalculatorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::WorkerManagerModule>()
+            .unwrap();
+        #[cfg(feature = "auth")]
         {
-            VecboostState {
-                service,
-                auth_enabled: false,
-                metrics_collector: None,
-                prometheus_collector: None,
-                rate_limiter,
-                ip_whitelist: vec![],
-                rate_limit_enabled: false,
-                audit_logger: None,
-                pipeline_enabled: false,
-                pipeline_queue,
-                response_channel,
-                priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
-                worker_manager: Arc::new(WorkerManager::new(
-                    Arc::new(PriorityRequestQueue::new(0)),
-                    Arc::new(ResponseChannel::new()),
-                    WorkerConfig::default(),
-                    Arc::new(RwLock::new(EmbeddingService::new(
-                        Arc::new(RwLock::new(TestEngine::new(384))),
-                        None,
-                    ))),
-                )),
-                kit: None,
-            }
+            kit.register::<crate::module_registry::AuthModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::UserStoreModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::CsrfConfigModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::CsrfTokenStoreModule>()
+                .unwrap();
         }
+        let kit = kit.build().await.unwrap();
+        VecboostState { kit: Arc::new(kit) }
     }
 
     #[test]
@@ -280,7 +306,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_openai_embed_handler_empty_input_returns_error() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9002);
         let req = OpenAIEmbedRequest {
             input: OpenAIInput::Multiple(vec![]),
@@ -306,7 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_openai_embed_handler_too_many_inputs_returns_error() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9002);
         let too_many: Vec<String> = (0..2049).map(|i| format!("text{}", i)).collect();
         let req = OpenAIEmbedRequest {
@@ -333,7 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_openai_embed_handler_single_input_returns_success() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9002);
         let req = OpenAIEmbedRequest {
             input: OpenAIInput::Single("hello world".to_string()),
@@ -355,7 +381,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_openai_embed_handler_multiple_inputs_returns_success() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9002);
         let req = OpenAIEmbedRequest {
             input: OpenAIInput::Multiple(vec![
@@ -380,7 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_openai_embed_handler_at_internal_batch_limit_succeeds() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9002);
         // The OpenAI handler allows up to 2048 items, but the internal
         // InputValidator enforces MAX_BATCH_SIZE=100. Use exactly 100 to test

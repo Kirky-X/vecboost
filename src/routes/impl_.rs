@@ -43,7 +43,11 @@ pub fn create_router(app_state: VecboostState) -> Router {
 
     #[cfg(feature = "auth")]
     {
-        if app_state.auth_enabled {
+        if app_state
+            .kit
+            .require::<crate::module_registry::AuthEnabledModule>()
+            .expect("AuthEnabledModule not registered")
+        {
             // Authentication routes (with timeout)
             let auth_routes = Router::new()
                 .route("/api/v1/auth/login", post(crate::auth::login_handler))
@@ -97,8 +101,14 @@ pub fn create_router(app_state: VecboostState) -> Router {
 
             // Apply CSRF protection (if enabled)
             let protected_routes = if let (Some(csrf_config), Some(csrf_token_store)) = (
-                app_state.csrf_config.clone(),
-                app_state.csrf_token_store.clone(),
+                app_state
+                    .kit
+                    .require::<crate::module_registry::CsrfConfigModule>()
+                    .expect("CsrfConfigModule not registered"),
+                app_state
+                    .kit
+                    .require::<crate::module_registry::CsrfTokenStoreModule>()
+                    .expect("CsrfTokenStoreModule not registered"),
             ) {
                 // If CSRF token validation is enabled, use combined middleware
                 if csrf_config.token_validation_enabled {
@@ -113,7 +123,11 @@ pub fn create_router(app_state: VecboostState) -> Router {
                         crate::auth::csrf_origin_middleware,
                     ))
                 }
-            } else if let Some(csrf_config) = app_state.csrf_config.clone() {
+            } else if let Some(csrf_config) = app_state
+                .kit
+                .require::<crate::module_registry::CsrfConfigModule>()
+                .expect("CsrfConfigModule not registered")
+            {
                 // Only Origin validation
                 protected_routes.layer(middleware::from_fn_with_state(
                     csrf_config,
@@ -238,6 +252,35 @@ mod tests {
 
     /// Build a minimal `VecboostState` for testing, with auth optionally enabled.
     async fn make_test_app_state(auth_enabled: bool) -> VecboostState {
+        #[cfg(feature = "auth")]
+        let csrf_config: Option<Arc<crate::auth::CsrfConfig>> = None;
+        #[cfg(feature = "auth")]
+        let csrf_token_store: Option<Arc<crate::auth::CsrfTokenStore>> = None;
+        make_test_app_state_with_options(
+            auth_enabled,
+            #[cfg(feature = "auth")]
+            csrf_config,
+            #[cfg(feature = "auth")]
+            csrf_token_store,
+        )
+        .await
+    }
+
+    /// Build a `VecboostState` with CSRF config injected (auth forced on).
+    #[cfg(feature = "auth")]
+    async fn make_test_app_state_with_csrf(
+        csrf_config: Option<Arc<crate::auth::CsrfConfig>>,
+        csrf_token_store: Option<Arc<crate::auth::CsrfTokenStore>>,
+    ) -> VecboostState {
+        make_test_app_state_with_options(true, csrf_config, csrf_token_store).await
+    }
+
+    /// Core builder: injects all 15 base modules + 4 auth modules (when `auth` is enabled).
+    async fn make_test_app_state_with_options(
+        auth_enabled: bool,
+        #[cfg(feature = "auth")] csrf_config: Option<Arc<crate::auth::CsrfConfig>>,
+        #[cfg(feature = "auth")] csrf_token_store: Option<Arc<crate::auth::CsrfTokenStore>>,
+    ) -> VecboostState {
         let temp_dir = tempdir().unwrap();
         let mock_engine = TestEngine::new(384);
         let model_config = ModelConfig {
@@ -275,63 +318,89 @@ mod tests {
         ));
 
         #[cfg(feature = "auth")]
-        {
+        let (jwt_manager, user_store): (
+            Option<Arc<crate::auth::JwtManager>>,
+            Option<Arc<crate::auth::UserStore>>,
+        ) = if auth_enabled {
             let jwt_secret = "test_secret_key_for_router_tests_must_be_long_enough_abcdef123456";
-            let jwt_manager = if auth_enabled {
+            (
                 Some(Arc::new(
                     crate::auth::JwtManager::new(jwt_secret.to_string()).unwrap(),
-                ))
-            } else {
-                None
-            };
-            let user_store = if auth_enabled {
-                Some(make_user_store_arc().await)
-            } else {
-                None
-            };
+                )),
+                Some(make_user_store_arc().await),
+            )
+        } else {
+            (None, None)
+        };
 
-            VecboostState {
-                service,
-                jwt_manager,
-                user_store,
-                auth_enabled,
-                csrf_config: None,
-                csrf_token_store: None,
-                metrics_collector: None,
-                prometheus_collector: None,
-                rate_limiter,
-                ip_whitelist: vec![],
-                rate_limit_enabled: false,
-                audit_logger: None,
-                pipeline_enabled: false,
-                pipeline_queue,
-                response_channel,
-                priority_calculator,
-                worker_manager,
-                kit: None,
-            }
-        }
-
-        #[cfg(not(feature = "auth"))]
+        let mut kit = trait_kit::AsyncKit::new();
+        kit.set_config(service.clone());
+        kit.set_config(rate_limiter.clone());
+        kit.set_config(pipeline_queue.clone());
+        kit.set_config(response_channel.clone());
+        kit.set_config(priority_calculator.clone());
+        kit.set_config(worker_manager.clone());
+        kit.set_config(Vec::<String>::new());
+        kit.set_config(crate::module_registry::AuthEnabled(auth_enabled));
+        kit.set_config(crate::module_registry::RateLimitEnabled(false));
+        kit.set_config(crate::module_registry::PipelineEnabled(false));
+        kit.set_config(crate::module_registry::CacheConfig {
+            enabled: false,
+            size: 0,
+        });
+        kit.set_config(crate::module_registry::DbConfig { enabled: false });
+        kit.set_config(None::<Arc<crate::audit::AuditLogger>>);
+        kit.set_config(None::<Arc<crate::metrics::InferenceCollector>>);
+        kit.set_config(None::<Arc<crate::metrics::PrometheusCollector>>);
+        #[cfg(feature = "auth")]
         {
-            let _ = auth_enabled;
-            VecboostState {
-                service,
-                auth_enabled: false,
-                metrics_collector: None,
-                prometheus_collector: None,
-                rate_limiter,
-                ip_whitelist: vec![],
-                rate_limit_enabled: false,
-                audit_logger: None,
-                pipeline_enabled: false,
-                pipeline_queue,
-                response_channel,
-                priority_calculator,
-                worker_manager,
-                kit: None,
-            }
+            kit.set_config(jwt_manager);
+            kit.set_config(user_store);
+            kit.set_config(csrf_config);
+            kit.set_config(csrf_token_store);
         }
+        kit.register::<crate::module_registry::EmbeddingModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::RateLimitModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::CacheModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::DbModule>().unwrap();
+        kit.register::<crate::module_registry::AuditModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::MetricsCollectorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PrometheusCollectorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::IpWhitelistModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::AuthEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::RateLimitEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PipelineEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PipelineQueueModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::ResponseChannelModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PriorityCalculatorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::WorkerManagerModule>()
+            .unwrap();
+        #[cfg(feature = "auth")]
+        {
+            kit.register::<crate::module_registry::AuthModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::UserStoreModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::CsrfConfigModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::CsrfTokenStoreModule>()
+                .unwrap();
+        }
+        let kit = kit.build().await.expect("Failed to build AsyncKit");
+        VecboostState { kit: Arc::new(kit) }
     }
 
     fn build_request(method: Method, uri: &str) -> Request<Body> {
@@ -454,64 +523,11 @@ mod tests {
     #[tokio::test]
     async fn test_create_router_with_csrf_origin_only() {
         // Build state with CSRF config (Origin validation only, no token validation)
-        let jwt_secret = "test_secret_key_for_csrf_origin_tests_long_enough_abc";
         let csrf_config = Arc::new(crate::auth::CsrfConfig::new(vec![
             "https://example.com".to_string(),
         ]));
 
-        let temp_dir = tempdir().unwrap();
-        let mock_engine = TestEngine::new(384);
-        let model_config = ModelConfig {
-            name: "test-model".to_string(),
-            engine_type: EngineType::Candle,
-            model_path: PathBuf::from(temp_dir.path()),
-            tokenizer_path: None,
-            device: DeviceType::Cpu,
-            max_batch_size: 32,
-            pooling_mode: None,
-            expected_dimension: Some(384),
-            memory_limit_bytes: None,
-            oom_fallback_enabled: true,
-            model_sha256: None,
-        };
-        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
-            Arc::new(RwLock::new(mock_engine));
-        let service = Arc::new(RwLock::new(EmbeddingService::new(
-            engine,
-            Some(model_config),
-        )));
-        std::mem::forget(temp_dir);
-
-        let state = VecboostState {
-            service,
-            jwt_manager: Some(Arc::new(
-                crate::auth::JwtManager::new(jwt_secret.to_string()).unwrap(),
-            )),
-            user_store: Some(make_user_store_arc().await),
-            auth_enabled: true,
-            csrf_config: Some(csrf_config),
-            csrf_token_store: None,
-            metrics_collector: None,
-            prometheus_collector: None,
-            rate_limiter: Arc::new(LimiteronAdapter::with_default_config()),
-            ip_whitelist: vec![],
-            rate_limit_enabled: false,
-            audit_logger: None,
-            pipeline_enabled: false,
-            pipeline_queue: Arc::new(PriorityRequestQueue::new(0)),
-            response_channel: Arc::new(ResponseChannel::new()),
-            priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
-            worker_manager: Arc::new(WorkerManager::new(
-                Arc::new(PriorityRequestQueue::new(0)),
-                Arc::new(ResponseChannel::new()),
-                WorkerConfig::default(),
-                Arc::new(RwLock::new(EmbeddingService::new(
-                    Arc::new(RwLock::new(TestEngine::new(384))),
-                    None,
-                ))),
-            )),
-            kit: None,
-        };
+        let state = make_test_app_state_with_csrf(Some(csrf_config), None).await;
 
         // Router should build successfully with CSRF Origin-only config
         let app = create_router(state);
@@ -532,66 +548,13 @@ mod tests {
     #[tokio::test]
     async fn test_create_router_with_csrf_token_validation() {
         // Build state with CSRF config (both Origin + token validation enabled)
-        let jwt_secret = "test_secret_key_for_csrf_token_tests_long_enough_xyz";
         let csrf_config = Arc::new(
             crate::auth::CsrfConfig::new(vec!["https://example.com".to_string()])
                 .with_token_validation(true),
         );
         let csrf_token_store = Arc::new(crate::auth::CsrfTokenStore::new());
 
-        let temp_dir = tempdir().unwrap();
-        let mock_engine = TestEngine::new(384);
-        let model_config = ModelConfig {
-            name: "test-model".to_string(),
-            engine_type: EngineType::Candle,
-            model_path: PathBuf::from(temp_dir.path()),
-            tokenizer_path: None,
-            device: DeviceType::Cpu,
-            max_batch_size: 32,
-            pooling_mode: None,
-            expected_dimension: Some(384),
-            memory_limit_bytes: None,
-            oom_fallback_enabled: true,
-            model_sha256: None,
-        };
-        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
-            Arc::new(RwLock::new(mock_engine));
-        let service = Arc::new(RwLock::new(EmbeddingService::new(
-            engine,
-            Some(model_config),
-        )));
-        std::mem::forget(temp_dir);
-
-        let state = VecboostState {
-            service,
-            jwt_manager: Some(Arc::new(
-                crate::auth::JwtManager::new(jwt_secret.to_string()).unwrap(),
-            )),
-            user_store: Some(make_user_store_arc().await),
-            auth_enabled: true,
-            csrf_config: Some(csrf_config),
-            csrf_token_store: Some(csrf_token_store),
-            metrics_collector: None,
-            prometheus_collector: None,
-            rate_limiter: Arc::new(LimiteronAdapter::with_default_config()),
-            ip_whitelist: vec![],
-            rate_limit_enabled: false,
-            audit_logger: None,
-            pipeline_enabled: false,
-            pipeline_queue: Arc::new(PriorityRequestQueue::new(0)),
-            response_channel: Arc::new(ResponseChannel::new()),
-            priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
-            worker_manager: Arc::new(WorkerManager::new(
-                Arc::new(PriorityRequestQueue::new(0)),
-                Arc::new(ResponseChannel::new()),
-                WorkerConfig::default(),
-                Arc::new(RwLock::new(EmbeddingService::new(
-                    Arc::new(RwLock::new(TestEngine::new(384))),
-                    None,
-                ))),
-            )),
-            kit: None,
-        };
+        let state = make_test_app_state_with_csrf(Some(csrf_config), Some(csrf_token_store)).await;
 
         // Router should build successfully with CSRF token validation config
         let app = create_router(state);

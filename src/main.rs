@@ -10,16 +10,24 @@ use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use vecboost::AppConfig;
 #[cfg(feature = "config")]
 use vecboost::config::ConfersAppConfig;
-#[cfg(feature = "auth")]
-use vecboost::module_registry::AuthModule;
 #[cfg(feature = "limiteron")]
 use vecboost::module_registry::RateLimitModule;
+#[cfg(feature = "auth")]
+use vecboost::module_registry::{
+    AuthModule, CsrfConfigModule, CsrfTokenStoreModule, UserStoreModule,
+};
 use vecboost::{
     VecboostState,
     audit::{AuditConfig, AuditLogger},
     config::model::{EngineType, ModelConfig},
     engine::AnyEngine,
-    module_registry::{AuditModule, CacheConfig, CacheModule, DbConfig, DbModule, EmbeddingModule},
+    module_registry::{
+        AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, DbConfig, DbModule,
+        EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
+        PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule,
+        PrometheusCollectorModule, RateLimitEnabled, RateLimitEnabledModule, ResponseChannelModule,
+        WorkerManagerModule,
+    },
     pipeline::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
         WorkerManager,
@@ -375,7 +383,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut kit = trait_kit::AsyncKit::new();
 
-    // 注入预构建的能力对象（clone Arc 以保留原始变量给 VecboostState）
+    // 注入预构建的能力对象（kit 是 single source of truth）
     kit.set_config(service.clone());
     #[cfg(feature = "limiteron")]
     kit.set_config(rate_limiter.clone());
@@ -387,6 +395,20 @@ async fn main() -> anyhow::Result<()> {
         enabled: cfg!(feature = "db"),
     });
     kit.set_config(audit_logger.clone());
+    // v0.3.0 D3: 注入 13 个新 Module 的能力配置
+    kit.set_config(Some(Arc::new(vecboost::metrics::InferenceCollector::new())));
+    kit.set_config(Some(Arc::new(
+        vecboost::metrics::PrometheusCollector::new()
+            .map_err(|e| anyhow::anyhow!("Failed to create PrometheusCollector: {}", e))?,
+    )));
+    kit.set_config(config.rate_limit.ip_whitelist.clone());
+    kit.set_config(AuthEnabled(config.auth.enabled));
+    kit.set_config(RateLimitEnabled(config.rate_limit.enabled));
+    kit.set_config(PipelineEnabled(pipeline_enabled));
+    kit.set_config(pipeline_queue.clone());
+    kit.set_config(response_channel.clone());
+    kit.set_config(priority_calculator.clone());
+    kit.set_config(worker_manager.clone());
     #[cfg(feature = "auth")]
     {
         if let Some(ref jwt) = jwt_manager {
@@ -394,9 +416,12 @@ async fn main() -> anyhow::Result<()> {
         } else {
             kit.set_config(None::<Arc<vecboost::auth::JwtManager>>);
         }
+        kit.set_config(user_store.clone());
+        kit.set_config(csrf_config.clone());
+        kit.set_config(csrf_token_store.clone());
     }
 
-    // 注册模块
+    // 注册模块（15 个非 auth + 4 个 auth feature = 19 个 Module）
     kit.register::<EmbeddingModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     #[cfg(feature = "limiteron")]
@@ -408,9 +433,38 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to register DbModule: {}", e))?;
     kit.register::<AuditModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register AuditModule: {}", e))?;
+    // v0.3.0 D3: 注册 13 个新 Module
+    kit.register::<MetricsCollectorModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register MetricsCollectorModule: {}", e))?;
+    kit.register::<PrometheusCollectorModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register PrometheusCollectorModule: {}", e))?;
+    kit.register::<IpWhitelistModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register IpWhitelistModule: {}", e))?;
+    kit.register::<AuthEnabledModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register AuthEnabledModule: {}", e))?;
+    kit.register::<RateLimitEnabledModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register RateLimitEnabledModule: {}", e))?;
+    kit.register::<PipelineEnabledModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register PipelineEnabledModule: {}", e))?;
+    kit.register::<PipelineQueueModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register PipelineQueueModule: {}", e))?;
+    kit.register::<ResponseChannelModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register ResponseChannelModule: {}", e))?;
+    kit.register::<PriorityCalculatorModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register PriorityCalculatorModule: {}", e))?;
+    kit.register::<WorkerManagerModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register WorkerManagerModule: {}", e))?;
     #[cfg(feature = "auth")]
-    kit.register::<AuthModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register AuthModule: {}", e))?;
+    {
+        kit.register::<AuthModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to register AuthModule: {}", e))?;
+        kit.register::<UserStoreModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to register UserStoreModule: {}", e))?;
+        kit.register::<CsrfConfigModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to register CsrfConfigModule: {}", e))?;
+        kit.register::<CsrfTokenStoreModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to register CsrfTokenStoreModule: {}", e))?;
+    }
 
     let kit = kit
         .build()
@@ -420,35 +474,14 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("AsyncKit module registry built successfully");
 
-    let app_state = VecboostState {
-        service,
-        #[cfg(feature = "auth")]
-        jwt_manager: jwt_manager.clone(),
-        #[cfg(feature = "auth")]
-        user_store: user_store.clone(),
-        auth_enabled: config.auth.enabled,
-        #[cfg(feature = "auth")]
-        csrf_config,
-        #[cfg(feature = "auth")]
-        csrf_token_store,
-        metrics_collector: Some(Arc::new(vecboost::metrics::InferenceCollector::new())),
-        prometheus_collector: Some(Arc::new(
-            vecboost::metrics::PrometheusCollector::new()
-                .map_err(|e| anyhow::anyhow!("Failed to create PrometheusCollector: {}", e))?,
-        )),
-        rate_limiter,
-        ip_whitelist: config.rate_limit.ip_whitelist,
-        rate_limit_enabled: config.rate_limit.enabled,
-        audit_logger,
-        pipeline_enabled,
-        pipeline_queue,
-        response_channel,
-        priority_calculator,
-        worker_manager,
-        kit: Some(kit),
-    };
+    // v0.3.0 D3: VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
+    let app_state = VecboostState { kit };
 
-    let _grpc_service = app_state.service.clone();
+    let _grpc_service = app_state
+        .kit
+        .require::<EmbeddingModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to require EmbeddingModule for gRPC: {}", e))?
+        .clone();
 
     // Using the new routing module to create the router
     let app = routes::create_router(app_state);

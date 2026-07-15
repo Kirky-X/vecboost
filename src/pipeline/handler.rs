@@ -22,17 +22,28 @@ pub async fn handle_pipeline_request(
     let request_id = Uuid::new_v4().to_string();
 
     // 创建响应通道
-    let response_rx = state.response_channel.register(request_id.clone()).await;
+    let response_rx = state
+        .kit
+        .require::<crate::module_registry::ResponseChannelModule>()
+        .expect("ResponseChannelModule not registered")
+        .register(request_id.clone())
+        .await;
 
     // 构建队列请求
     let priority = state
-        .priority_calculator
+        .kit
+        .require::<crate::module_registry::PriorityCalculatorModule>()
+        .expect("PriorityCalculatorModule not registered")
         .calculate(crate::pipeline::PriorityInput {
             base_priority: crate::pipeline::Priority::Normal,
             time_until_timeout: Duration::from_secs(30),
             user_tier: None,
             source: crate::pipeline::RequestSource::http(ip.clone()),
-            queue_length: state.pipeline_queue.size(),
+            queue_length: state
+                .kit
+                .require::<crate::module_registry::PipelineQueueModule>()
+                .expect("PipelineQueueModule not registered")
+                .size(),
         });
 
     let (tx, _) = oneshot::channel();
@@ -48,7 +59,12 @@ pub async fn handle_pipeline_request(
     };
 
     // 提交到流水线队列
-    state.pipeline_queue.enqueue(queued_request).await?;
+    state
+        .kit
+        .require::<crate::module_registry::PipelineQueueModule>()
+        .expect("PipelineQueueModule not registered")
+        .enqueue(queued_request)
+        .await?;
 
     // 等待响应
     match tokio::time::timeout(Duration::from_secs(30), response_rx).await {
@@ -139,7 +155,7 @@ mod tests {
         }
     }
 
-    fn create_test_state(
+    async fn create_test_state(
         queue_capacity: usize,
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
     ) -> VecboostState {
@@ -153,31 +169,78 @@ mod tests {
             WorkerConfig::default(),
             Arc::clone(&service),
         ));
+        let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
 
-        VecboostState {
-            service,
-            #[cfg(feature = "auth")]
-            jwt_manager: None,
-            #[cfg(feature = "auth")]
-            user_store: None,
-            auth_enabled: false,
-            #[cfg(feature = "auth")]
-            csrf_config: None,
-            #[cfg(feature = "auth")]
-            csrf_token_store: None,
-            metrics_collector: None,
-            prometheus_collector: None,
-            rate_limiter: Arc::new(LimiteronAdapter::with_default_config()),
-            ip_whitelist: vec![],
-            rate_limit_enabled: false,
-            audit_logger: None,
-            pipeline_enabled: true,
-            pipeline_queue: queue,
-            response_channel,
-            priority_calculator,
-            worker_manager,
-            kit: None,
+        let mut kit = trait_kit::AsyncKit::new();
+        kit.set_config(service.clone());
+        kit.set_config(rate_limiter.clone());
+        kit.set_config(queue.clone());
+        kit.set_config(response_channel.clone());
+        kit.set_config(priority_calculator.clone());
+        kit.set_config(worker_manager.clone());
+        kit.set_config(Vec::<String>::new());
+        kit.set_config(crate::module_registry::AuthEnabled(false));
+        kit.set_config(crate::module_registry::RateLimitEnabled(false));
+        kit.set_config(crate::module_registry::PipelineEnabled(true));
+        kit.set_config(crate::module_registry::CacheConfig {
+            enabled: false,
+            size: 0,
+        });
+        kit.set_config(crate::module_registry::DbConfig { enabled: false });
+        kit.set_config(None::<Arc<crate::audit::AuditLogger>>);
+        kit.set_config(None::<Arc<crate::metrics::InferenceCollector>>);
+        kit.set_config(None::<Arc<crate::metrics::PrometheusCollector>>);
+        #[cfg(feature = "auth")]
+        {
+            kit.set_config(Option::<Arc<crate::auth::JwtManager>>::None);
+            kit.set_config(Option::<Arc<crate::auth::UserStore>>::None);
+            kit.set_config(Option::<Arc<crate::auth::CsrfConfig>>::None);
+            kit.set_config(Option::<Arc<crate::auth::CsrfTokenStore>>::None);
         }
+
+        kit.register::<crate::module_registry::EmbeddingModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::RateLimitModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::CacheModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::DbModule>().unwrap();
+        kit.register::<crate::module_registry::AuditModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::MetricsCollectorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PrometheusCollectorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::IpWhitelistModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::AuthEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::RateLimitEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PipelineEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PipelineQueueModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::ResponseChannelModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PriorityCalculatorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::WorkerManagerModule>()
+            .unwrap();
+        #[cfg(feature = "auth")]
+        {
+            kit.register::<crate::module_registry::AuthModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::UserStoreModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::CsrfConfigModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::CsrfTokenStoreModule>()
+                .unwrap();
+        }
+
+        let kit = kit.build().await.expect("Failed to build AsyncKit");
+        VecboostState { kit: Arc::new(kit) }
     }
 
     /// 验证 handle_pipeline_request 成功路径——入队、worker 处理、返回 EmbedResponse。
@@ -185,10 +248,19 @@ mod tests {
     async fn test_handle_pipeline_request_success() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
-        let state = create_test_state(100, engine);
-        let queue = Arc::clone(&state.pipeline_queue);
-        let response_channel = Arc::clone(&state.response_channel);
-        let service = Arc::clone(&state.service);
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::module_registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::module_registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+        let service = state
+            .kit
+            .require::<crate::module_registry::EmbeddingModule>()
+            .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -226,7 +298,7 @@ mod tests {
     async fn test_handle_pipeline_request_queue_full() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
-        let state = create_test_state(0, engine);
+        let state = create_test_state(0, engine).await;
 
         let req = EmbedRequest {
             text: "hello".to_string(),
@@ -247,10 +319,19 @@ mod tests {
     async fn test_handle_pipeline_request_engine_error() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(ErrorEngine));
-        let state = create_test_state(100, engine);
-        let queue = Arc::clone(&state.pipeline_queue);
-        let response_channel = Arc::clone(&state.response_channel);
-        let service = Arc::clone(&state.service);
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::module_registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::module_registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+        let service = state
+            .kit
+            .require::<crate::module_registry::EmbeddingModule>()
+            .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -291,9 +372,15 @@ mod tests {
     async fn test_handle_pipeline_request_response_channel_error() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
-        let state = create_test_state(100, engine);
-        let queue = Arc::clone(&state.pipeline_queue);
-        let response_channel = Arc::clone(&state.response_channel);
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::module_registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::module_registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
 
         let consumer = tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -331,7 +418,7 @@ mod tests {
     async fn test_handle_pipeline_request_timeout() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
-        let state = create_test_state(100, engine);
+        let state = create_test_state(100, engine).await;
 
         let req = EmbedRequest {
             text: "hello".to_string(),
@@ -352,10 +439,19 @@ mod tests {
     async fn test_handle_pipeline_request_normalize_false() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(4)));
-        let state = create_test_state(100, engine);
-        let queue = Arc::clone(&state.pipeline_queue);
-        let response_channel = Arc::clone(&state.response_channel);
-        let service = Arc::clone(&state.service);
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::module_registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::module_registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+        let service = state
+            .kit
+            .require::<crate::module_registry::EmbeddingModule>()
+            .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -393,10 +489,19 @@ mod tests {
         for dim in &[1usize, 2, 16, 128] {
             let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
                 Arc::new(RwLock::new(TestEngine::new(*dim)));
-            let state = create_test_state(100, engine);
-            let queue = Arc::clone(&state.pipeline_queue);
-            let response_channel = Arc::clone(&state.response_channel);
-            let service = Arc::clone(&state.service);
+            let state = create_test_state(100, engine).await;
+            let queue = state
+                .kit
+                .require::<crate::module_registry::PipelineQueueModule>()
+                .expect("PipelineQueueModule not registered");
+            let response_channel = state
+                .kit
+                .require::<crate::module_registry::ResponseChannelModule>()
+                .expect("ResponseChannelModule not registered");
+            let service = state
+                .kit
+                .require::<crate::module_registry::EmbeddingModule>()
+                .expect("EmbeddingModule not registered");
 
             let consumer = tokio::spawn(async move {
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -435,10 +540,19 @@ mod tests {
     async fn test_handle_pipeline_request_empty_text() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
-        let state = create_test_state(100, engine);
-        let queue = Arc::clone(&state.pipeline_queue);
-        let response_channel = Arc::clone(&state.response_channel);
-        let service = Arc::clone(&state.service);
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::module_registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::module_registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+        let service = state
+            .kit
+            .require::<crate::module_registry::EmbeddingModule>()
+            .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -477,10 +591,19 @@ mod tests {
     async fn test_handle_pipeline_request_whitespace_text() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
-        let state = create_test_state(100, engine);
-        let queue = Arc::clone(&state.pipeline_queue);
-        let response_channel = Arc::clone(&state.response_channel);
-        let service = Arc::clone(&state.service);
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::module_registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::module_registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+        let service = state
+            .kit
+            .require::<crate::module_registry::EmbeddingModule>()
+            .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -626,10 +749,19 @@ mod tests {
     async fn test_handle_pipeline_request_long_text() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
-        let state = create_test_state(100, engine);
-        let queue = Arc::clone(&state.pipeline_queue);
-        let response_channel = Arc::clone(&state.response_channel);
-        let service = Arc::clone(&state.service);
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::module_registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::module_registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+        let service = state
+            .kit
+            .require::<crate::module_registry::EmbeddingModule>()
+            .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -666,10 +798,19 @@ mod tests {
     async fn test_handle_pipeline_request_normalize_none() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(4)));
-        let state = create_test_state(100, engine);
-        let queue = Arc::clone(&state.pipeline_queue);
-        let response_channel = Arc::clone(&state.response_channel);
-        let service = Arc::clone(&state.service);
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::module_registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::module_registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+        let service = state
+            .kit
+            .require::<crate::module_registry::EmbeddingModule>()
+            .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -707,10 +848,19 @@ mod tests {
         for ip in &["127.0.0.1", "192.168.0.1", "10.0.0.1", "172.16.0.1"] {
             let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
                 Arc::new(RwLock::new(TestEngine::new(4)));
-            let state = create_test_state(100, engine);
-            let queue = Arc::clone(&state.pipeline_queue);
-            let response_channel = Arc::clone(&state.response_channel);
-            let service = Arc::clone(&state.service);
+            let state = create_test_state(100, engine).await;
+            let queue = state
+                .kit
+                .require::<crate::module_registry::PipelineQueueModule>()
+                .expect("PipelineQueueModule not registered");
+            let response_channel = state
+                .kit
+                .require::<crate::module_registry::ResponseChannelModule>()
+                .expect("ResponseChannelModule not registered");
+            let service = state
+                .kit
+                .require::<crate::module_registry::EmbeddingModule>()
+                .expect("EmbeddingModule not registered");
 
             let consumer = tokio::spawn(async move {
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -746,10 +896,19 @@ mod tests {
     async fn test_handle_pipeline_request_unique_request_ids() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(4)));
-        let state = create_test_state(100, engine);
-        let queue = Arc::clone(&state.pipeline_queue);
-        let response_channel = Arc::clone(&state.response_channel);
-        let service = Arc::clone(&state.service);
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::module_registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::module_registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+        let service = state
+            .kit
+            .require::<crate::module_registry::EmbeddingModule>()
+            .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
             let mut ids = Vec::new();
@@ -806,10 +965,19 @@ mod tests {
     async fn test_handle_pipeline_request_unicode_text() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
-        let state = create_test_state(100, engine);
-        let queue = Arc::clone(&state.pipeline_queue);
-        let response_channel = Arc::clone(&state.response_channel);
-        let service = Arc::clone(&state.service);
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::module_registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::module_registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+        let service = state
+            .kit
+            .require::<crate::module_registry::EmbeddingModule>()
+            .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);

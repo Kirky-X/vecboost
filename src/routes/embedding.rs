@@ -78,13 +78,19 @@ fn is_ip_whitelisted(ip: &str, whitelist: &[String]) -> bool {
 async fn add_rate_limit_headers(headers: &mut HeaderMap, state: &VecboostState, ip: &str) {
     use axum::http::HeaderValue;
 
-    if state.rate_limit_enabled {
-        let global_remaining = state
-            .rate_limiter
+    let rate_limit_enabled = state
+        .kit
+        .require::<crate::module_registry::RateLimitEnabledModule>()
+        .expect("RateLimitEnabledModule not registered");
+    if rate_limit_enabled {
+        let rate_limiter = state
+            .kit
+            .require::<crate::module_registry::RateLimitModule>()
+            .expect("RateLimitModule not registered");
+        let global_remaining = rate_limiter
             .get_remaining(crate::rate_limit::RateLimitDimension::Global)
             .await;
-        let ip_remaining = state
-            .rate_limiter
+        let ip_remaining = rate_limiter
             .get_remaining(crate::rate_limit::RateLimitDimension::Ip(ip.to_string()))
             .await;
 
@@ -130,10 +136,21 @@ pub async fn embed_handler(
     let ip = extract_real_ip(addr);
 
     // Check if rate limiting is enabled and IP is not whitelisted
-    if state.rate_limit_enabled && !is_ip_whitelisted(&ip, &state.ip_whitelist) {
+    let rate_limit_enabled = state
+        .kit
+        .require::<crate::module_registry::RateLimitEnabledModule>()
+        .expect("RateLimitEnabledModule not registered");
+    let ip_whitelist = state
+        .kit
+        .require::<crate::module_registry::IpWhitelistModule>()
+        .expect("IpWhitelistModule not registered");
+    if rate_limit_enabled && !is_ip_whitelisted(&ip, &ip_whitelist) {
         // Check both global and IP rate limits
-        if !state
-            .rate_limiter
+        let rate_limiter = state
+            .kit
+            .require::<crate::module_registry::RateLimitModule>()
+            .expect("RateLimitModule not registered");
+        if !rate_limiter
             .check_rate_limit(vec![
                 crate::rate_limit::RateLimitDimension::Global,
                 crate::rate_limit::RateLimitDimension::Ip(ip.clone()),
@@ -147,7 +164,11 @@ pub async fn embed_handler(
     }
 
     // 如果启用了流水线，使用流水线处理
-    if state.pipeline_enabled {
+    let pipeline_enabled = state
+        .kit
+        .require::<crate::module_registry::PipelineEnabledModule>()
+        .expect("PipelineEnabledModule not registered");
+    if pipeline_enabled {
         let ip_clone = ip.clone();
         let res = crate::pipeline::handle_pipeline_request(state.clone(), req, ip_clone).await?;
         let mut response = res.into_response();
@@ -156,7 +177,11 @@ pub async fn embed_handler(
     }
 
     // 否则直接调用服务
-    let service_guard = state.service.read().await;
+    let service = state
+        .kit
+        .require::<crate::module_registry::EmbeddingModule>()
+        .expect("EmbeddingModule not registered");
+    let service_guard = service.read().await;
     let res = service_guard.process_text(req, None).await?;
 
     // Create response with rate limit headers
@@ -193,10 +218,21 @@ pub async fn batch_embed_handler(
     let ip = extract_real_ip(addr);
 
     // Check if rate limiting is enabled and IP is not whitelisted
-    if state.rate_limit_enabled && !is_ip_whitelisted(&ip, &state.ip_whitelist) {
+    let rate_limit_enabled = state
+        .kit
+        .require::<crate::module_registry::RateLimitEnabledModule>()
+        .expect("RateLimitEnabledModule not registered");
+    let ip_whitelist = state
+        .kit
+        .require::<crate::module_registry::IpWhitelistModule>()
+        .expect("IpWhitelistModule not registered");
+    if rate_limit_enabled && !is_ip_whitelisted(&ip, &ip_whitelist) {
         // Check both global and IP rate limits
-        if !state
-            .rate_limiter
+        let rate_limiter = state
+            .kit
+            .require::<crate::module_registry::RateLimitModule>()
+            .expect("RateLimitModule not registered");
+        if !rate_limiter
             .check_rate_limit(vec![
                 crate::rate_limit::RateLimitDimension::Global,
                 crate::rate_limit::RateLimitDimension::Ip(ip.clone()),
@@ -209,7 +245,11 @@ pub async fn batch_embed_handler(
         }
     }
 
-    let service_guard = state.service.read().await;
+    let service = state
+        .kit
+        .require::<crate::module_registry::EmbeddingModule>()
+        .expect("EmbeddingModule not registered");
+    let service_guard = service.read().await;
     let res = service_guard.process_batch(req, None).await?;
 
     // Create response with rate limit headers
@@ -246,10 +286,21 @@ pub async fn similarity_handler(
     let ip = extract_real_ip(addr);
 
     // Check if rate limiting is enabled and IP is not whitelisted
-    if state.rate_limit_enabled && !is_ip_whitelisted(&ip, &state.ip_whitelist) {
+    let rate_limit_enabled = state
+        .kit
+        .require::<crate::module_registry::RateLimitEnabledModule>()
+        .expect("RateLimitEnabledModule not registered");
+    let ip_whitelist = state
+        .kit
+        .require::<crate::module_registry::IpWhitelistModule>()
+        .expect("IpWhitelistModule not registered");
+    if rate_limit_enabled && !is_ip_whitelisted(&ip, &ip_whitelist) {
         // Check both global and IP rate limits
-        if !state
-            .rate_limiter
+        let rate_limiter = state
+            .kit
+            .require::<crate::module_registry::RateLimitModule>()
+            .expect("RateLimitModule not registered");
+        if !rate_limiter
             .check_rate_limit(vec![
                 crate::rate_limit::RateLimitDimension::Global,
                 crate::rate_limit::RateLimitDimension::Ip(ip.clone()),
@@ -262,7 +313,11 @@ pub async fn similarity_handler(
         }
     }
 
-    let service_guard = state.service.read().await;
+    let service = state
+        .kit
+        .require::<crate::module_registry::EmbeddingModule>()
+        .expect("EmbeddingModule not registered");
+    let service_guard = service.read().await;
     let res = service_guard.process_similarity(req).await?;
 
     // Create response with rate limit headers
@@ -299,10 +354,21 @@ pub async fn file_embed_handler(
     let ip = extract_real_ip(addr);
 
     // Check if rate limiting is enabled and IP is not whitelisted
-    if state.rate_limit_enabled && !is_ip_whitelisted(&ip, &state.ip_whitelist) {
+    let rate_limit_enabled = state
+        .kit
+        .require::<crate::module_registry::RateLimitEnabledModule>()
+        .expect("RateLimitEnabledModule not registered");
+    let ip_whitelist = state
+        .kit
+        .require::<crate::module_registry::IpWhitelistModule>()
+        .expect("IpWhitelistModule not registered");
+    if rate_limit_enabled && !is_ip_whitelisted(&ip, &ip_whitelist) {
         // Check both global and IP rate limits
-        if !state
-            .rate_limiter
+        let rate_limiter = state
+            .kit
+            .require::<crate::module_registry::RateLimitModule>()
+            .expect("RateLimitModule not registered");
+        if !rate_limiter
             .check_rate_limit(vec![
                 crate::rate_limit::RateLimitDimension::Global,
                 crate::rate_limit::RateLimitDimension::Ip(ip.clone()),
@@ -331,7 +397,11 @@ pub async fn file_embed_handler(
         .validate_file(&path)
         .map_err(|e| VecboostError::InvalidInput(format!("Path validation failed: {}", e)))?;
 
-    let service_guard = state.service.read().await;
+    let service = state
+        .kit
+        .require::<crate::module_registry::EmbeddingModule>()
+        .expect("EmbeddingModule not registered");
+    let service_guard = service.read().await;
     let stats = service_guard.get_processing_stats(&validated_path)?;
     let output = service_guard.embed_file(&validated_path, mode).await?;
 
@@ -366,6 +436,17 @@ mod tests {
     use super::*;
     use crate::config::model::{DeviceType, EngineType, ModelConfig, Precision};
     use crate::engine::InferenceEngine;
+    use crate::module_registry::{
+        AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, DbConfig, DbModule,
+        EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
+        PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule,
+        PrometheusCollectorModule, RateLimitEnabled, RateLimitEnabledModule, RateLimitModule,
+        ResponseChannelModule, WorkerManagerModule,
+    };
+    #[cfg(feature = "auth")]
+    use crate::module_registry::{
+        AuthModule, CsrfConfigModule, CsrfTokenStoreModule, UserStoreModule,
+    };
     use crate::pipeline::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
         WorkerManager,
@@ -418,7 +499,13 @@ mod tests {
         }
     }
 
-    fn make_test_state() -> VecboostState {
+    /// 参数化构建 VecboostState：可注入 rate_limit_enabled / rate_limiter / ip_whitelist / pipeline_enabled
+    async fn make_test_state_with_options(
+        rate_limit_enabled: bool,
+        rate_limiter: Option<Arc<LimiteronAdapter>>,
+        ip_whitelist: Option<Vec<String>>,
+        pipeline_enabled: bool,
+    ) -> VecboostState {
         let temp_dir = tempdir().unwrap();
         let mock_engine = TestEngine::new(384);
         let model_config = ModelConfig {
@@ -442,80 +529,84 @@ mod tests {
         )));
         std::mem::forget(temp_dir);
 
-        let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
+        let rate_limiter =
+            rate_limiter.unwrap_or_else(|| Arc::new(LimiteronAdapter::with_default_config()));
+        let ip_whitelist = ip_whitelist.unwrap_or_default();
         let pipeline_queue = Arc::new(PriorityRequestQueue::new(0));
         let response_channel = Arc::new(ResponseChannel::new());
+        let priority_calculator = Arc::new(PriorityCalculator::new(PriorityConfig::default()));
+        let worker_manager = Arc::new(WorkerManager::new(
+            pipeline_queue.clone(),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
 
+        let mut kit = trait_kit::AsyncKit::new();
+        kit.set_config(service.clone());
+        kit.set_config(rate_limiter.clone());
+        kit.set_config(None::<Arc<crate::metrics::InferenceCollector>>);
+        kit.set_config(None::<Arc<crate::metrics::PrometheusCollector>>);
+        kit.set_config(None::<Arc<crate::audit::AuditLogger>>);
+        kit.set_config(pipeline_queue.clone());
+        kit.set_config(response_channel.clone());
+        kit.set_config(priority_calculator.clone());
+        kit.set_config(worker_manager.clone());
+        kit.set_config(ip_whitelist.clone());
+        kit.set_config(AuthEnabled(false));
+        kit.set_config(RateLimitEnabled(rate_limit_enabled));
+        kit.set_config(PipelineEnabled(pipeline_enabled));
+        kit.set_config(CacheConfig {
+            enabled: false,
+            size: 0,
+        });
+        kit.set_config(DbConfig { enabled: false });
         #[cfg(feature = "auth")]
         {
-            VecboostState {
-                service,
-                jwt_manager: None,
-                user_store: None,
-                auth_enabled: false,
-                csrf_config: None,
-                csrf_token_store: None,
-                metrics_collector: None,
-                prometheus_collector: None,
-                rate_limiter,
-                ip_whitelist: vec![],
-                rate_limit_enabled: false,
-                audit_logger: None,
-                pipeline_enabled: false,
-                pipeline_queue,
-                response_channel,
-                priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
-                worker_manager: Arc::new(WorkerManager::new(
-                    Arc::new(PriorityRequestQueue::new(0)),
-                    Arc::new(ResponseChannel::new()),
-                    WorkerConfig::default(),
-                    Arc::new(RwLock::new(EmbeddingService::new(
-                        Arc::new(RwLock::new(TestEngine::new(384))),
-                        None,
-                    ))),
-                )),
-                kit: None,
-            }
+            kit.set_config(Option::<Arc<crate::auth::JwtManager>>::None);
+            kit.set_config(Option::<Arc<crate::auth::UserStore>>::None);
+            kit.set_config(Option::<Arc<crate::auth::CsrfConfig>>::None);
+            kit.set_config(Option::<Arc<crate::auth::CsrfTokenStore>>::None);
         }
 
-        #[cfg(not(feature = "auth"))]
+        kit.register::<EmbeddingModule>().unwrap();
+        kit.register::<RateLimitModule>().unwrap();
+        kit.register::<CacheModule>().unwrap();
+        kit.register::<DbModule>().unwrap();
+        kit.register::<AuditModule>().unwrap();
+        kit.register::<MetricsCollectorModule>().unwrap();
+        kit.register::<PrometheusCollectorModule>().unwrap();
+        kit.register::<IpWhitelistModule>().unwrap();
+        kit.register::<AuthEnabledModule>().unwrap();
+        kit.register::<RateLimitEnabledModule>().unwrap();
+        kit.register::<PipelineEnabledModule>().unwrap();
+        kit.register::<PipelineQueueModule>().unwrap();
+        kit.register::<ResponseChannelModule>().unwrap();
+        kit.register::<PriorityCalculatorModule>().unwrap();
+        kit.register::<WorkerManagerModule>().unwrap();
+        #[cfg(feature = "auth")]
         {
-            VecboostState {
-                service,
-                auth_enabled: false,
-                metrics_collector: None,
-                prometheus_collector: None,
-                rate_limiter,
-                ip_whitelist: vec![],
-                rate_limit_enabled: false,
-                audit_logger: None,
-                pipeline_enabled: false,
-                pipeline_queue,
-                response_channel,
-                priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
-                worker_manager: Arc::new(WorkerManager::new(
-                    Arc::new(PriorityRequestQueue::new(0)),
-                    Arc::new(ResponseChannel::new()),
-                    WorkerConfig::default(),
-                    Arc::new(RwLock::new(EmbeddingService::new(
-                        Arc::new(RwLock::new(TestEngine::new(384))),
-                        None,
-                    ))),
-                )),
-                kit: None,
-            }
+            kit.register::<AuthModule>().unwrap();
+            kit.register::<UserStoreModule>().unwrap();
+            kit.register::<CsrfConfigModule>().unwrap();
+            kit.register::<CsrfTokenStoreModule>().unwrap();
         }
+
+        let kit = kit.build().await.expect("Failed to build AsyncKit");
+        VecboostState { kit: Arc::new(kit) }
     }
 
-    fn make_rate_limited_state() -> VecboostState {
-        let mut state = make_test_state();
-        state.rate_limit_enabled = true;
-        state.rate_limiter = Arc::new(LimiteronAdapter::new(RateLimitConfig {
+    async fn make_test_state() -> VecboostState {
+        make_test_state_with_options(false, None, None, false).await
+    }
+
+    async fn make_rate_limited_state() -> VecboostState {
+        let rate_limiter = Arc::new(LimiteronAdapter::new(RateLimitConfig {
             global_requests_per_minute: 0,
             ip_requests_per_minute: 0,
             ..Default::default()
         }));
-        state
+        make_test_state_with_options(true, Some(rate_limiter), None, false).await
     }
 
     fn test_addr() -> SocketAddr {
@@ -577,7 +668,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_rate_limit_headers_disabled() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let mut headers = HeaderMap::new();
         add_rate_limit_headers(&mut headers, &state, "127.0.0.1").await;
         assert!(!headers.contains_key("x-ratelimit-limit"));
@@ -587,7 +678,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_rate_limit_headers_enabled() {
-        let state = make_rate_limited_state();
+        let state = make_rate_limited_state().await;
         let mut headers = HeaderMap::new();
         add_rate_limit_headers(&mut headers, &state, "127.0.0.1").await;
         assert!(headers.contains_key("x-ratelimit-limit"));
@@ -597,7 +688,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embed_handler_success() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = EmbedRequest {
             text: "hello world".to_string(),
             normalize: None,
@@ -610,7 +701,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embed_handler_empty_text_returns_bad_request() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = EmbedRequest {
             text: "".to_string(),
             normalize: None,
@@ -627,7 +718,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embed_handler_whitespace_only_returns_bad_request() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = EmbedRequest {
             text: "   ".to_string(),
             normalize: None,
@@ -640,7 +731,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_embed_handler_rate_limit_exceeded_returns_429() {
-        let state = make_rate_limited_state();
+        let state = make_rate_limited_state().await;
         let req = EmbedRequest {
             text: "hello world".to_string(),
             normalize: None,
@@ -657,7 +748,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_embed_handler_success() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = BatchEmbedRequest {
             texts: vec!["hello world".to_string(), "second text".to_string()],
             mode: None,
@@ -671,7 +762,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_embed_handler_empty_batch_returns_bad_request() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = BatchEmbedRequest {
             texts: vec![],
             mode: None,
@@ -689,7 +780,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_similarity_handler_success() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = SimilarityRequest {
             source: "hello world".to_string(),
             target: "hello there".to_string(),
@@ -702,7 +793,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_similarity_handler_empty_source_returns_bad_request() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = SimilarityRequest {
             source: "".to_string(),
             target: "hello there".to_string(),
@@ -719,7 +810,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_embed_handler_path_traversal_returns_bad_request() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = FileEmbedRequest {
             path: "../../../etc/passwd".to_string(),
             mode: None,
@@ -732,7 +823,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_embed_handler_nonexistent_file_returns_error() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = FileEmbedRequest {
             path: "nonexistent_file_xyz_123.txt".to_string(),
             mode: None,
@@ -749,7 +840,7 @@ mod tests {
         let file_path = temp_dir.path().join("test_embed.txt");
         std::fs::write(&file_path, "hello world\nsecond line\n").unwrap();
 
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = FileEmbedRequest {
             path: file_path.to_string_lossy().to_string(),
             mode: None,
@@ -831,7 +922,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_similarity_handler_empty_target_returns_bad_request() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = SimilarityRequest {
             source: "hello world".to_string(),
             target: "".to_string(),
@@ -848,7 +939,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_similarity_handler_rate_limit_exceeded() {
-        let state = make_rate_limited_state();
+        let state = make_rate_limited_state().await;
         let req = SimilarityRequest {
             source: "hello".to_string(),
             target: "world".to_string(),
@@ -863,7 +954,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_embed_handler_rate_limit_exceeded() {
-        let state = make_rate_limited_state();
+        let state = make_rate_limited_state().await;
         let req = BatchEmbedRequest {
             texts: vec!["hello".to_string()],
             mode: None,
@@ -879,7 +970,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_embed_handler_rate_limit_exceeded() {
-        let state = make_rate_limited_state();
+        let state = make_rate_limited_state().await;
         let req = FileEmbedRequest {
             path: "test.txt".to_string(),
             mode: None,
@@ -894,8 +985,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_embed_handler_with_whitelisted_ip_bypasses_rate_limit() {
-        let mut state = make_rate_limited_state();
-        state.ip_whitelist = vec!["127.0.0.1".to_string()];
+        let rate_limiter = Arc::new(LimiteronAdapter::new(RateLimitConfig {
+            global_requests_per_minute: 0,
+            ip_requests_per_minute: 0,
+            ..Default::default()
+        }));
+        let state = make_test_state_with_options(
+            true,
+            Some(rate_limiter),
+            Some(vec!["127.0.0.1".to_string()]),
+            false,
+        )
+        .await;
         let req = EmbedRequest {
             text: "hello world".to_string(),
             normalize: None,
@@ -912,7 +1013,7 @@ mod tests {
         let file_path = temp_dir.path().join("test_para.txt");
         std::fs::write(&file_path, "first paragraph\n\nsecond paragraph\n").unwrap();
 
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = FileEmbedRequest {
             path: file_path.to_string_lossy().to_string(),
             mode: Some(AggregationMode::Paragraph),
@@ -976,34 +1077,71 @@ mod tests {
             Arc::clone(&service),
         ));
 
-        let state = VecboostState {
-            service,
+        let state = {
+            let mut kit = trait_kit::AsyncKit::new();
+            kit.set_config(service.clone());
+            kit.set_config(Arc::new(LimiteronAdapter::with_default_config()));
+            kit.set_config(None::<Arc<crate::metrics::InferenceCollector>>);
+            kit.set_config(None::<Arc<crate::metrics::PrometheusCollector>>);
+            kit.set_config(None::<Arc<crate::audit::AuditLogger>>);
+            kit.set_config(queue.clone());
+            kit.set_config(response_channel.clone());
+            kit.set_config(priority_calculator.clone());
+            kit.set_config(worker_manager.clone());
+            kit.set_config(Vec::<String>::new());
+            kit.set_config(AuthEnabled(false));
+            kit.set_config(RateLimitEnabled(false));
+            kit.set_config(PipelineEnabled(true));
+            kit.set_config(CacheConfig {
+                enabled: false,
+                size: 0,
+            });
+            kit.set_config(DbConfig { enabled: false });
             #[cfg(feature = "auth")]
-            jwt_manager: None,
+            {
+                kit.set_config(Option::<Arc<crate::auth::JwtManager>>::None);
+                kit.set_config(Option::<Arc<crate::auth::UserStore>>::None);
+                kit.set_config(Option::<Arc<crate::auth::CsrfConfig>>::None);
+                kit.set_config(Option::<Arc<crate::auth::CsrfTokenStore>>::None);
+            }
+            kit.register::<EmbeddingModule>().unwrap();
+            kit.register::<RateLimitModule>().unwrap();
+            kit.register::<CacheModule>().unwrap();
+            kit.register::<DbModule>().unwrap();
+            kit.register::<AuditModule>().unwrap();
+            kit.register::<MetricsCollectorModule>().unwrap();
+            kit.register::<PrometheusCollectorModule>().unwrap();
+            kit.register::<IpWhitelistModule>().unwrap();
+            kit.register::<AuthEnabledModule>().unwrap();
+            kit.register::<RateLimitEnabledModule>().unwrap();
+            kit.register::<PipelineEnabledModule>().unwrap();
+            kit.register::<PipelineQueueModule>().unwrap();
+            kit.register::<ResponseChannelModule>().unwrap();
+            kit.register::<PriorityCalculatorModule>().unwrap();
+            kit.register::<WorkerManagerModule>().unwrap();
             #[cfg(feature = "auth")]
-            user_store: None,
-            auth_enabled: false,
-            #[cfg(feature = "auth")]
-            csrf_config: None,
-            #[cfg(feature = "auth")]
-            csrf_token_store: None,
-            metrics_collector: None,
-            prometheus_collector: None,
-            rate_limiter: Arc::new(LimiteronAdapter::with_default_config()),
-            ip_whitelist: vec![],
-            rate_limit_enabled: false,
-            audit_logger: None,
-            pipeline_enabled: true,
-            pipeline_queue: queue,
-            response_channel: response_channel.clone(),
-            priority_calculator,
-            worker_manager,
-            kit: None,
+            {
+                kit.register::<AuthModule>().unwrap();
+                kit.register::<UserStoreModule>().unwrap();
+                kit.register::<CsrfConfigModule>().unwrap();
+                kit.register::<CsrfTokenStoreModule>().unwrap();
+            }
+            let kit = kit.build().await.expect("Failed to build AsyncKit");
+            VecboostState { kit: Arc::new(kit) }
         };
 
-        let svc_clone = Arc::clone(&state.service);
-        let queue_clone = Arc::clone(&state.pipeline_queue);
-        let rc_clone = Arc::clone(&state.response_channel);
+        let svc_clone = state
+            .kit
+            .require::<EmbeddingModule>()
+            .expect("EmbeddingModule not registered");
+        let queue_clone = state
+            .kit
+            .require::<PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let rc_clone = state
+            .kit
+            .require::<ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
         let consumer = tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
             loop {
@@ -1036,7 +1174,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_embed_handler_with_normalize() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = BatchEmbedRequest {
             texts: vec!["hello".to_string(), "world".to_string()],
             mode: None,
@@ -1050,7 +1188,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_similarity_handler_whitespace_source_returns_bad_request() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = SimilarityRequest {
             source: "   ".to_string(),
             target: "hello there".to_string(),
@@ -1067,7 +1205,7 @@ mod tests {
         let file_path = temp_dir.path().join("test_doc.txt");
         std::fs::write(&file_path, "document content here").unwrap();
 
-        let state = make_test_state();
+        let state = make_test_state().await;
         let req = FileEmbedRequest {
             path: file_path.to_string_lossy().to_string(),
             mode: Some(AggregationMode::Document),

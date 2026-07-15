@@ -50,36 +50,47 @@ pub async fn metrics_endpoint(
 
     // Check if rate limiting is enabled and IP is not whitelisted
     #[allow(clippy::collapsible_if)]
-    if app_state.rate_limit_enabled {
-        let is_whitelisted = app_state.ip_whitelist.iter().any(|whitelist_ip| {
-            // Exact match
-            if ip == *whitelist_ip {
-                return true;
-            }
-            // CIDR match (basic implementation)
-            if let Some(cidr) = whitelist_ip.strip_suffix("/32") {
-                if ip == cidr {
+    if app_state
+        .kit
+        .require::<crate::module_registry::RateLimitEnabledModule>()
+        .expect("RateLimitEnabledModule not registered")
+    {
+        let is_whitelisted = app_state
+            .kit
+            .require::<crate::module_registry::IpWhitelistModule>()
+            .expect("IpWhitelistModule not registered")
+            .iter()
+            .any(|whitelist_ip| {
+                // Exact match
+                if ip == *whitelist_ip {
                     return true;
                 }
-            }
-            if let Some(cidr) = whitelist_ip.strip_suffix("/128") {
-                if ip == cidr {
-                    return true;
+                // CIDR match (basic implementation)
+                if let Some(cidr) = whitelist_ip.strip_suffix("/32") {
+                    if ip == cidr {
+                        return true;
+                    }
                 }
-            }
-            // IPv4 /24 subnet check
-            if let Some(cidr) = whitelist_ip.strip_suffix("/24") {
-                if ip.starts_with(&format!("{}.", cidr)) {
-                    return true;
+                if let Some(cidr) = whitelist_ip.strip_suffix("/128") {
+                    if ip == cidr {
+                        return true;
+                    }
                 }
-            }
-            false
-        });
+                // IPv4 /24 subnet check
+                if let Some(cidr) = whitelist_ip.strip_suffix("/24") {
+                    if ip.starts_with(&format!("{}.", cidr)) {
+                        return true;
+                    }
+                }
+                false
+            });
 
         if !is_whitelisted {
             // Check both global and IP rate limits for metrics endpoint
             if !app_state
-                .rate_limiter
+                .kit
+                .require::<crate::module_registry::RateLimitModule>()
+                .expect("RateLimitModule not registered")
                 .check_rate_limit(vec![
                     crate::rate_limit::RateLimitDimension::Global,
                     crate::rate_limit::RateLimitDimension::Ip(ip),
@@ -95,7 +106,13 @@ pub async fn metrics_endpoint(
         }
     }
 
-    let prometheus_collector = app_state.prometheus_collector.as_ref().unwrap();
+    let collector_opt = app_state
+        .kit
+        .require::<crate::module_registry::PrometheusCollectorModule>()
+        .expect("PrometheusCollectorModule not registered");
+    let prometheus_collector = collector_opt
+        .as_ref()
+        .expect("PrometheusCollector not configured");
     let encoder = prometheus::TextEncoder::new();
     let metric_families = prometheus_collector.registry().gather();
     let mut buffer = Vec::new();
@@ -175,7 +192,11 @@ mod tests {
         }
     }
 
-    fn make_test_state() -> VecboostState {
+    async fn make_test_state_with_rate_limit(
+        rate_limit_enabled: bool,
+        rate_limiter: Arc<LimiteronAdapter>,
+        ip_whitelist: Vec<String>,
+    ) -> VecboostState {
         let temp_dir = tempdir().unwrap();
         let mock_engine = TestEngine::new(384);
         let model_config = ModelConfig {
@@ -200,86 +221,114 @@ mod tests {
         std::mem::forget(temp_dir);
 
         let prometheus_collector = Arc::new(PrometheusCollector::new().unwrap());
-        let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
         let pipeline_queue = Arc::new(PriorityRequestQueue::new(0));
         let response_channel = Arc::new(ResponseChannel::new());
+        let priority_calculator = Arc::new(PriorityCalculator::new(PriorityConfig::default()));
+        let worker_manager = Arc::new(WorkerManager::new(
+            pipeline_queue.clone(),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
 
+        let mut kit = trait_kit::AsyncKit::new();
+        kit.set_config(service);
+        kit.set_config(rate_limiter);
+        kit.set_config(Some(prometheus_collector));
+        kit.set_config(pipeline_queue);
+        kit.set_config(response_channel);
+        kit.set_config(priority_calculator);
+        kit.set_config(worker_manager);
+        kit.set_config(ip_whitelist);
+        kit.set_config(crate::module_registry::AuthEnabled(false));
+        kit.set_config(crate::module_registry::RateLimitEnabled(rate_limit_enabled));
+        kit.set_config(crate::module_registry::PipelineEnabled(false));
+        kit.set_config(crate::module_registry::CacheConfig {
+            enabled: false,
+            size: 0,
+        });
+        kit.set_config(crate::module_registry::DbConfig { enabled: false });
+        kit.set_config(None::<Arc<crate::audit::AuditLogger>>);
+        kit.set_config(None::<Arc<crate::metrics::InferenceCollector>>);
         #[cfg(feature = "auth")]
         {
-            VecboostState {
-                service,
-                jwt_manager: None,
-                user_store: None,
-                auth_enabled: false,
-                csrf_config: None,
-                csrf_token_store: None,
-                metrics_collector: None,
-                prometheus_collector: Some(prometheus_collector),
-                rate_limiter,
-                ip_whitelist: vec![],
-                rate_limit_enabled: false,
-                audit_logger: None,
-                pipeline_enabled: false,
-                pipeline_queue,
-                response_channel,
-                priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
-                worker_manager: Arc::new(WorkerManager::new(
-                    Arc::new(PriorityRequestQueue::new(0)),
-                    Arc::new(ResponseChannel::new()),
-                    WorkerConfig::default(),
-                    Arc::new(RwLock::new(EmbeddingService::new(
-                        Arc::new(RwLock::new(TestEngine::new(384))),
-                        None,
-                    ))),
-                )),
-                kit: None,
-            }
+            kit.set_config(Option::<Arc<crate::auth::JwtManager>>::None);
+            kit.set_config(Option::<Arc<crate::auth::UserStore>>::None);
+            kit.set_config(Option::<Arc<crate::auth::CsrfConfig>>::None);
+            kit.set_config(Option::<Arc<crate::auth::CsrfTokenStore>>::None);
         }
-
-        #[cfg(not(feature = "auth"))]
+        kit.register::<crate::module_registry::EmbeddingModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::RateLimitModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::CacheModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::DbModule>().unwrap();
+        kit.register::<crate::module_registry::AuditModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::MetricsCollectorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PrometheusCollectorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::IpWhitelistModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::AuthEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::RateLimitEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PipelineEnabledModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PipelineQueueModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::ResponseChannelModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::PriorityCalculatorModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::WorkerManagerModule>()
+            .unwrap();
+        #[cfg(feature = "auth")]
         {
-            VecboostState {
-                service,
-                auth_enabled: false,
-                metrics_collector: None,
-                prometheus_collector: Some(prometheus_collector),
-                rate_limiter,
-                ip_whitelist: vec![],
-                rate_limit_enabled: false,
-                audit_logger: None,
-                pipeline_enabled: false,
-                pipeline_queue,
-                response_channel,
-                priority_calculator: Arc::new(PriorityCalculator::new(PriorityConfig::default())),
-                worker_manager: Arc::new(WorkerManager::new(
-                    Arc::new(PriorityRequestQueue::new(0)),
-                    Arc::new(ResponseChannel::new()),
-                    WorkerConfig::default(),
-                    Arc::new(RwLock::new(EmbeddingService::new(
-                        Arc::new(RwLock::new(TestEngine::new(384))),
-                        None,
-                    ))),
-                )),
-                kit: None,
-            }
+            kit.register::<crate::module_registry::AuthModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::UserStoreModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::CsrfConfigModule>()
+                .unwrap();
+            kit.register::<crate::module_registry::CsrfTokenStoreModule>()
+                .unwrap();
         }
+        let kit = kit.build().await.unwrap();
+        VecboostState { kit: Arc::new(kit) }
     }
 
-    fn make_rate_limited_state() -> VecboostState {
-        let mut state = make_test_state();
-        state.rate_limit_enabled = true;
-        state.rate_limiter = Arc::new(LimiteronAdapter::new(RateLimitConfig {
+    async fn make_test_state() -> VecboostState {
+        make_test_state_with_rate_limit(
+            false,
+            Arc::new(LimiteronAdapter::with_default_config()),
+            vec![],
+        )
+        .await
+    }
+
+    fn make_blocking_rate_limiter() -> Arc<LimiteronAdapter> {
+        Arc::new(LimiteronAdapter::new(RateLimitConfig {
             global_requests_per_minute: 0,
             ip_requests_per_minute: 0,
             ..Default::default()
-        }));
-        state
+        }))
     }
 
-    fn make_rate_limited_state_with_whitelist() -> VecboostState {
-        let mut state = make_rate_limited_state();
-        state.ip_whitelist = vec!["127.0.0.1".to_string()];
-        state
+    async fn make_rate_limited_state() -> VecboostState {
+        make_test_state_with_rate_limit(true, make_blocking_rate_limiter(), vec![]).await
+    }
+
+    async fn make_rate_limited_state_with_whitelist() -> VecboostState {
+        make_test_state_with_rate_limit(
+            true,
+            make_blocking_rate_limiter(),
+            vec!["127.0.0.1".to_string()],
+        )
+        .await
     }
 
     fn test_addr() -> SocketAddr {
@@ -300,7 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_success() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();
@@ -309,7 +358,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_rate_limit_exceeded_returns_429() {
-        let state = make_rate_limited_state();
+        let state = make_rate_limited_state().await;
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();
@@ -318,7 +367,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_whitelisted_ip_bypasses_rate_limit() {
-        let state = make_rate_limited_state_with_whitelist();
+        let state = make_rate_limited_state_with_whitelist().await;
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();
@@ -329,15 +378,14 @@ mod tests {
         SocketAddr::new(ip, 9002)
     }
 
-    fn make_rate_limited_state_with_whitelist_ips(whitelist: Vec<String>) -> VecboostState {
-        let mut state = make_rate_limited_state();
-        state.ip_whitelist = whitelist;
-        state
+    async fn make_rate_limited_state_with_whitelist_ips(whitelist: Vec<String>) -> VecboostState {
+        make_test_state_with_rate_limit(true, make_blocking_rate_limiter(), whitelist).await
     }
 
     #[tokio::test]
     async fn test_metrics_endpoint_whitelist_cidr_32_matches() {
-        let state = make_rate_limited_state_with_whitelist_ips(vec!["127.0.0.1/32".to_string()]);
+        let state =
+            make_rate_limited_state_with_whitelist_ips(vec!["127.0.0.1/32".to_string()]).await;
         let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
         let response = metrics_endpoint(State(state), ConnectInfo(addr))
             .await
@@ -347,7 +395,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_whitelist_cidr_32_does_not_match_other_ip() {
-        let state = make_rate_limited_state_with_whitelist_ips(vec!["127.0.0.1/32".to_string()]);
+        let state =
+            make_rate_limited_state_with_whitelist_ips(vec!["127.0.0.1/32".to_string()]).await;
         let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)));
         let response = metrics_endpoint(State(state), ConnectInfo(addr))
             .await
@@ -357,7 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_whitelist_cidr_24_matches_subnet() {
-        let state = make_rate_limited_state_with_whitelist_ips(vec!["10.0.0/24".to_string()]);
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["10.0.0/24".to_string()]).await;
         let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)));
         let response = metrics_endpoint(State(state), ConnectInfo(addr))
             .await
@@ -367,7 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_whitelist_cidr_24_does_not_match_other_subnet() {
-        let state = make_rate_limited_state_with_whitelist_ips(vec!["10.0.0/24".to_string()]);
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["10.0.0/24".to_string()]).await;
         let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)));
         let response = metrics_endpoint(State(state), ConnectInfo(addr))
             .await
@@ -377,7 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_whitelist_ipv6_cidr_128_matches() {
-        let state = make_rate_limited_state_with_whitelist_ips(vec!["::1/128".to_string()]);
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["::1/128".to_string()]).await;
         let addr = test_addr_with(IpAddr::V6(Ipv6Addr::LOCALHOST));
         let response = metrics_endpoint(State(state), ConnectInfo(addr))
             .await
@@ -390,7 +439,8 @@ mod tests {
         let state = make_rate_limited_state_with_whitelist_ips(vec![
             "192.168.1.1/32".to_string(),
             "127.0.0.1/32".to_string(),
-        ]);
+        ])
+        .await;
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();
@@ -399,7 +449,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_returns_text_content_type() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();
@@ -418,8 +468,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_rate_limit_disabled_returns_ok() {
-        let state = make_test_state();
-        assert!(!state.rate_limit_enabled);
+        let state = make_test_state().await;
+        assert!(
+            !state
+                .kit
+                .require::<crate::module_registry::RateLimitEnabledModule>()
+                .unwrap()
+        );
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();
@@ -440,7 +495,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_under_normal_limit_returns_ok() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();
@@ -449,7 +504,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_whitelist_cidr_128_does_not_match_other_ipv6() {
-        let state = make_rate_limited_state_with_whitelist_ips(vec!["::1/128".to_string()]);
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["::1/128".to_string()]).await;
         let addr = test_addr_with(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 2)));
         let response = metrics_endpoint(State(state), ConnectInfo(addr))
             .await
@@ -459,7 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_empty_whitelist_with_rate_limit() {
-        let state = make_rate_limited_state();
+        let state = make_rate_limited_state().await;
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();
@@ -468,7 +523,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_whitelist_exact_ip_match() {
-        let state = make_rate_limited_state_with_whitelist_ips(vec!["127.0.0.1".to_string()]);
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["127.0.0.1".to_string()]).await;
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();
@@ -477,7 +532,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_whitelist_exact_ip_no_match() {
-        let state = make_rate_limited_state_with_whitelist_ips(vec!["192.168.1.1".to_string()]);
+        let state =
+            make_rate_limited_state_with_whitelist_ips(vec!["192.168.1.1".to_string()]).await;
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();
@@ -486,7 +542,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_whitelist_cidr_24_exact_boundary() {
-        let state = make_rate_limited_state_with_whitelist_ips(vec!["10.0.0/24".to_string()]);
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["10.0.0/24".to_string()]).await;
         let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 255)));
         let response = metrics_endpoint(State(state), ConnectInfo(addr))
             .await
@@ -499,7 +555,8 @@ mod tests {
         let state = make_rate_limited_state_with_whitelist_ips(vec![
             "192.168.1.1/32".to_string(),
             "10.0.0/24".to_string(),
-        ]);
+        ])
+        .await;
         let addr = test_addr_with(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1)));
         let response = metrics_endpoint(State(state), ConnectInfo(addr))
             .await
@@ -509,7 +566,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_returns_body_with_metrics() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let response = metrics_endpoint(State(state), ConnectInfo(test_addr()))
             .await
             .into_response();
@@ -524,7 +581,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_with_ipv6_addr() {
-        let state = make_test_state();
+        let state = make_test_state().await;
         let addr = test_addr_with(IpAddr::V6(Ipv6Addr::LOCALHOST));
         let response = metrics_endpoint(State(state), ConnectInfo(addr))
             .await
@@ -534,7 +591,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_rate_limited_with_ipv6() {
-        let state = make_rate_limited_state();
+        let state = make_rate_limited_state().await;
         let addr = test_addr_with(IpAddr::V6(Ipv6Addr::LOCALHOST));
         let response = metrics_endpoint(State(state), ConnectInfo(addr))
             .await
@@ -544,7 +601,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_endpoint_whitelist_ipv6_exact_match() {
-        let state = make_rate_limited_state_with_whitelist_ips(vec!["::1".to_string()]);
+        let state = make_rate_limited_state_with_whitelist_ips(vec!["::1".to_string()]).await;
         let addr = test_addr_with(IpAddr::V6(Ipv6Addr::LOCALHOST));
         let response = metrics_endpoint(State(state), ConnectInfo(addr))
             .await

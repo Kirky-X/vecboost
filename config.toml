@@ -29,7 +29,7 @@ model_path = ""
 # 注意：需要启用相应的 cargo feature
 # - CUDA: cargo build --features cuda
 # - Metal (macOS): cargo build --features metal
-use_gpu = false
+use_gpu = true
 
 # 批处理大小
 batch_size = 32

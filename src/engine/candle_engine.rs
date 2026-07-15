@@ -196,6 +196,7 @@ impl CandleEngine {
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let weights_filename = repo
                 .get("model.safetensors")
+                .or_else(|_| repo.get("pytorch_model.bin"))
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
             (config_filename, tokenizer_filename, weights_filename)
@@ -1004,6 +1005,7 @@ impl CandleEngine {
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             let weights_filename = repo
                 .get("model.safetensors")
+                .or_else(|_| repo.get("pytorch_model.bin"))
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
             (config_filename, tokenizer_filename, weights_filename)

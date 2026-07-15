@@ -686,6 +686,11 @@ mod tests {
 
         let cuda_stats = stats.cuda_pool_stats.unwrap();
         assert_eq!(cuda_stats.used_memory_mb, 0);
+        // cuda feature 下 CudaMemoryPool 使用 config.max_memory_mb(1024);
+        // 非 cuda feature 下走 no-op 分支,get_memory_usage() 返回 (0, 0)。
+        #[cfg(feature = "cuda")]
+        assert_eq!(cuda_stats.total_memory_mb, 1024);
+        #[cfg(not(feature = "cuda"))]
         assert_eq!(cuda_stats.total_memory_mb, 0);
         assert!((cuda_stats.memory_usage_percent - 0.0).abs() < 0.001);
     }

@@ -125,44 +125,45 @@ impl CudaDeviceManager {
             return Ok(());
         }
 
-        match self.detect_cuda_devices().await {
-            Ok(devices) => {
-                let mut devices_guard = self.devices.write().await;
-                *devices_guard = devices;
+        // detect 失败时返回空设备列表(Ok),与 is_supported() = (count > 0) 语义一致:
+        // 无 CUDA 硬件 / driver 不可用 / 沙箱限制均视为"无可用设备",不算错误。
+        let devices = self.detect_cuda_devices().await.unwrap_or_else(|e| {
+            warn!(
+                "CUDA detection returned error, treating as no available devices: {}",
+                e
+            );
+            Vec::new()
+        });
 
-                // 为每个设备创建内存管理器
-                let mut memory_managers = self.memory_managers.write().await;
-                memory_managers.clear();
+        let mut devices_guard = self.devices.write().await;
+        *devices_guard = devices;
 
-                for device in &*devices_guard {
-                    let memory_config = GpuMemoryConfig::default();
-                    let memory_manager =
-                        SharedGpuMemoryManager::new(device.total_memory(), memory_config);
-                    memory_managers.insert(device.device_id(), memory_manager);
-                    info!(
-                        "Created memory manager for device {}: {} MB",
-                        device.device_id(),
-                        device.total_memory() / (1024 * 1024)
-                    );
-                }
+        // 为每个设备创建内存管理器
+        let mut memory_managers = self.memory_managers.write().await;
+        memory_managers.clear();
 
-                if !devices_guard.is_empty() {
-                    let mut primary = self.primary_device_id.write().await;
-                    *primary = Some(0);
-                }
-
-                *initialized = true;
-                info!(
-                    "CUDA device manager initialized with {} device(s)",
-                    devices_guard.len()
-                );
-                Ok(())
-            }
-            Err(e) => {
-                warn!("CUDA initialization failed: {}", e);
-                Err(e)
-            }
+        for device in &*devices_guard {
+            let memory_config = GpuMemoryConfig::default();
+            let memory_manager = SharedGpuMemoryManager::new(device.total_memory(), memory_config);
+            memory_managers.insert(device.device_id(), memory_manager);
+            info!(
+                "Created memory manager for device {}: {} MB",
+                device.device_id(),
+                device.total_memory() / (1024 * 1024)
+            );
         }
+
+        if !devices_guard.is_empty() {
+            let mut primary = self.primary_device_id.write().await;
+            *primary = Some(0);
+        }
+
+        *initialized = true;
+        info!(
+            "CUDA device manager initialized with {} device(s)",
+            devices_guard.len()
+        );
+        Ok(())
     }
 
     async fn detect_cuda_devices(&self) -> Result<Vec<CudaDevice>, String> {
@@ -173,14 +174,12 @@ impl CudaDeviceManager {
 
         #[cfg(not(feature = "cuda"))]
         {
-            self.detect_compatible().await
+            Ok(self.detect_compatible().await)
         }
     }
 
     #[cfg(feature = "cuda")]
     async fn detect_with_candle(&self) -> Result<Vec<CudaDevice>, String> {
-        let mut devices = Vec::new();
-
         match candle_core::Device::cuda_if_available(0) {
             Ok(_device) => {
                 let cuda_device = CudaDevice::new(
@@ -190,19 +189,20 @@ impl CudaDeviceManager {
                     (7, 0),
                 );
 
-                devices.push(cuda_device.clone());
                 info!("Detected CUDA device via candle-core");
-                Ok(devices)
+                Ok(vec![cuda_device])
             }
             Err(e) => {
-                error!("Failed to initialize CUDA device via candle-core: {}", e);
+                // CUDA driver 不可用 / 沙箱限制 / 无 GPU 硬件均视为"无可用设备"。
+                // 保留 Err 给上层调用方根据需要区分"完全不可用"与"无设备但可降级 CPU"。
+                warn!("Failed to initialize CUDA device via candle-core: {}", e);
                 Err(format!("CUDA device detection failed: {}", e))
             }
         }
     }
 
     #[cfg(not(feature = "cuda"))]
-    async fn detect_compatible(&self) -> Result<Vec<CudaDevice>, String> {
+    async fn detect_compatible(&self) -> Vec<CudaDevice> {
         let mut devices = Vec::new();
 
         if let Ok(nvidia_info) = detect_nvidia_driver().await
@@ -216,15 +216,15 @@ impl CudaDeviceManager {
                 nvidia_info.total_vram_bytes,
                 nvidia_info.compute_capability.unwrap_or((7, 0)),
             );
-            devices.push(cuda_device.clone());
             info!("Detected compatible CUDA device: {}", cuda_device.name());
+            devices.push(cuda_device);
         }
 
         if devices.is_empty() {
             debug!("No CUDA devices detected (CUDA feature not enabled or no NVIDIA GPU found)");
         }
 
-        Ok(devices)
+        devices
     }
 
     pub async fn devices(&self) -> Vec<CudaDevice> {

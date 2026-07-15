@@ -969,10 +969,9 @@ mod tests {
                 device_type: Some(dt.to_string()),
             });
 
-            let response = service.model_switch(req).await.expect(&format!(
-                "same-model switch with device_type={} should succeed",
-                dt
-            ));
+            let response = service.model_switch(req).await.unwrap_or_else(|_| {
+                panic!("same-model switch with device_type={} should succeed", dt)
+            });
             let inner = response.into_inner();
             assert!(
                 inner.success,

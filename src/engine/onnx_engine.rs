@@ -1036,4 +1036,127 @@ mod tests {
             );
         }
     }
+
+    /// 验证 cache path 可确定(parent's parent 存在)但 tokenizer 不在 cache path 时,
+    /// 返回包含两个路径的 "Tokenizer not found" 错误
+    #[test]
+    fn test_onnx_engine_cache_path_determinable_no_tokenizer() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let intermediate = temp_dir.path().join("intermediate");
+        let model_dir = intermediate.join("model_dir");
+        std::fs::create_dir_all(&model_dir).expect("Failed to create model_dir");
+        std::fs::write(model_dir.join("model.onnx"), b"fake onnx")
+            .expect("Failed to write fake model.onnx");
+
+        let mut config = test_config();
+        config.model_path = model_dir;
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
+        assert!(result.is_err());
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(
+                msg.contains("Tokenizer not found"),
+                "Expected 'Tokenizer not found', got: {}",
+                msg
+            );
+            assert!(
+                !msg.contains("Cannot determine"),
+                "Should not be 'Cannot determine' since cache path exists, got: {}",
+                msg
+            );
+        }
+    }
+
+    /// 验证仅存在 model_quantized.onnx(无 model.onnx)且无 tokenizer 时返回错误
+    #[test]
+    fn test_onnx_engine_only_quantized_no_model_onnx() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        std::fs::write(
+            temp_dir.path().join("model_quantized.onnx"),
+            b"fake quantized",
+        )
+        .expect("Failed to write fake model_quantized.onnx");
+
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
+        assert!(result.is_err());
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(
+                msg.contains("Tokenizer not found") || msg.contains("Cannot determine"),
+                "Expected tokenizer/cache error, got: {}",
+                msg
+            );
+        }
+    }
+
+    /// 验证 FP16 + AMD 设备在空目录上返回错误(覆盖 FP16 + supports_amd 分支)
+    #[test]
+    fn test_onnx_engine_fp16_amd_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp16, DeviceType::Amd);
+        assert!(result.is_err());
+    }
+
+    /// 验证 FP16 + OpenCL 设备在空目录上返回错误(覆盖 FP16 + supports_amd 分支)
+    #[test]
+    fn test_onnx_engine_fp16_opencl_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp16, DeviceType::OpenCL);
+        assert!(result.is_err());
+    }
+
+    /// 验证 INT8 + CUDA 设备在空目录上返回错误
+    #[test]
+    fn test_onnx_engine_int8_cuda_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Int8, DeviceType::Cuda);
+        assert!(result.is_err());
+    }
+
+    /// 验证 INT8 + AMD 设备在空目录上返回错误
+    #[test]
+    fn test_onnx_engine_int8_amd_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Int8, DeviceType::Amd);
+        assert!(result.is_err());
+    }
+
+    /// 验证 model_path 指向文件(非目录)时进入 HuggingFace Hub 下载路径并失败
+    #[test]
+    fn test_onnx_engine_model_path_is_file_not_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("not_a_dir");
+        std::fs::write(&file_path, b"file").expect("Failed to write file");
+
+        let mut config = test_config();
+        config.model_path = file_path;
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
+        assert!(result.is_err());
+    }
+
+    /// 验证 Metal 设备类型在空目录上返回错误
+    #[test]
+    fn test_onnx_engine_metal_empty_dir() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut config = test_config();
+        config.model_path = temp_dir.path().to_path_buf();
+
+        let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Metal);
+        assert!(result.is_err());
+    }
 }

@@ -536,6 +536,336 @@ mod tests {
             "permission_denied"
         );
     }
+
+    #[test]
+    fn test_security_event_type_all_variants_as_str() {
+        assert_eq!(SecurityEventType::UserCreated.as_str(), "user_created");
+        assert_eq!(SecurityEventType::UserUpdated.as_str(), "user_updated");
+        assert_eq!(SecurityEventType::UserDeleted.as_str(), "user_deleted");
+        assert_eq!(SecurityEventType::TokenRefresh.as_str(), "token_refresh");
+        assert_eq!(
+            SecurityEventType::UnauthorizedAccess.as_str(),
+            "unauthorized_access"
+        );
+        assert_eq!(
+            SecurityEventType::RateLimitExceeded.as_str(),
+            "rate_limit_exceeded"
+        );
+        assert_eq!(SecurityEventType::ConfigChanged.as_str(), "config_changed");
+    }
+
+    #[test]
+    fn test_audit_config_default() {
+        let config = AuditConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.log_file_path, PathBuf::from("logs/audit.log"));
+        assert_eq!(config.log_level, "info");
+        assert_eq!(config.max_file_size_mb, 100);
+        assert_eq!(config.max_files, 10);
+        assert!(config.async_write);
+    }
+
+    #[test]
+    fn test_security_event_new_with_none_fields() {
+        let event = SecurityEvent::new(
+            SecurityEventType::UnauthorizedAccess,
+            None,
+            None,
+            serde_json::json!({"path": "/admin"}),
+            false,
+        );
+        assert_eq!(event.event_type, "unauthorized_access");
+        assert!(event.user.is_none());
+        assert!(event.ip.is_none());
+        assert!(!event.success);
+        assert!(event.request_id.is_none());
+        assert!(event.user_agent.is_none());
+    }
+
+    fn make_logger(temp_dir: &TempDir, filename: &str) -> (AuditLogger, PathBuf) {
+        let log_path = temp_dir.path().join(filename);
+        let config = AuditConfig {
+            enabled: true,
+            log_file_path: log_path.clone(),
+            ..Default::default()
+        };
+        (AuditLogger::new(config), log_path)
+    }
+
+    async fn read_log_content(log_path: &PathBuf) -> String {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tokio::fs::read_to_string(log_path)
+            .await
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn test_log_login_failed_writes_to_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "login_failed.log");
+        logger.log_login_failed("baduser", Some("10.0.0.1".to_string()), "wrong password");
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("login_failed"));
+        assert!(content.contains("baduser"));
+        assert!(content.contains("10.0.0.1"));
+        assert!(content.contains("wrong password"));
+        assert!(content.contains("\"success\":false"));
+    }
+
+    #[tokio::test]
+    async fn test_log_logout_writes_to_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "logout.log");
+        logger.log_logout("user1", Some("10.0.0.2".to_string()));
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("logout"));
+        assert!(content.contains("user1"));
+        assert!(content.contains("\"success\":true"));
+    }
+
+    #[tokio::test]
+    async fn test_log_permission_denied_writes_to_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "perm_denied.log");
+        logger.log_permission_denied("user2", Some("10.0.0.3".to_string()), "/admin/users");
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("permission_denied"));
+        assert!(content.contains("user2"));
+        assert!(content.contains("/admin/users"));
+        assert!(content.contains("\"success\":false"));
+    }
+
+    #[tokio::test]
+    async fn test_log_user_created_writes_to_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "user_created.log");
+        logger.log_user_created("newuser", "admin", Some("10.0.0.4".to_string()));
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("user_created"));
+        assert!(content.contains("admin"));
+        assert!(content.contains("newuser"));
+        assert!(content.contains("\"success\":true"));
+    }
+
+    #[tokio::test]
+    async fn test_log_user_updated_writes_to_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "user_updated.log");
+        logger.log_user_updated("target_user", "admin", None);
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("user_updated"));
+        assert!(content.contains("target_user"));
+    }
+
+    #[tokio::test]
+    async fn test_log_user_deleted_writes_to_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "user_deleted.log");
+        logger.log_user_deleted("deleted_user", "admin", None);
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("user_deleted"));
+        assert!(content.contains("deleted_user"));
+    }
+
+    #[tokio::test]
+    async fn test_log_token_refresh_writes_to_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "token_refresh.log");
+        logger.log_token_refresh("user3", Some("10.0.0.5".to_string()));
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("token_refresh"));
+        assert!(content.contains("user3"));
+        assert!(content.contains("\"success\":true"));
+    }
+
+    #[tokio::test]
+    async fn test_log_unauthorized_access_writes_to_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "unauthorized.log");
+        logger.log_unauthorized_access(Some("10.0.0.6".to_string()), "/api/v1/embed");
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("unauthorized_access"));
+        assert!(content.contains("/api/v1/embed"));
+        assert!(content.contains("\"success\":false"));
+    }
+
+    #[tokio::test]
+    async fn test_log_rate_limit_exceeded_writes_to_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "rate_limit.log");
+        logger.log_rate_limit_exceeded(Some("user4".to_string()), Some("10.0.0.7".to_string()));
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("rate_limit_exceeded"));
+        assert!(content.contains("user4"));
+    }
+
+    #[tokio::test]
+    async fn test_log_rate_limit_exceeded_no_user() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "rate_limit_no_user.log");
+        logger.log_rate_limit_exceeded(None, Some("10.0.0.8".to_string()));
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("rate_limit_exceeded"));
+        assert!(content.contains("10.0.0.8"));
+    }
+
+    #[tokio::test]
+    async fn test_disabled_logger_does_not_write() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("disabled.log");
+        let config = AuditConfig {
+            enabled: false,
+            log_file_path: log_path.clone(),
+            ..Default::default()
+        };
+        let logger = AuditLogger::new(config);
+        assert!(!logger.is_enabled());
+        logger.log_login_success("user", None);
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        let exists = tokio::fs::try_exists(&log_path).await.unwrap_or(false);
+        assert!(!exists, "disabled logger should not create log file");
+    }
+
+    #[tokio::test]
+    async fn test_log_method_noop_when_disabled() {
+        let config = AuditConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let logger = AuditLogger::new(config);
+        let event = SecurityEvent::new(
+            SecurityEventType::LoginSuccess,
+            Some("user".to_string()),
+            None,
+            serde_json::json!({}),
+            true,
+        );
+        logger.log(event);
+    }
+
+    #[tokio::test]
+    async fn test_rotate_logs_removes_oldest_and_shifts() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("rotate.log");
+        let max_files = 3;
+        tokio::fs::write(&log_path, "current".to_string())
+            .await
+            .unwrap();
+        for i in 1..=max_files {
+            let rotated = format!("{}.{}", log_path.display(), i);
+            tokio::fs::write(&rotated, format!("file_{}", i))
+                .await
+                .unwrap();
+        }
+        AuditLogger::rotate_logs(&log_path, max_files).await;
+
+        // rotate_logs: delete .{max_files}, shift .{i} -> .{i+1} for i in
+        // (1..max_files).rev(), then move current -> .1
+        // Final state: .1=current, .2=file_1, .3=file_2 (oldest slot reused)
+        let new_3 = format!("{}.3", log_path.display());
+        let content_3 = tokio::fs::read_to_string(&new_3).await.unwrap();
+        assert_eq!(content_3, "file_2");
+
+        let new_2 = format!("{}.2", log_path.display());
+        let content_2 = tokio::fs::read_to_string(&new_2).await.unwrap();
+        assert_eq!(content_2, "file_1");
+
+        let new_1 = format!("{}.1", log_path.display());
+        let content_1 = tokio::fs::read_to_string(&new_1).await.unwrap();
+        assert_eq!(content_1, "current");
+
+        let original_exists = tokio::fs::try_exists(&log_path).await.unwrap_or(false);
+        assert!(!original_exists, "original log should be moved to .1");
+
+        let beyond = format!("{}.4", log_path.display());
+        let beyond_exists = tokio::fs::try_exists(&beyond).await.unwrap_or(false);
+        assert!(!beyond_exists, "no file should exist beyond max_files");
+    }
+
+    #[tokio::test]
+    async fn test_rotate_logs_with_max_files_zero() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("no_rotate.log");
+        tokio::fs::write(&log_path, "data".to_string())
+            .await
+            .unwrap();
+        AuditLogger::rotate_logs(&log_path, 0).await;
+
+        // max_files=0 skips the oldest removal and the shift loop, but the
+        // final rename of the current log to .1 is unconditional
+        let rotated = format!("{}.1", log_path.display());
+        let rotated_content = tokio::fs::read_to_string(&rotated).await.unwrap();
+        assert_eq!(rotated_content, "data");
+
+        let original_exists = tokio::fs::try_exists(&log_path).await.unwrap_or(false);
+        assert!(!original_exists, "original log should be moved to .1");
+
+        let beyond = format!("{}.2", log_path.display());
+        let beyond_exists = tokio::fs::try_exists(&beyond).await.unwrap_or(false);
+        assert!(
+            !beyond_exists,
+            "no .2 file should be created when max_files=0"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rotate_logs_nonexistent_source() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("nonexistent.log");
+        AuditLogger::rotate_logs(&log_path, 3).await;
+        let exists = tokio::fs::try_exists(&log_path).await.unwrap_or(false);
+        assert!(!exists);
+    }
+
+    #[tokio::test]
+    async fn test_write_log_entry_creates_and_appends() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("write_entry.log");
+        AuditLogger::write_log_entry(&log_path, "first line")
+            .await
+            .unwrap();
+        AuditLogger::write_log_entry(&log_path, "second line")
+            .await
+            .unwrap();
+        let content = tokio::fs::read_to_string(&log_path).await.unwrap();
+        assert!(content.contains("first line"));
+        assert!(content.contains("second line"));
+        assert_eq!(content.matches('\n').count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_log_all_methods_with_none_ip() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "all_none.log");
+        logger.log_login_success("u", None);
+        logger.log_login_failed("u", None, "reason");
+        logger.log_logout("u", None);
+        logger.log_permission_denied("u", None, "res");
+        logger.log_user_created("u", "creator", None);
+        logger.log_user_updated("u", "updater", None);
+        logger.log_user_deleted("u", "deleter", None);
+        logger.log_token_refresh("u", None);
+        logger.log_unauthorized_access(None, "/path");
+        logger.log_rate_limit_exceeded(None, None);
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("login_success"));
+        assert!(content.contains("login_failed"));
+        assert!(content.contains("logout"));
+        assert!(content.contains("permission_denied"));
+        assert!(content.contains("user_created"));
+        assert!(content.contains("user_updated"));
+        assert!(content.contains("user_deleted"));
+        assert!(content.contains("token_refresh"));
+        assert!(content.contains("unauthorized_access"));
+        assert!(content.contains("rate_limit_exceeded"));
+    }
+
+    #[tokio::test]
+    async fn test_log_channel_closed_does_not_panic() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, _log_path) = make_logger(&temp_dir, "closed.log");
+        drop(logger);
+    }
 }
 
 #[cfg(all(test, feature = "db"))]

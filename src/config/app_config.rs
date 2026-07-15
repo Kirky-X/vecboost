@@ -88,15 +88,15 @@ impl AppConfig {
 /// flat env var `VECBOOST_JWT_SECRET` is mapped onto `auth.jwt_secret`
 /// because confers' nested env mapping would require `VECBOOST_AUTH__JWT_SECRET`.
 fn apply_security_env_overrides(config: &mut AppConfig) {
-    if let Ok(jwt_secret) = std::env::var("VECBOOST_JWT_SECRET") {
-        if !jwt_secret.is_empty() {
-            config.auth.jwt_secret = Some(jwt_secret);
-        }
+    if let Ok(jwt_secret) = std::env::var("VECBOOST_JWT_SECRET")
+        && !jwt_secret.is_empty()
+    {
+        config.auth.jwt_secret = Some(jwt_secret);
     }
-    if let Ok(admin_password) = std::env::var("VECBOOST_ADMIN_PASSWORD") {
-        if !admin_password.is_empty() {
-            config.auth.default_admin_password = Some(admin_password);
-        }
+    if let Ok(admin_password) = std::env::var("VECBOOST_ADMIN_PASSWORD")
+        && !admin_password.is_empty()
+    {
+        config.auth.default_admin_password = Some(admin_password);
     }
 }
 

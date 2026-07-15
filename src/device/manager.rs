@@ -589,7 +589,7 @@ mod tests {
     async fn test_gpu_info_from_stats_available() {
         let stats = crate::monitor::GpuMemoryStats {
             device_id: 0,
-            used_bytes: 1 * 1024 * 1024 * 1024,
+            used_bytes: 1024 * 1024 * 1024,
             total_bytes: 8 * 1024 * 1024 * 1024,
             available_bytes: 7 * 1024 * 1024 * 1024,
             utilization_percent: 12.5,
@@ -612,7 +612,7 @@ mod tests {
             device_id: 0,
             used_bytes: 9 * 1024 * 1024 * 1024,
             total_bytes: 10 * 1024 * 1024 * 1024,
-            available_bytes: 1 * 1024 * 1024 * 1024,
+            available_bytes: 1024 * 1024 * 1024,
             utilization_percent: 95.0,
         };
 
@@ -624,7 +624,7 @@ mod tests {
     async fn test_gpu_info_from_stats_low_memory() {
         let stats = crate::monitor::GpuMemoryStats {
             device_id: 0,
-            used_bytes: 1 * 1024 * 1024 * 1024,
+            used_bytes: 1024 * 1024 * 1024,
             total_bytes: 2 * 1024 * 1024 * 1024,
             available_bytes: 512 * 1024 * 1024,
             utilization_percent: 50.0,

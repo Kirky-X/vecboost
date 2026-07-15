@@ -140,7 +140,7 @@ mod tests {
 
     #[async_trait]
     impl InferenceEngine for TestEngine {
-        fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
             Ok(vec![0.1f32; self.dimension])
         }
 
@@ -242,5 +242,170 @@ mod tests {
         assert!(json.contains("embedding"));
         assert!(json.contains("dimension"));
         assert!(json.contains("384"));
+    }
+
+    #[tokio::test]
+    async fn test_cli_batch_logic_processes_file_content() {
+        let service = make_service(384);
+        let temp_dir = tempdir().unwrap();
+        let input_path = temp_dir.path().join("batch_input.txt");
+        let content = "line one\nline two\n\nline three\n";
+        tokio::fs::write(&input_path, content).await.unwrap();
+        let file_content = tokio::fs::read_to_string(&input_path).await.unwrap();
+        let texts: Vec<String> = file_content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.to_string())
+            .collect();
+        assert_eq!(texts.len(), 3);
+        let req = BatchEmbedRequest {
+            texts,
+            mode: None,
+            normalize: Some(true),
+        };
+        let response = api::embed_batch(&service, req).await.unwrap();
+        assert_eq!(response.embeddings.len(), 3);
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("embedding"));
+    }
+
+    #[tokio::test]
+    async fn test_cli_batch_empty_file_returns_error() {
+        let temp_dir = tempdir().unwrap();
+        let input_path = temp_dir.path().join("empty.txt");
+        tokio::fs::write(&input_path, "   \n\n  \n").await.unwrap();
+        let content = tokio::fs::read_to_string(&input_path).await.unwrap();
+        let texts: Vec<String> = content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.to_string())
+            .collect();
+        assert!(texts.is_empty());
+        let req = BatchEmbedRequest {
+            texts,
+            mode: None,
+            normalize: Some(true),
+        };
+        let result = api::embed_batch(&service_placeholder(), req).await;
+        assert!(result.is_err());
+    }
+
+    fn service_placeholder() -> EmbeddingService {
+        make_service(384)
+    }
+
+    #[tokio::test]
+    async fn test_cli_batch_nonexistent_file_returns_io_error() {
+        let path = std::path::PathBuf::from("/nonexistent_path_xyz/file.txt");
+        let result = tokio::fs::read_to_string(&path).await;
+        assert!(result.is_err());
+        let err = VecboostError::IoError(format!(
+            "Failed to read input file: {}",
+            result.unwrap_err()
+        ));
+        assert!(err.to_string().contains("Failed to read input file"));
+    }
+
+    #[tokio::test]
+    async fn test_cli_similarity_logic_outputs_json() {
+        let service = make_service(384);
+        let req = SimilarityRequest {
+            source: "hello".to_string(),
+            target: "world".to_string(),
+        };
+        let response = api::compute_similarity(&service, req).await.unwrap();
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("score"));
+        assert!(json.parse::<serde_json::Value>().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cli_embed_with_normalize_none() {
+        let service = make_service(384);
+        let req = EmbedRequest {
+            text: "test text".to_string(),
+            normalize: None,
+        };
+        let response = api::embed(&service, req).await.unwrap();
+        assert_eq!(response.dimension, 384);
+    }
+
+    #[tokio::test]
+    async fn test_cli_batch_with_single_line_file() {
+        let service = make_service(384);
+        let temp_dir = tempdir().unwrap();
+        let input_path = temp_dir.path().join("single.txt");
+        tokio::fs::write(&input_path, "only one line\n")
+            .await
+            .unwrap();
+        let content = tokio::fs::read_to_string(&input_path).await.unwrap();
+        let texts: Vec<String> = content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.to_string())
+            .collect();
+        assert_eq!(texts.len(), 1);
+        let req = BatchEmbedRequest {
+            texts,
+            mode: None,
+            normalize: Some(true),
+        };
+        let response = api::embed_batch(&service, req).await.unwrap();
+        assert_eq!(response.embeddings.len(), 1);
+    }
+
+    #[test]
+    fn test_cli_parse_embed_command_with_special_chars() {
+        let cli =
+            Cli::try_parse_from(["vecboost", "embed", "--text", "Hello, 世界! @#$%"]).unwrap();
+        match cli.command {
+            CliCommand::Embed { ref text } => {
+                assert_eq!(text, "Hello, 世界! @#$%");
+            }
+            other => panic!("Expected Embed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_batch_command_with_path() {
+        let cli =
+            Cli::try_parse_from(["vecboost", "batch", "--input", "/tmp/test_input.txt"]).unwrap();
+        match cli.command {
+            CliCommand::Batch { ref input } => {
+                assert_eq!(input.to_str(), Some("/tmp/test_input.txt"));
+            }
+            other => panic!("Expected Batch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_similarity_command_empty_strings() {
+        let cli =
+            Cli::try_parse_from(["vecboost", "similarity", "--text1", "", "--text2", ""]).unwrap();
+        match cli.command {
+            CliCommand::Similarity { text1, text2 } => {
+                assert_eq!(text1, "");
+                assert_eq!(text2, "");
+            }
+            other => panic!("Expected Similarity, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_cli_missing_required_args_fails() {
+        let result = Cli::try_parse_from(["vecboost", "similarity", "--text1", "only_one"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_unknown_subcommand_fails() {
+        let result = Cli::try_parse_from(["vecboost", "unknown_command"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_no_subcommand_fails() {
+        let result = Cli::try_parse_from(["vecboost"]);
+        assert!(result.is_err());
     }
 }

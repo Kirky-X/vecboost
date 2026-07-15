@@ -631,7 +631,7 @@ mod tests {
         let result = recovery.verify_recovered_files(
             "test_model",
             temp_dir.path(),
-            &[file_path_str.clone()],
+            std::slice::from_ref(&file_path_str),
         );
         assert!(result.is_err());
 
@@ -652,7 +652,7 @@ mod tests {
         let result = recovery.verify_recovered_files(
             "test_model",
             temp_dir.path(),
-            &[file_path_str.clone()],
+            std::slice::from_ref(&file_path_str),
         );
         assert!(result.is_err());
 
@@ -673,7 +673,7 @@ mod tests {
         let result = recovery.verify_recovered_files(
             "test_model",
             temp_dir.path(),
-            &[file_path_str.clone()],
+            std::slice::from_ref(&file_path_str),
         );
         assert!(result.is_err());
 
@@ -749,7 +749,7 @@ mod tests {
                 "test_model",
                 model_path,
                 None,
-                &[corrupted_file_str.clone()],
+                std::slice::from_ref(&corrupted_file_str),
             )
             .unwrap();
 
@@ -841,7 +841,7 @@ mod tests {
                 "test_model",
                 model_path,
                 None,
-                &[corrupted_file_str.clone()],
+                std::slice::from_ref(&corrupted_file_str),
             )
             .unwrap();
 

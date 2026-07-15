@@ -13,6 +13,17 @@ use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::sync::RwLock;
 
+/// Ensure the global SERVICE is initialized for tests that need it.
+///
+/// Uses `SERVICE.set()` directly (not `init_service`) to avoid panicking if
+/// another test already initialized the OnceLock (process-global state).
+fn ensure_service_initialized() {
+    if SERVICE.get().is_none() {
+        let svc = Arc::new(RwLock::new(make_service(384)));
+        let _ = SERVICE.set(svc);
+    }
+}
+
 /// Deterministic mock engine for API layer tests.
 ///
 /// Generates a normalized embedding by hashing the text bytes, so the same
@@ -224,4 +235,273 @@ async fn test_compute_similarity_empty_target_returns_error() {
         VecboostError::InvalidInput(_) => {}
         other => panic!("Expected InvalidInput, got {:?}", other),
     }
+}
+
+// ---------------------------------------------------------------------------
+// init_service / service() tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_init_service_sets_global() {
+    ensure_service_initialized();
+    let result = service();
+    assert!(result.is_ok(), "service() should return Ok after init");
+}
+
+#[test]
+fn test_init_service_panics_on_double_init() {
+    ensure_service_initialized();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let svc = Arc::new(RwLock::new(make_service(384)));
+        init_service(svc);
+    }));
+    assert!(result.is_err(), "init_service should panic on double init");
+}
+
+// ---------------------------------------------------------------------------
+// to_api_error / uuid_like_id tests
+// ---------------------------------------------------------------------------
+
+#[cfg(any(feature = "http", feature = "cli"))]
+#[test]
+fn test_uuid_like_id_format() {
+    let id = uuid_like_id();
+    assert!(id.starts_with("err-"));
+    let suffix = &id[4..];
+    assert!(
+        suffix.parse::<u128>().is_ok(),
+        "suffix should be numeric, got: {}",
+        suffix
+    );
+}
+
+#[cfg(any(feature = "http", feature = "cli"))]
+#[test]
+fn test_uuid_like_id_unique() {
+    let id1 = uuid_like_id();
+    let id2 = uuid_like_id();
+    assert_ne!(id1, id2, "consecutive ids should differ");
+}
+
+#[cfg(any(feature = "http", feature = "cli"))]
+#[test]
+fn test_to_api_error_invalid_input() {
+    let err = VecboostError::InvalidInput("bad input".to_string());
+    let api_err = to_api_error(&err);
+    match api_err {
+        ApiError::InvalidInput {
+            message,
+            field,
+            value,
+        } => {
+            assert_eq!(message, "bad input");
+            assert!(field.is_none());
+            assert!(value.is_none());
+        }
+        other => panic!("Expected InvalidInput, got {:?}", other),
+    }
+}
+
+#[cfg(any(feature = "http", feature = "cli"))]
+#[test]
+fn test_to_api_error_model_load_error() {
+    let err = VecboostError::ModelLoadError("model not found".to_string());
+    let api_err = to_api_error(&err);
+    match api_err {
+        ApiError::Internal {
+            message, error_id, ..
+        } => {
+            assert!(message.contains("Model load error"));
+            assert!(message.contains("model not found"));
+            assert!(error_id.starts_with("err-"));
+        }
+        other => panic!("Expected Internal, got {:?}", other),
+    }
+}
+
+#[cfg(any(feature = "http", feature = "cli"))]
+#[test]
+fn test_to_api_error_other_variants_become_internal() {
+    let variants = vec![
+        VecboostError::ConfigError("cfg err".to_string()),
+        VecboostError::InferenceError("inf err".to_string()),
+        VecboostError::AuthenticationError("auth err".to_string()),
+        VecboostError::DatabaseError("db err".to_string()),
+        VecboostError::InternalError("internal err".to_string()),
+        VecboostError::RateLimitExceeded("rl err".to_string()),
+        VecboostError::ValidationError("val err".to_string()),
+        VecboostError::IoError("io err".to_string()),
+        VecboostError::NotFound("nf err".to_string()),
+        VecboostError::SecurityError("sec err".to_string()),
+        VecboostError::ModelNotLoaded("not loaded".to_string()),
+        VecboostError::ModelFileCorrupted("corrupted".to_string()),
+        VecboostError::ModelIntegrityError("integrity".to_string()),
+        VecboostError::TokenizationError("tok err".to_string()),
+        VecboostError::OutOfMemory("oom".to_string()),
+    ];
+    for err in variants {
+        let api_err = to_api_error(&err);
+        match api_err {
+            ApiError::Internal {
+                message, error_id, ..
+            } => {
+                assert!(!message.is_empty(), "message should not be empty");
+                assert!(error_id.starts_with("err-"));
+            }
+            other => panic!("Expected Internal for {:?}, got {:?}", err, other),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// forge_embed / forge_embed_batch / forge_compute_similarity tests
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_embed_success() {
+    ensure_service_initialized();
+    let req = EmbedRequest {
+        text: "hello forge".to_string(),
+        normalize: Some(true),
+    };
+    let result = forge_embed(req).await;
+    assert!(
+        result.is_ok(),
+        "forge_embed should succeed: {:?}",
+        result.err()
+    );
+    let response = result.unwrap();
+    assert_eq!(response.dimension, 384);
+    assert_eq!(response.embedding.len(), 384);
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_embed_empty_text_returns_error() {
+    ensure_service_initialized();
+    let req = EmbedRequest {
+        text: "".to_string(),
+        normalize: None,
+    };
+    let result = forge_embed(req).await;
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        ApiError::InvalidInput { message, .. } => {
+            assert!(
+                message.contains("empty") || message.contains("invalid"),
+                "expected empty/invalid message, got: {}",
+                message
+            );
+        }
+        other => panic!("Expected InvalidInput, got {:?}", other),
+    }
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_embed_batch_success() {
+    ensure_service_initialized();
+    let req = BatchEmbedRequest {
+        texts: vec!["text1".to_string(), "text2".to_string()],
+        mode: None,
+        normalize: Some(true),
+    };
+    let result = forge_embed_batch(req).await;
+    assert!(result.is_ok(), "forge_embed_batch should succeed");
+    let response = result.unwrap();
+    assert_eq!(response.embeddings.len(), 2);
+    assert_eq!(response.dimension, 384);
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_embed_batch_empty_returns_error() {
+    ensure_service_initialized();
+    let req = BatchEmbedRequest {
+        texts: vec![],
+        mode: None,
+        normalize: None,
+    };
+    let result = forge_embed_batch(req).await;
+    assert!(result.is_err());
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_compute_similarity_success() {
+    ensure_service_initialized();
+    let req = SimilarityRequest {
+        source: "hello".to_string(),
+        target: "world".to_string(),
+    };
+    let result = forge_compute_similarity(req).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    assert!(response.score >= -1.0 && response.score <= 1.0);
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_compute_similarity_empty_source_error() {
+    ensure_service_initialized();
+    let req = SimilarityRequest {
+        source: "".to_string(),
+        target: "target".to_string(),
+    };
+    let result = forge_compute_similarity(req).await;
+    assert!(result.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// cli_embed / cli_similarity tests
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "cli")]
+#[tokio::test]
+async fn test_cli_embed_success() {
+    ensure_service_initialized();
+    let result = cli_embed("hello cli".to_string()).await;
+    assert!(
+        result.is_ok(),
+        "cli_embed should succeed: {:?}",
+        result.err()
+    );
+    let json_str = result.unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_str).expect("cli_embed output should be valid JSON");
+    assert!(parsed.get("embedding").is_some());
+    assert!(parsed.get("dimension").is_some());
+}
+
+#[cfg(feature = "cli")]
+#[tokio::test]
+async fn test_cli_embed_empty_text_returns_error() {
+    ensure_service_initialized();
+    let result = cli_embed("".to_string()).await;
+    assert!(result.is_err());
+}
+
+#[cfg(feature = "cli")]
+#[tokio::test]
+async fn test_cli_similarity_success() {
+    ensure_service_initialized();
+    let result = cli_similarity("source text".to_string(), "target text".to_string()).await;
+    assert!(
+        result.is_ok(),
+        "cli_similarity should succeed: {:?}",
+        result.err()
+    );
+    let json_str = result.unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_str).expect("cli_similarity output should be valid JSON");
+    assert!(parsed.get("score").is_some());
+}
+
+#[cfg(feature = "cli")]
+#[tokio::test]
+async fn test_cli_similarity_empty_source_returns_error() {
+    ensure_service_initialized();
+    let result = cli_similarity("".to_string(), "target".to_string()).await;
+    assert!(result.is_err());
 }

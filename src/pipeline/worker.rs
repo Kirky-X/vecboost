@@ -1442,6 +1442,7 @@ mod tests {
         // worker task runs during our sleep().await yield points. Under
         // coverage instrumentation the loop may be slower, so allow 30s.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        #[allow(unused_assignments)]
         let mut updated_time = initial_time;
         loop {
             {

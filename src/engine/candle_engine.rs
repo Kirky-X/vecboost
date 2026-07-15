@@ -1854,4 +1854,299 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 384);
     }
+
+    /// 验证 PyTorch 模型加载路径(覆盖 is_pytorch 分支 362-403 行)
+    /// HuggingFace pytorch_model.bin 使用 pickle 格式,candle VarMap::load 不兼容,
+    /// 返回 ModelLoadError 提示转换为 safetensors 格式
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_pytorch_bin_loading() {
+        if !require_real_model() {
+            return;
+        }
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let real_path = std::path::Path::new(REAL_MODEL_PATH)
+            .canonicalize()
+            .expect("Failed to canonicalize real model path");
+        for file in &["config.json", "tokenizer.json", "pytorch_model.bin"] {
+            let src = real_path.join(file);
+            let dst = temp_dir.path().join(file);
+            std::os::unix::fs::symlink(&src, &dst)
+                .unwrap_or_else(|e| panic!("Failed to symlink {}: {}", file, e));
+        }
+        let mut config = real_model_config();
+        config.model_path = temp_dir.path().to_path_buf();
+        let result = CandleEngine::new(&config, Precision::Fp32);
+        assert!(
+            result.is_err(),
+            "PyTorch loading should fail with candle VarMap"
+        );
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(
+                msg.contains("Failed to load PyTorch weights"),
+                "Expected PyTorch load error, got: {}",
+                msg
+            );
+        }
+    }
+
+    /// 验证 TensorPool 在批量推理路径中被正确使用
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_batch_with_tensor_pool() {
+        if !require_real_model() {
+            return;
+        }
+        use crate::device::memory_pool::{TensorPool, TensorPoolConfig};
+        let pool = Arc::new(tokio::sync::RwLock::new(TensorPool::new(
+            candle_core::Device::Cpu,
+            TensorPoolConfig::default(),
+        )));
+        let config = real_model_config();
+        let engine =
+            CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, Some(pool))
+                .expect("Failed to load real model with tensor pool");
+        let texts: Vec<String> = vec!["hello world".to_string(), "batch pool test".to_string()];
+        let result = engine.embed_batch(&texts);
+        assert!(
+            result.is_ok(),
+            "embed_batch with tensor pool failed: {:?}",
+            result.err()
+        );
+        let embeddings = result.unwrap();
+        assert_eq!(embeddings.len(), 2);
+        for emb in &embeddings {
+            assert_eq!(emb.len(), 384);
+        }
+    }
+
+    /// 验证内存超限时触发 CPU 回退(覆盖 Exceeded 分支)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_memory_limit_exceeded_triggers_fallback() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let mut engine =
+            CandleEngine::new(&config, Precision::Fp32).expect("Failed to load real model");
+        let controller = Arc::new(MemoryLimitController::with_config(
+            crate::device::memory_limit::MemoryLimitConfig {
+                limit_bytes: 1024,
+                warning_threshold_percent: 80,
+                critical_threshold_percent: 90,
+            },
+        ));
+        controller.update_usage(2048).await;
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Exceeded);
+        engine.set_memory_limit_controller(controller);
+        let fallback = engine.check_memory_limit_and_fallback(&config).await;
+        assert!(
+            fallback.is_ok(),
+            "check_memory_limit_and_fallback failed: {:?}",
+            fallback.err()
+        );
+        assert!(
+            fallback.unwrap(),
+            "Should trigger fallback when memory exceeded"
+        );
+        assert!(
+            engine.is_fallback_triggered(),
+            "fallback_triggered flag must be set"
+        );
+    }
+
+    /// 验证 Critical 状态在 CPU 上不触发回退(因 check_memory_pressure 返回 false)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_memory_limit_critical_no_fallback_on_cpu() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let mut engine =
+            CandleEngine::new(&config, Precision::Fp32).expect("Failed to load real model");
+        let controller = Arc::new(MemoryLimitController::with_config(
+            crate::device::memory_limit::MemoryLimitConfig {
+                limit_bytes: 1024,
+                warning_threshold_percent: 80,
+                critical_threshold_percent: 90,
+            },
+        ));
+        controller.update_usage(922).await;
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Critical);
+        engine.set_memory_limit_controller(controller);
+        let fallback = engine.check_memory_limit_and_fallback(&config).await;
+        assert!(
+            fallback.is_ok(),
+            "check_memory_limit_and_fallback failed: {:?}",
+            fallback.err()
+        );
+        assert!(
+            !fallback.unwrap(),
+            "Should NOT trigger fallback on CPU with Critical status"
+        );
+        assert!(
+            !engine.is_fallback_triggered(),
+            "fallback_triggered should remain false"
+        );
+    }
+
+    /// 验证大批量推理(4+ 文本)覆盖批量处理循环路径
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_large_batch_embed() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let engine =
+            CandleEngine::new(&config, Precision::Fp32).expect("Failed to load real model");
+        let texts: Vec<String> = vec![
+            "first sentence".to_string(),
+            "second sentence".to_string(),
+            "third sentence".to_string(),
+            "fourth sentence".to_string(),
+        ];
+        let result = engine.embed_batch(&texts);
+        assert!(result.is_ok(), "large batch failed: {:?}", result.err());
+        let embeddings = result.unwrap();
+        assert_eq!(embeddings.len(), 4);
+        for (i, emb) in embeddings.iter().enumerate() {
+            assert_eq!(emb.len(), 384, "Embedding {} should be 384-dim", i);
+        }
+    }
+
+    /// 验证 estimate_memory_usage 在不同精度下的返回值(覆盖所有 precision 分支)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_estimate_memory_usage_all_precisions() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+
+        let engine_fp32 =
+            CandleEngine::new(&config, Precision::Fp32).expect("Failed to load FP32 model");
+        let mem_fp32 = engine_fp32.estimate_memory_usage(1, 128);
+        assert!(mem_fp32 > 0, "FP32 memory estimate should be positive");
+
+        let engine_fp16 =
+            CandleEngine::new(&config, Precision::Fp16).expect("Failed to load FP16 model");
+        let mem_fp16 = engine_fp16.estimate_memory_usage(1, 128);
+        assert!(mem_fp16 > 0, "FP16 memory estimate should be positive");
+        assert!(mem_fp16 < mem_fp32, "FP16 should use less memory than FP32");
+
+        let engine_int8 =
+            CandleEngine::new(&config, Precision::Int8).expect("Failed to load INT8 model");
+        let mem_int8 = engine_int8.estimate_memory_usage(1, 128);
+        assert!(mem_int8 > 0, "INT8 memory estimate should be positive");
+        assert!(mem_int8 < mem_fp16, "INT8 should use less memory than FP16");
+
+        let mem_batch = engine_fp32.estimate_memory_usage(8, 256);
+        assert!(
+            mem_batch > mem_fp32,
+            "Larger batch/seq should use more memory"
+        );
+    }
+
+    /// 验证长文本推理覆盖 tokenization 长序列路径
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_long_text_embed() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let engine =
+            CandleEngine::new(&config, Precision::Fp32).expect("Failed to load real model");
+        let long_text = "This is a very long text used for testing. ".repeat(20);
+        let result = engine.embed(&long_text);
+        assert!(result.is_ok(), "long text embed failed: {:?}", result.err());
+        assert_eq!(result.unwrap().len(), 384);
+    }
+
+    /// 验证批量推理与单条推理结果的一致性
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_batch_vs_single_consistency() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let engine =
+            CandleEngine::new(&config, Precision::Fp32).expect("Failed to load real model");
+        let text1 = "hello world";
+        let text2 = "machine learning";
+        let single1 = engine.embed(text1).expect("single embed 1 failed");
+        let single2 = engine.embed(text2).expect("single embed 2 failed");
+        let batch: Vec<String> = vec![text1.to_string(), text2.to_string()];
+        let batch_result = engine.embed_batch(&batch).expect("batch embed failed");
+        assert_eq!(batch_result.len(), 2);
+        for (i, (single, batch_emb)) in [single1, single2]
+            .iter()
+            .zip(batch_result.iter())
+            .enumerate()
+        {
+            for (a, b) in single.iter().zip(batch_emb.iter()) {
+                assert!(
+                    (a - b).abs() < 1e-3,
+                    "Batch vs single mismatch at index {} (diff > 1e-3)",
+                    i
+                );
+            }
+        }
+    }
+
+    /// 验证 Unicode 文本(中文+emoji)推理覆盖 tokenizer 多字节路径
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_unicode_text_embed() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let engine =
+            CandleEngine::new(&config, Precision::Fp32).expect("Failed to load real model");
+        let result = engine.embed("你好世界 🌍 machine learning");
+        assert!(result.is_ok(), "unicode embed failed: {:?}", result.err());
+        assert_eq!(result.unwrap().len(), 384);
+    }
+
+    /// 验证 FP16 精度下的批量推理路径(CPU 回退到 FP32)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_fp16_batch_embed() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let engine =
+            CandleEngine::new(&config, Precision::Fp16).expect("Failed to load FP16 model");
+        let texts: Vec<String> = vec!["fp16 batch test".to_string(), "second text".to_string()];
+        let result = engine.embed_batch(&texts);
+        assert!(
+            result.is_ok(),
+            "FP16 batch embed failed: {:?}",
+            result.err()
+        );
+        let embeddings = result.unwrap();
+        assert_eq!(embeddings.len(), 2);
+        for emb in &embeddings {
+            assert_eq!(emb.len(), 384);
+        }
+    }
+
+    /// 验证 INT8 精度下的批量推理路径
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_int8_batch_embed() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let engine =
+            CandleEngine::new(&config, Precision::Int8).expect("Failed to load INT8 model");
+        let texts: Vec<String> = vec!["int8 batch test".to_string(), "second text".to_string()];
+        let result = engine.embed_batch(&texts);
+        assert!(
+            result.is_ok(),
+            "INT8 batch embed failed: {:?}",
+            result.err()
+        );
+        let embeddings = result.unwrap();
+        assert_eq!(embeddings.len(), 2);
+        for emb in &embeddings {
+            assert_eq!(emb.len(), 384);
+        }
+    }
 }

@@ -242,4 +242,236 @@ mod tests {
 
         assert!(priority_enterprise >= priority_free);
     }
+
+    // ===== Priority::as_i32 tests =====
+
+    #[test]
+    fn test_priority_as_i32_returns_numeric_value() {
+        assert_eq!(Priority::Critical.as_i32(), 100);
+        assert_eq!(Priority::High.as_i32(), 75);
+        assert_eq!(Priority::Normal.as_i32(), 50);
+        assert_eq!(Priority::Low.as_i32(), 25);
+    }
+
+    // ===== Priority::from_score boundary tests =====
+
+    #[test]
+    fn test_priority_from_score_boundaries() {
+        assert_eq!(Priority::from_score(90), Priority::Critical);
+        assert_eq!(Priority::from_score(89), Priority::High);
+        assert_eq!(Priority::from_score(65), Priority::High);
+        assert_eq!(Priority::from_score(64), Priority::Normal);
+        assert_eq!(Priority::from_score(40), Priority::Normal);
+        assert_eq!(Priority::from_score(39), Priority::Low);
+        assert_eq!(Priority::from_score(0), Priority::Low);
+        assert_eq!(Priority::from_score(-1), Priority::Low);
+    }
+
+    // ===== RequestSource constructor tests =====
+
+    #[test]
+    fn test_request_source_http_constructor() {
+        let source = RequestSource::http("192.168.1.1".to_string());
+        match source {
+            RequestSource::Http { ip } => assert_eq!(ip, "192.168.1.1"),
+            other => panic!("Expected Http, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_request_source_grpc_constructor() {
+        let source = RequestSource::grpc("client-123".to_string());
+        match source {
+            RequestSource::Grpc { client_id } => assert_eq!(client_id, "client-123"),
+            other => panic!("Expected Grpc, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_request_source_internal_constructor() {
+        let source = RequestSource::internal();
+        assert!(matches!(source, RequestSource::Internal));
+    }
+
+    // ===== Timeout factor tests =====
+
+    #[test]
+    fn test_timeout_factor_under_100ms_critical_boost() {
+        let config = PriorityConfig::default();
+        let calculator = PriorityCalculator::new(config);
+        let input = PriorityInput {
+            base_priority: Priority::Normal,
+            time_until_timeout: Duration::from_millis(50),
+            user_tier: None,
+            source: RequestSource::internal(),
+            queue_length: 0,
+        };
+        let priority = calculator.calculate(input);
+        // Normal(50) * 2.0(timeout) * 1.5(internal) = 150 → Critical
+        assert_eq!(priority, Priority::Critical);
+    }
+
+    #[test]
+    fn test_timeout_factor_100_to_500ms_high_boost() {
+        let config = PriorityConfig::default();
+        let calculator = PriorityCalculator::new(config);
+        let input = PriorityInput {
+            base_priority: Priority::Normal,
+            time_until_timeout: Duration::from_millis(200),
+            user_tier: None,
+            source: RequestSource::internal(),
+            queue_length: 0,
+        };
+        let priority = calculator.calculate(input);
+        // Normal(50) * 1.5(timeout) * 1.5(internal) = 112.5 → 112 → Critical
+        assert_eq!(priority, Priority::Critical);
+    }
+
+    #[test]
+    fn test_timeout_factor_500_to_1000ms_moderate_boost() {
+        let config = PriorityConfig::default();
+        let calculator = PriorityCalculator::new(config);
+        let input = PriorityInput {
+            base_priority: Priority::Normal,
+            time_until_timeout: Duration::from_millis(700),
+            user_tier: None,
+            source: RequestSource::internal(),
+            queue_length: 0,
+        };
+        let priority = calculator.calculate(input);
+        // Normal(50) * 1.2(timeout) * 1.5(internal) = 90 → Critical
+        assert_eq!(priority, Priority::Critical);
+    }
+
+    #[test]
+    fn test_timeout_factor_over_1000ms_no_boost() {
+        let config = PriorityConfig::default();
+        let calculator = PriorityCalculator::new(config);
+        let input = PriorityInput {
+            base_priority: Priority::Normal,
+            time_until_timeout: Duration::from_millis(2000),
+            user_tier: None,
+            source: RequestSource::internal(),
+            queue_length: 0,
+        };
+        let priority = calculator.calculate(input);
+        // Normal(50) * 1.0(timeout) * 1.5(internal) = 75 → High
+        assert_eq!(priority, Priority::High);
+    }
+
+    // ===== Source weight tests =====
+
+    #[test]
+    fn test_source_weight_http() {
+        let config = PriorityConfig::default();
+        let calculator = PriorityCalculator::new(config);
+        let input = PriorityInput {
+            base_priority: Priority::Normal,
+            time_until_timeout: Duration::from_secs(10),
+            user_tier: None,
+            source: RequestSource::http("127.0.0.1".to_string()),
+            queue_length: 0,
+        };
+        let priority = calculator.calculate(input);
+        // Normal(50) * 1.0(timeout) * 1.0(http default) = 50 → Normal
+        assert_eq!(priority, Priority::Normal);
+    }
+
+    #[test]
+    fn test_source_weight_grpc() {
+        let config = PriorityConfig::default();
+        let calculator = PriorityCalculator::new(config);
+        let input = PriorityInput {
+            base_priority: Priority::Normal,
+            time_until_timeout: Duration::from_secs(10),
+            user_tier: None,
+            source: RequestSource::grpc("client-1".to_string()),
+            queue_length: 0,
+        };
+        let priority = calculator.calculate(input);
+        // Normal(50) * 1.0(timeout) * 1.2(grpc default) = 60 → Normal
+        assert_eq!(priority, Priority::Normal);
+    }
+
+    #[test]
+    fn test_source_weight_internal() {
+        let config = PriorityConfig::default();
+        let calculator = PriorityCalculator::new(config);
+        let input = PriorityInput {
+            base_priority: Priority::Normal,
+            time_until_timeout: Duration::from_secs(10),
+            user_tier: None,
+            source: RequestSource::internal(),
+            queue_length: 0,
+        };
+        let priority = calculator.calculate(input);
+        // Normal(50) * 1.0(timeout) * 1.5(internal default) = 75 → High
+        assert_eq!(priority, Priority::High);
+    }
+
+    // ===== Queue length tests =====
+
+    #[test]
+    fn test_queue_length_large_boost() {
+        let config = PriorityConfig::default();
+        let calculator = PriorityCalculator::new(config);
+        let input = PriorityInput {
+            base_priority: Priority::Normal,
+            time_until_timeout: Duration::from_secs(10),
+            user_tier: None,
+            source: RequestSource::http("127.0.0.1".to_string()),
+            queue_length: 100,
+        };
+        let priority = calculator.calculate(input);
+        // Normal(50) * 1.0(timeout) * 1.0(http) * 2.0(queue=100*0.05 capped) = 100 → Critical
+        assert_eq!(priority, Priority::Critical);
+    }
+
+    #[test]
+    fn test_calculate_with_unknown_tier_uses_no_weight() {
+        let config = PriorityConfig::default();
+        let calculator = PriorityCalculator::new(config);
+        let input = PriorityInput {
+            base_priority: Priority::Normal,
+            time_until_timeout: Duration::from_secs(10),
+            user_tier: Some("unknown_tier".to_string()),
+            source: RequestSource::http("127.0.0.1".to_string()),
+            queue_length: 0,
+        };
+        let priority = calculator.calculate(input);
+        // Unknown tier → no weight applied: 50 * 1.0 * 1.0 = 50 → Normal
+        assert_eq!(priority, Priority::Normal);
+    }
+
+    #[test]
+    fn test_calculate_clamps_to_150() {
+        let config = PriorityConfig::default();
+        let calculator = PriorityCalculator::new(config);
+        let input = PriorityInput {
+            base_priority: Priority::Critical,
+            time_until_timeout: Duration::from_millis(50),
+            user_tier: Some("enterprise".to_string()),
+            source: RequestSource::internal(),
+            queue_length: 100,
+        };
+        let priority = calculator.calculate(input);
+        // All boosts applied but clamped to 150 → Critical
+        assert_eq!(priority, Priority::Critical);
+    }
+
+    #[test]
+    fn test_calculate_low_base_with_no_boosts() {
+        let config = PriorityConfig::default();
+        let calculator = PriorityCalculator::new(config);
+        let input = PriorityInput {
+            base_priority: Priority::Low,
+            time_until_timeout: Duration::from_secs(10),
+            user_tier: None,
+            source: RequestSource::http("127.0.0.1".to_string()),
+            queue_length: 0,
+        };
+        let priority = calculator.calculate(input);
+        // Low(25) * 1.0 * 1.0 = 25 → Low
+        assert_eq!(priority, Priority::Low);
+    }
 }

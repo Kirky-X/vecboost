@@ -416,4 +416,274 @@ mod tests {
             "aged Critical should be skipped, Low should be dequeued first"
         );
     }
+
+    // ===== peek_highest_priority tests =====
+
+    #[tokio::test]
+    async fn test_peek_highest_priority_empty_queue_returns_none() {
+        let queue = PriorityRequestQueue::new(100);
+        let result = queue.peek_highest_priority().await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_peek_highest_priority_returns_critical() {
+        let queue = PriorityRequestQueue::new(100);
+        let (tx, _rx) = oneshot::channel();
+        let request = QueuedRequest {
+            request_id: "test-1".to_string(),
+            embed_request: EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Critical,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tx,
+        };
+        queue.enqueue(request).await.unwrap();
+        let result = queue.peek_highest_priority().await;
+        assert_eq!(result, Some(Priority::Critical));
+    }
+
+    #[tokio::test]
+    async fn test_peek_highest_priority_returns_low() {
+        let queue = PriorityRequestQueue::new(100);
+        let (tx, _rx) = oneshot::channel();
+        let request = QueuedRequest {
+            request_id: "test-1".to_string(),
+            embed_request: EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Low,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tx,
+        };
+        queue.enqueue(request).await.unwrap();
+        let result = queue.peek_highest_priority().await;
+        assert_eq!(result, Some(Priority::Low));
+    }
+
+    #[tokio::test]
+    async fn test_peek_highest_priority_after_dequeue() {
+        let queue = PriorityRequestQueue::new(100);
+        for priority in [Priority::High, Priority::Low] {
+            let (tx, _rx) = oneshot::channel();
+            let request = QueuedRequest {
+                request_id: format!("test-{:?}", priority),
+                embed_request: EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: Some(true),
+                },
+                priority,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+                response_tx: tx,
+            };
+            queue.enqueue(request).await.unwrap();
+        }
+        assert_eq!(queue.peek_highest_priority().await, Some(Priority::High));
+        queue.dequeue().await.unwrap();
+        assert_eq!(queue.peek_highest_priority().await, Some(Priority::Low));
+        queue.dequeue().await.unwrap();
+        assert!(queue.peek_highest_priority().await.is_none());
+    }
+
+    // ===== size_by_priority tests =====
+
+    #[tokio::test]
+    async fn test_size_by_priority_empty_queue() {
+        let queue = PriorityRequestQueue::new(100);
+        let result = queue.size_by_priority().await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_size_by_priority_single_priority() {
+        let queue = PriorityRequestQueue::new(100);
+        for i in 0..3 {
+            let (tx, _rx) = oneshot::channel();
+            let request = QueuedRequest {
+                request_id: format!("test-{}", i),
+                embed_request: EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: Some(true),
+                },
+                priority: Priority::Normal,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+                response_tx: tx,
+            };
+            queue.enqueue(request).await.unwrap();
+        }
+        let result = queue.size_by_priority().await;
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], (Priority::Normal, 3));
+    }
+
+    #[tokio::test]
+    async fn test_size_by_priority_multiple_priorities() {
+        let queue = PriorityRequestQueue::new(100);
+        let priorities_with_counts = [
+            (Priority::Critical, 2),
+            (Priority::High, 1),
+            (Priority::Low, 3),
+        ];
+        for (priority, count) in priorities_with_counts {
+            for i in 0..count {
+                let (tx, _rx) = oneshot::channel();
+                let request = QueuedRequest {
+                    request_id: format!("test-{:?}-{}", priority, i),
+                    embed_request: EmbedRequest {
+                        text: "test".to_string(),
+                        normalize: Some(true),
+                    },
+                    priority,
+                    submitted_at: Instant::now(),
+                    timeout: Duration::from_secs(30),
+                    source: RequestSource::Http {
+                        ip: "127.0.0.1".to_string(),
+                    },
+                    response_tx: tx,
+                };
+                queue.enqueue(request).await.unwrap();
+            }
+        }
+        let result = queue.size_by_priority().await;
+        let total: usize = result.iter().map(|(_, c)| c).sum();
+        assert_eq!(total, 6);
+    }
+
+    // ===== dequeue from empty queue =====
+
+    #[tokio::test]
+    async fn test_dequeue_empty_queue_returns_none() {
+        let queue = PriorityRequestQueue::new(100);
+        let result = queue.dequeue().await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_dequeue_all_then_empty() {
+        let queue = PriorityRequestQueue::new(100);
+        let (tx, _rx) = oneshot::channel();
+        let request = QueuedRequest {
+            request_id: "test-1".to_string(),
+            embed_request: EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tx,
+        };
+        queue.enqueue(request).await.unwrap();
+        assert!(queue.dequeue().await.is_some());
+        assert!(queue.dequeue().await.is_none());
+        assert_eq!(queue.size(), 0);
+    }
+
+    // ===== clear on empty queue =====
+
+    #[tokio::test]
+    async fn test_clear_empty_queue() {
+        let queue = PriorityRequestQueue::new(100);
+        queue.clear().await;
+        assert_eq!(queue.size(), 0);
+    }
+
+    // ===== queue size tracking after operations =====
+
+    #[tokio::test]
+    async fn test_size_reflects_enqueue_and_dequeue() {
+        let queue = PriorityRequestQueue::new(100);
+        assert_eq!(queue.size(), 0);
+        for i in 0..5 {
+            let (tx, _rx) = oneshot::channel();
+            let request = QueuedRequest {
+                request_id: format!("test-{}", i),
+                embed_request: EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: Some(true),
+                },
+                priority: Priority::Normal,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+                response_tx: tx,
+            };
+            queue.enqueue(request).await.unwrap();
+        }
+        assert_eq!(queue.size(), 5);
+        for _ in 0..3 {
+            queue.dequeue().await.unwrap();
+        }
+        assert_eq!(queue.size(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_max_size_zero_always_rejects() {
+        let queue = PriorityRequestQueue::new(0);
+        let (tx, _rx) = oneshot::channel();
+        let request = QueuedRequest {
+            request_id: "test-1".to_string(),
+            embed_request: EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tx,
+        };
+        let result = queue.enqueue(request).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_aging_does_not_skip_low_priority() {
+        let queue = PriorityRequestQueue::new(100);
+        let (tx, _rx) = oneshot::channel();
+        let low_req = QueuedRequest {
+            request_id: "low-1".to_string(),
+            embed_request: EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Low,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(60),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tx,
+        };
+        queue.enqueue(low_req).await.unwrap();
+        // Low priority does NOT participate in aging skip
+        let dequeued = queue.dequeue().await.unwrap();
+        assert_eq!(dequeued.priority, Priority::Low);
+    }
 }

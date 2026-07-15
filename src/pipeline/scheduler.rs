@@ -78,7 +78,7 @@ mod tests {
     use crate::domain::EmbedRequest;
     use crate::engine::InferenceEngine;
     use crate::pipeline::config::{PriorityConfig, WorkerConfig};
-    use crate::pipeline::priority::{Priority, RequestSource};
+    use crate::pipeline::priority::{Priority, PriorityInput, RequestSource};
     use crate::pipeline::queue::PriorityRequestQueue;
     use async_trait::async_trait;
     use std::time::{Duration, Instant};
@@ -576,5 +576,161 @@ mod tests {
             VecboostError::InvalidInput(_) => {}
             other => panic!("expected InvalidInput for whitespace-only, got {:?}", other),
         }
+    }
+
+    /// 验证 process_request 处理 Critical 优先级请求。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_request_critical_priority() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let request = QueuedRequest {
+            request_id: "test-critical".to_string(),
+            embed_request: EmbedRequest {
+                text: "urgent request".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Critical,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Internal,
+            response_tx: tokio::sync::oneshot::channel().0,
+        };
+
+        let result = scheduler.process_request(request).await;
+        assert!(result.is_ok(), "critical priority request should succeed");
+        assert_eq!(result.unwrap().dimension, 384);
+    }
+
+    /// 验证 process_request 处理 Low 优先级请求。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_request_low_priority() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let request = QueuedRequest {
+            request_id: "test-low".to_string(),
+            embed_request: EmbedRequest {
+                text: "low priority request".to_string(),
+                normalize: Some(true),
+            },
+            priority: Priority::Low,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Grpc {
+                client_id: "client-1".to_string(),
+            },
+            response_tx: tokio::sync::oneshot::channel().0,
+        };
+
+        let result = scheduler.process_request(request).await;
+        assert!(result.is_ok(), "low priority request should succeed");
+        assert_eq!(result.unwrap().dimension, 384);
+    }
+
+    /// 验证 process_request 处理超长文本。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_request_long_text() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let request = QueuedRequest {
+            request_id: "test-long".to_string(),
+            embed_request: EmbedRequest {
+                text: "X".repeat(1000),
+                normalize: Some(true),
+            },
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tokio::sync::oneshot::channel().0,
+        };
+
+        let result = scheduler.process_request(request).await;
+        assert!(result.is_ok(), "long text should succeed");
+        let response = result.unwrap();
+        assert_eq!(response.dimension, 384);
+        assert_eq!(response.embedding.len(), 384);
+    }
+
+    /// 验证 priority_calculator 访问器返回有效引用。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_priority_calculator_accessor_usable() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let pc = scheduler.priority_calculator();
+        let input = PriorityInput {
+            base_priority: Priority::Normal,
+            time_until_timeout: Duration::from_millis(50),
+            user_tier: None,
+            source: RequestSource::Internal,
+            queue_length: 0,
+        };
+        let result = pc.calculate(input);
+        assert_eq!(result, Priority::Critical);
     }
 }

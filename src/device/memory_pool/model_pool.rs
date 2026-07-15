@@ -450,7 +450,7 @@ mod tests {
             .unwrap();
         pool.mark_model_unloaded("model1");
 
-        assert!(!pool.can_load_model(1 * 1024 * 1024));
+        assert!(!pool.can_load_model(1024 * 1024));
     }
 
     #[test]

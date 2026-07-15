@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_amd_device_new_small_vram_compute_units() {
-        let info = make_info(1 * 1024 * 1024 * 1024);
+        let info = make_info(1024 * 1024 * 1024);
         let device = AmdDevice::new(info);
         assert_eq!(device.compute_units(), 64);
     }
@@ -705,7 +705,7 @@ mod tests {
 
         let primary = manager.primary_device().await.unwrap();
         assert!(primary.allocate(1024));
-        assert!(primary.is_busy() == false);
+        assert!(!primary.is_busy());
         primary.set_busy(true);
 
         manager.reset().await;

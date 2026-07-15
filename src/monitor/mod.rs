@@ -338,7 +338,7 @@ mod tests {
     async fn test_update_gpu_memory_overwrites_previous() {
         let monitor = MemoryMonitor::new();
         monitor
-            .update_gpu_memory(1 * 1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024)
+            .update_gpu_memory(1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024)
             .await;
         monitor
             .update_gpu_memory(2 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024)

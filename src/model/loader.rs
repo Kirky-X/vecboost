@@ -437,7 +437,7 @@ mod tests {
         let config = make_config("missing-model", PathBuf::from("/nonexistent/one"));
 
         let result = loader.get_model_path(&config).await;
-        let err = result.err().expect("should error");
+        let err = result.expect_err("should error");
         match err {
             VecboostError::NotFound(msg) => {
                 assert!(msg.contains("/nonexistent/one"));

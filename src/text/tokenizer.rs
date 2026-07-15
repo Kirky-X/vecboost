@@ -1424,7 +1424,9 @@ mod tests {
     fn test_cache_constants() {
         assert_eq!(DEFAULT_CACHE_SIZE, 1024);
         assert_eq!(MAX_CACHE_SIZE, 8192);
-        assert!(DEFAULT_CACHE_SIZE < MAX_CACHE_SIZE);
+        const _: () = {
+            assert!(DEFAULT_CACHE_SIZE < MAX_CACHE_SIZE);
+        };
     }
 
     #[test]

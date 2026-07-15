@@ -1318,4 +1318,300 @@ mod tests {
         let parsed: toml::Value = toml::from_str(&content).unwrap();
         assert!(parsed.is_table());
     }
+
+    #[test]
+    fn test_load_with_valid_config_file_overrides_defaults() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("vecboost_test_load_{}.toml", std::process::id()));
+        let toml_content = r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[model]
+model_repo = "custom/model"
+batch_size = 64
+
+[embedding]
+cache_size = 2048
+"#;
+        std::fs::write(&path, toml_content).unwrap();
+        let result = AppConfig::load_with_path(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_ok(), "load should succeed: {:?}", result.err());
+        let cfg = result.unwrap();
+        assert_eq!(cfg.server.host, "127.0.0.1");
+        assert_eq!(cfg.server.port, 8080);
+        assert_eq!(cfg.model.model_repo, "custom/model");
+        assert_eq!(cfg.model.batch_size, 64);
+        assert_eq!(cfg.embedding.cache_size, 2048);
+    }
+
+    #[test]
+    fn test_load_with_config_loader_and_path() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("vecboost_test_loader_{}.toml", std::process::id()));
+        let toml_content = r#"
+[server]
+port = 9999
+
+[rate_limit]
+enabled = false
+"#;
+        std::fs::write(&path, toml_content).unwrap();
+        let loader = ConfigLoader::new().with_config_path(&path);
+        let result = loader.load();
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_ok());
+        let cfg = result.unwrap();
+        assert_eq!(cfg.server.port, 9999);
+        assert!(!cfg.rate_limit.enabled);
+    }
+
+    #[test]
+    fn test_load_with_custom_env_prefix() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        let loader = ConfigLoader::new().with_env_prefix("CUSTOMPREFIX");
+        let result = loader.load();
+        assert!(result.is_ok(), "load with custom prefix should succeed");
+    }
+
+    #[test]
+    fn test_load_with_env_var_override() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        // prefix_separator "_" + separator "__" => VECBOOST_SERVER__PORT
+        unsafe {
+            std::env::set_var("VECBOOST_SERVER__PORT", "7777");
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        let result = AppConfig::load();
+        unsafe {
+            std::env::remove_var("VECBOOST_SERVER__PORT");
+        }
+        assert!(result.is_ok());
+        let cfg = result.unwrap();
+        assert_eq!(
+            cfg.server.port, 7777,
+            "env var should override default port"
+        );
+    }
+
+    #[test]
+    fn test_load_with_valid_jwt_and_password_env() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var(
+                "VECBOOST_JWT_SECRET",
+                "this-is-a-valid-jwt-secret-32chars!!",
+            );
+            std::env::set_var("VECBOOST_ADMIN_PASSWORD", "SuperSecurePass123!");
+        }
+        let result = AppConfig::load();
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        assert!(result.is_ok(), "load should succeed with valid env vars");
+        let cfg = result.unwrap();
+        assert!(cfg.auth.jwt_secret.is_some());
+        assert!(cfg.auth.default_admin_password.is_some());
+    }
+
+    #[test]
+    fn test_load_fails_with_empty_jwt_env() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("VECBOOST_JWT_SECRET", "");
+        }
+        let result = AppConfig::load();
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+        }
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_fails_with_short_password_env() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("VECBOOST_ADMIN_PASSWORD", "short");
+        }
+        let result = AppConfig::load();
+        unsafe {
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_error_from_message() {
+        let err = ConfigError::Message("custom error".to_string());
+        assert!(err.to_string().contains("custom error"));
+    }
+
+    #[test]
+    fn test_database_config_default_values() {
+        #[cfg(feature = "db")]
+        {
+            let config = DatabaseConfig::default();
+            assert_eq!(config.url, "sqlite:vecboost.db");
+            assert_eq!(config.max_connections, 10);
+            assert_eq!(config.connect_timeout_secs, 5);
+        }
+    }
+
+    #[test]
+    fn test_server_config_custom_values() {
+        let config = ServerConfig {
+            host: "localhost".to_string(),
+            port: 4000,
+            grpc_host: Some("0.0.0.0".to_string()),
+            grpc_port: Some(6000),
+            grpc_enabled: true,
+            workers: Some(8),
+            timeout: Some(60),
+        };
+        assert_eq!(config.host, "localhost");
+        assert_eq!(config.port, 4000);
+        assert_eq!(config.grpc_host, Some("0.0.0.0".to_string()));
+        assert_eq!(config.grpc_port, Some(6000));
+        assert!(config.grpc_enabled);
+        assert_eq!(config.workers, Some(8));
+        assert_eq!(config.timeout, Some(60));
+    }
+
+    #[test]
+    fn test_model_config_custom_values() {
+        let config = ModelConfig {
+            model_repo: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
+            model_revision: "v1.0".to_string(),
+            model_path: Some("/path/to/model".to_string()),
+            use_gpu: true,
+            batch_size: 128,
+            expected_dimension: Some(384),
+            max_sequence_length: Some(512),
+        };
+        assert_eq!(config.model_repo, "sentence-transformers/all-MiniLM-L6-v2");
+        assert!(config.use_gpu);
+        assert_eq!(config.batch_size, 128);
+        assert_eq!(config.expected_dimension, Some(384));
+    }
+
+    #[test]
+    fn test_embedding_config_custom_values() {
+        let config = EmbeddingConfig {
+            default_aggregation: "max".to_string(),
+            similarity_metric: "dot".to_string(),
+            cache_enabled: false,
+            cache_size: 512,
+            max_batch_size: 32,
+        };
+        assert_eq!(config.default_aggregation, "max");
+        assert!(!config.cache_enabled);
+        assert_eq!(config.cache_size, 512);
+    }
+
+    #[test]
+    fn test_auth_config_custom_values() {
+        let config = AuthConfig {
+            enabled: true,
+            jwt_secret: Some("my-secret-key-at-least-32-chars!!".to_string()),
+            token_expiration_hours: Some(48),
+            default_admin_username: Some("admin".to_string()),
+            default_admin_password: Some("MyPassword123!".to_string()),
+            security: SecurityConfig::default(),
+            csrf: CsrfConfig {
+                enabled: true,
+                allowed_origins: Some(vec!["https://example.com".to_string()]),
+                token_validation_enabled: true,
+                token_expiration_secs: Some(7200),
+                allow_same_origin: false,
+            },
+        };
+        assert!(config.enabled);
+        assert!(config.jwt_secret.is_some());
+        assert_eq!(config.token_expiration_hours, Some(48));
+        assert!(config.csrf.enabled);
+        assert!(!config.csrf.allow_same_origin);
+    }
+
+    #[test]
+    fn test_csrf_config_custom_values() {
+        let config = CsrfConfig {
+            enabled: true,
+            allowed_origins: Some(vec![
+                "https://example.com".to_string(),
+                "https://app.example.com".to_string(),
+            ]),
+            token_validation_enabled: true,
+            token_expiration_secs: Some(1800),
+            allow_same_origin: false,
+        };
+        assert!(config.enabled);
+        assert_eq!(config.allowed_origins.unwrap().len(), 2);
+        assert!(config.token_validation_enabled);
+    }
+
+    #[test]
+    fn test_security_config_custom_values() {
+        let config = SecurityConfig {
+            storage_type: "file".to_string(),
+            encryption_key: Some("encryption-key".to_string()),
+            key_file_path: Some("/path/to/key".to_string()),
+        };
+        assert_eq!(config.storage_type, "file");
+        assert!(config.encryption_key.is_some());
+        assert!(config.key_file_path.is_some());
+    }
+
+    #[test]
+    fn test_audit_config_custom_values() {
+        let config = AuditConfig {
+            enabled: false,
+            log_file_path: "/var/log/audit.log".to_string(),
+            log_level: "debug".to_string(),
+            max_file_size_mb: 200,
+            max_files: 5,
+        };
+        assert!(!config.enabled);
+        assert_eq!(config.log_file_path, "/var/log/audit.log");
+        assert_eq!(config.log_level, "debug");
+        assert_eq!(config.max_file_size_mb, 200);
+        assert_eq!(config.max_files, 5);
+    }
+
+    #[test]
+    fn test_memory_pool_config_custom_values() {
+        let config = MemoryPoolConfig {
+            enabled: false,
+            tensor_pool: TensorPoolConfig {
+                enabled: false,
+                max_batch_size: 64,
+                max_sequence_length: 4096,
+                pool_size_per_shape: 2,
+                preallocate_on_startup: false,
+            },
+            buffer_pool: BufferPoolConfig::default(),
+            model_pool: ModelPoolConfig::default(),
+            cuda_pool: CudaPoolConfig::default(),
+        };
+        assert!(!config.enabled);
+        assert!(!config.tensor_pool.enabled);
+        assert_eq!(config.tensor_pool.max_batch_size, 64);
+    }
 }

@@ -1565,4 +1565,293 @@ mod tests {
             );
         }
     }
+
+    // ===== 真实模型集成测试 =====
+
+    const REAL_MODEL_PATH: &str = "models/BAAI-bge-small-en-v1.5";
+
+    fn real_model_config() -> ModelConfig {
+        ModelConfig {
+            name: "bge-small-en".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from(REAL_MODEL_PATH),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+        }
+    }
+
+    fn require_real_model() -> bool {
+        let path = format!("{}/config.json", REAL_MODEL_PATH);
+        if !std::path::Path::new(&path).exists() {
+            eprintln!(
+                "Skipping test: model files not found at {}",
+                REAL_MODEL_PATH
+            );
+            return false;
+        }
+        true
+    }
+
+    /// 验证 CandleEngine::new 成功加载真实 BERT 模型并完成单文本推理、
+    /// 同时覆盖 precision/device_type/supports_mixed_precision/is_fallback_triggered/
+    /// uses_quantization/estimate_memory_usage/内存方法/embed_batch 等核心路径。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_load_and_embed() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let engine =
+            CandleEngine::new(&config, Precision::Fp32).expect("Failed to load real model");
+
+        assert_eq!(*engine.precision(), Precision::Fp32);
+        assert_eq!(engine.device_type(), DeviceType::Cpu);
+        assert!(!engine.supports_mixed_precision());
+        assert!(!engine.is_fallback_triggered());
+        assert!(!engine.uses_quantization());
+
+        let result = engine.embed("hello world");
+        assert!(result.is_ok(), "embed failed: {:?}", result.err());
+        let embedding = result.unwrap();
+        assert_eq!(
+            embedding.len(),
+            384,
+            "Expected 384-dim embedding, got {}",
+            embedding.len()
+        );
+        let non_zero = embedding.iter().filter(|v| **v != 0.0).count();
+        assert!(non_zero > 0, "Embedding should have non-zero values");
+
+        let result2 = engine.embed("hello world");
+        assert!(result2.is_ok());
+        let embedding2 = result2.unwrap();
+        for (a, b) in embedding.iter().zip(embedding2.iter()) {
+            assert!((a - b).abs() < 1e-5, "Same text should give same embedding");
+        }
+
+        let empty_result = engine.embed("");
+        assert!(
+            empty_result.is_err(),
+            "embed empty string should return error"
+        );
+        assert!(matches!(
+            empty_result.unwrap_err(),
+            VecboostError::TokenizationError(_)
+        ));
+
+        let mem = engine.estimate_memory_usage(1, 128);
+        assert!(
+            mem > 0,
+            "estimate_memory_usage should return positive value"
+        );
+
+        assert!(
+            !engine.check_memory_pressure(90).await,
+            "check_memory_pressure should be false without monitor"
+        );
+        assert_eq!(
+            engine.get_memory_status().await,
+            None,
+            "get_memory_status should be None without controller"
+        );
+        engine.update_memory_limit(1024).await;
+        engine.update_gpu_memory().await;
+
+        let empty_batch: Vec<String> = vec![];
+        let batch_result = engine.embed_batch(&empty_batch);
+        assert!(batch_result.is_ok());
+        assert_eq!(batch_result.unwrap().len(), 0);
+
+        let texts: Vec<String> = vec!["hello world".to_string(), "machine learning".to_string()];
+        let batch_result = engine.embed_batch(&texts);
+        assert!(
+            batch_result.is_ok(),
+            "embed_batch failed: {:?}",
+            batch_result.err()
+        );
+        let embeddings = batch_result.unwrap();
+        assert_eq!(embeddings.len(), 2);
+        for (i, emb) in embeddings.iter().enumerate() {
+            assert_eq!(
+                emb.len(),
+                384,
+                "Batch embedding {} should be 384-dim, got {}",
+                i,
+                emb.len()
+            );
+        }
+    }
+
+    /// 验证 try_fallback_to_cpu 在 CPU 引擎上仍能重新加载模型并继续推理
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_try_fallback_to_cpu() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let mut engine =
+            CandleEngine::new(&config, Precision::Fp32).expect("Failed to load real model");
+
+        assert!(!engine.is_fallback_triggered());
+
+        let fallback_result = engine.try_fallback_to_cpu(&config).await;
+        assert!(
+            fallback_result.is_ok(),
+            "try_fallback_to_cpu failed: {:?}",
+            fallback_result.err()
+        );
+        assert!(engine.is_fallback_triggered());
+        assert_eq!(engine.device_type(), DeviceType::Cpu);
+        assert!(
+            !engine.uses_quantization(),
+            "use_quantization should be disabled after fallback"
+        );
+
+        let result = engine.embed("post fallback text");
+        assert!(
+            result.is_ok(),
+            "embed after fallback failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap().len(), 384);
+
+        let second_fallback = engine.try_fallback_to_cpu(&config).await;
+        assert!(second_fallback.is_ok(), "Repeated fallback should be no-op");
+    }
+
+    /// 验证 set_memory_limit_controller 后内存状态查询与回退检查路径
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_with_memory_controller() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let mut engine =
+            CandleEngine::new(&config, Precision::Fp32).expect("Failed to load real model");
+
+        assert_eq!(engine.get_memory_status().await, None);
+
+        let controller = Arc::new(MemoryLimitController::new());
+        engine.set_memory_limit_controller(controller);
+
+        let status = engine.get_memory_status().await;
+        assert!(status.is_some(), "get_memory_status should return Some");
+        assert_eq!(status.unwrap(), MemoryLimitStatus::Ok);
+
+        let fallback_result = engine.check_memory_limit_and_fallback(&config).await;
+        assert!(
+            fallback_result.is_ok(),
+            "check_memory_limit_and_fallback failed: {:?}",
+            fallback_result.err()
+        );
+        assert!(
+            !fallback_result.unwrap(),
+            "Should not fallback when under limit"
+        );
+
+        engine.update_memory_limit(1024 * 1024).await;
+        assert_eq!(
+            engine.get_memory_status().await,
+            Some(MemoryLimitStatus::Ok)
+        );
+    }
+
+    /// 验证 FP16 精度在 CPU 上回退到 FP32 后仍可正常推理
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_loads_fp16_cpu() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let engine = CandleEngine::new(&config, Precision::Fp16)
+            .expect("Failed to load real model with FP16");
+
+        assert_eq!(*engine.precision(), Precision::Fp16);
+        assert!(
+            !engine.supports_mixed_precision(),
+            "CPU should not support mixed precision"
+        );
+
+        let result = engine.embed("fp16 precision test");
+        assert!(
+            result.is_ok(),
+            "embed with FP16 on CPU failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap().len(), 384);
+    }
+
+    /// 验证 INT8 精度在 CPU 上启用 use_quantization 标志并可推理
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_loads_int8_cpu() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let engine = CandleEngine::new(&config, Precision::Int8)
+            .expect("Failed to load real model with INT8");
+
+        assert_eq!(*engine.precision(), Precision::Int8);
+        assert!(
+            engine.uses_quantization(),
+            "INT8 precision should set use_quantization=true"
+        );
+
+        let result = engine.embed("int8 precision test");
+        assert!(
+            result.is_ok(),
+            "embed with INT8 on CPU failed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap().len(), 384);
+    }
+
+    /// 验证不同 PoolingMode 配置下引擎均能加载并推理
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_loads_with_all_pooling_modes() {
+        if !require_real_model() {
+            return;
+        }
+        use crate::config::model::PoolingMode;
+        for (name, mode) in [
+            ("Mean", PoolingMode::Mean),
+            ("Max", PoolingMode::Max),
+            ("Cls", PoolingMode::Cls),
+        ] {
+            let mut config = real_model_config();
+            config.pooling_mode = Some(mode.clone());
+            let engine = CandleEngine::new(&config, Precision::Fp32)
+                .unwrap_or_else(|e| panic!("Failed to load with {} pooling: {:?}", name, e));
+            let result = engine.embed("pooling mode test");
+            assert!(
+                result.is_ok(),
+                "embed with {} pooling failed: {:?}",
+                name,
+                result.err()
+            );
+            assert_eq!(result.unwrap().len(), 384);
+        }
+    }
+
+    /// 验证 with_device 显式传入 Cpu 设备与 tensor_pool=None 时行为与 new() 一致
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_with_device_cpu_no_pool() {
+        if !require_real_model() {
+            return;
+        }
+        let config = real_model_config();
+        let engine = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None)
+            .expect("Failed to load real model via with_device");
+
+        assert_eq!(engine.device_type(), DeviceType::Cpu);
+        let result = engine.embed("with_device test");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 384);
+    }
 }

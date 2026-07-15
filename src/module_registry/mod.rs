@@ -36,15 +36,82 @@ pub struct DbModule;
 /// 审计模块 — 提供 `Option<Arc<AuditLogger>>` 能力
 pub struct AuditModule;
 
-/// 缓存配置（通过 `Kit::set_config` 注入）
+// ---------------------------------------------------------------------------
+// v0.3.0 D3 重构：覆盖 VecboostState 剩余字段的 13 个 Module
+//
+// 设计原则（与现有 EmbeddingModule/AuthModule 等保持一致）：
+//   - 模块 Capability 类型 = 字段类型（1:1 映射，无派生逻辑）
+//   - 复杂对象通过 `kit.set_config(capability)` 预构建后注入，build() 从 config 检索
+//   - bool 字段用 newtype 包装以避免 TypeMap 中 bool TypeId 冲突
+// ---------------------------------------------------------------------------
+
+/// 用户存储模块（auth）— 提供 `Option<Arc<UserStore>>` 能力
+#[cfg(feature = "auth")]
+pub struct UserStoreModule;
+
+/// 认证启用模块 — 提供 `bool` 能力（读取 `AuthEnabled` newtype 配置）
+pub struct AuthEnabledModule;
+
+/// CSRF 配置模块（auth）— 提供 `Option<Arc<CsrfConfig>>` 能力
+#[cfg(feature = "auth")]
+pub struct CsrfConfigModule;
+
+/// CSRF token 存储模块（auth）— 提供 `Option<Arc<CsrfTokenStore>>` 能力
+#[cfg(feature = "auth")]
+pub struct CsrfTokenStoreModule;
+
+/// 指标收集器模块 — 提供 `Option<Arc<InferenceCollector>>` 能力
+pub struct MetricsCollectorModule;
+
+/// Prometheus 收集器模块 — 提供 `Option<Arc<PrometheusCollector>>` 能力
+pub struct PrometheusCollectorModule;
+
+/// IP 白名单模块 — 提供 `Vec<String>` 能力
+pub struct IpWhitelistModule;
+
+/// 限流启用模块 — 提供 `bool` 能力（读取 `RateLimitEnabled` newtype 配置）
+pub struct RateLimitEnabledModule;
+
+/// 管道启用模块 — 提供 `bool` 能力（读取 `PipelineEnabled` newtype 配置）
+pub struct PipelineEnabledModule;
+
+/// 管道队列模块 — 提供 `Arc<PriorityRequestQueue>` 能力
+pub struct PipelineQueueModule;
+
+/// 响应通道模块 — 提供 `Arc<ResponseChannel>` 能力
+pub struct ResponseChannelModule;
+
+/// 优先级计算器模块 — 提供 `Arc<PriorityCalculator>` 能力
+pub struct PriorityCalculatorModule;
+
+/// Worker 管理器模块 — 提供 `Arc<WorkerManager>` 能力
+pub struct WorkerManagerModule;
+
+// ---------------------------------------------------------------------------
+// 配置类型（通过 `Kit::set_config` 注入）
+// ---------------------------------------------------------------------------
+
+/// 缓存配置
 #[derive(Clone, Debug)]
 pub struct CacheConfig {
     pub enabled: bool,
     pub size: usize,
 }
 
-/// 数据库配置（通过 `Kit::set_config` 注入）
+/// 数据库配置
 #[derive(Clone, Debug, Default)]
 pub struct DbConfig {
     pub enabled: bool,
 }
+
+/// 认证启用配置（newtype 包装以避免 bool TypeId 冲突）
+#[derive(Clone, Copy, Debug)]
+pub struct AuthEnabled(pub bool);
+
+/// 限流启用配置（newtype 包装以避免 bool TypeId 冲突）
+#[derive(Clone, Copy, Debug)]
+pub struct RateLimitEnabled(pub bool);
+
+/// 管道启用配置（newtype 包装以避免 bool TypeId 冲突）
+#[derive(Clone, Copy, Debug)]
+pub struct PipelineEnabled(pub bool);

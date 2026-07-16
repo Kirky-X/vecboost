@@ -427,6 +427,22 @@ impl OriginValidator {
     }
 }
 
+/// T027: 检查 CSRF 危险配置组合。
+///
+/// 返回 `Some(warning)` 当 CSRF enabled 但既未启用 token validation
+/// 也未配置 allowed_origins——此时 CSRF 保护形同虚设。
+pub fn check_csrf_dangerous_config(cfg: &crate::config::app::CsrfConfig) -> Option<&'static str> {
+    if cfg.enabled && !cfg.token_validation_enabled && cfg.allowed_origins.is_none() {
+        Some(
+            "CSRF protection enabled with token_validation=false and allowed_origins=None: \
+             this combination does not provide effective CSRF protection. \
+             Consider enabling token validation or specifying allowed origins.",
+        )
+    } else {
+        None
+    }
+}
+
 /// CSRF Protection Helper Functions
 ///
 /// Utility functions for CSRF protection.
@@ -921,5 +937,59 @@ mod tests {
 
         // 所有 token 验证后应已被移除 (一次性使用)
         assert_eq!(store.token_count().await, 0);
+    }
+
+    // ===== T027: CSRF 危险配置检测 =====
+
+    #[test]
+    fn test_csrf_dangerous_config_detected() {
+        // 危险组合:enabled=true, token_validation=false, allowed_origins=None
+        let dangerous = crate::config::app::CsrfConfig {
+            enabled: true,
+            allowed_origins: None,
+            token_validation_enabled: false,
+            token_expiration_secs: Some(3600),
+            allow_same_origin: true,
+        };
+        let warning = check_csrf_dangerous_config(&dangerous);
+        assert!(warning.is_some(), "dangerous config should trigger warning");
+        let msg = warning.unwrap();
+        assert!(msg.contains("CSRF"), "warning should mention CSRF");
+        assert!(
+            msg.contains("token_validation=false"),
+            "warning should mention token_validation"
+        );
+        assert!(
+            msg.contains("allowed_origins=None"),
+            "warning should mention allowed_origins"
+        );
+    }
+
+    #[test]
+    fn test_csrf_safe_config_no_warning() {
+        use crate::config::app::CsrfConfig as AppConfig;
+
+        // 安全组合 1:disabled
+        let safe_disabled = AppConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        assert!(check_csrf_dangerous_config(&safe_disabled).is_none());
+
+        // 安全组合 2:enabled + token_validation=true
+        let safe_with_token = AppConfig {
+            enabled: true,
+            token_validation_enabled: true,
+            ..Default::default()
+        };
+        assert!(check_csrf_dangerous_config(&safe_with_token).is_none());
+
+        // 安全组合 3:enabled + allowed_origins=Some
+        let safe_with_origins = AppConfig {
+            enabled: true,
+            allowed_origins: Some(vec!["https://example.com".to_string()]),
+            ..Default::default()
+        };
+        assert!(check_csrf_dangerous_config(&safe_with_origins).is_none());
     }
 }

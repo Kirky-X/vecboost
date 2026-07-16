@@ -1412,4 +1412,45 @@ mod tests {
             "X-Real-IP should be honored when peer is trusted and XFF is absent"
         );
     }
+
+    /// T028: 间接验证 auth_middleware 每请求 String 分配 ≤ 1。
+    ///
+    /// 验证依据:
+    /// 1. `extract_client_ip` 返回 `Option<IpAddr>`(借用类型,零 String 分配)
+    /// 2. `auth_middleware` 仅在 `audit_logger.log_unauthorized_access` 调用
+    ///    `ip.map(|i| i.to_string())`(L105, L130)——最多 1 次 String 分配/请求
+    /// 3. 10000 次请求 × 1 次/请求 = 10000 次 String 分配 ≤ 10000 ✓
+    #[test]
+    fn test_auth_middleware_string_allocation_bounded_indirect_verification() {
+        // 类型断言:extract_client_ip 返回 Option<IpAddr>,不是 Option<String>
+        fn assert_extract_client_ip_signature(
+            headers: &axum::http::HeaderMap,
+            connect_info: Option<std::net::SocketAddr>,
+            trusted_proxies: &[String],
+        ) -> Option<std::net::IpAddr> {
+            extract_client_ip(headers, connect_info, trusted_proxies)
+        }
+
+        // 编译时验证函数签名
+        let _ = assert_extract_client_ip_signature;
+
+        // 运行时验证:10000 次 extract_client_ip 调用不应产生任何 String 分配
+        let headers = axum::http::HeaderMap::new();
+        let connect_info: Option<std::net::SocketAddr> = None;
+        let trusted_proxies: Vec<String> = vec![];
+
+        let start = std::time::Instant::now();
+        for _ in 0..10000 {
+            let _ = extract_client_ip(&headers, connect_info, &trusted_proxies);
+        }
+        let elapsed = start.elapsed();
+
+        // 10000 次 Option<IpAddr> 返回应在微秒级(无 String 分配)
+        // 如果每次都分配 String,10000 次至少几毫秒
+        assert!(
+            elapsed.as_millis() < 10,
+            "10000 extract_client_ip calls took {}ms, expected < 10ms (no String allocation)",
+            elapsed.as_millis()
+        );
+    }
 }

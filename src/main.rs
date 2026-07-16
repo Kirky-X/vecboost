@@ -352,19 +352,13 @@ async fn main() -> anyhow::Result<()> {
         (None, None)
     };
 
-    // T017: Warn on dangerous CSRF config combination — enabled but neither
+    // T017/T027: Warn on dangerous CSRF config combination — enabled but neither
     // token validation nor allowed_origins are configured, leaving CSRF
-    // protection ineffective.
+    // protection ineffective. Logic extracted to auth::csrf::check_csrf_dangerous_config
+    // for unit-test coverage (T027).
     #[cfg(feature = "auth")]
-    if config.auth.csrf.enabled
-        && !config.auth.csrf.token_validation_enabled
-        && config.auth.csrf.allowed_origins.is_none()
-    {
-        log::warn!(
-            "CSRF protection enabled with token_validation=false and allowed_origins=None: \
-             this combination does not provide effective CSRF protection. \
-             Consider enabling token validation or specifying allowed origins."
-        );
+    if let Some(warning) = vecboost::auth::csrf::check_csrf_dangerous_config(&config.auth.csrf) {
+        log::warn!("{}", warning);
     }
 
     // Initialize audit logging

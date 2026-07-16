@@ -529,6 +529,7 @@ mod tests {
         assert!(config.cache_enabled);
         assert_eq!(config.cache_size, 1024);
         assert_eq!(config.max_batch_size, 64);
+        assert_eq!(config.max_text_length, 8192);
     }
 
     #[test]
@@ -545,6 +546,7 @@ mod tests {
         assert!(!config.enabled);
         assert!(config.jwt_secret.is_none());
         assert_eq!(config.token_expiration_hours, Some(24));
+        assert!(config.trusted_proxies.is_empty());
     }
 
     #[test]

@@ -312,3 +312,126 @@ enabled = true
     assert!(config.rate_limit.enabled);
     assert!(config.audit.enabled);
 }
+
+/// T029: Regression test for trusted_proxies + max_text_length field defaults.
+///
+/// Validates that configs omitting these fields fall back to defaults
+/// (R-config-001/002 验收点 6), and configs including them load correctly.
+#[test]
+fn test_trusted_proxies_and_max_text_length_defaults_when_omitted() {
+    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    unsafe {
+        std::env::remove_var("VECBOOST_JWT_SECRET");
+        std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+    }
+
+    // TOML 配置中省略 trusted_proxies 和 max_text_length 字段
+    let toml_content = r#"
+[server]
+host = "127.0.0.1"
+port = 9000
+
+[model]
+model_repo = "test/model"
+use_gpu = false
+batch_size = 8
+expected_dimension = 128
+
+[embedding]
+default_aggregation = "mean"
+similarity_metric = "cosine"
+cache_enabled = false
+cache_size = 0
+max_batch_size = 32
+# max_text_length 故意省略，应 fallback 到 default 8192
+
+[monitoring]
+metrics_enabled = false
+
+[rate_limit]
+enabled = false
+
+[pipeline]
+enabled = false
+
+[audit]
+enabled = false
+
+[auth]
+enabled = false
+# trusted_proxies 故意省略，应 fallback 到 default 空 Vec
+"#;
+
+    let (_dir, path) = write_temp_toml(toml_content);
+    let config = AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+
+    // 验证 fallback 到 default
+    assert!(
+        config.auth.trusted_proxies.is_empty(),
+        "trusted_proxies should default to empty Vec when omitted"
+    );
+    assert_eq!(
+        config.embedding.max_text_length, 8192,
+        "max_text_length should default to 8192 when omitted"
+    );
+}
+
+#[test]
+fn test_trusted_proxies_and_max_text_length_loaded_when_present() {
+    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    unsafe {
+        std::env::remove_var("VECBOOST_JWT_SECRET");
+        std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+    }
+
+    // TOML 配置中显式提供 trusted_proxies 和 max_text_length
+    let toml_content = r#"
+[server]
+host = "127.0.0.1"
+port = 9001
+
+[model]
+model_repo = "test/model"
+use_gpu = false
+batch_size = 8
+expected_dimension = 128
+
+[embedding]
+default_aggregation = "mean"
+similarity_metric = "cosine"
+cache_enabled = false
+cache_size = 0
+max_batch_size = 32
+max_text_length = 4096
+
+[monitoring]
+metrics_enabled = false
+
+[rate_limit]
+enabled = false
+
+[pipeline]
+enabled = false
+
+[audit]
+enabled = false
+
+[auth]
+enabled = false
+trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
+"#;
+
+    let (_dir, path) = write_temp_toml(toml_content);
+    let config = AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+
+    // 验证字段被正确加载
+    assert_eq!(
+        config.auth.trusted_proxies,
+        vec!["10.0.0.0/8".to_string(), "192.168.0.0/16".to_string()],
+        "trusted_proxies should match TOML values"
+    );
+    assert_eq!(
+        config.embedding.max_text_length, 4096,
+        "max_text_length should match TOML value"
+    );
+}

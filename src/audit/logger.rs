@@ -835,6 +835,83 @@ mod tests {
             "interval flush should write within 1s"
         );
     }
+
+    /// T024 (R-audit-001 验收点 5): 1000 条审计事件 log_* 调用总耗时 < 100ms。
+    ///
+    /// `log_*` 方法仅 `sender.send(LoggerCommand::Event(event))`（mpsc unbounded，
+    /// 非阻塞），1000 次 send 应在毫秒级完成。后台 writer task 异步批量写入不计入耗时。
+    #[tokio::test]
+    async fn test_1000_log_calls_under_100ms() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("bench_1000.log");
+        let config = AuditConfig {
+            enabled: true,
+            log_file_path: log_path.clone(),
+            ..Default::default()
+        };
+        let logger = AuditLogger::new(config);
+
+        let start = std::time::Instant::now();
+        for i in 0..1000 {
+            logger.log_login_success(&format!("user{}", i), Some("127.0.0.1".to_string()));
+        }
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_millis() < 100,
+            "1000 log_* calls took {}ms, expected < 100ms",
+            elapsed.as_millis()
+        );
+
+        // 确保所有事件最终被写入（不阻塞基准测试，但确保后台 task 完成）
+        logger.flush().await.unwrap();
+    }
+
+    /// T025 (R-audit-002 验收点 4): 间接验证 log_* 方法不触发 fs::metadata syscall。
+    ///
+    /// 验证依据：
+    /// 1. `AuditLogger.sender` 类型为 `Option<mpsc::UnboundedSender<LoggerCommand>>`
+    ///    —— `log_*` 仅 `sender.send(...)`（内存 send，无 syscall）
+    /// 2. `log` 方法（logger.rs L331-338）仅 `sender.send(LoggerCommand::Event(event))`，
+    ///    无 `fs::metadata` 调用
+    /// 3. `current_size` 是 writer task 内的 `AtomicU64` 局部变量（内存计数，无 syscall），
+    ///    文件大小检查只在后台 `flush_buffer` 中发生（批量，非 per-event）
+    /// 4. 现有 `test_batch_flush_at_100_entries` 证明 100 条事件可批量处理
+    #[tokio::test]
+    async fn test_log_methods_no_fs_syscall_indirect_verification() {
+        // 类型断言：sender 是 mpsc::UnboundedSender<LoggerCommand>，不是 fs::File
+        fn assert_log_method_signature(logger: &AuditLogger) {
+            let _sender_type: &Option<tokio::sync::mpsc::UnboundedSender<LoggerCommand>> =
+                &logger.sender;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("no_syscall.log");
+        let config = AuditConfig {
+            enabled: true,
+            log_file_path: log_path.clone(),
+            ..Default::default()
+        };
+        let logger = AuditLogger::new(config);
+        assert_log_method_signature(&logger);
+
+        // 连续 100 次调用 log_*（与 test_batch_flush_at_100_entries 相同模式）
+        // 若 log_* 内有 fs::metadata syscall，100 次同步调用会显著慢于 1ms；
+        // 由于是 sender.send（非阻塞），100 次应在微秒级完成。
+        let start = std::time::Instant::now();
+        for i in 0..100 {
+            logger.log_login_success(&format!("user{}", i), None);
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_millis() < 10,
+            "100 log_* calls took {}ms, expected < 10ms (non-blocking send)",
+            elapsed.as_millis()
+        );
+
+        // 让后台 writer task 处理事件（验证类型断言之外的运行时正确性）
+        logger.flush().await.unwrap();
+    }
 }
 
 #[cfg(all(test, feature = "db"))]

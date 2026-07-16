@@ -132,11 +132,8 @@ impl CsrfToken {
     fn generate_token() -> String {
         let mut bytes = [0u8; 32];
 
-        // 使用加密安全的随机数生成器（操作系统熵源）
         use rand::Rng;
-        use rand::rngs::OsRng;
-        let mut rng = OsRng;
-        rng.fill(&mut bytes[..]);
+        rand::rng().fill_bytes(&mut bytes);
 
         let hash = Sha256::digest(bytes);
         hex::encode(hash)

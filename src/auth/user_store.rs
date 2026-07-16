@@ -11,7 +11,7 @@
 
 use crate::auth::User;
 use crate::error::VecboostError;
-use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::{PasswordHash, PasswordHasher, PasswordVerifier};
 use regex::Regex;
 #[cfg(feature = "db")]
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
@@ -359,11 +359,10 @@ impl Default for UserStore {
 }
 
 pub fn hash_password(password: &str) -> Result<String, VecboostError> {
-    let salt = SaltString::generate(&mut rand::thread_rng());
     let argon2 = argon2::Argon2::default();
 
     let password_hash = argon2
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(password.as_bytes())
         .map_err(|e| VecboostError::AuthenticationError(format!("Failed to hash password: {e}")))?;
 
     let mut password_vec = password.as_bytes().to_vec();

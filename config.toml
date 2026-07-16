@@ -23,7 +23,7 @@ model_repo = "BAAI/bge-m3"
 model_revision = "main"
 
 # 本地模型路径 (可选，设置后优先使用本地模型)
-model_path = ""
+model_path = "models/bge-m3-st"
 
 # 是否使用 GPU 加速
 # 注意：需要启用相应的 cargo feature
@@ -87,10 +87,9 @@ log_level = "info"
 enabled = false
 
 # JWT 密钥
-# ⚠️ 重要：生产环境必须通过环境变量设置
+# ⚠️ 重要：生产环境必须通过环境变量设置,禁止在配置文件中填写
 # 使用: export VECBOOST_JWT_SECRET="your-32-char-min-secret"
-# 不允许在配置文件中设置此值
-jwt_secret = ""
+# (vuln-0008 修复:不在配置文件中暴露字段名,统一通过环境变量注入)
 
 # Token 过期时间 (小时)
 # 访问 token 有效期: 1 小时
@@ -100,18 +99,19 @@ token_expiration_hours = 1
 default_admin_username = "admin"
 
 # 默认管理员密码
-# ⚠️ 重要：生产环境必须通过环境变量设置
+# ⚠️ 重要：生产环境必须通过环境变量设置,禁止在配置文件中填写
 # 使用: export VECBOOST_ADMIN_PASSWORD="your-secure-password"
-# 不允许在配置文件中设置此值
-default_admin_password = ""
+# (vuln-0008 修复:不在配置文件中暴露字段名,统一通过环境变量注入)
 
 # ============ 密钥存储配置 ============
 [auth.security]
 # 密钥存储类型: environment, encrypted_file
 storage_type = "environment"
 
-# 加密密钥 (用于 encrypted_file 存储类型)
-encryption_key = ""
+# 加密密钥(用于 encrypted_file 存储类型)
+# ⚠️ 重要：生产环境必须通过环境变量设置,禁止在配置文件中填写
+# 使用: export VECBOOST_ENCRYPTION_KEY="your-encryption-key"
+# (vuln-0008 修复:不在配置文件中暴露字段名,统一通过环境变量注入)
 
 # ============ 审计日志配置 ============
 [audit]

@@ -49,7 +49,7 @@ pub fn compute_sha256<P: AsRef<Path>>(file_path: P) -> Result<String, VecboostEr
         hasher.update(&buffer[..bytes_read]);
     }
 
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 pub fn verify_sha256<P: AsRef<Path>>(

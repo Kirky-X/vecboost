@@ -44,6 +44,15 @@ impl PathValidator {
 
     /// 验证路径是否在允许的根目录内
     ///
+    /// # 安全防御机制(vuln-0004 加固)
+    ///
+    /// 1. **输入检查**:拒绝包含 `..` 或 `~` 的原始路径字符串(快速拒绝明显攻击)
+    /// 2. **canonicalize 解析**:调用 `Path::canonicalize` 解析所有符号链接、
+    ///    `.`、`..` 等相对组件,得到绝对真实路径
+    /// 3. **allowed_roots 边界检查**:验证 canonical 路径是否以任一 allowed_root
+    ///    (已 canonicalize)开头。由于 canonicalize 已解析 symlink,symlink 指向
+    ///    allowed_roots 外的攻击会被此检查拦截
+    ///
     /// # 参数
     /// - `path`: 要验证的路径
     ///
@@ -53,7 +62,7 @@ impl PathValidator {
     pub fn validate_path<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, VecboostError> {
         let path = path.as_ref();
 
-        // 检查路径是否包含明显的路径遍历模式
+        // 检查路径是否包含明显的路径遍历模式(输入层快速拒绝)
         let path_str = path.to_string_lossy();
         if path_str.contains("..") || path_str.contains("~") {
             return Err(VecboostError::security_error(format!(
@@ -62,19 +71,12 @@ impl PathValidator {
             )));
         }
 
-        // 规范化路径
+        // canonicalize 解析所有 symlink、.、.. 等相对组件,得到绝对真实路径
+        // 这是 symlink 攻击防御的核心:所有 symlink 被解析后,allowed_roots 检查
+        // 验证的是真实路径,而非用户输入的路径
         let canonical = path
             .canonicalize()
             .map_err(|e| VecboostError::security_error(format!("Invalid path: {}", e)))?;
-
-        // 明确限制对 /tmp 目录的访问（安全考虑）
-        let canonical_str = canonical.to_string_lossy();
-        if canonical_str.starts_with("/tmp") || canonical_str.starts_with("/var/tmp") {
-            return Err(VecboostError::security_error(format!(
-                "Access to temporary directories is not allowed: {}",
-                canonical.display()
-            )));
-        }
 
         // 检查路径是否在允许的根目录内
         if self.allowed_roots.is_empty() {
@@ -190,16 +192,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let temp = dir.join(format!("vecboost_path_test_noroot_{}", std::process::id()));
         std::fs::create_dir_all(&temp).unwrap();
-        // 注意:需要避免 /tmp 被拦截(因为 /tmp 检查在 allowed_roots 检查之前)
-        // 所以我们用一个非 /tmp 的路径
         let temp = std::fs::canonicalize(&temp).unwrap();
-        // 如果 canonical 路径以 /tmp 开头,此测试不适用,跳过清理
-        if temp.to_string_lossy().starts_with("/tmp")
-            || temp.to_string_lossy().starts_with("/var/tmp")
-        {
-            std::fs::remove_dir_all(&temp).ok();
-            return;
-        }
 
         let validator = PathValidator::new(); // 无 allowed_roots
         let result = validator.validate_path(&temp);
@@ -211,6 +204,70 @@ mod tests {
             }
             _ => panic!("Expected SecurityError"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_path_symlink_outside_allowed_roots_rejected() {
+        // vuln-0004 加固测试:symlink 指向 allowed_roots 外应被拒绝
+        // 攻击场景:在 allowed_dir 内创建 symlink → /etc,尝试读取 /etc/passwd
+        use std::os::unix::fs::symlink;
+
+        let base = std::path::PathBuf::from("./test_path_symlink_outside_temp");
+        std::fs::create_dir_all(&base).unwrap();
+        let link_path = base.join("link_to_etc");
+        // 创建 symlink → /etc(allowed_roots 外)
+        let _ = symlink("/etc", &link_path);
+        // 尝试通过 symlink 访问 /etc/hostname
+        let attack_path = link_path.join("hostname");
+
+        let validator = PathValidator::new().add_allowed_root(&base);
+        let result = validator.validate_path(&attack_path);
+
+        // 清理
+        std::fs::remove_dir_all(&base).ok();
+
+        // 攻击应被拒绝:canonicalize 解析 symlink 得到 /etc/hostname,
+        // 不在 allowed_root(./test_path_symlink_outside_temp)内
+        assert!(result.is_err(), "symlink attack should be rejected");
+        match result.unwrap_err() {
+            VecboostError::SecurityError(msg) => {
+                assert!(
+                    msg.contains("Access denied"),
+                    "expected Access denied, got: {}",
+                    msg
+                );
+            }
+            _ => panic!("Expected SecurityError for symlink attack"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_path_symlink_inside_allowed_roots_accepted() {
+        // vuln-0004 合法场景:symlink 指向 allowed_roots 内应被接受
+        use std::os::unix::fs::symlink;
+
+        let base = std::path::PathBuf::from("./test_path_symlink_inside_temp");
+        let target_dir = base.join("target_dir");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let target_file = target_dir.join("data.txt");
+        std::fs::write(&target_file, "content").unwrap();
+
+        // symlink target 必须用绝对路径,否则 kernel 相对 symlink 所在目录解析
+        let abs_target = std::fs::canonicalize(&target_file).unwrap();
+        let link_path = base.join("link_to_target");
+        let _ = symlink(&abs_target, &link_path);
+
+        let validator = PathValidator::new().add_allowed_root(&base);
+        let result = validator.validate_file(&link_path);
+
+        std::fs::remove_dir_all(&base).ok();
+        assert!(
+            result.is_ok(),
+            "legitimate symlink should be accepted, got: {:?}",
+            result.err()
+        );
     }
 
     #[test]

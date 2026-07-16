@@ -110,14 +110,6 @@ pub enum VecboostError {
     InternalError(String),
 }
 
-/// Deprecated alias for `VecboostError`.
-///
-/// Kept for one release cycle (until v0.3.0) to ease migration from v0.1.x
-/// where the canonical error type was named `AppError`. New code must use
-/// [`VecboostError`] directly.
-#[deprecated(note = "Use VecboostError instead")]
-pub type AppError = VecboostError;
-
 impl VecboostError {
     pub fn config_error(message: String) -> Self {
         VecboostError::ConfigError(message)

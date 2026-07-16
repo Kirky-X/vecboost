@@ -8,14 +8,12 @@ use axum::extract::FromRef;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-// 公共 API 模块 - 被 main.rs 使用或作为库的公共接口
-#[cfg(feature = "http")]
+// 公共 API 模块 - SDK 入口,HTTP/MCP/CLI 协议共享
+#[cfg(any(feature = "http", feature = "mcp", feature = "cli"))]
 pub mod api;
 pub mod audit;
 #[cfg(feature = "auth")]
 pub mod auth;
-#[cfg(feature = "cli")]
-pub mod cli;
 pub mod config;
 #[cfg(feature = "db")]
 pub mod db;
@@ -27,7 +25,6 @@ pub mod metrics;
 pub mod module_registry;
 pub mod pipeline;
 pub mod rate_limit;
-pub mod routes;
 pub mod security;
 pub mod service;
 pub mod utils;
@@ -56,9 +53,6 @@ pub use domain::{EmbedRequest, EmbedResponse, SimilarityRequest, SimilarityRespo
 pub use error::VecboostError;
 pub use service::embedding::EmbeddingService;
 pub use utils::SimilarityMetric;
-
-#[allow(deprecated)]
-pub use error::AppError;
 
 /// Application state
 ///

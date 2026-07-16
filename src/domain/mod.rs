@@ -9,12 +9,20 @@ use crate::config::model::{DeviceType, PoolingMode};
 use crate::utils::AggregationMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::str::FromStr;
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct EmbedRequest {
     pub text: String,
     pub normalize: Option<bool>,
+}
+
+impl FromStr for EmbedRequest {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -28,6 +36,13 @@ pub struct EmbedResponse {
 pub struct SimilarityRequest {
     pub source: String,
     pub target: String,
+}
+
+impl FromStr for SimilarityRequest {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -94,6 +109,13 @@ pub struct BatchEmbedRequest {
     pub texts: Vec<String>,
     pub mode: Option<AggregationMode>,
     pub normalize: Option<bool>,
+}
+
+impl FromStr for BatchEmbedRequest {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]

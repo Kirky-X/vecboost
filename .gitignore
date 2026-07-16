@@ -137,4 +137,4 @@ IFLOW.md
 .ruff_cache/
 .sisyphus/
 TEST_MODES.md
-
+strix_runs/

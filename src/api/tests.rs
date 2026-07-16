@@ -7,6 +7,7 @@ use super::*;
 use crate::config::model::{DeviceType, EngineType, ModelConfig, Precision};
 use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
+use crate::service::embedding::EmbeddingService;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -249,13 +250,16 @@ fn test_init_service_sets_global() {
 }
 
 #[test]
-fn test_init_service_panics_on_double_init() {
+fn test_init_service_no_op_on_double_init() {
     ensure_service_initialized();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let svc = Arc::new(RwLock::new(make_service(384)));
-        init_service(svc);
-    }));
-    assert!(result.is_err(), "init_service should panic on double init");
+    let first = service().expect("service should be initialized");
+    let svc = Arc::new(RwLock::new(make_service(384)));
+    init_service(svc);
+    let second = service().expect("service should still be initialized");
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "init_service should be a no-op on double init (first caller wins)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -454,54 +458,66 @@ async fn test_forge_compute_similarity_empty_source_error() {
 }
 
 // ---------------------------------------------------------------------------
-// cli_embed / cli_similarity tests
+// cli_embed / cli_compute_similarity tests
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "cli")]
 #[tokio::test]
 async fn test_cli_embed_success() {
     ensure_service_initialized();
-    let result = cli_embed("hello cli".to_string()).await;
+    let req = EmbedRequest {
+        text: "hello cli".to_string(),
+        normalize: None,
+    };
+    let result = cli_embed(req).await;
     assert!(
         result.is_ok(),
         "cli_embed should succeed: {:?}",
         result.err()
     );
-    let json_str = result.unwrap();
-    let parsed: serde_json::Value =
-        serde_json::from_str(&json_str).expect("cli_embed output should be valid JSON");
-    assert!(parsed.get("embedding").is_some());
-    assert!(parsed.get("dimension").is_some());
+    let response = result.unwrap();
+    assert!(!response.embedding.is_empty());
+    assert!(response.dimension > 0);
 }
 
 #[cfg(feature = "cli")]
 #[tokio::test]
 async fn test_cli_embed_empty_text_returns_error() {
     ensure_service_initialized();
-    let result = cli_embed("".to_string()).await;
+    let req = EmbedRequest {
+        text: "".to_string(),
+        normalize: None,
+    };
+    let result = cli_embed(req).await;
     assert!(result.is_err());
 }
 
 #[cfg(feature = "cli")]
 #[tokio::test]
-async fn test_cli_similarity_success() {
+async fn test_cli_compute_similarity_success() {
     ensure_service_initialized();
-    let result = cli_similarity("source text".to_string(), "target text".to_string()).await;
+    let req = SimilarityRequest {
+        source: "source text".to_string(),
+        target: "target text".to_string(),
+    };
+    let result = cli_compute_similarity(req).await;
     assert!(
         result.is_ok(),
-        "cli_similarity should succeed: {:?}",
+        "cli_compute_similarity should succeed: {:?}",
         result.err()
     );
-    let json_str = result.unwrap();
-    let parsed: serde_json::Value =
-        serde_json::from_str(&json_str).expect("cli_similarity output should be valid JSON");
-    assert!(parsed.get("score").is_some());
+    let response = result.unwrap();
+    assert!(response.score >= -1.0 && response.score <= 1.0);
 }
 
 #[cfg(feature = "cli")]
 #[tokio::test]
-async fn test_cli_similarity_empty_source_returns_error() {
+async fn test_cli_compute_similarity_empty_source_returns_error() {
     ensure_service_initialized();
-    let result = cli_similarity("".to_string(), "target".to_string()).await;
+    let req = SimilarityRequest {
+        source: "".to_string(),
+        target: "target".to_string(),
+    };
+    let result = cli_compute_similarity(req).await;
     assert!(result.is_err());
 }

@@ -3,20 +3,25 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+use crate::VecboostState;
 use crate::audit::AuditLogger;
 use crate::auth::{CsrfConfig, CsrfProtection, CsrfTokenStore, JwtManager, OriginValidator, User};
 use axum::{
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     middleware::Next,
     response::Response,
 };
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AuthContext {
     pub user: User,
+    pub token: String,
 }
+
+const PUBLIC_PATHS: &[&str] = &["/health", "/api/v1/auth/login", "/api/v1/auth/refresh"];
 
 pub async fn auth_middleware(
     State(jwt_manager): State<Arc<JwtManager>>,
@@ -24,6 +29,12 @@ pub async fn auth_middleware(
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    let path = request.uri().path();
+
+    if PUBLIC_PATHS.contains(&path) {
+        return Ok(next.run(request).await);
+    }
+
     // 从 Authorization 头获取 token
     let auth_header = request
         .headers()
@@ -37,8 +48,6 @@ pub async fn auth_middleware(
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
 
-    let path = request.uri().path().to_string();
-
     let token = match auth_header {
         Some(header) if header.starts_with("Bearer ") => {
             &header[7..] // 跳过 "Bearer "
@@ -46,7 +55,7 @@ pub async fn auth_middleware(
         _ => {
             // Log unauthorized access
             if let Some(ref logger) = audit_logger {
-                logger.log_unauthorized_access(ip.clone(), &path);
+                logger.log_unauthorized_access(ip.clone(), path);
             }
             return Err(StatusCode::UNAUTHORIZED);
         }
@@ -59,16 +68,19 @@ pub async fn auth_middleware(
                 role: claims.role,
                 permissions: claims.permissions,
             };
-
+            let token_owned = token.to_string();
             let mut request = request;
-            request.extensions_mut().insert(AuthContext { user });
+            request.extensions_mut().insert(AuthContext {
+                user,
+                token: token_owned,
+            });
 
             Ok(next.run(request).await)
         }
         Err(_) => {
             // Log unauthorized access for invalid token
             if let Some(ref logger) = audit_logger {
-                logger.log_unauthorized_access(ip.clone(), &path);
+                logger.log_unauthorized_access(ip.clone(), path);
             }
             Err(StatusCode::UNAUTHORIZED)
         }
@@ -92,7 +104,10 @@ pub async fn optional_auth_middleware(
             permissions: claims.permissions,
         };
 
-        request.extensions_mut().insert(AuthContext { user });
+        request.extensions_mut().insert(AuthContext {
+            user,
+            token: token.to_string(),
+        });
     }
 
     next.run(request).await
@@ -133,6 +148,80 @@ pub async fn require_role_middleware(request: Request, next: Next) -> Result<Res
     } else {
         Err(StatusCode::FORBIDDEN)
     }
+}
+
+// ============================================================================
+// Auth Endpoint Rate Limiting Middleware
+// ============================================================================
+
+/// Auth 端点速率限制中间件(vuln-0006 修复)
+///
+/// 应用到 `/api/v1/auth/login`、`/api/v1/auth/refresh`、`/api/v1/auth/logout`
+/// 和 `/api/v1/auth/me` 等认证端点,防止暴力破解和 token 枚举攻击。
+///
+/// 限流维度:`Global` + `Ip`(用户尚未认证时不使用 `User` 维度)。
+/// 白名单内的 IP 跳过限流。限流未启用时直接放行。
+pub async fn auth_rate_limit_middleware(
+    State(state): State<VecboostState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // 检查限流是否启用
+    let rate_limit_enabled = state
+        .kit
+        .require::<crate::module_registry::RateLimitEnabledModule>()
+        .map_err(|e| {
+            log::error!("RateLimitEnabledModule not registered: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if !rate_limit_enabled {
+        return Ok(next.run(request).await);
+    }
+
+    // 获取 IP 白名单
+    let ip_whitelist = state
+        .kit
+        .require::<crate::module_registry::IpWhitelistModule>()
+        .map_err(|e| {
+            log::error!("IpWhitelistModule not registered: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // 从 ConnectInfo 获取客户端 IP(与 embedding handler 一致)
+    let ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // 白名单内的 IP 不限流
+    if crate::rate_limit::is_ip_whitelisted(&ip, &ip_whitelist) {
+        return Ok(next.run(request).await);
+    }
+
+    // 检查 Global + Ip 维度限流
+    let rate_limiter = state
+        .kit
+        .require::<crate::module_registry::RateLimitModule>()
+        .map_err(|e| {
+            log::error!("RateLimitModule not registered: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let allowed = rate_limiter
+        .check_rate_limit(vec![
+            crate::rate_limit::RateLimitDimension::Global,
+            crate::rate_limit::RateLimitDimension::Ip(ip.clone()),
+        ])
+        .await;
+
+    if !allowed {
+        log::warn!("Auth endpoint rate limit exceeded for IP: {}", ip);
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    Ok(next.run(request).await)
 }
 
 // ============================================================================
@@ -632,6 +721,7 @@ mod tests {
             "/admin",
             Some(AuthContext {
                 user: make_admin_user(),
+                token: String::new(),
             }),
         );
         let response = app.oneshot(request).await.unwrap();
@@ -650,6 +740,7 @@ mod tests {
             "/admin",
             Some(AuthContext {
                 user: make_test_user(),
+                token: String::new(),
             }),
         );
         let response = app.oneshot(request).await.unwrap();
@@ -688,6 +779,7 @@ mod tests {
             "/resource",
             Some(AuthContext {
                 user: make_test_user(),
+                token: String::new(),
             }),
         );
         let response = app.oneshot(request).await.unwrap();
@@ -708,6 +800,7 @@ mod tests {
             "/resource",
             Some(AuthContext {
                 user: make_test_user(),
+                token: String::new(),
             }),
         );
         let response = app.oneshot(request).await.unwrap();
@@ -729,6 +822,7 @@ mod tests {
             "/resource",
             Some(AuthContext {
                 user: make_admin_user(),
+                token: String::new(),
             }),
         );
         let response = app.oneshot(request).await.unwrap();

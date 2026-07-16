@@ -7,10 +7,11 @@ use crate::error::VecboostError;
 use crate::security::key_store::{KeyStore, KeyType, SecretKey};
 use aes_gcm::{
     Aes256Gcm, Nonce,
-    aead::{Aead, AeadCore, KeyInit},
+    aead::{Aead, KeyInit},
 };
 use argon2::Argon2;
 use async_trait::async_trait;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -130,7 +131,9 @@ impl EncryptedFileKeyStore {
             .map_err(|e| VecboostError::security_error(format!("Serialization failed: {}", e)))?;
 
         let cipher = Aes256Gcm::new(self.encryption_key.as_ref().into());
-        let nonce_bytes = Aes256Gcm::generate_nonce(&mut rand::thread_rng());
+        let mut nonce_buf = [0u8; 12];
+        rand::rng().fill_bytes(&mut nonce_buf);
+        let nonce_bytes = Nonce::clone_from_slice(&nonce_buf);
         let ciphertext = cipher
             .encrypt(&nonce_bytes, json_str.as_bytes())
             .map_err(|e| VecboostError::security_error(format!("Encryption failed: {}", e)))?;
@@ -212,7 +215,9 @@ impl KeyStore for EncryptedFileKeyStore {
     async fn set(&self, key: &SecretKey) -> Result<(), VecboostError> {
         let type_str = Self::key_type_to_string(&key.key_type);
         let cipher = Aes256Gcm::new(self.encryption_key.as_ref().into());
-        let nonce_bytes = Aes256Gcm::generate_nonce(&mut rand::thread_rng());
+        let mut nonce_buf = [0u8; 12];
+        rand::rng().fill_bytes(&mut nonce_buf);
+        let nonce_bytes = Nonce::clone_from_slice(&nonce_buf);
 
         let ciphertext = cipher
             .encrypt(&nonce_bytes, key.value.as_bytes())

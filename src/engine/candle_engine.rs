@@ -176,6 +176,28 @@ impl CandleEngine {
 
             (config_path, tokenizer_path, weights_filename)
         } else {
+            // vuln-0009 修复:验证 model_path 作为 HuggingFace repo ID 的格式
+            // 防止恶意配置注入非法 repo ID 导致下载/执行恶意模型
+            let repo_id = model_path.to_string_lossy().into_owned();
+            if !is_valid_hf_repo_id(&repo_id) {
+                return Err(VecboostError::ModelLoadError(format!(
+                    "Invalid HuggingFace repo ID '{}': must match 'organization/model-name' \
+                     pattern with alphanumeric, dash, underscore, dot characters only",
+                    repo_id
+                )));
+            }
+
+            // vuln-0009 加固:远程下载时若未设置 model_sha256,记录警告
+            // .bin(pickle)格式有代码执行风险,model_sha256 是完整性校验的最后防线
+            if config.model_sha256.is_none() {
+                log::warn!(
+                    "Loading model from remote HuggingFace repo '{}' without model_sha256 \
+                     verification — recommend setting model_sha256 in config to prevent \
+                     tampering and supply-chain attacks",
+                    repo_id
+                );
+            }
+
             log::info!(
                 "Downloading/Loading model from HuggingFace Hub: {:?}",
                 model_path
@@ -183,10 +205,7 @@ impl CandleEngine {
             let api = ApiBuilder::from_env()
                 .build()
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-            let repo = api.repo(Repo::new(
-                model_path.to_string_lossy().into_owned(),
-                RepoType::Model,
-            ));
+            let repo = api.repo(Repo::new(repo_id, RepoType::Model));
 
             let config_filename = repo
                 .get("config.json")
@@ -1097,6 +1116,48 @@ impl CandleEngine {
     }
 }
 
+/// 验证 HuggingFace repo ID 格式(vuln-0009 修复)
+///
+/// 合法格式:`organization/model-name` 或单段 `model-name`,每段只允许
+/// 字母、数字、`-`、`_`、`.`,不允许 `..`、`//`、开头/结尾的 `/`。
+///
+/// # 示例
+/// - `BAAI/bge-m3` ✓
+/// - `bert-base-uncased` ✓
+/// - `../etc/passwd` ✗(包含 `..`)
+/// - `/etc/passwd` ✗(以 `/` 开头)
+/// - `org//model` ✗(包含 `//`)
+fn is_valid_hf_repo_id(repo_id: &str) -> bool {
+    if repo_id.is_empty() {
+        return false;
+    }
+
+    // 不允许以 / 开头或结尾
+    if repo_id.starts_with('/') || repo_id.ends_with('/') {
+        return false;
+    }
+
+    // 不允许 .. 或 //
+    if repo_id.contains("..") || repo_id.contains("//") {
+        return false;
+    }
+
+    // 最多两段(organization/model)
+    let segments: Vec<&str> = repo_id.split('/').collect();
+    if segments.len() > 2 {
+        return false;
+    }
+
+    // 每段只允许字母、数字、-、_、.,且不为空,且不为纯 "."
+    segments.iter().all(|seg| {
+        !seg.is_empty()
+            && *seg != "."
+            && seg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1117,6 +1178,68 @@ mod tests {
             oom_fallback_enabled: true,
             model_sha256: None,
         }
+    }
+
+    // =========================================================================
+    // is_valid_hf_repo_id 单元测试(vuln-0009 修复)
+    // =========================================================================
+
+    #[test]
+    fn test_is_valid_hf_repo_id_valid_two_segments() {
+        assert!(is_valid_hf_repo_id("BAAI/bge-m3"));
+        assert!(is_valid_hf_repo_id(
+            "sentence-transformers/all-MiniLM-L6-v2"
+        ));
+        assert!(is_valid_hf_repo_id("org/model_name"));
+        assert!(is_valid_hf_repo_id("org/model.v2"));
+    }
+
+    #[test]
+    fn test_is_valid_hf_repo_id_valid_single_segment() {
+        assert!(is_valid_hf_repo_id("bert-base-uncased"));
+        assert!(is_valid_hf_repo_id("gpt2"));
+        assert!(is_valid_hf_repo_id("model_v1.2"));
+    }
+
+    #[test]
+    fn test_is_valid_hf_repo_id_rejects_empty() {
+        assert!(!is_valid_hf_repo_id(""));
+    }
+
+    #[test]
+    fn test_is_valid_hf_repo_id_rejects_path_traversal() {
+        // vuln-0009 核心:拒绝路径遍历尝试
+        assert!(!is_valid_hf_repo_id("../etc/passwd"));
+        assert!(!is_valid_hf_repo_id("org/../../etc/passwd"));
+        assert!(!is_valid_hf_repo_id("./model"));
+        assert!(!is_valid_hf_repo_id("org/.."));
+    }
+
+    #[test]
+    fn test_is_valid_hf_repo_id_rejects_leading_trailing_slash() {
+        assert!(!is_valid_hf_repo_id("/etc/passwd"));
+        assert!(!is_valid_hf_repo_id("org/model/"));
+        assert!(!is_valid_hf_repo_id("/"));
+    }
+
+    #[test]
+    fn test_is_valid_hf_repo_id_rejects_double_slash() {
+        assert!(!is_valid_hf_repo_id("org//model"));
+        assert!(!is_valid_hf_repo_id("//model"));
+    }
+
+    #[test]
+    fn test_is_valid_hf_repo_id_rejects_more_than_two_segments() {
+        assert!(!is_valid_hf_repo_id("org/sub/model"));
+        assert!(!is_valid_hf_repo_id("a/b/c/d"));
+    }
+
+    #[test]
+    fn test_is_valid_hf_repo_id_rejects_special_chars() {
+        assert!(!is_valid_hf_repo_id("org/model:name"));
+        assert!(!is_valid_hf_repo_id("org/model@v1"));
+        assert!(!is_valid_hf_repo_id("org/model name"));
+        assert!(!is_valid_hf_repo_id("org/model$evil"));
     }
 
     /// T006 H6: 验证 `tokio::task::block_in_place(|| Handle::current().block_on(...))` 模式

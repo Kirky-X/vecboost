@@ -863,12 +863,27 @@ async fn test_worker_manager_module_missing_config_fails() {
 // Auth-gated modules (UserStoreModule, CsrfConfigModule, CsrfTokenStoreModule)
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "auth")]
+#[cfg(all(feature = "auth", feature = "db"))]
 #[tokio::test]
 async fn test_user_store_module_with_some() {
     use crate::auth::UserStore;
     let pool = crate::db::DbPool::new("sqlite::memory:").await.unwrap();
     let store = Arc::new(UserStore::new(Arc::new(pool)));
+    let mut kit = AsyncKit::new();
+    kit.set_config(Some(store.clone()));
+    kit.register::<UserStoreModule>().unwrap();
+
+    let kit = kit.build().await.unwrap();
+    let capability = kit.require::<UserStoreModule>().unwrap();
+    assert!(capability.is_some());
+    assert!(Arc::ptr_eq(capability.as_ref().unwrap(), &store));
+}
+
+#[cfg(all(feature = "auth", not(feature = "db")))]
+#[tokio::test]
+async fn test_user_store_module_with_some_no_db() {
+    use crate::auth::UserStore;
+    let store = Arc::new(UserStore::new());
     let mut kit = AsyncKit::new();
     kit.set_config(Some(store.clone()));
     kit.register::<UserStoreModule>().unwrap();

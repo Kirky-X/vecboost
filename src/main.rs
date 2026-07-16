@@ -3,6 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#[cfg(feature = "cli")]
+use std::collections::HashMap;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
@@ -32,6 +34,9 @@ use vecboost::{
     service::embedding::EmbeddingService,
 };
 
+#[cfg(feature = "cli")]
+use sdforge::cli::{CliBuilder, CliCommandRegistration, CliHandlerRegistration};
+
 #[cfg(feature = "db")]
 use vecboost::db::{DbPool, init_schema};
 
@@ -47,8 +52,8 @@ use vecboost::{
 #[cfg(feature = "grpc")]
 use vecboost::grpc::server::GrpcServer;
 
-// 使用 vecboost crate 中的路由模块
-use vecboost::routes;
+// metrics 端点（Prometheus text/plain, forge 不支持非 JSON 响应, 保留手写）
+use vecboost::metrics::metrics_endpoint;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -63,6 +68,12 @@ async fn main() -> anyhow::Result<()> {
     // _logger_manager 保持存活至 main 结束,避免 LoggerManager shutdown 导致日志停止
 
     log::info!("Starting Rust Embedding Service...");
+
+    // 确保所有 sdforge inventory（HTTP/MCP/CLI）被链接器保留
+    #[cfg(any(feature = "http", feature = "mcp", feature = "cli"))]
+    {
+        let _counts = sdforge::init_all_plugins();
+    }
 
     let config = AppConfig::load_via_confers()
         .map_err(|e| anyhow::anyhow!("Failed to load config via confers: {}", e))?;
@@ -82,7 +93,15 @@ async fn main() -> anyhow::Result<()> {
     let db_pool = {
         log::info!(
             "Initializing database pool with url={}",
-            config.database.url
+            config
+                .database
+                .url
+                .rsplit_once('@')
+                .map(|(prefix, host)| {
+                    let scheme = prefix.split("://").next().unwrap_or("db");
+                    format!("{}://***@{}", scheme, host)
+                })
+                .unwrap_or_else(|| config.database.url.clone())
         );
         let pool = DbPool::new(&config.database.url)
             .await
@@ -148,9 +167,54 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Initialize the global service reference for sdforge #[forge] functions (D5)
-    #[cfg(feature = "http")]
-    vecboost::api::init_service(service.clone());
+    // CLI dispatch: sdforge CliBuilder 构建命令树 + 手写 dispatch
+    // sdforge 只构建 clap::Command,不提供 dispatch;此处手动查找 handler 并调用
+    #[cfg(feature = "cli")]
+    {
+        let cli_cmd = CliBuilder::new().with_name("vecboost").build();
+        let first_arg = std::env::args().nth(1);
+        let is_cli = first_arg
+            .as_ref()
+            .map(|cmd| {
+                cli_cmd
+                    .get_subcommands()
+                    .any(|sc| sc.get_name() == cmd.as_str())
+            })
+            .unwrap_or(false);
+
+        if is_cli {
+            vecboost::api::init_service(service.clone());
+            let matches = cli_cmd.get_matches_from(std::env::args());
+
+            if let Some((name, sub_matches)) = matches.subcommand() {
+                // 从 ArgMatches 提取参数到 HashMap<String, String>
+                let mut args_map = HashMap::new();
+                for reg in sdforge::inventory::iter::<CliCommandRegistration>() {
+                    if reg.name == name {
+                        for arg in reg.args {
+                            if let Some(val) = sub_matches.get_one::<String>(arg.name) {
+                                args_map.insert(arg.name.to_string(), val.clone());
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                // 查找并调用 handler
+                let handler = sdforge::inventory::iter::<CliHandlerRegistration>()
+                    .find(|h| h.name == name)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("No handler registered for CLI command: {}", name)
+                    })?;
+
+                (handler.handler)(args_map)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("CLI command '{}' failed: {:?}", name, e))?;
+                return Ok(());
+            }
+            return Ok(());
+        }
+    }
 
     // 创建限流器
     let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
@@ -473,9 +537,69 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to require EmbeddingModule for gRPC: {}", e))?
         .clone();
 
-    // Using the new routing module to create the router
-    let app = routes::create_router(app_state);
+    // 注入 service 和 state 到 api 模块
+    // init_service: embed forge 函数通过 OnceLock<Service> 访问 EmbeddingService
+    // init_state: auth forge 函数通过 OnceLock<VecboostState> 访问 kit 能力
+    vecboost::api::init_service(service.clone());
+    #[cfg(feature = "auth")]
+    vecboost::api::init_state(app_state.clone());
 
+    // sdforge #[forge] 路由（Router<()>，从 inventory 收集所有 forge 函数注册的路由）
+    let app = sdforge::http::build();
+
+    // metrics 端点（手写例外：Prometheus text/plain 响应，forge 不支持非 JSON）
+    let metrics_router = axum::Router::new()
+        .route("/metrics", axum::routing::get(metrics_endpoint))
+        .with_state(app_state.clone());
+    let app = app.merge(metrics_router);
+
+    // auth_middleware：应用到所有路由，内部用路径白名单放行公开端点
+    // (/health, /api/v1/auth/login, /api/v1/auth/refresh)
+    #[cfg(feature = "auth")]
+    let app = if config.auth.enabled {
+        use axum::middleware::from_fn_with_state;
+        app.layer(from_fn_with_state(
+            app_state.clone(),
+            vecboost::auth::auth_middleware,
+        ))
+        .layer(from_fn_with_state(
+            app_state.clone(),
+            vecboost::auth::auth_rate_limit_middleware,
+        ))
+    } else {
+        app
+    };
+
+    // CSRF 保护（条件性应用：auth 启用且 csrf 启用时）
+    #[cfg(feature = "auth")]
+    let app = if config.auth.enabled && config.auth.csrf.enabled {
+        use axum::middleware::from_fn_with_state;
+        let csrf_config = app_state
+            .kit
+            .require::<CsrfConfigModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to require CsrfConfigModule: {}", e))?;
+        let csrf_token_store = app_state
+            .kit
+            .require::<CsrfTokenStoreModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to require CsrfTokenStoreModule: {}", e))?;
+        match (csrf_config, csrf_token_store) {
+            (Some(cfg), Some(store)) if cfg.token_validation_enabled => {
+                app.layer(from_fn_with_state(
+                    (cfg, store),
+                    vecboost::auth::middleware::csrf_combined_middleware,
+                ))
+            }
+            (Some(cfg), _) => app.layer(from_fn_with_state(
+                cfg,
+                vecboost::auth::csrf_origin_middleware,
+            )),
+            _ => app,
+        }
+    } else {
+        app
+    };
+
+    // 安全 headers + trace
     let app = app
         .layer(TraceLayer::new_for_http())
         .layer(SetResponseHeaderLayer::overriding(

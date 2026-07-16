@@ -9,8 +9,10 @@
 //! 内部使用令牌桶算法,每个维度维护独立的令牌桶。
 
 // limiteron 后端(limiteron 必选,完全接管速率限制)
+pub mod ip_whitelist;
 pub(crate) mod limiteron_adapter;
 
+pub use ip_whitelist::is_ip_whitelisted;
 pub use limiteron_adapter::LimiteronAdapter;
 
 // === 限流类型定义 ===

@@ -160,7 +160,16 @@ async fn main() -> anyhow::Result<()> {
         use rmcp::{ServiceExt, transport::io::stdio};
 
         log::info!("Starting VecBoost MCP server over stdio");
-        vecboost::api::init_service(service.clone());
+        // 最小 kit：仅 EmbeddingModule，供 forge handler 通过 state().kit.require 访问
+        let mut kit = trait_kit::AsyncKit::new();
+        kit.set_config(service.clone());
+        kit.register::<EmbeddingModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
+        let kit = kit
+            .build()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
+        vecboost::api::init_state(VecboostState::new(Arc::new(kit)));
         let server = sdforge::mcp::build();
         let running = server.serve(stdio()).await?;
         running.waiting().await?;
@@ -183,7 +192,16 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or(false);
 
         if is_cli {
-            vecboost::api::init_service(service.clone());
+            // 最小 kit：仅 EmbeddingModule，供 forge handler 通过 state().kit.require 访问
+            let mut kit = trait_kit::AsyncKit::new();
+            kit.set_config(service.clone());
+            kit.register::<EmbeddingModule>()
+                .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
+            let kit = kit
+                .build()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
+            vecboost::api::init_state(VecboostState::new(Arc::new(kit)));
             let matches = cli_cmd.get_matches_from(std::env::args());
 
             if let Some((name, sub_matches)) = matches.subcommand() {
@@ -239,7 +257,7 @@ async fn main() -> anyhow::Result<()> {
         };
 
         let jwt_secret_name = "jwt_secret";
-        let _jwt_secret = if let Some(secret) = config.auth.jwt_secret {
+        let _jwt_secret = if let Some(ref secret) = config.auth.jwt_secret {
             // 验证 JWT 密钥强度（至少 32 字节）
             if secret.len() < 32 {
                 return Err(anyhow::anyhow!(
@@ -247,7 +265,7 @@ async fn main() -> anyhow::Result<()> {
                     secret.len()
                 ));
             }
-            let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, secret);
+            let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, secret.clone());
             key_store.set(&key).await?;
             key.value
         } else {
@@ -269,14 +287,14 @@ async fn main() -> anyhow::Result<()> {
         let user_store = Arc::new(UserStore::new());
 
         // 强制用户提供管理员凭证，不再使用默认值
-        let admin_username = config.auth.default_admin_username.ok_or_else(|| {
+        let admin_username = config.auth.default_admin_username.clone().ok_or_else(|| {
             anyhow::anyhow!(
                 "Administrator username is required when authentication is enabled. \
                      Please set 'default_admin_username' in the configuration."
             )
         })?;
 
-        let admin_password = config.auth.default_admin_password.ok_or_else(|| {
+        let admin_password = config.auth.default_admin_password.clone().ok_or_else(|| {
             anyhow::anyhow!(
                 "Administrator password is required when authentication is enabled. \
                      Please set 'default_admin_password' in the configuration."
@@ -333,6 +351,21 @@ async fn main() -> anyhow::Result<()> {
         log::info!("CSRF protection disabled");
         (None, None)
     };
+
+    // T017: Warn on dangerous CSRF config combination — enabled but neither
+    // token validation nor allowed_origins are configured, leaving CSRF
+    // protection ineffective.
+    #[cfg(feature = "auth")]
+    if config.auth.csrf.enabled
+        && !config.auth.csrf.token_validation_enabled
+        && config.auth.csrf.allowed_origins.is_none()
+    {
+        log::warn!(
+            "CSRF protection enabled with token_validation=false and allowed_origins=None: \
+             this combination does not provide effective CSRF protection. \
+             Consider enabling token validation or specifying allowed origins."
+        );
+    }
 
     // Initialize audit logging
     let audit_logger = if config.audit.enabled {
@@ -457,7 +490,11 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Failed to create PrometheusCollector: {}", e))?,
     )));
     kit.set_config(config.rate_limit.ip_whitelist.clone());
+    kit.set_config(config.embedding.clone());
     kit.set_config(AuthEnabled(config.auth.enabled));
+    // T013: Inject AuthConfig for `trusted_proxies` (XFF trust boundary) access
+    // via `kit.config::<AuthConfig>()` in `auth_middleware` (see lib.rs `FromRef` impl).
+    kit.set_config(config.auth.clone());
     kit.set_config(RateLimitEnabled(config.rate_limit.enabled));
     kit.set_config(PipelineEnabled(pipeline_enabled));
     kit.set_config(pipeline_queue.clone());
@@ -529,19 +566,15 @@ async fn main() -> anyhow::Result<()> {
     log::info!("AsyncKit module registry built successfully");
 
     // v0.3.0 D3: VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
-    let app_state = VecboostState { kit };
+    let app_state = VecboostState::new(kit);
 
     let _grpc_service = app_state
-        .kit
+        .kit()
         .require::<EmbeddingModule>()
         .map_err(|e| anyhow::anyhow!("Failed to require EmbeddingModule for gRPC: {}", e))?
         .clone();
 
-    // 注入 service 和 state 到 api 模块
-    // init_service: embed forge 函数通过 OnceLock<Service> 访问 EmbeddingService
-    // init_state: auth forge 函数通过 OnceLock<VecboostState> 访问 kit 能力
-    vecboost::api::init_service(service.clone());
-    #[cfg(feature = "auth")]
+    // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state().kit.require 访问）
     vecboost::api::init_state(app_state.clone());
 
     // sdforge #[forge] 路由（Router<()>，从 inventory 收集所有 forge 函数注册的路由）
@@ -575,11 +608,11 @@ async fn main() -> anyhow::Result<()> {
     let app = if config.auth.enabled && config.auth.csrf.enabled {
         use axum::middleware::from_fn_with_state;
         let csrf_config = app_state
-            .kit
+            .kit()
             .require::<CsrfConfigModule>()
             .map_err(|e| anyhow::anyhow!("Failed to require CsrfConfigModule: {}", e))?;
         let csrf_token_store = app_state
-            .kit
+            .kit()
             .require::<CsrfTokenStoreModule>()
             .map_err(|e| anyhow::anyhow!("Failed to require CsrfTokenStoreModule: {}", e))?;
         match (csrf_config, csrf_token_store) {

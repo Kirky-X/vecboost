@@ -66,6 +66,9 @@ cache_size = 4096
 # 最大批处理大小
 max_batch_size = 128
 
+# 单个文本最大字节长度 (防止资源耗尽攻击)
+max_text_length = 8192
+
 # ============ 监控配置 ============
 [monitoring]
 # 内存限制 (MB), None 表示不限制
@@ -104,6 +107,30 @@ default_admin_username = "admin"
 # 使用: export VECBOOST_ADMIN_PASSWORD="your-secure-password"
 # 不允许在配置文件中设置此值
 default_admin_password = ""
+
+# 受信任代理 CIDR 列表 (X-Forwarded-For 信任边界)
+# 空列表 = 无条件信任 XFF (v0.3.0-v0.3.2 向后兼容)
+# 非空 = 仅当 peer IP 匹配列表内 CIDR 时才信任 XFF
+# 示例: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+trusted_proxies = []
+
+# ============ CSRF 保护配置 ============
+[auth.csrf]
+# 是否启用 CSRF 保护
+enabled = false
+
+# 允许的 Origin 列表 (None = 不验证 Origin)
+# 示例: ["https://example.com", "https://app.example.com"]
+allowed_origins = []
+
+# 是否启用 CSRF Token 验证
+token_validation_enabled = false
+
+# Token 过期时间 (秒)
+token_expiration_secs = 3600
+
+# 是否允许同源请求
+allow_same_origin = true
 
 # ============ 密钥存储配置 ============
 [auth.security]

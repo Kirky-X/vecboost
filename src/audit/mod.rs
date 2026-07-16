@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 pub mod logger;
 pub use logger::AuditLogger;
+pub mod types;
 
 /// Security event type
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,24 +25,6 @@ pub enum SecurityEventType {
     UnauthorizedAccess,
     RateLimitExceeded,
     ConfigChanged,
-}
-
-impl SecurityEventType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SecurityEventType::LoginSuccess => "login_success",
-            SecurityEventType::LoginFailed => "login_failed",
-            SecurityEventType::Logout => "logout",
-            SecurityEventType::PermissionDenied => "permission_denied",
-            SecurityEventType::UserCreated => "user_created",
-            SecurityEventType::UserUpdated => "user_updated",
-            SecurityEventType::UserDeleted => "user_deleted",
-            SecurityEventType::TokenRefresh => "token_refresh",
-            SecurityEventType::UnauthorizedAccess => "unauthorized_access",
-            SecurityEventType::RateLimitExceeded => "rate_limit_exceeded",
-            SecurityEventType::ConfigChanged => "config_changed",
-        }
-    }
 }
 
 /// Security event log entry
@@ -87,19 +70,6 @@ pub struct AuditConfig {
     pub max_file_size_mb: usize,
     pub max_files: usize,
     pub async_write: bool,
-}
-
-impl Default for AuditConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            log_file_path: PathBuf::from("logs/audit.log"),
-            log_level: "info".to_string(),
-            max_file_size_mb: 100,
-            max_files: 10,
-            async_write: true,
-        }
-    }
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@
 
 use crate::error::VecboostError;
 use crate::security::key_store::{KeyStore, KeyType, SecretKey};
+use crate::security::salt::SaltStore;
 use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
@@ -18,6 +19,10 @@ use std::sync::Arc;
 use tokio::fs::{self, File};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
+
+/// Legacy fixed salt used by v0.3.0-v0.3.2 keystore files (pre-T012).
+/// Kept only for one-shot migration: load old format → re-encrypt with random salt.
+const LEGACY_SALT: &[u8; 16] = b"vecboost_salt_v1";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct EncryptedEntry {
@@ -46,35 +51,101 @@ impl Default for KeyStoreData {
 pub struct EncryptedFileKeyStore {
     file_path: String,
     encryption_key: Arc<[u8; 32]>,
+    salt: SaltStore,
     data: Arc<RwLock<KeyStoreData>>,
 }
 
 impl EncryptedFileKeyStore {
     pub async fn new(file_path: &str, encryption_key: &str) -> Result<Self, VecboostError> {
-        let key_bytes = Self::derive_key(encryption_key)?;
-
-        let data = if tokio::fs::try_exists(file_path)
+        let file_exists = tokio::fs::try_exists(file_path)
             .await
-            .map_err(|e| VecboostError::IoError(format!("Failed to check key file: {}", e)))?
-        {
-            Self::load_from_file(file_path, &key_bytes).await?
-        } else {
-            KeyStoreData::default()
-        };
+            .map_err(|e| VecboostError::IoError(format!("Failed to check key file: {}", e)))?;
 
-        Ok(Self {
-            file_path: file_path.to_string(),
-            encryption_key: Arc::new(key_bytes),
-            data: Arc::new(RwLock::new(data)),
-        })
+        if file_exists {
+            // load_from_file returns (data, decrypt_salt, needs_migration). For legacy
+            // 2-segment files it derives the key with LEGACY_SALT and decrypts the outer
+            // container, but inner entries remain encrypted under the legacy key.
+            let (mut data, decrypt_salt, needs_migration) =
+                Self::load_from_file(file_path, encryption_key).await?;
+
+            if needs_migration {
+                // Atomic migration: re-encrypt the outer container AND every inner entry
+                // from the legacy key to a fresh-salt key, then persist in 3-segment format.
+                let legacy_key = Self::derive_key(encryption_key, decrypt_salt.as_bytes())?;
+                let new_salt = SaltStore::generate();
+                let new_key = Self::derive_key(encryption_key, new_salt.as_bytes())?;
+                Self::re_encrypt_entries(&mut data, &legacy_key, &new_key)?;
+
+                let store = Self {
+                    file_path: file_path.to_string(),
+                    encryption_key: Arc::new(new_key),
+                    salt: new_salt,
+                    data: Arc::new(RwLock::new(data)),
+                };
+                store.save_to_file().await?;
+                Ok(store)
+            } else {
+                // New format already: reuse salt from file header.
+                let key_bytes = Self::derive_key(encryption_key, decrypt_salt.as_bytes())?;
+                Ok(Self {
+                    file_path: file_path.to_string(),
+                    encryption_key: Arc::new(key_bytes),
+                    salt: decrypt_salt,
+                    data: Arc::new(RwLock::new(data)),
+                })
+            }
+        } else {
+            // New keystore: generate a fresh random salt for KDF.
+            let salt = SaltStore::generate();
+            let key_bytes = Self::derive_key(encryption_key, salt.as_bytes())?;
+            Ok(Self {
+                file_path: file_path.to_string(),
+                encryption_key: Arc::new(key_bytes),
+                salt,
+                data: Arc::new(RwLock::new(KeyStoreData::default())),
+            })
+        }
     }
 
-    fn derive_key(password: &str) -> Result<[u8; 32], VecboostError> {
-        // Argon2id 提供抗侧信道攻击和抗 GPU/ASIC 暴力破解保护。
-        // 固定 salt 使密钥派生具有确定性,支持跨实例持久化
-        // (同一个文件可以被用相同密码创建的不同 store 实例读写)。
+    /// Re-encrypt every entry's `encrypted_value` from `old_key` to `new_key`.
+    /// Used during legacy migration: legacy files have entries encrypted under
+    /// the LEGACY_SALT-derived key; we decrypt each one and re-encrypt under
+    /// the fresh-salt-derived key so the post-migration store can read them.
+    fn re_encrypt_entries(
+        data: &mut KeyStoreData,
+        old_key: &[u8; 32],
+        new_key: &[u8; 32],
+    ) -> Result<(), VecboostError> {
+        let old_cipher = Aes256Gcm::new(old_key.into());
+        let new_cipher = Aes256Gcm::new(new_key.into());
+
+        for entry in &mut data.keys {
+            let old_nonce_bytes = hex::decode(&entry.nonce)
+                .map_err(|e| VecboostError::security_error(format!("Invalid nonce: {}", e)))?;
+            let old_nonce = Nonce::from_slice(&old_nonce_bytes);
+            let old_ct = hex::decode(&entry.encrypted_value)
+                .map_err(|e| VecboostError::security_error(format!("Invalid ciphertext: {}", e)))?;
+            let plaintext = old_cipher
+                .decrypt(old_nonce, old_ct.as_ref())
+                .map_err(|e| VecboostError::security_error(format!("Decryption failed: {}", e)))?;
+
+            let mut new_nonce_buf = [0u8; 12];
+            rand::rng().fill_bytes(&mut new_nonce_buf);
+            let new_nonce = Nonce::clone_from_slice(&new_nonce_buf);
+            let new_ct = new_cipher
+                .encrypt(&new_nonce, plaintext.as_ref())
+                .map_err(|e| VecboostError::security_error(format!("Encryption failed: {}", e)))?;
+
+            entry.nonce = hex::encode(new_nonce);
+            entry.encrypted_value = hex::encode(&new_ct);
+        }
+        Ok(())
+    }
+
+    fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; 32], VecboostError> {
+        // Argon2id provides side-channel resistance and GPU/ASIC brute-force protection.
+        // Salt comes from the keystore file header (v0.3.3+) or LEGACY_SALT (one-shot migration).
         let argon2 = Argon2::default();
-        let salt = b"vecboost_salt_v1"; // 16 bytes
         let mut key = [0u8; 32];
         argon2
             .hash_password_into(password.as_bytes(), salt, &mut key)
@@ -82,10 +153,18 @@ impl EncryptedFileKeyStore {
         Ok(key)
     }
 
+    /// Load keystore data from file. Returns `(data, decrypt_salt, needs_migration)`.
+    ///
+    /// - 3-segment format `salt_hex:nonce_hex:ciphertext_hex`: uses salt from file header,
+    ///   `needs_migration = false`. The returned `decrypt_salt` is reused as the store salt.
+    /// - 2-segment legacy format `nonce_hex:ciphertext_hex` (v0.3.0–v0.3.2): derives the key
+    ///   with `LEGACY_SALT` and decrypts the outer container. `needs_migration = true` so
+    ///   the caller generates a fresh random salt, re-encrypts every inner entry, and
+    ///   persists in the new 3-segment layout. The returned `decrypt_salt` is `LEGACY_SALT`.
     async fn load_from_file(
         file_path: &str,
-        key: &[u8; 32],
-    ) -> Result<KeyStoreData, VecboostError> {
+        password: &str,
+    ) -> Result<(KeyStoreData, SaltStore, bool), VecboostError> {
         let mut file = File::open(file_path)
             .await
             .map_err(|e| VecboostError::IoError(format!("Failed to open key file: {}", e)))?;
@@ -95,23 +174,34 @@ impl EncryptedFileKeyStore {
             .await
             .map_err(|e| VecboostError::IoError(format!("Failed to read key file: {}", e)))?;
 
-        let parts: Vec<&str> = encrypted_content.splitn(2, ':').collect();
-        if parts.len() != 2 {
-            return Err(VecboostError::security_error(
-                "Invalid key file format".to_string(),
-            ));
-        }
+        let parts: Vec<&str> = encrypted_content.splitn(3, ':').collect();
+        let (decrypt_salt, nonce_hex, ciphertext, needs_migration) = match parts.len() {
+            3 => {
+                // New format: salt_hex:nonce_hex:ciphertext_hex
+                let salt = SaltStore::from_hex(parts[0])?;
+                (salt, parts[1], parts[2], false)
+            }
+            2 => {
+                // Legacy format: nonce_hex:ciphertext_hex — use LEGACY_SALT for one-shot
+                // decryption of the outer container. The caller is responsible for
+                // re-encrypting inner entries and persisting the new 3-segment layout.
+                let salt = SaltStore::from_bytes(LEGACY_SALT)?;
+                (salt, parts[0], parts[1], true)
+            }
+            _ => {
+                return Err(VecboostError::security_error(
+                    "Invalid key file format".to_string(),
+                ));
+            }
+        };
 
-        let nonce_hex = parts[0];
-        let ciphertext = parts[1];
-
+        let key_bytes = Self::derive_key(password, decrypt_salt.as_bytes())?;
         let nonce_bytes = hex::decode(nonce_hex)
             .map_err(|e| VecboostError::security_error(format!("Invalid nonce: {}", e)))?;
-
         let ciphertext_bytes = hex::decode(ciphertext)
             .map_err(|e| VecboostError::security_error(format!("Invalid ciphertext: {}", e)))?;
 
-        let cipher = Aes256Gcm::new(key.into());
+        let cipher = Aes256Gcm::new((&key_bytes).into());
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let plaintext = cipher
@@ -120,9 +210,10 @@ impl EncryptedFileKeyStore {
 
         let json_str = String::from_utf8(plaintext)
             .map_err(|e| VecboostError::security_error(format!("Invalid UTF-8: {}", e)))?;
+        let data: KeyStoreData = serde_json::from_str(&json_str)
+            .map_err(|e| VecboostError::security_error(format!("Invalid key data: {}", e)))?;
 
-        serde_json::from_str(&json_str)
-            .map_err(|e| VecboostError::security_error(format!("Invalid key data: {}", e)))
+        Ok((data, decrypt_salt, needs_migration))
     }
 
     async fn save_to_file(&self) -> Result<(), VecboostError> {
@@ -138,8 +229,13 @@ impl EncryptedFileKeyStore {
             .encrypt(&nonce_bytes, json_str.as_bytes())
             .map_err(|e| VecboostError::security_error(format!("Encryption failed: {}", e)))?;
 
-        let nonce_hex = hex::encode(nonce_bytes);
-        let encrypted_content = format!("{}:{}", nonce_hex, hex::encode(&ciphertext));
+        // File format (v0.3.3+): salt_hex:nonce_hex:ciphertext_hex.
+        let encrypted_content = format!(
+            "{}:{}:{}",
+            self.salt.to_hex(),
+            hex::encode(nonce_bytes),
+            hex::encode(&ciphertext)
+        );
 
         let mut file = File::create(&self.file_path)
             .await
@@ -525,12 +621,22 @@ mod tests {
             .await
             .expect("should read key file");
 
-        // Format should be "nonce_hex:ciphertext_hex".
-        let parts: Vec<&str> = content.splitn(2, ':').collect();
-        assert_eq!(parts.len(), 2, "file should have nonce:ciphertext format");
-        assert!(hex::decode(parts[0]).is_ok(), "nonce should be valid hex");
+        // Format (v0.3.3+): "salt_hex:nonce_hex:ciphertext_hex".
+        let parts: Vec<&str> = content.splitn(3, ':').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "file should have salt:nonce:ciphertext format"
+        );
+        let salt_bytes = hex::decode(parts[0]).expect("salt should be valid hex");
+        assert_eq!(
+            salt_bytes.len(),
+            16,
+            "salt should be 16 bytes (128-bit Argon2 salt)"
+        );
+        assert!(hex::decode(parts[1]).is_ok(), "nonce should be valid hex");
         assert!(
-            hex::decode(parts[1]).is_ok(),
+            hex::decode(parts[2]).is_ok(),
             "ciphertext should be valid hex"
         );
 
@@ -643,5 +749,138 @@ mod tests {
         let custom_keys = store.list(&custom_type).await.expect("list failed");
         assert_eq!(custom_keys.len(), 1);
         assert!(custom_keys.contains(&"custom_name".to_string()));
+    }
+
+    /// Write a legacy 2-segment file (v0.3.0–v0.3.2 format: `nonce_hex:ciphertext_hex`)
+    /// using `LEGACY_SALT` for KDF. Returns the file content for verification.
+    async fn write_legacy_file(path: &str, password: &str, data: &KeyStoreData) -> String {
+        let json_str = serde_json::to_string(data).expect("serialize failed");
+        let legacy_salt = SaltStore::from_bytes(LEGACY_SALT).expect("legacy salt build failed");
+        let key_bytes = EncryptedFileKeyStore::derive_key(password, legacy_salt.as_bytes())
+            .expect("derive_key failed");
+        let cipher = Aes256Gcm::new((&key_bytes).into());
+        let mut nonce_buf = [0u8; 12];
+        rand::rng().fill_bytes(&mut nonce_buf);
+        let nonce_bytes = Nonce::clone_from_slice(&nonce_buf);
+        let ciphertext = cipher
+            .encrypt(&nonce_bytes, json_str.as_bytes())
+            .expect("encrypt failed");
+        let content = format!("{}:{}", hex::encode(nonce_bytes), hex::encode(&ciphertext));
+        tokio::fs::write(path, &content)
+            .await
+            .expect("write failed");
+        content
+    }
+
+    #[tokio::test]
+    async fn test_legacy_2_segment_format_auto_migrates_to_3_segment() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+        let password = "legacy_password_123";
+
+        // Write a legacy 2-segment file with default (empty) data.
+        let pre_content = write_legacy_file(&path, password, &KeyStoreData::default()).await;
+        assert_eq!(
+            pre_content.splitn(3, ':').count(),
+            2,
+            "should start as 2-segment legacy format"
+        );
+
+        // `new` should auto-detect legacy, decrypt with LEGACY_SALT, then migrate.
+        let store = EncryptedFileKeyStore::new(&path, password)
+            .await
+            .expect("legacy load + migration should succeed");
+
+        // File should now be in 3-segment format on disk.
+        let post_content = tokio::fs::read_to_string(&path).await.expect("read failed");
+        let parts: Vec<&str> = post_content.splitn(3, ':').collect();
+        assert_eq!(parts.len(), 3, "should be migrated to 3-segment format");
+        let migrated_salt_bytes = hex::decode(parts[0]).expect("salt hex valid");
+        assert_eq!(
+            migrated_salt_bytes.len(),
+            16,
+            "migrated salt should be 16 bytes"
+        );
+        assert_ne!(
+            hex::encode(&migrated_salt_bytes),
+            hex::encode(LEGACY_SALT),
+            "migrated salt must differ from LEGACY_SALT"
+        );
+
+        // Migrated store should be usable.
+        let keys = store.list(&KeyType::JwtSecret).await.expect("list failed");
+        assert!(keys.is_empty(), "migrated store should have empty keys");
+    }
+
+    #[tokio::test]
+    async fn test_legacy_format_preserves_data_and_supports_post_migration_writes() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = make_store_path(&dir);
+        let password = "legacy_password_456";
+
+        // Build a legacy file containing one pre-existing key (encrypted under LEGACY_SALT key).
+        let legacy_salt = SaltStore::from_bytes(LEGACY_SALT).expect("legacy salt build failed");
+        let key_bytes = EncryptedFileKeyStore::derive_key(password, legacy_salt.as_bytes())
+            .expect("derive_key failed");
+        let cipher = Aes256Gcm::new((&key_bytes).into());
+        let mut nonce_buf = [0u8; 12];
+        rand::rng().fill_bytes(&mut nonce_buf);
+        let nonce_bytes = Nonce::clone_from_slice(&nonce_buf);
+        let ciphertext = cipher
+            .encrypt(&nonce_bytes, "legacy_jwt_secret_value".as_bytes())
+            .expect("encrypt failed");
+        let mut legacy_data = KeyStoreData::default();
+        legacy_data.keys.push(EncryptedEntry {
+            key_type: "jwt_secret".to_string(),
+            name: "jwt_secret".to_string(),
+            encrypted_value: hex::encode(&ciphertext),
+            nonce: hex::encode(nonce_bytes),
+            created_at: chrono::Utc::now().timestamp(),
+        });
+        write_legacy_file(&path, password, &legacy_data).await;
+
+        // Load + auto-migrate.
+        let store = EncryptedFileKeyStore::new(&path, password)
+            .await
+            .expect("legacy load + migration should succeed");
+
+        // Pre-existing key must survive migration.
+        let retrieved = store
+            .get(&KeyType::JwtSecret, "jwt_secret")
+            .await
+            .expect("get failed")
+            .expect("key should exist after migration");
+        assert_eq!(retrieved.value, "legacy_jwt_secret_value");
+
+        // Post-migration write should persist in the new 3-segment format.
+        store
+            .set(&SecretKey::api_key("post_migration_key", "new_value"))
+            .await
+            .expect("set after migration failed");
+
+        // Reload from disk: both old + new keys must be readable under the new format.
+        let reloaded = EncryptedFileKeyStore::new(&path, password)
+            .await
+            .expect("reload should succeed");
+        let old_key = reloaded
+            .get(&KeyType::JwtSecret, "jwt_secret")
+            .await
+            .expect("get old key failed")
+            .expect("old key should persist");
+        assert_eq!(old_key.value, "legacy_jwt_secret_value");
+        let new_key = reloaded
+            .get(&KeyType::ApiKey, "post_migration_key")
+            .await
+            .expect("get new key failed")
+            .expect("new key should persist");
+        assert_eq!(new_key.value, "new_value");
+
+        // File should remain in 3-segment format (no rollback to legacy).
+        let content = tokio::fs::read_to_string(&path).await.expect("read failed");
+        assert_eq!(
+            content.splitn(3, ':').count(),
+            3,
+            "should remain 3-segment after reload"
+        );
     }
 }

@@ -66,6 +66,9 @@ cache_size = 1024
 # 最大批处理大小
 max_batch_size = 64
 
+# 单个文本最大字节长度 (防止资源耗尽攻击)
+max_text_length = 8192
+
 # ============ 监控配置 ============
 [monitoring]
 # 内存限制 (MB), None 表示不限制
@@ -102,6 +105,11 @@ default_admin_username = "admin"
 # ⚠️ 重要：生产环境必须通过环境变量设置,禁止在配置文件中填写
 # 使用: export VECBOOST_ADMIN_PASSWORD="your-secure-password"
 # (vuln-0008 修复:不在配置文件中暴露字段名,统一通过环境变量注入)
+
+# 受信任代理 CIDR 列表 (X-Forwarded-For 信任边界)
+# 空列表 = 无条件信任 XFF (向后兼容)
+# 非空 = 仅当 peer IP 匹配列表内 CIDR 时才信任 XFF
+trusted_proxies = []
 
 # ============ 密钥存储配置 ============
 [auth.security]

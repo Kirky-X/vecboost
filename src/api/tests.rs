@@ -3,26 +3,44 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use super::*;
+use crate::VecboostState;
+#[cfg(feature = "cli")]
+use crate::api::embedding::{cli_compute_similarity, cli_embed};
+use crate::api::embedding::{compute_similarity, embed, embed_batch};
+#[cfg(feature = "http")]
+use crate::api::embedding::{forge_compute_similarity, forge_embed, forge_embed_batch};
+#[cfg(any(feature = "http", feature = "cli"))]
+use crate::api::embedding::{to_api_error, uuid_like_id};
 use crate::config::model::{DeviceType, EngineType, ModelConfig, Precision};
+use crate::domain::{BatchEmbedRequest, EmbedRequest, SimilarityRequest};
 use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
+use crate::module_registry::EmbeddingModule;
 use crate::service::embedding::EmbeddingService;
 use async_trait::async_trait;
+#[cfg(any(feature = "http", feature = "cli"))]
+use sdforge::prelude::ApiError;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::sync::RwLock;
 
-/// Ensure the global SERVICE is initialized for tests that need it.
+/// Ensure the global STATE is initialized for forge handler tests.
 ///
-/// Uses `SERVICE.set()` directly (not `init_service`) to avoid panicking if
-/// another test already initialized the OnceLock (process-global state).
-fn ensure_service_initialized() {
-    if SERVICE.get().is_none() {
-        let svc = Arc::new(RwLock::new(make_service(384)));
-        let _ = SERVICE.set(svc);
+/// Builds a minimal `AsyncKit` with only `EmbeddingModule` registered and
+/// injects via `init_state`. Idempotent: subsequent calls are no-ops (OnceLock
+/// first-writer-wins semantics). Safe under parallel test execution.
+async fn ensure_state_initialized() {
+    if crate::api::state().is_ok() {
+        return;
     }
+    let svc = Arc::new(RwLock::new(make_service(384)));
+    let mut kit = trait_kit::AsyncKit::new();
+    kit.set_config(svc);
+    kit.register::<EmbeddingModule>()
+        .expect("register EmbeddingModule in test kit");
+    let kit = kit.build().await.expect("build test kit");
+    crate::api::init_state(VecboostState { kit: Arc::new(kit) });
 }
 
 /// Deterministic mock engine for API layer tests.
@@ -239,30 +257,6 @@ async fn test_compute_similarity_empty_target_returns_error() {
 }
 
 // ---------------------------------------------------------------------------
-// init_service / service() tests
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_init_service_sets_global() {
-    ensure_service_initialized();
-    let result = service();
-    assert!(result.is_ok(), "service() should return Ok after init");
-}
-
-#[test]
-fn test_init_service_no_op_on_double_init() {
-    ensure_service_initialized();
-    let first = service().expect("service should be initialized");
-    let svc = Arc::new(RwLock::new(make_service(384)));
-    init_service(svc);
-    let second = service().expect("service should still be initialized");
-    assert!(
-        Arc::ptr_eq(&first, &second),
-        "init_service should be a no-op on double init (first caller wins)"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // to_api_error / uuid_like_id tests
 // ---------------------------------------------------------------------------
 
@@ -364,7 +358,7 @@ fn test_to_api_error_other_variants_become_internal() {
 #[cfg(feature = "http")]
 #[tokio::test]
 async fn test_forge_embed_success() {
-    ensure_service_initialized();
+    ensure_state_initialized().await;
     let req = EmbedRequest {
         text: "hello forge".to_string(),
         normalize: Some(true),
@@ -383,7 +377,7 @@ async fn test_forge_embed_success() {
 #[cfg(feature = "http")]
 #[tokio::test]
 async fn test_forge_embed_empty_text_returns_error() {
-    ensure_service_initialized();
+    ensure_state_initialized().await;
     let req = EmbedRequest {
         text: "".to_string(),
         normalize: None,
@@ -405,7 +399,7 @@ async fn test_forge_embed_empty_text_returns_error() {
 #[cfg(feature = "http")]
 #[tokio::test]
 async fn test_forge_embed_batch_success() {
-    ensure_service_initialized();
+    ensure_state_initialized().await;
     let req = BatchEmbedRequest {
         texts: vec!["text1".to_string(), "text2".to_string()],
         mode: None,
@@ -421,7 +415,7 @@ async fn test_forge_embed_batch_success() {
 #[cfg(feature = "http")]
 #[tokio::test]
 async fn test_forge_embed_batch_empty_returns_error() {
-    ensure_service_initialized();
+    ensure_state_initialized().await;
     let req = BatchEmbedRequest {
         texts: vec![],
         mode: None,
@@ -434,7 +428,7 @@ async fn test_forge_embed_batch_empty_returns_error() {
 #[cfg(feature = "http")]
 #[tokio::test]
 async fn test_forge_compute_similarity_success() {
-    ensure_service_initialized();
+    ensure_state_initialized().await;
     let req = SimilarityRequest {
         source: "hello".to_string(),
         target: "world".to_string(),
@@ -448,7 +442,7 @@ async fn test_forge_compute_similarity_success() {
 #[cfg(feature = "http")]
 #[tokio::test]
 async fn test_forge_compute_similarity_empty_source_error() {
-    ensure_service_initialized();
+    ensure_state_initialized().await;
     let req = SimilarityRequest {
         source: "".to_string(),
         target: "target".to_string(),
@@ -464,7 +458,7 @@ async fn test_forge_compute_similarity_empty_source_error() {
 #[cfg(feature = "cli")]
 #[tokio::test]
 async fn test_cli_embed_success() {
-    ensure_service_initialized();
+    ensure_state_initialized().await;
     let req = EmbedRequest {
         text: "hello cli".to_string(),
         normalize: None,
@@ -483,7 +477,7 @@ async fn test_cli_embed_success() {
 #[cfg(feature = "cli")]
 #[tokio::test]
 async fn test_cli_embed_empty_text_returns_error() {
-    ensure_service_initialized();
+    ensure_state_initialized().await;
     let req = EmbedRequest {
         text: "".to_string(),
         normalize: None,
@@ -495,7 +489,7 @@ async fn test_cli_embed_empty_text_returns_error() {
 #[cfg(feature = "cli")]
 #[tokio::test]
 async fn test_cli_compute_similarity_success() {
-    ensure_service_initialized();
+    ensure_state_initialized().await;
     let req = SimilarityRequest {
         source: "source text".to_string(),
         target: "target text".to_string(),
@@ -513,7 +507,7 @@ async fn test_cli_compute_similarity_success() {
 #[cfg(feature = "cli")]
 #[tokio::test]
 async fn test_cli_compute_similarity_empty_source_returns_error() {
-    ensure_service_initialized();
+    ensure_state_initialized().await;
     let req = SimilarityRequest {
         source: "".to_string(),
         target: "target".to_string(),

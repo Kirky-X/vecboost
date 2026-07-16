@@ -50,6 +50,7 @@ pub struct EmbeddingConfig {
     pub cache_enabled: bool,
     pub cache_size: usize,
     pub max_batch_size: usize,
+    pub max_text_length: usize,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
@@ -71,6 +72,15 @@ pub struct AuthConfig {
     pub default_admin_password: Option<String>,
     pub security: SecurityConfig,
     pub csrf: CsrfConfig,
+    /// Trusted proxy CIDRs for X-Forwarded-For trust boundary.
+    ///
+    /// When non-empty, `X-Forwarded-For` / `X-Real-IP` headers are honored only if
+    /// the `ConnectInfo` peer IP matches a CIDR entry — preventing clients outside
+    /// the trust boundary from spoofing their IP via XFF.
+    /// When empty, XFF is honored unconditionally (legacy v0.3.0–v0.3.2 behavior,
+    /// kept for backward compatibility).
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
 }
 
 /// Rate limiting configuration
@@ -353,6 +363,7 @@ impl Default for EmbeddingConfig {
             cache_enabled: true,
             cache_size: 1024,
             max_batch_size: 64,
+            max_text_length: 8192,
         }
     }
 }
@@ -378,6 +389,7 @@ impl Default for AuthConfig {
             default_admin_password: None,
             security: SecurityConfig::default(),
             csrf: CsrfConfig::default(),
+            trusted_proxies: Vec::new(),
         }
     }
 }
@@ -938,10 +950,12 @@ mod tests {
             cache_enabled: false,
             cache_size: 512,
             max_batch_size: 32,
+            max_text_length: 4096,
         };
         assert_eq!(config.default_aggregation, "max");
         assert!(!config.cache_enabled);
         assert_eq!(config.cache_size, 512);
+        assert_eq!(config.max_text_length, 4096);
     }
 
     #[test]
@@ -960,6 +974,7 @@ mod tests {
                 token_expiration_secs: Some(7200),
                 allow_same_origin: false,
             },
+            trusted_proxies: vec!["10.0.0.0/8".to_string()],
         };
         assert!(config.enabled);
         assert!(config.jwt_secret.is_some());

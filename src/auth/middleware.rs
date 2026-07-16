@@ -6,13 +6,14 @@
 use crate::VecboostState;
 use crate::audit::AuditLogger;
 use crate::auth::{CsrfConfig, CsrfProtection, CsrfTokenStore, JwtManager, OriginValidator, User};
+use crate::config::app::AuthConfig;
 use axum::{
     extract::{ConnectInfo, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     middleware::Next,
     response::Response,
 };
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -23,9 +24,52 @@ pub struct AuthContext {
 
 const PUBLIC_PATHS: &[&str] = &["/health", "/api/v1/auth/login", "/api/v1/auth/refresh"];
 
+/// Extract client IP respecting the X-Forwarded-For trust boundary.
+///
+/// Trust logic:
+/// - `trusted_proxies` non-empty: `X-Forwarded-For` / `X-Real-IP` are honored only
+///   when `connect_info` peer IP matches a `trusted_proxies` CIDR entry (reuses
+///   `crate::rate_limit::is_ip_whitelisted`). Prevents spoofing by clients outside
+///   the trust boundary.
+/// - `trusted_proxies` empty: XFF honored unconditionally (legacy v0.3.0–v0.3.2
+///   behavior, kept for backward compatibility).
+/// - XFF absent or invalid: fall back to `connect_info` peer IP; if `connect_info`
+///   is also unavailable, returns `None`.
+fn extract_client_ip(
+    headers: &HeaderMap,
+    connect_info: Option<SocketAddr>,
+    trusted_proxies: &[String],
+) -> Option<IpAddr> {
+    let peer_ip = connect_info.map(|sa| sa.ip());
+
+    let xff_trusted = if trusted_proxies.is_empty() {
+        // Legacy behavior: trust XFF unconditionally when no boundary is configured.
+        true
+    } else {
+        match peer_ip {
+            Some(ip) => crate::rate_limit::is_ip_whitelisted(&ip.to_string(), trusted_proxies),
+            None => false,
+        }
+    };
+
+    if xff_trusted
+        && let Some(xff_ip) = headers
+            .get("x-forwarded-for")
+            .or_else(|| headers.get("x-real-ip"))
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .and_then(|s| s.trim().parse().ok())
+    {
+        return Some(xff_ip);
+    }
+
+    peer_ip
+}
+
 pub async fn auth_middleware(
     State(jwt_manager): State<Arc<JwtManager>>,
     State(audit_logger): State<Option<Arc<AuditLogger>>>,
+    State(auth_config): State<AuthConfig>,
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -41,12 +85,15 @@ pub async fn auth_middleware(
         .get("authorization")
         .and_then(|h| h.to_str().ok());
 
-    let ip = request
-        .headers()
-        .get("x-forwarded-for")
-        .or_else(|| request.headers().get("x-real-ip"))
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
+    let connect_info = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0);
+    let ip = extract_client_ip(
+        request.headers(),
+        connect_info,
+        &auth_config.trusted_proxies,
+    );
 
     let token = match auth_header {
         Some(header) if header.starts_with("Bearer ") => {
@@ -55,7 +102,7 @@ pub async fn auth_middleware(
         _ => {
             // Log unauthorized access
             if let Some(ref logger) = audit_logger {
-                logger.log_unauthorized_access(ip.clone(), path);
+                logger.log_unauthorized_access(ip.map(|i| i.to_string()), path);
             }
             return Err(StatusCode::UNAUTHORIZED);
         }
@@ -80,7 +127,7 @@ pub async fn auth_middleware(
         Err(_) => {
             // Log unauthorized access for invalid token
             if let Some(ref logger) = audit_logger {
-                logger.log_unauthorized_access(ip.clone(), path);
+                logger.log_unauthorized_access(ip.map(|i| i.to_string()), path);
             }
             Err(StatusCode::UNAUTHORIZED)
         }
@@ -539,12 +586,13 @@ mod tests {
     }
 
     /// Test-only state that provides `FromRef` impls for `auth_middleware`'s
-    /// two `State<T>` extractors. axum-core 0.4 has no blanket tuple `FromRef`
+    /// `State<T>` extractors. axum-core 0.4 has no blanket tuple `FromRef`
     /// impls, so a dedicated struct is required.
     #[derive(Clone)]
     struct AuthTestState {
         jwt: Arc<JwtManager>,
         audit: Option<Arc<AuditLogger>>,
+        auth_config: AuthConfig,
     }
 
     impl FromRef<AuthTestState> for Arc<JwtManager> {
@@ -559,10 +607,17 @@ mod tests {
         }
     }
 
+    impl FromRef<AuthTestState> for AuthConfig {
+        fn from_ref(s: &AuthTestState) -> Self {
+            s.auth_config.clone()
+        }
+    }
+
     fn make_auth_state() -> AuthTestState {
         AuthTestState {
             jwt: make_jwt_manager(),
             audit: None,
+            auth_config: AuthConfig::default(),
         }
     }
 
@@ -626,6 +681,7 @@ mod tests {
         let state = AuthTestState {
             jwt: jwt_manager,
             audit: None,
+            auth_config: AuthConfig::default(),
         };
         let app = Router::new()
             .route("/protected", any(|| async { "ok" }))
@@ -1238,5 +1294,122 @@ mod tests {
             "http://localhost:3000".to_string(),
         ]);
         // Should not panic; CorsLayer is created successfully
+    }
+
+    // =========================================================================
+    // extract_client_ip XFF trust boundary tests (T013)
+    // =========================================================================
+
+    fn make_headers_with_xff(xff: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_str(xff).unwrap());
+        headers
+    }
+
+    #[test]
+    fn test_extract_client_ip_trusted_proxy_honors_xff() {
+        // Peer IP 127.0.0.1 is in trusted_proxies (127.0.0.0/8) → XFF honored.
+        let headers = make_headers_with_xff("203.0.113.5");
+        let connect_info: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let trusted_proxies = vec!["127.0.0.0/8".to_string()];
+
+        let ip = extract_client_ip(&headers, Some(connect_info), &trusted_proxies);
+        assert_eq!(
+            ip,
+            Some("203.0.113.5".parse::<IpAddr>().unwrap()),
+            "XFF should be honored when peer IP is in trusted_proxies"
+        );
+    }
+
+    #[test]
+    fn test_extract_client_ip_untrusted_proxy_ignores_xff() {
+        // Peer IP 8.8.8.8 is NOT in trusted_proxies (only 10.0.0.0/8) → XFF ignored,
+        // fall back to peer IP.
+        let headers = make_headers_with_xff("203.0.113.5");
+        let connect_info: SocketAddr = "8.8.8.8:8080".parse().unwrap();
+        let trusted_proxies = vec!["10.0.0.0/8".to_string()];
+
+        let ip = extract_client_ip(&headers, Some(connect_info), &trusted_proxies);
+        assert_eq!(
+            ip,
+            Some("8.8.8.8".parse::<IpAddr>().unwrap()),
+            "XFF must be ignored when peer IP is outside trusted_proxies; fall back to peer IP"
+        );
+    }
+
+    #[test]
+    fn test_extract_client_ip_empty_trusted_proxies_honors_xff_backward_compat() {
+        // Empty trusted_proxies → legacy behavior: XFF honored unconditionally,
+        // regardless of peer IP. Backward compat with v0.3.0–v0.3.2 configs.
+        let headers = make_headers_with_xff("203.0.113.5");
+        let connect_info: SocketAddr = "8.8.8.8:8080".parse().unwrap();
+        let trusted_proxies: Vec<String> = vec![];
+
+        let ip = extract_client_ip(&headers, Some(connect_info), &trusted_proxies);
+        assert_eq!(
+            ip,
+            Some("203.0.113.5".parse::<IpAddr>().unwrap()),
+            "XFF should be honored unconditionally when trusted_proxies is empty (legacy mode)"
+        );
+    }
+
+    #[test]
+    fn test_extract_client_ip_no_xff_falls_back_to_connect_info() {
+        // No XFF header present → fall back to ConnectInfo peer IP.
+        let headers = HeaderMap::new();
+        let connect_info: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let trusted_proxies = vec!["127.0.0.0/8".to_string()];
+
+        let ip = extract_client_ip(&headers, Some(connect_info), &trusted_proxies);
+        assert_eq!(
+            ip,
+            Some("127.0.0.1".parse::<IpAddr>().unwrap()),
+            "Missing XFF should fall back to ConnectInfo peer IP"
+        );
+    }
+
+    #[test]
+    fn test_extract_client_ip_no_connect_info_ignores_xff_when_trusted_proxies_set() {
+        // trusted_proxies set but no ConnectInfo available → cannot verify peer is
+        // trusted, so XFF must be ignored. Returns None.
+        let headers = make_headers_with_xff("203.0.113.5");
+        let trusted_proxies = vec!["127.0.0.0/8".to_string()];
+
+        let ip = extract_client_ip(&headers, None, &trusted_proxies);
+        assert_eq!(
+            ip, None,
+            "XFF must be ignored when ConnectInfo is unavailable and trusted_proxies is set"
+        );
+    }
+
+    #[test]
+    fn test_extract_client_ip_ipv6_trusted_proxy_honors_xff() {
+        // IPv6 trusted proxy: peer [::1] in ::1/128 → XFF honored.
+        let headers = make_headers_with_xff("2001:db8::1");
+        let connect_info: SocketAddr = "[::1]:8080".parse().unwrap();
+        let trusted_proxies = vec!["::1/128".to_string()];
+
+        let ip = extract_client_ip(&headers, Some(connect_info), &trusted_proxies);
+        assert_eq!(
+            ip,
+            Some("2001:db8::1".parse::<IpAddr>().unwrap()),
+            "IPv6 XFF should be honored when IPv6 peer IP is in trusted_proxies"
+        );
+    }
+
+    #[test]
+    fn test_extract_client_ip_x_real_ip_honored_when_trusted() {
+        // X-Real-IP is used as fallback when X-Forwarded-For is absent.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("198.51.100.10"));
+        let connect_info: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let trusted_proxies = vec!["127.0.0.0/8".to_string()];
+
+        let ip = extract_client_ip(&headers, Some(connect_info), &trusted_proxies);
+        assert_eq!(
+            ip,
+            Some("198.51.100.10".parse::<IpAddr>().unwrap()),
+            "X-Real-IP should be honored when peer is trusted and XFF is absent"
+        );
     }
 }

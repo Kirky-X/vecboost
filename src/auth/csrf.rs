@@ -703,9 +703,18 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(feature = "redis"))]
     async fn test_csrf_token_store_with_redis_returns_none_without_feature() {
         // 未启用 redis feature 时,with_redis 应返回 None
         let result = CsrfTokenStore::with_redis("redis://localhost:6379", None, 3600).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "redis")]
+    async fn test_csrf_token_store_with_redis_returns_none_when_unreachable() {
+        // redis feature 启用但连接不可达时,with_redis 应返回 None
+        let result = CsrfTokenStore::with_redis("redis://localhost:1", None, 3600).await;
         assert!(result.is_none());
     }
 

@@ -70,7 +70,17 @@ pub struct VecboostState {
     /// `VecboostState` 并跨线程共享。包含 17 个 Module 的能力查询入口:
     /// - 4 现有:EmbeddingModule/AuthModule/RateLimitModule/AuditModule
     /// - 13 新增:覆盖原 14 字段剩余 13 个(详见 module_registry/mod.rs)
-    pub kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,
+    pub(crate) kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,
+}
+
+impl VecboostState {
+    pub fn new(kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>) -> Self {
+        Self { kit }
+    }
+
+    pub fn kit(&self) -> &Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>> {
+        &self.kit
+    }
 }
 
 #[cfg(feature = "http")]
@@ -160,6 +170,20 @@ impl FromRef<VecboostState> for Option<Arc<audit::AuditLogger>> {
             .kit
             .require::<module_registry::AuditModule>()
             .expect("AuditModule capability not registered in kit")
+    }
+}
+
+/// AuthConfig substate extractor — provides `trusted_proxies` and other auth
+/// configuration to middleware via axum's `FromRef` pattern. The config is
+/// injected via `kit.set_config(config.auth.clone())` in `main.rs` and
+/// retrieved through `kit.config::<AuthConfig>()` at request time.
+#[cfg(all(feature = "http", feature = "auth"))]
+impl FromRef<VecboostState> for config::app::AuthConfig {
+    fn from_ref(state: &VecboostState) -> Self {
+        state
+            .kit
+            .config::<config::app::AuthConfig>()
+            .unwrap_or_default()
     }
 }
 

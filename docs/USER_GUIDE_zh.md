@@ -199,18 +199,20 @@ max_sequence_length = 8192  # 每请求最大令牌数
 
 ---
 
-#### 缓存设置
+#### 缓存与文本长度设置
 
 ```toml
 [embedding]
 cache_enabled = true    # 启用缓存
 cache_size = 1024       # 最大缓存条目数
+max_text_length = 8192  # 单个文本最大字节长度
 ```
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `cache_enabled` | `true` | 是否启用缓存 |
 | `cache_size` | `1024` | 最大缓存条目数 |
+| `max_text_length` | `8192` | 单个文本最大字节长度（防止资源耗尽攻击） |
 
 ---
 
@@ -223,6 +225,7 @@ jwt_secret = "your-secure-secret-key-at-least-32-chars"
 token_expiration_hours = 1
 default_admin_username = "admin"
 default_admin_password = "Secure@Passw0rd!2026"
+trusted_proxies = []  # 受信任代理 CIDR 列表
 ```
 
 | 参数 | 默认值 | 说明 |
@@ -232,8 +235,9 @@ default_admin_password = "Secure@Passw0rd!2026"
 | `token_expiration_hours` | `1` | 令牌过期时间（小时） |
 | `default_admin_username` | `admin` | 默认管理员用户名 |
 | `default_admin_password` | - | 默认管理员密码 |
+| `trusted_proxies` | `[]` | 受信任代理 CIDR 列表（XFF 信任边界，空列表=无条件信任） |
 
-> **⚠️ 安全提示**: 生产环境中请修改默认管理员密码！
+> **⚠️ 安全提示**: 生产环境中请修改默认管理员密码！生产部署建议配置 `trusted_proxies` 为实际反代 CIDR，防止客户端伪造 X-Forwarded-For。
 
 ---
 

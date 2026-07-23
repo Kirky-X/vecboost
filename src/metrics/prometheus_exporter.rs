@@ -209,7 +209,7 @@ mod tests {
         let families = collector.registry().gather();
         let http_metric = families
             .iter()
-            .find(|m| m.get_name() == "http_requests_total")
+            .find(|m| m.name() == "http_requests_total")
             .expect("http_requests_total should be registered");
 
         let counters = http_metric.get_metric();
@@ -219,8 +219,8 @@ mod tests {
             .iter()
             .filter(|m| {
                 let labels = m.get_label();
-                labels.iter().any(|l| l.get_value() == "GET")
-                    && labels.iter().any(|l| l.get_value() == "200")
+                labels.iter().any(|l| l.value() == "GET")
+                    && labels.iter().any(|l| l.value() == "200")
             })
             .map(|m| m.get_counter().get_value())
             .sum();
@@ -236,7 +236,7 @@ mod tests {
         let families = collector.registry().gather();
         let duration_metric = families
             .iter()
-            .find(|m| m.get_name() == "http_request_duration_seconds")
+            .find(|m| m.name() == "http_request_duration_seconds")
             .expect("http_request_duration_seconds should be registered");
 
         let samples = duration_metric.get_metric();
@@ -256,7 +256,7 @@ mod tests {
         let families = collector.registry().gather();
         let gauge_metric = families
             .iter()
-            .find(|m| m.get_name() == "active_connections")
+            .find(|m| m.name() == "active_connections")
             .expect("active_connections should be registered");
 
         let gauges = gauge_metric.get_metric();
@@ -264,14 +264,14 @@ mod tests {
 
         let http_value: f64 = gauges
             .iter()
-            .filter(|m| m.get_label().iter().any(|l| l.get_value() == "http"))
+            .filter(|m| m.get_label().iter().any(|l| l.value() == "http"))
             .map(|m| m.get_gauge().get_value())
             .sum();
         assert_eq!(http_value, 42.0, "http connections gauge should be 42");
 
         let grpc_value: f64 = gauges
             .iter()
-            .filter(|m| m.get_label().iter().any(|l| l.get_value() == "grpc"))
+            .filter(|m| m.get_label().iter().any(|l| l.value() == "grpc"))
             .map(|m| m.get_gauge().get_value())
             .sum();
         assert_eq!(grpc_value, 7.0, "grpc connections gauge should be 7");
@@ -286,7 +286,7 @@ mod tests {
         let families = collector.registry().gather();
         let gauge_metric = families
             .iter()
-            .find(|m| m.get_name() == "active_connections")
+            .find(|m| m.name() == "active_connections")
             .unwrap();
         let gauge = &gauge_metric.get_metric()[0];
         assert_eq!(
@@ -306,7 +306,7 @@ mod tests {
         let families = collector.registry().gather();
         let batch_metric = families
             .iter()
-            .find(|m| m.get_name() == "batch_size")
+            .find(|m| m.name() == "batch_size")
             .expect("batch_size should be registered");
 
         let histograms = batch_metric.get_metric();
@@ -314,7 +314,7 @@ mod tests {
 
         let embed_count: u64 = histograms
             .iter()
-            .filter(|m| m.get_label().iter().any(|l| l.get_value() == "embed"))
+            .filter(|m| m.get_label().iter().any(|l| l.value() == "embed"))
             .map(|m| m.get_histogram().get_sample_count())
             .sum();
         assert_eq!(embed_count, 2, "embed operation should have 2 observations");
@@ -331,24 +331,24 @@ mod tests {
 
         let hits_metric = families
             .iter()
-            .find(|m| m.get_name() == "cache_hits_total")
+            .find(|m| m.name() == "cache_hits_total")
             .expect("cache_hits_total should be registered");
         let hits_value: f64 = hits_metric
             .get_metric()
             .iter()
-            .filter(|m| m.get_label().iter().any(|l| l.get_value() == "embedding"))
+            .filter(|m| m.get_label().iter().any(|l| l.value() == "embedding"))
             .map(|m| m.get_counter().get_value())
             .sum();
         assert_eq!(hits_value, 2.0, "should have 2 cache hits");
 
         let misses_metric = families
             .iter()
-            .find(|m| m.get_name() == "cache_misses_total")
+            .find(|m| m.name() == "cache_misses_total")
             .expect("cache_misses_total should be registered");
         let misses_value: f64 = misses_metric
             .get_metric()
             .iter()
-            .filter(|m| m.get_label().iter().any(|l| l.get_value() == "embedding"))
+            .filter(|m| m.get_label().iter().any(|l| l.value() == "embedding"))
             .map(|m| m.get_counter().get_value())
             .sum();
         assert_eq!(misses_value, 1.0, "should have 1 cache miss");

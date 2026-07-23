@@ -9,8 +9,8 @@ use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
 use crate::error::VecboostError;
 use crate::monitor::MemoryMonitor;
 use crate::utils::hash::verify_sha256;
+use crate::utils::hf_hub::build_hf_repo;
 use async_trait::async_trait;
-use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use ndarray::{Array1, Array2};
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Tensor;
@@ -91,22 +91,21 @@ impl OnnxEngine {
             (onnx_filename, tokenizer_filename)
         } else {
             log::info!("Using HuggingFace Hub for model: {:?}", model_path);
-            let api = ApiBuilder::from_env()
-                .build()
-                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-            let repo = api.repo(Repo::new(
-                model_path.to_string_lossy().into_owned(),
-                RepoType::Model,
-            ));
+            let repo_id = model_path.to_string_lossy().into_owned();
+            let repo = build_hf_repo(&repo_id)?;
 
             log::info!("Downloading/Loading ONNX model files...");
             let onnx_filename = repo
-                .get("model.onnx")
-                .or_else(|_| repo.get("model_quantized.onnx"))
+                .download_file()
+                .filename("model.onnx")
+                .send()
+                .or_else(|_| repo.download_file().filename("model_quantized.onnx").send())
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
             let tokenizer_filename = repo
-                .get("tokenizer.json")
+                .download_file()
+                .filename("tokenizer.json")
+                .send()
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
             (onnx_filename, tokenizer_filename)
         };
@@ -429,17 +428,14 @@ impl OnnxEngine {
         self.supports_cuda = false;
         self.fallback_triggered = true;
 
-        let api = ApiBuilder::from_env()
-            .build()
-            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-        let repo = api.repo(Repo::new(
-            config.model_path.to_string_lossy().into_owned(),
-            RepoType::Model,
-        ));
+        let repo_id = config.model_path.to_string_lossy().into_owned();
+        let repo = build_hf_repo(&repo_id)?;
 
         let onnx_filename = repo
-            .get("model.onnx")
-            .or_else(|_| repo.get("model_quantized.onnx"))
+            .download_file()
+            .filename("model.onnx")
+            .send()
+            .or_else(|_| repo.download_file().filename("model_quantized.onnx").send())
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
         let num_threads = std::thread::available_parallelism()

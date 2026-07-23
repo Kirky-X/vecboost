@@ -18,6 +18,7 @@ pub mod init;
 #[cfg(test)]
 mod tests;
 
+pub use embedding::{compute_similarity, embed, embed_batch};
 pub use init::{init_state, state};
 
 #[cfg(all(test, feature = "mcp"))]

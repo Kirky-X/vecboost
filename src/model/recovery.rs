@@ -5,7 +5,7 @@
 
 use crate::error::VecboostError;
 use crate::utils::hash::{ModelIntegrityReport, check_model_integrity};
-use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
+use crate::utils::hf_hub::build_hf_repo;
 use log::{error, info, warn};
 use std::collections::HashMap;
 use std::fs;
@@ -167,13 +167,8 @@ impl ModelRecovery {
                 return Ok(false);
             }
         } else {
-            let api = ApiBuilder::from_env()
-                .build()
-                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-            let repo = api.repo(Repo::new(
-                model_path.to_string_lossy().into_owned(),
-                RepoType::Model,
-            ));
+            let repo_id = model_path.to_string_lossy().into_owned();
+            let repo = build_hf_repo(&repo_id)?;
 
             let file_path = model_path.join(file_name);
 
@@ -181,7 +176,7 @@ impl ModelRecovery {
                 *attempts += 1;
                 info!("Recovery attempt {} for file: {}", attempt, file_name);
 
-                match repo.get(file_name) {
+                match repo.download_file().filename(file_name).send() {
                     Ok(downloaded_path) => {
                         if downloaded_path != file_path {
                             fs::copy(&downloaded_path, &file_path).map_err(|e| {
@@ -219,10 +214,7 @@ impl ModelRecovery {
         file_name: &str,
         attempts: &mut usize,
     ) -> Result<bool, VecboostError> {
-        let api = ApiBuilder::from_env()
-            .build()
-            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-        let repo = api.repo(Repo::new(repo_id.to_string(), RepoType::Model));
+        let repo = build_hf_repo(repo_id)?;
 
         let file_path = model_path.join(file_name);
 
@@ -230,7 +222,7 @@ impl ModelRecovery {
             *attempts += 1;
             info!("Download attempt {} for file: {}", attempt, file_name);
 
-            match repo.get(file_name) {
+            match repo.download_file().filename(file_name).send() {
                 Ok(downloaded_path) => {
                     if downloaded_path != file_path {
                         fs::copy(&downloaded_path, &file_path).map_err(|e| {

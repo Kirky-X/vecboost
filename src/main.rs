@@ -225,7 +225,7 @@ async fn main() -> anyhow::Result<()> {
                         anyhow::anyhow!("No handler registered for CLI command: {}", name)
                     })?;
 
-                (handler.handler)(args_map)
+                (handler.handler)(args_map, None)
                     .await
                     .map_err(|e| anyhow::anyhow!("CLI command '{}' failed: {:?}", name, e))?;
                 return Ok(());

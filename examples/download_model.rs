@@ -135,6 +135,16 @@ async fn main() {
 }
 
 async fn download_model(model_id: &str, files: &[&str]) {
+    // vuln-0009 加固：校验 model_id 格式，防止路径遍历/恶意 repo ID 注入
+    if !vecboost::utils::hf_hub::is_valid_hf_repo_id(model_id) {
+        eprintln!(
+            "错误: 无效的 HuggingFace 模型 ID '{}': 必须符合 '组织/模型名' 格式，",
+            model_id
+        );
+        eprintln!("仅允许字母、数字、'-'、'_'、'.' 字符，禁止 '..'、'//'、开头/结尾的 '/'");
+        return;
+    }
+
     println!();
     println!("目标目录: models/{}", model_id.replace('/', "-"));
     println!();
@@ -148,19 +158,15 @@ async fn download_model(model_id: &str, files: &[&str]) {
 
     println!("开始下载模型文件...\n");
 
-    let api = hf_hub::api::sync::ApiBuilder::from_env()
-        .build()
-        .expect("Failed to create HF API");
-    let repo = api.repo(hf_hub::Repo::new(
-        model_id.to_string(),
-        hf_hub::RepoType::Model,
-    ));
+    let api = hf_hub::HFClientSync::new().expect("Failed to create HF API");
+    let (owner, name) = hf_hub::split_id(model_id);
+    let repo = api.model(owner, name);
 
     let mut success_count = 0;
     let mut total_size: u64 = 0;
 
     for file in files {
-        match repo.get(file) {
+        match repo.download_file().filename(*file).send() {
             Ok(path) => {
                 let path_ref: &std::path::Path = path.as_ref();
                 let size = std::fs::metadata(path_ref).map(|m| m.len()).unwrap_or(0);

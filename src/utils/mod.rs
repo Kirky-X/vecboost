@@ -5,6 +5,7 @@
 
 pub mod constants;
 pub mod hash;
+pub mod hf_hub;
 pub mod resilience;
 pub mod validator;
 pub mod vector;

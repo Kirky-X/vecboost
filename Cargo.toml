@@ -55,14 +55,13 @@ limiteron = { version = "0.2", default-features = false }
 # dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
 # Direct sea-orm dependency is still required for those types.
 dbnexus = { version = "0.4", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache"] }
-# RC 版本保留完整 semver:sea-orm 2.0 尚无稳定 release
-sea-orm = { version = "2.0.0-rc.42", optional = true, default-features = false }
+sea-orm = { version = "2.0.0", optional = true, default-features = false }
 
 # AI & Math (base)
 candle-core = { version = "0.11", default-features = false, features = [] }
 candle-nn = { version = "0.11", default-features = false }
 candle-transformers = { version = "0.11", default-features = false }
-hf-hub = { version = "0.4", default-features = false, features = ["tokio", "ureq"] }
+hf-hub = { version = "1.0", default-features = false, features = ["blocking", "rustls-tls"] }
 
 # Web Framework (http feature)
 axum = { version = "0.8", optional = true, default-features = false, features = ["http1", "json", "tokio", "tracing", "macros", "matched-path", "original-uri", "query"] }
@@ -75,8 +74,8 @@ utoipa-swagger-ui = { version = "9.0", optional = true, default-features = false
 uuid = { version = "1.23", optional = true, default-features = false, features = ["v4", "serde"] }
 
 # Monitoring (http feature)
-prometheus = { version = "0.13", optional = true, default-features = false, features = ["process"] }
-axum-prometheus = { version = "0.7", optional = true, default-features = false }
+prometheus = { version = "0.14", optional = true, default-features = false, features = ["process"] }
+axum-prometheus = { version = "0.10", optional = true, default-features = false }
 
 # HTTP client (http feature)
 reqwest = { version = "0.13", optional = true, default-features = false, features = ["stream", "charset", "http2", "default-tls"] }
@@ -104,7 +103,7 @@ ort = { version = "2.0.0-rc.12", optional = true, default-features = false }
 # 注意:项目代码不直接使用 cudarc,无需在此声明
 
 # Multi-protocol SDK framework (sdforge - 通过 http/cli/mcp feature 启用,禁止手写接口)
-sdforge = { version = "0.4", optional = true, default-features = false }
+sdforge = { version = "0.4.6", optional = true, default-features = false }
 
 # CLI argument parsing (cli feature)
 clap = { version = "4.6", optional = true, default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }

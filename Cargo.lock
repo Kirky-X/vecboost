@@ -6781,7 +6781,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vecboost"
-version = "0.3.0"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -6841,7 +6841,7 @@ dependencies = [
 
 [[package]]
 name = "vecboost-examples"
-version = "0.3.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "candle-core",

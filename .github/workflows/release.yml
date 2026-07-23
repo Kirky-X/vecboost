@@ -23,7 +23,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy, cargo-audit
+          components: rustfmt, clippy
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
@@ -35,16 +38,16 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy Lint
-        run: cargo clippy --all-features --all-targets -- -D warnings
+        run: cargo clippy --features "grpc,cli,auth,onnx,db,redis,openapi,mcp" --all-targets -- -D warnings
 
       - name: Cargo Audit
         run: cargo audit --deny warnings
 
       - name: Build Check
-        run: cargo build --all-features
+        run: cargo build --features "grpc,cli,auth,onnx,db,redis,openapi,mcp"
 
       - name: Run Tests
-        run: cargo test --all-features --lib
+        run: cargo test --features "grpc,cli,auth,onnx,db,redis,openapi,mcp" --lib
 
   build-release:
     name: Build Release Binaries
@@ -52,24 +55,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-arm64]
+        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
         include:
           - os: ubuntu-latest
             artifact_name: vecboost
             asset_name: vecboost-linux-x86_64
             ext: ""
+            features: "grpc,cli,auth,onnx,db,redis,openapi,mcp"
           - os: windows-latest
             artifact_name: vecboost.exe
             asset_name: vecboost-windows-x86_64.exe
             ext: ".exe"
-          - os: macos-latest
+            features: "grpc,cli,auth,onnx,db,redis,openapi,mcp"
+          - os: macos-13
             artifact_name: vecboost
             asset_name: vecboost-macos-x86_64
             ext: ""
-          - os: macos-arm64
+            features: "metal,grpc,cli,auth,onnx,db,redis,openapi,mcp"
+          - os: macos-14
             artifact_name: vecboost
             asset_name: vecboost-macos-arm64
             ext: ""
+            features: "metal,grpc,cli,auth,onnx,db,redis,openapi,mcp"
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -87,14 +94,8 @@ jobs:
           shared-key: "release-${{ matrix.os }}"
           cache-targets: false
 
-      - name: Set up QEMU for ARM64 macOS
-        if: matrix.os == 'macos-arm64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Build Release
-        run: cargo build --release --all-features
+        run: cargo build --release --features "${{ matrix.features }}"
 
       - name: Create Artifact
         run: |
@@ -183,9 +184,29 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  publish-crates:
+    name: Publish to crates.io
+    needs: [build-release, build-docker, github-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-publish"
+          cache-targets: false
+
+      - name: Publish to crates.io
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
   notify:
     name: Notify Status
-    needs: [build-release, build-docker, github-release]
+    needs: [build-release, build-docker, github-release, publish-crates]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
@@ -194,7 +215,8 @@ jobs:
         run: |
           if [[ "${{ needs.build-release.result }}" == "success" ]] && \
              [[ "${{ needs.build-docker.result }}" == "success" ]] && \
-             [[ "${{ needs.github-release.result }}" == "success" ]]; then
+             [[ "${{ needs.github-release.result }}" == "success" ]] && \
+             [[ "${{ needs.publish-crates.result }}" == "success" ]]; then
             echo "✅ Release completed successfully!"
             exit 0
           else

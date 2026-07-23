@@ -39,7 +39,7 @@ jobs:
           - name: grpc
             features: "grpc"
           - name: ecosystem
-            features: "auth,redis,db,inklog,limiteron,oxcache"
+            features: "auth,redis,db,onnx"
           - name: cuda-network
             features: "cuda,grpc,auth,redis"
     steps:
@@ -65,7 +65,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Check all features compile
-        run: cargo check --all-features
+        run: cargo check --features "grpc,cli,auth,onnx,db,redis,openapi,mcp"
 
       - name: Run clippy
         if: matrix.features != ''

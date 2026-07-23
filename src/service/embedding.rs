@@ -566,7 +566,11 @@ impl EmbeddingService {
             let mut embedding = self.engine.read().await.embed(para)?;
             normalize_l2(&mut embedding);
 
-            let preview = if para.len() > 100 { &para[..100] } else { para };
+            let preview = if para.len() > 100 {
+                &para[..para.floor_char_boundary(100)]
+            } else {
+                para
+            };
 
             paragraph_embeddings.push(ParagraphEmbedding {
                 embedding,
@@ -830,8 +834,12 @@ impl EmbeddingService {
 
                                 let global_idx = chunk_idx * optimal_batch_size + text_idx;
 
-                                let text_preview =
-                                    if text.len() > 100 { &text[..100] } else { text }.to_string();
+                                let text_preview = if text.len() > 100 {
+                                    &text[..text.floor_char_boundary(100)]
+                                } else {
+                                    text
+                                }
+                                .to_string();
 
                                 results.push((global_idx, emb, text_preview));
                             }

@@ -44,7 +44,7 @@ jobs:
         run: cargo clippy --features "grpc,cli,auth,onnx,db,redis,openapi,mcp" --all-targets -- -D warnings
 
       - name: Cargo Audit
-        run: cargo audit --deny vulnerabilities
+        run: cargo audit
 
       - name: Build Check
         run: cargo build --features "grpc,cli,auth,onnx,db,redis,openapi,mcp"

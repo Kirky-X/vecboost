@@ -51,10 +51,14 @@ impl SecretKey {
         if self.value.len() <= 8 {
             "*".repeat(self.value.len())
         } else {
+            // UTF-8 safe slicing: floor/ceil to char boundary to avoid panic
+            // when the 4-byte boundary falls inside a multi-byte character.
+            let prefix_end = self.value.floor_char_boundary(4);
+            let suffix_start = self.value.ceil_char_boundary(self.value.len() - 4);
             format!(
                 "{}***{}",
-                &self.value[..4],
-                &self.value[self.value.len() - 4..]
+                &self.value[..prefix_end],
+                &self.value[suffix_start..]
             )
         }
     }
@@ -231,6 +235,15 @@ mod tests {
         // 9 chars: first 4 + *** + last 4
         let masked = key.mask_value();
         assert_eq!(masked, "1234***6789");
+    }
+
+    #[test]
+    fn test_mask_value_multibyte_no_panic() {
+        // CJK value: 4-byte boundary falls inside 2nd char (each CJK = 3 bytes).
+        // Without floor/ceil_char_boundary this would panic.
+        let key = SecretKey::new(KeyType::ApiKey, "test", "密钥secretvalue123");
+        let masked = key.mask_value();
+        assert!(masked.contains("***"));
     }
 
     #[test]

@@ -8,6 +8,9 @@
 /// Sanitize a string by masking sensitive content.
 /// Replaces the middle portion of the string with asterisks, showing only first and last 2 characters.
 ///
+/// Uses `floor_char_boundary`/`ceil_char_boundary` to guarantee UTF-8 safe slicing
+/// even when the 2-byte boundary falls inside a multi-byte character (e.g. CJK).
+///
 /// # Examples
 /// ```
 /// use vecboost::security::sanitize_secret;
@@ -20,8 +23,10 @@ pub fn sanitize_secret(s: &str) -> String {
     if s.len() <= 4 {
         "*".repeat(s.len())
     } else {
-        let (first, rest) = s.split_at(2);
-        let (middle, last) = rest.split_at(rest.len().saturating_sub(2));
+        let first_end = s.floor_char_boundary(2);
+        let (first, rest) = s.split_at(first_end);
+        let last_start = rest.ceil_char_boundary(rest.len().saturating_sub(2));
+        let (middle, last) = rest.split_at(last_start);
         format!("{}{}{}", first, "*".repeat(middle.len()), last)
     }
 }
@@ -32,8 +37,10 @@ pub fn sanitize_password(s: &str) -> String {
 }
 
 /// Sanitize a JWT secret - shows only prefix and length.
+///
+/// Uses `floor_char_boundary` to guarantee UTF-8 safe prefix slicing.
 pub fn sanitize_jwt_secret(s: &str) -> String {
-    format!("{}... [{} chars]", &s[..8], s.len())
+    format!("{}... [{} chars]", &s[..s.floor_char_boundary(8)], s.len())
 }
 
 /// Sanitize an API key - shows only first 8 characters.
@@ -95,6 +102,23 @@ mod tests {
         let sanitized = sanitize_jwt_secret(jwt);
         assert!(sanitized.starts_with("eyJhbGci..."));
         assert!(sanitized.contains("[36 chars]"));
+    }
+
+    #[test]
+    fn test_sanitize_secret_multibyte_no_panic() {
+        // CJK: each char is 3 bytes; the 2-byte boundary falls inside the
+        // first char, which would panic without floor_char_boundary.
+        let secret = "密钥内容不能泄露abcdefgh";
+        let sanitized = sanitize_secret(secret);
+        assert!(sanitized.contains('*'));
+    }
+
+    #[test]
+    fn test_sanitize_jwt_secret_multibyte_no_panic() {
+        // 8-byte boundary falls inside the 3rd CJK char (each 3 bytes)
+        let jwt = "密钥secretjwt1234567890";
+        let sanitized = sanitize_jwt_secret(jwt);
+        assert!(sanitized.contains(&format!("[{} chars]", jwt.len())));
     }
 
     #[test]

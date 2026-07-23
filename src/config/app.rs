@@ -209,30 +209,12 @@ impl Default for DatabaseConfig {
 pub struct MemoryPoolConfig {
     /// 是否启用内存池
     pub enabled: bool,
-    /// Tensor 池配置
-    pub tensor_pool: TensorPoolConfig,
     /// 缓冲区池配置
     pub buffer_pool: BufferPoolConfig,
     /// 模型权重池配置
     pub model_pool: ModelPoolConfig,
     /// CUDA 池配置
     pub cuda_pool: CudaPoolConfig,
-}
-
-/// Tensor 池配置
-#[derive(Debug, Deserialize, Clone, Serialize)]
-#[serde(default)]
-pub struct TensorPoolConfig {
-    /// 是否启用
-    pub enabled: bool,
-    /// 最大批量大小
-    pub max_batch_size: usize,
-    /// 最大序列长度
-    pub max_sequence_length: usize,
-    /// 每种形状的池大小
-    pub pool_size_per_shape: usize,
-    /// 启动时预分配
-    pub preallocate_on_startup: bool,
 }
 
 /// 缓冲区池配置
@@ -287,22 +269,9 @@ impl Default for MemoryPoolConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            tensor_pool: TensorPoolConfig::default(),
             buffer_pool: BufferPoolConfig::default(),
             model_pool: ModelPoolConfig::default(),
             cuda_pool: CudaPoolConfig::default(),
-        }
-    }
-}
-
-impl Default for TensorPoolConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            max_batch_size: 128,
-            max_sequence_length: 8192,
-            pool_size_per_shape: 4,
-            preallocate_on_startup: true,
         }
     }
 }
@@ -609,12 +578,9 @@ mod tests {
     fn test_memory_pool_config_default() {
         let config = MemoryPoolConfig::default();
         assert!(config.enabled);
-        assert!(config.tensor_pool.enabled);
         assert!(config.buffer_pool.enabled);
         assert!(config.model_pool.enabled);
         assert!(config.cuda_pool.enabled);
-        assert_eq!(config.tensor_pool.max_batch_size, 128);
-        assert_eq!(config.tensor_pool.max_sequence_length, 8192);
         assert_eq!(config.model_pool.max_memory_mb, 8192);
         assert_eq!(config.cuda_pool.max_memory_mb, 4096);
     }
@@ -680,16 +646,6 @@ mod tests {
         let err = ConfigError::Io(io_err);
         assert!(format!("{}", err).contains("IO error"));
         assert!(format!("{}", err).contains("missing file"));
-    }
-
-    #[test]
-    fn test_tensor_pool_config_default() {
-        let config = TensorPoolConfig::default();
-        assert!(config.enabled);
-        assert_eq!(config.max_batch_size, 128);
-        assert_eq!(config.max_sequence_length, 8192);
-        assert_eq!(config.pool_size_per_shape, 4);
-        assert!(config.preallocate_on_startup);
     }
 
     #[test]
@@ -1058,19 +1014,10 @@ mod tests {
     fn test_memory_pool_config_custom_values() {
         let config = MemoryPoolConfig {
             enabled: false,
-            tensor_pool: TensorPoolConfig {
-                enabled: false,
-                max_batch_size: 64,
-                max_sequence_length: 4096,
-                pool_size_per_shape: 2,
-                preallocate_on_startup: false,
-            },
             buffer_pool: BufferPoolConfig::default(),
             model_pool: ModelPoolConfig::default(),
             cuda_pool: CudaPoolConfig::default(),
         };
         assert!(!config.enabled);
-        assert!(!config.tensor_pool.enabled);
-        assert_eq!(config.tensor_pool.max_batch_size, 64);
     }
 }

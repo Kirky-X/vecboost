@@ -5,33 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// GPU 张量池配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TensorPoolConfig {
-    /// 是否启用
-    pub enabled: bool,
-    /// 最大批量大小
-    pub max_batch_size: usize,
-    /// 最大序列长度
-    pub max_sequence_length: usize,
-    /// 每种形状的池大小
-    pub pool_size_per_shape: usize,
-    /// 启动时预分配
-    pub preallocate_on_startup: bool,
-}
-
-impl Default for TensorPoolConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            max_batch_size: 128,
-            max_sequence_length: 8192,
-            pool_size_per_shape: 4,
-            preallocate_on_startup: true,
-        }
-    }
-}
-
 /// CPU 缓冲区池配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BufferPoolConfig {
@@ -98,8 +71,6 @@ impl Default for CudaPoolConfig {
 /// 内存池统一配置
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MemoryPoolConfig {
-    /// GPU 张量池配置
-    pub tensor_pool: TensorPoolConfig,
     /// CPU 缓冲区池配置
     pub buffer_pool: BufferPoolConfig,
     /// 模型权重内存池配置

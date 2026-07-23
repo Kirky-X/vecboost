@@ -19,7 +19,7 @@ pub(crate) use batch_scheduler::{
 };
 pub(crate) use manager::{DeviceInfo, DeviceStatus};
 pub(crate) use memory_pool::{
-    BufferPool, CudaMemoryPool, MemoryPoolConfig, MemoryPoolManager, ModelWeightPool, TensorPool,
+    BufferPool, CudaMemoryPool, MemoryPoolConfig, MemoryPoolManager, ModelWeightPool,
 };
 
 use crate::config::model::DeviceType as ConfigDeviceType;

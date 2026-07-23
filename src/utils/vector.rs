@@ -143,6 +143,9 @@ pub fn normalize_l2(v: &mut [f32]) {
 
 /// Truncate a vector to the specified dimension.
 /// Returns original vector if target >= original or target == 0.
+///
+/// 注意：Matryoshka 场景下截断会破坏单位向量语义（子向量范数 < 原范数），
+/// 调用方必须在截断后调用 [`normalize_l2`] 重新归一化，以保证余弦相似度正确。
 pub fn truncate_vector(vector: &[f32], target_dimension: usize) -> Vec<f32> {
     if target_dimension == 0 || target_dimension >= vector.len() {
         vector.to_vec()

@@ -355,6 +355,8 @@ impl EmbeddingService {
             validate_dimension(Some(target_dim), max_dim)
                 .map_err(|e| VecboostError::InvalidInput(e))?;
             embedding = truncate_vector(&embedding, target_dim);
+            // Matryoshka 截断破坏单位向量语义，必须重归一化以保证余弦相似度正确
+            normalize_l2(&mut embedding);
         }
 
         let dimension = embedding.len();
@@ -932,7 +934,10 @@ impl EmbeddingService {
             .into_iter()
             .map(|(_, embedding, preview)| {
                 let embedding = if let Some(dim) = effective_dimension {
-                    truncate_vector(&embedding, dim)
+                    let mut truncated = truncate_vector(&embedding, dim);
+                    // Matryoshka 截断破坏单位向量语义，必须重归一化以保证余弦相似度正确
+                    normalize_l2(&mut truncated);
+                    truncated
                 } else {
                     embedding
                 };
@@ -2076,11 +2081,11 @@ mod tests {
         let resp = result.unwrap();
         assert_eq!(resp.dimension, 128);
         assert_eq!(resp.embedding.len(), 128);
-        // 先归一化(norm=1)再截断,截断后子集的 norm <= 1
+        // Matryoshka 截断后必须重归一化，保证余弦相似度正确
         let norm: f32 = resp.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!(
-            norm <= 1.0 + 1e-5,
-            "truncated norm should be <= 1, got {}",
+            (norm - 1.0).abs() < 1e-5,
+            "truncated norm should be 1.0 (renormalized), got {}",
             norm
         );
     }
@@ -2681,6 +2686,13 @@ mod tests {
         assert_eq!(response.dimension, 128);
         for emb in &response.embeddings {
             assert_eq!(emb.embedding.len(), 128);
+            // Matryoshka 截断后必须重归一化，保证余弦相似度正确
+            let norm: f32 = emb.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!(
+                (norm - 1.0).abs() < 1e-5,
+                "batch truncated norm should be 1.0 (renormalized), got {}",
+                norm
+            );
         }
     }
 

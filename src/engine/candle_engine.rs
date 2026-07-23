@@ -74,19 +74,17 @@ pub struct CandleEngine {
     device_type: DeviceType,
     model_architecture: ModelArchitecture,
     use_quantization: bool, // 是否使用 INT8 量化
-    tensor_pool: Option<Arc<tokio::sync::RwLock<crate::device::memory_pool::TensorPool>>>, // GPU 张量池
 }
 
 impl CandleEngine {
     pub fn new(config: &ModelConfig, precision: Precision) -> Result<Self, VecboostError> {
-        Self::with_device(config, precision, config.device.clone(), None)
+        Self::with_device(config, precision, config.device.clone())
     }
 
     pub fn with_device(
         config: &ModelConfig,
         precision: Precision,
         device_type: DeviceType,
-        tensor_pool: Option<Arc<tokio::sync::RwLock<crate::device::memory_pool::TensorPool>>>,
     ) -> Result<Self, VecboostError> {
         let device = if device_type == DeviceType::Cuda && candle_core::utils::cuda_is_available() {
             log::info!("Using CUDA GPU");
@@ -478,7 +476,6 @@ impl CandleEngine {
             device_type,
             model_architecture,
             use_quantization,
-            tensor_pool,
         })
     }
 
@@ -739,37 +736,12 @@ impl CandleEngine {
             }
         }
 
-        // 尝试从内存池获取 token_ids 张量
-        let token_ids = if let Some(ref pool) = self.tensor_pool {
-            let mut pool = pool.write().await;
-            match pool.acquire(batch_size, max_seq_len) {
-                Ok(_tensor) => {
-                    // 从池中获取的张量需要填充数据
-                    // 由于 Candle Tensor 不可变，我们需要创建新的张量
-                    // 释放获取的张量回池
-                    pool.release(_tensor, batch_size, max_seq_len);
-
-                    // 创建新的张量并填充数据
-                    Tensor::new(batch_ids, &self.device)
-                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                        .reshape(&[batch_size, max_seq_len])
-                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                }
-                Err(_) => {
-                    // 获取失败，回退到动态分配
-                    Tensor::new(batch_ids, &self.device)
-                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                        .reshape(&[batch_size, max_seq_len])
-                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                }
-            }
-        } else {
-            // 没有内存池，动态分配
-            Tensor::new(batch_ids, &self.device)
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                .reshape(&[batch_size, max_seq_len])
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-        };
+        // 直接动态分配 token_ids 张量
+        // （Candle Tensor 不可变，张量池取出后仍需重建，无实际收益）
+        let token_ids = Tensor::new(batch_ids, &self.device)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+            .reshape(&[batch_size, max_seq_len])
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
         // 构建 attention_mask 批量张量
         let mut batch_mask = vec![0i64; batch_size * max_seq_len];
@@ -780,33 +752,12 @@ impl CandleEngine {
             }
         }
 
-        // 尝试从内存池获取 attention_mask 张量
-        let attention_mask_tensor = if let Some(ref pool) = self.tensor_pool {
-            let mut pool = pool.write().await;
-            match pool.acquire(batch_size, max_seq_len) {
-                Ok(tensor) => {
-                    // 从池中获取的张量需要填充数据
-                    let tensor = tensor
-                        .reshape(&[batch_size, max_seq_len])
-                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-                    // TODO: 填充数据到张量
-                    tensor
-                }
-                Err(_) => {
-                    // 获取失败，回退到动态分配
-                    Tensor::new(batch_mask, &self.device)
-                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                        .reshape(&[batch_size, max_seq_len])
-                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                }
-            }
-        } else {
-            // 没有内存池，动态分配
-            Tensor::new(batch_mask, &self.device)
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                .reshape(&[batch_size, max_seq_len])
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-        };
+        // 直接动态分配 attention_mask 张量
+        // （原张量池路径有 TODO 未回填数据导致 mask 全零的 bug；Candle Tensor 不可变，池无实际收益）
+        let attention_mask_tensor = Tensor::new(batch_mask, &self.device)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+            .reshape(&[batch_size, max_seq_len])
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
         // 执行批量前向传播
         let embeddings = match (&self.model, &self.model_architecture) {
@@ -870,13 +821,6 @@ impl CandleEngine {
                 .to_vec1::<f32>()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
             results.push(vec);
-        }
-
-        // 释放张量回池
-        if let Some(ref pool) = self.tensor_pool {
-            let mut pool = pool.write().await;
-            pool.release(token_ids, batch_size, max_seq_len);
-            pool.release(attention_mask_tensor, batch_size, max_seq_len);
         }
 
         log::debug!(
@@ -1307,7 +1251,7 @@ mod tests {
         let mut config = test_config();
         config.model_path = temp_dir.path().to_path_buf();
 
-        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
         assert!(result.is_err());
         if let Err(VecboostError::ModelLoadError(msg)) = result {
             assert!(
@@ -1325,7 +1269,7 @@ mod tests {
         let mut config = test_config();
         config.model_path = temp_dir.path().to_path_buf();
 
-        let result = CandleEngine::with_device(&config, Precision::Fp16, DeviceType::Cpu, None);
+        let result = CandleEngine::with_device(&config, Precision::Fp16, DeviceType::Cpu);
         assert!(result.is_err());
     }
 
@@ -1336,7 +1280,7 @@ mod tests {
         let mut config = test_config();
         config.model_path = temp_dir.path().to_path_buf();
 
-        let result = CandleEngine::with_device(&config, Precision::Int8, DeviceType::Cpu, None);
+        let result = CandleEngine::with_device(&config, Precision::Int8, DeviceType::Cpu);
         assert!(result.is_err());
     }
 
@@ -1347,7 +1291,7 @@ mod tests {
         let mut config = test_config();
         config.model_path = temp_dir.path().to_path_buf();
 
-        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Amd, None);
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Amd);
         assert!(result.is_err());
         if let Err(e) = result {
             assert!(
@@ -1365,7 +1309,7 @@ mod tests {
         let mut config = test_config();
         config.model_path = temp_dir.path().to_path_buf();
 
-        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::OpenCL, None);
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::OpenCL);
         assert!(result.is_err());
     }
 
@@ -1379,7 +1323,7 @@ mod tests {
         let mut config = test_config();
         config.model_path = temp_dir.path().to_path_buf();
 
-        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
         assert!(result.is_err());
         if let Err(e) = result {
             let msg = e.to_string();
@@ -1406,7 +1350,7 @@ mod tests {
         let mut config = test_config();
         config.model_path = temp_dir.path().to_path_buf();
 
-        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
         assert!(result.is_err());
     }
 
@@ -1497,7 +1441,7 @@ mod tests {
         let mut config = test_config();
         config.model_path = model_path;
 
-        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
         assert!(result.is_err());
         if let Err(VecboostError::ModelLoadError(msg)) = result {
             assert!(
@@ -1520,7 +1464,7 @@ mod tests {
         let mut config = test_config();
         config.model_path = temp_dir.path().to_path_buf();
 
-        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
         assert!(result.is_err());
         if let Err(e) = result {
             assert!(
@@ -1543,7 +1487,7 @@ mod tests {
         let mut config = test_config();
         config.model_path = temp_dir.path().to_path_buf();
 
-        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
         assert!(result.is_err());
         if let Err(e) = result {
             assert!(
@@ -1566,7 +1510,7 @@ mod tests {
         let mut config = test_config();
         config.model_path = temp_dir.path().to_path_buf();
 
-        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
         assert!(result.is_err());
         if let Err(e) = result {
             assert!(
@@ -1586,7 +1530,7 @@ mod tests {
         config.model_path = temp_dir.path().to_path_buf();
         config.model_sha256 = Some("abc123".to_string());
 
-        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None);
+        let result = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
         assert!(result.is_err());
         if let Err(VecboostError::ModelLoadError(msg)) = result {
             assert!(
@@ -1870,14 +1814,14 @@ mod tests {
         }
     }
 
-    /// 验证 with_device 显式传入 Cpu 设备与 tensor_pool=None 时行为与 new() 一致
+    /// 验证 with_device 显式传入 Cpu 设备时行为与 new() 一致
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_real_model_with_device_cpu_no_pool() {
         if !require_real_model() {
             return;
         }
         let config = real_model_config();
-        let engine = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, None)
+        let engine = CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu)
             .expect("Failed to load real model via with_device");
 
         assert_eq!(engine.device_type(), DeviceType::Cpu);
@@ -1917,35 +1861,6 @@ mod tests {
                 "Expected PyTorch load error, got: {}",
                 msg
             );
-        }
-    }
-
-    /// 验证 TensorPool 在批量推理路径中被正确使用
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_real_model_batch_with_tensor_pool() {
-        if !require_real_model() {
-            return;
-        }
-        use crate::device::memory_pool::{TensorPool, TensorPoolConfig};
-        let pool = Arc::new(tokio::sync::RwLock::new(TensorPool::new(
-            candle_core::Device::Cpu,
-            TensorPoolConfig::default(),
-        )));
-        let config = real_model_config();
-        let engine =
-            CandleEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu, Some(pool))
-                .expect("Failed to load real model with tensor pool");
-        let texts: Vec<String> = vec!["hello world".to_string(), "batch pool test".to_string()];
-        let result = engine.embed_batch(&texts);
-        assert!(
-            result.is_ok(),
-            "embed_batch with tensor pool failed: {:?}",
-            result.err()
-        );
-        let embeddings = result.unwrap();
-        assert_eq!(embeddings.len(), 2);
-        for emb in &embeddings {
-            assert_eq!(emb.len(), 384);
         }
     }
 

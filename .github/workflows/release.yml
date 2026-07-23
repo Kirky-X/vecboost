@@ -149,7 +149,7 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [build-release, build-docker]
+    needs: [build-release]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -186,7 +186,7 @@ jobs:
 
   publish-crates:
     name: Publish to crates.io
-    needs: [build-release, build-docker, github-release]
+    needs: [github-release]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -213,11 +213,17 @@ jobs:
     steps:
       - name: Check status
         run: |
+          echo "build-release: ${{ needs.build-release.result }}"
+          echo "build-docker: ${{ needs.build-docker.result }}"
+          echo "github-release: ${{ needs.github-release.result }}"
+          echo "publish-crates: ${{ needs.publish-crates.result }}"
           if [[ "${{ needs.build-release.result }}" == "success" ]] && \
-             [[ "${{ needs.build-docker.result }}" == "success" ]] && \
              [[ "${{ needs.github-release.result }}" == "success" ]] && \
              [[ "${{ needs.publish-crates.result }}" == "success" ]]; then
             echo "✅ Release completed successfully!"
+            if [[ "${{ needs.build-docker.result }}" != "success" ]]; then
+              echo "⚠️  Docker image build failed (non-blocking)"
+            fi
             exit 0
           else
             echo "❌ Release failed!"

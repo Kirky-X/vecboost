@@ -16,9 +16,20 @@ use tokio::sync::RwLock;
 use vecboost::domain::{EmbedRequest, SearchRequest, SimilarityRequest};
 use vecboost::service::embedding::EmbeddingService;
 
-use crate::common::{RealTestEngine, create_test_engine, create_test_engine_with_dimension};
+use crate::common::{
+    DEFAULT_MOCK_DIMENSION, RealTestEngine, create_test_engine, create_test_engine_with_dimension,
+    get_test_model_config,
+};
 
-const MOCK_DIMENSION: usize = 1024;
+/// 根据当前测试模式动态获取期望维度。
+/// - Mock 模式：DEFAULT_MOCK_DIMENSION (1024)
+/// - Light 模式：384 (bge-small-en-v1.5)
+/// - Full 模式：1024 (bge-m3)
+fn expected_dimension() -> usize {
+    get_test_model_config()
+        .expected_dimension
+        .unwrap_or(DEFAULT_MOCK_DIMENSION)
+}
 
 #[tokio::test]
 async fn test_e2e_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,7 +48,7 @@ async fn test_e2e_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(
         result.embedding.len(),
-        MOCK_DIMENSION,
+        expected_dimension(),
         "Embedding dimension should be 1024"
     );
     assert!(
@@ -67,7 +78,7 @@ async fn test_e2e_chinese_embedding() -> Result<(), Box<dyn std::error::Error>> 
         )
         .await?;
 
-    assert_eq!(result.embedding.len(), MOCK_DIMENSION);
+    assert_eq!(result.embedding.len(), expected_dimension());
     assert!(result.embedding.iter().all(|&x| x.is_finite()));
 
     println!(
@@ -92,7 +103,7 @@ async fn test_e2e_mixed_text_embedding() -> Result<(), Box<dyn std::error::Error
         )
         .await?;
 
-    assert_eq!(result.embedding.len(), MOCK_DIMENSION);
+    assert_eq!(result.embedding.len(), expected_dimension());
     assert!(result.embedding.iter().all(|&x| x.is_finite()));
 
     println!("[PASS] Mixed text embedding test passed");
@@ -268,7 +279,7 @@ async fn test_file_streaming_processing() -> Result<(), Box<dyn std::error::Erro
 
     let result = service.process_file_stream(&file_path).await?;
 
-    assert_eq!(result.embedding.len(), MOCK_DIMENSION);
+    assert_eq!(result.embedding.len(), expected_dimension());
     assert!(result.embedding.iter().all(|&x| x.is_finite()));
 
     println!(
@@ -430,7 +441,7 @@ async fn test_long_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
 
-    assert_eq!(result.embedding.len(), MOCK_DIMENSION);
+    assert_eq!(result.embedding.len(), expected_dimension());
     assert!(result.embedding.iter().all(|&x| x.is_finite()));
 
     println!(

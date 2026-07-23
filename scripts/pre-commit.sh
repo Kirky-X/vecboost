@@ -217,7 +217,7 @@ cmd_run() {
 declare -a COMBINATIONS=(
     "default|"
     "grpc|grpc"
-    "ecosystem|auth,redis,db,inklog,limiteron,oxcache"
+    "ecosystem|auth,redis,db,onnx"
     "cuda-network|cuda,grpc,auth,redis"
 )
 

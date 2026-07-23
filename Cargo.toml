@@ -89,7 +89,7 @@ prost = { version = "0.14", optional = true, default-features = false, features 
 jsonwebtoken = { version = "10.0", optional = true, default-features = false, features = ["aws_lc_rs"] }
 # RC 版本保留完整 semver:argon2 0.6 尚无稳定 release
 argon2 = { version = "0.6.0-rc.8", optional = true, default-features = false, features = ["alloc", "password-hash", "getrandom"] }
-aes-gcm = { version = "0.10", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
+aes-gcm = { version = "0.11", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
 
 # Redis feature
 redis = { version = "1.0", optional = true, default-features = false, features = ["tokio-comp", "connection-manager"] }

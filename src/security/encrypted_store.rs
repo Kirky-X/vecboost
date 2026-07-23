@@ -8,7 +8,7 @@ use crate::security::key_store::{KeyStore, KeyType, SecretKey};
 use crate::security::salt::SaltStore;
 use aes_gcm::{
     Aes256Gcm, Nonce,
-    aead::{Aead, KeyInit},
+    aead::{Aead, KeyInit, consts::U12},
 };
 use argon2::Argon2;
 use async_trait::async_trait;
@@ -122,7 +122,9 @@ impl EncryptedFileKeyStore {
         for entry in &mut data.keys {
             let old_nonce_bytes = hex::decode(&entry.nonce)
                 .map_err(|e| VecboostError::security_error(format!("Invalid nonce: {}", e)))?;
-            let old_nonce = Nonce::from_slice(&old_nonce_bytes);
+            let old_nonce: &Nonce<U12> = old_nonce_bytes[..]
+                .try_into()
+                .map_err(|e| VecboostError::security_error(format!("Invalid nonce: {}", e)))?;
             let old_ct = hex::decode(&entry.encrypted_value)
                 .map_err(|e| VecboostError::security_error(format!("Invalid ciphertext: {}", e)))?;
             let plaintext = old_cipher
@@ -131,7 +133,7 @@ impl EncryptedFileKeyStore {
 
             let mut new_nonce_buf = [0u8; 12];
             rand::rng().fill_bytes(&mut new_nonce_buf);
-            let new_nonce = Nonce::clone_from_slice(&new_nonce_buf);
+            let new_nonce: Nonce<U12> = new_nonce_buf[..].try_into().expect("12-byte nonce buffer");
             let new_ct = new_cipher
                 .encrypt(&new_nonce, plaintext.as_ref())
                 .map_err(|e| VecboostError::security_error(format!("Encryption failed: {}", e)))?;
@@ -202,7 +204,9 @@ impl EncryptedFileKeyStore {
             .map_err(|e| VecboostError::security_error(format!("Invalid ciphertext: {}", e)))?;
 
         let cipher = Aes256Gcm::new((&key_bytes).into());
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce: &Nonce<U12> = nonce_bytes[..]
+            .try_into()
+            .map_err(|e| VecboostError::security_error(format!("Invalid nonce: {}", e)))?;
 
         let plaintext = cipher
             .decrypt(nonce, ciphertext_bytes.as_ref())
@@ -224,7 +228,7 @@ impl EncryptedFileKeyStore {
         let cipher = Aes256Gcm::new(self.encryption_key.as_ref().into());
         let mut nonce_buf = [0u8; 12];
         rand::rng().fill_bytes(&mut nonce_buf);
-        let nonce_bytes = Nonce::clone_from_slice(&nonce_buf);
+        let nonce_bytes: Nonce<U12> = nonce_buf[..].try_into().expect("12-byte nonce buffer");
         let ciphertext = cipher
             .encrypt(&nonce_bytes, json_str.as_bytes())
             .map_err(|e| VecboostError::security_error(format!("Encryption failed: {}", e)))?;
@@ -288,7 +292,9 @@ impl KeyStore for EncryptedFileKeyStore {
                 let cipher = Aes256Gcm::new(self.encryption_key.as_ref().into());
                 let nonce_bytes = hex::decode(&entry.nonce)
                     .map_err(|e| VecboostError::security_error(format!("Invalid nonce: {}", e)))?;
-                let nonce = Nonce::from_slice(&nonce_bytes);
+                let nonce: &Nonce<U12> = nonce_bytes[..]
+                    .try_into()
+                    .map_err(|e| VecboostError::security_error(format!("Invalid nonce: {}", e)))?;
 
                 let ciphertext = hex::decode(&entry.encrypted_value).map_err(|e| {
                     VecboostError::security_error(format!("Invalid ciphertext: {}", e))
@@ -313,7 +319,7 @@ impl KeyStore for EncryptedFileKeyStore {
         let cipher = Aes256Gcm::new(self.encryption_key.as_ref().into());
         let mut nonce_buf = [0u8; 12];
         rand::rng().fill_bytes(&mut nonce_buf);
-        let nonce_bytes = Nonce::clone_from_slice(&nonce_buf);
+        let nonce_bytes: Nonce<U12> = nonce_buf[..].try_into().expect("12-byte nonce buffer");
 
         let ciphertext = cipher
             .encrypt(&nonce_bytes, key.value.as_bytes())
@@ -761,7 +767,7 @@ mod tests {
         let cipher = Aes256Gcm::new((&key_bytes).into());
         let mut nonce_buf = [0u8; 12];
         rand::rng().fill_bytes(&mut nonce_buf);
-        let nonce_bytes = Nonce::clone_from_slice(&nonce_buf);
+        let nonce_bytes: Nonce<U12> = nonce_buf[..].try_into().expect("12-byte nonce buffer");
         let ciphertext = cipher
             .encrypt(&nonce_bytes, json_str.as_bytes())
             .expect("encrypt failed");
@@ -825,7 +831,7 @@ mod tests {
         let cipher = Aes256Gcm::new((&key_bytes).into());
         let mut nonce_buf = [0u8; 12];
         rand::rng().fill_bytes(&mut nonce_buf);
-        let nonce_bytes = Nonce::clone_from_slice(&nonce_buf);
+        let nonce_bytes: Nonce<U12> = nonce_buf[..].try_into().expect("12-byte nonce buffer");
         let ciphertext = cipher
             .encrypt(&nonce_bytes, "legacy_jwt_secret_value".as_bytes())
             .expect("encrypt failed");

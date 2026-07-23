@@ -80,7 +80,7 @@ graph LR
 git clone https://github.com/Kirky-X/vecboost.git
 cd vecboost
 
-# 2. Build with default features (HTTP + oxcache + limiteron)
+# 2. Build with default features (HTTP)
 cargo build --release
 
 # 3. Build with GPU support
@@ -93,11 +93,14 @@ cargo build --release --features metal
 # 4. Build multi-protocol interfaces (HTTP + CLI)
 cargo build --release --features http,cli
 
+# 4b. Build MCP interface (stdio mode, launch with --mcp)
+cargo build --release --features mcp
+
 # 5. Build full ecosystem (DB + logging + auth + all protocols)
 cargo build --release --features http,cli,db,inklog,auth,oxcache,limiteron
 
-# 6. Build all features (incl. GPU + ONNX)
-cargo build --release --features cuda,onnx,grpc,auth,redis,db,inklog,cli
+# 6. Build all features (incl. GPU + ONNX + MCP)
+cargo build --release --features cuda,onnx,grpc,mcp,auth,redis,db,inklog,cli
 ```
 
 ### ⚙️ Configuration
@@ -166,20 +169,21 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 ### 📡 gRPC API
 
-The service exposes a gRPC interface on port `50051` (configurable):
+The service exposes a gRPC interface on port `50051` (configurable). gRPC methods are generated from a single source definition in `src/api/embedding.rs` via the `#[forge(grpc_method = "...")]` macro of `sdforge` — no hand-written proto files are required:
 
-```protobuf
-service EmbeddingService {
-  // Single text embedding
-  rpc Embed(EmbedRequest) returns (EmbedResponse);
+| gRPC Method | Handler Function | Description |
+|-------------|------------------|-------------|
+| `vecboost.embed` | `grpc_embed` | Single text embedding |
+| `vecboost.embed_batch` | `grpc_embed_batch` | Batch text embeddings |
+| `vecboost.compute_similarity` | `grpc_compute_similarity` | Compute vector similarity |
+| `vecboost.embed_file` | `grpc_embed_file` | File text embedding |
+| `vecboost.model_switch` | `grpc_model_switch` | Switch model |
+| `vecboost.get_current_model` | `grpc_get_current_model` | Get current model |
+| `vecboost.get_model_info` | `grpc_get_model_info` | Get model info |
+| `vecboost.list_models` | `grpc_list_models` | List available models |
+| `vecboost.health_check` | `grpc_health_check` | Health check |
 
-  // Batch text embeddings
-  rpc EmbedBatch(BatchEmbedRequest) returns (BatchEmbedResponse);
-
-  // Compute similarity between vectors
-  rpc ComputeSimilarity(SimilarityRequest) returns (SimilarityResponse);
-}
-```
+The gRPC server is launched via `build_server_with_config`, supporting JWT authentication (`grpc_require_auth`), rate limiting (`LimiteronAdapter`), max connections (`grpc_max_connections`), timeout (`grpc_timeout_seconds`), and allowed roots (`grpc_allowed_roots`) configuration.
 
 ### 📚 OpenAPI Documentation
 
@@ -259,16 +263,14 @@ curl -X POST http://localhost:9002/v1/embeddings \
 
 ### 📡 Multi-Protocol Interfaces
 
-VecBoost v0.2.0 generates 4 protocol interfaces from a single source definition via `sdforge` — enable the corresponding feature to use.
+VecBoost v0.2.0 generates 4 protocol interfaces from a single source definition via `sdforge` — enable the corresponding feature to use. All protocol handler functions are defined in `src/api/embedding.rs`, and protocol bindings are generated via the `#[forge(...)]` macro annotation.
 
-> **⚠️ v0.2.0 Implementation Status**: `sdforge` macros (`#[service_api]`/`#[forge]`) are **not actually used** in v0.2.0. HTTP routes are hand-written Axum handlers in `src/routes/`, CLI is hand-written clap in `src/cli/`, and MCP protocol is not implemented. The complete sdforge macro generation mechanism is deferred to v0.3.0. See `specmark/changes/vecboost-v0.2.0-ecosystem-refactor/design.md` D5 decision.
-
-| Protocol | Feature | Port | v0.2.0 Status | Description |
-|----------|---------|------|---------------|-------------|
-| **HTTP/REST** | `http` | `9002` | ✅ Implemented (hand-written Axum) | RESTful API + OpenAPI docs |
-| **gRPC** | `grpc` | `50051` | ✅ Implemented (tonic) | High-performance binary protocol (see `proto/`) |
-| **MCP** | `mcp` | - | ⏳ Deferred to v0.3.0 | Model Context Protocol (LLM tool integration) |
-| **CLI** | `cli` | - | ✅ Implemented (hand-written clap) | Command-line tool (`vecboost embed --text "Hello"`) |
+| Protocol | Feature | Port | Generation Method | Description |
+|----------|---------|------|-------------------|-------------|
+| **HTTP/REST** | `http` | `9002` | sdforge `#[forge]` | RESTful API + OpenAPI docs |
+| **gRPC** | `grpc` | `50051` | sdforge `#[forge(grpc_method = "...")]` | High-performance binary protocol |
+| **MCP** | `mcp` | stdio | sdforge `#[forge(tool_name = "...")]` | Model Context Protocol (LLM tool integration), launch with `--mcp` in stdio mode |
+| **CLI** | `cli` | - | sdforge `#[forge]` | Command-line tool (`vecboost embed --text "Hello"`) |
 
 **CLI usage examples:**
 
@@ -283,7 +285,23 @@ cargo run --features cli -- batch --input texts.txt
 cargo run --features cli -- similarity --text1 "machine learning" --text2 "artificial intelligence"
 ```
 
-> **💡 Note**: MCP protocol exposes VecBoost embedding capabilities as LLM-callable tools, suitable for AI Agent scenarios. Will be implemented based on `rmcp` in v0.3.0.
+**MCP usage examples (stdio mode):**
+
+```bash
+# Launch MCP server in stdio mode (stdout is the JSON-RPC stream; HTTP/gRPC are not started)
+cargo run --features mcp -- --mcp
+
+# Configure stdio launch command in an MCP client (e.g. Claude Desktop / any MCP host):
+# vecboost --mcp
+#
+# Exposed tools:
+#   - embed        single-text vectorization
+#   - embed_batch  batch-text vectorization
+#   - similarity   cosine similarity between two texts
+#   - list_models  list available/loaded models
+```
+
+> **💡 Note**: The MCP protocol exposes VecBoost embedding capabilities as LLM-callable tools, suitable for AI Agent scenarios. In v0.2.0 it is generated via `sdforge` `#[forge]`, providing three tools — `embed_text` / `embed_batch` / `compute_similarity` (collected from `#[forge(tool_name=...)]` in `src/api/embedding.rs` via `sdforge::mcp::build()`), launched in stdio mode via `cargo run --features mcp -- --mcp` (stdout is dedicated to the JSON-RPC stream; HTTP/gRPC services are not started in this mode).
 
 ### 🔧 New Engine Support
 
@@ -304,25 +322,22 @@ VecBoost uses feature-gated builds to enable modules on demand:
 
 | Feature | Default | Description | Dependency |
 |---------|---------|-------------|------------|
-| `http` | ✅ | HTTP/REST API + OpenAPI docs | sdforge, axum |
-| `oxcache` | ✅ | oxcache cache backend | oxcache |
-| `limiteron` | ✅ | limiteron rate limiter | limiteron |
-| `grpc` | - | gRPC server | tonic |
-| `mcp` | - | MCP protocol interface (LLM tool integration) | sdforge |
+| `http` | ✅ | HTTP/REST API + OpenAPI docs | sdforge, axum, utoipa |
+| `grpc` | - | gRPC server (generated via sdforge `#[forge(grpc_method)]`) | sdforge |
+| `mcp` | - | MCP protocol interface (LLM tool integration, generated via sdforge `#[forge]`) | sdforge, rmcp |
 | `cli` | - | CLI command-line tool | sdforge, clap |
-| `db` | - | dbnexus database persistence (SQLite) | dbnexus |
+| `openapi` | - | OpenAPI/Swagger UI documentation | utoipa, utoipa-swagger-ui |
+| `db` | - | dbnexus database persistence (SQLite) | dbnexus, sea-orm |
 | `postgres` | - | PostgreSQL support (includes db) | dbnexus |
-| `inklog` | - | inklog structured logging | inklog |
-| `config` | - | confers config hot reload | confers |
-| `auth` | - | JWT auth + AES-256 encryption | jsonwebtoken, argon2 |
+| `auth` | - | JWT auth + AES-256 encryption | jsonwebtoken, argon2, aes-gcm |
 | `redis` | - | Redis cache backend | redis |
 | `cuda` | - | NVIDIA CUDA GPU acceleration | candle-core/cuda |
 | `metal` | - | Apple Silicon Metal GPU | candle-core/metal |
 | `onnx` | - | ONNX Runtime engine | ort |
-| `tensorrt` | - | TensorRT engine (stub, requires runtime lib) | - |
-| `openvino` | - | OpenVINO engine (stub, requires runtime lib) | - |
 
-> **💡 Tip**: `default = ["http", "oxcache", "limiteron"]`; minimal build with `cargo build --no-default-features --features http`.
+> **💡 Tip**: `default = ["http"]`; minimal build with `cargo build --no-default-features --features http`.
+
+> **📦 Built-in Dependencies**: `confers` (config), `inklog` (logging), `oxcache` (cache), `limiteron` (rate limiting), `trait-kit` (module registry), and `sdforge` (interface generation, under the `http` feature) are mandatory dependencies — always enabled, no feature flag required.
 
 ## ⚙️ Configuration
 
@@ -477,31 +492,27 @@ graph TB
 ```
 vecboost/
 ├── src/                          # Core source code
-│   ├── api/            # sdforge multi-protocol interface defs (feature: http)
+│   ├── api/            # sdforge multi-protocol interface defs (single source for HTTP/gRPC/MCP/CLI)
 │   ├── audit/          # Audit logging & compliance
 │   ├── auth/           # Authentication (JWT, CSRF, RBAC)
-│   ├── cache/          # oxcache cache backend (feature: oxcache)
-│   ├── cli/            # CLI command-line tool (feature: cli)
+│   ├── cache/          # oxcache cache backend
 │   ├── config/         # Configuration management (confers integration)
 │   ├── db/             # dbnexus database layer (feature: db)
 │   ├── device/         # Device management (CPU, CUDA, Metal, ROCm)
 │   ├── domain/         # Domain models (request/response types)
-│   ├── engine/         # Inference engines (Candle/ONNX/TensorRT/OpenVINO)
+│   ├── engine/         # Inference engines (Candle/ONNX)
 │   ├── error/          # VecboostError unified error type
-│   ├── grpc/           # gRPC server & protocol (feature: grpc)
-│   ├── logger/         # inklog logging infrastructure (feature: inklog)
+│   ├── logger/         # inklog logging infrastructure
 │   ├── metrics/        # Prometheus metrics & observability
 │   ├── model/          # Model downloading, loading & recovery
 │   ├── module_registry/# trait-kit module registry
 │   ├── pipeline/       # Request pipeline, priority & scheduling
-│   ├── rate_limit/     # limiteron rate limiter adapter (feature: limiteron)
-│   ├── routes/         # HTTP routes & handlers
-│   ├── security/       # Security utilities (encryption, sanitization)
+│   ├── rate_limit/     # limiteron rate limiter adapter
+│   ├── security/       # Security utilities (encryption, sanitization, path validation)
 │   ├── service/        # Core embedding service & business logic
-│   └── text/           # Text processing (chunking, tokenization)
-├── examples/           # Example programs
-│   └── gpu/            # GPU-specific examples & benchmarks
-├── proto/              # gRPC protocol definitions (`.proto` files)
+│   ├── text/           # Text processing (chunking, tokenization)
+│   └── utils/          # Utility functions (vector ops, hf_hub, hash verification)
+├── examples/           # Example programs (download_model, batch, embed, similarity)
 ├── deployments/        # Kubernetes & Docker deployment configs
 ├── tests/              # Test directory
 │   ├── integration/    # Integration tests (api_test.rs, real_engine.rs)
@@ -524,9 +535,9 @@ vecboost/
 ### 🚀 Optimization Features
 
 - **⚡ Batch Processing**: Dynamic batching with configurable wait timeout
-- **💾 Memory Pool**: Pre-allocated tensor buffers to reduce allocation overhead
 - **🔄 Zero-Copy**: Shared references where possible
 - **📊 Adaptive Batching**: Automatic batch size adjustment based on load
+- **🧊 Matryoshka Re-normalization**: Automatic re-normalization after dimension truncation, ensuring correct cosine similarity
 
 ## 🔒 Security Features
 

@@ -18,7 +18,7 @@ graph TB
     end
 
     subgraph ProtocolLayer["Protocol Layer (sdforge)"]
-        API["src/api/<br/>#[service_api] definitions"]
+        API["src/api/embedding.rs<br/>#[forge(...)] definitions"]
         HTTPBinding["HTTP/REST Binding"]
         gRPCBinding["gRPC Binding"]
         MCPBinding["MCP Binding"]
@@ -71,17 +71,17 @@ graph TB
 
 ## 2. 7-Library Ecosystem
 
-The ecosystem is composed of 7 Rust libraries. `trait-kit` is the always-enabled core; the rest are optional, feature-gated dependencies.
+The ecosystem is composed of 7 Rust libraries. 6 of them (`trait-kit`, `confers`, `inklog`, `oxcache`, `limiteron`, `sdforge`) are always-enabled mandatory dependencies; only `dbnexus` is feature-gated.
 
 | Library | Version | Feature | Role | Module |
 |---------|---------|---------|------|--------|
 | **trait-kit** | `0.3` | always | Module registry & typestate dependency management | (registry host) |
-| **confers** | `0.4` | `config` | Config loading (TOML + env override + hot reload) | EmbeddingModule |
-| **inklog** | `0.1` | `inklog` | Structured logging (console + file rotation) | AuditModule |
-| **oxcache** | `0.3` | `oxcache` | Cache backend (LRU/LFU/FIFO + TTL eviction) | CacheModule |
-| **limiteron** | `0.2` | `limiteron` | Token bucket rate limiter (multi-dimension) | RateLimitModule |
+| **confers** | `0.4` | always | Config loading (TOML + env override + hot reload) | EmbeddingModule |
+| **inklog** | `0.1` | always | Structured logging (console + file rotation) | AuditModule |
+| **oxcache** | `0.3` | always | Cache backend (LRU/LFU/FIFO + TTL eviction) | CacheModule |
+| **limiteron** | `0.2` | always | Token bucket rate limiter (multi-dimension) | RateLimitModule |
 | **dbnexus** | `0.4` | `db` | Database persistence (SQLite/PostgreSQL + roles) | DbModule |
-| **sdforge** | `0.4` | `http`/`cli` | Multi-protocol interface generation | (API layer) |
+| **sdforge** | `0.4` | always | Multi-protocol interface generation (HTTP/gRPC/MCP/CLI) | (API layer) |
 
 ### 2.1 trait-kit Module Registry
 
@@ -118,22 +118,19 @@ The internal `src/` module structure follows a layered dependency discipline. Pu
 ```mermaid
 graph TB
     subgraph Public["Public Modules (pub mod)"]
-        api["api<br/>(feature: http)"]
+        api["api<br/>(feature: http/mcp/cli)<br/>sdforge #[forge(...)]"]
         audit["audit"]
         auth["auth<br/>(feature: auth)"]
-        cli["cli<br/>(feature: cli)"]
         config["config"]
         db["db<br/>(feature: db)"]
         domain["domain"]
         engine["engine"]
         error["error<br/>(VecboostError)"]
-        grpc["grpc<br/>(feature: grpc)"]
-        logger["logger<br/>(feature: inklog)"]
+        logger["logger<br/>(always)"]
         metrics["metrics"]
         module_registry["module_registry"]
         pipeline["pipeline"]
         rate_limit["rate_limit"]
-        routes["routes"]
         security["security"]
         service["service"]
         utils["utils"]
@@ -149,11 +146,8 @@ graph TB
 
     api --> service
     api --> domain
-    routes --> service
-    routes --> auth
-    routes --> rate_limit
-    grpc --> service
-    cli --> service
+    api --> auth
+    api --> rate_limit
     service --> engine
     service --> cache
     service --> text
@@ -175,46 +169,44 @@ graph TB
 
 | Visibility | Modules | Rationale |
 |------------|---------|-----------|
-| `pub mod` (always) | `audit`, `config`, `domain`, `engine`, `error`, `metrics`, `module_registry`, `pipeline`, `rate_limit`, `routes`, `security`, `service`, `utils` | Used by `main.rs` or as public library API |
-| `pub mod` (feature-gated) | `api` (http), `auth` (auth), `cli` (cli), `db` (db), `grpc` (grpc), `logger` (inklog) | Conditionally compiled; only present when feature enabled |
+| `pub mod` (always) | `audit`, `config`, `domain`, `engine`, `error`, `logger`, `metrics`, `module_registry`, `pipeline`, `rate_limit`, `security`, `service`, `utils` | Used by `main.rs` or as public library API |
+| `pub mod` (feature-gated) | `api` (http/mcp/cli — contains sdforge `#[forge(...)]` definitions), `auth` (auth), `db` (db) | Conditionally compiled; only present when feature enabled |
 | `pub(crate) mod` | `cache`, `device`, `model`, `monitor`, `text` | Internal implementation; not part of public API |
 
 > **Note**: `error` is exposed as `pub mod error` so integration tests can assert on `VecboostError` variants. The unified error type is `VecboostError` (defined in `src/error.rs`).
 
 ## 4. Multi-Protocol Interface Flow
 
-VecBoost v0.2.0 uses `sdforge` to generate multiple protocol bindings from a single API definition source. This eliminates duplicated interface code across HTTP, MCP, and CLI.
-
-> **⚠️ v0.2.0 实际实施状态(Converge 阶段偏离)**:
-> - `sdforge` 宏注解(`#[forge]`)**未在 HTTP/CLI 生成中使用**——HTTP 路由由 `src/routes/embedding.rs` 手写 Axum handler,CLI 由 `src/cli/mod.rs` 手写 clap `#[derive(Parser)]`
-> - **但 MCP 协议已用 sdforge 宏生成**:`src/api/mod.rs` 的 3 个 `#[forge(tool_name=...)]` 函数(embed/embed_batch/compute_similarity)在 `mcp` feature 下经 `sdforge::mcp::build()` 收集为 MCP 工具并走 stdio;工具逻辑复用 `src/api/mod.rs` 的 `forge_*` 函数,通过全局 `SERVICE` 单例访问 `EmbeddingService`
-> - `mcp` feature 透传 `sdforge/mcp`,后者依赖 `rmcp ~2.1`(本 crate 声明同版本 `rmcp = { version = "2.1", optional = true }` 以复用 sdforge 内部的 rmcp,避免版本冲突);HTTP/CLI 的 sdforge 宏生成机制仍推迟到 **v0.3.0**
-> - 详见 `specmark/changes/vecboost-v0.2.0-ecosystem-refactor/design.md` D5 决策 + "实施偏离记录"
+VecBoost v0.2.0 uses `sdforge` to generate all four protocol bindings (HTTP/gRPC/MCP/CLI) from a single API definition source in `src/api/embedding.rs`. Hand-written Axum handlers, tonic gRPC services, clap CLI parsers, and proto files are eliminated — all protocol handlers are annotated with `#[forge(...)]` macros and collected via sdforge inventory.
 
 ```mermaid
 sequenceDiagram
     participant Dev as Developer
-    participant API as src/api/<br/>#[service_api]
+    participant API as src/api/embedding.rs<br/>#[forge(...)]
     participant sdforge as sdforge
     participant HTTP as HTTP Server
+    participant gRPC as gRPC Server
     participant MCP as MCP Server
     participant CLI as CLI Binary
     participant Service as EmbeddingService
 
-    Dev->>API: Define embed/embed_batch/compute_similarity
-    Note over API: #[service_api] macro<br/>annotates function signatures
+    Dev->>API: Define forge_*/grpc_*/cli_* handlers
+    Note over API: #[forge(path, method, tool_name)]<br/>#[forge(grpc_method)]<br/>#[forge(cli)]
 
-    Dev->>sdforge: Enable feature (http/cli)
+    Dev->>sdforge: Enable feature (http/grpc/mcp/cli)
     sdforge->>HTTP: Generate Axum routes + OpenAPI
+    sdforge->>gRPC: Generate SdForgeService/Call RPC
     sdforge->>MCP: Generate MCP tool bindings
     sdforge->>CLI: Generate clap subcommands
 
-    Note over HTTP,MCP,CLI: Single source, 3 bindings
+    Note over HTTP,CLI: Single source, 4 bindings
 
-    HTTP->>Service: POST /api/v1/embed
-    MCP->>Service: tool_call("embed")
+    HTTP->>Service: POST /embed
+    gRPC->>Service: Call(vecboost.embed)
+    MCP->>Service: tool_call("embed_text")
     CLI->>Service: embed --text "Hello"
     Service-->>HTTP: EmbedResponse
+    Service-->>gRPC: EmbedResponse
     Service-->>MCP: EmbedResponse
     Service-->>CLI: EmbedResponse
 ```
@@ -223,30 +215,72 @@ sequenceDiagram
 
 | Protocol | Feature Flag | Default | v0.2.0 Status | Entry Point | Use Case |
 |----------|-------------|---------|---------------|-------------|----------|
-| HTTP/REST | `http` | ✅ | ✅ Implemented (hand-written Axum) | `src/routes/` + Axum | Web/API integration, OpenAPI docs |
-| gRPC | `grpc` | - | ✅ Implemented (tonic) | `src/grpc/` + tonic | High-performance binary RPC |
-| MCP | `mcp` | - | ✅ Implemented (sdforge `#[forge]` → `sdforge::mcp`, stdio) | `src/api/mod.rs` `#[forge(tool_name=...)]` | LLM tool integration (AI Agents) |
-| CLI | `cli` | - | ✅ Implemented (hand-written clap) | `src/cli/` + clap | Command-line usage, scripting |
+| HTTP/REST | `http` | ✅ | ✅ Implemented (sdforge `#[forge]`) | `src/api/embedding.rs` `forge_*` | Web/API integration, OpenAPI docs |
+| gRPC | `grpc` | - | ✅ Implemented (sdforge `#[forge(grpc_method)]` + `build_server_with_config`) | `src/api/embedding.rs` `grpc_*` | High-performance binary RPC |
+| MCP | `mcp` | - | ✅ Implemented (sdforge `#[forge(tool_name)]` → `sdforge::mcp`, stdio) | `src/api/embedding.rs` `forge_*` (reused) | LLM tool integration (AI Agents) |
+| CLI | `cli` | - | ✅ Implemented (sdforge `#[forge(cli)]`) | `src/api/embedding.rs` `cli_*` | Command-line usage, scripting |
 
 ### 4.2 API Definition Pattern
 
-API functions are defined once in `src/api/` using the `#[service_api]` macro. sdforge reads these definitions and generates protocol-specific bindings at compile time based on enabled features:
+API functions are defined once in `src/api/embedding.rs` using `#[forge(...)]` macros. sdforge reads these definitions and generates protocol-specific bindings at compile time based on enabled features:
 
 ```rust
-// src/api/mod.rs — single source of truth (target design, v0.3.0)
-#[service_api]
-pub async fn embed(text: String) -> Result<EmbedResponse, VecboostError> {
-    // shared implementation
+// src/api/embedding.rs — single source of truth for all 4 protocols
+
+// HTTP + MCP (tool_name reused)
+#[cfg(feature = "http")]
+#[forge(
+    name = "embed", version = "v1",
+    path = "/embed", method = "POST",
+    tool_name = "embed_text",
+    description = "Generate embedding vector for input text"
+)]
+pub async fn forge_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
+    embed_handler(req).await
 }
 
-#[service_api]
-pub async fn embed_batch(texts: Vec<String>) -> Result<BatchEmbedResponse, VecboostError> { ... }
+// gRPC — registered as vecboost.embed on SdForgeService/Call RPC
+#[cfg(feature = "grpc")]
+#[forge(
+    name = "vecboost_embed", version = "v1",
+    grpc_method = "vecboost.embed",
+    description = "Generate embedding vector for input text"
+)]
+pub async fn grpc_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
+    embed_handler(req).await
+}
 
-#[service_api]
-pub async fn compute_similarity(source: String, target: String) -> Result<SimilarityResponse, VecboostError> { ... }
+// CLI
+#[cfg(feature = "cli")]
+#[forge(
+    name = "embed", version = "v1",
+    cli = true,
+    description = "Generate embedding vector for input text"
+)]
+pub async fn cli_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
+    embed_handler(req).await
+}
 ```
 
-> **⚠️ v0.2.0 实际实施状态**: `#[service_api]` 宏注解 **未在 HTTP/CLI 中使用**;`src/api/mod.rs` 的 3 个 `#[forge]` 函数(embed/embed_batch/compute_similarity)为普通 `async fn`,签名接收 `service: &EmbeddingService`。HTTP 路由由 `src/routes/embedding.rs` 手写,CLI 由 `src/cli/mod.rs` 手写 clap。但 **MCP 协议已用 sdforge `#[forge]` 宏生成**(`src/api/mod.rs` 在 `mcp` feature 下经 `sdforge::mcp::build()` 收集工具),不再走独立手写 `rmcp`。完整 HTTP/CLI 的 sdforge 宏生成机制推迟到 v0.3.0。
+**Key design**: Protocol-specific `forge_*` / `grpc_*` / `cli_*` functions are thin wrappers annotated with `#[forge(...)]`; the actual business logic lives in protocol-agnostic `*_handler` functions (e.g., `embed_handler`, `embed_batch_handler`). This eliminates duplicated state-fetch / validation / dispatch code across protocols.
+
+**gRPC startup**: gRPC server is started via `sdforge::grpc::build_server_with_config(&addr, config)`, using the unified `SdForgeService/Call` RPC protocol. Requests/responses pass JSON-serialized domain types via `CallRequest.data` / `CallResponse.data`.
+
+### 4.3 gRPC Methods
+
+9 gRPC methods are registered via `#[forge(grpc_method = "...")]` and exposed through `SdForgeService/Call`:
+
+| gRPC Method | Handler | Description |
+|-------------|---------|-------------|
+| `vecboost.embed` | `grpc_embed` | Single-text embedding |
+| `vecboost.embed_batch` | `grpc_embed_batch` | Batch embedding |
+| `vecboost.compute_similarity` | `grpc_compute_similarity` | Cosine similarity |
+| `vecboost.embed_file` | `grpc_embed_file` | Embed text from file |
+| `vecboost.model_switch` | `grpc_model_switch` | Switch loaded model |
+| `vecboost.get_current_model` | `grpc_get_current_model` | Get current model info |
+| `vecboost.get_model_info` | `grpc_get_model_info` | Get model metadata |
+| `vecboost.list_models` | `grpc_list_models` | List available models |
+| `vecboost.health_check` | `grpc_health_check` | Service health check |
 
 ## 5. Engine Abstraction
 
@@ -280,6 +314,38 @@ graph TB
 | ONNX Runtime | `onnx` | ✅ Production | Cross-platform via `ort` crate |
 | TensorRT | `tensorrt` | 🔧 Stub | Returns runtime error; requires `libnvinfer.so` |
 | OpenVINO | `openvino` | 🔧 Stub | Returns runtime error; requires `libopenvino_c.so` |
+
+### 5.2 Candle Model Architecture
+
+`CandleEngine` (`src/engine/candle_engine.rs`) distinguishes two supported model architectures via the `ModelArchitecture` enum, auto-detected at runtime from the `model_type` field in `config.json`:
+
+```rust
+pub enum ModelArchitecture {
+    Bert,         // BERT family (e.g., BAAI/bge-*)
+    XlmRoberta,   // XLM-RoBERTa family (multilingual models)
+}
+```
+
+| Architecture | Backing Implementation | Param Scale | Typical Models |
+|--------------|------------------------|-------------|----------------|
+| **Bert** | `candle_transformers::models::bert::BertModel` | ~110M | BAAI/bge-small, bert-base-uncased |
+| **XlmRoberta** | `candle_transformers::models::xlm_roberta::XLMRobertaModel` | ~270M | BAAI/bge-m3, xlm-roberta-base |
+
+### 5.3 Matryoshka Embedding Truncation
+
+When the model is configured with `matryoshka_dimensions` (e.g., BAAI/bge-m3 supports 1024/768/512/256/128/64 truncation), `EmbeddingService` truncates the embedding in `process_text` and `process_batch`, then **re-invokes `normalize_l2` after truncation** to ensure the truncated vector remains a unit vector:
+
+```rust
+// src/service/embedding.rs — Matryoshka truncation + re-normalization
+if let Some(target_dim) = matryoshka_target {
+    embedding = truncate_vector(&embedding, target_dim);
+    normalize_l2(&mut embedding);  // ⚠️ must re-normalize after truncation
+}
+```
+
+> 🔒 **Correctness fix**: v0.2.0 fixes a bug where truncation was not followed by re-normalization, leaving the vector norm < 1 and breaking cosine similarity accuracy.
+
+> ⚠️ **Note**: The `CandleEngine.tensor_pool` field was removed in v0.2.0 (the original tensor pool had a mask-all-zero bug); tensor buffers are now managed internally by Candle. The device-level GPU memory pool (`src/device/memory_pool.rs`) is retained.
 
 ## 6. Request Lifecycle
 
@@ -321,7 +387,7 @@ graph LR
     TOML["config.toml"] --> Loader["Config Loader"]
     Env["Environment Variables<br/>VECBOOST_*"] --> Loader
     Loader --> AppConfig["AppConfig"]
-    confers["confers (feature: config)"] -.->|hot reload| AppConfig
+    confers["confers (always)"] -.->|hot reload| AppConfig
 
     AppConfig --> Server["ServerConfig"]
     AppConfig --> Model["ModelConfig"]
@@ -336,16 +402,29 @@ graph LR
 
 | Section | Library | Feature | Purpose |
 |---------|---------|---------|---------|
-| `[server]` | - | - | HTTP bind address, port, timeout |
+| `[server]` | - | - | HTTP bind address, port, timeout, gRPC config (max_connections, timeout, require_auth, allowed_roots) |
 | `[model]` | - | - | HuggingFace model repo, GPU, batch size |
 | `[embedding]` | - | - | Aggregation, similarity metric, cache |
 | `[auth]` | - | `auth` | JWT, CSRF, admin credentials |
 | `[database]` | dbnexus | `db` | Connection URL, pool size |
-| `[logging]` | inklog | `inklog` | Log level, console/file output |
-| `[flow_control]` | limiteron | `limiteron` | Token bucket, circuit breaker |
-| `[cache]` | oxcache | `oxcache` | Backend, TTL, eviction policy |
-| `[rate_limit]` | limiteron | `limiteron` | Per-dimension rate limits |
+| `[logging]` | inklog | always | Log level, console/file output |
+| `[flow_control]` | limiteron | always | Token bucket, circuit breaker |
+| `[cache]` | oxcache | always | Backend, TTL, eviction policy |
+| `[rate_limit]` | limiteron | always | Per-dimension rate limits |
 | `[audit]` | - | - | Audit log file, rotation |
+
+### 7.2 gRPC Server Configuration
+
+The gRPC server is started by sdforge via `build_server_with_config`. The following options are defined on `ServerConfig` (`src/config/app.rs`):
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `grpc_max_connections` | `Option<usize>` | `1000` | Max concurrent gRPC connections |
+| `grpc_timeout_seconds` | `Option<u64>` | `30` | gRPC request timeout (seconds) |
+| `grpc_require_auth` | `Option<bool>` | `true` | Require gRPC auth (must be explicitly disabled) |
+| `grpc_allowed_roots` | `Option<Vec<String>>` | `None` | Whitelist of root directories for gRPC file operations |
+
+> 🔒 **Secure defaults**: `grpc_require_auth` defaults to `true`; callers must explicitly set `grpc_require_auth = false` in `config.toml` to disable auth. When `grpc_allowed_roots` is `None`, it falls back to the current working directory but rejects sensitive paths (`/`, `/etc`, `/root`) to prevent full filesystem exposure.
 
 ## 8. Test Architecture
 

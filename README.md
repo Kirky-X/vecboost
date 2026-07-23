@@ -169,20 +169,21 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 ### 📡 gRPC API
 
-服务在 `50051` 端口（可配置）暴露 gRPC 接口：
+服务在 `50051` 端口（可配置）暴露 gRPC 接口。gRPC 方法由 `sdforge` 的 `#[forge(grpc_method = "...")]` 宏从 `src/api/embedding.rs` 的单一源定义生成，无需手写 proto 文件：
 
-```protobuf
-service EmbeddingService {
-  // 单文本嵌入
-  rpc Embed(EmbedRequest) returns (EmbedResponse);
+| gRPC 方法 | 对应处理函数 | 说明 |
+|-----------|-------------|------|
+| `vecboost.embed` | `grpc_embed` | 单文本嵌入 |
+| `vecboost.embed_batch` | `grpc_embed_batch` | 批量文本嵌入 |
+| `vecboost.compute_similarity` | `grpc_compute_similarity` | 计算向量相似度 |
+| `vecboost.embed_file` | `grpc_embed_file` | 文件文本嵌入 |
+| `vecboost.model_switch` | `grpc_model_switch` | 切换模型 |
+| `vecboost.get_current_model` | `grpc_get_current_model` | 获取当前模型 |
+| `vecboost.get_model_info` | `grpc_get_model_info` | 获取模型信息 |
+| `vecboost.list_models` | `grpc_list_models` | 列出可用模型 |
+| `vecboost.health_check` | `grpc_health_check` | 健康检查 |
 
-  // 批量文本嵌入
-  rpc EmbedBatch(BatchEmbedRequest) returns (BatchEmbedResponse);
-
-  // 计算向量相似度
-  rpc ComputeSimilarity(SimilarityRequest) returns (SimilarityResponse);
-}
-```
+gRPC 服务通过 `build_server_with_config` 启动，支持 JWT 认证（`grpc_require_auth`）、速率限制（`LimiteronAdapter`）、最大连接数（`grpc_max_connections`）和超时（`grpc_timeout_seconds`）等配置。
 
 ### 📚 OpenAPI 文档
 
@@ -262,16 +263,14 @@ curl -X POST http://localhost:9002/v1/embeddings \
 
 ### 📡 多协议接口
 
-VecBoost v0.2.0 通过 `sdforge` 从单一源定义生成 4 种协议接口，启用对应 feature 即可获得。
+VecBoost v0.2.0 通过 `sdforge` 从单一源定义生成 4 种协议接口，启用对应 feature 即可获得。所有协议的处理函数均定义在 `src/api/embedding.rs`，通过 `#[forge(...)]` 宏标注生成各协议绑定。
 
-> **⚠️ v0.2.0 实施状态说明**: `sdforge` 的 `#[forge]` 宏 **已用于 MCP 生成**(在 `src/api/mod.rs` 为 embed/embed_batch/compute_similarity 标注 `#[forge(tool_name=...)]`，由 `mcp` feature 经 `sdforge::mcp::build()` 收集为 MCP 工具并经 stdio 暴露)。HTTP 路由仍由 `src/routes/` 手写 Axum handler，CLI 由 `src/cli/` 手写 clap。完整 HTTP/CLI 的 sdforge 宏生成机制推迟到 v0.3.0。详见 `specmark/changes/vecboost-v0.2.0-ecosystem-refactor/design.md` D5 决策。
-
-| 协议 | Feature | 端口 | v0.2.0 状态 | 说明 |
-|------|---------|------|------------|------|
-| **HTTP/REST** | `http` | `9002` | ✅ 已实现(手写 Axum) | RESTful API + OpenAPI 文档 |
-| **gRPC** | `grpc` | `50051` | ✅ 已实现(tonic) | 高性能二进制协议（proto 定义见 `proto/`） |
-| **MCP** | `mcp` | stdio | ✅ 已实现(sdforge `#[forge]` 生成) | Model Context Protocol（LLM 工具集成），`--mcp` 以 stdio 模式启动 |
-| **CLI** | `cli` | - | ✅ 已实现(手写 clap) | 命令行工具（`vecboost embed --text "Hello"`） |
+| 协议 | Feature | 端口 | 生成方式 | 说明 |
+|------|---------|------|----------|------|
+| **HTTP/REST** | `http` | `9002` | sdforge `#[forge]` | RESTful API + OpenAPI 文档 |
+| **gRPC** | `grpc` | `50051` | sdforge `#[forge(grpc_method = "...")]` | 高性能二进制协议 |
+| **MCP** | `mcp` | stdio | sdforge `#[forge(tool_name = "...")]` | Model Context Protocol（LLM 工具集成），`--mcp` 以 stdio 模式启动 |
+| **CLI** | `cli` | - | sdforge `#[forge]` | 命令行工具（`vecboost embed --text "Hello"`） |
 
 **CLI 使用示例：**
 
@@ -302,7 +301,7 @@ cargo run --features mcp -- --mcp
 #   - list_models  列出可用/已加载模型
 ```
 
-> **💡 说明**: MCP 协议用于将 VecBoost 嵌入能力暴露为 LLM 可调用的工具，适用于 AI Agent 场景。v0.2.0 基于 `sdforge` `#[forge]` 生成，提供 `embed_text` / `embed_batch` / `compute_similarity` 三个工具（由 `src/api/mod.rs` 的 `#[forge(tool_name=...)]` 经 `sdforge::mcp::build()` 收集），通过 `cargo run --features mcp -- --mcp` 以 stdio 模式启动（stdout 专用于 JSON-RPC 流，此时不启动 HTTP/gRPC 服务）。
+> **💡 说明**: MCP 协议用于将 VecBoost 嵌入能力暴露为 LLM 可调用的工具，适用于 AI Agent 场景。v0.2.0 基于 `sdforge` `#[forge]` 生成，提供 `embed_text` / `embed_batch` / `compute_similarity` 三个工具（由 `src/api/embedding.rs` 的 `#[forge(tool_name=...)]` 经 `sdforge::mcp::build()` 收集），通过 `cargo run --features mcp -- --mcp` 以 stdio 模式启动（stdout 专用于 JSON-RPC 流，此时不启动 HTTP/gRPC 服务）。
 
 ### 🔧 新引擎支持
 
@@ -323,25 +322,22 @@ VecBoost 采用特性化构建，按需启用功能模块：
 
 | Feature | 默认 | 说明 | 依赖库 |
 |---------|------|------|--------|
-| `http` | ✅ | HTTP/REST API + OpenAPI 文档 | sdforge, axum |
-| `oxcache` | ✅ | oxcache 缓存后端 | oxcache |
-| `limiteron` | ✅ | limiteron 限流器 | limiteron |
-| `grpc` | - | gRPC 服务器 | tonic |
-| `mcp` | - | MCP 协议接口（LLM 工具集成，sdforge `#[forge]` 生成） | sdforge (`sdforge/mcp` → rmcp) |
+| `http` | ✅ | HTTP/REST API + OpenAPI 文档 | sdforge, axum, utoipa |
+| `grpc` | - | gRPC 服务器（sdforge `#[forge(grpc_method)]` 生成） | sdforge |
+| `mcp` | - | MCP 协议接口（LLM 工具集成，sdforge `#[forge]` 生成） | sdforge, rmcp |
 | `cli` | - | CLI 命令行工具 | sdforge, clap |
-| `db` | - | dbnexus 数据库持久化（SQLite） | dbnexus |
+| `openapi` | - | OpenAPI/Swagger UI 文档 | utoipa, utoipa-swagger-ui |
+| `db` | - | dbnexus 数据库持久化（SQLite） | dbnexus, sea-orm |
 | `postgres` | - | PostgreSQL 支持（含 db） | dbnexus |
-| `inklog` | - | inklog 结构化日志 | inklog |
-| `config` | - | confers 配置热重载 | confers |
-| `auth` | - | JWT 认证 + AES-256 加密 | jsonwebtoken, argon2 |
+| `auth` | - | JWT 认证 + AES-256 加密 | jsonwebtoken, argon2, aes-gcm |
 | `redis` | - | Redis 缓存后端 | redis |
 | `cuda` | - | NVIDIA CUDA GPU 加速 | candle-core/cuda |
 | `metal` | - | Apple Silicon Metal GPU | candle-core/metal |
 | `onnx` | - | ONNX Runtime 引擎 | ort |
-| `tensorrt` | - | TensorRT 引擎（stub，需运行时库） | - |
-| `openvino` | - | OpenVINO 引擎（stub，需运行时库） | - |
 
-> **💡 提示**: `default = ["http", "oxcache", "limiteron"]`，最小构建用 `cargo build --no-default-features --features http`。
+> **💡 提示**: `default = ["http"]`，最小构建用 `cargo build --no-default-features --features http`。
+
+> **📦 内置依赖说明**: `confers`（配置）、`inklog`（日志）、`oxcache`（缓存）、`limiteron`（限流）、`trait-kit`（模块注册）、`sdforge`（接口生成，http feature 下）为必选依赖，始终启用，无需通过 feature 开启。
 
 ## ⚙️ 配置
 
@@ -496,31 +492,27 @@ graph TB
 ```
 vecboost/
 ├── src/                          # 核心源代码
-│   ├── api/            # sdforge 多协议接口定义 (feature: http)
+│   ├── api/            # sdforge 多协议接口定义 (HTTP/gRPC/MCP/CLI 单一源)
 │   ├── audit/          # 审计日志与合规
 │   ├── auth/           # 认证 (JWT, CSRF, RBAC)
-│   ├── cache/          # oxcache 缓存后端 (feature: oxcache)
-│   ├── cli/            # CLI 命令行工具 (feature: cli)
+│   ├── cache/          # oxcache 缓存后端
 │   ├── config/         # 配置管理 (confers 集成)
 │   ├── db/             # dbnexus 数据库层 (feature: db)
 │   ├── device/         # 设备管理 (CPU, CUDA, Metal, ROCm)
 │   ├── domain/         # 领域模型 (请求/响应类型)
-│   ├── engine/         # 推理引擎 (Candle/ONNX/TensorRT/OpenVINO)
+│   ├── engine/         # 推理引擎 (Candle/ONNX)
 │   ├── error/          # VecboostError 统一错误类型
-│   ├── grpc/           # gRPC 服务器与协议 (feature: grpc)
-│   ├── logger/         # inklog 日志基础设施 (feature: inklog)
+│   ├── logger/         # inklog 日志基础设施
 │   ├── metrics/        # Prometheus 指标与可观测性
 │   ├── model/          # 模型下载、加载与恢复
 │   ├── module_registry/# trait-kit 模块注册中心
 │   ├── pipeline/       # 请求管道、优先级与调度
-│   ├── rate_limit/     # limiteron 限流适配器 (feature: limiteron)
-│   ├── routes/         # HTTP 路由与处理器
-│   ├── security/       # 安全工具 (加密、清理)
+│   ├── rate_limit/     # limiteron 限流适配器
+│   ├── security/       # 安全工具 (加密、清理、路径校验)
 │   ├── service/        # 核心嵌入服务与业务逻辑
-│   └── text/           # 文本处理 (分块、分词)
-├── examples/           # 示例程序
-│   └── gpu/            # GPU 相关示例与基准测试
-├── proto/              # gRPC 协议定义 (`.proto` 文件)
+│   ├── text/           # 文本处理 (分块、分词)
+│   └── utils/          # 工具函数 (向量运算、hf_hub、哈希校验)
+├── examples/           # 示例程序 (download_model, batch, embed, similarity)
 ├── deployments/        # Kubernetes 与 Docker 部署配置
 ├── tests/              # 测试目录
 │   ├── integration/    # 集成测试 (api_test.rs, real_engine.rs)
@@ -543,9 +535,9 @@ vecboost/
 ### 🚀 优化特性
 
 - **⚡ 批处理**: 带可配置等待超时的动态批处理
-- **💾 内存池**: 预分配张量缓冲区，减少分配开销
-- **🔄 零拷贝**: 尽可能使用共享引用
+- ** 零拷贝**: 尽可能使用共享引用
 - **📊 自适应批处理**: 根据负载自动调整批大小
+- **🧊 Matryoshka 重归一化**: 截断维度后自动重归一化，保证余弦相似度正确
 
 ## 🔒 安全特性
 

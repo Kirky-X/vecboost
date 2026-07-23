@@ -128,8 +128,14 @@ cargo build --release --features metal
 #### 选项 4: 全部功能
 
 ```bash
-cargo build --release --features cuda,onnx,grpc,auth,redis
+# 全协议（HTTP/gRPC/MCP/CLI）
+cargo build --release --features http,grpc,mcp,cli
+
+# 全协议 + 全可选功能（GPU/ONNX/认证/Redis）
+cargo build --release --features http,grpc,mcp,cli,cuda,onnx,auth,redis
 ```
+
+> **💡 提示**: `default = ["http"]`，默认构建仅启用 HTTP 协议。gRPC/MCP/CLI 协议需通过 `--features` 显式开启。confers（配置）、inklog（日志）、oxcache（缓存）、limiteron（限流）、trait-kit（模块注册）为必选依赖，无需 feature 开启。
 
 ---
 
@@ -175,6 +181,33 @@ timeout = 30        # 请求超时（秒）
 | `host` | `0.0.0.0` | 绑定地址 |
 | `port` | `9002` | HTTP 端口 |
 | `timeout` | `30` | 请求超时（秒） |
+
+#### gRPC 设置
+
+gRPC 协议通过 `grpc` feature 开启（`cargo build --release --features grpc`），所有协议处理函数均由 sdforge 生成。gRPC 配置项位于 `[server]` 段：
+
+```toml
+[server]
+grpc_enabled = false              # 是否启用 gRPC 服务
+grpc_host = "0.0.0.0"             # gRPC 绑定地址（可选，缺省同 host）
+grpc_port = 50051                 # gRPC 端口
+grpc_max_connections = 1000       # 最大并发连接数
+grpc_timeout_seconds = 30         # gRPC 请求超时（秒）
+grpc_require_auth = true          # 是否强制 JWT 认证
+grpc_allowed_roots = ["/data"]    # 路径校验根目录列表（可选）
+```
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `grpc_enabled` | `false` | 是否启用 gRPC 服务 |
+| `grpc_host` | 同 `host` | gRPC 绑定地址（可选） |
+| `grpc_port` | `50051` | gRPC 端口 |
+| `grpc_max_connections` | `1000` | 最大并发连接数 |
+| `grpc_timeout_seconds` | `30` | gRPC 请求超时（秒） |
+| `grpc_require_auth` | `true` | 是否强制 JWT 认证（默认强制） |
+| `grpc_allowed_roots` | - | 路径校验根目录列表（可选，用于限定可访问路径） |
+
+> **⚠️ 安全提示**: `grpc_require_auth` 默认为 `true`，调用方需通过配置 `grpc_require_auth = false` 显式关闭认证。生产环境建议保持开启，并配置 `grpc_allowed_roots` 限定可访问路径。
 
 ---
 
@@ -262,6 +295,13 @@ trusted_proxies = []  # 受信任代理 CIDR 列表
 [server]
 host = "0.0.0.0"
 port = 9002
+# gRPC 配置（需以 --features grpc 构建）
+grpc_enabled = true
+grpc_port = 50051
+grpc_max_connections = 1000
+grpc_timeout_seconds = 30
+grpc_require_auth = true
+grpc_allowed_roots = ["/data"]
 
 [model]
 model_repo = "BAAI/bge-m3"
@@ -349,7 +389,7 @@ docker stop vecboost
 curl http://localhost:9002/health
 
 # 预期响应:
-# {"status":"healthy","version":"0.1.0",...}
+# {"status":"healthy","version":"0.2.0",...}
 ```
 
 ---

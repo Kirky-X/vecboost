@@ -13,7 +13,7 @@ categories = ["asynchronous", "science", "web-programming::http-server"]
 
 [dependencies]
 # Base async runtime & utilities (always required)
-tokio = { version = "1.52", default-features = false, features = ["full"] }
+tokio = { version = "1.53", default-features = false, features = ["full"] }
 async-trait = { version = "0.1", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 sys-info = { version = "0.9", default-features = false }
@@ -103,7 +103,7 @@ ort = { version = "2.0.0-rc.12", optional = true, default-features = false }
 # 注意:项目代码不直接使用 cudarc,无需在此声明
 
 # Multi-protocol SDK framework (sdforge - 通过 http/cli/mcp feature 启用,禁止手写接口)
-sdforge = { version = "0.4.6", optional = true, default-features = false }
+sdforge = { path = "../sdforge", optional = true, default-features = false }
 
 # CLI argument parsing (cli feature)
 clap = { version = "4.6", optional = true, default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
@@ -156,7 +156,7 @@ tokenizers = { version = "0.15", default-features = false, features = ["http"] }
 [dev-dependencies]
 mockall = { version = "0.15", default-features = false }
 tower = { version = "0.5", default-features = false, features = ["util"] }
-tokio = { version = "1.52", default-features = false, features = ["test-util", "macros", "rt-multi-thread"] }
+tokio = { version = "1.53", default-features = false, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = { version = "3.0", default-features = false }
 # tracing/tracing-subscriber/toml 仅测试用(logger/tests.rs 验证 inklog subscriber 集成 + config 测试解析 toml)
 tracing = { version = "0.1", default-features = false, features = ["std"] }

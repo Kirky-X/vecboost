@@ -5022,6 +5022,8 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sdforge"
 version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "706d57a58557cd23b54ec72b3ac18bed3898ce4ef9e757369cc7296ae326c097"
 dependencies = [
  "anyhow",
  "axum",
@@ -5067,6 +5069,8 @@ dependencies = [
 [[package]]
 name = "sdforge-macros"
 version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bd3c1b511cf390dc26d97fcec9b3e686529e8bcd92cf719d0ea512d2bd2ee9c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6224,7 +6228,6 @@ dependencies = [
  "socket2",
  "sync_wrapper",
  "tokio",
- "tokio-rustls",
  "tokio-stream",
  "tower",
  "tower-layer",

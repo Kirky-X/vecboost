@@ -100,7 +100,8 @@ ort = { version = "2.0.0-rc.12", optional = true, default-features = false }
 # 注意:项目代码不直接使用 cudarc,无需在此声明
 
 # Multi-protocol SDK framework (sdforge - 通过 http/cli/mcp feature 启用,禁止手写接口)
-sdforge = { path = "../sdforge", optional = true, default-features = false }
+# 版本约束用 minor 级别(规则25),允许 sdforge 0.4.x 的 minor 升级
+sdforge = { version = "0.4", optional = true, default-features = false }
 
 # CLI argument parsing (cli feature)
 clap = { version = "4.6", optional = true, default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }

@@ -36,7 +36,7 @@ pub async fn forge_login(
     #[param(kind = "extension")] connect_info: ConnectInfo<SocketAddr>,
     req: LoginRequest,
 ) -> Result<AuthResponse, ApiError> {
-    let st = state().map_err(|e| to_api_error(&e))?;
+    let st = state().map_err(to_api_error)?;
     let user_store = st
         .kit
         .require::<UserStoreModule>()
@@ -65,9 +65,7 @@ pub async fn forge_login(
         .await
     {
         Ok(user) => {
-            let token = jwt_manager
-                .generate_token(&user)
-                .map_err(|e| to_api_error(&e))?;
+            let token = jwt_manager.generate_token(&user).map_err(to_api_error)?;
             if let Some(logger) = audit_logger {
                 logger.log_login_success(&req.username, Some(peer_ip.clone()));
             }
@@ -81,7 +79,7 @@ pub async fn forge_login(
             if let Some(logger) = audit_logger {
                 logger.log_login_failed(&req.username, Some(peer_ip.clone()), &e.to_string());
             }
-            Err(to_api_error(&e))
+            Err(to_api_error(e))
         }
     }
 }
@@ -96,7 +94,7 @@ pub async fn forge_login(
     description = "Refresh JWT token"
 )]
 pub async fn forge_refresh(req: RefreshTokenRequest) -> Result<AuthResponse, ApiError> {
-    let st = state().map_err(|e| to_api_error(&e))?;
+    let st = state().map_err(to_api_error)?;
     let jwt_manager = st
         .kit
         .require::<AuthModule>()
@@ -110,7 +108,7 @@ pub async fn forge_refresh(req: RefreshTokenRequest) -> Result<AuthResponse, Api
     let new_token = jwt_manager
         .refresh_token(&req.refresh_token)
         .await
-        .map_err(|e| to_api_error(&e))?;
+        .map_err(to_api_error)?;
 
     if let Some(logger) = audit_logger
         && let Ok(claims) = jwt_manager.validate_token(&req.refresh_token).await
@@ -138,7 +136,7 @@ pub async fn forge_logout(
     #[param(kind = "extension")] auth_ctx: AuthContext,
     #[param(kind = "extension")] connect_info: ConnectInfo<SocketAddr>,
 ) -> Result<String, ApiError> {
-    let st = state().map_err(|e| to_api_error(&e))?;
+    let st = state().map_err(to_api_error)?;
     let jwt_manager = st
         .kit
         .require::<AuthModule>()
@@ -174,7 +172,7 @@ pub async fn forge_logout(
 pub async fn forge_me(
     #[param(kind = "extension")] auth_ctx: AuthContext,
 ) -> Result<serde_json::Value, ApiError> {
-    let st = state().map_err(|e| to_api_error(&e))?;
+    let st = state().map_err(to_api_error)?;
     let user_store = st
         .kit
         .require::<UserStoreModule>()
@@ -185,7 +183,7 @@ pub async fn forge_me(
     let user = user_store
         .get_user(&username)
         .await
-        .map_err(|e| to_api_error(&e))?
+        .map_err(to_api_error)?
         .ok_or_else(|| ApiError::InvalidInput {
             message: format!("User '{}' not found", username),
             field: Some("username".to_string()),

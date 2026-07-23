@@ -50,7 +50,11 @@ use vecboost::{
 };
 
 #[cfg(feature = "grpc")]
-use vecboost::grpc::server::GrpcServer;
+use sdforge::grpc::{GrpcServerConfig, build_server_with_config};
+#[cfg(all(feature = "grpc", feature = "auth"))]
+use sdforge::security::BearerAuth;
+#[cfg(feature = "grpc")]
+use sdforge::security::ratelimit::LimiteronAdapter as SdforgeLimiteronAdapter;
 
 // metrics 端点（Prometheus text/plain, forge 不支持非 JSON 响应, 保留手写）
 use vecboost::metrics::metrics_endpoint;
@@ -69,8 +73,8 @@ async fn main() -> anyhow::Result<()> {
 
     log::info!("Starting Rust Embedding Service...");
 
-    // 确保所有 sdforge inventory（HTTP/MCP/CLI）被链接器保留
-    #[cfg(any(feature = "http", feature = "mcp", feature = "cli"))]
+    // 确保所有 sdforge inventory（HTTP/MCP/CLI/gRPC）被链接器保留
+    #[cfg(any(feature = "http", feature = "mcp", feature = "cli", feature = "grpc"))]
     {
         let _counts = sdforge::init_all_plugins();
     }
@@ -562,12 +566,6 @@ async fn main() -> anyhow::Result<()> {
     // v0.3.0 D3: VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
     let app_state = VecboostState::new(kit);
 
-    let _grpc_service = app_state
-        .kit()
-        .require::<EmbeddingModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to require EmbeddingModule for gRPC: {}", e))?
-        .clone();
-
     // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state().kit.require 访问）
     vecboost::api::init_state(app_state.clone());
 
@@ -658,21 +656,92 @@ async fn main() -> anyhow::Result<()> {
         let grpc_host = config
             .server
             .grpc_host
+            .clone()
             .unwrap_or_else(|| config.server.host.clone());
         let grpc_port = config.server.grpc_port.unwrap_or(50051);
-        let grpc_addr: SocketAddr = format!("{}:{}", grpc_host, grpc_port)
-            .parse()
-            .map_err(|e| anyhow::anyhow!("Invalid gRPC address: {}", e))?;
+        let grpc_addr = format!("{}:{}", grpc_host, grpc_port);
 
-        let grpc_server = GrpcServer::new(grpc_addr, _grpc_service);
+        // Secure default: require auth unless explicitly disabled via config.
+        // config.server.grpc_require_auth defaults to Some(true) in ServerConfig::default().
+        let require_auth = config.server.grpc_require_auth.unwrap_or(true);
 
+        // Build BearerAuth when auth is enabled and a JWT secret is configured.
+        // sdforge's GrpcServerConfig requires `auth: Option<BearerAuth>` (gated by
+        // sdforge/security feature, which vecboost's grpc feature pulls in).
+        let bearer_auth = if require_auth {
+            #[cfg(feature = "auth")]
+            {
+                if config.auth.enabled {
+                    if let Some(secret) = config.auth.jwt_secret.as_ref() {
+                        match BearerAuth::try_new(secret.clone()) {
+                            Ok(b) => {
+                                log::info!("gRPC BearerAuth enabled (auth.enabled=true)");
+                                Some(b)
+                            }
+                            Err(e) => {
+                                anyhow::bail!(
+                                    "gRPC require_auth=true but BearerAuth creation failed: {}. \
+                                     Set VECBOOST_JWT_SECRET (>=32 chars) or set \
+                                     [server] grpc_require_auth = false for dev",
+                                    e
+                                );
+                            }
+                        }
+                    } else {
+                        anyhow::bail!(
+                            "gRPC require_auth=true but auth.jwt_secret is None. \
+                             Set VECBOOST_JWT_SECRET env var or set \
+                             [server] grpc_require_auth = false for dev"
+                        );
+                    }
+                } else {
+                    anyhow::bail!(
+                        "gRPC require_auth=true but auth.enabled=false. \
+                         Enable [auth] enabled = true or set [server] grpc_require_auth = false"
+                    );
+                }
+            }
+            #[cfg(not(feature = "auth"))]
+            {
+                anyhow::bail!(
+                    "gRPC require_auth=true but vecboost `auth` feature is not enabled. \
+                     Enable `auth` feature or set [server] grpc_require_auth = false in config"
+                );
+            }
+        } else {
+            log::warn!(
+                "gRPC server starting with require_auth=false — \
+                 this is insecure; use only for development behind network isolation"
+            );
+            None
+        };
+
+        // Build sdforge rate_limiter (gated by sdforge/ratelimit feature, which
+        // vecboost's grpc feature pulls in). Uses default config (100 burst, 10 req/s).
+        // `new()` panics only on invalid default config (should never happen).
+        let rate_limiter: Option<std::sync::Arc<dyn sdforge::security::ratelimit::RateLimiter>> = {
+            let limiter = SdforgeLimiteronAdapter::new().await;
+            log::info!(
+                "gRPC rate_limiter enabled (sdforge LimiteronAdapter, default config: 100 burst / 10 req/s)"
+            );
+            Some(std::sync::Arc::new(limiter))
+        };
+
+        let grpc_config = GrpcServerConfig {
+            max_connections: config.server.grpc_max_connections.unwrap_or(1000),
+            timeout_seconds: config.server.grpc_timeout_seconds.unwrap_or(30),
+            require_auth,
+            auth: bearer_auth,
+            state: None,
+            rate_limiter,
+        };
+
+        log::info!("gRPC server enabled on {}", grpc_addr);
         tokio::spawn(async move {
-            if let Err(e) = grpc_server.run().await {
+            if let Err(e) = build_server_with_config(&grpc_addr, grpc_config).await {
                 log::error!("gRPC server error: {}", e);
             }
         });
-
-        log::info!("gRPC server enabled on {}", grpc_addr);
     }
 
     axum::serve(

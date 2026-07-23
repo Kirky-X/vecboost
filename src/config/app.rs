@@ -28,6 +28,16 @@ pub struct ServerConfig {
     pub grpc_enabled: bool,
     pub workers: Option<usize>,
     pub timeout: Option<u64>,
+    /// gRPC server max concurrent streams per connection.
+    pub grpc_max_connections: Option<usize>,
+    /// gRPC request timeout in seconds (applies to streaming RPCs).
+    pub grpc_timeout_seconds: Option<u64>,
+    /// Whether gRPC server requires authentication (secure default: true).
+    /// Set to false only for development/test environments behind network isolation.
+    pub grpc_require_auth: Option<bool>,
+    /// Allowed root directories for `grpc_embed_file` path validation.
+    /// When empty, falls back to current working directory (with sensitive-dir check).
+    pub grpc_allowed_roots: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
@@ -337,6 +347,12 @@ impl Default for ServerConfig {
             grpc_enabled: false,
             workers: None,
             timeout: Some(30),
+            grpc_max_connections: Some(1000),
+            grpc_timeout_seconds: Some(30),
+            // Secure default: require auth unless explicitly disabled.
+            // Callers must opt-out via config.toml `[server] grpc_require_auth = false`.
+            grpc_require_auth: Some(true),
+            grpc_allowed_roots: None,
         }
     }
 }
@@ -917,6 +933,10 @@ mod tests {
             grpc_enabled: true,
             workers: Some(8),
             timeout: Some(60),
+            grpc_max_connections: Some(500),
+            grpc_timeout_seconds: Some(120),
+            grpc_require_auth: Some(false),
+            grpc_allowed_roots: Some(vec!["/data".to_string()]),
         };
         assert_eq!(config.host, "localhost");
         assert_eq!(config.port, 4000);
@@ -925,6 +945,10 @@ mod tests {
         assert!(config.grpc_enabled);
         assert_eq!(config.workers, Some(8));
         assert_eq!(config.timeout, Some(60));
+        assert_eq!(config.grpc_max_connections, Some(500));
+        assert_eq!(config.grpc_timeout_seconds, Some(120));
+        assert_eq!(config.grpc_require_auth, Some(false));
+        assert_eq!(config.grpc_allowed_roots, Some(vec!["/data".to_string()]));
     }
 
     #[test]

@@ -285,7 +285,7 @@ fn test_uuid_like_id_unique() {
 #[test]
 fn test_to_api_error_invalid_input() {
     let err = VecboostError::InvalidInput("bad input".to_string());
-    let api_err = to_api_error(&err);
+    let api_err = to_api_error(err);
     match api_err {
         ApiError::InvalidInput {
             message,
@@ -304,7 +304,7 @@ fn test_to_api_error_invalid_input() {
 #[test]
 fn test_to_api_error_model_load_error() {
     let err = VecboostError::ModelLoadError("model not found".to_string());
-    let api_err = to_api_error(&err);
+    let api_err = to_api_error(err);
     match api_err {
         ApiError::Internal {
             message, error_id, ..
@@ -338,7 +338,7 @@ fn test_to_api_error_other_variants_become_internal() {
         VecboostError::OutOfMemory("oom".to_string()),
     ];
     for err in variants {
-        let api_err = to_api_error(&err);
+        let api_err = to_api_error(err.clone());
         match api_err {
             ApiError::Internal {
                 message, error_id, ..

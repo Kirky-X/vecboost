@@ -96,6 +96,13 @@ pub struct FileEmbedRequest {
     pub mode: Option<AggregationMode>,
 }
 
+impl FromStr for FileEmbedRequest {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct FileEmbedResponse {
     pub mode: AggregationMode,
@@ -142,6 +149,13 @@ pub struct ModelSwitchRequest {
     pub expected_dimension: Option<usize>,
     pub memory_limit_bytes: Option<u64>,
     pub oom_fallback_enabled: Option<bool>,
+}
+
+impl FromStr for ModelSwitchRequest {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]

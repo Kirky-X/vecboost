@@ -19,8 +19,6 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod engine;
-#[cfg(feature = "grpc")]
-pub mod grpc;
 pub mod metrics;
 pub mod module_registry;
 pub mod pipeline;

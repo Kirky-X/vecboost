@@ -25,15 +25,7 @@ fn main() {
         }
     }
 
-    // Build gRPC service only when grpc feature is enabled
-    #[cfg(feature = "grpc")]
-    {
-        println!("cargo:rerun-if-changed=proto/embedding.proto");
-
-        tonic_prost_build::configure()
-            .build_server(true)
-            .build_client(true)
-            .compile_protos(&["proto/embedding.proto"], &["proto/"])
-            .expect("Failed to compile proto files");
-    }
+    // gRPC is now fully handled by sdforge (unified Call protocol).
+    // No proto compilation needed — proto types are replaced by
+    // JSON-serialized domain types via #[forge(grpc_method = "...")].
 }

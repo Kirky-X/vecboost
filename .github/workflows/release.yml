@@ -58,36 +58,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+        os: [ubuntu-latest, windows-latest]
         include:
           - os: ubuntu-latest
             artifact_name: vecboost
             asset_name: vecboost-linux-x86_64
             ext: ""
             features: "grpc,cli,auth,onnx,db,redis,openapi,mcp"
-            continue_on_error: false
           - os: windows-latest
             artifact_name: vecboost.exe
             asset_name: vecboost-windows-x86_64.exe
             ext: ".exe"
             features: "grpc,cli,auth,onnx,db,redis,openapi,mcp"
-            continue_on_error: false
-          - os: macos-13
-            artifact_name: vecboost
-            asset_name: vecboost-macos-x86_64
-            ext: ""
-            features: "grpc,cli,auth,onnx,db,redis,openapi,mcp"
-            continue_on_error: true
-          - os: macos-14
-            artifact_name: vecboost
-            asset_name: vecboost-macos-arm64
-            ext: ""
-            features: "grpc,cli,auth,onnx,db,redis,openapi,mcp"
-            continue_on_error: true
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    continue-on-error: ${{ matrix.continue_on_error }}
     steps:
       - uses: actions/checkout@v4
         with:

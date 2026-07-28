@@ -6,6 +6,7 @@
 #[cfg(feature = "http")]
 use axum::extract::FromRef;
 use std::sync::Arc;
+#[cfg(feature = "http")]
 use tokio::sync::RwLock;
 
 // 公共 API 模块 - SDK 入口,HTTP/MCP/CLI 协议共享
@@ -193,10 +194,11 @@ mod tests {
     use crate::module_registry::{
         AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, DbConfig, DbModule,
         EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
-        PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule,
-        PrometheusCollectorModule, RateLimitEnabled, RateLimitEnabledModule, RateLimitModule,
-        ResponseChannelModule, WorkerManagerModule,
+        PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule, RateLimitEnabled,
+        RateLimitEnabledModule, RateLimitModule, ResponseChannelModule, WorkerManagerModule,
     };
+    #[cfg(feature = "http")]
+    use crate::module_registry::PrometheusCollectorModule;
     #[cfg(feature = "auth")]
     use crate::module_registry::{
         AuthModule, CsrfConfigModule, CsrfTokenStoreModule, UserStoreModule,
@@ -204,8 +206,10 @@ mod tests {
     use crate::pipeline::{PriorityConfig, WorkerConfig};
     use async_trait::async_trait;
 
+    #[cfg(feature = "http")]
     struct MockEngine;
 
+    #[cfg(feature = "http")]
     #[async_trait]
     impl InferenceEngine for MockEngine {
         fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
@@ -237,6 +241,7 @@ mod tests {
     /// `metrics` / `prometheus` / `audit` 为 None 时,Module 仍注册但能力查询返回 None,
     /// 用于测试 FromRef panic 路径。其他能力（service/rate_limiter/pipeline 组件）
     /// 始终注入,因为这些是必需能力（missing config = build 失败）。
+    #[cfg(feature = "http")]
     async fn make_app_state_with_options(
         metrics: Option<Arc<metrics::InferenceCollector>>,
         prometheus: Option<Arc<metrics::PrometheusCollector>>,
@@ -318,6 +323,7 @@ mod tests {
     }
 
     /// 默认完整 VecboostState：metrics=Some, prometheus=Some, audit=None
+    #[cfg(feature = "http")]
     async fn make_app_state() -> VecboostState {
         make_app_state_with_options(
             Some(Arc::new(metrics::InferenceCollector::new())),
@@ -333,6 +339,7 @@ mod tests {
     // 构建与 Clone 测试
     // -------------------------------------------------------------------------
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_app_state_construction() {
         let state = make_app_state().await;
@@ -346,6 +353,7 @@ mod tests {
         assert!(state.kit.contains::<WorkerManagerModule>());
     }
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_app_state_clone_preserves_kit_arc() {
         let state = make_app_state().await;
@@ -353,6 +361,7 @@ mod tests {
         assert!(Arc::ptr_eq(&state.kit, &cloned.kit));
     }
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_app_state_multiple_clones_share_kit() {
         let state = make_app_state().await;
@@ -368,6 +377,7 @@ mod tests {
     // kit.require 能力查询测试
     // -------------------------------------------------------------------------
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_kit_require_embedding_service() {
         let state = make_app_state().await;
@@ -375,12 +385,14 @@ mod tests {
         let _guard = service.read().await;
     }
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_kit_require_rate_limiter() {
         let state = make_app_state().await;
         let _limiter = state.kit.require::<RateLimitModule>().unwrap();
     }
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_kit_require_metrics_collector_returns_some() {
         let state = make_app_state().await;
@@ -388,6 +400,7 @@ mod tests {
         assert!(collector.is_some());
     }
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_kit_require_prometheus_collector_returns_some() {
         let state = make_app_state().await;
@@ -395,6 +408,7 @@ mod tests {
         assert!(collector.is_some());
     }
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_kit_require_audit_logger_returns_none() {
         let state = make_app_state().await;
@@ -402,6 +416,7 @@ mod tests {
         assert!(logger.is_none());
     }
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_kit_require_ip_whitelist_empty() {
         let state = make_app_state().await;
@@ -409,6 +424,7 @@ mod tests {
         assert!(whitelist.is_empty());
     }
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_kit_require_bool_flags_default_false() {
         let state = make_app_state().await;
@@ -420,6 +436,7 @@ mod tests {
         assert!(!pipeline_enabled);
     }
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_kit_require_pipeline_components() {
         let state = make_app_state().await;
@@ -429,6 +446,7 @@ mod tests {
         let _manager = state.kit.require::<WorkerManagerModule>().unwrap();
     }
 
+    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_kit_require_cache_and_db_default_false() {
         let state = make_app_state().await;

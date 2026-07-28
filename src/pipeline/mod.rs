@@ -8,6 +8,8 @@
 //! 实现请求流水线处理，包括优先级队列、动态 Worker 管理等
 
 pub mod config;
+// handler 依赖 axum::Json，仅在 http feature 下编译
+#[cfg(feature = "http")]
 pub(crate) mod handler;
 mod priority;
 mod queue;
@@ -16,6 +18,7 @@ mod scheduler;
 mod worker;
 
 pub use config::{PipelineConfig, PriorityConfig, QueueConfig, WorkerConfig};
+#[cfg(feature = "http")]
 pub use handler::handle_pipeline_request;
 pub use priority::{Priority, PriorityCalculator, PriorityInput, RequestSource};
 pub use queue::{PriorityRequestQueue, QueuedRequest};

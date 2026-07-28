@@ -3,12 +3,14 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#[cfg(feature = "http")]
 use axum::{
     Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use regex::Regex;
+#[cfg(feature = "http")]
 use serde_json::json;
 use thiserror::Error;
 
@@ -168,6 +170,7 @@ impl VecboostError {
     }
 }
 
+#[cfg(feature = "http")]
 impl IntoResponse for VecboostError {
     fn into_response(self) -> Response {
         let status = match self {

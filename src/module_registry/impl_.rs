@@ -22,15 +22,17 @@ use super::RateLimitModule;
 use super::{
     AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, DbConfig, DbModule,
     EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
-    PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule,
-    PrometheusCollectorModule, RateLimitEnabled, RateLimitEnabledModule, ResponseChannelModule,
-    WorkerManagerModule,
+    PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule, RateLimitEnabled,
+    RateLimitEnabledModule, ResponseChannelModule, WorkerManagerModule,
 };
+#[cfg(feature = "http")]
+use super::PrometheusCollectorModule;
 #[cfg(feature = "auth")]
 use super::{CsrfConfigModule, CsrfTokenStoreModule, UserStoreModule};
 use crate::audit::AuditLogger;
 #[cfg(feature = "auth")]
 use crate::auth::{CsrfConfig, CsrfTokenStore, UserStore};
+#[cfg(feature = "http")]
 use crate::metrics::PrometheusCollector;
 use crate::rate_limit::LimiteronAdapter;
 use crate::service::embedding::EmbeddingService;
@@ -316,9 +318,10 @@ impl AsyncAutoBuilder for MetricsCollectorModule {
 }
 
 // ---------------------------------------------------------------------------
-// PrometheusCollectorModule
+// PrometheusCollectorModule（仅 http feature）
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "http")]
 impl ModuleMeta for PrometheusCollectorModule {
     const NAME: &'static str = "prometheus_collector";
 
@@ -327,6 +330,7 @@ impl ModuleMeta for PrometheusCollectorModule {
     }
 }
 
+#[cfg(feature = "http")]
 impl AsyncAutoBuilder for PrometheusCollectorModule {
     type Capability = Option<Arc<PrometheusCollector>>;
     type Error = TraitKitError;

@@ -64,6 +64,10 @@ pub struct CsrfTokenStoreModule;
 pub struct MetricsCollectorModule;
 
 /// Prometheus 收集器模块 — 提供 `Option<Arc<PrometheusCollector>>` 能力
+///
+/// 仅在 http feature 下可用（依赖 prometheus crate）。
+/// library 模式下不注册此模块，`kit.require::<PrometheusCollectorModule>()` 会失败。
+#[cfg(feature = "http")]
 pub struct PrometheusCollectorModule;
 
 /// IP 白名单模块 — 提供 `Vec<String>` 能力

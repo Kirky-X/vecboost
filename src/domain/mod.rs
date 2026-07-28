@@ -10,9 +10,11 @@ use crate::utils::AggregationMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
+#[cfg(feature = "schema")]
 use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct EmbedRequest {
     pub text: String,
     pub normalize: Option<bool>,
@@ -25,14 +27,16 @@ impl FromStr for EmbedRequest {
     }
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct EmbedResponse {
     pub embedding: Vec<f32>,
     pub dimension: usize,
     pub processing_time_ms: u128,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct SimilarityRequest {
     pub source: String,
     pub target: String,
@@ -45,44 +49,51 @@ impl FromStr for SimilarityRequest {
     }
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct SimilarityResponse {
     pub score: f32,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct SearchRequest {
     pub query: String,
     pub texts: Vec<String>,
     pub top_k: Option<usize>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct SearchResult {
     pub text: String,
     pub score: f32,
     pub index: usize,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct ParagraphEmbedding {
     pub embedding: Vec<f32>,
     pub position: usize,
     pub text_preview: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub enum EmbeddingOutput {
     Single(EmbedResponse),
     Paragraphs(Vec<ParagraphEmbedding>),
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct FileProcessingStats {
     pub total_chunks: usize,
     pub successful_chunks: usize,
@@ -90,7 +101,8 @@ pub struct FileProcessingStats {
     pub processing_time_ms: u128,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct FileEmbedRequest {
     pub path: String,
     pub mode: Option<AggregationMode>,
@@ -103,7 +115,8 @@ impl FromStr for FileEmbedRequest {
     }
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct FileEmbedResponse {
     pub mode: AggregationMode,
     pub stats: FileProcessingStats,
@@ -111,7 +124,8 @@ pub struct FileEmbedResponse {
     pub paragraphs: Option<Vec<ParagraphEmbedding>>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct BatchEmbedRequest {
     pub texts: Vec<String>,
     pub mode: Option<AggregationMode>,
@@ -125,14 +139,16 @@ impl FromStr for BatchEmbedRequest {
     }
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct BatchEmbedResponse {
     pub embeddings: Vec<BatchEmbeddingResult>,
     pub dimension: usize,
     pub processing_time_ms: u128,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct BatchEmbeddingResult {
     pub text_preview: String,
     pub embedding: Vec<f32>,
@@ -158,7 +174,8 @@ impl FromStr for ModelSwitchRequest {
     }
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct ModelSwitchResponse {
     pub previous_model: Option<String>,
     pub current_model: String,
@@ -166,7 +183,8 @@ pub struct ModelSwitchResponse {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct ModelInfo {
     pub name: String,
     pub engine_type: String,
@@ -174,7 +192,8 @@ pub struct ModelInfo {
     pub is_loaded: bool,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct ModelMetadata {
     pub name: String,
     pub version: String,
@@ -185,7 +204,8 @@ pub struct ModelMetadata {
     pub loaded_at: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct ModelListResponse {
     pub models: Vec<ModelInfo>,
     pub total_count: usize,

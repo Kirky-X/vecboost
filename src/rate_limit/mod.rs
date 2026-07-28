@@ -100,7 +100,8 @@ impl RateLimitConfig {
 }
 
 /// 限流状态
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct RateLimitStatus {
     pub dimension: String,
     pub max_requests: u64,

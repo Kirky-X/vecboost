@@ -3,17 +3,15 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+#[cfg(feature = "schema")]
 use utoipa::ToSchema;
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
 
 use crate::error::VecboostError;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum SimilarityMetric {
     #[default]
@@ -37,7 +35,8 @@ impl FromStr for SimilarityMetric {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum AggregationMode {
     #[default]

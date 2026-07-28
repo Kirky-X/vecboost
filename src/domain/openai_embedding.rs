@@ -9,40 +9,48 @@
 //! OpenAI Embeddings API specification.
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "schema")]
 use utoipa::ToSchema;
 
 /// OpenAI-compatible embedding request.
 ///
 /// This structure matches the OpenAI Embeddings API request format.
 /// See: https://platform.openai.com/docs/api-reference/embeddings
-#[derive(Debug, Deserialize, ToSchema)]
-#[schema(example = json!({
-    "input": "The food was delicious and the waiter was friendly.",
-    "model": "text-embedding-ada-002",
-    "encoding_format": "float",
-    "dimensions": 1024
-}))]
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
+#[cfg_attr(
+    feature = "schema",
+    schema(example = json!({
+        "input": "The food was delicious and the waiter was friendly.",
+        "model": "text-embedding-ada-002",
+        "encoding_format": "float",
+        "dimensions": 1024
+    }))
+)]
 pub struct OpenAIEmbedRequest {
     /// The input text to embed, either as a string or an array of strings.
     /// Maximum array size is 2048 elements.
-    #[schema(value_type = String, example = "The food was delicious and the waiter was friendly.")]
+    #[cfg_attr(
+        feature = "schema",
+        schema(value_type = String, example = "The food was delicious and the waiter was friendly.")
+    )]
     pub input: OpenAIInput,
 
     /// The ID of the model to use for embedding.
     /// Must be a model that supports embeddings.
-    #[schema(example = "text-embedding-ada-002")]
+    #[cfg_attr(feature = "schema", schema(example = "text-embedding-ada-002"))]
     pub model: String,
 
     /// The format to return the embeddings in.
     /// Can be "float" or "base64".
     /// Defaults to "float".
-    #[schema(example = "float")]
+    #[cfg_attr(feature = "schema", schema(example = "float"))]
     #[serde(default)]
     pub encoding_format: Option<String>,
 
     /// The number of dimensions the resulting output embeddings should have.
     /// Only supported by text-embedding-3 and later models.
-    #[schema(example = 1024)]
+    #[cfg_attr(feature = "schema", schema(example = 1024))]
     #[serde(default)]
     pub dimensions: Option<usize>,
 
@@ -114,22 +122,26 @@ impl OpenAIInput {
 /// OpenAI-compatible embedding response.
 ///
 /// This structure matches the OpenAI Embeddings API response format.
-#[derive(Debug, Serialize, ToSchema)]
-#[schema(example = json!({
-    "object": "list",
-    "data": [
-        {
-            "object": "embedding",
-            "embedding": [0.0023064255, -0.009327292, -0.0028842222],
-            "index": 0
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
+#[cfg_attr(
+    feature = "schema",
+    schema(example = json!({
+        "object": "list",
+        "data": [
+            {
+                "object": "embedding",
+                "embedding": [0.0023064255, -0.009327292, -0.0028842222],
+                "index": 0
+            }
+        ],
+        "model": "text-embedding-ada-002",
+        "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8
         }
-    ],
-    "model": "text-embedding-ada-002",
-    "usage": {
-        "prompt_tokens": 8,
-        "total_tokens": 8
-    }
-}))]
+    }))
+)]
 pub struct OpenAIEmbedResponse {
     /// The object type, always "list"
     pub object: String,
@@ -145,7 +157,8 @@ pub struct OpenAIEmbedResponse {
 }
 
 /// An embedding object returned by the API.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct EmbeddingObject {
     /// The object type, always "embedding"
     pub object: String,
@@ -158,7 +171,8 @@ pub struct EmbeddingObject {
 }
 
 /// Usage statistics for the request.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct Usage {
     /// Number of tokens in the prompt
     pub prompt_tokens: u32,
@@ -168,13 +182,15 @@ pub struct Usage {
 }
 
 /// OpenAI-style error response.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct OpenAIError {
     pub error: OpenAIErrorDetail,
 }
 
 /// Details of an API error.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct OpenAIErrorDetail {
     /// Human-readable error message
     pub message: String,

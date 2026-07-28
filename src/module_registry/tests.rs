@@ -522,6 +522,7 @@ fn make_metrics_collector() -> Option<Arc<crate::metrics::InferenceCollector>> {
     Some(Arc::new(crate::metrics::InferenceCollector::new()))
 }
 
+#[cfg(feature = "http")]
 fn make_prometheus_collector() -> Option<Arc<crate::metrics::PrometheusCollector>> {
     Some(Arc::new(
         crate::metrics::PrometheusCollector::new().expect("Failed to create PrometheusCollector"),
@@ -687,6 +688,7 @@ async fn test_metrics_collector_module_missing_config_fails() {
 // PrometheusCollectorModule (Option<Arc<PrometheusCollector>>)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "http")]
 #[tokio::test]
 async fn test_prometheus_collector_module_with_some() {
     let collector = make_prometheus_collector();
@@ -703,6 +705,7 @@ async fn test_prometheus_collector_module_with_some() {
     ));
 }
 
+#[cfg(feature = "http")]
 #[tokio::test]
 async fn test_prometheus_collector_module_with_none() {
     let mut kit = AsyncKit::new();
@@ -714,6 +717,7 @@ async fn test_prometheus_collector_module_with_none() {
     assert!(capability.is_none());
 }
 
+#[cfg(feature = "http")]
 #[tokio::test]
 async fn test_prometheus_collector_module_missing_config_fails() {
     let mut kit = AsyncKit::new();
@@ -995,6 +999,7 @@ async fn test_all_seventeen_modules_build_together() {
     kit.set_config(RateLimitEnabled(true));
     kit.set_config(PipelineEnabled(false));
     kit.set_config(make_metrics_collector());
+    #[cfg(feature = "http")]
     kit.set_config(make_prometheus_collector());
     kit.set_config(vec!["127.0.0.1".to_string()]);
     kit.set_config(make_pipeline_queue());
@@ -1016,6 +1021,7 @@ async fn test_all_seventeen_modules_build_together() {
     kit.register::<RateLimitEnabledModule>().unwrap();
     kit.register::<PipelineEnabledModule>().unwrap();
     kit.register::<MetricsCollectorModule>().unwrap();
+    #[cfg(feature = "http")]
     kit.register::<PrometheusCollectorModule>().unwrap();
     kit.register::<IpWhitelistModule>().unwrap();
     kit.register::<PipelineQueueModule>().unwrap();
@@ -1042,6 +1048,7 @@ async fn test_all_seventeen_modules_build_together() {
     assert!(kit.contains::<RateLimitEnabledModule>());
     assert!(kit.contains::<PipelineEnabledModule>());
     assert!(kit.contains::<MetricsCollectorModule>());
+    #[cfg(feature = "http")]
     assert!(kit.contains::<PrometheusCollectorModule>());
     assert!(kit.contains::<IpWhitelistModule>());
     assert!(kit.contains::<PipelineQueueModule>());

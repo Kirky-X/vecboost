@@ -1,6 +1,6 @@
 [package]
 name = "vecboost"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["Kirky-X <kirky-x@outlook.com>"]
 description = "High-performance embedding vector service written in Rust"
@@ -69,7 +69,10 @@ axum-extra = { version = "0.12", optional = true, default-features = false, feat
 tower-http = { version = "0.7", optional = true, default-features = false, features = ["trace", "cors", "add-extension", "validate-request", "set-header", "timeout"] }
 
 # OpenAPI Documentation (http feature)
-utoipa = { version = "5.5", optional = true, default-features = false, features = ["axum_extras", "chrono", "uuid"] }
+# macros 是 utoipa::ToSchema derive 宏必需 feature(schema feature 单独启用时也工作)
+# utoipa 5.5.0 内部 schema.rs 引用 crate::utoipa::Number(被 cfg(feature="macros") 门控),
+# 不启用 macros 会导致 schema feature 单独编译失败
+utoipa = { version = "5.5", optional = true, default-features = false, features = ["macros", "axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui = { version = "9.0", optional = true, default-features = false, features = ["axum", "url"] }
 uuid = { version = "1.23", optional = true, default-features = false, features = ["v4", "serde"] }
 
@@ -144,6 +147,12 @@ redis = ["dep:redis"]
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/alternative-backend"]
+
+# Binary target — main.rs 是 HTTP server 入口（axum::serve），
+# 需要 http feature 才能编译。schema-only 等 library 模式不会构建 bin。
+[[bin]]
+name = "vecboost"
+required-features = ["http"]
 
 # Platform-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]

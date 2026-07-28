@@ -189,21 +189,26 @@ impl FromRef<VecboostState> for config::app::AuthConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "http")]
     use crate::config::model::Precision;
+    #[cfg(feature = "http")]
     use crate::engine::InferenceEngine;
+    #[cfg(feature = "http")]
+    use crate::module_registry::PrometheusCollectorModule;
+    #[cfg(feature = "http")]
     use crate::module_registry::{
         AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, DbConfig, DbModule,
         EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
         PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule, RateLimitEnabled,
         RateLimitEnabledModule, RateLimitModule, ResponseChannelModule, WorkerManagerModule,
     };
-    #[cfg(feature = "http")]
-    use crate::module_registry::PrometheusCollectorModule;
     #[cfg(feature = "auth")]
     use crate::module_registry::{
         AuthModule, CsrfConfigModule, CsrfTokenStoreModule, UserStoreModule,
     };
+    #[cfg(feature = "http")]
     use crate::pipeline::{PriorityConfig, WorkerConfig};
+    #[cfg(feature = "http")]
     use async_trait::async_trait;
 
     #[cfg(feature = "http")]

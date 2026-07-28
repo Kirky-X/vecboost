@@ -32,6 +32,12 @@ fn write_temp_toml(content: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 /// embedding settings.
 #[test]
 fn test_confers_load_from_minimal_toml() {
+    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    unsafe {
+        std::env::remove_var("VECBOOST_JWT_SECRET");
+        std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+    }
+
     let toml_content = r#"
 [server]
 host = "127.0.0.1"
@@ -258,6 +264,12 @@ fn test_confers_defaults_when_no_file() {
 /// over the `Default` implementations.
 #[test]
 fn test_confers_toml_overrides_defaults() {
+    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    unsafe {
+        std::env::remove_var("VECBOOST_JWT_SECRET");
+        std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+    }
+
     let toml_content = r#"
 [server]
 host = "10.0.0.1"

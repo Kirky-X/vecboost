@@ -5,6 +5,20 @@ All notable changes to VecBoost are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-07-29
+
+### Fixed
+
+- **schema feature 单独启用时编译失败**：`utoipa` 5.5.0 内部 `schema.rs` 引用 `crate::utoipa::Number`（被 `cfg(feature="macros")` 门控），不启用 `macros` feature 会导致 `schema` feature 单独编译失败。显式给 `utoipa` 添加 `macros` feature 修复此问题。
+- **schema-only 模式下 http 依赖代码未 gate**：`src/error.rs` 中 17 个 `test_into_response_*` 测试、3 个 `sanitize_error_message` 边界测试、`use regex::Regex` 导入、`src/lib.rs` tests 模块的 http-only imports、`src/module_registry/tests.rs` 中 `PrometheusCollectorModule` 相关测试和辅助函数缺少 `#[cfg(feature = "http")]` gate，导致 `schema` 单独启用时编译失败。已全部补齐 gate。
+- **config 测试环境变量竞争**：`test_confers_load_from_minimal_toml` 和 `test_confers_toml_overrides_defaults` 缺少 `ENV_LOCK`，与 `test_apply_security_env_overrides_*` 测试并行执行时会因 `VECBOOST_JWT_SECRET` 环境变量竞争而失败。已补齐 `ENV_LOCK` 和环境变量清理。
+- **worker 测试 flaky**：`test_worker_loop_exits_immediately_when_not_running` 在 `current_workers() == 0` 后立即检查 `is_alive`，但 `worker_loop` 先 `decrement_worker_count` 再设置 `is_alive = false`，存在 TOCTOU 竞争。改为等待 `is_alive == false && current_workers() == 0` 同时满足。
+- **bin target 在 schema-only 模式下编译失败**：`src/main.rs` 是 HTTP server 入口（`axum::serve`），整体依赖 `http` feature，但 `Cargo.toml` 未给 `[[bin]]` target 配置 `required-features`，导致 `cargo check --no-default-features --features schema`（含 bin）编译失败。已添加 `[[bin]] required-features = ["http"]`，与 `examples/Cargo.toml` 已有模式一致。
+
+### Changed
+
+- **utoipa features 显式化**：`utoipa` 依赖显式添加 `macros` feature（`ToSchema` derive 宏必需），符合规则25"依赖必须通过特性显式使用"。
+
 ## [0.2.0] - 2026-07-24
 
 ### Added

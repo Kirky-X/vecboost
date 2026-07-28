@@ -9,16 +9,20 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+#[cfg(feature = "http")]
 use regex::Regex;
 #[cfg(feature = "http")]
 use serde_json::json;
 use thiserror::Error;
 
+#[cfg(feature = "http")]
 const MAX_ERROR_MESSAGE_LENGTH: usize = 200;
 
+#[cfg(feature = "http")]
 static SANITIZE_PATTERNS: std::sync::OnceLock<Vec<(Regex, &'static str)>> =
     std::sync::OnceLock::new();
 
+#[cfg(feature = "http")]
 fn get_sanitize_patterns() -> &'static Vec<(Regex, &'static str)> {
     SANITIZE_PATTERNS.get_or_init(|| {
         vec![
@@ -44,6 +48,7 @@ fn get_sanitize_patterns() -> &'static Vec<(Regex, &'static str)> {
     })
 }
 
+#[cfg(feature = "http")]
 fn sanitize_error_message(msg: &str) -> String {
     let mut sanitized = msg.to_string();
     for (pattern, replacement) in get_sanitize_patterns() {
@@ -233,6 +238,7 @@ impl From<tokio::task::JoinError> for VecboostError {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_unix_path() {
         let msg = "Failed to load /home/user/model/file.safetensors";
@@ -241,6 +247,7 @@ mod tests {
         assert!(!sanitized.contains("/home/user/model/file.safetensors"));
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_windows_path() {
         let msg = r#"Failed to load C:\Users\admin\config.json"#;
@@ -248,6 +255,7 @@ mod tests {
         assert!(sanitized.contains("[REDACTED_WINDOWS_PATH]"));
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_token_id() {
         let msg = "Invalid token 12345";
@@ -256,6 +264,7 @@ mod tests {
         assert!(!sanitized.contains("12345"));
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_position() {
         let msg = "JSON parse error at position 42";
@@ -264,6 +273,7 @@ mod tests {
         assert!(!sanitized.contains("42"));
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_unwrap() {
         let msg = "Error in value.unwrap() at line 42";
@@ -271,6 +281,7 @@ mod tests {
         assert!(sanitized.contains("[INTERNAL_ERROR]"));
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_expect() {
         let msg = "called Result::expect(hello) on an Err value";
@@ -278,6 +289,7 @@ mod tests {
         assert!(sanitized.contains("[INTERNAL_ERROR]"));
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_truncation() {
         let long_msg = "x".repeat(300);
@@ -286,6 +298,7 @@ mod tests {
         assert!(sanitized.ends_with("..."));
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_short_message() {
         let msg = "Simple error";
@@ -293,6 +306,7 @@ mod tests {
         assert_eq!(sanitized, "Simple error");
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_empty() {
         let sanitized = sanitize_error_message("");
@@ -416,6 +430,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_config_error() {
         let err = VecboostError::ConfigError("test".to_string());
@@ -423,6 +438,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_invalid_input() {
         let err = VecboostError::InvalidInput("test".to_string());
@@ -430,6 +446,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_not_found() {
         let err = VecboostError::NotFound("test".to_string());
@@ -437,6 +454,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_authentication_error() {
         let err = VecboostError::AuthenticationError("test".to_string());
@@ -444,6 +462,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_rate_limit_exceeded() {
         let err = VecboostError::RateLimitExceeded("test".to_string());
@@ -451,6 +470,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_model_load_error() {
         let err = VecboostError::ModelLoadError("test".to_string());
@@ -458,6 +478,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FAILED_DEPENDENCY);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_inference_error() {
         let err = VecboostError::InferenceError("test".to_string());
@@ -465,6 +486,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_validation_error() {
         let err = VecboostError::ValidationError("test".to_string());
@@ -472,6 +494,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_tokenization_error() {
         let err = VecboostError::TokenizationError("test".to_string());
@@ -479,6 +502,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_out_of_memory() {
         let err = VecboostError::OutOfMemory("test".to_string());
@@ -512,6 +536,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_model_file_corrupted() {
         let err = VecboostError::ModelFileCorrupted("test".to_string());
@@ -519,6 +544,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FAILED_DEPENDENCY);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_model_integrity_error() {
         let err = VecboostError::ModelIntegrityError("test".to_string());
@@ -526,6 +552,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FAILED_DEPENDENCY);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_model_not_loaded() {
         let err = VecboostError::ModelNotLoaded("test".to_string());
@@ -533,6 +560,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FAILED_DEPENDENCY);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_security_error() {
         let err = VecboostError::SecurityError("test".to_string());
@@ -540,6 +568,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_io_error_variant() {
         let err = VecboostError::IoError("test".to_string());
@@ -547,6 +576,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_database_error() {
         let err = VecboostError::DatabaseError("test".to_string());
@@ -554,6 +584,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_into_response_internal_error() {
         let err = VecboostError::InternalError("test".to_string());
@@ -608,6 +639,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_multiple_patterns() {
         let msg = "Error at position 42 in value.unwrap() for token 12345 at /home/user/model/file.safetensors";
@@ -618,6 +650,7 @@ mod tests {
         assert!(sanitized.contains("[REDACTED_PATH]"));
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_exact_boundary() {
         let msg = "x".repeat(MAX_ERROR_MESSAGE_LENGTH);
@@ -626,6 +659,7 @@ mod tests {
         assert!(!sanitized.ends_with("..."));
     }
 
+    #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_one_char_over_boundary() {
         let msg = "x".repeat(MAX_ERROR_MESSAGE_LENGTH + 1);

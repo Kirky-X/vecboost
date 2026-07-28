@@ -18,6 +18,8 @@ use trait_kit::prelude::*;
 
 #[cfg(feature = "auth")]
 use super::AuthModule;
+#[cfg(feature = "http")]
+use super::PrometheusCollectorModule;
 use super::RateLimitModule;
 use super::{
     AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, DbConfig, DbModule,
@@ -25,8 +27,6 @@ use super::{
     PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule, RateLimitEnabled,
     RateLimitEnabledModule, ResponseChannelModule, WorkerManagerModule,
 };
-#[cfg(feature = "http")]
-use super::PrometheusCollectorModule;
 #[cfg(feature = "auth")]
 use super::{CsrfConfigModule, CsrfTokenStoreModule, UserStoreModule};
 use crate::audit::AuditLogger;

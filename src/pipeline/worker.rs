@@ -1161,21 +1161,22 @@ mod tests {
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         loop {
-            if manager.current_workers() == 0 {
+            let health = manager.worker_health.lock().await;
+            if health.len() == 1 && !health[0].is_alive && manager.current_workers() == 0 {
                 break;
             }
+            drop(health);
             if tokio::time::Instant::now() >= deadline {
-                panic!("worker did not exit within 2s");
+                let health = manager.worker_health.lock().await;
+                panic!(
+                    "worker did not exit within 2s (current_workers={}, health_len={}, is_alive={})",
+                    manager.current_workers(),
+                    health.len(),
+                    health.first().map(|h| h.is_alive).unwrap_or(false)
+                );
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-
-        let health = manager.worker_health.lock().await;
-        assert_eq!(health.len(), 1);
-        assert!(
-            !health[0].is_alive,
-            "worker must be marked as dead after exit"
-        );
     }
 
     /// 验证 WorkerHealthInfo::new 初始化字段。
@@ -1255,21 +1256,22 @@ mod tests {
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            if manager.current_workers() == 0 {
+            let health = manager.worker_health.lock().await;
+            if health.len() == 1 && !health[0].is_alive && manager.current_workers() == 0 {
                 break;
             }
+            drop(health);
             if tokio::time::Instant::now() >= deadline {
+                let health = manager.worker_health.lock().await;
                 panic!(
-                    "worker did not exit within 5s when running=false (current_workers={})",
-                    manager.current_workers()
+                    "worker did not exit within 5s when running=false (current_workers={}, health_len={}, is_alive={})",
+                    manager.current_workers(),
+                    health.len(),
+                    health.first().map(|h| h.is_alive).unwrap_or(false)
                 );
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-
-        let health = manager.worker_health.lock().await;
-        assert_eq!(health.len(), 1);
-        assert!(!health[0].is_alive, "worker must be marked dead after exit");
     }
 
     /// 验证 worker_loop 收到 ProcessRequest 任务时仅 debug 日志,不真正处理。
@@ -1561,19 +1563,26 @@ mod tests {
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         loop {
-            if manager.current_workers() == 0 {
+            let health = manager.worker_health.lock().await;
+            if health.len() == 1
+                && health[0].worker_id == 0
+                && !health[0].is_alive
+                && manager.current_workers() == 0
+            {
                 break;
             }
+            drop(health);
             if tokio::time::Instant::now() >= deadline {
-                panic!("worker did not exit within 2s");
+                let health = manager.worker_health.lock().await;
+                panic!(
+                    "worker did not exit within 2s (current_workers={}, health_len={}, is_alive={})",
+                    manager.current_workers(),
+                    health.len(),
+                    health.first().map(|h| h.is_alive).unwrap_or(false)
+                );
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-
-        let health = manager.worker_health.lock().await;
-        assert_eq!(health.len(), 1);
-        assert_eq!(health[0].worker_id, 0);
-        assert!(!health[0].is_alive);
     }
 
     /// 验证 start_scaling_monitor 在队列压力超过阈值时扩容 worker。

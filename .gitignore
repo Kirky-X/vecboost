@@ -104,6 +104,7 @@ test_report*.json
 models/
 *.wasm
 .gitnexus
+.codenexus
 
 # -----------------------------------------------------------------------------
 # 9. Temporary Files

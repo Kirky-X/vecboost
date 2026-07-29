@@ -4,17 +4,17 @@ on:
   push:
     branches: [main, develop]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.gitignore'
-      - 'LICENSE*'
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE*"
   pull_request:
     branches: [main, develop]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.gitignore'
-      - 'LICENSE*'
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE*"
   workflow_dispatch:
 
 env:
@@ -40,8 +40,6 @@ jobs:
             features: "grpc"
           - name: ecosystem
             features: "auth,redis,db,onnx"
-          - name: cuda-network
-            features: "cuda,grpc,auth,redis"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

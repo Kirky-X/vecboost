@@ -4,17 +4,17 @@ on:
   push:
     branches: [main, develop]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.gitignore'
-      - 'LICENSE*'
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE*"
   pull_request:
     branches: [main, develop]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.gitignore'
-      - 'LICENSE*'
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE*"
 
 env:
   CARGO_TERM_COLOR: always
@@ -323,10 +323,11 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
       - name: Run cargo-audit
-        uses: actions-rs/audit-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo audit
 
   benchmark:
     name: Benchmark
@@ -377,29 +378,3 @@ jobs:
         run: |
           cargo install cargo-outdated --locked 2>/dev/null || true
           cargo outdated --root-deps-only || echo "cargo-outdated not available, skipping"
-
-  notify:
-    name: Notify
-    runs-on: ubuntu-latest
-    needs: [check, build, test, test-windows, doc, audit]
-    if: always()
-    steps:
-      - name: Check job status
-        run: |
-          failed=false
-          for job in check build test test-windows doc audit; do
-            if [[ "${{ needs[$job].result }}" == "failure" ]]; then
-              failed=true
-              break
-            fi
-          done
-          if $failed; then
-            echo "status=failure" >> $GITHUB_OUTPUT
-          else
-            echo "status=success" >> $GITHUB_OUTPUT
-          fi
-        id: status
-
-      - name: Notify on failure
-        if: steps.status.outputs.status == 'failure'
-        run: echo "❌ CI pipeline failed. Please check the workflow logs for details."

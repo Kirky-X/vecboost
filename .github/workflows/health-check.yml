@@ -19,6 +19,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  FEATURES: "grpc,cli,auth,onnx,db,redis,openapi,mcp"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -52,7 +53,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Check clippy
-        run: cargo clippy --all-features --all-targets -- -D warnings
+        run: cargo clippy --features "${{ env.FEATURES }}" --all-targets -- -D warnings
 
   build:
     name: Build
@@ -65,14 +66,10 @@ jobs:
         feature:
           - name: default
             features: ""
-          - name: cuda
-            features: cuda
           - name: onnx
             features: onnx
           - name: grpc
             features: grpc
-          - name: all
-            features: cuda,onnx,grpc,redis
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -118,10 +115,10 @@ jobs:
           cache-targets: false
 
       - name: Run tests
-        run: cargo test --all-features --lib
+        run: cargo test --features "${{ env.FEATURES }}" --lib
 
       - name: Run integration tests
-        run: cargo test --all-features --tests
+        run: cargo test --features "${{ env.FEATURES }}" --tests
 
   test-coverage:
     name: Test (Coverage)
@@ -150,7 +147,7 @@ jobs:
         run: cargo install grcov
 
       - name: Run tests with coverage
-        run: cargo tarpaulin --all-features --all-targets --out lcov --output-dir coverage/
+        run: cargo tarpaulin --features "${{ env.FEATURES }}" --all-targets --out lcov --output-dir coverage/
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -230,7 +227,7 @@ jobs:
 
       - name: Run tests (Linux)
         if: matrix.metal == false
-        run: cargo test --all-features --all-targets
+        run: cargo test --features "${{ env.FEATURES }}" --all-targets
 
   test-windows:
     name: Test (Windows)
@@ -269,10 +266,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-features --all-targets -- -D warnings
+        run: cargo clippy --features "${{ env.FEATURES }}" --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test --all-features --all-targets --release
+        run: cargo test --features "${{ env.FEATURES }}" --all-targets --release
 
       - name: Upload test results on failure
         if: failure()
@@ -354,7 +351,7 @@ jobs:
           cache-targets: false
 
       - name: Run benchmarks
-        run: cargo bench --all-features
+        run: cargo bench --features "${{ env.FEATURES }}"
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4

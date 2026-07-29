@@ -143,11 +143,11 @@ jobs:
           shared-key: "vecboost-coverage"
           cache-targets: false
 
-      - name: Install grcov
-        run: cargo install grcov
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
 
       - name: Run tests with coverage
-        run: cargo tarpaulin --features "${{ env.FEATURES }}" --all-targets --out lcov --output-dir coverage/
+        run: cargo tarpaulin --features "${{ env.FEATURES }}" --all-targets --out lcov --out xml --output-dir coverage/
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -155,16 +155,13 @@ jobs:
           files: coverage/lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
-          verbose: true
-
-      - name: Generate Cobertura XML
-        run: grcov . --binary-path ./target/debug/ --source-dir . --output-type cobertura-xml --output-path cobertura.xml
 
       - name: Check coverage threshold
         run: |
-          total=$(grep -oP '(?<=line-rate=")[0-9.]+' cobertura.xml | head -1)
+          xml=$(find coverage/ -name "*.xml" | head -1)
+          total=$(grep -oP '(?<=line-rate=")[0-9.]+' "$xml" | head -1)
           threshold=0.80
-          echo "Coverage: $total"
+          echo "Coverage: $total (from $xml)"
           echo "Threshold: $threshold"
           if (( $(echo "$total >= $threshold" | bc -l) )); then
             echo "Coverage requirement met (>= 80%)"
@@ -177,9 +174,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: |
-            coverage/
-            cobertura.xml
+          path: coverage/
           retention-days: 7
 
   test-cross-platform:
@@ -204,9 +199,8 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install Protocol Buffers compiler (Linux only)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install Protocol Buffers compiler
+        uses: arduino/setup-protoc@v3
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4
@@ -243,6 +237,9 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+
+      - name: Install Protocol Buffers compiler
+        uses: arduino/setup-protoc@v3
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4

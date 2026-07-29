@@ -1834,6 +1834,7 @@ mod tests {
     /// HuggingFace pytorch_model.bin 使用 pickle 格式,candle VarMap::load 不兼容,
     /// 返回 ModelLoadError 提示转换为 safetensors 格式
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(unix)]
     async fn test_real_model_pytorch_bin_loading() {
         if !require_real_model() {
             return;

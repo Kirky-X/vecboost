@@ -32,7 +32,7 @@ fn write_temp_toml(content: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 /// embedding settings.
 #[test]
 fn test_confers_load_from_minimal_toml() {
-    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         std::env::remove_var("VECBOOST_JWT_SECRET");
         std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
@@ -109,7 +109,7 @@ enabled = false
 /// the window.
 #[test]
 fn test_confers_env_var_jwt_secret_override() {
-    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     // Ensure clean state before test
     unsafe {
@@ -235,7 +235,7 @@ async fn test_confers_inmemorybus_subscribe_publish() {
 /// back to `Default` implementations for all sub-configs.
 #[test]
 fn test_confers_defaults_when_no_file() {
-    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     // Ensure clean env state
     unsafe {
@@ -264,7 +264,7 @@ fn test_confers_defaults_when_no_file() {
 /// over the `Default` implementations.
 #[test]
 fn test_confers_toml_overrides_defaults() {
-    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         std::env::remove_var("VECBOOST_JWT_SECRET");
         std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
@@ -331,7 +331,7 @@ enabled = true
 /// (R-config-001/002 验收点 6), and configs including them load correctly.
 #[test]
 fn test_trusted_proxies_and_max_text_length_defaults_when_omitted() {
-    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         std::env::remove_var("VECBOOST_JWT_SECRET");
         std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
@@ -390,7 +390,7 @@ enabled = false
 
 #[test]
 fn test_trusted_proxies_and_max_text_length_loaded_when_present() {
-    let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         std::env::remove_var("VECBOOST_JWT_SECRET");
         std::env::remove_var("VECBOOST_ADMIN_PASSWORD");

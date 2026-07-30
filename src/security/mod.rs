@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_security_config_from_env_encrypted_file() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var("VECBOOST_KEY_STORAGE_TYPE", "encrypted_file");
             std::env::set_var("VECBOOST_ENCRYPTION_KEY", "test_key");
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_security_config_from_env_case_insensitive() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var("VECBOOST_KEY_STORAGE_TYPE", "ENCRYPTED_FILE");
         }
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_security_config_from_env_unknown_type_defaults_to_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var("VECBOOST_KEY_STORAGE_TYPE", "unknown_type");
         }

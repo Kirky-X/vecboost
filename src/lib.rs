@@ -100,7 +100,7 @@ impl FromRef<VecboostState> for Arc<auth::JwtManager> {
             .require::<module_registry::AuthModule>()
             .and_then(|opt| {
                 opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "jwt_manager (auth disabled at runtime)",
+                    key: "jwt_manager (auth disabled at runtime)".to_string(),
                 })
             })
             .expect("JWT manager capability not available")
@@ -115,7 +115,7 @@ impl FromRef<VecboostState> for Arc<auth::UserStore> {
             .require::<module_registry::UserStoreModule>()
             .and_then(|opt| {
                 opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "user_store (auth disabled at runtime)",
+                    key: "user_store (auth disabled at runtime)".to_string(),
                 })
             })
             .expect("UserStore capability not available")
@@ -130,7 +130,7 @@ impl FromRef<VecboostState> for Arc<metrics::InferenceCollector> {
             .require::<module_registry::MetricsCollectorModule>()
             .and_then(|opt| {
                 opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "metrics_collector (not configured)",
+                    key: "metrics_collector (not configured)".to_string(),
                 })
             })
             .expect("InferenceCollector capability not available")
@@ -145,7 +145,7 @@ impl FromRef<VecboostState> for Arc<metrics::PrometheusCollector> {
             .require::<module_registry::PrometheusCollectorModule>()
             .and_then(|opt| {
                 opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "prometheus_collector (not configured)",
+                    key: "prometheus_collector (not configured)".to_string(),
                 })
             })
             .expect("PrometheusCollector capability not available")

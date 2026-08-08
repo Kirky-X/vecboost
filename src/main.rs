@@ -161,7 +161,7 @@ async fn main() -> anyhow::Result<()> {
     // ...)]` macros and collected via `sdforge::mcp::build()`.
     #[cfg(feature = "mcp")]
     if std::env::args().any(|a| a == "--mcp") {
-        use rmcp::{ServiceExt, transport::io::stdio};
+        use sdforge::rmcp::{ServiceExt, transport::io::stdio};
 
         log::info!("Starting VecBoost MCP server over stdio");
         // 最小 kit：仅 EmbeddingModule，供 forge handler 通过 state().kit.require 访问

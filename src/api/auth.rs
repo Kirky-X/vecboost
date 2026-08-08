@@ -26,7 +26,7 @@ use sdforge::prelude::*;
 #[cfg(feature = "http")]
 #[forge(
     name = "login",
-    version = "v1",
+    version = 1,
     path = "/auth/login",
     method = "POST",
     tool_name = "login",
@@ -87,7 +87,7 @@ pub async fn forge_login(
 #[cfg(feature = "http")]
 #[forge(
     name = "refresh",
-    version = "v1",
+    version = 1,
     path = "/auth/refresh",
     method = "POST",
     tool_name = "refresh_token",
@@ -126,7 +126,7 @@ pub async fn forge_refresh(req: RefreshTokenRequest) -> Result<AuthResponse, Api
 #[cfg(feature = "http")]
 #[forge(
     name = "logout",
-    version = "v1",
+    version = 1,
     path = "/auth/logout",
     method = "POST",
     tool_name = "logout",
@@ -163,7 +163,7 @@ pub async fn forge_logout(
 #[cfg(feature = "http")]
 #[forge(
     name = "me",
-    version = "v1",
+    version = 1,
     path = "/auth/me",
     method = "GET",
     tool_name = "get_current_user",

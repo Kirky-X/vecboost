@@ -8,12 +8,13 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::priority::PriorityCalculator;
-use super::queue::QueuedRequest;
+use super::queue::{QueuedRequest, ServiceRequest};
 use super::response_channel::ResponseChannel;
 use super::worker::WorkerManager;
-use crate::domain::EmbedResponse;
+use crate::domain::ServiceResponse;
 use crate::error::VecboostError;
 use crate::service::embedding::EmbeddingService;
+use crate::service::rerank::RerankService;
 
 /// 流水线调度器
 pub struct PipelineScheduler {
@@ -25,6 +26,8 @@ pub struct PipelineScheduler {
     worker_manager: Arc<WorkerManager>,
     /// 嵌入服务
     service: Arc<RwLock<EmbeddingService>>,
+    /// 重排序服务
+    rerank_service: Option<Arc<RwLock<RerankService>>>,
 }
 
 impl PipelineScheduler {
@@ -41,18 +44,40 @@ impl PipelineScheduler {
             response_channel,
             worker_manager,
             service,
+            rerank_service: None,
         }
+    }
+
+    /// 设置重排序服务
+    pub fn with_rerank_service(mut self, rerank_service: Arc<RwLock<RerankService>>) -> Self {
+        self.rerank_service = Some(rerank_service);
+        self
     }
 
     /// 处理请求
     pub async fn process_request(
         &self,
         request: QueuedRequest,
-    ) -> Result<EmbedResponse, VecboostError> {
+    ) -> Result<ServiceResponse, VecboostError> {
         debug!("Processing request {}", request.request_id);
 
-        let service = self.service.read().await;
-        service.process_text(request.embed_request, None).await
+        match request.request {
+            ServiceRequest::Embed(embed_req) => {
+                let service = self.service.read().await;
+                let resp = service.process_text(embed_req, None).await?;
+                Ok(ServiceResponse::Embed(resp))
+            }
+            ServiceRequest::Rerank(rerank_req) => {
+                let rerank_service = self.rerank_service.as_ref().ok_or_else(|| {
+                    VecboostError::InternalError(
+                        "Rerank service not configured".to_string(),
+                    )
+                })?;
+                let service = rerank_service.read().await;
+                let resp = service.process_rerank(rerank_req, 100, 8192).await?;
+                Ok(ServiceResponse::Rerank(resp))
+            }
+        }
     }
 
     /// 获取 Worker 管理器
@@ -80,6 +105,7 @@ mod tests {
     use crate::pipeline::config::{PriorityConfig, WorkerConfig};
     use crate::pipeline::priority::{Priority, PriorityInput, RequestSource};
     use crate::pipeline::queue::PriorityRequestQueue;
+    use crate::service::rerank::RerankService;
     use async_trait::async_trait;
     use std::time::{Duration, Instant};
 
@@ -172,10 +198,10 @@ mod tests {
 
         let request = QueuedRequest {
             request_id: "test-001".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
                 normalize: None,
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -188,6 +214,9 @@ mod tests {
         let result = scheduler.process_request(request).await;
         assert!(result.is_ok(), "process_request should succeed");
         let response = result.unwrap();
+        let ServiceResponse::Embed(response) = response else {
+            panic!("Expected ServiceResponse::Embed");
+        };
         assert_eq!(response.dimension, 384);
         assert_eq!(response.embedding.len(), 384);
 
@@ -227,10 +256,10 @@ mod tests {
 
         let request = QueuedRequest {
             request_id: "test-002".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "".to_string(),
                 normalize: None,
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -312,10 +341,10 @@ mod tests {
 
         let request = QueuedRequest {
             request_id: "test-err-001".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
                 normalize: None,
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -369,10 +398,10 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let request = QueuedRequest {
                     request_id: format!("test-concurrent-{:03}", i),
-                    embed_request: EmbedRequest {
+                    request: ServiceRequest::Embed(EmbedRequest {
                         text: format!("hello world {}", i),
                         normalize: None,
-                    },
+                    }),
                     priority: Priority::Normal,
                     submitted_at: Instant::now(),
                     timeout: Duration::from_secs(30),
@@ -395,6 +424,9 @@ mod tests {
                 result.err()
             );
             let response = result.unwrap().unwrap();
+            let ServiceResponse::Embed(response) = response else {
+                panic!("Expected ServiceResponse::Embed for task {}", i);
+            };
             assert_eq!(
                 response.dimension, 384,
                 "task {} should return 384-dim embedding",
@@ -461,10 +493,10 @@ mod tests {
 
         let request = QueuedRequest {
             request_id: "test-norm-true".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -477,6 +509,9 @@ mod tests {
         let result = scheduler.process_request(request).await;
         assert!(result.is_ok());
         let response = result.unwrap();
+        let ServiceResponse::Embed(response) = response else {
+            panic!("Expected ServiceResponse::Embed");
+        };
         assert_eq!(response.dimension, 384);
 
         let norm: f32 = response.embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
@@ -509,10 +544,10 @@ mod tests {
 
         let request = QueuedRequest {
             request_id: "test-norm-false".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
                 normalize: Some(false),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -525,6 +560,9 @@ mod tests {
         let result = scheduler.process_request(request).await;
         assert!(result.is_ok());
         let response = result.unwrap();
+        let ServiceResponse::Embed(response) = response else {
+            panic!("Expected ServiceResponse::Embed");
+        };
         assert_eq!(response.dimension, 384);
 
         let norm: f32 = response.embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
@@ -557,10 +595,10 @@ mod tests {
 
         let request = QueuedRequest {
             request_id: "test-ws".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "   ".to_string(),
                 normalize: None,
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -601,10 +639,10 @@ mod tests {
 
         let request = QueuedRequest {
             request_id: "test-critical".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "urgent request".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Critical,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -614,7 +652,11 @@ mod tests {
 
         let result = scheduler.process_request(request).await;
         assert!(result.is_ok(), "critical priority request should succeed");
-        assert_eq!(result.unwrap().dimension, 384);
+        let response = result.unwrap();
+        let ServiceResponse::Embed(embed_resp) = response else {
+            panic!("Expected Embed response");
+        };
+        assert_eq!(embed_resp.dimension, 384);
     }
 
     /// 验证 process_request 处理 Low 优先级请求。
@@ -640,10 +682,10 @@ mod tests {
 
         let request = QueuedRequest {
             request_id: "test-low".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "low priority request".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Low,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -655,7 +697,11 @@ mod tests {
 
         let result = scheduler.process_request(request).await;
         assert!(result.is_ok(), "low priority request should succeed");
-        assert_eq!(result.unwrap().dimension, 384);
+        let response = result.unwrap();
+        let ServiceResponse::Embed(embed_resp) = response else {
+            panic!("Expected Embed response");
+        };
+        assert_eq!(embed_resp.dimension, 384);
     }
 
     /// 验证 process_request 处理超长文本。
@@ -681,10 +727,10 @@ mod tests {
 
         let request = QueuedRequest {
             request_id: "test-long".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "X".repeat(1000),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -697,6 +743,9 @@ mod tests {
         let result = scheduler.process_request(request).await;
         assert!(result.is_ok(), "long text should succeed");
         let response = result.unwrap();
+        let ServiceResponse::Embed(response) = response else {
+            panic!("Expected ServiceResponse::Embed");
+        };
         assert_eq!(response.dimension, 384);
         assert_eq!(response.embedding.len(), 384);
     }
@@ -732,5 +781,198 @@ mod tests {
         };
         let result = pc.calculate(input);
         assert_eq!(result, Priority::Critical);
+    }
+
+    // =========================================================================
+    // T016: ServiceRequest::Rerank routing tests
+    // =========================================================================
+
+    /// Mock engine that supports rerank with deterministic scores
+    struct RerankCapableEngine;
+
+    #[async_trait]
+    impl InferenceEngine for RerankCapableEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.0; 128])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.0; 128]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        fn rerank(&self, _query: &str, document: &str) -> Result<f32, VecboostError> {
+            Ok(document.len() as f32 / 100.0)
+        }
+        fn rerank_batch(
+            &self,
+            query: &str,
+            documents: &[String],
+        ) -> Result<Vec<f32>, VecboostError> {
+            documents.iter().map(|doc| self.rerank(query, doc)).collect()
+        }
+        fn supports_rerank(&self) -> bool {
+            true
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    fn create_rerank_service() -> Arc<RwLock<RerankService>> {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(RerankCapableEngine));
+        Arc::new(RwLock::new(RerankService::new(engine, None)))
+    }
+
+    /// ServiceRequest::Embed routes to embedding service
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_service_request_embed_routes_to_embedding() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let request = QueuedRequest {
+            request_id: "embed-route-test".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "hello".to_string(),
+                normalize: None,
+            }),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tokio::sync::oneshot::channel().0,
+        };
+
+        let result = scheduler.process_request(request).await.unwrap();
+        match result {
+            ServiceResponse::Embed(resp) => {
+                assert_eq!(resp.dimension, 384);
+            }
+            _ => panic!("Expected ServiceResponse::Embed"),
+        }
+    }
+
+    /// ServiceRequest::Rerank routes to rerank service
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_service_request_rerank_routes_to_rerank() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+        let rerank_service = create_rerank_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        )
+        .with_rerank_service(rerank_service);
+
+        let request = QueuedRequest {
+            request_id: "rerank-route-test".to_string(),
+            request: ServiceRequest::Rerank(crate::domain::RerankRequest {
+                query: "what is rust?".to_string(),
+                documents: vec!["short".to_string(), "a longer document".to_string()],
+                top_k: None,
+                return_documents: None,
+            }),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tokio::sync::oneshot::channel().0,
+        };
+
+        let result = scheduler.process_request(request).await.unwrap();
+        match result {
+            ServiceResponse::Rerank(resp) => {
+                assert_eq!(resp.results.len(), 2);
+                // Results sorted by score descending
+                assert!(resp.results[0].score >= resp.results[1].score);
+            }
+            _ => panic!("Expected ServiceResponse::Rerank"),
+        }
+    }
+
+    /// Rerank request without rerank_service configured returns error
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_rerank_without_service_returns_error() {
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        // No rerank service configured
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let request = QueuedRequest {
+            request_id: "rerank-no-service".to_string(),
+            request: ServiceRequest::Rerank(crate::domain::RerankRequest {
+                query: "test".to_string(),
+                documents: vec!["doc".to_string()],
+                top_k: None,
+                return_documents: None,
+            }),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+            response_tx: tokio::sync::oneshot::channel().0,
+        };
+
+        let result = scheduler.process_request(request).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InternalError(msg) => {
+                assert!(msg.contains("not configured"), "got: {}", msg);
+            }
+            other => panic!("Expected InternalError, got: {:?}", other),
+        }
     }
 }

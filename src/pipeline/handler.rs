@@ -192,10 +192,8 @@ mod tests {
         kit.set_config(None::<Arc<crate::metrics::PrometheusCollector>>);
         #[cfg(feature = "auth")]
         {
-            kit.set_config(Option::<Arc<crate::auth::JwtManager>>::None);
-            kit.set_config(Option::<Arc<crate::auth::UserStore>>::None);
-            kit.set_config(Option::<Arc<crate::auth::CsrfConfig>>::None);
-            kit.set_config(Option::<Arc<crate::auth::CsrfTokenStore>>::None);
+            kit.set_config(Option::<Arc<crate::auth::GarrisonHandle>>::None);
+            kit.set_config(Option::<Arc<crate::auth::GarrisonCsrfConfig>>::None);
         }
 
         kit.register::<crate::module_registry::EmbeddingModule>()
@@ -231,11 +229,7 @@ mod tests {
         {
             kit.register::<crate::module_registry::AuthModule>()
                 .unwrap();
-            kit.register::<crate::module_registry::UserStoreModule>()
-                .unwrap();
             kit.register::<crate::module_registry::CsrfConfigModule>()
-                .unwrap();
-            kit.register::<crate::module_registry::CsrfTokenStoreModule>()
                 .unwrap();
         }
 

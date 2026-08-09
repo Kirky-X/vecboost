@@ -222,6 +222,28 @@ impl From<sea_orm::DbErr> for VecboostError {
     }
 }
 
+#[cfg(feature = "auth")]
+impl From<garrison::error::GarrisonError> for VecboostError {
+    fn from(e: garrison::error::GarrisonError) -> Self {
+        use garrison::error::GarrisonError as GE;
+        match e {
+            GE::NotLogin(msg)
+            | GE::NotPermission(msg)
+            | GE::NotRole(msg)
+            | GE::InvalidToken(msg)
+            | GE::TokenRevoked(msg)
+            | GE::ExpiredToken(msg)
+            | GE::Session(msg) => VecboostError::AuthenticationError(msg),
+            GE::Config(msg) => VecboostError::ConfigError(msg),
+            GE::Dao(msg) | GE::Internal(msg) | GE::Annotation(msg) | GE::Context(msg) => {
+                VecboostError::InternalError(msg)
+            }
+            GE::Exception(ex) => VecboostError::AuthenticationError(ex.to_string()),
+            _ => VecboostError::InternalError(e.to_string()),
+        }
+    }
+}
+
 impl From<candle_core::Error> for VecboostError {
     fn from(e: candle_core::Error) -> Self {
         VecboostError::inference_error(e.to_string())

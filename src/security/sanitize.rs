@@ -43,11 +43,6 @@ pub fn sanitize_jwt_secret(s: &str) -> String {
     format!("{}... [{} chars]", &s[..s.floor_char_boundary(8)], s.len())
 }
 
-/// Sanitize an API key - shows only first 8 characters.
-pub fn sanitize_api_key(s: &str) -> String {
-    sanitize_secret(s)
-}
-
 /// Check if a field name likely contains sensitive data.
 pub fn is_sensitive_field(field_name: &str) -> bool {
     const SENSITIVE_PATTERNS: &[&str] = &[

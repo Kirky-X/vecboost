@@ -99,90 +99,85 @@ impl VecboostState {
     }
 }
 
+/// 生成 `FromRef<VecboostState>` 实现：直接 require 模式（能力类型非 Option）。
 #[cfg(feature = "http")]
-impl FromRef<VecboostState> for Arc<RwLock<EmbeddingService>> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::EmbeddingModule>()
-            .expect("EmbeddingService capability not registered in kit")
-    }
+macro_rules! impl_from_ref_direct {
+    ($target:ty, $module:ty, $msg:literal) => {
+        #[cfg(feature = "http")]
+        impl FromRef<VecboostState> for $target {
+            fn from_ref(state: &VecboostState) -> Self {
+                state.kit.require::<$module>().expect($msg)
+            }
+        }
+    };
 }
 
+/// 生成 `FromRef<VecboostState>` 实现：Option 能力解包模式。
 #[cfg(feature = "http")]
-impl FromRef<VecboostState> for Arc<RwLock<RerankService>> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::RerankModule>()
-            .expect("RerankService capability not registered in kit")
-    }
+macro_rules! impl_from_ref_option {
+    ($target:ty, $module:ty, $key:literal, $msg:literal) => {
+        #[cfg(feature = "http")]
+        impl FromRef<VecboostState> for $target {
+            fn from_ref(state: &VecboostState) -> Self {
+                state
+                    .kit
+                    .require::<$module>()
+                    .and_then(|opt| {
+                        opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
+                            key: $key.to_string(),
+                        })
+                    })
+                    .expect($msg)
+            }
+        }
+    };
 }
+
+impl_from_ref_direct!(
+    Arc<RwLock<EmbeddingService>>,
+    module_registry::EmbeddingModule,
+    "EmbeddingService capability not registered in kit"
+);
+
+impl_from_ref_direct!(
+    Arc<RwLock<RerankService>>,
+    module_registry::RerankModule,
+    "RerankService capability not registered in kit"
+);
+
+impl_from_ref_direct!(
+    Arc<rate_limit::LimiteronAdapter>,
+    module_registry::RateLimitModule,
+    "RateLimitModule capability not registered in kit"
+);
+
+impl_from_ref_direct!(
+    Option<Arc<audit::AuditLogger>>,
+    module_registry::AuditModule,
+    "AuditModule capability not registered in kit"
+);
 
 #[cfg(all(feature = "http", feature = "auth"))]
-impl FromRef<VecboostState> for Arc<auth::GarrisonCsrfConfig> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::CsrfConfigModule>()
-            .and_then(|opt| {
-                opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "csrf_config (auth disabled at runtime)".to_string(),
-                })
-            })
-            .expect("GarrisonCsrfConfig capability not available")
-    }
-}
+impl_from_ref_option!(
+    Arc<auth::GarrisonCsrfConfig>,
+    module_registry::CsrfConfigModule,
+    "csrf_config (auth disabled at runtime)",
+    "GarrisonCsrfConfig capability not available"
+);
 
-#[cfg(feature = "http")]
-impl FromRef<VecboostState> for Arc<metrics::InferenceCollector> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::MetricsCollectorModule>()
-            .and_then(|opt| {
-                opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "metrics_collector (not configured)".to_string(),
-                })
-            })
-            .expect("InferenceCollector capability not available")
-    }
-}
+impl_from_ref_option!(
+    Arc<metrics::InferenceCollector>,
+    module_registry::MetricsCollectorModule,
+    "metrics_collector (not configured)",
+    "InferenceCollector capability not available"
+);
 
-#[cfg(feature = "http")]
-impl FromRef<VecboostState> for Arc<metrics::PrometheusCollector> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::PrometheusCollectorModule>()
-            .and_then(|opt| {
-                opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "prometheus_collector (not configured)".to_string(),
-                })
-            })
-            .expect("PrometheusCollector capability not available")
-    }
-}
-
-#[cfg(feature = "http")]
-impl FromRef<VecboostState> for Arc<rate_limit::LimiteronAdapter> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::RateLimitModule>()
-            .expect("RateLimitModule capability not registered in kit")
-    }
-}
-
-#[cfg(feature = "http")]
-impl FromRef<VecboostState> for Option<Arc<audit::AuditLogger>> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::AuditModule>()
-            .expect("AuditModule capability not registered in kit")
-    }
-}
+impl_from_ref_option!(
+    Arc<metrics::PrometheusCollector>,
+    module_registry::PrometheusCollectorModule,
+    "prometheus_collector (not configured)",
+    "PrometheusCollector capability not available"
+);
 
 /// AuthConfig substate extractor — provides `trusted_proxies` and other auth
 /// configuration to middleware via axum's `FromRef` pattern. The config is

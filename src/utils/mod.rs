@@ -9,6 +9,7 @@ pub mod hf_hub;
 pub mod resilience;
 pub mod validator;
 pub mod vector;
+pub(crate) mod vector_simd;
 
 pub use constants::{
     DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP_RATIO, DEFAULT_TOP_K, MAX_BATCH_SIZE,
@@ -22,6 +23,7 @@ pub use validator::{
     FileValidator, InputValidator, PathValidator, TextValidator, ValidationConfig,
 };
 pub use vector::{
-    AggregationMode, SimilarityMetric, calculate_similarity, cosine_similarity, dot_product,
-    euclidean_distance, manhattan_distance, normalize_l2, truncate_vector, validate_dimension,
+    AggregationMode, SimilarityMetric, calculate_similarity, calculate_similarity_batch,
+    cosine_similarity, dot_product, euclidean_distance, manhattan_distance, normalize_l2,
+    truncate_vector, validate_dimension,
 };

@@ -21,7 +21,7 @@ pub use config::{PipelineConfig, PriorityConfig, QueueConfig, WorkerConfig};
 #[cfg(feature = "http")]
 pub use handler::handle_pipeline_request;
 pub use priority::{Priority, PriorityCalculator, PriorityInput, RequestSource};
-pub use queue::{PriorityRequestQueue, QueuedRequest};
+pub use queue::{PriorityRequestQueue, QueuedRequest, ServiceRequest};
 pub use response_channel::ResponseChannel;
 pub use scheduler::PipelineScheduler;
 pub use worker::WorkerManager;

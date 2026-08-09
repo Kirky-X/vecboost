@@ -24,7 +24,7 @@ pub use embedding::{compute_similarity, embed, embed_batch};
 pub use init::{init_state, state};
 pub use rerank::{rerank, rerank_batch};
 
-#[cfg(all(test, feature = "mcp"))]
+#[cfg(all(test, feature = "http", feature = "mcp"))]
 mod mcp_registration_tests {
     #[test]
     fn forge_macros_register_embed_tools() {

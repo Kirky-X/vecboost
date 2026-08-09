@@ -17,13 +17,13 @@ timeout = 30
 # ============ 模型配置 ============
 [model]
 # HuggingFace 模型仓库 ID
-model_repo = "BAAI/bge-m3"
+model_repo = "BAAI/bge-small-en-v1.5"
 
 # 模型版本/分支
 model_revision = "main"
 
 # 本地模型路径 (可选，设置后优先使用本地模型)
-model_path = "models/bge-m3-st"
+# model_path = "models/bge-m3-st"
 
 # 是否使用 GPU 加速
 # 注意：需要启用相应的 cargo feature
@@ -35,7 +35,7 @@ use_gpu = true
 batch_size = 32
 
 # 期望的向量维度 (BGE-M3 为 1024)
-expected_dimension = 1024
+expected_dimension = 384
 
 # 最大序列长度 (token 数)
 max_sequence_length = 8192

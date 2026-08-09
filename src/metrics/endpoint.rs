@@ -9,6 +9,8 @@
 //! 因此保留手写 handler 作为 HTTP 路由的例外。
 
 use std::net::SocketAddr;
+#[cfg(feature = "db")]
+use std::sync::Arc;
 
 use axum::{
     body::Body,
@@ -77,6 +79,19 @@ pub async fn metrics_endpoint(
             .body(format!("Failed to encode metrics: {}", e))
             .unwrap()
             .into_response();
+    }
+
+    // T044: Append dbnexus MetricsCollector output (pool/connection/query metrics)
+    #[cfg(feature = "db")]
+    if let Ok(Some(db_metrics)) = app_state
+        .kit
+        .config::<Option<Arc<dbnexus::MetricsCollector>>>()
+    {
+        let db_text = db_metrics.export_prometheus();
+        if !db_text.is_empty() {
+            buffer.extend_from_slice(b"\n");
+            buffer.extend_from_slice(db_text.as_bytes());
+        }
     }
 
     Response::builder()

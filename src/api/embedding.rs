@@ -25,7 +25,7 @@ use crate::domain::{
     ModelSwitchRequest, ModelSwitchResponse, SimilarityRequest, SimilarityResponse,
 };
 use crate::error::VecboostError;
-use crate::module_registry::EmbeddingModule;
+use crate::module_registry::{CacheModule, EmbeddingModule, RateLimitModule};
 use crate::utils::{AggregationMode, PathValidator};
 use std::path::PathBuf;
 
@@ -358,14 +358,44 @@ async fn list_models_handler() -> Result<ModelListResponse, ApiError> {
     Ok(guard.list_available_models())
 }
 
-/// Unified health-check response — minimal, no sensitive info.
+/// Unified health-check response — queries module health via trait-kit health checks.
 ///
-/// Returns only `{"status": "OK"}`. Detailed runtime info (version, uptime,
-/// model name) is intentionally omitted to avoid information leakage on
-/// unauthenticated endpoints.
+/// Returns `{"status": "OK"}` when all modules are healthy, or
+/// `ApiError::ServiceUnavailable` when any module reports unhealthy.
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 async fn health_handler() -> Result<serde_json::Value, ApiError> {
-    Ok(serde_json::json!({ "status": "OK" }))
+    use trait_kit::prelude::HealthStatus;
+
+    let st = state().map_err(to_api_error)?;
+    let mut unhealthy_modules = Vec::new();
+
+    // Query registered health checks
+    if let Ok(status) = st.kit.health_check::<EmbeddingModule>() {
+        if !status.is_healthy() {
+            unhealthy_modules.push(format!("embedding: {:?}", status));
+        }
+    }
+    if let Ok(status) = st.kit.health_check::<RateLimitModule>() {
+        if !status.is_healthy() {
+            unhealthy_modules.push(format!("rate_limit: {:?}", status));
+        }
+    }
+    if let Ok(status) = st.kit.health_check::<CacheModule>() {
+        if let HealthStatus::Unhealthy { ref detail } = status {
+            unhealthy_modules.push(format!("cache: {}", detail));
+        }
+        // Degraded (cache disabled) is not unhealthy — it's an expected config state
+    }
+
+    if unhealthy_modules.is_empty() {
+        Ok(serde_json::json!({ "status": "OK" }))
+    } else {
+        Err(ApiError::ServiceUnavailable {
+            service: unhealthy_modules.join(", "),
+            retry_after: Some(5),
+            source: None,
+        })
+    }
 }
 
 // =============================================================================

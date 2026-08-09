@@ -66,19 +66,19 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 ```json
 {
-  "access_token": "eyJhbGciOiJIUzI1NiIs...",
-  "token_type": "bearer",
-  "expires_in": 3600
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 0
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `access_token` | string | JWT 访问令牌 |
-| `token_type` | string | 令牌类型（始终为 `bearer`） |
-| `expires_in` | integer | 令牌过期时间（秒） |
+| `token` | string | JWT 访问令牌 |
+| `token_type` | string | 令牌类型（始终为 `Bearer`） |
+| `expires_in` | integer | 令牌过期时间（由 garrison 管理，固定为 0） |
 
-> **⚠️ 注意**: 令牌默认 1 小时后过期，可在配置中调整。
+> **ℹ️ 注意**: 令牌过期时间由 garrison 认证框架的 `GarrisonConfig.timeout` 统一管理，响应中 `expires_in` 固定为 0。
 
 ---
 
@@ -154,20 +154,26 @@ curl -X POST http://localhost:9002/api/v1/embed/batch \
 {
   "embeddings": [
     {
-      "embedding": [...],
-      "dimension": 1024,
-      "processing_time_ms": 12.3
+      "text_preview": "第一个文档",
+      "embedding": [0.123, 0.456, ...]
     },
     {
-      "embedding": [...],
-      "dimension": 1024,
-      "processing_time_ms": 11.8
+      "text_preview": "第二个文档",
+      "embedding": [0.789, 0.012, ...]
     }
   ],
-  "total_count": 2,
-  "processing_time_ms": 25.5
+  "dimension": 1024,
+  "processing_time_ms": 25
 }
 ```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `embeddings` | array | 嵌入结果数组（每项含 `text_preview` 和 `embedding`） |
+| `dimension` | integer | 向量维度 |
+| `processing_time_ms` | number | 总处理时间（毫秒） |
+
+> **⚠️ 批量大小校验**: 批量请求数量受 `EmbeddingConfig.max_batch_size` 限制（默认 64）。超限时返回 `400 INVALID_INPUT`。
 
 ---
 
@@ -179,10 +185,8 @@ curl -X POST http://localhost:9002/api/v1/embed/batch \
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `path` | string | ✅ | 文件路径 |
-| `mode` | string | ❌ | 嵌入模式 (`paragraph` 或 `chunk`) |
-| `chunk_size` | integer | ❌ | 分块大小（默认: 512） |
-| `overlap` | integer | ❌ | 重叠大小（默认: 50） |
+| `path` | string | ✅ | 文件路径（受 `grpc_allowed_roots` 路径校验约束） |
+| `mode` | string | ❌ | 聚合模式 (`document` 或 `paragraph`，默认: `document`) |
 
 **请求示例:**
 
@@ -201,22 +205,28 @@ curl -X POST http://localhost:9002/api/v1/embed/file \
 {
   "mode": "paragraph",
   "stats": {
-    "total_lines": 150,
-    "total_chars": 5000,
-    "total_paragraphs": 25,
-    "processed_chunks": 25,
-    "processing_time_ms": 150.5
+    "total_chunks": 25,
+    "successful_chunks": 25,
+    "failed_chunks": 0,
+    "processing_time_ms": 150
   },
-  "embedding": [0.123, ...],
+  "embedding": null,
   "paragraphs": [
     {
-      "index": 0,
-      "text": "First paragraph...",
-      "embedding": [0.456, ...]
+      "embedding": [0.456, ...],
+      "position": 0,
+      "text_preview": "First paragraph..."
     }
   ]
 }
 ```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `mode` | string | 使用的聚合模式 |
+| `stats` | object | 文件处理统计（`total_chunks`/`successful_chunks`/`failed_chunks`/`processing_time_ms`） |
+| `embedding` | array \| null | 聚合后的嵌入向量（`document` 模式时有值） |
+| `paragraphs` | array \| null | 分段嵌入结果（`paragraph` 模式时有值） |
 
 ---
 
@@ -326,15 +336,14 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 
 #### 计算相似度
 
-计算两个向量之间的相似度。
+计算两段文本之间的余弦相似度。服务端自动对文本进行嵌入后计算相似度。
 
 **端点:** `POST /api/v1/similarity`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `vector1` | array | ✅ | 第一个向量 |
-| `vector2` | array | ✅ | 第二个向量 |
-| `metric` | string | ❌ | 相似度度量 (`cosine`, `euclidean`, `dot_product`, `manhattan`) |
+| `source` | string | ✅ | 源文本 |
+| `target` | string | ✅ | 目标文本 |
 
 **请求示例:**
 
@@ -342,9 +351,8 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 curl -X POST http://localhost:9002/api/v1/similarity \
   -H "Content-Type: application/json" \
   -d '{
-    "vector1": [0.1, 0.2, 0.3, ...],
-    "vector2": [0.1, 0.2, 0.3, ...],
-    "metric": "cosine"
+    "source": "机器学习是人工智能的子领域",
+    "target": "深度学习基于神经网络"
   }'
 ```
 
@@ -352,40 +360,41 @@ curl -X POST http://localhost:9002/api/v1/similarity \
 
 ```json
 {
-  "score": 0.9876,
-  "metric": "cosine"
+  "score": 0.8765
 }
 ```
 
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `score` | number | 余弦相似度分数（范围 [-1, 1]） |
+
 ---
 
-#### 相似文档搜索
+### 重排序（Rerank）
 
-从文档集合中找到最相似的向量。
+#### 文档重排序
 
-**端点:** `POST /api/v1/search`
+根据与查询文本的相关性对文档列表进行重排序。
+
+**端点:** `POST /api/v1/rerank`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `query` | string | ✅ | 搜索查询文本 |
-| `documents` | array | ✅ | 文档数组 |
-| `top_k` | integer | ❌ | 返回结果数量（默认: 5） |
-| `metric` | string | ❌ | 相似度度量 |
+| `query` | string | ✅ | 查询文本 |
+| `documents` | array | ✅ | 待排序文档数组 |
+| `top_k` | integer | ❌ | 返回前 K 个结果 |
+| `return_documents` | boolean | ❌ | 是否在结果中返回文档原文 |
 
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/search \
+curl -X POST http://localhost:9002/api/v1/rerank \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "AI 技术发展",
-    "documents": [
-      "关于人工智能的文档",
-      "关于机器学习的文档",
-      "关于深度学习的文档"
-    ],
+    "query": "什么是机器学习",
+    "documents": ["机器学习是人工智能的子领域", "今天天气很好", "深度学习基于神经网络"],
     "top_k": 2,
-    "metric": "cosine"
+    "return_documents": true
   }'
 ```
 
@@ -396,16 +405,45 @@ curl -X POST http://localhost:9002/api/v1/search \
   "results": [
     {
       "index": 0,
-      "text": "关于人工智能的文档",
-      "score": 0.95
+      "score": 0.95,
+      "document": "机器学习是人工智能的子领域"
     },
     {
-      "index": 1,
-      "text": "关于机器学习的文档",
-      "score": 0.87
+      "index": 2,
+      "score": 0.82,
+      "document": "深度学习基于神经网络"
     }
   ],
-  "query_embedding": [0.123, ...]
+  "processing_time_ms": 8
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `results` | array | 排序结果（按相关性降序） |
+| `results[].index` | integer | 原文档在输入数组中的索引 |
+| `results[].score` | number | 相关性分数 |
+| `results[].document` | string | 文档原文（仅当 `return_documents=true` 时返回） |
+| `processing_time_ms` | number | 处理时间（毫秒） |
+
+#### 批量重排序
+
+**端点:** `POST /api/v1/rerank/batch`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `queries` | array | ✅ | RerankRequest 数组（每项含 `query`、`documents`、`top_k`、`return_documents`） |
+
+**响应:**
+
+```json
+{
+  "responses": [
+    {
+      "results": [...],
+      "processing_time_ms": 8
+    }
+  ]
 }
 ```
 
@@ -417,7 +455,7 @@ curl -X POST http://localhost:9002/api/v1/search \
 
 获取当前加载模型的信息。
 
-**端点:** `GET /api/v1/model`
+**端点:** `GET /api/v1/model/current`
 
 **响应:**
 
@@ -425,12 +463,8 @@ curl -X POST http://localhost:9002/api/v1/search \
 {
   "name": "BAAI/bge-m3",
   "engine_type": "candle",
-  "device_type": "cuda",
   "dimension": 1024,
-  "precision": "fp32",
-  "max_batch_size": 32,
-  "cache_enabled": true,
-  "cache_size": 1024
+  "is_loaded": true
 }
 ```
 
@@ -438,10 +472,38 @@ curl -X POST http://localhost:9002/api/v1/search \
 |------|------|------|
 | `name` | string | 模型名称（HuggingFace ID） |
 | `engine_type` | string | 引擎类型 (`candle` 或 `onnx`) |
-| `device_type` | string | 设备类型 (`cpu`, `cuda`, `metal`) |
-| `dimension` | integer | 嵌入向量维度 |
-| `precision` | string | 模型精度 (`fp16`, `fp32`) |
-| `max_batch_size` | integer | 最大批处理大小 |
+| `dimension` | integer | 嵌入向量维度（可选） |
+| `is_loaded` | boolean | 模型是否已加载 |
+
+#### 获取模型元数据
+
+获取当前加载模型的详细元数据。
+
+**端点:** `GET /api/v1/model/info`
+
+**响应:**
+
+```json
+{
+  "name": "BAAI/bge-m3",
+  "version": "main",
+  "engine_type": "candle",
+  "dimension": 1024,
+  "max_input_length": 8192,
+  "is_loaded": true,
+  "loaded_at": "2026-08-10T10:30:00Z"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | string | 模型名称 |
+| `version` | string | 模型版本 |
+| `engine_type` | string | 引擎类型 |
+| `dimension` | integer | 向量维度（可选） |
+| `max_input_length` | integer | 最大输入长度 |
+| `is_loaded` | boolean | 是否已加载 |
+| `loaded_at` | string | 加载时间（可选） |
 
 ---
 
@@ -458,20 +520,19 @@ curl -X POST http://localhost:9002/api/v1/search \
   "models": [
     {
       "name": "BAAI/bge-m3",
-      "version": "main",
+      "engine_type": "candle",
       "dimension": 1024,
-      "supported_devices": ["cpu", "cuda", "metal"]
-    },
-    {
-      "name": "BAAI/bge-small-en-v1.5",
-      "version": "main",
-      "dimension": 384,
-      "supported_devices": ["cpu", "cuda", "metal"]
+      "is_loaded": true
     }
   ],
-  "current_model": "BAAI/bge-m3"
+  "total_count": 1
 }
 ```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `models` | array | 模型列表（每项为 `ModelInfo`） |
+| `total_count` | integer | 可用模型总数 |
 
 ---
 
@@ -484,8 +545,14 @@ curl -X POST http://localhost:9002/api/v1/search \
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `model_name` | string | ✅ | 模型名称 |
-| `engine_type` | string | ❌ | 引擎类型 (`candle`, `onnx`) |
-| `device_type` | string | ❌ | 设备类型 (`auto`, `cpu`, `cuda`, `metal`) |
+| `model_path` | string | ❌ | 本地模型路径 |
+| `tokenizer_path` | string | ❌ | 分词器路径 |
+| `device` | string | ❌ | 设备类型 (`cpu`, `cuda`, `metal`) |
+| `max_batch_size` | integer | ❌ | 最大批处理大小 |
+| `pooling_mode` | string | ❌ | 池化模式 |
+| `expected_dimension` | integer | ❌ | 期望维度 |
+| `memory_limit_bytes` | integer | ❌ | 内存限制（字节） |
+| `oom_fallback_enabled` | boolean | ❌ | OOM 自动降级 |
 
 **请求示例:**
 
@@ -495,8 +562,8 @@ curl -X POST http://localhost:9002/api/v1/model/switch \
   -H "Authorization: Bearer <token>" \
   -d '{
     "model_name": "BAAI/bge-small-en-v1.5",
-    "engine_type": "candle",
-    "device_type": "auto"
+    "device": "cpu",
+    "expected_dimension": 384
   }'
 ```
 
@@ -504,12 +571,10 @@ curl -X POST http://localhost:9002/api/v1/model/switch \
 
 ```json
 {
+  "previous_model": "BAAI/bge-m3",
+  "current_model": "BAAI/bge-small-en-v1.5",
   "success": true,
-  "message": "Model switched successfully",
-  "model_info": {
-    "name": "BAAI/bge-small-en-v1.5",
-    "dimension": 384
-  }
+  "message": "Model switched successfully"
 }
 ```
 
@@ -531,47 +596,15 @@ curl -X POST http://localhost:9002/api/v1/model/switch \
 
 ```json
 {
-  "status": "healthy",
-  "version": "0.2.1",
-  "uptime": "2h30m45s",
-  "model_loaded": "BAAI/bge-m3",
-  "modules": {
-    "embedding": "healthy",
-    "rate_limit": "healthy",
-    "cache": "healthy"
-  }
+  "status": "OK"
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `status` | string | 聚合健康状态 (`healthy`, `degraded`, `unhealthy`) |
-| `version` | string | 服务版本 |
-| `uptime` | string | 运行时间 |
-| `model_loaded` | string | 当前加载的模型名称 |
-| `modules` | object | 各模块健康状态（key=模块名, value=状态） |
+| `status` | string | 聚合健康状态（`OK` 表示所有模块健康） |
 
-> **ℹ️ 注意**: 健康检查通过 trait-kit `health` feature 的 `health_status()` 方法查询各注册模块状态。配合 sdforge `graceful-shutdown` feature，服务在收到 SIGTERM/SIGINT 后会等待在途请求完成再关闭（超时 30s）。
-
----
-
-#### 就绪检查
-
-检查服务是否准备好接收请求。
-
-**端点:** `GET /ready`
-
-**响应:**
-
-```json
-{
-  "ready": true
-}
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `ready` | boolean | 是否准备好接收请求 |
+> **ℹ️ 注意**: 健康检查通过 trait-kit `health` feature 查询各注册模块（EmbeddingModule、RerankModule、RateLimitModule、CacheModule）状态。任一模块不健康时返回 `503 Service Unavailable`。配合 sdforge `graceful-shutdown` feature，服务在收到 SIGTERM/SIGINT 后会等待在途请求完成再关闭（超时 30s）。
 
 ---
 
@@ -681,6 +714,8 @@ gRPC 服务通过 `sdforge::grpc::build_server_with_config` 启动，配置项�
 | `vecboost.embed_batch` | `grpc_embed_batch` | `BatchEmbedRequest` | `BatchEmbedResponse` | 批量生成嵌入向量 |
 | `vecboost.compute_similarity` | `grpc_compute_similarity` | `SimilarityRequest` | `SimilarityResponse` | 计算向量相似度 |
 | `vecboost.embed_file` | `grpc_embed_file` | `FileEmbedRequest` | `FileEmbedResponse` | 文件嵌入（路径校验） |
+| `vecboost.rerank` | `grpc_rerank` | `RerankRequest` | `RerankResponse` | 按相关性重排序文档 |
+| `vecboost.rerank_batch` | `grpc_rerank_batch` | `BatchRerankRequest` | `BatchRerankResponse` | 批量重排序 |
 | `vecboost.model_switch` | `grpc_model_switch` | `ModelSwitchRequest` | `ModelSwitchResponse` | 切换模型 |
 | `vecboost.get_current_model` | `grpc_get_current_model` | （空） | `ModelInfo` | 获取当前模型信息 |
 | `vecboost.get_model_info` | `grpc_get_model_info` | （空） | `ModelMetadata` | 获取模型元数据 |
@@ -699,27 +734,29 @@ gRPC 服务通过 `sdforge::grpc::build_server_with_config` 启动，配置项�
 // 请求
 struct EmbedRequest {
     text: String,
-    normalize: bool,
+    normalize: Option<bool>,
 }
 
 // 响应
 struct EmbedResponse {
     embedding: Vec<f32>,
-    dimension: i64,
-    processing_time_ms: f64,
+    dimension: usize,
+    processing_time_ms: u128,
+    information_retention_rate: Option<f32>,  // Matryoshka 截断时填充
 }
 
 // 批量请求
 struct BatchEmbedRequest {
     texts: Vec<String>,
-    normalize: bool,
+    mode: Option<AggregationMode>,
+    normalize: Option<bool>,
 }
 
 // 批量响应
 struct BatchEmbedResponse {
-    embeddings: Vec<EmbedResponse>,
-    total_count: i64,
-    processing_time_ms: f64,
+    embeddings: Vec<BatchEmbeddingResult>,  // 每项含 text_preview + embedding
+    dimension: usize,
+    processing_time_ms: u128,
 }
 ```
 
@@ -729,14 +766,12 @@ struct BatchEmbedResponse {
 
 ```rust
 struct SimilarityRequest {
-    vector1: Vec<f32>,
-    vector2: Vec<f32>,
-    metric: String,  // "cosine" | "euclidean" | "dot_product" | "manhattan"
+    source: String,  // 源文本（服务端自动嵌入后计算）
+    target: String,  // 目标文本
 }
 
 struct SimilarityResponse {
-    score: f64,
-    metric: String,
+    score: f32,
 }
 ```
 
@@ -745,30 +780,27 @@ struct SimilarityResponse {
 ```rust
 struct FileEmbedRequest {
     path: String,
-    mode: String,       // "paragraph" | "chunk"
-    chunk_size: i32,
-    overlap: i32,
+    mode: Option<AggregationMode>,  // "document" | "paragraph"
 }
 
 struct FileEmbedResponse {
-    mode: String,
-    stats: FileStats,
-    embedding: Vec<f32>,
-    paragraphs: Vec<ParagraphEmbedding>,
+    mode: AggregationMode,
+    stats: FileProcessingStats,
+    embedding: Option<Vec<f32>>,     // document 模式时有值
+    paragraphs: Option<Vec<ParagraphEmbedding>>,  // paragraph 模式时有值
 }
 
-struct FileStats {
-    total_lines: i64,
-    total_chars: i64,
-    total_paragraphs: i64,
-    processed_chunks: i64,
-    processing_time_ms: f64,
+struct FileProcessingStats {
+    total_chunks: usize,
+    successful_chunks: usize,
+    failed_chunks: usize,
+    processing_time_ms: u128,
 }
 
 struct ParagraphEmbedding {
-    index: i32,
-    text: String,
     embedding: Vec<f32>,
+    position: usize,
+    text_preview: String,
 }
 ```
 
@@ -779,44 +811,73 @@ struct ParagraphEmbedding {
 ```rust
 struct ModelSwitchRequest {
     model_name: String,
-    engine_type: String,   // "candle" | "onnx"
-    device_type: String,   // "auto" | "cpu" | "cuda" | "metal"
+    model_path: Option<PathBuf>,
+    tokenizer_path: Option<PathBuf>,
+    device: Option<DeviceType>,       // "cpu" | "cuda" | "metal"
+    max_batch_size: Option<usize>,
+    pooling_mode: Option<PoolingMode>,
+    expected_dimension: Option<usize>,
+    memory_limit_bytes: Option<u64>,
+    oom_fallback_enabled: Option<bool>,
 }
 
 struct ModelSwitchResponse {
+    previous_model: Option<String>,
+    current_model: String,
     success: bool,
     message: String,
-    model_info: ModelInfo,
 }
 
 struct ModelInfo {
     name: String,
     engine_type: String,
-    device_type: String,
-    dimension: i64,
-    precision: String,
-    max_batch_size: i64,
-    cache_enabled: bool,
-    cache_size: i64,
+    dimension: Option<usize>,
+    is_loaded: bool,
 }
 
 struct ModelMetadata {
-    model_name: String,
+    name: String,
     version: String,
-    architecture: String,
-    max_position_embeddings: i64,
-    vocab_size: i64,
-    hidden_size: i64,
-    num_hidden_layers: i64,
-    num_attention_heads: i64,
-    intermediate_size: i64,
-    supported_devices: Vec<String>,
-    supported_precisions: Vec<String>,
+    engine_type: String,
+    dimension: Option<usize>,
+    max_input_length: usize,
+    is_loaded: bool,
+    loaded_at: Option<String>,
 }
 
 struct ModelListResponse {
-    models: Vec<ModelMetadata>,
-    current_model: String,
+    models: Vec<ModelInfo>,
+    total_count: usize,
+}
+```
+
+#### 重排序
+
+```rust
+struct RerankRequest {
+    query: String,
+    documents: Vec<String>,
+    top_k: Option<usize>,
+    return_documents: Option<bool>,
+}
+
+struct RerankResult {
+    index: usize,
+    score: f32,
+    document: Option<String>,
+}
+
+struct RerankResponse {
+    results: Vec<RerankResult>,
+    processing_time_ms: u128,
+}
+
+struct BatchRerankRequest {
+    queries: Vec<RerankRequest>,
+}
+
+struct BatchRerankResponse {
+    responses: Vec<RerankResponse>,
 }
 ```
 
@@ -825,14 +886,11 @@ struct ModelListResponse {
 ```rust
 // 响应（serde_json::Value）
 {
-    "status": "healthy",       // "healthy" | "degraded" | "unhealthy"
-    "version": "0.2.0",
-    "uptime": "2h30m45s",
-    "model_loaded": "BAAI/bge-m3"
+    "status": "OK"
 }
 ```
 
-> **ℹ️ 注意**: v0.2.0 中 `vecboost.health_check`、`vecboost.get_current_model`、`vecboost.get_model_info`、`vecboost.list_models` 不需要请求载荷（即原 `Empty` 已移除），客户端调用 `SdForgeService/Call` 时传空 JSON 即可。
+> **ℹ️ 注意**: v0.2.0 中 `vecboost.health_check`、`vecboost.get_current_model`、`vecboost.get_model_info`、`vecboost.list_models` 不需要请求载荷（即原 `Empty` 已移除），客户端调用 `SdForgeService/Call` 时传空 JSON 即可。健康检查返回 `{"status": "OK"}` 或 `503 Service Unavailable`。
 
 ---
 
@@ -1068,22 +1126,12 @@ X-RateLimit-Reset: 1640995200
 ```toml
 [rate_limit]
 enabled = true
-
-[rate_limit.global]
-requests = 2000
-window_seconds = 60
-
-[rate_limit.ip]
-requests = 200
-window_seconds = 60
-
-[rate_limit.user]
-requests = 500
-window_seconds = 60
-
-[rate_limit.api_key]
-requests = 1000
-window_seconds = 60
+global_requests_per_minute = 2000
+ip_requests_per_minute = 200
+user_requests_per_minute = 500
+api_key_requests_per_minute = 1000
+window_secs = 60
+ip_whitelist = ["127.0.0.1"]
 ```
 
 ---

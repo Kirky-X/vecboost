@@ -36,7 +36,7 @@ VecBoost v0.2.0 采用模块化生态架构，由 7 个独立 Rust 库组成，�
 | 库 | 版本 | 用途 | Feature |
 |----|------|------|---------|
 | **trait-kit** | `0.4` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
-| **confers** | `0.5` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | `config` |
+| **confers** | `0.5` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | 始终启用 |
 | **inklog** | `0.2` | 结构化日志基础设施（控制台 + 文件轮转） | `inklog` |
 | **oxcache** | `0.4` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | `oxcache` |
 | **limiteron** | `0.2` | 令牌桶限流器（多维度独立计数） | `limiteron` |
@@ -177,6 +177,8 @@ curl -X POST http://localhost:9002/api/v1/embed \
 | `vecboost.embed_batch` | `grpc_embed_batch` | 批量文本嵌入 |
 | `vecboost.compute_similarity` | `grpc_compute_similarity` | 计算向量相似度 |
 | `vecboost.embed_file` | `grpc_embed_file` | 文件文本嵌入 |
+| `vecboost.rerank` | `grpc_rerank` | 按相关性重排序文档 |
+| `vecboost.rerank_batch` | `grpc_rerank_batch` | 批量重排序 |
 | `vecboost.model_switch` | `grpc_model_switch` | 切换模型 |
 | `vecboost.get_current_model` | `grpc_get_current_model` | 获取当前模型 |
 | `vecboost.get_model_info` | `grpc_get_model_info` | 获取模型信息 |
@@ -557,8 +559,7 @@ vecboost/
 | 工具 | 端点 | 说明 |
 |------|------|------|
 | **Prometheus** | `/metrics` | Prometheus 抓取指标端点 |
-| **健康检查** | `/health` | 服务存活和就绪探针 |
-| **详细健康** | `/health/detailed` | 完整健康状态与组件检查 |
+| **健康检查** | `/health` | 服务存活和就绪探针（返回 `{"status": "OK"}` 或 503） |
 | **OpenAPI 文档** | `/api-docs` | 交互式 Swagger UI 文档 |
 | **Grafana** | - | 预配置仪表板（计划中） |
 

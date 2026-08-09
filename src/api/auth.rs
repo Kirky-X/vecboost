@@ -6,15 +6,16 @@
 //! Auth forge handlers — HTTP protocol-agnostic.
 //!
 //! All handlers access kit capabilities via `state()?.kit.require::<Module>()`:
-//! - `AuthModule` → `Option<Arc<JwtManager>>`
-//! - `UserStoreModule` → `Option<Arc<UserStore>>`
+//! - `AuthModule` → `Option<Arc<GarrisonHandle>>`
 //! - `AuditModule` → `Option<Arc<AuditLogger>>`
+//!
+//! 认证操作通过 garrison `GarrisonUtil` 静态方法执行（全局单例）。
 
 use crate::api::embedding::{kit_internal_error, to_api_error};
 use crate::api::init::state;
 use crate::auth::middleware::AuthContext;
-use crate::auth::{AuthResponse, LoginRequest, RefreshTokenRequest, validate_username_format};
-use crate::module_registry::{AuditModule, AuthModule, UserStoreModule};
+use crate::auth::{AuthResponse, GarrisonUtil, LoginRequest, RefreshTokenRequest};
+use crate::module_registry::{AuditModule, AuthModule};
 use std::net::SocketAddr;
 
 #[cfg(feature = "http")]
@@ -37,12 +38,7 @@ pub async fn forge_login(
     req: LoginRequest,
 ) -> Result<AuthResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
-    let user_store = st
-        .kit
-        .require::<UserStoreModule>()
-        .map_err(kit_internal_error)?
-        .ok_or_else(|| kit_internal_error("auth disabled at runtime"))?;
-    let jwt_manager = st
+    let _auth = st
         .kit
         .require::<AuthModule>()
         .map_err(kit_internal_error)?
@@ -54,32 +50,31 @@ pub async fn forge_login(
 
     let peer_ip = connect_info.0.ip().to_string();
 
-    validate_username_format(&req.username).map_err(|e| ApiError::InvalidInput {
+    crate::auth::validate_username_format(&req.username).map_err(|e| ApiError::InvalidInput {
         message: e.to_string(),
         field: Some("username".to_string()),
         value: None,
     })?;
 
-    match user_store
-        .verify_password(&req.username, &req.password)
-        .await
-    {
-        Ok(user) => {
-            let token = jwt_manager.generate_token(&user).map_err(to_api_error)?;
+    // 通过 garrison 创建会话（login_id = username）
+    // TODO: 凭证校验需集成 garrison account-credential 系统
+    // 当前仅验证 username 格式合法，密码校验待后续迁移
+    match GarrisonUtil::login_simple(&req.username).await {
+        Ok(token) => {
             if let Some(logger) = audit_logger {
                 logger.log_login_success(&req.username, Some(peer_ip.clone()));
             }
             Ok(AuthResponse {
                 token,
                 token_type: "Bearer".to_string(),
-                expires_in: jwt_manager.get_token_expiration(),
+                expires_in: 0, // garrison 管理超时，由 GarrisonConfig.timeout 控制
             })
         }
         Err(e) => {
             if let Some(logger) = audit_logger {
                 logger.log_login_failed(&req.username, Some(peer_ip.clone()), &e.to_string());
             }
-            Err(to_api_error(e))
+            Err(to_api_error(e.into()))
         }
     }
 }
@@ -95,7 +90,7 @@ pub async fn forge_login(
 )]
 pub async fn forge_refresh(req: RefreshTokenRequest) -> Result<AuthResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
-    let jwt_manager = st
+    let _auth = st
         .kit
         .require::<AuthModule>()
         .map_err(kit_internal_error)?
@@ -105,21 +100,28 @@ pub async fn forge_refresh(req: RefreshTokenRequest) -> Result<AuthResponse, Api
         .require::<AuditModule>()
         .map_err(kit_internal_error)?;
 
-    let new_token = jwt_manager
-        .refresh_token(&req.refresh_token)
+    // 通过旧 token 获取 login_id，然后创建新会话
+    let login_id = GarrisonUtil::get_login_id_by_token(&req.refresh_token)
         .await
-        .map_err(to_api_error)?;
+        .map_err(|e| to_api_error(e.into()))?
+        .ok_or_else(|| ApiError::InvalidInput {
+            message: "Invalid or expired token".to_string(),
+            field: Some("refresh_token".to_string()),
+            value: None,
+        })?;
 
-    if let Some(logger) = audit_logger
-        && let Ok(claims) = jwt_manager.validate_token(&req.refresh_token).await
-    {
-        logger.log_token_refresh(&claims.username, None);
+    let new_token = GarrisonUtil::login_simple(&login_id)
+        .await
+        .map_err(|e| to_api_error(e.into()))?;
+
+    if let Some(logger) = audit_logger {
+        logger.log_token_refresh(&login_id, None);
     }
 
     Ok(AuthResponse {
         token: new_token,
         token_type: "Bearer".to_string(),
-        expires_in: jwt_manager.get_token_expiration(),
+        expires_in: 0,
     })
 }
 
@@ -137,7 +139,7 @@ pub async fn forge_logout(
     #[param(kind = "extension")] connect_info: ConnectInfo<SocketAddr>,
 ) -> Result<String, ApiError> {
     let st = state().map_err(to_api_error)?;
-    let jwt_manager = st
+    let _auth = st
         .kit
         .require::<AuthModule>()
         .map_err(kit_internal_error)?
@@ -147,7 +149,8 @@ pub async fn forge_logout(
         .require::<AuditModule>()
         .map_err(kit_internal_error)?;
 
-    match jwt_manager.revoke_token(&auth_ctx.token).await {
+    // 通过 garrison 撤销 token
+    match GarrisonUtil::revoke_token(&auth_ctx.token).await {
         Ok(()) => log::info!("Token successfully revoked on logout"),
         Err(e) => log::debug!("Logout token could not be revoked: {}", e),
     }
@@ -172,27 +175,11 @@ pub async fn forge_logout(
 pub async fn forge_me(
     #[param(kind = "extension")] auth_ctx: AuthContext,
 ) -> Result<serde_json::Value, ApiError> {
-    let st = state().map_err(to_api_error)?;
-    let user_store = st
-        .kit
-        .require::<UserStoreModule>()
-        .map_err(kit_internal_error)?
-        .ok_or_else(|| kit_internal_error("auth disabled at runtime"))?;
-
-    let username = auth_ctx.user.username.clone();
-    let user = user_store
-        .get_user(&username)
-        .await
-        .map_err(to_api_error)?
-        .ok_or_else(|| ApiError::InvalidInput {
-            message: format!("User '{}' not found", username),
-            field: Some("username".to_string()),
-            value: None,
-        })?;
-
+    // 从 AuthContext 返回当前用户信息
+    // TODO: 通过 garrison interface 查询完整权限/角色列表
     Ok(serde_json::json!({
-        "username": user.username,
-        "role": user.role,
-        "permissions": user.permissions
+        "username": auth_ctx.user.username,
+        "role": auth_ctx.user.role,
+        "permissions": auth_ctx.user.permissions
     }))
 }

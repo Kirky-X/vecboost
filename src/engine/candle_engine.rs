@@ -74,6 +74,7 @@ pub struct CandleEngine {
     device_type: DeviceType,
     model_architecture: ModelArchitecture,
     use_quantization: bool, // 是否使用 INT8 量化
+    model_name: String,
 }
 
 impl CandleEngine {
@@ -484,6 +485,7 @@ impl CandleEngine {
             device_type,
             model_architecture,
             use_quantization,
+            model_name: config.name.clone(),
         })
     }
 
@@ -865,6 +867,18 @@ impl InferenceEngine for CandleEngine {
 
     fn is_fallback_triggered(&self) -> bool {
         self.fallback_triggered
+    }
+
+    fn rerank(&self, query: &str, document: &str) -> Result<f32, VecboostError> {
+        let query_emb = self.embed(query)?;
+        let doc_emb = self.embed(document)?;
+        let similarity = crate::utils::vector::cosine_similarity(&query_emb, &doc_emb)?;
+        // sigmoid 归一化到 [0, 1]
+        Ok(1.0 / (1.0 + (-similarity).exp()))
+    }
+
+    fn supports_rerank(&self) -> bool {
+        self.model_name.contains("reranker")
     }
 
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {

@@ -175,11 +175,20 @@ pub async fn forge_logout(
 pub async fn forge_me(
     #[param(kind = "extension")] auth_ctx: AuthContext,
 ) -> Result<serde_json::Value, ApiError> {
-    // 从 AuthContext 返回当前用户信息
-    // TODO: 通过 garrison interface 查询完整权限/角色列表
+    // 通过 garrison 查询完整权限/角色列表（task_local token 已由 auth_middleware 设置）
+    let has_all_perms = GarrisonUtil::has_permission("*").await.unwrap_or(false);
+    let is_admin = GarrisonUtil::has_role("admin").await.unwrap_or(false);
+
+    let role = if is_admin { "admin" } else { "user" };
+    let perms: Vec<&str> = if has_all_perms {
+        vec!["*"]
+    } else {
+        vec!["embedding:read", "embedding:write"]
+    };
+
     Ok(serde_json::json!({
         "username": auth_ctx.user.username,
-        "role": auth_ctx.user.role,
-        "permissions": auth_ctx.user.permissions
+        "role": role,
+        "permissions": perms
     }))
 }

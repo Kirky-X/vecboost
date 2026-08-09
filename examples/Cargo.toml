@@ -43,7 +43,7 @@ onnx = ["vecboost/onnx"]
 metal = ["vecboost/metal"]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Binaries — 31 个示例
+# Binaries — 36 个示例
 # ─────────────────────────────────────────────────────────────────────────────
 
 # download_model — 模型下载工具
@@ -192,3 +192,28 @@ path = "monitoring/performance.rs"
 [[bin]]
 name = "library_usage"
 path = "library/library_usage.rs"
+
+# semantic-cache — 语义缓存（trigram Jaccard 三级查询策略）
+[[bin]]
+name = "semantic_cache_demo"
+path = "semantic-cache/semantic_cache_demo.rs"
+
+# batch-scheduling — 动态批量调度（自适应批量调整 + 性能统计）
+[[bin]]
+name = "batch_scheduler"
+path = "batch-scheduling/batch_scheduler.rs"
+
+# memory-paging — GPU 显存分页管理（LRU-K 驱逐 + 预取）
+[[bin]]
+name = "memory_paging"
+path = "memory-paging/memory_paging.rs"
+
+# security — 密钥管理、盐值生成、敏感数据脱敏
+[[bin]]
+name = "security_demo"
+path = "security/security_demo.rs"
+
+# audit — 审计日志（异步批量写入 + 文件轮转）
+[[bin]]
+name = "audit_demo"
+path = "audit/audit_demo.rs"

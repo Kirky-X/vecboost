@@ -824,7 +824,8 @@ impl Tokenizer {
     }
 
     fn wordpiece_tokenize(&self, text: &str) -> Vec<String> {
-        let re = Regex::new(r"\w+|[^\w\s]+").unwrap();
+        static WORDPIECE_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        let re = WORDPIECE_RE.get_or_init(|| Regex::new(r"\w+|[^\w\s]+").unwrap());
         re.find_iter(text)
             .map(|m| m.as_str().to_lowercase())
             .collect()

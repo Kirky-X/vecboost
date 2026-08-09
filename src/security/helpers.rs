@@ -20,6 +20,9 @@ pub async fn create_key_store(config: &SecurityConfig) -> Result<Box<dyn KeyStor
         (StorageType::EncryptedFile, _, _) => Err(VecboostError::ConfigError(
             "Encrypted file storage requires the 'auth' feature to be enabled".to_string(),
         )),
+        // Reached only with auth feature enabled when validate() was bypassed or
+        // EncryptedFile is selected without providing both key_file_path and encryption_key.
+        #[cfg(feature = "auth")]
         _ => Err(VecboostError::ConfigError(
             "Invalid configuration: key_file_path and encryption_key are required for encrypted file storage".to_string(),
         )),

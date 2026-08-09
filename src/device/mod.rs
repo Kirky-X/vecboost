@@ -57,7 +57,7 @@ impl From<&ConfigDeviceType> for DeviceCategory {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct DeviceCapability {
     pub supports_float16: bool,
     pub supports_tensor_cores: bool,

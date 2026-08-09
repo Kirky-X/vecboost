@@ -20,14 +20,25 @@
 /// assert_eq!(sanitized, "my*********************45");
 /// ```
 pub fn sanitize_secret(s: &str) -> String {
-    if s.len() <= 4 {
+    let char_count = s.chars().count();
+    if char_count <= 4 {
         "*".repeat(s.len())
     } else {
-        let first_end = s.floor_char_boundary(2);
-        let (first, rest) = s.split_at(first_end);
-        let last_start = rest.ceil_char_boundary(rest.len().saturating_sub(2));
-        let (middle, last) = rest.split_at(last_start);
-        format!("{}{}{}", first, "*".repeat(middle.len()), last)
+        // Show first 2 and last 2 characters, mask the middle
+        let first_byte_end = s
+            .char_indices()
+            .nth(2)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
+        let last_byte_start = s
+            .char_indices()
+            .nth(char_count - 2)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
+        let first = &s[..first_byte_end];
+        let last = &s[last_byte_start..];
+        let middle_len = last_byte_start - first_byte_end;
+        format!("{}{}{}", first, "*".repeat(middle_len), last)
     }
 }
 

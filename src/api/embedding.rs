@@ -227,6 +227,23 @@ async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
         max_text_length_from_kit(&st.kit),
     )
     .map_err(to_api_error)?;
+
+    // Pipeline 启用时，通过流水线处理请求
+    #[cfg(feature = "http")]
+    {
+        let pipeline_enabled = st
+            .kit
+            .config::<crate::module_registry::PipelineEnabled>()
+            .map(|c| c.0)
+            .unwrap_or(false);
+        if pipeline_enabled {
+            let result = crate::pipeline::handle_pipeline_request(st.clone(), req, "api".to_string())
+                .await
+                .map_err(to_api_error)?;
+            return Ok(result.0);
+        }
+    }
+
     let svc = st
         .kit
         .require::<EmbeddingModule>()

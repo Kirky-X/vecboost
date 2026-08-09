@@ -12,6 +12,7 @@ use trait_kit::prelude::{AsyncShutdownCoordinator, BuildObserver, ShutdownPhase}
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use vecboost::AppConfig;
 use vecboost::module_registry::RateLimitModule;
+use vecboost::logger::LoggerModule;
 #[cfg(feature = "auth")]
 use vecboost::module_registry::{
     AuthModule, CsrfConfigModule,
@@ -88,15 +89,17 @@ impl BuildObserver for LoggingObserver {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 日志初始化:inklog 完全接管日志输出(通过 log crate 宏 + inklog LogLogger 适配器)
-    let _logger_manager = inklog::LoggerManager::builder()
-        .level("info")
-        .console(true)
-        .file("logs/vecboost.log")
-        .file_compress(true) // T021: zstd compression for log files (inklog compression feature)
-        .build()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to initialize inklog logger: {}", e))?;
-    // _logger_manager 保持存活至 main 结束,避免 LoggerManager shutdown 导致日志停止
+    let logger_manager = Arc::new(
+        inklog::LoggerManager::builder()
+            .level("info")
+            .console(true)
+            .file("logs/vecboost.log")
+            .file_compress(true) // T021: zstd compression for log files (inklog compression feature)
+            .build()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize inklog logger: {}", e))?,
+    );
+    // logger_manager 通过 Arc 注入 kit，由 LoggerModule 管理生命周期，保持存活至 main 结束
 
     log::info!("Starting Rust Embedding Service...");
 
@@ -496,6 +499,8 @@ async fn main() -> anyhow::Result<()> {
     kit.set_config(response_channel.clone());
     kit.set_config(priority_calculator.clone());
     kit.set_config(worker_manager.clone());
+    // LoggerModule: Arc<inklog::LoggerManager> 能力注入
+    kit.set_config(logger_manager.clone());
     #[cfg(feature = "auth")]
     {
         kit.set_config(garrison_handle.clone());
@@ -535,6 +540,8 @@ async fn main() -> anyhow::Result<()> {
     kit.set_config(watcher_guard);
     kit.register::<ConfigWatcherModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register ConfigWatcherModule: {}", e))?;
+    kit.register::<LoggerModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register LoggerModule: {}", e))?;
     #[cfg(feature = "auth")]
     {
         kit.register::<AuthModule>()

@@ -26,7 +26,10 @@ pub fn is_oom_error(error: &VecboostError) -> bool {
                 || lower_msg.contains("memory allocation failed")
                 || lower_msg.contains("failed to allocate")
                 || lower_msg.contains("not enough memory")
-                || lower_msg.contains("alloc")
+                || (lower_msg.contains("alloc")
+                    && (lower_msg.contains("fail")
+                        || lower_msg.contains("error")
+                        || lower_msg.contains("unable")))
         }
         _ => false,
     }
@@ -80,19 +83,13 @@ where
                             match fallback_result {
                                 Ok(()) => {
                                     warn!("Successfully fell back to CPU, retrying operation");
-                                    if attempts >= MAX_FALLBACK_ATTEMPTS {
-                                        warn!("Max fallback attempts reached, aborting");
-                                        return Err(VecboostError::OutOfMemory(
-                                            "Max fallback attempts exceeded".to_string(),
-                                        ));
-                                    }
                                     continue;
                                 }
                                 Err(e) => {
                                     warn!("Failed to fallback to CPU: {}", e);
                                     return Err(VecboostError::OutOfMemory(format!(
-                                        "OOM error and fallback failed: {}",
-                                        e
+                                        "OOM error [{}] and fallback failed: {}",
+                                        error, e
                                     )));
                                 }
                             }
@@ -103,6 +100,12 @@ where
                 return Err(VecboostError::OutOfMemory(
                     "Out of memory and no fallback available".to_string(),
                 ));
+            }
+            Err(error) if is_oom_error(&error) => {
+                return Err(VecboostError::OutOfMemory(format!(
+                    "Max fallback attempts exceeded ({}). Last error: {}",
+                    MAX_FALLBACK_ATTEMPTS, error
+                )));
             }
             Err(error) => return Err(error),
         }

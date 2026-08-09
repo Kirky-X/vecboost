@@ -29,7 +29,7 @@ use crate::module_registry::{CacheModule, EmbeddingModule, RateLimitModule, Rera
 use crate::utils::{AggregationMode, PathValidator};
 use std::path::PathBuf;
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 use sdforge::prelude::*;
 
 // =============================================================================
@@ -61,7 +61,7 @@ pub async fn compute_similarity(
 // Error conversion helpers
 // =============================================================================
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
     match e {
         VecboostError::InvalidInput(msg) => ApiError::InvalidInput {
@@ -84,7 +84,7 @@ pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
     }
 }
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 pub(crate) fn uuid_like_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
@@ -94,7 +94,7 @@ pub(crate) fn uuid_like_id() -> String {
     format!("err-{}", nanos)
 }
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 pub(crate) fn kit_internal_error(e: impl std::fmt::Display) -> ApiError {
     ApiError::Internal {
         message: e.to_string(),
@@ -129,7 +129,7 @@ fn validate_text_length(texts: &[String], max: usize) -> Result<(), VecboostErro
 
 /// Validate that batch size does not exceed the configured maximum, preventing
 /// resource exhaustion via oversized batch requests.
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 fn validate_batch_size(texts_len: usize, max: usize) -> Result<(), VecboostError> {
     if texts_len > max {
         return Err(VecboostError::ValidationError(format!(
@@ -142,7 +142,7 @@ fn validate_batch_size(texts_len: usize, max: usize) -> Result<(), VecboostError
 
 /// Retrieve `max_text_length` from kit config, falling back to the default
 /// (`EmbeddingConfig::default().max_text_length` = 8192) when config is absent.
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 fn max_text_length_from_kit(kit: &trait_kit::AsyncKit<trait_kit::AsyncReady>) -> usize {
     kit.config::<crate::config::app::EmbeddingConfig>()
         .unwrap_or_default()
@@ -151,7 +151,7 @@ fn max_text_length_from_kit(kit: &trait_kit::AsyncKit<trait_kit::AsyncReady>) ->
 
 /// Retrieve `max_batch_size` from kit config, falling back to the default
 /// (`EmbeddingConfig::default().max_batch_size` = 64) when config is absent.
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 fn max_batch_size_from_kit(kit: &trait_kit::AsyncKit<trait_kit::AsyncReady>) -> usize {
     kit.config::<crate::config::app::EmbeddingConfig>()
         .unwrap_or_default()
@@ -164,7 +164,7 @@ fn max_batch_size_from_kit(kit: &trait_kit::AsyncKit<trait_kit::AsyncReady>) -> 
 /// roots. When `None`, falls back to the current working directory — but
 /// refuses sensitive directories (`/`, `/etc`, `/root`, `/var`, `/usr`, ...)
 /// to prevent accidental filesystem-wide exposure.
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 fn build_path_validator() -> Result<PathValidator, ApiError> {
     let st = state().map_err(to_api_error)?;
     let server_cfg = st
@@ -219,7 +219,7 @@ fn build_path_validator() -> Result<PathValidator, ApiError> {
 // of delegation plus the `#[forge(...)]` macro registration.
 // =============================================================================
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
     validate_text_length(
@@ -252,7 +252,7 @@ async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
     embed(&guard, req).await.map_err(to_api_error)
 }
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn embed_batch_handler(req: BatchEmbedRequest) -> Result<BatchEmbedResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
     validate_batch_size(req.texts.len(), max_batch_size_from_kit(&st.kit)).map_err(to_api_error)?;
@@ -265,7 +265,7 @@ async fn embed_batch_handler(req: BatchEmbedRequest) -> Result<BatchEmbedRespons
     embed_batch(&guard, req).await.map_err(to_api_error)
 }
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn compute_similarity_handler(
     req: SimilarityRequest,
 ) -> Result<SimilarityResponse, ApiError> {
@@ -278,7 +278,7 @@ async fn compute_similarity_handler(
     compute_similarity(&guard, req).await.map_err(to_api_error)
 }
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn embed_file_handler(req: FileEmbedRequest) -> Result<FileEmbedResponse, ApiError> {
     let mode = req.mode.unwrap_or(AggregationMode::Document);
     let path = PathBuf::from(&req.path);
@@ -323,7 +323,7 @@ async fn embed_file_handler(req: FileEmbedRequest) -> Result<FileEmbedResponse, 
     })
 }
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn model_switch_handler(req: ModelSwitchRequest) -> Result<ModelSwitchResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
     let svc = st
@@ -334,7 +334,7 @@ async fn model_switch_handler(req: ModelSwitchRequest) -> Result<ModelSwitchResp
     guard.switch_model(req).await.map_err(to_api_error)
 }
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn get_current_model_handler() -> Result<ModelInfo, ApiError> {
     let st = state().map_err(to_api_error)?;
     let svc = st
@@ -348,7 +348,7 @@ async fn get_current_model_handler() -> Result<ModelInfo, ApiError> {
     })
 }
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn get_model_info_handler() -> Result<ModelMetadata, ApiError> {
     let st = state().map_err(to_api_error)?;
     let svc = st
@@ -364,7 +364,7 @@ async fn get_model_info_handler() -> Result<ModelMetadata, ApiError> {
         })
 }
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn list_models_handler() -> Result<ModelListResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
     let svc = st
@@ -379,7 +379,7 @@ async fn list_models_handler() -> Result<ModelListResponse, ApiError> {
 ///
 /// Returns `{"status": "OK"}` when all modules are healthy, or
 /// `ApiError::ServiceUnavailable` when any module reports unhealthy.
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn health_handler() -> Result<serde_json::Value, ApiError> {
     use trait_kit::prelude::HealthStatus;
 
@@ -827,13 +827,13 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+    #[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
     #[test]
     fn test_validate_batch_size_under_limit_passes() {
         assert!(validate_batch_size(10, 64).is_ok());
     }
 
-    #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+    #[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
     #[test]
     fn test_validate_batch_size_exceeds_limit_returns_error() {
         let err = validate_batch_size(100, 64).unwrap_err();
@@ -849,7 +849,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+    #[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
     #[test]
     fn test_validate_batch_size_at_boundary_passes() {
         assert!(validate_batch_size(64, 64).is_ok());

@@ -206,3 +206,66 @@ async fn test_logger_module_missing_config_fails() {
         "build should fail when LoggerManager config is not injected"
     );
 }
+
+// ---------------------------------------------------------------------------
+// T019 测试 6: LoggerModule 注册后可通过 contains 查询
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_logger_module_contains_after_register() {
+    let config = inklog::InklogConfig {
+        console_sink: None,
+        ..Default::default()
+    };
+    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+        .await
+        .expect("build_detached");
+    let manager = Arc::new(manager);
+
+    let mut kit = AsyncKit::new();
+    kit.set_config(manager.clone());
+    kit.register::<LoggerModule>().expect("register");
+
+    let kit = kit.build().await.expect("build");
+    assert!(
+        kit.contains::<LoggerModule>(),
+        "contains should be true after build"
+    );
+
+    // 验证 require 可以获取能力
+    let capability: Arc<inklog::LoggerManager> = kit.require::<LoggerModule>().expect("require");
+    assert!(Arc::ptr_eq(&capability, &manager));
+
+    manager.shutdown().expect("shutdown");
+}
+
+// ---------------------------------------------------------------------------
+// T019 测试 7: LoggerModule 与其他 Module 共存于同一 AsyncKit
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_logger_module_coexists_with_other_modules() {
+    use crate::module_registry::EmbeddingModule;
+
+    let config = inklog::InklogConfig {
+        console_sink: None,
+        ..Default::default()
+    };
+    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+        .await
+        .expect("build_detached");
+    let manager = Arc::new(manager);
+
+    let mut kit = AsyncKit::new();
+    kit.set_config(manager.clone());
+    kit.register::<LoggerModule>().expect("register logger");
+    kit.register::<EmbeddingModule>().expect("register embedding");
+
+    // 验证注册不冲突（两个模块可同时注册）
+    // build 会因 EmbeddingModule 缺少 service config 而失败，
+    // 但 LoggerModule 的能力已正确注入
+    let result = kit.build().await;
+    assert!(result.is_err(), "build should fail due to missing EmbeddingModule config");
+
+    manager.shutdown().expect("shutdown");
+}

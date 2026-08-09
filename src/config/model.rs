@@ -445,4 +445,43 @@ mod tests {
         assert_eq!(Precision::Bf16.to_string(), "bf16");
         assert_eq!(Precision::Int8.to_string(), "int8");
     }
+
+    // -------------------------------------------------------------------------
+    // Eq trait 验证（确保 InferenceContext 可派生 Eq）
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_model_type_eq() {
+        let a = ModelType::Predefined(PredefinedModelType::Bert);
+        let b = ModelType::Predefined(PredefinedModelType::Bert);
+        let c = ModelType::Custom("test".to_string());
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_precision_eq() {
+        assert_eq!(Precision::Fp32, Precision::Fp32);
+        assert_ne!(Precision::Fp32, Precision::Fp16);
+        assert_ne!(Precision::Bf16, Precision::Int8);
+    }
+
+    #[test]
+    fn test_engine_type_eq() {
+        assert_eq!(EngineType::Candle, EngineType::Candle);
+    }
+
+    #[test]
+    fn test_device_type_eq() {
+        assert_eq!(DeviceType::Cpu, DeviceType::Cpu);
+        assert_ne!(DeviceType::Cpu, DeviceType::Cuda);
+        assert_ne!(DeviceType::Cuda, DeviceType::Metal);
+    }
+
+    #[test]
+    fn test_inference_context_eq() {
+        let ctx = InferenceContext::default();
+        let ctx2 = InferenceContext::default();
+        assert_eq!(ctx, ctx2);
+    }
 }

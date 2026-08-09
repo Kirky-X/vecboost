@@ -12,6 +12,7 @@
 //! - `types` — HTTP 请求/响应类型（serde 序列化，无业务逻辑）
 pub mod config;
 pub mod interface;
+#[cfg(feature = "http")]
 pub mod middleware;
 pub mod types;
 
@@ -55,6 +56,7 @@ pub use garrison::stp::with_current_token;
 pub use garrison::dao::GarrisonDaoOxcache;
 
 // Re-export middleware 函数
+#[cfg(feature = "http")]
 pub use middleware::{
     auth_middleware, auth_rate_limit_middleware, optional_auth_middleware,
     require_permission_middleware, require_role_middleware,

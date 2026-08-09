@@ -133,24 +133,28 @@ macro_rules! impl_from_ref_option {
     };
 }
 
+#[cfg(feature = "http")]
 impl_from_ref_direct!(
     Arc<RwLock<EmbeddingService>>,
     module_registry::EmbeddingModule,
     "EmbeddingService capability not registered in kit"
 );
 
+#[cfg(feature = "http")]
 impl_from_ref_direct!(
     Arc<RwLock<RerankService>>,
     module_registry::RerankModule,
     "RerankService capability not registered in kit"
 );
 
+#[cfg(feature = "http")]
 impl_from_ref_direct!(
     Arc<rate_limit::LimiteronAdapter>,
     module_registry::RateLimitModule,
     "RateLimitModule capability not registered in kit"
 );
 
+#[cfg(feature = "http")]
 impl_from_ref_direct!(
     Option<Arc<audit::AuditLogger>>,
     module_registry::AuditModule,
@@ -165,6 +169,7 @@ impl_from_ref_option!(
     "GarrisonCsrfConfig capability not available"
 );
 
+#[cfg(feature = "http")]
 impl_from_ref_option!(
     Arc<metrics::InferenceCollector>,
     module_registry::MetricsCollectorModule,
@@ -172,6 +177,7 @@ impl_from_ref_option!(
     "InferenceCollector capability not available"
 );
 
+#[cfg(feature = "http")]
 impl_from_ref_option!(
     Arc<metrics::PrometheusCollector>,
     module_registry::PrometheusCollectorModule,
@@ -209,6 +215,7 @@ mod tests {
         PipelineQueueModule, PriorityCalculatorModule, RerankModule, RateLimitEnabled,
         RateLimitModule, ResponseChannelModule, WorkerManagerModule,
     };
+    use crate::logger::LoggerModule;
     #[cfg(feature = "auth")]
     use crate::module_registry::{
         AuthModule, CsrfConfigModule,
@@ -299,6 +306,17 @@ mod tests {
         kit.set_config(DbConfig { enabled: false });
         kit.set_config(RerankConfig::default());
 
+        // LoggerModule: 构建最小 logger manager 注入 kit
+        let logger_manager = Arc::new(
+            inklog::LoggerManager::builder()
+                .level("warn")
+                .console(false)
+                .build()
+                .await
+                .expect("test logger manager"),
+        );
+        kit.set_config(logger_manager);
+
         // auth feature 能力（全部 None — 默认禁用）
         #[cfg(feature = "auth")]
         {
@@ -306,7 +324,8 @@ mod tests {
             kit.set_config(Option::<Arc<crate::auth::GarrisonCsrfConfig>>::None);
         }
 
-        // 注册所有 Module（16 个非 auth + 4 个 auth feature）
+        // 注册所有 Module（17 个核心 + auth feature 模块）
+        kit.register::<LoggerModule>().unwrap();
         kit.register::<EmbeddingModule>().unwrap();
         kit.register::<RerankModule>().unwrap();
         kit.register::<RateLimitModule>().unwrap();
@@ -474,6 +493,19 @@ mod tests {
         let db_enabled = state.kit.require::<DbModule>().unwrap();
         assert!(!cache_enabled);
         assert!(!db_enabled);
+    }
+
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_kit_require_logger_module() {
+        let state = make_app_state().await;
+        assert!(
+            state.kit.contains::<LoggerModule>(),
+            "LoggerModule should be registered in kit"
+        );
+        let logger: Arc<inklog::LoggerManager> = state.kit.require::<LoggerModule>().expect("require LoggerModule");
+        // LoggerManager 应成功构建且可用
+        let _ = logger;
     }
 
     // -------------------------------------------------------------------------

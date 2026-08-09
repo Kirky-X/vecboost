@@ -19,7 +19,7 @@ use crate::service::rerank::RerankService;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 use sdforge::prelude::*;
 
 // =============================================================================
@@ -63,7 +63,7 @@ pub async fn rerank_batch(
 /// Returns the `Arc<RwLock<RerankService>>` capability together with the
 /// configured `max_documents_per_query` and `max_query_length` limits so
 /// callers only need to acquire a read-guard and dispatch.
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn load_rerank_service(
 ) -> Result<(Arc<RwLock<RerankService>>, usize, usize), ApiError> {
     let st = state().map_err(to_api_error)?;
@@ -82,7 +82,7 @@ async fn load_rerank_service(
     ))
 }
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn rerank_handler(req: RerankRequest) -> Result<RerankResponse, ApiError> {
     let (svc, max_documents, max_query_length) = load_rerank_service().await?;
     let guard = svc.read().await;
@@ -91,7 +91,7 @@ async fn rerank_handler(req: RerankRequest) -> Result<RerankResponse, ApiError> 
         .map_err(to_api_error)
 }
 
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc", feature = "mcp"))]
 async fn rerank_batch_handler(
     req: BatchRerankRequest,
 ) -> Result<BatchRerankResponse, ApiError> {

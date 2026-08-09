@@ -26,14 +26,14 @@ use vecboost::{
         ConfigWatcherModule, DbConfig, DbModule, EmbeddingModule, IpWhitelistModule,
         MetricsCollectorModule, PipelineEnabled, PipelineQueueModule,
         PriorityCalculatorModule, PrometheusCollectorModule, RateLimitEnabled,
-        ResponseChannelModule, WorkerManagerModule,
+        RerankModule, ResponseChannelModule, WorkerManagerModule,
     },
     pipeline::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
         WorkerManager,
     },
     rate_limit::LimiteronAdapter,
-    service::embedding::EmbeddingService,
+    service::{embedding::EmbeddingService, rerank::RerankService},
 };
 
 #[cfg(feature = "cli")]
@@ -193,12 +193,17 @@ async fn main() -> anyhow::Result<()> {
 
     let service = if cache_enabled && cache_size > 0 {
         log::info!("KV Cache enabled with size: {}", cache_size);
-        EmbeddingService::with_cache(engine, Some(model_config), cache_size)
+        EmbeddingService::with_cache(engine.clone(), Some(model_config.clone()), cache_size)
     } else {
         log::info!("KV Cache disabled");
-        EmbeddingService::new(engine, Some(model_config))
+        EmbeddingService::new(engine.clone(), Some(model_config.clone()))
     };
     let service = Arc::new(RwLock::new(service));
+
+    // Rerank service — reuses the same engine
+    let rerank_service = Arc::new(RwLock::new(
+        RerankService::new(engine.clone(), Some(model_config)),
+    ));
 
     // MCP stdio run-mode: when `--mcp` is passed, serve the Model Context Protocol
     // over stdio and do NOT start the HTTP/gRPC servers (stdout must stay clean for
@@ -451,6 +456,8 @@ async fn main() -> anyhow::Result<()> {
 
     // 注入预构建的能力对象（kit 是 single source of truth）
     kit.set_config(service.clone());
+    kit.set_config(rerank_service.clone());
+    kit.set_config(config.rerank.clone());
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {
         enabled: config.embedding.cache_enabled,
@@ -492,6 +499,8 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RateLimitModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RateLimitModule: {}", e))?;
+    kit.register::<RerankModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
     kit.register::<CacheModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register CacheModule: {}", e))?;
     kit.register::<DbModule>()

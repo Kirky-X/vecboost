@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use vecboost::domain::EmbedRequest;
-use vecboost::pipeline::{Priority, PriorityRequestQueue, QueuedRequest, RequestSource};
+use vecboost::pipeline::{Priority, PriorityRequestQueue, QueuedRequest, RequestSource, ServiceRequest};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,10 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (tx, _rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: id.to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: format!("text for {}", id),
                 normalize: Some(true),
-            },
+            }),
             priority: *priority,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),

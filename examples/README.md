@@ -1,6 +1,6 @@
 # VecBoost 示例
 
-本目录是独立的 workspace member crate `vecboost-examples`(`publish = false`),包含 VecBoost 向量嵌入服务的全功能示例代码,按功能分类组织为 10 个分类、27 个可执行二进制。
+本目录是独立的 workspace member crate `vecboost-examples`(`publish = false`),包含 VecBoost 向量嵌入服务的全功能示例代码,按功能分类组织为 12 个分类、31 个可执行二进制。
 
 ## 运行示例
 
@@ -51,17 +51,18 @@ required-features = ["cuda"]
 
 | 分类 | 目录 | 示例数 | 说明 |
 |------|------|--------|------|
-| basic | `basic/` | 3 | 基础用法:单文本嵌入、批量嵌入、相似度计算 |
+| basic | `basic/` | 4 | 基础用法:单文本嵌入、批量嵌入、相似度计算、重排序 |
 | engine | `engine/` | 3 | 引擎抽象:Candle/ONNX 引擎初始化与运行时切换 |
 | gpu | `gpu/` | 4 | GPU 引擎:设备检测、Candle/ONNX GPU 推理、性能对比 |
-| http | `http/` | 3 | HTTP API:REST 接口调用(reqwest) |
-| cli | `cli/` | 2 | 命令行工具:CLI 子命令调用 |
+| http | `http/` | 4 | HTTP API:REST 接口调用(reqwest) |
+| cli | `cli/` | 3 | 命令行工具:CLI 子命令调用 |
 | auth | `auth/` | 3 | 认证授权:JWT 令牌、CSRF 防护、token 刷新 |
 | cache | `cache/` | 2 | 缓存:oxcache 后端配置与 TTL 验证 |
 | rate-limiting | `rate-limiting/` | 2 | 限流:limiteron 多维度限流配置 |
 | pipeline | `pipeline/` | 2 | 请求管道:优先级队列与工作线程 |
 | grpc | `grpc/` | 1 | gRPC 接口:客户端调用 embedding_service |
 | monitoring | `monitoring/` | 2 | 监控:Prometheus 指标与性能采集 |
+| library | `library/` | 1 | Library SDK:VecBoostLibrary 嵌入式集成 |
 
 另外 `download_model.rs` 位于根目录,是模型下载工具。
 
@@ -71,6 +72,7 @@ required-features = ["cuda"]
 - `embed` — 单文本嵌入,演示 `EmbeddingService` + `api::embed`
 - `batch` — 批量嵌入,演示 `api::embed_batch` 处理多条文本
 - `similarity` — 余弦相似度,演示 `api::compute_similarity`
+- `rerank` — 重排序,演示 `RerankService` 文档相关性排序
 
 ### engine — 引擎抽象
 - `candle` — Candle 引擎初始化与推理
@@ -84,13 +86,15 @@ required-features = ["cuda"]
 - `gpu_performance_comparison` — 引擎性能对比(需要 `cuda,onnx`)
 
 ### http — HTTP API
-- `embed_api` — HTTP POST `/embed`
-- `batch_api` — HTTP POST `/embed/batch`
-- `similarity_api` — HTTP POST `/similarity`
+- `embed_api` — HTTP POST `/api/v1/embed`
+- `batch_api` — HTTP POST `/api/v1/embed/batch`
+- `similarity_api` — HTTP POST `/api/v1/similarity`
+- `rerank_api` — HTTP POST `/api/v1/rerank`
 
 ### cli — 命令行工具
 - `embed_cli` — 调用 `vecboost embed --text "hello"`
 - `batch_cli` — 调用 `vecboost batch --input texts.txt`
+- `rerank_cli` — 调用 `vecboost rerank --query "..." --documents docs.txt`
 
 ### auth — 认证授权
 - `jwt_auth` — JWT token 生成与验证
@@ -115,6 +119,9 @@ required-features = ["cuda"]
 ### monitoring — 监控
 - `metrics` — Prometheus 指标暴露
 - `performance` — 推理性能监控
+
+### library — Library SDK
+- `library_usage` — VecBoostLibrary 嵌入式集成(异步+同步 API、嵌入+重排序)
 
 ### 工具
 - `download_model` — 下载预训练模型

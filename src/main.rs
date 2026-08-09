@@ -6,13 +6,15 @@
 #[cfg(feature = "cli")]
 use std::collections::HashMap;
 use std::{net::SocketAddr, sync::Arc};
+use std::time::Duration;
 use tokio::sync::RwLock;
+use trait_kit::prelude::{AsyncShutdownCoordinator, BuildObserver, ShutdownPhase};
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use vecboost::AppConfig;
 use vecboost::module_registry::RateLimitModule;
 #[cfg(feature = "auth")]
 use vecboost::module_registry::{
-    AuthModule, CsrfConfigModule, CsrfTokenStoreModule, UserStoreModule,
+    AuthModule, CsrfConfigModule,
 };
 use vecboost::{
     VecboostState,
@@ -20,11 +22,11 @@ use vecboost::{
     config::model::{EngineType, ModelConfig},
     engine::AnyEngine,
     module_registry::{
-        AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, DbConfig, DbModule,
-        EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
-        PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule,
-        PrometheusCollectorModule, RateLimitEnabled, RateLimitEnabledModule, ResponseChannelModule,
-        WorkerManagerModule,
+        AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule,
+        ConfigWatcherModule, DbConfig, DbModule, EmbeddingModule, IpWhitelistModule,
+        MetricsCollectorModule, PipelineEnabled, PipelineEnabledModule, PipelineQueueModule,
+        PriorityCalculatorModule, PrometheusCollectorModule, RateLimitEnabled,
+        RateLimitEnabledModule, ResponseChannelModule, WorkerManagerModule,
     },
     pipeline::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
@@ -43,10 +45,9 @@ use vecboost::db::{DbPool, init_schema};
 #[cfg(feature = "auth")]
 use vecboost::{
     auth::{
-        CsrfConfig, CsrfTokenStore, JwtManager, UserStore, create_default_admin_user,
-        validate_password_complexity,
+        GarrisonHandle, GarrisonCsrfConfig, VecBoostInterface,
+        map_auth_config_to_garrison,
     },
-    security::{KeyStore, KeyType, SecretKey, SecurityConfig, StorageType, create_key_store},
 };
 
 #[cfg(feature = "grpc")]
@@ -59,6 +60,31 @@ use sdforge::security::ratelimit::LimiteronAdapter as SdforgeLimiteronAdapter;
 // metrics 端点（Prometheus text/plain, forge 不支持非 JSON 响应, 保留手写）
 use vecboost::metrics::metrics_endpoint;
 
+/// Build observer that logs per-module build timing (T017a, observer feature).
+struct LoggingObserver;
+
+impl BuildObserver for LoggingObserver {
+    fn on_module_start(&self, module_name: &'static str) {
+        log::info!("Building module: {}", module_name);
+    }
+
+    fn on_module_built(&self, module_name: &'static str, elapsed: Duration) {
+        if elapsed.as_secs_f64() > 1.0 {
+            log::warn!(
+                "Module {} built in {:.2}s (>1s)",
+                module_name,
+                elapsed.as_secs_f64()
+            );
+        } else {
+            log::info!(
+                "Module {} built in {:.2}ms",
+                module_name,
+                elapsed.as_secs_f64() * 1000.0
+            );
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 日志初始化:inklog 完全接管日志输出(通过 log crate 宏 + inklog LogLogger 适配器)
@@ -66,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
         .level("info")
         .console(true)
         .file("logs/vecboost.log")
+        .file_compress(true) // T021: zstd compression for log files (inklog compression feature)
         .build()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to initialize inklog logger: {}", e))?;
@@ -94,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 初始化数据库连接池（db feature 启用时）
     #[cfg(feature = "db")]
-    let db_pool = {
+    let (db_pool, db_metrics) = {
         log::info!(
             "Initializing database pool with url={}",
             config
@@ -107,14 +134,32 @@ async fn main() -> anyhow::Result<()> {
                 })
                 .unwrap_or_else(|| config.database.url.clone())
         );
-        let pool = DbPool::new(&config.database.url)
+        // T024-T025: Use DbPool::with_config to enable retry policy + pool-health-check
+        // pool-health-check starts automatically in DbPool::with_config() (background task)
+        let mut db_config = dbnexus::DbConfig {
+            url: config.database.url.clone(),
+            ..Default::default()
+        };
+        // T025: Enable retry policy for idempotent database operations
+        // (dbnexus `retry` feature is always enabled when vecboost `db` feature is active)
+        db_config.retry_policy = Some(dbnexus::RetryPolicy {
+            max_retries: 3,
+            ..Default::default()
+        });
+        log::info!("Database retry policy enabled (max_retries=3, exponential backoff)");
+        let pool = DbPool::with_config(db_config)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create database pool: {}", e))?;
         init_schema(&pool)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to initialize database schema: {}", e))?;
         log::info!("Database pool initialized and schema verified");
-        pool
+        // T044: Create standalone dbnexus MetricsCollector for Prometheus endpoint
+        // (dbnexus pool internal metrics_collector is not yet settable from outside;
+        // this standalone collector is wired to /metrics and ready for future pool integration)
+        let db_metrics = Arc::new(dbnexus::MetricsCollector::new());
+        log::info!("dbnexus MetricsCollector created (T044 observability wiring)");
+        (pool, db_metrics)
     };
 
     let model_config = ModelConfig {
@@ -241,37 +286,17 @@ async fn main() -> anyhow::Result<()> {
     // 创建限流器
     let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
 
+    // Garrison 认证初始化（替代手写 JWT/UserStore/CSRF）
     #[cfg(feature = "auth")]
-    let (jwt_manager, user_store): (Option<Arc<JwtManager>>, Option<Arc<UserStore>>) = if config
-        .auth
-        .enabled
-    {
-        let security_config = SecurityConfig {
-            storage_type: match config.auth.security.storage_type.as_str() {
-                "encrypted_file" => StorageType::EncryptedFile,
-                _ => StorageType::Environment,
-            },
-            encryption_key: config.auth.security.encryption_key.clone(),
-            key_file_path: config.auth.security.key_file_path.clone(),
-        };
-
-        let key_store: Arc<dyn KeyStore> = {
-            let boxed = create_key_store(&security_config).await?;
-            Arc::from(boxed)
-        };
-
-        let jwt_secret_name = "jwt_secret";
-        let _jwt_secret = if let Some(ref secret) = config.auth.jwt_secret {
-            // 验证 JWT 密钥强度（至少 32 字节）
+    let garrison_handle: Option<Arc<GarrisonHandle>> = if config.auth.enabled {
+        // 验证 JWT 密钥强度（至少 32 字节）
+        if let Some(ref secret) = config.auth.jwt_secret {
             if secret.len() < 32 {
                 return Err(anyhow::anyhow!(
                     "JWT secret must be at least 32 characters long for security. Current length: {}",
                     secret.len()
                 ));
             }
-            let key = SecretKey::new(KeyType::JwtSecret, jwt_secret_name, secret.clone());
-            key_store.set(&key).await?;
-            key.value
         } else {
             return Err(anyhow::anyhow!(
                 "JWT secret is required when authentication is enabled. \
@@ -279,91 +304,42 @@ async fn main() -> anyhow::Result<()> {
             ));
         };
 
-        let jwt_manager = Arc::new(
-            JwtManager::new_with_key_store(Arc::clone(&key_store), Some(jwt_secret_name))
-                .await?
-                .with_expiration(config.auth.token_expiration_hours.unwrap_or(24)),
-        );
-
-        #[cfg(feature = "db")]
-        let user_store = Arc::new(UserStore::new(Arc::new(db_pool.clone())));
-        #[cfg(not(feature = "db"))]
-        let user_store = Arc::new(UserStore::new());
-
-        // 强制用户提供管理员凭证，不再使用默认值
-        let admin_username = config.auth.default_admin_username.clone().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Administrator username is required when authentication is enabled. \
-                     Please set 'default_admin_username' in the configuration."
-            )
-        })?;
-
-        let admin_password = config.auth.default_admin_password.clone().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Administrator password is required when authentication is enabled. \
-                     Please set 'default_admin_password' in the configuration."
-            )
-        })?;
-
-        // 验证密码复杂度
-        validate_password_complexity(&admin_password)
-            .map_err(|e| anyhow::anyhow!("Administrator password validation failed: {}", e))?;
-
-        let admin_user = create_default_admin_user(&admin_username, &admin_password)
-            .map_err(|e| anyhow::anyhow!("Failed to create default admin user: {}", e))?;
-        user_store
-            .add_user(admin_user)
+        // 创建 garrison DAO（内存缓存）
+        let dao = garrison::dao::GarrisonDaoOxcache::new()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to add default admin user: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create GarrisonDaoOxcache: {}", e))?;
 
-        log::info!(
-            "JWT authentication enabled with {} storage",
-            config.auth.security.storage_type
-        );
-        log::info!("Default admin user created: {}", admin_username);
+        // 映射 VecBoost AuthConfig → GarrisonConfig
+        let garrison_config = map_auth_config_to_garrison(&config.auth);
 
-        (Some(jwt_manager), Some(user_store))
+        // 初始化 garrison 全局单例
+        garrison::prelude::GarrisonManager::init(
+            Arc::new(dao),
+            Arc::new(garrison_config),
+            Arc::new(VecBoostInterface::new(
+                config.auth.default_admin_username.clone().unwrap_or_else(|| "admin".to_string()),
+            )),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to init GarrisonManager: {}", e))?;
+
+        log::info!("Garrison authentication enabled (JWT + session)");
+
+        Some(Arc::new(GarrisonHandle))
     } else {
-        log::info!("JWT authentication disabled");
-        (None, None)
+        log::info!("Authentication disabled");
+        None
     };
 
-    // Initialize CSRF protection
+    // Garrison CSRF 配置
     #[cfg(feature = "auth")]
-    let (csrf_config, csrf_token_store): (
-        Option<Arc<CsrfConfig>>,
-        Option<Arc<CsrfTokenStore>>,
-    ) = if config.auth.csrf.enabled {
-        log::info!("CSRF protection enabled");
-
-        let csrf_config =
-            CsrfConfig::new(config.auth.csrf.allowed_origins.clone().unwrap_or_default())
-                .with_token_validation(config.auth.csrf.token_validation_enabled)
-                .with_token_expiration(config.auth.csrf.token_expiration_secs.unwrap_or(3600))
-                .with_allow_same_origin(config.auth.csrf.allow_same_origin);
-
-        let csrf_token_store = if config.auth.csrf.token_validation_enabled {
-            log::info!("CSRF token validation enabled");
-            Some(Arc::new(CsrfTokenStore::new()))
-        } else {
-            log::info!("CSRF token validation disabled (using Origin validation only)");
-            None
-        };
-
-        (Some(Arc::new(csrf_config)), csrf_token_store)
+    let garrison_csrf_config: Option<Arc<GarrisonCsrfConfig>> = if config.auth.csrf.enabled {
+        let csrf = GarrisonCsrfConfig::default();
+        log::info!("CSRF protection enabled (garrison)");
+        Some(Arc::new(csrf))
     } else {
         log::info!("CSRF protection disabled");
-        (None, None)
+        None
     };
-
-    // T017/T027: Warn on dangerous CSRF config combination — enabled but neither
-    // token validation nor allowed_origins are configured, leaving CSRF
-    // protection ineffective. Logic extracted to auth::csrf::check_csrf_dangerous_config
-    // for unit-test coverage (T027).
-    #[cfg(feature = "auth")]
-    if let Some(warning) = vecboost::auth::csrf::check_csrf_dangerous_config(&config.auth.csrf) {
-        log::warn!("{}", warning);
-    }
 
     // Initialize audit logging
     let audit_logger = if config.audit.enabled {
@@ -470,6 +446,9 @@ async fn main() -> anyhow::Result<()> {
 
     let mut kit = trait_kit::AsyncKit::new();
 
+    // T017a: Register build observer for per-module build timing
+    kit.with_observer(Arc::new(LoggingObserver));
+
     // 注入预构建的能力对象（kit 是 single source of truth）
     kit.set_config(service.clone());
     kit.set_config(rate_limiter.clone());
@@ -480,6 +459,9 @@ async fn main() -> anyhow::Result<()> {
     kit.set_config(DbConfig {
         enabled: cfg!(feature = "db"),
     });
+    // T044: Inject dbnexus MetricsCollector for Prometheus endpoint integration
+    #[cfg(feature = "db")]
+    kit.set_config(Some(db_metrics.clone()));
     kit.set_config(audit_logger.clone());
     // v0.3.0 D3: 注入 13 个新 Module 的能力配置
     kit.set_config(Some(Arc::new(vecboost::metrics::InferenceCollector::new())));
@@ -501,17 +483,11 @@ async fn main() -> anyhow::Result<()> {
     kit.set_config(worker_manager.clone());
     #[cfg(feature = "auth")]
     {
-        if let Some(ref jwt) = jwt_manager {
-            kit.set_config(Some(Arc::clone(jwt)) as Option<Arc<vecboost::auth::JwtManager>>);
-        } else {
-            kit.set_config(None::<Arc<vecboost::auth::JwtManager>>);
-        }
-        kit.set_config(user_store.clone());
-        kit.set_config(csrf_config.clone());
-        kit.set_config(csrf_token_store.clone());
+        kit.set_config(garrison_handle.clone());
+        kit.set_config(garrison_csrf_config.clone());
     }
 
-    // 注册模块（15 个非 auth + 4 个 auth feature = 19 个 Module）
+    // 注册模块（15 个非 auth + 2 个 auth feature = 17 个 Module）
     kit.register::<EmbeddingModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RateLimitModule>()
@@ -543,17 +519,26 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to register PriorityCalculatorModule: {}", e))?;
     kit.register::<WorkerManagerModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register WorkerManagerModule: {}", e))?;
+    // T034-T035: ConfigWatcherModule — monitors config.toml for hot reload
+    let watcher_guard = Arc::new(confers::watcher::WatcherGuard::new());
+    kit.set_config(watcher_guard);
+    kit.register::<ConfigWatcherModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register ConfigWatcherModule: {}", e))?;
     #[cfg(feature = "auth")]
     {
         kit.register::<AuthModule>()
             .map_err(|e| anyhow::anyhow!("Failed to register AuthModule: {}", e))?;
-        kit.register::<UserStoreModule>()
-            .map_err(|e| anyhow::anyhow!("Failed to register UserStoreModule: {}", e))?;
         kit.register::<CsrfConfigModule>()
             .map_err(|e| anyhow::anyhow!("Failed to register CsrfConfigModule: {}", e))?;
-        kit.register::<CsrfTokenStoreModule>()
-            .map_err(|e| anyhow::anyhow!("Failed to register CsrfTokenStoreModule: {}", e))?;
     }
+
+    // T012-T016: Register lifecycle and health check for key modules
+    kit.register_lifecycle::<EmbeddingModule>();
+    kit.register_lifecycle::<AuditModule>();
+    kit.register_lifecycle::<ConfigWatcherModule>();
+    kit.register_health_check::<EmbeddingModule>();
+    kit.register_health_check::<RateLimitModule>();
+    kit.register_health_check::<CacheModule>();
 
     let kit = kit
         .build()
@@ -561,7 +546,80 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
     let kit = Arc::new(kit);
 
+    // T017: AsyncShutdownCoordinator — phased graceful shutdown
+    let shutdown_coordinator = AsyncShutdownCoordinator::new();
+    shutdown_coordinator.set_global_timeout(Duration::from_secs(30));
+    {
+        let kit_for_shutdown = Arc::clone(&kit);
+        shutdown_coordinator
+            .register_hook(ShutdownPhase::CloseConnections, move || {
+                Box::pin(async move {
+                    // Manually invoke async on_shutdown for lifecycle modules
+                    // (AsyncKit::shutdown() is sync and cannot call async fns)
+                    if let Ok(audit_cap) = kit_for_shutdown.require::<AuditModule>() {
+                        <AuditModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(&audit_cap)
+                            .await;
+                    }
+                })
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to register shutdown hook: {}", e))?;
+    }
+    // T035: Register ConfigWatcherModule shutdown hook
+    {
+        let kit_for_watcher_shutdown = Arc::clone(&kit);
+        shutdown_coordinator
+            .register_hook(ShutdownPhase::DrainQueue, move || {
+                Box::pin(async move {
+                    if let Ok(watcher_cap) = kit_for_watcher_shutdown.require::<ConfigWatcherModule>() {
+                        <ConfigWatcherModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(
+                            &watcher_cap,
+                        )
+                        .await;
+                    }
+                })
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to register config watcher shutdown hook: {}", e))?;
+    }
+
     log::info!("AsyncKit module registry built successfully");
+
+    // T034: Spawn config file watcher task for hot reload
+    // Watches config.toml and reloads configuration on file changes,
+    // injecting new config through kit.set_config().
+    {
+        let kit_for_watch = Arc::clone(&kit);
+        tokio::spawn(async move {
+            // FsWatcher requires the file to exist; skip gracefully if not
+            let config_path = "config.toml";
+            let mut fs_watcher = match confers::watcher::FsWatcher::new(config_path, 200).await {
+                Ok(w) => {
+                    log::info!("Config file watcher started for {}", config_path);
+                    w
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Config file watcher not started ({} not found or error: {:?})",
+                        config_path,
+                        e
+                    );
+                    return;
+                }
+            };
+            while let Some(changed_path) = fs_watcher.recv().await {
+                log::info!("Config file changed: {:?}, reloading...", changed_path);
+                match AppConfig::load_via_confers() {
+                    Ok(new_config) => {
+                        kit_for_watch.set_config(new_config);
+                        log::info!("Configuration reloaded successfully");
+                    }
+                    Err(e) => {
+                        log::error!("Failed to reload configuration: {}", e);
+                    }
+                }
+            }
+            log::info!("Config file watcher stopped");
+        });
+    }
 
     // v0.3.0 D3: VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
     let app_state = VecboostState::new(kit);
@@ -596,6 +654,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // CSRF 保护（条件性应用：auth 启用且 csrf 启用时）
+    // T008: 中间件内部将委托 garrison CSRF 校验
     #[cfg(feature = "auth")]
     let app = if config.auth.enabled && config.auth.csrf.enabled {
         use axum::middleware::from_fn_with_state;
@@ -603,22 +662,13 @@ async fn main() -> anyhow::Result<()> {
             .kit()
             .require::<CsrfConfigModule>()
             .map_err(|e| anyhow::anyhow!("Failed to require CsrfConfigModule: {}", e))?;
-        let csrf_token_store = app_state
-            .kit()
-            .require::<CsrfTokenStoreModule>()
-            .map_err(|e| anyhow::anyhow!("Failed to require CsrfTokenStoreModule: {}", e))?;
-        match (csrf_config, csrf_token_store) {
-            (Some(cfg), Some(store)) if cfg.token_validation_enabled => {
-                app.layer(from_fn_with_state(
-                    (cfg, store),
-                    vecboost::auth::middleware::csrf_combined_middleware,
-                ))
-            }
-            (Some(cfg), _) => app.layer(from_fn_with_state(
+        if let Some(cfg) = csrf_config {
+            app.layer(from_fn_with_state(
                 cfg,
                 vecboost::auth::csrf_origin_middleware,
-            )),
-            _ => app,
+            ))
+        } else {
+            app
         }
     } else {
         app
@@ -650,6 +700,21 @@ async fn main() -> anyhow::Result<()> {
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     log::info!("Server listening on {}", addr);
+
+    // T018: Signal-aware graceful shutdown (SIGINT + SIGTERM)
+    let signal = async {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                log::info!("Received SIGINT, initiating graceful shutdown");
+            }
+            _ = sigterm.recv() => {
+                log::info!("Received SIGTERM, initiating graceful shutdown");
+            }
+        }
+    };
 
     #[cfg(feature = "grpc")]
     if config.server.grpc_enabled {
@@ -744,11 +809,24 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Wait for server to complete (graceful shutdown on signal)
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(signal)
     .await?;
+
+    // Execute phased shutdown coordinator after server stops
+    log::info!("Server stopped, executing phased shutdown...");
+    let shutdown_result = shutdown_coordinator.shutdown().await;
+    if !shutdown_result.is_ok() {
+        log::warn!(
+            "Shutdown timed out on phases: {:?}",
+            shutdown_result.timed_out_phases()
+        );
+    }
+    log::info!("VecBoost shutdown complete");
 
     Ok(())
 }

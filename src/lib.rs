@@ -93,32 +93,17 @@ impl FromRef<VecboostState> for Arc<RwLock<EmbeddingService>> {
 }
 
 #[cfg(all(feature = "http", feature = "auth"))]
-impl FromRef<VecboostState> for Arc<auth::JwtManager> {
+impl FromRef<VecboostState> for Arc<auth::GarrisonCsrfConfig> {
     fn from_ref(state: &VecboostState) -> Self {
         state
             .kit
-            .require::<module_registry::AuthModule>()
+            .require::<module_registry::CsrfConfigModule>()
             .and_then(|opt| {
                 opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "jwt_manager (auth disabled at runtime)".to_string(),
+                    key: "csrf_config (auth disabled at runtime)".to_string(),
                 })
             })
-            .expect("JWT manager capability not available")
-    }
-}
-
-#[cfg(all(feature = "http", feature = "auth"))]
-impl FromRef<VecboostState> for Arc<auth::UserStore> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::UserStoreModule>()
-            .and_then(|opt| {
-                opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "user_store (auth disabled at runtime)".to_string(),
-                })
-            })
-            .expect("UserStore capability not available")
+            .expect("GarrisonCsrfConfig capability not available")
     }
 }
 
@@ -204,7 +189,7 @@ mod tests {
     };
     #[cfg(feature = "auth")]
     use crate::module_registry::{
-        AuthModule, CsrfConfigModule, CsrfTokenStoreModule, UserStoreModule,
+        AuthModule, CsrfConfigModule,
     };
     #[cfg(feature = "http")]
     use crate::pipeline::{PriorityConfig, WorkerConfig};
@@ -292,10 +277,8 @@ mod tests {
         // auth feature 能力（全部 None — 默认禁用）
         #[cfg(feature = "auth")]
         {
-            kit.set_config(Option::<Arc<auth::JwtManager>>::None);
-            kit.set_config(Option::<Arc<auth::UserStore>>::None);
-            kit.set_config(Option::<Arc<auth::CsrfConfig>>::None);
-            kit.set_config(Option::<Arc<auth::CsrfTokenStore>>::None);
+            kit.set_config(Option::<Arc<crate::auth::GarrisonHandle>>::None);
+            kit.set_config(Option::<Arc<crate::auth::GarrisonCsrfConfig>>::None);
         }
 
         // 注册所有 Module（15 个非 auth + 4 个 auth feature）
@@ -318,10 +301,15 @@ mod tests {
         #[cfg(feature = "auth")]
         {
             kit.register::<AuthModule>().unwrap();
-            kit.register::<UserStoreModule>().unwrap();
             kit.register::<CsrfConfigModule>().unwrap();
-            kit.register::<CsrfTokenStoreModule>().unwrap();
         }
+
+        // T012-T016: Register lifecycle and health check for key modules
+        kit.register_lifecycle::<EmbeddingModule>();
+        kit.register_lifecycle::<AuditModule>();
+        kit.register_health_check::<EmbeddingModule>();
+        kit.register_health_check::<RateLimitModule>();
+        kit.register_health_check::<CacheModule>();
 
         let kit = kit.build().await.expect("Failed to build AsyncKit");
         VecboostState { kit: Arc::new(kit) }
@@ -580,31 +568,7 @@ mod tests {
         );
     }
 
-    #[cfg(all(feature = "http", feature = "auth"))]
-    #[tokio::test]
-    async fn test_from_ref_jwt_manager_panics_when_none() {
-        let state = make_app_state().await;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _: Arc<auth::JwtManager> = FromRef::from_ref(&state);
-        }));
-        assert!(
-            result.is_err(),
-            "from_ref should panic when jwt_manager is None"
-        );
-    }
 
-    #[cfg(all(feature = "http", feature = "auth"))]
-    #[tokio::test]
-    async fn test_from_ref_user_store_panics_when_none() {
-        let state = make_app_state().await;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _: Arc<auth::UserStore> = FromRef::from_ref(&state);
-        }));
-        assert!(
-            result.is_err(),
-            "from_ref should panic when user_store is None"
-        );
-    }
 
     // -------------------------------------------------------------------------
     // VecboostState Send + Sync 编译期断言
@@ -620,5 +584,46 @@ mod tests {
     fn test_vecboost_state_is_clone() {
         fn assert_clone<T: Clone>() {}
         assert_clone::<VecboostState>();
+    }
+
+    // -------------------------------------------------------------------------
+    // T019/T020: Health check + graceful shutdown integration tests
+    // -------------------------------------------------------------------------
+
+    /// T019: Verify health checks return Healthy for all registered modules.
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_health_checks_return_healthy() {
+        use trait_kit::prelude::HealthStatus;
+
+        let state = make_app_state().await;
+
+        let embedding_health = state.kit.health_check::<EmbeddingModule>();
+        assert!(embedding_health.is_ok(), "EmbeddingModule health check should be registered");
+        assert_eq!(embedding_health.unwrap(), HealthStatus::Healthy);
+
+        let rate_limit_health = state.kit.health_check::<RateLimitModule>();
+        assert!(rate_limit_health.is_ok(), "RateLimitModule health check should be registered");
+        assert_eq!(rate_limit_health.unwrap(), HealthStatus::Healthy);
+
+        let cache_health = state.kit.health_check::<CacheModule>();
+        assert!(cache_health.is_ok(), "CacheModule health check should be registered");
+        // Cache disabled → Degraded (expected config state, not Unhealthy)
+        assert_eq!(
+            cache_health.unwrap(),
+            HealthStatus::Degraded {
+                detail: "cache disabled".into(),
+            }
+        );
+    }
+
+    /// T020: Verify AsyncKit shutdown invokes lifecycle hooks without panic.
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_kit_shutdown_completes_cleanly() {
+        let state = make_app_state().await;
+        // AsyncKit::shutdown() calls sync shutdown callbacks (lifecycle modules)
+        // Should not panic even with async lifecycle modules registered
+        state.kit.shutdown();
     }
 }

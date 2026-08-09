@@ -26,6 +26,7 @@ rand = { version = "0.10", default-features = false, features = ["thread_rng", "
 hex = { version = "0.4", default-features = false, features = ["std"] }
 url = { version = "2.5", default-features = false }
 zeroize = { version = "1.0", default-features = false, features = ["alloc"] }
+argon2 = { version = "0.5", default-features = false }
 
 # Serialization (base)
 serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
@@ -36,17 +37,19 @@ thiserror = { version = "2.0", default-features = false }
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 
 # Module Registry (always required)
-trait-kit = { version = "0.4", path = "../base/trait-kit", default-features = false, features = ["async"] }
+trait-kit = { version = "0.4", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer"] }
 
 # Configuration infrastructure (confers - 必选,完全接管配置,禁止手写 config/toml)
-confers = { version = "0.5", path = "../base/confers", default-features = false, features = ["toml", "env", "config-bus"] }
+confers = { version = "0.5", path = "../base/confers", default-features = false, features = ["toml", "env", "config-bus", "validation", "watch", "encryption", "schema"] }
+garde = { version = "0.22", default-features = false, features = ["derive"] }
+schemars = { version = "1.2", default-features = false }
 
 # Logging infrastructure (inklog + log - 必选,完全接管日志,禁止手写 tracing)
-inklog = { version = "0.2", path = "../base/inklog", default-features = false }
+inklog = { version = "0.2", path = "../base/inklog", default-features = false, features = ["compression", "fast-masking"] }
 log = { version = "0.4", default-features = false }
 
 # Cache infrastructure (oxcache - 必选,完全接管缓存,禁止手写 lru)
-oxcache = { version = "0.4", path = "../base/oxcache", default-features = false, features = ["core"] }
+oxcache = { version = "0.4", path = "../base/oxcache", default-features = false, features = ["core", "bloom", "compression", "macros"] }
 
 # Rate limiting infrastructure (limiteron - 必选,完全接管速率限制,禁止手写)
 limiteron = { version = "0.2", path = "../base/limiteron", default-features = false }
@@ -54,7 +57,7 @@ limiteron = { version = "0.2", path = "../base/limiteron", default-features = fa
 # Database infrastructure (db feature)
 # dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
 # Direct sea-orm dependency is still required for those types.
-dbnexus = { version = "0.5", path = "../base/dbnexus", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache"] }
+dbnexus = { version = "0.5", path = "../base/dbnexus", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "retry", "config-env", "observability"] }
 sea-orm = { version = "2.0", optional = true, default-features = false }
 
 # AI & Math (base)
@@ -85,10 +88,8 @@ reqwest = { version = "0.13", optional = true, default-features = false, feature
 
 # gRPC is fully handled by sdforge (unified Call protocol via #[forge(grpc_method)])
 
-# Auth feature
-jsonwebtoken = { version = "11.0", optional = true, default-features = false, features = ["aws_lc_rs"] }
-# RC 版本保留完整 semver:argon2 0.6 尚无稳定 release
-argon2 = { version = "0.6.0-rc.8", optional = true, default-features = false, features = ["alloc", "password-hash", "getrandom"] }
+# Auth feature (garrison - 一站式认证鉴权框架，完全接管 auth，禁止手写 JWT/CSRF/密码哈希)
+garrison = { version = "0.8", optional = true, default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "account-credential", "account-policy"] }
 aes-gcm = { version = "0.11", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
 
 # Redis feature
@@ -114,7 +115,7 @@ clap = { version = "4.6", optional = true, default-features = false, features = 
 default = ["http"]
 
 # 协议特性
-http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest", "sdforge/http", "sdforge/security"]
+http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/graceful-shutdown", "sdforge/health-check"]
 grpc = ["sdforge/grpc", "sdforge/ratelimit", "sdforge/security"]
 cli = ["sdforge/cli", "dep:clap"]
 openapi = ["schema", "dep:utoipa-swagger-ui", "sdforge/openapi", "sdforge/docs"]
@@ -136,7 +137,7 @@ db = ["dep:dbnexus", "dep:sea-orm"]
 postgres = ["db", "dbnexus/postgres"]
 
 # 功能特性
-auth = ["dep:jsonwebtoken", "dep:argon2", "dep:aes-gcm"]
+auth = ["dep:garrison", "dep:aes-gcm"]
 redis = ["dep:redis"]
 
 # 引擎特性

@@ -6,8 +6,10 @@
 #![allow(clippy::all)]
 
 use crate::cache::OxCacheBackend;
+use crate::cache::SemanticCache;
 use crate::config::model::ModelConfig;
 use crate::device::DynamicBatchScheduler;
+use crate::device::continuous_batch::ContinuousBatchLoop;
 use crate::device::memory_optimizer::SharedGpuMemoryManager;
 use crate::device::memory_pool::BufferPool;
 use crate::domain::{
@@ -42,6 +44,8 @@ pub struct EmbeddingService {
     memory_manager: Option<SharedGpuMemoryManager>,
     batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     buffer_pool: Option<Arc<tokio::sync::RwLock<BufferPool>>>,
+    continuous_batch_loop: Option<Arc<ContinuousBatchLoop>>,
+    semantic_cache: Option<Arc<SemanticCache>>,
 }
 
 impl EmbeddingService {
@@ -58,6 +62,8 @@ impl EmbeddingService {
             memory_manager: None,
             batch_scheduler: None,
             buffer_pool: None,
+            continuous_batch_loop: None,
+            semantic_cache: None,
         }
     }
 
@@ -75,6 +81,8 @@ impl EmbeddingService {
             memory_manager: None,
             batch_scheduler: None,
             buffer_pool: None,
+            continuous_batch_loop: None,
+            semantic_cache: None,
         }
     }
 
@@ -93,6 +101,8 @@ impl EmbeddingService {
             memory_manager: None,
             batch_scheduler: None,
             buffer_pool: None,
+            continuous_batch_loop: None,
+            semantic_cache: None,
         }
     }
 
@@ -110,6 +120,8 @@ impl EmbeddingService {
             memory_manager: None,
             batch_scheduler: None,
             buffer_pool: None,
+            continuous_batch_loop: None,
+            semantic_cache: None,
         }
     }
 
@@ -131,6 +143,8 @@ impl EmbeddingService {
             memory_manager,
             batch_scheduler,
             buffer_pool: None,
+            continuous_batch_loop: None,
+            semantic_cache: None,
         }
     }
 
@@ -138,6 +152,26 @@ impl EmbeddingService {
     pub fn with_buffer_pool(mut self, buffer_pool: Arc<tokio::sync::RwLock<BufferPool>>) -> Self {
         self.buffer_pool = Some(buffer_pool);
         self
+    }
+
+    /// 设置连续批处理 loop
+    pub fn with_continuous_batch(mut self, batch_loop: Arc<ContinuousBatchLoop>) -> Self {
+        self.continuous_batch_loop = Some(batch_loop);
+        self
+    }
+
+    /// 设置语义缓存
+    pub fn with_semantic_cache(mut self, semantic_cache: Arc<SemanticCache>) -> Self {
+        self.semantic_cache = Some(semantic_cache);
+        self
+    }
+
+    /// 内部批量推理方法（供 ContinuousBatchLoop 使用）
+    ///
+    /// 直接调用引擎的 `embed_batch`，不经过缓存/验证/归一化路径。
+    /// 由调用方负责结果后处理。
+    pub async fn embed_batch_internal(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+        self.engine.read().await.embed_batch(texts)
     }
 
     fn validate_dimension(&self, actual_dimension: usize) {
@@ -327,7 +361,18 @@ impl EmbeddingService {
 
         let cache_key = format!("text:{}", req.text);
 
-        let embedding = if self.cache.is_enabled() {
+        let embedding = if let Some(ref semantic_cache) = self.semantic_cache {
+            // 语义缓存启用：精确匹配 → trigram 搜索 → 计算回填
+            self.handle_oom_fallback(|| async {
+                semantic_cache
+                    .get_or_compute(&req.text, || async {
+                        let embedding = self.engine.read().await.embed(&req.text)?;
+                        Ok(embedding)
+                    })
+                    .await
+            })
+            .await?
+        } else if self.cache.is_enabled() {
             self.handle_oom_fallback(|| async {
                 self.cache
                     .get_or_insert::<_, _, VecboostError>(&cache_key, || async {
@@ -366,6 +411,7 @@ impl EmbeddingService {
             dimension,
             embedding,
             processing_time_ms: 0,
+            information_retention_rate: None,
         })
     }
 
@@ -530,6 +576,7 @@ impl EmbeddingService {
                 dimension,
                 embedding: final_vec,
                 processing_time_ms: processing_time.as_millis(),
+                information_retention_rate: None,
             })
         } else {
             Err(VecboostError::InvalidInput("File is empty".to_string()))

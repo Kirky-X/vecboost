@@ -167,6 +167,7 @@ mod tests {
             embedding: vec![0.0; 768],
             dimension: 768,
             processing_time_ms: 100,
+            information_retention_rate: None,
         });
 
         channel.complete("test-1".to_string(), response).await;
@@ -236,6 +237,7 @@ mod tests {
                     embedding: vec![0.0; 4],
                     dimension: 4,
                     processing_time_ms: 1,
+                    information_retention_rate: None,
                 }),
             )
             .await;
@@ -257,6 +259,7 @@ mod tests {
                     embedding: vec![0.0; 4],
                     dimension: 4,
                     processing_time_ms: 1,
+                    information_retention_rate: None,
                 }),
             )
             .await;
@@ -319,6 +322,7 @@ mod tests {
                     embedding: vec![0.0; 8],
                     dimension: 8,
                     processing_time_ms: 1,
+                    information_retention_rate: None,
                 });
                 channel_clone.complete(request_id, response).await;
                 rx.await
@@ -351,6 +355,7 @@ mod tests {
                     embedding: vec![1.0; 4],
                     dimension: 4,
                     processing_time_ms: 0,
+                    information_retention_rate: None,
                 }),
             )
             .await;
@@ -377,6 +382,7 @@ mod tests {
                     embedding: vec![],
                     dimension: 0,
                     processing_time_ms: 0,
+                    information_retention_rate: None,
                 }),
             )
             .await;

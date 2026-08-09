@@ -10,7 +10,6 @@
 //! - `interface` — VecBoostInterface（GarrisonInterface 实现）
 //! - `middleware` — axum 中间件（外壳保留，内部委托 garrison）
 //! - `types` — HTTP 请求/响应类型（serde 序列化，无业务逻辑）
-
 pub mod config;
 pub mod interface;
 pub mod middleware;
@@ -31,8 +30,8 @@ pub use interface::VecBoostInterface;
 #[derive(Clone, Debug)]
 pub struct GarrisonHandle;
 
-// Re-export 保留的 HTTP 类型（API 契约不变）
-pub use types::{AuthResponse, LoginRequest, Permission, RefreshTokenRequest, User, validate_username_format};
+/// Re-export 保留的 HTTP 类型（API 契约不变）
+pub use types::{AuthResponse, LoginRequest, RefreshTokenRequest, User, validate_username_format};
 
 // Re-export garrison 密码哈希（替代手写 argon2 实现）
 pub use garrison::account::credential::password::{Argon2Hasher, PasswordHasher};
@@ -43,12 +42,20 @@ pub use garrison::web::csrf::{
     CsrfConfig as GarrisonCsrfConfig, generate_csrf_token, validate_csrf_token,
 };
 
+// Re-export garrison CSRF 中间件（替代手写 csrf_origin/csrf/csrf_combined 中间件）
+#[cfg(feature = "auth")]
+pub use garrison::web::csrf::garrison_csrf_middleware;
+
+// Re-export garrison task_local token 工具（供下游 handler 使用权限查询）
+#[cfg(feature = "auth")]
+pub use garrison::stp::with_current_token;
+
 // Re-export garrison DAO（内存实现，供示例/测试使用）
 #[cfg(feature = "auth")]
 pub use garrison::dao::GarrisonDaoOxcache;
 
 // Re-export middleware 函数
 pub use middleware::{
-    auth_middleware, auth_rate_limit_middleware, csrf_combined_middleware, csrf_middleware,
-    csrf_origin_middleware, require_role_middleware,
+    auth_middleware, auth_rate_limit_middleware, optional_auth_middleware,
+    require_permission_middleware, require_role_middleware,
 };

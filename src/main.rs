@@ -46,7 +46,7 @@ use vecboost::db::{DbPool, init_schema};
 use vecboost::{
     auth::{
         GarrisonHandle, GarrisonCsrfConfig, VecBoostInterface,
-        map_auth_config_to_garrison,
+        garrison_csrf_middleware, map_auth_config_to_garrison,
     },
 };
 
@@ -658,7 +658,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // CSRF 保护（条件性应用：auth 启用且 csrf 启用时）
-    // T008: 中间件内部将委托 garrison CSRF 校验
+    // 直接使用 garrison garrison_csrf_middleware（包含 Origin + Token 双重校验）
     #[cfg(feature = "auth")]
     let app = if config.auth.enabled && config.auth.csrf.enabled {
         use axum::middleware::from_fn_with_state;
@@ -669,7 +669,7 @@ async fn main() -> anyhow::Result<()> {
         if let Some(cfg) = csrf_config {
             app.layer(from_fn_with_state(
                 cfg,
-                vecboost::auth::csrf_origin_middleware,
+                garrison_csrf_middleware,
             ))
         } else {
             app

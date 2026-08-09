@@ -102,7 +102,7 @@ impl CandleEngine {
             Device::Cpu
         };
 
-        // 确定计算数据类型，支持 FP16 和 INT8 量化
+        // 确定计算数据类型，支持 FP16、BF16 和 INT8 量化
         let compute_dtype = match (&precision, device.is_cuda()) {
             (Precision::Int8, true) => {
                 log::info!("Using INT8 quantization (CPU inference, reduced precision)");
@@ -118,6 +118,14 @@ impl CandleEngine {
             }
             (Precision::Fp16, false) => {
                 log::warn!("FP16 not supported on non-CUDA devices, falling back to FP32");
+                DType::F32
+            }
+            (Precision::Bf16, true) => {
+                log::info!("Using BF16 precision (Brain Float 16)");
+                DType::BF16
+            }
+            (Precision::Bf16, false) => {
+                log::warn!("BF16 not supported on non-CUDA devices, falling back to FP32");
                 DType::F32
             }
             (Precision::Fp32, _) => {
@@ -879,6 +887,7 @@ impl CandleEngine {
         let model_size_mb = match (&self.precision, self.use_quantization) {
             (Precision::Fp32, _) => num_params * 4 / (1024 * 1024), // 4 bytes per param
             (Precision::Fp16, _) => num_params * 2 / (1024 * 1024), // 2 bytes per param
+            (Precision::Bf16, _) => num_params * 2 / (1024 * 1024), // 2 bytes per param
             (Precision::Int8, true) => num_params * 1 / (1024 * 1024), // 1 byte per param
             (Precision::Int8, false) => num_params * 4 / (1024 * 1024), // Fallback to FP32
         };
@@ -1359,6 +1368,7 @@ mod tests {
     fn test_precision_display() {
         assert_eq!(Precision::Fp32.to_string(), "fp32");
         assert_eq!(Precision::Fp16.to_string(), "fp16");
+        assert_eq!(Precision::Bf16.to_string(), "bf16");
         assert_eq!(Precision::Int8.to_string(), "int8");
     }
 

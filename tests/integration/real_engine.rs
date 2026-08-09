@@ -464,3 +464,72 @@ mod tests {
         }
     }
 }
+
+/// BF16 vs FP32 precision comparison test.
+/// Requires CUDA environment with a real model. Marked #[ignore] for CI safety.
+///
+/// Run with: `cargo test --test integration bf16_precision -- --ignored --nocapture`
+#[cfg(test)]
+mod bf16_precision_tests {
+    use super::*;
+    use vecboost::config::model::Precision;
+    use vecboost::utils::vector::cosine_similarity;
+
+    /// Compare BF16 and FP32 inference outputs on the same texts.
+    /// Asserts cosine similarity deviation < 0.001 for each text pair.
+    #[test]
+    #[ignore] // Requires CUDA + real model
+    fn test_bf16_precision_comparison() {
+        // This test requires:
+        // 1. CUDA-capable GPU
+        // 2. Real model loaded (set TEST_MODE=real or configure real model path)
+        // 3. candle-core compiled with CUDA feature
+        //
+        // Without these, the test is silently skipped.
+        let config = ModelConfig::default();
+        if !config.model_path.exists() {
+            eprintln!("SKIP: No real model available for BF16 comparison");
+            return;
+        }
+
+        let texts = vec![
+            "The quick brown fox jumps over the lazy dog",
+            "Machine learning is a subset of artificial intelligence",
+            "Vector embeddings capture semantic meaning of text",
+            "Rust provides memory safety without garbage collection",
+            "Embedding models transform text into dense vector representations",
+        ];
+
+        // FP32 baseline
+        let engine_fp32 = AnyEngine::new(&config, Precision::Fp32)
+            .expect("Failed to create FP32 engine");
+        let embeddings_fp32 = engine_fp32
+            .embed_batch(&texts)
+            .expect("FP32 batch embed failed");
+
+        // BF16
+        let engine_bf16 = AnyEngine::new(&config, Precision::Bf16)
+            .expect("Failed to create BF16 engine");
+        let embeddings_bf16 = engine_bf16
+            .embed_batch(&texts)
+            .expect("BF16 batch embed failed");
+
+        // Compare each text's embedding
+        for (i, (fp32_vec, bf16_vec)) in embeddings_fp32
+            .iter()
+            .zip(embeddings_bf16.iter())
+            .enumerate()
+        {
+            let similarity = cosine_similarity(fp32_vec, bf16_vec)
+                .expect("Cosine similarity failed");
+            let deviation = (1.0 - similarity).abs();
+            assert!(
+                deviation < 0.001,
+                "Text {}: BF16 vs FP32 cosine similarity deviation {} >= 0.001 (sim={})",
+                i,
+                deviation,
+                similarity
+            );
+        }
+    }
+}

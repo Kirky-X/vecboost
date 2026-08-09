@@ -33,6 +33,9 @@ pub struct EmbedResponse {
     pub embedding: Vec<f32>,
     pub dimension: usize,
     pub processing_time_ms: u128,
+    /// 信息保留率（仅在 Matryoshka 截断时填充）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub information_retention_rate: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]

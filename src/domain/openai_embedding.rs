@@ -54,6 +54,12 @@ pub struct OpenAIEmbedRequest {
     #[serde(default)]
     pub dimensions: Option<usize>,
 
+    /// The downstream task type for automatic dimension selection.
+    /// Only used when `dimensions` is not specified and the model supports Matryoshka.
+    /// Valid values: "retrieval", "clustering", "classification", "semantic_search".
+    #[serde(default)]
+    pub task_type: Option<String>,
+
     /// A unique identifier representing your end-user.
     /// Helps OpenAI to monitor and detect abuse.
     #[serde(default)]

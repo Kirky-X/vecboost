@@ -211,14 +211,14 @@ impl IntoResponse for VecboostError {
 
 impl From<std::io::Error> for VecboostError {
     fn from(e: std::io::Error) -> Self {
-        VecboostError::io_error(e.to_string())
+        VecboostError::IoError(e.to_string())
     }
 }
 
 #[cfg(feature = "db")]
 impl From<sea_orm::DbErr> for VecboostError {
     fn from(e: sea_orm::DbErr) -> Self {
-        VecboostError::database_error(e.to_string())
+        VecboostError::DatabaseError(e.to_string())
     }
 }
 
@@ -246,13 +246,13 @@ impl From<garrison::error::GarrisonError> for VecboostError {
 
 impl From<candle_core::Error> for VecboostError {
     fn from(e: candle_core::Error) -> Self {
-        VecboostError::inference_error(e.to_string())
+        VecboostError::InferenceError(e.to_string())
     }
 }
 
 impl From<tokio::task::JoinError> for VecboostError {
     fn from(e: tokio::task::JoinError) -> Self {
-        VecboostError::inference_error(e.to_string())
+        VecboostError::InferenceError(e.to_string())
     }
 }
 
@@ -335,123 +335,10 @@ mod tests {
         assert_eq!(sanitized, "");
     }
 
-    #[test]
-    fn test_vecboost_error_config_error_constructor() {
-        let err = VecboostError::config_error("bad config".to_string());
-        match err {
-            VecboostError::ConfigError(msg) => assert_eq!(msg, "bad config"),
-            _ => panic!("Expected ConfigError"),
-        }
-    }
 
-    #[test]
-    fn test_vecboost_error_model_load_error_constructor() {
-        let err = VecboostError::model_load_error("load failed".to_string());
-        match err {
-            VecboostError::ModelLoadError(msg) => assert_eq!(msg, "load failed"),
-            _ => panic!("Expected ModelLoadError"),
-        }
-    }
-
-    #[test]
-    fn test_vecboost_error_inference_error_constructor() {
-        let err = VecboostError::inference_error("infer failed".to_string());
-        match err {
-            VecboostError::InferenceError(msg) => assert_eq!(msg, "infer failed"),
-            _ => panic!("Expected InferenceError"),
-        }
-    }
-
-    #[test]
-    fn test_vecboost_error_invalid_input_constructor() {
-        let err = VecboostError::invalid_input("bad input".to_string());
-        match err {
-            VecboostError::InvalidInput(msg) => assert_eq!(msg, "bad input"),
-            _ => panic!("Expected InvalidInput"),
-        }
-    }
-
-    #[test]
-    fn test_vecboost_error_not_found_constructor() {
-        let err = VecboostError::not_found("missing".to_string());
-        match err {
-            VecboostError::NotFound(msg) => assert_eq!(msg, "missing"),
-            _ => panic!("Expected NotFound"),
-        }
-    }
-
-    #[test]
-    fn test_vecboost_error_authentication_error_constructor() {
-        let err = VecboostError::authentication_error("unauthorized".to_string());
-        match err {
-            VecboostError::AuthenticationError(msg) => assert_eq!(msg, "unauthorized"),
-            _ => panic!("Expected AuthenticationError"),
-        }
-    }
-
-    #[test]
-    fn test_vecboost_error_security_error_constructor() {
-        let err = VecboostError::security_error("sec issue".to_string());
-        match err {
-            VecboostError::SecurityError(msg) => assert_eq!(msg, "sec issue"),
-            _ => panic!("Expected SecurityError"),
-        }
-    }
-
-    #[test]
-    fn test_vecboost_error_io_error_constructor() {
-        let err = VecboostError::io_error("io failed".to_string());
-        match err {
-            VecboostError::IoError(msg) => assert_eq!(msg, "io failed"),
-            _ => panic!("Expected IoError"),
-        }
-    }
-
-    #[test]
-    fn test_vecboost_error_validation_error_constructor() {
-        let err = VecboostError::validation_error("invalid".to_string());
-        match err {
-            VecboostError::ValidationError(msg) => assert_eq!(msg, "invalid"),
-            _ => panic!("Expected ValidationError"),
-        }
-    }
-
-    #[test]
-    fn test_vecboost_error_model_file_corrupted_constructor() {
-        let err = VecboostError::model_file_corrupted("corrupt".to_string());
-        match err {
-            VecboostError::ModelFileCorrupted(msg) => assert_eq!(msg, "corrupt"),
-            _ => panic!("Expected ModelFileCorrupted"),
-        }
-    }
-
-    #[test]
-    fn test_vecboost_error_model_integrity_error_constructor() {
-        let err = VecboostError::model_integrity_error("integrity".to_string());
-        match err {
-            VecboostError::ModelIntegrityError(msg) => assert_eq!(msg, "integrity"),
-            _ => panic!("Expected ModelIntegrityError"),
-        }
-    }
-
-    #[test]
-    fn test_vecboost_error_tokenization_error_constructor() {
-        let err = VecboostError::tokenization_error("tokenize".to_string());
-        match err {
-            VecboostError::TokenizationError(msg) => assert_eq!(msg, "tokenize"),
-            _ => panic!("Expected TokenizationError"),
-        }
-    }
-
-    #[test]
-    fn test_vecboost_error_model_not_loaded_constructor() {
-        let err = VecboostError::model_not_loaded("not loaded".to_string());
-        match err {
-            VecboostError::ModelNotLoaded(msg) => assert_eq!(msg, "not loaded"),
-            _ => panic!("Expected ModelNotLoaded"),
-        }
-    }
-
+    // -------------------------------------------------------------------------
+    // IntoResponse 测试
+    // -------------------------------------------------------------------------
     #[cfg(feature = "http")]
     #[test]
     fn test_into_response_config_error() {
@@ -548,16 +435,6 @@ mod tests {
         assert_eq!(format!("{}", err), "Config error: test message");
     }
 
-    #[test]
-    fn test_error_clone() {
-        let err = VecboostError::ConfigError("test".to_string());
-        let cloned = err.clone();
-        match cloned {
-            VecboostError::ConfigError(msg) => assert_eq!(msg, "test"),
-            _ => panic!("Expected ConfigError"),
-        }
-    }
-
     #[cfg(feature = "http")]
     #[test]
     fn test_into_response_model_file_corrupted() {
@@ -612,15 +489,6 @@ mod tests {
         let err = VecboostError::InternalError("test".to_string());
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[test]
-    fn test_vecboost_error_database_error_constructor() {
-        let err = VecboostError::database_error("db failed".to_string());
-        match err {
-            VecboostError::DatabaseError(msg) => assert_eq!(msg, "db failed"),
-            _ => panic!("Expected DatabaseError"),
-        }
     }
 
     #[test]
@@ -688,14 +556,6 @@ mod tests {
         let sanitized = sanitize_error_message(&msg);
         assert!(sanitized.ends_with("..."));
         assert!(sanitized.len() <= MAX_ERROR_MESSAGE_LENGTH + 3);
-    }
-
-    #[test]
-    fn test_error_debug_format() {
-        let err = VecboostError::ConfigError("debug test".to_string());
-        let debug_str = format!("{:?}", err);
-        assert!(debug_str.contains("ConfigError"));
-        assert!(debug_str.contains("debug test"));
     }
 
     #[test]

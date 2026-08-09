@@ -878,7 +878,8 @@ impl InferenceEngine for CandleEngine {
     }
 
     fn supports_rerank(&self) -> bool {
-        self.model_name.contains("reranker")
+        // Bi-encoder rerank (embed + cosine + sigmoid) works with any embedding model
+        true
     }
 
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {

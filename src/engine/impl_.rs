@@ -70,6 +70,30 @@ impl InferenceEngine for AnyEngine {
         }
     }
 
+    fn rerank(&self, query: &str, document: &str) -> Result<f32, VecboostError> {
+        match self {
+            AnyEngine::Candle(engine) => engine.rerank(query, document),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.rerank(query, document),
+        }
+    }
+
+    fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> {
+        match self {
+            AnyEngine::Candle(engine) => engine.rerank_batch(query, documents),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.rerank_batch(query, documents),
+        }
+    }
+
+    fn supports_rerank(&self) -> bool {
+        match self {
+            AnyEngine::Candle(engine) => engine.supports_rerank(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.supports_rerank(),
+        }
+    }
+
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         match self {
             AnyEngine::Candle(engine) => engine.try_fallback_to_cpu(config).await,

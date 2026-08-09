@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="image/vecboost.png" alt="VecBoost Logo" width="200"/>
+<img src="docs/image/vecboost.png" alt="VecBoost Logo" width="200"/>
 
 [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![GitHub release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![Rustc 1.75+](https://img.shields.io/badge/Rustc-1.75+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
 
@@ -35,12 +35,12 @@ VecBoost v0.2.0 采用模块化生态架构，由 7 个独立 Rust 库组成，�
 
 | 库 | 版本 | 用途 | Feature |
 |----|------|------|---------|
-| **trait-kit** | `0.3` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
-| **confers** | `0.4` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | `config` |
-| **inklog** | `0.1` | 结构化日志基础设施（控制台 + 文件轮转） | `inklog` |
-| **oxcache** | `0.3` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | `oxcache` |
+| **trait-kit** | `0.4` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
+| **confers** | `0.5` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | `config` |
+| **inklog** | `0.2` | 结构化日志基础设施（控制台 + 文件轮转） | `inklog` |
+| **oxcache** | `0.4` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | `oxcache` |
 | **limiteron** | `0.2` | 令牌桶限流器（多维度独立计数） | `limiteron` |
-| **dbnexus** | `0.4` | 数据库持久化（SQLite/PostgreSQL + 权限角色） | `db` |
+| **dbnexus** | `0.5` | 数据库持久化（SQLite/PostgreSQL + 权限角色） | `db` |
 | **sdforge** | `0.4` | 多协议接口生成（HTTP/CLI 单一源定义） | `http`/`cli` |
 
 ```mermaid
@@ -140,10 +140,10 @@ docker run -p 9002:9002 -p 50051:50051 \
 
 | 文档 | 说明 | 链接 |
 |------|------|------|
-| **📋 用户指南** | 详细使用说明、配置和部署指南 | [USER_GUIDE_zh.md](USER_GUIDE_zh.md) |
-| **🔌 API 参考** | 完整的 REST API 和 gRPC 文档 | [API_REFERENCE_zh.md](API_REFERENCE_zh.md) |
-| **🏗️ 架构设计** | 系统设计、组件和数据流 | [ARCHITECTURE_zh.md](ARCHITECTURE_zh.md) |
-| **🤝 贡献指南** | 贡献代码指南和最佳实践 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) |
+| **📋 用户指南** | 详细使用说明、配置和部署指南 | [USER_GUIDE_zh.md](docs/USER_GUIDE_zh.md) |
+| **🔌 API 参考** | 完整的 REST API 和 gRPC 文档 | [API_REFERENCE_zh.md](docs/API_REFERENCE_zh.md) |
+| **🏗️ 架构设计** | 系统设计、组件和数据流 | [ARCHITECTURE_zh.md](docs/ARCHITECTURE_zh.md) |
+| **🤝 贡献指南** | 贡献代码指南和最佳实践 | 计划中 |
 
 ## 🔌 API 使用
 
@@ -329,7 +329,7 @@ VecBoost 采用特性化构建，按需启用功能模块：
 | `openapi` | - | OpenAPI/Swagger UI 文档 | utoipa, utoipa-swagger-ui |
 | `db` | - | dbnexus 数据库持久化（SQLite） | dbnexus, sea-orm |
 | `postgres` | - | PostgreSQL 支持（含 db） | dbnexus |
-| `auth` | - | JWT 认证 + AES-256 加密 | jsonwebtoken, argon2, aes-gcm |
+| `auth` | - | JWT 认证 + AES-256 加密 | garrison, aes-gcm |
 | `redis` | - | Redis 缓存后端 | redis |
 | `cuda` | - | NVIDIA CUDA GPU 加速 | candle-core/cuda |
 | `metal` | - | Apple Silicon Metal GPU | candle-core/metal |
@@ -501,11 +501,12 @@ vecboost/
 │   ├── device/         # 设备管理 (CPU, CUDA, Metal, ROCm)
 │   ├── domain/         # 领域模型 (请求/响应类型)
 │   ├── engine/         # 推理引擎 (Candle/ONNX)
-│   ├── error/          # VecboostError 统一错误类型
+│   ├── error.rs        # VecboostError 统一错误类型
 │   ├── logger/         # inklog 日志基础设施
 │   ├── metrics/        # Prometheus 指标与可观测性
 │   ├── model/          # 模型下载、加载与恢复
 │   ├── module_registry/# trait-kit 模块注册中心
+│   ├── monitor/        # 监控与告警
 │   ├── pipeline/       # 请求管道、优先级与调度
 │   ├── rate_limit/     # limiteron 限流适配器
 │   ├── security/       # 安全工具 (加密、清理、路径校验)
@@ -513,7 +514,6 @@ vecboost/
 │   ├── text/           # 文本处理 (分块、分词)
 │   └── utils/          # 工具函数 (向量运算、hf_hub、哈希校验)
 ├── examples/           # 示例程序 (download_model, batch, embed, similarity)
-├── deployments/        # Kubernetes 与 Docker 部署配置
 ├── tests/              # 测试目录
 │   ├── integration/    # 集成测试 (api_test.rs, real_engine.rs)
 │   ├── perf/           # 性能测试 (Python pytest + Rust bench)
@@ -560,7 +560,7 @@ vecboost/
 | **健康检查** | `/health` | 服务存活和就绪探针 |
 | **详细健康** | `/health/detailed` | 完整健康状态与组件检查 |
 | **OpenAPI 文档** | `/api-docs` | 交互式 Swagger UI 文档 |
-| **Grafana** | - | `deployments/` 中的预配置仪表板 |
+| **Grafana** | - | 预配置仪表板（计划中） |
 
 ### 📊 关键指标
 
@@ -575,26 +575,14 @@ vecboost/
 ### ☸️ Kubernetes
 
 ```bash
-# 部署到 Kubernetes
-kubectl apply -f deployments/kubernetes/
-
-# 部署 GPU 支持
-kubectl apply -f deployments/kubernetes/gpu-deployment.yaml
+# 部署到 Kubernetes（需要自备 Kubernetes 部署清单）
+kubectl apply -f <your-k8s-manifests>/
 
 # 查看部署状态
 kubectl get pods -n vecboost
 ```
 
-| 资源 | 说明 |
-|------|------|
-| `configmap.yaml` | 配置即代码 |
-| `deployment.yaml` | 主部署清单 |
-| `gpu-deployment.yaml` | GPU 节点选择器部署 |
-| `hpa.yaml` | 水平 Pod 自动扩缩容 |
-| `model-cache.yaml` | 模型缓存持久化卷 |
-| `service.yaml` | 集群 IP 服务 |
-
-> **📖 完整指南**: 查看[部署指南](deployments/kubernetes/README.md)了解更多详情。
+> **ℹ️ 说明**: Kubernetes 部署清单需根据实际环境自定义，Docker 镜像可通过 `docker build` 或 GitHub Actions 构建。
 
 ### 🐳 Docker Compose
 
@@ -627,7 +615,7 @@ services:
 
 ## 🤝 贡献
 
-欢迎贡献代码！请阅读[贡献指南](docs/CONTRIBUTING.md)了解更多。
+欢迎贡献代码！贡献指南计划中，请先通过 [GitHub Issues](https://github.com/Kirky-X/vecboost/issues) 讨论。
 
 ### 🛠️ 开发环境设置
 

@@ -4,7 +4,7 @@
 
 **完整的 REST HTTP 端点和 gRPC 服务方法文档**
 
-[![Version 0.2.0](https://img.shields.io/badge/Version-0.2.0-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002) [![gRPC](https://img.shields.io/badge/gRPC-50051-green.svg?style=for-the-badge)](localhost:50051)
+[![Version 0.2.1](https://img.shields.io/badge/Version-0.2.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002) [![gRPC](https://img.shields.io/badge/gRPC-50051-green.svg?style=for-the-badge)](localhost:50051)
 
 *VecBoost API 的完整文档，包括 REST HTTP 端点和 gRPC 服务方法。*
 
@@ -519,27 +519,39 @@ curl -X POST http://localhost:9002/api/v1/model/switch \
 
 #### 健康检查
 
-检查服务健康状态。
+检查服务健康状态。聚合各模块（EmbeddingModule、RateLimitModule、CacheModule 等）的 `health_status()` 状态。
 
 **端点:** `GET /health`
 
-**响应:**
+**HTTP 状态码:**
+- `200 OK` — 所有模块健康
+- `503 Service Unavailable` — 任一模块异常
+
+**响应示例 (200):**
 
 ```json
 {
   "status": "healthy",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "uptime": "2h30m45s",
-  "model_loaded": "BAAI/bge-m3"
+  "model_loaded": "BAAI/bge-m3",
+  "modules": {
+    "embedding": "healthy",
+    "rate_limit": "healthy",
+    "cache": "healthy"
+  }
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `status` | string | 健康状态 (`healthy`, `degraded`, `unhealthy`) |
+| `status` | string | 聚合健康状态 (`healthy`, `degraded`, `unhealthy`) |
 | `version` | string | 服务版本 |
 | `uptime` | string | 运行时间 |
 | `model_loaded` | string | 当前加载的模型名称 |
+| `modules` | object | 各模块健康状态（key=模块名, value=状态） |
+
+> **ℹ️ 注意**: 健康检查通过 trait-kit `health` feature 的 `health_status()` 方法查询各注册模块状态。配合 sdforge `graceful-shutdown` feature，服务在收到 SIGTERM/SIGINT 后会等待在途请求完成再关闭（超时 30s）。
 
 ---
 
@@ -1076,10 +1088,11 @@ window_seconds = 60
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| `0.2.1` | 2026-08-09 | 🐛 文档同步更新、代码质量改进 |
 | `0.2.0` | 2026-02-01 | ✨ 生态重构：7 库架构、trait-kit 模块注册、多协议接口；gRPC 由 sdforge `#[forge(grpc_method)]` 宏生成，移除 `proto/`、`src/grpc/`、`src/routes/`、`src/cli/` |
 | `0.1.2` | 2026-01-16 | ✨ 添加 Matryoshka 维度约简支持、OpenAI 兼容 API |
 | `0.1.0` | 2026-01-10 | ✨ 初始发布，支持 REST 和 gRPC API |
 
 ---
 
-> **📝 最后更新**: 2026-07-24 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-08-09 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

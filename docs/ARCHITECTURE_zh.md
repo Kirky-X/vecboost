@@ -4,7 +4,7 @@
 
 **内部架构、关键组件、数据流和设计决策详解**
 
-[![Version 0.2.0](https://img.shields.io/badge/Version-0.2.0-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![Version 0.2.1](https://img.shields.io/badge/Version-0.2.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
 *VecBoost 的内部架构，解释关键组件、数据流和设计决策。*
 
@@ -76,37 +76,17 @@ VecBoost 是一个使用 Rust 构建的**高性能嵌入向量服务**。它为�
 
 ### 应用状态
 
-`AppState` 结构体（定义在 `src/lib.rs`）保存路由处理程序使用的所有共享状态：
+`VecboostState` 结构体（定义在 `src/lib.rs`）保存路由处理程序使用的所有共享状态。v0.3.0 重构后，所有能力通过 `trait-kit` 的 `AsyncKit<AsyncReady>` 统一管理，不再使用独立字段：
 
 ```rust
-pub struct AppState {
-    // 核心服务
-    pub service: Arc<RwLock<EmbeddingService>>,
-    
-    // 认证相关
-    pub jwt_manager: Option<Arc<JwtManager>>,
-    pub user_store: Option<Arc<UserStore>>,
-    pub auth_enabled: bool,
-    pub csrf_config: Option<Arc<CsrfConfig>>,
-    pub csrf_token_store: Option<Arc<CsrfTokenStore>>,
-    
-    // 可观测性
-    pub metrics_collector: Option<Arc<InferenceCollector>>,
-    pub prometheus_collector: Option<Arc<PrometheusCollector>>,
-    pub audit_logger: Option<Arc<AuditLogger>>,
-    
-    // 流量控制
-    pub rate_limiter: Arc<RateLimiter>,
-    pub rate_limit_enabled: bool,
-    pub ip_whitelist: Vec<String>,
-    
-    // 请求管道
-    pub pipeline_enabled: bool,
-    pub pipeline_queue: Arc<PriorityRequestQueue>,
-    pub response_channel: Arc<ResponseChannel>,
-    pub priority_calculator: Arc<PriorityCalculator>,
+pub struct VecboostState {
+    /// trait-kit AsyncKit — 模块能力管理中心
+    /// 包含 17 个 Module 的能力查询入口
+    pub(crate) kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,
 }
 ```
+
+路由 handler 通过 `state.kit.require::<M>()` 检索能力，或通过 Axum `FromRef` 自动注入。
 
 ---
 
@@ -166,10 +146,14 @@ graph LR
 
 ```rust
 pub struct EmbeddingService {
-    engine: Arc<RwLock<AnyEngine>>,    // 推理引擎
-    model_config: Option<ModelConfig>, // 模型配置
-    cache: Option<Arc<dyn Cache>>,     // 缓存接口
-    cache_size: usize,                  // 缓存大小
+    engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>, // 推理引擎
+    validator: InputValidator,                              // 输入校验器
+    model_config: Option<ModelConfig>,                      // 模型配置
+    model_manager: Option<Arc<ModelManager>>,               // 模型管理器
+    cache: Arc<OxCacheBackend>,                             // oxcache 缓存后端
+    memory_manager: Option<SharedGpuMemoryManager>,         // GPU 内存管理
+    batch_scheduler: Option<Arc<DynamicBatchScheduler>>,    // 动态批处理调度
+    buffer_pool: Option<Arc<RwLock<BufferPool>>>,           // GPU 缓冲区池
 }
 ```
 
@@ -180,11 +164,25 @@ pub struct EmbeddingService {
 引擎抽象（`src/engine/mod.rs`）为不同的 ML 运行时提供统一接口：
 
 ```rust
-pub trait Engine: Send + Sync {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, Error>;
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, Error>;
-    fn get_dimension(&self) -> usize;
-    fn health_check(&self) -> bool;
+#[async_trait]
+pub trait InferenceEngine: Send + Sync {
+    /// 执行推理，返回未归一化的向量
+    fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError>;
+
+    /// 批量推理
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError>;
+
+    /// 获取当前精度设置
+    fn precision(&self) -> &Precision;
+
+    /// 检查是否支持混合精度
+    fn supports_mixed_precision(&self) -> bool;
+
+    /// 检查是否已触发降级
+    fn is_fallback_triggered(&self) -> bool { false }
+
+    /// 尝试降级到 CPU（在 OOM 时调用）
+    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
 }
 ```
 
@@ -243,10 +241,10 @@ src/device/
 ├── cuda.rs             # NVIDIA CUDA GPU 支持
 ├── amd.rs              # AMD GPU 支持 (ROCm)
 ├── manager.rs          # 设备生命周期管理
-├── memory_pool.rs      # GPU 内存池
 ├── memory_limit.rs     # 内存限制和 OOM 处理
+├── memory_optimizer.rs # GPU 内存优化器
 ├── batch_scheduler.rs  # 批处理优化调度
-└── memory_pool/        # 内存池子模块
+└── memory_pool/        # GPU 内存池子模块
     ├── buffer_pool.rs  # 缓冲区池
     ├── cuda_pool.rs    # CUDA 内存池
     └── pool_manager.rs # 池管理
@@ -412,17 +410,24 @@ impl PriorityCalculator {
 
 ## 💾 缓存架构
 
-VecBoost 实现**多层缓存系统**，以最大化缓存命中率：
+VecBoost 的缓存基础设施由 `oxcache` 统一接管（必选依赖，禁止手写 LRU），实际文件结构如下：
 
 ```
 src/cache/
-├── mod.rs              # 模块导出和公共接口
-├── lru_cache.rs        # LRU (最近最少使用) 缓存
-├── lfu_cache.rs        # LFU (最不经常使用) 缓存
-├── kv_cache.rs         # KV 键值缓存
-├── arc_cache.rs        # ARC (自适应替换) 缓存
-└── tiered_cache.rs     # 多层缓存组合
+├── mod.rs              # 模块导出、CacheStrategy/CacheConfig/Cache trait 定义
+├── entry.rs            # 缓存条目类型定义
+├── oxcache_backend.rs  # oxcache 后端实现（OxCacheBackend）
+└── trait_impl.rs       # Cache trait 实现
 ```
+
+支持的缓存策略（通过 `CacheStrategy` 枚举）：
+
+| 策略 | 枚举值 | 说明 |
+|------|--------|------|
+| **LRU** | `Lru` | 最近最少使用（默认） |
+| **LFU** | `Lfu` | 最不经常使用 |
+| **ARC** | `Arc` | 自适应替换缓存 |
+| **TwoQueue** | `TwoQueue` | 两队列缓存（FIFO + LRU） |
 
 ---
 
@@ -496,25 +501,20 @@ graph TB
 
 ### 🪪 JWT 认证
 
-```rust
-pub struct JwtManager {
-    key_store: Arc<dyn KeyStore>,  // 密钥存储
-    secret_name: String,           // 密钥名称
-    expiration: Duration,          // 过期时间
-}
+v0.2.0 起，JWT 认证完全委托给 `garrison` 框架，VecBoost 通过 `src/auth/` 模块进行适配集成：
 
-impl JwtManager {
-    pub fn generate_token(&self, user_id: &str, roles: &[Role]) -> Result<String, Error> {
-        let claims = Claims {
-            sub: user_id.to_string(),
-            roles: roles.iter().map(|r| r.to_string()).collect(),
-            exp: Utc::now() + self.expiration,
-            iat: Utc::now(),
-        }
-        .encode(&self.encoding_key)
-    }
-}
+```rust
+// src/auth/mod.rs — garrison 集成层
+pub use garrison::prelude::{GarrisonConfig, GarrisonManager, GarrisonUtil};
+pub use config::map_auth_config_to_garrison;
+pub use interface::VecBoostInterface;
+
+// Garrison 初始化标记类型
+// Some 表示 garrison 已初始化，None 表示 auth 未启用
+pub struct GarrisonHandle;
 ```
+
+认证流程通过 `garrison` 的 `GarrisonManager` 单例管理，VecBoost 只需提供 `AuthConfig → GarrisonConfig` 映射和 `VecBoostInterface`（实现 `GarrisonInterface`）。
 
 ---
 
@@ -522,13 +522,12 @@ impl JwtManager {
 
 ```
 src/auth/
-├── csrf.rs           # CSRF 令牌生成和验证
-├── handlers.rs       # 认证 HTTP 处理程序
-├── jwt.rs            # JWT 管理
-├── middleware.rs     # Axum 认证中间件
-├── mod.rs            # 模块导出
-├── types.rs          # 认证类型
-└── user_store.rs     # 用户存储
+├── migrations/     # 数据库迁移脚本
+├── config.rs       # AuthConfig → GarrisonConfig 映射
+├── interface.rs    # VecBoostInterface（GarrisonInterface 实现）
+├── middleware.rs   # Axum 认证中间件（委托 garrison）
+├── mod.rs          # 模块导出 + Re-export garrison 核心类型
+└── types.rs        # HTTP 请求/响应类型（serde 序列化）
 ```
 
 ---
@@ -604,9 +603,12 @@ impl AuditLogger {
 
 ```
 src/config/
-├── app.rs            # 应用程序配置
-├── model.rs          # 模型配置
-└── mod.rs            # 模块导出
+├── app.rs            # 配置子结构体定义（ServerConfig/ModelConfig/EmbeddingConfig 等）
+├── app_config.rs     # AppConfig 定义（confers #[derive(Config)] 接管配置加载）
+├── encryption.rs     # 配置加密支持
+├── model.rs          # 模型配置（Precision/DeviceType 等类型）
+├── mod.rs            # 模块导出
+└── tests.rs          # 配置测试
 ```
 
 ---
@@ -750,16 +752,15 @@ graph TB
 
 ### ☸️ Kubernetes 部署
 
-```
-deployments/kubernetes/
-├── configmap.yaml         # 配置即代码
-├── deployment.yaml        # 主部署配置
-├── gpu-deployment.yaml    # GPU 节点选择器配置
-├── hpa.yaml               # 水平 Pod 自动扩缩容
-├── model-cache.yaml       # 模型存储 PVC
-├── service.yaml           # 集群 IP 服务
-└── SCALING_BEST_PRACTICES.md
-```
+VecBoost 提供 Docker 镜像（通过 `docker build` 或 GitHub Actions 构建），Kubernetes 部署清单需根据实际环境自定义。典型部署资源包括：
+
+| 资源 | 说明 |
+|------|------|
+| `ConfigMap` | 配置即代码 |
+| `Deployment` | 主部署清单 |
+| `HPA` | 水平 Pod 自动扩缩容 |
+| `PVC` | 模型存储持久化卷 |
+| `Service` | 集群 IP 服务 |
 
 ---
 
@@ -817,24 +818,28 @@ graph TB
 
 ### ⚡ 添加新推理引擎
 
-1. 在 `src/engine/` 实现 `Engine` trait
-2. 将引擎类型添加到 `EngineType` 枚举
-3. 更新 `AnyEngine::new()` 工厂方法
+1. 在 `src/engine/` 实现 `InferenceEngine` trait
+2. 将引擎类型添加到 `AnyEngine` 枚举
+3. 更新 `EngineFactory::create()` 工厂方法
 4. 添加配置解析支持
 
 ```rust
-pub trait Engine: Send + Sync {
-    /// 生成单个嵌入向量
-    fn embed(&self, text: &str) -> Result<Vec<f32>, Error>;
-    
-    /// 批量生成嵌入向量
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, Error>;
-    
-    /// 获取嵌入向量维度
-    fn get_dimension(&self) -> usize;
-    
-    /// 健康检查
-    fn health_check(&self) -> bool;
+#[async_trait]
+pub trait InferenceEngine: Send + Sync {
+    /// 执行推理，返回未归一化的向量
+    fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError>;
+
+    /// 批量推理
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError>;
+
+    /// 获取当前精度设置
+    fn precision(&self) -> &Precision;
+
+    /// 检查是否支持混合精度
+    fn supports_mixed_precision(&self) -> bool;
+
+    /// 尝试降级到 CPU（在 OOM 时调用）
+    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
 }
 ```
 
@@ -856,7 +861,7 @@ pub trait Engine: Send + Sync {
 
 ---
 
-> **📝 最后更新**: 2026-07-24 | **版本**: 0.2.0 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-08-09 | **版本**: 0.2.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
 
 ---
 
@@ -870,11 +875,22 @@ src/error.rs
 
 ### 错误类型
 
-| 错误 | 描述 | 恢复策略 |
+| 错误 | 描述 | HTTP 状态码 |
 |------|------|----------|
-| `InferenceError` | 模型推理失败 | 指数退避重试 |
-| `CacheMiss` | 缓存条目未找到 | 回退到推理 |
-| `RateLimitExceeded` | 触发速率限制 | 等待后重试 |
-| `CircuitBreakerOpen` | 熔断器打开 | 快速失败，等待恢复 |
-| `GPUOutOfMemory` | GPU 内存耗尽 | 回退到 CPU |
-| `ModelNotFound` | 模型不可用 | 下载或切换模型 |
+| `ConfigError` | 配置错误 | 500 |
+| `ModelLoadError` | 模型加载失败 | 503 |
+| `ModelFileCorrupted` | 模型文件损坏 | 503 |
+| `ModelIntegrityError` | 模型完整性校验失败 | 503 |
+| `TokenizationError` | 分词错误 | 422 |
+| `InferenceError` | 推理失败 | 503 |
+| `OutOfMemory` | GPU/CPU 内存耗尽 | 507 |
+| `InvalidInput` | 无效输入 | 400 |
+| `NotFound` | 资源未找到 | 404 |
+| `ModelNotLoaded` | 模型未加载 | 503 |
+| `AuthenticationError` | 认证失败 | 401 |
+| `SecurityError` | 安全错误 | 500 |
+| `IoError` | IO 错误 | 500 |
+| `ValidationError` | 校验错误 | 400 |
+| `RateLimitExceeded` | 速率限制 | 429 |
+| `DatabaseError` | 数据库错误 | 500 |
+| `InternalError` | 内部错误 | 500 |

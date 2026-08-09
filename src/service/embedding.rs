@@ -232,32 +232,35 @@ impl EmbeddingService {
         }
 
         let total_texts = texts.len();
-        let mut embeddings = std::collections::HashMap::with_capacity(total_texts);
-        let mut processed = 0;
+        let mut cache_entries = std::collections::HashMap::with_capacity(total_texts);
+        let mut processed_count = 0usize;
 
-        for text in texts {
-            if let Ok(embedding) = self.engine.read().await.embed(&text) {
-                embeddings.insert(text, embedding);
-                processed += 1;
+        // 获取最优批量大小，分批推理避免 OOM
+        let batch_size = self
+            .get_optimal_batch_size(128, self.model_config.as_ref().and_then(|c| c.expected_dimension).unwrap_or(768))
+            .await;
 
-                if processed % 100 == 0 {
-                    debug!("Warm-up progress: {}/{}", processed, total_texts);
+        for chunk in texts.chunks(batch_size) {
+            match self.engine.read().await.embed_batch(chunk) {
+                Ok(embeddings) => {
+                    for (text, embedding) in chunk.iter().zip(embeddings.into_iter()) {
+                        cache_entries.insert(text.clone(), embedding);
+                        processed_count += 1;
+                    }
+                    debug!("Warm-up progress: {}/{}", processed_count, total_texts);
+                }
+                Err(e) => {
+                    warn!("Warm-up batch failed, skipping {} texts: {}", chunk.len(), e);
                 }
             }
         }
 
-        // 在移动 embeddings 之前记录处理数量
-        let processed_count = processed;
-
-        // 使用 HashMap 将预热数据转换为缓存预期的格式
-        let cache_entries: std::collections::HashMap<String, Vec<f32>> =
-            embeddings.into_iter().collect();
-
         self.cache.warm_up(cache_entries).await;
 
         log::info!(
-            "Cache warm-up completed: {} entries preloaded",
-            processed_count
+            "Cache warm-up completed: {}/{} entries preloaded",
+            processed_count,
+            total_texts
         );
         Ok(())
     }
@@ -353,42 +356,45 @@ impl EmbeddingService {
         self.validator.validate_text(&req.source)?;
         self.validator.validate_text(&req.target)?;
 
+        // 短路：相同文本的余弦相似度必为 1.0
+        if req.source == req.target {
+            return Ok(SimilarityResponse { score: 1.0 });
+        }
+
         let cache_key_source = format!("text:{}", req.source);
         let cache_key_target = format!("text:{}", req.target);
 
-        let engine = Arc::clone(&self.engine);
-        let cache = Arc::clone(&self.cache);
-
-        let f1 = async move {
-            if cache.is_enabled() {
+        let (mut v1, mut v2) = if self.cache.is_enabled() {
+            // 缓存启用：并行查缓存，各自独立命中/未命中
+            let engine = Arc::clone(&self.engine);
+            let cache = Arc::clone(&self.cache);
+            let f1 = async move {
                 cache
                     .get_or_insert::<_, _, VecboostError>(&cache_key_source, || async {
                         let embedding = engine.read().await.embed(&req.source)?;
                         Ok(embedding)
                     })
                     .await
-            } else {
-                engine.read().await.embed(&req.source)
-            }
-        };
+            };
 
-        let engine = Arc::clone(&self.engine);
-        let cache = Arc::clone(&self.cache);
-
-        let f2 = async move {
-            if cache.is_enabled() {
+            let engine = Arc::clone(&self.engine);
+            let cache = Arc::clone(&self.cache);
+            let f2 = async move {
                 cache
                     .get_or_insert::<_, _, VecboostError>(&cache_key_target, || async {
                         let embedding = engine.read().await.embed(&req.target)?;
                         Ok(embedding)
                     })
                     .await
-            } else {
-                engine.read().await.embed(&req.target)
-            }
-        };
+            };
 
-        let (mut v1, mut v2) = tokio::try_join!(f1, f2)?;
+            tokio::try_join!(f1, f2)?
+        } else {
+            // 缓存禁用：合并为 1 次 batch forward pass（而非 2 次独立 forward pass）
+            let texts = vec![req.source.clone(), req.target.clone()];
+            let embeddings = self.engine.read().await.embed_batch(&texts)?;
+            (embeddings[0].clone(), embeddings[1].clone())
+        };
 
         let score = tokio::task::spawn_blocking(move || {
             normalize_l2(&mut v1);
@@ -729,11 +735,35 @@ impl EmbeddingService {
         self.validator.validate_batch(&req.texts)?;
 
         let texts = req.texts;
-
         let texts_len = texts.len();
 
+        // 去重：相同文本只推理一次，结果映射回原始位置
+        let mut unique_map: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::with_capacity(texts_len);
+        let mut unique_texts: Vec<String> = Vec::with_capacity(texts_len);
+        let mut index_to_unique: Vec<usize> = Vec::with_capacity(texts_len); // original_idx → unique_idx
+
+        for text in &texts {
+            if let Some(&uidx) = unique_map.get(text.as_str()) {
+                index_to_unique.push(uidx);
+            } else {
+                let uidx = unique_texts.len();
+                unique_map.insert(text.as_str(), uidx);
+                unique_texts.push(text.clone());
+                index_to_unique.push(uidx);
+            }
+        }
+
+        let dedup_saved = texts_len - unique_texts.len();
+        if dedup_saved > 0 {
+            debug!(
+                "Batch deduplication: {} texts → {} unique (saved {} redundant inferences)",
+                texts_len, unique_texts.len(), dedup_saved
+            );
+        }
+
         // 检测一个示例文本的序列长度（用于计算内存需求）
-        let sequence_length = texts.first().map_or(0, |t| t.len());
+        let sequence_length = unique_texts.first().map_or(0, |t| t.len());
 
         // 检测输出维度（如果有模型配置则使用配置值）
         let output_dimension = self
@@ -747,21 +777,21 @@ impl EmbeddingService {
             .get_optimal_batch_size(sequence_length, output_dimension)
             .await;
 
-        // 使用动态批量大小进行分块
-        let chunks: Vec<&[String]> = texts.chunks(optimal_batch_size).collect();
+        // 使用动态批量大小进行分块（基于去重后的文本）
+        let chunks: Vec<&[String]> = unique_texts.chunks(optimal_batch_size).collect();
 
         let num_chunks = chunks.len();
 
         debug!(
-            "Processing batch: {} texts, optimal_batch_size={}, chunks={}",
-            texts_len, optimal_batch_size, num_chunks
+            "Processing batch: {} unique texts ({} original), optimal_batch_size={}, chunks={}",
+            unique_texts.len(), texts_len, optimal_batch_size, num_chunks
         );
 
         // 根据实际负载和系统资源动态调整并发数
         let cpu_count = num_cpus::get();
         let max_concurrent_chunks = std::cmp::min(
-            cpu_count * 2,                                    // 每个 CPU 核心最多处理 2 个并发任务
-            std::cmp::max(4, texts_len / optimal_batch_size), // 至少 4 个并发
+            cpu_count * 2,                                               // 每个 CPU 核心最多处理 2 个并发任务
+            std::cmp::max(4, unique_texts.len() / optimal_batch_size),   // 至少 4 个并发
         );
 
         debug!(
@@ -882,7 +912,7 @@ impl EmbeddingService {
             tasks.push(task);
         }
 
-        let mut all_results: Vec<(usize, Vec<f32>, String)> = Vec::with_capacity(texts_len);
+        let mut all_results: Vec<(usize, Vec<f32>, String)> = Vec::with_capacity(unique_texts.len());
 
         for task in tasks {
             let chunk_results = task.await??;
@@ -907,20 +937,29 @@ impl EmbeddingService {
             None
         };
 
-        let results: Vec<BatchEmbeddingResult> = all_results
+        // 构建 unique_idx → (embedding, preview) 查找表
+        let unique_results: Vec<(Vec<f32>, String)> = all_results
             .into_iter()
             .map(|(_, embedding, preview)| {
                 let embedding = if let Some(dim) = effective_dimension {
                     let mut truncated = truncate_vector(&embedding, dim);
-                    // Matryoshka 截断破坏单位向量语义，必须重归一化以保证余弦相似度正确
                     normalize_l2(&mut truncated);
                     truncated
                 } else {
                     embedding
                 };
+                (embedding, preview)
+            })
+            .collect();
+
+        // 将去重结果映射回原始顺序（重复文本复用同一 embedding）
+        let results: Vec<BatchEmbeddingResult> = index_to_unique
+            .iter()
+            .map(|&uidx| {
+                let (ref embedding, ref preview) = unique_results[uidx];
                 BatchEmbeddingResult {
-                    text_preview: preview,
-                    embedding,
+                    text_preview: preview.clone(),
+                    embedding: embedding.clone(),
                 }
             })
             .collect();

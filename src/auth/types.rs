@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use crate::error::VecboostError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct LoginRequest {
@@ -102,6 +103,40 @@ impl User {
     pub fn has_permission(&self, permission: &str) -> bool {
         self.permissions.contains(&permission.to_string()) || self.role == "admin"
     }
+}
+
+/// 验证用户名格式：
+/// - 长度 3-32 字符
+/// - 必须以字母开头
+/// - 仅允许字母、数字、下划线和连字符
+pub fn validate_username_format(username: &str) -> Result<(), VecboostError> {
+    if username.len() < 3 || username.len() > 32 {
+        return Err(VecboostError::ValidationError(
+            "用户名长度必须在 3 到 32 个字符之间".to_string(),
+        ));
+    }
+
+    if !username
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_alphabetic())
+        .unwrap_or(false)
+    {
+        return Err(VecboostError::ValidationError(
+            "用户名必须以字母开头".to_string(),
+        ));
+    }
+
+    if !username
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(VecboostError::ValidationError(
+            "用户名只能包含字母、数字、下划线和连字符".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

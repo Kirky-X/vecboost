@@ -1,5 +1,5 @@
 -- Users table for authentication and authorization
--- Used by UserStore (db feature) and init_schema in src/db/mod.rs
+-- Used by init_schema in src/db/mod.rs (auth feature)
 --
 -- Schema mirrors the inline CREATE TABLE in DbPool::init_schema to provide
 -- a migration file source of truth (R-persistence-002).

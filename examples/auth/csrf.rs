@@ -3,60 +3,61 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! CSRF Token 获取与使用示例 — 演示 CsrfConfig 配置、CsrfToken 生成与 CsrfTokenStore 验证
+//! CSRF 防护配置与 token 校验示例 — 演示 garrison CsrfConfig 配置、
+//! token 生成与常量时间校验。
+//!
+//! garrison 采用 Double-Submit Cookie 模式：
+//! - 安全方法（GET/HEAD/OPTIONS）自动在响应中设置 CSRF Cookie
+//! - 受保护方法（POST/PUT/PATCH/DELETE）校验 Header 与 Cookie 中的 token 一致性
 
-use vecboost::auth::{CsrfConfig, CsrfToken, CsrfTokenStore};
+use vecboost::auth::{GarrisonCsrfConfig, generate_csrf_token, validate_csrf_token};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🛡️ CSRF Token 获取与使用示例");
-    println!("==============================\n");
+fn main() {
+    println!("🛡️ CSRF 防护配置与校验示例（garrison）");
+    println!("========================================\n");
 
-    let config = CsrfConfig::new(vec![
-        "http://localhost:3000".to_string(),
-        "https://example.com".to_string(),
-    ])
-    .with_token_validation(true)
-    .with_token_expiration(3600);
+    // 1. 默认配置（secure-by-default：默认启用）
+    let default_config = GarrisonCsrfConfig::default();
+    println!("📋 默认 CSRF 配置:");
+    println!("  enabled: {}", default_config.enabled);
+    println!("  cookie_name: {}", default_config.cookie_name);
+    println!("  header_name: {}", default_config.header_name);
+    println!("  protected_methods: {:?}", default_config.protected_methods);
+    println!("  cookie_secure: {}", default_config.cookie_secure);
+    println!("  cookie_domain: {:?}", default_config.cookie_domain);
 
-    println!("📋 CSRF 配置:");
-    println!("  允许的 Origins: http://localhost:3000, https://example.com");
-    println!("  Token 验证: 启用");
-    println!("  Token 过期时间: {} 秒", config.token_expiration_secs);
+    // 2. 自定义配置
+    let custom_config = GarrisonCsrfConfig {
+        enabled: true,
+        excluded_paths: vec!["/api/webhook".to_string()],
+        cookie_domain: Some("example.com".to_string()),
+        ..Default::default()
+    };
+    println!("\n📋 自定义 CSRF 配置:");
+    println!("  excluded_paths: {:?}", custom_config.excluded_paths);
+    println!("  cookie_domain: {:?}", custom_config.cookie_domain);
 
-    println!("\n🔍 Origin 验证测试:");
-    println!(
-        "  http://localhost:3000 -> {}",
-        config.is_origin_allowed("http://localhost:3000")
-    );
-    println!(
-        "  https://example.com   -> {}",
-        config.is_origin_allowed("https://example.com")
-    );
-    println!(
-        "  https://evil.com      -> {}",
-        config.is_origin_allowed("https://evil.com")
-    );
-
-    let store = CsrfTokenStore::new();
-    let token = CsrfToken::new(3600);
+    // 3. Token 生成（garrison 内部使用 OsRng + URL-safe Base64）
+    let token = generate_csrf_token()
+        .expect("CSRF token generation should not fail");
     println!("\n🎫 生成的 CSRF Token:");
-    println!("  value: {}...", &token.value[..16]);
-    println!("  expires_at: {}", token.expires_at);
-    println!("  is_expired: {}", token.is_expired());
+    println!("  value: {}...", &token[..16]);
+    println!("  length: {} chars (32 bytes base64url-no-pad)", token.len());
 
-    store.store_token(&token.value).await;
-    println!(
-        "\n💾 Token 已存储 (store count: {})",
-        store.token_count().await
-    );
+    // 4. Token 校验（常量时间比较，防时序攻击）
+    let same_result = validate_csrf_token(&token, &token);
+    println!("\n✅ 相同 token 校验: {}", same_result);
 
-    let valid = store.validate_token(&token.value).await;
-    println!("✅ 首次验证结果: {}", valid);
+    let other_token = generate_csrf_token().unwrap();
+    let diff_result = validate_csrf_token(&token, &other_token);
+    println!("🚫 不同 token 校验: {}", diff_result);
 
-    let replay = store.validate_token(&token.value).await;
-    println!("🚫 重放攻击防护 (第二次验证): {}", replay);
+    // 5. 空 token 安全处理
+    let empty_result = validate_csrf_token("", "");
+    println!("🚫 空 token 校验: {}", empty_result);
+
+    println!("\n💡 提示: 实际集成中，CSRF 中间件自动处理 Cookie/Header 的生成与校验。");
+    println!("   客户端流程: GET 获取 Cookie → POST 时从 Cookie 读取 token 放入 X-CSRF-Token Header");
 
     println!("\n✅ CSRF 示例完成");
-    Ok(())
 }

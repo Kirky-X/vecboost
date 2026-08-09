@@ -7,17 +7,21 @@
 
 pub(crate) mod amd;
 pub(crate) mod batch_scheduler;
+pub(crate) mod continuous_batch;
 pub(crate) mod cuda;
 pub(crate) mod manager;
 pub(crate) mod memory_limit;
 pub(crate) mod memory_optimizer;
+pub(crate) mod memory_paging;
 pub(crate) mod memory_pool;
 
 // 重新导出必要的类型供内部使用
 pub(crate) use batch_scheduler::{
     BatchConfig, BatchPerformanceStats, BatchPriority, BatchRequest, DynamicBatchScheduler,
 };
+pub(crate) use continuous_batch::ContinuousBatchLoop;
 pub(crate) use manager::{DeviceInfo, DeviceStatus};
+pub(crate) use memory_paging::{PagingConfig, PagingStats, WeightPagingManager};
 pub(crate) use memory_pool::{
     BufferPool, CudaMemoryPool, MemoryPoolConfig, MemoryPoolManager, ModelWeightPool,
 };

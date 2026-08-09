@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod app_config;
+pub mod encryption;
 pub mod model;
 
 pub use app_config::AppConfig;

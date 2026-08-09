@@ -18,52 +18,76 @@ pub use crate::pipeline::{PipelineConfig, PriorityConfig, QueueConfig, WorkerCon
 // 注:AppConfig 定义已迁移至 app_config.rs(由 confers #[derive(Config)] 接管)。
 // 本文件保留所有子结构体定义,供 app_config.rs 引用。
 
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ServerConfig {
+    #[garde(skip)]
     pub host: String,
+    #[garde(range(min = 1, max = 65535))]
     pub port: u16,
+    #[garde(skip)]
     pub grpc_host: Option<String>,
+    #[garde(skip)]
     pub grpc_port: Option<u16>,
+    #[garde(skip)]
     pub grpc_enabled: bool,
+    #[garde(skip)]
     pub workers: Option<usize>,
+    #[garde(skip)]
     pub timeout: Option<u64>,
     /// gRPC server max concurrent streams per connection.
+    #[garde(skip)]
     pub grpc_max_connections: Option<usize>,
     /// gRPC request timeout in seconds (applies to streaming RPCs).
+    #[garde(skip)]
     pub grpc_timeout_seconds: Option<u64>,
     /// Whether gRPC server requires authentication (secure default: true).
     /// Set to false only for development/test environments behind network isolation.
+    #[garde(skip)]
     pub grpc_require_auth: Option<bool>,
     /// Allowed root directories for `grpc_embed_file` path validation.
     /// When empty, falls back to current working directory (with sensitive-dir check).
+    #[garde(skip)]
     pub grpc_allowed_roots: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ModelConfig {
+    #[garde(length(min = 1))]
     pub model_repo: String,
+    #[garde(skip)]
     pub model_revision: String,
+    #[garde(skip)]
     pub model_path: Option<String>,
+    #[garde(skip)]
     pub use_gpu: bool,
+    #[garde(range(min = 1, max = 1024))]
     pub batch_size: usize,
+    #[garde(skip)]
     pub expected_dimension: Option<usize>,
+    #[garde(skip)]
     pub max_sequence_length: Option<usize>,
 }
 
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
 #[serde(default)]
 pub struct EmbeddingConfig {
+    #[garde(skip)]
     pub default_aggregation: String,
+    #[garde(skip)]
     pub similarity_metric: String,
+    #[garde(skip)]
     pub cache_enabled: bool,
+    #[garde(skip)]
     pub cache_size: usize,
+    #[garde(range(min = 1))]
     pub max_batch_size: usize,
+    #[garde(range(min = 1))]
     pub max_text_length: usize,
 }
 
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct MonitoringConfig {
     pub memory_limit_mb: Option<usize>,
@@ -72,15 +96,24 @@ pub struct MonitoringConfig {
     pub log_level: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct AuthConfig {
     pub enabled: bool,
+    #[serde(
+        default,
+        serialize_with = "crate::config::encryption::encrypted_option::serialize",
+        deserialize_with = "crate::config::encryption::encrypted_option::deserialize"
+    )]
     pub jwt_secret: Option<String>,
     pub token_expiration_hours: Option<i64>,
     pub default_admin_username: Option<String>,
+    #[serde(
+        default,
+        serialize_with = "crate::config::encryption::encrypted_option::serialize",
+        deserialize_with = "crate::config::encryption::encrypted_option::deserialize"
+    )]
     pub default_admin_password: Option<String>,
-    pub security: SecurityConfig,
     pub csrf: CsrfConfig,
     /// Trusted proxy CIDRs for X-Forwarded-For trust boundary.
     ///
@@ -94,7 +127,7 @@ pub struct AuthConfig {
 }
 
 /// Rate limiting configuration
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct RateLimitConfig {
     /// Enable rate limiting
@@ -127,47 +160,21 @@ impl Default for RateLimitConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Serialize)]
-#[serde(default)]
-pub struct SecurityConfig {
-    pub storage_type: String,
-    pub encryption_key: Option<String>,
-    pub key_file_path: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct CsrfConfig {
     pub enabled: bool,
-    pub allowed_origins: Option<Vec<String>>,
-    pub token_validation_enabled: bool,
-    pub token_expiration_secs: Option<u64>,
-    pub allow_same_origin: bool,
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            storage_type: "environment".to_string(),
-            encryption_key: None,
-            key_file_path: None,
-        }
-    }
 }
 
 impl Default for CsrfConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            allowed_origins: None,
-            token_validation_enabled: false,
-            token_expiration_secs: Some(3600),
-            allow_same_origin: true,
         }
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct AuditConfig {
     pub enabled: bool,
@@ -179,7 +186,7 @@ pub struct AuditConfig {
 
 /// 数据库配置（dbnexus，需启用 `db` feature）
 #[cfg(feature = "db")]
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct DatabaseConfig {
     /// 数据库连接 URL
@@ -204,7 +211,7 @@ impl Default for DatabaseConfig {
 }
 
 /// 内存池配置
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct MemoryPoolConfig {
     /// 是否启用内存池
@@ -218,7 +225,7 @@ pub struct MemoryPoolConfig {
 }
 
 /// 缓冲区池配置
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct BufferPoolConfig {
     /// 是否启用
@@ -232,7 +239,7 @@ pub struct BufferPoolConfig {
 }
 
 /// 模型权重池配置
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ModelPoolConfig {
     /// 是否启用
@@ -244,7 +251,7 @@ pub struct ModelPoolConfig {
 }
 
 /// CUDA 池配置
-#[derive(Debug, Deserialize, Clone, Serialize)]
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct CudaPoolConfig {
     /// 是否启用
@@ -372,7 +379,6 @@ impl Default for AuthConfig {
             token_expiration_hours: Some(24),
             default_admin_username: None,
             default_admin_password: None,
-            security: SecurityConfig::default(),
             csrf: CsrfConfig::default(),
             trusted_proxies: Vec::new(),
         }
@@ -557,21 +563,9 @@ mod tests {
     }
 
     #[test]
-    fn test_security_config_default() {
-        let config = SecurityConfig::default();
-        assert_eq!(config.storage_type, "environment");
-        assert!(config.encryption_key.is_none());
-        assert!(config.key_file_path.is_none());
-    }
-
-    #[test]
     fn test_csrf_config_default() {
         let config = CsrfConfig::default();
         assert!(!config.enabled);
-        assert!(config.allowed_origins.is_none());
-        assert!(!config.token_validation_enabled);
-        assert_eq!(config.token_expiration_secs, Some(3600));
-        assert!(config.allow_same_origin);
     }
 
     #[test]
@@ -695,7 +689,6 @@ mod tests {
         assert!(!config.auth.enabled);
         assert_eq!(config.auth.token_expiration_hours, Some(24));
         assert!(!config.auth.csrf.enabled);
-        assert!(config.auth.csrf.allow_same_origin);
 
         assert!(config.audit.enabled);
         assert!(config.rate_limit.enabled);
@@ -948,13 +941,8 @@ mod tests {
             token_expiration_hours: Some(48),
             default_admin_username: Some("admin".to_string()),
             default_admin_password: Some("MyPassword123!".to_string()),
-            security: SecurityConfig::default(),
             csrf: CsrfConfig {
                 enabled: true,
-                allowed_origins: Some(vec!["https://example.com".to_string()]),
-                token_validation_enabled: true,
-                token_expiration_secs: Some(7200),
-                allow_same_origin: false,
             },
             trusted_proxies: vec!["10.0.0.0/8".to_string()],
         };
@@ -962,37 +950,16 @@ mod tests {
         assert!(config.jwt_secret.is_some());
         assert_eq!(config.token_expiration_hours, Some(48));
         assert!(config.csrf.enabled);
-        assert!(!config.csrf.allow_same_origin);
     }
 
     #[test]
     fn test_csrf_config_custom_values() {
         let config = CsrfConfig {
             enabled: true,
-            allowed_origins: Some(vec![
-                "https://example.com".to_string(),
-                "https://app.example.com".to_string(),
-            ]),
-            token_validation_enabled: true,
-            token_expiration_secs: Some(1800),
-            allow_same_origin: false,
         };
         assert!(config.enabled);
-        assert_eq!(config.allowed_origins.unwrap().len(), 2);
-        assert!(config.token_validation_enabled);
     }
 
-    #[test]
-    fn test_security_config_custom_values() {
-        let config = SecurityConfig {
-            storage_type: "file".to_string(),
-            encryption_key: Some("encryption-key".to_string()),
-            key_file_path: Some("/path/to/key".to_string()),
-        };
-        assert_eq!(config.storage_type, "file");
-        assert!(config.encryption_key.is_some());
-        assert!(config.key_file_path.is_some());
-    }
 
     #[test]
     fn test_audit_config_custom_values() {

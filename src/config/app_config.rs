@@ -32,7 +32,7 @@ use crate::pipeline::PipelineConfig;
 /// 子结构体复用 `app.rs` 中的定义,确保下游消费者(services / middleware)
 /// 不受加载器切换影响。`env_prefix = "VECBOOST_"` 将环境变量如
 /// `VECBOOST_JWT_SECRET` 映射到嵌套字段。
-#[derive(Config, Debug, Clone, Serialize, Deserialize)]
+#[derive(Config, Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[config(env_prefix = "VECBOOST_")]
 #[serde(default)]
 pub struct AppConfig {
@@ -73,7 +73,52 @@ impl AppConfig {
             .build()?;
         apply_security_env_overrides(&mut config)?;
         apply_priority_defaults(&mut config.pipeline.priority);
+        config.validate()?;
         Ok(config)
+    }
+
+    /// Generate TypeScript type definitions for `AppConfig` using confers'
+    /// `TypeScriptGenerator` (backed by `schemars` JSON Schema).
+    ///
+    /// Useful for generating configuration documentation or frontend type stubs.
+    pub fn generate_schema() -> Result<String, ConfigError> {
+        confers::schema::TypeScriptGenerator::generate::<Self>()
+            .map_err(|e| ConfigError::Message(format!("schema generation failed: {e}")))
+    }
+
+    /// Validate configuration fields using garde-derived validation.
+    ///
+    /// Delegates to sub-struct `validate()` methods (ServerConfig, ModelConfig,
+    /// EmbeddingConfig) which use `#[derive(garde::Validate)]` with field-level
+    /// `#[garde(...)]` rules. Aggregates all errors into a single `ConfigError`.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        use garde::Validate;
+        let mut errors = Vec::new();
+
+        if let Err(report) = self.server.validate() {
+            for (path, error) in report.iter() {
+                errors.push(format!("server.{path}: {error}"));
+            }
+        }
+        if let Err(report) = self.model.validate() {
+            for (path, error) in report.iter() {
+                errors.push(format!("model.{path}: {error}"));
+            }
+        }
+        if let Err(report) = self.embedding.validate() {
+            for (path, error) in report.iter() {
+                errors.push(format!("embedding.{path}: {error}"));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(ConfigError::Message(format!(
+                "Configuration validation failed:\n  {}",
+                errors.join("\n  ")
+            )))
+        }
     }
 }
 

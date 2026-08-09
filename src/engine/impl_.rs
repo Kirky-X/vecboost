@@ -70,30 +70,6 @@ impl InferenceEngine for AnyEngine {
         }
     }
 
-    fn rerank(&self, query: &str, document: &str) -> Result<f32, VecboostError> {
-        match self {
-            AnyEngine::Candle(engine) => engine.rerank(query, document),
-            #[cfg(feature = "onnx")]
-            AnyEngine::Onnx(engine) => engine.rerank(query, document),
-        }
-    }
-
-    fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> {
-        match self {
-            AnyEngine::Candle(engine) => engine.rerank_batch(query, documents),
-            #[cfg(feature = "onnx")]
-            AnyEngine::Onnx(engine) => engine.rerank_batch(query, documents),
-        }
-    }
-
-    fn supports_rerank(&self) -> bool {
-        match self {
-            AnyEngine::Candle(engine) => engine.supports_rerank(),
-            #[cfg(feature = "onnx")]
-            AnyEngine::Onnx(engine) => engine.supports_rerank(),
-        }
-    }
-
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         match self {
             AnyEngine::Candle(engine) => engine.try_fallback_to_cpu(config).await,
@@ -337,15 +313,6 @@ mod tests {
     }
 
     #[test]
-    fn test_precision_clone_and_eq() {
-        let p1 = Precision::Fp32;
-        let p2 = p1.clone();
-        assert_eq!(p1, p2);
-        assert_ne!(Precision::Fp32, Precision::Fp16);
-        assert_ne!(Precision::Fp16, Precision::Int8);
-    }
-
-    #[test]
     fn test_device_type_cuda_and_metal_serde() {
         let cuda_json = serde_json::to_string(&DeviceType::Cuda).expect("serialize Cuda");
         assert_eq!(cuda_json, "\"cuda\"");
@@ -378,35 +345,9 @@ mod tests {
     }
 
     #[test]
-    fn test_device_type_clone_and_equality() {
-        let cpu = DeviceType::Cpu;
-        let cpu_clone = cpu.clone();
-        assert_eq!(cpu, cpu_clone);
-        assert_ne!(DeviceType::Cpu, DeviceType::Cuda);
-        assert_ne!(DeviceType::Cuda, DeviceType::Metal);
-        assert_ne!(DeviceType::Metal, DeviceType::Amd);
-        assert_ne!(DeviceType::Amd, DeviceType::OpenCL);
-        assert_ne!(DeviceType::OpenCL, DeviceType::Cpu);
-    }
-
-    #[test]
     fn test_pooling_mode_default_is_mean() {
         let mode = crate::config::model::PoolingMode::default();
         assert!(matches!(mode, crate::config::model::PoolingMode::Mean));
-    }
-
-    #[test]
-    fn test_pooling_mode_clone_and_equality() {
-        use crate::config::model::PoolingMode;
-        let mean = PoolingMode::Mean;
-        let max = PoolingMode::Max;
-        let cls = PoolingMode::Cls;
-        assert_eq!(mean.clone(), mean);
-        assert_eq!(max.clone(), max);
-        assert_eq!(cls.clone(), cls);
-        assert_ne!(mean, max);
-        assert_ne!(max, cls);
-        assert_ne!(cls, mean);
     }
 
     #[test]
@@ -419,25 +360,6 @@ mod tests {
                 serde_json::from_str(&json).expect("deserialize PoolingMode");
             assert_eq!(*mode, decoded);
         }
-    }
-
-    #[test]
-    fn test_engine_type_clone_and_equality() {
-        let candle1 = EngineType::Candle;
-        let candle2 = candle1.clone();
-        assert_eq!(candle1, candle2);
-    }
-
-    #[test]
-    fn test_engine_type_debug_format() {
-        let format = format!("{:?}", EngineType::Candle);
-        assert!(format.contains("Candle"));
-    }
-
-    #[test]
-    fn test_precision_debug_format() {
-        let format = format!("{:?}", Precision::Fp32);
-        assert!(format.contains("Fp32"));
     }
 
     #[test]

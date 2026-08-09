@@ -3,7 +3,7 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-#![allow(clippy::all)]
+#![allow(clippy::manual_checked_ops, clippy::identity_op)]
 
 use super::InferenceEngine;
 use crate::config::model::{DeviceType, ModelConfig, Precision};
@@ -867,41 +867,6 @@ impl InferenceEngine for CandleEngine {
 
     fn is_fallback_triggered(&self) -> bool {
         self.fallback_triggered
-    }
-
-    fn rerank(&self, query: &str, document: &str) -> Result<f32, VecboostError> {
-        // 合并为 1 次 batch forward pass（而非 2 次独立 forward pass）
-        let texts = vec![query.to_string(), document.to_string()];
-        let embeddings = self.embed_batch(&texts)?;
-        let similarity =
-            crate::utils::vector::cosine_similarity(&embeddings[0], &embeddings[1])?;
-        // sigmoid 归一化到 [0, 1]
-        Ok(1.0 / (1.0 + (-similarity).exp()))
-    }
-
-    fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> {
-        // query 只 embed 1 次，documents 批量 embed 1 次（共 2 次 forward pass）
-        // 而非 trait 默认的 N 次 rerank() = 2N 次 forward pass
-        let mut texts = Vec::with_capacity(1 + documents.len());
-        texts.push(query.to_string());
-        texts.extend(documents.iter().cloned());
-
-        let embeddings = self.embed_batch(&texts)?;
-        let query_emb = &embeddings[0];
-
-        embeddings[1..]
-            .iter()
-            .map(|doc_emb| {
-                let similarity =
-                    crate::utils::vector::cosine_similarity(query_emb, doc_emb)?;
-                Ok(1.0 / (1.0 + (-similarity).exp()))
-            })
-            .collect()
-    }
-
-    fn supports_rerank(&self) -> bool {
-        // Bi-encoder rerank (embed + cosine + sigmoid) works with any embedding model
-        true
     }
 
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {

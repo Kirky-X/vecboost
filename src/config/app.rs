@@ -87,6 +87,19 @@ pub struct EmbeddingConfig {
     pub max_text_length: usize,
 }
 
+#[derive(Debug, Deserialize, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
+#[serde(default)]
+pub struct RerankConfig {
+    #[garde(range(min = 1))]
+    pub max_documents_per_query: usize,
+    #[garde(range(min = 1))]
+    pub max_query_length: usize,
+    #[garde(skip)]
+    pub cache_enabled: bool,
+    #[garde(skip)]
+    pub cache_size: usize,
+}
+
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct MonitoringConfig {
@@ -403,6 +416,17 @@ impl Default for EmbeddingConfig {
             cache_size: 1024,
             max_batch_size: 64,
             max_text_length: 8192,
+        }
+    }
+}
+
+impl Default for RerankConfig {
+    fn default() -> Self {
+        Self {
+            max_documents_per_query: 100,
+            max_query_length: 8192,
+            cache_enabled: true,
+            cache_size: 1024,
         }
     }
 }

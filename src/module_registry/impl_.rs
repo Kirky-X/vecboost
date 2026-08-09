@@ -22,16 +22,16 @@ use super::AuthModule;
 use super::PrometheusCollectorModule;
 use super::RateLimitModule;
 use super::{
-    AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, DbConfig, DbModule,
-    EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
+    AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, ConfigWatcherModule,
+    DbConfig, DbModule, EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
     PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule, RateLimitEnabled,
     RateLimitEnabledModule, ResponseChannelModule, WorkerManagerModule,
 };
 #[cfg(feature = "auth")]
-use super::{CsrfConfigModule, CsrfTokenStoreModule, UserStoreModule};
+use super::{CsrfConfigModule};
 use crate::audit::AuditLogger;
 #[cfg(feature = "auth")]
-use crate::auth::{CsrfConfig, CsrfTokenStore, UserStore};
+use crate::auth::GarrisonHandle;
 #[cfg(feature = "http")]
 use crate::metrics::PrometheusCollector;
 use crate::rate_limit::LimiteronAdapter;
@@ -65,6 +65,28 @@ impl AsyncAutoBuilder for EmbeddingModule {
 }
 
 // ---------------------------------------------------------------------------
+// EmbeddingModule — lifecycle + health (Phase 3)
+// ---------------------------------------------------------------------------
+
+impl AsyncLifecycle for EmbeddingModule {
+    fn on_ready<'a>(
+        _kit: &'a AsyncKit<trait_kit::AsyncReady>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
+        Box::pin(async {
+            log::info!("EmbeddingModule: model engine ready");
+            Ok(())
+        })
+    }
+}
+
+impl AsyncHealthCheck for EmbeddingModule {
+    fn check(_cap: &Self::Capability) -> HealthStatus {
+        // EmbeddingService is always operational after successful build
+        HealthStatus::Healthy
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AuthModule (auth feature only)
 // ---------------------------------------------------------------------------
 
@@ -79,7 +101,7 @@ impl ModuleMeta for AuthModule {
 
 #[cfg(feature = "auth")]
 impl AsyncAutoBuilder for AuthModule {
-    type Capability = Option<Arc<crate::auth::JwtManager>>;
+    type Capability = Option<Arc<GarrisonHandle>>;
     type Error = TraitKitError;
 
     fn build<'a>(
@@ -113,6 +135,17 @@ impl AsyncAutoBuilder for RateLimitModule {
 }
 
 // ---------------------------------------------------------------------------
+// RateLimitModule — health (Phase 3)
+// ---------------------------------------------------------------------------
+
+impl AsyncHealthCheck for RateLimitModule {
+    fn check(_cap: &Self::Capability) -> HealthStatus {
+        // LimiteronAdapter is always operational after construction
+        HealthStatus::Healthy
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CacheModule
 // ---------------------------------------------------------------------------
 
@@ -137,6 +170,22 @@ impl AsyncAutoBuilder for CacheModule {
                 .map(|c| c.enabled)
                 .unwrap_or(false))
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CacheModule — health (Phase 3)
+// ---------------------------------------------------------------------------
+
+impl AsyncHealthCheck for CacheModule {
+    fn check(cap: &Self::Capability) -> HealthStatus {
+        if *cap {
+            HealthStatus::Healthy
+        } else {
+            HealthStatus::Degraded {
+                detail: "cache disabled".into(),
+            }
+        }
     }
 }
 
@@ -186,6 +235,25 @@ impl AsyncAutoBuilder for AuditModule {
     }
 }
 
+// ---------------------------------------------------------------------------
+// AuditModule — lifecycle (Phase 3)
+// ---------------------------------------------------------------------------
+
+impl AsyncLifecycle for AuditModule {
+    fn on_shutdown<'a>(
+        cap: &'a Self::Capability,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            if let Some(logger) = cap {
+                log::info!("AuditModule: flushing audit log before shutdown");
+                if let Err(e) = logger.flush().await {
+                    log::error!("AuditModule: failed to flush audit log: {}", e);
+                }
+            }
+        })
+    }
+}
+
 // ===========================================================================
 // v0.3.0 D3 重构：覆盖 VecboostState 剩余字段的 13 个 Module 实现
 //
@@ -195,31 +263,6 @@ impl AsyncAutoBuilder for AuditModule {
 //   - bool 类型 → `kit.config::<Newtype>().map(|c| c.0).unwrap_or(false)`
 //     宽松模式（与 CacheModule/DbModule 一致）：missing config 默认 false
 // ===========================================================================
-
-// ---------------------------------------------------------------------------
-// UserStoreModule (auth feature)
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "auth")]
-impl ModuleMeta for UserStoreModule {
-    const NAME: &'static str = "user_store";
-
-    fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
-        &[]
-    }
-}
-
-#[cfg(feature = "auth")]
-impl AsyncAutoBuilder for UserStoreModule {
-    type Capability = Option<Arc<UserStore>>;
-    type Error = TraitKitError;
-
-    fn build<'a>(
-        kit: &'a AsyncKit,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
-        Box::pin(async move { kit.config::<Self::Capability>() })
-    }
-}
 
 // ---------------------------------------------------------------------------
 // AuthEnabledModule — bool from AuthEnabled newtype
@@ -259,32 +302,7 @@ impl ModuleMeta for CsrfConfigModule {
 
 #[cfg(feature = "auth")]
 impl AsyncAutoBuilder for CsrfConfigModule {
-    type Capability = Option<Arc<CsrfConfig>>;
-    type Error = TraitKitError;
-
-    fn build<'a>(
-        kit: &'a AsyncKit,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
-        Box::pin(async move { kit.config::<Self::Capability>() })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// CsrfTokenStoreModule (auth feature)
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "auth")]
-impl ModuleMeta for CsrfTokenStoreModule {
-    const NAME: &'static str = "csrf_token_store";
-
-    fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
-        &[]
-    }
-}
-
-#[cfg(feature = "auth")]
-impl AsyncAutoBuilder for CsrfTokenStoreModule {
-    type Capability = Option<Arc<CsrfTokenStore>>;
+    type Capability = Option<Arc<crate::auth::GarrisonCsrfConfig>>;
     type Error = TraitKitError;
 
     fn build<'a>(
@@ -510,5 +528,50 @@ impl AsyncAutoBuilder for WorkerManagerModule {
         kit: &'a AsyncKit,
     ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
         Box::pin(async move { kit.config::<Self::Capability>() })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ConfigWatcherModule — confers watch 集成 (Phase 8)
+// ---------------------------------------------------------------------------
+
+impl ModuleMeta for ConfigWatcherModule {
+    const NAME: &'static str = "config_watcher";
+
+    fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
+        &[]
+    }
+}
+
+impl AsyncAutoBuilder for ConfigWatcherModule {
+    type Capability = Arc<confers::watcher::WatcherGuard>;
+    type Error = TraitKitError;
+
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { kit.config::<Self::Capability>() })
+    }
+}
+
+impl AsyncLifecycle for ConfigWatcherModule {
+    fn on_ready<'a>(
+        _kit: &'a AsyncKit<trait_kit::AsyncReady>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
+        Box::pin(async {
+            log::info!("ConfigWatcherModule: config file watcher ready");
+            Ok(())
+        })
+    }
+
+    fn on_shutdown<'a>(
+        cap: &'a Self::Capability,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            log::info!("ConfigWatcherModule: shutting down config watcher");
+            if let Err(e) = cap.shutdown(std::time::Duration::from_secs(5)).await {
+                log::error!("ConfigWatcherModule: error during watcher shutdown: {}", e);
+            }
+        })
     }
 }

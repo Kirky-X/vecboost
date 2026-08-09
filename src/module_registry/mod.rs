@@ -20,7 +20,7 @@ mod tests;
 /// 嵌入服务模块 — 提供 `Arc<RwLock<EmbeddingService>>` 能力
 pub struct EmbeddingModule;
 
-/// 认证模块 — 提供 `Option<Arc<JwtManager>>` 能力（需要 auth feature）
+/// 认证模块 — 提供 `Option<Arc<GarrisonHandle>>` 能力（需要 auth feature）
 #[cfg(feature = "auth")]
 pub struct AuthModule;
 
@@ -45,20 +45,12 @@ pub struct AuditModule;
 //   - bool 字段用 newtype 包装以避免 TypeMap 中 bool TypeId 冲突
 // ---------------------------------------------------------------------------
 
-/// 用户存储模块（auth）— 提供 `Option<Arc<UserStore>>` 能力
-#[cfg(feature = "auth")]
-pub struct UserStoreModule;
-
 /// 认证启用模块 — 提供 `bool` 能力（读取 `AuthEnabled` newtype 配置）
 pub struct AuthEnabledModule;
 
-/// CSRF 配置模块（auth）— 提供 `Option<Arc<CsrfConfig>>` 能力
+/// CSRF 配置模块（auth）— 提供 `Option<Arc<GarrisonCsrfConfig>>` 能力
 #[cfg(feature = "auth")]
 pub struct CsrfConfigModule;
-
-/// CSRF token 存储模块（auth）— 提供 `Option<Arc<CsrfTokenStore>>` 能力
-#[cfg(feature = "auth")]
-pub struct CsrfTokenStoreModule;
 
 /// 指标收集器模块 — 提供 `Option<Arc<InferenceCollector>>` 能力
 pub struct MetricsCollectorModule;
@@ -90,6 +82,12 @@ pub struct PriorityCalculatorModule;
 
 /// Worker 管理器模块 — 提供 `Arc<WorkerManager>` 能力
 pub struct WorkerManagerModule;
+
+/// 配置监视器模块 — 提供 `confers::watcher::WatcherGuard` 能力
+///
+/// 监视配置文件变化并触发重载。Capability 为 `WatcherGuard`，
+/// 通过 `on_ready()` 启动监视，`on_shutdown()` 优雅关闭。
+pub struct ConfigWatcherModule;
 
 // ---------------------------------------------------------------------------
 // 配置类型（通过 `Kit::set_config` 注入）

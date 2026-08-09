@@ -3,7 +3,7 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-#![allow(clippy::all)]
+#![allow(clippy::manual_checked_ops, clippy::identity_op)]
 
 use super::InferenceEngine;
 use crate::config::model::{DeviceType, ModelConfig, Precision};
@@ -74,6 +74,7 @@ pub struct CandleEngine {
     device_type: DeviceType,
     model_architecture: ModelArchitecture,
     use_quantization: bool, // 是否使用 INT8 量化
+    _model_name: String,
 }
 
 impl CandleEngine {
@@ -484,6 +485,7 @@ impl CandleEngine {
             device_type,
             model_architecture,
             use_quantization,
+            _model_name: config.name.clone(),
         })
     }
 
@@ -493,6 +495,10 @@ impl CandleEngine {
 
     pub fn device_type(&self) -> DeviceType {
         self.device_type.clone()
+    }
+
+    pub fn get_model_name(&self) -> &str {
+        &self._model_name
     }
 
     pub fn is_fallback_triggered(&self) -> bool {
@@ -729,7 +735,8 @@ impl CandleEngine {
             .min(self.tokenizer.max_length());
 
         if max_seq_len == 0 {
-            return Ok(vec![vec![0f32; 768]; texts.len()]);
+            let hidden_size = self.get_hidden_size();
+            return Ok(vec![vec![0f32; hidden_size]; texts.len()]);
         }
 
         // 创建批量张量

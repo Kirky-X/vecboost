@@ -3,7 +3,7 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-#![allow(clippy::all)]
+#![allow(clippy::empty_line_after_doc_comments)]
 
 use log::{debug, error, info, warn};
 use std::sync::Arc;

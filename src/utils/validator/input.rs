@@ -8,7 +8,7 @@ use crate::utils::constants::{
     MAX_BATCH_SIZE, MAX_CONCURRENT_REQUESTS, MAX_FILE_SIZE_BYTES, MAX_SEARCH_RESULTS,
     MAX_TEXT_LENGTH, MIN_TEXT_LENGTH,
 };
-use std::io::BufRead;
+use std::io::Read;
 use std::num::NonZeroUsize;
 
 const ALLOWED_FILE_EXTENSIONS: &[&str] = &[
@@ -256,7 +256,6 @@ impl InputValidator {
 
     fn validate_file_content(&self, path: &str) -> Result<(), VecboostError> {
         use std::fs::File;
-        use std::io::Read;
 
         let file = File::open(path)
             .map_err(|e| VecboostError::InvalidInput(format!("Cannot open file: {}", e)))?;
@@ -264,26 +263,24 @@ impl InputValidator {
         let mut buffer = [0u8; MAX_MAGIC_BYTES];
         let mut reader = std::io::BufReader::new(file);
 
-        reader
+        let bytes_read = reader
             .read(&mut buffer)
             .map_err(|e| VecboostError::InvalidInput(format!("Cannot read file: {}", e)))?;
 
-        let bytes_read = reader
-            .fill_buf()
-            .map_err(|e| VecboostError::InvalidInput(format!("Cannot read file buffer: {}", e)))?;
-
-        if bytes_read.is_empty() {
+        if bytes_read == 0 {
             return Ok(());
         }
+
+        let file_header = &buffer[..bytes_read];
 
         let mut has_text_marker = false;
         for (magic, mask, _name) in TEXT_FILE_MAGIC_NUMBERS {
             let magic_len = magic.len();
-            if bytes_read.len() >= magic_len {
+            if file_header.len() >= magic_len {
                 let mut matches = true;
                 for (i, &magic_byte) in magic.iter().enumerate() {
                     let mask_byte = mask.get(i).copied().unwrap_or(0xFF);
-                    if (bytes_read[i] & mask_byte) != magic_byte {
+                    if (file_header[i] & mask_byte) != magic_byte {
                         matches = false;
                         break;
                     }
@@ -296,7 +293,7 @@ impl InputValidator {
         }
 
         if !has_text_marker {
-            for &byte in bytes_read.iter().take(256) {
+            for &byte in file_header.iter().take(256) {
                 if byte < 0x09 || (byte > 0x0A && byte < 0x20 && byte != 0x1E && byte != 0x1F) {
                     return Err(VecboostError::InvalidInput(
                         "File contains non-text binary data".to_string(),

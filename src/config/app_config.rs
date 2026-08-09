@@ -22,7 +22,7 @@ use confers::Config;
 use super::app::DatabaseConfig;
 use super::app::{
     AuditConfig, AuthConfig, ConfigError, EmbeddingConfig, MemoryPagingConfig, MemoryPoolConfig,
-    ModelConfig, MonitoringConfig, RateLimitConfig, SemanticCacheConfig, ServerConfig,
+    ModelConfig, MonitoringConfig, RateLimitConfig, RerankConfig, SemanticCacheConfig, ServerConfig,
     apply_priority_defaults, apply_security_env_overrides,
 };
 use crate::pipeline::PipelineConfig;
@@ -39,6 +39,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub model: ModelConfig,
     pub embedding: EmbeddingConfig,
+    pub rerank: RerankConfig,
     pub monitoring: MonitoringConfig,
     pub auth: AuthConfig,
     pub rate_limit: RateLimitConfig,
@@ -97,21 +98,18 @@ impl AppConfig {
         use garde::Validate;
         let mut errors = Vec::new();
 
-        if let Err(report) = self.server.validate() {
-            for (path, error) in report.iter() {
-                errors.push(format!("server.{path}: {error}"));
+        let mut collect = |prefix: &str, result: Result<(), garde::Report>| {
+            if let Err(report) = result {
+                for (path, error) in report.iter() {
+                    errors.push(format!("{prefix}.{path}: {error}"));
+                }
             }
-        }
-        if let Err(report) = self.model.validate() {
-            for (path, error) in report.iter() {
-                errors.push(format!("model.{path}: {error}"));
-            }
-        }
-        if let Err(report) = self.embedding.validate() {
-            for (path, error) in report.iter() {
-                errors.push(format!("embedding.{path}: {error}"));
-            }
-        }
+        };
+
+        collect("server", self.server.validate());
+        collect("model", self.model.validate());
+        collect("embedding", self.embedding.validate());
+        collect("rerank", self.rerank.validate());
 
         if errors.is_empty() {
             Ok(())

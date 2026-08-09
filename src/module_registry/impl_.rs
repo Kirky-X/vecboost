@@ -24,7 +24,7 @@ use super::RateLimitModule;
 use super::{
     AuditModule, CacheConfig, CacheModule, ConfigWatcherModule,
     DbConfig, DbModule, EmbeddingModule, IpWhitelistModule, MetricsCollectorModule,
-    PipelineQueueModule, PriorityCalculatorModule,
+    PipelineQueueModule, PriorityCalculatorModule, RerankModule,
     ResponseChannelModule, WorkerManagerModule,
 };
 #[cfg(feature = "auth")]
@@ -36,6 +36,7 @@ use crate::auth::GarrisonHandle;
 use crate::metrics::PrometheusCollector;
 use crate::rate_limit::LimiteronAdapter;
 use crate::service::embedding::EmbeddingService;
+use crate::service::rerank::RerankService;
 use crate::{
     metrics::InferenceCollector,
     pipeline::{PriorityCalculator, PriorityRequestQueue, ResponseChannel, WorkerManager},
@@ -82,6 +83,46 @@ impl AsyncLifecycle for EmbeddingModule {
 impl AsyncHealthCheck for EmbeddingModule {
     fn check(_cap: &Self::Capability) -> HealthStatus {
         // EmbeddingService is always operational after successful build
+        HealthStatus::Healthy
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RerankModule
+// ---------------------------------------------------------------------------
+
+impl ModuleMeta for RerankModule {
+    const NAME: &'static str = "rerank";
+
+    fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
+        &[]
+    }
+}
+
+impl AsyncAutoBuilder for RerankModule {
+    type Capability = Arc<RwLock<RerankService>>;
+    type Error = TraitKitError;
+
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { kit.config::<Self::Capability>() })
+    }
+}
+
+impl AsyncLifecycle for RerankModule {
+    fn on_ready<'a>(
+        _kit: &'a AsyncKit<trait_kit::AsyncReady>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
+        Box::pin(async {
+            log::info!("RerankModule: rerank service ready");
+            Ok(())
+        })
+    }
+}
+
+impl AsyncHealthCheck for RerankModule {
+    fn check(_cap: &Self::Capability) -> HealthStatus {
         HealthStatus::Healthy
     }
 }
@@ -139,9 +180,15 @@ impl AsyncAutoBuilder for RateLimitModule {
 // ---------------------------------------------------------------------------
 
 impl AsyncHealthCheck for RateLimitModule {
-    fn check(_cap: &Self::Capability) -> HealthStatus {
-        // LimiteronAdapter is always operational after construction
-        HealthStatus::Healthy
+    fn check(cap: &Self::Capability) -> HealthStatus {
+        // 读取 LimiteronAdapter 中缓存的健康状态（由 check_health() 异步更新）
+        if cap.is_healthy() {
+            HealthStatus::Healthy
+        } else {
+            HealthStatus::Unhealthy {
+                detail: "rate limiter health check failed".into(),
+            }
+        }
     }
 }
 

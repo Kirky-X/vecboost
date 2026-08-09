@@ -20,6 +20,7 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod engine;
+pub mod library;
 pub mod metrics;
 pub mod module_registry;
 pub mod pipeline;
@@ -46,11 +47,16 @@ pub(crate) mod text;
 pub use config::AppConfig;
 #[cfg(feature = "db")]
 pub use config::app::DatabaseConfig;
-pub use config::app::{AuthConfig, CsrfConfig, RateLimitConfig, ServerConfig};
+pub use config::app::{AuthConfig, CsrfConfig, RateLimitConfig, RerankConfig, ServerConfig};
 pub use config::model::ModelConfig;
-pub use domain::{EmbedRequest, EmbedResponse, SimilarityRequest, SimilarityResponse};
+pub use domain::{
+    EmbedRequest, EmbedResponse, RerankRequest, RerankResponse, SimilarityRequest,
+    SimilarityResponse,
+};
 pub use error::VecboostError;
 pub use service::embedding::EmbeddingService;
+pub use service::rerank::RerankService;
+pub use library::{LibraryConfig, VecBoostLibrary};
 pub use utils::SimilarityMetric;
 pub use utils::vector::{TaskType, recommended_dimension, information_retention_rate};
 
@@ -93,80 +99,85 @@ impl VecboostState {
     }
 }
 
+/// 生成 `FromRef<VecboostState>` 实现：直接 require 模式（能力类型非 Option）。
 #[cfg(feature = "http")]
-impl FromRef<VecboostState> for Arc<RwLock<EmbeddingService>> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::EmbeddingModule>()
-            .expect("EmbeddingService capability not registered in kit")
-    }
+macro_rules! impl_from_ref_direct {
+    ($target:ty, $module:ty, $msg:literal) => {
+        #[cfg(feature = "http")]
+        impl FromRef<VecboostState> for $target {
+            fn from_ref(state: &VecboostState) -> Self {
+                state.kit.require::<$module>().expect($msg)
+            }
+        }
+    };
 }
+
+/// 生成 `FromRef<VecboostState>` 实现：Option 能力解包模式。
+#[cfg(feature = "http")]
+macro_rules! impl_from_ref_option {
+    ($target:ty, $module:ty, $key:literal, $msg:literal) => {
+        #[cfg(feature = "http")]
+        impl FromRef<VecboostState> for $target {
+            fn from_ref(state: &VecboostState) -> Self {
+                state
+                    .kit
+                    .require::<$module>()
+                    .and_then(|opt| {
+                        opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
+                            key: $key.to_string(),
+                        })
+                    })
+                    .expect($msg)
+            }
+        }
+    };
+}
+
+impl_from_ref_direct!(
+    Arc<RwLock<EmbeddingService>>,
+    module_registry::EmbeddingModule,
+    "EmbeddingService capability not registered in kit"
+);
+
+impl_from_ref_direct!(
+    Arc<RwLock<RerankService>>,
+    module_registry::RerankModule,
+    "RerankService capability not registered in kit"
+);
+
+impl_from_ref_direct!(
+    Arc<rate_limit::LimiteronAdapter>,
+    module_registry::RateLimitModule,
+    "RateLimitModule capability not registered in kit"
+);
+
+impl_from_ref_direct!(
+    Option<Arc<audit::AuditLogger>>,
+    module_registry::AuditModule,
+    "AuditModule capability not registered in kit"
+);
 
 #[cfg(all(feature = "http", feature = "auth"))]
-impl FromRef<VecboostState> for Arc<auth::GarrisonCsrfConfig> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::CsrfConfigModule>()
-            .and_then(|opt| {
-                opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "csrf_config (auth disabled at runtime)".to_string(),
-                })
-            })
-            .expect("GarrisonCsrfConfig capability not available")
-    }
-}
+impl_from_ref_option!(
+    Arc<auth::GarrisonCsrfConfig>,
+    module_registry::CsrfConfigModule,
+    "csrf_config (auth disabled at runtime)",
+    "GarrisonCsrfConfig capability not available"
+);
 
-#[cfg(feature = "http")]
-impl FromRef<VecboostState> for Arc<metrics::InferenceCollector> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::MetricsCollectorModule>()
-            .and_then(|opt| {
-                opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "metrics_collector (not configured)".to_string(),
-                })
-            })
-            .expect("InferenceCollector capability not available")
-    }
-}
+impl_from_ref_option!(
+    Arc<metrics::InferenceCollector>,
+    module_registry::MetricsCollectorModule,
+    "metrics_collector (not configured)",
+    "InferenceCollector capability not available"
+);
 
-#[cfg(feature = "http")]
-impl FromRef<VecboostState> for Arc<metrics::PrometheusCollector> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::PrometheusCollectorModule>()
-            .and_then(|opt| {
-                opt.ok_or_else(|| trait_kit::TraitKitError::MissingCapability {
-                    key: "prometheus_collector (not configured)".to_string(),
-                })
-            })
-            .expect("PrometheusCollector capability not available")
-    }
-}
-
-#[cfg(feature = "http")]
-impl FromRef<VecboostState> for Arc<rate_limit::LimiteronAdapter> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::RateLimitModule>()
-            .expect("RateLimitModule capability not registered in kit")
-    }
-}
-
-#[cfg(feature = "http")]
-impl FromRef<VecboostState> for Option<Arc<audit::AuditLogger>> {
-    fn from_ref(state: &VecboostState) -> Self {
-        state
-            .kit
-            .require::<module_registry::AuditModule>()
-            .expect("AuditModule capability not registered in kit")
-    }
-}
+impl_from_ref_option!(
+    Arc<metrics::PrometheusCollector>,
+    module_registry::PrometheusCollectorModule,
+    "prometheus_collector (not configured)",
+    "PrometheusCollector capability not available"
+);
 
 /// AuthConfig substate extractor — provides `trusted_proxies` and other auth
 /// configuration to middleware via axum's `FromRef` pattern. The config is
@@ -195,7 +206,7 @@ mod tests {
     use crate::module_registry::{
         AuditModule, AuthEnabled, CacheConfig, CacheModule, DbConfig, DbModule,
         EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
-        PipelineQueueModule, PriorityCalculatorModule, RateLimitEnabled,
+        PipelineQueueModule, PriorityCalculatorModule, RerankModule, RateLimitEnabled,
         RateLimitModule, ResponseChannelModule, WorkerManagerModule,
     };
     #[cfg(feature = "auth")]
@@ -250,8 +261,9 @@ mod tests {
     ) -> VecboostState {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockEngine));
-        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
-        let rate_limiter = Arc::new(rate_limit::LimiteronAdapter::with_defaults());
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine.clone(), None)));
+        let rerank_service = Arc::new(RwLock::new(RerankService::new(engine, None)));
+        let rate_limiter = Arc::new(rate_limit::LimiteronAdapter::with_defaults().await);
         let pipeline_queue = Arc::new(pipeline::PriorityRequestQueue::new(100));
         let response_channel = Arc::new(pipeline::ResponseChannel::new());
         let priority_calculator =
@@ -266,6 +278,7 @@ mod tests {
         let mut kit = trait_kit::AsyncKit::new();
         // 注入复杂类型能力（预构建对象）
         kit.set_config(service.clone());
+        kit.set_config(rerank_service.clone());
         kit.set_config(rate_limiter.clone());
         kit.set_config(metrics.clone());
         kit.set_config(prometheus.clone());
@@ -284,6 +297,7 @@ mod tests {
             size: 0,
         });
         kit.set_config(DbConfig { enabled: false });
+        kit.set_config(RerankConfig::default());
 
         // auth feature 能力（全部 None — 默认禁用）
         #[cfg(feature = "auth")]
@@ -292,8 +306,9 @@ mod tests {
             kit.set_config(Option::<Arc<crate::auth::GarrisonCsrfConfig>>::None);
         }
 
-        // 注册所有 Module（15 个非 auth + 4 个 auth feature）
+        // 注册所有 Module（16 个非 auth + 4 个 auth feature）
         kit.register::<EmbeddingModule>().unwrap();
+        kit.register::<RerankModule>().unwrap();
         kit.register::<RateLimitModule>().unwrap();
         kit.register::<CacheModule>().unwrap();
         kit.register::<DbModule>().unwrap();
@@ -314,9 +329,11 @@ mod tests {
 
         // T012-T016: Register lifecycle and health check for key modules
         kit.register_lifecycle::<EmbeddingModule>();
+        kit.register_lifecycle::<RerankModule>();
         kit.register_lifecycle::<RateLimitModule>();
         kit.register_lifecycle::<AuditModule>();
         kit.register_health_check::<EmbeddingModule>();
+        kit.register_health_check::<RerankModule>();
         kit.register_health_check::<RateLimitModule>();
         kit.register_health_check::<CacheModule>();
 
@@ -346,6 +363,7 @@ mod tests {
     async fn test_app_state_construction() {
         let state = make_app_state().await;
         assert!(state.kit.contains::<EmbeddingModule>());
+        assert!(state.kit.contains::<RerankModule>());
         assert!(state.kit.contains::<RateLimitModule>());
         assert!(state.kit.contains::<AuditModule>());
         assert!(state.kit.contains::<MetricsCollectorModule>());
@@ -610,6 +628,10 @@ mod tests {
         let embedding_health = state.kit.health_check::<EmbeddingModule>();
         assert!(embedding_health.is_ok(), "EmbeddingModule health check should be registered");
         assert_eq!(embedding_health.unwrap(), HealthStatus::Healthy);
+
+        let rerank_health = state.kit.health_check::<RerankModule>();
+        assert!(rerank_health.is_ok(), "RerankModule health check should be registered");
+        assert_eq!(rerank_health.unwrap(), HealthStatus::Healthy);
 
         let rate_limit_health = state.kit.health_check::<RateLimitModule>();
         assert!(rate_limit_health.is_ok(), "RateLimitModule health check should be registered");

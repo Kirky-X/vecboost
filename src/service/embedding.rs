@@ -3,7 +3,7 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-#![allow(clippy::all)]
+#![allow(clippy::collapsible_if, clippy::useless_conversion, clippy::redundant_closure)]
 
 use crate::cache::OxCacheBackend;
 use crate::cache::SemanticCache;
@@ -49,22 +49,38 @@ pub struct EmbeddingService {
 }
 
 impl EmbeddingService {
-    pub fn new(
+    /// 统一内部构造入口：所有可选组件通过参数控制，消除 5 个构造器间的字段初始化重复。
+    fn build(
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        validator: InputValidator,
         model_config: Option<ModelConfig>,
+        model_manager: Option<Arc<ModelManager>>,
+        cache_size: Option<usize>,
+        memory_manager: Option<SharedGpuMemoryManager>,
+        batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     ) -> Self {
         Self {
             engine,
-            validator: InputValidator::with_default(),
+            validator,
             model_config,
-            model_manager: None,
-            cache: Arc::new(OxCacheBackend::disabled()),
-            memory_manager: None,
-            batch_scheduler: None,
+            model_manager,
+            cache: Arc::new(match cache_size {
+                Some(size) => OxCacheBackend::new(size),
+                None => OxCacheBackend::disabled(),
+            }),
+            memory_manager,
+            batch_scheduler,
             buffer_pool: None,
             continuous_batch_loop: None,
             semantic_cache: None,
         }
+    }
+
+    pub fn new(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+    ) -> Self {
+        Self::build(engine, InputValidator::with_default(), model_config, None, None, None, None)
     }
 
     pub fn with_manager(
@@ -72,18 +88,7 @@ impl EmbeddingService {
         model_config: Option<ModelConfig>,
         model_manager: Arc<ModelManager>,
     ) -> Self {
-        Self {
-            engine,
-            validator: InputValidator::with_default(),
-            model_config,
-            model_manager: Some(model_manager),
-            cache: Arc::new(OxCacheBackend::disabled()),
-            memory_manager: None,
-            batch_scheduler: None,
-            buffer_pool: None,
-            continuous_batch_loop: None,
-            semantic_cache: None,
-        }
+        Self::build(engine, InputValidator::with_default(), model_config, Some(model_manager), None, None, None)
     }
 
     pub fn with_validator_and_manager(
@@ -92,18 +97,7 @@ impl EmbeddingService {
         model_config: Option<ModelConfig>,
         model_manager: Option<Arc<ModelManager>>,
     ) -> Self {
-        Self {
-            engine,
-            validator,
-            model_config,
-            model_manager,
-            cache: Arc::new(OxCacheBackend::disabled()),
-            memory_manager: None,
-            batch_scheduler: None,
-            buffer_pool: None,
-            continuous_batch_loop: None,
-            semantic_cache: None,
-        }
+        Self::build(engine, validator, model_config, model_manager, None, None, None)
     }
 
     pub fn with_cache(
@@ -111,18 +105,7 @@ impl EmbeddingService {
         model_config: Option<ModelConfig>,
         cache_size: usize,
     ) -> Self {
-        Self {
-            engine,
-            validator: InputValidator::with_default(),
-            model_config,
-            model_manager: None,
-            cache: Arc::new(OxCacheBackend::new(cache_size)),
-            memory_manager: None,
-            batch_scheduler: None,
-            buffer_pool: None,
-            continuous_batch_loop: None,
-            semantic_cache: None,
-        }
+        Self::build(engine, InputValidator::with_default(), model_config, None, Some(cache_size), None, None)
     }
 
     pub fn with_all(
@@ -134,18 +117,7 @@ impl EmbeddingService {
         memory_manager: Option<SharedGpuMemoryManager>,
         batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     ) -> Self {
-        Self {
-            engine,
-            validator,
-            model_config,
-            model_manager,
-            cache: Arc::new(OxCacheBackend::new(cache_size)),
-            memory_manager,
-            batch_scheduler,
-            buffer_pool: None,
-            continuous_batch_loop: None,
-            semantic_cache: None,
-        }
+        Self::build(engine, validator, model_config, model_manager, Some(cache_size), memory_manager, batch_scheduler)
     }
 
     /// 设置 BufferPool
@@ -232,50 +204,41 @@ impl EmbeddingService {
         }
 
         let total_texts = texts.len();
-        let mut embeddings = std::collections::HashMap::with_capacity(total_texts);
-        let mut processed = 0;
+        let mut cache_entries = std::collections::HashMap::with_capacity(total_texts);
+        let mut processed_count = 0usize;
 
-        for text in texts {
-            if let Ok(embedding) = self.engine.read().await.embed(&text) {
-                embeddings.insert(text, embedding);
-                processed += 1;
+        // 获取最优批量大小，分批推理避免 OOM
+        let batch_size = self
+            .get_optimal_batch_size(128, self.model_config.as_ref().and_then(|c| c.expected_dimension).unwrap_or(768))
+            .await;
 
-                if processed % 100 == 0 {
-                    debug!("Warm-up progress: {}/{}", processed, total_texts);
+        for chunk in texts.chunks(batch_size) {
+            match self.engine.read().await.embed_batch(chunk) {
+                Ok(embeddings) => {
+                    for (text, embedding) in chunk.iter().zip(embeddings.into_iter()) {
+                        cache_entries.insert(text.clone(), embedding);
+                        processed_count += 1;
+                    }
+                    debug!("Warm-up progress: {}/{}", processed_count, total_texts);
+                }
+                Err(e) => {
+                    warn!("Warm-up batch failed, skipping {} texts: {}", chunk.len(), e);
                 }
             }
         }
 
-        // 在移动 embeddings 之前记录处理数量
-        let processed_count = processed;
-
-        // 使用 HashMap 将预热数据转换为缓存预期的格式
-        let cache_entries: std::collections::HashMap<String, Vec<f32>> =
-            embeddings.into_iter().collect();
-
         self.cache.warm_up(cache_entries).await;
 
         log::info!(
-            "Cache warm-up completed: {} entries preloaded",
-            processed_count
+            "Cache warm-up completed: {}/{} entries preloaded",
+            processed_count,
+            total_texts
         );
         Ok(())
     }
 
     fn is_oom_error(error: &VecboostError) -> bool {
-        match error {
-            VecboostError::InferenceError(msg) | VecboostError::OutOfMemory(msg) => {
-                let lower_msg = msg.to_lowercase();
-                lower_msg.contains("out of memory")
-                    || lower_msg.contains("cuda out of memory")
-                    || lower_msg.contains("gpu out of memory")
-                    || lower_msg.contains("memory allocation failed")
-                    || lower_msg.contains("failed to allocate")
-                    || lower_msg.contains("not enough memory")
-                    || lower_msg.contains("alloc")
-            }
-            _ => false,
-        }
+        crate::service::common::is_oom_error(error)
     }
 
     async fn handle_oom_fallback<F, Fut, T>(&self, operation: F) -> Result<T, VecboostError>
@@ -283,71 +246,13 @@ impl EmbeddingService {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<T, VecboostError>>,
     {
-        let mut attempts = 0;
-
-        loop {
-            attempts += 1;
-
-            match operation().await {
-                Ok(result) => return Ok(result),
-                Err(error) if Self::is_oom_error(&error) && attempts <= MAX_FALLBACK_ATTEMPTS => {
-                    warn!(
-                        "OOM error detected: {}. Attempting fallback to CPU (attempt {}/{})",
-                        error, attempts, MAX_FALLBACK_ATTEMPTS
-                    );
-
-                    let engine = self.engine.read().await;
-
-                    if engine.is_fallback_triggered() {
-                        warn!("Fallback already triggered, cannot retry");
-                        return Err(VecboostError::OutOfMemory(
-                            "Out of memory and fallback already attempted".to_string(),
-                        ));
-                    }
-
-                    drop(engine);
-
-                    if let Some(ref config) = self.model_config
-                        && let Some(ref manager) = self.model_manager
-                    {
-                        let loaded_model = manager.get(&config.name).await;
-
-                        if let Some(_model) = loaded_model {
-                            let mut engine_guard = self.engine.write().await;
-                            let config_clone = config.clone();
-                            let fallback_result =
-                                engine_guard.try_fallback_to_cpu(&config_clone).await;
-
-                            match fallback_result {
-                                Ok(()) => {
-                                    warn!("Successfully fell back to CPU, retrying operation");
-                                    // 检查是否还有重试次数
-                                    if attempts >= MAX_FALLBACK_ATTEMPTS {
-                                        warn!("Max fallback attempts reached, aborting");
-                                        return Err(VecboostError::OutOfMemory(
-                                            "Max fallback attempts exceeded".to_string(),
-                                        ));
-                                    }
-                                    continue;
-                                }
-                                Err(e) => {
-                                    warn!("Failed to fallback to CPU: {}", e);
-                                    return Err(VecboostError::OutOfMemory(format!(
-                                        "OOM error and fallback failed: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                        }
-                    }
-
-                    return Err(VecboostError::OutOfMemory(
-                        "Out of memory and no fallback available".to_string(),
-                    ));
-                }
-                Err(error) => return Err(error),
-            }
-        }
+        crate::service::common::handle_oom_fallback(
+            &self.engine,
+            &self.model_config,
+            &self.model_manager,
+            operation,
+        )
+        .await
     }
 
     /// 处理单文本向量化
@@ -423,42 +328,45 @@ impl EmbeddingService {
         self.validator.validate_text(&req.source)?;
         self.validator.validate_text(&req.target)?;
 
+        // 短路：相同文本的余弦相似度必为 1.0
+        if req.source == req.target {
+            return Ok(SimilarityResponse { score: 1.0 });
+        }
+
         let cache_key_source = format!("text:{}", req.source);
         let cache_key_target = format!("text:{}", req.target);
 
-        let engine = Arc::clone(&self.engine);
-        let cache = Arc::clone(&self.cache);
-
-        let f1 = async move {
-            if cache.is_enabled() {
+        let (mut v1, mut v2) = if self.cache.is_enabled() {
+            // 缓存启用：并行查缓存，各自独立命中/未命中
+            let engine = Arc::clone(&self.engine);
+            let cache = Arc::clone(&self.cache);
+            let f1 = async move {
                 cache
                     .get_or_insert::<_, _, VecboostError>(&cache_key_source, || async {
                         let embedding = engine.read().await.embed(&req.source)?;
                         Ok(embedding)
                     })
                     .await
-            } else {
-                engine.read().await.embed(&req.source)
-            }
-        };
+            };
 
-        let engine = Arc::clone(&self.engine);
-        let cache = Arc::clone(&self.cache);
-
-        let f2 = async move {
-            if cache.is_enabled() {
+            let engine = Arc::clone(&self.engine);
+            let cache = Arc::clone(&self.cache);
+            let f2 = async move {
                 cache
                     .get_or_insert::<_, _, VecboostError>(&cache_key_target, || async {
                         let embedding = engine.read().await.embed(&req.target)?;
                         Ok(embedding)
                     })
                     .await
-            } else {
-                engine.read().await.embed(&req.target)
-            }
-        };
+            };
 
-        let (mut v1, mut v2) = tokio::try_join!(f1, f2)?;
+            tokio::try_join!(f1, f2)?
+        } else {
+            // 缓存禁用：合并为 1 次 batch forward pass（而非 2 次独立 forward pass）
+            let texts = vec![req.source.clone(), req.target.clone()];
+            let embeddings = self.engine.read().await.embed_batch(&texts)?;
+            (embeddings[0].clone(), embeddings[1].clone())
+        };
 
         let score = tokio::task::spawn_blocking(move || {
             normalize_l2(&mut v1);
@@ -799,11 +707,35 @@ impl EmbeddingService {
         self.validator.validate_batch(&req.texts)?;
 
         let texts = req.texts;
-
         let texts_len = texts.len();
 
+        // 去重：相同文本只推理一次，结果映射回原始位置
+        let mut unique_map: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::with_capacity(texts_len);
+        let mut unique_texts: Vec<String> = Vec::with_capacity(texts_len);
+        let mut index_to_unique: Vec<usize> = Vec::with_capacity(texts_len); // original_idx → unique_idx
+
+        for text in &texts {
+            if let Some(&uidx) = unique_map.get(text.as_str()) {
+                index_to_unique.push(uidx);
+            } else {
+                let uidx = unique_texts.len();
+                unique_map.insert(text.as_str(), uidx);
+                unique_texts.push(text.clone());
+                index_to_unique.push(uidx);
+            }
+        }
+
+        let dedup_saved = texts_len - unique_texts.len();
+        if dedup_saved > 0 {
+            debug!(
+                "Batch deduplication: {} texts → {} unique (saved {} redundant inferences)",
+                texts_len, unique_texts.len(), dedup_saved
+            );
+        }
+
         // 检测一个示例文本的序列长度（用于计算内存需求）
-        let sequence_length = texts.first().map_or(0, |t| t.len());
+        let sequence_length = unique_texts.first().map_or(0, |t| t.len());
 
         // 检测输出维度（如果有模型配置则使用配置值）
         let output_dimension = self
@@ -817,21 +749,21 @@ impl EmbeddingService {
             .get_optimal_batch_size(sequence_length, output_dimension)
             .await;
 
-        // 使用动态批量大小进行分块
-        let chunks: Vec<&[String]> = texts.chunks(optimal_batch_size).collect();
+        // 使用动态批量大小进行分块（基于去重后的文本）
+        let chunks: Vec<&[String]> = unique_texts.chunks(optimal_batch_size).collect();
 
         let num_chunks = chunks.len();
 
         debug!(
-            "Processing batch: {} texts, optimal_batch_size={}, chunks={}",
-            texts_len, optimal_batch_size, num_chunks
+            "Processing batch: {} unique texts ({} original), optimal_batch_size={}, chunks={}",
+            unique_texts.len(), texts_len, optimal_batch_size, num_chunks
         );
 
         // 根据实际负载和系统资源动态调整并发数
         let cpu_count = num_cpus::get();
         let max_concurrent_chunks = std::cmp::min(
-            cpu_count * 2,                                    // 每个 CPU 核心最多处理 2 个并发任务
-            std::cmp::max(4, texts_len / optimal_batch_size), // 至少 4 个并发
+            cpu_count * 2,                                               // 每个 CPU 核心最多处理 2 个并发任务
+            std::cmp::max(4, unique_texts.len() / optimal_batch_size),   // 至少 4 个并发
         );
 
         debug!(
@@ -952,7 +884,7 @@ impl EmbeddingService {
             tasks.push(task);
         }
 
-        let mut all_results: Vec<(usize, Vec<f32>, String)> = Vec::with_capacity(texts_len);
+        let mut all_results: Vec<(usize, Vec<f32>, String)> = Vec::with_capacity(unique_texts.len());
 
         for task in tasks {
             let chunk_results = task.await??;
@@ -977,20 +909,29 @@ impl EmbeddingService {
             None
         };
 
-        let results: Vec<BatchEmbeddingResult> = all_results
+        // 构建 unique_idx → (embedding, preview) 查找表
+        let unique_results: Vec<(Vec<f32>, String)> = all_results
             .into_iter()
             .map(|(_, embedding, preview)| {
                 let embedding = if let Some(dim) = effective_dimension {
                     let mut truncated = truncate_vector(&embedding, dim);
-                    // Matryoshka 截断破坏单位向量语义，必须重归一化以保证余弦相似度正确
                     normalize_l2(&mut truncated);
                     truncated
                 } else {
                     embedding
                 };
+                (embedding, preview)
+            })
+            .collect();
+
+        // 将去重结果映射回原始顺序（重复文本复用同一 embedding）
+        let results: Vec<BatchEmbeddingResult> = index_to_unique
+            .iter()
+            .map(|&uidx| {
+                let (ref embedding, ref preview) = unique_results[uidx];
                 BatchEmbeddingResult {
-                    text_preview: preview,
-                    embedding,
+                    text_preview: preview.clone(),
+                    embedding: embedding.clone(),
                 }
             })
             .collect();

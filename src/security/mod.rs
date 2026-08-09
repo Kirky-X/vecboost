@@ -3,8 +3,6 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-#![allow(unused)]
-
 #[cfg(feature = "auth")]
 mod encrypted_store;
 mod helpers;
@@ -17,7 +15,7 @@ pub use encrypted_store::EncryptedFileKeyStore;
 pub use helpers::create_key_store;
 pub use key_store::{KeyStore, KeyType, SecretKey};
 pub use salt::SaltStore;
-pub use sanitize::{sanitize_jwt_secret, sanitize_password, sanitize_secret};
+pub use sanitize::{is_sensitive_field, sanitize_jwt_secret, sanitize_password, sanitize_secret};
 
 use crate::error::VecboostError;
 

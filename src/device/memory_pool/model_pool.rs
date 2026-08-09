@@ -46,7 +46,7 @@ pub struct ModelSlot {
 impl ModelWeightPool {
     /// 创建新的模型权重池
     pub fn new(device_id: String, config: ModelWeightPoolConfig) -> Self {
-        let max_memory = (config.max_memory_mb * 1024 * 1024) as u64;
+        let max_memory = (config.max_memory_mb as u64) * 1024 * 1024;
 
         info!(
             "Creating ModelWeightPool for device {} with max_memory={}MB",
@@ -208,6 +208,9 @@ impl ModelWeightPool {
     pub fn get_memory_usage_percent(&self) -> f64 {
         let used = self.allocated_memory.load(Ordering::Relaxed) as f64;
         let total = self.max_memory as f64;
+        if total == 0.0 {
+            return 0.0;
+        }
         (used / total) * 100.0
     }
 

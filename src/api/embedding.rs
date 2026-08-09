@@ -25,7 +25,7 @@ use crate::domain::{
     ModelSwitchRequest, ModelSwitchResponse, SimilarityRequest, SimilarityResponse,
 };
 use crate::error::VecboostError;
-use crate::module_registry::{CacheModule, EmbeddingModule, RateLimitModule};
+use crate::module_registry::{CacheModule, EmbeddingModule, RateLimitModule, RerankModule};
 use crate::utils::{AggregationMode, PathValidator};
 use std::path::PathBuf;
 
@@ -227,6 +227,23 @@ async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
         max_text_length_from_kit(&st.kit),
     )
     .map_err(to_api_error)?;
+
+    // Pipeline 启用时，通过流水线处理请求
+    #[cfg(feature = "http")]
+    {
+        let pipeline_enabled = st
+            .kit
+            .config::<crate::module_registry::PipelineEnabled>()
+            .map(|c| c.0)
+            .unwrap_or(false);
+        if pipeline_enabled {
+            let result = crate::pipeline::handle_pipeline_request(st.clone(), req, "api".to_string())
+                .await
+                .map_err(to_api_error)?;
+            return Ok(result.0);
+        }
+    }
+
     let svc = st
         .kit
         .require::<EmbeddingModule>()
@@ -373,6 +390,11 @@ async fn health_handler() -> Result<serde_json::Value, ApiError> {
     if let Ok(status) = st.kit.health_check::<EmbeddingModule>() {
         if !status.is_healthy() {
             unhealthy_modules.push(format!("embedding: {:?}", status));
+        }
+    }
+    if let Ok(status) = st.kit.health_check::<RerankModule>() {
+        if !status.is_healthy() {
+            unhealthy_modules.push(format!("rerank: {:?}", status));
         }
     }
     if let Ok(status) = st.kit.health_check::<RateLimitModule>() {

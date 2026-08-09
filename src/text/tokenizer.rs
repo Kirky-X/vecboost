@@ -824,7 +824,8 @@ impl Tokenizer {
     }
 
     fn wordpiece_tokenize(&self, text: &str) -> Vec<String> {
-        let re = Regex::new(r"\w+|[^\w\s]+").unwrap();
+        static WORDPIECE_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        let re = WORDPIECE_RE.get_or_init(|| Regex::new(r"\w+|[^\w\s]+").unwrap());
         re.find_iter(text)
             .map(|m| m.as_str().to_lowercase())
             .collect()
@@ -843,7 +844,7 @@ impl Tokenizer {
                 "UTF-8 encoding validation failed at byte {} (value 0x{:02x}): {}. \
                 The input contains invalid or incomplete UTF-8 sequences.",
                 utf8_result.invalid_byte_position.unwrap_or(0),
-                utf8_result.invalid_byte_position.unwrap_or(0),
+                utf8_result.invalid_byte_value.unwrap_or(0),
                 utf8_result
                     .error_message
                     .unwrap_or_else(|| "Unknown UTF-8 error".to_string())

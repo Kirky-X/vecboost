@@ -5,11 +5,11 @@
 
 use crate::VecboostState;
 use crate::audit::AuditLogger;
-use crate::auth::{GarrisonCsrfConfig, GarrisonUtil, User};
+use crate::auth::{GarrisonUtil, User};
 use crate::config::app::AuthConfig;
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode},
+    http::{HeaderMap, StatusCode},
     middleware::Next,
     response::Response,
 };
@@ -115,9 +115,10 @@ pub async fn auth_middleware(
             let mut request = request;
             request.extensions_mut().insert(AuthContext {
                 user,
-                token,
+                token: token.clone(),
             });
-            Ok(next.run(request).await)
+            // 设置 task_local token，使下游 handler 可使用 GarrisonUtil::has_permission/has_role
+            Ok(garrison::stp::with_current_token(token, next.run(request)).await)
         }
         _ => {
             if let Some(ref logger) = audit_logger {
@@ -147,39 +148,46 @@ pub async fn optional_auth_middleware(
             user,
             token: token.to_string(),
         });
+        // 设置 task_local token，使下游 handler 可使用 GarrisonUtil 权限查询
+        return garrison::stp::with_current_token(token.to_string(), next.run(request)).await;
     }
 
     next.run(request).await
 }
 
+/// 权限校验中间件 — 委托 garrison `GarrisonUtil::has_permission()`。
+///
+/// 需要 `auth_middleware` 先设置 task_local token（已通过 `with_current_token` 完成）。
 pub async fn require_permission_middleware(
     permission: &'static str,
-    // State(audit_logger): State<Arc<AuditLogger>>,
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let auth_context = request
+    // 确保已认证
+    let _auth_context = request
         .extensions()
         .get::<AuthContext>()
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    if auth_context.user.has_permission(permission) {
-        Ok(next.run(request).await)
-    } else {
-        Err(StatusCode::FORBIDDEN)
+    match GarrisonUtil::has_permission(permission).await {
+        Ok(true) => Ok(next.run(request).await),
+        _ => Err(StatusCode::FORBIDDEN),
     }
 }
 
+/// 角色校验中间件 — 委托 garrison `GarrisonUtil::has_role()`。
+///
+/// 需要 `auth_middleware` 先设置 task_local token（已通过 `with_current_token` 完成）。
 pub async fn require_role_middleware(request: Request, next: Next) -> Result<Response, StatusCode> {
-    let auth_context = request
+    // 确保已认证
+    let _auth_context = request
         .extensions()
         .get::<AuthContext>()
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    if auth_context.user.role == "admin" {
-        Ok(next.run(request).await)
-    } else {
-        Err(StatusCode::FORBIDDEN)
+    match GarrisonUtil::has_role("admin").await {
+        Ok(true) => Ok(next.run(request).await),
+        _ => Err(StatusCode::FORBIDDEN),
     }
 }
 
@@ -192,7 +200,7 @@ pub async fn require_role_middleware(request: Request, next: Next) -> Result<Res
 /// 应用到 `/api/v1/auth/login`、`/api/v1/auth/refresh`、`/api/v1/auth/logout`
 /// 和 `/api/v1/auth/me` 等认证端点,防止暴力破解和 token 枚举攻击。
 ///
-/// 限流维度:`Global` + `Ip`(用户尚未认证时不使用 `User` 维度)。
+/// 通过 limiteron Governor 的 RequestContext 驱动限流。
 /// 白名单内的 IP 跳过限流。限流未启用时直接放行。
 pub async fn auth_rate_limit_middleware(
     State(state): State<VecboostState>,
@@ -231,7 +239,7 @@ pub async fn auth_rate_limit_middleware(
         return Ok(next.run(request).await);
     }
 
-    // 检查 Global + Ip 维度限流
+    // 通过 Governor 检查限流（规则匹配 + 封禁 + 熔断）
     let rate_limiter = state
         .kit
         .require::<crate::module_registry::RateLimitModule>()
@@ -240,12 +248,13 @@ pub async fn auth_rate_limit_middleware(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let allowed = rate_limiter
-        .check_rate_limit(vec![
-            crate::rate_limit::Dimension::Global,
-            crate::rate_limit::Dimension::Ip(ip.clone()),
-        ])
-        .await;
+    let context = crate::rate_limit::RequestContext {
+        client_ip: Some(ip.clone()),
+        path: request.uri().path().to_string(),
+        method: request.method().to_string(),
+        ..Default::default()
+    };
+    let allowed = rate_limiter.check_rate_limit(&context).await;
 
     // 记录限流决策指标
     if let Ok(prom_collector) = state.kit.require::<crate::module_registry::PrometheusCollectorModule>() {
@@ -266,135 +275,4 @@ pub async fn auth_rate_limit_middleware(
     Ok(next.run(request).await)
 }
 
-// ============================================================================
-// CSRF Protection Middleware
-// ============================================================================
 
-/// CSRF Origin Validation Middleware (garrison 集成)
-///
-/// 对状态变更请求验证 Origin header。使用 garrison `GarrisonCsrfConfig` 配置。
-pub async fn csrf_origin_middleware(
-    State(_csrf_config): State<Arc<GarrisonCsrfConfig>>,
-    request: Request,
-    next: Next,
-) -> Result<Response, StatusCode> {
-    // 仅对状态变更方法执行校验
-    if !requires_csrf_protection(request.method()) {
-        return Ok(next.run(request).await);
-    }
-
-    let uri = request.uri().to_string();
-
-    // 提取并验证 Origin header
-    let origin = request
-        .headers()
-        .get("origin")
-        .and_then(|h| h.to_str().ok())
-        .ok_or_else(|| {
-            log::warn!("Missing Origin header for {}", uri);
-            StatusCode::FORBIDDEN
-        })?;
-
-    log::debug!("CSRF origin validation passed for origin '{}' on {}", origin, uri);
-
-    Ok(next.run(request).await)
-}
-
-/// CSRF Token Validation Middleware (garrison 集成)
-///
-/// 对状态变更请求验证 CSRF token。使用 garrison `GarrisonCsrfConfig` 配置。
-pub async fn csrf_middleware(
-    State(_csrf_config): State<Arc<GarrisonCsrfConfig>>,
-    request: Request,
-    next: Next,
-) -> Result<Response, StatusCode> {
-    if !requires_csrf_protection(request.method()) {
-        return Ok(next.run(request).await);
-    }
-
-    let uri = request.uri().to_string();
-
-    // 从 header 提取 CSRF token
-    let _csrf_token = request
-        .headers()
-        .get(&GarrisonCsrfConfig::default().header_name)
-        .and_then(|h| h.to_str().ok())
-        .ok_or_else(|| {
-            log::warn!("Missing CSRF token for request to {}", uri);
-            StatusCode::BAD_REQUEST
-        })?;
-
-    // TODO: 委托 garrison CSRF token 校验
-    log::debug!("CSRF token validation passed for {}", uri);
-    Ok(next.run(request).await)
-}
-
-/// Combined CSRF Protection Middleware (garrison 集成)
-///
-/// 同时执行 Origin 验证和 CSRF token 验证。
-pub async fn csrf_combined_middleware(
-    State(csrf_config): State<Arc<GarrisonCsrfConfig>>,
-    request: Request,
-    next: Next,
-) -> Result<Response, StatusCode> {
-    if !requires_csrf_protection(request.method()) {
-        return Ok(next.run(request).await);
-    }
-
-    let uri = request.uri().to_string();
-    log::debug!("CSRF combined validation passed for {}", uri);
-
-    // 委托给 garrison CSRF 校验（后续完善）
-    let _ = &csrf_config;
-    Ok(next.run(request).await)
-}
-
-/// 判断 HTTP 方法是否需要 CSRF 保护（状态变更方法）。
-fn requires_csrf_protection(method: &Method) -> bool {
-    matches!(
-        *method,
-        Method::POST | Method::PUT | Method::DELETE | Method::PATCH
-    )
-}
-
-/// CORS Configuration Helper for CSRF Protection
-///
-/// This function creates a CORS configuration that works well with
-/// CSRF Origin validation middleware.
-pub fn create_csrf_cors(allowed_origins: Vec<String>) -> tower_http::cors::CorsLayer {
-    use axum::http::header;
-    use tower_http::cors::{Any, CorsLayer};
-
-    let allowed_origins: Vec<HeaderValue> = allowed_origins
-        .into_iter()
-        .filter_map(|origin| origin.parse().ok())
-        .collect();
-
-    if allowed_origins.is_empty() {
-        CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods([
-                Method::GET,
-                Method::POST,
-                Method::PUT,
-                Method::DELETE,
-                Method::PATCH,
-            ])
-            .allow_headers(Any)
-            .allow_credentials(true)
-            .expose_headers([header::CONTENT_TYPE])
-    } else {
-        CorsLayer::new()
-            .allow_origin(allowed_origins)
-            .allow_methods([
-                Method::GET,
-                Method::POST,
-                Method::PUT,
-                Method::DELETE,
-                Method::PATCH,
-            ])
-            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
-            .allow_credentials(true)
-            .expose_headers([header::CONTENT_TYPE])
-    }
-}

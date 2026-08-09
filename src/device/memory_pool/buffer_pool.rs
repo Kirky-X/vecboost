@@ -228,11 +228,14 @@ impl BufferPool {
         }
     }
 
-    /// 清空池
+    /// 清空池并重置统计信息
     pub fn clear(&mut self) {
         info!("Clearing buffer pool...");
         self.text_buffers.clear();
         self.vector_buffers.clear();
+        // Reset pool size counters but preserve cumulative stats (allocations, hits, misses)
+        self.stats.current_text_pool_size = 0;
+        self.stats.current_vector_pool_size = 0;
         info!("Buffer pool cleared");
     }
 }

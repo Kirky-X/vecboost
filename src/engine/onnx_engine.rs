@@ -36,6 +36,7 @@ pub struct OnnxEngine {
     fallback_lock: Arc<Mutex<()>>, // 保护降级过程的互斥锁
     device_type: DeviceType,
     supports_cuda: bool,
+    model_name: String,
 }
 
 impl OnnxEngine {
@@ -240,6 +241,7 @@ impl OnnxEngine {
             fallback_lock: Arc::new(Mutex::new(())),
             device_type,
             supports_cuda,
+            model_name: config.name.clone(),
         })
     }
 
@@ -249,6 +251,10 @@ impl OnnxEngine {
 
     pub fn device_type(&self) -> DeviceType {
         self.device_type.clone()
+    }
+
+    pub fn get_model_name(&self) -> &str {
+        &self.model_name
     }
 
     pub fn is_fallback_triggered(&self) -> bool {

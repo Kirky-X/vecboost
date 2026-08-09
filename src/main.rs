@@ -12,6 +12,7 @@ use trait_kit::prelude::{AsyncShutdownCoordinator, BuildObserver, ShutdownPhase}
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use vecboost::AppConfig;
 use vecboost::module_registry::RateLimitModule;
+use vecboost::logger::LoggerModule;
 #[cfg(feature = "auth")]
 use vecboost::module_registry::{
     AuthModule, CsrfConfigModule,
@@ -26,14 +27,14 @@ use vecboost::{
         ConfigWatcherModule, DbConfig, DbModule, EmbeddingModule, IpWhitelistModule,
         MetricsCollectorModule, PipelineEnabled, PipelineQueueModule,
         PriorityCalculatorModule, PrometheusCollectorModule, RateLimitEnabled,
-        ResponseChannelModule, WorkerManagerModule,
+        RerankModule, ResponseChannelModule, WorkerManagerModule,
     },
     pipeline::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
         WorkerManager,
     },
     rate_limit::LimiteronAdapter,
-    service::embedding::EmbeddingService,
+    service::{embedding::EmbeddingService, rerank::RerankService},
 };
 
 #[cfg(feature = "cli")]
@@ -46,7 +47,7 @@ use vecboost::db::{DbPool, init_schema};
 use vecboost::{
     auth::{
         GarrisonHandle, GarrisonCsrfConfig, VecBoostInterface,
-        map_auth_config_to_garrison,
+        garrison_csrf_middleware, map_auth_config_to_garrison,
     },
 };
 
@@ -88,15 +89,17 @@ impl BuildObserver for LoggingObserver {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 日志初始化:inklog 完全接管日志输出(通过 log crate 宏 + inklog LogLogger 适配器)
-    let _logger_manager = inklog::LoggerManager::builder()
-        .level("info")
-        .console(true)
-        .file("logs/vecboost.log")
-        .file_compress(true) // T021: zstd compression for log files (inklog compression feature)
-        .build()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to initialize inklog logger: {}", e))?;
-    // _logger_manager 保持存活至 main 结束,避免 LoggerManager shutdown 导致日志停止
+    let logger_manager = Arc::new(
+        inklog::LoggerManager::builder()
+            .level("info")
+            .console(true)
+            .file("logs/vecboost.log")
+            .file_compress(true) // T021: zstd compression for log files (inklog compression feature)
+            .build()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize inklog logger: {}", e))?,
+    );
+    // logger_manager 通过 Arc 注入 kit，由 LoggerModule 管理生命周期，保持存活至 main 结束
 
     log::info!("Starting Rust Embedding Service...");
 
@@ -193,12 +196,17 @@ async fn main() -> anyhow::Result<()> {
 
     let service = if cache_enabled && cache_size > 0 {
         log::info!("KV Cache enabled with size: {}", cache_size);
-        EmbeddingService::with_cache(engine, Some(model_config), cache_size)
+        EmbeddingService::with_cache(engine.clone(), Some(model_config.clone()), cache_size)
     } else {
         log::info!("KV Cache disabled");
-        EmbeddingService::new(engine, Some(model_config))
+        EmbeddingService::new(engine.clone(), Some(model_config.clone()))
     };
     let service = Arc::new(RwLock::new(service));
+
+    // Rerank service — reuses the same engine
+    let rerank_service = Arc::new(RwLock::new(
+        RerankService::new(engine.clone(), Some(model_config)),
+    ));
 
     // MCP stdio run-mode: when `--mcp` is passed, serve the Model Context Protocol
     // over stdio and do NOT start the HTTP/gRPC servers (stdout must stay clean for
@@ -209,11 +217,15 @@ async fn main() -> anyhow::Result<()> {
         use sdforge::rmcp::{ServiceExt, transport::io::stdio};
 
         log::info!("Starting VecBoost MCP server over stdio");
-        // 最小 kit：仅 EmbeddingModule，供 forge handler 通过 state().kit.require 访问
+        // kit：EmbeddingModule + RerankModule，供 forge handler 通过 state().kit.require 访问
         let mut kit = trait_kit::AsyncKit::new();
         kit.set_config(service.clone());
+        kit.set_config(rerank_service.clone());
+        kit.set_config(config.rerank.clone());
         kit.register::<EmbeddingModule>()
             .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
+        kit.register::<RerankModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
         let kit = kit
             .build()
             .await
@@ -241,11 +253,15 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or(false);
 
         if is_cli {
-            // 最小 kit：仅 EmbeddingModule，供 forge handler 通过 state().kit.require 访问
+            // kit：EmbeddingModule + RerankModule，供 forge handler 通过 state().kit.require 访问
             let mut kit = trait_kit::AsyncKit::new();
             kit.set_config(service.clone());
+            kit.set_config(rerank_service.clone());
+            kit.set_config(config.rerank.clone());
             kit.register::<EmbeddingModule>()
                 .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
+            kit.register::<RerankModule>()
+                .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
             let kit = kit
                 .build()
                 .await
@@ -284,7 +300,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 创建限流器
-    let rate_limiter = Arc::new(LimiteronAdapter::with_defaults());
+    let rate_limiter = Arc::new(LimiteronAdapter::with_defaults().await);
 
     // Garrison 认证初始化（替代手写 JWT/UserStore/CSRF）
     #[cfg(feature = "auth")]
@@ -451,6 +467,8 @@ async fn main() -> anyhow::Result<()> {
 
     // 注入预构建的能力对象（kit 是 single source of truth）
     kit.set_config(service.clone());
+    kit.set_config(rerank_service.clone());
+    kit.set_config(config.rerank.clone());
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {
         enabled: config.embedding.cache_enabled,
@@ -481,6 +499,8 @@ async fn main() -> anyhow::Result<()> {
     kit.set_config(response_channel.clone());
     kit.set_config(priority_calculator.clone());
     kit.set_config(worker_manager.clone());
+    // LoggerModule: Arc<inklog::LoggerManager> 能力注入
+    kit.set_config(logger_manager.clone());
     #[cfg(feature = "auth")]
     {
         kit.set_config(garrison_handle.clone());
@@ -492,6 +512,8 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RateLimitModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RateLimitModule: {}", e))?;
+    kit.register::<RerankModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
     kit.register::<CacheModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register CacheModule: {}", e))?;
     kit.register::<DbModule>()
@@ -518,6 +540,8 @@ async fn main() -> anyhow::Result<()> {
     kit.set_config(watcher_guard);
     kit.register::<ConfigWatcherModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register ConfigWatcherModule: {}", e))?;
+    kit.register::<LoggerModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register LoggerModule: {}", e))?;
     #[cfg(feature = "auth")]
     {
         kit.register::<AuthModule>()
@@ -528,10 +552,12 @@ async fn main() -> anyhow::Result<()> {
 
     // T012-T016: Register lifecycle and health check for key modules
     kit.register_lifecycle::<EmbeddingModule>();
+    kit.register_lifecycle::<RerankModule>();
     kit.register_lifecycle::<RateLimitModule>();
     kit.register_lifecycle::<AuditModule>();
     kit.register_lifecycle::<ConfigWatcherModule>();
     kit.register_health_check::<EmbeddingModule>();
+    kit.register_health_check::<RerankModule>();
     kit.register_health_check::<RateLimitModule>();
     kit.register_health_check::<CacheModule>();
 
@@ -649,7 +675,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // CSRF 保护（条件性应用：auth 启用且 csrf 启用时）
-    // T008: 中间件内部将委托 garrison CSRF 校验
+    // 直接使用 garrison garrison_csrf_middleware（包含 Origin + Token 双重校验）
     #[cfg(feature = "auth")]
     let app = if config.auth.enabled && config.auth.csrf.enabled {
         use axum::middleware::from_fn_with_state;
@@ -660,7 +686,7 @@ async fn main() -> anyhow::Result<()> {
         if let Some(cfg) = csrf_config {
             app.layer(from_fn_with_state(
                 cfg,
-                vecboost::auth::csrf_origin_middleware,
+                garrison_csrf_middleware,
             ))
         } else {
             app
@@ -698,16 +724,26 @@ async fn main() -> anyhow::Result<()> {
 
     // T018: Signal-aware graceful shutdown (SIGINT + SIGTERM)
     let signal = async {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                log::info!("Received SIGINT, initiating graceful shutdown");
+        #[cfg(unix)]
+        {
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("failed to install SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    log::info!("Received SIGINT, initiating graceful shutdown");
+                }
+                _ = sigterm.recv() => {
+                    log::info!("Received SIGTERM, initiating graceful shutdown");
+                }
             }
-            _ = sigterm.recv() => {
-                log::info!("Received SIGTERM, initiating graceful shutdown");
-            }
+        }
+        #[cfg(not(unix))]
+        {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to install CTRL-C handler");
+            log::info!("Received CTRL-C, initiating graceful shutdown");
         }
     };
 
@@ -780,7 +816,8 @@ async fn main() -> anyhow::Result<()> {
         // vecboost's grpc feature pulls in). Uses default config (100 burst, 10 req/s).
         // `new()` panics only on invalid default config (should never happen).
         let rate_limiter: Option<std::sync::Arc<dyn sdforge::security::ratelimit::RateLimiter>> = {
-            let limiter = SdforgeLimiteronAdapter::new().await;
+            let limiter = SdforgeLimiteronAdapter::new().await
+                .map_err(|e| anyhow::anyhow!("Failed to create gRPC rate limiter: {}", e))?;
             log::info!(
                 "gRPC rate_limiter enabled (sdforge LimiteronAdapter, default config: 100 burst / 10 req/s)"
             );

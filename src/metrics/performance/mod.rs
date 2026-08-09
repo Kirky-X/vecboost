@@ -37,6 +37,12 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
         config: PerformanceTestConfig,
         text_generator: impl Fn(usize) -> String + Send + Sync + 'static,
     ) -> Result<ThroughputResult, VecboostError> {
+        if config.concurrent_requests == 0 {
+            return Err(VecboostError::ConfigError(
+                "concurrent_requests must be greater than 0".to_string(),
+            ));
+        }
+
         let start_time = Instant::now();
         let total_requests = Arc::new(AtomicUsize::new(0));
         let successful_requests = Arc::new(AtomicUsize::new(0));

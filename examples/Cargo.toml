@@ -43,7 +43,7 @@ onnx = ["vecboost/onnx"]
 metal = ["vecboost/metal"]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Binaries — 27 个示例
+# Binaries — 36 个示例
 # ─────────────────────────────────────────────────────────────────────────────
 
 # download_model — 模型下载工具
@@ -72,7 +72,7 @@ name = "gpu_performance_comparison"
 path = "gpu/performance_comparison.rs"
 required-features = ["cuda", "onnx"]
 
-# basic — 基础用法(MockEngine + api::embed/embed_batch/compute_similarity)
+# basic — 基础用法(MockEngine + api::embed/embed_batch/compute_similarity/rerank)
 [[bin]]
 name = "embed"
 path = "basic/embed.rs"
@@ -84,6 +84,10 @@ path = "basic/batch.rs"
 [[bin]]
 name = "similarity"
 path = "basic/similarity.rs"
+
+[[bin]]
+name = "rerank"
+path = "basic/rerank.rs"
 
 # engine — Candle/Onnx 引擎初始化与运行时切换
 [[bin]]
@@ -112,6 +116,10 @@ path = "http/batch_api.rs"
 name = "similarity_api"
 path = "http/similarity_api.rs"
 
+[[bin]]
+name = "rerank_api"
+path = "http/rerank_api.rs"
+
 # cli — 命令行子进程调用
 [[bin]]
 name = "embed_cli"
@@ -120,6 +128,10 @@ path = "cli/embed_cli.rs"
 [[bin]]
 name = "batch_cli"
 path = "cli/batch_cli.rs"
+
+[[bin]]
+name = "rerank_cli"
+path = "cli/rerank_cli.rs"
 
 # auth — JWT/CSRF/Refresh 流程
 [[bin]]
@@ -175,3 +187,33 @@ path = "monitoring/metrics.rs"
 [[bin]]
 name = "performance"
 path = "monitoring/performance.rs"
+
+# library — VecBoostLibrary SDK（library 模式，异步+同步 API）
+[[bin]]
+name = "library_usage"
+path = "library/library_usage.rs"
+
+# semantic-cache — 语义缓存（trigram Jaccard 三级查询策略）
+[[bin]]
+name = "semantic_cache_demo"
+path = "semantic-cache/semantic_cache_demo.rs"
+
+# batch-scheduling — 动态批量调度（自适应批量调整 + 性能统计）
+[[bin]]
+name = "batch_scheduler"
+path = "batch-scheduling/batch_scheduler.rs"
+
+# memory-paging — GPU 显存分页管理（LRU-K 驱逐 + 预取）
+[[bin]]
+name = "memory_paging"
+path = "memory-paging/memory_paging.rs"
+
+# security — 密钥管理、盐值生成、敏感数据脱敏
+[[bin]]
+name = "security_demo"
+path = "security/security_demo.rs"
+
+# audit — 审计日志（异步批量写入 + 文件轮转）
+[[bin]]
+name = "audit_demo"
+path = "audit/audit_demo.rs"

@@ -173,7 +173,12 @@ impl ContinuousBatchLoop {
         // 提取文本
         let texts: Vec<String> = batch
             .iter()
-            .map(|req| req.embed_request.text.clone())
+            .map(|req| {
+                match &req.request {
+                    crate::pipeline::ServiceRequest::Embed(embed_req) => embed_req.text.clone(),
+                    crate::pipeline::ServiceRequest::Rerank(_) => String::new(), // rerank not handled in batch embed
+                }
+            })
             .collect();
 
         // 调用推理服务（read lock 足够，embed_batch 是 &self 方法）
@@ -284,10 +289,10 @@ mod tests {
         let (tx, rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: id.to_string(),
-            embed_request: EmbedRequest {
+            request: crate::pipeline::ServiceRequest::Embed(EmbedRequest {
                 text: format!("test text {}", id),
                 normalize: Some(true),
-            },
+            }),
             priority,
             submitted_at: Instant::now(),
             timeout,

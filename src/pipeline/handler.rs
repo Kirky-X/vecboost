@@ -50,7 +50,7 @@ pub async fn handle_pipeline_request(
 
     let queued_request = crate::pipeline::QueuedRequest {
         request_id: request_id.clone(),
-        embed_request: req,
+        request: crate::pipeline::ServiceRequest::Embed(req),
         priority,
         submitted_at: std::time::Instant::now(),
         timeout: Duration::from_secs(30),
@@ -159,7 +159,8 @@ mod tests {
         queue_capacity: usize,
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
     ) -> VecboostState {
-        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine.clone(), None)));
+        let rerank_service = Arc::new(RwLock::new(crate::service::rerank::RerankService::new(engine, None)));
         let queue = Arc::new(PriorityRequestQueue::new(queue_capacity));
         let response_channel = Arc::new(ResponseChannel::new());
         let priority_calculator = Arc::new(PriorityCalculator::new(PriorityConfig::default()));
@@ -169,10 +170,11 @@ mod tests {
             WorkerConfig::default(),
             Arc::clone(&service),
         ));
-        let rate_limiter = Arc::new(LimiteronAdapter::with_defaults());
+        let rate_limiter = Arc::new(LimiteronAdapter::with_defaults().await);
 
         let mut kit = trait_kit::AsyncKit::new();
         kit.set_config(service.clone());
+        kit.set_config(rerank_service);
         kit.set_config(rate_limiter.clone());
         kit.set_config(queue.clone());
         kit.set_config(response_channel.clone());
@@ -190,6 +192,7 @@ mod tests {
         kit.set_config(None::<Arc<crate::audit::AuditLogger>>);
         kit.set_config(None::<Arc<crate::metrics::InferenceCollector>>);
         kit.set_config(None::<Arc<crate::metrics::PrometheusCollector>>);
+        kit.set_config(crate::RerankConfig::default());
         #[cfg(feature = "auth")]
         {
             kit.set_config(Option::<Arc<crate::auth::GarrisonHandle>>::None);
@@ -197,6 +200,8 @@ mod tests {
         }
 
         kit.register::<crate::module_registry::EmbeddingModule>()
+            .unwrap();
+        kit.register::<crate::module_registry::RerankModule>()
             .unwrap();
         kit.register::<crate::module_registry::RateLimitModule>()
             .unwrap();
@@ -256,7 +261,7 @@ mod tests {
                 if let Some(req) = queue.dequeue().await {
                     let request_id = req.request_id.clone();
                     let service_guard = service.read().await;
-                    let result = service_guard.process_text(req.embed_request, None).await;
+                    let result = service_guard.process_text(req.request.into_embed().expect("expected embed request"), None).await;
                     drop(service_guard);
                     response_channel.complete(request_id, result).await;
                     return;
@@ -327,7 +332,7 @@ mod tests {
                 if let Some(req) = queue.dequeue().await {
                     let request_id = req.request_id.clone();
                     let service_guard = service.read().await;
-                    let result = service_guard.process_text(req.embed_request, None).await;
+                    let result = service_guard.process_text(req.request.into_embed().expect("expected embed request"), None).await;
                     drop(service_guard);
                     response_channel.complete(request_id, result).await;
                     return;
@@ -447,7 +452,7 @@ mod tests {
                 if let Some(req) = queue.dequeue().await {
                     let request_id = req.request_id.clone();
                     let service_guard = service.read().await;
-                    let result = service_guard.process_text(req.embed_request, None).await;
+                    let result = service_guard.process_text(req.request.into_embed().expect("expected embed request"), None).await;
                     drop(service_guard);
                     response_channel.complete(request_id, result).await;
                     return;
@@ -497,7 +502,7 @@ mod tests {
                     if let Some(req) = queue.dequeue().await {
                         let request_id = req.request_id.clone();
                         let service_guard = service.read().await;
-                        let result = service_guard.process_text(req.embed_request, None).await;
+                        let result = service_guard.process_text(req.request.into_embed().expect("expected embed request"), None).await;
                         drop(service_guard);
                         response_channel.complete(request_id, result).await;
                         return;
@@ -548,7 +553,7 @@ mod tests {
                 if let Some(req) = queue.dequeue().await {
                     let request_id = req.request_id.clone();
                     let service_guard = service.read().await;
-                    let result = service_guard.process_text(req.embed_request, None).await;
+                    let result = service_guard.process_text(req.request.into_embed().expect("expected embed request"), None).await;
                     drop(service_guard);
                     response_channel.complete(request_id, result).await;
                     return;
@@ -599,7 +604,7 @@ mod tests {
                 if let Some(req) = queue.dequeue().await {
                     let request_id = req.request_id.clone();
                     let service_guard = service.read().await;
-                    let result = service_guard.process_text(req.embed_request, None).await;
+                    let result = service_guard.process_text(req.request.into_embed().expect("expected embed request"), None).await;
                     drop(service_guard);
                     response_channel.complete(request_id, result).await;
                     return;
@@ -757,7 +762,7 @@ mod tests {
                 if let Some(req) = queue.dequeue().await {
                     let request_id = req.request_id.clone();
                     let service_guard = service.read().await;
-                    let result = service_guard.process_text(req.embed_request, None).await;
+                    let result = service_guard.process_text(req.request.into_embed().expect("expected embed request"), None).await;
                     drop(service_guard);
                     response_channel.complete(request_id, result).await;
                     return;
@@ -806,7 +811,7 @@ mod tests {
                 if let Some(req) = queue.dequeue().await {
                     let request_id = req.request_id.clone();
                     let service_guard = service.read().await;
-                    let result = service_guard.process_text(req.embed_request, None).await;
+                    let result = service_guard.process_text(req.request.into_embed().expect("expected embed request"), None).await;
                     drop(service_guard);
                     response_channel.complete(request_id, result).await;
                     return;
@@ -856,7 +861,7 @@ mod tests {
                     if let Some(req) = queue.dequeue().await {
                         let request_id = req.request_id.clone();
                         let service_guard = service.read().await;
-                        let result = service_guard.process_text(req.embed_request, None).await;
+                        let result = service_guard.process_text(req.request.into_embed().expect("expected embed request"), None).await;
                         drop(service_guard);
                         response_channel.complete(request_id, result).await;
                         return;
@@ -906,7 +911,7 @@ mod tests {
                     ids.push(req.request_id.clone());
                     let request_id = req.request_id.clone();
                     let service_guard = service.read().await;
-                    let result = service_guard.process_text(req.embed_request, None).await;
+                    let result = service_guard.process_text(req.request.into_embed().expect("expected embed request"), None).await;
                     drop(service_guard);
                     response_channel.complete(request_id, result).await;
                     if ids.len() >= 2 {
@@ -973,7 +978,7 @@ mod tests {
                 if let Some(req) = queue.dequeue().await {
                     let request_id = req.request_id.clone();
                     let service_guard = service.read().await;
-                    let result = service_guard.process_text(req.embed_request, None).await;
+                    let result = service_guard.process_text(req.request.into_embed().expect("expected embed request"), None).await;
                     drop(service_guard);
                     response_channel.complete(request_id, result).await;
                     return;

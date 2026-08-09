@@ -31,6 +31,7 @@
 use std::sync::Arc;
 
 use tracing_subscriber::prelude::*;
+use trait_kit::AsyncKit;
 use trait_kit::prelude::*;
 
 use super::LoggerModule;
@@ -50,11 +51,11 @@ async fn test_logger_module_build_returns_manager() {
         .expect("build_detached");
     let manager = Arc::new(manager);
 
-    let mut kit = Kit::new();
+    let mut kit = AsyncKit::new();
     kit.set_config(manager.clone());
     kit.register::<LoggerModule>().expect("register");
 
-    let kit = kit.build().expect("build");
+    let kit = kit.build().await.expect("build");
     let capability: Arc<inklog::LoggerManager> = kit.require::<LoggerModule>().expect("require");
 
     assert!(
@@ -194,12 +195,12 @@ async fn test_logger_console_output() {
 // T019 测试 5: 未注入 config 时 build 返回 Err
 // ---------------------------------------------------------------------------
 
-#[test]
-fn test_logger_module_missing_config_fails() {
-    let mut kit = Kit::new();
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_logger_module_missing_config_fails() {
+    let mut kit = AsyncKit::new();
     kit.register::<LoggerModule>().expect("register");
 
-    let result = kit.build();
+    let result = kit.build().await;
     assert!(
         result.is_err(),
         "build should fail when LoggerManager config is not injected"

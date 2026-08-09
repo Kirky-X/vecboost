@@ -6,7 +6,7 @@
 use crate::error::VecboostError;
 use async_trait::async_trait;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KeyType {
     JwtSecret,
     ApiKey,

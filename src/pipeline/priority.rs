@@ -3,7 +3,7 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-#![allow(clippy::all)]
+#![allow(clippy::collapsible_if)]
 
 use log::debug;
 use std::collections::HashMap;

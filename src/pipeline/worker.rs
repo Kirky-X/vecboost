@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, mpsc};
 
 use super::config::WorkerConfig;
-use super::queue::PriorityRequestQueue;
+use super::queue::{PriorityRequestQueue, ServiceRequest};
 use super::response_channel::ResponseChannel;
 use crate::domain::EmbedResponse;
 use crate::error::VecboostError;
@@ -23,7 +23,7 @@ use crate::service::embedding::EmbeddingService;
 pub enum WorkerTask {
     ProcessRequest {
         request_id: String,
-        embed_request: crate::domain::EmbedRequest,
+        request: ServiceRequest,
     },
     /// 优雅关闭信号
     Shutdown {
@@ -393,7 +393,14 @@ impl WorkerManager {
         embedding_service: &Arc<RwLock<EmbeddingService>>,
     ) -> Result<EmbedResponse, VecboostError> {
         // 实际调用 EmbeddingService
-        let embed_request = &request.embed_request;
+        let embed_request = match &request.request {
+            ServiceRequest::Embed(req) => req,
+            ServiceRequest::Rerank(_) => {
+                return Err(VecboostError::InternalError(
+                    "Rerank not supported by embedding worker".to_string(),
+                ));
+            }
+        };
 
         debug!("Processing embedding request");
 
@@ -979,10 +986,10 @@ mod tests {
         let (tx, _rx) = tokio::sync::oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-process-1".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: std::time::Instant::now(),
             timeout: Duration::from_secs(30),
@@ -1007,10 +1014,10 @@ mod tests {
         let (tx, _rx) = tokio::sync::oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-process-err".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: std::time::Instant::now(),
             timeout: Duration::from_secs(30),
@@ -1050,10 +1057,10 @@ mod tests {
         let (tx, _) = tokio::sync::oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-loop-1".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: std::time::Instant::now(),
             timeout: Duration::from_secs(30),
@@ -1102,10 +1109,10 @@ mod tests {
         let (tx, _) = tokio::sync::oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-loop-err".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: std::time::Instant::now(),
             timeout: Duration::from_secs(30),
@@ -1293,10 +1300,10 @@ mod tests {
             senders[0]
                 .send(WorkerTask::ProcessRequest {
                     request_id: "ignored-1".to_string(),
-                    embed_request: EmbedRequest {
+                    request: ServiceRequest::Embed(EmbedRequest {
                         text: "hello".to_string(),
                         normalize: Some(true),
-                    },
+                    }),
                 })
                 .await
                 .expect("send ProcessRequest must succeed");
@@ -1387,10 +1394,10 @@ mod tests {
             let (tx, _) = tokio::sync::oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("multi-{}", i),
-                embed_request: EmbedRequest {
+                request: ServiceRequest::Embed(EmbedRequest {
                     text: format!("text-{}", i),
                     normalize: Some(true),
-                },
+                }),
                 priority: Priority::Normal,
                 submitted_at: std::time::Instant::now(),
                 timeout: Duration::from_secs(30),
@@ -1500,10 +1507,10 @@ mod tests {
         let (tx, _rx) = tokio::sync::oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-none-norm".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello".to_string(),
                 normalize: None,
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: std::time::Instant::now(),
             timeout: Duration::from_secs(30),
@@ -1612,10 +1619,10 @@ mod tests {
             let (tx, _) = tokio::sync::oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("scale-up-{}", i),
-                embed_request: EmbedRequest {
+                request: ServiceRequest::Embed(EmbedRequest {
                     text: format!("text-{}", i),
                     normalize: Some(true),
-                },
+                }),
                 priority: Priority::Normal,
                 submitted_at: std::time::Instant::now(),
                 timeout: Duration::from_secs(30),

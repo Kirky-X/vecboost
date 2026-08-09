@@ -7,6 +7,7 @@ use crate::error::VecboostError;
 use std::path::{Path, PathBuf};
 
 /// 路径验证器，用于防止路径遍历攻击
+#[derive(Debug)]
 pub struct PathValidator {
     /// 允许的根目录白名单
     allowed_roots: Vec<PathBuf>,

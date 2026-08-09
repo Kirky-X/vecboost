@@ -3,7 +3,7 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-#![allow(clippy::all)]
+#![allow(clippy::collapsible_if)]
 
 use log::{debug, warn};
 use std::collections::{BTreeMap, VecDeque};
@@ -13,16 +13,35 @@ use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
 use super::priority::{Priority, RequestSource};
-use crate::domain::EmbedRequest;
+use crate::domain::{EmbedRequest, RerankRequest};
 use crate::error::VecboostError;
+
+/// 服务请求枚举 — 支持嵌入和重排序两种请求类型
+#[derive(Debug, Clone)]
+pub enum ServiceRequest {
+    Embed(EmbedRequest),
+    Rerank(RerankRequest),
+}
+
+impl ServiceRequest {
+    /// 提取嵌入请求，非 Embed 变体时返回错误
+    pub fn into_embed(self) -> Result<EmbedRequest, VecboostError> {
+        match self {
+            ServiceRequest::Embed(req) => Ok(req),
+            ServiceRequest::Rerank(_) => Err(VecboostError::InternalError(
+                "Expected Embed request but got Rerank".to_string(),
+            )),
+        }
+    }
+}
 
 /// 队列请求
 #[derive(Debug)]
 pub struct QueuedRequest {
     /// 请求 ID
     pub request_id: String,
-    /// 嵌入请求
-    pub embed_request: EmbedRequest,
+    /// 服务请求
+    pub request: ServiceRequest,
     /// 优先级
     pub priority: Priority,
     /// 提交时间
@@ -213,10 +232,10 @@ mod tests {
         let (tx, _rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-1".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -251,10 +270,10 @@ mod tests {
             let (tx, _rx) = oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("test-{}", i),
-                embed_request: EmbedRequest {
+                request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
                     normalize: Some(true),
-                },
+                }),
                 priority: *priority,
                 submitted_at: Instant::now(),
                 timeout: Duration::from_secs(30),
@@ -281,10 +300,10 @@ mod tests {
         let (tx1, _rx1) = oneshot::channel();
         let request1 = QueuedRequest {
             request_id: "test-1".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -297,10 +316,10 @@ mod tests {
         let (tx2, _rx2) = oneshot::channel();
         let request2 = QueuedRequest {
             request_id: "test-2".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -316,10 +335,10 @@ mod tests {
         let (tx3, _rx3) = oneshot::channel();
         let request3 = QueuedRequest {
             request_id: "test-3".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -342,10 +361,10 @@ mod tests {
             let (tx, _rx) = oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("test-{}", i),
-                embed_request: EmbedRequest {
+                request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
                     normalize: Some(true),
-                },
+                }),
                 priority: Priority::Normal,
                 submitted_at: Instant::now(),
                 timeout: Duration::from_secs(30),
@@ -373,10 +392,10 @@ mod tests {
         let (tx1, _rx1) = oneshot::channel();
         let critical_req = QueuedRequest {
             request_id: "critical-1".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Critical,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(60),
@@ -391,10 +410,10 @@ mod tests {
         let (tx2, _rx2) = oneshot::channel();
         let low_req = QueuedRequest {
             request_id: "low-1".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Low,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(60),
@@ -432,10 +451,10 @@ mod tests {
         let (tx, _rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-1".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Critical,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -455,10 +474,10 @@ mod tests {
         let (tx, _rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-1".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Low,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -479,10 +498,10 @@ mod tests {
             let (tx, _rx) = oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("test-{:?}", priority),
-                embed_request: EmbedRequest {
+                request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
                     normalize: Some(true),
-                },
+                }),
                 priority,
                 submitted_at: Instant::now(),
                 timeout: Duration::from_secs(30),
@@ -516,10 +535,10 @@ mod tests {
             let (tx, _rx) = oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("test-{}", i),
-                embed_request: EmbedRequest {
+                request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
                     normalize: Some(true),
-                },
+                }),
                 priority: Priority::Normal,
                 submitted_at: Instant::now(),
                 timeout: Duration::from_secs(30),
@@ -548,10 +567,10 @@ mod tests {
                 let (tx, _rx) = oneshot::channel();
                 let request = QueuedRequest {
                     request_id: format!("test-{:?}-{}", priority, i),
-                    embed_request: EmbedRequest {
+                    request: ServiceRequest::Embed(EmbedRequest {
                         text: "test".to_string(),
                         normalize: Some(true),
-                    },
+                    }),
                     priority,
                     submitted_at: Instant::now(),
                     timeout: Duration::from_secs(30),
@@ -583,10 +602,10 @@ mod tests {
         let (tx, _rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-1".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -620,10 +639,10 @@ mod tests {
             let (tx, _rx) = oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("test-{}", i),
-                embed_request: EmbedRequest {
+                request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
                     normalize: Some(true),
-                },
+                }),
                 priority: Priority::Normal,
                 submitted_at: Instant::now(),
                 timeout: Duration::from_secs(30),
@@ -647,10 +666,10 @@ mod tests {
         let (tx, _rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-1".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Normal,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
@@ -669,10 +688,10 @@ mod tests {
         let (tx, _rx) = oneshot::channel();
         let low_req = QueuedRequest {
             request_id: "low-1".to_string(),
-            embed_request: EmbedRequest {
+            request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
                 normalize: Some(true),
-            },
+            }),
             priority: Priority::Low,
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(60),

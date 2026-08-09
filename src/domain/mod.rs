@@ -27,7 +27,7 @@ impl FromStr for EmbedRequest {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct EmbedResponse {
     pub embedding: Vec<f32>,
@@ -212,4 +212,69 @@ pub struct ModelMetadata {
 pub struct ModelListResponse {
     pub models: Vec<ModelInfo>,
     pub total_count: usize,
+}
+
+// =============================================================================
+// Rerank 领域类型
+// =============================================================================
+
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
+pub struct RerankRequest {
+    pub query: String,
+    pub documents: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_documents: Option<bool>,
+}
+
+impl FromStr for RerankRequest {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
+pub struct RerankResult {
+    pub index: usize,
+    pub score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
+pub struct RerankResponse {
+    pub results: Vec<RerankResult>,
+    pub processing_time_ms: u128,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
+pub struct BatchRerankRequest {
+    pub queries: Vec<RerankRequest>,
+}
+
+impl FromStr for BatchRerankRequest {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
+pub struct BatchRerankResponse {
+    pub responses: Vec<RerankResponse>,
+}
+
+/// 服务响应枚举 — pipeline 调度器统一返回类型
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
+pub enum ServiceResponse {
+    Embed(EmbedResponse),
+    Rerank(RerankResponse),
 }

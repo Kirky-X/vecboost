@@ -7,7 +7,8 @@
 //!
 //! `#[forge]`-annotated functions are registered via sdforge inventory for
 //! HTTP/MCP/CLI protocol generation. Embedding handlers in `embedding.rs`,
-//! auth handlers in `auth.rs`, state singleton in `init.rs`.
+//! rerank handlers in `rerank.rs`, auth handlers in `auth.rs`,
+//! state singleton in `init.rs`.
 
 #![allow(unexpected_cfgs)]
 
@@ -15,11 +16,13 @@
 pub mod auth;
 pub mod embedding;
 pub mod init;
+pub mod rerank;
 #[cfg(test)]
 mod tests;
 
 pub use embedding::{compute_similarity, embed, embed_batch};
 pub use init::{init_state, state};
+pub use rerank::{rerank, rerank_batch};
 
 #[cfg(all(test, feature = "mcp"))]
 mod mcp_registration_tests {

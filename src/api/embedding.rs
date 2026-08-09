@@ -25,7 +25,7 @@ use crate::domain::{
     ModelSwitchRequest, ModelSwitchResponse, SimilarityRequest, SimilarityResponse,
 };
 use crate::error::VecboostError;
-use crate::module_registry::{CacheModule, EmbeddingModule, RateLimitModule};
+use crate::module_registry::{CacheModule, EmbeddingModule, RateLimitModule, RerankModule};
 use crate::utils::{AggregationMode, PathValidator};
 use std::path::PathBuf;
 
@@ -373,6 +373,11 @@ async fn health_handler() -> Result<serde_json::Value, ApiError> {
     if let Ok(status) = st.kit.health_check::<EmbeddingModule>() {
         if !status.is_healthy() {
             unhealthy_modules.push(format!("embedding: {:?}", status));
+        }
+    }
+    if let Ok(status) = st.kit.health_check::<RerankModule>() {
+        if !status.is_healthy() {
+            unhealthy_modules.push(format!("rerank: {:?}", status));
         }
     }
     if let Ok(status) = st.kit.health_check::<RateLimitModule>() {

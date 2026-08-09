@@ -18,17 +18,15 @@ export PATH="$PWD/target/release:$PATH"
 |------|------|--------|
 | `embed_cli.rs` | 单文本嵌入 | `vecboost embed --text "hello"` |
 | `batch_cli.rs` | 批量文件嵌入 | `vecboost batch --input texts.txt` |
+| `rerank_cli.rs` | 文档重排序 | `vecboost rerank --query "..." --documents docs.txt` |
 
 ## 运行方式
 
 ```bash
-# 方式一:通过 cargo run(需先在 Cargo.toml 注册 example)
-cargo run -p vecboost-examples --bin embed_cli --features cli
-cargo run -p vecboost-examples --bin batch_cli --features cli
-
-# 方式二:编译后直接运行
-cargo build --release --features cli --example embed_cli
-./target/release/examples/embed_cli
+# 方式一:通过 cargo run
+cargo run -p vecboost-examples --bin embed_cli
+cargo run -p vecboost-examples --bin batch_cli
+cargo run -p vecboost-examples --bin rerank_cli
 ```
 
 ## 所需 Feature
@@ -41,6 +39,7 @@ cargo build --release --features cli --example embed_cli
 vecboost embed --text "Hello"              # 单文本嵌入,输出 JSON
 vecboost batch --input file.txt            # 批量嵌入(每行一条文本),输出 JSON
 vecboost similarity --text1 "a" --text2 "b" # 计算余弦相似度,输出 JSON
+vecboost rerank --query "..." --documents docs.txt # 文档重排序,输出 JSON
 ```
 
 所有子命令输出 JSON 到 stdout,便于脚本化处理。

@@ -43,7 +43,7 @@ onnx = ["vecboost/onnx"]
 metal = ["vecboost/metal"]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Binaries — 27 个示例
+# Binaries — 31 个示例
 # ─────────────────────────────────────────────────────────────────────────────
 
 # download_model — 模型下载工具
@@ -72,7 +72,7 @@ name = "gpu_performance_comparison"
 path = "gpu/performance_comparison.rs"
 required-features = ["cuda", "onnx"]
 
-# basic — 基础用法(MockEngine + api::embed/embed_batch/compute_similarity)
+# basic — 基础用法(MockEngine + api::embed/embed_batch/compute_similarity/rerank)
 [[bin]]
 name = "embed"
 path = "basic/embed.rs"
@@ -84,6 +84,10 @@ path = "basic/batch.rs"
 [[bin]]
 name = "similarity"
 path = "basic/similarity.rs"
+
+[[bin]]
+name = "rerank"
+path = "basic/rerank.rs"
 
 # engine — Candle/Onnx 引擎初始化与运行时切换
 [[bin]]
@@ -112,6 +116,10 @@ path = "http/batch_api.rs"
 name = "similarity_api"
 path = "http/similarity_api.rs"
 
+[[bin]]
+name = "rerank_api"
+path = "http/rerank_api.rs"
+
 # cli — 命令行子进程调用
 [[bin]]
 name = "embed_cli"
@@ -120,6 +128,10 @@ path = "cli/embed_cli.rs"
 [[bin]]
 name = "batch_cli"
 path = "cli/batch_cli.rs"
+
+[[bin]]
+name = "rerank_cli"
+path = "cli/rerank_cli.rs"
 
 # auth — JWT/CSRF/Refresh 流程
 [[bin]]
@@ -175,3 +187,8 @@ path = "monitoring/metrics.rs"
 [[bin]]
 name = "performance"
 path = "monitoring/performance.rs"
+
+# library — VecBoostLibrary SDK（library 模式，异步+同步 API）
+[[bin]]
+name = "library_usage"
+path = "library/library_usage.rs"

@@ -514,4 +514,75 @@ mod tests {
         scheduler.set_batch_size(16).await;
         assert_eq!(scheduler.current_batch_size().await, 16);
     }
+
+    /// 延迟分布测试：测量当前调度器在不同请求模式下的 P50/P99 等待时间。
+    /// 模拟 polling loop（1ms 间隔调用 try_get_batch），记录每个请求从提交到被收集的时间。
+    #[tokio::test]
+    async fn test_current_scheduling_latency_distribution() {
+        let config = BatchConfig {
+            min_batch_size: 4,
+            max_batch_size: 32,
+            max_wait_time_ms: 50,
+            ..Default::default()
+        };
+        let scheduler = Arc::new(DynamicBatchScheduler::new(config.clone()));
+
+        let num_requests = 10;
+        let mut latencies_ms: Vec<f64> = Vec::with_capacity(num_requests);
+
+        // 逐个提交请求并测量等待时间
+        for i in 0..num_requests {
+            let submit_time = Instant::now();
+            let request = BatchRequest {
+                request_id: format!("latency-req-{}", i),
+                data: vec![format!("text-{}", i)],
+                priority: BatchPriority::Normal,
+                submitted_at: submit_time,
+            };
+            scheduler.submit_request(request).await.unwrap();
+
+            // 模拟 polling loop：每 1ms 尝试获取批次
+            loop {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                if let Some(batch) = scheduler.try_get_batch().await {
+                    let wait_ms = submit_time.elapsed().as_secs_f64() * 1000.0;
+                    latencies_ms.push(wait_ms);
+                    // 记录批次完成以释放信号量
+                    scheduler
+                        .record_batch_completion(batch.requests.len(), wait_ms)
+                        .await;
+                    break;
+                }
+                // 安全阀：最多等 200ms
+                if submit_time.elapsed() > Duration::from_millis(200) {
+                    latencies_ms.push(200.0);
+                    break;
+                }
+            }
+        }
+
+        // 统计 P50/P99
+        latencies_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let p50_idx = (latencies_ms.len() as f64 * 0.50).round() as usize;
+        let p99_idx = (latencies_ms.len() as f64 * 0.99).round() as usize;
+        let p50 = latencies_ms[p50_idx.min(latencies_ms.len() - 1)];
+        let p99 = latencies_ms[p99_idx.min(latencies_ms.len() - 1)];
+        let avg = latencies_ms.iter().sum::<f64>() / latencies_ms.len() as f64;
+
+        log::info!(
+            "Current scheduling latency distribution ({} requests): P50={:.1}ms, P99={:.1}ms, avg={:.1}ms",
+            num_requests,
+            p50,
+            p99,
+            avg
+        );
+        log::info!("Individual latencies: {:?}", latencies_ms);
+
+        // 验证：P50 应接近 max_wait_time_ms（50ms），因为当前调度器是被动凑批
+        assert!(
+            p50 >= 40.0,
+            "P50 latency should be close to max_wait_time_ms (50ms), got {:.1}ms",
+            p50
+        );
+    }
 }

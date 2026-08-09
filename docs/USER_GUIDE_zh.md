@@ -4,7 +4,7 @@
 
 **安装、配置和使用的完整说明**
 
-[![Version 0.2.0](https://img.shields.io/badge/Version-0.2.0-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002)
+[![Version 0.2.1](https://img.shields.io/badge/Version-0.2.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002)
 
 *安装、配置和使用 VecBoost 的完整说明。*
 
@@ -389,7 +389,7 @@ docker stop vecboost
 curl http://localhost:9002/health
 
 # 预期响应:
-# {"status":"healthy","version":"0.2.0",...}
+# {"status":"healthy","version":"0.2.1",...}
 ```
 
 ---
@@ -633,8 +633,8 @@ docker-compose up -d
 # 创建命名空间
 kubectl create namespace vecboost
 
-# 应用配置
-kubectl apply -f deployments/kubernetes/ -n vecboost
+# 应用配置（请替换为你的实际清单路径）
+kubectl apply -f <your-k8s-manifests>/ -n vecboost
 
 # 检查部署状态
 kubectl get pods -n vecboost
@@ -650,8 +650,8 @@ kubectl logs -f deployment/vecboost -n vecboost
 对于 GPU 工作负载:
 
 ```bash
-# 应用特定 GPU 部署
-kubectl apply -f deployments/kubernetes/gpu-deployment.yaml -n vecboost
+# 应用 GPU 部署清单（请替换为你的实际清单路径）
+kubectl apply -f <your-gpu-deployment>.yaml -n vecboost
 ```
 
 ---
@@ -662,8 +662,8 @@ kubectl apply -f deployments/kubernetes/gpu-deployment.yaml -n vecboost
 # 手动扩缩容
 kubectl scale deployment vecboost --replicas=3 -n vecboost
 
-# 或使用 HPA
-kubectl apply -f deployments/kubernetes/hpa.yaml -n vecboost
+# 或使用 HPA（请替换为你的实际 HPA 清单路径）
+kubectl apply -f <your-hpa>.yaml -n vecboost
 ```
 
 ---
@@ -674,8 +674,8 @@ kubectl apply -f deployments/kubernetes/hpa.yaml -n vecboost
 # 端口转发以进行本地访问
 kubectl port-forward -n vecboost svc/vecboost 9002:9002
 
-# 或使用 ingress
-kubectl apply -f deployments/kubernetes/ingress.yaml
+# 或使用 ingress（请替换为你的实际 ingress 清单路径）
+kubectl apply -f <your-ingress>.yaml
 ```
 
 ---
@@ -711,17 +711,17 @@ vecboost_embedding_latency_seconds_bucket{le="0.01"} 500
 
 ### Grafana 仪表板
 
-从 `deployments/grafana-dashboard.json` 导入仪表板:
+导入 VecBoost 仪表板（Grafana 仪表板配置计划中）：
 
 1. 打开 Grafana
 2. 导航到仪表板 → 导入
-3. 上传 JSON 文件
+3. 上传 JSON 文件（或配置 Prometheus 数据源后手动创建）
 
 ---
 
 ### 告警配置
 
-在 `deployments/alerts.yml` 中配置告警:
+配置 Prometheus 告警规则（示例）：
 
 ```yaml
 alerts:
@@ -932,9 +932,8 @@ free -h     # 内存
 
 - [📚 API 参考](API_REFERENCE_zh.md) - 详细 API 文档
 - [🏗️ 架构设计](ARCHITECTURE_zh.md) - 系统设计详情
-- [🤝 贡献指南](../CONTRIBUTING.md) - 如何贡献代码
 - [💻 示例代码](../examples/) - 代码示例
 
 ---
 
-> **📝 最后更新**: 2026-01-16 | **版本**: 0.2.0 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-08-09 | **版本**: 0.2.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

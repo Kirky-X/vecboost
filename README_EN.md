@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="image/vecboost.png" alt="VecBoost Logo" width="200"/>
+<img src="docs/image/vecboost.png" alt="VecBoost Logo" width="200"/>
 
 [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![GitHub release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![Rustc 1.75+](https://img.shields.io/badge/Rustc-1.75+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
 
@@ -35,12 +35,12 @@ VecBoost v0.2.0 adopts a modular ecosystem architecture composed of 7 independen
 
 | Library | Version | Purpose | Feature |
 |---------|---------|---------|---------|
-| **trait-kit** | `0.3` | Module registry & typestate dependency management (`Kit<Unbuilt> → Kit<Ready>`) | Always enabled |
-| **confers** | `0.4` | Config loading (TOML + env override + hot reload subscription) | `config` |
-| **inklog** | `0.1` | Structured logging infrastructure (console + file rotation) | `inklog` |
-| **oxcache** | `0.3` | High-performance cache backend (LRU/LFU/FIFO + TTL eviction) | `oxcache` |
+| **trait-kit** | `0.4` | Module registry & typestate dependency management (`Kit<Unbuilt> → Kit<Ready>`) | Always enabled |
+| **confers** | `0.5` | Config loading (TOML + env override + hot reload subscription) | `config` |
+| **inklog** | `0.2` | Structured logging infrastructure (console + file rotation) | `inklog` |
+| **oxcache** | `0.4` | High-performance cache backend (LRU/LFU/FIFO + TTL eviction) | `oxcache` |
 | **limiteron** | `0.2` | Token bucket rate limiter (multi-dimension independent counting) | `limiteron` |
-| **dbnexus** | `0.4` | Database persistence (SQLite/PostgreSQL + permission roles) | `db` |
+| **dbnexus** | `0.5` | Database persistence (SQLite/PostgreSQL + permission roles) | `db` |
 | **sdforge** | `0.4` | Multi-protocol interface generation (HTTP/CLI from single source) | `http`/`cli` |
 
 ```mermaid
@@ -140,10 +140,10 @@ docker run -p 9002:9002 -p 50051:50051 \
 
 | Document | Description | Link |
 |----------|-------------|------|
-| **📋 User Guide** | Detailed usage instructions, configuration, and deployment | [USER_GUIDE.md](USER_GUIDE.md) |
-| **🔌 API Reference** | Complete REST API and gRPC documentation | [API_REFERENCE.md](API_REFERENCE.md) |
-| **🏗️ Architecture** | System design, components, and data flow | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| **🤝 Contributing** | Contribution guidelines and best practices | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) |
+| **📋 User Guide** | Detailed usage instructions, configuration, and deployment | [USER_GUIDE_zh.md](docs/USER_GUIDE_zh.md) (Chinese) |
+| **🔌 API Reference** | Complete REST API and gRPC documentation | [API_REFERENCE_zh.md](docs/API_REFERENCE_zh.md) (Chinese) |
+| **🏗️ Architecture** | System design, components, and data flow | [ARCHITECTURE.md](docs/ARCHITECTURE.md) / [ARCHITECTURE_zh.md](docs/ARCHITECTURE_zh.md) |
+| **🤝 Contributing** | Contribution guidelines and best practices | Planned |
 
 ## 🔌 API Usage
 
@@ -329,7 +329,7 @@ VecBoost uses feature-gated builds to enable modules on demand:
 | `openapi` | - | OpenAPI/Swagger UI documentation | utoipa, utoipa-swagger-ui |
 | `db` | - | dbnexus database persistence (SQLite) | dbnexus, sea-orm |
 | `postgres` | - | PostgreSQL support (includes db) | dbnexus |
-| `auth` | - | JWT auth + AES-256 encryption | jsonwebtoken, argon2, aes-gcm |
+| `auth` | - | JWT auth + AES-256 encryption | garrison, aes-gcm |
 | `redis` | - | Redis cache backend | redis |
 | `cuda` | - | NVIDIA CUDA GPU acceleration | candle-core/cuda |
 | `metal` | - | Apple Silicon Metal GPU | candle-core/metal |
@@ -501,11 +501,12 @@ vecboost/
 │   ├── device/         # Device management (CPU, CUDA, Metal, ROCm)
 │   ├── domain/         # Domain models (request/response types)
 │   ├── engine/         # Inference engines (Candle/ONNX)
-│   ├── error/          # VecboostError unified error type
+│   ├── error.rs        # VecboostError unified error type
 │   ├── logger/         # inklog logging infrastructure
 │   ├── metrics/        # Prometheus metrics & observability
 │   ├── model/          # Model downloading, loading & recovery
 │   ├── module_registry/# trait-kit module registry
+│   ├── monitor/        # Monitoring & alerting
 │   ├── pipeline/       # Request pipeline, priority & scheduling
 │   ├── rate_limit/     # limiteron rate limiter adapter
 │   ├── security/       # Security utilities (encryption, sanitization, path validation)
@@ -513,7 +514,6 @@ vecboost/
 │   ├── text/           # Text processing (chunking, tokenization)
 │   └── utils/          # Utility functions (vector ops, hf_hub, hash verification)
 ├── examples/           # Example programs (download_model, batch, embed, similarity)
-├── deployments/        # Kubernetes & Docker deployment configs
 ├── tests/              # Test directory
 │   ├── integration/    # Integration tests (api_test.rs, real_engine.rs)
 │   ├── perf/           # Performance tests (Python pytest + Rust bench)
@@ -560,7 +560,7 @@ vecboost/
 | **Health Check** | `/health` | Service liveness and readiness probe |
 | **Detailed Health** | `/health/detailed` | Full health status with component checks |
 | **OpenAPI Docs** | `/api-docs` | Interactive Swagger UI documentation |
-| **Grafana** | - | Pre-configured dashboards in `deployments/` |
+| **Grafana** | - | Pre-configured dashboards (planned) |
 
 ### 📊 Key Metrics
 
@@ -575,26 +575,14 @@ vecboost/
 ### ☸️ Kubernetes
 
 ```bash
-# Deploy to Kubernetes
-kubectl apply -f deployments/kubernetes/
-
-# Deploy with GPU support
-kubectl apply -f deployments/kubernetes/gpu-deployment.yaml
+# Deploy to Kubernetes (bring your own manifests)
+kubectl apply -f <your-k8s-manifests>/
 
 # View deployment status
 kubectl get pods -n vecboost
 ```
 
-| Resource | Description |
-|----------|-------------|
-| `configmap.yaml` | Configuration as code |
-| `deployment.yaml` | Main deployment manifest |
-| `gpu-deployment.yaml` | GPU node selector deployment |
-| `hpa.yaml` | Horizontal Pod Autoscaler |
-| `model-cache.yaml` | Persistent volume for model caching |
-| `service.yaml` | Cluster IP service |
-
-> **📖 Full Guide**: See [Deployment Guide](deployments/kubernetes/README.md) for detailed instructions.
+> **ℹ️ Note**: Kubernetes deployment manifests should be customized for your environment. Docker images can be built via `docker build` or GitHub Actions.
 
 ### 🐳 Docker Compose
 
@@ -627,7 +615,7 @@ services:
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please read our [Contributing Guide](docs/CONTRIBUTING.md) for details.
+Contributions are welcome! Please open an issue or PR on [GitHub](https://github.com/Kirky-X/vecboost).
 
 ### 🛠️ Development Setup
 

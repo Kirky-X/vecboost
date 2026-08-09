@@ -1,12 +1,12 @@
 # VecBoost Architecture
 
-> Version 0.2.0 — Ecosystem Refactor with 7-Library Integration
+> Version 0.2.1 — Ecosystem Refactor with 7-Library Integration
 
-This document describes the VecBoost v0.2.0 architecture, built on a modular 7-library ecosystem unified through `trait-kit`.
+This document describes the VecBoost v0.2.1 architecture, built on a modular 7-library ecosystem unified through `trait-kit`.
 
 ## 1. High-Level Architecture
 
-VecBoost is a high-performance Rust vector embedding service. The v0.2.0 architecture decomposes the monolith into 7 independent libraries, registered and wired through the `trait-kit` typestate module registry.
+VecBoost is a high-performance Rust vector embedding service. The architecture (introduced in v0.2.0, current v0.2.1) decomposes the monolith into 7 independent libraries, registered and wired through the `trait-kit` typestate module registry.
 
 ```mermaid
 graph TB

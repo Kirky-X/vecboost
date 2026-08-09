@@ -613,15 +613,37 @@ impl InferenceEngine for OnnxEngine {
     }
 
     fn rerank(&self, query: &str, document: &str) -> Result<f32, VecboostError> {
-        let query_emb = self.embed(query)?;
-        let doc_emb = self.embed(document)?;
-        let similarity = crate::utils::vector::cosine_similarity(&query_emb, &doc_emb)?;
+        // 合并为 1 次 batch forward pass（而非 2 次独立 forward pass）
+        let texts = vec![query.to_string(), document.to_string()];
+        let embeddings = self.embed_batch(&texts)?;
+        let similarity =
+            crate::utils::vector::cosine_similarity(&embeddings[0], &embeddings[1])?;
         // sigmoid 归一化到 [0, 1]
         Ok(1.0 / (1.0 + (-similarity).exp()))
     }
 
+    fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> {
+        // query 只 embed 1 次，documents 批量 embed 1 次（共 2 次 forward pass）
+        let mut texts = Vec::with_capacity(1 + documents.len());
+        texts.push(query.to_string());
+        texts.extend(documents.iter().cloned());
+
+        let embeddings = self.embed_batch(&texts)?;
+        let query_emb = &embeddings[0];
+
+        embeddings[1..]
+            .iter()
+            .map(|doc_emb| {
+                let similarity =
+                    crate::utils::vector::cosine_similarity(query_emb, doc_emb)?;
+                Ok(1.0 / (1.0 + (-similarity).exp()))
+            })
+            .collect()
+    }
+
     fn supports_rerank(&self) -> bool {
-        self.model_name.contains("reranker")
+        // Bi-encoder rerank (embed + cosine + sigmoid) works with any embedding model
+        true
     }
 
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {

@@ -6,7 +6,6 @@
 pub mod constants;
 pub mod hash;
 pub mod hf_hub;
-pub mod resilience;
 pub mod validator;
 pub mod vector;
 pub(crate) mod vector_simd;
@@ -15,9 +14,6 @@ pub use constants::{
     DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP_RATIO, DEFAULT_TOP_K, MAX_BATCH_SIZE,
     MAX_CONCURRENT_REQUESTS, MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB, MAX_SEARCH_RESULTS,
     MAX_TEXT_LENGTH, MAX_TOP_K, MIN_CHUNK_SIZE_RATIO, MIN_TEXT_LENGTH,
-};
-pub use resilience::{
-    CircuitBreaker, CircuitBreakerConfig, CircuitState, RetryConfig, Retryable, with_retry,
 };
 pub use validator::{
     FileValidator, InputValidator, PathValidator, TextValidator, ValidationConfig,

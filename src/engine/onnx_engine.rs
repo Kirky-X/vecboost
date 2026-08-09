@@ -253,6 +253,10 @@ impl OnnxEngine {
         self.device_type.clone()
     }
 
+    pub fn get_model_name(&self) -> &str {
+        &self.model_name
+    }
+
     pub fn is_fallback_triggered(&self) -> bool {
         self.fallback_triggered
     }

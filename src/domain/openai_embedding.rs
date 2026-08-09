@@ -16,7 +16,7 @@ use utoipa::ToSchema;
 ///
 /// This structure matches the OpenAI Embeddings API request format.
 /// See: https://platform.openai.com/docs/api-reference/embeddings
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 #[cfg_attr(
     feature = "schema",
@@ -67,7 +67,7 @@ pub struct OpenAIEmbedRequest {
 }
 
 /// Input type for embedding request - can be a single string or array of strings.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(untagged)]
 pub enum OpenAIInput {
     /// Single text input
@@ -128,7 +128,7 @@ impl OpenAIInput {
 /// OpenAI-compatible embedding response.
 ///
 /// This structure matches the OpenAI Embeddings API response format.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 #[cfg_attr(
     feature = "schema",
@@ -163,7 +163,7 @@ pub struct OpenAIEmbedResponse {
 }
 
 /// An embedding object returned by the API.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct EmbeddingObject {
     /// The object type, always "embedding"
@@ -177,7 +177,7 @@ pub struct EmbeddingObject {
 }
 
 /// Usage statistics for the request.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct Usage {
     /// Number of tokens in the prompt
@@ -188,14 +188,14 @@ pub struct Usage {
 }
 
 /// OpenAI-style error response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct OpenAIError {
     pub error: OpenAIErrorDetail,
 }
 
 /// Details of an API error.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct OpenAIErrorDetail {
     /// Human-readable error message

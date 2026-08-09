@@ -14,9 +14,8 @@ use argon2::Argon2;
 use async_trait::async_trait;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::sync::Arc;
-use tokio::fs::{self, File};
+use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 

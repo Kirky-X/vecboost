@@ -65,6 +65,12 @@ pub struct SemanticCache {
 }
 
 impl SemanticCache {
+    /// 创建启用的语义缓存（便捷构造方法，内部自动创建 OxCacheBackend）。
+    pub fn with_capacity(similarity_threshold: f32, capacity: usize) -> Self {
+        let exact_cache = Arc::new(OxCacheBackend::new(capacity));
+        Self::new(exact_cache, similarity_threshold, capacity)
+    }
+
     /// 创建启用的语义缓存。
     #[allow(dead_code)]
     pub(crate) fn new(

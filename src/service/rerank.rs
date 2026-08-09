@@ -211,8 +211,11 @@ impl RerankService {
             })
             .collect();
 
-        // 按分数降序排序
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        // 按分数降序排序（NaN 值排到末尾，保证排序稳定性）
+        results.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+        });
 
         // 应用 top_k 截断
         if let Some(top_k) = req.top_k {

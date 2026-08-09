@@ -27,21 +27,32 @@ fn get_sanitize_patterns() -> &'static Vec<(Regex, &'static str)> {
     SANITIZE_PATTERNS.get_or_init(|| {
         vec![
             (
-                Regex::new(r#"/[a-zA-Z0-9/_.-]+/[a-zA-Z0-9/_.-]+\.\w+"#).unwrap(),
+                Regex::new(r#"/[a-zA-Z0-9/_.-]+/[a-zA-Z0-9/_.-]+\.\w+"#)
+                    .expect("sanitize pattern: valid Unix path regex"),
                 "[REDACTED_PATH]",
             ),
             (
-                Regex::new(r#"C:\\[a-zA-Z0-9_\\]+\.\w+"#).unwrap(),
+                Regex::new(r#"C:\\[a-zA-Z0-9_\\]+\.\w+"#)
+                    .expect("sanitize pattern: valid Windows path regex"),
                 "[REDACTED_WINDOWS_PATH]",
             ),
-            (Regex::new(r#"token \d+"#).unwrap(), "token [ID]"),
             (
-                Regex::new(r#"at position \d+"#).unwrap(),
+                Regex::new(r#"token \d+"#).expect("sanitize pattern: valid token regex"),
+                "token [ID]",
+            ),
+            (
+                Regex::new(r#"at position \d+"#)
+                    .expect("sanitize pattern: valid position regex"),
                 "at position [REDACTED]",
             ),
-            (Regex::new(r#"\.unwrap\(\)"#).unwrap(), "[INTERNAL_ERROR]"),
             (
-                Regex::new(r#"expect\([^)]+\)"#).unwrap(),
+                Regex::new(r#"\.unwrap\(\)"#)
+                    .expect("sanitize pattern: valid unwrap regex"),
+                "[INTERNAL_ERROR]",
+            ),
+            (
+                Regex::new(r#"expect\([^)]+\)"#)
+                    .expect("sanitize pattern: valid expect regex"),
                 "[INTERNAL_ERROR]",
             ),
         ]
@@ -177,6 +188,18 @@ impl VecboostError {
 
     pub fn database_error(message: String) -> Self {
         VecboostError::DatabaseError(message)
+    }
+
+    pub fn rate_limit_exceeded(message: String) -> Self {
+        VecboostError::RateLimitExceeded(message)
+    }
+
+    pub fn out_of_memory(message: String) -> Self {
+        VecboostError::OutOfMemory(message)
+    }
+
+    pub fn internal_error(message: String) -> Self {
+        VecboostError::InternalError(message)
     }
 }
 

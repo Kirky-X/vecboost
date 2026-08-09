@@ -589,6 +589,8 @@ Prometheus 指标端点。
 | `vecboost_batch_size` | histogram | 批处理大小分布 |
 | `vecboost_model_load_duration_seconds` | histogram | 模型加载时间 |
 | `vecboost_active_requests` | gauge | 活跃请求数 |
+| `rate_limit_allowed_total` | counter | 限流放行的请求数（按维度标签） |
+| `rate_limit_denied_total` | counter | 限流拒绝的请求数（按维度标签） |
 
 **示例查询:**
 
@@ -1007,6 +1009,8 @@ func main() {
 ## ⚡ 速率限制
 
 ### 默认限制策略
+
+限流基于 limiteron 原生 `TokenBucketLimiter`，支持 Global/Ip/User/ApiKey 四维度独立限流：
 
 | 限制类型 | 请求数 | 时间窗口 | 适用场景 |
 |----------|--------|----------|----------|

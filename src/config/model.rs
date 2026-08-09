@@ -80,6 +80,7 @@ impl PredefinedModelType {
 pub enum Precision {
     Fp32,
     Fp16,
+    Bf16,
     Int8,
 }
 
@@ -88,6 +89,7 @@ impl fmt::Display for Precision {
         match self {
             Precision::Fp32 => write!(f, "fp32"),
             Precision::Fp16 => write!(f, "fp16"),
+            Precision::Bf16 => write!(f, "bf16"),
             Precision::Int8 => write!(f, "int8"),
         }
     }
@@ -340,11 +342,21 @@ mod tests {
     fn test_precision_serialization() {
         let fp32 = Precision::Fp32;
         let fp16 = Precision::Fp16;
+        let bf16 = Precision::Bf16;
         let int8 = Precision::Int8;
 
         assert_eq!(serde_json::to_string(&fp32).unwrap(), "\"fp32\"");
         assert_eq!(serde_json::to_string(&fp16).unwrap(), "\"fp16\"");
+        assert_eq!(serde_json::to_string(&bf16).unwrap(), "\"bf16\"");
         assert_eq!(serde_json::to_string(&int8).unwrap(), "\"int8\"");
+
+        // Deserialization roundtrip
+        let bf16_decoded: Precision = serde_json::from_str("\"bf16\"").unwrap();
+        assert_eq!(bf16_decoded, Precision::Bf16);
+
+        // Invalid precision string
+        let invalid: Result<Precision, _> = serde_json::from_str("\"bf8\"");
+        assert!(invalid.is_err());
     }
 
     #[test]
@@ -430,6 +442,7 @@ mod tests {
     fn test_precision_display() {
         assert_eq!(Precision::Fp32.to_string(), "fp32");
         assert_eq!(Precision::Fp16.to_string(), "fp16");
+        assert_eq!(Precision::Bf16.to_string(), "bf16");
         assert_eq!(Precision::Int8.to_string(), "int8");
     }
 }

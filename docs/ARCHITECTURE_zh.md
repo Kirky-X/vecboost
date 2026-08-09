@@ -64,7 +64,7 @@ VecBoost 是一个使用 Rust 构建的**高性能嵌入向量服务**。它为�
 | **配置管理** | confers (TOML + env + config-bus) | 配置解析（必选依赖，禁止手写 config） |
 | **日志** | inklog + log | 日志基础设施（必选依赖，禁止手写 tracing） |
 | **缓存** | oxcache | 缓存基础设施（必选依赖，禁止手写 LRU） |
-| **速率限制** | limiteron | 限流基础设施（必选依赖，禁止手写） |
+| **速率限制** | limiteron | 限流基础设施（必选依赖，禁止手写）。基于 limiteron 原生 `TokenBucketLimiter` + `Limiter` trait，支持 Global/Ip/User/ApiKey 四维度独立限流 |
 | **模块注册** | trait-kit | 模块注册与依赖注入（必选依赖） |
 | **可观测性** | Prometheus 0.14 + log | 指标和日志 |
 
@@ -81,12 +81,12 @@ VecBoost 是一个使用 Rust 构建的**高性能嵌入向量服务**。它为�
 ```rust
 pub struct VecboostState {
     /// trait-kit AsyncKit — 模块能力管理中心
-    /// 包含 17 个 Module 的能力查询入口
+    /// 包含 14 个 Module 的能力查询入口
     pub(crate) kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,
 }
 ```
 
-路由 handler 通过 `state.kit.require::<M>()` 检索能力，或通过 Axum `FromRef` 自动注入。
+路由 handler 通过 `state.kit.require::<M>()` 检索能力，或通过 Axum `FromRef` 自动注入。布尔配置（如 `AuthEnabled`、`RateLimitEnabled`、`PipelineEnabled`）通过 `state.kit.config::<T>()` 直接查询，无需注册独立 Module。
 
 ---
 
@@ -414,20 +414,11 @@ VecBoost 的缓存基础设施由 `oxcache` 统一接管（必选依赖，禁止
 
 ```
 src/cache/
-├── mod.rs              # 模块导出、CacheStrategy/CacheConfig/Cache trait 定义
-├── entry.rs            # 缓存条目类型定义
-├── oxcache_backend.rs  # oxcache 后端实现（OxCacheBackend）
-└── trait_impl.rs       # Cache trait 实现
+├── mod.rs              # 模块导出（仅 OxCacheBackend）
+└── oxcache_backend.rs  # oxcache 后端实现（OxCacheBackend）
 ```
 
-支持的缓存策略（通过 `CacheStrategy` 枚举）：
-
-| 策略 | 枚举值 | 说明 |
-|------|--------|------|
-| **LRU** | `Lru` | 最近最少使用（默认） |
-| **LFU** | `Lfu` | 最不经常使用 |
-| **ARC** | `Arc` | 自适应替换缓存 |
-| **TwoQueue** | `TwoQueue` | 两队列缓存（FIFO + LRU） |
+缓存策略（LRU/LFU/ARC/TwoQueue）由 `oxcache` 内部统一管理，VecBoost 通过 `OxCacheBackend` 直接调用 oxcache 原生 API，不维护额外的 Cache trait 或策略枚举。
 
 ---
 

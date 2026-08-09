@@ -184,6 +184,53 @@ pub struct AuditConfig {
     pub max_files: usize,
 }
 
+/// 语义缓存配置
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct SemanticCacheConfig {
+    /// 是否启用语义缓存
+    pub enabled: bool,
+    /// trigram Jaccard 相似度阈值（0.0-1.0）
+    pub similarity_threshold: f32,
+    /// 语义索引最大条目数
+    pub capacity: usize,
+}
+
+impl Default for SemanticCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            similarity_threshold: 0.7,
+            capacity: 10000,
+        }
+    }
+}
+
+/// GPU 显存分页配置
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct MemoryPagingConfig {
+    /// 是否启用显存分页
+    pub enabled: bool,
+    /// GPU 显存预算（字节，0 = 自动检测）
+    pub gpu_memory_budget_bytes: u64,
+    /// LRU-K 的 K 值
+    pub lru_k: usize,
+    /// 预取深度
+    pub prefetch_depth: usize,
+}
+
+impl Default for MemoryPagingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            gpu_memory_budget_bytes: 0,
+            lru_k: 2,
+            prefetch_depth: 2,
+        }
+    }
+}
+
 /// 数据库配置（dbnexus，需启用 `db` feature）
 #[cfg(feature = "db")]
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]

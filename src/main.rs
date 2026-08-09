@@ -22,11 +22,11 @@ use vecboost::{
     config::model::{EngineType, ModelConfig},
     engine::AnyEngine,
     module_registry::{
-        AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule,
+        AuditModule, AuthEnabled, CacheConfig, CacheModule,
         ConfigWatcherModule, DbConfig, DbModule, EmbeddingModule, IpWhitelistModule,
-        MetricsCollectorModule, PipelineEnabled, PipelineEnabledModule, PipelineQueueModule,
+        MetricsCollectorModule, PipelineEnabled, PipelineQueueModule,
         PriorityCalculatorModule, PrometheusCollectorModule, RateLimitEnabled,
-        RateLimitEnabledModule, ResponseChannelModule, WorkerManagerModule,
+        ResponseChannelModule, WorkerManagerModule,
     },
     pipeline::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
@@ -284,7 +284,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 创建限流器
-    let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
+    let rate_limiter = Arc::new(LimiteronAdapter::with_defaults());
 
     // Garrison 认证初始化（替代手写 JWT/UserStore/CSRF）
     #[cfg(feature = "auth")]
@@ -505,12 +505,6 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to register PrometheusCollectorModule: {}", e))?;
     kit.register::<IpWhitelistModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register IpWhitelistModule: {}", e))?;
-    kit.register::<AuthEnabledModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register AuthEnabledModule: {}", e))?;
-    kit.register::<RateLimitEnabledModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register RateLimitEnabledModule: {}", e))?;
-    kit.register::<PipelineEnabledModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register PipelineEnabledModule: {}", e))?;
     kit.register::<PipelineQueueModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register PipelineQueueModule: {}", e))?;
     kit.register::<ResponseChannelModule>()
@@ -534,6 +528,7 @@ async fn main() -> anyhow::Result<()> {
 
     // T012-T016: Register lifecycle and health check for key modules
     kit.register_lifecycle::<EmbeddingModule>();
+    kit.register_lifecycle::<RateLimitModule>();
     kit.register_lifecycle::<AuditModule>();
     kit.register_lifecycle::<ConfigWatcherModule>();
     kit.register_health_check::<EmbeddingModule>();

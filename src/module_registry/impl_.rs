@@ -22,10 +22,10 @@ use super::AuthModule;
 use super::PrometheusCollectorModule;
 use super::RateLimitModule;
 use super::{
-    AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, ConfigWatcherModule,
-    DbConfig, DbModule, EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
-    PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule, RateLimitEnabled,
-    RateLimitEnabledModule, ResponseChannelModule, WorkerManagerModule,
+    AuditModule, CacheConfig, CacheModule, ConfigWatcherModule,
+    DbConfig, DbModule, EmbeddingModule, IpWhitelistModule, MetricsCollectorModule,
+    PipelineQueueModule, PriorityCalculatorModule,
+    ResponseChannelModule, WorkerManagerModule,
 };
 #[cfg(feature = "auth")]
 use super::{CsrfConfigModule};
@@ -135,13 +135,32 @@ impl AsyncAutoBuilder for RateLimitModule {
 }
 
 // ---------------------------------------------------------------------------
-// RateLimitModule — health (Phase 3)
+// RateLimitModule — health + lifecycle (Phase 3)
 // ---------------------------------------------------------------------------
 
 impl AsyncHealthCheck for RateLimitModule {
     fn check(_cap: &Self::Capability) -> HealthStatus {
         // LimiteronAdapter is always operational after construction
         HealthStatus::Healthy
+    }
+}
+
+impl AsyncLifecycle for RateLimitModule {
+    fn on_ready<'a>(
+        _kit: &'a AsyncKit<trait_kit::AsyncReady>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
+        Box::pin(async {
+            log::info!("RateLimitModule: on_ready — limiteron rate limiter active");
+            Ok(())
+        })
+    }
+
+    fn on_shutdown<'a>(
+        _cap: &'a Self::Capability,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async {
+            log::info!("RateLimitModule: on_shutdown — rate limiter shut down");
+        })
     }
 }
 
@@ -265,29 +284,6 @@ impl AsyncLifecycle for AuditModule {
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
-// AuthEnabledModule — bool from AuthEnabled newtype
-// ---------------------------------------------------------------------------
-
-impl ModuleMeta for AuthEnabledModule {
-    const NAME: &'static str = "auth_enabled";
-
-    fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
-        &[]
-    }
-}
-
-impl AsyncAutoBuilder for AuthEnabledModule {
-    type Capability = bool;
-    type Error = TraitKitError;
-
-    fn build<'a>(
-        kit: &'a AsyncKit,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
-        Box::pin(async move { Ok(kit.config::<AuthEnabled>().map(|c| c.0).unwrap_or(false)) })
-    }
-}
-
-// ---------------------------------------------------------------------------
 // CsrfConfigModule (auth feature)
 // ---------------------------------------------------------------------------
 
@@ -380,62 +376,6 @@ impl AsyncAutoBuilder for IpWhitelistModule {
         kit: &'a AsyncKit,
     ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
         Box::pin(async move { kit.config::<Self::Capability>() })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// RateLimitEnabledModule — bool from RateLimitEnabled newtype
-// ---------------------------------------------------------------------------
-
-impl ModuleMeta for RateLimitEnabledModule {
-    const NAME: &'static str = "rate_limit_enabled";
-
-    fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
-        &[]
-    }
-}
-
-impl AsyncAutoBuilder for RateLimitEnabledModule {
-    type Capability = bool;
-    type Error = TraitKitError;
-
-    fn build<'a>(
-        kit: &'a AsyncKit,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
-        Box::pin(async move {
-            Ok(kit
-                .config::<RateLimitEnabled>()
-                .map(|c| c.0)
-                .unwrap_or(false))
-        })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PipelineEnabledModule — bool from PipelineEnabled newtype
-// ---------------------------------------------------------------------------
-
-impl ModuleMeta for PipelineEnabledModule {
-    const NAME: &'static str = "pipeline_enabled";
-
-    fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
-        &[]
-    }
-}
-
-impl AsyncAutoBuilder for PipelineEnabledModule {
-    type Capability = bool;
-    type Error = TraitKitError;
-
-    fn build<'a>(
-        kit: &'a AsyncKit,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
-        Box::pin(async move {
-            Ok(kit
-                .config::<PipelineEnabled>()
-                .map(|c| c.0)
-                .unwrap_or(false))
-        })
     }
 }
 

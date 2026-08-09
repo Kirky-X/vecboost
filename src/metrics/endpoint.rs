@@ -32,10 +32,17 @@ pub async fn metrics_endpoint(
 
     let ip = addr.ip().to_string();
 
+    // 提前获取 PrometheusCollector（限流指标记录 + 指标导出共用）
+    let collector_opt = app_state
+        .kit
+        .require::<crate::module_registry::PrometheusCollectorModule>()
+        .expect("PrometheusCollectorModule not registered");
+
     if app_state
         .kit
-        .require::<crate::module_registry::RateLimitEnabledModule>()
-        .expect("RateLimitEnabledModule not registered")
+        .config::<crate::module_registry::RateLimitEnabled>()
+        .map(|c| c.0)
+        .unwrap_or(false)
     {
         let ip_whitelist = app_state
             .kit
@@ -48,10 +55,18 @@ pub async fn metrics_endpoint(
                 .require::<crate::module_registry::RateLimitModule>()
                 .expect("RateLimitModule not registered")
                 .check_rate_limit(vec![
-                    crate::rate_limit::RateLimitDimension::Global,
-                    crate::rate_limit::RateLimitDimension::Ip(ip),
+                    crate::rate_limit::Dimension::Global,
+                    crate::rate_limit::Dimension::Ip(ip),
                 ])
                 .await;
+            // 记录限流决策指标
+            if let Some(prom) = collector_opt.as_ref() {
+                if allowed {
+                    prom.record_rate_limit_allowed("metrics_ip");
+                } else {
+                    prom.record_rate_limit_denied("metrics_ip");
+                }
+            }
             if !allowed {
                 return Response::builder()
                     .status(429)
@@ -62,10 +77,6 @@ pub async fn metrics_endpoint(
         }
     }
 
-    let collector_opt = app_state
-        .kit
-        .require::<crate::module_registry::PrometheusCollectorModule>()
-        .expect("PrometheusCollectorModule not registered");
     let prometheus_collector = collector_opt
         .as_ref()
         .expect("PrometheusCollector not configured");

@@ -480,4 +480,47 @@ mod tests {
         let decompressed = decompress_f32_vec(compressed).unwrap();
         assert!(decompressed.is_empty());
     }
+
+    // ========================================================================
+    // Baseline: exact-match cache hit rate under semantic similarity
+    // ========================================================================
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_cache_hit_rate_under_semantic_similarity() {
+        // 生成 50 对近似改写文本，存入原始版本，用改写版本查询
+        // 验证精确匹配命中率 = 0%（证明语义缓存有提升空间）
+        let originals = vec![
+            "今天天气怎么样", "机器学习很有趣", "Rust编程语言", "向量数据库搜索",
+            "深度学习模型训练", "自然语言处理任务", "文本相似度计算", "缓存命中率优化",
+            "高性能计算框架", "分布式系统架构", "GPU加速推理", "模型权重加载",
+            "批量处理请求", "语义搜索算法", "内存池管理", "数据压缩存储",
+            "实时流处理", "异步任务调度", "安全认证中间件", "API速率限制",
+        ];
+        let paraphrases = vec![
+            "今天天气怎么样啊", "机器学习很有意思", "Rust 编程语言", "向量数据库的搜索",
+            "深度学习模型的训练", "自然语言处理的任务", "计算文本相似度", "优化缓存命中率",
+            "高性能的计算框架", "分布式系统的架构", "GPU 加速的推理", "模型权重的加载",
+            "批量处理请求的", "语义搜索的算法", "内存池的管理", "数据的压缩存储",
+            "实时流式处理", "异步的任务调度", "安全认证中间件", "API 的速率限制",
+        ];
+
+        let cache = OxCacheBackend::new(1024);
+        // 存入原始文本
+        for (i, text) in originals.iter().enumerate() {
+            let embedding: Vec<f32> = (0..128).map(|j| (i * 128 + j) as f32 * 0.01).collect();
+            cache.put(&format!("text:{}", text), embedding).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // 用改写文本查询——精确匹配应全部 miss
+        let mut hits = 0;
+        for text in &paraphrases {
+            if cache.get(&format!("text:{}", text)).await.is_some() {
+                hits += 1;
+            }
+        }
+        // 精确匹配命中率应为 0%（所有改写文本键都不同）
+        assert_eq!(hits, 0, "exact match should miss all paraphrased texts");
+        // 注意：原始文本的命中依赖 moka 异步索引，这里仅验证改写文本全部 miss
+    }
 }

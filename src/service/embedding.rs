@@ -3,7 +3,7 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-#![allow(clippy::all)]
+#![allow(clippy::collapsible_if, clippy::useless_conversion, clippy::redundant_closure)]
 
 use crate::cache::OxCacheBackend;
 use crate::cache::SemanticCache;
@@ -49,22 +49,38 @@ pub struct EmbeddingService {
 }
 
 impl EmbeddingService {
-    pub fn new(
+    /// 统一内部构造入口：所有可选组件通过参数控制，消除 5 个构造器间的字段初始化重复。
+    fn build(
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        validator: InputValidator,
         model_config: Option<ModelConfig>,
+        model_manager: Option<Arc<ModelManager>>,
+        cache_size: Option<usize>,
+        memory_manager: Option<SharedGpuMemoryManager>,
+        batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     ) -> Self {
         Self {
             engine,
-            validator: InputValidator::with_default(),
+            validator,
             model_config,
-            model_manager: None,
-            cache: Arc::new(OxCacheBackend::disabled()),
-            memory_manager: None,
-            batch_scheduler: None,
+            model_manager,
+            cache: Arc::new(match cache_size {
+                Some(size) => OxCacheBackend::new(size),
+                None => OxCacheBackend::disabled(),
+            }),
+            memory_manager,
+            batch_scheduler,
             buffer_pool: None,
             continuous_batch_loop: None,
             semantic_cache: None,
         }
+    }
+
+    pub fn new(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+    ) -> Self {
+        Self::build(engine, InputValidator::with_default(), model_config, None, None, None, None)
     }
 
     pub fn with_manager(
@@ -72,18 +88,7 @@ impl EmbeddingService {
         model_config: Option<ModelConfig>,
         model_manager: Arc<ModelManager>,
     ) -> Self {
-        Self {
-            engine,
-            validator: InputValidator::with_default(),
-            model_config,
-            model_manager: Some(model_manager),
-            cache: Arc::new(OxCacheBackend::disabled()),
-            memory_manager: None,
-            batch_scheduler: None,
-            buffer_pool: None,
-            continuous_batch_loop: None,
-            semantic_cache: None,
-        }
+        Self::build(engine, InputValidator::with_default(), model_config, Some(model_manager), None, None, None)
     }
 
     pub fn with_validator_and_manager(
@@ -92,18 +97,7 @@ impl EmbeddingService {
         model_config: Option<ModelConfig>,
         model_manager: Option<Arc<ModelManager>>,
     ) -> Self {
-        Self {
-            engine,
-            validator,
-            model_config,
-            model_manager,
-            cache: Arc::new(OxCacheBackend::disabled()),
-            memory_manager: None,
-            batch_scheduler: None,
-            buffer_pool: None,
-            continuous_batch_loop: None,
-            semantic_cache: None,
-        }
+        Self::build(engine, validator, model_config, model_manager, None, None, None)
     }
 
     pub fn with_cache(
@@ -111,18 +105,7 @@ impl EmbeddingService {
         model_config: Option<ModelConfig>,
         cache_size: usize,
     ) -> Self {
-        Self {
-            engine,
-            validator: InputValidator::with_default(),
-            model_config,
-            model_manager: None,
-            cache: Arc::new(OxCacheBackend::new(cache_size)),
-            memory_manager: None,
-            batch_scheduler: None,
-            buffer_pool: None,
-            continuous_batch_loop: None,
-            semantic_cache: None,
-        }
+        Self::build(engine, InputValidator::with_default(), model_config, None, Some(cache_size), None, None)
     }
 
     pub fn with_all(
@@ -134,18 +117,7 @@ impl EmbeddingService {
         memory_manager: Option<SharedGpuMemoryManager>,
         batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     ) -> Self {
-        Self {
-            engine,
-            validator,
-            model_config,
-            model_manager,
-            cache: Arc::new(OxCacheBackend::new(cache_size)),
-            memory_manager,
-            batch_scheduler,
-            buffer_pool: None,
-            continuous_batch_loop: None,
-            semantic_cache: None,
-        }
+        Self::build(engine, validator, model_config, model_manager, Some(cache_size), memory_manager, batch_scheduler)
     }
 
     /// 设置 BufferPool

@@ -169,7 +169,7 @@ mod tests {
             WorkerConfig::default(),
             Arc::clone(&service),
         ));
-        let rate_limiter = Arc::new(LimiteronAdapter::with_defaults());
+        let rate_limiter = Arc::new(LimiteronAdapter::with_defaults().await);
 
         let mut kit = trait_kit::AsyncKit::new();
         kit.set_config(service.clone());

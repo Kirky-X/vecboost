@@ -181,7 +181,8 @@ impl AsyncAutoBuilder for RateLimitModule {
 
 impl AsyncHealthCheck for RateLimitModule {
     fn check(_cap: &Self::Capability) -> HealthStatus {
-        // LimiteronAdapter is always operational after construction
+        // Governor 使用 MemoryStorage（始终健康）；分布式存储启用后
+        // 需通过 async health_status() 检查并缓存结果
         HealthStatus::Healthy
     }
 }

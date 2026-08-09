@@ -289,7 +289,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 创建限流器
-    let rate_limiter = Arc::new(LimiteronAdapter::with_defaults());
+    let rate_limiter = Arc::new(LimiteronAdapter::with_defaults().await);
 
     // Garrison 认证初始化（替代手写 JWT/UserStore/CSRF）
     #[cfg(feature = "auth")]

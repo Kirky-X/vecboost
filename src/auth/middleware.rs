@@ -200,7 +200,7 @@ pub async fn require_role_middleware(request: Request, next: Next) -> Result<Res
 /// 应用到 `/api/v1/auth/login`、`/api/v1/auth/refresh`、`/api/v1/auth/logout`
 /// 和 `/api/v1/auth/me` 等认证端点,防止暴力破解和 token 枚举攻击。
 ///
-/// 限流维度:`Global` + `Ip`(用户尚未认证时不使用 `User` 维度)。
+/// 通过 limiteron Governor 的 RequestContext 驱动限流。
 /// 白名单内的 IP 跳过限流。限流未启用时直接放行。
 pub async fn auth_rate_limit_middleware(
     State(state): State<VecboostState>,
@@ -239,7 +239,7 @@ pub async fn auth_rate_limit_middleware(
         return Ok(next.run(request).await);
     }
 
-    // 检查 Global + Ip 维度限流
+    // 通过 Governor 检查限流（规则匹配 + 封禁 + 熔断）
     let rate_limiter = state
         .kit
         .require::<crate::module_registry::RateLimitModule>()
@@ -248,12 +248,13 @@ pub async fn auth_rate_limit_middleware(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let allowed = rate_limiter
-        .check_rate_limit(vec![
-            crate::rate_limit::Dimension::Global,
-            crate::rate_limit::Dimension::Ip(ip.clone()),
-        ])
-        .await;
+    let context = crate::rate_limit::RequestContext {
+        client_ip: Some(ip.clone()),
+        path: request.uri().path().to_string(),
+        method: request.method().to_string(),
+        ..Default::default()
+    };
+    let allowed = rate_limiter.check_rate_limit(&context).await;
 
     // 记录限流决策指标
     if let Ok(prom_collector) = state.kit.require::<crate::module_registry::PrometheusCollectorModule>() {

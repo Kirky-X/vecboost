@@ -425,29 +425,12 @@ async fn test_embedding_and_rate_limit_independent_build() {
 #[tokio::test]
 async fn test_auth_module_with_none_config() {
     let mut kit = AsyncKit::new();
-    kit.set_config(Option::<Arc<crate::auth::JwtManager>>::None);
+    kit.set_config(Option::<Arc<crate::auth::GarrisonHandle>>::None);
     kit.register::<AuthModule>().unwrap();
 
     let kit = kit.build().await.unwrap();
     let capability = kit.require::<AuthModule>().unwrap();
     assert!(capability.is_none());
-}
-
-#[cfg(feature = "auth")]
-#[tokio::test]
-async fn test_auth_module_with_some_config() {
-    use crate::auth::JwtManager;
-    let secret = "0123456789abcdef0123456789abcdef01234567".to_string();
-    let jwt = Arc::new(JwtManager::new(secret).unwrap());
-
-    let mut kit = AsyncKit::new();
-    kit.set_config(Some(jwt.clone()));
-    kit.register::<AuthModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let capability = kit.require::<AuthModule>().unwrap();
-    assert!(capability.is_some());
-    assert!(Arc::ptr_eq(capability.as_ref().unwrap(), &jwt));
 }
 
 #[cfg(feature = "auth")]
@@ -478,7 +461,7 @@ async fn test_all_modules_build_together_with_auth() {
     });
     kit.set_config(DbConfig { enabled: true });
     kit.set_config(Option::<Arc<crate::audit::AuditLogger>>::None);
-    kit.set_config(Option::<Arc<crate::auth::JwtManager>>::None);
+    kit.set_config(Option::<Arc<crate::auth::GarrisonHandle>>::None);
 
     kit.register::<EmbeddingModule>().unwrap();
     kit.register::<RateLimitModule>().unwrap();
@@ -864,67 +847,14 @@ async fn test_worker_manager_module_missing_config_fails() {
 }
 
 // ---------------------------------------------------------------------------
-// Auth-gated modules (UserStoreModule, CsrfConfigModule, CsrfTokenStoreModule)
+// Auth-gated modules (CsrfConfigModule)
 // ---------------------------------------------------------------------------
-
-#[cfg(all(feature = "auth", feature = "db"))]
-#[tokio::test]
-async fn test_user_store_module_with_some() {
-    use crate::auth::UserStore;
-    let pool = crate::db::DbPool::new("sqlite::memory:").await.unwrap();
-    let store = Arc::new(UserStore::new(Arc::new(pool)));
-    let mut kit = AsyncKit::new();
-    kit.set_config(Some(store.clone()));
-    kit.register::<UserStoreModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let capability = kit.require::<UserStoreModule>().unwrap();
-    assert!(capability.is_some());
-    assert!(Arc::ptr_eq(capability.as_ref().unwrap(), &store));
-}
-
-#[cfg(all(feature = "auth", not(feature = "db")))]
-#[tokio::test]
-async fn test_user_store_module_with_some_no_db() {
-    use crate::auth::UserStore;
-    let store = Arc::new(UserStore::new());
-    let mut kit = AsyncKit::new();
-    kit.set_config(Some(store.clone()));
-    kit.register::<UserStoreModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let capability = kit.require::<UserStoreModule>().unwrap();
-    assert!(capability.is_some());
-    assert!(Arc::ptr_eq(capability.as_ref().unwrap(), &store));
-}
-
-#[cfg(feature = "auth")]
-#[tokio::test]
-async fn test_user_store_module_with_none() {
-    let mut kit = AsyncKit::new();
-    kit.set_config(Option::<Arc<crate::auth::UserStore>>::None);
-    kit.register::<UserStoreModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let capability = kit.require::<UserStoreModule>().unwrap();
-    assert!(capability.is_none());
-}
-
-#[cfg(feature = "auth")]
-#[tokio::test]
-async fn test_user_store_module_missing_config_fails() {
-    let mut kit = AsyncKit::new();
-    kit.register::<UserStoreModule>().unwrap();
-
-    let result = kit.build().await;
-    assert!(result.is_err());
-}
 
 #[cfg(feature = "auth")]
 #[tokio::test]
 async fn test_csrf_config_module_with_some() {
-    use crate::auth::CsrfConfig;
-    let config = Arc::new(CsrfConfig::new(vec!["https://example.com".to_string()]));
+    use crate::auth::GarrisonCsrfConfig;
+    let config = Arc::new(GarrisonCsrfConfig::default());
     let mut kit = AsyncKit::new();
     kit.set_config(Some(config.clone()));
     kit.register::<CsrfConfigModule>().unwrap();
@@ -939,7 +869,7 @@ async fn test_csrf_config_module_with_some() {
 #[tokio::test]
 async fn test_csrf_config_module_with_none() {
     let mut kit = AsyncKit::new();
-    kit.set_config(Option::<Arc<crate::auth::CsrfConfig>>::None);
+    kit.set_config(Option::<Arc<crate::auth::GarrisonCsrfConfig>>::None);
     kit.register::<CsrfConfigModule>().unwrap();
 
     let kit = kit.build().await.unwrap();
@@ -947,39 +877,12 @@ async fn test_csrf_config_module_with_none() {
     assert!(capability.is_none());
 }
 
-#[cfg(feature = "auth")]
-#[tokio::test]
-async fn test_csrf_token_store_module_with_some() {
-    use crate::auth::CsrfTokenStore;
-    let store = Arc::new(CsrfTokenStore::new());
-    let mut kit = AsyncKit::new();
-    kit.set_config(Some(store.clone()));
-    kit.register::<CsrfTokenStoreModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let capability = kit.require::<CsrfTokenStoreModule>().unwrap();
-    assert!(capability.is_some());
-    assert!(Arc::ptr_eq(capability.as_ref().unwrap(), &store));
-}
-
-#[cfg(feature = "auth")]
-#[tokio::test]
-async fn test_csrf_token_store_module_with_none() {
-    let mut kit = AsyncKit::new();
-    kit.set_config(Option::<Arc<crate::auth::CsrfTokenStore>>::None);
-    kit.register::<CsrfTokenStoreModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let capability = kit.require::<CsrfTokenStoreModule>().unwrap();
-    assert!(capability.is_none());
-}
-
 // ---------------------------------------------------------------------------
-// 集成测试：所有 17 个 Module 联合构建（验证无 TypeId 冲突）
+// 集成测试：所有 15 个 Module 联合构建（验证无 TypeId 冲突）
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_all_seventeen_modules_build_together() {
+async fn test_all_fifteen_modules_build_together() {
     let mut kit = AsyncKit::new();
 
     // 4 个现有 Module
@@ -1009,10 +912,8 @@ async fn test_all_seventeen_modules_build_together() {
 
     #[cfg(feature = "auth")]
     {
-        kit.set_config(Option::<Arc<crate::auth::JwtManager>>::None);
-        kit.set_config(Option::<Arc<crate::auth::UserStore>>::None);
-        kit.set_config(Option::<Arc<crate::auth::CsrfConfig>>::None);
-        kit.set_config(Option::<Arc<crate::auth::CsrfTokenStore>>::None);
+        kit.set_config(Option::<Arc<crate::auth::GarrisonHandle>>::None);
+        kit.set_config(Option::<Arc<crate::auth::GarrisonCsrfConfig>>::None);
     }
 
     // 注册全部
@@ -1035,9 +936,7 @@ async fn test_all_seventeen_modules_build_together() {
     #[cfg(feature = "auth")]
     {
         kit.register::<AuthModule>().unwrap();
-        kit.register::<UserStoreModule>().unwrap();
         kit.register::<CsrfConfigModule>().unwrap();
-        kit.register::<CsrfTokenStoreModule>().unwrap();
     }
 
     let kit = kit.build().await.unwrap();
@@ -1062,9 +961,7 @@ async fn test_all_seventeen_modules_build_together() {
     #[cfg(feature = "auth")]
     {
         assert!(kit.contains::<AuthModule>());
-        assert!(kit.contains::<UserStoreModule>());
         assert!(kit.contains::<CsrfConfigModule>());
-        assert!(kit.contains::<CsrfTokenStoreModule>());
     }
 
     // 验证部分 capability 返回正确值

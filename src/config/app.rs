@@ -9,7 +9,7 @@
 //! 禁止手写 config/toml 解析)。本文件只保留子结构体定义、默认值实现、
 //! 安全环境变量覆盖和优先级默认值。
 
-#![allow(clippy::all)]
+#![allow(clippy::derivable_impls)]
 
 use serde::{Deserialize, Serialize};
 

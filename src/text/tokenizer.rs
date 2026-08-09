@@ -843,7 +843,7 @@ impl Tokenizer {
                 "UTF-8 encoding validation failed at byte {} (value 0x{:02x}): {}. \
                 The input contains invalid or incomplete UTF-8 sequences.",
                 utf8_result.invalid_byte_position.unwrap_or(0),
-                utf8_result.invalid_byte_position.unwrap_or(0),
+                utf8_result.invalid_byte_value.unwrap_or(0),
                 utf8_result
                     .error_message
                     .unwrap_or_else(|| "Unknown UTF-8 error".to_string())

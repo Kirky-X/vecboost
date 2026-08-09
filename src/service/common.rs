@@ -13,7 +13,7 @@ use log::warn;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-const MAX_FALLBACK_ATTEMPTS: usize = 1;
+const MAX_FALLBACK_ATTEMPTS: usize = 2;
 
 /// 判断错误是否为 OOM（内存溢出）错误
 pub fn is_oom_error(error: &VecboostError) -> bool {

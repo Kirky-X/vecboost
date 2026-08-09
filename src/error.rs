@@ -56,7 +56,12 @@ fn sanitize_error_message(msg: &str) -> String {
     }
 
     if sanitized.len() > MAX_ERROR_MESSAGE_LENGTH {
-        sanitized.truncate(MAX_ERROR_MESSAGE_LENGTH);
+        // 确保在有效的 char 边界处截断，避免 UTF-8 多字节字符被截断导致 panic
+        let mut truncate_at = MAX_ERROR_MESSAGE_LENGTH;
+        while truncate_at > 0 && !sanitized.is_char_boundary(truncate_at) {
+            truncate_at -= 1;
+        }
+        sanitized.truncate(truncate_at);
         sanitized.push_str("...");
     }
 

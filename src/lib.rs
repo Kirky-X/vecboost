@@ -20,6 +20,7 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod engine;
+pub mod library;
 pub mod metrics;
 pub mod module_registry;
 pub mod pipeline;
@@ -55,6 +56,7 @@ pub use domain::{
 pub use error::VecboostError;
 pub use service::embedding::EmbeddingService;
 pub use service::rerank::RerankService;
+pub use library::{LibraryConfig, VecBoostLibrary};
 pub use utils::SimilarityMetric;
 pub use utils::vector::{TaskType, recommended_dimension, information_retention_rate};
 
@@ -266,7 +268,7 @@ mod tests {
             Arc::new(RwLock::new(MockEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine.clone(), None)));
         let rerank_service = Arc::new(RwLock::new(RerankService::new(engine, None)));
-        let rate_limiter = Arc::new(rate_limit::LimiteronAdapter::with_defaults());
+        let rate_limiter = Arc::new(rate_limit::LimiteronAdapter::with_defaults().await);
         let pipeline_queue = Arc::new(pipeline::PriorityRequestQueue::new(100));
         let response_channel = Arc::new(pipeline::ResponseChannel::new());
         let priority_calculator =

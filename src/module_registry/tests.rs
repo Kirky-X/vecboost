@@ -103,8 +103,8 @@ fn make_service() -> Arc<RwLock<EmbeddingService>> {
     Arc::new(RwLock::new(EmbeddingService::new(engine, None)))
 }
 
-fn make_rate_limiter() -> Arc<LimiteronAdapter> {
-    Arc::new(LimiteronAdapter::with_defaults())
+async fn make_rate_limiter() -> Arc<LimiteronAdapter> {
+    Arc::new(LimiteronAdapter::with_defaults().await)
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +142,7 @@ async fn test_embedding_module_missing_config_fails() {
 async fn test_rate_limit_module_build() {
     let mut kit = AsyncKit::new();
 
-    let rate_limiter = make_rate_limiter();
+    let rate_limiter = make_rate_limiter().await;
     kit.set_config(rate_limiter.clone());
     kit.register::<RateLimitModule>().unwrap();
 
@@ -212,7 +212,7 @@ async fn test_multiple_modules_build_together() {
     let mut kit = AsyncKit::new();
 
     let service = make_service();
-    let rate_limiter = make_rate_limiter();
+    let rate_limiter = make_rate_limiter().await;
     kit.set_config(service.clone());
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {
@@ -452,7 +452,7 @@ async fn test_all_modules_build_together_with_auth() {
     let mut kit = AsyncKit::new();
 
     let service = make_service();
-    let rate_limiter = make_rate_limiter();
+    let rate_limiter = make_rate_limiter().await;
     kit.set_config(service.clone());
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {
@@ -800,7 +800,7 @@ async fn test_all_fifteen_modules_build_together() {
 
     // 4 个现有 Module
     let service = make_service();
-    let rate_limiter = make_rate_limiter();
+    let rate_limiter = make_rate_limiter().await;
     kit.set_config(service.clone());
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {

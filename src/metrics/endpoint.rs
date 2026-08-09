@@ -50,14 +50,17 @@ pub async fn metrics_endpoint(
             .expect("IpWhitelistModule not registered");
 
         if !is_ip_whitelisted(&ip, &ip_whitelist) {
+            let context = crate::rate_limit::RequestContext {
+                client_ip: Some(ip.clone()),
+                path: "/metrics".to_string(),
+                method: "GET".to_string(),
+                ..Default::default()
+            };
             let allowed = app_state
                 .kit
                 .require::<crate::module_registry::RateLimitModule>()
                 .expect("RateLimitModule not registered")
-                .check_rate_limit(vec![
-                    crate::rate_limit::Dimension::Global,
-                    crate::rate_limit::Dimension::Ip(ip),
-                ])
+                .check_rate_limit(&context)
                 .await;
             // 记录限流决策指标
             if let Some(prom) = collector_opt.as_ref() {

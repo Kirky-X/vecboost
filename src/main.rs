@@ -214,11 +214,15 @@ async fn main() -> anyhow::Result<()> {
         use sdforge::rmcp::{ServiceExt, transport::io::stdio};
 
         log::info!("Starting VecBoost MCP server over stdio");
-        // 最小 kit：仅 EmbeddingModule，供 forge handler 通过 state().kit.require 访问
+        // kit：EmbeddingModule + RerankModule，供 forge handler 通过 state().kit.require 访问
         let mut kit = trait_kit::AsyncKit::new();
         kit.set_config(service.clone());
+        kit.set_config(rerank_service.clone());
+        kit.set_config(config.rerank.clone());
         kit.register::<EmbeddingModule>()
             .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
+        kit.register::<RerankModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
         let kit = kit
             .build()
             .await
@@ -246,11 +250,15 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or(false);
 
         if is_cli {
-            // 最小 kit：仅 EmbeddingModule，供 forge handler 通过 state().kit.require 访问
+            // kit：EmbeddingModule + RerankModule，供 forge handler 通过 state().kit.require 访问
             let mut kit = trait_kit::AsyncKit::new();
             kit.set_config(service.clone());
+            kit.set_config(rerank_service.clone());
+            kit.set_config(config.rerank.clone());
             kit.register::<EmbeddingModule>()
                 .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
+            kit.register::<RerankModule>()
+                .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
             let kit = kit
                 .build()
                 .await
@@ -537,10 +545,12 @@ async fn main() -> anyhow::Result<()> {
 
     // T012-T016: Register lifecycle and health check for key modules
     kit.register_lifecycle::<EmbeddingModule>();
+    kit.register_lifecycle::<RerankModule>();
     kit.register_lifecycle::<RateLimitModule>();
     kit.register_lifecycle::<AuditModule>();
     kit.register_lifecycle::<ConfigWatcherModule>();
     kit.register_health_check::<EmbeddingModule>();
+    kit.register_health_check::<RerankModule>();
     kit.register_health_check::<RateLimitModule>();
     kit.register_health_check::<CacheModule>();
 
@@ -707,16 +717,26 @@ async fn main() -> anyhow::Result<()> {
 
     // T018: Signal-aware graceful shutdown (SIGINT + SIGTERM)
     let signal = async {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                log::info!("Received SIGINT, initiating graceful shutdown");
+        #[cfg(unix)]
+        {
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("failed to install SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    log::info!("Received SIGINT, initiating graceful shutdown");
+                }
+                _ = sigterm.recv() => {
+                    log::info!("Received SIGTERM, initiating graceful shutdown");
+                }
             }
-            _ = sigterm.recv() => {
-                log::info!("Received SIGTERM, initiating graceful shutdown");
-            }
+        }
+        #[cfg(not(unix))]
+        {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to install CTRL-C handler");
+            log::info!("Received CTRL-C, initiating graceful shutdown");
         }
     };
 
@@ -789,7 +809,8 @@ async fn main() -> anyhow::Result<()> {
         // vecboost's grpc feature pulls in). Uses default config (100 burst, 10 req/s).
         // `new()` panics only on invalid default config (should never happen).
         let rate_limiter: Option<std::sync::Arc<dyn sdforge::security::ratelimit::RateLimiter>> = {
-            let limiter = SdforgeLimiteronAdapter::new().await;
+            let limiter = SdforgeLimiteronAdapter::new().await
+                .map_err(|e| anyhow::anyhow!("Failed to create gRPC rate limiter: {}", e))?;
             log::info!(
                 "gRPC rate_limiter enabled (sdforge LimiteronAdapter, default config: 100 burst / 10 req/s)"
             );

@@ -30,38 +30,8 @@ pub struct RerankService {
 }
 
 impl RerankService {
-    pub fn new(
-        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
-        model_config: Option<ModelConfig>,
-    ) -> Self {
-        Self {
-            engine,
-            validator: InputValidator::with_default(),
-            model_config,
-            cache: Arc::new(OxCacheBackend::disabled()),
-            memory_manager: None,
-            batch_scheduler: None,
-        }
-    }
-
-    #[allow(private_interfaces)]
-    pub fn with_cache(
-        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
-        model_config: Option<ModelConfig>,
-        cache: Arc<OxCacheBackend>,
-    ) -> Self {
-        Self {
-            engine,
-            validator: InputValidator::with_default(),
-            model_config,
-            cache,
-            memory_manager: None,
-            batch_scheduler: None,
-        }
-    }
-
-    #[allow(private_interfaces)]
-    pub fn with_all(
+    /// 统一内部构造入口，消除多个构造器间的字段初始化重复。
+    fn build(
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
         model_config: Option<ModelConfig>,
         cache: Arc<OxCacheBackend>,
@@ -76,6 +46,33 @@ impl RerankService {
             memory_manager,
             batch_scheduler,
         }
+    }
+
+    pub fn new(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+    ) -> Self {
+        Self::build(engine, model_config, Arc::new(OxCacheBackend::disabled()), None, None)
+    }
+
+    #[allow(private_interfaces)]
+    pub fn with_cache(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+        cache: Arc<OxCacheBackend>,
+    ) -> Self {
+        Self::build(engine, model_config, cache, None, None)
+    }
+
+    #[allow(private_interfaces)]
+    pub fn with_all(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+        cache: Arc<OxCacheBackend>,
+        memory_manager: Option<SharedGpuMemoryManager>,
+        batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
+    ) -> Self {
+        Self::build(engine, model_config, cache, memory_manager, batch_scheduler)
     }
 
     /// 执行重排序：对 query 和 documents 列表计算相关性分数

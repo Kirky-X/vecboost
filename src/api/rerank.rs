@@ -8,7 +8,7 @@
 //! 遵循 `src/api/embedding.rs` 相同模式：协议无关的 `*_handler` 函数包含
 //! 业务逻辑，`forge_*` / `cli_*` / `grpc_*` 仅为薄包装。
 
-use crate::api::embedding::{kit_internal_error, uuid_like_id};
+use crate::api::embedding::{kit_internal_error, to_api_error};
 use crate::api::init::state;
 use crate::domain::{
     BatchRerankRequest, BatchRerankResponse, RerankRequest, RerankResponse,
@@ -16,6 +16,8 @@ use crate::domain::{
 use crate::error::VecboostError;
 use crate::module_registry::RerankModule;
 use crate::service::rerank::RerankService;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 use sdforge::prelude::*;
@@ -53,44 +55,36 @@ pub async fn rerank_batch(
 }
 
 // =============================================================================
-// Error conversion — reuse embedding module's helpers
-// =============================================================================
-
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
-pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
-    match e {
-        VecboostError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        other => ApiError::Internal {
-            message: other.to_string(),
-            error_id: uuid_like_id(),
-            source: None,
-            context: None,
-        },
-    }
-}
-
-// =============================================================================
 // Protocol-agnostic handlers
 // =============================================================================
 
+/// Load rerank service and limits from the global kit.
+///
+/// Returns the `Arc<RwLock<RerankService>>` capability together with the
+/// configured `max_documents_per_query` and `max_query_length` limits so
+/// callers only need to acquire a read-guard and dispatch.
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
-async fn rerank_handler(req: RerankRequest) -> Result<RerankResponse, ApiError> {
+async fn load_rerank_service(
+) -> Result<(Arc<RwLock<RerankService>>, usize, usize), ApiError> {
     let st = state().map_err(to_api_error)?;
     let rerank_config = st
         .kit
         .config::<crate::config::app::RerankConfig>()
         .unwrap_or_default();
-    let max_documents = rerank_config.max_documents_per_query;
-    let max_query_length = rerank_config.max_query_length;
-
     let svc = st
         .kit
         .require::<RerankModule>()
         .map_err(kit_internal_error)?;
+    Ok((
+        svc,
+        rerank_config.max_documents_per_query,
+        rerank_config.max_query_length,
+    ))
+}
+
+#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
+async fn rerank_handler(req: RerankRequest) -> Result<RerankResponse, ApiError> {
+    let (svc, max_documents, max_query_length) = load_rerank_service().await?;
     let guard = svc.read().await;
     rerank(&guard, req, max_documents, max_query_length)
         .await
@@ -101,18 +95,7 @@ async fn rerank_handler(req: RerankRequest) -> Result<RerankResponse, ApiError> 
 async fn rerank_batch_handler(
     req: BatchRerankRequest,
 ) -> Result<BatchRerankResponse, ApiError> {
-    let st = state().map_err(to_api_error)?;
-    let rerank_config = st
-        .kit
-        .config::<crate::config::app::RerankConfig>()
-        .unwrap_or_default();
-    let max_documents = rerank_config.max_documents_per_query;
-    let max_query_length = rerank_config.max_query_length;
-
-    let svc = st
-        .kit
-        .require::<RerankModule>()
-        .map_err(kit_internal_error)?;
+    let (svc, max_documents, max_query_length) = load_rerank_service().await?;
     let guard = svc.read().await;
     rerank_batch(&guard, req, max_documents, max_query_length)
         .await
@@ -159,7 +142,7 @@ pub async fn forge_rerank_batch(
 #[forge(
     name = "rerank",
     version = 1,
-    cli_subcommand = "rerank",
+    cli = true,
     description = "Rerank documents by relevance to a query"
 )]
 pub async fn cli_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError> {

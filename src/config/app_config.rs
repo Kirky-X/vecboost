@@ -22,7 +22,7 @@ use confers::Config;
 use super::app::DatabaseConfig;
 use super::app::{
     AuditConfig, AuthConfig, ConfigError, EmbeddingConfig, MemoryPagingConfig, MemoryPoolConfig,
-    ModelConfig, MonitoringConfig, RateLimitConfig, SemanticCacheConfig, ServerConfig,
+    ModelConfig, MonitoringConfig, RateLimitConfig, RerankConfig, SemanticCacheConfig, ServerConfig,
     apply_priority_defaults, apply_security_env_overrides,
 };
 use crate::pipeline::PipelineConfig;
@@ -39,6 +39,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub model: ModelConfig,
     pub embedding: EmbeddingConfig,
+    pub rerank: RerankConfig,
     pub monitoring: MonitoringConfig,
     pub auth: AuthConfig,
     pub rate_limit: RateLimitConfig,
@@ -110,6 +111,11 @@ impl AppConfig {
         if let Err(report) = self.embedding.validate() {
             for (path, error) in report.iter() {
                 errors.push(format!("embedding.{path}: {error}"));
+            }
+        }
+        if let Err(report) = self.rerank.validate() {
+            for (path, error) in report.iter() {
+                errors.push(format!("rerank.{path}: {error}"));
             }
         }
 

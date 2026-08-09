@@ -263,19 +263,7 @@ impl EmbeddingService {
     }
 
     fn is_oom_error(error: &VecboostError) -> bool {
-        match error {
-            VecboostError::InferenceError(msg) | VecboostError::OutOfMemory(msg) => {
-                let lower_msg = msg.to_lowercase();
-                lower_msg.contains("out of memory")
-                    || lower_msg.contains("cuda out of memory")
-                    || lower_msg.contains("gpu out of memory")
-                    || lower_msg.contains("memory allocation failed")
-                    || lower_msg.contains("failed to allocate")
-                    || lower_msg.contains("not enough memory")
-                    || lower_msg.contains("alloc")
-            }
-            _ => false,
-        }
+        crate::service::common::is_oom_error(error)
     }
 
     async fn handle_oom_fallback<F, Fut, T>(&self, operation: F) -> Result<T, VecboostError>
@@ -283,71 +271,13 @@ impl EmbeddingService {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<T, VecboostError>>,
     {
-        let mut attempts = 0;
-
-        loop {
-            attempts += 1;
-
-            match operation().await {
-                Ok(result) => return Ok(result),
-                Err(error) if Self::is_oom_error(&error) && attempts <= MAX_FALLBACK_ATTEMPTS => {
-                    warn!(
-                        "OOM error detected: {}. Attempting fallback to CPU (attempt {}/{})",
-                        error, attempts, MAX_FALLBACK_ATTEMPTS
-                    );
-
-                    let engine = self.engine.read().await;
-
-                    if engine.is_fallback_triggered() {
-                        warn!("Fallback already triggered, cannot retry");
-                        return Err(VecboostError::OutOfMemory(
-                            "Out of memory and fallback already attempted".to_string(),
-                        ));
-                    }
-
-                    drop(engine);
-
-                    if let Some(ref config) = self.model_config
-                        && let Some(ref manager) = self.model_manager
-                    {
-                        let loaded_model = manager.get(&config.name).await;
-
-                        if let Some(_model) = loaded_model {
-                            let mut engine_guard = self.engine.write().await;
-                            let config_clone = config.clone();
-                            let fallback_result =
-                                engine_guard.try_fallback_to_cpu(&config_clone).await;
-
-                            match fallback_result {
-                                Ok(()) => {
-                                    warn!("Successfully fell back to CPU, retrying operation");
-                                    // 检查是否还有重试次数
-                                    if attempts >= MAX_FALLBACK_ATTEMPTS {
-                                        warn!("Max fallback attempts reached, aborting");
-                                        return Err(VecboostError::OutOfMemory(
-                                            "Max fallback attempts exceeded".to_string(),
-                                        ));
-                                    }
-                                    continue;
-                                }
-                                Err(e) => {
-                                    warn!("Failed to fallback to CPU: {}", e);
-                                    return Err(VecboostError::OutOfMemory(format!(
-                                        "OOM error and fallback failed: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                        }
-                    }
-
-                    return Err(VecboostError::OutOfMemory(
-                        "Out of memory and no fallback available".to_string(),
-                    ));
-                }
-                Err(error) => return Err(error),
-            }
-        }
+        crate::service::common::handle_oom_fallback(
+            &self.engine,
+            &self.model_config,
+            &self.model_manager,
+            operation,
+        )
+        .await
     }
 
     /// 处理单文本向量化

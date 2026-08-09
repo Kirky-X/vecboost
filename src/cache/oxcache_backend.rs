@@ -119,6 +119,7 @@ impl OxCacheBackend {
     }
 
     /// 删除 key,返回是否命中。
+    #[allow(dead_code)]
     pub async fn remove(&self, key: &str) -> bool {
         if !self.enabled {
             return false;
@@ -130,6 +131,7 @@ impl OxCacheBackend {
     }
 
     /// 清空缓存,同时重置 bloom filter。
+    #[allow(dead_code)]
     pub async fn clear(&self) {
         if let Some(cache) = &self.cache {
             let _ = cache.clear().await;
@@ -140,6 +142,7 @@ impl OxCacheBackend {
     }
 
     /// 返回当前条目数。
+    #[allow(dead_code)]
     pub async fn len(&self) -> usize {
         match &self.cache {
             Some(cache) => cache.len().await.map(|n| n as usize).unwrap_or(0),
@@ -148,6 +151,7 @@ impl OxCacheBackend {
     }
 
     /// 返回缓存是否为空。
+    #[allow(dead_code)]
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
     }

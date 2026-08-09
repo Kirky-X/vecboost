@@ -35,6 +35,23 @@ pub trait InferenceEngine: Send + Sync {
         false
     }
 
+    /// 对 (query, document) 对进行重排序评分
+    fn rerank(&self, _query: &str, _document: &str) -> Result<f32, VecboostError> {
+        Err(VecboostError::InternalError(
+            "rerank not supported by this engine".to_string(),
+        ))
+    }
+
+    /// 批量重排序：对同一 query 和多个 document 评分
+    fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> {
+        documents.iter().map(|doc| self.rerank(query, doc)).collect()
+    }
+
+    /// 检查引擎是否支持重排序
+    fn supports_rerank(&self) -> bool {
+        false
+    }
+
     /// 尝试降级到 CPU（在 OOM 时调用）
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
 }

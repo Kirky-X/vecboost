@@ -12,7 +12,7 @@
 
 #![allow(unexpected_cfgs)]
 
-#[cfg(feature = "auth")]
+#[cfg(all(feature = "auth", feature = "http"))]
 pub mod auth;
 pub mod embedding;
 pub mod init;

@@ -254,23 +254,24 @@ max_text_length = 8192  # 单个文本最大字节长度
 ```toml
 [auth]
 enabled = true
-jwt_secret = "your-secure-secret-key-at-least-32-chars"
+# ⚠️ 生产环境必须通过环境变量设置:
+# export VECBOOST_JWT_SECRET="your-32-char-min-secret"
+# export VECBOOST_ADMIN_PASSWORD="your-secure-password"
 token_expiration_hours = 1
 default_admin_username = "admin"
-default_admin_password = "Secure@Passw0rd!2026"
 trusted_proxies = []  # 受信任代理 CIDR 列表
 ```
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `enabled` | `false` | 是否启用认证 |
-| `jwt_secret` | - | JWT 密钥（至少 32 字符） |
-| `token_expiration_hours` | `1` | 令牌过期时间（小时） |
+| `jwt_secret` | - | JWT 密钥（至少 32 字符，**生产环境通过环境变量 `VECBOOST_JWT_SECRET` 设置**） |
+| `token_expiration_hours` | `1` | 服务端令牌超时（小时），实际 `expires_in` 由 garrison 管理 |
 | `default_admin_username` | `admin` | 默认管理员用户名 |
-| `default_admin_password` | - | 默认管理员密码 |
+| `default_admin_password` | - | 默认管理员密码（**生产环境通过环境变量 `VECBOOST_ADMIN_PASSWORD` 设置**） |
 | `trusted_proxies` | `[]` | 受信任代理 CIDR 列表（XFF 信任边界，空列表=无条件信任） |
 
-> **⚠️ 安全提示**: 生产环境中请修改默认管理员密码！生产部署建议配置 `trusted_proxies` 为实际反代 CIDR，防止客户端伪造 X-Forwarded-For。
+> **⚠️ 安全提示**: 生产环境中请通过环境变量设置敏感信息！`jwt_secret` 通过 `VECBOOST_JWT_SECRET`，`default_admin_password` 通过 `VECBOOST_ADMIN_PASSWORD` 注入，禁止在配置文件中明文存储。生产部署建议配置 `trusted_proxies` 为实际反代 CIDR，防止客户端伪造 X-Forwarded-For。
 
 ---
 
@@ -315,7 +316,9 @@ cache_size = 2048
 
 [auth]
 enabled = true
-jwt_secret = "your-very-long-secret-key-min-32-chars"
+# ⚠️ 敏感信息通过环境变量注入:
+# VECBOOST_JWT_SECRET / VECBOOST_ADMIN_PASSWORD
+token_expiration_hours = 24
 
 [rate_limit]
 enabled = true
@@ -389,7 +392,7 @@ docker stop vecboost
 curl http://localhost:9002/health
 
 # 预期响应:
-# {"status":"healthy","version":"0.2.1",...}
+# {"status":"OK"}
 ```
 
 ---
@@ -453,25 +456,34 @@ curl -X POST http://localhost:9002/api/v1/embed \
 curl -X POST http://localhost:9002/api/v1/similarity \
   -H "Content-Type: application/json" \
   -d '{
-    "vector1": [0.1, 0.2, 0.3, ...],
-    "vector2": [0.1, 0.2, 0.3, ...],
-    "metric": "cosine"
+    "source": "机器学习是人工智能的一个分支",
+    "target": "深度学习使用神经网络"
   }'
 ```
 
+**响应:**
+
+```json
+{
+  "score": 0.85
+}
+```
+
+> **💡 说明**: 相似度 API 接受两段文本（`source` 和 `target`），自动向量化后计算余弦相似度。
+
 ---
 
-### 🔍 搜索文档
+### 🔍 重排序（Rerank）
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/search \
+curl -X POST http://localhost:9002/api/v1/rerank \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "搜索查询",
+    "query": "什么是机器学习？",
     "documents": [
-      "关于 AI 的文档",
-      "关于 Rust 的文档",
-      "关于 ML 的文档"
+      "机器学习是人工智能的一个分支",
+      "今天天气很好",
+      "深度学习使用神经网络"
     ],
     "top_k": 2
   }'
@@ -484,7 +496,13 @@ curl -X POST http://localhost:9002/api/v1/search \
 #### 获取当前模型
 
 ```bash
-curl http://localhost:9002/api/v1/model
+curl http://localhost:9002/api/v1/model/current
+```
+
+#### 获取模型详细信息
+
+```bash
+curl http://localhost:9002/api/v1/model/info
 ```
 
 #### 列出可用模型
@@ -506,9 +524,9 @@ curl http://localhost:9002/api/v1/models
 ```toml
 [auth]
 enabled = true
-jwt_secret = "your-very-long-secret-key-min-32-chars"
+# jwt_secret 通过环境变量 VECBOOST_JWT_SECRET 注入
 default_admin_username = "admin"
-default_admin_password = "Secure@Passw0rd!2026"
+# default_admin_password 通过环境变量 VECBOOST_ADMIN_PASSWORD 注入
 ```
 
 ---
@@ -528,11 +546,13 @@ curl -X POST http://localhost:9002/api/v1/auth/login \
 
 ```json
 {
-  "access_token": "eyJhbGciOiJIUzI1NiIs...",
-  "token_type": "bearer",
-  "expires_in": 3600
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 0
 }
 ```
+
+> **💡 说明**: `expires_in` 为 `0` 表示令牌过期时间由 garrison 服务端统一管理（通过 `GarrisonConfig.timeout` 控制），客户端无需自行计算过期。
 
 ---
 
@@ -551,7 +571,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 ### 令牌过期
 
-默认令牌过期时间为 1 小时。在 `config.toml` 中配置：
+令牌过期时间由 garrison 服务端统一管理（`expires_in` 返回 `0`）。可在 `config.toml` 中配置服务端超时：
 
 ```toml
 [auth]
@@ -686,8 +706,7 @@ kubectl apply -f <your-ingress>.yaml
 
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `/health` | GET | 服务健康状态 |
-| `/ready` | GET | 就绪探针 |
+| `/health` | GET | 服务健康状态（返回 `{"status": "OK"}` 或 503） |
 | `/metrics` | GET | Prometheus 指标 |
 
 ---
@@ -798,8 +817,9 @@ grep -i cuda target/release/vecboost.log
 **问题**: 401 未授权错误。
 
 ```bash
-# 检查令牌是否有效
-curl http://localhost:9002/api/v1/auth/verify
+# 检查令牌是否有效（通过 /auth/me 端点验证当前用户信息）
+curl http://localhost:9002/api/v1/auth/me \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."
 ```
 
 **解决方案:**

@@ -81,7 +81,7 @@ VecBoost 是一个使用 Rust 构建的**高性能嵌入向量服务**。它为�
 ```rust
 pub struct VecboostState {
     /// trait-kit AsyncKit — 模块能力管理中心
-    /// 包含 14 个 Module 的能力查询入口
+    /// 包含 17 个 Module 的能力查询入口
     pub(crate) kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,
 }
 ```
@@ -513,7 +513,6 @@ pub struct GarrisonHandle;
 
 ```
 src/auth/
-├── migrations/     # 数据库迁移脚本
 ├── config.rs       # AuthConfig → GarrisonConfig 映射
 ├── interface.rs    # VecBoostInterface（GarrisonInterface 实现）
 ├── middleware.rs   # Axum 认证中间件（委托 garrison）

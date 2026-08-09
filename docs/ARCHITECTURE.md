@@ -45,7 +45,7 @@ graph TB
 
     subgraph Ecosystem["7-Library Ecosystem"]
         Kit["trait-kit<br/>Kit&lt;Ready&gt;"]
-        trait-kit -->|registers| Modules["6 Modules"]
+        trait-kit -->|registers| Modules["17 Modules"]
         oxcache["oxcache"]
         limiteron["limiteron"]
         dbnexus["dbnexus"]
@@ -71,16 +71,16 @@ graph TB
 
 ## 2. 7-Library Ecosystem
 
-The ecosystem is composed of 7 Rust libraries. 6 of them (`trait-kit`, `confers`, `inklog`, `oxcache`, `limiteron`, `sdforge`) are always-enabled mandatory dependencies; only `dbnexus` is feature-gated.
+The ecosystem is composed of 7 Rust libraries. 6 of them (`trait-kit`, `confers`, `inklog`, `oxcache`, `limiteron`, `sdforge`) are always-enabled mandatory dependencies; only `dbnexus` is feature-gated (`db` feature).
 
 | Library | Version | Feature | Role | Module |
 |---------|---------|---------|------|--------|
-| **trait-kit** | `0.3` | always | Module registry & typestate dependency management | (registry host) |
-| **confers** | `0.4` | always | Config loading (TOML + env override + hot reload) | EmbeddingModule |
-| **inklog** | `0.1` | always | Structured logging (console + file rotation) | AuditModule |
-| **oxcache** | `0.3` | always | Cache backend (LRU/LFU/FIFO + TTL eviction) | CacheModule |
+| **trait-kit** | `0.4` | always | Module registry & typestate dependency management | (registry host) |
+| **confers** | `0.5` | always | Config loading (TOML + env override + hot reload) | EmbeddingModule |
+| **inklog** | `0.2` | always | Structured logging (console + file rotation) | AuditModule |
+| **oxcache** | `0.4` | always | Cache backend (LRU/LFU/FIFO + TTL eviction) | CacheModule |
 | **limiteron** | `0.2` | always | Token bucket rate limiter (multi-dimension) | RateLimitModule |
-| **dbnexus** | `0.4` | `db` | Database persistence (SQLite/PostgreSQL + roles) | DbModule |
+| **dbnexus** | `0.5` | `db` | Database persistence (SQLite/PostgreSQL + roles) | DbModule |
 | **sdforge** | `0.4` | always | Multi-protocol interface generation (HTTP/gRPC/MCP/CLI) | (API layer) |
 
 ### 2.1 trait-kit Module Registry
@@ -100,16 +100,27 @@ graph LR
     Ready -->|require::&lt;T&gt;| Arc["Arc&lt;T&gt;"]
 ```
 
-The 6 registered modules:
+The 17 registered modules:
 
 | Module | Trait Bound | Backing Library | Provides |
 |--------|-------------|-----------------|----------|
-| `EmbeddingModule` | `ModuleMeta + AutoBuilder` | confers, sdforge | `EmbeddingService` |
-| `AuthModule` | `ModuleMeta + AutoBuilder` | jsonwebtoken, argon2 | `JwtManager`, `UserStore` |
-| `RateLimitModule` | `ModuleMeta + AutoBuilder` | limiteron | `LimiteronAdapter` |
-| `CacheModule` | `ModuleMeta + AutoBuilder` | oxcache | `Cache` backend |
-| `DbModule` | `ModuleMeta + AutoBuilder` | dbnexus | `DbPool` |
-| `AuditModule` | `ModuleMeta + AutoBuilder` | inklog | `AuditLogger` |
+| `EmbeddingModule` | `ModuleMeta + AsyncAutoBuilder` | confers, sdforge | `Arc<RwLock<EmbeddingService>>` |
+| `RerankModule` | `ModuleMeta + AsyncAutoBuilder` | sdforge | `Arc<RwLock<RerankService>>` |
+| `AuthModule` | `ModuleMeta + AsyncAutoBuilder` | garrison | `Option<Arc<GarrisonHandle>>` |
+| `RateLimitModule` | `ModuleMeta + AsyncAutoBuilder` | limiteron | `Arc<LimiteronAdapter>` |
+| `CacheModule` | `ModuleMeta + AsyncAutoBuilder` | oxcache | Cache enabled state |
+| `DbModule` | `ModuleMeta + AsyncAutoBuilder` | dbnexus | Database enabled state |
+| `AuditModule` | `ModuleMeta + AsyncAutoBuilder` | inklog | `Option<Arc<AuditLogger>>` |
+| `LoggerModule` | `ModuleMeta + AsyncAutoBuilder` | inklog | `Arc<LoggerManager>` |
+| `MetricsCollectorModule` | `ModuleMeta + AsyncAutoBuilder` | prometheus | `Option<Arc<InferenceCollector>>` |
+| `PrometheusCollectorModule` | `ModuleMeta + AsyncAutoBuilder` | prometheus | `Option<Arc<PrometheusCollector>>` |
+| `IpWhitelistModule` | `ModuleMeta + AsyncAutoBuilder` | - | `Vec<String>` |
+| `PipelineQueueModule` | `ModuleMeta + AsyncAutoBuilder` | - | `Arc<PriorityRequestQueue>` |
+| `ResponseChannelModule` | `ModuleMeta + AsyncAutoBuilder` | - | `Arc<ResponseChannel>` |
+| `PriorityCalculatorModule` | `ModuleMeta + AsyncAutoBuilder` | - | `Arc<PriorityCalculator>` |
+| `WorkerManagerModule` | `ModuleMeta + AsyncAutoBuilder` | - | `Arc<WorkerManager>` |
+| `ConfigWatcherModule` | `ModuleMeta + AsyncAutoBuilder` | confers | `WatcherGuard` |
+| `CsrfConfigModule` | `ModuleMeta + AsyncAutoBuilder` | garrison | `Option<Arc<GarrisonCsrfConfig>>` |
 
 ## 3. Module Dependency Graph
 
@@ -268,7 +279,7 @@ pub async fn cli_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
 
 ### 4.3 gRPC Methods
 
-9 gRPC methods are registered via `#[forge(grpc_method = "...")]` and exposed through `SdForgeService/Call`:
+11 gRPC methods are registered via `#[forge(grpc_method = "...")]` and exposed through `SdForgeService/Call`:
 
 | gRPC Method | Handler | Description |
 |-------------|---------|-------------|
@@ -276,6 +287,8 @@ pub async fn cli_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
 | `vecboost.embed_batch` | `grpc_embed_batch` | Batch embedding |
 | `vecboost.compute_similarity` | `grpc_compute_similarity` | Cosine similarity |
 | `vecboost.embed_file` | `grpc_embed_file` | Embed text from file |
+| `vecboost.rerank` | `grpc_rerank` | Rerank documents by query |
+| `vecboost.rerank_batch` | `grpc_rerank_batch` | Batch rerank multiple queries |
 | `vecboost.model_switch` | `grpc_model_switch` | Switch loaded model |
 | `vecboost.get_current_model` | `grpc_get_current_model` | Get current model info |
 | `vecboost.get_model_info` | `grpc_get_model_info` | Get model metadata |

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct PipelineConfig {
     pub enabled: bool,
@@ -27,7 +27,7 @@ impl Default for PipelineConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct QueueConfig {
     pub max_queue_size: usize,
@@ -43,7 +43,7 @@ impl Default for QueueConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct WorkerConfig {
     pub min_workers: usize,
@@ -67,7 +67,7 @@ impl Default for WorkerConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct PriorityConfig {
     pub base_priority: i32,
     pub timeout_boost_factor: f64,

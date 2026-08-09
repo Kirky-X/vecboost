@@ -9,7 +9,7 @@
 //! 仅在 `db` feature 启用时可用。
 
 use crate::error::VecboostError;
-use dbnexus::{DbPool as NexusDbPool, Session};
+use dbnexus::{DbConfig, DbPool as NexusDbPool, Session};
 
 /// VecBoost 数据库连接池 wrapper
 ///
@@ -31,6 +31,22 @@ impl DbPool {
     /// 如果连接失败,返回 `VecboostError::InternalError`
     pub async fn new(url: &str) -> Result<Self, VecboostError> {
         let pool = NexusDbPool::new(url)
+            .await
+            .map_err(|e| VecboostError::InternalError(format!("Failed to create db pool: {e}")))?;
+        Ok(Self { inner: pool })
+    }
+
+    /// 使用 `DbConfig` 创建连接池（支持 retry policy、pool-health-check 等高级配置）
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - dbnexus 连接池配置
+    ///
+    /// # Errors
+    ///
+    /// 如果连接失败,返回 `VecboostError::InternalError`
+    pub async fn with_config(config: DbConfig) -> Result<Self, VecboostError> {
+        let pool = NexusDbPool::with_config(config)
             .await
             .map_err(|e| VecboostError::InternalError(format!("Failed to create db pool: {e}")))?;
         Ok(Self { inner: pool })

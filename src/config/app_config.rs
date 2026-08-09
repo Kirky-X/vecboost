@@ -98,26 +98,18 @@ impl AppConfig {
         use garde::Validate;
         let mut errors = Vec::new();
 
-        if let Err(report) = self.server.validate() {
-            for (path, error) in report.iter() {
-                errors.push(format!("server.{path}: {error}"));
+        let mut collect = |prefix: &str, result: Result<(), garde::Report>| {
+            if let Err(report) = result {
+                for (path, error) in report.iter() {
+                    errors.push(format!("{prefix}.{path}: {error}"));
+                }
             }
-        }
-        if let Err(report) = self.model.validate() {
-            for (path, error) in report.iter() {
-                errors.push(format!("model.{path}: {error}"));
-            }
-        }
-        if let Err(report) = self.embedding.validate() {
-            for (path, error) in report.iter() {
-                errors.push(format!("embedding.{path}: {error}"));
-            }
-        }
-        if let Err(report) = self.rerank.validate() {
-            for (path, error) in report.iter() {
-                errors.push(format!("rerank.{path}: {error}"));
-            }
-        }
+        };
+
+        collect("server", self.server.validate());
+        collect("model", self.model.validate());
+        collect("embedding", self.embedding.validate());
+        collect("rerank", self.rerank.validate());
 
         if errors.is_empty() {
             Ok(())

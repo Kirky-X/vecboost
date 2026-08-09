@@ -436,4 +436,33 @@ mod tests {
             "output should contain TYPE lines"
         );
     }
+
+    #[cfg(feature = "db")]
+    #[test]
+    fn test_dbnexus_metrics_append_pattern() {
+        // T044: Verify the integration pattern — dbnexus MetricsCollector output
+        // can be appended to PrometheusCollector text output
+        use prometheus::Encoder;
+        let collector = PrometheusCollector::new().unwrap();
+        collector.record_http_request("GET", "/health", 200);
+
+        let encoder = prometheus::TextEncoder::new();
+        let families = collector.registry().gather();
+        let mut buffer = Vec::new();
+        encoder.encode(&families, &mut buffer).unwrap();
+
+        // Simulate appending dbnexus metrics (same pattern as endpoint.rs)
+        let db_metrics = dbnexus::MetricsCollector::new();
+        let db_text = db_metrics.export_prometheus();
+        assert!(
+            db_text.contains("dbnexus_"),
+            "dbnexus metrics should contain dbnexus_ prefixed metrics"
+        );
+        buffer.extend_from_slice(b"\n");
+        buffer.extend_from_slice(db_text.as_bytes());
+
+        let output = String::from_utf8(buffer).unwrap();
+        assert!(output.contains("http_requests_total"), "should have vecboost metrics");
+        assert!(output.contains("dbnexus_uptime"), "should have dbnexus metrics");
+    }
 }

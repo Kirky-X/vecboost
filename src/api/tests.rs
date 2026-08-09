@@ -533,7 +533,7 @@ async fn test_cli_compute_similarity_empty_source_returns_error() {
 /// so 100 successes imply 100 successful requires, which is within the 400 budget.
 ///
 /// Per-handler require budget (code review, src/api/auth.rs L40-53):
-/// - forge_login:  UserStoreModule + AuthModule + AuditModule = 3 requires
+/// - forge_login:  AuthModule + AuditModule = 2 requires
 /// - forge_logout: AuthModule + AuditModule = 2 requires
 /// - forge_embed:  EmbeddingModule = 1 require
 /// All handlers stay within the 4-require-per-request budget.

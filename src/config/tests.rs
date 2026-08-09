@@ -447,3 +447,336 @@ trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
         "max_text_length should match TOML value"
     );
 }
+
+// =============================================================================
+// T011: Config validation tests (garde validation integration)
+// =============================================================================
+
+/// T011: port=0 is rejected by validation.
+#[test]
+fn test_validation_port_zero_rejected() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::remove_var("VECBOOST_JWT_SECRET");
+        std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+    }
+
+    let toml_content = r#"
+[server]
+port = 0
+
+[model]
+model_repo = "test/model"
+batch_size = 8
+
+[embedding]
+max_batch_size = 32
+max_text_length = 8192
+
+[audit]
+enabled = false
+
+[pipeline]
+enabled = false
+"#;
+
+    let (_dir, path) = write_temp_toml(toml_content);
+    let result = AppConfig::load_via_confers_with_path(&path);
+    assert!(result.is_err(), "port=0 must be rejected by validation");
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("port"), "error should mention 'port': {err_msg}");
+}
+
+/// T011: empty model_repo is rejected by validation.
+#[test]
+fn test_validation_empty_model_repo_rejected() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::remove_var("VECBOOST_JWT_SECRET");
+        std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+    }
+
+    let toml_content = r#"
+[server]
+port = 3000
+
+[model]
+model_repo = ""
+batch_size = 8
+
+[embedding]
+max_batch_size = 32
+max_text_length = 8192
+
+[audit]
+enabled = false
+
+[pipeline]
+enabled = false
+"#;
+
+    let (_dir, path) = write_temp_toml(toml_content);
+    let result = AppConfig::load_via_confers_with_path(&path);
+    assert!(result.is_err(), "empty model_repo must be rejected by validation");
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("model_repo"), "error should mention 'model_repo': {err_msg}");
+}
+
+/// T011: batch_size=0 is rejected by validation.
+#[test]
+fn test_validation_batch_size_zero_rejected() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::remove_var("VECBOOST_JWT_SECRET");
+        std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+    }
+
+    let toml_content = r#"
+[server]
+port = 3000
+
+[model]
+model_repo = "test/model"
+batch_size = 0
+
+[embedding]
+max_batch_size = 32
+max_text_length = 8192
+
+[audit]
+enabled = false
+
+[pipeline]
+enabled = false
+"#;
+
+    let (_dir, path) = write_temp_toml(toml_content);
+    let result = AppConfig::load_via_confers_with_path(&path);
+    assert!(result.is_err(), "batch_size=0 must be rejected by validation");
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("batch_size"), "error should mention 'batch_size': {err_msg}");
+}
+
+/// T011: default config passes validation.
+#[test]
+fn test_validation_default_config_passes() {
+    let config = AppConfig::default();
+    let result = config.validate();
+    assert!(result.is_ok(), "default config should pass validation: {:?}", result.err());
+}
+
+/// T036: Config file watcher detects changes and triggers reload.
+///
+/// Verifies that `FsWatcher` detects file modifications and that the
+/// reload callback mechanism works (simulating what main.rs does).
+#[tokio::test]
+async fn test_config_watch_detects_file_change() {
+    let toml_content = r#"
+[server]
+host = "127.0.0.1"
+port = 9002
+timeout = 30
+
+[model]
+model_repo = "BAAI/bge-m3"
+use_gpu = false
+batch_size = 8
+
+[embedding]
+max_batch_size = 32
+max_text_length = 8192
+
+[audit]
+enabled = false
+
+[pipeline]
+enabled = false
+"#;
+
+    let (_dir, path) = write_temp_toml(toml_content);
+
+    // Create FsWatcher watching the temp config file
+    let mut watcher = confers::watcher::FsWatcher::new(&path, 100)
+        .await
+        .expect("FsWatcher should be created");
+    assert!(watcher.is_running(), "watcher should be running");
+
+    // Spawn a task that waits for the first change event
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let watch_task = tokio::spawn(async move {
+        if let Some(changed_path) = watcher.recv().await {
+            let _ = tx.send(changed_path).await;
+        }
+    });
+
+    // Wait a bit for the watcher to settle, then modify the file
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should open file for append");
+        writeln!(file, "\n# hot reload test change").expect("should write");
+    }
+
+    // Wait for the change event (with timeout)
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await;
+    assert!(result.is_ok(), "should receive change event within 5s");
+    let changed_path = result.unwrap().expect("channel should have a value");
+    assert!(
+        changed_path.to_string_lossy().contains("test_config"),
+        "changed path should reference the config file: {:?}",
+        changed_path
+    );
+
+    // Cleanup
+    watch_task.abort();
+}
+
+/// T036: WatcherGuard lifecycle — start/stop/is_running.
+#[tokio::test]
+async fn test_watcher_guard_lifecycle() {
+    let guard = confers::watcher::WatcherGuard::new();
+    assert!(!guard.is_running(), "new guard should not be running");
+
+    guard.start();
+    assert!(guard.is_running(), "guard should be running after start");
+
+    let result = guard.shutdown(std::time::Duration::from_secs(2)).await;
+    assert!(result.is_ok(), "shutdown should succeed");
+    assert!(result.unwrap(), "shutdown with no task should return true");
+    assert!(!guard.is_running(), "guard should not be running after shutdown");
+}
+
+// =============================================================================
+// T039: Encryption roundtrip tests
+// =============================================================================
+
+/// T039: Encryption roundtrip — encrypt → serialize → deserialize → decrypt
+/// produces the original value.
+///
+/// Sets `VECBOOST_ENCRYPTION_KEY`, creates an `AuthConfig` with known secrets,
+/// serializes to TOML, deserializes back, and verifies the secrets survive
+/// the roundtrip through XChaCha20-Poly1305 encryption.
+#[test]
+fn test_encryption_roundtrip_via_serde() {
+    use super::app::AuthConfig;
+    use crate::config::app::test_support::ENV_LOCK;
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Set a 32-byte encryption key
+    let enc_key = "vecboost-test-encryption-key-32b"; // pragma: allowlist secret
+    assert_eq!(enc_key.len(), 32);
+    unsafe {
+        std::env::set_var("VECBOOST_ENCRYPTION_KEY", enc_key);
+    }
+
+    // Create config with known sensitive values
+    let mut config = AuthConfig::default();
+    config.jwt_secret = Some("my-super-secret-jwt-token-value".to_string());
+    config.default_admin_password = Some("AdminP@ssw0rd!2026".to_string());
+
+    // Serialize to TOML (this encrypts the sensitive fields)
+    let serialized = toml::to_string(&config).expect("serialize should succeed");
+
+    // Verify the serialized form does NOT contain plaintext secrets
+    assert!(
+        !serialized.contains("my-super-secret-jwt-token-value"),
+        "serialized TOML should not contain plaintext jwt_secret"
+    );
+    assert!(
+        !serialized.contains("AdminP@ssw0rd!2026"),
+        "serialized TOML should not contain plaintext admin password"
+    );
+
+    // Deserialize back (this decrypts the sensitive fields)
+    let deserialized: AuthConfig =
+        toml::from_str(&serialized).expect("deserialize should succeed");
+
+    // Verify the roundtrip preserved the original values
+    assert_eq!(
+        deserialized.jwt_secret,
+        Some("my-super-secret-jwt-token-value".to_string()),
+        "jwt_secret should survive encrypt→decrypt roundtrip"
+    );
+    assert_eq!(
+        deserialized.default_admin_password,
+        Some("AdminP@ssw0rd!2026".to_string()),
+        "admin password should survive encrypt→decrypt roundtrip"
+    );
+
+    // Cleanup
+    unsafe {
+        std::env::remove_var("VECBOOST_ENCRYPTION_KEY");
+    }
+}
+
+/// T039: Without encryption key, values pass through as plaintext.
+#[test]
+fn test_encryption_fallback_to_plaintext_without_key() {
+    use super::app::AuthConfig;
+    use crate::config::app::test_support::ENV_LOCK;
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::remove_var("VECBOOST_ENCRYPTION_KEY");
+    }
+
+    let mut config = AuthConfig::default();
+    config.jwt_secret = Some("plaintext-jwt-secret".to_string());
+
+    let serialized = toml::to_string(&config).expect("serialize should succeed");
+    // Without encryption key, the value should appear as plaintext
+    assert!(
+        serialized.contains("plaintext-jwt-secret"),
+        "without encryption key, values should be plaintext"
+    );
+
+    let deserialized: AuthConfig =
+        toml::from_str(&serialized).expect("deserialize should succeed");
+    assert_eq!(
+        deserialized.jwt_secret,
+        Some("plaintext-jwt-secret".to_string())
+    );
+}
+
+/// T039: None values are preserved through serde (not encrypted).
+#[test]
+fn test_encryption_none_values_pass_through() {
+    use super::app::AuthConfig;
+    use crate::config::app::test_support::ENV_LOCK;
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        std::env::remove_var("VECBOOST_ENCRYPTION_KEY");
+    }
+
+    let config = AuthConfig::default();
+    assert!(config.jwt_secret.is_none());
+    assert!(config.default_admin_password.is_none());
+
+    let serialized = toml::to_string(&config).expect("serialize should succeed");
+    let deserialized: AuthConfig =
+        toml::from_str(&serialized).expect("deserialize should succeed");
+    assert!(deserialized.jwt_secret.is_none());
+    assert!(deserialized.default_admin_password.is_none());
+}
+
+/// T038: Schema generation produces non-empty TypeScript output.
+#[test]
+fn test_schema_generation_produces_typescript() {
+    let schema = AppConfig::generate_schema().expect("schema generation should succeed");
+    assert!(!schema.is_empty(), "generated schema should not be empty");
+    // TypeScript output should contain interface definitions
+    assert!(
+        schema.contains("interface") || schema.contains("type"),
+        "TypeScript output should contain interface or type definitions: {}",
+        &schema[..schema.len().min(200)]
+    );
+    // Should reference known config field names
+    assert!(
+        schema.contains("server") || schema.contains("Server"),
+        "schema should contain server config references"
+    );
+}

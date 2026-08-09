@@ -52,6 +52,17 @@ pub use domain::{EmbedRequest, EmbedResponse, SimilarityRequest, SimilarityRespo
 pub use error::VecboostError;
 pub use service::embedding::EmbeddingService;
 pub use utils::SimilarityMetric;
+pub use utils::vector::{TaskType, recommended_dimension, information_retention_rate};
+
+// 重新导出批处理调度类型（供 benchmark 和外部集成测试使用）
+pub use device::batch_scheduler::{
+    BatchConfig, BatchPriority, BatchRequest, DynamicBatchScheduler,
+};
+pub use device::continuous_batch::ContinuousBatchLoop;
+pub use device::memory_paging::{PagingConfig, PagingStats, WeightPagingManager};
+
+// 重新导出语义缓存类型
+pub use cache::{SemanticCache, SemanticCacheConfig, SemanticCacheStats};
 
 /// Application state
 ///
@@ -182,10 +193,10 @@ mod tests {
     use crate::module_registry::PrometheusCollectorModule;
     #[cfg(feature = "http")]
     use crate::module_registry::{
-        AuditModule, AuthEnabled, AuthEnabledModule, CacheConfig, CacheModule, DbConfig, DbModule,
+        AuditModule, AuthEnabled, CacheConfig, CacheModule, DbConfig, DbModule,
         EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
-        PipelineEnabledModule, PipelineQueueModule, PriorityCalculatorModule, RateLimitEnabled,
-        RateLimitEnabledModule, RateLimitModule, ResponseChannelModule, WorkerManagerModule,
+        PipelineQueueModule, PriorityCalculatorModule, RateLimitEnabled,
+        RateLimitModule, ResponseChannelModule, WorkerManagerModule,
     };
     #[cfg(feature = "auth")]
     use crate::module_registry::{
@@ -240,7 +251,7 @@ mod tests {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
-        let rate_limiter = Arc::new(rate_limit::LimiteronAdapter::with_default_config());
+        let rate_limiter = Arc::new(rate_limit::LimiteronAdapter::with_defaults());
         let pipeline_queue = Arc::new(pipeline::PriorityRequestQueue::new(100));
         let response_channel = Arc::new(pipeline::ResponseChannel::new());
         let priority_calculator =
@@ -290,9 +301,6 @@ mod tests {
         kit.register::<MetricsCollectorModule>().unwrap();
         kit.register::<PrometheusCollectorModule>().unwrap();
         kit.register::<IpWhitelistModule>().unwrap();
-        kit.register::<AuthEnabledModule>().unwrap();
-        kit.register::<RateLimitEnabledModule>().unwrap();
-        kit.register::<PipelineEnabledModule>().unwrap();
         kit.register::<PipelineQueueModule>().unwrap();
         kit.register::<ResponseChannelModule>().unwrap();
         kit.register::<PriorityCalculatorModule>().unwrap();
@@ -306,6 +314,7 @@ mod tests {
 
         // T012-T016: Register lifecycle and health check for key modules
         kit.register_lifecycle::<EmbeddingModule>();
+        kit.register_lifecycle::<RateLimitModule>();
         kit.register_lifecycle::<AuditModule>();
         kit.register_health_check::<EmbeddingModule>();
         kit.register_health_check::<RateLimitModule>();
@@ -419,11 +428,11 @@ mod tests {
 
     #[cfg(feature = "http")]
     #[tokio::test]
-    async fn test_kit_require_bool_flags_default_false() {
+    async fn test_kit_config_bool_flags_default_false() {
         let state = make_app_state().await;
-        let auth_enabled = state.kit.require::<AuthEnabledModule>().unwrap();
-        let rate_limit_enabled = state.kit.require::<RateLimitEnabledModule>().unwrap();
-        let pipeline_enabled = state.kit.require::<PipelineEnabledModule>().unwrap();
+        let auth_enabled = state.kit.config::<AuthEnabled>().map(|c| c.0).unwrap_or(false);
+        let rate_limit_enabled = state.kit.config::<RateLimitEnabled>().map(|c| c.0).unwrap_or(false);
+        let pipeline_enabled = state.kit.config::<PipelineEnabled>().map(|c| c.0).unwrap_or(false);
         assert!(!auth_enabled);
         assert!(!rate_limit_enabled);
         assert!(!pipeline_enabled);

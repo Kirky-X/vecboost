@@ -104,7 +104,7 @@ fn make_service() -> Arc<RwLock<EmbeddingService>> {
 }
 
 fn make_rate_limiter() -> Arc<LimiteronAdapter> {
-    Arc::new(LimiteronAdapter::with_default_config())
+    Arc::new(LimiteronAdapter::with_defaults())
 }
 
 // ---------------------------------------------------------------------------
@@ -538,93 +538,6 @@ fn make_worker_manager() -> Arc<crate::pipeline::WorkerManager> {
 }
 
 // ---------------------------------------------------------------------------
-// AuthEnabledModule (bool from AuthEnabled newtype)
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn test_auth_enabled_module_with_true() {
-    let mut kit = AsyncKit::new();
-    kit.set_config(AuthEnabled(true));
-    kit.register::<AuthEnabledModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let enabled = kit.require::<AuthEnabledModule>().unwrap();
-    assert!(enabled, "AuthEnabledModule should return true");
-}
-
-#[tokio::test]
-async fn test_auth_enabled_module_with_false() {
-    let mut kit = AsyncKit::new();
-    kit.set_config(AuthEnabled(false));
-    kit.register::<AuthEnabledModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let enabled = kit.require::<AuthEnabledModule>().unwrap();
-    assert!(!enabled, "AuthEnabledModule should return false");
-}
-
-#[tokio::test]
-async fn test_auth_enabled_module_defaults_false_when_config_missing() {
-    // 与 CacheModule/DbModule 一致：missing config 默认 false
-    let mut kit = AsyncKit::new();
-    kit.register::<AuthEnabledModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let enabled = kit.require::<AuthEnabledModule>().unwrap();
-    assert!(!enabled, "AuthEnabledModule should default to false");
-}
-
-// ---------------------------------------------------------------------------
-// RateLimitEnabledModule (bool from RateLimitEnabled newtype)
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn test_rate_limit_enabled_module_with_true() {
-    let mut kit = AsyncKit::new();
-    kit.set_config(RateLimitEnabled(true));
-    kit.register::<RateLimitEnabledModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let enabled = kit.require::<RateLimitEnabledModule>().unwrap();
-    assert!(enabled);
-}
-
-#[tokio::test]
-async fn test_rate_limit_enabled_module_defaults_false_when_config_missing() {
-    let mut kit = AsyncKit::new();
-    kit.register::<RateLimitEnabledModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let enabled = kit.require::<RateLimitEnabledModule>().unwrap();
-    assert!(!enabled);
-}
-
-// ---------------------------------------------------------------------------
-// PipelineEnabledModule (bool from PipelineEnabled newtype)
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn test_pipeline_enabled_module_with_true() {
-    let mut kit = AsyncKit::new();
-    kit.set_config(PipelineEnabled(true));
-    kit.register::<PipelineEnabledModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let enabled = kit.require::<PipelineEnabledModule>().unwrap();
-    assert!(enabled);
-}
-
-#[tokio::test]
-async fn test_pipeline_enabled_module_defaults_false_when_config_missing() {
-    let mut kit = AsyncKit::new();
-    kit.register::<PipelineEnabledModule>().unwrap();
-
-    let kit = kit.build().await.unwrap();
-    let enabled = kit.require::<PipelineEnabledModule>().unwrap();
-    assert!(!enabled);
-}
-
-// ---------------------------------------------------------------------------
 // MetricsCollectorModule (Option<Arc<InferenceCollector>>)
 // ---------------------------------------------------------------------------
 
@@ -898,6 +811,7 @@ async fn test_all_fifteen_modules_build_together() {
     kit.set_config(Option::<Arc<crate::audit::AuditLogger>>::None);
 
     // 13 个新 Module 的 config
+    // Bool newtype configs (no Module registration — queried via kit.config)
     kit.set_config(AuthEnabled(true));
     kit.set_config(RateLimitEnabled(true));
     kit.set_config(PipelineEnabled(false));
@@ -916,11 +830,8 @@ async fn test_all_fifteen_modules_build_together() {
         kit.set_config(Option::<Arc<crate::auth::GarrisonCsrfConfig>>::None);
     }
 
-    // 注册全部
+    // 注册全部（bool newtype 不再注册 Module，直接通过 config 查询）
     kit.register::<EmbeddingModule>().unwrap();
-    kit.register::<AuthEnabledModule>().unwrap();
-    kit.register::<RateLimitEnabledModule>().unwrap();
-    kit.register::<PipelineEnabledModule>().unwrap();
     kit.register::<MetricsCollectorModule>().unwrap();
     #[cfg(feature = "http")]
     kit.register::<PrometheusCollectorModule>().unwrap();
@@ -943,9 +854,6 @@ async fn test_all_fifteen_modules_build_together() {
 
     // 验证全部 capability 可检索
     assert!(kit.contains::<EmbeddingModule>());
-    assert!(kit.contains::<AuthEnabledModule>());
-    assert!(kit.contains::<RateLimitEnabledModule>());
-    assert!(kit.contains::<PipelineEnabledModule>());
     assert!(kit.contains::<MetricsCollectorModule>());
     #[cfg(feature = "http")]
     assert!(kit.contains::<PrometheusCollectorModule>());
@@ -964,10 +872,10 @@ async fn test_all_fifteen_modules_build_together() {
         assert!(kit.contains::<CsrfConfigModule>());
     }
 
-    // 验证部分 capability 返回正确值
-    assert!(kit.require::<AuthEnabledModule>().unwrap());
-    assert!(kit.require::<RateLimitEnabledModule>().unwrap());
-    assert!(!kit.require::<PipelineEnabledModule>().unwrap());
+    // 验证部分 capability 返回正确值（bool newtype 通过 config 查询）
+    assert!(kit.config::<AuthEnabled>().map(|c| c.0).unwrap_or(false));
+    assert!(kit.config::<RateLimitEnabled>().map(|c| c.0).unwrap_or(false));
+    assert!(!kit.config::<PipelineEnabled>().map(|c| c.0).unwrap_or(false));
     let ip_list = kit.require::<IpWhitelistModule>().unwrap();
     assert_eq!(ip_list, vec!["127.0.0.1".to_string()]);
 }

@@ -32,6 +32,10 @@ pub struct PrometheusCollector {
     // 缓存命中率
     cache_hits: CounterVec,
     cache_misses: CounterVec,
+
+    // 限流决策计数器（limiteron 集成）
+    rate_limit_allowed: CounterVec,
+    rate_limit_denied: CounterVec,
 }
 
 impl PrometheusCollector {
@@ -90,6 +94,22 @@ impl PrometheusCollector {
             registry.clone()
         )?;
 
+        // 限流允许通过的请求数
+        let rate_limit_allowed = register_counter_vec_with_registry!(
+            "rate_limit_allowed_total",
+            "Total number of rate-limited requests allowed",
+            &["dimension"],
+            registry.clone()
+        )?;
+
+        // 限流拒绝的请求数
+        let rate_limit_denied = register_counter_vec_with_registry!(
+            "rate_limit_denied_total",
+            "Total number of rate-limited requests denied",
+            &["dimension"],
+            registry.clone()
+        )?;
+
         Ok(Self {
             registry,
             http_requests_total,
@@ -98,6 +118,8 @@ impl PrometheusCollector {
             batch_size,
             cache_hits,
             cache_misses,
+            rate_limit_allowed,
+            rate_limit_denied,
         })
     }
 
@@ -141,6 +163,16 @@ impl PrometheusCollector {
     /// 记录缓存未命中
     pub fn record_cache_miss(&self, cache_type: &str) {
         self.cache_misses.with_label_values(&[cache_type]).inc();
+    }
+
+    /// 记录限流决策：允许通过
+    pub fn record_rate_limit_allowed(&self, dimension: &str) {
+        self.rate_limit_allowed.with_label_values(&[dimension]).inc();
+    }
+
+    /// 记录限流决策：拒绝
+    pub fn record_rate_limit_denied(&self, dimension: &str) {
+        self.rate_limit_denied.with_label_values(&[dimension]).inc();
     }
 
     #[allow(clippy::unnecessary_cast)]

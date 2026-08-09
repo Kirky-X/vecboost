@@ -3,10 +3,12 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! limiteron 后端封装:提供与 RateLimiter 兼容的接口,内部委托 limiteron::TokenBucketLimiter。
+//! limiteron 后端封装：多维度限流适配器。
 //!
-//! 用于替代自研 RateLimiter,支持多维度限流(Global/Ip/User/ApiKey)。
-//! 每个维度维护独立的令牌桶,容量等于该维度的每分钟限额,补充速率为 限额/60(令牌/秒)。
+//! 基于 limiteron 原生 `Limiter` trait + `TokenBucketLimiter`，
+//! 支持 Global/Ip/User/ApiKey 四个维度的独立限流。
+//! 每个维度维护独立的令牌桶，容量等于该维度的每分钟限额，
+//! 补充速率为 限额/60（令牌/秒）。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,31 +16,66 @@ use std::sync::Arc;
 use limiteron::limiters::{Limiter, TokenBucketLimiter};
 use tokio::sync::Mutex;
 
-use crate::rate_limit::{RateLimitConfig, RateLimitDimension, RateLimitStatus};
+/// 限流维度（VecBoost 特有的多维度路由逻辑）
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Dimension {
+    /// 全局限流
+    Global,
+    /// IP 限流
+    Ip(String),
+    /// 用户限流
+    User(String),
+    /// API Key 限流
+    ApiKey(String),
+}
 
-/// limiteron 后端,包装多个 `limiteron::TokenBucketLimiter`(按维度 key 管理)。
+/// 多维度限流配置
+#[derive(Debug, Clone)]
+pub struct RateLimitSettings {
+    /// 全局请求限制（每分钟）
+    pub global_requests_per_minute: u64,
+    /// IP 请求限制（每分钟）
+    pub ip_requests_per_minute: u64,
+    /// 用户请求限制（每分钟）
+    pub user_requests_per_minute: u64,
+    /// API Key 请求限制（每分钟）
+    pub api_key_requests_per_minute: u64,
+}
+
+impl Default for RateLimitSettings {
+    fn default() -> Self {
+        Self {
+            global_requests_per_minute: 1000,
+            ip_requests_per_minute: 100,
+            user_requests_per_minute: 200,
+            api_key_requests_per_minute: 500,
+        }
+    }
+}
+
+/// limiteron 后端，按维度管理 `TokenBucketLimiter` 实例。
 pub struct LimiteronAdapter {
     buckets: Mutex<HashMap<String, Arc<TokenBucketLimiter>>>,
-    config: RateLimitConfig,
+    settings: RateLimitSettings,
 }
 
 impl LimiteronAdapter {
-    pub fn new(config: RateLimitConfig) -> Self {
+    pub fn new(settings: RateLimitSettings) -> Self {
         Self {
             buckets: Mutex::new(HashMap::new()),
-            config,
+            settings,
         }
     }
 
-    pub fn with_default_config() -> Self {
-        Self::new(RateLimitConfig::default())
+    pub fn with_defaults() -> Self {
+        Self::new(RateLimitSettings::default())
     }
 
-    /// 检查是否允许请求(所有维度都必须通过)。
-    pub async fn check_rate_limit(&self, dimensions: Vec<RateLimitDimension>) -> bool {
+    /// 检查是否允许请求（所有维度都必须通过）。
+    pub async fn check_rate_limit(&self, dimensions: Vec<Dimension>) -> bool {
         for dimension in dimensions {
             let key = dimension_to_key(&dimension);
-            let max_requests = dimension_limit(&self.config, &dimension);
+            let max_requests = self.dimension_limit(&dimension);
             // limit=0 表示禁止该维度所有请求
             if max_requests == 0 {
                 return false;
@@ -52,28 +89,19 @@ impl LimiteronAdapter {
         true
     }
 
-    /// 获取限流状态。
-    pub async fn get_status(&self, dimension: RateLimitDimension) -> RateLimitStatus {
+    /// 获取给定维度的剩余令牌数。
+    pub async fn get_remaining(&self, dimension: Dimension) -> u64 {
         let key = dimension_to_key(&dimension);
-        let max_requests = dimension_limit(&self.config, &dimension);
+        let max_requests = self.dimension_limit(&dimension);
         let bucket = self.get_or_create_bucket(&key, max_requests).await;
-        let tokens = bucket.tokens();
-        RateLimitStatus {
-            dimension: format!("{:?}", dimension),
-            max_requests,
-            current_count: max_requests.saturating_sub(tokens),
-            remaining: tokens,
-            window_secs: 60, // 限流窗口固定 60 秒(每分钟限额)
-            algorithm: "token_bucket".to_string(),
-        }
+        bucket.tokens()
     }
 
-    /// 获取给定维度的剩余请求数。
-    pub async fn get_remaining(&self, dimension: RateLimitDimension) -> u64 {
-        self.get_status(dimension).await.remaining
-    }
-
-    async fn get_or_create_bucket(&self, key: &str, max_requests: u64) -> Arc<TokenBucketLimiter> {
+    async fn get_or_create_bucket(
+        &self,
+        key: &str,
+        max_requests: u64,
+    ) -> Arc<TokenBucketLimiter> {
         let mut buckets = self.buckets.lock().await;
         buckets
             .entry(key.to_string())
@@ -83,23 +111,23 @@ impl LimiteronAdapter {
             })
             .clone()
     }
-}
 
-fn dimension_to_key(dimension: &RateLimitDimension) -> String {
-    match dimension {
-        RateLimitDimension::Global => "global".to_string(),
-        RateLimitDimension::Ip(ip) => format!("ip:{}", ip),
-        RateLimitDimension::User(u) => format!("user:{}", u),
-        RateLimitDimension::ApiKey(k) => format!("apikey:{}", k),
+    fn dimension_limit(&self, dimension: &Dimension) -> u64 {
+        match dimension {
+            Dimension::Global => self.settings.global_requests_per_minute,
+            Dimension::Ip(_) => self.settings.ip_requests_per_minute,
+            Dimension::User(_) => self.settings.user_requests_per_minute,
+            Dimension::ApiKey(_) => self.settings.api_key_requests_per_minute,
+        }
     }
 }
 
-fn dimension_limit(config: &RateLimitConfig, dimension: &RateLimitDimension) -> u64 {
+fn dimension_to_key(dimension: &Dimension) -> String {
     match dimension {
-        RateLimitDimension::Global => config.global_requests_per_minute,
-        RateLimitDimension::Ip(_) => config.ip_requests_per_minute,
-        RateLimitDimension::User(_) => config.user_requests_per_minute,
-        RateLimitDimension::ApiKey(_) => config.api_key_requests_per_minute,
+        Dimension::Global => "global".to_string(),
+        Dimension::Ip(ip) => format!("ip:{}", ip),
+        Dimension::User(u) => format!("user:{}", u),
+        Dimension::ApiKey(k) => format!("apikey:{}", k),
     }
 }
 
@@ -107,24 +135,22 @@ fn dimension_limit(config: &RateLimitConfig, dimension: &RateLimitDimension) -> 
 mod tests {
     use super::*;
 
-    fn small_config() -> RateLimitConfig {
-        RateLimitConfig {
+    fn small_settings() -> RateLimitSettings {
+        RateLimitSettings {
             global_requests_per_minute: 5,
             ip_requests_per_minute: 3,
             user_requests_per_minute: 4,
             api_key_requests_per_minute: 2,
-            ..RateLimitConfig::default()
         }
     }
 
     #[tokio::test]
     async fn test_check_rate_limit_allows_under_limit() {
-        let adapter = LimiteronAdapter::new(small_config());
-        // global 限额 5,发 5 个请求都应通过
+        let adapter = LimiteronAdapter::new(small_settings());
         for _ in 0..5 {
             assert!(
                 adapter
-                    .check_rate_limit(vec![RateLimitDimension::Global])
+                    .check_rate_limit(vec![Dimension::Global])
                     .await
             );
         }
@@ -132,77 +158,54 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_rate_limit_blocks_over_limit() {
-        let adapter = LimiteronAdapter::new(small_config());
-        // api_key 限额 2
+        let adapter = LimiteronAdapter::new(small_settings());
         assert!(
             adapter
-                .check_rate_limit(vec![RateLimitDimension::ApiKey("k1".into())])
+                .check_rate_limit(vec![Dimension::ApiKey("k1".into())])
                 .await
         );
         assert!(
             adapter
-                .check_rate_limit(vec![RateLimitDimension::ApiKey("k1".into())])
+                .check_rate_limit(vec![Dimension::ApiKey("k1".into())])
                 .await
         );
-        // 第 3 个应被拒绝
         assert!(
             !adapter
-                .check_rate_limit(vec![RateLimitDimension::ApiKey("k1".into())])
+                .check_rate_limit(vec![Dimension::ApiKey("k1".into())])
                 .await
         );
     }
 
     #[tokio::test]
     async fn test_multiple_dimensions_independent() {
-        let adapter = LimiteronAdapter::new(small_config());
-        // ip 限额 3,user 限额 4 — 不同维度独立计数
-        let ip = RateLimitDimension::Ip("1.2.3.4".into());
-        let user = RateLimitDimension::User("alice".into());
+        let adapter = LimiteronAdapter::new(small_settings());
+        let ip = Dimension::Ip("1.2.3.4".into());
+        let user = Dimension::User("alice".into());
         for _ in 0..3 {
             assert!(adapter.check_rate_limit(vec![ip.clone()]).await);
         }
-        // ip 已耗尽
         assert!(!adapter.check_rate_limit(vec![ip.clone()]).await);
-        // user 仍可用
         assert!(adapter.check_rate_limit(vec![user.clone()]).await);
     }
 
     #[tokio::test]
     async fn test_check_rate_limit_all_dimensions_must_pass() {
-        let adapter = LimiteronAdapter::new(small_config());
-        // api_key 限额 2,消耗 2 次后,同时检查 global+apikey 应失败(apikey 维度拒绝)
-        let api_key = RateLimitDimension::ApiKey("key".into());
+        let adapter = LimiteronAdapter::new(small_settings());
+        let api_key = Dimension::ApiKey("key".into());
         assert!(adapter.check_rate_limit(vec![api_key.clone()]).await);
         assert!(adapter.check_rate_limit(vec![api_key.clone()]).await);
-        // apikey 已耗尽,组合维度应返回 false
         assert!(
             !adapter
-                .check_rate_limit(vec![RateLimitDimension::Global, api_key.clone()])
+                .check_rate_limit(vec![Dimension::Global, api_key.clone()])
                 .await
         );
     }
 
     #[tokio::test]
-    async fn test_get_status_returns_correct_info() {
-        let adapter = LimiteronAdapter::new(small_config());
-        let dim = RateLimitDimension::Ip("10.0.0.1".into());
-        // 消耗 1 个令牌
-        assert!(adapter.check_rate_limit(vec![dim.clone()]).await);
-        let status = adapter.get_status(dim.clone()).await;
-        assert_eq!(status.max_requests, 3);
-        assert_eq!(status.remaining, 2);
-        assert_eq!(status.current_count, 1);
-        assert_eq!(status.algorithm, "token_bucket");
-        assert!(status.dimension.contains("Ip"));
-    }
-
-    #[tokio::test]
     async fn test_get_remaining_returns_tokens() {
-        let adapter = LimiteronAdapter::new(small_config());
-        let dim = RateLimitDimension::User("bob".into());
-        // 初始剩余 = 限额 4
+        let adapter = LimiteronAdapter::new(small_settings());
+        let dim = Dimension::User("bob".into());
         assert_eq!(adapter.get_remaining(dim.clone()).await, 4);
-        // 消耗 2 个
         adapter.check_rate_limit(vec![dim.clone()]).await;
         adapter.check_rate_limit(vec![dim.clone()]).await;
         assert_eq!(adapter.get_remaining(dim.clone()).await, 2);
@@ -210,41 +213,35 @@ mod tests {
 
     #[tokio::test]
     async fn test_global_dimension_key_isolation() {
-        let adapter = LimiteronAdapter::new(small_config());
-        // global 限额 5,消耗 5 次
+        let adapter = LimiteronAdapter::new(small_settings());
         for _ in 0..5 {
             assert!(
                 adapter
-                    .check_rate_limit(vec![RateLimitDimension::Global])
+                    .check_rate_limit(vec![Dimension::Global])
                     .await
             );
         }
-        // 第 6 次应拒绝
         assert!(
             !adapter
-                .check_rate_limit(vec![RateLimitDimension::Global])
+                .check_rate_limit(vec![Dimension::Global])
                 .await
         );
-        // 但其他维度仍可用
         assert!(
             adapter
-                .check_rate_limit(vec![RateLimitDimension::Ip("9.9.9.9".into())])
+                .check_rate_limit(vec![Dimension::Ip("9.9.9.9".into())])
                 .await
         );
     }
 
     #[tokio::test]
     async fn test_token_refill_restores_capacity() {
-        let adapter = LimiteronAdapter::new(small_config());
-        let dim = RateLimitDimension::ApiKey("refill".into());
-        // 限额 2,消耗完
+        let adapter = LimiteronAdapter::new(small_settings());
+        let dim = Dimension::ApiKey("refill".into());
         adapter.check_rate_limit(vec![dim.clone()]).await;
         adapter.check_rate_limit(vec![dim.clone()]).await;
-        // 此时再请求应被拒绝
         assert!(!adapter.check_rate_limit(vec![dim.clone()]).await);
-        // 等待令牌补充(refill_rate = max(2/60,1) = 1 令牌/秒,等 1.2 秒)
+        // refill_rate = max(2/60,1) = 1 令牌/秒,等 1.2 秒
         tokio::time::sleep(tokio::time::Duration::from_millis(1200)).await;
-        // 补充后请求应成功(allow() 触发 refill)
         assert!(
             adapter.check_rate_limit(vec![dim.clone()]).await,
             "expected refill to allow request after wait"
@@ -253,25 +250,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_limit_zero_rejects_all() {
-        let mut config = small_config();
-        config.global_requests_per_minute = 0;
-        let adapter = LimiteronAdapter::new(config);
-        // limit=0 时所有请求被拒绝
+        let mut settings = small_settings();
+        settings.global_requests_per_minute = 0;
+        let adapter = LimiteronAdapter::new(settings);
         assert!(
             !adapter
-                .check_rate_limit(vec![RateLimitDimension::Global])
+                .check_rate_limit(vec![Dimension::Global])
                 .await,
             "limit=0 must reject all requests"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_window_secs_is_60() {
-        let adapter = LimiteronAdapter::new(small_config());
-        let status = adapter.get_status(RateLimitDimension::Global).await;
-        assert_eq!(
-            status.window_secs, 60,
-            "window_secs must be 60 (per-minute window)"
         );
     }
 }

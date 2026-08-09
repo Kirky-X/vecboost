@@ -37,7 +37,7 @@ thiserror = { version = "2.0", default-features = false }
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 
 # Module Registry (always required)
-trait-kit = { version = "0.4", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer"] }
+trait-kit = { version = "0.4", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator"] }
 
 # Configuration infrastructure (confers - 必选,完全接管配置,禁止手写 config/toml)
 confers = { version = "0.5", path = "../base/confers", default-features = false, features = ["toml", "env", "config-bus", "validation", "watch", "encryption", "schema"] }
@@ -52,7 +52,7 @@ log = { version = "0.4", default-features = false }
 oxcache = { version = "0.4", path = "../base/oxcache", default-features = false, features = ["core", "bloom", "compression", "macros"] }
 
 # Rate limiting infrastructure (limiteron - 必选,完全接管速率限制,禁止手写)
-limiteron = { version = "0.2", path = "../base/limiteron", default-features = false }
+limiteron = { version = "0.2", path = "../base/limiteron", default-features = false, features = ["ban-manager", "quota-control", "circuit-breaker", "gcra", "macros", "metrics", "validation", "parallel-checker", "adaptive-limiting", "event-system", "multi-tenant", "priority-queue", "admission-control", "kit"] }
 
 # Database infrastructure (db feature)
 # dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
@@ -168,6 +168,19 @@ tempfile = { version = "3.0", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter"] }
 toml = { version = "1.1", default-features = false }
+criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "similarity_bench"
+harness = false
+
+[[bench]]
+name = "batch_scheduling_bench"
+harness = false
+
+[[bench]]
+name = "semantic_cache_bench"
+harness = false
 
 [profile.dev]
 opt-level = 1

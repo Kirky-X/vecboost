@@ -169,7 +169,7 @@ mod tests {
             WorkerConfig::default(),
             Arc::clone(&service),
         ));
-        let rate_limiter = Arc::new(LimiteronAdapter::with_default_config());
+        let rate_limiter = Arc::new(LimiteronAdapter::with_defaults());
 
         let mut kit = trait_kit::AsyncKit::new();
         kit.set_config(service.clone());
@@ -210,12 +210,6 @@ mod tests {
         kit.register::<crate::module_registry::PrometheusCollectorModule>()
             .unwrap();
         kit.register::<crate::module_registry::IpWhitelistModule>()
-            .unwrap();
-        kit.register::<crate::module_registry::AuthEnabledModule>()
-            .unwrap();
-        kit.register::<crate::module_registry::RateLimitEnabledModule>()
-            .unwrap();
-        kit.register::<crate::module_registry::PipelineEnabledModule>()
             .unwrap();
         kit.register::<crate::module_registry::PipelineQueueModule>()
             .unwrap();

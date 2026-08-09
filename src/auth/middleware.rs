@@ -202,11 +202,9 @@ pub async fn auth_rate_limit_middleware(
     // 检查限流是否启用
     let rate_limit_enabled = state
         .kit
-        .require::<crate::module_registry::RateLimitEnabledModule>()
-        .map_err(|e| {
-            log::error!("RateLimitEnabledModule not registered: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .config::<crate::module_registry::RateLimitEnabled>()
+        .map(|c| c.0)
+        .unwrap_or(false);
 
     if !rate_limit_enabled {
         return Ok(next.run(request).await);
@@ -244,10 +242,21 @@ pub async fn auth_rate_limit_middleware(
 
     let allowed = rate_limiter
         .check_rate_limit(vec![
-            crate::rate_limit::RateLimitDimension::Global,
-            crate::rate_limit::RateLimitDimension::Ip(ip.clone()),
+            crate::rate_limit::Dimension::Global,
+            crate::rate_limit::Dimension::Ip(ip.clone()),
         ])
         .await;
+
+    // 记录限流决策指标
+    if let Ok(prom_collector) = state.kit.require::<crate::module_registry::PrometheusCollectorModule>() {
+        if let Some(prom) = prom_collector.as_ref() {
+            if allowed {
+                prom.record_rate_limit_allowed("ip");
+            } else {
+                prom.record_rate_limit_denied("ip");
+            }
+        }
+    }
 
     if !allowed {
         log::warn!("Auth endpoint rate limit exceeded for IP: {}", ip);

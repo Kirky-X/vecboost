@@ -45,9 +45,6 @@ pub struct AuditModule;
 //   - bool 字段用 newtype 包装以避免 TypeMap 中 bool TypeId 冲突
 // ---------------------------------------------------------------------------
 
-/// 认证启用模块 — 提供 `bool` 能力（读取 `AuthEnabled` newtype 配置）
-pub struct AuthEnabledModule;
-
 /// CSRF 配置模块（auth）— 提供 `Option<Arc<GarrisonCsrfConfig>>` 能力
 #[cfg(feature = "auth")]
 pub struct CsrfConfigModule;
@@ -64,12 +61,6 @@ pub struct PrometheusCollectorModule;
 
 /// IP 白名单模块 — 提供 `Vec<String>` 能力
 pub struct IpWhitelistModule;
-
-/// 限流启用模块 — 提供 `bool` 能力（读取 `RateLimitEnabled` newtype 配置）
-pub struct RateLimitEnabledModule;
-
-/// 管道启用模块 — 提供 `bool` 能力（读取 `PipelineEnabled` newtype 配置）
-pub struct PipelineEnabledModule;
 
 /// 管道队列模块 — 提供 `Arc<PriorityRequestQueue>` 能力
 pub struct PipelineQueueModule;

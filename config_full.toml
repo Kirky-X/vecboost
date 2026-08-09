@@ -41,6 +41,15 @@ expected_dimension = 1024
 # 最大序列长度 (token 数)
 max_sequence_length = 8192
 
+# 推理精度 (可选)
+# 可选值:
+#   - fp32: 单精度浮点 (默认，最高精度)
+#   - fp16: 半精度浮点 (仅 CUDA GPU，速度更快，内存减半)
+#   - bf16: Brain Float 16 (仅 CUDA Ampere+ GPU，动态范围同 FP32，精度损失极小)
+#   - int8: 8 位量化 (仅 CUDA GPU，内存降至 1/4)
+# 注意: 非 CUDA 设备请求 fp16/bf16 会自动回退到 fp32
+# precision = "fp32"
+
 # ============ 向量化配置 ============
 [embedding]
 # 默认聚合模式

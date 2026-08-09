@@ -8163,9 +8163,6 @@ name = "vecboost-examples"
 version = "0.2.0"
 dependencies = [
  "async-trait",
- "candle-core",
- "candle-nn",
- "candle-transformers",
  "hf-hub 1.0.0",
  "prometheus",
  "reqwest",

@@ -9,7 +9,7 @@ description = "Functional examples for the VecBoost embedding service"
 
 [dependencies]
 # 通过 path 依赖主 crate,默认开启所有非引擎 features
-# 引擎 features(cuda/onnx/metal)通过本 crate 的 features 透传,可选启用
+# 引擎 features(onnx/metal)通过本 crate 的 features 透传,可选启用
 # 注:oxcache/limiteron/inklog/confers 在主 crate 中已是必选依赖,无需在此声明 feature
 vecboost = { path = "..", default-features = false, features = [
     "http",
@@ -30,47 +30,20 @@ hf-hub = { version = "1.0", default-features = false, features = ["blocking", "r
 tempfile = { version = "3.0", default-features = false }
 prometheus = { version = "0.14", default-features = false, features = ["process"] }
 
-# GPU 示例直接使用 candle 系列(cuda feature 下启用)
-candle-core = { version = "0.11", optional = true, default-features = false }
-candle-nn = { version = "0.11", optional = true, default-features = false }
-candle-transformers = { version = "0.11", optional = true, default-features = false }
-
 [features]
 default = []
 # 引擎特性透传
-cuda = ["vecboost/cuda", "dep:candle-core", "dep:candle-nn", "dep:candle-transformers"]
 onnx = ["vecboost/onnx"]
 metal = ["vecboost/metal"]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Binaries — 36 个示例
+# Binaries — 30 个示例
 # ─────────────────────────────────────────────────────────────────────────────
 
 # download_model — 模型下载工具
 [[bin]]
 name = "download_model"
 path = "download_model.rs"
-
-# gpu — GPU 引擎示例(需要 CUDA/ONNX feature)
-[[bin]]
-name = "gpu_basic_device_test"
-path = "gpu/basic_device_test.rs"
-required-features = ["cuda"]
-
-[[bin]]
-name = "gpu_candle_engine_test"
-path = "gpu/candle_engine_test.rs"
-required-features = ["cuda"]
-
-[[bin]]
-name = "gpu_onnx_engine_test"
-path = "gpu/onnx_engine_test.rs"
-required-features = ["cuda", "onnx"]
-
-[[bin]]
-name = "gpu_performance_comparison"
-path = "gpu/performance_comparison.rs"
-required-features = ["cuda", "onnx"]
 
 # basic — 基础用法(MockEngine + api::embed/embed_batch/compute_similarity/rerank)
 [[bin]]
@@ -164,21 +137,6 @@ path = "rate-limiting/rate_limit.rs"
 name = "multi_dimension"
 path = "rate-limiting/multi_dimension.rs"
 
-# pipeline — 优先级队列与 WorkerManager
-[[bin]]
-name = "priority_queue"
-path = "pipeline/priority_queue.rs"
-
-[[bin]]
-name = "workers"
-path = "pipeline/workers.rs"
-
-# grpc — 客户端调用 embedding_service(注:当前实现走 HTTP API,
-# 与任务描述的"gRPC 客户端"存在偏差,后续可重构为 tonic gRPC 客户端)
-[[bin]]
-name = "grpc_client"
-path = "grpc/grpc_client.rs"
-
 # monitoring — Prometheus 指标与推理性能监控
 [[bin]]
 name = "metrics"
@@ -198,16 +156,6 @@ path = "library/library_usage.rs"
 name = "semantic_cache_demo"
 path = "semantic-cache/semantic_cache_demo.rs"
 
-# batch-scheduling — 动态批量调度（自适应批量调整 + 性能统计）
-[[bin]]
-name = "batch_scheduler"
-path = "batch-scheduling/batch_scheduler.rs"
-
-# memory-paging — GPU 显存分页管理（LRU-K 驱逐 + 预取）
-[[bin]]
-name = "memory_paging"
-path = "memory-paging/memory_paging.rs"
-
 # security — 密钥管理、盐值生成、敏感数据脱敏
 [[bin]]
 name = "security_demo"
@@ -217,3 +165,13 @@ path = "security/security_demo.rs"
 [[bin]]
 name = "audit_demo"
 path = "audit/audit_demo.rs"
+
+# matryoshka — Matryoshka 维度约简（任务自适应截断 + 信息保留率）
+[[bin]]
+name = "matryoshka"
+path = "basic/matryoshka.rs"
+
+# validation — 输入验证（文本/路径/模型 ID 校验）
+[[bin]]
+name = "validation"
+path = "basic/validation.rs"

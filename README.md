@@ -107,8 +107,8 @@ cargo build --release --features cuda,onnx,grpc,mcp,auth,redis,db,inklog,cli
 
 ```bash
 # 复制并自定义配置
-cp config.toml config_custom.toml
-# 编辑 config_custom.toml
+cp config/config.toml config/config_custom.toml
+# 编辑 config/config_custom.toml
 ```
 
 ### ▶️ 运行
@@ -118,7 +118,7 @@ cp config.toml config_custom.toml
 ./target/release/vecboost
 
 # 使用自定义配置
-./target/release/vecboost --config config_custom.toml
+./target/release/vecboost --config config/config_custom.toml
 ```
 
 > **✅ 成功**: 服务默认在 `http://localhost:9002` 启动。
@@ -131,7 +131,7 @@ docker build -t vecboost:latest .
 
 # 运行容器
 docker run -p 9002:9002 -p 50051:50051 \
-  -v $(pwd)/config.toml:/app/config.toml \
+  -v $(pwd)/config/config.toml:/app/config/config.toml \
   -v $(pwd)/models:/app/models \
   vecboost:latest
 ```
@@ -407,7 +407,7 @@ eviction_policy = "lru"
 | **cache** | `backend` | `memory` | 缓存后端类型 | oxcache |
 | | `ttl_secs` | `3600` | 缓存 TTL（秒） | oxcache |
 
-> **📖 完整配置**: 查看 [`config.toml`](config.toml) 了解所有可用选项。
+> **📖 完整配置**: 查看 [`config/config.toml`](config/config.toml) 了解所有可用选项。
 
 ## 🏗️ 架构
 
@@ -520,7 +520,10 @@ vecboost/
 │   ├── integration/    # 集成测试 (api_test.rs, real_engine.rs)
 │   ├── perf/           # 性能测试 (Python pytest + Rust bench)
 │   └── common/         # 共享测试夹具 (MockEngine, fixtures)
-└── config.toml         # 默认配置文件
+├── config/             # 配置文件目录
+│   ├── config.toml     # 默认配置文件
+│   ├── config_full.toml    # 完整配置示例
+│   └── config_minimal.toml # 最小配置示例
 ```
 
 ## 🎯 性能基准
@@ -598,7 +601,7 @@ services:
       - "50051:50051"  # gRPC
       # Prometheus 指标暴露在 9002 的 /metrics 路径，无需独立端口
     volumes:
-      - ./config.toml:/app/config.toml
+      - ./config/config.toml:/app/config/config.toml
       - ./models:/app/models
       - ./logs:/app/logs
     environment:

@@ -57,11 +57,11 @@ WORKDIR /app
 
 # 从构建阶段复制二进制文件
 COPY --from=builder /build/target/release/vecboost /app/vecboost
-COPY config.toml /app/config.toml
+COPY config/config.toml /app/config/config.toml
 
 # 设置权限
 RUN chmod +x /app/vecboost && \
-    chown vecboost:vecboost /app/vecboost /app/config.toml
+    chown vecboost:vecboost /app/vecboost /app/config/config.toml
 
 # 切换到非 root 用户
 USER vecboost

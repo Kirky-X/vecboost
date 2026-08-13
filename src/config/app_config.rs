@@ -53,13 +53,13 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// 通过 confers 从默认路径 `config.toml` 加载配置。
+    /// 通过 confers 从默认路径 `config/config.toml` 加载配置。
     ///
     /// 文件不存在时回退到 `Default` 实现 + `VECBOOST_` 前缀环境变量。
     /// 敏感字段校验由 `app::apply_security_env_overrides` 执行,
     /// 校验失败时返回 `ConfigError::Message`。
     pub fn load_via_confers() -> Result<Self, ConfigError> {
-        Self::load_via_confers_with_path("config.toml")
+        Self::load_via_confers_with_path("config/config.toml")
     }
 
     /// 通过 confers 从显式路径加载配置。

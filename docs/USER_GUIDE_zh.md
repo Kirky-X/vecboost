@@ -160,7 +160,7 @@ ls -lh target/release/vecboost
 复制示例配置：
 
 ```bash
-cp config.toml config_custom.toml
+cp config/config.toml config/config_custom.toml
 ```
 
 ---
@@ -371,7 +371,7 @@ docker build -t vecboost:latest .
 # 运行容器
 docker run -d \
   -p 9002:9002 \
-  -v $(pwd)/config_custom.toml:/app/config.toml \
+  -v $(pwd)/config/config_custom.toml:/app/config/config.toml \
   -v $(pwd)/models:/app/models \
   --name vecboost \
   vecboost:latest
@@ -571,7 +571,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 ### 令牌过期
 
-令牌过期时间由 garrison 服务端统一管理（`expires_in` 返回 `0`）。可在 `config.toml` 中配置服务端超时：
+令牌过期时间由 garrison 服务端统一管理（`expires_in` 返回 `0`）。可在 `config/config.toml` 中配置服务端超时：
 
 ```toml
 [auth]
@@ -604,7 +604,7 @@ services:
       - "9002:9002"
       - "50051:50051"
     volumes:
-      - ./config_custom.toml:/app/config.toml
+      - ./config/config_custom.toml:/app/config/config.toml
       - ./models:/app/models
       - ./logs:/app/logs
     environment:

@@ -202,8 +202,12 @@ pub async fn require_role_middleware(request: Request, next: Next) -> Result<Res
 ///
 /// 通过 limiteron Governor 的 RequestContext 驱动限流。
 /// 白名单内的 IP 跳过限流。限流未启用时直接放行。
+///
+/// IP 提取复用 `extract_client_ip()`，遵循 `trusted_proxies` XFF 信任边界，
+/// 与 `auth_middleware` 保持一致的客户端 IP 解析逻辑。
 pub async fn auth_rate_limit_middleware(
     State(state): State<VecboostState>,
+    State(auth_config): State<AuthConfig>,
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -227,11 +231,13 @@ pub async fn auth_rate_limit_middleware(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    // 从 ConnectInfo 获取客户端 IP(与 embedding handler 一致)
-    let ip = request
+    // 通过 XFF 信任边界提取客户端 IP（与 auth_middleware 一致）
+    let connect_info = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0.ip().to_string())
+        .map(|ci| ci.0);
+    let ip = extract_client_ip(request.headers(), connect_info, &auth_config.trusted_proxies)
+        .map(|i| i.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
     // 白名单内的 IP 不限流
@@ -275,4 +281,150 @@ pub async fn auth_rate_limit_middleware(
     Ok(next.run(request).await)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderMap;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
+    fn peer_addr(ip: IpAddr) -> Option<SocketAddr> {
+        Some(SocketAddr::new(ip, 12345))
+    }
+
+    fn headers_with_xff(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", value.parse().unwrap());
+        h
+    }
+
+    fn headers_with_x_real_ip(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("x-real-ip", value.parse().unwrap());
+        h
+    }
+
+    // --- trusted_proxies 非空路径 ---
+
+    #[test]
+    fn extract_ip_trusted_proxy_with_xff_returns_xff_ip() {
+        let peer = peer_addr(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
+        let headers = headers_with_xff("203.0.113.50");
+        let proxies = vec!["10.0.0.0/8".to_string()];
+
+        let result = extract_client_ip(&headers, peer, &proxies);
+        assert_eq!(
+            result,
+            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50)))
+        );
+    }
+
+    #[test]
+    fn extract_ip_untrusted_proxy_with_xff_returns_peer_ip() {
+        let peer = peer_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)));
+        let headers = headers_with_xff("203.0.113.50");
+        let proxies = vec!["10.0.0.0/8".to_string()];
+
+        let result = extract_client_ip(&headers, peer, &proxies);
+        // 192.168.1.100 不在 10.0.0.0/8 内 → XFF 被忽略
+        assert_eq!(
+            result,
+            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)))
+        );
+    }
+
+    #[test]
+    fn extract_ip_trusted_proxy_xff_multiple_entries_returns_first() {
+        let peer = peer_addr(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
+        let headers = headers_with_xff("203.0.113.50, 70.41.32.12, 198.51.100.2");
+        let proxies = vec!["10.0.0.0/8".to_string()];
+
+        let result = extract_client_ip(&headers, peer, &proxies);
+        assert_eq!(
+            result,
+            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50)))
+        );
+    }
+
+    // --- trusted_proxies 为空路径（legacy 行为）---
+
+    #[test]
+    fn extract_ip_empty_proxies_with_xff_returns_xff_ip() {
+        let peer = peer_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)));
+        let headers = headers_with_xff("203.0.113.50");
+        let proxies: Vec<String> = vec![];
+
+        let result = extract_client_ip(&headers, peer, &proxies);
+        // 空 trusted_proxies → legacy 模式，无条件信任 XFF
+        assert_eq!(
+            result,
+            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50)))
+        );
+    }
+
+    // --- 无 XFF 回退 ---
+
+    #[test]
+    fn extract_ip_no_xff_returns_peer_ip() {
+        let peer = peer_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)));
+        let headers = HeaderMap::new();
+        let proxies = vec!["10.0.0.0/8".to_string()];
+
+        let result = extract_client_ip(&headers, peer, &proxies);
+        assert_eq!(
+            result,
+            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)))
+        );
+    }
+
+    #[test]
+    fn extract_ip_no_xff_no_connect_info_returns_none() {
+        let headers = HeaderMap::new();
+        let proxies: Vec<String> = vec![];
+
+        let result = extract_client_ip(&headers, None, &proxies);
+        assert_eq!(result, None);
+    }
+
+    // --- X-Real-IP 回退 ---
+
+    #[test]
+    fn extract_ip_x_real_ip_used_when_xff_absent() {
+        let peer = peer_addr(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
+        let headers = headers_with_x_real_ip("203.0.113.99");
+        let proxies = vec!["10.0.0.0/8".to_string()];
+
+        let result = extract_client_ip(&headers, peer, &proxies);
+        assert_eq!(
+            result,
+            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 99)))
+        );
+    }
+
+    #[test]
+    fn extract_ip_xff_preferred_over_x_real_ip() {
+        let peer = peer_addr(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
+        let mut headers = headers_with_xff("203.0.113.50");
+        headers.insert("x-real-ip", "198.51.100.7".parse().unwrap());
+        let proxies = vec!["10.0.0.0/8".to_string()];
+
+        let result = extract_client_ip(&headers, peer, &proxies);
+        // XFF 优先于 X-Real-IP
+        assert_eq!(
+            result,
+            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50)))
+        );
+    }
+
+    // --- IPv6 ---
+
+    #[test]
+    fn extract_ip_ipv6_peer_with_trusted_proxy() {
+        let peer = peer_addr(IpAddr::V6(Ipv6Addr::LOCALHOST));
+        let headers = headers_with_xff("2001:db8::1");
+        // ::1 不在 10.0.0.0/8 → XFF 被忽略
+        let proxies = vec!["10.0.0.0/8".to_string()];
+
+        let result = extract_client_ip(&headers, peer, &proxies);
+        assert_eq!(result, Some(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    }
+}

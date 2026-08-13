@@ -1,0 +1,26 @@
+# gitleaks configuration
+# See https://github.com/gitleaks/gitleaks#configuration
+
+title = "VecBoost gitleaks config"
+
+# Exclude documentation and build artifacts from scanning.
+# docs/ contains example JWT tokens and API keys in code snippets.
+# target/ contains compiled binaries that may trigger false positives.
+[allowlist]
+description = "Exclude docs and build artifacts"
+paths = [
+    '''docs\/''',
+    '''target\/''',
+    '''security-results\/''',
+    '''specmark\/''',
+    '''\.corrupted_backup\/''',
+]
+
+# Exclude test-only secret patterns (test_ prefix keys, placeholder values).
+[[allowlist.rules]]
+description = "Test secrets with test_ prefix"
+regex = '''test_?(?:secret|key|token|password|api_key)'''
+
+[[allowlist.rules]]
+description = "Placeholder JWT tokens in documentation and tests"
+regex = '''eyJ(?:0eXAiOiJIUzI1NiJ9|hbGciOiJIUzI1NiJ9)'''

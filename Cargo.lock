@@ -4938,6 +4938,7 @@ dependencies = [
 name = "oxcache"
 version = "0.4.3"
 dependencies = [
+ "ahash",
  "async-trait",
  "bloomfilter",
  "chrono",

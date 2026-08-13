@@ -19,6 +19,9 @@ use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use vecboost::AppConfig;
 use vecboost::module_registry::RateLimitModule;
 use vecboost::logger::LoggerModule;
+
+/// 全局关闭超时（秒）
+const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 #[cfg(feature = "auth")]
 use vecboost::module_registry::{
     AuthModule, CsrfConfigModule,
@@ -577,7 +580,7 @@ async fn main() -> anyhow::Result<()> {
 
     // T017: AsyncShutdownCoordinator — phased graceful shutdown
     let shutdown_coordinator = AsyncShutdownCoordinator::new();
-    shutdown_coordinator.set_global_timeout(Duration::from_secs(30));
+    shutdown_coordinator.set_global_timeout(Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS));
     {
         let kit_for_shutdown = Arc::clone(&kit);
         shutdown_coordinator

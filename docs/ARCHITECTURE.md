@@ -2,6 +2,8 @@
 
 > Version 0.2.1 — Ecosystem Refactor with 7-Library Integration
 
+**[中文](ARCHITECTURE_zh.md)**
+
 This document describes the VecBoost v0.2.1 architecture, built on a modular 7-library ecosystem unified through `trait-kit`.
 
 ## 1. High-Level Architecture

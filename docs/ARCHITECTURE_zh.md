@@ -8,6 +8,8 @@
 
 *VecBoost 的内部架构，解释关键组件、数据流和设计决策。*
 
+**[English](ARCHITECTURE.md)**
+
 </div>
 
 ---

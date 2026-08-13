@@ -393,12 +393,25 @@ async fn detect_nvidia_driver() -> Result<NvidiaDriverInfo, String> {
     detect_via_nvidia_smi()
 }
 
-/// 通过 NVML（NVIDIA Management Library）获取 GPU 信息
+/// 通过 NVML（NVIDIA Management Library）获取 GPU 信息。
+/// 默认查找 `libnvidia-ml.so`，失败后尝试 `libnvidia-ml.so.1`（WSL 兼容）。
 #[cfg(feature = "cuda")]
 fn detect_with_nvml() -> Result<NvidiaDriverInfo, String> {
-    let nvml = nvml_wrapper::Nvml::init()
-        .map_err(|e| format!("NVML init failed: {}", e))?;
+    use std::ffi::OsStr;
 
+    let nvml = nvml_wrapper::Nvml::init().or_else(|_| {
+        // WSL 环境下只有 libnvidia-ml.so.1，没有 libnvidia-ml.so 符号链接
+        nvml_wrapper::Nvml::builder()
+            .lib_path(OsStr::new("libnvidia-ml.so.1"))
+            .init()
+    }).map_err(|e| format!("NVML init failed: {}", e))?;
+
+    query_nvml_info(&nvml)
+}
+
+/// 从已初始化的 NVML 实例中查询 GPU 信息
+#[cfg(feature = "cuda")]
+fn query_nvml_info(nvml: &nvml_wrapper::Nvml) -> Result<NvidiaDriverInfo, String> {
     let device_count = nvml.device_count()
         .map_err(|e| format!("NVML device_count failed: {}", e))?;
     if device_count == 0 {
@@ -414,7 +427,7 @@ fn detect_with_nvml() -> Result<NvidiaDriverInfo, String> {
     let memory_info = device.memory_info()
         .map_err(|e| format!("NVML memory_info query failed: {}", e))?;
 
-    let (cc_major, cc_minor) = device.cuda_compute_capability()
+    let cc = device.cuda_compute_capability()
         .map_err(|e| format!("NVML compute_capability query failed: {}", e))?;
 
     let driver_version = nvml.sys_driver_version()
@@ -425,7 +438,7 @@ fn detect_with_nvml() -> Result<NvidiaDriverInfo, String> {
         driver_version: Some(driver_version),
         device_name: Some(name),
         total_vram_bytes: memory_info.total,
-        compute_capability: Some((cc_major as u8, cc_minor as u8)),
+        compute_capability: Some((cc.major as u8, cc.minor as u8)),
     })
 }
 

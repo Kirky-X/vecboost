@@ -182,19 +182,30 @@ impl CudaDeviceManager {
     async fn detect_with_candle(&self) -> Result<Vec<CudaDevice>, String> {
         match candle_core::Device::cuda_if_available(0) {
             Ok(_device) => {
-                let cuda_device = CudaDevice::new(
-                    0,
-                    "CUDA Device (via candle-core)".to_string(),
-                    8 * 1024 * 1024 * 1024, // 8GB default
-                    (7, 0),
-                );
+                // 优先通过 nvidia-smi 查询真实设备信息，避免硬编码
+                let (name, vram_bytes, compute_cap) = match detect_nvidia_driver().await {
+                    Ok(info) if info.total_vram_bytes > 0 => (
+                        info.device_name.unwrap_or_else(|| "CUDA Device (candle)".to_string()),
+                        info.total_vram_bytes,
+                        info.compute_capability.unwrap_or((7, 0)),
+                    ),
+                    _ => {
+                        warn!("nvidia-smi 查询失败，使用默认设备参数（建议安装 nvidia-smi 以获取准确信息）");
+                        ("CUDA Device (candle)".to_string(), 8 * 1024 * 1024 * 1024, (7, 0))
+                    }
+                };
 
-                info!("Detected CUDA device via candle-core");
+                let cuda_device = CudaDevice::new(0, name, vram_bytes, compute_cap);
+                info!(
+                    "Detected CUDA device via candle-core: {} ({} MB, compute {}.{} )",
+                    cuda_device.name(),
+                    vram_bytes / (1024 * 1024),
+                    compute_cap.0,
+                    compute_cap.1
+                );
                 Ok(vec![cuda_device])
             }
             Err(e) => {
-                // CUDA driver 不可用 / 沙箱限制 / 无 GPU 硬件均视为"无可用设备"。
-                // 保留 Err 给上层调用方根据需要区分"完全不可用"与"无设备但可降级 CPU"。
                 warn!("Failed to initialize CUDA device via candle-core: {}", e);
                 Err(format!("CUDA device detection failed: {}", e))
             }

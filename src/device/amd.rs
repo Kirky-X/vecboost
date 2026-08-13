@@ -6,9 +6,17 @@
 #![allow(unused)]
 
 use crate::config::model::DeviceType;
+use log::{debug, info, warn};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::RwLock;
+
+/// AMD GPU 检测不可用时的 fallback 默认参数
+const DEFAULT_OPENCL_VRAM_BYTES: u64 = 8 * 1024 * 1024 * 1024; // 8 GB
+const DEFAULT_OPENCL_COMPUTE_CAP: (u32, u32) = (5, 0);
+const DEFAULT_ROCM_VRAM_BYTES: u64 = 16 * 1024 * 1024 * 1024; // 16 GB
+const DEFAULT_ROCM_COMPUTE_CAP: (u32, u32) = (9, 0);
+const DEFAULT_DRIVER_VERSION: &str = "unknown";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AmdGpuInfo {
@@ -81,16 +89,24 @@ impl AmdDevice {
     }
 
     pub fn from_opencl(index: usize) -> Option<Self> {
-        log::debug!("Attempting to detect AMD GPU via OpenCL at index {}", index);
+        debug!("Attempting to detect AMD GPU via OpenCL at index {}", index);
+
+        // OpenCL 无法直接查询 VRAM，使用 fallback 默认值
+        warn!(
+            "AMD GPU (OpenCL) 使用 fallback 默认参数 ({}GB, compute {}.{}). \
+             OpenCL 无法查询真实 VRAM，建议通过 ROCm 路径获取准确信息",
+            DEFAULT_OPENCL_VRAM_BYTES / (1024 * 1024 * 1024),
+            DEFAULT_OPENCL_COMPUTE_CAP.0, DEFAULT_OPENCL_COMPUTE_CAP.1,
+        );
 
         let info = AmdGpuInfo {
             name: format!("AMD GPU (OpenCL) - Device {}", index),
             device_id: index as u32,
-            vram_bytes: 8 * 1024 * 1024 * 1024,
-            compute_capability: (5, 0),
+            vram_bytes: DEFAULT_OPENCL_VRAM_BYTES,
+            compute_capability: DEFAULT_OPENCL_COMPUTE_CAP,
             opencl_version: "3.0".to_string(),
             roc_version: None,
-            driver_version: detect_amd_driver_version(),
+            driver_version: query_amd_driver_version(),
             is_available: true,
         };
 
@@ -98,18 +114,18 @@ impl AmdDevice {
     }
 
     pub fn from_rocm(index: usize) -> Option<Self> {
-        log::debug!("Attempting to detect AMD GPU via ROCm at index {}", index);
+        debug!("Attempting to detect AMD GPU via ROCm at index {}", index);
 
-        let vram = detect_rocm_vram(index);
+        let vram = query_rocm_vram(index);
 
         let info = AmdGpuInfo {
             name: format!("AMD GPU (ROCm) - Device {}", index),
             device_id: index as u32,
             vram_bytes: vram,
-            compute_capability: (9, 0),
+            compute_capability: DEFAULT_ROCM_COMPUTE_CAP,
             opencl_version: "3.0".to_string(),
-            roc_version: Some("6.0.0".to_string()),
-            driver_version: detect_amd_driver_version(),
+            roc_version: query_rocm_version(),
+            driver_version: query_amd_driver_version(),
             is_available: true,
         };
 
@@ -201,12 +217,100 @@ impl AmdDevice {
     }
 }
 
-fn detect_amd_driver_version() -> String {
-    "24.0.0".to_string()
+/// 查询 AMD 驱动版本
+///
+/// 优先读取 `/sys/module/amdgpu/version`（Linux amdgpu 内核模块）。
+/// 不可用时 fallback 到 `DEFAULT_DRIVER_VERSION`。
+fn query_amd_driver_version() -> String {
+    // 尝试从 sysfs 读取 amdgpu 内核模块版本
+    if let Ok(version) = std::fs::read_to_string("/sys/module/amdgpu/version") {
+        let trimmed = version.trim().to_string();
+        if !trimmed.is_empty() {
+            info!("AMD 驱动版本 (sysfs): {}", trimmed);
+            return trimmed;
+        }
+    }
+    // 尝试 rocm-smi 查询
+    if let Ok(output) = std::process::Command::new("rocm-smi")
+        .arg("--showdriverversion")
+        .output()
+    {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout).to_string();
+            // 解析 "Driver version: X.Y.Z" 格式
+            for line in text.lines() {
+                if let Some(ver) = line.strip_prefix("Driver version:") {
+                    let trimmed = ver.trim().to_string();
+                    if !trimmed.is_empty() {
+                        info!("AMD 驱动版本 (rocm-smi): {}", trimmed);
+                        return trimmed;
+                    }
+                }
+            }
+        }
+    }
+    debug!("AMD 驱动版本查询失败，使用 fallback: {}", DEFAULT_DRIVER_VERSION);
+    DEFAULT_DRIVER_VERSION.to_string()
 }
 
-fn detect_rocm_vram(_index: usize) -> u64 {
-    16 * 1024 * 1024 * 1024
+/// 查询 ROCm VRAM 大小
+///
+/// 优先通过 `rocm-smi --showmeminfo vram` 查询真实显存。
+/// 不可用时 fallback 到 `DEFAULT_ROCM_VRAM_BYTES`。
+fn query_rocm_vram(index: usize) -> u64 {
+    if let Ok(output) = std::process::Command::new("rocm-smi")
+        .args(["--showmeminfo", "vram", "--json"])
+        .output()
+    {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            // rocm-smi --json 输出格式: {"card0": {"VRAM Total Memory (MiB)": "16384", ...}}
+            // 简单解析: 查找 "VRAM Total" 相关字段
+            for line in text.lines() {
+                if line.contains("VRAM Total") || line.contains("Total Memory") {
+                    // 尝试提取数字 (MiB)
+                    if let Some(mib) = extract_number_from_line(line) {
+                        let bytes = mib * 1024 * 1024;
+                        info!("ROCm VRAM (rocm-smi, device {}): {} MB", index, mib);
+                        return bytes;
+                    }
+                }
+            }
+        }
+    }
+    warn!(
+        "ROCm VRAM 查询失败，使用 fallback 默认值: {}GB",
+        DEFAULT_ROCM_VRAM_BYTES / (1024 * 1024 * 1024)
+    );
+    DEFAULT_ROCM_VRAM_BYTES
+}
+
+/// 查询 ROCm 版本
+fn query_rocm_version() -> Option<String> {
+    if let Ok(output) = std::process::Command::new("rocm-smi")
+        .arg("--showdriverversion")
+        .output()
+    {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if let Some(ver) = line.strip_prefix("ROCm version:") {
+                    let trimmed = ver.trim().to_string();
+                    if !trimmed.is_empty() {
+                        info!("ROCm 版本: {}", trimmed);
+                        return Some(trimmed);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 从文本行中提取第一个出现的数字
+fn extract_number_from_line(line: &str) -> Option<u64> {
+    let digits: String = line.chars().filter(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
 
 pub struct AmdDeviceManager {
@@ -467,8 +571,9 @@ mod tests {
         assert_eq!(device.device_type(), DeviceType::Amd);
         assert!(device.name().contains("ROCm"));
         assert!(device.name().contains("Device 1"));
-        assert_eq!(device.vram_bytes(), 16 * 1024 * 1024 * 1024);
-        assert!(device.info().roc_version.is_some());
+        // VRAM 可能是真实查询结果或 fallback 默认值
+        assert!(device.vram_bytes() > 0);
+        // roc_version 在有 rocm-smi 时为 Some，无 rocm-smi 时为 None
     }
 
     #[test]

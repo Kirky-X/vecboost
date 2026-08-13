@@ -66,7 +66,9 @@ pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     let norm_b = vector_simd::sum_of_squares_chunked(v2).sqrt();
 
     if norm_a == 0.0 || norm_b == 0.0 {
-        return Ok(0.0);
+        return Err(VecboostError::InvalidInput(
+            "cosine similarity is undefined for zero vectors".to_string(),
+        ));
     }
 
     Ok(dot_product / (norm_a * norm_b))
@@ -284,6 +286,20 @@ mod similarity_tests {
         let v1 = vec![1.0, 0.0];
         let v2 = vec![1.0, 0.0, 0.0];
         assert!(cosine_similarity(&v1, &v2).is_err());
+    }
+
+    #[test]
+    fn test_cosine_similarity_zero_vector_returns_error() {
+        let zero = vec![0.0, 0.0, 0.0];
+        let v = vec![1.0, 2.0, 3.0];
+        assert!(
+            cosine_similarity(&zero, &v).is_err(),
+            "zero vector should return Err, not Ok(0.0)"
+        );
+        assert!(
+            cosine_similarity(&v, &zero).is_err(),
+            "zero vector (second arg) should return Err"
+        );
     }
 
     #[test]

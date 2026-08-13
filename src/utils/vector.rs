@@ -8,6 +8,7 @@ use utoipa::ToSchema;
 
 use crate::error::VecboostError;
 use crate::utils::vector_simd;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -128,13 +129,17 @@ pub fn calculate_similarity(
     }
 }
 
+/// 批量计算相似度 — 使用 rayon 并行化候选向量匹配。
+///
+/// 对应鲲鹏文档「阿姆达尔定律」：P（并行比例）越大加速越显著。
+/// 对 100+ 候选场景可获得显著多核加速。
 pub fn calculate_similarity_batch(
     query: &[f32],
     candidates: &[&[f32]],
     metric: SimilarityMetric,
 ) -> Result<Vec<f32>, VecboostError> {
     candidates
-        .iter()
+        .par_iter()
         .map(|candidate| calculate_similarity(query, candidate, metric))
         .collect()
 }

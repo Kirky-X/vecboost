@@ -816,27 +816,42 @@ impl CandleEngine {
         self.update_gpu_memory().await;
 
         // 提取每个样本的嵌入向量（使用 CLS token）
-        let mut results = Vec::with_capacity(batch_size);
-        for i in 0..batch_size {
-            let embedding_tensor = embeddings
-                .get(i)
-                .map_err(|e| {
-                    VecboostError::InferenceError(format!("Failed to get batch {}: {}", i, e))
-                })?
-                .get(0)
-                .map_err(|e| {
-                    VecboostError::InferenceError(format!(
-                        "Failed to get CLS token for batch {}: {}",
-                        i, e
-                    ))
-                })?
-                .clone();
-
-            let vec = embedding_tensor
-                .to_vec1::<f32>()
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-            results.push(vec);
-        }
+        // 优化：使用 narrow + squeeze + to_vec2 单次提取所有 CLS token，
+        // 替代逐样本 get(i).get(0).to_vec1() 的 N 次 GPU kernel + N 次 DMA 传输。
+        // 对应鲲鹏文档「理论计算极限」：减少全局内存访问延迟（400-600 clocks）。
+        let results = if embeddings.dims().len() == 3 {
+            let cls_all = embeddings
+                .narrow(1, 0, 1)
+                .map_err(|e| VecboostError::InferenceError(format!("Failed to narrow CLS dim: {}", e)))?
+                .squeeze(1)
+                .map_err(|e| VecboostError::InferenceError(format!("Failed to squeeze CLS dim: {}", e)))?;
+            // 需要根据实际 dtype 转换：模型可能输出 f16/bf16，需先 cast 到 f32
+            let cls_f32 = if cls_all.dtype() == DType::F32 {
+                cls_all
+            } else {
+                cls_all.to_dtype(DType::F32)
+                    .map_err(|e| VecboostError::InferenceError(format!("Failed to cast CLS to f32: {}", e)))?
+            };
+            cls_f32
+                .to_vec2::<f32>()
+                .map_err(|e| VecboostError::InferenceError(format!("Failed to convert CLS batch to vec2: {}", e)))?
+        } else {
+            // Fallback：非 3D 输出退化为逐样本提取
+            let mut fallback = Vec::with_capacity(batch_size);
+            for i in 0..batch_size {
+                let embedding_tensor = embeddings
+                    .get(i)
+                    .map_err(|e| VecboostError::InferenceError(format!("Failed to get batch {}: {}", i, e)))?
+                    .get(0)
+                    .map_err(|e| VecboostError::InferenceError(format!("Failed to get CLS token for batch {}: {}", i, e)))?
+                    .clone();
+                let vec = embedding_tensor
+                    .to_vec1::<f32>()
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+                fallback.push(vec);
+            }
+            fallback
+        };
 
         log::debug!(
             "Batch processing completed, {} embeddings generated",

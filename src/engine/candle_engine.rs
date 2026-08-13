@@ -28,6 +28,21 @@ use tokenizers::Tokenizer as HfTokenizer;
 #[cfg(not(target_os = "macos"))]
 type HfTokenizer = crate::text::Tokenizer;
 
+/// Tokenizer 缓存容量（缓存最近 N 个文本的分词结果）
+const DEFAULT_TOKENIZER_CACHE_CAPACITY: usize = 2048;
+
+/// PyTorch 大文件警告阈值（2 GB）
+const PYTORCH_LARGE_FILE_WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// 每种精度每个参数占用的字节数
+fn bytes_per_param(precision: Precision) -> u64 {
+    match precision {
+        Precision::Fp32 => 4,
+        Precision::Fp16 | Precision::Bf16 => 2,
+        Precision::Int8 => 1,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ModelArchitecture {
     Bert,
@@ -264,7 +279,7 @@ impl CandleEngine {
             }
         };
 
-        let tokenizer = CachedTokenizer::new(hf_tokenizer, max_position_embeddings, 2048);
+        let tokenizer = CachedTokenizer::new(hf_tokenizer, max_position_embeddings, DEFAULT_TOKENIZER_CACHE_CAPACITY);
 
         let is_pytorch = weights_filename.to_string_lossy().ends_with(".bin");
 
@@ -397,9 +412,9 @@ impl CandleEngine {
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
                 .len();
 
-            if file_size > 2 * 1024 * 1024 * 1024 {
+            if file_size > PYTORCH_LARGE_FILE_WARN_BYTES {
                 log::warn!(
-                    "PyTorch model file is large ({} GB). Large PyTorch files may have loading issues.",
+                    "PyTorch model file is large ({} GB). Large pyTorch files may have loading issues.",
                     file_size as f64 / 1024.0 / 1024.0 / 1024.0
                 );
                 log::info!("Consider converting to safetensors format for better performance:");
@@ -907,11 +922,11 @@ impl CandleEngine {
 
         // 基础模型大小（MB）
         let model_size_mb = match (&self.precision, self.use_quantization) {
-            (Precision::Fp32, _) => num_params * 4 / (1024 * 1024), // 4 bytes per param
-            (Precision::Fp16, _) => num_params * 2 / (1024 * 1024), // 2 bytes per param
-            (Precision::Bf16, _) => num_params * 2 / (1024 * 1024), // 2 bytes per param
-            (Precision::Int8, true) => num_params * 1 / (1024 * 1024), // 1 byte per param
-            (Precision::Int8, false) => num_params * 4 / (1024 * 1024), // Fallback to FP32
+            (Precision::Fp32, _) => num_params * bytes_per_param(Precision::Fp32) / (1024 * 1024),
+            (Precision::Fp16, _) => num_params * bytes_per_param(Precision::Fp16) / (1024 * 1024),
+            (Precision::Bf16, _) => num_params * bytes_per_param(Precision::Bf16) / (1024 * 1024),
+            (Precision::Int8, true) => num_params * bytes_per_param(Precision::Int8) / (1024 * 1024),
+            (Precision::Int8, false) => num_params * bytes_per_param(Precision::Fp32) / (1024 * 1024),
         };
 
         // 激活值大小（MB）
@@ -1052,7 +1067,7 @@ impl CandleEngine {
             }
         };
 
-        self.tokenizer = CachedTokenizer::new(hf_tokenizer, max_position_embeddings, 2048);
+        self.tokenizer = CachedTokenizer::new(hf_tokenizer, max_position_embeddings, DEFAULT_TOKENIZER_CACHE_CAPACITY);
 
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[weights_filename], DType::F32, &self.device)

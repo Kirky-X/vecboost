@@ -5,6 +5,7 @@
 
 use log::{debug, info, warn};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, Semaphore, mpsc};
@@ -66,8 +67,8 @@ struct PerformanceSample {
 pub struct DynamicBatchScheduler {
     /// 批量配置
     config: BatchConfig,
-    /// 当前批量大小
-    current_batch_size: Arc<RwLock<usize>>,
+    /// 当前批量大小（AtomicUsize 避免 RwLock 开销）
+    current_batch_size: Arc<AtomicUsize>,
     /// 请求队列
     request_queue: Arc<RwLock<VecDeque<BatchRequest>>>,
     /// 信号量（控制并发）
@@ -86,7 +87,7 @@ impl DynamicBatchScheduler {
 
         Self {
             config,
-            current_batch_size: Arc::new(RwLock::new(initial_batch_size)),
+            current_batch_size: Arc::new(AtomicUsize::new(initial_batch_size)),
             request_queue: Arc::new(RwLock::new(VecDeque::new())),
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             performance_history: Arc::new(RwLock::new(Vec::with_capacity(100))),
@@ -96,7 +97,7 @@ impl DynamicBatchScheduler {
 
     /// 获取当前批量大小
     pub async fn current_batch_size(&self) -> usize {
-        *self.current_batch_size.read().await
+        self.current_batch_size.load(Ordering::Relaxed)
     }
 
     /// 提交批量请求
@@ -151,7 +152,7 @@ impl DynamicBatchScheduler {
 
         // 检查是否满足等待时间条件
         let wait_time_elapsed = now.duration_since(oldest_request_time).as_millis() as u64;
-        let batch_size = *self.current_batch_size.read().await;
+        let batch_size = self.current_batch_size.load(Ordering::Relaxed);
         let should_flush =
             wait_time_elapsed >= self.config.max_wait_time_ms || queue.len() >= batch_size;
 
@@ -255,7 +256,7 @@ impl DynamicBatchScheduler {
         drop(history);
 
         // 调整逻辑：使用 P99 延迟作为主要指标（更保守）
-        let current_batch = *self.current_batch_size.read().await;
+        let current_batch = self.current_batch_size.load(Ordering::Relaxed);
         let mut new_batch_size = current_batch;
 
         // 目标：P99 延迟 < 80ms 且 吞吐量 > 150 req/s
@@ -292,7 +293,7 @@ impl DynamicBatchScheduler {
         }
 
         if new_batch_size != current_batch {
-            *self.current_batch_size.write().await = new_batch_size;
+            self.current_batch_size.store(new_batch_size, Ordering::Relaxed);
         }
     }
 
@@ -302,7 +303,7 @@ impl DynamicBatchScheduler {
             self.config.min_batch_size,
             std::cmp::min(batch_size, self.config.max_batch_size),
         );
-        *self.current_batch_size.write().await = new_batch_size;
+        self.current_batch_size.store(new_batch_size, Ordering::Relaxed);
         info!("Batch size manually set to {}", new_batch_size);
     }
 
@@ -319,7 +320,7 @@ impl DynamicBatchScheduler {
     /// 获取性能统计
     pub async fn get_performance_stats(&self) -> BatchPerformanceStats {
         let history = self.performance_history.read().await;
-        let current_batch = *self.current_batch_size.read().await;
+        let current_batch = self.current_batch_size.load(Ordering::Relaxed);
         let queue_size = self.queue_size().await;
         let active_batches = *self.active_batches.read().await;
 

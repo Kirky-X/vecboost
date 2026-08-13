@@ -3,6 +3,12 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
+// Performance: jemalloc global memory allocator
+// Only enabled on Linux glibc platforms; macOS/musl use the system default allocator
+#[cfg(all(target_os = "linux", not(target_env = "musl")))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[cfg(feature = "cli")]
 use std::collections::HashMap;
 use std::{net::SocketAddr, sync::Arc};

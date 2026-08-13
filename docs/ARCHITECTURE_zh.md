@@ -608,7 +608,7 @@ src/config/
 | 优先级 | 来源 | 说明 |
 |--------|------|------|
 | 1 | **默认值** | 代码中的内置默认值 |
-| 2 | **配置文件** | `config.toml` 或 `config_custom.toml` |
+| 2 | **配置文件** | `config/config.toml` 或 `config/config_custom.toml` |
 | 3 | **环境变量** | 以 `VECBOOST_` 为前缀的环境变量 |
 | 4 | **CLI 参数** | 命令行参数（最高优先级） |
 
@@ -637,7 +637,7 @@ gRPC 服务由 sdforge 通过 `build_server_with_config` 启动，相关配置�
 | `grpc_require_auth` | `Option<bool>` | `true` | 是否强制 gRPC 鉴权（默认开启，需显式关闭） |
 | `grpc_allowed_roots` | `Option<Vec<String>>` | `None` | gRPC 文件操作允许的根目录白名单 |
 
-> 🔒 **安全默认值**：`grpc_require_auth` 默认为 `true`，调用方必须在 `config.toml` 中显式设置 `grpc_require_auth = false` 才能禁用鉴权。`grpc_allowed_roots` 为 `None` 时回退到当前工作目录，但拒绝 `/`、`/etc`、`/root` 等敏感目录以防文件系统全暴露。
+> 🔒 **安全默认值**：`grpc_require_auth` 默认为 `true`，调用方必须在 `config/config.toml` 中显式设置 `grpc_require_auth = false` 才能禁用鉴权。`grpc_allowed_roots` 为 `None` 时回退到当前工作目录，但拒绝 `/`、`/etc`、`/root` 等敏感目录以防文件系统全暴露。
 
 ---
 
@@ -649,7 +649,7 @@ impl AppConfig {
         let mut builder = ConfigBuilder::default();
         
         // 1. 加载配置文件
-        builder = builder.add_source(ConfigFile::with_name("config.toml"));
+        builder = builder.add_source(ConfigFile::with_name("config/config.toml"));
         
         // 2. 添加环境变量覆盖
         builder = builder.add_source(EnvironmentVariables::with_prefix("VECBOOST"));
@@ -847,7 +847,7 @@ pub trait InferenceEngine: Send + Sync {
 
 1. 实现 `AuthProvider` trait
 2. 在认证模块注册
-3. 在 `config.toml` 中配置
+3. 在 `config/config.toml` 中配置
 
 ---
 

@@ -397,7 +397,7 @@ Configuration is layered: base TOML files + environment variable overrides + opt
 
 ```mermaid
 graph LR
-    TOML["config.toml"] --> Loader["Config Loader"]
+    TOML["config/config.toml"] --> Loader["Config Loader"]
     Env["Environment Variables<br/>VECBOOST_*"] --> Loader
     Loader --> AppConfig["AppConfig"]
     confers["confers (always)"] -.->|hot reload| AppConfig
@@ -437,7 +437,7 @@ The gRPC server is started by sdforge via `build_server_with_config`. The follow
 | `grpc_require_auth` | `Option<bool>` | `true` | Require gRPC auth (must be explicitly disabled) |
 | `grpc_allowed_roots` | `Option<Vec<String>>` | `None` | Whitelist of root directories for gRPC file operations |
 
-> 🔒 **Secure defaults**: `grpc_require_auth` defaults to `true`; callers must explicitly set `grpc_require_auth = false` in `config.toml` to disable auth. When `grpc_allowed_roots` is `None`, it falls back to the current working directory but rejects sensitive paths (`/`, `/etc`, `/root`) to prevent full filesystem exposure.
+> 🔒 **Secure defaults**: `grpc_require_auth` defaults to `true`; callers must explicitly set `grpc_require_auth = false` in `config/config.toml` to disable auth. When `grpc_allowed_roots` is `None`, it falls back to the current working directory but rejects sensitive paths (`/`, `/etc`, `/root`) to prevent full filesystem exposure.
 
 ## 8. Test Architecture
 

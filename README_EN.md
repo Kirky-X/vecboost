@@ -107,8 +107,8 @@ cargo build --release --features cuda,onnx,grpc,mcp,auth,redis,db,inklog,cli
 
 ```bash
 # Copy and customize the configuration
-cp config.toml config_custom.toml
-# Edit config_custom.toml with your settings
+cp config/config.toml config/config_custom.toml
+# Edit config/config_custom.toml with your settings
 ```
 
 ### ▶️ Running
@@ -118,7 +118,7 @@ cp config.toml config_custom.toml
 ./target/release/vecboost
 
 # Run with custom configuration
-./target/release/vecboost --config config_custom.toml
+./target/release/vecboost --config config/config_custom.toml
 ```
 
 > **✅ Success**: The service will start on `http://localhost:9002` by default.
@@ -131,7 +131,7 @@ docker build -t vecboost:latest .
 
 # Run the container
 docker run -p 9002:9002 -p 50051:50051 \
-  -v $(pwd)/config.toml:/app/config.toml \
+  -v $(pwd)/config/config.toml:/app/config/config.toml \
   -v $(pwd)/models:/app/models \
   vecboost:latest
 ```
@@ -405,7 +405,7 @@ eviction_policy = "lru"
 | **cache** | `backend` | `memory` | Cache backend type | oxcache |
 | | `ttl_secs` | `3600` | Cache TTL (seconds) | oxcache |
 
-> **📖 Full Configuration**: See [`config.toml`](config.toml) for all available options.
+> **📖 Full Configuration**: See [`config/config.toml`](config/config.toml) for all available options.
 
 ## 🏗️ Architecture
 
@@ -518,7 +518,10 @@ vecboost/
 │   ├── integration/    # Integration tests (api_test.rs, real_engine.rs)
 │   ├── perf/           # Performance tests (Python pytest + Rust bench)
 │   └── common/         # Shared test fixtures (MockEngine, fixtures)
-└── config.toml         # Default configuration file
+├── config/             # Configuration files directory
+│   ├── config.toml     # Default configuration file
+│   ├── config_full.toml    # Full configuration example
+│   └── config_minimal.toml # Minimal configuration example
 ```
 
 ## 🎯 Performance Benchmarks
@@ -597,7 +600,7 @@ services:
       - "50051:50051"  # gRPC
       # Prometheus metrics are exposed on the 9002 /metrics path, no separate port
     volumes:
-      - ./config.toml:/app/config.toml
+      - ./config/config.toml:/app/config/config.toml
       - ./models:/app/models
       - ./logs:/app/logs
     environment:

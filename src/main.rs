@@ -607,13 +607,13 @@ async fn main() -> anyhow::Result<()> {
     log::info!("AsyncKit module registry built successfully");
 
     // T034: Spawn config file watcher task for hot reload
-    // Watches config.toml and reloads configuration on file changes,
+    // Watches config/config.toml and reloads configuration on file changes,
     // injecting new config through kit.set_config().
     {
         let kit_for_watch = Arc::clone(&kit);
         tokio::spawn(async move {
             // FsWatcher requires the file to exist; skip gracefully if not
-            let config_path = "config.toml";
+            let config_path = "config/config.toml";
             let mut fs_watcher = match confers::watcher::FsWatcher::new(config_path, 200).await {
                 Ok(w) => {
                     log::info!("Config file watcher started for {}", config_path);

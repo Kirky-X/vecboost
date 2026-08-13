@@ -386,7 +386,7 @@ impl Default for ServerConfig {
             grpc_max_connections: Some(1000),
             grpc_timeout_seconds: Some(30),
             // Secure default: require auth unless explicitly disabled.
-            // Callers must opt-out via config.toml `[server] grpc_require_auth = false`.
+            // Callers must opt-out via config/config.toml `[server] grpc_require_auth = false`.
             grpc_require_auth: Some(true),
             grpc_allowed_roots: None,
         }

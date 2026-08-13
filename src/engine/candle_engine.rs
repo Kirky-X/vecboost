@@ -407,7 +407,7 @@ impl CandleEngine {
                     "  python -c \"from transformers import AutoModel; AutoModel.from_pretrained('{}').save_pretrained('./model_converted')\"",
                     config.model_path.to_string_lossy()
                 );
-                log::info!("  Then use './model_converted' as the model_path in config.toml");
+                log::info!("  Then use './model_converted' as the model_path in config/config.toml");
             }
 
             let mut varmap = VarMap::new();

@@ -56,10 +56,25 @@ pub async fn forge_login(
         value: None,
     })?;
 
+    // 拒绝空密码（基本安全检查）
+    if req.password.is_empty() {
+        return Err(ApiError::InvalidInput {
+            message: "password must not be empty".to_string(),
+            field: Some("password".to_string()),
+            value: None,
+        });
+    }
+
     // 通过 garrison 创建会话（login_id = username）
     // TODO: 凭证校验需集成 garrison account-credential 系统
     // GarrisonUtil::login 不接受密码参数，需通过 DAO 查询用户存储的密码哈希后
     // 使用 PasswordHasher::verify 校验。当前仅验证 username 格式合法。
+    // SECURITY: 密码未校验即颁发 token，仅限受信任网络环境使用。
+    log::warn!(
+        "SECURITY: forge_login issued token for user '{}' without password verification \
+         (garrison credential store not integrated)",
+        &req.username
+    );
     match GarrisonUtil::login_simple(&req.username).await {
         Ok(token) => {
             if let Some(logger) = audit_logger {
@@ -105,6 +120,7 @@ pub async fn forge_refresh(
         .map_err(kit_internal_error)?;
 
     // 通过旧 token 获取 login_id，然后创建新会话
+    // 注意：先创建新会话，再撤销旧 token，避免并发 revoke 导致竞态
     let login_id = GarrisonUtil::get_login_id_by_token(&req.refresh_token)
         .await
         .map_err(|e| {
@@ -119,9 +135,19 @@ pub async fn forge_refresh(
             value: None,
         })?;
 
+    // 先创建新会话
     let new_token = GarrisonUtil::login_simple(&login_id)
         .await
         .map_err(|e| to_api_error(e.into()))?;
+
+    // 再撤销旧 token（失败不影响新 token 颁发）
+    if let Err(e) = GarrisonUtil::revoke_token(&req.refresh_token).await {
+        log::warn!(
+            "Failed to revoke old refresh token during refresh for login_id '{}': {}",
+            &login_id,
+            e
+        );
+    }
 
     let peer_ip = connect_info.0.ip().to_string();
     if let Some(logger) = audit_logger {

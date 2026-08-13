@@ -160,17 +160,17 @@ impl CandleEngine {
         let model_path = &config.model_path;
         let is_local_path = model_path.exists() && model_path.is_dir();
 
-        // 安全增强：如果是本地路径，进行路径遍历攻击检测
+        // 安全增强：本地路径进行路径遍历攻击检测，直接拒绝
         if is_local_path {
-            // 检查路径是否包含 ".." 或其他可疑模式
             let model_path_str = model_path.to_string_lossy();
             if model_path_str.contains("..") || model_path_str.contains('~') {
-                log::warn!(
-                    "Potential path traversal attempt detected in model path: {:?}",
-                    model_path
-                );
-                // 注意：这里不直接拒绝，因为可能是合法的相对路径
-                // 但会记录警告日志用于安全审计
+                return Err(VecboostError::ModelLoadError(
+                    format!(
+                        "Rejected model path due to potential path traversal attack: {:?}. \
+                         Path must not contain '..' or '~'.",
+                        model_path
+                    ),
+                ));
             }
         }
 
@@ -538,7 +538,13 @@ impl CandleEngine {
         &mut self,
         config: &ModelConfig,
     ) -> Result<bool, VecboostError> {
+        // 如果已触发 fallback，检查是否可以恢复
         if self.fallback_triggered {
+            // 内存压力解除后，尝试恢复到 GPU
+            if self.check_memory_pressure(50).await == false {
+                log::info!("Memory pressure cleared, resetting fallback flag — GPU may be retried on next model load");
+                self.fallback_triggered = false;
+            }
             return Ok(false);
         }
 

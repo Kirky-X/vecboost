@@ -230,7 +230,8 @@ async fn main() -> anyhow::Result<()> {
             .build()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
-        vecboost::api::init_state(VecboostState::new(Arc::new(kit)));
+        vecboost::api::init_state(VecboostState::new(Arc::new(kit)))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         let server = sdforge::mcp::build();
         let running = server.serve(stdio()).await?;
         running.waiting().await?;
@@ -266,7 +267,8 @@ async fn main() -> anyhow::Result<()> {
                 .build()
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
-            vecboost::api::init_state(VecboostState::new(Arc::new(kit)));
+            vecboost::api::init_state(VecboostState::new(Arc::new(kit)))
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
             let matches = cli_cmd.get_matches_from(std::env::args());
 
             if let Some((name, sub_matches)) = matches.subcommand() {
@@ -646,7 +648,8 @@ async fn main() -> anyhow::Result<()> {
     let app_state = VecboostState::new(kit);
 
     // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state().kit.require 访问）
-    vecboost::api::init_state(app_state.clone());
+    vecboost::api::init_state(app_state.clone())
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // sdforge #[forge] 路由（Router<()>，从 inventory 收集所有 forge 函数注册的路由）
     let app = sdforge::http::build();

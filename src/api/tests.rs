@@ -28,8 +28,9 @@ use tokio::sync::RwLock;
 /// Ensure the global STATE is initialized for forge handler tests.
 ///
 /// Builds a minimal `AsyncKit` with only `EmbeddingModule` registered and
-/// injects via `init_state`. Idempotent: subsequent calls are no-ops (OnceLock
-/// first-writer-wins semantics). Safe under parallel test execution.
+/// injects via `init_state`. Under parallel test execution, multiple tests
+/// may race to initialize; `OnceLock` ensures first-writer-wins, and
+/// subsequent `init_state` errors are silently ignored (expected behavior).
 async fn ensure_state_initialized() {
     if crate::api::state().is_ok() {
         return;
@@ -40,7 +41,8 @@ async fn ensure_state_initialized() {
     kit.register::<EmbeddingModule>()
         .expect("register EmbeddingModule in test kit");
     let kit = kit.build().await.expect("build test kit");
-    crate::api::init_state(VecboostState { kit: Arc::new(kit) });
+    // Ignore error: under parallel execution another test may have initialized first
+    let _ = crate::api::init_state(VecboostState { kit: Arc::new(kit) });
 }
 
 /// Deterministic mock engine for API layer tests.
@@ -126,7 +128,9 @@ fn make_service(dimension: usize) -> EmbeddingService {
         model_sha256: None,
     };
     let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(mock_engine));
-    let _ = temp_dir; // keep temp dir alive for the test
+    // NOTE: temp_dir is intentionally dropped here. TestEngine does not read from
+    // disk, so the deleted path is benign for current tests. If a real engine is
+    // used in the future, the TempDir guard must be kept alive alongside the service.
     EmbeddingService::new(engine, Some(model_config))
 }
 
@@ -196,6 +200,26 @@ async fn test_embed_batch_empty_returns_error() {
     };
     let result = embed_batch(&service, req).await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_embed_batch_mid_batch_empty_string_returns_error() {
+    let service = make_service(384);
+    let req = BatchEmbedRequest {
+        texts: vec![
+            "hello".to_string(),
+            "".to_string(),
+            "world".to_string(),
+        ],
+        mode: None,
+        normalize: None,
+    };
+    let result = embed_batch(&service, req).await;
+    assert!(result.is_err(), "batch with empty string in the middle should fail");
+    match result.unwrap_err() {
+        VecboostError::InvalidInput(_) => {}
+        other => panic!("Expected InvalidInput, got {:?}", other),
+    }
 }
 
 #[tokio::test]

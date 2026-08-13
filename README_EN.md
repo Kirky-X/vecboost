@@ -6,6 +6,8 @@
 
 *A high-performance, production-ready embedding vector service written in Rust. VecBoost provides efficient text vectorization with support for multiple inference engines, GPU acceleration, and enterprise-grade features.*
 
+**[中文](README.md)**
+
 </div>
 
 ---

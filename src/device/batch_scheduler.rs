@@ -42,13 +42,19 @@ pub struct BatchConfig {
     pub enable_dynamic_adjustment: bool,
 }
 
+/// 批量调度默认值
+const DEFAULT_MIN_BATCH_SIZE: usize = 4;
+const DEFAULT_MAX_BATCH_SIZE: usize = 128;
+const DEFAULT_MAX_WAIT_TIME_MS: u64 = 50;
+const DEFAULT_MAX_CONCURRENT_BATCHES: usize = 4;
+
 impl Default for BatchConfig {
     fn default() -> Self {
         Self {
-            min_batch_size: 4,
-            max_batch_size: 128,
-            max_wait_time_ms: 50,
-            max_concurrent_batches: 4,
+            min_batch_size: DEFAULT_MIN_BATCH_SIZE,
+            max_batch_size: DEFAULT_MAX_BATCH_SIZE,
+            max_wait_time_ms: DEFAULT_MAX_WAIT_TIME_MS,
+            max_concurrent_batches: DEFAULT_MAX_CONCURRENT_BATCHES,
             enable_dynamic_adjustment: true,
         }
     }

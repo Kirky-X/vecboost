@@ -9,7 +9,7 @@
 //! 核心价值：精确 miss 后、模型推理前，插入一层零开销的文本相似度检查。
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -63,6 +63,7 @@ pub struct SemanticCache {
     exact_hits: AtomicU64,
     semantic_hits: AtomicU64,
     misses: AtomicU64,
+    total_entries: AtomicUsize,
 }
 
 impl SemanticCache {
@@ -88,6 +89,7 @@ impl SemanticCache {
             exact_hits: AtomicU64::new(0),
             semantic_hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
+            total_entries: AtomicUsize::new(0),
         }
     }
 
@@ -102,6 +104,7 @@ impl SemanticCache {
             exact_hits: AtomicU64::new(0),
             semantic_hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
+            total_entries: AtomicUsize::new(0),
         }
     }
 
@@ -195,6 +198,7 @@ impl SemanticCache {
                 .map(|(i, _)| i)
                 .unwrap_or(0);
             index.swap_remove(oldest_idx);
+            self.total_entries.store(index.len(), Ordering::Relaxed);
         }
 
         index.push(SemanticEntry {
@@ -206,16 +210,16 @@ impl SemanticCache {
             embedding,
             last_access: Instant::now(),
         });
+        self.total_entries.store(index.len(), Ordering::Relaxed);
     }
 
     /// 返回当前统计快照。
     pub fn stats(&self) -> SemanticCacheStats {
-        let total_entries = self.semantic_index.try_read().map(|idx| idx.len()).unwrap_or(0);
         SemanticCacheStats {
             exact_hits: self.exact_hits.load(Ordering::Relaxed),
             semantic_hits: self.semantic_hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
-            total_entries,
+            total_entries: self.total_entries.load(Ordering::Relaxed),
         }
     }
 }

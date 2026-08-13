@@ -1477,9 +1477,9 @@ mod tests {
         assert!(xlm_debug.contains("XlmRoberta"));
     }
 
-    /// 验证路径包含 ".." 时触发路径遍历警告但不阻断流程(仍返回 ModelLoadError)
+    /// 验证路径包含 ".." 时直接拒绝加载（路径遍历攻击防护）
     #[test]
-    fn test_candle_engine_path_with_dotdot_traversal_warning() {
+    fn test_candle_engine_path_with_dotdot_traversal_rejected() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let sub_dir = temp_dir.path().join("sub");
         std::fs::create_dir(&sub_dir).expect("Failed to create sub dir");
@@ -1498,8 +1498,8 @@ mod tests {
         assert!(result.is_err());
         if let Err(VecboostError::ModelLoadError(msg)) = result {
             assert!(
-                msg.contains("No model weights file found"),
-                "Expected weights error despite path traversal, got: {}",
+                msg.contains("path traversal"),
+                "Expected path traversal rejection, got: {}",
                 msg
             );
         }

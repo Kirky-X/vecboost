@@ -4,7 +4,7 @@
 # ============================================
 # 阶段 1: 构建阶段
 # ============================================
-FROM rust:1.75-slim as builder
+FROM rust:1.75-slim@sha256:70c2a016184099262fd7cee46f3d35fec3568c45c62f87e37f7f665f766b1f74 as builder
 
 # 设置工作目录
 WORKDIR /build
@@ -36,7 +36,7 @@ RUN cargo build --release --features cuda,onnx,grpc
 # ============================================
 # 阶段 2: 运行阶段
 # ============================================
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y \

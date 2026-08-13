@@ -354,11 +354,16 @@ impl Default for BufferPoolConfig {
     }
 }
 
+/// 模型池默认最大内存 (8 GB)
+const DEFAULT_MODEL_POOL_MAX_MEMORY_MB: usize = 8192;
+/// CUDA 池默认最大内存 (4 GB)
+const DEFAULT_CUDA_POOL_MAX_MEMORY_MB: usize = 4096;
+
 impl Default for ModelPoolConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            max_memory_mb: 8192,
+            max_memory_mb: DEFAULT_MODEL_POOL_MAX_MEMORY_MB,
             cache_models: true,
         }
     }
@@ -368,7 +373,7 @@ impl Default for CudaPoolConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            max_memory_mb: 4096,
+            max_memory_mb: DEFAULT_CUDA_POOL_MAX_MEMORY_MB,
         }
     }
 }
@@ -393,6 +398,24 @@ impl Default for ServerConfig {
     }
 }
 
+/// 模型配置默认值
+const DEFAULT_BATCH_SIZE: usize = 32;
+const DEFAULT_EXPECTED_DIMENSION: usize = 1024;
+const DEFAULT_MAX_SEQUENCE_LENGTH: usize = 8192;
+
+/// 嵌入配置默认值
+const DEFAULT_CACHE_SIZE: usize = 1024;
+const DEFAULT_MAX_BATCH_SIZE: usize = 64;
+const DEFAULT_MAX_TEXT_LENGTH: usize = 8192;
+
+/// 重排配置默认值
+const DEFAULT_MAX_DOCUMENTS_PER_QUERY: usize = 100;
+const DEFAULT_MAX_QUERY_LENGTH: usize = 8192;
+
+/// 监控配置默认值
+const DEFAULT_MEMORY_LIMIT_MB: usize = 4096;
+const DEFAULT_MEMORY_WARNING_THRESHOLD: f64 = 0.8;
+
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
@@ -400,9 +423,9 @@ impl Default for ModelConfig {
             model_revision: "main".to_string(),
             model_path: None,
             use_gpu: false,
-            batch_size: 32,
-            expected_dimension: Some(1024),
-            max_sequence_length: Some(8192),
+            batch_size: DEFAULT_BATCH_SIZE,
+            expected_dimension: Some(DEFAULT_EXPECTED_DIMENSION),
+            max_sequence_length: Some(DEFAULT_MAX_SEQUENCE_LENGTH),
         }
     }
 }
@@ -413,9 +436,9 @@ impl Default for EmbeddingConfig {
             default_aggregation: "mean".to_string(),
             similarity_metric: "cosine".to_string(),
             cache_enabled: true,
-            cache_size: 1024,
-            max_batch_size: 64,
-            max_text_length: 8192,
+            cache_size: DEFAULT_CACHE_SIZE,
+            max_batch_size: DEFAULT_MAX_BATCH_SIZE,
+            max_text_length: DEFAULT_MAX_TEXT_LENGTH,
         }
     }
 }
@@ -423,10 +446,10 @@ impl Default for EmbeddingConfig {
 impl Default for RerankConfig {
     fn default() -> Self {
         Self {
-            max_documents_per_query: 100,
-            max_query_length: 8192,
+            max_documents_per_query: DEFAULT_MAX_DOCUMENTS_PER_QUERY,
+            max_query_length: DEFAULT_MAX_QUERY_LENGTH,
             cache_enabled: true,
-            cache_size: 1024,
+            cache_size: DEFAULT_CACHE_SIZE,
         }
     }
 }
@@ -434,8 +457,8 @@ impl Default for RerankConfig {
 impl Default for MonitoringConfig {
     fn default() -> Self {
         Self {
-            memory_limit_mb: Some(4096),
-            memory_warning_threshold: Some(0.8),
+            memory_limit_mb: Some(DEFAULT_MEMORY_LIMIT_MB),
+            memory_warning_threshold: Some(DEFAULT_MEMORY_WARNING_THRESHOLD),
             metrics_enabled: true,
             log_level: Some("info".to_string()),
         }

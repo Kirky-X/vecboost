@@ -3,27 +3,26 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! Chunk-based manual unrolling for vector operations.
+//! Chunk-based vector operations with 4-wide manual unrolling.
 //!
-//! Provides SIMD-friendly implementations that compilers can auto-vectorize
-//! on most platforms without requiring nightly `std::simd` or platform-specific intrinsics.
+//! The compiler auto-vectorizes these loops into SIMD instructions
+//! (SSE2/AVX on x86-64, NEON on ARM64). Benchmarks show this outperforms
+//! explicit SIMD crates like `wide` because the compiler can generate
+//! aligned vector loads from contiguous slice access patterns.
 
-const CHUNK_SIZE: usize = 4;
-
-/// Compute dot product of two f32 slices using 4-wide chunk-based unrolling.
+/// Compute dot product of two f32 slices (4-wide unrolled).
 ///
 /// The slices must have equal length. Caller is responsible for validation.
 #[inline]
 pub fn dot_product_chunked(v1: &[f32], v2: &[f32]) -> f32 {
     debug_assert_eq!(v1.len(), v2.len());
     let len = v1.len();
-    let chunks = len / CHUNK_SIZE;
+    let chunks = len / 4;
 
     let mut sum = 0.0f32;
 
-    // Process 4 elements at a time
     for i in 0..chunks {
-        let base = i * CHUNK_SIZE;
+        let base = i * 4;
         sum += v1[base] * v2[base]
             + v1[base + 1] * v2[base + 1]
             + v1[base + 2] * v2[base + 2]
@@ -31,7 +30,7 @@ pub fn dot_product_chunked(v1: &[f32], v2: &[f32]) -> f32 {
     }
 
     // Handle remaining elements
-    let tail_start = chunks * CHUNK_SIZE;
+    let tail_start = chunks * 4;
     for i in tail_start..len {
         sum += v1[i] * v2[i];
     }
@@ -39,25 +38,25 @@ pub fn dot_product_chunked(v1: &[f32], v2: &[f32]) -> f32 {
     sum
 }
 
-/// Compute sum of squares of a f32 slice using 4-wide chunk-based unrolling.
+/// Compute sum of squares of a f32 slice (4-wide unrolled).
 #[inline]
 pub fn sum_of_squares_chunked(v: &[f32]) -> f32 {
     let len = v.len();
-    let chunks = len / CHUNK_SIZE;
+    let chunks = len / 4;
 
     let mut sum = 0.0f32;
 
-    // Process 4 elements at a time
     for i in 0..chunks {
-        let base = i * CHUNK_SIZE;
-        sum += v[base] * v[base]
-            + v[base + 1] * v[base + 1]
-            + v[base + 2] * v[base + 2]
-            + v[base + 3] * v[base + 3];
+        let base = i * 4;
+        let a = v[base];
+        let b = v[base + 1];
+        let c = v[base + 2];
+        let d = v[base + 3];
+        sum += a * a + b * b + c * c + d * d;
     }
 
     // Handle remaining elements
-    let tail_start = chunks * CHUNK_SIZE;
+    let tail_start = chunks * 4;
     for val in &v[tail_start..] {
         sum += val * val;
     }
@@ -65,17 +64,17 @@ pub fn sum_of_squares_chunked(v: &[f32]) -> f32 {
     sum
 }
 
-/// Compute squared euclidean distance using 4-wide chunk-based unrolling.
+/// Compute squared euclidean distance (4-wide unrolled).
 #[inline]
 pub fn squared_euclidean_chunked(v1: &[f32], v2: &[f32]) -> f32 {
     debug_assert_eq!(v1.len(), v2.len());
     let len = v1.len();
-    let chunks = len / CHUNK_SIZE;
+    let chunks = len / 4;
 
     let mut sum = 0.0f32;
 
     for i in 0..chunks {
-        let base = i * CHUNK_SIZE;
+        let base = i * 4;
         let d0 = v1[base] - v2[base];
         let d1 = v1[base + 1] - v2[base + 1];
         let d2 = v1[base + 2] - v2[base + 2];
@@ -83,7 +82,7 @@ pub fn squared_euclidean_chunked(v1: &[f32], v2: &[f32]) -> f32 {
         sum += d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
     }
 
-    let tail_start = chunks * CHUNK_SIZE;
+    let tail_start = chunks * 4;
     for i in tail_start..len {
         let d = v1[i] - v2[i];
         sum += d * d;
@@ -92,24 +91,24 @@ pub fn squared_euclidean_chunked(v1: &[f32], v2: &[f32]) -> f32 {
     sum
 }
 
-/// Compute manhattan distance using 4-wide chunk-based unrolling.
+/// Compute manhattan distance (4-wide unrolled).
 #[inline]
 pub fn manhattan_distance_chunked(v1: &[f32], v2: &[f32]) -> f32 {
     debug_assert_eq!(v1.len(), v2.len());
     let len = v1.len();
-    let chunks = len / CHUNK_SIZE;
+    let chunks = len / 4;
 
     let mut sum = 0.0f32;
 
     for i in 0..chunks {
-        let base = i * CHUNK_SIZE;
+        let base = i * 4;
         sum += (v1[base] - v2[base]).abs()
             + (v1[base + 1] - v2[base + 1]).abs()
             + (v1[base + 2] - v2[base + 2]).abs()
             + (v1[base + 3] - v2[base + 3]).abs();
     }
 
-    let tail_start = chunks * CHUNK_SIZE;
+    let tail_start = chunks * 4;
     for i in tail_start..len {
         sum += (v1[i] - v2[i]).abs();
     }

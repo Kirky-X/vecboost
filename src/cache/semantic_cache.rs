@@ -19,7 +19,8 @@ use crate::cache::OxCacheBackend;
 
 /// 语义缓存条目
 struct SemanticEntry {
-    text: String,
+    /// 缓存的 trigram 集合，避免重复计算
+    trigrams: HashSet<Vec<u8>>,
     embedding: Vec<f32>,
     last_access: Instant,
 }
@@ -153,12 +154,20 @@ impl SemanticCache {
     /// 在语义索引中查找与 query 最相似的条目。
     /// 返回 Some(embedding) 当最大相似度 > threshold。
     pub async fn find_similar(&self, query: &str) -> Option<Vec<f32>> {
-        let mut index = self.semantic_index.write().await;
+        // 纯读操作使用 read 锁
+        let index = self.semantic_index.read().await;
         let mut best_sim = 0.0f32;
         let mut best_idx = None;
 
+        // 构建 query 的 trigram 集合（仅一次，复用于所有比较）
+        let query_trigrams: HashSet<Vec<u8>> = query
+            .as_bytes()
+            .windows(3)
+            .map(|w| w.to_vec())
+            .collect();
+
         for (i, entry) in index.iter().enumerate() {
-            let sim = trigram_jaccard(query, &entry.text);
+            let sim = trigram_jaccard_with_set(&query_trigrams, &entry.trigrams);
             if sim > best_sim {
                 best_sim = sim;
                 best_idx = Some(i);
@@ -168,7 +177,6 @@ impl SemanticCache {
         if best_sim >= self.similarity_threshold
             && let Some(idx) = best_idx
         {
-            index[idx].last_access = Instant::now();
             return Some(index[idx].embedding.clone());
         }
         None
@@ -190,7 +198,11 @@ impl SemanticCache {
         }
 
         index.push(SemanticEntry {
-            text: text.to_string(),
+            trigrams: text
+                .as_bytes()
+                .windows(3)
+                .map(|w| w.to_vec())
+                .collect(),
             embedding,
             last_access: Instant::now(),
         });
@@ -208,18 +220,15 @@ impl SemanticCache {
     }
 }
 
-/// 计算两个字符串的字符级 trigram Jaccard 相似度。
+/// 使用预计算的 trigram 集合计算 Jaccard 相似度。
 ///
-/// Jaccard = |A ∩ B| / |A ∪ B|，其中 A、B 分别是两个字符串的 3-byte window 集合。
-/// 空字符串或长度 < 3 的字符串返回 0.0。
-pub fn trigram_jaccard(a: &str, b: &str) -> f32 {
-    if a.len() < 3 || b.len() < 3 {
+/// 避免在批量比较中重复构建 HashSet。
+fn trigram_jaccard_with_set(a_trigrams: &HashSet<Vec<u8>>, b_trigrams: &HashSet<Vec<u8>>) -> f32 {
+    if a_trigrams.is_empty() || b_trigrams.is_empty() {
         return 0.0;
     }
-    let trigrams_a: HashSet<&[u8]> = a.as_bytes().windows(3).collect();
-    let trigrams_b: HashSet<&[u8]> = b.as_bytes().windows(3).collect();
-    let intersection = trigrams_a.intersection(&trigrams_b).count();
-    let union_size = trigrams_a.union(&trigrams_b).count();
+    let intersection = a_trigrams.intersection(b_trigrams).count();
+    let union_size = a_trigrams.union(b_trigrams).count();
     if union_size == 0 {
         return 0.0;
     }
@@ -229,6 +238,16 @@ pub fn trigram_jaccard(a: &str, b: &str) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 计算两个字符串的字符级 trigram Jaccard 相似度（测试辅助函数）。
+    fn trigram_jaccard(a: &str, b: &str) -> f32 {
+        if a.len() < 3 || b.len() < 3 {
+            return 0.0;
+        }
+        let trigrams_a: HashSet<Vec<u8>> = a.as_bytes().windows(3).map(|w| w.to_vec()).collect();
+        let trigrams_b: HashSet<Vec<u8>> = b.as_bytes().windows(3).map(|w| w.to_vec()).collect();
+        trigram_jaccard_with_set(&trigrams_a, &trigrams_b)
+    }
 
     #[test]
     fn test_trigram_jaccard_identical() {

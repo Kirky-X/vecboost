@@ -8,7 +8,7 @@
 //! 热层常驻 GPU，冷层按需从 CPU 内存换入/换出。
 //! 支持预取优化：根据当前推理层预测后续层，提前换入。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 /// 分页错误类型
@@ -92,7 +92,7 @@ struct LayerMeta {
     location: LayerLocation,
     size_bytes: u64,
     /// 最近 K 次访问时间戳（LRU-K 用）
-    access_history: Vec<Instant>,
+    access_history: VecDeque<Instant>,
 }
 
 /// GPU 显存分页管理器
@@ -137,7 +137,7 @@ impl WeightPagingManager {
             LayerMeta {
                 location: LayerLocation::OnCpu,
                 size_bytes,
-                access_history: Vec::with_capacity(self.lru_k),
+                access_history: VecDeque::with_capacity(self.lru_k),
             },
         );
     }
@@ -191,9 +191,9 @@ impl WeightPagingManager {
         self.total_page_in_latency_ms += start.elapsed().as_secs_f64() * 1000.0;
 
         // 记录访问时间
-        meta.access_history.push(Instant::now());
+        meta.access_history.push_back(Instant::now());
         if meta.access_history.len() > self.lru_k {
-            meta.access_history.remove(0);
+            meta.access_history.pop_front();
         }
 
         Ok(())
@@ -218,9 +218,9 @@ impl WeightPagingManager {
     /// 记录层访问（用于 LRU-K 频率跟踪）。
     pub fn record_access(&mut self, name: &str) {
         if let Some(meta) = self.layers.get_mut(name) {
-            meta.access_history.push(Instant::now());
+            meta.access_history.push_back(Instant::now());
             if meta.access_history.len() > self.lru_k {
-                meta.access_history.remove(0);
+                meta.access_history.pop_front();
             }
         }
     }

@@ -109,6 +109,13 @@ sdforge = { version = "0.4", path = "../base/sdforge", optional = true, default-
 # CLI argument parsing (cli feature)
 clap = { version = "4.6", optional = true, default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
 
+# Performance: parallel iterator for batch similarity
+rayon = { version = "1.10", default-features = false }
+
+# Performance: jemalloc global allocator for multi-threaded workloads
+[target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
+tikv-jemallocator = { version = "0.6", default-features = false, features = ["background_threads"] }
+
 
 [features]
 default = ["http"]
@@ -183,6 +190,13 @@ harness = false
 
 [profile.dev]
 opt-level = 1
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Workspace — examples 作为独立 crate(member),不发布

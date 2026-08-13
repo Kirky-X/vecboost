@@ -16,6 +16,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// nvidia-smi 不可用时的 fallback 默认设备参数
+const DEFAULT_FALLBACK_VRAM_BYTES: u64 = 8 * 1024 * 1024 * 1024; // 8 GB
+const DEFAULT_FALLBACK_COMPUTE_CAP: (u8, u8) = (7, 0); // Turing 级别
+
+/// 批量大小降级算法常量
+const MAX_FALLBACK_BATCH_SIZE: usize = 32;
+const MB_PER_BATCH_SLOT: u64 = 2048; // 每个 batch slot 预估占用 2048 MB
+const DEFAULT_BATCH_SIZE: usize = 16;
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CudaGpuInfo {
     pub device_id: usize,
@@ -187,11 +196,13 @@ impl CudaDeviceManager {
                     Ok(info) if info.total_vram_bytes > 0 => (
                         info.device_name.unwrap_or_else(|| "CUDA Device (candle)".to_string()),
                         info.total_vram_bytes,
-                        info.compute_capability.unwrap_or((7, 0)),
+                        info.compute_capability.unwrap_or(DEFAULT_FALLBACK_COMPUTE_CAP),
                     ),
                     _ => {
-                        warn!("nvidia-smi 查询失败，使用默认设备参数（建议安装 nvidia-smi 以获取准确信息）");
-                        ("CUDA Device (candle)".to_string(), 8 * 1024 * 1024 * 1024, (7, 0))
+                        warn!("nvidia-smi 查询失败，使用 fallback 默认设备参数 ({}GB, compute {}.{})。建议安装 nvidia-smi 以获取准确信息",
+                            DEFAULT_FALLBACK_VRAM_BYTES / (1024 * 1024 * 1024),
+                            DEFAULT_FALLBACK_COMPUTE_CAP.0, DEFAULT_FALLBACK_COMPUTE_CAP.1);
+                        ("CUDA Device (candle)".to_string(), DEFAULT_FALLBACK_VRAM_BYTES, DEFAULT_FALLBACK_COMPUTE_CAP)
                     }
                 };
 
@@ -225,7 +236,7 @@ impl CudaDeviceManager {
                     .device_name
                     .unwrap_or_else(|| "Unknown NVIDIA GPU".to_string()),
                 nvidia_info.total_vram_bytes,
-                nvidia_info.compute_capability.unwrap_or((7, 0)),
+                nvidia_info.compute_capability.unwrap_or(DEFAULT_FALLBACK_COMPUTE_CAP),
             );
             info!("Detected compatible CUDA device: {}", cuda_device.name());
             devices.push(cuda_device);
@@ -280,13 +291,13 @@ impl CudaDeviceManager {
                     // 降级到简单算法
                     let available = memory_manager.get_available_memory().await;
                     let available_mb = available / (1024 * 1024);
-                    std::cmp::min(32, (available_mb / 2048) as usize + 1)
+                    std::cmp::min(MAX_FALLBACK_BATCH_SIZE, (available_mb / MB_PER_BATCH_SLOT) as usize + 1)
                 }
             } else {
-                16
+                DEFAULT_BATCH_SIZE
             }
         } else {
-            16
+            DEFAULT_BATCH_SIZE
         }
     }
 
@@ -366,7 +377,60 @@ impl Default for CudaDeviceManager {
     }
 }
 
+/// 检测 NVIDIA 驱动与 GPU 信息。
+///
+/// 优先通过 NVML 库（`nvml-wrapper`）获取，不可用时 fallback 到 `nvidia-smi` 二进制。
 async fn detect_nvidia_driver() -> Result<NvidiaDriverInfo, String> {
+    #[cfg(feature = "cuda")]
+    {
+        match detect_with_nvml() {
+            Ok(info) if info.total_vram_bytes > 0 => return Ok(info),
+            Ok(_) => debug!("NVML returned empty VRAM, falling back to nvidia-smi"),
+            Err(e) => debug!("NVML query failed, falling back to nvidia-smi: {}", e),
+        }
+    }
+
+    detect_via_nvidia_smi()
+}
+
+/// 通过 NVML（NVIDIA Management Library）获取 GPU 信息
+#[cfg(feature = "cuda")]
+fn detect_with_nvml() -> Result<NvidiaDriverInfo, String> {
+    let nvml = nvml_wrapper::Nvml::init()
+        .map_err(|e| format!("NVML init failed: {}", e))?;
+
+    let device_count = nvml.device_count()
+        .map_err(|e| format!("NVML device_count failed: {}", e))?;
+    if device_count == 0 {
+        return Err("NVML: no NVIDIA GPU found".to_string());
+    }
+
+    let device = nvml.device_by_index(0)
+        .map_err(|e| format!("NVML device_by_index failed: {}", e))?;
+
+    let name = device.name()
+        .map_err(|e| format!("NVML name query failed: {}", e))?;
+
+    let memory_info = device.memory_info()
+        .map_err(|e| format!("NVML memory_info query failed: {}", e))?;
+
+    let (cc_major, cc_minor) = device.cuda_compute_capability()
+        .map_err(|e| format!("NVML compute_capability query failed: {}", e))?;
+
+    let driver_version = nvml.sys_driver_version()
+        .map_err(|e| format!("NVML driver_version query failed: {}", e))?;
+
+    Ok(NvidiaDriverInfo {
+        cuda_version: if memory_info.total > 0 { Some(11) } else { None },
+        driver_version: Some(driver_version),
+        device_name: Some(name),
+        total_vram_bytes: memory_info.total,
+        compute_capability: Some((cc_major as u8, cc_minor as u8)),
+    })
+}
+
+/// 通过 `nvidia-smi` 二进制命令获取 GPU 信息（fallback 路径）
+fn detect_via_nvidia_smi() -> Result<NvidiaDriverInfo, String> {
     use std::process::Command;
     use std::str;
 

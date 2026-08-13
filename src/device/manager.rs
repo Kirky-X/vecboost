@@ -309,7 +309,7 @@ impl DeviceManager {
                 device_id: cuda_device.device_id(),
                 name: cuda_device.name().to_string(),
                 total_memory_bytes: cuda_device.total_memory(),
-                available_memory_bytes: cuda_device.total_memory(),
+                available_memory_bytes: self.cuda_device_manager.available_memory(cuda_device.device_id()).await.unwrap_or(cuda_device.total_memory()),
                 compute_capability: cuda_device.compute_capability(),
                 supports_float16: cuda_device.capability().supports_float16,
                 supports_tensor_cores: cuda_device.capability().supports_tensor_cores,
@@ -345,21 +345,27 @@ impl DeviceManager {
         self.ensure_initialized().await;
         let cuda_devices = self.cuda_device_manager.devices().await;
 
-        cuda_devices
-            .iter()
-            .map(|d| CudaGpuInfo {
+        let mut result = Vec::with_capacity(cuda_devices.len());
+        for d in &cuda_devices {
+            let avail = self
+                .cuda_device_manager
+                .available_memory(d.device_id())
+                .await
+                .unwrap_or(d.total_memory());
+            result.push(CudaGpuInfo {
                 device_id: d.device_id(),
                 name: d.name().to_string(),
                 total_memory_bytes: d.total_memory(),
-                available_memory_bytes: d.total_memory(),
+                available_memory_bytes: avail,
                 compute_capability: d.compute_capability(),
                 supports_float16: d.capability().supports_float16,
                 supports_tensor_cores: d.capability().supports_tensor_cores,
                 sm_count: 0,
                 max_threads_per_multiprocessor: 0,
                 cuda_cores_count: 0,
-            })
-            .collect()
+            });
+        }
+        result
     }
 
     pub async fn check_memory_pressure(&self) -> bool {

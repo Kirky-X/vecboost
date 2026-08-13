@@ -274,6 +274,11 @@ impl CudaDeviceManager {
     }
 
     pub async fn available_memory(&self, device_id: usize) -> Option<u64> {
+        // 优先通过内存管理器获取真实可用显存（总显存 - 已分配）
+        if let Some(memory_manager) = self.memory_managers.read().await.get(&device_id) {
+            return Some(memory_manager.get_available_memory().await);
+        }
+        // fallback：无内存管理器时返回总显存（不应发生）
         let devices = self.devices.read().await;
         devices.get(device_id).map(|d| d.total_memory())
     }

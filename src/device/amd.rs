@@ -170,20 +170,34 @@ impl AmdDevice {
     }
 
     pub fn allocate(&self, bytes: u64) -> bool {
-        let current = self.memory_allocated.load(Ordering::SeqCst);
-        let new_allocated = current + bytes;
+        // 原子 check-then-act：避免并发调用导致超分配
+        let result = self.memory_allocated.fetch_update(
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+            |current| {
+                let new_allocated = current + bytes;
+                if new_allocated > self.info.vram_bytes {
+                    None // 拒绝：超出 VRAM
+                } else {
+                    Some(new_allocated)
+                }
+            },
+        );
 
-        if new_allocated > self.info.vram_bytes {
-            log::warn!(
-                "GPU memory allocation failed: requested {} bytes, available {} bytes",
-                bytes,
-                self.available_memory()
-            );
-            false
-        } else {
-            self.memory_allocated.store(new_allocated, Ordering::SeqCst);
-            self.memory_used.store(new_allocated, Ordering::SeqCst);
-            true
+        match result {
+            Ok(_old) => {
+                self.memory_used
+                    .store(self.memory_allocated.load(Ordering::SeqCst), Ordering::SeqCst);
+                true
+            }
+            Err(_) => {
+                log::warn!(
+                    "GPU memory allocation failed: requested {} bytes, available {} bytes",
+                    bytes,
+                    self.available_memory()
+                );
+                false
+            }
         }
     }
 

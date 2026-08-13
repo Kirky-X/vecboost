@@ -151,6 +151,9 @@ impl WeightPagingManager {
     }
 
     /// 将层从 CPU 换入 GPU。
+    ///
+    /// 若层处于 `InTransfer` 状态（由 `prefetch()` 标记），则完成传输：
+    /// 更新 GPU 用量并转换到 `OnGpu`。
     pub fn page_in(&mut self, name: &str) -> Result<(), PagingError> {
         // 先只读检查层状态（借用在此块结束时释放）
         let (location, size) = {
@@ -161,8 +164,23 @@ impl WeightPagingManager {
             (meta.location.clone(), meta.size_bytes)
         };
 
-        if location == LayerLocation::OnGpu || location == LayerLocation::InTransfer {
-            return Ok(()); // 已在 GPU 或正在传输中
+        if location == LayerLocation::OnGpu {
+            return Ok(()); // 已在 GPU 上，无需操作
+        }
+
+        // InTransfer → OnGpu：完成预取传输
+        if location == LayerLocation::InTransfer {
+            let start = Instant::now();
+            let meta = self.layers.get_mut(name).unwrap();
+            meta.location = LayerLocation::OnGpu;
+            self.current_gpu_usage += size;
+            self.page_in_count += 1;
+            self.total_page_in_latency_ms += start.elapsed().as_secs_f64() * 1000.0;
+            meta.access_history.push_back(Instant::now());
+            if meta.access_history.len() > self.lru_k {
+                meta.access_history.pop_front();
+            }
+            return Ok(());
         }
 
         // 检查显存是否足够（此时不持有 layers 的引用）
@@ -437,6 +455,25 @@ mod tests {
         mgr.register_layer("cpu_layer", 100);
         let result = mgr.page_out("cpu_layer");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_prefetch_then_page_in_completes_transfer() {
+        let mut mgr = WeightPagingManager::new(&test_config());
+        mgr.register_layer("layer_0", 100);
+        mgr.register_layer("layer_1", 100);
+
+        // prefetch 标记 InTransfer
+        mgr.prefetch(&["layer_1".to_string()]);
+        assert_eq!(
+            mgr.layers.get("layer_1").unwrap().location,
+            LayerLocation::InTransfer
+        );
+
+        // page_in 应完成传输：InTransfer → OnGpu
+        mgr.page_in("layer_1").unwrap();
+        assert!(mgr.is_on_gpu("layer_1"), "layer_1 should be OnGpu after page_in");
+        assert_eq!(mgr.gpu_usage(), 100, "GPU usage should account for transferred layer");
     }
 
     #[test]

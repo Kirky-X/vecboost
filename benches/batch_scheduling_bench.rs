@@ -6,7 +6,7 @@ use tokio::runtime::Runtime;
 use vecboost::{
     BatchConfig, BatchPriority, BatchRequest, ContinuousBatchLoop, DynamicBatchScheduler,
 };
-use vecboost::pipeline::{Priority, PriorityRequestQueue, QueuedRequest, RequestSource};
+use vecboost::pipeline::{Priority, PriorityRequestQueue, QueuedRequest, RequestSource, ServiceRequest};
 use vecboost::domain::EmbedRequest;
 use vecboost::EmbeddingService;
 use vecboost::engine::InferenceEngine;
@@ -54,7 +54,7 @@ fn make_queued_request(id: usize) -> (QueuedRequest, tokio::sync::oneshot::Recei
     let (tx, rx) = tokio::sync::oneshot::channel();
     let req = QueuedRequest {
         request_id: format!("bench-{}", id),
-        embed_request: EmbedRequest { text: format!("text {}", id), normalize: Some(true) },
+        request: ServiceRequest::Embed(EmbedRequest { text: format!("text {}", id), normalize: Some(true) }),
         priority: Priority::Normal,
         submitted_at: Instant::now(),
         timeout: Duration::from_secs(30),

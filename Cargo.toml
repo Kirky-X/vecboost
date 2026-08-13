@@ -39,19 +39,19 @@ anyhow = { version = "1.0", default-features = false, features = ["std"] }
 # Module Registry (always required)
 trait-kit = { version = "0.4", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator"] }
 
-# Configuration infrastructure (confers - 必选,完全接管配置,禁止手写 config/toml)
+# Configuration infrastructure
 confers = { version = "0.5", path = "../base/confers", default-features = false, features = ["toml", "env", "config-bus", "validation", "watch", "encryption", "schema"] }
 garde = { version = "0.22", default-features = false, features = ["derive"] }
 schemars = { version = "1.2", default-features = false }
 
-# Logging infrastructure (inklog + log - 必选,完全接管日志,禁止手写 tracing)
+# Logging infrastructure
 inklog = { version = "0.2", path = "../base/inklog", default-features = false, features = ["compression", "fast-masking"] }
 log = { version = "0.4", default-features = false }
 
-# Cache infrastructure (oxcache - 必选,完全接管缓存,禁止手写 lru)
+# Cache infrastructure
 oxcache = { version = "0.4", path = "../base/oxcache", default-features = false, features = ["core", "bloom", "compression", "macros"] }
 
-# Rate limiting infrastructure (limiteron - 必选,完全接管速率限制,禁止手写)
+# Rate limiting infrastructure
 limiteron = { version = "0.2", path = "../base/limiteron", default-features = false, features = ["ban-manager", "quota-control", "circuit-breaker", "gcra", "macros", "metrics", "validation", "parallel-checker", "adaptive-limiting", "event-system", "multi-tenant", "priority-queue", "admission-control", "kit"] }
 
 # Database infrastructure (db feature)
@@ -88,7 +88,7 @@ reqwest = { version = "0.13", optional = true, default-features = false, feature
 
 # gRPC is fully handled by sdforge (unified Call protocol via #[forge(grpc_method)])
 
-# Auth feature (garrison - 一站式认证鉴权框架，完全接管 auth，禁止手写 JWT/CSRF/密码哈希)
+# Auth feature
 garrison = { version = "0.8", optional = true, default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "account-credential", "account-policy"] }
 aes-gcm = { version = "0.11", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
 
@@ -103,8 +103,7 @@ ort = { version = "2.0.0-rc.13", optional = true, default-features = false }
 # CUDA feature (candle-core/cuda 传递依赖 cudarc 0.19,支持 CUDA 13)
 # 注意:项目代码不直接使用 cudarc,无需在此声明
 
-# Multi-protocol SDK framework (sdforge - 通过 http/cli/mcp feature 启用,禁止手写接口)
-# 版本约束用 minor 级别(规则25),允许 sdforge 0.4.x 的 minor 升级
+# Multi-protocol SDK framework
 sdforge = { version = "0.4", path = "../base/sdforge", optional = true, default-features = false }
 
 # CLI argument parsing (cli feature)

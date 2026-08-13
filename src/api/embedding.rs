@@ -399,26 +399,43 @@ async fn health_handler() -> Result<serde_json::Value, ApiError> {
     let mut unhealthy_modules = Vec::new();
 
     // Query registered health checks
-    if let Ok(status) = st.kit.health_check::<EmbeddingModule>() {
-        if !status.is_healthy() {
+    match st.kit.health_check::<EmbeddingModule>() {
+        Ok(status) if !status.is_healthy() => {
             unhealthy_modules.push(format!("embedding: {:?}", status));
         }
+        Err(e) => {
+            unhealthy_modules.push(format!("embedding: health check failed: {}", e));
+        }
+        _ => {}
     }
-    if let Ok(status) = st.kit.health_check::<RerankModule>() {
-        if !status.is_healthy() {
+    match st.kit.health_check::<RerankModule>() {
+        Ok(status) if !status.is_healthy() => {
             unhealthy_modules.push(format!("rerank: {:?}", status));
         }
+        Err(e) => {
+            unhealthy_modules.push(format!("rerank: health check failed: {}", e));
+        }
+        _ => {}
     }
-    if let Ok(status) = st.kit.health_check::<RateLimitModule>() {
-        if !status.is_healthy() {
+    match st.kit.health_check::<RateLimitModule>() {
+        Ok(status) if !status.is_healthy() => {
             unhealthy_modules.push(format!("rate_limit: {:?}", status));
         }
-    }
-    if let Ok(status) = st.kit.health_check::<CacheModule>() {
-        if let HealthStatus::Unhealthy { ref detail } = status {
-            unhealthy_modules.push(format!("cache: {}", detail));
+        Err(e) => {
+            unhealthy_modules.push(format!("rate_limit: health check failed: {}", e));
         }
-        // Degraded (cache disabled) is not unhealthy — it's an expected config state
+        _ => {}
+    }
+    match st.kit.health_check::<CacheModule>() {
+        Ok(status) => {
+            if let HealthStatus::Unhealthy { ref detail } = status {
+                unhealthy_modules.push(format!("cache: {}", detail));
+            }
+            // Degraded (cache disabled) is not unhealthy — it's an expected config state
+        }
+        Err(e) => {
+            unhealthy_modules.push(format!("cache: health check failed: {}", e));
+        }
     }
 
     if unhealthy_modules.is_empty() {

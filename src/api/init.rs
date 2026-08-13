@@ -15,8 +15,10 @@ use std::sync::OnceLock;
 
 static STATE: OnceLock<VecboostState> = OnceLock::new();
 
-pub fn init_state(state: VecboostState) {
-    let _ = STATE.set(state);
+pub fn init_state(state: VecboostState) -> Result<(), VecboostError> {
+    STATE
+        .set(state)
+        .map_err(|_| VecboostError::InternalError("init_state already called".to_string()))
 }
 
 pub fn state() -> Result<VecboostState, VecboostError> {

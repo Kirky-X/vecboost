@@ -58,7 +58,8 @@ pub async fn forge_login(
 
     // 通过 garrison 创建会话（login_id = username）
     // TODO: 凭证校验需集成 garrison account-credential 系统
-    // 当前仅验证 username 格式合法，密码校验待后续迁移
+    // GarrisonUtil::login 不接受密码参数，需通过 DAO 查询用户存储的密码哈希后
+    // 使用 PasswordHasher::verify 校验。当前仅验证 username 格式合法。
     match GarrisonUtil::login_simple(&req.username).await {
         Ok(token) => {
             if let Some(logger) = audit_logger {
@@ -72,7 +73,7 @@ pub async fn forge_login(
         }
         Err(e) => {
             if let Some(logger) = audit_logger {
-                logger.log_login_failed(&req.username, Some(peer_ip.clone()), &e.to_string());
+                logger.log_login_failed(&req.username, Some(peer_ip.clone()), "authentication failed");
             }
             Err(to_api_error(e.into()))
         }
@@ -88,7 +89,10 @@ pub async fn forge_login(
     tool_name = "refresh_token",
     description = "Refresh JWT token"
 )]
-pub async fn forge_refresh(req: RefreshTokenRequest) -> Result<AuthResponse, ApiError> {
+pub async fn forge_refresh(
+    #[param(kind = "extension")] connect_info: ConnectInfo<SocketAddr>,
+    req: RefreshTokenRequest,
+) -> Result<AuthResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
     let _auth = st
         .kit
@@ -103,7 +107,12 @@ pub async fn forge_refresh(req: RefreshTokenRequest) -> Result<AuthResponse, Api
     // 通过旧 token 获取 login_id，然后创建新会话
     let login_id = GarrisonUtil::get_login_id_by_token(&req.refresh_token)
         .await
-        .map_err(|e| to_api_error(e.into()))?
+        .map_err(|e| {
+            if let Some(logger) = &audit_logger {
+                logger.log_login_failed("<unknown>", None, "refresh token validation failed");
+            }
+            to_api_error(e.into())
+        })?
         .ok_or_else(|| ApiError::InvalidInput {
             message: "Invalid or expired token".to_string(),
             field: Some("refresh_token".to_string()),
@@ -114,8 +123,9 @@ pub async fn forge_refresh(req: RefreshTokenRequest) -> Result<AuthResponse, Api
         .await
         .map_err(|e| to_api_error(e.into()))?;
 
+    let peer_ip = connect_info.0.ip().to_string();
     if let Some(logger) = audit_logger {
-        logger.log_token_refresh(&login_id, None);
+        logger.log_token_refresh(&login_id, Some(peer_ip));
     }
 
     Ok(AuthResponse {
@@ -151,8 +161,13 @@ pub async fn forge_logout(
 
     // 通过 garrison 撤销 token
     match GarrisonUtil::revoke_token(&auth_ctx.token).await {
-        Ok(()) => log::info!("Token successfully revoked on logout"),
-        Err(e) => log::debug!("Logout token could not be revoked: {}", e),
+        Ok(()) => {
+            log::info!("Token successfully revoked on logout");
+        }
+        Err(e) => {
+            log::warn!("Logout token could not be revoked: {}", e);
+            return Err(to_api_error(e.into()));
+        }
     }
 
     if let Some(logger) = audit_logger {
@@ -176,8 +191,10 @@ pub async fn forge_me(
     #[param(kind = "extension")] auth_ctx: AuthContext,
 ) -> Result<serde_json::Value, ApiError> {
     // 通过 garrison 查询完整权限/角色列表（task_local token 已由 auth_middleware 设置）
-    let has_all_perms = GarrisonUtil::has_permission("*").await.unwrap_or(false);
-    let is_admin = GarrisonUtil::has_role("admin").await.unwrap_or(false);
+    let has_all_perms = GarrisonUtil::has_permission("*").await
+        .map_err(|e| to_api_error(e.into()))?;
+    let is_admin = GarrisonUtil::has_role("admin").await
+        .map_err(|e| to_api_error(e.into()))?;
 
     let role = if is_admin { "admin" } else { "user" };
     let perms: Vec<&str> = if has_all_perms {

@@ -172,7 +172,7 @@ impl WeightPagingManager {
         // InTransfer → OnGpu：完成预取传输
         if location == LayerLocation::InTransfer {
             let start = Instant::now();
-            let meta = self.layers.get_mut(name).unwrap();
+            let meta = self.layers.get_mut(name).ok_or_else(|| PagingError::LayerNotFound(name.to_string()))?;
             meta.location = LayerLocation::OnGpu;
             self.current_gpu_usage += size;
             self.page_in_count += 1;
@@ -203,7 +203,7 @@ impl WeightPagingManager {
         let start = Instant::now();
 
         // 现在安全地获取可变引用来更新状态
-        let meta = self.layers.get_mut(name).unwrap();
+        let meta = self.layers.get_mut(name).ok_or_else(|| PagingError::LayerNotFound(name.to_string()))?;
         meta.location = LayerLocation::OnGpu;
         self.current_gpu_usage += size;
         self.page_in_count += 1;

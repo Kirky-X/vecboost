@@ -245,7 +245,7 @@ async fn test_logger_module_contains_after_register() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_logger_module_coexists_with_other_modules() {
-    use crate::module_registry::EmbeddingModule;
+    use crate::registry::EmbeddingModule;
 
     let config = inklog::InklogConfig {
         console_sink: None,

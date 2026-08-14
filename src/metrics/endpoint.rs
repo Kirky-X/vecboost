@@ -35,18 +35,18 @@ pub async fn metrics_endpoint(
     // 提前获取 PrometheusCollector（限流指标记录 + 指标导出共用）
     let collector_opt = app_state
         .kit
-        .require::<crate::module_registry::PrometheusCollectorModule>()
+        .require::<crate::registry::PrometheusCollectorModule>()
         .expect("PrometheusCollectorModule not registered");
 
     if app_state
         .kit
-        .config::<crate::module_registry::RateLimitEnabled>()
+        .config::<crate::registry::RateLimitEnabled>()
         .map(|c| c.0)
         .unwrap_or(false)
     {
         let ip_whitelist = app_state
             .kit
-            .require::<crate::module_registry::IpWhitelistModule>()
+            .require::<crate::registry::IpWhitelistModule>()
             .expect("IpWhitelistModule not registered");
 
         if !is_ip_whitelisted(&ip, &ip_whitelist) {
@@ -58,7 +58,7 @@ pub async fn metrics_endpoint(
             };
             let allowed = app_state
                 .kit
-                .require::<crate::module_registry::RateLimitModule>()
+                .require::<crate::registry::RateLimitModule>()
                 .expect("RateLimitModule not registered")
                 .check_rate_limit(&context)
                 .await;

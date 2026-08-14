@@ -36,7 +36,7 @@ use crate::domain::{
 };
 use crate::engine::{AnyEngine, EngineFactory};
 use crate::error::VecboostError;
-use crate::module_registry::{EmbeddingModule, RerankModule};
+use crate::registry::{EmbeddingModule, RerankModule};
 use crate::service::embedding::EmbeddingService;
 use crate::service::rerank::RerankService;
 use crate::RerankConfig;

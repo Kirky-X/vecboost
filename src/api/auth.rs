@@ -15,7 +15,7 @@ use crate::api::embedding::{kit_internal_error, to_api_error};
 use crate::api::init::state;
 use crate::auth::middleware::AuthContext;
 use crate::auth::{AuthResponse, GarrisonUtil, LoginRequest, RefreshTokenRequest};
-use crate::module_registry::{AuditModule, AuthModule};
+use crate::registry::{AuditModule, AuthModule};
 use std::net::SocketAddr;
 
 #[cfg(feature = "http")]

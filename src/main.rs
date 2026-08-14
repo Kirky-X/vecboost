@@ -17,13 +17,13 @@ use tokio::sync::RwLock;
 use trait_kit::prelude::{AsyncShutdownCoordinator, BuildObserver, ShutdownPhase};
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use vecboost::AppConfig;
-use vecboost::module_registry::RateLimitModule;
+use vecboost::registry::RateLimitModule;
 use vecboost::logger::LoggerModule;
 
 /// 全局关闭超时（秒）
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 #[cfg(feature = "auth")]
-use vecboost::module_registry::{
+use vecboost::registry::{
     AuthModule, CsrfConfigModule,
 };
 use vecboost::{
@@ -31,7 +31,7 @@ use vecboost::{
     audit::{AuditConfig, AuditLogger},
     config::model::{EngineType, ModelConfig},
     engine::AnyEngine,
-    module_registry::{
+    registry::{
         AuditModule, AuthEnabled, CacheConfig, CacheModule,
         ConfigWatcherModule, DbConfig, DbModule, EmbeddingModule, IpWhitelistModule,
         MetricsCollectorModule, PipelineEnabled, PipelineQueueModule,

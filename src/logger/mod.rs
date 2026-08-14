@@ -10,7 +10,7 @@
 //! 本模块采用"预构建能力注入"模式:`main.rs` 中预构建 `LoggerManager` 后,
 //! 通过 `kit.set_config(Arc::new(manager))` 注入,模块的 `build()` 从 config 检索。
 //!
-//! 注意:与 `module_registry::AuditModule`(提供 `Option<Arc<AuditLogger>>` 审计能力)
+//! 注意:与 `registry::AuditModule`(提供 `Option<Arc<AuditLogger>>` 审计能力)
 //! 不同,本模块提供 `Arc<inklog::LoggerManager>` 应用日志能力。
 
 pub(crate) mod impl_;

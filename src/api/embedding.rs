@@ -32,9 +32,9 @@ use crate::domain::{
 };
 use crate::error::VecboostError;
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
-use crate::module_registry::EmbeddingModule;
+use crate::registry::EmbeddingModule;
 #[cfg(any(feature = "http", feature = "grpc"))]
-use crate::module_registry::{CacheModule, RateLimitModule, RerankModule};
+use crate::registry::{CacheModule, RateLimitModule, RerankModule};
 #[cfg(any(feature = "http", feature = "grpc"))]
 use crate::utils::{AggregationMode, PathValidator};
 #[cfg(any(feature = "http", feature = "grpc"))]
@@ -245,7 +245,7 @@ async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
     {
         let pipeline_enabled = st
             .kit
-            .config::<crate::module_registry::PipelineEnabled>()
+            .config::<crate::registry::PipelineEnabled>()
             .map(|c| c.0)
             .unwrap_or(false);
         if pipeline_enabled {

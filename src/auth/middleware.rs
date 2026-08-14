@@ -216,7 +216,11 @@ pub async fn auth_rate_limit_middleware(
         .kit
         .config::<crate::module_registry::RateLimitEnabled>()
         .map(|c| c.0)
-        .unwrap_or(false);
+        .unwrap_or_else(|| {
+            log::warn!("RateLimitEnabled not registered, rate limiting is disabled. \
+                        This may leave endpoints unprotected in production.");
+            false
+        });
 
     if !rate_limit_enabled {
         return Ok(next.run(request).await);

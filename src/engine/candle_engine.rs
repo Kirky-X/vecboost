@@ -524,7 +524,8 @@ impl CandleEngine {
         if let Some(ref monitor) = self.memory_monitor {
             let stats = monitor.get_memory_stats().await;
             let usage_percent = if stats.total_bytes > 0 {
-                (stats.current_bytes * 100) / stats.total_bytes
+                // 使用 u128 中间值避免 current_bytes * 100 溢出 u64
+                ((stats.current_bytes as u128 * 100) / stats.total_bytes as u128) as u64
             } else {
                 0
             };
@@ -943,18 +944,19 @@ impl CandleEngine {
 
     /// 估算模型参数数量
     fn estimate_parameter_count(&self) -> u64 {
-        // 基于 BERT-Base 的估算（约 110M 参数）
+        // TODO: 从模型权重元数据或 config 读取实际参数数量，当前仅适用于 base 变体
         match &self.model_architecture {
             ModelArchitecture::Bert => 110_000_000,
-            ModelArchitecture::XlmRoberta => 270_000_000, // XLM-RoBERTa base 约为 270M
+            ModelArchitecture::XlmRoberta => 270_000_000,
         }
     }
 
     /// 获取隐藏层大小
     fn get_hidden_size(&self) -> usize {
+        // TODO: 从 config.hidden_size 读取实际值，当前仅适用于 base 变体（BERT-Base/XLM-RoBERTa-Base 均为 768）
         match &self.model_architecture {
-            ModelArchitecture::Bert => 768,       // BERT-Base
-            ModelArchitecture::XlmRoberta => 768, // XLM-RoBERTa-Base
+            ModelArchitecture::Bert => 768,
+            ModelArchitecture::XlmRoberta => 768,
         }
     }
 

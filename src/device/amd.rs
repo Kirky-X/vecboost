@@ -331,10 +331,21 @@ fn query_rocm_version() -> Option<String> {
     None
 }
 
-/// 从文本行中提取第一个出现的数字
+/// 从文本行中提取第一个出现的数字序列
 fn extract_number_from_line(line: &str) -> Option<u64> {
-    let digits: String = line.chars().filter(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
+    // 提取第一个连续数字序列，避免多数字行拼接导致解析错误
+    let mut num_str = String::new();
+    let mut found_digits = false;
+    for c in line.chars() {
+        if c.is_ascii_digit() {
+            num_str.push(c);
+            found_digits = true;
+        } else if found_digits {
+            // 遇到非数字字符且已有数字序列，停止提取
+            break;
+        }
+    }
+    if found_digits { num_str.parse().ok() } else { None }
 }
 
 pub struct AmdDeviceManager {

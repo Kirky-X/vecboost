@@ -103,7 +103,7 @@ impl DynamicBatchScheduler {
 
     /// 获取当前批量大小
     pub async fn current_batch_size(&self) -> usize {
-        self.current_batch_size.load(Ordering::Relaxed)
+        self.current_batch_size.load(Ordering::Acquire)
     }
 
     /// 提交批量请求
@@ -153,7 +153,7 @@ impl DynamicBatchScheduler {
 
         // 检查是否满足等待时间条件
         let wait_time_elapsed = now.duration_since(oldest_request_time).as_millis() as u64;
-        let batch_size = self.current_batch_size.load(Ordering::Relaxed);
+        let batch_size = self.current_batch_size.load(Ordering::Acquire);
         let should_flush =
             wait_time_elapsed >= self.config.max_wait_time_ms || queue.len() >= batch_size;
 
@@ -235,7 +235,7 @@ impl DynamicBatchScheduler {
 
         // 计算 P95 和 P99 延迟（更准确地反映长尾延迟）
         let mut latencies: Vec<f64> = recent_samples.iter().map(|s| s.latency_ms).collect();
-        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let p95_index = (latencies.len() as f64 * 0.95).round() as usize - 1;
         let p99_index = (latencies.len() as f64 * 0.99).round() as usize - 1;
@@ -257,7 +257,7 @@ impl DynamicBatchScheduler {
         drop(history);
 
         // 调整逻辑：使用 P99 延迟作为主要指标（更保守）
-        let current_batch = self.current_batch_size.load(Ordering::Relaxed);
+        let current_batch = self.current_batch_size.load(Ordering::Acquire);
         let mut new_batch_size = current_batch;
 
         // 目标：P99 延迟 < 80ms 且 吞吐量 > 150 req/s
@@ -294,7 +294,7 @@ impl DynamicBatchScheduler {
         }
 
         if new_batch_size != current_batch {
-            self.current_batch_size.store(new_batch_size, Ordering::Relaxed);
+            self.current_batch_size.store(new_batch_size, Ordering::Release);
         }
     }
 
@@ -304,7 +304,7 @@ impl DynamicBatchScheduler {
             self.config.min_batch_size,
             std::cmp::min(batch_size, self.config.max_batch_size),
         );
-        self.current_batch_size.store(new_batch_size, Ordering::Relaxed);
+        self.current_batch_size.store(new_batch_size, Ordering::Release);
         info!("Batch size manually set to {}", new_batch_size);
     }
 
@@ -321,7 +321,7 @@ impl DynamicBatchScheduler {
     /// 获取性能统计
     pub async fn get_performance_stats(&self) -> BatchPerformanceStats {
         let history = self.performance_history.read().await;
-        let current_batch = self.current_batch_size.load(Ordering::Relaxed);
+        let current_batch = self.current_batch_size.load(Ordering::Acquire);
         let queue_size = self.queue_size().await;
         let active_batches = *self.active_batches.read().await;
 
@@ -564,7 +564,7 @@ mod tests {
         }
 
         // 统计 P50/P99
-        latencies_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        latencies_ms.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let p50_idx = (latencies_ms.len() as f64 * 0.50).round() as usize;
         let p99_idx = (latencies_ms.len() as f64 * 0.99).round() as usize;
         let p50 = latencies_ms[p50_idx.min(latencies_ms.len() - 1)];

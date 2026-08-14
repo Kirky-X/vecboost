@@ -121,12 +121,7 @@ impl DynamicBatchScheduler {
     pub async fn try_get_batch(&self) -> Option<Batch> {
         let batch = self.collect_batch().await?;
 
-        // 检查是否有可用的并发槽位
-        if self.semaphore.available_permits() == 0 {
-            debug!("No available concurrent batch slots, waiting...");
-            return None;
-        }
-
+        // 直接尝试获取 permit（移除冗余的 available_permits 检查，避免 check-then-act 竞争）
         let _permit = match self.semaphore.try_acquire() {
             Ok(p) => p,
             Err(_) => return None,

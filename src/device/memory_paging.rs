@@ -52,7 +52,8 @@ impl Default for PagingConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            gpu_memory_budget_bytes: 0, // 0 = 自动检测
+            // 默认 2GB 显存预算；生产环境应根据 GPU 实际 VRAM 配置覆盖
+            gpu_memory_budget_bytes: 2 * 1024 * 1024 * 1024,
             lru_k: 2,
             prefetch_depth: 2,
         }

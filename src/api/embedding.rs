@@ -393,8 +393,6 @@ async fn list_models_handler() -> Result<ModelListResponse, ApiError> {
 /// `ApiError::ServiceUnavailable` when any module reports unhealthy.
 #[cfg(any(feature = "http", feature = "grpc"))]
 async fn health_handler() -> Result<serde_json::Value, ApiError> {
-    use trait_kit::prelude::HealthStatus;
-
     let st = state().map_err(to_api_error)?;
     let mut unhealthy_modules = Vec::new();
 
@@ -427,15 +425,13 @@ async fn health_handler() -> Result<serde_json::Value, ApiError> {
         _ => {}
     }
     match st.kit.health_check::<CacheModule>() {
-        Ok(status) => {
-            if let HealthStatus::Unhealthy { ref detail } = status {
-                unhealthy_modules.push(format!("cache: {}", detail));
-            }
-            // Degraded (cache disabled) is not unhealthy — it's an expected config state
+        Ok(status) if !status.is_healthy() => {
+            unhealthy_modules.push(format!("cache: {:?}", status));
         }
         Err(e) => {
             unhealthy_modules.push(format!("cache: health check failed: {}", e));
         }
+        _ => {}
     }
 
     if unhealthy_modules.is_empty() {

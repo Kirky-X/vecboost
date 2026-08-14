@@ -535,9 +535,8 @@ pub(crate) fn apply_security_env_overrides(
         }
         if jwt_secret.len() < MIN_JWT_SECRET_LENGTH {
             return Err(ConfigError::Message(format!(
-                "VECBOOST_JWT_SECRET must be at least {} characters (current: {})",
-                MIN_JWT_SECRET_LENGTH,
-                jwt_secret.len()
+                "VECBOOST_JWT_SECRET must be at least {} characters",
+                MIN_JWT_SECRET_LENGTH
             )));
         }
         cfg.auth.jwt_secret = Some(jwt_secret);
@@ -552,9 +551,8 @@ pub(crate) fn apply_security_env_overrides(
         }
         if admin_password.len() < MIN_PASSWORD_LENGTH {
             return Err(ConfigError::Message(format!(
-                "VECBOOST_ADMIN_PASSWORD must be at least {} characters (current: {})",
-                MIN_PASSWORD_LENGTH,
-                admin_password.len()
+                "VECBOOST_ADMIN_PASSWORD must be at least {} characters",
+                MIN_PASSWORD_LENGTH
             )));
         }
         cfg.auth.default_admin_password = Some(admin_password);

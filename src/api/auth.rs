@@ -16,6 +16,7 @@ use crate::api::init::state;
 use crate::auth::middleware::AuthContext;
 use crate::auth::{AuthResponse, GarrisonUtil, LoginRequest, RefreshTokenRequest};
 use crate::registry::{AuditModule, AuthModule};
+use garrison::account::credential::password::PasswordVerifier;
 use std::net::SocketAddr;
 
 #[cfg(feature = "http")]
@@ -38,7 +39,7 @@ pub async fn forge_login(
     req: LoginRequest,
 ) -> Result<AuthResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
-    let _auth = st
+    let auth_handle = st
         .kit
         .require::<AuthModule>()
         .map_err(kit_internal_error)?
@@ -65,16 +66,29 @@ pub async fn forge_login(
         });
     }
 
+    // 校验 admin 密码（通过 garrison PasswordVerifier 自动识别 Argon2/Bcrypt）
+    if let Some(ref hash) = auth_handle.admin_password_hash {
+        let verified = PasswordVerifier::verify(&req.password, hash)
+            .map_err(|e| {
+                log::error!("Password verification internal error: {}", e);
+                kit_internal_error("password verification failed")
+            })?;
+        if !verified {
+            if let Some(logger) = audit_logger {
+                logger.log_login_failed(&req.username, Some(peer_ip.clone()), "invalid password");
+            }
+            return Err(ApiError::AuthenticationFailed {
+                reason: "Invalid username or password".to_string(),
+            });
+        }
+    } else {
+        log::warn!(
+            "No admin password configured — issuing token for user '{}' without password verification",
+            &req.username
+        );
+    }
+
     // 通过 garrison 创建会话（login_id = username）
-    // TODO: 凭证校验需集成 garrison account-credential 系统
-    // GarrisonUtil::login 不接受密码参数，需通过 DAO 查询用户存储的密码哈希后
-    // 使用 PasswordHasher::verify 校验。当前仅验证 username 格式合法。
-    // SECURITY: 密码未校验即颁发 token，仅限受信任网络环境使用。
-    log::warn!(
-        "SECURITY: forge_login issued token for user '{}' without password verification \
-         (garrison credential store not integrated)",
-        &req.username
-    );
     match GarrisonUtil::login_simple(&req.username).await {
         Ok(token) => {
             if let Some(logger) = audit_logger {
@@ -83,7 +97,7 @@ pub async fn forge_login(
             Ok(AuthResponse {
                 token,
                 token_type: "Bearer".to_string(),
-                expires_in: 3600, // TODO: 从 garrison config TTL 读取；当前默认 1h
+                expires_in: auth_handle.token_timeout_secs as u64,
             })
         }
         Err(e) => {
@@ -109,7 +123,7 @@ pub async fn forge_refresh(
     req: RefreshTokenRequest,
 ) -> Result<AuthResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
-    let _auth = st
+    let auth_handle = st
         .kit
         .require::<AuthModule>()
         .map_err(kit_internal_error)?
@@ -166,7 +180,7 @@ pub async fn forge_refresh(
     Ok(AuthResponse {
         token: new_token,
         token_type: "Bearer".to_string(),
-        expires_in: 3600, // TODO: 从 garrison config TTL 读取；当前默认 1h
+        expires_in: auth_handle.token_timeout_secs as u64,
     })
 }
 

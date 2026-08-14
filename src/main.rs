@@ -57,6 +57,7 @@ use vecboost::{
     auth::{
         GarrisonHandle, GarrisonCsrfConfig, VecBoostInterface,
         garrison_csrf_middleware, map_auth_config_to_garrison,
+        PasswordHasher,
     },
 };
 
@@ -342,16 +343,26 @@ async fn main() -> anyhow::Result<()> {
         // 初始化 garrison 全局单例
         garrison::prelude::GarrisonManager::init(
             Arc::new(dao),
-            Arc::new(garrison_config),
+            Arc::new(garrison_config.clone()),
             Arc::new(VecBoostInterface::new(
                 config.auth.default_admin_username.clone().unwrap_or_else(|| "admin".to_string()),
             )),
         )
         .map_err(|e| anyhow::anyhow!("Failed to init GarrisonManager: {}", e))?;
 
-        log::info!("Garrison authentication enabled (JWT + session)");
+        // 计算 admin 密码哈希（供 forge_login 校验）
+        let admin_password_hash = config.auth.default_admin_password.as_ref().map(|pw| {
+            garrison::account::credential::password::Argon2Hasher::default()
+                .hash(pw)
+                .expect("admin password hash must succeed")
+        });
 
-        Some(Arc::new(GarrisonHandle))
+        log::info!("Garrison authentication enabled (JWT + session + password verification)");
+
+        Some(Arc::new(GarrisonHandle {
+            admin_password_hash,
+            token_timeout_secs: garrison_config.timeout,
+        }))
     } else {
         log::info!("Authentication disabled");
         None

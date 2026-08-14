@@ -90,6 +90,44 @@ pub struct CandleEngine {
     model_architecture: ModelArchitecture,
     use_quantization: bool, // 是否使用 INT8 量化
     _model_name: String,
+    /// 模型隐藏层大小（从 config.hidden_size 读取）
+    hidden_size: usize,
+    /// 模型参数数量估算（从 config 计算）
+    parameter_count: u64,
+}
+
+/// 从 BERT/RoBERTa config 估算参数数量。
+///
+/// 公式：embeddings + layers * (attention + ffn + norms)
+/// - embeddings = vocab * h + max_pos * h + type_vocab * h + layer_norm
+/// - attention per layer = 4 * h² + 2 * h (Q/K/V/O + bias)
+/// - ffn per layer = 2 * h * intermediate + 2 * h
+/// - norms per layer = 2 * 2 * h (two LayerNorms, weight + bias each)
+fn estimate_bert_params(
+    vocab_size: usize,
+    hidden_size: usize,
+    num_hidden_layers: usize,
+    intermediate_size: usize,
+    _num_attention_heads: usize,
+) -> u64 {
+    let h = hidden_size as u64;
+    let v = vocab_size as u64;
+    let layers = num_hidden_layers as u64;
+    let intermediate = intermediate_size as u64;
+
+    // Embedding layer
+    let embedding_params = v * h + 512 * h + 2 * h + h; // word + pos + token_type + layer_norm
+
+    // Per-layer parameters
+    let attention_params = 4 * h * h + 2 * h; // Q/K/V/O projections + biases
+    let ffn_params = 2 * h * intermediate + 2 * h; // up + down projections + biases
+    let norm_params = 4 * h; // two LayerNorms (weight + bias each)
+    let per_layer = attention_params + ffn_params + norm_params;
+
+    // Pooler (dense + tanh)
+    let pooler_params = h * h + h;
+
+    embedding_params + layers * per_layer + pooler_params
 }
 
 impl CandleEngine {
@@ -263,6 +301,25 @@ impl CandleEngine {
                     .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
                 (None, Some(xlm_config))
             }
+        };
+
+        // 从 config 提取 hidden_size 和估算参数数量（在 config 被模型构造消费前）
+        let (hidden_size, parameter_count) = match (&bert_config, &xlm_config) {
+            (Some(bc), _) => {
+                let params = estimate_bert_params(
+                    bc.vocab_size, bc.hidden_size, bc.num_hidden_layers,
+                    bc.intermediate_size, bc.num_attention_heads,
+                );
+                (bc.hidden_size, params)
+            }
+            (_, Some(xc)) => {
+                let params = estimate_bert_params(
+                    xc.vocab_size, xc.hidden_size, xc.num_hidden_layers,
+                    xc.intermediate_size, xc.num_attention_heads,
+                );
+                (xc.hidden_size, params)
+            }
+            _ => (768, 110_000_000), // fallback
         };
 
         let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
@@ -501,6 +558,8 @@ impl CandleEngine {
             model_architecture,
             use_quantization,
             _model_name: config.name.clone(),
+            hidden_size,
+            parameter_count,
         })
     }
 
@@ -789,8 +848,7 @@ impl CandleEngine {
             }
         }
 
-        // 直接动态分配 attention_mask 张量
-        // （原张量池路径有 TODO 未回填数据导致 mask 全零的 bug；Candle Tensor 不可变，池无实际收益）
+        // 动态分配 attention_mask 张量（Candle Tensor 不可变，池化无收益）
         let attention_mask_tensor = Tensor::new(batch_mask, &self.device)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?
             .reshape(&[batch_size, max_seq_len])
@@ -944,20 +1002,12 @@ impl CandleEngine {
 
     /// 估算模型参数数量
     fn estimate_parameter_count(&self) -> u64 {
-        // TODO: 从模型权重元数据或 config 读取实际参数数量，当前仅适用于 base 变体
-        match &self.model_architecture {
-            ModelArchitecture::Bert => 110_000_000,
-            ModelArchitecture::XlmRoberta => 270_000_000,
-        }
+        self.parameter_count
     }
 
     /// 获取隐藏层大小
     fn get_hidden_size(&self) -> usize {
-        // TODO: 从 config.hidden_size 读取实际值，当前仅适用于 base 变体（BERT-Base/XLM-RoBERTa-Base 均为 768）
-        match &self.model_architecture {
-            ModelArchitecture::Bert => 768,
-            ModelArchitecture::XlmRoberta => 768,
-        }
+        self.hidden_size
     }
 
     async fn try_fallback_to_cpu_impl(
@@ -2161,5 +2211,41 @@ mod tests {
         for emb in &embeddings {
             assert_eq!(emb.len(), 384);
         }
+    }
+
+    #[test]
+    fn estimate_bert_params_base() {
+        // BERT-Base: vocab=30522, hidden=768, layers=12, intermediate=3072, heads=12
+        let params = estimate_bert_params(30522, 768, 12, 3072, 12);
+        // BERT-Base 约 110M 参数，允许 10% 偏差
+        assert!(
+            params > 100_000_000 && params < 120_000_000,
+            "BERT-Base params should be ~110M, got {}",
+            params
+        );
+    }
+
+    #[test]
+    fn estimate_bert_params_large() {
+        // BERT-Large: vocab=30522, hidden=1024, layers=24, intermediate=4096, heads=16
+        let params = estimate_bert_params(30522, 1024, 24, 4096, 16);
+        // BERT-Large 约 340M 参数
+        assert!(
+            params > 300_000_000 && params < 380_000_000,
+            "BERT-Large params should be ~340M, got {}",
+            params
+        );
+    }
+
+    #[test]
+    fn estimate_bert_params_xlm_roberta_base() {
+        // XLM-RoBERTa-Base: vocab=250002, hidden=768, layers=12, intermediate=3072, heads=12
+        let params = estimate_bert_params(250002, 768, 12, 3072, 12);
+        // XLM-RoBERTa-Base 约 270M（主要因大 vocab）
+        assert!(
+            params > 250_000_000 && params < 300_000_000,
+            "XLM-RoBERTa-Base params should be ~270M, got {}",
+            params
+        );
     }
 }

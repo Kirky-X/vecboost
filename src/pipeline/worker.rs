@@ -590,18 +590,15 @@ mod tests {
         }
     }
 
-    // TODO: 需要添加 EmbeddingService mock 来修复以下集成测试
-    /*
     #[tokio::test]
     async fn test_worker_manager_creation() {
         let queue = Arc::new(PriorityRequestQueue::new(100));
         let response_channel = Arc::new(ResponseChannel::new());
         let config = WorkerConfig::default();
 
-        let service = Arc::new(RwLock::new(EmbeddingService::new(
-            Arc::new(RwLock::new(crate::engine::TestEngine::new(384))),
-            None,
-        )));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
 
         let manager = WorkerManager::new(queue, response_channel, config, service);
 
@@ -618,10 +615,9 @@ mod tests {
             ..Default::default()
         };
 
-        let service = Arc::new(RwLock::new(EmbeddingService::new(
-            Arc::new(RwLock::new(crate::engine::TestEngine::new(384))),
-            None,
-        )));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
 
         let mut manager = WorkerManager::new(queue, response_channel, config, service);
 
@@ -629,7 +625,6 @@ mod tests {
 
         assert_eq!(manager.current_workers(), 2);
     }
-    */
 
     /// T004 H1: 验证 decrement_worker_count 真实递减(非硬编码 0)。
     #[test]
@@ -666,9 +661,7 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
 
-    /// T005 H2: 验证 spawn_worker(对外入口)真实递增 current_workers。
-    /// 此前 start_scaling_monitor 中的扩容逻辑是 TODO 注释,无法实际增加 worker;
-    /// 现已通过 spawn_single_worker 落地。
+    /// T005 H2: 验证 spawn_worker 真实递增 current_workers。
     #[tokio::test]
     async fn test_spawn_worker_increments_current_workers() {
         let queue = Arc::new(PriorityRequestQueue::new(100));

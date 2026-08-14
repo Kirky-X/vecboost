@@ -5,25 +5,36 @@
 
 //! Library Interface — 轻量级 SDK 入口
 //!
-//! 提供 `VecBoostLibrary` 作为 library 模式的唯一入口，使 VecBoost 可以在不启动
-//! HTTP/gRPC 服务器的情况下作为嵌入式向量化(embedding)和重排序(rerank)模块
-//! 被其他 Rust 应用程序直接集成调用。
+//! 提供两种集成方式：
 //!
-//! 通过 trait-kit `AsyncKit` 管理 `EmbeddingModule` 和 `RerankModule` 的注册、
-//! 构建和生命周期，复用现有 `EmbeddingService` / `RerankService` 的完整推理逻辑。
+//! ## 1. `VecBoostLibrary` — 开箱即用的独立 SDK
 //!
-//! # 异步 API
+//! 无需启动 HTTP/gRPC 服务器即可使用完整的嵌入和重排序功能。
 //!
 //! ```ignore
 //! let lib = VecBoostLibrary::new(config).await?;
 //! let response = lib.embed("hello world").await?;
 //! ```
 //!
-//! # 同步 API
+//! ## 2. `VecBoostModuleBuilder` — trait-kit 模块化集成
+//!
+//! 将 VecBoost 的 embedding/rerank 能力作为 trait-kit Module 注册到外部项目
+//! 自己的 `AsyncKit` 中，与其他模块共存、共享生命周期管理。
 //!
 //! ```ignore
-//! let lib = VecBoostLibrary::new(config).await?;
-//! let response = lib.embed_sync("hello world")?;
+//! let mut kit = trait_kit::AsyncKit::new();
+//! // 注册外部项目自己的模块...
+//! kit.register::<MyAppModule>()?;
+//!
+//! // 将 VecBoost 能力注入同一个 kit
+//! VecBoostModuleBuilder::new(model_config)
+//!     .embedding()
+//!     .rerank()
+//!     .build(&mut kit)
+//!     .await?;
+//!
+//! let kit = kit.build().await?;
+//! // 通过 kit.require::<EmbeddingModule>() 获取 EmbeddingService
 //! ```
 
 use std::sync::Arc;
@@ -271,6 +282,152 @@ impl VecBoostLibrary {
 }
 
 // ---------------------------------------------------------------------------
+// VecBoostModuleBuilder — trait-kit 模块化集成
+// ---------------------------------------------------------------------------
+
+/// VecBoost 模块化构建器 — 将 embedding/rerank 能力注册到外部 `AsyncKit`
+///
+/// 允许外部项目将 VecBoost 的向量化和重排序能力作为 trait-kit Module
+/// 注册到自己的 `AsyncKit` 中，与项目自身的模块共存并共享生命周期管理。
+///
+/// # 选择性注册
+///
+/// 通过 `embedding()` / `rerank()` 按需启用能力，未调用的能力不会注册。
+/// 两者都未调用时 `build()` 不会注册任何模块（也不会报错）。
+///
+/// # 示例
+///
+/// ```ignore
+/// use vecboost::{VecBoostModuleBuilder, config::model::ModelConfig};
+///
+/// let model_config = ModelConfig { /* ... */ };
+/// let mut kit = trait_kit::AsyncKit::new();
+///
+/// // 注册自己的模块
+/// kit.register::<MyAppModule>()?;
+///
+/// // 注入 VecBoost 能力
+/// VecBoostModuleBuilder::new(model_config)
+///     .embedding()           // 启用 embedding
+///     .rerank()              // 启用 rerank
+///     .cache_size(1000)      // 可选：嵌入缓存
+///     .build(&mut kit)
+///     .await?;
+///
+/// let kit = kit.build().await?;
+///
+/// // 使用
+/// let embed_svc = kit.require::<vecboost::registry::EmbeddingModule>()?;
+/// ```
+pub struct VecBoostModuleBuilder {
+    model_config: ModelConfig,
+    cache_size: usize,
+    with_embedding: bool,
+    with_rerank: bool,
+    rerank_config: Option<RerankConfig>,
+}
+
+impl VecBoostModuleBuilder {
+    /// 创建构建器，指定模型配置
+    pub fn new(model_config: ModelConfig) -> Self {
+        Self {
+            model_config,
+            cache_size: 0,
+            with_embedding: false,
+            with_rerank: false,
+            rerank_config: None,
+        }
+    }
+
+    /// 启用 embedding 模块
+    pub fn embedding(mut self) -> Self {
+        self.with_embedding = true;
+        self
+    }
+
+    /// 启用 rerank 模块
+    pub fn rerank(mut self) -> Self {
+        self.with_rerank = true;
+        self
+    }
+
+    /// 设置嵌入缓存容量（0 = 禁用，默认 0）
+    pub fn cache_size(mut self, size: usize) -> Self {
+        self.cache_size = size;
+        self
+    }
+
+    /// 设置重排序配置（None = 使用默认值）
+    pub fn rerank_config(mut self, config: RerankConfig) -> Self {
+        self.rerank_config = Some(config);
+        self
+    }
+
+    /// 将选中的 VecBoost 模块注册到外部 `AsyncKit`
+    ///
+    /// 此方法：
+    /// 1. 通过 `EngineFactory` 创建推理引擎
+    /// 2. 构建 `EmbeddingService` / `RerankService`（按选择）
+    /// 3. 通过 `kit.set_config()` 注入能力
+    /// 4. 注册对应的 `EmbeddingModule` / `RerankModule` + lifecycle hooks
+    ///
+    /// 调用后外部项目继续注册自己的其他模块，最终调用 `kit.build().await`。
+    pub async fn build(
+        self,
+        kit: &mut trait_kit::AsyncKit,
+    ) -> Result<(), VecboostError> {
+        // 1. 创建共享推理引擎
+        let engine = EngineFactory::create(
+            self.model_config.engine_type.clone(),
+            &self.model_config,
+        )?;
+        let engine: Arc<RwLock<AnyEngine>> = Arc::new(RwLock::new(engine));
+
+        // 2. 按选择构建并注册服务
+        if self.with_embedding {
+            let embedding_service = if self.cache_size > 0 {
+                Arc::new(RwLock::new(EmbeddingService::with_cache(
+                    engine.clone(),
+                    Some(self.model_config.clone()),
+                    self.cache_size,
+                )))
+            } else {
+                Arc::new(RwLock::new(EmbeddingService::new(
+                    engine.clone(),
+                    Some(self.model_config.clone()),
+                )))
+            };
+            kit.set_config(embedding_service);
+            kit.register::<EmbeddingModule>().map_err(|e| {
+                VecboostError::InternalError(format!(
+                    "Failed to register EmbeddingModule: {}",
+                    e
+                ))
+            })?;
+            kit.register_lifecycle::<EmbeddingModule>();
+        }
+
+        if self.with_rerank {
+            let rerank_service = Arc::new(RwLock::new(RerankService::new(
+                engine,
+                Some(self.model_config),
+            )));
+            kit.set_config(rerank_service);
+            kit.set_config(self.rerank_config.unwrap_or_default());
+            kit.register::<RerankModule>().map_err(|e| {
+                VecboostError::InternalError(format!(
+                    "Failed to register RerankModule: {}",
+                    e
+                ))
+            })?;
+            kit.register_lifecycle::<RerankModule>();
+        }
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -493,5 +650,115 @@ mod tests {
         assert_eq!(config.model_config.name, "test-model");
         assert_eq!(config.model_config.expected_dimension, Some(768));
         assert_eq!(config.cache_size, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // VecBoostModuleBuilder 测试
+    // -------------------------------------------------------------------------
+
+    /// 测试辅助：通过 mock engine 直接注入 kit（绕过 EngineFactory 需要真实模型）
+    async fn make_test_kit_with_builder(
+        with_embedding: bool,
+        with_rerank: bool,
+    ) -> trait_kit::AsyncKit<trait_kit::AsyncReady> {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine::new(128)));
+
+        let mut kit = trait_kit::AsyncKit::new();
+
+        if with_embedding {
+            let embedding_service =
+                Arc::new(RwLock::new(EmbeddingService::new(engine.clone(), None)));
+            kit.set_config(embedding_service);
+            kit.register::<EmbeddingModule>().unwrap();
+            kit.register_lifecycle::<EmbeddingModule>();
+        }
+
+        if with_rerank {
+            let rerank_service =
+                Arc::new(RwLock::new(RerankService::new(engine, None)));
+            kit.set_config(rerank_service);
+            kit.set_config(RerankConfig::default());
+            kit.register::<RerankModule>().unwrap();
+            kit.register_lifecycle::<RerankModule>();
+        }
+
+        kit.build().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_module_builder_embedding_only() {
+        let kit = make_test_kit_with_builder(true, false).await;
+        assert!(kit.contains::<EmbeddingModule>());
+        assert!(!kit.contains::<RerankModule>());
+
+        // embedding 能力可正常检索
+        let svc = kit.require::<EmbeddingModule>().unwrap();
+        let guard = svc.read().await;
+        let resp = guard
+            .process_text(
+                EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.dimension, 128);
+    }
+
+    #[tokio::test]
+    async fn test_module_builder_rerank_only() {
+        let kit = make_test_kit_with_builder(false, true).await;
+        assert!(!kit.contains::<EmbeddingModule>());
+        assert!(kit.contains::<RerankModule>());
+
+        let svc = kit.require::<RerankModule>().unwrap();
+        let guard = svc.read().await;
+        let resp = guard
+            .process_rerank(
+                RerankRequest {
+                    query: "query".to_string(),
+                    documents: vec!["doc a".to_string(), "doc b".to_string()],
+                    top_k: None,
+                    return_documents: None,
+                },
+                100,
+                1000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_module_builder_both_modules() {
+        let kit = make_test_kit_with_builder(true, true).await;
+        assert!(kit.contains::<EmbeddingModule>());
+        assert!(kit.contains::<RerankModule>());
+
+        // 两个能力都可正常检索
+        let _embed_svc = kit.require::<EmbeddingModule>().unwrap();
+        let _rerank_svc = kit.require::<RerankModule>().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_module_builder_neither_module() {
+        // 两者都未启用 → kit 为空但构建成功
+        let kit = make_test_kit_with_builder(false, false).await;
+        assert!(!kit.contains::<EmbeddingModule>());
+        assert!(!kit.contains::<RerankModule>());
+    }
+
+    #[test]
+    fn test_module_builder_chaining_api() {
+        // 验证 builder 链式调用编译正确
+        let model_config = ModelConfig::default();
+        let _builder = VecBoostModuleBuilder::new(model_config)
+            .embedding()
+            .rerank()
+            .cache_size(500)
+            .rerank_config(RerankConfig::default());
     }
 }

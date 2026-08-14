@@ -56,7 +56,7 @@ pub use domain::{
 pub use error::VecboostError;
 pub use service::embedding::EmbeddingService;
 pub use service::rerank::RerankService;
-pub use library::{LibraryConfig, VecBoostLibrary};
+pub use library::{LibraryConfig, VecBoostLibrary, VecBoostModuleBuilder};
 pub use utils::SimilarityMetric;
 pub use utils::vector::{TaskType, recommended_dimension, information_retention_rate};
 

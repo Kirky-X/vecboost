@@ -83,7 +83,7 @@ pub async fn forge_login(
             Ok(AuthResponse {
                 token,
                 token_type: "Bearer".to_string(),
-                expires_in: 0, // garrison 管理超时，由 GarrisonConfig.timeout 控制
+                expires_in: 3600, // TODO: 从 garrison config TTL 读取；当前默认 1h
             })
         }
         Err(e) => {
@@ -118,6 +118,15 @@ pub async fn forge_refresh(
         .kit
         .require::<AuditModule>()
         .map_err(kit_internal_error)?;
+
+    // 输入验证：拒绝空 refresh_token
+    if req.refresh_token.is_empty() {
+        return Err(ApiError::InvalidInput {
+            message: "refresh_token must not be empty".to_string(),
+            field: Some("refresh_token".to_string()),
+            value: None,
+        });
+    }
 
     // 通过旧 token 获取 login_id，然后创建新会话
     // 注意：先创建新会话，再撤销旧 token，避免并发 revoke 导致竞态
@@ -157,7 +166,7 @@ pub async fn forge_refresh(
     Ok(AuthResponse {
         token: new_token,
         token_type: "Bearer".to_string(),
-        expires_in: 0,
+        expires_in: 3600, // TODO: 从 garrison config TTL 读取；当前默认 1h
     })
 }
 
@@ -185,15 +194,9 @@ pub async fn forge_logout(
         .require::<AuditModule>()
         .map_err(kit_internal_error)?;
 
-    // 通过 garrison 撤销 token
-    match GarrisonUtil::revoke_token(&auth_ctx.token).await {
-        Ok(()) => {
-            log::info!("Token successfully revoked on logout");
-        }
-        Err(e) => {
-            log::warn!("Logout token could not be revoked: {}", e);
-            return Err(to_api_error(e.into()));
-        }
+    // 通过 garrison 撤销 token（best-effort：失败时仍返回成功，避免阻断客户端登出）
+    if let Err(e) = GarrisonUtil::revoke_token(&auth_ctx.token).await {
+        log::warn!("Logout token revocation failed (best-effort): {}", e);
     }
 
     if let Some(logger) = audit_logger {

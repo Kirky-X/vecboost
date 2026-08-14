@@ -67,7 +67,7 @@ impl GpuInfo {
             available_memory_bytes: stats.available_bytes,
             utilization_percent: stats.utilization_percent,
             compute_capability: None,
-            supports_float16: true,
+            supports_float16: false, // 无 compute capability 信息时保守默认
             status: if stats.utilization_percent > 90.0 {
                 DeviceStatus::Busy
             } else if stats.available_bytes < 1024 * 1024 * 1024 {
@@ -216,6 +216,16 @@ impl DeviceManager {
         }
 
         let amd_devices = self.amd_device_manager.devices().await;
+        // 检查设备数量是否一致，避免 zip 静默丢弃
+        let amd_count = amd_devices.len();
+        let expected_amd = devices.iter().filter(|d| matches!(d.device_type, DeviceType::Amd | DeviceType::OpenCL)).count();
+        if amd_count != expected_amd {
+            log::warn!(
+                "refresh_devices: AMD device count mismatch (internal: {}, amd_manager: {}). \
+                 Some devices may not be updated.",
+                expected_amd, amd_count
+            );
+        }
         for (device_info, amd_device) in devices.iter_mut().zip(amd_devices.iter()) {
             if matches!(
                 device_info.device_type,
@@ -445,6 +455,10 @@ impl DeviceManager {
     }
 
     pub async fn trigger_fallback(&self) -> DeviceType {
+        if !self.auto_fallback_enabled {
+            log::info!("Auto-fallback disabled, skipping fallback to CPU");
+            return DeviceType::Cpu;
+        }
         self.memory_limit_controller.trigger_fallback().await;
         self.fallback_to_cpu().await
     }
@@ -599,7 +613,7 @@ mod tests {
         assert_eq!(gpu_info.available_memory_bytes, 7 * 1024 * 1024 * 1024);
         assert!((gpu_info.utilization_percent - 12.5).abs() < 0.1);
         assert_eq!(gpu_info.compute_capability, None);
-        assert!(gpu_info.supports_float16);
+        assert!(!gpu_info.supports_float16); // 无 compute capability 信息时保守默认 false
         assert_eq!(gpu_info.status, DeviceStatus::Available);
     }
 

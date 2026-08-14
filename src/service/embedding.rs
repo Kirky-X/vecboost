@@ -293,7 +293,7 @@ impl EmbeddingService {
         };
 
         let mut embedding = embedding;
-        normalize_l2(&mut embedding);
+        normalize_l2(&mut embedding)?;
 
         // Apply Matryoshka dimension reduction if requested
         if let Some(target_dim) = target_dimension {
@@ -306,7 +306,7 @@ impl EmbeddingService {
                 .map_err(|e| VecboostError::InvalidInput(e))?;
             embedding = truncate_vector(&embedding, target_dim);
             // Matryoshka 截断破坏单位向量语义，必须重归一化以保证余弦相似度正确
-            normalize_l2(&mut embedding);
+            normalize_l2(&mut embedding)?;
         }
 
         let dimension = embedding.len();
@@ -369,8 +369,8 @@ impl EmbeddingService {
         };
 
         let score = tokio::task::spawn_blocking(move || {
-            normalize_l2(&mut v1);
-            normalize_l2(&mut v2);
+            normalize_l2(&mut v1)?;
+            normalize_l2(&mut v2)?;
             cosine_similarity(&v1, &v2)
         })
         .await??;
@@ -468,7 +468,7 @@ impl EmbeddingService {
                     *x /= count as f32;
                 }
             }
-            normalize_l2(&mut final_vec);
+            normalize_l2(&mut final_vec)?;
 
             let dimension = final_vec.len();
             self.validate_dimension(dimension);
@@ -521,7 +521,7 @@ impl EmbeddingService {
             }
 
             let mut embedding = self.engine.read().await.embed(para)?;
-            normalize_l2(&mut embedding);
+            normalize_l2(&mut embedding)?;
 
             let preview = if para.len() > 100 {
                 &para[..para.floor_char_boundary(100)]
@@ -596,7 +596,7 @@ impl EmbeddingService {
 
         let query_embedding = {
             let mut embedding = self.engine.read().await.embed(&req.query)?;
-            normalize_l2(&mut embedding);
+            normalize_l2(&mut embedding)?;
             embedding
         };
 
@@ -604,7 +604,7 @@ impl EmbeddingService {
 
         for (idx, text) in req.texts.iter().enumerate() {
             let mut embedding = self.engine.read().await.embed(text)?;
-            normalize_l2(&mut embedding);
+            normalize_l2(&mut embedding)?;
 
             let score = cosine_similarity(&query_embedding, &embedding)?;
             results.push((idx, score, text.clone()));
@@ -640,7 +640,7 @@ impl EmbeddingService {
 
         let query_embedding = {
             let mut embedding = self.engine.read().await.embed(query)?;
-            normalize_l2(&mut embedding);
+            normalize_l2(&mut embedding)?;
             embedding
         };
 
@@ -666,7 +666,7 @@ impl EmbeddingService {
         for chunk in texts.chunks(optimal_batch_size) {
             let chunk_embeddings = self.engine.read().await.embed_batch(chunk)?;
             for mut emb in chunk_embeddings {
-                normalize_l2(&mut emb);
+                normalize_l2(&mut emb)?;
                 embeddings.push(emb);
             }
         }
@@ -811,7 +811,7 @@ impl EmbeddingService {
                             {
                                 let mut emb = embedding;
 
-                                normalize_l2(&mut emb);
+                                normalize_l2(&mut emb)?;
 
                                 let global_idx = chunk_idx * optimal_batch_size + text_idx;
 
@@ -915,7 +915,9 @@ impl EmbeddingService {
             .map(|(_, embedding, preview)| {
                 let embedding = if let Some(dim) = effective_dimension {
                     let mut truncated = truncate_vector(&embedding, dim);
-                    normalize_l2(&mut truncated);
+                    if let Err(e) = normalize_l2(&mut truncated) {
+                        log::warn!("normalize_l2 failed for truncated embedding: {}", e);
+                    }
                     truncated
                 } else {
                     embedding

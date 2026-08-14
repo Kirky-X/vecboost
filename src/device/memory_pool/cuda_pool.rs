@@ -10,7 +10,8 @@ use super::config::CudaPoolConfig;
 
 /// CUDA 内存池
 ///
-/// 使用 CUDA API 管理底层 GPU 内存分配
+/// 使用 cudarc driver API（`cuMemAlloc_v2` / `cuMemFree_v2`）管理 GPU 内存分配。
+/// 构造时初始化 CUDA 驱动并为指定设备创建上下文。
 #[cfg(feature = "cuda")]
 pub struct CudaMemoryPool {
     /// 设备 ID
@@ -21,11 +22,16 @@ pub struct CudaMemoryPool {
     max_memory: u64,
     /// 配置
     config: CudaPoolConfig,
+    /// CUDA 上下文句柄（由 cudarc 管理生命周期）
+    _ctx: cudarc::driver::sys::CUcontext,
 }
 
 #[cfg(feature = "cuda")]
 impl CudaMemoryPool {
     /// 创建新的 CUDA 内存池
+    ///
+    /// 初始化 CUDA 驱动并为 `device_id` 创建上下文。
+    /// 若 CUDA 不可用或设备无效，返回错误。
     pub fn new(device_id: i32, config: CudaPoolConfig) -> Result<Self, String> {
         let max_memory = (config.max_memory_mb * 1024 * 1024) as u64;
 
@@ -34,18 +40,31 @@ impl CudaMemoryPool {
             device_id, config.max_memory_mb
         );
 
-        // TODO: 使用 cudarc 或 CUDA API 初始化内存池
-        // 这里简化实现，实际应该使用 CUDA 的内存池 API
+        // 初始化 CUDA 驱动并创建上下文
+        cudarc::driver::result::init().map_err(|e| format!("CUDA driver init failed: {}", e))?;
+
+        let device = cudarc::driver::result::device::get(device_id)
+            .map_err(|e| format!("CUDA device {} not found: {}", device_id, e))?;
+
+        let ctx = unsafe {
+            cudarc::driver::result::primary_ctx::retain(device)
+                .map_err(|e| format!("CUDA context creation failed for device {}: {}", device_id, e))?
+        };
+
+        info!("CUDA context created for device {}", device_id);
 
         Ok(Self {
             device_id,
             allocated_memory: AtomicU64::new(0),
             max_memory,
             config,
+            _ctx: ctx,
         })
     }
 
-    /// 分配内存
+    /// 分配 CUDA 设备内存
+    ///
+    /// 通过 `cuMemAlloc_v2` 分配真实 GPU 内存。受池最大容量限制。
     pub fn allocate(&mut self, size: usize) -> Result<CudaMemoryPtr, String> {
         let size_u64 = size as u64;
 
@@ -61,34 +80,41 @@ impl CudaMemoryPool {
             ));
         }
 
-        // 分配内存
+        // 通过 cudarc 调用 cuMemAlloc_v2 分配真实 CUDA 内存
+        let dev_ptr = unsafe {
+            cudarc::driver::result::malloc_sync(size)
+                .map_err(|e| format!("CUDA malloc failed for {} bytes: {}", size, e))?
+        };
+
         self.allocated_memory.fetch_add(size_u64, Ordering::Relaxed);
 
         debug!(
-            "Allocated {}MB CUDA memory on device {}, total allocated: {}MB",
+            "Allocated {}MB CUDA memory on device {} at {:?}, total allocated: {}MB",
             size_u64 / 1024 / 1024,
             self.device_id,
+            dev_ptr,
             self.allocated_memory.load(Ordering::Relaxed) / 1024 / 1024
-        );
-
-        // 注意：这是占位符实现
-        // 实际的 CUDA 内存分配需要 CudaDevice 句柄
-        warn!(
-            "CUDA memory pool is using placeholder implementation. Actual memory allocation requires CudaDevice handle."
         );
 
         Ok(CudaMemoryPtr {
             device_id: self.device_id,
             size,
-            ptr: 0, // 占位符 - 实际应该是真实的 CUDA 指针
+            ptr: dev_ptr,
         })
     }
 
-    /// 释放内存
+    /// 释放 CUDA 设备内存
+    ///
+    /// 通过 `cuMemFree_v2` 释放真实 GPU 内存。
     pub fn deallocate(&mut self, ptr: CudaMemoryPtr) {
         if ptr.size == 0 {
             warn!("Attempted to deallocate CUDA memory with size 0");
             return;
+        }
+
+        // 通过 cudarc 调用 cuMemFree_v2 释放真实 CUDA 内存
+        if let Err(e) = unsafe { cudarc::driver::result::free_sync(ptr.ptr) } {
+            warn!("CUDA free failed for device {}: {}", self.device_id, e);
         }
 
         self.allocated_memory
@@ -101,11 +127,8 @@ impl CudaMemoryPool {
             self.allocated_memory.load(Ordering::Relaxed) / 1024 / 1024
         );
 
-        // 注意：这是占位符实现
-        // 实际的 CUDA 内存释放需要 CudaDevice 句柄
-        warn!(
-            "CUDA memory pool is using placeholder implementation. Actual memory deallocation requires CudaDevice handle."
-        );
+        // 防止 Drop 再次释放（ptr 已被 move 消费）
+        std::mem::forget(ptr);
     }
 
     /// 获取内存使用情况
@@ -129,23 +152,33 @@ impl CudaMemoryPool {
     }
 }
 
-/// CUDA 内存指针
+/// CUDA 设备内存指针
+///
+/// 持有 `CUdeviceptr`（真实 CUDA 设备指针）。`Drop` 时通过 `cuMemFree_v2` 释放内存，
+/// 确保即使未显式调用 `deallocate()` 也不会泄漏 GPU 内存。
 #[cfg(feature = "cuda")]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CudaMemoryPtr {
     /// 设备 ID
     pub device_id: i32,
     /// 大小（字节）
     pub size: usize,
-    /// 指针（简化实现）
-    pub ptr: usize,
+    /// CUDA 设备指针（cuMemAlloc_v2 返回）
+    pub ptr: cudarc::driver::sys::CUdeviceptr,
 }
 
 #[cfg(feature = "cuda")]
 impl Drop for CudaMemoryPtr {
     fn drop(&mut self) {
-        debug!("Dropping CUDA memory ptr on device {}", self.device_id);
-        // TODO: 使用 CUDA API 释放内存
+        if self.size > 0 && self.ptr != cudarc::driver::sys::CUdeviceptr::default() {
+            debug!(
+                "Dropping CUDA memory ptr on device {} ({} bytes) — freeing via cuMemFree_v2",
+                self.device_id, self.size
+            );
+            if let Err(e) = unsafe { cudarc::driver::result::free_sync(self.ptr) } {
+                warn!("CUDA free on drop failed for device {}: {}", self.device_id, e);
+            }
+        }
     }
 }
 

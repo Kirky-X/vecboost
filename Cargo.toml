@@ -101,7 +101,8 @@ ndarray = { version = "0.17", optional = true, default-features = false, feature
 ort = { version = "2.0.0-rc.13", optional = true, default-features = false }
 
 # CUDA feature (candle-core/cuda 传递依赖 cudarc 0.19,支持 CUDA 13)
-# 注意:项目代码不直接使用 cudarc,无需在此声明
+# 项目代码直接使用 cudarc driver API 进行 CUDA 内存管理
+cudarc = { version = "0.19", optional = true, default-features = false, features = ["std", "driver", "cuda-version-from-build-system", "dynamic-linking"] }
 nvml-wrapper = { version = "0.10", optional = true, default-features = false }
 
 # Multi-protocol SDK framework
@@ -148,7 +149,7 @@ auth = ["dep:garrison", "dep:aes-gcm"]
 redis = ["dep:redis"]
 
 # 引擎特性
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:nvml-wrapper"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:nvml-wrapper", "dep:cudarc"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/alternative-backend"]
 

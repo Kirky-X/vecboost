@@ -8127,6 +8127,7 @@ dependencies = [
  "clap",
  "confers 0.5.1",
  "criterion",
+ "cudarc 0.19.8",
  "dbnexus",
  "futures",
  "garde 0.22.1",

@@ -8,7 +8,6 @@ use utoipa::ToSchema;
 
 use crate::error::VecboostError;
 use crate::utils::vector_simd;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -140,28 +139,40 @@ pub fn calculate_similarity_batch(
     candidates: &[&[f32]],
     metric: SimilarityMetric,
 ) -> Result<Vec<f32>, VecboostError> {
+    // 使用串行迭代保证错误顺序确定性：
+    // par_iter 的 collect<Result> 在并行调度下“第一个错误”不可复现。
     candidates
-        .par_iter()
+        .iter()
         .map(|candidate| calculate_similarity(query, candidate, metric))
         .collect()
 }
 
-pub fn normalize_l2(v: &mut [f32]) {
+/// 对向量进行 L2 归一化（原地）。
+///
+/// 若向量范数接近零（≤ 1e-12），归一化在数学上无意义，
+/// 返回 `Err` 以避免下游获得未归一化的向量。
+pub fn normalize_l2(v: &mut [f32]) -> Result<(), VecboostError> {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 1e-12 {
-        for x in v.iter_mut() {
-            *x /= norm;
-        }
+    if norm <= 1e-12 {
+        return Err(VecboostError::InvalidInput(
+            format!("cannot normalize near-zero vector (L2 norm = {:.2e})", norm),
+        ));
     }
+    for x in v.iter_mut() {
+        *x /= norm;
+    }
+    Ok(())
 }
 
 /// Truncate a vector to the specified dimension.
-/// Returns original vector if target >= original or target == 0.
+///
+/// - `target_dimension == 0` → 返回空向量（语义：截断到零维）
+/// - `target_dimension >= vector.len()` → 返回原向量副本
 ///
 /// 注意：Matryoshka 场景下截断会破坏单位向量语义（子向量范数 < 原范数），
 /// 调用方必须在截断后调用 [`normalize_l2`] 重新归一化，以保证余弦相似度正确。
 pub fn truncate_vector(vector: &[f32], target_dimension: usize) -> Vec<f32> {
-    if target_dimension == 0 || target_dimension >= vector.len() {
+    if target_dimension >= vector.len() {
         vector.to_vec()
     } else {
         vector[..target_dimension].to_vec()
@@ -457,7 +468,7 @@ mod similarity_tests {
     fn test_truncate_vector_zero() {
         let v = vec![1.0, 2.0, 3.0];
         let truncated = truncate_vector(&v, 0);
-        assert_eq!(truncated, vec![1.0, 2.0, 3.0]);
+        assert_eq!(truncated, Vec::<f32>::new());
     }
 
     #[test]

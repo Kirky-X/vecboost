@@ -103,7 +103,7 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
 
                     match result {
                         Ok(mut embedding) => {
-                            normalize_l2(&mut embedding);
+                            let _ = normalize_l2(&mut embedding);
                             local_successful += 1;
                             local_tokens += embedding.len();
 
@@ -216,7 +216,7 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
 
                 match result {
                     Ok(mut embedding) => {
-                        normalize_l2(&mut embedding);
+                        let _ = normalize_l2(&mut embedding);
                         latencies.push(elapsed.as_millis() as u64);
                     }
                     Err(e) => {
@@ -318,7 +318,7 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
 
                     match result {
                         Ok(mut embedding) => {
-                            normalize_l2(&mut embedding);
+                            let _ = normalize_l2(&mut embedding);
                             successful_requests.fetch_add(1, Ordering::SeqCst);
                             total_tokens.fetch_add(embedding.len(), Ordering::SeqCst);
                             metrics

@@ -534,17 +534,18 @@ mod tests {
     use crate::pipeline::queue::QueuedRequest;
     use async_trait::async_trait;
 
-    /// 测试用 Mock 推理引擎——返回固定 8 维零向量,不依赖任何外部模型。
+    /// 测试用 Mock 推理引擎——返回固定 8 维非零向量（归一化安全），不依赖任何外部模型。
     /// 定义在测试模块内,遵循 embedding.rs::tests 的 TestEngine 既有惯例。
     struct MockEngine;
 
     #[async_trait]
     impl InferenceEngine for MockEngine {
         fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
-            Ok(vec![0.0; 8])
+            // 返回非零向量以避免 normalize_l2 返回 Err
+            Ok(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
         }
         fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
-            Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+            Ok(texts.iter().map(|_| vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]).collect())
         }
         fn precision(&self) -> &Precision {
             &Precision::Fp32

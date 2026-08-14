@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! module_registry 单元测试
+//! registry 单元测试
 //!
 //! 基于 trait-kit 0.3 的 `AsyncKit`（`Send + Sync`）。`build()` 是异步的，
 //! 测试使用 `#[tokio::test]`。`require` / `config` / `register` 均为同步方法。

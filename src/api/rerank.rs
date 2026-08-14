@@ -17,7 +17,7 @@ use crate::domain::{
 };
 use crate::error::VecboostError;
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
-use crate::module_registry::RerankModule;
+use crate::registry::RerankModule;
 use crate::service::rerank::RerankService;
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 use std::sync::Arc;

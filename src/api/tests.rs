@@ -15,7 +15,7 @@ use crate::config::model::{DeviceType, EngineType, ModelConfig, Precision};
 use crate::domain::{BatchEmbedRequest, EmbedRequest, SimilarityRequest};
 use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
-use crate::module_registry::EmbeddingModule;
+use crate::registry::EmbeddingModule;
 use crate::service::embedding::EmbeddingService;
 use async_trait::async_trait;
 #[cfg(any(feature = "http", feature = "cli"))]

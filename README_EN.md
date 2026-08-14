@@ -507,7 +507,7 @@ vecboost/
 │   ├── logger/         # inklog logging infrastructure
 │   ├── metrics/        # Prometheus metrics & observability
 │   ├── model/          # Model downloading, loading & recovery
-│   ├── module_registry/# trait-kit module registry
+│   ├── registry/# trait-kit module registry
 │   ├── monitor/        # Monitoring & alerting
 │   ├── pipeline/       # Request pipeline, priority & scheduling
 │   ├── rate_limit/     # limiteron rate limiter adapter

@@ -141,7 +141,7 @@ graph TB
         error["error<br/>(VecboostError)"]
         logger["logger<br/>(always)"]
         metrics["metrics"]
-        module_registry["module_registry"]
+        registry["registry"]
         pipeline["pipeline"]
         rate_limit["rate_limit"]
         security["security"]
@@ -167,12 +167,12 @@ graph TB
     service --> domain
     engine --> model
     engine --> device
-    module_registry --> service
-    module_registry --> auth
-    module_registry --> rate_limit
-    module_registry --> cache
-    module_registry --> db
-    module_registry --> logger
+    registry --> service
+    registry --> auth
+    registry --> rate_limit
+    registry --> cache
+    registry --> db
+    registry --> logger
     audit --> db
     auth --> db
     rate_limit --> cache
@@ -182,7 +182,7 @@ graph TB
 
 | Visibility | Modules | Rationale |
 |------------|---------|-----------|
-| `pub mod` (always) | `audit`, `config`, `domain`, `engine`, `error`, `logger`, `metrics`, `module_registry`, `pipeline`, `rate_limit`, `security`, `service`, `utils` | Used by `main.rs` or as public library API |
+| `pub mod` (always) | `audit`, `config`, `domain`, `engine`, `error`, `logger`, `metrics`, `registry`, `pipeline`, `rate_limit`, `security`, `service`, `utils` | Used by `main.rs` or as public library API |
 | `pub mod` (feature-gated) | `api` (http/mcp/cli — contains sdforge `#[forge(...)]` definitions), `auth` (auth), `db` (db) | Conditionally compiled; only present when feature enabled |
 | `pub(crate) mod` | `cache`, `device`, `model`, `monitor`, `text` | Internal implementation; not part of public API |
 

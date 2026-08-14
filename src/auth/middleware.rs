@@ -214,7 +214,7 @@ pub async fn auth_rate_limit_middleware(
     // 检查限流是否启用
     let rate_limit_enabled = state
         .kit
-        .config::<crate::module_registry::RateLimitEnabled>()
+        .config::<crate::registry::RateLimitEnabled>()
         .map(|c| c.0)
         .unwrap_or_else(|| {
             log::warn!("RateLimitEnabled not registered, rate limiting is disabled. \
@@ -229,7 +229,7 @@ pub async fn auth_rate_limit_middleware(
     // 获取 IP 白名单
     let ip_whitelist = state
         .kit
-        .require::<crate::module_registry::IpWhitelistModule>()
+        .require::<crate::registry::IpWhitelistModule>()
         .map_err(|e| {
             log::error!("IpWhitelistModule not registered: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
@@ -252,7 +252,7 @@ pub async fn auth_rate_limit_middleware(
     // 通过 Governor 检查限流（规则匹配 + 封禁 + 熔断）
     let rate_limiter = state
         .kit
-        .require::<crate::module_registry::RateLimitModule>()
+        .require::<crate::registry::RateLimitModule>()
         .map_err(|e| {
             log::error!("RateLimitModule not registered: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
@@ -267,7 +267,7 @@ pub async fn auth_rate_limit_middleware(
     let allowed = rate_limiter.check_rate_limit(&context).await;
 
     // 记录限流决策指标
-    if let Ok(prom_collector) = state.kit.require::<crate::module_registry::PrometheusCollectorModule>() {
+    if let Ok(prom_collector) = state.kit.require::<crate::registry::PrometheusCollectorModule>() {
         if let Some(prom) = prom_collector.as_ref() {
             if allowed {
                 prom.record_rate_limit_allowed("ip");

@@ -24,7 +24,7 @@ pub async fn handle_pipeline_request(
     // 创建响应通道
     let response_rx = state
         .kit
-        .require::<crate::module_registry::ResponseChannelModule>()
+        .require::<crate::registry::ResponseChannelModule>()
         .expect("ResponseChannelModule not registered")
         .register(request_id.clone())
         .await;
@@ -32,7 +32,7 @@ pub async fn handle_pipeline_request(
     // 构建队列请求
     let priority = state
         .kit
-        .require::<crate::module_registry::PriorityCalculatorModule>()
+        .require::<crate::registry::PriorityCalculatorModule>()
         .expect("PriorityCalculatorModule not registered")
         .calculate(crate::pipeline::PriorityInput {
             base_priority: crate::pipeline::Priority::Normal,
@@ -41,7 +41,7 @@ pub async fn handle_pipeline_request(
             source: crate::pipeline::RequestSource::http(ip.clone()),
             queue_length: state
                 .kit
-                .require::<crate::module_registry::PipelineQueueModule>()
+                .require::<crate::registry::PipelineQueueModule>()
                 .expect("PipelineQueueModule not registered")
                 .size(),
         });
@@ -61,7 +61,7 @@ pub async fn handle_pipeline_request(
     // 提交到流水线队列
     state
         .kit
-        .require::<crate::module_registry::PipelineQueueModule>()
+        .require::<crate::registry::PipelineQueueModule>()
         .expect("PipelineQueueModule not registered")
         .enqueue(queued_request)
         .await?;
@@ -181,14 +181,14 @@ mod tests {
         kit.set_config(priority_calculator.clone());
         kit.set_config(worker_manager.clone());
         kit.set_config(Vec::<String>::new());
-        kit.set_config(crate::module_registry::AuthEnabled(false));
-        kit.set_config(crate::module_registry::RateLimitEnabled(false));
-        kit.set_config(crate::module_registry::PipelineEnabled(true));
-        kit.set_config(crate::module_registry::CacheConfig {
+        kit.set_config(crate::registry::AuthEnabled(false));
+        kit.set_config(crate::registry::RateLimitEnabled(false));
+        kit.set_config(crate::registry::PipelineEnabled(true));
+        kit.set_config(crate::registry::CacheConfig {
             enabled: false,
             size: 0,
         });
-        kit.set_config(crate::module_registry::DbConfig { enabled: false });
+        kit.set_config(crate::registry::DbConfig { enabled: false });
         kit.set_config(None::<Arc<crate::audit::AuditLogger>>);
         kit.set_config(None::<Arc<crate::metrics::InferenceCollector>>);
         kit.set_config(None::<Arc<crate::metrics::PrometheusCollector>>);
@@ -199,36 +199,36 @@ mod tests {
             kit.set_config(Option::<Arc<crate::auth::GarrisonCsrfConfig>>::None);
         }
 
-        kit.register::<crate::module_registry::EmbeddingModule>()
+        kit.register::<crate::registry::EmbeddingModule>()
             .unwrap();
-        kit.register::<crate::module_registry::RerankModule>()
+        kit.register::<crate::registry::RerankModule>()
             .unwrap();
-        kit.register::<crate::module_registry::RateLimitModule>()
+        kit.register::<crate::registry::RateLimitModule>()
             .unwrap();
-        kit.register::<crate::module_registry::CacheModule>()
+        kit.register::<crate::registry::CacheModule>()
             .unwrap();
-        kit.register::<crate::module_registry::DbModule>().unwrap();
-        kit.register::<crate::module_registry::AuditModule>()
+        kit.register::<crate::registry::DbModule>().unwrap();
+        kit.register::<crate::registry::AuditModule>()
             .unwrap();
-        kit.register::<crate::module_registry::MetricsCollectorModule>()
+        kit.register::<crate::registry::MetricsCollectorModule>()
             .unwrap();
-        kit.register::<crate::module_registry::PrometheusCollectorModule>()
+        kit.register::<crate::registry::PrometheusCollectorModule>()
             .unwrap();
-        kit.register::<crate::module_registry::IpWhitelistModule>()
+        kit.register::<crate::registry::IpWhitelistModule>()
             .unwrap();
-        kit.register::<crate::module_registry::PipelineQueueModule>()
+        kit.register::<crate::registry::PipelineQueueModule>()
             .unwrap();
-        kit.register::<crate::module_registry::ResponseChannelModule>()
+        kit.register::<crate::registry::ResponseChannelModule>()
             .unwrap();
-        kit.register::<crate::module_registry::PriorityCalculatorModule>()
+        kit.register::<crate::registry::PriorityCalculatorModule>()
             .unwrap();
-        kit.register::<crate::module_registry::WorkerManagerModule>()
+        kit.register::<crate::registry::WorkerManagerModule>()
             .unwrap();
         #[cfg(feature = "auth")]
         {
-            kit.register::<crate::module_registry::AuthModule>()
+            kit.register::<crate::registry::AuthModule>()
                 .unwrap();
-            kit.register::<crate::module_registry::CsrfConfigModule>()
+            kit.register::<crate::registry::CsrfConfigModule>()
                 .unwrap();
         }
 
@@ -244,15 +244,15 @@ mod tests {
         let state = create_test_state(100, engine).await;
         let queue = state
             .kit
-            .require::<crate::module_registry::PipelineQueueModule>()
+            .require::<crate::registry::PipelineQueueModule>()
             .expect("PipelineQueueModule not registered");
         let response_channel = state
             .kit
-            .require::<crate::module_registry::ResponseChannelModule>()
+            .require::<crate::registry::ResponseChannelModule>()
             .expect("ResponseChannelModule not registered");
         let service = state
             .kit
-            .require::<crate::module_registry::EmbeddingModule>()
+            .require::<crate::registry::EmbeddingModule>()
             .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
@@ -315,15 +315,15 @@ mod tests {
         let state = create_test_state(100, engine).await;
         let queue = state
             .kit
-            .require::<crate::module_registry::PipelineQueueModule>()
+            .require::<crate::registry::PipelineQueueModule>()
             .expect("PipelineQueueModule not registered");
         let response_channel = state
             .kit
-            .require::<crate::module_registry::ResponseChannelModule>()
+            .require::<crate::registry::ResponseChannelModule>()
             .expect("ResponseChannelModule not registered");
         let service = state
             .kit
-            .require::<crate::module_registry::EmbeddingModule>()
+            .require::<crate::registry::EmbeddingModule>()
             .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
@@ -368,11 +368,11 @@ mod tests {
         let state = create_test_state(100, engine).await;
         let queue = state
             .kit
-            .require::<crate::module_registry::PipelineQueueModule>()
+            .require::<crate::registry::PipelineQueueModule>()
             .expect("PipelineQueueModule not registered");
         let response_channel = state
             .kit
-            .require::<crate::module_registry::ResponseChannelModule>()
+            .require::<crate::registry::ResponseChannelModule>()
             .expect("ResponseChannelModule not registered");
 
         let consumer = tokio::spawn(async move {
@@ -435,15 +435,15 @@ mod tests {
         let state = create_test_state(100, engine).await;
         let queue = state
             .kit
-            .require::<crate::module_registry::PipelineQueueModule>()
+            .require::<crate::registry::PipelineQueueModule>()
             .expect("PipelineQueueModule not registered");
         let response_channel = state
             .kit
-            .require::<crate::module_registry::ResponseChannelModule>()
+            .require::<crate::registry::ResponseChannelModule>()
             .expect("ResponseChannelModule not registered");
         let service = state
             .kit
-            .require::<crate::module_registry::EmbeddingModule>()
+            .require::<crate::registry::EmbeddingModule>()
             .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
@@ -485,15 +485,15 @@ mod tests {
             let state = create_test_state(100, engine).await;
             let queue = state
                 .kit
-                .require::<crate::module_registry::PipelineQueueModule>()
+                .require::<crate::registry::PipelineQueueModule>()
                 .expect("PipelineQueueModule not registered");
             let response_channel = state
                 .kit
-                .require::<crate::module_registry::ResponseChannelModule>()
+                .require::<crate::registry::ResponseChannelModule>()
                 .expect("ResponseChannelModule not registered");
             let service = state
                 .kit
-                .require::<crate::module_registry::EmbeddingModule>()
+                .require::<crate::registry::EmbeddingModule>()
                 .expect("EmbeddingModule not registered");
 
             let consumer = tokio::spawn(async move {
@@ -536,15 +536,15 @@ mod tests {
         let state = create_test_state(100, engine).await;
         let queue = state
             .kit
-            .require::<crate::module_registry::PipelineQueueModule>()
+            .require::<crate::registry::PipelineQueueModule>()
             .expect("PipelineQueueModule not registered");
         let response_channel = state
             .kit
-            .require::<crate::module_registry::ResponseChannelModule>()
+            .require::<crate::registry::ResponseChannelModule>()
             .expect("ResponseChannelModule not registered");
         let service = state
             .kit
-            .require::<crate::module_registry::EmbeddingModule>()
+            .require::<crate::registry::EmbeddingModule>()
             .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
@@ -587,15 +587,15 @@ mod tests {
         let state = create_test_state(100, engine).await;
         let queue = state
             .kit
-            .require::<crate::module_registry::PipelineQueueModule>()
+            .require::<crate::registry::PipelineQueueModule>()
             .expect("PipelineQueueModule not registered");
         let response_channel = state
             .kit
-            .require::<crate::module_registry::ResponseChannelModule>()
+            .require::<crate::registry::ResponseChannelModule>()
             .expect("ResponseChannelModule not registered");
         let service = state
             .kit
-            .require::<crate::module_registry::EmbeddingModule>()
+            .require::<crate::registry::EmbeddingModule>()
             .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
@@ -745,15 +745,15 @@ mod tests {
         let state = create_test_state(100, engine).await;
         let queue = state
             .kit
-            .require::<crate::module_registry::PipelineQueueModule>()
+            .require::<crate::registry::PipelineQueueModule>()
             .expect("PipelineQueueModule not registered");
         let response_channel = state
             .kit
-            .require::<crate::module_registry::ResponseChannelModule>()
+            .require::<crate::registry::ResponseChannelModule>()
             .expect("ResponseChannelModule not registered");
         let service = state
             .kit
-            .require::<crate::module_registry::EmbeddingModule>()
+            .require::<crate::registry::EmbeddingModule>()
             .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
@@ -794,15 +794,15 @@ mod tests {
         let state = create_test_state(100, engine).await;
         let queue = state
             .kit
-            .require::<crate::module_registry::PipelineQueueModule>()
+            .require::<crate::registry::PipelineQueueModule>()
             .expect("PipelineQueueModule not registered");
         let response_channel = state
             .kit
-            .require::<crate::module_registry::ResponseChannelModule>()
+            .require::<crate::registry::ResponseChannelModule>()
             .expect("ResponseChannelModule not registered");
         let service = state
             .kit
-            .require::<crate::module_registry::EmbeddingModule>()
+            .require::<crate::registry::EmbeddingModule>()
             .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
@@ -844,15 +844,15 @@ mod tests {
             let state = create_test_state(100, engine).await;
             let queue = state
                 .kit
-                .require::<crate::module_registry::PipelineQueueModule>()
+                .require::<crate::registry::PipelineQueueModule>()
                 .expect("PipelineQueueModule not registered");
             let response_channel = state
                 .kit
-                .require::<crate::module_registry::ResponseChannelModule>()
+                .require::<crate::registry::ResponseChannelModule>()
                 .expect("ResponseChannelModule not registered");
             let service = state
                 .kit
-                .require::<crate::module_registry::EmbeddingModule>()
+                .require::<crate::registry::EmbeddingModule>()
                 .expect("EmbeddingModule not registered");
 
             let consumer = tokio::spawn(async move {
@@ -892,15 +892,15 @@ mod tests {
         let state = create_test_state(100, engine).await;
         let queue = state
             .kit
-            .require::<crate::module_registry::PipelineQueueModule>()
+            .require::<crate::registry::PipelineQueueModule>()
             .expect("PipelineQueueModule not registered");
         let response_channel = state
             .kit
-            .require::<crate::module_registry::ResponseChannelModule>()
+            .require::<crate::registry::ResponseChannelModule>()
             .expect("ResponseChannelModule not registered");
         let service = state
             .kit
-            .require::<crate::module_registry::EmbeddingModule>()
+            .require::<crate::registry::EmbeddingModule>()
             .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {
@@ -961,15 +961,15 @@ mod tests {
         let state = create_test_state(100, engine).await;
         let queue = state
             .kit
-            .require::<crate::module_registry::PipelineQueueModule>()
+            .require::<crate::registry::PipelineQueueModule>()
             .expect("PipelineQueueModule not registered");
         let response_channel = state
             .kit
-            .require::<crate::module_registry::ResponseChannelModule>()
+            .require::<crate::registry::ResponseChannelModule>()
             .expect("ResponseChannelModule not registered");
         let service = state
             .kit
-            .require::<crate::module_registry::EmbeddingModule>()
+            .require::<crate::registry::EmbeddingModule>()
             .expect("EmbeddingModule not registered");
 
         let consumer = tokio::spawn(async move {

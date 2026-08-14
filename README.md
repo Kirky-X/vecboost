@@ -509,7 +509,7 @@ vecboost/
 │   ├── logger/         # inklog 日志基础设施
 │   ├── metrics/        # Prometheus 指标与可观测性
 │   ├── model/          # 模型下载、加载与恢复
-│   ├── module_registry/# trait-kit 模块注册中心
+│   ├── registry/# trait-kit 模块注册中心
 │   ├── monitor/        # 监控与告警
 │   ├── pipeline/       # 请求管道、优先级与调度
 │   ├── rate_limit/     # limiteron 限流适配器

@@ -22,7 +22,7 @@ pub mod domain;
 pub mod engine;
 pub mod library;
 pub mod metrics;
-pub mod module_registry;
+pub mod registry;
 pub mod pipeline;
 pub mod rate_limit;
 pub mod security;
@@ -85,7 +85,7 @@ pub struct VecboostState {
     /// `AsyncKit<Ready>` 是 `Send + Sync`(基于 `Arc<RwLock>`),可安全存入
     /// `VecboostState` 并跨线程共享。包含 17 个 Module 的能力查询入口:
     /// - 4 现有:EmbeddingModule/AuthModule/RateLimitModule/AuditModule
-    /// - 13 新增:覆盖原 14 字段剩余 13 个(详见 module_registry/mod.rs)
+    /// - 13 新增:覆盖原 14 字段剩余 13 个(详见 registry/mod.rs)
     pub(crate) kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,
 }
 
@@ -136,35 +136,35 @@ macro_rules! impl_from_ref_option {
 #[cfg(feature = "http")]
 impl_from_ref_direct!(
     Arc<RwLock<EmbeddingService>>,
-    module_registry::EmbeddingModule,
+    registry::EmbeddingModule,
     "EmbeddingService capability not registered in kit"
 );
 
 #[cfg(feature = "http")]
 impl_from_ref_direct!(
     Arc<RwLock<RerankService>>,
-    module_registry::RerankModule,
+    registry::RerankModule,
     "RerankService capability not registered in kit"
 );
 
 #[cfg(feature = "http")]
 impl_from_ref_direct!(
     Arc<rate_limit::LimiteronAdapter>,
-    module_registry::RateLimitModule,
+    registry::RateLimitModule,
     "RateLimitModule capability not registered in kit"
 );
 
 #[cfg(feature = "http")]
 impl_from_ref_direct!(
     Option<Arc<audit::AuditLogger>>,
-    module_registry::AuditModule,
+    registry::AuditModule,
     "AuditModule capability not registered in kit"
 );
 
 #[cfg(all(feature = "http", feature = "auth"))]
 impl_from_ref_option!(
     Arc<auth::GarrisonCsrfConfig>,
-    module_registry::CsrfConfigModule,
+    registry::CsrfConfigModule,
     "csrf_config (auth disabled at runtime)",
     "GarrisonCsrfConfig capability not available"
 );
@@ -172,7 +172,7 @@ impl_from_ref_option!(
 #[cfg(feature = "http")]
 impl_from_ref_option!(
     Arc<metrics::InferenceCollector>,
-    module_registry::MetricsCollectorModule,
+    registry::MetricsCollectorModule,
     "metrics_collector (not configured)",
     "InferenceCollector capability not available"
 );
@@ -180,7 +180,7 @@ impl_from_ref_option!(
 #[cfg(feature = "http")]
 impl_from_ref_option!(
     Arc<metrics::PrometheusCollector>,
-    module_registry::PrometheusCollectorModule,
+    registry::PrometheusCollectorModule,
     "prometheus_collector (not configured)",
     "PrometheusCollector capability not available"
 );
@@ -207,9 +207,9 @@ mod tests {
     #[cfg(feature = "http")]
     use crate::engine::InferenceEngine;
     #[cfg(feature = "http")]
-    use crate::module_registry::PrometheusCollectorModule;
+    use crate::registry::PrometheusCollectorModule;
     #[cfg(feature = "http")]
-    use crate::module_registry::{
+    use crate::registry::{
         AuditModule, AuthEnabled, CacheConfig, CacheModule, DbConfig, DbModule,
         EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
         PipelineQueueModule, PriorityCalculatorModule, RerankModule, RateLimitEnabled,
@@ -217,7 +217,7 @@ mod tests {
     };
     use crate::logger::LoggerModule;
     #[cfg(feature = "auth")]
-    use crate::module_registry::{
+    use crate::registry::{
         AuthModule, CsrfConfigModule,
     };
     #[cfg(feature = "http")]

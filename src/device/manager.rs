@@ -124,11 +124,14 @@ impl DeviceManager {
     }
 
     async fn ensure_initialized(&self) {
-        if self.initialized.load(Ordering::SeqCst) {
-            return;
+        // 使用 compare_exchange 保证一次性初始化，避免 TOCTOU 竞争
+        if self
+            .initialized
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            self.initialize_devices().await;
         }
-        self.initialize_devices().await;
-        self.initialized.store(true, Ordering::SeqCst);
     }
 
     async fn initialize_devices(&self) {
@@ -288,21 +291,9 @@ impl DeviceManager {
 
     pub async fn get_gpu_info(&self) -> Vec<GpuInfo> {
         self.ensure_initialized().await;
-        let mut gpu_infos = Vec::new();
+        let mut gpu_infos: Vec<GpuInfo> = Vec::new();
 
-        if let Some(gpu_stats) = self.memory_monitor.get_gpu_stats().await {
-            let devices = self.devices.read().await;
-            for device in devices.iter() {
-                if let DeviceType::Cuda = device.device_type {
-                    gpu_infos.push(GpuInfo::from_gpu_memory_stats(
-                        0,
-                        device.name.clone(),
-                        gpu_stats.clone(),
-                    ));
-                }
-            }
-        }
-
+        // 直接从 cuda_device_manager 构建 GpuInfo 列表（避免第一个循环硬编码 device_id=0）
         let cuda_devices = self.cuda_device_manager.devices().await;
         for cuda_device in cuda_devices.iter() {
             let cuda_info = CudaGpuInfo {

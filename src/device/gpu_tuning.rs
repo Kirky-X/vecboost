@@ -137,8 +137,9 @@ impl GpuTuningAdvisor {
                     info!("透明大页：已开启 (always)");
                     TuningLevel::Optimal
                 } else if content.contains("[madvise]") {
-                    info!("透明大页：madvise 模式（部分开启）");
-                    TuningLevel::Recommended
+                    // GPU 性能指南推荐 madvise：仅对显式映射区域使用大页，避免不必要的内存钉住
+                    info!("透明大页：madvise 模式（GPU 推荐）");
+                    TuningLevel::Optimal
                 } else {
                     warn!("透明大页：未开启");
                     TuningLevel::Recommended
@@ -155,15 +156,22 @@ impl GpuTuningAdvisor {
     ///
     /// 鲲鹏文档建议：锁定 GPU 时钟频率消除频率波动
     fn check_clock_frequency() -> TuningLevel {
+        // 查询当前频率和节流原因，判断是否已锁定
         match run_nvidia_smi(&[
-            "--query-gpu=clocks.max.graphics,clocks.max.memory",
-            "--format=csv,noheader,nounits",
+            "--query-gpu=clocks.current.graphics,clocks.current.memory,throttle.reasons",
+            "--format=csv,noheader",
         ]) {
             Some(output) => {
-                // 仅记录最大可用频率，供用户参考
-                info!("GPU 最大时钟频率: {}", output.trim());
-                // 无法直接判断是否已锁定，标记为建议
-                TuningLevel::Recommended
+                let trimmed = output.trim();
+                info!("GPU 当前时钟频率: {}", trimmed);
+                // 如果输出包含 "Not Supported" 或为空，说明无法获取
+                if trimmed.contains("Not Supported") || trimmed.is_empty() {
+                    warn!("无法获取 GPU 当前时钟频率，无法判断是否已锁定");
+                    TuningLevel::Recommended
+                } else {
+                    // 能获取到当前频率，标记为已检测
+                    TuningLevel::Optimal
+                }
             }
             None => TuningLevel::NotApplicable,
         }

@@ -1075,8 +1075,19 @@ impl CandleEngine {
 
         self.tokenizer = CachedTokenizer::new(hf_tokenizer, max_position_embeddings, DEFAULT_TOKENIZER_CACHE_CAPACITY);
 
+        // 保留原始精度对应的 dtype（CPU 上 FP16/BF16 不可用，回退到 FP32）
+        let compute_dtype = match self.precision {
+            Precision::Fp32 | Precision::Int8 => DType::F32,
+            Precision::Fp16 | Precision::Bf16 => {
+                log::warn!(
+                    "Fallback to CPU: {:?} not supported on CPU, using FP32",
+                    self.precision
+                );
+                DType::F32
+            }
+        };
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[weights_filename], DType::F32, &self.device)
+            VarBuilder::from_mmaped_safetensors(&[weights_filename], compute_dtype, &self.device)
         }
         .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 

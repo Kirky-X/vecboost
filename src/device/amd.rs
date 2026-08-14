@@ -116,6 +116,16 @@ impl AmdDevice {
     pub fn from_rocm(index: usize) -> Option<Self> {
         debug!("Attempting to detect AMD GPU via ROCm at index {}", index);
 
+        // 检查 rocm-smi 是否可用，不可用时不创建伪设备
+        if std::process::Command::new("rocm-smi")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            debug!("rocm-smi not available, skipping ROCm device at index {}", index);
+            return None;
+        }
+
         let vram = query_rocm_vram(index);
 
         let info = AmdGpuInfo {
@@ -580,14 +590,21 @@ mod tests {
 
     #[test]
     fn test_amd_device_from_rocm() {
-        let device = AmdDevice::from_rocm(1).expect("from_rocm should return Some");
+        // rocm-smi 不可用时 from_rocm 返回 None
+        let rocm_smi_available = std::process::Command::new("rocm-smi")
+            .arg("--version")
+            .output()
+            .is_ok();
+        if !rocm_smi_available {
+            assert!(AmdDevice::from_rocm(1).is_none());
+            return;
+        }
+        let device = AmdDevice::from_rocm(1).expect("from_rocm should return Some when rocm-smi is available");
         assert!(device.info().is_available);
         assert_eq!(device.device_type(), DeviceType::Amd);
         assert!(device.name().contains("ROCm"));
         assert!(device.name().contains("Device 1"));
-        // VRAM 可能是真实查询结果或 fallback 默认值
         assert!(device.vram_bytes() > 0);
-        // roc_version 在有 rocm-smi 时为 Some，无 rocm-smi 时为 None
     }
 
     #[test]
@@ -715,12 +732,18 @@ mod tests {
             .expect("initialize should succeed");
 
         assert!(manager.is_initialized());
-        assert!(manager.is_rocm_available());
-        assert!(!manager.is_opencl_available());
-        assert_eq!(manager.device_count().await, 4);
-
-        let total = manager.total_vram().await;
-        assert_eq!(total, 4 * 16 * 1024 * 1024 * 1024u64);
+        // ROCm 设备数量取决于 rocm-smi 是否可用
+        if std::process::Command::new("rocm-smi").arg("--version").output().is_ok() {
+            assert!(manager.is_rocm_available());
+            assert_eq!(manager.device_count().await, 4);
+            let total = manager.total_vram().await;
+            assert_eq!(total, 4 * 16 * 1024 * 1024 * 1024u64);
+        } else {
+            // rocm-smi 不可用时 fallback 到 OpenCL，from_opencl 总是返回 Some
+            assert!(!manager.is_rocm_available());
+            assert!(manager.is_opencl_available());
+            assert_eq!(manager.device_count().await, 4);
+        }
     }
 
     #[tokio::test]
@@ -741,8 +764,15 @@ mod tests {
         manager.initialize().await.unwrap();
 
         let primary = manager.primary_device().await;
-        assert!(primary.is_some());
-        assert!(primary.as_ref().unwrap().name().contains("ROCm"));
+        // ROCm 可用时主设备是 ROCm 设备；不可用时 fallback 到 OpenCL 设备
+        if std::process::Command::new("rocm-smi").arg("--version").output().is_ok() {
+            assert!(primary.is_some());
+            assert!(primary.as_ref().unwrap().name().contains("ROCm"));
+        } else {
+            // fallback 到 OpenCL，仍有主设备
+            assert!(primary.is_some());
+            assert!(primary.as_ref().unwrap().name().contains("OpenCL"));
+        }
     }
 
     #[tokio::test]
@@ -849,7 +879,12 @@ mod tests {
             .await
             .expect("create_amd_device_manager should succeed");
         assert!(manager.is_initialized());
-        assert!(manager.is_rocm_available());
+        // ROCm 可用性取决于系统环境
+        if std::process::Command::new("rocm-smi").arg("--version").output().is_ok() {
+            assert!(manager.is_rocm_available());
+        } else {
+            assert!(!manager.is_rocm_available());
+        }
     }
 
     #[tokio::test]

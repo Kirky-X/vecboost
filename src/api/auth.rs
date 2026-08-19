@@ -68,11 +68,10 @@ pub async fn forge_login(
 
     // 校验 admin 密码（通过 garrison PasswordVerifier 自动识别 Argon2/Bcrypt）
     if let Some(ref hash) = auth_handle.admin_password_hash {
-        let verified = PasswordVerifier::verify(&req.password, hash)
-            .map_err(|e| {
-                log::error!("Password verification internal error: {}", e);
-                kit_internal_error("password verification failed")
-            })?;
+        let verified = PasswordVerifier::verify(&req.password, hash).map_err(|e| {
+            log::error!("Password verification internal error: {}", e);
+            kit_internal_error("password verification failed")
+        })?;
         if !verified {
             if let Some(logger) = audit_logger {
                 logger.log_login_failed(&req.username, Some(peer_ip.clone()), "invalid password");
@@ -102,7 +101,11 @@ pub async fn forge_login(
         }
         Err(e) => {
             if let Some(logger) = audit_logger {
-                logger.log_login_failed(&req.username, Some(peer_ip.clone()), "authentication failed");
+                logger.log_login_failed(
+                    &req.username,
+                    Some(peer_ip.clone()),
+                    "authentication failed",
+                );
             }
             Err(to_api_error(e.into()))
         }
@@ -234,9 +237,11 @@ pub async fn forge_me(
     #[param(kind = "extension")] auth_ctx: AuthContext,
 ) -> Result<serde_json::Value, ApiError> {
     // 通过 garrison 查询完整权限/角色列表（task_local token 已由 auth_middleware 设置）
-    let has_all_perms = GarrisonUtil::has_permission("*").await
+    let has_all_perms = GarrisonUtil::has_permission("*")
+        .await
         .map_err(|e| to_api_error(e.into()))?;
-    let is_admin = GarrisonUtil::has_role("admin").await
+    let is_admin = GarrisonUtil::has_role("admin")
+        .await
         .map_err(|e| to_api_error(e.into()))?;
 
     let role = if is_admin { "admin" } else { "user" };

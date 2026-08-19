@@ -22,9 +22,9 @@ pub mod domain;
 pub mod engine;
 pub mod library;
 pub mod metrics;
-pub mod registry;
 pub mod pipeline;
 pub mod rate_limit;
+pub mod registry;
 pub mod security;
 pub mod service;
 pub mod utils;
@@ -54,11 +54,11 @@ pub use domain::{
     SimilarityResponse,
 };
 pub use error::VecboostError;
+pub use library::{LibraryConfig, VecBoostLibrary, VecBoostModuleBuilder};
 pub use service::embedding::EmbeddingService;
 pub use service::rerank::RerankService;
-pub use library::{LibraryConfig, VecBoostLibrary, VecBoostModuleBuilder};
 pub use utils::SimilarityMetric;
-pub use utils::vector::{TaskType, recommended_dimension, information_retention_rate};
+pub use utils::vector::{TaskType, information_retention_rate, recommended_dimension};
 
 // 重新导出批处理调度类型（供 benchmark 和外部集成测试使用）
 pub use device::batch_scheduler::{
@@ -206,22 +206,20 @@ mod tests {
     use crate::config::model::Precision;
     #[cfg(feature = "http")]
     use crate::engine::InferenceEngine;
+    use crate::logger::LoggerModule;
+    #[cfg(feature = "http")]
+    use crate::pipeline::{PriorityConfig, WorkerConfig};
     #[cfg(feature = "http")]
     use crate::registry::PrometheusCollectorModule;
     #[cfg(feature = "http")]
     use crate::registry::{
-        AuditModule, AuthEnabled, CacheConfig, CacheModule, DbConfig, DbModule,
-        EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
-        PipelineQueueModule, PriorityCalculatorModule, RerankModule, RateLimitEnabled,
-        RateLimitModule, ResponseChannelModule, WorkerManagerModule,
+        AuditModule, AuthEnabled, CacheConfig, CacheModule, DbConfig, DbModule, EmbeddingModule,
+        IpWhitelistModule, MetricsCollectorModule, PipelineEnabled, PipelineQueueModule,
+        PriorityCalculatorModule, RateLimitEnabled, RateLimitModule, RerankModule,
+        ResponseChannelModule, WorkerManagerModule,
     };
-    use crate::logger::LoggerModule;
     #[cfg(feature = "auth")]
-    use crate::registry::{
-        AuthModule, CsrfConfigModule,
-    };
-    #[cfg(feature = "http")]
-    use crate::pipeline::{PriorityConfig, WorkerConfig};
+    use crate::registry::{AuthModule, CsrfConfigModule};
     #[cfg(feature = "http")]
     use async_trait::async_trait;
 
@@ -467,9 +465,21 @@ mod tests {
     #[tokio::test]
     async fn test_kit_config_bool_flags_default_false() {
         let state = make_app_state().await;
-        let auth_enabled = state.kit.config::<AuthEnabled>().map(|c| c.0).unwrap_or(false);
-        let rate_limit_enabled = state.kit.config::<RateLimitEnabled>().map(|c| c.0).unwrap_or(false);
-        let pipeline_enabled = state.kit.config::<PipelineEnabled>().map(|c| c.0).unwrap_or(false);
+        let auth_enabled = state
+            .kit
+            .config::<AuthEnabled>()
+            .map(|c| c.0)
+            .unwrap_or(false);
+        let rate_limit_enabled = state
+            .kit
+            .config::<RateLimitEnabled>()
+            .map(|c| c.0)
+            .unwrap_or(false);
+        let pipeline_enabled = state
+            .kit
+            .config::<PipelineEnabled>()
+            .map(|c| c.0)
+            .unwrap_or(false);
         assert!(!auth_enabled);
         assert!(!rate_limit_enabled);
         assert!(!pipeline_enabled);
@@ -503,7 +513,10 @@ mod tests {
             state.kit.contains::<LoggerModule>(),
             "LoggerModule should be registered in kit"
         );
-        let logger: Arc<inklog::LoggerManager> = state.kit.require::<LoggerModule>().expect("require LoggerModule");
+        let logger: Arc<inklog::LoggerManager> = state
+            .kit
+            .require::<LoggerModule>()
+            .expect("require LoggerModule");
         // LoggerManager 应成功构建且可用
         let _ = logger;
     }
@@ -627,8 +640,6 @@ mod tests {
         );
     }
 
-
-
     // -------------------------------------------------------------------------
     // VecboostState Send + Sync 编译期断言
     // -------------------------------------------------------------------------
@@ -658,19 +669,31 @@ mod tests {
         let state = make_app_state().await;
 
         let embedding_health = state.kit.health_check::<EmbeddingModule>();
-        assert!(embedding_health.is_ok(), "EmbeddingModule health check should be registered");
+        assert!(
+            embedding_health.is_ok(),
+            "EmbeddingModule health check should be registered"
+        );
         assert_eq!(embedding_health.unwrap(), HealthStatus::Healthy);
 
         let rerank_health = state.kit.health_check::<RerankModule>();
-        assert!(rerank_health.is_ok(), "RerankModule health check should be registered");
+        assert!(
+            rerank_health.is_ok(),
+            "RerankModule health check should be registered"
+        );
         assert_eq!(rerank_health.unwrap(), HealthStatus::Healthy);
 
         let rate_limit_health = state.kit.health_check::<RateLimitModule>();
-        assert!(rate_limit_health.is_ok(), "RateLimitModule health check should be registered");
+        assert!(
+            rate_limit_health.is_ok(),
+            "RateLimitModule health check should be registered"
+        );
         assert_eq!(rate_limit_health.unwrap(), HealthStatus::Healthy);
 
         let cache_health = state.kit.health_check::<CacheModule>();
-        assert!(cache_health.is_ok(), "CacheModule health check should be registered");
+        assert!(
+            cache_health.is_ok(),
+            "CacheModule health check should be registered"
+        );
         // Cache disabled → Degraded (expected config state, not Unhealthy)
         assert_eq!(
             cache_health.unwrap(),

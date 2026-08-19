@@ -13,5 +13,5 @@ pub mod ip_whitelist;
 pub(crate) mod limiteron_adapter;
 
 pub use ip_whitelist::is_ip_whitelisted;
-pub use limiteron_adapter::{LimiteronAdapter, RateLimitSettings};
 pub use limiteron::matchers::RequestContext;
+pub use limiteron_adapter::{LimiteronAdapter, RateLimitSettings};

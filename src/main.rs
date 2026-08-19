@@ -11,38 +11,35 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[cfg(feature = "cli")]
 use std::collections::HashMap;
-use std::{net::SocketAddr, sync::Arc};
 use std::time::Duration;
+use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
-use trait_kit::prelude::{AsyncShutdownCoordinator, BuildObserver, ShutdownPhase};
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
+use trait_kit::prelude::{AsyncShutdownCoordinator, BuildObserver, ShutdownPhase};
 use vecboost::AppConfig;
-use vecboost::registry::RateLimitModule;
 use vecboost::logger::LoggerModule;
+use vecboost::registry::RateLimitModule;
 
 /// 全局关闭超时（秒）
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 #[cfg(feature = "auth")]
-use vecboost::registry::{
-    AuthModule, CsrfConfigModule,
-};
+use vecboost::registry::{AuthModule, CsrfConfigModule};
 use vecboost::{
     VecboostState,
     audit::{AuditConfig, AuditLogger},
     config::model::{EngineType, ModelConfig},
     engine::AnyEngine,
-    registry::{
-        AuditModule, AuthEnabled, CacheConfig, CacheModule,
-        ConfigWatcherModule, DbConfig, DbModule, EmbeddingModule, IpWhitelistModule,
-        MetricsCollectorModule, PipelineEnabled, PipelineQueueModule,
-        PriorityCalculatorModule, PrometheusCollectorModule, RateLimitEnabled,
-        RerankModule, ResponseChannelModule, WorkerManagerModule,
-    },
     pipeline::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
         WorkerManager,
     },
     rate_limit::LimiteronAdapter,
+    registry::{
+        AuditModule, AuthEnabled, CacheConfig, CacheModule, ConfigWatcherModule, DbConfig,
+        DbModule, EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineEnabled,
+        PipelineQueueModule, PriorityCalculatorModule, PrometheusCollectorModule, RateLimitEnabled,
+        RerankModule, ResponseChannelModule, WorkerManagerModule,
+    },
     service::{embedding::EmbeddingService, rerank::RerankService},
 };
 
@@ -53,12 +50,9 @@ use sdforge::cli::{CliBuilder, CliCommandRegistration, CliHandlerRegistration};
 use vecboost::db::{DbPool, init_schema};
 
 #[cfg(feature = "auth")]
-use vecboost::{
-    auth::{
-        GarrisonHandle, GarrisonCsrfConfig, VecBoostInterface,
-        garrison_csrf_middleware, map_auth_config_to_garrison,
-        PasswordHasher,
-    },
+use vecboost::auth::{
+    GarrisonCsrfConfig, GarrisonHandle, PasswordHasher, VecBoostInterface,
+    garrison_csrf_middleware, map_auth_config_to_garrison,
 };
 
 #[cfg(feature = "grpc")]
@@ -214,9 +208,10 @@ async fn main() -> anyhow::Result<()> {
     let service = Arc::new(RwLock::new(service));
 
     // Rerank service — reuses the same engine
-    let rerank_service = Arc::new(RwLock::new(
-        RerankService::new(engine.clone(), Some(model_config)),
-    ));
+    let rerank_service = Arc::new(RwLock::new(RerankService::new(
+        engine.clone(),
+        Some(model_config),
+    )));
 
     // MCP stdio run-mode: when `--mcp` is passed, serve the Model Context Protocol
     // over stdio and do NOT start the HTTP/gRPC servers (stdout must stay clean for
@@ -345,7 +340,11 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(dao),
             Arc::new(garrison_config.clone()),
             Arc::new(VecBoostInterface::new(
-                config.auth.default_admin_username.clone().unwrap_or_else(|| "admin".to_string()),
+                config
+                    .auth
+                    .default_admin_username
+                    .clone()
+                    .unwrap_or_else(|| "admin".to_string()),
             )),
         )
         .map_err(|e| anyhow::anyhow!("Failed to init GarrisonManager: {}", e))?;
@@ -600,8 +599,10 @@ async fn main() -> anyhow::Result<()> {
                     // Manually invoke async on_shutdown for lifecycle modules
                     // (AsyncKit::shutdown() is sync and cannot call async fns)
                     if let Ok(audit_cap) = kit_for_shutdown.require::<AuditModule>() {
-                        <AuditModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(&audit_cap)
-                            .await;
+                        <AuditModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(
+                            &audit_cap,
+                        )
+                        .await;
                     }
                 })
             })
@@ -613,7 +614,9 @@ async fn main() -> anyhow::Result<()> {
         shutdown_coordinator
             .register_hook(ShutdownPhase::DrainQueue, move || {
                 Box::pin(async move {
-                    if let Ok(watcher_cap) = kit_for_watcher_shutdown.require::<ConfigWatcherModule>() {
+                    if let Ok(watcher_cap) =
+                        kit_for_watcher_shutdown.require::<ConfigWatcherModule>()
+                    {
                         <ConfigWatcherModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(
                             &watcher_cap,
                         )
@@ -621,7 +624,9 @@ async fn main() -> anyhow::Result<()> {
                     }
                 })
             })
-            .map_err(|e| anyhow::anyhow!("Failed to register config watcher shutdown hook: {}", e))?;
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to register config watcher shutdown hook: {}", e)
+            })?;
     }
 
     log::info!("AsyncKit module registry built successfully");
@@ -668,8 +673,7 @@ async fn main() -> anyhow::Result<()> {
     let app_state = VecboostState::new(kit);
 
     // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state().kit.require 访问）
-    vecboost::api::init_state(app_state.clone())
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    vecboost::api::init_state(app_state.clone()).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // sdforge #[forge] 路由（Router<()>，从 inventory 收集所有 forge 函数注册的路由）
     let app = sdforge::http::build();
@@ -707,10 +711,7 @@ async fn main() -> anyhow::Result<()> {
             .require::<CsrfConfigModule>()
             .map_err(|e| anyhow::anyhow!("Failed to require CsrfConfigModule: {}", e))?;
         if let Some(cfg) = csrf_config {
-            app.layer(from_fn_with_state(
-                cfg,
-                garrison_csrf_middleware,
-            ))
+            app.layer(from_fn_with_state(cfg, garrison_csrf_middleware))
         } else {
             app
         }
@@ -839,7 +840,8 @@ async fn main() -> anyhow::Result<()> {
         // vecboost's grpc feature pulls in). Uses default config (100 burst, 10 req/s).
         // `new()` panics only on invalid default config (should never happen).
         let rate_limiter: Option<std::sync::Arc<dyn sdforge::security::ratelimit::RateLimiter>> = {
-            let limiter = SdforgeLimiteronAdapter::new().await
+            let limiter = SdforgeLimiteronAdapter::new()
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to create gRPC rate limiter: {}", e))?;
             log::info!(
                 "gRPC rate_limiter enabled (sdforge LimiteronAdapter, default config: 100 burst / 10 req/s)"

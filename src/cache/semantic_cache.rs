@@ -9,8 +9,8 @@
 //! 核心价值：精确 miss 后、模型推理前，插入一层零开销的文本相似度检查。
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use tokio::sync::RwLock;
@@ -163,11 +163,8 @@ impl SemanticCache {
         let mut best_idx = None;
 
         // 构建 query 的 trigram 集合（仅一次，复用于所有比较）
-        let query_trigrams: HashSet<Vec<u8>> = query
-            .as_bytes()
-            .windows(3)
-            .map(|w| w.to_vec())
-            .collect();
+        let query_trigrams: HashSet<Vec<u8>> =
+            query.as_bytes().windows(3).map(|w| w.to_vec()).collect();
 
         for (i, entry) in index.iter().enumerate() {
             let sim = trigram_jaccard_with_set(&query_trigrams, &entry.trigrams);
@@ -202,11 +199,7 @@ impl SemanticCache {
         }
 
         index.push(SemanticEntry {
-            trigrams: text
-                .as_bytes()
-                .windows(3)
-                .map(|w| w.to_vec())
-                .collect(),
+            trigrams: text.as_bytes().windows(3).map(|w| w.to_vec()).collect(),
             embedding,
             last_access: Instant::now(),
         });
@@ -256,19 +249,31 @@ mod tests {
     #[test]
     fn test_trigram_jaccard_identical() {
         let sim = trigram_jaccard("hello world", "hello world");
-        assert!((sim - 1.0).abs() < 1e-6, "identical strings should have similarity 1.0, got {}", sim);
+        assert!(
+            (sim - 1.0).abs() < 1e-6,
+            "identical strings should have similarity 1.0, got {}",
+            sim
+        );
     }
 
     #[test]
     fn test_trigram_jaccard_similar() {
         let sim = trigram_jaccard("今天天气怎么样", "今天天气怎么样啊");
-        assert!(sim > 0.5, "similar strings should have high similarity, got {}", sim);
+        assert!(
+            sim > 0.5,
+            "similar strings should have high similarity, got {}",
+            sim
+        );
     }
 
     #[test]
     fn test_trigram_jaccard_different() {
         let sim = trigram_jaccard("hello", "xyz");
-        assert!(sim < 0.3, "different strings should have low similarity, got {}", sim);
+        assert!(
+            sim < 0.3,
+            "different strings should have low similarity, got {}",
+            sim
+        );
     }
 
     #[test]
@@ -302,16 +307,24 @@ mod tests {
 
         // 存入一个文本到语义索引（通过 compute_fn）
         let _ = cache
-            .get_or_compute("今天天气怎么样", || async { Ok(vec![1.0, 2.0, 3.0]) })
+            .get_or_compute("今天天气怎么样", || async {
+                Ok(vec![1.0, 2.0, 3.0])
+            })
             .await
             .unwrap();
 
         // 用近似改写查询——应语义命中
         let result = cache
-            .get_or_compute("今天天气怎么样啊", || async { Ok(vec![9.0, 9.0, 9.0]) })
+            .get_or_compute("今天天气怎么样啊", || async {
+                Ok(vec![9.0, 9.0, 9.0])
+            })
             .await
             .unwrap();
-        assert_eq!(result, vec![1.0, 2.0, 3.0], "should return cached embedding via semantic match");
+        assert_eq!(
+            result,
+            vec![1.0, 2.0, 3.0],
+            "should return cached embedding via semantic match"
+        );
         assert_eq!(cache.stats().semantic_hits, 1);
     }
 
@@ -345,11 +358,20 @@ mod tests {
         let cache = SemanticCache::new(backend.clone(), 0.99, 3); // 容量仅 3
 
         // 存入 3 个不同文本
-        cache.get_or_compute("aaa_text_one", || async { Ok(vec![1.0]) }).await.unwrap();
+        cache
+            .get_or_compute("aaa_text_one", || async { Ok(vec![1.0]) })
+            .await
+            .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-        cache.get_or_compute("bbb_text_two", || async { Ok(vec![2.0]) }).await.unwrap();
+        cache
+            .get_or_compute("bbb_text_two", || async { Ok(vec![2.0]) })
+            .await
+            .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-        cache.get_or_compute("ccc_text_three", || async { Ok(vec![3.0]) }).await.unwrap();
+        cache
+            .get_or_compute("ccc_text_three", || async { Ok(vec![3.0]) })
+            .await
+            .unwrap();
 
         // 语义索引应有 3 个条目（精确缓存 miss 后存入）
         {
@@ -359,10 +381,16 @@ mod tests {
 
         // 再存入一个——应驱逐最老的
         tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-        cache.get_or_compute("ddd_completely_different", || async { Ok(vec![4.0]) }).await.unwrap();
+        cache
+            .get_or_compute("ddd_completely_different", || async { Ok(vec![4.0]) })
+            .await
+            .unwrap();
         {
             let index = cache.semantic_index.read().await;
-            assert!(index.len() <= 3, "should still not exceed capacity after eviction");
+            assert!(
+                index.len() <= 3,
+                "should still not exceed capacity after eviction"
+            );
         }
     }
 
@@ -372,14 +400,19 @@ mod tests {
         let cache = SemanticCache::new(backend.clone(), 0.7, 100);
 
         // 1 miss
-        cache.get_or_compute("unique_text_alpha", || async { Ok(vec![1.0]) }).await.unwrap();
+        cache
+            .get_or_compute("unique_text_alpha", || async { Ok(vec![1.0]) })
+            .await
+            .unwrap();
         let stats = cache.stats();
         assert_eq!(stats.misses, 1);
         assert_eq!(stats.exact_hits, 0);
         assert_eq!(stats.total_entries, 1);
 
         // 1 semantic hit (similar text)
-        let _ = cache.get_or_compute("unique_text_alpha_beta", || async { Ok(vec![2.0]) }).await;
+        let _ = cache
+            .get_or_compute("unique_text_alpha_beta", || async { Ok(vec![2.0]) })
+            .await;
         let stats = cache.stats();
         // total_entries 可能是 1 或 2（取决于是否语义命中）
         assert!(stats.total_entries >= 1);

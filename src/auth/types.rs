@@ -3,8 +3,8 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-use serde::{Deserialize, Serialize};
 use crate::error::VecboostError;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
@@ -27,15 +27,12 @@ pub struct AuthResponse {
     pub expires_in: u64,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub username: String,
     pub role: String,
     pub permissions: Vec<String>,
 }
-
-
 
 /// 验证用户名格式：
 /// - 长度 3-32 字符
@@ -75,8 +72,6 @@ pub fn validate_username_format(username: &str) -> Result<(), VecboostError> {
 mod tests {
     use super::*;
 
-
-
     #[test]
     fn test_login_request_serialization() {
         let req = LoginRequest {
@@ -103,8 +98,6 @@ mod tests {
         assert_eq!(deserialized.expires_in, 3600);
     }
 
-
-
     #[test]
     fn test_refresh_token_request_serialization() {
         let req = RefreshTokenRequest {
@@ -114,6 +107,4 @@ mod tests {
         let deserialized: RefreshTokenRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.refresh_token, "refresh_tok");
     }
-
-
 }

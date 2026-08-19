@@ -217,8 +217,10 @@ pub async fn auth_rate_limit_middleware(
         .config::<crate::registry::RateLimitEnabled>()
         .map(|c| c.0)
         .unwrap_or_else(|_| {
-            log::warn!("RateLimitEnabled not registered, rate limiting is disabled. \
-                        This may leave endpoints unprotected in production.");
+            log::warn!(
+                "RateLimitEnabled not registered, rate limiting is disabled. \
+                        This may leave endpoints unprotected in production."
+            );
             false
         });
 
@@ -240,9 +242,13 @@ pub async fn auth_rate_limit_middleware(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0);
-    let ip = extract_client_ip(request.headers(), connect_info, &auth_config.trusted_proxies)
-        .map(|i| i.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+    let ip = extract_client_ip(
+        request.headers(),
+        connect_info,
+        &auth_config.trusted_proxies,
+    )
+    .map(|i| i.to_string())
+    .unwrap_or_else(|| "unknown".to_string());
 
     // 白名单内的 IP 不限流
     if crate::rate_limit::is_ip_whitelisted(&ip, &ip_whitelist) {
@@ -267,7 +273,10 @@ pub async fn auth_rate_limit_middleware(
     let allowed = rate_limiter.check_rate_limit(&context).await;
 
     // 记录限流决策指标
-    if let Ok(prom_collector) = state.kit.require::<crate::registry::PrometheusCollectorModule>() {
+    if let Ok(prom_collector) = state
+        .kit
+        .require::<crate::registry::PrometheusCollectorModule>()
+    {
         if let Some(prom) = prom_collector.as_ref() {
             if allowed {
                 prom.record_rate_limit_allowed("ip");
@@ -316,10 +325,7 @@ mod tests {
         let proxies = vec!["10.0.0.0/8".to_string()];
 
         let result = extract_client_ip(&headers, peer, &proxies);
-        assert_eq!(
-            result,
-            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50)))
-        );
+        assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50))));
     }
 
     #[test]
@@ -330,10 +336,7 @@ mod tests {
 
         let result = extract_client_ip(&headers, peer, &proxies);
         // 192.168.1.100 不在 10.0.0.0/8 内 → XFF 被忽略
-        assert_eq!(
-            result,
-            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)))
-        );
+        assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
     }
 
     #[test]
@@ -343,10 +346,7 @@ mod tests {
         let proxies = vec!["10.0.0.0/8".to_string()];
 
         let result = extract_client_ip(&headers, peer, &proxies);
-        assert_eq!(
-            result,
-            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50)))
-        );
+        assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50))));
     }
 
     // --- trusted_proxies 为空路径（legacy 行为）---
@@ -359,10 +359,7 @@ mod tests {
 
         let result = extract_client_ip(&headers, peer, &proxies);
         // 空 trusted_proxies → legacy 模式，无条件信任 XFF
-        assert_eq!(
-            result,
-            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50)))
-        );
+        assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50))));
     }
 
     // --- 无 XFF 回退 ---
@@ -374,10 +371,7 @@ mod tests {
         let proxies = vec!["10.0.0.0/8".to_string()];
 
         let result = extract_client_ip(&headers, peer, &proxies);
-        assert_eq!(
-            result,
-            Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)))
-        );
+        assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
     }
 
     #[test]
@@ -398,10 +392,7 @@ mod tests {
         let proxies = vec!["10.0.0.0/8".to_string()];
 
         let result = extract_client_ip(&headers, peer, &proxies);
-        assert_eq!(
-            result,
-            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 99)))
-        );
+        assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 99))));
     }
 
     #[test]
@@ -413,10 +404,7 @@ mod tests {
 
         let result = extract_client_ip(&headers, peer, &proxies);
         // XFF 优先于 X-Real-IP
-        assert_eq!(
-            result,
-            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50)))
-        );
+        assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50))));
     }
 
     // --- IPv6 ---

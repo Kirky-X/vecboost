@@ -874,8 +874,16 @@ async fn test_all_fifteen_modules_build_together() {
 
     // 验证部分 capability 返回正确值（bool newtype 通过 config 查询）
     assert!(kit.config::<AuthEnabled>().map(|c| c.0).unwrap_or(false));
-    assert!(kit.config::<RateLimitEnabled>().map(|c| c.0).unwrap_or(false));
-    assert!(!kit.config::<PipelineEnabled>().map(|c| c.0).unwrap_or(false));
+    assert!(
+        kit.config::<RateLimitEnabled>()
+            .map(|c| c.0)
+            .unwrap_or(false)
+    );
+    assert!(
+        !kit.config::<PipelineEnabled>()
+            .map(|c| c.0)
+            .unwrap_or(false)
+    );
     let ip_list = kit.require::<IpWhitelistModule>().unwrap();
     assert_eq!(ip_list, vec!["127.0.0.1".to_string()]);
 }

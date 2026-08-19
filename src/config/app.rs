@@ -181,9 +181,7 @@ pub struct CsrfConfig {
 
 impl Default for CsrfConfig {
     fn default() -> Self {
-        Self {
-            enabled: false,
-        }
+        Self { enabled: false }
     }
 }
 
@@ -1033,9 +1031,7 @@ mod tests {
             token_expiration_hours: Some(48),
             default_admin_username: Some("admin".to_string()),
             default_admin_password: Some("MyPassword123!".to_string()),
-            csrf: CsrfConfig {
-                enabled: true,
-            },
+            csrf: CsrfConfig { enabled: true },
             trusted_proxies: vec!["10.0.0.0/8".to_string()],
         };
         assert!(config.enabled);
@@ -1046,12 +1042,9 @@ mod tests {
 
     #[test]
     fn test_csrf_config_custom_values() {
-        let config = CsrfConfig {
-            enabled: true,
-        };
+        let config = CsrfConfig { enabled: true };
         assert!(config.enabled);
     }
-
 
     #[test]
     fn test_audit_config_custom_values() {

@@ -42,8 +42,7 @@ pub trait InferenceEngine: Send + Sync {
     fn rerank(&self, query: &str, document: &str) -> Result<f32, VecboostError> {
         let texts = vec![query.to_string(), document.to_string()];
         let embeddings = self.embed_batch(&texts)?;
-        let similarity =
-            crate::utils::vector::cosine_similarity(&embeddings[0], &embeddings[1])?;
+        let similarity = crate::utils::vector::cosine_similarity(&embeddings[0], &embeddings[1])?;
         Ok(1.0 / (1.0 + (-similarity).exp()))
     }
 
@@ -61,8 +60,7 @@ pub trait InferenceEngine: Send + Sync {
         embeddings[1..]
             .iter()
             .map(|doc_emb| {
-                let similarity =
-                    crate::utils::vector::cosine_similarity(query_emb, doc_emb)?;
+                let similarity = crate::utils::vector::cosine_similarity(query_emb, doc_emb)?;
                 Ok(1.0 / (1.0 + (-similarity).exp()))
             })
             .collect()

@@ -30,7 +30,11 @@ impl std::fmt::Display for PagingError {
             PagingError::LayerNotOnGpu(name) => write!(f, "layer '{}' is not on GPU", name),
             PagingError::LayerNotOnCpu(name) => write!(f, "layer '{}' is not on CPU", name),
             PagingError::OutOfGpuMemory { needed, available } => {
-                write!(f, "GPU OOM: need {} bytes, available {} bytes", needed, available)
+                write!(
+                    f,
+                    "GPU OOM: need {} bytes, available {} bytes",
+                    needed, available
+                )
             }
             PagingError::LayerNotFound(name) => write!(f, "layer '{}' not found", name),
         }
@@ -172,7 +176,10 @@ impl WeightPagingManager {
         // InTransfer → OnGpu：完成预取传输
         if location == LayerLocation::InTransfer {
             let start = Instant::now();
-            let meta = self.layers.get_mut(name).ok_or_else(|| PagingError::LayerNotFound(name.to_string()))?;
+            let meta = self
+                .layers
+                .get_mut(name)
+                .ok_or_else(|| PagingError::LayerNotFound(name.to_string()))?;
             meta.location = LayerLocation::OnGpu;
             self.current_gpu_usage += size;
             self.page_in_count += 1;
@@ -194,7 +201,9 @@ impl WeightPagingManager {
             if self.current_gpu_usage + size > self.gpu_memory_budget {
                 return Err(PagingError::OutOfGpuMemory {
                     needed: size,
-                    available: self.gpu_memory_budget.saturating_sub(self.current_gpu_usage),
+                    available: self
+                        .gpu_memory_budget
+                        .saturating_sub(self.current_gpu_usage),
                 });
             }
         }
@@ -203,7 +212,10 @@ impl WeightPagingManager {
         let start = Instant::now();
 
         // 现在安全地获取可变引用来更新状态
-        let meta = self.layers.get_mut(name).ok_or_else(|| PagingError::LayerNotFound(name.to_string()))?;
+        let meta = self
+            .layers
+            .get_mut(name)
+            .ok_or_else(|| PagingError::LayerNotFound(name.to_string()))?;
         meta.location = LayerLocation::OnGpu;
         self.current_gpu_usage += size;
         self.page_in_count += 1;
@@ -220,7 +232,10 @@ impl WeightPagingManager {
 
     /// 将层从 GPU 换出到 CPU。
     pub fn page_out(&mut self, name: &str) -> Result<(), PagingError> {
-        let meta = self.layers.get_mut(name).ok_or_else(|| PagingError::LayerNotFound(name.to_string()))?;
+        let meta = self
+            .layers
+            .get_mut(name)
+            .ok_or_else(|| PagingError::LayerNotFound(name.to_string()))?;
 
         if meta.location != LayerLocation::OnGpu {
             return Err(PagingError::LayerNotOnGpu(name.to_string()));
@@ -311,7 +326,11 @@ impl WeightPagingManager {
     pub fn stats(&self) -> PagingStats {
         PagingStats {
             gpu_usage_bytes: self.current_gpu_usage,
-            cpu_backup_count: self.layers.values().filter(|m| m.location == LayerLocation::OnCpu).count(),
+            cpu_backup_count: self
+                .layers
+                .values()
+                .filter(|m| m.location == LayerLocation::OnCpu)
+                .count(),
             page_in_count: self.page_in_count,
             page_out_count: self.page_out_count,
             total_page_in_latency_ms: self.total_page_in_latency_ms,
@@ -378,7 +397,11 @@ mod tests {
         // cold 从未被再次访问（注册后只 page_in 时的访问）
         // 驱逐候选应是 cold（第 K 次访问最老）
         let victim = mgr.evict_candidate();
-        assert_eq!(victim, Some("cold".to_string()), "cold should be evicted first");
+        assert_eq!(
+            victim,
+            Some("cold".to_string()),
+            "cold should be evicted first"
+        );
     }
 
     #[test]
@@ -473,8 +496,15 @@ mod tests {
 
         // page_in 应完成传输：InTransfer → OnGpu
         mgr.page_in("layer_1").unwrap();
-        assert!(mgr.is_on_gpu("layer_1"), "layer_1 should be OnGpu after page_in");
-        assert_eq!(mgr.gpu_usage(), 100, "GPU usage should account for transferred layer");
+        assert!(
+            mgr.is_on_gpu("layer_1"),
+            "layer_1 should be OnGpu after page_in"
+        );
+        assert_eq!(
+            mgr.gpu_usage(),
+            100,
+            "GPU usage should account for transferred layer"
+        );
     }
 
     #[test]

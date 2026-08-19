@@ -47,8 +47,12 @@ impl CudaMemoryPool {
             .map_err(|e| format!("CUDA device {} not found: {}", device_id, e))?;
 
         let ctx = unsafe {
-            cudarc::driver::result::primary_ctx::retain(device)
-                .map_err(|e| format!("CUDA context creation failed for device {}: {}", device_id, e))?
+            cudarc::driver::result::primary_ctx::retain(device).map_err(|e| {
+                format!(
+                    "CUDA context creation failed for device {}: {}",
+                    device_id, e
+                )
+            })?
         };
 
         info!("CUDA context created for device {}", device_id);
@@ -176,7 +180,10 @@ impl Drop for CudaMemoryPtr {
                 self.device_id, self.size
             );
             if let Err(e) = unsafe { cudarc::driver::result::free_sync(self.ptr) } {
-                warn!("CUDA free on drop failed for device {}: {}", self.device_id, e);
+                warn!(
+                    "CUDA free on drop failed for device {}: {}",
+                    self.device_id, e
+                );
             }
         }
     }

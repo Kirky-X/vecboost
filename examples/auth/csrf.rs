@@ -22,7 +22,10 @@ fn main() {
     println!("  enabled: {}", default_config.enabled);
     println!("  cookie_name: {}", default_config.cookie_name);
     println!("  header_name: {}", default_config.header_name);
-    println!("  protected_methods: {:?}", default_config.protected_methods);
+    println!(
+        "  protected_methods: {:?}",
+        default_config.protected_methods
+    );
     println!("  cookie_secure: {}", default_config.cookie_secure);
     println!("  cookie_domain: {:?}", default_config.cookie_domain);
 
@@ -38,11 +41,13 @@ fn main() {
     println!("  cookie_domain: {:?}", custom_config.cookie_domain);
 
     // 3. Token 生成（garrison 内部使用 OsRng + URL-safe Base64）
-    let token = generate_csrf_token()
-        .expect("CSRF token generation should not fail");
+    let token = generate_csrf_token().expect("CSRF token generation should not fail");
     println!("\n🎫 生成的 CSRF Token:");
     println!("  value: {}...", &token[..16]);
-    println!("  length: {} chars (32 bytes base64url-no-pad)", token.len());
+    println!(
+        "  length: {} chars (32 bytes base64url-no-pad)",
+        token.len()
+    );
 
     // 4. Token 校验（常量时间比较，防时序攻击）
     let same_result = validate_csrf_token(&token, &token);
@@ -57,7 +62,9 @@ fn main() {
     println!("🚫 空 token 校验: {}", empty_result);
 
     println!("\n💡 提示: 实际集成中，CSRF 中间件自动处理 Cookie/Header 的生成与校验。");
-    println!("   客户端流程: GET 获取 Cookie → POST 时从 Cookie 读取 token 放入 X-CSRF-Token Header");
+    println!(
+        "   客户端流程: GET 获取 Cookie → POST 时从 Cookie 读取 token 放入 X-CSRF-Token Header"
+    );
 
     println!("\n✅ CSRF 示例完成");
 }

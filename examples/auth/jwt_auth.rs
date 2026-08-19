@@ -32,10 +32,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let garrison_config = map_auth_config_to_garrison(&auth_config);
     let dao = GarrisonDaoOxcache::new().await?;
     let interface = VecBoostInterface::new(
-        auth_config.default_admin_username.clone().unwrap_or_else(|| "admin".to_string()),
+        auth_config
+            .default_admin_username
+            .clone()
+            .unwrap_or_else(|| "admin".to_string()),
     );
 
-    GarrisonManager::init(Arc::new(dao), Arc::new(garrison_config), Arc::new(interface))?;
+    GarrisonManager::init(
+        Arc::new(dao),
+        Arc::new(garrison_config),
+        Arc::new(interface),
+    )?;
     println!("✅ Garrison 初始化成功");
 
     // 3. 用户登录（login_id = username）

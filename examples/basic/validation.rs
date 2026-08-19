@@ -95,7 +95,11 @@ fn main() {
 
     // 合法路径
     match path_validator.validate_path(&test_file) {
-        Ok(p) => println!("  ✅ 合法路径 {} — 解析为 {}", test_file.display(), p.display()),
+        Ok(p) => println!(
+            "  ✅ 合法路径 {} — 解析为 {}",
+            test_file.display(),
+            p.display()
+        ),
         Err(e) => println!("  ❌ 合法路径 — {}", e),
     }
 
@@ -113,7 +117,7 @@ fn main() {
         "BAAI/bge-small-en-v1.5",
         "sentence-transformers/all-MiniLM-L6-v2",
         "nomic-ai/nomic-embed-text-v1.5",
-        "local-model",          // 单段格式也合法
+        "local-model", // 单段格式也合法
     ];
     for id in &valid_ids {
         let valid = vecboost::utils::hf_hub::is_valid_hf_repo_id(id);
@@ -121,11 +125,11 @@ fn main() {
     }
 
     let invalid_ids = [
-        "",                    // 空字符串
-        "/leading-slash",      // 以 / 开头
-        "trailing-slash/",     // 以 / 结尾
-        "org//model",          // 双斜杠
-        "a/b/c",               // 超过两段
+        "",                // 空字符串
+        "/leading-slash",  // 以 / 开头
+        "trailing-slash/", // 以 / 结尾
+        "org//model",      // 双斜杠
+        "a/b/c",           // 超过两段
     ];
     for id in &invalid_ids {
         let valid = vecboost::utils::hf_hub::is_valid_hf_repo_id(id);

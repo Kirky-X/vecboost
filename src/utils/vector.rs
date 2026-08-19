@@ -154,9 +154,10 @@ pub fn calculate_similarity_batch(
 pub fn normalize_l2(v: &mut [f32]) -> Result<(), VecboostError> {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm <= 1e-12 {
-        return Err(VecboostError::InvalidInput(
-            format!("cannot normalize near-zero vector (L2 norm = {:.2e})", norm),
-        ));
+        return Err(VecboostError::InvalidInput(format!(
+            "cannot normalize near-zero vector (L2 norm = {:.2e})",
+            norm
+        )));
     }
     for x in v.iter_mut() {
         *x /= norm;
@@ -236,8 +237,9 @@ impl std::str::FromStr for TaskType {
                 Ok(TaskType::SemanticSearch)
             }
             _ => Err(format!(
-                "Unknown task type: {}. Valid: retrieval, clustering, classification, semantic_search"
-            , s)),
+                "Unknown task type: {}. Valid: retrieval, clustering, classification, semantic_search",
+                s
+            )),
         }
     }
 }
@@ -403,7 +405,8 @@ mod similarity_tests {
         let c2: Vec<f32> = vec![0.0, 1.0];
         let c3: Vec<f32> = vec![-1.0, 0.0];
         let candidates: Vec<&[f32]> = vec![&c1, &c2, &c3];
-        let results = calculate_similarity_batch(&query, &candidates, SimilarityMetric::Cosine).unwrap();
+        let results =
+            calculate_similarity_batch(&query, &candidates, SimilarityMetric::Cosine).unwrap();
         assert_eq!(results.len(), 3);
         assert!((results[0] - 1.0).abs() < 1e-6);
         assert!((results[1] - 0.0).abs() < 1e-6);
@@ -414,7 +417,8 @@ mod similarity_tests {
     fn test_calculate_similarity_batch_empty_candidates() {
         let query = vec![1.0, 0.0];
         let candidates: Vec<&[f32]> = vec![];
-        let results = calculate_similarity_batch(&query, &candidates, SimilarityMetric::Cosine).unwrap();
+        let results =
+            calculate_similarity_batch(&query, &candidates, SimilarityMetric::Cosine).unwrap();
         assert!(results.is_empty());
     }
 
@@ -500,7 +504,10 @@ mod similarity_tests {
     fn test_information_retention_rate_full_dim() {
         let v: Vec<f32> = (0..1024).map(|i| (i as f32) * 0.01).collect();
         let rate = information_retention_rate(&v, 1024);
-        assert!((rate - 1.0).abs() < 1e-6, "full dim should retain all energy");
+        assert!(
+            (rate - 1.0).abs() < 1e-6,
+            "full dim should retain all energy"
+        );
     }
 
     #[test]
@@ -508,7 +515,11 @@ mod similarity_tests {
         // 均匀分布向量：前 512 维应保留约 50% 能量
         let v: Vec<f32> = (0..1024).map(|_| 1.0).collect();
         let rate = information_retention_rate(&v, 512);
-        assert!((rate - 0.5).abs() < 1e-6, "uniform vector half dim should be ~0.5, got {}", rate);
+        assert!(
+            (rate - 0.5).abs() < 1e-6,
+            "uniform vector half dim should be ~0.5, got {}",
+            rate
+        );
     }
 
     #[test]
@@ -525,14 +536,31 @@ mod similarity_tests {
     #[test]
     fn test_matryoshka_energy_distribution() {
         // 生成 1024 维向量，验证截断到不同维度的能量保留率递增
-        let v: Vec<f32> = (0..1024).map(|i| ((i as f32) * 0.001).sin() + 1.0).collect();
+        let v: Vec<f32> = (0..1024)
+            .map(|i| ((i as f32) * 0.001).sin() + 1.0)
+            .collect();
         let rate_128 = information_retention_rate(&v, 128);
         let rate_256 = information_retention_rate(&v, 256);
         let rate_512 = information_retention_rate(&v, 512);
         let rate_768 = information_retention_rate(&v, 768);
-        assert!(rate_128 < rate_256, "128 < 256: {} vs {}", rate_128, rate_256);
-        assert!(rate_256 < rate_512, "256 < 512: {} vs {}", rate_256, rate_512);
-        assert!(rate_512 < rate_768, "512 < 768: {} vs {}", rate_512, rate_768);
+        assert!(
+            rate_128 < rate_256,
+            "128 < 256: {} vs {}",
+            rate_128,
+            rate_256
+        );
+        assert!(
+            rate_256 < rate_512,
+            "256 < 512: {} vs {}",
+            rate_256,
+            rate_512
+        );
+        assert!(
+            rate_512 < rate_768,
+            "512 < 768: {} vs {}",
+            rate_512,
+            rate_768
+        );
     }
 
     // ========================================================================
@@ -541,11 +569,26 @@ mod similarity_tests {
 
     #[test]
     fn test_task_type_from_str() {
-        assert_eq!("retrieval".parse::<TaskType>().unwrap(), TaskType::Retrieval);
-        assert_eq!("clustering".parse::<TaskType>().unwrap(), TaskType::Clustering);
-        assert_eq!("classification".parse::<TaskType>().unwrap(), TaskType::Classification);
-        assert_eq!("semantic_search".parse::<TaskType>().unwrap(), TaskType::SemanticSearch);
-        assert_eq!("semantic-search".parse::<TaskType>().unwrap(), TaskType::SemanticSearch);
+        assert_eq!(
+            "retrieval".parse::<TaskType>().unwrap(),
+            TaskType::Retrieval
+        );
+        assert_eq!(
+            "clustering".parse::<TaskType>().unwrap(),
+            TaskType::Clustering
+        );
+        assert_eq!(
+            "classification".parse::<TaskType>().unwrap(),
+            TaskType::Classification
+        );
+        assert_eq!(
+            "semantic_search".parse::<TaskType>().unwrap(),
+            TaskType::SemanticSearch
+        );
+        assert_eq!(
+            "semantic-search".parse::<TaskType>().unwrap(),
+            TaskType::SemanticSearch
+        );
         assert!("invalid".parse::<TaskType>().is_err());
     }
 

@@ -31,10 +31,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let garrison_config = map_auth_config_to_garrison(&auth_config);
     let dao = GarrisonDaoOxcache::new().await?;
     let interface = VecBoostInterface::new(
-        auth_config.default_admin_username.clone().unwrap_or_else(|| "admin".to_string()),
+        auth_config
+            .default_admin_username
+            .clone()
+            .unwrap_or_else(|| "admin".to_string()),
     );
 
-    GarrisonManager::init(Arc::new(dao), Arc::new(garrison_config), Arc::new(interface))?;
+    GarrisonManager::init(
+        Arc::new(dao),
+        Arc::new(garrison_config),
+        Arc::new(interface),
+    )?;
     println!("✅ Garrison 初始化成功");
 
     // 2. 用户登录获取原始 token
@@ -62,8 +69,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let old_valid = GarrisonUtil::get_login_id_by_token(&original_token).await?;
     let new_valid = GarrisonUtil::get_login_id_by_token(&new_token).await?;
     println!("\n📊 Token 状态:");
-    println!("  旧 token: {}", if old_valid.is_none() { "已失效 ✅" } else { "仍有效 ❌" });
-    println!("  新 token: {}", if new_valid.is_some() { "有效 ✅" } else { "已失效 ❌" });
+    println!(
+        "  旧 token: {}",
+        if old_valid.is_none() {
+            "已失效 ✅"
+        } else {
+            "仍有效 ❌"
+        }
+    );
+    println!(
+        "  新 token: {}",
+        if new_valid.is_some() {
+            "有效 ✅"
+        } else {
+            "已失效 ❌"
+        }
+    );
     println!("  tokens 不同: {}", original_token != new_token);
 
     println!("\n💡 提示: garrison 的 token 刷新策略是「创建新会话 + 撤销旧会话」，");

@@ -52,7 +52,13 @@ impl RerankService {
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
         model_config: Option<ModelConfig>,
     ) -> Self {
-        Self::build(engine, model_config, Arc::new(OxCacheBackend::disabled()), None, None)
+        Self::build(
+            engine,
+            model_config,
+            Arc::new(OxCacheBackend::disabled()),
+            None,
+            None,
+        )
     }
 
     #[allow(private_interfaces)]
@@ -148,11 +154,8 @@ impl RerankService {
 
             if !uncached_docs.is_empty() {
                 // 对未命中的 document 批量调用引擎
-                let uncached_scores = common::handle_oom_fallback(
-                    &engine,
-                    &self.model_config,
-                    &None,
-                    || {
+                let uncached_scores =
+                    common::handle_oom_fallback(&engine, &self.model_config, &None, || {
                         let engine = engine.clone();
                         let query = query.clone();
                         let docs = uncached_docs.clone();
@@ -160,9 +163,8 @@ impl RerankService {
                             let engine = engine.read().await;
                             engine.rerank_batch(&query, &docs)
                         }
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
 
                 // 存入缓存并收集结果
                 for (idx, &score) in uncached_indices.iter().zip(uncached_scores.iter()) {
@@ -177,20 +179,15 @@ impl RerankService {
             scores.into_iter().map(|(_, s)| s).collect()
         } else {
             // 缓存禁用：直接批量调用引擎
-            common::handle_oom_fallback(
-                &engine,
-                &self.model_config,
-                &None,
-                || {
-                    let engine = engine.clone();
-                    let query = query.clone();
-                    let docs = documents_vec.clone();
-                    async move {
-                        let engine = engine.read().await;
-                        engine.rerank_batch(&query, &docs)
-                    }
-                },
-            )
+            common::handle_oom_fallback(&engine, &self.model_config, &None, || {
+                let engine = engine.clone();
+                let query = query.clone();
+                let docs = documents_vec.clone();
+                async move {
+                    let engine = engine.read().await;
+                    engine.rerank_batch(&query, &docs)
+                }
+            })
             .await?
         };
 
@@ -212,10 +209,7 @@ impl RerankService {
             .collect();
 
         // 按分数降序排序（NaN 值排到末尾，保证排序稳定性）
-        results.sort_by(|a, b| {
-            b.score
-                .total_cmp(&a.score)
-        });
+        results.sort_by(|a, b| b.score.total_cmp(&a.score));
 
         // 应用 top_k 截断
         if let Some(top_k) = req.top_k {
@@ -271,7 +265,10 @@ mod tests {
             query: &str,
             documents: &[String],
         ) -> Result<Vec<f32>, VecboostError> {
-            documents.iter().map(|doc| self.rerank(query, doc)).collect()
+            documents
+                .iter()
+                .map(|doc| self.rerank(query, doc))
+                .collect()
         }
 
         fn supports_rerank(&self) -> bool {
@@ -373,7 +370,9 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             VecboostError::InvalidInput(msg) => {
-                assert!(msg.to_lowercase().contains("empty") || msg.to_lowercase().contains("text"));
+                assert!(
+                    msg.to_lowercase().contains("empty") || msg.to_lowercase().contains("text")
+                );
             }
             other => panic!("Expected InvalidInput, got: {:?}", other),
         }
@@ -396,7 +395,9 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             VecboostError::InvalidInput(msg) => {
-                assert!(msg.to_lowercase().contains("empty") || msg.to_lowercase().contains("document"));
+                assert!(
+                    msg.to_lowercase().contains("empty") || msg.to_lowercase().contains("document")
+                );
             }
             other => panic!("Expected InvalidInput, got: {:?}", other),
         }

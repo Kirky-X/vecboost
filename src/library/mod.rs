@@ -40,6 +40,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::RerankConfig;
 use crate::config::model::ModelConfig;
 use crate::domain::{
     BatchEmbedRequest, BatchEmbedResponse, EmbedRequest, EmbedResponse, RerankRequest,
@@ -50,7 +51,6 @@ use crate::error::VecboostError;
 use crate::registry::{EmbeddingModule, RerankModule};
 use crate::service::embedding::EmbeddingService;
 use crate::service::rerank::RerankService;
-use crate::RerankConfig;
 
 // ---------------------------------------------------------------------------
 // LibraryConfig
@@ -143,23 +143,20 @@ impl VecBoostLibrary {
         kit.set_config(embedding_service);
         kit.set_config(rerank_service);
         kit.set_config(config.rerank_config.unwrap_or_default());
-        kit
-            .register::<EmbeddingModule>()
-            .map_err(|e| VecboostError::InternalError(format!("Failed to register EmbeddingModule: {}", e)))?;
-        kit
-            .register::<RerankModule>()
-            .map_err(|e| VecboostError::InternalError(format!("Failed to register RerankModule: {}", e)))?;
+        kit.register::<EmbeddingModule>().map_err(|e| {
+            VecboostError::InternalError(format!("Failed to register EmbeddingModule: {}", e))
+        })?;
+        kit.register::<RerankModule>().map_err(|e| {
+            VecboostError::InternalError(format!("Failed to register RerankModule: {}", e))
+        })?;
         kit.register_lifecycle::<EmbeddingModule>();
         kit.register_lifecycle::<RerankModule>();
 
-        let kit = kit
-            .build()
-            .await
-            .map_err(|e| VecboostError::InternalError(format!("Failed to build AsyncKit: {}", e)))?;
+        let kit = kit.build().await.map_err(|e| {
+            VecboostError::InternalError(format!("Failed to build AsyncKit: {}", e))
+        })?;
 
-        Ok(Self {
-            kit: Arc::new(kit),
-        })
+        Ok(Self { kit: Arc::new(kit) })
     }
 
     // -----------------------------------------------------------------------
@@ -168,10 +165,9 @@ impl VecBoostLibrary {
 
     /// 异步向量化：将单条文本转换为向量表示
     pub async fn embed(&self, text: &str) -> Result<EmbedResponse, VecboostError> {
-        let service = self
-            .kit
-            .require::<EmbeddingModule>()
-            .map_err(|e| VecboostError::InternalError(format!("Failed to require EmbeddingModule: {}", e)))?;
+        let service = self.kit.require::<EmbeddingModule>().map_err(|e| {
+            VecboostError::InternalError(format!("Failed to require EmbeddingModule: {}", e))
+        })?;
         let svc = service.read().await;
         svc.process_text(
             EmbedRequest {
@@ -184,14 +180,10 @@ impl VecBoostLibrary {
     }
 
     /// 异步批量向量化：将多条文本转换为向量表示
-    pub async fn embed_batch(
-        &self,
-        texts: &[String],
-    ) -> Result<BatchEmbedResponse, VecboostError> {
-        let service = self
-            .kit
-            .require::<EmbeddingModule>()
-            .map_err(|e| VecboostError::InternalError(format!("Failed to require EmbeddingModule: {}", e)))?;
+    pub async fn embed_batch(&self, texts: &[String]) -> Result<BatchEmbedResponse, VecboostError> {
+        let service = self.kit.require::<EmbeddingModule>().map_err(|e| {
+            VecboostError::InternalError(format!("Failed to require EmbeddingModule: {}", e))
+        })?;
         let svc = service.read().await;
         svc.process_batch(
             BatchEmbedRequest {
@@ -211,15 +203,10 @@ impl VecBoostLibrary {
         documents: &[String],
         top_k: Option<usize>,
     ) -> Result<RerankResponse, VecboostError> {
-        let service = self
-            .kit
-            .require::<RerankModule>()
-            .map_err(|e| VecboostError::InternalError(format!("Failed to require RerankModule: {}", e)))?;
-        let rerank_config = self
-            .kit
-            .config::<RerankConfig>()
-            .ok()
-            .unwrap_or_default();
+        let service = self.kit.require::<RerankModule>().map_err(|e| {
+            VecboostError::InternalError(format!("Failed to require RerankModule: {}", e))
+        })?;
+        let rerank_config = self.kit.config::<RerankConfig>().ok().unwrap_or_default();
         let svc = service.read().await;
         svc.process_rerank(
             RerankRequest {
@@ -248,10 +235,7 @@ impl VecBoostLibrary {
     }
 
     /// 同步批量向量化：将多条文本转换为向量表示
-    pub fn embed_batch_sync(
-        &self,
-        texts: &[String],
-    ) -> Result<BatchEmbedResponse, VecboostError> {
+    pub fn embed_batch_sync(&self, texts: &[String]) -> Result<BatchEmbedResponse, VecboostError> {
         let future = self.embed_batch(texts);
         Self::block_on_future(future)
     }
@@ -372,15 +356,10 @@ impl VecBoostModuleBuilder {
     /// 4. 注册对应的 `EmbeddingModule` / `RerankModule` + lifecycle hooks
     ///
     /// 调用后外部项目继续注册自己的其他模块，最终调用 `kit.build().await`。
-    pub async fn build(
-        self,
-        kit: &mut trait_kit::AsyncKit,
-    ) -> Result<(), VecboostError> {
+    pub async fn build(self, kit: &mut trait_kit::AsyncKit) -> Result<(), VecboostError> {
         // 1. 创建共享推理引擎
-        let engine = EngineFactory::create(
-            self.model_config.engine_type.clone(),
-            &self.model_config,
-        )?;
+        let engine =
+            EngineFactory::create(self.model_config.engine_type.clone(), &self.model_config)?;
         let engine: Arc<RwLock<AnyEngine>> = Arc::new(RwLock::new(engine));
 
         // 2. 按选择构建并注册服务
@@ -399,10 +378,7 @@ impl VecBoostModuleBuilder {
             };
             kit.set_config(embedding_service);
             kit.register::<EmbeddingModule>().map_err(|e| {
-                VecboostError::InternalError(format!(
-                    "Failed to register EmbeddingModule: {}",
-                    e
-                ))
+                VecboostError::InternalError(format!("Failed to register EmbeddingModule: {}", e))
             })?;
             kit.register_lifecycle::<EmbeddingModule>();
         }
@@ -415,10 +391,7 @@ impl VecBoostModuleBuilder {
             kit.set_config(rerank_service);
             kit.set_config(self.rerank_config.unwrap_or_default());
             kit.register::<RerankModule>().map_err(|e| {
-                VecboostError::InternalError(format!(
-                    "Failed to register RerankModule: {}",
-                    e
-                ))
+                VecboostError::InternalError(format!("Failed to register RerankModule: {}", e))
             })?;
             kit.register_lifecycle::<RerankModule>();
         }
@@ -456,10 +429,7 @@ mod tests {
         }
 
         fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
-            Ok(texts
-                .iter()
-                .map(|_| vec![1.0; self.dimension])
-                .collect())
+            Ok(texts.iter().map(|_| vec![1.0; self.dimension]).collect())
         }
 
         fn precision(&self) -> &Precision {
@@ -502,10 +472,8 @@ mod tests {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockEngine::new(128)));
 
-        let embedding_service =
-            Arc::new(RwLock::new(EmbeddingService::new(engine.clone(), None)));
-        let rerank_service =
-            Arc::new(RwLock::new(RerankService::new(engine, None)));
+        let embedding_service = Arc::new(RwLock::new(EmbeddingService::new(engine.clone(), None)));
+        let rerank_service = Arc::new(RwLock::new(RerankService::new(engine, None)));
 
         let mut kit = trait_kit::AsyncKit::new();
         kit.set_config(embedding_service);
@@ -515,9 +483,7 @@ mod tests {
         kit.register::<RerankModule>().unwrap();
         let kit = kit.build().await.unwrap();
 
-        VecBoostLibrary {
-            kit: Arc::new(kit),
-        }
+        VecBoostLibrary { kit: Arc::new(kit) }
     }
 
     // -------------------------------------------------------------------------
@@ -582,11 +548,7 @@ mod tests {
         let response = lib
             .rerank(
                 "test",
-                &[
-                    "a".to_string(),
-                    "bb".to_string(),
-                    "ccc".to_string(),
-                ],
+                &["a".to_string(), "bb".to_string(), "ccc".to_string()],
                 Some(2),
             )
             .await
@@ -675,8 +637,7 @@ mod tests {
         }
 
         if with_rerank {
-            let rerank_service =
-                Arc::new(RwLock::new(RerankService::new(engine, None)));
+            let rerank_service = Arc::new(RwLock::new(RerankService::new(engine, None)));
             kit.set_config(rerank_service);
             kit.set_config(RerankConfig::default());
             kit.register::<RerankModule>().unwrap();

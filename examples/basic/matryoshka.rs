@@ -16,8 +16,8 @@
 //!
 //! 运行: cargo run -p vecboost-examples --bin matryoshka
 
-use vecboost::{TaskType, information_retention_rate, recommended_dimension};
 use vecboost::utils::{normalize_l2, truncate_vector};
+use vecboost::{TaskType, information_retention_rate, recommended_dimension};
 
 fn main() {
     println!("🪆 Matryoshka 维度约简示例");
@@ -66,7 +66,10 @@ fn main() {
     let original_norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
     let truncated_norm: f32 = truncated.iter().map(|x| x * x).sum::<f32>().sqrt();
     println!("  截断前 L2 范数: {:.4}", original_norm);
-    println!("  截断后 L2 范数: {:.4}（需要重新归一化！）", truncated_norm);
+    println!(
+        "  截断后 L2 范数: {:.4}（需要重新归一化！）",
+        truncated_norm
+    );
 
     // L2 归一化 — 截断后必须执行，否则余弦相似度计算不正确
     normalize_l2(&mut truncated);
@@ -92,10 +95,7 @@ fn main() {
     println!("\n📊 存储节省对比:");
     let full_bytes = full_dimension * 4; // f32 = 4 bytes
     let reduced_bytes = target_dim * 4;
-    println!(
-        "  原始 {} 维: {} bytes/向量",
-        full_dimension, full_bytes
-    );
+    println!("  原始 {} 维: {} bytes/向量", full_dimension, full_bytes);
     println!(
         "  约简 {} 维: {} bytes/向量（节省 {}%）",
         target_dim,

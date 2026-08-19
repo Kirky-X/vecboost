@@ -69,9 +69,7 @@ impl PipelineScheduler {
             }
             ServiceRequest::Rerank(rerank_req) => {
                 let rerank_service = self.rerank_service.as_ref().ok_or_else(|| {
-                    VecboostError::InternalError(
-                        "Rerank service not configured".to_string(),
-                    )
+                    VecboostError::InternalError("Rerank service not configured".to_string())
                 })?;
                 let service = rerank_service.read().await;
                 let resp = service.process_rerank(rerank_req, 100, 8192).await?;
@@ -812,7 +810,10 @@ mod tests {
             query: &str,
             documents: &[String],
         ) -> Result<Vec<f32>, VecboostError> {
-            documents.iter().map(|doc| self.rerank(query, doc)).collect()
+            documents
+                .iter()
+                .map(|doc| self.rerank(query, doc))
+                .collect()
         }
         fn supports_rerank(&self) -> bool {
             true

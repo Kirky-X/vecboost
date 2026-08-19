@@ -41,18 +41,15 @@ fn get_sanitize_patterns() -> &'static Vec<(Regex, &'static str)> {
                 "token [ID]",
             ),
             (
-                Regex::new(r#"at position \d+"#)
-                    .expect("sanitize pattern: valid position regex"),
+                Regex::new(r#"at position \d+"#).expect("sanitize pattern: valid position regex"),
                 "at position [REDACTED]",
             ),
             (
-                Regex::new(r#"\.unwrap\(\)"#)
-                    .expect("sanitize pattern: valid unwrap regex"),
+                Regex::new(r#"\.unwrap\(\)"#).expect("sanitize pattern: valid unwrap regex"),
                 "[INTERNAL_ERROR]",
             ),
             (
-                Regex::new(r#"expect\([^)]+\)"#)
-                    .expect("sanitize pattern: valid expect regex"),
+                Regex::new(r#"expect\([^)]+\)"#).expect("sanitize pattern: valid expect regex"),
                 "[INTERNAL_ERROR]",
             ),
         ]
@@ -362,7 +359,6 @@ mod tests {
         let sanitized = sanitize_error_message("");
         assert_eq!(sanitized, "");
     }
-
 
     // -------------------------------------------------------------------------
     // IntoResponse 测试

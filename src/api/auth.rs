@@ -83,7 +83,7 @@ pub async fn forge_login(
     } else {
         log::warn!(
             "No admin password configured — issuing token for user '{}' without password verification",
-            &req.username
+            req.username
         );
     }
 
@@ -170,7 +170,7 @@ pub async fn forge_refresh(
     if let Err(e) = GarrisonUtil::revoke_token(&req.refresh_token).await {
         log::warn!(
             "Failed to revoke old refresh token during refresh for login_id '{}': {}",
-            &login_id,
+            login_id,
             e
         );
     }

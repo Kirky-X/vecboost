@@ -611,7 +611,7 @@ impl CandleEngine {
         // 如果已触发 fallback，检查是否可以恢复
         if self.fallback_triggered {
             // 内存压力解除后，尝试恢复到 GPU
-            if self.check_memory_pressure(50).await == false {
+            if !self.check_memory_pressure(50).await {
                 log::info!(
                     "Memory pressure cleared, resetting fallback flag — GPU may be retried on next model load"
                 );

@@ -59,7 +59,7 @@ use crate::service::rerank::RerankService;
 /// Library 模式配置
 ///
 /// 封装模型配置和可选的缓存/重排序参数，用于初始化 `VecBoostLibrary`。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LibraryConfig {
     /// 模型配置（引擎类型、模型路径、设备等）
     pub model_config: ModelConfig,
@@ -67,16 +67,6 @@ pub struct LibraryConfig {
     pub cache_size: usize,
     /// 重排序配置（None = 使用默认值）
     pub rerank_config: Option<RerankConfig>,
-}
-
-impl Default for LibraryConfig {
-    fn default() -> Self {
-        Self {
-            model_config: ModelConfig::default(),
-            cache_size: 0,
-            rerank_config: None,
-        }
-    }
 }
 
 impl LibraryConfig {

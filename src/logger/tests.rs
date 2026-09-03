@@ -32,7 +32,6 @@ use std::sync::Arc;
 
 use tracing_subscriber::prelude::*;
 use trait_kit::AsyncKit;
-use trait_kit::prelude::*;
 
 use super::LoggerModule;
 

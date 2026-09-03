@@ -33,6 +33,7 @@ pub async fn create_key_store(config: &SecurityConfig) -> Result<Box<dyn KeyStor
 mod tests {
     use super::*;
     use crate::security::KeyType;
+    #[cfg(feature = "auth")]
     use tempfile::tempdir;
 
     #[tokio::test]

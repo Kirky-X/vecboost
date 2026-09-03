@@ -33,10 +33,10 @@ class TestEmbeddingService:
     def embed(cls, text: str) -> Dict[str, Any]:
         """生成模拟的文本向量"""
         dimension = cls.get_dimension()
-        seed = int(hashlib.md5(text.encode()).hexdigest()[:8], 16) % (2**31)
+        seed = int(hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()[:8], 16) % (2**31)
         random.seed(seed)
 
-        vector = [random.uniform(-1, 1) for _ in range(dimension)]
+        vector = [random.uniform(-1, 1) for _ in range(dimension)]  # nosec B311
         magnitude = sum(v**2 for v in vector) ** 0.5
         if magnitude > 0:
             vector = [v / magnitude for v in vector]

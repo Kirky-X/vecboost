@@ -1,0 +1,3 @@
+[tool.bandit]
+exclude_dirs = ["tests/perf/test_api.py", "tests/perf/test_server_integration.py", "tests/perf/client_factory.py"]
+skips = []

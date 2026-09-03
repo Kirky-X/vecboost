@@ -122,6 +122,14 @@ impl AppConfig {
     }
 }
 
+// P0 吸收: trait-kit reload — 使 AppConfig 可通过 Kit::reload_config::<AppConfig>() 热重载
+// 依赖 trait-kit `reload` + `confers` feature (Cargo.toml:40 已启用)，底层复用 confers 的 load_via_confers
+impl trait_kit::kit::Configurable for AppConfig {
+    fn load() -> Result<Self, Box<dyn std::error::Error + Send + 'static>> {
+        Self::load_via_confers().map_err(|e| Box::new(e) as _)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::AppConfig;

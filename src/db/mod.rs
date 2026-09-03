@@ -130,7 +130,12 @@ mod tests {
             .await
             .expect("Failed to create in-memory SQLite pool");
         let status = pool.inner().status();
-        assert_eq!(status.total, 0, "New pool should have 0 connections");
+        // pool-warmup 预创建 min_connections 个连接;无 warmup 时为 0
+        assert!(
+            status.total > 0,
+            "Pool should have pre-created connections (pool-warmup enabled), got {}",
+            status.total
+        );
     }
 
     #[tokio::test]

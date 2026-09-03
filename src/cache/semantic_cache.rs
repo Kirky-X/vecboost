@@ -74,7 +74,10 @@ impl SemanticCache {
     }
 
     /// 创建启用的语义缓存。
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Test helper / trait dispatch / inventory, not directly called"
+    )]
     pub(crate) fn new(
         exact_cache: Arc<OxCacheBackend>,
         similarity_threshold: f32,

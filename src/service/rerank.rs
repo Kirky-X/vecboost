@@ -19,7 +19,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Test helper / trait dispatch / inventory, not directly called"
+)]
 pub struct RerankService {
     engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
     validator: InputValidator,
@@ -212,10 +215,10 @@ impl RerankService {
         results.sort_by(|a, b| b.score.total_cmp(&a.score));
 
         // 应用 top_k 截断
-        if let Some(top_k) = req.top_k {
-            if top_k < results.len() {
-                results.truncate(top_k);
-            }
+        if let Some(top_k) = req.top_k
+            && top_k < results.len()
+        {
+            results.truncate(top_k);
         }
 
         let processing_time_ms = start.elapsed().as_millis();

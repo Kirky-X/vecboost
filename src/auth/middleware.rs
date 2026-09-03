@@ -276,13 +276,12 @@ pub async fn auth_rate_limit_middleware(
     if let Ok(prom_collector) = state
         .kit
         .require::<crate::registry::PrometheusCollectorModule>()
+        && let Some(prom) = prom_collector.as_ref()
     {
-        if let Some(prom) = prom_collector.as_ref() {
-            if allowed {
-                prom.record_rate_limit_allowed("ip");
-            } else {
-                prom.record_rate_limit_denied("ip");
-            }
+        if allowed {
+            prom.record_rate_limit_allowed("ip");
+        } else {
+            prom.record_rate_limit_denied("ip");
         }
     }
 

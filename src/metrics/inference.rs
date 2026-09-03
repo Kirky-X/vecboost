@@ -70,7 +70,10 @@ impl InferenceCollector {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Test helper / trait dispatch / inventory, not directly called"
+    )]
     pub(crate) fn with_memory_monitor(memory_monitor: Arc<MemoryMonitor>) -> Self {
         let mut collector = Self::new();
         collector.memory_monitor = memory_monitor;

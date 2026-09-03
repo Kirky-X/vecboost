@@ -70,10 +70,10 @@ impl OxCacheBackend {
             return None;
         }
         // T030: Bloom filter negative check
-        if let Some(bloom) = &self.bloom {
-            if !bloom.contains(key) {
-                return None;
-            }
+        if let Some(bloom) = &self.bloom
+            && !bloom.contains(key)
+        {
+            return None;
         }
         let cache = self.cache.as_ref()?;
         let raw = cache.get(&key.to_string()).await.ok().flatten()?;
@@ -117,7 +117,10 @@ impl OxCacheBackend {
     }
 
     /// 删除 key,返回是否命中。
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Test helper / trait dispatch / inventory, not directly called"
+    )]
     pub async fn remove(&self, key: &str) -> bool {
         if !self.enabled {
             return false;
@@ -129,7 +132,10 @@ impl OxCacheBackend {
     }
 
     /// 清空缓存,同时重置 bloom filter。
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Test helper / trait dispatch / inventory, not directly called"
+    )]
     pub async fn clear(&self) {
         if let Some(cache) = &self.cache {
             let _ = cache.clear().await;
@@ -140,7 +146,10 @@ impl OxCacheBackend {
     }
 
     /// 返回当前条目数。
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Test helper / trait dispatch / inventory, not directly called"
+    )]
     pub async fn len(&self) -> usize {
         match &self.cache {
             Some(cache) => cache.len().await.map(|n| n as usize).unwrap_or(0),
@@ -149,7 +158,10 @@ impl OxCacheBackend {
     }
 
     /// 返回缓存是否为空。
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Test helper / trait dispatch / inventory, not directly called"
+    )]
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
     }
@@ -225,7 +237,7 @@ fn bytes_to_f32_vec(bytes: Vec<u8>) -> Vec<f32> {
     let mut bytes = bytes;
     let remainder = bytes.len() % 4;
     if remainder != 0 {
-        bytes.extend(std::iter::repeat(0u8).take(4 - remainder));
+        bytes.extend(std::iter::repeat_n(0u8, 4 - remainder));
     }
     let f32_count = bytes.len() / 4;
     let ptr = bytes.as_ptr();

@@ -106,45 +106,39 @@ impl LimiteronAdapter {
         }
 
         // 2. per-key 维度检查
-        if self.settings.ip_requests_per_minute > 0 {
-            if let Some(ip) = &context.client_ip {
-                if !self
-                    .check_per_key(&self.ip_buckets, ip, self.settings.ip_requests_per_minute)
-                    .await
-                {
-                    return false;
-                }
-            }
+        if self.settings.ip_requests_per_minute > 0
+            && let Some(ip) = &context.client_ip
+            && !self
+                .check_per_key(&self.ip_buckets, ip, self.settings.ip_requests_per_minute)
+                .await
+        {
+            return false;
         }
 
-        if self.settings.user_requests_per_minute > 0 {
-            if let Some(user_id) = &context.user_id {
-                if !self
-                    .check_per_key(
-                        &self.user_buckets,
-                        user_id,
-                        self.settings.user_requests_per_minute,
-                    )
-                    .await
-                {
-                    return false;
-                }
-            }
+        if self.settings.user_requests_per_minute > 0
+            && let Some(user_id) = &context.user_id
+            && !self
+                .check_per_key(
+                    &self.user_buckets,
+                    user_id,
+                    self.settings.user_requests_per_minute,
+                )
+                .await
+        {
+            return false;
         }
 
-        if self.settings.api_key_requests_per_minute > 0 {
-            if let Some(api_key) = &context.api_key {
-                if !self
-                    .check_per_key(
-                        &self.api_key_buckets,
-                        api_key,
-                        self.settings.api_key_requests_per_minute,
-                    )
-                    .await
-                {
-                    return false;
-                }
-            }
+        if self.settings.api_key_requests_per_minute > 0
+            && let Some(api_key) = &context.api_key
+            && !self
+                .check_per_key(
+                    &self.api_key_buckets,
+                    api_key,
+                    self.settings.api_key_requests_per_minute,
+                )
+                .await
+        {
+            return false;
         }
 
         true

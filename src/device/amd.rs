@@ -262,17 +262,16 @@ fn query_amd_driver_version() -> String {
     if let Ok(output) = std::process::Command::new("rocm-smi")
         .arg("--showdriverversion")
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout).to_string();
-            // 解析 "Driver version: X.Y.Z" 格式
-            for line in text.lines() {
-                if let Some(ver) = line.strip_prefix("Driver version:") {
-                    let trimmed = ver.trim().to_string();
-                    if !trimmed.is_empty() {
-                        info!("AMD 驱动版本 (rocm-smi): {}", trimmed);
-                        return trimmed;
-                    }
+        let text = String::from_utf8_lossy(&output.stdout).to_string();
+        // 解析 "Driver version: X.Y.Z" 格式
+        for line in text.lines() {
+            if let Some(ver) = line.strip_prefix("Driver version:") {
+                let trimmed = ver.trim().to_string();
+                if !trimmed.is_empty() {
+                    info!("AMD 驱动版本 (rocm-smi): {}", trimmed);
+                    return trimmed;
                 }
             }
         }
@@ -292,19 +291,18 @@ fn query_rocm_vram(index: usize) -> u64 {
     if let Ok(output) = std::process::Command::new("rocm-smi")
         .args(["--showmeminfo", "vram", "--json"])
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            // rocm-smi --json 输出格式: {"card0": {"VRAM Total Memory (MiB)": "16384", ...}}
-            // 简单解析: 查找 "VRAM Total" 相关字段
-            for line in text.lines() {
-                if line.contains("VRAM Total") || line.contains("Total Memory") {
-                    // 尝试提取数字 (MiB)
-                    if let Some(mib) = extract_number_from_line(line) {
-                        let bytes = mib * 1024 * 1024;
-                        info!("ROCm VRAM (rocm-smi, device {}): {} MB", index, mib);
-                        return bytes;
-                    }
+        let text = String::from_utf8_lossy(&output.stdout);
+        // rocm-smi --json 输出格式: {"card0": {"VRAM Total Memory (MiB)": "16384", ...}}
+        // 简单解析: 查找 "VRAM Total" 相关字段
+        for line in text.lines() {
+            if line.contains("VRAM Total") || line.contains("Total Memory") {
+                // 尝试提取数字 (MiB)
+                if let Some(mib) = extract_number_from_line(line) {
+                    let bytes = mib * 1024 * 1024;
+                    info!("ROCm VRAM (rocm-smi, device {}): {} MB", index, mib);
+                    return bytes;
                 }
             }
         }
@@ -321,16 +319,15 @@ fn query_rocm_version() -> Option<String> {
     if let Ok(output) = std::process::Command::new("rocm-smi")
         .arg("--showdriverversion")
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            for line in text.lines() {
-                if let Some(ver) = line.strip_prefix("ROCm version:") {
-                    let trimmed = ver.trim().to_string();
-                    if !trimmed.is_empty() {
-                        info!("ROCm 版本: {}", trimmed);
-                        return Some(trimmed);
-                    }
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            if let Some(ver) = line.strip_prefix("ROCm version:") {
+                let trimmed = ver.trim().to_string();
+                if !trimmed.is_empty() {
+                    info!("ROCm 版本: {}", trimmed);
+                    return Some(trimmed);
                 }
             }
         }

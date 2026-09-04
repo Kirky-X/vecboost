@@ -11,38 +11,35 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[cfg(feature = "cli")]
 use std::collections::HashMap;
-use std::{net::SocketAddr, sync::Arc};
 use std::time::Duration;
+use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
-use trait_kit::prelude::{AsyncShutdownCoordinator, BuildObserver, ShutdownPhase};
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
+use trait_kit::prelude::{AsyncShutdownCoordinator, BuildObserver, ShutdownPhase};
 use vecboost::AppConfig;
-use vecboost::registry::RateLimitModule;
 use vecboost::logger::LoggerModule;
+use vecboost::registry::RateLimitModule;
 
 /// 全局关闭超时（秒）
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 #[cfg(feature = "auth")]
-use vecboost::registry::{
-    AuthModule, CsrfConfigModule,
-};
+use vecboost::registry::{AuthModule, CsrfConfigModule};
 use vecboost::{
     VecboostState,
     audit::{AuditConfig, AuditLogger},
     config::model::{EngineType, ModelConfig},
     engine::AnyEngine,
-    registry::{
-        AuditModule, AuthEnabled, CacheConfig, CacheModule,
-        ConfigWatcherModule, DbConfig, DbModule, EmbeddingModule, IpWhitelistModule,
-        MetricsCollectorModule, PipelineEnabled, PipelineQueueModule,
-        PriorityCalculatorModule, PrometheusCollectorModule, RateLimitEnabled,
-        RerankModule, ResponseChannelModule, WorkerManagerModule,
-    },
     pipeline::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
         WorkerManager,
     },
     rate_limit::LimiteronAdapter,
+    registry::{
+        AuditModule, CacheConfig, CacheModule, ConfigWatcherModule, DbConfig, DbModule,
+        EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineQueueModule,
+        PriorityCalculatorModule, PrometheusCollectorModule, RerankModule, ResponseChannelModule,
+        WorkerManagerModule,
+    },
     service::{embedding::EmbeddingService, rerank::RerankService},
 };
 
@@ -53,12 +50,9 @@ use sdforge::cli::{CliBuilder, CliCommandRegistration, CliHandlerRegistration};
 use vecboost::db::{DbPool, init_schema};
 
 #[cfg(feature = "auth")]
-use vecboost::{
-    auth::{
-        GarrisonHandle, GarrisonCsrfConfig, VecBoostInterface,
-        garrison_csrf_middleware, map_auth_config_to_garrison,
-        PasswordHasher,
-    },
+use vecboost::auth::{
+    GarrisonCsrfConfig, GarrisonHandle, PasswordHasher, VecBoostInterface,
+    garrison_csrf_middleware, map_auth_config_to_garrison,
 };
 
 #[cfg(feature = "grpc")]
@@ -96,85 +90,64 @@ impl BuildObserver for LoggingObserver {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // 日志初始化:inklog 完全接管日志输出(通过 log crate 宏 + inklog LogLogger 适配器)
-    let logger_manager = Arc::new(
-        inklog::LoggerManager::builder()
-            .level("info")
-            .console(true)
-            .file("logs/vecboost.log")
-            .file_compress(true) // T021: zstd compression for log files (inklog compression feature)
-            .build()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize inklog logger: {}", e))?,
-    );
-    // logger_manager 通过 Arc 注入 kit，由 LoggerModule 管理生命周期，保持存活至 main 结束
+// ---------------------------------------------------------------------------
+// Helper functions — extracted from main() to reduce cyclomatic complexity
+// ---------------------------------------------------------------------------
 
-    log::info!("Starting Rust Embedding Service...");
-
-    // 确保所有 sdforge inventory（HTTP/MCP/CLI/gRPC）被链接器保留
-    #[cfg(any(feature = "http", feature = "mcp", feature = "cli", feature = "grpc"))]
-    {
-        let _counts = sdforge::init_all_plugins();
-    }
-
-    let config = AppConfig::load_via_confers()
-        .map_err(|e| anyhow::anyhow!("Failed to load config via confers: {}", e))?;
+#[cfg(feature = "db")]
+async fn init_db_pool(
+    config: &AppConfig,
+) -> anyhow::Result<(DbPool, Arc<dbnexus::MetricsCollector>)> {
     log::info!(
-        "Configuration loaded: {} auth={} audit={}",
-        if config.auth.enabled {
-            "auth enabled"
-        } else {
-            "auth disabled"
-        },
-        config.auth.enabled,
-        config.audit.enabled
+        "Initializing database pool with url={}",
+        config
+            .database
+            .url
+            .rsplit_once('@')
+            .map(|(prefix, host)| {
+                let scheme = prefix.split("://").next().unwrap_or("db");
+                format!("{}://***@{}", scheme, host)
+            })
+            .unwrap_or_else(|| config.database.url.clone())
     );
-
-    // 初始化数据库连接池（db feature 启用时）
-    #[cfg(feature = "db")]
-    let (db_pool, db_metrics) = {
-        log::info!(
-            "Initializing database pool with url={}",
-            config
-                .database
-                .url
-                .rsplit_once('@')
-                .map(|(prefix, host)| {
-                    let scheme = prefix.split("://").next().unwrap_or("db");
-                    format!("{}://***@{}", scheme, host)
-                })
-                .unwrap_or_else(|| config.database.url.clone())
-        );
-        // T024-T025: Use DbPool::with_config to enable retry policy + pool-health-check
-        // pool-health-check starts automatically in DbPool::with_config() (background task)
-        let mut db_config = dbnexus::DbConfig {
-            url: config.database.url.clone(),
-            ..Default::default()
-        };
-        // T025: Enable retry policy for idempotent database operations
-        // (dbnexus `retry` feature is always enabled when vecboost `db` feature is active)
-        db_config.retry_policy = Some(dbnexus::RetryPolicy {
-            max_retries: 3,
-            ..Default::default()
-        });
-        log::info!("Database retry policy enabled (max_retries=3, exponential backoff)");
-        let pool = DbPool::with_config(db_config)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to create database pool: {}", e))?;
-        init_schema(&pool)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize database schema: {}", e))?;
-        log::info!("Database pool initialized and schema verified");
-        // T044: Create standalone dbnexus MetricsCollector for Prometheus endpoint
-        // (dbnexus pool internal metrics_collector is not yet settable from outside;
-        // this standalone collector is wired to /metrics and ready for future pool integration)
-        let db_metrics = Arc::new(dbnexus::MetricsCollector::new());
-        log::info!("dbnexus MetricsCollector created (T044 observability wiring)");
-        (pool, db_metrics)
+    let mut db_config = dbnexus::DbConfig {
+        url: config.database.url.clone(),
+        ..Default::default()
     };
+    db_config.retry_policy = Some(dbnexus::RetryPolicy {
+        max_retries: 3,
+        ..Default::default()
+    });
+    log::info!("Database retry policy enabled (max_retries=3, exponential backoff)");
+    db_config.pool_config.min_connections = 5;
+    db_config.warmup_timeout = 10;
+    db_config.warmup_retries = 2;
+    log::info!(
+        "dbnexus pool-warmup enabled: min_connections={}, warmup_timeout={}s, warmup_retries={}",
+        db_config.pool_config.min_connections,
+        db_config.warmup_timeout,
+        db_config.warmup_retries
+    );
+    let pool = DbPool::with_config(db_config)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create database pool: {}", e))?;
+    init_schema(&pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to initialize database schema: {}", e))?;
+    log::info!("Database pool initialized and schema verified");
+    let db_metrics = Arc::new(dbnexus::MetricsCollector::new());
+    log::info!("dbnexus MetricsCollector created (T044 observability wiring)");
+    Ok((pool, db_metrics))
+}
 
+async fn init_engine_and_services(
+    config: &AppConfig,
+) -> anyhow::Result<(
+    Arc<RwLock<AnyEngine>>,
+    Arc<RwLock<EmbeddingService>>,
+    Arc<RwLock<RerankService>>,
+    ModelConfig,
+)> {
     let model_config = ModelConfig {
         name: config.model.model_repo.clone(),
         engine_type: EngineType::Candle,
@@ -213,111 +186,105 @@ async fn main() -> anyhow::Result<()> {
     };
     let service = Arc::new(RwLock::new(service));
 
-    // Rerank service — reuses the same engine
-    let rerank_service = Arc::new(RwLock::new(
-        RerankService::new(engine.clone(), Some(model_config)),
-    ));
+    let rerank_service = Arc::new(RwLock::new(RerankService::new(
+        engine.clone(),
+        Some(model_config.clone()),
+    )));
 
-    // MCP stdio run-mode: when `--mcp` is passed, serve the Model Context Protocol
-    // over stdio and do NOT start the HTTP/gRPC servers (stdout must stay clean for
-    // the JSON-RPC stream). Tools are generated by sdforge's `#[forge(tool_name =
-    // ...)]` macros and collected via `sdforge::mcp::build()`.
-    #[cfg(feature = "mcp")]
-    if std::env::args().any(|a| a == "--mcp") {
-        use sdforge::rmcp::{ServiceExt, transport::io::stdio};
+    Ok((engine, service, rerank_service, model_config))
+}
 
-        log::info!("Starting VecBoost MCP server over stdio");
-        // kit：EmbeddingModule + RerankModule，供 forge handler 通过 state().kit.require 访问
-        let mut kit = trait_kit::AsyncKit::new();
-        kit.set_config(service.clone());
-        kit.set_config(rerank_service.clone());
-        kit.set_config(config.rerank.clone());
-        kit.register::<EmbeddingModule>()
-            .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
-        kit.register::<RerankModule>()
-            .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
-        let kit = kit
-            .build()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
-        vecboost::api::init_state(VecboostState::new(Arc::new(kit)))
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        let server = sdforge::mcp::build();
-        let running = server.serve(stdio()).await?;
-        running.waiting().await?;
-        return Ok(());
+#[cfg(feature = "mcp")]
+async fn run_mcp_server(
+    service: Arc<RwLock<EmbeddingService>>,
+    rerank_service: Arc<RwLock<RerankService>>,
+) -> anyhow::Result<()> {
+    use sdforge::rmcp::{ServiceExt, transport::io::stdio};
+
+    log::info!("Starting VecBoost MCP server over stdio");
+    let mut kit = trait_kit::AsyncKit::new();
+    kit.set_config(service);
+    kit.set_config(rerank_service);
+    kit.register::<EmbeddingModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
+    kit.register::<RerankModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
+    let kit = kit
+        .build()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
+    vecboost::api::init_state(VecboostState::new(Arc::new(kit)))
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let server = sdforge::mcp::build();
+    let running = server.serve(stdio()).await?;
+    running.waiting().await?;
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+async fn run_cli_command(
+    service: Arc<RwLock<EmbeddingService>>,
+    rerank_service: Arc<RwLock<RerankService>>,
+) -> anyhow::Result<bool> {
+    let cli_cmd = CliBuilder::new().with_name("vecboost").build();
+    let first_arg = std::env::args().nth(1);
+    let is_cli = first_arg
+        .as_ref()
+        .map(|cmd| {
+            cli_cmd
+                .get_subcommands()
+                .any(|sc| sc.get_name() == cmd.as_str())
+        })
+        .unwrap_or(false);
+
+    if !is_cli {
+        return Ok(false);
     }
 
-    // CLI dispatch: sdforge CliBuilder 构建命令树 + 手写 dispatch
-    // sdforge 只构建 clap::Command,不提供 dispatch;此处手动查找 handler 并调用
-    #[cfg(feature = "cli")]
-    {
-        let cli_cmd = CliBuilder::new().with_name("vecboost").build();
-        let first_arg = std::env::args().nth(1);
-        let is_cli = first_arg
-            .as_ref()
-            .map(|cmd| {
-                cli_cmd
-                    .get_subcommands()
-                    .any(|sc| sc.get_name() == cmd.as_str())
-            })
-            .unwrap_or(false);
+    let mut kit = trait_kit::AsyncKit::new();
+    kit.set_config(service);
+    kit.set_config(rerank_service);
+    kit.register::<EmbeddingModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
+    kit.register::<RerankModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
+    let kit = kit
+        .build()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
+    vecboost::api::init_state(VecboostState::new(Arc::new(kit)))
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let matches = cli_cmd.get_matches_from(std::env::args());
 
-        if is_cli {
-            // kit：EmbeddingModule + RerankModule，供 forge handler 通过 state().kit.require 访问
-            let mut kit = trait_kit::AsyncKit::new();
-            kit.set_config(service.clone());
-            kit.set_config(rerank_service.clone());
-            kit.set_config(config.rerank.clone());
-            kit.register::<EmbeddingModule>()
-                .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
-            kit.register::<RerankModule>()
-                .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
-            let kit = kit
-                .build()
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
-            vecboost::api::init_state(VecboostState::new(Arc::new(kit)))
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-            let matches = cli_cmd.get_matches_from(std::env::args());
-
-            if let Some((name, sub_matches)) = matches.subcommand() {
-                // 从 ArgMatches 提取参数到 HashMap<String, String>
-                let mut args_map = HashMap::new();
-                for reg in sdforge::inventory::iter::<CliCommandRegistration>() {
-                    if reg.name == name {
-                        for arg in reg.args {
-                            if let Some(val) = sub_matches.get_one::<String>(arg.name) {
-                                args_map.insert(arg.name.to_string(), val.clone());
-                            }
-                        }
-                        break;
+    if let Some((name, sub_matches)) = matches.subcommand() {
+        let mut args_map = HashMap::new();
+        for reg in sdforge::inventory::iter::<CliCommandRegistration>() {
+            if reg.name == name {
+                for arg in reg.args {
+                    if let Some(val) = sub_matches.get_one::<String>(arg.name) {
+                        args_map.insert(arg.name.to_string(), val.clone());
                     }
                 }
-
-                // 查找并调用 handler
-                let handler = sdforge::inventory::iter::<CliHandlerRegistration>()
-                    .find(|h| h.name == name)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("No handler registered for CLI command: {}", name)
-                    })?;
-
-                (handler.handler)(args_map, None)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("CLI command '{}' failed: {:?}", name, e))?;
-                return Ok(());
+                break;
             }
-            return Ok(());
         }
+
+        let handler = sdforge::inventory::iter::<CliHandlerRegistration>()
+            .find(|h| h.name == name)
+            .ok_or_else(|| anyhow::anyhow!("No handler registered for CLI command: {}", name))?;
+
+        (handler.handler)(args_map, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("CLI command '{}' failed: {:?}", name, e))?;
     }
+    Ok(true)
+}
 
-    // 创建限流器
-    let rate_limiter = Arc::new(LimiteronAdapter::with_defaults().await);
-
-    // Garrison 认证初始化（替代手写 JWT/UserStore/CSRF）
-    #[cfg(feature = "auth")]
+#[cfg(feature = "auth")]
+async fn init_auth(
+    config: &AppConfig,
+) -> anyhow::Result<(Option<Arc<GarrisonHandle>>, Option<Arc<GarrisonCsrfConfig>>)> {
     let garrison_handle: Option<Arc<GarrisonHandle>> = if config.auth.enabled {
-        // 验证 JWT 密钥强度（至少 32 字节）
         if let Some(ref secret) = config.auth.jwt_secret {
             if secret.len() < 32 {
                 return Err(anyhow::anyhow!(
@@ -332,25 +299,25 @@ async fn main() -> anyhow::Result<()> {
             ));
         };
 
-        // 创建 garrison DAO（内存缓存）
         let dao = garrison::dao::GarrisonDaoOxcache::new()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create GarrisonDaoOxcache: {}", e))?;
 
-        // 映射 VecBoost AuthConfig → GarrisonConfig
         let garrison_config = map_auth_config_to_garrison(&config.auth);
 
-        // 初始化 garrison 全局单例
         garrison::prelude::GarrisonManager::init(
             Arc::new(dao),
             Arc::new(garrison_config.clone()),
             Arc::new(VecBoostInterface::new(
-                config.auth.default_admin_username.clone().unwrap_or_else(|| "admin".to_string()),
+                config
+                    .auth
+                    .default_admin_username
+                    .clone()
+                    .unwrap_or_else(|| "admin".to_string()),
             )),
         )
         .map_err(|e| anyhow::anyhow!("Failed to init GarrisonManager: {}", e))?;
 
-        // 计算 admin 密码哈希（供 forge_login 校验）
         let admin_password_hash = config.auth.default_admin_password.as_ref().map(|pw| {
             garrison::account::credential::password::Argon2Hasher::default()
                 .hash(pw)
@@ -368,8 +335,6 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // Garrison CSRF 配置
-    #[cfg(feature = "auth")]
     let garrison_csrf_config: Option<Arc<GarrisonCsrfConfig>> = if config.auth.csrf.enabled {
         let csrf = GarrisonCsrfConfig::default();
         log::info!("CSRF protection enabled (garrison)");
@@ -379,7 +344,135 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // Initialize audit logging
+    Ok((garrison_handle, garrison_csrf_config))
+}
+
+async fn init_pipeline(
+    config: &AppConfig,
+    service: &Arc<RwLock<EmbeddingService>>,
+) -> anyhow::Result<(
+    Arc<PriorityRequestQueue>,
+    Arc<ResponseChannel>,
+    Arc<PriorityCalculator>,
+    Arc<WorkerManager>,
+)> {
+    if config.pipeline.enabled {
+        log::info!(
+            "Request pipeline enabled with queue_size={}",
+            config.pipeline.queue.max_queue_size
+        );
+
+        let pipeline_queue = Arc::new(PriorityRequestQueue::new(
+            config.pipeline.queue.max_queue_size,
+        ));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let priority_config = PriorityConfig {
+            base_priority: config.pipeline.priority.base_priority,
+            timeout_boost_factor: config.pipeline.priority.timeout_boost_factor,
+            user_tier_weights: config.pipeline.priority.user_tier_weights.clone(),
+            source_weights: config.pipeline.priority.source_weights.clone(),
+        };
+        let priority_calculator = Arc::new(PriorityCalculator::new(priority_config));
+
+        let worker_config = vecboost::pipeline::WorkerConfig {
+            min_workers: config.pipeline.worker.min_workers,
+            max_workers: config.pipeline.worker.max_workers,
+            scale_up_threshold: config.pipeline.worker.scale_up_threshold,
+            scale_down_threshold: config.pipeline.worker.scale_down_threshold,
+            scale_check_interval_secs: config.pipeline.worker.scale_check_interval_secs,
+            idle_timeout_secs: config.pipeline.worker.idle_timeout_secs,
+        };
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            pipeline_queue.clone(),
+            response_channel.clone(),
+            worker_config.clone(),
+            service.clone(),
+        ));
+
+        for _ in 0..worker_config.min_workers {
+            worker_manager.spawn_worker().await;
+        }
+
+        log::info!("Pipeline components initialized successfully");
+
+        Ok((
+            pipeline_queue,
+            response_channel,
+            priority_calculator,
+            worker_manager,
+        ))
+    } else {
+        log::info!("Request pipeline disabled");
+
+        Ok((
+            Arc::new(PriorityRequestQueue::new(0)),
+            Arc::new(ResponseChannel::new()),
+            Arc::new(PriorityCalculator::new(PriorityConfig::default())),
+            Arc::new(WorkerManager::new(
+                Arc::new(PriorityRequestQueue::new(0)),
+                Arc::new(ResponseChannel::new()),
+                WorkerConfig::default(),
+                service.clone(),
+            )),
+        ))
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let logger_manager = Arc::new(
+        inklog::LoggerManager::builder()
+            .level("info")
+            .console(true)
+            .file("logs/vecboost.log")
+            .file_compress(true)
+            .build()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize inklog logger: {}", e))?,
+    );
+
+    log::info!("Starting Rust Embedding Service...");
+
+    #[cfg(any(feature = "http", feature = "mcp", feature = "cli", feature = "grpc"))]
+    {
+        let _counts = sdforge::init_all_plugins();
+    }
+
+    let config = AppConfig::load_via_confers()
+        .map_err(|e| anyhow::anyhow!("Failed to load config via confers: {}", e))?;
+    log::info!(
+        "Configuration loaded: {} auth={} audit={}",
+        if config.auth.enabled {
+            "auth enabled"
+        } else {
+            "auth disabled"
+        },
+        config.auth.enabled,
+        config.audit.enabled
+    );
+
+    #[cfg(feature = "db")]
+    let (db_pool, _db_metrics) = init_db_pool(&config).await?;
+
+    let (_engine, service, rerank_service, _model_config) =
+        init_engine_and_services(&config).await?;
+
+    #[cfg(feature = "mcp")]
+    if std::env::args().any(|a| a == "--mcp") {
+        return run_mcp_server(service, rerank_service).await;
+    }
+
+    #[cfg(feature = "cli")]
+    if run_cli_command(service.clone(), rerank_service.clone()).await? {
+        return Ok(());
+    }
+
+    let rate_limiter = Arc::new(LimiteronAdapter::with_defaults().await);
+
+    #[cfg(feature = "auth")]
+    let (garrison_handle, garrison_csrf_config) = init_auth(&config).await?;
+
     let audit_logger = if config.audit.enabled {
         log::info!("Audit logging enabled");
         let audit_config = AuditConfig {
@@ -404,73 +497,8 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // Initialize pipeline if enabled
-    let (pipeline_enabled, pipeline_queue, response_channel, priority_calculator, worker_manager) =
-        if config.pipeline.enabled {
-            log::info!(
-                "Request pipeline enabled with queue_size={}",
-                config.pipeline.queue.max_queue_size
-            );
-
-            let pipeline_queue = Arc::new(PriorityRequestQueue::new(
-                config.pipeline.queue.max_queue_size,
-            ));
-            let response_channel = Arc::new(ResponseChannel::new());
-            let priority_config = PriorityConfig {
-                base_priority: config.pipeline.priority.base_priority,
-                timeout_boost_factor: config.pipeline.priority.timeout_boost_factor,
-                user_tier_weights: config.pipeline.priority.user_tier_weights,
-                source_weights: config.pipeline.priority.source_weights,
-            };
-            let priority_calculator = Arc::new(PriorityCalculator::new(priority_config));
-
-            // Create WorkerManager with EmbeddingService
-            let worker_config = vecboost::pipeline::WorkerConfig {
-                min_workers: config.pipeline.worker.min_workers,
-                max_workers: config.pipeline.worker.max_workers,
-                scale_up_threshold: config.pipeline.worker.scale_up_threshold,
-                scale_down_threshold: config.pipeline.worker.scale_down_threshold,
-                scale_check_interval_secs: config.pipeline.worker.scale_check_interval_secs,
-                idle_timeout_secs: config.pipeline.worker.idle_timeout_secs,
-            };
-
-            let worker_manager = Arc::new(WorkerManager::new(
-                pipeline_queue.clone(),
-                response_channel.clone(),
-                worker_config.clone(),
-                service.clone(), // Pass the Arc<RwLock<EmbeddingService>>
-            ));
-
-            // Start minimum workers
-            for _ in 0..worker_config.min_workers {
-                worker_manager.spawn_worker().await;
-            }
-
-            log::info!("Pipeline components initialized successfully");
-
-            (
-                true,
-                pipeline_queue,
-                response_channel,
-                priority_calculator,
-                worker_manager,
-            )
-        } else {
-            log::info!("Request pipeline disabled");
-
-            (
-                false,
-                Arc::new(PriorityRequestQueue::new(0)),
-                Arc::new(ResponseChannel::new()),
-                Arc::new(PriorityCalculator::new(PriorityConfig::default())),
-                Arc::new(WorkerManager::new(
-                    Arc::new(PriorityRequestQueue::new(0)),
-                    Arc::new(ResponseChannel::new()),
-                    WorkerConfig::default(),
-                    service.clone(), // Pass the Arc<RwLock<EmbeddingService>>
-                )),
-            )
-        };
+    let (pipeline_queue, response_channel, priority_calculator, worker_manager) =
+        init_pipeline(&config, &service).await?;
 
     // ---------------------------------------------------------------------------
     // Module Registry (trait-kit AsyncKit) — D1 集成
@@ -487,10 +515,9 @@ async fn main() -> anyhow::Result<()> {
     // T017a: Register build observer for per-module build timing
     kit.with_observer(Arc::new(LoggingObserver));
 
-    // 注入预构建的能力对象（kit 是 single source of truth）
+    // 注入预构建的能力对象（kit 是 single source of truth）— 已清理未被任何 Module/Handler 消费的冗余注入
     kit.set_config(service.clone());
     kit.set_config(rerank_service.clone());
-    kit.set_config(config.rerank.clone());
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {
         enabled: config.embedding.cache_enabled,
@@ -499,9 +526,6 @@ async fn main() -> anyhow::Result<()> {
     kit.set_config(DbConfig {
         enabled: cfg!(feature = "db"),
     });
-    // T044: Inject dbnexus MetricsCollector for Prometheus endpoint integration
-    #[cfg(feature = "db")]
-    kit.set_config(Some(db_metrics.clone()));
     kit.set_config(audit_logger.clone());
     // v0.3.0 D3: 注入 13 个新 Module 的能力配置
     kit.set_config(Some(Arc::new(vecboost::metrics::InferenceCollector::new())));
@@ -511,12 +535,9 @@ async fn main() -> anyhow::Result<()> {
     )));
     kit.set_config(config.rate_limit.ip_whitelist.clone());
     kit.set_config(config.embedding.clone());
-    kit.set_config(AuthEnabled(config.auth.enabled));
     // T013: Inject AuthConfig for `trusted_proxies` (XFF trust boundary) access
     // via `kit.config::<AuthConfig>()` in `auth_middleware` (see lib.rs `FromRef` impl).
     kit.set_config(config.auth.clone());
-    kit.set_config(RateLimitEnabled(config.rate_limit.enabled));
-    kit.set_config(PipelineEnabled(pipeline_enabled));
     kit.set_config(pipeline_queue.clone());
     kit.set_config(response_channel.clone());
     kit.set_config(priority_calculator.clone());
@@ -600,8 +621,10 @@ async fn main() -> anyhow::Result<()> {
                     // Manually invoke async on_shutdown for lifecycle modules
                     // (AsyncKit::shutdown() is sync and cannot call async fns)
                     if let Ok(audit_cap) = kit_for_shutdown.require::<AuditModule>() {
-                        <AuditModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(&audit_cap)
-                            .await;
+                        <AuditModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(
+                            &audit_cap,
+                        )
+                        .await;
                     }
                 })
             })
@@ -613,7 +636,9 @@ async fn main() -> anyhow::Result<()> {
         shutdown_coordinator
             .register_hook(ShutdownPhase::DrainQueue, move || {
                 Box::pin(async move {
-                    if let Ok(watcher_cap) = kit_for_watcher_shutdown.require::<ConfigWatcherModule>() {
+                    if let Ok(watcher_cap) =
+                        kit_for_watcher_shutdown.require::<ConfigWatcherModule>()
+                    {
                         <ConfigWatcherModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(
                             &watcher_cap,
                         )
@@ -621,16 +646,30 @@ async fn main() -> anyhow::Result<()> {
                     }
                 })
             })
-            .map_err(|e| anyhow::anyhow!("Failed to register config watcher shutdown hook: {}", e))?;
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to register config watcher shutdown hook: {}", e)
+            })?;
+    }
+    // WorkerManager 优雅关闭：排空队列并等待 in-flight 请求完成
+    {
+        let wm = Arc::clone(&worker_manager);
+        shutdown_coordinator
+            .register_hook(ShutdownPhase::DrainQueue, move || {
+                Box::pin(async move {
+                    wm.shutdown().await;
+                })
+            })
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to register worker manager shutdown hook: {}", e)
+            })?;
     }
 
     log::info!("AsyncKit module registry built successfully");
 
     // T034: Spawn config file watcher task for hot reload
-    // Watches config/config.toml and reloads configuration on file changes,
-    // injecting new config through kit.set_config().
+    // 变更检测：当前 AsyncKit<Ready> 不支持运行时 set_config，热重载仅验证新配置可加载
+    // 后续待 trait-kit 为 AsyncKit 提供 reload 能力后再接线至各 Module
     {
-        let kit_for_watch = Arc::clone(&kit);
         tokio::spawn(async move {
             // FsWatcher requires the file to exist; skip gracefully if not
             let config_path = "config/config.toml";
@@ -651,9 +690,10 @@ async fn main() -> anyhow::Result<()> {
             while let Some(changed_path) = fs_watcher.recv().await {
                 log::info!("Config file changed: {:?}, reloading...", changed_path);
                 match AppConfig::load_via_confers() {
-                    Ok(new_config) => {
-                        kit_for_watch.set_config(new_config);
-                        log::info!("Configuration reloaded successfully");
+                    Ok(_new_config) => {
+                        log::info!(
+                            "Configuration reloaded and validated successfully (hot-swap pending trait-kit AsyncKit reload)"
+                        );
                     }
                     Err(e) => {
                         log::error!("Failed to reload configuration: {}", e);
@@ -668,8 +708,7 @@ async fn main() -> anyhow::Result<()> {
     let app_state = VecboostState::new(kit);
 
     // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state().kit.require 访问）
-    vecboost::api::init_state(app_state.clone())
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    vecboost::api::init_state(app_state.clone()).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // sdforge #[forge] 路由（Router<()>，从 inventory 收集所有 forge 函数注册的路由）
     let app = sdforge::http::build();
@@ -707,10 +746,7 @@ async fn main() -> anyhow::Result<()> {
             .require::<CsrfConfigModule>()
             .map_err(|e| anyhow::anyhow!("Failed to require CsrfConfigModule: {}", e))?;
         if let Some(cfg) = csrf_config {
-            app.layer(from_fn_with_state(
-                cfg,
-                garrison_csrf_middleware,
-            ))
+            app.layer(from_fn_with_state(cfg, garrison_csrf_middleware))
         } else {
             app
         }
@@ -837,10 +873,9 @@ async fn main() -> anyhow::Result<()> {
 
         // Build sdforge rate_limiter (gated by sdforge/ratelimit feature, which
         // vecboost's grpc feature pulls in). Uses default config (100 burst, 10 req/s).
-        // `new()` panics only on invalid default config (should never happen).
+        // `new()` is infallible (panics only on invalid default config, which is a bug).
         let rate_limiter: Option<std::sync::Arc<dyn sdforge::security::ratelimit::RateLimiter>> = {
-            let limiter = SdforgeLimiteronAdapter::new().await
-                .map_err(|e| anyhow::anyhow!("Failed to create gRPC rate limiter: {}", e))?;
+            let limiter = SdforgeLimiteronAdapter::new().await;
             log::info!(
                 "gRPC rate_limiter enabled (sdforge LimiteronAdapter, default config: 100 burst / 10 req/s)"
             );

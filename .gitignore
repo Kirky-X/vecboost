@@ -140,3 +140,5 @@ IFLOW.md
 .sisyphus/
 TEST_MODES.md
 strix_runs/
+security-results/
+.corrupted_backup/

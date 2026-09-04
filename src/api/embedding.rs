@@ -22,8 +22,8 @@ use crate::domain::openai_embedding::{
     EmbeddingObject, OpenAIEmbedRequest, OpenAIEmbedResponse, Usage,
 };
 use crate::domain::{
-    BatchEmbedRequest, BatchEmbedResponse, EmbedRequest, EmbedResponse,
-    SimilarityRequest, SimilarityResponse,
+    BatchEmbedRequest, BatchEmbedResponse, EmbedRequest, EmbedResponse, SimilarityRequest,
+    SimilarityResponse,
 };
 #[cfg(any(feature = "http", feature = "grpc"))]
 use crate::domain::{
@@ -249,9 +249,10 @@ async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
             .map(|c| c.0)
             .unwrap_or(false);
         if pipeline_enabled {
-            let result = crate::pipeline::handle_pipeline_request(st.clone(), req, "api".to_string())
-                .await
-                .map_err(to_api_error)?;
+            let result =
+                crate::pipeline::handle_pipeline_request(st.clone(), req, "api".to_string())
+                    .await
+                    .map_err(to_api_error)?;
             return Ok(result.0);
         }
     }

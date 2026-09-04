@@ -18,17 +18,16 @@ use trait_kit::prelude::*;
 
 #[cfg(feature = "auth")]
 use super::AuthModule;
+#[cfg(feature = "auth")]
+use super::CsrfConfigModule;
 #[cfg(feature = "http")]
 use super::PrometheusCollectorModule;
 use super::RateLimitModule;
 use super::{
-    AuditModule, CacheConfig, CacheModule, ConfigWatcherModule,
-    DbConfig, DbModule, EmbeddingModule, IpWhitelistModule, MetricsCollectorModule,
-    PipelineQueueModule, PriorityCalculatorModule, RerankModule,
-    ResponseChannelModule, WorkerManagerModule,
+    AuditModule, CacheConfig, CacheModule, ConfigWatcherModule, DbConfig, DbModule,
+    EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineQueueModule,
+    PriorityCalculatorModule, RerankModule, ResponseChannelModule, WorkerManagerModule,
 };
-#[cfg(feature = "auth")]
-use super::{CsrfConfigModule};
 use crate::audit::AuditLogger;
 #[cfg(feature = "auth")]
 use crate::auth::GarrisonHandle;
@@ -306,9 +305,7 @@ impl AsyncAutoBuilder for AuditModule {
 // ---------------------------------------------------------------------------
 
 impl AsyncLifecycle for AuditModule {
-    fn on_shutdown<'a>(
-        cap: &'a Self::Capability,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    fn on_shutdown<'a>(cap: &'a Self::Capability) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             if let Some(logger) = cap {
                 log::info!("AuditModule: flushing audit log before shutdown");
@@ -551,9 +548,7 @@ impl AsyncLifecycle for ConfigWatcherModule {
         })
     }
 
-    fn on_shutdown<'a>(
-        cap: &'a Self::Capability,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    fn on_shutdown<'a>(cap: &'a Self::Capability) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             log::info!("ConfigWatcherModule: shutting down config watcher");
             if let Err(e) = cap.shutdown(std::time::Duration::from_secs(5)).await {

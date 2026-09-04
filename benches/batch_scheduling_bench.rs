@@ -3,15 +3,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 
+use async_trait::async_trait;
+use vecboost::EmbeddingService;
+use vecboost::domain::EmbedRequest;
+use vecboost::engine::InferenceEngine;
+use vecboost::error::VecboostError;
+use vecboost::pipeline::{
+    Priority, PriorityRequestQueue, QueuedRequest, RequestSource, ServiceRequest,
+};
 use vecboost::{
     BatchConfig, BatchPriority, BatchRequest, ContinuousBatchLoop, DynamicBatchScheduler,
 };
-use vecboost::pipeline::{Priority, PriorityRequestQueue, QueuedRequest, RequestSource, ServiceRequest};
-use vecboost::domain::EmbedRequest;
-use vecboost::EmbeddingService;
-use vecboost::engine::InferenceEngine;
-use vecboost::error::VecboostError;
-use async_trait::async_trait;
 
 /// Benchmark mock inference engine
 struct BenchMockEngine;
@@ -27,17 +29,28 @@ impl InferenceEngine for BenchMockEngine {
     fn precision(&self) -> &vecboost::config::model::Precision {
         &vecboost::config::model::Precision::Fp32
     }
-    fn supports_mixed_precision(&self) -> bool { false }
-    async fn try_fallback_to_cpu(&mut self, _config: &vecboost::config::model::ModelConfig) -> Result<(), VecboostError> {
+    fn supports_mixed_precision(&self) -> bool {
+        false
+    }
+    async fn try_fallback_to_cpu(
+        &mut self,
+        _config: &vecboost::config::model::ModelConfig,
+    ) -> Result<(), VecboostError> {
         Ok(())
     }
 }
 
 /// Create a ContinuousBatchLoop with its components for benchmarking
-fn setup_continuous_loop() -> (ContinuousBatchLoop, Arc<PriorityRequestQueue>, tokio::sync::watch::Sender<bool>) {
+fn setup_continuous_loop() -> (
+    ContinuousBatchLoop,
+    Arc<PriorityRequestQueue>,
+    tokio::sync::watch::Sender<bool>,
+) {
     let engine: Arc<tokio::sync::RwLock<dyn InferenceEngine + Send + Sync>> =
         Arc::new(tokio::sync::RwLock::new(BenchMockEngine));
-    let service = Arc::new(tokio::sync::RwLock::new(EmbeddingService::new(engine, None)));
+    let service = Arc::new(tokio::sync::RwLock::new(EmbeddingService::new(
+        engine, None,
+    )));
     let queue = Arc::new(PriorityRequestQueue::new(1000));
     let scheduler = Arc::new(DynamicBatchScheduler::new(BatchConfig {
         min_batch_size: 4,
@@ -50,11 +63,19 @@ fn setup_continuous_loop() -> (ContinuousBatchLoop, Arc<PriorityRequestQueue>, t
     (loop_, queue, shutdown_tx)
 }
 
-fn make_queued_request(id: usize) -> (QueuedRequest, tokio::sync::oneshot::Receiver<Result<vecboost::domain::EmbedResponse, VecboostError>>) {
+fn make_queued_request(
+    id: usize,
+) -> (
+    QueuedRequest,
+    tokio::sync::oneshot::Receiver<Result<vecboost::domain::EmbedResponse, VecboostError>>,
+) {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let req = QueuedRequest {
         request_id: format!("bench-{}", id),
-        request: ServiceRequest::Embed(EmbedRequest { text: format!("text {}", id), normalize: Some(true) }),
+        request: ServiceRequest::Embed(EmbedRequest {
+            text: format!("text {}", id),
+            normalize: Some(true),
+        }),
         priority: Priority::Normal,
         submitted_at: Instant::now(),
         timeout: Duration::from_secs(30),
@@ -79,11 +100,7 @@ fn make_request(id: usize) -> BatchRequest {
 fn bench_steady_load(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
 
-    let configs = [
-        ("wait_50ms", 50u64),
-        ("wait_20ms", 20),
-        ("wait_5ms", 5),
-    ];
+    let configs = [("wait_50ms", 50u64), ("wait_20ms", 20), ("wait_5ms", 5)];
 
     let mut group = c.benchmark_group("batch_steady_load");
     for (label, wait_ms) in configs {
@@ -102,23 +119,16 @@ fn bench_steady_load(c: &mut Criterion) {
 
                     for i in 0..num_requests {
                         let submit_time = Instant::now();
-                        scheduler
-                            .submit_request(make_request(i))
-                            .await
-                            .unwrap();
+                        scheduler.submit_request(make_request(i)).await.unwrap();
 
                         // Polling loop (1ms interval)
                         loop {
                             tokio::time::sleep(Duration::from_millis(1)).await;
                             if let Some(batch) = scheduler.try_get_batch().await {
-                                let wait =
-                                    submit_time.elapsed().as_secs_f64() * 1000.0;
+                                let wait = submit_time.elapsed().as_secs_f64() * 1000.0;
                                 latencies.push(wait);
                                 scheduler
-                                    .record_batch_completion(
-                                        batch.requests.len(),
-                                        wait,
-                                    )
+                                    .record_batch_completion(batch.requests.len(), wait)
                                     .await;
                                 break;
                             }
@@ -145,11 +155,7 @@ fn bench_steady_load(c: &mut Criterion) {
 fn bench_burst_load(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
 
-    let configs = [
-        ("wait_50ms", 50u64),
-        ("wait_20ms", 20),
-        ("wait_5ms", 5),
-    ];
+    let configs = [("wait_50ms", 50u64), ("wait_20ms", 20), ("wait_5ms", 5)];
 
     let mut group = c.benchmark_group("batch_burst_load");
     for (label, wait_ms) in configs {
@@ -182,17 +188,13 @@ fn bench_burst_load(c: &mut Criterion) {
                         while collected < 50 {
                             tokio::time::sleep(Duration::from_millis(1)).await;
                             if let Some(batch) = scheduler.try_get_batch().await {
-                                let wait =
-                                    burst_start.elapsed().as_secs_f64() * 1000.0;
+                                let wait = burst_start.elapsed().as_secs_f64() * 1000.0;
                                 for _ in &batch.requests {
                                     all_latencies.push(wait);
                                 }
                                 collected += batch.requests.len();
                                 scheduler
-                                    .record_batch_completion(
-                                        batch.requests.len(),
-                                        wait,
-                                    )
+                                    .record_batch_completion(batch.requests.len(), wait)
                                     .await;
                             }
                             if burst_start.elapsed() > Duration::from_secs(2) {
@@ -276,5 +278,11 @@ fn bench_continuous_burst(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_steady_load, bench_burst_load, bench_continuous_steady, bench_continuous_burst);
+criterion_group!(
+    benches,
+    bench_steady_load,
+    bench_burst_load,
+    bench_continuous_steady,
+    bench_continuous_burst
+);
 criterion_main!(benches);

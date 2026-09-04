@@ -31,7 +31,10 @@ struct CandleModel {
     name: String,
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Test helper / trait dispatch / inventory, not directly called"
+)]
 struct OnnxModel {
     path: PathBuf,
     name: String,

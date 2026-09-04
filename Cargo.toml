@@ -36,28 +36,28 @@ serde_json = { version = "1.0", default-features = false, features = ["std"] }
 thiserror = { version = "2.0", default-features = false }
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 
-# Module Registry (always required)
-trait-kit = { version = "0.4", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator"] }
+# Module Registry (always required) — 保留 reload/confers 热重载，移除未接线的 i18n 以减体积
+trait-kit = { version = "0.5.0-rc.2", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "confers"] }
 
-# Configuration infrastructure
-confers = { version = "0.5", path = "../base/confers", default-features = false, features = ["toml", "env", "config-bus", "validation", "watch", "encryption", "schema"] }
+# Configuration infrastructure — 保留 interpolation/dynamic/feature-toggle (已接线 Configurable)，移除 json/yaml 冗余格式
+confers = { version = "0.6.0-rc.2", path = "../base/confers", default-features = false, features = ["toml", "env", "config-bus", "validation", "watch", "encryption", "schema", "interpolation", "dynamic", "feature-toggle"] }
 garde = { version = "0.22", default-features = false, features = ["derive"] }
 schemars = { version = "1.2", default-features = false }
 
-# Logging infrastructure
-inklog = { version = "0.2", path = "../base/inklog", default-features = false, features = ["compression", "fast-masking"] }
+# Logging infrastructure — 回退至最小集，kit/sqlite 未接线且引入重型 db 依赖
+inklog = { version = "0.3.0-rc.2", path = "../base/inklog", default-features = false, features = ["compression", "fast-masking"] }
 log = { version = "0.4", default-features = false }
 
-# Cache infrastructure
-oxcache = { version = "0.4", path = "../base/oxcache", default-features = false, features = ["core", "bloom", "compression", "macros"] }
+# Cache infrastructure — 保留 batch/lock (无侵入)，移除未接线的 kit
+oxcache = { version = "0.5.0-rc.2", path = "../base/oxcache", default-features = false, features = ["core", "bloom", "compression", "macros", "batch", "lock"] }
 
-# Rate limiting infrastructure
-limiteron = { version = "0.2", path = "../base/limiteron", default-features = false, features = ["ban-manager", "quota-control", "circuit-breaker", "gcra", "macros", "metrics", "validation", "parallel-checker", "adaptive-limiting", "event-system", "multi-tenant", "priority-queue", "admission-control", "kit"] }
+# Rate limiting infrastructure — 保留 fallback/custom-limiter，移除重型 geo/device/telemetry 等未配置特性
+limiteron = { version = "0.3.0-rc.2", path = "../base/limiteron", default-features = false, features = ["ban-manager", "quota-control", "circuit-breaker", "gcra", "macros", "metrics", "validation", "parallel-checker", "event-system", "multi-tenant", "kit", "fallback", "custom-limiter"] }
 
-# Database infrastructure (db feature)
+# Database infrastructure (db feature) — 仅保留已接线的 pool-warmup，其余 kit/migration 等按需启用
 # dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
 # Direct sea-orm dependency is still required for those types.
-dbnexus = { version = "0.5", path = "../base/dbnexus", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "retry", "config-env", "observability"] }
+dbnexus = { version = "0.6.0-rc.2", path = "../base/dbnexus", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "pool-warmup", "retry", "config-env", "observability"] }
 sea-orm = { version = "2.0", optional = true, default-features = false }
 
 # AI & Math (base)
@@ -106,7 +106,7 @@ cudarc = { version = "0.19", optional = true, default-features = false, features
 nvml-wrapper = { version = "0.10", optional = true, default-features = false }
 
 # Multi-protocol SDK framework
-sdforge = { version = "0.4", path = "../base/sdforge", optional = true, default-features = false }
+sdforge = { version = "0.5.0-rc.2", path = "../base/sdforge", optional = true, default-features = false }
 
 # CLI argument parsing (cli feature)
 clap = { version = "4.6", optional = true, default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
@@ -122,8 +122,8 @@ tikv-jemallocator = { version = "0.6", default-features = false, features = ["ba
 [features]
 default = ["http"]
 
-# 协议特性
-http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/graceful-shutdown", "sdforge/health-check"]
+# 协议特性 — 保留 cache/streaming/timestamp (轻量)，移除未接线的 logging/kit/inklog
+http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/cache", "sdforge/streaming", "sdforge/timestamp"]
 grpc = ["sdforge/grpc", "sdforge/ratelimit", "sdforge/security"]
 cli = ["sdforge/cli", "dep:clap"]
 openapi = ["schema", "dep:utoipa-swagger-ui", "sdforge/openapi", "sdforge/docs"]

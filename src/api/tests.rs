@@ -206,16 +206,15 @@ async fn test_embed_batch_empty_returns_error() {
 async fn test_embed_batch_mid_batch_empty_string_returns_error() {
     let service = make_service(384);
     let req = BatchEmbedRequest {
-        texts: vec![
-            "hello".to_string(),
-            "".to_string(),
-            "world".to_string(),
-        ],
+        texts: vec!["hello".to_string(), "".to_string(), "world".to_string()],
         mode: None,
         normalize: None,
     };
     let result = embed_batch(&service, req).await;
-    assert!(result.is_err(), "batch with empty string in the middle should fail");
+    assert!(
+        result.is_err(),
+        "batch with empty string in the middle should fail"
+    );
     match result.unwrap_err() {
         VecboostError::InvalidInput(_) => {}
         other => panic!("Expected InvalidInput, got {:?}", other),

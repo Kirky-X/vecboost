@@ -5,7 +5,9 @@ use vecboost::utils::vector::{
 
 /// Generate a deterministic f32 vector for benchmarking.
 fn generate_vector(dim: usize, seed: f32) -> Vec<f32> {
-    (0..dim).map(|i| ((i as f32) * 0.001 + seed).sin()).collect()
+    (0..dim)
+        .map(|i| ((i as f32) * 0.001 + seed).sin())
+        .collect()
 }
 
 fn bench_cosine_similarity(c: &mut Criterion) {

@@ -218,12 +218,16 @@ impl DeviceManager {
         let amd_devices = self.amd_device_manager.devices().await;
         // 检查设备数量是否一致，避免 zip 静默丢弃
         let amd_count = amd_devices.len();
-        let expected_amd = devices.iter().filter(|d| matches!(d.device_type, DeviceType::Amd | DeviceType::OpenCL)).count();
+        let expected_amd = devices
+            .iter()
+            .filter(|d| matches!(d.device_type, DeviceType::Amd | DeviceType::OpenCL))
+            .count();
         if amd_count != expected_amd {
             log::warn!(
                 "refresh_devices: AMD device count mismatch (internal: {}, amd_manager: {}). \
                  Some devices may not be updated.",
-                expected_amd, amd_count
+                expected_amd,
+                amd_count
             );
         }
         for (device_info, amd_device) in devices.iter_mut().zip(amd_devices.iter()) {
@@ -310,7 +314,11 @@ impl DeviceManager {
                 device_id: cuda_device.device_id(),
                 name: cuda_device.name().to_string(),
                 total_memory_bytes: cuda_device.total_memory(),
-                available_memory_bytes: self.cuda_device_manager.available_memory(cuda_device.device_id()).await.unwrap_or(cuda_device.total_memory()),
+                available_memory_bytes: self
+                    .cuda_device_manager
+                    .available_memory(cuda_device.device_id())
+                    .await
+                    .unwrap_or(cuda_device.total_memory()),
                 compute_capability: cuda_device.compute_capability(),
                 supports_float16: cuda_device.capability().supports_float16,
                 supports_tensor_cores: cuda_device.capability().supports_tensor_cores,
@@ -689,7 +697,10 @@ mod tests {
         let device = manager.select_device(&DeviceType::Amd, false).await;
         // 如果没有 Amd 设备（无 rocm-smi），可能返回 OpenCL 或 Cpu
         assert!(
-            matches!(device, DeviceType::Amd | DeviceType::OpenCL | DeviceType::Cpu),
+            matches!(
+                device,
+                DeviceType::Amd | DeviceType::OpenCL | DeviceType::Cpu
+            ),
             "应该选择 Amd/OpenCL 或 fallback 到 Cpu，实际: {:?}",
             device
         );
@@ -710,7 +721,10 @@ mod tests {
         let manager = DeviceManager::new();
         let device = manager.select_device(&DeviceType::OpenCL, false).await;
         assert!(
-            matches!(device, DeviceType::Cpu | DeviceType::Amd | DeviceType::OpenCL),
+            matches!(
+                device,
+                DeviceType::Cpu | DeviceType::Amd | DeviceType::OpenCL
+            ),
             "OpenCL 不存在时应 fallback 到可用设备，实际: {:?}",
             device
         );
@@ -900,12 +914,17 @@ mod tests {
     async fn test_get_device_info_amd_returns_some() {
         let manager = DeviceManager::new();
         // AMD 设备可能是 Amd 或 OpenCL 类型
-        let info = manager.get_device_info(&DeviceType::Amd).await
+        let info = manager
+            .get_device_info(&DeviceType::Amd)
+            .await
             .or_else(|| None); // 如果没有 Amd，尝试 OpenCL
         let info = info.or(manager.get_device_info(&DeviceType::OpenCL).await);
         assert!(info.is_some(), "应该有 AMD/OpenCL 设备");
         assert!(
-            matches!(info.unwrap().device_type, DeviceType::Amd | DeviceType::OpenCL),
+            matches!(
+                info.unwrap().device_type,
+                DeviceType::Amd | DeviceType::OpenCL
+            ),
             "设备类型应该是 Amd 或 OpenCL"
         );
     }
@@ -943,7 +962,9 @@ mod tests {
         let devices = manager.list_devices().await;
         // AMD 设备可能是 Amd 或 OpenCL 类型
         assert!(
-            devices.iter().any(|d| matches!(d.device_type, DeviceType::Amd | DeviceType::OpenCL)),
+            devices
+                .iter()
+                .any(|d| matches!(d.device_type, DeviceType::Amd | DeviceType::OpenCL)),
             "应该包含 AMD/OpenCL 设备"
         );
     }

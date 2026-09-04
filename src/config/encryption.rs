@@ -157,9 +157,7 @@ pub mod encrypted_option {
             Some(encoded) => {
                 let decrypted = match read_master_key() {
                     Some(master) => match decrypt_from_hex(&encoded, &master) {
-                        Ok(bytes) => {
-                            String::from_utf8(bytes).map_err(serde::de::Error::custom)?
-                        }
+                        Ok(bytes) => String::from_utf8(bytes).map_err(serde::de::Error::custom)?,
                         Err(_) => {
                             // Decryption failed → assume plaintext value.
                             encoded

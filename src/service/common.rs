@@ -70,29 +70,25 @@ where
 
                 drop(engine_read);
 
-                if let Some(config) = model_config {
-                    if let Some(manager) = model_manager {
-                        let loaded_model = manager.get(&config.name).await;
+                if let Some(config) = model_config
+                    && let Some(manager) = model_manager
+                    && let Some(_model) = manager.get(&config.name).await
+                {
+                    let mut engine_guard = engine.write().await;
+                    let config_clone = config.clone();
+                    let fallback_result = engine_guard.try_fallback_to_cpu(&config_clone).await;
 
-                        if let Some(_model) = loaded_model {
-                            let mut engine_guard = engine.write().await;
-                            let config_clone = config.clone();
-                            let fallback_result =
-                                engine_guard.try_fallback_to_cpu(&config_clone).await;
-
-                            match fallback_result {
-                                Ok(()) => {
-                                    warn!("Successfully fell back to CPU, retrying operation");
-                                    continue;
-                                }
-                                Err(e) => {
-                                    warn!("Failed to fallback to CPU: {}", e);
-                                    return Err(VecboostError::OutOfMemory(format!(
-                                        "OOM error [{}] and fallback failed: {}",
-                                        error, e
-                                    )));
-                                }
-                            }
+                    match fallback_result {
+                        Ok(()) => {
+                            warn!("Successfully fell back to CPU, retrying operation");
+                            continue;
+                        }
+                        Err(e) => {
+                            warn!("Failed to fallback to CPU: {}", e);
+                            return Err(VecboostError::OutOfMemory(format!(
+                                "OOM error [{}] and fallback failed: {}",
+                                error, e
+                            )));
                         }
                     }
                 }

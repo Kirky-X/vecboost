@@ -194,15 +194,24 @@ impl CudaDeviceManager {
                 // 优先通过 nvidia-smi 查询真实设备信息，避免硬编码
                 let (name, vram_bytes, compute_cap) = match detect_nvidia_driver().await {
                     Ok(info) if info.total_vram_bytes > 0 => (
-                        info.device_name.unwrap_or_else(|| "CUDA Device (candle)".to_string()),
+                        info.device_name
+                            .unwrap_or_else(|| "CUDA Device (candle)".to_string()),
                         info.total_vram_bytes,
-                        info.compute_capability.unwrap_or(DEFAULT_FALLBACK_COMPUTE_CAP),
+                        info.compute_capability
+                            .unwrap_or(DEFAULT_FALLBACK_COMPUTE_CAP),
                     ),
                     _ => {
-                        warn!("nvidia-smi 查询失败，使用 fallback 默认设备参数 ({}GB, compute {}.{})。建议安装 nvidia-smi 以获取准确信息",
+                        warn!(
+                            "nvidia-smi 查询失败，使用 fallback 默认设备参数 ({}GB, compute {}.{})。建议安装 nvidia-smi 以获取准确信息",
                             DEFAULT_FALLBACK_VRAM_BYTES / (1024 * 1024 * 1024),
-                            DEFAULT_FALLBACK_COMPUTE_CAP.0, DEFAULT_FALLBACK_COMPUTE_CAP.1);
-                        ("CUDA Device (candle)".to_string(), DEFAULT_FALLBACK_VRAM_BYTES, DEFAULT_FALLBACK_COMPUTE_CAP)
+                            DEFAULT_FALLBACK_COMPUTE_CAP.0,
+                            DEFAULT_FALLBACK_COMPUTE_CAP.1
+                        );
+                        (
+                            "CUDA Device (candle)".to_string(),
+                            DEFAULT_FALLBACK_VRAM_BYTES,
+                            DEFAULT_FALLBACK_COMPUTE_CAP,
+                        )
                     }
                 };
 
@@ -236,7 +245,9 @@ impl CudaDeviceManager {
                     .device_name
                     .unwrap_or_else(|| "Unknown NVIDIA GPU".to_string()),
                 nvidia_info.total_vram_bytes,
-                nvidia_info.compute_capability.unwrap_or(DEFAULT_FALLBACK_COMPUTE_CAP),
+                nvidia_info
+                    .compute_capability
+                    .unwrap_or(DEFAULT_FALLBACK_COMPUTE_CAP),
             );
             info!("Detected compatible CUDA device: {}", cuda_device.name());
             devices.push(cuda_device);
@@ -296,7 +307,10 @@ impl CudaDeviceManager {
                     // 降级到简单算法
                     let available = memory_manager.get_available_memory().await;
                     let available_mb = available / (1024 * 1024);
-                    std::cmp::min(MAX_FALLBACK_BATCH_SIZE, (available_mb / MB_PER_BATCH_SLOT) as usize + 1)
+                    std::cmp::min(
+                        MAX_FALLBACK_BATCH_SIZE,
+                        (available_mb / MB_PER_BATCH_SLOT) as usize + 1,
+                    )
                 }
             } else {
                 DEFAULT_BATCH_SIZE
@@ -404,12 +418,14 @@ async fn detect_nvidia_driver() -> Result<NvidiaDriverInfo, String> {
 fn detect_with_nvml() -> Result<NvidiaDriverInfo, String> {
     use std::ffi::OsStr;
 
-    let nvml = nvml_wrapper::Nvml::init().or_else(|_| {
-        // WSL 环境下只有 libnvidia-ml.so.1，没有 libnvidia-ml.so 符号链接
-        nvml_wrapper::Nvml::builder()
-            .lib_path(OsStr::new("libnvidia-ml.so.1"))
-            .init()
-    }).map_err(|e| format!("NVML init failed: {}", e))?;
+    let nvml = nvml_wrapper::Nvml::init()
+        .or_else(|_| {
+            // WSL 环境下只有 libnvidia-ml.so.1，没有 libnvidia-ml.so 符号链接
+            nvml_wrapper::Nvml::builder()
+                .lib_path(OsStr::new("libnvidia-ml.so.1"))
+                .init()
+        })
+        .map_err(|e| format!("NVML init failed: {}", e))?;
 
     query_nvml_info(&nvml)
 }
@@ -417,29 +433,39 @@ fn detect_with_nvml() -> Result<NvidiaDriverInfo, String> {
 /// 从已初始化的 NVML 实例中查询 GPU 信息
 #[cfg(feature = "cuda")]
 fn query_nvml_info(nvml: &nvml_wrapper::Nvml) -> Result<NvidiaDriverInfo, String> {
-    let device_count = nvml.device_count()
+    let device_count = nvml
+        .device_count()
         .map_err(|e| format!("NVML device_count failed: {}", e))?;
     if device_count == 0 {
         return Err("NVML: no NVIDIA GPU found".to_string());
     }
 
-    let device = nvml.device_by_index(0)
+    let device = nvml
+        .device_by_index(0)
         .map_err(|e| format!("NVML device_by_index failed: {}", e))?;
 
-    let name = device.name()
+    let name = device
+        .name()
         .map_err(|e| format!("NVML name query failed: {}", e))?;
 
-    let memory_info = device.memory_info()
+    let memory_info = device
+        .memory_info()
         .map_err(|e| format!("NVML memory_info query failed: {}", e))?;
 
-    let cc = device.cuda_compute_capability()
+    let cc = device
+        .cuda_compute_capability()
         .map_err(|e| format!("NVML compute_capability query failed: {}", e))?;
 
-    let driver_version = nvml.sys_driver_version()
+    let driver_version = nvml
+        .sys_driver_version()
         .map_err(|e| format!("NVML driver_version query failed: {}", e))?;
 
     Ok(NvidiaDriverInfo {
-        cuda_version: if memory_info.total > 0 { Some(11) } else { None },
+        cuda_version: if memory_info.total > 0 {
+            Some(11)
+        } else {
+            None
+        },
         driver_version: Some(driver_version),
         device_name: Some(name),
         total_vram_bytes: memory_info.total,

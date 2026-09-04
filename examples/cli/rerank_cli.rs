@@ -18,18 +18,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 创建临时文档文件
     let mut temp_file = NamedTempFile::new()?;
-    writeln!(temp_file, "Machine learning is a subset of artificial intelligence")?;
+    writeln!(
+        temp_file,
+        "Machine learning is a subset of artificial intelligence"
+    )?;
     writeln!(temp_file, "The weather forecast predicts rain tomorrow")?;
     writeln!(temp_file, "Deep learning uses neural networks for training")?;
     writeln!(temp_file, "Rust is a systems programming language")?;
-    writeln!(temp_file, "Reinforcement learning optimizes policies through rewards")?;
+    writeln!(
+        temp_file,
+        "Reinforcement learning optimizes policies through rewards"
+    )?;
     let temp_path = temp_file.into_temp_path();
     let input_path = temp_path.to_str().unwrap();
 
     let query = "what is machine learning?";
     println!("📝 查询: \"{}\"", query);
     println!("📄 文档文件: {} (5 条文档)", input_path);
-    println!("📝 调用: vecboost rerank --query \"{}\" --documents {}\n", query, input_path);
+    println!(
+        "📝 调用: vecboost rerank --query \"{}\" --documents {}\n",
+        query, input_path
+    );
 
     let output = Command::new("vecboost")
         .args(["rerank", "--query", query, "--documents", input_path])

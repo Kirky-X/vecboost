@@ -32,7 +32,6 @@ use std::sync::Arc;
 
 use tracing_subscriber::prelude::*;
 use trait_kit::AsyncKit;
-use trait_kit::prelude::*;
 
 use super::LoggerModule;
 
@@ -259,13 +258,17 @@ async fn test_logger_module_coexists_with_other_modules() {
     let mut kit = AsyncKit::new();
     kit.set_config(manager.clone());
     kit.register::<LoggerModule>().expect("register logger");
-    kit.register::<EmbeddingModule>().expect("register embedding");
+    kit.register::<EmbeddingModule>()
+        .expect("register embedding");
 
     // 验证注册不冲突（两个模块可同时注册）
     // build 会因 EmbeddingModule 缺少 service config 而失败，
     // 但 LoggerModule 的能力已正确注入
     let result = kit.build().await;
-    assert!(result.is_err(), "build should fail due to missing EmbeddingModule config");
+    assert!(
+        result.is_err(),
+        "build should fail due to missing EmbeddingModule config"
+    );
 
     manager.shutdown().expect("shutdown");
 }

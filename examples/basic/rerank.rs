@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::RwLock;
+use vecboost::VecboostError;
 use vecboost::config::model::{ModelConfig, Precision};
 use vecboost::domain::RerankRequest;
 use vecboost::engine::InferenceEngine;
 use vecboost::service::rerank::RerankService;
-use vecboost::VecboostError;
 
 /// 模拟推理引擎 — rerank 分数与文档长度正相关（确定性输出）
 struct MockRerankEngine;
@@ -44,12 +44,11 @@ impl InferenceEngine for MockRerankEngine {
         Ok(document.len() as f32 / 100.0)
     }
 
-    fn rerank_batch(
-        &self,
-        query: &str,
-        documents: &[String],
-    ) -> Result<Vec<f32>, VecboostError> {
-        documents.iter().map(|doc| self.rerank(query, doc)).collect()
+    fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> {
+        documents
+            .iter()
+            .map(|doc| self.rerank(query, doc))
+            .collect()
     }
 
     fn supports_rerank(&self) -> bool {

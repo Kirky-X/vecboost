@@ -86,10 +86,7 @@ mod tests {
     fn test_map_jwt_secret() {
         let auth = make_auth_config();
         let garrison = map_auth_config_to_garrison(&auth);
-        assert_eq!(
-            garrison.jwt_secret,
-            "test-jwt-secret-at-least-32-chars!!"
-        );
+        assert_eq!(garrison.jwt_secret, "test-jwt-secret-at-least-32-chars!!");
     }
 
     #[test]

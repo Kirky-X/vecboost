@@ -36,9 +36,7 @@ impl OxCacheBackend {
     /// T029: 同时初始化 bloom filter (FPR=0.01, capacity=capacity)。
     pub fn new(capacity: usize) -> Self {
         let cap = capacity.max(1);
-        let moka = MokaMemoryBackend::builder()
-            .capacity(cap as u64)
-            .build();
+        let moka = MokaMemoryBackend::builder().capacity(cap as u64).build();
         let cache = Cache::with_dependencies(Arc::new(moka));
         // T029: Bloom filter for negative query filtering
         let bloom = BloomFilter::new(cap, 0.01);
@@ -72,10 +70,10 @@ impl OxCacheBackend {
             return None;
         }
         // T030: Bloom filter negative check
-        if let Some(bloom) = &self.bloom {
-            if !bloom.contains(key) {
-                return None;
-            }
+        if let Some(bloom) = &self.bloom
+            && !bloom.contains(key)
+        {
+            return None;
         }
         let cache = self.cache.as_ref()?;
         let raw = cache.get(&key.to_string()).await.ok().flatten()?;
@@ -119,7 +117,10 @@ impl OxCacheBackend {
     }
 
     /// 删除 key,返回是否命中。
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Test helper / trait dispatch / inventory, not directly called"
+    )]
     pub async fn remove(&self, key: &str) -> bool {
         if !self.enabled {
             return false;
@@ -131,7 +132,10 @@ impl OxCacheBackend {
     }
 
     /// 清空缓存,同时重置 bloom filter。
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Test helper / trait dispatch / inventory, not directly called"
+    )]
     pub async fn clear(&self) {
         if let Some(cache) = &self.cache {
             let _ = cache.clear().await;
@@ -142,7 +146,10 @@ impl OxCacheBackend {
     }
 
     /// 返回当前条目数。
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Test helper / trait dispatch / inventory, not directly called"
+    )]
     pub async fn len(&self) -> usize {
         match &self.cache {
             Some(cache) => cache.len().await.map(|n| n as usize).unwrap_or(0),
@@ -151,7 +158,10 @@ impl OxCacheBackend {
     }
 
     /// 返回缓存是否为空。
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Test helper / trait dispatch / inventory, not directly called"
+    )]
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
     }
@@ -227,7 +237,7 @@ fn bytes_to_f32_vec(bytes: Vec<u8>) -> Vec<f32> {
     let mut bytes = bytes;
     let remainder = bytes.len() % 4;
     if remainder != 0 {
-        bytes.extend(std::iter::repeat(0u8).take(4 - remainder));
+        bytes.extend(std::iter::repeat_n(0u8, 4 - remainder));
     }
     let f32_count = bytes.len() / 4;
     let ptr = bytes.as_ptr();
@@ -405,7 +415,10 @@ mod tests {
         cache.put("key1", vec![1.0, 2.0]).await;
         let bloom = cache.bloom_filter().unwrap();
         assert!(bloom.contains("key1"), "bloom should contain inserted key");
-        assert!(!bloom.contains("key2"), "bloom should not contain non-inserted key");
+        assert!(
+            !bloom.contains("key2"),
+            "bloom should not contain non-inserted key"
+        );
         assert_eq!(bloom.len(), 1);
     }
 
@@ -444,7 +457,9 @@ mod tests {
             assert!(
                 (a - b).abs() < f32::EPSILON,
                 "value mismatch at index {}: {} != {}",
-                i, a, b
+                i,
+                a,
+                b
             );
         }
     }
@@ -471,7 +486,9 @@ mod tests {
             assert!(
                 (a - b).abs() < f32::EPSILON,
                 "roundtrip mismatch at index {}: {} != {}",
-                i, a, b
+                i,
+                a,
+                b
             );
         }
     }
@@ -494,18 +511,48 @@ mod tests {
         // 生成 50 对近似改写文本，存入原始版本，用改写版本查询
         // 验证精确匹配命中率 = 0%（证明语义缓存有提升空间）
         let originals = vec![
-            "今天天气怎么样", "机器学习很有趣", "Rust编程语言", "向量数据库搜索",
-            "深度学习模型训练", "自然语言处理任务", "文本相似度计算", "缓存命中率优化",
-            "高性能计算框架", "分布式系统架构", "GPU加速推理", "模型权重加载",
-            "批量处理请求", "语义搜索算法", "内存池管理", "数据压缩存储",
-            "实时流处理", "异步任务调度", "安全认证中间件", "API速率限制",
+            "今天天气怎么样",
+            "机器学习很有趣",
+            "Rust编程语言",
+            "向量数据库搜索",
+            "深度学习模型训练",
+            "自然语言处理任务",
+            "文本相似度计算",
+            "缓存命中率优化",
+            "高性能计算框架",
+            "分布式系统架构",
+            "GPU加速推理",
+            "模型权重加载",
+            "批量处理请求",
+            "语义搜索算法",
+            "内存池管理",
+            "数据压缩存储",
+            "实时流处理",
+            "异步任务调度",
+            "安全认证中间件",
+            "API速率限制",
         ];
         let paraphrases = vec![
-            "今天天气怎么样啊", "机器学习很有意思", "Rust 编程语言", "向量数据库的搜索",
-            "深度学习模型的训练", "自然语言处理的任务", "计算文本相似度", "优化缓存命中率",
-            "高性能的计算框架", "分布式系统的架构", "GPU 加速的推理", "模型权重的加载",
-            "批量处理请求的", "语义搜索的算法", "内存池的管理", "数据的压缩存储",
-            "实时流式处理", "异步的任务调度", "安全认证中间件", "API 的速率限制",
+            "今天天气怎么样啊",
+            "机器学习很有意思",
+            "Rust 编程语言",
+            "向量数据库的搜索",
+            "深度学习模型的训练",
+            "自然语言处理的任务",
+            "计算文本相似度",
+            "优化缓存命中率",
+            "高性能的计算框架",
+            "分布式系统的架构",
+            "GPU 加速的推理",
+            "模型权重的加载",
+            "批量处理请求的",
+            "语义搜索的算法",
+            "内存池的管理",
+            "数据的压缩存储",
+            "实时流式处理",
+            "异步的任务调度",
+            "安全认证中间件",
+            "API 的速率限制",
         ];
 
         let cache = OxCacheBackend::new(1024);

@@ -61,7 +61,11 @@ async fn main() {
     println!("  ✅ 用户更新: newuser by admin");
 
     // 权限拒绝
-    logger.log_permission_denied("newuser", Some("192.168.1.100".to_string()), "/admin/settings");
+    logger.log_permission_denied(
+        "newuser",
+        Some("192.168.1.100".to_string()),
+        "/admin/settings",
+    );
     println!("  ❌ 权限拒绝: newuser → /admin/settings");
 
     // Token 刷新
@@ -108,7 +112,10 @@ async fn main() {
         logger.log_login_success(&format!("user_{}", i), Some("127.0.0.1".to_string()));
     }
     let elapsed = start.elapsed();
-    println!("  1000 次 log_* 调用耗时: {:.2}ms", elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "  1000 次 log_* 调用耗时: {:.2}ms",
+        elapsed.as_secs_f64() * 1000.0
+    );
 
     logger.flush().await.unwrap();
     println!("  flush 完成");

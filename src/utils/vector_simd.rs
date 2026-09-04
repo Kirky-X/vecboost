@@ -15,7 +15,13 @@
 /// The slices must have equal length. Caller is responsible for validation.
 #[inline]
 pub fn dot_product_chunked(v1: &[f32], v2: &[f32]) -> f32 {
-    assert_eq!(v1.len(), v2.len(), "dot_product_chunked: slice length mismatch ({} vs {})", v1.len(), v2.len());
+    assert_eq!(
+        v1.len(),
+        v2.len(),
+        "dot_product_chunked: slice length mismatch ({} vs {})",
+        v1.len(),
+        v2.len()
+    );
     let len = v1.len();
     let chunks = len / 4;
 
@@ -67,7 +73,13 @@ pub fn sum_of_squares_chunked(v: &[f32]) -> f32 {
 /// Compute squared euclidean distance (4-wide unrolled).
 #[inline]
 pub fn squared_euclidean_chunked(v1: &[f32], v2: &[f32]) -> f32 {
-    assert_eq!(v1.len(), v2.len(), "squared_euclidean_chunked: slice length mismatch ({} vs {})", v1.len(), v2.len());
+    assert_eq!(
+        v1.len(),
+        v2.len(),
+        "squared_euclidean_chunked: slice length mismatch ({} vs {})",
+        v1.len(),
+        v2.len()
+    );
     let len = v1.len();
     let chunks = len / 4;
 
@@ -94,7 +106,13 @@ pub fn squared_euclidean_chunked(v1: &[f32], v2: &[f32]) -> f32 {
 /// Compute manhattan distance (4-wide unrolled).
 #[inline]
 pub fn manhattan_distance_chunked(v1: &[f32], v2: &[f32]) -> f32 {
-    assert_eq!(v1.len(), v2.len(), "manhattan_distance_chunked: slice length mismatch ({} vs {})", v1.len(), v2.len());
+    assert_eq!(
+        v1.len(),
+        v2.len(),
+        "manhattan_distance_chunked: slice length mismatch ({} vs {})",
+        v1.len(),
+        v2.len()
+    );
     let len = v1.len();
     let chunks = len / 4;
 
@@ -136,10 +154,7 @@ mod tests {
     }
 
     fn scalar_manhattan(v1: &[f32], v2: &[f32]) -> f32 {
-        v1.iter()
-            .zip(v2.iter())
-            .map(|(a, b)| (a - b).abs())
-            .sum()
+        v1.iter().zip(v2.iter()).map(|(a, b)| (a - b).abs()).sum()
     }
 
     const TOLERANCE: f32 = 1e-6;

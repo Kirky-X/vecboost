@@ -301,7 +301,9 @@ if __name__ == "__main__":
     mock_client = create_client("mock")
     status, response = mock_client.get("/health")
     print(f"   GET /health: {status}")
-    assert status == 200
+    if status != 200:
+        print(f"   FAIL: expected 200, got {status}")
+        sys.exit(1)
     print("   Mock client works!")
     print()
 
@@ -309,8 +311,12 @@ if __name__ == "__main__":
     print("2. Testing Mock embed...")
     status, response = mock_client.post("/api/v1/embed", {"text": "Hello world"})
     print(f"   POST /api/v1/embed: {status}")
-    assert status == 200
-    assert "embedding" in response
+    if status != 200:
+        print(f"   FAIL: expected 200, got {status}")
+        sys.exit(1)
+    if "embedding" not in response:
+        print("   FAIL: missing 'embedding' in response")
+        sys.exit(1)
     print(f"   Dimension: {response.get('dimension')}")
     print("   Mock embed works!")
     print()

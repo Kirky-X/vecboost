@@ -3,7 +3,11 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information
 
-#![allow(clippy::collapsible_if, clippy::useless_conversion, clippy::redundant_closure)]
+#![allow(
+    clippy::collapsible_if,
+    clippy::useless_conversion,
+    clippy::redundant_closure
+)]
 
 use crate::cache::OxCacheBackend;
 use crate::cache::SemanticCache;
@@ -80,7 +84,15 @@ impl EmbeddingService {
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
         model_config: Option<ModelConfig>,
     ) -> Self {
-        Self::build(engine, InputValidator::with_default(), model_config, None, None, None, None)
+        Self::build(
+            engine,
+            InputValidator::with_default(),
+            model_config,
+            None,
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn with_manager(
@@ -88,7 +100,15 @@ impl EmbeddingService {
         model_config: Option<ModelConfig>,
         model_manager: Arc<ModelManager>,
     ) -> Self {
-        Self::build(engine, InputValidator::with_default(), model_config, Some(model_manager), None, None, None)
+        Self::build(
+            engine,
+            InputValidator::with_default(),
+            model_config,
+            Some(model_manager),
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn with_validator_and_manager(
@@ -97,7 +117,15 @@ impl EmbeddingService {
         model_config: Option<ModelConfig>,
         model_manager: Option<Arc<ModelManager>>,
     ) -> Self {
-        Self::build(engine, validator, model_config, model_manager, None, None, None)
+        Self::build(
+            engine,
+            validator,
+            model_config,
+            model_manager,
+            None,
+            None,
+            None,
+        )
     }
 
     pub fn with_cache(
@@ -105,7 +133,15 @@ impl EmbeddingService {
         model_config: Option<ModelConfig>,
         cache_size: usize,
     ) -> Self {
-        Self::build(engine, InputValidator::with_default(), model_config, None, Some(cache_size), None, None)
+        Self::build(
+            engine,
+            InputValidator::with_default(),
+            model_config,
+            None,
+            Some(cache_size),
+            None,
+            None,
+        )
     }
 
     pub fn with_all(
@@ -117,7 +153,15 @@ impl EmbeddingService {
         memory_manager: Option<SharedGpuMemoryManager>,
         batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     ) -> Self {
-        Self::build(engine, validator, model_config, model_manager, Some(cache_size), memory_manager, batch_scheduler)
+        Self::build(
+            engine,
+            validator,
+            model_config,
+            model_manager,
+            Some(cache_size),
+            memory_manager,
+            batch_scheduler,
+        )
     }
 
     /// 设置 BufferPool
@@ -142,7 +186,10 @@ impl EmbeddingService {
     ///
     /// 直接调用引擎的 `embed_batch`，不经过缓存/验证/归一化路径。
     /// 由调用方负责结果后处理。
-    pub async fn embed_batch_internal(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+    pub async fn embed_batch_internal(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Vec<f32>>, VecboostError> {
         self.engine.read().await.embed_batch(texts)
     }
 
@@ -209,7 +256,13 @@ impl EmbeddingService {
 
         // 获取最优批量大小，分批推理避免 OOM
         let batch_size = self
-            .get_optimal_batch_size(128, self.model_config.as_ref().and_then(|c| c.expected_dimension).unwrap_or(768))
+            .get_optimal_batch_size(
+                128,
+                self.model_config
+                    .as_ref()
+                    .and_then(|c| c.expected_dimension)
+                    .unwrap_or(768),
+            )
             .await;
 
         for chunk in texts.chunks(batch_size) {
@@ -222,7 +275,11 @@ impl EmbeddingService {
                     debug!("Warm-up progress: {}/{}", processed_count, total_texts);
                 }
                 Err(e) => {
-                    warn!("Warm-up batch failed, skipping {} texts: {}", chunk.len(), e);
+                    warn!(
+                        "Warm-up batch failed, skipping {} texts: {}",
+                        chunk.len(),
+                        e
+                    );
                 }
             }
         }
@@ -730,7 +787,9 @@ impl EmbeddingService {
         if dedup_saved > 0 {
             debug!(
                 "Batch deduplication: {} texts → {} unique (saved {} redundant inferences)",
-                texts_len, unique_texts.len(), dedup_saved
+                texts_len,
+                unique_texts.len(),
+                dedup_saved
             );
         }
 
@@ -756,14 +815,17 @@ impl EmbeddingService {
 
         debug!(
             "Processing batch: {} unique texts ({} original), optimal_batch_size={}, chunks={}",
-            unique_texts.len(), texts_len, optimal_batch_size, num_chunks
+            unique_texts.len(),
+            texts_len,
+            optimal_batch_size,
+            num_chunks
         );
 
         // 根据实际负载和系统资源动态调整并发数
         let cpu_count = num_cpus::get();
         let max_concurrent_chunks = std::cmp::min(
-            cpu_count * 2,                                               // 每个 CPU 核心最多处理 2 个并发任务
-            std::cmp::max(4, unique_texts.len() / optimal_batch_size),   // 至少 4 个并发
+            cpu_count * 2, // 每个 CPU 核心最多处理 2 个并发任务
+            std::cmp::max(4, unique_texts.len() / optimal_batch_size), // 至少 4 个并发
         );
 
         debug!(
@@ -884,7 +946,8 @@ impl EmbeddingService {
             tasks.push(task);
         }
 
-        let mut all_results: Vec<(usize, Vec<f32>, String)> = Vec::with_capacity(unique_texts.len());
+        let mut all_results: Vec<(usize, Vec<f32>, String)> =
+            Vec::with_capacity(unique_texts.len());
 
         for task in tasks {
             let chunk_results = task.await??;

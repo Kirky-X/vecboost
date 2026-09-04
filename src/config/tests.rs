@@ -484,7 +484,10 @@ enabled = false
     let result = AppConfig::load_via_confers_with_path(&path);
     assert!(result.is_err(), "port=0 must be rejected by validation");
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("port"), "error should mention 'port': {err_msg}");
+    assert!(
+        err_msg.contains("port"),
+        "error should mention 'port': {err_msg}"
+    );
 }
 
 /// T011: empty model_repo is rejected by validation.
@@ -517,9 +520,15 @@ enabled = false
 
     let (_dir, path) = write_temp_toml(toml_content);
     let result = AppConfig::load_via_confers_with_path(&path);
-    assert!(result.is_err(), "empty model_repo must be rejected by validation");
+    assert!(
+        result.is_err(),
+        "empty model_repo must be rejected by validation"
+    );
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("model_repo"), "error should mention 'model_repo': {err_msg}");
+    assert!(
+        err_msg.contains("model_repo"),
+        "error should mention 'model_repo': {err_msg}"
+    );
 }
 
 /// T011: batch_size=0 is rejected by validation.
@@ -552,9 +561,15 @@ enabled = false
 
     let (_dir, path) = write_temp_toml(toml_content);
     let result = AppConfig::load_via_confers_with_path(&path);
-    assert!(result.is_err(), "batch_size=0 must be rejected by validation");
+    assert!(
+        result.is_err(),
+        "batch_size=0 must be rejected by validation"
+    );
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("batch_size"), "error should mention 'batch_size': {err_msg}");
+    assert!(
+        err_msg.contains("batch_size"),
+        "error should mention 'batch_size': {err_msg}"
+    );
 }
 
 /// T011: default config passes validation.
@@ -562,7 +577,11 @@ enabled = false
 fn test_validation_default_config_passes() {
     let config = AppConfig::default();
     let result = config.validate();
-    assert!(result.is_ok(), "default config should pass validation: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "default config should pass validation: {:?}",
+        result.err()
+    );
 }
 
 /// T036: Config file watcher detects changes and triggers reload.
@@ -645,7 +664,10 @@ async fn test_watcher_guard_lifecycle() {
     let result = guard.shutdown(std::time::Duration::from_secs(2)).await;
     assert!(result.is_ok(), "shutdown should succeed");
     assert!(result.unwrap(), "shutdown with no task should return true");
-    assert!(!guard.is_running(), "guard should not be running after shutdown");
+    assert!(
+        !guard.is_running(),
+        "guard should not be running after shutdown"
+    );
 }
 
 // =============================================================================
@@ -691,8 +713,7 @@ fn test_encryption_roundtrip_via_serde() {
     );
 
     // Deserialize back (this decrypts the sensitive fields)
-    let deserialized: AuthConfig =
-        toml::from_str(&serialized).expect("deserialize should succeed");
+    let deserialized: AuthConfig = toml::from_str(&serialized).expect("deserialize should succeed");
 
     // Verify the roundtrip preserved the original values
     assert_eq!(
@@ -733,8 +754,7 @@ fn test_encryption_fallback_to_plaintext_without_key() {
         "without encryption key, values should be plaintext"
     );
 
-    let deserialized: AuthConfig =
-        toml::from_str(&serialized).expect("deserialize should succeed");
+    let deserialized: AuthConfig = toml::from_str(&serialized).expect("deserialize should succeed");
     assert_eq!(
         deserialized.jwt_secret,
         Some("plaintext-jwt-secret".to_string())
@@ -757,8 +777,7 @@ fn test_encryption_none_values_pass_through() {
     assert!(config.default_admin_password.is_none());
 
     let serialized = toml::to_string(&config).expect("serialize should succeed");
-    let deserialized: AuthConfig =
-        toml::from_str(&serialized).expect("deserialize should succeed");
+    let deserialized: AuthConfig = toml::from_str(&serialized).expect("deserialize should succeed");
     assert!(deserialized.jwt_secret.is_none());
     assert!(deserialized.default_admin_password.is_none());
 }

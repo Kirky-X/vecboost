@@ -14,8 +14,7 @@
 //! 运行: cargo run -p vecboost-examples --bin security_demo
 
 use vecboost::security::{
-    KeyType, SaltStore, SecretKey,
-    sanitize_jwt_secret, sanitize_password, sanitize_secret,
+    KeyType, SaltStore, SecretKey, sanitize_jwt_secret, sanitize_password, sanitize_secret,
 };
 
 #[tokio::main]
@@ -27,24 +26,41 @@ async fn main() {
     println!("📝 SecretKey 密钥管理:");
 
     let jwt_key = SecretKey::jwt_secret("my_super_secret_jwt_key_2024");
-    println!("  JWT Secret: {} (掩码: {})", jwt_key.name, jwt_key.mask_value());
+    println!(
+        "  JWT Secret: {} (掩码: {})",
+        jwt_key.name,
+        jwt_key.mask_value()
+    );
 
     let api_key = SecretKey::api_key("huggingface", "hf_abcdefghijklmnopqrstuvwxyz");
-    println!("  API Key: {} (掩码: {})", api_key.name, api_key.mask_value());
+    println!(
+        "  API Key: {} (掩码: {})",
+        api_key.name,
+        api_key.mask_value()
+    );
 
     let db_pass = SecretKey::database_password("p@ssw0rd!");
-    println!("  DB Password: {} (掩码: {})", db_pass.name, db_pass.mask_value());
+    println!(
+        "  DB Password: {} (掩码: {})",
+        db_pass.name,
+        db_pass.mask_value()
+    );
 
     let model_key = SecretKey::model_api_key("sk-1234567890abcdef");
-    println!("  Model API Key: {} (掩码: {})\n", model_key.name, model_key.mask_value());
+    println!(
+        "  Model API Key: {} (掩码: {})\n",
+        model_key.name,
+        model_key.mask_value()
+    );
 
     // ─── EnvironmentKeyStore ────────────────────────────────────────────
     println!("📝 EnvironmentKeyStore 操作:");
 
     // 存储密钥到环境变量
-    let store = vecboost::security::create_key_store(
-        &vecboost::security::SecurityConfig::default()
-    ).await.unwrap();
+    let store =
+        vecboost::security::create_key_store(&vecboost::security::SecurityConfig::default())
+            .await
+            .unwrap();
 
     let key = SecretKey::api_key("demo_service", "demo_api_key_value_12345");
     store.set(&key).await.unwrap();
@@ -52,11 +68,18 @@ async fn main() {
 
     // 读取密钥
     if let Some(retrieved) = store.get(&KeyType::ApiKey, "demo_service").await.unwrap() {
-        println!("  读取成功: {} = {}", retrieved.name, retrieved.mask_value());
+        println!(
+            "  读取成功: {} = {}",
+            retrieved.name,
+            retrieved.mask_value()
+        );
     }
 
     // 检查存在性
-    let exists = store.exists(&KeyType::ApiKey, "demo_service").await.unwrap();
+    let exists = store
+        .exists(&KeyType::ApiKey, "demo_service")
+        .await
+        .unwrap();
     println!("  存在性检查: {}", exists);
 
     // 列出同类型密钥
@@ -64,10 +87,16 @@ async fn main() {
     println!("  API Key 列表: {} 个", keys.len());
 
     // 删除密钥
-    store.delete(&KeyType::ApiKey, "demo_service").await.unwrap();
+    store
+        .delete(&KeyType::ApiKey, "demo_service")
+        .await
+        .unwrap();
     println!("  已删除 API Key");
 
-    let exists_after = store.exists(&KeyType::ApiKey, "demo_service").await.unwrap();
+    let exists_after = store
+        .exists(&KeyType::ApiKey, "demo_service")
+        .await
+        .unwrap();
     println!("  删除后存在性: {}\n", exists_after);
 
     // ─── SaltStore ──────────────────────────────────────────────────────
@@ -87,13 +116,25 @@ async fn main() {
     println!("📝 敏感数据脱敏:");
 
     let secret = "my_super_secret_key_12345";
-    println!("  sanitize_secret(\"{}\"): {}", secret, sanitize_secret(secret));
+    println!(
+        "  sanitize_secret(\"{}\"): {}",
+        secret,
+        sanitize_secret(secret)
+    );
 
     let password = "password123";
-    println!("  sanitize_password(\"{}\"): {}", password, sanitize_password(password));
+    println!(
+        "  sanitize_password(\"{}\"): {}",
+        password,
+        sanitize_password(password)
+    );
 
     let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
-    println!("  sanitize_jwt_secret(\"{}\"): {}", jwt, sanitize_jwt_secret(jwt));
+    println!(
+        "  sanitize_jwt_secret(\"{}\"): {}",
+        jwt,
+        sanitize_jwt_secret(jwt)
+    );
 
     // CJK 安全脱敏（不会 panic）
     let cjk_secret = "密钥内容不能泄露abcdefgh";

@@ -76,10 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let allowed = adapter.check_rate_limit(&new_ip_context).await;
-    println!(
-        "\n🌐 新 IP 10.0.0.1 请求: allowed={}",
-        allowed
-    );
+    println!("\n🌐 新 IP 10.0.0.1 请求: allowed={}", allowed);
     println!("→ 不同 IP 独立计数");
 
     println!("\n✅ 示例完成");

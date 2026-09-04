@@ -79,7 +79,8 @@ impl GpuTuningAdvisor {
         }
         if ecc_status == TuningLevel::Recommended {
             recommendations.push(
-                "ECC 内存已禁用：生产环境建议开启 (nvidia-smi -e 1) 防止内存位翻转导致计算错误".to_string(),
+                "ECC 内存已禁用：生产环境建议开启 (nvidia-smi -e 1) 防止内存位翻转导致计算错误"
+                    .to_string(),
             );
         }
         if compute_mode == TuningLevel::Recommended {
@@ -91,7 +92,10 @@ impl GpuTuningAdvisor {
         if recommendations.is_empty() {
             info!("GPU 调优检测完成：所有配置已优化");
         } else {
-            warn!("GPU 调优检测完成，发现 {} 项可优化配置：", recommendations.len());
+            warn!(
+                "GPU 调优检测完成，发现 {} 项可优化配置：",
+                recommendations.len()
+            );
             for (i, rec) in recommendations.iter().enumerate() {
                 warn!("  {}. {}", i + 1, rec);
             }
@@ -111,7 +115,10 @@ impl GpuTuningAdvisor {
     ///
     /// 鲲鹏文档建议：开启持久模式避免 GPU 低负载休眠后唤醒失败
     fn check_persistence_mode() -> TuningLevel {
-        match run_nvidia_smi(&["--query-gpu=persistence_mode", "--format=csv,noheader,nounits"]) {
+        match run_nvidia_smi(&[
+            "--query-gpu=persistence_mode",
+            "--format=csv,noheader,nounits",
+        ]) {
             Some(output) => {
                 let mode = output.trim();
                 if mode == "1" || mode == "Enabled" {
@@ -179,7 +186,10 @@ impl GpuTuningAdvisor {
 
     /// 检测 ECC 内存状态
     fn check_ecc_status() -> TuningLevel {
-        match run_nvidia_smi(&["--query-gpu=ecc.mode.current", "--format=csv,noheader,nounits"]) {
+        match run_nvidia_smi(&[
+            "--query-gpu=ecc.mode.current",
+            "--format=csv,noheader,nounits",
+        ]) {
             Some(output) => {
                 let mode = output.trim();
                 if mode == "1" || mode.to_lowercase().contains("enabled") {
@@ -254,12 +264,10 @@ mod tests {
         // 在任何平台上都应该返回一个有效级别
         let level = GpuTuningAdvisor::check_transparent_hugepage();
         // 在测试环境中可能是 Optimal、Recommended 或 NotApplicable
-        assert!(
-            matches!(
-                level,
-                TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable
-            )
-        );
+        assert!(matches!(
+            level,
+            TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable
+        ));
     }
 
     #[test]

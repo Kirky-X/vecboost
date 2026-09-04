@@ -202,13 +202,11 @@ impl CandleEngine {
         if is_local_path {
             let model_path_str = model_path.to_string_lossy();
             if model_path_str.contains("..") || model_path_str.contains('~') {
-                return Err(VecboostError::ModelLoadError(
-                    format!(
-                        "Rejected model path due to potential path traversal attack: {:?}. \
+                return Err(VecboostError::ModelLoadError(format!(
+                    "Rejected model path due to potential path traversal attack: {:?}. \
                          Path must not contain '..' or '~'.",
-                        model_path
-                    ),
-                ));
+                    model_path
+                )));
             }
         }
 
@@ -307,15 +305,21 @@ impl CandleEngine {
         let (hidden_size, parameter_count) = match (&bert_config, &xlm_config) {
             (Some(bc), _) => {
                 let params = estimate_bert_params(
-                    bc.vocab_size, bc.hidden_size, bc.num_hidden_layers,
-                    bc.intermediate_size, bc.num_attention_heads,
+                    bc.vocab_size,
+                    bc.hidden_size,
+                    bc.num_hidden_layers,
+                    bc.intermediate_size,
+                    bc.num_attention_heads,
                 );
                 (bc.hidden_size, params)
             }
             (_, Some(xc)) => {
                 let params = estimate_bert_params(
-                    xc.vocab_size, xc.hidden_size, xc.num_hidden_layers,
-                    xc.intermediate_size, xc.num_attention_heads,
+                    xc.vocab_size,
+                    xc.hidden_size,
+                    xc.num_hidden_layers,
+                    xc.intermediate_size,
+                    xc.num_attention_heads,
                 );
                 (xc.hidden_size, params)
             }
@@ -336,7 +340,11 @@ impl CandleEngine {
             }
         };
 
-        let tokenizer = CachedTokenizer::new(hf_tokenizer, max_position_embeddings, DEFAULT_TOKENIZER_CACHE_CAPACITY);
+        let tokenizer = CachedTokenizer::new(
+            hf_tokenizer,
+            max_position_embeddings,
+            DEFAULT_TOKENIZER_CACHE_CAPACITY,
+        );
 
         let is_pytorch = weights_filename.to_string_lossy().ends_with(".bin");
 
@@ -479,7 +487,9 @@ impl CandleEngine {
                     "  python -c \"from transformers import AutoModel; AutoModel.from_pretrained('{}').save_pretrained('./model_converted')\"",
                     config.model_path.to_string_lossy()
                 );
-                log::info!("  Then use './model_converted' as the model_path in config/config.toml");
+                log::info!(
+                    "  Then use './model_converted' as the model_path in config/config.toml"
+                );
             }
 
             let mut varmap = VarMap::new();
@@ -601,8 +611,10 @@ impl CandleEngine {
         // 如果已触发 fallback，检查是否可以恢复
         if self.fallback_triggered {
             // 内存压力解除后，尝试恢复到 GPU
-            if self.check_memory_pressure(50).await == false {
-                log::info!("Memory pressure cleared, resetting fallback flag — GPU may be retried on next model load");
+            if !self.check_memory_pressure(50).await {
+                log::info!(
+                    "Memory pressure cleared, resetting fallback flag — GPU may be retried on next model load"
+                );
                 self.fallback_triggered = false;
             }
             return Ok(false);
@@ -902,28 +914,40 @@ impl CandleEngine {
         let results = if embeddings.dims().len() == 3 {
             let cls_all = embeddings
                 .narrow(1, 0, 1)
-                .map_err(|e| VecboostError::InferenceError(format!("Failed to narrow CLS dim: {}", e)))?
+                .map_err(|e| {
+                    VecboostError::InferenceError(format!("Failed to narrow CLS dim: {}", e))
+                })?
                 .squeeze(1)
-                .map_err(|e| VecboostError::InferenceError(format!("Failed to squeeze CLS dim: {}", e)))?;
+                .map_err(|e| {
+                    VecboostError::InferenceError(format!("Failed to squeeze CLS dim: {}", e))
+                })?;
             // 需要根据实际 dtype 转换：模型可能输出 f16/bf16，需先 cast 到 f32
             let cls_f32 = if cls_all.dtype() == DType::F32 {
                 cls_all
             } else {
-                cls_all.to_dtype(DType::F32)
-                    .map_err(|e| VecboostError::InferenceError(format!("Failed to cast CLS to f32: {}", e)))?
+                cls_all.to_dtype(DType::F32).map_err(|e| {
+                    VecboostError::InferenceError(format!("Failed to cast CLS to f32: {}", e))
+                })?
             };
-            cls_f32
-                .to_vec2::<f32>()
-                .map_err(|e| VecboostError::InferenceError(format!("Failed to convert CLS batch to vec2: {}", e)))?
+            cls_f32.to_vec2::<f32>().map_err(|e| {
+                VecboostError::InferenceError(format!("Failed to convert CLS batch to vec2: {}", e))
+            })?
         } else {
             // Fallback：非 3D 输出退化为逐样本提取
             let mut fallback = Vec::with_capacity(batch_size);
             for i in 0..batch_size {
                 let embedding_tensor = embeddings
                     .get(i)
-                    .map_err(|e| VecboostError::InferenceError(format!("Failed to get batch {}: {}", i, e)))?
+                    .map_err(|e| {
+                        VecboostError::InferenceError(format!("Failed to get batch {}: {}", i, e))
+                    })?
                     .get(0)
-                    .map_err(|e| VecboostError::InferenceError(format!("Failed to get CLS token for batch {}: {}", i, e)))?
+                    .map_err(|e| {
+                        VecboostError::InferenceError(format!(
+                            "Failed to get CLS token for batch {}: {}",
+                            i, e
+                        ))
+                    })?
                     .clone();
                 let vec = embedding_tensor
                     .to_vec1::<f32>()
@@ -990,8 +1014,12 @@ impl CandleEngine {
             (Precision::Fp32, _) => num_params * bytes_per_param(Precision::Fp32) / (1024 * 1024),
             (Precision::Fp16, _) => num_params * bytes_per_param(Precision::Fp16) / (1024 * 1024),
             (Precision::Bf16, _) => num_params * bytes_per_param(Precision::Bf16) / (1024 * 1024),
-            (Precision::Int8, true) => num_params * bytes_per_param(Precision::Int8) / (1024 * 1024),
-            (Precision::Int8, false) => num_params * bytes_per_param(Precision::Fp32) / (1024 * 1024),
+            (Precision::Int8, true) => {
+                num_params * bytes_per_param(Precision::Int8) / (1024 * 1024)
+            }
+            (Precision::Int8, false) => {
+                num_params * bytes_per_param(Precision::Fp32) / (1024 * 1024)
+            }
         };
 
         // 激活值大小（MB）
@@ -1125,7 +1153,11 @@ impl CandleEngine {
             }
         };
 
-        self.tokenizer = CachedTokenizer::new(hf_tokenizer, max_position_embeddings, DEFAULT_TOKENIZER_CACHE_CAPACITY);
+        self.tokenizer = CachedTokenizer::new(
+            hf_tokenizer,
+            max_position_embeddings,
+            DEFAULT_TOKENIZER_CACHE_CAPACITY,
+        );
 
         // 保留原始精度对应的 dtype（CPU 上 FP16/BF16 不可用，回退到 FP32）
         let compute_dtype = match self.precision {

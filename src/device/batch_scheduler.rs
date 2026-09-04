@@ -5,8 +5,8 @@
 
 use log::{debug, info, warn};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, Semaphore, mpsc};
 
@@ -294,7 +294,8 @@ impl DynamicBatchScheduler {
         }
 
         if new_batch_size != current_batch {
-            self.current_batch_size.store(new_batch_size, Ordering::Release);
+            self.current_batch_size
+                .store(new_batch_size, Ordering::Release);
         }
     }
 
@@ -304,7 +305,8 @@ impl DynamicBatchScheduler {
             self.config.min_batch_size,
             std::cmp::min(batch_size, self.config.max_batch_size),
         );
-        self.current_batch_size.store(new_batch_size, Ordering::Release);
+        self.current_batch_size
+            .store(new_batch_size, Ordering::Release);
         info!("Batch size manually set to {}", new_batch_size);
     }
 

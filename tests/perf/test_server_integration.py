@@ -8,7 +8,7 @@ def wait_for_server(timeout=300):
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            response = requests.get(f"{BASE_URL}/health")
+            response = requests.get(f"{BASE_URL}/health", timeout=5)
             if response.status_code == 200:
                 print("Server is ready!")
                 return True
@@ -21,7 +21,7 @@ def wait_for_server(timeout=300):
 
 def test_health():
     print("Testing /health...")
-    response = requests.get(f"{BASE_URL}/health")
+    response = requests.get(f"{BASE_URL}/health", timeout=5)
     assert response.status_code == 200
     # The actual implementation returns plain text "OK", not JSON
     assert response.text == "OK"
@@ -30,7 +30,7 @@ def test_health():
 def test_embed():
     print("Testing /api/v1/embed...")
     payload = {"text": "Hello, world!"}
-    response = requests.post(f"{BASE_URL}/api/v1/embed", json=payload)
+    response = requests.post(f"{BASE_URL}/api/v1/embed", json=payload, timeout=30)
     if response.status_code != 200:
         print(f"Embed failed: {response.text}")
     assert response.status_code == 200
@@ -46,7 +46,7 @@ def test_similarity():
         "source": "Hello world",
         "target": "Hi world"
     }
-    response = requests.post(f"{BASE_URL}/api/v1/similarity", json=payload)
+    response = requests.post(f"{BASE_URL}/api/v1/similarity", json=payload, timeout=30)
     if response.status_code != 200:
         print(f"Similarity failed: {response.text}")
     assert response.status_code == 200
@@ -57,7 +57,7 @@ def test_similarity():
 def test_batch_embed():
     print("Testing /api/v1/embed/batch...")
     payload = {"texts": ["Hello", "World"]}
-    response = requests.post(f"{BASE_URL}/api/v1/embed/batch", json=payload)
+    response = requests.post(f"{BASE_URL}/api/v1/embed/batch", json=payload, timeout=30)
     if response.status_code != 200:
         print(f"Batch embed failed: {response.text}")
     assert response.status_code == 200

@@ -167,7 +167,9 @@ impl PrometheusCollector {
 
     /// 记录限流决策：允许通过
     pub fn record_rate_limit_allowed(&self, dimension: &str) {
-        self.rate_limit_allowed.with_label_values(&[dimension]).inc();
+        self.rate_limit_allowed
+            .with_label_values(&[dimension])
+            .inc();
     }
 
     /// 记录限流决策：拒绝
@@ -494,7 +496,13 @@ mod tests {
         buffer.extend_from_slice(db_text.as_bytes());
 
         let output = String::from_utf8(buffer).unwrap();
-        assert!(output.contains("http_requests_total"), "should have vecboost metrics");
-        assert!(output.contains("dbnexus_uptime"), "should have dbnexus metrics");
+        assert!(
+            output.contains("http_requests_total"),
+            "should have vecboost metrics"
+        );
+        assert!(
+            output.contains("dbnexus_uptime"),
+            "should have dbnexus metrics"
+        );
     }
 }

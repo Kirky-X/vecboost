@@ -12,9 +12,7 @@
 use crate::api::embedding::{kit_internal_error, to_api_error};
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 use crate::api::init::state;
-use crate::domain::{
-    BatchRerankRequest, BatchRerankResponse, RerankRequest, RerankResponse,
-};
+use crate::domain::{BatchRerankRequest, BatchRerankResponse, RerankRequest, RerankResponse};
 use crate::error::VecboostError;
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 use crate::registry::RerankModule;
@@ -37,7 +35,8 @@ pub async fn rerank(
     max_documents: usize,
     max_query_length: usize,
 ) -> Result<RerankResponse, VecboostError> {
-    svc.process_rerank(req, max_documents, max_query_length).await
+    svc.process_rerank(req, max_documents, max_query_length)
+        .await
 }
 
 pub async fn rerank_batch(
@@ -69,8 +68,7 @@ pub async fn rerank_batch(
 /// configured `max_documents_per_query` and `max_query_length` limits so
 /// callers only need to acquire a read-guard and dispatch.
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
-async fn load_rerank_service(
-) -> Result<(Arc<RwLock<RerankService>>, usize, usize), ApiError> {
+async fn load_rerank_service() -> Result<(Arc<RwLock<RerankService>>, usize, usize), ApiError> {
     let st = state().map_err(to_api_error)?;
     let rerank_config = st
         .kit
@@ -97,9 +95,7 @@ async fn rerank_handler(req: RerankRequest) -> Result<RerankResponse, ApiError> 
 }
 
 #[cfg(any(feature = "http", feature = "grpc"))]
-async fn rerank_batch_handler(
-    req: BatchRerankRequest,
-) -> Result<BatchRerankResponse, ApiError> {
+async fn rerank_batch_handler(req: BatchRerankRequest) -> Result<BatchRerankResponse, ApiError> {
     let (svc, max_documents, max_query_length) = load_rerank_service().await?;
     let guard = svc.read().await;
     rerank_batch(&guard, req, max_documents, max_query_length)
@@ -133,9 +129,7 @@ pub async fn forge_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError
     tool_name = "rerank_batch",
     description = "Batch rerank multiple queries against document sets"
 )]
-pub async fn forge_rerank_batch(
-    req: BatchRerankRequest,
-) -> Result<BatchRerankResponse, ApiError> {
+pub async fn forge_rerank_batch(req: BatchRerankRequest) -> Result<BatchRerankResponse, ApiError> {
     rerank_batch_handler(req).await
 }
 
@@ -176,8 +170,6 @@ pub async fn grpc_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError>
     grpc_method = "vecboost.rerank_batch",
     description = "Batch rerank multiple queries against document sets"
 )]
-pub async fn grpc_rerank_batch(
-    req: BatchRerankRequest,
-) -> Result<BatchRerankResponse, ApiError> {
+pub async fn grpc_rerank_batch(req: BatchRerankRequest) -> Result<BatchRerankResponse, ApiError> {
     rerank_batch_handler(req).await
 }

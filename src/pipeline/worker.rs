@@ -3,7 +3,10 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "WorkerManager is used via queue in handler; tests cover all methods, production uses shared queue"
+)]
 
 use log::{debug, info, warn};
 use std::sync::Arc;
@@ -545,7 +548,10 @@ mod tests {
             Ok(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
         }
         fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
-            Ok(texts.iter().map(|_| vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]).collect())
+            Ok(texts
+                .iter()
+                .map(|_| vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+                .collect())
         }
         fn precision(&self) -> &Precision {
             &Precision::Fp32
@@ -619,7 +625,7 @@ mod tests {
             Arc::new(RwLock::new(MockEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
 
-        let mut manager = WorkerManager::new(queue, response_channel, config, service);
+        let manager = WorkerManager::new(queue, response_channel, config, service);
 
         manager.start().await.unwrap();
 

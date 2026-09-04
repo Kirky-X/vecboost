@@ -143,9 +143,12 @@ impl ContinuousBatchLoop {
             // 检查 SLA 超时：已超时请求直接返回错误
             let elapsed = now.duration_since(request.submitted_at);
             if elapsed >= request.timeout {
-                let _ = request.response_tx.send(Err(VecboostError::InferenceError(
-                    format!("Request {} timed out before processing", request.request_id),
-                )));
+                let _ = request
+                    .response_tx
+                    .send(Err(VecboostError::InferenceError(format!(
+                        "Request {} timed out before processing",
+                        request.request_id
+                    ))));
                 continue;
             }
 
@@ -270,12 +273,7 @@ mod tests {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        let loop_ = ContinuousBatchLoop::new(
-            queue.clone(),
-            scheduler,
-            service,
-            shutdown_rx,
-        );
+        let loop_ = ContinuousBatchLoop::new(queue.clone(), scheduler, service, shutdown_rx);
 
         (loop_, queue, shutdown_tx)
     }
@@ -285,7 +283,10 @@ mod tests {
         id: &str,
         priority: Priority,
         timeout: Duration,
-    ) -> (QueuedRequest, oneshot::Receiver<Result<EmbedResponse, VecboostError>>) {
+    ) -> (
+        QueuedRequest,
+        oneshot::Receiver<Result<EmbedResponse, VecboostError>>,
+    ) {
         let (tx, rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: id.to_string(),
@@ -333,7 +334,8 @@ mod tests {
         let (loop_, queue, shutdown_tx) = setup_test_loop();
 
         // 先入队 Low，再入队 Critical
-        let (low_req, low_rx) = make_queued_request("low-1", Priority::Low, Duration::from_secs(30));
+        let (low_req, low_rx) =
+            make_queued_request("low-1", Priority::Low, Duration::from_secs(30));
         let (crit_req, crit_rx) =
             make_queued_request("crit-1", Priority::Critical, Duration::from_secs(30));
 
@@ -345,14 +347,12 @@ mod tests {
         });
 
         // 两个请求都应该被处理
-        let crit_result =
-            tokio::time::timeout(Duration::from_millis(200), crit_rx)
-                .await
-                .expect("Critical request should complete within 200ms");
-        let low_result =
-            tokio::time::timeout(Duration::from_millis(200), low_rx)
-                .await
-                .expect("Low request should complete within 200ms");
+        let crit_result = tokio::time::timeout(Duration::from_millis(200), crit_rx)
+            .await
+            .expect("Critical request should complete within 200ms");
+        let low_result = tokio::time::timeout(Duration::from_millis(200), low_rx)
+            .await
+            .expect("Low request should complete within 200ms");
 
         assert!(crit_result.unwrap().is_ok());
         assert!(low_result.unwrap().is_ok());
@@ -403,7 +403,10 @@ mod tests {
 
         // loop 应在合理时间内退出
         let result = tokio::time::timeout(Duration::from_millis(100), handle).await;
-        assert!(result.is_ok(), "Loop should stop within 100ms of shutdown signal");
+        assert!(
+            result.is_ok(),
+            "Loop should stop within 100ms of shutdown signal"
+        );
     }
 
     /// 验证超时请求收到 Timeout 错误

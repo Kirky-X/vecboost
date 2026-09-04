@@ -52,7 +52,10 @@ pub struct CachedTokenizer {
 }
 
 #[cfg(not(target_os = "macos"))]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Test helper / trait dispatch / inventory, not directly called"
+)]
 #[derive(Debug)]
 pub struct CachedTokenizer {
     tokenizer: HfTokenizer,
@@ -1124,7 +1127,10 @@ impl CachedTokenizer {
 }
 
 #[cfg(not(target_os = "macos"))]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Test helper / trait dispatch / inventory, not directly called"
+)]
 impl CachedTokenizer {
     pub fn new(tokenizer: HfTokenizer, max_length: usize, cache_size: usize) -> Self {
         let capacity = cache_size.clamp(1, MAX_CACHE_SIZE) as u64;

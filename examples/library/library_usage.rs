@@ -13,8 +13,8 @@
 //! 注意: 需要先下载模型文件:
 //!   cargo run -p vecboost-examples --bin download_model -- --small
 
-use vecboost::{LibraryConfig, VecBoostLibrary};
 use vecboost::config::model::{DeviceType, EngineType, ModelConfig};
+use vecboost::{LibraryConfig, VecBoostLibrary};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -72,7 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let resp = lib.embed("hello world").await?;
     println!("  维度: {}", resp.dimension);
     println!("  耗时: {} ms", resp.processing_time_ms);
-    let preview: Vec<String> = resp.embedding.iter().take(5)
+    let preview: Vec<String> = resp
+        .embedding
+        .iter()
+        .take(5)
         .map(|v| format!("{:.4}", v))
         .collect();
     println!("  前 5 个值: [{}]", preview.join(", "));

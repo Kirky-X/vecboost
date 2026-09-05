@@ -115,3 +115,94 @@ pub async fn metrics_endpoint(
         .unwrap()
         .into_response()
 }
+
+/// Prometheus HTTP 请求指标记录中间件。
+///
+/// 自动记录每个请求的方法、路径、状态码和延迟到 PrometheusCollector。
+/// 路径经过归一化处理，只保留前 3 段以避免 Prometheus label 基数膨胀。
+#[cfg(feature = "http")]
+pub async fn metrics_middleware(
+    State(app_state): State<crate::VecboostState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = request.method().to_string();
+    let path = normalize_metrics_path(request.uri().path());
+
+    let prom_collector = app_state
+        .kit
+        .require::<crate::registry::PrometheusCollectorModule>()
+        .ok()
+        .and_then(|opt| opt);
+
+    let _timer = prom_collector
+        .as_ref()
+        .map(|prom| prom.start_http_request_timer(&method, &path));
+
+    let response = next.run(request).await;
+
+    if let Some(prom) = prom_collector.as_ref() {
+        prom.record_http_request(&method, &path, response.status().as_u16());
+    }
+
+    response
+}
+
+/// 归一化 HTTP 路径，只保留前 4 段以控制 Prometheus label 基数。
+///
+/// 例如：
+/// - `/api/1/embed` → `/api/1/embed`
+/// - `/api/1/embed/batch` → `/api/1/embed/batch`
+/// - `/api/1/model/switch` → `/api/1/model/switch`
+/// - `/health` → `/health`
+#[cfg(feature = "http")]
+fn normalize_metrics_path(path: &str) -> String {
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let prefix = if path.starts_with('/') { "/" } else { "" };
+    if segments.len() <= 4 {
+        format!("{}{}", prefix, segments.join("/"))
+    } else {
+        format!("{}{}", prefix, segments[..4].join("/"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_metrics_path_short_paths_unchanged() {
+        assert_eq!(normalize_metrics_path("/health"), "/health");
+        assert_eq!(normalize_metrics_path("/metrics"), "/metrics");
+        assert_eq!(normalize_metrics_path("/api/1/embed"), "/api/1/embed");
+        assert_eq!(normalize_metrics_path("/v1/embeddings"), "/v1/embeddings");
+    }
+
+    #[test]
+    fn test_normalize_metrics_path_four_segments_preserved() {
+        assert_eq!(
+            normalize_metrics_path("/api/1/embed/batch"),
+            "/api/1/embed/batch"
+        );
+        assert_eq!(
+            normalize_metrics_path("/api/1/model/switch"),
+            "/api/1/model/switch"
+        );
+        assert_eq!(
+            normalize_metrics_path("/api/1/auth/login"),
+            "/api/1/auth/login"
+        );
+    }
+
+    #[test]
+    fn test_normalize_metrics_path_truncates_beyond_four() {
+        assert_eq!(
+            normalize_metrics_path("/api/1/model/switch/extra"),
+            "/api/1/model/switch"
+        );
+        assert_eq!(
+            normalize_metrics_path("/a/b/c/d/e/f"),
+            "/a/b/c/d"
+        );
+    }
+}

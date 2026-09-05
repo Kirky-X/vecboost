@@ -16,6 +16,8 @@ pub mod prometheus_exporter;
 
 #[cfg(feature = "http")]
 pub use endpoint::metrics_endpoint;
+#[cfg(feature = "http")]
+pub use endpoint::metrics_middleware;
 pub use inference::InferenceCollector;
 #[cfg(feature = "http")]
 pub use prometheus_exporter::PrometheusCollector;

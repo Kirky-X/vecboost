@@ -13,6 +13,7 @@ use super::response_channel::ResponseChannel;
 use super::worker::WorkerManager;
 use crate::domain::ServiceResponse;
 use crate::error::VecboostError;
+use crate::i18n;
 use crate::service::embedding::EmbeddingService;
 use crate::service::rerank::RerankService;
 
@@ -69,7 +70,7 @@ impl PipelineScheduler {
             }
             ServiceRequest::Rerank(rerank_req) => {
                 let rerank_service = self.rerank_service.as_ref().ok_or_else(|| {
-                    VecboostError::InternalError("Rerank service not configured".to_string())
+                    VecboostError::InternalError(i18n::tr("rerank-not-configured"))
                 })?;
                 let service = rerank_service.read().await;
                 let resp = service.process_rerank(rerank_req, 100, 8192).await?;
@@ -97,6 +98,10 @@ impl PipelineScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ensure_i18n_init() {
+        i18n::init();
+    }
     use crate::config::model::{ModelConfig, Precision};
     use crate::domain::EmbedRequest;
     use crate::engine::InferenceEngine;
@@ -931,6 +936,7 @@ mod tests {
     /// Rerank request without rerank_service configured returns error
     #[tokio::test(flavor = "multi_thread")]
     async fn test_rerank_without_service_returns_error() {
+        ensure_i18n_init();
         let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
         let response_channel = Arc::new(ResponseChannel::new());
         let service = create_test_service();

@@ -140,10 +140,16 @@ async fn init_db_pool(
     );
     let pool = DbPool::with_config(db_config)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to create database pool: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
+            "startup-db-pool",
+            vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+        )))?;
     init_schema(&pool)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to initialize database schema: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
+            "startup-db-schema",
+            vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+        )))?;
     log::info!("Database pool initialized and schema verified");
     let db_metrics = Arc::new(dbnexus::MetricsCollector::new());
     log::info!("dbnexus MetricsCollector created (T044 observability wiring)");
@@ -281,11 +287,17 @@ async fn run_cli_command(
 
         let handler = sdforge::inventory::iter::<CliHandlerRegistration>()
             .find(|h| h.name == name)
-            .ok_or_else(|| anyhow::anyhow!("No handler registered for CLI command: {}", name))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
+                "cli-no-handler",
+                vecboost::i18n::tr_args(&[("name", name)]),
+            )))?;
 
         (handler.handler)(args_map, None)
             .await
-            .map_err(|e| anyhow::anyhow!("CLI command '{}' failed: {:?}", name, e))?;
+            .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
+                "cli-failed",
+                vecboost::i18n::tr_args(&[("name", name), ("detail", &format!("{:?}", e))]),
+            )))?;
     }
     Ok(true)
 }
@@ -297,16 +309,13 @@ async fn init_auth(
     let garrison_handle: Option<Arc<GarrisonHandle>> = if config.auth.enabled {
         if let Some(ref secret) = config.auth.jwt_secret {
             if secret.len() < 32 {
-                return Err(anyhow::anyhow!(
-                    "JWT secret must be at least 32 characters long for security. Current length: {}",
-                    secret.len()
-                ));
+                return Err(anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
+                    "startup-jwt-length",
+                    vecboost::i18n::tr_args(&[("got", &secret.len().to_string())]),
+                )));
             }
         } else {
-            return Err(anyhow::anyhow!(
-                "JWT secret is required when authentication is enabled. \
-                     Please provide a strong JWT secret (at least 32 characters) in the configuration."
-            ));
+            return Err(anyhow::anyhow!("{}", vecboost::i18n::tr("startup-jwt-missing")));
         };
 
         let dao = garrison::dao::GarrisonDaoOxcache::new()
@@ -452,7 +461,10 @@ async fn main() -> anyhow::Result<()> {
             .file_compress(true)
             .build()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize inklog logger: {}", e))?,
+            .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
+                "startup-logger",
+                vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+            )))?,
     );
 
     log::info!("Starting Rust Embedding Service...");
@@ -466,7 +478,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let config = AppConfig::load_via_confers()
-        .map_err(|e| anyhow::anyhow!("Failed to load config via confers: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
+            "startup-config",
+            vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+        )))?;
     log::info!(
         "Configuration loaded: {} auth={} audit={}",
         if config.auth.enabled {
@@ -485,7 +500,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(false)
     {
         if let Err(reason) = vecboost::config::encryption::validate_encryption_key() {
-            return Err(anyhow::anyhow!("Encryption key validation failed: {}", reason));
+            return Err(anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
+                "startup-encryption",
+                vecboost::i18n::tr_args(&[("detail", &reason.to_string())]),
+            )));
         }
         log::info!("Encryption key validated (VECBOOST_REQUIRE_ENCRYPTION=1)");
     }
@@ -577,7 +595,10 @@ async fn main() -> anyhow::Result<()> {
     kit.set_config(Some(Arc::new(vecboost::metrics::InferenceCollector::new())));
     kit.set_config(Some(Arc::new(
         vecboost::metrics::PrometheusCollector::new()
-            .map_err(|e| anyhow::anyhow!("Failed to create PrometheusCollector: {}", e))?,
+            .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[("module", "PrometheusCollector"), ("detail", &e.to_string())]),
+            )))?,
     )));
     kit.set_config(config.rate_limit.ip_whitelist.clone());
     kit.set_config(vecboost::registry::RateLimitEnabled(config.rate_limit.enabled));
@@ -917,33 +938,24 @@ async fn main() -> anyhow::Result<()> {
                             }
                             Err(e) => {
                                 anyhow::bail!(
-                                    "gRPC require_auth=true but BearerAuth creation failed: {}. \
-                                     Set VECBOOST_JWT_SECRET (>=32 chars) or set \
-                                     [server] grpc_require_auth = false for dev",
-                                    e
+                                    "{}",
+                                    vecboost::i18n::tr_with_args(
+                                        "startup-grpc-bearer-failed",
+                                        vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                                    )
                                 );
                             }
                         }
                     } else {
-                        anyhow::bail!(
-                            "gRPC require_auth=true but auth.jwt_secret is None. \
-                             Set VECBOOST_JWT_SECRET env var or set \
-                             [server] grpc_require_auth = false for dev"
-                        );
+                        anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-no-secret"));
                     }
                 } else {
-                    anyhow::bail!(
-                        "gRPC require_auth=true but auth.enabled=false. \
-                         Enable [auth] enabled = true or set [server] grpc_require_auth = false"
-                    );
+                    anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-auth-disabled"));
                 }
             }
             #[cfg(not(feature = "auth"))]
             {
-                anyhow::bail!(
-                    "gRPC require_auth=true but vecboost `auth` feature is not enabled. \
-                     Enable `auth` feature or set [server] grpc_require_auth = false in config"
-                );
+                anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-no-feature"));
             }
         } else {
             log::warn!(

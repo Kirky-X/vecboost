@@ -43,3 +43,81 @@ rerank-query-too-long = Query length { $length } exceeds maximum allowed length 
 
 # ── Directory errors ──
 dir-get-cwd-failed = Failed to get current directory: { $detail }
+
+# ── Auth username validation ──
+auth-username-length = Username must be between 3 and 32 characters
+auth-username-start = Username must start with a letter
+auth-username-charset = Username may only contain letters, digits, underscores and hyphens
+
+# ── Text / batch validation ──
+validate-text-empty = Text cannot be empty
+validate-text-too-short = Text too short: { $got } characters (minimum: { $min })
+validate-text-too-long = Text too long: { $got } characters (maximum: { $max })
+validate-text-whitespace = Text contains only whitespace
+validate-batch-empty = Batch cannot be empty
+validate-text-index-failed = Validation failed for text at index { $index }: { $detail }
+validate-search-empty = Search texts list cannot be empty
+validate-top-k-exceeded = top_k { $got } exceeds maximum { $max }
+
+# ── File validation ──
+file-too-large = File size { $size } MB exceeds maximum allowed size { $max } MB
+file-access-failed = Cannot access file { $path }: { $detail }
+file-no-extension = File has no extension
+file-extension-not-allowed = File extension '{ $ext }' is not allowed. Allowed extensions: { $allowed }
+file-open-failed = Cannot open file: { $detail }
+file-read-failed = Cannot read file: { $detail }
+file-binary-rejected = File contains non-text binary data
+
+# ── Path validation ──
+path-traversal-detected = Path traversal attempt detected: { $detail }
+path-invalid = Invalid path: { $detail }
+path-no-roots = No allowed root directories configured for file access
+path-access-denied = Access denied: path '{ $path }' is not within allowed directories. { $detail }
+path-not-file = Path is not a file: { $path }
+path-not-dir = Path is not a directory: { $path }
+
+# ── Pipeline / queue ──
+pipeline-channel-error = Response channel error
+pipeline-timeout = Request timeout
+queue-type-mismatch = Expected Embed request but got Rerank
+queue-full-rejected = Queue is full, request rejected
+rerank-not-configured = Rerank service not configured
+auth-disabled = Authentication is disabled at runtime
+auth-verify-failed = Password verification failed
+api-init-state-called = init_state already called
+api-init-state-missing = init_state not called
+
+# ── OOM / engine (P1) ──
+oom-no-fallback-available = Out of memory and no fallback available
+oom-fallback-failed = OOM error and fallback failed: { $detail }
+oom-max-attempts = Max fallback attempts exceeded ({ $attempts }). Last error: { $detail }
+engine-semaphore-failed = Failed to acquire semaphore: { $detail }
+engine-batch-timeout = Batch chunk processing timed out after { $secs }s
+
+# ── Metrics endpoint (P1) ──
+metrics-limiter-unavailable = Rate limiter unavailable
+metrics-rate-limited = Rate limit exceeded
+metrics-collector-missing = PrometheusCollector not configured
+metrics-encode-failed = Failed to encode metrics: { $detail }
+
+# ── Startup / config (P1) ──
+startup-db-pool = Failed to create database pool: { $detail }
+startup-db-schema = Failed to initialize database schema: { $detail }
+startup-jwt-length = JWT secret must be at least 32 characters long for security. Current length: { $got }
+startup-jwt-missing = JWT secret is required when authentication is enabled. Please provide a strong JWT secret
+startup-logger = Failed to initialize inklog logger: { $detail }
+startup-config = Failed to load config: { $detail }
+startup-encryption = Encryption key validation failed: { $detail }
+startup-register-failed = Failed to register { $module }: { $detail }
+startup-grpc-bearer-failed = gRPC require_auth=true but BearerAuth creation failed: { $detail }. Set VECBOOST_JWT_SECRET (>=32 chars) or set [server] grpc_require_auth = false for dev
+startup-grpc-no-secret = gRPC require_auth=true but auth.jwt_secret is None. Set VECBOOST_JWT_SECRET env var or set [server] grpc_require_auth = false for dev
+startup-grpc-auth-disabled = gRPC require_auth=true but auth.enabled=false. Enable [auth] enabled = true or set [server] grpc_require_auth = false
+startup-grpc-no-feature = gRPC require_auth=true but vecboost `auth` feature is not enabled. Enable `auth` feature or set [server] grpc_require_auth = false in config
+config-jwt-empty = VECBOOST_JWT_SECRET cannot be empty
+config-jwt-length = VECBOOST_JWT_SECRET must be at least { $min } characters
+config-password-empty = VECBOOST_ADMIN_PASSWORD cannot be empty
+config-password-length = VECBOOST_ADMIN_PASSWORD must be at least { $min } characters
+config-encryption-missing = { $key } environment variable is not set. Production deployments MUST configure it
+config-encryption-length = { $key } must be exactly 32 bytes
+cli-no-handler = No handler registered for CLI command: { $name }
+cli-failed = CLI command '{ $name }' failed: { $detail }

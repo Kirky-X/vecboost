@@ -3403,7 +3403,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             VecboostError::InvalidInput(msg) => {
-                assert!(msg.contains("top_k must be at least 1"), "got: {}", msg)
+                assert!(msg.contains("top_k"), "got: {}", msg)
             }
             other => panic!("expected InvalidInput, got {:?}", other),
         }

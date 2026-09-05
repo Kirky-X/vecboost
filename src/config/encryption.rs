@@ -69,14 +69,14 @@ pub fn validate_encryption_key() -> Result<(), String> {
         Some(_) => Ok(()),
         None => {
             if std::env::var(ENCRYPTION_KEY_ENV).is_err() {
-                Err(format!(
-                    "{ENCRYPTION_KEY_ENV} environment variable is not set. \
-                     Production deployments MUST configure a 32-byte encryption key. \
-                     Generate one with: openssl rand -hex 32"
+                Err(crate::i18n::tr_with_args(
+                    "config-encryption-missing",
+                    crate::i18n::tr_args(&[("key", ENCRYPTION_KEY_ENV)]),
                 ))
             } else {
-                Err(format!(
-                    "{ENCRYPTION_KEY_ENV} must be exactly 32 bytes for XChaCha20-Poly1305"
+                Err(crate::i18n::tr_with_args(
+                    "config-encryption-length",
+                    crate::i18n::tr_args(&[("key", ENCRYPTION_KEY_ENV)]),
                 ))
             }
         }

@@ -19,6 +19,7 @@ use axum::{
     response::IntoResponse,
 };
 
+use crate::i18n;
 use crate::rate_limit::is_ip_whitelisted;
 
 /// Prometheus metrics 端点。
@@ -75,7 +76,7 @@ pub async fn metrics_endpoint(
                     );
                     return Response::builder()
                         .status(500)
-                        .body(Body::from("Rate limiter unavailable"))
+                        .body(Body::from(i18n::tr("metrics-limiter-unavailable")))
                         .unwrap()
                         .into_response();
                 }
@@ -91,7 +92,7 @@ pub async fn metrics_endpoint(
             if !allowed {
                 return Response::builder()
                     .status(429)
-                    .body(Body::from("Rate limit exceeded"))
+                    .body(Body::from(i18n::tr("metrics-rate-limited")))
                     .unwrap()
                     .into_response();
             }
@@ -103,10 +104,10 @@ pub async fn metrics_endpoint(
         None => {
             return Response::builder()
                 .status(500)
-                .body(Body::from("PrometheusCollector not configured"))
+                .body(Body::from(i18n::tr("metrics-collector-missing")))
                 .unwrap_or_else(|e| {
                     log::error!("Failed to build error response: {}", e);
-                    Response::new(Body::from("Internal error"))
+                    Response::new(Body::from(i18n::tr("error-internal")))
                 })
                 .into_response();
         }
@@ -118,7 +119,10 @@ pub async fn metrics_endpoint(
     if let Err(e) = encoder.encode(&metric_families, &mut buffer) {
         return Response::builder()
             .status(500)
-            .body(format!("Failed to encode metrics: {}", e))
+            .body(Body::from(i18n::tr_with_args(
+                "metrics-encode-failed",
+                i18n::tr_args(&[("detail", &e.to_string())]),
+            )))
             .unwrap()
             .into_response();
     }

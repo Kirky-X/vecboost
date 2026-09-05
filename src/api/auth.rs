@@ -43,7 +43,7 @@ pub async fn forge_login(
         .kit
         .require::<AuthModule>()
         .map_err(kit_internal_error)?
-        .ok_or_else(|| kit_internal_error("auth disabled at runtime"))?;
+        .ok_or_else(|| kit_internal_error(crate::i18n::tr("auth-disabled")))?;
     let audit_logger = st
         .kit
         .require::<AuditModule>()
@@ -70,7 +70,7 @@ pub async fn forge_login(
     if let Some(ref hash) = auth_handle.admin_password_hash {
         let verified = PasswordVerifier::verify(&req.password, hash).map_err(|e| {
             log::error!("Password verification internal error: {}", e);
-            kit_internal_error("password verification failed")
+            kit_internal_error(crate::i18n::tr("auth-verify-failed"))
         })?;
         if !verified {
             if let Some(logger) = audit_logger {
@@ -130,7 +130,7 @@ pub async fn forge_refresh(
         .kit
         .require::<AuthModule>()
         .map_err(kit_internal_error)?
-        .ok_or_else(|| kit_internal_error("auth disabled at runtime"))?;
+        .ok_or_else(|| kit_internal_error(crate::i18n::tr("auth-disabled")))?;
     let audit_logger = st
         .kit
         .require::<AuditModule>()
@@ -205,7 +205,7 @@ pub async fn forge_logout(
         .kit
         .require::<AuthModule>()
         .map_err(kit_internal_error)?
-        .ok_or_else(|| kit_internal_error("auth disabled at runtime"))?;
+        .ok_or_else(|| kit_internal_error(crate::i18n::tr("auth-disabled")))?;
     let audit_logger = st
         .kit
         .require::<AuditModule>()

@@ -8,6 +8,7 @@
 use crate::VecboostState;
 use crate::domain::EmbedRequest;
 use crate::error::VecboostError;
+use crate::i18n;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -71,10 +72,10 @@ pub async fn handle_pipeline_request(
         Ok(Ok(Ok(response))) => Ok(axum::Json(response)),
         Ok(Ok(Err(e))) => Err(e),
         Ok(Err(_)) => Err(VecboostError::InternalError(
-            "Response channel error".to_string(),
+            i18n::tr("pipeline-channel-error"),
         )),
         Err(_) => Err(VecboostError::ValidationError(
-            "Request timeout".to_string(),
+            i18n::tr("pipeline-timeout"),
         )),
     }
 }
@@ -82,6 +83,10 @@ pub async fn handle_pipeline_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ensure_i18n_init() {
+        i18n::init();
+    }
     use crate::config::model::{ModelConfig, Precision};
     use crate::domain::EmbedRequest;
     use crate::engine::InferenceEngine;
@@ -368,6 +373,7 @@ mod tests {
     /// 验证 handle_pipeline_request 在 response channel sender 被 drop 时返回 InternalError。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_response_channel_error() {
+        ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(100, engine).await;
@@ -414,6 +420,7 @@ mod tests {
     /// 使用 start_paused 模拟时间流逝,不启动 consumer 让 response 永远 pending。
     #[tokio::test(start_paused = true)]
     async fn test_handle_pipeline_request_timeout() {
+        ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(100, engine).await;

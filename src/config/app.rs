@@ -569,13 +569,13 @@ pub(crate) fn apply_security_env_overrides(
     if let Ok(jwt_secret) = env::var("VECBOOST_JWT_SECRET") {
         if jwt_secret.is_empty() {
             return Err(ConfigError::Message(
-                "VECBOOST_JWT_SECRET cannot be empty".to_string(),
+                crate::i18n::tr("config-jwt-empty"),
             ));
         }
         if jwt_secret.len() < MIN_JWT_SECRET_LENGTH {
-            return Err(ConfigError::Message(format!(
-                "VECBOOST_JWT_SECRET must be at least {} characters",
-                MIN_JWT_SECRET_LENGTH
+            return Err(ConfigError::Message(crate::i18n::tr_with_args(
+                "config-jwt-length",
+                crate::i18n::tr_args(&[("min", &MIN_JWT_SECRET_LENGTH.to_string())]),
             )));
         }
         cfg.auth.jwt_secret = Some(jwt_secret);
@@ -585,13 +585,13 @@ pub(crate) fn apply_security_env_overrides(
     if let Ok(admin_password) = env::var("VECBOOST_ADMIN_PASSWORD") {
         if admin_password.is_empty() {
             return Err(ConfigError::Message(
-                "VECBOOST_ADMIN_PASSWORD cannot be empty".to_string(),
+                crate::i18n::tr("config-password-empty"),
             ));
         }
         if admin_password.len() < MIN_PASSWORD_LENGTH {
-            return Err(ConfigError::Message(format!(
-                "VECBOOST_ADMIN_PASSWORD must be at least {} characters",
-                MIN_PASSWORD_LENGTH
+            return Err(ConfigError::Message(crate::i18n::tr_with_args(
+                "config-password-length",
+                crate::i18n::tr_args(&[("min", &MIN_PASSWORD_LENGTH.to_string())]),
             )));
         }
         cfg.auth.default_admin_password = Some(admin_password);

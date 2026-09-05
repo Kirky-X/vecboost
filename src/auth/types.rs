@@ -4,6 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 use crate::error::VecboostError;
+use crate::i18n;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,7 +42,7 @@ pub struct User {
 pub fn validate_username_format(username: &str) -> Result<(), VecboostError> {
     if username.len() < 3 || username.len() > 32 {
         return Err(VecboostError::ValidationError(
-            "用户名长度必须在 3 到 32 个字符之间".to_string(),
+            i18n::tr("auth-username-length"),
         ));
     }
 
@@ -52,7 +53,7 @@ pub fn validate_username_format(username: &str) -> Result<(), VecboostError> {
         .unwrap_or(false)
     {
         return Err(VecboostError::ValidationError(
-            "用户名必须以字母开头".to_string(),
+            i18n::tr("auth-username-start"),
         ));
     }
 
@@ -61,7 +62,7 @@ pub fn validate_username_format(username: &str) -> Result<(), VecboostError> {
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
         return Err(VecboostError::ValidationError(
-            "用户名只能包含字母、数字、下划线和连字符".to_string(),
+            i18n::tr("auth-username-charset"),
         ));
     }
 

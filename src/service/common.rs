@@ -8,6 +8,7 @@
 use crate::config::model::ModelConfig;
 use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
+use crate::i18n;
 use crate::model::manager::ModelManager;
 use log::warn;
 use std::sync::Arc;
@@ -64,7 +65,7 @@ where
                 if engine_read.is_fallback_triggered() {
                     warn!("Fallback already triggered, cannot retry");
                     return Err(VecboostError::OutOfMemory(
-                        "Out of memory and fallback already attempted".to_string(),
+                        i18n::tr("oom-no-fallback"),
                     ));
                 }
 
@@ -85,22 +86,25 @@ where
                         }
                         Err(e) => {
                             warn!("Failed to fallback to CPU: {}", e);
-                            return Err(VecboostError::OutOfMemory(format!(
-                                "OOM error [{}] and fallback failed: {}",
-                                error, e
+                            return Err(VecboostError::OutOfMemory(i18n::tr_with_args(
+                                "oom-fallback-failed",
+                                i18n::tr_args(&[("detail", &e.to_string())]),
                             )));
                         }
                     }
                 }
 
                 return Err(VecboostError::OutOfMemory(
-                    "Out of memory and no fallback available".to_string(),
+                    i18n::tr("oom-no-fallback-available"),
                 ));
             }
             Err(error) if is_oom_error(&error) => {
-                return Err(VecboostError::OutOfMemory(format!(
-                    "Max fallback attempts exceeded ({}). Last error: {}",
-                    MAX_FALLBACK_ATTEMPTS, error
+                return Err(VecboostError::OutOfMemory(i18n::tr_with_args(
+                    "oom-max-attempts",
+                    i18n::tr_args(&[
+                        ("attempts", &MAX_FALLBACK_ATTEMPTS.to_string()),
+                        ("detail", &error.to_string()),
+                    ]),
                 )));
             }
             Err(error) => return Err(error),

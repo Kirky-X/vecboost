@@ -15,6 +15,7 @@ use tokio::sync::oneshot;
 use super::priority::{Priority, RequestSource};
 use crate::domain::{EmbedRequest, RerankRequest};
 use crate::error::VecboostError;
+use crate::i18n;
 
 /// 服务请求枚举 — 支持嵌入和重排序两种请求类型
 #[derive(Debug, Clone)]
@@ -29,7 +30,7 @@ impl ServiceRequest {
         match self {
             ServiceRequest::Embed(req) => Ok(req),
             ServiceRequest::Rerank(_) => Err(VecboostError::InternalError(
-                "Expected Embed request but got Rerank".to_string(),
+                i18n::tr("queue-type-mismatch"),
             )),
         }
     }
@@ -86,7 +87,7 @@ impl PriorityRequestQueue {
 
             if current_size >= self.max_queue_size {
                 return Err(VecboostError::RateLimitExceeded(
-                    "Queue is full, request rejected".to_string(),
+                    i18n::tr("queue-full-rejected"),
                 ));
             }
 

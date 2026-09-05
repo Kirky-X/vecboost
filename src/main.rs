@@ -33,7 +33,7 @@ use vecboost::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
         WorkerManager,
     },
-    rate_limit::LimiteronAdapter,
+    rate_limit::{LimiteronAdapter, RateLimitSettings},
     registry::{
         AuditModule, CacheConfig, CacheModule, ConfigWatcherModule, DbConfig, DbModule,
         EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineQueueModule,
@@ -468,7 +468,15 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let rate_limiter = Arc::new(LimiteronAdapter::with_defaults().await);
+    let rate_limiter = Arc::new(
+        LimiteronAdapter::new(RateLimitSettings {
+            global_requests_per_minute: config.rate_limit.global_requests_per_minute,
+            ip_requests_per_minute: config.rate_limit.ip_requests_per_minute,
+            user_requests_per_minute: config.rate_limit.user_requests_per_minute,
+            api_key_requests_per_minute: config.rate_limit.api_key_requests_per_minute,
+        })
+        .await,
+    );
 
     #[cfg(feature = "auth")]
     let (garrison_handle, garrison_csrf_config) = init_auth(&config).await?;
@@ -534,6 +542,7 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Failed to create PrometheusCollector: {}", e))?,
     )));
     kit.set_config(config.rate_limit.ip_whitelist.clone());
+    kit.set_config(vecboost::registry::RateLimitEnabled(config.rate_limit.enabled));
     kit.set_config(config.embedding.clone());
     // T013: Inject AuthConfig for `trusted_proxies` (XFF trust boundary) access
     // via `kit.config::<AuthConfig>()` in `auth_middleware` (see lib.rs `FromRef` impl).
@@ -669,8 +678,8 @@ async fn main() -> anyhow::Result<()> {
     // T034: Spawn config file watcher task for hot reload
     // 变更检测：当前 AsyncKit<Ready> 不支持运行时 set_config，热重载仅验证新配置可加载
     // 后续待 trait-kit 为 AsyncKit 提供 reload 能力后再接线至各 Module
-    {
-        tokio::spawn(async move {
+    let config_watcher_handle = {
+        Some(tokio::spawn(async move {
             // FsWatcher requires the file to exist; skip gracefully if not
             let config_path = "config/config.toml";
             let mut fs_watcher = match confers::watcher::FsWatcher::new(config_path, 200).await {
@@ -701,8 +710,8 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             log::info!("Config file watcher stopped");
-        });
-    }
+        }))
+    };
 
     // v0.3.0 D3: VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
     let app_state = VecboostState::new(kit);
@@ -717,20 +726,38 @@ async fn main() -> anyhow::Result<()> {
     let metrics_router = axum::Router::new()
         .route("/metrics", axum::routing::get(metrics_endpoint))
         .with_state(app_state.clone());
-    let app = app.merge(metrics_router);
+    let mut app = app.merge(metrics_router);
+
+    // Prometheus 指标记录中间件 — 无条件应用到所有路由
+    #[cfg(feature = "http")]
+    {
+        use axum::middleware::from_fn_with_state;
+        app = app.layer(from_fn_with_state(
+            app_state.clone(),
+            vecboost::metrics::metrics_middleware,
+        ));
+    }
+
+    // 全局限流中间件 — 应用到所有路由
+    // 内部通过 RateLimitEnabled 配置控制是否生效
+    // 注：auth_rate_limit_middleware 定义在 auth 模块下，需 feature = "auth" 门控
+    #[cfg(feature = "auth")]
+    {
+        use axum::middleware::from_fn_with_state;
+        app = app.layer(from_fn_with_state(
+            app_state.clone(),
+            vecboost::auth::auth_rate_limit_middleware,
+        ));
+    }
 
     // auth_middleware：应用到所有路由，内部用路径白名单放行公开端点
-    // (/health, /api/v1/auth/login, /api/v1/auth/refresh)
+    // (/health, /api/1/auth/login, /api/1/auth/refresh)
     #[cfg(feature = "auth")]
     let app = if config.auth.enabled {
         use axum::middleware::from_fn_with_state;
         app.layer(from_fn_with_state(
             app_state.clone(),
             vecboost::auth::auth_middleware,
-        ))
-        .layer(from_fn_with_state(
-            app_state.clone(),
-            vecboost::auth::auth_rate_limit_middleware,
         ))
     } else {
         app
@@ -875,11 +902,25 @@ async fn main() -> anyhow::Result<()> {
         // vecboost's grpc feature pulls in). Uses default config (100 burst, 10 req/s).
         // `new()` is infallible (panics only on invalid default config, which is a bug).
         let rate_limiter: Option<std::sync::Arc<dyn sdforge::security::ratelimit::RateLimiter>> = {
-            let limiter = SdforgeLimiteronAdapter::new().await;
-            log::info!(
-                "gRPC rate_limiter enabled (sdforge LimiteronAdapter, default config: 100 burst / 10 req/s)"
-            );
-            Some(std::sync::Arc::new(limiter))
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                SdforgeLimiteronAdapter::new(),
+            )
+            .await
+            {
+                Ok(limiter) => {
+                    log::info!(
+                        "gRPC rate_limiter enabled (sdforge LimiteronAdapter, default config: 100 burst / 10 req/s)"
+                    );
+                    Some(std::sync::Arc::new(limiter))
+                }
+                Err(_) => {
+                    log::warn!(
+                        "gRPC rate_limiter initialization timed out after 10s, starting without rate limiting"
+                    );
+                    None
+                }
+            }
         };
 
         let grpc_config = GrpcServerConfig {
@@ -909,6 +950,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Execute phased shutdown coordinator after server stops
     log::info!("Server stopped, executing phased shutdown...");
+
+    // Cancel config watcher background task to prevent runtime hang
+    if let Some(handle) = config_watcher_handle {
+        handle.abort();
+    }
+
     let shutdown_result = shutdown_coordinator.shutdown().await;
     if !shutdown_result.is_ok() {
         log::warn!(

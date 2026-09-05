@@ -22,7 +22,7 @@ pub struct AuthContext {
     pub token: String,
 }
 
-const PUBLIC_PATHS: &[&str] = &["/health", "/api/v1/auth/login", "/api/v1/auth/refresh"];
+const PUBLIC_PATHS: &[&str] = &["/health", "/api/1/auth/login", "/api/1/auth/refresh"];
 
 /// Extract client IP respecting the X-Forwarded-For trust boundary.
 ///
@@ -197,8 +197,8 @@ pub async fn require_role_middleware(request: Request, next: Next) -> Result<Res
 
 /// Auth 端点速率限制中间件(vuln-0006 修复)
 ///
-/// 应用到 `/api/v1/auth/login`、`/api/v1/auth/refresh`、`/api/v1/auth/logout`
-/// 和 `/api/v1/auth/me` 等认证端点,防止暴力破解和 token 枚举攻击。
+/// 应用到 `/api/1/auth/login`、`/api/1/auth/refresh`、`/api/1/auth/logout`
+/// 和 `/api/1/auth/me` 等认证端点,防止暴力破解和 token 枚举攻击。
 ///
 /// 通过 limiteron Governor 的 RequestContext 驱动限流。
 /// 白名单内的 IP 跳过限流。限流未启用时直接放行。
@@ -287,6 +287,14 @@ pub async fn auth_rate_limit_middleware(
 
     if !allowed {
         log::warn!("Auth endpoint rate limit exceeded for IP: {}", ip);
+
+        // DEFECT-AUDIT-001: 限流事件写入审计日志
+        if let Ok(audit_opt) = state.kit.require::<crate::registry::AuditModule>() {
+            if let Some(logger) = audit_opt.as_ref() {
+                logger.log_rate_limit_exceeded(None, Some(ip.clone()));
+            }
+        }
+
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
 

@@ -1170,7 +1170,11 @@ impl EmbeddingService {
             &model_config,
             model_config.engine_type.clone(),
             crate::config::model::Precision::Fp32,
-        )?;
+        )
+        .map_err(|e| VecboostError::NotFound(format!(
+            "Failed to load model '{}': {}",
+            req.model_name, e
+        )))?;
 
         self.engine = Arc::new(RwLock::new(new_engine));
         self.model_config = Some(model_config);
@@ -3540,6 +3544,10 @@ mod tests {
         };
         let result = service.switch_model(req).await;
         assert!(result.is_err(), "switch to nonexistent model should fail");
+        assert!(
+            matches!(result.unwrap_err(), VecboostError::NotFound(_)),
+            "nonexistent model should return NotFound (404), not Internal (500)"
+        );
     }
 
     #[tokio::test]

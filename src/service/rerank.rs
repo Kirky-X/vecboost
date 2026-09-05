@@ -119,6 +119,15 @@ impl RerankService {
             )));
         }
 
+        // 验证 top_k 有效性（0 无意义，应拒绝）
+        if let Some(top_k) = req.top_k
+            && top_k == 0
+        {
+            return Err(VecboostError::InvalidInput(
+                "top_k must be greater than 0 when specified".to_string(),
+            ));
+        }
+
         let documents = &req.documents;
 
         let start = Instant::now();
@@ -427,6 +436,27 @@ mod tests {
 
         let result = service.process_rerank(req, 100, 8192).await.unwrap();
         assert_eq!(result.results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_rerank_top_k_zero_rejected() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockRerankEngine));
+        let service = make_service(engine);
+
+        let req = RerankRequest {
+            query: "test".to_string(),
+            documents: vec!["a".to_string(), "b".to_string()],
+            top_k: Some(0),
+            return_documents: None,
+        };
+
+        let err = service.process_rerank(req, 100, 8192).await.unwrap_err();
+        assert!(
+            matches!(err, VecboostError::InvalidInput(_)),
+            "top_k=0 should return InvalidInput, got: {:?}",
+            err
+        );
     }
 
     #[tokio::test]

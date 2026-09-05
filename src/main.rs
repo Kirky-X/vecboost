@@ -431,10 +431,23 @@ async fn init_pipeline(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Early CLI detection: suppress console logging in CLI mode to keep stdout clean
+    // for machine-readable JSON output (DEFECT-CLI-001 fix)
+    #[cfg(feature = "cli")]
+    let cli_mode = {
+        let known_cmds = ["embed", "embed_batch", "compute_similarity", "rerank"];
+        std::env::args()
+            .nth(1)
+            .map(|a| known_cmds.contains(&a.as_str()))
+            .unwrap_or(false)
+    };
+    #[cfg(not(feature = "cli"))]
+    let cli_mode = false;
+
     let logger_manager = Arc::new(
         inklog::LoggerManager::builder()
             .level("info")
-            .console(true)
+            .console(!cli_mode)
             .file("logs/vecboost.log")
             .file_compress(true)
             .build()

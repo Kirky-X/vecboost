@@ -53,10 +53,28 @@ pub fn is_valid_hf_repo_id(repo_id: &str) -> bool {
     })
 }
 
+/// 检测是否使用了非官方 HuggingFace 端点（如国内镜像）。
+///
+/// hf-hub 1.0.0 强制要求服务端返回 ETag 响应头，部分镜像站（如 hf-mirror.com）
+/// 可能不提供该头部，导致下载失败（DEFECT-HUB-001）。
+fn detect_mirror_risk() -> Option<String> {
+    let endpoint = std::env::var("HF_ENDPOINT").ok()?;
+    if endpoint.is_empty()
+        || endpoint.contains("huggingface.co")
+        || endpoint.contains("hf.co")
+    {
+        return None;
+    }
+    Some(endpoint)
+}
+
 /// 构建已校验的 HuggingFace model 仓库句柄（blocking）。
 ///
 /// 统一 vuln-0009 的 repo_id 格式校验与 HFClientSync 构造，供所有远程下载入口复用，
 /// 避免校验逻辑遗漏到 fallback/onnx/recovery 路径。
+///
+/// DEFECT-HUB-001：当 `HF_ENDPOINT` 指向非官方镜像时，hf-hub 1.0.0 可能因
+/// 缺少 ETag 头部而下载失败。此函数提前检测并输出警告，建议用户使用本地模型路径。
 pub(crate) fn build_hf_repo(
     repo_id: &str,
 ) -> Result<HFRepositorySync<RepoTypeModel>, VecboostError> {
@@ -67,7 +85,33 @@ pub(crate) fn build_hf_repo(
             repo_id
         )));
     }
-    let api = HFClientSync::new().map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+
+    // DEFECT-HUB-001: 提前检测镜像端点并警告
+    if let Some(endpoint) = detect_mirror_risk() {
+        log::warn!(
+            "HF_ENDPOINT={} detected — hf-hub 1.0.0 requires ETag headers which \
+             some mirrors (e.g. hf-mirror.com) may not provide. If model download \
+             fails with 'missing ETag header', pre-download the model manually and \
+             set `model_path` in config to use local loading instead.",
+            endpoint
+        );
+    }
+
+    let api = HFClientSync::new().map_err(|e| {
+        let msg = e.to_string();
+        // 提供更具针对性的错误信息
+        if msg.contains("ETag") || msg.contains("missing") {
+            VecboostError::ModelLoadError(format!(
+                "HuggingFace hub initialization failed: {}. \
+                 If using HF_ENDPOINT mirror, it may be incompatible with hf-hub 1.0.0 \
+                 (DEFECT-HUB-001). Workaround: pre-download the model and set \
+                 `model_path` in config.",
+                msg
+            ))
+        } else {
+            VecboostError::ModelLoadError(msg)
+        }
+    })?;
     let (owner, name) = split_id(repo_id);
     Ok(api.model(owner, name))
 }

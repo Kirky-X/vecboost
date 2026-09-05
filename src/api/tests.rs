@@ -329,30 +329,29 @@ fn test_to_api_error_model_load_error() {
     let err = VecboostError::ModelLoadError("model not found".to_string());
     let api_err = to_api_error(err);
     match api_err {
-        ApiError::Internal {
-            message, error_id, ..
+        ApiError::NotFound {
+            resource,
+            resource_id,
         } => {
-            assert!(message.contains("Model load error"));
-            assert!(message.contains("model not found"));
-            assert!(error_id.starts_with("err-"));
+            assert_eq!(resource, "model");
+            assert!(resource_id.as_deref().unwrap_or("").contains("model not found"));
         }
-        other => panic!("Expected Internal, got {:?}", other),
+        other => panic!("Expected NotFound, got {:?}", other),
     }
 }
 
 #[cfg(any(feature = "http", feature = "cli"))]
 #[test]
 fn test_to_api_error_other_variants_become_internal() {
+    // Note: ValidationError → InvalidInput, ModelLoadError → NotFound,
+    // RateLimitExceeded → ServiceUnavailable (tested separately)
     let variants = vec![
         VecboostError::ConfigError("cfg err".to_string()),
         VecboostError::InferenceError("inf err".to_string()),
         VecboostError::AuthenticationError("auth err".to_string()),
         VecboostError::DatabaseError("db err".to_string()),
         VecboostError::InternalError("internal err".to_string()),
-        VecboostError::RateLimitExceeded("rl err".to_string()),
-        VecboostError::ValidationError("val err".to_string()),
         VecboostError::IoError("io err".to_string()),
-        VecboostError::NotFound("nf err".to_string()),
         VecboostError::SecurityError("sec err".to_string()),
         VecboostError::ModelNotLoaded("not loaded".to_string()),
         VecboostError::ModelFileCorrupted("corrupted".to_string()),

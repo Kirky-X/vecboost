@@ -80,11 +80,23 @@ pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
             field: None,
             value: None,
         },
-        VecboostError::ModelLoadError(msg) => ApiError::Internal {
-            message: format!("Model load error: {}", msg),
-            error_id: uuid_like_id(),
+        VecboostError::ValidationError(msg) => ApiError::InvalidInput {
+            message: msg,
+            field: None,
+            value: None,
+        },
+        VecboostError::ModelLoadError(msg) => ApiError::NotFound {
+            resource: "model".to_string(),
+            resource_id: Some(msg),
+        },
+        VecboostError::NotFound(msg) => ApiError::NotFound {
+            resource: "resource".to_string(),
+            resource_id: Some(msg),
+        },
+        VecboostError::RateLimitExceeded(msg) => ApiError::ServiceUnavailable {
+            service: msg,
+            retry_after: Some(60),
             source: None,
-            context: None,
         },
         other => ApiError::Internal {
             message: other.to_string(),

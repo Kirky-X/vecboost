@@ -518,6 +518,11 @@ impl CandleEngine {
                 "Loading safetensors model weights from: {:?}",
                 weights_filename
             );
+            // SAFETY: `VarBuilder::from_mmaped_safetensors` memory-maps model weight files
+            // from disk. This is safe because:
+            // 1. The file path is validated to exist before this call.
+            // 2. The mmap is read-only and managed by candle's internal lifetime tracking.
+            // 3. The OS handles page faults; no manual pointer manipulation is needed.
             let vb =
                 unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], dtype, &device) };
             vb.map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
@@ -1170,6 +1175,8 @@ impl CandleEngine {
                 DType::F32
             }
         };
+        // SAFETY: Same as the initialization path — memory-maps safetensors weight file.
+        // The file path comes from a validated model config and the mmap is read-only.
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[weights_filename], compute_dtype, &self.device)
         }

@@ -99,7 +99,7 @@ impl AuditLogger {
         if let Some(parent) = log_file_path.parent()
             && let Err(e) = tokio::fs::create_dir_all(parent).await
         {
-            eprintln!("Failed to create log directory: {}", e);
+            log::error!("Failed to create log directory: {}", e);
             return;
         }
 
@@ -111,7 +111,7 @@ impl AuditLogger {
         {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("Failed to open audit log file: {}", e);
+                log::error!("Failed to open audit log file: {}", e);
                 return;
             }
         };
@@ -218,7 +218,7 @@ impl AuditLogger {
             match cmd {
                 LoggerCommand::Event(event) => {
                     if let Err(e) = Self::write_to_db(&pool, &event).await {
-                        eprintln!("Failed to write audit log to db: {}", e);
+                        log::error!("Failed to write audit log to db: {}", e);
                     }
                 }
                 LoggerCommand::Flush(ack) => {
@@ -227,7 +227,7 @@ impl AuditLogger {
                         if let LoggerCommand::Event(event) = cmd
                             && let Err(e) = Self::write_to_db(&pool, &event).await
                         {
-                            eprintln!("Failed to write audit log to db: {}", e);
+                            log::error!("Failed to write audit log to db: {}", e);
                         }
                     }
                     let _ = ack.send(());
@@ -266,7 +266,7 @@ impl AuditLogger {
             {
                 Ok(f) => f,
                 Err(e) => {
-                    eprintln!("Failed to reopen log file after rotation: {}", e);
+                    log::error!("Failed to reopen log file after rotation: {}", e);
                     buffer.clear();
                     return consecutive_errors + 1;
                 }
@@ -288,7 +288,7 @@ impl AuditLogger {
                 0
             }
             Err(e) => {
-                eprintln!("Failed to write audit log batch: {}", e);
+                log::error!("Failed to write audit log batch: {}", e);
                 consecutive_errors + 1
             }
         }
@@ -474,7 +474,7 @@ impl AuditLogger {
             let oldest_log = format!("{}.{}", log_file_path.display(), max_files);
             if let Err(e) = tokio::fs::remove_file(&oldest_log).await {
                 if !e.kind().eq(&std::io::ErrorKind::NotFound) {
-                    eprintln!("Failed to remove old log file {}: {}", oldest_log, e);
+                    log::error!("Failed to remove old log file {}: {}", oldest_log, e);
                 }
             }
         }
@@ -485,14 +485,14 @@ impl AuditLogger {
 
             if let Err(e) = tokio::fs::rename(&old_file, &new_file).await {
                 if !e.kind().eq(&std::io::ErrorKind::NotFound) {
-                    eprintln!("Failed to rotate log file: {}", e);
+                    log::error!("Failed to rotate log file: {}", e);
                 }
             }
         }
 
         let rotated_log = format!("{}.1", log_file_path.display());
         if let Err(e) = tokio::fs::rename(log_file_path, &rotated_log).await {
-            eprintln!("Failed to rotate current log: {}", e);
+            log::error!("Failed to rotate current log: {}", e);
         }
     }
 

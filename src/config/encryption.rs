@@ -46,6 +46,43 @@ use confers::secret::{XChaCha20Crypto, derive_field_key};
 /// The value must be exactly 32 bytes (UTF-8 encoded) for XChaCha20-Poly1305.
 const ENCRYPTION_KEY_ENV: &str = "VECBOOST_ENCRYPTION_KEY";
 
+/// Validate that the master encryption key is configured.
+///
+/// Returns `Ok(())` when `VECBOOST_ENCRYPTION_KEY` is set to a valid 32-byte value.
+/// Returns `Err(reason)` when the key is missing or has an invalid length.
+///
+/// # Production Deployment
+///
+/// **生产环境必须设置 `VECBOOST_REQUIRE_ENCRYPTION=1`**，否则启动时会自动调用
+/// 此函数校验密钥。未配置时敏感字段（JWT secret、admin password 等）将以明文
+/// 存储，存在安全风险。
+///
+/// # Usage
+///
+/// Call during application startup to enforce encryption in production:
+///
+/// ```rust,ignore
+/// crate::config::encryption::validate_encryption_key()?;
+/// ```
+pub fn validate_encryption_key() -> Result<(), String> {
+    match read_master_key() {
+        Some(_) => Ok(()),
+        None => {
+            if std::env::var(ENCRYPTION_KEY_ENV).is_err() {
+                Err(format!(
+                    "{ENCRYPTION_KEY_ENV} environment variable is not set. \
+                     Production deployments MUST configure a 32-byte encryption key. \
+                     Generate one with: openssl rand -hex 32"
+                ))
+            } else {
+                Err(format!(
+                    "{ENCRYPTION_KEY_ENV} must be exactly 32 bytes for XChaCha20-Poly1305"
+                ))
+            }
+        }
+    }
+}
+
 /// HKDF field path used to derive per-field encryption keys.
 const FIELD_PATH: &str = "vecboost.config.sensitive";
 
@@ -59,8 +96,19 @@ const KEY_VERSION: &str = "v1";
 /// Read the 32-byte master key from the environment.
 ///
 /// Returns `None` when the env var is unset or empty (encryption disabled).
+/// 未配置时记录 `log::warn!` 提醒生产环境应配置加密密钥。
 fn read_master_key() -> Option<[u8; 32]> {
-    let key = std::env::var(ENCRYPTION_KEY_ENV).ok()?;
+    let key = match std::env::var(ENCRYPTION_KEY_ENV) {
+        Ok(k) => k,
+        Err(_) => {
+            log::warn!(
+                "{ENCRYPTION_KEY_ENV} not set — sensitive config fields stored as plaintext. \
+                 Production deployments MUST set this to a 32-byte key \
+                 (e.g. `openssl rand -hex 32`) and enable VECBOOST_REQUIRE_ENCRYPTION=1."
+            );
+            return None;
+        }
+    };
     if key.len() != 32 {
         log::warn!(
             "{ENCRYPTION_KEY_ENV} must be exactly 32 bytes for XChaCha20-Poly1305, \

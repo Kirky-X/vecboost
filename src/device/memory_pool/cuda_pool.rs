@@ -46,6 +46,10 @@ impl CudaMemoryPool {
         let device = cudarc::driver::result::device::get(device_id)
             .map_err(|e| format!("CUDA device {} not found: {}", device_id, e))?;
 
+        // SAFETY: `primary_ctx::retain` increments the reference count of the CUDA
+        // primary context for the given device. Safe because:
+        // 1. `device` was obtained from a validated `device_id` via `device::get()`.
+        // 2. cudarc manages the context lifetime via RAII; we hold a reference.
         let ctx = unsafe {
             cudarc::driver::result::primary_ctx::retain(device).map_err(|e| {
                 format!(
@@ -70,6 +74,10 @@ impl CudaMemoryPool {
     ///
     /// 通过 `cuMemAlloc_v2` 分配真实 GPU 内存。受池最大容量限制。
     pub fn allocate(&mut self, size: usize) -> Result<CudaMemoryPtr, String> {
+        if size == 0 {
+            return Err("CUDA allocation size must be > 0".to_string());
+        }
+
         let size_u64 = size as u64;
 
         // 检查是否有足够内存
@@ -85,6 +93,12 @@ impl CudaMemoryPool {
         }
 
         // 通过 cudarc 调用 cuMemAlloc_v2 分配真实 CUDA 内存
+        // SAFETY: `malloc_sync` wraps `cuMemAlloc_v2` which allocates device memory.
+        // Safe because:
+        // 1. The CUDA context is initialized and valid (verified at pool creation).
+        // 2. `size` has been checked > 0 above (zero-byte allocations are rejected).
+        // 3. Available memory has been verified against `max_memory` limit.
+        // 4. The returned pointer is tracked by the pool for later deallocation.
         let dev_ptr = unsafe {
             cudarc::driver::result::malloc_sync(size)
                 .map_err(|e| format!("CUDA malloc failed for {} bytes: {}", size, e))?
@@ -117,6 +131,9 @@ impl CudaMemoryPool {
         }
 
         // 通过 cudarc 调用 cuMemFree_v2 释放真实 CUDA 内存
+        // SAFETY: `free_sync` wraps `cuMemFree_v2` which frees device memory.
+        // Safe because `ptr.ptr` was allocated by `malloc_sync` in the same context
+        // and has not been freed yet (verified by pool tracking).
         if let Err(e) = unsafe { cudarc::driver::result::free_sync(ptr.ptr) } {
             warn!("CUDA free failed for device {}: {}", self.device_id, e);
         }
@@ -179,6 +196,9 @@ impl Drop for CudaMemoryPtr {
                 "Dropping CUDA memory ptr on device {} ({} bytes) — freeing via cuMemFree_v2",
                 self.device_id, self.size
             );
+            // SAFETY: `free_sync` wraps `cuMemFree_v2`. Safe because `self.ptr` was
+            // allocated by `malloc_sync` in a valid CUDA context and is being freed
+            // exactly once (Drop guarantees single invocation).
             if let Err(e) = unsafe { cudarc::driver::result::free_sync(self.ptr) } {
                 warn!(
                     "CUDA free on drop failed for device {}: {}",

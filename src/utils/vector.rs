@@ -11,9 +11,40 @@ use crate::utils::vector_simd;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+/// Error type for vector utility parsing operations.
+///
+/// Replaces raw `String` errors in `FromStr` implementations and validation
+/// functions to provide structured, matchable error variants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VectorParseError {
+    /// Unknown similarity metric name.
+    UnknownSimilarityMetric(String),
+    /// Unknown task type name.
+    UnknownTaskType(String),
+    /// Invalid dimension parameter.
+    InvalidDimension(String),
+}
+
+impl std::fmt::Display for VectorParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownSimilarityMetric(s) => write!(f, "Unknown similarity metric: {}", s),
+            Self::UnknownTaskType(s) => write!(f, "Unknown task type: {}", s),
+            Self::InvalidDimension(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+impl std::error::Error for VectorParseError {}
+
+/// 相似度度量指标。
+///
+/// 支持余弦、欧氏、点积和曼哈顿距离四种度量。
+/// 通过 `FromStr` 从字符串解析（不区分大小写）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SimilarityMetric {
     #[default]
     Cosine,
@@ -23,7 +54,7 @@ pub enum SimilarityMetric {
 }
 
 impl FromStr for SimilarityMetric {
-    type Err = String;
+    type Err = VectorParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -31,14 +62,18 @@ impl FromStr for SimilarityMetric {
             "euclidean" => Ok(SimilarityMetric::Euclidean),
             "dot" | "dotproduct" | "dot_product" => Ok(SimilarityMetric::DotProduct),
             "manhattan" | "l1" => Ok(SimilarityMetric::Manhattan),
-            _ => Err(format!("Unknown similarity metric: {}", s)),
+            _ => Err(VectorParseError::UnknownSimilarityMetric(s.to_string())),
         }
     }
 }
 
+/// 聚合模式 — 控制长文本 embedding 的分块策略。
+///
+/// 支持滑动窗口、文档级、段落级、固定大小、平均、最大池化、最小池化。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AggregationMode {
     #[default]
     SlidingWindow,
@@ -51,6 +86,9 @@ pub enum AggregationMode {
     MinPooling,
 }
 
+/// 计算两个向量的余弦相似度。
+///
+/// 零向量返回 `Err`（数学上未定义）。
 pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
         return Err(VecboostError::InvalidInput(format!(
@@ -73,6 +111,7 @@ pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     Ok(dot_product / (norm_a * norm_b))
 }
 
+/// 计算两个向量的欧氏距离。
 pub fn euclidean_distance(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
         return Err(VecboostError::InvalidInput(format!(
@@ -87,6 +126,7 @@ pub fn euclidean_distance(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> 
     Ok(squared_distance.sqrt())
 }
 
+/// 计算两个向量的点积。
 pub fn dot_product(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
         return Err(VecboostError::InvalidInput(format!(
@@ -99,6 +139,7 @@ pub fn dot_product(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     Ok(vector_simd::dot_product_chunked(v1, v2))
 }
 
+/// 计算两个向量的曼哈顿距离。
 pub fn manhattan_distance(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
         return Err(VecboostError::InvalidInput(format!(
@@ -111,6 +152,9 @@ pub fn manhattan_distance(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> 
     Ok(vector_simd::manhattan_distance_chunked(v1, v2))
 }
 
+/// 根据指定度量计算两个向量的相似度。
+///
+/// 距离度量（欧氏、曼哈顿）转换为相似度：`1 / (1 + distance)`。
 pub fn calculate_similarity(
     v1: &[f32],
     v2: &[f32],
@@ -181,13 +225,15 @@ pub fn truncate_vector(vector: &[f32], target_dimension: usize) -> Vec<f32> {
 }
 
 /// Validate dimension parameter against maximum allowed dimension.
-pub fn validate_dimension(target: Option<usize>, max_dimension: usize) -> Result<(), String> {
+pub fn validate_dimension(target: Option<usize>, max_dimension: usize) -> Result<(), VectorParseError> {
     match target {
-        Some(0) => Err("dimensions must be greater than 0".to_string()),
-        Some(d) if d > max_dimension => Err(format!(
+        Some(0) => Err(VectorParseError::InvalidDimension(
+            "dimensions must be greater than 0".to_string(),
+        )),
+        Some(d) if d > max_dimension => Err(VectorParseError::InvalidDimension(format!(
             "dimensions {} exceeds model maximum {}",
             d, max_dimension
-        )),
+        ))),
         _ => Ok(()),
     }
 }
@@ -214,6 +260,7 @@ pub fn information_retention_rate(embedding: &[f32], target_dim: usize) -> f32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum TaskType {
     /// 检索任务（推荐 1024 维）
     Retrieval,
@@ -226,7 +273,7 @@ pub enum TaskType {
 }
 
 impl std::str::FromStr for TaskType {
-    type Err = String;
+    type Err = VectorParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -236,10 +283,7 @@ impl std::str::FromStr for TaskType {
             "semantic_search" | "semanticsearch" | "semantic-search" => {
                 Ok(TaskType::SemanticSearch)
             }
-            _ => Err(format!(
-                "Unknown task type: {}. Valid: retrieval, clustering, classification, semantic_search",
-                s
-            )),
+            _ => Err(VectorParseError::UnknownTaskType(s.to_string())),
         }
     }
 }
@@ -486,14 +530,14 @@ mod similarity_tests {
     fn test_validate_dimension_invalid_too_small() {
         let result = validate_dimension(Some(0), 1024);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("greater than 0"));
+        assert!(result.unwrap_err().to_string().contains("greater than 0"));
     }
 
     #[test]
     fn test_validate_dimension_invalid_too_large() {
         let result = validate_dimension(Some(2048), 1024);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("exceeds model maximum"));
+        assert!(result.unwrap_err().to_string().contains("exceeds model maximum"));
     }
 
     // ========================================================================

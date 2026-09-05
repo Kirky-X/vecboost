@@ -272,13 +272,16 @@ impl OnnxEngine {
                     usage_percent >= threshold_percent
                 })
             } else {
-                let rt = tokio::runtime::Builder::new_current_thread()
+                let rt = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .unwrap_or_else(|_| {
-                        log::error!("Failed to create Tokio runtime for memory check");
-                        std::process::exit(1);
-                    });
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        log::error!("Failed to create Tokio runtime for memory check: {}", e);
+                        return false;
+                    }
+                };
                 rt.block_on(async {
                     let stats = monitor.get_memory_stats().await;
                     let usage_percent = (stats.current_bytes * 100)

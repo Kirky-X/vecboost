@@ -36,7 +36,10 @@ pub async fn metrics_endpoint(
     let collector_opt = app_state
         .kit
         .require::<crate::registry::PrometheusCollectorModule>()
-        .expect("PrometheusCollectorModule not registered");
+        .unwrap_or_else(|e| {
+            log::error!("PrometheusCollectorModule not registered: {}", e);
+            None
+        });
 
     if app_state
         .kit
@@ -47,7 +50,10 @@ pub async fn metrics_endpoint(
         let ip_whitelist = app_state
             .kit
             .require::<crate::registry::IpWhitelistModule>()
-            .expect("IpWhitelistModule not registered");
+            .unwrap_or_else(|e| {
+                log::error!("IpWhitelistModule not registered: {}", e);
+                Vec::new()
+            });
 
         if !is_ip_whitelisted(&ip, &ip_whitelist) {
             let context = crate::rate_limit::RequestContext {
@@ -56,12 +62,24 @@ pub async fn metrics_endpoint(
                 method: "GET".to_string(),
                 ..Default::default()
             };
-            let allowed = app_state
+            let allowed = match app_state
                 .kit
                 .require::<crate::registry::RateLimitModule>()
-                .expect("RateLimitModule not registered")
-                .check_rate_limit(&context)
-                .await;
+            {
+                Ok(limiter) => limiter.check_rate_limit(&context).await,
+                Err(e) => {
+                    // Fail-closed: RateLimitEnabled=true but module unavailable → deny request
+                    log::error!(
+                        "RateLimitModule not available while RateLimitEnabled=true: {}. Denying request.",
+                        e
+                    );
+                    return Response::builder()
+                        .status(500)
+                        .body(Body::from("Rate limiter unavailable"))
+                        .unwrap()
+                        .into_response();
+                }
+            };
             // 记录限流决策指标
             if let Some(prom) = collector_opt.as_ref() {
                 if allowed {
@@ -80,9 +98,19 @@ pub async fn metrics_endpoint(
         }
     }
 
-    let prometheus_collector = collector_opt
-        .as_ref()
-        .expect("PrometheusCollector not configured");
+    let prometheus_collector = match collector_opt.as_ref() {
+        Some(c) => c,
+        None => {
+            return Response::builder()
+                .status(500)
+                .body(Body::from("PrometheusCollector not configured"))
+                .unwrap_or_else(|e| {
+                    log::error!("Failed to build error response: {}", e);
+                    Response::new(Body::from("Internal error"))
+                })
+                .into_response();
+        }
+    };
     let encoder = prometheus::TextEncoder::new();
     let metric_families = prometheus_collector.registry().gather();
     let mut buffer = Vec::new();

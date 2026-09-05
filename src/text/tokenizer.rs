@@ -132,8 +132,11 @@ impl Utf8ValidationResult {
     }
 }
 
-pub fn validate_utf8(text: &str) -> Utf8ValidationResult {
-    let bytes = text.as_bytes();
+/// Validate UTF-8 encoding of a byte slice.
+///
+/// This is the core implementation that operates on raw bytes, allowing
+/// tests to verify invalid byte sequences without constructing invalid `&str`.
+pub fn validate_utf8_bytes(bytes: &[u8]) -> Utf8ValidationResult {
     let mut position = 0;
 
     while position < bytes.len() {
@@ -178,6 +181,13 @@ pub fn validate_utf8(text: &str) -> Utf8ValidationResult {
     }
 
     Utf8ValidationResult::valid()
+}
+
+/// Validate UTF-8 encoding of a string.
+///
+/// Delegates to [`validate_utf8_bytes`] for the actual validation logic.
+pub fn validate_utf8(text: &str) -> Utf8ValidationResult {
+    validate_utf8_bytes(text.as_bytes())
 }
 
 #[cfg(target_os = "macos")]
@@ -487,15 +497,15 @@ impl Tokenizer {
             ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"];
 
         // Parse model.vocab (token → id mapping)
-        if let Some(vocab_obj) = json.get("model").and_then(|m| m.get("vocab")) {
-            if let Some(vocab_map) = vocab_obj.as_object() {
-                for (token, id_val) in vocab_map {
-                    if let Some(id) = id_val.as_u64() {
-                        if special_token_names.contains(&token.as_str()) {
-                            special_tokens.insert(token.clone(), id as u32);
-                        } else {
-                            vocab.insert(token.clone(), id as u32);
-                        }
+        if let Some(vocab_obj) = json.get("model").and_then(|m| m.get("vocab"))
+            && let Some(vocab_map) = vocab_obj.as_object()
+        {
+            for (token, id_val) in vocab_map {
+                if let Some(id) = id_val.as_u64() {
+                    if special_token_names.contains(&token.as_str()) {
+                        special_tokens.insert(token.clone(), id as u32);
+                    } else {
+                        vocab.insert(token.clone(), id as u32);
                     }
                 }
             }
@@ -507,13 +517,11 @@ impl Tokenizer {
                 if let (Some(content), Some(id)) = (
                     token.get("content").and_then(|c| c.as_str()),
                     token.get("id").and_then(|i| i.as_u64()),
-                ) {
-                    if special_token_names.contains(&content) {
-                        special_tokens
-                            .entry(content.to_string())
-                            .or_insert(id as u32);
-                        vocab.remove(content); // ensure no duplication
-                    }
+                ) && special_token_names.contains(&content) {
+                    special_tokens
+                        .entry(content.to_string())
+                        .or_insert(id as u32);
+                    vocab.remove(content); // ensure no duplication
                 }
             }
         }
@@ -955,7 +963,7 @@ impl Tokenizer {
                     let substr: String = if start == 0 {
                         chars[start..end].iter().collect()
                     } else {
-                        format!("##{}", &chars[start..end].iter().collect::<String>())
+                        format!("##{}", chars[start..end].iter().collect::<String>())
                     };
 
                     if self.vocab.contains_key(&substr) {
@@ -1203,7 +1211,9 @@ impl CachedTokenizer {
 
         let mut stats = self.stats.lock().await;
         stats.misses += 1;
-        let _ = self.cache.set(&key, &encoding).await;
+        if let Err(e) = self.cache.set(&key, &encoding).await {
+            log::warn!("Failed to cache tokenization result: {}", e);
+        }
 
         Ok(encoding)
     }
@@ -1325,7 +1335,9 @@ impl CachedTokenizer {
 
         let mut stats = self.stats.lock().await;
         stats.misses += 1;
-        let _ = self.cache.set(&key, &encoding).await;
+        if let Err(e) = self.cache.set(&key, &encoding).await {
+            log::warn!("Failed to cache tokenization result: {}", e);
+        }
 
         Ok(encoding)
     }
@@ -1468,8 +1480,7 @@ mod tests {
     #[test]
     fn test_validate_utf8_invalid_lead_byte_0x80() {
         let bytes = [0x80u8];
-        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
-        let r = validate_utf8(s);
+        let r = validate_utf8_bytes(&bytes);
         assert!(!r.is_valid);
         assert_eq!(r.invalid_byte_position, Some(0));
         assert_eq!(r.invalid_byte_value, Some(0x80));
@@ -1479,8 +1490,7 @@ mod tests {
     #[test]
     fn test_validate_utf8_invalid_lead_byte_0xc0() {
         let bytes = [0xC0u8];
-        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
-        let r = validate_utf8(s);
+        let r = validate_utf8_bytes(&bytes);
         assert!(!r.is_valid);
         assert_eq!(r.invalid_byte_position, Some(0));
         assert_eq!(r.invalid_byte_value, Some(0xC0));
@@ -1489,8 +1499,7 @@ mod tests {
     #[test]
     fn test_validate_utf8_invalid_lead_byte_0xff() {
         let bytes = [0xFFu8];
-        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
-        let r = validate_utf8(s);
+        let r = validate_utf8_bytes(&bytes);
         assert!(!r.is_valid);
         assert_eq!(r.invalid_byte_value, Some(0xFF));
     }
@@ -1498,8 +1507,7 @@ mod tests {
     #[test]
     fn test_validate_utf8_incomplete_two_byte_sequence() {
         let bytes = [0xC2u8];
-        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
-        let r = validate_utf8(s);
+        let r = validate_utf8_bytes(&bytes);
         assert!(!r.is_valid);
         assert_eq!(r.invalid_byte_position, Some(0));
         assert_eq!(r.invalid_byte_value, Some(0xC2));
@@ -1514,8 +1522,7 @@ mod tests {
     #[test]
     fn test_validate_utf8_incomplete_three_byte_sequence() {
         let bytes = [0xE0u8, 0x80u8];
-        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
-        let r = validate_utf8(s);
+        let r = validate_utf8_bytes(&bytes);
         assert!(!r.is_valid);
         assert_eq!(r.invalid_byte_position, Some(0));
         assert!(
@@ -1529,8 +1536,7 @@ mod tests {
     #[test]
     fn test_validate_utf8_incomplete_four_byte_sequence() {
         let bytes = [0xF0u8, 0x80u8, 0x80u8];
-        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
-        let r = validate_utf8(s);
+        let r = validate_utf8_bytes(&bytes);
         assert!(!r.is_valid);
         assert_eq!(r.invalid_byte_position, Some(0));
         assert!(
@@ -1544,8 +1550,7 @@ mod tests {
     #[test]
     fn test_validate_utf8_invalid_continuation_byte() {
         let bytes = [0xC2u8, 0xFFu8];
-        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
-        let r = validate_utf8(s);
+        let r = validate_utf8_bytes(&bytes);
         assert!(!r.is_valid);
         assert_eq!(r.invalid_byte_position, Some(1));
         assert_eq!(r.invalid_byte_value, Some(0xFF));
@@ -1560,8 +1565,7 @@ mod tests {
     #[test]
     fn test_validate_utf8_valid_then_invalid_continuation_byte() {
         let bytes = [b'a', 0xE0u8, 0x80u8, 0x00u8];
-        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
-        let r = validate_utf8(s);
+        let r = validate_utf8_bytes(&bytes);
         assert!(!r.is_valid);
         assert_eq!(r.invalid_byte_position, Some(3));
         assert_eq!(r.invalid_byte_value, Some(0x00));
@@ -1899,6 +1903,9 @@ mod tests {
         fn test_tokenizer_encode_batch_invalid_utf8_returns_error() {
             let tokenizer = make_tokenizer();
             let bytes = [0xC2u8];
+            // SAFETY: Intentionally creates invalid UTF-8 to test tokenizer error handling
+            // with malformed input. The `&str` is only passed to encode/encode_batch
+            // which must gracefully reject invalid UTF-8.
             let bad = unsafe { std::str::from_utf8_unchecked(&bytes) };
             let result = tokenizer.encode_batch(&["the", bad], false);
             assert!(result.is_err());
@@ -2033,6 +2040,9 @@ mod tests {
             let tokenizer = Tokenizer::new(512).unwrap();
             let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
             let bytes = [0xC2u8];
+            // SAFETY: Intentionally creates invalid UTF-8 to test tokenizer error handling
+            // with malformed input. The `&str` is only passed to encode/encode_batch
+            // which must gracefully reject invalid UTF-8.
             let bad = unsafe { std::str::from_utf8_unchecked(&bytes) };
             let result = cached.encode(bad, false).await;
             assert!(result.is_err());

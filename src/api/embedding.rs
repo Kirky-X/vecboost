@@ -417,7 +417,7 @@ async fn health_handler() -> Result<serde_json::Value, ApiError> {
         Err(e) => {
             unhealthy_modules.push(format!("embedding: health check failed: {}", e));
         }
-        _ => {}
+        Ok(_) => {} // healthy — no action needed
     }
     match st.kit.health_check::<RerankModule>() {
         Ok(status) if !status.is_healthy() => {
@@ -426,7 +426,7 @@ async fn health_handler() -> Result<serde_json::Value, ApiError> {
         Err(e) => {
             unhealthy_modules.push(format!("rerank: health check failed: {}", e));
         }
-        _ => {}
+        Ok(_) => {} // healthy — no action needed
     }
     match st.kit.health_check::<RateLimitModule>() {
         Ok(status) if !status.is_healthy() => {
@@ -435,7 +435,7 @@ async fn health_handler() -> Result<serde_json::Value, ApiError> {
         Err(e) => {
             unhealthy_modules.push(format!("rate_limit: health check failed: {}", e));
         }
-        _ => {}
+        Ok(_) => {} // healthy — no action needed
     }
     match st.kit.health_check::<CacheModule>() {
         Ok(status) if !status.is_healthy() => {
@@ -444,7 +444,7 @@ async fn health_handler() -> Result<serde_json::Value, ApiError> {
         Err(e) => {
             unhealthy_modules.push(format!("cache: health check failed: {}", e));
         }
-        _ => {}
+        Ok(_) => {} // healthy — no action needed
     }
 
     if unhealthy_modules.is_empty() {

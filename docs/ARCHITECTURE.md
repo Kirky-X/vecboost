@@ -375,7 +375,7 @@ sequenceDiagram
     participant E as InferenceEngine
     participant Cache as oxcache
 
-    C->>G: POST /api/v1/embed {text}
+    C->>G: POST /api/1/embed {text}
     G->>G: Auth (JWT/CSRF) check
     G->>G: Rate limit check (limiteron)
     G->>P: Enqueue with priority

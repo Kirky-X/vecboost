@@ -48,7 +48,7 @@ cargo build --release
 ./target/release/vecboost
 
 # 3. 测试 API（在新终端中）
-curl -X POST http://localhost:9002/api/v1/embed \
+curl -X POST http://localhost:9002/api/1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, VecBoost!"}'
 ```
@@ -404,7 +404,7 @@ curl http://localhost:9002/health
 #### 单个文本
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed \
+curl -X POST http://localhost:9002/api/1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!"}'
 ```
@@ -424,7 +424,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 #### 批量嵌入
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed/batch \
+curl -X POST http://localhost:9002/api/1/embed/batch \
   -H "Content-Type: application/json" \
   -d '{
     "texts": [
@@ -443,7 +443,7 @@ curl -X POST http://localhost:9002/api/v1/embed/batch \
 `normalize` 选项返回单位长度嵌入向量（用于余弦相似度）：
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed \
+curl -X POST http://localhost:9002/api/1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": "要嵌入的文本", "normalize": true}'
 ```
@@ -453,7 +453,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 ### 📊 计算相似度
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/similarity \
+curl -X POST http://localhost:9002/api/1/similarity \
   -H "Content-Type: application/json" \
   -d '{
     "source": "机器学习是人工智能的一个分支",
@@ -476,7 +476,7 @@ curl -X POST http://localhost:9002/api/v1/similarity \
 ### 🔍 重排序（Rerank）
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/rerank \
+curl -X POST http://localhost:9002/api/1/rerank \
   -H "Content-Type: application/json" \
   -d '{
     "query": "什么是机器学习？",
@@ -496,19 +496,19 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 #### 获取当前模型
 
 ```bash
-curl http://localhost:9002/api/v1/model/current
+curl http://localhost:9002/api/1/model/current
 ```
 
 #### 获取模型详细信息
 
 ```bash
-curl http://localhost:9002/api/v1/model/info
+curl http://localhost:9002/api/1/model/info
 ```
 
 #### 列出可用模型
 
 ```bash
-curl http://localhost:9002/api/v1/models
+curl http://localhost:9002/api/1/models
 ```
 
 ---
@@ -534,7 +534,7 @@ default_admin_username = "admin"
 ### 获取令牌
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/auth/login \
+curl -X POST http://localhost:9002/api/1/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "username": "admin",
@@ -561,7 +561,7 @@ curl -X POST http://localhost:9002/api/v1/auth/login \
 在 API 请求中包含令牌：
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed \
+curl -X POST http://localhost:9002/api/1/embed \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..." \
   -d '{"text": "Hello, world!"}'
@@ -718,7 +718,7 @@ kubectl apply -f <your-ingress>.yaml
 ```
 # HELP vecboost_requests_total 总请求数
 # TYPE vecboost_requests_total counter
-vecboost_requests_total{method="POST",endpoint="/api/v1/embed"} 1234
+vecboost_requests_total{method="POST",endpoint="/api/1/embed"} 1234
 
 # HELP vecboost_embedding_latency_seconds 嵌入生成延迟
 # TYPE vecboost_embedding_latency_seconds histogram
@@ -818,7 +818,7 @@ grep -i cuda target/release/vecboost.log
 
 ```bash
 # 检查令牌是否有效（通过 /auth/me 端点验证当前用户信息）
-curl http://localhost:9002/api/v1/auth/me \
+curl http://localhost:9002/api/1/auth/me \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."
 ```
 
@@ -920,7 +920,7 @@ free -h     # 内存
 
 **问: 如何在运行时更改模型？**
 
-答: 使用 `POST /api/v1/model/switch` 端点。
+答: 使用 `POST /api/1/model/switch` 端点。
 
 ---
 

@@ -637,11 +637,11 @@ mod tests {
     async fn test_log_unauthorized_access_writes_to_file() {
         let temp_dir = TempDir::new().unwrap();
         let (logger, log_path) = make_logger(&temp_dir, "unauthorized.log");
-        logger.log_unauthorized_access(Some("10.0.0.6".to_string()), "/api/v1/embed");
+        logger.log_unauthorized_access(Some("10.0.0.6".to_string()), "/api/1/embed");
         logger.flush().await.unwrap();
         let content = read_log_content(&log_path).await;
         assert!(content.contains("unauthorized_access"));
-        assert!(content.contains("/api/v1/embed"));
+        assert!(content.contains("/api/1/embed"));
         assert!(content.contains("\"success\":false"));
     }
 

@@ -450,7 +450,7 @@ const DEFAULT_POOL_SIZE_PER_SIZE: usize = 8;
 
 /// 服务器配置默认值
 const DEFAULT_HOST: &str = "0.0.0.0";
-const DEFAULT_PORT: u16 = 3000;
+const DEFAULT_PORT: u16 = 9002;
 const DEFAULT_GRPC_PORT: u16 = 50051;
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_GRPC_MAX_CONNECTIONS: usize = 1000;
@@ -626,7 +626,7 @@ mod tests {
     fn test_server_config_default() {
         let config = ServerConfig::default();
         assert_eq!(config.host, "0.0.0.0");
-        assert_eq!(config.port, 3000);
+        assert_eq!(config.port, 9002);
         assert!(!config.grpc_enabled);
         assert_eq!(config.grpc_port, Some(50051));
         assert_eq!(config.timeout, Some(30));
@@ -713,7 +713,7 @@ mod tests {
     #[test]
     fn test_app_config_default() {
         let config = AppConfig::default();
-        assert_eq!(config.server.port, 3000);
+        assert_eq!(config.server.port, 9002);
         assert_eq!(config.model.model_repo, "BAAI/bge-m3");
         assert!(config.embedding.cache_enabled);
         assert!(config.audit.enabled);
@@ -802,7 +802,7 @@ mod tests {
         let config = AppConfig::default();
         // 验证所有子配置默认值
         assert_eq!(config.server.host, "0.0.0.0");
-        assert_eq!(config.server.port, 3000);
+        assert_eq!(config.server.port, 9002);
         assert!(!config.server.grpc_enabled);
         assert_eq!(config.server.grpc_port, Some(50051));
         assert_eq!(config.server.timeout, Some(30));

@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let context = RequestContext {
         client_ip: Some("192.168.1.100".to_string()),
         user_id: Some("alice".to_string()),
-        path: "/api/v1/embed".to_string(),
+        path: "/api/1/embed".to_string(),
         method: "POST".to_string(),
         ..Default::default()
     };

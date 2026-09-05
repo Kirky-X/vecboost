@@ -66,15 +66,15 @@ done
 if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
     echo "  Server ready, sending test requests..."
     # Embedding request
-    curl -sf -X POST http://localhost:8080/api/v1/embed \
+    curl -sf -X POST http://localhost:8080/api/1/embed \
         -H "Content-Type: application/json" \
         -d '{"text": "profile guided optimization test"}' > /dev/null 2>&1 || true
     # Similarity request
-    curl -sf -X POST http://localhost:8080/api/v1/similarity \
+    curl -sf -X POST http://localhost:8080/api/1/similarity \
         -H "Content-Type: application/json" \
         -d '{"source": "hello world", "target": "hello rust"}' > /dev/null 2>&1 || true
     # Batch embedding
-    curl -sf -X POST http://localhost:8080/api/v1/embed/batch \
+    curl -sf -X POST http://localhost:8080/api/1/embed/batch \
         -H "Content-Type: application/json" \
         -d '{"texts": ["text one", "text two", "text three"]}' > /dev/null 2>&1 || true
     sleep 1

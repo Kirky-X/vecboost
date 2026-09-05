@@ -73,8 +73,8 @@ async fn main() {
     println!("  ✅ Token 刷新: admin");
 
     // 未授权访问
-    logger.log_unauthorized_access(Some("10.0.0.99".to_string()), "/api/v1/internal");
-    println!("  ❌ 未授权访问: 10.0.0.99 → /api/v1/internal");
+    logger.log_unauthorized_access(Some("10.0.0.99".to_string()), "/api/1/internal");
+    println!("  ❌ 未授权访问: 10.0.0.99 → /api/1/internal");
 
     // 速率限制
     logger.log_rate_limit_exceeded(Some("abuser".to_string()), Some("10.0.0.50".to_string()));

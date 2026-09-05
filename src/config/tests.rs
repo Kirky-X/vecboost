@@ -249,7 +249,7 @@ fn test_confers_defaults_when_no_file() {
 
     // Verify defaults from app.rs Default impls
     assert_eq!(config.server.host, "0.0.0.0");
-    assert_eq!(config.server.port, 3000);
+    assert_eq!(config.server.port, 9002);
     assert_eq!(config.model.model_repo, "BAAI/bge-m3");
     assert_eq!(config.model.batch_size, 32);
     assert_eq!(config.embedding.default_aggregation, "mean");

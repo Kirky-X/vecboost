@@ -154,7 +154,7 @@ docker run -p 9002:9002 -p 50051:50051 \
 **通过 HTTP 生成嵌入向量：**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed \
+curl -X POST http://localhost:9002/api/1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!"}'
 ```

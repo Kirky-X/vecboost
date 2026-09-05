@@ -101,9 +101,9 @@ class BaseAPISimulator:
     ) -> Tuple[int, Dict[str, Any]]:
         handler_map: Dict[Tuple[str, str], Callable[[], Tuple[int, Dict[str, Any]]]] = {
             ("/health", "GET"): self.health_check,
-            ("/api/v1/embed", "POST"): lambda: self.embed(request),
-            ("/api/v1/similarity", "POST"): lambda: self.similarity(request),
-            ("/api/v1/embed/batch", "POST"): lambda: self.embed_batch(request),
+            ("/api/1/embed", "POST"): lambda: self.embed(request),
+            ("/api/1/similarity", "POST"): lambda: self.similarity(request),
+            ("/api/1/embed/batch", "POST"): lambda: self.embed_batch(request),
         }
         key = (endpoint, method)
         if key in handler_map:

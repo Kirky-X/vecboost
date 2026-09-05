@@ -14,10 +14,10 @@ cargo run --release --features http
 
 | 示例 | 端点 | 说明 |
 |------|------|------|
-| `embed_api.rs` | `POST /api/v1/embed` | 单文本嵌入 |
-| `batch_api.rs` | `POST /api/v1/embed/batch` | 批量文本嵌入 |
-| `similarity_api.rs` | `POST /api/v1/similarity` | 文本相似度计算 |
-| `rerank_api.rs` | `POST /api/v1/rerank` | 文档重排序 |
+| `embed_api.rs` | `POST /api/1/embed` | 单文本嵌入 |
+| `batch_api.rs` | `POST /api/1/embed/batch` | 批量文本嵌入 |
+| `similarity_api.rs` | `POST /api/1/similarity` | 文本相似度计算 |
+| `rerank_api.rs` | `POST /api/1/rerank` | 文档重排序 |
 
 ## 运行命令
 
@@ -30,7 +30,7 @@ cargo run -p vecboost-examples --bin rerank_api
 
 ## 请求/响应格式
 
-- `POST /api/v1/embed`:`{"text": "...", "normalize": true}` → `{"embedding": [...], "dimension": N, "processing_time_ms": M}`
-- `POST /api/v1/embed/batch`:`{"texts": ["...", "..."], "normalize": true}` → `{"embeddings": [{"text_preview": "...", "embedding": [...]}], "dimension": N, "processing_time_ms": M}`
-- `POST /api/v1/similarity`:`{"source": "...", "target": "..."}` → `{"score": 0.87}`
-- `POST /api/v1/rerank`:`{"query": "...", "documents": ["..."], "top_k": 3, "return_documents": true}` → `{"results": [{"index": N, "score": 0.95, "document": "..."}], "processing_time_ms": M}`
+- `POST /api/1/embed`:`{"text": "...", "normalize": true}` → `{"embedding": [...], "dimension": N, "processing_time_ms": M}`
+- `POST /api/1/embed/batch`:`{"texts": ["...", "..."], "normalize": true}` → `{"embeddings": [{"text_preview": "...", "embedding": [...]}], "dimension": N, "processing_time_ms": M}`
+- `POST /api/1/similarity`:`{"source": "...", "target": "..."}` → `{"score": 0.87}`
+- `POST /api/1/rerank`:`{"query": "...", "documents": ["..."], "top_k": 3, "return_documents": true}` → `{"results": [{"index": N, "score": 0.95, "document": "..."}], "processing_time_ms": M}`

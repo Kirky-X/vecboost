@@ -34,7 +34,7 @@
 | **gRPC API** | HTTP/2 | `localhost:50051` | `50051` |
 | **Prometheus** | HTTP | `http://localhost:9002/metrics` | `9002` |
 
-> **💡 提示**: 所有 REST API 端点都以 `/api/v1/` 为前缀。
+> **💡 提示**: 所有 REST API 端点都以 `/api/1/` 为前缀（由 sdforge `version = 1` 生成）。OpenAI 兼容端点使用 `/v1/embeddings`。
 
 ---
 
@@ -43,7 +43,7 @@
 启用认证时，请在 `Authorization` 头中包含 Bearer 令牌：
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed \
+curl -X POST http://localhost:9002/api/1/embed \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-jwt-token>" \
   -d '{"text": "Hello, world!"}'
@@ -51,7 +51,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 ### 获取令牌
 
-**端点:** `POST /api/v1/auth/login`
+**端点:** `POST /api/1/auth/login`
 
 **请求体:**
 
@@ -90,7 +90,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 为单个文本生成向量嵌入。
 
-**端点:** `POST /api/v1/embed`
+**端点:** `POST /api/1/embed`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -100,7 +100,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed \
+curl -X POST http://localhost:9002/api/1/embed \
   -H "Content-Type: application/json" \
   -d '{
     "text": "The quick brown fox jumps over the lazy dog",
@@ -130,7 +130,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 在单个请求中为多个文本生成嵌入向量。
 
-**端点:** `POST /api/v1/embed/batch`
+**端点:** `POST /api/1/embed/batch`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -140,7 +140,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed/batch \
+curl -X POST http://localhost:9002/api/1/embed/batch \
   -H "Content-Type: application/json" \
   -d '{
     "texts": ["第一个文档", "第二个文档", "第三个文档"],
@@ -181,7 +181,7 @@ curl -X POST http://localhost:9002/api/v1/embed/batch \
 
 为文件生成嵌入向量。
 
-**端点:** `POST /api/v1/embed/file`
+**端点:** `POST /api/1/embed/file`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -191,7 +191,7 @@ curl -X POST http://localhost:9002/api/v1/embed/batch \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed/file \
+curl -X POST http://localhost:9002/api/1/embed/file \
   -H "Content-Type: application/json" \
   -d '{
     "path": "/path/to/document.txt",
@@ -317,7 +317,7 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 - 点积与余弦相似度不再等价
 - 与原始 1024 维向量的相似度比较失真
 
-> **💡 提示**: 该归一化对所有支持 Matryoshka 的入口生效（HTTP `/v1/embeddings`、`/api/v1/embed*`、gRPC `vecboost.embed*`、MCP、CLI）。若请求中显式指定 `normalize: false` 但同时传 `dimensions`，截断后仍会执行重归一化以保证语义正确。
+> **💡 提示**: 该归一化对所有支持 Matryoshka 的入口生效（HTTP `/v1/embeddings`、`/api/1/embed*`、gRPC `vecboost.embed*`、MCP、CLI）。若请求中显式指定 `normalize: false` 但同时传 `dimensions`，截断后仍会执行重归一化以保证语义正确。
 
 **错误响应（维度超限）：**
 
@@ -338,7 +338,7 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 
 计算两段文本之间的余弦相似度。服务端自动对文本进行嵌入后计算相似度。
 
-**端点:** `POST /api/v1/similarity`
+**端点:** `POST /api/1/similarity`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -348,7 +348,7 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/similarity \
+curl -X POST http://localhost:9002/api/1/similarity \
   -H "Content-Type: application/json" \
   -d '{
     "source": "机器学习是人工智能的子领域",
@@ -376,7 +376,7 @@ curl -X POST http://localhost:9002/api/v1/similarity \
 
 根据与查询文本的相关性对文档列表进行重排序。
 
-**端点:** `POST /api/v1/rerank`
+**端点:** `POST /api/1/rerank`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -388,7 +388,7 @@ curl -X POST http://localhost:9002/api/v1/similarity \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/rerank \
+curl -X POST http://localhost:9002/api/1/rerank \
   -H "Content-Type: application/json" \
   -d '{
     "query": "什么是机器学习",
@@ -428,7 +428,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 
 #### 批量重排序
 
-**端点:** `POST /api/v1/rerank/batch`
+**端点:** `POST /api/1/rerank/batch`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -455,7 +455,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 
 获取当前加载模型的信息。
 
-**端点:** `GET /api/v1/model/current`
+**端点:** `GET /api/1/model/current`
 
 **响应:**
 
@@ -479,7 +479,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 
 获取当前加载模型的详细元数据。
 
-**端点:** `GET /api/v1/model/info`
+**端点:** `GET /api/1/model/info`
 
 **响应:**
 
@@ -511,7 +511,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 
 列出所有可用模型。
 
-**端点:** `GET /api/v1/models`
+**端点:** `GET /api/1/models`
 
 **响应:**
 
@@ -540,7 +540,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 
 切换到不同的模型。
 
-**端点:** `POST /api/v1/model/switch`
+**端点:** `POST /api/1/model/switch`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -557,7 +557,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/model/switch \
+curl -X POST http://localhost:9002/api/1/model/switch \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
   -d '{
@@ -760,7 +760,7 @@ struct BatchEmbedResponse {
 }
 ```
 
-> **⚠️ 批量大小校验**: 批量请求数量受 `validate_batch_size` 限制，上限取自 `EmbeddingConfig.max_batch_size`（默认 64）。超限时返回 `400 INVALID_INPUT`，错误信息形如 `batch size N exceeds max M (config embedding.max_batch_size)`。HTTP `/api/v1/embed/batch` 与 OpenAI 兼容 `/v1/embeddings` 批量端点均执行此校验。
+> **⚠️ 批量大小校验**: 批量请求数量受 `validate_batch_size` 限制，上限取自 `EmbeddingConfig.max_batch_size`（默认 64）。超限时返回 `400 INVALID_INPUT`，错误信息形如 `batch size N exceeds max M (config embedding.max_batch_size)`。HTTP `/api/1/embed/batch` 与 OpenAI 兼容 `/v1/embeddings` 批量端点均执行此校验。
 
 #### 相似度请求/响应
 

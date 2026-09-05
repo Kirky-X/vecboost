@@ -64,7 +64,7 @@ class RealEmbeddingService:
 
         session = self._get_session()
         response = session.post(
-            f"{self.base_url}/api/v1/embed", json={"text": text}, timeout=30.0
+            f"{self.base_url}/api/1/embed", json={"text": text}, timeout=30.0
         )
         response.raise_for_status()
         return response.json()
@@ -82,7 +82,7 @@ class RealEmbeddingService:
 
         session = self._get_session()
         response = session.post(
-            f"{self.base_url}/api/v1/embed/batch", json={"texts": texts}, timeout=60.0
+            f"{self.base_url}/api/1/embed/batch", json={"texts": texts}, timeout=60.0
         )
         response.raise_for_status()
         result = response.json()
@@ -102,7 +102,7 @@ class RealEmbeddingService:
 
         session = self._get_session()
         response = session.post(
-            f"{self.base_url}/api/v1/similarity",
+            f"{self.base_url}/api/1/similarity",
             json={"source": text1, "target": text2},
             timeout=30.0,
         )

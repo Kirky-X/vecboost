@@ -181,6 +181,8 @@ The service exposes a gRPC interface on port `50051` (configurable). gRPC method
 | `vecboost.embed_batch` | `grpc_embed_batch` | Batch text embeddings |
 | `vecboost.compute_similarity` | `grpc_compute_similarity` | Compute vector similarity |
 | `vecboost.embed_file` | `grpc_embed_file` | File text embedding |
+| `vecboost.rerank` | `grpc_rerank` | Rerank documents by relevance |
+| `vecboost.rerank_batch` | `grpc_rerank_batch` | Batch reranking |
 | `vecboost.model_switch` | `grpc_model_switch` | Switch model |
 | `vecboost.get_current_model` | `grpc_get_current_model` | Get current model |
 | `vecboost.get_model_info` | `grpc_get_model_info` | Get model info |

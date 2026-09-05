@@ -467,8 +467,14 @@ graph TB
         Metal["Metal GPU"]
     end
 
-    Client --> HTTP & gRPC & MCP & CLI
-    HTTP & gRPC & MCP & CLI --> Auth
+    Client --> HTTP
+    Client --> gRPC
+    Client --> MCP
+    Client --> CLI
+    HTTP --> Auth
+    gRPC --> Auth
+    MCP --> Auth
+    CLI --> Auth
     Auth --> RateLim
     RateLim --> Queue
 
@@ -478,10 +484,13 @@ graph TB
     Text --> Engine
     Engine --> Cache
 
-    Engine --> Candle & ONNX
+    Engine --> Candle
+    Engine --> ONNX
 
-    Candle --> CPU & CUDA
-    ONNX --> CPU & Metal
+    Candle --> CPU
+    Candle --> CUDA
+    ONNX --> CPU
+    ONNX --> Metal
 
     CacheMod -.-> Cache
     DbMod -.-> DbNexus

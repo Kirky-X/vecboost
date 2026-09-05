@@ -538,7 +538,7 @@ impl CandleEngine {
             ModelArchitecture::Bert => {
                 let config = bert_config.ok_or_else(|| {
                     VecboostError::ModelLoadError(
-                        "Bert config is required for Bert model".to_string(),
+                        crate::i18n::tr("engine-bert-config-required"),
                     )
                 })?;
                 let bert_model = BertModel::load(vb, &config)
@@ -547,7 +547,7 @@ impl CandleEngine {
             }
             ModelArchitecture::XlmRoberta => {
                 let config = xlm_config.ok_or_else(|| {
-                    VecboostError::ModelLoadError("XLM-RoBERTa config is required".to_string())
+                    VecboostError::ModelLoadError(crate::i18n::tr("engine-xlm-config-required"))
                 })?;
                 let xlm_model = XLMRobertaModel::new(&config, vb)
                     .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
@@ -1185,7 +1185,7 @@ impl CandleEngine {
         self.model = match &fallback_architecture {
             ModelArchitecture::Bert => {
                 let config = bert_config.ok_or_else(|| {
-                    VecboostError::ModelLoadError("Bert config is required".to_string())
+                    VecboostError::ModelLoadError(crate::i18n::tr("engine-bert-config-required"))
                 })?;
                 let bert_model = BertModel::load(vb, &config)
                     .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
@@ -1193,7 +1193,7 @@ impl CandleEngine {
             }
             ModelArchitecture::XlmRoberta => {
                 let config = xlm_config.ok_or_else(|| {
-                    VecboostError::ModelLoadError("XLM-RoBERTa config is required".to_string())
+                    VecboostError::ModelLoadError(crate::i18n::tr("engine-xlm-config-required"))
                 })?;
                 let xlm_model = XLMRobertaModel::new(&config, vb)
                     .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;

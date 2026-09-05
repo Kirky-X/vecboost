@@ -52,7 +52,7 @@ pub async fn forge_login(
     let peer_ip = connect_info.0.ip().to_string();
 
     crate::auth::validate_username_format(&req.username).map_err(|e| ApiError::InvalidInput {
-        message: e.to_string(),
+        message: e.error_detail().to_string(),
         field: Some("username".to_string()),
         value: None,
     })?;

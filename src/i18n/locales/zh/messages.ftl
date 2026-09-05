@@ -121,3 +121,5 @@ config-encryption-missing = { $key } 环境变量未设置。生产部署必须�
 config-encryption-length = { $key } 必须恰好为 32 字节
 cli-no-handler = 未注册 CLI 命令处理器：{ $name }
 cli-failed = CLI 命令 '{ $name }' 执行失败：{ $detail }
+engine-bert-config-required = Bert 模型需要 Bert 配置
+engine-xlm-config-required = XLM-RoBERTa 模型需要 XLM-RoBERTa 配置

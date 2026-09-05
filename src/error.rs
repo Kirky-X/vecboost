@@ -13,7 +13,6 @@ use axum::{
 use regex::Regex;
 #[cfg(feature = "http")]
 use serde_json::json;
-use thiserror::Error;
 
 #[cfg(feature = "http")]
 const MAX_ERROR_MESSAGE_LENGTH: usize = 200;
@@ -76,59 +75,37 @@ fn sanitize_error_message(msg: &str) -> String {
     sanitized
 }
 
-#[derive(Error, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum VecboostError {
-    #[error("Config error: {0}")]
     ConfigError(String),
-
-    #[error("Model load error: {0}")]
     ModelLoadError(String),
-
-    #[error("Model file corrupted: {0}")]
     ModelFileCorrupted(String),
-
-    #[error("Model file integrity check failed: {0}")]
     ModelIntegrityError(String),
-
-    #[error("Tokenization error: {0}")]
     TokenizationError(String),
-
-    #[error("Inference error: {0}")]
     InferenceError(String),
-
-    #[error("Out of memory error: {0}")]
     OutOfMemory(String),
-
-    #[error("Invalid input: {0}")]
     InvalidInput(String),
-
-    #[error("Not found: {0}")]
     NotFound(String),
-
-    #[error("Model not loaded: {0}")]
     ModelNotLoaded(String),
-
-    #[error("Authentication error: {0}")]
     AuthenticationError(String),
-
-    #[error("Security error: {0}")]
     SecurityError(String),
-
-    #[error("IO error: {0}")]
     IoError(String),
-
-    #[error("Validation error: {0}")]
     ValidationError(String),
-
-    #[error("Rate limit exceeded: {0}")]
     RateLimitExceeded(String),
-
-    #[error("Database error: {0}")]
     DatabaseError(String),
-
-    #[error("Internal error: {0}")]
     InternalError(String),
 }
+
+impl std::fmt::Display for VecboostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let detail = self.error_detail();
+        let args = crate::i18n::tr_args(&[("detail", detail)]);
+        let msg = crate::i18n::tr_with_args(self.error_code(), args);
+        write!(f, "{}", msg)
+    }
+}
+
+impl std::error::Error for VecboostError {}
 
 impl VecboostError {
     pub fn config_error(message: String) -> Self {
@@ -336,6 +313,10 @@ impl From<tokio::task::JoinError> for VecboostError {
 mod tests {
     use super::*;
 
+    fn ensure_init() {
+        crate::i18n::init();
+    }
+
     #[cfg(feature = "http")]
     #[test]
     fn test_sanitize_error_message_unix_path() {
@@ -506,8 +487,13 @@ mod tests {
 
     #[test]
     fn test_error_display() {
+        ensure_init();
         let err = VecboostError::ConfigError("test message".to_string());
-        assert_eq!(format!("{}", err), "Config error: test message");
+        let expected = crate::i18n::tr_with_args(
+            "error-config",
+            crate::i18n::tr_args(&[("detail", "test message")]),
+        );
+        assert_eq!(format!("{}", err), expected);
     }
 
     #[cfg(feature = "http")]
@@ -635,21 +621,19 @@ mod tests {
 
     #[test]
     fn test_all_error_variants_display() {
-        assert_eq!(
-            format!("{}", VecboostError::OutOfMemory("oom".to_string())),
-            "Out of memory error: oom"
-        );
-        assert_eq!(
-            format!("{}", VecboostError::DatabaseError("db".to_string())),
-            "Database error: db"
-        );
-        assert_eq!(
-            format!("{}", VecboostError::InternalError("int".to_string())),
-            "Internal error: int"
-        );
-        assert_eq!(
-            format!("{}", VecboostError::RateLimitExceeded("rl".to_string())),
-            "Rate limit exceeded: rl"
-        );
+        ensure_init();
+        let cases: Vec<(VecboostError, &str, &str)> = vec![
+            (VecboostError::OutOfMemory("oom".into()), "error-oom", "oom"),
+            (VecboostError::DatabaseError("db".into()), "error-database", "db"),
+            (VecboostError::InternalError("int".into()), "error-internal", "int"),
+            (VecboostError::RateLimitExceeded("rl".into()), "error-rate-limit", "rl"),
+        ];
+        for (err, code, detail) in cases {
+            let expected = crate::i18n::tr_with_args(
+                code,
+                crate::i18n::tr_args(&[("detail", detail)]),
+            );
+            assert_eq!(format!("{}", err), expected, "mismatch for {}", code);
+        }
     }
 }

@@ -121,3 +121,5 @@ config-encryption-missing = { $key } environment variable is not set. Production
 config-encryption-length = { $key } must be exactly 32 bytes
 cli-no-handler = No handler registered for CLI command: { $name }
 cli-failed = CLI command '{ $name }' failed: { $detail }
+engine-bert-config-required = Bert config is required for Bert model
+engine-xlm-config-required = XLM-RoBERTa config is required

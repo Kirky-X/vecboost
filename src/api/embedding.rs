@@ -99,7 +99,7 @@ pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
             source: None,
         },
         other => ApiError::Internal {
-            message: other.to_string(),
+            message: other.error_detail().to_string(),
             error_id: uuid_like_id(),
             source: None,
             context: None,

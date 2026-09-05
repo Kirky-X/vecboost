@@ -22,6 +22,16 @@ use vecboost::registry::RateLimitModule;
 
 /// 全局关闭超时（秒）
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
+
+/// 数据库连接池配置
+#[cfg(feature = "db")]
+const DB_MAX_RETRIES: u32 = 3;
+#[cfg(feature = "db")]
+const DB_MIN_CONNECTIONS: u32 = 5;
+#[cfg(feature = "db")]
+const DB_WARMUP_TIMEOUT_SECS: u64 = 10;
+#[cfg(feature = "db")]
+const DB_WARMUP_RETRIES: u32 = 2;
 #[cfg(feature = "auth")]
 use vecboost::registry::{AuthModule, CsrfConfigModule};
 use vecboost::{
@@ -115,13 +125,13 @@ async fn init_db_pool(
         ..Default::default()
     };
     db_config.retry_policy = Some(dbnexus::RetryPolicy {
-        max_retries: 3,
+        max_retries: DB_MAX_RETRIES,
         ..Default::default()
     });
-    log::info!("Database retry policy enabled (max_retries=3, exponential backoff)");
-    db_config.pool_config.min_connections = 5;
-    db_config.warmup_timeout = 10;
-    db_config.warmup_retries = 2;
+    log::info!("Database retry policy enabled (max_retries={}, exponential backoff)", DB_MAX_RETRIES);
+    db_config.pool_config.min_connections = DB_MIN_CONNECTIONS;
+    db_config.warmup_timeout = DB_WARMUP_TIMEOUT_SECS;
+    db_config.warmup_retries = DB_WARMUP_RETRIES;
     log::info!(
         "dbnexus pool-warmup enabled: min_connections={}, warmup_timeout={}s, warmup_retries={}",
         db_config.pool_config.min_connections,
@@ -452,6 +462,18 @@ async fn main() -> anyhow::Result<()> {
         config.audit.enabled
     );
 
+    // T007: Enforce encryption key when explicitly required (production hardening).
+    // Set VECBOOST_REQUIRE_ENCRYPTION=1 to refuse startup without a valid key.
+    if std::env::var("VECBOOST_REQUIRE_ENCRYPTION")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false)
+    {
+        if let Err(reason) = vecboost::config::encryption::validate_encryption_key() {
+            return Err(anyhow::anyhow!("Encryption key validation failed: {}", reason));
+        }
+        log::info!("Encryption key validated (VECBOOST_REQUIRE_ENCRYPTION=1)");
+    }
+
     #[cfg(feature = "db")]
     let (db_pool, _db_metrics) = init_db_pool(&config).await?;
 
@@ -675,11 +697,13 @@ async fn main() -> anyhow::Result<()> {
 
     log::info!("AsyncKit module registry built successfully");
 
+    // T004: JoinSet for managing background tasks lifecycle
+    let mut bg_tasks = tokio::task::JoinSet::<()>::new();
+
     // T034: Spawn config file watcher task for hot reload
     // 变更检测：当前 AsyncKit<Ready> 不支持运行时 set_config，热重载仅验证新配置可加载
     // 后续待 trait-kit 为 AsyncKit 提供 reload 能力后再接线至各 Module
-    let config_watcher_handle = {
-        Some(tokio::spawn(async move {
+    bg_tasks.spawn(async move {
             // FsWatcher requires the file to exist; skip gracefully if not
             let config_path = "config/config.toml";
             let mut fs_watcher = match confers::watcher::FsWatcher::new(config_path, 200).await {
@@ -710,8 +734,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             log::info!("Config file watcher stopped");
-        }))
-    };
+    });
 
     // v0.3.0 D3: VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
     let app_state = VecboostState::new(kit);
@@ -813,8 +836,16 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(unix)]
         {
             let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("failed to install SIGTERM handler");
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::error!("Failed to install SIGTERM handler: {}", e);
+                        // SIGTERM unavailable — continue with ctrl_c only
+                        tokio::signal::ctrl_c().await.ok();
+                        log::info!("Received SIGINT, initiating graceful shutdown");
+                        return;
+                    }
+                };
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
                     log::info!("Received SIGINT, initiating graceful shutdown");
@@ -826,9 +857,9 @@ async fn main() -> anyhow::Result<()> {
         }
         #[cfg(not(unix))]
         {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("failed to install CTRL-C handler");
+            if let Err(e) = tokio::signal::ctrl_c().await {
+                log::error!("Failed to install CTRL-C handler: {}", e);
+            }
             log::info!("Received CTRL-C, initiating graceful shutdown");
         }
     };
@@ -933,7 +964,7 @@ async fn main() -> anyhow::Result<()> {
         };
 
         log::info!("gRPC server enabled on {}", grpc_addr);
-        tokio::spawn(async move {
+        bg_tasks.spawn(async move {
             if let Err(e) = build_server_with_config(&grpc_addr, grpc_config).await {
                 log::error!("gRPC server error: {}", e);
             }
@@ -951,10 +982,10 @@ async fn main() -> anyhow::Result<()> {
     // Execute phased shutdown coordinator after server stops
     log::info!("Server stopped, executing phased shutdown...");
 
-    // Cancel config watcher background task to prevent runtime hang
-    if let Some(handle) = config_watcher_handle {
-        handle.abort();
-    }
+    // Cancel all background tasks (config watcher, gRPC server, etc.)
+    bg_tasks.abort_all();
+    // Drain remaining tasks to prevent runtime hang
+    while bg_tasks.join_next().await.is_some() {}
 
     let shutdown_result = shutdown_coordinator.shutdown().await;
     if !shutdown_result.is_ok() {

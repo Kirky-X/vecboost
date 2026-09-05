@@ -12,7 +12,10 @@ use tokio::sync::{RwLock, oneshot};
 use crate::domain::EmbedResponse;
 use crate::error::VecboostError;
 
-/// 待处理的响应
+/// 待处理的响应条目。
+///
+/// 每个条目包含一个 oneshot 发送器、提交时间和超时配置。
+/// Worker 处理完请求后通过 `tx` 将结果发回给等待的 handler。
 pub struct PendingResponse {
     /// 响应发送器
     pub tx: oneshot::Sender<Result<EmbedResponse, VecboostError>>,
@@ -22,7 +25,10 @@ pub struct PendingResponse {
     pub timeout: Duration,
 }
 
-/// 响应通道
+/// 响应通道 — 管理 pipeline worker 与 HTTP handler 之间的响应传递。
+///
+/// 每个请求通过 `register` 注册一个 oneshot channel，worker 处理完成后
+/// 通过 `complete` 将结果发送回 handler。支持超时清理和优雅关闭。
 pub struct ResponseChannel {
     /// 待处理的响应
     pending: Arc<RwLock<HashMap<String, PendingResponse>>>,
@@ -73,15 +79,21 @@ impl ResponseChannel {
         rx
     }
 
-    /// 完成响应
+    /// 完成响应，将结果发送给等待的 handler。
+    ///
+    /// 锁临界区优化：先在锁内移除并提取 PendingResponse，再在锁外执行 send，
+    /// 避免 send 阻塞时长时间持有写锁。
     pub async fn complete(
         &self,
         request_id: String,
         response: Result<EmbedResponse, VecboostError>,
     ) {
-        let mut pending = self.pending.write().await;
+        let pending_response = {
+            let mut pending = self.pending.write().await;
+            pending.remove(&request_id)
+        };
 
-        if let Some(pending_response) = pending.remove(&request_id) {
+        if let Some(pending_response) = pending_response {
             let elapsed = pending_response.submitted_at.elapsed();
 
             match pending_response.tx.send(response) {

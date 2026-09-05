@@ -34,10 +34,14 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 const MAX_FALLBACK_ATTEMPTS: usize = 1;
+
+/// Per-chunk timeout for batch processing (seconds).
+/// Prevents a single hung inference call from blocking the entire batch indefinitely.
+const BATCH_CHUNK_TIMEOUT_SECS: u64 = 60;
 
 pub struct EmbeddingService {
     engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
@@ -360,7 +364,7 @@ impl EmbeddingService {
                 .and_then(|c| c.expected_dimension)
                 .unwrap_or(1024);
             validate_dimension(Some(target_dim), max_dim)
-                .map_err(|e| VecboostError::InvalidInput(e))?;
+                .map_err(|e| VecboostError::InvalidInput(e.to_string()))?;
             embedding = truncate_vector(&embedding, target_dim);
             // Matryoshka 截断破坏单位向量语义，必须重归一化以保证余弦相似度正确
             normalize_l2(&mut embedding)?;
@@ -950,7 +954,20 @@ impl EmbeddingService {
             Vec::with_capacity(unique_texts.len());
 
         for task in tasks {
-            let chunk_results = task.await??;
+            let chunk_results = match tokio::time::timeout(
+                Duration::from_secs(BATCH_CHUNK_TIMEOUT_SECS),
+                task,
+            )
+            .await
+            {
+                Ok(join_result) => join_result??,
+                Err(_) => {
+                    return Err(VecboostError::InferenceError(format!(
+                        "Batch chunk processing timed out after {}s",
+                        BATCH_CHUNK_TIMEOUT_SECS
+                    )));
+                }
+            };
             for (idx, embedding, preview) in chunk_results {
                 all_results.push((idx, embedding, preview));
             }
@@ -966,7 +983,7 @@ impl EmbeddingService {
                 .and_then(|c| c.expected_dimension)
                 .unwrap_or(1024);
             validate_dimension(Some(target_dim), max_dim)
-                .map_err(|e| VecboostError::InvalidInput(e))?;
+                .map_err(|e| VecboostError::InvalidInput(e.to_string()))?;
             Some(target_dim)
         } else {
             None

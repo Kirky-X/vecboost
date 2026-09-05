@@ -21,7 +21,9 @@ use crate::domain::EmbedResponse;
 use crate::error::VecboostError;
 use crate::service::embedding::EmbeddingService;
 
-/// Worker 任务
+/// Worker 任务枚举 — 通过 mpsc channel 发送给 worker loop。
+///
+/// 包含两种变体：处理请求和优雅关闭。
 #[derive(Debug)]
 pub enum WorkerTask {
     ProcessRequest {
@@ -35,7 +37,10 @@ pub enum WorkerTask {
     },
 }
 
-/// Worker 状态
+/// Worker 生命周期状态。
+///
+/// 状态转换：Idle → Processing → Idle（循环）；
+/// 收到 Shutdown 后转为 Stopping → Stopped。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerState {
     Idle,
@@ -44,7 +49,10 @@ pub enum WorkerState {
     Stopped,
 }
 
-/// Worker 实例
+/// Worker 实例 — 从任务队列接收请求并调用 EmbeddingService 处理。
+///
+/// 每个 Worker 在独立 tokio task 中运行，通过 mpsc channel 接收任务，
+/// 通过 ResponseChannel 返回结果。
 pub struct Worker {
     /// Worker ID
     worker_id: usize,
@@ -58,7 +66,12 @@ pub struct Worker {
     config: WorkerConfig,
 }
 
-/// Worker 管理器
+/// Worker 管理器 — 管理 worker 生命周期和自动伸缩。
+///
+/// 负责：
+/// - 启动/停止 worker（`spawn_worker` / `shutdown`）
+/// - 根据队列负载自动扩缩容（`start_scaling_monitor`）
+/// - 跟踪 worker 健康状态和崩溃计数
 pub struct WorkerManager {
     /// 最小 Worker 数量
     min_workers: usize,
@@ -80,6 +93,8 @@ pub struct WorkerManager {
     embedding_service: Arc<RwLock<EmbeddingService>>,
     /// Worker 健康状态跟踪
     worker_health: Arc<Mutex<Vec<WorkerHealthInfo>>>,
+    /// 后台任务集合（worker loops + scaling monitor）
+    bg_tasks: Arc<Mutex<tokio::task::JoinSet<()>>>,
 }
 
 /// Worker 健康信息
@@ -117,6 +132,7 @@ impl WorkerManager {
         config: WorkerConfig,
         embedding_service: Arc<RwLock<EmbeddingService>>,
     ) -> Self {
+        let max_workers = config.max_workers;
         Self {
             min_workers: config.min_workers,
             max_workers: config.max_workers,
@@ -125,9 +141,10 @@ impl WorkerManager {
             response_channel,
             config,
             running: Arc::new(AtomicBool::new(true)),
-            worker_senders: Arc::new(Mutex::new(Vec::new())),
+            worker_senders: Arc::new(Mutex::new(Vec::with_capacity(max_workers))),
             embedding_service,
-            worker_health: Arc::new(Mutex::new(Vec::new())),
+            worker_health: Arc::new(Mutex::new(Vec::with_capacity(max_workers))),
+            bg_tasks: Arc::new(Mutex::new(tokio::task::JoinSet::new())),
         }
     }
 
@@ -177,6 +194,12 @@ impl WorkerManager {
             let _ = sender.send(WorkerTask::Shutdown { immediate: true }).await;
         }
 
+        // Abort all background tasks (worker loops + scaling monitor)
+        {
+            let mut tasks = self.bg_tasks.lock().await;
+            tasks.abort_all();
+        }
+
         info!("WorkerManager shutdown complete");
     }
 
@@ -196,6 +219,7 @@ impl WorkerManager {
             &self.embedding_service,
             &self.config,
             &self.running,
+            &self.bg_tasks,
         )
         .await;
     }
@@ -214,6 +238,7 @@ impl WorkerManager {
         embedding_service: &Arc<RwLock<EmbeddingService>>,
         config: &WorkerConfig,
         running: &Arc<AtomicBool>,
+        bg_tasks: &Arc<Mutex<tokio::task::JoinSet<()>>>,
     ) {
         let worker_id = current_workers.fetch_add(1, Ordering::SeqCst);
 
@@ -242,7 +267,7 @@ impl WorkerManager {
 
         info!("Worker {} started", worker_id);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             Self::worker_loop(
                 worker_id,
                 task_receiver,
@@ -255,6 +280,11 @@ impl WorkerManager {
                 current_workers,
             )
             .await;
+        });
+
+        // Track the worker task for lifecycle management
+        bg_tasks.lock().await.spawn(async move {
+            let _ = handle.await;
         });
     }
 
@@ -450,7 +480,10 @@ impl WorkerManager {
         let response_channel = Arc::clone(&self.response_channel);
         let embedding_service = Arc::clone(&self.embedding_service);
 
-        tokio::spawn(async move {
+        let bg_tasks = Arc::clone(&self.bg_tasks);
+        let bg_tasks_for_spawn = Arc::clone(&bg_tasks);
+
+        bg_tasks_for_spawn.lock().await.spawn(async move {
             let mut interval =
                 tokio::time::interval(Duration::from_secs(config.scale_check_interval_secs));
 
@@ -486,6 +519,7 @@ impl WorkerManager {
                                 &embedding_service,
                                 &config,
                                 &running,
+                                &bg_tasks,
                             )
                             .await;
                         }
@@ -715,6 +749,7 @@ mod tests {
         let config_clone = manager.config.clone();
 
         assert_eq!(current_workers.load(Ordering::SeqCst), 0);
+        let bg_tasks = Arc::new(Mutex::new(tokio::task::JoinSet::new()));
         WorkerManager::spawn_single_worker(
             &current_workers,
             &worker_senders,
@@ -724,6 +759,7 @@ mod tests {
             &embedding_service_clone,
             &config_clone,
             &running,
+            &bg_tasks,
         )
         .await;
         assert_eq!(
@@ -1565,6 +1601,7 @@ mod tests {
             &manager.embedding_service,
             &manager.config,
             &manager.running,
+            &manager.bg_tasks,
         )
         .await;
 

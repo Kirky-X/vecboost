@@ -425,26 +425,127 @@ impl Tokenizer {
 
 #[cfg(not(target_os = "macos"))]
 impl Tokenizer {
-    pub fn from_pretrained(_model_id: &str) -> Result<Self, VecboostError> {
-        Self::new(512)
+    pub fn from_pretrained(model_id: &str) -> Result<Self, VecboostError> {
+        Self::from_pretrained_with_max_length(model_id, 512)
     }
 
     pub fn from_pretrained_with_max_length(
-        _model_id: &str,
+        model_id: &str,
         max_length: usize,
     ) -> Result<Self, VecboostError> {
+        // Try local directory first (model_id as path with tokenizer.json)
+        let tokenizer_path = std::path::Path::new(model_id).join("tokenizer.json");
+        if tokenizer_path.exists() {
+            return Self::from_file_with_max_length(
+                tokenizer_path.to_string_lossy().as_ref(),
+                max_length,
+            );
+        }
+        // Fallback to hardcoded vocab
         Self::new(max_length)
     }
 
-    pub fn from_file(_path: &str) -> Result<Self, VecboostError> {
-        Self::new(512)
+    pub fn from_file(path: &str) -> Result<Self, VecboostError> {
+        Self::from_file_with_max_length(path, 512)
     }
 
     pub fn from_file_with_max_length(
-        _path: &str,
+        path: &str,
         max_length: usize,
     ) -> Result<Self, VecboostError> {
-        Self::new(max_length)
+        Ok(Self::load_vocab_from_tokenizer_json(path, max_length)
+            .unwrap_or_else(|_| Self::new(max_length).unwrap()))
+    }
+
+    /// Load vocabulary from a HuggingFace tokenizer.json file.
+    ///
+    /// Parses the `model.vocab` mapping and extracts special tokens from `added_tokens`.
+    /// Falls back to `Self::new()` (hardcoded vocab) if the file cannot be parsed.
+    fn load_vocab_from_tokenizer_json(
+        path: &str,
+        max_length: usize,
+    ) -> Result<Self, VecboostError> {
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            VecboostError::tokenization_error(format!(
+                "Failed to read tokenizer.json at '{}': {}",
+                path, e
+            ))
+        })?;
+
+        let json: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+            VecboostError::tokenization_error(format!(
+                "Failed to parse tokenizer.json at '{}': {}",
+                path, e
+            ))
+        })?;
+
+        let mut vocab = HashMap::new();
+        let mut special_tokens = HashMap::new();
+
+        // Known special token names
+        let special_token_names =
+            ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"];
+
+        // Parse model.vocab (token → id mapping)
+        if let Some(vocab_obj) = json.get("model").and_then(|m| m.get("vocab")) {
+            if let Some(vocab_map) = vocab_obj.as_object() {
+                for (token, id_val) in vocab_map {
+                    if let Some(id) = id_val.as_u64() {
+                        if special_token_names.contains(&token.as_str()) {
+                            special_tokens.insert(token.clone(), id as u32);
+                        } else {
+                            vocab.insert(token.clone(), id as u32);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also extract special tokens from added_tokens array (if not already found)
+        if let Some(added) = json.get("added_tokens").and_then(|a| a.as_array()) {
+            for token in added {
+                if let (Some(content), Some(id)) = (
+                    token.get("content").and_then(|c| c.as_str()),
+                    token.get("id").and_then(|i| i.as_u64()),
+                ) {
+                    if special_token_names.contains(&content) {
+                        special_tokens
+                            .entry(content.to_string())
+                            .or_insert(id as u32);
+                        vocab.remove(content); // ensure no duplication
+                    }
+                }
+            }
+        }
+
+        if vocab.is_empty() {
+            return Err(VecboostError::tokenization_error(format!(
+                "tokenizer.json at '{}' has empty vocabulary",
+                path
+            )));
+        }
+
+        // 强制要求 [UNK] 存在，避免未知 token 静默退化为 id=0（通常是 [PAD]）
+        if !special_tokens.contains_key("[UNK]") {
+            return Err(VecboostError::tokenization_error(format!(
+                "tokenizer.json at '{}' is missing required [UNK] special token. \
+                 Ensure the tokenizer definition includes [UNK] in added_tokens.",
+                path
+            )));
+        }
+
+        log::info!(
+            "Loaded tokenizer vocab ({} tokens) and {} special tokens from '{}'",
+            vocab.len(),
+            special_tokens.len(),
+            path
+        );
+
+        Ok(Self {
+            vocab,
+            max_length,
+            special_tokens,
+        })
     }
 
     pub fn new(max_length: usize) -> Result<Self, VecboostError> {
@@ -826,12 +927,58 @@ impl Tokenizer {
         })
     }
 
+    /// WordPiece 子词分词。
+    ///
+    /// 对输入文本按空白分词后，对每个词执行贪心子词拆分：
+    /// 从最长前缀开始尝试，匹配不到则逐步缩短。
+    /// 非首段使用 `##` 前缀标记为延续片段。
+    /// 无法拆分的词整体回退为 `[UNK]`。
     fn wordpiece_tokenize(&self, text: &str) -> Vec<String> {
-        static WORDPIECE_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-        let re = WORDPIECE_RE.get_or_init(|| Regex::new(r"\w+|[^\w\s]+").unwrap());
-        re.find_iter(text)
-            .map(|m| m.as_str().to_lowercase())
-            .collect()
+        let text_lower = text.to_lowercase();
+        let words = text_lower.split_whitespace();
+        let mut pieces = Vec::new();
+
+        for word in words {
+            if word.is_empty() {
+                continue;
+            }
+
+            let chars: Vec<char> = word.chars().collect();
+            let mut start = 0;
+            let mut word_pieces = Vec::new();
+
+            while start < chars.len() {
+                let mut end = chars.len();
+                let mut found = false;
+
+                while start < end {
+                    let substr: String = if start == 0 {
+                        chars[start..end].iter().collect()
+                    } else {
+                        format!("##{}", &chars[start..end].iter().collect::<String>())
+                    };
+
+                    if self.vocab.contains_key(&substr) {
+                        word_pieces.push(substr);
+                        found = true;
+                        break;
+                    }
+                    end -= 1;
+                }
+
+                if !found {
+                    // Entire word → [UNK], skip remaining chars
+                    word_pieces.push("[UNK]".to_string());
+                    break;
+                }
+
+                start = end;
+            }
+
+            pieces.extend(word_pieces);
+        }
+
+        pieces
     }
 
     pub fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, VecboostError> {

@@ -6,7 +6,7 @@
 
 *A high-performance, production-ready embedding vector service written in Rust. VecBoost provides efficient text vectorization with support for multiple inference engines, GPU acceleration, and enterprise-grade features.*
 
-**[中文](README.md)**
+**[中文](README.md) | English**
 
 </div>
 
@@ -17,7 +17,9 @@
 | Category | Features |
 |----------|----------|
 | **🚀 Performance** | Optimized Rust codebase with batch processing and concurrent request handling |
-| **🔧 Multi-Engine** | Candle (native Rust), ONNX Runtime, TensorRT, and OpenVINO inference engines |
+| **🔧 Multi-Engine** | Candle (native Rust) and ONNX Runtime inference engines |
+| **🔁 Rerank** | Bi-encoder document reranking with HTTP/gRPC/CLI support |
+| **🌍 i18n** | Bilingual (EN/ZH) error responses with Accept-Language negotiation |
 | **🎮 GPU Support** | Native CUDA (NVIDIA), Metal (Apple Silicon), and ROCm (AMD) acceleration |
 | **🌐 Multi-Protocol** | HTTP/REST, gRPC, MCP, and CLI interfaces unified via sdforge |
 | **🧩 7-Library Ecosystem** | Modular ecosystem: trait-kit/confers/inklog/oxcache/limiteron/dbnexus/sdforge |
@@ -305,18 +307,16 @@ cargo run --features mcp -- --mcp
 
 > **💡 Note**: The MCP protocol exposes VecBoost embedding capabilities as LLM-callable tools, suitable for AI Agent scenarios. In v0.2.0 it is generated via `sdforge` `#[forge]`, providing three tools — `embed_text` / `embed_batch` / `compute_similarity` (collected from `#[forge(tool_name=...)]` in `src/api/embedding.rs` via `sdforge::mcp::build()`), launched in stdio mode via `cargo run --features mcp -- --mcp` (stdout is dedicated to the JSON-RPC stream; HTTP/gRPC services are not started in this mode).
 
-### 🔧 New Engine Support
+### 🔧 Inference Engines
 
-v0.2.0 adds TensorRT and OpenVINO engine support (currently stub implementations, require corresponding runtime libraries):
+VecBoost abstracts multiple ML runtimes via the `InferenceEngine` trait:
 
 | Engine | Feature | Description |
 |--------|---------|-------------|
-| **Candle** | default | HuggingFace native Rust ML framework (default engine) |
+| **Candle** | default | HuggingFace native Rust ML framework (default engine, supports Bert/XlmRoberta architectures) |
 | **ONNX Runtime** | `onnx` | Cross-platform ML inference runtime |
-| **TensorRT** | `tensorrt` | NVIDIA high-performance inference optimization (requires libnvinfer.so) |
-| **OpenVINO** | `openvino` | Intel inference engine (requires libopenvino_c.so) |
 
-Created via the `EngineFactory::create(engine_type, config)` factory method; the `EngineType` enum supports `Candle`/`Onnx`/`TensorRt`/`OpenVino` variants.
+Created via the `EngineFactory::create(engine_type, config)` factory method; the `EngineType` enum supports `Candle`/`Onnx` variants.
 
 ### 🏷️ Feature Flags
 
@@ -451,8 +451,6 @@ graph TB
     subgraph Engine["Inference Engine"]
         Candle["Candle (Native Rust)"]
         ONNX["ONNX Runtime"]
-        TensorRT["TensorRT"]
-        OpenVINO["OpenVINO"]
     end
 
     subgraph Infra["Infrastructure (7-Library Ecosystem)"]
@@ -478,7 +476,7 @@ graph TB
     Text --> Engine
     Engine --> Cache
 
-    Engine --> Candle & ONNX & TensorRT & OpenVINO
+    Engine --> Candle & ONNX
 
     Candle --> CPU & CUDA
     ONNX --> CPU & Metal

@@ -6,7 +6,7 @@
 
 *高性能、生产级嵌入向量服务，使用 Rust 编写。VecBoost 提供高效的文本向量化服务，支持多种推理引擎、GPU 加速和企业级功能。*
 
-**[English](README_EN.md)**
+**中文 | [English](README_EN.md)**
 
 </div>
 
@@ -17,7 +17,9 @@
 | 分类 | 功能特性 |
 |------|----------|
 | **🚀 高性能** | 优化的 Rust 代码库，支持批处理和并发请求处理 |
-| **🔧 多引擎支持** | Candle（原生 Rust）、ONNX Runtime、TensorRT、OpenVINO 推理引擎 |
+| **🔧 多引擎支持** | Candle（原生 Rust）和 ONNX Runtime 推理引擎 |
+| **🔁 Rerank 重排序** | 基于 bi-encoder 的文档重排序，HTTP/gRPC/CLI 三协议支持 |
+| **🌍 国际化（i18n）** | 中英双语错误响应，Accept-Language 请求级语言协商 |
 | **🎮 GPU 加速** | NVIDIA CUDA、Apple Metal 和 AMD ROCm 原生支持 |
 | **🌐 多协议接口** | HTTP/REST、gRPC、MCP、CLI 四种接口由 sdforge 统一生成 |
 | **🧩 7 库生态** | trait-kit/confers/inklog/oxcache/limiteron/dbnexus/sdforge 模块化生态 |
@@ -307,18 +309,16 @@ cargo run --features mcp -- --mcp
 
 > **💡 说明**: MCP 协议用于将 VecBoost 嵌入能力暴露为 LLM 可调用的工具，适用于 AI Agent 场景。v0.2.0 基于 `sdforge` `#[forge]` 生成，提供 `embed_text` / `embed_batch` / `compute_similarity` 三个工具（由 `src/api/embedding.rs` 的 `#[forge(tool_name=...)]` 经 `sdforge::mcp::build()` 收集），通过 `cargo run --features mcp -- --mcp` 以 stdio 模式启动（stdout 专用于 JSON-RPC 流，此时不启动 HTTP/gRPC 服务）。
 
-### 🔧 新引擎支持
+### 🔧 推理引擎
 
-v0.2.0 新增 TensorRT 与 OpenVINO 引擎支持（当前为 stub 实现，需对应运行时库）：
+VecBoost 通过 `InferenceEngine` trait 抽象支持多种 ML 运行时：
 
 | 引擎 | Feature | 说明 |
 |------|---------|------|
-| **Candle** | 默认 | HuggingFace 原生 Rust ML 框架（默认引擎） |
+| **Candle** | 默认 | HuggingFace 原生 Rust ML 框架（默认引擎，支持 Bert/XlmRoberta 架构） |
 | **ONNX Runtime** | `onnx` | 跨平台 ML 推理运行时 |
-| **TensorRT** | `tensorrt` | NVIDIA 高性能推理优化（需 libnvinfer.so） |
-| **OpenVINO** | `openvino` | Intel 推理引擎（需 libopenvino_c.so） |
 
-通过 `EngineFactory::create(engine_type, config)` 工厂方法创建，`EngineType` 枚举支持 `Candle`/`Onnx`/`TensorRt`/`OpenVino` 四种变体。
+通过 `EngineFactory::create(engine_type, config)` 工厂方法创建，`EngineType` 枚举支持 `Candle`/`Onnx` 两种变体。
 
 ### 🏷️ Feature 标志
 
@@ -453,8 +453,6 @@ graph TB
     subgraph Engine["推理引擎"]
         Candle["Candle (原生 Rust)"]
         ONNX["ONNX Runtime"]
-        TensorRT["TensorRT"]
-        OpenVINO["OpenVINO"]
     end
 
     subgraph Infra["基础设施 (7 库生态)"]
@@ -480,7 +478,7 @@ graph TB
     Text --> Engine
     Engine --> Cache
 
-    Engine --> Candle & ONNX & TensorRT & OpenVINO
+    Engine --> Candle & ONNX
 
     Candle --> CPU & CUDA
     ONNX --> CPU & Metal

@@ -25,6 +25,7 @@
 | [Docker 部署](#-docker-部署) | Docker 容器化部署 |
 | [Kubernetes 部署](#-kubernetes-部署) | K8s 集群部署 |
 | [监控](#-监控) | 可观测性配置 |
+| [国际化（i18n）](#-国际化i18n) | 多语言错误响应配置 |
 | [故障排除](#-故障排除) | 常见问题解决 |
 | [最佳实践](#-最佳实践) | 安全、性能和可靠性建议 |
 | [常见问题](#-常见问题) | FAQ |
@@ -283,9 +284,12 @@ trusted_proxies = []  # 受信任代理 CIDR 列表
 |----------|----------|--------|
 | `VECBOOST_SERVER_PORT` | `server.port` | `9002` |
 | `VECBOOST_MODEL_REPO` | `model.model_repo` | `BAAI/bge-m3` |
-| `VECBOOST_JWT_SECRET` | `auth.jwt_secret` | `your-secret-key` |
+| `VECBOOST_JWT_SECRET` | `auth.jwt_secret` | `your-secret-key`（≥32 字符） |
+| `VECBOOST_ADMIN_PASSWORD` | `auth.default_admin_password` | `your-admin-password`（≥8 字符） |
+| `VECBOOST_ENCRYPTION_KEY` | - | 32 字节 hex 密钥（用于敏感配置加密） |
 | `VECBOOST_CACHE_SIZE` | `embedding.cache_size` | `1024` |
 | `VECBOOST_LOG_LEVEL` | - | `debug`, `info`, `warn`, `error` |
+| `VECBOOST_LANG` | - | `zh`, `en`（全局默认语言） |
 
 ---
 
@@ -631,7 +635,10 @@ docker-compose up -d
 
 | 变量 | 描述 | 必需 |
 |------|------|------|
-| `VECBOOST_JWT_SECRET` | JWT 密钥（认证时必需） | ✅ |
+| `VECBOOST_JWT_SECRET` | JWT 密钥（认证时必需，≥32 字符） | ✅ |
+| `VECBOOST_ADMIN_PASSWORD` | 管理员密码（认证时必需，≥8 字符） | ✅ |
+| `VECBOOST_ENCRYPTION_KEY` | 敏感配置加密密钥（32 字节 hex） | 推荐 |
+| `VECBOOST_LANG` | 默认语言（`zh` 或 `en`） | ❌ |
 | `VECBOOST_LOG_LEVEL` | 日志级别 (`debug`, `info`, `warn`, `error`) | ❌ |
 | `VECBOOST_CACHE_SIZE` | 缓存大小覆盖 | ❌ |
 
@@ -697,6 +704,42 @@ kubectl port-forward -n vecboost svc/vecboost 9002:9002
 # 或使用 ingress（请替换为你的实际 ingress 清单路径）
 kubectl apply -f <your-ingress>.yaml
 ```
+
+---
+
+## 🌍 国际化（i18n）
+
+VecBoost 支持中英双语错误响应，通过 `Accept-Language` 请求头自动协商语言。
+
+### 语言优先级
+
+1. **请求级**：`Accept-Language` 请求头（如 `Accept-Language: zh-CN,zh;q=0.9`）
+2. **全局默认**：`VECBOOST_LANG` 环境变量（如 `VECBOOST_LANG=zh`）
+3. **系统 locale**：`LC_ALL`/`LANG` 环境变量
+4. **兜底**：英文 (`en`)
+
+### 使用示例
+
+```bash
+# 中文错误响应
+curl -X POST http://localhost:9002/api/1/embed \
+  -H "Content-Type: application/json" \
+  -H "Accept-Language: zh-CN" \
+  -d '{"text": ""}'
+
+# 响应（中文）
+{"error": {"code": "INVALID_INPUT", "message": "文本不能为空"}}
+
+# 英文错误响应（默认）
+curl -X POST http://localhost:9002/api/1/embed \
+  -H "Content-Type: application/json" \
+  -d '{"text": ""}'
+
+# 响应（英文）
+{"error": {"code": "INVALID_INPUT", "message": "Text cannot be empty"}}
+```
+
+> **💡 说明**: i18n 覆盖所有用户可见消息：HTTP JSON 错误响应、CLI 帮助文本、gRPC 错误详情、启动错误日志。翻译键定义在 `src/i18n/locales/{en,zh}/messages.ftl` 和 `errors.ftl`（共 114 个键）。
 
 ---
 

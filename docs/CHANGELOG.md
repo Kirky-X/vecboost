@@ -5,9 +5,61 @@ All notable changes to VecBoost are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] - 2026-07-29
+## [0.2.1] - 2026-09-06
+
+### Added
+
+- **i18n 国际化系统**：完整 ICU+Fluent 兼容双语支持（中英），包含：
+  - 轻量 FTL 解析器（`src/i18n/bundle.rs`），`include_str!` 编译期嵌入，114 个翻译键（errors.ftl 17 + messages.ftl 97）
+  - 三级 locale 优先级：显式 locale > 请求级（`Accept-Language` 中间件 + tokio task_local）> 全局默认
+  - `VecboostError::IntoResponse` 通过 `error_code()` + `tr_with_args()` 全翻译
+  - `Display` trait 手动实现使用 `tr_with_args()`，消除 thiserror 英文前缀
+  - P0（HTTP JSON 硬编码）+ P1（启动/OOM/metrics）+ P2（Display/engine）全量清零
+- **Rerank 重排序**：HTTP/gRPC/CLI 三协议完整支持：
+  - `InferenceEngine` trait 新增 `rerank()` / `rerank_batch()` / `supports_rerank()` 默认实现
+  - `RerankService`（`src/service/rerank.rs`）+ `RerankConfig` 配置
+  - `src/api/rerank.rs` forge/cli/grpc 端点，11 个 gRPC 方法增至含 rerank/rerank_batch
+- **语义缓存**：`SemanticCache`（`src/cache/semantic_cache.rs`）三级查询：精确匹配 → trigram Jaccard 语义搜索 → 模型推理回填
+- **BF16 精度推理**：`Precision::Bf16` 支持，Candle 引擎 BF16 推理路径
+- **SIMD 向量化相似度**：`src/utils/vector.rs` 向量化余弦相似度计算
+- **连续批处理调度**：`ContinuousBatchLoop`（`src/device/continuous_batch.rs`）持续收集批次并处理
+- **GPU 内存分页**：`WeightPagingManager`（`src/device/memory_paging.rs`）LRU-K 策略
+- **Matryoshka 自适应维度**：`information_retention_rate()` + `recommended_dimension()` 公共 API
+- **加密配置模块**：`src/config/encryption.rs` AES-256-GCM 密钥管理
+- **认证子系统重构**：拆分为 `src/auth/` 多文件接口化架构（middleware/types/csrf）
+- **场景测试套件**：`tests/scenario/` 10 个 Python 场景测试 + `scripts/run-scenario-tests.sh`
+- **Library 模式**：`schema` feature 独立、HTTP feature gate 分离，支持非 HTTP 库模式使用
+
+### Changed
+
+- **依赖升级**：h2 0.4.15→0.4.19（RUSTSEC-2026-0258 DoS 修复）、自研库迁移到本地路径
+- **Rust 2024 迁移**：let-chain 语法、`#[allow(dead_code)]` 补充 reason
+- **代码质量**：魔法值提取常量、集合预分配、JoinSet 统一管理、block_on 重构
 
 ### Fixed
+
+- **Tokenizer 中文分词**：非 macOS 平台加载实际模型词汇表（30K+ 词）、WordPiece 逐字符 UNK 回退、encode 保留实际字符
+- **错误状态码映射**：`to_api_error` 正确映射 ValidationError→400、ModelLoadError→424、NotFound→404
+- **认证白名单路径**：PUBLIC_PATHS 与 sdforge 路由前缀 `/api/1/` 对齐
+- **限流中间件**：注入 RateLimitEnabled、无条件挂载、与 auth 解耦
+- **Prometheus 指标**：添加 HTTP 指标记录中间件 + 路径归一化防 label 基数膨胀
+- **gRPC 启动**：SdforgeLimiteronAdapter 超时保护 10s
+- **优雅关闭**：保存 config watcher 句柄，关闭时 abort
+- **HF Hub 镜像**：检测 HF_ENDPOINT 镜像端点 + ETag 不兼容警告
+- **schema feature 编译**：feature gate 修复，`schema` 单独启用编译通过
+- **杂项**：多字节字符安全切片、fallback 路径 repo_id 校验、CLI 示例参数格式
+
+### Security
+
+- **h2 DoS 漏洞**：RUSTSEC-2026-0258 修复
+- **vuln-0009**：HF Hub repo_id 格式校验
+- **安全加固**：认证/限流/审计级联修复、Python 测试脚本安全扫描修复
+
+---
+
+## [0.2.0] - 2026-07-24
+
+### Added
 
 - **schema feature 单独启用时编译失败**：`utoipa` 5.5.0 内部 `schema.rs` 引用 `crate::utoipa::Number`（被 `cfg(feature="macros")` 门控），不启用 `macros` feature 会导致 `schema` feature 单独编译失败。显式给 `utoipa` 添加 `macros` feature 修复此问题。
 - **schema-only 模式下 http 依赖代码未 gate**：`src/error.rs` 中 17 个 `test_into_response_*` 测试、3 个 `sanitize_error_message` 边界测试、`use regex::Regex` 导入、`src/lib.rs` tests 模块的 http-only imports、`src/registry/tests.rs` 中 `PrometheusCollectorModule` 相关测试和辅助函数缺少 `#[cfg(feature = "http")]` gate，导致 `schema` 单独启用时编译失败。已全部补齐 gate。

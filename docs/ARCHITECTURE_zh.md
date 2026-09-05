@@ -157,6 +157,8 @@ pub struct EmbeddingService {
     memory_manager: Option<SharedGpuMemoryManager>,         // GPU 内存管理
     batch_scheduler: Option<Arc<DynamicBatchScheduler>>,    // 动态批处理调度
     buffer_pool: Option<Arc<RwLock<BufferPool>>>,           // GPU 缓冲区池
+    continuous_batch_loop: Option<Arc<ContinuousBatchLoop>>, // 连续批处理循环
+    semantic_cache: Option<Arc<SemanticCache>>,             // 语义缓存
 }
 ```
 
@@ -183,6 +185,16 @@ pub trait InferenceEngine: Send + Sync {
 
     /// 检查是否已触发降级
     fn is_fallback_triggered(&self) -> bool { false }
+
+    /// 对 (query, document) 对进行重排序评分
+    /// 默认实现：bi-encoder (embed_batch + cosine + sigmoid)
+    fn rerank(&self, query: &str, document: &str) -> Result<f32, VecboostError> { ... }
+
+    /// 批量重排序：query 只 embed 1 次，documents 批量 embed 1 次
+    fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> { ... }
+
+    /// 检查引擎是否支持重排序（默认返回 true）
+    fn supports_rerank(&self) -> bool { true }
 
     /// 尝试降级到 CPU（在 OOM 时调用）
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
@@ -287,7 +299,7 @@ graph TB
     end
 
     subgraph Inference["推理层"]
-        CacheCheck[缓存检查 LRU/LFU/ARC/KV]
+        CacheCheck[缓存检查 oxcache + SemanticCache]
         ModelInference[模型推理 Candle/ONNX]
     end
 
@@ -819,19 +831,13 @@ graph TB
 ```rust
 #[async_trait]
 pub trait InferenceEngine: Send + Sync {
-    /// 执行推理，返回未归一化的向量
     fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError>;
-
-    /// 批量推理
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError>;
-
-    /// 获取当前精度设置
     fn precision(&self) -> &Precision;
-
-    /// 检查是否支持混合精度
     fn supports_mixed_precision(&self) -> bool;
-
-    /// 尝试降级到 CPU（在 OOM 时调用）
+    fn rerank(&self, query: &str, document: &str) -> Result<f32, VecboostError> { ... }
+    fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> { ... }
+    fn supports_rerank(&self) -> bool { true }
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
 }
 ```
@@ -932,15 +938,15 @@ src/error.rs
 | 错误 | 描述 | HTTP 状态码 |
 |------|------|----------|
 | `ConfigError` | 配置错误 | 500 |
-| `ModelLoadError` | 模型加载失败 | 503 |
-| `ModelFileCorrupted` | 模型文件损坏 | 503 |
-| `ModelIntegrityError` | 模型完整性校验失败 | 503 |
+| `ModelLoadError` | 模型加载失败 | 424 |
+| `ModelFileCorrupted` | 模型文件损坏 | 424 |
+| `ModelIntegrityError` | 模型完整性校验失败 | 424 |
 | `TokenizationError` | 分词错误 | 422 |
 | `InferenceError` | 推理失败 | 503 |
 | `OutOfMemory` | GPU/CPU 内存耗尽 | 507 |
 | `InvalidInput` | 无效输入 | 400 |
 | `NotFound` | 资源未找到 | 404 |
-| `ModelNotLoaded` | 模型未加载 | 503 |
+| `ModelNotLoaded` | 模型未加载 | 424 |
 | `AuthenticationError` | 认证失败 | 401 |
 | `SecurityError` | 安全错误 | 500 |
 | `IoError` | IO 错误 | 500 |

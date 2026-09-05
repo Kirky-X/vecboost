@@ -77,9 +77,46 @@ curl -X POST http://localhost:9002/api/1/embed \
 |------|------|------|
 | `token` | string | JWT 访问令牌 |
 | `token_type` | string | 令牌类型（始终为 `Bearer`） |
-| `expires_in` | integer | 令牌过期时间（由 garrison 管理，固定为 0） |
+| `expires_in` | integer | 令牌过期时间（秒），由 `token_timeout_secs` 配置决定 |
 
-> **ℹ️ 注意**: 令牌过期时间由 garrison 认证框架的 `GarrisonConfig.timeout` 统一管理，响应中 `expires_in` 固定为 0。
+> **ℹ️ 注意**: 令牌过期时间由配置项 `[auth] token_timeout_secs` 决定。
+
+### 刷新令牌
+
+**端点:** `POST /api/1/auth/refresh`
+
+**请求体:**
+
+```json
+{
+  "refresh_token": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
+
+**响应:** 与登录响应格式相同，返回新的 `token` 和 `expires_in`。
+
+### 登出
+
+**端点:** `POST /api/1/auth/logout`
+
+**请求头:** `Authorization: Bearer <your-jwt-token>`
+
+**响应:** 成功登出返回空响应体，当前令牌被撤销。
+
+### 获取当前用户
+
+**端点:** `GET /api/1/auth/me`
+
+**请求头:** `Authorization: Bearer <your-jwt-token>`
+
+**响应:**
+
+```json
+{
+  "username": "admin",
+  "roles": ["admin"]
+}
+```
 
 ---
 
@@ -1052,12 +1089,14 @@ func main() {
 | `INVALID_INPUT` | 400 | 请求参数无效 | 检查请求体格式 |
 | `UNAUTHORIZED` | 401 | 认证失败 | 获取并使用有效令牌 |
 | `FORBIDDEN` | 403 | 权限不足 | 联系管理员提升权限 |
-| `RATE_LIMITED` | 429 | 超出速率限制 | 使用指数退避重试 |
 | `MODEL_NOT_FOUND` | 404 | 模型不存在 | 检查模型名称 |
-| `INFERENCE_ERROR` | 500 | 推理失败 | 检查模型状态 |
-| `GPU_OOM` | 500 | GPU 内存不足 | 减小批处理大小或使用 CPU |
-| `FILE_NOT_FOUND` | 404 | 文件不存在 | 检查文件路径 |
+| `MODEL_LOAD_FAILED` | 424 | 模型加载失败（依赖缺失） | 检查模型文件和配置 |
+| `TOKENIZATION_ERROR` | 422 | 分词错误 | 检查输入文本编码 |
+| `RATE_LIMITED` | 429 | 超出速率限制 | 使用指数退避重试 |
+| `INFERENCE_ERROR` | 503 | 推理失败 | 检查模型状态 |
+| `GPU_OOM` | 507 | GPU/CPU 内存耗尽 | 减小批处理大小或使用 CPU |
 | `CONFIG_ERROR` | 500 | 配置错误 | 检查配置文件 |
+| `INTERNAL_ERROR` | 500 | 内部错误 | 联系管理员 |
 
 > **💡 提示**: 启用认证时，401 错误也可能表示令牌已过期。
 
@@ -1065,14 +1104,15 @@ func main() {
 
 ### 🌐 国际化（i18n）
 
-VecBoost 支持中英双语错误响应，基于 ICU+Fluent 框架实现。错误消息的语言由以下优先级链决定：
+VecBoost 支持中英双语错误响应，基于 ICU+Fluent 框架实现。HTTP 请求通过 `Accept-Language` 头自动切换语言，优先级如下：
 
 | 优先级 | 来源 | 示例 |
 |--------|------|------|
-| 1（最高） | `VECBOOST_LANG` 环境变量 | `VECBOOST_LANG=zh` |
-| 2 | `LC_ALL` / `LANG` 环境变量 | `LANG=zh_CN.UTF-8` |
-| 3 | 系统 locale（`sys-locale`） | 操作系统语言设置 |
-| 4（默认） | 英文 | `en` |
+| 1（最高） | `Accept-Language` 请求头（请求级） | `Accept-Language: zh-CN` |
+| 2 | `VECBOOST_LANG` 环境变量（全局默认） | `VECBOOST_LANG=zh` |
+| 3 | `LC_ALL` / `LANG` 环境变量 | `LANG=zh_CN.UTF-8` |
+| 4 | 系统 locale（`sys-locale`） | 操作系统语言设置 |
+| 5（默认） | 英文 | `en` |
 
 **错误消息示例（中文）：**
 

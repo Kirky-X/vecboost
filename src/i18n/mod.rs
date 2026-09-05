@@ -31,6 +31,32 @@ use unic_langid::LanguageIdentifier;
 /// Global i18n state — initialized once at startup.
 static I18N: OnceLock<I18nState> = OnceLock::new();
 
+// ---------------------------------------------------------------------------
+// Per-request locale (set by HTTP middleware via Accept-Language header)
+// ---------------------------------------------------------------------------
+
+tokio::task_local! {
+    /// Per-request locale extracted from `Accept-Language` header.
+    /// Set by `i18n_middleware`; read by `tr()` / `IntoResponse`.
+    static REQUEST_LOCALE: Option<String>;
+}
+
+/// Run a future within a request-locale scope.
+///
+/// All `tr()` / `tr_with_args()` / `IntoResponse` calls within `f` will use
+/// `locale` instead of the global default.
+pub async fn with_request_locale<F, R>(locale: Option<String>, f: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    REQUEST_LOCALE.scope(locale, f).await
+}
+
+/// Return the per-request locale, if set by the i18n middleware.
+pub fn request_locale() -> Option<String> {
+    REQUEST_LOCALE.try_with(|lc| lc.clone()).unwrap_or(None)
+}
+
 struct I18nState {
     bundle: I18nBundle,
     default_locale: LanguageIdentifier,
@@ -56,22 +82,34 @@ pub fn init() {
     });
 }
 
-/// Translate a message key using the current default locale.
+/// Translate a message key.
+///
+/// Resolution order: per-request locale (from `Accept-Language` middleware) →
+/// global default locale (from `VECBOOST_LANG` / system locale).
 pub fn tr(key: &str) -> String {
     tr_locale_with_args(key, None, None)
 }
 
-/// Translate a message key with arguments using the current default locale.
+/// Translate a message key with arguments.
+///
+/// Same locale resolution as [`tr`].
 pub fn tr_with_args(key: &str, args: HashMap<String, String>) -> String {
     tr_locale_with_args(key, None, Some(args))
 }
 
-/// Translate a message key using a specific locale string (e.g., `"zh"`, `"en"`).
+/// Translate a message key using an explicit locale string (e.g., `"zh"`, `"en"`).
+///
+/// Bypasses both request-level and global-default locale resolution.
 pub fn tr_locale(key: &str, locale_str: Option<&str>) -> String {
     tr_locale_with_args(key, locale_str, None)
 }
 
 /// Core translation function — resolves locale and delegates to bundle.
+///
+/// Locale resolution priority:
+/// 1. Explicit `locale_str` parameter (if `Some`)
+/// 2. Per-request locale from `REQUEST_LOCALE` task-local (set by HTTP middleware)
+/// 3. Global default locale (set at startup by `init()`)
 fn tr_locale_with_args(
     key: &str,
     locale_str: Option<&str>,
@@ -86,8 +124,15 @@ fn tr_locale_with_args(
     };
 
     let locale = if let Some(s) = locale_str {
+        // Explicit override — highest priority
         s.parse().unwrap_or_else(|_| state.default_locale.clone())
+    } else if let Some(req_lc) = request_locale() {
+        // Per-request locale from Accept-Language middleware
+        req_lc
+            .parse()
+            .unwrap_or_else(|_| state.default_locale.clone())
     } else {
+        // Global default
         state.default_locale.clone()
     };
 
@@ -117,6 +162,28 @@ pub fn tr_args(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// HTTP middleware — sets per-request locale from Accept-Language header
+// ---------------------------------------------------------------------------
+
+/// Axum middleware that extracts `Accept-Language` and sets the per-request
+/// locale for all downstream handlers and `IntoResponse` conversions.
+///
+/// Add to the router via `axum::middleware::from_fn(i18n_middleware)`.
+#[cfg(feature = "http")]
+pub async fn i18n_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let locale = req
+        .headers()
+        .get(axum::http::header::ACCEPT_LANGUAGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(locale::parse_accept_language);
+
+    with_request_locale(locale, async { next.run(req).await }).await
 }
 
 #[cfg(test)]
@@ -178,5 +245,65 @@ mod tests {
         ensure_init();
         let loc = current_locale();
         assert!(!loc.is_empty());
+    }
+
+    // ---- Per-request locale tests ----
+
+    #[tokio::test]
+    async fn test_request_locale_overrides_default() {
+        ensure_init();
+        // Without request locale, tr() uses global default
+        let default_result = tr("health-ok");
+
+        // With request locale set to "zh", tr() should return Chinese
+        let zh_result = with_request_locale(Some("zh".to_string()), async {
+            tr("health-ok")
+        })
+        .await;
+        assert_eq!(zh_result, "正常");
+
+        // With request locale set to "en", tr() should return English
+        let en_result = with_request_locale(Some("en".to_string()), async {
+            tr("health-ok")
+        })
+        .await;
+        assert_eq!(en_result, "OK");
+
+        // Outside the scope, request locale is gone — back to default
+        let after_result = tr("health-ok");
+        assert_eq!(default_result, after_result);
+    }
+
+    #[tokio::test]
+    async fn test_request_locale_with_args() {
+        ensure_init();
+        let args = tr_args(&[("detail", "端口无效")]);
+        let result = with_request_locale(Some("zh".to_string()), async {
+            tr_with_args("error-config", args)
+        })
+        .await;
+        assert!(
+            result.contains("端口无效"),
+            "Expected '端口无效' in result, got: {result}"
+        );
+        assert!(
+            result.contains("配置错误"),
+            "Expected Chinese prefix '配置错误' in result, got: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_locale_none_falls_back_to_default() {
+        ensure_init();
+        // None request locale should fall back to global default
+        let result = with_request_locale(None, async { tr("health-ok") }).await;
+        let default_result = tr("health-ok");
+        assert_eq!(result, default_result);
+    }
+
+    #[test]
+    fn test_request_locale_outside_scope_returns_none() {
+        // Outside any with_request_locale scope, request_locale() returns None
+        assert!(request_locale().is_none());
     }
 }

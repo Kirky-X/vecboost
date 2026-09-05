@@ -474,3 +474,62 @@ The `TEST_MODE` environment variable controls test engine behavior:
 | `full` | Forces real inference engine (requires model download) |
 
 > **Note**: Tests asserting semantic similarity (e.g., similar texts > different texts) are marked `#[ignore]` because the mock engine generates semantically random vectors. Run them with `cargo test --test integration -- --ignored` under `TEST_MODE=light` or `full`.
+
+## 9. Internationalization (i18n)
+
+VecBoost supports bilingual (English/Chinese) error responses and user-facing messages via a lightweight Fluent-compatible translation system.
+
+### Architecture
+
+```
+src/i18n/
+├── mod.rs          # Public API: init(), tr(), tr_with_args(), tr_locale(), tr_args()
+├── bundle.rs       # FTL parser + I18nBundle (HashMap<LanguageIdentifier, HashMap<String, String>>)
+├── locale.rs       # Language detection + Accept-Language parsing
+└── locales/
+    ├── en/
+    │   ├── errors.ftl    # 17 error variant translations
+    │   └── messages.ftl  # Response message translations
+    └── zh/
+        ├── errors.ftl
+        └── messages.ftl
+```
+
+### Design Decisions
+
+| Decision | Rationale |
+|----------|----------|
+| Lightweight FTL parser instead of `fluent-bundle` | `FluentBundle` is not `Send+Sync` (contains `RefCell<TypeMap>`), incompatible with `static OnceLock` storage |
+| FTL files embedded via `include_str!` | Zero runtime I/O; translations compiled into binary |
+| `HashMap<String, String>` for args | Avoids `FluentArgs<'a>` lifetime issues; simple `{ $var }` substitution |
+| Language detection priority chain | `VECBOOST_LANG` → `LC_ALL`/`LANG` → `sys-locale` → `"en"` |
+
+### Public API
+
+```rust
+// Initialize i18n (called once at startup in main.rs)
+vecboost::i18n::init();
+
+// Translate a message key
+let msg = vecboost::i18n::tr("health-ok");
+
+// Translate with arguments
+let args = vecboost::i18n::tr_args(&[("index", "0"), ("max", "1024")]);
+let msg = vecboost::i18n::tr_with_args("validate-text-length", args);
+
+// Translate for a specific locale
+let msg = vecboost::i18n::tr_locale("health-ok", "zh");
+```
+
+### Error Code Mapping
+
+Each `VecboostError` variant maps to a stable Fluent key via `error_code()`:
+
+| Variant | `error_code()` | English | Chinese |
+|---------|---------------|---------|----------|
+| `ConfigError` | `error-config` | Config error: {detail} | 配置错误：{detail} |
+| `ValidationError` | `error-validation` | Validation error: {detail} | 验证错误：{detail} |
+| `AuthenticationError` | `error-authentication` | Authentication error: {detail} | 认证错误：{detail} |
+| ... | ... | ... | ... |
+
+The `IntoResponse` implementation uses `error_code()` to look up the translated message, passing `error_detail()` as the `{ $detail }` argument.

@@ -777,6 +777,14 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
+    // i18n Accept-Language 中间件 — 解析请求语言，设置请求级 locale
+    // 使所有下游 handler 和 IntoResponse 自动使用正确的语言
+    #[cfg(feature = "http")]
+    {
+        use axum::middleware::from_fn;
+        app = app.layer(from_fn(vecboost::i18n::i18n_middleware));
+    }
+
     // 全局限流中间件 — 应用到所有路由
     // 内部通过 RateLimitEnabled 配置控制是否生效
     // 注：auth_rate_limit_middleware 定义在 auth 模块下，需 feature = "auth" 门控

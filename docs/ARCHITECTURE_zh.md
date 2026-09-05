@@ -28,6 +28,7 @@
 | [性能优化](#性能优化) | 批处理、内存管理和 GPU 优化 |
 | [部署架构](#部署架构) | Kubernetes 和 Docker 部署 |
 | [扩展点](#扩展点) | 如何添加新引擎和缓存 |
+| [国际化（i18n）](#-国际化i18n) | 中英双语支持与架构设计 |
 
 ---
 
@@ -856,6 +857,67 @@ pub trait InferenceEngine: Send + Sync {
 > **📝 最后更新**: 2026-08-09 | **版本**: 0.2.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
 
 ---
+
+---
+
+## 🌐 国际化（i18n）
+
+VecBoost 支持中英双语错误响应和面向用户的消息，基于轻量级 Fluent 兼容翻译系统实现。
+
+### 模块结构
+
+```
+src/i18n/
+├── mod.rs          # 公共 API：init(), tr(), tr_with_args(), tr_locale(), tr_args()
+├── bundle.rs       # FTL 解析器 + I18nBundle（HashMap<LanguageIdentifier, HashMap<String, String>>）
+├── locale.rs       # 语言检测 + Accept-Language 解析
+└── locales/
+    ├── en/
+    │   ├── errors.ftl    # 17 个错误变体翻译
+    │   └── messages.ftl  # 响应消息翻译
+    └── zh/
+        ├── errors.ftl
+        └── messages.ftl
+```
+
+### 设计决策
+
+| 决策 | 原因 |
+|------|------|
+| 轻量 FTL 解析器替代 `fluent-bundle` | `FluentBundle` 非 `Send+Sync`（含 `RefCell<TypeMap>`），无法存入 `static OnceLock` |
+| FTL 文件通过 `include_str!` 嵌入 | 零运行时 I/O；翻译编译进二进制 |
+| `HashMap<String, String>` 存储参数 | 避免 `FluentArgs<'a>` 生命周期问题；简单 `{ $var }` 替换 |
+| 语言检测优先级链 | `VECBOOST_LANG` → `LC_ALL`/`LANG` → `sys-locale` → `"en"` |
+
+### 公共 API
+
+```rust
+// 初始化 i18n（在 main.rs 启动时调用一次）
+vecboost::i18n::init();
+
+// 翻译消息键
+let msg = vecboost::i18n::tr("health-ok");
+
+// 带参数翻译
+let args = vecboost::i18n::tr_args(&[("index", "0"), ("max", "1024")]);
+let msg = vecboost::i18n::tr_with_args("validate-text-length", args);
+
+// 指定 locale 翻译
+let msg = vecboost::i18n::tr_locale("health-ok", "zh");
+```
+
+### 错误码映射
+
+每个 `VecboostError` 变体通过 `error_code()` 映射到稳定的 Fluent 键：
+
+| 变体 | `error_code()` | 英文 | 中文 |
+|------|---------------|------|------|
+| `ConfigError` | `error-config` | Config error: {detail} | 配置错误：{detail} |
+| `ValidationError` | `error-validation` | Validation error: {detail} | 验证错误：{detail} |
+| `AuthenticationError` | `error-authentication` | Authentication error: {detail} | 认证错误：{detail} |
+| ... | ... | ... | ... |
+
+`IntoResponse` 实现使用 `error_code()` 查找翻译消息，将 `error_detail()` 作为 `{ $detail }` 参数传入。
 
 ---
 

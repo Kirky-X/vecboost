@@ -22,6 +22,7 @@
 | [OpenAPI 文档](#-openapi-文档) | Swagger UI 与 OpenAPI 规范端点 |
 | [gRPC API](#grpc-api) | gRPC 服务定义、配置与消息类型 |
 | [错误处理](#错误处理) | 错误码和响应格式 |
+| [国际化（i18n）](#-国际化i18n) | 中英双语支持与语言配置 |
 | [速率限制](#速率限制) | 速率限制策略和响应头 |
 
 ---
@@ -1026,23 +1027,21 @@ func main() {
 
 ### 错误响应格式
 
-所有错误响应遵循统一格式：
+所有错误响应遵循统一格式，并支持国际化（i18n）：
 
 ```json
 {
-  "error": {
-    "code": "INVALID_INPUT",
-    "message": "Text input cannot be empty",
-    "details": null
-  }
+  "error": "配置错误：数据库连接超时",
+  "code": 500,
+  "error_code": "error-config"
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `code` | string | 错误码 |
-| `message` | string | 错误描述 |
-| `details` | object | 错误详情（可选） |
+| `error` | string | 错误描述（根据当前语言环境自动翻译） |
+| `code` | integer | HTTP 状态码 |
+| `error_code` | string | Fluent 消息键，用于程序化错误分类 |
 
 ---
 
@@ -1061,6 +1060,41 @@ func main() {
 | `CONFIG_ERROR` | 500 | 配置错误 | 检查配置文件 |
 
 > **💡 提示**: 启用认证时，401 错误也可能表示令牌已过期。
+
+---
+
+### 🌐 国际化（i18n）
+
+VecBoost 支持中英双语错误响应，基于 ICU+Fluent 框架实现。错误消息的语言由以下优先级链决定：
+
+| 优先级 | 来源 | 示例 |
+|--------|------|------|
+| 1（最高） | `VECBOOST_LANG` 环境变量 | `VECBOOST_LANG=zh` |
+| 2 | `LC_ALL` / `LANG` 环境变量 | `LANG=zh_CN.UTF-8` |
+| 3 | 系统 locale（`sys-locale`） | 操作系统语言设置 |
+| 4（默认） | 英文 | `en` |
+
+**错误消息示例（中文）：**
+
+```json
+{
+  "error": "验证错误：文本 index 0 长度 5000 超过限制 1024",
+  "code": 400,
+  "error_code": "error-validation"
+}
+```
+
+**同一错误的英文版本：**
+
+```json
+{
+  "error": "Validation error: text at index 0 has length 5000 exceeding limit 1024",
+  "code": 400,
+  "error_code": "error-validation"
+}
+```
+
+> **ℹ️ 说明**: `error_code` 字段是 Fluent 消息键（如 `error-config`、`error-validation`），可用于程序化错误处理，不受语言切换影响。支持的语言：`en`（英文）、`zh`（中文）。不支持的语言会自动回退到英文。
 
 ---
 

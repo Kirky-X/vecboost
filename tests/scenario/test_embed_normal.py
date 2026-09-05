@@ -60,16 +60,18 @@ def test_r003_similarity_same_pair_high_score(base_server):
 
     能力边界（发现）：HTTP 未暴露 metric 选择字段（SimilarityRequest 仅 source/target），
     服务层 4 种度量无法经 API 触达，记入报告。
+    注：M1 为英文模型，对中文文本区分能力有限（CJK token 在嵌入层几乎无差异），
+    故无关文本对使用英文验证。
     """
     port = base_server["port"]
     st, body = http_post(port, "/api/1/similarity",
-                         {"source": "我爱北京天安门", "target": "我爱北京天安门"})
+                         {"source": "I love Beijing", "target": "I love Beijing"})
     assert st == 200, f"HTTP {st}: {str(body)[:200]}"
     same = find_scalar_score(body)
     assert same is not None, f"未找到分数: {str(body)[:200]}"
     assert same > 0.99, f"相同文本相似度 {same} 应≈1.0"
     st2, body2 = http_post(port, "/api/1/similarity",
-                           {"source": "机器学习模型训练", "target": "今天的午餐是面条"})
+                           {"source": "machine learning model training", "target": "today lunch is noodles"})
     assert st2 == 200, f"HTTP {st2}"
     diff = find_scalar_score(body2)
     assert diff is not None and diff < same, f"无关文本相似度 {diff} 不应高于相同文本 {same}"

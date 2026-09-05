@@ -967,12 +967,13 @@ impl Tokenizer {
                 }
 
                 if !found {
-                    // Entire word → [UNK], skip remaining chars
-                    word_pieces.push("[UNK]".to_string());
-                    break;
+                    // Single char → UNK, advance by 1 so subsequent chars can still match
+                    let unk_char: String = chars[start..=start].iter().collect();
+                    word_pieces.push(unk_char);
+                    start += 1;
+                } else {
+                    start = end;
                 }
-
-                start = end;
             }
 
             pieces.extend(word_pieces);

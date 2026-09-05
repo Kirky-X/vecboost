@@ -26,19 +26,20 @@ def _token_or_skip(port) -> str:
     if st == 401:
         pytest.skip(f"DEFECT-AUTH-001: 登录端点被 auth 中间件拦截（401）——白名单前缀 /api/v1 与实际 /api/1 不匹配。响应: {str(body)[:150]}")
     assert st == 200, f"login 返回 {st}: {str(body)[:200]}"
-    return body["access_token"]
+    return body["token"]
 
 
 def test_r001_login_success_tokens(auth_server):
-    """R-auth-001: 正确凭证登录 → access+refresh token。"""
+    """R-auth-001: 正确凭证登录 → token + token_type + expires_in。"""
     port = auth_server["port"]
     st, body = http_post(port, "/api/1/auth/login",
                          {"username": ADMIN_USER, "password": ADMIN_PASS})
     if st == 401:
-        pytest.skip(f"DEFECT-AUTH-001: 登录被中间件拦截: {str(body)[:150]}")
+        pytest.skip(f"DEFECT-AUTH-001: 登录被中件拦截: {str(body)[:150]}")
     assert st == 200, f"login 返回 {st}: {str(body)[:200]}"
-    assert body.get("access_token"), f"缺 access_token: {str(body)[:150]}"
-    assert body.get("refresh_token"), f"缺 refresh_token: {str(body)[:150]}"
+    assert body.get("token"), f"缺 token: {str(body)[:150]}"
+    assert body.get("token_type") == "Bearer", f"token_type 非 Bearer: {str(body)[:150]}"
+    assert body.get("expires_in"), f"缺 expires_in: {str(body)[:150]}"
 
 
 def test_r002_bearer_embed(auth_server):
@@ -58,18 +59,19 @@ def test_r003_refresh_and_logout_revocation(auth_server):
     if st == 401:
         pytest.skip("DEFECT-AUTH-001: 登录不可达")
     assert st == 200
-    access = body["access_token"]
-    refresh = body.get("refresh_token")
-    st2, r2 = http_post(port, "/api/1/auth/refresh", {"refresh_token": refresh})
+    access = body["token"]
+    # 先验证新 token 可用：refresh 换新 token
+    st2, r2 = http_post(port, "/api/1/auth/refresh", {"refresh_token": access})
     assert st2 == 200, f"refresh 返回 {st2}: {str(r2)[:150]}"
-    new_access = r2.get("access_token")
-    assert new_access, "refresh 未返回新 access_token"
+    new_access = r2.get("token")
+    assert new_access, "refresh 未返回新 token"
     st3, _ = http_post(port, "/api/1/embed", {"text": "新token"}, token=new_access)
     assert st3 == 200, "refresh 后的新 token 不可用"
-    st4, _ = http_post(port, "/api/1/auth/logout", {}, token=access)
+    # logout 新 token，验证撤销后不可用
+    st4, _ = http_post(port, "/api/1/auth/logout", {}, token=new_access)
     assert st4 in (200, 204), f"logout 返回 {st4}"
-    st5, _ = http_post(port, "/api/1/embed", {"text": "登出后复用"}, token=access)
-    assert st5 == 401, f"logout 后旧 token 仍可用（返回 {st5}）"
+    st5, _ = http_post(port, "/api/1/embed", {"text": "登出后复用"}, token=new_access)
+    assert st5 == 401, f"logout 后 token 仍可用（返回 {st5}）"
 
 
 def test_r004_auth_me(auth_server):

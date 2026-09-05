@@ -142,4 +142,5 @@ TEST_MODES.md
 strix_runs/
 security-results/
 .corrupted_backup/
+.mimosa/
 tests/scenario/run/

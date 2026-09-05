@@ -81,9 +81,9 @@ impl LimiteronAdapter {
 
         Self {
             governor,
-            ip_buckets: Mutex::new(HashMap::new()),
-            user_buckets: Mutex::new(HashMap::new()),
-            api_key_buckets: Mutex::new(HashMap::new()),
+            ip_buckets: Mutex::new(HashMap::with_capacity(64)),
+            user_buckets: Mutex::new(HashMap::with_capacity(64)),
+            api_key_buckets: Mutex::new(HashMap::with_capacity(64)),
             settings,
             health_cache: AtomicBool::new(true),
         }

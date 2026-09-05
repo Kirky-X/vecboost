@@ -163,11 +163,11 @@ impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            global_requests_per_minute: 1000,
-            ip_requests_per_minute: 100,
-            user_requests_per_minute: 200,
-            api_key_requests_per_minute: 500,
-            window_secs: 60,
+            global_requests_per_minute: DEFAULT_GLOBAL_RPM,
+            ip_requests_per_minute: DEFAULT_IP_RPM,
+            user_requests_per_minute: DEFAULT_USER_RPM,
+            api_key_requests_per_minute: DEFAULT_API_KEY_RPM,
+            window_secs: DEFAULT_WINDOW_SECS,
             ip_whitelist: vec![],
         }
     }
@@ -211,8 +211,8 @@ impl Default for SemanticCacheConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            similarity_threshold: 0.7,
-            capacity: 10000,
+            similarity_threshold: DEFAULT_SIMILARITY_THRESHOLD,
+            capacity: DEFAULT_SEMANTIC_CACHE_CAPACITY,
         }
     }
 }
@@ -236,8 +236,8 @@ impl Default for MemoryPagingConfig {
         Self {
             enabled: false,
             gpu_memory_budget_bytes: 0,
-            lru_k: 2,
-            prefetch_depth: 2,
+            lru_k: DEFAULT_LRU_K,
+            prefetch_depth: DEFAULT_PREFETCH_DEPTH,
         }
     }
 }
@@ -261,9 +261,9 @@ pub struct DatabaseConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            url: "sqlite:vecboost.db".to_string(),
-            max_connections: 10,
-            connect_timeout_secs: 5,
+            url: DEFAULT_DB_URL.to_string(),
+            max_connections: DEFAULT_DB_MAX_CONNECTIONS,
+            connect_timeout_secs: DEFAULT_DB_CONNECT_TIMEOUT_SECS,
         }
     }
 }
@@ -323,9 +323,9 @@ impl Default for AuditConfig {
         Self {
             enabled: true,
             log_file_path: "logs/audit.log".to_string(),
-            log_level: "info".to_string(),
-            max_file_size_mb: 100,
-            max_files: 10,
+            log_level: DEFAULT_AUDIT_LOG_LEVEL.to_string(),
+            max_file_size_mb: DEFAULT_AUDIT_MAX_FILE_SIZE_MB,
+            max_files: DEFAULT_AUDIT_MAX_FILES,
         }
     }
 }
@@ -347,7 +347,7 @@ impl Default for BufferPoolConfig {
             enabled: true,
             text_buffer_sizes: vec![16, 32, 64, 128, 256],
             vector_buffer_sizes: vec![16, 32, 64, 128, 256],
-            pool_size_per_size: 8,
+            pool_size_per_size: DEFAULT_POOL_SIZE_PER_SIZE,
         }
     }
 }
@@ -379,15 +379,15 @@ impl Default for CudaPoolConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            host: "0.0.0.0".to_string(),
-            port: 3000,
+            host: DEFAULT_HOST.to_string(),
+            port: DEFAULT_PORT,
             grpc_host: None,
-            grpc_port: Some(50051),
+            grpc_port: Some(DEFAULT_GRPC_PORT),
             grpc_enabled: false,
             workers: None,
-            timeout: Some(30),
-            grpc_max_connections: Some(1000),
-            grpc_timeout_seconds: Some(30),
+            timeout: Some(DEFAULT_TIMEOUT_SECS),
+            grpc_max_connections: Some(DEFAULT_GRPC_MAX_CONNECTIONS),
+            grpc_timeout_seconds: Some(DEFAULT_TIMEOUT_SECS),
             // Secure default: require auth unless explicitly disabled.
             // Callers must opt-out via config/config.toml `[server] grpc_require_auth = false`.
             grpc_require_auth: Some(true),
@@ -413,6 +413,47 @@ const DEFAULT_MAX_QUERY_LENGTH: usize = 8192;
 /// 监控配置默认值
 const DEFAULT_MEMORY_LIMIT_MB: usize = 4096;
 const DEFAULT_MEMORY_WARNING_THRESHOLD: f64 = 0.8;
+
+/// 审计配置默认值
+const DEFAULT_AUDIT_LOG_LEVEL: &str = "info";
+const DEFAULT_AUDIT_MAX_FILE_SIZE_MB: usize = 100;
+const DEFAULT_AUDIT_MAX_FILES: usize = 10;
+
+/// 限流配置默认值
+const DEFAULT_GLOBAL_RPM: u64 = 1000;
+const DEFAULT_IP_RPM: u64 = 100;
+const DEFAULT_USER_RPM: u64 = 200;
+const DEFAULT_API_KEY_RPM: u64 = 500;
+const DEFAULT_WINDOW_SECS: u64 = 60;
+
+/// 认证配置默认值
+const DEFAULT_TOKEN_EXPIRATION_HOURS: i64 = 24;
+
+/// 内存分页配置默认值
+const DEFAULT_LRU_K: usize = 2;
+const DEFAULT_PREFETCH_DEPTH: usize = 2;
+
+/// 语义缓存配置默认值
+const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.7;
+const DEFAULT_SEMANTIC_CACHE_CAPACITY: usize = 10000;
+
+/// 数据库配置默认值（需 `db` feature）
+#[cfg(feature = "db")]
+const DEFAULT_DB_URL: &str = "sqlite:vecboost.db";
+#[cfg(feature = "db")]
+const DEFAULT_DB_MAX_CONNECTIONS: u32 = 10;
+#[cfg(feature = "db")]
+const DEFAULT_DB_CONNECT_TIMEOUT_SECS: u64 = 5;
+
+/// 缓冲区池配置默认值
+const DEFAULT_POOL_SIZE_PER_SIZE: usize = 8;
+
+/// 服务器配置默认值
+const DEFAULT_HOST: &str = "0.0.0.0";
+const DEFAULT_PORT: u16 = 3000;
+const DEFAULT_GRPC_PORT: u16 = 50051;
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_GRPC_MAX_CONNECTIONS: usize = 1000;
 
 impl Default for ModelConfig {
     fn default() -> Self {
@@ -468,7 +509,7 @@ impl Default for AuthConfig {
         Self {
             enabled: false,
             jwt_secret: None,
-            token_expiration_hours: Some(24),
+            token_expiration_hours: Some(DEFAULT_TOKEN_EXPIRATION_HOURS),
             default_admin_username: None,
             default_admin_password: None,
             csrf: CsrfConfig::default(),

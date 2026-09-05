@@ -17,6 +17,11 @@ use tokio::sync::RwLock;
 
 use crate::cache::OxCacheBackend;
 
+/// 语义缓存默认相似度阈值（trigram Jaccard）
+const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.7;
+/// 语义索引默认最大条目数
+const DEFAULT_CAPACITY: usize = 10000;
+
 /// 语义缓存条目
 struct SemanticEntry {
     /// 缓存的 trigram 集合，避免重复计算
@@ -46,8 +51,8 @@ impl Default for SemanticCacheConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            similarity_threshold: 0.7,
-            capacity: 10000,
+            similarity_threshold: DEFAULT_SIMILARITY_THRESHOLD,
+            capacity: DEFAULT_CAPACITY,
         }
     }
 }
@@ -101,7 +106,7 @@ impl SemanticCache {
         Self {
             exact_cache: Arc::new(OxCacheBackend::disabled()),
             semantic_index: RwLock::new(Vec::new()),
-            similarity_threshold: 0.7,
+            similarity_threshold: DEFAULT_SIMILARITY_THRESHOLD,
             capacity: 0,
             enabled: false,
             exact_hits: AtomicU64::new(0),

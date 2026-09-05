@@ -16,6 +16,10 @@ use axum::{
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
+/// 认证上下文 — 由 `auth_middleware` 在验证通过后注入到请求扩展中。
+///
+/// 包含已解析的用户身份和原始 JWT token，下游 handler 通过
+/// `request.extensions().get::<AuthContext>()` 获取。
 #[derive(Clone)]
 pub struct AuthContext {
     pub user: User,
@@ -72,6 +76,17 @@ pub async fn auth_middleware(
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // T016: Warn once when trusted_proxies is empty (legacy unconditional XFF trust).
+    static EMPTY_PROXIES_WARN: std::sync::Once = std::sync::Once::new();
+    if auth_config.trusted_proxies.is_empty() {
+        EMPTY_PROXIES_WARN.call_once(|| {
+            log::warn!(
+                "trusted_proxies is empty — X-Forwarded-For header is trusted unconditionally. \
+                 Production deployments should configure trusted_proxies to prevent IP spoofing."
+            );
+        });
+    }
+
     let path = request.uri().path();
 
     if PUBLIC_PATHS.contains(&path) {
@@ -289,10 +304,10 @@ pub async fn auth_rate_limit_middleware(
         log::warn!("Auth endpoint rate limit exceeded for IP: {}", ip);
 
         // DEFECT-AUDIT-001: 限流事件写入审计日志
-        if let Ok(audit_opt) = state.kit.require::<crate::registry::AuditModule>() {
-            if let Some(logger) = audit_opt.as_ref() {
-                logger.log_rate_limit_exceeded(None, Some(ip.clone()));
-            }
+        if let Ok(audit_opt) = state.kit.require::<crate::registry::AuditModule>()
+            && let Some(logger) = audit_opt.as_ref()
+        {
+            logger.log_rate_limit_exceeded(None, Some(ip.clone()));
         }
 
         return Err(StatusCode::TOO_MANY_REQUESTS);

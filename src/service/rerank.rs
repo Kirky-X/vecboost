@@ -96,26 +96,30 @@ impl RerankService {
 
         // 验证 query 长度
         if req.query.len() > max_query_length {
-            return Err(VecboostError::InvalidInput(format!(
-                "Query length {} exceeds maximum allowed length {}",
-                req.query.len(),
-                max_query_length
+            return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+                "rerank-query-too-long",
+                crate::i18n::tr_args(&[
+                    ("length", &req.query.len().to_string()),
+                    ("max", &max_query_length.to_string()),
+                ]),
             )));
         }
 
         // 验证 documents 非空
         if req.documents.is_empty() {
             return Err(VecboostError::InvalidInput(
-                "Documents list cannot be empty".to_string(),
+                crate::i18n::tr("rerank-empty-docs").to_string(),
             ));
         }
 
         // 验证 documents 数量不超过限制
         if req.documents.len() > max_documents {
-            return Err(VecboostError::InvalidInput(format!(
-                "Documents count {} exceeds max documents per query {}",
-                req.documents.len(),
-                max_documents
+            return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+                "rerank-too-many-docs",
+                crate::i18n::tr_args(&[
+                    ("count", &req.documents.len().to_string()),
+                    ("max", &max_documents.to_string()),
+                ]),
             )));
         }
 
@@ -124,7 +128,7 @@ impl RerankService {
             && top_k == 0
         {
             return Err(VecboostError::InvalidInput(
-                "top_k must be greater than 0 when specified".to_string(),
+                crate::i18n::tr("rerank-invalid-top-k").to_string(),
             ));
         }
 
@@ -136,7 +140,7 @@ impl RerankService {
         let engine_read = self.engine.read().await;
         if !engine_read.supports_rerank() {
             return Err(VecboostError::InternalError(
-                "Current engine does not support rerank".to_string(),
+                crate::i18n::tr("rerank-unsupported").to_string(),
             ));
         }
         drop(engine_read);

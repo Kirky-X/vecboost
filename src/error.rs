@@ -198,12 +198,58 @@ impl VecboostError {
     pub fn internal_error(message: String) -> Self {
         VecboostError::InternalError(message)
     }
+
+    /// Return a stable Fluent message key for this error variant.
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            VecboostError::ConfigError(_) => "error-config",
+            VecboostError::ModelLoadError(_) => "error-model-load",
+            VecboostError::ModelFileCorrupted(_) => "error-model-corrupted",
+            VecboostError::ModelIntegrityError(_) => "error-model-integrity",
+            VecboostError::TokenizationError(_) => "error-tokenization",
+            VecboostError::InferenceError(_) => "error-inference",
+            VecboostError::OutOfMemory(_) => "error-oom",
+            VecboostError::InvalidInput(_) => "error-invalid-input",
+            VecboostError::NotFound(_) => "error-not-found",
+            VecboostError::ModelNotLoaded(_) => "error-model-not-loaded",
+            VecboostError::AuthenticationError(_) => "error-authentication",
+            VecboostError::SecurityError(_) => "error-security",
+            VecboostError::IoError(_) => "error-io",
+            VecboostError::ValidationError(_) => "error-validation",
+            VecboostError::RateLimitExceeded(_) => "error-rate-limit",
+            VecboostError::DatabaseError(_) => "error-database",
+            VecboostError::InternalError(_) => "error-internal",
+        }
+    }
+
+    /// Return the inner detail string for this error.
+    pub fn error_detail(&self) -> &str {
+        match self {
+            VecboostError::ConfigError(s)
+            | VecboostError::ModelLoadError(s)
+            | VecboostError::ModelFileCorrupted(s)
+            | VecboostError::ModelIntegrityError(s)
+            | VecboostError::TokenizationError(s)
+            | VecboostError::InferenceError(s)
+            | VecboostError::OutOfMemory(s)
+            | VecboostError::InvalidInput(s)
+            | VecboostError::NotFound(s)
+            | VecboostError::ModelNotLoaded(s)
+            | VecboostError::AuthenticationError(s)
+            | VecboostError::SecurityError(s)
+            | VecboostError::IoError(s)
+            | VecboostError::ValidationError(s)
+            | VecboostError::RateLimitExceeded(s)
+            | VecboostError::DatabaseError(s)
+            | VecboostError::InternalError(s) => s.as_str(),
+        }
+    }
 }
 
 #[cfg(feature = "http")]
 impl IntoResponse for VecboostError {
     fn into_response(self) -> Response {
-        let status = match self {
+        let status = match &self {
             VecboostError::ConfigError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             VecboostError::ModelLoadError(_) => StatusCode::FAILED_DEPENDENCY,
             VecboostError::ModelFileCorrupted(_) => StatusCode::FAILED_DEPENDENCY,
@@ -223,11 +269,16 @@ impl IntoResponse for VecboostError {
             VecboostError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
-        let sanitized_message = sanitize_error_message(&self.to_string());
+        // Use i18n translation for the error message
+        let error_code = self.error_code();
+        let args = crate::i18n::tr_args(&[("detail", self.error_detail())]);
+        let translated_message = crate::i18n::tr_with_args(error_code, args);
+        let sanitized_message = sanitize_error_message(&translated_message);
 
         let body = Json(json!({
             "error": sanitized_message,
-            "code": status.as_u16()
+            "code": status.as_u16(),
+            "error_code": error_code
         }));
 
         (status, body).into_response()

@@ -36,7 +36,12 @@ serde_json = { version = "1.0", default-features = false, features = ["std"] }
 thiserror = { version = "2.0", default-features = false }
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 
-# Module Registry (always required) — 保留 reload/confers 热重载，移除未接线的 i18n 以减体积
+# Internationalization (i18n) — ICU+Fluent 中英双语支持
+# FTL 文件使用轻量解析器加载（FluentBundle 非 Send+Sync，不适合 static 存储）
+sys-locale = { version = "0.3", default-features = false }
+unic-langid = { version = "0.9", default-features = false, features = ["likelysubtags"] }
+
+# Module Registry (always required) — 保留 reload/confers 热重载
 trait-kit = { version = "0.5.0-rc.2", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "confers"] }
 
 # Configuration infrastructure — 保留 interpolation/dynamic/feature-toggle (已接线 Configurable)，移除 json/yaml 冗余格式

@@ -457,6 +457,9 @@ async fn main() -> anyhow::Result<()> {
 
     log::info!("Starting Rust Embedding Service...");
 
+    // Initialize i18n — detects system locale and loads FTL translation resources
+    vecboost::i18n::init();
+
     #[cfg(any(feature = "http", feature = "mcp", feature = "cli", feature = "grpc"))]
     {
         let _counts = sdforge::init_all_plugins();

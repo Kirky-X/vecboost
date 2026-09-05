@@ -443,7 +443,7 @@ impl EmbeddingService {
     pub async fn process_file_stream(&self, path: &Path) -> Result<EmbedResponse, VecboostError> {
         let path_str = path.to_str().ok_or_else(|| {
             VecboostError::InvalidInput(
-                "Invalid path encoding: path contains invalid UTF-8".to_string(),
+                crate::i18n::tr("file-invalid-encoding").to_string(),
             )
         })?;
         self.validator.validate_file(path_str)?;
@@ -469,7 +469,7 @@ impl EmbeddingService {
     ) -> Result<EmbeddingOutput, VecboostError> {
         let path_str = path.to_str().ok_or_else(|| {
             VecboostError::InvalidInput(
-                "Invalid path encoding: path contains invalid UTF-8".to_string(),
+                crate::i18n::tr("file-invalid-encoding").to_string(),
             )
         })?;
         self.validator.validate_file(path_str)?;
@@ -548,7 +548,7 @@ impl EmbeddingService {
                 information_retention_rate: None,
             })
         } else {
-            Err(VecboostError::InvalidInput("File is empty".to_string()))
+            Err(VecboostError::InvalidInput(crate::i18n::tr("file-empty").to_string()))
         }
     }
 
@@ -569,7 +569,7 @@ impl EmbeddingService {
 
         if paragraphs.is_empty() {
             return Err(VecboostError::InvalidInput(
-                "No paragraphs found in file".to_string(),
+                crate::i18n::tr("file-no-paragraphs").to_string(),
             ));
         }
 
@@ -908,7 +908,7 @@ impl EmbeddingService {
                                 warn!("Fallback already triggered, cannot retry");
 
                                 return Err(VecboostError::OutOfMemory(
-                                    "Out of memory and fallback already attempted".to_string(),
+                                    crate::i18n::tr("oom-no-fallback").to_string(),
                                 ));
                             }
 
@@ -1101,7 +1101,7 @@ impl EmbeddingService {
                 previous_model: previous_model.clone(),
                 current_model: req.model_name,
                 success: true,
-                message: "Already using this model".to_string(),
+                message: crate::i18n::tr("model-already-current"),
             });
         }
 
@@ -1171,9 +1171,9 @@ impl EmbeddingService {
             model_config.engine_type.clone(),
             crate::config::model::Precision::Fp32,
         )
-        .map_err(|e| VecboostError::NotFound(format!(
-            "Failed to load model '{}': {}",
-            req.model_name, e
+        .map_err(|e| VecboostError::NotFound(crate::i18n::tr_with_args(
+            "model-load-failed",
+            crate::i18n::tr_args(&[("name", &req.model_name), ("detail", &e.to_string())]),
         )))?;
 
         self.engine = Arc::new(RwLock::new(new_engine));
@@ -1185,7 +1185,7 @@ impl EmbeddingService {
             previous_model,
             current_model: req.model_name,
             success: true,
-            message: "Model switched successfully".to_string(),
+            message: crate::i18n::tr("model-switch-success"),
         })
     }
 

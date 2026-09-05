@@ -20,6 +20,7 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod engine;
+pub mod i18n;
 pub mod library;
 pub mod metrics;
 pub mod pipeline;

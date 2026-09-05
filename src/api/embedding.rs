@@ -140,12 +140,16 @@ pub(crate) fn kit_internal_error(e: impl std::fmt::Display) -> ApiError {
 fn validate_text_length(texts: &[String], max: usize) -> Result<(), VecboostError> {
     for (idx, text) in texts.iter().enumerate() {
         if text.len() > max {
-            return Err(VecboostError::ValidationError(format!(
-                "text at index {} exceeds max length {} (got {})",
-                idx,
-                max,
-                text.len()
-            )));
+            return Err(VecboostError::ValidationError(
+                crate::i18n::tr_with_args(
+                    "validate-text-length",
+                    crate::i18n::tr_args(&[
+                        ("index", &idx.to_string()),
+                        ("max", &max.to_string()),
+                        ("got", &text.len().to_string()),
+                    ]),
+                ),
+            ));
         }
     }
     Ok(())
@@ -156,10 +160,15 @@ fn validate_text_length(texts: &[String], max: usize) -> Result<(), VecboostErro
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 fn validate_batch_size(texts_len: usize, max: usize) -> Result<(), VecboostError> {
     if texts_len > max {
-        return Err(VecboostError::ValidationError(format!(
-            "batch size {} exceeds max {} (config embedding.max_batch_size)",
-            texts_len, max
-        )));
+        return Err(VecboostError::ValidationError(
+            crate::i18n::tr_with_args(
+                "validate-batch-size",
+                crate::i18n::tr_args(&[
+                    ("size", &texts_len.to_string()),
+                    ("max", &max.to_string()),
+                ]),
+            ),
+        ));
     }
     Ok(())
 }
@@ -208,7 +217,10 @@ fn build_path_validator() -> Result<PathValidator, ApiError> {
 
     // Fallback: current working directory with sensitive-dir guard.
     let cwd = std::env::current_dir().map_err(|e| ApiError::Internal {
-        message: format!("Failed to get current directory: {}", e),
+        message: crate::i18n::tr_with_args(
+            "dir-get-cwd-failed",
+            crate::i18n::tr_args(&[("detail", &e.to_string())]),
+        ),
         error_id: uuid_like_id(),
         source: None,
         context: None,
@@ -220,10 +232,9 @@ fn build_path_validator() -> Result<PathValidator, ApiError> {
     let cwd_str = cwd.to_string_lossy();
     if SENSITIVE_DIRS.iter().any(|s| cwd_str.as_ref() == *s) {
         return Err(ApiError::Internal {
-            message: format!(
-                "Refusing to use sensitive directory '{}' as allowed root; \
-                 configure [server] grpc_allowed_roots explicitly",
-                cwd_str
+            message: crate::i18n::tr_with_args(
+                "sensitive-dir-refused",
+                crate::i18n::tr_args(&[("path", cwd_str.as_ref())]),
             ),
             error_id: uuid_like_id(),
             source: None,
@@ -312,7 +323,10 @@ async fn embed_file_handler(req: FileEmbedRequest) -> Result<FileEmbedResponse, 
     let validated_path = validator
         .validate_file(&path)
         .map_err(|e| ApiError::InvalidInput {
-            message: format!("Path validation failed: {}", e),
+            message: crate::i18n::tr_with_args(
+                "validate-path-failed",
+                crate::i18n::tr_args(&[("detail", &e.to_string())]),
+            ),
             field: Some("path".to_string()),
             value: Some(serde_json::Value::String(req.path.clone())),
         })?;
@@ -412,43 +426,67 @@ async fn health_handler() -> Result<serde_json::Value, ApiError> {
     // Query registered health checks
     match st.kit.health_check::<EmbeddingModule>() {
         Ok(status) if !status.is_healthy() => {
-            unhealthy_modules.push(format!("embedding: {:?}", status));
+            unhealthy_modules.push(crate::i18n::tr_with_args(
+                "health-check-failed",
+                crate::i18n::tr_args(&[("module", "embedding"), ("detail", &format!("{:?}", status))]),
+            ));
         }
         Err(e) => {
-            unhealthy_modules.push(format!("embedding: health check failed: {}", e));
+            unhealthy_modules.push(crate::i18n::tr_with_args(
+                "health-check-failed",
+                crate::i18n::tr_args(&[("module", "embedding"), ("detail", &e.to_string())]),
+            ));
         }
-        Ok(_) => {} // healthy — no action needed
+        Ok(_) => {}
     }
     match st.kit.health_check::<RerankModule>() {
         Ok(status) if !status.is_healthy() => {
-            unhealthy_modules.push(format!("rerank: {:?}", status));
+            unhealthy_modules.push(crate::i18n::tr_with_args(
+                "health-check-failed",
+                crate::i18n::tr_args(&[("module", "rerank"), ("detail", &format!("{:?}", status))]),
+            ));
         }
         Err(e) => {
-            unhealthy_modules.push(format!("rerank: health check failed: {}", e));
+            unhealthy_modules.push(crate::i18n::tr_with_args(
+                "health-check-failed",
+                crate::i18n::tr_args(&[("module", "rerank"), ("detail", &e.to_string())]),
+            ));
         }
-        Ok(_) => {} // healthy — no action needed
+        Ok(_) => {}
     }
     match st.kit.health_check::<RateLimitModule>() {
         Ok(status) if !status.is_healthy() => {
-            unhealthy_modules.push(format!("rate_limit: {:?}", status));
+            unhealthy_modules.push(crate::i18n::tr_with_args(
+                "health-check-failed",
+                crate::i18n::tr_args(&[("module", "rate_limit"), ("detail", &format!("{:?}", status))]),
+            ));
         }
         Err(e) => {
-            unhealthy_modules.push(format!("rate_limit: health check failed: {}", e));
+            unhealthy_modules.push(crate::i18n::tr_with_args(
+                "health-check-failed",
+                crate::i18n::tr_args(&[("module", "rate_limit"), ("detail", &e.to_string())]),
+            ));
         }
-        Ok(_) => {} // healthy — no action needed
+        Ok(_) => {}
     }
     match st.kit.health_check::<CacheModule>() {
         Ok(status) if !status.is_healthy() => {
-            unhealthy_modules.push(format!("cache: {:?}", status));
+            unhealthy_modules.push(crate::i18n::tr_with_args(
+                "health-check-failed",
+                crate::i18n::tr_args(&[("module", "cache"), ("detail", &format!("{:?}", status))]),
+            ));
         }
         Err(e) => {
-            unhealthy_modules.push(format!("cache: health check failed: {}", e));
+            unhealthy_modules.push(crate::i18n::tr_with_args(
+                "health-check-failed",
+                crate::i18n::tr_args(&[("module", "cache"), ("detail", &e.to_string())]),
+            ));
         }
-        Ok(_) => {} // healthy — no action needed
+        Ok(_) => {}
     }
 
     if unhealthy_modules.is_empty() {
-        Ok(serde_json::json!({ "status": "OK" }))
+        Ok(serde_json::json!({ "status": crate::i18n::tr("health-ok") }))
     } else {
         Err(ApiError::ServiceUnavailable {
             service: unhealthy_modules.join(", "),
@@ -595,14 +633,17 @@ pub async fn forge_list_models() -> Result<ModelListResponse, ApiError> {
 pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedResponse, ApiError> {
     if req.input.is_empty() {
         return Err(ApiError::InvalidInput {
-            message: "input cannot be empty".to_string(),
+            message: crate::i18n::tr("openai-input-empty"),
             field: Some("input".to_string()),
             value: None,
         });
     }
     if req.input.len() > 2048 {
         return Err(ApiError::InvalidInput {
-            message: "input array too large (max 2048 items)".to_string(),
+            message: crate::i18n::tr_with_args(
+                "openai-input-too-large",
+                crate::i18n::tr_args(&[("max", "2048")]),
+            ),
             field: Some("input".to_string()),
             value: None,
         });
@@ -826,20 +867,22 @@ mod tests {
     #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
     #[test]
     fn test_validate_text_length_exceeds_limit_returns_error() {
+        crate::i18n::init();
         let texts = vec!["ok".to_string(), "x".repeat(101)];
         let err = validate_text_length(&texts, 100).unwrap_err();
         match err {
             VecboostError::ValidationError(msg) => {
+                // i18n translated message contains the parameter values
                 assert!(
-                    msg.contains("index 1"),
+                    msg.contains("1"),
                     "error should mention index 1: {msg}"
                 );
                 assert!(
-                    msg.contains("max length 100"),
+                    msg.contains("100"),
                     "error should mention limit: {msg}"
                 );
                 assert!(
-                    msg.contains("got 101"),
+                    msg.contains("101"),
                     "error should mention actual length: {msg}"
                 );
             }
@@ -857,12 +900,14 @@ mod tests {
     #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
     #[test]
     fn test_validate_text_length_first_offending_text_reported() {
+        crate::i18n::init();
         let texts = vec!["x".repeat(51), "x".repeat(52)];
         let err = validate_text_length(&texts, 50).unwrap_err();
         match err {
             VecboostError::ValidationError(msg) => {
+                // Message should contain the offending index "0"
                 assert!(
-                    msg.contains("index 0"),
+                    msg.contains("0"),
                     "should report first offending index: {msg}"
                 );
             }
@@ -879,14 +924,15 @@ mod tests {
     #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
     #[test]
     fn test_validate_batch_size_exceeds_limit_returns_error() {
+        crate::i18n::init();
         let err = validate_batch_size(100, 64).unwrap_err();
         match err {
             VecboostError::ValidationError(msg) => {
                 assert!(
-                    msg.contains("batch size 100"),
+                    msg.contains("100"),
                     "error should mention actual size: {msg}"
                 );
-                assert!(msg.contains("max 64"), "error should mention limit: {msg}");
+                assert!(msg.contains("64"), "error should mention limit: {msg}");
             }
             other => panic!("expected ValidationError, got {other:?}"),
         }

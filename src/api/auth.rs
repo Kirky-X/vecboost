@@ -60,7 +60,7 @@ pub async fn forge_login(
     // 拒绝空密码（基本安全检查）
     if req.password.is_empty() {
         return Err(ApiError::InvalidInput {
-            message: "password must not be empty".to_string(),
+            message: crate::i18n::tr("auth-password-empty"),
             field: Some("password".to_string()),
             value: None,
         });
@@ -77,7 +77,7 @@ pub async fn forge_login(
                 logger.log_login_failed(&req.username, Some(peer_ip.clone()), "invalid password");
             }
             return Err(ApiError::AuthenticationFailed {
-                reason: "Invalid username or password".to_string(),
+                reason: crate::i18n::tr("auth-invalid-credentials"),
             });
         }
     } else {
@@ -139,7 +139,7 @@ pub async fn forge_refresh(
     // 输入验证：拒绝空 refresh_token
     if req.refresh_token.is_empty() {
         return Err(ApiError::InvalidInput {
-            message: "refresh_token must not be empty".to_string(),
+            message: crate::i18n::tr("auth-refresh-token-empty"),
             field: Some("refresh_token".to_string()),
             value: None,
         });
@@ -156,7 +156,7 @@ pub async fn forge_refresh(
             to_api_error(e.into())
         })?
         .ok_or_else(|| ApiError::InvalidInput {
-            message: "Invalid or expired token".to_string(),
+            message: crate::i18n::tr("auth-invalid-token"),
             field: Some("refresh_token".to_string()),
             value: None,
         })?;
@@ -221,7 +221,7 @@ pub async fn forge_logout(
         logger.log_logout(&auth_ctx.user.username, Some(peer_ip));
     }
 
-    Ok("Logout successful. Token has been revoked.".to_string())
+    Ok(crate::i18n::tr("logout-success"))
 }
 
 #[cfg(feature = "http")]

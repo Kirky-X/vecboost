@@ -144,3 +144,8 @@ security-results/
 .corrupted_backup/
 .mimosa/
 tests/scenario/run/
+# Local-only test/spike reports (do not commit)
+tests/scenario/report.md
+tests/integration/bf16_spike.md
+# Local-only i18n audit report (do not commit)
+docs/I18N_MISSING_AUDIT.md

@@ -1026,7 +1026,7 @@ impl Tokenizer {
                     type_ids.push(0);
                 }
             } else {
-                tokens.push("[UNK]".to_string());
+                tokens.push(word.clone());
                 ids.push(unknown_id);
                 attention_mask.push(1);
                 type_ids.push(0);
@@ -1721,27 +1721,32 @@ mod tests {
         fn test_tokenizer_encode_unknown_word_becomes_unk() {
             let tokenizer = make_tokenizer();
             let encoding = tokenizer.encode("xyzqwerty", false).unwrap();
-            assert_eq!(encoding.tokens, vec!["[UNK]"]);
-            assert_eq!(
-                encoding.ids,
-                vec![*tokenizer.special_tokens.get("[UNK]").unwrap()]
-            );
+            // Per-character UNK fallback: each char becomes a separate token mapped to UNK ID
+            let unk_id = *tokenizer.special_tokens.get("[UNK]").unwrap();
+            assert_eq!(encoding.tokens, vec!["x", "y", "z", "q", "w", "e", "r", "t", "y"]);
+            assert_eq!(encoding.ids, vec![unk_id; 9]);
         }
 
         #[test]
         fn test_tokenizer_encode_mixed_known_unknown() {
             let tokenizer = make_tokenizer();
             let encoding = tokenizer.encode("the zzzz be", false).unwrap();
-            assert_eq!(encoding.tokens, vec!["the", "[UNK]", "be"]);
-            assert_eq!(encoding.ids.len(), 3);
+            // "the" and "be" are in vocab; "zzzz" → 4 individual UNK chars
+            let unk_id = *tokenizer.special_tokens.get("[UNK]").unwrap();
+            assert_eq!(encoding.tokens, vec!["the", "z", "z", "z", "z", "be"]);
+            assert_eq!(encoding.ids.len(), 6);
+            assert_eq!(encoding.ids[0], *tokenizer.vocab.get("the").unwrap());
+            assert_eq!(encoding.ids[1], unk_id);
+            assert_eq!(encoding.ids[5], *tokenizer.vocab.get("be").unwrap());
         }
 
         #[test]
         fn test_tokenizer_encode_punctuation_tokens() {
             let tokenizer = make_tokenizer();
             let encoding = tokenizer.encode("!!!", false).unwrap();
-            assert_eq!(encoding.tokens.len(), 1);
-            assert_eq!(encoding.tokens[0], "[UNK]");
+            // Per-character UNK fallback: 3 individual "!" tokens
+            assert_eq!(encoding.tokens.len(), 3);
+            assert_eq!(encoding.tokens, vec!["!", "!", "!"]);
         }
 
         #[test]
@@ -1916,9 +1921,9 @@ mod tests {
             let encoding = tokenizer.encode("the, be.", false).unwrap();
             assert_eq!(encoding.tokens.len(), 4);
             assert_eq!(encoding.tokens[0], "the");
-            assert_eq!(encoding.tokens[1], "[UNK]");
+            assert_eq!(encoding.tokens[1], ",");
             assert_eq!(encoding.tokens[2], "be");
-            assert_eq!(encoding.tokens[3], "[UNK]");
+            assert_eq!(encoding.tokens[3], ".");
         }
 
         #[tokio::test]

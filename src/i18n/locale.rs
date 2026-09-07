@@ -171,4 +171,82 @@ mod tests {
             Some("en".to_string()) // en has higher quality
         );
     }
+
+    #[test]
+    fn test_detect_locale_fallback_to_en() {
+        // Clear all locale env vars to test fallback
+        let saved_vb = std::env::var("VECBOOST_LANG").ok();
+        let saved_lc = std::env::var("LC_ALL").ok();
+        let saved_lang = std::env::var("LANG").ok();
+        unsafe {
+            std::env::remove_var("VECBOOST_LANG");
+            std::env::remove_var("LC_ALL");
+            std::env::remove_var("LANG");
+        }
+        // Without env vars, falls through to sys_locale or "en"
+        let locale = detect_locale();
+        assert!(!locale.is_empty());
+        // Restore
+        if let Some(v) = saved_vb { unsafe { std::env::set_var("VECBOOST_LANG", v) } }
+        if let Some(v) = saved_lc { unsafe { std::env::set_var("LC_ALL", v) } }
+        if let Some(v) = saved_lang { unsafe { std::env::set_var("LANG", v) } }
+    }
+
+    #[test]
+    fn test_detect_locale_lc_all() {
+        let saved_vb = std::env::var("VECBOOST_LANG").ok();
+        let saved_lc = std::env::var("LC_ALL").ok();
+        unsafe {
+            std::env::remove_var("VECBOOST_LANG");
+            std::env::set_var("LC_ALL", "zh_CN.UTF-8");
+        }
+        assert_eq!(detect_locale(), "zh");
+        // Restore
+        match saved_vb {
+            Some(v) => unsafe { std::env::set_var("VECBOOST_LANG", v) },
+            None => unsafe { std::env::remove_var("VECBOOST_LANG") },
+        }
+        match saved_lc {
+            Some(v) => unsafe { std::env::set_var("LC_ALL", v) },
+            None => unsafe { std::env::remove_var("LC_ALL") },
+        }
+    }
+
+    #[test]
+    fn test_detect_locale_lang() {
+        let saved_vb = std::env::var("VECBOOST_LANG").ok();
+        let saved_lc = std::env::var("LC_ALL").ok();
+        let saved_lang = std::env::var("LANG").ok();
+        unsafe {
+            std::env::remove_var("VECBOOST_LANG");
+            std::env::remove_var("LC_ALL");
+            std::env::set_var("LANG", "en_US.UTF-8");
+        }
+        assert_eq!(detect_locale(), "en");
+        // Restore
+        match saved_vb { Some(v) => unsafe { std::env::set_var("VECBOOST_LANG", v) }, None => unsafe { std::env::remove_var("VECBOOST_LANG") } }
+        match saved_lc { Some(v) => unsafe { std::env::set_var("LC_ALL", v) }, None => unsafe { std::env::remove_var("LC_ALL") } }
+        match saved_lang { Some(v) => unsafe { std::env::set_var("LANG", v) }, None => unsafe { std::env::remove_var("LANG") } }
+    }
+
+    #[test]
+    fn test_detect_locale_empty_vecboost_lang_falls_through() {
+        let saved = std::env::var("VECBOOST_LANG").ok();
+        unsafe { std::env::set_var("VECBOOST_LANG", "  ") };
+        // Empty after trim, should fall through to next check
+        let locale = detect_locale();
+        assert!(!locale.is_empty());
+        match saved {
+            Some(v) => unsafe { std::env::set_var("VECBOOST_LANG", v) },
+            None => unsafe { std::env::remove_var("VECBOOST_LANG") },
+        }
+    }
+
+    #[test]
+    fn test_normalize_locale_opt() {
+        assert_eq!(normalize_locale_opt("zh"), Some("zh".to_string()));
+        assert_eq!(normalize_locale_opt("en"), Some("en".to_string()));
+        assert_eq!(normalize_locale_opt("fr"), None);
+        assert_eq!(normalize_locale_opt("ZH_CN"), Some("zh".to_string()));
+    }
 }

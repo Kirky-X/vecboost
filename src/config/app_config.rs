@@ -353,4 +353,56 @@ port = 9999
         let debug_str = format!("{:?}", config);
         assert!(debug_str.contains("AppConfig"));
     }
+
+    #[test]
+    fn test_app_config_validate_default_succeeds() {
+        let config = AppConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_app_config_validate_bad_server_port() {
+        let mut config = AppConfig::default();
+        config.server.port = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_app_config_serialize_roundtrip() {
+        let config = AppConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.server.port, config.server.port);
+    }
+
+    #[test]
+    fn test_app_config_generate_schema() {
+        let result = AppConfig::generate_schema();
+        assert!(result.is_ok());
+        let schema = result.unwrap();
+        assert!(!schema.is_empty());
+    }
+
+    #[test]
+    fn test_app_config_load_via_confers_default() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        let result = AppConfig::load_via_confers();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_app_config_configurable_load() {
+        use trait_kit::kit::Configurable;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        let result = AppConfig::load().await;
+        assert!(result.is_ok());
+    }
 }

@@ -108,4 +108,52 @@ mod tests {
         let deserialized: RefreshTokenRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.refresh_token, "refresh_tok");
     }
+
+    #[test]
+    fn test_user_serialization() {
+        let user = User {
+            username: "bob".to_string(),
+            role: "admin".to_string(),
+            permissions: vec!["read".to_string(), "write".to_string()],
+        };
+        let json = serde_json::to_string(&user).unwrap();
+        let deserialized: User = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.username, "bob");
+        assert_eq!(deserialized.role, "admin");
+        assert_eq!(deserialized.permissions.len(), 2);
+    }
+
+    #[test]
+    fn test_validate_username_format_valid() {
+        assert!(validate_username_format("alice").is_ok());
+        assert!(validate_username_format("Bob123").is_ok());
+        assert!(validate_username_format("a-b").is_ok());
+        assert!(validate_username_format("user_name").is_ok());
+    }
+
+    #[test]
+    fn test_validate_username_format_too_short() {
+        assert!(validate_username_format("ab").is_err());
+        assert!(validate_username_format("").is_err());
+    }
+
+    #[test]
+    fn test_validate_username_format_too_long() {
+        let long_name = "a".repeat(33);
+        assert!(validate_username_format(&long_name).is_err());
+    }
+
+    #[test]
+    fn test_validate_username_format_must_start_with_letter() {
+        assert!(validate_username_format("1user").is_err());
+        assert!(validate_username_format("_user").is_err());
+        assert!(validate_username_format("-user").is_err());
+    }
+
+    #[test]
+    fn test_validate_username_format_invalid_chars() {
+        assert!(validate_username_format("user name").is_err());
+        assert!(validate_username_format("user@name").is_err());
+        assert!(validate_username_format("user.name").is_err());
+    }
 }

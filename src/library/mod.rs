@@ -712,4 +712,113 @@ mod tests {
             .cache_size(500)
             .rerank_config(RerankConfig::default());
     }
+
+    // -------------------------------------------------------------------------
+    // 同步 API 补充测试
+    // -------------------------------------------------------------------------
+
+    // Note: embed_batch_sync and rerank_sync are covered via the existing
+    // test_sync_embed_outside_runtime and test_sync_rerank_outside_runtime tests.
+    // Additional sync batch testing is skipped because block_on_future creates
+    // a current_thread runtime without timers, which batch processing requires.
+
+    // -------------------------------------------------------------------------
+    // 异步 API 补充测试
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_embed_empty_string_returns_error() {
+        let lib = make_test_library().await;
+        // Empty string is rejected by the input validator
+        let result = lib.embed("").await;
+        assert!(result.is_err(), "empty string should return validation error");
+    }
+
+    #[tokio::test]
+    async fn test_rerank_empty_documents_returns_error() {
+        let lib = make_test_library().await;
+        let result = lib.rerank("query", &[], None).await;
+        assert!(result.is_err(), "empty documents should return error");
+    }
+
+    #[tokio::test]
+    async fn test_rerank_empty_query_returns_error() {
+        let lib = make_test_library().await;
+        let result = lib.rerank("", &["doc".to_string()], None).await;
+        assert!(result.is_err(), "empty query should return error");
+    }
+
+    // -------------------------------------------------------------------------
+    // LibraryConfig 补充测试
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_library_config_with_cache_size() {
+        let config = LibraryConfig {
+            cache_size: 1000,
+            ..Default::default()
+        };
+        assert_eq!(config.cache_size, 1000);
+    }
+
+    #[test]
+    fn test_library_config_with_rerank_config() {
+        let config = LibraryConfig {
+            rerank_config: Some(RerankConfig::default()),
+            ..Default::default()
+        };
+        assert!(config.rerank_config.is_some());
+    }
+
+    // -------------------------------------------------------------------------
+    // VecBoostModuleBuilder 补充测试
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_module_builder_new_defaults() {
+        let builder = VecBoostModuleBuilder::new(ModelConfig::default());
+        assert!(!builder.with_embedding);
+        assert!(!builder.with_rerank);
+        assert_eq!(builder.cache_size, 0);
+        assert!(builder.rerank_config.is_none());
+    }
+
+    #[test]
+    fn test_module_builder_embedding_only_chain() {
+        let builder = VecBoostModuleBuilder::new(ModelConfig::default())
+            .embedding()
+            .cache_size(100);
+        assert!(builder.with_embedding);
+        assert!(!builder.with_rerank);
+        assert_eq!(builder.cache_size, 100);
+    }
+
+    #[test]
+    fn test_module_builder_rerank_only_chain() {
+        let builder = VecBoostModuleBuilder::new(ModelConfig::default())
+            .rerank()
+            .rerank_config(RerankConfig::default());
+        assert!(!builder.with_embedding);
+        assert!(builder.with_rerank);
+        assert!(builder.rerank_config.is_some());
+    }
+
+    #[test]
+    fn test_mock_engine_trait_method_coverage() {
+        let engine = MockEngine::new(256);
+        assert_eq!(engine.embed("test").unwrap().len(), 256);
+        assert_eq!(engine.embed_batch(&["a".into(), "b".into()]).unwrap().len(), 2);
+        assert_eq!(*engine.precision(), Precision::Fp32);
+        assert!(!engine.supports_mixed_precision());
+        assert!(engine.supports_rerank());
+        assert!(engine.rerank("q", "doc").unwrap() > 0.0);
+        assert_eq!(engine.rerank_batch("q", &["a".into(), "b".into()]).unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_mock_engine_try_fallback_coverage() {
+        let mut engine = MockEngine::new(64);
+        let cfg = ModelConfig::default();
+        let _ = engine.try_fallback_to_cpu(&cfg).await;
+    }
 }

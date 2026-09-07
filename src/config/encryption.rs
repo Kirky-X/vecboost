@@ -222,6 +222,7 @@ pub mod encrypted_option {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::{Serialize, Deserialize};
 
     /// A fixed 32-byte key used exclusively by unit tests.
     const TEST_KEY: [u8; 32] = *b"vecboost-test-encryption-key-32b"; // pragma: allowlist secret
@@ -270,5 +271,129 @@ mod tests {
         // 10 hex chars = 5 bytes, less than NONCE_SIZE (24)
         let result = decrypt_from_hex("aabbccddee", &TEST_KEY);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_encryption_key_missing() {
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+        let result = validate_encryption_key();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_encryption_key_wrong_length() {
+        unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "tooshort") };
+        let result = validate_encryption_key();
+        assert!(result.is_err());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+    }
+
+    #[test]
+    fn test_validate_encryption_key_valid() {
+        unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "vecboost-test-encryption-key-32b") };
+        let result = validate_encryption_key();
+        assert!(result.is_ok());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+    }
+
+    #[test]
+    fn test_read_master_key_missing() {
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+        assert!(read_master_key().is_none());
+    }
+
+    #[test]
+    fn test_read_master_key_wrong_length() {
+        unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "short") };
+        assert!(read_master_key().is_none());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+    }
+
+    #[test]
+    fn test_read_master_key_valid() {
+        unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "vecboost-test-encryption-key-32b") };
+        let key = read_master_key();
+        assert!(key.is_some());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+    }
+
+    #[test]
+    fn test_derive_key_produces_32_bytes() {
+        let derived = derive_key(&TEST_KEY);
+        assert!(derived.is_ok());
+        assert_eq!(derived.unwrap().len(), 32);
+    }
+
+    #[test]
+    fn test_encrypted_option_serde_none() {
+        #[derive(Serialize, Deserialize)]
+        struct Cfg {
+            #[serde(
+                default,
+                serialize_with = "encrypted_option::serialize",
+                deserialize_with = "encrypted_option::deserialize"
+            )]
+            val: Option<String>,
+        }
+        let cfg = Cfg { val: None };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let deserialized: Cfg = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.val.is_none());
+    }
+
+    #[test]
+    fn test_encrypted_option_serde_some_no_key() {
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+        #[derive(Serialize, Deserialize)]
+        struct Cfg {
+            #[serde(
+                default,
+                serialize_with = "encrypted_option::serialize",
+                deserialize_with = "encrypted_option::deserialize"
+            )]
+            val: Option<String>,
+        }
+        let cfg = Cfg { val: Some("plaintext".to_string()) };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let deserialized: Cfg = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.val, Some("plaintext".to_string()));
+    }
+
+    #[test]
+    fn test_encrypted_option_serde_some_with_key() {
+        unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "vecboost-test-encryption-key-32b") };
+        #[derive(Serialize, Deserialize)]
+        struct Cfg {
+            #[serde(
+                default,
+                serialize_with = "encrypted_option::serialize",
+                deserialize_with = "encrypted_option::deserialize"
+            )]
+            val: Option<String>,
+        }
+        let cfg = Cfg { val: Some("secret".to_string()) };
+        let json = serde_json::to_string(&cfg).unwrap();
+        // Encrypted value should differ from plaintext
+        assert!(!json.contains("\"secret\""));
+        let deserialized: Cfg = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.val, Some("secret".to_string()));
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+    }
+
+    #[test]
+    fn test_encrypted_option_deserialize_none() {
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+        #[derive(Serialize, Deserialize)]
+        struct Cfg {
+            #[serde(
+                default,
+                serialize_with = "encrypted_option::serialize",
+                deserialize_with = "encrypted_option::deserialize"
+            )]
+            val: Option<String>,
+        }
+        let json = r#"{}"#;
+        let deserialized: Cfg = serde_json::from_str(json).unwrap();
+        assert!(deserialized.val.is_none());
     }
 }

@@ -95,6 +95,7 @@ impl I18nBundle {
     }
 
     /// Return all message keys for a given locale (for testing).
+    #[allow(dead_code, reason = "Test utility method; reserved for locale completeness verification")]
     pub fn keys_for_locale(&self, locale: &LanguageIdentifier) -> Vec<String> {
         self.messages
             .get(locale)
@@ -136,14 +137,20 @@ fn parse_ftl_into(source: &str, out: &mut HashMap<String, String>) {
 }
 
 /// Replace `{ $varname }` placeholders in a pattern with values from `args`.
+///
+/// Supports three whitespace variants produced by FTL authors:
+/// - `{ $key }` — standard spaced
+/// - `{ $key}`  — trailing-tight
+/// - `{$key}`   — fully tight
 fn substitute_vars(pattern: &str, args: &HashMap<String, String>) -> String {
     let mut result = pattern.to_string();
     for (key, value) in args {
-        // Handle both `{ $key }` and `{ $key}` (with/without trailing space)
-        let placeholder_braced = format!("{{ ${key} }}");
-        let placeholder_tight = format!("{{ ${key}}}");
-        result = result.replace(&placeholder_braced, value);
-        result = result.replace(&placeholder_tight, value);
+        let placeholder_spaced = format!("{{ ${key} }}");
+        let placeholder_trailing_tight = format!("{{ ${key}}}");
+        let placeholder_fully_tight = format!("{{${key}}}");
+        result = result.replace(&placeholder_spaced, value);
+        result = result.replace(&placeholder_trailing_tight, value);
+        result = result.replace(&placeholder_fully_tight, value);
     }
     result
 }
@@ -252,5 +259,65 @@ mod tests {
 
         let msg = bundle.get_message("nonexistent-key", &en, &args);
         assert_eq!(msg, "nonexistent-key");
+    }
+
+    #[test]
+    fn test_get_message_fallback_locale() {
+        let bundle = I18nBundle::load();
+        // Use a locale that doesn't exist but has a language-only match
+        let zh_cn: LanguageIdentifier = "zh-CN".parse().unwrap();
+        let args = HashMap::new();
+        // Should fall back to "zh" via language-only match
+        let msg = bundle.get_message("health-ok", &zh_cn, &args);
+        assert_eq!(msg, "正常");
+    }
+
+    #[test]
+    fn test_get_message_unsupported_locale_falls_back_to_en() {
+        let bundle = I18nBundle::load();
+        let fr: LanguageIdentifier = "fr".parse().unwrap();
+        let args = HashMap::new();
+        // fr is not supported, should fall back to en
+        let msg = bundle.get_message("health-ok", &fr, &args);
+        assert_eq!(msg, "OK");
+    }
+
+    #[test]
+    fn test_keys_for_language_unsupported_locale() {
+        let bundle = I18nBundle::load();
+        let fr: LanguageIdentifier = "fr".parse().unwrap();
+        let keys = bundle.keys_for_locale(&fr);
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn test_fallback_locale_is_en() {
+        let fallback = I18nBundle::fallback_locale();
+        assert_eq!(fallback.language.as_str(), "en");
+    }
+
+    #[test]
+    fn test_parse_ftl_empty_lines_and_comments() {
+        let ftl = "\n# comment\n\n  # another comment\nkey = value\n";
+        let mut map = HashMap::new();
+        parse_ftl_into(ftl, &mut map);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("key").unwrap(), "value");
+    }
+
+    #[test]
+    fn test_substitute_vars_no_match() {
+        let pattern = "no placeholders here";
+        let mut args = HashMap::new();
+        args.insert("key".to_string(), "value".to_string());
+        assert_eq!(substitute_vars(pattern, &args), "no placeholders here");
+    }
+
+    #[test]
+    fn test_substitute_vars_tight_format() {
+        let pattern = "Hello {$name}!";
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), "World".to_string());
+        assert_eq!(substitute_vars(pattern, &args), "Hello World!");
     }
 }

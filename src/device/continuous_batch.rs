@@ -435,4 +435,47 @@ mod tests {
         shutdown_tx.send(true).unwrap();
         let _ = tokio::time::timeout(Duration::from_millis(100), handle).await;
     }
+
+    // -- Direct mock method calls to improve coverage --
+    #[test]
+    fn test_mock_engine_embed() {
+        let engine = MockEngine { dimension: 64 };
+        let vec = engine.embed("test").unwrap();
+        assert_eq!(vec.len(), 64);
+    }
+
+    #[test]
+    fn test_mock_engine_embed_batch() {
+        let engine = MockEngine { dimension: 32 };
+        let texts = vec!["a".to_string(), "b".to_string()];
+        let vecs = engine.embed_batch(&texts).unwrap();
+        assert_eq!(vecs.len(), 2);
+    }
+
+    #[test]
+    fn test_mock_engine_precision() {
+        let engine = MockEngine { dimension: 4 };
+        assert_eq!(*engine.precision(), Precision::Fp32);
+    }
+
+    #[test]
+    fn test_mock_engine_supports_mixed_precision() {
+        let engine = MockEngine { dimension: 4 };
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    #[tokio::test]
+    async fn test_mock_engine_try_fallback() {
+        let mut engine = MockEngine { dimension: 4 };
+        let config = ModelConfig::default();
+        assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
+    }
+
+    /// Test process_batch with empty batch returns immediately
+    #[tokio::test]
+    async fn test_process_batch_empty() {
+        let (loop_, _queue, _shutdown_tx) = setup_test_loop();
+        // process_batch with empty vec should return immediately without panic
+        loop_.process_batch(vec![]).await;
+    }
 }

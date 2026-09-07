@@ -516,4 +516,97 @@ mod tests {
         let mgr = WeightPagingManager::new(&config);
         assert!(!mgr.is_enabled());
     }
+
+    #[test]
+    fn test_paging_error_display() {
+        let err = PagingError::LayerNotOnGpu("layer0".into());
+        assert!(err.to_string().contains("not on GPU"));
+
+        let err = PagingError::LayerNotOnCpu("layer1".into());
+        assert!(err.to_string().contains("not on CPU"));
+
+        let err = PagingError::OutOfGpuMemory { needed: 1024, available: 512 };
+        let msg = err.to_string();
+        assert!(msg.contains("1024") && msg.contains("512"));
+
+        let err = PagingError::LayerNotFound("missing".into());
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_paging_error_is_std_error() {
+        let err = PagingError::LayerNotOnGpu("x".into());
+        // Verify it implements std::error::Error
+        let _: &dyn std::error::Error = &err;
+    }
+
+    #[test]
+    fn test_paging_stats_avg_latency_zero_page_ins() {
+        let stats = PagingStats::default();
+        assert_eq!(stats.avg_page_in_latency_ms(), 0.0);
+    }
+
+    #[test]
+    fn test_paging_stats_avg_latency_computed() {
+        let stats = PagingStats {
+            page_in_count: 4,
+            total_page_in_latency_ms: 20.0,
+            ..Default::default()
+        };
+        assert!((stats.avg_page_in_latency_ms() - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_gpu_budget_accessor() {
+        let config = PagingConfig {
+            enabled: true,
+            gpu_memory_budget_bytes: 4096,
+            lru_k: 2,
+            prefetch_depth: 1,
+        };
+        let mgr = WeightPagingManager::new(&config);
+        assert_eq!(mgr.gpu_budget(), 4096);
+    }
+
+    #[test]
+    fn test_paging_config_default() {
+        let config = PagingConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.gpu_memory_budget_bytes, 2 * 1024 * 1024 * 1024);
+        assert_eq!(config.lru_k, 2);
+        assert_eq!(config.prefetch_depth, 2);
+    }
+
+    #[test]
+    fn test_page_in_already_on_gpu_is_noop() {
+        let mut mgr = WeightPagingManager::new(&test_config());
+        mgr.register_layer("l", 100);
+        mgr.page_in("l").unwrap();
+        assert!(mgr.is_on_gpu("l"));
+        // Second page_in should be a no-op
+        mgr.page_in("l").unwrap();
+        assert_eq!(mgr.gpu_usage(), 100);
+        assert_eq!(mgr.stats().page_in_count, 1);
+    }
+
+    #[test]
+    fn test_record_access_nonexistent_layer_no_panic() {
+        let mut mgr = WeightPagingManager::new(&test_config());
+        mgr.record_access("nonexistent"); // should not panic
+    }
+
+    #[test]
+    fn test_get_prefetch_list_unknown_layer() {
+        let mut mgr = WeightPagingManager::new(&test_config());
+        mgr.register_layer("a", 100);
+        let list = mgr.get_prefetch_list("unknown", &["a".to_string()]);
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_evict_candidate_no_gpu_layers() {
+        let mut mgr = WeightPagingManager::new(&test_config());
+        mgr.register_layer("cpu_only", 100);
+        assert!(mgr.evict_candidate().is_none());
+    }
 }

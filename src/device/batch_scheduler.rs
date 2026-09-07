@@ -519,6 +519,145 @@ mod tests {
         assert_eq!(scheduler.current_batch_size().await, 16);
     }
 
+    #[tokio::test]
+    async fn test_try_get_batch_empty_queue_returns_none() {
+        let config = BatchConfig::default();
+        let scheduler = DynamicBatchScheduler::new(config);
+        // No requests submitted, queue is empty
+        let batch = scheduler.try_get_batch().await;
+        assert!(batch.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_performance_adjustment_decrease_high_latency() {
+        let config = BatchConfig {
+            min_batch_size: 4,
+            max_batch_size: 128,
+            max_wait_time_ms: 10,
+            enable_dynamic_adjustment: true,
+            ..Default::default()
+        };
+        let scheduler = DynamicBatchScheduler::new(config);
+        let initial_batch_size = scheduler.current_batch_size().await;
+
+        // Record batches with very high latency to trigger decrease
+        for _ in 0..15 {
+            scheduler.record_batch_completion(initial_batch_size, 200.0).await;
+        }
+
+        let new_batch_size = scheduler.current_batch_size().await;
+        assert!(
+            new_batch_size < initial_batch_size,
+            "batch size should decrease with high latency: {} -> {}",
+            initial_batch_size,
+            new_batch_size
+        );
+    }
+
+    #[tokio::test]
+    async fn test_performance_adjustment_moderate_latency_decrease() {
+        let config = BatchConfig {
+            min_batch_size: 4,
+            max_batch_size: 128,
+            max_wait_time_ms: 10,
+            enable_dynamic_adjustment: true,
+            ..Default::default()
+        };
+        let scheduler = DynamicBatchScheduler::new(config);
+        let initial_batch_size = 64;
+        scheduler.set_batch_size(initial_batch_size).await;
+
+        // Record batches with moderate latency (between 80ms and 120ms)
+        // P99 should be > 80 but < 120 (80 * 1.5)
+        for _ in 0..15 {
+            scheduler.record_batch_completion(initial_batch_size, 90.0).await;
+        }
+
+        let new_batch_size = scheduler.current_batch_size().await;
+        // With P99=90ms > 80ms target, batch size should decrease
+        assert!(
+            new_batch_size <= initial_batch_size,
+            "batch size should decrease or stay with moderate latency"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_performance_stats_with_non_empty_history() {
+        let config = BatchConfig::default();
+        let scheduler = DynamicBatchScheduler::new(config);
+
+        // Record some batches with varying latencies
+        for i in 0..5 {
+            let latency = 20.0 + (i as f64) * 10.0;
+            scheduler.record_batch_completion(8, latency).await;
+        }
+
+        let stats = scheduler.get_performance_stats().await;
+        assert_eq!(stats.total_batches_processed, 5);
+        assert!(stats.avg_latency_ms > 0.0);
+        assert!(stats.min_latency_ms > 0.0);
+        assert!(stats.max_latency_ms >= stats.min_latency_ms);
+        assert!(stats.avg_throughput_req_per_sec > 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_performance_stats_empty_history() {
+        let config = BatchConfig::default();
+        let scheduler = DynamicBatchScheduler::new(config);
+
+        let stats = scheduler.get_performance_stats().await;
+        assert_eq!(stats.total_batches_processed, 0);
+        assert_eq!(stats.current_batch_size, 66); // default (4+128)/2
+    }
+
+    #[tokio::test]
+    async fn test_record_batch_completion_trims_history() {
+        let config = BatchConfig {
+            enable_dynamic_adjustment: false,
+            ..Default::default()
+        };
+        let scheduler = DynamicBatchScheduler::new(config);
+
+        // Record more than 100 batches to trigger history trimming
+        for _ in 0..110 {
+            scheduler.record_batch_completion(16, 50.0).await;
+        }
+
+        let stats = scheduler.get_performance_stats().await;
+        // History should be trimmed to 100 entries max
+        assert!(stats.total_batches_processed <= 100);
+    }
+
+    #[tokio::test]
+    async fn test_batch_completion_decrements_active_batches() {
+        let config = BatchConfig {
+            min_batch_size: 1,
+            max_batch_size: 4,
+            max_wait_time_ms: 5,
+            ..Default::default()
+        };
+        let scheduler = DynamicBatchScheduler::new(config);
+
+        // Submit and collect a batch
+        for i in 0..2 {
+            let request = BatchRequest {
+                request_id: format!("req-{}", i),
+                data: vec![format!("text-{}", i)],
+                priority: BatchPriority::Normal,
+                submitted_at: Instant::now(),
+            };
+            scheduler.submit_request(request).await.unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let batch = scheduler.try_get_batch().await;
+        assert!(batch.is_some());
+        assert_eq!(scheduler.active_batches().await, 1);
+
+        // Record completion should decrement active batches
+        scheduler.record_batch_completion(2, 10.0).await;
+        assert_eq!(scheduler.active_batches().await, 0);
+    }
+
     /// 延迟分布测试：测量当前调度器在不同请求模式下的 P50/P99 等待时间。
     /// 模拟 polling loop（1ms 间隔调用 try_get_batch），记录每个请求从提交到被收集的时间。
     #[tokio::test]

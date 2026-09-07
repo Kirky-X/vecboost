@@ -52,17 +52,12 @@ def test_r004_hot_switch_dims(zh_server):
 
 
 def test_r005_switch_failure_preserves_current(zh_server):
-    """R-model-005: 切换到不存在模型失败，原模型继续可用。
-
-    发现：失败状态码实测为 500（预期 4xx，错误映射缺陷 DEFECT-SWITCH-001），但失败后
-    原模型韧性（核心验收）必须成立。
-    """
+    """R-model-005: 切换到不存在模型失败，原模型继续可用。"""
     port = zh_server["port"]
     st, body = http_post(port, "/api/1/model/switch",
                          {"model_name": "BAAI/definitely-not-exist-xyz-123"})
     assert st >= 400, f"无效切换竟返回 {st}"
-    if st not in (400, 404, 422):
-        print(f"[info] DEFECT-SWITCH-001: 无效切换状态码 {st}（预期 4xx，实际 5xx）")
+    assert st in (400, 404, 422), f"无效切换状态码 {st}（预期 4xx）"
     st2, b2 = http_post(port, "/api/1/embed", {"text": "失败后仍可用"})
     assert st2 == 200 and len(find_vector(b2)) == 512, "切换失败后原模型不可用"
 

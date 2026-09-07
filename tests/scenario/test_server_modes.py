@@ -119,19 +119,11 @@ def grpc_call(port: int, method: str, data: str, token: str | None = None, timeo
 # ---------------- 场景 ----------------
 
 def test_r003_grpc_unauthenticated_rejected():
-    """R-server-003a: gRPC 无 token 调用被拒绝。
-
-    DEFECT-GRPC-001（已坐实）：grpc_enabled=true 时主线程在 sdforge LimiteronAdapter
-    （Governor 异步构建，BanManager/熔断器初始化之后）永久阻塞——"Server listening"已打、
-    HTTP/gRPC 端口均不服务，进程僵死。require_auth=true/false 均复现。gRPC E2E 被阻断。
-    """
+    """R-server-003a: gRPC 无 token 调用被拒绝。"""
     from conftest import AUTH_ENV, M1_PATH, spawn_server, stop_server
-    try:
-        s = spawn_server("grpc", 9106,
-                         make_config(9106, model_path=M1_PATH, auth=True, grpc=True),
-                         env_extra=AUTH_ENV, timeout=60)
-    except RuntimeError as e:
-        pytest.skip(f"DEFECT-GRPC-001: {str(e)[:160]}")
+    s = spawn_server("grpc", 9106,
+                     make_config(9106, model_path=M1_PATH, auth=True, grpc=True),
+                     env_extra=AUTH_ENV, timeout=60)
     gport = s["grpc_port"] = 9151
     last = None
     for method in ("embed", "embed_text", "/api/1/embed"):
@@ -146,20 +138,17 @@ def test_r003_grpc_unauthenticated_rejected():
 
 
 def test_r003_grpc_authenticated_embed():
-    """R-server-003b: 带 JWT 的 gRPC embed 成功返回向量（受 DEFECT-GRPC-001 阻断）。"""
+    """R-server-003b: 带 JWT 的 gRPC embed 成功返回向量。"""
     from conftest import AUTH_ENV, ADMIN_PASS, M1_PATH, spawn_server, stop_server
-    try:
-        s = spawn_server("grpc", 9106,
-                         make_config(9106, model_path=M1_PATH, auth=True, grpc=True),
-                         env_extra=AUTH_ENV, timeout=60)
-    except RuntimeError as e:
-        pytest.skip(f"DEFECT-GRPC-001: {str(e)[:160]}")
+    s = spawn_server("grpc", 9106,
+                     make_config(9106, model_path=M1_PATH, auth=True, grpc=True),
+                     env_extra=AUTH_ENV, timeout=60)
     gport = s["grpc_port"] = 9151
     st, body = http_post(s["port"], "/api/1/auth/login",
                          {"username": "admin", "password": ADMIN_PASS})
     if st != 200:
         stop_server(s)
-        pytest.skip(f"DEFECT-AUTH-001: 登录不可达（{st}），无法取 token")
+        assert False, f"登录不可达（{st}），无法取 token"
     jwt = body["access_token"]
     successes = []
     for method in ("embed", "embed_text", "/api/1/embed"):

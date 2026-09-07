@@ -29,18 +29,12 @@ def test_r009_whitelist_bypass(rl_pass_server):
 
 
 def test_r009_rate_limit_audit_event(rl_strict_server):
-    """R-auth-009c: 触发限流后审计日志含限流事件。
-
-    前置依赖 DEFECT-RL-001：限流未生效则无事件可审计，skip 并记录。
-    """
+    """R-auth-009c: 触发限流后审计日志含限流事件。"""
     codes = []
     for _ in range(3):
         st, _ = http_post(rl_strict_server["port"], "/api/1/embed", {"text": "审计前置"})
         codes.append(st)
     f = RUN_DIR / "rl_strict" / "logs" / "audit.log"
-    if 429 not in codes and not f.exists():
-        import pytest
-        pytest.skip("DEFECT-RL-001 联动：限流未触发（无 429），且审计日志未产生——两个缺陷一并记入报告")
     assert f.exists(), f"审计日志不存在: {f}"
     text = f.read_text(errors="replace")
     assert "RateLimit" in text or "rate_limit" in text.lower(), \
@@ -61,8 +55,6 @@ def test_r010_path_traversal_rejected(base_server):
         # 拒绝本身必须发生（不得放行恶意路径）；状态码映射缺陷（500 而非 4xx）单独记录
         assert st >= 400, \
             f"{path} {payload.get('path', payload.get('model_name'))} 未被拒绝（{st}）"
-        if st >= 500:
-            print(f"[info] DEFECT-STATUS-5xx: {path} 恶意输入被拒但返回 {st}")
 
 
 def test_r010_error_response_sanitized(base_server):

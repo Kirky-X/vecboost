@@ -1,9 +1,5 @@
 """认证场景（R-auth-001 ~ R-auth-008）。auth 配置档（9103）。
 
-已知风险：auth/middleware.rs 的 PUBLIC_PATHS 写死 "/api/v1/auth/login"，而实际路由挂载在
-"/api/1/auth/login"（sdforge version 字面量拼接）——若中间件按白名单拦截，登录端点将不可达
-（DEFECT-AUTH-001）。测试按规格断言，失败即缺陷坐实。
-
 凭据来源：测试专用凭证统一由 conftest 常量提供（VECBOOST_ADMIN_PASSWORD 环境变量注入服务器），
 本文件不出现明文密码字面量；错误密码由正确常量派生。
 """
@@ -20,11 +16,9 @@ WRONG_PASSWORD = ADMIN_PASS + "-wrong-suffix"
 
 
 def _token_or_skip(port) -> str:
-    """登录拿 token；若因 DEFECT-AUTH-001 不可达则 skip（后续用例阻塞）。"""
+    """登录拿 token。"""
     st, body = http_post(port, "/api/1/auth/login",
                          {"username": ADMIN_USER, "password": ADMIN_PASS})
-    if st == 401:
-        pytest.skip(f"DEFECT-AUTH-001: 登录端点被 auth 中间件拦截（401）——白名单前缀 /api/v1 与实际 /api/1 不匹配。响应: {str(body)[:150]}")
     assert st == 200, f"login 返回 {st}: {str(body)[:200]}"
     return body["token"]
 
@@ -34,8 +28,6 @@ def test_r001_login_success_tokens(auth_server):
     port = auth_server["port"]
     st, body = http_post(port, "/api/1/auth/login",
                          {"username": ADMIN_USER, "password": ADMIN_PASS})
-    if st == 401:
-        pytest.skip(f"DEFECT-AUTH-001: 登录被中件拦截: {str(body)[:150]}")
     assert st == 200, f"login 返回 {st}: {str(body)[:200]}"
     assert body.get("token"), f"缺 token: {str(body)[:150]}"
     assert body.get("token_type") == "Bearer", f"token_type 非 Bearer: {str(body)[:150]}"
@@ -56,8 +48,6 @@ def test_r003_refresh_and_logout_revocation(auth_server):
     port = auth_server["port"]
     st, body = http_post(port, "/api/1/auth/login",
                          {"username": ADMIN_USER, "password": ADMIN_PASS})
-    if st == 401:
-        pytest.skip("DEFECT-AUTH-001: 登录不可达")
     assert st == 200
     access = body["token"]
     # 先验证新 token 可用：refresh 换新 token

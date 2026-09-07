@@ -437,4 +437,48 @@ mod tests {
             .unwrap();
         assert_eq!(result, vec![42.0]);
     }
+
+    #[test]
+    fn test_semantic_cache_config_default() {
+        let config = SemanticCacheConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.similarity_threshold, DEFAULT_SIMILARITY_THRESHOLD);
+        assert_eq!(config.capacity, DEFAULT_CAPACITY);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_with_capacity_constructor() {
+        let cache = SemanticCache::with_capacity(0.8, 50);
+        assert!(cache.is_enabled());
+        // Should work like a normal enabled cache
+        let result = cache
+            .get_or_compute("test query", || async { Ok(vec![1.0, 2.0]) })
+            .await
+            .unwrap();
+        assert_eq!(result, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn test_trigram_jaccard_with_set_both_empty() {
+        let a = HashSet::new();
+        let b = HashSet::new();
+        assert_eq!(trigram_jaccard_with_set(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn test_trigram_jaccard_with_set_one_empty() {
+        let mut a = HashSet::new();
+        a.insert(vec![1, 2, 3]);
+        let b = HashSet::new();
+        assert_eq!(trigram_jaccard_with_set(&a, &b), 0.0);
+        assert_eq!(trigram_jaccard_with_set(&b, &a), 0.0);
+    }
+
+    #[test]
+    fn test_trigram_jaccard_with_set_identical() {
+        let mut a = HashSet::new();
+        a.insert(vec![1, 2, 3]);
+        a.insert(vec![4, 5, 6]);
+        assert_eq!(trigram_jaccard_with_set(&a, &a), 1.0);
+    }
 }

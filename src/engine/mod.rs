@@ -83,3 +83,232 @@ pub enum AnyEngine {
     #[cfg(feature = "onnx")]
     Onnx(onnx_engine::OnnxEngine),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::{DeviceType, EngineType, Precision};
+    use async_trait::async_trait;
+
+    /// Mock engine that returns deterministic embeddings for testing default trait methods.
+    struct MockEngine {
+        dimension: usize,
+    }
+
+    #[async_trait]
+    impl InferenceEngine for MockEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![1.0; self.dimension])
+        }
+
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![1.0; self.dimension]).collect())
+        }
+
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    /// Mock engine whose embed_batch returns orthogonal vectors so cosine ≈ 0.
+    struct OrthogonalEngine {
+        dimension: usize,
+    }
+
+    #[async_trait]
+    impl InferenceEngine for OrthogonalEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.0; self.dimension])
+        }
+
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            // Return distinct unit-like vectors: first text = [1,0,0,...], second = [0,1,0,...], etc.
+            let mut result = Vec::new();
+            for (i, _) in texts.iter().enumerate() {
+                let mut v = vec![0.0f32; self.dimension];
+                if i < self.dimension {
+                    v[i] = 1.0;
+                }
+                result.push(v);
+            }
+            Ok(result)
+        }
+
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    fn mock_config() -> ModelConfig {
+        ModelConfig {
+            name: "mock".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: std::path::PathBuf::from("/tmp/mock"),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        }
+    }
+
+    // -- is_fallback_triggered default --
+    #[test]
+    fn test_default_is_fallback_triggered_returns_false() {
+        let engine = MockEngine { dimension: 4 };
+        assert!(!engine.is_fallback_triggered());
+    }
+
+    // -- supports_rerank default --
+    #[test]
+    fn test_default_supports_rerank_returns_true() {
+        let engine = MockEngine { dimension: 4 };
+        assert!(engine.supports_rerank());
+    }
+
+    // -- rerank default (identical vectors → cosine=1 → sigmoid(1)≈0.731) --
+    #[test]
+    fn test_default_rerank_identical_embeddings() {
+        let engine = MockEngine { dimension: 4 };
+        let score = engine.rerank("query", "doc").unwrap();
+        // cosine_similarity([1,1,1,1], [1,1,1,1]) = 1.0
+        // sigmoid(1.0) = 1/(1+e^{-1}) ≈ 0.7311
+        assert!((score - 0.7311).abs() < 0.01, "score={}", score);
+    }
+
+    // -- rerank default (orthogonal vectors → cosine≈0 → sigmoid(0)=0.5) --
+    #[test]
+    fn test_default_rerank_orthogonal_embeddings() {
+        let engine = OrthogonalEngine { dimension: 4 };
+        let score = engine.rerank("query", "doc").unwrap();
+        // cosine_similarity([1,0,0,0], [0,1,0,0]) = 0.0
+        // sigmoid(0.0) = 0.5
+        assert!((score - 0.5).abs() < 0.01, "score={}", score);
+    }
+
+    // -- rerank_batch default (identical vectors) --
+    #[test]
+    fn test_default_rerank_batch_identical() {
+        let engine = MockEngine { dimension: 4 };
+        let docs = vec!["doc1".to_string(), "doc2".to_string(), "doc3".to_string()];
+        let scores = engine.rerank_batch("query", &docs).unwrap();
+        assert_eq!(scores.len(), 3);
+        for &s in &scores {
+            assert!((s - 0.7311).abs() < 0.01, "score={}", s);
+        }
+    }
+
+    // -- rerank_batch default (orthogonal vectors) --
+    #[test]
+    fn test_default_rerank_batch_orthogonal() {
+        let engine = OrthogonalEngine { dimension: 4 };
+        let docs = vec!["doc1".to_string(), "doc2".to_string()];
+        let scores = engine.rerank_batch("query", &docs).unwrap();
+        assert_eq!(scores.len(), 2);
+        for &s in &scores {
+            // cosine(query=[1,0,0,0], doc=[0,1,0,0] or [0,0,1,0]) = 0 → sigmoid(0) = 0.5
+            assert!((s - 0.5).abs() < 0.01, "score={}", s);
+        }
+    }
+
+    // -- rerank_batch with empty documents --
+    #[test]
+    fn test_default_rerank_batch_empty_docs() {
+        let engine = MockEngine { dimension: 4 };
+        let scores = engine.rerank_batch("query", &[]).unwrap();
+        assert!(scores.is_empty());
+    }
+
+    // -- try_fallback_to_cpu --
+    #[tokio::test]
+    async fn test_mock_try_fallback_to_cpu() {
+        let mut engine = MockEngine { dimension: 4 };
+        let config = mock_config();
+        assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
+    }
+
+    // -- Direct embed() call --
+    #[test]
+    fn test_mock_embed_returns_deterministic_vector() {
+        let engine = MockEngine { dimension: 8 };
+        let vec = engine.embed("hello").unwrap();
+        assert_eq!(vec.len(), 8);
+        assert!(vec.iter().all(|&v| v == 1.0));
+    }
+
+    // -- Direct embed_batch() call --
+    #[test]
+    fn test_mock_embed_batch_returns_vectors() {
+        let engine = MockEngine { dimension: 4 };
+        let texts = vec!["a".to_string(), "b".to_string()];
+        let vecs = engine.embed_batch(&texts).unwrap();
+        assert_eq!(vecs.len(), 2);
+        assert_eq!(vecs[0].len(), 4);
+    }
+
+    // -- precision() accessor --
+    #[test]
+    fn test_mock_precision_is_fp32() {
+        let engine = MockEngine { dimension: 4 };
+        assert_eq!(*engine.precision(), Precision::Fp32);
+    }
+
+    // -- supports_mixed_precision() --
+    #[test]
+    fn test_mock_supports_mixed_precision_false() {
+        let engine = MockEngine { dimension: 4 };
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    // -- OrthogonalEngine direct calls --
+    #[test]
+    fn test_orthogonal_embed() {
+        let engine = OrthogonalEngine { dimension: 4 };
+        let vec = engine.embed("test").unwrap();
+        assert_eq!(vec, vec![0.0; 4]);
+    }
+
+    #[test]
+    fn test_orthogonal_precision() {
+        let engine = OrthogonalEngine { dimension: 4 };
+        assert_eq!(*engine.precision(), Precision::Fp32);
+    }
+
+    #[test]
+    fn test_orthogonal_supports_mixed_precision() {
+        let engine = OrthogonalEngine { dimension: 4 };
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    #[tokio::test]
+    async fn test_orthogonal_try_fallback_to_cpu() {
+        let mut engine = OrthogonalEngine { dimension: 4 };
+        let config = mock_config();
+        assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
+    }
+}

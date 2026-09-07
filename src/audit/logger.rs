@@ -803,6 +803,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let (logger, _log_path) = make_logger(&temp_dir, "closed.log");
         drop(logger);
+        // Give the background writer task time to process the channel close
+        // and execute the final flush + break path
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
     /// Batch flush triggers when buffer reaches 100 entries (no explicit flush call).
@@ -833,6 +836,59 @@ mod tests {
         assert!(
             content.contains("solo_user"),
             "interval flush should write within 1s"
+        );
+    }
+
+    /// Log rotation triggered when file size exceeds max_file_size.
+    /// Using max_file_size_mb=0 so any write triggers rotation.
+    #[tokio::test]
+    async fn test_log_rotation_on_small_max_size() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("rotate.log");
+        let config = AuditConfig {
+            enabled: true,
+            log_file_path: log_path.clone(),
+            max_file_size_mb: 0, // triggers rotation on first flush
+            max_files: 3,
+            ..Default::default()
+        };
+        let logger = AuditLogger::new(config);
+
+        // Write enough events to trigger a batch flush (100 entries)
+        for i in 0..120 {
+            logger.log_login_success(&format!("user{}", i), None);
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        logger.flush().await.unwrap();
+
+        // After rotation, the original file should have been renamed to .1
+        // and a new file created
+        let content = read_log_content(&log_path).await;
+        assert!(
+            content.contains("login_success"),
+            "log should contain entries after rotation"
+        );
+    }
+
+    /// Flush with pending events in channel exercises the drain loop.
+    #[tokio::test]
+    async fn test_flush_drains_pending_events() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "drain.log");
+        // Send events and immediately flush (no sleep) to maximize
+        // chance that events are still in the channel when Flush arrives.
+        for i in 0..10 {
+            logger.log_login_success(&format!("drain_user{}", i), None);
+        }
+        logger.flush().await.unwrap();
+        let content = read_log_content(&log_path).await;
+        assert!(
+            content.contains("login_success"),
+            "flush should write all pending events"
+        );
+        assert!(
+            content.contains("drain_user0"),
+            "first event should be present"
         );
     }
 

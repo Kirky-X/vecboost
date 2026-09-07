@@ -402,7 +402,8 @@ port = 9999
             std::env::remove_var("VECBOOST_JWT_SECRET");
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
         }
-        let result = AppConfig::load().await;
+        // Call the Configurable trait's load() explicitly to cover the trait impl
+        let result = <AppConfig as Configurable>::load();
         assert!(result.is_ok());
     }
 }

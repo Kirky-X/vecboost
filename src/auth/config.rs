@@ -30,9 +30,9 @@ pub fn map_auth_config_to_garrison(auth: &AuthConfig) -> GarrisonConfig {
         config.timeout = hours * 3600;
     }
 
-    // JWT 签名密钥
+    // JWT 签名密钥（account-credential-zeroize 启用时为 Zeroizing<String>）
     if let Some(ref secret) = auth.jwt_secret {
-        config.jwt_secret = secret.clone();
+        config.jwt_secret = secret.clone().into();
     }
 
     // Token 风格固定为 JWT
@@ -86,7 +86,7 @@ mod tests {
     fn test_map_jwt_secret() {
         let auth = make_auth_config();
         let garrison = map_auth_config_to_garrison(&auth);
-        assert_eq!(garrison.jwt_secret, "test-jwt-secret-at-least-32-chars!!");
+        assert_eq!(garrison.jwt_secret.as_str(), "test-jwt-secret-at-least-32-chars!!");
     }
 
     #[test]

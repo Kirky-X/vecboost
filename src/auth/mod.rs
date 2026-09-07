@@ -64,6 +64,26 @@ pub use garrison::stp::with_current_token;
 #[cfg(feature = "auth")]
 pub use garrison::dao::GarrisonDaoOxcache;
 
+// Re-export garrison firewall 策略类型（inventory 自注册，启用即生效）
+#[cfg(feature = "auth")]
+pub use garrison::{GarrisonFirewallStrategy, FirewallContext, StrategyRegistration};
+#[cfg(feature = "auth")]
+pub use garrison::{BruteForceConfig, BruteForceStrategy};
+#[cfg(feature = "auth")]
+pub use garrison::{RateLimitConfig, RateLimitScope, RateLimitStrategy};
+#[cfg(feature = "auth")]
+pub use garrison::{AnomalousConfig, AnomalousLoginStrategy};
+#[cfg(feature = "auth")]
+pub use garrison::{DDoSConfig, DDoSStrategy};
+
+// Re-export garrison backend-kit 生命周期类型
+#[cfg(feature = "auth")]
+pub use garrison::backend::{BackendModule, BackendKitError};
+
+// Re-export garrison protocol 扩展类型
+#[cfg(feature = "auth")]
+pub use garrison::secure::TotpVerifier;
+
 // Re-export middleware 函数
 #[cfg(feature = "http")]
 pub use middleware::{

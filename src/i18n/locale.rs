@@ -249,4 +249,39 @@ mod tests {
         assert_eq!(normalize_locale_opt("fr"), None);
         assert_eq!(normalize_locale_opt("ZH_CN"), Some("zh".to_string()));
     }
+
+    #[test]
+    fn test_normalize_locale_opt_with_encoding() {
+        assert_eq!(normalize_locale_opt("zh_CN.UTF-8"), Some("zh".to_string()));
+        assert_eq!(normalize_locale_opt("en_US.utf8"), Some("en".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_locale_opt_edge_cases() {
+        assert_eq!(normalize_locale_opt(""), None);
+        assert_eq!(normalize_locale_opt("ja"), None);
+        assert_eq!(normalize_locale_opt("zh-Hant"), Some("zh".to_string()));
+        assert_eq!(normalize_locale_opt("en-GB"), Some("en".to_string()));
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_parse_accept_language_edge_cases() {
+        // Empty string
+        assert_eq!(parse_accept_language(""), None);
+        // Only whitespace
+        assert_eq!(parse_accept_language("  "), None);
+        // Single unsupported language
+        assert_eq!(parse_accept_language("fr"), None);
+        // Mixed supported and unsupported
+        assert_eq!(
+            parse_accept_language("fr;q=1.0,zh;q=0.5"),
+            Some("zh".to_string())
+        );
+        // Quality without q= prefix
+        assert_eq!(
+            parse_accept_language("en;0.5"),
+            Some("en".to_string())
+        );
+    }
 }

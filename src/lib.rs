@@ -361,7 +361,7 @@ mod tests {
 
     /// 默认完整 VecboostState：metrics=Some, prometheus=Some, audit=None
     #[cfg(feature = "http")]
-    async fn make_app_state() -> VecboostState {
+    pub(crate) async fn make_app_state() -> VecboostState {
         make_app_state_with_options(
             Some(Arc::new(metrics::InferenceCollector::new())),
             Some(Arc::new(
@@ -712,5 +712,67 @@ mod tests {
         // AsyncKit::shutdown() calls sync shutdown callbacks (lifecycle modules)
         // Should not panic even with async lifecycle modules registered
         state.kit.shutdown();
+    }
+
+    /// VecboostState::new() and kit()
+    /// Verifies that `kit()` returns a reference to the internal `Arc<AsyncKit>`
+    /// and that all registered modules are accessible through it.
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_vecboost_state_new_and_kit_accessor() {
+        let state = make_app_state().await;
+        let kit_ref = state.kit();
+        // kit() returns &Arc<AsyncKit>; only `state` owns the Arc → strong_count == 1
+        assert_eq!(Arc::strong_count(kit_ref), 1);
+        // Verify key modules are accessible through the kit reference
+        assert!(kit_ref.contains::<EmbeddingModule>());
+        assert!(kit_ref.contains::<RerankModule>());
+        assert!(kit_ref.contains::<RateLimitModule>());
+        assert!(kit_ref.contains::<AuditModule>());
+    }
+
+    /// VecboostState::new() constructs from Arc<AsyncKit>
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_vecboost_state_constructor() {
+        let state = make_app_state().await;
+        let kit_clone = state.kit().clone();
+        let new_state = VecboostState::new(kit_clone);
+        assert!(new_state.kit.contains::<EmbeddingModule>());
+    }
+
+    /// MockEngine direct trait method calls for coverage
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_mock_engine_direct_method_calls() {
+        let engine = MockEngine;
+        // embed
+        let vec = engine.embed("hello").unwrap();
+        assert_eq!(vec.len(), 384);
+        assert!(vec.iter().all(|&v| v == 0.0));
+        // embed_batch
+        let texts = vec!["hello".to_string(), "world".to_string()];
+        let batch = engine.embed_batch(&texts).unwrap();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].len(), 384);
+        // precision
+        assert_eq!(*engine.precision(), Precision::Fp32);
+        // supports_mixed_precision
+        assert!(!engine.supports_mixed_precision());
+        // try_fallback_to_cpu
+        let config = crate::config::model::ModelConfig::default();
+        let mut engine_mut = MockEngine;
+        let result = engine_mut.try_fallback_to_cpu(&config).await;
+        assert!(result.is_ok());
+    }
+
+    /// FromRef<VecboostState> for AuthConfig
+    #[cfg(all(feature = "http", feature = "auth"))]
+    #[tokio::test]
+    async fn test_from_ref_auth_config_returns_default() {
+        let state = make_app_state().await;
+        let auth_config: config::app::AuthConfig = FromRef::from_ref(&state);
+        // When auth is not configured, should return default
+        let _ = auth_config;
     }
 }

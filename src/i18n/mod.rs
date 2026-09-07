@@ -306,4 +306,41 @@ mod tests {
         // Outside any with_request_locale scope, request_locale() returns None
         assert!(request_locale().is_none());
     }
+
+    #[test]
+    fn test_current_locale_id_returns_valid_id() {
+        ensure_init();
+        let id = current_locale_id();
+        let s = id.to_string();
+        assert!(s == "en" || s == "zh", "unexpected locale id: {}", s);
+    }
+
+    #[test]
+    fn test_tr_locale_with_invalid_locale_str_falls_back() {
+        ensure_init();
+        // Invalid locale string should fall back to default
+        let result = tr_locale("health-ok", Some("invalid_locale!!!"));
+        // Should not panic, should return something
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_tr_with_empty_args_map() {
+        ensure_init();
+        let args = HashMap::new();
+        let result = tr_with_args("health-ok", args);
+        assert!(!result.is_empty());
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_parse_accept_language_empty_header() {
+        assert_eq!(locale::parse_accept_language(""), None);
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_parse_accept_language_unsupported_only() {
+        assert_eq!(locale::parse_accept_language("fr,de,ja"), None);
+    }
 }

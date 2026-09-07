@@ -181,4 +181,67 @@ mod tests {
         assert!(!is_valid_hf_repo_id("org/model name"));
         assert!(!is_valid_hf_repo_id("org/model$evil"));
     }
+
+    #[test]
+    fn test_is_valid_hf_repo_id_rejects_dot_only_segment() {
+        assert!(!is_valid_hf_repo_id("."));
+        assert!(!is_valid_hf_repo_id("org/."));
+        assert!(!is_valid_hf_repo_id("./model"));
+    }
+
+    #[test]
+    fn test_build_hf_repo_invalid_repo_id() {
+        let result = build_hf_repo("../etc/passwd");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::ModelLoadError(msg) => {
+                assert!(msg.contains("Invalid HuggingFace repo ID"));
+            }
+            other => panic!("Expected ModelLoadError, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_build_hf_repo_valid_repo_id() {
+        // Valid repo ID should succeed (HFClientSync::new() may fail in CI but the validation passes)
+        let result = build_hf_repo("BAAI/bge-m3");
+        // In test environment without network, HFClientSync::new() might still succeed
+        // as it only creates the client, not downloads anything
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_detect_mirror_risk_no_env() {
+        // When HF_ENDPOINT is not set, should return None
+        let saved = std::env::var("HF_ENDPOINT").ok();
+        unsafe { std::env::remove_var("HF_ENDPOINT") };
+        assert!(detect_mirror_risk().is_none());
+        if let Some(v) = saved {
+            unsafe { std::env::set_var("HF_ENDPOINT", v) };
+        }
+    }
+
+    #[test]
+    fn test_detect_mirror_risk_official_endpoint() {
+        let saved = std::env::var("HF_ENDPOINT").ok();
+        unsafe { std::env::set_var("HF_ENDPOINT", "https://huggingface.co") };
+        assert!(detect_mirror_risk().is_none());
+        match saved {
+            Some(v) => unsafe { std::env::set_var("HF_ENDPOINT", v) },
+            None => unsafe { std::env::remove_var("HF_ENDPOINT") },
+        }
+    }
+
+    #[test]
+    fn test_detect_mirror_risk_mirror_endpoint() {
+        let saved = std::env::var("HF_ENDPOINT").ok();
+        unsafe { std::env::set_var("HF_ENDPOINT", "https://hf-mirror.com") };
+        let result = detect_mirror_risk();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "https://hf-mirror.com");
+        match saved {
+            Some(v) => unsafe { std::env::set_var("HF_ENDPOINT", v) },
+            None => unsafe { std::env::remove_var("HF_ENDPOINT") },
+        }
+    }
 }

@@ -557,4 +557,167 @@ mod tests {
             other => panic!("Expected InvalidInput, got: {:?}", other),
         }
     }
+
+    // -- Cache-enabled path tests --
+
+    fn make_service_with_cache(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+    ) -> RerankService {
+        let cache = Arc::new(OxCacheBackend::new(100));
+        RerankService::with_cache(engine, None, cache)
+    }
+
+    #[tokio::test]
+    async fn test_rerank_with_cache_first_call_misses() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockRerankEngine));
+        let service = make_service_with_cache(engine);
+
+        let req = RerankRequest {
+            query: "cache test query".to_string(),
+            documents: vec!["doc one".to_string(), "doc two".to_string()],
+            top_k: None,
+            return_documents: None,
+        };
+
+        let result = service.process_rerank(req, 100, 8192).await.unwrap();
+        assert_eq!(result.results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_rerank_with_cache_second_call_hits() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockRerankEngine));
+        let service = make_service_with_cache(engine.clone());
+
+        // First call: cache miss, computes and stores scores
+        let req1 = RerankRequest {
+            query: "same query".to_string(),
+            documents: vec!["cached doc".to_string()],
+            top_k: None,
+            return_documents: None,
+        };
+        let result1 = service.process_rerank(req1, 100, 8192).await.unwrap();
+
+        // Second call with same query+doc: should hit cache
+        let req2 = RerankRequest {
+            query: "same query".to_string(),
+            documents: vec!["cached doc".to_string()],
+            top_k: None,
+            return_documents: None,
+        };
+        let result2 = service.process_rerank(req2, 100, 8192).await.unwrap();
+
+        // Scores should match
+        assert_eq!(result1.results.len(), result2.results.len());
+        assert!((result1.results[0].score - result2.results[0].score).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn test_rerank_with_all_constructors() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockRerankEngine));
+        let cache = Arc::new(OxCacheBackend::new(50));
+        let service = RerankService::with_all(engine, None, cache, None, None);
+
+        let req = RerankRequest {
+            query: "test".to_string(),
+            documents: vec!["doc".to_string()],
+            top_k: None,
+            return_documents: None,
+        };
+        let result = service.process_rerank(req, 100, 8192).await.unwrap();
+        assert_eq!(result.results.len(), 1);
+    }
+
+    // -- Direct mock method calls to cover unused trait impls --
+    #[test]
+    fn test_mock_rerank_engine_embed() {
+        let engine = MockRerankEngine;
+        let vec = engine.embed("test").unwrap();
+        assert_eq!(vec.len(), 128);
+    }
+
+    #[test]
+    fn test_mock_rerank_engine_embed_batch() {
+        let engine = MockRerankEngine;
+        let texts = vec!["a".to_string(), "b".to_string()];
+        let vecs = engine.embed_batch(&texts).unwrap();
+        assert_eq!(vecs.len(), 2);
+    }
+
+    #[test]
+    fn test_mock_rerank_engine_precision() {
+        let engine = MockRerankEngine;
+        assert_eq!(*engine.precision(), Precision::Fp32);
+    }
+
+    #[test]
+    fn test_mock_rerank_engine_supports_mixed_precision() {
+        let engine = MockRerankEngine;
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    #[tokio::test]
+    async fn test_mock_rerank_engine_try_fallback() {
+        let mut engine = MockRerankEngine;
+        let config = crate::config::model::ModelConfig {
+            name: "test".to_string(),
+            engine_type: crate::config::model::EngineType::Candle,
+            model_path: std::path::PathBuf::from("/tmp"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
+    }
+
+    #[test]
+    fn test_no_rerank_engine_embed() {
+        let engine = NoRerankEngine;
+        let vec = engine.embed("test").unwrap();
+        assert_eq!(vec.len(), 128);
+    }
+
+    #[test]
+    fn test_no_rerank_engine_embed_batch() {
+        let engine = NoRerankEngine;
+        let texts = vec!["a".to_string()];
+        let vecs = engine.embed_batch(&texts).unwrap();
+        assert_eq!(vecs.len(), 1);
+    }
+
+    #[test]
+    fn test_no_rerank_engine_precision() {
+        assert_eq!(*NoRerankEngine.precision(), Precision::Fp32);
+    }
+
+    #[test]
+    fn test_no_rerank_engine_supports_mixed_precision() {
+        assert!(!NoRerankEngine.supports_mixed_precision());
+    }
+
+    #[tokio::test]
+    async fn test_no_rerank_engine_try_fallback() {
+        let mut engine = NoRerankEngine;
+        let config = crate::config::model::ModelConfig {
+            name: "test".to_string(),
+            engine_type: crate::config::model::EngineType::Candle,
+            model_path: std::path::PathBuf::from("/tmp"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
+    }
 }

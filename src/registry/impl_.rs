@@ -557,3 +557,171 @@ impl AsyncLifecycle for ConfigWatcherModule {
         })
     }
 }
+
+#[cfg(test)]
+mod impl_tests {
+    use super::*;
+    use crate::config::model::Precision;
+    use crate::engine::InferenceEngine;
+    use crate::error::VecboostError;
+    use async_trait::async_trait;
+
+    struct TestMockEngine;
+
+    #[async_trait]
+    impl InferenceEngine for TestMockEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.0; 128])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.0; 128]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &crate::config::model::ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    // -- ModuleMeta NAME constants --
+    #[test]
+    fn test_embedding_module_name() {
+        assert_eq!(EmbeddingModule::NAME, "embedding");
+    }
+
+    #[test]
+    fn test_rerank_module_name() {
+        assert_eq!(RerankModule::NAME, "rerank");
+    }
+
+    #[test]
+    fn test_rate_limit_module_name() {
+        assert_eq!(RateLimitModule::NAME, "rate_limit");
+    }
+
+    #[test]
+    fn test_cache_module_name() {
+        assert_eq!(CacheModule::NAME, "cache");
+    }
+
+    #[test]
+    fn test_db_module_name() {
+        assert_eq!(DbModule::NAME, "db");
+    }
+
+    #[test]
+    fn test_audit_module_name() {
+        assert_eq!(AuditModule::NAME, "audit");
+    }
+
+    #[test]
+    fn test_metrics_collector_module_name() {
+        assert_eq!(MetricsCollectorModule::NAME, "metrics_collector");
+    }
+
+    #[test]
+    fn test_ip_whitelist_module_name() {
+        assert_eq!(IpWhitelistModule::NAME, "ip_whitelist");
+    }
+
+    #[test]
+    fn test_pipeline_queue_module_name() {
+        assert_eq!(PipelineQueueModule::NAME, "pipeline_queue");
+    }
+
+    #[test]
+    fn test_response_channel_module_name() {
+        assert_eq!(ResponseChannelModule::NAME, "response_channel");
+    }
+
+    #[test]
+    fn test_priority_calculator_module_name() {
+        assert_eq!(PriorityCalculatorModule::NAME, "priority_calculator");
+    }
+
+    #[test]
+    fn test_worker_manager_module_name() {
+        assert_eq!(WorkerManagerModule::NAME, "worker_manager");
+    }
+
+    #[test]
+    fn test_config_watcher_module_name() {
+        assert_eq!(ConfigWatcherModule::NAME, "config_watcher");
+    }
+
+    #[cfg(feature = "auth")]
+    #[test]
+    fn test_auth_module_name() {
+        assert_eq!(AuthModule::NAME, "auth");
+    }
+
+    #[cfg(feature = "auth")]
+    #[test]
+    fn test_csrf_config_module_name() {
+        assert_eq!(CsrfConfigModule::NAME, "csrf_config");
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_prometheus_collector_module_name() {
+        assert_eq!(PrometheusCollectorModule::NAME, "prometheus_collector");
+    }
+
+    // -- ModuleMeta dependencies (all should be empty) --
+    #[test]
+    fn test_all_modules_have_no_dependencies() {
+        assert!(EmbeddingModule::dependencies().is_empty());
+        assert!(RerankModule::dependencies().is_empty());
+        assert!(RateLimitModule::dependencies().is_empty());
+        assert!(CacheModule::dependencies().is_empty());
+        assert!(DbModule::dependencies().is_empty());
+        assert!(AuditModule::dependencies().is_empty());
+        assert!(MetricsCollectorModule::dependencies().is_empty());
+        assert!(IpWhitelistModule::dependencies().is_empty());
+        assert!(PipelineQueueModule::dependencies().is_empty());
+        assert!(ResponseChannelModule::dependencies().is_empty());
+        assert!(PriorityCalculatorModule::dependencies().is_empty());
+        assert!(WorkerManagerModule::dependencies().is_empty());
+        assert!(ConfigWatcherModule::dependencies().is_empty());
+    }
+
+    // -- AsyncHealthCheck implementations --
+    #[test]
+    fn test_embedding_health_check_always_healthy() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestMockEngine));
+        let service = crate::service::embedding::EmbeddingService::new(engine, None);
+        let cap: <EmbeddingModule as AsyncAutoBuilder>::Capability = Arc::new(RwLock::new(service));
+        let status = <EmbeddingModule as AsyncHealthCheck>::check(&cap);
+        assert!(matches!(status, HealthStatus::Healthy));
+    }
+
+    #[test]
+    fn test_rerank_health_check_always_healthy() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestMockEngine));
+        let service = crate::service::rerank::RerankService::new(engine, None);
+        let cap: <RerankModule as AsyncAutoBuilder>::Capability = Arc::new(RwLock::new(service));
+        let status = <RerankModule as AsyncHealthCheck>::check(&cap);
+        assert!(matches!(status, HealthStatus::Healthy));
+    }
+
+    #[test]
+    fn test_cache_health_check_enabled() {
+        let status = <CacheModule as AsyncHealthCheck>::check(&true);
+        assert!(matches!(status, HealthStatus::Healthy));
+    }
+
+    #[test]
+    fn test_cache_health_check_disabled() {
+        let status = <CacheModule as AsyncHealthCheck>::check(&false);
+        assert!(matches!(status, HealthStatus::Degraded { .. }));
+    }
+}

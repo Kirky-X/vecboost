@@ -982,4 +982,83 @@ mod tests {
             other => panic!("Expected InternalError, got: {:?}", other),
         }
     }
+
+    // -- Direct mock method calls to cover unused trait impls --
+    #[test]
+    fn test_test_engine_embed_batch() {
+        let engine = TestEngine::new(128);
+        let texts = vec!["a".to_string(), "b".to_string()];
+        let vecs = engine.embed_batch(&texts).unwrap();
+        assert_eq!(vecs.len(), 2);
+        assert_eq!(vecs[0].len(), 128);
+    }
+
+    #[test]
+    fn test_test_engine_precision() {
+        let engine = TestEngine::new(4);
+        assert_eq!(*engine.precision(), Precision::Fp32);
+    }
+
+    #[test]
+    fn test_test_engine_supports_mixed_precision() {
+        let engine = TestEngine::new(4);
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    #[tokio::test]
+    async fn test_test_engine_try_fallback() {
+        let mut engine = TestEngine::new(4);
+        let config = ModelConfig {
+            name: "test".to_string(),
+            engine_type: crate::config::model::EngineType::Candle,
+            model_path: std::path::PathBuf::from("/tmp"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
+    }
+
+    #[test]
+    fn test_error_engine_embed_batch() {
+        let engine = ErrorEngine::new();
+        let texts = vec!["a".to_string()];
+        assert!(engine.embed_batch(&texts).is_err());
+    }
+
+    #[test]
+    fn test_error_engine_precision() {
+        let engine = ErrorEngine::new();
+        assert_eq!(*engine.precision(), Precision::Fp32);
+    }
+
+    #[test]
+    fn test_error_engine_supports_mixed_precision() {
+        let engine = ErrorEngine::new();
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    #[tokio::test]
+    async fn test_error_engine_try_fallback() {
+        let mut engine = ErrorEngine::new();
+        let config = ModelConfig {
+            name: "test".to_string(),
+            engine_type: crate::config::model::EngineType::Candle,
+            model_path: std::path::PathBuf::from("/tmp"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
+    }
 }

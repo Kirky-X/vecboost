@@ -521,4 +521,33 @@ mod tests {
                 .contains("does not exist")
         );
     }
+
+    /// Passing a directory path triggers a read error in compute_sha256
+    /// because directories can be opened but not read as file data.
+    #[test]
+    fn test_check_model_integrity_directory_path_triggers_read_error() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir_path = temp_dir.path().to_str().unwrap().to_string();
+
+        let files = vec![(dir_path.clone(), None)];
+        let report = check_model_integrity("dir_model", files, None).unwrap();
+
+        assert!(!report.overall_valid);
+        assert_eq!(report.corrupted_files.len(), 1);
+        assert!(report.files_checked[0].error_message.is_some());
+        let err_msg = report.files_checked[0].error_message.as_ref().unwrap();
+        assert!(
+            err_msg.contains("Failed to compute hash") || err_msg.contains("read"),
+            "error should mention hash computation failure, got: {}",
+            err_msg
+        );
+    }
+
+    /// compute_sha256 on a directory should return an error
+    #[test]
+    fn test_compute_sha256_on_directory_fails() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let result = compute_sha256(temp_dir.path());
+        assert!(result.is_err());
+    }
 }

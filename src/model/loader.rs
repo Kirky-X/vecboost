@@ -193,6 +193,17 @@ mod tests {
     }
 
     #[test]
+    fn test_onnx_model_name_path_and_reload_without_feature_gate() {
+        let model = OnnxModel {
+            path: PathBuf::from("/test/onnx/path"),
+            name: "onnx-no-gate".to_string(),
+        };
+        assert_eq!(model.name(), "onnx-no-gate");
+        assert_eq!(model.path(), Path::new("/test/onnx/path"));
+        assert!(model.reload().is_ok());
+    }
+
+    #[test]
     #[cfg(feature = "onnx")]
     fn test_onnx_model_properties() {
         let path = PathBuf::from("/test/model");

@@ -173,3 +173,104 @@ pub async fn grpc_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError>
 pub async fn grpc_rerank_batch(req: BatchRerankRequest) -> Result<BatchRerankResponse, ApiError> {
     rerank_batch_handler(req).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::{ModelConfig, Precision};
+    use crate::engine::InferenceEngine;
+    use async_trait::async_trait;
+
+    struct MockRerankEngine;
+
+    #[async_trait]
+    impl InferenceEngine for MockRerankEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.0; 128])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.0; 128]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        fn rerank(&self, _query: &str, document: &str) -> Result<f32, VecboostError> {
+            Ok((document.len() as f32) / 100.0)
+        }
+        fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> {
+            documents.iter().map(|doc| self.rerank(query, doc)).collect()
+        }
+        fn supports_rerank(&self) -> bool {
+            true
+        }
+        async fn try_fallback_to_cpu(&mut self, _config: &ModelConfig) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    fn make_svc() -> RerankService {
+        let engine: std::sync::Arc<tokio::sync::RwLock<dyn InferenceEngine + Send + Sync>> =
+            std::sync::Arc::new(tokio::sync::RwLock::new(MockRerankEngine));
+        RerankService::new(engine, None)
+    }
+
+    #[tokio::test]
+    async fn test_sdk_rerank_delegates_to_service() {
+        let svc = make_svc();
+        let req = RerankRequest {
+            query: "test query".to_string(),
+            documents: vec!["doc one".to_string(), "doc two".to_string()],
+            top_k: None,
+            return_documents: None,
+        };
+        let result = rerank(&svc, req, 100, 8192).await.unwrap();
+        assert_eq!(result.results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_sdk_rerank_batch_processes_multiple_queries() {
+        let svc = make_svc();
+        let req = BatchRerankRequest {
+            queries: vec![
+                RerankRequest {
+                    query: "query 1".to_string(),
+                    documents: vec!["doc a".to_string()],
+                    top_k: None,
+                    return_documents: None,
+                },
+                RerankRequest {
+                    query: "query 2".to_string(),
+                    documents: vec!["doc b".to_string(), "doc c".to_string()],
+                    top_k: None,
+                    return_documents: None,
+                },
+            ],
+        };
+        let result = rerank_batch(&svc, req, 100, 8192).await.unwrap();
+        assert_eq!(result.responses.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_sdk_rerank_batch_empty_queries() {
+        let svc = make_svc();
+        let req = BatchRerankRequest { queries: vec![] };
+        let result = rerank_batch(&svc, req, 100, 8192).await.unwrap();
+        assert!(result.responses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sdk_rerank_empty_docs_returns_error() {
+        let svc = make_svc();
+        let req = RerankRequest {
+            query: "test".to_string(),
+            documents: vec![],
+            top_k: None,
+            return_documents: None,
+        };
+        let result = rerank(&svc, req, 100, 8192).await;
+        assert!(result.is_err());
+    }
+}

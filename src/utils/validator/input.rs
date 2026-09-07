@@ -885,4 +885,42 @@ mod validator_tests {
             _ => panic!("Expected InvalidInput for whitespace-only text"),
         }
     }
+
+    #[test]
+    fn test_validate_file_size_oversized() {
+        ensure_i18n_init();
+        let validator = InputValidator::with_default();
+        // Create a sparse file that appears to be larger than MAX_FILE_SIZE_BYTES (100MB)
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let file = temp.as_file();
+        file.set_len(MAX_FILE_SIZE_BYTES + 1).unwrap();
+        let result = validator.validate_file_path(temp.path().to_str().unwrap());
+        assert!(result.is_err(), "file exceeding max size should be rejected");
+    }
+
+    #[test]
+    fn test_validate_file_content_rejects_binary() {
+        ensure_i18n_init();
+        let validator = InputValidator::with_default();
+        // Create a file with binary content (bytes < 0x09 or in 0x0B-0x1F range excluding 0x1E/0x1F)
+        let mut temp = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        // Write binary bytes: 0x00 is < 0x09, so it should be detected as binary
+        temp.write_all(&[0x00, 0x01, 0x02, 0x03, 0x04, 0x05]).unwrap();
+        temp.flush().unwrap();
+        // validate_file_content checks for binary content
+        let result = validator.validate_file_content(temp.path().to_str().unwrap());
+        assert!(result.is_err(), "binary file should be rejected");
+    }
+
+    #[test]
+    fn test_validate_file_content_accepts_text() {
+        let validator = InputValidator::with_default();
+        let mut temp = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        temp.write_all(b"Hello, this is plain text!\n").unwrap();
+        temp.flush().unwrap();
+        let result = validator.validate_file_content(temp.path().to_str().unwrap());
+        assert!(result.is_ok(), "text file should be accepted: {:?}", result);
+    }
 }

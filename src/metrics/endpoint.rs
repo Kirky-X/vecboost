@@ -237,4 +237,10 @@ mod tests {
             "/a/b/c/d"
         );
     }
+
+    #[test]
+    fn test_normalize_metrics_path_empty_and_root() {
+        assert_eq!(normalize_metrics_path(""), "");
+        assert_eq!(normalize_metrics_path("/"), "/");
+    }
 }

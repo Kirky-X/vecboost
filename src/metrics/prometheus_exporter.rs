@@ -256,7 +256,7 @@ mod tests {
                 labels.iter().any(|l| l.value() == "GET")
                     && labels.iter().any(|l| l.value() == "200")
             })
-            .map(|m| m.get_counter().get_value())
+            .map(|m| m.get_counter().value())
             .sum();
         assert_eq!(get_200, 2.0, "GET 200 counter should be 2");
     }
@@ -299,14 +299,14 @@ mod tests {
         let http_value: f64 = gauges
             .iter()
             .filter(|m| m.get_label().iter().any(|l| l.value() == "http"))
-            .map(|m| m.get_gauge().get_value())
+            .map(|m| m.get_gauge().value())
             .sum();
         assert_eq!(http_value, 42.0, "http connections gauge should be 42");
 
         let grpc_value: f64 = gauges
             .iter()
             .filter(|m| m.get_label().iter().any(|l| l.value() == "grpc"))
-            .map(|m| m.get_gauge().get_value())
+            .map(|m| m.get_gauge().value())
             .sum();
         assert_eq!(grpc_value, 7.0, "grpc connections gauge should be 7");
     }
@@ -324,7 +324,7 @@ mod tests {
             .unwrap();
         let gauge = &gauge_metric.get_metric()[0];
         assert_eq!(
-            gauge.get_gauge().get_value(),
+            gauge.get_gauge().value(),
             25.0,
             "gauge should reflect the latest set value"
         );
@@ -371,7 +371,7 @@ mod tests {
             .get_metric()
             .iter()
             .filter(|m| m.get_label().iter().any(|l| l.value() == "embedding"))
-            .map(|m| m.get_counter().get_value())
+            .map(|m| m.get_counter().value())
             .sum();
         assert_eq!(hits_value, 2.0, "should have 2 cache hits");
 
@@ -383,7 +383,7 @@ mod tests {
             .get_metric()
             .iter()
             .filter(|m| m.get_label().iter().any(|l| l.value() == "embedding"))
-            .map(|m| m.get_counter().get_value())
+            .map(|m| m.get_counter().value())
             .sum();
         assert_eq!(misses_value, 1.0, "should have 1 cache miss");
     }
@@ -469,6 +469,52 @@ mod tests {
             output.contains("# TYPE"),
             "output should contain TYPE lines"
         );
+    }
+
+    #[test]
+    fn test_record_rate_limit_allowed_increments_counter() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.record_rate_limit_allowed("embedding");
+        collector.record_rate_limit_allowed("embedding");
+        collector.record_rate_limit_allowed("rerank");
+
+        let families = collector.registry().gather();
+        let metric = families
+            .iter()
+            .find(|m| m.name() == "rate_limit_allowed_total")
+            .expect("rate_limit_allowed_total should be registered");
+
+        let counters = metric.get_metric();
+        assert_eq!(counters.len(), 2, "should have 2 dimensions");
+
+        let embedding_val: f64 = counters
+            .iter()
+            .filter(|m| m.get_label().iter().any(|l| l.value() == "embedding"))
+            .map(|m| m.get_counter().value())
+            .sum();
+        assert_eq!(embedding_val, 2.0);
+    }
+
+    #[test]
+    fn test_record_rate_limit_denied_increments_counter() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.record_rate_limit_denied("embedding");
+        collector.record_rate_limit_denied("embedding");
+        collector.record_rate_limit_denied("embedding");
+
+        let families = collector.registry().gather();
+        let metric = families
+            .iter()
+            .find(|m| m.name() == "rate_limit_denied_total")
+            .expect("rate_limit_denied_total should be registered");
+
+        let counters = metric.get_metric();
+        let val: f64 = counters
+            .iter()
+            .filter(|m| m.get_label().iter().any(|l| l.value() == "embedding"))
+            .map(|m| m.get_counter().value())
+            .sum();
+        assert_eq!(val, 3.0);
     }
 
     #[cfg(feature = "db")]

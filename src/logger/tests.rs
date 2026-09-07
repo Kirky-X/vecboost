@@ -45,7 +45,7 @@ async fn test_logger_module_build_returns_manager() {
         console_sink: None,
         ..Default::default()
     };
-    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
     let manager = Arc::new(manager);
@@ -89,7 +89,7 @@ async fn test_logger_writes_to_file() {
         ..Default::default()
     };
 
-    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
 
@@ -136,7 +136,7 @@ async fn test_log_macro_works() {
         ..Default::default()
     };
 
-    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
 
@@ -172,7 +172,7 @@ async fn test_logger_console_output() {
         ..Default::default()
     };
 
-    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
 
@@ -216,7 +216,7 @@ async fn test_logger_module_contains_after_register() {
         console_sink: None,
         ..Default::default()
     };
-    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
     let manager = Arc::new(manager);
@@ -250,7 +250,7 @@ async fn test_logger_module_coexists_with_other_modules() {
         console_sink: None,
         ..Default::default()
     };
-    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
     let manager = Arc::new(manager);

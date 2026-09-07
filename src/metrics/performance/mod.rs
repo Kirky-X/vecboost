@@ -875,4 +875,113 @@ mod tests {
         assert!(result.failed_requests > 0);
         assert_eq!(result.error_rate, 1.0);
     }
+
+    #[test]
+    fn test_engine_accessor_returns_engine_ref() {
+        let tester = make_tester(128);
+        let engine_ref = tester.engine();
+        // The accessor returns a reference to the internal Arc,
+        // so strong_count should be exactly 1 (only the tester holds it).
+        assert_eq!(Arc::strong_count(engine_ref), 1);
+    }
+
+    #[tokio::test]
+    async fn test_throughput_zero_concurrent_returns_error() {
+        let tester = make_tester(128);
+        let config = PerformanceTestConfig {
+            total_requests: 10,
+            concurrent_requests: 0,
+            warmup_requests: 0,
+            min_text_length: 10,
+            max_text_length: 100,
+            target_qps: None,
+            timeout_seconds: 30,
+        };
+        let result = tester.run_throughput_test(config, |n| "x".repeat(n)).await;
+        assert!(result.is_err());
+    }
+
+    // -- Direct mock method calls to improve coverage --
+    #[test]
+    fn test_mock_engine_embed() {
+        let engine = MockEngine::new(64);
+        let vec = engine.embed("test").unwrap();
+        assert_eq!(vec.len(), 64);
+    }
+
+    #[test]
+    fn test_mock_engine_embed_batch() {
+        let engine = MockEngine::new(32);
+        let texts = vec!["a".to_string(), "b".to_string()];
+        let vecs = engine.embed_batch(&texts).unwrap();
+        assert_eq!(vecs.len(), 2);
+        assert_eq!(vecs[0].len(), 32);
+    }
+
+    #[test]
+    fn test_mock_engine_precision() {
+        let engine = MockEngine::new(4);
+        assert_eq!(*engine.precision(), Precision::Fp32);
+    }
+
+    #[test]
+    fn test_mock_engine_supports_mixed_precision() {
+        let engine = MockEngine::new(4);
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    #[tokio::test]
+    async fn test_mock_engine_try_fallback_to_cpu() {
+        let mut engine = MockEngine::new(4);
+        let config = crate::config::model::ModelConfig {
+            name: "test".to_string(),
+            engine_type: crate::config::model::EngineType::Candle,
+            model_path: std::path::PathBuf::from("/tmp"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
+    }
+
+    #[test]
+    fn test_failing_engine_embed_batch() {
+        let engine = FailingMockEngine;
+        let texts = vec!["a".to_string()];
+        assert!(engine.embed_batch(&texts).is_err());
+    }
+
+    #[test]
+    fn test_failing_engine_precision() {
+        assert_eq!(*FailingMockEngine.precision(), Precision::Fp32);
+    }
+
+    #[test]
+    fn test_failing_engine_supports_mixed_precision() {
+        assert!(!FailingMockEngine.supports_mixed_precision());
+    }
+
+    #[tokio::test]
+    async fn test_failing_engine_try_fallback() {
+        let mut engine = FailingMockEngine;
+        let config = crate::config::model::ModelConfig {
+            name: "test".to_string(),
+            engine_type: crate::config::model::EngineType::Candle,
+            model_path: std::path::PathBuf::from("/tmp"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+        };
+        assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
+    }
 }

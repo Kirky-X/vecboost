@@ -71,6 +71,10 @@ pub use device::memory_paging::{PagingConfig, PagingStats, WeightPagingManager};
 // 重新导出语义缓存类型
 pub use cache::{SemanticCache, SemanticCacheConfig, SemanticCacheStats};
 
+// 再导出 sdforge 多协议框架（gRPC E2E 集成测试经此使用生成的 tonic 客户端）
+#[cfg(feature = "grpc")]
+pub use sdforge;
+
 /// Application state
 ///
 /// v0.3.0 D3 重构：所有能力通过 `AsyncKit<Ready>` 查询。
@@ -709,9 +713,9 @@ mod tests {
     #[tokio::test]
     async fn test_kit_shutdown_completes_cleanly() {
         let state = make_app_state().await;
-        // AsyncKit::shutdown() calls sync shutdown callbacks (lifecycle modules)
+        // AsyncKit::shutdown_async() awaits async shutdown callbacks (lifecycle modules)
         // Should not panic even with async lifecycle modules registered
-        state.kit.shutdown();
+        state.kit.shutdown_async().await;
     }
 
     /// VecboostState::new() and kit()

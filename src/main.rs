@@ -23,6 +23,10 @@ use vecboost::registry::RateLimitModule;
 /// 全局关闭超时（秒）
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 
+/// runtime 退出时等待常驻 spawn_blocking 任务的兜底超时（秒）。
+/// 常驻任务（inklog 定时器等）不可取消，默认 Drop 会无限等待导致进程挂死。
+const SHUTDOWN_RUNTIME_DRAIN_SECS: u64 = 10;
+
 /// 数据库连接池配置
 #[cfg(feature = "db")]
 const DB_MAX_RETRIES: u32 = 3;
@@ -128,7 +132,10 @@ async fn init_db_pool(
         max_retries: DB_MAX_RETRIES,
         ..Default::default()
     });
-    log::info!("Database retry policy enabled (max_retries={}, exponential backoff)", DB_MAX_RETRIES);
+    log::info!(
+        "Database retry policy enabled (max_retries={}, exponential backoff)",
+        DB_MAX_RETRIES
+    );
     db_config.pool_config.min_connections = DB_MIN_CONNECTIONS;
     db_config.warmup_timeout = DB_WARMUP_TIMEOUT_SECS;
     db_config.warmup_retries = DB_WARMUP_RETRIES;
@@ -138,18 +145,24 @@ async fn init_db_pool(
         db_config.warmup_timeout,
         db_config.warmup_retries
     );
-    let pool = DbPool::with_config(db_config)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
-            "startup-db-pool",
-            vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
-        )))?;
-    init_schema(&pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
-            "startup-db-schema",
-            vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
-        )))?;
+    let pool = DbPool::with_config(db_config).await.map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-db-pool",
+                vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+            )
+        )
+    })?;
+    init_schema(&pool).await.map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-db-schema",
+                vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+            )
+        )
+    })?;
     log::info!("Database pool initialized and schema verified");
     let db_metrics = Arc::new(dbnexus::MetricsCollector::new());
     log::info!("dbnexus MetricsCollector created (T044 observability wiring)");
@@ -287,17 +300,29 @@ async fn run_cli_command(
 
         let handler = sdforge::inventory::iter::<CliHandlerRegistration>()
             .find(|h| h.name == name)
-            .ok_or_else(|| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
-                "cli-no-handler",
-                vecboost::i18n::tr_args(&[("name", name)]),
-            )))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    vecboost::i18n::tr_with_args(
+                        "cli-no-handler",
+                        vecboost::i18n::tr_args(&[("name", name)]),
+                    )
+                )
+            })?;
 
-        (handler.handler)(args_map, None)
-            .await
-            .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
-                "cli-failed",
-                vecboost::i18n::tr_args(&[("name", name), ("detail", &format!("{:?}", e))]),
-            )))?;
+        // DEFECT-CLI-001 根因修复：HandlerFn 返回序列化后的 serde_json::Value，
+        // 打印职责在调用方（sdforge 自带的 execute() 未被 vecboost 使用）。
+        // 旧实现直接丢弃返回值，导致 CLI 子命令"退出码 0 但无任何结果输出"。
+        let value = (handler.handler)(args_map, None).await.map_err(|e| {
+            anyhow::anyhow!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "cli-failed",
+                    vecboost::i18n::tr_args(&[("name", name), ("detail", &format!("{:?}", e))]),
+                )
+            )
+        })?;
+        println!("{}", sdforge::core::extract_value(&value));
     }
     Ok(true)
 }
@@ -309,13 +334,19 @@ async fn init_auth(
     let garrison_handle: Option<Arc<GarrisonHandle>> = if config.auth.enabled {
         if let Some(ref secret) = config.auth.jwt_secret {
             if secret.len() < 32 {
-                return Err(anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
-                    "startup-jwt-length",
-                    vecboost::i18n::tr_args(&[("got", &secret.len().to_string())]),
-                )));
+                return Err(anyhow::anyhow!(
+                    "{}",
+                    vecboost::i18n::tr_with_args(
+                        "startup-jwt-length",
+                        vecboost::i18n::tr_args(&[("got", &secret.len().to_string())]),
+                    )
+                ));
             }
         } else {
-            return Err(anyhow::anyhow!("{}", vecboost::i18n::tr("startup-jwt-missing")));
+            return Err(anyhow::anyhow!(
+                "{}",
+                vecboost::i18n::tr("startup-jwt-missing")
+            ));
         };
 
         let dao = garrison::dao::GarrisonDaoOxcache::new()
@@ -438,8 +469,25 @@ async fn init_pipeline(
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime");
+    let result = rt.block_on(app_main());
+    // DEFECT-SHUTDOWN-002 修复：常驻 spawn_blocking 任务（inklog 定时器/写入线程等）
+    // 会让 Runtime::drop 的 BlockingPool::shutdown 无限等待，导致任何退出路径
+    // （启动配置错误 bail / SIGTERM 优雅关闭）挂死、最终被 SIGKILL(137)。
+    // 显式 shutdown_timeout 保证所有退出路径都能在超时后落地。
+    rt.shutdown_timeout(Duration::from_secs(SHUTDOWN_RUNTIME_DRAIN_SECS));
+    result.unwrap_or_else(|e| {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    });
+}
+
+/// 应用主入口（在 tokio runtime 上执行）
+async fn app_main() -> anyhow::Result<()> {
     // Early CLI detection: suppress console logging in CLI mode to keep stdout clean
     // for machine-readable JSON output (DEFECT-CLI-001 fix)
     #[cfg(feature = "cli")]
@@ -453,18 +501,39 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "cli"))]
     let cli_mode = false;
 
+    // DEFECT-MCP-001 修复：MCP stdio 模式下 stdout 只能承载 JSON-RPC 协议消息，
+    // inklog 控制台日志会污染协议流导致客户端解析失败 —— 与 CLI 模式同样关闭控制台输出。
+    #[cfg(feature = "mcp")]
+    let mcp_mode = std::env::args().any(|a| a == "--mcp");
+    #[cfg(not(feature = "mcp"))]
+    let mcp_mode = false;
+
+    // DEFECT-CLI-003 绕过：inklog ConsoleSink 不消费 enabled 标志（上游缺陷，
+    // console(false) 无法关闭输出）。CLI/MCP 模式下将全部日志级别路由到 stderr，
+    // 保证 stdout 只承载机器可读 JSON / JSON-RPC 协议消息。
+    let logger_builder = {
+        let b = inklog::LoggerManager::builder().level("info").console(true);
+        if cli_mode || mcp_mode {
+            b.console_stderr_levels(&["trace", "debug", "info", "warn", "error"])
+        } else {
+            b
+        }
+    };
     let logger_manager = Arc::new(
-        inklog::LoggerManager::builder()
-            .level("info")
-            .console(!cli_mode)
+        logger_builder
             .file("logs/vecboost.log")
             .file_compress(true)
             .build()
             .await
-            .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
-                "startup-logger",
-                vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
-            )))?,
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "{}",
+                    vecboost::i18n::tr_with_args(
+                        "startup-logger",
+                        vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                    )
+                )
+            })?,
     );
 
     log::info!("Starting Rust Embedding Service...");
@@ -477,11 +546,15 @@ async fn main() -> anyhow::Result<()> {
         let _counts = sdforge::init_all_plugins();
     }
 
-    let config = AppConfig::load_via_confers()
-        .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
-            "startup-config",
-            vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
-        )))?;
+    let config = AppConfig::load_via_confers().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-config",
+                vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+            )
+        )
+    })?;
     log::info!(
         "Configuration loaded: {} auth={} audit={}",
         if config.auth.enabled {
@@ -500,10 +573,13 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(false)
     {
         if let Err(reason) = vecboost::config::encryption::validate_encryption_key() {
-            return Err(anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
-                "startup-encryption",
-                vecboost::i18n::tr_args(&[("detail", &reason.to_string())]),
-            )));
+            return Err(anyhow::anyhow!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "startup-encryption",
+                    vecboost::i18n::tr_args(&[("detail", &reason.to_string())]),
+                )
+            ));
         }
         log::info!("Encryption key validated (VECBOOST_REQUIRE_ENCRYPTION=1)");
     }
@@ -594,14 +670,23 @@ async fn main() -> anyhow::Result<()> {
     // v0.3.0 D3: 注入 13 个新 Module 的能力配置
     kit.set_config(Some(Arc::new(vecboost::metrics::InferenceCollector::new())));
     kit.set_config(Some(Arc::new(
-        vecboost::metrics::PrometheusCollector::new()
-            .map_err(|e| anyhow::anyhow!("{}", vecboost::i18n::tr_with_args(
-                "startup-register-failed",
-                vecboost::i18n::tr_args(&[("module", "PrometheusCollector"), ("detail", &e.to_string())]),
-            )))?,
+        vecboost::metrics::PrometheusCollector::new().map_err(|e| {
+            anyhow::anyhow!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "startup-register-failed",
+                    vecboost::i18n::tr_args(&[
+                        ("module", "PrometheusCollector"),
+                        ("detail", &e.to_string())
+                    ]),
+                )
+            )
+        })?,
     )));
     kit.set_config(config.rate_limit.ip_whitelist.clone());
-    kit.set_config(vecboost::registry::RateLimitEnabled(config.rate_limit.enabled));
+    kit.set_config(vecboost::registry::RateLimitEnabled(
+        config.rate_limit.enabled,
+    ));
     kit.set_config(config.embedding.clone());
     // T013: Inject AuthConfig for `trusted_proxies` (XFF trust boundary) access
     // via `kit.config::<AuthConfig>()` in `auth_middleware` (see lib.rs `FromRef` impl).
@@ -680,7 +765,9 @@ async fn main() -> anyhow::Result<()> {
 
     // T017: AsyncShutdownCoordinator — phased graceful shutdown
     let shutdown_coordinator = AsyncShutdownCoordinator::new();
-    shutdown_coordinator.set_global_timeout(Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS));
+    shutdown_coordinator
+        .set_global_timeout(Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS))
+        .map_err(|e| anyhow::anyhow!("Failed to set shutdown timeout: {}", e))?;
     {
         let kit_for_shutdown = Arc::clone(&kit);
         shutdown_coordinator
@@ -1023,7 +1110,13 @@ async fn main() -> anyhow::Result<()> {
     // Drain remaining tasks to prevent runtime hang
     while bg_tasks.join_next().await.is_some() {}
 
-    let shutdown_result = shutdown_coordinator.shutdown().await;
+    let shutdown_result = match shutdown_coordinator.shutdown().await {
+        Ok(result) => result,
+        Err(e) => {
+            log::warn!("Shutdown coordinator error: {}", e);
+            return Err(anyhow::anyhow!("Phased shutdown failed: {}", e));
+        }
+    };
     if !shutdown_result.is_ok() {
         log::warn!(
             "Shutdown timed out on phases: {:?}",

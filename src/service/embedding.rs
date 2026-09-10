@@ -27,12 +27,14 @@ use crate::error::VecboostError;
 use crate::model::manager::ModelManager;
 use crate::utils::{
     AggregationMode, DEFAULT_TOP_K, FileValidator, InputValidator, MAX_BATCH_SIZE, MAX_TOP_K,
-    TextValidator, cosine_similarity, normalize_l2, truncate_vector, validate_dimension,
+    SimilarityMetric, TextValidator, calculate_similarity, cosine_similarity, normalize_l2,
+    truncate_vector, validate_dimension,
 };
 use log::{debug, warn};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -389,8 +391,15 @@ impl EmbeddingService {
         self.validator.validate_text(&req.source)?;
         self.validator.validate_text(&req.target)?;
 
-        // 短路：相同文本的余弦相似度必为 1.0
-        if req.source == req.target {
+        // 度量解析：cosine（默认）/ euclidean / dot_product / manhattan
+        let metric: SimilarityMetric = match req.metric.as_deref() {
+            None | Some("") | Some("cosine") => SimilarityMetric::Cosine,
+            Some(m) => SimilarityMetric::from_str(m)
+                .map_err(|e| VecboostError::InvalidInput(e.to_string()))?,
+        };
+
+        // 短路：相同文本的余弦相似度必为 1.0（仅余弦度量成立）
+        if req.source == req.target && metric == SimilarityMetric::Cosine {
             return Ok(SimilarityResponse { score: 1.0 });
         }
 
@@ -430,9 +439,13 @@ impl EmbeddingService {
         };
 
         let score = tokio::task::spawn_blocking(move || {
-            normalize_l2(&mut v1)?;
-            normalize_l2(&mut v2)?;
-            cosine_similarity(&v1, &v2)
+            // 距离类度量（euclidean/manhattan）按 1/(1+d) 转换为相似度，
+            // 其输入向量不应预先归一化；点积亦使用原始向量。
+            if metric == SimilarityMetric::Cosine {
+                normalize_l2(&mut v1)?;
+                normalize_l2(&mut v2)?;
+            }
+            calculate_similarity(&v1, &v2, metric)
         })
         .await??;
 
@@ -2218,6 +2231,7 @@ mod tests {
         let req = SimilarityRequest {
             source: "hello world".to_string(),
             target: "hello world".to_string(),
+            metric: None,
         };
         let result = service.process_similarity(req).await;
         assert!(result.is_ok());
@@ -2239,6 +2253,7 @@ mod tests {
         let req = SimilarityRequest {
             source: "alpha text".to_string(),
             target: "beta text".to_string(),
+            metric: None,
         };
         let result = service.process_similarity(req).await;
         assert!(result.is_ok());
@@ -2260,6 +2275,7 @@ mod tests {
         let req = SimilarityRequest {
             source: "".to_string(),
             target: "valid target".to_string(),
+            metric: None,
         };
         let result = service.process_similarity(req).await;
         assert!(result.is_err());
@@ -3292,6 +3308,7 @@ mod tests {
         let req = SimilarityRequest {
             source: "source text".to_string(),
             target: "target text".to_string(),
+            metric: None,
         };
         let result = service.process_similarity(req).await;
         assert!(result.is_ok());
@@ -3419,6 +3436,7 @@ mod tests {
         let req = SimilarityRequest {
             source: "valid source".to_string(),
             target: "".to_string(),
+            metric: None,
         };
         let result = service.process_similarity(req).await;
         assert!(result.is_err());
@@ -3438,6 +3456,7 @@ mod tests {
         let req = SimilarityRequest {
             source: "valid source".to_string(),
             target: "   \n\t  ".to_string(),
+            metric: None,
         };
         let result = service.process_similarity(req).await;
         assert!(result.is_err());
@@ -3784,6 +3803,7 @@ mod tests {
         let req = SimilarityRequest {
             source: "src no cache".to_string(),
             target: "tgt no cache".to_string(),
+            metric: None,
         };
         let result = service.process_similarity(req).await;
         assert!(result.is_ok());

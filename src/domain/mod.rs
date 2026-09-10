@@ -43,6 +43,9 @@ pub struct EmbedResponse {
 pub struct SimilarityRequest {
     pub source: String,
     pub target: String,
+    /// 相似度度量：cosine（默认）/ euclidean / dot_product / manhattan
+    #[serde(default)]
+    pub metric: Option<String>,
 }
 
 impl FromStr for SimilarityRequest {
@@ -64,6 +67,20 @@ pub struct SearchRequest {
     pub query: String,
     pub texts: Vec<String>,
     pub top_k: Option<usize>,
+}
+
+impl FromStr for SearchRequest {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
+}
+
+impl FromStr for UnloadModelRequest {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -212,6 +229,20 @@ pub struct ModelMetadata {
 pub struct ModelListResponse {
     pub models: Vec<ModelInfo>,
     pub total_count: usize,
+}
+
+/// 卸载模型请求（/api/1/model/unload）
+#[derive(Debug, Deserialize, Clone)]
+pub struct UnloadModelRequest {
+    pub model_name: String,
+}
+
+/// 卸载模型响应
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
+pub struct UnloadModelResponse {
+    pub model_name: String,
+    pub unloaded: bool,
 }
 
 // =============================================================================

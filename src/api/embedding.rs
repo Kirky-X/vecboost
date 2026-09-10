@@ -22,13 +22,14 @@ use crate::domain::openai_embedding::{
     EmbeddingData, EmbeddingObject, OpenAIEmbedRequest, OpenAIEmbedResponse, Usage,
 };
 use crate::domain::{
-    BatchEmbedRequest, BatchEmbedResponse, EmbedRequest, EmbedResponse, SimilarityRequest,
-    SimilarityResponse,
+    BatchEmbedRequest, BatchEmbedResponse, EmbedRequest, EmbedResponse, SearchRequest,
+    SearchResponse, SimilarityRequest, SimilarityResponse,
 };
 #[cfg(any(feature = "http", feature = "grpc"))]
 use crate::domain::{
     EmbeddingOutput, FileEmbedRequest, FileEmbedResponse, ModelInfo, ModelListResponse,
-    ModelMetadata, ModelSwitchRequest, ModelSwitchResponse,
+    ModelMetadata, ModelSwitchRequest, ModelSwitchResponse, UnloadModelRequest,
+    UnloadModelResponse,
 };
 use crate::error::VecboostError;
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
@@ -66,6 +67,14 @@ pub async fn compute_similarity(
     req: SimilarityRequest,
 ) -> Result<SimilarityResponse, VecboostError> {
     svc.process_similarity(req).await
+}
+
+/// 1对N 语义检索：给定查询文本，在候选文本列表中按相似度排序
+pub async fn search(
+    svc: &crate::service::embedding::EmbeddingService,
+    req: SearchRequest,
+) -> Result<SearchResponse, VecboostError> {
+    svc.process_search(req).await
 }
 
 // =============================================================================
@@ -307,6 +316,42 @@ async fn compute_similarity_handler(
     compute_similarity(&guard, req).await.map_err(to_api_error)
 }
 
+#[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
+async fn search_handler(req: SearchRequest) -> Result<SearchResponse, ApiError> {
+    let st = state().map_err(to_api_error)?;
+    let svc = st
+        .kit
+        .require::<EmbeddingModule>()
+        .map_err(kit_internal_error)?;
+    let guard = svc.read().await;
+    guard.process_search(req).await.map_err(to_api_error)
+}
+
+#[cfg(any(feature = "http", feature = "grpc"))]
+async fn unload_model_handler(req: UnloadModelRequest) -> Result<UnloadModelResponse, ApiError> {
+    let st = state().map_err(to_api_error)?;
+    let svc = st
+        .kit
+        .require::<EmbeddingModule>()
+        .map_err(kit_internal_error)?;
+    let mut guard = svc.write().await;
+    // 服务器主路径不构造 ModelManager —— 此时卸载能力不可用，明确 404 而非谎报成功
+    if !guard.has_model_manager() {
+        return Err(ApiError::NotFound {
+            resource: "model manager".to_string(),
+            resource_id: None,
+        });
+    }
+    guard
+        .unload_model(&req.model_name)
+        .await
+        .map_err(to_api_error)?;
+    Ok(UnloadModelResponse {
+        model_name: req.model_name,
+        unloaded: true,
+    })
+}
+
 #[cfg(any(feature = "http", feature = "grpc"))]
 async fn embed_file_handler(req: FileEmbedRequest) -> Result<FileEmbedResponse, ApiError> {
     let mode = req.mode.unwrap_or(AggregationMode::Document);
@@ -542,6 +587,19 @@ pub async fn forge_compute_similarity(
 
 #[cfg(feature = "http")]
 #[forge(
+    name = "search",
+    version = 1,
+    path = "/search",
+    method = "POST",
+    tool_name = "search",
+    description = "1-to-N semantic search: rank candidate texts by similarity to the query"
+)]
+pub async fn forge_search(req: SearchRequest) -> Result<SearchResponse, ApiError> {
+    search_handler(req).await
+}
+
+#[cfg(feature = "http")]
+#[forge(
     name = "file_embed",
     version = 1,
     path = "/embed/file",
@@ -617,6 +675,19 @@ pub async fn forge_get_model_info() -> Result<ModelMetadata, ApiError> {
 )]
 pub async fn forge_list_models() -> Result<ModelListResponse, ApiError> {
     list_models_handler().await
+}
+
+#[cfg(feature = "http")]
+#[forge(
+    name = "model_unload",
+    version = 1,
+    path = "/model/unload",
+    method = "POST",
+    tool_name = "model_unload",
+    description = "Unload a model from the model manager cache"
+)]
+pub async fn forge_unload_model(req: UnloadModelRequest) -> Result<UnloadModelResponse, ApiError> {
+    unload_model_handler(req).await
 }
 
 #[cfg(feature = "http")]
@@ -855,6 +926,39 @@ pub async fn grpc_get_model_info() -> Result<ModelMetadata, ApiError> {
 )]
 pub async fn grpc_list_models() -> Result<ModelListResponse, ApiError> {
     list_models_handler().await
+}
+
+#[cfg(feature = "grpc")]
+#[forge(
+    name = "vecboost_search",
+    version = 1,
+    grpc_method = "vecboost.search",
+    description = "1-to-N semantic search over candidate texts"
+)]
+pub async fn grpc_search(req: SearchRequest) -> Result<SearchResponse, ApiError> {
+    search_handler(req).await
+}
+
+#[cfg(feature = "cli")]
+#[forge(
+    name = "search",
+    version = 1,
+    cli = true,
+    description = "Rank candidate texts by similarity to the query (1-to-N search)"
+)]
+pub async fn cli_search(req: SearchRequest) -> Result<SearchResponse, ApiError> {
+    search_handler(req).await
+}
+
+#[cfg(feature = "grpc")]
+#[forge(
+    name = "vecboost_model_unload",
+    version = 1,
+    grpc_method = "vecboost.model_unload",
+    description = "Unload a model from the model manager cache"
+)]
+pub async fn grpc_unload_model(req: UnloadModelRequest) -> Result<UnloadModelResponse, ApiError> {
+    unload_model_handler(req).await
 }
 
 #[cfg(feature = "grpc")]

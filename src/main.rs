@@ -254,9 +254,10 @@ async fn run_mcp_server(
 async fn run_cli_command(
     service: Arc<RwLock<EmbeddingService>>,
     rerank_service: Arc<RwLock<RerankService>>,
+    cli_args: Vec<String>,
 ) -> anyhow::Result<bool> {
     let cli_cmd = CliBuilder::new().with_name("vecboost").build();
-    let first_arg = std::env::args().nth(1);
+    let first_arg = cli_args.get(1);
     let is_cli = first_arg
         .as_ref()
         .map(|cmd| {
@@ -283,7 +284,7 @@ async fn run_cli_command(
         .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
     vecboost::api::init_state(VecboostState::new(Arc::new(kit)))
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    let matches = cli_cmd.get_matches_from(std::env::args());
+    let matches = cli_cmd.get_matches_from(cli_args);
 
     if let Some((name, sub_matches)) = matches.subcommand() {
         let mut args_map = HashMap::new();
@@ -486,15 +487,46 @@ fn main() {
     });
 }
 
+/// 从参数列表剥离 `--config <path>` / `--config=path`，返回
+/// (剥离后的参数, 已解析的配置路径)。CLI 子命令解析不识别 --config，
+/// 必须先剥离，避免 clap 报未知参数或服务器模式误判。
+fn strip_config_args(mut args: Vec<String>) -> (Vec<String>, Option<String>) {
+    let mut config_path = None;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--config" {
+            args.remove(i);
+            if i < args.len() {
+                config_path = Some(args.remove(i));
+            }
+        } else if let Some(path) = args[i].strip_prefix("--config=") {
+            config_path = Some(path.to_string());
+            args.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    (args, config_path)
+}
+
 /// 应用主入口（在 tokio runtime 上执行）
 async fn app_main() -> anyhow::Result<()> {
+    // 剥离全局 --config 参数（CLI 子命令/clap 不识别该参数，须先行剥离）
+    let (_filtered_args, config_path) = strip_config_args(std::env::args().collect());
+
     // Early CLI detection: suppress console logging in CLI mode to keep stdout clean
     // for machine-readable JSON output (DEFECT-CLI-001 fix)
     #[cfg(feature = "cli")]
     let cli_mode = {
-        let known_cmds = ["embed", "embed_batch", "compute_similarity", "rerank"];
-        std::env::args()
-            .nth(1)
+        let known_cmds = [
+            "embed",
+            "embed_batch",
+            "compute_similarity",
+            "rerank",
+            "search",
+        ];
+        _filtered_args
+            .get(1)
             .map(|a| known_cmds.contains(&a.as_str()))
             .unwrap_or(false)
     };
@@ -508,53 +540,79 @@ async fn app_main() -> anyhow::Result<()> {
     #[cfg(not(feature = "mcp"))]
     let mcp_mode = false;
 
+    // i18n 先于配置初始化：配置校验错误消息需要翻译
+    vecboost::i18n::init();
+
+    // 配置先行加载（DEFECT-CONFIG-001）：logger 的级别/文件参数来自 [logging] 配置段，
+    // 因此配置必须在 logger 之前就绪；此时尚无日志后端，错误经 stderr 输出。
+    let config = {
+        let result = match config_path.as_deref() {
+            Some(p) => AppConfig::load_via_confers_with_path(p),
+            None => AppConfig::load_via_confers(),
+        };
+        match result {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!(
+                    "Error: {}",
+                    vecboost::i18n::tr_with_args(
+                        "startup-config",
+                        vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                    )
+                );
+                std::process::exit(1);
+            }
+        }
+    };
+
+    // DEFECT-CONFIG-002: [logging] 配置段接入 logger；
+    // VECBOOST_LOG_LEVEL 环境变量优先级高于配置文件。
+    // 白名单含 inklog 合法别名（warning 等）
+    let log_level = std::env::var("VECBOOST_LOG_LEVEL")
+        .ok()
+        .filter(|l| {
+            ["trace", "debug", "info", "warn", "warning", "error"]
+                .contains(&l.to_lowercase().as_str())
+        })
+        .unwrap_or_else(|| config.logging.level.clone());
+
     // DEFECT-CLI-003 绕过：inklog ConsoleSink 不消费 enabled 标志（上游缺陷，
     // console(false) 无法关闭输出）。CLI/MCP 模式下将全部日志级别路由到 stderr，
     // 保证 stdout 只承载机器可读 JSON / JSON-RPC 协议消息。
-    let logger_builder = {
-        let b = inklog::LoggerManager::builder().level("info").console(true);
-        if cli_mode || mcp_mode {
-            b.console_stderr_levels(&["trace", "debug", "info", "warn", "error"])
-        } else {
-            b
-        }
-    };
-    let logger_manager = Arc::new(
-        logger_builder
-            .file("logs/vecboost.log")
-            .file_compress(true)
-            .build()
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "{}",
-                    vecboost::i18n::tr_with_args(
-                        "startup-logger",
-                        vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
-                    )
-                )
-            })?,
+    let mut logger_builder = inklog::LoggerManager::builder()
+        .level(&log_level)
+        .console(true);
+    if cli_mode || mcp_mode {
+        logger_builder =
+            logger_builder.console_stderr_levels(&["trace", "debug", "info", "warn", "error"]);
+    }
+    if !config.logging.file_path.is_empty() {
+        logger_builder = logger_builder
+            .file(&config.logging.file_path)
+            .file_max_size(format!("{}MB", config.logging.rotation_size_mb))
+            .file_keep_files(config.logging.max_files)
+            .file_compress(true);
+    }
+    let logger_manager = Arc::new(logger_builder.build().await.map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-logger",
+                vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+            )
+        )
+    })?);
+
+    log::info!(
+        "Starting Rust Embedding Service... (log level: {log_level}, config: {})",
+        config_path.as_deref().unwrap_or("config/config.toml")
     );
-
-    log::info!("Starting Rust Embedding Service...");
-
-    // Initialize i18n — detects system locale and loads FTL translation resources
-    vecboost::i18n::init();
 
     #[cfg(any(feature = "http", feature = "mcp", feature = "cli", feature = "grpc"))]
     {
         let _counts = sdforge::init_all_plugins();
     }
 
-    let config = AppConfig::load_via_confers().map_err(|e| {
-        anyhow::anyhow!(
-            "{}",
-            vecboost::i18n::tr_with_args(
-                "startup-config",
-                vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
-            )
-        )
-    })?;
     log::info!(
         "Configuration loaded: {} auth={} audit={}",
         if config.auth.enabled {
@@ -596,7 +654,13 @@ async fn app_main() -> anyhow::Result<()> {
     }
 
     #[cfg(feature = "cli")]
-    if run_cli_command(service.clone(), rerank_service.clone()).await? {
+    if run_cli_command(
+        service.clone(),
+        rerank_service.clone(),
+        _filtered_args.clone(),
+    )
+    .await?
+    {
         return Ok(());
     }
 
@@ -829,7 +893,7 @@ async fn app_main() -> anyhow::Result<()> {
     // 后续待 trait-kit 为 AsyncKit 提供 reload 能力后再接线至各 Module
     bg_tasks.spawn(async move {
             // FsWatcher requires the file to exist; skip gracefully if not
-            let config_path = "config/config.toml";
+            let config_path = config_path.as_deref().unwrap_or("config/config.toml");
             let mut fs_watcher = match confers::watcher::FsWatcher::new(config_path, 200).await {
                 Ok(w) => {
                     log::info!("Config file watcher started for {}", config_path);
@@ -844,9 +908,11 @@ async fn app_main() -> anyhow::Result<()> {
                     return;
                 }
             };
+            // 热重载校验跟随 --config 路径（否则自定义配置的变更会被默认路径误校验）
+            let reload_path = config_path.to_string();
             while let Some(changed_path) = fs_watcher.recv().await {
                 log::info!("Config file changed: {:?}, reloading...", changed_path);
-                match AppConfig::load_via_confers() {
+                match AppConfig::load_via_confers_with_path(&reload_path) {
                     Ok(_new_config) => {
                         log::info!(
                             "Configuration reloaded and validated successfully (hot-swap pending trait-kit AsyncKit reload)"
@@ -955,6 +1021,36 @@ async fn app_main() -> anyhow::Result<()> {
             axum::http::header::STRICT_TRANSPORT_SECURITY,
             axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
         ));
+
+    // 响应压缩（gzip）——客户端经 Accept-Encoding 协商
+    #[cfg(feature = "http")]
+    let app = app.layer(tower_http::compression::CompressionLayer::new());
+
+    // CORS（配置开关，默认关闭）：[server] cors_enabled / cors_allow_origins
+    #[cfg(feature = "http")]
+    let app = if config.server.cors_enabled {
+        use axum::http::{HeaderName, HeaderValue, Method};
+        let origins = config.server.cors_allow_origins;
+        let mut cors = tower_http::cors::CorsLayer::new()
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers([
+                HeaderName::from_static("content-type"),
+                HeaderName::from_static("authorization"),
+                HeaderName::from_static("accept-language"),
+            ]);
+        if origins.is_empty() || origins.iter().any(|o| o == "*") {
+            cors = cors.allow_origin(tower_http::cors::Any);
+        } else {
+            let list: Vec<HeaderValue> = origins
+                .iter()
+                .filter_map(|o| HeaderValue::from_str(o).ok())
+                .collect();
+            cors = cors.allow_origin(list);
+        }
+        app.layer(cors)
+    } else {
+        app
+    };
 
     // ConnectInfo is automatically available when using axum::serve with a TcpListener
     // No additional layer needed

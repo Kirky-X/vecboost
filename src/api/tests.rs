@@ -227,6 +227,7 @@ async fn test_compute_similarity_returns_score() {
     let req = SimilarityRequest {
         source: "Hello world".to_string(),
         target: "Hello rust".to_string(),
+        metric: None,
     };
     let result = compute_similarity(&service, req).await;
     assert!(result.is_ok());
@@ -241,6 +242,7 @@ async fn test_compute_similarity_identical_texts_returns_one() {
     let req = SimilarityRequest {
         source: "identical text".to_string(),
         target: "identical text".to_string(),
+        metric: None,
     };
     let result = compute_similarity(&service, req).await;
     assert!(result.is_ok());
@@ -255,6 +257,7 @@ async fn test_compute_similarity_empty_source_returns_error() {
     let req = SimilarityRequest {
         source: "".to_string(),
         target: "valid target".to_string(),
+        metric: None,
     };
     let result = compute_similarity(&service, req).await;
     assert!(result.is_err());
@@ -270,6 +273,7 @@ async fn test_compute_similarity_empty_target_returns_error() {
     let req = SimilarityRequest {
         source: "valid source".to_string(),
         target: "".to_string(),
+        metric: None,
     };
     let result = compute_similarity(&service, req).await;
     assert!(result.is_err());
@@ -459,6 +463,7 @@ async fn test_forge_compute_similarity_success() {
     let req = SimilarityRequest {
         source: "hello".to_string(),
         target: "world".to_string(),
+        metric: None,
     };
     let result = forge_compute_similarity(req).await;
     assert!(result.is_ok());
@@ -473,6 +478,7 @@ async fn test_forge_compute_similarity_empty_source_error() {
     let req = SimilarityRequest {
         source: "".to_string(),
         target: "target".to_string(),
+        metric: None,
     };
     let result = forge_compute_similarity(req).await;
     assert!(result.is_err());
@@ -520,6 +526,7 @@ async fn test_cli_compute_similarity_success() {
     let req = SimilarityRequest {
         source: "source text".to_string(),
         target: "target text".to_string(),
+        metric: None,
     };
     let result = cli_compute_similarity(req).await;
     assert!(
@@ -538,6 +545,7 @@ async fn test_cli_compute_similarity_empty_source_returns_error() {
     let req = SimilarityRequest {
         source: "".to_string(),
         target: "target".to_string(),
+        metric: None,
     };
     let result = cli_compute_similarity(req).await;
     assert!(result.is_err());

@@ -309,6 +309,7 @@ async fn sdk_normal_similarity_semantics() {
         .process_similarity(SimilarityRequest {
             source: "machine learning algorithms".into(),
             target: "machine learning algorithms".into(),
+            metric: None,
         })
         .await
         .unwrap();
@@ -322,6 +323,7 @@ async fn sdk_normal_similarity_semantics() {
         .process_similarity(SimilarityRequest {
             source: "machine learning algorithms".into(),
             target: "neural networks and deep learning models".into(),
+            metric: None,
         })
         .await
         .unwrap();
@@ -329,6 +331,7 @@ async fn sdk_normal_similarity_semantics() {
         .process_similarity(SimilarityRequest {
             source: "machine learning algorithms".into(),
             target: "今天的午餐是面条".into(),
+            metric: None,
         })
         .await
         .unwrap();

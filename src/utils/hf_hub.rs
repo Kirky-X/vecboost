@@ -9,7 +9,7 @@
 //! `engine` 与 `model` 两层均依赖此共享工具层，避免校验逻辑遗漏到 fallback/onnx/recovery 路径。
 
 use crate::error::VecboostError;
-use hf_hub::{split_id, HFClientBuilder, HFRepositorySync, RepoTypeModel};
+use hf_hub::{HFClientBuilder, HFRepositorySync, RepoTypeModel, split_id};
 
 /// 验证 HuggingFace repo ID 格式(vuln-0009 修复)
 ///

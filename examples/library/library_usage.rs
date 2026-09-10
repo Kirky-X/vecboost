@@ -111,8 +111,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let extra_resp = lib.embed("additional test").await?;
     println!("  额外 embed 维度: {}", extra_resp.dimension);
 
-    let extra_batch = lib.embed_batch(&["text a".to_string(), "text b".to_string()]).await?;
-    println!("  额外 embed_batch 返回 {} 条", extra_batch.embeddings.len());
+    let extra_batch = lib
+        .embed_batch(&["text a".to_string(), "text b".to_string()])
+        .await?;
+    println!(
+        "  额外 embed_batch 返回 {} 条",
+        extra_batch.embeddings.len()
+    );
 
     println!("\n✅ VecBoostLibrary SDK 示例完成");
     Ok(())

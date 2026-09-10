@@ -41,9 +41,9 @@ pub struct User {
 /// - 仅允许字母、数字、下划线和连字符
 pub fn validate_username_format(username: &str) -> Result<(), VecboostError> {
     if username.len() < 3 || username.len() > 32 {
-        return Err(VecboostError::ValidationError(
-            i18n::tr("auth-username-length"),
-        ));
+        return Err(VecboostError::ValidationError(i18n::tr(
+            "auth-username-length",
+        )));
     }
 
     if !username
@@ -52,18 +52,18 @@ pub fn validate_username_format(username: &str) -> Result<(), VecboostError> {
         .map(|c| c.is_ascii_alphabetic())
         .unwrap_or(false)
     {
-        return Err(VecboostError::ValidationError(
-            i18n::tr("auth-username-start"),
-        ));
+        return Err(VecboostError::ValidationError(i18n::tr(
+            "auth-username-start",
+        )));
     }
 
     if !username
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
-        return Err(VecboostError::ValidationError(
-            i18n::tr("auth-username-charset"),
-        ));
+        return Err(VecboostError::ValidationError(i18n::tr(
+            "auth-username-charset",
+        )));
     }
 
     Ok(())

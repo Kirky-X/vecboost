@@ -316,11 +316,21 @@ mod tests {
         ));
         // 每个 Recommended 检查项都应有对应的建议
         let mut expected_count = 0;
-        if report.persistence_mode == TuningLevel::Recommended { expected_count += 1; }
-        if report.transparent_hugepage == TuningLevel::Recommended { expected_count += 1; }
-        if report.clock_frequency == TuningLevel::Recommended { expected_count += 1; }
-        if report.ecc_status == TuningLevel::Recommended { expected_count += 1; }
-        if report.compute_mode == TuningLevel::Recommended { expected_count += 1; }
+        if report.persistence_mode == TuningLevel::Recommended {
+            expected_count += 1;
+        }
+        if report.transparent_hugepage == TuningLevel::Recommended {
+            expected_count += 1;
+        }
+        if report.clock_frequency == TuningLevel::Recommended {
+            expected_count += 1;
+        }
+        if report.ecc_status == TuningLevel::Recommended {
+            expected_count += 1;
+        }
+        if report.compute_mode == TuningLevel::Recommended {
+            expected_count += 1;
+        }
         assert_eq!(
             report.recommendations.len(),
             expected_count,

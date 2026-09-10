@@ -222,7 +222,7 @@ pub mod encrypted_option {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::{Serialize, Deserialize};
+    use serde::{Deserialize, Serialize};
 
     /// A fixed 32-byte key used exclusively by unit tests.
     const TEST_KEY: [u8; 32] = *b"vecboost-test-encryption-key-32b"; // pragma: allowlist secret
@@ -290,7 +290,12 @@ mod tests {
 
     #[test]
     fn test_validate_encryption_key_valid() {
-        unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "vecboost-test-encryption-key-32b") };
+        unsafe {
+            std::env::set_var(
+                "VECBOOST_ENCRYPTION_KEY",
+                "vecboost-test-encryption-key-32b",
+            )
+        };
         let result = validate_encryption_key();
         assert!(result.is_ok());
         unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
@@ -311,7 +316,12 @@ mod tests {
 
     #[test]
     fn test_read_master_key_valid() {
-        unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "vecboost-test-encryption-key-32b") };
+        unsafe {
+            std::env::set_var(
+                "VECBOOST_ENCRYPTION_KEY",
+                "vecboost-test-encryption-key-32b",
+            )
+        };
         let key = read_master_key();
         assert!(key.is_some());
         unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
@@ -353,7 +363,9 @@ mod tests {
             )]
             val: Option<String>,
         }
-        let cfg = Cfg { val: Some("plaintext".to_string()) };
+        let cfg = Cfg {
+            val: Some("plaintext".to_string()),
+        };
         let json = serde_json::to_string(&cfg).unwrap();
         let deserialized: Cfg = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.val, Some("plaintext".to_string()));
@@ -361,7 +373,12 @@ mod tests {
 
     #[test]
     fn test_encrypted_option_serde_some_with_key() {
-        unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "vecboost-test-encryption-key-32b") };
+        unsafe {
+            std::env::set_var(
+                "VECBOOST_ENCRYPTION_KEY",
+                "vecboost-test-encryption-key-32b",
+            )
+        };
         #[derive(Serialize, Deserialize)]
         struct Cfg {
             #[serde(
@@ -371,7 +388,9 @@ mod tests {
             )]
             val: Option<String>,
         }
-        let cfg = Cfg { val: Some("secret".to_string()) };
+        let cfg = Cfg {
+            val: Some("secret".to_string()),
+        };
         let json = serde_json::to_string(&cfg).unwrap();
         // Encrypted value should differ from plaintext
         assert!(!json.contains("\"secret\""));

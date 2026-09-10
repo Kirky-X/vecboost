@@ -63,10 +63,7 @@ pub async fn metrics_endpoint(
                 method: "GET".to_string(),
                 ..Default::default()
             };
-            let allowed = match app_state
-                .kit
-                .require::<crate::registry::RateLimitModule>()
-            {
+            let allowed = match app_state.kit.require::<crate::registry::RateLimitModule>() {
                 Ok(limiter) => limiter.check_rate_limit(&context).await,
                 Err(e) => {
                     // Fail-closed: RateLimitEnabled=true but module unavailable → deny request
@@ -232,10 +229,7 @@ mod tests {
             normalize_metrics_path("/api/1/model/switch/extra"),
             "/api/1/model/switch"
         );
-        assert_eq!(
-            normalize_metrics_path("/a/b/c/d/e/f"),
-            "/a/b/c/d"
-        );
+        assert_eq!(normalize_metrics_path("/a/b/c/d/e/f"), "/a/b/c/d");
     }
 
     #[test]

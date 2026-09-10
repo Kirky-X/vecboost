@@ -442,9 +442,7 @@ impl EmbeddingService {
     /// 处理大文件流式向量化 (简单实现：按行平均)
     pub async fn process_file_stream(&self, path: &Path) -> Result<EmbedResponse, VecboostError> {
         let path_str = path.to_str().ok_or_else(|| {
-            VecboostError::InvalidInput(
-                crate::i18n::tr("file-invalid-encoding").to_string(),
-            )
+            VecboostError::InvalidInput(crate::i18n::tr("file-invalid-encoding").to_string())
         })?;
         self.validator.validate_file(path_str)?;
 
@@ -468,9 +466,7 @@ impl EmbeddingService {
         mode: AggregationMode,
     ) -> Result<EmbeddingOutput, VecboostError> {
         let path_str = path.to_str().ok_or_else(|| {
-            VecboostError::InvalidInput(
-                crate::i18n::tr("file-invalid-encoding").to_string(),
-            )
+            VecboostError::InvalidInput(crate::i18n::tr("file-invalid-encoding").to_string())
         })?;
         self.validator.validate_file(path_str)?;
 
@@ -548,7 +544,9 @@ impl EmbeddingService {
                 information_retention_rate: None,
             })
         } else {
-            Err(VecboostError::InvalidInput(crate::i18n::tr("file-empty").to_string()))
+            Err(VecboostError::InvalidInput(
+                crate::i18n::tr("file-empty").to_string(),
+            ))
         }
     }
 
@@ -954,20 +952,18 @@ impl EmbeddingService {
             Vec::with_capacity(unique_texts.len());
 
         for task in tasks {
-            let chunk_results = match tokio::time::timeout(
-                Duration::from_secs(BATCH_CHUNK_TIMEOUT_SECS),
-                task,
-            )
-            .await
-            {
-                Ok(join_result) => join_result??,
-                Err(_) => {
-                    return Err(VecboostError::InferenceError(format!(
-                        "Batch chunk processing timed out after {}s",
-                        BATCH_CHUNK_TIMEOUT_SECS
-                    )));
-                }
-            };
+            let chunk_results =
+                match tokio::time::timeout(Duration::from_secs(BATCH_CHUNK_TIMEOUT_SECS), task)
+                    .await
+                {
+                    Ok(join_result) => join_result??,
+                    Err(_) => {
+                        return Err(VecboostError::InferenceError(format!(
+                            "Batch chunk processing timed out after {}s",
+                            BATCH_CHUNK_TIMEOUT_SECS
+                        )));
+                    }
+                };
             for (idx, embedding, preview) in chunk_results {
                 all_results.push((idx, embedding, preview));
             }
@@ -1171,10 +1167,12 @@ impl EmbeddingService {
             model_config.engine_type.clone(),
             crate::config::model::Precision::Fp32,
         )
-        .map_err(|e| VecboostError::NotFound(crate::i18n::tr_with_args(
-            "model-load-failed",
-            crate::i18n::tr_args(&[("name", &req.model_name), ("detail", &e.to_string())]),
-        )))?;
+        .map_err(|e| {
+            VecboostError::NotFound(crate::i18n::tr_with_args(
+                "model-load-failed",
+                crate::i18n::tr_args(&[("name", &req.model_name), ("detail", &e.to_string())]),
+            ))
+        })?;
 
         self.engine = Arc::new(RwLock::new(new_engine));
         self.model_config = Some(model_config);

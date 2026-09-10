@@ -336,9 +336,8 @@ mod tests {
 
     #[test]
     fn test_search_request_deserialize() {
-        let req: SearchRequest = serde_json::from_str(
-            r#"{"query":"test","texts":["a","b"],"top_k":5}"#
-        ).unwrap();
+        let req: SearchRequest =
+            serde_json::from_str(r#"{"query":"test","texts":["a","b"],"top_k":5}"#).unwrap();
         assert_eq!(req.top_k, Some(5));
     }
 
@@ -438,8 +437,7 @@ mod tests {
 
     #[test]
     fn test_rerank_request_from_str() {
-        let req: Result<RerankRequest, _> =
-            r#"{"query":"q","documents":["d1"],"top_k":3}"#.parse();
+        let req: Result<RerankRequest, _> = r#"{"query":"q","documents":["d1"],"top_k":3}"#.parse();
         assert!(req.is_ok());
         assert_eq!(req.unwrap().top_k, Some(3));
     }

@@ -200,13 +200,23 @@ mod tests {
         fn rerank(&self, _query: &str, document: &str) -> Result<f32, VecboostError> {
             Ok((document.len() as f32) / 100.0)
         }
-        fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> {
-            documents.iter().map(|doc| self.rerank(query, doc)).collect()
+        fn rerank_batch(
+            &self,
+            query: &str,
+            documents: &[String],
+        ) -> Result<Vec<f32>, VecboostError> {
+            documents
+                .iter()
+                .map(|doc| self.rerank(query, doc))
+                .collect()
         }
         fn supports_rerank(&self) -> bool {
             true
         }
-        async fn try_fallback_to_cpu(&mut self, _config: &ModelConfig) -> Result<(), VecboostError> {
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
             Ok(())
         }
     }

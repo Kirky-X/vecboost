@@ -459,10 +459,7 @@ impl Tokenizer {
         Self::from_file_with_max_length(path, 512)
     }
 
-    pub fn from_file_with_max_length(
-        path: &str,
-        max_length: usize,
-    ) -> Result<Self, VecboostError> {
+    pub fn from_file_with_max_length(path: &str, max_length: usize) -> Result<Self, VecboostError> {
         Ok(Self::load_vocab_from_tokenizer_json(path, max_length)
             .unwrap_or_else(|_| Self::new(max_length).unwrap()))
     }
@@ -493,8 +490,7 @@ impl Tokenizer {
         let mut special_tokens = HashMap::new();
 
         // Known special token names
-        let special_token_names =
-            ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"];
+        let special_token_names = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"];
 
         // Parse model.vocab (token → id mapping)
         if let Some(vocab_obj) = json.get("model").and_then(|m| m.get("vocab"))
@@ -517,7 +513,8 @@ impl Tokenizer {
                 if let (Some(content), Some(id)) = (
                     token.get("content").and_then(|c| c.as_str()),
                     token.get("id").and_then(|i| i.as_u64()),
-                ) && special_token_names.contains(&content) {
+                ) && special_token_names.contains(&content)
+                {
                     special_tokens
                         .entry(content.to_string())
                         .or_insert(id as u32);
@@ -1727,7 +1724,10 @@ mod tests {
             let encoding = tokenizer.encode("xyzqwerty", false).unwrap();
             // Per-character UNK fallback: each char becomes a separate token mapped to UNK ID
             let unk_id = *tokenizer.special_tokens.get("[UNK]").unwrap();
-            assert_eq!(encoding.tokens, vec!["x", "y", "z", "q", "w", "e", "r", "t", "y"]);
+            assert_eq!(
+                encoding.tokens,
+                vec!["x", "y", "z", "q", "w", "e", "r", "t", "y"]
+            );
             assert_eq!(encoding.ids, vec![unk_id; 9]);
         }
 

@@ -256,17 +256,13 @@ mod tests {
         let default_result = tr("health-ok");
 
         // With request locale set to "zh", tr() should return Chinese
-        let zh_result = with_request_locale(Some("zh".to_string()), async {
-            tr("health-ok")
-        })
-        .await;
+        let zh_result =
+            with_request_locale(Some("zh".to_string()), async { tr("health-ok") }).await;
         assert_eq!(zh_result, "正常");
 
         // With request locale set to "en", tr() should return English
-        let en_result = with_request_locale(Some("en".to_string()), async {
-            tr("health-ok")
-        })
-        .await;
+        let en_result =
+            with_request_locale(Some("en".to_string()), async { tr("health-ok") }).await;
         assert_eq!(en_result, "OK");
 
         // Outside the scope, request locale is gone — back to default

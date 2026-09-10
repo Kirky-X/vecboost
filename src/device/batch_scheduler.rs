@@ -542,7 +542,9 @@ mod tests {
 
         // Record batches with very high latency to trigger decrease
         for _ in 0..15 {
-            scheduler.record_batch_completion(initial_batch_size, 200.0).await;
+            scheduler
+                .record_batch_completion(initial_batch_size, 200.0)
+                .await;
         }
 
         let new_batch_size = scheduler.current_batch_size().await;
@@ -570,7 +572,9 @@ mod tests {
         // Record batches with moderate latency (between 80ms and 120ms)
         // P99 should be > 80 but < 120 (80 * 1.5)
         for _ in 0..15 {
-            scheduler.record_batch_completion(initial_batch_size, 90.0).await;
+            scheduler
+                .record_batch_completion(initial_batch_size, 90.0)
+                .await;
         }
 
         let new_batch_size = scheduler.current_batch_size().await;

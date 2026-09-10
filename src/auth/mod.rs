@@ -66,19 +66,19 @@ pub use garrison::dao::GarrisonDaoOxcache;
 
 // Re-export garrison firewall 策略类型（inventory 自注册，启用即生效）
 #[cfg(feature = "auth")]
-pub use garrison::{GarrisonFirewallStrategy, FirewallContext, StrategyRegistration};
+pub use garrison::{AnomalousConfig, AnomalousLoginStrategy};
 #[cfg(feature = "auth")]
 pub use garrison::{BruteForceConfig, BruteForceStrategy};
 #[cfg(feature = "auth")]
-pub use garrison::{RateLimitConfig, RateLimitScope, RateLimitStrategy};
-#[cfg(feature = "auth")]
-pub use garrison::{AnomalousConfig, AnomalousLoginStrategy};
-#[cfg(feature = "auth")]
 pub use garrison::{DDoSConfig, DDoSStrategy};
+#[cfg(feature = "auth")]
+pub use garrison::{FirewallContext, GarrisonFirewallStrategy, StrategyRegistration};
+#[cfg(feature = "auth")]
+pub use garrison::{RateLimitConfig, RateLimitScope, RateLimitStrategy};
 
 // Re-export garrison backend-kit 生命周期类型
 #[cfg(feature = "auth")]
-pub use garrison::backend::{BackendModule, BackendKitError};
+pub use garrison::backend::{BackendKitError, BackendModule};
 
 // Re-export garrison protocol 扩展类型
 #[cfg(feature = "auth")]

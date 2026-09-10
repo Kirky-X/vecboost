@@ -71,12 +71,10 @@ pub async fn handle_pipeline_request(
     match tokio::time::timeout(Duration::from_secs(30), response_rx).await {
         Ok(Ok(Ok(response))) => Ok(axum::Json(response)),
         Ok(Ok(Err(e))) => Err(e),
-        Ok(Err(_)) => Err(VecboostError::InternalError(
-            i18n::tr("pipeline-channel-error"),
-        )),
-        Err(_) => Err(VecboostError::ValidationError(
-            i18n::tr("pipeline-timeout"),
-        )),
+        Ok(Err(_)) => Err(VecboostError::InternalError(i18n::tr(
+            "pipeline-channel-error",
+        ))),
+        Err(_) => Err(VecboostError::ValidationError(i18n::tr("pipeline-timeout"))),
     }
 }
 

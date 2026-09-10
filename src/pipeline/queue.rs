@@ -29,9 +29,9 @@ impl ServiceRequest {
     pub fn into_embed(self) -> Result<EmbedRequest, VecboostError> {
         match self {
             ServiceRequest::Embed(req) => Ok(req),
-            ServiceRequest::Rerank(_) => Err(VecboostError::InternalError(
-                i18n::tr("queue-type-mismatch"),
-            )),
+            ServiceRequest::Rerank(_) => Err(VecboostError::InternalError(i18n::tr(
+                "queue-type-mismatch",
+            ))),
         }
     }
 }
@@ -86,9 +86,9 @@ impl PriorityRequestQueue {
             let current_size = self.current_size.load(Ordering::Acquire);
 
             if current_size >= self.max_queue_size {
-                return Err(VecboostError::RateLimitExceeded(
-                    i18n::tr("queue-full-rejected"),
-                ));
+                return Err(VecboostError::RateLimitExceeded(i18n::tr(
+                    "queue-full-rejected",
+                )));
             }
 
             // 尝试原子递增

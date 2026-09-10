@@ -624,15 +624,25 @@ mod tests {
         ensure_init();
         let cases: Vec<(VecboostError, &str, &str)> = vec![
             (VecboostError::OutOfMemory("oom".into()), "error-oom", "oom"),
-            (VecboostError::DatabaseError("db".into()), "error-database", "db"),
-            (VecboostError::InternalError("int".into()), "error-internal", "int"),
-            (VecboostError::RateLimitExceeded("rl".into()), "error-rate-limit", "rl"),
+            (
+                VecboostError::DatabaseError("db".into()),
+                "error-database",
+                "db",
+            ),
+            (
+                VecboostError::InternalError("int".into()),
+                "error-internal",
+                "int",
+            ),
+            (
+                VecboostError::RateLimitExceeded("rl".into()),
+                "error-rate-limit",
+                "rl",
+            ),
         ];
         for (err, code, detail) in cases {
-            let expected = crate::i18n::tr_with_args(
-                code,
-                crate::i18n::tr_args(&[("detail", detail)]),
-            );
+            let expected =
+                crate::i18n::tr_with_args(code, crate::i18n::tr_args(&[("detail", detail)]));
             assert_eq!(format!("{}", err), expected, "mismatch for {}", code);
         }
     }
@@ -695,18 +705,45 @@ mod tests {
     fn test_error_display_all_remaining_variants() {
         ensure_init();
         let remaining: Vec<(VecboostError, &str)> = vec![
-            (VecboostError::ModelLoadError("ml".into()), "error-model-load"),
-            (VecboostError::ModelFileCorrupted("mfc".into()), "error-model-corrupted"),
-            (VecboostError::ModelIntegrityError("mi".into()), "error-model-integrity"),
-            (VecboostError::TokenizationError("tok".into()), "error-tokenization"),
-            (VecboostError::InferenceError("inf".into()), "error-inference"),
-            (VecboostError::InvalidInput("ii".into()), "error-invalid-input"),
+            (
+                VecboostError::ModelLoadError("ml".into()),
+                "error-model-load",
+            ),
+            (
+                VecboostError::ModelFileCorrupted("mfc".into()),
+                "error-model-corrupted",
+            ),
+            (
+                VecboostError::ModelIntegrityError("mi".into()),
+                "error-model-integrity",
+            ),
+            (
+                VecboostError::TokenizationError("tok".into()),
+                "error-tokenization",
+            ),
+            (
+                VecboostError::InferenceError("inf".into()),
+                "error-inference",
+            ),
+            (
+                VecboostError::InvalidInput("ii".into()),
+                "error-invalid-input",
+            ),
             (VecboostError::NotFound("nf".into()), "error-not-found"),
-            (VecboostError::ModelNotLoaded("mnl".into()), "error-model-not-loaded"),
-            (VecboostError::AuthenticationError("auth".into()), "error-authentication"),
+            (
+                VecboostError::ModelNotLoaded("mnl".into()),
+                "error-model-not-loaded",
+            ),
+            (
+                VecboostError::AuthenticationError("auth".into()),
+                "error-authentication",
+            ),
             (VecboostError::SecurityError("sec".into()), "error-security"),
             (VecboostError::IoError("io".into()), "error-io"),
-            (VecboostError::ValidationError("val".into()), "error-validation"),
+            (
+                VecboostError::ValidationError("val".into()),
+                "error-validation",
+            ),
         ];
         for (err, code) in remaining {
             let expected = crate::i18n::tr_with_args(

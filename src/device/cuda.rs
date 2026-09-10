@@ -900,7 +900,11 @@ mod tests {
             // Verify by checking that available_memory returns Some
             for i in 0..count {
                 let mem = manager.available_memory(i).await;
-                assert!(mem.is_some(), "available_memory should exist for device {}", i);
+                assert!(
+                    mem.is_some(),
+                    "available_memory should exist for device {}",
+                    i
+                );
             }
         }
     }

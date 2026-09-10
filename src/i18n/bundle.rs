@@ -95,7 +95,10 @@ impl I18nBundle {
     }
 
     /// Return all message keys for a given locale (for testing).
-    #[allow(dead_code, reason = "Test utility method; reserved for locale completeness verification")]
+    #[allow(
+        dead_code,
+        reason = "Test utility method; reserved for locale completeness verification"
+    )]
     pub fn keys_for_locale(&self, locale: &LanguageIdentifier) -> Vec<String> {
         self.messages
             .get(locale)
@@ -174,10 +177,7 @@ mod tests {
         let ftl = "greeting = Hello { $name }, welcome!\n";
         let mut map = HashMap::new();
         parse_ftl_into(ftl, &mut map);
-        assert_eq!(
-            map.get("greeting").unwrap(),
-            "Hello { $name }, welcome!"
-        );
+        assert_eq!(map.get("greeting").unwrap(), "Hello { $name }, welcome!");
     }
 
     #[test]
@@ -214,7 +214,11 @@ mod tests {
         assert!(!zh_keys.is_empty(), "zh should have messages");
 
         // Same keys in both locales
-        assert_eq!(en_keys.len(), zh_keys.len(), "en and zh should have same number of keys");
+        assert_eq!(
+            en_keys.len(),
+            zh_keys.len(),
+            "en and zh should have same number of keys"
+        );
     }
 
     #[test]
@@ -245,10 +249,7 @@ mod tests {
         args.insert("detail".to_string(), "bad port".to_string());
 
         let msg = bundle.get_message("error-config", &en, &args);
-        assert!(
-            msg.contains("bad port"),
-            "Expected 'bad port' in '{msg}'"
-        );
+        assert!(msg.contains("bad port"), "Expected 'bad port' in '{msg}'");
     }
 
     #[test]

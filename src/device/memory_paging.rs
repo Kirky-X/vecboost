@@ -525,7 +525,10 @@ mod tests {
         let err = PagingError::LayerNotOnCpu("layer1".into());
         assert!(err.to_string().contains("not on CPU"));
 
-        let err = PagingError::OutOfGpuMemory { needed: 1024, available: 512 };
+        let err = PagingError::OutOfGpuMemory {
+            needed: 1024,
+            available: 512,
+        };
         let msg = err.to_string();
         assert!(msg.contains("1024") && msg.contains("512"));
 

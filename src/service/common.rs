@@ -64,9 +64,7 @@ where
 
                 if engine_read.is_fallback_triggered() {
                     warn!("Fallback already triggered, cannot retry");
-                    return Err(VecboostError::OutOfMemory(
-                        i18n::tr("oom-no-fallback"),
-                    ));
+                    return Err(VecboostError::OutOfMemory(i18n::tr("oom-no-fallback")));
                 }
 
                 drop(engine_read);
@@ -94,9 +92,9 @@ where
                     }
                 }
 
-                return Err(VecboostError::OutOfMemory(
-                    i18n::tr("oom-no-fallback-available"),
-                ));
+                return Err(VecboostError::OutOfMemory(i18n::tr(
+                    "oom-no-fallback-available",
+                )));
             }
             Err(error) if is_oom_error(&error) => {
                 return Err(VecboostError::OutOfMemory(i18n::tr_with_args(

@@ -9,7 +9,7 @@
 //! `engine` 与 `model` 两层均依赖此共享工具层，避免校验逻辑遗漏到 fallback/onnx/recovery 路径。
 
 use crate::error::VecboostError;
-use hf_hub::{HFClientSync, HFRepositorySync, RepoTypeModel, split_id};
+use hf_hub::{split_id, HFClientBuilder, HFRepositorySync, RepoTypeModel};
 
 /// 验证 HuggingFace repo ID 格式(vuln-0009 修复)
 ///
@@ -59,10 +59,7 @@ pub fn is_valid_hf_repo_id(repo_id: &str) -> bool {
 /// 可能不提供该头部，导致下载失败（DEFECT-HUB-001）。
 fn detect_mirror_risk() -> Option<String> {
     let endpoint = std::env::var("HF_ENDPOINT").ok()?;
-    if endpoint.is_empty()
-        || endpoint.contains("huggingface.co")
-        || endpoint.contains("hf.co")
-    {
+    if endpoint.is_empty() || endpoint.contains("huggingface.co") || endpoint.contains("hf.co") {
         return None;
     }
     Some(endpoint)
@@ -97,7 +94,22 @@ pub(crate) fn build_hf_repo(
         );
     }
 
-    let api = HFClientSync::new().map_err(|e| {
+    // DEFECT-SWITCH-002 修复：为 HF 客户端注入带连接超时的 reqwest 客户端并限制
+    // 重试次数。默认配置无请求超时且重试次数多，网络不可达时单次模型切换会阻塞
+    // 3 分钟以上并级联拖垮并发请求（实测 182s）。连接超时 10s 保证不可达网络
+    // 快速失败；总超时 300s 保证大模型下载不受影响。
+    #[allow(unused_mut)]
+    let mut builder = HFClientBuilder::new().retry_max_attempts(2);
+    #[cfg(feature = "http")]
+    {
+        let http_client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .map_err(|e| VecboostError::ModelLoadError(format!("HF client build failed: {e}")))?;
+        builder = builder.client(http_client);
+    }
+    let api = builder.build_sync().map_err(|e| {
         let msg = e.to_string();
         // 提供更具针对性的错误信息
         if msg.contains("ETag") || msg.contains("missing") {

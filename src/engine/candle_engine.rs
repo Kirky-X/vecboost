@@ -537,9 +537,7 @@ impl CandleEngine {
         let model = match &model_architecture {
             ModelArchitecture::Bert => {
                 let config = bert_config.ok_or_else(|| {
-                    VecboostError::ModelLoadError(
-                        crate::i18n::tr("engine-bert-config-required"),
-                    )
+                    VecboostError::ModelLoadError(crate::i18n::tr("engine-bert-config-required"))
                 })?;
                 let bert_model = BertModel::load(vb, &config)
                     .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
@@ -715,9 +713,19 @@ impl CandleEngine {
             .unsqueeze(0)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
+        // DEFECT-BATCH-001 修复：candle BertModel::forward 签名为
+        // (input_ids, token_type_ids, attention_mask: Option)——旧实现把
+        // attention_mask 误传到 token_type_ids 槽位、mask 传 None，
+        // 导致 segment embedding 错误（单条）且批内 padding 完全无隔离（批量）。
+        let type_ids_slice: Vec<u32> = encoding.type_ids.iter().take(max_len).cloned().collect();
+        let token_type_ids = Tensor::new(type_ids_slice, &self.device)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+            .unsqueeze(0)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+
         let embeddings = match &self.model {
             ModelWrapper::Bert(bert_model) => bert_model
-                .forward(&token_ids, &attention_mask_tensor, None)
+                .forward(&token_ids, &token_type_ids, Some(&attention_mask_tensor))
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
             ModelWrapper::XlmRoberta(xlm_model) => {
                 let type_ids_slice: Vec<u32> =
@@ -872,36 +880,35 @@ impl CandleEngine {
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
         // 执行批量前向传播
+        // DEFECT-BATCH-001 修复：构建批量 token_type_ids 并将 attention_mask
+        // 以 Some(...) 正确传入（旧实现把 mask 传到 type_ids 槽位、mask 传 None，
+        // 导致批内 padding 无隔离，短序列向量被长序列污染，cos 仅 ~0.59）。
+        let mut batch_type_ids = vec![0i64; batch_size * max_seq_len];
+        for (batch_idx, encoding) in encodings.iter().enumerate() {
+            let type_ids = encoding.get_type_ids();
+            for (seq_idx, &tid) in type_ids.iter().enumerate().take(max_seq_len) {
+                batch_type_ids[batch_idx * max_seq_len + seq_idx] = tid as i64;
+            }
+        }
+        let token_type_ids = Tensor::new(batch_type_ids, &self.device)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+            .reshape(&[batch_size, max_seq_len])
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+
         let embeddings = match (&self.model, &self.model_architecture) {
             (ModelWrapper::Bert(bert_model), ModelArchitecture::Bert) => bert_model
-                .forward(&token_ids, &attention_mask_tensor, None)
+                .forward(&token_ids, &token_type_ids, Some(&attention_mask_tensor))
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
-            (ModelWrapper::XlmRoberta(xlm_model), ModelArchitecture::XlmRoberta) => {
-                // 构建 type_ids 批量张量
-                let mut batch_type_ids = vec![0i64; batch_size * max_seq_len];
-                for (batch_idx, encoding) in encodings.iter().enumerate() {
-                    let type_ids = encoding.get_type_ids();
-                    for (seq_idx, &tid) in type_ids.iter().enumerate().take(max_seq_len) {
-                        batch_type_ids[batch_idx * max_seq_len + seq_idx] = tid as i64;
-                    }
-                }
-
-                let token_type_ids = Tensor::new(batch_type_ids, &self.device)
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                    .reshape(&[batch_size, max_seq_len])
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-
-                xlm_model
-                    .forward(
-                        &token_ids,
-                        &attention_mask_tensor,
-                        &token_type_ids,
-                        None,
-                        None,
-                        None,
-                    )
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-            }
+            (ModelWrapper::XlmRoberta(xlm_model), ModelArchitecture::XlmRoberta) => xlm_model
+                .forward(
+                    &token_ids,
+                    &attention_mask_tensor,
+                    &token_type_ids,
+                    None,
+                    None,
+                    None,
+                )
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
             _ => {
                 return Err(VecboostError::InferenceError(format!(
                     "Model architecture mismatch for batch processing: {:?}",

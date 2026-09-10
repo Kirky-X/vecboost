@@ -46,6 +46,7 @@ pub struct AppConfig {
     pub audit: AuditConfig,
     pub memory_pool: MemoryPoolConfig,
     pub pipeline: PipelineConfig,
+    pub logging: crate::config::app::LoggingConfig,
     pub semantic_cache: SemanticCacheConfig,
     pub memory_paging: MemoryPagingConfig,
     #[cfg(feature = "db")]

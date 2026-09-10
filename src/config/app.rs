@@ -49,6 +49,14 @@ pub struct ServerConfig {
     /// When empty, falls back to current working directory (with sensitive-dir check).
     #[garde(skip)]
     pub grpc_allowed_roots: Option<Vec<String>>,
+    /// 启用 CORS 中间件（默认关闭）。
+    #[garde(skip)]
+    #[serde(default)]
+    pub cors_enabled: bool,
+    /// CORS 允许的来源列表；含 "*" 或为空时允许任意来源。
+    #[garde(skip)]
+    #[serde(default)]
+    pub cors_allow_origins: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
@@ -107,6 +115,36 @@ pub struct MonitoringConfig {
     pub memory_warning_threshold: Option<f64>,
     pub metrics_enabled: bool,
     pub log_level: Option<String>,
+}
+
+/// 日志配置（[logging] 段，v0.3.0 起正式生效）。
+///
+/// `VECBOOST_LOG_LEVEL` 环境变量优先级高于 `level` 字段。
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct LoggingConfig {
+    /// 日志级别: trace, debug, info, warn, error
+    pub level: String,
+    /// 是否输出到控制台（CLI/MCP 模式下强制关闭，stdout 需承载结果/协议消息）
+    pub console: bool,
+    /// 日志文件路径（空字符串表示不写入文件）
+    pub file_path: String,
+    /// 日志文件轮转大小 (MB)
+    pub rotation_size_mb: u64,
+    /// 保留的日志文件数量
+    pub max_files: u32,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: "info".to_string(),
+            console: true,
+            file_path: "logs/vecboost.log".to_string(),
+            rotation_size_mb: 100,
+            max_files: 10,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
@@ -392,6 +430,8 @@ impl Default for ServerConfig {
             // Callers must opt-out via config/config.toml `[server] grpc_require_auth = false`.
             grpc_require_auth: Some(true),
             grpc_allowed_roots: None,
+            cors_enabled: false,
+            cors_allow_origins: Vec::new(),
         }
     }
 }
@@ -1033,6 +1073,8 @@ mod tests {
             grpc_timeout_seconds: Some(120),
             grpc_require_auth: Some(false),
             grpc_allowed_roots: Some(vec!["/data".to_string()]),
+            cors_enabled: true,
+            cors_allow_origins: vec!["https://example.com".to_string()],
         };
         assert_eq!(config.host, "localhost");
         assert_eq!(config.port, 4000);

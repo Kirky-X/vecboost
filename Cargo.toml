@@ -74,7 +74,7 @@ hf-hub = { version = "1.0", default-features = false, features = ["blocking", "r
 # Web Framework (http feature)
 axum = { version = "0.8", optional = true, default-features = false, features = ["http1", "json", "tokio", "tracing", "macros", "matched-path", "original-uri", "query"] }
 axum-extra = { version = "0.12", optional = true, default-features = false, features = ["typed-header"] }
-tower-http = { version = "0.7", optional = true, default-features = false, features = ["trace", "cors", "add-extension", "validate-request", "set-header", "timeout"] }
+tower-http = { version = "0.7", optional = true, default-features = false, features = ["trace", "cors", "add-extension", "validate-request", "set-header", "timeout", "compression-gzip"] }
 
 # OpenAPI Documentation (http feature)
 # macros 是 utoipa::ToSchema derive 宏必需 feature(schema feature 单独启用时也工作)

@@ -243,12 +243,17 @@ impl VecBoostLibrary {
 
     /// 内部辅助：执行异步 future 并阻塞等待结果
     ///
-    /// 创建临时 `current_thread` runtime 执行 future。
+    /// 创建临时 **multi_thread** runtime 执行 future。
+    /// DEFECT-LIB-002 修复：推理引擎内部使用 `tokio::task::block_in_place`，
+    /// 该 API 仅在 multi_thread runtime 上可用 —— 旧实现创建 current_thread
+    /// runtime 会导致所有 sync API（embed_sync 等）必然 panic。
     ///
     /// **注意**：不要在已有 tokio runtime 的异步上下文中调用 sync API，
     /// 应使用对应的异步方法（`embed` / `embed_batch` / `rerank`）代替。
     fn block_on_future<F: std::future::Future>(future: F) -> F::Output {
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
             .build()
             .expect("Failed to create tokio runtime for sync API");
         rt.block_on(future)
@@ -731,7 +736,10 @@ mod tests {
         let lib = make_test_library().await;
         // Empty string is rejected by the input validator
         let result = lib.embed("").await;
-        assert!(result.is_err(), "empty string should return validation error");
+        assert!(
+            result.is_err(),
+            "empty string should return validation error"
+        );
     }
 
     #[tokio::test]
@@ -807,12 +815,21 @@ mod tests {
     fn test_mock_engine_trait_method_coverage() {
         let engine = MockEngine::new(256);
         assert_eq!(engine.embed("test").unwrap().len(), 256);
-        assert_eq!(engine.embed_batch(&["a".into(), "b".into()]).unwrap().len(), 2);
+        assert_eq!(
+            engine.embed_batch(&["a".into(), "b".into()]).unwrap().len(),
+            2
+        );
         assert_eq!(*engine.precision(), Precision::Fp32);
         assert!(!engine.supports_mixed_precision());
         assert!(engine.supports_rerank());
         assert!(engine.rerank("q", "doc").unwrap() > 0.0);
-        assert_eq!(engine.rerank_batch("q", &["a".into(), "b".into()]).unwrap().len(), 2);
+        assert_eq!(
+            engine
+                .rerank_batch("q", &["a".into(), "b".into()])
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]

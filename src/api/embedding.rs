@@ -19,7 +19,7 @@
 use crate::api::init::state;
 #[cfg(feature = "http")]
 use crate::domain::openai_embedding::{
-    EmbeddingObject, OpenAIEmbedRequest, OpenAIEmbedResponse, Usage,
+    EmbeddingData, EmbeddingObject, OpenAIEmbedRequest, OpenAIEmbedResponse, Usage,
 };
 use crate::domain::{
     BatchEmbedRequest, BatchEmbedResponse, EmbedRequest, EmbedResponse, SimilarityRequest,
@@ -140,16 +140,14 @@ pub(crate) fn kit_internal_error(e: impl std::fmt::Display) -> ApiError {
 fn validate_text_length(texts: &[String], max: usize) -> Result<(), VecboostError> {
     for (idx, text) in texts.iter().enumerate() {
         if text.len() > max {
-            return Err(VecboostError::ValidationError(
-                crate::i18n::tr_with_args(
-                    "validate-text-length",
-                    crate::i18n::tr_args(&[
-                        ("index", &idx.to_string()),
-                        ("max", &max.to_string()),
-                        ("got", &text.len().to_string()),
-                    ]),
-                ),
-            ));
+            return Err(VecboostError::ValidationError(crate::i18n::tr_with_args(
+                "validate-text-length",
+                crate::i18n::tr_args(&[
+                    ("index", &idx.to_string()),
+                    ("max", &max.to_string()),
+                    ("got", &text.len().to_string()),
+                ]),
+            )));
         }
     }
     Ok(())
@@ -160,15 +158,10 @@ fn validate_text_length(texts: &[String], max: usize) -> Result<(), VecboostErro
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 fn validate_batch_size(texts_len: usize, max: usize) -> Result<(), VecboostError> {
     if texts_len > max {
-        return Err(VecboostError::ValidationError(
-            crate::i18n::tr_with_args(
-                "validate-batch-size",
-                crate::i18n::tr_args(&[
-                    ("size", &texts_len.to_string()),
-                    ("max", &max.to_string()),
-                ]),
-            ),
-        ));
+        return Err(VecboostError::ValidationError(crate::i18n::tr_with_args(
+            "validate-batch-size",
+            crate::i18n::tr_args(&[("size", &texts_len.to_string()), ("max", &max.to_string())]),
+        )));
     }
     Ok(())
 }
@@ -428,7 +421,10 @@ async fn health_handler() -> Result<serde_json::Value, ApiError> {
         Ok(status) if !status.is_healthy() => {
             unhealthy_modules.push(crate::i18n::tr_with_args(
                 "health-check-failed",
-                crate::i18n::tr_args(&[("module", "embedding"), ("detail", &format!("{:?}", status))]),
+                crate::i18n::tr_args(&[
+                    ("module", "embedding"),
+                    ("detail", &format!("{:?}", status)),
+                ]),
             ));
         }
         Err(e) => {
@@ -458,7 +454,10 @@ async fn health_handler() -> Result<serde_json::Value, ApiError> {
         Ok(status) if !status.is_healthy() => {
             unhealthy_modules.push(crate::i18n::tr_with_args(
                 "health-check-failed",
-                crate::i18n::tr_args(&[("module", "rate_limit"), ("detail", &format!("{:?}", status))]),
+                crate::i18n::tr_args(&[
+                    ("module", "rate_limit"),
+                    ("detail", &format!("{:?}", status)),
+                ]),
             ));
         }
         Err(e) => {
@@ -671,14 +670,38 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
         .await
         .map_err(to_api_error)?;
 
+    // DEFECT-OPENAI-001 修复：实现 OpenAI 规范的 encoding_format=base64
+    // （小端 f32 字节流的 base64 编码），旧实现直接忽略该参数。
+    let as_base64 = req.encoding_format.as_deref() == Some("base64");
     let embedding_objects: Vec<EmbeddingObject> = batch_response
         .embeddings
         .into_iter()
         .enumerate()
-        .map(|(idx, result)| EmbeddingObject {
-            object: "embedding".to_string(),
-            embedding: result.embedding,
-            index: idx,
+        .map(|(idx, result)| {
+            let embedding = if as_base64 {
+                #[cfg(feature = "http")]
+                {
+                    use base64::Engine as _;
+                    let bytes: Vec<u8> = result
+                        .embedding
+                        .iter()
+                        .flat_map(|f| f.to_le_bytes())
+                        .collect();
+                    EmbeddingData::Base64(base64::engine::general_purpose::STANDARD.encode(bytes))
+                }
+                #[cfg(not(feature = "http"))]
+                {
+                    let _ = as_base64;
+                    EmbeddingData::Floats(result.embedding)
+                }
+            } else {
+                EmbeddingData::Floats(result.embedding)
+            };
+            EmbeddingObject {
+                object: "embedding".to_string(),
+                embedding,
+                index: idx,
+            }
         })
         .collect();
 
@@ -873,14 +896,8 @@ mod tests {
         match err {
             VecboostError::ValidationError(msg) => {
                 // i18n translated message contains the parameter values
-                assert!(
-                    msg.contains("1"),
-                    "error should mention index 1: {msg}"
-                );
-                assert!(
-                    msg.contains("100"),
-                    "error should mention limit: {msg}"
-                );
+                assert!(msg.contains("1"), "error should mention index 1: {msg}");
+                assert!(msg.contains("100"), "error should mention limit: {msg}");
                 assert!(
                     msg.contains("101"),
                     "error should mention actual length: {msg}"

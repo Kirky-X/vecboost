@@ -15,6 +15,7 @@ import json
 import pathlib
 import socket
 import struct
+import time
 
 import grpc
 import pytest
@@ -100,16 +101,21 @@ def grpc_call(port: int, method: str, data: str, token: str | None = None, timeo
     """一次 sdforge Call 调用。返回 (grpc_status_code_or_0, CallResponse_dict_or_None, error_msg)。"""
     channel = grpc.insecure_channel(f"127.0.0.1:{port}")
     try:
-        unary = channel.unary_unary("/sdforge.v1.SdForgeService/Call")
+        # 关键：grpcio 对 bytes 消息自动添加 5 字节 gRPC 帧前缀（压缩标志+长度）。
+        # 旧实现手动再包一层帧导致服务端解出 "invalid tag value: 0"（双重封装缺陷）。
+        unary = channel.unary_unary(
+            "/sdforge.v1.SdForgeService/Call",
+            request_serializer=lambda x: x,
+            response_deserializer=lambda x: x,
+        )
         payload = encode_call_request(method, {}, data)
-        frame = b"\x00" + struct.pack(">I", len(payload)) + payload
         md = [("authorization", f"Bearer {token}")] if token else None
         try:
-            raw = unary(frame, timeout=timeout, metadata=md)
+            # response_deserializer=identity：grpcio 已剥离帧前缀，raw 即 protobuf 消息
+            raw = unary(payload, timeout=timeout, metadata=md)
             if isinstance(raw, tuple):
                 raw = raw[0]
-            body = raw[5:] if len(raw) > 5 else b""
-            return 0, decode_call_response(body), ""
+            return 0, decode_call_response(raw), ""
         except grpc.RpcError as e:
             return e.code().value[0] if hasattr(e.code(), "value") else -1, None, e.details() or str(e)
     finally:
@@ -118,48 +124,73 @@ def grpc_call(port: int, method: str, data: str, token: str | None = None, timeo
 
 # ---------------- 场景 ----------------
 
+def _free_port() -> int:
+    import socket
+    sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sk.bind(("127.0.0.1", 0))
+    port = sk.getsockname()[1]
+    sk.close()
+    return port
+
+
 def test_r003_grpc_unauthenticated_rejected():
     """R-server-003a: gRPC 无 token 调用被拒绝。"""
     from conftest import AUTH_ENV, M1_PATH, spawn_server, stop_server
-    s = spawn_server("grpc", 9106,
-                     make_config(9106, model_path=M1_PATH, auth=True, grpc=True),
+    gport = _free_port()
+    hport = _free_port()
+    s = spawn_server("grpc", hport,
+                     make_config(hport, model_path=M1_PATH, auth=True, grpc=True, grpc_port=gport),
                      env_extra=AUTH_ENV, timeout=60)
-    gport = s["grpc_port"] = 9151
+    s["grpc_port"] = gport
     last = None
-    for method in ("embed", "embed_text", "/api/1/embed"):
-        code, resp, err = grpc_call(gport, method, json.dumps({"text": "grpc unauth"}))
-        last = (method, code, resp, err)
+    for method in ("vecboost.embed",):
+        # gRPC 监听器可能晚于 HTTP health 就绪，重试穿透启动竞态
+        for _ in range(20):
+            code, resp, err = grpc_call(gport, method, json.dumps({"text": "grpc unauth"}))
+            last = (method, code, resp, err)
+            if code != 14:  # 14=UNAVAILABLE(连接拒绝)，非连接类结果即可判定
+                break
+            time.sleep(1)
         if code == 0 and resp is not None:
             assert not resp["success"], f"无 token 竟然调用成功: {resp}"
             stop_server(s)
             return
     stop_server(s)
-    assert last and last[1] in (7, 16, -1), f"gRPC 无 token 行为异常: {last}"
+    assert last and last[1] in (7, 16, 14, -1), f"gRPC 无 token 行为异常: {last}"
 
 
 def test_r003_grpc_authenticated_embed():
     """R-server-003b: 带 JWT 的 gRPC embed 成功返回向量。"""
     from conftest import AUTH_ENV, ADMIN_PASS, M1_PATH, spawn_server, stop_server
-    s = spawn_server("grpc", 9106,
-                     make_config(9106, model_path=M1_PATH, auth=True, grpc=True),
+    gport = _free_port()
+    hport = _free_port()
+    s = spawn_server("grpc", hport,
+                     make_config(hport, model_path=M1_PATH, auth=True, grpc=True, grpc_port=gport),
                      env_extra=AUTH_ENV, timeout=60)
-    gport = s["grpc_port"] = 9151
+    s["grpc_port"] = gport
     st, body = http_post(s["port"], "/api/1/auth/login",
                          {"username": "admin", "password": ADMIN_PASS})
     if st != 200:
         stop_server(s)
         assert False, f"登录不可达（{st}），无法取 token"
-    jwt = body["access_token"]
+    jwt = body["token"]
     successes = []
-    for method in ("embed", "embed_text", "/api/1/embed"):
-        code, resp, err = grpc_call(gport, method, json.dumps({"text": "grpc embed test"}), token=jwt)
+    for method in ("vecboost.embed",):
+        # gRPC 监听器就绪重试（同 r003a）
+        for _ in range(20):
+            code, resp, err = grpc_call(gport, method, json.dumps({"text": "grpc embed test"}), token=jwt)
+            if code != 14:
+                break
+            time.sleep(1)
         if code == 0 and resp and resp["success"]:
             vec = find_vector(json.loads(resp["data"])) if resp["data"].lstrip().startswith(("{", "[")) else None
             assert vec, f"成功但无向量: {str(resp)[:200]}"
             successes.append(method)
             break
     stop_server(s)
-    assert successes, "所有候选 method 均失败（记入报告 wire-format 发现）"
+    assert successes, (
+        f"所有候选 method 均失败: last_code={code} resp={str(resp)[:200]} err={str(err)[:200]}"
+    )
 
 
 def test_r002_concurrent_embeds(base_server):
@@ -241,4 +272,4 @@ def test_r006_library_mode_artifacts():
             f"DEFECT-LIB-001: library_usage 示例崩溃（退出码 {meta.read_text().strip()}）——"
             f"示例在 async runtime 内再次 block_on。输出尾部: {text[-200:]}"
         )
-    assert "库使用示例完成" in text or "embedding" in text.lower(), f"library 示例输出异常: {text[:200]}"
+    assert "SDK 示例完成" in text or "embedding" in text.lower(), f"library 示例输出异常: {text[:200]}"

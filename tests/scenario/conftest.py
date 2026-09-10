@@ -28,7 +28,7 @@ RUN_DIR = pathlib.Path(__file__).resolve().parent / "run"
 M1_PATH = str(PROJECT_ROOT / "models" / "BAAI-bge-small-en-v1.5")
 M1_REPO = "BAAI/bge-small-en-v1.5"
 M2_REPO = "BAAI/bge-small-zh-v1.5"
-JWT_SECRET = "scenario-test-jwt-secret-0123456789abcdef"
+JWT_SECRET = "scenario-test-jwt-secret-0123456789ABCDEF"
 ADMIN_USER = "admin"
 ADMIN_PASS = "Scenario#2026Pass"
 HTTP_TIMEOUT = 30
@@ -394,7 +394,7 @@ def l2_norm(vec) -> float:
 def login_token(port: int, username: str = ADMIN_USER, password: str = ADMIN_PASS) -> str:
     st, body = http_post(port, "/api/1/auth/login", {"username": username, "password": password})
     assert st == 200, f"login 失败 {st}: {str(body)[:200]}"
-    return body["access_token"]
+    return body["token"]
 
 
 def write_file(name: str, rel: str, content: str) -> str:

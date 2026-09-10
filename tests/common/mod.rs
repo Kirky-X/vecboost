@@ -67,8 +67,8 @@ pub fn get_test_model_config() -> ModelConfig {
         TestMode::Light => ModelConfig {
             name: "bge-small-en-v1.5".to_string(),
             engine_type: EngineType::Candle,
-            model_path: PathBuf::from("models/bge-small-en-v1.5"),
-            tokenizer_path: Some(PathBuf::from("models/bge-small-en-v1.5-tokenizer")),
+            model_path: PathBuf::from("models/BAAI-bge-small-en-v1.5"),
+            tokenizer_path: None,
             device: vecboost::config::model::DeviceType::Cpu,
             max_batch_size: 16,
             pooling_mode: None,

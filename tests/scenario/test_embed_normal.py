@@ -138,7 +138,14 @@ def test_r007_openai_compat_endpoint(base_server):
     embs = [item.get("embedding") for item in data]
     assert all(isinstance(e, list) and len(e) == DIM for e in embs), "embedding 结构异常"
     st1, b1 = _embed(port, "hello world")
-    assert find_vector(b1) == embs[0], "OpenAI 端点与原生端点向量不一致"
+    # 批量与单条推理存在浮点 ULP 级差异（batched matmul 求和顺序不同），
+    # 语义契约用余弦相似度≈1 断言，不做逐位相等比较
+    v_native = find_vector(b1)
+    dot = sum(a * b for a, b in zip(v_native, embs[0]))
+    na = sum(a * a for a in v_native) ** 0.5
+    nb = sum(b * b for b in embs[0]) ** 0.5
+    cos = dot / (na * nb)
+    assert cos > 0.999999, f"OpenAI 端点与原生端点向量语义不一致: cos={cos}"
 
 
 def test_r008_repeat_request_cache_effect(base_server):

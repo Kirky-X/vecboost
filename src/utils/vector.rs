@@ -225,7 +225,10 @@ pub fn truncate_vector(vector: &[f32], target_dimension: usize) -> Vec<f32> {
 }
 
 /// Validate dimension parameter against maximum allowed dimension.
-pub fn validate_dimension(target: Option<usize>, max_dimension: usize) -> Result<(), VectorParseError> {
+pub fn validate_dimension(
+    target: Option<usize>,
+    max_dimension: usize,
+) -> Result<(), VectorParseError> {
     match target {
         Some(0) => Err(VectorParseError::InvalidDimension(
             "dimensions must be greater than 0".to_string(),
@@ -240,7 +243,7 @@ pub fn validate_dimension(target: Option<usize>, max_dimension: usize) -> Result
 
 /// 计算截断向量的信息保留率（能量比）。
 ///
-/// 信息保留率 = ||v[:d]||² / ||v||²
+/// 信息保留率 = `||v[:d]||² / ||v||²`
 /// 值域 [0.0, 1.0]，越接近 1.0 表示截断后保留的信息越多。
 /// 空向量返回 0.0。
 pub fn information_retention_rate(embedding: &[f32], target_dim: usize) -> f32 {
@@ -537,7 +540,12 @@ mod similarity_tests {
     fn test_validate_dimension_invalid_too_large() {
         let result = validate_dimension(Some(2048), 1024);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("exceeds model maximum"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds model maximum")
+        );
     }
 
     // ========================================================================

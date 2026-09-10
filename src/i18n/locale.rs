@@ -116,10 +116,14 @@ pub fn parse_accept_language(header_value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// 序列化环境变量修改，避免并行测试干扰（cargo test 多线程并行执行）
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     use super::*;
 
     #[test]
     fn test_normalize_locale() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(normalize_locale("zh"), "zh");
         assert_eq!(normalize_locale("zh-CN"), "zh");
         assert_eq!(normalize_locale("zh-TW"), "zh");
@@ -135,6 +139,7 @@ mod tests {
 
     #[test]
     fn test_detect_locale_vecboost_lang() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Save and clear env vars to test in isolation
         let saved = std::env::var("VECBOOST_LANG").ok();
         // SAFETY: test-only, no concurrent env access in same process
@@ -154,6 +159,7 @@ mod tests {
     #[cfg(feature = "http")]
     #[test]
     fn test_parse_accept_language() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(
             parse_accept_language("zh-CN,zh;q=0.9,en;q=0.8"),
             Some("zh".to_string())
@@ -174,6 +180,7 @@ mod tests {
 
     #[test]
     fn test_detect_locale_fallback_to_en() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Clear all locale env vars to test fallback
         let saved_vb = std::env::var("VECBOOST_LANG").ok();
         let saved_lc = std::env::var("LC_ALL").ok();
@@ -187,13 +194,20 @@ mod tests {
         let locale = detect_locale();
         assert!(!locale.is_empty());
         // Restore
-        if let Some(v) = saved_vb { unsafe { std::env::set_var("VECBOOST_LANG", v) } }
-        if let Some(v) = saved_lc { unsafe { std::env::set_var("LC_ALL", v) } }
-        if let Some(v) = saved_lang { unsafe { std::env::set_var("LANG", v) } }
+        if let Some(v) = saved_vb {
+            unsafe { std::env::set_var("VECBOOST_LANG", v) }
+        }
+        if let Some(v) = saved_lc {
+            unsafe { std::env::set_var("LC_ALL", v) }
+        }
+        if let Some(v) = saved_lang {
+            unsafe { std::env::set_var("LANG", v) }
+        }
     }
 
     #[test]
     fn test_detect_locale_lc_all() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved_vb = std::env::var("VECBOOST_LANG").ok();
         let saved_lc = std::env::var("LC_ALL").ok();
         unsafe {
@@ -214,6 +228,7 @@ mod tests {
 
     #[test]
     fn test_detect_locale_lang() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved_vb = std::env::var("VECBOOST_LANG").ok();
         let saved_lc = std::env::var("LC_ALL").ok();
         let saved_lang = std::env::var("LANG").ok();
@@ -224,13 +239,23 @@ mod tests {
         }
         assert_eq!(detect_locale(), "en");
         // Restore
-        match saved_vb { Some(v) => unsafe { std::env::set_var("VECBOOST_LANG", v) }, None => unsafe { std::env::remove_var("VECBOOST_LANG") } }
-        match saved_lc { Some(v) => unsafe { std::env::set_var("LC_ALL", v) }, None => unsafe { std::env::remove_var("LC_ALL") } }
-        match saved_lang { Some(v) => unsafe { std::env::set_var("LANG", v) }, None => unsafe { std::env::remove_var("LANG") } }
+        match saved_vb {
+            Some(v) => unsafe { std::env::set_var("VECBOOST_LANG", v) },
+            None => unsafe { std::env::remove_var("VECBOOST_LANG") },
+        }
+        match saved_lc {
+            Some(v) => unsafe { std::env::set_var("LC_ALL", v) },
+            None => unsafe { std::env::remove_var("LC_ALL") },
+        }
+        match saved_lang {
+            Some(v) => unsafe { std::env::set_var("LANG", v) },
+            None => unsafe { std::env::remove_var("LANG") },
+        }
     }
 
     #[test]
     fn test_detect_locale_empty_vecboost_lang_falls_through() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = std::env::var("VECBOOST_LANG").ok();
         unsafe { std::env::set_var("VECBOOST_LANG", "  ") };
         // Empty after trim, should fall through to next check
@@ -279,9 +304,6 @@ mod tests {
             Some("zh".to_string())
         );
         // Quality without q= prefix
-        assert_eq!(
-            parse_accept_language("en;0.5"),
-            Some("en".to_string())
-        );
+        assert_eq!(parse_accept_language("en;0.5"), Some("en".to_string()));
     }
 }

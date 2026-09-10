@@ -31,7 +31,7 @@ const TICK_INTERVAL: Duration = Duration::from_millis(1);
 ///
 /// 持续从 `PriorityRequestQueue` 按优先级出队请求，收集到批次后调用
 /// `EmbeddingService` 处理。刷新条件：
-/// 1. 最老请求剩余 timeout < [`SLA_SAFETY_MARGIN_MS`] → 立即刷新
+/// 1. 最老请求剩余 timeout < `SLA_SAFETY_MARGIN_MS` → 立即刷新
 /// 2. 批次大小 >= 最优批量 → 刷新
 /// 3. 队列中无更多请求 → 等待下一 tick
 pub struct ContinuousBatchLoop {

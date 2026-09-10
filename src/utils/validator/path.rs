@@ -69,25 +69,23 @@ impl PathValidator {
         if path_str.contains("..") || path_str.contains("~") {
             return Err(VecboostError::security_error(i18n::tr_with_args(
                 "path-traversal-detected",
-                i18n::tr_args(&[("detail", &path_str.to_string())]),
+                i18n::tr_args(&[("detail", path_str.as_ref())]),
             )));
         }
 
         // canonicalize 解析所有 symlink、.、.. 等相对组件,得到绝对真实路径
         // 这是 symlink 攻击防御的核心:所有 symlink 被解析后,allowed_roots 检查
         // 验证的是真实路径,而非用户输入的路径
-        let canonical = path
-            .canonicalize()
-            .map_err(|e| VecboostError::security_error(i18n::tr_with_args(
+        let canonical = path.canonicalize().map_err(|e| {
+            VecboostError::security_error(i18n::tr_with_args(
                 "path-invalid",
                 i18n::tr_args(&[("detail", &e.to_string())]),
-            )))?;
+            ))
+        })?;
 
         // 检查路径是否在允许的根目录内
         if self.allowed_roots.is_empty() {
-            return Err(VecboostError::security_error(
-                i18n::tr("path-no-roots"),
-            ));
+            return Err(VecboostError::security_error(i18n::tr("path-no-roots")));
         }
 
         let is_allowed = self
@@ -96,7 +94,8 @@ impl PathValidator {
             .any(|root| canonical.starts_with(root));
 
         if !is_allowed {
-            let roots_display = self.allowed_roots
+            let roots_display = self
+                .allowed_roots
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect::<Vec<_>>()

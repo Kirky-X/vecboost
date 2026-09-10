@@ -568,9 +568,7 @@ pub(crate) fn apply_security_env_overrides(
     // Handle JWT secret with environment variable
     if let Ok(jwt_secret) = env::var("VECBOOST_JWT_SECRET") {
         if jwt_secret.is_empty() {
-            return Err(ConfigError::Message(
-                crate::i18n::tr("config-jwt-empty"),
-            ));
+            return Err(ConfigError::Message(crate::i18n::tr("config-jwt-empty")));
         }
         if jwt_secret.len() < MIN_JWT_SECRET_LENGTH {
             return Err(ConfigError::Message(crate::i18n::tr_with_args(
@@ -584,9 +582,9 @@ pub(crate) fn apply_security_env_overrides(
     // Handle default admin password with environment variable
     if let Ok(admin_password) = env::var("VECBOOST_ADMIN_PASSWORD") {
         if admin_password.is_empty() {
-            return Err(ConfigError::Message(
-                crate::i18n::tr("config-password-empty"),
-            ));
+            return Err(ConfigError::Message(crate::i18n::tr(
+                "config-password-empty",
+            )));
         }
         if admin_password.len() < MIN_PASSWORD_LENGTH {
             return Err(ConfigError::Message(crate::i18n::tr_with_args(
@@ -847,6 +845,7 @@ mod tests {
     #[test]
     fn test_apply_security_env_overrides_empty_jwt_rejected() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        crate::i18n::init();
         unsafe {
             std::env::set_var("VECBOOST_JWT_SECRET", "");
         }
@@ -857,12 +856,16 @@ mod tests {
         }
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("VECBOOST_JWT_SECRET cannot be empty"));
+        assert!(
+            err_msg.contains("VECBOOST_JWT_SECRET"),
+            "应包含变量名: {err_msg}"
+        );
     }
 
     #[test]
     fn test_apply_security_env_overrides_short_jwt_rejected() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        crate::i18n::init();
         unsafe {
             std::env::set_var("VECBOOST_JWT_SECRET", "tooshort");
         }
@@ -873,7 +876,10 @@ mod tests {
         }
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("at least 32 characters"));
+        assert!(
+            err_msg.contains("VECBOOST_JWT_SECRET") && err_msg.contains("32"),
+            "应包含变量名与最小长度: {err_msg}"
+        );
     }
 
     #[test]
@@ -895,6 +901,7 @@ mod tests {
     #[test]
     fn test_apply_security_env_overrides_empty_password_rejected() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        crate::i18n::init();
         unsafe {
             std::env::set_var("VECBOOST_ADMIN_PASSWORD", "");
         }
@@ -905,12 +912,16 @@ mod tests {
         }
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("VECBOOST_ADMIN_PASSWORD cannot be empty"));
+        assert!(
+            err_msg.contains("VECBOOST_ADMIN_PASSWORD"),
+            "应包含变量名: {err_msg}"
+        );
     }
 
     #[test]
     fn test_apply_security_env_overrides_short_password_rejected() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        crate::i18n::init();
         unsafe {
             std::env::set_var("VECBOOST_ADMIN_PASSWORD", "short");
         }
@@ -921,7 +932,10 @@ mod tests {
         }
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("at least 12 characters"));
+        assert!(
+            err_msg.contains("VECBOOST_ADMIN_PASSWORD") && err_msg.contains("12"),
+            "应包含变量名与最小长度: {err_msg}"
+        );
     }
 
     #[test]
@@ -968,8 +982,10 @@ mod tests {
 
     #[test]
     fn test_rate_limit_config_with_whitelist() {
-        let mut config = RateLimitConfig::default();
-        config.ip_whitelist = vec!["127.0.0.1".to_string(), "10.0.0.0/8".to_string()];
+        let config = RateLimitConfig {
+            ip_whitelist: vec!["127.0.0.1".to_string(), "10.0.0.0/8".to_string()],
+            ..Default::default()
+        };
         assert_eq!(config.ip_whitelist.len(), 2);
         assert!(config.ip_whitelist.contains(&"127.0.0.1".to_string()));
     }

@@ -101,9 +101,7 @@ impl InputValidator {
 
     fn validate_text_content(&self, text: &str) -> Result<(), VecboostError> {
         if text.is_empty() {
-            return Err(VecboostError::InvalidInput(
-                i18n::tr("validate-text-empty"),
-            ));
+            return Err(VecboostError::InvalidInput(i18n::tr("validate-text-empty")));
         }
 
         let char_count = text.chars().count();
@@ -128,9 +126,9 @@ impl InputValidator {
         }
 
         if text.trim().is_empty() {
-            return Err(VecboostError::InvalidInput(
-                i18n::tr("validate-text-whitespace"),
-            ));
+            return Err(VecboostError::InvalidInput(i18n::tr(
+                "validate-text-whitespace",
+            )));
         }
 
         Ok(())
@@ -144,9 +142,9 @@ impl TextValidator for InputValidator {
 
     fn validate_batch(&self, texts: &[String]) -> Result<(), VecboostError> {
         if texts.is_empty() {
-            return Err(VecboostError::InvalidInput(
-                i18n::tr("validate-batch-empty"),
-            ));
+            return Err(VecboostError::InvalidInput(i18n::tr(
+                "validate-batch-empty",
+            )));
         }
 
         if texts.len() > self.config.max_batch_size.get() {
@@ -163,10 +161,7 @@ impl TextValidator for InputValidator {
             self.validate_text_content(text).map_err(|e| {
                 VecboostError::InvalidInput(i18n::tr_with_args(
                     "validate-text-index-failed",
-                    i18n::tr_args(&[
-                        ("index", &idx.to_string()),
-                        ("detail", &e.to_string()),
-                    ]),
+                    i18n::tr_args(&[("index", &idx.to_string()), ("detail", &e.to_string())]),
                 ))
             })?;
         }
@@ -183,9 +178,9 @@ impl TextValidator for InputValidator {
         self.validate_text_content(query)?;
 
         if texts.is_empty() {
-            return Err(VecboostError::InvalidInput(
-                i18n::tr("validate-search-empty"),
-            ));
+            return Err(VecboostError::InvalidInput(i18n::tr(
+                "validate-search-empty",
+            )));
         }
 
         if texts.len() > self.config.max_search_results.get() {
@@ -200,9 +195,9 @@ impl TextValidator for InputValidator {
 
         if let Some(k) = top_k {
             if k == 0 {
-                return Err(VecboostError::InvalidInput(
-                    i18n::tr("rerank-invalid-top-k"),
-                ));
+                return Err(VecboostError::InvalidInput(i18n::tr(
+                    "rerank-invalid-top-k",
+                )));
             }
             if k > self.config.max_search_results.get() {
                 return Err(VecboostError::InvalidInput(i18n::tr_with_args(
@@ -219,10 +214,7 @@ impl TextValidator for InputValidator {
             self.validate_text_content(text).map_err(|e| {
                 VecboostError::InvalidInput(i18n::tr_with_args(
                     "validate-text-index-failed",
-                    i18n::tr_args(&[
-                        ("index", &idx.to_string()),
-                        ("detail", &e.to_string()),
-                    ]),
+                    i18n::tr_args(&[("index", &idx.to_string()), ("detail", &e.to_string())]),
                 ))
             })?;
         }
@@ -253,10 +245,7 @@ impl InputValidator {
             }
             Err(e) => Err(VecboostError::InvalidInput(i18n::tr_with_args(
                 "file-access-failed",
-                i18n::tr_args(&[
-                    ("path", path),
-                    ("detail", &e.to_string()),
-                ]),
+                i18n::tr_args(&[("path", path), ("detail", &e.to_string())]),
             ))),
         }
     }
@@ -272,10 +261,7 @@ impl InputValidator {
             let allowed = ALLOWED_FILE_EXTENSIONS.join(", ");
             return Err(VecboostError::InvalidInput(i18n::tr_with_args(
                 "file-extension-not-allowed",
-                i18n::tr_args(&[
-                    ("ext", &ext_lower),
-                    ("allowed", &allowed),
-                ]),
+                i18n::tr_args(&[("ext", &ext_lower), ("allowed", &allowed)]),
             )));
         }
 
@@ -285,21 +271,22 @@ impl InputValidator {
     fn validate_file_content(&self, path: &str) -> Result<(), VecboostError> {
         use std::fs::File;
 
-        let file = File::open(path)
-            .map_err(|e| VecboostError::InvalidInput(i18n::tr_with_args(
+        let file = File::open(path).map_err(|e| {
+            VecboostError::InvalidInput(i18n::tr_with_args(
                 "file-open-failed",
                 i18n::tr_args(&[("detail", &e.to_string())]),
-            )))?;
+            ))
+        })?;
 
         let mut buffer = [0u8; MAX_MAGIC_BYTES];
         let mut reader = std::io::BufReader::new(file);
 
-        let bytes_read = reader
-            .read(&mut buffer)
-            .map_err(|e| VecboostError::InvalidInput(i18n::tr_with_args(
+        let bytes_read = reader.read(&mut buffer).map_err(|e| {
+            VecboostError::InvalidInput(i18n::tr_with_args(
                 "file-read-failed",
                 i18n::tr_args(&[("detail", &e.to_string())]),
-            )))?;
+            ))
+        })?;
 
         if bytes_read == 0 {
             return Ok(());
@@ -329,9 +316,9 @@ impl InputValidator {
         if !has_text_marker {
             for &byte in file_header.iter().take(256) {
                 if byte < 0x09 || (byte > 0x0A && byte < 0x20 && byte != 0x1E && byte != 0x1F) {
-                    return Err(VecboostError::InvalidInput(
-                        i18n::tr("file-binary-rejected"),
-                    ));
+                    return Err(VecboostError::InvalidInput(i18n::tr(
+                        "file-binary-rejected",
+                    )));
                 }
             }
         }
@@ -895,7 +882,10 @@ mod validator_tests {
         let file = temp.as_file();
         file.set_len(MAX_FILE_SIZE_BYTES + 1).unwrap();
         let result = validator.validate_file_path(temp.path().to_str().unwrap());
-        assert!(result.is_err(), "file exceeding max size should be rejected");
+        assert!(
+            result.is_err(),
+            "file exceeding max size should be rejected"
+        );
     }
 
     #[test]
@@ -906,7 +896,8 @@ mod validator_tests {
         let mut temp = tempfile::NamedTempFile::new().unwrap();
         use std::io::Write;
         // Write binary bytes: 0x00 is < 0x09, so it should be detected as binary
-        temp.write_all(&[0x00, 0x01, 0x02, 0x03, 0x04, 0x05]).unwrap();
+        temp.write_all(&[0x00, 0x01, 0x02, 0x03, 0x04, 0x05])
+            .unwrap();
         temp.flush().unwrap();
         // validate_file_content checks for binary content
         let result = validator.validate_file_content(temp.path().to_str().unwrap());

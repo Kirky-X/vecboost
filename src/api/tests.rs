@@ -334,7 +334,12 @@ fn test_to_api_error_model_load_error() {
             resource_id,
         } => {
             assert_eq!(resource, "model");
-            assert!(resource_id.as_deref().unwrap_or("").contains("model not found"));
+            assert!(
+                resource_id
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("model not found")
+            );
         }
         other => panic!("Expected NotFound, got {:?}", other),
     }

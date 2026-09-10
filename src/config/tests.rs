@@ -695,9 +695,11 @@ fn test_encryption_roundtrip_via_serde() {
     }
 
     // Create config with known sensitive values
-    let mut config = AuthConfig::default();
-    config.jwt_secret = Some("my-super-secret-jwt-token-value".to_string());
-    config.default_admin_password = Some("AdminP@ssw0rd!2026".to_string());
+    let config = AuthConfig {
+        jwt_secret: Some("my-super-secret-jwt-token-value".to_string()),
+        default_admin_password: Some("AdminP@ssw0rd!2026".to_string()),
+        ..Default::default()
+    };
 
     // Serialize to TOML (this encrypts the sensitive fields)
     let serialized = toml::to_string(&config).expect("serialize should succeed");
@@ -744,8 +746,10 @@ fn test_encryption_fallback_to_plaintext_without_key() {
         std::env::remove_var("VECBOOST_ENCRYPTION_KEY");
     }
 
-    let mut config = AuthConfig::default();
-    config.jwt_secret = Some("plaintext-jwt-secret".to_string());
+    let config = AuthConfig {
+        jwt_secret: Some("plaintext-jwt-secret".to_string()),
+        ..Default::default()
+    };
 
     let serialized = toml::to_string(&config).expect("serialize should succeed");
     // Without encryption key, the value should appear as plaintext

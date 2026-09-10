@@ -231,9 +231,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_audit_logs_insert() {
-        let pool = DbPool::new("sqlite::memory:")
-            .await
-            .expect("Failed to create pool");
+        // sqlite::memory: 的每个连接是独立数据库；限制单连接确保
+        // init_schema 与 INSERT 在并行测试负载下也落在同一连接
+        let pool = DbPool::with_config(DbConfig {
+            url: "sqlite::memory:".to_string(),
+            pool_config: dbnexus::PoolConfig {
+                max_connections: 1,
+                min_connections: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("Failed to create pool");
         init_schema(&pool).await.expect("Failed to init schema");
         let session = pool
             .get_session("admin")

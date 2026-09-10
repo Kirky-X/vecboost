@@ -875,7 +875,7 @@ mod tests {
         manager.initialize().await.unwrap();
 
         let devices = manager.devices().await;
-        assert!(devices.len() > 0);
+        assert!(!devices.is_empty());
     }
 
     #[tokio::test]
@@ -905,7 +905,10 @@ mod tests {
 
     #[test]
     fn test_extract_number_from_line_with_prefix() {
-        assert_eq!(extract_number_from_line("VRAM Total: 16384 MiB"), Some(16384));
+        assert_eq!(
+            extract_number_from_line("VRAM Total: 16384 MiB"),
+            Some(16384)
+        );
     }
 
     #[test]
@@ -1074,11 +1077,13 @@ fi
     }
 
     // 序列化 PATH 修改，避免并行测试干扰
-    static PATH_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // tokio Mutex：异步测试需跨 .await 持锁（std MutexGuard 跨 await 会触发
+    // clippy::await_holding_lock 且阻塞其他运行时线程）
+    static PATH_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    #[test]
-    fn test_query_rocm_vram_with_mock() {
-        let _guard = PATH_MUTEX.lock().unwrap();
+    #[tokio::test]
+    async fn test_query_rocm_vram_with_mock() {
+        let _guard = PATH_MUTEX.lock().await;
         let original_path = std::env::var("PATH").unwrap_or_default();
         let temp = create_mock_rocm_smi();
         prepend_path(temp.path());
@@ -1089,9 +1094,9 @@ fi
         restore_path(&original_path);
     }
 
-    #[test]
-    fn test_query_rocm_version_with_mock() {
-        let _guard = PATH_MUTEX.lock().unwrap();
+    #[tokio::test]
+    async fn test_query_rocm_version_with_mock() {
+        let _guard = PATH_MUTEX.lock().await;
         let original_path = std::env::var("PATH").unwrap_or_default();
         let temp = create_mock_rocm_smi();
         prepend_path(temp.path());
@@ -1102,9 +1107,9 @@ fi
         restore_path(&original_path);
     }
 
-    #[test]
-    fn test_query_amd_driver_version_with_mock() {
-        let _guard = PATH_MUTEX.lock().unwrap();
+    #[tokio::test]
+    async fn test_query_amd_driver_version_with_mock() {
+        let _guard = PATH_MUTEX.lock().await;
         let original_path = std::env::var("PATH").unwrap_or_default();
         let temp = create_mock_rocm_smi();
         prepend_path(temp.path());
@@ -1122,9 +1127,9 @@ fi
         restore_path(&original_path);
     }
 
-    #[test]
-    fn test_from_rocm_with_mock() {
-        let _guard = PATH_MUTEX.lock().unwrap();
+    #[tokio::test]
+    async fn test_from_rocm_with_mock() {
+        let _guard = PATH_MUTEX.lock().await;
         let original_path = std::env::var("PATH").unwrap_or_default();
         let temp = create_mock_rocm_smi();
         prepend_path(temp.path());
@@ -1142,7 +1147,7 @@ fi
 
     #[tokio::test]
     async fn test_initialize_with_mock_rocm_smi() {
-        let _guard = PATH_MUTEX.lock().unwrap();
+        let _guard = PATH_MUTEX.lock().await;
         let original_path = std::env::var("PATH").unwrap_or_default();
         let temp = create_mock_rocm_smi();
         prepend_path(temp.path());
@@ -1162,7 +1167,7 @@ fi
 
     #[tokio::test]
     async fn test_create_amd_device_manager_with_mock() {
-        let _guard = PATH_MUTEX.lock().unwrap();
+        let _guard = PATH_MUTEX.lock().await;
         let original_path = std::env::var("PATH").unwrap_or_default();
         let temp = create_mock_rocm_smi();
         prepend_path(temp.path());

@@ -14,6 +14,10 @@ port = 9002
 # 请求超时时间 (秒)
 timeout = 30
 
+# CORS 跨域开关（默认 false）；允许来源列表，含 "*" 或为空表示允许任意来源
+# cors_enabled = false
+# cors_allow_origins = ["*"]
+
 # ============ 模型配置 ============
 [model]
 # HuggingFace 模型仓库 ID
@@ -181,12 +185,13 @@ max_connections = 10
 # 连接超时 (秒)
 connect_timeout_secs = 5
 
-# ============ 日志配置 (inklog, 需要 inklog feature) ============
+# ============ 日志配置 (inklog，v0.3.0 起生效) ============
 [logging]
 # 日志级别: trace, debug, info, warn, error
 level = "info"
 
-# 是否输出到控制台
+# 是否输出到控制台（注：上游 inklog 缺陷导致运行期关闭暂不生效；
+# CLI/MCP 模式下日志自动改道 stderr，不受此字段影响）
 console = true
 
 # 日志文件路径 (空字符串表示不写入文件)
@@ -199,6 +204,8 @@ rotation_size_mb = 100
 max_files = 10
 
 # ============ 流控配置 (limiteron, 需要 limiteron feature) ============
+# ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。
+# 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
 [flow_control]
 # 是否启用流控
 enabled = true
@@ -216,6 +223,8 @@ circuit_breaker_failure_threshold = 0.5
 circuit_breaker_recovery_secs = 30
 
 # ============ 缓存配置 (oxcache, 需要 oxcache feature) ============
+# ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。
+# 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
 [cache]
 # 是否启用缓存
 enabled = true
@@ -233,6 +242,8 @@ ttl_secs = 3600
 eviction_policy = "lru"
 
 # ============ 设备配置 ============
+# ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。
+# 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
 [device]
 # 优先使用的设备类型
 # 可选值:
@@ -247,6 +258,8 @@ preferred = "auto"
 gpu_memory_reservation = 0.1
 
 # ============ 高级配置 ============
+# ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。
+# 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
 [advanced]
 # 是否启用 ONNX Runtime 作为备用引擎
 onnx_fallback_enabled = true

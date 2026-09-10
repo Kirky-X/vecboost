@@ -164,6 +164,8 @@ ls -lh target/release/vecboost
 cp config/config.toml config/config_custom.toml
 ```
 
+通过全局参数 `--config <path>`（或 `--config=<path>`）指定配置文件，服务器与 CLI 模式均生效。CLI 子命令模式下该参数须写在子命令之前，例如 `vecboost --config config_custom.toml embed --text "Hello"`。
+
 ---
 
 ### 🔧 主要配置选项
@@ -175,6 +177,8 @@ cp config/config.toml config/config_custom.toml
 host = "0.0.0.0"    # 绑定地址
 port = 9002         # HTTP 端口
 timeout = 30        # 请求超时（秒）
+cors_enabled = false          # 是否启用 CORS（默认关闭）
+cors_allow_origins = []       # 允许的跨域来源；含 "*" 或留空 = 任意来源
 ```
 
 | 参数 | 默认值 | 说明 |
@@ -182,6 +186,10 @@ timeout = 30        # 请求超时（秒）
 | `host` | `0.0.0.0` | 绑定地址 |
 | `port` | `9002` | HTTP 端口 |
 | `timeout` | `30` | 请求超时（秒） |
+| `cors_enabled` | `false` | 是否启用 CORS 跨域支持 |
+| `cors_allow_origins` | `[]` | 允许的跨域来源列表；包含 `"*"` 或留空表示允许任意来源（仅 `cors_enabled = true` 时生效） |
+
+> **💡 提示**: HTTP 响应的 gzip 压缩始终启用，无需额外配置。
 
 #### gRPC 设置
 
@@ -276,6 +284,27 @@ trusted_proxies = []  # 受信任代理 CIDR 列表
 
 ---
 
+#### 日志设置
+
+```toml
+[logging]
+level = "info"                  # 日志级别
+console = true                  # 是否输出到控制台
+file_path = "logs/vecboost.log" # 日志文件路径（空字符串 = 不写文件）
+rotation_size_mb = 100          # 单个日志文件轮转大小（MB）
+max_files = 10                  # 保留的日志文件数量
+```
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `level` | `info` | 日志级别：`trace` / `debug` / `info` / `warn`（别名 `warning`）/ `error`；可被环境变量 `VECBOOST_LOG_LEVEL` 覆盖 |
+| `console` | `true` | 是否输出到控制台（⚠️ 受上游 inklog 缺陷影响，运行期关闭暂不生效；CLI/MCP 模式下日志自动改道 stderr，stdout 仅承载结果/协议消息） |
+| `file_path` | `logs/vecboost.log` | 日志文件路径，空字符串表示不写入文件 |
+| `rotation_size_mb` | `100` | 单个日志文件轮转大小（MB），轮转后的历史文件自动压缩 |
+| `max_files` | `10` | 保留的日志文件数量 |
+
+---
+
 ### 🔄 环境变量
 
 使用环境变量覆盖配置文件：
@@ -287,8 +316,7 @@ trusted_proxies = []  # 受信任代理 CIDR 列表
 | `VECBOOST_JWT_SECRET` | `auth.jwt_secret` | `your-secret-key`（≥32 字符） |
 | `VECBOOST_ADMIN_PASSWORD` | `auth.default_admin_password` | `your-admin-password`（≥8 字符） |
 | `VECBOOST_ENCRYPTION_KEY` | - | 32 字节 hex 密钥（用于敏感配置加密） |
-| `VECBOOST_CACHE_SIZE` | `embedding.cache_size` | `1024` |
-| `VECBOOST_LOG_LEVEL` | - | `debug`, `info`, `warn`, `error` |
+| `VECBOOST_LOG_LEVEL` | `logging.level`（优先级高于配置文件） | `trace`, `debug`, `info`, `warn`/`warning`, `error` |
 | `VECBOOST_LANG` | - | `zh`, `en`（全局默认语言） |
 
 ---
@@ -639,8 +667,7 @@ docker-compose up -d
 | `VECBOOST_ADMIN_PASSWORD` | 管理员密码（认证时必需，≥8 字符） | ✅ |
 | `VECBOOST_ENCRYPTION_KEY` | 敏感配置加密密钥（32 字节 hex） | 推荐 |
 | `VECBOOST_LANG` | 默认语言（`zh` 或 `en`） | ❌ |
-| `VECBOOST_LOG_LEVEL` | 日志级别 (`debug`, `info`, `warn`, `error`) | ❌ |
-| `VECBOOST_CACHE_SIZE` | 缓存大小覆盖 | ❌ |
+| `VECBOOST_LOG_LEVEL` | 日志级别 (`trace`, `debug`, `info`, `warn`/`warning`, `error`)，覆盖 `[logging].level` | ❌ |
 
 ---
 

@@ -121,7 +121,7 @@ cp config/config.toml config/config_custom.toml
 # 使用默认配置运行
 ./target/release/vecboost
 
-# 使用自定义配置
+# 使用自定义配置（--config，v0.3.0 起；CLI 子命令模式下须写在子命令之前）
 ./target/release/vecboost --config config/config_custom.toml
 ```
 
@@ -371,6 +371,7 @@ jwt_secret = "your-secret-key"
 url = "sqlite:vecboost.db"
 max_connections = 10
 
+# [logging] 已于 v0.3.0 正式解析生效
 [logging]         # inklog (feature: inklog)
 level = "info"
 console = true
@@ -404,9 +405,9 @@ eviction_policy = "lru"
 | | `max_connections` | `10` | 连接池大小 | dbnexus |
 | **logging** | `level` | `info` | 日志级别 | inklog |
 | | `file_path` | `logs/vecboost.log` | 日志文件路径 | inklog |
-| **flow_control** | `token_capacity` | `100` | 令牌桶容量 | limiteron |
+| **flow_control** **（⚠️ 当前版本未解析，编辑不生效）** | `token_capacity` | `100` | 令牌桶容量 | limiteron |
 | | `token_refill_rate` | `50` | 令牌补充速率（每秒） | limiteron |
-| **cache** | `backend` | `memory` | 缓存后端类型 | oxcache |
+| **cache** **（⚠️ 当前版本未解析，编辑不生效）** | `backend` | `memory` | 缓存后端类型 | oxcache |
 | | `ttl_secs` | `3600` | 缓存 TTL（秒） | oxcache |
 
 > **📖 完整配置**: 查看 [`config/config.toml`](config/config.toml) 了解所有可用选项。

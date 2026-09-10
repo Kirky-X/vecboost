@@ -121,7 +121,7 @@ cp config/config.toml config/config_custom.toml
 # Run with default configuration
 ./target/release/vecboost
 
-# Run with custom configuration
+# Run with custom configuration (--config since v0.3.0; must precede the subcommand in CLI mode)
 ./target/release/vecboost --config config/config_custom.toml
 ```
 
@@ -371,6 +371,7 @@ jwt_secret = "your-secret-key"
 url = "sqlite:vecboost.db"
 max_connections = 10
 
+# [logging] 已于 v0.3.0 正式解析生效
 [logging]         # inklog (feature: inklog)
 level = "info"
 console = true
@@ -404,9 +405,9 @@ eviction_policy = "lru"
 | | `max_connections` | `10` | Connection pool size | dbnexus |
 | **logging** | `level` | `info` | Log level | inklog |
 | | `file_path` | `logs/vecboost.log` | Log file path | inklog |
-| **flow_control** | `token_capacity` | `100` | Token bucket capacity | limiteron |
+| **flow_control** **（⚠️ 当前版本未解析，编辑不生效）** | `token_capacity` | `100` | Token bucket capacity | limiteron |
 | | `token_refill_rate` | `50` | Token refill rate (per second) | limiteron |
-| **cache** | `backend` | `memory` | Cache backend type | oxcache |
+| **cache** **（⚠️ 当前版本未解析，编辑不生效）** | `backend` | `memory` | Cache backend type | oxcache |
 | | `ttl_secs` | `3600` | Cache TTL (seconds) | oxcache |
 
 > **📖 Full Configuration**: See [`config/config.toml`](config/config.toml) for all available options.

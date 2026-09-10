@@ -374,7 +374,7 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 
 #### 计算相似度
 
-计算两段文本之间的余弦相似度。服务端自动对文本进行嵌入后计算相似度。
+计算两段文本之间的相似度（默认余弦相似度，可通过 `metric` 切换度量）。服务端自动对文本进行嵌入后计算相似度。
 
 **端点:** `POST /api/1/similarity`
 
@@ -382,6 +382,7 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 |------|------|------|------|
 | `source` | string | ✅ | 源文本 |
 | `target` | string | ✅ | 目标文本 |
+| `metric` | string | ❌ | 相似度度量：`cosine`（默认）/ `euclidean` / `dot_product` / `manhattan`。距离类度量转换为相似度 `1/(1+d)` |
 
 **请求示例:**
 
@@ -404,7 +405,70 @@ curl -X POST http://localhost:9002/api/1/similarity \
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `score` | number | 余弦相似度分数（范围 [-1, 1]） |
+| `score` | number | 相似度分数。`cosine`（默认）范围 [-1, 1]；`dot_product` 不限范围；`euclidean` / `manhattan` 经 `1/(1+d)` 转换后范围 (0, 1] |
+
+---
+
+### 语义检索（Search）
+
+1对N 检索：给定查询文本，在候选文本列表中按相似度降序返回 Top-K。
+
+**端点:** `POST /api/1/search`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `query` | string | ✅ | 查询文本 |
+| `texts` | string[] | ✅ | 候选文本列表（≤100） |
+| `top_k` | int | ❌ | 返回条数（默认 5，上限 100） |
+
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/1/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "什么是机器学习",
+    "texts": ["机器学习是人工智能的分支", "今天的午餐是面条"],
+    "top_k": 2
+  }'
+```
+
+**响应:**
+
+```json
+{
+  "results": [
+    { "text": "机器学习是人工智能的分支", "score": 0.87, "index": 0 },
+    { "text": "今天的午餐是面条", "score": 0.32, "index": 1 }
+  ]
+}
+```
+
+---
+
+### 卸载模型（Model Unload）
+
+从模型管理缓存中卸载指定模型（不影响当前活跃引擎）。
+
+**端点:** `POST /api/1/model/unload`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `model_name` | string | ✅ | 模型名称 |
+
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/1/model/unload \
+  -H "Content-Type: application/json" \
+  -d '{"model_name": "BAAI/bge-small-zh-v1.5"}'
+```
+
+**响应:**
+
+```json
+{ "model_name": "BAAI/bge-small-zh-v1.5", "unloaded": true }
+```
 
 ---
 
@@ -751,6 +815,8 @@ gRPC 服务通过 `sdforge::grpc::build_server_with_config` 启动，配置项�
 | `vecboost.embed` | `grpc_embed` | `EmbedRequest` | `EmbedResponse` | 生成单个嵌入向量 |
 | `vecboost.embed_batch` | `grpc_embed_batch` | `BatchEmbedRequest` | `BatchEmbedResponse` | 批量生成嵌入向量 |
 | `vecboost.compute_similarity` | `grpc_compute_similarity` | `SimilarityRequest` | `SimilarityResponse` | 计算向量相似度 |
+| `vecboost.search` | `grpc_search` | `SearchRequest` | `SearchResponse` | 1对N 语义检索 |
+| `vecboost.model_unload` | `grpc_unload_model` | `UnloadModelRequest` | `UnloadModelResponse` | 卸载模型 |
 | `vecboost.embed_file` | `grpc_embed_file` | `FileEmbedRequest` | `FileEmbedResponse` | 文件嵌入（路径校验） |
 | `vecboost.rerank` | `grpc_rerank` | `RerankRequest` | `RerankResponse` | 按相关性重排序文档 |
 | `vecboost.rerank_batch` | `grpc_rerank_batch` | `BatchRerankRequest` | `BatchRerankResponse` | 批量重排序 |

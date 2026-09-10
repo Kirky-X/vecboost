@@ -57,7 +57,7 @@ def code_env_vars(src: str) -> set[str]:
 
 
 def code_cli_subcommands(src: str) -> set[str]:
-    return set(re.findall(r'name\s*=\s*"(embed|embed_batch|compute_similarity|rerank)"\s*,\s*version', src))
+    return set(re.findall(r'name\s*=\s*"(embed|embed_batch|compute_similarity|rerank|search)"\s*,\s*version', src))
 
 
 # confers env 映射可用性：VECBOOST_<SECTION>_<FIELD>，FIELD 不含下划线时可达
@@ -78,6 +78,7 @@ EXPLICIT_ENV_OK = {
     "VECBOOST_JWT_SECRET", "VECBOOST_ADMIN_PASSWORD", "VECBOOST_ENCRYPTION_KEY",
     "VECBOOST_REQUIRE_ENCRYPTION", "VECBOOST_KEY_STORAGE_TYPE", "VECBOOST_KEY_FILE_PATH",
     "VECBOOST_LANG", "HF_ENDPOINT", "VECBOOST_DATABASE_PASSWORD", "VECBOOST_MODEL_API_KEY",
+    "VECBOOST_LOG_LEVEL",
 }
 
 
@@ -130,7 +131,7 @@ def main() -> int:
 
     # 4. CLI 子命令
     cli_cmds = code_cli_subcommands(src)
-    doc_cli = set(re.findall(r"vecboost\s+(embed_batch|compute_similarity|embed|rerank)\b", docs_text))
+    doc_cli = set(re.findall(r"vecboost\s+(embed_batch|compute_similarity|embed|rerank|search)\b", docs_text))
     for cmd in sorted(doc_cli):
         if cmd not in cli_cmds:
             issues.append(f"[cli] 文档声明子命令 {cmd} 未注册")

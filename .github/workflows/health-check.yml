@@ -16,6 +16,10 @@ on:
       - ".gitignore"
       - "LICENSE*"
 
+# 最小权限:CI 只需读取源码与写缓存,不给予 GITHUB_TOKEN 写权限
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
@@ -53,7 +57,8 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Check clippy
-        run: cargo clippy --features "${{ env.FEATURES }}" --all-targets -- -D warnings
+        # unwrap_used:生产代码 panic 面门禁(测试代码由 clippy.toml 豁免)
+        run: cargo clippy --features "${{ env.FEATURES }}" --all-targets -- -D warnings -W clippy::unwrap_used
 
   build:
     name: Build
@@ -158,7 +163,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Check coverage threshold
-        continue-on-error: true
+        # 硬门禁:tarpaulin 运行失败(无 xml 产出)或覆盖率 < 80% 都将使本 job 失败
         run: |
           xml=$(find coverage/ -name "*.xml" | head -1)
           total=$(grep -oP '(?<=line-rate=")[0-9.]+' "$xml" | head -1)

@@ -1,0 +1,4 @@
+# Clippy 配置
+# allow-unwrap-in-tests 与 -W clippy::unwrap_used(见 CI clippy 步骤)配合:
+# 生产代码禁止 unwrap/expect 造成的 panic 面,测试代码豁免。
+allow-unwrap-in-tests = true

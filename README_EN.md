@@ -2,7 +2,7 @@
 
 <img src="docs/image/vecboost.png" alt="VecBoost Logo" width="200"/>
 
-[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![GitHub release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![Rustc 1.75+](https://img.shields.io/badge/Rustc-1.75+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
+[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![GitHub release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![Rustc 1.85+](https://img.shields.io/badge/Rustc-1.85+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
 
 *A high-performance, production-ready embedding vector service written in Rust. VecBoost provides efficient text vectorization with support for multiple inference engines, GPU acceleration, and enterprise-grade features.*
 
@@ -70,8 +70,8 @@ graph LR
 
 | Requirement | Version | Description |
 |-------------|---------|-------------|
-| **Rust** | 1.75+ | Edition 2024 required |
-| **Cargo** | 1.75+ | Comes with Rust |
+| **Rust** | 1.85+ | Edition 2024 required |
+| **Cargo** | 1.85+ | Comes with Rust |
 | **CUDA Toolkit** | 12.x | Optional, for NVIDIA GPU support |
 | **Metal SDK** | Latest | Optional, for Apple Silicon GPU |
 

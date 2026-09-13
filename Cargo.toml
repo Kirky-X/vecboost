@@ -2,6 +2,7 @@
 name = "vecboost"
 version = "0.2.1"
 edition = "2024"
+rust-version = "1.85"
 authors = ["Kirky-X <kirky-x@outlook.com>"]
 description = "High-performance embedding vector service written in Rust"
 repository = "https://github.com/Kirky-X/vecboost"

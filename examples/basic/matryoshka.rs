@@ -72,7 +72,7 @@ fn main() {
     );
 
     // L2 归一化 — 截断后必须执行，否则余弦相似度计算不正确
-    normalize_l2(&mut truncated);
+    let _ = normalize_l2(&mut truncated);
     let normalized_norm: f32 = truncated.iter().map(|x| x * x).sum::<f32>().sqrt();
     println!("  归一化后 L2 范数: {:.4}", normalized_norm);
 
@@ -84,7 +84,7 @@ fn main() {
             .collect::<Vec<f32>>(),
         target_dim,
     );
-    normalize_l2(&mut other);
+    let _ = normalize_l2(&mut other);
 
     // 两个归一化向量的点积 = 余弦相似度
     let dot: f32 = truncated.iter().zip(other.iter()).map(|(a, b)| a * b).sum();

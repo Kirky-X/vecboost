@@ -2,7 +2,7 @@
 
 <img src="docs/image/vecboost.png" alt="VecBoost Logo" width="200"/>
 
-[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![GitHub release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![Rustc 1.75+](https://img.shields.io/badge/Rustc-1.75+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
+[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![GitHub release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![Rustc 1.85+](https://img.shields.io/badge/Rustc-1.85+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
 
 *高性能、生产级嵌入向量服务，使用 Rust 编写。VecBoost 提供高效的文本向量化服务，支持多种推理引擎、GPU 加速和企业级功能。*
 
@@ -70,8 +70,8 @@ graph LR
 
 | 依赖项 | 版本 | 说明 |
 |--------|------|------|
-| **Rust** | 1.75+ | 需要 2024 版 |
-| **Cargo** | 1.75+ | 随 Rust 附带 |
+| **Rust** | 1.85+ | 需要 2024 版 |
+| **Cargo** | 1.85+ | 随 Rust 附带 |
 | **CUDA Toolkit** | 12.x | 可选，NVIDIA GPU 支持 |
 | **Metal SDK** | 最新版 | 可选，Apple Silicon GPU 支持 |
 

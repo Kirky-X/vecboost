@@ -880,6 +880,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_amd_device_manager() {
+        let _path_guard = PATH_MUTEX.lock().await;
         let manager = create_amd_device_manager()
             .await
             .expect("create_amd_device_manager should succeed");
@@ -889,13 +890,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_amd_device_manager_primary_device_index_out_of_range_falls_back() {
+        // 与 mock rocm-smi 测试共享 PATH 全局态:必须持锁,否则 mock 注入的
+        // PATH 会令 initialize() 凭空枚举出伪设备(实测 Device 2)
+        let _path_guard = PATH_MUTEX.lock().await;
         let manager = AmdDeviceManager::new();
         manager.initialize().await.unwrap();
 
         manager.set_primary(100).await;
         let primary = manager.primary_device().await;
-        assert!(primary.is_some());
-        assert!(primary.as_ref().unwrap().name().contains("Device 0"));
+        // 机器封闭化:initialize() 枚举真实系统状态(WSL2/CI 无 AMD GPU 时
+        // 设备表可能为空)。越界 set_primary 的契约是"不 panic 且返回安全值":
+        // 有设备 → 回退 Device 0;无设备 → primary 为 None。
+        if manager.device_count().await > 0 {
+            assert!(primary.is_some());
+            assert!(primary.as_ref().unwrap().name().contains("Device 0"));
+        } else {
+            assert!(primary.is_none(), "no devices enumerated → primary must be None");
+        }
     }
 
     #[test]

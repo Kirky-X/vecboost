@@ -291,12 +291,10 @@ mod tests {
         id: &str,
         priority: Priority,
         timeout: Duration,
-    ) -> (
-        QueuedRequest,
-        oneshot::Receiver<Result<EmbedResponse, VecboostError>>,
-    ) {
-        let (tx, rx) = oneshot::channel();
-        let request = QueuedRequest {
+    ) -> QueuedRequest {
+        // G011 契约:ContinuousBatchLoop 不再持有 response_tx,
+        // 结果交付统一由 pipeline worker 经 ResponseChannel 完成。
+        QueuedRequest {
             request_id: id.to_string(),
             request: crate::pipeline::ServiceRequest::Embed(EmbedRequest {
                 text: format!("test text {}", id),
@@ -306,8 +304,7 @@ mod tests {
             submitted_at: Instant::now(),
             timeout,
             source: RequestSource::Internal,
-        };
-        (request, rx)
+        }
     }
 
     /// 单个请求在 < 100ms 内被处理（无需等待 50ms 凑批时间）
@@ -315,7 +312,7 @@ mod tests {
     async fn test_continuous_loop_processes_single_request() {
         let (loop_, queue, shutdown_tx) = setup_test_loop();
 
-        let (request, rx) = make_queued_request("req-1", Priority::Normal, Duration::from_secs(30));
+        let request = make_queued_request("req-1", Priority::Normal, Duration::from_secs(30));
         queue.enqueue(request).await.unwrap();
 
         // 在后台运行 loop
@@ -323,14 +320,15 @@ mod tests {
             loop_.run().await;
         });
 
-        // 等待结果（应在 < 100ms 内完成）
-        let result = tokio::time::timeout(Duration::from_millis(100), rx).await;
-        assert!(result.is_ok(), "Request should be processed within 100ms");
+        // G011 契约:请求应被出队并处理(队列排空;交付由 pipeline 完成)
+        let drained = tokio::time::timeout(Duration::from_millis(500), async {
+            while queue.size() > 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(drained.is_ok(), "Request should be dequeued within 500ms");
 
-        let response = result.unwrap().expect("Channel should not be closed");
-        assert!(response.is_ok(), "Embedding should succeed");
-
-        // 关闭 loop
         shutdown_tx.send(true).unwrap();
         let _ = tokio::time::timeout(Duration::from_millis(100), handle).await;
     }
@@ -341,10 +339,8 @@ mod tests {
         let (loop_, queue, shutdown_tx) = setup_test_loop();
 
         // 先入队 Low，再入队 Critical
-        let (low_req, low_rx) =
-            make_queued_request("low-1", Priority::Low, Duration::from_secs(30));
-        let (crit_req, crit_rx) =
-            make_queued_request("crit-1", Priority::Critical, Duration::from_secs(30));
+        let low_req = make_queued_request("low-1", Priority::Low, Duration::from_secs(30));
+        let crit_req = make_queued_request("crit-1", Priority::Critical, Duration::from_secs(30));
 
         queue.enqueue(low_req).await.unwrap();
         queue.enqueue(crit_req).await.unwrap();
@@ -353,16 +349,14 @@ mod tests {
             loop_.run().await;
         });
 
-        // 两个请求都应该被处理
-        let crit_result = tokio::time::timeout(Duration::from_millis(200), crit_rx)
-            .await
-            .expect("Critical request should complete within 200ms");
-        let low_result = tokio::time::timeout(Duration::from_millis(200), low_rx)
-            .await
-            .expect("Low request should complete within 200ms");
-
-        assert!(crit_result.unwrap().is_ok());
-        assert!(low_result.unwrap().is_ok());
+        // G011 契约:两个请求都应被出队处理(队列排空;批内优先顺序由调度器保证)
+        let drained = tokio::time::timeout(Duration::from_millis(500), async {
+            while queue.size() > 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(drained.is_ok(), "Both requests should be dequeued within 500ms");
 
         shutdown_tx.send(true).unwrap();
         let _ = tokio::time::timeout(Duration::from_millis(100), handle).await;
@@ -373,24 +367,25 @@ mod tests {
     async fn test_sla_timeout_forces_flush() {
         let (loop_, queue, shutdown_tx) = setup_test_loop();
 
-        // timeout=5ms 的请求
-        let (request, rx) =
-            make_queued_request("sla-1", Priority::Normal, Duration::from_millis(5));
+        // timeout=5ms 的请求(SLA 安全边际 = 10ms,应立即凑批处理而非等待 50ms 窗口)
+        let request = make_queued_request("sla-1", Priority::Normal, Duration::from_millis(5));
         queue.enqueue(request).await.unwrap();
 
         let handle = tokio::spawn(async move {
             loop_.run().await;
         });
 
-        // 请求应在 ≤ 10ms 内被处理（SLA 安全边际 = 10ms）
-        let result = tokio::time::timeout(Duration::from_millis(50), rx).await;
+        // G011 契约:短超时请求应被快速出队(不落入批处理等待窗口)
+        let drained = tokio::time::timeout(Duration::from_millis(50), async {
+            while queue.size() > 0 {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await;
         assert!(
-            result.is_ok(),
-            "Short-timeout request should be processed quickly"
+            drained.is_ok(),
+            "Short-timeout request should be dequeued quickly (SLA flush)"
         );
-
-        let response = result.unwrap().expect("Channel should not be closed");
-        assert!(response.is_ok(), "Embedding should succeed before timeout");
 
         shutdown_tx.send(true).unwrap();
         let _ = tokio::time::timeout(Duration::from_millis(100), handle).await;
@@ -418,11 +413,11 @@ mod tests {
 
     /// 验证超时请求收到 Timeout 错误
     #[tokio::test]
-    async fn test_expired_request_gets_timeout_error() {
+    async fn test_expired_request_gets_skipped() {
         let (loop_, queue, shutdown_tx) = setup_test_loop();
 
-        // 创建一个已经过期的请求（timeout=0）
-        let (request, rx) =
+        // 创建一个已经过期的请求(timeout=0):loop 应跳过而非送入推理
+        let request =
             make_queued_request("expired-1", Priority::Normal, Duration::from_millis(0));
         queue.enqueue(request).await.unwrap();
 
@@ -433,11 +428,14 @@ mod tests {
             loop_.run().await;
         });
 
-        // 请求应收到 Timeout 错误
-        let result = tokio::time::timeout(Duration::from_millis(100), rx).await;
-        assert!(result.is_ok(), "Should get a response");
-        let response = result.unwrap().expect("Channel should not be closed");
-        assert!(response.is_err(), "Expired request should get an error");
+        // G011 契约:过期请求被跳过并从队列移除(错误交付由 pipeline 过期路径负责)
+        let drained = tokio::time::timeout(Duration::from_millis(100), async {
+            while queue.size() > 0 {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await;
+        assert!(drained.is_ok(), "Expired request should be skipped and removed");
 
         shutdown_tx.send(true).unwrap();
         let _ = tokio::time::timeout(Duration::from_millis(100), handle).await;

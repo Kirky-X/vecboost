@@ -46,7 +46,9 @@ unic-langid = { version = "0.9", default-features = false, features = ["likelysu
 trait-kit = { version = "0.5.0-rc.3", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "confers", "i18n"] }
 
 # Configuration infrastructure — 全量启用：安全规则/渐进重载/审计/快照/远程配置/分布式配置中心
-confers = { version = "0.6.0-rc.3", path = "../base/confers", default-features = false, features = ["toml", "env", "config-bus", "validation", "watch", "encryption", "schema", "interpolation", "dynamic", "feature-toggle", "security-rules", "progressive-reload", "audit", "snapshot", "remote", "typescript-schema", "etcd", "consul", "nats-bus", "redis-bus", "context-aware", "modules"] }
+# feature 瘦身:仅保留实际接线能力(toml/env 加载、校验、watch 热重载、
+# 加密、schema 导出);config-bus/etcd/consul/nats/redis-bus/remote 等零接线项裁剪。
+confers = { version = "0.6.0-rc.3", path = "../base/confers", default-features = false, features = ["toml", "env", "validation", "watch", "encryption", "schema", "typescript-schema", "modules"] }
 garde = { version = "0.22", default-features = false, features = ["derive"] }
 schemars = { version = "1.2", default-features = false }
 
@@ -58,7 +60,12 @@ log = { version = "0.4", default-features = false }
 oxcache = { version = "0.5.0-rc.3", path = "../base/oxcache", default-features = false, features = ["core", "bloom", "compression", "macros", "batch", "lock", "kit"] }
 
 # Rate limiting infrastructure — 全量启用：运维/审计/中间件/i18n/可观测/地理设备匹配/分布式
-limiteron = { version = "0.3.0-rc.3", path = "../base/limiteron", default-features = false, features = ["ban-manager", "quota-control", "circuit-breaker", "gcra", "macros", "metrics", "validation", "parallel-checker", "event-system", "multi-tenant", "kit", "fallback", "custom-limiter", "admin-api", "webhook", "config-watcher", "audit-log", "tower-middleware", "i18n", "inklog", "telemetry", "monitoring", "geo-matching", "device-matching", "distributed", "chaos-testing"] }
+# feature 瘦身:仅保留实际接线能力(Governor/存储/matchers/审计事件/宏)。
+# 裁剪 distributed/chaos-testing/webhook/admin-api/geo-matching/device-matching/
+# config-watcher/tower-middleware/telemetry/monitoring/inklog/i18n 等未接线项;
+# 若 ../base 后续演进需要其中某能力,按需回补。
+# 熔断(circuit-breaker)评估:当前唯一外部依赖是本地 DB(有重试),熔断无标的,不接线。
+limiteron = { version = "0.3.0-rc.3", path = "../base/limiteron", default-features = false, features = ["ban-manager", "gcra", "macros", "metrics", "validation", "kit", "fallback", "audit-log", "multi-tenant"] }
 
 # Database infrastructure (db feature) — 仅保留已接线的 pool-warmup，其余 kit/migration 等按需启用
 # dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
@@ -106,7 +113,6 @@ garrison = { version = "0.8", optional = true, default-features = false, feature
 aes-gcm = { version = "0.11", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
 
 # Redis feature
-redis = { version = "1.0", optional = true, default-features = false, features = ["tokio-comp", "connection-manager"] }
 
 # ONNX feature
 ndarray = { version = "0.17", optional = true, default-features = false, features = ["std"] }
@@ -162,7 +168,6 @@ postgres = ["db", "dbnexus/postgres"]
 
 # 功能特性
 auth = ["dep:garrison", "dep:aes-gcm"]
-redis = ["dep:redis"]
 
 # 引擎特性
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:nvml-wrapper", "dep:cudarc"]
@@ -229,7 +234,7 @@ edition = "2024"
 authors = ["Kirky-X <Kirky-X@outlook.com>"]
 
 # dbnexus rc.3 依赖尚未发布的 oxcache 0.5.0-rc.4（../base 生态发布中态），
-# 用本地路径补丁统一解析（DEFECT-KIT-002）
+# 用本地路径补丁统一解析
 [patch.crates-io]
 oxcache = { path = "../base/oxcache" }
 trait-kit = { path = "../base/trait-kit" }

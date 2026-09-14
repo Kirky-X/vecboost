@@ -3,9 +3,9 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information.
 
-//! gRPC E2E 集成测试 — sdforge 统一 Call 协议（R-server-001 / R-api-001）
+//! gRPC E2E 集成测试 — sdforge 统一 Call 协议
 //!
-//! 覆盖场景（specmark/design.md M3 矩阵）：
+//! 覆盖场景：
 //! - 11 个 grpc_method 正常路径（GP-N01…GP-N11）
 //! - 协议等价性：同一请求 HTTP vs gRPC 结果一致（GP-EQ01/02）
 //! - 异常：未知 method、超 1MiB 载荷、坏 JSON、空文本业务错误（GP-A01…GP-A04）
@@ -220,9 +220,16 @@ fn spawn_server(name: &str, opts: &ServerOpts, env_extra: &[(&str, &str)]) -> Te
 }
 
 async fn connect_grpc(port: u16) -> Client {
+    // 不依赖生成 client 的 connect(该函数由 tonic/transport feature
+    // 统一决定,裁剪传递依赖后不保证存在)—— 显式走 Channel 连接
     for _ in 0..120 {
-        if let Ok(client) = Client::connect(format!("http://127.0.0.1:{port}")).await {
-            return client;
+        if let Ok(channel) =
+            tonic::transport::Channel::from_shared(format!("http://127.0.0.1:{port}"))
+                .expect("valid endpoint")
+                .connect()
+                .await
+        {
+            return Client::new(channel);
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
@@ -474,7 +481,7 @@ async fn grpc_model_switch_roundtrip_and_failure_protection() {
     .expect("embed after switch");
     assert_eq!(v["embedding"].as_array().map(Vec::len), Some(384));
 
-    // SWITCH-001 回归（gRPC 侧）：切换不存在的模型 → 业务错误 success=false 且 4xx，非 5xx
+    // 回归（gRPC 侧）：切换不存在的模型 → 业务错误 success=false 且 4xx，非 5xx
     let v = call_raw(
         &mut client,
         "vecboost.model_switch",
@@ -502,7 +509,7 @@ async fn grpc_model_switch_roundtrip_and_failure_protection() {
 }
 
 // ---------------------------------------------------------------------------
-// 协议等价性（GP-EQ01/02，R-api-001）
+// 协议等价性（GP-EQ01/02）
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -676,7 +683,7 @@ async fn grpc_bad_json_and_empty_text_are_4xx_business_errors() {
 // 生命周期（GP-L01 / GP-L02）
 // ---------------------------------------------------------------------------
 
-// GRPC-001 复验已在上述所有测试的 spawn 健康等待中隐式覆盖：
+// 复验已在上述所有测试的 spawn 健康等待中隐式覆盖：
 // grpc_enabled=true 下 health 可达即证明不挂死。
 
 /// GP-L01：grpc_require_auth=true 且 auth.enabled=false → 安全默认拒绝启动

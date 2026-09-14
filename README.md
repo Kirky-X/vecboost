@@ -189,8 +189,8 @@ docker run -p 9002:9002 -p 50051:50051 \
 | CLI | 未知子命令静默启动 HTTP 服务器 | stderr 用法提示 + 退出码 2 | 脚本若依赖旧行为需调整;`--help` 可用 |
 
 **多副本边界**:推理路径无状态,auth 关闭时可水平扩展(限流/缓存为进程内语义)。
-`auth.enabled=true` 时会话存进程内存,**仅限单副本**;多副本 + 认证需启用 `db`
-feature(会话外置数据库)。
+`auth.enabled=true` 时认证会话存进程内存(oxcache DAO),**仅限单副本**;
+会话外置需 garrison db 后端补齐(pool-backed DAO,独立变更跟踪)。
 
 **热重载语义**:配置文件变更会进行**校验并打日志,重启后生效**(非运行时热切换)。
 Kubernetes 场景用 ConfigMap 滚动更新。

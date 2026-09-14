@@ -1,0 +1,846 @@
+// Copyright (c) 2025-2026 Kirky.X
+//
+// Licensed under MIT License
+// See LICENSE file in the project root for full license information
+
+//! 调度抽象类型(优先级/请求来源/服务请求/队列请求)。
+//!
+//! 从 pipeline 下沉到 domain:device(continuous_batch)与 pipeline 双向依赖
+//! 这些类型,归入 domain 后两者均单向依赖 domain,宏观循环打断。
+//! `PriorityRequestQueue`/`PriorityCalculator` 等调度器仍属 pipeline。
+
+use std::time::{Duration, Instant};
+
+use crate::domain::{EmbedRequest, RerankRequest};
+use crate::error::VecboostError;
+use crate::i18n;
+
+/// 优先级枚举
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Priority {
+    Critical = 100,
+    High = 75,
+    Normal = 50,
+    Low = 25,
+}
+
+impl Priority {
+    pub fn from_score(score: i32) -> Self {
+        if score >= 90 {
+            Priority::Critical
+        } else if score >= 65 {
+            Priority::High
+        } else if score >= 40 {
+            Priority::Normal
+        } else {
+            Priority::Low
+        }
+    }
+
+    pub fn as_i32(&self) -> i32 {
+        *self as i32
+    }
+}
+
+/// 请求来源
+#[derive(Debug, Clone)]
+pub enum RequestSource {
+    Http { ip: String },
+    Grpc { client_id: String },
+    Internal,
+}
+
+impl RequestSource {
+    pub fn http(ip: String) -> Self {
+        RequestSource::Http { ip }
+    }
+
+    pub fn grpc(client_id: String) -> Self {
+        RequestSource::Grpc { client_id }
+    }
+
+    pub fn internal() -> Self {
+        RequestSource::Internal
+    }
+}
+
+/// 服务请求枚举 — 支持嵌入和重排序两种请求类型
+#[derive(Debug, Clone)]
+pub enum ServiceRequest {
+    Embed(EmbedRequest),
+    Rerank(RerankRequest),
+}
+
+impl ServiceRequest {
+    /// 提取嵌入请求，非 Embed 变体时返回错误
+    pub fn into_embed(self) -> Result<EmbedRequest, VecboostError> {
+        match self {
+            ServiceRequest::Embed(req) => Ok(req),
+            ServiceRequest::Rerank(_) => Err(VecboostError::InternalError(i18n::tr(
+                "queue-type-mismatch",
+            ))),
+        }
+    }
+}
+
+/// 队列请求
+#[derive(Debug)]
+pub struct QueuedRequest {
+    /// 请求 ID
+    pub request_id: String,
+    /// 服务请求
+    pub request: ServiceRequest,
+    /// 优先级
+    pub priority: Priority,
+    /// 提交时间
+    pub submitted_at: Instant,
+    /// 超时时间
+    pub timeout: Duration,
+    /// 请求来源
+    pub source: RequestSource,
+}
+
+// ---- PriorityRequestQueue ----
+
+use log::{debug, warn};
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::Notify;
+
+/// 优先级老化阈值(5s)—— 必须显著小于请求超时(30s),否则
+/// 老化跳过在请求可达超时前永不触发,四级优先队列形同虚设。
+const AGING_THRESHOLD_DURATION: Duration = Duration::from_secs(5);
+
+/// 优先级请求队列
+pub struct PriorityRequestQueue {
+    /// 队列: Priority -> 请求队列
+    queues: Arc<tokio::sync::RwLock<BTreeMap<Priority, VecDeque<QueuedRequest>>>>,
+    /// 最大队列大小
+    max_queue_size: usize,
+    /// 当前队列大小
+    current_size: Arc<AtomicUsize>,
+    /// 入队通知——worker 通过 notified() 等待，消除轮询退避
+    notify: Arc<Notify>,
+}
+
+impl PriorityRequestQueue {
+    pub fn new(max_queue_size: usize) -> Self {
+        debug!(
+            "Creating PriorityRequestQueue with max_size={}",
+            max_queue_size
+        );
+
+        Self {
+            queues: Arc::new(tokio::sync::RwLock::new(BTreeMap::new())),
+            max_queue_size,
+            current_size: Arc::new(AtomicUsize::new(0)),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// 入队
+    pub async fn enqueue(&self, request: QueuedRequest) -> Result<(), VecboostError> {
+        // 使用原子操作确保检查和入队的原子性
+        loop {
+            let current_size = self.current_size.load(Ordering::Acquire);
+
+            if current_size >= self.max_queue_size {
+                return Err(VecboostError::RateLimitExceeded(i18n::tr(
+                    "queue-full-rejected",
+                )));
+            }
+
+            // 尝试原子递增
+            match self.current_size.compare_exchange_weak(
+                current_size,
+                current_size + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    // 成功获取槽位，继续入队
+                    break;
+                }
+                Err(_) => {
+                    // 失败，重试
+                    continue;
+                }
+            }
+        }
+
+        let mut queues = self.queues.write().await;
+
+        let priority = request.priority;
+        let queue = queues.entry(priority).or_insert_with(VecDeque::new);
+        queue.push_back(request);
+
+        // 通知等待的 worker
+        self.notify.notify_one();
+
+        debug!(
+            "Request enqueued, priority={:?}, queue_size={}",
+            priority,
+            self.current_size.load(Ordering::Relaxed)
+        );
+
+        Ok(())
+    }
+
+    /// 出队（按优先级,含老化机制防止低优先级饥饿）
+    ///
+    /// 当高优先级队列队首请求等待超过 30s 时,跳过该优先级处理下级队列,
+    /// 防止低优先级请求永久饥饿。`Priority::Low` 不参与老化跳过。
+    pub async fn dequeue(&self) -> Option<QueuedRequest> {
+        let mut queues = self.queues.write().await;
+        let now = Instant::now();
+        const AGING_THRESHOLD: Duration = AGING_THRESHOLD_DURATION;
+
+        // 按优先级从高到低查找
+        for priority in [
+            Priority::Critical,
+            Priority::High,
+            Priority::Normal,
+            Priority::Low,
+        ] {
+            if let Some(queue) = queues.get_mut(&priority) {
+                // 老化检查:高优先级队列队首请求已超时 → 跳到下一优先级
+                if priority != Priority::Low
+                    && let Some(front) = queue.front()
+                    && now.duration_since(front.submitted_at) > AGING_THRESHOLD
+                {
+                    continue;
+                }
+                if let Some(request) = queue.pop_front() {
+                    let new_size = self.current_size.fetch_sub(1, Ordering::Relaxed) - 1;
+
+                    debug!(
+                        "Request dequeued, priority={:?}, queue_size={}",
+                        priority, new_size
+                    );
+
+                    // 清理空的队列
+                    if queue.is_empty() {
+                        queues.remove(&priority);
+                    }
+
+                    return Some(request);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// 批量出队——取首个请求后继续 try_dequeue 至 max_batch_size。
+    ///
+    /// 返回至少 1 个请求（调用前须确保队列非空），最多 max_batch_size 个。
+    /// 按优先级顺序出队。
+    pub async fn dequeue_batch(&self, max_batch_size: usize) -> Vec<QueuedRequest> {
+        let mut result = Vec::with_capacity(max_batch_size);
+        let mut queues = self.queues.write().await;
+        let now = Instant::now();
+        const AGING_THRESHOLD: Duration = AGING_THRESHOLD_DURATION;
+
+        for priority in [
+            Priority::Critical,
+            Priority::High,
+            Priority::Normal,
+            Priority::Low,
+        ] {
+            if result.len() >= max_batch_size {
+                break;
+            }
+            if let Some(queue) = queues.get_mut(&priority) {
+                while result.len() < max_batch_size {
+                    // 老化检查
+                    if priority != Priority::Low
+                        && let Some(front) = queue.front()
+                        && now.duration_since(front.submitted_at) > AGING_THRESHOLD
+                    {
+                        break;
+                    }
+                    if let Some(request) = queue.pop_front() {
+                        self.current_size.fetch_sub(1, Ordering::Relaxed);
+                        result.push(request);
+                    } else {
+                        break;
+                    }
+                }
+                // 清理空队列
+                if queue.is_empty() {
+                    queues.remove(&priority);
+                }
+            }
+        }
+
+        debug!("Batch dequeued: {} requests", result.len());
+        result
+    }
+
+    /// 获取最高优先级
+    pub async fn peek_highest_priority(&self) -> Option<Priority> {
+        let queues = self.queues.read().await;
+
+        for priority in [
+            Priority::Critical,
+            Priority::High,
+            Priority::Normal,
+            Priority::Low,
+        ] {
+            if let Some(queue) = queues.get(&priority)
+                && !queue.is_empty()
+            {
+                return Some(priority);
+            }
+        }
+
+        None
+    }
+
+    /// 获取队列大小
+    pub fn size(&self) -> usize {
+        self.current_size.load(Ordering::Relaxed)
+    }
+
+    /// 获取入队通知引用，供 worker select! 使用
+    pub fn notify(&self) -> &Notify {
+        &self.notify
+    }
+
+    /// 清空队列
+    pub async fn clear(&self) {
+        let mut queues = self.queues.write().await;
+        let cleared_count = queues.values().map(|q| q.len()).sum::<usize>();
+
+        queues.clear();
+        self.current_size.store(0, Ordering::Relaxed);
+
+        warn!("Queue cleared, {} requests discarded", cleared_count);
+    }
+
+    /// 获取按优先级分组的队列大小
+    pub async fn size_by_priority(&self) -> Vec<(Priority, usize)> {
+        let queues = self.queues.read().await;
+
+        queues
+            .iter()
+            .map(|(priority, queue)| (*priority, queue.len()))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_queue_creation() {
+        let queue = PriorityRequestQueue::new(100);
+        assert_eq!(queue.size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_dequeue() {
+        let queue = PriorityRequestQueue::new(100);
+        let request = QueuedRequest {
+            request_id: "test-1".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            }),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+
+        queue.enqueue(request).await.unwrap();
+        assert_eq!(queue.size(), 1);
+
+        let dequeued = queue.dequeue().await;
+        assert!(dequeued.is_some());
+        assert_eq!(queue.size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_priority_ordering() {
+        let queue = PriorityRequestQueue::new(100);
+
+        // 添加不同优先级的请求
+        for (i, priority) in [
+            Priority::Low,
+            Priority::Critical,
+            Priority::Normal,
+            Priority::High,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let request = QueuedRequest {
+                request_id: format!("test-{}", i),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: Some(true),
+                }),
+                priority: *priority,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+            };
+
+            queue.enqueue(request).await.unwrap();
+        }
+
+        // 验证出队顺序
+        assert_eq!(queue.dequeue().await.unwrap().priority, Priority::Critical);
+        assert_eq!(queue.dequeue().await.unwrap().priority, Priority::High);
+        assert_eq!(queue.dequeue().await.unwrap().priority, Priority::Normal);
+        assert_eq!(queue.dequeue().await.unwrap().priority, Priority::Low);
+    }
+
+    #[tokio::test]
+    async fn test_queue_full() {
+        let queue = PriorityRequestQueue::new(2);
+        let request1 = QueuedRequest {
+            request_id: "test-1".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            }),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+        let request2 = QueuedRequest {
+            request_id: "test-2".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            }),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+
+        queue.enqueue(request1).await.unwrap();
+        queue.enqueue(request2).await.unwrap();
+        let request3 = QueuedRequest {
+            request_id: "test-3".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            }),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+
+        let result = queue.enqueue(request3).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_clear() {
+        let queue = PriorityRequestQueue::new(100);
+
+        // 添加一些请求
+        for i in 0..10 {
+            let request = QueuedRequest {
+                request_id: format!("test-{}", i),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: Some(true),
+                }),
+                priority: Priority::Normal,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+            };
+
+            queue.enqueue(request).await.unwrap();
+        }
+
+        assert_eq!(queue.size(), 10);
+
+        queue.clear().await;
+
+        assert_eq!(queue.size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_aging_prevents_low_priority_starvation() {
+        let queue = PriorityRequestQueue::new(100);
+
+        // 入队 Critical 请求(会老化)
+        let critical_req = QueuedRequest {
+            request_id: "critical-1".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            }),
+            priority: Priority::Critical,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(60),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+        queue.enqueue(critical_req).await.unwrap();
+
+        // 入队 Low 请求
+        let low_req = QueuedRequest {
+            request_id: "low-1".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            }),
+            priority: Priority::Low,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(60),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+        queue.enqueue(low_req).await.unwrap();
+
+        // 等待超过老化阈值(5s;阈值须远小于请求超时 30s 才有实效)
+        tokio::time::sleep(Duration::from_secs(6)).await;
+
+        // dequeue 应先返回 Low(Critical 已老化,跳过)
+        let dequeued = queue.dequeue().await.unwrap();
+        assert_eq!(
+            dequeued.priority,
+            Priority::Low,
+            "aged Critical should be skipped, Low should be dequeued first"
+        );
+    }
+
+    // ===== peek_highest_priority tests =====
+
+    #[tokio::test]
+    async fn test_peek_highest_priority_empty_queue_returns_none() {
+        let queue = PriorityRequestQueue::new(100);
+        let result = queue.peek_highest_priority().await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_peek_highest_priority_returns_critical() {
+        let queue = PriorityRequestQueue::new(100);
+        let request = QueuedRequest {
+            request_id: "test-1".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            }),
+            priority: Priority::Critical,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+        queue.enqueue(request).await.unwrap();
+        let result = queue.peek_highest_priority().await;
+        assert_eq!(result, Some(Priority::Critical));
+    }
+
+    #[tokio::test]
+    async fn test_peek_highest_priority_returns_low() {
+        let queue = PriorityRequestQueue::new(100);
+        let request = QueuedRequest {
+            request_id: "test-1".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            }),
+            priority: Priority::Low,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+        queue.enqueue(request).await.unwrap();
+        let result = queue.peek_highest_priority().await;
+        assert_eq!(result, Some(Priority::Low));
+    }
+
+    #[tokio::test]
+    async fn test_peek_highest_priority_after_dequeue() {
+        let queue = PriorityRequestQueue::new(100);
+        for priority in [Priority::High, Priority::Low] {
+            let request = QueuedRequest {
+                request_id: format!("test-{:?}", priority),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: Some(true),
+                }),
+                priority,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+            };
+            queue.enqueue(request).await.unwrap();
+        }
+        assert_eq!(queue.peek_highest_priority().await, Some(Priority::High));
+        queue.dequeue().await.unwrap();
+        assert_eq!(queue.peek_highest_priority().await, Some(Priority::Low));
+        queue.dequeue().await.unwrap();
+        assert!(queue.peek_highest_priority().await.is_none());
+    }
+
+    // ===== size_by_priority tests =====
+
+    #[tokio::test]
+    async fn test_size_by_priority_empty_queue() {
+        let queue = PriorityRequestQueue::new(100);
+        let result = queue.size_by_priority().await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_size_by_priority_single_priority() {
+        let queue = PriorityRequestQueue::new(100);
+        for i in 0..3 {
+            let request = QueuedRequest {
+                request_id: format!("test-{}", i),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: Some(true),
+                }),
+                priority: Priority::Normal,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+            };
+            queue.enqueue(request).await.unwrap();
+        }
+        let result = queue.size_by_priority().await;
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], (Priority::Normal, 3));
+    }
+
+    #[tokio::test]
+    async fn test_size_by_priority_multiple_priorities() {
+        let queue = PriorityRequestQueue::new(100);
+        let priorities_with_counts = [
+            (Priority::Critical, 2),
+            (Priority::High, 1),
+            (Priority::Low, 3),
+        ];
+        for (priority, count) in priorities_with_counts {
+            for i in 0..count {
+                let request = QueuedRequest {
+                    request_id: format!("test-{:?}-{}", priority, i),
+                    request: ServiceRequest::Embed(EmbedRequest {
+                        text: "test".to_string(),
+                        normalize: Some(true),
+                    }),
+                    priority,
+                    submitted_at: Instant::now(),
+                    timeout: Duration::from_secs(30),
+                    source: RequestSource::Http {
+                        ip: "127.0.0.1".to_string(),
+                    },
+                };
+                queue.enqueue(request).await.unwrap();
+            }
+        }
+        let result = queue.size_by_priority().await;
+        let total: usize = result.iter().map(|(_, c)| c).sum();
+        assert_eq!(total, 6);
+    }
+
+    // ===== dequeue from empty queue =====
+
+    #[tokio::test]
+    async fn test_dequeue_empty_queue_returns_none() {
+        let queue = PriorityRequestQueue::new(100);
+        let result = queue.dequeue().await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_dequeue_all_then_empty() {
+        let queue = PriorityRequestQueue::new(100);
+        let request = QueuedRequest {
+            request_id: "test-1".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            }),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+        queue.enqueue(request).await.unwrap();
+        assert!(queue.dequeue().await.is_some());
+        assert!(queue.dequeue().await.is_none());
+        assert_eq!(queue.size(), 0);
+    }
+
+    // ===== clear on empty queue =====
+
+    #[tokio::test]
+    async fn test_clear_empty_queue() {
+        let queue = PriorityRequestQueue::new(100);
+        queue.clear().await;
+        assert_eq!(queue.size(), 0);
+    }
+
+    // ===== queue size tracking after operations =====
+
+    #[tokio::test]
+    async fn test_size_reflects_enqueue_and_dequeue() {
+        let queue = PriorityRequestQueue::new(100);
+        assert_eq!(queue.size(), 0);
+        for i in 0..5 {
+            let request = QueuedRequest {
+                request_id: format!("test-{}", i),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: Some(true),
+                }),
+                priority: Priority::Normal,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+            };
+            queue.enqueue(request).await.unwrap();
+        }
+        assert_eq!(queue.size(), 5);
+        for _ in 0..3 {
+            queue.dequeue().await.unwrap();
+        }
+        assert_eq!(queue.size(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_max_size_zero_always_rejects() {
+        let queue = PriorityRequestQueue::new(0);
+        let request = QueuedRequest {
+            request_id: "test-1".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            }),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+        let result = queue.enqueue(request).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_aging_does_not_skip_low_priority() {
+        let queue = PriorityRequestQueue::new(100);
+        let low_req = QueuedRequest {
+            request_id: "low-1".to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "test".to_string(),
+                normalize: Some(true),
+            }),
+            priority: Priority::Low,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(60),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+        queue.enqueue(low_req).await.unwrap();
+        // Low priority does NOT participate in aging skip
+        let dequeued = queue.dequeue().await.unwrap();
+        assert_eq!(dequeued.priority, Priority::Low);
+    }
+
+    // ===== dequeue_batch tests =====
+
+    #[tokio::test]
+    async fn test_dequeue_batch_returns_all_when_under_limit() {
+        let queue = PriorityRequestQueue::new(100);
+        for i in 0..3 {
+            queue
+                .enqueue(QueuedRequest {
+                    request_id: format!("req-{}", i),
+                    request: ServiceRequest::Embed(EmbedRequest {
+                        text: format!("text-{}", i),
+                        normalize: Some(true),
+                    }),
+                    priority: Priority::Normal,
+                    submitted_at: Instant::now(),
+                    timeout: Duration::from_secs(30),
+                    source: RequestSource::Http {
+                        ip: "127.0.0.1".to_string(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        let batch = queue.dequeue_batch(5).await;
+        assert_eq!(batch.len(), 3, "should return all 3 when under limit");
+        assert_eq!(queue.size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_dequeue_batch_respects_max_limit() {
+        let queue = PriorityRequestQueue::new(100);
+        for i in 0..8 {
+            queue
+                .enqueue(QueuedRequest {
+                    request_id: format!("req-{}", i),
+                    request: ServiceRequest::Embed(EmbedRequest {
+                        text: format!("text-{}", i),
+                        normalize: Some(true),
+                    }),
+                    priority: Priority::Normal,
+                    submitted_at: Instant::now(),
+                    timeout: Duration::from_secs(30),
+                    source: RequestSource::Http {
+                        ip: "127.0.0.1".to_string(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        let batch = queue.dequeue_batch(4).await;
+        assert_eq!(batch.len(), 4, "should cap at max_batch_size");
+        assert_eq!(queue.size(), 4, "remaining 4 should stay in queue");
+    }
+
+    #[tokio::test]
+    async fn test_dequeue_batch_empty_queue_returns_empty() {
+        let queue = PriorityRequestQueue::new(100);
+        let batch = queue.dequeue_batch(5).await;
+        assert!(batch.is_empty());
+    }
+}

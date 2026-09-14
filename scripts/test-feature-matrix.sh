@@ -135,16 +135,15 @@ run_check "openapi-only" \
     cargo check --no-default-features --features openapi
 
 run_check "redis-only" \
-    cargo check --no-default-features --features redis
-
+    cargo check --no-default-features 
 run_check "http+openapi" \
     cargo check --features "http,openapi"
 
 run_check "http+redis" \
-    cargo check --features "http,redis"
+    cargo check --features "http"
 
 run_check "ci-full (http+grpc+cli+auth+db+redis+openapi+mcp)" \
-    cargo check --features "http,grpc,cli,auth,db,redis,openapi,mcp"
+    cargo check --features "http,grpc,cli,auth,db,openapi,mcp"
 
 echo ""
 echo "--- clippy 零告警门禁 (-D warnings) ---"
@@ -153,7 +152,7 @@ run_check "clippy (default)" \
     cargo clippy --all-targets -- -D warnings
 
 run_check "clippy (ci-full)" \
-    cargo clippy --features "http,grpc,cli,auth,db,redis,openapi,mcp" --all-targets -- -D warnings
+    cargo clippy --features "http,grpc,cli,auth,db,openapi,mcp" --all-targets -- -D warnings
 
 echo ""
 echo "--- GPU 特性编译级验证（本机无 GPU/工具链时记 SKIP） ---"

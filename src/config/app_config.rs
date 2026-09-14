@@ -13,6 +13,7 @@
 //! `app::apply_security_env_overrides` 负责(单一真相源);本模块仅负责
 //! confers 加载与默认值填充,不重复实现校验逻辑。
 
+use crate::error::VecboostError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -21,9 +22,9 @@ use confers::Config;
 #[cfg(feature = "db")]
 use super::app::DatabaseConfig;
 use super::app::{
-    AuditConfig, AuthConfig, ConfigError, EmbeddingConfig, MemoryPagingConfig, MemoryPoolConfig,
-    ModelConfig, MonitoringConfig, RateLimitConfig, RerankConfig, SemanticCacheConfig,
-    ServerConfig, apply_priority_defaults, apply_security_env_overrides,
+    AuditConfig, AuthConfig, EmbeddingConfig, MemoryPagingConfig, MemoryPoolConfig, ModelConfig,
+    MonitoringConfig, RateLimitConfig, RerankConfig, SemanticCacheConfig, ServerConfig,
+    apply_priority_defaults, apply_security_env_overrides,
 };
 use crate::pipeline::PipelineConfig;
 
@@ -58,8 +59,8 @@ impl AppConfig {
     ///
     /// 文件不存在时回退到 `Default` 实现 + `VECBOOST_` 前缀环境变量。
     /// 敏感字段校验由 `app::apply_security_env_overrides` 执行,
-    /// 校验失败时返回 `ConfigError::Message`。
-    pub fn load_via_confers() -> Result<Self, ConfigError> {
+    /// 校验失败时返回 `VecboostError::ConfigError`。
+    pub fn load_via_confers() -> Result<Self, VecboostError> {
         Self::load_via_confers_with_path("config/config.toml")
     }
 
@@ -69,12 +70,13 @@ impl AppConfig {
     /// 敏感环境变量(`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD`)
     /// 的最小长度校验由 `app::apply_security_env_overrides` 强制执行,
     /// 失败时通过 `?` 显式传播(规则12:错误必须显性化)。
-    pub fn load_via_confers_with_path<P: Into<PathBuf>>(path: P) -> Result<Self, ConfigError> {
+    pub fn load_via_confers_with_path<P: Into<PathBuf>>(path: P) -> Result<Self, VecboostError> {
         let mut config = confers::ConfigBuilder::<Self>::new()
             .allow_absolute_paths()
             .file_optional(path)
             .env_prefix("VECBOOST_")
-            .build()?;
+            .build()
+            .map_err(|e| VecboostError::ConfigError(format!("confers: {e}")))?;
         apply_security_env_overrides(&mut config)?;
         apply_priority_defaults(&mut config.pipeline.priority);
         config.validate()?;
@@ -85,9 +87,9 @@ impl AppConfig {
     /// `TypeScriptGenerator` (backed by `schemars` JSON Schema).
     ///
     /// Useful for generating configuration documentation or frontend type stubs.
-    pub fn generate_schema() -> Result<String, ConfigError> {
+    pub fn generate_schema() -> Result<String, VecboostError> {
         confers::schema::TypeScriptGenerator::generate::<Self>()
-            .map_err(|e| ConfigError::Message(format!("schema generation failed: {e}")))
+            .map_err(|e| VecboostError::ConfigError(format!("schema generation failed: {e}")))
     }
 
     /// Validate configuration fields using garde-derived validation.
@@ -95,7 +97,7 @@ impl AppConfig {
     /// Delegates to sub-struct `validate()` methods (ServerConfig, ModelConfig,
     /// EmbeddingConfig) which use `#[derive(garde::Validate)]` with field-level
     /// `#[garde(...)]` rules. Aggregates all errors into a single `ConfigError`.
-    pub fn validate(&self) -> Result<(), ConfigError> {
+    pub fn validate(&self) -> Result<(), VecboostError> {
         use garde::Validate;
         let mut errors = Vec::new();
 
@@ -115,7 +117,7 @@ impl AppConfig {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(ConfigError::Message(format!(
+            Err(VecboostError::ConfigError(format!(
                 "Configuration validation failed:\n  {}",
                 errors.join("\n  ")
             )))

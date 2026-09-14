@@ -369,7 +369,7 @@ pub async fn auth_rate_limit_middleware(
     if !allowed {
         log::warn!("Auth endpoint rate limit exceeded for IP: {}", ip);
 
-        // DEFECT-AUDIT-001: 限流事件写入审计日志
+        // 限流事件写入审计日志
         if let Ok(audit_opt) = state.kit.require::<crate::registry::AuditModule>()
             && let Some(logger) = audit_opt.as_ref()
         {

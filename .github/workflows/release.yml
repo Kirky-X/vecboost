@@ -45,16 +45,16 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy Lint
-        run: cargo clippy --features "grpc,cli,auth,onnx,db,redis,openapi,mcp" --all-targets -- -D warnings
+        run: cargo clippy --features "grpc,cli,auth,onnx,db,openapi,mcp" --all-targets -- -D warnings
 
       - name: Cargo Audit
         run: cargo audit
 
       - name: Build Check
-        run: cargo build --features "grpc,cli,auth,onnx,db,redis,openapi,mcp"
+        run: cargo build --features "grpc,cli,auth,onnx,db,openapi,mcp"
 
       - name: Run Tests
-        run: cargo test --features "grpc,cli,auth,onnx,db,redis,openapi,mcp" --lib
+        run: cargo test --features "grpc,cli,auth,onnx,db,openapi,mcp" --lib
 
   build-release:
     name: Build Release Binaries
@@ -68,12 +68,12 @@ jobs:
             artifact_name: vecboost
             asset_name: vecboost-linux-x86_64
             ext: ""
-            features: "grpc,cli,auth,onnx,db,redis,openapi,mcp"
+            features: "grpc,cli,auth,onnx,db,openapi,mcp"
           - os: windows-latest
             artifact_name: vecboost.exe
             asset_name: vecboost-windows-x86_64.exe
             ext: ".exe"
-            features: "grpc,cli,auth,onnx,db,redis,openapi,mcp"
+            features: "grpc,cli,auth,onnx,db,openapi,mcp"
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30

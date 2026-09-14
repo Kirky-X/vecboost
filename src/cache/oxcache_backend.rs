@@ -22,17 +22,17 @@ use oxcache::features::bloom_filter::BloomFilter;
 /// 内部集成:
 /// - **Bloom filter**: 负查询过滤,FPR=0.01,`get()` 时先查 bloom,
 ///   miss 则跳过底层缓存查询。
-/// - **Bloom 上限重建**(G010): 插入计数达到 [`BLOOM_REBUILD_THRESHOLD`]
+/// - **Bloom 上限重建**: 插入计数达到 [`BLOOM_REBUILD_THRESHOLD`]
 ///   时重建 bloom filter,防止无界增长导致负过滤失效与内存泄漏。
-/// G010: bloom filter 插入重建阈值 —— bloom 只增不减,达到阈值后整体重建,
-/// 防止长运行进程的负过滤失效(误判率回弹)与内存无界增长。
+///
+/// bloom 只增不减,达到阈值后整体重建,防止长运行进程的负过滤失效(误判率回弹)与内存无界增长。
 const BLOOM_REBUILD_THRESHOLD: usize = 1_000_000;
 
 pub(crate) struct OxCacheBackend {
     cache: Option<Cache<String, Vec<f32>>>,
     bloom: Option<BloomFilter>,
     enabled: bool,
-    /// G010: bloom 累计插入计数(原子,put 热路径无锁)
+    /// bloom 累计插入计数(原子,put 热路径无锁)
     bloom_insertions: std::sync::atomic::AtomicUsize,
 }
 
@@ -84,7 +84,7 @@ impl OxCacheBackend {
             return None;
         }
         let cache = self.cache.as_ref()?;
-        // G010: 直接存取原始 Vec<f32>(原 gzip 压缩/解压每命中 10-50µs + unsafe 转换,净负收益)
+        // 直接存取原始 Vec<f32>(原 gzip 压缩/解压每命中 10-50µs + unsafe 转换,净负收益)
         cache.get(&key.to_string()).await.ok().flatten()
     }
 
@@ -101,7 +101,7 @@ impl OxCacheBackend {
         // Insert into bloom filter after successful set
         if let Some(bloom) = &self.bloom {
             bloom.insert(key);
-            // G010: 达到重建阈值 → 清空重建(bloom 负过滤语义安全:重建后
+            // 达到重建阈值 → 清空重建(bloom 负过滤语义安全:重建后
             // 旧 key 可能 miss,仅损失一次缓存命中,不产生错误数据)
             let n = self
                 .bloom_insertions
@@ -203,7 +203,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    /// G010: 存取原始 f32 —— 往返值逐位相等,无压缩损耗
+    /// 存取原始 f32 —— 往返值逐位相等,无压缩损耗
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_roundtrip_preserves_exact_f32_bits() {
         let cache = OxCacheBackend::new(16);
@@ -215,7 +215,7 @@ mod tests {
         assert!(cache.get("k-missing").await.is_none());
     }
 
-    /// G010: bloom 重建后负过滤仍正确(不产生错误命中)
+    /// bloom 重建后负过滤仍正确(不产生错误命中)
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bloom_rebuild_keeps_negative_filtering() {
         let cache = OxCacheBackend::new(16);
@@ -270,7 +270,7 @@ mod tests {
         );
     }
 
-    /// G026: 并发读写 —— 多任务同时 put/get 无 panic、无错误值
+    /// 并发读写 —— 多任务同时 put/get 无 panic、无错误值
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_concurrent_readers_and_writers() {
         use std::sync::Arc;
@@ -295,6 +295,7 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_ttl_expiry() {
         let moka = MokaMemoryBackend::builder()
             .capacity(16)

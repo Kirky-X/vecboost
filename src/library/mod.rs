@@ -244,14 +244,14 @@ impl VecBoostLibrary {
     /// 内部辅助：执行异步 future 并阻塞等待结果
     ///
     /// 进程级共享 **multi_thread** runtime(`OnceLock` 复用,首次调用惰性创建)。
-    /// DEFECT-LIB-002:推理引擎内部使用 `block_in_place`,必须 multi_thread runtime。
-    /// G007:在已有 tokio runtime 上下文中调用 → 返回 `VecboostError`(指引改用
+    /// 推理引擎内部使用 `block_in_place`,必须 multi_thread runtime。
+    /// 在已有 tokio runtime 上下文中调用 → 返回 `VecboostError`(指引改用
     /// 异步方法 `embed` / `embed_batch` / `rerank`),不再 panic。
     fn block_on_future<F: std::future::Future>(future: F) -> F::Output
     where
         F::Output: IntoSyncResult,
     {
-        // G007: 在已有 tokio runtime 上下文中调用 → 返回可操作错误而非 panic
+        // 在已有 tokio runtime 上下文中调用 → 返回可操作错误而非 panic
         if tokio::runtime::Handle::try_current().is_ok() {
             return F::Output::into_sync_result(
                 "sync API called from within a tokio runtime; use the async variants                  (embed / embed_batch / rerank) instead",
@@ -267,14 +267,14 @@ impl VecBoostLibrary {
         });
         match rt {
             Ok(rt) => rt.block_on(future),
-            Err(e) => F::Output::into_sync_result(&format!(
+            Err(e) => F::Output::into_sync_result(format!(
                 "Failed to create tokio runtime for sync API: {e}"
             )),
         }
     }
 }
 
-/// G007 内部约定:sync 包装层把"不能 block_on"类失败转成 `VecboostError`。
+/// 内部约定:sync 包装层把"不能 block_on"类失败转成 `VecboostError`。
 trait IntoSyncResult {
     fn into_sync_result(message: impl Into<String>) -> Self;
 }
@@ -580,7 +580,7 @@ mod tests {
     // 同步 API 测试
     // -------------------------------------------------------------------------
 
-    // G007: 在 tokio runtime 上下文调用 sync API → 可操作错误而非 panic
+    // 在 tokio runtime 上下文调用 sync API → 可操作错误而非 panic
     #[tokio::test]
     async fn sync_api_inside_runtime_returns_error_not_panic() {
         let lib = make_test_library().await;

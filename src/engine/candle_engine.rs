@@ -738,7 +738,7 @@ impl CandleEngine {
             .unsqueeze(0)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-        // DEFECT-BATCH-001 修复：candle BertModel::forward 签名为
+        // 修复：candle BertModel::forward 签名为
         // (input_ids, token_type_ids, attention_mask: Option)——旧实现把
         // attention_mask 误传到 token_type_ids 槽位、mask 传 None，
         // 导致 segment embedding 错误（单条）且批内 padding 完全无隔离（批量）。
@@ -920,7 +920,7 @@ impl CandleEngine {
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
         // 执行批量前向传播
-        // DEFECT-BATCH-001 修复：构建批量 token_type_ids 并将 attention_mask
+        // 修复：构建批量 token_type_ids 并将 attention_mask
         // 以 Some(...) 正确传入（旧实现把 mask 传到 type_ids 槽位、mask 传 None，
         // 导致批内 padding 无隔离，短序列向量被长序列污染，cos 仅 ~0.59）。
         let mut batch_type_ids = vec![0i64; batch_size * max_seq_len];
@@ -2063,7 +2063,7 @@ mod tests {
         assert_eq!(*engine.precision(), Precision::Int8);
         assert!(
             !engine.uses_quantization(),
-            "T029: INT8 not implemented, use_quantization should be false"
+            "INT8 not implemented, use_quantization should be false"
         );
 
         let result = engine.embed("int8 precision test");

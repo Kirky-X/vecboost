@@ -56,7 +56,7 @@ pub fn is_valid_hf_repo_id(repo_id: &str) -> bool {
 /// 检测是否使用了非官方 HuggingFace 端点（如国内镜像）。
 ///
 /// hf-hub 1.0.0 强制要求服务端返回 ETag 响应头，部分镜像站（如 hf-mirror.com）
-/// 可能不提供该头部，导致下载失败（DEFECT-HUB-001）。
+/// 可能不提供该头部，导致下载失败。
 fn detect_mirror_risk() -> Option<String> {
     let endpoint = std::env::var("HF_ENDPOINT").ok()?;
     if endpoint.is_empty() || endpoint.contains("huggingface.co") || endpoint.contains("hf.co") {
@@ -70,7 +70,7 @@ fn detect_mirror_risk() -> Option<String> {
 /// 统一 vuln-0009 的 repo_id 格式校验与 HFClientSync 构造，供所有远程下载入口复用，
 /// 避免校验逻辑遗漏到 fallback/onnx/recovery 路径。
 ///
-/// DEFECT-HUB-001：当 `HF_ENDPOINT` 指向非官方镜像时，hf-hub 1.0.0 可能因
+/// 当 `HF_ENDPOINT` 指向非官方镜像时，hf-hub 1.0.0 可能因
 /// 缺少 ETag 头部而下载失败。此函数提前检测并输出警告，建议用户使用本地模型路径。
 pub(crate) fn build_hf_repo(
     repo_id: &str,
@@ -83,7 +83,7 @@ pub(crate) fn build_hf_repo(
         )));
     }
 
-    // DEFECT-HUB-001: 提前检测镜像端点并警告
+    // 提前检测镜像端点并警告
     if let Some(endpoint) = detect_mirror_risk() {
         log::warn!(
             "HF_ENDPOINT={} detected — hf-hub 1.0.0 requires ETag headers which \
@@ -94,7 +94,7 @@ pub(crate) fn build_hf_repo(
         );
     }
 
-    // DEFECT-SWITCH-002 修复：为 HF 客户端注入带连接超时的 reqwest 客户端并限制
+    // 修复：为 HF 客户端注入带连接超时的 reqwest 客户端并限制
     // 重试次数。默认配置无请求超时且重试次数多，网络不可达时单次模型切换会阻塞
     // 3 分钟以上并级联拖垮并发请求（实测 182s）。连接超时 10s 保证不可达网络
     // 快速失败；总超时 300s 保证大模型下载不受影响。
@@ -116,7 +116,7 @@ pub(crate) fn build_hf_repo(
             VecboostError::ModelLoadError(format!(
                 "HuggingFace hub initialization failed: {}. \
                  If using HF_ENDPOINT mirror, it may be incompatible with hf-hub 1.0.0 \
-                 (DEFECT-HUB-001). Workaround: pre-download the model and set \
+                 Workaround: pre-download the model and set \
                  `model_path` in config.",
                 msg
             ))

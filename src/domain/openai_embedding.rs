@@ -170,7 +170,7 @@ pub struct EmbeddingObject {
     pub object: String,
 
     /// The embedding vector — float array by default, base64-encoded
-    /// little-endian f32 bytes when `encoding_format=base64`（DEFECT-OPENAI-001 修复）
+    /// little-endian f32 bytes when `encoding_format=base64`
     pub embedding: EmbeddingData,
 
     /// The index of this embedding in the response

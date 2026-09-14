@@ -65,7 +65,7 @@ impl AsyncAutoBuilder for EmbeddingModule {
 }
 
 // ---------------------------------------------------------------------------
-// EmbeddingModule — lifecycle + health (Phase 3)
+// EmbeddingModule — lifecycle + health
 // ---------------------------------------------------------------------------
 
 impl AsyncLifecycle for EmbeddingModule {
@@ -175,7 +175,7 @@ impl AsyncAutoBuilder for RateLimitModule {
 }
 
 // ---------------------------------------------------------------------------
-// RateLimitModule — health + lifecycle (Phase 3)
+// RateLimitModule — health + lifecycle
 // ---------------------------------------------------------------------------
 
 impl AsyncHealthCheck for RateLimitModule {
@@ -239,7 +239,7 @@ impl AsyncAutoBuilder for CacheModule {
 }
 
 // ---------------------------------------------------------------------------
-// CacheModule — health (Phase 3)
+// CacheModule — health
 // ---------------------------------------------------------------------------
 
 impl AsyncHealthCheck for CacheModule {
@@ -301,7 +301,7 @@ impl AsyncAutoBuilder for AuditModule {
 }
 
 // ---------------------------------------------------------------------------
-// AuditModule — lifecycle (Phase 3)
+// AuditModule — lifecycle
 // ---------------------------------------------------------------------------
 
 impl AsyncLifecycle for AuditModule {
@@ -516,7 +516,7 @@ impl AsyncAutoBuilder for WorkerManagerModule {
 }
 
 // ---------------------------------------------------------------------------
-// ConfigWatcherModule — confers watch 集成 (Phase 8)
+// ConfigWatcherModule — confers watch 集成
 // ---------------------------------------------------------------------------
 
 impl ModuleMeta for ConfigWatcherModule {

@@ -11,9 +11,8 @@
 
 #![allow(clippy::derivable_impls)]
 
+use crate::error::VecboostError;
 use serde::{Deserialize, Serialize};
-
-pub use crate::pipeline::{PipelineConfig, PriorityConfig, QueueConfig, WorkerConfig};
 
 // 注:AppConfig 定义已迁移至 app_config.rs(由 confers #[derive(Config)] 接管)。
 // 本文件保留所有子结构体定义,供 app_config.rs 引用。
@@ -41,10 +40,10 @@ pub struct ServerConfig {
     /// gRPC request timeout in seconds (applies to streaming RPCs).
     #[garde(skip)]
     pub grpc_timeout_seconds: Option<u64>,
-    /// G009: HTTP 请求体大小上限(MiB);默认 5。
+    /// HTTP 请求体大小上限(MiB);默认 5。
     #[garde(range(min = 1, max = 1024))]
     pub body_limit_mb: u32,
-    /// G016: HTTP 全局请求超时秒数(TimeoutLayer);默认 60。
+    /// HTTP 全局请求超时秒数(TimeoutLayer);默认 60。
     #[garde(range(min = 1, max = 3600))]
     pub request_timeout_seconds: u64,
     /// Whether gRPC server requires authentication (secure default: true).
@@ -123,7 +122,7 @@ pub struct MonitoringConfig {
     pub log_level: Option<String>,
 }
 
-/// 日志配置（[logging] 段，v0.3.0 起正式生效）。
+/// 日志配置（[logging] 段）。
 ///
 /// `VECBOOST_LOG_LEVEL` 环境变量优先级高于 `level` 字段。
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
@@ -570,7 +569,7 @@ impl Default for AuthConfig {
     }
 }
 
-pub(crate) fn apply_priority_defaults(priority: &mut PriorityConfig) {
+pub(crate) fn apply_priority_defaults(priority: &mut crate::pipeline::PriorityConfig) {
     if priority.user_tier_weights.is_empty() {
         priority.user_tier_weights.insert("free".to_string(), 1.0);
         priority.user_tier_weights.insert("basic".to_string(), 1.5);
@@ -588,18 +587,6 @@ pub(crate) fn apply_priority_defaults(priority: &mut PriorityConfig) {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
-    #[error("Configuration error: {0}")]
-    Message(String),
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("confers error: {0}")]
-    Confers(#[from] confers::ConfigError),
-}
-
 /// Apply environment variable overrides for sensitive configuration
 ///
 /// This function handles the priority of configuration sources:
@@ -611,7 +598,7 @@ pub enum ConfigError {
 /// are required for production deployments. Validates minimum length constraints.
 pub(crate) fn apply_security_env_overrides(
     cfg: &mut super::app_config::AppConfig,
-) -> Result<(), ConfigError> {
+) -> Result<(), VecboostError> {
     use std::env;
 
     const MIN_JWT_SECRET_LENGTH: usize = 32;
@@ -620,10 +607,12 @@ pub(crate) fn apply_security_env_overrides(
     // Handle JWT secret with environment variable
     if let Ok(jwt_secret) = env::var("VECBOOST_JWT_SECRET") {
         if jwt_secret.is_empty() {
-            return Err(ConfigError::Message(crate::i18n::tr("config-jwt-empty")));
+            return Err(VecboostError::ConfigError(crate::i18n::tr(
+                "config-jwt-empty",
+            )));
         }
         if jwt_secret.len() < MIN_JWT_SECRET_LENGTH {
-            return Err(ConfigError::Message(crate::i18n::tr_with_args(
+            return Err(VecboostError::ConfigError(crate::i18n::tr_with_args(
                 "config-jwt-length",
                 crate::i18n::tr_args(&[("min", &MIN_JWT_SECRET_LENGTH.to_string())]),
             )));
@@ -634,12 +623,12 @@ pub(crate) fn apply_security_env_overrides(
     // Handle default admin password with environment variable
     if let Ok(admin_password) = env::var("VECBOOST_ADMIN_PASSWORD") {
         if admin_password.is_empty() {
-            return Err(ConfigError::Message(crate::i18n::tr(
+            return Err(VecboostError::ConfigError(crate::i18n::tr(
                 "config-password-empty",
             )));
         }
         if admin_password.len() < MIN_PASSWORD_LENGTH {
-            return Err(ConfigError::Message(crate::i18n::tr_with_args(
+            return Err(VecboostError::ConfigError(crate::i18n::tr_with_args(
                 "config-password-length",
                 crate::i18n::tr_args(&[("min", &MIN_PASSWORD_LENGTH.to_string())]),
             )));
@@ -817,16 +806,17 @@ mod tests {
 
     #[test]
     fn test_config_error_display() {
-        let err = ConfigError::Message("display test".to_string());
-        assert_eq!(format!("{}", err), "Configuration error: display test");
+        // VecboostError::ConfigError 的 Display 走 i18n 键 error-config
+        let err = VecboostError::ConfigError("display test".to_string());
+        assert!(format!("{}", err).contains("display test"));
     }
 
     #[test]
     fn test_config_error_io_variant_display() {
+        // ConfigError 已并入 VecboostError(IoError 变体承载 IO 语义)
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "missing file");
-        let err = ConfigError::Io(io_err);
-        assert!(format!("{}", err).contains("IO error"));
-        assert!(format!("{}", err).contains("missing file"));
+        let err = VecboostError::IoError(io_err.to_string());
+        assert!(err.error_detail().contains("missing file"));
     }
 
     #[test]
@@ -1063,7 +1053,7 @@ mod tests {
 
     #[test]
     fn test_config_error_from_message() {
-        let err = ConfigError::Message("custom error".to_string());
+        let err = VecboostError::ConfigError("custom error".to_string());
         assert!(err.to_string().contains("custom error"));
     }
 

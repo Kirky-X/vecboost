@@ -246,7 +246,7 @@ async fn run_mcp_server(
     Ok(())
 }
 
-/// G002: CLI 子命令名单的单一来源 —— sdforge inventory 注册(forge CLI 宏),
+/// CLI 子命令名单的单一来源 —— sdforge inventory 注册(forge CLI 宏),
 /// 不再维护手工数组。docs 子命令由 sdforge 自动附加。
 #[cfg(feature = "cli")]
 fn cli_subcommand_names() -> Vec<String> {
@@ -258,7 +258,7 @@ fn cli_subcommand_names() -> Vec<String> {
         .collect()
 }
 
-/// G002: 校验 CLI 首参数 —— `--help` 打印用法后退出;未知子命令 stderr 报错
+/// 校验 CLI 首参数 —— `--help` 打印用法后退出;未知子命令 stderr 报错
 /// 并以退出码 2 终止(不得静默落入 HTTP 服务器启动路径)。
 #[cfg(feature = "cli")]
 fn validate_cli_invocation(filtered_args: &[String]) {
@@ -345,7 +345,7 @@ async fn run_cli_command(
                 )
             })?;
 
-        // DEFECT-CLI-001 根因修复：HandlerFn 返回序列化后的 serde_json::Value，
+        // 根因修复：HandlerFn 返回序列化后的 serde_json::Value，
         // 打印职责在调用方（sdforge 自带的 execute() 未被 vecboost 使用）。
         // 旧实现直接丢弃返回值，导致 CLI 子命令"退出码 0 但无任何结果输出"。
         let value = (handler.handler)(args_map, None).await.map_err(|e| {
@@ -522,7 +522,7 @@ async fn init_pipeline(
     }
 }
 
-/// G008: 设备解析 —— 请求 GPU 但对应 feature 未编译时 WARN 并回退 CPU。
+/// 设备解析 —— 请求 GPU 但对应 feature 未编译时 WARN 并回退 CPU。
 fn resolve_device_config(use_gpu: bool) -> vecboost::config::model::DeviceType {
     use vecboost::config::model::DeviceType;
     if !use_gpu {
@@ -594,7 +594,7 @@ fn main() {
         .build()
         .expect("failed to build tokio runtime");
     let result = rt.block_on(app_main());
-    // DEFECT-SHUTDOWN-002 修复：常驻 spawn_blocking 任务（inklog 定时器/写入线程等）
+    // 修复：常驻 spawn_blocking 任务（inklog 定时器/写入线程等）
     // 会让 Runtime::drop 的 BlockingPool::shutdown 无限等待，导致任何退出路径
     // （启动配置错误 bail / SIGTERM 优雅关闭）挂死、最终被 SIGKILL(137)。
     // 显式 shutdown_timeout 保证所有退出路径都能在超时后落地。
@@ -632,12 +632,12 @@ async fn app_main() -> anyhow::Result<()> {
     // 剥离全局 --config 参数（CLI 子命令/clap 不识别该参数，须先行剥离）
     let (_filtered_args, config_path) = strip_config_args(std::env::args().collect());
 
-    // G002: 未知子命令/`--help` 在进入服务器装配前拦截(fail-fast,不静默起服务)
+    // 未知子命令/`--help` 在进入服务器装配前拦截(fail-fast,不静默起服务)
     #[cfg(feature = "cli")]
     validate_cli_invocation(&_filtered_args[1..]);
 
     // Early CLI detection: suppress console logging in CLI mode to keep stdout clean
-    // for machine-readable JSON output (DEFECT-CLI-001 fix)
+    // for machine-readable JSON output
     #[cfg(feature = "cli")]
     let cli_mode = _filtered_args
         .get(1)
@@ -646,7 +646,7 @@ async fn app_main() -> anyhow::Result<()> {
     #[cfg(not(feature = "cli"))]
     let cli_mode = false;
 
-    // DEFECT-MCP-001 修复：MCP stdio 模式下 stdout 只能承载 JSON-RPC 协议消息，
+    // 修复：MCP stdio 模式下 stdout 只能承载 JSON-RPC 协议消息，
     // inklog 控制台日志会污染协议流导致客户端解析失败 —— 与 CLI 模式同样关闭控制台输出。
     #[cfg(feature = "mcp")]
     let mcp_mode = std::env::args().any(|a| a == "--mcp");
@@ -656,10 +656,10 @@ async fn app_main() -> anyhow::Result<()> {
     // i18n 先于配置初始化：配置校验错误消息需要翻译
     vecboost::i18n::init();
 
-    // 配置先行加载（DEFECT-CONFIG-001）：logger 的级别/文件参数来自 [logging] 配置段，
+    // 配置先行加载：logger 的级别/文件参数来自 [logging] 配置段，
     // 因此配置必须在 logger 之前就绪；此时尚无日志后端，错误经 stderr 输出。
     let config = {
-        // G006: 显式指定的 --config 文件不存在 → 立即报错退出(码 2),
+        // 显式指定的 --config 文件不存在 → 立即报错退出(码 2),
         // 杜绝"以为自定义配置生效,实际跑默认配置"的静默回退
         if let Some(p) = config_path.as_deref()
             && !std::path::Path::new(p).exists()
@@ -687,7 +687,7 @@ async fn app_main() -> anyhow::Result<()> {
         }
     };
 
-    // DEFECT-CONFIG-002: [logging] 配置段接入 logger；
+    // [logging] 配置段接入 logger；
     // VECBOOST_LOG_LEVEL 环境变量优先级高于配置文件。
     // 白名单含 inklog 合法别名（warning 等）
     let log_level = std::env::var("VECBOOST_LOG_LEVEL")
@@ -698,7 +698,7 @@ async fn app_main() -> anyhow::Result<()> {
         })
         .unwrap_or_else(|| config.logging.level.clone());
 
-    // DEFECT-CLI-003 绕过：inklog ConsoleSink 不消费 enabled 标志（上游缺陷，
+    // 绕过：inklog ConsoleSink 不消费 enabled 标志（上游缺陷，
     // console(false) 无法关闭输出）。CLI/MCP 模式下将全部日志级别路由到 stderr，
     // 保证 stdout 只承载机器可读 JSON / JSON-RPC 协议消息。
     let mut logger_builder = inklog::LoggerManager::builder()
@@ -789,6 +789,9 @@ async fn app_main() -> anyhow::Result<()> {
 
     #[cfg(feature = "db")]
     let (db_pool, _db_metrics) = init_db_pool(&config).await?;
+    // 供 /health?depth=full 的 DB 就绪探测
+    #[cfg(feature = "db")]
+    let _ = vecboost::db::register_global_pool(std::sync::Arc::new(db_pool.clone()));
 
     let (_engine, service, rerank_service, _model_config) =
         init_engine_and_services(&config).await?;
@@ -852,8 +855,544 @@ async fn app_main() -> anyhow::Result<()> {
     let (pipeline_queue, response_channel, priority_calculator, worker_manager) =
         init_pipeline(&config, &service).await?;
 
+    let kit = build_module_registry(
+        &config,
+        service.clone(),
+        rerank_service.clone(),
+        rate_limiter.clone(),
+        audit_logger.clone(),
+        pipeline_queue.clone(),
+        response_channel.clone(),
+        priority_calculator.clone(),
+        worker_manager.clone(),
+        logger_manager.clone(),
+        #[cfg(feature = "auth")]
+        garrison_handle.clone(),
+        #[cfg(feature = "auth")]
+        garrison_csrf_config.clone(),
+    )
+    .await?;
+
+    let shutdown_coordinator = AsyncShutdownCoordinator::new();
+    shutdown_coordinator
+        .set_global_timeout(Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS))
+        .map_err(|e| anyhow::anyhow!("Failed to set shutdown timeout: {}", e))?;
+    register_shutdown_hooks(&shutdown_coordinator, &kit, &worker_manager)?;
+
+    log::info!("AsyncKit module registry built successfully");
+
+    // JoinSet for managing background tasks lifecycle
+    let mut bg_tasks = tokio::task::JoinSet::<()>::new();
+
+    spawn_config_watcher(&mut bg_tasks, config_path);
+
+    // VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
+    let app_state = VecboostState::new(kit);
+
+    // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state().kit.require 访问）
+    vecboost::api::init_state(app_state.clone()).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // sdforge #[forge] 路由（Router<()>，从 inventory 收集所有 forge 函数注册的路由）
+    /// HTTP 路由装配(sdforge 路由 + Swagger/metrics/中间件/CORS)。
+    async fn build_http_router(config: &AppConfig) -> anyhow::Result<axum::Router> {
+        // app_state 由调用方保证已 init_state(所有能力经 kit.require 获取)
+        let app_state = vecboost::api::state().map_err(|e| anyhow::anyhow!("{e}"))?;
+        // 版本前缀:路由注册为 /api/1/*(forge version=1)。
+        // 实施期决策:不启用 build_with_redirect —— 它会把 /api/1/* 重定向到
+        // 不存在的 /api/v1/*,破坏全部 API 路由(实测 301)。
+        let app = sdforge::http::build();
+
+        // 挂载 Swagger UI(/api-docs/openapi.json + /swagger-ui/),
+        // openapi.json 由 sdforge 从 forge 注册路由动态生成
+        let app = app.merge(sdforge::docs::swagger_ui_router());
+
+        // metrics 端点（手写例外：Prometheus text/plain 响应，forge 不支持非 JSON）
+        let metrics_router = axum::Router::new()
+            .route("/metrics", axum::routing::get(metrics_endpoint))
+            .with_state(app_state.clone());
+        let mut app = app.merge(metrics_router);
+
+        // Prometheus 指标记录中间件 — 无条件应用到所有路由
+        #[cfg(feature = "http")]
+        {
+            use axum::middleware::from_fn_with_state;
+            app = app.layer(from_fn_with_state(
+                app_state.clone(),
+                vecboost::metrics::metrics_middleware,
+            ));
+        }
+
+        // i18n Accept-Language 中间件 — 解析请求语言，设置请求级 locale
+        // 使所有下游 handler 和 IntoResponse 自动使用正确的语言
+        #[cfg(feature = "http")]
+        {
+            use axum::middleware::from_fn;
+            app = app.layer(from_fn(vecboost::i18n::i18n_middleware));
+        }
+
+        // 全局限流中间件 — 应用到所有路由
+        // 内部通过 RateLimitEnabled 配置控制是否生效
+        // 注：auth_rate_limit_middleware 定义在 auth 模块下，需 feature = "auth" 门控
+        #[cfg(feature = "auth")]
+        {
+            use axum::middleware::from_fn_with_state;
+            app = app.layer(from_fn_with_state(
+                app_state.clone(),
+                vecboost::auth::auth_rate_limit_middleware,
+            ));
+        }
+
+        // auth_middleware：应用到所有路由，内部用路径白名单放行公开端点
+        // (/health, /api/1/auth/login, /api/1/auth/refresh)
+        #[cfg(feature = "auth")]
+        let app = if config.auth.enabled {
+            use axum::middleware::from_fn_with_state;
+            app.layer(from_fn_with_state(
+                app_state.clone(),
+                vecboost::auth::auth_middleware,
+            ))
+        } else {
+            app
+        };
+
+        // CSRF 保护（条件性应用：auth 启用且 csrf 启用时）
+        // 直接使用 garrison garrison_csrf_middleware（包含 Origin + Token 双重校验）
+        #[cfg(feature = "auth")]
+        let app = if config.auth.enabled && config.auth.csrf.enabled {
+            use axum::middleware::from_fn_with_state;
+            let csrf_config = app_state
+                .kit()
+                .require::<CsrfConfigModule>()
+                .map_err(|e| anyhow::anyhow!("Failed to require CsrfConfigModule: {}", e))?;
+            if let Some(cfg) = csrf_config {
+                app.layer(from_fn_with_state(cfg, garrison_csrf_middleware))
+            } else {
+                app
+            }
+        } else {
+            app
+        };
+
+        // 安全 headers + trace
+        // 请求体大小上限(默认 5 MiB,防超大 payload DoS)
+        let app = app.layer(tower_http::limit::RequestBodyLimitLayer::new(
+            config.server.body_limit_mb.max(1) as usize * 1024 * 1024,
+        ));
+        // HTTP 全局请求超时(默认 60s,配置 server.request_timeout_seconds)
+        let app = app.layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::GATEWAY_TIMEOUT,
+            std::time::Duration::from_secs(config.server.request_timeout_seconds.max(1)),
+        ));
+        // 每个响应注入 x-request-id(与日志关联)
+        let app = app.layer(axum::middleware::from_fn(
+            |req: axum::extract::Request, next: axum::middleware::Next| async move {
+                let mut resp = next.run(req).await;
+                if !resp.headers().contains_key("x-request-id")
+                    && let Ok(id) = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                {
+                    resp.headers_mut().insert(
+                        "x-request-id",
+                        axum::http::HeaderValue::from_str(&format!("req-{:x}", id.as_nanos()))
+                            .unwrap_or(axum::http::HeaderValue::from_static("req-unknown")),
+                    );
+                }
+                Ok::<_, std::convert::Infallible>(resp)
+            },
+        ));
+        let app = app
+            .layer(TraceLayer::new_for_http())
+            .layer(SetResponseHeaderLayer::overriding(
+                axum::http::header::X_CONTENT_TYPE_OPTIONS,
+                axum::http::HeaderValue::from_static("nosniff"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                axum::http::header::X_FRAME_OPTIONS,
+                axum::http::HeaderValue::from_static("DENY"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                axum::http::header::X_XSS_PROTECTION,
+                axum::http::HeaderValue::from_static("1; mode=block"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                axum::http::header::STRICT_TRANSPORT_SECURITY,
+                axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+            ));
+
+        // 响应压缩（gzip）——客户端经 Accept-Encoding 协商
+        #[cfg(feature = "http")]
+        let app = app.layer(tower_http::compression::CompressionLayer::new());
+
+        // CORS（配置开关，默认关闭）：[server] cors_enabled / cors_allow_origins
+        #[cfg(feature = "http")]
+        let app = if config.server.cors_enabled {
+            use axum::http::{HeaderName, HeaderValue, Method};
+            let origins = config.server.cors_allow_origins.clone();
+            let mut cors = tower_http::cors::CorsLayer::new()
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers([
+                    HeaderName::from_static("content-type"),
+                    HeaderName::from_static("authorization"),
+                    HeaderName::from_static("accept-language"),
+                ]);
+            if origins.is_empty() || origins.iter().any(|o| o == "*") {
+                cors = cors.allow_origin(tower_http::cors::Any);
+            } else {
+                let list: Vec<HeaderValue> = origins
+                    .iter()
+                    .filter_map(|o| HeaderValue::from_str(o).ok())
+                    .collect();
+                cors = cors.allow_origin(list);
+            }
+            app.layer(cors)
+        } else {
+            app
+        };
+
+        // ConnectInfo is automatically available when using axum::serve with a TcpListener
+        // No additional layer needed
+        Ok(app)
+    }
+
+    let app = build_http_router(&config).await?;
+
+    let addr = format!("{}:{}", config.server.host, config.server.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    log::info!("Server listening on {}", addr);
+
+    // Signal-aware graceful shutdown (SIGINT + SIGTERM)
+    let signal = async {
+        #[cfg(unix)]
+        {
+            let mut sigterm =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::error!("Failed to install SIGTERM handler: {}", e);
+                        // SIGTERM unavailable — continue with ctrl_c only
+                        tokio::signal::ctrl_c().await.ok();
+                        log::info!("Received SIGINT, initiating graceful shutdown");
+                        return;
+                    }
+                };
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    log::info!("Received SIGINT, initiating graceful shutdown");
+                }
+                _ = sigterm.recv() => {
+                    log::info!("Received SIGTERM, initiating graceful shutdown");
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            if let Err(e) = tokio::signal::ctrl_c().await {
+                log::error!("Failed to install CTRL-C handler: {}", e);
+            }
+            log::info!("Received CTRL-C, initiating graceful shutdown");
+        }
+    };
+    #[cfg(feature = "grpc")]
+    if config.server.grpc_enabled {
+        spawn_grpc_server(&config, &mut bg_tasks).await?;
+    }
+
+    run_server_lifecycle(
+        listener,
+        app,
+        signal,
+        &config,
+        bg_tasks,
+        shutdown_coordinator,
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// 服务器生命周期 —— 阻塞等待退出信号,执行分级优雅关闭。
+#[cfg(feature = "http")]
+async fn run_server_lifecycle(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    signal: impl std::future::Future<Output = ()> + Send + 'static,
+    config: &AppConfig,
+    mut bg_tasks: tokio::task::JoinSet<()>,
+    shutdown_coordinator: AsyncShutdownCoordinator,
+) -> anyhow::Result<()> {
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(signal)
+    .await?;
+
+    // Execute phased shutdown coordinator after server stops
+    log::info!("Server stopped, executing phased shutdown...");
+
+    // gRPC drain 窗口 —— HTTP 已停止;给在途 gRPC 调用一个有界完成窗口
+    // 再 abort。sdforge server API 无 shutdown 注入口,无法做 tonic 级
+    // graceful drain(复制鉴权拦截器有安全漂移风险,实施期决策)。
+    #[cfg(feature = "grpc")]
+    if config.server.grpc_enabled {
+        log::info!("gRPC drain window: waiting up to 30s for in-flight calls");
+        let deadline = tokio::time::sleep(std::time::Duration::from_secs(
+            config.server.grpc_timeout_seconds.unwrap_or(5).min(30),
+        ));
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                _ = &mut deadline => break,
+                _ = bg_tasks.join_next(), if !bg_tasks.is_empty() => {}
+                else => break,
+            }
+        }
+    }
+
+    // Cancel all background tasks (config watcher, gRPC server, etc.)
+    bg_tasks.abort_all();
+    // Drain remaining tasks to prevent runtime hang
+    while bg_tasks.join_next().await.is_some() {}
+
+    let shutdown_result = match shutdown_coordinator.shutdown().await {
+        Ok(result) => result,
+        Err(e) => {
+            log::warn!("Shutdown coordinator error: {}", e);
+            return Err(anyhow::anyhow!("Phased shutdown failed: {}", e));
+        }
+    };
+    if !shutdown_result.is_ok() {
+        log::warn!(
+            "Shutdown timed out on phases: {:?}",
+            shutdown_result.timed_out_phases()
+        );
+    }
+    log::info!("VecBoost shutdown complete");
+
+    Ok(())
+}
+
+/// 注册分级优雅关闭钩子(CloseConnections/DrainQueue 各阶段)。
+fn register_shutdown_hooks(
+    shutdown_coordinator: &AsyncShutdownCoordinator,
+    kit: &Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,
+    worker_manager: &Arc<WorkerManager>,
+) -> anyhow::Result<()> {
+    {
+        let kit_for_shutdown = Arc::clone(kit);
+        shutdown_coordinator
+            .register_hook(ShutdownPhase::CloseConnections, move || {
+                Box::pin(async move {
+                    // Manually invoke async on_shutdown for lifecycle modules
+                    // (AsyncKit::shutdown() is sync and cannot call async fns)
+                    if let Ok(audit_cap) = kit_for_shutdown.require::<AuditModule>() {
+                        <AuditModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(
+                            &audit_cap,
+                        )
+                        .await;
+                    }
+                })
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to register shutdown hook: {}", e))?;
+    }
+    // Register ConfigWatcherModule shutdown hook
+    {
+        let kit_for_watcher_shutdown = Arc::clone(kit);
+        shutdown_coordinator
+            .register_hook(ShutdownPhase::DrainQueue, move || {
+                Box::pin(async move {
+                    if let Ok(watcher_cap) =
+                        kit_for_watcher_shutdown.require::<ConfigWatcherModule>()
+                    {
+                        <ConfigWatcherModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(
+                            &watcher_cap,
+                        )
+                        .await;
+                    }
+                })
+            })
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to register config watcher shutdown hook: {}", e)
+            })?;
+    }
+    // WorkerManager 优雅关闭：排空队列并等待 in-flight 请求完成
+    {
+        let wm = Arc::clone(worker_manager);
+        shutdown_coordinator
+            .register_hook(ShutdownPhase::DrainQueue, move || {
+                Box::pin(async move {
+                    wm.shutdown().await;
+                })
+            })
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to register worker manager shutdown hook: {}", e)
+            })?;
+    }
+
+    Ok(())
+}
+
+/// 装配并启动 gRPC 服务器(BearerAuth/限流/连接上限/超时)。
+#[cfg(feature = "grpc")]
+async fn spawn_grpc_server(
+    config: &AppConfig,
+    bg_tasks: &mut tokio::task::JoinSet<()>,
+) -> anyhow::Result<()> {
+    let grpc_host = config
+        .server
+        .grpc_host
+        .clone()
+        .unwrap_or_else(|| config.server.host.clone());
+    let grpc_port = config.server.grpc_port.unwrap_or(50051);
+    let grpc_addr = format!("{}:{}", grpc_host, grpc_port);
+
+    // Secure default: require auth unless explicitly disabled via config.
+    // config.server.grpc_require_auth defaults to Some(true) in ServerConfig::default().
+    let require_auth = config.server.grpc_require_auth.unwrap_or(true);
+
+    // Build BearerAuth when auth is enabled and a JWT secret is configured.
+    // sdforge's GrpcServerConfig requires `auth: Option<BearerAuth>` (gated by
+    // sdforge/security feature, which vecboost's grpc feature pulls in).
+    let bearer_auth = if require_auth {
+        #[cfg(feature = "auth")]
+        {
+            if config.auth.enabled {
+                if let Some(secret) = config.auth.jwt_secret.as_ref() {
+                    match BearerAuth::try_new(secret.clone()) {
+                        Ok(b) => {
+                            log::info!("gRPC BearerAuth enabled (auth.enabled=true)");
+                            Some(b)
+                        }
+                        Err(e) => {
+                            anyhow::bail!(
+                                "{}",
+                                vecboost::i18n::tr_with_args(
+                                    "startup-grpc-bearer-failed",
+                                    vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                                )
+                            );
+                        }
+                    }
+                } else {
+                    anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-no-secret"));
+                }
+            } else {
+                anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-auth-disabled"));
+            }
+        }
+        #[cfg(not(feature = "auth"))]
+        {
+            anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-no-feature"));
+        }
+    } else {
+        log::warn!(
+            "gRPC server starting with require_auth=false — \
+                 this is insecure; use only for development behind network isolation"
+        );
+        None
+    };
+
+    // Build sdforge rate_limiter (gated by sdforge/ratelimit feature, which
+    // vecboost's grpc feature pulls in). Uses default config (100 burst, 10 req/s).
+    // `new()` is infallible (panics only on invalid default config, which is a bug).
+    let rate_limiter: Option<std::sync::Arc<dyn sdforge::security::ratelimit::RateLimiter>> = {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            SdforgeLimiteronAdapter::new(),
+        )
+        .await
+        {
+            Ok(limiter) => {
+                log::info!(
+                    "gRPC rate_limiter enabled (sdforge LimiteronAdapter, default config: 100 burst / 10 req/s)"
+                );
+                Some(std::sync::Arc::new(limiter))
+            }
+            Err(_) => {
+                log::warn!(
+                    "gRPC rate_limiter initialization timed out after 10s, starting without rate limiting"
+                );
+                None
+            }
+        }
+    };
+
+    let grpc_config = GrpcServerConfig {
+        max_connections: config.server.grpc_max_connections.unwrap_or(1000),
+        timeout_seconds: config.server.grpc_timeout_seconds.unwrap_or(30),
+        require_auth,
+        auth: bearer_auth,
+        state: None,
+        rate_limiter,
+    };
+
+    log::info!("gRPC server enabled on {}", grpc_addr);
+    bg_tasks.spawn(async move {
+        if let Err(e) = build_server_with_config(&grpc_addr, grpc_config).await {
+            log::error!("gRPC server error: {}", e);
+        }
+    });
+
+    Ok(())
+}
+
+/// 启动配置文件监视任务(热重载校验;变更后重启生效,见 README)。
+fn spawn_config_watcher(bg_tasks: &mut tokio::task::JoinSet<()>, config_path: Option<String>) {
+    bg_tasks.spawn(async move {
+            // FsWatcher requires the file to exist; skip gracefully if not
+            let config_path = config_path.as_deref().unwrap_or("config/config.toml");
+            let mut fs_watcher = match confers::watcher::FsWatcher::new(config_path, 200).await {
+                Ok(w) => {
+                    log::info!("Config file watcher started for {}", config_path);
+                    w
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Config file watcher not started ({} not found or error: {:?})",
+                        config_path,
+                        e
+                    );
+                    return;
+                }
+            };
+            // 热重载校验跟随 --config 路径（否则自定义配置的变更会被默认路径误校验）
+            let reload_path = config_path.to_string();
+            while let Some(changed_path) = fs_watcher.recv().await {
+                log::info!("Config file changed: {:?}, reloading...", changed_path);
+                match AppConfig::load_via_confers_with_path(&reload_path) {
+                    Ok(_new_config) => {
+                        log::info!(
+                            "Configuration reloaded and validated successfully (hot-swap pending trait-kit AsyncKit reload)"
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Failed to reload configuration: {}", e);
+                    }
+                }
+            }
+            log::info!("Config file watcher stopped");
+    });
+}
+
+/// 构建模块注册中心(trait-kit AsyncKit)—— 预构建能力注入 + 17 个
+/// Module 注册 + 生命周期/健康检查挂载。从 `app_main` 拆出。
+#[allow(clippy::too_many_arguments)]
+async fn build_module_registry(
+    config: &AppConfig,
+    service: Arc<RwLock<EmbeddingService>>,
+    rerank_service: Arc<RwLock<RerankService>>,
+    rate_limiter: Arc<LimiteronAdapter>,
+    audit_logger: Option<Arc<AuditLogger>>,
+    pipeline_queue: Arc<PriorityRequestQueue>,
+    response_channel: Arc<ResponseChannel>,
+    priority_calculator: Arc<PriorityCalculator>,
+    worker_manager: Arc<WorkerManager>,
+    logger_manager: Arc<inklog::LoggerManager>,
+    #[cfg(feature = "auth")] garrison_handle: Option<Arc<vecboost::auth::GarrisonHandle>>,
+    #[cfg(feature = "auth")] garrison_csrf_config: Option<Arc<vecboost::auth::GarrisonCsrfConfig>>,
+) -> anyhow::Result<Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>> {
     // ---------------------------------------------------------------------------
-    // Module Registry (trait-kit AsyncKit) — D1 集成
+    // Module Registry (trait-kit AsyncKit)
     //
     // 使用 trait-kit 0.3 的 AsyncKit 构建模块依赖图。AsyncKit 是 Send + Sync
     // （基于 Arc<RwLock>），可安全存入 VecboostState 并跨线程共享。
@@ -973,433 +1512,7 @@ async fn app_main() -> anyhow::Result<()> {
         .build()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
-    let kit = Arc::new(kit);
-
-    // AsyncShutdownCoordinator — phased graceful shutdown
-    let shutdown_coordinator = AsyncShutdownCoordinator::new();
-    shutdown_coordinator
-        .set_global_timeout(Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS))
-        .map_err(|e| anyhow::anyhow!("Failed to set shutdown timeout: {}", e))?;
-    {
-        let kit_for_shutdown = Arc::clone(&kit);
-        shutdown_coordinator
-            .register_hook(ShutdownPhase::CloseConnections, move || {
-                Box::pin(async move {
-                    // Manually invoke async on_shutdown for lifecycle modules
-                    // (AsyncKit::shutdown() is sync and cannot call async fns)
-                    if let Ok(audit_cap) = kit_for_shutdown.require::<AuditModule>() {
-                        <AuditModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(
-                            &audit_cap,
-                        )
-                        .await;
-                    }
-                })
-            })
-            .map_err(|e| anyhow::anyhow!("Failed to register shutdown hook: {}", e))?;
-    }
-    // Register ConfigWatcherModule shutdown hook
-    {
-        let kit_for_watcher_shutdown = Arc::clone(&kit);
-        shutdown_coordinator
-            .register_hook(ShutdownPhase::DrainQueue, move || {
-                Box::pin(async move {
-                    if let Ok(watcher_cap) =
-                        kit_for_watcher_shutdown.require::<ConfigWatcherModule>()
-                    {
-                        <ConfigWatcherModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(
-                            &watcher_cap,
-                        )
-                        .await;
-                    }
-                })
-            })
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to register config watcher shutdown hook: {}", e)
-            })?;
-    }
-    // WorkerManager 优雅关闭：排空队列并等待 in-flight 请求完成
-    {
-        let wm = Arc::clone(&worker_manager);
-        shutdown_coordinator
-            .register_hook(ShutdownPhase::DrainQueue, move || {
-                Box::pin(async move {
-                    wm.shutdown().await;
-                })
-            })
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to register worker manager shutdown hook: {}", e)
-            })?;
-    }
-
-    log::info!("AsyncKit module registry built successfully");
-
-    // JoinSet for managing background tasks lifecycle
-    let mut bg_tasks = tokio::task::JoinSet::<()>::new();
-
-    // Spawn config file watcher task for hot reload
-    // 变更检测：当前 AsyncKit<Ready> 不支持运行时 set_config，热重载仅验证新配置可加载
-    // 后续待 trait-kit 为 AsyncKit 提供 reload 能力后再接线至各 Module
-    bg_tasks.spawn(async move {
-            // FsWatcher requires the file to exist; skip gracefully if not
-            let config_path = config_path.as_deref().unwrap_or("config/config.toml");
-            let mut fs_watcher = match confers::watcher::FsWatcher::new(config_path, 200).await {
-                Ok(w) => {
-                    log::info!("Config file watcher started for {}", config_path);
-                    w
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Config file watcher not started ({} not found or error: {:?})",
-                        config_path,
-                        e
-                    );
-                    return;
-                }
-            };
-            // 热重载校验跟随 --config 路径（否则自定义配置的变更会被默认路径误校验）
-            let reload_path = config_path.to_string();
-            while let Some(changed_path) = fs_watcher.recv().await {
-                log::info!("Config file changed: {:?}, reloading...", changed_path);
-                match AppConfig::load_via_confers_with_path(&reload_path) {
-                    Ok(_new_config) => {
-                        log::info!(
-                            "Configuration reloaded and validated successfully (hot-swap pending trait-kit AsyncKit reload)"
-                        );
-                    }
-                    Err(e) => {
-                        log::error!("Failed to reload configuration: {}", e);
-                    }
-                }
-            }
-            log::info!("Config file watcher stopped");
-    });
-
-    // VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
-    let app_state = VecboostState::new(kit);
-
-    // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state().kit.require 访问）
-    vecboost::api::init_state(app_state.clone()).map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    // sdforge #[forge] 路由（Router<()>，从 inventory 收集所有 forge 函数注册的路由）
-    // G009: /api → /api/v1 307 重定向(版本前缀惯例)
-    let app = sdforge::http::build_with_redirect();
-
-    // G001: 挂载 Swagger UI(/api-docs/openapi.json + /swagger-ui/),
-    // openapi.json 由 sdforge 从 forge 注册路由动态生成
-    let app = app.merge(sdforge::docs::swagger_ui_router());
-
-    // metrics 端点（手写例外：Prometheus text/plain 响应，forge 不支持非 JSON）
-    let metrics_router = axum::Router::new()
-        .route("/metrics", axum::routing::get(metrics_endpoint))
-        .with_state(app_state.clone());
-    let mut app = app.merge(metrics_router);
-
-    // Prometheus 指标记录中间件 — 无条件应用到所有路由
-    #[cfg(feature = "http")]
-    {
-        use axum::middleware::from_fn_with_state;
-        app = app.layer(from_fn_with_state(
-            app_state.clone(),
-            vecboost::metrics::metrics_middleware,
-        ));
-    }
-
-    // i18n Accept-Language 中间件 — 解析请求语言，设置请求级 locale
-    // 使所有下游 handler 和 IntoResponse 自动使用正确的语言
-    #[cfg(feature = "http")]
-    {
-        use axum::middleware::from_fn;
-        app = app.layer(from_fn(vecboost::i18n::i18n_middleware));
-    }
-
-    // 全局限流中间件 — 应用到所有路由
-    // 内部通过 RateLimitEnabled 配置控制是否生效
-    // 注：auth_rate_limit_middleware 定义在 auth 模块下，需 feature = "auth" 门控
-    #[cfg(feature = "auth")]
-    {
-        use axum::middleware::from_fn_with_state;
-        app = app.layer(from_fn_with_state(
-            app_state.clone(),
-            vecboost::auth::auth_rate_limit_middleware,
-        ));
-    }
-
-    // auth_middleware：应用到所有路由，内部用路径白名单放行公开端点
-    // (/health, /api/1/auth/login, /api/1/auth/refresh)
-    #[cfg(feature = "auth")]
-    let app = if config.auth.enabled {
-        use axum::middleware::from_fn_with_state;
-        app.layer(from_fn_with_state(
-            app_state.clone(),
-            vecboost::auth::auth_middleware,
-        ))
-    } else {
-        app
-    };
-
-    // CSRF 保护（条件性应用：auth 启用且 csrf 启用时）
-    // 直接使用 garrison garrison_csrf_middleware（包含 Origin + Token 双重校验）
-    #[cfg(feature = "auth")]
-    let app = if config.auth.enabled && config.auth.csrf.enabled {
-        use axum::middleware::from_fn_with_state;
-        let csrf_config = app_state
-            .kit()
-            .require::<CsrfConfigModule>()
-            .map_err(|e| anyhow::anyhow!("Failed to require CsrfConfigModule: {}", e))?;
-        if let Some(cfg) = csrf_config {
-            app.layer(from_fn_with_state(cfg, garrison_csrf_middleware))
-        } else {
-            app
-        }
-    } else {
-        app
-    };
-
-    // 安全 headers + trace
-    // G009: 请求体大小上限(默认 5 MiB,防超大 payload DoS)
-    let app = app.layer(tower_http::limit::RequestBodyLimitLayer::new(
-        config.server.body_limit_mb.max(1) as usize * 1024 * 1024,
-    ));
-    // G009: 每个响应注入 x-request-id(与日志关联)
-    let app = app.layer(axum::middleware::from_fn(
-        |req: axum::extract::Request, next: axum::middleware::Next| async move {
-            let mut resp = next.run(req).await;
-            if !resp.headers().contains_key("x-request-id") {
-                if let Ok(id) = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                {
-                    resp.headers_mut().insert(
-                        "x-request-id",
-                        axum::http::HeaderValue::from_str(&format!(
-                            "req-{:x}",
-                            id.as_nanos()
-                        ))
-                        .unwrap_or(axum::http::HeaderValue::from_static("req-unknown")),
-                    );
-                }
-            }
-            Ok::<_, std::convert::Infallible>(resp)
-        },
-    ));
-    let app = app
-        .layer(TraceLayer::new_for_http())
-        .layer(SetResponseHeaderLayer::overriding(
-            axum::http::header::X_CONTENT_TYPE_OPTIONS,
-            axum::http::HeaderValue::from_static("nosniff"),
-        ))
-        .layer(SetResponseHeaderLayer::overriding(
-            axum::http::header::X_FRAME_OPTIONS,
-            axum::http::HeaderValue::from_static("DENY"),
-        ))
-        .layer(SetResponseHeaderLayer::overriding(
-            axum::http::header::X_XSS_PROTECTION,
-            axum::http::HeaderValue::from_static("1; mode=block"),
-        ))
-        .layer(SetResponseHeaderLayer::overriding(
-            axum::http::header::STRICT_TRANSPORT_SECURITY,
-            axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
-        ));
-
-    // 响应压缩（gzip）——客户端经 Accept-Encoding 协商
-    #[cfg(feature = "http")]
-    let app = app.layer(tower_http::compression::CompressionLayer::new());
-
-    // CORS（配置开关，默认关闭）：[server] cors_enabled / cors_allow_origins
-    #[cfg(feature = "http")]
-    let app = if config.server.cors_enabled {
-        use axum::http::{HeaderName, HeaderValue, Method};
-        let origins = config.server.cors_allow_origins;
-        let mut cors = tower_http::cors::CorsLayer::new()
-            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-            .allow_headers([
-                HeaderName::from_static("content-type"),
-                HeaderName::from_static("authorization"),
-                HeaderName::from_static("accept-language"),
-            ]);
-        if origins.is_empty() || origins.iter().any(|o| o == "*") {
-            cors = cors.allow_origin(tower_http::cors::Any);
-        } else {
-            let list: Vec<HeaderValue> = origins
-                .iter()
-                .filter_map(|o| HeaderValue::from_str(o).ok())
-                .collect();
-            cors = cors.allow_origin(list);
-        }
-        app.layer(cors)
-    } else {
-        app
-    };
-
-    // ConnectInfo is automatically available when using axum::serve with a TcpListener
-    // No additional layer needed
-
-    let addr = format!("{}:{}", config.server.host, config.server.port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    log::info!("Server listening on {}", addr);
-
-    // Signal-aware graceful shutdown (SIGINT + SIGTERM)
-    let signal = async {
-        #[cfg(unix)]
-        {
-            let mut sigterm =
-                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::error!("Failed to install SIGTERM handler: {}", e);
-                        // SIGTERM unavailable — continue with ctrl_c only
-                        tokio::signal::ctrl_c().await.ok();
-                        log::info!("Received SIGINT, initiating graceful shutdown");
-                        return;
-                    }
-                };
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    log::info!("Received SIGINT, initiating graceful shutdown");
-                }
-                _ = sigterm.recv() => {
-                    log::info!("Received SIGTERM, initiating graceful shutdown");
-                }
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            if let Err(e) = tokio::signal::ctrl_c().await {
-                log::error!("Failed to install CTRL-C handler: {}", e);
-            }
-            log::info!("Received CTRL-C, initiating graceful shutdown");
-        }
-    };
-
-    #[cfg(feature = "grpc")]
-    if config.server.grpc_enabled {
-        let grpc_host = config
-            .server
-            .grpc_host
-            .clone()
-            .unwrap_or_else(|| config.server.host.clone());
-        let grpc_port = config.server.grpc_port.unwrap_or(50051);
-        let grpc_addr = format!("{}:{}", grpc_host, grpc_port);
-
-        // Secure default: require auth unless explicitly disabled via config.
-        // config.server.grpc_require_auth defaults to Some(true) in ServerConfig::default().
-        let require_auth = config.server.grpc_require_auth.unwrap_or(true);
-
-        // Build BearerAuth when auth is enabled and a JWT secret is configured.
-        // sdforge's GrpcServerConfig requires `auth: Option<BearerAuth>` (gated by
-        // sdforge/security feature, which vecboost's grpc feature pulls in).
-        let bearer_auth = if require_auth {
-            #[cfg(feature = "auth")]
-            {
-                if config.auth.enabled {
-                    if let Some(secret) = config.auth.jwt_secret.as_ref() {
-                        match BearerAuth::try_new(secret.clone()) {
-                            Ok(b) => {
-                                log::info!("gRPC BearerAuth enabled (auth.enabled=true)");
-                                Some(b)
-                            }
-                            Err(e) => {
-                                anyhow::bail!(
-                                    "{}",
-                                    vecboost::i18n::tr_with_args(
-                                        "startup-grpc-bearer-failed",
-                                        vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
-                                    )
-                                );
-                            }
-                        }
-                    } else {
-                        anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-no-secret"));
-                    }
-                } else {
-                    anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-auth-disabled"));
-                }
-            }
-            #[cfg(not(feature = "auth"))]
-            {
-                anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-no-feature"));
-            }
-        } else {
-            log::warn!(
-                "gRPC server starting with require_auth=false — \
-                 this is insecure; use only for development behind network isolation"
-            );
-            None
-        };
-
-        // Build sdforge rate_limiter (gated by sdforge/ratelimit feature, which
-        // vecboost's grpc feature pulls in). Uses default config (100 burst, 10 req/s).
-        // `new()` is infallible (panics only on invalid default config, which is a bug).
-        let rate_limiter: Option<std::sync::Arc<dyn sdforge::security::ratelimit::RateLimiter>> = {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                SdforgeLimiteronAdapter::new(),
-            )
-            .await
-            {
-                Ok(limiter) => {
-                    log::info!(
-                        "gRPC rate_limiter enabled (sdforge LimiteronAdapter, default config: 100 burst / 10 req/s)"
-                    );
-                    Some(std::sync::Arc::new(limiter))
-                }
-                Err(_) => {
-                    log::warn!(
-                        "gRPC rate_limiter initialization timed out after 10s, starting without rate limiting"
-                    );
-                    None
-                }
-            }
-        };
-
-        let grpc_config = GrpcServerConfig {
-            max_connections: config.server.grpc_max_connections.unwrap_or(1000),
-            timeout_seconds: config.server.grpc_timeout_seconds.unwrap_or(30),
-            require_auth,
-            auth: bearer_auth,
-            state: None,
-            rate_limiter,
-        };
-
-        log::info!("gRPC server enabled on {}", grpc_addr);
-        bg_tasks.spawn(async move {
-            if let Err(e) = build_server_with_config(&grpc_addr, grpc_config).await {
-                log::error!("gRPC server error: {}", e);
-            }
-        });
-    }
-
-    // Wait for server to complete (graceful shutdown on signal)
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(signal)
-    .await?;
-
-    // Execute phased shutdown coordinator after server stops
-    log::info!("Server stopped, executing phased shutdown...");
-
-    // Cancel all background tasks (config watcher, gRPC server, etc.)
-    bg_tasks.abort_all();
-    // Drain remaining tasks to prevent runtime hang
-    while bg_tasks.join_next().await.is_some() {}
-
-    let shutdown_result = match shutdown_coordinator.shutdown().await {
-        Ok(result) => result,
-        Err(e) => {
-            log::warn!("Shutdown coordinator error: {}", e);
-            return Err(anyhow::anyhow!("Phased shutdown failed: {}", e));
-        }
-    };
-    if !shutdown_result.is_ok() {
-        log::warn!(
-            "Shutdown timed out on phases: {:?}",
-            shutdown_result.timed_out_phases()
-        );
-    }
-    log::info!("VecBoost shutdown complete");
-
-    Ok(())
+    Ok(Arc::new(kit))
 }
 
 #[cfg(test)]
@@ -1431,7 +1544,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // G009: x-request-id 中间件注入响应头
+    // x-request-id 中间件注入响应头
     #[cfg(feature = "http")]
     #[tokio::test]
     async fn request_id_header_injected() {
@@ -1440,18 +1553,20 @@ mod tests {
         async fn ping() -> &'static str {
             "ok"
         }
-        let app = axum::Router::new().route("/ping", get(ping)).layer(axum::middleware::from_fn(
-            |req: axum::extract::Request, next: axum::middleware::Next| async move {
-                let mut resp = next.run(req).await;
-                if !resp.headers().contains_key("x-request-id") {
-                    resp.headers_mut().insert(
-                        "x-request-id",
-                        axum::http::HeaderValue::from_static("req-test"),
-                    );
-                }
-                Ok::<_, std::convert::Infallible>(resp)
-            },
-        ));
+        let app = axum::Router::new()
+            .route("/ping", get(ping))
+            .layer(axum::middleware::from_fn(
+                |req: axum::extract::Request, next: axum::middleware::Next| async move {
+                    let mut resp = next.run(req).await;
+                    if !resp.headers().contains_key("x-request-id") {
+                        resp.headers_mut().insert(
+                            "x-request-id",
+                            axum::http::HeaderValue::from_static("req-test"),
+                        );
+                    }
+                    Ok::<_, std::convert::Infallible>(resp)
+                },
+            ));
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
@@ -1461,13 +1576,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            resp.headers().get("x-request-id").unwrap(),
-            "req-test"
-        );
+        assert_eq!(resp.headers().get("x-request-id").unwrap(), "req-test");
     }
 
-    // G008: 默认构建(无 cuda/metal)下 use_gpu=true 回退 CPU
+    // 默认构建(无 cuda/metal)下 use_gpu=true 回退 CPU
     #[test]
     fn device_resolution_falls_back_to_cpu_without_gpu_features() {
         assert!(
@@ -1492,7 +1604,7 @@ mod tests {
         assert!(!should_warn_plaintext_secrets(false, false, false));
     }
 
-    // G001: Swagger UI 挂载验证 —— openapi.json 与 UI 资源均可访问
+    // Swagger UI 挂载验证 —— openapi.json 与 UI 资源均可访问
     #[cfg(feature = "http")]
     #[tokio::test]
     async fn swagger_ui_endpoints_served() {
@@ -1523,7 +1635,7 @@ mod tests {
         assert_eq!(resp.status(), 200);
     }
 
-    // G002: CLI 名单单一来源 + 未知子命令判定
+    // CLI 名单单一来源 + 未知子命令判定
     #[cfg(feature = "cli")]
     #[test]
     fn cli_subcommand_names_from_inventory() {

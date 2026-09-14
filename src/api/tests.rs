@@ -588,13 +588,13 @@ async fn test_forge_handler_require_calls_bounded_under_100_requests() {
 }
 
 // ---------------------------------------------------------------------------
-// AuditLogger called by forge handler pattern (R-audit-004)
+// AuditLogger called by forge handler pattern
 // ---------------------------------------------------------------------------
 
 /// Verify that `AuditLogger` correctly records login_success and logout events
 /// when invoked using the same call pattern as `forge_login` and `forge_logout`.
 ///
-/// R-audit-004 acceptance criteria 4-5:
+/// Acceptance criteria 4-5:
 /// - After forge_login: `log_login_success` is called and the ip argument is non-empty.
 /// - After forge_logout: `log_logout` is called and the username matches the login user.
 ///
@@ -635,7 +635,7 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
         .await
         .expect("audit log file should exist after flush");
 
-    // R-audit-004 验收点 4: log_login_success 被调用且 ip 非空
+    // 验收点 4: log_login_success 被调用且 ip 非空
     assert!(
         content.contains("login_success"),
         "login_success event should be logged"
@@ -645,7 +645,7 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
         "ip should be non-empty in login event"
     );
 
-    // R-audit-004 验收点 5: log_logout 被调用且 username 匹配登录用户
+    // 验收点 5: log_logout 被调用且 username 匹配登录用户
     assert!(content.contains("logout"), "logout event should be logged");
     assert!(
         content.contains(username),

@@ -17,6 +17,10 @@ use std::sync::Arc;
 pub struct PrometheusCollector {
     registry: Arc<Registry>,
 
+    // pipeline 队列深度 / 在途请求(pull 时快照)
+    pipeline_queue_depth: prometheus::IntGauge,
+    pipeline_in_flight: prometheus::IntGauge,
+
     // HTTP 请求计数器
     http_requests_total: CounterVec,
 
@@ -58,6 +62,18 @@ impl PrometheusCollector {
             vec![
                 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0
             ],
+            registry.clone()
+        )?;
+
+        // pipeline 队列深度与在途请求(pull 时快照,热路径零开销)
+        let pipeline_queue_depth = prometheus::register_int_gauge_with_registry!(
+            "vecboost_pipeline_queue_depth",
+            "Number of requests waiting in the pipeline priority queue",
+            registry.clone()
+        )?;
+        let pipeline_in_flight = prometheus::register_int_gauge_with_registry!(
+            "vecboost_pipeline_in_flight_requests",
+            "Number of requests currently inside the pipeline (dequeued, awaiting completion)",
             registry.clone()
         )?;
 
@@ -112,6 +128,8 @@ impl PrometheusCollector {
 
         Ok(Self {
             registry,
+            pipeline_queue_depth,
+            pipeline_in_flight,
             http_requests_total,
             http_request_duration_seconds,
             active_connections,
@@ -190,6 +208,12 @@ impl PrometheusCollector {
     }
 
     /// 获取注册表（用于暴露指标）
+    /// 拉取时更新 pipeline 快照 gauge(队列深度 / 在途请求)
+    pub fn set_pipeline_snapshot(&self, queue_depth: i64, in_flight: i64) {
+        self.pipeline_queue_depth.set(queue_depth);
+        self.pipeline_in_flight.set(in_flight);
+    }
+
     pub fn registry(&self) -> Arc<Registry> {
         self.registry.clone()
     }
@@ -216,10 +240,14 @@ mod tests {
         let collector = PrometheusCollector::default();
         let registry = collector.registry();
         let families = registry.gather();
-        assert!(
-            families.is_empty(),
-            "gather should return empty when no metrics have been recorded yet"
-        );
+        // 仅常驻的 pipeline 快照 gauge(初值 0)存在于未记录状态
+        for family in &families {
+            let name = family.name();
+            assert!(
+                name.starts_with("vecboost_pipeline_"),
+                "unexpected always-on family: {name}"
+            );
+        }
     }
 
     #[test]

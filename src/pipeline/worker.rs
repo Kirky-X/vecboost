@@ -949,7 +949,7 @@ mod tests {
             if tokio::time::Instant::now() >= deadline {
                 panic!(
                     "worker did not shut down within 2s after graceful Shutdown signal \
-                     (current_workers={}) — worker_loop is not consuming task_receiver (T009 regression)",
+                     (current_workers={}) — worker_loop is not consuming task_receiver",
                     manager.current_workers()
                 );
             }

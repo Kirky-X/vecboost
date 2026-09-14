@@ -16,3 +16,12 @@ pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
+
+/// 异步测试用:tokio Mutex 版本,可在跨 .await 持有时避免
+/// clippy::await_holding_lock 告警。
+pub static ENV_LOCK_ASYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// 异步测试便捷获取(tokio guard 可跨 .await)。
+pub async fn env_lock_async() -> tokio::sync::MutexGuard<'static, ()> {
+    ENV_LOCK_ASYNC.lock().await
+}

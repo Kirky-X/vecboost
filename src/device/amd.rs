@@ -905,7 +905,10 @@ mod tests {
             assert!(primary.is_some());
             assert!(primary.as_ref().unwrap().name().contains("Device 0"));
         } else {
-            assert!(primary.is_none(), "no devices enumerated → primary must be None");
+            assert!(
+                primary.is_none(),
+                "no devices enumerated → primary must be None"
+            );
         }
     }
 

@@ -3,7 +3,7 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information.
 
-//! SDK 场景集成测试 — 模型矩阵 + 正常/异常全场景（design.md M1 矩阵）
+//! SDK 场景集成测试 — 模型矩阵 + 正常/异常全场景
 //!
 //! 覆盖场景：
 //! - M0 模型矩阵：4 模型 × 3 厂商 × 2 架构（Bert/XlmRoberta），
@@ -304,7 +304,7 @@ async fn sdk_normal_similarity_semantics() {
     let engine = AnyEngine::new(&cfg, EngineType::Candle, Precision::Fp32).expect("engine");
     let svc = EmbeddingService::new(Arc::new(RwLock::new(engine)), Some(cfg));
 
-    // 同文本 = 1.0（SIM-002 语义回归：无关文本不得为 1.0）
+    // 同文本 = 1.0（语义回归：无关文本不得为 1.0）
     let same = svc
         .process_similarity(SimilarityRequest {
             source: "machine learning algorithms".into(),
@@ -399,7 +399,7 @@ async fn sdk_normal_rerank_topk_boundaries() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sdk_batch_matches_single_across_lengths() {
-    // DEFECT-BATCH-001 回归钉：批内短序列不得被长序列 padding 污染
+    // 回归钉：批内短序列不得被长序列 padding 污染
     // （Bert forward 参数错位修复的永久守护）
     if model_dir(M1_DIR).is_none() {
         eprintln!("SKIP: M1 缺失");
@@ -424,7 +424,7 @@ async fn sdk_batch_matches_single_across_lengths() {
     let cos_long = cos(&single_long, &batch.embeddings[1].embedding);
     assert!(
         cos_short > 0.9999,
-        "批内短序列与单条推理应一致（DEFECT-BATCH-001）: cos={cos_short}"
+        "批内短序列与单条推理应一致: cos={cos_short}"
     );
     assert!(
         cos_long > 0.9999,

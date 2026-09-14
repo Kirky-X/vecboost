@@ -4,6 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 pub mod openai_embedding;
+pub mod scheduling;
 
 use crate::config::model::{DeviceType, PoolingMode};
 use crate::utils::AggregationMode;

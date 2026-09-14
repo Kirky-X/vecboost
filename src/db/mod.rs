@@ -81,6 +81,25 @@ impl DbPool {
 /// # Errors
 ///
 /// 如果建表失败,返回 `VecboostError::InternalError`
+static GLOBAL_POOL: std::sync::OnceLock<std::sync::Arc<DbPool>> = std::sync::OnceLock::new();
+
+/// 记录进程级活跃连接池(供 /health?depth=full 的 DB 探测读取)。
+pub fn register_global_pool(pool: std::sync::Arc<DbPool>) -> bool {
+    GLOBAL_POOL.set(pool).is_ok()
+}
+
+/// DB 就绪探测(等价 SELECT 1):获取一次 admin 会话。
+pub async fn probe_ready() -> Result<(), String> {
+    match GLOBAL_POOL.get() {
+        Some(pool) => pool
+            .get_session("admin")
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("db session probe failed: {e}")),
+        None => Err("db pool not initialised (db feature disabled or init pending)".into()),
+    }
+}
+
 pub async fn init_schema(pool: &DbPool) -> Result<(), VecboostError> {
     let session = pool.get_session("admin").await?;
 

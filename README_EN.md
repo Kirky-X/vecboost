@@ -189,8 +189,9 @@ This audit-remediation introduces the following **breaking behavior changes** �
 | CLI | unknown subcommand silently started the HTTP server | usage on stderr + exit code 2 | adjust scripts; `--help` available |
 
 **Multi-replica boundary**: the inference path is stateless and scales horizontally when auth
-is disabled (rate limiting / caches are per-process). With `auth.enabled=true` sessions live
-in process memory — **single replica only**; enable the `db` feature for multi-replica auth.
+is disabled (rate limiting / caches are per-process). With `auth.enabled=true` auth sessions live
+in process memory (oxcache DAO) — **single replica only**; session externalization
+requires a garrison pool-backed DAO (tracked as a separate change).
 
 **Hot reload semantics**: config file changes are **validated and logged, applied after
 restart** (not hot-swapped). On Kubernetes use ConfigMap rollout.

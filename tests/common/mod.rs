@@ -6,7 +6,7 @@
 //! 共享测试 fixtures
 //!
 //! 提供集成测试与性能测试共用的工具函数、`MockEngine` 与 `RealTestEngine`。
-//! 本模块合并自原 `tests/integration/real_engine.rs`（D8 重组）。
+//! 本模块合并自原 `tests/integration/real_engine.rs`。
 
 use std::path::PathBuf;
 use std::sync::Arc;

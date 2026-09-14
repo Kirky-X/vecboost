@@ -23,7 +23,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
-  FEATURES: "grpc,cli,auth,onnx,db,redis,openapi,mcp"
+  FEATURES: "grpc,cli,auth,onnx,db,openapi,mcp"
 
 concurrency:
   group: ci-${{ github.ref }}

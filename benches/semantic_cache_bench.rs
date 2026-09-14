@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 /// Trigram Jaccard similarity — local copy for baseline benchmarking.
-/// Will be replaced by the actual implementation in Phase 2.
 fn trigram_jaccard(a: &str, b: &str) -> f32 {
     if a.len() < 3 || b.len() < 3 {
         return 0.0;

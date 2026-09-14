@@ -63,14 +63,8 @@ fn setup_continuous_loop() -> (
     (loop_, queue, shutdown_tx)
 }
 
-fn make_queued_request(
-    id: usize,
-) -> (
-    QueuedRequest,
-    tokio::sync::oneshot::Receiver<Result<vecboost::domain::EmbedResponse, VecboostError>>,
-) {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let req = QueuedRequest {
+fn make_queued_request(id: usize) -> QueuedRequest {
+    QueuedRequest {
         request_id: format!("bench-{}", id),
         request: ServiceRequest::Embed(EmbedRequest {
             text: format!("text {}", id),
@@ -80,8 +74,7 @@ fn make_queued_request(
         submitted_at: Instant::now(),
         timeout: Duration::from_secs(30),
         source: RequestSource::Internal,
-    };
-    (req, rx)
+    }
 }
 
 /// Create a batch request with the given id.
@@ -225,19 +218,21 @@ fn bench_continuous_steady(c: &mut Criterion) {
                 let loop_handle = tokio::spawn(async move { loop_.run().await });
 
                 let num_requests = 100;
-                let mut receivers = Vec::with_capacity(num_requests);
 
                 for i in 0..num_requests {
-                    let (req, rx) = make_queued_request(i);
+                    let req = make_queued_request(i);
                     queue.enqueue(req).await.unwrap();
-                    receivers.push(rx);
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
 
-                // Wait for all responses
-                for rx in receivers {
-                    let _ = tokio::time::timeout(Duration::from_secs(5), rx).await;
-                }
+                // 契约:等待队列排空(结果交付由 pipeline 响应通道负责)
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while queue.size() > 0 {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("queue should drain");
 
                 shutdown_tx.send(true).unwrap();
                 let _ = tokio::time::timeout(Duration::from_millis(100), loop_handle).await;
@@ -257,16 +252,18 @@ fn bench_continuous_burst(c: &mut Criterion) {
                 let loop_handle = tokio::spawn(async move { loop_.run().await });
 
                 for burst in 0..3 {
-                    let mut receivers = Vec::with_capacity(50);
                     for i in 0..50 {
-                        let (req, rx) = make_queued_request(burst * 50 + i);
+                        let req = make_queued_request(burst * 50 + i);
                         queue.enqueue(req).await.unwrap();
-                        receivers.push(rx);
                     }
 
-                    for rx in receivers {
-                        let _ = tokio::time::timeout(Duration::from_secs(5), rx).await;
-                    }
+                    tokio::time::timeout(Duration::from_secs(5), async {
+                        while queue.size() > 0 {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    })
+                    .await
+                    .expect("burst queue should drain");
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
 

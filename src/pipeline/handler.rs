@@ -12,9 +12,26 @@ use crate::i18n;
 use std::time::Duration;
 
 /// 处理流水线请求
-/// G011: 进程级请求 ID 计数器 —— u64 原子递增,十六进制展示
+/// 进程级请求 ID 计数器 —— u64 原子递增,十六进制展示
 /// (替代 UUID String:省一次堆分配与随机熵开销,格式仍可读)
 static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// pipeline 在途请求计数(入队等待响应期间 +1,完成 -1)
+pub static IN_FLIGHT_REQUESTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// RAII 守卫:离开 pipeline 等待路径时自动递减
+pub(crate) struct InFlightGuard;
+impl InFlightGuard {
+    pub(crate) fn enter() -> Self {
+        IN_FLIGHT_REQUESTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        InFlightGuard
+    }
+}
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        IN_FLIGHT_REQUESTS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 fn next_request_id() -> String {
     format!(
@@ -30,6 +47,8 @@ pub async fn handle_pipeline_request(
 ) -> Result<axum::Json<crate::domain::EmbedResponse>, VecboostError> {
     // 生成请求 ID
     let request_id = next_request_id();
+    // 进入 pipeline 等待即计为在途(RAII,任何退出路径自动递减)
+    let _in_flight = InFlightGuard::enter();
 
     // 创建响应通道
     let response_rx = state
@@ -56,7 +75,7 @@ pub async fn handle_pipeline_request(
                 .size(),
         });
 
-    // G011: 不再创建被丢弃的 oneshot —— 响应统一走 ResponseChannel.register
+    // 不再创建被丢弃的 oneshot —— 响应统一走 ResponseChannel.register
     let queued_request = crate::pipeline::QueuedRequest {
         request_id: request_id.clone(),
         request: crate::pipeline::ServiceRequest::Embed(req),

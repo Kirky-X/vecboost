@@ -108,7 +108,7 @@ pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
             source: None,
         },
         other => {
-            // G004: 500 类错误经 context.extra 透传 Fluent error_code,
+            // 500 类错误经 context.extra 透传 Fluent error_code,
             // 客户端可在 error.details.context.extra.error_code 拿到稳定键
             ApiError::Internal {
                 message: other.error_detail().to_string(),
@@ -492,6 +492,72 @@ fn model_path_validator(configured_roots: Option<&[String]>) -> PathValidator {
     validator
 }
 
+// ---------------------------------------------------------------------------
+// /health?depth=full 真实就绪探测
+// ---------------------------------------------------------------------------
+
+/// 引擎 dummy 推理探测的结果缓存(500ms):防止健康检查风暴打满推理
+static ENGINE_PROBE_CACHE: std::sync::OnceLock<
+    tokio::sync::Mutex<Option<(std::time::Instant, bool)>>,
+> = std::sync::OnceLock::new();
+
+const ENGINE_PROBE_CACHE_TTL: std::time::Duration = std::time::Duration::from_millis(500);
+
+async fn engine_probe_ok(st: &crate::VecboostState) -> bool {
+    let cache = ENGINE_PROBE_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
+    let mut guard = cache.lock().await;
+    if let Some((at, ok)) = *guard
+        && at.elapsed() < ENGINE_PROBE_CACHE_TTL
+    {
+        return ok;
+    }
+    let ok = async {
+        match st.kit.require::<EmbeddingModule>() {
+            Ok(svc) => {
+                let guard = svc.read().await;
+                guard.count_tokens("healthcheck").is_ok()
+            }
+            Err(_) => false,
+        }
+    }
+    .await;
+    *guard = Some((std::time::Instant::now(), ok));
+    ok
+}
+
+/// 深度就绪探测:返回失败组件列表(空 = 全部就绪)。
+/// - db:连接池真实往返(cfg db);
+/// - engine:tokenizer/服务链路可用性(带 500ms 缓存);
+/// - rate_limit:limiteron 周期健康检查。
+async fn run_deep_health_checks(st: &crate::VecboostState) -> Vec<serde_json::Value> {
+    let mut failures = Vec::new();
+
+    #[cfg(feature = "db")]
+    {
+        if let Err(reason) = crate::db::probe_ready().await {
+            failures.push(serde_json::json!({ "component": "db", "error": reason }));
+        }
+    }
+
+    if !engine_probe_ok(st).await {
+        failures.push(serde_json::json!({
+            "component": "engine",
+            "error": "tokenizer/engine pipeline probe failed",
+        }));
+    }
+
+    if let Ok(limiter) = st.kit.require::<crate::registry::RateLimitModule>()
+        && !limiter.check_health().await
+    {
+        failures.push(serde_json::json!({
+            "component": "rate_limit",
+            "error": "limiteron health check failed",
+        }));
+    }
+
+    failures
+}
+
 #[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
 async fn model_switch_handler(req: ModelSwitchRequest) -> Result<ModelSwitchResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
@@ -562,9 +628,25 @@ async fn list_models_handler() -> Result<ModelListResponse, ApiError> {
 /// Returns `{"status": "OK"}` when all modules are healthy, or
 /// `ApiError::ServiceUnavailable` when any module reports unhealthy.
 #[cfg(any(feature = "http", feature = "grpc"))]
-async fn health_handler() -> Result<serde_json::Value, ApiError> {
+async fn health_handler(depth: Option<String>) -> Result<serde_json::Value, ApiError> {
     let st = state().map_err(to_api_error)?;
     let mut unhealthy_modules = Vec::new();
+
+    // depth=full → 真实就绪探测(DB/引擎/限流器),任一失败 → 503
+    if depth.as_deref() == Some("full") {
+        let failures = run_deep_health_checks(&st).await;
+        if !failures.is_empty() {
+            return Err(ApiError::ServiceUnavailable {
+                service: serde_json::to_string(&failures).unwrap_or_default(),
+                retry_after: Some(5),
+                source: None,
+            });
+        }
+        return Ok(serde_json::json!({
+            "status": crate::i18n::tr("health-ok"),
+            "depth": "full",
+        }));
+    }
 
     // Query registered health checks
     match st.kit.health_check::<EmbeddingModule>() {
@@ -726,8 +808,10 @@ pub async fn forge_file_embed(req: FileEmbedRequest) -> Result<FileEmbedResponse
     tool_name = "health",
     description = "Service health check"
 )]
-pub async fn forge_health() -> Result<serde_json::Value, ApiError> {
-    health_handler().await
+pub async fn forge_health(
+    #[param(kind = "query")] depth: Option<String>,
+) -> Result<serde_json::Value, ApiError> {
+    health_handler(depth).await
 }
 
 #[cfg(feature = "http")]
@@ -813,11 +897,9 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
             value: openai_error_detail("invalid_request_error", "empty_input"),
         });
     }
-    // G005: OpenAI 契约上限 2048;错误文案同时给出 embedding.max_batch_size 生效值
+    // OpenAI 契约上限 2048;错误文案同时给出 embedding.max_batch_size 生效值
     if req.input.len() > 2048 {
-        let effective = max_batch_size_from_kit(
-            &state().map_err(to_api_error)?.kit,
-        );
+        let effective = max_batch_size_from_kit(&state().map_err(to_api_error)?.kit);
         return Err(ApiError::InvalidInput {
             message: format!(
                 "{} (server embedding.max_batch_size = {})",
@@ -833,7 +915,7 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
     }
 
     let st = state().map_err(to_api_error)?;
-    // G005: model 必须非空且在可用模型集合中,否则 404 + 可用列表
+    // model 必须非空且在可用模型集合中,否则 404 + 可用列表
     let available = {
         let svc = st
             .kit
@@ -842,7 +924,7 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
         let guard = svc.read().await;
         guard.list_available_models().models
     };
-    if !available.iter().any(|m| &m.name == &req.model) {
+    if !available.iter().any(|m| m.name == req.model) {
         // 404 + 可用模型列表(OpenAI SDK 侧经 openai_error_type/openai_code 槽识别,
         // NotFound 变体无自由槽位,故将 OpenAI 字段并入 resource 语义说明)
         return Err(ApiError::InvalidInput {
@@ -885,7 +967,7 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
         .await
         .map_err(to_api_error)?;
 
-    // DEFECT-OPENAI-001 修复：实现 OpenAI 规范的 encoding_format=base64
+    // 修复：实现 OpenAI 规范的 encoding_format=base64
     // （小端 f32 字节流的 base64 编码），旧实现直接忽略该参数。
     let as_base64 = req.encoding_format.as_deref() == Some("base64");
     let embedding_objects: Vec<EmbeddingObject> = batch_response
@@ -1118,12 +1200,13 @@ pub async fn grpc_unload_model(req: UnloadModelRequest) -> Result<UnloadModelRes
     description = "Service health check"
 )]
 pub async fn grpc_health_check() -> Result<serde_json::Value, ApiError> {
-    health_handler().await
+    // gRPC 无 query 语义 → 固定轻量 liveness(HTTP 侧 /health?depth=full 提供就绪探测)
+    health_handler(None).await
 }
 
 #[cfg(test)]
 mod tests {
-    /// G004: 500 类错误 wire JSON 透传 Fluent error_code(context.extra)
+    /// 500 类错误 wire JSON 透传 Fluent error_code(context.extra)
     #[test]
     fn to_api_error_carries_fluent_error_code() {
         let api = to_api_error(VecboostError::InternalError("boom".into()));
@@ -1131,10 +1214,13 @@ mod tests {
         let wire = serde_json::to_value(&svc).unwrap();
         // ServiceError derive 序列化为平铺字段(code/message/details/http_status)
         assert_eq!(wire["code"], "INTERNAL_ERROR");
-        assert_eq!(wire["details"]["context"]["extra"]["error_code"], "error-internal");
+        assert_eq!(
+            wire["details"]["context"]["extra"]["error_code"],
+            "error-internal"
+        );
     }
 
-    /// G004: OpenAI 错误槽位(type/code)可经 value 槽到达 wire
+    /// OpenAI 错误槽位(type/code)可经 value 槽到达 wire
     #[cfg(feature = "http")]
     #[test]
     fn openai_error_detail_carries_type_and_code() {

@@ -175,7 +175,7 @@ impl SemanticCache {
         let query_len = query_trigrams.len();
 
         for (i, entry) in index.iter().enumerate() {
-            // G013: 大小差预过滤 —— Jaccard 上限 = min/max;大小差超过阈值时
+            // 大小差预过滤 —— Jaccard 上限 = min/max;大小差超过阈值时
             // 不可能达标,跳过昂贵的集合交/并
             let upper_bound = query_len.min(entry.trigrams.len()) as f32
                 / query_len.max(entry.trigrams.len()).max(1) as f32;
@@ -232,7 +232,7 @@ impl SemanticCache {
     }
 }
 
-/// G013: 将 3 字节窗口打包为一个 u32(避免每 trigram 一次堆分配)。
+/// 将 3 字节窗口打包为一个 u32(避免每 trigram 一次堆分配)。
 ///
 /// 尾部不足 3 字节时以零填充补齐最后一个窗口(与 `windows(3)` 语义一致:
 /// 字节数 < 3 的文本没有完整窗口,返回空集)。
@@ -506,7 +506,7 @@ mod tests {
         assert_eq!(trigram_jaccard_with_set(&a, &a), 1.0);
     }
 
-    /// G013: 打包一致性 —— pack_trigrams 与逐字节窗口语义等价
+    /// 打包一致性 —— pack_trigrams 与逐字节窗口语义等价
     #[test]
     fn test_pack_trigrams_roundtrip_consistency() {
         let text = "hello world 机器学习";

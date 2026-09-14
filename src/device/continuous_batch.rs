@@ -18,7 +18,9 @@ use tokio::sync::{RwLock, watch};
 use crate::device::DynamicBatchScheduler;
 use crate::domain::{EmbedRequest, EmbedResponse};
 use crate::error::VecboostError;
-use crate::pipeline::{Priority, PriorityRequestQueue, QueuedRequest};
+// 调度类型经 domain(打断 device→pipeline 依赖)
+use crate::domain::scheduling::{Priority, QueuedRequest};
+use crate::pipeline::PriorityRequestQueue;
 use crate::service::embedding::EmbeddingService;
 
 /// SLA 安全边际：剩余 timeout 低于此值时立即刷新
@@ -199,7 +201,7 @@ impl ContinuousBatchLoop {
                         processing_time_ms: 0,
                         information_retention_rate: None,
                     };
-                    let _ = response; // G011: 响应回传经 ResponseChannel(由 pipeline 完成路径负责)
+                    let _ = response; // 响应回传经 ResponseChannel(由 pipeline 完成路径负责)
                     log::debug!(
                         "Continuous batch produced embedding (dim {}) for request {}; delivery is handled by the pipeline response channel",
                         response.dimension,
@@ -210,7 +212,7 @@ impl ContinuousBatchLoop {
             Err(e) => {
                 warn!("Batch processing failed: {}", e);
                 for request in batch {
-                    // G011: 无 response_tx —— 失败记日志,等待方经 30s 超时收到错误
+                    // 无 response_tx —— 失败记日志,等待方经 30s 超时收到错误
                     warn!(
                         "Continuous batch request {} failed: {}",
                         request.request_id, e
@@ -225,8 +227,8 @@ impl ContinuousBatchLoop {
 mod tests {
     use super::*;
     use crate::config::model::{ModelConfig, Precision};
+    use crate::domain::scheduling::RequestSource;
     use crate::engine::InferenceEngine;
-    use crate::pipeline::RequestSource;
     use async_trait::async_trait;
     use tokio::sync::{oneshot, watch};
 
@@ -287,12 +289,8 @@ mod tests {
     }
 
     /// 创建测试用的 QueuedRequest
-    fn make_queued_request(
-        id: &str,
-        priority: Priority,
-        timeout: Duration,
-    ) -> QueuedRequest {
-        // G011 契约:ContinuousBatchLoop 不再持有 response_tx,
+    fn make_queued_request(id: &str, priority: Priority, timeout: Duration) -> QueuedRequest {
+        // 契约:ContinuousBatchLoop 不再持有 response_tx,
         // 结果交付统一由 pipeline worker 经 ResponseChannel 完成。
         QueuedRequest {
             request_id: id.to_string(),
@@ -320,7 +318,7 @@ mod tests {
             loop_.run().await;
         });
 
-        // G011 契约:请求应被出队并处理(队列排空;交付由 pipeline 完成)
+        // 契约:请求应被出队并处理(队列排空;交付由 pipeline 完成)
         let drained = tokio::time::timeout(Duration::from_millis(500), async {
             while queue.size() > 0 {
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -349,14 +347,17 @@ mod tests {
             loop_.run().await;
         });
 
-        // G011 契约:两个请求都应被出队处理(队列排空;批内优先顺序由调度器保证)
+        // 契约:两个请求都应被出队处理(队列排空;批内优先顺序由调度器保证)
         let drained = tokio::time::timeout(Duration::from_millis(500), async {
             while queue.size() > 0 {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
         .await;
-        assert!(drained.is_ok(), "Both requests should be dequeued within 500ms");
+        assert!(
+            drained.is_ok(),
+            "Both requests should be dequeued within 500ms"
+        );
 
         shutdown_tx.send(true).unwrap();
         let _ = tokio::time::timeout(Duration::from_millis(100), handle).await;
@@ -375,7 +376,7 @@ mod tests {
             loop_.run().await;
         });
 
-        // G011 契约:短超时请求应被快速出队(不落入批处理等待窗口)
+        // 契约:短超时请求应被快速出队(不落入批处理等待窗口)
         let drained = tokio::time::timeout(Duration::from_millis(50), async {
             while queue.size() > 0 {
                 tokio::time::sleep(Duration::from_millis(2)).await;
@@ -417,8 +418,7 @@ mod tests {
         let (loop_, queue, shutdown_tx) = setup_test_loop();
 
         // 创建一个已经过期的请求(timeout=0):loop 应跳过而非送入推理
-        let request =
-            make_queued_request("expired-1", Priority::Normal, Duration::from_millis(0));
+        let request = make_queued_request("expired-1", Priority::Normal, Duration::from_millis(0));
         queue.enqueue(request).await.unwrap();
 
         // 等一小段时间让请求过期
@@ -428,14 +428,17 @@ mod tests {
             loop_.run().await;
         });
 
-        // G011 契约:过期请求被跳过并从队列移除(错误交付由 pipeline 过期路径负责)
+        // 契约:过期请求被跳过并从队列移除(错误交付由 pipeline 过期路径负责)
         let drained = tokio::time::timeout(Duration::from_millis(100), async {
             while queue.size() > 0 {
                 tokio::time::sleep(Duration::from_millis(2)).await;
             }
         })
         .await;
-        assert!(drained.is_ok(), "Expired request should be skipped and removed");
+        assert!(
+            drained.is_ok(),
+            "Expired request should be skipped and removed"
+        );
 
         shutdown_tx.send(true).unwrap();
         let _ = tokio::time::timeout(Duration::from_millis(100), handle).await;

@@ -31,6 +31,8 @@ pub async fn create_key_store(config: &SecurityConfig) -> Result<Box<dyn KeyStor
 
 #[cfg(test)]
 mod tests {
+    use crate::utils::test_env_lock::env_lock;
+
     use super::*;
     use crate::security::KeyType;
     #[cfg(feature = "auth")]
@@ -38,6 +40,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_key_store_environment_default() {
+        let _env = env_lock();
         let config = SecurityConfig::default();
         let result = create_key_store(&config).await;
         assert!(
@@ -48,6 +51,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_key_store_environment_explicit() {
+        let _env = env_lock();
         let config = SecurityConfig {
             storage_type: StorageType::Environment,
             encryption_key: None,
@@ -64,6 +68,7 @@ mod tests {
     #[cfg(feature = "auth")]
     #[tokio::test]
     async fn test_create_key_store_encrypted_file_success() {
+        let _env = env_lock();
         let dir = tempdir().expect("failed to create temp dir");
         let path = dir.path().join("keys.enc").to_string_lossy().to_string();
 
@@ -83,6 +88,7 @@ mod tests {
     #[cfg(feature = "auth")]
     #[tokio::test]
     async fn test_create_key_store_encrypted_file_returns_working_store() {
+        let _env = env_lock();
         let dir = tempdir().expect("failed to create temp dir");
         let path = dir.path().join("keys.enc").to_string_lossy().to_string();
 
@@ -108,6 +114,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_key_store_encrypted_file_missing_key() {
+        let _env = env_lock();
         let config = SecurityConfig {
             storage_type: StorageType::EncryptedFile,
             encryption_key: None,
@@ -125,6 +132,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_key_store_encrypted_file_missing_path() {
+        let _env = env_lock();
         let config = SecurityConfig {
             storage_type: StorageType::EncryptedFile,
             encryption_key: Some("key".to_string()),
@@ -142,6 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_key_store_encrypted_file_both_missing() {
+        let _env = env_lock();
         let config = SecurityConfig {
             storage_type: StorageType::EncryptedFile,
             encryption_key: None,

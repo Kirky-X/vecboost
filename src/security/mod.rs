@@ -227,6 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_key_store_environment() {
+        let _env = env_lock();
         let config = SecurityConfig::default();
         let store = create_key_store(&config).await;
         assert!(store.is_ok());
@@ -234,6 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_key_store_invalid_encrypted_file_no_auth() {
+        let _env = env_lock();
         // Without both key and path, should return Invalid configuration error
         let config = SecurityConfig {
             storage_type: StorageType::EncryptedFile,

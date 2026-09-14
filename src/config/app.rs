@@ -561,9 +561,11 @@ impl Default for AuthConfig {
             token_expiration_hours: Some(DEFAULT_TOKEN_EXPIRATION_HOURS),
             default_admin_username: None,
             default_admin_password: None,
-            // CSRF 默认开启 —— 中间件仅在 auth.enabled && csrf.enabled 时挂载,
-            // 因此实际效果是"CSRF 跟随 auth 开关"。显式关闭可在配置中设 csrf.enabled=false。
-            csrf: CsrfConfig { enabled: true },
+            // T020 修订:CSRF 默认关闭。本 API 为纯 Bearer 认证(garrison
+            // is_read_cookie=false),无 Cookie 则无 CSRF 攻击面;默认开启反而令
+            // 标准 API 客户端(无 Origin 头的服务器间调用)被 403 拒绝(实测)。
+            // 需要浏览器会话场景时显式设 csrf.enabled=true。
+            csrf: CsrfConfig::default(),
             trusted_proxies: Vec::new(),
         }
     }
@@ -655,8 +657,8 @@ pub(crate) mod test_support {
 mod tests {
     /// AuthConfig 默认 CSRF 开启(配合挂载条件实现“跟随 auth”)
     #[test]
-    fn authconfig_default_csrf_enabled() {
-        assert!(AuthConfig::default().csrf.enabled);
+    fn authconfig_default_csrf_disabled() {
+        assert!(!AuthConfig::default().csrf.enabled);
     }
 
     use super::*;
@@ -865,8 +867,8 @@ mod tests {
 
         assert!(!config.auth.enabled);
         assert_eq!(config.auth.token_expiration_hours, Some(24));
-        // CSRF 默认开启(挂载条件 auth.enabled && csrf.enabled 实现跟随 auth)
-        assert!(config.auth.csrf.enabled);
+        // T020 修订:CSRF 默认关闭(纯 Bearer API 无 Cookie 攻击面)
+        assert!(!config.auth.csrf.enabled);
 
         assert!(config.audit.enabled);
         assert!(config.rate_limit.enabled);

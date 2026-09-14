@@ -988,8 +988,8 @@ async fn app_main() -> anyhow::Result<()> {
             |req: axum::extract::Request, next: axum::middleware::Next| async move {
                 let mut resp = next.run(req).await;
                 if !resp.headers().contains_key("x-request-id")
-                    && let Ok(id) = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
+                    && let Ok(id) =
+                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
                 {
                     resp.headers_mut().insert(
                         "x-request-id",

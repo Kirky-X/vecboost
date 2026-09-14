@@ -4,11 +4,38 @@
 
 [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![GitHub release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![Rustc 1.85+](https://img.shields.io/badge/Rustc-1.85+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
 
+[中文](README.md) | **English**
+
 *A high-performance, production-ready embedding vector service written in Rust. VecBoost provides efficient text vectorization with support for multiple inference engines, GPU acceleration, and enterprise-grade features.*
 
-**[中文](README.md) | English**
+[✨ Core Features](#-core-features) • [🚀 Quick Start](#-quick-start) • [📖 Documentation](#-documentation) • [🔌 API](#-api-usage) • [⚙️ Configuration](#️-configuration) • [🏗️ Architecture](#️-architecture)
 
 </div>
+
+---
+
+## 📋 Table of Contents
+
+<details open>
+<summary>📑 Table of Contents</summary>
+
+- [✨ Core Features](#-core-features)
+- [🧩 7-Library Ecosystem](#-7-library-ecosystem)
+- [🚀 Quick Start](#-quick-start)
+- [📖 Documentation](#-documentation)
+- [🔌 API Usage](#-api-usage)
+- [⚙️ Configuration](#️-configuration)
+- [🏗️ Architecture](#️-architecture)
+- [📦 Project Structure](#-project-structure)
+- [🎯 Performance Benchmarks](#-performance-benchmarks)
+- [🔒 Security Features](#-security-features)
+- [📈 Observability](#-observability)
+- [🚀 Deployment Options](#-deployment-options)
+- [🤝 Contributing](#-contributing)
+- [📄 License](#-license)
+- [🙏 Acknowledgments](#-acknowledgments)
+
+</details>
 
 ---
 
@@ -371,7 +398,7 @@ jwt_secret = "your-secret-key"
 url = "sqlite:vecboost.db"
 max_connections = 10
 
-# [logging] 已于 v0.3.0 正式解析生效
+# [logging] is actively parsed since v0.3.0
 [logging]         # inklog (feature: inklog)
 level = "info"
 console = true
@@ -405,9 +432,9 @@ eviction_policy = "lru"
 | | `max_connections` | `10` | Connection pool size | dbnexus |
 | **logging** | `level` | `info` | Log level | inklog |
 | | `file_path` | `logs/vecboost.log` | Log file path | inklog |
-| **flow_control** **（⚠️ 当前版本未解析，编辑不生效）** | `token_capacity` | `100` | Token bucket capacity | limiteron |
+| **flow_control** **(⚠️ Not parsed in current version, edits have no effect)** | `token_capacity` | `100` | Token bucket capacity | limiteron |
 | | `token_refill_rate` | `50` | Token refill rate (per second) | limiteron |
-| **cache** **（⚠️ 当前版本未解析，编辑不生效）** | `backend` | `memory` | Cache backend type | oxcache |
+| **cache** **(⚠️ Not parsed in current version, edits have no effect)** | `backend` | `memory` | Cache backend type | oxcache |
 | | `ttl_secs` | `3600` | Cache TTL (seconds) | oxcache |
 
 > **📖 Full Configuration**: See [`config/config.toml`](config/config.toml) for all available options.

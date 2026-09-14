@@ -1,6 +1,4 @@
-<div align="center">
-
-# 📚 VecBoost API 参考文档
+# 📘 VecBoost API 参考文档
 
 **完整的 REST HTTP 端点和 gRPC 服务方法文档**
 
@@ -8,22 +6,24 @@
 
 *VecBoost API 的完整文档，包括 REST HTTP 端点和 gRPC 服务方法。*
 
-</div>
-
 ---
 
 ## 📋 目录
 
-| 章节 | 说明 |
-|------|------|
-| [基础 URL](#基础-url) | API 端点基础地址 |
-| [认证](#认证) | JWT 认证和令牌管理 |
-| [REST API](#rest-api) | HTTP REST 接口文档 |
-| [OpenAPI 文档](#-openapi-文档) | Swagger UI 与 OpenAPI 规范端点 |
-| [gRPC API](#grpc-api) | gRPC 服务定义、配置与消息类型 |
-| [错误处理](#错误处理) | 错误码和响应格式 |
-| [国际化（i18n）](#-国际化i18n) | 中英双语支持与语言配置 |
-| [速率限制](#速率限制) | 速率限制策略和响应头 |
+<details open>
+<summary>📑 目录（点击展开）</summary>
+
+- [基础 URL](#-基础-url)
+- [认证](#-认证)
+- [REST API](#-rest-api)
+- [gRPC API](#-grpc-api)
+- [错误处理](#-错误处理)
+- [国际化（i18n）](#-国际化i18n)
+- [速率限制](#-速率限制)
+- [版本历史](#-版本历史)
+- [相关文档](#-相关文档)
+
+</details>
 
 ---
 
@@ -1287,4 +1287,14 @@ ip_whitelist = ["127.0.0.1"]
 
 ---
 
-> **📝 最后更新**: 2026-08-09 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+## 📚 相关文档
+
+| 文档 | 说明 |
+|:-----|:-----|
+| [📖 用户指南](USER_GUIDE_zh.md) | 安装、配置和使用的完整说明 |
+| [🏗️ 架构设计](ARCHITECTURE_zh.md) | 内部架构、组件与设计决策 |
+| [📋 更新日志](CHANGELOG.md) | 每个版本的变更记录 |
+
+---
+
+> **📝 最后更新**: 2026-09-06 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

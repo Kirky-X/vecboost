@@ -4,11 +4,38 @@
 
 [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT) [![GitHub release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![Rustc 1.85+](https://img.shields.io/badge/Rustc-1.85+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
 
+**中文** | [English](README_EN.md)
+
 *高性能、生产级嵌入向量服务，使用 Rust 编写。VecBoost 提供高效的文本向量化服务，支持多种推理引擎、GPU 加速和企业级功能。*
 
-**中文 | [English](README_EN.md)**
+[✨ 核心功能](#-核心功能) • [🚀 快速开始](#-快速开始) • [📖 文档](#-文档) • [🔌 API](#-api-使用) • [⚙️ 配置](#️-配置) • [🏗️ 架构](#️-架构)
 
 </div>
+
+---
+
+## 📋 目录
+
+<details open>
+<summary>📑 目录</summary>
+
+- [✨ 核心功能](#-核心功能)
+- [🧩 7 库生态](#-7-库生态)
+- [🚀 快速开始](#-快速开始)
+- [📖 文档](#-文档)
+- [🔌 API 使用](#-api-使用)
+- [⚙️ 配置](#️-配置)
+- [🏗️ 架构](#️-架构)
+- [📦 项目结构](#-项目结构)
+- [🎯 性能基准](#-性能基准)
+- [🔒 安全特性](#-安全特性)
+- [📈 可观测性](#-可观测性)
+- [🚀 部署选项](#-部署选项)
+- [🤝 贡献](#-贡献)
+- [📄 许可证](#-许可证)
+- [🙏 致谢](#-致谢)
+
+</details>
 
 ---
 

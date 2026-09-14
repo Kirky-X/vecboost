@@ -6,6 +6,26 @@
 
 This document describes the VecBoost v0.2.1 architecture, built on a modular 7-library ecosystem unified through `trait-kit`.
 
+## 📋 Table of Contents
+
+<details open>
+<summary>📑 Table of Contents (click to expand)</summary>
+
+- [1. High-Level Architecture](#1-high-level-architecture)
+- [2. 7-Library Ecosystem](#2-7-library-ecosystem)
+- [3. Module Dependency Graph](#3-module-dependency-graph)
+- [4. Multi-Protocol Interface Flow](#4-multi-protocol-interface-flow)
+- [5. Engine Abstraction](#5-engine-abstraction)
+- [6. Request Lifecycle](#6-request-lifecycle)
+- [7. Configuration Architecture](#7-configuration-architecture)
+- [8. Test Architecture](#8-test-architecture)
+- [9. Internationalization (i18n)](#9-internationalization-i18n)
+- [Related Documentation](#-related-documentation)
+
+</details>
+
+---
+
 ## 1. High-Level Architecture
 
 VecBoost is a high-performance Rust vector embedding service. The architecture (introduced in v0.2.0, current v0.2.1) decomposes the monolith into 7 independent libraries, registered and wired through the `trait-kit` typestate module registry.
@@ -533,3 +553,13 @@ Each `VecboostError` variant maps to a stable Fluent key via `error_code()`:
 | ... | ... | ... | ... |
 
 Both `IntoResponse` (HTTP JSON) and `Display` (logging/`to_string()`) use `error_code()` to look up the translated message, passing `error_detail()` as the `{ $detail }` argument. Per-request locale is set by the `i18n_middleware` via `Accept-Language` header, stored in a tokio task_local, and automatically read by all `tr()` calls within the request scope.
+
+---
+
+## 📚 Related Documentation
+
+| Documentation | Description |
+|:--------------|:------------|
+| [📖 User Guide](USER_GUIDE_zh.md) | Installation, configuration, and usage guide |
+| [📘 API Reference](API_REFERENCE_zh.md) | Complete REST API and gRPC documentation |
+| [📋 Changelog](CHANGELOG.md) | Release notes for each version |

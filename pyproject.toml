@@ -1,3 +1,7 @@
 [tool.bandit]
-exclude_dirs = []
+# tests/ 是测试代码目录,使用 pytest 惯用 assert,B101 属误报;扫描时应排除。
+# target/ 是 Rust 构建产物目录,含第三方 crate 的生成脚本,非本项目代码。
+# temp/ 是临时工作区,含其他项目文件,非本项目代码。
+# 生产代码(src/、scripts/)仍会全量扫描。
+exclude_dirs = ["tests", "target", "temp"]
 skips = []

@@ -1,0 +1,15 @@
+# cargo-audit 配置:Rust 安全公告豁免
+# 运行:cargo audit
+#
+# 处置策略与 deny.toml 保持一致:出现新 advisory 时,若为不可达路径
+# (transitive/未启用 feature) 或攻击面不适用,可在此记录豁免;
+# 否则必须升级修复。豁免理由详见 deny.toml 同 ID 条目。
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 (Marvin Attack):rsa 仅由 garrison → jsonwebtoken
+    # 传递引入,用于 JWT 签名/验证;Marvin 攻击针对 RSA PKCS#1 v1.5 解密
+    # 时序侧信道,不涉及本项目攻击面;上游无补丁,跟踪
+    # https://github.com/RustCrypto/RSA/issues/626,发布后撤销本豁免。
+    "RUSTSEC-2023-0071",
+]

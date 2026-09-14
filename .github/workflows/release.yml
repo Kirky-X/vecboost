@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+# 最小权限:顶层只读,发布 job 单独声明 contents: write
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 

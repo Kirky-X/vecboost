@@ -353,12 +353,12 @@ impl WorkerManager {
                     // 重置空闲计数
                     idle_count = 0;
 
-                    // T032: 排空拼批——取首个请求后继续 drain 至 max_batch_size
+                    // 排空拼批——取首个请求后继续 drain 至 max_batch_size
                     let mut batch = vec![request];
                     let extra = queue.dequeue_batch(config.max_batch_size.saturating_sub(1)).await;
                     batch.extend(extra);
 
-                    // T033: 过期淘汰——submitted_at 超过 30s 的请求直接超时响应,不入推理
+                    // 过期淘汰——submitted_at 超过 30s 的请求直接超时响应,不入推理
                     const QUEUE_EXPIRY: Duration = Duration::from_secs(30);
                     let now = std::time::Instant::now();
                     let mut valid_batch = Vec::with_capacity(batch.len());
@@ -497,7 +497,7 @@ impl WorkerManager {
         }
     }
 
-    /// T032: 批量处理请求——用 embed_batch 合并推理，按 request_id 切分结果分别 complete。
+    /// 批量处理请求——用 embed_batch 合并推理，按 request_id 切分结果分别 complete。
     ///
     /// 单条文本失败仅该请求收错，不影响其他请求。
     async fn process_batch_requests(

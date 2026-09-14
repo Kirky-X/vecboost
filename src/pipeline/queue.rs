@@ -175,7 +175,7 @@ impl PriorityRequestQueue {
         None
     }
 
-    /// T032: 批量出队——取首个请求后继续 try_dequeue 至 max_batch_size。
+    /// 批量出队——取首个请求后继续 try_dequeue 至 max_batch_size。
     ///
     /// 返回至少 1 个请求（调用前须确保队列非空），最多 max_batch_size 个。
     /// 按优先级顺序出队。

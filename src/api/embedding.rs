@@ -325,7 +325,7 @@ async fn search_handler(req: SearchRequest) -> Result<SearchResponse, ApiError> 
         .require::<EmbeddingModule>()
         .map_err(kit_internal_error)?;
     let guard = svc.read().await;
-    // T038: 改用 process_search_batch，候选向量先查缓存
+    // 改用 process_search_batch，候选向量先查缓存
     guard
         .process_search_batch(&req.query, &req.texts, req.top_k)
         .await

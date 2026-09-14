@@ -493,7 +493,7 @@ impl CachedTokenizer {
         Ok(Tokenizer::truncate_encoding(encoding, self.max_length))
     }
 
-    /// T034: 同步 encode——绕过异步缓存，直接调用底层 tokenizer。
+    /// 同步 encode——绕过异步缓存，直接调用底层 tokenizer。
     ///
     /// 供 spawn_blocking 上下文使用，避免 async-in-sync 问题。
     pub fn encode_sync(

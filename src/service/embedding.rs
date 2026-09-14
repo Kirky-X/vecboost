@@ -327,7 +327,7 @@ impl EmbeddingService {
     ) -> Result<EmbedResponse, VecboostError> {
         self.validator.validate_text(&req.text)?;
 
-        // T036: 缓存键包含 model_id 和文本哈希，避免跨模型污染
+        // 缓存键包含 model_id 和文本哈希，避免跨模型污染
         let model_id = self
             .model_config
             .as_ref()
@@ -390,7 +390,7 @@ impl EmbeddingService {
         })
     }
 
-    /// T032: 批量文本嵌入——调用引擎 embed_batch，返回每个文本的嵌入向量。
+    /// 批量文本嵌入——调用引擎 embed_batch，返回每个文本的嵌入向量。
     ///
     /// 不做缓存/语义缓存，直接调引擎。供 worker 排空拼批使用。
     pub async fn embed_batch_texts(
@@ -423,7 +423,7 @@ impl EmbeddingService {
             return Ok(SimilarityResponse { score: 1.0 });
         }
 
-        // T036: 缓存键包含 model_id 和文本哈希
+        // 缓存键包含 model_id 和文本哈希
         let model_id = self
             .model_config
             .as_ref()
@@ -728,7 +728,7 @@ impl EmbeddingService {
     }
 
     /// 批量处理 1对N 检索（更高效的版本，使用批量推理和动态批量大小）
-    // T038: 候选向量先查精确缓存，命中不再送推理
+    // 候选向量先查精确缓存，命中不再送推理
     pub async fn process_search_batch(
         &self,
         query: &str,
@@ -745,7 +745,7 @@ impl EmbeddingService {
             embedding
         };
 
-        // T038: 先查缓存，收集未命中的文本及其索引
+        // 先查缓存，收集未命中的文本及其索引
         let model_id = self
             .model_config
             .as_ref()
@@ -1259,7 +1259,7 @@ impl EmbeddingService {
 
         log::info!("Model switched successfully to {}", req.model_name);
 
-        // T036: 切模型后清缓存，避免旧模型向量污染新模型
+        // 切模型后清缓存，避免旧模型向量污染新模型
         self.cache.clear().await;
 
         Ok(ModelSwitchResponse {
@@ -1281,7 +1281,7 @@ impl EmbeddingService {
             log::info!("Local model config cleared for {}", name);
         }
 
-        // T036: 卸载模型后清缓存
+        // 卸载模型后清缓存
         self.cache.clear().await;
 
         Ok(())

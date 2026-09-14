@@ -686,7 +686,7 @@ impl CandleEngine {
         }
     }
 
-    // T034: 纯同步 forward_pass——使用 encode_sync 绕过异步缓存，移除 GPU 监控 await
+    // 纯同步 forward_pass——使用 encode_sync 绕过异步缓存，移除 GPU 监控 await
     fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         let encoding = self
             .tokenizer
@@ -775,7 +775,7 @@ impl CandleEngine {
         log::debug!("Embeddings shape: {:?}", embeddings.shape());
         log::debug!("Embeddings dims: {:?}", embeddings.dims());
 
-        // T034: 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
+        // 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
 
         let dims = embeddings.dims();
         let hidden_dim = self.hidden_size;
@@ -848,7 +848,7 @@ impl CandleEngine {
     }
 
     /// 优化的批量前向传播，使用真正的批量处理而非串行处理
-    // T034: 纯同步 forward_pass_batch
+    // 纯同步 forward_pass_batch
     fn forward_pass_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VecboostError> {
         if texts.is_empty() {
             return Ok(vec![]);
@@ -957,7 +957,7 @@ impl CandleEngine {
             }
         };
 
-        // T034: 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
+        // 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
 
         // 提取每个样本的嵌入向量（使用 CLS token）
         // 优化：使用 narrow + squeeze + to_vec2 单次提取所有 CLS token，
@@ -1019,7 +1019,7 @@ impl CandleEngine {
 
 #[async_trait]
 impl InferenceEngine for CandleEngine {
-    // T034: 纯同步实现——移除 block_in_place+block_on，由调用方 spawn_blocking 包装
+    // 纯同步实现——移除 block_in_place+block_on，由调用方 spawn_blocking 包装
     fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         self.forward_pass(text)
     }
@@ -2270,7 +2270,7 @@ mod tests {
             CandleEngine::new(&config, Precision::Int8).expect("Failed to load INT8 model");
         let mem_int8 = engine_int8.estimate_memory_usage(1, 128);
         assert!(mem_int8 > 0, "INT8 memory estimate should be positive");
-        // T029: INT8 量化未实现，回退 FP32，内存估算与 FP32 相同
+        // INT8 量化未实现，回退 FP32，内存估算与 FP32 相同
         assert_eq!(
             mem_int8, mem_fp32,
             "INT8 not implemented, should fall back to FP32 memory usage"

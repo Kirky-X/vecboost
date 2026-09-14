@@ -140,15 +140,14 @@ impl ContinuousBatchLoop {
                 None => break, // 队列空
             };
 
-            // 检查 SLA 超时：已超时请求直接返回错误
+            // 检查 SLA 超时：已超时请求跳过(响应完成由 pipeline worker 的
+            // 过期淘汰路径统一负责,本组件无 ResponseChannel 句柄)
             let elapsed = now.duration_since(request.submitted_at);
             if elapsed >= request.timeout {
-                let _ = request
-                    .response_tx
-                    .send(Err(VecboostError::InferenceError(format!(
-                        "Request {} timed out before processing",
-                        request.request_id
-                    ))));
+                log::warn!(
+                    "Request {} timed out before batching; skipped by continuous batch loop",
+                    request.request_id
+                );
                 continue;
             }
 
@@ -200,13 +199,22 @@ impl ContinuousBatchLoop {
                         processing_time_ms: 0,
                         information_retention_rate: None,
                     };
-                    let _ = request.response_tx.send(Ok(response));
+                    let _ = response; // G011: 响应回传经 ResponseChannel(由 pipeline 完成路径负责)
+                    log::debug!(
+                        "Continuous batch produced embedding (dim {}) for request {}; delivery is handled by the pipeline response channel",
+                        response.dimension,
+                        request.request_id
+                    );
                 }
             }
             Err(e) => {
                 warn!("Batch processing failed: {}", e);
                 for request in batch {
-                    let _ = request.response_tx.send(Err(e.clone()));
+                    // G011: 无 response_tx —— 失败记日志,等待方经 30s 超时收到错误
+                    warn!(
+                        "Continuous batch request {} failed: {}",
+                        request.request_id, e
+                    );
                 }
             }
         }
@@ -298,7 +306,6 @@ mod tests {
             submitted_at: Instant::now(),
             timeout,
             source: RequestSource::Internal,
-            response_tx: tx,
         };
         (request, rx)
     }

@@ -1152,8 +1152,6 @@ mod tests {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
-
-        let (tx, _rx) = tokio::sync::oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-process-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -1164,7 +1162,6 @@ mod tests {
             submitted_at: std::time::Instant::now(),
             timeout: Duration::from_secs(30),
             source: RequestSource::http("127.0.0.1".to_string()),
-            response_tx: tx,
         };
 
         let result = WorkerManager::process_request(&request, &service).await;
@@ -1180,8 +1177,6 @@ mod tests {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(ErrorEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
-
-        let (tx, _rx) = tokio::sync::oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-process-err".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -1192,7 +1187,6 @@ mod tests {
             submitted_at: std::time::Instant::now(),
             timeout: Duration::from_secs(30),
             source: RequestSource::http("127.0.0.1".to_string()),
-            response_tx: tx,
         };
 
         let result = WorkerManager::process_request(&request, &service).await;
@@ -1223,8 +1217,6 @@ mod tests {
         );
 
         let rx = response_channel.register("test-loop-1".to_string()).await;
-
-        let (tx, _) = tokio::sync::oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-loop-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -1235,7 +1227,6 @@ mod tests {
             submitted_at: std::time::Instant::now(),
             timeout: Duration::from_secs(30),
             source: RequestSource::http("127.0.0.1".to_string()),
-            response_tx: tx,
         };
         queue.enqueue(request).await.unwrap();
 
@@ -1275,8 +1266,6 @@ mod tests {
         );
 
         let rx = response_channel.register("test-loop-err".to_string()).await;
-
-        let (tx, _) = tokio::sync::oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-loop-err".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -1287,7 +1276,6 @@ mod tests {
             submitted_at: std::time::Instant::now(),
             timeout: Duration::from_secs(30),
             source: RequestSource::http("127.0.0.1".to_string()),
-            response_tx: tx,
         };
         queue.enqueue(request).await.unwrap();
 
@@ -1561,7 +1549,6 @@ mod tests {
         }
 
         for i in 0..5 {
-            let (tx, _) = tokio::sync::oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("multi-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
@@ -1572,7 +1559,6 @@ mod tests {
                 submitted_at: std::time::Instant::now(),
                 timeout: Duration::from_secs(30),
                 source: RequestSource::http("127.0.0.1".to_string()),
-                response_tx: tx,
             };
             queue.enqueue(request).await.unwrap();
         }
@@ -1673,8 +1659,6 @@ mod tests {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
-
-        let (tx, _rx) = tokio::sync::oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-none-norm".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -1685,7 +1669,6 @@ mod tests {
             submitted_at: std::time::Instant::now(),
             timeout: Duration::from_secs(30),
             source: RequestSource::http("127.0.0.1".to_string()),
-            response_tx: tx,
         };
 
         let result = WorkerManager::process_request(&request, &service).await;
@@ -1788,7 +1771,6 @@ mod tests {
         );
 
         for i in 0..200 {
-            let (tx, _) = tokio::sync::oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("scale-up-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
@@ -1799,7 +1781,6 @@ mod tests {
                 submitted_at: std::time::Instant::now(),
                 timeout: Duration::from_secs(30),
                 source: RequestSource::http("127.0.0.1".to_string()),
-                response_tx: tx,
             };
             queue.enqueue(request).await.unwrap();
         }

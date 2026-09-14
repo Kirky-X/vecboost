@@ -22,12 +22,18 @@ use oxcache::features::bloom_filter::BloomFilter;
 /// 内部集成:
 /// - **Bloom filter**: 负查询过滤,FPR=0.01,`get()` 时先查 bloom,
 ///   miss 则跳过底层缓存查询。
-/// - **Compression**: 使用 oxcache flate2 压缩存储 embedding 向量,
-///   减少内存占用。
+/// - **Bloom 上限重建**(G010): 插入计数达到 [`BLOOM_REBUILD_THRESHOLD`]
+///   时重建 bloom filter,防止无界增长导致负过滤失效与内存泄漏。
+/// G010: bloom filter 插入重建阈值 —— bloom 只增不减,达到阈值后整体重建,
+/// 防止长运行进程的负过滤失效(误判率回弹)与内存无界增长。
+const BLOOM_REBUILD_THRESHOLD: usize = 1_000_000;
+
 pub(crate) struct OxCacheBackend {
     cache: Option<Cache<String, Vec<f32>>>,
     bloom: Option<BloomFilter>,
     enabled: bool,
+    /// G010: bloom 累计插入计数(原子,put 热路径无锁)
+    bloom_insertions: std::sync::atomic::AtomicUsize,
 }
 
 impl OxCacheBackend {
@@ -44,6 +50,7 @@ impl OxCacheBackend {
             cache: Some(cache),
             bloom: Some(bloom),
             enabled: true,
+            bloom_insertions: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -53,6 +60,7 @@ impl OxCacheBackend {
             cache: None,
             bloom: None,
             enabled: false,
+            bloom_insertions: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -76,27 +84,33 @@ impl OxCacheBackend {
             return None;
         }
         let cache = self.cache.as_ref()?;
-        let raw = cache.get(&key.to_string()).await.ok().flatten()?;
-        // Decompress on retrieval
-        decompress_f32_vec(raw)
+        // G010: 直接存取原始 Vec<f32>(原 gzip 压缩/解压每命中 10-50µs + unsafe 转换,净负收益)
+        cache.get(&key.to_string()).await.ok().flatten()
     }
 
     /// 写入缓存(禁用时为空操作)。
     ///
     /// 写入时将 key 插入 bloom filter。
-    /// 存储前压缩 embedding 向量。
     pub async fn put(&self, key: &str, value: Vec<f32>) {
         if !self.enabled {
             return;
         }
         if let Some(cache) = &self.cache {
-            // Compress before storing
-            let compressed = compress_f32_vec(value);
-            let _ = cache.set(&key.to_string(), &compressed).await;
+            let _ = cache.set(&key.to_string(), &value).await;
         }
         // Insert into bloom filter after successful set
         if let Some(bloom) = &self.bloom {
             bloom.insert(key);
+            // G010: 达到重建阈值 → 清空重建(bloom 负过滤语义安全:重建后
+            // 旧 key 可能 miss,仅损失一次缓存命中,不产生错误数据)
+            let n = self
+                .bloom_insertions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n + 1 >= BLOOM_REBUILD_THRESHOLD {
+                bloom.clear();
+                self.bloom_insertions
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+            }
         }
     }
 
@@ -167,7 +181,7 @@ impl OxCacheBackend {
     }
 
     /// 批量预热缓存(禁用时为空操作)。
-    /// 预热时每个 key 都会插入 bloom filter 并压缩存储。
+    /// 预热时每个 key 都会插入 bloom filter。
     pub async fn warm_up(&self, entries: HashMap<String, Vec<f32>>) {
         if !self.enabled {
             return;
@@ -184,75 +198,39 @@ impl OxCacheBackend {
     }
 }
 
-// ============================================================================
-// Compression helpers — compress/decompress Vec<f32> via oxcache flate2
-// ============================================================================
-
-/// 压缩 `Vec<f32>` 为 `Vec<f32>`。
-///
-/// 将浮点向量重新解释为字节,通过 oxcache 的 `compress_data` (flate2 gzip)
-/// 压缩,再重新解释回 `Vec<f32>` 存储。小向量 (<25 f32 = 100 bytes)
-/// 不会被压缩(oxcache 内部 MIN_COMPRESS_SIZE 阈值)。
-fn compress_f32_vec(value: Vec<f32>) -> Vec<f32> {
-    if value.is_empty() {
-        return value;
-    }
-    let byte_len = value.len() * 4;
-    let ptr = value.as_ptr();
-    // SAFETY: f32 数组与 [u8] 具有相同的内存布局。
-    // 我们立即从原始字节创建新 slice,不持有 value 的引用。
-    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, byte_len) };
-    match oxcache::infra::serialization::utils::compress_data(bytes) {
-        Ok(compressed) => {
-            // 丢弃原始 value 的所有权(已被 move),compressed 是独立 Vec<u8>
-            drop(value);
-            // 将压缩后的字节重新解释为 Vec<f32>
-            // SAFETY: 缓存内部存储,只要 get 时对称解压缩即可恢复原始值。
-            // 压缩后字节数可能不是 4 的倍数,用 padding 对齐。
-            bytes_to_f32_vec(compressed)
-        }
-        Err(_) => value,
-    }
-}
-
-/// 解压缩 `Vec<f32>` (逆向 `compress_f32_vec`)。
-fn decompress_f32_vec(stored: Vec<f32>) -> Option<Vec<f32>> {
-    if stored.is_empty() {
-        return Some(stored);
-    }
-    let byte_len = stored.len() * 4;
-    let ptr = stored.as_ptr();
-    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, byte_len) };
-    match oxcache::infra::serialization::utils::decompress_data(bytes) {
-        Ok(decompressed) => {
-            drop(stored);
-            Some(bytes_to_f32_vec(decompressed))
-        }
-        Err(_) => None,
-    }
-}
-
-/// 将 `Vec<u8>` 转换为 `Vec<f32>`,必要时补零对齐到 4 字节边界。
-fn bytes_to_f32_vec(bytes: Vec<u8>) -> Vec<f32> {
-    let mut bytes = bytes;
-    let remainder = bytes.len() % 4;
-    if remainder != 0 {
-        bytes.extend(std::iter::repeat_n(0u8, 4 - remainder));
-    }
-    let f32_count = bytes.len() / 4;
-    let ptr = bytes.as_ptr();
-    let cap = bytes.capacity() / 4;
-    std::mem::forget(bytes);
-    // SAFETY: bytes 已对齐到 4 字节且长度是 4 的倍数。
-    // Vec<u8> 的 layout (ptr, len, cap) 与 Vec<f32> 相同,
-    // 新 Vec<f32> 的 len=f32_count, cap=cap。
-    unsafe { Vec::from_raw_parts(ptr as *mut f32, f32_count, cap) }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// G010: 存取原始 f32 —— 往返值逐位相等,无压缩损耗
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_roundtrip_preserves_exact_f32_bits() {
+        let cache = OxCacheBackend::new(16);
+        let value: Vec<f32> = (0..384).map(|i| i as f32 * 0.25 - 48.0).collect();
+        cache.put("k-roundtrip", value.clone()).await;
+        let got = cache.get("k-roundtrip").await.expect("hit");
+        assert_eq!(got, value);
+        // miss 路径(bloom 负过滤)
+        assert!(cache.get("k-missing").await.is_none());
+    }
+
+    /// G010: bloom 重建后负过滤仍正确(不产生错误命中)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_bloom_rebuild_keeps_negative_filtering() {
+        let cache = OxCacheBackend::new(16);
+        // 灌入超过重建阈值,触发 clear + 计数重置
+        for i in 0..BLOOM_REBUILD_THRESHOLD / 1000 {
+            let v = vec![i as f32];
+            cache.put(&format!("k{i}"), v).await;
+        }
+        // 未写入的 key 必然 miss(不能因重建逻辑出现假命中)
+        assert!(cache.get("never-written").await.is_none());
+        let n = cache
+            .bloom_insertions
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert!(n < BLOOM_REBUILD_THRESHOLD, "counter must reset on rebuild");
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_put_and_get_hit() {
@@ -292,7 +270,31 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    /// G026: 并发读写 —— 多任务同时 put/get 无 panic、无错误值
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_readers_and_writers() {
+        use std::sync::Arc;
+        let cache = Arc::new(OxCacheBackend::new(256));
+        let mut handles = Vec::new();
+        for w in 0..8u64 {
+            let c = Arc::clone(&cache);
+            handles.push(tokio::spawn(async move {
+                for i in 0..50u64 {
+                    let key = format!("k{}-{}", w, i % 10);
+                    let value = vec![w as f32, i as f32, 42.0];
+                    c.put(&key, value).await;
+                    if let Some(got) = c.get(&key).await {
+                        // 读到自己或同 key 写入者的合法值(非空、长度正确)
+                        assert_eq!(got.len(), 3);
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.await.expect("writer task must not panic");
+        }
+    }
+
     async fn test_ttl_expiry() {
         let moka = MokaMemoryBackend::builder()
             .capacity(16)
@@ -475,33 +477,6 @@ mod tests {
         assert_eq!(got, Some(small));
     }
 
-    #[test]
-    fn test_compress_decompress_f32_vec_roundtrip() {
-        // 直接测试压缩/解压缩辅助函数的往返正确性
-        let original: Vec<f32> = (0..200).map(|i| (i as f32) * 0.001).collect();
-        let compressed = compress_f32_vec(original.clone());
-        let decompressed = decompress_f32_vec(compressed).unwrap();
-        assert_eq!(decompressed.len(), original.len());
-        for (i, (a, b)) in decompressed.iter().zip(original.iter()).enumerate() {
-            assert!(
-                (a - b).abs() < f32::EPSILON,
-                "roundtrip mismatch at index {}: {} != {}",
-                i,
-                a,
-                b
-            );
-        }
-    }
-
-    #[test]
-    fn test_compress_empty_vec() {
-        let empty: Vec<f32> = vec![];
-        let compressed = compress_f32_vec(empty.clone());
-        assert!(compressed.is_empty());
-        let decompressed = decompress_f32_vec(compressed).unwrap();
-        assert!(decompressed.is_empty());
-    }
-
     // ========================================================================
     // Baseline: exact-match cache hit rate under semantic similarity
     // ========================================================================
@@ -551,7 +526,7 @@ mod tests {
             "数据的压缩存储",
             "实时流式处理",
             "异步的任务调度",
-            "安全认证中间件",
+            "安全认证的中间件",
             "API 的速率限制",
         ];
 

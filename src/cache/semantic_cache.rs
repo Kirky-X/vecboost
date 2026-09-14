@@ -25,7 +25,7 @@ const DEFAULT_CAPACITY: usize = 10000;
 /// 语义缓存条目
 struct SemanticEntry {
     /// 缓存的 trigram 集合，避免重复计算
-    trigrams: HashSet<Vec<u8>>,
+    trigrams: HashSet<u32>,
     embedding: Vec<f32>,
     last_access: Instant,
 }
@@ -171,10 +171,17 @@ impl SemanticCache {
         let mut best_idx = None;
 
         // 构建 query 的 trigram 集合（仅一次，复用于所有比较）
-        let query_trigrams: HashSet<Vec<u8>> =
-            query.as_bytes().windows(3).map(|w| w.to_vec()).collect();
+        let query_trigrams = pack_trigrams(query.as_bytes());
+        let query_len = query_trigrams.len();
 
         for (i, entry) in index.iter().enumerate() {
+            // G013: 大小差预过滤 —— Jaccard 上限 = min/max;大小差超过阈值时
+            // 不可能达标,跳过昂贵的集合交/并
+            let upper_bound = query_len.min(entry.trigrams.len()) as f32
+                / query_len.max(entry.trigrams.len()).max(1) as f32;
+            if upper_bound < self.similarity_threshold {
+                continue;
+            }
             let sim = trigram_jaccard_with_set(&query_trigrams, &entry.trigrams);
             if sim > best_sim {
                 best_sim = sim;
@@ -207,7 +214,7 @@ impl SemanticCache {
         }
 
         index.push(SemanticEntry {
-            trigrams: text.as_bytes().windows(3).map(|w| w.to_vec()).collect(),
+            trigrams: pack_trigrams(text.as_bytes()),
             embedding,
             last_access: Instant::now(),
         });
@@ -225,10 +232,27 @@ impl SemanticCache {
     }
 }
 
+/// G013: 将 3 字节窗口打包为一个 u32(避免每 trigram 一次堆分配)。
+///
+/// 尾部不足 3 字节时以零填充补齐最后一个窗口(与 `windows(3)` 语义一致:
+/// 字节数 < 3 的文本没有完整窗口,返回空集)。
+#[inline]
+fn pack_trigrams(bytes: &[u8]) -> HashSet<u32> {
+    if bytes.len() < 3 {
+        return HashSet::new();
+    }
+    let mut set = HashSet::with_capacity(bytes.len() - 2);
+    for w in bytes.windows(3) {
+        let packed = ((w[0] as u32) << 16) | ((w[1] as u32) << 8) | (w[2] as u32);
+        set.insert(packed);
+    }
+    set
+}
+
 /// 使用预计算的 trigram 集合计算 Jaccard 相似度。
 ///
 /// 避免在批量比较中重复构建 HashSet。
-fn trigram_jaccard_with_set(a_trigrams: &HashSet<Vec<u8>>, b_trigrams: &HashSet<Vec<u8>>) -> f32 {
+fn trigram_jaccard_with_set(a_trigrams: &HashSet<u32>, b_trigrams: &HashSet<u32>) -> f32 {
     if a_trigrams.is_empty() || b_trigrams.is_empty() {
         return 0.0;
     }
@@ -249,8 +273,8 @@ mod tests {
         if a.len() < 3 || b.len() < 3 {
             return 0.0;
         }
-        let trigrams_a: HashSet<Vec<u8>> = a.as_bytes().windows(3).map(|w| w.to_vec()).collect();
-        let trigrams_b: HashSet<Vec<u8>> = b.as_bytes().windows(3).map(|w| w.to_vec()).collect();
+        let trigrams_a = pack_trigrams(a.as_bytes());
+        let trigrams_b = pack_trigrams(b.as_bytes());
         trigram_jaccard_with_set(&trigrams_a, &trigrams_b)
     }
 
@@ -468,7 +492,7 @@ mod tests {
     #[test]
     fn test_trigram_jaccard_with_set_one_empty() {
         let mut a = HashSet::new();
-        a.insert(vec![1, 2, 3]);
+        a.insert(0x010203u32);
         let b = HashSet::new();
         assert_eq!(trigram_jaccard_with_set(&a, &b), 0.0);
         assert_eq!(trigram_jaccard_with_set(&b, &a), 0.0);
@@ -477,8 +501,24 @@ mod tests {
     #[test]
     fn test_trigram_jaccard_with_set_identical() {
         let mut a = HashSet::new();
-        a.insert(vec![1, 2, 3]);
-        a.insert(vec![4, 5, 6]);
+        a.insert(0x010203u32);
+        a.insert(0x040506u32);
         assert_eq!(trigram_jaccard_with_set(&a, &a), 1.0);
+    }
+
+    /// G013: 打包一致性 —— pack_trigrams 与逐字节窗口语义等价
+    #[test]
+    fn test_pack_trigrams_roundtrip_consistency() {
+        let text = "hello world 机器学习";
+        let packed = pack_trigrams(text.as_bytes());
+        let expected: HashSet<u32> = text
+            .as_bytes()
+            .windows(3)
+            .map(|w| ((w[0] as u32) << 16) | ((w[1] as u32) << 8) | (w[2] as u32))
+            .collect();
+        assert_eq!(packed, expected);
+        // 短文本无完整窗口 → 空集
+        assert!(pack_trigrams(b"ab").is_empty());
+        assert!(pack_trigrams(b"").is_empty());
     }
 }

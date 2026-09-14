@@ -80,7 +80,6 @@ fn make_queued_request(
         submitted_at: Instant::now(),
         timeout: Duration::from_secs(30),
         source: RequestSource::Internal,
-        response_tx: tx,
     };
     (req, rx)
 }

@@ -221,8 +221,6 @@ pub mod encrypted_option {
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::test_env_lock::env_lock;
-
     use super::*;
 
     /// 串行化进程级环境变量 VECBOOST_ENCRYPTION_KEY 的测试访问(共享锁见 utils::test_env_lock)。

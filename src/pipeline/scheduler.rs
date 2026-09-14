@@ -211,7 +211,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -269,7 +268,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -354,7 +352,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -411,7 +408,6 @@ mod tests {
                     source: RequestSource::Http {
                         ip: "127.0.0.1".to_string(),
                     },
-                    response_tx: tokio::sync::oneshot::channel().0,
                 };
                 scheduler.process_request(request).await
             }));
@@ -506,7 +502,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -557,7 +552,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -608,7 +602,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -650,7 +643,6 @@ mod tests {
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
             source: RequestSource::Internal,
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -695,7 +687,6 @@ mod tests {
             source: RequestSource::Grpc {
                 client_id: "client-1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -740,7 +731,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -870,7 +860,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await.unwrap();
@@ -919,7 +908,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await.unwrap();
@@ -970,7 +958,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;

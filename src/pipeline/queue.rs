@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::Notify;
 
 use super::priority::{Priority, RequestSource};
 use crate::domain::{EmbedRequest, RerankRequest};
@@ -37,6 +37,10 @@ impl ServiceRequest {
 }
 
 /// 队列请求
+/// G012: 优先级老化阈值(5s)—— 必须显著小于请求超时(30s),否则
+/// 老化跳过在请求可达超时前永不触发,四级优先队列形同虚设。
+const AGING_THRESHOLD_DURATION: Duration = Duration::from_secs(5);
+
 #[derive(Debug)]
 pub struct QueuedRequest {
     /// 请求 ID
@@ -51,8 +55,6 @@ pub struct QueuedRequest {
     pub timeout: Duration,
     /// 请求来源
     pub source: RequestSource,
-    /// 响应发送器
-    pub response_tx: oneshot::Sender<Result<crate::domain::EmbedResponse, VecboostError>>,
 }
 
 /// 优先级请求队列
@@ -137,7 +139,7 @@ impl PriorityRequestQueue {
     pub async fn dequeue(&self) -> Option<QueuedRequest> {
         let mut queues = self.queues.write().await;
         let now = Instant::now();
-        const AGING_THRESHOLD: Duration = Duration::from_secs(30);
+        const AGING_THRESHOLD: Duration = AGING_THRESHOLD_DURATION;
 
         // 按优先级从高到低查找
         for priority in [
@@ -183,7 +185,7 @@ impl PriorityRequestQueue {
         let mut result = Vec::with_capacity(max_batch_size);
         let mut queues = self.queues.write().await;
         let now = Instant::now();
-        const AGING_THRESHOLD: Duration = Duration::from_secs(30);
+        const AGING_THRESHOLD: Duration = AGING_THRESHOLD_DURATION;
 
         for priority in [
             Priority::Critical,
@@ -286,8 +288,6 @@ mod tests {
     #[tokio::test]
     async fn test_enqueue_dequeue() {
         let queue = PriorityRequestQueue::new(100);
-
-        let (tx, _rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -300,7 +300,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tx,
         };
 
         queue.enqueue(request).await.unwrap();
@@ -325,7 +324,6 @@ mod tests {
         .iter()
         .enumerate()
         {
-            let (tx, _rx) = oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("test-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
@@ -338,7 +336,6 @@ mod tests {
                 source: RequestSource::Http {
                     ip: "127.0.0.1".to_string(),
                 },
-                response_tx: tx,
             };
 
             queue.enqueue(request).await.unwrap();
@@ -354,8 +351,6 @@ mod tests {
     #[tokio::test]
     async fn test_queue_full() {
         let queue = PriorityRequestQueue::new(2);
-
-        let (tx1, _rx1) = oneshot::channel();
         let request1 = QueuedRequest {
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -368,10 +363,7 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tx1,
         };
-
-        let (tx2, _rx2) = oneshot::channel();
         let request2 = QueuedRequest {
             request_id: "test-2".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -384,13 +376,10 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tx2,
         };
 
         queue.enqueue(request1).await.unwrap();
         queue.enqueue(request2).await.unwrap();
-
-        let (tx3, _rx3) = oneshot::channel();
         let request3 = QueuedRequest {
             request_id: "test-3".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -403,7 +392,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tx3,
         };
 
         let result = queue.enqueue(request3).await;
@@ -416,7 +404,6 @@ mod tests {
 
         // 添加一些请求
         for i in 0..10 {
-            let (tx, _rx) = oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("test-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
@@ -429,7 +416,6 @@ mod tests {
                 source: RequestSource::Http {
                     ip: "127.0.0.1".to_string(),
                 },
-                response_tx: tx,
             };
 
             queue.enqueue(request).await.unwrap();
@@ -447,7 +433,6 @@ mod tests {
         let queue = PriorityRequestQueue::new(100);
 
         // 入队 Critical 请求(会老化)
-        let (tx1, _rx1) = oneshot::channel();
         let critical_req = QueuedRequest {
             request_id: "critical-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -460,12 +445,10 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tx1,
         };
         queue.enqueue(critical_req).await.unwrap();
 
         // 入队 Low 请求
-        let (tx2, _rx2) = oneshot::channel();
         let low_req = QueuedRequest {
             request_id: "low-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -478,12 +461,11 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tx2,
         };
         queue.enqueue(low_req).await.unwrap();
 
-        // 等待超过老化阈值(30s)
-        tokio::time::sleep(Duration::from_secs(31)).await;
+        // 等待超过老化阈值(G012: 5s;阈值须远小于请求超时 30s 才有实效)
+        tokio::time::sleep(Duration::from_secs(6)).await;
 
         // dequeue 应先返回 Low(Critical 已老化,跳过)
         let dequeued = queue.dequeue().await.unwrap();
@@ -506,7 +488,6 @@ mod tests {
     #[tokio::test]
     async fn test_peek_highest_priority_returns_critical() {
         let queue = PriorityRequestQueue::new(100);
-        let (tx, _rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -519,7 +500,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tx,
         };
         queue.enqueue(request).await.unwrap();
         let result = queue.peek_highest_priority().await;
@@ -529,7 +509,6 @@ mod tests {
     #[tokio::test]
     async fn test_peek_highest_priority_returns_low() {
         let queue = PriorityRequestQueue::new(100);
-        let (tx, _rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -542,7 +521,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tx,
         };
         queue.enqueue(request).await.unwrap();
         let result = queue.peek_highest_priority().await;
@@ -553,7 +531,6 @@ mod tests {
     async fn test_peek_highest_priority_after_dequeue() {
         let queue = PriorityRequestQueue::new(100);
         for priority in [Priority::High, Priority::Low] {
-            let (tx, _rx) = oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("test-{:?}", priority),
                 request: ServiceRequest::Embed(EmbedRequest {
@@ -566,7 +543,6 @@ mod tests {
                 source: RequestSource::Http {
                     ip: "127.0.0.1".to_string(),
                 },
-                response_tx: tx,
             };
             queue.enqueue(request).await.unwrap();
         }
@@ -590,7 +566,6 @@ mod tests {
     async fn test_size_by_priority_single_priority() {
         let queue = PriorityRequestQueue::new(100);
         for i in 0..3 {
-            let (tx, _rx) = oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("test-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
@@ -603,7 +578,6 @@ mod tests {
                 source: RequestSource::Http {
                     ip: "127.0.0.1".to_string(),
                 },
-                response_tx: tx,
             };
             queue.enqueue(request).await.unwrap();
         }
@@ -622,7 +596,6 @@ mod tests {
         ];
         for (priority, count) in priorities_with_counts {
             for i in 0..count {
-                let (tx, _rx) = oneshot::channel();
                 let request = QueuedRequest {
                     request_id: format!("test-{:?}-{}", priority, i),
                     request: ServiceRequest::Embed(EmbedRequest {
@@ -635,7 +608,6 @@ mod tests {
                     source: RequestSource::Http {
                         ip: "127.0.0.1".to_string(),
                     },
-                    response_tx: tx,
                 };
                 queue.enqueue(request).await.unwrap();
             }
@@ -657,7 +629,6 @@ mod tests {
     #[tokio::test]
     async fn test_dequeue_all_then_empty() {
         let queue = PriorityRequestQueue::new(100);
-        let (tx, _rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -670,7 +641,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tx,
         };
         queue.enqueue(request).await.unwrap();
         assert!(queue.dequeue().await.is_some());
@@ -694,7 +664,6 @@ mod tests {
         let queue = PriorityRequestQueue::new(100);
         assert_eq!(queue.size(), 0);
         for i in 0..5 {
-            let (tx, _rx) = oneshot::channel();
             let request = QueuedRequest {
                 request_id: format!("test-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
@@ -707,7 +676,6 @@ mod tests {
                 source: RequestSource::Http {
                     ip: "127.0.0.1".to_string(),
                 },
-                response_tx: tx,
             };
             queue.enqueue(request).await.unwrap();
         }
@@ -721,7 +689,6 @@ mod tests {
     #[tokio::test]
     async fn test_enqueue_max_size_zero_always_rejects() {
         let queue = PriorityRequestQueue::new(0);
-        let (tx, _rx) = oneshot::channel();
         let request = QueuedRequest {
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -734,7 +701,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tx,
         };
         let result = queue.enqueue(request).await;
         assert!(result.is_err());
@@ -743,7 +709,6 @@ mod tests {
     #[tokio::test]
     async fn test_aging_does_not_skip_low_priority() {
         let queue = PriorityRequestQueue::new(100);
-        let (tx, _rx) = oneshot::channel();
         let low_req = QueuedRequest {
             request_id: "low-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
@@ -756,7 +721,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tx,
         };
         queue.enqueue(low_req).await.unwrap();
         // Low priority does NOT participate in aging skip
@@ -770,7 +734,6 @@ mod tests {
     async fn test_dequeue_batch_returns_all_when_under_limit() {
         let queue = PriorityRequestQueue::new(100);
         for i in 0..3 {
-            let (tx, _rx) = oneshot::channel();
             queue
                 .enqueue(QueuedRequest {
                     request_id: format!("req-{}", i),
@@ -784,7 +747,6 @@ mod tests {
                     source: RequestSource::Http {
                         ip: "127.0.0.1".to_string(),
                     },
-                    response_tx: tx,
                 })
                 .await
                 .unwrap();
@@ -798,7 +760,6 @@ mod tests {
     async fn test_dequeue_batch_respects_max_limit() {
         let queue = PriorityRequestQueue::new(100);
         for i in 0..8 {
-            let (tx, _rx) = oneshot::channel();
             queue
                 .enqueue(QueuedRequest {
                     request_id: format!("req-{}", i),
@@ -812,7 +773,6 @@ mod tests {
                     source: RequestSource::Http {
                         ip: "127.0.0.1".to_string(),
                     },
-                    response_tx: tx,
                 })
                 .await
                 .unwrap();

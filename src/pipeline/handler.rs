@@ -10,17 +10,26 @@ use crate::domain::EmbedRequest;
 use crate::error::VecboostError;
 use crate::i18n;
 use std::time::Duration;
-use tokio::sync::oneshot;
-use uuid::Uuid;
 
 /// 处理流水线请求
+/// G011: 进程级请求 ID 计数器 —— u64 原子递增,十六进制展示
+/// (替代 UUID String:省一次堆分配与随机熵开销,格式仍可读)
+static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_request_id() -> String {
+    format!(
+        "{:x}",
+        NEXT_REQUEST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
 pub async fn handle_pipeline_request(
     state: VecboostState,
     req: EmbedRequest,
     ip: String,
 ) -> Result<axum::Json<crate::domain::EmbedResponse>, VecboostError> {
     // 生成请求 ID
-    let request_id = Uuid::new_v4().to_string();
+    let request_id = next_request_id();
 
     // 创建响应通道
     let response_rx = state
@@ -47,8 +56,7 @@ pub async fn handle_pipeline_request(
                 .size(),
         });
 
-    let (tx, _) = oneshot::channel();
-
+    // G011: 不再创建被丢弃的 oneshot —— 响应统一走 ResponseChannel.register
     let queued_request = crate::pipeline::QueuedRequest {
         request_id: request_id.clone(),
         request: crate::pipeline::ServiceRequest::Embed(req),
@@ -56,7 +64,6 @@ pub async fn handle_pipeline_request(
         submitted_at: std::time::Instant::now(),
         timeout: Duration::from_secs(30),
         source: crate::pipeline::RequestSource::http(ip),
-        response_tx: tx,
     };
 
     // 提交到流水线队列

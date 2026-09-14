@@ -449,6 +449,7 @@ async fn init_pipeline(
             scale_down_threshold: config.pipeline.worker.scale_down_threshold,
             scale_check_interval_secs: config.pipeline.worker.scale_check_interval_secs,
             idle_timeout_secs: config.pipeline.worker.idle_timeout_secs,
+            max_batch_size: config.embedding.max_batch_size,
         };
 
         let worker_manager = Arc::new(WorkerManager::new(
@@ -488,7 +489,11 @@ async fn init_pipeline(
 }
 
 /// 配置含敏感项(jwt_secret/admin_password)且未设加密 key 时应告警。
-fn should_warn_plaintext_secrets(has_jwt: bool, has_admin_password: bool, has_encryption_key: bool) -> bool {
+fn should_warn_plaintext_secrets(
+    has_jwt: bool,
+    has_admin_password: bool,
+    has_encryption_key: bool,
+) -> bool {
     (has_jwt || has_admin_password) && !has_encryption_key
 }
 
@@ -698,7 +703,12 @@ async fn app_main() -> anyhow::Result<()> {
     } else {
         // 检测到敏感配置但未设加密 key → 提示明文存储风险(不强制,
         // VECBOOST_REQUIRE_ENCRYPTION=1 才拒绝启动)
-        let has_jwt = config.auth.jwt_secret.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+        let has_jwt = config
+            .auth
+            .jwt_secret
+            .as_ref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
         let has_pw = config
             .auth
             .default_admin_password
@@ -1341,8 +1351,7 @@ mod tests {
     // auth 启用但未配置管理员密码 → 拒绝启动(错误信息指明 VECBOOST_ADMIN_PASSWORD)
     #[cfg(feature = "auth")]
     #[tokio::test]
-    async fn init_auth_rejects_missing_admin_password()
-    {
+    async fn init_auth_rejects_missing_admin_password() {
         let mut config = AppConfig::default();
         config.auth.enabled = true;
         config.auth.jwt_secret = Some("test-secret-0123456789abcdef0123".to_string());

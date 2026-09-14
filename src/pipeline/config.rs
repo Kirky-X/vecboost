@@ -52,6 +52,8 @@ pub struct WorkerConfig {
     pub scale_down_threshold: usize,
     pub idle_timeout_secs: u64,
     pub scale_check_interval_secs: u64,
+    /// T032: 排空拼批最大请求数（worker 单次从队列取出的最大请求数）
+    pub max_batch_size: usize,
 }
 
 impl Default for WorkerConfig {
@@ -63,6 +65,7 @@ impl Default for WorkerConfig {
             scale_down_threshold: 10,
             idle_timeout_secs: 60,
             scale_check_interval_secs: 5,
+            max_batch_size: 8,
         }
     }
 }

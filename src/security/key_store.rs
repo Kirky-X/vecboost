@@ -305,7 +305,12 @@ mod tests {
         let store = EnvironmentKeyStore::new();
         let key = SecretKey::api_key("test_readonly", "my_value");
         assert!(store.set(&key).await.is_err());
-        assert!(store.delete(&KeyType::ApiKey, "test_readonly").await.is_err());
+        assert!(
+            store
+                .delete(&KeyType::ApiKey, "test_readonly")
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

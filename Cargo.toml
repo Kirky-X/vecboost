@@ -2,8 +2,8 @@
 name = "vecboost"
 version = "0.2.1"
 edition = "2024"
-rust-version = "1.85"
-authors = ["Kirky-X <kirky-x@outlook.com>"]
+rust-version = "1.91"
+authors = ["Kirky-X <Kirky-X@outlook.com>"]
 description = "High-performance embedding vector service written in Rust"
 repository = "https://github.com/Kirky-X/vecboost"
 documentation = "https://github.com/Kirky-X/vecboost"
@@ -220,7 +220,7 @@ resolver = "2"
 [workspace.package]
 license = "MIT"
 edition = "2024"
-authors = ["Kirky-X <kirky-x@outlook.com>"]
+authors = ["Kirky-X <Kirky-X@outlook.com>"]
 
 # dbnexus rc.3 依赖尚未发布的 oxcache 0.5.0-rc.4（../base 生态发布中态），
 # 用本地路径补丁统一解析（DEFECT-KIT-002）

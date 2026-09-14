@@ -6,4 +6,4 @@
 pub(crate) mod tokenizer;
 
 // 重新导出必要的类型供内部使用
-pub(crate) use tokenizer::{CachedTokenizer, Encoding, Tokenizer};
+pub(crate) use tokenizer::{CachedTokenizer, Encoding};

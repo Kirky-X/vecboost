@@ -6,7 +6,9 @@
 # ============ 服务配置 ============
 [server]
 # 服务绑定地址
-host = "0.0.0.0"
+# 安全默认:仅监听回环地址。auth.enabled=false 时绑定非回环地址会拒绝启动
+# (容器等受信网络场景可设 VECBOOST_ALLOW_INSECURE=1 显式越过,见 README)
+host = "127.0.0.1"
 
 # 服务端口号
 port = 9002
@@ -14,7 +16,13 @@ port = 9002
 # 请求超时时间 (秒)
 timeout = 30
 
-# CORS 跨域开关（默认 false）；允许来源列表，含 "*" 或为空表示允许任意来源
+# CORS 跨域开关（默认 false）；允许来源列表
+#
+# ⚠️ 通配符 "*" 语义说明:
+#   - cors_allow_origins = ["*"] 允许任意来源跨域调用,同时放行 Authorization 头
+#   - 意味着任何网页都能以用户自己的 JWT token 调用 API,等同于公开接口
+#   - 生产环境务必显式列出可信来源,例如 ["https://app.example.com"]
+#   - 开发/内网测试可使用 "*",但切勿在公网暴露的服务上启用
 # cors_enabled = false
 # cors_allow_origins = ["*"]
 
@@ -30,10 +38,11 @@ model_revision = "main"
 # model_path = "models/bge-m3-st"
 
 # 是否使用 GPU 加速
-# 注意：需要启用相应的 cargo feature
+# 安全/可用性默认:false。默认构建不含 GPU feature,置 true 会在无 GPU 环境回退 CPU 并告警。
+# 需要启用时先以相应 cargo feature 构建:
 # - CUDA: cargo build --features cuda
 # - Metal (macOS): cargo build --features metal
-use_gpu = true
+use_gpu = false
 
 # 批处理大小
 batch_size = 32

@@ -470,7 +470,11 @@ mod tests {
             .await
             .expect("get failed")
             .expect("key should exist");
-        assert_eq!(retrieved.value.as_str(), "new_value", "value should be updated");
+        assert_eq!(
+            retrieved.value.as_str(),
+            "new_value",
+            "value should be updated"
+        );
     }
 
     #[tokio::test]

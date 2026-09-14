@@ -23,3 +23,6 @@ pub use vector::{
     cosine_similarity, dot_product, euclidean_distance, manhattan_distance, normalize_l2,
     truncate_vector, validate_dimension,
 };
+
+#[cfg(test)]
+pub mod test_env_lock;

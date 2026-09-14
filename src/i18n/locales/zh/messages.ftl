@@ -11,6 +11,8 @@ openai-input-empty = 输入不能为空
 openai-input-too-large = 输入数组过大（最多 { $max } 项）
 
 # ── 认证消息 ──
+auth-admin-password-missing = 服务端未配置管理员密码，认证不可用；请设置 VECBOOST_ADMIN_PASSWORD 并重启
+auth-admin-required = 该操作需要管理员权限
 auth-password-empty = 密码不能为空
 auth-invalid-credentials = 用户名或密码无效
 auth-refresh-token-empty = 刷新令牌不能为空
@@ -105,6 +107,7 @@ startup-db-pool = 创建数据库连接池失败：{ $detail }
 startup-db-schema = 初始化数据库模式失败：{ $detail }
 startup-jwt-length = JWT 密钥长度必须至少 32 个字符。当前长度：{ $got }
 startup-jwt-missing = 启用认证时必须提供 JWT 密钥，请设置强 JWT 密钥
+startup-admin-password-missing = 启用认证时必须配置管理员密码，请设置环境变量 VECBOOST_ADMIN_PASSWORD（否则任意凭据均可登录）
 startup-logger = 初始化日志系统失败：{ $detail }
 startup-config = 加载配置失败：{ $detail }
 startup-encryption = 加密密钥验证失败：{ $detail }

@@ -124,6 +124,11 @@ fn model_snapshot_regression() {
             );
         }
 
-        eprintln!("PASS {}: dim={} norm={:.6} deterministic=ok", snap.name, vec1.len(), norm);
+        eprintln!(
+            "PASS {}: dim={} norm={:.6} deterministic=ok",
+            snap.name,
+            vec1.len(),
+            norm
+        );
     }
 }

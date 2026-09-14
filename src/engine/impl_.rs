@@ -70,6 +70,14 @@ impl InferenceEngine for AnyEngine {
         }
     }
 
+    fn count_tokens(&self, text: &str) -> Result<usize, VecboostError> {
+        match self {
+            AnyEngine::Candle(engine) => engine.count_tokens(text),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.count_tokens(text),
+        }
+    }
+
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         match self {
             AnyEngine::Candle(engine) => engine.try_fallback_to_cpu(config).await,
@@ -345,9 +353,9 @@ mod tests {
     }
 
     #[test]
-    fn test_pooling_mode_default_is_mean() {
+    fn test_pooling_mode_default_is_auto() {
         let mode = crate::config::model::PoolingMode::default();
-        assert!(matches!(mode, crate::config::model::PoolingMode::Mean));
+        assert!(matches!(mode, crate::config::model::PoolingMode::Auto));
     }
 
     #[test]

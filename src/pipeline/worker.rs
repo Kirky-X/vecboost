@@ -358,13 +358,41 @@ impl WorkerManager {
                     let extra = queue.dequeue_batch(config.max_batch_size.saturating_sub(1)).await;
                     batch.extend(extra);
 
+                    // T033: 过期淘汰——submitted_at 超过 30s 的请求直接超时响应,不入推理
+                    const QUEUE_EXPIRY: Duration = Duration::from_secs(30);
+                    let now = std::time::Instant::now();
+                    let mut valid_batch = Vec::with_capacity(batch.len());
+                    for req in batch {
+                        if now.duration_since(req.submitted_at) > QUEUE_EXPIRY {
+                            warn!(
+                                "Request {} expired in queue ({:.1}s), rejecting",
+                                req.request_id,
+                                now.duration_since(req.submitted_at).as_secs_f64()
+                            );
+                            response_channel
+                                .complete(
+                                    req.request_id.clone(),
+                                    Err(VecboostError::RateLimitExceeded(
+                                        "Request expired in queue".to_string(),
+                                    )),
+                                )
+                                .await;
+                        } else {
+                            valid_batch.push(req);
+                        }
+                    }
+
+                    if valid_batch.is_empty() {
+                        continue;
+                    }
+
                     debug!(
                         "Worker {} processing batch of {} requests",
-                        worker_id, batch.len()
+                        worker_id, valid_batch.len()
                     );
 
                     // 批量处理请求
-                    Self::process_batch_requests(&batch, &embedding_service, &response_channel).await;
+                    Self::process_batch_requests(&valid_batch, &embedding_service, &response_channel).await;
                 }
                 // 队列为空时等待入队通知，消除指数退避轮询
                 // 使用 timeout 实现空闲超时退出
@@ -522,11 +550,7 @@ impl WorkerManager {
 
         // 批量推理
         let service_guard = embedding_service.read().await;
-        let batch_result = service_guard
-            .engine
-            .read()
-            .await
-            .embed_batch(&texts);
+        let batch_result = service_guard.embed_batch_texts(&texts).await;
         drop(service_guard);
 
         match batch_result {
@@ -537,7 +561,7 @@ impl WorkerManager {
                     if j < embeddings.len() {
                         let mut embedding = embeddings[j].clone();
                         if normalize_flags[idx] {
-                            crate::utils::math::normalize_l2(&mut embedding).ok();
+                            crate::utils::vector::normalize_l2(&mut embedding).ok();
                         }
                         let dimension = embedding.len();
                         response_channel
@@ -1751,6 +1775,7 @@ mod tests {
             scale_down_threshold: 5,
             idle_timeout_secs: 60,
             scale_check_interval_secs: 1,
+            max_batch_size: 8,
         };
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockEngine));
@@ -1829,6 +1854,7 @@ mod tests {
             scale_down_threshold: 10,
             idle_timeout_secs: 60,
             scale_check_interval_secs: 1,
+            max_batch_size: 8,
         };
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockEngine));

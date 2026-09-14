@@ -168,7 +168,7 @@ impl OnnxEngine {
 
         log::info!("Loading tokenizer...");
         #[allow(unused_mut)]
-        let mut tokenizer = Tokenizer::from_file(&tokenizer_filename.to_string_lossy())
+        let mut tokenizer = Tokenizer::from_file(&tokenizer_filename)
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
         // 全平台启用 padding 配置
@@ -182,7 +182,7 @@ impl OnnxEngine {
             tokenizer.with_padding(Some(pp));
         }
 
-        let vocab_size = tokenizer.get_vocab_size();
+        let vocab_size = tokenizer.get_vocab_size(true);
         let hidden_size = config.expected_dimension.unwrap_or(1024);
         log::info!(
             "Using hidden_size from configuration: {:?}",

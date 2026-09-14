@@ -182,7 +182,6 @@ mod tests {
         assert_eq!(handle.token_timeout_secs, 3600);
     }
 
-
     fn handle_with_password() -> GarrisonHandle {
         let hash = Argon2Hasher::default()
             .hash("Correct-Admin-Pw-1")

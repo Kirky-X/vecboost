@@ -11,6 +11,8 @@ openai-input-empty = Input cannot be empty
 openai-input-too-large = Input array too large (max { $max } items)
 
 # ── Authentication messages ──
+auth-admin-password-missing = Server has no admin password configured; authentication is unavailable. Set VECBOOST_ADMIN_PASSWORD and restart
+auth-admin-required = Admin privileges are required for this operation
 auth-password-empty = Password must not be empty
 auth-invalid-credentials = Invalid username or password
 auth-refresh-token-empty = Refresh token must not be empty
@@ -105,6 +107,7 @@ startup-db-pool = Failed to create database pool: { $detail }
 startup-db-schema = Failed to initialize database schema: { $detail }
 startup-jwt-length = JWT secret must be at least 32 characters long for security. Current length: { $got }
 startup-jwt-missing = JWT secret is required when authentication is enabled. Please provide a strong JWT secret
+startup-admin-password-missing = Admin password is required when authentication is enabled. Set the VECBOOST_ADMIN_PASSWORD environment variable (otherwise any credentials would be able to log in)
 startup-logger = Failed to initialize inklog logger: { $detail }
 startup-config = Failed to load config: { $detail }
 startup-encryption = Encryption key validation failed: { $detail }

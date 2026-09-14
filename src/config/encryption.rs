@@ -222,6 +222,9 @@ pub mod encrypted_option {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 串行化进程级环境变量 VECBOOST_ENCRYPTION_KEY 的测试访问(共享锁见 utils::test_env_lock)。
+    use crate::utils::test_env_lock::ENV_LOCK;
     use serde::{Deserialize, Serialize};
 
     /// A fixed 32-byte key used exclusively by unit tests.
@@ -229,6 +232,7 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_hex_roundtrip() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let plaintext = b"super-secret-jwt-token";
         let encrypted = encrypt_to_hex(plaintext, &TEST_KEY).expect("encrypt");
         let decrypted = decrypt_from_hex(&encrypted, &TEST_KEY).expect("decrypt");
@@ -237,6 +241,7 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_hex_empty_plaintext() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let plaintext = b"";
         let encrypted = encrypt_to_hex(plaintext, &TEST_KEY).expect("encrypt");
         let decrypted = decrypt_from_hex(&encrypted, &TEST_KEY).expect("decrypt");
@@ -245,6 +250,7 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_hex_unicode() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let plaintext = "你好世界🌍".as_bytes();
         let encrypted = encrypt_to_hex(plaintext, &TEST_KEY).expect("encrypt");
         let decrypted = decrypt_from_hex(&encrypted, &TEST_KEY).expect("decrypt");
@@ -253,6 +259,7 @@ mod tests {
 
     #[test]
     fn test_decrypt_with_wrong_key_fails() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let plaintext = b"secret-data";
         let encrypted = encrypt_to_hex(plaintext, &TEST_KEY).expect("encrypt");
         let wrong_key = *b"vecboost-wrong-encryption-key32b"; // pragma: allowlist secret
@@ -262,12 +269,14 @@ mod tests {
 
     #[test]
     fn test_decrypt_invalid_hex_fails() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let result = decrypt_from_hex("not-valid-hex!", &TEST_KEY);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_decrypt_too_short_value_fails() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // 10 hex chars = 5 bytes, less than NONCE_SIZE (24)
         let result = decrypt_from_hex("aabbccddee", &TEST_KEY);
         assert!(result.is_err());
@@ -275,6 +284,7 @@ mod tests {
 
     #[test]
     fn test_validate_encryption_key_missing() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
         let result = validate_encryption_key();
         assert!(result.is_err());
@@ -282,6 +292,7 @@ mod tests {
 
     #[test]
     fn test_validate_encryption_key_wrong_length() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "tooshort") };
         let result = validate_encryption_key();
         assert!(result.is_err());
@@ -290,6 +301,7 @@ mod tests {
 
     #[test]
     fn test_validate_encryption_key_valid() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var(
                 "VECBOOST_ENCRYPTION_KEY",
@@ -303,12 +315,14 @@ mod tests {
 
     #[test]
     fn test_read_master_key_missing() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
         assert!(read_master_key().is_none());
     }
 
     #[test]
     fn test_read_master_key_wrong_length() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "short") };
         assert!(read_master_key().is_none());
         unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
@@ -316,6 +330,7 @@ mod tests {
 
     #[test]
     fn test_read_master_key_valid() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var(
                 "VECBOOST_ENCRYPTION_KEY",
@@ -329,6 +344,7 @@ mod tests {
 
     #[test]
     fn test_derive_key_produces_32_bytes() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let derived = derive_key(&TEST_KEY);
         assert!(derived.is_ok());
         assert_eq!(derived.unwrap().len(), 32);
@@ -336,6 +352,7 @@ mod tests {
 
     #[test]
     fn test_encrypted_option_serde_none() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         #[derive(Serialize, Deserialize)]
         struct Cfg {
             #[serde(
@@ -353,6 +370,7 @@ mod tests {
 
     #[test]
     fn test_encrypted_option_serde_some_no_key() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
         #[derive(Serialize, Deserialize)]
         struct Cfg {
@@ -373,6 +391,7 @@ mod tests {
 
     #[test]
     fn test_encrypted_option_serde_some_with_key() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var(
                 "VECBOOST_ENCRYPTION_KEY",
@@ -401,6 +420,7 @@ mod tests {
 
     #[test]
     fn test_encrypted_option_deserialize_none() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
         #[derive(Serialize, Deserialize)]
         struct Cfg {

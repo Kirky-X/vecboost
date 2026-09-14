@@ -167,9 +167,14 @@ pub enum DeviceType {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum PoolingMode {
+    /// Auto: 按模型名推断(minilm/e5/gte → Mean, bge → Cls, 其余 Cls+warn)。
     #[default]
+    Auto,
+    /// 平均池化(attention-mask 加权平均)。
     Mean,
+    /// 最大池化(mask 内逐维最大)。
     Max,
+    /// CLS token 池化(取 index 0)。
     Cls,
 }
 

@@ -48,11 +48,7 @@ pub fn sanitize_password(s: &str) -> String {
 /// 原 8 字符前缀足以泄漏可猜测的签名头("eyJhbGci" 为固定 HS256
 /// JWT 头 base64),收窄到 2 字符。`floor_char_boundary` 保证 UTF-8 安全切片。
 pub fn sanitize_jwt_secret(s: &str) -> String {
-    format!(
-        "{}... [{} chars]",
-        &s[..s.floor_char_boundary(2)],
-        s.len()
-    )
+    format!("{}... [{} chars]", &s[..s.floor_char_boundary(2)], s.len())
 }
 
 /// Check if a field name likely contains sensitive data.

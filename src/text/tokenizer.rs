@@ -8,8 +8,8 @@ use oxcache::backend::MokaMemoryBackend;
 use oxcache::cache::Cache;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokenizers::Tokenizer as HfTokenizer;
 use xxhash_rust::xxh3::Xxh3;
 
@@ -19,12 +19,14 @@ pub const MAX_CACHE_SIZE: usize = 8192;
 /// 统一 tokenizer——全平台走 HuggingFace tokenizers crate。
 /// 加载失败 → VecboostError(含尝试路径),禁止静默回退。
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Tokenizer {
     tokenizer: HfTokenizer,
     max_length: usize,
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct CacheHitStats {
     pub hits: AtomicU64,
     pub misses: AtomicU64,
@@ -141,6 +143,7 @@ pub fn validate_utf8(text: &str) -> Utf8ValidationResult {
     validate_utf8_bytes(text.as_bytes())
 }
 
+#[allow(dead_code)]
 impl Tokenizer {
     pub fn from_pretrained(model_id: &str) -> Result<Self, VecboostError> {
         Self::from_pretrained_with_max_length(model_id, 512)
@@ -187,14 +190,20 @@ impl Tokenizer {
         Self::validate_and_build(tokenizer, max_length)
     }
 
-    fn validate_and_build(tokenizer: HfTokenizer, max_length: usize) -> Result<Self, VecboostError> {
+    fn validate_and_build(
+        tokenizer: HfTokenizer,
+        max_length: usize,
+    ) -> Result<Self, VecboostError> {
         if max_length == 0 {
             return Err(VecboostError::invalid_input(format!(
                 "max_length must be greater than 0, got {}",
                 max_length
             )));
         }
-        Ok(Self { tokenizer, max_length })
+        Ok(Self {
+            tokenizer,
+            max_length,
+        })
     }
 
     pub fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, VecboostError> {
@@ -217,14 +226,17 @@ impl Tokenizer {
             )));
         }
 
-        let encoding = self.tokenizer.encode(text, add_special_tokens).map_err(|e| {
-            VecboostError::tokenization_error(format!(
-                "Failed to encode text (length={}): {}. \
+        let encoding = self
+            .tokenizer
+            .encode(text, add_special_tokens)
+            .map_err(|e| {
+                VecboostError::tokenization_error(format!(
+                    "Failed to encode text (length={}): {}. \
                 The text may contain unsupported characters or be too long.",
-                text.len(),
-                e
-            ))
-        })?;
+                    text.len(),
+                    e
+                ))
+            })?;
 
         Ok(Self::truncate_encoding(encoding, self.max_length))
     }
@@ -247,14 +259,16 @@ impl Tokenizer {
             )));
         }
 
-        self.tokenizer.decode(ids, skip_special_tokens).map_err(|e| {
-            VecboostError::tokenization_error(format!(
-                "Failed to decode {} token ids: {}. \
+        self.tokenizer
+            .decode(ids, skip_special_tokens)
+            .map_err(|e| {
+                VecboostError::tokenization_error(format!(
+                    "Failed to decode {} token ids: {}. \
                 The ids may be invalid or incompatible with this tokenizer.",
-                ids.len(),
-                e
-            ))
-        })
+                    ids.len(),
+                    e
+                ))
+            })
     }
 
     pub fn get_vocab_size(&self) -> usize {
@@ -309,14 +323,17 @@ impl Tokenizer {
 
         let texts_str: Vec<String> = texts.iter().map(|s| (*s).to_string()).collect();
 
-        let batch = self.tokenizer.encode_batch(texts_str, add_special_tokens).map_err(|e| {
-            VecboostError::tokenization_error(format!(
-                "Failed to encode batch of {} texts: {}. \
+        let batch = self
+            .tokenizer
+            .encode_batch(texts_str, add_special_tokens)
+            .map_err(|e| {
+                VecboostError::tokenization_error(format!(
+                    "Failed to encode batch of {} texts: {}. \
                 Some texts may be invalid or too long.",
-                texts.len(),
-                e
-            ))
-        })?;
+                    texts.len(),
+                    e
+                ))
+            })?;
 
         Ok(batch
             .into_iter()
@@ -357,6 +374,7 @@ impl Tokenizer {
 
 /// 统一 CachedTokenizer——全平台使用 HF tokenizers,stats 改 AtomicU64。
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct CachedTokenizer {
     tokenizer: HfTokenizer,
     max_length: usize,
@@ -365,6 +383,7 @@ pub struct CachedTokenizer {
     misses: AtomicU64,
 }
 
+#[allow(dead_code)]
 impl CachedTokenizer {
     pub fn new(tokenizer: HfTokenizer, max_length: usize, cache_size: usize) -> Self {
         let capacity = cache_size.clamp(1, MAX_CACHE_SIZE) as u64;
@@ -459,14 +478,53 @@ impl CachedTokenizer {
             )));
         }
 
-        let encoding = self.tokenizer.encode(text, add_special_tokens).map_err(|e| {
-            VecboostError::tokenization_error(format!(
-                "Failed to encode text (length={}): {}. \
+        let encoding = self
+            .tokenizer
+            .encode(text, add_special_tokens)
+            .map_err(|e| {
+                VecboostError::tokenization_error(format!(
+                    "Failed to encode text (length={}): {}. \
                 The text may contain unsupported characters or be too long.",
-                text.len(),
-                e
-            ))
-        })?;
+                    text.len(),
+                    e
+                ))
+            })?;
+
+        Ok(Tokenizer::truncate_encoding(encoding, self.max_length))
+    }
+
+    /// T034: 同步 encode——绕过异步缓存，直接调用底层 tokenizer。
+    ///
+    /// 供 spawn_blocking 上下文使用，避免 async-in-sync 问题。
+    pub fn encode_sync(
+        &self,
+        text: &str,
+        add_special_tokens: bool,
+    ) -> Result<Encoding, VecboostError> {
+        if text.is_empty() {
+            return Err(VecboostError::invalid_input(
+                "Cannot encode empty text".to_string(),
+            ));
+        }
+
+        let utf8_result = validate_utf8(text);
+        if !utf8_result.is_valid {
+            return Err(VecboostError::tokenization_error(format!(
+                "Invalid UTF-8: {:?}",
+                utf8_result.error_message
+            )));
+        }
+
+        let encoding = self
+            .tokenizer
+            .encode(text, add_special_tokens)
+            .map_err(|e| {
+                VecboostError::tokenization_error(format!(
+                    "Failed to encode text (length={}): {}",
+                    text.len(),
+                    e
+                ))
+            })?;
 
         Ok(Tokenizer::truncate_encoding(encoding, self.max_length))
     }
@@ -689,8 +747,12 @@ mod tests {
 
     /// 辅助:获取第一个可用本地模型的 tokenizer.json 路径
     fn find_local_tokenizer_path() -> Option<String> {
-        let models = ["models/all-MiniLM-L6-v2", "models/BAAI-bge-small-en-v1.5",
-                       "models/BAAI-bge-small-zh-v1.5", "models/multilingual-e5-small"];
+        let models = [
+            "models/all-MiniLM-L6-v2",
+            "models/BAAI-bge-small-en-v1.5",
+            "models/BAAI-bge-small-zh-v1.5",
+            "models/multilingual-e5-small",
+        ];
         for m in &models {
             let p = format!("{}/tokenizer.json", m);
             if std::path::Path::new(&p).exists() {
@@ -717,7 +779,11 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         let detail = err.error_detail().to_string();
-        assert!(detail.contains("/nonexistent/path/tokenizer.json"), "got: {}", detail);
+        assert!(
+            detail.contains("/nonexistent/path/tokenizer.json"),
+            "got: {}",
+            detail
+        );
     }
 
     #[test]

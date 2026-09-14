@@ -531,7 +531,11 @@ mod tests {
         let resp = forbidden_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         assert_eq!(
-            resp.headers().get("content-type").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "application/json"
         );
     }
@@ -540,10 +544,7 @@ mod tests {
     #[test]
     fn public_paths_do_not_require_admin() {
         for path in PUBLIC_PATHS {
-            assert!(
-                !requires_admin(path),
-                "公开路径 {path} 不应要求 admin 角色"
-            );
+            assert!(!requires_admin(path), "公开路径 {path} 不应要求 admin 角色");
         }
     }
 
@@ -578,10 +579,7 @@ mod tests {
             "/api-docs",
         ];
         for path in safe_paths {
-            assert!(
-                !requires_admin(path),
-                "普通端点 {path} 不应要求 admin 角色"
-            );
+            assert!(!requires_admin(path), "普通端点 {path} 不应要求 admin 角色");
         }
     }
 }

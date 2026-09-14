@@ -556,9 +556,7 @@ impl Default for AuthConfig {
             default_admin_password: None,
             // CSRF 默认开启 —— 中间件仅在 auth.enabled && csrf.enabled 时挂载,
             // 因此实际效果是"CSRF 跟随 auth 开关"。显式关闭可在配置中设 csrf.enabled=false。
-            csrf: CsrfConfig {
-                enabled: true,
-            },
+            csrf: CsrfConfig { enabled: true },
             trusted_proxies: Vec::new(),
         }
     }
@@ -869,8 +867,8 @@ mod tests {
 
         assert!(!config.auth.enabled);
         assert_eq!(config.auth.token_expiration_hours, Some(24));
-    // CSRF 默认开启(挂载条件 auth.enabled && csrf.enabled 实现跟随 auth)
-    assert!(config.auth.csrf.enabled);
+        // CSRF 默认开启(挂载条件 auth.enabled && csrf.enabled 实现跟随 auth)
+        assert!(config.auth.csrf.enabled);
 
         assert!(config.audit.enabled);
         assert!(config.rate_limit.enabled);

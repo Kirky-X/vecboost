@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{Notify, oneshot};
 
 use super::priority::{Priority, RequestSource};
 use crate::domain::{EmbedRequest, RerankRequest};
@@ -762,5 +762,70 @@ mod tests {
         // Low priority does NOT participate in aging skip
         let dequeued = queue.dequeue().await.unwrap();
         assert_eq!(dequeued.priority, Priority::Low);
+    }
+
+    // ===== T032: dequeue_batch tests =====
+
+    #[tokio::test]
+    async fn test_dequeue_batch_returns_all_when_under_limit() {
+        let queue = PriorityRequestQueue::new(100);
+        for i in 0..3 {
+            let (tx, _rx) = oneshot::channel();
+            queue
+                .enqueue(QueuedRequest {
+                    request_id: format!("req-{}", i),
+                    request: ServiceRequest::Embed(EmbedRequest {
+                        text: format!("text-{}", i),
+                        normalize: Some(true),
+                    }),
+                    priority: Priority::Normal,
+                    submitted_at: Instant::now(),
+                    timeout: Duration::from_secs(30),
+                    source: RequestSource::Http {
+                        ip: "127.0.0.1".to_string(),
+                    },
+                    response_tx: tx,
+                })
+                .await
+                .unwrap();
+        }
+        let batch = queue.dequeue_batch(5).await;
+        assert_eq!(batch.len(), 3, "should return all 3 when under limit");
+        assert_eq!(queue.size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_dequeue_batch_respects_max_limit() {
+        let queue = PriorityRequestQueue::new(100);
+        for i in 0..8 {
+            let (tx, _rx) = oneshot::channel();
+            queue
+                .enqueue(QueuedRequest {
+                    request_id: format!("req-{}", i),
+                    request: ServiceRequest::Embed(EmbedRequest {
+                        text: format!("text-{}", i),
+                        normalize: Some(true),
+                    }),
+                    priority: Priority::Normal,
+                    submitted_at: Instant::now(),
+                    timeout: Duration::from_secs(30),
+                    source: RequestSource::Http {
+                        ip: "127.0.0.1".to_string(),
+                    },
+                    response_tx: tx,
+                })
+                .await
+                .unwrap();
+        }
+        let batch = queue.dequeue_batch(4).await;
+        assert_eq!(batch.len(), 4, "should cap at max_batch_size");
+        assert_eq!(queue.size(), 4, "remaining 4 should stay in queue");
+    }
+
+    #[tokio::test]
+    async fn test_dequeue_batch_empty_queue_returns_empty() {
+        let queue = PriorityRequestQueue::new(100);
+        let batch = queue.dequeue_batch(5).await;
+        assert!(batch.is_empty());
     }
 }

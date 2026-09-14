@@ -200,8 +200,7 @@ fn max_batch_size_from_kit(kit: &trait_kit::AsyncKit<trait_kit::AsyncReady>) -> 
 /// 返回 400,错误信息指明配置项。
 #[cfg(any(feature = "http", feature = "grpc"))]
 fn build_path_validator() -> Result<PathValidator, ApiError> {
-    const CONFIG_HINT: &str =
-        "[server] grpc_allowed_roots is required for /embed/file; add explicit allowed roots          to config and restart";
+    const CONFIG_HINT: &str = "[server] grpc_allowed_roots is required for /embed/file; add explicit allowed roots          to config and restart";
 
     let st = state().map_err(to_api_error)?;
     let server_cfg = st
@@ -326,7 +325,11 @@ async fn search_handler(req: SearchRequest) -> Result<SearchResponse, ApiError> 
         .require::<EmbeddingModule>()
         .map_err(kit_internal_error)?;
     let guard = svc.read().await;
-    guard.process_search(req).await.map_err(to_api_error)
+    // T038: 改用 process_search_batch，候选向量先查缓存
+    guard
+        .process_search_batch(&req.query, &req.texts, req.top_k)
+        .await
+        .map_err(to_api_error)
 }
 
 #[cfg(any(feature = "http", feature = "grpc"))]
@@ -433,10 +436,7 @@ async fn embed_file_handler(req: FileEmbedRequest) -> Result<FileEmbedResponse, 
 /// auth 未启用 → 允许(非回环绑定已被启动闸门封堵);启用时 → 仅 admin。
 #[cfg(all(any(feature = "http", feature = "grpc"), feature = "auth"))]
 async fn requester_may_preview(st: &crate::VecboostState) -> bool {
-    let auth_enabled = matches!(
-        st.kit.require::<crate::registry::AuthModule>(),
-        Ok(Some(_))
-    );
+    let auth_enabled = matches!(st.kit.require::<crate::registry::AuthModule>(), Ok(Some(_)));
     if !auth_enabled {
         return true;
     }
@@ -815,7 +815,8 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
     // 预先计算 total_chars 和 token 计数，避免后续 move texts 到 batch_req 后再访问
     let total_chars: usize = texts.iter().map(|s| s.len()).sum();
     // 使用 tokenizer 真实计数替代 bytes/4 估算
-    let real_token_count: usize = texts.iter()
+    let real_token_count: usize = texts
+        .iter()
         .filter_map(|t| guard.count_tokens(t).ok())
         .sum();
     let batch_req = BatchEmbedRequest {

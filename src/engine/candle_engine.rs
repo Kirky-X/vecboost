@@ -161,13 +161,17 @@ impl CandleEngine {
         let compute_dtype = match (&precision, device.is_cuda()) {
             (Precision::Int8, true) => {
                 // INT8 量化未实现，诚实告知用户
-                log::warn!("INT8 quantization is not yet implemented; running in FP32 mode. \
-                    The use_quantization flag has no effect until INT8 support is added.");
+                log::warn!(
+                    "INT8 quantization is not yet implemented; running in FP32 mode. \
+                    The use_quantization flag has no effect until INT8 support is added."
+                );
                 DType::F32
             }
             (Precision::Int8, false) => {
-                log::warn!("INT8 quantization is not yet implemented; running in FP32 mode. \
-                    The use_quantization flag has no effect until INT8 support is added.");
+                log::warn!(
+                    "INT8 quantization is not yet implemented; running in FP32 mode. \
+                    The use_quantization flag has no effect until INT8 support is added."
+                );
                 DType::F32
             }
             (Precision::Fp16, true) => {
@@ -568,7 +572,11 @@ impl CandleEngine {
             crate::config::model::PoolingMode::Auto => infer_pooling_mode(&config.name),
             other => other,
         };
-        log::info!("Pooling mode: {:?} (model: {})", resolved_pooling, config.name);
+        log::info!(
+            "Pooling mode: {:?} (model: {})",
+            resolved_pooling,
+            config.name
+        );
 
         Ok(Self {
             model,
@@ -678,11 +686,11 @@ impl CandleEngine {
         }
     }
 
-    async fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
+    // T034: 纯同步 forward_pass——使用 encode_sync 绕过异步缓存，移除 GPU 监控 await
+    fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         let encoding = self
             .tokenizer
-            .encode(text, true)
-            .await
+            .encode_sync(text, true)
             .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
 
         let ids = encoding.get_ids();
@@ -767,7 +775,7 @@ impl CandleEngine {
         log::debug!("Embeddings shape: {:?}", embeddings.shape());
         log::debug!("Embeddings dims: {:?}", embeddings.dims());
 
-        self.update_gpu_memory().await;
+        // T034: 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
 
         let dims = embeddings.dims();
         let hidden_dim = self.hidden_size;
@@ -782,9 +790,9 @@ impl CandleEngine {
             let cast = if batch0.dtype() == DType::F32 {
                 batch0
             } else {
-                batch0.to_dtype(DType::F32).map_err(|e| {
-                    VecboostError::InferenceError(format!("cast to f32: {}", e))
-                })?
+                batch0
+                    .to_dtype(DType::F32)
+                    .map_err(|e| VecboostError::InferenceError(format!("cast to f32: {}", e)))?
             };
             cast.to_vec2::<f32>()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?
@@ -796,9 +804,9 @@ impl CandleEngine {
             let cast = if embeddings.dtype() == DType::F32 {
                 embeddings.clone()
             } else {
-                embeddings.to_dtype(DType::F32).map_err(|e| {
-                    VecboostError::InferenceError(format!("cast to f32: {}", e))
-                })?
+                embeddings
+                    .to_dtype(DType::F32)
+                    .map_err(|e| VecboostError::InferenceError(format!("cast to f32: {}", e)))?
             };
             cast.to_vec2::<f32>()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?
@@ -821,9 +829,15 @@ impl CandleEngine {
 
         // 取 attention_mask(长度 = seq_len)用于 pooling
         let vec = match self.pooling_mode {
-            crate::config::model::PoolingMode::Cls => pool_cls(&seq_hidden, &mask_for_pooling, hidden_dim),
-            crate::config::model::PoolingMode::Mean => pool_mean(&seq_hidden, &mask_for_pooling, hidden_dim),
-            crate::config::model::PoolingMode::Max => pool_max(&seq_hidden, &mask_for_pooling, hidden_dim),
+            crate::config::model::PoolingMode::Cls => {
+                pool_cls(&seq_hidden, &mask_for_pooling, hidden_dim)
+            }
+            crate::config::model::PoolingMode::Mean => {
+                pool_mean(&seq_hidden, &mask_for_pooling, hidden_dim)
+            }
+            crate::config::model::PoolingMode::Max => {
+                pool_max(&seq_hidden, &mask_for_pooling, hidden_dim)
+            }
             crate::config::model::PoolingMode::Auto => {
                 unreachable!("Auto pooling should have been resolved at construction time")
             }
@@ -834,7 +848,8 @@ impl CandleEngine {
     }
 
     /// 优化的批量前向传播，使用真正的批量处理而非串行处理
-    async fn forward_pass_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VecboostError> {
+    // T034: 纯同步 forward_pass_batch
+    fn forward_pass_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VecboostError> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -844,14 +859,13 @@ impl CandleEngine {
             texts.len()
         );
 
-        // 批量编码所有文本
+        // 批量编码所有文本——使用 encode_sync 绕过异步缓存
         let encodings: Vec<Encoding> = {
             let mut encodings = Vec::with_capacity(texts.len());
             for &text in texts {
                 let encoding = self
                     .tokenizer
-                    .encode(text, true)
-                    .await
+                    .encode_sync(text, true)
                     .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
                 encodings.push(encoding);
             }
@@ -943,7 +957,7 @@ impl CandleEngine {
             }
         };
 
-        self.update_gpu_memory().await;
+        // T034: 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
 
         // 提取每个样本的嵌入向量（使用 CLS token）
         // 优化：使用 narrow + squeeze + to_vec2 单次提取所有 CLS token，
@@ -1005,18 +1019,14 @@ impl CandleEngine {
 
 #[async_trait]
 impl InferenceEngine for CandleEngine {
+    // T034: 纯同步实现——移除 block_in_place+block_on，由调用方 spawn_blocking 包装
     fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async { self.forward_pass(text).await })
-        })
+        self.forward_pass(text)
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
         let texts_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { self.forward_pass_batch(&texts_refs).await })
-        })
+        self.forward_pass_batch(&texts_refs)
     }
 
     fn precision(&self) -> &Precision {
@@ -2260,7 +2270,11 @@ mod tests {
             CandleEngine::new(&config, Precision::Int8).expect("Failed to load INT8 model");
         let mem_int8 = engine_int8.estimate_memory_usage(1, 128);
         assert!(mem_int8 > 0, "INT8 memory estimate should be positive");
-        assert!(mem_int8 < mem_fp16, "INT8 should use less memory than FP16");
+        // T029: INT8 量化未实现，回退 FP32，内存估算与 FP32 相同
+        assert_eq!(
+            mem_int8, mem_fp32,
+            "INT8 not implemented, should fall back to FP32 memory usage"
+        );
 
         let mem_batch = engine_fp32.estimate_memory_usage(8, 256);
         assert!(
@@ -2505,27 +2519,45 @@ mod tests {
     fn infer_pooling_minilm_returns_mean() {
         use crate::config::model::PoolingMode;
         assert_eq!(infer_pooling_mode("all-MiniLM-L6-v2"), PoolingMode::Mean);
-        assert_eq!(infer_pooling_mode("paraphrase-MiniLM-L12-v2"), PoolingMode::Mean);
+        assert_eq!(
+            infer_pooling_mode("paraphrase-MiniLM-L12-v2"),
+            PoolingMode::Mean
+        );
     }
 
     #[test]
     fn infer_pooling_e5_returns_mean() {
         use crate::config::model::PoolingMode;
-        assert_eq!(infer_pooling_mode("multilingual-e5-small"), PoolingMode::Mean);
-        assert_eq!(infer_pooling_mode("intfloat/e5-small-v2"), PoolingMode::Mean);
+        assert_eq!(
+            infer_pooling_mode("multilingual-e5-small"),
+            PoolingMode::Mean
+        );
+        assert_eq!(
+            infer_pooling_mode("intfloat/e5-small-v2"),
+            PoolingMode::Mean
+        );
     }
 
     #[test]
     fn infer_pooling_gte_returns_mean() {
         use crate::config::model::PoolingMode;
-        assert_eq!(infer_pooling_mode("Alibaba-NLP/gte-Qwen2-1.5B-instruct"), PoolingMode::Mean);
+        assert_eq!(
+            infer_pooling_mode("Alibaba-NLP/gte-Qwen2-1.5B-instruct"),
+            PoolingMode::Mean
+        );
     }
 
     #[test]
     fn infer_pooling_bge_returns_cls() {
         use crate::config::model::PoolingMode;
-        assert_eq!(infer_pooling_mode("BAAI/bge-small-en-v1.5"), PoolingMode::Cls);
-        assert_eq!(infer_pooling_mode("BAAI/bge-large-zh-v1.5"), PoolingMode::Cls);
+        assert_eq!(
+            infer_pooling_mode("BAAI/bge-small-en-v1.5"),
+            PoolingMode::Cls
+        );
+        assert_eq!(
+            infer_pooling_mode("BAAI/bge-large-zh-v1.5"),
+            PoolingMode::Cls
+        );
     }
 
     #[test]

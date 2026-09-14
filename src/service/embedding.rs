@@ -327,7 +327,14 @@ impl EmbeddingService {
     ) -> Result<EmbedResponse, VecboostError> {
         self.validator.validate_text(&req.text)?;
 
-        let cache_key = format!("text:{}", req.text);
+        // T036: 缓存键包含 model_id 和文本哈希，避免跨模型污染
+        let model_id = self
+            .model_config
+            .as_ref()
+            .map(|c| c.name.as_str())
+            .unwrap_or("unknown");
+        let text_hash = xxhash_rust::xxh3::xxh3_128(req.text.as_bytes());
+        let cache_key = format!("emb:{}:{:016x}", model_id, text_hash);
 
         let embedding = if let Some(ref semantic_cache) = self.semantic_cache {
             // 语义缓存启用：精确匹配 → trigram 搜索 → 计算回填
@@ -383,6 +390,19 @@ impl EmbeddingService {
         })
     }
 
+    /// T032: 批量文本嵌入——调用引擎 embed_batch，返回每个文本的嵌入向量。
+    ///
+    /// 不做缓存/语义缓存，直接调引擎。供 worker 排空拼批使用。
+    pub async fn embed_batch_texts(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Vec<f32>>, VecboostError> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+        self.engine.read().await.embed_batch(texts)
+    }
+
     /// 处理相似度计算
     pub async fn process_similarity(
         &self,
@@ -403,8 +423,16 @@ impl EmbeddingService {
             return Ok(SimilarityResponse { score: 1.0 });
         }
 
-        let cache_key_source = format!("text:{}", req.source);
-        let cache_key_target = format!("text:{}", req.target);
+        // T036: 缓存键包含 model_id 和文本哈希
+        let model_id = self
+            .model_config
+            .as_ref()
+            .map(|c| c.name.as_str())
+            .unwrap_or("unknown");
+        let source_hash = xxhash_rust::xxh3::xxh3_128(req.source.as_bytes());
+        let target_hash = xxhash_rust::xxh3::xxh3_128(req.target.as_bytes());
+        let cache_key_source = format!("emb:{}:{:016x}", model_id, source_hash);
+        let cache_key_target = format!("emb:{}:{:016x}", model_id, target_hash);
 
         let (mut v1, mut v2) = if self.cache.is_enabled() {
             // 缓存启用：并行查缓存，各自独立命中/未命中
@@ -700,6 +728,7 @@ impl EmbeddingService {
     }
 
     /// 批量处理 1对N 检索（更高效的版本，使用批量推理和动态批量大小）
+    // T038: 候选向量先查精确缓存，命中不再送推理
     pub async fn process_search_batch(
         &self,
         query: &str,
@@ -716,38 +745,68 @@ impl EmbeddingService {
             embedding
         };
 
-        // 计算最优批量大小
-        let sequence_length = texts.first().map_or(0, |t| t.len());
-        let output_dimension = self
+        // T038: 先查缓存，收集未命中的文本及其索引
+        let model_id = self
             .model_config
             .as_ref()
-            .and_then(|c| c.expected_dimension)
-            .unwrap_or(768);
-        let optimal_batch_size = self
-            .get_optimal_batch_size(sequence_length, output_dimension)
-            .await;
+            .map(|c| c.name.as_str())
+            .unwrap_or("unknown");
+        let mut embeddings: Vec<Option<Vec<f32>>> = vec![None; texts.len()];
+        let mut uncached_texts: Vec<(usize, &str)> = Vec::new();
 
-        debug!(
-            "Processing search batch: {} texts, optimal_batch_size={}",
-            texts.len(),
-            optimal_batch_size
-        );
-
-        let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-
-        for chunk in texts.chunks(optimal_batch_size) {
-            let chunk_embeddings = self.engine.read().await.embed_batch(chunk)?;
-            for mut emb in chunk_embeddings {
-                normalize_l2(&mut emb)?;
-                embeddings.push(emb);
+        for (idx, text) in texts.iter().enumerate() {
+            let text_hash = xxhash_rust::xxh3::xxh3_128(text.as_bytes());
+            let cache_key = format!("emb:{}:{:016x}", model_id, text_hash);
+            if let Some(cached) = self.cache.get(&cache_key).await {
+                embeddings[idx] = Some(cached);
+            } else {
+                uncached_texts.push((idx, text.as_str()));
             }
         }
 
-        let mut results: Vec<(usize, f32, String)> = Vec::with_capacity(texts.len());
+        // 批量推理未命中的文本
+        if !uncached_texts.is_empty() {
+            let uncached_refs: Vec<String> =
+                uncached_texts.iter().map(|(_, t)| t.to_string()).collect();
+            let sequence_length = uncached_refs.first().map_or(0, |t| t.len());
+            let output_dimension = self
+                .model_config
+                .as_ref()
+                .and_then(|c| c.expected_dimension)
+                .unwrap_or(768);
+            let optimal_batch_size = self
+                .get_optimal_batch_size(sequence_length, output_dimension)
+                .await;
 
-        for (idx, (text, emb)) in texts.iter().zip(embeddings.iter()).enumerate() {
-            let score = cosine_similarity(&query_embedding, emb)?;
-            results.push((idx, score, text.clone()));
+            debug!(
+                "Processing search batch: {} texts ({} cached, {} uncached), optimal_batch_size={}",
+                texts.len(),
+                embeddings.iter().filter(|e| e.is_some()).count(),
+                uncached_texts.len(),
+                optimal_batch_size
+            );
+
+            for chunk in uncached_refs.chunks(optimal_batch_size) {
+                let chunk_embeddings = self.engine.read().await.embed_batch(chunk)?;
+                for (i, mut emb) in chunk_embeddings.into_iter().enumerate() {
+                    normalize_l2(&mut emb)?;
+                    let original_idx = uncached_texts[i].0;
+                    // 写入缓存供后续使用
+                    let text_hash = xxhash_rust::xxh3::xxh3_128(uncached_refs[i].as_bytes());
+                    let cache_key = format!("emb:{}:{:016x}", model_id, text_hash);
+                    self.cache.put(&cache_key, emb.clone()).await;
+                    embeddings[original_idx] = Some(emb);
+                }
+            }
+        }
+
+        // 计算相似度
+        let mut results: Vec<(usize, f32, String)> = Vec::with_capacity(texts.len());
+        for (idx, (text, emb_opt)) in texts.iter().zip(embeddings.into_iter()).enumerate() {
+            if let Some(emb) = emb_opt {
+                let score = cosine_similarity(&query_embedding, &emb)?;
+                results.push((idx, score, text.clone()));
+            }
         }
 
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -1200,6 +1259,9 @@ impl EmbeddingService {
 
         log::info!("Model switched successfully to {}", req.model_name);
 
+        // T036: 切模型后清缓存，避免旧模型向量污染新模型
+        self.cache.clear().await;
+
         Ok(ModelSwitchResponse {
             previous_model,
             current_model: req.model_name,
@@ -1218,6 +1280,9 @@ impl EmbeddingService {
             self.model_config = None;
             log::info!("Local model config cleared for {}", name);
         }
+
+        // T036: 卸载模型后清缓存
+        self.cache.clear().await;
 
         Ok(())
     }

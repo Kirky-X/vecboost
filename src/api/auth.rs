@@ -16,7 +16,6 @@ use crate::api::init::state;
 use crate::auth::middleware::AuthContext;
 use crate::auth::{AuthResponse, GarrisonUtil, LoginRequest, RefreshTokenRequest};
 use crate::registry::{AuditModule, AuthModule};
-use garrison::account::credential::password::PasswordVerifier;
 use std::net::SocketAddr;
 
 #[cfg(feature = "http")]
@@ -66,25 +65,34 @@ pub async fn forge_login(
         });
     }
 
-    // 校验 admin 密码（通过 garrison PasswordVerifier 自动识别 Argon2/Bcrypt）
-    if let Some(ref hash) = auth_handle.admin_password_hash {
-        let verified = PasswordVerifier::verify(&req.password, hash).map_err(|e| {
-            log::error!("Password verification internal error: {}", e);
-            kit_internal_error(crate::i18n::tr("auth-verify-failed"))
-        })?;
-        if !verified {
+    // 单管理员登录判定(纯函数,见 verify_login_decision 测试):
+    // 非 admin 用户名/错误密码 → 401;无哈希配置(启动闸门漏网)→ 503。
+    let decision = crate::auth::verify_login_decision(&auth_handle, &req.username, &req.password);
+    match decision {
+        crate::auth::LoginDecision::Authenticated => {}
+        crate::auth::LoginDecision::InvalidCredentials => {
             if let Some(logger) = audit_logger {
-                logger.log_login_failed(&req.username, Some(peer_ip.clone()), "invalid password");
+                logger.log_login_failed(
+                    &req.username,
+                    Some(peer_ip.clone()),
+                    "invalid credentials",
+                );
             }
             return Err(ApiError::AuthenticationFailed {
                 reason: crate::i18n::tr("auth-invalid-credentials"),
             });
         }
-    } else {
-        log::warn!(
-            "No admin password configured — issuing token for user '{}' without password verification",
-            req.username
-        );
+        crate::auth::LoginDecision::AdminPasswordMissing => {
+            log::error!(
+                "Login rejected: auth is enabled but no admin password is configured (missing \
+                 VECBOOST_ADMIN_PASSWORD). This should have failed at startup."
+            );
+            return Err(ApiError::service_unavailable_with_source(
+                "auth",
+                None,
+                std::io::Error::other(crate::i18n::tr("auth-admin-password-missing")),
+            ));
+        }
     }
 
     // 通过 garrison 创建会话（login_id = username）

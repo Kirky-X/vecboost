@@ -20,7 +20,7 @@ use crate::domain::{EmbedRequest, EmbedResponse};
 use crate::error::VecboostError;
 // 调度类型经 domain(打断 device→pipeline 依赖)
 use crate::domain::scheduling::{Priority, QueuedRequest};
-use crate::pipeline::PriorityRequestQueue;
+use crate::domain::scheduling::PriorityRequestQueue;
 use crate::service::embedding::EmbeddingService;
 
 /// SLA 安全边际：剩余 timeout 低于此值时立即刷新

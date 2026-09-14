@@ -8,6 +8,13 @@ VecBoost API 接口测试
 """
 
 import pytest
+
+
+# 本文件针对 Python api_simulator(语义模拟),不代表 Rust 服务行为;
+# 真实服务用例见 test_server_integration.py(docs/TESTING.md)
+pytestmark = pytest.mark.sim
+
+import pytest
 from typing import Any
 import sys
 import os

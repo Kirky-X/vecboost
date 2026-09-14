@@ -66,13 +66,13 @@ VecBoost v0.2.0 adopts a modular ecosystem architecture composed of 7 independen
 
 | Library | Version | Purpose | Feature |
 |---------|---------|---------|---------|
-| **trait-kit** | `0.4` | Module registry & typestate dependency management (`Kit<Unbuilt> → Kit<Ready>`) | Always enabled |
-| **confers** | `0.5` | Config loading (TOML + env override + hot reload subscription) | `config` |
-| **inklog** | `0.2` | Structured logging infrastructure (console + file rotation) | `inklog` |
-| **oxcache** | `0.4` | High-performance cache backend (LRU/LFU/FIFO + TTL eviction) | `oxcache` |
-| **limiteron** | `0.2` | Token bucket rate limiter (multi-dimension independent counting) | `limiteron` |
-| **dbnexus** | `0.5` | Database persistence (SQLite/PostgreSQL + permission roles) | `db` |
-| **sdforge** | `0.4` | Multi-protocol interface generation (HTTP/CLI from single source) | `http`/`cli` |
+| **trait-kit** | `0.5.0-rc.3` | Module registry & typestate dependency management (`Kit<Unbuilt> → Kit<Ready>`) | Always enabled |
+| **confers** | `0.6.0-rc.3` | Config loading (TOML + env override + hot reload subscription) | `config` |
+| **inklog** | `0.3.0-rc.3` | Structured logging infrastructure (console + file rotation) | `inklog` |
+| **oxcache** | `0.5.0-rc.3` | High-performance cache backend (LRU/LFU/FIFO + TTL eviction) | `oxcache` |
+| **limiteron** | `0.3.0-rc.3` | Token bucket rate limiter (multi-dimension independent counting) | `limiteron` |
+| **dbnexus** | `0.6.0-rc.3` | Database persistence (SQLite/PostgreSQL + permission roles) | `db` |
+| **sdforge** | `0.5.0-rc.3` | Multi-protocol interface generation (HTTP/CLI from single source) | `http`/`cli` |
 
 ```mermaid
 graph LR
@@ -166,6 +166,34 @@ docker run -p 9002:9002 -p 50051:50051 \
   -v $(pwd)/models:/app/models \
   vecboost:latest
 ```
+
+
+## 🔄 Breaking Changes & Migration (Unreleased)
+
+This audit-remediation introduces the following **breaking behavior changes** — review before upgrading:
+
+| Change | Old | New | Migration |
+|--------|-----|-----|-----------|
+| Bind safety | `auth.enabled=false` could bind `0.0.0.0` | non-loopback bind without auth → **refuses to start** | keep `127.0.0.1` for dev; `VECBOOST_ALLOW_INSECURE=1` for trusted containers (logs ERROR); enable auth in production |
+| Admin password | `VECBOOST_ADMIN_PASSWORD` optional | missing with auth enabled → **refuses to start** | set `VECBOOST_ADMIN_PASSWORD` |
+| Login username | any username + admin password accepted | only `default_admin_username` (default `admin`) accepted | use the admin username |
+| XFF trust | empty `trusted_proxies` trusted XFF unconditionally | empty = **XFF ignored**, peer IP used | configure `trusted_proxies = ["10.0.0.0/8"]` behind proxies |
+| RBAC | `/model/*`, `/embed/file` needed only login | require **admin role** | use a normal account for embed; admin for model ops |
+| `/embed/file` | default root = cwd, text preview returned | explicit `grpc_allowed_roots` required; ≤10 MiB; preview admin-only | configure allowed roots |
+| Token lifetime | 30 days default | **1 hour** default | set `token_expiration_hours` for long sessions |
+| CSRF | off by default | follows `auth.enabled` | no impact for pure-Bearer APIs |
+| `use_gpu` | shipped as `true` | shipped `false`; warn + CPU fallback when feature missing | enable explicitly for GPU builds |
+| `--config` | missing file silently fell back to defaults | **errors out** (exit 2) | fix the path |
+| Cache keys | `text:{raw}` (model-agnostic) | `emb:{model}:{xxh3_128}`; cache cleared on model switch | first run after upgrade has cold cache |
+| Tokenizer | custom WordPiece on Linux (250-word fallback) | HuggingFace `tokenizers` everywhere; load failure **errors** | re-embed existing vectors |
+| CLI | unknown subcommand silently started the HTTP server | usage on stderr + exit code 2 | adjust scripts; `--help` available |
+
+**Multi-replica boundary**: the inference path is stateless and scales horizontally when auth
+is disabled (rate limiting / caches are per-process). With `auth.enabled=true` sessions live
+in process memory — **single replica only**; enable the `db` feature for multi-replica auth.
+
+**Hot reload semantics**: config file changes are **validated and logged, applied after
+restart** (not hot-swapped). On Kubernetes use ConfigMap rollout.
 
 ## 📖 Documentation
 

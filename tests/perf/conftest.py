@@ -69,3 +69,9 @@ def long_text() -> str:
 def special_char_text() -> str:
     """提供包含特殊字符的文本用于测试"""
     return "Hello! @#$% &*() World"
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "sim: 使用 Python api_simulator 的语义模拟用例(不代表 Rust 服务行为)"
+    )

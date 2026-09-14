@@ -54,7 +54,7 @@
 | **🔐 企业级安全** | JWT 认证、CSRF 保护、基于角色的访问控制和审计日志 |
 | **⚡ 速率限制** | 基于 limiteron 的令牌桶限流（全局/IP/用户/API 密钥） |
 | **📈 优先级队列** | 可配置优先级的请求队列和加权公平调度 |
-| **📦 云原生部署** | 生产环境 Kubernetes、Docker 和云平台部署配置 |
+| **📦 云原生部署** | Docker 镜像构建就绪;Kubernetes 提供部署指引(清单需自备) |
 | **📈 可观测性** | Prometheus 指标、健康检查、结构化日志和 Grafana 仪表板 |
 | **🧊 Matryoshka 支持** | 动态维度约简，支持更小更快的嵌入向量（OpenAI 兼容） |
 
@@ -66,13 +66,13 @@ VecBoost v0.2.0 采用模块化生态架构，由 7 个独立 Rust 库组成，�
 
 | 库 | 版本 | 用途 | Feature |
 |----|------|------|---------|
-| **trait-kit** | `0.4` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
-| **confers** | `0.5` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | 始终启用 |
-| **inklog** | `0.2` | 结构化日志基础设施（控制台 + 文件轮转） | `inklog` |
-| **oxcache** | `0.4` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | `oxcache` |
-| **limiteron** | `0.2` | 令牌桶限流器（多维度独立计数） | `limiteron` |
-| **dbnexus** | `0.5` | 数据库持久化（SQLite/PostgreSQL + 权限角色） | `db` |
-| **sdforge** | `0.4` | 多协议接口生成（HTTP/CLI 单一源定义） | `http`/`cli` |
+| **trait-kit** | `0.5.0-rc.3` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
+| **confers** | `0.6.0-rc.3` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | 始终启用 |
+| **inklog** | `0.3.0-rc.3` | 结构化日志基础设施（控制台 + 文件轮转） | `inklog` |
+| **oxcache** | `0.5.0-rc.3` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | `oxcache` |
+| **limiteron** | `0.3.0-rc.3` | 令牌桶限流器（多维度独立计数） | `limiteron` |
+| **dbnexus** | `0.6.0-rc.3` | 数据库持久化（SQLite/PostgreSQL + 权限角色） | `db` |
+| **sdforge** | `0.5.0-rc.3` | 多协议接口生成（HTTP/CLI 单一源定义） | `http`/`cli` |
 
 ```mermaid
 graph LR
@@ -166,6 +166,34 @@ docker run -p 9002:9002 -p 50051:50051 \
   -v $(pwd)/models:/app/models \
   vecboost:latest
 ```
+
+
+## 🔄 行为变更与迁移(Unreleased)
+
+本次审计修复包含以下**破坏性行为变更**,升级前请逐项核对:
+
+| 变更 | 旧行为 | 新行为 | 迁移动作 |
+|------|--------|--------|----------|
+| 绑定安全 | `auth.enabled=false` 可绑定 `0.0.0.0` | 非回环绑定 + 无认证 → **拒绝启动** | 本地开发保持 `127.0.0.1`;受信网络容器设 `VECBOOST_ALLOW_INSECURE=1`(打 ERROR 告警);生产启用 auth |
+| 管理员密码 | `VECBOOST_ADMIN_PASSWORD` 可选,缺失时任意凭据登录 | `auth.enabled=true` 且缺失 → **拒绝启动** | 设置 `VECBOOST_ADMIN_PASSWORD`(≥8 位) |
+| 登录用户名 | 任意用户名 + admin 口令可登录 | 仅 `default_admin_username`(默认 `admin`)可登录 | 客户端固定使用 admin 用户名 |
+| XFF 信任 | `trusted_proxies` 为空时无条件信任 `X-Forwarded-For` | 为空时**忽略 XFF**,使用直连地址 | 反代部署显式配置 `trusted_proxies = ["10.0.0.0/8"]` 等 |
+| RBAC | `/model/*`、`/embed/file` 仅需登录 | 要求 **admin 角色** | 业务用户使用普通账号即可调 embed;模型管理用 admin |
+| `/embed/file` | 默认允许根 = 进程 cwd,回传文本预览 | 必须显式配置 `grpc_allowed_roots`;单文件 ≤10 MiB;`text_preview` 仅 admin | 配置允许根;客户端不再依赖 preview |
+| Token 有效期 | 缺省 30 天(garrison 默认) | 缺省 **1 小时** | 长会话场景显式配置 `token_expiration_hours` |
+| CSRF | 默认关闭 | 跟随 `auth.enabled`(显式 `csrf.enabled=false` 仍生效) | 纯 Bearer API 无影响 |
+| `use_gpu` | 出厂配置 `true`(无 GPU 构建下告警回退) | 出厂 `false`;请求 GPU 但 feature 缺失 → WARN + CPU 回退 | GPU 构建用户显式开启 |
+| `--config` | 路径不存在 → 静默回退默认配置 | **报错退出**(码 2) | 排查路径拼写 |
+| 缓存键 | `text:{原文}`(不含模型) | `emb:{model}:{xxh3_128}`;模型切换清缓存 | 升级后首轮缓存全 miss(一次性) |
+| 分词器 | Linux 自研 WordPiece(异常时回退 250 词表) | 全平台 HuggingFace `tokenizers`;加载失败**报错** | 存量向量与重建向量不兼容,需重建索引 |
+| CLI | 未知子命令静默启动 HTTP 服务器 | stderr 用法提示 + 退出码 2 | 脚本若依赖旧行为需调整;`--help` 可用 |
+
+**多副本边界**:推理路径无状态,auth 关闭时可水平扩展(限流/缓存为进程内语义)。
+`auth.enabled=true` 时会话存进程内存,**仅限单副本**;多副本 + 认证需启用 `db`
+feature(会话外置数据库)。
+
+**热重载语义**:配置文件变更会进行**校验并打日志,重启后生效**(非运行时热切换)。
+Kubernetes 场景用 ConfigMap 滚动更新。
 
 ## 📖 文档
 

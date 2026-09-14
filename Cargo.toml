@@ -63,7 +63,10 @@ limiteron = { version = "0.3.0-rc.3", path = "../base/limiteron", default-featur
 # Database infrastructure (db feature) — 仅保留已接线的 pool-warmup，其余 kit/migration 等按需启用
 # dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
 # Direct sea-orm dependency is still required for those types.
-dbnexus = { version = "0.6.0-rc.3", path = "../base/dbnexus", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "pool-warmup", "retry", "config-env", "observability"] }
+dbnexus = { version = "0.6.0-rc.3", path = "../base/dbnexus", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "pool-warmup", "retry", "config-env", "observability", "failover", "replica-routing"] }
+# failover/replica-routing:inklog integrations::infra 无条件构造 DbConfig 的
+# failover_config/replica_config 字段(2026-09-14 dbnexus 加入门控),缺此二者
+# inklog 无法编译;../base 侧修复前由 vecboost 侧补齐。
 sea-orm = { version = "2.0", optional = true, default-features = false }
 
 # AI & Math (base)
@@ -133,7 +136,10 @@ tikv-jemallocator = { version = "0.6", default-features = false, features = ["ba
 default = ["http"]
 
 # 协议特性 — 保留 cache/streaming/timestamp (轻量)，移除未接线的 logging/kit/inklog
-http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:base64", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/cache", "sdforge/streaming", "sdforge/timestamp"]
+# sdforge/docs:Swagger UI(/api-docs);dep:dbnexus:在所有 http 构建中统一
+# dbnexus feature(含 failover/replica-routing)—— inklog integrations::infra
+# 无条件构造这两个 DbConfig 字段,缺 feature 时 inklog 无法编译(见 dbnexus 依赖处注释)
+http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:base64", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/cache", "sdforge/streaming", "sdforge/timestamp", "sdforge/docs", "dep:dbnexus"]
 grpc = ["sdforge/grpc", "sdforge/ratelimit", "sdforge/security"]
 cli = ["sdforge/cli", "dep:clap"]
 openapi = ["schema", "dep:utoipa-swagger-ui", "sdforge/openapi", "sdforge/docs"]

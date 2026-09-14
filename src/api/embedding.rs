@@ -107,13 +107,35 @@ pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
             retry_after: Some(60),
             source: None,
         },
-        other => ApiError::Internal {
-            message: other.error_detail().to_string(),
-            error_id: uuid_like_id(),
-            source: None,
-            context: None,
-        },
+        other => {
+            // G004: 500 类错误经 context.extra 透传 Fluent error_code,
+            // 客户端可在 error.details.context.extra.error_code 拿到稳定键
+            ApiError::Internal {
+                message: other.error_detail().to_string(),
+                error_id: uuid_like_id(),
+                source: None,
+                context: Some(Box::new(sdforge::error::ErrorContext {
+                    file: None,
+                    line: None,
+                    function: None,
+                    extra: [("error_code".to_string(), other.error_code().to_string())]
+                        .into_iter()
+                        .collect(),
+                })),
+            }
+        }
     }
+}
+
+/// OpenAI 风格错误的 detail 槽:sdforge ApiError 的 details 结构固定(库不可改),
+/// 借用 InvalidInput/NotFound 的 `value` 槽附带 OpenAI SDK 可读的
+/// `error.type` / `error.code` 对应字段。
+#[cfg(feature = "http")]
+fn openai_error_detail(openai_type: &str, openai_code: &str) -> Option<serde_json::Value> {
+    Some(serde_json::json!({
+        "openai_error_type": openai_type,
+        "openai_code": openai_code,
+    }))
 }
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
@@ -788,21 +810,55 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
         return Err(ApiError::InvalidInput {
             message: crate::i18n::tr("openai-input-empty"),
             field: Some("input".to_string()),
-            value: None,
+            value: openai_error_detail("invalid_request_error", "empty_input"),
         });
     }
+    // G005: OpenAI 契约上限 2048;错误文案同时给出 embedding.max_batch_size 生效值
     if req.input.len() > 2048 {
+        let effective = max_batch_size_from_kit(
+            &state().map_err(to_api_error)?.kit,
+        );
         return Err(ApiError::InvalidInput {
-            message: crate::i18n::tr_with_args(
-                "openai-input-too-large",
-                crate::i18n::tr_args(&[("max", "2048")]),
+            message: format!(
+                "{} (server embedding.max_batch_size = {})",
+                crate::i18n::tr_with_args(
+                    "openai-input-too-large",
+                    crate::i18n::tr_args(&[("max", "2048")]),
+                ),
+                effective
             ),
             field: Some("input".to_string()),
-            value: None,
+            value: openai_error_detail("invalid_request_error", "batch_too_large"),
         });
     }
 
     let st = state().map_err(to_api_error)?;
+    // G005: model 必须非空且在可用模型集合中,否则 404 + 可用列表
+    let available = {
+        let svc = st
+            .kit
+            .require::<EmbeddingModule>()
+            .map_err(kit_internal_error)?;
+        let guard = svc.read().await;
+        guard.list_available_models().models
+    };
+    if !available.iter().any(|m| &m.name == &req.model) {
+        // 404 + 可用模型列表(OpenAI SDK 侧经 openai_error_type/openai_code 槽识别,
+        // NotFound 变体无自由槽位,故将 OpenAI 字段并入 resource 语义说明)
+        return Err(ApiError::InvalidInput {
+            message: format!(
+                "The model '{}' does not exist. Available models: {}",
+                req.model,
+                available
+                    .iter()
+                    .map(|m| m.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            field: Some("model".to_string()),
+            value: openai_error_detail("invalid_request_error", "model_not_found"),
+        });
+    }
     validate_batch_size(req.input.len(), max_batch_size_from_kit(&st.kit)).map_err(to_api_error)?;
     let svc = st
         .kit
@@ -1067,6 +1123,26 @@ pub async fn grpc_health_check() -> Result<serde_json::Value, ApiError> {
 
 #[cfg(test)]
 mod tests {
+    /// G004: 500 类错误 wire JSON 透传 Fluent error_code(context.extra)
+    #[test]
+    fn to_api_error_carries_fluent_error_code() {
+        let api = to_api_error(VecboostError::InternalError("boom".into()));
+        let svc = api.to_service_error();
+        let wire = serde_json::to_value(&svc).unwrap();
+        // ServiceError derive 序列化为平铺字段(code/message/details/http_status)
+        assert_eq!(wire["code"], "INTERNAL_ERROR");
+        assert_eq!(wire["details"]["context"]["extra"]["error_code"], "error-internal");
+    }
+
+    /// G004: OpenAI 错误槽位(type/code)可经 value 槽到达 wire
+    #[cfg(feature = "http")]
+    #[test]
+    fn openai_error_detail_carries_type_and_code() {
+        let d = openai_error_detail("invalid_request_error", "model_not_found").unwrap();
+        assert_eq!(d["openai_error_type"], "invalid_request_error");
+        assert_eq!(d["openai_code"], "model_not_found");
+    }
+
     /// 文件大小上限(10 MiB 内通过,超限报错并给出限值)
     #[test]
     fn check_file_embed_size_enforces_limit() {

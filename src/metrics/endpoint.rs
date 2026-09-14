@@ -87,11 +87,7 @@ pub async fn metrics_endpoint(
                 }
             }
             if !allowed {
-                return Response::builder()
-                    .status(429)
-                    .body(Body::from(i18n::tr("metrics-rate-limited")))
-                    .unwrap()
-                    .into_response();
+                return json_error_response(429, &i18n::tr("metrics-rate-limited"));
             }
         }
     }
@@ -99,14 +95,7 @@ pub async fn metrics_endpoint(
     let prometheus_collector = match collector_opt.as_ref() {
         Some(c) => c,
         None => {
-            return Response::builder()
-                .status(500)
-                .body(Body::from(i18n::tr("metrics-collector-missing")))
-                .unwrap_or_else(|e| {
-                    log::error!("Failed to build error response: {}", e);
-                    Response::new(Body::from(i18n::tr("error-internal")))
-                })
-                .into_response();
+            return json_error_response(500, &i18n::tr("metrics-collector-missing"));
         }
     };
     let encoder = prometheus::TextEncoder::new();
@@ -237,4 +226,23 @@ mod tests {
         assert_eq!(normalize_metrics_path(""), "");
         assert_eq!(normalize_metrics_path("/"), "/");
     }
+}
+
+
+/// G009: /metrics 的 4xx/5xx 统一 JSON 错误体(原为纯文本,机器不可读)。
+pub fn json_error_response(status: u16, message: &str) -> axum::response::Response {
+    let body = serde_json::json!({
+        "success": false,
+        "error": { "code": "METRICS_ERROR", "message": message }
+    });
+    let mut resp = axum::response::Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap_or_else(|e| {
+            log::error!("Failed to build JSON error response: {}", e);
+            axum::response::Response::new(axum::body::Body::from(r#"{"success":false}"#))
+        });
+    *resp.status_mut() = axum::http::StatusCode::from_u16(status).unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    resp
 }

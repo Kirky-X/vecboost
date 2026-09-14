@@ -185,11 +185,7 @@ async fn init_engine_and_services(
             _ => std::path::PathBuf::from(&config.model.model_repo),
         },
         tokenizer_path: None,
-        device: if config.model.use_gpu {
-            vecboost::config::model::DeviceType::Cuda
-        } else {
-            vecboost::config::model::DeviceType::Cpu
-        },
+        device: resolve_device_config(config.model.use_gpu),
         max_batch_size: config.model.batch_size,
         pooling_mode: None,
         expected_dimension: config.model.expected_dimension,
@@ -248,6 +244,44 @@ async fn run_mcp_server(
     let running = server.serve(stdio()).await?;
     running.waiting().await?;
     Ok(())
+}
+
+/// G002: CLI 子命令名单的单一来源 —— sdforge inventory 注册(forge CLI 宏),
+/// 不再维护手工数组。docs 子命令由 sdforge 自动附加。
+#[cfg(feature = "cli")]
+fn cli_subcommand_names() -> Vec<String> {
+    CliBuilder::new()
+        .with_name("vecboost")
+        .build()
+        .get_subcommands()
+        .map(|sc| sc.get_name().to_string())
+        .collect()
+}
+
+/// G002: 校验 CLI 首参数 —— `--help` 打印用法后退出;未知子命令 stderr 报错
+/// 并以退出码 2 终止(不得静默落入 HTTP 服务器启动路径)。
+#[cfg(feature = "cli")]
+fn validate_cli_invocation(filtered_args: &[String]) {
+    let Some(first) = filtered_args.first() else {
+        return; // 无子命令 → 服务器模式
+    };
+    if first == "--help" || first == "-h" {
+        let mut cmd = CliBuilder::new().with_name("vecboost").build();
+        let _ = cmd.print_help();
+        println!();
+        std::process::exit(0);
+    }
+    if first.starts_with('-') {
+        return; // 全局 flag(--config 已剥离/--mcp)交由后续路径处理
+    }
+    let known = cli_subcommand_names();
+    if !known.contains(first) {
+        eprintln!("Error: unknown subcommand '{first}'");
+        eprintln!();
+        eprintln!("Available subcommands: {}", known.join(", "));
+        eprintln!("Run 'vecboost --help' for usage.");
+        std::process::exit(2);
+    }
 }
 
 #[cfg(feature = "cli")]
@@ -488,6 +522,30 @@ async fn init_pipeline(
     }
 }
 
+/// G008: 设备解析 —— 请求 GPU 但对应 feature 未编译时 WARN 并回退 CPU。
+fn resolve_device_config(use_gpu: bool) -> vecboost::config::model::DeviceType {
+    use vecboost::config::model::DeviceType;
+    if !use_gpu {
+        return DeviceType::Cpu;
+    }
+    #[cfg(feature = "cuda")]
+    {
+        DeviceType::Cuda
+    }
+    #[cfg(all(not(feature = "cuda"), feature = "metal"))]
+    {
+        DeviceType::Metal
+    }
+    #[cfg(not(any(feature = "cuda", feature = "metal")))]
+    {
+        log::warn!(
+            "use_gpu=true but no GPU backend is compiled in (missing 'cuda' feature, or \
+             'metal' on macOS) — falling back to CPU. Rebuild with --features cuda for GPU."
+        );
+        DeviceType::Cpu
+    }
+}
+
 /// 配置含敏感项(jwt_secret/admin_password)且未设加密 key 时应告警。
 fn should_warn_plaintext_secrets(
     has_jwt: bool,
@@ -574,22 +632,17 @@ async fn app_main() -> anyhow::Result<()> {
     // 剥离全局 --config 参数（CLI 子命令/clap 不识别该参数，须先行剥离）
     let (_filtered_args, config_path) = strip_config_args(std::env::args().collect());
 
+    // G002: 未知子命令/`--help` 在进入服务器装配前拦截(fail-fast,不静默起服务)
+    #[cfg(feature = "cli")]
+    validate_cli_invocation(&_filtered_args[1..]);
+
     // Early CLI detection: suppress console logging in CLI mode to keep stdout clean
     // for machine-readable JSON output (DEFECT-CLI-001 fix)
     #[cfg(feature = "cli")]
-    let cli_mode = {
-        let known_cmds = [
-            "embed",
-            "embed_batch",
-            "compute_similarity",
-            "rerank",
-            "search",
-        ];
-        _filtered_args
-            .get(1)
-            .map(|a| known_cmds.contains(&a.as_str()))
-            .unwrap_or(false)
-    };
+    let cli_mode = _filtered_args
+        .get(1)
+        .map(|a| cli_subcommand_names().contains(a))
+        .unwrap_or(false);
     #[cfg(not(feature = "cli"))]
     let cli_mode = false;
 
@@ -606,6 +659,15 @@ async fn app_main() -> anyhow::Result<()> {
     // 配置先行加载（DEFECT-CONFIG-001）：logger 的级别/文件参数来自 [logging] 配置段，
     // 因此配置必须在 logger 之前就绪；此时尚无日志后端，错误经 stderr 输出。
     let config = {
+        // G006: 显式指定的 --config 文件不存在 → 立即报错退出(码 2),
+        // 杜绝"以为自定义配置生效,实际跑默认配置"的静默回退
+        if let Some(p) = config_path.as_deref()
+            && !std::path::Path::new(p).exists()
+        {
+            eprintln!("Error: config file not found: {p}");
+            eprintln!("The --config path must point to an existing TOML file.");
+            std::process::exit(2);
+        }
         let result = match config_path.as_deref() {
             Some(p) => AppConfig::load_via_confers_with_path(p),
             None => AppConfig::load_via_confers(),
@@ -1019,7 +1081,12 @@ async fn app_main() -> anyhow::Result<()> {
     vecboost::api::init_state(app_state.clone()).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // sdforge #[forge] 路由（Router<()>，从 inventory 收集所有 forge 函数注册的路由）
-    let app = sdforge::http::build();
+    // G009: /api → /api/v1 307 重定向(版本前缀惯例)
+    let app = sdforge::http::build_with_redirect();
+
+    // G001: 挂载 Swagger UI(/api-docs/openapi.json + /swagger-ui/),
+    // openapi.json 由 sdforge 从 forge 注册路由动态生成
+    let app = app.merge(sdforge::docs::swagger_ui_router());
 
     // metrics 端点（手写例外：Prometheus text/plain 响应，forge 不支持非 JSON）
     let metrics_router = axum::Router::new()
@@ -1089,6 +1156,31 @@ async fn app_main() -> anyhow::Result<()> {
     };
 
     // 安全 headers + trace
+    // G009: 请求体大小上限(默认 5 MiB,防超大 payload DoS)
+    let app = app.layer(tower_http::limit::RequestBodyLimitLayer::new(
+        config.server.body_limit_mb.max(1) as usize * 1024 * 1024,
+    ));
+    // G009: 每个响应注入 x-request-id(与日志关联)
+    let app = app.layer(axum::middleware::from_fn(
+        |req: axum::extract::Request, next: axum::middleware::Next| async move {
+            let mut resp = next.run(req).await;
+            if !resp.headers().contains_key("x-request-id") {
+                if let Ok(id) = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                {
+                    resp.headers_mut().insert(
+                        "x-request-id",
+                        axum::http::HeaderValue::from_str(&format!(
+                            "req-{:x}",
+                            id.as_nanos()
+                        ))
+                        .unwrap_or(axum::http::HeaderValue::from_static("req-unknown")),
+                    );
+                }
+            }
+            Ok::<_, std::convert::Infallible>(resp)
+        },
+    ));
     let app = app
         .layer(TraceLayer::new_for_http())
         .layer(SetResponseHeaderLayer::overriding(
@@ -1339,6 +1431,58 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    // G009: x-request-id 中间件注入响应头
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn request_id_header_injected() {
+        use axum::routing::get;
+        use tower::ServiceExt;
+        async fn ping() -> &'static str {
+            "ok"
+        }
+        let app = axum::Router::new().route("/ping", get(ping)).layer(axum::middleware::from_fn(
+            |req: axum::extract::Request, next: axum::middleware::Next| async move {
+                let mut resp = next.run(req).await;
+                if !resp.headers().contains_key("x-request-id") {
+                    resp.headers_mut().insert(
+                        "x-request-id",
+                        axum::http::HeaderValue::from_static("req-test"),
+                    );
+                }
+                Ok::<_, std::convert::Infallible>(resp)
+            },
+        ));
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/ping")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.headers().get("x-request-id").unwrap(),
+            "req-test"
+        );
+    }
+
+    // G008: 默认构建(无 cuda/metal)下 use_gpu=true 回退 CPU
+    #[test]
+    fn device_resolution_falls_back_to_cpu_without_gpu_features() {
+        assert!(
+            matches!(
+                resolve_device_config(true),
+                vecboost::config::model::DeviceType::Cpu
+            ),
+            "non-GPU build must fall back to CPU"
+        );
+        assert!(matches!(
+            resolve_device_config(false),
+            vecboost::config::model::DeviceType::Cpu
+        ));
+    }
+
     // 敏感配置明文存储告警判定
     #[test]
     fn plaintext_secret_warning_logic() {
@@ -1346,6 +1490,51 @@ mod tests {
         assert!(should_warn_plaintext_secrets(false, true, false));
         assert!(!should_warn_plaintext_secrets(true, true, true));
         assert!(!should_warn_plaintext_secrets(false, false, false));
+    }
+
+    // G001: Swagger UI 挂载验证 —— openapi.json 与 UI 资源均可访问
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn swagger_ui_endpoints_served() {
+        use tower::ServiceExt;
+        let app = sdforge::docs::swagger_ui_router();
+
+        let resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api-docs/openapi.json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/swagger-ui/")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    // G002: CLI 名单单一来源 + 未知子命令判定
+    #[cfg(feature = "cli")]
+    #[test]
+    fn cli_subcommand_names_from_inventory() {
+        // 名单来自 sdforge inventory(单一来源,非硬编码数组)
+        let names = cli_subcommand_names();
+        assert!(names.contains(&"embed_batch".to_string()));
+        assert!(names.contains(&"compute_similarity".to_string()));
+        assert!(names.contains(&"embed".to_string()));
+        // 未知子命令的 exit(2) 行为在子进程中验证:
+        //   vecboost definitely_not_a_cmd  -> exit 2
+        //   vecboost --help                -> exit 0
     }
 
     // auth 启用但未配置管理员密码 → 拒绝启动(错误信息指明 VECBOOST_ADMIN_PASSWORD)

@@ -41,6 +41,12 @@ pub struct ServerConfig {
     /// gRPC request timeout in seconds (applies to streaming RPCs).
     #[garde(skip)]
     pub grpc_timeout_seconds: Option<u64>,
+    /// G009: HTTP 请求体大小上限(MiB);默认 5。
+    #[garde(range(min = 1, max = 1024))]
+    pub body_limit_mb: u32,
+    /// G016: HTTP 全局请求超时秒数(TimeoutLayer);默认 60。
+    #[garde(range(min = 1, max = 3600))]
+    pub request_timeout_seconds: u64,
     /// Whether gRPC server requires authentication (secure default: true).
     /// Set to false only for development/test environments behind network isolation.
     #[garde(skip)]
@@ -428,6 +434,8 @@ impl Default for ServerConfig {
             timeout: Some(DEFAULT_TIMEOUT_SECS),
             grpc_max_connections: Some(DEFAULT_GRPC_MAX_CONNECTIONS),
             grpc_timeout_seconds: Some(DEFAULT_TIMEOUT_SECS),
+            body_limit_mb: 5,
+            request_timeout_seconds: 60,
             // Secure default: require auth unless explicitly disabled.
             // Callers must opt-out via config/config.toml `[server] grpc_require_auth = false`.
             grpc_require_auth: Some(true),
@@ -1082,6 +1090,8 @@ mod tests {
             timeout: Some(60),
             grpc_max_connections: Some(500),
             grpc_timeout_seconds: Some(120),
+            body_limit_mb: 5,
+            request_timeout_seconds: 60,
             grpc_require_auth: Some(false),
             grpc_allowed_roots: Some(vec!["/data".to_string()]),
             cors_enabled: true,

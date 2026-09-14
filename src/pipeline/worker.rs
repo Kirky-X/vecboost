@@ -321,8 +321,7 @@ impl WorkerManager {
                 }
             }
 
-            // 同时等待队列请求和关闭信号(T009: 消费 task_receiver 的 Shutdown 信号,
-            // 使 start_scaling_monitor 缩容发送的 Shutdown 能及时被 worker 接收)
+            // 同时等待队列请求和关闭信号
             tokio::select! {
                 Some(task) = task_receiver.recv() => {
                     match task {
@@ -341,8 +340,6 @@ impl WorkerManager {
                             break;
                         }
                         WorkerTask::ProcessRequest { .. } => {
-                            // 当前请求通过 queue 路由,task_receiver 仅承载 Shutdown 信号。
-                            // 保留分支以防未来切换到直接派发模式。
                             debug!(
                                 "Worker {} received ProcessRequest via task_receiver \
                                  (ignored, queue is primary route)",
@@ -356,46 +353,49 @@ impl WorkerManager {
                     // 重置空闲计数
                     idle_count = 0;
 
-                    debug!(
-                        "Worker {} processing request {}",
-                        worker_id, request.request_id
-                    );
-
-                    // 处理请求
-                    let result = Self::process_request(&request, &embedding_service).await;
-
-                    // 发送响应
-                    response_channel
-                        .complete(request.request_id.clone(), result)
-                        .await;
+                    // T032: 排空拼批——取首个请求后继续 drain 至 max_batch_size
+                    let mut batch = vec![request];
+                    let extra = queue.dequeue_batch(config.max_batch_size.saturating_sub(1)).await;
+                    batch.extend(extra);
 
                     debug!(
-                        "Worker {} completed request {}",
-                        worker_id, request.request_id
+                        "Worker {} processing batch of {} requests",
+                        worker_id, batch.len()
                     );
+
+                    // 批量处理请求
+                    Self::process_batch_requests(&batch, &embedding_service, &response_channel).await;
                 }
-                // 队列为空且无关闭信号:指数退避
-                else => {
-                    idle_count = idle_count.saturating_add(1usize);
-                    let wait_ms =
-                        std::cmp::min(100usize * (1usize << idle_count.min(6)), 5000usize);
-
-                    debug!(
-                        "Worker {} queue empty, waiting {}ms (idle_count={})",
-                        worker_id, wait_ms, idle_count
-                    );
-
-                    tokio::time::sleep(Duration::from_millis(wait_ms as u64)).await;
-
-                    // 如果长时间空闲，可以让 worker 退出
-                    if idle_count > MAX_IDLE_COUNT && worker_id > config.min_workers {
-                        info!(
-                            "Worker {} idle for too long, requesting shutdown",
-                            worker_id
-                        );
-                        break;
+                // 队列为空时等待入队通知，消除指数退避轮询
+                // 使用 timeout 实现空闲超时退出
+                result = tokio::time::timeout(
+                    Duration::from_secs(config.idle_timeout_secs),
+                    queue.notify().notified(),
+                ) => {
+                    match result {
+                        Ok(()) => {
+                            debug!("Worker {} notified of new request", worker_id);
+                            idle_count = 0;
+                        }
+                        Err(_) => {
+                            // 超时:增加空闲计数
+                            idle_count = idle_count.saturating_add(1);
+                            debug!(
+                                "Worker {} idle timeout ({}s), idle_count={}",
+                                worker_id, config.idle_timeout_secs, idle_count
+                            );
+                        }
                     }
                 }
+            }
+
+            // 如果长时间空闲且队列为空，让 worker 退出
+            if idle_count > MAX_IDLE_COUNT && queue.size() == 0 && worker_id > config.min_workers {
+                info!(
+                    "Worker {} idle for too long, requesting shutdown",
+                    worker_id
+                );
+                break;
             }
         }
 
@@ -465,6 +465,116 @@ impl WorkerManager {
             Err(e) => {
                 warn!("Embedding inference failed: {}", e);
                 Err(e)
+            }
+        }
+    }
+
+    /// T032: 批量处理请求——用 embed_batch 合并推理，按 request_id 切分结果分别 complete。
+    ///
+    /// 单条文本失败仅该请求收错，不影响其他请求。
+    async fn process_batch_requests(
+        batch: &[super::queue::QueuedRequest],
+        embedding_service: &Arc<RwLock<EmbeddingService>>,
+        response_channel: &Arc<ResponseChannel>,
+    ) {
+        if batch.is_empty() {
+            return;
+        }
+
+        // 单条请求走快速路径
+        if batch.len() == 1 {
+            let result = Self::process_request(&batch[0], embedding_service).await;
+            response_channel
+                .complete(batch[0].request_id.clone(), result)
+                .await;
+            return;
+        }
+
+        // 收集所有文本和 normalize 设置
+        let mut texts = Vec::with_capacity(batch.len());
+        let mut normalize_flags = Vec::with_capacity(batch.len());
+        let mut valid_indices = Vec::with_capacity(batch.len());
+
+        for (i, req) in batch.iter().enumerate() {
+            match &req.request {
+                ServiceRequest::Embed(embed_req) => {
+                    texts.push(embed_req.text.clone());
+                    normalize_flags.push(embed_req.normalize.unwrap_or(false));
+                    valid_indices.push(i);
+                }
+                ServiceRequest::Rerank(_) => {
+                    // Rerank 不支持，直接给该请求返回错误
+                    response_channel
+                        .complete(
+                            req.request_id.clone(),
+                            Err(VecboostError::InternalError(
+                                "Rerank not supported by embedding worker".to_string(),
+                            )),
+                        )
+                        .await;
+                }
+            }
+        }
+
+        if texts.is_empty() {
+            return;
+        }
+
+        // 批量推理
+        let service_guard = embedding_service.read().await;
+        let batch_result = service_guard
+            .engine
+            .read()
+            .await
+            .embed_batch(&texts);
+        drop(service_guard);
+
+        match batch_result {
+            Ok(embeddings) => {
+                // 按 request_id 切分结果
+                for (j, &idx) in valid_indices.iter().enumerate() {
+                    let req = &batch[idx];
+                    if j < embeddings.len() {
+                        let mut embedding = embeddings[j].clone();
+                        if normalize_flags[idx] {
+                            crate::utils::math::normalize_l2(&mut embedding).ok();
+                        }
+                        let dimension = embedding.len();
+                        response_channel
+                            .complete(
+                                req.request_id.clone(),
+                                Ok(EmbedResponse {
+                                    dimension,
+                                    embedding,
+                                    processing_time_ms: 0,
+                                    information_retention_rate: None,
+                                }),
+                            )
+                            .await;
+                    } else {
+                        // 引擎返回的向量数少于输入
+                        response_channel
+                            .complete(
+                                req.request_id.clone(),
+                                Err(VecboostError::InternalError(
+                                    "Batch inference returned fewer embeddings than inputs"
+                                        .to_string(),
+                                )),
+                            )
+                            .await;
+                    }
+                }
+            }
+            Err(e) => {
+                // 批量推理失败——所有请求收错
+                warn!("Batch inference failed: {}", e);
+                for req in batch.iter() {
+                    if matches!(req.request, ServiceRequest::Embed(_)) {
+                        response_channel
+                            .complete(req.request_id.clone(), Err(e.clone()))
+                            .await;
+                    }
+                }
             }
         }
     }
@@ -666,7 +776,7 @@ mod tests {
         assert_eq!(manager.current_workers(), 2);
     }
 
-    /// T004 H1: 验证 decrement_worker_count 真实递减(非硬编码 0)。
+    /// 验证 decrement_worker_count 真实递减(非硬编码 0)。
     #[test]
     fn test_decrement_worker_count_actually_decrements() {
         let counter = Arc::new(AtomicUsize::new(5));
@@ -682,7 +792,7 @@ mod tests {
         );
     }
 
-    /// T004 H1: 边界场景——单 worker 停止后计数归零。
+    /// 边界场景——单 worker 停止后计数归零。
     #[test]
     fn test_decrement_worker_count_from_one_to_zero() {
         let counter = Arc::new(AtomicUsize::new(1));
@@ -691,7 +801,7 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
 
-    /// T004 H1: 连续递减多次,确认每次都生效(排除"只减一次"的假实现)。
+    /// 连续递减多次,确认每次都生效(排除“只减一次”的假实现)。
     #[test]
     fn test_decrement_worker_count_multiple_times() {
         let counter = Arc::new(AtomicUsize::new(3));
@@ -701,7 +811,7 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
 
-    /// T005 H2: 验证 spawn_worker 真实递增 current_workers。
+    /// 验证 spawn_worker 真实递增 current_workers。
     #[tokio::test]
     async fn test_spawn_worker_increments_current_workers() {
         let queue = Arc::new(PriorityRequestQueue::new(100));
@@ -727,7 +837,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    /// T005 H2: 验证 spawn_single_worker(静态方法,被 start_scaling_monitor 调用)
+    /// 验证 spawn_single_worker(静态方法,被 start_scaling_monitor 调用)
     /// 真实递增计数器——这是扩容逻辑落地的核心证据。
     #[tokio::test]
     async fn test_spawn_single_worker_increments_counter() {
@@ -773,7 +883,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    /// T009 H2-补: 验证 worker_loop 消费 task_receiver 的 Shutdown 信号,
+    /// 验证 worker_loop 消费 task_receiver 的 Shutdown 信号,
     /// 在 2s 内退出(而非等 idle timeout ~30s 或永不退出)。
     ///
     /// 此前 worker_loop 的 _task_receiver 参数带下划线(未使用),
@@ -823,7 +933,7 @@ mod tests {
         }
     }
 
-    /// T009 H2-补: 验证 immediate=true 时 worker 也退出(立即关闭路径)。
+    /// 验证 immediate=true 时 worker 也退出(立即关闭路径)。
     #[tokio::test]
     async fn test_worker_loop_consumes_immediate_shutdown_within_2s() {
         let queue = Arc::new(PriorityRequestQueue::new(100));
@@ -861,10 +971,10 @@ mod tests {
         }
     }
 
-    /// T009-补: 验证 worker 退出后 sender 变为 closed,
+    /// 验证 worker 退出后 sender 变为 closed,
     /// start_scaling_monitor 的 retain(!s.is_closed()) 能正确清理失效 sender。
     ///
-    /// T009 修复后 worker 会因 Shutdown 退出,但 sender 留在 worker_senders 中。
+    /// worker 因 Shutdown 退出,但 sender 留在 worker_senders 中。
     /// 若不清理,下次缩容 take(to_remove) 可能取到失效 sender,导致缩容数量不足。
     #[tokio::test]
     async fn test_worker_exit_marks_sender_closed_for_cleanup() {
@@ -1774,12 +1884,13 @@ mod tests {
 
     /// 验证 worker_loop 在队列空且 task channel 关闭时进入 idle backoff else 分支。
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_worker_loop_enters_idle_backoff_when_channel_closed() {
+    async fn test_worker_loop_exits_after_idle_timeout_when_channel_closed() {
         let queue = Arc::new(PriorityRequestQueue::new(100));
         let response_channel = Arc::new(ResponseChannel::new());
         let config = WorkerConfig {
             min_workers: 0,
             max_workers: 2,
+            idle_timeout_secs: 1, // 短超时,让 worker 快速回到循环顶检查 running
             ..Default::default()
         };
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1791,34 +1902,34 @@ mod tests {
         assert_eq!(manager.current_workers(), 1);
 
         // 关闭 task channel:清空 senders 使 task_receiver.recv() 返回 None,
-        // 同时队列为空 → select! 进入 else 分支(idle backoff)
+        // 同时队列为空 → select! 进入 notify timeout 分支
         {
             let mut senders = manager.worker_senders.lock().await;
             senders.clear();
         }
 
-        // 等待 idle backoff 首次执行(首次 sleep = 100 * 2^1 = 200ms)
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        // 等待 idle timeout 首次执行(1s timeout)
+        tokio::time::sleep(Duration::from_millis(1500)).await;
 
         // worker 仍在运行(idle_count 未超 MAX_IDLE_COUNT=10 或 worker_id 不大于 min_workers)
         assert_eq!(
             manager.current_workers(),
             1,
-            "worker should still be running after idle backoff"
+            "worker should still be running after idle timeout"
         );
 
-        // 设置 running=false,worker 在下次循环顶部退出
+        // 设置 running=false,worker 在下次 timeout 后循环顶部退出
         manager.running.store(false, Ordering::SeqCst);
 
-        // 轮询等待退出(idle backoff sleep 可能达 5s,给 10s 余量)
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        // 轮询等待退出(idle_timeout_secs=1,给 5s 余量)
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             if manager.current_workers() == 0 {
                 break;
             }
             if tokio::time::Instant::now() >= deadline {
                 panic!(
-                    "worker did not exit within 10s after running=false (current_workers={})",
+                    "worker did not exit within 5s after running=false (current_workers={})",
                     manager.current_workers()
                 );
             }

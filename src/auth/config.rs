@@ -12,6 +12,9 @@
 use crate::config::app::AuthConfig;
 use garrison::prelude::GarrisonConfig;
 
+/// token 缺省有效期:1 小时。替代 garrison 默认的 2592000s(30 天)。
+pub const DEFAULT_TOKEN_EXPIRATION_SECS: i64 = 3600;
+
 /// 将 VecBoost `AuthConfig` 映射为 garrison `GarrisonConfig`。
 ///
 /// 映射规则：
@@ -25,10 +28,14 @@ use garrison::prelude::GarrisonConfig;
 pub fn map_auth_config_to_garrison(auth: &AuthConfig) -> GarrisonConfig {
     let mut config = GarrisonConfig::default_config();
 
-    // 会话超时：VecBoost 用小时，garrison 用秒
-    if let Some(hours) = auth.token_expiration_hours {
-        config.timeout = hours * 3600;
-    }
+    // 会话超时：VecBoost 用小时，garrison 用秒。
+    // 缺省 1 小时：不再回落 garrison 的 30 天默认 —— 滑动会话过长会使
+    // token 泄漏后的窗口不可接受。
+    config.timeout = match auth.token_expiration_hours {
+        Some(hours) if hours > 0 => hours * 3600,
+        Some(0) | None => DEFAULT_TOKEN_EXPIRATION_SECS,
+        _ => DEFAULT_TOKEN_EXPIRATION_SECS,
+    };
 
     // JWT 签名密钥（account-credential-zeroize 启用时为 Zeroizing<String>）
     if let Some(ref secret) = auth.jwt_secret {
@@ -74,12 +81,22 @@ mod tests {
     }
 
     #[test]
-    fn test_map_timeout_default_when_none() {
+    fn test_map_timeout_default_is_one_hour_when_none() {
         let mut auth = make_auth_config();
         auth.token_expiration_hours = None;
         let garrison = map_auth_config_to_garrison(&auth);
-        // garrison default is 2592000 (30 days)
-        assert_eq!(garrison.timeout, 2592000);
+        // 缺省 1h,不再回落 garrison 30 天默认
+        assert_eq!(garrison.timeout, 3600);
+    }
+
+    #[test]
+    fn test_map_timeout_zero_or_negative_falls_back_to_default() {
+        for bad in [Some(0), Some(-5)] {
+            let mut auth = make_auth_config();
+            auth.token_expiration_hours = bad;
+            let garrison = map_auth_config_to_garrison(&auth);
+            assert_eq!(garrison.timeout, 3600);
+        }
     }
 
     #[test]

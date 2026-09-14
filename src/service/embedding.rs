@@ -1071,6 +1071,14 @@ impl EmbeddingService {
         })
     }
 
+    /// 使用引擎 tokenizer 统计 token 数(同步,供 API usage 计算)
+    pub fn count_tokens(&self, text: &str) -> Result<usize, VecboostError> {
+        let engine = self.engine.try_read().map_err(|_| {
+            VecboostError::inference_error("engine lock contention during token count".into())
+        })?;
+        engine.count_tokens(text)
+    }
+
     pub fn get_model_metadata(&self) -> Option<ModelMetadata> {
         self.model_config.as_ref().map(|config| {
             let now = std::time::SystemTime::now()

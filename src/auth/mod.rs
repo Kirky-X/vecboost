@@ -35,12 +35,49 @@ pub use interface::VecBoostInterface;
 #[derive(Clone, Debug)]
 pub struct GarrisonHandle {
     /// admin 用户密码哈希（Argon2/Bcrypt PHC 格式），用于登录校验。
+    /// 登录密码仅校验此 admin 凭据（单管理员模型）。
     pub admin_password_hash: Option<String>,
+    /// admin 用户名（来自 config.auth.default_admin_username，默认 "admin"）。
+    /// 登录时仅此用户名可被认证；其他用户名一律 401，防止持共享口令者
+    /// 以任意身份产生审计记录。
+    pub admin_username: String,
     /// Token 超时秒数（从 garrison config.timeout 读取）。
     pub token_timeout_secs: i64,
 }
 
-/// Re-export 保留的 HTTP 类型（API 契约不变）
+/// 登录判定结果(纯函数化,便于单元测试)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginDecision {
+    /// 用户名与密码均正确,可颁发 token。
+    Authenticated,
+    /// 用户名非 admin 或密码错误 → 401。
+    InvalidCredentials,
+    /// 服务端未配置 admin 密码哈希 → 503(纵深防御,正常流程应被启动闸门拦截)。
+    AdminPasswordMissing,
+}
+
+/// 单管理员登录判定:
+/// 1. 仅 `admin_username` 可登录,其余用户名一律拒绝(防止持共享口令者伪造审计身份);
+/// 2. 未配置密码哈希 → 拒绝服务(不允许任何免密登录路径);
+/// 3. 密码经 garrison `PasswordVerifier` 校验(自动识别 Argon2/Bcrypt)。
+pub fn verify_login_decision(
+    handle: &GarrisonHandle,
+    username: &str,
+    password: &str,
+) -> LoginDecision {
+    if username != handle.admin_username {
+        return LoginDecision::InvalidCredentials;
+    }
+    let Some(ref hash) = handle.admin_password_hash else {
+        return LoginDecision::AdminPasswordMissing;
+    };
+    match garrison::account::credential::password::PasswordVerifier::verify(password, hash) {
+        Ok(true) => LoginDecision::Authenticated,
+        Ok(false) | Err(_) => LoginDecision::InvalidCredentials,
+    }
+}
+
+/// Re-export 保留的 HTTP 类型(API 契约不变)
 pub use types::{AuthResponse, LoginRequest, RefreshTokenRequest, User, validate_username_format};
 
 // Re-export garrison 密码哈希（替代手写 argon2 实现）
@@ -124,6 +161,7 @@ mod tests {
             .expect("hash must succeed");
         let handle = GarrisonHandle {
             admin_password_hash: Some(hash.clone()),
+            admin_username: "admin".to_string(),
             token_timeout_secs: 7200,
         };
         assert_eq!(handle.token_timeout_secs, 7200);
@@ -137,9 +175,66 @@ mod tests {
     fn garrison_handle_without_password_hash() {
         let handle = GarrisonHandle {
             admin_password_hash: None,
+            admin_username: "admin".to_string(),
             token_timeout_secs: 3600,
         };
         assert!(handle.admin_password_hash.is_none());
         assert_eq!(handle.token_timeout_secs, 3600);
+    }
+
+
+    fn handle_with_password() -> GarrisonHandle {
+        let hash = Argon2Hasher::default()
+            .hash("Correct-Admin-Pw-1")
+            .expect("hash must succeed");
+        GarrisonHandle {
+            admin_password_hash: Some(hash),
+            admin_username: "admin".to_string(),
+            token_timeout_secs: 3600,
+        }
+    }
+
+    /// admin 正确凭据 → 放行
+    #[test]
+    fn admin_correct_password_authenticates() {
+        let h = handle_with_password();
+        assert_eq!(
+            verify_login_decision(&h, "admin", "Correct-Admin-Pw-1"),
+            LoginDecision::Authenticated
+        );
+    }
+
+    /// 任意非 admin 用户名即使持有正确密码也拒绝(单管理员模型)
+    #[test]
+    fn non_admin_username_rejected_even_with_valid_password() {
+        let h = handle_with_password();
+        assert_eq!(
+            verify_login_decision(&h, "root", "Correct-Admin-Pw-1"),
+            LoginDecision::InvalidCredentials
+        );
+    }
+
+    /// admin 错误密码拒绝
+    #[test]
+    fn admin_wrong_password_rejected() {
+        let h = handle_with_password();
+        assert_eq!(
+            verify_login_decision(&h, "admin", "wrong-password"),
+            LoginDecision::InvalidCredentials
+        );
+    }
+
+    /// 无哈希配置 → AdminPasswordMissing(供 forge_login 映射 503)
+    #[test]
+    fn missing_password_hash_maps_to_unavailable() {
+        let h = GarrisonHandle {
+            admin_password_hash: None,
+            admin_username: "admin".to_string(),
+            token_timeout_secs: 3600,
+        };
+        assert_eq!(
+            verify_login_decision(&h, "admin", "anything"),
+            LoginDecision::AdminPasswordMissing
+        );
     }
 }

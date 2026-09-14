@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! Tests for confers-based configuration loading (T016).
+//! Tests for confers-based configuration loading.
 //!
 //! Covers three scenarios required by the spec:
 //! 1. Loading `AppConfig` from `config_minimal.toml`
@@ -325,7 +325,7 @@ enabled = true
     assert!(config.audit.enabled);
 }
 
-/// T029: Regression test for trusted_proxies + max_text_length field defaults.
+/// Regression test for trusted_proxies + max_text_length field defaults.
 ///
 /// Validates that configs omitting these fields fall back to defaults
 /// (R-config-001/002 验收点 6), and configs including them load correctly.
@@ -449,10 +449,10 @@ trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
 }
 
 // =============================================================================
-// T011: Config validation tests (garde validation integration)
+// Config validation tests (garde validation integration)
 // =============================================================================
 
-/// T011: port=0 is rejected by validation.
+/// port=0 is rejected by validation.
 #[test]
 fn test_validation_port_zero_rejected() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -490,7 +490,7 @@ enabled = false
     );
 }
 
-/// T011: empty model_repo is rejected by validation.
+/// empty model_repo is rejected by validation.
 #[test]
 fn test_validation_empty_model_repo_rejected() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -531,7 +531,7 @@ enabled = false
     );
 }
 
-/// T011: batch_size=0 is rejected by validation.
+/// batch_size=0 is rejected by validation.
 #[test]
 fn test_validation_batch_size_zero_rejected() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -572,7 +572,7 @@ enabled = false
     );
 }
 
-/// T011: default config passes validation.
+/// default config passes validation.
 #[test]
 fn test_validation_default_config_passes() {
     let config = AppConfig::default();
@@ -584,7 +584,7 @@ fn test_validation_default_config_passes() {
     );
 }
 
-/// T036: Config file watcher detects changes and triggers reload.
+/// Config file watcher detects changes and triggers reload.
 ///
 /// Verifies that `FsWatcher` detects file modifications and that the
 /// reload callback mechanism works (simulating what main.rs does).
@@ -652,7 +652,7 @@ enabled = false
     watch_task.abort();
 }
 
-/// T036: WatcherGuard lifecycle — start/stop/is_running.
+/// WatcherGuard lifecycle — start/stop/is_running.
 #[tokio::test]
 async fn test_watcher_guard_lifecycle() {
     let guard = confers::watcher::WatcherGuard::new();
@@ -671,10 +671,10 @@ async fn test_watcher_guard_lifecycle() {
 }
 
 // =============================================================================
-// T039: Encryption roundtrip tests
+// Encryption roundtrip tests
 // =============================================================================
 
-/// T039: Encryption roundtrip — encrypt → serialize → deserialize → decrypt
+/// Encryption roundtrip — encrypt → serialize → deserialize → decrypt
 /// produces the original value.
 ///
 /// Sets `VECBOOST_ENCRYPTION_KEY`, creates an `AuthConfig` with known secrets,
@@ -735,7 +735,7 @@ fn test_encryption_roundtrip_via_serde() {
     }
 }
 
-/// T039: Without encryption key, values pass through as plaintext.
+/// Without encryption key, values pass through as plaintext.
 #[test]
 fn test_encryption_fallback_to_plaintext_without_key() {
     use super::app::AuthConfig;
@@ -765,7 +765,7 @@ fn test_encryption_fallback_to_plaintext_without_key() {
     );
 }
 
-/// T039: None values are preserved through serde (not encrypted).
+/// None values are preserved through serde (not encrypted).
 #[test]
 fn test_encryption_none_values_pass_through() {
     use super::app::AuthConfig;
@@ -786,7 +786,7 @@ fn test_encryption_none_values_pass_through() {
     assert!(deserialized.default_admin_password.is_none());
 }
 
-/// T038: Schema generation produces non-empty TypeScript output.
+/// Schema generation produces non-empty TypeScript output.
 #[test]
 fn test_schema_generation_produces_typescript() {
     let schema = AppConfig::generate_schema().expect("schema generation should succeed");

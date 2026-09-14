@@ -40,7 +40,7 @@ pub struct DbModule;
 pub struct AuditModule;
 
 // ---------------------------------------------------------------------------
-// v0.3.0 D3 重构：覆盖 VecboostState 剩余字段的 13 个 Module
+// 覆盖 VecboostState 剩余字段的 13 个 Module
 //
 // 设计原则（与现有 EmbeddingModule/AuthModule 等保持一致）：
 //   - 模块 Capability 类型 = 字段类型（1:1 映射，无派生逻辑）

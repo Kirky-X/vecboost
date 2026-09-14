@@ -25,16 +25,8 @@ static SANITIZE_PATTERNS: std::sync::OnceLock<Vec<(Regex, &'static str)>> =
 fn get_sanitize_patterns() -> &'static Vec<(Regex, &'static str)> {
     SANITIZE_PATTERNS.get_or_init(|| {
         vec![
-            (
-                Regex::new(r#"/[a-zA-Z0-9/_.-]+/[a-zA-Z0-9/_.-]+\.\w+"#)
-                    .expect("sanitize pattern: valid Unix path regex"),
-                "[REDACTED_PATH]",
-            ),
-            (
-                Regex::new(r#"C:\\[a-zA-Z0-9_\\]+\.\w+"#)
-                    .expect("sanitize pattern: valid Windows path regex"),
-                "[REDACTED_WINDOWS_PATH]",
-            ),
+            // 移除全局路径脱敏——模型/配置路径对调试至关重要，
+            // 仅对用户输入派生路径在 API 边界脱敏。
             (
                 Regex::new(r#"token \d+"#).expect("sanitize pattern: valid token regex"),
                 "token [ID]",
@@ -319,19 +311,20 @@ mod tests {
 
     #[cfg(feature = "http")]
     #[test]
-    fn test_sanitize_error_message_unix_path() {
+    fn test_sanitize_error_message_unix_path_preserved() {
+        // 路径不再全局脱敏，保留原始路径以便调试
         let msg = "Failed to load /home/user/model/file.safetensors";
         let sanitized = sanitize_error_message(msg);
-        assert!(sanitized.contains("[REDACTED_PATH]"));
-        assert!(!sanitized.contains("/home/user/model/file.safetensors"));
+        assert!(sanitized.contains("/home/user/model/file.safetensors"));
     }
 
     #[cfg(feature = "http")]
     #[test]
-    fn test_sanitize_error_message_windows_path() {
+    fn test_sanitize_error_message_windows_path_preserved() {
+        // Windows 路径同样保留
         let msg = r#"Failed to load C:\Users\admin\config.json"#;
         let sanitized = sanitize_error_message(msg);
-        assert!(sanitized.contains("[REDACTED_WINDOWS_PATH]"));
+        assert!(sanitized.contains(r#"C:\Users\admin\config.json"#));
     }
 
     #[cfg(feature = "http")]
@@ -598,7 +591,8 @@ mod tests {
         assert!(sanitized.contains("at position [REDACTED]"));
         assert!(sanitized.contains("[INTERNAL_ERROR]"));
         assert!(sanitized.contains("token [ID]"));
-        assert!(sanitized.contains("[REDACTED_PATH]"));
+        // 路径不再脱敏
+        assert!(sanitized.contains("/home/user/model/file.safetensors"));
     }
 
     #[cfg(feature = "http")]

@@ -124,7 +124,7 @@ pub async fn metrics_endpoint(
             .into_response();
     }
 
-    // T044: Append dbnexus MetricsCollector output (pool/connection/query metrics)
+    // Append dbnexus MetricsCollector output (pool/connection/query metrics)
     #[cfg(feature = "db")]
     if let Ok(Some(db_metrics)) = app_state
         .kit

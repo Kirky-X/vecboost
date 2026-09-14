@@ -520,7 +520,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[test]
     fn test_dbnexus_metrics_append_pattern() {
-        // T044: Verify the integration pattern — dbnexus MetricsCollector output
+        // Verify the integration pattern — dbnexus MetricsCollector output
         // can be appended to PrometheusCollector text output
         use prometheus::Encoder;
         let collector = PrometheusCollector::new().unwrap();

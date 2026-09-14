@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Notify};
 
 use super::priority::{Priority, RequestSource};
 use crate::domain::{EmbedRequest, RerankRequest};
@@ -63,6 +63,8 @@ pub struct PriorityRequestQueue {
     max_queue_size: usize,
     /// 当前队列大小
     current_size: Arc<AtomicUsize>,
+    /// 入队通知——worker 通过 notified() 等待，消除轮询退避
+    notify: Arc<Notify>,
 }
 
 impl PriorityRequestQueue {
@@ -76,6 +78,7 @@ impl PriorityRequestQueue {
             queues: Arc::new(tokio::sync::RwLock::new(BTreeMap::new())),
             max_queue_size,
             current_size: Arc::new(AtomicUsize::new(0)),
+            notify: Arc::new(Notify::new()),
         }
     }
 
@@ -114,6 +117,9 @@ impl PriorityRequestQueue {
         let priority = request.priority;
         let queue = queues.entry(priority).or_insert_with(VecDeque::new);
         queue.push_back(request);
+
+        // 通知等待的 worker
+        self.notify.notify_one();
 
         debug!(
             "Request enqueued, priority={:?}, queue_size={}",
@@ -169,6 +175,52 @@ impl PriorityRequestQueue {
         None
     }
 
+    /// T032: 批量出队——取首个请求后继续 try_dequeue 至 max_batch_size。
+    ///
+    /// 返回至少 1 个请求（调用前须确保队列非空），最多 max_batch_size 个。
+    /// 按优先级顺序出队。
+    pub async fn dequeue_batch(&self, max_batch_size: usize) -> Vec<QueuedRequest> {
+        let mut result = Vec::with_capacity(max_batch_size);
+        let mut queues = self.queues.write().await;
+        let now = Instant::now();
+        const AGING_THRESHOLD: Duration = Duration::from_secs(30);
+
+        for priority in [
+            Priority::Critical,
+            Priority::High,
+            Priority::Normal,
+            Priority::Low,
+        ] {
+            if result.len() >= max_batch_size {
+                break;
+            }
+            if let Some(queue) = queues.get_mut(&priority) {
+                while result.len() < max_batch_size {
+                    // 老化检查
+                    if priority != Priority::Low
+                        && let Some(front) = queue.front()
+                        && now.duration_since(front.submitted_at) > AGING_THRESHOLD
+                    {
+                        break;
+                    }
+                    if let Some(request) = queue.pop_front() {
+                        self.current_size.fetch_sub(1, Ordering::Relaxed);
+                        result.push(request);
+                    } else {
+                        break;
+                    }
+                }
+                // 清理空队列
+                if queue.is_empty() {
+                    queues.remove(&priority);
+                }
+            }
+        }
+
+        debug!("Batch dequeued: {} requests", result.len());
+        result
+    }
+
     /// 获取最高优先级
     pub async fn peek_highest_priority(&self) -> Option<Priority> {
         let queues = self.queues.read().await;
@@ -192,6 +244,11 @@ impl PriorityRequestQueue {
     /// 获取队列大小
     pub fn size(&self) -> usize {
         self.current_size.load(Ordering::Relaxed)
+    }
+
+    /// 获取入队通知引用，供 worker select! 使用
+    pub fn notify(&self) -> &Notify {
+        &self.notify
     }
 
     /// 清空队列

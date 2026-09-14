@@ -20,9 +20,9 @@ use oxcache::features::bloom_filter::BloomFilter;
 /// `get_or_insert`/`remove`/`clear`/`len`/`is_empty`/`warm_up`。
 ///
 /// 内部集成:
-/// - **Bloom filter** (T029-T030): 负查询过滤,FPR=0.01,`get()` 时先查 bloom,
+/// - **Bloom filter**: 负查询过滤,FPR=0.01,`get()` 时先查 bloom,
 ///   miss 则跳过底层缓存查询。
-/// - **Compression** (T031): 使用 oxcache flate2 压缩存储 embedding 向量,
+/// - **Compression**: 使用 oxcache flate2 压缩存储 embedding 向量,
 ///   减少内存占用。
 pub(crate) struct OxCacheBackend {
     cache: Option<Cache<String, Vec<f32>>>,
@@ -33,12 +33,12 @@ pub(crate) struct OxCacheBackend {
 impl OxCacheBackend {
     /// 创建指定容量的缓存后端。
     ///
-    /// T029: 同时初始化 bloom filter (FPR=0.01, capacity=capacity)。
+    /// 同时初始化 bloom filter (FPR=0.01, capacity=capacity)。
     pub fn new(capacity: usize) -> Self {
         let cap = capacity.max(1);
         let moka = MokaMemoryBackend::builder().capacity(cap as u64).build();
         let cache = Cache::with_dependencies(Arc::new(moka));
-        // T029: Bloom filter for negative query filtering
+        // Bloom filter for negative query filtering
         let bloom = BloomFilter::new(cap, 0.01);
         Self {
             cache: Some(cache),
@@ -63,13 +63,13 @@ impl OxCacheBackend {
 
     /// 查询缓存,未命中或禁用时返回 None。
     ///
-    /// T030: 先查 bloom filter,如果 bloom 说 key 不存在则直接返回 None,
+    /// 先查 bloom filter,如果 bloom 说 key 不存在则直接返回 None,
     /// 跳过底层缓存查询 (bloom filter 无误判)。
     pub async fn get(&self, key: &str) -> Option<Vec<f32>> {
         if !self.enabled {
             return None;
         }
-        // T030: Bloom filter negative check
+        // Bloom filter negative check
         if let Some(bloom) = &self.bloom
             && !bloom.contains(key)
         {
@@ -77,24 +77,24 @@ impl OxCacheBackend {
         }
         let cache = self.cache.as_ref()?;
         let raw = cache.get(&key.to_string()).await.ok().flatten()?;
-        // T031: Decompress on retrieval
+        // Decompress on retrieval
         decompress_f32_vec(raw)
     }
 
     /// 写入缓存(禁用时为空操作)。
     ///
-    /// T029: 写入时将 key 插入 bloom filter。
-    /// T031: 存储前压缩 embedding 向量。
+    /// 写入时将 key 插入 bloom filter。
+    /// 存储前压缩 embedding 向量。
     pub async fn put(&self, key: &str, value: Vec<f32>) {
         if !self.enabled {
             return;
         }
         if let Some(cache) = &self.cache {
-            // T031: Compress before storing
+            // Compress before storing
             let compressed = compress_f32_vec(value);
             let _ = cache.set(&key.to_string(), &compressed).await;
         }
-        // T029: Insert into bloom filter after successful set
+        // Insert into bloom filter after successful set
         if let Some(bloom) = &self.bloom {
             bloom.insert(key);
         }
@@ -185,7 +185,7 @@ impl OxCacheBackend {
 }
 
 // ============================================================================
-// T031: Compression helpers — compress/decompress Vec<f32> via oxcache flate2
+// Compression helpers — compress/decompress Vec<f32> via oxcache flate2
 // ============================================================================
 
 /// 压缩 `Vec<f32>` 为 `Vec<f32>`。
@@ -394,12 +394,12 @@ mod tests {
     }
 
     // ========================================================================
-    // T033: Bloom filter integration tests
+    // Bloom filter integration tests
     // ========================================================================
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bloom_filter_miss_skips_backend_lookup() {
-        // T033: 验证 bloom filter miss 时直接返回 None,不查询底层缓存。
+        // 验证 bloom filter miss 时直接返回 None,不查询底层缓存。
         let cache = OxCacheBackend::new(100);
         // 从未 put 过任何 key,bloom filter 应为空
         let bloom = cache.bloom_filter().unwrap();
@@ -410,7 +410,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bloom_filter_populated_on_put() {
-        // T033: 验证 put 后 bloom filter 包含该 key
+        // 验证 put 后 bloom filter 包含该 key
         let cache = OxCacheBackend::new(100);
         cache.put("key1", vec![1.0, 2.0]).await;
         let bloom = cache.bloom_filter().unwrap();
@@ -424,7 +424,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bloom_filter_cleared_with_cache() {
-        // T033: 验证 clear() 同时重置 bloom filter
+        // 验证 clear() 同时重置 bloom filter
         let cache = OxCacheBackend::new(100);
         cache.put("a", vec![1.0]).await;
         cache.put("b", vec![2.0]).await;
@@ -437,12 +437,12 @@ mod tests {
     }
 
     // ========================================================================
-    // T033: Compression roundtrip tests
+    // Compression roundtrip tests
     // ========================================================================
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_compression_roundtrip_preserves_values() {
-        // T033: 验证压缩往返后向量值在容差范围内保持一致。
+        // 验证压缩往返后向量值在容差范围内保持一致。
         // 使用较大向量 (>25 f32 = 100 bytes) 以触发 flate2 压缩。
         let cache = OxCacheBackend::new(16);
         let original: Vec<f32> = (0..100).map(|i| (i as f32) * 0.01).collect();
@@ -466,7 +466,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_compression_small_vectors_roundtrip() {
-        // T033: 小向量 (<100 bytes) 不触发压缩,但往返仍应保持精确一致。
+        // 小向量 (<100 bytes) 不触发压缩,但往返仍应保持精确一致。
         let cache = OxCacheBackend::new(16);
         let small = vec![0.1, 0.2, 0.3];
         cache.put("small", small.clone()).await;
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn test_compress_decompress_f32_vec_roundtrip() {
-        // T033: 直接测试压缩/解压缩辅助函数的往返正确性
+        // 直接测试压缩/解压缩辅助函数的往返正确性
         let original: Vec<f32> = (0..200).map(|i| (i as f32) * 0.001).collect();
         let compressed = compress_f32_vec(original.clone());
         let decompressed = decompress_f32_vec(compressed).unwrap();

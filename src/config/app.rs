@@ -171,8 +171,10 @@ pub struct AuthConfig {
     /// When non-empty, `X-Forwarded-For` / `X-Real-IP` headers are honored only if
     /// the `ConnectInfo` peer IP matches a CIDR entry — preventing clients outside
     /// the trust boundary from spoofing their IP via XFF.
-    /// When empty, XFF is honored unconditionally (legacy v0.3.0–v0.3.2 behavior,
-    /// kept for backward compatibility).
+    /// When empty, XFF is IGNORED and the direct peer IP is used (secure default).
+    /// To trust forwarded headers behind a reverse proxy, list your proxy CIDRs here
+    /// (e.g. `["10.0.0.0/8"]`; `["0.0.0.0/0"]` restores the legacy v0.3.0–v0.3.2
+    /// trust-all behavior).
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
 }
@@ -552,7 +554,11 @@ impl Default for AuthConfig {
             token_expiration_hours: Some(DEFAULT_TOKEN_EXPIRATION_HOURS),
             default_admin_username: None,
             default_admin_password: None,
-            csrf: CsrfConfig::default(),
+            // CSRF 默认开启 —— 中间件仅在 auth.enabled && csrf.enabled 时挂载,
+            // 因此实际效果是"CSRF 跟随 auth 开关"。显式关闭可在配置中设 csrf.enabled=false。
+            csrf: CsrfConfig {
+                enabled: true,
+            },
             trusted_proxies: Vec::new(),
         }
     }
@@ -652,6 +658,12 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    /// AuthConfig 默认 CSRF 开启(配合挂载条件实现“跟随 auth”)
+    #[test]
+    fn authconfig_default_csrf_enabled() {
+        assert!(AuthConfig::default().csrf.enabled);
+    }
+
     use super::*;
     use crate::config::app_config::AppConfig;
     use std::sync::Mutex;
@@ -857,7 +869,8 @@ mod tests {
 
         assert!(!config.auth.enabled);
         assert_eq!(config.auth.token_expiration_hours, Some(24));
-        assert!(!config.auth.csrf.enabled);
+    // CSRF 默认开启(挂载条件 auth.enabled && csrf.enabled 实现跟随 auth)
+    assert!(config.auth.csrf.enabled);
 
         assert!(config.audit.enabled);
         assert!(config.rate_limit.enabled);

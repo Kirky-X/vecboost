@@ -22,11 +22,8 @@ use candle_transformers::models::xlm_roberta::{Config as XlmRobertaConfig, XLMRo
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-#[cfg(target_os = "macos")]
+// 全平台统一使用 tokenizers crate
 use tokenizers::Tokenizer as HfTokenizer;
-
-#[cfg(not(target_os = "macos"))]
-type HfTokenizer = crate::text::Tokenizer;
 
 /// Tokenizer 缓存容量（缓存最近 N 个文本的分词结果）
 const DEFAULT_TOKENIZER_CACHE_CAPACITY: usize = 2048;
@@ -88,12 +85,16 @@ pub struct CandleEngine {
     fallback_triggered: bool,
     device_type: DeviceType,
     model_architecture: ModelArchitecture,
-    use_quantization: bool, // 是否使用 INT8 量化
+    use_quantization: bool, // INT8 量化未实现，始终为 false（保留字段供未来实现）
     _model_name: String,
     /// 模型隐藏层大小（从 config.hidden_size 读取）
     hidden_size: usize,
     /// 模型参数数量估算（从 config 计算）
     parameter_count: u64,
+    /// 汇聚模式(Auto 在构造时已解析为具体模式)
+    pooling_mode: crate::config::model::PoolingMode,
+    /// 词表大小(从 config.json vocab_size 读取,替代硬编码 250002)
+    vocab_size: usize,
 }
 
 /// 从 BERT/RoBERTa config 估算参数数量。
@@ -159,11 +160,14 @@ impl CandleEngine {
         // 确定计算数据类型，支持 FP16、BF16 和 INT8 量化
         let compute_dtype = match (&precision, device.is_cuda()) {
             (Precision::Int8, true) => {
-                log::info!("Using INT8 quantization (CPU inference, reduced precision)");
-                DType::U8 // Candle 使用 U8 而非 I8
+                // INT8 量化未实现，诚实告知用户
+                log::warn!("INT8 quantization is not yet implemented; running in FP32 mode. \
+                    The use_quantization flag has no effect until INT8 support is added.");
+                DType::F32
             }
             (Precision::Int8, false) => {
-                log::warn!("INT8 quantization requested but CUDA not available, using FP32");
+                log::warn!("INT8 quantization is not yet implemented; running in FP32 mode. \
+                    The use_quantization flag has no effect until INT8 support is added.");
                 DType::F32
             }
             (Precision::Fp16, true) => {
@@ -188,9 +192,9 @@ impl CandleEngine {
             }
         };
 
-        // INT8 量化需要特殊处理：在 CPU 上量化，然后可能传输到 GPU
+        // INT8 量化未实现，use_quantization 始终为 false
         let (dtype, use_quantization) = if matches!(precision, Precision::Int8) {
-            (DType::F32, true) // INT8 量化使用 FP32 存储，推理时量化
+            (DType::F32, false) // INT8 未实现，回退 FP32
         } else {
             (compute_dtype, false)
         };
@@ -301,8 +305,8 @@ impl CandleEngine {
             }
         };
 
-        // 从 config 提取 hidden_size 和估算参数数量（在 config 被模型构造消费前）
-        let (hidden_size, parameter_count) = match (&bert_config, &xlm_config) {
+        // 从 config 提取 hidden_size、vocab_size 和估算参数数量（在 config 被模型构造消费前）
+        let (hidden_size, vocab_size, parameter_count) = match (&bert_config, &xlm_config) {
             (Some(bc), _) => {
                 let params = estimate_bert_params(
                     bc.vocab_size,
@@ -311,7 +315,7 @@ impl CandleEngine {
                     bc.intermediate_size,
                     bc.num_attention_heads,
                 );
-                (bc.hidden_size, params)
+                (bc.hidden_size, bc.vocab_size, params)
             }
             (_, Some(xc)) => {
                 let params = estimate_bert_params(
@@ -321,9 +325,9 @@ impl CandleEngine {
                     xc.intermediate_size,
                     xc.num_attention_heads,
                 );
-                (xc.hidden_size, params)
+                (xc.hidden_size, xc.vocab_size, params)
             }
-            _ => (768, 110_000_000), // fallback
+            _ => (768, 30522, 110_000_000), // fallback: BERT-base vocab
         };
 
         let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
@@ -559,6 +563,13 @@ impl CandleEngine {
             None
         };
 
+        // 解析 pooling 模式——Auto 按模型名推断为具体模式
+        let resolved_pooling = match config.pooling_mode.clone().unwrap_or_default() {
+            crate::config::model::PoolingMode::Auto => infer_pooling_mode(&config.name),
+            other => other,
+        };
+        log::info!("Pooling mode: {:?} (model: {})", resolved_pooling, config.name);
+
         Ok(Self {
             model,
             tokenizer,
@@ -573,6 +584,8 @@ impl CandleEngine {
             _model_name: config.name.clone(),
             hidden_size,
             parameter_count,
+            pooling_mode: resolved_pooling,
+            vocab_size,
         })
     }
 
@@ -679,7 +692,8 @@ impl CandleEngine {
         log::debug!("Max token ID: {}", ids.iter().max().copied().unwrap_or(0));
         log::debug!("Attention mask: {:?}", attention_mask);
 
-        let vocab_size = 250002;
+        // 从 config.json 读取的 vocab_size(替代硬编码 250002)
+        let vocab_size = self.vocab_size as u32;
         let max_id = ids.iter().max().copied().unwrap_or(0);
         if max_id >= vocab_size {
             log::warn!(
@@ -700,7 +714,8 @@ impl CandleEngine {
         let mask_slice: Vec<u32> = attention_mask
             .iter()
             .take(max_len)
-            .map(|&id| if id >= vocab_size { vocab_size - 1 } else { id })
+            // attention_mask 值为 0/1,不需要 vocab 截断
+            .copied()
             .collect();
 
         let token_ids = Tensor::new(ids_slice, &self.device)
@@ -708,6 +723,8 @@ impl CandleEngine {
             .unsqueeze(0)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
+        // 保留 mask 副本供 pooling 函数使用
+        let mask_for_pooling = mask_slice.clone();
         let attention_mask_tensor = Tensor::new(mask_slice, &self.device)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?
             .unsqueeze(0)
@@ -748,62 +765,71 @@ impl CandleEngine {
         };
 
         log::debug!("Embeddings shape: {:?}", embeddings.shape());
-        log::debug!("Embeddings dims: {}", embeddings.dims().len());
-        log::debug!("Embeddings dims array: {:?}", embeddings.dims());
+        log::debug!("Embeddings dims: {:?}", embeddings.dims());
 
         self.update_gpu_memory().await;
 
-        let embedding_result: Tensor;
         let dims = embeddings.dims();
-        log::debug!("Processing embedding with {} dimensions", dims.len());
+        let hidden_dim = self.hidden_size;
 
-        if dims.len() == 1 {
-            log::debug!("1D embedding, using directly");
-            embedding_result = embeddings.clone();
-        } else if dims.len() == 2 {
-            if dims[0] == 1 && dims[1] > 1 {
-                log::debug!("2D embedding [1, hidden_size], extracting batch 0");
-                embedding_result = embeddings
-                    .get(0)
-                    .map_err(|e| {
-                        VecboostError::InferenceError(format!("Failed to get batch 0: {}", e))
-                    })?
-                    .clone();
+        // 按 pooling_mode 汇聚——将 [seq_len, hidden_dim] 展平数据 + mask 传入纯函数
+        let seq_hidden: Vec<f32> = if dims.len() == 3 {
+            // [batch, seq_len, hidden] → 取 batch 0 的 [seq_len, hidden]
+            let batch0 = embeddings
+                .get(0)
+                .map_err(|e| VecboostError::InferenceError(format!("get batch 0: {}", e)))?;
+            // cast to f32 if needed
+            let cast = if batch0.dtype() == DType::F32 {
+                batch0
             } else {
-                log::debug!("2D embedding [seq_len, hidden_size], extracting CLS token (index 0)");
-                embedding_result = embeddings
-                    .get(0)
-                    .map_err(|e| {
-                        VecboostError::InferenceError(format!("Failed to get token 0: {}", e))
-                    })?
-                    .clone();
-            }
-        } else if dims.len() == 3 {
-            log::debug!("3D embedding [batch, seq_len, hidden], extracting batch 0, token 0");
-            embedding_result = embeddings
-                .get(0)
-                .map_err(|e| {
-                    VecboostError::InferenceError(format!("Failed to get batch 0: {}", e))
+                batch0.to_dtype(DType::F32).map_err(|e| {
+                    VecboostError::InferenceError(format!("cast to f32: {}", e))
                 })?
-                .get(0)
-                .map_err(|e| {
-                    VecboostError::InferenceError(format!("Failed to get token 0: {}", e))
+            };
+            cast.to_vec2::<f32>()
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+                .into_iter()
+                .flatten()
+                .collect()
+        } else if dims.len() == 2 {
+            // [seq_len, hidden] 直接展平
+            let cast = if embeddings.dtype() == DType::F32 {
+                embeddings.clone()
+            } else {
+                embeddings.to_dtype(DType::F32).map_err(|e| {
+                    VecboostError::InferenceError(format!("cast to f32: {}", e))
                 })?
-                .clone();
+            };
+            cast.to_vec2::<f32>()
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+                .into_iter()
+                .flatten()
+                .collect()
+        } else if dims.len() == 1 {
+            // 1D: 模型已输出单向量(某些特殊架构),直接返回
+            let vec = embeddings
+                .to_vec1::<f32>()
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+            return Ok(vec);
         } else {
             return Err(VecboostError::InferenceError(format!(
                 "Unsupported embedding dimensions: {} (shape: {:?})",
                 dims.len(),
                 embeddings.shape()
             )));
-        }
+        };
 
-        log::debug!("Final embedding shape: {:?}", embedding_result.shape());
+        // 取 attention_mask(长度 = seq_len)用于 pooling
+        let vec = match self.pooling_mode {
+            crate::config::model::PoolingMode::Cls => pool_cls(&seq_hidden, &mask_for_pooling, hidden_dim),
+            crate::config::model::PoolingMode::Mean => pool_mean(&seq_hidden, &mask_for_pooling, hidden_dim),
+            crate::config::model::PoolingMode::Max => pool_max(&seq_hidden, &mask_for_pooling, hidden_dim),
+            crate::config::model::PoolingMode::Auto => {
+                unreachable!("Auto pooling should have been resolved at construction time")
+            }
+        };
 
-        let vec = embedding_result
-            .to_vec1::<f32>()
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-
+        log::debug!("Final embedding dim: {}", vec.len());
         Ok(vec)
     }
 
@@ -1007,6 +1033,10 @@ impl InferenceEngine for CandleEngine {
 
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         self.try_fallback_to_cpu_impl(config).await
+    }
+
+    fn count_tokens(&self, text: &str) -> Result<usize, VecboostError> {
+        self.tokenizer.count_tokens(text)
     }
 }
 
@@ -1217,6 +1247,92 @@ impl CandleEngine {
     }
 }
 
+// ============================================================================
+// Pooling 数学纯函数(与 candle Tensor 解耦,可独立单测)
+// ============================================================================
+
+/// Auto pooling 推断——按模型名推断最佳 pooling 策略。
+///
+/// 规则:
+/// - 模型名含 `minilm`/`e5`/`gte` (不区分大小写) → Mean
+/// - 模型名含 `bge` → Cls
+/// - 其余 → Cls + warn
+pub(crate) fn infer_pooling_mode(model_name: &str) -> crate::config::model::PoolingMode {
+    use crate::config::model::PoolingMode;
+    let lower = model_name.to_lowercase();
+    if lower.contains("minilm") || lower.contains("e5") || lower.contains("gte") {
+        PoolingMode::Mean
+    } else if lower.contains("bge") {
+        PoolingMode::Cls
+    } else {
+        log::warn!(
+            "Auto pooling: unrecognized model family '{}', falling back to CLS. \
+             Set pooling_mode explicitly to silence this warning.",
+            model_name
+        );
+        PoolingMode::Cls
+    }
+}
+
+/// CLS pooling:取序列第一个 token 的 hidden state。
+///
+/// `hidden` 为 `[seq_len × hidden_dim]` 行优先展平向量。
+pub(crate) fn pool_cls(hidden: &[f32], _mask: &[u32], hidden_dim: usize) -> Vec<f32> {
+    hidden[..hidden_dim].to_vec()
+}
+
+/// Mean pooling:以 attention_mask 为权重的加权和 ÷ mask 元素总和。
+///
+/// `hidden`: `[seq_len × hidden_dim]` 行优先展平。
+/// `mask`: 长度 `seq_len`,值为 0/1。仅 mask=1 的位置参与累加。
+pub(crate) fn pool_mean(hidden: &[f32], mask: &[u32], hidden_dim: usize) -> Vec<f32> {
+    let seq_len = mask.len();
+    let mut result = vec![0.0_f32; hidden_dim];
+    let mut mask_sum = 0.0_f32;
+    for (t, &m) in mask.iter().enumerate().take(seq_len) {
+        if m == 0 {
+            continue;
+        }
+        mask_sum += 1.0;
+        let offset = t * hidden_dim;
+        for (d, &h) in hidden[offset..offset + hidden_dim].iter().enumerate() {
+            result[d] += h;
+        }
+    }
+    if mask_sum > 0.0 {
+        for v in &mut result {
+            *v /= mask_sum;
+        }
+    }
+    result
+}
+
+/// Max pooling:mask 内逐维取最大。
+///
+/// `hidden`: `[seq_len × hidden_dim]` 行优先展平。
+/// `mask`: 长度 `seq_len`。mask=0 的位置不参与 max 比较。
+pub(crate) fn pool_max(hidden: &[f32], mask: &[u32], hidden_dim: usize) -> Vec<f32> {
+    let seq_len = mask.len();
+    let mut result = vec![f32::NEG_INFINITY; hidden_dim];
+    let mut any_active = false;
+    for (t, &m) in mask.iter().enumerate().take(seq_len) {
+        if m == 0 {
+            continue;
+        }
+        any_active = true;
+        let offset = t * hidden_dim;
+        for (d, &h) in hidden[offset..offset + hidden_dim].iter().enumerate() {
+            if h > result[d] {
+                result[d] = h;
+            }
+        }
+    }
+    if !any_active {
+        result.fill(0.0);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1239,7 +1355,7 @@ mod tests {
         }
     }
 
-    /// T006 H6: 验证 `tokio::task::block_in_place(|| Handle::current().block_on(...))` 模式
+    /// 验证 `tokio::task::block_in_place(|| Handle::current().block_on(...))` 模式
     /// 在 multi-thread runtime 下不 panic。
     ///
     /// 此前 `embed`/`embed_batch` 使用 `futures::executor::block_on`,在 Tokio 异步上下文中
@@ -1263,7 +1379,7 @@ mod tests {
         );
     }
 
-    /// T006 H6: 验证 block_in_place 内部的 block_on 可以正确 await Tokio 异步原语
+    /// 验证 block_in_place 内部的 block_on 可以正确 await Tokio 异步原语
     /// (如 tokio::sync::RwLock)。这模拟了 forward_pass_batch 中 pool.write().await 的场景。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_block_in_place_with_tokio_rwlock_does_not_deadlock() {
@@ -1924,7 +2040,7 @@ mod tests {
         assert_eq!(result.unwrap().len(), 384);
     }
 
-    /// 验证 INT8 精度在 CPU 上启用 use_quantization 标志并可推理
+    /// 验证 INT8 精度在 CPU 上回退 FP32，use_quantization 始终为 false
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_real_model_loads_int8_cpu() {
         if !require_real_model() {
@@ -1936,8 +2052,8 @@ mod tests {
 
         assert_eq!(*engine.precision(), Precision::Int8);
         assert!(
-            engine.uses_quantization(),
-            "INT8 precision should set use_quantization=true"
+            !engine.uses_quantization(),
+            "T029: INT8 not implemented, use_quantization should be false"
         );
 
         let result = engine.embed("int8 precision test");
@@ -2293,5 +2409,137 @@ mod tests {
             "XLM-RoBERTa-Base params should be ~270M, got {}",
             params
         );
+    }
+
+    // ========================================================================
+    // Pooling 数学单元测试(合成 hidden states + attention mask)
+    // ========================================================================
+
+    /// 合成 [seq_len=3, hidden_dim=4] 的 hidden states + mask
+    fn synthetic_pooling_data() -> (Vec<f32>, Vec<u32>, usize) {
+        let hidden_dim = 4;
+        // seq_len=3, hidden_dim=4 → 12 个 f32
+        // token 0 (CLS): [1.0, 2.0, 3.0, 4.0]
+        // token 1:       [5.0, 6.0, 7.0, 8.0]
+        // token 2 (pad): [0.0, 0.0, 0.0, 0.0]
+        let hidden = vec![
+            1.0, 2.0, 3.0, 4.0, //
+            5.0, 6.0, 7.0, 8.0, //
+            0.0, 0.0, 0.0, 0.0, //
+        ];
+        let mask = vec![1, 1, 0]; // token 2 是 padding
+        (hidden, mask, hidden_dim)
+    }
+
+    #[test]
+    fn pool_cls_returns_first_token() {
+        let (hidden, mask, dim) = synthetic_pooling_data();
+        let result = pool_cls(&hidden, &mask, dim);
+        assert_eq!(result, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn pool_mean_mask_weighted_average() {
+        let (hidden, mask, dim) = synthetic_pooling_data();
+        let result = pool_mean(&hidden, &mask, dim);
+        // mask=[1,1,0]: 仅 token 0 和 token 1 参与,mean_sum=2
+        // dim 0: (1.0+5.0)/2 = 3.0
+        // dim 1: (2.0+6.0)/2 = 4.0
+        // dim 2: (3.0+7.0)/2 = 5.0
+        // dim 3: (4.0+8.0)/2 = 6.0
+        assert_eq!(result, vec![3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn pool_max_mask_element_wise_max() {
+        let (hidden, mask, dim) = synthetic_pooling_data();
+        let result = pool_max(&hidden, &mask, dim);
+        // mask=[1,1,0]: 仅 token 0 和 token 1 参与
+        // dim 0: max(1.0,5.0) = 5.0
+        // dim 1: max(2.0,6.0) = 6.0
+        // dim 2: max(3.0,7.0) = 7.0
+        // dim 3: max(4.0,8.0) = 8.0
+        assert_eq!(result, vec![5.0, 6.0, 7.0, 8.0]);
+    }
+
+    #[test]
+    fn pool_mean_all_masked_out_returns_zero() {
+        let hidden = vec![1.0, 2.0, 3.0, 4.0];
+        let mask = vec![0]; // 全部 padding
+        let result = pool_mean(&hidden, &mask, 4);
+        assert_eq!(result, vec![0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn pool_max_all_masked_out_returns_zero() {
+        let hidden = vec![1.0, 2.0, 3.0, 4.0];
+        let mask = vec![0];
+        let result = pool_max(&hidden, &mask, 4);
+        assert_eq!(result, vec![0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn pool_mean_single_token_equals_that_token() {
+        let hidden = vec![10.0, 20.0, 30.0];
+        let mask = vec![1];
+        let result = pool_mean(&hidden, &mask, 3);
+        assert_eq!(result, vec![10.0, 20.0, 30.0]);
+    }
+
+    #[test]
+    fn pool_max_negative_values() {
+        let hidden_dim = 2;
+        // token 0: [-5.0, -1.0], token 1: [-3.0, -9.0]
+        let hidden = vec![-5.0, -1.0, -3.0, -9.0];
+        let mask = vec![1, 1];
+        let result = pool_max(&hidden, &mask, hidden_dim);
+        // max(-5,-3)=-3, max(-1,-9)=-1
+        assert_eq!(result, vec![-3.0, -1.0]);
+    }
+
+    // ========================================================================
+    // Auto pooling 推断测试
+    // ========================================================================
+
+    #[test]
+    fn infer_pooling_minilm_returns_mean() {
+        use crate::config::model::PoolingMode;
+        assert_eq!(infer_pooling_mode("all-MiniLM-L6-v2"), PoolingMode::Mean);
+        assert_eq!(infer_pooling_mode("paraphrase-MiniLM-L12-v2"), PoolingMode::Mean);
+    }
+
+    #[test]
+    fn infer_pooling_e5_returns_mean() {
+        use crate::config::model::PoolingMode;
+        assert_eq!(infer_pooling_mode("multilingual-e5-small"), PoolingMode::Mean);
+        assert_eq!(infer_pooling_mode("intfloat/e5-small-v2"), PoolingMode::Mean);
+    }
+
+    #[test]
+    fn infer_pooling_gte_returns_mean() {
+        use crate::config::model::PoolingMode;
+        assert_eq!(infer_pooling_mode("Alibaba-NLP/gte-Qwen2-1.5B-instruct"), PoolingMode::Mean);
+    }
+
+    #[test]
+    fn infer_pooling_bge_returns_cls() {
+        use crate::config::model::PoolingMode;
+        assert_eq!(infer_pooling_mode("BAAI/bge-small-en-v1.5"), PoolingMode::Cls);
+        assert_eq!(infer_pooling_mode("BAAI/bge-large-zh-v1.5"), PoolingMode::Cls);
+    }
+
+    #[test]
+    fn infer_pooling_unknown_returns_cls() {
+        use crate::config::model::PoolingMode;
+        // 未知模型家族 → Cls (带 warn)
+        assert_eq!(infer_pooling_mode("some-unknown-model"), PoolingMode::Cls);
+    }
+
+    #[test]
+    fn infer_pooling_case_insensitive() {
+        use crate::config::model::PoolingMode;
+        assert_eq!(infer_pooling_mode("BGE-Small"), PoolingMode::Cls);
+        assert_eq!(infer_pooling_mode("MINILM-v2"), PoolingMode::Mean);
+        assert_eq!(infer_pooling_mode("E5-Large"), PoolingMode::Mean);
     }
 }

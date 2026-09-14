@@ -600,7 +600,7 @@ mod tests {
         assert!(duration.as_millis() >= 100);
     }
 
-    /// T007 H7: 验证 add_performance_sample 清理超过 max_sample_age_secs 的过期样本。
+    /// 验证 add_performance_sample 清理超过 max_sample_age_secs 的过期样本。
     #[tokio::test]
     async fn test_add_performance_sample_expires_old_samples() {
         let config = CollectionConfig {
@@ -641,7 +641,7 @@ mod tests {
         );
     }
 
-    /// T007 H7: 验证未过期的样本被保留(边界场景)。
+    /// 验证未过期的样本被保留(边界场景)。
     #[tokio::test]
     async fn test_add_performance_sample_keeps_unexpired_samples() {
         let config = CollectionConfig {

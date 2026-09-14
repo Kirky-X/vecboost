@@ -552,7 +552,7 @@ async fn test_cli_compute_similarity_empty_source_returns_error() {
 }
 
 // ---------------------------------------------------------------------------
-// T023: forge handler require calls bounded under 100 requests (R-api-routing-004)
+// forge handler require calls bounded under 100 requests (R-api-routing-004)
 // ---------------------------------------------------------------------------
 
 /// Verify that forge handlers make a bounded number of `kit.require::<Module>()`
@@ -588,7 +588,7 @@ async fn test_forge_handler_require_calls_bounded_under_100_requests() {
 }
 
 // ---------------------------------------------------------------------------
-// T026: AuditLogger called by forge handler pattern (R-audit-004)
+// AuditLogger called by forge handler pattern (R-audit-004)
 // ---------------------------------------------------------------------------
 
 /// Verify that `AuditLogger` correctly records login_success and logout events

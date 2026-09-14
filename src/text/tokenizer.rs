@@ -3,79 +3,40 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-#![allow(unused)]
-
 use crate::error::VecboostError;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-#[cfg(target_os = "macos")]
-use tokenizers::Encoding as HfEncoding;
-#[cfg(target_os = "macos")]
-use tokenizers::Tokenizer as HfTokenizer;
-
-#[cfg(not(target_os = "macos"))]
-type HfTokenizer = Tokenizer;
-
 use oxcache::backend::MokaMemoryBackend;
 use oxcache::cache::Cache;
-use tokio::sync::Mutex;
+use serde::{Deserialize, Serialize};
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tokenizers::Tokenizer as HfTokenizer;
 use xxhash_rust::xxh3::Xxh3;
 
 pub const DEFAULT_CACHE_SIZE: usize = 1024;
 pub const MAX_CACHE_SIZE: usize = 8192;
 
-#[cfg(target_os = "macos")]
+/// 统一 tokenizer——全平台走 HuggingFace tokenizers crate。
+/// 加载失败 → VecboostError(含尝试路径),禁止静默回退。
 #[derive(Debug, Clone)]
 pub struct Tokenizer {
     tokenizer: HfTokenizer,
     max_length: usize,
 }
 
-#[cfg(not(target_os = "macos"))]
-#[derive(Debug, Clone)]
-pub struct Tokenizer {
-    vocab: HashMap<String, u32>,
-    max_length: usize,
-    special_tokens: HashMap<String, u32>,
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Debug, Clone)]
-pub struct CachedTokenizer {
-    tokenizer: HfTokenizer,
-    max_length: usize,
-    cache: Cache<String, Encoding>,
-    stats: Mutex<CacheHitStats>,
-}
-
-#[cfg(not(target_os = "macos"))]
-#[allow(
-    dead_code,
-    reason = "Test helper / trait dispatch / inventory, not directly called"
-)]
 #[derive(Debug)]
-pub struct CachedTokenizer {
-    tokenizer: HfTokenizer,
-    max_length: usize,
-    cache: Cache<String, Encoding>,
-    stats: Mutex<CacheHitStats>,
-}
-
-#[derive(Debug, Default)]
 pub struct CacheHitStats {
-    pub hits: u64,
-    pub misses: u64,
+    pub hits: AtomicU64,
+    pub misses: AtomicU64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CacheStats {
-    pub hits: u64,
-    pub misses: u64,
-    pub size: usize,
-    pub capacity: usize,
+impl Default for CacheHitStats {
+    fn default() -> Self {
+        Self {
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,7 +44,6 @@ pub struct Encoding {
     pub ids: Vec<u32>,
     pub attention_mask: Vec<u32>,
     pub type_ids: Vec<u32>,
-    pub tokens: Vec<String>,
 }
 
 impl Encoding {
@@ -97,10 +57,6 @@ impl Encoding {
 
     pub fn get_type_ids(&self) -> &[u32] {
         &self.type_ids
-    }
-
-    pub fn get_tokens(&self) -> &[String] {
-        &self.tokens
     }
 }
 
@@ -133,9 +89,6 @@ impl Utf8ValidationResult {
 }
 
 /// Validate UTF-8 encoding of a byte slice.
-///
-/// This is the core implementation that operates on raw bytes, allowing
-/// tests to verify invalid byte sequences without constructing invalid `&str`.
 pub fn validate_utf8_bytes(bytes: &[u8]) -> Utf8ValidationResult {
     let mut position = 0;
 
@@ -184,13 +137,10 @@ pub fn validate_utf8_bytes(bytes: &[u8]) -> Utf8ValidationResult {
 }
 
 /// Validate UTF-8 encoding of a string.
-///
-/// Delegates to [`validate_utf8_bytes`] for the actual validation logic.
 pub fn validate_utf8(text: &str) -> Utf8ValidationResult {
     validate_utf8_bytes(text.as_bytes())
 }
 
-#[cfg(target_os = "macos")]
 impl Tokenizer {
     pub fn from_pretrained(model_id: &str) -> Result<Self, VecboostError> {
         Self::from_pretrained_with_max_length(model_id, 512)
@@ -200,6 +150,15 @@ impl Tokenizer {
         model_id: &str,
         max_length: usize,
     ) -> Result<Self, VecboostError> {
+        // Try local directory first (model_id as path with tokenizer.json)
+        let tokenizer_path = std::path::Path::new(model_id).join("tokenizer.json");
+        if tokenizer_path.exists() {
+            return Self::from_file_with_max_length(
+                tokenizer_path.to_string_lossy().as_ref(),
+                max_length,
+            );
+        }
+        // Try HF hub
         HfTokenizer::from_pretrained(model_id, None)
             .map_err(|e| {
                 VecboostError::tokenization_error(format!(
@@ -209,47 +168,33 @@ impl Tokenizer {
                     model_id, e
                 ))
             })
-            .and_then(|tokenizer| {
-                if max_length == 0 {
-                    Err(VecboostError::invalid_input(format!(
-                        "max_length must be greater than 0, got {}",
-                        max_length
-                    )))
-                } else {
-                    Ok(Self {
-                        tokenizer,
-                        max_length,
-                    })
-                }
-            })
+            .and_then(|tokenizer| Self::validate_and_build(tokenizer, max_length))
     }
 
     pub fn from_file(path: &str) -> Result<Self, VecboostError> {
         Self::from_file_with_max_length(path, 512)
     }
 
+    /// 从 tokenizer.json 加载,失败 → VecboostError(含路径),禁止静默回退。
     pub fn from_file_with_max_length(path: &str, max_length: usize) -> Result<Self, VecboostError> {
-        HfTokenizer::from_file(path)
-            .map_err(|e| {
-                VecboostError::tokenization_error(format!(
-                    "Failed to load tokenizer from file '{}': {}. \
-                Please ensure the file exists and is a valid tokenizer file.",
-                    path, e
-                ))
-            })
-            .and_then(|tokenizer| {
-                if max_length == 0 {
-                    Err(VecboostError::invalid_input(format!(
-                        "max_length must be greater than 0, got {}",
-                        max_length
-                    )))
-                } else {
-                    Ok(Self {
-                        tokenizer,
-                        max_length,
-                    })
-                }
-            })
+        let tokenizer = HfTokenizer::from_file(path).map_err(|e| {
+            VecboostError::tokenization_error(format!(
+                "Failed to load tokenizer from file '{}': {}. \
+                Please ensure the file exists and is a valid tokenizer.json.",
+                path, e
+            ))
+        })?;
+        Self::validate_and_build(tokenizer, max_length)
+    }
+
+    fn validate_and_build(tokenizer: HfTokenizer, max_length: usize) -> Result<Self, VecboostError> {
+        if max_length == 0 {
+            return Err(VecboostError::invalid_input(format!(
+                "max_length must be greater than 0, got {}",
+                max_length
+            )));
+        }
+        Ok(Self { tokenizer, max_length })
     }
 
     pub fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, VecboostError> {
@@ -272,45 +217,16 @@ impl Tokenizer {
             )));
         }
 
-        let encoding = self
-            .tokenizer
-            .encode(text, add_special_tokens)
-            .map_err(|e| {
-                VecboostError::tokenization_error(format!(
-                    "Failed to encode text (length={}): {}. \
+        let encoding = self.tokenizer.encode(text, add_special_tokens).map_err(|e| {
+            VecboostError::tokenization_error(format!(
+                "Failed to encode text (length={}): {}. \
                 The text may contain unsupported characters or be too long.",
-                    text.len(),
-                    e
-                ))
-            })?;
+                text.len(),
+                e
+            ))
+        })?;
 
-        let ids = encoding.get_ids().to_vec();
-        let truncated_ids: Vec<u32> = if ids.len() > self.max_length {
-            ids[..self.max_length].to_vec()
-        } else {
-            ids
-        };
-
-        let attention_mask = encoding.get_attention_mask().to_vec();
-        let truncated_mask: Vec<u32> = if attention_mask.len() > self.max_length {
-            attention_mask[..self.max_length].to_vec()
-        } else {
-            attention_mask
-        };
-
-        let type_ids = encoding.get_type_ids().to_vec();
-        let truncated_type_ids: Vec<u32> = if type_ids.len() > self.max_length {
-            type_ids[..self.max_length].to_vec()
-        } else {
-            type_ids
-        };
-
-        Ok(Encoding {
-            ids: truncated_ids,
-            attention_mask: truncated_mask,
-            type_ids: truncated_type_ids,
-            tokens: encoding.get_tokens().to_vec(),
-        })
+        Ok(Self::truncate_encoding(encoding, self.max_length))
     }
 
     pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String, VecboostError> {
@@ -331,16 +247,14 @@ impl Tokenizer {
             )));
         }
 
-        self.tokenizer
-            .decode(ids, skip_special_tokens)
-            .map_err(|e| {
-                VecboostError::tokenization_error(format!(
-                    "Failed to decode {} token ids: {}. \
+        self.tokenizer.decode(ids, skip_special_tokens).map_err(|e| {
+            VecboostError::tokenization_error(format!(
+                "Failed to decode {} token ids: {}. \
                 The ids may be invalid or incompatible with this tokenizer.",
-                    ids.len(),
-                    e
-                ))
-            })
+                ids.len(),
+                e
+            ))
+        })
     }
 
     pub fn get_vocab_size(&self) -> usize {
@@ -349,6 +263,16 @@ impl Tokenizer {
 
     pub fn get_max_length(&self) -> usize {
         self.max_length
+    }
+
+    /// 供 onnx_engine 使用的 padding 配置方法
+    pub fn get_padding_mut(&mut self) -> Option<&mut tokenizers::PaddingParams> {
+        self.tokenizer.get_padding_mut()
+    }
+
+    /// 供 onnx_engine 使用的 padding 配置方法
+    pub fn with_padding(&mut self, padding: Option<tokenizers::PaddingParams>) {
+        self.tokenizer.with_padding(padding);
     }
 
     pub fn encode_batch(
@@ -385,907 +309,62 @@ impl Tokenizer {
 
         let texts_str: Vec<String> = texts.iter().map(|s| (*s).to_string()).collect();
 
-        let batch = self
-            .tokenizer
-            .encode_batch(texts_str, add_special_tokens)
-            .map_err(|e| {
-                VecboostError::tokenization_error(format!(
-                    "Failed to encode batch of {} texts: {}. \
+        let batch = self.tokenizer.encode_batch(texts_str, add_special_tokens).map_err(|e| {
+            VecboostError::tokenization_error(format!(
+                "Failed to encode batch of {} texts: {}. \
                 Some texts may be invalid or too long.",
-                    texts.len(),
-                    e
-                ))
-            })?;
-
-        let mut encodings = Vec::with_capacity(batch.len());
-
-        for encoding in batch.into_iter() {
-            let ids = encoding.get_ids().to_vec();
-            let truncated_ids: Vec<u32> = if ids.len() > self.max_length {
-                ids[..self.max_length].to_vec()
-            } else {
-                ids
-            };
-
-            let attention_mask = encoding.get_attention_mask().to_vec();
-            let truncated_mask: Vec<u32> = if attention_mask.len() > self.max_length {
-                attention_mask[..self.max_length].to_vec()
-            } else {
-                attention_mask
-            };
-
-            let type_ids = encoding.get_type_ids().to_vec();
-            let truncated_type_ids: Vec<u32> = if type_ids.len() > self.max_length {
-                type_ids[..self.max_length].to_vec()
-            } else {
-                type_ids
-            };
-
-            encodings.push(Encoding {
-                ids: truncated_ids,
-                attention_mask: truncated_mask,
-                type_ids: truncated_type_ids,
-                tokens: encoding.get_tokens().to_vec(),
-            });
-        }
-
-        Ok(encodings)
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-impl Tokenizer {
-    pub fn from_pretrained(model_id: &str) -> Result<Self, VecboostError> {
-        Self::from_pretrained_with_max_length(model_id, 512)
-    }
-
-    pub fn from_pretrained_with_max_length(
-        model_id: &str,
-        max_length: usize,
-    ) -> Result<Self, VecboostError> {
-        // Try local directory first (model_id as path with tokenizer.json)
-        let tokenizer_path = std::path::Path::new(model_id).join("tokenizer.json");
-        if tokenizer_path.exists() {
-            return Self::from_file_with_max_length(
-                tokenizer_path.to_string_lossy().as_ref(),
-                max_length,
-            );
-        }
-        // Fallback to hardcoded vocab
-        Self::new(max_length)
-    }
-
-    pub fn from_file(path: &str) -> Result<Self, VecboostError> {
-        Self::from_file_with_max_length(path, 512)
-    }
-
-    pub fn from_file_with_max_length(path: &str, max_length: usize) -> Result<Self, VecboostError> {
-        Ok(Self::load_vocab_from_tokenizer_json(path, max_length)
-            .unwrap_or_else(|_| Self::new(max_length).unwrap()))
-    }
-
-    /// Load vocabulary from a HuggingFace tokenizer.json file.
-    ///
-    /// Parses the `model.vocab` mapping and extracts special tokens from `added_tokens`.
-    /// Falls back to `Self::new()` (hardcoded vocab) if the file cannot be parsed.
-    fn load_vocab_from_tokenizer_json(
-        path: &str,
-        max_length: usize,
-    ) -> Result<Self, VecboostError> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            VecboostError::tokenization_error(format!(
-                "Failed to read tokenizer.json at '{}': {}",
-                path, e
+                texts.len(),
+                e
             ))
         })?;
 
-        let json: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
-            VecboostError::tokenization_error(format!(
-                "Failed to parse tokenizer.json at '{}': {}",
-                path, e
-            ))
-        })?;
-
-        let mut vocab = HashMap::new();
-        let mut special_tokens = HashMap::new();
-
-        // Known special token names
-        let special_token_names = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"];
-
-        // Parse model.vocab (token → id mapping)
-        if let Some(vocab_obj) = json.get("model").and_then(|m| m.get("vocab"))
-            && let Some(vocab_map) = vocab_obj.as_object()
-        {
-            for (token, id_val) in vocab_map {
-                if let Some(id) = id_val.as_u64() {
-                    if special_token_names.contains(&token.as_str()) {
-                        special_tokens.insert(token.clone(), id as u32);
-                    } else {
-                        vocab.insert(token.clone(), id as u32);
-                    }
-                }
-            }
-        }
-
-        // Also extract special tokens from added_tokens array (if not already found)
-        if let Some(added) = json.get("added_tokens").and_then(|a| a.as_array()) {
-            for token in added {
-                if let (Some(content), Some(id)) = (
-                    token.get("content").and_then(|c| c.as_str()),
-                    token.get("id").and_then(|i| i.as_u64()),
-                ) && special_token_names.contains(&content)
-                {
-                    special_tokens
-                        .entry(content.to_string())
-                        .or_insert(id as u32);
-                    vocab.remove(content); // ensure no duplication
-                }
-            }
-        }
-
-        if vocab.is_empty() {
-            return Err(VecboostError::tokenization_error(format!(
-                "tokenizer.json at '{}' has empty vocabulary",
-                path
-            )));
-        }
-
-        // 强制要求 [UNK] 存在，避免未知 token 静默退化为 id=0（通常是 [PAD]）
-        if !special_tokens.contains_key("[UNK]") {
-            return Err(VecboostError::tokenization_error(format!(
-                "tokenizer.json at '{}' is missing required [UNK] special token. \
-                 Ensure the tokenizer definition includes [UNK] in added_tokens.",
-                path
-            )));
-        }
-
-        log::info!(
-            "Loaded tokenizer vocab ({} tokens) and {} special tokens from '{}'",
-            vocab.len(),
-            special_tokens.len(),
-            path
-        );
-
-        Ok(Self {
-            vocab,
-            max_length,
-            special_tokens,
-        })
+        Ok(batch
+            .into_iter()
+            .map(|encoding| Self::truncate_encoding(encoding, self.max_length))
+            .collect())
     }
 
-    pub fn new(max_length: usize) -> Result<Self, VecboostError> {
-        let mut vocab = HashMap::new();
-        let mut special_tokens = HashMap::new();
-
-        let common_words = [
-            "the",
-            "be",
-            "to",
-            "of",
-            "and",
-            "a",
-            "in",
-            "that",
-            "have",
-            "i",
-            "it",
-            "for",
-            "not",
-            "on",
-            "with",
-            "he",
-            "as",
-            "you",
-            "do",
-            "at",
-            "this",
-            "but",
-            "his",
-            "by",
-            "from",
-            "they",
-            "we",
-            "say",
-            "her",
-            "she",
-            "or",
-            "an",
-            "will",
-            "my",
-            "one",
-            "all",
-            "would",
-            "there",
-            "their",
-            "what",
-            "is",
-            "are",
-            "was",
-            "were",
-            "been",
-            "being",
-            "has",
-            "had",
-            "having",
-            "does",
-            "did",
-            "doing",
-            "can",
-            "could",
-            "should",
-            "would",
-            "will",
-            "shall",
-            "may",
-            "might",
-            "must",
-            "need",
-            "ought",
-            "used",
-            "get",
-            "got",
-            "getting",
-            "make",
-            "made",
-            "making",
-            "go",
-            "going",
-            "went",
-            "gone",
-            "come",
-            "coming",
-            "came",
-            "see",
-            "seeing",
-            "saw",
-            "know",
-            "knowing",
-            "knew",
-            "known",
-            "think",
-            "thinking",
-            "thought",
-            "take",
-            "taking",
-            "find",
-            "finding",
-            "found",
-            "give",
-            "giving",
-            "gave",
-            "tell",
-            "telling",
-            "told",
-            "become",
-            "becoming",
-            "became",
-            "leave",
-            "leaving",
-            "left",
-            "put",
-            "putting",
-            "mean",
-            "meaning",
-            "meant",
-            "keep",
-            "keeping",
-            "kept",
-            "let",
-            "letting",
-            "begin",
-            "beginning",
-            "began",
-            "seem",
-            "seeming",
-            "seemed",
-            "help",
-            "helping",
-            "helped",
-            "show",
-            "showing",
-            "showed",
-            "hear",
-            "hearing",
-            "heard",
-            "play",
-            "playing",
-            "played",
-            "run",
-            "running",
-            "ran",
-            "move",
-            "moving",
-            "moved",
-            "like",
-            "live",
-            "believe",
-            "hold",
-            "holding",
-            "held",
-            "bring",
-            "bringing",
-            "brought",
-            "happen",
-            "happening",
-            "happened",
-            "write",
-            "writing",
-            "wrote",
-            "provide",
-            "providing",
-            "provided",
-            "sit",
-            "sitting",
-            "sat",
-            "stand",
-            "standing",
-            "stood",
-            "lose",
-            "losing",
-            "lost",
-            "pay",
-            "paying",
-            "paid",
-            "meet",
-            "meeting",
-            "met",
-            "include",
-            "including",
-            "included",
-            "continue",
-            "continuing",
-            "continued",
-            "set",
-            "setting",
-            "learn",
-            "learning",
-            "learned",
-            "change",
-            "changing",
-            "changed",
-            "lead",
-            "leading",
-            "led",
-            "understand",
-            "understanding",
-            "understood",
-            "watch",
-            "watching",
-            "watched",
-            "follow",
-            "following",
-            "followed",
-            "stop",
-            "stopping",
-            "stopped",
-            "create",
-            "creating",
-            "created",
-            "speak",
-            "speaking",
-            "spoke",
-            "read",
-            "allow",
-            "adding",
-            "added",
-            "add",
-            "open",
-            "opening",
-            "opened",
-            "walk",
-            "walking",
-            "walked",
-            "win",
-            "winning",
-            "won",
-            "offer",
-            "offering",
-            "offered",
-            "remember",
-            "remembering",
-            "remembered",
-            "love",
-            "consider",
-            "appear",
-            "appearing",
-            "appeared",
-            "buy",
-            "buying",
-            "bought",
-            "wait",
-            "waiting",
-            "waited",
-            "serve",
-            "serving",
-            "served",
-            "die",
-            "dying",
-            "died",
-            "send",
-            "sending",
-            "sent",
-            "expect",
-            "expecting",
-            "expected",
-            "build",
-            "building",
-            "built",
-            "stay",
-            "staying",
-            "stayed",
-            "fall",
-            "falling",
-            "fell",
-            "fallen",
-            "cut",
-            "cutting",
-            "reach",
-            "reaching",
-            "reached",
-            "kill",
-            "killing",
-            "killed",
-            "remain",
-            "remaining",
-            "remained",
-            "really",
-            "now",
-            "even",
-            "new",
-            "newer",
-            "newest",
-            "good",
-            "better",
-            "best",
-            "great",
-            "greater",
-            "greatest",
-            "high",
-            "higher",
-            "highest",
-            "little",
-            "smaller",
-            "smallest",
-            "long",
-            "longer",
-            "longest",
-            "next",
-            "first",
-            "last",
-            "young",
-            "younger",
-            "youngest",
-            "important",
-            "few",
-            "fewer",
-            "fewest",
-            "big",
-            "bigger",
-            "biggest",
-            "different",
-            "small",
-            "large",
-            "large",
-            "larger",
-            "largest",
-            "right",
-            "wrong",
-            "true",
-            "false",
-            "real",
-            "best",
-            "better",
-            "well",
-            "also",
-            "just",
-            "still",
-            "back",
-            "much",
-            "many",
-            "way",
-            "well",
-            "even",
-            "then",
-            "more",
-            "most",
-            "other",
-            "some",
-            "such",
-            "no",
-            "only",
-            "own",
-            "same",
-            "able",
-            "over",
-            "after",
-            "first",
-            "two",
-            "most",
-            "made",
-            "made",
-            "made",
-            "thing",
-            "things",
-            "every",
-            "where",
-            "when",
-            "who",
-            "what",
-            "how",
-            "which",
-        ];
-
-        for (id, word) in common_words.iter().enumerate() {
-            vocab.insert(word.to_string(), id as u32);
-        }
-
-        special_tokens.insert("[PAD]".to_string(), vocab.len() as u32);
-        special_tokens.insert("[UNK]".to_string(), (vocab.len() + 1) as u32);
-        special_tokens.insert("[CLS]".to_string(), (vocab.len() + 2) as u32);
-        special_tokens.insert("[SEP]".to_string(), (vocab.len() + 3) as u32);
-        special_tokens.insert("[MASK]".to_string(), (vocab.len() + 4) as u32);
-
-        Ok(Self {
-            vocab,
-            max_length,
-            special_tokens,
-        })
-    }
-
-    /// WordPiece 子词分词。
-    ///
-    /// 对输入文本按空白分词后，对每个词执行贪心子词拆分：
-    /// 从最长前缀开始尝试，匹配不到则逐步缩短。
-    /// 非首段使用 `##` 前缀标记为延续片段。
-    /// 无法拆分的词整体回退为 `[UNK]`。
-    fn wordpiece_tokenize(&self, text: &str) -> Vec<String> {
-        let text_lower = text.to_lowercase();
-        let words = text_lower.split_whitespace();
-        let mut pieces = Vec::new();
-
-        for word in words {
-            if word.is_empty() {
-                continue;
-            }
-
-            let chars: Vec<char> = word.chars().collect();
-            let mut start = 0;
-            let mut word_pieces = Vec::new();
-
-            while start < chars.len() {
-                let mut end = chars.len();
-                let mut found = false;
-
-                while start < end {
-                    let substr: String = if start == 0 {
-                        chars[start..end].iter().collect()
-                    } else {
-                        format!("##{}", chars[start..end].iter().collect::<String>())
-                    };
-
-                    if self.vocab.contains_key(&substr) {
-                        word_pieces.push(substr);
-                        found = true;
-                        break;
-                    }
-                    end -= 1;
-                }
-
-                if !found {
-                    // Single char → UNK, advance by 1 so subsequent chars can still match
-                    let unk_char: String = chars[start..=start].iter().collect();
-                    word_pieces.push(unk_char);
-                    start += 1;
-                } else {
-                    start = end;
-                }
-            }
-
-            pieces.extend(word_pieces);
-        }
-
-        pieces
-    }
-
-    pub fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Encoding, VecboostError> {
-        if text.is_empty() {
-            return Err(VecboostError::invalid_input(
-                "Cannot encode empty text".to_string(),
-            ));
-        }
-
-        let utf8_result = validate_utf8(text);
-        if !utf8_result.is_valid {
-            return Err(VecboostError::invalid_input(format!(
-                "UTF-8 encoding validation failed at byte {} (value 0x{:02x}): {}. \
-                The input contains invalid or incomplete UTF-8 sequences.",
-                utf8_result.invalid_byte_position.unwrap_or(0),
-                utf8_result.invalid_byte_value.unwrap_or(0),
-                utf8_result
-                    .error_message
-                    .unwrap_or_else(|| "Unknown UTF-8 error".to_string())
-            )));
-        }
-
-        let mut tokens = Vec::new();
-        let mut ids = Vec::new();
-        let mut attention_mask = Vec::new();
-        let mut type_ids = Vec::new();
-
-        if add_special_tokens && let Some(&id) = self.special_tokens.get("[CLS]") {
-            tokens.push("[CLS]".to_string());
-            ids.push(id);
-            attention_mask.push(1);
-            type_ids.push(0);
-        }
-
-        let words = self.wordpiece_tokenize(text);
-        let unknown_id = self.special_tokens.get("[UNK]").copied().unwrap_or(0);
-
-        for word in words {
-            if self.vocab.contains_key(&word) {
-                if let Some(&id) = self.vocab.get(&word) {
-                    tokens.push(word.clone());
-                    ids.push(id);
-                    attention_mask.push(1);
-                    type_ids.push(0);
-                }
-            } else {
-                tokens.push(word.clone());
-                ids.push(unknown_id);
-                attention_mask.push(1);
-                type_ids.push(0);
-            }
-        }
-
-        if add_special_tokens && let Some(&id) = self.special_tokens.get("[SEP]") {
-            tokens.push("[SEP]".to_string());
-            ids.push(id);
-            attention_mask.push(1);
-            type_ids.push(0);
-        }
-
-        let truncated_ids: Vec<u32> = if ids.len() > self.max_length {
-            ids[..self.max_length].to_vec()
-        } else {
-            ids
-        };
-
-        let truncated_mask: Vec<u32> = if attention_mask.len() > self.max_length {
-            attention_mask[..self.max_length].to_vec()
-        } else {
-            attention_mask
-        };
-
-        let truncated_type_ids: Vec<u32> = if type_ids.len() > self.max_length {
-            type_ids[..self.max_length].to_vec()
-        } else {
-            type_ids
-        };
-
-        let truncated_tokens: Vec<String> = if tokens.len() > self.max_length {
-            tokens[..self.max_length].to_vec()
-        } else {
-            tokens
-        };
-
-        Ok(Encoding {
-            ids: truncated_ids,
-            attention_mask: truncated_mask,
-            type_ids: truncated_type_ids,
-            tokens: truncated_tokens,
-        })
-    }
-
-    pub fn decode(&self, ids: &[u32], _skip_special_tokens: bool) -> Result<String, VecboostError> {
-        if ids.is_empty() {
-            return Err(VecboostError::invalid_input(
-                "Cannot decode empty token ids".to_string(),
-            ));
-        }
-
-        let mut result = Vec::new();
-        for id in ids {
-            let mut found = false;
-            for (word, &word_id) in &self.vocab {
-                if word_id == *id {
-                    result.push(word.clone());
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                for (token, &token_id) in &self.special_tokens {
-                    if token_id == *id {
-                        result.push(token.clone());
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            if !found {
-                result.push(format!("[UNK:{}]", id));
-            }
-        }
-
-        Ok(result.join(" "))
-    }
-
-    pub fn get_vocab_size(&self) -> usize {
-        self.vocab.len() + self.special_tokens.len()
-    }
-
-    pub fn get_max_length(&self) -> usize {
-        self.max_length
-    }
-
-    pub fn encode_batch(
-        &self,
-        texts: &[&str],
-        add_special_tokens: bool,
-    ) -> Result<Vec<Encoding>, VecboostError> {
-        if texts.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        for (i, &text) in texts.iter().enumerate() {
-            if text.is_empty() {
-                return Err(VecboostError::invalid_input(format!(
-                    "Cannot encode empty text at batch index {}",
-                    i
-                )));
-            }
-
-            let utf8_result = validate_utf8(text);
-            if !utf8_result.is_valid {
-                return Err(VecboostError::invalid_input(format!(
-                    "UTF-8 encoding validation failed at byte {} (value 0x{:02x}) in text at batch index {}: {}. \
-                    The input contains invalid or incomplete UTF-8 sequences.",
-                    utf8_result.invalid_byte_position.unwrap_or(0),
-                    utf8_result.invalid_byte_value.unwrap_or(0),
-                    i,
-                    utf8_result
-                        .error_message
-                        .unwrap_or_else(|| "Unknown UTF-8 error".to_string())
-                )));
-            }
-        }
-
-        let mut encodings = Vec::with_capacity(texts.len());
-        for &text in texts {
-            let encoding = self.encode(text, add_special_tokens)?;
-            encodings.push(encoding);
-        }
-
-        Ok(encodings)
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl CachedTokenizer {
-    pub fn new(tokenizer: HfTokenizer, max_length: usize, cache_size: usize) -> Self {
-        let capacity = cache_size.clamp(1, MAX_CACHE_SIZE) as u64;
-        let moka = MokaMemoryBackend::builder().capacity(capacity).build();
-        let cache = Cache::with_dependencies(Arc::new(moka));
-        Self {
-            tokenizer,
-            max_length,
-            cache,
-            stats: Mutex::new(CacheHitStats::default()),
-        }
-    }
-
-    pub fn with_default_cache(tokenizer: HfTokenizer, max_length: usize) -> Self {
-        Self::new(tokenizer, max_length, DEFAULT_CACHE_SIZE)
-    }
-
-    pub fn max_length(&self) -> usize {
-        self.max_length
-    }
-
-    fn hash_key(&self, text: &str, add_special_tokens: bool) -> String {
-        let mut hasher = Xxh3::new();
-        text.hash(&mut hasher);
-        add_special_tokens.hash(&mut hasher);
-        let hash = hasher.finish();
-        format!("{:016x}_{}", hash, add_special_tokens)
-    }
-
-    pub async fn encode(
-        &self,
-        text: &str,
-        add_special_tokens: bool,
-    ) -> Result<Encoding, VecboostError> {
-        let key = self.hash_key(text, add_special_tokens);
-
-        if let Some(cached) = self.cache.get(&key).await.ok().flatten() {
-            let mut stats = self.stats.lock().await;
-            stats.hits += 1;
-            return Ok(cached);
-        }
-
-        let encoding = self.encode_uncached(text, add_special_tokens).await?;
-
-        let mut stats = self.stats.lock().await;
-        stats.misses += 1;
-        if let Err(e) = self.cache.set(&key, &encoding).await {
-            log::warn!("Failed to cache tokenization result: {}", e);
-        }
-
-        Ok(encoding)
-    }
-
-    async fn encode_uncached(
-        &self,
-        text: &str,
-        add_special_tokens: bool,
-    ) -> Result<Encoding, VecboostError> {
-        if text.is_empty() {
-            return Err(VecboostError::invalid_input(
-                "Cannot encode empty text".to_string(),
-            ));
-        }
-
-        let utf8_result = validate_utf8(text);
-        if !utf8_result.is_valid {
-            return Err(VecboostError::invalid_input(format!(
-                "UTF-8 encoding validation failed at byte {} (value 0x{:02x}): {}. \
-                The input contains invalid or incomplete UTF-8 sequences.",
-                utf8_result.invalid_byte_position.unwrap_or(0),
-                utf8_result.invalid_byte_value.unwrap_or(0),
-                utf8_result
-                    .error_message
-                    .unwrap_or_else(|| "Unknown UTF-8 error".to_string())
-            )));
-        }
-
-        let encoding = self
-            .tokenizer
-            .encode(text, add_special_tokens)
-            .map_err(|e| {
-                VecboostError::tokenization_error(format!(
-                    "Failed to encode text (length={}): {}. \
-                The text may contain unsupported characters or be too long.",
-                    text.len(),
-                    e
-                ))
-            })?;
-
+    /// 将 HF Encoding 转为我们的 Encoding,按 max_length 截断
+    fn truncate_encoding(encoding: tokenizers::Encoding, max_length: usize) -> Encoding {
         let ids = encoding.get_ids().to_vec();
-        let truncated_ids: Vec<u32> = if ids.len() > self.max_length {
-            ids[..self.max_length].to_vec()
+        let truncated_ids = if ids.len() > max_length {
+            ids[..max_length].to_vec()
         } else {
             ids
         };
 
         let attention_mask = encoding.get_attention_mask().to_vec();
-        let truncated_mask: Vec<u32> = if attention_mask.len() > self.max_length {
-            attention_mask[..self.max_length].to_vec()
+        let truncated_mask = if attention_mask.len() > max_length {
+            attention_mask[..max_length].to_vec()
         } else {
             attention_mask
         };
 
         let type_ids = encoding.get_type_ids().to_vec();
-        let truncated_type_ids: Vec<u32> = if type_ids.len() > self.max_length {
-            type_ids[..self.max_length].to_vec()
+        let truncated_type_ids = if type_ids.len() > max_length {
+            type_ids[..max_length].to_vec()
         } else {
             type_ids
         };
 
-        Ok(Encoding {
+        Encoding {
             ids: truncated_ids,
             attention_mask: truncated_mask,
             type_ids: truncated_type_ids,
-            tokens: encoding.get_tokens().to_vec(),
-        })
+        }
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-#[allow(
-    dead_code,
-    reason = "Test helper / trait dispatch / inventory, not directly called"
-)]
+/// 统一 CachedTokenizer——全平台使用 HF tokenizers,stats 改 AtomicU64。
+#[derive(Debug)]
+pub struct CachedTokenizer {
+    tokenizer: HfTokenizer,
+    max_length: usize,
+    cache: Cache<String, Encoding>,
+    hits: AtomicU64,
+    misses: AtomicU64,
+}
+
 impl CachedTokenizer {
     pub fn new(tokenizer: HfTokenizer, max_length: usize, cache_size: usize) -> Self {
         let capacity = cache_size.clamp(1, MAX_CACHE_SIZE) as u64;
@@ -1295,7 +374,8 @@ impl CachedTokenizer {
             tokenizer,
             max_length,
             cache,
-            stats: Mutex::new(CacheHitStats::default()),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
         }
     }
 
@@ -1305,6 +385,24 @@ impl CachedTokenizer {
 
     pub fn max_length(&self) -> usize {
         self.max_length
+    }
+
+    /// 同步 token 计数(用于 API usage.prompt_tokens)
+    pub fn count_tokens(&self, text: &str) -> Result<usize, VecboostError> {
+        if text.is_empty() {
+            return Ok(0);
+        }
+        let encoding = self.tokenizer.encode(text, true).map_err(|e| {
+            VecboostError::tokenization_error(format!("count_tokens failed: {}", e))
+        })?;
+        Ok(encoding.get_ids().len())
+    }
+
+    pub fn stats(&self) -> CacheHitStats {
+        CacheHitStats {
+            hits: AtomicU64::new(self.hits.load(Ordering::Relaxed)),
+            misses: AtomicU64::new(self.misses.load(Ordering::Relaxed)),
+        }
     }
 
     fn hash_key(&self, text: &str, add_special_tokens: bool) -> String {
@@ -1323,15 +421,13 @@ impl CachedTokenizer {
         let key = self.hash_key(text, add_special_tokens);
 
         if let Some(cached) = self.cache.get(&key).await.ok().flatten() {
-            let mut stats = self.stats.lock().await;
-            stats.hits += 1;
+            self.hits.fetch_add(1, Ordering::Relaxed);
             return Ok(cached);
         }
 
         let encoding = self.encode_uncached(text, add_special_tokens).await?;
 
-        let mut stats = self.stats.lock().await;
-        stats.misses += 1;
+        self.misses.fetch_add(1, Ordering::Relaxed);
         if let Err(e) = self.cache.set(&key, &encoding).await {
             log::warn!("Failed to cache tokenization result: {}", e);
         }
@@ -1363,23 +459,26 @@ impl CachedTokenizer {
             )));
         }
 
-        self.tokenizer
-            .encode(text, add_special_tokens)
-            .map_err(|e| {
-                VecboostError::tokenization_error(format!(
-                    "Failed to encode text (length={}): {}. \
+        let encoding = self.tokenizer.encode(text, add_special_tokens).map_err(|e| {
+            VecboostError::tokenization_error(format!(
+                "Failed to encode text (length={}): {}. \
                 The text may contain unsupported characters or be too long.",
-                    text.len(),
-                    e
-                ))
-            })
+                text.len(),
+                e
+            ))
+        })?;
+
+        Ok(Tokenizer::truncate_encoding(encoding, self.max_length))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(invalid_from_utf8_unchecked)]
     use super::*;
+
+    // ========================================================================
+    // Encoding 结构体测试(平台无关)
+    // ========================================================================
 
     #[test]
     fn test_encoding_getters_return_correct_slices() {
@@ -1387,15 +486,10 @@ mod tests {
             ids: vec![1, 2, 3],
             attention_mask: vec![1, 1, 1],
             type_ids: vec![0, 0, 0],
-            tokens: vec!["a".to_string(), "b".to_string(), "c".to_string()],
         };
         assert_eq!(encoding.get_ids(), &[1, 2, 3]);
         assert_eq!(encoding.get_attention_mask(), &[1, 1, 1]);
         assert_eq!(encoding.get_type_ids(), &[0, 0, 0]);
-        assert_eq!(
-            encoding.get_tokens(),
-            &["a".to_string(), "b".to_string(), "c".to_string()]
-        );
     }
 
     #[test]
@@ -1404,12 +498,10 @@ mod tests {
             ids: vec![],
             attention_mask: vec![],
             type_ids: vec![],
-            tokens: vec![],
         };
         assert!(encoding.get_ids().is_empty());
         assert!(encoding.get_attention_mask().is_empty());
         assert!(encoding.get_type_ids().is_empty());
-        assert!(encoding.get_tokens().is_empty());
     }
 
     #[test]
@@ -1418,13 +510,16 @@ mod tests {
             ids: vec![1],
             attention_mask: vec![1],
             type_ids: vec![0],
-            tokens: vec!["x".to_string()],
         };
         let cloned = encoding.clone();
         assert_eq!(encoding, cloned);
         let debug_str = format!("{:?}", encoding);
         assert!(debug_str.contains("Encoding"));
     }
+
+    // ========================================================================
+    // UTF-8 验证测试(平台无关)
+    // ========================================================================
 
     #[test]
     fn test_utf8_validation_result_valid_constructor() {
@@ -1568,6 +663,10 @@ mod tests {
         assert_eq!(r.invalid_byte_value, Some(0x00));
     }
 
+    // ========================================================================
+    // 缓存常量测试
+    // ========================================================================
+
     #[test]
     fn test_cache_constants() {
         assert_eq!(DEFAULT_CACHE_SIZE, 1024);
@@ -1580,553 +679,152 @@ mod tests {
     #[test]
     fn test_cache_hit_stats_default() {
         let stats = CacheHitStats::default();
-        assert_eq!(stats.hits, 0);
-        assert_eq!(stats.misses, 0);
+        assert_eq!(stats.hits.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.misses.load(Ordering::Relaxed), 0);
+    }
+
+    // ========================================================================
+    // 本地 tokenizer.json 加载测试(使用 models/ 下真实模型)
+    // ========================================================================
+
+    /// 辅助:获取第一个可用本地模型的 tokenizer.json 路径
+    fn find_local_tokenizer_path() -> Option<String> {
+        let models = ["models/all-MiniLM-L6-v2", "models/BAAI-bge-small-en-v1.5",
+                       "models/BAAI-bge-small-zh-v1.5", "models/multilingual-e5-small"];
+        for m in &models {
+            let p = format!("{}/tokenizer.json", m);
+            if std::path::Path::new(&p).exists() {
+                return Some(p);
+            }
+        }
+        None
     }
 
     #[test]
-    fn test_cache_stats_struct() {
-        let stats = CacheStats {
-            hits: 5,
-            misses: 3,
-            size: 2,
-            capacity: 1024,
+    fn test_tokenizer_from_file_success() {
+        let Some(path) = find_local_tokenizer_path() else {
+            eprintln!("SKIP: no local model found");
+            return;
         };
-        assert_eq!(stats.hits, 5);
-        assert_eq!(stats.misses, 3);
-        assert_eq!(stats.size, 2);
-        assert_eq!(stats.capacity, 1024);
-        let cloned = stats.clone();
-        assert_eq!(stats, cloned);
+        let tokenizer = Tokenizer::from_file(&path).unwrap();
+        assert_eq!(tokenizer.get_max_length(), 512);
+        assert!(tokenizer.get_vocab_size() > 0);
     }
 
-    #[cfg(not(target_os = "macos"))]
-    mod non_macos {
-        use super::*;
+    #[test]
+    fn test_tokenizer_from_file_nonexistent_returns_error() {
+        let result = Tokenizer::from_file("/nonexistent/path/tokenizer.json");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let detail = err.error_detail().to_string();
+        assert!(detail.contains("/nonexistent/path/tokenizer.json"), "got: {}", detail);
+    }
 
-        fn make_tokenizer() -> Tokenizer {
-            Tokenizer::new(512).expect("Failed to create tokenizer")
-        }
+    #[test]
+    fn test_tokenizer_from_file_zero_max_length_returns_error() {
+        let Some(path) = find_local_tokenizer_path() else {
+            eprintln!("SKIP: no local model found");
+            return;
+        };
+        let result = Tokenizer::from_file_with_max_length(&path, 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().error_detail().contains("max_length"));
+    }
 
-        #[test]
-        fn test_tokenizer_new_success() {
-            let tokenizer = Tokenizer::new(512).unwrap();
-            assert_eq!(tokenizer.get_max_length(), 512);
-            assert!(tokenizer.get_vocab_size() > 0);
-        }
+    #[test]
+    fn test_tokenizer_encode_with_local_model() {
+        let Some(path) = find_local_tokenizer_path() else {
+            eprintln!("SKIP: no local model found");
+            return;
+        };
+        let tokenizer = Tokenizer::from_file(&path).unwrap();
+        let encoding = tokenizer.encode("hello world", true).unwrap();
+        assert!(!encoding.ids.is_empty());
+        assert_eq!(encoding.ids.len(), encoding.attention_mask.len());
+        assert_eq!(encoding.ids.len(), encoding.type_ids.len());
+    }
 
-        #[test]
-        fn test_tokenizer_new_populates_vocab_and_specials() {
-            let tokenizer = Tokenizer::new(64).unwrap();
-            assert!(tokenizer.vocab.contains_key("the"));
-            assert!(tokenizer.vocab.contains_key("be"));
-            assert!(tokenizer.special_tokens.contains_key("[CLS]"));
-            assert!(tokenizer.special_tokens.contains_key("[SEP]"));
-            assert!(tokenizer.special_tokens.contains_key("[PAD]"));
-            assert!(tokenizer.special_tokens.contains_key("[UNK]"));
-            assert_eq!(
-                tokenizer.get_vocab_size(),
-                tokenizer.vocab.len() + tokenizer.special_tokens.len()
-            );
-        }
+    #[test]
+    fn test_tokenizer_encode_empty_returns_error() {
+        let Some(path) = find_local_tokenizer_path() else {
+            eprintln!("SKIP: no local model found");
+            return;
+        };
+        let tokenizer = Tokenizer::from_file(&path).unwrap();
+        let result = tokenizer.encode("", true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().error_detail().contains("empty text"));
+    }
 
-        #[test]
-        fn test_tokenizer_from_pretrained_default_max_length() {
-            let tokenizer = Tokenizer::from_pretrained("bert-base-uncased").unwrap();
-            assert_eq!(tokenizer.get_max_length(), 512);
-        }
+    #[test]
+    fn test_tokenizer_encode_batch_empty() {
+        let Some(path) = find_local_tokenizer_path() else {
+            eprintln!("SKIP: no local model found");
+            return;
+        };
+        let tokenizer = Tokenizer::from_file(&path).unwrap();
+        let result = tokenizer.encode_batch(&[], true).unwrap();
+        assert!(result.is_empty());
+    }
 
-        #[test]
-        fn test_tokenizer_from_pretrained_with_max_length() {
-            let tokenizer = Tokenizer::from_pretrained_with_max_length("any-model", 128).unwrap();
-            assert_eq!(tokenizer.get_max_length(), 128);
-        }
+    #[tokio::test]
+    async fn test_cached_tokenizer_encode_miss_then_hit() {
+        let Some(path) = find_local_tokenizer_path() else {
+            eprintln!("SKIP: no local model found");
+            return;
+        };
+        let hf_tok = HfTokenizer::from_file(&path).unwrap();
+        let cached = CachedTokenizer::with_default_cache(hf_tok, 512);
 
-        #[test]
-        fn test_tokenizer_from_file_default_max_length() {
-            let tokenizer = Tokenizer::from_file("/nonexistent/path.json").unwrap();
-            assert_eq!(tokenizer.get_max_length(), 512);
-        }
+        let _ = cached.encode("hello", true).await.unwrap();
+        assert_eq!(cached.hits.load(Ordering::Relaxed), 0);
+        assert_eq!(cached.misses.load(Ordering::Relaxed), 1);
 
-        #[test]
-        fn test_tokenizer_from_file_with_max_length() {
-            let tokenizer =
-                Tokenizer::from_file_with_max_length("/nonexistent/path.json", 256).unwrap();
-            assert_eq!(tokenizer.get_max_length(), 256);
-        }
+        let _ = cached.encode("hello", true).await.unwrap();
+        assert_eq!(cached.hits.load(Ordering::Relaxed), 1);
+        assert_eq!(cached.misses.load(Ordering::Relaxed), 1);
+    }
 
-        #[test]
-        fn test_tokenizer_get_max_length() {
-            let tokenizer = Tokenizer::new(42).unwrap();
-            assert_eq!(tokenizer.get_max_length(), 42);
-        }
+    #[tokio::test]
+    async fn test_cached_tokenizer_different_keys() {
+        let Some(path) = find_local_tokenizer_path() else {
+            eprintln!("SKIP: no local model found");
+            return;
+        };
+        let hf_tok = HfTokenizer::from_file(&path).unwrap();
+        let cached = CachedTokenizer::with_default_cache(hf_tok, 512);
 
-        #[test]
-        fn test_tokenizer_get_vocab_size_includes_specials() {
-            let tokenizer = make_tokenizer();
-            let vocab_only = tokenizer.vocab.len();
-            let specials_only = tokenizer.special_tokens.len();
-            assert_eq!(tokenizer.get_vocab_size(), vocab_only + specials_only);
-        }
+        let _ = cached.encode("hello", false).await.unwrap();
+        let _ = cached.encode("hello", true).await.unwrap();
+        assert_eq!(cached.hits.load(Ordering::Relaxed), 0);
+        assert_eq!(cached.misses.load(Ordering::Relaxed), 2);
+    }
 
-        #[test]
-        fn test_tokenizer_encode_empty_text_returns_error() {
-            let tokenizer = make_tokenizer();
-            let result = tokenizer.encode("", true);
-            assert!(result.is_err());
-            let err = result.unwrap_err();
-            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
-            assert!(err.to_string().contains("empty text"));
-        }
+    #[tokio::test]
+    async fn test_cached_tokenizer_empty_text_no_cache() {
+        let Some(path) = find_local_tokenizer_path() else {
+            eprintln!("SKIP: no local model found");
+            return;
+        };
+        let hf_tok = HfTokenizer::from_file(&path).unwrap();
+        let cached = CachedTokenizer::with_default_cache(hf_tok, 512);
 
-        #[test]
-        fn test_tokenizer_encode_known_words_without_special_tokens() {
-            let tokenizer = make_tokenizer();
-            let encoding = tokenizer.encode("the be to", false).unwrap();
-            assert_eq!(encoding.tokens, vec!["the", "be", "to"]);
-            assert_eq!(encoding.ids.len(), 3);
-            assert_eq!(encoding.attention_mask, vec![1, 1, 1]);
-            assert_eq!(encoding.type_ids, vec![0, 0, 0]);
-        }
+        let result = cached.encode("", true).await;
+        assert!(result.is_err());
+        assert_eq!(cached.hits.load(Ordering::Relaxed), 0);
+        assert_eq!(cached.misses.load(Ordering::Relaxed), 0);
+    }
 
-        #[test]
-        fn test_tokenizer_encode_known_words_ids_match_vocab() {
-            let tokenizer = make_tokenizer();
-            let encoding = tokenizer.encode("the be to", false).unwrap();
-            assert_eq!(encoding.ids[0], *tokenizer.vocab.get("the").unwrap());
-            assert_eq!(encoding.ids[1], *tokenizer.vocab.get("be").unwrap());
-            assert_eq!(encoding.ids[2], *tokenizer.vocab.get("to").unwrap());
-        }
-
-        #[test]
-        fn test_tokenizer_encode_with_special_tokens_wraps_cls_sep() {
-            let tokenizer = make_tokenizer();
-            let encoding = tokenizer.encode("the be", true).unwrap();
-            assert_eq!(encoding.tokens.len(), 4);
-            assert_eq!(encoding.tokens[0], "[CLS]");
-            assert_eq!(encoding.tokens[1], "the");
-            assert_eq!(encoding.tokens[2], "be");
-            assert_eq!(encoding.tokens[3], "[SEP]");
-            assert_eq!(
-                encoding.ids[0],
-                *tokenizer.special_tokens.get("[CLS]").unwrap()
-            );
-            assert_eq!(
-                encoding.ids[3],
-                *tokenizer.special_tokens.get("[SEP]").unwrap()
-            );
-            assert_eq!(encoding.attention_mask, vec![1, 1, 1, 1]);
-        }
-
-        #[test]
-        fn test_tokenizer_encode_unknown_word_becomes_unk() {
-            let tokenizer = make_tokenizer();
-            let encoding = tokenizer.encode("xyzqwerty", false).unwrap();
-            // Per-character UNK fallback: each char becomes a separate token mapped to UNK ID
-            let unk_id = *tokenizer.special_tokens.get("[UNK]").unwrap();
-            assert_eq!(
-                encoding.tokens,
-                vec!["x", "y", "z", "q", "w", "e", "r", "t", "y"]
-            );
-            assert_eq!(encoding.ids, vec![unk_id; 9]);
-        }
-
-        #[test]
-        fn test_tokenizer_encode_mixed_known_unknown() {
-            let tokenizer = make_tokenizer();
-            let encoding = tokenizer.encode("the zzzz be", false).unwrap();
-            // "the" and "be" are in vocab; "zzzz" → 4 individual UNK chars
-            let unk_id = *tokenizer.special_tokens.get("[UNK]").unwrap();
-            assert_eq!(encoding.tokens, vec!["the", "z", "z", "z", "z", "be"]);
-            assert_eq!(encoding.ids.len(), 6);
-            assert_eq!(encoding.ids[0], *tokenizer.vocab.get("the").unwrap());
-            assert_eq!(encoding.ids[1], unk_id);
-            assert_eq!(encoding.ids[5], *tokenizer.vocab.get("be").unwrap());
-        }
-
-        #[test]
-        fn test_tokenizer_encode_punctuation_tokens() {
-            let tokenizer = make_tokenizer();
-            let encoding = tokenizer.encode("!!!", false).unwrap();
-            // Per-character UNK fallback: 3 individual "!" tokens
-            assert_eq!(encoding.tokens.len(), 3);
-            assert_eq!(encoding.tokens, vec!["!", "!", "!"]);
-        }
-
-        #[test]
-        fn test_tokenizer_encode_lowercase_normalization() {
-            let tokenizer = make_tokenizer();
-            let upper = tokenizer.encode("THE", false).unwrap();
-            let lower = tokenizer.encode("the", false).unwrap();
-            assert_eq!(upper.ids, lower.ids);
-            assert_eq!(upper.tokens, lower.tokens);
-        }
-
-        #[test]
-        fn test_tokenizer_encode_truncation_applies_to_all_fields() {
-            let tokenizer = Tokenizer::new(3).unwrap();
-            let encoding = tokenizer.encode("the be to of and", true).unwrap();
-            assert_eq!(encoding.ids.len(), 3);
-            assert_eq!(encoding.attention_mask.len(), 3);
-            assert_eq!(encoding.type_ids.len(), 3);
-            assert_eq!(encoding.tokens.len(), 3);
-            assert_eq!(encoding.tokens[0], "[CLS]");
-        }
-
-        #[test]
-        fn test_tokenizer_encode_truncation_without_special_tokens() {
-            let tokenizer = Tokenizer::new(2).unwrap();
-            let encoding = tokenizer.encode("the be to of and", false).unwrap();
-            assert_eq!(encoding.ids.len(), 2);
-            assert_eq!(encoding.tokens.len(), 2);
-            assert_eq!(encoding.tokens, vec!["the", "be"]);
-        }
-
-        #[test]
-        fn test_tokenizer_encode_truncation_when_text_fits() {
-            let tokenizer = Tokenizer::new(100).unwrap();
-            let encoding = tokenizer.encode("the be", true).unwrap();
-            assert_eq!(encoding.tokens.len(), 4);
-            assert_eq!(encoding.ids.len(), 4);
-        }
-
-        #[test]
-        fn test_tokenizer_decode_empty_ids_returns_error() {
-            let tokenizer = make_tokenizer();
-            let result = tokenizer.decode(&[], true);
-            assert!(result.is_err());
-            let err = result.unwrap_err();
-            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
-            assert!(err.to_string().contains("empty token ids"));
-        }
-
-        #[test]
-        fn test_tokenizer_decode_known_id() {
-            let tokenizer = make_tokenizer();
-            let the_id = *tokenizer.vocab.get("the").unwrap();
-            let result = tokenizer.decode(&[the_id], false).unwrap();
-            assert_eq!(result, "the");
-        }
-
-        #[test]
-        fn test_tokenizer_decode_multiple_known_ids() {
-            let tokenizer = make_tokenizer();
-            let the_id = *tokenizer.vocab.get("the").unwrap();
-            let be_id = *tokenizer.vocab.get("be").unwrap();
-            let to_id = *tokenizer.vocab.get("to").unwrap();
-            let result = tokenizer.decode(&[the_id, be_id, to_id], false).unwrap();
-            assert_eq!(result, "the be to");
-        }
-
-        #[test]
-        fn test_tokenizer_decode_special_token_id() {
-            let tokenizer = make_tokenizer();
-            let cls_id = *tokenizer.special_tokens.get("[CLS]").unwrap();
-            let result = tokenizer.decode(&[cls_id], false).unwrap();
-            assert_eq!(result, "[CLS]");
-        }
-
-        #[test]
-        fn test_tokenizer_decode_unknown_id_returns_unk_placeholder() {
-            let tokenizer = make_tokenizer();
-            let result = tokenizer.decode(&[u32::MAX], false).unwrap();
-            assert_eq!(result, format!("[UNK:{}]", u32::MAX));
-        }
-
-        #[test]
-        fn test_tokenizer_decode_mixed_known_special_unknown() {
-            let tokenizer = make_tokenizer();
-            let the_id = *tokenizer.vocab.get("the").unwrap();
-            let cls_id = *tokenizer.special_tokens.get("[CLS]").unwrap();
-            let result = tokenizer
-                .decode(&[cls_id, the_id, 99_999_999], false)
-                .unwrap();
-            assert_eq!(result, format!("[CLS] the [UNK:{}]", 99_999_999));
-        }
-
-        #[test]
-        fn test_tokenizer_decode_skip_special_tokens_param_does_not_affect_output() {
-            let tokenizer = make_tokenizer();
-            let cls_id = *tokenizer.special_tokens.get("[CLS]").unwrap();
-            let with_skip = tokenizer.decode(&[cls_id], true).unwrap();
-            let without_skip = tokenizer.decode(&[cls_id], false).unwrap();
-            assert_eq!(with_skip, without_skip);
-            assert_eq!(with_skip, "[CLS]");
-        }
-
-        #[test]
-        fn test_tokenizer_encode_batch_empty_returns_empty_vec() {
-            let tokenizer = make_tokenizer();
-            let result = tokenizer.encode_batch(&[], true).unwrap();
-            assert!(result.is_empty());
-        }
-
-        #[test]
-        fn test_tokenizer_encode_batch_with_empty_text_at_index_returns_error() {
-            let tokenizer = make_tokenizer();
-            let result = tokenizer.encode_batch(&["the", "", "be"], false);
-            assert!(result.is_err());
-            let err = result.unwrap_err();
-            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
-            assert!(err.to_string().contains("batch index 1"));
-        }
-
-        #[test]
-        fn test_tokenizer_encode_batch_success() {
-            let tokenizer = make_tokenizer();
-            let result = tokenizer.encode_batch(&["the be", "to of"], true).unwrap();
-            assert_eq!(result.len(), 2);
-            assert_eq!(result[0].tokens, vec!["[CLS]", "the", "be", "[SEP]"]);
-            assert_eq!(result[1].tokens, vec!["[CLS]", "to", "of", "[SEP]"]);
-        }
-
-        #[test]
-        fn test_tokenizer_encode_batch_without_special_tokens() {
-            let tokenizer = make_tokenizer();
-            let result = tokenizer.encode_batch(&["the be", "to of"], false).unwrap();
-            assert_eq!(result.len(), 2);
-            assert_eq!(result[0].tokens, vec!["the", "be"]);
-            assert_eq!(result[1].tokens, vec!["to", "of"]);
-        }
-
-        #[test]
-        fn test_tokenizer_encode_batch_propagates_truncation() {
-            let tokenizer = Tokenizer::new(2).unwrap();
-            let result = tokenizer
-                .encode_batch(&["the be to of and"], false)
-                .unwrap();
-            assert_eq!(result.len(), 1);
-            assert_eq!(result[0].tokens.len(), 2);
-        }
-
-        #[test]
-        fn test_tokenizer_encode_batch_invalid_utf8_returns_error() {
-            let tokenizer = make_tokenizer();
-            let bytes = [0xC2u8];
-            // SAFETY: Intentionally creates invalid UTF-8 to test tokenizer error handling
-            // with malformed input. The `&str` is only passed to encode/encode_batch
-            // which must gracefully reject invalid UTF-8.
-            let bad = unsafe { std::str::from_utf8_unchecked(&bytes) };
-            let result = tokenizer.encode_batch(&["the", bad], false);
-            assert!(result.is_err());
-            let err = result.unwrap_err();
-            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
-            assert!(err.to_string().contains("batch index 1"));
-        }
-
-        #[test]
-        fn test_tokenizer_clone_is_equal() {
-            let tokenizer = make_tokenizer();
-            let cloned = tokenizer.clone();
-            assert_eq!(tokenizer.get_max_length(), cloned.get_max_length());
-            assert_eq!(tokenizer.get_vocab_size(), cloned.get_vocab_size());
-        }
-
-        #[test]
-        fn test_tokenizer_wordpiece_tokenize_via_encode_mixed_alphanum_and_punct() {
-            let tokenizer = make_tokenizer();
-            let encoding = tokenizer.encode("the, be.", false).unwrap();
-            assert_eq!(encoding.tokens.len(), 4);
-            assert_eq!(encoding.tokens[0], "the");
-            assert_eq!(encoding.tokens[1], ",");
-            assert_eq!(encoding.tokens[2], "be");
-            assert_eq!(encoding.tokens[3], ".");
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_new_max_length_preserved() {
-            let tokenizer = Tokenizer::new(256).unwrap();
-            let cached = CachedTokenizer::new(tokenizer, 256, 64);
-            assert_eq!(cached.max_length(), 256);
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_with_default_cache() {
-            let tokenizer = Tokenizer::new(128).unwrap();
-            let cached = CachedTokenizer::with_default_cache(tokenizer, 128);
-            assert_eq!(cached.max_length(), 128);
-            // oxcache::Cache 不暴露 capacity getter,验证初始 len 为 0
-            assert_eq!(cached.cache.len().await.unwrap_or(0), 0);
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_cache_size_clamped_to_max() {
-            let tokenizer = Tokenizer::new(128).unwrap();
-            let _cached = CachedTokenizer::new(tokenizer, 128, 100_000);
-            // oxcache::Cache 通过 MokaMemoryBackend 配置 capacity,
-            // 运行时不暴露 cap getter。此处仅验证构造不 panic。
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_cache_size_zero_becomes_one() {
-            let tokenizer = Tokenizer::new(128).unwrap();
-            let cached = CachedTokenizer::new(tokenizer, 128, 0);
-            // oxcache::Cache 不暴露 cap getter,验证初始 len 为 0
-            assert_eq!(cached.cache.len().await.unwrap_or(0), 0);
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_encode_cache_miss_then_hit_stats() {
-            let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
-
-            let first = cached.encode("the be to", true).await.unwrap();
-            {
-                let stats = cached.stats.lock().await;
-                assert_eq!(stats.hits, 0);
-                assert_eq!(stats.misses, 1);
-            }
-
-            let second = cached.encode("the be to", true).await.unwrap();
-            {
-                let stats = cached.stats.lock().await;
-                assert_eq!(stats.hits, 1);
-                assert_eq!(stats.misses, 1);
-            }
-            assert_eq!(first, second);
-
-            let third = cached.encode("the be to", true).await.unwrap();
-            {
-                let stats = cached.stats.lock().await;
-                assert_eq!(stats.hits, 2);
-                assert_eq!(stats.misses, 1);
-            }
-            assert_eq!(third, first);
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_encode_different_special_tokens_not_shared() {
-            let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
-
-            let _ = cached.encode("the", false).await.unwrap();
-            let _ = cached.encode("the", true).await.unwrap();
-
-            let stats = cached.stats.lock().await;
-            assert_eq!(stats.hits, 0);
-            assert_eq!(stats.misses, 2);
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_encode_different_text_separate_entries() {
-            let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
-
-            let _ = cached.encode("the", false).await.unwrap();
-            let _ = cached.encode("be", false).await.unwrap();
-            let _ = cached.encode("the", false).await.unwrap();
-
-            let stats = cached.stats.lock().await;
-            assert_eq!(stats.hits, 1);
-            assert_eq!(stats.misses, 2);
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_encode_empty_text_returns_error() {
-            let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
-            let result = cached.encode("", true).await;
-            assert!(result.is_err());
-            let err = result.unwrap_err();
-            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
-            assert!(err.to_string().contains("empty text"));
-            let stats = cached.stats.lock().await;
-            assert_eq!(stats.hits, 0);
-            assert_eq!(stats.misses, 0);
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_encode_invalid_utf8_returns_error() {
-            let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
-            let bytes = [0xC2u8];
-            // SAFETY: Intentionally creates invalid UTF-8 to test tokenizer error handling
-            // with malformed input. The `&str` is only passed to encode/encode_batch
-            // which must gracefully reject invalid UTF-8.
-            let bad = unsafe { std::str::from_utf8_unchecked(&bytes) };
-            let result = cached.encode(bad, false).await;
-            assert!(result.is_err());
-            let err = result.unwrap_err();
-            assert!(matches!(err, crate::error::VecboostError::InvalidInput(_)));
-            assert!(err.to_string().contains("UTF-8"));
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_encode_returns_correct_encoding_content() {
-            let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
-            let encoding = cached.encode("the be", true).await.unwrap();
-            assert_eq!(encoding.tokens, vec!["[CLS]", "the", "be", "[SEP]"]);
-            assert_eq!(encoding.attention_mask, vec![1, 1, 1, 1]);
-            assert_eq!(encoding.type_ids, vec![0, 0, 0, 0]);
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_encode_failure_does_not_consume_cache_slot() {
-            let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
-
-            let _ = cached.encode("", true).await;
-            let cache_size_after_failure = cached.cache.len().await.unwrap_or(0);
-            assert_eq!(cache_size_after_failure, 0);
-            let stats = cached.stats.lock().await;
-            assert_eq!(stats.misses, 0);
-            assert_eq!(stats.hits, 0);
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_eviction_under_capacity_pressure() {
-            // oxcache::Cache 基于 moka W-TinyLFU,异步驱逐,不保证严格 LRU。
-            // 验证容量压力下最终会有驱逐(而非全部驻留)。
-            let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::new(tokenizer, 512, 2);
-
-            // 插入超量 key 触发驱逐
-            for word in ["a", "b", "c", "d", "e", "f", "g", "h"] {
-                let _ = cached.encode(word, false).await.unwrap();
-            }
-
-            // 等待 moka 异步驱逐完成
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-            let len = cached.cache.len().await.unwrap_or(0);
-            assert!(
-                len <= 8,
-                "cache should evict some entries under capacity pressure, got len={}",
-                len
-            );
-            let stats = cached.stats.lock().await;
-            assert_eq!(stats.misses, 8);
-            assert_eq!(stats.hits, 0);
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_hash_key_differs_by_special_tokens() {
-            let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
-            let key_false = cached.hash_key("the", false);
-            let key_true = cached.hash_key("the", true);
-            assert_ne!(key_false, key_true);
-            assert!(key_false.ends_with("_false"));
-            assert!(key_true.ends_with("_true"));
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_hash_key_differs_by_text() {
-            let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
-            let key_a = cached.hash_key("the", false);
-            let key_b = cached.hash_key("be", false);
-            assert_ne!(key_a, key_b);
-        }
-
-        #[tokio::test]
-        async fn test_cached_tokenizer_hash_key_same_input_same_hash() {
-            let tokenizer = Tokenizer::new(512).unwrap();
-            let cached = CachedTokenizer::with_default_cache(tokenizer, 512);
-            let k1 = cached.hash_key("the be to", true);
-            let k2 = cached.hash_key("the be to", true);
-            assert_eq!(k1, k2);
-        }
+    #[test]
+    fn test_hash_key_differs_by_special_tokens() {
+        let Some(path) = find_local_tokenizer_path() else {
+            eprintln!("SKIP: no local model found");
+            return;
+        };
+        let hf_tok = HfTokenizer::from_file(&path).unwrap();
+        let cached = CachedTokenizer::with_default_cache(hf_tok, 512);
+        let key_false = cached.hash_key("hello", false);
+        let key_true = cached.hash_key("hello", true);
+        assert_ne!(key_false, key_true);
     }
 }

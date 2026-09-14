@@ -77,7 +77,7 @@ pub use sdforge;
 
 /// Application state
 ///
-/// v0.3.0 D3 重构：所有能力通过 `AsyncKit<Ready>` 查询。
+/// 所有能力通过 `AsyncKit<Ready>` 查询。
 /// 启动时由 `main.rs` 通过 `kit.set_config()` 注入预构建对象 + `kit.register::<M>()`
 /// 注册 17 个 Module,`kit.build().await` 后注入到 `VecboostState`。
 ///
@@ -349,7 +349,7 @@ mod tests {
             kit.register::<CsrfConfigModule>().unwrap();
         }
 
-        // T012-T016: Register lifecycle and health check for key modules
+        // Register lifecycle and health check for key modules
         kit.register_lifecycle::<EmbeddingModule>();
         kit.register_lifecycle::<RerankModule>();
         kit.register_lifecycle::<RateLimitModule>();
@@ -662,10 +662,10 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // T019/T020: Health check + graceful shutdown integration tests
+    // Health check + graceful shutdown integration tests
     // -------------------------------------------------------------------------
 
-    /// T019: Verify health checks return Healthy for all registered modules.
+    /// Verify health checks return Healthy for all registered modules.
     #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_health_checks_return_healthy() {
@@ -708,7 +708,7 @@ mod tests {
         );
     }
 
-    /// T020: Verify AsyncKit shutdown invokes lifecycle hooks without panic.
+    /// Verify AsyncKit shutdown invokes lifecycle hooks without panic.
     #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_kit_shutdown_completes_cleanly() {

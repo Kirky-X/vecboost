@@ -79,7 +79,7 @@ use sdforge::security::ratelimit::LimiteronAdapter as SdforgeLimiteronAdapter;
 // metrics 端点（Prometheus text/plain, forge 不支持非 JSON 响应, 保留手写）
 use vecboost::metrics::metrics_endpoint;
 
-/// Build observer that logs per-module build timing (T017a, observer feature).
+/// Build observer that logs per-module build timing.
 struct LoggingObserver;
 
 impl BuildObserver for LoggingObserver {
@@ -165,7 +165,7 @@ async fn init_db_pool(
     })?;
     log::info!("Database pool initialized and schema verified");
     let db_metrics = Arc::new(dbnexus::MetricsCollector::new());
-    log::info!("dbnexus MetricsCollector created (T044 observability wiring)");
+    log::info!("dbnexus MetricsCollector created");
     Ok((pool, db_metrics))
 }
 
@@ -350,6 +350,16 @@ async fn init_auth(
             ));
         };
 
+        // 安全闸门:启用认证但未配置管理员密码时拒绝启动。
+        // 否则 forge_login 在无哈希时对任意凭据颁发 token,认证形同虚设。
+        if config.auth.default_admin_password.is_none() {
+            return Err(anyhow::anyhow!(
+                // i18n 文案之外固定附带环境变量名,保证任何 locale 下都可操作
+                "{} (required: VECBOOST_ADMIN_PASSWORD)",
+                vecboost::i18n::tr("startup-admin-password-missing")
+            ));
+        }
+
         let dao = garrison::dao::GarrisonDaoOxcache::new()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create GarrisonDaoOxcache: {}", e))?;
@@ -375,10 +385,17 @@ async fn init_auth(
                 .expect("admin password hash must succeed")
         });
 
+        let admin_username = config
+            .auth
+            .default_admin_username
+            .clone()
+            .unwrap_or_else(|| "admin".to_string());
+
         log::info!("Garrison authentication enabled (JWT + session + password verification)");
 
         Some(Arc::new(GarrisonHandle {
             admin_password_hash,
+            admin_username,
             token_timeout_secs: garrison_config.timeout,
         }))
     } else {
@@ -468,6 +485,44 @@ async fn init_pipeline(
             )),
         ))
     }
+}
+
+/// 配置含敏感项(jwt_secret/admin_password)且未设加密 key 时应告警。
+fn should_warn_plaintext_secrets(has_jwt: bool, has_admin_password: bool, has_encryption_key: bool) -> bool {
+    (has_jwt || has_admin_password) && !has_encryption_key
+}
+
+/// 绑定安全闸门:认证关闭时禁止绑定非回环地址,杜绝 insecure-by-default 裸奔。
+///
+/// - 回环(127.x/::1/localhost)+ 认证关闭 → 放行(本地开发形态)。
+/// - 非回环 + 认证关闭 → 拒绝启动,除非设置 `VECBOOST_ALLOW_INSECURE=1`
+///   (显式逃生阀,此时输出 ERROR 级风险告警,供容器等受信网络边界场景使用)。
+fn validate_bind_safety(host: &str, auth_enabled: bool) -> anyhow::Result<()> {
+    if auth_enabled {
+        return Ok(());
+    }
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || match host.parse::<std::net::IpAddr>() {
+            Ok(ip) => ip.is_loopback(),
+            Err(_) => false,
+        };
+    if loopback {
+        return Ok(());
+    }
+    if std::env::var("VECBOOST_ALLOW_INSECURE").as_deref() == Ok("1") {
+        log::error!(
+            "SECURITY RISK: authentication is disabled while binding to non-loopback address \
+             '{host}' (VECBOOST_ALLOW_INSECURE=1). Anyone reachable on this interface can read \
+             files via /embed/file and manage models. Enable auth or bind to 127.0.0.1."
+        );
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "Refusing to start: authentication is disabled (auth.enabled=false) while binding to \
+         non-loopback address '{host}'. Fix one of: (1) set host to 127.0.0.1 in the config, \
+         (2) enable [auth] with VECBOOST_JWT_SECRET and VECBOOST_ADMIN_PASSWORD, or \
+         (3) set VECBOOST_ALLOW_INSECURE=1 to accept the risk explicitly."
+    ))
 }
 
 fn main() {
@@ -624,7 +679,7 @@ async fn app_main() -> anyhow::Result<()> {
         config.audit.enabled
     );
 
-    // T007: Enforce encryption key when explicitly required (production hardening).
+    // Enforce encryption key when explicitly required (production hardening).
     // Set VECBOOST_REQUIRE_ENCRYPTION=1 to refuse startup without a valid key.
     if std::env::var("VECBOOST_REQUIRE_ENCRYPTION")
         .map(|v| v == "1" || v == "true")
@@ -640,6 +695,24 @@ async fn app_main() -> anyhow::Result<()> {
             ));
         }
         log::info!("Encryption key validated (VECBOOST_REQUIRE_ENCRYPTION=1)");
+    } else {
+        // 检测到敏感配置但未设加密 key → 提示明文存储风险(不强制,
+        // VECBOOST_REQUIRE_ENCRYPTION=1 才拒绝启动)
+        let has_jwt = config.auth.jwt_secret.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+        let has_pw = config
+            .auth
+            .default_admin_password
+            .as_ref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        let has_key = std::env::var("VECBOOST_ENCRYPTION_KEY")
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false);
+        if should_warn_plaintext_secrets(has_jwt, has_pw, has_key) {
+            log::warn!(
+                "Sensitive config (jwt_secret / default_admin_password) is present but                  VECBOOST_ENCRYPTION_KEY is not set — values are stored in plaintext.                  Set VECBOOST_ENCRYPTION_KEY to encrypt, or VECBOOST_REQUIRE_ENCRYPTION=1                  to enforce encryption at startup."
+            );
+        }
     }
 
     #[cfg(feature = "db")]
@@ -663,6 +736,9 @@ async fn app_main() -> anyhow::Result<()> {
     {
         return Ok(());
     }
+
+    // 安全闸门:仅 HTTP 服务器路径需要(上方 MCP/CLI 均已提前返回)。
+    validate_bind_safety(&config.server.host, config.auth.enabled)?;
 
     let rate_limiter = Arc::new(
         LimiteronAdapter::new(RateLimitSettings {
@@ -716,7 +792,7 @@ async fn app_main() -> anyhow::Result<()> {
 
     let mut kit = trait_kit::AsyncKit::new();
 
-    // T017a: Register build observer for per-module build timing
+    // Register build observer for per-module build timing
     kit.with_observer(Arc::new(LoggingObserver));
 
     // 注入预构建的能力对象（kit 是 single source of truth）— 已清理未被任何 Module/Handler 消费的冗余注入
@@ -731,7 +807,7 @@ async fn app_main() -> anyhow::Result<()> {
         enabled: cfg!(feature = "db"),
     });
     kit.set_config(audit_logger.clone());
-    // v0.3.0 D3: 注入 13 个新 Module 的能力配置
+    // 注入各 Module 的能力配置
     kit.set_config(Some(Arc::new(vecboost::metrics::InferenceCollector::new())));
     kit.set_config(Some(Arc::new(
         vecboost::metrics::PrometheusCollector::new().map_err(|e| {
@@ -752,7 +828,7 @@ async fn app_main() -> anyhow::Result<()> {
         config.rate_limit.enabled,
     ));
     kit.set_config(config.embedding.clone());
-    // T013: Inject AuthConfig for `trusted_proxies` (XFF trust boundary) access
+    // Inject AuthConfig for `trusted_proxies` (XFF trust boundary) access
     // via `kit.config::<AuthConfig>()` in `auth_middleware` (see lib.rs `FromRef` impl).
     kit.set_config(config.auth.clone());
     kit.set_config(pipeline_queue.clone());
@@ -780,7 +856,7 @@ async fn app_main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to register DbModule: {}", e))?;
     kit.register::<AuditModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register AuditModule: {}", e))?;
-    // v0.3.0 D3: 注册 13 个新 Module
+    // 注册各 Module
     kit.register::<MetricsCollectorModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register MetricsCollectorModule: {}", e))?;
     kit.register::<PrometheusCollectorModule>()
@@ -795,7 +871,7 @@ async fn app_main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to register PriorityCalculatorModule: {}", e))?;
     kit.register::<WorkerManagerModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register WorkerManagerModule: {}", e))?;
-    // T034-T035: ConfigWatcherModule — monitors config.toml for hot reload
+    // ConfigWatcherModule — monitors config.toml for hot reload
     let watcher_guard = Arc::new(confers::watcher::WatcherGuard::new());
     kit.set_config(watcher_guard);
     kit.register::<ConfigWatcherModule>()
@@ -810,7 +886,7 @@ async fn app_main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Failed to register CsrfConfigModule: {}", e))?;
     }
 
-    // T012-T016: Register lifecycle and health check for key modules
+    // Register lifecycle and health check for key modules
     kit.register_lifecycle::<EmbeddingModule>();
     kit.register_lifecycle::<RerankModule>();
     kit.register_lifecycle::<RateLimitModule>();
@@ -827,7 +903,7 @@ async fn app_main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to build AsyncKit: {}", e))?;
     let kit = Arc::new(kit);
 
-    // T017: AsyncShutdownCoordinator — phased graceful shutdown
+    // AsyncShutdownCoordinator — phased graceful shutdown
     let shutdown_coordinator = AsyncShutdownCoordinator::new();
     shutdown_coordinator
         .set_global_timeout(Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS))
@@ -849,7 +925,7 @@ async fn app_main() -> anyhow::Result<()> {
             })
             .map_err(|e| anyhow::anyhow!("Failed to register shutdown hook: {}", e))?;
     }
-    // T035: Register ConfigWatcherModule shutdown hook
+    // Register ConfigWatcherModule shutdown hook
     {
         let kit_for_watcher_shutdown = Arc::clone(&kit);
         shutdown_coordinator
@@ -885,10 +961,10 @@ async fn app_main() -> anyhow::Result<()> {
 
     log::info!("AsyncKit module registry built successfully");
 
-    // T004: JoinSet for managing background tasks lifecycle
+    // JoinSet for managing background tasks lifecycle
     let mut bg_tasks = tokio::task::JoinSet::<()>::new();
 
-    // T034: Spawn config file watcher task for hot reload
+    // Spawn config file watcher task for hot reload
     // 变更检测：当前 AsyncKit<Ready> 不支持运行时 set_config，热重载仅验证新配置可加载
     // 后续待 trait-kit 为 AsyncKit 提供 reload 能力后再接线至各 Module
     bg_tasks.spawn(async move {
@@ -926,7 +1002,7 @@ async fn app_main() -> anyhow::Result<()> {
             log::info!("Config file watcher stopped");
     });
 
-    // v0.3.0 D3: VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
+    // VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
     let app_state = VecboostState::new(kit);
 
     // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state().kit.require 访问）
@@ -1059,7 +1135,7 @@ async fn app_main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     log::info!("Server listening on {}", addr);
 
-    // T018: Signal-aware graceful shutdown (SIGINT + SIGTERM)
+    // Signal-aware graceful shutdown (SIGINT + SIGTERM)
     let signal = async {
         #[cfg(unix)]
         {
@@ -1222,4 +1298,56 @@ async fn app_main() -> anyhow::Result<()> {
     log::info!("VecBoost shutdown complete");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 绑定安全闸门 —— 回环放行 / 非回环拒绝 / 逃生阀放行并告警
+    #[test]
+    fn bind_safety_allows_loopback_without_auth() {
+        assert!(validate_bind_safety("127.0.0.1", false).is_ok());
+        assert!(validate_bind_safety("::1", false).is_ok());
+        assert!(validate_bind_safety("localhost", false).is_ok());
+        // auth enabled 时无论绑定地址一律放行
+        assert!(validate_bind_safety("0.0.0.0", true).is_ok());
+    }
+
+    // 拒绝与逃生阀共享进程级环境变量,合并为单测避免并行竞态
+    #[test]
+    fn bind_safety_rejects_non_loopback_escape_valve_allows() {
+        // SAFETY: 单线程内变更测试专用环境变量;Rust 2024 中 set_var/remove_var 为 unsafe
+        unsafe { std::env::remove_var("VECBOOST_ALLOW_INSECURE") };
+        let err = validate_bind_safety("0.0.0.0", false).unwrap_err();
+        assert!(err.to_string().contains("VECBOOST_ALLOW_INSECURE"));
+        assert!(validate_bind_safety("192.168.1.10", false).is_err());
+
+        unsafe { std::env::set_var("VECBOOST_ALLOW_INSECURE", "1") };
+        let result = validate_bind_safety("0.0.0.0", false);
+        unsafe { std::env::remove_var("VECBOOST_ALLOW_INSECURE") };
+        assert!(result.is_ok());
+    }
+
+    // 敏感配置明文存储告警判定
+    #[test]
+    fn plaintext_secret_warning_logic() {
+        assert!(should_warn_plaintext_secrets(true, false, false));
+        assert!(should_warn_plaintext_secrets(false, true, false));
+        assert!(!should_warn_plaintext_secrets(true, true, true));
+        assert!(!should_warn_plaintext_secrets(false, false, false));
+    }
+
+    // auth 启用但未配置管理员密码 → 拒绝启动(错误信息指明 VECBOOST_ADMIN_PASSWORD)
+    #[cfg(feature = "auth")]
+    #[tokio::test]
+    async fn init_auth_rejects_missing_admin_password()
+    {
+        let mut config = AppConfig::default();
+        config.auth.enabled = true;
+        config.auth.jwt_secret = Some("test-secret-0123456789abcdef0123".to_string());
+        config.auth.default_admin_password = None;
+        let err = init_auth(&config).await.unwrap_err();
+        assert!(err.to_string().contains("VECBOOST_ADMIN_PASSWORD"));
+    }
 }

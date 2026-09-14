@@ -318,7 +318,7 @@ impl AsyncLifecycle for AuditModule {
 }
 
 // ===========================================================================
-// v0.3.0 D3 重构：覆盖 VecboostState 剩余字段的 13 个 Module 实现
+// 覆盖 VecboostState 剩余字段的 13 个 Module 实现
 //
 // 设计原则与现有 6 个 Module 保持一致：
 //   - 复杂类型（Arc<T>、Option<Arc<T>>、Vec<String>）→ `kit.config::<Self::Capability>()`

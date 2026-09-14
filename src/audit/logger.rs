@@ -892,7 +892,7 @@ mod tests {
         );
     }
 
-    /// T024 (R-audit-001 验收点 5): 1000 条审计事件 log_* 调用总耗时 < 100ms。
+    /// 1000 条审计事件 log_* 调用总耗时 < 100ms。
     ///
     /// `log_*` 方法仅 `sender.send(LoggerCommand::Event(event))`（mpsc unbounded，
     /// 非阻塞），1000 次 send 应在毫秒级完成。后台 writer task 异步批量写入不计入耗时。
@@ -923,7 +923,7 @@ mod tests {
         logger.flush().await.unwrap();
     }
 
-    /// T025 (R-audit-002 验收点 4): 间接验证 log_* 方法不触发 fs::metadata syscall。
+    /// 间接验证 log_* 方法不触发 fs::metadata syscall。
     ///
     /// 验证依据：
     /// 1. `AuditLogger.sender` 类型为 `Option<mpsc::UnboundedSender<LoggerCommand>>`

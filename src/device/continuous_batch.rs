@@ -303,7 +303,7 @@ mod tests {
         (request, rx)
     }
 
-    /// T007a: 单个请求在 < 100ms 内被处理（无需等待 50ms 凑批时间）
+    /// 单个请求在 < 100ms 内被处理（无需等待 50ms 凑批时间）
     #[tokio::test]
     async fn test_continuous_loop_processes_single_request() {
         let (loop_, queue, shutdown_tx) = setup_test_loop();
@@ -328,7 +328,7 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_millis(100), handle).await;
     }
 
-    /// T007b: Critical 请求先于 Low 请求被处理
+    /// Critical 请求先于 Low 请求被处理
     #[tokio::test]
     async fn test_priority_ordering_in_batch() {
         let (loop_, queue, shutdown_tx) = setup_test_loop();
@@ -361,7 +361,7 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_millis(100), handle).await;
     }
 
-    /// T007c: 短 timeout 请求在超时前被刷新
+    /// 短 timeout 请求在超时前被刷新
     #[tokio::test]
     async fn test_sla_timeout_forces_flush() {
         let (loop_, queue, shutdown_tx) = setup_test_loop();

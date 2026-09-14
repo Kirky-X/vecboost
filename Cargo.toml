@@ -71,6 +71,8 @@ candle-core = { version = "0.11", default-features = false, features = [] }
 candle-nn = { version = "0.11", default-features = false }
 candle-transformers = { version = "0.11", default-features = false }
 hf-hub = { version = "1.0", default-features = false, features = ["blocking", "rustls-tls"] }
+# tokenizers 全平台直接依赖（移除 cfg(target_os) 门控）
+tokenizers = { version = "0.23", default-features = false, features = ["http", "onig"] }
 
 # Web Framework (http feature)
 axum = { version = "0.8", optional = true, default-features = false, features = ["http1", "json", "tokio", "tracing", "macros", "matched-path", "original-uri", "query"] }
@@ -168,8 +170,6 @@ name = "vecboost"
 required-features = ["http"]
 
 # Platform-specific dependencies
-[target.'cfg(target_os = "macos")'.dependencies]
-tokenizers = { version = "0.23", default-features = false, features = ["http"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 

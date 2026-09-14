@@ -787,7 +787,7 @@ mod tests {
     }
 
     // =========================================================================
-    // T016: ServiceRequest::Rerank routing tests
+    // ServiceRequest::Rerank routing tests
     // =========================================================================
 
     /// Mock engine that supports rerank with deterministic scores

@@ -43,11 +43,16 @@ pub fn sanitize_password(s: &str) -> String {
     format!("[{} chars]", s.len())
 }
 
-/// Sanitize a JWT secret - shows only prefix and length.
+/// Sanitize a JWT secret - shows a minimal 2-char prefix and the length.
 ///
-/// Uses `floor_char_boundary` to guarantee UTF-8 safe prefix slicing.
+/// 原 8 字符前缀足以泄漏可猜测的签名头("eyJhbGci" 为固定 HS256
+/// JWT 头 base64),收窄到 2 字符。`floor_char_boundary` 保证 UTF-8 安全切片。
 pub fn sanitize_jwt_secret(s: &str) -> String {
-    format!("{}... [{} chars]", &s[..s.floor_char_boundary(8)], s.len())
+    format!(
+        "{}... [{} chars]",
+        &s[..s.floor_char_boundary(2)],
+        s.len()
+    )
 }
 
 /// Check if a field name likely contains sensitive data.
@@ -102,8 +107,10 @@ mod tests {
     fn test_sanitize_jwt_secret() {
         let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
         let sanitized = sanitize_jwt_secret(jwt);
-        assert!(sanitized.starts_with("eyJhbGci..."));
+        // 仅保留 2 字符前缀,不泄漏完整 base64 头
+        assert!(sanitized.starts_with("ey..."));
         assert!(sanitized.contains("[36 chars]"));
+        assert!(!sanitized.contains("eyJhbGci"));
     }
 
     #[test]

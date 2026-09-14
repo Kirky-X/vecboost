@@ -19,7 +19,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
-/// Legacy fixed salt used by v0.3.0-v0.3.2 keystore files (pre-T012).
+/// Legacy fixed salt used by v0.3.0–v0.3.2 keystore files.
 /// Kept only for one-shot migration: load old format → re-encrypt with random salt.
 const LEGACY_SALT: &[u8; 16] = b"vecboost_salt_v1";
 
@@ -426,7 +426,7 @@ mod tests {
             .expect("get failed");
         assert!(retrieved.is_some(), "key should exist after set");
         let retrieved = retrieved.unwrap();
-        assert_eq!(retrieved.value, "my_jwt_secret_value");
+        assert_eq!(retrieved.value.as_str(), "my_jwt_secret_value");
         assert_eq!(retrieved.name, "jwt_secret");
         assert_eq!(retrieved.key_type, KeyType::JwtSecret);
     }
@@ -470,7 +470,7 @@ mod tests {
             .await
             .expect("get failed")
             .expect("key should exist");
-        assert_eq!(retrieved.value, "new_value", "value should be updated");
+        assert_eq!(retrieved.value.as_str(), "new_value", "value should be updated");
     }
 
     #[tokio::test]
@@ -604,7 +604,7 @@ mod tests {
             .await
             .expect("get failed")
             .expect("key should persist");
-        assert_eq!(retrieved.value, "hf_token_abc");
+        assert_eq!(retrieved.value.as_str(), "hf_token_abc");
     }
 
     #[tokio::test]
@@ -749,7 +749,7 @@ mod tests {
             .await
             .expect("get failed")
             .expect("key should exist");
-        assert_eq!(retrieved.value, "custom_value");
+        assert_eq!(retrieved.value.as_str(), "custom_value");
 
         let custom_keys = store.list(&custom_type).await.expect("list failed");
         assert_eq!(custom_keys.len(), 1);
@@ -855,7 +855,7 @@ mod tests {
             .await
             .expect("get failed")
             .expect("key should exist after migration");
-        assert_eq!(retrieved.value, "legacy_jwt_secret_value");
+        assert_eq!(retrieved.value.as_str(), "legacy_jwt_secret_value");
 
         // Post-migration write should persist in the new 3-segment format.
         store
@@ -872,13 +872,13 @@ mod tests {
             .await
             .expect("get old key failed")
             .expect("old key should persist");
-        assert_eq!(old_key.value, "legacy_jwt_secret_value");
+        assert_eq!(old_key.value.as_str(), "legacy_jwt_secret_value");
         let new_key = reloaded
             .get(&KeyType::ApiKey, "post_migration_key")
             .await
             .expect("get new key failed")
             .expect("new key should persist");
-        assert_eq!(new_key.value, "new_value");
+        assert_eq!(new_key.value.as_str(), "new_value");
 
         // File should remain in 3-segment format (no rollback to legacy).
         let content = tokio::fs::read_to_string(&path).await.expect("read failed");

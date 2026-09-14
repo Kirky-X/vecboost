@@ -73,6 +73,12 @@ pub trait InferenceEngine: Send + Sync {
         true
     }
 
+    /// 统计文本的 token 数(用于 API usage.prompt_tokens)。
+    /// 默认实现: bytes/4 估算;真实引擎应覆盖为 tokenizer 精确计数。
+    fn count_tokens(&self, _text: &str) -> Result<usize, VecboostError> {
+        Ok(0) // 调用方回退到 bytes/4
+    }
+
     /// 尝试降级到 CPU（在 OOM 时调用）
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
 }

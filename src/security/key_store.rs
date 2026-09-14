@@ -5,6 +5,7 @@
 
 use crate::error::VecboostError;
 use async_trait::async_trait;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KeyType {
@@ -15,11 +16,30 @@ pub enum KeyType {
     Custom(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SecretKey {
     pub key_type: KeyType,
-    pub value: String,
+    /// 零化包装 —— 值离开作用域时内存被安全擦除,不在堆上残留。
+    pub value: Zeroizing<String>,
     pub name: String,
+}
+
+impl std::fmt::Debug for SecretKey {
+    /// 调试输出走掩码,防止 `{:?}` 打印把完整密钥写进日志。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretKey")
+            .field("key_type", &self.key_type)
+            .field("name", &self.name)
+            .field("value", &self.mask_value())
+            .finish()
+    }
+}
+
+impl std::fmt::Display for SecretKey {
+    /// Display 同样只输出掩码形式(mask_value 的生产接线点)。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.mask_value())
+    }
 }
 
 impl SecretKey {
@@ -27,7 +47,7 @@ impl SecretKey {
         Self {
             key_type,
             name: name.into(),
-            value: value.into(),
+            value: Zeroizing::new(value.into()),
         }
     }
 
@@ -48,18 +68,15 @@ impl SecretKey {
     }
 
     pub fn mask_value(&self) -> String {
-        if self.value.len() <= 8 {
-            "*".repeat(self.value.len())
+        let value: &str = &self.value;
+        if value.len() <= 8 {
+            "*".repeat(value.len())
         } else {
             // UTF-8 safe slicing: floor/ceil to char boundary to avoid panic
             // when the 4-byte boundary falls inside a multi-byte character.
-            let prefix_end = self.value.floor_char_boundary(4);
-            let suffix_start = self.value.ceil_char_boundary(self.value.len() - 4);
-            format!(
-                "{}***{}",
-                &self.value[..prefix_end],
-                &self.value[suffix_start..]
-            )
+            let prefix_end = value.floor_char_boundary(4);
+            let suffix_start = value.ceil_char_boundary(value.len() - 4);
+            format!("{}***{}", &value[..prefix_end], &value[suffix_start..])
         }
     }
 }
@@ -98,6 +115,11 @@ impl EnvironmentKeyStore {
     }
 }
 
+/// 环境变量 keystore（只读来源）。
+///
+/// 环境变量是进程的注入来源而非持久存储:通过 `set_var` 把密钥写回进程环境
+/// 会使其对 `/proc/<pid>/environ` 读者与全部子进程可见。因此本实现仅支持
+/// 读取(get/exists/list),`set`/`delete` 返回只读错误。
 #[async_trait]
 impl KeyStore for EnvironmentKeyStore {
     async fn get(
@@ -112,20 +134,18 @@ impl KeyStore for EnvironmentKeyStore {
         }
     }
 
-    async fn set(&self, key: &SecretKey) -> Result<(), VecboostError> {
-        let env_key = Self::env_key_name(&key.key_type, &key.name);
-        unsafe {
-            std::env::set_var(env_key, key.value.clone());
-        }
-        Ok(())
+    async fn set(&self, _key: &SecretKey) -> Result<(), VecboostError> {
+        Err(VecboostError::InternalError(
+            "EnvironmentKeyStore is read-only: injecting secrets back into the process              environment would expose them via /proc/<pid>/environ and child processes;              provide them through the parent environment instead"
+                .into(),
+        ))
     }
 
-    async fn delete(&self, key_type: &KeyType, name: &str) -> Result<(), VecboostError> {
-        let env_key = Self::env_key_name(key_type, name);
-        unsafe {
-            std::env::remove_var(env_key);
-        }
-        Ok(())
+    async fn delete(&self, _key_type: &KeyType, _name: &str) -> Result<(), VecboostError> {
+        Err(VecboostError::InternalError(
+            "EnvironmentKeyStore is read-only: environment variables are owned by the              parent process and cannot be revoked at runtime"
+                .into(),
+        ))
     }
 
     async fn list(&self, key_type: &KeyType) -> Result<Vec<String>, VecboostError> {
@@ -171,7 +191,7 @@ mod tests {
     fn test_secret_key_new() {
         let key = SecretKey::new(KeyType::JwtSecret, "name", "value");
         assert_eq!(key.name, "name");
-        assert_eq!(key.value, "value");
+        assert_eq!(key.value.as_str(), "value");
         assert_eq!(key.key_type, KeyType::JwtSecret);
     }
 
@@ -179,7 +199,7 @@ mod tests {
     fn test_secret_key_jwt_secret_constructor() {
         let key = SecretKey::jwt_secret("my_secret_value");
         assert_eq!(key.name, "jwt_secret");
-        assert_eq!(key.value, "my_secret_value");
+        assert_eq!(key.value.as_str(), "my_secret_value");
         assert_eq!(key.key_type, KeyType::JwtSecret);
     }
 
@@ -187,7 +207,7 @@ mod tests {
     fn test_secret_key_api_key_constructor() {
         let key = SecretKey::api_key("service_x", "abc123");
         assert_eq!(key.name, "service_x");
-        assert_eq!(key.value, "abc123");
+        assert_eq!(key.value.as_str(), "abc123");
         assert_eq!(key.key_type, KeyType::ApiKey);
     }
 
@@ -195,7 +215,7 @@ mod tests {
     fn test_secret_key_database_password_constructor() {
         let key = SecretKey::database_password("password123");
         assert_eq!(key.name, "database_password");
-        assert_eq!(key.value, "password123");
+        assert_eq!(key.value.as_str(), "password123");
         assert_eq!(key.key_type, KeyType::DatabasePassword);
     }
 
@@ -203,7 +223,7 @@ mod tests {
     fn test_secret_key_model_api_key_constructor() {
         let key = SecretKey::model_api_key("hf_key");
         assert_eq!(key.name, "model_api_key");
-        assert_eq!(key.value, "hf_key");
+        assert_eq!(key.value.as_str(), "hf_key");
         assert_eq!(key.key_type, KeyType::ModelApiKey);
     }
 
@@ -280,27 +300,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_environment_key_store_set_and_get() {
-        // Use unique name to avoid collision with other tests
+    async fn test_environment_key_store_is_read_only() {
+        // set/delete 返回只读错误,不再写回进程环境
         let store = EnvironmentKeyStore::new();
-        let key = SecretKey::api_key("test_set_get_unique", "my_value");
+        let key = SecretKey::api_key("test_readonly", "my_value");
+        assert!(store.set(&key).await.is_err());
+        assert!(store.delete(&KeyType::ApiKey, "test_readonly").await.is_err());
+    }
 
-        store.set(&key).await.unwrap();
-
+    #[tokio::test]
+    async fn test_environment_key_store_get_from_parent_env() {
+        // 读取路径保持可用:父进程注入的环境变量可读出
+        let var = "VECBOOST_API_KEY_TEST_PARENT_ENV";
+        // SAFETY: 测试专用变量,单测试内清理
+        unsafe { std::env::set_var(var, "my_value") };
+        let store = EnvironmentKeyStore::new();
         let retrieved = store
-            .get(&KeyType::ApiKey, "test_set_get_unique")
+            .get(&KeyType::ApiKey, "test_parent_env")
             .await
             .unwrap();
-        assert!(retrieved.is_some());
-        let retrieved = retrieved.unwrap();
-        assert_eq!(retrieved.value, "my_value");
-        assert_eq!(retrieved.name, "test_set_get_unique");
+        // SAFETY: 同上
+        unsafe { std::env::remove_var(var) };
+        let retrieved = retrieved.expect("env var should be readable");
+        assert_eq!(retrieved.value.as_str(), "my_value");
+        assert_eq!(retrieved.name, "test_parent_env");
+    }
 
-        // Cleanup
-        store
-            .delete(&KeyType::ApiKey, "test_set_get_unique")
-            .await
-            .unwrap();
+    /// Debug/Display 走掩码,完整密钥不会经日志泄漏
+    #[test]
+    fn secret_key_debug_display_are_masked() {
+        let key = SecretKey::api_key("svc", "super_secret_value_123");
+        let dbg = format!("{:?}", key);
+        let disp = format!("{}", key);
+        assert!(!dbg.contains("super_secret_value_123"));
+        assert!(!disp.contains("super_secret_value_123"));
+        assert!(disp.contains("***"));
     }
 
     #[tokio::test]
@@ -315,8 +349,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_environment_key_store_exists() {
+        let var = "VECBOOST_API_KEY_TEST_EXISTS_UNIQUE";
         let store = EnvironmentKeyStore::new();
-        let key = SecretKey::api_key("test_exists_unique", "value");
 
         assert!(
             !store
@@ -325,48 +359,18 @@ mod tests {
                 .unwrap()
         );
 
-        store.set(&key).await.unwrap();
-
+        // SAFETY: 测试专用变量,测试内清理
+        unsafe { std::env::set_var(var, "value") };
         assert!(
             store
                 .exists(&KeyType::ApiKey, "test_exists_unique")
                 .await
                 .unwrap()
         );
-
-        // Cleanup
-        store
-            .delete(&KeyType::ApiKey, "test_exists_unique")
-            .await
-            .unwrap();
+        unsafe { std::env::remove_var(var) };
         assert!(
             !store
                 .exists(&KeyType::ApiKey, "test_exists_unique")
-                .await
-                .unwrap()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_environment_key_store_delete() {
-        let store = EnvironmentKeyStore::new();
-        let key = SecretKey::api_key("test_delete_unique", "value");
-
-        store.set(&key).await.unwrap();
-        assert!(
-            store
-                .exists(&KeyType::ApiKey, "test_delete_unique")
-                .await
-                .unwrap()
-        );
-
-        store
-            .delete(&KeyType::ApiKey, "test_delete_unique")
-            .await
-            .unwrap();
-        assert!(
-            !store
-                .exists(&KeyType::ApiKey, "test_delete_unique")
                 .await
                 .unwrap()
         );
@@ -374,26 +378,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_environment_key_store_list() {
+        let var_a = "VECBOOST_API_KEY_LIST_TEST_A_UNIQUE";
+        let var_b = "VECBOOST_API_KEY_LIST_TEST_B_UNIQUE";
         let store = EnvironmentKeyStore::new();
 
-        // Set multiple keys
-        let key1 = SecretKey::api_key("list_test_a_unique", "v1");
-        let key2 = SecretKey::api_key("list_test_b_unique", "v2");
-        store.set(&key1).await.unwrap();
-        store.set(&key2).await.unwrap();
+        // SAFETY: 测试专用变量,测试内清理
+        unsafe { std::env::set_var(var_a, "v1") };
+        unsafe { std::env::set_var(var_b, "v2") };
 
         let keys = store.list(&KeyType::ApiKey).await.unwrap();
         assert!(keys.iter().any(|k| k.contains("LIST_TEST_A_UNIQUE")));
         assert!(keys.iter().any(|k| k.contains("LIST_TEST_B_UNIQUE")));
 
-        // Cleanup
-        store
-            .delete(&KeyType::ApiKey, "list_test_a_unique")
-            .await
-            .unwrap();
-        store
-            .delete(&KeyType::ApiKey, "list_test_b_unique")
-            .await
-            .unwrap();
+        unsafe { std::env::remove_var(var_a) };
+        unsafe { std::env::remove_var(var_b) };
     }
 }

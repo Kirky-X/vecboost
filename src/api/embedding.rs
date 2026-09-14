@@ -195,56 +195,58 @@ fn max_batch_size_from_kit(kit: &trait_kit::AsyncKit<trait_kit::AsyncReady>) -> 
 
 /// Build a `PathValidator` from `[server] grpc_allowed_roots` config.
 ///
-/// When `grpc_allowed_roots` is `Some`, those paths are used as the allowed
-/// roots. When `None`, falls back to the current working directory — but
-/// refuses sensitive directories (`/`, `/etc`, `/root`, `/var`, `/usr`, ...)
-/// to prevent accidental filesystem-wide exposure.
+/// 允许根必须显式配置。移除旧的 cwd 隐式回退 —— 该回退使 `/embed/file` 成为
+/// 以进程工作目录为根的任意文件读取原语(含 config/、源码、日志)。未配置时
+/// 返回 400,错误信息指明配置项。
 #[cfg(any(feature = "http", feature = "grpc"))]
 fn build_path_validator() -> Result<PathValidator, ApiError> {
+    const CONFIG_HINT: &str =
+        "[server] grpc_allowed_roots is required for /embed/file; add explicit allowed roots          to config and restart";
+
     let st = state().map_err(to_api_error)?;
     let server_cfg = st
         .kit
         .config::<crate::config::app::ServerConfig>()
         .unwrap_or_default();
 
-    if let Some(roots) = &server_cfg.grpc_allowed_roots
-        && !roots.is_empty()
-    {
-        let mut validator = PathValidator::new();
-        for root in roots {
-            validator = validator.add_allowed_root(root);
-        }
-        return Ok(validator);
-    }
-
-    // Fallback: current working directory with sensitive-dir guard.
-    let cwd = std::env::current_dir().map_err(|e| ApiError::Internal {
-        message: crate::i18n::tr_with_args(
-            "dir-get-cwd-failed",
-            crate::i18n::tr_args(&[("detail", &e.to_string())]),
-        ),
-        error_id: uuid_like_id(),
-        source: None,
-        context: None,
-    })?;
-
-    const SENSITIVE_DIRS: &[&str] = &[
-        "/", "/etc", "/root", "/var", "/usr", "/bin", "/sbin", "/boot", "/sys", "/proc",
-    ];
-    let cwd_str = cwd.to_string_lossy();
-    if SENSITIVE_DIRS.iter().any(|s| cwd_str.as_ref() == *s) {
-        return Err(ApiError::Internal {
-            message: crate::i18n::tr_with_args(
-                "sensitive-dir-refused",
-                crate::i18n::tr_args(&[("path", cwd_str.as_ref())]),
-            ),
-            error_id: uuid_like_id(),
-            source: None,
-            context: None,
+    let Some(roots) = &server_cfg.grpc_allowed_roots else {
+        return Err(ApiError::InvalidInput {
+            message: CONFIG_HINT.to_string(),
+            field: Some("path".to_string()),
+            value: None,
+        });
+    };
+    if roots.is_empty() {
+        return Err(ApiError::InvalidInput {
+            message: CONFIG_HINT.to_string(),
+            field: Some("path".to_string()),
+            value: None,
         });
     }
 
-    Ok(PathValidator::new().add_allowed_root(&cwd))
+    let mut validator = PathValidator::new();
+    for root in roots {
+        validator = validator.add_allowed_root(root);
+    }
+    Ok(validator)
+}
+
+/// `/embed/file` 单文件大小上限:10 MiB（防大文件 DoS 与内容外泄放大）。
+#[cfg(any(feature = "http", feature = "grpc"))]
+const FILE_EMBED_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// 校验 /embed/file 目标文件大小,超限返回错误文案(纯函数,可单测)。
+#[cfg(any(feature = "http", feature = "grpc"))]
+fn check_file_embed_size(len: u64) -> Result<(), String> {
+    if len > FILE_EMBED_MAX_BYTES {
+        Err(format!(
+            "File exceeds the {} MiB limit for /embed/file (got {} bytes)",
+            FILE_EMBED_MAX_BYTES / (1024 * 1024),
+            len
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -369,6 +371,17 @@ async fn embed_file_handler(req: FileEmbedRequest) -> Result<FileEmbedResponse, 
             value: Some(serde_json::Value::String(req.path.clone())),
         })?;
 
+    // 文件大小上限
+    if let Ok(meta) = std::fs::metadata(&validated_path)
+        && let Err(msg) = check_file_embed_size(meta.len())
+    {
+        return Err(ApiError::InvalidInput {
+            message: msg,
+            field: Some("path".to_string()),
+            value: Some(serde_json::Value::String(req.path.clone())),
+        });
+    }
+
     let st = state().map_err(to_api_error)?;
     let svc = st
         .kit
@@ -391,18 +404,88 @@ async fn embed_file_handler(req: FileEmbedRequest) -> Result<FileEmbedResponse, 
             embedding: Some(response.embedding),
             paragraphs: None,
         },
-        EmbeddingOutput::Paragraphs(paragraphs) => FileEmbedResponse {
-            mode,
-            stats,
-            embedding: None,
-            paragraphs: Some(paragraphs),
-        },
+        EmbeddingOutput::Paragraphs(paragraphs) => {
+            // text_preview 会回传文件原文,仅 admin 可见;auth 关闭时
+            // (启动闸门已限制回环绑定)保留本地开发可用性。
+            let may_preview = requester_may_preview(&st).await;
+            let paragraphs = if may_preview {
+                paragraphs
+            } else {
+                paragraphs
+                    .into_iter()
+                    .map(|mut p| {
+                        p.text_preview = String::new();
+                        p
+                    })
+                    .collect()
+            };
+            FileEmbedResponse {
+                mode,
+                stats,
+                embedding: None,
+                paragraphs: Some(paragraphs),
+            }
+        }
     })
 }
 
-#[cfg(any(feature = "http", feature = "grpc"))]
+/// 判定当前请求者是否可获取文件内容回传(text_preview):
+/// auth 未启用 → 允许(非回环绑定已被启动闸门封堵);启用时 → 仅 admin。
+#[cfg(all(any(feature = "http", feature = "grpc"), feature = "auth"))]
+async fn requester_may_preview(st: &crate::VecboostState) -> bool {
+    let auth_enabled = matches!(
+        st.kit.require::<crate::registry::AuthModule>(),
+        Ok(Some(_))
+    );
+    if !auth_enabled {
+        return true;
+    }
+    crate::auth::middleware::current_token_is_admin_pub().await
+}
+
+/// 无 auth feature:预览权限不生效(无认证体系)。
+#[cfg(all(any(feature = "http", feature = "grpc"), not(feature = "auth")))]
+async fn requester_may_preview(st: &crate::VecboostState) -> bool {
+    let _ = st;
+    true
+}
+
+/// 构造 `/model/switch` 本地路径白名单校验器。
+///
+/// 允许根优先取 `[server] grpc_allowed_roots`;未配置时回落到进程工作目录下的
+/// `models/`(项目默认模型目录)。显式提供 `model_path`/`tokenizer_path` 的
+/// 模型切换必须落在允许根内,防止认证用户加载任意本地目录(超大文件 OOM/
+/// 解析器攻击面/敏感路径探测)。
+#[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
+fn model_path_validator(configured_roots: Option<&[String]>) -> PathValidator {
+    let mut validator = PathValidator::new();
+    match configured_roots {
+        Some(roots) if !roots.is_empty() => {
+            validator = validator.add_allowed_roots(roots);
+        }
+        _ => {
+            validator = validator.add_allowed_root("models");
+        }
+    }
+    validator
+}
+
+#[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
 async fn model_switch_handler(req: ModelSwitchRequest) -> Result<ModelSwitchResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
+
+    // 显式本地路径必须落在白名单根内(HF repo-id 切换不受影响)
+    if req.model_path.is_some() || req.tokenizer_path.is_some() {
+        let server_cfg = st
+            .kit
+            .config::<crate::config::app::ServerConfig>()
+            .unwrap_or_default();
+        let validator = model_path_validator(server_cfg.grpc_allowed_roots.as_deref());
+        for path in req.model_path.iter().chain(req.tokenizer_path.iter()) {
+            validator.validate_directory(path).map_err(to_api_error)?;
+        }
+    }
+
     let svc = st
         .kit
         .require::<EmbeddingModule>()
@@ -729,8 +812,12 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
 
     let texts = req.input.to_vec();
     validate_text_length(&texts, max_text_length_from_kit(&st.kit)).map_err(to_api_error)?;
-    // 预先计算 total_chars，避免后续 move texts 到 batch_req 后再访问
+    // 预先计算 total_chars 和 token 计数，避免后续 move texts 到 batch_req 后再访问
     let total_chars: usize = texts.iter().map(|s| s.len()).sum();
+    // 使用 tokenizer 真实计数替代 bytes/4 估算
+    let real_token_count: usize = texts.iter()
+        .filter_map(|t| guard.count_tokens(t).ok())
+        .sum();
     let batch_req = BatchEmbedRequest {
         texts,
         mode: None,
@@ -776,7 +863,12 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
         })
         .collect();
 
-    let prompt_tokens = (total_chars / 4) as u32;
+    // 优先使用 tokenizer 真实计数,回退到 bytes/4
+    let prompt_tokens = if real_token_count > 0 {
+        real_token_count as u32
+    } else {
+        (total_chars / 4) as u32
+    };
 
     Ok(OpenAIEmbedResponse {
         object: "list".to_string(),
@@ -974,6 +1066,41 @@ pub async fn grpc_health_check() -> Result<serde_json::Value, ApiError> {
 
 #[cfg(test)]
 mod tests {
+    /// 文件大小上限(10 MiB 内通过,超限报错并给出限值)
+    #[test]
+    fn check_file_embed_size_enforces_limit() {
+        assert!(check_file_embed_size(0).is_ok());
+        assert!(check_file_embed_size(10 * 1024 * 1024).is_ok());
+        let err = check_file_embed_size(10 * 1024 * 1024 + 1).unwrap_err();
+        assert!(err.contains("10 MiB"));
+    }
+
+    /// model_path 白名单 —— 配置根内通过,越界拒绝,未配置回落 models/
+    #[test]
+    fn model_path_validator_enforces_allowed_roots() {
+        let base = std::env::temp_dir().join(format!("vb_model_paths_{}", std::process::id()));
+        let inside = base.join("my-model");
+        std::fs::create_dir_all(&inside).expect("create dirs");
+
+        let roots = vec![base.to_string_lossy().to_string()];
+        let validator = model_path_validator(Some(&roots));
+        assert!(validator.validate_directory(&inside).is_ok());
+
+        let outside = std::env::temp_dir().join(format!("vb_outside_{}", std::process::id()));
+        std::fs::create_dir_all(&outside).expect("create dirs");
+        assert!(validator.validate_directory(&outside).is_err());
+
+        // 未配置 grpc_allowed_roots → 默认根为 models/
+        let default_validator = model_path_validator(None);
+        let default_root = std::path::Path::new("models").canonicalize().ok();
+        if let Some(root) = default_root {
+            assert!(default_validator.validate_directory(&root).is_ok());
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
     use super::*;
 
     #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]

@@ -1455,10 +1455,10 @@ async fn run_server_lifecycle(
     // 再 abort。sdforge server API 无 shutdown 注入口,无法做 tonic 级
     // graceful drain(复制鉴权拦截器有安全漂移风险,实施期决策)。
     #[cfg(feature = "grpc")]
-    if config.server.grpc_enabled {
+    if _config.server.grpc_enabled {
         log::info!("gRPC drain window: waiting up to 30s for in-flight calls");
         let deadline = tokio::time::sleep(std::time::Duration::from_secs(
-            config.server.grpc_timeout_seconds.unwrap_or(5).min(30),
+            _config.server.grpc_timeout_seconds.unwrap_or(5).min(30),
         ));
         tokio::pin!(deadline);
         loop {

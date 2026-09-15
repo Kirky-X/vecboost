@@ -21,8 +21,69 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use limiteron::Governor;
 use limiteron::limiters::{Limiter, TokenBucketLimiter};
 use limiteron::matchers::RequestContext;
+use limiteron::middleware::RateLimitHeaderValues;
 use limiteron::storage::{MemoryBanStorage, MemoryStorage};
 use tokio::sync::Mutex;
+
+/// 限流决策详情：布尔结果 + 绑定维度快照。
+///
+/// `headers` 供 IETF RateLimit-* 响应头渲染：allowed 时为剩余额度最紧维度
+/// （全局 Governor 与各 per-key 桶中 remaining 最小者）的快照；rejected 时为
+/// 触发拒绝维度的快照（429 响应据此携带 Retry-After）。Governor 封禁
+/// （Banned）不携带快照——封禁事件由 Governor 审计流处理。
+#[derive(Debug, Clone)]
+pub struct RateLimitDecision {
+    pub allowed: bool,
+    pub headers: Option<RateLimitHeaderValues>,
+}
+
+impl RateLimitDecision {
+    fn allowed(headers: Option<RateLimitHeaderValues>) -> Self {
+        Self {
+            allowed: true,
+            headers,
+        }
+    }
+
+    fn rejected(headers: Option<RateLimitHeaderValues>) -> Self {
+        Self {
+            allowed: false,
+            headers,
+        }
+    }
+}
+
+/// 取剩余额度更紧（remaining 更小）的维度快照。
+fn tighter(
+    a: Option<RateLimitHeaderValues>,
+    b: Option<RateLimitHeaderValues>,
+) -> Option<RateLimitHeaderValues> {
+    match (a, b) {
+        (None, b) => b,
+        (a, None) => a,
+        (a, b) => Some(
+            if a.as_ref().unwrap().remaining <= b.as_ref().unwrap().remaining {
+                a.unwrap()
+            } else {
+                b.unwrap()
+            },
+        ),
+    }
+}
+
+/// per-key 维度检查结果（携带消费后的非消费快照，供响应头渲染）。
+enum KeyOutcome {
+    Allowed(Option<RateLimitHeaderValues>),
+    Rejected(Option<RateLimitHeaderValues>),
+}
+
+/// 当前 Unix 秒（时钟回拨等异常时回退 0，仅影响 RateLimit-Reset 展示）。
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 /// 多维度限流配置
 #[derive(Debug, Clone)]
@@ -99,58 +160,108 @@ impl LimiteronAdapter {
     /// 检查顺序：Governor 全局 → IP per-key → User per-key → ApiKey per-key。
     /// 任一拒绝即整体拒绝。
     pub async fn check_rate_limit(&self, context: &RequestContext) -> bool {
+        self.check_rate_limit_detailed(context).await.allowed
+    }
+
+    /// 检查请求是否被允许，并携带绑定维度的限流快照。
+    ///
+    /// 语义与 [`Self::check_rate_limit`] 完全一致；额外返回剩余额度最紧
+    /// 维度（allowed）或触发拒绝维度（rejected）的 `RateLimitHeaderValues`，
+    /// 供限流中间件注入 IETF RateLimit-* 响应头。
+    pub async fn check_rate_limit_detailed(&self, context: &RequestContext) -> RateLimitDecision {
         // 1. Governor 全局检查（含封禁、熔断）
-        match self.governor.check(context).await {
-            Ok(limiteron::error::Decision::Allowed(_)) => {}
-            _ => return false,
-        }
+        let global_headers = match self.governor.check(context).await {
+            // limit==0 表示全局规则未启用（build_global_flow_control_config
+            // 对 0 配额不建规则），不参与绑定维度比较
+            Ok(limiteron::error::Decision::Allowed(meta)) if meta.limit > 0 => {
+                Some(RateLimitHeaderValues {
+                    limit: meta.limit,
+                    remaining: meta.remaining,
+                    reset_at: meta.reset_at,
+                    retry_after: None,
+                    policy: meta.policy,
+                })
+            }
+            Ok(limiteron::error::Decision::Allowed(_)) => None,
+            Ok(limiteron::error::Decision::Rejected(meta)) => {
+                return RateLimitDecision::rejected(Some(RateLimitHeaderValues {
+                    limit: meta.limit,
+                    remaining: 0,
+                    reset_at: meta.reset_at,
+                    retry_after: Some(meta.retry_after),
+                    policy: "global".to_string(),
+                }));
+            }
+            // Banned / 内部错误：无头数据（封禁事件走 Governor 审计流）
+            _ => return RateLimitDecision::rejected(None),
+        };
 
         // 2. per-key 维度检查
+        let mut binding = global_headers;
+
         if self.settings.ip_requests_per_minute > 0
             && let Some(ip) = &context.client_ip
-            && !self
-                .check_per_key(&self.ip_buckets, ip, self.settings.ip_requests_per_minute)
-                .await
         {
-            return false;
+            match self
+                .check_per_key_detailed(
+                    &self.ip_buckets,
+                    ip,
+                    self.settings.ip_requests_per_minute,
+                    "ip",
+                )
+                .await
+            {
+                KeyOutcome::Allowed(headers) => binding = tighter(binding, headers),
+                KeyOutcome::Rejected(headers) => return RateLimitDecision::rejected(headers),
+            }
         }
 
         if self.settings.user_requests_per_minute > 0
             && let Some(user_id) = &context.user_id
-            && !self
-                .check_per_key(
+        {
+            match self
+                .check_per_key_detailed(
                     &self.user_buckets,
                     user_id,
                     self.settings.user_requests_per_minute,
+                    "user",
                 )
                 .await
-        {
-            return false;
+            {
+                KeyOutcome::Allowed(headers) => binding = tighter(binding, headers),
+                KeyOutcome::Rejected(headers) => return RateLimitDecision::rejected(headers),
+            }
         }
 
         if self.settings.api_key_requests_per_minute > 0
             && let Some(api_key) = &context.api_key
-            && !self
-                .check_per_key(
+        {
+            match self
+                .check_per_key_detailed(
                     &self.api_key_buckets,
                     api_key,
                     self.settings.api_key_requests_per_minute,
+                    "api-key",
                 )
                 .await
-        {
-            return false;
+            {
+                KeyOutcome::Allowed(headers) => binding = tighter(binding, headers),
+                KeyOutcome::Rejected(headers) => return RateLimitDecision::rejected(headers),
+            }
         }
 
-        true
+        RateLimitDecision::allowed(binding)
     }
 
-    /// per-key 令牌桶检查：获取或创建桶，消费 1 个令牌。
-    async fn check_per_key(
+    /// per-key 令牌桶检查：获取或创建桶，消费 1 个令牌，并读取消费后的
+    /// 非消费快照（`remaining()`）供响应头渲染。
+    async fn check_per_key_detailed(
         &self,
         buckets: &Mutex<HashMap<String, Arc<TokenBucketLimiter>>>,
         key: &str,
         rpm: u64,
-    ) -> bool {
+        dimension: &str,
+    ) -> KeyOutcome {
         let bucket = {
             let mut map = buckets.lock().await;
             map.entry(key.to_string())
@@ -160,7 +271,32 @@ impl LimiteronAdapter {
                 })
                 .clone()
         };
-        bucket.allow(1).await.unwrap_or(false)
+        let allowed = bucket.allow(1).await.unwrap_or(false);
+        let headers = bucket.remaining().await.ok().map(|snapshot| {
+            let policy = format!("{dimension}-token-bucket");
+            if allowed {
+                RateLimitHeaderValues {
+                    limit: snapshot.limit,
+                    remaining: snapshot.remaining,
+                    reset_at: unix_now() + snapshot.reset_secs,
+                    retry_after: None,
+                    policy,
+                }
+            } else {
+                RateLimitHeaderValues {
+                    limit: snapshot.limit,
+                    remaining: snapshot.remaining,
+                    reset_at: unix_now() + snapshot.reset_secs,
+                    retry_after: Some(snapshot.reset_secs.max(1)),
+                    policy,
+                }
+            }
+        });
+        if allowed {
+            KeyOutcome::Allowed(headers)
+        } else {
+            KeyOutcome::Rejected(headers)
+        }
     }
 
     /// 异步健康检查：委托 Governor + 更新缓存。
@@ -185,6 +321,10 @@ impl LimiteronAdapter {
 ///
 /// Governor 负责全局限流（系统总吞吐量管理），per-key 维度隔离由
 /// `TokenBucketLimiter` 直接处理（Governor 的 DecisionChain 不支持 per-key）。
+///
+/// `global_requests_per_minute == 0` 语义为"不设全局上限"：但 Governor 要求
+/// 至少一条规则（空规则集构建报 ConfigError），故以高容量哨兵规则代替
+/// （单实例吞吐远低于 100 万/分钟，等效于不限）。
 fn build_global_flow_control_config(
     settings: &RateLimitSettings,
 ) -> limiteron::config::FlowControlConfig {
@@ -193,26 +333,32 @@ fn build_global_flow_control_config(
         Matcher, MetricsBackend, Rule, StorageType, TrustedProxyConfig,
     };
 
-    let rules = if settings.global_requests_per_minute > 0 {
-        vec![Rule {
-            id: "global".to_string(),
-            name: "Global rate limit".to_string(),
-            priority: 100,
-            matchers: vec![Matcher::User {
-                user_ids: vec!["*".to_string()],
-            }],
-            limiters: vec![LimiterConfig::TokenBucket {
-                capacity: settings.global_requests_per_minute,
-                refill_rate: (settings.global_requests_per_minute / 60).max(1),
-            }],
-            action: ActionConfig {
-                on_exceed: Action::Reject,
-                ban: None,
-            },
-        }]
+    // (容量, 补充速率)：0 配额映射为哨兵高容量规则
+    let (capacity, refill_rate) = if settings.global_requests_per_minute > 0 {
+        (
+            settings.global_requests_per_minute,
+            (settings.global_requests_per_minute / 60).max(1),
+        )
     } else {
-        vec![]
+        (1_000_000, 16_666)
     };
+
+    let rules = vec![Rule {
+        id: "global".to_string(),
+        name: "Global rate limit".to_string(),
+        priority: 100,
+        matchers: vec![Matcher::User {
+            user_ids: vec!["*".to_string()],
+        }],
+        limiters: vec![LimiterConfig::TokenBucket {
+            capacity,
+            refill_rate,
+        }],
+        action: ActionConfig {
+            on_exceed: Action::Reject,
+            ban: None,
+        },
+    }];
 
     FlowControlConfig {
         version: "1.0".to_string(),
@@ -365,5 +511,71 @@ mod tests {
             stats.total_requests >= 2,
             "stats should show at least 2 requests"
         );
+    }
+
+    // ==================== RateLimit-* 响应头详情测试 ====================
+
+    #[tokio::test]
+    async fn test_detailed_decision_carries_binding_snapshot() {
+        // 只启用 IP 维度，绑定维度必为 ip-token-bucket
+        let settings = RateLimitSettings {
+            global_requests_per_minute: 0,
+            ip_requests_per_minute: 3,
+            user_requests_per_minute: 0,
+            api_key_requests_per_minute: 0,
+        };
+        let adapter = LimiteronAdapter::new(settings).await;
+        let ctx = ctx_ip("9.9.9.9");
+
+        let decision = adapter.check_rate_limit_detailed(&ctx).await;
+        assert!(decision.allowed);
+        let headers = decision.headers.expect("allowed 决策应携带绑定维度快照");
+        assert_eq!(headers.limit, 3, "limit 应为 IP 维度配额");
+        assert_eq!(headers.remaining, 2, "消费 1 个令牌后剩余 2");
+        assert!(headers.retry_after.is_none(), "放行不携带 Retry-After");
+        assert_eq!(headers.policy, "ip-token-bucket");
+
+        // 用尽配额后：拒绝决策携带 Retry-After
+        assert!(adapter.check_rate_limit_detailed(&ctx).await.allowed);
+        assert!(adapter.check_rate_limit_detailed(&ctx).await.allowed);
+        let rejected = adapter.check_rate_limit_detailed(&ctx).await;
+        assert!(!rejected.allowed);
+        let headers = rejected.headers.expect("拒绝决策应携带拒绝维度快照");
+        assert!(headers.retry_after.is_some(), "拒绝决策应携带 Retry-After");
+        assert_eq!(headers.policy, "ip-token-bucket");
+    }
+
+    #[tokio::test]
+    async fn test_detailed_decision_picks_tightest_dimension() {
+        // global 1000 很宽松、ip 3 很紧：绑定维度应取 ip（remaining 更小）
+        let adapter = LimiteronAdapter::new(small_settings()).await;
+        let ctx = ctx_ip("8.8.8.8");
+        let decision = adapter.check_rate_limit_detailed(&ctx).await;
+        assert!(decision.allowed);
+        let headers = decision.headers.expect("应携带绑定维度快照");
+        assert_eq!(
+            headers.policy, "ip-token-bucket",
+            "绑定维度应为剩余额度最紧的 per-key 桶"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bool_wrapper_matches_detailed_decision() {
+        // 两个入口共享桶状态，需在各自独立的适配器上跑相同序列
+        let adapter_bool = LimiteronAdapter::new(small_settings()).await;
+        let adapter_detailed = LimiteronAdapter::new(small_settings()).await;
+        let ctx = ctx_ip("7.7.7.7");
+        let mut bool_results = Vec::new();
+        let mut detailed_results = Vec::new();
+        for _ in 0..4 {
+            bool_results.push(adapter_bool.check_rate_limit(&ctx).await);
+            detailed_results.push(
+                adapter_detailed
+                    .check_rate_limit_detailed(&ctx)
+                    .await
+                    .allowed,
+            );
+        }
+        assert_eq!(bool_results, detailed_results);
     }
 }

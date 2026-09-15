@@ -108,6 +108,10 @@ pub struct AuthEnabled(pub bool);
 #[derive(Clone, Copy, Debug)]
 pub struct RateLimitEnabled(pub bool);
 
+/// 限流响应头注入开关（IETF RateLimit-*；newtype 包装以避免 bool TypeId 冲突）
+#[derive(Clone, Copy, Debug)]
+pub struct RateLimitHeadersEnabled(pub bool);
+
 /// 管道启用配置（newtype 包装以避免 bool TypeId 冲突）
 #[derive(Clone, Copy, Debug)]
 pub struct PipelineEnabled(pub bool);

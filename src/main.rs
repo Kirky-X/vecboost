@@ -1015,11 +1015,38 @@ async fn app_main() -> anyhow::Result<()> {
             logger_builder.console_stderr_levels(&["trace", "debug", "info", "warn", "error"]);
     }
     if !config.logging.file_path.is_empty() {
-        logger_builder = logger_builder
-            .file(&config.logging.file_path)
-            .file_max_size(format!("{}MB", config.logging.rotation_size_mb))
-            .file_keep_files(config.logging.max_files)
-            .file_compress(true);
+        // 文件 sink 手工构建：以便按需以 SamplingSink 包装（[logging.sampling]）。
+        // FileSinkConfig 字段与旧 builder.file/file_max_size/file_keep_files/
+        // file_compress 链式调用一一对应。
+        use inklog::FileSinkConfig;
+        use inklog::sink::file::FileSink;
+        use inklog::sink::sampling::{Sampler, SamplingSink};
+
+        let file_config = FileSinkConfig {
+            enabled: true,
+            path: config.logging.file_path.clone().into(),
+            max_size: format!("{}MB", config.logging.rotation_size_mb),
+            keep_files: config.logging.max_files,
+            compress: true,
+            ..Default::default()
+        };
+        let file_sink: Arc<dyn inklog::sink::AsyncSink> = if config.logging.sampling.enabled {
+            let sampler = Sampler::new(
+                &config.logging.sampling.min_level,
+                config.logging.sampling.sample_every_n,
+                config.logging.sampling.keyword_whitelist.clone(),
+            )
+            .map_err(|e| anyhow::anyhow!("Invalid [logging.sampling] config: {}", e))?;
+            let inner = FileSink::new(file_config)
+                .map_err(|e| anyhow::anyhow!("File log sink build failed: {}", e))?;
+            Arc::new(SamplingSink::new(Arc::new(inner), Arc::new(sampler)))
+        } else {
+            Arc::new(
+                FileSink::new(file_config)
+                    .map_err(|e| anyhow::anyhow!("File log sink build failed: {}", e))?,
+            )
+        };
+        logger_builder = logger_builder.add_sink(file_sink);
     }
     let logger_manager = Arc::new(logger_builder.build().await.map_err(|e| {
         anyhow::anyhow!(
@@ -1304,21 +1331,25 @@ async fn app_main() -> anyhow::Result<()> {
             axum::http::StatusCode::GATEWAY_TIMEOUT,
             std::time::Duration::from_secs(config.server.request_timeout_seconds.max(1)),
         ));
-        // 每个响应注入 x-request-id(与日志关联)
+        // 请求上下文（sdforge context 吸收）：入口解析/生成 X-Request-Id 与
+        // X-Trace-Id（兼容 W3C traceparent），task-local 贯穿请求链，响应回显
+        // 双头；替代原先手写的 x-request-id 响应头闭包。此处包一层观测：
+        // debug 级请求生命周期日志携带双 id + 耗时，实现日志按请求关联。
         let app = app.layer(axum::middleware::from_fn(
             |req: axum::extract::Request, next: axum::middleware::Next| async move {
-                let mut resp = next.run(req).await;
-                if !resp.headers().contains_key("x-request-id")
-                    && let Ok(id) =
-                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                {
-                    resp.headers_mut().insert(
-                        "x-request-id",
-                        axum::http::HeaderValue::from_str(&format!("req-{:x}", id.as_nanos()))
-                            .unwrap_or(axum::http::HeaderValue::from_static("req-unknown")),
-                    );
-                }
-                Ok::<_, std::convert::Infallible>(resp)
+                let started = std::time::Instant::now();
+                let method = req.method().clone();
+                let path = req.uri().path().to_string();
+                let resp = sdforge::context::context_middleware(req, next).await;
+                let (request_id, trace_id) = sdforge::context::current()
+                    .map(|c| (c.request_id().to_string(), c.trace_id().to_string()))
+                    .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
+                log::debug!(
+                    "http_request method={method} path={path} status={} duration_ms={} request_id={request_id} trace_id={trace_id}",
+                    resp.status().as_u16(),
+                    started.elapsed().as_millis()
+                );
+                resp
             },
         ));
         let app = app
@@ -1762,7 +1793,14 @@ async fn build_module_registry(
     kit.set_config(vecboost::registry::RateLimitEnabled(
         config.rate_limit.enabled,
     ));
+    kit.set_config(vecboost::registry::RateLimitHeadersEnabled(
+        config.rate_limit.headers_enabled,
+    ));
     kit.set_config(config.embedding.clone());
+    // ServerConfig 注入：/embed/file 的 PathValidator 与 model_path_validator
+    // 经 kit.config::<ServerConfig>() 读取 grpc_allowed_roots；缺失时前者
+    // 422(CONFIG_HINT)、后者回落相对根 "models"(拒绝绝对路径 → 500)
+    kit.set_config(config.server.clone());
     // Inject AuthConfig for `trusted_proxies` (XFF trust boundary) access
     // via `kit.config::<AuthConfig>()` in `auth_middleware` (see lib.rs `FromRef` impl).
     kit.set_config(config.auth.clone());
@@ -1868,7 +1906,8 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // x-request-id 中间件注入响应头
+    // 请求上下文中间件（sdforge context 吸收）：回显 X-Request-Id/X-Trace-Id，
+    // 且入站 X-Request-Id 优先（客户端关联）而非覆盖
     #[cfg(feature = "http")]
     #[tokio::test]
     async fn request_id_header_injected() {
@@ -1880,16 +1919,7 @@ mod tests {
         let app = axum::Router::new()
             .route("/ping", get(ping))
             .layer(axum::middleware::from_fn(
-                |req: axum::extract::Request, next: axum::middleware::Next| async move {
-                    let mut resp = next.run(req).await;
-                    if !resp.headers().contains_key("x-request-id") {
-                        resp.headers_mut().insert(
-                            "x-request-id",
-                            axum::http::HeaderValue::from_static("req-test"),
-                        );
-                    }
-                    Ok::<_, std::convert::Infallible>(resp)
-                },
+                sdforge::context::context_middleware,
             ));
         let resp = app
             .oneshot(
@@ -1900,7 +1930,41 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.headers().get("x-request-id").unwrap(), "req-test");
+        let request_id = resp
+            .headers()
+            .get("x-request-id")
+            .expect("响应应携带 X-Request-Id")
+            .to_str()
+            .unwrap();
+        assert!(
+            request_id.starts_with("req-"),
+            "生成 id 应带 req- 前缀: {request_id}"
+        );
+        assert!(
+            resp.headers().get("x-trace-id").is_some(),
+            "响应应携带 X-Trace-Id"
+        );
+
+        // 入站 X-Request-Id 应被保留（客户端关联语义）
+        let app2 = axum::Router::new()
+            .route("/ping", get(ping))
+            .layer(axum::middleware::from_fn(
+                sdforge::context::context_middleware,
+            ));
+        let resp2 = app2
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/ping")
+                    .header("x-request-id", "my-client-id-42")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp2.headers().get("x-request-id").unwrap(),
+            "my-client-id-42"
+        );
     }
 
     // 默认构建(无 cuda/metal)下 use_gpu=true 回退 CPU

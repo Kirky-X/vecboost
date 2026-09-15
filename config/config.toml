@@ -199,6 +199,10 @@ window_secs = 60
 # 支持单个 IP 和 CIDR 表示法，例如: "127.0.0.1", "192.168.1.0/24"
 ip_whitelist = ["127.0.0.1", "::1"]
 
+# 注入 IETF RateLimit-* 响应头 (RateLimit-Limit/Remaining/Reset/Policy,
+# 429 响应额外携带 Retry-After)，便于客户端按标准头做退避
+headers_enabled = false
+
 # ============ 数据库配置 (dbnexus, 需要 db feature) ============
 [database]
 # 数据库连接 URL
@@ -229,6 +233,17 @@ rotation_size_mb = 100
 
 # 保留的日志文件数量
 max_files = 10
+
+# 文件日志采样（高频日志降盘压；只作用于文件 sink）
+[logging.sampling]
+# 启用采样
+enabled = false
+# 级别阈值：≥ 该级别的记录直接放行 (trace/debug/info/warn/error/fatal)
+min_level = "info"
+# 低于阈值的记录 N 取 1 (1 表示全放行)
+sample_every_n = 10
+# 豁免关键词（大小写不敏感子串匹配，命中即放行）
+keyword_whitelist = []
 
 # ============ 流控配置 (limiteron, 需要 limiteron feature) ============
 # ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。

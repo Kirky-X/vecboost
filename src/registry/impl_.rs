@@ -47,6 +47,7 @@ use crate::{
 
 impl ModuleMeta for EmbeddingModule {
     const NAME: &'static str = "embedding";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -92,6 +93,7 @@ impl AsyncHealthCheck for EmbeddingModule {
 
 impl ModuleMeta for RerankModule {
     const NAME: &'static str = "rerank";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -133,6 +135,7 @@ impl AsyncHealthCheck for RerankModule {
 #[cfg(feature = "auth")]
 impl ModuleMeta for AuthModule {
     const NAME: &'static str = "auth";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -157,6 +160,7 @@ impl AsyncAutoBuilder for AuthModule {
 
 impl ModuleMeta for RateLimitModule {
     const NAME: &'static str = "rate_limit";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -216,6 +220,7 @@ impl AsyncLifecycle for RateLimitModule {
 
 impl ModuleMeta for CacheModule {
     const NAME: &'static str = "cache";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -260,6 +265,7 @@ impl AsyncHealthCheck for CacheModule {
 
 impl ModuleMeta for DbModule {
     const NAME: &'static str = "db";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -283,6 +289,7 @@ impl AsyncAutoBuilder for DbModule {
 
 impl ModuleMeta for AuditModule {
     const NAME: &'static str = "audit";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -334,6 +341,7 @@ impl AsyncLifecycle for AuditModule {
 #[cfg(feature = "auth")]
 impl ModuleMeta for CsrfConfigModule {
     const NAME: &'static str = "csrf_config";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -358,6 +366,7 @@ impl AsyncAutoBuilder for CsrfConfigModule {
 
 impl ModuleMeta for MetricsCollectorModule {
     const NAME: &'static str = "metrics_collector";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -382,6 +391,7 @@ impl AsyncAutoBuilder for MetricsCollectorModule {
 #[cfg(feature = "http")]
 impl ModuleMeta for PrometheusCollectorModule {
     const NAME: &'static str = "prometheus_collector";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -406,6 +416,7 @@ impl AsyncAutoBuilder for PrometheusCollectorModule {
 
 impl ModuleMeta for IpWhitelistModule {
     const NAME: &'static str = "ip_whitelist";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -429,6 +440,7 @@ impl AsyncAutoBuilder for IpWhitelistModule {
 
 impl ModuleMeta for PipelineQueueModule {
     const NAME: &'static str = "pipeline_queue";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -452,6 +464,7 @@ impl AsyncAutoBuilder for PipelineQueueModule {
 
 impl ModuleMeta for ResponseChannelModule {
     const NAME: &'static str = "response_channel";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -475,6 +488,7 @@ impl AsyncAutoBuilder for ResponseChannelModule {
 
 impl ModuleMeta for PriorityCalculatorModule {
     const NAME: &'static str = "priority_calculator";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -498,6 +512,7 @@ impl AsyncAutoBuilder for PriorityCalculatorModule {
 
 impl ModuleMeta for WorkerManagerModule {
     const NAME: &'static str = "worker_manager";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -521,6 +536,7 @@ impl AsyncAutoBuilder for WorkerManagerModule {
 
 impl ModuleMeta for ConfigWatcherModule {
     const NAME: &'static str = "config_watcher";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]

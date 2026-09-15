@@ -33,6 +33,9 @@ use vecboost::sdforge::grpc::sdforge_v1::sd_forge_service_client::SdForgeService
 
 const M1_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/models/BAAI-bge-small-en-v1.5");
 const M2_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/models/all-MiniLM-L6-v2");
+// 模型热切换(model_path 落在 models/ 下)要求 models 目录在 grpc_allowed_roots
+// 白名单内——显式配置会整体替换默认根"models"(安全契约,见 model_path_validator)
+const MODELS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/models");
 const HTTP_TIMEOUT_SECS: u64 = 120;
 const JWT_SECRET: &str = "grpc-e2e-jwt-secret-0123456789ABCDEF";
 const ADMIN_PASS: &str = "GrpcE2e#2026Pass";
@@ -143,13 +146,14 @@ fn config_text(http_port: u16, grpc_port: u16, dir: &std::path::Path, opts: &Ser
         "[server]\nhost = \"127.0.0.1\"\nport = {http_port}\n\
          grpc_enabled = true\ngrpc_port = {grpc_port}\n\
          grpc_require_auth = {grpc_require_auth}\n\
-         grpc_allowed_roots = [\"{}\"]\n\n\
+         grpc_allowed_roots = [\"{}\", \"{}\"]\n\n\
          [model]\nmodel_path = \"{M1_PATH}\"\nexpected_dimension = 384\n\n\
          [embedding]\ncache_enabled = true\n\n\
          [rate_limit]\nenabled = false\n\n\
          [auth]\nenabled = {}\n{}\n\
          [database]\nurl = \"sqlite::memory:\"\n",
         dir.display(),
+        MODELS_DIR,
         opts.auth,
         if opts.auth {
             "default_admin_username = \"admin\"".to_string()

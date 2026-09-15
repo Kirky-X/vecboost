@@ -351,7 +351,15 @@ pub async fn auth_rate_limit_middleware(
         method: request.method().to_string(),
         ..Default::default()
     };
-    let allowed = rate_limiter.check_rate_limit(&context).await;
+    let decision = rate_limiter.check_rate_limit_detailed(&context).await;
+    let allowed = decision.allowed;
+
+    // IETF RateLimit-* 响应头注入开关（kit 配置，缺省关闭保持行为兼容）
+    let headers_enabled = state
+        .kit
+        .config::<crate::registry::RateLimitHeadersEnabled>()
+        .map(|c| c.0)
+        .unwrap_or(false);
 
     // 记录限流决策指标
     if let Ok(prom_collector) = state
@@ -376,10 +384,26 @@ pub async fn auth_rate_limit_middleware(
             logger.log_rate_limit_exceeded(None, Some(ip.clone()));
         }
 
+        // 429 响应携带 RateLimit-*/Retry-After（开启 headers 时），便于
+        // 客户端按标准头做退避；未开启时保持既有裸状态码行为
+        if headers_enabled && let Some(values) = decision.headers {
+            use axum::response::IntoResponse;
+            let response = (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
+            return Ok(limiteron::middleware::inject_rate_limit_headers(
+                response, &values,
+            ));
+        }
+
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
 
-    Ok(next.run(request).await)
+    let response = next.run(request).await;
+    if headers_enabled && let Some(values) = decision.headers {
+        return Ok(limiteron::middleware::inject_rate_limit_headers(
+            response, &values,
+        ));
+    }
+    Ok(response)
 }
 
 #[cfg(test)]

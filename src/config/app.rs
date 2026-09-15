@@ -156,6 +156,8 @@ pub struct LoggingConfig {
     pub rotation_size_mb: u64,
     /// 保留的日志文件数量
     pub max_files: u32,
+    /// 文件日志采样配置（低于阈值的记录按 N 取 1 写入文件）
+    pub sampling: LogSamplingConfig,
 }
 
 impl Default for LoggingConfig {
@@ -166,6 +168,35 @@ impl Default for LoggingConfig {
             file_path: "logs/vecboost.log".to_string(),
             rotation_size_mb: 100,
             max_files: 10,
+            sampling: LogSamplingConfig::default(),
+        }
+    }
+}
+
+/// 文件日志采样配置（inklog Sampler/SamplingSink）。
+///
+/// 采样只作用于文件 sink：≥ `min_level` 的记录直接放行，低于阈值的记录按
+/// `sample_every_n` 取 1 写入；命中 `keyword_whitelist` 的记录豁免采样。
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct LogSamplingConfig {
+    /// 启用文件日志采样
+    pub enabled: bool,
+    /// 级别阈值（trace/debug/info/warn/error/fatal）
+    pub min_level: String,
+    /// 低于阈值的记录 N 取 1（1 表示全放行）
+    pub sample_every_n: u64,
+    /// 豁免关键词（大小写不敏感子串匹配 message/target）
+    pub keyword_whitelist: Vec<String>,
+}
+
+impl Default for LogSamplingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_level: "info".to_string(),
+            sample_every_n: 1,
+            keyword_whitelist: vec![],
         }
     }
 }
@@ -220,6 +251,9 @@ pub struct RateLimitConfig {
     pub window_secs: u64,
     /// IP whitelist (these IPs bypass rate limiting)
     pub ip_whitelist: Vec<String>,
+    /// Inject IETF RateLimit-* headers (limit/remaining/reset/policy) into
+    /// HTTP responses; rejected requests additionally carry Retry-After
+    pub headers_enabled: bool,
 }
 
 impl Default for RateLimitConfig {
@@ -232,6 +266,7 @@ impl Default for RateLimitConfig {
             api_key_requests_per_minute: DEFAULT_API_KEY_RPM,
             window_secs: DEFAULT_WINDOW_SECS,
             ip_whitelist: vec![],
+            headers_enabled: false,
         }
     }
 }
@@ -785,6 +820,43 @@ mod tests {
         assert_eq!(config.api_key_requests_per_minute, 500);
         assert_eq!(config.window_secs, 60);
         assert!(config.ip_whitelist.is_empty());
+        assert!(!config.headers_enabled, "限流响应头注入缺省关闭");
+    }
+
+    #[test]
+    fn test_rate_limit_headers_enabled_parses_from_toml() {
+        let parsed: RateLimitConfig =
+            toml::from_str("headers_enabled = true\nip_whitelist = []").expect("parse");
+        assert!(parsed.headers_enabled);
+        // 缺省段反序列化仍成立（serde(default)）
+        let bare: RateLimitConfig = toml::from_str("enabled = true").expect("parse");
+        assert!(!bare.headers_enabled);
+    }
+
+    #[test]
+    fn test_logging_sampling_config_parses_from_toml() {
+        let parsed: LoggingConfig = toml::from_str(
+            r#"
+            level = "debug"
+            [sampling]
+            enabled = true
+            min_level = "warn"
+            sample_every_n = 10
+            keyword_whitelist = ["health"]
+            "#,
+        )
+        .expect("parse");
+        assert!(parsed.sampling.enabled);
+        assert_eq!(parsed.sampling.min_level, "warn");
+        assert_eq!(parsed.sampling.sample_every_n, 10);
+        assert_eq!(
+            parsed.sampling.keyword_whitelist,
+            vec!["health".to_string()]
+        );
+        // 缺省：关闭
+        let bare = LoggingConfig::default();
+        assert!(!bare.sampling.enabled);
+        assert_eq!(bare.sampling.sample_every_n, 1);
     }
 
     #[test]

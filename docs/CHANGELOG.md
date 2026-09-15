@@ -31,7 +31,6 @@
 - **硬件感知规划**:`[device] auto_plan = true` 启动探测 RAM/物理核/GPU/模型生成保守计划(显式配置优先);`scripts/autotune.py` 坐标下降实测调优(absorb-colibri-optimizations)
 - **只读诊断**:`vecboost doctor`——config/tokenizer/缓存持久层/线程/GPU/模型完整性(safetensors 头、`__metadata__`、gguf 魔数、hidden_size 配对;按内容角色匹配),有 FAIL 退出码 1(absorb-colibri-optimizations)
 - **启动预热**:`--warmup N` 合成文本预热;`scripts/warmup_corpus.py` 暖语料回放(去重保序)(absorb-colibri-optimizations)
-- **实验协议**:`docs/experiments/README.md`(单变量/ABBA/≥3 次中位数/字节等同/吞吐不搬移)+ `scripts/validate_manifest.py`(absorb-colibri-optimizations)
 - **新增指标**:`vecboost_batch_size`、`vecboost_batch_wait_seconds`、`vecboost_inbatch_dedup_ratio`、`vecboost_stage_seconds{stage=tokenize|inference|pool}`(absorb-colibri-optimizations)
 
 ### 变更(破坏性,升级必读)

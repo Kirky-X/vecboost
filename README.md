@@ -252,9 +252,7 @@ VecBoost 由 `sdforge` 从 `src/api/embedding.rs` 单一源生成四种协议接
 | [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md) | 测试栈职责划分与场景穷举矩阵 |
 | [📋 更新日志](docs/CHANGELOG.md) | 每个版本的变更记录 |
 | [🤝 贡献指南](docs/CONTRIBUTING.md) | 如何参与项目开发 |
-| [🧭 性能调优注册表](docs/tuning.md) | 指向 PERFORMANCE.md 的指针（内容已并入） |
 | [📈 基准数据归档](docs/benchmarks/) | 历史基准数据（相似度/批调度/语义缓存/GPU 管线） |
-| [🔬 实验协议](docs/experiments/README.md) | A/B 实证纪律与 manifest 校验 |
 | [🌍 I18N 缺失审计](docs/I18N_MISSING_AUDIT.md) | 国际化翻译键审计记录 |
 
 ---

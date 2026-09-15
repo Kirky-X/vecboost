@@ -252,9 +252,7 @@ Per-key options and defaults for every config section (server / model / embeddin
 | [🧪 Test Scenarios](docs/TEST_SCENARIOS.md) | Test-stack responsibilities and the scenario matrix |
 | [📋 Changelog](docs/CHANGELOG.md) | Release-by-release change log |
 | [🤝 Contributing](docs/CONTRIBUTING.md) | How to contribute |
-| [🧭 Tuning registry pointer](docs/tuning.md) | Pointer to PERFORMANCE.md (content merged) |
 | [📈 Benchmark archive](docs/benchmarks/) | Historical benchmark data (similarity / batch scheduling / semantic cache / GPU pipeline) |
-| [🔬 Experiment protocol](docs/experiments/README.md) | A/B empirical discipline and manifest validation |
 | [🌍 I18N missing-key audit](docs/I18N_MISSING_AUDIT.md) | Internationalization audit record |
 
 ---

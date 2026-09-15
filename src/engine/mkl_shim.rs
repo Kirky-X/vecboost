@@ -5,7 +5,7 @@
 
 //! `hgemm_` 符号垫片（feature `mkl`，T035 收敛修复）。
 //!
-//! 上游版本错配（证据链见 docs/tuning.md）：candle-core 0.11 的 mkl 后端调用
+//! 上游版本错配（证据链见 docs/PERFORMANCE.md）：candle-core 0.11 的 mkl 后端调用
 //! fp16 GEMM `hgemm_`，而 intel-mkl-src 0.8.1 在 Linux 静态路径锁死 MKL 2020.1
 //! （ghcr.io/rust-math OCI 镜像 2020.1-3038006115），该版本不导出 `hgemm_`
 //! （fp16 GEMM 自 oneAPI MKL 2021.4 起提供）→ 链接失败 `undefined symbol: hgemm_`。

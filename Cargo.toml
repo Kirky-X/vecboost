@@ -142,7 +142,7 @@ tikv-jemallocator = { version = "0.6", default-features = false, features = ["ba
 # T011：平台加速后端（opt-in features）。
 # 原计划为 target-conditional 自动追加 candle `mkl`，但实测本机链接失败
 #（intel-mkl-src 2020.1 静态库缺 `hgemm_`，candle 0.11 mkl.rs 必需；证据见
-# docs/tuning.md），自动启用会使所有 profile 无法链接。故改为显式 feature，
+# docs/PERFORMANCE.md「加速后端说明」），自动启用会使所有 profile 无法链接。故改为显式 feature，
 # 在链接正常的工具链/CI 矩阵中按需启用：
 # - x86_64 Linux/Windows：`--features mkl`
 # - aarch64 macOS：`--features accelerate`

@@ -60,7 +60,7 @@ max_sequence_length = 8192
 
 # GGUF 量化模型开关 (可选，默认 false)
 # true 且 model_path 指向 .gguf 文件时选用量化引擎（Q8_0/Q4_K）；
-# 需要以 `--features quantized-gguf` 构建；质量门见 docs/tuning.md「量化」节
+# 需要以 `--features quantized-gguf` 构建；质量门见 docs/PERFORMANCE.md「GGUF 量化」节
 # quantized = false
 
 # 最大驻留模型数 (T019, 可选，默认不限制): 超限按 LFRU 驱逐 score 最低者

@@ -2,7 +2,7 @@
 
 VecBoost 为高吞吐、低延迟的嵌入向量服务而生。本指南汇总实测基准数据、性能设计要点、全部调优开关注册表与 A/B 实验纪律，帮助在生产负载下优化性能。
 
-> 实证纪律（port 自 colibri）：默认保守、opt-in 开启、每个优化一个 kill-switch、每个性能数字标注主机配置与基准。本文件由 `docs/tuning.md` 与 `docs/benchmarks/` 归档数据合并而来。
+> 实证纪律（port 自 colibri）：默认保守、opt-in 开启、每个优化一个 kill-switch、每个性能数字标注主机配置与基准。基准数据归档见 `docs/benchmarks/`。
 
 ## 📋 目录
 
@@ -132,7 +132,6 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 | `vecboost doctor` | CLI | — | 只读诊断：config/tokenizer/cache-persist/threads/gpu/models；有 FAIL 退出码 1 | `tests/doctor.rs` |
 | `vecboost --warmup N` | CLI | 0 | 0 = 不预热 | 启动预热（T031） |
 | `scripts/autotune.py` | 脚本 | — | 手动运行；安全门（漂移>1e-6 取消/增益<3% 不采纳/胜者反序复测） | `--help` |
-| `scripts/validate_manifest.py` | 脚本 | — | 实验协议校验（字段/runs≥3/中位数/sha256） | [docs/experiments/README.md](experiments/README.md) |
 
 ---
 
@@ -155,19 +154,20 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 | 长期驻留缓存 | `[embedding] persist_path` 开启 WAL 落盘，配合 `persist_max_bytes` 控制紧凑化 |
 | 硬件不匹配 | `[device] auto_plan = true` 生成保守计划；GPU 部署先跑 `scripts/gpu-tuning.sh`；极端性能场景评估 `scripts/pgo-build.sh`（PGO 构建） |
 | 定位瓶颈 | 观察 `vecboost_stage_seconds{stage}` 分段指标；`vecboost doctor` 检查配置/线程/GPU 状态 |
-| 单变量验证 | `scripts/autotune.py` 坐标下降实测调优（内置安全门），结果按实验协议归档 |
+| 单变量验证 | `scripts/autotune.py` 坐标下降实测调优（内置安全门），结果归档至 `docs/benchmarks/` |
 
 ---
 
 ## 🔬 实验纪律
 
-任何开关的采纳与否按 [docs/experiments/README.md](experiments/README.md) 协议执行：
+任何开关的采纳与否按以下纪律执行：
 
 1. **单变量**：一次实验只改一个变量；
 2. **次数与中位数**：baseline 与 trial 各 ≥3 次，报中位数而非单次最佳，实验间预热；
 3. **ABBA 顺序**：按 `baseline→trial→trial→baseline` 交替执行，抵抗机器热态漂移；
-4. **吞吐不得搬移时间**：吞吐提升不得以 startup/首请求延迟为代价；无损优化必须证明输出与基线**字节等同**；
-5. 产物为 `docs/experiments/<日期>-<slug>.manifest.json`，经 `python3 scripts/validate_manifest.py` 校验后连同 evidence 提交；结论（正反皆记）回写本文件对应条目。
+4. **吞吐不得搬移时间**：吞吐提升不得以 startup/首请求延迟为代价；无损优化必须证明输出与基线**字节等同**。
+
+结论（正反皆记）回写本文件对应条目。
 
 ---
 
@@ -177,6 +177,5 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 |:-----|:-----|
 | [🧪 测试场景矩阵](TEST_SCENARIOS.md) | 测试栈职责与场景穷举 |
 | [📈 基准数据归档](benchmarks/) | 历史基准数据明细 |
-| [🔬 实验协议](experiments/README.md) | A/B manifest 协议与校验器 |
 | [🏗️ 架构文档](ARCHITECTURE.md) | 性能优化设计（批处理/内存/GPU/并发） |
 | [📋 更新日志](CHANGELOG.md) | 调优开关的版本记录 |

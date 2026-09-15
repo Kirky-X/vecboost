@@ -19,15 +19,21 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 DOCS = [
     ROOT / "README.md",
     ROOT / "README_EN.md",
-    ROOT / "docs" / "API_REFERENCE_zh.md",
-    ROOT / "docs" / "USER_GUIDE_zh.md",
+    ROOT / "docs" / "API_REFERENCE.md",
+    ROOT / "docs" / "USER_GUIDE.md",
 ]
 SRC = ROOT / "src"
 
 # ---------------------------------------------------------------- 代码侧事实
 
 def src_text() -> str:
-    return "\n".join(p.read_text(errors="replace") for p in SRC.rglob("*.rs"))
+    # src/ 为主（forge 路由/gRPC/CLI 事实源）；benches/ 一并纳入以核验基准类
+    # 环境变量（如 VECBOOST_BENCH_MODEL 仅被 benches 消费）。
+    return "\n".join(
+        p.read_text(errors="replace")
+        for d in (ROOT / "src", ROOT / "benches")
+        for p in d.rglob("*.rs")
+    )
 
 
 def code_routes(src: str) -> set[str]:
@@ -83,8 +89,10 @@ EXPLICIT_ENV_OK = {
 
 
 def env_var_resolvable(var: str, src: str) -> bool:
+    if var in code_env_vars(src):
+        return True
     if var in EXPLICIT_ENV_OK:
-        return var in code_env_vars(src) or var in EXPLICIT_ENV_OK and var in src
+        return var in src
     body = var[len("VECBOOST_"):].lower()
     parts = body.split("_")
     if len(parts) < 2:

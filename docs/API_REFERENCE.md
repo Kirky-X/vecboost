@@ -17,6 +17,8 @@
 - [认证](#-认证)
 - [REST API](#-rest-api)
 - [gRPC API](#-grpc-api)
+- [MCP 接口](#-mcp-接口)
+- [CLI 工具](#-cli-工具)
 - [错误处理](#-错误处理)
 - [国际化（i18n）](#-国际化i18n)
 - [速率限制](#-速率限制)
@@ -1112,6 +1114,36 @@ func main() {
 
 ---
 
+## 🤖 MCP 接口
+
+`mcp` feature 将嵌入能力暴露为 LLM 可调用的工具（基于 `sdforge::mcp::build()` + rmcp stdio 传输）：
+
+```bash
+# 以 stdio 模式启动 MCP 服务器（stdout 为 JSON-RPC 流，不启动 HTTP/gRPC）
+cargo run --features mcp -- --mcp
+
+# 在 MCP 客户端（如 Claude Desktop）中配置 stdio 启动命令：vecboost --mcp
+```
+
+暴露的工具：`embed` / `embed_batch` / `similarity` / `list_models`。工具由 `#[forge(tool_name = ...)]` 宏从与 REST/gRPC 相同的处理函数生成，入参/出参复用上方消息类型定义中的同名领域类型（JSON 格式）。
+
+---
+
+## 💻 CLI 工具
+
+`cli` feature 提供 clap 命令行工具（由 sdforge 从与 HTTP/gRPC 相同的处理函数生成）。`--config` 等全局参数须写在子命令之前：
+
+```bash
+cargo run --features cli -- embed --text "Hello, world!"      # 单文本嵌入
+cargo run --features cli -- batch --input texts.txt            # 批量嵌入（从文件读取）
+cargo run --features cli -- similarity --text1 "机器学习" --text2 "人工智能"
+cargo run --features cli -- rerank --query "什么是机器学习" --documents docs.txt
+```
+
+> **ℹ️ 说明**: 未知子命令会输出用法提示并退出（码 2），不再静默启动 HTTP 服务器。
+
+---
+
 ## ⚠️ 错误处理
 
 ### HTTP 状态码
@@ -1291,8 +1323,8 @@ ip_whitelist = ["127.0.0.1"]
 
 | 文档 | 说明 |
 |:-----|:-----|
-| [📖 用户指南](USER_GUIDE_zh.md) | 安装、配置和使用的完整说明 |
-| [🏗️ 架构设计](ARCHITECTURE_zh.md) | 内部架构、组件与设计决策 |
+| [📖 用户指南](USER_GUIDE.md) | 安装、配置和使用的完整说明 |
+| [🏗️ 架构设计](ARCHITECTURE.md) | 内部架构、组件与设计决策 |
 | [📋 更新日志](CHANGELOG.md) | 每个版本的变更记录 |
 
 ---

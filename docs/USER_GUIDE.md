@@ -162,7 +162,31 @@ ls -lh target/release/vecboost
 cp config/config.toml config/config_custom.toml
 ```
 
-通过全局参数 `--config <path>`（或 `--config=<path>`）指定配置文件，服务器与 CLI 模式均生效。CLI 子命令模式下该参数须写在子命令之前，例如 `vecboost --config config_custom.toml embed --text "Hello"`。
+通过全局参数 `--config <path>`（或 `--config=<path>`）指定配置文件，服务器与 CLI 模式均生效。CLI 子命令模式下该参数须写在子命令之前，例如 `vecboost --config config_custom.toml embed --text "Hello"`。显式路径不存在时 fail-fast 报错退出（码 2）。预置三份配置：`config/config.toml`（默认，安全默认：回环绑定、GPU 关闭）、`config/config_full.toml`（完整示例）、`config/config_minimal.toml`（最小示例）。
+
+---
+
+### 🗂️ 配置段总览
+
+下表对应 `AppConfig`（`src/config/app_config.rs`）实际解析的配置段：
+
+| 区块 | 说明 | 依赖库 / Feature |
+|------|------|------------------|
+| `[server]` | 绑定地址、端口、超时、CORS、gRPC 设置 | - |
+| `[model]` | 模型仓库、设备、精度、量化、多模型驻留 | - |
+| `[embedding]` | 聚合模式、相似度度量、缓存、文本长度上限、WAL 落盘 | oxcache |
+| `[rerank]` | 重排序服务配置 | - |
+| `[monitoring]` | 内存限制、指标收集 | prometheus |
+| `[auth]` | JWT、CSRF、管理员账号、token 有效期 | garrison（`auth`） |
+| `[rate_limit]` | 多维令牌桶限流 | limiteron |
+| `[audit]` | 审计日志 | inklog |
+| `[database]` | 数据库连接（`[database] url = "sqlite:vecboost.db"`） | dbnexus（`db`） |
+| `[logging]` | 日志级别、控制台、文件轮转 | inklog |
+| `[pipeline.worker]` | 时间窗拼批 `batch_wait_ms` / `max_batch_size` | - |
+| `[semantic_cache]` | 语义缓存 `comparison_mode` | oxcache |
+| `[device]` | 硬件感知规划 `auto_plan` | - |
+
+> **⚠️ 注意**：`[flow_control]` 与 `[cache]` 两个 TOML 段**当前版本不解析，编辑不生效**（历史遗留段名）；限流走 `[rate_limit]`，缓存走 `[embedding]` 与 `[semantic_cache]`。调优开关注册表见 [⚡ 性能指南](PERFORMANCE.md)。
 
 ---
 
@@ -313,9 +337,16 @@ max_files = 10                  # 保留的日志文件数量
 | `VECBOOST_MODEL_REPO` | `model.model_repo` | `BAAI/bge-m3` |
 | `VECBOOST_JWT_SECRET` | `auth.jwt_secret` | `your-secret-key`（≥32 字符） |
 | `VECBOOST_ADMIN_PASSWORD` | `auth.default_admin_password` | `your-admin-password`（≥8 字符） |
+| `VECBOOST_ALLOW_INSECURE` | - | `1` = 允许非回环绑定 + 无认证（打 ERROR 告警，仅供受信网络容器） |
 | `VECBOOST_ENCRYPTION_KEY` | - | 32 字节 hex 密钥（用于敏感配置加密） |
+| `VECBOOST_REQUIRE_ENCRYPTION` | - | 强制加密配置 |
+| `VECBOOST_KEY_STORAGE_TYPE` / `VECBOOST_KEY_FILE_PATH` | - | 密钥存储后端选择与路径 |
 | `VECBOOST_LOG_LEVEL` | `logging.level`（优先级高于配置文件） | `trace`, `debug`, `info`, `warn`/`warning`, `error` |
 | `VECBOOST_LANG` | - | `zh`, `en`（全局默认语言） |
+| `VECBOOST_DATABASE_PASSWORD` | - | 数据库密码（`db` feature） |
+| `VECBOOST_MODEL_API_KEY` | - | 模型仓库 API Key |
+| `VECBOOST_NO_THREAD_TUNE` | - | `1` = 关闭物理核线程调优 |
+| `HF_ENDPOINT` | - | HuggingFace 镜像端点 |
 
 ---
 
@@ -353,6 +384,13 @@ token_expiration_hours = 24
 [rate_limit]
 enabled = true
 global_requests_per_minute = 2000
+
+[pipeline.worker]     # 时间窗动态拼批
+batch_wait_ms = 5
+max_batch_size = 8
+
+[semantic_cache]      # 向量输出量化比较
+comparison_mode = "exact"   # exact | i8 | binary
 ```
 
 ---
@@ -935,8 +973,8 @@ free -h     # 内存
 ### 获取帮助
 
 - 查看现有[问题](https://github.com/Kirky-X/vecboost/issues)
-- 查看 [API 参考](API_REFERENCE_zh.md)
-- 查看 [架构设计](ARCHITECTURE_zh.md)
+- 查看 [API 参考](API_REFERENCE.md)
+- 查看 [架构设计](ARCHITECTURE.md)
 
 ---
 
@@ -1018,8 +1056,8 @@ free -h     # 内存
 
 ## 🎯 下一步
 
-- [📚 API 参考](API_REFERENCE_zh.md) - 详细 API 文档
-- [🏗️ 架构设计](ARCHITECTURE_zh.md) - 系统设计详情
+- [📚 API 参考](API_REFERENCE.md) - 详细 API 文档
+- [🏗️ 架构设计](ARCHITECTURE.md) - 系统设计详情
 - [💻 示例代码](../examples/) - 代码示例
 
 ---
@@ -1028,8 +1066,8 @@ free -h     # 内存
 
 | 文档 | 说明 |
 |:-----|:-----|
-| [📘 API 参考](API_REFERENCE_zh.md) | 完整的 REST API 和 gRPC 文档 |
-| [🏗️ 架构设计](ARCHITECTURE_zh.md) | 内部架构、组件与设计决策 |
+| [📘 API 参考](API_REFERENCE.md) | 完整的 REST API 和 gRPC 文档 |
+| [🏗️ 架构设计](ARCHITECTURE.md) | 内部架构、组件与设计决策 |
 | [📋 更新日志](CHANGELOG.md) | 每个版本的变更记录 |
 
 ---

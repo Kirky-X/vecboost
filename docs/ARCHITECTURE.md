@@ -1,161 +1,299 @@
-# VecBoost Architecture
+# 🏗️ VecBoost 架构文档
 
-> Version 0.2.1 — Ecosystem Refactor with 7-Library Integration
+**内部架构、关键组件、数据流和设计决策详解**
 
-**[中文](ARCHITECTURE_zh.md)**
+[![Version 0.2.1](https://img.shields.io/badge/Version-0.2.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-This document describes the VecBoost v0.2.1 architecture, built on a modular 7-library ecosystem unified through `trait-kit`.
+*VecBoost 的内部架构，解释关键组件、数据流和设计决策。*
 
-## 📋 Table of Contents
+**[English](ARCHITECTURE.md)**
+
+---
+
+## 📋 目录
 
 <details open>
-<summary>📑 Table of Contents (click to expand)</summary>
+<summary>📑 目录（点击展开）</summary>
 
-- [1. High-Level Architecture](#1-high-level-architecture)
-- [2. 7-Library Ecosystem](#2-7-library-ecosystem)
-- [3. Module Dependency Graph](#3-module-dependency-graph)
-- [4. Multi-Protocol Interface Flow](#4-multi-protocol-interface-flow)
-- [5. Engine Abstraction](#5-engine-abstraction)
-- [6. Request Lifecycle](#6-request-lifecycle)
-- [7. Configuration Architecture](#7-configuration-architecture)
-- [8. Test Architecture](#8-test-architecture)
-- [9. Internationalization (i18n)](#9-internationalization-i18n)
-- [Related Documentation](#-related-documentation)
+- [概述](#-概述)
+- [核心组件](#-核心组件)
+- [模块依赖图](#-模块依赖图)
+- [数据流](#-数据流)
+- [请求管道](#-请求管道)
+- [缓存架构](#-缓存架构)
+- [安全架构](#-安全架构)
+- [配置系统](#-配置系统)
+- [性能优化](#-性能优化)
+- [部署架构](#-部署架构)
+- [扩展点](#-扩展点)
+- [测试架构](#-测试架构)
+- [国际化（i18n）](#-国际化i18n)
+- [错误处理](#-错误处理)
+- [相关文档](#-相关文档)
 
 </details>
 
 ---
 
-## 1. High-Level Architecture
+## 📌 概述
 
-VecBoost is a high-performance Rust vector embedding service. The architecture (introduced in v0.2.0, current v0.2.1) decomposes the monolith into 7 independent libraries, registered and wired through the `trait-kit` typestate module registry.
+VecBoost 是一个使用 Rust 构建的**高性能嵌入向量服务**。它为文本向量化提供可扩展、生产就绪的解决方案，包含企业级功能。
 
-```mermaid
-graph TB
-    subgraph Clients["Clients"]
-        HTTPClient["HTTP Client"]
-        gRPCClient["gRPC Client"]
-        MCPClient["MCP / LLM Agent"]
-        CLIUser["CLI User"]
-    end
+### 🎯 设计目标
 
-    subgraph ProtocolLayer["Protocol Layer (sdforge)"]
-        API["src/api/embedding.rs<br/>#[forge(...)] definitions"]
-        HTTPBinding["HTTP/REST Binding"]
-        gRPCBinding["gRPC Binding"]
-        MCPBinding["MCP Binding"]
-        CLIBinding["CLI Binding"]
-    end
+| 目标 | 说明 | 实现方式 |
+|------|------|----------|
+| **高性能** | 最小化延迟 | 批处理、并发执行、高效内存管理 |
+| **可扩展性** | 水平扩展 | Kubernetes 原生支持 |
+| **可靠性** | 稳定运行 | 熔断器、重试机制、健康检查 |
+| **安全性** | 企业级安全 | 认证、授权、审计日志 |
+| **灵活性** | 多引擎支持 | Candle、ONNX Runtime 抽象 |
 
-    subgraph Gateway["Gateway"]
-        Auth["Auth (JWT/CSRF)"]
-        RateLim["Rate Limiter (limiteron)"]
-    end
+---
 
-    subgraph Core["Core Service"]
-        Pipeline["Priority Pipeline"]
-        EmbeddingService["EmbeddingService"]
-        EngineFactory["EngineFactory"]
-    end
+### 🛠️ 技术栈
 
-    subgraph Engines["Inference Engines"]
-        Candle["Candle"]
-        ONNX["ONNX Runtime"]
-    end
+| 层级 | 技术选型 | 作用 |
+|------|----------|------|
+| **编程语言** | Rust 2024 Edition | 高性能、内存安全 |
+| **协议生成** | sdforge | 通过 `#[forge(...)]` 宏统一生成 HTTP/gRPC/MCP/CLI 四协议绑定 |
+| **Web 框架** | Axum 0.8 | HTTP/REST 底层运行时（由 sdforge 生成，非手写） |
+| **gRPC** | sdforge 统一 Call 协议 | 通过 `#[forge(grpc_method = "...")]` 注册，`build_server_with_config` 启动 |
+| **MCP** | rmcp 2.1 | Model Context Protocol 服务，`#[forge(tool_name = "...")]` 注册工具 |
+| **CLI** | clap 4.6 | 命令行接口（由 sdforge 生成，非手写） |
+| **ML 推理** | Candle 0.11 | 原生 Rust 引擎（支持 Bert / XlmRoberta 架构） |
+| | ONNX Runtime 2.0 | 跨平台推理 |
+| **GPU 加速** | CUDA 12.x | NVIDIA GPU |
+| | Metal | Apple Silicon |
+| **配置管理** | confers (TOML + env + config-bus) | 配置解析（必选依赖，禁止手写 config） |
+| **日志** | inklog + log | 日志基础设施（必选依赖，禁止手写 tracing） |
+| **缓存** | oxcache | 缓存基础设施（必选依赖，禁止手写 LRU） |
+| **速率限制** | limiteron | 限流基础设施（必选依赖，禁止手写）。基于 limiteron 原生 `TokenBucketLimiter` + `Limiter` trait，支持 Global/Ip/User/ApiKey 四维度独立限流 |
+| **模块注册** | trait-kit | 模块注册与依赖注入（必选依赖） |
+| **可观测性** | Prometheus 0.14 + log | 指标和日志 |
 
-    subgraph Ecosystem["7-Library Ecosystem"]
-        Kit["trait-kit<br/>Kit&lt;Ready&gt;"]
-        trait-kit -->|registers| Modules["17 Modules"]
-        oxcache["oxcache"]
-        limiteron["limiteron"]
-        dbnexus["dbnexus"]
-        inklog["inklog"]
-        confers["confers"]
-        sdforge["sdforge"]
-    end
+### 🧩 7 库生态（路径依赖）
 
-    HTTPClient --> HTTPBinding
-    gRPCClient --> gRPCBinding
-    MCPClient --> MCPBinding
-    CLIUser --> CLIBinding
+| 库 | 版本 | 用途 | Feature |
+|----|------|------|---------|
+| **trait-kit** | `0.5.0-rc.3` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
+| **confers** | `0.6.0-rc.3` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | 始终启用 |
+| **inklog** | `0.3.0-rc.3` | 结构化日志基础设施（控制台 + 文件轮转） | 始终启用 |
+| **oxcache** | `0.5.0-rc.3` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | 始终启用 |
+| **limiteron** | `0.3.0-rc.3` | 令牌桶限流器（多维度独立计数） | 始终启用 |
+| **dbnexus** | `0.6.0-rc.3` | 数据库持久化（SQLite/PostgreSQL + 权限角色） | `db` |
+| **sdforge** | `0.5.0-rc.3` | 多协议接口生成（HTTP/gRPC/MCP/CLI 单一源定义） | `http`/`grpc`/`cli`/`mcp` |
 
-    HTTPBinding --> API
-    gRPCBinding --> API
-    MCPBinding --> API
-    CLIBinding --> API
-    API --> Auth --> RateLim --> Pipeline --> EmbeddingService
-    EmbeddingService --> EngineFactory
-    EngineFactory --> Candle
-    EngineFactory --> ONNX
+> `../base/*` 七库为路径依赖的活仓库，版本号以根目录 `Cargo.toml` 为准。
 
-    Modules -.->|wires| oxcache
-    Modules -.->|wires| limiteron
-    Modules -.->|wires| dbnexus
-    Modules -.->|wires| inklog
-    API -.->|generated by| sdforge
-    EmbeddingService -.->|configured by| confers
+---
+
+## 🧩 核心组件
+
+### 应用状态
+
+`VecboostState` 结构体（定义在 `src/lib.rs`）保存路由处理程序使用的所有共享状态。v0.3.0 重构后，所有能力通过 `trait-kit` 的 `AsyncKit<AsyncReady>` 统一管理，不再使用独立字段：
+
+```rust
+pub struct VecboostState {
+    /// trait-kit AsyncKit — 模块能力管理中心
+    /// 包含 17 个 Module 的能力查询入口
+    pub(crate) kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,
+}
 ```
 
-## 2. 7-Library Ecosystem
+路由 handler 通过 `state.kit.require::<M>()` 检索能力，或通过 Axum `FromRef` 自动注入。布尔配置（如 `AuthEnabled`、`RateLimitEnabled`、`PipelineEnabled`）通过 `state.kit.config::<T>()` 直接查询，无需注册独立 Module。
 
-The ecosystem is composed of 7 Rust libraries. 6 of them (`trait-kit`, `confers`, `inklog`, `oxcache`, `limiteron`, `sdforge`) are always-enabled mandatory dependencies; only `dbnexus` is feature-gated (`db` feature).
+---
 
-| Library | Version | Feature | Role | Module |
-|---------|---------|---------|------|--------|
-| **trait-kit** | `0.4` | always | Module registry & typestate dependency management | (registry host) |
-| **confers** | `0.5` | always | Config loading (TOML + env override + hot reload) | EmbeddingModule |
-| **inklog** | `0.2` | always | Structured logging (console + file rotation) | AuditModule |
-| **oxcache** | `0.4` | always | Cache backend (LRU/LFU/FIFO + TTL eviction) | CacheModule |
-| **limiteron** | `0.2` | always | Token bucket rate limiter (multi-dimension) | RateLimitModule |
-| **dbnexus** | `0.5` | `db` | Database persistence (SQLite/PostgreSQL + roles) | DbModule |
-| **sdforge** | `0.4` | always | Multi-protocol interface generation (HTTP/gRPC/MCP/CLI) | (API layer) |
+### 🔌 协议生成层（sdforge）
 
-### 2.1 trait-kit Module Registry
+VecBoost 通过 **sdforge** 框架统一生成 HTTP/gRPC/MCP/CLI 四种协议绑定，**禁止手写** Axum handler、tonic gRPC、clap CLI 或 proto 文件。所有协议处理函数集中定义在 `src/api/embedding.rs`，通过 `#[forge(...)]` 宏标注生成各协议绑定。
 
-`trait-kit` provides a typestate-pattern module registry: `Kit<Unbuilt>` accumulates module registrations, then `.build()` transitions to `Kit<Ready>` with all dependencies resolved and cycle detection performed.
+#### 架构设计：协议无关 handler
 
 ```mermaid
 graph LR
-    New["Kit::new()"] --> UB["Kit&lt;Unbuilt&gt;"]
-    UB -->|register::&lt;EmbeddingModule&gt;| UB2["Kit&lt;Unbuilt&gt;"]
-    UB2 -->|register::&lt;AuthModule&gt;| UB3["Kit&lt;Unbuilt&gt;"]
-    UB3 -->|register::&lt;RateLimitModule&gt;| UB4["Kit&lt;Unbuilt&gt;"]
-    UB4 -->|register::&lt;CacheModule&gt;| UB5["Kit&lt;Unbuilt&gt;"]
-    UB5 -->|register::&lt;DbModule&gt;| UB6["Kit&lt;Unbuilt&gt;"]
-    UB6 -->|register::&lt;AuditModule&gt;| UB7["Kit&lt;Unbuilt&gt;"]
-    UB7 -->|build()| Ready["Kit&lt;Ready&gt;"]
-    Ready -->|require::&lt;T&gt;| Arc["Arc&lt;T&gt;"]
+    subgraph Protocols["协议层 sdforge 生成"]
+        HTTP["forge_embed<br/>#[forge(path, method, tool_name)]"]
+        GRPC["grpc_embed<br/>#[forge(grpc_method)]"]
+        MCP["MCP 工具<br/>#[forge(tool_name)]"]
+        CLI["cli_embed<br/>#[forge(cli)]"]
+    end
+
+    subgraph Handlers["协议无关业务层"]
+        EmbedHandler["embed_handler"]
+        BatchHandler["embed_batch_handler"]
+        SimHandler["compute_similarity_handler"]
+    end
+
+    HTTP --> EmbedHandler
+    GRPC --> EmbedHandler
+    MCP --> EmbedHandler
+    CLI --> EmbedHandler
+
+    EmbedHandler --> Service["EmbeddingService"]
+    BatchHandler --> Service
+    SimHandler --> Service
 ```
 
-The 17 registered modules:
+| 协议 | 宏标注 | 启用 feature | 入口函数示例 |
+|------|--------|--------------|--------------|
+| **HTTP** | `#[forge(path = "/embed", method = "POST", tool_name = "embed_text")]` | `http` | `forge_embed` |
+| **gRPC** | `#[forge(grpc_method = "vecboost.embed")]` | `grpc` | `grpc_embed` |
+| **MCP** | `#[forge(tool_name = "embed_text")]` | `mcp` | （复用 HTTP forge） |
+| **CLI** | `#[forge(...)]` + `cli_*` 函数 | `cli` | `cli_embed` |
 
-| Module | Trait Bound | Backing Library | Provides |
-|--------|-------------|-----------------|----------|
-| `EmbeddingModule` | `ModuleMeta + AsyncAutoBuilder` | confers, sdforge | `Arc<RwLock<EmbeddingService>>` |
-| `RerankModule` | `ModuleMeta + AsyncAutoBuilder` | sdforge | `Arc<RwLock<RerankService>>` |
-| `AuthModule` | `ModuleMeta + AsyncAutoBuilder` | garrison | `Option<Arc<GarrisonHandle>>` |
-| `RateLimitModule` | `ModuleMeta + AsyncAutoBuilder` | limiteron | `Arc<LimiteronAdapter>` |
-| `CacheModule` | `ModuleMeta + AsyncAutoBuilder` | oxcache | Cache enabled state |
-| `DbModule` | `ModuleMeta + AsyncAutoBuilder` | dbnexus | Database enabled state |
-| `AuditModule` | `ModuleMeta + AsyncAutoBuilder` | inklog | `Option<Arc<AuditLogger>>` |
-| `LoggerModule` | `ModuleMeta + AsyncAutoBuilder` | inklog | `Arc<LoggerManager>` |
-| `MetricsCollectorModule` | `ModuleMeta + AsyncAutoBuilder` | prometheus | `Option<Arc<InferenceCollector>>` |
-| `PrometheusCollectorModule` | `ModuleMeta + AsyncAutoBuilder` | prometheus | `Option<Arc<PrometheusCollector>>` |
-| `IpWhitelistModule` | `ModuleMeta + AsyncAutoBuilder` | - | `Vec<String>` |
-| `PipelineQueueModule` | `ModuleMeta + AsyncAutoBuilder` | - | `Arc<PriorityRequestQueue>` |
-| `ResponseChannelModule` | `ModuleMeta + AsyncAutoBuilder` | - | `Arc<ResponseChannel>` |
-| `PriorityCalculatorModule` | `ModuleMeta + AsyncAutoBuilder` | - | `Arc<PriorityCalculator>` |
-| `WorkerManagerModule` | `ModuleMeta + AsyncAutoBuilder` | - | `Arc<WorkerManager>` |
-| `ConfigWatcherModule` | `ModuleMeta + AsyncAutoBuilder` | confers | `WatcherGuard` |
-| `CsrfConfigModule` | `ModuleMeta + AsyncAutoBuilder` | garrison | `Option<Arc<GarrisonCsrfConfig>>` |
+**核心设计**：协议特定的 `forge_*` / `cli_*` / `grpc_*` 函数是薄包装，仅附加 `#[forge(...)]` 宏；实际业务逻辑在协议无关的 `*_handler` 函数中（如 `embed_handler`、`embed_batch_handler`）。这消除了约 96 行跨三协议的重复状态获取/校验/分发代码。
 
-## 3. Module Dependency Graph
+**gRPC 启动**：通过 `sdforge::grpc::build_server_with_config(&addr, config)` 启动，使用统一的 `SdForgeService/Call` RPC 协议，请求/响应通过 `CallRequest.data` / `CallResponse.data` 传递 JSON 序列化的领域类型。
 
-The internal `src/` module structure follows a layered dependency discipline. Public modules are the library's API surface; `pub(crate)` modules are internal implementation details.
+---
+
+### 🔧 嵌入服务
+
+`EmbeddingService`（`src/service/embedding.rs`）是核心服务，负责协调：
+
+| 功能 | 模块 | 说明 |
+|------|------|------|
+| **文本处理** | `src/text/` | 分块、分词、聚合 |
+| **推理执行** | `src/engine/` | 引擎抽象和实现 |
+| **结果缓存** | `src/cache/` | 多层缓存策略 |
+
+```rust
+pub struct EmbeddingService {
+    engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>, // 推理引擎
+    validator: InputValidator,                              // 输入校验器
+    model_config: Option<ModelConfig>,                      // 模型配置
+    model_manager: Option<Arc<ModelManager>>,               // 模型管理器
+    cache: Arc<OxCacheBackend>,                             // oxcache 缓存后端
+    memory_manager: Option<SharedGpuMemoryManager>,         // GPU 内存管理
+    batch_scheduler: Option<Arc<DynamicBatchScheduler>>,    // 动态批处理调度
+    buffer_pool: Option<Arc<RwLock<BufferPool>>>,           // GPU 缓冲区池
+    continuous_batch_loop: Option<Arc<ContinuousBatchLoop>>, // 连续批处理循环
+    semantic_cache: Option<Arc<SemanticCache>>,             // 语义缓存
+}
+```
+
+---
+
+### ⚡ 推理引擎
+
+引擎抽象（`src/engine/mod.rs`）为不同的 ML 运行时提供统一接口：
+
+```rust
+#[async_trait]
+pub trait InferenceEngine: Send + Sync {
+    /// 执行推理，返回未归一化的向量
+    fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError>;
+
+    /// 批量推理
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError>;
+
+    /// 获取当前精度设置
+    fn precision(&self) -> &Precision;
+
+    /// 检查是否支持混合精度
+    fn supports_mixed_precision(&self) -> bool;
+
+    /// 检查是否已触发降级
+    fn is_fallback_triggered(&self) -> bool { false }
+
+    /// 对 (query, document) 对进行重排序评分
+    /// 默认实现：bi-encoder (embed_batch + cosine + sigmoid)
+    fn rerank(&self, query: &str, document: &str) -> Result<f32, VecboostError> { ... }
+
+    /// 批量重排序：query 只 embed 1 次，documents 批量 embed 1 次
+    fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> { ... }
+
+    /// 检查引擎是否支持重排序（默认返回 true）
+    fn supports_rerank(&self) -> bool { true }
+
+    /// 尝试降级到 CPU（在 OOM 时调用）
+    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
+}
+```
+
+---
+
+#### 支持的引擎对比
+
+| 引擎 | 类型 | 优势 | 劣势 | 适用场景 |
+|------|------|------|------|----------|
+| **Candle** | 原生 Rust | 无外部依赖、启动快、WASM 支持 | 生态系统较小 | CPU 推理、边缘计算 |
+| **ONNX Runtime** | 跨平台 | 成熟稳定、优化良好、硬件支持广 | 需要导出模型 | 通用推理、生产环境 |
+
+---
+
+#### Candle 引擎模型架构
+
+`CandleEngine`（`src/engine/candle_engine.rs`）通过 `ModelArchitecture` 枚举区分两种支持的模型架构，运行时根据 `config.json` 的 `model_type` 字段自动识别：
+
+```rust
+pub enum ModelArchitecture {
+    Bert,         // BERT 系列（如 BAAI/bge-*）
+    XlmRoberta,   // XLM-RoBERTa 系列（多语言模型）
+}
+```
+
+| 架构 | 底层实现 | 参数量级 | 典型模型 |
+|------|----------|----------|----------|
+| **Bert** | `candle_transformers::models::bert::BertModel` | ~110M | BAAI/bge-small, bert-base-uncased |
+| **XlmRoberta** | `candle_transformers::models::xlm_roberta::XLMRobertaModel` | ~270M | BAAI/bge-m3, xlm-roberta-base |
+
+---
+
+#### Matryoshka 嵌入降维
+
+当模型配置了 `matryoshka_dimensions`（如 BAAI/bge-m3 支持 1024/768/512/256/128/64 降维），`EmbeddingService` 会在 `process_text` 和 `process_batch` 中执行截断，并**在截断后重新调用 `normalize_l2` 归一化**，保证截断后的向量仍是单位向量：
+
+```rust
+// src/service/embedding.rs — Matryoshka 截断 + 重归一化
+if let Some(target_dim) = matryoshka_target {
+    embedding = truncate_vector(&embedding, target_dim);
+    normalize_l2(&mut embedding);  // ⚠️ 截断后必须重归一化
+}
+```
+
+> 🔒 **正确性修复**：v0.2.0 修复了截断后未重归一化导致向量范数 < 1 的 bug，影响余弦相似度计算的准确性。
+
+---
+
+### 🎮 设备管理
+
+设备模块（`src/device/`）管理计算设备选择和内存分配：
+
+```
+src/device/
+├── mod.rs              # 设备抽象和公共接口
+├── cuda.rs             # NVIDIA CUDA GPU 支持
+├── amd.rs              # AMD GPU 支持 (ROCm)
+├── manager.rs          # 设备生命周期管理
+├── memory_limit.rs     # 内存限制和 OOM 处理
+├── memory_optimizer.rs # GPU 内存优化器
+├── batch_scheduler.rs  # 批处理优化调度
+└── memory_pool/        # GPU 内存池子模块
+    ├── buffer_pool.rs  # 缓冲区池
+    ├── cuda_pool.rs    # CUDA 内存池
+    └── pool_manager.rs # 池管理
+```
+
+| 设备类型 | 支持状态 | 内存管理 |
+|----------|----------|----------|
+| **CPU** | ✅ 完全支持 | 系统分配 |
+| **CUDA** | ✅ 完全支持 | 内存池优化 |
+| **Metal** | ✅ 完全支持 | 内存池优化 |
+| **ROCm** | 🚧 开发中 | 基础支持 |
+
+---
+
+## 🧩 模块依赖图
+
+`src/` 内部模块遵循分层依赖纪律：公开模块构成库的 API 面，`pub(crate)` 模块为内部实现细节。
 
 ```mermaid
 graph TB
-    subgraph Public["Public Modules (pub mod)"]
+    subgraph Public["公开模块 (pub mod)"]
         api["api<br/>(feature: http/mcp/cli)<br/>sdforge #[forge(...)]"]
         audit["audit"]
         auth["auth<br/>(feature: auth)"]
@@ -164,7 +302,7 @@ graph TB
         domain["domain"]
         engine["engine"]
         error["error<br/>(VecboostError)"]
-        logger["logger<br/>(always)"]
+        logger["logger"]
         metrics["metrics"]
         registry["registry"]
         pipeline["pipeline"]
@@ -174,7 +312,7 @@ graph TB
         utils["utils"]
     end
 
-    subgraph Internal["Internal Modules (pub(crate) mod)"]
+    subgraph Internal["内部模块 (pub(crate) mod)"]
         cache["cache"]
         device["device"]
         model["model"]
@@ -203,363 +341,730 @@ graph TB
     rate_limit --> cache
 ```
 
-### 3.1 Module Visibility Boundary
+### 🔍 模块可见性边界
 
-| Visibility | Modules | Rationale |
-|------------|---------|-----------|
-| `pub mod` (always) | `audit`, `config`, `domain`, `engine`, `error`, `logger`, `metrics`, `registry`, `pipeline`, `rate_limit`, `security`, `service`, `utils` | Used by `main.rs` or as public library API |
-| `pub mod` (feature-gated) | `api` (http/mcp/cli — contains sdforge `#[forge(...)]` definitions), `auth` (auth), `db` (db) | Conditionally compiled; only present when feature enabled |
-| `pub(crate) mod` | `cache`, `device`, `model`, `monitor`, `text` | Internal implementation; not part of public API |
+下表与 `src/lib.rs` 的实际声明一致：
 
-> **Note**: `error` is exposed as `pub mod error` so integration tests can assert on `VecboostError` variants. The unified error type is `VecboostError` (defined in `src/error.rs`).
+| 可见性 | 模块 | 说明 |
+|--------|------|------|
+| `pub mod`（始终） | `audit`、`config`、`doctor`、`domain`、`engine`、`error`、`i18n`、`library`、`logger`、`metrics`、`pipeline`、`rate_limit`、`registry`、`security`、`service`、`utils` | 由 `main.rs` 使用或作为公开库 API |
+| `pub mod`（特性门控） | `api`（`http`/`mcp`/`cli`，sdforge `#[forge(...)]` 定义所在）、`auth`（`auth`）、`db`（`db`） | 条件编译，仅在对应 feature 启用时可见 |
+| `pub(crate) mod` | `cache`、`device`、`model`、`monitor`、`text` | 内部实现，不属于公开 API |
 
-## 4. Multi-Protocol Interface Flow
+> **说明**：`error` 以 `pub mod` 暴露，便于集成测试对 `VecboostError` 变体做断言。统一错误类型为 `VecboostError`（定义在 `src/error.rs`）。
 
-VecBoost v0.2.0 uses `sdforge` to generate all four protocol bindings (HTTP/gRPC/MCP/CLI) from a single API definition source in `src/api/embedding.rs`. Hand-written Axum handlers, tonic gRPC services, clap CLI parsers, and proto files are eliminated — all protocol handlers are annotated with `#[forge(...)]` macros and collected via sdforge inventory.
+---
 
-```mermaid
-sequenceDiagram
-    participant Dev as Developer
-    participant API as src/api/embedding.rs<br/>#[forge(...)]
-    participant sdforge as sdforge
-    participant HTTP as HTTP Server
-    participant gRPC as gRPC Server
-    participant MCP as MCP Server
-    participant CLI as CLI Binary
-    participant Service as EmbeddingService
+## 🔄 数据流
 
-    Dev->>API: Define forge_*/grpc_*/cli_* handlers
-    Note over API: #[forge(path, method, tool_name)]<br/>#[forge(grpc_method)]<br/>#[forge(cli)]
-
-    Dev->>sdforge: Enable feature (http/grpc/mcp/cli)
-    sdforge->>HTTP: Generate Axum routes + OpenAPI
-    sdforge->>gRPC: Generate SdForgeService/Call RPC
-    sdforge->>MCP: Generate MCP tool bindings
-    sdforge->>CLI: Generate clap subcommands
-
-    Note over HTTP,CLI: Single source, 4 bindings
-
-    HTTP->>Service: POST /embed
-    gRPC->>Service: Call(vecboost.embed)
-    MCP->>Service: tool_call("embed_text")
-    CLI->>Service: embed --text "Hello"
-    Service-->>HTTP: EmbedResponse
-    Service-->>gRPC: EmbedResponse
-    Service-->>MCP: EmbedResponse
-    Service-->>CLI: EmbedResponse
-```
-
-### 4.1 Protocol Activation Matrix
-
-| Protocol | Feature Flag | Default | v0.2.0 Status | Entry Point | Use Case |
-|----------|-------------|---------|---------------|-------------|----------|
-| HTTP/REST | `http` | ✅ | ✅ Implemented (sdforge `#[forge]`) | `src/api/embedding.rs` `forge_*` | Web/API integration, OpenAPI docs |
-| gRPC | `grpc` | - | ✅ Implemented (sdforge `#[forge(grpc_method)]` + `build_server_with_config`) | `src/api/embedding.rs` `grpc_*` | High-performance binary RPC |
-| MCP | `mcp` | - | ✅ Implemented (sdforge `#[forge(tool_name)]` → `sdforge::mcp`, stdio) | `src/api/embedding.rs` `forge_*` (reused) | LLM tool integration (AI Agents) |
-| CLI | `cli` | - | ✅ Implemented (sdforge `#[forge(cli)]`) | `src/api/embedding.rs` `cli_*` | Command-line usage, scripting |
-
-### 4.2 API Definition Pattern
-
-API functions are defined once in `src/api/embedding.rs` using `#[forge(...)]` macros. sdforge reads these definitions and generates protocol-specific bindings at compile time based on enabled features:
-
-```rust
-// src/api/embedding.rs — single source of truth for all 4 protocols
-
-// HTTP + MCP (tool_name reused)
-#[cfg(feature = "http")]
-#[forge(
-    name = "embed", version = "v1",
-    path = "/embed", method = "POST",
-    tool_name = "embed_text",
-    description = "Generate embedding vector for input text"
-)]
-pub async fn forge_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
-    embed_handler(req).await
-}
-
-// gRPC — registered as vecboost.embed on SdForgeService/Call RPC
-#[cfg(feature = "grpc")]
-#[forge(
-    name = "vecboost_embed", version = "v1",
-    grpc_method = "vecboost.embed",
-    description = "Generate embedding vector for input text"
-)]
-pub async fn grpc_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
-    embed_handler(req).await
-}
-
-// CLI
-#[cfg(feature = "cli")]
-#[forge(
-    name = "embed", version = "v1",
-    cli = true,
-    description = "Generate embedding vector for input text"
-)]
-pub async fn cli_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
-    embed_handler(req).await
-}
-```
-
-**Key design**: Protocol-specific `forge_*` / `grpc_*` / `cli_*` functions are thin wrappers annotated with `#[forge(...)]`; the actual business logic lives in protocol-agnostic `*_handler` functions (e.g., `embed_handler`, `embed_batch_handler`). This eliminates duplicated state-fetch / validation / dispatch code across protocols.
-
-**gRPC startup**: gRPC server is started via `sdforge::grpc::build_server_with_config(&addr, config)`, using the unified `SdForgeService/Call` RPC protocol. Requests/responses pass JSON-serialized domain types via `CallRequest.data` / `CallResponse.data`.
-
-### 4.3 gRPC Methods
-
-11 gRPC methods are registered via `#[forge(grpc_method = "...")]` and exposed through `SdForgeService/Call`:
-
-| gRPC Method | Handler | Description |
-|-------------|---------|-------------|
-| `vecboost.embed` | `grpc_embed` | Single-text embedding |
-| `vecboost.embed_batch` | `grpc_embed_batch` | Batch embedding |
-| `vecboost.compute_similarity` | `grpc_compute_similarity` | Cosine similarity |
-| `vecboost.embed_file` | `grpc_embed_file` | Embed text from file |
-| `vecboost.rerank` | `grpc_rerank` | Rerank documents by query |
-| `vecboost.rerank_batch` | `grpc_rerank_batch` | Batch rerank multiple queries |
-| `vecboost.model_switch` | `grpc_model_switch` | Switch loaded model |
-| `vecboost.get_current_model` | `grpc_get_current_model` | Get current model info |
-| `vecboost.get_model_info` | `grpc_get_model_info` | Get model metadata |
-| `vecboost.list_models` | `grpc_list_models` | List available models |
-| `vecboost.health_check` | `grpc_health_check` | Service health check |
-
-## 5. Engine Abstraction
-
-The `InferenceEngine` trait abstracts over multiple ML backends. `EngineFactory::create()` dispatches to the correct implementation based on `EngineType`.
+### 请求处理流程
 
 ```mermaid
 graph TB
-    Factory["EngineFactory::create(engine_type, config)"]
-    Factory -->|Candle| CandleEngine["CandleEngine<br/>(default)"]
-    Factory -->|Onnx| OnnxEngine["OnnxEngine<br/>(feature: onnx)"]
-
-    CandleEngine --> CandleLib["candle-core/nn/transformers"]
-    OnnxEngine --> OnnxLib["ort (ONNX Runtime)"]
-
-    CandleEngine --> DeviceCuda["CUDA (feature: cuda)"]
-    CandleEngine --> DeviceMetal["Metal (feature: metal)"]
-    CandleEngine --> DeviceCPU["CPU"]
-    OnnxEngine --> DeviceCPU2["CPU"]
-    OnnxEngine --> DeviceMetal2["Metal"]
-```
-
-### 5.1 Engine Status
-
-| Engine | Feature | Status | Notes |
-|--------|---------|--------|-------|
-| Candle | default | ✅ Production | Native Rust, supports CUDA/Metal |
-| ONNX Runtime | `onnx` | ✅ Production | Cross-platform via `ort` crate |
-
-### 5.2 Candle Model Architecture
-
-`CandleEngine` (`src/engine/candle_engine.rs`) distinguishes two supported model architectures via the `ModelArchitecture` enum, auto-detected at runtime from the `model_type` field in `config.json`:
-
-```rust
-pub enum ModelArchitecture {
-    Bert,         // BERT family (e.g., BAAI/bge-*)
-    XlmRoberta,   // XLM-RoBERTa family (multilingual models)
-}
-```
-
-| Architecture | Backing Implementation | Param Scale | Typical Models |
-|--------------|------------------------|-------------|----------------|
-| **Bert** | `candle_transformers::models::bert::BertModel` | ~110M | BAAI/bge-small, bert-base-uncased |
-| **XlmRoberta** | `candle_transformers::models::xlm_roberta::XLMRobertaModel` | ~270M | BAAI/bge-m3, xlm-roberta-base |
-
-### 5.3 Matryoshka Embedding Truncation
-
-When the model is configured with `matryoshka_dimensions` (e.g., BAAI/bge-m3 supports 1024/768/512/256/128/64 truncation), `EmbeddingService` truncates the embedding in `process_text` and `process_batch`, then **re-invokes `normalize_l2` after truncation** to ensure the truncated vector remains a unit vector:
-
-```rust
-// src/service/embedding.rs — Matryoshka truncation + re-normalization
-if let Some(target_dim) = matryoshka_target {
-    embedding = truncate_vector(&embedding, target_dim);
-    normalize_l2(&mut embedding);  // ⚠️ must re-normalize after truncation
-}
-```
-
-> 🔒 **Correctness fix**: v0.2.0 fixes a bug where truncation was not followed by re-normalization, leaving the vector norm < 1 and breaking cosine similarity accuracy.
-
-> ⚠️ **Note**: The `CandleEngine.tensor_pool` field was removed in v0.2.0 (the original tensor pool had a mask-all-zero bug); tensor buffers are now managed internally by Candle. The device-level GPU memory pool (`src/device/memory_pool.rs`) is retained.
-
-## 6. Request Lifecycle
-
-A typical embedding request flows through the following stages:
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant G as Gateway
-    participant P as Pipeline
-    participant S as EmbeddingService
-    participant E as InferenceEngine
-    participant Cache as oxcache
-
-    C->>G: POST /api/1/embed {text}
-    G->>G: Auth (JWT/CSRF) check
-    G->>G: Rate limit check (limiteron)
-    G->>P: Enqueue with priority
-    P->>S: Dispatch to worker
-    S->>Cache: Cache lookup (text hash)
-    alt Cache hit
-        Cache-->>S: Cached embedding
-    else Cache miss
-        S->>E: embed(text)
-        E-->>S: Embedding vector
-        S->>Cache: Store result
+    subgraph Client["客户端层"]
+        ClientReq[客户端请求]
     end
-    S-->>P: EmbedResponse
-    P-->>G: Response
-    G-->>C: 200 OK {embedding, dimension}
+
+    subgraph Gateway["网关层"]
+        Server[HTTP/gRPC/MCP/CLI 服务器<br/>sdforge 生成]
+        Auth[认证 JWT]
+        RateLim[速率限制 令牌桶]
+    end
+
+    subgraph Pipeline["请求管道层"]
+        PriorityQueue[优先级队列]
+        Scheduler[调度器]
+        Workers[工作线程]
+    end
+
+    subgraph Inference["推理层"]
+        CacheCheck[缓存检查 oxcache + SemanticCache]
+        ModelInference[模型推理 Candle/ONNX]
+    end
+
+    subgraph Response["响应层"]
+        ResponseBuilder[响应构建]
+    end
+
+    ClientReq --> Server
+    Server --> Auth
+    Server --> RateLim
+    Auth --> RateLim
+
+    RateLim --> PriorityQueue
+    PriorityQueue --> Scheduler
+    Scheduler --> Workers
+
+    Workers --> CacheCheck
+    Workers --> ModelInference
+
+    CacheCheck --> ResponseBuilder
+    ModelInference --> ResponseBuilder
 ```
 
-## 7. Configuration Architecture
+---
 
-Configuration is layered: base TOML files + environment variable overrides + optional hot reload via `confers`.
+### 📝 逐步处理流程
+
+| 步骤 | 组件 | 说明 | 可选 |
+|------|------|------|------|
+| **1. 请求接收** | HTTP/gRPC/MCP/CLI 服务器 | 接收并解析请求（sdforge 统一生成） | ❌ |
+| **2. 认证** | JWT 中间件 | 验证令牌有效性 | ✅ (可禁用) |
+| **3. 速率限制** | Rate Limiter | 令牌桶算法检查 | ✅ (可禁用) |
+| **4. 请求管道** | Pipeline | 优先级队列处理 | ✅ (可启用) |
+| **5. 缓存查找** | Cache Layer | 检查缓存命中 | ✅ |
+| **6. 模型推理** | Engine | 执行嵌入计算 | ❌ |
+| **7. 缓存更新** | Cache Layer | 存储新结果 | ✅ |
+| **8. 返回响应** | Response Builder | 格式化并返回 | ❌ |
+
+---
+
+### ⏱️ 性能关键路径
+
+```
+延迟组成（缓存命中）:  认证 + 速率限制 + 缓存查找 ≈ 1-5ms
+
+延迟组成（缓存未命中）: 认证 + 速率限制 + 排队等待 + 模型推理 ≈ 10-100ms
+                                                              │
+                                            ┌─────────────────┘
+                                            ▼
+                              GPU: 10-50ms | CPU: 50-200ms
+```
+
+---
+
+## 📬 请求管道
+
+管道模块（`src/pipeline/`）实现基于优先级的请求队列：
+
+```
+src/pipeline/
+├── mod.rs              # 模块导出
+├── config.rs           # 优先级配置
+├── priority.rs         # 优先级计算逻辑
+├── queue.rs            # 线程安全优先级队列
+├── scheduler.rs        # 请求调度器
+├── worker.rs           # 工作线程池
+└── response_channel.rs # 异步响应通道
+```
+
+---
+
+### 🔢 优先级计算
+
+请求优先级由多个因素综合决定：
+
+```rust
+pub struct PriorityCalculator {
+    base_priority: u32,              // 基础优先级
+    timeout_boost_factor: f32,       // 超时提升因子
+    user_tier_weights: HashMap<UserTier, f32>,   // 用户层级权重
+    source_weights: HashMap<RequestSource, f32>, // 请求来源权重
+}
+
+impl PriorityCalculator {
+    pub fn calculate(&self, request: &PriorityRequest) -> u32 {
+        let mut priority = self.base_priority;
+        priority += (request.timeout_remaining_secs * self.timeout_boost_factor) as u32;
+        priority += (self.user_tier_weights[&request.user_tier] * 100.0) as u32;
+        priority += (self.source_weights[&request.source] * 50.0) as u32;
+        priority
+    }
+}
+```
+
+---
+
+### 👤 用户层级权重
+
+| 层级 | 权重系数 | 优先级倍率 | 适用场景 |
+|------|----------|------------|----------|
+| **free** | 1.0 | 1x | 免费用户 |
+| **basic** | 1.5 | 1.5x | 基础付费用户 |
+| **pro** | 2.0 | 2x | 专业用户 |
+| **enterprise** | 3.0 | 3x | 企业客户 |
+
+---
+
+### 📡 请求来源权重
+
+| 来源 | 权重系数 | 说明 |
+|------|----------|------|
+| **api** | 1.0 | 标准 HTTP API 请求 |
+| **grpc** | 1.2 | gRPC 请求（已优化批处理） |
+| **mcp** | 1.0 | MCP 工具调用（LLM 客户端） |
+| **cli** | 0.8 | 命令行调用（本地运维） |
+| **internal** | 0.5 | 内部服务调用 |
+
+---
+
+## 💾 缓存架构
+
+VecBoost 的缓存基础设施由 `oxcache` 统一接管（必选依赖，禁止手写 LRU），实际文件结构如下：
+
+```
+src/cache/
+├── mod.rs              # 模块导出（仅 OxCacheBackend）
+└── oxcache_backend.rs  # oxcache 后端实现（OxCacheBackend）
+```
+
+缓存策略（LRU/LFU/ARC/TwoQueue）由 `oxcache` 内部统一管理，VecBoost 通过 `OxCacheBackend` 直接调用 oxcache 原生 API，不维护额外的 Cache trait 或策略枚举。
+
+---
+
+### 🗂️ 缓存层次结构
 
 ```mermaid
 graph LR
-    TOML["config/config.toml"] --> Loader["Config Loader"]
-    Env["Environment Variables<br/>VECBOOST_*"] --> Loader
-    Loader --> AppConfig["AppConfig"]
-    confers["confers (always)"] -.->|hot reload| AppConfig
+    subgraph Cache_Layers["VecBoost 分层缓存"]
+        ARC["ARC 缓存"] --> LFU["LFU 缓存"] --> KV["KV 缓存"]
+    end
 
-    AppConfig --> Server["ServerConfig"]
-    AppConfig --> Model["ModelConfig"]
-    AppConfig --> Auth["AuthConfig"]
-    AppConfig --> Database["DatabaseConfig"]
-    AppConfig --> Logging["LoggingConfig"]
-    AppConfig --> FlowControl["FlowControlConfig"]
-    AppConfig --> Cache["CacheConfig"]
+    ARC -->|"频繁访问项目<br/>(热数据)"| ARC_Desc
+    LFU -->|"长尾访问项目<br/>(温数据)"| LFU_Desc
+    KV -->|"大型嵌入向量<br/>(冷数据)"| KV_Desc
+
+    ARC_Desc["ARC 缓存"]
+    LFU_Desc["LFU 缓存"]
+    KV_Desc["KV 缓存"]
 ```
 
-### 7.1 Configuration Sections
+---
 
-| Section | Library | Feature | Purpose |
-|---------|---------|---------|---------|
-| `[server]` | - | - | HTTP bind address, port, timeout, gRPC config (max_connections, timeout, require_auth, allowed_roots) |
-| `[model]` | - | - | HuggingFace model repo, GPU, batch size |
-| `[embedding]` | - | - | Aggregation, similarity metric, cache |
-| `[auth]` | - | `auth` | JWT, CSRF, admin credentials |
-| `[database]` | dbnexus | `db` | Connection URL, pool size |
-| `[logging]` | inklog | always | Log level, console/file output |
-| `[flow_control]` | limiteron | always | Token bucket, circuit breaker |
-| `[cache]` | oxcache | always | Backend, TTL, eviction policy |
-| `[rate_limit]` | limiteron | always | Per-dimension rate limits |
-| `[audit]` | - | - | Audit log file, rotation |
+### 📊 缓存策略对比
 
-### 7.2 gRPC Server Configuration
+| 策略 | 最佳场景 | 淘汰策略 | 内存效率 |
+|------|----------|----------|----------|
+| **ARC** | 混合访问模式 | 自适应 LRU/LFU | ⭐⭐⭐⭐⭐ |
+| **LFU** | 一致访问模式 | 淘汰最少使用 | ⭐⭐⭐⭐ |
+| **LRU** | 时间局部性 | 淘汰最近最少使用 | ⭐⭐⭐ |
+| **KV** | 大型向量存储 | O(1) 键值操作 | ⭐⭐⭐ |
 
-The gRPC server is started by sdforge via `build_server_with_config`. The following options are defined on `ServerConfig` (`src/config/app.rs`):
+---
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `grpc_max_connections` | `Option<usize>` | `1000` | Max concurrent gRPC connections |
-| `grpc_timeout_seconds` | `Option<u64>` | `30` | gRPC request timeout (seconds) |
-| `grpc_require_auth` | `Option<bool>` | `true` | Require gRPC auth (must be explicitly disabled) |
-| `grpc_allowed_roots` | `Option<Vec<String>>` | `None` | Whitelist of root directories for gRPC file operations |
+### ⚙️ 缓存配置
 
-> 🔒 **Secure defaults**: `grpc_require_auth` defaults to `true`; callers must explicitly set `grpc_require_auth = false` in `config/config.toml` to disable auth. When `grpc_allowed_roots` is `None`, it falls back to the current working directory but rejects sensitive paths (`/`, `/etc`, `/root`) to prevent full filesystem exposure.
+```toml
+[embedding]
+cache_enabled = true           # 启用缓存
+cache_size = 1024              # 最大缓存条目数
 
-## 8. Test Architecture
+[advanced.cache]
+# ARC 缓存特定配置
+arc_size_fraction = 0.5        # ARC 占总缓存比例
+# LFU 缓存特定配置
+lfu_access_window = 3600       # 访问频率统计窗口（秒）
+```
 
-The `tests/` directory is organized into three subdirectories with shared fixtures:
+---
+
+## 🔒 安全架构
+
+### 🔐 认证流程
+
+```mermaid
+graph TB
+    subgraph Auth["认证流程"]
+        UserReq["用户请求"] --> Validate["验证凭据"]
+        Validate --> Generate["生成 JWT"]
+        Generate --> Return["返回令牌"]
+
+        Validate -->|"查询"| UserStore["用户存储"]
+        UserStore -->|"验证结果"| Validate
+
+        Generate -->|"无效"| Return401["返回 401: 无效令牌"]
+    end
+```
+
+---
+
+### 🪪 JWT 认证
+
+v0.2.0 起，JWT 认证完全委托给 `garrison` 框架，VecBoost 通过 `src/auth/` 模块进行适配集成：
+
+```rust
+// src/auth/mod.rs — garrison 集成层
+pub use garrison::prelude::{GarrisonConfig, GarrisonManager, GarrisonUtil};
+pub use config::map_auth_config_to_garrison;
+pub use interface::VecBoostInterface;
+
+// Garrison 初始化标记类型
+// Some 表示 garrison 已初始化，None 表示 auth 未启用
+pub struct GarrisonHandle;
+```
+
+认证流程通过 `garrison` 的 `GarrisonManager` 单例管理，VecBoost 只需提供 `AuthConfig → GarrisonConfig` 映射和 `VecBoostInterface`（实现 `GarrisonInterface`）。
+
+---
+
+### 🛡️ CSRF 保护
+
+```
+src/auth/
+├── config.rs       # AuthConfig → GarrisonConfig 映射
+├── interface.rs    # VecBoostInterface（GarrisonInterface 实现）
+├── middleware.rs   # Axum 认证中间件（委托 garrison）
+├── mod.rs          # 模块导出 + Re-export garrison 核心类型
+└── types.rs        # HTTP 请求/响应类型（serde 序列化）
+```
+
+---
+
+### 🔒 HF Hub repo_id 校验（vuln-0009）
+
+为防止路径遍历攻击，所有 Hugging Face 模型仓库 ID 的校验统一收敛到 `src/utils/hf_hub.rs`，由 `is_valid_hf_repo_id` + `build_hf_repo` 两个函数集中处理：
+
+```rust
+// src/utils/hf_hub.rs
+pub fn is_valid_hf_repo_id(repo_id: &str) -> bool {
+    // 拒绝：空、前导/尾随斜杠、双斜杠、超过两段、路径遍历（../）、特殊字符
+    // 允许：单段（gpt2）或双段（org/model）
+}
+
+pub(crate) fn build_hf_repo(repo_id: &str, /* ... */) -> Result<...> {
+    if !is_valid_hf_repo_id(repo_id) {
+        return Err(/* 无效 repo_id */);
+    }
+    // 安全构造 HF 仓库句柄
+}
+```
+
+| 校验规则 | 拒绝示例 | 允许示例 |
+|----------|----------|----------|
+| 路径遍历 | `../etc/passwd`、`org/../../etc` | — |
+| 前导/尾随斜杠 | `/etc/passwd`、`org/model/` | — |
+| 超过两段 | `org/sub/model` | — |
+| 特殊字符 | `org/model:name`、`org/model$evil` | — |
+| 合法单段 | — | `gpt2`、`bert-base-uncased` |
+| 合法双段 | — | `BAAI/bge-m3`、`org/model.v2` |
+
+---
+
+### 📝 审计日志
+
+```rust
+pub struct AuditLogger {
+    log_file: File,        // 日志文件
+    config: AuditConfig,   // 审计配置
+}
+
+impl AuditLogger {
+    pub async fn log(&self, event: AuditEvent) {
+        let entry = AuditEntry {
+            timestamp: Utc::now(),
+            user_id: event.user_id,
+            action: event.action,
+            resource: event.resource,
+            ip_address: event.ip_address,
+            success: event.success,
+        };
+        // 异步写入日志
+        self.write_entry(&entry).await;
+    }
+}
+```
+
+| 审计字段 | 说明 |
+|----------|------|
+| `timestamp` | 事件时间戳 |
+| `user_id` | 用户标识 |
+| `action` | 操作类型 |
+| `resource` | 资源路径 |
+| `ip_address` | 客户端 IP |
+| `success` | 是否成功 |
+
+---
+
+## ⚙️ 配置系统
+
+```
+src/config/
+├── app.rs            # 配置子结构体定义（ServerConfig/ModelConfig/EmbeddingConfig 等）
+├── app_config.rs     # AppConfig 定义（confers #[derive(Config)] 接管配置加载）
+├── encryption.rs     # 配置加密支持
+├── model.rs          # 模型配置（Precision/DeviceType 等类型）
+├── mod.rs            # 模块导出
+└── tests.rs          # 配置测试
+```
+
+---
+
+### 📊 配置层次（优先级从低到高）
+
+| 优先级 | 来源 | 说明 |
+|--------|------|------|
+| 1 | **默认值** | 代码中的内置默认值 |
+| 2 | **配置文件** | `config/config.toml` 或 `config/config_custom.toml` |
+| 3 | **环境变量** | 以 `VECBOOST_` 为前缀的环境变量 |
+| 4 | **CLI 参数** | 命令行参数（最高优先级） |
+
+---
+
+### 🔄 环境变量映射
+
+| 配置键 | 环境变量 | 示例值 |
+|--------|----------|--------|
+| `server.port` | `VECBOOST_SERVER_PORT` | `9002` |
+| `model.model_repo` | `VECBOOST_MODEL_REPO` | `BAAI/bge-m3` |
+| `auth.jwt_secret` | `VECBOOST_JWT_SECRET` | `your-secret-key` |
+| `embedding.cache_size` | `VECBOOST_CACHE_SIZE` | `1024` |
+| `model.use_gpu` | `VECBOOST_USE_GPU` | `true` |
+
+---
+
+### 🔧 gRPC 服务器配置（ServerConfig）
+
+gRPC 服务由 sdforge 通过 `build_server_with_config` 启动，相关配置项定义在 `ServerConfig`（`src/config/app.rs`）：
+
+| 配置键 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `grpc_max_connections` | `Option<usize>` | `1000` | gRPC 最大并发连接数 |
+| `grpc_timeout_seconds` | `Option<u64>` | `30` | gRPC 请求超时（秒） |
+| `grpc_require_auth` | `Option<bool>` | `true` | 是否强制 gRPC 鉴权（默认开启，需显式关闭） |
+| `grpc_allowed_roots` | `Option<Vec<String>>` | `None` | gRPC 文件操作允许的根目录白名单 |
+
+> 🔒 **安全默认值**：`grpc_require_auth` 默认为 `true`，调用方必须在 `config/config.toml` 中显式设置 `grpc_require_auth = false` 才能禁用鉴权。`grpc_allowed_roots` 为 `None` 时回退到当前工作目录，但拒绝 `/`、`/etc`、`/root` 等敏感目录以防文件系统全暴露。
+
+---
+
+### 📦 配置加载流程
+
+```rust
+impl AppConfig {
+    pub fn load() -> Result<Self, ConfigError> {
+        let mut builder = ConfigBuilder::default();
+        
+        // 1. 加载配置文件
+        builder = builder.add_source(ConfigFile::with_name("config/config.toml"));
+        
+        // 2. 添加环境变量覆盖
+        builder = builder.add_source(EnvironmentVariables::with_prefix("VECBOOST"));
+        
+        // 3. 解析并返回配置
+        builder.build()
+    }
+}
+```
+
+---
+
+## 🚀 性能优化
+
+### 📦 批处理优化
+
+```mermaid
+graph TB
+    subgraph Batching["批处理流程"]
+        Req1["请求 1"] --> Batch["批处理器<br/>(最大等待时间: 10ms)"]
+        Req2["请求 2"] --> Batch
+        Req3["请求 3"] --> Batch
+        ReqN["请求 N"] --> Batch
+
+        Batch -->|"批大小上限: 32"| Inference["批量推理<br/>(一次前向传播)"]
+    end
+```
+
+| 参数 | 默认值 | 可配置范围 | 影响 |
+|------|--------|------------|------|
+| `batch_size` | 32 | 1-256 | 吞吐量 |
+| `max_wait_ms` | 10 | 1-100 | 延迟 |
+
+---
+
+### 🧠 内存管理
+
+| 优化技术 | 说明 | 收益 |
+|----------|------|------|
+| **GPU 内存池** | 预分配 CUDA/Metal 缓冲区（`src/device/memory_pool.rs`） | 减少设备分配开销 |
+| **自适应缓存** | ARC 缓存策略 | 最小化内存碎片 |
+| **零拷贝** | 尽可能使用共享引用 | 减少内存复制 |
+
+> ⚠️ **注意**：`CandleEngine.tensor_pool` 字段已在 v0.2.0 移除（原张量池存在 mask 全零 bug），张量缓冲区改由 Candle 内部管理。设备级 GPU 内存池（`src/device/memory_pool.rs`）保留。
+
+---
+
+### 🎮 GPU 内存优化
+
+```rust
+pub struct MemoryPool {
+    buffers: Vec<CudaBuffer>,  // 缓冲区列表
+    free_list: Vec<usize>,     // 空闲缓冲区索引
+    max_size: usize,           // 最大池大小
+}
+
+impl MemoryPool {
+    pub fn allocate(&mut self, size: usize) -> Result<CudaBuffer, Error> {
+        // 1. 尝试从空闲列表重用
+        if let Some(idx) = self.find_free_buffer(size) {
+            return Ok(self.buffers[idx].take().unwrap());
+        }
+        
+        // 2. 分配新缓冲区
+        self.allocate_new(size)
+    }
+}
+```
+
+---
+
+### 🧵 并发模型
+
+```mermaid
+graph TB
+    subgraph ThreadPool["并发模型"]
+        Main["主线程<br/>(sdforge 多协议服务器<br/>HTTP/gRPC/MCP/CLI)"] -->|"分发请求"| Workers["工作线程池<br/>(Rayon 线程池)"]
+
+        Workers -->|"提交推理任务"| Engine["推理引擎<br/>(GPU / CPU)"]
+    end
+```
+
+---
+
+## 🚢 部署架构
+
+### ☸️ Kubernetes 部署
+
+VecBoost 提供 Docker 镜像（通过 `docker build` 或 GitHub Actions 构建），Kubernetes 部署清单需根据实际环境自定义。典型部署资源包括：
+
+| 资源 | 说明 |
+|------|------|
+| `ConfigMap` | 配置即代码 |
+| `Deployment` | 主部署清单 |
+| `HPA` | 水平 Pod 自动扩缩容 |
+| `PVC` | 模型存储持久化卷 |
+| `Service` | 集群 IP 服务 |
+
+---
+
+### 📦 容器架构
+
+```mermaid
+graph TB
+    subgraph Docker["Docker 容器"]
+        subgraph Process["VecBoost 进程 (PID 1)"]
+            HTTP["HTTP 服务器 :9002<br/>sdforge 生成"]
+            GRPC["gRPC 服务器 :50051<br/>sdforge Call 协议"]
+            MCP["MCP 服务器 stdio<br/>sdforge 生成"]
+            CLI["CLI 入口<br/>sdforge 生成"]
+            Health["健康检查端点 /health"]
+        end
+
+        subgraph Engine["推理引擎层"]
+            InferenceEngine["推理引擎<br/>(Candle / ONNX Runtime)"]
+        end
+
+        subgraph Device["设备层"]
+            CPU["CPU 系统内存"]
+            CUDA["CUDA VRAM"]
+            Metal["Metal VRAM"]
+        end
+
+        HTTP --> InferenceEngine
+        GRPC --> InferenceEngine
+        MCP --> InferenceEngine
+        CLI --> InferenceEngine
+        Health --> InferenceEngine
+
+        InferenceEngine --> CPU
+        InferenceEngine --> CUDA
+        InferenceEngine --> Metal
+    end
+```
+
+---
+
+### 📈 扩展策略
+
+| 策略 | 描述 | 适用场景 |
+|------|------|----------|
+| **HPA** | 基于 CPU/内存自动扩缩容 | 高请求量、波动流量 |
+| **GPU 节点池** | 专用 GPU 节点 | 推理密集型工作负载 |
+| **模型缓存** | 持久化存储模型 | 多区域部署、冷启动 |
+| **速率限制** | 防止过载 | 公共 API、保护下游 |
+
+---
+
+## 🔌 扩展点
+
+### ⚡ 添加新推理引擎
+
+1. 在 `src/engine/` 实现 `InferenceEngine` trait
+2. 将引擎类型添加到 `AnyEngine` 枚举
+3. 更新 `EngineFactory::create()` 工厂方法
+4. 添加配置解析支持
+
+```rust
+#[async_trait]
+pub trait InferenceEngine: Send + Sync {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError>;
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError>;
+    fn precision(&self) -> &Precision;
+    fn supports_mixed_precision(&self) -> bool;
+    fn rerank(&self, query: &str, document: &str) -> Result<f32, VecboostError> { ... }
+    fn rerank_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, VecboostError> { ... }
+    fn supports_rerank(&self) -> bool { true }
+    async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
+}
+```
+
+---
+
+### 💾 添加新缓存策略
+
+1. 在 `src/cache/` 实现 `Cache` trait
+2. 将缓存类型添加到 `CacheType` 枚举
+3. 更新 `EmbeddingService` 中的缓存工厂
+
+---
+
+### 🔐 自定义认证提供商
+
+1. 实现 `AuthProvider` trait
+2. 在认证模块注册
+3. 在 `config/config.toml` 中配置
+
+---
+
+## 🧪 测试架构
+
+`tests/` 目录按职责分为共享夹具、集成测试、性能与场景四类（同时存在 `tests/integration.rs` 入口文件与 `tests/integration/` 子目录、`tests/perf.rs` 与 `tests/perf/` 子目录，为 v0.2.0 已知偏离 D8，合并修复推迟到 v0.3.0）：
 
 ```
 tests/
-├── integration.rs       # Entry point: cargo test --test integration
-├── perf.rs              # Entry point: cargo test --test perf
-├── common/
-│   └── mod.rs           # Shared fixtures: MockEngine, create_test_engine()
+├── integration.rs            # 入口：cargo test --test integration
 ├── integration/
-│   ├── api_test.rs      # API integration tests (merged)
-│   └── real_engine.rs   # RealTestEngine + TestMode (mock/light/full)
-└── perf/
-    ├── performance_test.rs  # Rust performance benchmarks
-    ├── conftest.py          # pytest fixtures
-    ├── test_api.py          # Python API tests
-    └── ...                  # Python perf tooling
+│   ├── api_test.rs           # API 集成测试
+│   └── real_engine.rs        # RealTestEngine + TestMode (mock/light/full)
+├── perf.rs                   # 入口：cargo test --test perf
+├── perf/
+│   ├── performance_test.rs   # Rust 性能回归阈值（MockEngine）
+│   ├── conftest.py           # pytest 夹具
+│   ├── test_api.py           # Python API 测试（sim 标记区分模拟器）
+│   └── ...                   # Python 性能工具
+├── scenario/                 # Python 场景测试（15 个套件，conftest 拉起真实二进制）
+├── common/mod.rs             # 共享夹具：MockEngine、create_test_engine()
+├── doctor.rs / grpc_e2e.rs / model_snapshot_regression.rs
+├── quantized_parity.rs / scenario_sdk.rs
+└── fixtures/golden_corpus.txt  # 量化质量门 golden 语料
 ```
 
-> **⚠️ v0.2.0 已知偏离(D8)**: `tests/integration.rs` 与 `tests/integration/` 子目录并存,`tests/perf.rs` 与 `tests/perf/` 子目录并存,会导致 Rust 模块系统警告。同时 `tests/integration/mod.rs`、`tests/integration/grpc_test.rs`、`tests/common/fixtures.rs` 缺失。修复方式(删除顶层 .rs 文件或删除对应目录)推迟到 v0.3.0。详见 `specmark/changes/vecboost-v0.2.0-ecosystem-refactor/design.md` D8 偏离记录。
+### 🎛️ 测试模式（TEST_MODE）
 
-### 8.1 Test Modes
+`TEST_MODE` 环境变量控制测试引擎行为：
 
-The `TEST_MODE` environment variable controls test engine behavior:
+| 模式 | 行为 |
+|------|------|
+| `mock`（默认） | 使用 `MockEngine`（FNV-1a 哈希 + LCG）— 确定性，无需模型 |
+| `light` | 尝试真实推理，失败回退 mock |
+| `full` | 强制真实推理引擎（需要下载模型） |
 
-| Mode | Behavior |
-|------|----------|
-| `mock` (default) | Uses `MockEngine` (FNV-1a hash + LCG) — deterministic, no model required |
-| `light` | Attempts real inference, falls back to mock on failure |
-| `full` | Forces real inference engine (requires model download) |
+> **说明**：断言语义相似性的测试（如"相似文本 > 不同文本"）标注 `#[ignore]`，因为 mock 引擎生成语义随机向量。需在 `TEST_MODE=light` 或 `full` 下以 `cargo test --test integration -- --ignored` 运行。
 
-> **Note**: Tests asserting semantic similarity (e.g., similar texts > different texts) are marked `#[ignore]` because the mock engine generates semantically random vectors. Run them with `cargo test --test integration -- --ignored` under `TEST_MODE=light` or `full`.
+---
 
-## 9. Internationalization (i18n)
+> **📝 最后更新**: 2026-08-09 | **版本**: 0.2.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
 
-VecBoost supports bilingual (English/Chinese) error responses and user-facing messages via a lightweight Fluent-compatible translation system. The `Display` trait implementation uses `tr_with_args(error_code())` for full i18n coverage in both HTTP responses (`IntoResponse`) and log output.
+---
 
-### Architecture
+## 🌐 国际化（i18n）
+
+VecBoost 支持中英双语错误响应和面向用户的消息，基于轻量级 Fluent 兼容翻译系统实现。
+
+### 模块结构
 
 ```
 src/i18n/
-├── mod.rs          # Public API: init(), tr(), tr_with_args(), tr_locale(), tr_args()
-├── bundle.rs       # FTL parser + I18nBundle (HashMap<LanguageIdentifier, HashMap<String, String>>)
-├── locale.rs       # Language detection + Accept-Language parsing
+├── mod.rs          # 公共 API：init(), tr(), tr_with_args(), tr_locale(), tr_args()
+├── bundle.rs       # FTL 解析器 + I18nBundle（HashMap<LanguageIdentifier, HashMap<String, String>>）
+├── locale.rs       # 语言检测 + Accept-Language 解析
 └── locales/
     ├── en/
-    │   ├── errors.ftl    # 17 error variant translations
-    │   └── messages.ftl  # ~97 response/validation/startup message translations (114 total keys)
+    │   ├── errors.ftl    # 17 个错误变体翻译
+    │   └── messages.ftl  # 响应消息翻译
     └── zh/
         ├── errors.ftl
         └── messages.ftl
 ```
 
-### Design Decisions
+### 设计决策
 
-| Decision | Rationale |
-|----------|----------|
-| Lightweight FTL parser instead of `fluent-bundle` | `FluentBundle` is not `Send+Sync` (contains `RefCell<TypeMap>`), incompatible with `static OnceLock` storage |
-| FTL files embedded via `include_str!` | Zero runtime I/O; translations compiled into binary |
-| `HashMap<String, String>` for args | Avoids `FluentArgs<'a>` lifetime issues; simple `{ $var }` substitution |
-| Language detection priority chain | `VECBOOST_LANG` → `LC_ALL`/`LANG` → `sys-locale` → `"en"` |
-| Per-request locale via `Accept-Language` middleware | HTTP requests set locale via tokio task_local; all `tr()` calls downstream use request locale |
+| 决策 | 原因 |
+|------|------|
+| 轻量 FTL 解析器替代 `fluent-bundle` | `FluentBundle` 非 `Send+Sync`（含 `RefCell<TypeMap>`），无法存入 `static OnceLock` |
+| FTL 文件通过 `include_str!` 嵌入 | 零运行时 I/O；翻译编译进二进制 |
+| `HashMap<String, String>` 存储参数 | 避免 `FluentArgs<'a>` 生命周期问题；简单 `{ $var }` 替换 |
+| 语言检测优先级链 | `VECBOOST_LANG` → `LC_ALL`/`LANG` → `sys-locale` → `"en"` |
 
-### Public API
+### 公共 API
 
 ```rust
-// Initialize i18n (called once at startup in main.rs)
+// 初始化 i18n（在 main.rs 启动时调用一次）
 vecboost::i18n::init();
 
-// Translate a message key
+// 翻译消息键
 let msg = vecboost::i18n::tr("health-ok");
 
-// Translate with arguments
+// 带参数翻译
 let args = vecboost::i18n::tr_args(&[("index", "0"), ("max", "1024")]);
 let msg = vecboost::i18n::tr_with_args("validate-text-length", args);
 
-// Translate for a specific locale
+// 指定 locale 翻译
 let msg = vecboost::i18n::tr_locale("health-ok", "zh");
 ```
 
-### Error Code Mapping
+### 错误码映射
 
-Each `VecboostError` variant maps to a stable Fluent key via `error_code()`:
+每个 `VecboostError` 变体通过 `error_code()` 映射到稳定的 Fluent 键：
 
-| Variant | `error_code()` | English | Chinese |
-|---------|---------------|---------|----------|
+| 变体 | `error_code()` | 英文 | 中文 |
+|------|---------------|------|------|
 | `ConfigError` | `error-config` | Config error: {detail} | 配置错误：{detail} |
 | `ValidationError` | `error-validation` | Validation error: {detail} | 验证错误：{detail} |
 | `AuthenticationError` | `error-authentication` | Authentication error: {detail} | 认证错误：{detail} |
 | ... | ... | ... | ... |
 
-Both `IntoResponse` (HTTP JSON) and `Display` (logging/`to_string()`) use `error_code()` to look up the translated message, passing `error_detail()` as the `{ $detail }` argument. Per-request locale is set by the `i18n_middleware` via `Accept-Language` header, stored in a tokio task_local, and automatically read by all `tr()` calls within the request scope.
+`IntoResponse` 实现使用 `error_code()` 查找翻译消息，将 `error_detail()` 作为 `{ $detail }` 参数传入。
 
 ---
 
-## 📚 Related Documentation
+## ⚠️ 错误处理
 
-| Documentation | Description |
-|:--------------|:------------|
-| [📖 User Guide](USER_GUIDE_zh.md) | Installation, configuration, and usage guide |
-| [📘 API Reference](API_REFERENCE_zh.md) | Complete REST API and gRPC documentation |
-| [📋 Changelog](CHANGELOG.md) | Release notes for each version |
+```
+src/error.rs
+```
+
+### 错误类型
+
+| 错误 | 描述 | HTTP 状态码 |
+|------|------|----------|
+| `ConfigError` | 配置错误 | 500 |
+| `ModelLoadError` | 模型加载失败 | 424 |
+| `ModelFileCorrupted` | 模型文件损坏 | 424 |
+| `ModelIntegrityError` | 模型完整性校验失败 | 424 |
+| `TokenizationError` | 分词错误 | 422 |
+| `InferenceError` | 推理失败 | 503 |
+| `OutOfMemory` | GPU/CPU 内存耗尽 | 507 |
+| `InvalidInput` | 无效输入 | 400 |
+| `NotFound` | 资源未找到 | 404 |
+| `ModelNotLoaded` | 模型未加载 | 424 |
+| `AuthenticationError` | 认证失败 | 401 |
+| `SecurityError` | 安全错误 | 500 |
+| `IoError` | IO 错误 | 500 |
+| `ValidationError` | 校验错误 | 400 |
+| `RateLimitExceeded` | 速率限制 | 429 |
+| `DatabaseError` | 数据库错误 | 500 |
+| `InternalError` | 内部错误 | 500 |
+
+---
+
+## 📚 相关文档
+
+| 文档 | 说明 |
+|:-----|:-----|
+| [📖 用户指南](USER_GUIDE.md) | 安装、配置和使用的完整说明 |
+| [📘 API 参考](API_REFERENCE.md) | 完整的 REST API 和 gRPC 文档 |
+| [⚡ 性能指南](PERFORMANCE.md) | 基准数据、调优开关与实验纪律 |
+| [🔒 安全文档](SECURITY.md) | 安全设计与漏洞报告流程 |
+| [🧪 测试场景矩阵](TEST_SCENARIOS.md) | 测试栈职责划分与场景穷举 |
+| [❓ FAQ](FAQ.md) | 常见问题解答 |
+| [📋 更新日志](CHANGELOG.md) | 每个版本的变更记录 |

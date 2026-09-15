@@ -6,7 +6,7 @@
 
 [中文](README.md) | **English**
 
-*A high-performance, production-grade embedding vector service written in Rust. VecBoost provides efficient text vectorization with multiple inference engines, GPU acceleration, and enterprise-grade features.*
+**A high-performance, production-grade embedding vector service written in Rust. VecBoost provides efficient text vectorization with multiple inference engines, GPU acceleration, and enterprise-grade features.**
 
 [✨ Features](#-features) • [🚀 Quick Start](#-quick-start) • [📚 Documentation](#-documentation) • [💻 Examples](#-examples) • [🤝 Contributing](#-contributing)
 
@@ -14,18 +14,18 @@
 
 ---
 
-<div align="center" style="padding: 32px; margin: 24px 0">
+<div align="center">
 
-### 🎯 Single-Source Definitions, Four Protocols
+### 🎯 Write the API Once, Get Four Protocols
 
-All API handlers live in `src/api/embedding.rs`; the `sdforge` `#[forge(...)]` macros generate the four protocol bindings at compile time:
+Interface handlers are written just once; `sdforge` macros generate all four protocol bindings at compile time — the compiler does the rest.
 
 <table style="width:100%; border-collapse: collapse">
 <tr>
-<td align="center" width="25%" style="padding: 12px">🌐<br><b>HTTP/REST</b><br><span style="color:#64748B">Axum + OpenAPI docs</span></td>
-<td align="center" width="25%" style="padding: 12px">📡<br><b>gRPC</b><br><span style="color:#64748B">sdforge unified Call protocol</span></td>
-<td align="center" width="25%" style="padding: 12px">🤖<br><b>MCP</b><br><span style="color:#64748B">LLM tool integration (stdio)</span></td>
-<td align="center" width="25%" style="padding: 12px">💻<br><b>CLI</b><br><span style="color:#64748B">clap command line</span></td>
+<td align="center" width="25%">🌐<br><b>REST</b><br><span style="color:#64748B">Web clients · On by default</span></td>
+<td align="center" width="25%">📡<br><b>gRPC</b><br><span style="color:#64748B">Microservices · Type-safe</span></td>
+<td align="center" width="25%">🤖<br><b>MCP</b><br><span style="color:#64748B">LLM tools · stdio transport</span></td>
+<td align="center" width="25%">💻<br><b>CLI</b><br><span style="color:#64748B">Scripting · Quick checks</span></td>
 </tr>
 </table>
 
@@ -52,7 +52,6 @@ All API handlers live in `src/api/embedding.rs`; the `sdforge` `#[forge(...)]` m
 - [🙏 Acknowledgements](#-acknowledgements)
 - [📞 Contact & Support](#-contact--support)
 - [⭐ Star History](#-star-history)
-
 
 ---
 
@@ -84,10 +83,12 @@ All API handlers live in `src/api/embedding.rs`; the `sdforge` `#[forge(...)]` m
 <td width="50%" style="vertical-align:top; padding: 12px">🧊 <b>Matryoshka Support</b><br><span style="color:#64748B">Dynamic dimensionality reduction (auto re-normalization after truncation) for smaller, faster embeddings (OpenAI-compatible)</span></td>
 </tr>
 <tr>
-<td width="50%" style="vertical-align:top; padding: 12px">📈 <b>Observability</b><br><span style="color:#64748B">Prometheus metrics, health checks, structured logging (inklog console + file rotation)</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🔍 <b>Observability</b><br><span style="color:#64748B">Prometheus metrics, health checks, structured logging (inklog console + file rotation)</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">📦 <b>Cloud-Native Deployment</b><br><span style="color:#64748B">Multi-arch Docker images (linux/amd64 + arm64); Kubernetes deployment guidance (manifests bring-your-own)</span></td>
 </tr>
 </table>
+
+In addition to the core capabilities above, an OpenAI-compatible endpoint (`POST /v1/embeddings`, with `encoding_format=base64` support), BF16 inference and SIMD vector similarity, GPU memory paging, read-only `vecboost doctor` diagnostics, Library SDK integration (library mode), and the `config_full.toml` / `config_minimal.toml` config presets are also available; see [🔌 API Usage](#-api-usage) for endpoint details and [⚙️ Configuration](#️-configuration) for configuration options.
 
 ---
 
@@ -153,7 +154,7 @@ cp config/config.toml config/config_custom.toml
 
 ### 💡 Minimal Example
 
-Once the server is running, generate embeddings over HTTP (see [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)):
+The following example is adapted from [`examples/http/embed_api.rs`](examples/http/embed_api.rs) and generates embeddings over HTTP (full endpoints in the [📘 API Reference](docs/API_REFERENCE.md)):
 
 ```bash
 curl -X POST http://localhost:9002/api/1/embed \
@@ -275,7 +276,9 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 
 ## 🏗️ Architecture
 
-VecBoost uses a modular ecosystem architecture: `trait-kit` wires 17 modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`), `sdforge` generates the four protocol bindings from the single source `src/api/embedding.rs`, inference is abstracted behind `EngineFactory` to the Candle / ONNX engines, and requests flow through a priority queue and time-window batching into the inference pipeline. The 7-library ecosystem (trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge) versions and responsibilities, the module dependency graph, data flow, and the cache / security / deployment architecture and extension points are documented in the [🏗️ Architecture document](docs/ARCHITECTURE.md).
+VecBoost uses a modular ecosystem architecture: `trait-kit` wires 17 modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`), `sdforge` generates the four protocol bindings from the single source `src/api/embedding.rs`, inference is abstracted behind `EngineFactory` to the Candle / ONNX engines, and requests flow through a priority queue and time-window batching into the inference pipeline.
+
+The 7-library ecosystem (trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge) versions and responsibilities, the module dependency graph, data flow, and the cache / security / deployment architecture and extension points are documented in the [🏗️ Architecture document](docs/ARCHITECTURE.md).
 
 ---
 

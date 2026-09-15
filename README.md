@@ -6,7 +6,7 @@
 
 **中文** | [English](README_EN.md)
 
-*高性能、生产级嵌入向量服务，使用 Rust 编写。VecBoost 提供高效的文本向量化服务，支持多种推理引擎、GPU 加速和企业级功能。*
+**高性能、生产级嵌入向量服务，使用 Rust 编写。VecBoost 提供高效的文本向量化服务，支持多种推理引擎、GPU 加速和企业级功能。**
 
 [✨ 功能特性](#-功能特性) • [🚀 快速开始](#-快速开始) • [📚 文档](#-文档) • [💻 示例](#-示例) • [🤝 参与贡献](#-参与贡献)
 
@@ -14,18 +14,18 @@
 
 ---
 
-<div align="center" style="padding: 32px; margin: 24px 0">
+<div align="center">
 
-### 🎯 单一源定义，四协议输出
+### 🎯 写一份接口，四种协议即刻可用
 
-所有接口处理函数集中在 `src/api/embedding.rs`，由 `sdforge` 的 `#[forge(...)]` 宏编译期生成四协议绑定：
+接口处理函数只写一份，`sdforge` 宏在编译期生成四协议绑定，剩下交给编译器。
 
 <table style="width:100%; border-collapse: collapse">
 <tr>
-<td align="center" width="25%" style="padding: 12px">🌐<br><b>HTTP/REST</b><br><span style="color:#64748B">Axum + OpenAPI 文档</span></td>
-<td align="center" width="25%" style="padding: 12px">📡<br><b>gRPC</b><br><span style="color:#64748B">sdforge 统一 Call 协议</span></td>
-<td align="center" width="25%" style="padding: 12px">🤖<br><b>MCP</b><br><span style="color:#64748B">LLM 工具集成（stdio）</span></td>
-<td align="center" width="25%" style="padding: 12px">💻<br><b>CLI</b><br><span style="color:#64748B">clap 命令行</span></td>
+<td align="center" width="25%">🌐<br><b>REST</b><br><span style="color:#64748B">Web 接入 · 默认启用</span></td>
+<td align="center" width="25%">📡<br><b>gRPC</b><br><span style="color:#64748B">微服务 · 强类型调用</span></td>
+<td align="center" width="25%">🤖<br><b>MCP</b><br><span style="color:#64748B">LLM 工具 · 标准输入输出</span></td>
+<td align="center" width="25%">💻<br><b>CLI</b><br><span style="color:#64748B">脚本调用 · 快速验证</span></td>
 </tr>
 </table>
 
@@ -52,7 +52,6 @@
 - [🙏 致谢](#-致谢)
 - [📞 联系与支持](#-联系与支持)
 - [⭐ Star 历史](#-star-历史)
-
 
 ---
 
@@ -84,10 +83,12 @@
 <td width="50%" style="vertical-align:top; padding: 12px">🧊 <b>Matryoshka 支持</b><br><span style="color:#64748B">动态维度约简（截断后自动重归一化），支持更小更快的嵌入向量（OpenAI 兼容）</span></td>
 </tr>
 <tr>
-<td width="50%" style="vertical-align:top; padding: 12px">📈 <b>可观测性</b><br><span style="color:#64748B">Prometheus 指标、健康检查、结构化日志（inklog 控制台 + 文件轮转）</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🔍 <b>可观测性</b><br><span style="color:#64748B">Prometheus 指标、健康检查、结构化日志（inklog 控制台 + 文件轮转）</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">📦 <b>云原生部署</b><br><span style="color:#64748B">多架构 Docker 镜像（linux/amd64 + arm64）；Kubernetes 提供部署指引（清单需自备）</span></td>
 </tr>
 </table>
+
+除上述核心能力外，OpenAI 兼容端点（`POST /v1/embeddings`，支持 `encoding_format=base64`）、BF16 推理与 SIMD 向量相似度、GPU 内存分页、`vecboost doctor` 只读诊断、Library SDK 集成（Library 模式）与 `config_full.toml` / `config_minimal.toml` 配置预设也已可用；端点与参数明细见 [🔌 API 使用](#-api-使用) 一节，配置项说明见 [⚙️ 配置](#️-配置) 一节。
 
 ---
 
@@ -153,7 +154,7 @@ cp config/config.toml config/config_custom.toml
 
 ### 💡 最小示例
 
-服务启动后，通过 HTTP 生成嵌入向量（见 [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)）：
+以下示例改编自 [`examples/http/embed_api.rs`](examples/http/embed_api.rs)，通过 HTTP 生成嵌入向量（完整端点见 [📘 API 参考](docs/API_REFERENCE.md)）：
 
 ```bash
 curl -X POST http://localhost:9002/api/1/embed \
@@ -275,7 +276,9 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 
 ## 🏗️ 架构
 
-VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中心（`Kit<Unbuilt> → Kit<Ready>`）装配 17 个模块，`sdforge` 从 `src/api/embedding.rs` 单一源生成四协议绑定，推理经 `EngineFactory` 抽象到 Candle / ONNX 引擎，请求经优先级队列与时间窗拼批进入推理管线。7 库生态（trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge）的版本与分工、模块依赖图、数据流、缓存/安全/部署架构与扩展点说明见 [🏗️ 架构文档](docs/ARCHITECTURE.md)。
+VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中心（`Kit<Unbuilt> → Kit<Ready>`）装配 17 个模块，`sdforge` 从 `src/api/embedding.rs` 单一源生成四协议绑定，推理经 `EngineFactory` 抽象到 Candle / ONNX 引擎，请求经优先级队列与时间窗拼批进入推理管线。
+
+7 库生态（trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge）的版本与分工、模块依赖图、数据流、缓存/安全/部署架构与扩展点说明见 [🏗️ 架构文档](docs/ARCHITECTURE.md)。
 
 ---
 

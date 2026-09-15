@@ -18,6 +18,7 @@ pub mod auth;
 pub mod config;
 #[cfg(feature = "db")]
 pub mod db;
+pub mod doctor;
 pub mod domain;
 pub mod engine;
 pub mod i18n;
@@ -61,15 +62,34 @@ pub use service::rerank::RerankService;
 pub use utils::SimilarityMetric;
 pub use utils::vector::{TaskType, information_retention_rate, recommended_dimension};
 
-// 重新导出批处理调度类型（供 benchmark 和外部集成测试使用）
-pub use device::batch_scheduler::{
-    BatchConfig, BatchPriority, BatchRequest, DynamicBatchScheduler,
-};
-pub use device::continuous_batch::ContinuousBatchLoop;
+// 重新导出内存分页类型（供 benchmark 和外部集成测试使用）
 pub use device::memory_paging::{PagingConfig, PagingStats, WeightPagingManager};
 
+/// 线程调优公共 API（T008–T010）：bin 与外部工具共享物理核检测与优先级解析。
+/// 模型驻留管理（T033 server 接线）：`model` 为 pub(crate)，
+/// 经最小面重导出供 bin 装配 ModelManager。
+pub mod model_management {
+    pub use crate::model::heat::DEFAULT_HEAT_PATH;
+    pub use crate::model::loader::LocalModelLoader;
+    pub use crate::model::manager::ModelManager;
+}
+
+pub mod thread_tune {
+    pub use crate::device::thread_tune::{
+        detect_physical_cores, parse_lscpu_sockets, parse_thread_siblings_lists,
+        resolve_worker_threads,
+    };
+}
+
+/// 硬件感知启动规划公共 API（T023–T024）。
+pub mod planner {
+    pub use crate::device::planner::{
+        Bottleneck, HardwarePlan, PlanOverride, Probes, apply_plan, plan,
+    };
+}
+
 // 重新导出语义缓存类型
-pub use cache::{SemanticCache, SemanticCacheConfig, SemanticCacheStats};
+pub use cache::{ComparisonMode, SemanticCache, SemanticCacheConfig, SemanticCacheStats};
 
 // 再导出 sdforge 多协议框架（gRPC E2E 集成测试经此使用生成的 tonic 客户端）
 #[cfg(feature = "grpc")]

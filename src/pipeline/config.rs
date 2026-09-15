@@ -54,6 +54,15 @@ pub struct WorkerConfig {
     pub scale_check_interval_secs: u64,
     /// 排空拼批最大请求数（worker 单次从队列取出的最大请求数）
     pub max_batch_size: usize,
+    /// 时间窗动态拼批等待窗口（毫秒）。首请求到达后继续等待该时长以聚合更多请求；
+    /// 0 表示关闭时间窗、严格还原排空式拼批（kill-switch 内建）。
+    #[serde(default = "default_batch_wait_ms")]
+    #[schemars(default = "default_batch_wait_ms")]
+    pub batch_wait_ms: u64,
+}
+
+fn default_batch_wait_ms() -> u64 {
+    5
 }
 
 impl Default for WorkerConfig {
@@ -66,6 +75,7 @@ impl Default for WorkerConfig {
             idle_timeout_secs: 60,
             scale_check_interval_secs: 5,
             max_batch_size: 8,
+            batch_wait_ms: default_batch_wait_ms(),
         }
     }
 }
@@ -124,5 +134,50 @@ impl Default for PriorityConfig {
             .into_iter()
             .collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_worker_config_default_batch_wait_ms() {
+        let cfg = WorkerConfig::default();
+        assert_eq!(cfg.batch_wait_ms, 5, "batch_wait_ms default must be 5");
+        assert_eq!(cfg.max_batch_size, 8);
+    }
+
+    #[test]
+    fn test_worker_config_deserialize_missing_uses_default() {
+        let cfg: WorkerConfig = toml::from_str(
+            "min_workers = 2\nmax_workers = 4\nscale_up_threshold = 100\n\
+             scale_down_threshold = 10\nidle_timeout_secs = 60\n\
+             scale_check_interval_secs = 5\nmax_batch_size = 8\n",
+        )
+        .expect("deserialize without batch_wait_ms must succeed");
+        assert_eq!(cfg.batch_wait_ms, 5);
+    }
+
+    #[test]
+    fn test_worker_config_deserialize_zero_is_legal() {
+        let cfg: WorkerConfig = toml::from_str(
+            "min_workers = 2\nmax_workers = 4\nscale_up_threshold = 100\n\
+             scale_down_threshold = 10\nidle_timeout_secs = 60\n\
+             scale_check_interval_secs = 5\nmax_batch_size = 8\nbatch_wait_ms = 0\n",
+        )
+        .expect("batch_wait_ms=0 must be legal (kill-switch)");
+        assert_eq!(cfg.batch_wait_ms, 0);
+    }
+
+    #[test]
+    fn test_worker_config_schema_contains_batch_wait_ms() {
+        let schema = schemars::schema_for!(WorkerConfig);
+        let json = serde_json::to_value(&schema).expect("schema serializes");
+        let text = serde_json::to_string(&json).expect("schema to string");
+        assert!(
+            text.contains("batch_wait_ms"),
+            "generate_schema() output must contain batch_wait_ms"
+        );
     }
 }

@@ -24,4 +24,4 @@ pub use priority::{Priority, PriorityCalculator, PriorityInput, RequestSource};
 pub use queue::{PriorityRequestQueue, QueuedRequest, ServiceRequest};
 pub use response_channel::ResponseChannel;
 pub use scheduler::PipelineScheduler;
-pub use worker::WorkerManager;
+pub use worker::{WorkerManager, assemble_batch};

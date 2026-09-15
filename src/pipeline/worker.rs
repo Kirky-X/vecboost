@@ -15,7 +15,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, mpsc};
 
 use super::config::WorkerConfig;
-use super::queue::{PriorityRequestQueue, ServiceRequest};
+use super::queue::{PriorityRequestQueue, QueuedRequest, ServiceRequest};
 use super::response_channel::ResponseChannel;
 use crate::domain::EmbedResponse;
 use crate::error::VecboostError;
@@ -64,6 +64,58 @@ pub struct Worker {
     receiver: mpsc::Receiver<WorkerTask>,
     /// 配置
     config: WorkerConfig,
+}
+
+/// 时间窗批组装纯函数（T002）。
+///
+/// 语义：首请求到达后开启 `batch_wait_ms` 窗口，窗口内继续出队，
+/// 凑满 `max_batch_size` 或窗口关闭即返回；`batch_wait_ms=0` 时立即
+/// 返回仅首请求（严格还原排空式，kill-switch 内建）。
+///
+/// `try_dequeue` 为非阻塞出队闭包（返回 `None` 表示当前无请求），
+/// 函数在窗口内以 1ms 粒度轮询以接住陆续到达的请求，不引入新线程/任务。
+pub async fn assemble_batch<F, Fut>(
+    first: QueuedRequest,
+    mut try_dequeue: F,
+    max_batch_size: usize,
+    batch_wait_ms: u64,
+) -> Vec<QueuedRequest>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<QueuedRequest>>,
+{
+    let mut batch = vec![first];
+    let cap = max_batch_size.max(1);
+    if batch.len() >= cap {
+        return batch;
+    }
+    if batch_wait_ms == 0 {
+        return batch;
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(batch_wait_ms);
+    loop {
+        if batch.len() >= cap {
+            break;
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        match try_dequeue().await {
+            Some(req) => {
+                batch.push(req);
+            }
+            None => {
+                let remaining = deadline.saturating_duration_since(now);
+                let sleep_for = std::cmp::min(remaining, Duration::from_millis(1));
+                if sleep_for.is_zero() {
+                    break;
+                }
+                tokio::time::sleep(sleep_for).await;
+            }
+        }
+    }
+    batch
 }
 
 /// Worker 管理器 — 管理 worker 生命周期和自动伸缩。
@@ -353,10 +405,30 @@ impl WorkerManager {
                     // 重置空闲计数
                     idle_count = 0;
 
-                    // 排空拼批——取首个请求后继续 drain 至 max_batch_size
-                    let mut batch = vec![request];
-                    let extra = queue.dequeue_batch(config.max_batch_size.saturating_sub(1)).await;
-                    batch.extend(extra);
+                    // 时间窗动态拼批——首请求后开 batch_wait_ms 窗口继续聚合，
+                    // batch_wait_ms=0 时 assemble_batch 立即返回仅首请求（旧排空语义）。
+                    let wait_start = tokio::time::Instant::now();
+                    let batch = assemble_batch(
+                        request,
+                        || queue.dequeue(),
+                        config.max_batch_size,
+                        config.batch_wait_ms,
+                    )
+                    .await;
+                    let waited_secs = wait_start.elapsed().as_secs_f64();
+                    // T004 埋点：批次大小与窗口等待时长（全局 collector 未设置时零开销跳过）
+                    #[cfg(feature = "http")]
+                    if let Some(collector) = crate::metrics::prometheus_exporter::global_collector()
+                    {
+                        collector.observe_batch("embed", batch.len(), waited_secs);
+                    }
+                    debug!(
+                        "Worker {} assembled batch of {} (wait {:.3}s, window {}ms)",
+                        worker_id,
+                        batch.len(),
+                        waited_secs,
+                        config.batch_wait_ms
+                    );
 
                     // 过期淘汰——submitted_at 超过 30s 的请求直接超时响应,不入推理
                     const QUEUE_EXPIRY: Duration = Duration::from_secs(30);
@@ -704,6 +776,114 @@ mod tests {
     use crate::pipeline::priority::{Priority, RequestSource};
     use crate::pipeline::queue::QueuedRequest;
     use async_trait::async_trait;
+    use std::collections::VecDeque;
+    use std::sync::Arc as StdArc;
+    use tokio::sync::Mutex as TokioMutex;
+
+    fn make_queued(id: &str) -> QueuedRequest {
+        QueuedRequest {
+            request_id: id.to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: id.to_string(),
+                normalize: Some(false),
+            }),
+            priority: Priority::Normal,
+            submitted_at: std::time::Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::http("127.0.0.1".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_assemble_batch_collects_arrivals_within_window() {
+        let pending: StdArc<TokioMutex<VecDeque<QueuedRequest>>> =
+            StdArc::new(TokioMutex::new(VecDeque::new()));
+        let pending_clone = StdArc::clone(&pending);
+        // 窗口内陆续到达 2 个后续请求
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            pending_clone.lock().await.push_back(make_queued("req-2"));
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            pending_clone.lock().await.push_back(make_queued("req-3"));
+        });
+        let first = make_queued("req-1");
+        let batch = assemble_batch(
+            first,
+            || {
+                let pending = StdArc::clone(&pending);
+                async move { pending.lock().await.pop_front() }
+            },
+            8,
+            50,
+        )
+        .await;
+        assert_eq!(batch.len(), 3, "窗口内陆续到达 3 请求应单次组装返回 3 条");
+        assert_eq!(batch[0].request_id, "req-1");
+    }
+
+    #[tokio::test]
+    async fn test_assemble_batch_zero_wait_returns_first_only() {
+        let first = make_queued("only");
+        let batch = assemble_batch(first, || async { Some(make_queued("late")) }, 8, 0).await;
+        assert_eq!(batch.len(), 1, "batch_wait_ms=0 应立即返回仅首请求");
+        assert_eq!(batch[0].request_id, "only");
+    }
+
+    #[tokio::test]
+    async fn test_assemble_batch_full_returns_early() {
+        let first = make_queued("a");
+        let batch = assemble_batch(first, || async { Some(make_queued("extra")) }, 2, 100).await;
+        assert_eq!(batch.len(), 2, "凑满 max_batch_size 应提前返回");
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_same_text_byte_equal_and_ordered() {
+        use crate::service::embedding::EmbeddingService;
+        // 不变量：同一文本在批内经 scatter 回填的结果，与该文本单独走
+        // embed_batch_texts 的结果字节等同，且顺序与输入一一对应。
+        // （注：worker 批路径 embed_batch_texts 与单请求 process_text 全管线
+        // 在归一化/分块上本就存在既有差异，此处只断言 scatter 自身的正确性。）
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let channel = Arc::new(ResponseChannel::new());
+        let mk = |id: &str, text: &str| QueuedRequest {
+            request_id: id.to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: text.to_string(),
+                normalize: Some(false),
+            }),
+            priority: Priority::Normal,
+            submitted_at: std::time::Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::http("127.0.0.1".to_string()),
+        };
+        // 同一函数单文本基线
+        let baseline = service
+            .read()
+            .await
+            .embed_batch_texts(&["hello world".to_string()])
+            .await
+            .expect("baseline embed must succeed");
+        // 批内相同文本两条 + 一条不同文本，验证 scatter 保序与字节等同
+        let b1 = mk("b1", "hello world");
+        let b2 = mk("b2", "hello world");
+        let b3 = mk("b3", "other text");
+        let batch = vec![b1, b2, b3];
+        let rx1 = channel.register("b1".to_string()).await;
+        let rx2 = channel.register("b2".to_string()).await;
+        let rx3 = channel.register("b3".to_string()).await;
+        WorkerManager::process_batch_requests(&batch, &service, &channel).await;
+        let r1 = rx1.await.expect("b1 response").expect("b1 ok");
+        let r2 = rx2.await.expect("b2 response").expect("b2 ok");
+        let r3 = rx3.await.expect("b3 response").expect("b3 ok");
+        assert_eq!(
+            r1.embedding, baseline[0],
+            "批内结果须与同函数单文本基线字节等同"
+        );
+        assert_eq!(r1.embedding, r2.embedding, "相同文本批内 scatter 须一致");
+        assert_eq!(r1.dimension, r3.dimension);
+    }
 
     /// 测试用 Mock 推理引擎——返回固定 8 维非零向量（归一化安全），不依赖任何外部模型。
     /// 定义在测试模块内,遵循 embedding.rs::tests 的 TestEngine 既有惯例。
@@ -1759,6 +1939,7 @@ mod tests {
             idle_timeout_secs: 60,
             scale_check_interval_secs: 1,
             max_batch_size: 8,
+            batch_wait_ms: 5,
         };
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockEngine));
@@ -1836,6 +2017,7 @@ mod tests {
             idle_timeout_secs: 60,
             scale_check_interval_secs: 1,
             max_batch_size: 8,
+            batch_wait_ms: 5,
         };
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockEngine));

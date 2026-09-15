@@ -172,6 +172,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -251,6 +252,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         }
     }
 

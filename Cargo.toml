@@ -80,6 +80,8 @@ sea-orm = { version = "2.0", optional = true, default-features = false }
 candle-core = { version = "0.11", default-features = false, features = [] }
 candle-nn = { version = "0.11", default-features = false }
 candle-transformers = { version = "0.11", default-features = false }
+# hgemm_ 垫片（mkl feature，见 src/engine/mkl_shim.rs）：f16 类型 ABI 兼容层
+half = { version = "2.4", default-features = false, optional = true }
 hf-hub = { version = "1.0", default-features = false, features = ["blocking", "rustls-tls"] }
 # tokenizers 全平台直接依赖（移除 cfg(target_os) 门控）
 tokenizers = { version = "0.23", default-features = false, features = ["http", "onig"] }
@@ -137,6 +139,14 @@ rayon = { version = "1.10", default-features = false }
 [target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
 tikv-jemallocator = { version = "0.6", default-features = false, features = ["background_threads"] }
 
+# T011：平台加速后端（opt-in features）。
+# 原计划为 target-conditional 自动追加 candle `mkl`，但实测本机链接失败
+#（intel-mkl-src 2020.1 静态库缺 `hgemm_`，candle 0.11 mkl.rs 必需；证据见
+# docs/tuning.md），自动启用会使所有 profile 无法链接。故改为显式 feature，
+# 在链接正常的工具链/CI 矩阵中按需启用：
+# - x86_64 Linux/Windows：`--features mkl`
+# - aarch64 macOS：`--features accelerate`
+
 
 [features]
 default = ["http"]
@@ -173,6 +183,12 @@ auth = ["dep:garrison", "dep:aes-gcm"]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:nvml-wrapper", "dep:cudarc"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/alternative-backend"]
+# T011：CPU 加速后端（opt-in；见上方 target 表注释）。
+mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl", "dep:half"]
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
+# T013：GGUF 量化引擎开关。启用后编译 engine/quantized_engine.rs；
+# 推理后端待 candle 上游 quantized BERT 落地（见模块文档）。
+quantized-gguf = []
 
 # Binary target — main.rs 是 HTTP server 入口（axum::serve），
 # 需要 http feature 才能编译。schema-only 等 library 模式不会构建 bin。
@@ -209,6 +225,10 @@ harness = false
 
 [[bench]]
 name = "semantic_cache_bench"
+harness = false
+
+[[bench]]
+name = "embed_throughput_bench"
 harness = false
 
 [profile.dev]

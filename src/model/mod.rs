@@ -5,6 +5,7 @@
 
 #![allow(unused)]
 
+pub(crate) mod heat;
 pub(crate) mod loader;
 pub(crate) mod manager;
 pub(crate) mod recovery;

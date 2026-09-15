@@ -63,6 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         memory_limit_bytes: None,
         oom_fallback_enabled: false,
         model_sha256: None,
+        quantized: false,
     };
 
     println!("📊 模型配置:");

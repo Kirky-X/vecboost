@@ -51,6 +51,7 @@ fn model_config(dirname: &str, dim: usize) -> ModelConfig {
         memory_limit_bytes: None,
         oom_fallback_enabled: true,
         model_sha256: None,
+        quantized: false,
     }
 }
 

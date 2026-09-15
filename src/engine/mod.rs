@@ -11,6 +11,12 @@ pub(crate) mod impl_;
 #[cfg(feature = "onnx")]
 pub(crate) mod onnx_engine;
 
+#[cfg(feature = "mkl")]
+pub mod mkl_shim;
+
+#[cfg(feature = "quantized-gguf")]
+pub mod quantized_engine;
+
 use crate::config::model::{ModelConfig, Precision};
 use crate::error::VecboostError;
 use async_trait::async_trait;
@@ -79,8 +85,114 @@ pub trait InferenceEngine: Send + Sync {
         Ok(0) // 调用方回退到 bytes/4
     }
 
+    /// 取出并清零分阶段延迟累计（T026）。默认无埋点（None）；
+    /// candle 引擎覆盖为真实三阶段快照。
+    fn take_stage_snapshot(&self) -> Option<StageSnapshot> {
+        None
+    }
+
     /// 尝试降级到 CPU（在 OOM 时调用）
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
+}
+
+/// 推理分阶段标签（T026）。枚举固定为三值，不得扩展（指标标签稳定性）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum Stage {
+    Tokenize = 0,
+    Inference = 1,
+    Pooling = 2,
+}
+
+impl Stage {
+    pub const ALL: [Stage; 3] = [Stage::Tokenize, Stage::Inference, Stage::Pooling];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stage::Tokenize => "tokenize",
+            Stage::Inference => "inference",
+            Stage::Pooling => "pool",
+        }
+    }
+}
+
+/// 分阶段延迟快照（纳秒累计 + 观测计数）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StageSnapshot {
+    pub nanos: [u64; 3],
+    pub counts: [u64; 3],
+}
+
+impl StageSnapshot {
+    /// 逐阶段 `(stage, 秒, 计数)`。
+    pub fn parts(&self) -> [(Stage, f64, u64); 3] {
+        [
+            (
+                Stage::Tokenize,
+                self.nanos[Stage::Tokenize as usize] as f64 / 1e9,
+                self.counts[Stage::Tokenize as usize],
+            ),
+            (
+                Stage::Inference,
+                self.nanos[Stage::Inference as usize] as f64 / 1e9,
+                self.counts[Stage::Inference as usize],
+            ),
+            (
+                Stage::Pooling,
+                self.nanos[Stage::Pooling as usize] as f64 / 1e9,
+                self.counts[Stage::Pooling as usize],
+            ),
+        ]
+    }
+}
+
+/// 分阶段延迟累加器（T026）：纯原子累加，无锁快路径。
+#[derive(Debug, Default)]
+pub struct StageStats {
+    nanos: [std::sync::atomic::AtomicU64; 3],
+    counts: [std::sync::atomic::AtomicU64; 3],
+}
+
+impl StageStats {
+    pub fn record(&self, stage: Stage, elapsed: std::time::Duration) {
+        let i = stage as usize;
+        self.nanos[i].fetch_add(
+            elapsed.as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.counts[i].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn snapshot(&self) -> StageSnapshot {
+        StageSnapshot {
+            nanos: [
+                self.nanos[0].load(std::sync::atomic::Ordering::Relaxed),
+                self.nanos[1].load(std::sync::atomic::Ordering::Relaxed),
+                self.nanos[2].load(std::sync::atomic::Ordering::Relaxed),
+            ],
+            counts: [
+                self.counts[0].load(std::sync::atomic::Ordering::Relaxed),
+                self.counts[1].load(std::sync::atomic::Ordering::Relaxed),
+                self.counts[2].load(std::sync::atomic::Ordering::Relaxed),
+            ],
+        }
+    }
+
+    /// 取出并清零（drain 语义，供指标汇出）。
+    pub fn take(&self) -> StageSnapshot {
+        StageSnapshot {
+            nanos: [
+                self.nanos[0].swap(0, std::sync::atomic::Ordering::Relaxed),
+                self.nanos[1].swap(0, std::sync::atomic::Ordering::Relaxed),
+                self.nanos[2].swap(0, std::sync::atomic::Ordering::Relaxed),
+            ],
+            counts: [
+                self.counts[0].swap(0, std::sync::atomic::Ordering::Relaxed),
+                self.counts[1].swap(0, std::sync::atomic::Ordering::Relaxed),
+                self.counts[2].swap(0, std::sync::atomic::Ordering::Relaxed),
+            ],
+        }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -88,6 +200,9 @@ pub enum AnyEngine {
     Candle(candle_engine::CandleEngine),
     #[cfg(feature = "onnx")]
     Onnx(onnx_engine::OnnxEngine),
+    /// GGUF 量化引擎（Q8_0/Q4_K 加载期反量化桥，T035）。
+    #[cfg(feature = "quantized-gguf")]
+    Quantized(quantized_engine::QuantizedCandleEngine),
 }
 
 #[cfg(test)]
@@ -180,6 +295,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            quantized: false,
         }
     }
 
@@ -316,5 +432,48 @@ mod tests {
         let mut engine = OrthogonalEngine { dimension: 4 };
         let config = mock_config();
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
+    }
+
+    // -- T026 分阶段延迟埋点 --
+
+    #[test]
+    fn test_stage_labels_enum_complete() {
+        // 枚举固定为三值，标签不得漂移（指标稳定性契约）
+        assert_eq!(Stage::ALL.len(), 3);
+        let labels: Vec<&str> = Stage::ALL.iter().map(|s| s.as_str()).collect();
+        assert_eq!(labels, ["tokenize", "inference", "pool"]);
+    }
+
+    #[test]
+    fn test_stage_stats_record_then_snapshot_counts_all_stages() {
+        let stats = StageStats::default();
+        for stage in Stage::ALL {
+            stats.record(stage, std::time::Duration::from_micros(100));
+        }
+        let snap = stats.snapshot();
+        for (_, secs, count) in snap.parts() {
+            assert!(count > 0, "三阶段均应被观测");
+            assert!(secs > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_stage_stats_take_drains_to_zero() {
+        let stats = StageStats::default();
+        stats.record(Stage::Inference, std::time::Duration::from_millis(2));
+        let drained = stats.take();
+        assert_eq!(drained.counts[Stage::Inference as usize], 1);
+        let after = stats.snapshot();
+        assert!(
+            after.counts.iter().all(|&c| c == 0),
+            "take 后计数应清零（drain 语义）"
+        );
+    }
+
+    #[test]
+    fn test_mock_engine_stage_snapshot_defaults_to_none() {
+        // 无埋点引擎走 trait 默认 None，导出侧必须容忍
+        let engine = MockEngine { dimension: 4 };
+        assert!(engine.take_stage_snapshot().is_none());
     }
 }

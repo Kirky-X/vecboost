@@ -81,6 +81,18 @@ pub struct ModelConfig {
     pub expected_dimension: Option<usize>,
     #[garde(skip)]
     pub max_sequence_length: Option<usize>,
+    /// GGUF 量化模型开关（T013/T015）：true 且 model_path 以 `.gguf` 结尾时
+    /// 选用量化引擎；默认 false。对应运行时 `ModelConfig.quantized`。
+    #[garde(skip)]
+    #[serde(default)]
+    pub quantized: bool,
+    /// 最大驻留模型数（T019）：对应 `ModelManager::with_residency`；
+    /// None = 不限制（现状行为）。
+    #[garde(skip)]
+    pub max_resident_models: Option<usize>,
+    /// 驻留内存预算 MB（T019）：超预算按 LFRU 硬驱逐；None = 不限制。
+    #[garde(skip)]
+    pub resident_memory_budget_mb: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
@@ -94,6 +106,12 @@ pub struct EmbeddingConfig {
     pub cache_enabled: bool,
     #[garde(skip)]
     pub cache_size: usize,
+    /// T021：embedding 缓存 WAL 持久文件路径（None = 纯内存，默认）。
+    #[garde(skip)]
+    pub persist_path: Option<String>,
+    /// T022：WAL 超过该字节数触发启动紧凑化（None = 1 GiB）。
+    #[garde(skip)]
+    pub persist_max_bytes: Option<u64>,
     #[garde(range(min = 1))]
     pub max_batch_size: usize,
     #[garde(range(min = 1))]
@@ -250,6 +268,10 @@ pub struct SemanticCacheConfig {
     pub similarity_threshold: f32,
     /// 语义索引最大条目数
     pub capacity: usize,
+    /// 向量比较模式（T018）：exact（默认）| i8 | binary；
+    /// i8/binary 用 vquant 粗筛 + 原始向量复验，仅内部比较路径。
+    #[serde(default = "default_comparison_mode")]
+    pub comparison_mode: String,
 }
 
 impl Default for SemanticCacheConfig {
@@ -258,7 +280,27 @@ impl Default for SemanticCacheConfig {
             enabled: false,
             similarity_threshold: DEFAULT_SIMILARITY_THRESHOLD,
             capacity: DEFAULT_SEMANTIC_CACHE_CAPACITY,
+            comparison_mode: default_comparison_mode(),
         }
+    }
+}
+
+fn default_comparison_mode() -> String {
+    "exact".to_string()
+}
+
+/// 设备与硬件感知配置（T024，`[device]` 段）。
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct DeviceConfig {
+    /// 硬件感知启动规划（T023 planner）：true 时用探测计划填充**未显式配置**
+    /// 的字段（显式值优先），计划全文进启动日志；默认 false（零计划行为）。
+    pub auto_plan: bool,
+}
+
+impl Default for DeviceConfig {
+    fn default() -> Self {
+        Self { auto_plan: false }
     }
 }
 
@@ -514,6 +556,9 @@ impl Default for ModelConfig {
             batch_size: DEFAULT_BATCH_SIZE,
             expected_dimension: Some(DEFAULT_EXPECTED_DIMENSION),
             max_sequence_length: Some(DEFAULT_MAX_SEQUENCE_LENGTH),
+            quantized: false,
+            max_resident_models: None,
+            resident_memory_budget_mb: None,
         }
     }
 }
@@ -525,6 +570,8 @@ impl Default for EmbeddingConfig {
             similarity_metric: "cosine".to_string(),
             cache_enabled: true,
             cache_size: DEFAULT_CACHE_SIZE,
+            persist_path: None,
+            persist_max_bytes: None,
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             max_text_length: DEFAULT_MAX_TEXT_LENGTH,
         }
@@ -1112,6 +1159,9 @@ mod tests {
             batch_size: 128,
             expected_dimension: Some(384),
             max_sequence_length: Some(512),
+            quantized: false,
+            max_resident_models: None,
+            resident_memory_budget_mb: None,
         };
         assert_eq!(config.model_repo, "sentence-transformers/all-MiniLM-L6-v2");
         assert!(config.use_gpu);
@@ -1126,12 +1176,16 @@ mod tests {
             similarity_metric: "dot".to_string(),
             cache_enabled: false,
             cache_size: 512,
+            persist_path: Some("data/cache.wal".to_string()),
+            persist_max_bytes: Some(1024 * 1024),
             max_batch_size: 32,
             max_text_length: 4096,
         };
         assert_eq!(config.default_aggregation, "max");
         assert!(!config.cache_enabled);
         assert_eq!(config.cache_size, 512);
+        assert_eq!(config.persist_path.as_deref(), Some("data/cache.wal"));
+        assert_eq!(config.persist_max_bytes, Some(1024 * 1024));
         assert_eq!(config.max_text_length, 4096);
     }
 

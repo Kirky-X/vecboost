@@ -58,6 +58,17 @@ max_sequence_length = 8192
 # bf16 仅 CUDA Ampere+ GPU 支持，其他设备自动回退 fp32
 # precision = "fp32"
 
+# GGUF 量化模型开关 (可选，默认 false)
+# true 且 model_path 指向 .gguf 文件时选用量化引擎（Q8_0/Q4_K）；
+# 需要以 `--features quantized-gguf` 构建；质量门见 docs/tuning.md「量化」节
+# quantized = false
+
+# 最大驻留模型数 (T019, 可选，默认不限制): 超限按 LFRU 驱逐 score 最低者
+# max_resident_models = 4
+
+# 驻留内存预算 MB (T019, 可选，默认不限制): 超预算硬驱逐（忽略迟滞）
+# resident_memory_budget_mb = 8192
+
 # ============ 向量化配置 ============
 [embedding]
 # 默认聚合模式
@@ -86,6 +97,13 @@ max_batch_size = 64
 
 # 单个文本最大字节长度 (防止资源耗尽攻击)
 max_text_length = 8192
+
+# embedding 缓存 WAL 落盘路径 (T021): 设置后每次插入两段追加落盘，
+# 重启回放重建缓存；默认不设置 = 纯内存
+# persist_path = "data/embedding_cache.wal"
+
+# WAL 紧凑化阈值字节数 (T022): 超过即启动时快照重写；默认 1 GiB
+# persist_max_bytes = 1073741824
 
 # ============ 监控配置 ============
 [monitoring]
@@ -250,10 +268,19 @@ ttl_secs = 3600
 # 驱逐策略: lru, lfu, fifo
 eviction_policy = "lru"
 
+# 语义缓存向量比较模式: exact（默认，行为不变）| i8 | binary —— 见 [embedding] 段说明，
+# 实际生效配置见上方各段；本段为展示段不生效。
+# comparison_mode = "exact"
+
+# ⚠️ WAL 落盘示例已移至 [embedding] 段（persist_path / persist_max_bytes，该段真实生效）。
+
 # ============ 设备配置 ============
-# ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。
-# 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
+# ✅ 本段由 AppConfig 解析（T024 接线）。
 [device]
+# 硬件感知启动规划 (T024): true 时用探测计划填充未显式配置的字段，
+# 任何显式配置优先于计划；计划全文进启动日志。默认 false（零计划行为）
+# auto_plan = false
+
 # 优先使用的设备类型
 # 可选值:
 #   - cpu: CPU 计算

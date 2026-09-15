@@ -12,8 +12,6 @@
 use crate::cache::OxCacheBackend;
 use crate::cache::SemanticCache;
 use crate::config::model::ModelConfig;
-use crate::device::DynamicBatchScheduler;
-use crate::device::continuous_batch::ContinuousBatchLoop;
 use crate::device::memory_optimizer::SharedGpuMemoryManager;
 use crate::device::memory_pool::BufferPool;
 use crate::domain::{
@@ -22,7 +20,7 @@ use crate::domain::{
     ModelSwitchRequest, ModelSwitchResponse, ParagraphEmbedding, SearchRequest, SearchResponse,
     SearchResult, SimilarityRequest, SimilarityResponse,
 };
-use crate::engine::{AnyEngine, InferenceEngine};
+use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
 use crate::model::manager::ModelManager;
 use crate::utils::{
@@ -52,14 +50,13 @@ pub struct EmbeddingService {
     model_manager: Option<Arc<ModelManager>>,
     cache: Arc<OxCacheBackend>,
     memory_manager: Option<SharedGpuMemoryManager>,
-    batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     buffer_pool: Option<Arc<tokio::sync::RwLock<BufferPool>>>,
-    continuous_batch_loop: Option<Arc<ContinuousBatchLoop>>,
     semantic_cache: Option<Arc<SemanticCache>>,
 }
 
 impl EmbeddingService {
     /// 统一内部构造入口：所有可选组件通过参数控制，消除 5 个构造器间的字段初始化重复。
+    /// `cache_persist` 为 `Some((path, max_bytes))` 时启用 WAL 持久层（T021/T022）。
     fn build(
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
         validator: InputValidator,
@@ -67,21 +64,32 @@ impl EmbeddingService {
         model_manager: Option<Arc<ModelManager>>,
         cache_size: Option<usize>,
         memory_manager: Option<SharedGpuMemoryManager>,
-        batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
+        cache_persist: Option<(std::path::PathBuf, u64)>,
     ) -> Self {
+        let cache = match (cache_size, cache_persist) {
+            (Some(size), Some((path, max_bytes))) => {
+                // T035 审查安全7/架构3：指纹绑定权重内容（sha256 可用时），
+                // 同名换权重的旧向量在回放时被指纹不匹配淘汰。
+                let fingerprint = model_config
+                    .as_ref()
+                    .map(|c| match &c.model_sha256 {
+                        Some(sha) => format!("{}:{}", c.name, &sha[..sha.len().min(16)]),
+                        None => c.name.clone(),
+                    })
+                    .unwrap_or_default();
+                OxCacheBackend::with_persist(size, path, max_bytes, fingerprint)
+            }
+            (Some(size), None) => OxCacheBackend::new(size),
+            _ => OxCacheBackend::disabled(),
+        };
         Self {
             engine,
             validator,
             model_config,
             model_manager,
-            cache: Arc::new(match cache_size {
-                Some(size) => OxCacheBackend::new(size),
-                None => OxCacheBackend::disabled(),
-            }),
+            cache: Arc::new(cache),
             memory_manager,
-            batch_scheduler,
             buffer_pool: None,
-            continuous_batch_loop: None,
             semantic_cache: None,
         }
     }
@@ -150,6 +158,27 @@ impl EmbeddingService {
         )
     }
 
+    /// 带 WAL 持久层的缓存构造（`[embedding] persist_path` 配置时启用）。
+    /// 插入路径由 OxCacheBackend 内部两段追加写盘；启动时须显式调
+    /// [`load_persisted_cache`](Self::load_persisted_cache) 回放。
+    pub fn with_cache_persist(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+        cache_size: usize,
+        persist_path: std::path::PathBuf,
+        persist_max_bytes: u64,
+    ) -> Self {
+        Self::build(
+            engine,
+            InputValidator::with_default(),
+            model_config,
+            None,
+            Some(cache_size),
+            None,
+            Some((persist_path, persist_max_bytes)),
+        )
+    }
+
     pub fn with_all(
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
         validator: InputValidator,
@@ -157,7 +186,6 @@ impl EmbeddingService {
         model_manager: Option<Arc<ModelManager>>,
         cache_size: usize,
         memory_manager: Option<SharedGpuMemoryManager>,
-        batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     ) -> Self {
         Self::build(
             engine,
@@ -166,8 +194,34 @@ impl EmbeddingService {
             model_manager,
             Some(cache_size),
             memory_manager,
-            batch_scheduler,
+            None,
         )
+    }
+
+    /// T033：注入 ModelManager（server 模式装配；switch/unload 与 LFRU 驻留依赖它）。
+    pub fn with_model_manager(mut self, manager: Arc<ModelManager>) -> Self {
+        self.model_manager = Some(manager);
+        self
+    }
+
+    /// T033：模型热度落盘（switch/unload 成功路径调用；失败仅 warn 不阻断业务）。
+    async fn save_model_heat(&self) {
+        if let Some(ref manager) = self.model_manager {
+            if let Err(e) = manager
+                .save_heat_file(std::path::Path::new(crate::model::heat::DEFAULT_HEAT_PATH))
+                .await
+            {
+                log::warn!("model heat save failed: {e}");
+            }
+        }
+    }
+
+    /// T022：启动时顺序回放 WAL 重建缓存。persist 未启用时为 no-op。
+    pub async fn load_persisted_cache(&self) {
+        if let Some(path) = self.cache.persist_path() {
+            log::info!("Embedding cache WAL replay from {}", path.display());
+        }
+        self.cache.load_persisted().await;
     }
 
     /// 设置 BufferPool
@@ -176,27 +230,10 @@ impl EmbeddingService {
         self
     }
 
-    /// 设置连续批处理 loop
-    pub fn with_continuous_batch(mut self, batch_loop: Arc<ContinuousBatchLoop>) -> Self {
-        self.continuous_batch_loop = Some(batch_loop);
-        self
-    }
-
     /// 设置语义缓存
     pub fn with_semantic_cache(mut self, semantic_cache: Arc<SemanticCache>) -> Self {
         self.semantic_cache = Some(semantic_cache);
         self
-    }
-
-    /// 内部批量推理方法（供 ContinuousBatchLoop 使用）
-    ///
-    /// 直接调用引擎的 `embed_batch`，不经过缓存/验证/归一化路径。
-    /// 由调用方负责结果后处理。
-    pub async fn embed_batch_internal(
-        &self,
-        texts: &[String],
-    ) -> Result<Vec<Vec<f32>>, VecboostError> {
-        self.engine.read().await.embed_batch(texts)
     }
 
     fn validate_dimension(&self, actual_dimension: usize) {
@@ -212,7 +249,8 @@ impl EmbeddingService {
     }
 
     /// 获取当前最优的批量大小
-    /// 优先使用 memory_manager 计算，其次使用 batch_scheduler，最后回退到 MAX_BATCH_SIZE
+    /// 优先使用 memory_manager 计算，最后回退到 MAX_BATCH_SIZE
+    /// （时间窗拼批取代 DynamicBatchScheduler 后不再查询 scheduler）。
     async fn get_optimal_batch_size(
         &self,
         sequence_length: usize,
@@ -231,15 +269,6 @@ impl EmbeddingService {
                     }
                     _ => {}
                 }
-            }
-        }
-
-        // 尝试使用 batch_scheduler 的当前批量大小
-        if let Some(ref scheduler) = self.batch_scheduler {
-            let size = scheduler.current_batch_size().await;
-            if size > 0 {
-                debug!("Using batch scheduler size: {}", size);
-                return size;
             }
         }
 
@@ -390,9 +419,10 @@ impl EmbeddingService {
         })
     }
 
-    /// 批量文本嵌入——调用引擎 embed_batch，返回每个文本的嵌入向量。
+    /// 批量文本嵌入——批内去重后调用引擎 embed_batch，结果按索引 scatter 回填。
     ///
-    /// 不做缓存/语义缓存，直接调引擎。供 worker 排空拼批使用。
+    /// 不做缓存/语义缓存，直接调引擎。供 worker 时间窗拼批使用。
+    /// 去重键为 xxh3_64，碰撞时以原始字符串二次确认，保证字节等同。
     pub async fn embed_batch_texts(
         &self,
         texts: &[String],
@@ -400,7 +430,61 @@ impl EmbeddingService {
         if texts.is_empty() {
             return Ok(vec![]);
         }
-        self.engine.read().await.embed_batch(texts)
+        // 批内去重：xxh3 键 + 字符串二次确认
+        let mut hash_to_uniques: std::collections::HashMap<u64, Vec<usize>> =
+            std::collections::HashMap::with_capacity(texts.len());
+        let mut unique_texts: Vec<String> = Vec::with_capacity(texts.len());
+        let mut index_to_unique: Vec<usize> = Vec::with_capacity(texts.len());
+        for text in texts {
+            let h = xxhash_rust::xxh3::xxh3_64(text.as_bytes());
+            let mut found: Option<usize> = None;
+            if let Some(candidates) = hash_to_uniques.get(&h) {
+                for &uidx in candidates {
+                    if unique_texts[uidx] == *text {
+                        found = Some(uidx);
+                        break;
+                    }
+                }
+            }
+            match found {
+                Some(uidx) => index_to_unique.push(uidx),
+                None => {
+                    let uidx = unique_texts.len();
+                    unique_texts.push(text.clone());
+                    hash_to_uniques.entry(h).or_default().push(uidx);
+                    index_to_unique.push(uidx);
+                }
+            }
+        }
+        let unique_results = self.engine.read().await.embed_batch(&unique_texts)?;
+        // T026 埋点：drain 引擎分阶段延迟（tokenize/inference/pool）进 prometheus。
+        // 单文本 embed 的累计值延迟到下一次批次 drain 或抓取时汇出（take 语义不丢数据）。
+        #[cfg(feature = "http")]
+        {
+            let snapshot = self.engine.read().await.take_stage_snapshot();
+            if let Some(snapshot) = snapshot {
+                if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
+                    collector.record_stage_snapshot(&snapshot);
+                }
+            }
+        }
+        let ratio = crate::metrics::inbatch_dedup_ratio(texts.len(), unique_texts.len());
+        // T007 埋点：批内去重率滚动 gauge（全局 collector 未设置时零开销跳过）
+        #[cfg(feature = "http")]
+        if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
+            collector.set_dedup_ratio("embed", ratio);
+        }
+        debug!(
+            "embed_batch_texts: {} texts → {} unique (saved {}, ratio {:.3})",
+            texts.len(),
+            unique_texts.len(),
+            texts.len() - unique_texts.len(),
+            ratio
+        );
+        Ok(index_to_unique
+            .iter()
+            .map(|&uidx| unique_results[uidx].clone())
+            .collect())
     }
 
     /// 处理相似度计算
@@ -1092,17 +1176,6 @@ impl EmbeddingService {
         let processing_time = start_time.elapsed();
         let processing_time_ms = processing_time.as_millis() as f64;
 
-        // 记录批量完成性能，用于动态调整
-        if let Some(ref scheduler) = self.batch_scheduler {
-            scheduler
-                .record_batch_completion(texts_len, processing_time_ms)
-                .await;
-            debug!(
-                "Recorded batch completion: size={}, latency={:.2}ms",
-                texts_len, processing_time_ms
-            );
-        }
-
         // 记录内存使用情况，用于动态调整
         if let Some(ref mm) = self.memory_manager {
             let memory_usage = mm.get_memory_usage_percent().await;
@@ -1230,6 +1303,8 @@ impl EmbeddingService {
                     .unwrap_or(false)
             }),
             model_sha256: None,
+            // .gguf 路径走 EngineFactory 量化路由（与启动路径同一判定，T035 审查架构1）
+            quantized: req.model_name.ends_with(".gguf"),
         };
 
         if let Some(ref manager) = self.model_manager {
@@ -1242,17 +1317,15 @@ impl EmbeddingService {
             }
         }
 
-        let new_engine = AnyEngine::new(
-            &model_config,
-            model_config.engine_type.clone(),
-            crate::config::model::Precision::Fp32,
-        )
-        .map_err(|e| {
-            VecboostError::NotFound(crate::i18n::tr_with_args(
-                "model-load-failed",
-                crate::i18n::tr_args(&[("name", &req.model_name), ("detail", &e.to_string())]),
-            ))
-        })?;
+        // 统一经 EngineFactory 创建（GGUF 量化路由单一入口，T035 审查架构1）。
+        let new_engine =
+            crate::engine::EngineFactory::create(model_config.engine_type.clone(), &model_config)
+                .map_err(|e| {
+                VecboostError::NotFound(crate::i18n::tr_with_args(
+                    "model-load-failed",
+                    crate::i18n::tr_args(&[("name", &req.model_name), ("detail", &e.to_string())]),
+                ))
+            })?;
 
         self.engine = Arc::new(RwLock::new(new_engine));
         self.model_config = Some(model_config);
@@ -1261,6 +1334,12 @@ impl EmbeddingService {
 
         // 切模型后清缓存，避免旧模型向量污染新模型
         self.cache.clear().await;
+        // T035 审查安全1：语义缓存键为纯文本，跨模型必须一并清空
+        if let Some(ref semantic) = self.semantic_cache {
+            semantic.clear().await;
+        }
+        // T033：切换改变热度分布，落盘供下次 warmstart
+        self.save_model_heat().await;
 
         Ok(ModelSwitchResponse {
             previous_model,
@@ -1274,6 +1353,8 @@ impl EmbeddingService {
         if let Some(ref manager) = self.model_manager {
             manager.unload(name).await?;
             log::info!("Model {} unloaded via ModelManager", name);
+            // T033：卸载后落盘热度表
+            self.save_model_heat().await;
         }
 
         if self.model_config.as_ref().map(|c| &c.name) == Some(&name.to_string()) {
@@ -1404,6 +1485,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_embed_batch_texts_dedup_bit_equal_and_ordered() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(32)));
+        let service = EmbeddingService::new(engine.clone(), None);
+        let texts = vec![
+            "hello world".to_string(),
+            "other text".to_string(),
+            "hello world".to_string(),
+        ];
+        let batch = service.embed_batch_texts(&texts).await.unwrap();
+        assert_eq!(batch.len(), 3);
+        // 逐条单独调用基线
+        let guard = engine.read().await;
+        let e0 = guard.embed(&texts[0]).unwrap();
+        let e1 = guard.embed(&texts[1]).unwrap();
+        drop(guard);
+        assert_eq!(batch[0], e0, "重复条目须与逐条调用 bit 级一致");
+        assert_eq!(batch[2], e0, "索引回填须正确");
+        assert_eq!(batch[1], e1);
+        assert_eq!(batch[0], batch[2]);
+    }
+
+    #[tokio::test]
     async fn test_process_text_with_model_config() {
         let temp_dir = tempdir().unwrap();
         let mock_engine = TestEngine::new(384);
@@ -1420,6 +1524,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1456,6 +1561,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1492,6 +1598,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1550,6 +1657,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1577,6 +1685,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1617,6 +1726,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1822,6 +1932,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1892,6 +2003,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -2065,6 +2177,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         }
     }
 
@@ -2879,9 +2992,6 @@ mod tests {
             8 * 1024 * 1024 * 1024,
             crate::device::memory_optimizer::GpuMemoryConfig::default(),
         );
-        let scheduler = Arc::new(DynamicBatchScheduler::new(
-            crate::device::BatchConfig::default(),
-        ));
         let service = EmbeddingService::with_all(
             engine,
             InputValidator::with_default(),
@@ -2889,7 +2999,6 @@ mod tests {
             None,
             16,
             Some(memory_manager),
-            Some(scheduler),
         );
         let list = service.list_available_models();
         assert_eq!(list.models[0].name, "all-fields-model");
@@ -2989,6 +3098,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
         manager.load(&config).await.unwrap();
         manager
@@ -3165,14 +3275,10 @@ mod tests {
     // ===== get_optimal_batch_size 路径测试 =====
 
     #[tokio::test]
-    async fn test_get_optimal_batch_size_uses_scheduler() {
+    async fn test_get_optimal_batch_size_default_path() {
         let mock_engine = TestEngine::new(64);
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
-        let scheduler = Arc::new(DynamicBatchScheduler::new(
-            crate::device::BatchConfig::default(),
-        ));
-        scheduler.set_batch_size(3).await;
 
         let service = EmbeddingService::with_all(
             engine,
@@ -3181,7 +3287,6 @@ mod tests {
             None,
             16,
             None,
-            Some(scheduler),
         );
 
         let texts: Vec<String> = (0..10).map(|i| format!("sched text {}", i)).collect();
@@ -3214,7 +3319,6 @@ mod tests {
             None,
             16,
             Some(memory_manager),
-            None,
         );
 
         let texts: Vec<String> = (0..5).map(|i| format!("mem text {}", i)).collect();
@@ -3704,6 +3808,7 @@ mod tests {
             memory_limit_bytes: Some(1024),
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));

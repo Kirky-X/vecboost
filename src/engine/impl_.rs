@@ -33,6 +33,8 @@ impl InferenceEngine for AnyEngine {
     fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         match self {
             AnyEngine::Candle(engine) => engine.embed(text),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(engine) => engine.embed(text),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.embed(text),
         }
@@ -41,6 +43,8 @@ impl InferenceEngine for AnyEngine {
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
         match self {
             AnyEngine::Candle(engine) => engine.embed_batch(texts),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(engine) => engine.embed_batch(texts),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.embed_batch(texts),
         }
@@ -49,6 +53,8 @@ impl InferenceEngine for AnyEngine {
     fn precision(&self) -> &Precision {
         match self {
             AnyEngine::Candle(engine) => engine.precision(),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(engine) => engine.precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.precision(),
         }
@@ -57,6 +63,8 @@ impl InferenceEngine for AnyEngine {
     fn supports_mixed_precision(&self) -> bool {
         match self {
             AnyEngine::Candle(engine) => engine.supports_mixed_precision(),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(engine) => engine.supports_mixed_precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.supports_mixed_precision(),
         }
@@ -65,6 +73,9 @@ impl InferenceEngine for AnyEngine {
     fn is_fallback_triggered(&self) -> bool {
         match self {
             AnyEngine::Candle(engine) => engine.is_fallback_triggered(),
+            #[cfg(feature = "quantized-gguf")]
+            // QuantizedCandleEngine 走 trait 默认实现（恒 false，无回退状态）
+            AnyEngine::Quantized(engine) => InferenceEngine::is_fallback_triggered(engine),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.is_fallback_triggered(),
         }
@@ -73,14 +84,31 @@ impl InferenceEngine for AnyEngine {
     fn count_tokens(&self, text: &str) -> Result<usize, VecboostError> {
         match self {
             AnyEngine::Candle(engine) => engine.count_tokens(text),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(engine) => engine.count_tokens(text),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.count_tokens(text),
+        }
+    }
+
+    fn take_stage_snapshot(&self) -> Option<super::StageSnapshot> {
+        match self {
+            // UFCS 显式走 trait 方法：CandleEngine 的同名固有方法返回
+            // StageSnapshot（非 Option），方法解析时固有方法优先会遮蔽 trait 实现。
+            AnyEngine::Candle(engine) => InferenceEngine::take_stage_snapshot(engine),
+            #[cfg(feature = "quantized-gguf")]
+            // 量化引擎暂无分阶段埋点，走 trait 默认 None
+            AnyEngine::Quantized(engine) => InferenceEngine::take_stage_snapshot(engine),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.take_stage_snapshot(),
         }
     }
 
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         match self {
             AnyEngine::Candle(engine) => engine.try_fallback_to_cpu(config).await,
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(engine) => engine.try_fallback_to_cpu(config).await,
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.try_fallback_to_cpu(config).await,
         }
@@ -106,6 +134,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         }
     }
 
@@ -123,6 +152,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         }
     }
 
@@ -395,6 +425,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
         let ctx = InferenceContext::with_config(&config, Precision::Fp16);
         assert_eq!(ctx.model_name, "ctx-test");

@@ -68,6 +68,7 @@ pub fn get_test_model_config() -> ModelConfig {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         },
         TestMode::Full => ModelConfig {
             name: "bge-m3".to_string(),
@@ -81,6 +82,7 @@ pub fn get_test_model_config() -> ModelConfig {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         },
     }
 }

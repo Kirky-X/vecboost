@@ -1,0 +1,32 @@
+hello world
+the quick brown fox jumps over the lazy dog
+machine learning is transforming search
+dense vector retrieval powers semantic search
+北京是中国的首都
+自然语言处理很有趣
+向量数据库加速相似度检索
+今天天气不错适合散步
+embedding models encode meaning into vectors
+quantization reduces memory footprint
+余弦相似度衡量向量夹角
+批处理提高吞吐降低延迟
+open source software builds community
+rust offers fearless concurrency
+深度学习需要大量计算资源
+缓存命中时直接返回结果
+continuous batching improves gpu utilization
+hadamard rotation spreads out outliers
+ late nights and early mornings
+咖啡配代码是程序员的标配
+low latency serving matters most
+归一化让点积等价于余弦
+observability starts with good metrics
+kill switches keep rollouts safe
+灰度发布降低线上风险
+benchmarks must pin hardware details
+时间窗口拼批聚合突发请求
+reproducibility beats raw speed
+小步快跑快速验证假设
+single variable experiments only
+文档与代码必须同步更新
+default conservative, opt-in aggressive

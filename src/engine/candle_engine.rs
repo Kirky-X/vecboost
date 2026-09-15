@@ -6,6 +6,7 @@
 #![allow(clippy::manual_checked_ops, clippy::identity_op)]
 
 use super::InferenceEngine;
+use super::{Stage, StageSnapshot, StageStats};
 use crate::config::model::{DeviceType, ModelConfig, Precision};
 use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
 use crate::error::VecboostError;
@@ -75,6 +76,30 @@ enum ModelWrapper {
     XlmRoberta(XLMRobertaModel),
 }
 
+/// 分阶段计时守卫（T026）：作用域退出（含 `?` 提前返回）时自动累加耗时。
+/// 无锁快路径：底层为原子 fetch_add。
+struct StageTimer<'a> {
+    stats: &'a StageStats,
+    stage: Stage,
+    start: std::time::Instant,
+}
+
+impl<'a> StageTimer<'a> {
+    fn new(stats: &'a StageStats, stage: Stage) -> Self {
+        Self {
+            stats,
+            stage,
+            start: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Drop for StageTimer<'_> {
+    fn drop(&mut self) {
+        self.stats.record(self.stage, self.start.elapsed());
+    }
+}
+
 pub struct CandleEngine {
     model: ModelWrapper,
     tokenizer: CachedTokenizer,
@@ -89,6 +114,8 @@ pub struct CandleEngine {
     _model_name: String,
     /// 模型隐藏层大小（从 config.hidden_size 读取）
     hidden_size: usize,
+    /// 分阶段延迟累加器（T026）：tokenize/inference/pooling，无锁原子累加。
+    stage_stats: Arc<StageStats>,
     /// 模型参数数量估算（从 config 计算）
     parameter_count: u64,
     /// 汇聚模式(Auto 在构造时已解析为具体模式)
@@ -594,11 +621,22 @@ impl CandleEngine {
             parameter_count,
             pooling_mode: resolved_pooling,
             vocab_size,
+            stage_stats: Arc::new(StageStats::default()),
         })
     }
 
     pub fn set_memory_limit_controller(&mut self, controller: Arc<MemoryLimitController>) {
         self.memory_limit_controller = Some(controller);
+    }
+
+    /// 分阶段延迟快照（非破坏性，供诊断）。
+    pub fn stage_snapshot(&self) -> StageSnapshot {
+        self.stage_stats.snapshot()
+    }
+
+    /// 取出并清零分阶段延迟（指标汇出用）。
+    pub fn take_stage_snapshot(&self) -> StageSnapshot {
+        self.stage_stats.take()
     }
 
     pub fn device_type(&self) -> DeviceType {
@@ -688,10 +726,13 @@ impl CandleEngine {
 
     // 纯同步 forward_pass——使用 encode_sync 绕过异步缓存，移除 GPU 监控 await
     fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
-        let encoding = self
-            .tokenizer
-            .encode_sync(text, true)
-            .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
+        // T026 分阶段埋点：tokenize（守卫 Drop 时累加，`?` 提前返回亦覆盖）。
+        let encoding = {
+            let _timer = StageTimer::new(&self.stage_stats, Stage::Tokenize);
+            self.tokenizer
+                .encode_sync(text, true)
+                .map_err(|e| VecboostError::TokenizationError(e.to_string()))?
+        };
 
         let ids = encoding.get_ids();
         let attention_mask = encoding.get_attention_mask();
@@ -748,27 +789,30 @@ impl CandleEngine {
             .unsqueeze(0)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-        let embeddings = match &self.model {
-            ModelWrapper::Bert(bert_model) => bert_model
-                .forward(&token_ids, &token_type_ids, Some(&attention_mask_tensor))
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
-            ModelWrapper::XlmRoberta(xlm_model) => {
-                let type_ids_slice: Vec<u32> =
-                    encoding.type_ids.iter().take(max_len).cloned().collect();
-                let token_type_ids = Tensor::new(type_ids_slice, &self.device)
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                    .unsqueeze(0)
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-                xlm_model
-                    .forward(
-                        &token_ids,
-                        &attention_mask_tensor,
-                        &token_type_ids,
-                        None,
-                        None,
-                        None,
-                    )
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+        let embeddings = {
+            let _timer = StageTimer::new(&self.stage_stats, Stage::Inference);
+            match &self.model {
+                ModelWrapper::Bert(bert_model) => bert_model
+                    .forward(&token_ids, &token_type_ids, Some(&attention_mask_tensor))
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
+                ModelWrapper::XlmRoberta(xlm_model) => {
+                    let type_ids_slice: Vec<u32> =
+                        encoding.type_ids.iter().take(max_len).cloned().collect();
+                    let token_type_ids = Tensor::new(type_ids_slice, &self.device)
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+                        .unsqueeze(0)
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+                    xlm_model
+                        .forward(
+                            &token_ids,
+                            &attention_mask_tensor,
+                            &token_type_ids,
+                            None,
+                            None,
+                            None,
+                        )
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+                }
             }
         };
 
@@ -777,6 +821,8 @@ impl CandleEngine {
 
         // 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
 
+        // T026：pooling 计时守卫驻留至函数返回，覆盖全部三个出口（2D/1D/err）。
+        let _pool_timer = StageTimer::new(&self.stage_stats, Stage::Pooling);
         let dims = embeddings.dims();
         let hidden_dim = self.hidden_size;
 
@@ -861,6 +907,7 @@ impl CandleEngine {
 
         // 批量编码所有文本——使用 encode_sync 绕过异步缓存
         let encodings: Vec<Encoding> = {
+            let _timer = StageTimer::new(&self.stage_stats, Stage::Tokenize);
             let mut encodings = Vec::with_capacity(texts.len());
             for &text in texts {
                 let encoding = self
@@ -935,29 +982,35 @@ impl CandleEngine {
             .reshape(&[batch_size, max_seq_len])
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-        let embeddings = match (&self.model, &self.model_architecture) {
-            (ModelWrapper::Bert(bert_model), ModelArchitecture::Bert) => bert_model
-                .forward(&token_ids, &token_type_ids, Some(&attention_mask_tensor))
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
-            (ModelWrapper::XlmRoberta(xlm_model), ModelArchitecture::XlmRoberta) => xlm_model
-                .forward(
-                    &token_ids,
-                    &attention_mask_tensor,
-                    &token_type_ids,
-                    None,
-                    None,
-                    None,
-                )
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
-            _ => {
-                return Err(VecboostError::InferenceError(format!(
-                    "Model architecture mismatch for batch processing: {:?}",
-                    self.model_architecture
-                )));
+        let embeddings = {
+            let _timer = StageTimer::new(&self.stage_stats, Stage::Inference);
+            match (&self.model, &self.model_architecture) {
+                (ModelWrapper::Bert(bert_model), ModelArchitecture::Bert) => bert_model
+                    .forward(&token_ids, &token_type_ids, Some(&attention_mask_tensor))
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
+                (ModelWrapper::XlmRoberta(xlm_model), ModelArchitecture::XlmRoberta) => xlm_model
+                    .forward(
+                        &token_ids,
+                        &attention_mask_tensor,
+                        &token_type_ids,
+                        None,
+                        None,
+                        None,
+                    )
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
+                _ => {
+                    return Err(VecboostError::InferenceError(format!(
+                        "Model architecture mismatch for batch processing: {:?}",
+                        self.model_architecture
+                    )));
+                }
             }
         };
 
         // 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
+
+        // T026：pooling 计时守卫驻留至函数返回，覆盖正常与 fallback 出口。
+        let _pool_timer = StageTimer::new(&self.stage_stats, Stage::Pooling);
 
         // 提取每个样本的嵌入向量（使用 CLS token）
         // 优化：使用 narrow + squeeze + to_vec2 单次提取所有 CLS token，
@@ -1047,6 +1100,10 @@ impl InferenceEngine for CandleEngine {
 
     fn count_tokens(&self, text: &str) -> Result<usize, VecboostError> {
         self.tokenizer.count_tokens(text)
+    }
+
+    fn take_stage_snapshot(&self) -> Option<StageSnapshot> {
+        Some(self.take_stage_snapshot())
     }
 }
 
@@ -1362,6 +1419,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         }
     }
 
@@ -1846,6 +1904,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         }
     }
 
@@ -2573,5 +2632,39 @@ mod tests {
         assert_eq!(infer_pooling_mode("BGE-Small"), PoolingMode::Cls);
         assert_eq!(infer_pooling_mode("MINILM-v2"), PoolingMode::Mean);
         assert_eq!(infer_pooling_mode("E5-Large"), PoolingMode::Mean);
+    }
+
+    // -- T026 StageTimer --
+
+    #[test]
+    fn stage_timer_records_on_scope_exit() {
+        let stats = StageStats::default();
+        {
+            let _timer = StageTimer::new(&stats, Stage::Inference);
+            std::thread::sleep(std::time::Duration::from_micros(50));
+        }
+        let snap = stats.snapshot();
+        assert_eq!(
+            snap.counts[Stage::Inference as usize],
+            1,
+            "作用域退出应记录"
+        );
+        assert!(snap.nanos[Stage::Inference as usize] > 0, "耗时应大于 0");
+    }
+
+    #[test]
+    fn stage_timer_records_on_early_return_path() {
+        // 模拟 `?` 提前返回：守卫 Drop 仍须累加（无锁快路径不漏计）
+        fn fallible(stats: &StageStats) -> Result<(), ()> {
+            let _timer = StageTimer::new(stats, Stage::Tokenize);
+            Err(())
+        }
+        let stats = StageStats::default();
+        let _ = fallible(&stats);
+        assert_eq!(
+            stats.snapshot().counts[Stage::Tokenize as usize],
+            1,
+            "提前返回路径也应记录"
+        );
     }
 }

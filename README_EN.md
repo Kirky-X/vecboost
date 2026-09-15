@@ -6,9 +6,28 @@
 
 [中文](README.md) | **English**
 
-*A high-performance, production-ready embedding vector service written in Rust. VecBoost provides efficient text vectorization with support for multiple inference engines, GPU acceleration, and enterprise-grade features.*
+*A high-performance, production-grade embedding vector service written in Rust. VecBoost provides efficient text vectorization with multiple inference engines, GPU acceleration, and enterprise-grade features.*
 
-[✨ Core Features](#-core-features) • [🚀 Quick Start](#-quick-start) • [📖 Documentation](#-documentation) • [🔌 API](#-api-usage) • [⚙️ Configuration](#️-configuration) • [🏗️ Architecture](#️-architecture)
+[✨ Features](#-features) • [🚀 Quick Start](#-quick-start) • [📚 Documentation](#-documentation) • [💻 Examples](#-examples) • [🤝 Contributing](#-contributing)
+
+</div>
+
+---
+
+<div align="center" style="padding: 32px; margin: 24px 0">
+
+### 🎯 Single-Source Definitions, Four Protocols
+
+All API handlers live in `src/api/embedding.rs`; the `sdforge` `#[forge(...)]` macros generate the four protocol bindings at compile time:
+
+<table style="width:100%; border-collapse: collapse">
+<tr>
+<td align="center" width="25%" style="padding: 12px">🌐<br><b>HTTP/REST</b><br><span style="color:#64748B">Axum + OpenAPI docs</span></td>
+<td align="center" width="25%" style="padding: 12px">📡<br><b>gRPC</b><br><span style="color:#64748B">sdforge unified Call protocol</span></td>
+<td align="center" width="25%" style="padding: 12px">🤖<br><b>MCP</b><br><span style="color:#64748B">LLM tool integration (stdio)</span></td>
+<td align="center" width="25%" style="padding: 12px">💻<br><b>CLI</b><br><span style="color:#64748B">clap command line</span></td>
+</tr>
+</table>
 
 </div>
 
@@ -16,200 +35,125 @@
 
 ## 📋 Table of Contents
 
-<details open>
-<summary>📑 Table of Contents</summary>
-
-- [✨ Core Features](#-core-features)
-- [🧩 7-Library Ecosystem](#-7-library-ecosystem)
+- [✨ Features](#-features)
 - [🚀 Quick Start](#-quick-start)
-- [📖 Documentation](#-documentation)
 - [🔌 API Usage](#-api-usage)
 - [⚙️ Configuration](#️-configuration)
+- [📚 Documentation](#-documentation)
+- [💻 Examples](#-examples)
 - [🏗️ Architecture](#️-architecture)
-- [📦 Project Structure](#-project-structure)
-- [🎯 Performance Benchmarks](#-performance-benchmarks)
-- [🔒 Security Features](#-security-features)
-- [📈 Observability](#-observability)
-- [🚀 Deployment Options](#-deployment-options)
+- [🧪 Testing](#-testing)
+- [📊 Performance](#-performance)
+- [🔒 Security](#-security)
+- [🗺️ Roadmap](#️-roadmap)
 - [🤝 Contributing](#-contributing)
+- [📋 Changelog](#-changelog)
 - [📄 License](#-license)
-- [🙏 Acknowledgments](#-acknowledgments)
+- [🙏 Acknowledgements](#-acknowledgements)
+- [📞 Contact & Support](#-contact--support)
+- [⭐ Star History](#-star-history)
 
-</details>
 
 ---
 
-## ✨ Core Features
+## ✨ Features
 
-| Category | Features |
-|----------|----------|
-| **🚀 Performance** | Optimized Rust codebase with batch processing and concurrent request handling |
-| **🔧 Multi-Engine** | Candle (native Rust) and ONNX Runtime inference engines |
-| **🔁 Rerank** | Bi-encoder document reranking with HTTP/gRPC/CLI support |
-| **🌍 i18n** | Bilingual (EN/ZH) error responses with Accept-Language negotiation |
-| **🎮 GPU Support** | Native CUDA (NVIDIA), Metal (Apple Silicon), and ROCm (AMD) acceleration |
-| **🌐 Multi-Protocol** | HTTP/REST, gRPC, MCP, and CLI interfaces unified via sdforge |
-| **🧩 7-Library Ecosystem** | Modular ecosystem: trait-kit/confers/inklog/oxcache/limiteron/dbnexus/sdforge |
-| **📊 Smart Caching** | High-performance caching via oxcache (LRU/LFU/FIFO + TTL) |
-| **🔐 Enterprise Security** | JWT authentication, CSRF protection, role-based access control, and audit logging |
-| **⚡ Rate Limiting** | Token bucket rate limiting via limiteron (global/IP/user/API key) |
-| **📈 Priority Queue** | Request prioritization with configurable priority weights and weighted fair queuing |
-| **📦 Cloud Ready** | Production deployment configurations for Kubernetes, Docker, and cloud platforms |
-| **📈 Observability** | Prometheus metrics, health checks, structured logging, and Grafana dashboards |
-| **🧊 Matryoshka Support** | Dynamic dimension reduction for smaller, faster embeddings (OpenAI compatible) |
+<table style="width:100%; border-collapse: collapse">
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🚀 <b>High Performance</b><br><span style="color:#64748B">Optimized Rust codebase with batching and concurrent request processing; jemalloc global allocator enabled by default on Linux</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🔧 <b>Multiple Engines</b><br><span style="color:#64748B"><code>Candle</code> (native Rust) and <code>ONNX Runtime</code> inference engines, switchable via <code>EngineFactory</code></span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🔁 <b>Rerank</b><br><span style="color:#64748B">Bi-encoder based document reranking over HTTP/gRPC/CLI</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🌍 <b>Internationalization (i18n)</b><br><span style="color:#64748B">ICU+Fluent bilingual (English/Chinese) error responses with <code>Accept-Language</code> per-request negotiation</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🎮 <b>GPU Acceleration</b><br><span style="color:#64748B">Native NVIDIA CUDA and Apple Metal support; opt-in <code>mkl</code>/<code>accelerate</code> CPU backends</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>Multi-Protocol Interface</b><br><span style="color:#64748B">HTTP/REST, gRPC, MCP, and CLI generated from a single source by <code>sdforge</code></span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🧩 <b>7-Library Ecosystem</b><br><span style="color:#64748B">Modular ecosystem: <code>trait-kit</code>/<code>confers</code>/<code>inklog</code>/<code>oxcache</code>/<code>limiteron</code>/<code>dbnexus</code>/<code>sdforge</code></span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">📊 <b>Smart Caching</b><br><span style="color:#64748B">High-performance caching via <code>oxcache</code> (LRU/LFU/FIFO + TTL) and three-stage semantic cache lookups</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🔐 <b>Enterprise Security</b><br><span style="color:#64748B">JWT authentication, CSRF protection, role-based access control, TOTP, account lockout, and audit logging</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">⚡ <b>Rate Limiting</b><br><span style="color:#64748B">Token-bucket rate limiting via <code>limiteron</code> (global/IP/user/API-key dimensions)</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">📈 <b>Priority Queue</b><br><span style="color:#64748B">Configurable request priorities, weighted fair scheduling, and time-window dynamic batching</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🧊 <b>Matryoshka Support</b><br><span style="color:#64748B">Dynamic dimensionality reduction (auto re-normalization after truncation) for smaller, faster embeddings (OpenAI-compatible)</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">📈 <b>Observability</b><br><span style="color:#64748B">Prometheus metrics, health checks, structured logging (inklog console + file rotation)</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>Cloud-Native Deployment</b><br><span style="color:#64748B">Multi-arch Docker images (linux/amd64 + arm64); Kubernetes deployment guidance (manifests bring-your-own)</span></td>
+</tr>
+</table>
 
-> **💡 Quick Start**: Get up and running in 2 minutes! [See Quick Start](#-quick-start)
-
-## 🧩 7-Library Ecosystem
-
-VecBoost v0.2.0 adopts a modular ecosystem architecture composed of 7 independent Rust libraries, unified through `trait-kit` for registration and dependency management:
-
-| Library | Version | Purpose | Feature |
-|---------|---------|---------|---------|
-| **trait-kit** | `0.5.0-rc.3` | Module registry & typestate dependency management (`Kit<Unbuilt> → Kit<Ready>`) | Always enabled |
-| **confers** | `0.6.0-rc.3` | Config loading (TOML + env override + hot reload subscription) | `config` |
-| **inklog** | `0.3.0-rc.3` | Structured logging infrastructure (console + file rotation) | `inklog` |
-| **oxcache** | `0.5.0-rc.3` | High-performance cache backend (LRU/LFU/FIFO + TTL eviction) | `oxcache` |
-| **limiteron** | `0.3.0-rc.3` | Token bucket rate limiter (multi-dimension independent counting) | `limiteron` |
-| **dbnexus** | `0.6.0-rc.3` | Database persistence (SQLite/PostgreSQL + permission roles) | `db` |
-| **sdforge** | `0.5.0-rc.3` | Multi-protocol interface generation (HTTP/CLI from single source) | `http`/`cli` |
-
-```mermaid
-graph LR
-    Kit["trait-kit<br/>Kit&lt;Ready&gt;"] --> EmbeddingMod["EmbeddingModule"]
-    Kit --> AuthMod["AuthModule"]
-    Kit --> RateLimitMod["RateLimitModule"]
-    Kit --> CacheMod["CacheModule"]
-    Kit --> DbMod["DbModule"]
-    Kit --> LoggerMod["AuditModule"]
-
-    CacheMod -.->|uses| oxcache
-    RateLimitMod -.->|uses| limiteron
-    DbMod -.->|uses| dbnexus
-    LoggerMod -.->|uses| inklog
-    EmbeddingMod -.->|config| confers
-    EmbeddingMod -.->|interface| sdforge
-```
+---
 
 ## 🚀 Quick Start
 
-### 📋 Prerequisites
+### 📦 Installation
 
-| Requirement | Version | Description |
-|-------------|---------|-------------|
-| **Rust** | 1.85+ | Edition 2024 required |
-| **Cargo** | 1.85+ | Comes with Rust |
-| **CUDA Toolkit** | 12.x | Optional, for NVIDIA GPU support |
-| **Metal SDK** | Latest | Optional, for Apple Silicon GPU |
+Prerequisites:
 
-> **💡 Tip**: Run `rustc --version` to verify your Rust installation.
+| Dependency | Version | Notes |
+|--------|------|------|
+| **Rust** | 1.91+ | edition 2024 (`rust-version` in `Cargo.toml` is authoritative) |
+| **Cargo** | 1.91+ | ships with Rust |
+| **CUDA Toolkit** | 12.x | optional, NVIDIA GPU support (`cuda` feature) |
+| **Metal SDK** | latest | optional, Apple Silicon GPU support (`metal` feature) |
+| **protobuf-compiler** | latest | optional, required for gRPC E2E tests |
 
-### 🔧 Installation
+> **💡 Tip**: run `rustc --version` to verify your Rust installation.
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/Kirky-X/vecboost.git
 cd vecboost
 
-# 2. Build with default features (HTTP)
+# 2. Default build (http feature, includes OpenAPI docs)
 cargo build --release
 
 # 3. Build with GPU support
 #    Linux (CUDA):
 cargo build --release --features cuda
-
 #    macOS (Metal):
 cargo build --release --features metal
 
-# 4. Build multi-protocol interfaces (HTTP + CLI)
-cargo build --release --features http,cli
+# 4. Build multi-protocol interfaces (HTTP + gRPC + CLI)
+cargo build --release --features grpc,cli
 
-# 4b. Build MCP interface (stdio mode, launch with --mcp)
+# 5. Build the MCP interface (stdio mode, start with --mcp)
 cargo build --release --features mcp
 
-# 5. Build full ecosystem (DB + logging + auth + all protocols)
-cargo build --release --features http,cli,db,inklog,auth,oxcache,limiteron
-
-# 6. Build all features (incl. GPU + ONNX + MCP)
-cargo build --release --features cuda,onnx,grpc,mcp,auth,redis,db,inklog,cli
+# 6. Build the CI full-feature combination (database + auth + ONNX + OpenAPI + all protocols)
+cargo build --release --features grpc,cli,auth,onnx,db,openapi,mcp
 ```
 
-### ⚙️ Configuration
+Minimal build: `cargo build --no-default-features --features http`.
+
+Configure and run:
 
 ```bash
-# Copy and customize the configuration
+# Copy and customize the config (defaults to config/config.toml)
 cp config/config.toml config/config_custom.toml
-# Edit config/config_custom.toml with your settings
-```
+# Edit config/config_custom.toml
 
-### ▶️ Running
-
-```bash
-# Run with default configuration
+# Run with the default config
 ./target/release/vecboost
 
-# Run with custom configuration (--config since v0.3.0; must precede the subcommand in CLI mode)
+# Run with a custom config (--config; in CLI subcommand mode it must precede the subcommand)
 ./target/release/vecboost --config config/config_custom.toml
 ```
 
-> **✅ Success**: The service will start on `http://localhost:9002` by default.
+> **✅ Success**: the service starts at `http://127.0.0.1:9002` by default (secure default: loopback only).
 
-### 🐳 Docker
+> **🐳 Docker**: `docker build -t vecboost:latest .`, then run with `config/` and `models/` mounted; Docker Compose and Kubernetes deployment are covered in the [📖 User Guide · Docker deployment](docs/USER_GUIDE.md#-docker-部署).
 
-```bash
-# Build the image
-docker build -t vecboost:latest .
+### 💡 Minimal Example
 
-# Run the container
-docker run -p 9002:9002 -p 50051:50051 \
-  -v $(pwd)/config/config.toml:/app/config/config.toml \
-  -v $(pwd)/models:/app/models \
-  vecboost:latest
-```
-
-
-## 🔄 Breaking Changes & Migration (Unreleased)
-
-This audit-remediation introduces the following **breaking behavior changes** — review before upgrading:
-
-| Change | Old | New | Migration |
-|--------|-----|-----|-----------|
-| Bind safety | `auth.enabled=false` could bind `0.0.0.0` | non-loopback bind without auth → **refuses to start** | keep `127.0.0.1` for dev; `VECBOOST_ALLOW_INSECURE=1` for trusted containers (logs ERROR); enable auth in production |
-| Admin password | `VECBOOST_ADMIN_PASSWORD` optional | missing with auth enabled → **refuses to start** | set `VECBOOST_ADMIN_PASSWORD` |
-| Login username | any username + admin password accepted | only `default_admin_username` (default `admin`) accepted | use the admin username |
-| XFF trust | empty `trusted_proxies` trusted XFF unconditionally | empty = **XFF ignored**, peer IP used | configure `trusted_proxies = ["10.0.0.0/8"]` behind proxies |
-| RBAC | `/model/*`, `/embed/file` needed only login | require **admin role** | use a normal account for embed; admin for model ops |
-| `/embed/file` | default root = cwd, text preview returned | explicit `grpc_allowed_roots` required; ≤10 MiB; preview admin-only | configure allowed roots |
-| Token lifetime | 30 days default | **1 hour** default | set `token_expiration_hours` for long sessions |
-| CSRF | off by default | follows `auth.enabled` | no impact for pure-Bearer APIs |
-| `use_gpu` | shipped as `true` | shipped `false`; warn + CPU fallback when feature missing | enable explicitly for GPU builds |
-| `--config` | missing file silently fell back to defaults | **errors out** (exit 2) | fix the path |
-| Cache keys | `text:{raw}` (model-agnostic) | `emb:{model}:{xxh3_128}`; cache cleared on model switch | first run after upgrade has cold cache |
-| Tokenizer | custom WordPiece on Linux (250-word fallback) | HuggingFace `tokenizers` everywhere; load failure **errors** | re-embed existing vectors |
-| CLI | unknown subcommand silently started the HTTP server | usage on stderr + exit code 2 | adjust scripts; `--help` available |
-
-**Multi-replica boundary**: the inference path is stateless and scales horizontally when auth
-is disabled (rate limiting / caches are per-process). With `auth.enabled=true` auth sessions live
-in process memory (oxcache DAO) — **single replica only**; session externalization
-requires a garrison pool-backed DAO (tracked as a separate change).
-
-**Hot reload semantics**: config file changes are **validated and logged, applied after
-restart** (not hot-swapped). On Kubernetes use ConfigMap rollout.
-
-## 📖 Documentation
-
-| Document | Description | Link |
-|----------|-------------|------|
-| **📋 User Guide** | Detailed usage instructions, configuration, and deployment | [USER_GUIDE_zh.md](docs/USER_GUIDE_zh.md) (Chinese) |
-| **🔌 API Reference** | Complete REST API and gRPC documentation | [API_REFERENCE_zh.md](docs/API_REFERENCE_zh.md) (Chinese) |
-| **🏗️ Architecture** | System design, components, and data flow | [ARCHITECTURE.md](docs/ARCHITECTURE.md) / [ARCHITECTURE_zh.md](docs/ARCHITECTURE_zh.md) |
-| **🤝 Contributing** | Contribution guidelines and best practices | Planned |
-
-## 🔌 API Usage
-
-### 🌐 HTTP REST API
-
-**Generate embeddings via HTTP:**
+Once the server is running, generate embeddings over HTTP (see [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)):
 
 ```bash
 curl -X POST http://localhost:9002/api/1/embed \
@@ -217,7 +161,7 @@ curl -X POST http://localhost:9002/api/1/embed \
   -d '{"text": "Hello, world!"}'
 ```
 
-**Response:**
+Response:
 
 ```json
 {
@@ -227,510 +171,331 @@ curl -X POST http://localhost:9002/api/1/embed \
 }
 ```
 
-### 📡 gRPC API
-
-The service exposes a gRPC interface on port `50051` (configurable). gRPC methods are generated from a single source definition in `src/api/embedding.rs` via the `#[forge(grpc_method = "...")]` macro of `sdforge` — no hand-written proto files are required:
-
-| gRPC Method | Handler Function | Description |
-|-------------|------------------|-------------|
-| `vecboost.embed` | `grpc_embed` | Single text embedding |
-| `vecboost.embed_batch` | `grpc_embed_batch` | Batch text embeddings |
-| `vecboost.compute_similarity` | `grpc_compute_similarity` | Compute vector similarity |
-| `vecboost.embed_file` | `grpc_embed_file` | File text embedding |
-| `vecboost.rerank` | `grpc_rerank` | Rerank documents by relevance |
-| `vecboost.rerank_batch` | `grpc_rerank_batch` | Batch reranking |
-| `vecboost.model_switch` | `grpc_model_switch` | Switch model |
-| `vecboost.get_current_model` | `grpc_get_current_model` | Get current model |
-| `vecboost.get_model_info` | `grpc_get_model_info` | Get model info |
-| `vecboost.list_models` | `grpc_list_models` | List available models |
-| `vecboost.health_check` | `grpc_health_check` | Health check |
-
-The gRPC server is launched via `build_server_with_config`, supporting JWT authentication (`grpc_require_auth`), rate limiting (`LimiteronAdapter`), max connections (`grpc_max_connections`), timeout (`grpc_timeout_seconds`), and allowed roots (`grpc_allowed_roots`) configuration.
-
-### 📚 OpenAPI Documentation
-
-Access interactive API documentation:
-
-| Tool | URL | Notes |
-|------|-----|-------|
-| **Swagger UI** | `http://localhost:9002/api-docs` | v0.2.0 actual path (based on utoipa SwaggerUi) |
-| **OpenAPI JSON** | `http://localhost:9002/api-docs/openapi.json` | OpenAPI spec endpoint |
-| **ReDoc** | - | Deferred to v0.3.0 |
-
-### 🌐 OpenAI-Compatible API
-
-VecBoost provides an OpenAI-compatible embeddings API endpoint:
+You can also use the CLI (`cli` feature) or the library SDK (library mode):
 
 ```bash
-curl -X POST http://localhost:9002/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "input": "Hello, world!",
-    "model": "text-embedding-ada-002"
-  }'
-```
-
-**Response:**
-
-```json
-{
-  "object": "list",
-  "data": [{
-    "object": "embedding",
-    "embedding": [0.123, 0.456, 0.789, ...],
-    "index": 0
-  }],
-  "model": "text-embedding-ada-002",
-  "usage": {
-    "prompt_tokens": 2,
-    "total_tokens": 2
-  }
-}
-```
-
-### 🧊 Matryoshka Dimension Reduction
-
-Reduce embedding dimensions for smaller, faster embeddings while maintaining quality:
-
-```bash
-# Request 256-dimensional embeddings
-curl -X POST http://localhost:9002/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "input": "Hello, world!",
-    "model": "text-embedding-ada-002",
-    "dimensions": 256
-  }'
-```
-
-**Supported dimensions** (BGE-M3 model, max 1024):
-
-| Requested | Returned | Use Case |
-|-----------|----------|----------|
-| `256` | 256 | Maximum speed, smaller storage |
-| `512` | 512 | Balanced performance |
-| `1024` | 1024 | Maximum quality (default) |
-
-**Batch with dimension reduction:**
-
-```bash
-curl -X POST http://localhost:9002/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "input": ["text1", "text2", "text3"],
-    "model": "text-embedding-ada-002",
-    "dimensions": 512
-  }'
-```
-
-### 📡 Multi-Protocol Interfaces
-
-VecBoost v0.2.0 generates 4 protocol interfaces from a single source definition via `sdforge` — enable the corresponding feature to use. All protocol handler functions are defined in `src/api/embedding.rs`, and protocol bindings are generated via the `#[forge(...)]` macro annotation.
-
-| Protocol | Feature | Port | Generation Method | Description |
-|----------|---------|------|-------------------|-------------|
-| **HTTP/REST** | `http` | `9002` | sdforge `#[forge]` | RESTful API + OpenAPI docs |
-| **gRPC** | `grpc` | `50051` | sdforge `#[forge(grpc_method = "...")]` | High-performance binary protocol |
-| **MCP** | `mcp` | stdio | sdforge `#[forge(tool_name = "...")]` | Model Context Protocol (LLM tool integration), launch with `--mcp` in stdio mode |
-| **CLI** | `cli` | - | sdforge `#[forge]` | Command-line tool (`vecboost embed --text "Hello"`) |
-
-**CLI usage examples:**
-
-```bash
-# Single text embedding
+# Single-text embedding
 cargo run --features cli -- embed --text "Hello, world!"
-
-# Batch embedding (read from file)
-cargo run --features cli -- batch --input texts.txt
-
-# Compute similarity
-cargo run --features cli -- similarity --text1 "machine learning" --text2 "artificial intelligence"
 ```
 
-**MCP usage examples (stdio mode):**
+### 🧭 Core Concepts
 
-```bash
-# Launch MCP server in stdio mode (stdout is the JSON-RPC stream; HTTP/gRPC are not started)
-cargo run --features mcp -- --mcp
+- **Models & engines**: `ModelConfig` declares a HuggingFace model (default `BAAI/bge-small-en-v1.5`); `EngineFactory::create(engine_type, config)` creates a `Candle` (default) or `ONNX` (`onnx` feature) engine; Bert / XlmRoberta architectures and mean/cls/max pooling are supported.
+- **Four protocols, one source**: handlers in `src/api/embedding.rs` are annotated with `#[forge(...)]` macros; `sdforge` generates the HTTP/gRPC/MCP/CLI bindings. Hand-written protocol code is forbidden.
+- **7-library ecosystem**: `trait-kit` wires all modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`); `confers` owns configuration, `inklog` logging, `oxcache` caching, `limiteron` rate limiting, `dbnexus` persistence (`db` feature), and `sdforge` interface generation.
+- **Configuration precedence**: TOML file + `VECBOOST_`-prefixed environment variable overrides (secrets such as `VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD` must be provided via env vars); config file changes are validated and logged, taking effect after restart.
+- **Feature gating**: every optional capability is an independent feature (see [🏷️ Feature Flags](#️-feature-flags)); the minimal build contains only the HTTP server.
 
-# Configure stdio launch command in an MCP client (e.g. Claude Desktop / any MCP host):
-# vecboost --mcp
-#
-# Exposed tools:
-#   - embed        single-text vectorization
-#   - embed_batch  batch-text vectorization
-#   - similarity   cosine similarity between two texts
-#   - list_models  list available/loaded models
-```
+---
 
-> **💡 Note**: The MCP protocol exposes VecBoost embedding capabilities as LLM-callable tools, suitable for AI Agent scenarios. In v0.2.0 it is generated via `sdforge` `#[forge]`, providing three tools — `embed_text` / `embed_batch` / `compute_similarity` (collected from `#[forge(tool_name=...)]` in `src/api/embedding.rs` via `sdforge::mcp::build()`), launched in stdio mode via `cargo run --features mcp -- --mcp` (stdout is dedicated to the JSON-RPC stream; HTTP/gRPC services are not started in this mode).
+## 🔌 API Usage
 
-### 🔧 Inference Engines
+VecBoost generates its four protocol interfaces from the single source `src/api/embedding.rs` via `sdforge`. All endpoints, parameters, request/response examples, the gRPC method table, and message types are documented in the [📘 API Reference](docs/API_REFERENCE.md); summary:
 
-VecBoost abstracts multiple ML runtimes via the `InferenceEngine` trait:
+- **HTTP/REST**: `/api/1/*` provides embedding (single / batch / file), similarity, semantic search, rerank, model management, and health endpoints;
+- **OpenAI-compatible**: `POST /v1/embeddings`, responding in the OpenAI format (`object` / `data` / `usage`) with `encoding_format=base64` support;
+- **Matryoshka dimensionality reduction**: pass `dimensions` (256/512/1024, etc.) to `/v1/embeddings` for smaller, faster vectors; truncated vectors are automatically L2 re-normalized to keep cosine similarity correct;
+- **gRPC**: with the `grpc` feature, 13 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — with JWT auth, rate limiting, max connections, and timeouts all configurable;
+- **MCP**: the `mcp` feature exposes the `embed` / `embed_batch` / `similarity` / `list_models` tools to LLMs over stdio (`vecboost --mcp`);
+- **CLI**: the `cli` feature provides the embed / batch / similarity / rerank subcommands (see [💡 Minimal Example](#-minimal-example));
+- **Inference engines**: Candle (native Rust, default) and ONNX Runtime (`onnx` feature), switched via the `EngineFactory::create` factory;
+- **Observability & operations**: `/metrics` (Prometheus), `/health` (liveness) and `/health?depth=full` (real readiness probe), `/api-docs` (Swagger UI); read-only diagnostics with `vecboost doctor` (config / tokenizer / cache / threads / GPU / model integrity; exit code 1 on FAIL).
 
-| Engine | Feature | Description |
-|--------|---------|-------------|
-| **Candle** | default | HuggingFace native Rust ML framework (default engine, supports Bert/XlmRoberta architectures) |
-| **ONNX Runtime** | `onnx` | Cross-platform ML inference runtime |
-
-Created via the `EngineFactory::create(engine_type, config)` factory method; the `EngineType` enum supports `Candle`/`Onnx` variants.
+Interactive OpenAPI docs: `http://localhost:9002/api-docs` (Swagger UI) and `/api-docs/openapi.json` (spec JSON, requires the `openapi` feature; ReDoc is deferred to v0.3.0). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/PERFORMANCE.md#-新增指标).
 
 ### 🏷️ Feature Flags
 
-VecBoost uses feature-gated builds to enable modules on demand:
+The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `default = ["http"]`.
 
-| Feature | Default | Description | Dependency |
-|---------|---------|-------------|------------|
-| `http` | ✅ | HTTP/REST API + OpenAPI docs | sdforge, axum, utoipa |
-| `grpc` | - | gRPC server (generated via sdforge `#[forge(grpc_method)]`) | sdforge |
-| `mcp` | - | MCP protocol interface (LLM tool integration, generated via sdforge `#[forge]`) | sdforge, rmcp |
-| `cli` | - | CLI command-line tool | sdforge, clap |
-| `openapi` | - | OpenAPI/Swagger UI documentation | utoipa, utoipa-swagger-ui |
-| `db` | - | dbnexus database persistence (SQLite) | dbnexus, sea-orm |
-| `postgres` | - | PostgreSQL support (includes db) | dbnexus |
-| `auth` | - | JWT auth + AES-256 encryption | garrison, aes-gcm |
-| `redis` | - | Redis cache backend | redis |
-| `cuda` | - | NVIDIA CUDA GPU acceleration | candle-core/cuda |
-| `metal` | - | Apple Silicon Metal GPU | candle-core/metal |
-| `onnx` | - | ONNX Runtime engine | ort |
+| Feature | Default | Description |
+|---------|------|------|
+| `http` | ✅ | HTTP/REST API + OpenAPI docs + Prometheus metrics |
+| `grpc` | - | gRPC server (generated by sdforge `#[forge(grpc_method)]`) |
+| `cli` | - | CLI tool |
+| `mcp` | - | MCP protocol interface (LLM tool integration, stdio mode) |
+| `openapi` | - | OpenAPI/Swagger UI docs (independent of `http`) |
+| `schema` | - | OpenAPI schema derive (auto-enabled by `http`/`openapi`; for library-mode type export) |
+| `db` | - | dbnexus database persistence (SQLite) |
+| `postgres` | - | PostgreSQL support (implies `db`) |
+| `auth` | - | JWT auth + CSRF + RBAC + AES-256-GCM encryption |
+| `cuda` | - | NVIDIA CUDA GPU acceleration |
+| `metal` | - | Apple Silicon Metal GPU |
+| `onnx` | - | ONNX Runtime engine |
+| `mkl` | - | x86_64 CPU MKL acceleration backend (opt-in; requires a toolchain that links cleanly) |
+| `accelerate` | - | aarch64 macOS Accelerate backend (opt-in) |
+| `quantized-gguf` | - | GGUF quantization engine switch (inference backend pending upstream candle support) |
 
-> **💡 Tip**: `default = ["http"]`; minimal build with `cargo build --no-default-features --features http`.
+> **📦 Built-in dependencies**: `confers` (config), `inklog` (logging), `oxcache` (cache), `limiteron` (rate limiting), and `trait-kit` (module registry) are mandatory dependencies that are always enabled — no feature flag needed. `sdforge` is enabled by any protocol feature (`http`/`grpc`/`cli`/`mcp`).
 
-> **📦 Built-in Dependencies**: `confers` (config), `inklog` (logging), `oxcache` (cache), `limiteron` (rate limiting), `trait-kit` (module registry), and `sdforge` (interface generation, under the `http` feature) are mandatory dependencies — always enabled, no feature flag required.
+---
 
 ## ⚙️ Configuration
 
-### Key Configuration Options
+The default config path is `config/config.toml` (`--config <path>` selects another; a missing explicit path fails fast with exit code 2; the repo ships `config_full.toml` / `config_minimal.toml` presets). Environment variables with the `VECBOOST_` prefix override the config file, and secrets (`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD`) must be provided via env vars; config file changes are validated and logged, taking effect after restart.
 
-```toml
-[server]
-host = "0.0.0.0"
-port = 9002
+Per-key options and defaults for every config section (server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device), the full environment-variable table, and a complete example config are documented in the [📖 User Guide · Configuration](docs/USER_GUIDE.md#️-配置); you can also read [`config/config.toml`](config/config.toml) directly.
 
-[model]
-model_repo = "BAAI/bge-m3"  # HuggingFace model ID
-use_gpu = true
-batch_size = 32
-expected_dimension = 1024
+> **⚠️ Note**: the `[flow_control]` and `[cache]` TOML sections are not parsed in the current version (legacy section names); rate limiting uses `[rate_limit]`, caching uses `[embedding]` and `[semantic_cache]`. See the [❓ FAQ](docs/FAQ.md#️-配置与部署).
 
-[embedding]
-cache_enabled = true
-cache_size = 1024
+---
 
-[auth]
-enabled = true
-jwt_secret = "your-secret-key"
+## 📚 Documentation
 
-# v0.2.0 new config sections (mapping to 7-library ecosystem)
-[database]        # dbnexus (feature: db)
-url = "sqlite:vecboost.db"
-max_connections = 10
+| Document | Description |
+|------|------|
+| [📖 User Guide](docs/USER_GUIDE.md) | Complete tutorial from installation to advanced usage (incl. deployment) |
+| [📘 API Reference](docs/API_REFERENCE.md) | Full REST / gRPC / OpenAI-compatible interface documentation |
+| [🏗️ Architecture](docs/ARCHITECTURE.md) | Design principles, module layout, and data flow |
+| [⚡ Performance Guide](docs/PERFORMANCE.md) | Benchmark data, tuning-switch registry, and experiment discipline |
+| [🔒 Security](docs/SECURITY.md) | Security design, supported versions, and vulnerability reporting |
+| [❓ FAQ](docs/FAQ.md) | Frequently asked questions |
+| [🧪 Test Scenarios](docs/TEST_SCENARIOS.md) | Test-stack responsibilities and the scenario matrix |
+| [📋 Changelog](docs/CHANGELOG.md) | Release-by-release change log |
+| [🤝 Contributing](docs/CONTRIBUTING.md) | How to contribute |
+| [🧭 Tuning registry pointer](docs/tuning.md) | Pointer to PERFORMANCE.md (content merged) |
+| [📈 Benchmark archive](docs/benchmarks/) | Historical benchmark data (similarity / batch scheduling / semantic cache / GPU pipeline) |
+| [🔬 Experiment protocol](docs/experiments/README.md) | A/B empirical discipline and manifest validation |
+| [🌍 I18N missing-key audit](docs/I18N_MISSING_AUDIT.md) | Internationalization audit record |
 
-# [logging] is actively parsed since v0.3.0
-[logging]         # inklog (feature: inklog)
-level = "info"
-console = true
-file_path = "logs/vecboost.log"
+---
 
-[flow_control]    # limiteron (feature: limiteron)
-enabled = true
-token_capacity = 100
-token_refill_rate = 50
+## 💻 Examples
 
-[cache]           # oxcache (feature: oxcache)
-enabled = true
-backend = "memory"
-max_entries = 10000
-ttl_secs = 3600
-eviction_policy = "lru"
+All examples live in [`examples/`](examples/), an independent workspace-member crate `vecboost-examples` (13 categories, 30 runnable binaries) covering basic embedding, HTTP/CLI calls, engine switching, auth, caching, rate limiting, monitoring, audit, semantic cache, and Library SDK integration; the per-category listing is in [`examples/README.md`](examples/README.md).
+
+```bash
+# Run a single example
+cargo run -p vecboost-examples --bin embed
+cargo run -p vecboost-examples --bin library_usage
+cargo run -p vecboost-examples --bin matryoshka
+
+# ONNX engine example (requires ONNX Runtime)
+cargo run -p vecboost-examples --bin onnx --features onnx
 ```
 
-| Section | Key | Default | Description | Library |
-|---------|-----|---------|-------------|---------|
-| **server** | `host` | `"0.0.0.0"` | Bind address | - |
-| | `port` | `9002` | HTTP server port | - |
-| **model** | `model_repo` | `"BAAI/bge-m3"` | HuggingFace model ID | - |
-| | `use_gpu` | `false` | Enable GPU acceleration | - |
-| | `batch_size` | `32` | Batch processing size | - |
-| **embedding** | `cache_enabled` | `true` | Enable response caching | - |
-| | `cache_size` | `1024` | Maximum cache entries | - |
-| **auth** | `enabled` | `false` | Enable authentication | - |
-| | `jwt_secret` | - | JWT signing secret | - |
-| **database** | `url` | `sqlite:vecboost.db` | Database connection URL | dbnexus |
-| | `max_connections` | `10` | Connection pool size | dbnexus |
-| **logging** | `level` | `info` | Log level | inklog |
-| | `file_path` | `logs/vecboost.log` | Log file path | inklog |
-| **flow_control** **(⚠️ Not parsed in current version, edits have no effect)** | `token_capacity` | `100` | Token bucket capacity | limiteron |
-| | `token_refill_rate` | `50` | Token refill rate (per second) | limiteron |
-| **cache** **(⚠️ Not parsed in current version, edits have no effect)** | `backend` | `memory` | Cache backend type | oxcache |
-| | `ttl_secs` | `3600` | Cache TTL (seconds) | oxcache |
-
-> **📖 Full Configuration**: See [`config/config.toml`](config/config.toml) for all available options.
+---
 
 ## 🏗️ Architecture
 
-```mermaid
-graph TB
-    subgraph Client_Layer["Client Layer"]
-        Client[Client Requests]
-    end
+VecBoost uses a modular ecosystem architecture: `trait-kit` wires 17 modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`), `sdforge` generates the four protocol bindings from the single source `src/api/embedding.rs`, inference is abstracted behind `EngineFactory` to the Candle / ONNX engines, and requests flow through a priority queue and time-window batching into the inference pipeline. The 7-library ecosystem (trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge) versions and responsibilities, the module dependency graph, data flow, and the cache / security / deployment architecture and extension points are documented in the [🏗️ Architecture document](docs/ARCHITECTURE.md).
 
-    subgraph Gateway["Gateway Layer (sdforge multi-protocol)"]
-        HTTP["HTTP/REST Endpoints"]
-        gRPC["gRPC Endpoints"]
-        MCP["MCP Interface"]
-        CLI["CLI Commands"]
-        Auth["Auth (JWT/CSRF)"]
-        RateLim["Rate Limiting (limiteron)"]
-    end
+---
 
-    subgraph Kit_Layer["Module Registry (trait-kit)"]
-        Kit["Kit&lt;Ready&gt;"]
-        Kit --> EmbeddingMod["EmbeddingModule"]
-        Kit --> AuthMod["AuthModule"]
-        Kit --> RateLimitMod["RateLimitModule"]
-        Kit --> CacheMod["CacheModule"]
-        Kit --> DbMod["DbModule"]
-        Kit --> LoggerMod["AuditModule"]
-    end
+## 🧪 Testing
 
-    subgraph Pipeline["Request Pipeline"]
-        Queue["Priority Queue"]
-        Workers["Request Workers"]
-        Response["Response Channel"]
-    end
+### 🎯 Testing Strategy
 
-    subgraph Service["Embedding Service"]
-        Text["Text Chunking"]
-        Engine["Inference Engine (EngineFactory)"]
-        Cache["Vector Cache (oxcache)"]
-    end
+The test stack has six layers: inline unit tests in `src/`, integration tests in `tests/integration/`, specialized integration tests (doctor / gRPC E2E / model snapshot regression / quantization quality gate / SDK matrix), real-service scenario tests in `tests/scenario/*.py` (15 pytest suites), performance regression thresholds in `tests/perf/`, and 4 Criterion microbenchmark suites in `benches/`. The `TEST_MODE` environment variable controls the test engine (`mock` default / `light` / `full`). Layer responsibilities, the exhaustive scenario matrix, and the CI workflow mapping are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
 
-    subgraph Engine["Inference Engine"]
-        Candle["Candle (Native Rust)"]
-        ONNX["ONNX Runtime"]
-    end
+### ▶️ Commands (identical to CI)
 
-    subgraph Infra["Infrastructure (7-Library Ecosystem)"]
-        DbNexus["dbnexus (SQLite/PG)"]
-        Inklog["inklog (logging)"]
-        Confers["confers (config)"]
-    end
-
-    subgraph Device["Compute Devices"]
-        CPU["CPU"]
-        CUDA["CUDA GPU"]
-        Metal["Metal GPU"]
-    end
-
-    Client --> HTTP
-    Client --> gRPC
-    Client --> MCP
-    Client --> CLI
-    HTTP --> Auth
-    gRPC --> Auth
-    MCP --> Auth
-    CLI --> Auth
-    Auth --> RateLim
-    RateLim --> Queue
-
-    Queue --> Workers
-    Workers --> Response
-
-    Text --> Engine
-    Engine --> Cache
-
-    Engine --> Candle
-    Engine --> ONNX
-
-    Candle --> CPU
-    Candle --> CUDA
-    ONNX --> CPU
-    ONNX --> Metal
-
-    CacheMod -.-> Cache
-    DbMod -.-> DbNexus
-    LoggerMod -.-> Inklog
-    RateLimitMod -.-> RateLim
-```
-
-## 📦 Project Structure
-
-```
-vecboost/
-├── src/                          # Core source code
-│   ├── api/            # sdforge multi-protocol interface defs (single source for HTTP/gRPC/MCP/CLI)
-│   ├── audit/          # Audit logging & compliance
-│   ├── auth/           # Authentication (JWT, CSRF, RBAC)
-│   ├── cache/          # oxcache cache backend
-│   ├── config/         # Configuration management (confers integration)
-│   ├── db/             # dbnexus database layer (feature: db)
-│   ├── device/         # Device management (CPU, CUDA, Metal, ROCm)
-│   ├── domain/         # Domain models (request/response types)
-│   ├── engine/         # Inference engines (Candle/ONNX)
-│   ├── error.rs        # VecboostError unified error type
-│   ├── logger/         # inklog logging infrastructure
-│   ├── metrics/        # Prometheus metrics & observability
-│   ├── model/          # Model downloading, loading & recovery
-│   ├── registry/# trait-kit module registry
-│   ├── monitor/        # Monitoring & alerting
-│   ├── pipeline/       # Request pipeline, priority & scheduling
-│   ├── rate_limit/     # limiteron rate limiter adapter
-│   ├── security/       # Security utilities (encryption, sanitization, path validation)
-│   ├── service/        # Core embedding service & business logic
-│   ├── text/           # Text processing (chunking, tokenization)
-│   └── utils/          # Utility functions (vector ops, hf_hub, hash verification)
-├── examples/           # Example programs (download_model, batch, embed, similarity)
-├── tests/              # Test directory
-│   ├── integration/    # Integration tests (api_test.rs, real_engine.rs)
-│   ├── perf/           # Performance tests (Python pytest + Rust bench)
-│   └── common/         # Shared test fixtures (MockEngine, fixtures)
-├── config/             # Configuration files directory
-│   ├── config.toml     # Default configuration file
-│   ├── config_full.toml    # Full configuration example
-│   └── config_minimal.toml # Minimal configuration example
-```
-
-## 🎯 Performance Benchmarks
-
-| Metric | CPU | GPU (CUDA) | Notes |
-|--------|-----|------------|-------|
-| **Embedding Dimension** | Up to 4096 | Up to 4096 | Model dependent |
-| **Max Batch Size** | 64 | 256 | Memory dependent |
-| **Requests/Second** | 1,000+ | 10,000+ | Throughput |
-| **Latency (p50)** | < 25ms | < 5ms | Single request |
-| **Latency (p99)** | < 100ms | < 50ms | Single request |
-| **Cache Hit Ratio** | > 90% | > 90% | With 1024 entries |
-
-### 🚀 Optimization Features
-
-- **⚡ Batch Processing**: Dynamic batching with configurable wait timeout
-- **🔄 Zero-Copy**: Shared references where possible
-- **📊 Adaptive Batching**: Automatic batch size adjustment based on load
-- **🧊 Matryoshka Re-normalization**: Automatic re-normalization after dimension truncation, ensuring correct cosine similarity
-
-## 🔒 Security Features
-
-| Layer | Feature | Description |
-|-------|---------|-------------|
-| **🔐 Authentication** | JWT Tokens | Configurable expiration, refresh tokens |
-| **👥 Authorization** | Role-Based Access | User tiers: free, basic, pro, enterprise |
-| **📝 Audit Logging** | Request Tracking | User, action, resource, IP, timestamp |
-| **⚡ Rate Limiting** | Multi-Layer | Global, per-IP, per-user, per-API key |
-| **🔒 Encryption** | AES-256-GCM | Sensitive data at rest |
-| **🛡️ Input Sanitization** | XSS/CSRF Protection | Request validation & sanitization |
-
-> **⚠️ Security Best Practice**: Always use HTTPS in production and rotate JWT secrets regularly.
-
-## 📈 Observability
-
-| Tool | Endpoint | Description |
-|------|----------|-------------|
-| **Prometheus** | `/metrics` | Metrics endpoint for Prometheus scraping |
-| **Health Check** | `/health` | Service liveness and readiness probe |
-| **Detailed Health** | `/health/detailed` | Full health status with component checks |
-| **OpenAPI Docs** | `/api-docs` | Interactive Swagger UI documentation |
-| **Grafana** | - | Pre-configured dashboards (planned) |
-
-### 📊 Key Metrics
-
-- `vecboost_requests_total` - Total request count by endpoint
-- `vecboost_embedding_latency_seconds` - Embedding generation latency
-- `vecboost_cache_hit_ratio` - Cache hit ratio percentage
-- `vecboost_batch_size` - Current batch processing size
-- `vecboost_gpu_memory_bytes` - GPU memory usage
-
-## 🚀 Deployment Options
-
-### ☸️ Kubernetes
+The commands below are extracted from `.github/workflows/health-check.yml` (CI), `feature-matrix.yml`, `scenario-tests.yml`, and `docs/CONTRIBUTING.md`. Path-dependency note: the `../base/*` ecosystem libraries are living path dependencies, so local gate commands must be scoped with `-p vecboost -p vecboost-examples`.
 
 ```bash
-# Deploy to Kubernetes (bring your own manifests)
-kubectl apply -f <your-k8s-manifests>/
+# Format and lint gates (CI treats clippy unwrap_used as the production panic-surface gate)
+cargo fmt --all -- --check
+cargo clippy --features "grpc,cli,auth,onnx,db,openapi,mcp" --all-targets -- -D warnings -W clippy::unwrap_used
 
-# View deployment status
-kubectl get pods -n vecboost
+# Full-feature compile check (feature-matrix)
+cargo check --features "grpc,cli,auth,onnx,db,openapi,mcp"
+
+# Unit + integration tests (CI runs --lib and --tests separately)
+cargo test --features "grpc,cli,auth,onnx,db,openapi,mcp" --lib
+cargo test --features "grpc,cli,auth,onnx,db,openapi,mcp" --tests
+
+# gRPC E2E (spawns the real binary)
+cargo test -p vecboost --features http,grpc --test grpc_e2e
+
+# Scenario tests (pytest; conftest spawns real servers; inference cases auto-SKIP without models/)
+cargo build -p vecboost --features http
+pytest tests/scenario -q --junitxml=scenario-results.xml
+
+# Python performance tests (sim marker separates simulator cases)
+pytest tests/perf -m "not sim"   # real-service cases only
+pytest tests/perf -m sim          # simulator cases only
+
+# Coverage (CI hard gate: line coverage >= 80%, tarpaulin)
+cargo tarpaulin --features "grpc,cli,auth,onnx,db,openapi,mcp" --all-targets --out lcov --out xml --output-dir coverage/
+
+# Benchmarks (CI benchmark job)
+cargo bench --features "grpc,cli,auth,onnx,db,openapi,mcp"
+
+# Documentation build and broken-link check
+cargo doc --workspace --no-deps
+
+# Dependency security audit
+cargo audit
 ```
 
-> **ℹ️ Note**: Kubernetes deployment manifests should be customized for your environment. Docker images can be built via `docker build` or GitHub Actions.
+### 📊 Test Scale
 
-### 🐳 Docker Compose
+As of the v0.2.1 workspace: ~1700+ inline unit tests in `src/`, 61 Rust integration/specialized tests (`tests/*.rs`), 126 Python scenario/performance cases (15 scenario suites), and 4 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 80% (tarpaulin), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
 
-```yaml
-version: '3.8'
+---
 
-services:
-  vecboost:
-    image: vecboost:latest
-    ports:
-      - "9002:9002"    # HTTP API
-      - "50051:50051"  # gRPC
-      # Prometheus metrics are exposed on the 9002 /metrics path, no separate port
-    volumes:
-      - ./config/config.toml:/app/config/config.toml
-      - ./models:/app/models
-      - ./logs:/app/logs
-    environment:
-      - VECBOOST_JWT_SECRET=${JWT_SECRET}
-      - VECBOOST_LOG_LEVEL=info
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-```
+## 📊 Performance
+
+Benchmark data comes from the measured `docs/benchmarks/` archive (criterion, collected 2026-08 on Linux x86_64, noise roughly ±5-10%): SIMD vector similarity is up to **3.06x** faster than the scalar baseline (~341.7 ns for 1024-dim cosine), `ContinuousBatchLoop` continuous batch scheduling is **5.6x** faster than fixed waiting (1.110 s vs 6.194 s for a 100-request steady load), and exact semantic-cache hits take ~10 ns; the throughput baseline (`embed_throughput_bench`) requires a local model and is **to be measured**. The full benchmark tables, performance design highlights (time-window batching / in-batch dedup / SIMD / thread tuning / jemalloc), GGUF quantization, and the tuning-switch registry are in the [⚡ Performance Guide](docs/PERFORMANCE.md); microbenchmarks can be reproduced with `cargo bench` (see the [Testing](#-testing) section above).
+
+---
+
+## 🔒 Security
+
+### 🛡️ Security Design
+
+VecBoost is secure by default: the factory config binds to loopback only, and non-loopback binding with `auth.enabled=false` refuses to start (the `VECBOOST_ALLOW_INSECURE=1` escape hatch logs an ERROR); authentication and authorization build on garrison (JWT + CSRF + RBAC admin role + TOTP + account lockout), plus XFF trust inversion, file-path allowed roots, input length limits, AES-256-GCM config encryption, audit logging, and i18n bilingual error masking. Mechanism-level details are in the [🔒 Security document](docs/SECURITY.md).
+
+### ⛓️ Supply Chain & Gates
+
+`cargo audit`, `cargo deny check`, CodeQL, Trivy/Checkov image scanning, gitleaks secret scanning, and pre-commit hooks run both in CI and locally; the full list and triage policy are in the [🔒 Security document · Supply chain & gates](docs/SECURITY.md#️-供应链与安全门禁).
+
+### 🚨 Reporting a Vulnerability
+
+Please do not report security vulnerabilities through public issues; contact the maintainer at <kirky-x@outlook.com>. Dependency advisories are gated by CI `cargo-audit`. For the full policy and supported versions, see [SECURITY.md](docs/SECURITY.md).
+
+---
+
+## 🗺️ Roadmap
+
+<table style="width:100%; border-collapse: collapse">
+<tr><th style="text-align:center">Status</th><th style="text-align:left">Area</th><th style="text-align:left">Items</th></tr>
+<tr><td align="center">✅</td><td>Core service</td><td>Four-protocol single-source generation, Candle/ONNX engines, Bert/XlmRoberta architectures, priority queue and time-window batching</td></tr>
+<tr><td align="center">✅</td><td>Ecosystem integration</td><td>7-library ecosystem wiring (trait-kit registry, confers config, inklog logging, oxcache cache, limiteron rate limiting, dbnexus persistence, sdforge interfaces)</td></tr>
+<tr><td align="center">✅</td><td>Security & i18n</td><td>JWT/CSRF/RBAC/TOTP, secure defaults hardening, audit logging, ICU+Fluent bilingual errors</td></tr>
+<tr><td align="center">✅</td><td>Performance foundation</td><td>SIMD similarity, continuous batching, semantic cache, GPU memory paging, BF16 inference, Matryoshka reduction</td></tr>
+<tr><td align="center">🚧</td><td>Audit remediation (Unreleased)</td><td>Breaking behavioral changes: secure defaults / login convergence / XFF trust inversion / RBAC wiring / model-scoped cache keys (see [Changelog](#-changelog))</td></tr>
+<tr><td align="center">🚧</td><td>Tuning switches (Unreleased)</td><td>GGUF quantization, quantized vector comparison, multi-model LFRU residency, cache WAL, hardware-aware planning, doctor diagnostics, startup warmup</td></tr>
+<tr><td align="center">📋</td><td>Quantized inference backend</td><td>GGUF inference backend awaits upstream quantized BERT in candle-transformers (routing/magic-number checks/quality gate scaffolding ready)</td></tr>
+<tr><td align="center">📋</td><td>Multi-replica session offload</td><td>Externalized auth sessions require the garrison db backend (pool-backed DAO)</td></tr>
+<tr><td align="center">📋</td><td>Baseline completion</td><td><code>embed_throughput_bench</code> throughput baseline to be measured; MKL/Accelerate comparison baselines on toolchains that link cleanly</td></tr>
+<tr><td align="center">📋</td><td>Docs & observability</td><td>ReDoc (v0.3.0), pre-configured Grafana dashboards</td></tr>
+</table>
+
+---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please open an issue or PR on [GitHub](https://github.com/Kirky-X/vecboost).
+For the detailed workflow and code standards, see the [🤝 Contributing guide](docs/CONTRIBUTING.md).
 
-### 🛠️ Development Setup
+### 🛠️ Development Environment
 
-```bash
-# Install development dependencies
-cargo install cargo-audit cargo-clippy cargo fmt
+The toolchain is Rust 1.91+ (`rust-version` in `Cargo.toml` is authoritative) and Python ≥ 3.10 + pytest (optional: protobuf-compiler, docker); before submitting you must pass the four quality gates — fmt / clippy (the `unwrap_used` panic-surface gate) / tests / `scripts/doc_consistency_check.py` — and Git hooks run automatically via [pre-commit](https://pre-commit.com/) (`.pre-commit-config.yaml` → `scripts/pre-commit.sh`); commit messages follow Conventional Commits, and behavioral changes must be recorded in the CHANGELOG `Unreleased` section and mirrored in both READMEs. Environment setup, feature combinations, and the quality-gate commands are in the [🤝 Contributing guide](docs/CONTRIBUTING.md).
 
-# Run tests
-cargo test --all-features
+### 💖 Ways to Contribute
 
-# Run linter
-cargo clippy --all-targets --all-features -- -D warnings
+<table style="width:100%; border-collapse: collapse">
+<tr>
+<td width="33%" align="center" style="padding: 16px">
 
-# Format code
-cargo fmt --all
-```
+### 🐛 Report a Bug
+
+Found a problem?<br>
+<a href="https://github.com/Kirky-X/vecboost/issues/new">Open an issue</a>
+
+</td>
+<td width="33%" align="center" style="padding: 16px">
+
+### 💡 Suggest a Feature
+
+Have an idea?<br>
+<a href="https://github.com/Kirky-X/vecboost/issues/new">Start a discussion</a>
+
+</td>
+<td width="33%" align="center" style="padding: 16px">
+
+### 🔧 Submit a PR
+
+Want to contribute code?<br>
+<a href="https://github.com/Kirky-X/vecboost/pulls">Fork and open a PR</a>
+
+</td>
+</tr>
+</table>
+
+---
+
+## 📋 Changelog
+
+The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (following [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), semantic versioning).
+
+| Version | Date | Highlights |
+|------|------|------|
+| Unreleased | - | Audit remediation and tuning switches: secure defaults hardening, HF tokenizers on all platforms, time-window batching / in-batch dedup, GGUF quantization path, semantic-cache comparison modes, multi-model LFRU, cache WAL, doctor diagnostics, startup warmup |
+| 0.2.1 | 2026-09-06 | i18n (114 translation keys), three-protocol rerank, three-stage semantic cache, BF16 precision, SIMD similarity, continuous batch scheduling, GPU memory paging, library mode |
+| 0.2.0 | 2026-07-24 | sdforge four-protocol generation, 7-library ecosystem wiring, Matryoshka truncation re-normalization, vuln-0009 repo_id validation |
+| 0.1.0 | 2025-12-15 | Initial VecBoost release |
+
+Unreleased contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · Unreleased](docs/CHANGELOG.md#unreleased). The multi-replica boundary (auth sessions live in process memory; single replica only) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#️-配置与部署).
+
+---
 
 ## 📄 License
 
 This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+---
 
-| Project | Description | Link |
-|---------|-------------|------|
-| **trait-kit** | Module registry & typestate dependency management | [crates.io](https://crates.io/crates/trait-kit) |
-| **confers** | Config loading & hot reload | [crates.io](https://crates.io/crates/confers) |
-| **inklog** | Structured logging infrastructure | [crates.io](https://crates.io/crates/inklog) |
-| **oxcache** | High-performance cache backend | [crates.io](https://crates.io/crates/oxcache) |
-| **limiteron** | Token bucket rate limiter | [crates.io](https://crates.io/crates/limiteron) |
-| **dbnexus** | Database persistence & permission management | [crates.io](https://crates.io/crates/dbnexus) |
-| **sdforge** | Multi-protocol interface generation | [crates.io](https://crates.io/crates/sdforge) |
-| **Candle** | Native Rust ML framework | [GitHub](https://github.com/huggingface/candle) |
-| **ONNX Runtime** | Cross-platform ML inference runtime | [Website](https://onnxruntime.ai/) |
-| **Hugging Face Hub** | Model repository and distribution | [Website](https://huggingface.co/models) |
-| **Axum** | Ergonomic web framework for Rust | [GitHub](https://github.com/tokio-rs/axum) |
-| **Tonic** | gRPC implementation for Rust | [GitHub](https://github.com/hyperium/tonic) |
+## 🙏 Acknowledgements
+
+### 🌟 Core Dependencies
+
+VecBoost stands on the shoulders of these excellent open-source projects:
+
+| Dependency | Purpose |
+|------|------|
+| [candle](https://github.com/huggingface/candle) | Native Rust ML inference framework (default engine) |
+| [tokenizers](https://github.com/huggingface/tokenizers) | HuggingFace tokenizer (all platforms) |
+| [hf-hub](https://crates.io/crates/hf-hub) | HuggingFace Hub model downloads |
+| [trait-kit](https://crates.io/crates/trait-kit) | Module registry & typestate dependency management |
+| [confers](https://crates.io/crates/confers) | Configuration loading (TOML + env + validation) |
+| [inklog](https://crates.io/crates/inklog) | Structured logging infrastructure |
+| [oxcache](https://crates.io/crates/oxcache) | High-performance cache backend |
+| [limiteron](https://crates.io/crates/limiteron) | Token-bucket rate limiter |
+| [dbnexus](https://crates.io/crates/dbnexus) | Database persistence (`db` feature) |
+| [sdforge](https://crates.io/crates/sdforge) | Multi-protocol interface generation |
+| [garrison](https://crates.io/crates/garrison) | Authentication & security hardening (`auth` feature) |
+| [axum](https://github.com/tokio-rs/axum) | HTTP framework (generated by sdforge) |
+| [tokio](https://github.com/tokio-rs/tokio) | Async runtime |
+| [utoipa](https://github.com/juhaku/utoipa) | OpenAPI documentation |
+| [prometheus](https://github.com/tikv/rust-prometheus) | Metrics export |
+| [criterion](https://github.com/bheisler/criterion.rs) | Benchmarking |
+| [tikv-jemallocator](https://github.com/tikv/jemallocator) | jemalloc global allocator (Linux glibc) |
+
+### 💝 Special Thanks
+
+Thanks to the Rust community, Hugging Face (model & tokenizer ecosystem), and all [contributors](https://github.com/Kirky-X/vecboost/graphs/contributors).
 
 ---
 
-<div align="center">
+## 📞 Contact & Support
 
-**⭐ Star us on GitHub if you find VecBoost useful!**
+<table style="width:100%; max-width: 600px">
+<tr>
+<td align="center" width="33%">
+<a href="https://github.com/Kirky-X/vecboost/issues"><b style="color:#991B1B">Issues</b></a><br>
+<span style="color:#64748B">Report problems and bugs</span>
+</td>
+<td align="center" width="33%">
+<a href="https://github.com/Kirky-X/vecboost/issues"><b style="color:#1E40AF">Discussions</b></a><br>
+<span style="color:#64748B">Ask questions and share ideas</span>
+</td>
+<td align="center" width="33%">
+<a href="https://github.com/Kirky-X/vecboost"><b style="color:#1E293B">GitHub</b></a><br>
+<span style="color:#64748B">Browse the source</span>
+</td>
+</tr>
+</table>
 
-[![GitHub stars](https://img.shields.io/github/stars/Kirky-X/vecboost?style=social)](https://github.com/Kirky-X/vecboost)
+---
 
-</div>
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Kirky-X/vecboost&type=Date)](https://star-history.com/#Kirky-X/vecboost&Date)
+
+If this project helps you, please consider giving it a ⭐️!
+
+**Built by Kirky.X**
+
+---
+
+<sub>© 2026 Kirky.X. All rights reserved.</sub>

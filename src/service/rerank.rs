@@ -7,7 +7,6 @@
 
 use crate::cache::OxCacheBackend;
 use crate::config::model::ModelConfig;
-use crate::device::DynamicBatchScheduler;
 use crate::device::memory_optimizer::SharedGpuMemoryManager;
 use crate::domain::{RerankRequest, RerankResponse, RerankResult};
 use crate::engine::InferenceEngine;
@@ -29,7 +28,6 @@ pub struct RerankService {
     model_config: Option<ModelConfig>,
     cache: Arc<OxCacheBackend>,
     memory_manager: Option<SharedGpuMemoryManager>,
-    batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
 }
 
 impl RerankService {
@@ -39,7 +37,6 @@ impl RerankService {
         model_config: Option<ModelConfig>,
         cache: Arc<OxCacheBackend>,
         memory_manager: Option<SharedGpuMemoryManager>,
-        batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     ) -> Self {
         Self {
             engine,
@@ -47,7 +44,6 @@ impl RerankService {
             model_config,
             cache,
             memory_manager,
-            batch_scheduler,
         }
     }
 
@@ -60,7 +56,6 @@ impl RerankService {
             model_config,
             Arc::new(OxCacheBackend::disabled()),
             None,
-            None,
         )
     }
 
@@ -70,7 +65,7 @@ impl RerankService {
         model_config: Option<ModelConfig>,
         cache: Arc<OxCacheBackend>,
     ) -> Self {
-        Self::build(engine, model_config, cache, None, None)
+        Self::build(engine, model_config, cache, None)
     }
 
     #[allow(private_interfaces)]
@@ -79,9 +74,8 @@ impl RerankService {
         model_config: Option<ModelConfig>,
         cache: Arc<OxCacheBackend>,
         memory_manager: Option<SharedGpuMemoryManager>,
-        batch_scheduler: Option<Arc<DynamicBatchScheduler>>,
     ) -> Self {
-        Self::build(engine, model_config, cache, memory_manager, batch_scheduler)
+        Self::build(engine, model_config, cache, memory_manager)
     }
 
     /// 执行重排序：对 query 和 documents 列表计算相关性分数
@@ -618,7 +612,7 @@ mod tests {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockRerankEngine));
         let cache = Arc::new(OxCacheBackend::new(50));
-        let service = RerankService::with_all(engine, None, cache, None, None);
+        let service = RerankService::with_all(engine, None, cache, None);
 
         let req = RerankRequest {
             query: "test".to_string(),
@@ -673,6 +667,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            quantized: false,
         };
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
     }
@@ -717,6 +712,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            quantized: false,
         };
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
     }

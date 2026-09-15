@@ -9,6 +9,7 @@ pub mod hf_hub;
 pub mod validator;
 pub mod vector;
 pub(crate) mod vector_simd;
+pub mod vquant;
 
 pub use constants::{
     DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP_RATIO, DEFAULT_TOP_K, MAX_BATCH_SIZE,

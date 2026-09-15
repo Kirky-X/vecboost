@@ -191,6 +191,10 @@ pub struct ModelConfig {
     pub memory_limit_bytes: Option<u64>,
     pub oom_fallback_enabled: bool,
     pub model_sha256: Option<String>,
+    /// GGUF 量化模型开关（T013）：true 且 `model_path` 以 `.gguf` 结尾时
+    /// 路由至 `QuantizedCandleEngine`；默认 false（safetensors 路径不变）。
+    #[serde(default)]
+    pub quantized: bool,
 }
 
 impl Default for ModelConfig {
@@ -207,6 +211,7 @@ impl Default for ModelConfig {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         }
     }
 }
@@ -238,6 +243,10 @@ mod tests {
         assert_eq!(config.expected_dimension, None);
         assert_eq!(config.memory_limit_bytes, None);
         assert!(config.oom_fallback_enabled);
+        assert!(
+            !config.quantized,
+            "quantized 默认为 false（safetensors 路径不变）"
+        );
     }
 
     #[test]
@@ -254,6 +263,7 @@ mod tests {
             memory_limit_bytes: Some(8 * 1024 * 1024 * 1024),
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         assert_eq!(config.name, "bge-m3");
@@ -275,6 +285,7 @@ mod tests {
             memory_limit_bytes: Some(8 * 1024 * 1024 * 1024),
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -394,6 +405,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let context = InferenceContext::with_config(&config, Precision::Fp16);

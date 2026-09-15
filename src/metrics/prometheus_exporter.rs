@@ -33,6 +33,14 @@ pub struct PrometheusCollector {
     // 批处理大小
     batch_size: HistogramVec,
 
+    // 时间窗拼批指标（T004）：批次大小与等待时长
+    vecboost_batch_size: HistogramVec,
+    vecboost_batch_wait_seconds: HistogramVec,
+    // 批内去重率（T007）：滚动 gauge
+    vecboost_inbatch_dedup_ratio: GaugeVec,
+    // 引擎分阶段延迟（T026）：tokenize/inference/pool
+    vecboost_stage_seconds: HistogramVec,
+
     // 缓存命中率
     cache_hits: CounterVec,
     cache_misses: CounterVec,
@@ -94,6 +102,37 @@ impl PrometheusCollector {
             registry.clone()
         )?;
 
+        // T004：时间窗拼批批次大小与等待时长（标签 operation 完整）
+        let vecboost_batch_size = register_histogram_vec_with_registry!(
+            "vecboost_batch_size",
+            "Worker time-window batch size",
+            &["operation"],
+            vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0],
+            registry.clone()
+        )?;
+        let vecboost_batch_wait_seconds = register_histogram_vec_with_registry!(
+            "vecboost_batch_wait_seconds",
+            "Worker time-window batch wait duration in seconds",
+            &["operation"],
+            vec![0.0, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1],
+            registry.clone()
+        )?;
+        // T007：批内去重率滚动 gauge
+        let vecboost_inbatch_dedup_ratio = register_gauge_vec_with_registry!(
+            "vecboost_inbatch_dedup_ratio",
+            "In-batch dedup ratio (n_unique savings)",
+            &["operation"],
+            registry.clone()
+        )?;
+        // T026：引擎分阶段延迟（stage 标签枚举固定为 tokenize|inference|pool）。
+        let vecboost_stage_seconds = register_histogram_vec_with_registry!(
+            "vecboost_stage_seconds",
+            "Engine stage latency in seconds",
+            &["stage"],
+            vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0],
+            registry.clone()
+        )?;
+
         // 缓存命中
         let cache_hits = register_counter_vec_with_registry!(
             "cache_hits_total",
@@ -134,6 +173,10 @@ impl PrometheusCollector {
             http_request_duration_seconds,
             active_connections,
             batch_size,
+            vecboost_batch_size,
+            vecboost_batch_wait_seconds,
+            vecboost_inbatch_dedup_ratio,
+            vecboost_stage_seconds,
             cache_hits,
             cache_misses,
             rate_limit_allowed,
@@ -171,6 +214,36 @@ impl PrometheusCollector {
         self.batch_size
             .with_label_values(&[operation])
             .observe(size);
+    }
+
+    /// T004：在 assemble_batch 返回处埋点。`batch_wait_ms=0` 时调用方传 wait_secs=0。
+    pub fn observe_batch(&self, operation: &str, size: usize, wait_secs: f64) {
+        self.vecboost_batch_size
+            .with_label_values(&[operation])
+            .observe(size as f64);
+        self.vecboost_batch_wait_seconds
+            .with_label_values(&[operation])
+            .observe(wait_secs);
+    }
+
+    /// T007：更新批内去重率滚动 gauge。
+    pub fn set_dedup_ratio(&self, operation: &str, ratio: f64) {
+        self.vecboost_inbatch_dedup_ratio
+            .with_label_values(&[operation])
+            .set(ratio);
+    }
+
+    /// T026：汇出引擎分阶段延迟快照（drain 语义，来自 StageStats::take）。
+    /// 快照聚合了多次调用，直方图按"每次调用均值"观测（秒/计数）；
+    /// 计数为 0 的阶段跳过，避免向空桶写入无意义样本。
+    pub fn record_stage_snapshot(&self, snapshot: &crate::engine::StageSnapshot) {
+        for (stage, total_secs, count) in snapshot.parts() {
+            if count > 0 {
+                self.vecboost_stage_seconds
+                    .with_label_values(&[stage.as_str()])
+                    .observe(total_secs / count as f64);
+            }
+        }
     }
 
     /// 记录缓存命中
@@ -223,6 +296,21 @@ impl Default for PrometheusCollector {
     fn default() -> Self {
         Self::new().expect("Failed to create PrometheusCollector")
     }
+}
+
+/// 全局 collector 单例锚点：worker/服务热路径无 kit 状态可拿，
+/// 通过进程级 OnceLock 桥接（main 启动时 set 一次）。
+static GLOBAL_COLLECTOR: std::sync::OnceLock<std::sync::Arc<PrometheusCollector>> =
+    std::sync::OnceLock::new();
+
+/// 设置全局 collector（进程生命周期内一次；重复设置忽略并返回 false）。
+pub fn set_global_collector(collector: std::sync::Arc<PrometheusCollector>) -> bool {
+    GLOBAL_COLLECTOR.set(collector).is_ok()
+}
+
+/// 全局 collector 访问点（未设置时 None —— library 模式/单测环境零指标副作用）。
+pub fn global_collector() -> Option<&'static std::sync::Arc<PrometheusCollector>> {
+    GLOBAL_COLLECTOR.get()
 }
 
 #[cfg(test)]
@@ -314,7 +402,6 @@ mod tests {
         let collector = PrometheusCollector::new().unwrap();
         collector.update_active_connections("http", 42);
         collector.update_active_connections("grpc", 7);
-
         let families = collector.registry().gather();
         let gauge_metric = families
             .iter()
@@ -380,6 +467,110 @@ mod tests {
             .map(|m| m.get_histogram().get_sample_count())
             .sum();
         assert_eq!(embed_count, 2, "embed operation should have 2 observations");
+    }
+
+    #[test]
+    fn test_record_stage_snapshot_observes_all_stages_and_skips_empty() {
+        use crate::engine::{Stage, StageSnapshot};
+        let collector = PrometheusCollector::new().unwrap();
+        // 三阶段均有观测：均值 = total/count
+        let mut snap = StageSnapshot::default();
+        snap.nanos[Stage::Tokenize as usize] = 2_000_000; // 2ms
+        snap.counts[Stage::Tokenize as usize] = 2;
+        snap.nanos[Stage::Inference as usize] = 5_000_000; // 5ms
+        snap.counts[Stage::Inference as usize] = 1;
+        snap.nanos[Stage::Pooling as usize] = 1_000_000; // 1ms
+        snap.counts[Stage::Pooling as usize] = 1;
+        collector.record_stage_snapshot(&snap);
+
+        let families = collector.registry().gather();
+        let stage_metric = families
+            .iter()
+            .find(|m| m.name() == "vecboost_stage_seconds")
+            .expect("vecboost_stage_seconds should be registered");
+        let labels_seen: Vec<String> = stage_metric
+            .get_metric()
+            .iter()
+            .flat_map(|m| {
+                m.get_label()
+                    .iter()
+                    .map(|l| l.value().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for expected in ["tokenize", "inference", "pool"] {
+            assert!(
+                labels_seen.iter().any(|l| l == expected),
+                "stage 标签 {expected} 应存在"
+            );
+        }
+        assert_eq!(labels_seen.len(), 3, "stage 标签枚举应恰为三值");
+
+        // 计数为 0 的阶段必须跳过（空快照不产生标签序列；
+        // prometheus 对无子序列的 HistogramVec 直接不输出 family）
+        let collector2 = PrometheusCollector::new().unwrap();
+        collector2.record_stage_snapshot(&StageSnapshot::default());
+        let families2 = collector2.registry().gather();
+        assert!(
+            families2
+                .iter()
+                .all(|m| m.name() != "vecboost_stage_seconds"),
+            "空快照不应产生 vecboost_stage_seconds 输出"
+        );
+    }
+
+    #[test]
+    fn test_observe_batch_records_size_and_wait_with_labels() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.observe_batch("worker", 3, 0.005);
+        collector.observe_batch("worker", 1, 0.0);
+
+        let families = collector.registry().gather();
+        let size_metric = families
+            .iter()
+            .find(|m| m.name() == "vecboost_batch_size")
+            .expect("vecboost_batch_size should be registered");
+        let size_hist = &size_metric.get_metric()[0];
+        assert_eq!(size_hist.get_histogram().get_sample_count(), 2);
+        let labels: Vec<_> = size_hist
+            .get_label()
+            .iter()
+            .map(|l| (l.name().to_string(), l.value().to_string()))
+            .collect();
+        assert!(
+            labels
+                .iter()
+                .any(|(k, v)| k == "operation" && v == "worker")
+        );
+
+        let wait_metric = families
+            .iter()
+            .find(|m| m.name() == "vecboost_batch_wait_seconds")
+            .expect("vecboost_batch_wait_seconds should be registered");
+        let wait_hist = &wait_metric.get_metric()[0];
+        assert_eq!(wait_hist.get_histogram().get_sample_count(), 2);
+        // batch_wait_ms=0 时 wait 观测值为 0 不 panic
+        collector.observe_batch("worker-zero", 1, 0.0);
+        let families2 = collector.registry().gather();
+        assert!(
+            families2
+                .iter()
+                .any(|m| m.name() == "vecboost_batch_wait_seconds")
+        );
+    }
+
+    #[test]
+    fn test_set_dedup_ratio_boundaries() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.set_dedup_ratio("embed", 0.0);
+        collector.set_dedup_ratio("embed", 0.75);
+        let families = collector.registry().gather();
+        let metric = families
+            .iter()
+            .find(|m| m.name() == "vecboost_inbatch_dedup_ratio")
+            .expect("vecboost_inbatch_dedup_ratio should be registered");
+        let val: f64 = metric.get_metric()[0].get_gauge().value();
+        assert!((val - 0.75).abs() < 1e-9);
     }
 
     #[test]

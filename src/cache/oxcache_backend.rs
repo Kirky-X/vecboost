@@ -8,11 +8,32 @@
 //! 用于替代自研 KvCache,支持 LRU 驱逐和 per-entry TTL。
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Arc;
 
 use oxcache::backend::MokaMemoryBackend;
 use oxcache::cache::Cache;
 use oxcache::features::bloom_filter::BloomFilter;
+
+use super::persist;
+
+/// 持久层状态（T021）：两段追加 WAL。文件操作经互斥串行，无后台线程。
+struct PersistState {
+    path: std::path::PathBuf,
+    tag: String,
+    max_bytes: u64,
+    inner: std::sync::Mutex<PersistInner>,
+}
+
+struct PersistInner {
+    /// 带用户态缓冲的 WAL 句柄（T035 审查 F1：合并系统调用）。
+    file: std::io::BufWriter<std::fs::File>,
+    /// 已提交记录数（回放初始化，追加递增，紧凑化重置）。
+    nrec: u64,
+    /// WAL 近似字节数（构造时从文件长度初始化，追加时累加；
+    /// 替代逐插入 stat 的超限检查）。
+    approx_bytes: u64,
+}
 
 /// oxcache 后端,包装 `oxcache::Cache<String, Vec<f32>>`。
 ///
@@ -34,6 +55,8 @@ pub(crate) struct OxCacheBackend {
     enabled: bool,
     /// bloom 累计插入计数(原子,put 热路径无锁)
     bloom_insertions: std::sync::atomic::AtomicUsize,
+    /// 可选 WAL 持久层（`persist_path` 设置时启用，默认 None = 纯内存）。
+    persist: Option<Arc<PersistState>>,
 }
 
 impl OxCacheBackend {
@@ -51,6 +74,77 @@ impl OxCacheBackend {
             bloom: Some(bloom),
             enabled: true,
             bloom_insertions: std::sync::atomic::AtomicUsize::new(0),
+            persist: None,
+        }
+    }
+
+    /// 创建带 WAL 持久层的缓存后端（T021）。
+    ///
+    /// `model_tag` 为模型指纹（回放时不匹配的记录被弃用）；`max_bytes`
+    /// 为紧凑化阈值。构造时回放已有文件计数 nrec；内存重建需调用方在
+    /// 启动时显式 `load_persisted().await`（顺序回放重建缓存）。
+    pub fn with_persist(
+        capacity: usize,
+        path: std::path::PathBuf,
+        max_bytes: u64,
+        model_tag: String,
+    ) -> Self {
+        let mut backend = Self::new(capacity);
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "persist 文件不可创建 {}: {e}（请检查 [embedding] persist_path 目录权限）",
+                    path.display()
+                )
+            });
+        let approx_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let is_new = approx_bytes == 0;
+        let (_, committed) = persist::replay(&path, &model_tag);
+        // 新文件构造时一次性写头（追加路径不再逐插入 stat，T035 审查 F1）。
+        let mut writer = std::io::BufWriter::new(file);
+        if is_new && let Err(e) = persist::write_header(&mut writer) {
+            log::warn!("persist: {} 写头失败: {}", path.display(), e);
+        }
+        backend.persist = Some(Arc::new(PersistState {
+            path,
+            tag: model_tag,
+            max_bytes,
+            inner: std::sync::Mutex::new(PersistInner {
+                file: writer,
+                nrec: committed,
+                approx_bytes,
+            }),
+        }));
+        backend
+    }
+
+    /// 返回持久文件路径（doctor 可写性探测用）。
+    pub fn persist_path(&self) -> Option<std::path::PathBuf> {
+        self.persist.as_ref().map(|p| p.path.clone())
+    }
+
+    /// 启动回放：顺序重放持久文件重建内存缓存（T022）。
+    /// 版本头/指纹不匹配或 checksum 失败的记录被弃用并 warn。
+    pub async fn load_persisted(&self) {
+        let Some(ps) = self.persist.as_ref() else {
+            return;
+        };
+        let (records, committed) = persist::replay(&ps.path, &ps.tag);
+        // 去重（后者覆盖前者）后写入内存（不回写 WAL，避免放大）。
+        let mut dedup: HashMap<String, Vec<f32>> = HashMap::with_capacity(records.len());
+        for (k, v) in records {
+            dedup.insert(k, v);
+        }
+        // 同步 nrec（回放计数可能领先构造时计数）。
+        if let Ok(mut inner) = ps.inner.lock() {
+            inner.nrec = inner.nrec.max(committed);
+        }
+        for (k, v) in dedup {
+            self.put_inner(&k, v, false).await;
         }
     }
 
@@ -61,6 +155,7 @@ impl OxCacheBackend {
             bloom: None,
             enabled: false,
             bloom_insertions: std::sync::atomic::AtomicUsize::new(0),
+            persist: None,
         }
     }
 
@@ -90,8 +185,13 @@ impl OxCacheBackend {
 
     /// 写入缓存(禁用时为空操作)。
     ///
-    /// 写入时将 key 插入 bloom filter。
+    /// 写入时将 key 插入 bloom filter；持久层启用时同步两段追加 WAL。
     pub async fn put(&self, key: &str, value: Vec<f32>) {
+        let do_persist = self.persist.is_some();
+        self.put_inner(key, value, do_persist).await;
+    }
+
+    async fn put_inner(&self, key: &str, value: Vec<f32>, do_persist: bool) {
         if !self.enabled {
             return;
         }
@@ -110,6 +210,75 @@ impl OxCacheBackend {
                 bloom.clear();
                 self.bloom_insertions
                     .store(0, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        if do_persist {
+            self.append_persist(key, &value);
+        }
+    }
+
+    /// WAL 两段追加 + 超限紧凑化（同步于插入调用点，无后台线程）。
+    fn append_persist(&self, key: &str, value: &[f32]) {
+        let Some(ps) = self.persist.as_ref() else {
+            return;
+        };
+        let mut guard = match ps.inner.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                log::warn!("persist: 文件锁中毒，跳过本次落盘: {}", e);
+                return;
+            }
+        };
+        // 先拷贝出所需字段，避免 MutexGuard 解引用与 ps.tag 的借用冲突。
+        let tag = ps.tag.clone();
+        let nrec = guard.nrec;
+        match persist::append_record(&mut guard.file, key, value, &tag, nrec) {
+            Ok((nrec, bytes)) => {
+                guard.nrec = nrec;
+                guard.approx_bytes += bytes as u64;
+                // 提交记录推送至内核（File.flush 本为 no-op，这里刷 BufWriter）。
+                let _ = guard.file.flush();
+                // 超限紧凑化：快照重写（临时文件 + rename 原子替换）。
+                let over = guard.approx_bytes > ps.max_bytes;
+                if over {
+                    drop(guard);
+                    self.compact_persist();
+                }
+            }
+            Err(e) => {
+                log::warn!("persist: 追加失败（{}），本次插入仅内存生效", e);
+            }
+        }
+    }
+
+    /// 快照重写紧凑化：回放去重 → tmp 重写 → 原子替换 → 重开句柄。
+    fn compact_persist(&self) {
+        let Some(ps) = self.persist.as_ref() else {
+            return;
+        };
+        let (records, _) = persist::replay(&ps.path, &ps.tag);
+        let mut dedup: HashMap<String, Vec<f32>> = HashMap::with_capacity(records.len());
+        for (k, v) in records {
+            dedup.insert(k, v);
+        }
+        match persist::compact(&ps.path, &dedup, &ps.tag) {
+            Ok(n) => {
+                if let Ok(mut guard) = ps.inner.lock() {
+                    guard.nrec = n;
+                    if let Ok(file) = std::fs::OpenOptions::new()
+                        .read(true)
+                        .create(true)
+                        .append(true)
+                        .open(&ps.path)
+                    {
+                        guard.approx_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
+                        guard.file = std::io::BufWriter::new(file);
+                    }
+                }
+                log::info!("persist: 紧凑化完成，{} 条记录", n);
+            }
+            Err(e) => {
+                log::warn!("persist: 紧凑化失败（{}），保留原文件", e);
             }
         }
     }
@@ -156,6 +325,27 @@ impl OxCacheBackend {
         }
         if let Some(bloom) = &self.bloom {
             bloom.clear();
+        }
+        // 持久文件同步截断（否则重启会复活已清数据）。
+        if let Some(ps) = self.persist.as_ref()
+            && let Ok(mut guard) = ps.inner.lock()
+        {
+            let reopened = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&ps.path);
+            match reopened {
+                Ok(f) => {
+                    guard.approx_bytes = 0;
+                    guard.file = std::io::BufWriter::new(f);
+                    guard.nrec = 0;
+                }
+                Err(e) => {
+                    log::warn!("persist: 清空截断失败（{}）", e);
+                }
+            }
         }
     }
 
@@ -549,5 +739,145 @@ mod tests {
         // 精确匹配命中率应为 0%（所有改写文本键都不同）
         assert_eq!(hits, 0, "exact match should miss all paraphrased texts");
         // 注意：原始文本的命中依赖 moka 异步索引，这里仅验证改写文本全部 miss
+    }
+
+    // ========================================================================
+    // T021/T022: WAL 持久层测试
+    // ========================================================================
+
+    fn persist_backend(
+        dir: &std::path::Path,
+        max_bytes: u64,
+    ) -> (OxCacheBackend, std::path::PathBuf) {
+        let path = dir.join("cache.wal");
+        let backend =
+            OxCacheBackend::with_persist(1024, path.clone(), max_bytes, "test-model".to_string());
+        (backend, path)
+    }
+
+    /// T021：每次插入产生数据记录 + 提交记录；崩溃截断尾部半条后重放无脏数据。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_persist_write_path_two_phase_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, path) = persist_backend(dir.path(), 1024 * 1024);
+        cache.put("k1", vec![1.0, 2.0]).await;
+        cache.put("k2", vec![3.0]).await;
+        let (data, commit) = persist::record_counts(&path);
+        assert_eq!(data, 2, "每次插入应产生一段数据记录");
+        assert_eq!(commit, 2, "每次插入应产生一段提交记录");
+        // 崩溃模拟：截断尾部半条（k2 的提交记录写一半）。
+        // 按两段协议语义：已提交 k1 恢复；k2 数据虽完整但提交撕裂，
+        // 按"最多丢最后一条"被丢弃——关键是绝不出现半条脏数据。
+        let len = std::fs::metadata(&path).unwrap().len();
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_len(len - 3).unwrap();
+        drop(f);
+        // 重放：k1 完整恢复，k2 缺席（而非脏数据）。
+        let cache2 =
+            OxCacheBackend::with_persist(1024, path.clone(), 1024 * 1024, "test-model".to_string());
+        cache2.load_persisted().await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(cache2.get("k1").await, Some(vec![1.0, 2.0]));
+        assert_eq!(
+            cache2.get("k2").await,
+            None,
+            "提交撕裂的最后一条必须丢弃而非半应用"
+        );
+    }
+
+    /// T022：roundtrip（写入 N 条 → 重启后命中 N 条）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_persist_roundtrip_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, path) = persist_backend(dir.path(), 1024 * 1024);
+        for i in 0..8 {
+            cache.put(&format!("rk{}", i), vec![i as f32, 0.5]).await;
+        }
+        drop(cache);
+        let cache2 =
+            OxCacheBackend::with_persist(1024, path, 1024 * 1024, "test-model".to_string());
+        cache2.load_persisted().await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        for i in 0..8 {
+            assert_eq!(
+                cache2.get(&format!("rk{}", i)).await,
+                Some(vec![i as f32, 0.5]),
+                "重启后应命中全部 N 条"
+            );
+        }
+    }
+
+    /// T022：中段损坏跳过继续 + 指纹不匹配弃用。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_persist_replay_skips_corrupt_middle() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, path) = persist_backend(dir.path(), 1024 * 1024);
+        cache.put("good-a", vec![1.0]).await;
+        cache.put("good-b", vec![2.0]).await;
+        cache.put("good-c", vec![3.0]).await;
+        // 破坏第一条数据记录的向量载荷（保持长度前缀合法，使其可跳过）。
+        let mut bytes = std::fs::read(&path).unwrap();
+        // 文件头 8 字节 + 类型 1 + key_len 4 + key("good-a"=6) + dim 4 = 23；
+        // 向量载荷始于 offset 23。
+        let off = 8 + 1 + 4 + 6 + 4;
+        bytes[off] ^= 0xFF;
+        bytes[off + 1] ^= 0xFF;
+        std::fs::write(&path, &bytes).unwrap();
+        let cache2 =
+            OxCacheBackend::with_persist(1024, path, 1024 * 1024, "test-model".to_string());
+        cache2.load_persisted().await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(cache2.get("good-a").await.is_none(), "损坏条目必须跳过");
+        assert_eq!(cache2.get("good-b").await, Some(vec![2.0]), "其余继续恢复");
+        assert_eq!(cache2.get("good-c").await, Some(vec![3.0]));
+        // 指纹不匹配：换 tag 重放应全部弃用。
+        let cache3 = OxCacheBackend::with_persist(
+            1024,
+            dir.path().join("cache.wal"),
+            1024 * 1024,
+            "other-model".to_string(),
+        );
+        cache3.load_persisted().await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(cache3.get("good-b").await.is_none(), "指纹不匹配应弃用");
+    }
+
+    /// T022：超限触发紧凑化（文件收缩、去重且数据完整）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_persist_compaction_on_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        // 阈值较小；3 个 key 反复覆盖写入 30 次（累积远超阈值），
+        // 紧凑化后文件应只保留去重后的 3 条记录。
+        let (cache, path) = persist_backend(dir.path(), 400);
+        for i in 0..30 {
+            cache.put(&format!("ck{}", i % 3), vec![i as f32]).await;
+        }
+        let (data_records, _) = persist::record_counts(&path);
+        // 无紧凑化时应为 30 条；紧凑化后仅保留去重快照 + 尾部少量追加。
+        assert!(
+            data_records <= 8,
+            "紧凑化应去重，实际 {} 条记录",
+            data_records
+        );
+        let size_after = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            size_after < 400,
+            "紧凑化后文件应低于阈值，实际 {} 字节",
+            size_after
+        );
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // 最新值完整（key ck{i%3} 最后一次写入 i=27/28/29）。
+        assert_eq!(cache.get("ck0").await, Some(vec![27.0]));
+        assert_eq!(cache.get("ck1").await, Some(vec![28.0]));
+        assert_eq!(cache.get("ck2").await, Some(vec![29.0]));
+    }
+
+    /// 默认无 persist_path 时零写盘行为。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_no_persist_by_default() {
+        let cache = OxCacheBackend::new(16);
+        assert!(cache.persist_path().is_none());
+        cache.put("k", vec![1.0]).await;
+        assert_eq!(cache.get("k").await, Some(vec![1.0]));
     }
 }

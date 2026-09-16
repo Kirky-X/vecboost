@@ -13,6 +13,7 @@ openai-input-too-large = Input array too large (max { $max } items)
 # ── Authentication messages ──
 auth-admin-password-missing = Server has no admin password configured; authentication is unavailable. Set VECBOOST_ADMIN_PASSWORD and restart
 auth-admin-required = Admin privileges are required for this operation
+auth-credentials-missing = Missing authentication credentials
 auth-password-empty = Password must not be empty
 auth-invalid-credentials = Invalid username or password
 auth-refresh-token-empty = Refresh token must not be empty
@@ -95,6 +96,10 @@ oom-fallback-failed = OOM error and fallback failed: { $detail }
 oom-max-attempts = Max fallback attempts exceeded ({ $attempts }). Last error: { $detail }
 engine-semaphore-failed = Failed to acquire semaphore: { $detail }
 engine-batch-timeout = Batch chunk processing timed out after { $secs }s
+
+# ── Middleware error responses ──
+rate-limit-exceeded = Rate limit exceeded
+route-not-found = The requested resource was not found
 
 # ── Metrics endpoint (P1) ──
 metrics-limiter-unavailable = Rate limiter unavailable

@@ -1274,6 +1274,24 @@ async fn app_main() -> anyhow::Result<()> {
             .with_state(app_state.clone());
         let mut app = app.merge(metrics_router);
 
+        // 404 fallback：未知路由返回结构化 JSON（与 R-1 错误契约一致）
+        app = app.fallback(|| async {
+            use axum::http::{StatusCode, header};
+            use axum::response::IntoResponse;
+            let body = serde_json::json!({
+                "type": "NotFound",
+                "message": vecboost::i18n::tr("route-not-found"),
+                "field": null,
+                "value": null,
+            });
+            (
+                StatusCode::NOT_FOUND,
+                [(header::CONTENT_TYPE, "application/json")],
+                body.to_string(),
+            )
+                .into_response()
+        });
+
         // Prometheus 指标记录中间件 — 无条件应用到所有路由
         #[cfg(feature = "http")]
         {

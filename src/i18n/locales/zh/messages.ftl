@@ -13,6 +13,7 @@ openai-input-too-large = 输入数组过大（最多 { $max } 项）
 # ── 认证消息 ──
 auth-admin-password-missing = 服务端未配置管理员密码，认证不可用；请设置 VECBOOST_ADMIN_PASSWORD 并重启
 auth-admin-required = 该操作需要管理员权限
+auth-credentials-missing = 缺少认证凭据
 auth-password-empty = 密码不能为空
 auth-invalid-credentials = 用户名或密码无效
 auth-refresh-token-empty = 刷新令牌不能为空
@@ -95,6 +96,10 @@ oom-fallback-failed = 内存不足错误且降级回退失败：{ $detail }
 oom-max-attempts = 超出最大降级重试次数（{ $attempts }）。最后错误：{ $detail }
 engine-semaphore-failed = 获取信号量失败：{ $detail }
 engine-batch-timeout = 批处理分块处理超时（{ $secs }s）
+
+# ── 中间件错误响应 ──
+rate-limit-exceeded = 请求频率超出限制
+route-not-found = 请求的资源不存在
 
 # ── Metrics 端点（P1） ──
 metrics-limiter-unavailable = 速率限制器不可用

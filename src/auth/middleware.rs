@@ -150,7 +150,7 @@ pub async fn auth_middleware(
             if let Some(ref logger) = audit_logger {
                 logger.log_unauthorized_access(ip.map(|i| i.to_string()), path);
             }
-            return Err(StatusCode::UNAUTHORIZED);
+            return Ok(unauthorized_response("auth-credentials-missing"));
         }
     };
 
@@ -186,7 +186,7 @@ pub async fn auth_middleware(
             if let Some(ref logger) = audit_logger {
                 logger.log_unauthorized_access(ip.map(|i| i.to_string()), path);
             }
-            Err(StatusCode::UNAUTHORIZED)
+            Ok(unauthorized_response("auth-invalid-token"))
         }
     }
 }
@@ -203,6 +203,42 @@ fn forbidden_response() -> Response {
     });
     let mut resp = Response::new(axum::body::Body::from(body.to_string()));
     *resp.status_mut() = StatusCode::FORBIDDEN;
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    resp
+}
+
+/// 401 响应：结构化错误体（与 handler 层 R-1 契约 `{type, message, field, value}` 一致）。
+fn unauthorized_response(message_key: &str) -> Response {
+    use axum::http::header;
+    let body = serde_json::json!({
+        "type": "AuthenticationRequired",
+        "message": crate::i18n::tr(message_key),
+        "field": null,
+        "value": null,
+    });
+    let mut resp = Response::new(axum::body::Body::from(body.to_string()));
+    *resp.status_mut() = StatusCode::UNAUTHORIZED;
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    resp
+}
+
+/// 429 响应：结构化错误体（与 handler 层 R-1 契约一致）。
+fn rate_limited_response() -> Response {
+    use axum::http::header;
+    let body = serde_json::json!({
+        "type": "RateLimitExceeded",
+        "message": crate::i18n::tr("rate-limit-exceeded"),
+        "field": null,
+        "value": null,
+    });
+    let mut resp = Response::new(axum::body::Body::from(body.to_string()));
+    *resp.status_mut() = StatusCode::TOO_MANY_REQUESTS;
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("application/json"),
@@ -396,14 +432,13 @@ pub async fn auth_rate_limit_middleware(
         // 429 响应携带 RateLimit-*/Retry-After（开启 headers 时），便于
         // 客户端按标准头做退避；未开启时保持既有裸状态码行为
         if headers_enabled && let Some(values) = decision.headers {
-            use axum::response::IntoResponse;
-            let response = (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
+            let response = rate_limited_response();
             return Ok(limiteron::middleware::inject_rate_limit_headers(
                 response, &values,
             ));
         }
 
-        return Err(StatusCode::TOO_MANY_REQUESTS);
+        return Ok(rate_limited_response());
     }
 
     let response = next.run(request).await;
@@ -563,6 +598,36 @@ mod tests {
     fn forbidden_response_has_correct_status_and_json_body() {
         let resp = forbidden_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/json"
+        );
+    }
+
+    /// 401 响应结构验证:含 R-1 契约的 `{type, message, field, value}` 结构
+    #[test]
+    fn unauthorized_response_has_structured_json_body() {
+        let resp = unauthorized_response("auth-credentials-missing");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/json"
+        );
+    }
+
+    /// 429 响应结构验证:含 R-1 契约的 `{type, message, field, value}` 结构
+    #[test]
+    fn rate_limited_response_has_structured_json_body() {
+        let resp = rate_limited_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(
             resp.headers()
                 .get("content-type")

@@ -702,13 +702,15 @@ src/config/
 
 ### 🔄 环境变量映射
 
+> **说明**：VecBoost 使用 confers 库的 `env_prefix = "VECBOOST_"` 机制自动映射环境变量到配置字段。字段名含下划线（如 `cache_size`、`use_gpu`）无法通过 confers 映射，只能通过配置文件设置。`VECBOOST_JWT_SECRET` 和 `VECBOOST_ADMIN_PASSWORD` 由 `apply_security_env_overrides` 函数显式处理并校验最小长度。
+
 | 配置键 | 环境变量 | 示例值 |
 |--------|----------|--------|
 | `server.port` | `VECBOOST_SERVER_PORT` | `9002` |
 | `model.model_repo` | `VECBOOST_MODEL_REPO` | `BAAI/bge-m3` |
-| `auth.jwt_secret` | `VECBOOST_JWT_SECRET` | `your-secret-key` |
-| `embedding.cache_size` | `VECBOOST_CACHE_SIZE` | `1024` |
-| `model.use_gpu` | `VECBOOST_USE_GPU` | `true` |
+| `auth.jwt_secret` | `VECBOOST_JWT_SECRET` | `your-secret-key`（≥32 字符） |
+| `server.timeout` | `VECBOOST_SERVER_TIMEOUT` | `30` |
+| `audit.enabled` | `VECBOOST_AUDIT_ENABLED` | `true` |
 
 ---
 
@@ -730,19 +732,17 @@ gRPC 服务由 sdforge 通过 `build_server_with_config` 启动，相关配置�
 ### 📦 配置加载流程
 
 ```rust
-impl AppConfig {
-    pub fn load() -> Result<Self, ConfigError> {
-        let mut builder = ConfigBuilder::default();
-        
-        // 1. 加载配置文件
-        builder = builder.add_source(ConfigFile::with_name("config/config.toml"));
-        
-        // 2. 添加环境变量覆盖
-        builder = builder.add_source(EnvironmentVariables::with_prefix("VECBOOST"));
-        
-        // 3. 解析并返回配置
-        builder.build()
-    }
+// src/config/app_config.rs — 实际加载逻辑
+pub fn load_via_confers_with_path<P: Into<PathBuf>>(path: P) -> Result<Self, VecboostError> {
+    let mut config = confers::ConfigBuilder::<Self>::new()
+        .allow_absolute_paths()
+        .file_optional(path)            // 1. 加载配置文件（可选）
+        .env_prefix("VECBOOST_")         // 2. 环境变量覆盖
+        .build()?;
+    apply_security_env_overrides(&mut config)?;  // 3. 敏感字段校验
+    apply_priority_defaults(&mut config.pipeline.priority);  // 4. 优先级默认值
+    config.validate()?;                  // 5. 配置验证
+    Ok(config)
 }
 ```
 

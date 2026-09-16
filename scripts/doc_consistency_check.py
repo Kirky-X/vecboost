@@ -16,12 +16,10 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DOCS = [
-    ROOT / "README.md",
-    ROOT / "README_EN.md",
-    ROOT / "docs" / "API_REFERENCE.md",
-    ROOT / "docs" / "USER_GUIDE.md",
-]
+DOCS = (
+    [ROOT / "README.md", ROOT / "README_EN.md"]
+    + sorted((ROOT / "docs").rglob("*.md"))
+)
 SRC = ROOT / "src"
 
 # ---------------------------------------------------------------- 代码侧事实
@@ -29,9 +27,10 @@ SRC = ROOT / "src"
 def src_text() -> str:
     # src/ 为主（forge 路由/gRPC/CLI 事实源）；benches/ 一并纳入以核验基准类
     # 环境变量（如 VECBOOST_BENCH_MODEL 仅被 benches 消费）。
+    # tests/ 纳入以核验测试专用环境变量（如 VECBOOST_GGUF_MODEL）。
     return "\n".join(
         p.read_text(errors="replace")
-        for d in (ROOT / "src", ROOT / "benches")
+        for d in (ROOT / "src", ROOT / "benches", ROOT / "tests")
         for p in d.rglob("*.rs")
     )
 
@@ -68,14 +67,20 @@ def code_cli_subcommands(src: str) -> set[str]:
 
 # confers env 映射可用性：VECBOOST_<SECTION>_<FIELD>，FIELD 不含下划线时可达
 CONFIG_SECTIONS: dict[str, set[str]] = {
-    "server": {"host", "port", "timeout", "grpc", "workers"},
-    "model": {"repo", "revision", "path", "gpu", "size", "dimension", "length"},
+    "server": {"host", "port", "timeout", "grpc", "workers", "body", "request", "cors"},
+    "model": {"repo", "revision", "path", "gpu", "size", "dimension", "length", "batch", "quantized", "max", "resident"},
     "embedding": set(),
     "rerank": set(),
     "monitoring": set(),
     "auth": set(),
     "rate": set(),
     "audit": set(),
+    "logging": set(),
+    "semantic": set(),
+    "device": set(),
+    "database": set(),
+    "pipeline": set(),
+    "memory": set(),
 }
 # 上表中 section/field 为前缀匹配（如 server.grpc* / model.repo*），subset 字段可放宽；
 # 字段名含下划线（如 max_batch_size）无法通过 confers env 映射，属文档禁用区。

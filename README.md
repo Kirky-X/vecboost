@@ -198,7 +198,7 @@ VecBoost 由 `sdforge` 从 `src/api/embedding.rs` 单一源生成四种协议接
 - **Matryoshka 维度约简**：`/v1/embeddings` 传 `dimensions`（256/512/1024 等）换取更小更快的向量，截断后自动 L2 重归一化保证余弦相似度正确；
 - **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 13 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto），JWT 认证、限流、最大连接数与超时均可配置；
 - **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露 `embed` / `embed_batch` / `similarity` / `list_models` 工具；
-- **CLI**：`cli` feature 提供 embed / batch / similarity / rerank 子命令（见 [💡 最小示例](#-最小示例)）；
+- **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank 子命令（见 [💡 最小示例](#-最小示例)）；
 - **推理引擎**：Candle（原生 Rust，默认）与 ONNX Runtime（`onnx` feature），经 `EngineFactory::create` 工厂切换；
 - **可观测性与运维**：`/metrics`（Prometheus 指标）、`/health`（存活探针）与 `/health?depth=full`（真实就绪探测）、`/api-docs`（Swagger UI）；只读诊断 `vecboost doctor`（config / tokenizer / 缓存 / 线程 / GPU / 模型完整性，FAIL 退出码 1）。
 

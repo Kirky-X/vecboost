@@ -1134,10 +1134,11 @@ cargo run --features mcp -- --mcp
 `cli` feature 提供 clap 命令行工具（由 sdforge 从与 HTTP/gRPC 相同的处理函数生成）。`--config` 等全局参数须写在子命令之前：
 
 ```bash
-cargo run --features cli -- embed --text "Hello, world!"      # 单文本嵌入
-cargo run --features cli -- batch --input texts.txt            # 批量嵌入（从文件读取）
-cargo run --features cli -- similarity --text1 "机器学习" --text2 "人工智能"
-cargo run --features cli -- rerank --query "什么是机器学习" --documents docs.txt
+cargo run --features cli -- embed --text "Hello, world!"                # 单文本嵌入
+cargo run --features cli -- embed_batch --input texts.txt               # 批量嵌入（从文件读取）
+cargo run --features cli -- compute_similarity --text1 "机器学习" --text2 "人工智能"  # 相似度
+cargo run --features cli -- search --text "查询文本" --candidates candidates.txt     # 语义检索
+cargo run --features cli -- rerank --query "什么是机器学习" --documents docs.txt     # 重排序
 ```
 
 > **ℹ️ 说明**: 未知子命令会输出用法提示并退出（码 2），不再静默启动 HTTP 服务器。

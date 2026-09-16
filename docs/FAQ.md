@@ -119,7 +119,7 @@ Unreleased 版本将分词器统一为全平台 HuggingFace `tokenizers`（更�
 
 ### ❓ 哪些配置项必须用环境变量？
 
-敏感项必须走环境变量（前缀 `VECBOOST_`）：`VECBOOST_JWT_SECRET`（启用认证时必填）、`VECBOOST_ADMIN_PASSWORD`（启用认证时必填，≥8 位）、`VECBOOST_ENCRYPTION_KEY` 等。完整清单见 [📖 用户指南 · 环境变量](USER_GUIDE.md#-环境变量) 一节。
+敏感项必须走环境变量（前缀 `VECBOOST_`）：`VECBOOST_JWT_SECRET`（启用认证时必填，≥32 字符）、`VECBOOST_ADMIN_PASSWORD`（启用认证时必填，≥12 位）、`VECBOOST_ENCRYPTION_KEY` 等。完整清单见 [📖 用户指南 · 环境变量](USER_GUIDE.md#-环境变量) 一节。
 
 ### ❓ `[flow_control]` / `[cache]` 配置段为什么不生效？
 

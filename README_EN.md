@@ -198,7 +198,7 @@ VecBoost generates its four protocol interfaces from the single source `src/api/
 - **Matryoshka dimensionality reduction**: pass `dimensions` (256/512/1024, etc.) to `/v1/embeddings` for smaller, faster vectors; truncated vectors are automatically L2 re-normalized to keep cosine similarity correct;
 - **gRPC**: with the `grpc` feature, 13 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — with JWT auth, rate limiting, max connections, and timeouts all configurable;
 - **MCP**: the `mcp` feature exposes the `embed` / `embed_batch` / `similarity` / `list_models` tools to LLMs over stdio (`vecboost --mcp`);
-- **CLI**: the `cli` feature provides the embed / batch / similarity / rerank subcommands (see [💡 Minimal Example](#-minimal-example));
+- **CLI**: the `cli` feature provides the embed / embed_batch / compute_similarity / search / rerank subcommands (see [💡 Minimal Example](#-minimal-example));
 - **Inference engines**: Candle (native Rust, default) and ONNX Runtime (`onnx` feature), switched via the `EngineFactory::create` factory;
 - **Observability & operations**: `/metrics` (Prometheus), `/health` (liveness) and `/health?depth=full` (real readiness probe), `/api-docs` (Swagger UI); read-only diagnostics with `vecboost doctor` (config / tokenizer / cache / threads / GPU / model integrity; exit code 1 on FAIL).
 

@@ -336,7 +336,7 @@ max_files = 10                  # 保留的日志文件数量
 | `VECBOOST_SERVER_PORT` | `server.port` | `9002` |
 | `VECBOOST_MODEL_REPO` | `model.model_repo` | `BAAI/bge-m3` |
 | `VECBOOST_JWT_SECRET` | `auth.jwt_secret` | `your-secret-key`（≥32 字符） |
-| `VECBOOST_ADMIN_PASSWORD` | `auth.default_admin_password` | `your-admin-password`（≥8 字符） |
+| `VECBOOST_ADMIN_PASSWORD` | `auth.default_admin_password` | `your-admin-password`（≥12 字符） |
 | `VECBOOST_ALLOW_INSECURE` | - | `1` = 允许非回环绑定 + 无认证（打 ERROR 告警，仅供受信网络容器） |
 | `VECBOOST_ENCRYPTION_KEY` | - | 32 字节 hex 密钥（用于敏感配置加密） |
 | `VECBOOST_REQUIRE_ENCRYPTION` | - | 强制加密配置 |
@@ -700,7 +700,7 @@ docker-compose up -d
 | 变量 | 描述 | 必需 |
 |------|------|------|
 | `VECBOOST_JWT_SECRET` | JWT 密钥（认证时必需，≥32 字符） | ✅ |
-| `VECBOOST_ADMIN_PASSWORD` | 管理员密码（认证时必需，≥8 字符） | ✅ |
+| `VECBOOST_ADMIN_PASSWORD` | 管理员密码（认证时必需，≥12 字符） | ✅ |
 | `VECBOOST_ENCRYPTION_KEY` | 敏感配置加密密钥（32 字节 hex） | 推荐 |
 | `VECBOOST_LANG` | 默认语言（`zh` 或 `en`） | ❌ |
 | `VECBOOST_LOG_LEVEL` | 日志级别 (`trace`, `debug`, `info`, `warn`/`warning`, `error`)，覆盖 `[logging].level` | ❌ |

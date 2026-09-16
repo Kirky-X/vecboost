@@ -95,6 +95,9 @@ def make_config(
         "[server]",
         'host = "127.0.0.1"',
         f"port = {check_port(port)}",
+        # /embed/file 与 /model/switch 的路径白名单（安全契约：显式配置整体替换默认根），
+        # 覆盖场景产物目录与本地模型库
+        f"grpc_allowed_roots = {json.dumps([str(RUN_DIR), str(PROJECT_ROOT / 'models')])}",
     ]
     if grpc:
         lines += [
@@ -161,15 +164,21 @@ def spawn_server(name: str, port: int, config_text: str, env_extra: dict | None 
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         probe.bind(("127.0.0.1", check_port(port)))
-        probe.close()
     except OSError:
         raise RuntimeError(f"port {port} 已被占用（疑似残留 vecboost 进程），请先清理") from None
+    finally:
+        # 占用与空闲两条路径都必须关闭 fd，否则 ResourceWarning 在零告警门禁下炸测试
+        probe.close()
     env = os.environ.copy()
     env.update(env_extra or {})
     log = open(d / "server.log", "ab")
-    proc = subprocess.Popen(
-        ["/home/kirky/projects/vecboost/target/debug/vecboost"],
-        cwd=d, stdout=log, stderr=subprocess.STDOUT, env=env, shell=False)
+    try:
+        proc = subprocess.Popen(
+            ["/home/kirky/projects/vecboost/target/debug/vecboost"],
+            cwd=d, stdout=log, stderr=subprocess.STDOUT, env=env, shell=False)
+    finally:
+        # 子进程已 dup 该 fd,关闭父副本避免 ResourceWarning(零告警门禁)
+        log.close()
     if not wait_health(port, timeout, proc):
         tail = tail_log(name)
         stop_server({"proc": proc, "port": port})
@@ -216,9 +225,12 @@ def probe_lifecycle(name: str, port: int, config_text: str, env_extra: dict | No
     env = os.environ.copy()
     env.update(env_extra or {})
     log = open(d / "server.log", "ab")
-    proc = subprocess.Popen(
-        ["/home/kirky/projects/vecboost/target/debug/vecboost"],
-        cwd=d, stdout=log, stderr=subprocess.STDOUT, env=env, shell=False)
+    try:
+        proc = subprocess.Popen(
+            ["/home/kirky/projects/vecboost/target/debug/vecboost"],
+            cwd=d, stdout=log, stderr=subprocess.STDOUT, env=env, shell=False)
+    finally:
+        log.close()
     health_ok = wait_health(port, 90, proc)
     result = {"health_ok": health_ok, "exit_code": None, "seconds": None}
     if not health_ok:

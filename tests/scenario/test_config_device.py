@@ -91,13 +91,18 @@ def test_r005_no_gpu_fallback(nogpu_server):
 
 def test_r006_device_field_reported(base_server):
     """R-config-006: 设备信息可观测性——/model/info 无 device 字段（能力缺口记录），
-    但启动日志明确报告设备（Using CPU / GPU），以日志为准。"""
+    但启动日志明确报告设备（Using CPU / GPU），以日志为准。
+
+    应用日志经 inklog 落盘到 CWD 相对 logs/vecboost.log（server.log 仅承载
+    logger 初始化前的 stderr 横幅），故以日志文件为准。
+    """
     st, body = http_get(base_server["port"], "/api/1/model/info")
     assert st == 200, f"info HTTP {st}: {str(body)[:150]}"
     if "device" not in str(body).lower():
-        # 日志证据：启动日志含 "Using CPU"/"Using FP32"
-        from conftest import tail_log
-        log = tail_log("base", 100)
+        # 日志证据：应用日志含 "Using CPU"/"Using FP32"
+        log_file = base_server["dir"] / "logs" / "vecboost.log"
+        assert log_file.exists(), f"应用日志文件应存在: {log_file}"
+        log = log_file.read_text(errors="replace")
         assert "Using CPU" in log or "Using GPU" in log or "cuda" in log.lower(), \
             "模型信息端点与日志均未报告设备（R-config-006 失败）"
         print("[info] 能力记录：/model/info 无 device 字段（发现），设备经启动日志报告")

@@ -63,9 +63,12 @@ def enh_server():
     env = {"VECBOOST_LOG_LEVEL": "debug"}
     full_env = {**dict(__import__("os").environ), **env}
     log = open(d / "server.log", "ab")
-    proc = subprocess.Popen(
-        [str(BIN), "--config", "custom.toml"],
-        cwd=d, stdout=log, stderr=subprocess.STDOUT, env=full_env)
+    try:
+        proc = subprocess.Popen(
+            [str(BIN), "--config", "custom.toml"],
+            cwd=d, stdout=log, stderr=subprocess.STDOUT, env=full_env)
+    finally:
+        log.close()
     deadline = time.time() + 90
     ready = False
     while time.time() < deadline:
@@ -182,16 +185,21 @@ def test_ae08_gzip_compression(enh_server):
 
 
 def test_ae09_vecboost_log_level_env(enh_server):
-    """AE-09: VECBOOST_LOG_LEVEL=debug → 服务器日志含 debug 级别行。"""
-    log_file = enh_server["dir"] / "server.log"
+    """AE-09: VECBOOST_LOG_LEVEL=debug → 应用日志含 debug 级别行。
+
+    应用日志经 inklog 落盘到 CWD 相对 logs/vecboost.log（server.log 仅承载
+    logger 初始化前的 stderr 横幅），故以日志文件为准。
+    """
+    log_file = enh_server["dir"] / "logs" / "vecboost.log"
+    assert log_file.exists(), f"应用日志文件应存在: {log_file}"
     text = log_file.read_text(errors="replace")
-    assert "[DEBUG]" in text or "debug" in text.lower(), "debug 级别日志应落盘"
+    assert "[DEBUG]" in text, "debug 级别日志应落盘（logs/vecboost.log）"
 
 
-def test_ae10_model_unload_capability_boundary(enh_server):
-    """AE-10: 服务器主路径未装配 ModelManager —— unload 明确 404（能力边界，
-    不得谎报卸载成功）。HTTP 404 响应体含资源说明。"""
+def test_ae10_model_unload_unknown_model_404(enh_server):
+    """AE-10: ModelManager 已接线——卸载不存在的模型返回 404 且消息指明
+    Model not found（不得谎报卸载成功）。"""
     st, _, body = _post(enh_server["port"], "/api/1/model/unload",
                         {"model_name": "never-loaded-xyz"})
-    assert st == 404, f"无 ModelManager 部署应 404（不得谎报成功），实际 {st}: {str(body)[:150]}"
-    assert "model manager" in str(body), f"错误应指明缺失能力: {str(body)[:200]}"
+    assert st == 404, f"未知模型卸载应 404（不得谎报成功），实际 {st}: {str(body)[:150]}"
+    assert "not found" in str(body).lower(), f"错误应指明模型不存在: {str(body)[:200]}"

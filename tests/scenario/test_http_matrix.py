@@ -19,6 +19,7 @@ import pytest
 
 from conftest import (
     M1_PATH,
+    M1_REPO,
     RUN_DIR,
     find_vector,
     http_get,
@@ -34,7 +35,7 @@ M2_MINILM_PATH = str(pathlib.Path(__file__).resolve().parents[2] / "models" / "a
 def test_hm_o01_openai_single_string(base_server):
     """HM-O01: input 单串 → object=list + 向量 + usage。"""
     st, body = http_post(base_server["port"], "/v1/embeddings",
-                         {"input": "openai compatibility check", "model": "bge-small-en-v1.5"})
+                         {"input": "openai compatibility check", "model": M1_REPO})
     assert st == 200, f"{st}: {str(body)[:200]}"
     assert body.get("object") == "list", f"object 应为 list: {str(body)[:200]}"
     assert body["data"] and find_vector(body), "应含向量"
@@ -44,7 +45,7 @@ def test_hm_o01_openai_single_string(base_server):
 def test_hm_o02_openai_array_input(base_server):
     """HM-O02: input 数组 → 每条一个 data 元素，index 对齐。"""
     st, body = http_post(base_server["port"], "/v1/embeddings",
-                         {"input": ["first doc", "second doc"], "model": "bge-small-en-v1.5"})
+                         {"input": ["first doc", "second doc"], "model": M1_REPO})
     assert st == 200, f"{st}: {str(body)[:200]}"
     assert len(body["data"]) == 2, "数组输入应返回 2 个 embedding 对象"
     assert [d["index"] for d in body["data"]] == [0, 1], "index 应对齐输入顺序"
@@ -53,7 +54,7 @@ def test_hm_o02_openai_array_input(base_server):
 def test_hm_o03_openai_base64_format(base_server):
     """HM-O03: encoding_format=base64 → base64 编码向量。"""
     st, body = http_post(base_server["port"], "/v1/embeddings",
-                         {"input": "base64 encoded vector", "model": "bge-small-en-v1.5",
+                         {"input": "base64 encoded vector", "model": M1_REPO,
                           "encoding_format": "base64"})
     assert st == 200, f"{st}: {str(body)[:200]}"
     raw = body["data"][0]["embedding"]
@@ -66,7 +67,7 @@ def test_hm_o03_openai_base64_format(base_server):
 def test_hm_o04_openai_matryoshka_dimensions(base_server):
     """HM-O04: dimensions=128 → Matryoshka 截断，维度正确且保留率字段存在。"""
     st, body = http_post(base_server["port"], "/v1/embeddings",
-                         {"input": "matryoshka truncation test", "model": "bge-small-en-v1.5",
+                         {"input": "matryoshka truncation test", "model": M1_REPO,
                           "dimensions": 128})
     assert st == 200, f"{st}: {str(body)[:200]}"
     vec = body["data"][0]["embedding"]
@@ -76,7 +77,7 @@ def test_hm_o04_openai_matryoshka_dimensions(base_server):
 def test_hm_o05_openai_empty_input_rejected(base_server):
     """HM-O05: input 空数组 → 400。"""
     st, body = http_post(base_server["port"], "/v1/embeddings",
-                         {"input": [], "model": "bge-small-en-v1.5"})
+                         {"input": [], "model": M1_REPO})
     assert st == 400, f"空 input 应 400，实际 {st}: {str(body)[:150]}"
 
 

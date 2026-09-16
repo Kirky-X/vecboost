@@ -39,8 +39,12 @@ def test_lc02_sigint_graceful_shutdown():
     (d / "config").mkdir(parents=True, exist_ok=True)
     (d / "config" / "config.toml").write_text(make_config(9142, model_path=M1_PATH))
     log = open(d / "server.log", "ab")
-    proc = subprocess.Popen(["/home/kirky/projects/vecboost/target/debug/vecboost"],
-                            cwd=d, stdout=log, stderr=subprocess.STDOUT)
+    try:
+        proc = subprocess.Popen(["/home/kirky/projects/vecboost/target/debug/vecboost"],
+                                cwd=d, stdout=log, stderr=subprocess.STDOUT)
+    finally:
+        # 子进程已 dup 该 fd,关闭父副本避免 ResourceWarning(零告警门禁)
+        log.close()
     # 等待健康
     deadline = time.time() + 90
     healthy = False
@@ -76,8 +80,12 @@ def test_lc03_graceful_shutdown_under_load():
     (d / "config").mkdir(parents=True, exist_ok=True)
     (d / "config" / "config.toml").write_text(make_config(9143, model_path=M1_PATH))
     log = open(d / "server.log", "ab")
-    proc = subprocess.Popen(["/home/kirky/projects/vecboost/target/debug/vecboost"],
-                            cwd=d, stdout=log, stderr=subprocess.STDOUT)
+    try:
+        proc = subprocess.Popen(["/home/kirky/projects/vecboost/target/debug/vecboost"],
+                                cwd=d, stdout=log, stderr=subprocess.STDOUT)
+    finally:
+        # 子进程已 dup 该 fd,关闭父副本避免 ResourceWarning(零告警门禁)
+        log.close()
     deadline = time.time() + 90
     healthy = False
     while time.time() < deadline:

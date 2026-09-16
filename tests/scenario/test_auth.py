@@ -8,9 +8,11 @@ from __future__ import annotations
 import pytest
 
 from conftest import (
-    ADMIN_PASS, ADMIN_USER,
+    ADMIN_PASS, ADMIN_USER, AUTH_ENV, M1_PATH,
     http_get, http_post, find_vector, make_config, probe_expect_fail,
+    spawn_server, stop_server,
 )
+import time
 
 WRONG_PASSWORD = ADMIN_PASS + "-wrong-suffix"
 
@@ -111,3 +113,64 @@ def test_r008_startup_requires_jwt_secret():
                             make_config(9130, model_path="/nonexistent-unused", auth=True),
                             env_extra={"VECBOOST_JWT_SECRET": "short"}, timeout=45)
     assert ok2, "短 JWT secret 仍启动成功（安全缺陷）"
+
+
+def test_r009_invalid_refresh_token_rejected(auth_server):
+    """R-auth-009: 无效/伪造 refresh_token → 4xx（不得 5xx），服务存活。"""
+    port = auth_server["port"]
+    for label, tok in (("随机串", "not-a-real-refresh-token-0123456789"),
+                       ("空串", "")):
+        st, body = http_post(port, "/api/1/auth/refresh", {"refresh_token": tok})
+        assert 400 <= st < 500, f"{label} refresh_token 返回 {st}（预期 4xx）: {str(body)[:150]}"
+    st2, _ = http_get(port, "/health")
+    assert st2 == 200, "无效 refresh 后服务不健康"
+
+
+def test_r010_malformed_authorization_header_rejected(auth_server):
+    """R-auth-010: 畸形 Authorization 头——缺失 scheme/未知 scheme/空 Bearer
+    → 401 且不崩溃。"""
+    port = auth_server["port"]
+    import http.client
+    import json as _json
+    from conftest import ALLOWED_HOST
+    for label, header in (("无scheme", "justarawtoken"),
+                          ("未知scheme", "Basic YWRtaW46YWRtaW4="),
+                          ("空Bearer", "Bearer "),
+                          ("空Bearer无空格", "Bearer")):
+        conn = http.client.HTTPConnection(ALLOWED_HOST, port, timeout=15)
+        conn.request("POST", "/api/1/embed",
+                     body=_json.dumps({"text": "malformed auth header probe"}).encode(),
+                     headers={"Content-Type": "application/json", "Authorization": header})
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        assert resp.status == 401, f"{label}: 返回 {resp.status}（预期 401）"
+    st2, _ = http_get(port, "/health")
+    assert st2 == 200, "畸形 Authorization 后服务不健康"
+
+
+def test_r011_token_expiration_seconds_graceful():
+    """R-auth-011: token_expiration_seconds 秒级过期（R-4）——登录可用、
+    过期后 401、服务存活。刷新 token 与 access token 同生命周期。"""
+    port = 9133
+    # token_expiration_seconds 属 [auth] 段:插在 [database] 段之前
+    cfg = make_config(port, model_path=M1_PATH, auth=True).replace(
+        "[database]", "token_expiration_seconds = 4\n\n[database]")
+    s = spawn_server("auth_expiry", port, cfg, env_extra=AUTH_ENV, timeout=60)
+    try:
+        st, body = http_post(port, "/api/1/auth/login",
+                             {"username": ADMIN_USER, "password": ADMIN_PASS})
+        assert st == 200, f"login 应 200: {st}: {str(body)[:150]}"
+        token = body["token"]
+        expires_in = body.get("expires_in")
+        assert isinstance(expires_in, int) and 0 < expires_in <= 10, \
+            f"expires_in 应为秒级(≤10): {expires_in}"
+        st2, _ = http_post(port, "/api/1/embed", {"text": "fresh token"}, token=token)
+        assert st2 == 200, f"未过期 token 应可用: {st2}"
+        time.sleep(6)
+        st3, body3 = http_post(port, "/api/1/embed", {"text": "expired token"}, token=token)
+        assert st3 == 401, f"过期 token 应 401: {st3}: {str(body3)[:150]}"
+        st4, _ = http_get(port, "/health")
+        assert st4 == 200, "过期后服务应存活"
+    finally:
+        stop_server(s)

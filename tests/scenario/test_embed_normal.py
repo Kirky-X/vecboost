@@ -7,6 +7,7 @@ import pytest
 
 from conftest import (
     http_get, http_post, find_list_of_vectors, find_vector, find_scalar_score, l2_norm,
+    M1_REPO,
 )
 
 DIM = 384
@@ -114,7 +115,7 @@ def test_r006_matryoshka_via_openai_dimensions(base_server):
     port = base_server["port"]
     for d in (128, 256):
         st, body = http_post(port, "/v1/embeddings",
-                             {"input": "matryoshka 降维测试", "model": "bge-small-en-v1.5",
+                             {"input": "matryoshka 降维测试", "model": M1_REPO,
                               "dimensions": d, "encoding_format": "float"})
         assert st == 200, f"dimensions={d}: HTTP {st}: {str(body)[:200]}"
         vec = find_vector(body)
@@ -122,7 +123,7 @@ def test_r006_matryoshka_via_openai_dimensions(base_server):
         assert abs(l2_norm(vec) - 1.0) < 0.05, f"dimensions={d} 未重新归一化: L2={l2_norm(vec)}"
     for bad in (0, 4096):
         st, body = http_post(port, "/v1/embeddings",
-                             {"input": "x", "model": "bge-small-en-v1.5", "dimensions": bad})
+                             {"input": "x", "model": M1_REPO, "dimensions": bad})
         assert st in (400, 422), f"非法 dimensions={bad} 返回 {st}（预期 400/422）"
 
 
@@ -130,7 +131,7 @@ def test_r007_openai_compat_endpoint(base_server):
     """R-embed-007: OpenAI 兼容 /v1/embeddings——结构与 /embed 一致性。"""
     port = base_server["port"]
     st, body = http_post(port, "/v1/embeddings",
-                         {"input": ["hello world", "你好世界"], "model": "bge-small-en-v1.5",
+                         {"input": ["hello world", "你好世界"], "model": M1_REPO,
                           "encoding_format": "float"})
     assert st == 200, f"HTTP {st}: {str(body)[:200]}"
     data = body.get("data") if isinstance(body, dict) else None

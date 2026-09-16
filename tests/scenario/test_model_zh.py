@@ -7,9 +7,13 @@ from __future__ import annotations
 import pytest
 
 from conftest import (
-    M1_PATH, M1_REPO, http_get, http_post, find_vector,
+    M1_PATH, M1_REPO, PROJECT_ROOT, http_get, http_post, find_vector,
     probe_expect_fail, tail_log,
 )
+
+# M2 本地副本(models/ 资产):热切换回 M2 用本地路径,消除对 HF 网络的
+# 运行期依赖——在线下载能力已由 R-model-002 在启动阶段单独覆盖。
+M2_LOCAL_PATH = str(PROJECT_ROOT / "models" / "BAAI-bge-small-zh-v1.5")
 
 
 def test_r002_hf_mirror_server_side_download(zh_server):
@@ -37,16 +41,17 @@ def test_r003_model_info_endpoints(zh_server):
 
 
 def test_r004_hot_switch_dims(zh_server):
-    """R-model-004: 热切换 M2→M1→M2，维度 512↔384。"""
+    """R-model-004: 热切换 M2→M1→M2，维度 512↔384。回切走本地路径（确定性）。"""
     port = zh_server["port"]
     st, _ = http_post(port, "/api/1/model/switch",
                       {"model_name": M1_REPO, "model_path": M1_PATH, "expected_dimension": 384})
     assert st == 200, f"切换 M1: HTTP {st}: {str(_)[:200]}"
     st1, b1 = http_post(port, "/api/1/embed", {"text": "切换后验证"})
     assert st1 == 200 and len(find_vector(b1)) == 384, "切换 M1 后维度非 384"
-    st2, _ = http_post(port, "/api/1/model/switch",
-                       {"model_name": "BAAI/bge-small-zh-v1.5", "expected_dimension": 512})
-    assert st2 == 200, f"切回 M2: HTTP {st2}"
+    st2, body2 = http_post(port, "/api/1/model/switch",
+                           {"model_name": "BAAI/bge-small-zh-v1.5",
+                            "model_path": M2_LOCAL_PATH, "expected_dimension": 512})
+    assert st2 == 200, f"切回 M2: HTTP {st2}: {str(body2)[:200]}"
     st3, b3 = http_post(port, "/api/1/embed", {"text": "切回验证"})
     assert st3 == 200 and len(find_vector(b3)) == 512, "切回 M2 后维度非 512"
 

@@ -27,23 +27,19 @@ pub fn is_valid_hf_repo_id(repo_id: &str) -> bool {
         return false;
     }
 
-    // 不允许以 / 开头或结尾
     if repo_id.starts_with('/') || repo_id.ends_with('/') {
         return false;
     }
 
-    // 不允许 .. 或 //
     if repo_id.contains("..") || repo_id.contains("//") {
         return false;
     }
 
-    // 最多两段(organization/model)
     let segments: Vec<&str> = repo_id.split('/').collect();
     if segments.len() > 2 {
         return false;
     }
 
-    // 每段只允许字母、数字、-、_、.,且不为空,且不为纯 "."
     segments.iter().all(|seg| {
         !seg.is_empty()
             && *seg != "."
@@ -83,7 +79,6 @@ pub(crate) fn build_hf_repo(
         )));
     }
 
-    // 提前检测镜像端点并警告
     if let Some(endpoint) = detect_mirror_risk() {
         log::warn!(
             "HF_ENDPOINT={} detected — hf-hub 1.0.0 requires ETag headers which \
@@ -111,7 +106,6 @@ pub(crate) fn build_hf_repo(
     }
     let api = builder.build_sync().map_err(|e| {
         let msg = e.to_string();
-        // 提供更具针对性的错误信息
         if msg.contains("ETag") || msg.contains("missing") {
             VecboostError::ModelLoadError(format!(
                 "HuggingFace hub initialization failed: {}. \
@@ -160,7 +154,6 @@ mod tests {
 
     #[test]
     fn test_is_valid_hf_repo_id_rejects_path_traversal() {
-        // vuln-0009 核心:拒绝路径遍历尝试
         assert!(!is_valid_hf_repo_id("../etc/passwd"));
         assert!(!is_valid_hf_repo_id("org/../../etc/passwd"));
         assert!(!is_valid_hf_repo_id("./model"));
@@ -224,7 +217,6 @@ mod tests {
 
     #[test]
     fn test_detect_mirror_risk_no_env() {
-        // When HF_ENDPOINT is not set, should return None
         let saved = std::env::var("HF_ENDPOINT").ok();
         unsafe { std::env::remove_var("HF_ENDPOINT") };
         assert!(detect_mirror_risk().is_none());

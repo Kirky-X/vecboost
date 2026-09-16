@@ -280,13 +280,13 @@ impl PrometheusCollector {
         if total == 0.0 { 0.0 } else { hits_f64 / total }
     }
 
-    /// 获取注册表（用于暴露指标）
     /// 拉取时更新 pipeline 快照 gauge(队列深度 / 在途请求)
     pub fn set_pipeline_snapshot(&self, queue_depth: i64, in_flight: i64) {
         self.pipeline_queue_depth.set(queue_depth);
         self.pipeline_in_flight.set(in_flight);
     }
 
+    /// 获取注册表（用于暴露指标）
     pub fn registry(&self) -> Arc<Registry> {
         self.registry.clone()
     }

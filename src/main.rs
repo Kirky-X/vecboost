@@ -1243,7 +1243,6 @@ async fn app_main() -> anyhow::Result<()> {
 
     log::info!("AsyncKit module registry built successfully");
 
-    // JoinSet for managing background tasks lifecycle
     let mut bg_tasks = tokio::task::JoinSet::<()>::new();
 
     spawn_config_watcher(&mut bg_tasks, config_path);
@@ -1531,7 +1530,6 @@ async fn run_server_lifecycle(
     .with_graceful_shutdown(signal)
     .await?;
 
-    // Execute phased shutdown coordinator after server stops
     log::info!("Server stopped, executing phased shutdown...");
 
     // gRPC drain 窗口 —— HTTP 已停止;给在途 gRPC 调用一个有界完成窗口
@@ -1553,7 +1551,6 @@ async fn run_server_lifecycle(
         }
     }
 
-    // Cancel all background tasks (config watcher, gRPC server, etc.)
     bg_tasks.abort_all();
     // Drain remaining tasks to prevent runtime hang
     while bg_tasks.join_next().await.is_some() {}
@@ -1599,7 +1596,6 @@ fn register_shutdown_hooks(
             })
             .map_err(|e| anyhow::anyhow!("Failed to register shutdown hook: {}", e))?;
     }
-    // Register ConfigWatcherModule shutdown hook
     {
         let kit_for_watcher_shutdown = Arc::clone(kit);
         shutdown_coordinator
@@ -1837,7 +1833,6 @@ async fn build_module_registry(
 
     let mut kit = trait_kit::AsyncKit::new();
 
-    // Register build observer for per-module build timing
     kit.with_observer(Arc::new(LoggingObserver));
 
     // 注入预构建的能力对象（kit 是 single source of truth）— 已清理未被任何 Module/Handler 消费的冗余注入
@@ -1852,7 +1847,6 @@ async fn build_module_registry(
         enabled: cfg!(feature = "db"),
     });
     kit.set_config(audit_logger.clone());
-    // 注入各 Module 的能力配置
     kit.set_config(Some(Arc::new(vecboost::metrics::InferenceCollector::new())));
     let prometheus_collector =
         Arc::new(vecboost::metrics::PrometheusCollector::new().map_err(|e| {
@@ -1911,7 +1905,6 @@ async fn build_module_registry(
         .map_err(|e| anyhow::anyhow!("Failed to register DbModule: {}", e))?;
     kit.register::<AuditModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register AuditModule: {}", e))?;
-    // 注册各 Module
     kit.register::<MetricsCollectorModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register MetricsCollectorModule: {}", e))?;
     kit.register::<PrometheusCollectorModule>()
@@ -1941,7 +1934,6 @@ async fn build_module_registry(
             .map_err(|e| anyhow::anyhow!("Failed to register CsrfConfigModule: {}", e))?;
     }
 
-    // Register lifecycle and health check for key modules
     kit.register_lifecycle::<EmbeddingModule>();
     kit.register_lifecycle::<RerankModule>();
     kit.register_lifecycle::<RateLimitModule>();

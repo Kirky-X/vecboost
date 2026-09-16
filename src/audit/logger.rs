@@ -991,7 +991,7 @@ mod tests {
     /// 验证依据：
     /// 1. `AuditLogger.sender` 类型为 `Option<mpsc::UnboundedSender<LoggerCommand>>`
     ///    —— `log_*` 仅 `sender.send(...)`（内存 send，无 syscall）
-    /// 2. `log` 方法（logger.rs L331-338）仅 `sender.send(LoggerCommand::Event(event))`，
+    /// 2. `log` 方法仅 `sender.send(LoggerCommand::Event(event))`，
     ///    无 `fs::metadata` 调用
     /// 3. `current_size` 是 writer task 内的 `AtomicU64` 局部变量（内存计数，无 syscall），
     ///    文件大小检查只在后台 `flush_buffer` 中发生（批量，非 per-event）

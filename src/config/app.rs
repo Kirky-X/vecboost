@@ -14,9 +14,6 @@
 use crate::error::VecboostError;
 use serde::{Deserialize, Serialize};
 
-// 注:AppConfig 定义已迁移至 app_config.rs(由 confers #[derive(Config)] 接管)。
-// 本文件保留所有子结构体定义,供 app_config.rs 引用。
-
 #[derive(Debug, Deserialize, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ServerConfig {
@@ -742,7 +739,7 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    /// AuthConfig 默认 CSRF 开启(配合挂载条件实现“跟随 auth”)
+    /// AuthConfig 默认 CSRF 关闭("跟随 auth"由路由挂载条件实现,而非默认开启)
     #[test]
     fn authconfig_default_csrf_disabled() {
         assert!(!AuthConfig::default().csrf.enabled);
@@ -1132,7 +1129,6 @@ mod tests {
     #[test]
     fn test_apply_priority_defaults_idempotent() {
         let mut cfg = AppConfig::default();
-        // 第一次应用
         apply_priority_defaults(&mut cfg.pipeline.priority);
         let tier_count = cfg.pipeline.priority.user_tier_weights.len();
         let source_count = cfg.pipeline.priority.source_weights.len();

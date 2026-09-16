@@ -40,7 +40,7 @@ impl CudaMemoryPool {
             device_id, config.max_memory_mb
         );
 
-        // 初始化 CUDA 驱动并创建上下文
+        // 初始化 CUDA 驱动
         cudarc::driver::result::init().map_err(|e| format!("CUDA driver init failed: {}", e))?;
 
         let device = cudarc::driver::result::device::get(device_id)
@@ -80,7 +80,6 @@ impl CudaMemoryPool {
 
         let size_u64 = size as u64;
 
-        // 检查是否有足够内存
         let current_allocated = self.allocated_memory.load(Ordering::Relaxed);
         let available = self.max_memory.saturating_sub(current_allocated);
 
@@ -92,7 +91,6 @@ impl CudaMemoryPool {
             ));
         }
 
-        // 通过 cudarc 调用 cuMemAlloc_v2 分配真实 CUDA 内存
         // SAFETY: `malloc_sync` wraps `cuMemAlloc_v2` which allocates device memory.
         // Safe because:
         // 1. The CUDA context is initialized and valid (verified at pool creation).
@@ -130,7 +128,6 @@ impl CudaMemoryPool {
             return;
         }
 
-        // 通过 cudarc 调用 cuMemFree_v2 释放真实 CUDA 内存
         // SAFETY: `free_sync` wraps `cuMemFree_v2` which frees device memory.
         // Safe because `ptr.ptr` was allocated by `malloc_sync` in the same context
         // and has not been freed yet (verified by pool tracking).
@@ -291,7 +288,6 @@ mod tests {
             Err(_) => return, // CUDA 运行时不可用，跳过
         };
 
-        // 分配 512MB
         let ptr = match pool.allocate(512 * 1024 * 1024) {
             Ok(p) => p,
             Err(_) => return, // CUDA 设备不可访问，跳过
@@ -300,7 +296,6 @@ mod tests {
         let (used, _) = pool.get_memory_usage();
         assert_eq!(used, 512 * 1024 * 1024);
 
-        // 释放内存
         pool.deallocate(ptr);
 
         let (used, _) = pool.get_memory_usage();
@@ -370,7 +365,6 @@ mod tests {
             Ok(p) => p,
             Err(_) => return,
         };
-        // Allocate then clear
         let _ptr = match pool.allocate(1024 * 1024) {
             Ok(p) => p,
             Err(_) => return,
@@ -443,7 +437,6 @@ mod tests {
 
         let mut pool = pool.unwrap();
 
-        // 尝试分配应该失败
         let ptr = pool.allocate(1024);
         assert!(ptr.is_err());
     }

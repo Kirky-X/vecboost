@@ -688,8 +688,8 @@ async fn grpc_bad_json_and_empty_text_are_4xx_business_errors() {
 // 生命周期（GP-L01 / GP-L02）
 // ---------------------------------------------------------------------------
 
-// 复验已在上述所有测试的 spawn 健康等待中隐式覆盖：
-// grpc_enabled=true 下 health 可达即证明不挂死。
+// 「grpc_enabled=true 下服务不挂死」不设独立用例：
+// 上述各测试 spawn 时均等待 HTTP health 就绪，可达即已隐式覆盖该回归。
 
 /// GP-L01：grpc_require_auth=true 且 auth.enabled=false → 安全默认拒绝启动
 #[tokio::test]

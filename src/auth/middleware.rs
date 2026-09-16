@@ -128,7 +128,6 @@ pub async fn auth_middleware(
         return Ok(next.run(request).await);
     }
 
-    // 从 Authorization 头获取 token
     let auth_header = request
         .headers()
         .get("authorization")
@@ -154,7 +153,6 @@ pub async fn auth_middleware(
         }
     };
 
-    // 通过 garrison 验证 token 并获取 login_id
     match GarrisonUtil::get_login_id_by_token(&token).await {
         Ok(Some(login_id)) => {
             let user = User {
@@ -329,7 +327,6 @@ pub async fn auth_rate_limit_middleware(
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    // 检查限流是否启用
     let rate_limit_enabled = state
         .kit
         .config::<crate::registry::RateLimitEnabled>()
@@ -354,7 +351,6 @@ pub async fn auth_rate_limit_middleware(
         return Ok(next.run(request).await);
     }
 
-    // 获取 IP 白名单
     let ip_whitelist = state
         .kit
         .require::<crate::registry::IpWhitelistModule>()
@@ -376,7 +372,6 @@ pub async fn auth_rate_limit_middleware(
     .map(|i| i.to_string())
     .unwrap_or_else(|| "unknown".to_string());
 
-    // 白名单内的 IP 不限流
     if crate::rate_limit::is_ip_whitelisted(&ip, &ip_whitelist) {
         return Ok(next.run(request).await);
     }
@@ -406,7 +401,6 @@ pub async fn auth_rate_limit_middleware(
         .map(|c| c.0)
         .unwrap_or(false);
 
-    // 记录限流决策指标
     if let Ok(prom_collector) = state
         .kit
         .require::<crate::registry::PrometheusCollectorModule>()
@@ -422,7 +416,6 @@ pub async fn auth_rate_limit_middleware(
     if !allowed {
         log::warn!("Auth endpoint rate limit exceeded for IP: {}", ip);
 
-        // 限流事件写入审计日志
         if let Ok(audit_opt) = state.kit.require::<crate::registry::AuditModule>()
             && let Some(logger) = audit_opt.as_ref()
         {

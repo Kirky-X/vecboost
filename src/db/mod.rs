@@ -74,13 +74,7 @@ impl DbPool {
     }
 }
 
-/// 初始化数据库 schema(建表)
-///
-/// 创建 `users` 和 `audit_logs` 表(如果不存在)。
-///
-/// # Errors
-///
-/// 如果建表失败,返回 `VecboostError::InternalError`
+/// 进程级全局连接池(register_global_pool 写入;probe_ready 读取)。
 static GLOBAL_POOL: std::sync::OnceLock<std::sync::Arc<DbPool>> = std::sync::OnceLock::new();
 
 /// 记录进程级活跃连接池(供 /health?depth=full 的 DB 探测读取)。
@@ -100,6 +94,13 @@ pub async fn probe_ready() -> Result<(), String> {
     }
 }
 
+/// 初始化数据库 schema(建表)
+///
+/// 创建 `users` 和 `audit_logs` 表(如果不存在)。
+///
+/// # Errors
+///
+/// 如果建表失败,返回 `VecboostError::InternalError`
 pub async fn init_schema(pool: &DbPool) -> Result<(), VecboostError> {
     let session = pool.get_session("admin").await?;
 

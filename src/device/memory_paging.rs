@@ -221,7 +221,6 @@ impl WeightPagingManager {
         self.page_in_count += 1;
         self.total_page_in_latency_ms += start.elapsed().as_secs_f64() * 1000.0;
 
-        // 记录访问时间
         meta.access_history.push_back(Instant::now());
         if meta.access_history.len() > self.lru_k {
             meta.access_history.pop_front();

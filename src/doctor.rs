@@ -201,7 +201,6 @@ pub fn check_cache_persist(config: &AppConfig) -> CheckResult {
             ),
         );
     }
-    // 探针：临时文件创建后立即删除
     let probe = parent.join(".vecboost_doctor_probe");
     let probe_result = std::fs::File::create(&probe).and_then(|_| std::fs::remove_file(&probe));
     match probe_result {
@@ -466,7 +465,7 @@ struct SafetensorsInfo {
 
 fn scan_safetensors(path: &std::path::Path) -> Result<SafetensorsInfo, String> {
     // 只读头部（8 字节长度 + header_len JSON），不整文件载入内存
-    // （数 GB 权重文件的资源放大，）。
+    // （数 GB 权重文件的资源放大）。
     let mut file =
         std::fs::File::open(path).map_err(|e| format!("权重文件不可读 {}: {e}", path.display()))?;
     let display = path.display();
@@ -524,7 +523,7 @@ fn scan_safetensors(path: &std::path::Path) -> Result<SafetensorsInfo, String> {
             two_d_dims.push((d0, d1));
         }
     }
-    // 溢出安全比较（offset 来自不可信文件；）
+    // 溢出安全比较（offset 来自不可信文件）。
     let data_begin = 8 + header_len;
     let available = file_len.saturating_sub(data_begin);
     if max_end > available {

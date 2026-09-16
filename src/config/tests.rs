@@ -74,26 +74,21 @@ enabled = false
     let (_dir, path) = write_temp_toml(toml_content);
     let config = AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
 
-    // Verify server config loaded from TOML
     assert_eq!(config.server.host, "127.0.0.1");
     assert_eq!(config.server.port, 9002);
     assert_eq!(config.server.timeout, Some(30));
 
-    // Verify model config
     assert_eq!(config.model.model_repo, "BAAI/bge-m3");
     assert!(!config.model.use_gpu);
     assert_eq!(config.model.batch_size, 8);
     assert_eq!(config.model.expected_dimension, Some(1024));
 
-    // Verify embedding config
     assert_eq!(config.embedding.default_aggregation, "mean");
     assert!(!config.embedding.cache_enabled);
     assert_eq!(config.embedding.max_batch_size, 32);
 
-    // Verify rate_limit disabled in minimal config
     assert!(!config.rate_limit.enabled);
 
-    // Verify audit disabled in minimal config
     assert!(!config.audit.enabled);
 }
 
@@ -146,7 +141,6 @@ enabled = false
 
     let (_dir, path) = write_temp_toml(toml_content);
 
-    // Load without env var - jwt_secret should be None (default)
     let config_no_env =
         AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
     assert!(

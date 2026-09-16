@@ -31,13 +31,10 @@ pub mod security;
 pub mod service;
 pub mod utils;
 
-// 条件编译模块 — 仅在对应 feature 启用时可见
 pub mod logger;
 
-// 导出 config::app 中的类型
 pub use crate::pipeline::PriorityConfig;
 
-// 内部实现模块 - 只在 crate 内部使用，不暴露给外部
 pub(crate) mod cache;
 pub(crate) mod device;
 pub mod error;
@@ -88,7 +85,6 @@ pub mod planner {
     };
 }
 
-// 重新导出语义缓存类型
 pub use cache::{ComparisonMode, SemanticCache, SemanticCacheConfig, SemanticCacheStats};
 
 // 再导出 sdforge 多协议框架（gRPC E2E 集成测试经此使用生成的 tonic 客户端）
@@ -347,7 +343,7 @@ mod tests {
             kit.set_config(Option::<Arc<crate::auth::GarrisonCsrfConfig>>::None);
         }
 
-        // 注册所有 Module（17 个核心 + auth feature 模块）
+        // 注册所有 Module（除 ConfigWatcherModule；auth 模块按 feature 注入）
         kit.register::<LoggerModule>().unwrap();
         kit.register::<EmbeddingModule>().unwrap();
         kit.register::<RerankModule>().unwrap();
@@ -369,7 +365,6 @@ mod tests {
             kit.register::<CsrfConfigModule>().unwrap();
         }
 
-        // Register lifecycle and health check for key modules
         kit.register_lifecycle::<EmbeddingModule>();
         kit.register_lifecycle::<RerankModule>();
         kit.register_lifecycle::<RateLimitModule>();
@@ -542,7 +537,6 @@ mod tests {
             .kit
             .require::<LoggerModule>()
             .expect("require LoggerModule");
-        // LoggerManager 应成功构建且可用
         let _ = logger;
     }
 
@@ -748,7 +742,6 @@ mod tests {
         let kit_ref = state.kit();
         // kit() returns &Arc<AsyncKit>; only `state` owns the Arc → strong_count == 1
         assert_eq!(Arc::strong_count(kit_ref), 1);
-        // Verify key modules are accessible through the kit reference
         assert!(kit_ref.contains::<EmbeddingModule>());
         assert!(kit_ref.contains::<RerankModule>());
         assert!(kit_ref.contains::<RateLimitModule>());
@@ -770,20 +763,15 @@ mod tests {
     #[tokio::test]
     async fn test_mock_engine_direct_method_calls() {
         let engine = MockEngine;
-        // embed
         let vec = engine.embed("hello").unwrap();
         assert_eq!(vec.len(), 384);
         assert!(vec.iter().all(|&v| v == 0.0));
-        // embed_batch
         let texts = vec!["hello".to_string(), "world".to_string()];
         let batch = engine.embed_batch(&texts).unwrap();
         assert_eq!(batch.len(), 2);
         assert_eq!(batch[0].len(), 384);
-        // precision
         assert_eq!(*engine.precision(), Precision::Fp32);
-        // supports_mixed_precision
         assert!(!engine.supports_mixed_precision());
-        // try_fallback_to_cpu
         let config = crate::config::model::ModelConfig::default();
         let mut engine_mut = MockEngine;
         let result = engine_mut.try_fallback_to_cpu(&config).await;

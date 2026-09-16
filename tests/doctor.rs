@@ -5,7 +5,7 @@
 
 //! doctor 只读诊断集成测试。
 //!
-//! 合法默认配置下：核心检查（config/cache-persist/threads）必须 PASS，
+//! 合法默认配置下：核心检查（config/cache-persist/threads/gpu）必须 PASS，
 //! 报告整体无 FAIL（tokenizer/models 依赖本地模型存在性，缺失时为 WARN，
 //! 对应"运行时回退 HF 下载"的合法状态）。
 

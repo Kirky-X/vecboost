@@ -24,7 +24,6 @@ pub fn sanitize_secret(s: &str) -> String {
     if char_count <= 4 {
         "*".repeat(s.len())
     } else {
-        // Show first 2 and last 2 characters, mask the middle
         let first_byte_end = s.char_indices().nth(2).map(|(i, _)| i).unwrap_or(s.len());
         let last_byte_start = s
             .char_indices()

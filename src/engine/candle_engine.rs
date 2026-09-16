@@ -184,7 +184,7 @@ impl CandleEngine {
             Device::Cpu
         };
 
-        // 确定计算数据类型，支持 FP16、BF16 和 INT8 量化
+        // 确定计算数据类型（FP16/BF16 按设备映射；INT8 量化未实现，诚实回退 FP32）
         let compute_dtype = match (&precision, device.is_cuda()) {
             (Precision::Int8, true) => {
                 // INT8 量化未实现，诚实告知用户
@@ -504,7 +504,6 @@ impl CandleEngine {
             log::info!("Model file SHA256 verification passed");
         }
 
-        // 使用之前确定的 dtype（支持量化）
         let vb: VarBuilder = if is_pytorch {
             log::info!("Loading PyTorch model weights from: {:?}", weights_filename);
 
@@ -873,7 +872,6 @@ impl CandleEngine {
             )));
         };
 
-        // 取 attention_mask(长度 = seq_len)用于 pooling
         let vec = match self.pooling_mode {
             crate::config::model::PoolingMode::Cls => {
                 pool_cls(&seq_hidden, &mask_for_pooling, hidden_dim)
@@ -919,7 +917,6 @@ impl CandleEngine {
             encodings
         };
 
-        // 计算最大序列长度
         let max_seq_len = encodings
             .iter()
             .map(|e| e.get_ids().len())
@@ -932,10 +929,8 @@ impl CandleEngine {
             return Ok(vec![vec![0f32; hidden_size]; texts.len()]);
         }
 
-        // 创建批量张量
         let batch_size = texts.len();
 
-        // 构建 input_ids 批量张量
         let mut batch_ids = vec![0i64; batch_size * max_seq_len];
         for (batch_idx, encoding) in encodings.iter().enumerate() {
             let ids = encoding.get_ids();
@@ -951,7 +946,6 @@ impl CandleEngine {
             .reshape(&[batch_size, max_seq_len])
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-        // 构建 attention_mask 批量张量
         let mut batch_mask = vec![0i64; batch_size * max_seq_len];
         for (batch_idx, encoding) in encodings.iter().enumerate() {
             let mask = encoding.get_attention_mask();
@@ -966,7 +960,6 @@ impl CandleEngine {
             .reshape(&[batch_size, max_seq_len])
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-        // 执行批量前向传播
         // 修复：构建批量 token_type_ids 并将 attention_mask
         // 以 Some(...) 正确传入（旧实现把 mask 传到 type_ids 槽位、mask 传 None，
         // 导致批内 padding 无隔离，短序列向量被长序列污染，cos 仅 ~0.59）。
@@ -2177,7 +2170,7 @@ mod tests {
         assert_eq!(result.unwrap().len(), 384);
     }
 
-    /// 验证 PyTorch 模型加载路径(覆盖 is_pytorch 分支 362-403 行)
+    /// 验证 PyTorch 模型加载路径(覆盖 is_pytorch 分支)
     /// HuggingFace pytorch_model.bin 使用 pickle 格式,candle VarMap::load 不兼容,
     /// 返回 ModelLoadError 提示转换为 safetensors 格式
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -207,12 +207,10 @@ impl WorkerManager {
             self.min_workers, self.max_workers
         );
 
-        // 启动最小数量的 worker
         for _ in 0..self.min_workers {
             self.spawn_worker().await;
         }
 
-        // 启动扩缩容监控
         self.start_scaling_monitor().await;
 
         info!("WorkerManager started successfully");
@@ -224,16 +222,13 @@ impl WorkerManager {
     pub async fn shutdown(&self) {
         info!("Shutting down WorkerManager...");
 
-        // 设置停止标志
         self.running.store(false, Ordering::SeqCst);
 
-        // 获取所有 worker 发送器的克隆
         let senders = {
             let guard = self.worker_senders.lock().await;
             guard.clone()
         };
 
-        // 向所有 worker 发送关闭信号
         for sender in &senders {
             let _ = sender.send(WorkerTask::Shutdown { immediate: false }).await;
         }
@@ -294,7 +289,6 @@ impl WorkerManager {
     ) {
         let worker_id = current_workers.fetch_add(1, Ordering::SeqCst);
 
-        // 创建任务通道
         let (task_sender, task_receiver) = mpsc::channel(100);
 
         // 保存发送器用于后续关闭
@@ -303,7 +297,6 @@ impl WorkerManager {
             senders.push(task_sender.clone());
         }
 
-        // 初始化健康信息
         {
             let mut health_guard = worker_health.lock().await;
             health_guard.push(WorkerHealthInfo::new(worker_id));
@@ -359,13 +352,11 @@ impl WorkerManager {
         const MAX_IDLE_COUNT: usize = 10; // 最大空闲计数
 
         loop {
-            // 检查是否应该停止
             if !running.load(Ordering::Relaxed) {
                 info!("Worker {} received stop signal", worker_id);
                 break;
             }
 
-            // 更新活动时间
             {
                 let mut guard = worker_health.lock().await;
                 if let Some(info) = guard.iter_mut().find(|i| i.worker_id == worker_id) {
@@ -400,9 +391,7 @@ impl WorkerManager {
                         }
                     }
                 }
-                // 从队列获取请求
                 Some(request) = queue.dequeue() => {
-                    // 重置空闲计数
                     idle_count = 0;
 
                     // 时间窗动态拼批——首请求后开 batch_wait_ms 窗口继续聚合，
@@ -463,7 +452,6 @@ impl WorkerManager {
                         worker_id, valid_batch.len()
                     );
 
-                    // 批量处理请求
                     Self::process_batch_requests(&valid_batch, &embedding_service, &response_channel).await;
                 }
                 // 队列为空时等待入队通知，消除指数退避轮询
@@ -499,14 +487,12 @@ impl WorkerManager {
             }
         }
 
-        // 清理：减少 worker 计数
         let final_count = Self::decrement_worker_count(&current_workers);
         info!(
             "Worker {} stopped, remaining workers: {}",
             worker_id, final_count
         );
 
-        // 标记为不活跃
         {
             let mut guard = worker_health.lock().await;
             if let Some(info) = guard.iter_mut().find(|i| i.worker_id == worker_id) {
@@ -525,7 +511,6 @@ impl WorkerManager {
         request: &super::queue::QueuedRequest,
         embedding_service: &Arc<RwLock<EmbeddingService>>,
     ) -> Result<EmbedResponse, VecboostError> {
-        // 实际调用 EmbeddingService
         let embed_request = match &request.request {
             ServiceRequest::Embed(req) => req,
             ServiceRequest::Rerank(_) => {
@@ -537,11 +522,8 @@ impl WorkerManager {
 
         debug!("Processing embedding request");
 
-        // 获取 EmbeddingService 的读锁
         let service_guard = embedding_service.read().await;
 
-        // 调用 EmbeddingService 进行推理
-        // 使用 process_text 方法，它接受 EmbedRequest
         let result = service_guard
             .process_text(
                 crate::domain::EmbedRequest {
@@ -590,7 +572,6 @@ impl WorkerManager {
             return;
         }
 
-        // 收集所有文本和 normalize 设置
         let mut texts = Vec::with_capacity(batch.len());
         let mut normalize_flags = Vec::with_capacity(batch.len());
         let mut valid_indices = Vec::with_capacity(batch.len());
@@ -620,7 +601,6 @@ impl WorkerManager {
             return;
         }
 
-        // 批量推理
         let service_guard = embedding_service.read().await;
         let batch_started = std::time::Instant::now();
         let batch_result = service_guard.embed_batch_texts(&texts).await;

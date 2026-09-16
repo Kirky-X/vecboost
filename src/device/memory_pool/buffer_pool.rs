@@ -71,7 +71,6 @@ impl BufferPool {
     pub fn preallocate(&mut self) {
         info!("Preallocating buffers...");
 
-        // 预分配文本缓冲区
         for &size in &self.config.text_buffer_sizes {
             self.text_buffers.entry(size).or_default();
 
@@ -93,7 +92,6 @@ impl BufferPool {
             let pool_size = self.config.pool_size_per_size;
 
             for _ in 0..pool_size {
-                // 创建空的向量缓冲区
                 let buffer = vec![Vec::new(); size];
                 pool.push_back(buffer);
                 self.stats.vector_allocations += 1;
@@ -109,7 +107,6 @@ impl BufferPool {
 
     /// 获取文本缓冲区
     pub fn acquire_text_buffer(&mut self, size: usize) -> Vec<String> {
-        // 边界检查
         if size > MAX_BUFFER_SIZE {
             warn!(
                 "Requested text buffer size {} exceeds maximum {}, using max size instead",
@@ -118,7 +115,6 @@ impl BufferPool {
             return vec![String::new(); MAX_BUFFER_SIZE];
         }
 
-        // 尝试从池中获取
         if let Some(pool) = self.text_buffers.get_mut(&size)
             && let Some(buffer) = pool.pop_front()
         {
@@ -128,7 +124,6 @@ impl BufferPool {
             return buffer;
         }
 
-        // 池中没有，创建新的
         self.stats.text_cache_misses += 1;
         self.stats.text_allocations += 1;
         debug!("Creating new text buffer, size={}", size);
@@ -139,20 +134,17 @@ impl BufferPool {
     pub fn release_text_buffer(&mut self, mut buffer: Vec<String>) {
         let size = buffer.capacity();
 
-        // 清空缓冲区内容
         buffer.clear();
 
         self.text_buffers.entry(size).or_default();
 
         let pool = self.text_buffers.get_mut(&size).unwrap();
 
-        // 如果池未满，则放回池中
         if pool.len() < self.config.pool_size_per_size {
             pool.push_back(buffer);
             self.stats.text_releases += 1;
             debug!("Released text buffer to pool, size={}", size);
         } else {
-            // 池已满，直接丢弃
             self.stats.text_releases += 1;
             debug!("Text buffer pool full for size={}, buffer dropped", size);
         }
@@ -160,7 +152,6 @@ impl BufferPool {
 
     /// 获取向量缓冲区
     pub fn acquire_vector_buffer(&mut self, size: usize) -> Vec<Vec<f32>> {
-        // 边界检查
         if size > MAX_BUFFER_SIZE {
             warn!(
                 "Requested vector buffer size {} exceeds maximum {}, using max size instead",
@@ -169,7 +160,6 @@ impl BufferPool {
             return vec![Vec::new(); MAX_BUFFER_SIZE];
         }
 
-        // 尝试从池中获取
         if let Some(pool) = self.vector_buffers.get_mut(&size)
             && let Some(buffer) = pool.pop_front()
         {
@@ -179,7 +169,6 @@ impl BufferPool {
             return buffer;
         }
 
-        // 池中没有，创建新的
         self.stats.vector_cache_misses += 1;
         self.stats.vector_allocations += 1;
         debug!("Creating new vector buffer, size={}", size);
@@ -190,20 +179,17 @@ impl BufferPool {
     pub fn release_vector_buffer(&mut self, mut buffer: Vec<Vec<f32>>) {
         let size = buffer.capacity();
 
-        // 清空缓冲区内容
         buffer.clear();
 
         self.vector_buffers.entry(size).or_default();
 
         let pool = self.vector_buffers.get_mut(&size).unwrap();
 
-        // 如果池未满，则放回池中
         if pool.len() < self.config.pool_size_per_size {
             pool.push_back(buffer);
             self.stats.vector_releases += 1;
             debug!("Released vector buffer to pool, size={}", size);
         } else {
-            // 池已满，直接丢弃
             self.stats.vector_releases += 1;
             debug!("Vector buffer pool full for size={}, buffer dropped", size);
         }
@@ -263,16 +249,13 @@ mod tests {
 
         let mut pool = BufferPool::new(config);
 
-        // 获取缓冲区
         let buffer = pool.acquire_text_buffer(16);
         assert_eq!(buffer.len(), 16);
         assert_eq!(pool.get_stats().text_cache_misses, 1);
 
-        // 释放缓冲区
         pool.release_text_buffer(buffer);
         assert_eq!(pool.get_stats().text_releases, 1);
 
-        // 再次获取，应该从池中获取
         let _buffer2 = pool.acquire_text_buffer(16);
         assert_eq!(pool.get_stats().text_cache_hits, 1);
     }
@@ -287,16 +270,13 @@ mod tests {
 
         let mut pool = BufferPool::new(config);
 
-        // 获取缓冲区
         let buffer = pool.acquire_vector_buffer(16);
         assert_eq!(buffer.len(), 16);
         assert_eq!(pool.get_stats().vector_cache_misses, 1);
 
-        // 释放缓冲区
         pool.release_vector_buffer(buffer);
         assert_eq!(pool.get_stats().vector_releases, 1);
 
-        // 再次获取，应该从池中获取
         let _buffer2 = pool.acquire_vector_buffer(16);
         assert_eq!(pool.get_stats().vector_cache_hits, 1);
     }

@@ -183,8 +183,6 @@ pub fn calculate_similarity_batch(
     candidates: &[&[f32]],
     metric: SimilarityMetric,
 ) -> Result<Vec<f32>, VecboostError> {
-    // 使用串行迭代保证错误顺序确定性：
-    // par_iter 的 collect<Result> 在并行调度下“第一个错误”不可复现。
     candidates
         .iter()
         .map(|candidate| calculate_similarity(query, candidate, metric))

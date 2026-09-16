@@ -238,7 +238,6 @@ impl IntoResponse for VecboostError {
             VecboostError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
-        // Use i18n translation for the error message
         let error_code = self.error_code();
         let args = crate::i18n::tr_args(&[("detail", self.error_detail())]);
         let translated_message = crate::i18n::tr_with_args(error_code, args);

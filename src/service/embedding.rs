@@ -68,7 +68,7 @@ impl EmbeddingService {
     ) -> Self {
         let cache = match (cache_size, cache_persist) {
             (Some(size), Some((path, max_bytes))) => {
-                // /架构3：指纹绑定权重内容（sha256 可用时），
+                // 指纹绑定权重内容（sha256 可用时），
                 // 同名换权重的旧向量在回放时被指纹不匹配淘汰。
                 let fingerprint = model_config
                     .as_ref()
@@ -1304,7 +1304,7 @@ impl EmbeddingService {
                     .unwrap_or(false)
             }),
             model_sha256: None,
-            // gguf 路径走 EngineFactory 量化路由（与启动路径同一判定，）
+            // gguf 路径走 EngineFactory 量化路由（与启动路径同一判定）
             quantized: req.model_name.ends_with(".gguf"),
         };
 
@@ -1318,7 +1318,7 @@ impl EmbeddingService {
             }
         }
 
-        // 统一经 EngineFactory 创建（GGUF 量化路由单一入口，）。
+        // 统一经 EngineFactory 创建（GGUF 量化路由单一入口）。
         let new_engine =
             crate::engine::EngineFactory::create(model_config.engine_type.clone(), &model_config)
                 .map_err(|e| {

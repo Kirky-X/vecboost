@@ -288,7 +288,6 @@ async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
     )
     .map_err(to_api_error)?;
 
-    // Pipeline 启用时，通过流水线处理请求
     #[cfg(feature = "http")]
     {
         let pipeline_enabled = st
@@ -396,7 +395,6 @@ async fn embed_file_handler(req: FileEmbedRequest) -> Result<FileEmbedResponse, 
             value: Some(serde_json::Value::String(req.path.clone())),
         })?;
 
-    // 文件大小上限
     if let Ok(meta) = std::fs::metadata(&validated_path)
         && let Err(msg) = check_file_embed_size(meta.len())
     {
@@ -924,7 +922,7 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
     }
 
     let st = state().map_err(to_api_error)?;
-    // model 必须非空且在可用模型集合中,否则 404 + 可用列表
+    // model 不在可用模型集合中 → 400 + 可用列表
     let available = {
         let svc = st
             .kit
@@ -934,8 +932,9 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
         guard.list_available_models().models
     };
     if !available.iter().any(|m| m.name == req.model) {
-        // 404 + 可用模型列表(OpenAI SDK 侧经 openai_error_type/openai_code 槽识别,
-        // NotFound 变体无自由槽位,故将 OpenAI 字段并入 resource 语义说明)
+        // 400 + 可用模型列表(OpenAI 契约的 model_not_found 本应 404;
+        // NotFound 变体无自由槽位,故用 InvalidInput(BAD_REQUEST) 并经 value 槽
+        // 附带 openai_error_type/openai_code 供 OpenAI SDK 识别)
         return Err(ApiError::InvalidInput {
             message: format!(
                 "The model '{}' does not exist. Available models: {}",

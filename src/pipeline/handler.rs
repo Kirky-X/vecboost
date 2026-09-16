@@ -45,12 +45,10 @@ pub async fn handle_pipeline_request(
     req: EmbedRequest,
     ip: String,
 ) -> Result<axum::Json<crate::domain::EmbedResponse>, VecboostError> {
-    // 生成请求 ID
     let request_id = next_request_id();
     // 进入 pipeline 等待即计为在途(RAII,任何退出路径自动递减)
     let _in_flight = InFlightGuard::enter();
 
-    // 创建响应通道
     let response_rx = state
         .kit
         .require::<crate::registry::ResponseChannelModule>()
@@ -58,7 +56,6 @@ pub async fn handle_pipeline_request(
         .register(request_id.clone())
         .await;
 
-    // 构建队列请求
     let priority = state
         .kit
         .require::<crate::registry::PriorityCalculatorModule>()
@@ -85,7 +82,6 @@ pub async fn handle_pipeline_request(
         source: crate::pipeline::RequestSource::http(ip),
     };
 
-    // 提交到流水线队列
     state
         .kit
         .require::<crate::registry::PipelineQueueModule>()
@@ -93,7 +89,6 @@ pub async fn handle_pipeline_request(
         .enqueue(queued_request)
         .await?;
 
-    // 等待响应
     match tokio::time::timeout(Duration::from_secs(30), response_rx).await {
         Ok(Ok(Ok(response))) => Ok(axum::Json(response)),
         Ok(Ok(Err(e))) => Err(e),
@@ -1002,7 +997,6 @@ mod tests {
             }
         });
 
-        // Send first request
         let req1 = EmbedRequest {
             text: "first".to_string(),
             normalize: Some(true),
@@ -1012,7 +1006,6 @@ mod tests {
             handle_pipeline_request(state1, req1, "127.0.0.1".to_string()).await
         });
 
-        // Send second request
         let req2 = EmbedRequest {
             text: "second".to_string(),
             normalize: Some(true),

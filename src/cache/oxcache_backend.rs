@@ -635,8 +635,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_compression_roundtrip_preserves_values() {
-        // 验证压缩往返后向量值在容差范围内保持一致。
-        // 使用较大向量 (>25 f32 = 100 bytes) 以触发 flate2 压缩。
+        // 历史上的 flate2 压缩路径已移除（净负收益，见 get() 处注释），现直接存取
+        // 原始 Vec<f32>；本测试验证大向量往返后逐位一致。
         let cache = OxCacheBackend::new(16);
         let original: Vec<f32> = (0..100).map(|i| (i as f32) * 0.01).collect();
         cache.put("compressed_key", original.clone()).await;
@@ -659,7 +659,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_compression_small_vectors_roundtrip() {
-        // 小向量 (<100 bytes) 不触发压缩,但往返仍应保持精确一致。
+        // 小向量往返仍应保持精确一致（压缩路径已移除）。
         let cache = OxCacheBackend::new(16);
         let small = vec![0.1, 0.2, 0.3];
         cache.put("small", small.clone()).await;

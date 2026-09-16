@@ -135,7 +135,7 @@ async fn main() {
 }
 
 async fn download_model(model_id: &str, files: &[&str]) {
-    // vuln-0009 加固：校验 model_id 格式，防止路径遍历/恶意 repo ID 注入
+    // 安全加固：校验 model_id 格式，防止路径遍历/恶意 repo ID 注入
     if !vecboost::utils::hf_hub::is_valid_hf_repo_id(model_id) {
         eprintln!(
             "错误: 无效的 HuggingFace 模型 ID '{}': 必须符合 '组织/模型名' 格式，",
@@ -149,7 +149,6 @@ async fn download_model(model_id: &str, files: &[&str]) {
     println!("目标目录: models/{}", model_id.replace('/', "-"));
     println!();
 
-    // 创建输出目录
     let output_dir = PathBuf::from("models").join(model_id.replace('/', "-"));
     if let Err(e) = std::fs::create_dir_all(&output_dir) {
         eprintln!("创建输出目录失败: {}", e);
@@ -173,7 +172,6 @@ async fn download_model(model_id: &str, files: &[&str]) {
                 println!("  ✓ {} ({})", file, format_size(size));
                 total_size += size;
 
-                // 复制到输出目录
                 if let Some(filename) = path_ref.file_name() {
                     let dest = output_dir.join(filename);
                     if let Err(e) = std::fs::copy(path_ref, &dest) {

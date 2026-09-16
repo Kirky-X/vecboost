@@ -899,7 +899,6 @@ mod validator_tests {
         temp.write_all(&[0x00, 0x01, 0x02, 0x03, 0x04, 0x05])
             .unwrap();
         temp.flush().unwrap();
-        // validate_file_content checks for binary content
         let result = validator.validate_file_content(temp.path().to_str().unwrap());
         assert!(result.is_err(), "binary file should be rejected");
     }

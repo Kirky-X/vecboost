@@ -81,7 +81,6 @@ fn bench_exact_cache_operations(c: &mut Criterion) {
         })
     });
 
-    // Benchmark exact cache miss latency
     c.bench_function("exact_cache_miss", |b| {
         let map: std::collections::HashMap<String, Vec<f32>> = (0..1000)
             .map(|i| (format!("text:hello_world_{}", i), vec![0.1f32; 128]))

@@ -35,7 +35,6 @@ pub fn dot_product_chunked(v1: &[f32], v2: &[f32]) -> f32 {
             + v1[base + 3] * v2[base + 3];
     }
 
-    // Handle remaining elements
     let tail_start = chunks * 4;
     for i in tail_start..len {
         sum += v1[i] * v2[i];
@@ -61,7 +60,6 @@ pub fn sum_of_squares_chunked(v: &[f32]) -> f32 {
         sum += a * a + b * b + c * c + d * d;
     }
 
-    // Handle remaining elements
     let tail_start = chunks * 4;
     for val in &v[tail_start..] {
         sum += val * val;

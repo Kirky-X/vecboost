@@ -147,7 +147,6 @@ async fn test_embed_returns_vector() {
     let response = result.unwrap();
     assert_eq!(response.dimension, 384);
     assert_eq!(response.embedding.len(), 384);
-    // Verify the vector is L2-normalized
     let norm: f32 = response.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
     assert!((norm - 1.0).abs() < 1e-5);
 }
@@ -560,7 +559,7 @@ async fn test_cli_compute_similarity_empty_source_returns_error() {
 /// calls per request. acceptance criterion 2 requires total
 /// require calls ≤ 4 × request_count (≤ 400 for 100 requests).
 ///
-/// `forge_embed` (src/api/embedding.rs L128-141) calls `require::<EmbeddingModule>()`
+/// `forge_embed` (src/api/embedding.rs) calls `require::<EmbeddingModule>()`
 /// exactly once per invocation. 100 requests × 1 require = 100 requires ≤ 400 ✓.
 ///
 /// `trait_kit::AsyncKit` does not expose a require-counter API, so we use an
@@ -601,8 +600,8 @@ async fn test_forge_handler_require_calls_bounded_under_100_requests() {
 ///
 /// `AuditLogger` is a concrete struct (not a trait), so we use a real logger with
 /// a tempdir file backend (per task spec 方案 B). The test mirrors the exact audit
-/// call sites in `forge_login` (src/api/auth.rs L72) and `forge_logout`
-/// (src/api/auth.rs L159), exercising the full Event → channel → file write path.
+/// call sites in `forge_login` and `forge_logout` (src/api/auth.rs),
+/// exercising the full Event → channel → file write path.
 #[cfg(feature = "http")]
 #[tokio::test]
 async fn test_audit_logger_called_by_forge_handler_pattern() {
@@ -620,13 +619,13 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
     };
     let logger = AuditLogger::new(audit_config);
 
-    // Mirror forge_login audit call (src/api/auth.rs L72):
+    // Mirror forge_login audit call:
     //   logger.log_login_success(&req.username, Some(peer_ip.clone()));
     let peer_ip = "192.168.1.100".to_string();
     let username = "testuser";
     logger.log_login_success(username, Some(peer_ip.clone()));
 
-    // Mirror forge_logout audit call (src/api/auth.rs L159):
+    // Mirror forge_logout audit call:
     //   logger.log_logout(&auth_ctx.user.username, Some(peer_ip));
     logger.log_logout(username, Some(peer_ip.clone()));
 
@@ -636,7 +635,6 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
         .await
         .expect("audit log file should exist after flush");
 
-    // 验收点 4: log_login_success 被调用且 ip 非空
     assert!(
         content.contains("login_success"),
         "login_success event should be logged"
@@ -646,7 +644,6 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
         "ip should be non-empty in login event"
     );
 
-    // 验收点 5: log_logout 被调用且 username 匹配登录用户
     assert!(content.contains("logout"), "logout event should be logged");
     assert!(
         content.contains(username),

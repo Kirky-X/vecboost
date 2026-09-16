@@ -152,7 +152,7 @@ pub async fn metrics_endpoint(
 /// Prometheus HTTP 请求指标记录中间件。
 ///
 /// 自动记录每个请求的方法、路径、状态码和延迟到 PrometheusCollector。
-/// 路径经过归一化处理，只保留前 3 段以避免 Prometheus label 基数膨胀。
+/// 路径经过归一化处理，只保留前 4 段以避免 Prometheus label 基数膨胀。
 #[cfg(feature = "http")]
 pub async fn metrics_middleware(
     State(app_state): State<crate::VecboostState>,

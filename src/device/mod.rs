@@ -16,7 +16,6 @@ pub(crate) mod memory_pool;
 pub mod planner;
 pub mod thread_tune;
 
-// 重新导出必要的类型供内部使用
 pub(crate) use gpu_tuning::{GpuTuningAdvisor, GpuTuningReport, TuningLevel};
 pub(crate) use manager::{DeviceInfo, DeviceStatus};
 pub(crate) use memory_paging::{PagingConfig, PagingStats, WeightPagingManager};

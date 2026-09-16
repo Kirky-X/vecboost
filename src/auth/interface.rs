@@ -38,10 +38,8 @@ impl VecBoostInterface {
 impl GarrisonInterface for VecBoostInterface {
     async fn get_permission_list(&self, login_id: &str) -> GarrisonResult<Vec<String>> {
         if login_id == self.admin_username {
-            // admin 用户拥有全部权限
             Ok(vec!["*".to_string()])
         } else {
-            // 普通用户拥有基础 embedding 权限
             Ok(vec![
                 "embedding:read".to_string(),
                 "embedding:write".to_string(),

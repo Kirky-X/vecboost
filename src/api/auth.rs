@@ -56,7 +56,6 @@ pub async fn forge_login(
         value: None,
     })?;
 
-    // 拒绝空密码（基本安全检查）
     if req.password.is_empty() {
         return Err(ApiError::InvalidInput {
             message: crate::i18n::tr("auth-password-empty"),
@@ -149,7 +148,6 @@ pub async fn forge_refresh(
         .require::<AuditModule>()
         .map_err(kit_internal_error)?;
 
-    // 输入验证：拒绝空 refresh_token
     if req.refresh_token.is_empty() {
         return Err(ApiError::InvalidInput {
             message: crate::i18n::tr("auth-refresh-token-empty"),
@@ -174,7 +172,6 @@ pub async fn forge_refresh(
             value: None,
         })?;
 
-    // 先创建新会话
     let new_token = GarrisonUtil::login_simple(&login_id)
         .await
         .map_err(|e| to_api_error(e.into()))?;

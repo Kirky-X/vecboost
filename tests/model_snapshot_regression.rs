@@ -79,12 +79,10 @@ fn model_snapshot_regression() {
 
         let input = "The quick brown fox jumps over the lazy dog.";
 
-        // 第一次推理
         let vec1 = engine
             .embed(input)
             .unwrap_or_else(|e| panic!("embed failed for {}: {}", snap.name, e));
 
-        // 断言维度
         assert_eq!(
             vec1.len(),
             snap.expected_dim,
@@ -94,7 +92,6 @@ fn model_snapshot_regression() {
             snap.expected_dim
         );
 
-        // 断言 L2 范数 ≈ 1.0
         let norm = l2_norm(&vec1);
         assert!(
             (norm - 1.0).abs() < 1e-4,
@@ -103,7 +100,6 @@ fn model_snapshot_regression() {
             norm
         );
 
-        // 第二次推理:断言确定性(逐位一致)
         let vec2 = engine
             .embed(input)
             .unwrap_or_else(|e| panic!("embed failed for {}: {}", snap.name, e));

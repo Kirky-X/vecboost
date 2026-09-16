@@ -151,7 +151,6 @@ impl PriorityRequestQueue {
                 )));
             }
 
-            // 尝试原子递增
             match self.current_size.compare_exchange_weak(
                 current_size,
                 current_size + 1,
@@ -159,11 +158,9 @@ impl PriorityRequestQueue {
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    // 成功获取槽位，继续入队
                     break;
                 }
                 Err(_) => {
-                    // 失败，重试
                     continue;
                 }
             }
@@ -175,7 +172,6 @@ impl PriorityRequestQueue {
         let queue = queues.entry(priority).or_insert_with(VecDeque::new);
         queue.push_back(request);
 
-        // 通知等待的 worker
         self.notify.notify_one();
 
         debug!(
@@ -219,7 +215,6 @@ impl PriorityRequestQueue {
                         priority, new_size
                     );
 
-                    // 清理空的队列
                     if queue.is_empty() {
                         queues.remove(&priority);
                     }
@@ -267,7 +262,6 @@ impl PriorityRequestQueue {
                         break;
                     }
                 }
-                // 清理空队列
                 if queue.is_empty() {
                     queues.remove(&priority);
                 }
@@ -369,7 +363,6 @@ mod tests {
     async fn test_priority_ordering() {
         let queue = PriorityRequestQueue::new(100);
 
-        // 添加不同优先级的请求
         for (i, priority) in [
             Priority::Low,
             Priority::Critical,
@@ -396,7 +389,6 @@ mod tests {
             queue.enqueue(request).await.unwrap();
         }
 
-        // 验证出队顺序
         assert_eq!(queue.dequeue().await.unwrap().priority, Priority::Critical);
         assert_eq!(queue.dequeue().await.unwrap().priority, Priority::High);
         assert_eq!(queue.dequeue().await.unwrap().priority, Priority::Normal);
@@ -457,7 +449,6 @@ mod tests {
     async fn test_clear() {
         let queue = PriorityRequestQueue::new(100);
 
-        // 添加一些请求
         for i in 0..10 {
             let request = QueuedRequest {
                 request_id: format!("test-{}", i),
@@ -503,7 +494,6 @@ mod tests {
         };
         queue.enqueue(critical_req).await.unwrap();
 
-        // 入队 Low 请求
         let low_req = QueuedRequest {
             request_id: "low-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {

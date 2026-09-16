@@ -22,6 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         enabled: true,
         jwt_secret: Some("demo-secret-at-least-32-characters-long!!".to_string()),
         token_expiration_hours: Some(24),
+        token_expiration_seconds: None,
         default_admin_username: Some("admin".to_string()),
         default_admin_password: Some("SecurePass123!".to_string()),
         csrf: vecboost::config::app::CsrfConfig::default(),
@@ -37,11 +38,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|| "admin".to_string()),
     );
 
-    GarrisonManager::init(
-        Arc::new(dao),
-        Arc::new(garrison_config),
-        Arc::new(interface),
-    )?;
+    // garrison 0.9：init(dao, config, interface) → builder 链
+    GarrisonManager::builder()
+        .dao(Arc::new(dao))
+        .config(Arc::new(garrison_config))
+        .interface(Arc::new(interface))
+        .build()
+        .await?;
     println!("✅ Garrison 初始化成功");
 
     // 2. 用户登录获取原始 token

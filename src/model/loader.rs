@@ -172,6 +172,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -190,6 +191,17 @@ mod tests {
         assert_eq!(model.name(), "test-candle");
         assert_eq!(model.path(), path.as_path());
         assert_eq!(model.engine_type(), EngineType::Candle);
+    }
+
+    #[test]
+    fn test_onnx_model_name_path_and_reload_without_feature_gate() {
+        let model = OnnxModel {
+            path: PathBuf::from("/test/onnx/path"),
+            name: "onnx-no-gate".to_string(),
+        };
+        assert_eq!(model.name(), "onnx-no-gate");
+        assert_eq!(model.path(), Path::new("/test/onnx/path"));
+        assert!(model.reload().is_ok());
     }
 
     #[test]
@@ -240,6 +252,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         }
     }
 

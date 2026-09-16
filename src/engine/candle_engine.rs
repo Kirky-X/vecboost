@@ -6,6 +6,7 @@
 #![allow(clippy::manual_checked_ops, clippy::identity_op)]
 
 use super::InferenceEngine;
+use super::{Stage, StageSnapshot, StageStats};
 use crate::config::model::{DeviceType, ModelConfig, Precision};
 use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
 use crate::error::VecboostError;
@@ -22,11 +23,8 @@ use candle_transformers::models::xlm_roberta::{Config as XlmRobertaConfig, XLMRo
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-#[cfg(target_os = "macos")]
+// 全平台统一使用 tokenizers crate
 use tokenizers::Tokenizer as HfTokenizer;
-
-#[cfg(not(target_os = "macos"))]
-type HfTokenizer = crate::text::Tokenizer;
 
 /// Tokenizer 缓存容量（缓存最近 N 个文本的分词结果）
 const DEFAULT_TOKENIZER_CACHE_CAPACITY: usize = 2048;
@@ -78,6 +76,30 @@ enum ModelWrapper {
     XlmRoberta(XLMRobertaModel),
 }
 
+/// 分阶段计时守卫：作用域退出（含 `?` 提前返回）时自动累加耗时。
+/// 无锁快路径：底层为原子 fetch_add。
+struct StageTimer<'a> {
+    stats: &'a StageStats,
+    stage: Stage,
+    start: std::time::Instant,
+}
+
+impl<'a> StageTimer<'a> {
+    fn new(stats: &'a StageStats, stage: Stage) -> Self {
+        Self {
+            stats,
+            stage,
+            start: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Drop for StageTimer<'_> {
+    fn drop(&mut self) {
+        self.stats.record(self.stage, self.start.elapsed());
+    }
+}
+
 pub struct CandleEngine {
     model: ModelWrapper,
     tokenizer: CachedTokenizer,
@@ -88,12 +110,18 @@ pub struct CandleEngine {
     fallback_triggered: bool,
     device_type: DeviceType,
     model_architecture: ModelArchitecture,
-    use_quantization: bool, // 是否使用 INT8 量化
+    use_quantization: bool, // INT8 量化未实现，始终为 false（保留字段供未来实现）
     _model_name: String,
     /// 模型隐藏层大小（从 config.hidden_size 读取）
     hidden_size: usize,
+    /// 分阶段延迟累加器：tokenize/inference/pooling，无锁原子累加。
+    stage_stats: Arc<StageStats>,
     /// 模型参数数量估算（从 config 计算）
     parameter_count: u64,
+    /// 汇聚模式(Auto 在构造时已解析为具体模式)
+    pooling_mode: crate::config::model::PoolingMode,
+    /// 词表大小(从 config.json vocab_size 读取,替代硬编码 250002)
+    vocab_size: usize,
 }
 
 /// 从 BERT/RoBERTa config 估算参数数量。
@@ -156,14 +184,21 @@ impl CandleEngine {
             Device::Cpu
         };
 
-        // 确定计算数据类型，支持 FP16、BF16 和 INT8 量化
+        // 确定计算数据类型（FP16/BF16 按设备映射；INT8 量化未实现，诚实回退 FP32）
         let compute_dtype = match (&precision, device.is_cuda()) {
             (Precision::Int8, true) => {
-                log::info!("Using INT8 quantization (CPU inference, reduced precision)");
-                DType::U8 // Candle 使用 U8 而非 I8
+                // INT8 量化未实现，诚实告知用户
+                log::warn!(
+                    "INT8 quantization is not yet implemented; running in FP32 mode. \
+                    The use_quantization flag has no effect until INT8 support is added."
+                );
+                DType::F32
             }
             (Precision::Int8, false) => {
-                log::warn!("INT8 quantization requested but CUDA not available, using FP32");
+                log::warn!(
+                    "INT8 quantization is not yet implemented; running in FP32 mode. \
+                    The use_quantization flag has no effect until INT8 support is added."
+                );
                 DType::F32
             }
             (Precision::Fp16, true) => {
@@ -188,9 +223,9 @@ impl CandleEngine {
             }
         };
 
-        // INT8 量化需要特殊处理：在 CPU 上量化，然后可能传输到 GPU
+        // INT8 量化未实现，use_quantization 始终为 false
         let (dtype, use_quantization) = if matches!(precision, Precision::Int8) {
-            (DType::F32, true) // INT8 量化使用 FP32 存储，推理时量化
+            (DType::F32, false) // INT8 未实现，回退 FP32
         } else {
             (compute_dtype, false)
         };
@@ -301,8 +336,8 @@ impl CandleEngine {
             }
         };
 
-        // 从 config 提取 hidden_size 和估算参数数量（在 config 被模型构造消费前）
-        let (hidden_size, parameter_count) = match (&bert_config, &xlm_config) {
+        // 从 config 提取 hidden_size、vocab_size 和估算参数数量（在 config 被模型构造消费前）
+        let (hidden_size, vocab_size, parameter_count) = match (&bert_config, &xlm_config) {
             (Some(bc), _) => {
                 let params = estimate_bert_params(
                     bc.vocab_size,
@@ -311,7 +346,7 @@ impl CandleEngine {
                     bc.intermediate_size,
                     bc.num_attention_heads,
                 );
-                (bc.hidden_size, params)
+                (bc.hidden_size, bc.vocab_size, params)
             }
             (_, Some(xc)) => {
                 let params = estimate_bert_params(
@@ -321,9 +356,9 @@ impl CandleEngine {
                     xc.intermediate_size,
                     xc.num_attention_heads,
                 );
-                (xc.hidden_size, params)
+                (xc.hidden_size, xc.vocab_size, params)
             }
-            _ => (768, 110_000_000), // fallback
+            _ => (768, 30522, 110_000_000), // fallback: BERT-base vocab
         };
 
         let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
@@ -469,7 +504,6 @@ impl CandleEngine {
             log::info!("Model file SHA256 verification passed");
         }
 
-        // 使用之前确定的 dtype（支持量化）
         let vb: VarBuilder = if is_pytorch {
             log::info!("Loading PyTorch model weights from: {:?}", weights_filename);
 
@@ -518,6 +552,11 @@ impl CandleEngine {
                 "Loading safetensors model weights from: {:?}",
                 weights_filename
             );
+            // SAFETY: `VarBuilder::from_mmaped_safetensors` memory-maps model weight files
+            // from disk. This is safe because:
+            // 1. The file path is validated to exist before this call.
+            // 2. The mmap is read-only and managed by candle's internal lifetime tracking.
+            // 3. The OS handles page faults; no manual pointer manipulation is needed.
             let vb =
                 unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], dtype, &device) };
             vb.map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
@@ -532,9 +571,7 @@ impl CandleEngine {
         let model = match &model_architecture {
             ModelArchitecture::Bert => {
                 let config = bert_config.ok_or_else(|| {
-                    VecboostError::ModelLoadError(
-                        "Bert config is required for Bert model".to_string(),
-                    )
+                    VecboostError::ModelLoadError(crate::i18n::tr("engine-bert-config-required"))
                 })?;
                 let bert_model = BertModel::load(vb, &config)
                     .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
@@ -542,7 +579,7 @@ impl CandleEngine {
             }
             ModelArchitecture::XlmRoberta => {
                 let config = xlm_config.ok_or_else(|| {
-                    VecboostError::ModelLoadError("XLM-RoBERTa config is required".to_string())
+                    VecboostError::ModelLoadError(crate::i18n::tr("engine-xlm-config-required"))
                 })?;
                 let xlm_model = XLMRobertaModel::new(&config, vb)
                     .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
@@ -555,6 +592,17 @@ impl CandleEngine {
         } else {
             None
         };
+
+        // 解析 pooling 模式——Auto 按模型名推断为具体模式
+        let resolved_pooling = match config.pooling_mode.clone().unwrap_or_default() {
+            crate::config::model::PoolingMode::Auto => infer_pooling_mode(&config.name),
+            other => other,
+        };
+        log::info!(
+            "Pooling mode: {:?} (model: {})",
+            resolved_pooling,
+            config.name
+        );
 
         Ok(Self {
             model,
@@ -570,11 +618,24 @@ impl CandleEngine {
             _model_name: config.name.clone(),
             hidden_size,
             parameter_count,
+            pooling_mode: resolved_pooling,
+            vocab_size,
+            stage_stats: Arc::new(StageStats::default()),
         })
     }
 
     pub fn set_memory_limit_controller(&mut self, controller: Arc<MemoryLimitController>) {
         self.memory_limit_controller = Some(controller);
+    }
+
+    /// 分阶段延迟快照（非破坏性，供诊断）。
+    pub fn stage_snapshot(&self) -> StageSnapshot {
+        self.stage_stats.snapshot()
+    }
+
+    /// 取出并清零分阶段延迟（指标汇出用）。
+    pub fn take_stage_snapshot(&self) -> StageSnapshot {
+        self.stage_stats.take()
     }
 
     pub fn device_type(&self) -> DeviceType {
@@ -662,12 +723,15 @@ impl CandleEngine {
         }
     }
 
-    async fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
-        let encoding = self
-            .tokenizer
-            .encode(text, true)
-            .await
-            .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
+    // 纯同步 forward_pass——使用 encode_sync 绕过异步缓存，移除 GPU 监控 await
+    fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
+        // 分阶段埋点：tokenize（守卫 Drop 时累加，`?` 提前返回亦覆盖）。
+        let encoding = {
+            let _timer = StageTimer::new(&self.stage_stats, Stage::Tokenize);
+            self.tokenizer
+                .encode_sync(text, true)
+                .map_err(|e| VecboostError::TokenizationError(e.to_string()))?
+        };
 
         let ids = encoding.get_ids();
         let attention_mask = encoding.get_attention_mask();
@@ -676,7 +740,8 @@ impl CandleEngine {
         log::debug!("Max token ID: {}", ids.iter().max().copied().unwrap_or(0));
         log::debug!("Attention mask: {:?}", attention_mask);
 
-        let vocab_size = 250002;
+        // 从 config.json 读取的 vocab_size(替代硬编码 250002)
+        let vocab_size = self.vocab_size as u32;
         let max_id = ids.iter().max().copied().unwrap_or(0);
         if max_id >= vocab_size {
             log::warn!(
@@ -697,7 +762,8 @@ impl CandleEngine {
         let mask_slice: Vec<u32> = attention_mask
             .iter()
             .take(max_len)
-            .map(|&id| if id >= vocab_size { vocab_size - 1 } else { id })
+            // attention_mask 值为 0/1,不需要 vocab 截断
+            .copied()
             .collect();
 
         let token_ids = Tensor::new(ids_slice, &self.device)
@@ -705,97 +771,129 @@ impl CandleEngine {
             .unsqueeze(0)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
+        // 保留 mask 副本供 pooling 函数使用
+        let mask_for_pooling = mask_slice.clone();
         let attention_mask_tensor = Tensor::new(mask_slice, &self.device)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?
             .unsqueeze(0)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-        let embeddings = match &self.model {
-            ModelWrapper::Bert(bert_model) => bert_model
-                .forward(&token_ids, &attention_mask_tensor, None)
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
-            ModelWrapper::XlmRoberta(xlm_model) => {
-                let type_ids_slice: Vec<u32> =
-                    encoding.type_ids.iter().take(max_len).cloned().collect();
-                let token_type_ids = Tensor::new(type_ids_slice, &self.device)
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                    .unsqueeze(0)
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-                xlm_model
-                    .forward(
-                        &token_ids,
-                        &attention_mask_tensor,
-                        &token_type_ids,
-                        None,
-                        None,
-                        None,
-                    )
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+        // 修复：candle BertModel::forward 签名为
+        // (input_ids, token_type_ids, attention_mask: Option)——旧实现把
+        // attention_mask 误传到 token_type_ids 槽位、mask 传 None，
+        // 导致 segment embedding 错误（单条）且批内 padding 完全无隔离（批量）。
+        let type_ids_slice: Vec<u32> = encoding.type_ids.iter().take(max_len).cloned().collect();
+        let token_type_ids = Tensor::new(type_ids_slice, &self.device)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+            .unsqueeze(0)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+
+        let embeddings = {
+            let _timer = StageTimer::new(&self.stage_stats, Stage::Inference);
+            match &self.model {
+                ModelWrapper::Bert(bert_model) => bert_model
+                    .forward(&token_ids, &token_type_ids, Some(&attention_mask_tensor))
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
+                ModelWrapper::XlmRoberta(xlm_model) => {
+                    let type_ids_slice: Vec<u32> =
+                        encoding.type_ids.iter().take(max_len).cloned().collect();
+                    let token_type_ids = Tensor::new(type_ids_slice, &self.device)
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+                        .unsqueeze(0)
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+                    xlm_model
+                        .forward(
+                            &token_ids,
+                            &attention_mask_tensor,
+                            &token_type_ids,
+                            None,
+                            None,
+                            None,
+                        )
+                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+                }
             }
         };
 
         log::debug!("Embeddings shape: {:?}", embeddings.shape());
-        log::debug!("Embeddings dims: {}", embeddings.dims().len());
-        log::debug!("Embeddings dims array: {:?}", embeddings.dims());
+        log::debug!("Embeddings dims: {:?}", embeddings.dims());
 
-        self.update_gpu_memory().await;
+        // 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
 
-        let embedding_result: Tensor;
+        // pooling 计时守卫驻留至函数返回，覆盖全部三个出口。
+        let _pool_timer = StageTimer::new(&self.stage_stats, Stage::Pooling);
         let dims = embeddings.dims();
-        log::debug!("Processing embedding with {} dimensions", dims.len());
+        let hidden_dim = self.hidden_size;
 
-        if dims.len() == 1 {
-            log::debug!("1D embedding, using directly");
-            embedding_result = embeddings.clone();
-        } else if dims.len() == 2 {
-            if dims[0] == 1 && dims[1] > 1 {
-                log::debug!("2D embedding [1, hidden_size], extracting batch 0");
-                embedding_result = embeddings
-                    .get(0)
-                    .map_err(|e| {
-                        VecboostError::InferenceError(format!("Failed to get batch 0: {}", e))
-                    })?
-                    .clone();
+        // 按 pooling_mode 汇聚——将 [seq_len, hidden_dim] 展平数据 + mask 传入纯函数
+        let seq_hidden: Vec<f32> = if dims.len() == 3 {
+            // [batch, seq_len, hidden] → 取 batch 0 的 [seq_len, hidden]
+            let batch0 = embeddings
+                .get(0)
+                .map_err(|e| VecboostError::InferenceError(format!("get batch 0: {}", e)))?;
+            // cast to f32 if needed
+            let cast = if batch0.dtype() == DType::F32 {
+                batch0
             } else {
-                log::debug!("2D embedding [seq_len, hidden_size], extracting CLS token (index 0)");
-                embedding_result = embeddings
-                    .get(0)
-                    .map_err(|e| {
-                        VecboostError::InferenceError(format!("Failed to get token 0: {}", e))
-                    })?
-                    .clone();
-            }
-        } else if dims.len() == 3 {
-            log::debug!("3D embedding [batch, seq_len, hidden], extracting batch 0, token 0");
-            embedding_result = embeddings
-                .get(0)
-                .map_err(|e| {
-                    VecboostError::InferenceError(format!("Failed to get batch 0: {}", e))
-                })?
-                .get(0)
-                .map_err(|e| {
-                    VecboostError::InferenceError(format!("Failed to get token 0: {}", e))
-                })?
-                .clone();
+                batch0
+                    .to_dtype(DType::F32)
+                    .map_err(|e| VecboostError::InferenceError(format!("cast to f32: {}", e)))?
+            };
+            cast.to_vec2::<f32>()
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+                .into_iter()
+                .flatten()
+                .collect()
+        } else if dims.len() == 2 {
+            // [seq_len, hidden] 直接展平
+            let cast = if embeddings.dtype() == DType::F32 {
+                embeddings.clone()
+            } else {
+                embeddings
+                    .to_dtype(DType::F32)
+                    .map_err(|e| VecboostError::InferenceError(format!("cast to f32: {}", e)))?
+            };
+            cast.to_vec2::<f32>()
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+                .into_iter()
+                .flatten()
+                .collect()
+        } else if dims.len() == 1 {
+            // 1D: 模型已输出单向量(某些特殊架构),直接返回
+            let vec = embeddings
+                .to_vec1::<f32>()
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+            return Ok(vec);
         } else {
             return Err(VecboostError::InferenceError(format!(
                 "Unsupported embedding dimensions: {} (shape: {:?})",
                 dims.len(),
                 embeddings.shape()
             )));
-        }
+        };
 
-        log::debug!("Final embedding shape: {:?}", embedding_result.shape());
+        let vec = match self.pooling_mode {
+            crate::config::model::PoolingMode::Cls => {
+                pool_cls(&seq_hidden, &mask_for_pooling, hidden_dim)
+            }
+            crate::config::model::PoolingMode::Mean => {
+                pool_mean(&seq_hidden, &mask_for_pooling, hidden_dim)
+            }
+            crate::config::model::PoolingMode::Max => {
+                pool_max(&seq_hidden, &mask_for_pooling, hidden_dim)
+            }
+            crate::config::model::PoolingMode::Auto => {
+                unreachable!("Auto pooling should have been resolved at construction time")
+            }
+        };
 
-        let vec = embedding_result
-            .to_vec1::<f32>()
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-
+        log::debug!("Final embedding dim: {}", vec.len());
         Ok(vec)
     }
 
     /// 优化的批量前向传播，使用真正的批量处理而非串行处理
-    async fn forward_pass_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VecboostError> {
+    // 纯同步 forward_pass_batch
+    fn forward_pass_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VecboostError> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -805,21 +903,20 @@ impl CandleEngine {
             texts.len()
         );
 
-        // 批量编码所有文本
+        // 批量编码所有文本——使用 encode_sync 绕过异步缓存
         let encodings: Vec<Encoding> = {
+            let _timer = StageTimer::new(&self.stage_stats, Stage::Tokenize);
             let mut encodings = Vec::with_capacity(texts.len());
             for &text in texts {
                 let encoding = self
                     .tokenizer
-                    .encode(text, true)
-                    .await
+                    .encode_sync(text, true)
                     .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
                 encodings.push(encoding);
             }
             encodings
         };
 
-        // 计算最大序列长度
         let max_seq_len = encodings
             .iter()
             .map(|e| e.get_ids().len())
@@ -832,10 +929,8 @@ impl CandleEngine {
             return Ok(vec![vec![0f32; hidden_size]; texts.len()]);
         }
 
-        // 创建批量张量
         let batch_size = texts.len();
 
-        // 构建 input_ids 批量张量
         let mut batch_ids = vec![0i64; batch_size * max_seq_len];
         for (batch_idx, encoding) in encodings.iter().enumerate() {
             let ids = encoding.get_ids();
@@ -851,7 +946,6 @@ impl CandleEngine {
             .reshape(&[batch_size, max_seq_len])
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-        // 构建 attention_mask 批量张量
         let mut batch_mask = vec![0i64; batch_size * max_seq_len];
         for (batch_idx, encoding) in encodings.iter().enumerate() {
             let mask = encoding.get_attention_mask();
@@ -866,27 +960,28 @@ impl CandleEngine {
             .reshape(&[batch_size, max_seq_len])
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-        // 执行批量前向传播
-        let embeddings = match (&self.model, &self.model_architecture) {
-            (ModelWrapper::Bert(bert_model), ModelArchitecture::Bert) => bert_model
-                .forward(&token_ids, &attention_mask_tensor, None)
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
-            (ModelWrapper::XlmRoberta(xlm_model), ModelArchitecture::XlmRoberta) => {
-                // 构建 type_ids 批量张量
-                let mut batch_type_ids = vec![0i64; batch_size * max_seq_len];
-                for (batch_idx, encoding) in encodings.iter().enumerate() {
-                    let type_ids = encoding.get_type_ids();
-                    for (seq_idx, &tid) in type_ids.iter().enumerate().take(max_seq_len) {
-                        batch_type_ids[batch_idx * max_seq_len + seq_idx] = tid as i64;
-                    }
-                }
+        // 修复：构建批量 token_type_ids 并将 attention_mask
+        // 以 Some(...) 正确传入（旧实现把 mask 传到 type_ids 槽位、mask 传 None，
+        // 导致批内 padding 无隔离，短序列向量被长序列污染，cos 仅 ~0.59）。
+        let mut batch_type_ids = vec![0i64; batch_size * max_seq_len];
+        for (batch_idx, encoding) in encodings.iter().enumerate() {
+            let type_ids = encoding.get_type_ids();
+            for (seq_idx, &tid) in type_ids.iter().enumerate().take(max_seq_len) {
+                batch_type_ids[batch_idx * max_seq_len + seq_idx] = tid as i64;
+            }
+        }
+        let token_type_ids = Tensor::new(batch_type_ids, &self.device)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+            .reshape(&[batch_size, max_seq_len])
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-                let token_type_ids = Tensor::new(batch_type_ids, &self.device)
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                    .reshape(&[batch_size, max_seq_len])
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-
-                xlm_model
+        let embeddings = {
+            let _timer = StageTimer::new(&self.stage_stats, Stage::Inference);
+            match (&self.model, &self.model_architecture) {
+                (ModelWrapper::Bert(bert_model), ModelArchitecture::Bert) => bert_model
+                    .forward(&token_ids, &token_type_ids, Some(&attention_mask_tensor))
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
+                (ModelWrapper::XlmRoberta(xlm_model), ModelArchitecture::XlmRoberta) => xlm_model
                     .forward(
                         &token_ids,
                         &attention_mask_tensor,
@@ -895,17 +990,20 @@ impl CandleEngine {
                         None,
                         None,
                     )
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-            }
-            _ => {
-                return Err(VecboostError::InferenceError(format!(
-                    "Model architecture mismatch for batch processing: {:?}",
-                    self.model_architecture
-                )));
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
+                _ => {
+                    return Err(VecboostError::InferenceError(format!(
+                        "Model architecture mismatch for batch processing: {:?}",
+                        self.model_architecture
+                    )));
+                }
             }
         };
 
-        self.update_gpu_memory().await;
+        // 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
+
+        // pooling 计时守卫驻留至函数返回，覆盖正常与 fallback 出口。
+        let _pool_timer = StageTimer::new(&self.stage_stats, Stage::Pooling);
 
         // 提取每个样本的嵌入向量（使用 CLS token）
         // 优化：使用 narrow + squeeze + to_vec2 单次提取所有 CLS token，
@@ -967,18 +1065,14 @@ impl CandleEngine {
 
 #[async_trait]
 impl InferenceEngine for CandleEngine {
+    // 纯同步实现——移除 block_in_place+block_on，由调用方 spawn_blocking 包装
     fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async { self.forward_pass(text).await })
-        })
+        self.forward_pass(text)
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
         let texts_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { self.forward_pass_batch(&texts_refs).await })
-        })
+        self.forward_pass_batch(&texts_refs)
     }
 
     fn precision(&self) -> &Precision {
@@ -995,6 +1089,14 @@ impl InferenceEngine for CandleEngine {
 
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         self.try_fallback_to_cpu_impl(config).await
+    }
+
+    fn count_tokens(&self, text: &str) -> Result<usize, VecboostError> {
+        self.tokenizer.count_tokens(text)
+    }
+
+    fn take_stage_snapshot(&self) -> Option<StageSnapshot> {
+        Some(self.take_stage_snapshot())
     }
 }
 
@@ -1170,6 +1272,8 @@ impl CandleEngine {
                 DType::F32
             }
         };
+        // SAFETY: Same as the initialization path — memory-maps safetensors weight file.
+        // The file path comes from a validated model config and the mmap is read-only.
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[weights_filename], compute_dtype, &self.device)
         }
@@ -1178,7 +1282,7 @@ impl CandleEngine {
         self.model = match &fallback_architecture {
             ModelArchitecture::Bert => {
                 let config = bert_config.ok_or_else(|| {
-                    VecboostError::ModelLoadError("Bert config is required".to_string())
+                    VecboostError::ModelLoadError(crate::i18n::tr("engine-bert-config-required"))
                 })?;
                 let bert_model = BertModel::load(vb, &config)
                     .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
@@ -1186,7 +1290,7 @@ impl CandleEngine {
             }
             ModelArchitecture::XlmRoberta => {
                 let config = xlm_config.ok_or_else(|| {
-                    VecboostError::ModelLoadError("XLM-RoBERTa config is required".to_string())
+                    VecboostError::ModelLoadError(crate::i18n::tr("engine-xlm-config-required"))
                 })?;
                 let xlm_model = XLMRobertaModel::new(&config, vb)
                     .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
@@ -1201,6 +1305,92 @@ impl CandleEngine {
         log::info!("Successfully fell back to CPU");
         Ok(())
     }
+}
+
+// ============================================================================
+// Pooling 数学纯函数(与 candle Tensor 解耦,可独立单测)
+// ============================================================================
+
+/// Auto pooling 推断——按模型名推断最佳 pooling 策略。
+///
+/// 规则:
+/// - 模型名含 `minilm`/`e5`/`gte` (不区分大小写) → Mean
+/// - 模型名含 `bge` → Cls
+/// - 其余 → Cls + warn
+pub(crate) fn infer_pooling_mode(model_name: &str) -> crate::config::model::PoolingMode {
+    use crate::config::model::PoolingMode;
+    let lower = model_name.to_lowercase();
+    if lower.contains("minilm") || lower.contains("e5") || lower.contains("gte") {
+        PoolingMode::Mean
+    } else if lower.contains("bge") {
+        PoolingMode::Cls
+    } else {
+        log::warn!(
+            "Auto pooling: unrecognized model family '{}', falling back to CLS. \
+             Set pooling_mode explicitly to silence this warning.",
+            model_name
+        );
+        PoolingMode::Cls
+    }
+}
+
+/// CLS pooling:取序列第一个 token 的 hidden state。
+///
+/// `hidden` 为 `[seq_len × hidden_dim]` 行优先展平向量。
+pub(crate) fn pool_cls(hidden: &[f32], _mask: &[u32], hidden_dim: usize) -> Vec<f32> {
+    hidden[..hidden_dim].to_vec()
+}
+
+/// Mean pooling:以 attention_mask 为权重的加权和 ÷ mask 元素总和。
+///
+/// `hidden`: `[seq_len × hidden_dim]` 行优先展平。
+/// `mask`: 长度 `seq_len`,值为 0/1。仅 mask=1 的位置参与累加。
+pub(crate) fn pool_mean(hidden: &[f32], mask: &[u32], hidden_dim: usize) -> Vec<f32> {
+    let seq_len = mask.len();
+    let mut result = vec![0.0_f32; hidden_dim];
+    let mut mask_sum = 0.0_f32;
+    for (t, &m) in mask.iter().enumerate().take(seq_len) {
+        if m == 0 {
+            continue;
+        }
+        mask_sum += 1.0;
+        let offset = t * hidden_dim;
+        for (d, &h) in hidden[offset..offset + hidden_dim].iter().enumerate() {
+            result[d] += h;
+        }
+    }
+    if mask_sum > 0.0 {
+        for v in &mut result {
+            *v /= mask_sum;
+        }
+    }
+    result
+}
+
+/// Max pooling:mask 内逐维取最大。
+///
+/// `hidden`: `[seq_len × hidden_dim]` 行优先展平。
+/// `mask`: 长度 `seq_len`。mask=0 的位置不参与 max 比较。
+pub(crate) fn pool_max(hidden: &[f32], mask: &[u32], hidden_dim: usize) -> Vec<f32> {
+    let seq_len = mask.len();
+    let mut result = vec![f32::NEG_INFINITY; hidden_dim];
+    let mut any_active = false;
+    for (t, &m) in mask.iter().enumerate().take(seq_len) {
+        if m == 0 {
+            continue;
+        }
+        any_active = true;
+        let offset = t * hidden_dim;
+        for (d, &h) in hidden[offset..offset + hidden_dim].iter().enumerate() {
+            if h > result[d] {
+                result[d] = h;
+            }
+        }
+    }
+    if !any_active {
+        result.fill(0.0);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -1222,10 +1412,11 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         }
     }
 
-    /// T006 H6: 验证 `tokio::task::block_in_place(|| Handle::current().block_on(...))` 模式
+    /// 验证 `tokio::task::block_in_place(|| Handle::current().block_on(...))` 模式
     /// 在 multi-thread runtime 下不 panic。
     ///
     /// 此前 `embed`/`embed_batch` 使用 `futures::executor::block_on`,在 Tokio 异步上下文中
@@ -1249,7 +1440,7 @@ mod tests {
         );
     }
 
-    /// T006 H6: 验证 block_in_place 内部的 block_on 可以正确 await Tokio 异步原语
+    /// 验证 block_in_place 内部的 block_on 可以正确 await Tokio 异步原语
     /// (如 tokio::sync::RwLock)。这模拟了 forward_pass_batch 中 pool.write().await 的场景。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_block_in_place_with_tokio_rwlock_does_not_deadlock() {
@@ -1706,6 +1897,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         }
     }
 
@@ -1910,7 +2102,7 @@ mod tests {
         assert_eq!(result.unwrap().len(), 384);
     }
 
-    /// 验证 INT8 精度在 CPU 上启用 use_quantization 标志并可推理
+    /// 验证 INT8 精度在 CPU 上回退 FP32，use_quantization 始终为 false
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_real_model_loads_int8_cpu() {
         if !require_real_model() {
@@ -1922,8 +2114,8 @@ mod tests {
 
         assert_eq!(*engine.precision(), Precision::Int8);
         assert!(
-            engine.uses_quantization(),
-            "INT8 precision should set use_quantization=true"
+            !engine.uses_quantization(),
+            "INT8 not implemented, use_quantization should be false"
         );
 
         let result = engine.embed("int8 precision test");
@@ -1978,7 +2170,7 @@ mod tests {
         assert_eq!(result.unwrap().len(), 384);
     }
 
-    /// 验证 PyTorch 模型加载路径(覆盖 is_pytorch 分支 362-403 行)
+    /// 验证 PyTorch 模型加载路径(覆盖 is_pytorch 分支)
     /// HuggingFace pytorch_model.bin 使用 pickle 格式,candle VarMap::load 不兼容,
     /// 返回 ModelLoadError 提示转换为 safetensors 格式
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2130,7 +2322,11 @@ mod tests {
             CandleEngine::new(&config, Precision::Int8).expect("Failed to load INT8 model");
         let mem_int8 = engine_int8.estimate_memory_usage(1, 128);
         assert!(mem_int8 > 0, "INT8 memory estimate should be positive");
-        assert!(mem_int8 < mem_fp16, "INT8 should use less memory than FP16");
+        // INT8 量化未实现，回退 FP32，内存估算与 FP32 相同
+        assert_eq!(
+            mem_int8, mem_fp32,
+            "INT8 not implemented, should fall back to FP32 memory usage"
+        );
 
         let mem_batch = engine_fp32.estimate_memory_usage(8, 256);
         assert!(
@@ -2278,6 +2474,190 @@ mod tests {
             params > 250_000_000 && params < 300_000_000,
             "XLM-RoBERTa-Base params should be ~270M, got {}",
             params
+        );
+    }
+
+    // ========================================================================
+    // Pooling 数学单元测试(合成 hidden states + attention mask)
+    // ========================================================================
+
+    /// 合成 [seq_len=3, hidden_dim=4] 的 hidden states + mask
+    fn synthetic_pooling_data() -> (Vec<f32>, Vec<u32>, usize) {
+        let hidden_dim = 4;
+        // seq_len=3, hidden_dim=4 → 12 个 f32
+        // token 0 (CLS): [1.0, 2.0, 3.0, 4.0]
+        // token 1:       [5.0, 6.0, 7.0, 8.0]
+        // token 2 (pad): [0.0, 0.0, 0.0, 0.0]
+        let hidden = vec![
+            1.0, 2.0, 3.0, 4.0, //
+            5.0, 6.0, 7.0, 8.0, //
+            0.0, 0.0, 0.0, 0.0, //
+        ];
+        let mask = vec![1, 1, 0]; // token 2 是 padding
+        (hidden, mask, hidden_dim)
+    }
+
+    #[test]
+    fn pool_cls_returns_first_token() {
+        let (hidden, mask, dim) = synthetic_pooling_data();
+        let result = pool_cls(&hidden, &mask, dim);
+        assert_eq!(result, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn pool_mean_mask_weighted_average() {
+        let (hidden, mask, dim) = synthetic_pooling_data();
+        let result = pool_mean(&hidden, &mask, dim);
+        // mask=[1,1,0]: 仅 token 0 和 token 1 参与,mean_sum=2
+        // dim 0: (1.0+5.0)/2 = 3.0
+        // dim 1: (2.0+6.0)/2 = 4.0
+        // dim 2: (3.0+7.0)/2 = 5.0
+        // dim 3: (4.0+8.0)/2 = 6.0
+        assert_eq!(result, vec![3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn pool_max_mask_element_wise_max() {
+        let (hidden, mask, dim) = synthetic_pooling_data();
+        let result = pool_max(&hidden, &mask, dim);
+        // mask=[1,1,0]: 仅 token 0 和 token 1 参与
+        // dim 0: max(1.0,5.0) = 5.0
+        // dim 1: max(2.0,6.0) = 6.0
+        // dim 2: max(3.0,7.0) = 7.0
+        // dim 3: max(4.0,8.0) = 8.0
+        assert_eq!(result, vec![5.0, 6.0, 7.0, 8.0]);
+    }
+
+    #[test]
+    fn pool_mean_all_masked_out_returns_zero() {
+        let hidden = vec![1.0, 2.0, 3.0, 4.0];
+        let mask = vec![0]; // 全部 padding
+        let result = pool_mean(&hidden, &mask, 4);
+        assert_eq!(result, vec![0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn pool_max_all_masked_out_returns_zero() {
+        let hidden = vec![1.0, 2.0, 3.0, 4.0];
+        let mask = vec![0];
+        let result = pool_max(&hidden, &mask, 4);
+        assert_eq!(result, vec![0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn pool_mean_single_token_equals_that_token() {
+        let hidden = vec![10.0, 20.0, 30.0];
+        let mask = vec![1];
+        let result = pool_mean(&hidden, &mask, 3);
+        assert_eq!(result, vec![10.0, 20.0, 30.0]);
+    }
+
+    #[test]
+    fn pool_max_negative_values() {
+        let hidden_dim = 2;
+        // token 0: [-5.0, -1.0], token 1: [-3.0, -9.0]
+        let hidden = vec![-5.0, -1.0, -3.0, -9.0];
+        let mask = vec![1, 1];
+        let result = pool_max(&hidden, &mask, hidden_dim);
+        // max(-5,-3)=-3, max(-1,-9)=-1
+        assert_eq!(result, vec![-3.0, -1.0]);
+    }
+
+    // ========================================================================
+    // Auto pooling 推断测试
+    // ========================================================================
+
+    #[test]
+    fn infer_pooling_minilm_returns_mean() {
+        use crate::config::model::PoolingMode;
+        assert_eq!(infer_pooling_mode("all-MiniLM-L6-v2"), PoolingMode::Mean);
+        assert_eq!(
+            infer_pooling_mode("paraphrase-MiniLM-L12-v2"),
+            PoolingMode::Mean
+        );
+    }
+
+    #[test]
+    fn infer_pooling_e5_returns_mean() {
+        use crate::config::model::PoolingMode;
+        assert_eq!(
+            infer_pooling_mode("multilingual-e5-small"),
+            PoolingMode::Mean
+        );
+        assert_eq!(
+            infer_pooling_mode("intfloat/e5-small-v2"),
+            PoolingMode::Mean
+        );
+    }
+
+    #[test]
+    fn infer_pooling_gte_returns_mean() {
+        use crate::config::model::PoolingMode;
+        assert_eq!(
+            infer_pooling_mode("Alibaba-NLP/gte-Qwen2-1.5B-instruct"),
+            PoolingMode::Mean
+        );
+    }
+
+    #[test]
+    fn infer_pooling_bge_returns_cls() {
+        use crate::config::model::PoolingMode;
+        assert_eq!(
+            infer_pooling_mode("BAAI/bge-small-en-v1.5"),
+            PoolingMode::Cls
+        );
+        assert_eq!(
+            infer_pooling_mode("BAAI/bge-large-zh-v1.5"),
+            PoolingMode::Cls
+        );
+    }
+
+    #[test]
+    fn infer_pooling_unknown_returns_cls() {
+        use crate::config::model::PoolingMode;
+        // 未知模型家族 → Cls (带 warn)
+        assert_eq!(infer_pooling_mode("some-unknown-model"), PoolingMode::Cls);
+    }
+
+    #[test]
+    fn infer_pooling_case_insensitive() {
+        use crate::config::model::PoolingMode;
+        assert_eq!(infer_pooling_mode("BGE-Small"), PoolingMode::Cls);
+        assert_eq!(infer_pooling_mode("MINILM-v2"), PoolingMode::Mean);
+        assert_eq!(infer_pooling_mode("E5-Large"), PoolingMode::Mean);
+    }
+
+    // -- StageTimer --
+
+    #[test]
+    fn stage_timer_records_on_scope_exit() {
+        let stats = StageStats::default();
+        {
+            let _timer = StageTimer::new(&stats, Stage::Inference);
+            std::thread::sleep(std::time::Duration::from_micros(50));
+        }
+        let snap = stats.snapshot();
+        assert_eq!(
+            snap.counts[Stage::Inference as usize],
+            1,
+            "作用域退出应记录"
+        );
+        assert!(snap.nanos[Stage::Inference as usize] > 0, "耗时应大于 0");
+    }
+
+    #[test]
+    fn stage_timer_records_on_early_return_path() {
+        // 模拟 `?` 提前返回：守卫 Drop 仍须累加（无锁快路径不漏计）
+        fn fallible(stats: &StageStats) -> Result<(), ()> {
+            let _timer = StageTimer::new(stats, Stage::Tokenize);
+            Err(())
+        }
+        let stats = StageStats::default();
+        let _ = fallible(&stats);
+        assert_eq!(
+            stats.snapshot().counts[Stage::Tokenize as usize],
+            1,
+            "提前返回路径也应记录"
         );
     }
 }

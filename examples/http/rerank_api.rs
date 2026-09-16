@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! HTTP POST /api/v1/rerank 客户端示例
+//! HTTP POST /api/1/rerank 客户端示例
 //!
 //! 需要 vecboost 服务已启动: cargo run --features http
 
@@ -35,11 +35,11 @@ struct RerankResponseBody {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🚀 HTTP POST /api/v1/rerank 示例");
+    println!("🚀 HTTP POST /api/1/rerank 示例");
     println!("=================================\n");
 
     let client = Client::new();
-    let url = "http://localhost:9002/api/v1/rerank";
+    let url = "http://localhost:9002/api/1/rerank";
     let body = RerankRequestBody {
         query: "what is machine learning?".to_string(),
         documents: vec![

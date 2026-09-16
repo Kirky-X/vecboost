@@ -34,6 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         memory_limit_bytes: None,
         oom_fallback_enabled: false,
         model_sha256: None,
+        quantized: false,
     };
 
     let config = LibraryConfig {
@@ -106,13 +107,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("    [{}] score={:.4}", result.index, result.score);
     }
 
-    // 6. 同步 API（适用于非异步上下文）
-    println!("\n📝 同步 API 调用:");
-    let sync_resp = lib.embed_sync("synchronous embedding")?;
-    println!("  embed_sync 维度: {}", sync_resp.dimension);
+    // 6. 额外异步调用验证（同步 API 需在非 async 上下文中使用 embed_sync/embed_batch_sync）
+    println!("\n📝 额外异步调用验证:");
+    let extra_resp = lib.embed("additional test").await?;
+    println!("  额外 embed 维度: {}", extra_resp.dimension);
 
-    let sync_batch = lib.embed_batch_sync(&["text a".to_string(), "text b".to_string()])?;
-    println!("  embed_batch_sync 返回 {} 条", sync_batch.embeddings.len());
+    let extra_batch = lib
+        .embed_batch(&["text a".to_string(), "text b".to_string()])
+        .await?;
+    println!(
+        "  额外 embed_batch 返回 {} 条",
+        extra_batch.embeddings.len()
+    );
 
     println!("\n✅ VecBoostLibrary SDK 示例完成");
     Ok(())

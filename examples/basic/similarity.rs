@@ -69,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let req = SimilarityRequest {
         source: source.to_string(),
         target: target.to_string(),
+        metric: Some("cosine".to_string()),
     };
 
     println!("\n🔧 调用 api::compute_similarity...");

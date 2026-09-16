@@ -99,7 +99,7 @@ impl AuditLogger {
         if let Some(parent) = log_file_path.parent()
             && let Err(e) = tokio::fs::create_dir_all(parent).await
         {
-            eprintln!("Failed to create log directory: {}", e);
+            log::error!("Failed to create log directory: {}", e);
             return;
         }
 
@@ -111,7 +111,7 @@ impl AuditLogger {
         {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("Failed to open audit log file: {}", e);
+                log::error!("Failed to open audit log file: {}", e);
                 return;
             }
         };
@@ -218,7 +218,8 @@ impl AuditLogger {
             match cmd {
                 LoggerCommand::Event(event) => {
                     if let Err(e) = Self::write_to_db(&pool, &event).await {
-                        eprintln!("Failed to write audit log to db: {}", e);
+                        // DB 写失败 → 死信文件落地,事件不静默丢失
+                        Self::write_dead_letter(&event, &e.to_string());
                     }
                 }
                 LoggerCommand::Flush(ack) => {
@@ -227,12 +228,43 @@ impl AuditLogger {
                         if let LoggerCommand::Event(event) = cmd
                             && let Err(e) = Self::write_to_db(&pool, &event).await
                         {
-                            eprintln!("Failed to write audit log to db: {}", e);
+                            Self::write_dead_letter(&event, &e.to_string());
                         }
                     }
                     let _ = ack.send(());
                 }
             }
+        }
+    }
+
+    /// DB 写重试耗尽后的死信落地 —— 追加写 `logs/audit_dead_letter.jsonl`
+    /// (含失败原因),保证审计事件可事后重放。写死信自身的失败仅记 error
+    /// (无更深兜底介质)。
+    // 调用方 run_db_writer 与 dead_letter_tests 均为 db/test 门控,缺一即死代码
+    #[cfg(any(test, feature = "db"))]
+    fn write_dead_letter(event: &SecurityEvent, db_error: &str) {
+        let event = serde_json::to_value(event)
+            .unwrap_or_else(|_| serde_json::json!({"serialize_error": true}));
+        use std::io::Write as _;
+        let path = std::path::Path::new("logs/audit_dead_letter.jsonl");
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let record = serde_json::json!({
+            "dead_lettered_at": chrono::Utc::now().to_rfc3339(),
+            "db_error": db_error,
+            "event": event,
+        });
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut f| writeln!(f, "{record}"))
+        {
+            Ok(()) => log::warn!("Audit event dead-lettered to {}", path.display()),
+            Err(e) => log::error!(
+                "Audit event lost: dead-letter write failed: {e} (db error: {db_error})"
+            ),
         }
     }
 
@@ -266,7 +298,7 @@ impl AuditLogger {
             {
                 Ok(f) => f,
                 Err(e) => {
-                    eprintln!("Failed to reopen log file after rotation: {}", e);
+                    log::error!("Failed to reopen log file after rotation: {}", e);
                     buffer.clear();
                     return consecutive_errors + 1;
                 }
@@ -288,7 +320,7 @@ impl AuditLogger {
                 0
             }
             Err(e) => {
-                eprintln!("Failed to write audit log batch: {}", e);
+                log::error!("Failed to write audit log batch: {}", e);
                 consecutive_errors + 1
             }
         }
@@ -474,7 +506,7 @@ impl AuditLogger {
             let oldest_log = format!("{}.{}", log_file_path.display(), max_files);
             if let Err(e) = tokio::fs::remove_file(&oldest_log).await {
                 if !e.kind().eq(&std::io::ErrorKind::NotFound) {
-                    eprintln!("Failed to remove old log file {}: {}", oldest_log, e);
+                    log::error!("Failed to remove old log file {}: {}", oldest_log, e);
                 }
             }
         }
@@ -485,20 +517,51 @@ impl AuditLogger {
 
             if let Err(e) = tokio::fs::rename(&old_file, &new_file).await {
                 if !e.kind().eq(&std::io::ErrorKind::NotFound) {
-                    eprintln!("Failed to rotate log file: {}", e);
+                    log::error!("Failed to rotate log file: {}", e);
                 }
             }
         }
 
         let rotated_log = format!("{}.1", log_file_path.display());
         if let Err(e) = tokio::fs::rename(log_file_path, &rotated_log).await {
-            eprintln!("Failed to rotate current log: {}", e);
+            log::error!("Failed to rotate current log: {}", e);
         }
     }
 
     /// Check if audit logging is enabled.
     pub fn is_enabled(&self) -> bool {
         self.config.enabled
+    }
+}
+
+#[cfg(test)]
+mod dead_letter_tests {
+    use super::*;
+
+    /// DB 写失败 → 死信文件追加一行合法 JSON(含失败原因与事件体)
+    #[test]
+    fn dead_letter_writes_valid_json_line() {
+        // 独立临时目录隔离(cwd 相对路径 write_dead_letter 固定写 logs/)
+        use super::AuditLogger;
+        let event = SecurityEvent {
+            timestamp: chrono::Utc::now(),
+            event_type: "login_failed".to_string(),
+            user: Some("alice".to_string()),
+            ip: None,
+            request_id: None,
+            user_agent: None,
+            details: serde_json::json!({}),
+            success: false,
+        };
+        AuditLogger::write_dead_letter(&event, "simulated db outage");
+        let path = std::path::Path::new("logs/audit_dead_letter.jsonl");
+        let content = std::fs::read_to_string(path).expect("dead letter file must exist");
+        let last_line = content.lines().last().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(last_line).expect("valid JSONL");
+        assert_eq!(parsed["db_error"], "simulated db outage");
+        assert!(parsed["event"].is_object(), "event body must be embedded");
+        // 清理测试产生的文件
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -637,11 +700,11 @@ mod tests {
     async fn test_log_unauthorized_access_writes_to_file() {
         let temp_dir = TempDir::new().unwrap();
         let (logger, log_path) = make_logger(&temp_dir, "unauthorized.log");
-        logger.log_unauthorized_access(Some("10.0.0.6".to_string()), "/api/v1/embed");
+        logger.log_unauthorized_access(Some("10.0.0.6".to_string()), "/api/1/embed");
         logger.flush().await.unwrap();
         let content = read_log_content(&log_path).await;
         assert!(content.contains("unauthorized_access"));
-        assert!(content.contains("/api/v1/embed"));
+        assert!(content.contains("/api/1/embed"));
         assert!(content.contains("\"success\":false"));
     }
 
@@ -803,6 +866,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let (logger, _log_path) = make_logger(&temp_dir, "closed.log");
         drop(logger);
+        // Give the background writer task time to process the channel close
+        // and execute the final flush + break path
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
     /// Batch flush triggers when buffer reaches 100 entries (no explicit flush call).
@@ -836,7 +902,60 @@ mod tests {
         );
     }
 
-    /// T024 (R-audit-001 验收点 5): 1000 条审计事件 log_* 调用总耗时 < 100ms。
+    /// Log rotation triggered when file size exceeds max_file_size.
+    /// Using max_file_size_mb=0 so any write triggers rotation.
+    #[tokio::test]
+    async fn test_log_rotation_on_small_max_size() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("rotate.log");
+        let config = AuditConfig {
+            enabled: true,
+            log_file_path: log_path.clone(),
+            max_file_size_mb: 0, // triggers rotation on first flush
+            max_files: 3,
+            ..Default::default()
+        };
+        let logger = AuditLogger::new(config);
+
+        // Write enough events to trigger a batch flush (100 entries)
+        for i in 0..120 {
+            logger.log_login_success(&format!("user{}", i), None);
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        logger.flush().await.unwrap();
+
+        // After rotation, the original file should have been renamed to .1
+        // and a new file created
+        let content = read_log_content(&log_path).await;
+        assert!(
+            content.contains("login_success"),
+            "log should contain entries after rotation"
+        );
+    }
+
+    /// Flush with pending events in channel exercises the drain loop.
+    #[tokio::test]
+    async fn test_flush_drains_pending_events() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "drain.log");
+        // Send events and immediately flush (no sleep) to maximize
+        // chance that events are still in the channel when Flush arrives.
+        for i in 0..10 {
+            logger.log_login_success(&format!("drain_user{}", i), None);
+        }
+        logger.flush().await.unwrap();
+        let content = read_log_content(&log_path).await;
+        assert!(
+            content.contains("login_success"),
+            "flush should write all pending events"
+        );
+        assert!(
+            content.contains("drain_user0"),
+            "first event should be present"
+        );
+    }
+
+    /// 1000 条审计事件 log_* 调用总耗时 < 100ms。
     ///
     /// `log_*` 方法仅 `sender.send(LoggerCommand::Event(event))`（mpsc unbounded，
     /// 非阻塞），1000 次 send 应在毫秒级完成。后台 writer task 异步批量写入不计入耗时。
@@ -867,12 +986,12 @@ mod tests {
         logger.flush().await.unwrap();
     }
 
-    /// T025 (R-audit-002 验收点 4): 间接验证 log_* 方法不触发 fs::metadata syscall。
+    /// 间接验证 log_* 方法不触发 fs::metadata syscall。
     ///
     /// 验证依据：
     /// 1. `AuditLogger.sender` 类型为 `Option<mpsc::UnboundedSender<LoggerCommand>>`
     ///    —— `log_*` 仅 `sender.send(...)`（内存 send，无 syscall）
-    /// 2. `log` 方法（logger.rs L331-338）仅 `sender.send(LoggerCommand::Event(event))`，
+    /// 2. `log` 方法仅 `sender.send(LoggerCommand::Event(event))`，
     ///    无 `fs::metadata` 调用
     /// 3. `current_size` 是 writer task 内的 `AtomicU64` 局部变量（内存计数，无 syscall），
     ///    文件大小检查只在后台 `flush_buffer` 中发生（批量，非 per-event）

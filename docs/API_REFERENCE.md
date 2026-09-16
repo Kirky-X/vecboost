@@ -1,6 +1,4 @@
-<div align="center">
-
-# 📚 VecBoost API 参考文档
+# 📘 VecBoost API 参考文档
 
 **完整的 REST HTTP 端点和 gRPC 服务方法文档**
 
@@ -8,21 +6,26 @@
 
 *VecBoost API 的完整文档，包括 REST HTTP 端点和 gRPC 服务方法。*
 
-</div>
-
 ---
 
 ## 📋 目录
 
-| 章节 | 说明 |
-|------|------|
-| [基础 URL](#基础-url) | API 端点基础地址 |
-| [认证](#认证) | JWT 认证和令牌管理 |
-| [REST API](#rest-api) | HTTP REST 接口文档 |
-| [OpenAPI 文档](#-openapi-文档) | Swagger UI 与 OpenAPI 规范端点 |
-| [gRPC API](#grpc-api) | gRPC 服务定义、配置与消息类型 |
-| [错误处理](#错误处理) | 错误码和响应格式 |
-| [速率限制](#速率限制) | 速率限制策略和响应头 |
+<details open>
+<summary>📑 目录（点击展开）</summary>
+
+- [基础 URL](#基础-url)
+- [认证](#认证)
+- [REST API](#rest-api)
+- [gRPC API](#grpc-api)
+- [MCP 接口](#mcp-接口)
+- [CLI 工具](#cli-工具)
+- [错误处理](#错误处理)
+- [国际化（i18n）](#国际化i18n)
+- [速率限制](#速率限制)
+- [版本历史](#版本历史)
+- [相关文档](#相关文档)
+
+</details>
 
 ---
 
@@ -34,7 +37,7 @@
 | **gRPC API** | HTTP/2 | `localhost:50051` | `50051` |
 | **Prometheus** | HTTP | `http://localhost:9002/metrics` | `9002` |
 
-> **💡 提示**: 所有 REST API 端点都以 `/api/v1/` 为前缀。
+> **💡 提示**: 所有 REST API 端点都以 `/api/1/` 为前缀（由 sdforge `version = 1` 生成）。OpenAI 兼容端点使用 `/v1/embeddings`。
 
 ---
 
@@ -43,7 +46,7 @@
 启用认证时，请在 `Authorization` 头中包含 Bearer 令牌：
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed \
+curl -X POST http://localhost:9002/api/1/embed \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-jwt-token>" \
   -d '{"text": "Hello, world!"}'
@@ -51,7 +54,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 ### 获取令牌
 
-**端点:** `POST /api/v1/auth/login`
+**端点:** `POST /api/1/auth/login`
 
 **请求体:**
 
@@ -76,9 +79,46 @@ curl -X POST http://localhost:9002/api/v1/embed \
 |------|------|------|
 | `token` | string | JWT 访问令牌 |
 | `token_type` | string | 令牌类型（始终为 `Bearer`） |
-| `expires_in` | integer | 令牌过期时间（由 garrison 管理，固定为 0） |
+| `expires_in` | integer | 令牌过期时间（秒），由 `token_timeout_secs` 配置决定 |
 
-> **ℹ️ 注意**: 令牌过期时间由 garrison 认证框架的 `GarrisonConfig.timeout` 统一管理，响应中 `expires_in` 固定为 0。
+> **ℹ️ 注意**: 令牌过期时间由配置项 `[auth] token_timeout_secs` 决定。
+
+### 刷新令牌
+
+**端点:** `POST /api/1/auth/refresh`
+
+**请求体:**
+
+```json
+{
+  "refresh_token": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
+
+**响应:** 与登录响应格式相同，返回新的 `token` 和 `expires_in`。
+
+### 登出
+
+**端点:** `POST /api/1/auth/logout`
+
+**请求头:** `Authorization: Bearer <your-jwt-token>`
+
+**响应:** 成功登出返回空响应体，当前令牌被撤销。
+
+### 获取当前用户
+
+**端点:** `GET /api/1/auth/me`
+
+**请求头:** `Authorization: Bearer <your-jwt-token>`
+
+**响应:**
+
+```json
+{
+  "username": "admin",
+  "roles": ["admin"]
+}
+```
 
 ---
 
@@ -90,7 +130,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 为单个文本生成向量嵌入。
 
-**端点:** `POST /api/v1/embed`
+**端点:** `POST /api/1/embed`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -100,7 +140,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed \
+curl -X POST http://localhost:9002/api/1/embed \
   -H "Content-Type: application/json" \
   -d '{
     "text": "The quick brown fox jumps over the lazy dog",
@@ -130,7 +170,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 在单个请求中为多个文本生成嵌入向量。
 
-**端点:** `POST /api/v1/embed/batch`
+**端点:** `POST /api/1/embed/batch`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -140,7 +180,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed/batch \
+curl -X POST http://localhost:9002/api/1/embed/batch \
   -H "Content-Type: application/json" \
   -d '{
     "texts": ["第一个文档", "第二个文档", "第三个文档"],
@@ -181,7 +221,7 @@ curl -X POST http://localhost:9002/api/v1/embed/batch \
 
 为文件生成嵌入向量。
 
-**端点:** `POST /api/v1/embed/file`
+**端点:** `POST /api/1/embed/file`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -191,7 +231,7 @@ curl -X POST http://localhost:9002/api/v1/embed/batch \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/embed/file \
+curl -X POST http://localhost:9002/api/1/embed/file \
   -H "Content-Type: application/json" \
   -d '{
     "path": "/path/to/document.txt",
@@ -317,7 +357,7 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 - 点积与余弦相似度不再等价
 - 与原始 1024 维向量的相似度比较失真
 
-> **💡 提示**: 该归一化对所有支持 Matryoshka 的入口生效（HTTP `/v1/embeddings`、`/api/v1/embed*`、gRPC `vecboost.embed*`、MCP、CLI）。若请求中显式指定 `normalize: false` 但同时传 `dimensions`，截断后仍会执行重归一化以保证语义正确。
+> **💡 提示**: 该归一化对所有支持 Matryoshka 的入口生效（HTTP `/v1/embeddings`、`/api/1/embed*`、gRPC `vecboost.embed*`、MCP、CLI）。若请求中显式指定 `normalize: false` 但同时传 `dimensions`，截断后仍会执行重归一化以保证语义正确。
 
 **错误响应（维度超限）：**
 
@@ -336,19 +376,20 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 
 #### 计算相似度
 
-计算两段文本之间的余弦相似度。服务端自动对文本进行嵌入后计算相似度。
+计算两段文本之间的相似度（默认余弦相似度，可通过 `metric` 切换度量）。服务端自动对文本进行嵌入后计算相似度。
 
-**端点:** `POST /api/v1/similarity`
+**端点:** `POST /api/1/similarity`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `source` | string | ✅ | 源文本 |
 | `target` | string | ✅ | 目标文本 |
+| `metric` | string | ❌ | 相似度度量：`cosine`（默认）/ `euclidean` / `dot_product` / `manhattan`。距离类度量转换为相似度 `1/(1+d)` |
 
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/similarity \
+curl -X POST http://localhost:9002/api/1/similarity \
   -H "Content-Type: application/json" \
   -d '{
     "source": "机器学习是人工智能的子领域",
@@ -366,7 +407,70 @@ curl -X POST http://localhost:9002/api/v1/similarity \
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `score` | number | 余弦相似度分数（范围 [-1, 1]） |
+| `score` | number | 相似度分数。`cosine`（默认）范围 [-1, 1]；`dot_product` 不限范围；`euclidean` / `manhattan` 经 `1/(1+d)` 转换后范围 (0, 1] |
+
+---
+
+### 语义检索（Search）
+
+1对N 检索：给定查询文本，在候选文本列表中按相似度降序返回 Top-K。
+
+**端点:** `POST /api/1/search`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `query` | string | ✅ | 查询文本 |
+| `texts` | string[] | ✅ | 候选文本列表（≤100） |
+| `top_k` | int | ❌ | 返回条数（默认 5，上限 100） |
+
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/1/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "什么是机器学习",
+    "texts": ["机器学习是人工智能的分支", "今天的午餐是面条"],
+    "top_k": 2
+  }'
+```
+
+**响应:**
+
+```json
+{
+  "results": [
+    { "text": "机器学习是人工智能的分支", "score": 0.87, "index": 0 },
+    { "text": "今天的午餐是面条", "score": 0.32, "index": 1 }
+  ]
+}
+```
+
+---
+
+### 卸载模型（Model Unload）
+
+从模型管理缓存中卸载指定模型（不影响当前活跃引擎）。
+
+**端点:** `POST /api/1/model/unload`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `model_name` | string | ✅ | 模型名称 |
+
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/1/model/unload \
+  -H "Content-Type: application/json" \
+  -d '{"model_name": "BAAI/bge-small-zh-v1.5"}'
+```
+
+**响应:**
+
+```json
+{ "model_name": "BAAI/bge-small-zh-v1.5", "unloaded": true }
+```
 
 ---
 
@@ -376,7 +480,7 @@ curl -X POST http://localhost:9002/api/v1/similarity \
 
 根据与查询文本的相关性对文档列表进行重排序。
 
-**端点:** `POST /api/v1/rerank`
+**端点:** `POST /api/1/rerank`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -388,7 +492,7 @@ curl -X POST http://localhost:9002/api/v1/similarity \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/rerank \
+curl -X POST http://localhost:9002/api/1/rerank \
   -H "Content-Type: application/json" \
   -d '{
     "query": "什么是机器学习",
@@ -428,7 +532,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 
 #### 批量重排序
 
-**端点:** `POST /api/v1/rerank/batch`
+**端点:** `POST /api/1/rerank/batch`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -455,7 +559,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 
 获取当前加载模型的信息。
 
-**端点:** `GET /api/v1/model/current`
+**端点:** `GET /api/1/model/current`
 
 **响应:**
 
@@ -479,7 +583,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 
 获取当前加载模型的详细元数据。
 
-**端点:** `GET /api/v1/model/info`
+**端点:** `GET /api/1/model/info`
 
 **响应:**
 
@@ -511,7 +615,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 
 列出所有可用模型。
 
-**端点:** `GET /api/v1/models`
+**端点:** `GET /api/1/models`
 
 **响应:**
 
@@ -540,7 +644,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 
 切换到不同的模型。
 
-**端点:** `POST /api/v1/model/switch`
+**端点:** `POST /api/1/model/switch`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -557,7 +661,7 @@ curl -X POST http://localhost:9002/api/v1/rerank \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/v1/model/switch \
+curl -X POST http://localhost:9002/api/1/model/switch \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
   -d '{
@@ -713,6 +817,8 @@ gRPC 服务通过 `sdforge::grpc::build_server_with_config` 启动，配置项�
 | `vecboost.embed` | `grpc_embed` | `EmbedRequest` | `EmbedResponse` | 生成单个嵌入向量 |
 | `vecboost.embed_batch` | `grpc_embed_batch` | `BatchEmbedRequest` | `BatchEmbedResponse` | 批量生成嵌入向量 |
 | `vecboost.compute_similarity` | `grpc_compute_similarity` | `SimilarityRequest` | `SimilarityResponse` | 计算向量相似度 |
+| `vecboost.search` | `grpc_search` | `SearchRequest` | `SearchResponse` | 1对N 语义检索 |
+| `vecboost.model_unload` | `grpc_unload_model` | `UnloadModelRequest` | `UnloadModelResponse` | 卸载模型 |
 | `vecboost.embed_file` | `grpc_embed_file` | `FileEmbedRequest` | `FileEmbedResponse` | 文件嵌入（路径校验） |
 | `vecboost.rerank` | `grpc_rerank` | `RerankRequest` | `RerankResponse` | 按相关性重排序文档 |
 | `vecboost.rerank_batch` | `grpc_rerank_batch` | `BatchRerankRequest` | `BatchRerankResponse` | 批量重排序 |
@@ -760,7 +866,7 @@ struct BatchEmbedResponse {
 }
 ```
 
-> **⚠️ 批量大小校验**: 批量请求数量受 `validate_batch_size` 限制，上限取自 `EmbeddingConfig.max_batch_size`（默认 64）。超限时返回 `400 INVALID_INPUT`，错误信息形如 `batch size N exceeds max M (config embedding.max_batch_size)`。HTTP `/api/v1/embed/batch` 与 OpenAI 兼容 `/v1/embeddings` 批量端点均执行此校验。
+> **⚠️ 批量大小校验**: 批量请求数量受 `validate_batch_size` 限制，上限取自 `EmbeddingConfig.max_batch_size`（默认 64）。超限时返回 `400 INVALID_INPUT`，错误信息形如 `batch size N exceeds max M (config embedding.max_batch_size)`。HTTP `/api/1/embed/batch` 与 OpenAI 兼容 `/v1/embeddings` 批量端点均执行此校验。
 
 #### 相似度请求/响应
 
@@ -1008,6 +1114,37 @@ func main() {
 
 ---
 
+## 🤖 MCP 接口
+
+`mcp` feature 将嵌入能力暴露为 LLM 可调用的工具（基于 `sdforge::mcp::build()` + rmcp stdio 传输）：
+
+```bash
+# 以 stdio 模式启动 MCP 服务器（stdout 为 JSON-RPC 流，不启动 HTTP/gRPC）
+cargo run --features mcp -- --mcp
+
+# 在 MCP 客户端（如 Claude Desktop）中配置 stdio 启动命令：vecboost --mcp
+```
+
+暴露的工具：`embed` / `embed_batch` / `similarity` / `list_models`。工具由 `#[forge(tool_name = ...)]` 宏从与 REST/gRPC 相同的处理函数生成，入参/出参复用上方消息类型定义中的同名领域类型（JSON 格式）。
+
+---
+
+## 💻 CLI 工具
+
+`cli` feature 提供 clap 命令行工具（由 sdforge 从与 HTTP/gRPC 相同的处理函数生成）。`--config` 等全局参数须写在子命令之前：
+
+```bash
+cargo run --features cli -- embed --text "Hello, world!"                # 单文本嵌入
+cargo run --features cli -- embed_batch --input texts.txt               # 批量嵌入（从文件读取）
+cargo run --features cli -- compute_similarity --text1 "机器学习" --text2 "人工智能"  # 相似度
+cargo run --features cli -- search --text "查询文本" --candidates candidates.txt     # 语义检索
+cargo run --features cli -- rerank --query "什么是机器学习" --documents docs.txt     # 重排序
+```
+
+> **ℹ️ 说明**: 未知子命令会输出用法提示并退出（码 2），不再静默启动 HTTP 服务器。
+
+---
+
 ## ⚠️ 错误处理
 
 ### HTTP 状态码
@@ -1026,23 +1163,21 @@ func main() {
 
 ### 错误响应格式
 
-所有错误响应遵循统一格式：
+所有错误响应遵循统一格式，并支持国际化（i18n）：
 
 ```json
 {
-  "error": {
-    "code": "INVALID_INPUT",
-    "message": "Text input cannot be empty",
-    "details": null
-  }
+  "error": "配置错误：数据库连接超时",
+  "code": 500,
+  "error_code": "error-config"
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `code` | string | 错误码 |
-| `message` | string | 错误描述 |
-| `details` | object | 错误详情（可选） |
+| `error` | string | 错误描述（根据当前语言环境自动翻译） |
+| `code` | integer | HTTP 状态码 |
+| `error_code` | string | Fluent 消息键，用于程序化错误分类 |
 
 ---
 
@@ -1053,14 +1188,52 @@ func main() {
 | `INVALID_INPUT` | 400 | 请求参数无效 | 检查请求体格式 |
 | `UNAUTHORIZED` | 401 | 认证失败 | 获取并使用有效令牌 |
 | `FORBIDDEN` | 403 | 权限不足 | 联系管理员提升权限 |
-| `RATE_LIMITED` | 429 | 超出速率限制 | 使用指数退避重试 |
 | `MODEL_NOT_FOUND` | 404 | 模型不存在 | 检查模型名称 |
-| `INFERENCE_ERROR` | 500 | 推理失败 | 检查模型状态 |
-| `GPU_OOM` | 500 | GPU 内存不足 | 减小批处理大小或使用 CPU |
-| `FILE_NOT_FOUND` | 404 | 文件不存在 | 检查文件路径 |
+| `MODEL_LOAD_FAILED` | 424 | 模型加载失败（依赖缺失） | 检查模型文件和配置 |
+| `TOKENIZATION_ERROR` | 422 | 分词错误 | 检查输入文本编码 |
+| `RATE_LIMITED` | 429 | 超出速率限制 | 使用指数退避重试 |
+| `INFERENCE_ERROR` | 503 | 推理失败 | 检查模型状态 |
+| `GPU_OOM` | 507 | GPU/CPU 内存耗尽 | 减小批处理大小或使用 CPU |
 | `CONFIG_ERROR` | 500 | 配置错误 | 检查配置文件 |
+| `INTERNAL_ERROR` | 500 | 内部错误 | 联系管理员 |
 
 > **💡 提示**: 启用认证时，401 错误也可能表示令牌已过期。
+
+---
+
+### 🌐 国际化（i18n）
+
+VecBoost 支持中英双语错误响应，基于 ICU+Fluent 框架实现。HTTP 请求通过 `Accept-Language` 头自动切换语言，优先级如下：
+
+| 优先级 | 来源 | 示例 |
+|--------|------|------|
+| 1（最高） | `Accept-Language` 请求头（请求级） | `Accept-Language: zh-CN` |
+| 2 | `VECBOOST_LANG` 环境变量（全局默认） | `VECBOOST_LANG=zh` |
+| 3 | `LC_ALL` / `LANG` 环境变量 | `LANG=zh_CN.UTF-8` |
+| 4 | 系统 locale（`sys-locale`） | 操作系统语言设置 |
+| 5（默认） | 英文 | `en` |
+
+**错误消息示例（中文）：**
+
+```json
+{
+  "error": "验证错误：文本 index 0 长度 5000 超过限制 1024",
+  "code": 400,
+  "error_code": "error-validation"
+}
+```
+
+**同一错误的英文版本：**
+
+```json
+{
+  "error": "Validation error: text at index 0 has length 5000 exceeding limit 1024",
+  "code": 400,
+  "error_code": "error-validation"
+}
+```
+
+> **ℹ️ 说明**: `error_code` 字段是 Fluent 消息键（如 `error-config`、`error-validation`），可用于程序化错误处理，不受语言切换影响。支持的语言：`en`（英文）、`zh`（中文）。不支持的语言会自动回退到英文。
 
 ---
 
@@ -1147,4 +1320,14 @@ ip_whitelist = ["127.0.0.1"]
 
 ---
 
-> **📝 最后更新**: 2026-08-09 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+## 📚 相关文档
+
+| 文档 | 说明 |
+|:-----|:-----|
+| [📖 用户指南](USER_GUIDE.md) | 安装、配置和使用的完整说明 |
+| [🏗️ 架构设计](ARCHITECTURE.md) | 内部架构、组件与设计决策 |
+| [📋 更新日志](CHANGELOG.md) | 每个版本的变更记录 |
+
+---
+
+> **📝 最后更新**: 2026-09-06 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

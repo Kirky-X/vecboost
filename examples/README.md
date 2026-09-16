@@ -68,10 +68,10 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 - `switch` — 运行时 `EmbeddingService::switch_model`
 
 ### http — HTTP API
-- `embed_api` — HTTP POST `/api/v1/embed`
-- `batch_api` — HTTP POST `/api/v1/embed/batch`
-- `similarity_api` — HTTP POST `/api/v1/similarity`
-- `rerank_api` — HTTP POST `/api/v1/rerank`
+- `embed_api` — HTTP POST `/api/1/embed`
+- `batch_api` — HTTP POST `/api/1/embed/batch`
+- `similarity_api` — HTTP POST `/api/1/similarity`
+- `rerank_api` — HTTP POST `/api/1/rerank`
 
 ### cli — 命令行工具
 - `embed_cli` — 调用 `vecboost embed --text "hello"`

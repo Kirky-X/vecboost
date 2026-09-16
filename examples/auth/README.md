@@ -13,7 +13,7 @@ cargo build --features auth,http
 
 | 示例 | 说明 | 核心 API |
 |------|------|----------|
-| `jwt_auth.rs` | JWT 登录、token 验证与撤销 | `GarrisonManager::init` + `GarrisonUtil::login_simple` |
+| `jwt_auth.rs` | JWT 登录、token 验证与撤销 | `GarrisonManager::builder` + `GarrisonUtil::login_simple` |
 | `csrf.rs` | CSRF 配置与 token 生成/校验 | `GarrisonCsrfConfig` + `generate_csrf_token` |
 | `refresh.rs` | Token 刷新（创建新会话 + 撤销旧会话） | `GarrisonUtil::get_login_id_by_token` + `revoke_token` |
 
@@ -37,14 +37,15 @@ cargo build --release --features auth,http --example jwt_auth
 
 ## API 参考
 
-### GarrisonManager（全局单例初始化）
+### GarrisonManager（全局单例初始化，garrison 0.9 builder 链）
 
 ```rust
-GarrisonManager::init(
-    dao: Arc<dyn GarrisonDao>,       // 数据层（GarrisonDaoOxcache = 内存）
-    config: Arc<GarrisonConfig>,     // 框架配置（timeout, jwt_secret 等）
-    interface: Arc<dyn GarrisonInterface>,  // 业务适配（权限/角色映射）
-) -> GarrisonResult<()>
+GarrisonManager::builder()
+    .dao(dao: Arc<dyn GarrisonDao>)                    // 数据层（GarrisonDaoOxcache = 内存）
+    .config(config: Arc<GarrisonConfig>)               // 框架配置（timeout, jwt_secret 等）
+    .interface(interface: Arc<dyn GarrisonInterface>)  // 业务适配（权限/角色映射）
+    .build()                                           // 异步：注入全局单例 + 启动后台 task
+    .await?;
 ```
 
 ### GarrisonUtil（静态工具方法）

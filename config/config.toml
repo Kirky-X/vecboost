@@ -6,13 +6,25 @@
 # ============ 服务配置 ============
 [server]
 # 服务绑定地址
-host = "0.0.0.0"
+# 安全默认:仅监听回环地址。auth.enabled=false 时绑定非回环地址会拒绝启动
+# (容器等受信网络场景可设 VECBOOST_ALLOW_INSECURE=1 显式越过,见 README)
+host = "127.0.0.1"
 
 # 服务端口号
 port = 9002
 
 # 请求超时时间 (秒)
 timeout = 30
+
+# CORS 跨域开关（默认 false）；允许来源列表
+#
+# ⚠️ 通配符 "*" 语义说明:
+#   - cors_allow_origins = ["*"] 允许任意来源跨域调用,同时放行 Authorization 头
+#   - 意味着任何网页都能以用户自己的 JWT token 调用 API,等同于公开接口
+#   - 生产环境务必显式列出可信来源,例如 ["https://app.example.com"]
+#   - 开发/内网测试可使用 "*",但切勿在公网暴露的服务上启用
+# cors_enabled = false
+# cors_allow_origins = ["*"]
 
 # ============ 模型配置 ============
 [model]
@@ -26,10 +38,11 @@ model_revision = "main"
 # model_path = "models/bge-m3-st"
 
 # 是否使用 GPU 加速
-# 注意：需要启用相应的 cargo feature
+# 安全/可用性默认:false。默认构建不含 GPU feature,置 true 会在无 GPU 环境回退 CPU 并告警。
+# 需要启用时先以相应 cargo feature 构建:
 # - CUDA: cargo build --features cuda
 # - Metal (macOS): cargo build --features metal
-use_gpu = true
+use_gpu = false
 
 # 批处理大小
 batch_size = 32
@@ -44,6 +57,17 @@ max_sequence_length = 8192
 # 可选值: fp32 / fp16 / bf16 / int8
 # bf16 仅 CUDA Ampere+ GPU 支持，其他设备自动回退 fp32
 # precision = "fp32"
+
+# GGUF 量化模型开关 (可选，默认 false)
+# true 且 model_path 指向 .gguf 文件时选用量化引擎（Q8_0/Q4_K）；
+# 需要以 `--features quantized-gguf` 构建；质量门见 docs/PERFORMANCE.md「GGUF 量化」节
+# quantized = false
+
+# 最大驻留模型数 (T019, 可选，默认不限制): 超限按 LFRU 驱逐 score 最低者
+# max_resident_models = 4
+
+# 驻留内存预算 MB (T019, 可选，默认不限制): 超预算硬驱逐（忽略迟滞）
+# resident_memory_budget_mb = 8192
 
 # ============ 向量化配置 ============
 [embedding]
@@ -73,6 +97,13 @@ max_batch_size = 64
 
 # 单个文本最大字节长度 (防止资源耗尽攻击)
 max_text_length = 8192
+
+# embedding 缓存 WAL 落盘路径 (T021): 设置后每次插入两段追加落盘，
+# 重启回放重建缓存；默认不设置 = 纯内存
+# persist_path = "data/embedding_cache.wal"
+
+# WAL 紧凑化阈值字节数 (T022): 超过即启动时快照重写；默认 1 GiB
+# persist_max_bytes = 1073741824
 
 # ============ 监控配置 ============
 [monitoring]
@@ -168,6 +199,10 @@ window_secs = 60
 # 支持单个 IP 和 CIDR 表示法，例如: "127.0.0.1", "192.168.1.0/24"
 ip_whitelist = ["127.0.0.1", "::1"]
 
+# 注入 IETF RateLimit-* 响应头 (RateLimit-Limit/Remaining/Reset/Policy,
+# 429 响应额外携带 Retry-After)，便于客户端按标准头做退避
+headers_enabled = false
+
 # ============ 数据库配置 (dbnexus, 需要 db feature) ============
 [database]
 # 数据库连接 URL
@@ -181,12 +216,13 @@ max_connections = 10
 # 连接超时 (秒)
 connect_timeout_secs = 5
 
-# ============ 日志配置 (inklog, 需要 inklog feature) ============
+# ============ 日志配置 (inklog，v0.3.0 起生效) ============
 [logging]
 # 日志级别: trace, debug, info, warn, error
 level = "info"
 
-# 是否输出到控制台
+# 是否输出到控制台（注：上游 inklog 缺陷导致运行期关闭暂不生效；
+# CLI/MCP 模式下日志自动改道 stderr，不受此字段影响）
 console = true
 
 # 日志文件路径 (空字符串表示不写入文件)
@@ -198,7 +234,20 @@ rotation_size_mb = 100
 # 保留的日志文件数量
 max_files = 10
 
+# 文件日志采样（高频日志降盘压；只作用于文件 sink）
+[logging.sampling]
+# 启用采样
+enabled = false
+# 级别阈值：≥ 该级别的记录直接放行 (trace/debug/info/warn/error/fatal)
+min_level = "info"
+# 低于阈值的记录 N 取 1 (1 表示全放行)
+sample_every_n = 10
+# 豁免关键词（大小写不敏感子串匹配，命中即放行）
+keyword_whitelist = []
+
 # ============ 流控配置 (limiteron, 需要 limiteron feature) ============
+# ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。
+# 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
 [flow_control]
 # 是否启用流控
 enabled = true
@@ -216,6 +265,8 @@ circuit_breaker_failure_threshold = 0.5
 circuit_breaker_recovery_secs = 30
 
 # ============ 缓存配置 (oxcache, 需要 oxcache feature) ============
+# ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。
+# 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
 [cache]
 # 是否启用缓存
 enabled = true
@@ -232,8 +283,19 @@ ttl_secs = 3600
 # 驱逐策略: lru, lfu, fifo
 eviction_policy = "lru"
 
+# 语义缓存向量比较模式: exact（默认，行为不变）| i8 | binary —— 见 [embedding] 段说明，
+# 实际生效配置见上方各段；本段为展示段不生效。
+# comparison_mode = "exact"
+
+# ⚠️ WAL 落盘示例已移至 [embedding] 段（persist_path / persist_max_bytes，该段真实生效）。
+
 # ============ 设备配置 ============
+# ✅ 本段由 AppConfig 解析（T024 接线）。
 [device]
+# 硬件感知启动规划 (T024): true 时用探测计划填充未显式配置的字段，
+# 任何显式配置优先于计划；计划全文进启动日志。默认 false（零计划行为）
+# auto_plan = false
+
 # 优先使用的设备类型
 # 可选值:
 #   - cpu: CPU 计算
@@ -247,6 +309,8 @@ preferred = "auto"
 gpu_memory_reservation = 0.1
 
 # ============ 高级配置 ============
+# ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。
+# 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
 [advanced]
 # 是否启用 ONNX Runtime 作为备用引擎
 onnx_fallback_enabled = true

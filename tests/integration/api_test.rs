@@ -118,6 +118,7 @@ async fn test_similarity_calculation() -> Result<(), Box<dyn std::error::Error>>
     let req = SimilarityRequest {
         source: "machine learning".to_string(),
         target: "deep learning".to_string(),
+        metric: None,
     };
 
     let result = service.process_similarity(req).await?;
@@ -146,11 +147,13 @@ async fn test_embedding_determinism() -> Result<(), Box<dyn std::error::Error>> 
     let req1 = SimilarityRequest {
         source: "aaaa".to_string(),
         target: "aaab".to_string(),
+        metric: None,
     };
 
     let req2 = SimilarityRequest {
         source: "aaaa".to_string(),
         target: "bbbb".to_string(),
+        metric: None,
     };
 
     let sim_similar = service.process_similarity(req1).await?.score;
@@ -553,6 +556,7 @@ async fn test_real_test_engine_similarity() {
         .process_similarity(SimilarityRequest {
             source: similar_text1.to_string(),
             target: similar_text2.to_string(),
+            metric: None,
         })
         .await
         .unwrap();
@@ -561,6 +565,7 @@ async fn test_real_test_engine_similarity() {
         .process_similarity(SimilarityRequest {
             source: similar_text1.to_string(),
             target: different_text.to_string(),
+            metric: None,
         })
         .await
         .unwrap();

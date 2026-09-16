@@ -16,6 +16,8 @@
 pub mod auth;
 pub mod embedding;
 pub mod init;
+#[cfg(feature = "http")]
+pub mod rejection_normalize;
 pub mod rerank;
 #[cfg(test)]
 mod tests;

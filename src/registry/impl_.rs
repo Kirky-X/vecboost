@@ -47,6 +47,7 @@ use crate::{
 
 impl ModuleMeta for EmbeddingModule {
     const NAME: &'static str = "embedding";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -65,7 +66,7 @@ impl AsyncAutoBuilder for EmbeddingModule {
 }
 
 // ---------------------------------------------------------------------------
-// EmbeddingModule — lifecycle + health (Phase 3)
+// EmbeddingModule — lifecycle + health
 // ---------------------------------------------------------------------------
 
 impl AsyncLifecycle for EmbeddingModule {
@@ -92,6 +93,7 @@ impl AsyncHealthCheck for EmbeddingModule {
 
 impl ModuleMeta for RerankModule {
     const NAME: &'static str = "rerank";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -133,6 +135,7 @@ impl AsyncHealthCheck for RerankModule {
 #[cfg(feature = "auth")]
 impl ModuleMeta for AuthModule {
     const NAME: &'static str = "auth";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -157,6 +160,7 @@ impl AsyncAutoBuilder for AuthModule {
 
 impl ModuleMeta for RateLimitModule {
     const NAME: &'static str = "rate_limit";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -175,7 +179,7 @@ impl AsyncAutoBuilder for RateLimitModule {
 }
 
 // ---------------------------------------------------------------------------
-// RateLimitModule — health + lifecycle (Phase 3)
+// RateLimitModule — health + lifecycle
 // ---------------------------------------------------------------------------
 
 impl AsyncHealthCheck for RateLimitModule {
@@ -216,6 +220,7 @@ impl AsyncLifecycle for RateLimitModule {
 
 impl ModuleMeta for CacheModule {
     const NAME: &'static str = "cache";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -239,7 +244,7 @@ impl AsyncAutoBuilder for CacheModule {
 }
 
 // ---------------------------------------------------------------------------
-// CacheModule — health (Phase 3)
+// CacheModule — health
 // ---------------------------------------------------------------------------
 
 impl AsyncHealthCheck for CacheModule {
@@ -260,6 +265,7 @@ impl AsyncHealthCheck for CacheModule {
 
 impl ModuleMeta for DbModule {
     const NAME: &'static str = "db";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -283,6 +289,7 @@ impl AsyncAutoBuilder for DbModule {
 
 impl ModuleMeta for AuditModule {
     const NAME: &'static str = "audit";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -301,7 +308,7 @@ impl AsyncAutoBuilder for AuditModule {
 }
 
 // ---------------------------------------------------------------------------
-// AuditModule — lifecycle (Phase 3)
+// AuditModule — lifecycle
 // ---------------------------------------------------------------------------
 
 impl AsyncLifecycle for AuditModule {
@@ -318,7 +325,7 @@ impl AsyncLifecycle for AuditModule {
 }
 
 // ===========================================================================
-// v0.3.0 D3 重构：覆盖 VecboostState 剩余字段的 13 个 Module 实现
+// 覆盖 VecboostState 剩余字段的 13 个 Module 实现
 //
 // 设计原则与现有 6 个 Module 保持一致：
 //   - 复杂类型（Arc<T>、Option<Arc<T>>、Vec<String>）→ `kit.config::<Self::Capability>()`
@@ -334,6 +341,7 @@ impl AsyncLifecycle for AuditModule {
 #[cfg(feature = "auth")]
 impl ModuleMeta for CsrfConfigModule {
     const NAME: &'static str = "csrf_config";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -358,6 +366,7 @@ impl AsyncAutoBuilder for CsrfConfigModule {
 
 impl ModuleMeta for MetricsCollectorModule {
     const NAME: &'static str = "metrics_collector";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -382,6 +391,7 @@ impl AsyncAutoBuilder for MetricsCollectorModule {
 #[cfg(feature = "http")]
 impl ModuleMeta for PrometheusCollectorModule {
     const NAME: &'static str = "prometheus_collector";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -406,6 +416,7 @@ impl AsyncAutoBuilder for PrometheusCollectorModule {
 
 impl ModuleMeta for IpWhitelistModule {
     const NAME: &'static str = "ip_whitelist";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -429,6 +440,7 @@ impl AsyncAutoBuilder for IpWhitelistModule {
 
 impl ModuleMeta for PipelineQueueModule {
     const NAME: &'static str = "pipeline_queue";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -452,6 +464,7 @@ impl AsyncAutoBuilder for PipelineQueueModule {
 
 impl ModuleMeta for ResponseChannelModule {
     const NAME: &'static str = "response_channel";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -475,6 +488,7 @@ impl AsyncAutoBuilder for ResponseChannelModule {
 
 impl ModuleMeta for PriorityCalculatorModule {
     const NAME: &'static str = "priority_calculator";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -498,6 +512,7 @@ impl AsyncAutoBuilder for PriorityCalculatorModule {
 
 impl ModuleMeta for WorkerManagerModule {
     const NAME: &'static str = "worker_manager";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -516,11 +531,12 @@ impl AsyncAutoBuilder for WorkerManagerModule {
 }
 
 // ---------------------------------------------------------------------------
-// ConfigWatcherModule — confers watch 集成 (Phase 8)
+// ConfigWatcherModule — confers watch 集成
 // ---------------------------------------------------------------------------
 
 impl ModuleMeta for ConfigWatcherModule {
     const NAME: &'static str = "config_watcher";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]
@@ -555,5 +571,173 @@ impl AsyncLifecycle for ConfigWatcherModule {
                 log::error!("ConfigWatcherModule: error during watcher shutdown: {}", e);
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod impl_tests {
+    use super::*;
+    use crate::config::model::Precision;
+    use crate::engine::InferenceEngine;
+    use crate::error::VecboostError;
+    use async_trait::async_trait;
+
+    struct TestMockEngine;
+
+    #[async_trait]
+    impl InferenceEngine for TestMockEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.0; 128])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.0; 128]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &crate::config::model::ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    // -- ModuleMeta NAME constants --
+    #[test]
+    fn test_embedding_module_name() {
+        assert_eq!(EmbeddingModule::NAME, "embedding");
+    }
+
+    #[test]
+    fn test_rerank_module_name() {
+        assert_eq!(RerankModule::NAME, "rerank");
+    }
+
+    #[test]
+    fn test_rate_limit_module_name() {
+        assert_eq!(RateLimitModule::NAME, "rate_limit");
+    }
+
+    #[test]
+    fn test_cache_module_name() {
+        assert_eq!(CacheModule::NAME, "cache");
+    }
+
+    #[test]
+    fn test_db_module_name() {
+        assert_eq!(DbModule::NAME, "db");
+    }
+
+    #[test]
+    fn test_audit_module_name() {
+        assert_eq!(AuditModule::NAME, "audit");
+    }
+
+    #[test]
+    fn test_metrics_collector_module_name() {
+        assert_eq!(MetricsCollectorModule::NAME, "metrics_collector");
+    }
+
+    #[test]
+    fn test_ip_whitelist_module_name() {
+        assert_eq!(IpWhitelistModule::NAME, "ip_whitelist");
+    }
+
+    #[test]
+    fn test_pipeline_queue_module_name() {
+        assert_eq!(PipelineQueueModule::NAME, "pipeline_queue");
+    }
+
+    #[test]
+    fn test_response_channel_module_name() {
+        assert_eq!(ResponseChannelModule::NAME, "response_channel");
+    }
+
+    #[test]
+    fn test_priority_calculator_module_name() {
+        assert_eq!(PriorityCalculatorModule::NAME, "priority_calculator");
+    }
+
+    #[test]
+    fn test_worker_manager_module_name() {
+        assert_eq!(WorkerManagerModule::NAME, "worker_manager");
+    }
+
+    #[test]
+    fn test_config_watcher_module_name() {
+        assert_eq!(ConfigWatcherModule::NAME, "config_watcher");
+    }
+
+    #[cfg(feature = "auth")]
+    #[test]
+    fn test_auth_module_name() {
+        assert_eq!(AuthModule::NAME, "auth");
+    }
+
+    #[cfg(feature = "auth")]
+    #[test]
+    fn test_csrf_config_module_name() {
+        assert_eq!(CsrfConfigModule::NAME, "csrf_config");
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_prometheus_collector_module_name() {
+        assert_eq!(PrometheusCollectorModule::NAME, "prometheus_collector");
+    }
+
+    // -- ModuleMeta dependencies (all should be empty) --
+    #[test]
+    fn test_all_modules_have_no_dependencies() {
+        assert!(EmbeddingModule::dependencies().is_empty());
+        assert!(RerankModule::dependencies().is_empty());
+        assert!(RateLimitModule::dependencies().is_empty());
+        assert!(CacheModule::dependencies().is_empty());
+        assert!(DbModule::dependencies().is_empty());
+        assert!(AuditModule::dependencies().is_empty());
+        assert!(MetricsCollectorModule::dependencies().is_empty());
+        assert!(IpWhitelistModule::dependencies().is_empty());
+        assert!(PipelineQueueModule::dependencies().is_empty());
+        assert!(ResponseChannelModule::dependencies().is_empty());
+        assert!(PriorityCalculatorModule::dependencies().is_empty());
+        assert!(WorkerManagerModule::dependencies().is_empty());
+        assert!(ConfigWatcherModule::dependencies().is_empty());
+    }
+
+    // -- AsyncHealthCheck implementations --
+    #[test]
+    fn test_embedding_health_check_always_healthy() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestMockEngine));
+        let service = crate::service::embedding::EmbeddingService::new(engine, None);
+        let cap: <EmbeddingModule as AsyncAutoBuilder>::Capability = Arc::new(RwLock::new(service));
+        let status = <EmbeddingModule as AsyncHealthCheck>::check(&cap);
+        assert!(matches!(status, HealthStatus::Healthy));
+    }
+
+    #[test]
+    fn test_rerank_health_check_always_healthy() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestMockEngine));
+        let service = crate::service::rerank::RerankService::new(engine, None);
+        let cap: <RerankModule as AsyncAutoBuilder>::Capability = Arc::new(RwLock::new(service));
+        let status = <RerankModule as AsyncHealthCheck>::check(&cap);
+        assert!(matches!(status, HealthStatus::Healthy));
+    }
+
+    #[test]
+    fn test_cache_health_check_enabled() {
+        let status = <CacheModule as AsyncHealthCheck>::check(&true);
+        assert!(matches!(status, HealthStatus::Healthy));
+    }
+
+    #[test]
+    fn test_cache_health_check_disabled() {
+        let status = <CacheModule as AsyncHealthCheck>::check(&false);
+        assert!(matches!(status, HealthStatus::Degraded { .. }));
     }
 }

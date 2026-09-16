@@ -92,7 +92,6 @@ impl TensorPool {
                 let pool_size = self.config.pool_size_per_shape;
 
                 for _ in 0..pool_size {
-                    // 先创建张量
                     let tensor_result: Result<Tensor, VecboostError> = {
                         let size = batch_size * seq_len;
                         let data = vec![0i64; size];
@@ -106,7 +105,6 @@ impl TensorPool {
                                 ))
                             })?;
 
-                        // 更新内存统计
                         let tensor_size = (batch_size * seq_len * 8) as u64; // i64 = 8 bytes
                         self.total_memory_bytes
                             .fetch_add(tensor_size, Ordering::Relaxed);
@@ -141,7 +139,6 @@ impl TensorPool {
 
     /// 获取张量
     pub fn acquire(&mut self, batch_size: usize, seq_len: usize) -> Result<Tensor, VecboostError> {
-        // 验证参数
         if batch_size > self.max_batch_size {
             return Err(VecboostError::InvalidInput(format!(
                 "Batch size {} exceeds maximum {}",
@@ -158,7 +155,6 @@ impl TensorPool {
 
         let key = (batch_size, seq_len);
 
-        // 尝试从池中获取
         if let Some(pool) = self.pools.get_mut(&key)
             && let Some(tensor) = pool.pop_front()
         {
@@ -171,7 +167,6 @@ impl TensorPool {
             return Ok(tensor);
         }
 
-        // 池中没有，创建新的
         self.stats.cache_misses += 1;
         self.stats.total_allocations += 1;
         debug!(
@@ -190,7 +185,6 @@ impl TensorPool {
 
         let pool = self.pools.get_mut(&key).unwrap();
 
-        // 如果池未满，则放回池中
         if pool.len() < self.config.pool_size_per_shape {
             pool.push_back(tensor);
             self.stats.total_releases += 1;
@@ -201,7 +195,6 @@ impl TensorPool {
         } else {
             // 池已满，直接丢弃（Tensor 会被 Drop）
             self.stats.total_releases += 1;
-            // 更新内存统计
             let tensor_size = (batch_size * seq_len * 8) as u64; // i64 = 8 bytes
             self.total_memory_bytes
                 .fetch_sub(tensor_size, Ordering::Relaxed);
@@ -224,7 +217,6 @@ impl TensorPool {
                 VecboostError::InferenceError(format!("Failed to reshape tensor: {}", e))
             })?;
 
-        // 更新内存统计
         let tensor_size = (batch_size * seq_len * 8) as u64; // i64 = 8 bytes
         self.total_memory_bytes
             .fetch_add(tensor_size, Ordering::Relaxed);
@@ -287,15 +279,12 @@ mod tests {
 
         let mut pool = TensorPool::new(device, config);
 
-        // 获取张量
         let tensor = pool.acquire(16, 256).unwrap();
         assert_eq!(pool.get_stats().cache_misses, 1);
 
-        // 释放张量
         pool.release(tensor, 16, 256);
         assert_eq!(pool.get_stats().total_releases, 1);
 
-        // 再次获取，应该从池中获取
         let _tensor2 = pool.acquire(16, 256).unwrap();
         assert_eq!(pool.get_stats().cache_hits, 1);
     }
@@ -331,7 +320,6 @@ mod tests {
 
         let mut pool = TensorPool::new(device, config);
 
-        // 尝试获取超过最大批次的张量
         let result = pool.acquire(32, 256);
         assert!(result.is_err());
     }

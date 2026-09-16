@@ -16,7 +16,6 @@ use crate::api::init::state;
 use crate::auth::middleware::AuthContext;
 use crate::auth::{AuthResponse, GarrisonUtil, LoginRequest, RefreshTokenRequest};
 use crate::registry::{AuditModule, AuthModule};
-use garrison::account::credential::password::PasswordVerifier;
 use std::net::SocketAddr;
 
 #[cfg(feature = "http")]
@@ -43,7 +42,7 @@ pub async fn forge_login(
         .kit
         .require::<AuthModule>()
         .map_err(kit_internal_error)?
-        .ok_or_else(|| kit_internal_error("auth disabled at runtime"))?;
+        .ok_or_else(|| kit_internal_error(crate::i18n::tr("auth-disabled")))?;
     let audit_logger = st
         .kit
         .require::<AuditModule>()
@@ -52,44 +51,57 @@ pub async fn forge_login(
     let peer_ip = connect_info.0.ip().to_string();
 
     crate::auth::validate_username_format(&req.username).map_err(|e| ApiError::InvalidInput {
-        message: e.to_string(),
+        message: e.error_detail().to_string(),
         field: Some("username".to_string()),
         value: None,
     })?;
 
-    // 拒绝空密码（基本安全检查）
     if req.password.is_empty() {
         return Err(ApiError::InvalidInput {
-            message: "password must not be empty".to_string(),
+            message: crate::i18n::tr("auth-password-empty"),
             field: Some("password".to_string()),
             value: None,
         });
     }
 
-    // 校验 admin 密码（通过 garrison PasswordVerifier 自动识别 Argon2/Bcrypt）
-    if let Some(ref hash) = auth_handle.admin_password_hash {
-        let verified = PasswordVerifier::verify(&req.password, hash).map_err(|e| {
-            log::error!("Password verification internal error: {}", e);
-            kit_internal_error("password verification failed")
-        })?;
-        if !verified {
+    // 单管理员登录判定(纯函数,见 verify_login_decision 测试):
+    // 非 admin 用户名/错误密码 → 401;无哈希配置(启动闸门漏网)→ 503。
+    let decision = crate::auth::verify_login_decision(&auth_handle, &req.username, &req.password);
+    // garrison metrics-prometheus：garrison_login_total 计数（vecboost 登录走自有
+    // forge_login，不进 garrison 内部 login 路径，此处补齐指标口径）
+    let metrics = garrison::observability::GarrisonMetrics::new();
+    match decision {
+        crate::auth::LoginDecision::Authenticated => {}
+        crate::auth::LoginDecision::InvalidCredentials => {
+            metrics.record_login(false);
             if let Some(logger) = audit_logger {
-                logger.log_login_failed(&req.username, Some(peer_ip.clone()), "invalid password");
+                logger.log_login_failed(
+                    &req.username,
+                    Some(peer_ip.clone()),
+                    "invalid credentials",
+                );
             }
             return Err(ApiError::AuthenticationFailed {
-                reason: "Invalid username or password".to_string(),
+                reason: crate::i18n::tr("auth-invalid-credentials"),
             });
         }
-    } else {
-        log::warn!(
-            "No admin password configured — issuing token for user '{}' without password verification",
-            req.username
-        );
+        crate::auth::LoginDecision::AdminPasswordMissing => {
+            log::error!(
+                "Login rejected: auth is enabled but no admin password is configured (missing \
+                 VECBOOST_ADMIN_PASSWORD). This should have failed at startup."
+            );
+            return Err(ApiError::service_unavailable_with_source(
+                "auth",
+                None,
+                std::io::Error::other(crate::i18n::tr("auth-admin-password-missing")),
+            ));
+        }
     }
 
     // 通过 garrison 创建会话（login_id = username）
     match GarrisonUtil::login_simple(&req.username).await {
         Ok(token) => {
+            metrics.record_login(true);
             if let Some(logger) = audit_logger {
                 logger.log_login_success(&req.username, Some(peer_ip.clone()));
             }
@@ -130,16 +142,15 @@ pub async fn forge_refresh(
         .kit
         .require::<AuthModule>()
         .map_err(kit_internal_error)?
-        .ok_or_else(|| kit_internal_error("auth disabled at runtime"))?;
+        .ok_or_else(|| kit_internal_error(crate::i18n::tr("auth-disabled")))?;
     let audit_logger = st
         .kit
         .require::<AuditModule>()
         .map_err(kit_internal_error)?;
 
-    // 输入验证：拒绝空 refresh_token
     if req.refresh_token.is_empty() {
         return Err(ApiError::InvalidInput {
-            message: "refresh_token must not be empty".to_string(),
+            message: crate::i18n::tr("auth-refresh-token-empty"),
             field: Some("refresh_token".to_string()),
             value: None,
         });
@@ -156,12 +167,11 @@ pub async fn forge_refresh(
             to_api_error(e.into())
         })?
         .ok_or_else(|| ApiError::InvalidInput {
-            message: "Invalid or expired token".to_string(),
+            message: crate::i18n::tr("auth-invalid-token"),
             field: Some("refresh_token".to_string()),
             value: None,
         })?;
 
-    // 先创建新会话
     let new_token = GarrisonUtil::login_simple(&login_id)
         .await
         .map_err(|e| to_api_error(e.into()))?;
@@ -205,7 +215,7 @@ pub async fn forge_logout(
         .kit
         .require::<AuthModule>()
         .map_err(kit_internal_error)?
-        .ok_or_else(|| kit_internal_error("auth disabled at runtime"))?;
+        .ok_or_else(|| kit_internal_error(crate::i18n::tr("auth-disabled")))?;
     let audit_logger = st
         .kit
         .require::<AuditModule>()
@@ -221,7 +231,7 @@ pub async fn forge_logout(
         logger.log_logout(&auth_ctx.user.username, Some(peer_ip));
     }
 
-    Ok("Logout successful. Token has been revoked.".to_string())
+    Ok(crate::i18n::tr("logout-success"))
 }
 
 #[cfg(feature = "http")]

@@ -9,6 +9,10 @@ on:
   schedule:
     - cron: '0 0 * * 0'
 
+# 最小权限:顶层只读,analyze job 单独声明 security-events: write
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: CodeQL analysis

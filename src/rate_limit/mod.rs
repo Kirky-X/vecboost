@@ -15,3 +15,6 @@ pub(crate) mod limiteron_adapter;
 pub use ip_whitelist::is_ip_whitelisted;
 pub use limiteron::matchers::RequestContext;
 pub use limiteron_adapter::{LimiteronAdapter, RateLimitSettings};
+
+// Re-export limiteron 高级特性类型（limiteron 为非可选依赖，特性始终启用）
+pub use limiteron::{AuditEvent, AuditLogConfig, AuditLogStats, AuditLogger};

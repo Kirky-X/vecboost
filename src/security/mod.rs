@@ -82,11 +82,14 @@ impl SecurityConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::utils::test_env_lock::{env_lock, env_lock_async};
+
     use super::*;
     use crate::config::app::test_support::ENV_LOCK;
 
     #[test]
     fn test_security_config_default() {
+        let _env = env_lock();
         let config = SecurityConfig::default();
         assert_eq!(config.storage_type, StorageType::Environment);
         assert!(config.encryption_key.is_none());
@@ -95,6 +98,7 @@ mod tests {
 
     #[test]
     fn test_storage_type_equality() {
+        let _env = env_lock();
         assert_eq!(StorageType::Environment, StorageType::Environment);
         assert_eq!(StorageType::EncryptedFile, StorageType::EncryptedFile);
         assert_ne!(StorageType::Environment, StorageType::EncryptedFile);
@@ -102,6 +106,7 @@ mod tests {
 
     #[test]
     fn test_security_config_from_env_default() {
+        let _env = env_lock();
         // Clear env vars to ensure default behavior
         unsafe {
             std::env::remove_var("VECBOOST_KEY_STORAGE_TYPE");
@@ -117,6 +122,7 @@ mod tests {
 
     #[test]
     fn test_security_config_from_env_encrypted_file() {
+        let _env = env_lock();
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var("VECBOOST_KEY_STORAGE_TYPE", "encrypted_file");
@@ -139,6 +145,7 @@ mod tests {
 
     #[test]
     fn test_security_config_from_env_case_insensitive() {
+        let _env = env_lock();
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var("VECBOOST_KEY_STORAGE_TYPE", "ENCRYPTED_FILE");
@@ -155,6 +162,7 @@ mod tests {
 
     #[test]
     fn test_security_config_from_env_unknown_type_defaults_to_env() {
+        let _env = env_lock();
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var("VECBOOST_KEY_STORAGE_TYPE", "unknown_type");
@@ -171,12 +179,14 @@ mod tests {
 
     #[test]
     fn test_security_config_validate_environment_ok() {
+        let _env = env_lock();
         let config = SecurityConfig::default();
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_security_config_validate_encrypted_file_missing_key() {
+        let _env = env_lock();
         let config = SecurityConfig {
             storage_type: StorageType::EncryptedFile,
             encryption_key: None,
@@ -191,6 +201,7 @@ mod tests {
 
     #[test]
     fn test_security_config_validate_encrypted_file_missing_path() {
+        let _env = env_lock();
         let config = SecurityConfig {
             storage_type: StorageType::EncryptedFile,
             encryption_key: Some("key".to_string()),
@@ -205,6 +216,7 @@ mod tests {
 
     #[test]
     fn test_security_config_validate_encrypted_file_complete() {
+        let _env = env_lock();
         let config = SecurityConfig {
             storage_type: StorageType::EncryptedFile,
             encryption_key: Some("key".to_string()),
@@ -215,6 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_key_store_environment() {
+        let _env = env_lock_async().await;
         let config = SecurityConfig::default();
         let store = create_key_store(&config).await;
         assert!(store.is_ok());
@@ -222,6 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_key_store_invalid_encrypted_file_no_auth() {
+        let _env = env_lock_async().await;
         // Without both key and path, should return Invalid configuration error
         let config = SecurityConfig {
             storage_type: StorageType::EncryptedFile,

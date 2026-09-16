@@ -142,3 +142,13 @@ TEST_MODES.md
 strix_runs/
 security-results/
 .corrupted_backup/
+.mimosa/
+tests/scenario/run/
+# Local-only test/spike reports (do not commit)
+tests/scenario/report.md
+tests/integration/bf16_spike.md
+# Local-only i18n audit report (do not commit)
+docs/I18N_MISSING_AUDIT.md
+
+# 运行时状态（T035 审查安全9）：模型热度表 / embedding WAL / autotune 指纹
+data/

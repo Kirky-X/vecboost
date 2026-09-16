@@ -126,10 +126,8 @@ impl SmartGpuMemoryManager {
             .get(model_name)
             .ok_or_else(|| format!("Model '{}' not registered", model_name))?;
 
-        // 确保序列长度不超过模型限制
         let sequence_length = std::cmp::min(sequence_length, requirements.max_sequence_length);
 
-        // 计算可用内存
         let available_memory = self.available_memory();
         let safety_memory = (self.device_total_memory as f64 * self.config.safety_threshold) as u64;
         let usable_memory = std::cmp::min(available_memory, safety_memory);
@@ -175,7 +173,6 @@ impl SmartGpuMemoryManager {
             return;
         }
 
-        // 记录性能样本
         let sample = PerformanceSample {
             timestamp: std::time::Instant::now(),
             batch_size: self.current_batch_size,
@@ -186,12 +183,10 @@ impl SmartGpuMemoryManager {
 
         self.performance_history.push(sample);
 
-        // 保持历史记录大小
         if self.performance_history.len() > 100 {
             self.performance_history.remove(0);
         }
 
-        // 分析最近性能
         let recent_samples: Vec<&PerformanceSample> =
             self.performance_history.iter().rev().take(10).collect();
 
@@ -208,7 +203,6 @@ impl SmartGpuMemoryManager {
             .sum::<f64>()
             / recent_samples.len() as f64;
 
-        // 调整逻辑
         let mut new_batch_size = self.current_batch_size;
 
         if avg_latency < 30.0 && avg_memory < 70.0 {
@@ -420,7 +414,6 @@ mod tests {
 
         let memory = requirements.calculate_memory_for_batch(32, 256, 1024);
 
-        // 计算预期值
         let input_memory = 100_000_000 + (32 * 256 * 1000) as u64;
         let output_memory = 32 * 1024 * 4000;
         let expected = input_memory + output_memory;
@@ -460,7 +453,6 @@ mod tests {
 
         let mut manager = SmartGpuMemoryManager::new(8 * 1024 * 1024 * 1024, config);
 
-        // 初始批量大小
         assert_eq!(manager.current_batch_size, 16);
 
         // 良好性能，应该增加批量
@@ -479,7 +471,6 @@ mod tests {
         let config = GpuMemoryConfig::default();
         let manager = SharedGpuMemoryManager::new(8 * 1024 * 1024 * 1024, config);
 
-        // 测试并发访问
         let manager_clone = manager.clone();
         let handle = tokio::spawn(async move { manager_clone.allocate(100_000_000).await });
 

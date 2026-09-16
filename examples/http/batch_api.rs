@@ -27,11 +27,11 @@ struct BatchEmbedResponseBody {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🚀 HTTP POST /api/v1/embed/batch 示例");
+    println!("🚀 HTTP POST /api/1/embed/batch 示例");
     println!("=====================================\n");
 
     let client = Client::new();
-    let url = "http://localhost:9002/api/v1/embed/batch";
+    let url = "http://localhost:9002/api/1/embed/batch";
     let body = BatchEmbedRequestBody {
         texts: vec!["hello".to_string(), "world".to_string()],
         normalize: true,

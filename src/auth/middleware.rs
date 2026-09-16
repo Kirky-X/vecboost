@@ -16,13 +16,47 @@ use axum::{
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
+/// 认证上下文 — 由 `auth_middleware` 在验证通过后注入到请求扩展中。
+///
+/// 包含已解析的用户身份和原始 JWT token，下游 handler 通过
+/// `request.extensions().get::<AuthContext>()` 获取。
 #[derive(Clone)]
 pub struct AuthContext {
     pub user: User,
     pub token: String,
 }
 
-const PUBLIC_PATHS: &[&str] = &["/health", "/api/v1/auth/login", "/api/v1/auth/refresh"];
+const PUBLIC_PATHS: &[&str] = &["/health", "/api/1/auth/login", "/api/1/auth/refresh"];
+
+/// 需要 admin 角色的路径(前缀匹配)。覆盖带 `/api/1` 前缀与 `no_prefix` 两种注册形态。
+///
+/// - `/api/1/model/*`(switch/unload/current/info):模型管理属高危操作,可造成
+///   服务不可用或加载任意本地目录,必须限 admin;
+/// - `/api/1/embed/file`:服务端文件读取原语,text_preview 会回传文件内容。
+const ADMIN_PATH_PREFIXES: &[&str] = &[
+    "/api/1/model/",
+    "/api/1/embed/file",
+    "/model/",
+    "/embed/file",
+];
+
+/// 该路径是否要求 admin 角色。
+fn requires_admin(path: &str) -> bool {
+    ADMIN_PATH_PREFIXES.iter().any(|p| path.starts_with(p))
+}
+
+/// 查询当前 task_local token 是否具有 admin 角色。
+/// 复用 `require_role_middleware` 的同一判定来源(garrison `has_role`),需已由
+/// `with_current_token` 设置 task_local。
+async fn current_token_is_admin() -> bool {
+    matches!(GarrisonUtil::has_role("admin").await, Ok(true))
+}
+
+/// 供 api 层(embed/file text_preview 收权)复用的 admin 判定入口。
+#[cfg_attr(not(feature = "grpc"), allow(dead_code))]
+pub async fn current_token_is_admin_pub() -> bool {
+    current_token_is_admin().await
+}
 
 /// Extract client IP respecting the X-Forwarded-For trust boundary.
 ///
@@ -31,8 +65,11 @@ const PUBLIC_PATHS: &[&str] = &["/health", "/api/v1/auth/login", "/api/v1/auth/r
 ///   when `connect_info` peer IP matches a `trusted_proxies` CIDR entry (reuses
 ///   `crate::rate_limit::is_ip_whitelisted`). Prevents spoofing by clients outside
 ///   the trust boundary.
-/// - `trusted_proxies` empty: XFF honored unconditionally (legacy v0.3.0–v0.3.2
-///   behavior, kept for backward compatibility).
+/// - `trusted_proxies` empty: XFF is IGNORED and the direct peer IP is used
+///   (secure-by-default). Attackers can otherwise rotate XFF per request to bypass
+///   IP-based rate limiting and pollute audit trails. To restore proxy-aware
+///   behavior, explicitly configure `trusted_proxies` (e.g. `["10.0.0.0/8"]`, or
+///   `["0.0.0.0/0"]` to trust every peer — legacy v0.3.0–v0.3.2 behavior).
 /// - XFF absent or invalid: fall back to `connect_info` peer IP; if `connect_info`
 ///   is also unavailable, returns `None`.
 fn extract_client_ip(
@@ -43,8 +80,8 @@ fn extract_client_ip(
     let peer_ip = connect_info.map(|sa| sa.ip());
 
     let xff_trusted = if trusted_proxies.is_empty() {
-        // Legacy behavior: trust XFF unconditionally when no boundary is configured.
-        true
+        // Secure default: no explicit trust boundary → never trust client-supplied XFF.
+        false
     } else {
         match peer_ip {
             Some(ip) => crate::rate_limit::is_ip_whitelisted(&ip.to_string(), trusted_proxies),
@@ -72,13 +109,25 @@ pub async fn auth_middleware(
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // Secure default: empty trusted_proxies → XFF ignored (peer IP used). Remind
+    // proxy deployments to configure their trust boundary explicitly.
+    static EMPTY_PROXIES_WARN: std::sync::Once = std::sync::Once::new();
+    if auth_config.trusted_proxies.is_empty() {
+        EMPTY_PROXIES_WARN.call_once(|| {
+            log::info!(
+                "trusted_proxies is empty — X-Forwarded-For is ignored; the direct peer IP is \
+                 used for rate limiting and audit. Behind a reverse proxy, configure \
+                 trusted_proxies (e.g. [\"10.0.0.0/8\"]) to honor forwarded headers."
+            );
+        });
+    }
+
     let path = request.uri().path();
 
     if PUBLIC_PATHS.contains(&path) {
         return Ok(next.run(request).await);
     }
 
-    // 从 Authorization 头获取 token
     let auth_header = request
         .headers()
         .get("authorization")
@@ -100,11 +149,10 @@ pub async fn auth_middleware(
             if let Some(ref logger) = audit_logger {
                 logger.log_unauthorized_access(ip.map(|i| i.to_string()), path);
             }
-            return Err(StatusCode::UNAUTHORIZED);
+            return Ok(unauthorized_response("auth-credentials-missing"));
         }
     };
 
-    // 通过 garrison 验证 token 并获取 login_id
     match GarrisonUtil::get_login_id_by_token(&token).await {
         Ok(Some(login_id)) => {
             let user = User {
@@ -112,6 +160,18 @@ pub async fn auth_middleware(
                 role: String::new(), // garrison 通过 interface 查询角色
                 permissions: vec![],
             };
+            // RBAC 路径映射:高危端点要求 admin 角色(判定复用 current_token_is_admin)
+            if requires_admin(path) {
+                let is_admin =
+                    garrison::stp::with_current_token(token.clone(), current_token_is_admin())
+                        .await;
+                if !is_admin {
+                    if let Some(ref logger) = audit_logger {
+                        logger.log_unauthorized_access(ip.map(|i| i.to_string()), path);
+                    }
+                    return Ok(forbidden_response());
+                }
+            }
             let mut request = request;
             request.extensions_mut().insert(AuthContext {
                 user,
@@ -124,9 +184,64 @@ pub async fn auth_middleware(
             if let Some(ref logger) = audit_logger {
                 logger.log_unauthorized_access(ip.map(|i| i.to_string()), path);
             }
-            Err(StatusCode::UNAUTHORIZED)
+            Ok(unauthorized_response("auth-invalid-token"))
         }
     }
+}
+
+/// 403 响应:统一错误 envelope 结构中携带 i18n 消息(而非裸 StatusCode)。
+fn forbidden_response() -> Response {
+    use axum::http::header;
+    let body = serde_json::json!({
+        "success": false,
+        "error": {
+            "code": "FORBIDDEN",
+            "message": crate::i18n::tr("auth-admin-required"),
+        }
+    });
+    let mut resp = Response::new(axum::body::Body::from(body.to_string()));
+    *resp.status_mut() = StatusCode::FORBIDDEN;
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    resp
+}
+
+/// 401 响应：结构化错误体（与 handler 层错误契约 `{type, message, field, value}` 一致）。
+fn unauthorized_response(message_key: &str) -> Response {
+    use axum::http::header;
+    let body = serde_json::json!({
+        "type": "AuthenticationRequired",
+        "message": crate::i18n::tr(message_key),
+        "field": null,
+        "value": null,
+    });
+    let mut resp = Response::new(axum::body::Body::from(body.to_string()));
+    *resp.status_mut() = StatusCode::UNAUTHORIZED;
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    resp
+}
+
+/// 429 响应：结构化错误体（与 handler 层错误契约一致）。
+fn rate_limited_response() -> Response {
+    use axum::http::header;
+    let body = serde_json::json!({
+        "type": "RateLimitExceeded",
+        "message": crate::i18n::tr("rate-limit-exceeded"),
+        "field": null,
+        "value": null,
+    });
+    let mut resp = Response::new(axum::body::Body::from(body.to_string()));
+    *resp.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    resp
 }
 
 pub async fn optional_auth_middleware(
@@ -197,8 +312,9 @@ pub async fn require_role_middleware(request: Request, next: Next) -> Result<Res
 
 /// Auth 端点速率限制中间件(vuln-0006 修复)
 ///
-/// 应用到 `/api/v1/auth/login`、`/api/v1/auth/refresh`、`/api/v1/auth/logout`
-/// 和 `/api/v1/auth/me` 等认证端点,防止暴力破解和 token 枚举攻击。
+/// 应用到全部路由(main.rs 全局挂载):业务限流 + IETF RateLimit-* 头注入,
+/// 防资源耗尽;`/health`、`/metrics` 与 IP 白名单主机豁免。
+/// 认证端点(login/refresh)的暴力破解防护由本中间件的 path 语义覆盖。
 ///
 /// 通过 limiteron Governor 的 RequestContext 驱动限流。
 /// 白名单内的 IP 跳过限流。限流未启用时直接放行。
@@ -211,7 +327,6 @@ pub async fn auth_rate_limit_middleware(
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    // 检查限流是否启用
     let rate_limit_enabled = state
         .kit
         .config::<crate::registry::RateLimitEnabled>()
@@ -228,7 +343,14 @@ pub async fn auth_rate_limit_middleware(
         return Ok(next.run(request).await);
     }
 
-    // 获取 IP 白名单
+    // 探活/指标端点豁免业务限流:LB/K8s 探针与 Prometheus 抓取器高频访问,
+    // 若被 429 会被编排层误判为不健康而摘除实例(探活雪崩)。/metrics 自带
+    // fail-closed 的 RateLimitModule 健康检查(metrics::endpoint),不受影响。
+    let path = request.uri().path();
+    if path == "/health" || path == "/metrics" {
+        return Ok(next.run(request).await);
+    }
+
     let ip_whitelist = state
         .kit
         .require::<crate::registry::IpWhitelistModule>()
@@ -250,7 +372,6 @@ pub async fn auth_rate_limit_middleware(
     .map(|i| i.to_string())
     .unwrap_or_else(|| "unknown".to_string());
 
-    // 白名单内的 IP 不限流
     if crate::rate_limit::is_ip_whitelisted(&ip, &ip_whitelist) {
         return Ok(next.run(request).await);
     }
@@ -270,9 +391,16 @@ pub async fn auth_rate_limit_middleware(
         method: request.method().to_string(),
         ..Default::default()
     };
-    let allowed = rate_limiter.check_rate_limit(&context).await;
+    let decision = rate_limiter.check_rate_limit_detailed(&context).await;
+    let allowed = decision.allowed;
 
-    // 记录限流决策指标
+    // IETF RateLimit-* 响应头注入开关（kit 配置，缺省关闭保持行为兼容）
+    let headers_enabled = state
+        .kit
+        .config::<crate::registry::RateLimitHeadersEnabled>()
+        .map(|c| c.0)
+        .unwrap_or(false);
+
     if let Ok(prom_collector) = state
         .kit
         .require::<crate::registry::PrometheusCollectorModule>()
@@ -287,10 +415,32 @@ pub async fn auth_rate_limit_middleware(
 
     if !allowed {
         log::warn!("Auth endpoint rate limit exceeded for IP: {}", ip);
-        return Err(StatusCode::TOO_MANY_REQUESTS);
+
+        if let Ok(audit_opt) = state.kit.require::<crate::registry::AuditModule>()
+            && let Some(logger) = audit_opt.as_ref()
+        {
+            logger.log_rate_limit_exceeded(None, Some(ip.clone()));
+        }
+
+        // 429 响应携带 RateLimit-*/Retry-After（开启 headers 时），便于
+        // 客户端按标准头做退避；未开启时保持既有裸状态码行为
+        if headers_enabled && let Some(values) = decision.headers {
+            let response = rate_limited_response();
+            return Ok(limiteron::middleware::inject_rate_limit_headers(
+                response, &values,
+            ));
+        }
+
+        return Ok(rate_limited_response());
     }
 
-    Ok(next.run(request).await)
+    let response = next.run(request).await;
+    if headers_enabled && let Some(values) = decision.headers {
+        return Ok(limiteron::middleware::inject_rate_limit_headers(
+            response, &values,
+        ));
+    }
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -348,17 +498,32 @@ mod tests {
         assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50))));
     }
 
-    // --- trusted_proxies 为空路径（legacy 行为）---
+    // --- trusted_proxies 为空路径（secure default:XFF 被忽略）---
 
     #[test]
-    fn extract_ip_empty_proxies_with_xff_returns_xff_ip() {
+    fn extract_ip_empty_proxies_with_xff_returns_peer_ip() {
         let peer = peer_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)));
         let headers = headers_with_xff("203.0.113.50");
         let proxies: Vec<String> = vec![];
 
         let result = extract_client_ip(&headers, peer, &proxies);
-        // 空 trusted_proxies → legacy 模式，无条件信任 XFF
-        assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50))));
+        // 空 trusted_proxies → 忽略伪造 XFF,使用直连 peer IP
+        assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100))));
+    }
+
+    #[test]
+    fn requires_admin_matches_model_and_file_paths() {
+        assert!(requires_admin("/api/1/model/switch"));
+        assert!(requires_admin("/api/1/model/unload"));
+        assert!(requires_admin("/api/1/embed/file"));
+        // no_prefix 注册形态兜底
+        assert!(requires_admin("/model/switch"));
+        assert!(requires_admin("/embed/file"));
+        // 普通端点不受限
+        assert!(!requires_admin("/api/1/embed"));
+        assert!(!requires_admin("/api/1/embed/batch"));
+        assert!(!requires_admin("/api/1/auth/login"));
+        assert!(!requires_admin("/health"));
     }
 
     // --- 无 XFF 回退 ---
@@ -417,5 +582,95 @@ mod tests {
 
         let result = extract_client_ip(&headers, peer, &proxies);
         assert_eq!(result, Some(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    }
+
+    // --- RBAC 路径→角色映射契约测试 ---
+
+    /// 403 响应结构验证:含 i18n 消息与 FORBIDDEN 错误码
+    #[test]
+    fn forbidden_response_has_correct_status_and_json_body() {
+        let resp = forbidden_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/json"
+        );
+    }
+
+    /// 401 响应结构验证:含错误契约的 `{type, message, field, value}` 结构
+    #[test]
+    fn unauthorized_response_has_structured_json_body() {
+        let resp = unauthorized_response("auth-credentials-missing");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/json"
+        );
+    }
+
+    /// 429 响应结构验证:含错误契约的 `{type, message, field, value}` 结构
+    #[test]
+    fn rate_limited_response_has_structured_json_body() {
+        let resp = rate_limited_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/json"
+        );
+    }
+
+    /// 公开路径不触发 admin 要求
+    #[test]
+    fn public_paths_do_not_require_admin() {
+        for path in PUBLIC_PATHS {
+            assert!(!requires_admin(path), "公开路径 {path} 不应要求 admin 角色");
+        }
+    }
+
+    /// admin 路径前缀完整性:所有高危端点均被覆盖
+    #[test]
+    fn admin_path_prefixes_cover_all_dangerous_endpoints() {
+        // 模型管理
+        assert!(requires_admin("/api/1/model/switch"));
+        assert!(requires_admin("/api/1/model/unload"));
+        assert!(requires_admin("/api/1/model/current"));
+        assert!(requires_admin("/api/1/model/info"));
+        // 文件嵌入(text_preview 回传文件内容)
+        assert!(requires_admin("/api/1/embed/file"));
+        // no_prefix 形态
+        assert!(requires_admin("/model/switch"));
+        assert!(requires_admin("/embed/file"));
+    }
+
+    /// 非 admin 路径不被误拦
+    #[test]
+    fn normal_endpoints_not_blocked_by_admin_check() {
+        let safe_paths = [
+            "/api/1/embed",
+            "/api/1/embed/batch",
+            "/api/1/similarity",
+            "/api/1/rerank",
+            "/api/1/auth/login",
+            "/api/1/auth/refresh",
+            "/api/1/auth/logout",
+            "/health",
+            "/metrics",
+            "/api-docs",
+        ];
+        for path in safe_paths {
+            assert!(!requires_admin(path), "普通端点 {path} 不应要求 admin 角色");
+        }
     }
 }

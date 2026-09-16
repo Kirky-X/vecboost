@@ -11,54 +11,8 @@ use std::time::Duration;
 
 use super::config::PriorityConfig;
 
-/// 优先级枚举
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Priority {
-    Critical = 100,
-    High = 75,
-    Normal = 50,
-    Low = 25,
-}
-
-impl Priority {
-    pub fn from_score(score: i32) -> Self {
-        if score >= 90 {
-            Priority::Critical
-        } else if score >= 65 {
-            Priority::High
-        } else if score >= 40 {
-            Priority::Normal
-        } else {
-            Priority::Low
-        }
-    }
-
-    pub fn as_i32(&self) -> i32 {
-        *self as i32
-    }
-}
-
-/// 请求来源
-#[derive(Debug, Clone)]
-pub enum RequestSource {
-    Http { ip: String },
-    Grpc { client_id: String },
-    Internal,
-}
-
-impl RequestSource {
-    pub fn http(ip: String) -> Self {
-        RequestSource::Http { ip }
-    }
-
-    pub fn grpc(client_id: String) -> Self {
-        RequestSource::Grpc { client_id }
-    }
-
-    pub fn internal() -> Self {
-        RequestSource::Internal
-    }
-}
+// Priority/RequestSource 已下沉 domain::scheduling(见 src/domain/scheduling.rs)
+pub use crate::domain::scheduling::{Priority, RequestSource};
 
 /// 优先级输入
 #[derive(Debug, Clone)]

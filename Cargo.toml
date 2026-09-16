@@ -2,7 +2,8 @@
 name = "vecboost"
 version = "0.2.1"
 edition = "2024"
-authors = ["Kirky-X <kirky-x@outlook.com>"]
+rust-version = "1.91"
+authors = ["Kirky-X <Kirky-X@outlook.com>"]
 description = "High-performance embedding vector service written in Rust"
 repository = "https://github.com/Kirky-X/vecboost"
 documentation = "https://github.com/Kirky-X/vecboost"
@@ -25,8 +26,9 @@ sha2 = { version = "0.11", default-features = false, features = ["alloc"] }
 rand = { version = "0.10", default-features = false, features = ["thread_rng", "alloc"] }
 hex = { version = "0.4", default-features = false, features = ["std"] }
 url = { version = "2.5", default-features = false }
-zeroize = { version = "1.0", default-features = false, features = ["alloc"] }
-argon2 = { version = "0.5", default-features = false }
+zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
+# 0.6 起 hash_password_into 被 alloc feature 门控（derive_key 依赖它）
+argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
 
 # Serialization (base)
 serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
@@ -36,40 +38,63 @@ serde_json = { version = "1.0", default-features = false, features = ["std"] }
 thiserror = { version = "2.0", default-features = false }
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 
-# Module Registry (always required) — 保留 reload/confers 热重载，移除未接线的 i18n 以减体积
-trait-kit = { version = "0.5.0-rc.2", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "confers"] }
+# Internationalization (i18n) — ICU+Fluent 中英双语支持
+# FTL 文件使用轻量解析器加载（FluentBundle 非 Send+Sync，不适合 static 存储）
+sys-locale = { version = "0.3", default-features = false }
+unic-langid = { version = "0.9", default-features = false, features = ["likelysubtags"] }
 
-# Configuration infrastructure — 保留 interpolation/dynamic/feature-toggle (已接线 Configurable)，移除 json/yaml 冗余格式
-confers = { version = "0.6.0-rc.2", path = "../base/confers", default-features = false, features = ["toml", "env", "config-bus", "validation", "watch", "encryption", "schema", "interpolation", "dynamic", "feature-toggle"] }
-garde = { version = "0.22", default-features = false, features = ["derive"] }
+# Module Registry (always required) — 保留 reload/confers 热重载 + i18n 模块消息国际化
+# negotiate(2026-09-16 吸收)：模块能力版本协商（build 时 semver 校验），
+# vecboost 全部 17 个模块已在 ModuleMeta 声明 VERSION，为跨库模块接入提供 fail-fast
+trait-kit = { version = "0.5.0-rc.5", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "confers", "i18n", "negotiate"] }
+
+# Configuration infrastructure
+# feature 瘦身:仅保留实际接线能力(toml/env 加载、校验、watch 热重载、
+# 加密、schema 导出);config-bus/etcd/consul/nats/redis-bus/remote 等零接线项裁剪。
+confers = { version = "0.6.0-rc.4", path = "../base/confers", default-features = false, features = ["toml", "env", "validation", "watch", "encryption", "schema", "typescript-schema", "modules"] }
+garde = { version = "0.23", default-features = false, features = ["derive"] }
 schemars = { version = "1.2", default-features = false }
 
-# Logging infrastructure — 回退至最小集，kit/sqlite 未接线且引入重型 db 依赖
-inklog = { version = "0.3.0-rc.2", path = "../base/inklog", default-features = false, features = ["compression", "fast-masking"] }
+# Logging infrastructure — 启用 sqlite 持久化后端 + trait-kit 生命周期集成
+inklog = { version = "0.3.0-rc.4", path = "../base/inklog", default-features = false, features = ["compression", "fast-masking", "sqlite", "kit"] }
 log = { version = "0.4", default-features = false }
 
-# Cache infrastructure — 保留 batch/lock (无侵入)，移除未接线的 kit
-oxcache = { version = "0.5.0-rc.2", path = "../base/oxcache", default-features = false, features = ["core", "bloom", "compression", "macros", "batch", "lock"] }
+# Cache infrastructure — 启用 trait-kit 生命周期集成
+oxcache = { version = "0.5.0-rc.4", path = "../base/oxcache", default-features = false, features = ["core", "bloom", "compression", "macros", "batch", "lock", "kit"] }
 
-# Rate limiting infrastructure — 保留 fallback/custom-limiter，移除重型 geo/device/telemetry 等未配置特性
-limiteron = { version = "0.3.0-rc.2", path = "../base/limiteron", default-features = false, features = ["ban-manager", "quota-control", "circuit-breaker", "gcra", "macros", "metrics", "validation", "parallel-checker", "event-system", "multi-tenant", "kit", "fallback", "custom-limiter"] }
+# Rate limiting infrastructure
+# feature 瘦身:仅保留实际接线能力(Governor/存储/matchers/审计事件/宏)。
+# 裁剪 distributed/chaos-testing/webhook/admin-api/geo-matching/device-matching/
+# config-watcher/telemetry/monitoring/inklog/i18n 等未接线项;
+# tower-middleware 已回补(2026-09-16 吸收 IETF RateLimit-* 响应头注入,
+# 其 middleware::headers 模块被该 feature 门控;dep:tower/http 均已在依赖图内,零新增 crate)。
+# 若 ../base 后续演进需要其中某能力,按需回补。
+# 熔断(circuit-breaker)评估:当前唯一外部依赖是本地 DB(有重试),熔断无标的,不接线。
+limiteron = { version = "0.3.0-rc.4", path = "../base/limiteron", default-features = false, features = ["ban-manager", "gcra", "macros", "metrics", "validation", "kit", "fallback", "audit-log", "multi-tenant", "tower-middleware"] }
 
-# Database infrastructure (db feature) — 仅保留已接线的 pool-warmup，其余 kit/migration 等按需启用
+# Database infrastructure (db feature) — kit/migration 等未接线项按需启用
 # dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
 # Direct sea-orm dependency is still required for those types.
-dbnexus = { version = "0.6.0-rc.2", path = "../base/dbnexus", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "pool-warmup", "retry", "config-env", "observability"] }
+dbnexus = { version = "0.6.0-rc.4", path = "../base/dbnexus", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "pool-warmup", "retry", "config-env", "observability", "failover", "replica-routing"] }
+# failover/replica-routing:inklog integrations::infra 无条件构造 DbConfig 的
+# failover_config/replica_config 字段(2026-09-14 dbnexus 加入门控),缺此二者
+# inklog 无法编译;../base 侧修复前由 vecboost 侧补齐。
 sea-orm = { version = "2.0", optional = true, default-features = false }
 
 # AI & Math (base)
 candle-core = { version = "0.11", default-features = false, features = [] }
 candle-nn = { version = "0.11", default-features = false }
 candle-transformers = { version = "0.11", default-features = false }
+# hgemm_ 垫片（mkl feature，见 src/engine/mkl_shim.rs）：f16 类型 ABI 兼容层
+half = { version = "2.7", default-features = false, optional = true }
 hf-hub = { version = "1.0", default-features = false, features = ["blocking", "rustls-tls"] }
+# tokenizers 全平台直接依赖（移除 cfg(target_os) 门控）
+tokenizers = { version = "0.23", default-features = false, features = ["http", "onig"] }
 
 # Web Framework (http feature)
 axum = { version = "0.8", optional = true, default-features = false, features = ["http1", "json", "tokio", "tracing", "macros", "matched-path", "original-uri", "query"] }
 axum-extra = { version = "0.12", optional = true, default-features = false, features = ["typed-header"] }
-tower-http = { version = "0.7", optional = true, default-features = false, features = ["trace", "cors", "add-extension", "validate-request", "set-header", "timeout"] }
+tower-http = { version = "0.7", optional = true, default-features = false, features = ["trace", "cors", "add-extension", "validate-request", "set-header", "timeout", "compression-gzip"] }
 
 # OpenAPI Documentation (http feature)
 # macros 是 utoipa::ToSchema derive 宏必需 feature(schema feature 单独启用时也工作)
@@ -77,7 +102,9 @@ tower-http = { version = "0.7", optional = true, default-features = false, featu
 # 不启用 macros 会导致 schema feature 单独编译失败
 utoipa = { version = "5.5", optional = true, default-features = false, features = ["macros", "axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui = { version = "9.0", optional = true, default-features = false, features = ["axum", "url"] }
-uuid = { version = "1.23", optional = true, default-features = false, features = ["v4", "serde"] }
+uuid = { version = "1.26", optional = true, default-features = false, features = ["v4", "serde"] }
+# OpenAI 兼容端点 encoding_format=base64 编码（http feature）
+base64 = { version = "0.23", optional = true, default-features = false, features = ["std"] }
 
 # Monitoring (http feature)
 prometheus = { version = "0.14", optional = true, default-features = false, features = ["process"] }
@@ -88,43 +115,70 @@ reqwest = { version = "0.13", optional = true, default-features = false, feature
 
 # gRPC is fully handled by sdforge (unified Call protocol via #[forge(grpc_method)])
 
-# Auth feature
-garrison = { version = "0.8", optional = true, default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "account-credential", "account-policy"] }
+# Auth feature — 安全加固：firewall 系列/TOTP/凭证清零/异常检测/协议扩展/生命周期/注解宏
+# 0.9.0-rc.1（[patch.crates-io] 桥接本地 ~/projects/garrison）：account-credential-zeroize
+# 改名 credential-zeroize；web-security-headers（0.9 新增）注入 nosniff/DENY/no-store
+# 安全响应头（src/api/mod.rs 挂载 garrison::web::security_headers 中间件）；
+# cache-audit：GarrisonDaoOxcache 缓存审计事件自动接线（tracing 桥接，键名脱敏）；
+# metrics-prometheus：garrison_* auth 域指标（OnceLock 单例注册 default_registry，
+# /metrics 端点合并导出，src/metrics/endpoint.rs）；
+# grpc：GarrisonGrpcAuthLayer（main.rs spawn_grpc_server server 级挂载，替代
+# sdforge BearerAuth 的独立会话宇宙——HTTP revoke 的 token 此前在 gRPC 侧 exp 前仍有效）。
+# audit-inklog-http/siem、firewall-gcra、backend-shutdown 等 0.9 新 face 为纯透传
+# feature（garrison src 零引用），按 feature 瘦身原则不接。
+garrison = { version = "0.9.0-rc.1", optional = true, default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "cache-audit", "account-credential", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "listener", "i18n", "firewall", "firewall-bruteforce", "firewall-ratelimit", "firewall-ddos", "firewall-anomalous", "secure-totp", "credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-ct-eq", "secure-simple-token", "web-cors", "web-security-headers", "metrics-prometheus", "grpc"] }
 aes-gcm = { version = "0.11", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
-
-# Redis feature
-redis = { version = "1.0", optional = true, default-features = false, features = ["tokio-comp", "connection-manager"] }
 
 # ONNX feature
 ndarray = { version = "0.17", optional = true, default-features = false, features = ["std"] }
-# RC 版本保留完整 semver:ort 2.0 尚无稳定 release
+# RC 版本保留完整 semver:ort 至今(2026-09-16 核实)从未发布稳定版,
+# 2.0.0-rc.13 即 crates.io 最新发布版本,"仅稳定版"规则对 ort 无稳定标的可用
 ort = { version = "2.0.0-rc.13", optional = true, default-features = false }
 
 # CUDA feature (candle-core/cuda 传递依赖 cudarc 0.19,支持 CUDA 13)
 # 项目代码直接使用 cudarc driver API 进行 CUDA 内存管理
 cudarc = { version = "0.19", optional = true, default-features = false, features = ["std", "driver", "cuda-version-from-build-system", "dynamic-linking"] }
-nvml-wrapper = { version = "0.10", optional = true, default-features = false }
+nvml-wrapper = { version = "0.13", optional = true, default-features = false }
 
-# Multi-protocol SDK framework
-sdforge = { version = "0.5.0-rc.2", path = "../base/sdforge", optional = true, default-features = false }
+# Multi-protocol SDK framework — 启用 i18n 国际化 + inklog 日志集成
+# context(2026-09-16 吸收)：request_id/trace_id 跨协议传播 + X-Request-Id/X-Trace-Id
+# 响应头回显（替代 main.rs 手写 x-request-id 闭包；traceparent/W3C 兼容）
+sdforge = { version = "0.5.0-rc.4", path = "../base/sdforge", optional = true, default-features = false, features = ["i18n", "inklog", "context"] }
+
+# gRPC server 装配（grpc feature）—— garrison GarrisonGrpcAuthLayer 需要 server 级
+# tonic builder：sdforge build_server_with_config 的 auth 槽位是 BearerAuth 具体类型、
+# 无 layer 挂载点；服务本体复用 sdforge pub 类型（SdForgeGrpcService /
+# sdforge_v1::sd_forge_service_server）自行装配
+tonic = { version = "0.14", optional = true, default-features = false, features = ["transport"] }
 
 # CLI argument parsing (cli feature)
 clap = { version = "4.6", optional = true, default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
 
 # Performance: parallel iterator for batch similarity
-rayon = { version = "1.10", default-features = false }
+rayon = { version = "1.12", default-features = false }
 
 # Performance: jemalloc global allocator for multi-threaded workloads
 [target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
-tikv-jemallocator = { version = "0.6", default-features = false, features = ["background_threads"] }
+tikv-jemallocator = { version = "0.7", default-features = false, features = ["background_threads"] }
+
+# 平台加速后端（opt-in features）。
+# 原计划为 target-conditional 自动追加 candle `mkl`，但实测本机链接失败
+#（intel-mkl-src 2020.1 静态库缺 `hgemm_`，candle 0.11 mkl.rs 必需；证据见
+# docs/PERFORMANCE.md「加速后端说明」），自动启用会使所有 profile 无法链接。故改为显式 feature，
+# 在链接正常的工具链/CI 矩阵中按需启用：
+# - x86_64 Linux/Windows：`--features mkl`
+# - aarch64 macOS：`--features accelerate`
 
 
 [features]
 default = ["http"]
 
 # 协议特性 — 保留 cache/streaming/timestamp (轻量)，移除未接线的 logging/kit/inklog
-http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/cache", "sdforge/streaming", "sdforge/timestamp"]
-grpc = ["sdforge/grpc", "sdforge/ratelimit", "sdforge/security"]
+# sdforge/docs:Swagger UI(/api-docs);dep:dbnexus:在所有 http 构建中统一
+# dbnexus feature(含 failover/replica-routing)—— inklog integrations::infra
+# 无条件构造这两个 DbConfig 字段,缺 feature 时 inklog 无法编译(见 dbnexus 依赖处注释)
+http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:base64", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/cache", "sdforge/streaming", "sdforge/timestamp", "sdforge/docs", "dep:dbnexus"]
+grpc = ["sdforge/grpc", "sdforge/ratelimit", "sdforge/security", "dep:tonic"]
 cli = ["sdforge/cli", "dep:clap"]
 openapi = ["schema", "dep:utoipa-swagger-ui", "sdforge/openapi", "sdforge/docs"]
 
@@ -146,12 +200,17 @@ postgres = ["db", "dbnexus/postgres"]
 
 # 功能特性
 auth = ["dep:garrison", "dep:aes-gcm"]
-redis = ["dep:redis"]
 
 # 引擎特性
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:nvml-wrapper", "dep:cudarc"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/alternative-backend"]
+# CPU 加速后端（opt-in；见上方 target 表注释）。
+mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl", "dep:half"]
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
+# GGUF 量化引擎开关。启用后编译 engine/quantized_engine.rs；
+# 推理后端待 candle 上游 quantized BERT 落地（见模块文档）。
+quantized-gguf = []
 
 # Binary target — main.rs 是 HTTP server 入口（axum::serve），
 # 需要 http feature 才能编译。schema-only 等 library 模式不会构建 bin。
@@ -160,23 +219,23 @@ name = "vecboost"
 required-features = ["http"]
 
 # Platform-specific dependencies
-[target.'cfg(target_os = "macos")'.dependencies]
-tokenizers = { version = "0.23", default-features = false, features = ["http"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 
 [target.'cfg(target_os = "windows")'.dependencies]
 
 [dev-dependencies]
-mockall = { version = "0.15", default-features = false }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 tokio = { version = "1.53", default-features = false, features = ["test-util", "macros", "rt-multi-thread"] }
-tempfile = { version = "3.0", default-features = false }
+tempfile = { version = "3.27", default-features = false }
 # tracing/tracing-subscriber/toml 仅测试用(logger/tests.rs 验证 inklog subscriber 集成 + config 测试解析 toml)
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter"] }
 toml = { version = "1.1", default-features = false }
-criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+# gRPC E2E 测试客户端（tests/grpc_e2e.rs；生成的客户端经由 vecboost::sdforge 再导出访问）
+tonic = { version = "0.14", default-features = false, features = ["transport", "codegen"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
 
 [[bench]]
 name = "similarity_bench"
@@ -188,6 +247,10 @@ harness = false
 
 [[bench]]
 name = "semantic_cache_bench"
+harness = false
+
+[[bench]]
+name = "embed_throughput_bench"
 harness = false
 
 [profile.dev]
@@ -210,4 +273,18 @@ resolver = "2"
 [workspace.package]
 license = "MIT"
 edition = "2024"
-authors = ["Kirky-X <kirky-x@outlook.com>"]
+authors = ["Kirky-X <Kirky-X@outlook.com>"]
+
+# ../base 生态发布中态：跨库相互引用的 rc 版本（如 trait-kit rc.5 → confers rc.4）
+# 与本地路径版本统一，用本地路径补丁覆盖 crates.io 解析
+[patch.crates-io]
+oxcache = { path = "../base/oxcache" }
+trait-kit = { path = "../base/trait-kit" }
+confers = { path = "../base/confers" }
+inklog = { path = "../base/inklog" }
+limiteron = { path = "../base/limiteron" }
+dbnexus = { path = "../base/dbnexus" }
+sdforge = { path = "../base/sdforge" }
+# garrison 0.9.0-rc.1 尚未发布，patch 桥接本地仓库（发布后可拆）。
+# 其内部 garrison-macros 是 workspace path 依赖，随 garrison 一并走本地，无需单独 patch。
+garrison = { path = "../garrison" }

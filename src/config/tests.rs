@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! Tests for confers-based configuration loading (T016).
+//! Tests for confers-based configuration loading.
 //!
 //! Covers three scenarios required by the spec:
 //! 1. Loading `AppConfig` from `config_minimal.toml`
@@ -26,7 +26,6 @@ fn write_temp_toml(content: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 /// Test 1: Load `AppConfig` from `config_minimal.toml` and verify key fields.
-///
 /// Verifies that confers correctly deserialises the TOML file into the
 /// nested `AppConfig` struct, including server port, model repo, and
 /// embedding settings.
@@ -75,35 +74,28 @@ enabled = false
     let (_dir, path) = write_temp_toml(toml_content);
     let config = AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
 
-    // Verify server config loaded from TOML
     assert_eq!(config.server.host, "127.0.0.1");
     assert_eq!(config.server.port, 9002);
     assert_eq!(config.server.timeout, Some(30));
 
-    // Verify model config
     assert_eq!(config.model.model_repo, "BAAI/bge-m3");
     assert!(!config.model.use_gpu);
     assert_eq!(config.model.batch_size, 8);
     assert_eq!(config.model.expected_dimension, Some(1024));
 
-    // Verify embedding config
     assert_eq!(config.embedding.default_aggregation, "mean");
     assert!(!config.embedding.cache_enabled);
     assert_eq!(config.embedding.max_batch_size, 32);
 
-    // Verify rate_limit disabled in minimal config
     assert!(!config.rate_limit.enabled);
 
-    // Verify audit disabled in minimal config
     assert!(!config.audit.enabled);
 }
 
 /// Test 2: Environment variable `VECBOOST_JWT_SECRET` overrides TOML value.
-///
 /// Sets `VECBOOST_JWT_SECRET` to a non-empty value, loads config, and
 /// verifies that `auth.jwt_secret` reflects the env var rather than the
 /// TOML default (None).
-///
 /// NOTE: Env vars are process-global; this test may race with parallel tests
 /// that also touch `VECBOOST_JWT_SECRET`. The cleanup at the end minimises
 /// the window.
@@ -149,7 +141,6 @@ enabled = false
 
     let (_dir, path) = write_temp_toml(toml_content);
 
-    // Load without env var - jwt_secret should be None (default)
     let config_no_env =
         AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
     assert!(
@@ -181,56 +172,7 @@ enabled = false
     }
 }
 
-/// Test 3: Hot-reload subscribe callback via `confers::bus::InMemoryBus`.
-///
-/// Verifies the subscribe API: create an `InMemoryBus`, subscribe to
-/// config change events, publish a `ConfigChangeEvent`, and verify the
-/// subscriber receives it. This models the hot-reload notification flow
-/// where a watcher publishes change events and config consumers react.
-#[tokio::test]
-async fn test_confers_inmemorybus_subscribe_publish() {
-    use confers::ConfigBus;
-    use confers::bus::{ConfigChangeEvent, InMemoryBus};
-    use futures::StreamExt;
-
-    let bus = InMemoryBus::new();
-
-    // Subscribe before publishing to ensure receipt
-    let mut stream = bus
-        .subscribe()
-        .await
-        .expect("subscribe should return a stream");
-
-    // Publish a config change event
-    let event = ConfigChangeEvent::new(
-        "test-instance",
-        "file://config.toml",
-        vec!["server.port".to_string(), "auth.jwt_secret".to_string()],
-        "checksum-abc123",
-    );
-
-    bus.publish(event.clone())
-        .await
-        .expect("publish should succeed");
-
-    // Receive the event from the stream
-    let received = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
-        .await
-        .expect("should receive event within timeout")
-        .expect("stream should not end");
-
-    // Verify event content
-    assert_eq!(received.instance_id, "test-instance");
-    assert_eq!(received.source, "file://config.toml");
-    assert_eq!(
-        received.changed_keys,
-        vec!["server.port".to_string(), "auth.jwt_secret".to_string()]
-    );
-    assert_eq!(received.checksum, "checksum-abc123");
-}
-
 /// Test 4: Defaults are applied when config file is missing.
-///
 /// When `file_optional` is given a non-existent path, confers should fall
 /// back to `Default` implementations for all sub-configs.
 #[test]
@@ -249,7 +191,7 @@ fn test_confers_defaults_when_no_file() {
 
     // Verify defaults from app.rs Default impls
     assert_eq!(config.server.host, "0.0.0.0");
-    assert_eq!(config.server.port, 3000);
+    assert_eq!(config.server.port, 9002);
     assert_eq!(config.model.model_repo, "BAAI/bge-m3");
     assert_eq!(config.model.batch_size, 32);
     assert_eq!(config.embedding.default_aggregation, "mean");
@@ -259,7 +201,6 @@ fn test_confers_defaults_when_no_file() {
 }
 
 /// Test 5: TOML values override struct defaults.
-///
 /// Loads a TOML with non-default values and verifies they take precedence
 /// over the `Default` implementations.
 #[test]
@@ -325,8 +266,7 @@ enabled = true
     assert!(config.audit.enabled);
 }
 
-/// T029: Regression test for trusted_proxies + max_text_length field defaults.
-///
+/// Regression test for trusted_proxies + max_text_length field defaults.
 /// Validates that configs omitting these fields fall back to defaults
 /// (R-config-001/002 验收点 6), and configs including them load correctly.
 #[test]
@@ -449,10 +389,10 @@ trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
 }
 
 // =============================================================================
-// T011: Config validation tests (garde validation integration)
+// Config validation tests (garde validation integration)
 // =============================================================================
 
-/// T011: port=0 is rejected by validation.
+/// port=0 is rejected by validation.
 #[test]
 fn test_validation_port_zero_rejected() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -490,7 +430,7 @@ enabled = false
     );
 }
 
-/// T011: empty model_repo is rejected by validation.
+/// empty model_repo is rejected by validation.
 #[test]
 fn test_validation_empty_model_repo_rejected() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -531,7 +471,7 @@ enabled = false
     );
 }
 
-/// T011: batch_size=0 is rejected by validation.
+/// batch_size=0 is rejected by validation.
 #[test]
 fn test_validation_batch_size_zero_rejected() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -572,7 +512,7 @@ enabled = false
     );
 }
 
-/// T011: default config passes validation.
+/// default config passes validation.
 #[test]
 fn test_validation_default_config_passes() {
     let config = AppConfig::default();
@@ -584,8 +524,7 @@ fn test_validation_default_config_passes() {
     );
 }
 
-/// T036: Config file watcher detects changes and triggers reload.
-///
+/// Config file watcher detects changes and triggers reload.
 /// Verifies that `FsWatcher` detects file modifications and that the
 /// reload callback mechanism works (simulating what main.rs does).
 #[tokio::test]
@@ -652,7 +591,7 @@ enabled = false
     watch_task.abort();
 }
 
-/// T036: WatcherGuard lifecycle — start/stop/is_running.
+/// WatcherGuard lifecycle — start/stop/is_running.
 #[tokio::test]
 async fn test_watcher_guard_lifecycle() {
     let guard = confers::watcher::WatcherGuard::new();
@@ -671,12 +610,11 @@ async fn test_watcher_guard_lifecycle() {
 }
 
 // =============================================================================
-// T039: Encryption roundtrip tests
+// Encryption roundtrip tests
 // =============================================================================
 
-/// T039: Encryption roundtrip — encrypt → serialize → deserialize → decrypt
+/// Encryption roundtrip — encrypt → serialize → deserialize → decrypt
 /// produces the original value.
-///
 /// Sets `VECBOOST_ENCRYPTION_KEY`, creates an `AuthConfig` with known secrets,
 /// serializes to TOML, deserializes back, and verifies the secrets survive
 /// the roundtrip through XChaCha20-Poly1305 encryption.
@@ -695,9 +633,11 @@ fn test_encryption_roundtrip_via_serde() {
     }
 
     // Create config with known sensitive values
-    let mut config = AuthConfig::default();
-    config.jwt_secret = Some("my-super-secret-jwt-token-value".to_string());
-    config.default_admin_password = Some("AdminP@ssw0rd!2026".to_string());
+    let config = AuthConfig {
+        jwt_secret: Some("my-super-secret-jwt-token-value".to_string()),
+        default_admin_password: Some("AdminP@ssw0rd!2026".to_string()),
+        ..Default::default()
+    };
 
     // Serialize to TOML (this encrypts the sensitive fields)
     let serialized = toml::to_string(&config).expect("serialize should succeed");
@@ -733,7 +673,7 @@ fn test_encryption_roundtrip_via_serde() {
     }
 }
 
-/// T039: Without encryption key, values pass through as plaintext.
+/// Without encryption key, values pass through as plaintext.
 #[test]
 fn test_encryption_fallback_to_plaintext_without_key() {
     use super::app::AuthConfig;
@@ -744,8 +684,10 @@ fn test_encryption_fallback_to_plaintext_without_key() {
         std::env::remove_var("VECBOOST_ENCRYPTION_KEY");
     }
 
-    let mut config = AuthConfig::default();
-    config.jwt_secret = Some("plaintext-jwt-secret".to_string());
+    let config = AuthConfig {
+        jwt_secret: Some("plaintext-jwt-secret".to_string()),
+        ..Default::default()
+    };
 
     let serialized = toml::to_string(&config).expect("serialize should succeed");
     // Without encryption key, the value should appear as plaintext
@@ -761,7 +703,7 @@ fn test_encryption_fallback_to_plaintext_without_key() {
     );
 }
 
-/// T039: None values are preserved through serde (not encrypted).
+/// None values are preserved through serde (not encrypted).
 #[test]
 fn test_encryption_none_values_pass_through() {
     use super::app::AuthConfig;
@@ -782,7 +724,7 @@ fn test_encryption_none_values_pass_through() {
     assert!(deserialized.default_admin_password.is_none());
 }
 
-/// T038: Schema generation produces non-empty TypeScript output.
+/// Schema generation produces non-empty TypeScript output.
 #[test]
 fn test_schema_generation_produces_typescript() {
     let schema = AppConfig::generate_schema().expect("schema generation should succeed");

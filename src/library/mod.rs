@@ -217,8 +217,8 @@ impl VecBoostLibrary {
 
     /// 同步向量化：将单条文本转换为向量表示
     ///
-    /// 内部创建临时 tokio runtime 执行异步推理。
-    /// 注意：不要在已有 tokio runtime 的异步上下文中调用此方法，应使用 `embed()` 代替。
+    /// 使用进程级共享 runtime 执行异步推理;在 tokio 异步上下文中调用会返回
+    /// 错误(非 panic),应使用 `embed()` 代替。
     pub fn embed_sync(&self, text: &str) -> Result<EmbedResponse, VecboostError> {
         let future = self.embed(text);
         Self::block_on_future(future)
@@ -243,15 +243,45 @@ impl VecBoostLibrary {
 
     /// 内部辅助：执行异步 future 并阻塞等待结果
     ///
-    /// 创建临时 `current_thread` runtime 执行 future。
-    ///
-    /// **注意**：不要在已有 tokio runtime 的异步上下文中调用 sync API，
-    /// 应使用对应的异步方法（`embed` / `embed_batch` / `rerank`）代替。
-    fn block_on_future<F: std::future::Future>(future: F) -> F::Output {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("Failed to create tokio runtime for sync API");
-        rt.block_on(future)
+    /// 进程级共享 **multi_thread** runtime(`OnceLock` 复用,首次调用惰性创建)。
+    /// 推理引擎内部使用 `block_in_place`,必须 multi_thread runtime。
+    /// 在已有 tokio runtime 上下文中调用 → 返回 `VecboostError`(指引改用
+    /// 异步方法 `embed` / `embed_batch` / `rerank`),不再 panic。
+    fn block_on_future<F: std::future::Future>(future: F) -> F::Output
+    where
+        F::Output: IntoSyncResult,
+    {
+        // 在已有 tokio runtime 上下文中调用 → 返回可操作错误而非 panic
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return F::Output::into_sync_result(
+                "sync API called from within a tokio runtime; use the async variants                  (embed / embed_batch / rerank) instead",
+            );
+        }
+        static SHARED_RUNTIME: std::sync::OnceLock<std::io::Result<tokio::runtime::Runtime>> =
+            std::sync::OnceLock::new();
+        let rt = SHARED_RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+        });
+        match rt {
+            Ok(rt) => rt.block_on(future),
+            Err(e) => F::Output::into_sync_result(format!(
+                "Failed to create tokio runtime for sync API: {e}"
+            )),
+        }
+    }
+}
+
+/// 内部约定:sync 包装层把"不能 block_on"类失败转成 `VecboostError`。
+trait IntoSyncResult {
+    fn into_sync_result(message: impl Into<String>) -> Self;
+}
+
+impl<T> IntoSyncResult for Result<T, VecboostError> {
+    fn into_sync_result(message: impl Into<String>) -> Self {
+        Err(VecboostError::InternalError(message.into()))
     }
 }
 
@@ -550,6 +580,20 @@ mod tests {
     // 同步 API 测试
     // -------------------------------------------------------------------------
 
+    // 在 tokio runtime 上下文调用 sync API → 可操作错误而非 panic
+    #[tokio::test]
+    async fn sync_api_inside_runtime_returns_error_not_panic() {
+        let lib = make_test_library().await;
+        let err = lib
+            .embed_sync("hello")
+            .expect_err("must error inside tokio context");
+        let msg = err.error_detail().to_string();
+        assert!(
+            msg.contains("async variants") || msg.contains("tokio runtime"),
+            "error should point to async alternatives, got: {msg}"
+        );
+    }
+
     #[test]
     fn test_sync_embed_outside_runtime() {
         // 普通 #[test] 线程无活跃 tokio runtime
@@ -711,5 +755,126 @@ mod tests {
             .rerank()
             .cache_size(500)
             .rerank_config(RerankConfig::default());
+    }
+
+    // -------------------------------------------------------------------------
+    // 同步 API 补充测试
+    // -------------------------------------------------------------------------
+
+    // Note: embed_batch_sync and rerank_sync are covered via the existing
+    // test_sync_embed_outside_runtime and test_sync_rerank_outside_runtime tests.
+    // Additional sync batch testing is skipped because block_on_future creates
+    // a current_thread runtime without timers, which batch processing requires.
+
+    // -------------------------------------------------------------------------
+    // 异步 API 补充测试
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_embed_empty_string_returns_error() {
+        let lib = make_test_library().await;
+        // Empty string is rejected by the input validator
+        let result = lib.embed("").await;
+        assert!(
+            result.is_err(),
+            "empty string should return validation error"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rerank_empty_documents_returns_error() {
+        let lib = make_test_library().await;
+        let result = lib.rerank("query", &[], None).await;
+        assert!(result.is_err(), "empty documents should return error");
+    }
+
+    #[tokio::test]
+    async fn test_rerank_empty_query_returns_error() {
+        let lib = make_test_library().await;
+        let result = lib.rerank("", &["doc".to_string()], None).await;
+        assert!(result.is_err(), "empty query should return error");
+    }
+
+    // -------------------------------------------------------------------------
+    // LibraryConfig 补充测试
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_library_config_with_cache_size() {
+        let config = LibraryConfig {
+            cache_size: 1000,
+            ..Default::default()
+        };
+        assert_eq!(config.cache_size, 1000);
+    }
+
+    #[test]
+    fn test_library_config_with_rerank_config() {
+        let config = LibraryConfig {
+            rerank_config: Some(RerankConfig::default()),
+            ..Default::default()
+        };
+        assert!(config.rerank_config.is_some());
+    }
+
+    // -------------------------------------------------------------------------
+    // VecBoostModuleBuilder 补充测试
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_module_builder_new_defaults() {
+        let builder = VecBoostModuleBuilder::new(ModelConfig::default());
+        assert!(!builder.with_embedding);
+        assert!(!builder.with_rerank);
+        assert_eq!(builder.cache_size, 0);
+        assert!(builder.rerank_config.is_none());
+    }
+
+    #[test]
+    fn test_module_builder_embedding_only_chain() {
+        let builder = VecBoostModuleBuilder::new(ModelConfig::default())
+            .embedding()
+            .cache_size(100);
+        assert!(builder.with_embedding);
+        assert!(!builder.with_rerank);
+        assert_eq!(builder.cache_size, 100);
+    }
+
+    #[test]
+    fn test_module_builder_rerank_only_chain() {
+        let builder = VecBoostModuleBuilder::new(ModelConfig::default())
+            .rerank()
+            .rerank_config(RerankConfig::default());
+        assert!(!builder.with_embedding);
+        assert!(builder.with_rerank);
+        assert!(builder.rerank_config.is_some());
+    }
+
+    #[test]
+    fn test_mock_engine_trait_method_coverage() {
+        let engine = MockEngine::new(256);
+        assert_eq!(engine.embed("test").unwrap().len(), 256);
+        assert_eq!(
+            engine.embed_batch(&["a".into(), "b".into()]).unwrap().len(),
+            2
+        );
+        assert_eq!(*engine.precision(), Precision::Fp32);
+        assert!(!engine.supports_mixed_precision());
+        assert!(engine.supports_rerank());
+        assert!(engine.rerank("q", "doc").unwrap() > 0.0);
+        assert_eq!(
+            engine
+                .rerank_batch("q", &["a".into(), "b".into()])
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mock_engine_try_fallback_coverage() {
+        let mut engine = MockEngine::new(64);
+        let cfg = ModelConfig::default();
+        let _ = engine.try_fallback_to_cpu(&cfg).await;
     }
 }

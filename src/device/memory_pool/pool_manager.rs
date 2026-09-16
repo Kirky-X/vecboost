@@ -82,19 +82,13 @@ impl MemoryPoolManager {
     ) -> Result<(), VecboostError> {
         info!("Initializing all memory pools...");
 
-        // 先验证所有必需的参数
-
         if self.config.cuda_pool.enabled && cuda_device_id.is_none() {
             return Err(VecboostError::ConfigError(
                 "CUDA pool requires device_id but none provided".to_string(),
             ));
         }
 
-        // 记录初始化状态
-
         let mut initialized_pools = Vec::new();
-
-        // 初始化缓冲区池
 
         if self.config.buffer_pool.enabled {
             let mut buffer_pool = self.buffer_pool.write().await;
@@ -106,15 +100,11 @@ impl MemoryPoolManager {
             info!("Buffer pool initialized");
         }
 
-        // 初始化模型权重池
-
         if self.config.model_pool.enabled {
             initialized_pools.push("model_pool");
 
             info!("Model weight pool initialized");
         }
-
-        // 初始化 CUDA 池
 
         if let Some(device_id) = cuda_device_id {
             match self.initialize_cuda_pool(device_id).await {

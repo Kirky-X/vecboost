@@ -46,6 +46,43 @@ use confers::secret::{XChaCha20Crypto, derive_field_key};
 /// The value must be exactly 32 bytes (UTF-8 encoded) for XChaCha20-Poly1305.
 const ENCRYPTION_KEY_ENV: &str = "VECBOOST_ENCRYPTION_KEY";
 
+/// Validate that the master encryption key is configured.
+///
+/// Returns `Ok(())` when `VECBOOST_ENCRYPTION_KEY` is set to a valid 32-byte value.
+/// Returns `Err(reason)` when the key is missing or has an invalid length.
+///
+/// # Production Deployment
+///
+/// **生产环境必须设置 `VECBOOST_REQUIRE_ENCRYPTION=1`**，否则启动时会自动调用
+/// 此函数校验密钥。未配置时敏感字段（JWT secret、admin password 等）将以明文
+/// 存储，存在安全风险。
+///
+/// # Usage
+///
+/// Call during application startup to enforce encryption in production:
+///
+/// ```rust,ignore
+/// crate::config::encryption::validate_encryption_key()?;
+/// ```
+pub fn validate_encryption_key() -> Result<(), String> {
+    match read_master_key() {
+        Some(_) => Ok(()),
+        None => {
+            if std::env::var(ENCRYPTION_KEY_ENV).is_err() {
+                Err(crate::i18n::tr_with_args(
+                    "config-encryption-missing",
+                    crate::i18n::tr_args(&[("key", ENCRYPTION_KEY_ENV)]),
+                ))
+            } else {
+                Err(crate::i18n::tr_with_args(
+                    "config-encryption-length",
+                    crate::i18n::tr_args(&[("key", ENCRYPTION_KEY_ENV)]),
+                ))
+            }
+        }
+    }
+}
+
 /// HKDF field path used to derive per-field encryption keys.
 const FIELD_PATH: &str = "vecboost.config.sensitive";
 
@@ -59,8 +96,19 @@ const KEY_VERSION: &str = "v1";
 /// Read the 32-byte master key from the environment.
 ///
 /// Returns `None` when the env var is unset or empty (encryption disabled).
+/// 未配置时记录 `log::warn!` 提醒生产环境应配置加密密钥。
 fn read_master_key() -> Option<[u8; 32]> {
-    let key = std::env::var(ENCRYPTION_KEY_ENV).ok()?;
+    let key = match std::env::var(ENCRYPTION_KEY_ENV) {
+        Ok(k) => k,
+        Err(_) => {
+            log::warn!(
+                "{ENCRYPTION_KEY_ENV} not set — sensitive config fields stored as plaintext. \
+                 Production deployments MUST set this to a 32-byte key \
+                 (e.g. `openssl rand -hex 32`) and enable VECBOOST_REQUIRE_ENCRYPTION=1."
+            );
+            return None;
+        }
+    };
     if key.len() != 32 {
         log::warn!(
             "{ENCRYPTION_KEY_ENV} must be exactly 32 bytes for XChaCha20-Poly1305, \
@@ -175,11 +223,16 @@ pub mod encrypted_option {
 mod tests {
     use super::*;
 
+    /// 串行化进程级环境变量 VECBOOST_ENCRYPTION_KEY 的测试访问(共享锁见 utils::test_env_lock)。
+    use crate::utils::test_env_lock::ENV_LOCK;
+    use serde::{Deserialize, Serialize};
+
     /// A fixed 32-byte key used exclusively by unit tests.
     const TEST_KEY: [u8; 32] = *b"vecboost-test-encryption-key-32b"; // pragma: allowlist secret
 
     #[test]
     fn test_encrypt_decrypt_hex_roundtrip() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let plaintext = b"super-secret-jwt-token";
         let encrypted = encrypt_to_hex(plaintext, &TEST_KEY).expect("encrypt");
         let decrypted = decrypt_from_hex(&encrypted, &TEST_KEY).expect("decrypt");
@@ -188,6 +241,7 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_hex_empty_plaintext() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let plaintext = b"";
         let encrypted = encrypt_to_hex(plaintext, &TEST_KEY).expect("encrypt");
         let decrypted = decrypt_from_hex(&encrypted, &TEST_KEY).expect("decrypt");
@@ -196,6 +250,7 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_hex_unicode() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let plaintext = "你好世界🌍".as_bytes();
         let encrypted = encrypt_to_hex(plaintext, &TEST_KEY).expect("encrypt");
         let decrypted = decrypt_from_hex(&encrypted, &TEST_KEY).expect("decrypt");
@@ -204,6 +259,7 @@ mod tests {
 
     #[test]
     fn test_decrypt_with_wrong_key_fails() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let plaintext = b"secret-data";
         let encrypted = encrypt_to_hex(plaintext, &TEST_KEY).expect("encrypt");
         let wrong_key = *b"vecboost-wrong-encryption-key32b"; // pragma: allowlist secret
@@ -213,14 +269,170 @@ mod tests {
 
     #[test]
     fn test_decrypt_invalid_hex_fails() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let result = decrypt_from_hex("not-valid-hex!", &TEST_KEY);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_decrypt_too_short_value_fails() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // 10 hex chars = 5 bytes, less than NONCE_SIZE (24)
         let result = decrypt_from_hex("aabbccddee", &TEST_KEY);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_encryption_key_missing() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+        let result = validate_encryption_key();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_encryption_key_wrong_length() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "tooshort") };
+        let result = validate_encryption_key();
+        assert!(result.is_err());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+    }
+
+    #[test]
+    fn test_validate_encryption_key_valid() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var(
+                "VECBOOST_ENCRYPTION_KEY",
+                "vecboost-test-encryption-key-32b",
+            )
+        };
+        let result = validate_encryption_key();
+        assert!(result.is_ok());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+    }
+
+    #[test]
+    fn test_read_master_key_missing() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+        assert!(read_master_key().is_none());
+    }
+
+    #[test]
+    fn test_read_master_key_wrong_length() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("VECBOOST_ENCRYPTION_KEY", "short") };
+        assert!(read_master_key().is_none());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+    }
+
+    #[test]
+    fn test_read_master_key_valid() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var(
+                "VECBOOST_ENCRYPTION_KEY",
+                "vecboost-test-encryption-key-32b",
+            )
+        };
+        let key = read_master_key();
+        assert!(key.is_some());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+    }
+
+    #[test]
+    fn test_derive_key_produces_32_bytes() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let derived = derive_key(&TEST_KEY);
+        assert!(derived.is_ok());
+        assert_eq!(derived.unwrap().len(), 32);
+    }
+
+    #[test]
+    fn test_encrypted_option_serde_none() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        #[derive(Serialize, Deserialize)]
+        struct Cfg {
+            #[serde(
+                default,
+                serialize_with = "encrypted_option::serialize",
+                deserialize_with = "encrypted_option::deserialize"
+            )]
+            val: Option<String>,
+        }
+        let cfg = Cfg { val: None };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let deserialized: Cfg = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.val.is_none());
+    }
+
+    #[test]
+    fn test_encrypted_option_serde_some_no_key() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+        #[derive(Serialize, Deserialize)]
+        struct Cfg {
+            #[serde(
+                default,
+                serialize_with = "encrypted_option::serialize",
+                deserialize_with = "encrypted_option::deserialize"
+            )]
+            val: Option<String>,
+        }
+        let cfg = Cfg {
+            val: Some("plaintext".to_string()),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let deserialized: Cfg = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.val, Some("plaintext".to_string()));
+    }
+
+    #[test]
+    fn test_encrypted_option_serde_some_with_key() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var(
+                "VECBOOST_ENCRYPTION_KEY",
+                "vecboost-test-encryption-key-32b",
+            )
+        };
+        #[derive(Serialize, Deserialize)]
+        struct Cfg {
+            #[serde(
+                default,
+                serialize_with = "encrypted_option::serialize",
+                deserialize_with = "encrypted_option::deserialize"
+            )]
+            val: Option<String>,
+        }
+        let cfg = Cfg {
+            val: Some("secret".to_string()),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        // Encrypted value should differ from plaintext
+        assert!(!json.contains("\"secret\""));
+        let deserialized: Cfg = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.val, Some("secret".to_string()));
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+    }
+
+    #[test]
+    fn test_encrypted_option_deserialize_none() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::remove_var("VECBOOST_ENCRYPTION_KEY") };
+        #[derive(Serialize, Deserialize)]
+        struct Cfg {
+            #[serde(
+                default,
+                serialize_with = "encrypted_option::serialize",
+                deserialize_with = "encrypted_option::deserialize"
+            )]
+            val: Option<String>,
+        }
+        let json = r#"{}"#;
+        let deserialized: Cfg = serde_json::from_str(json).unwrap();
+        assert!(deserialized.val.is_none());
     }
 }

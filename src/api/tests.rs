@@ -126,6 +126,7 @@ fn make_service(dimension: usize) -> EmbeddingService {
         memory_limit_bytes: None,
         oom_fallback_enabled: true,
         model_sha256: None,
+        quantized: false,
     };
     let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(mock_engine));
     // NOTE: temp_dir is intentionally dropped here. TestEngine does not read from
@@ -146,7 +147,6 @@ async fn test_embed_returns_vector() {
     let response = result.unwrap();
     assert_eq!(response.dimension, 384);
     assert_eq!(response.embedding.len(), 384);
-    // Verify the vector is L2-normalized
     let norm: f32 = response.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
     assert!((norm - 1.0).abs() < 1e-5);
 }
@@ -227,6 +227,7 @@ async fn test_compute_similarity_returns_score() {
     let req = SimilarityRequest {
         source: "Hello world".to_string(),
         target: "Hello rust".to_string(),
+        metric: None,
     };
     let result = compute_similarity(&service, req).await;
     assert!(result.is_ok());
@@ -241,6 +242,7 @@ async fn test_compute_similarity_identical_texts_returns_one() {
     let req = SimilarityRequest {
         source: "identical text".to_string(),
         target: "identical text".to_string(),
+        metric: None,
     };
     let result = compute_similarity(&service, req).await;
     assert!(result.is_ok());
@@ -255,6 +257,7 @@ async fn test_compute_similarity_empty_source_returns_error() {
     let req = SimilarityRequest {
         source: "".to_string(),
         target: "valid target".to_string(),
+        metric: None,
     };
     let result = compute_similarity(&service, req).await;
     assert!(result.is_err());
@@ -270,6 +273,7 @@ async fn test_compute_similarity_empty_target_returns_error() {
     let req = SimilarityRequest {
         source: "valid source".to_string(),
         target: "".to_string(),
+        metric: None,
     };
     let result = compute_similarity(&service, req).await;
     assert!(result.is_err());
@@ -329,30 +333,34 @@ fn test_to_api_error_model_load_error() {
     let err = VecboostError::ModelLoadError("model not found".to_string());
     let api_err = to_api_error(err);
     match api_err {
-        ApiError::Internal {
-            message, error_id, ..
+        ApiError::NotFound {
+            resource,
+            resource_id,
         } => {
-            assert!(message.contains("Model load error"));
-            assert!(message.contains("model not found"));
-            assert!(error_id.starts_with("err-"));
+            assert_eq!(resource, "model");
+            assert!(
+                resource_id
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("model not found")
+            );
         }
-        other => panic!("Expected Internal, got {:?}", other),
+        other => panic!("Expected NotFound, got {:?}", other),
     }
 }
 
 #[cfg(any(feature = "http", feature = "cli"))]
 #[test]
 fn test_to_api_error_other_variants_become_internal() {
+    // Note: ValidationError → InvalidInput, ModelLoadError → NotFound,
+    // RateLimitExceeded → ServiceUnavailable (tested separately)
     let variants = vec![
         VecboostError::ConfigError("cfg err".to_string()),
         VecboostError::InferenceError("inf err".to_string()),
         VecboostError::AuthenticationError("auth err".to_string()),
         VecboostError::DatabaseError("db err".to_string()),
         VecboostError::InternalError("internal err".to_string()),
-        VecboostError::RateLimitExceeded("rl err".to_string()),
-        VecboostError::ValidationError("val err".to_string()),
         VecboostError::IoError("io err".to_string()),
-        VecboostError::NotFound("nf err".to_string()),
         VecboostError::SecurityError("sec err".to_string()),
         VecboostError::ModelNotLoaded("not loaded".to_string()),
         VecboostError::ModelFileCorrupted("corrupted".to_string()),
@@ -455,6 +463,7 @@ async fn test_forge_compute_similarity_success() {
     let req = SimilarityRequest {
         source: "hello".to_string(),
         target: "world".to_string(),
+        metric: None,
     };
     let result = forge_compute_similarity(req).await;
     assert!(result.is_ok());
@@ -469,6 +478,7 @@ async fn test_forge_compute_similarity_empty_source_error() {
     let req = SimilarityRequest {
         source: "".to_string(),
         target: "target".to_string(),
+        metric: None,
     };
     let result = forge_compute_similarity(req).await;
     assert!(result.is_err());
@@ -516,6 +526,7 @@ async fn test_cli_compute_similarity_success() {
     let req = SimilarityRequest {
         source: "source text".to_string(),
         target: "target text".to_string(),
+        metric: None,
     };
     let result = cli_compute_similarity(req).await;
     assert!(
@@ -534,20 +545,21 @@ async fn test_cli_compute_similarity_empty_source_returns_error() {
     let req = SimilarityRequest {
         source: "".to_string(),
         target: "target".to_string(),
+        metric: None,
     };
     let result = cli_compute_similarity(req).await;
     assert!(result.is_err());
 }
 
 // ---------------------------------------------------------------------------
-// T023: forge handler require calls bounded under 100 requests (R-api-routing-004)
+// forge handler require calls bounded under 100 requests
 // ---------------------------------------------------------------------------
 
 /// Verify that forge handlers make a bounded number of `kit.require::<Module>()`
-/// calls per request. R-api-routing-004 acceptance criterion 2 requires total
+/// calls per request. acceptance criterion 2 requires total
 /// require calls ≤ 4 × request_count (≤ 400 for 100 requests).
 ///
-/// `forge_embed` (src/api/embedding.rs L128-141) calls `require::<EmbeddingModule>()`
+/// `forge_embed` (src/api/embedding.rs) calls `require::<EmbeddingModule>()`
 /// exactly once per invocation. 100 requests × 1 require = 100 requires ≤ 400 ✓.
 ///
 /// `trait_kit::AsyncKit` does not expose a require-counter API, so we use an
@@ -576,20 +588,20 @@ async fn test_forge_handler_require_calls_bounded_under_100_requests() {
 }
 
 // ---------------------------------------------------------------------------
-// T026: AuditLogger called by forge handler pattern (R-audit-004)
+// AuditLogger called by forge handler pattern
 // ---------------------------------------------------------------------------
 
 /// Verify that `AuditLogger` correctly records login_success and logout events
 /// when invoked using the same call pattern as `forge_login` and `forge_logout`.
 ///
-/// R-audit-004 acceptance criteria 4-5:
+/// Acceptance criteria 4-5:
 /// - After forge_login: `log_login_success` is called and the ip argument is non-empty.
 /// - After forge_logout: `log_logout` is called and the username matches the login user.
 ///
 /// `AuditLogger` is a concrete struct (not a trait), so we use a real logger with
 /// a tempdir file backend (per task spec 方案 B). The test mirrors the exact audit
-/// call sites in `forge_login` (src/api/auth.rs L72) and `forge_logout`
-/// (src/api/auth.rs L159), exercising the full Event → channel → file write path.
+/// call sites in `forge_login` and `forge_logout` (src/api/auth.rs),
+/// exercising the full Event → channel → file write path.
 #[cfg(feature = "http")]
 #[tokio::test]
 async fn test_audit_logger_called_by_forge_handler_pattern() {
@@ -607,13 +619,13 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
     };
     let logger = AuditLogger::new(audit_config);
 
-    // Mirror forge_login audit call (src/api/auth.rs L72):
+    // Mirror forge_login audit call:
     //   logger.log_login_success(&req.username, Some(peer_ip.clone()));
     let peer_ip = "192.168.1.100".to_string();
     let username = "testuser";
     logger.log_login_success(username, Some(peer_ip.clone()));
 
-    // Mirror forge_logout audit call (src/api/auth.rs L159):
+    // Mirror forge_logout audit call:
     //   logger.log_logout(&auth_ctx.user.username, Some(peer_ip));
     logger.log_logout(username, Some(peer_ip.clone()));
 
@@ -623,7 +635,6 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
         .await
         .expect("audit log file should exist after flush");
 
-    // R-audit-004 验收点 4: log_login_success 被调用且 ip 非空
     assert!(
         content.contains("login_success"),
         "login_success event should be logged"
@@ -633,7 +644,6 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
         "ip should be non-empty in login event"
     );
 
-    // R-audit-004 验收点 5: log_logout 被调用且 username 匹配登录用户
     assert!(content.contains("logout"), "logout event should be logged");
     assert!(
         content.contains(username),

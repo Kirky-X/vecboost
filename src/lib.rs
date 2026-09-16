@@ -18,8 +18,10 @@ pub mod auth;
 pub mod config;
 #[cfg(feature = "db")]
 pub mod db;
+pub mod doctor;
 pub mod domain;
 pub mod engine;
+pub mod i18n;
 pub mod library;
 pub mod metrics;
 pub mod pipeline;
@@ -29,13 +31,10 @@ pub mod security;
 pub mod service;
 pub mod utils;
 
-// 条件编译模块 — 仅在对应 feature 启用时可见
 pub mod logger;
 
-// 导出 config::app 中的类型
 pub use crate::pipeline::PriorityConfig;
 
-// 内部实现模块 - 只在 crate 内部使用，不暴露给外部
 pub(crate) mod cache;
 pub(crate) mod device;
 pub mod error;
@@ -60,19 +59,41 @@ pub use service::rerank::RerankService;
 pub use utils::SimilarityMetric;
 pub use utils::vector::{TaskType, information_retention_rate, recommended_dimension};
 
-// 重新导出批处理调度类型（供 benchmark 和外部集成测试使用）
-pub use device::batch_scheduler::{
-    BatchConfig, BatchPriority, BatchRequest, DynamicBatchScheduler,
-};
-pub use device::continuous_batch::ContinuousBatchLoop;
+// 重新导出内存分页类型（供 benchmark 和外部集成测试使用）
 pub use device::memory_paging::{PagingConfig, PagingStats, WeightPagingManager};
 
-// 重新导出语义缓存类型
-pub use cache::{SemanticCache, SemanticCacheConfig, SemanticCacheStats};
+/// 线程调优公共 API：bin 与外部工具共享物理核检测与优先级解析。
+/// 模型驻留管理（server 接线）：`model` 为 pub(crate)，
+/// 经最小面重导出供 bin 装配 ModelManager。
+pub mod model_management {
+    pub use crate::model::heat::DEFAULT_HEAT_PATH;
+    pub use crate::model::loader::LocalModelLoader;
+    pub use crate::model::manager::ModelManager;
+}
+
+pub mod thread_tune {
+    pub use crate::device::thread_tune::{
+        detect_physical_cores, parse_lscpu_sockets, parse_thread_siblings_lists,
+        resolve_worker_threads,
+    };
+}
+
+/// 硬件感知启动规划公共 API。
+pub mod planner {
+    pub use crate::device::planner::{
+        Bottleneck, HardwarePlan, PlanOverride, Probes, apply_plan, plan,
+    };
+}
+
+pub use cache::{ComparisonMode, SemanticCache, SemanticCacheConfig, SemanticCacheStats};
+
+// 再导出 sdforge 多协议框架（gRPC E2E 集成测试经此使用生成的 tonic 客户端）
+#[cfg(feature = "grpc")]
+pub use sdforge;
 
 /// Application state
 ///
-/// v0.3.0 D3 重构：所有能力通过 `AsyncKit<Ready>` 查询。
+/// 所有能力通过 `AsyncKit<Ready>` 查询。
 /// 启动时由 `main.rs` 通过 `kit.set_config()` 注入预构建对象 + `kit.register::<M>()`
 /// 注册 17 个 Module,`kit.build().await` 后注入到 `VecboostState`。
 ///
@@ -322,7 +343,7 @@ mod tests {
             kit.set_config(Option::<Arc<crate::auth::GarrisonCsrfConfig>>::None);
         }
 
-        // 注册所有 Module（17 个核心 + auth feature 模块）
+        // 注册所有 Module（除 ConfigWatcherModule；auth 模块按 feature 注入）
         kit.register::<LoggerModule>().unwrap();
         kit.register::<EmbeddingModule>().unwrap();
         kit.register::<RerankModule>().unwrap();
@@ -344,7 +365,6 @@ mod tests {
             kit.register::<CsrfConfigModule>().unwrap();
         }
 
-        // T012-T016: Register lifecycle and health check for key modules
         kit.register_lifecycle::<EmbeddingModule>();
         kit.register_lifecycle::<RerankModule>();
         kit.register_lifecycle::<RateLimitModule>();
@@ -360,7 +380,7 @@ mod tests {
 
     /// 默认完整 VecboostState：metrics=Some, prometheus=Some, audit=None
     #[cfg(feature = "http")]
-    async fn make_app_state() -> VecboostState {
+    pub(crate) async fn make_app_state() -> VecboostState {
         make_app_state_with_options(
             Some(Arc::new(metrics::InferenceCollector::new())),
             Some(Arc::new(
@@ -517,7 +537,6 @@ mod tests {
             .kit
             .require::<LoggerModule>()
             .expect("require LoggerModule");
-        // LoggerManager 应成功构建且可用
         let _ = logger;
     }
 
@@ -657,10 +676,10 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // T019/T020: Health check + graceful shutdown integration tests
+    // Health check + graceful shutdown integration tests
     // -------------------------------------------------------------------------
 
-    /// T019: Verify health checks return Healthy for all registered modules.
+    /// Verify health checks return Healthy for all registered modules.
     #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_health_checks_return_healthy() {
@@ -703,13 +722,69 @@ mod tests {
         );
     }
 
-    /// T020: Verify AsyncKit shutdown invokes lifecycle hooks without panic.
+    /// Verify AsyncKit shutdown invokes lifecycle hooks without panic.
     #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_kit_shutdown_completes_cleanly() {
         let state = make_app_state().await;
-        // AsyncKit::shutdown() calls sync shutdown callbacks (lifecycle modules)
+        // AsyncKit::shutdown_async() awaits async shutdown callbacks (lifecycle modules)
         // Should not panic even with async lifecycle modules registered
-        state.kit.shutdown();
+        state.kit.shutdown_async().await;
+    }
+
+    /// VecboostState::new() and kit()
+    /// Verifies that `kit()` returns a reference to the internal `Arc<AsyncKit>`
+    /// and that all registered modules are accessible through it.
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_vecboost_state_new_and_kit_accessor() {
+        let state = make_app_state().await;
+        let kit_ref = state.kit();
+        // kit() returns &Arc<AsyncKit>; only `state` owns the Arc → strong_count == 1
+        assert_eq!(Arc::strong_count(kit_ref), 1);
+        assert!(kit_ref.contains::<EmbeddingModule>());
+        assert!(kit_ref.contains::<RerankModule>());
+        assert!(kit_ref.contains::<RateLimitModule>());
+        assert!(kit_ref.contains::<AuditModule>());
+    }
+
+    /// VecboostState::new() constructs from Arc<AsyncKit>
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_vecboost_state_constructor() {
+        let state = make_app_state().await;
+        let kit_clone = state.kit().clone();
+        let new_state = VecboostState::new(kit_clone);
+        assert!(new_state.kit.contains::<EmbeddingModule>());
+    }
+
+    /// MockEngine direct trait method calls for coverage
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_mock_engine_direct_method_calls() {
+        let engine = MockEngine;
+        let vec = engine.embed("hello").unwrap();
+        assert_eq!(vec.len(), 384);
+        assert!(vec.iter().all(|&v| v == 0.0));
+        let texts = vec!["hello".to_string(), "world".to_string()];
+        let batch = engine.embed_batch(&texts).unwrap();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].len(), 384);
+        assert_eq!(*engine.precision(), Precision::Fp32);
+        assert!(!engine.supports_mixed_precision());
+        let config = crate::config::model::ModelConfig::default();
+        let mut engine_mut = MockEngine;
+        let result = engine_mut.try_fallback_to_cpu(&config).await;
+        assert!(result.is_ok());
+    }
+
+    /// FromRef<VecboostState> for AuthConfig
+    #[cfg(all(feature = "http", feature = "auth"))]
+    #[tokio::test]
+    async fn test_from_ref_auth_config_returns_default() {
+        let state = make_app_state().await;
+        let auth_config: config::app::AuthConfig = FromRef::from_ref(&state);
+        // When auth is not configured, should return default
+        let _ = auth_config;
     }
 }

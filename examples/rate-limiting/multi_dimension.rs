@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) 耗尽 IP 维度（限额 5）
     let ip_context = RequestContext {
         client_ip: Some("192.168.1.10".to_string()),
-        path: "/api/v1/embed".to_string(),
+        path: "/api/1/embed".to_string(),
         method: "POST".to_string(),
         ..Default::default()
     };
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2) 用户维度仍可用（不同 RequestContext 无 client_ip，仅检查 user_id）
     let user_context = RequestContext {
         user_id: Some("alice".to_string()),
-        path: "/api/v1/embed".to_string(),
+        path: "/api/1/embed".to_string(),
         method: "POST".to_string(),
         ..Default::default()
     };
@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let combined_context = RequestContext {
         client_ip: Some("192.168.1.10".to_string()),
         user_id: Some("alice".to_string()),
-        path: "/api/v1/embed".to_string(),
+        path: "/api/1/embed".to_string(),
         method: "POST".to_string(),
         ..Default::default()
     };
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4) 切换新 IP 仍可用（IP 维度按 IP 独立计数）
     let new_ip_context = RequestContext {
         client_ip: Some("10.0.0.1".to_string()),
-        path: "/api/v1/embed".to_string(),
+        path: "/api/1/embed".to_string(),
         method: "POST".to_string(),
         ..Default::default()
     };

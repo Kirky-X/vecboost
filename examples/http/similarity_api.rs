@@ -19,11 +19,11 @@ struct SimilarityResponseBody {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🚀 HTTP POST /api/v1/similarity 示例");
+    println!("🚀 HTTP POST /api/1/similarity 示例");
     println!("====================================\n");
 
     let client = Client::new();
-    let url = "http://localhost:9002/api/v1/similarity";
+    let url = "http://localhost:9002/api/1/similarity";
     let body = SimilarityRequestBody {
         source: "hello".to_string(),
         target: "world".to_string(),

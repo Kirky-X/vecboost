@@ -8,20 +8,47 @@
 use crate::VecboostState;
 use crate::domain::EmbedRequest;
 use crate::error::VecboostError;
+use crate::i18n;
 use std::time::Duration;
-use tokio::sync::oneshot;
-use uuid::Uuid;
 
 /// 处理流水线请求
+/// 进程级请求 ID 计数器 —— u64 原子递增,十六进制展示
+/// (替代 UUID String:省一次堆分配与随机熵开销,格式仍可读)
+static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// pipeline 在途请求计数(入队等待响应期间 +1,完成 -1)
+pub static IN_FLIGHT_REQUESTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// RAII 守卫:离开 pipeline 等待路径时自动递减
+pub(crate) struct InFlightGuard;
+impl InFlightGuard {
+    pub(crate) fn enter() -> Self {
+        IN_FLIGHT_REQUESTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        InFlightGuard
+    }
+}
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        IN_FLIGHT_REQUESTS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn next_request_id() -> String {
+    format!(
+        "{:x}",
+        NEXT_REQUEST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
 pub async fn handle_pipeline_request(
     state: VecboostState,
     req: EmbedRequest,
     ip: String,
 ) -> Result<axum::Json<crate::domain::EmbedResponse>, VecboostError> {
-    // 生成请求 ID
-    let request_id = Uuid::new_v4().to_string();
+    let request_id = next_request_id();
+    // 进入 pipeline 等待即计为在途(RAII,任何退出路径自动递减)
+    let _in_flight = InFlightGuard::enter();
 
-    // 创建响应通道
     let response_rx = state
         .kit
         .require::<crate::registry::ResponseChannelModule>()
@@ -29,7 +56,6 @@ pub async fn handle_pipeline_request(
         .register(request_id.clone())
         .await;
 
-    // 构建队列请求
     let priority = state
         .kit
         .require::<crate::registry::PriorityCalculatorModule>()
@@ -46,8 +72,7 @@ pub async fn handle_pipeline_request(
                 .size(),
         });
 
-    let (tx, _) = oneshot::channel();
-
+    // 不再创建被丢弃的 oneshot —— 响应统一走 ResponseChannel.register
     let queued_request = crate::pipeline::QueuedRequest {
         request_id: request_id.clone(),
         request: crate::pipeline::ServiceRequest::Embed(req),
@@ -55,10 +80,8 @@ pub async fn handle_pipeline_request(
         submitted_at: std::time::Instant::now(),
         timeout: Duration::from_secs(30),
         source: crate::pipeline::RequestSource::http(ip),
-        response_tx: tx,
     };
 
-    // 提交到流水线队列
     state
         .kit
         .require::<crate::registry::PipelineQueueModule>()
@@ -66,22 +89,23 @@ pub async fn handle_pipeline_request(
         .enqueue(queued_request)
         .await?;
 
-    // 等待响应
     match tokio::time::timeout(Duration::from_secs(30), response_rx).await {
         Ok(Ok(Ok(response))) => Ok(axum::Json(response)),
         Ok(Ok(Err(e))) => Err(e),
-        Ok(Err(_)) => Err(VecboostError::InternalError(
-            "Response channel error".to_string(),
-        )),
-        Err(_) => Err(VecboostError::ValidationError(
-            "Request timeout".to_string(),
-        )),
+        Ok(Err(_)) => Err(VecboostError::InternalError(i18n::tr(
+            "pipeline-channel-error",
+        ))),
+        Err(_) => Err(VecboostError::ValidationError(i18n::tr("pipeline-timeout"))),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ensure_i18n_init() {
+        i18n::init();
+    }
     use crate::config::model::{ModelConfig, Precision};
     use crate::domain::EmbedRequest;
     use crate::engine::InferenceEngine;
@@ -368,6 +392,7 @@ mod tests {
     /// 验证 handle_pipeline_request 在 response channel sender 被 drop 时返回 InternalError。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_response_channel_error() {
+        ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(100, engine).await;
@@ -414,6 +439,7 @@ mod tests {
     /// 使用 start_paused 模拟时间流逝,不启动 consumer 让 response 永远 pending。
     #[tokio::test(start_paused = true)]
     async fn test_handle_pipeline_request_timeout() {
+        ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(100, engine).await;
@@ -971,7 +997,6 @@ mod tests {
             }
         });
 
-        // Send first request
         let req1 = EmbedRequest {
             text: "first".to_string(),
             normalize: Some(true),
@@ -981,7 +1006,6 @@ mod tests {
             handle_pipeline_request(state1, req1, "127.0.0.1".to_string()).await
         });
 
-        // Send second request
         let req2 = EmbedRequest {
             text: "second".to_string(),
             normalize: Some(true),

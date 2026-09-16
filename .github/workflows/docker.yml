@@ -20,6 +20,10 @@ on:
   schedule:
     - cron: '0 0 * * 0'  # Weekly security scan
 
+# 最小权限:顶层只读,deploy job 单独声明 packages: write
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 

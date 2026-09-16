@@ -801,4 +801,134 @@ mod tests {
         assert_eq!(cap.compute_capability, Some((9, 0)));
         assert_eq!(cap.max_memory_bytes, 80 * 1024 * 1024 * 1024);
     }
+
+    #[tokio::test]
+    async fn test_available_memory_with_initialized_manager() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+        let count = manager.device_count().await;
+        if count > 0 {
+            // Memory manager exists for device 0 → goes through memory_manager path
+            let mem = manager.available_memory(0).await;
+            assert!(mem.is_some());
+            assert!(mem.unwrap() > 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_optimal_batch_size_with_memory_manager() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+        let count = manager.device_count().await;
+        if count > 0 {
+            let batch = manager.get_optimal_batch_size(0).await;
+            // Should use memory manager path (performance stats or fallback algorithm)
+            assert!(batch > 0);
+            assert!(batch <= MAX_FALLBACK_BATCH_SIZE);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register_and_query_model_memory_requirements() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+        let count = manager.device_count().await;
+        if count > 0 {
+            let requirements = ModelMemoryRequirements {
+                model_name: "test-model".to_string(),
+                base_memory_bytes: 100_000_000,
+                per_token_memory_bytes: 1000,
+                per_vector_memory_bytes: 4000,
+                max_sequence_length: 512,
+            };
+            let result = manager
+                .register_model_memory_requirements(0, requirements)
+                .await;
+            assert!(result.is_ok());
+
+            // After registration, performance stats should be available
+            let stats = manager.get_performance_stats(0).await;
+            assert!(stats.is_some());
+
+            // Memory usage percent should be queryable
+            let usage = manager.get_memory_usage_percent(0).await;
+            assert!(usage >= 0.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_adjust_batch_size_with_manager() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+        let count = manager.device_count().await;
+        if count > 0 {
+            // Should not panic with valid device
+            manager.adjust_batch_size_dynamically(0, 50.0, 60.0).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reset_primary_device_success() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+        let count = manager.device_count().await;
+        if count > 0 {
+            let result = manager.reset_primary_device(0).await;
+            assert!(result.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_primary_device_with_initialized_manager() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+        let count = manager.device_count().await;
+        if count > 0 {
+            let primary = manager.primary_device().await;
+            assert!(primary.is_some());
+            assert_eq!(primary.unwrap().device_id(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_initialize_creates_memory_managers() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+        let count = manager.device_count().await;
+        if count > 0 {
+            // Memory managers should be created for each device
+            // Verify by checking that available_memory returns Some
+            for i in 0..count {
+                let mem = manager.available_memory(i).await;
+                assert!(
+                    mem.is_some(),
+                    "available_memory should exist for device {}",
+                    i
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_device_valid_after_init() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+        let count = manager.device_count().await;
+        if count > 0 {
+            let device = manager.get_device(0).await;
+            assert!(device.is_some());
+            let device = device.unwrap();
+            assert!(!device.name().is_empty());
+            assert!(device.total_memory() > 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_is_supported_after_init() {
+        let manager = CudaDeviceManager::new();
+        manager.initialize().await.unwrap();
+        let count = manager.device_count().await;
+        // If nvidia-smi found a GPU, is_supported should be true
+        assert_eq!(manager.is_supported().await, count > 0);
+    }
 }

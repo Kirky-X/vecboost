@@ -13,6 +13,7 @@ use super::response_channel::ResponseChannel;
 use super::worker::WorkerManager;
 use crate::domain::ServiceResponse;
 use crate::error::VecboostError;
+use crate::i18n;
 use crate::service::embedding::EmbeddingService;
 use crate::service::rerank::RerankService;
 
@@ -69,7 +70,7 @@ impl PipelineScheduler {
             }
             ServiceRequest::Rerank(rerank_req) => {
                 let rerank_service = self.rerank_service.as_ref().ok_or_else(|| {
-                    VecboostError::InternalError("Rerank service not configured".to_string())
+                    VecboostError::InternalError(i18n::tr("rerank-not-configured"))
                 })?;
                 let service = rerank_service.read().await;
                 let resp = service.process_rerank(rerank_req, 100, 8192).await?;
@@ -97,6 +98,10 @@ impl PipelineScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ensure_i18n_init() {
+        i18n::init();
+    }
     use crate::config::model::{ModelConfig, Precision};
     use crate::domain::EmbedRequest;
     use crate::engine::InferenceEngine;
@@ -206,7 +211,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -264,7 +268,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -349,7 +352,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -406,7 +408,6 @@ mod tests {
                     source: RequestSource::Http {
                         ip: "127.0.0.1".to_string(),
                     },
-                    response_tx: tokio::sync::oneshot::channel().0,
                 };
                 scheduler.process_request(request).await
             }));
@@ -501,7 +502,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -552,7 +552,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -603,7 +602,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -645,7 +643,6 @@ mod tests {
             submitted_at: Instant::now(),
             timeout: Duration::from_secs(30),
             source: RequestSource::Internal,
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -690,7 +687,6 @@ mod tests {
             source: RequestSource::Grpc {
                 client_id: "client-1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -735,7 +731,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -782,7 +777,7 @@ mod tests {
     }
 
     // =========================================================================
-    // T016: ServiceRequest::Rerank routing tests
+    // ServiceRequest::Rerank routing tests
     // =========================================================================
 
     /// Mock engine that supports rerank with deterministic scores
@@ -865,7 +860,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await.unwrap();
@@ -914,7 +908,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await.unwrap();
@@ -931,6 +924,7 @@ mod tests {
     /// Rerank request without rerank_service configured returns error
     #[tokio::test(flavor = "multi_thread")]
     async fn test_rerank_without_service_returns_error() {
+        ensure_i18n_init();
         let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
         let response_channel = Arc::new(ResponseChannel::new());
         let service = create_test_service();
@@ -964,7 +958,6 @@ mod tests {
             source: RequestSource::Http {
                 ip: "127.0.0.1".to_string(),
             },
-            response_tx: tokio::sync::oneshot::channel().0,
         };
 
         let result = scheduler.process_request(request).await;
@@ -975,5 +968,86 @@ mod tests {
             }
             other => panic!("Expected InternalError, got: {:?}", other),
         }
+    }
+
+    // -- Direct mock method calls to cover unused trait impls --
+    #[test]
+    fn test_test_engine_embed_batch() {
+        let engine = TestEngine::new(128);
+        let texts = vec!["a".to_string(), "b".to_string()];
+        let vecs = engine.embed_batch(&texts).unwrap();
+        assert_eq!(vecs.len(), 2);
+        assert_eq!(vecs[0].len(), 128);
+    }
+
+    #[test]
+    fn test_test_engine_precision() {
+        let engine = TestEngine::new(4);
+        assert_eq!(*engine.precision(), Precision::Fp32);
+    }
+
+    #[test]
+    fn test_test_engine_supports_mixed_precision() {
+        let engine = TestEngine::new(4);
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    #[tokio::test]
+    async fn test_test_engine_try_fallback() {
+        let mut engine = TestEngine::new(4);
+        let config = ModelConfig {
+            name: "test".to_string(),
+            engine_type: crate::config::model::EngineType::Candle,
+            model_path: std::path::PathBuf::from("/tmp"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+            quantized: false,
+        };
+        assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
+    }
+
+    #[test]
+    fn test_error_engine_embed_batch() {
+        let engine = ErrorEngine::new();
+        let texts = vec!["a".to_string()];
+        assert!(engine.embed_batch(&texts).is_err());
+    }
+
+    #[test]
+    fn test_error_engine_precision() {
+        let engine = ErrorEngine::new();
+        assert_eq!(*engine.precision(), Precision::Fp32);
+    }
+
+    #[test]
+    fn test_error_engine_supports_mixed_precision() {
+        let engine = ErrorEngine::new();
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    #[tokio::test]
+    async fn test_error_engine_try_fallback() {
+        let mut engine = ErrorEngine::new();
+        let config = ModelConfig {
+            name: "test".to_string(),
+            engine_type: crate::config::model::EngineType::Candle,
+            model_path: std::path::PathBuf::from("/tmp"),
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+            quantized: false,
+        };
+        assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
     }
 }

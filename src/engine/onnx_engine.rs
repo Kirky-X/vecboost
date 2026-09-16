@@ -15,14 +15,8 @@ use ndarray::{Array1, Array2};
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Tensor;
 use std::sync::{Arc, Mutex};
-#[cfg(target_os = "macos")]
 use tokenizers::Tokenizer;
-
-#[cfg(target_os = "macos")]
 use tokenizers::{PaddingParams, PaddingStrategy};
-
-#[cfg(not(target_os = "macos"))]
-type Tokenizer = crate::text::Tokenizer;
 
 pub struct OnnxEngine {
     session: Arc<Mutex<Session>>,
@@ -174,23 +168,21 @@ impl OnnxEngine {
 
         log::info!("Loading tokenizer...");
         #[allow(unused_mut)]
-        let mut tokenizer = Tokenizer::from_file(&tokenizer_filename.to_string_lossy())
+        let mut tokenizer = Tokenizer::from_file(&tokenizer_filename)
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
-        #[cfg(target_os = "macos")]
-        {
-            if let Some(pp) = tokenizer.get_padding_mut() {
-                pp.strategy = PaddingStrategy::BatchLongest;
-            } else {
-                let pp = PaddingParams {
-                    strategy: PaddingStrategy::BatchLongest,
-                    ..Default::default()
-                };
-                tokenizer.with_padding(Some(pp));
-            }
+        // 全平台启用 padding 配置
+        if let Some(pp) = tokenizer.get_padding_mut() {
+            pp.strategy = PaddingStrategy::BatchLongest;
+        } else {
+            let pp = PaddingParams {
+                strategy: PaddingStrategy::BatchLongest,
+                ..Default::default()
+            };
+            tokenizer.with_padding(Some(pp));
         }
 
-        let vocab_size = tokenizer.get_vocab_size();
+        let vocab_size = tokenizer.get_vocab_size(true);
         let hidden_size = config.expected_dimension.unwrap_or(1024);
         log::info!(
             "Using hidden_size from configuration: {:?}",
@@ -272,13 +264,16 @@ impl OnnxEngine {
                     usage_percent >= threshold_percent
                 })
             } else {
-                let rt = tokio::runtime::Builder::new_current_thread()
+                let rt = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .unwrap_or_else(|_| {
-                        log::error!("Failed to create Tokio runtime for memory check");
-                        std::process::exit(1);
-                    });
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        log::error!("Failed to create Tokio runtime for memory check: {}", e);
+                        return false;
+                    }
+                };
                 rt.block_on(async {
                     let stats = monitor.get_memory_stats().await;
                     let usage_percent = (stats.current_bytes * 100)
@@ -640,6 +635,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         }
     }
 

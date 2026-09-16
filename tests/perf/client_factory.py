@@ -55,7 +55,7 @@ class MockAPIClient(APIClient):
 
         service = AdaptiveEmbeddingService()
 
-        if endpoint == "/api/v1/embed":
+        if endpoint == "/api/1/embed":
             text = data.get("text", "")
             if not text:
                 return 400, {
@@ -70,7 +70,7 @@ class MockAPIClient(APIClient):
             result = service.embed(text)
             return 200, result
 
-        elif endpoint == "/api/v1/similarity":
+        elif endpoint == "/api/1/similarity":
             source = data.get("source", "")
             target = data.get("target", "")
             if not source:
@@ -91,7 +91,7 @@ class MockAPIClient(APIClient):
             result = service.similarity(source, target)
             return 200, result
 
-        elif endpoint == "/api/v1/embed/batch":
+        elif endpoint == "/api/1/embed/batch":
             texts = data.get("texts", [])
             if not texts:
                 return 400, {
@@ -309,8 +309,8 @@ if __name__ == "__main__":
 
     # 测试 Mock embed
     print("2. Testing Mock embed...")
-    status, response = mock_client.post("/api/v1/embed", {"text": "Hello world"})
-    print(f"   POST /api/v1/embed: {status}")
+    status, response = mock_client.post("/api/1/embed", {"text": "Hello world"})
+    print(f"   POST /api/1/embed: {status}")
     if status != 200:
         print(f"   FAIL: expected 200, got {status}")
         sys.exit(1)

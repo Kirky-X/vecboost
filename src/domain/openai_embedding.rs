@@ -15,7 +15,7 @@ use utoipa::ToSchema;
 /// OpenAI-compatible embedding request.
 ///
 /// This structure matches the OpenAI Embeddings API request format.
-/// See: https://platform.openai.com/docs/api-reference/embeddings
+/// See: <https://platform.openai.com/docs/api-reference/embeddings>
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 #[cfg_attr(
@@ -169,11 +169,23 @@ pub struct EmbeddingObject {
     /// The object type, always "embedding"
     pub object: String,
 
-    /// The embedding vector
-    pub embedding: Vec<f32>,
+    /// The embedding vector — float array by default, base64-encoded
+    /// little-endian f32 bytes when `encoding_format=base64`
+    pub embedding: EmbeddingData,
 
     /// The index of this embedding in the response
     pub index: usize,
+}
+
+/// Embedding payload: float array or base64-encoded f32 bytes (OpenAI spec).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
+#[serde(untagged)]
+pub enum EmbeddingData {
+    /// Standard float array (encoding_format=float, 默认)
+    Floats(Vec<f32>),
+    /// Base64-encoded little-endian f32 bytes (encoding_format=base64)
+    Base64(String),
 }
 
 /// Usage statistics for the request.

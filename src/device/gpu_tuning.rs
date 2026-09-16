@@ -289,4 +289,133 @@ mod tests {
         // 我们只验证不会 panic
         let _ = result;
     }
+
+    #[test]
+    fn test_check_and_advise_produces_correct_recommendations() {
+        let report = GpuTuningAdvisor::check_and_advise();
+        // 验证报告结构完整
+        assert!(matches!(
+            report.persistence_mode,
+            TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable
+        ));
+        assert!(matches!(
+            report.transparent_hugepage,
+            TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable
+        ));
+        assert!(matches!(
+            report.clock_frequency,
+            TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable
+        ));
+        assert!(matches!(
+            report.ecc_status,
+            TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable
+        ));
+        assert!(matches!(
+            report.compute_mode,
+            TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable
+        ));
+        // 每个 Recommended 检查项都应有对应的建议
+        let mut expected_count = 0;
+        if report.persistence_mode == TuningLevel::Recommended {
+            expected_count += 1;
+        }
+        if report.transparent_hugepage == TuningLevel::Recommended {
+            expected_count += 1;
+        }
+        if report.clock_frequency == TuningLevel::Recommended {
+            expected_count += 1;
+        }
+        if report.ecc_status == TuningLevel::Recommended {
+            expected_count += 1;
+        }
+        if report.compute_mode == TuningLevel::Recommended {
+            expected_count += 1;
+        }
+        assert_eq!(
+            report.recommendations.len(),
+            expected_count,
+            "recommendations count should match Recommended items"
+        );
+    }
+
+    #[test]
+    fn test_check_persistence_mode_returns_valid_level() {
+        let level = GpuTuningAdvisor::check_persistence_mode();
+        assert!(matches!(
+            level,
+            TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable
+        ));
+    }
+
+    #[test]
+    fn test_check_clock_frequency_returns_valid_level() {
+        let level = GpuTuningAdvisor::check_clock_frequency();
+        assert!(matches!(
+            level,
+            TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable
+        ));
+    }
+
+    #[test]
+    fn test_check_ecc_status_returns_valid_level() {
+        let level = GpuTuningAdvisor::check_ecc_status();
+        assert!(matches!(
+            level,
+            TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable
+        ));
+    }
+
+    #[test]
+    fn test_check_compute_mode_returns_valid_level() {
+        let level = GpuTuningAdvisor::check_compute_mode();
+        assert!(matches!(
+            level,
+            TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable
+        ));
+    }
+
+    #[test]
+    fn test_run_nvidia_smi_with_valid_query() {
+        // nvidia-smi 可用时，查询 name 应返回 Some
+        let result = run_nvidia_smi(&["--query-gpu=name", "--format=csv,noheader"]);
+        if std::process::Command::new("nvidia-smi").output().is_ok() {
+            assert!(result.is_some());
+            let name = result.unwrap();
+            assert!(!name.trim().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_run_nvidia_smi_with_invalid_field() {
+        // 查询无效字段时 nvidia-smi 应失败，返回 None
+        let result = run_nvidia_smi(&["--query-gpu=nonexistent_field", "--format=csv,noheader"]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_tuning_level_clone_and_eq() {
+        let a = TuningLevel::Optimal;
+        let b = a.clone();
+        assert_eq!(a, b);
+        let c = TuningLevel::Recommended;
+        assert_ne!(a, c);
+        let d = TuningLevel::NotApplicable;
+        assert_ne!(a, d);
+        assert_ne!(c, d);
+    }
+
+    #[test]
+    fn test_gpu_tuning_report_clone() {
+        let report = GpuTuningReport {
+            persistence_mode: TuningLevel::Optimal,
+            transparent_hugepage: TuningLevel::Recommended,
+            clock_frequency: TuningLevel::NotApplicable,
+            ecc_status: TuningLevel::Optimal,
+            compute_mode: TuningLevel::Recommended,
+            recommendations: vec!["rec1".to_string(), "rec2".to_string()],
+        };
+        let cloned = report.clone();
+        assert_eq!(cloned.persistence_mode, report.persistence_mode);
+        assert_eq!(cloned.recommendations.len(), 2);
+    }
 }

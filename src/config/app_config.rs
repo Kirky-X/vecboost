@@ -13,6 +13,7 @@
 //! `app::apply_security_env_overrides` 负责(单一真相源);本模块仅负责
 //! confers 加载与默认值填充,不重复实现校验逻辑。
 
+use crate::error::VecboostError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -21,7 +22,7 @@ use confers::Config;
 #[cfg(feature = "db")]
 use super::app::DatabaseConfig;
 use super::app::{
-    AuditConfig, AuthConfig, ConfigError, EmbeddingConfig, MemoryPagingConfig, MemoryPoolConfig,
+    AuditConfig, AuthConfig, DeviceConfig, EmbeddingConfig, MemoryPagingConfig, MemoryPoolConfig,
     ModelConfig, MonitoringConfig, RateLimitConfig, RerankConfig, SemanticCacheConfig,
     ServerConfig, apply_priority_defaults, apply_security_env_overrides,
 };
@@ -46,8 +47,11 @@ pub struct AppConfig {
     pub audit: AuditConfig,
     pub memory_pool: MemoryPoolConfig,
     pub pipeline: PipelineConfig,
+    pub logging: crate::config::app::LoggingConfig,
     pub semantic_cache: SemanticCacheConfig,
     pub memory_paging: MemoryPagingConfig,
+    /// 设备与硬件感知配置（`[device]` 段，）。
+    pub device: DeviceConfig,
     #[cfg(feature = "db")]
     pub database: DatabaseConfig,
 }
@@ -57,8 +61,8 @@ impl AppConfig {
     ///
     /// 文件不存在时回退到 `Default` 实现 + `VECBOOST_` 前缀环境变量。
     /// 敏感字段校验由 `app::apply_security_env_overrides` 执行,
-    /// 校验失败时返回 `ConfigError::Message`。
-    pub fn load_via_confers() -> Result<Self, ConfigError> {
+    /// 校验失败时返回 `VecboostError::ConfigError`。
+    pub fn load_via_confers() -> Result<Self, VecboostError> {
         Self::load_via_confers_with_path("config/config.toml")
     }
 
@@ -68,12 +72,13 @@ impl AppConfig {
     /// 敏感环境变量(`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD`)
     /// 的最小长度校验由 `app::apply_security_env_overrides` 强制执行,
     /// 失败时通过 `?` 显式传播(规则12:错误必须显性化)。
-    pub fn load_via_confers_with_path<P: Into<PathBuf>>(path: P) -> Result<Self, ConfigError> {
+    pub fn load_via_confers_with_path<P: Into<PathBuf>>(path: P) -> Result<Self, VecboostError> {
         let mut config = confers::ConfigBuilder::<Self>::new()
             .allow_absolute_paths()
             .file_optional(path)
             .env_prefix("VECBOOST_")
-            .build()?;
+            .build()
+            .map_err(|e| VecboostError::ConfigError(format!("confers: {e}")))?;
         apply_security_env_overrides(&mut config)?;
         apply_priority_defaults(&mut config.pipeline.priority);
         config.validate()?;
@@ -84,9 +89,9 @@ impl AppConfig {
     /// `TypeScriptGenerator` (backed by `schemars` JSON Schema).
     ///
     /// Useful for generating configuration documentation or frontend type stubs.
-    pub fn generate_schema() -> Result<String, ConfigError> {
+    pub fn generate_schema() -> Result<String, VecboostError> {
         confers::schema::TypeScriptGenerator::generate::<Self>()
-            .map_err(|e| ConfigError::Message(format!("schema generation failed: {e}")))
+            .map_err(|e| VecboostError::ConfigError(format!("schema generation failed: {e}")))
     }
 
     /// Validate configuration fields using garde-derived validation.
@@ -94,7 +99,7 @@ impl AppConfig {
     /// Delegates to sub-struct `validate()` methods (ServerConfig, ModelConfig,
     /// EmbeddingConfig) which use `#[derive(garde::Validate)]` with field-level
     /// `#[garde(...)]` rules. Aggregates all errors into a single `ConfigError`.
-    pub fn validate(&self) -> Result<(), ConfigError> {
+    pub fn validate(&self) -> Result<(), VecboostError> {
         use garde::Validate;
         let mut errors = Vec::new();
 
@@ -114,7 +119,7 @@ impl AppConfig {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(ConfigError::Message(format!(
+            Err(VecboostError::ConfigError(format!(
                 "Configuration validation failed:\n  {}",
                 errors.join("\n  ")
             )))
@@ -122,8 +127,8 @@ impl AppConfig {
     }
 }
 
-// P0 吸收: trait-kit reload — 使 AppConfig 可通过 Kit::reload_config::<AppConfig>() 热重载
-// 依赖 trait-kit `reload` + `confers` feature (Cargo.toml:40 已启用)，底层复用 confers 的 load_via_confers
+// trait-kit reload 装配：使 AppConfig 可通过 Kit::reload_config::<AppConfig>() 热重载
+// 依赖 trait-kit `reload` + `confers` feature，底层复用 confers 的 load_via_confers
 impl trait_kit::kit::Configurable for AppConfig {
     fn load() -> Result<Self, Box<dyn std::error::Error + Send + 'static>> {
         Self::load_via_confers().map_err(|e| Box::new(e) as _)
@@ -352,5 +357,58 @@ port = 9999
         let config = AppConfig::default();
         let debug_str = format!("{:?}", config);
         assert!(debug_str.contains("AppConfig"));
+    }
+
+    #[test]
+    fn test_app_config_validate_default_succeeds() {
+        let config = AppConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_app_config_validate_bad_server_port() {
+        let mut config = AppConfig::default();
+        config.server.port = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_app_config_serialize_roundtrip() {
+        let config = AppConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.server.port, config.server.port);
+    }
+
+    #[test]
+    fn test_app_config_generate_schema() {
+        let result = AppConfig::generate_schema();
+        assert!(result.is_ok());
+        let schema = result.unwrap();
+        assert!(!schema.is_empty());
+    }
+
+    #[test]
+    fn test_app_config_load_via_confers_default() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        let result = AppConfig::load_via_confers();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_app_config_configurable_load() {
+        use trait_kit::kit::Configurable;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        // Call the Configurable trait's load() explicitly to cover the trait impl
+        let result = <AppConfig as Configurable>::load();
+        assert!(result.is_ok());
     }
 }

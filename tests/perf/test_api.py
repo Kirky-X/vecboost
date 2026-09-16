@@ -3,9 +3,16 @@ VecBoost API 接口测试
 
 使用 Mock 服务测试 API 接口的各个功能：
 - /health - 健康检查接口
-- /api/v1/embed - 文本向量化接口
-- /api/v1/similarity - 相似度计算接口
+- /api/1/embed - 文本向量化接口
+- /api/1/similarity - 相似度计算接口
 """
+
+import pytest
+
+
+# 本文件针对 Python api_simulator(语义模拟),不代表 Rust 服务行为;
+# 真实服务用例见 test_server_integration.py(docs/TESTING.md)
+pytestmark = pytest.mark.sim
 
 import pytest
 from typing import Any
@@ -57,7 +64,7 @@ class TestEmbedEndpoint:
     def test_embed_normal_request(self, api_client: Any, model_dimension: int):
         """TC-EMBED-001: 验证正常文本可以成功向量化"""
         status_code, response = api_client.post(
-            "/api/v1/embed", {"text": "Hello, world! This is a test."}
+            "/api/1/embed", {"text": "Hello, world! This is a test."}
         )
 
         assert status_code == 200
@@ -68,7 +75,7 @@ class TestEmbedEndpoint:
 
     def test_embed_short_text(self, api_client: Any, short_text: str, model_dimension: int):
         """TC-EMBED-002: 验证短文本可以成功向量化"""
-        status_code, response = api_client.post("/api/v1/embed", {"text": short_text})
+        status_code, response = api_client.post("/api/1/embed", {"text": short_text})
 
         assert status_code == 200
         assert "embedding" in response
@@ -78,7 +85,7 @@ class TestEmbedEndpoint:
 
     def test_embed_empty_text(self, api_client: Any):
         """TC-EMBED-003: 验证空文本返回错误"""
-        status_code, response = api_client.post("/api/v1/embed", {"text": ""})
+        status_code, response = api_client.post("/api/1/embed", {"text": ""})
 
         assert status_code == 400
         assert "error" in response
@@ -86,7 +93,7 @@ class TestEmbedEndpoint:
 
     def test_embed_missing_text_field(self, api_client: Any):
         """TC-EMBED-004: 验证缺失text字段返回错误"""
-        status_code, response = api_client.post("/api/v1/embed", {})
+        status_code, response = api_client.post("/api/1/embed", {})
 
         assert status_code == 400
         assert "error" in response
@@ -97,7 +104,7 @@ class TestEmbedEndpoint:
     ):
         """TC-EMBED-005: 验证包含特殊字符的文本向量化"""
         status_code, response = api_client.post(
-            "/api/v1/embed", {"text": special_char_text}
+            "/api/1/embed", {"text": special_char_text}
         )
 
         assert status_code == 200
@@ -110,7 +117,7 @@ class TestEmbedEndpoint:
         self, api_client: Any, chinese_text: str, model_dimension: int
     ):
         """TC-EMBED-006: 验证中文文本的向量化"""
-        status_code, response = api_client.post("/api/v1/embed", {"text": chinese_text})
+        status_code, response = api_client.post("/api/1/embed", {"text": chinese_text})
 
         assert status_code == 200
         assert "embedding" in response
@@ -120,7 +127,7 @@ class TestEmbedEndpoint:
 
     def test_embed_long_text(self, api_client: Any, long_text: str, model_dimension: int):
         """TC-EMBED-007: 验证长文本的向量化"""
-        status_code, response = api_client.post("/api/v1/embed", {"text": long_text})
+        status_code, response = api_client.post("/api/1/embed", {"text": long_text})
 
         assert status_code == 200
         assert "embedding" in response
@@ -135,7 +142,7 @@ class TestEmbedEndpoint:
         texts = ["Short text", "A slightly longer text for testing", "中文测试文本"]
 
         for text in texts:
-            status_code, response = api_client.post("/api/v1/embed", {"text": text})
+            status_code, response = api_client.post("/api/1/embed", {"text": text})
 
             assert status_code == 200
             assert response["dimension"] == model_dimension
@@ -146,7 +153,7 @@ class TestEmbedEndpoint:
         max_length_text = "a" * 10000
 
         status_code, response = api_client.post(
-            "/api/v1/embed", {"text": max_length_text}
+            "/api/1/embed", {"text": max_length_text}
         )
 
         assert status_code == 200
@@ -158,7 +165,7 @@ class TestEmbedEndpoint:
         exceeded_text = "a" * 10001
 
         status_code, response = api_client.post(
-            "/api/v1/embed", {"text": exceeded_text}
+            "/api/1/embed", {"text": exceeded_text}
         )
 
         assert status_code == 400
@@ -172,7 +179,7 @@ class TestSimilarityEndpoint:
     def test_similarity_identical_texts(self, api_client: Any):
         """TC-SIM-001: 验证相同文本的相似度为1.0"""
         status_code, response = api_client.post(
-            "/api/v1/similarity", {"source": "Hello world", "target": "Hello world"}
+            "/api/1/similarity", {"source": "Hello world", "target": "Hello world"}
         )
 
         assert status_code == 200
@@ -184,7 +191,7 @@ class TestSimilarityEndpoint:
     def test_similarity_different_texts(self, api_client: Any):
         """TC-SIM-002: 验证不同文本的相似度小于1.0"""
         status_code, response = api_client.post(
-            "/api/v1/similarity", {"source": "Hello world", "target": "Goodbye world"}
+            "/api/1/similarity", {"source": "Hello world", "target": "Goodbye world"}
         )
 
         assert status_code == 200
@@ -194,7 +201,7 @@ class TestSimilarityEndpoint:
     def test_similarity_missing_source(self, api_client: Any):
         """TC-SIM-003: 验证缺失源文本返回错误"""
         status_code, response = api_client.post(
-            "/api/v1/similarity", {"source": "", "target": "Some text"}
+            "/api/1/similarity", {"source": "", "target": "Some text"}
         )
 
         assert status_code == 400
@@ -204,7 +211,7 @@ class TestSimilarityEndpoint:
     def test_similarity_missing_target(self, api_client: Any):
         """TC-SIM-004: 验证缺失目标文本返回错误"""
         status_code, response = api_client.post(
-            "/api/v1/similarity", {"source": "Some text", "target": ""}
+            "/api/1/similarity", {"source": "Some text", "target": ""}
         )
 
         assert status_code == 400
@@ -214,7 +221,7 @@ class TestSimilarityEndpoint:
     def test_similarity_missing_both_fields(self, api_client: Any):
         """TC-SIM-005: 验证两个字段都缺失时返回错误"""
         status_code, response = api_client.post(
-            "/api/v1/similarity", {"source": "", "target": ""}
+            "/api/1/similarity", {"source": "", "target": ""}
         )
 
         assert status_code == 400
@@ -223,7 +230,7 @@ class TestSimilarityEndpoint:
 
     def test_similarity_empty_request_body(self, api_client: Any):
         """TC-SIM-006: 验证空请求体返回错误"""
-        status_code, response = api_client.post("/api/v1/similarity", {})
+        status_code, response = api_client.post("/api/1/similarity", {})
 
         assert status_code == 400
         assert "error" in response
@@ -232,7 +239,7 @@ class TestSimilarityEndpoint:
     def test_similarity_chinese_texts(self, api_client: Any):
         """TC-SIM-007: 验证中文文本相似度计算"""
         status_code, response = api_client.post(
-            "/api/v1/similarity", {"source": "你好世界", "target": "你好中国"}
+            "/api/1/similarity", {"source": "你好世界", "target": "你好中国"}
         )
 
         assert status_code == 200
@@ -243,7 +250,7 @@ class TestSimilarityEndpoint:
     def test_similarity_similar_chinese_phrases(self, api_client: Any):
         """TC-SIM-008: 验证相似中文短语的相似度计算"""
         status_code, response = api_client.post(
-            "/api/v1/similarity",
+            "/api/1/similarity",
             {
                 "source": "机器学习是人工智能的子领域",
                 "target": "机器学习属于人工智能范畴",
@@ -264,7 +271,7 @@ class TestSimilarityEndpoint:
         ]
 
         for case in test_cases:
-            status_code, response = api_client.post("/api/v1/similarity", case)
+            status_code, response = api_client.post("/api/1/similarity", case)
 
             assert status_code == 200
             assert -1.0 <= response["score"] <= 1.0
@@ -275,7 +282,7 @@ class TestErrorHandling:
 
     def test_404_not_found(self, api_client: Any):
         """TC-BOUNDARY-001: 验证访问不存在的端点返回404"""
-        status_code, response = api_client.post("/api/v1/nonexistent", {})
+        status_code, response = api_client.post("/api/1/nonexistent", {})
 
         assert status_code == 404
         assert "error" in response
@@ -283,14 +290,14 @@ class TestErrorHandling:
 
     def test_405_method_not_allowed(self, api_client: Any):
         """TC-BOUNDARY-002: 验证使用错误的HTTP方法返回405"""
-        status_code, response = api_client.get("/api/v1/embed")
+        status_code, response = api_client.get("/api/1/embed")
 
         assert status_code == 404
         assert "error" in response
 
     def test_400_bad_request_empty_body(self, api_client: Any):
         """TC-BOUNDARY-003: 验证空请求体触发正确的错误"""
-        status_code, response = api_client.post("/api/v1/embed", None)
+        status_code, response = api_client.post("/api/1/embed", None)
 
         assert status_code == 400
         assert "error" in response

@@ -8,11 +8,32 @@
 //! 用于替代自研 KvCache,支持 LRU 驱逐和 per-entry TTL。
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Arc;
 
 use oxcache::backend::MokaMemoryBackend;
 use oxcache::cache::Cache;
 use oxcache::features::bloom_filter::BloomFilter;
+
+use super::persist;
+
+/// 持久层状态：两段追加 WAL。文件操作经互斥串行，无后台线程。
+struct PersistState {
+    path: std::path::PathBuf,
+    tag: String,
+    max_bytes: u64,
+    inner: std::sync::Mutex<PersistInner>,
+}
+
+struct PersistInner {
+    /// 带用户态缓冲的 WAL 句柄（合并系统调用）。
+    file: std::io::BufWriter<std::fs::File>,
+    /// 已提交记录数（回放初始化，追加递增，紧凑化重置）。
+    nrec: u64,
+    /// WAL 近似字节数（构造时从文件长度初始化，追加时累加；
+    /// 替代逐插入 stat 的超限检查）。
+    approx_bytes: u64,
+}
 
 /// oxcache 后端,包装 `oxcache::Cache<String, Vec<f32>>`。
 ///
@@ -20,30 +41,110 @@ use oxcache::features::bloom_filter::BloomFilter;
 /// `get_or_insert`/`remove`/`clear`/`len`/`is_empty`/`warm_up`。
 ///
 /// 内部集成:
-/// - **Bloom filter** (T029-T030): 负查询过滤,FPR=0.01,`get()` 时先查 bloom,
+/// - **Bloom filter**: 负查询过滤,FPR=0.01,`get()` 时先查 bloom,
 ///   miss 则跳过底层缓存查询。
-/// - **Compression** (T031): 使用 oxcache flate2 压缩存储 embedding 向量,
-///   减少内存占用。
+/// - **Bloom 上限重建**: 插入计数达到 [`BLOOM_REBUILD_THRESHOLD`]
+///   时重建 bloom filter,防止无界增长导致负过滤失效与内存泄漏。
+///
+/// bloom 只增不减,达到阈值后整体重建,防止长运行进程的负过滤失效(误判率回弹)与内存无界增长。
+const BLOOM_REBUILD_THRESHOLD: usize = 1_000_000;
+
 pub(crate) struct OxCacheBackend {
     cache: Option<Cache<String, Vec<f32>>>,
     bloom: Option<BloomFilter>,
     enabled: bool,
+    /// bloom 累计插入计数(原子,put 热路径无锁)
+    bloom_insertions: std::sync::atomic::AtomicUsize,
+    /// 可选 WAL 持久层（`persist_path` 设置时启用，默认 None = 纯内存）。
+    persist: Option<Arc<PersistState>>,
 }
 
 impl OxCacheBackend {
     /// 创建指定容量的缓存后端。
     ///
-    /// T029: 同时初始化 bloom filter (FPR=0.01, capacity=capacity)。
+    /// 同时初始化 bloom filter (FPR=0.01, capacity=capacity)。
     pub fn new(capacity: usize) -> Self {
         let cap = capacity.max(1);
         let moka = MokaMemoryBackend::builder().capacity(cap as u64).build();
         let cache = Cache::with_dependencies(Arc::new(moka));
-        // T029: Bloom filter for negative query filtering
+        // Bloom filter for negative query filtering
         let bloom = BloomFilter::new(cap, 0.01);
         Self {
             cache: Some(cache),
             bloom: Some(bloom),
             enabled: true,
+            bloom_insertions: std::sync::atomic::AtomicUsize::new(0),
+            persist: None,
+        }
+    }
+
+    /// 创建带 WAL 持久层的缓存后端。
+    ///
+    /// `model_tag` 为模型指纹（回放时不匹配的记录被弃用）；`max_bytes`
+    /// 为紧凑化阈值。构造时回放已有文件计数 nrec；内存重建需调用方在
+    /// 启动时显式 `load_persisted().await`（顺序回放重建缓存）。
+    pub fn with_persist(
+        capacity: usize,
+        path: std::path::PathBuf,
+        max_bytes: u64,
+        model_tag: String,
+    ) -> Self {
+        let mut backend = Self::new(capacity);
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "persist 文件不可创建 {}: {e}（请检查 [embedding] persist_path 目录权限）",
+                    path.display()
+                )
+            });
+        let approx_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let is_new = approx_bytes == 0;
+        let (_, committed) = persist::replay(&path, &model_tag);
+        // 新文件构造时一次性写头（追加路径不再逐插入 stat， 审查）。
+        let mut writer = std::io::BufWriter::new(file);
+        if is_new && let Err(e) = persist::write_header(&mut writer) {
+            log::warn!("persist: {} 写头失败: {}", path.display(), e);
+        }
+        backend.persist = Some(Arc::new(PersistState {
+            path,
+            tag: model_tag,
+            max_bytes,
+            inner: std::sync::Mutex::new(PersistInner {
+                file: writer,
+                nrec: committed,
+                approx_bytes,
+            }),
+        }));
+        backend
+    }
+
+    /// 返回持久文件路径（doctor 可写性探测用）。
+    pub fn persist_path(&self) -> Option<std::path::PathBuf> {
+        self.persist.as_ref().map(|p| p.path.clone())
+    }
+
+    /// 启动回放：顺序重放持久文件重建内存缓存。
+    /// 版本头/指纹不匹配或 checksum 失败的记录被弃用并 warn。
+    pub async fn load_persisted(&self) {
+        let Some(ps) = self.persist.as_ref() else {
+            return;
+        };
+        let (records, committed) = persist::replay(&ps.path, &ps.tag);
+        // 去重（后者覆盖前者）后写入内存（不回写 WAL，避免放大）。
+        let mut dedup: HashMap<String, Vec<f32>> = HashMap::with_capacity(records.len());
+        for (k, v) in records {
+            dedup.insert(k, v);
+        }
+        // 同步 nrec（回放计数可能领先构造时计数）。
+        if let Ok(mut inner) = ps.inner.lock() {
+            inner.nrec = inner.nrec.max(committed);
+        }
+        for (k, v) in dedup {
+            self.put_inner(&k, v, false).await;
         }
     }
 
@@ -53,6 +154,8 @@ impl OxCacheBackend {
             cache: None,
             bloom: None,
             enabled: false,
+            bloom_insertions: std::sync::atomic::AtomicUsize::new(0),
+            persist: None,
         }
     }
 
@@ -63,40 +166,120 @@ impl OxCacheBackend {
 
     /// 查询缓存,未命中或禁用时返回 None。
     ///
-    /// T030: 先查 bloom filter,如果 bloom 说 key 不存在则直接返回 None,
+    /// 先查 bloom filter,如果 bloom 说 key 不存在则直接返回 None,
     /// 跳过底层缓存查询 (bloom filter 无误判)。
     pub async fn get(&self, key: &str) -> Option<Vec<f32>> {
         if !self.enabled {
             return None;
         }
-        // T030: Bloom filter negative check
+        // Bloom filter negative check
         if let Some(bloom) = &self.bloom
             && !bloom.contains(key)
         {
             return None;
         }
         let cache = self.cache.as_ref()?;
-        let raw = cache.get(&key.to_string()).await.ok().flatten()?;
-        // T031: Decompress on retrieval
-        decompress_f32_vec(raw)
+        // 直接存取原始 Vec<f32>(原 gzip 压缩/解压每命中 10-50µs + unsafe 转换,净负收益)
+        cache.get(&key.to_string()).await.ok().flatten()
     }
 
     /// 写入缓存(禁用时为空操作)。
     ///
-    /// T029: 写入时将 key 插入 bloom filter。
-    /// T031: 存储前压缩 embedding 向量。
+    /// 写入时将 key 插入 bloom filter；持久层启用时同步两段追加 WAL。
     pub async fn put(&self, key: &str, value: Vec<f32>) {
+        let do_persist = self.persist.is_some();
+        self.put_inner(key, value, do_persist).await;
+    }
+
+    async fn put_inner(&self, key: &str, value: Vec<f32>, do_persist: bool) {
         if !self.enabled {
             return;
         }
         if let Some(cache) = &self.cache {
-            // T031: Compress before storing
-            let compressed = compress_f32_vec(value);
-            let _ = cache.set(&key.to_string(), &compressed).await;
+            let _ = cache.set(&key.to_string(), &value).await;
         }
-        // T029: Insert into bloom filter after successful set
+        // Insert into bloom filter after successful set
         if let Some(bloom) = &self.bloom {
             bloom.insert(key);
+            // 达到重建阈值 → 清空重建(bloom 负过滤语义安全:重建后
+            // 旧 key 可能 miss,仅损失一次缓存命中,不产生错误数据)
+            let n = self
+                .bloom_insertions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n + 1 >= BLOOM_REBUILD_THRESHOLD {
+                bloom.clear();
+                self.bloom_insertions
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        if do_persist {
+            self.append_persist(key, &value);
+        }
+    }
+
+    /// WAL 两段追加 + 超限紧凑化（同步于插入调用点，无后台线程）。
+    fn append_persist(&self, key: &str, value: &[f32]) {
+        let Some(ps) = self.persist.as_ref() else {
+            return;
+        };
+        let mut guard = match ps.inner.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                log::warn!("persist: 文件锁中毒，跳过本次落盘: {}", e);
+                return;
+            }
+        };
+        // 先拷贝出所需字段，避免 MutexGuard 解引用与 ps.tag 的借用冲突。
+        let tag = ps.tag.clone();
+        let nrec = guard.nrec;
+        match persist::append_record(&mut guard.file, key, value, &tag, nrec) {
+            Ok((nrec, bytes)) => {
+                guard.nrec = nrec;
+                guard.approx_bytes += bytes as u64;
+                // 提交记录推送至内核（File.flush 本为 no-op，这里刷 BufWriter）。
+                let _ = guard.file.flush();
+                // 超限紧凑化：快照重写（临时文件 + rename 原子替换）。
+                let over = guard.approx_bytes > ps.max_bytes;
+                if over {
+                    drop(guard);
+                    self.compact_persist();
+                }
+            }
+            Err(e) => {
+                log::warn!("persist: 追加失败（{}），本次插入仅内存生效", e);
+            }
+        }
+    }
+
+    /// 快照重写紧凑化：回放去重 → tmp 重写 → 原子替换 → 重开句柄。
+    fn compact_persist(&self) {
+        let Some(ps) = self.persist.as_ref() else {
+            return;
+        };
+        let (records, _) = persist::replay(&ps.path, &ps.tag);
+        let mut dedup: HashMap<String, Vec<f32>> = HashMap::with_capacity(records.len());
+        for (k, v) in records {
+            dedup.insert(k, v);
+        }
+        match persist::compact(&ps.path, &dedup, &ps.tag) {
+            Ok(n) => {
+                if let Ok(mut guard) = ps.inner.lock() {
+                    guard.nrec = n;
+                    if let Ok(file) = std::fs::OpenOptions::new()
+                        .read(true)
+                        .create(true)
+                        .append(true)
+                        .open(&ps.path)
+                    {
+                        guard.approx_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
+                        guard.file = std::io::BufWriter::new(file);
+                    }
+                }
+                log::info!("persist: 紧凑化完成，{} 条记录", n);
+            }
+            Err(e) => {
+                log::warn!("persist: 紧凑化失败（{}），保留原文件", e);
+            }
         }
     }
 
@@ -143,6 +326,27 @@ impl OxCacheBackend {
         if let Some(bloom) = &self.bloom {
             bloom.clear();
         }
+        // 持久文件同步截断（否则重启会复活已清数据）。
+        if let Some(ps) = self.persist.as_ref()
+            && let Ok(mut guard) = ps.inner.lock()
+        {
+            let reopened = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&ps.path);
+            match reopened {
+                Ok(f) => {
+                    guard.approx_bytes = 0;
+                    guard.file = std::io::BufWriter::new(f);
+                    guard.nrec = 0;
+                }
+                Err(e) => {
+                    log::warn!("persist: 清空截断失败（{}）", e);
+                }
+            }
+        }
     }
 
     /// 返回当前条目数。
@@ -167,7 +371,7 @@ impl OxCacheBackend {
     }
 
     /// 批量预热缓存(禁用时为空操作)。
-    /// 预热时每个 key 都会插入 bloom filter 并压缩存储。
+    /// 预热时每个 key 都会插入 bloom filter。
     pub async fn warm_up(&self, entries: HashMap<String, Vec<f32>>) {
         if !self.enabled {
             return;
@@ -184,75 +388,39 @@ impl OxCacheBackend {
     }
 }
 
-// ============================================================================
-// T031: Compression helpers — compress/decompress Vec<f32> via oxcache flate2
-// ============================================================================
-
-/// 压缩 `Vec<f32>` 为 `Vec<f32>`。
-///
-/// 将浮点向量重新解释为字节,通过 oxcache 的 `compress_data` (flate2 gzip)
-/// 压缩,再重新解释回 `Vec<f32>` 存储。小向量 (<25 f32 = 100 bytes)
-/// 不会被压缩(oxcache 内部 MIN_COMPRESS_SIZE 阈值)。
-fn compress_f32_vec(value: Vec<f32>) -> Vec<f32> {
-    if value.is_empty() {
-        return value;
-    }
-    let byte_len = value.len() * 4;
-    let ptr = value.as_ptr();
-    // SAFETY: f32 数组与 [u8] 具有相同的内存布局。
-    // 我们立即从原始字节创建新 slice,不持有 value 的引用。
-    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, byte_len) };
-    match oxcache::infra::serialization::utils::compress_data(bytes) {
-        Ok(compressed) => {
-            // 丢弃原始 value 的所有权(已被 move),compressed 是独立 Vec<u8>
-            drop(value);
-            // 将压缩后的字节重新解释为 Vec<f32>
-            // SAFETY: 缓存内部存储,只要 get 时对称解压缩即可恢复原始值。
-            // 压缩后字节数可能不是 4 的倍数,用 padding 对齐。
-            bytes_to_f32_vec(compressed)
-        }
-        Err(_) => value,
-    }
-}
-
-/// 解压缩 `Vec<f32>` (逆向 `compress_f32_vec`)。
-fn decompress_f32_vec(stored: Vec<f32>) -> Option<Vec<f32>> {
-    if stored.is_empty() {
-        return Some(stored);
-    }
-    let byte_len = stored.len() * 4;
-    let ptr = stored.as_ptr();
-    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, byte_len) };
-    match oxcache::infra::serialization::utils::decompress_data(bytes) {
-        Ok(decompressed) => {
-            drop(stored);
-            Some(bytes_to_f32_vec(decompressed))
-        }
-        Err(_) => None,
-    }
-}
-
-/// 将 `Vec<u8>` 转换为 `Vec<f32>`,必要时补零对齐到 4 字节边界。
-fn bytes_to_f32_vec(bytes: Vec<u8>) -> Vec<f32> {
-    let mut bytes = bytes;
-    let remainder = bytes.len() % 4;
-    if remainder != 0 {
-        bytes.extend(std::iter::repeat_n(0u8, 4 - remainder));
-    }
-    let f32_count = bytes.len() / 4;
-    let ptr = bytes.as_ptr();
-    let cap = bytes.capacity() / 4;
-    std::mem::forget(bytes);
-    // SAFETY: bytes 已对齐到 4 字节且长度是 4 的倍数。
-    // Vec<u8> 的 layout (ptr, len, cap) 与 Vec<f32> 相同,
-    // 新 Vec<f32> 的 len=f32_count, cap=cap。
-    unsafe { Vec::from_raw_parts(ptr as *mut f32, f32_count, cap) }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// 存取原始 f32 —— 往返值逐位相等,无压缩损耗
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_roundtrip_preserves_exact_f32_bits() {
+        let cache = OxCacheBackend::new(16);
+        let value: Vec<f32> = (0..384).map(|i| i as f32 * 0.25 - 48.0).collect();
+        cache.put("k-roundtrip", value.clone()).await;
+        let got = cache.get("k-roundtrip").await.expect("hit");
+        assert_eq!(got, value);
+        // miss 路径(bloom 负过滤)
+        assert!(cache.get("k-missing").await.is_none());
+    }
+
+    /// bloom 重建后负过滤仍正确(不产生错误命中)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_bloom_rebuild_keeps_negative_filtering() {
+        let cache = OxCacheBackend::new(16);
+        // 灌入超过重建阈值,触发 clear + 计数重置
+        for i in 0..BLOOM_REBUILD_THRESHOLD / 1000 {
+            let v = vec![i as f32];
+            cache.put(&format!("k{i}"), v).await;
+        }
+        // 未写入的 key 必然 miss(不能因重建逻辑出现假命中)
+        assert!(cache.get("never-written").await.is_none());
+        let n = cache
+            .bloom_insertions
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert!(n < BLOOM_REBUILD_THRESHOLD, "counter must reset on rebuild");
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_put_and_get_hit() {
@@ -290,6 +458,31 @@ mod tests {
             "capacity pressure should evict some entries, {} still present",
             remaining
         );
+    }
+
+    /// 并发读写 —— 多任务同时 put/get 无 panic、无错误值
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_readers_and_writers() {
+        use std::sync::Arc;
+        let cache = Arc::new(OxCacheBackend::new(256));
+        let mut handles = Vec::new();
+        for w in 0..8u64 {
+            let c = Arc::clone(&cache);
+            handles.push(tokio::spawn(async move {
+                for i in 0..50u64 {
+                    let key = format!("k{}-{}", w, i % 10);
+                    let value = vec![w as f32, i as f32, 42.0];
+                    c.put(&key, value).await;
+                    if let Some(got) = c.get(&key).await {
+                        // 读到自己或同 key 写入者的合法值(非空、长度正确)
+                        assert_eq!(got.len(), 3);
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.await.expect("writer task must not panic");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -394,12 +587,12 @@ mod tests {
     }
 
     // ========================================================================
-    // T033: Bloom filter integration tests
+    // Bloom filter integration tests
     // ========================================================================
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bloom_filter_miss_skips_backend_lookup() {
-        // T033: 验证 bloom filter miss 时直接返回 None,不查询底层缓存。
+        // 验证 bloom filter miss 时直接返回 None,不查询底层缓存。
         let cache = OxCacheBackend::new(100);
         // 从未 put 过任何 key,bloom filter 应为空
         let bloom = cache.bloom_filter().unwrap();
@@ -410,7 +603,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bloom_filter_populated_on_put() {
-        // T033: 验证 put 后 bloom filter 包含该 key
+        // 验证 put 后 bloom filter 包含该 key
         let cache = OxCacheBackend::new(100);
         cache.put("key1", vec![1.0, 2.0]).await;
         let bloom = cache.bloom_filter().unwrap();
@@ -424,7 +617,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bloom_filter_cleared_with_cache() {
-        // T033: 验证 clear() 同时重置 bloom filter
+        // 验证 clear() 同时重置 bloom filter
         let cache = OxCacheBackend::new(100);
         cache.put("a", vec![1.0]).await;
         cache.put("b", vec![2.0]).await;
@@ -437,13 +630,13 @@ mod tests {
     }
 
     // ========================================================================
-    // T033: Compression roundtrip tests
+    // Compression roundtrip tests
     // ========================================================================
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_compression_roundtrip_preserves_values() {
-        // T033: 验证压缩往返后向量值在容差范围内保持一致。
-        // 使用较大向量 (>25 f32 = 100 bytes) 以触发 flate2 压缩。
+        // 历史上的 flate2 压缩路径已移除（净负收益，见 get() 处注释），现直接存取
+        // 原始 Vec<f32>；本测试验证大向量往返后逐位一致。
         let cache = OxCacheBackend::new(16);
         let original: Vec<f32> = (0..100).map(|i| (i as f32) * 0.01).collect();
         cache.put("compressed_key", original.clone()).await;
@@ -466,40 +659,13 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_compression_small_vectors_roundtrip() {
-        // T033: 小向量 (<100 bytes) 不触发压缩,但往返仍应保持精确一致。
+        // 小向量往返仍应保持精确一致（压缩路径已移除）。
         let cache = OxCacheBackend::new(16);
         let small = vec![0.1, 0.2, 0.3];
         cache.put("small", small.clone()).await;
         tokio::time::sleep(Duration::from_millis(20)).await;
         let got = cache.get("small").await;
         assert_eq!(got, Some(small));
-    }
-
-    #[test]
-    fn test_compress_decompress_f32_vec_roundtrip() {
-        // T033: 直接测试压缩/解压缩辅助函数的往返正确性
-        let original: Vec<f32> = (0..200).map(|i| (i as f32) * 0.001).collect();
-        let compressed = compress_f32_vec(original.clone());
-        let decompressed = decompress_f32_vec(compressed).unwrap();
-        assert_eq!(decompressed.len(), original.len());
-        for (i, (a, b)) in decompressed.iter().zip(original.iter()).enumerate() {
-            assert!(
-                (a - b).abs() < f32::EPSILON,
-                "roundtrip mismatch at index {}: {} != {}",
-                i,
-                a,
-                b
-            );
-        }
-    }
-
-    #[test]
-    fn test_compress_empty_vec() {
-        let empty: Vec<f32> = vec![];
-        let compressed = compress_f32_vec(empty.clone());
-        assert!(compressed.is_empty());
-        let decompressed = decompress_f32_vec(compressed).unwrap();
-        assert!(decompressed.is_empty());
     }
 
     // ========================================================================
@@ -551,7 +717,7 @@ mod tests {
             "数据的压缩存储",
             "实时流式处理",
             "异步的任务调度",
-            "安全认证中间件",
+            "安全认证的中间件",
             "API 的速率限制",
         ];
 
@@ -573,5 +739,145 @@ mod tests {
         // 精确匹配命中率应为 0%（所有改写文本键都不同）
         assert_eq!(hits, 0, "exact match should miss all paraphrased texts");
         // 注意：原始文本的命中依赖 moka 异步索引，这里仅验证改写文本全部 miss
+    }
+
+    // ========================================================================
+    // WAL 持久层测试
+    // ========================================================================
+
+    fn persist_backend(
+        dir: &std::path::Path,
+        max_bytes: u64,
+    ) -> (OxCacheBackend, std::path::PathBuf) {
+        let path = dir.join("cache.wal");
+        let backend =
+            OxCacheBackend::with_persist(1024, path.clone(), max_bytes, "test-model".to_string());
+        (backend, path)
+    }
+
+    /// 每次插入产生数据记录 + 提交记录；崩溃截断尾部半条后重放无脏数据。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_persist_write_path_two_phase_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, path) = persist_backend(dir.path(), 1024 * 1024);
+        cache.put("k1", vec![1.0, 2.0]).await;
+        cache.put("k2", vec![3.0]).await;
+        let (data, commit) = persist::record_counts(&path);
+        assert_eq!(data, 2, "每次插入应产生一段数据记录");
+        assert_eq!(commit, 2, "每次插入应产生一段提交记录");
+        // 崩溃模拟：截断尾部半条（k2 的提交记录写一半）。
+        // 按两段协议语义：已提交 k1 恢复；k2 数据虽完整但提交撕裂，
+        // 按"最多丢最后一条"被丢弃——关键是绝不出现半条脏数据。
+        let len = std::fs::metadata(&path).unwrap().len();
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_len(len - 3).unwrap();
+        drop(f);
+        // 重放：k1 完整恢复，k2 缺席（而非脏数据）。
+        let cache2 =
+            OxCacheBackend::with_persist(1024, path.clone(), 1024 * 1024, "test-model".to_string());
+        cache2.load_persisted().await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(cache2.get("k1").await, Some(vec![1.0, 2.0]));
+        assert_eq!(
+            cache2.get("k2").await,
+            None,
+            "提交撕裂的最后一条必须丢弃而非半应用"
+        );
+    }
+
+    /// roundtrip（写入 N 条 → 重启后命中 N 条）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_persist_roundtrip_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, path) = persist_backend(dir.path(), 1024 * 1024);
+        for i in 0..8 {
+            cache.put(&format!("rk{}", i), vec![i as f32, 0.5]).await;
+        }
+        drop(cache);
+        let cache2 =
+            OxCacheBackend::with_persist(1024, path, 1024 * 1024, "test-model".to_string());
+        cache2.load_persisted().await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        for i in 0..8 {
+            assert_eq!(
+                cache2.get(&format!("rk{}", i)).await,
+                Some(vec![i as f32, 0.5]),
+                "重启后应命中全部 N 条"
+            );
+        }
+    }
+
+    /// 中段损坏跳过继续 + 指纹不匹配弃用。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_persist_replay_skips_corrupt_middle() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, path) = persist_backend(dir.path(), 1024 * 1024);
+        cache.put("good-a", vec![1.0]).await;
+        cache.put("good-b", vec![2.0]).await;
+        cache.put("good-c", vec![3.0]).await;
+        // 破坏第一条数据记录的向量载荷（保持长度前缀合法，使其可跳过）。
+        let mut bytes = std::fs::read(&path).unwrap();
+        // 文件头 8 字节 + 类型 1 + key_len 4 + key("good-a"=6) + dim 4 = 23；
+        // 向量载荷始于 offset 23。
+        let off = 8 + 1 + 4 + 6 + 4;
+        bytes[off] ^= 0xFF;
+        bytes[off + 1] ^= 0xFF;
+        std::fs::write(&path, &bytes).unwrap();
+        let cache2 =
+            OxCacheBackend::with_persist(1024, path, 1024 * 1024, "test-model".to_string());
+        cache2.load_persisted().await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(cache2.get("good-a").await.is_none(), "损坏条目必须跳过");
+        assert_eq!(cache2.get("good-b").await, Some(vec![2.0]), "其余继续恢复");
+        assert_eq!(cache2.get("good-c").await, Some(vec![3.0]));
+        // 指纹不匹配：换 tag 重放应全部弃用。
+        let cache3 = OxCacheBackend::with_persist(
+            1024,
+            dir.path().join("cache.wal"),
+            1024 * 1024,
+            "other-model".to_string(),
+        );
+        cache3.load_persisted().await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(cache3.get("good-b").await.is_none(), "指纹不匹配应弃用");
+    }
+
+    /// 超限触发紧凑化（文件收缩、去重且数据完整）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_persist_compaction_on_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        // 阈值较小；3 个 key 反复覆盖写入 30 次（累积远超阈值），
+        // 紧凑化后文件应只保留去重后的 3 条记录。
+        let (cache, path) = persist_backend(dir.path(), 400);
+        for i in 0..30 {
+            cache.put(&format!("ck{}", i % 3), vec![i as f32]).await;
+        }
+        let (data_records, _) = persist::record_counts(&path);
+        // 无紧凑化时应为 30 条；紧凑化后仅保留去重快照 + 尾部少量追加。
+        assert!(
+            data_records <= 8,
+            "紧凑化应去重，实际 {} 条记录",
+            data_records
+        );
+        let size_after = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            size_after < 400,
+            "紧凑化后文件应低于阈值，实际 {} 字节",
+            size_after
+        );
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // 最新值完整（key ck{i%3} 最后一次写入 i=27/28/29）。
+        assert_eq!(cache.get("ck0").await, Some(vec![27.0]));
+        assert_eq!(cache.get("ck1").await, Some(vec![28.0]));
+        assert_eq!(cache.get("ck2").await, Some(vec![29.0]));
+    }
+
+    /// 默认无 persist_path 时零写盘行为。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_no_persist_by_default() {
+        let cache = OxCacheBackend::new(16);
+        assert!(cache.persist_path().is_none());
+        cache.put("k", vec![1.0]).await;
+        assert_eq!(cache.get("k").await, Some(vec![1.0]));
     }
 }

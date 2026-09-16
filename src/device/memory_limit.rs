@@ -155,6 +155,10 @@ impl MemoryLimitController {
     }
 }
 
+/// Run a synchronous closure within the current tokio runtime context (if any).
+///
+/// Does **not** block on the runtime — merely enters its guard so that
+/// `Handle::current()` and similar APIs work inside `f`.
 pub fn block_on_sync<F: FnOnce() -> T, T>(f: F) -> T {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         let _guard = handle.enter();
@@ -164,15 +168,28 @@ pub fn block_on_sync<F: FnOnce() -> T, T>(f: F) -> T {
     }
 }
 
-pub fn block_on_async<F: std::future::Future<Output = T>, T>(f: F) -> T {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.block_on(f)
+/// Try to run a future to completion.
+///
+/// - **Inside a tokio runtime** → returns `None` (blocking would deadlock).
+///   Callers should `await` the future directly instead.
+/// - **Outside any runtime** → creates a temporary single-threaded runtime,
+///   blocks on the future, and returns `Some(result)`.
+pub fn block_on_async<F: std::future::Future<Output = T>, T>(f: F) -> Option<T> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        // Already inside a running runtime — blocking would deadlock.
+        None
     } else {
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("Failed to create Tokio runtime");
-        rt.block_on(f)
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                log::error!("Failed to create Tokio runtime: {}", e);
+                return None;
+            }
+        };
+        Some(rt.block_on(f))
     }
 }
 
@@ -521,14 +538,13 @@ mod tests {
     #[test]
     fn test_block_on_async_without_runtime() {
         let result = block_on_async(async { 42 });
-        assert_eq!(result, 42);
+        assert_eq!(result, Some(42));
     }
 
-    #[test]
-    fn test_block_on_async_with_runtime_context() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
+    #[tokio::test]
+    async fn test_block_on_async_inside_runtime_returns_none() {
+        // Inside a running runtime, block_on_async must return None (not deadlock).
         let result = block_on_async(async { 42 });
-        assert_eq!(result, 42);
+        assert!(result.is_none());
     }
 }

@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! Tests for inklog integration (T019).
+//! Tests for inklog integration.
 //!
 //! Covers five scenarios required by the spec:
 //! 1. `LoggerModule::build(&kit)` returns `Arc<LoggerManager>` via pre-built injection
@@ -36,7 +36,7 @@ use trait_kit::AsyncKit;
 use super::LoggerModule;
 
 // ---------------------------------------------------------------------------
-// T019 测试 1: LoggerModule::build 返回 Arc<LoggerManager>
+// 测试 1: LoggerModule::build 返回 Arc<LoggerManager>
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -45,7 +45,7 @@ async fn test_logger_module_build_returns_manager() {
         console_sink: None,
         ..Default::default()
     };
-    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
     let manager = Arc::new(manager);
@@ -66,7 +66,7 @@ async fn test_logger_module_build_returns_manager() {
 }
 
 // ---------------------------------------------------------------------------
-// T019 测试 2: LoggerManager 文件 sink 写入日志
+// 测试 2: LoggerManager 文件 sink 写入日志
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -89,7 +89,7 @@ async fn test_logger_writes_to_file() {
         ..Default::default()
     };
 
-    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
 
@@ -118,7 +118,7 @@ async fn test_logger_writes_to_file() {
 }
 
 // ---------------------------------------------------------------------------
-// T019 测试 3: tracing::info! / warn! / error! 宏通过 subscriber 正常工作
+// 测试 3: tracing::info! / warn! / error! 宏通过 subscriber 正常工作
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -136,7 +136,7 @@ async fn test_log_macro_works() {
         ..Default::default()
     };
 
-    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
 
@@ -155,7 +155,7 @@ async fn test_log_macro_works() {
 }
 
 // ---------------------------------------------------------------------------
-// T019 测试 4: console sink 启用时不 panic
+// 测试 4: console sink 启用时不 panic
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -172,7 +172,7 @@ async fn test_logger_console_output() {
         ..Default::default()
     };
 
-    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
 
@@ -191,7 +191,7 @@ async fn test_logger_console_output() {
 }
 
 // ---------------------------------------------------------------------------
-// T019 测试 5: 未注入 config 时 build 返回 Err
+// 测试 5: 未注入 config 时 build 返回 Err
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -207,7 +207,7 @@ async fn test_logger_module_missing_config_fails() {
 }
 
 // ---------------------------------------------------------------------------
-// T019 测试 6: LoggerModule 注册后可通过 contains 查询
+// 测试 6: LoggerModule 注册后可通过 contains 查询
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -216,7 +216,7 @@ async fn test_logger_module_contains_after_register() {
         console_sink: None,
         ..Default::default()
     };
-    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
     let manager = Arc::new(manager);
@@ -239,7 +239,7 @@ async fn test_logger_module_contains_after_register() {
 }
 
 // ---------------------------------------------------------------------------
-// T019 测试 7: LoggerModule 与其他 Module 共存于同一 AsyncKit
+// 测试 7: LoggerModule 与其他 Module 共存于同一 AsyncKit
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -250,7 +250,7 @@ async fn test_logger_module_coexists_with_other_modules() {
         console_sink: None,
         ..Default::default()
     };
-    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config)
+    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
         .await
         .expect("build_detached");
     let manager = Arc::new(manager);

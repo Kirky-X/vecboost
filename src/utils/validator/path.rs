@@ -4,6 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 use crate::error::VecboostError;
+use crate::i18n;
 use std::path::{Path, PathBuf};
 
 /// 路径验证器，用于防止路径遍历攻击
@@ -66,24 +67,25 @@ impl PathValidator {
         // 检查路径是否包含明显的路径遍历模式(输入层快速拒绝)
         let path_str = path.to_string_lossy();
         if path_str.contains("..") || path_str.contains("~") {
-            return Err(VecboostError::security_error(format!(
-                "Path traversal attempt detected: {}",
-                path_str
+            return Err(VecboostError::security_error(i18n::tr_with_args(
+                "path-traversal-detected",
+                i18n::tr_args(&[("detail", path_str.as_ref())]),
             )));
         }
 
         // canonicalize 解析所有 symlink、.、.. 等相对组件,得到绝对真实路径
         // 这是 symlink 攻击防御的核心:所有 symlink 被解析后,allowed_roots 检查
         // 验证的是真实路径,而非用户输入的路径
-        let canonical = path
-            .canonicalize()
-            .map_err(|e| VecboostError::security_error(format!("Invalid path: {}", e)))?;
+        let canonical = path.canonicalize().map_err(|e| {
+            VecboostError::security_error(i18n::tr_with_args(
+                "path-invalid",
+                i18n::tr_args(&[("detail", &e.to_string())]),
+            ))
+        })?;
 
         // 检查路径是否在允许的根目录内
         if self.allowed_roots.is_empty() {
-            return Err(VecboostError::security_error(
-                "No allowed root directories configured for file access".to_string(),
-            ));
+            return Err(VecboostError::security_error(i18n::tr("path-no-roots")));
         }
 
         let is_allowed = self
@@ -92,13 +94,18 @@ impl PathValidator {
             .any(|root| canonical.starts_with(root));
 
         if !is_allowed {
-            return Err(VecboostError::security_error(format!(
-                "Access denied: path '{}' is not within allowed directories. Allowed roots: {:?}",
-                canonical.display(),
-                self.allowed_roots
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
+            let roots_display = self
+                .allowed_roots
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(VecboostError::security_error(i18n::tr_with_args(
+                "path-access-denied",
+                i18n::tr_args(&[
+                    ("path", &canonical.display().to_string()),
+                    ("detail", &format!("Allowed roots: {}", roots_display)),
+                ]),
             )));
         }
 
@@ -110,9 +117,9 @@ impl PathValidator {
         let canonical = self.validate_path(path)?;
 
         if !canonical.is_file() {
-            return Err(VecboostError::security_error(format!(
-                "Path is not a file: {}",
-                canonical.display()
+            return Err(VecboostError::security_error(i18n::tr_with_args(
+                "path-not-file",
+                i18n::tr_args(&[("path", &canonical.display().to_string())]),
             )));
         }
 
@@ -124,9 +131,9 @@ impl PathValidator {
         let canonical = self.validate_path(path)?;
 
         if !canonical.is_dir() {
-            return Err(VecboostError::security_error(format!(
-                "Path is not a directory: {}",
-                canonical.display()
+            return Err(VecboostError::security_error(i18n::tr_with_args(
+                "path-not-dir",
+                i18n::tr_args(&[("path", &canonical.display().to_string())]),
             )));
         }
 
@@ -143,6 +150,10 @@ impl Default for PathValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ensure_i18n_init() {
+        i18n::init();
+    }
 
     #[test]
     fn test_path_traversal_detection() {
@@ -189,6 +200,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_rejects_when_no_roots_configured() {
+        ensure_i18n_init();
         // 没有配置任何允许根目录时,任何存在的路径都应被拒绝
         let dir = std::env::temp_dir();
         let temp = dir.join(format!("vecboost_path_test_noroot_{}", std::process::id()));
@@ -210,6 +222,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_validate_path_symlink_outside_allowed_roots_rejected() {
+        ensure_i18n_init();
         // vuln-0004 加固测试:symlink 指向 allowed_roots 外应被拒绝
         // 攻击场景:在 allowed_dir 内创建 symlink → /etc,尝试读取 /etc/passwd
         use std::os::unix::fs::symlink;
@@ -273,6 +286,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_nonexistent_path_rejected() {
+        ensure_i18n_init();
         // 路径不存在时 canonicalize 失败
         let validator = PathValidator::new().add_allowed_root("/etc");
         let result = validator.validate_path("/etc/nonexistent_file_xyz_123");
@@ -314,6 +328,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_double_dot_rejected() {
+        ensure_i18n_init();
         let validator = PathValidator::new().add_allowed_root("/etc");
         let result = validator.validate_path("/etc/../etc/passwd");
         assert!(result.is_err());
@@ -327,6 +342,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_tilde_rejected() {
+        ensure_i18n_init();
         let validator = PathValidator::new().add_allowed_root("/home");
         let result = validator.validate_path("~/.ssh/id_rsa");
         assert!(result.is_err());
@@ -356,6 +372,7 @@ mod tests {
 
     #[test]
     fn test_validate_file_rejects_directory() {
+        ensure_i18n_init();
         let base = std::path::PathBuf::from("./test_path_validate_dir_temp");
         std::fs::create_dir_all(&base).unwrap();
 
@@ -389,6 +406,7 @@ mod tests {
 
     #[test]
     fn test_validate_directory_rejects_file() {
+        ensure_i18n_init();
         let base = std::path::PathBuf::from("./test_path_dir_reject_temp");
         std::fs::create_dir_all(&base).unwrap();
         let file_path = base.join("file.txt");
@@ -432,6 +450,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_rejects_path_outside_all_roots() {
+        ensure_i18n_init();
         let allowed = std::path::PathBuf::from("./test_path_outside_allowed_temp");
         std::fs::create_dir_all(&allowed).unwrap();
 

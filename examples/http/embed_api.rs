@@ -21,11 +21,11 @@ struct EmbedResponseBody {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🚀 HTTP POST /api/v1/embed 示例");
+    println!("🚀 HTTP POST /api/1/embed 示例");
     println!("================================\n");
 
     let client = Client::new();
-    let url = "http://localhost:9002/api/v1/embed";
+    let url = "http://localhost:9002/api/1/embed";
     let body = EmbedRequestBody {
         text: "hello world".to_string(),
         normalize: true,

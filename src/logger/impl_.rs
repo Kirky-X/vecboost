@@ -22,6 +22,7 @@ pub struct LoggerModule;
 
 impl ModuleMeta for LoggerModule {
     const NAME: &'static str = "inklog_logger";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
 
     fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
         &[]

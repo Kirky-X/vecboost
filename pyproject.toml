@@ -1,3 +1,15 @@
 [tool.bandit]
-exclude_dirs = ["tests/perf/test_api.py", "tests/perf/test_server_integration.py", "tests/perf/client_factory.py"]
+# tests/ 是测试代码目录,使用 pytest 惯用 assert,B101 属误报;扫描时应排除。
+# target/ 是 Rust 构建产物目录,含第三方 crate 的生成脚本,非本项目代码。
+# temp/ 是临时工作区,含其他项目文件,非本项目代码。
+# 生产代码(src/、scripts/)仍会全量扫描。
+exclude_dirs = ["tests", "target", "temp"]
 skips = []
+
+[tool.pytest.ini_options]
+# 零告警门禁:任何 warning 直接判失败(新告警源出现即红,防止静默腐化)。
+filterwarnings = ["error"]
+markers = [
+  "sim: tests/perf Python API 语义模拟器用例(非 Rust 服务行为)",
+  "real: tests/perf 真实服务集成用例(需 localhost:9002)",
+]

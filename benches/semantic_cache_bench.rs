@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 /// Trigram Jaccard similarity — local copy for baseline benchmarking.
-/// Will be replaced by the actual implementation in Phase 2.
 fn trigram_jaccard(a: &str, b: &str) -> f32 {
     if a.len() < 3 || b.len() < 3 {
         return 0.0;
@@ -82,7 +81,6 @@ fn bench_exact_cache_operations(c: &mut Criterion) {
         })
     });
 
-    // Benchmark exact cache miss latency
     c.bench_function("exact_cache_miss", |b| {
         let map: std::collections::HashMap<String, Vec<f32>> = (0..1000)
             .map(|i| (format!("text:hello_world_{}", i), vec![0.1f32; 128]))

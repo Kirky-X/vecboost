@@ -4,6 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 use crate::error::VecboostError;
+use crate::i18n;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,9 +41,9 @@ pub struct User {
 /// - 仅允许字母、数字、下划线和连字符
 pub fn validate_username_format(username: &str) -> Result<(), VecboostError> {
     if username.len() < 3 || username.len() > 32 {
-        return Err(VecboostError::ValidationError(
-            "用户名长度必须在 3 到 32 个字符之间".to_string(),
-        ));
+        return Err(VecboostError::ValidationError(i18n::tr(
+            "auth-username-length",
+        )));
     }
 
     if !username
@@ -51,18 +52,18 @@ pub fn validate_username_format(username: &str) -> Result<(), VecboostError> {
         .map(|c| c.is_ascii_alphabetic())
         .unwrap_or(false)
     {
-        return Err(VecboostError::ValidationError(
-            "用户名必须以字母开头".to_string(),
-        ));
+        return Err(VecboostError::ValidationError(i18n::tr(
+            "auth-username-start",
+        )));
     }
 
     if !username
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
-        return Err(VecboostError::ValidationError(
-            "用户名只能包含字母、数字、下划线和连字符".to_string(),
-        ));
+        return Err(VecboostError::ValidationError(i18n::tr(
+            "auth-username-charset",
+        )));
     }
 
     Ok(())
@@ -106,5 +107,53 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: RefreshTokenRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.refresh_token, "refresh_tok");
+    }
+
+    #[test]
+    fn test_user_serialization() {
+        let user = User {
+            username: "bob".to_string(),
+            role: "admin".to_string(),
+            permissions: vec!["read".to_string(), "write".to_string()],
+        };
+        let json = serde_json::to_string(&user).unwrap();
+        let deserialized: User = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.username, "bob");
+        assert_eq!(deserialized.role, "admin");
+        assert_eq!(deserialized.permissions.len(), 2);
+    }
+
+    #[test]
+    fn test_validate_username_format_valid() {
+        assert!(validate_username_format("alice").is_ok());
+        assert!(validate_username_format("Bob123").is_ok());
+        assert!(validate_username_format("a-b").is_ok());
+        assert!(validate_username_format("user_name").is_ok());
+    }
+
+    #[test]
+    fn test_validate_username_format_too_short() {
+        assert!(validate_username_format("ab").is_err());
+        assert!(validate_username_format("").is_err());
+    }
+
+    #[test]
+    fn test_validate_username_format_too_long() {
+        let long_name = "a".repeat(33);
+        assert!(validate_username_format(&long_name).is_err());
+    }
+
+    #[test]
+    fn test_validate_username_format_must_start_with_letter() {
+        assert!(validate_username_format("1user").is_err());
+        assert!(validate_username_format("_user").is_err());
+        assert!(validate_username_format("-user").is_err());
+    }
+
+    #[test]
+    fn test_validate_username_format_invalid_chars() {
+        assert!(validate_username_format("user name").is_err());
+        assert!(validate_username_format("user@name").is_err());
+        assert!(validate_username_format("user.name").is_err());
     }
 }

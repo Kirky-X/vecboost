@@ -34,7 +34,7 @@ impl TestMode {
             Ok("mock") => TestMode::Mock,
             Ok("light") | Ok("real") => TestMode::Light,
             Ok("full") => TestMode::Full,
-            _ => TestMode::Mock, // 默认使用 Mock 模式
+            _ => TestMode::Mock,
         }
     }
 
@@ -68,6 +68,7 @@ pub fn get_test_model_config() -> ModelConfig {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         },
         TestMode::Full => ModelConfig {
             name: "bge-m3".to_string(),
@@ -81,6 +82,7 @@ pub fn get_test_model_config() -> ModelConfig {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         },
     }
 }
@@ -178,7 +180,6 @@ impl RealTestEngine {
         let expected_dimension = config.expected_dimension.unwrap_or(384);
 
         if mode.is_mock() {
-            // Mock 模式：直接使用 Mock 引擎
             tracing::info!("Using Mock engine (TEST_MODE=mock)");
             Self {
                 real_engine: None,
@@ -187,7 +188,6 @@ impl RealTestEngine {
                 expected_dimension,
             }
         } else {
-            // 尝试创建真实引擎
             match AnyEngine::new(&config, config.engine_type.clone(), Precision::Fp32) {
                 Ok(engine) => {
                     tracing::info!(
@@ -259,7 +259,6 @@ impl InferenceEngine for RealTestEngine {
         {
             match engine.embed(text) {
                 Ok(embedding) => {
-                    // 验证维度
                     if embedding.len() == self.expected_dimension {
                         return Ok(embedding);
                     }
@@ -275,7 +274,6 @@ impl InferenceEngine for RealTestEngine {
             }
         }
 
-        // 使用 Mock 回退
         Ok(self.mock_engine.generate_embedding(text))
     }
 
@@ -285,7 +283,6 @@ impl InferenceEngine for RealTestEngine {
         {
             match engine.embed_batch(texts) {
                 Ok(embeddings) => {
-                    // 验证第一个向量的维度
                     #[allow(clippy::collapsible_if)]
                     if let Some(first) = embeddings.first() {
                         if first.len() == self.expected_dimension {
@@ -303,7 +300,6 @@ impl InferenceEngine for RealTestEngine {
             }
         }
 
-        // 使用 Mock 回退
         let embeddings: Vec<Vec<f32>> = texts
             .iter()
             .map(|t| self.mock_engine.generate_embedding(t))
@@ -337,7 +333,7 @@ impl InferenceEngine for RealTestEngine {
 
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         if self.use_fallback {
-            return Ok(()); // 已经使用回退
+            return Ok(());
         }
 
         if let Some(ref mut engine) = self.real_engine {
@@ -364,15 +360,12 @@ impl InferenceEngine for RealTestEngine {
 /// 根据 TEST_MODE 环境变量选择引擎类型。
 pub fn create_test_engine()
 -> Result<Arc<RwLock<dyn InferenceEngine + Send + Sync>>, Box<dyn std::error::Error>> {
-    // 检查测试模式
     let mode = TestMode::from_env();
 
     if mode.is_mock() {
-        // Mock 模式：使用 1024 维（与原来一致）
         let engine = RealTestEngine::with_dimension(1024);
         Ok(Arc::new(RwLock::new(engine)))
     } else {
-        // 真实模式：尝试加载真实模型
         let engine = RealTestEngine::new();
         Ok(Arc::new(RwLock::new(engine)))
     }
@@ -399,7 +392,6 @@ mod tests {
         assert_eq!(result.len(), 384);
         assert!(result.iter().all(|&x| x.is_finite()));
 
-        // 验证归一化
         let norm: f32 = result.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-5);
     }
@@ -434,31 +426,26 @@ mod tests {
 
     #[test]
     fn test_test_mode_from_env() {
-        // 默认应该是 Mock 模式
         unsafe {
             std::env::remove_var("TEST_MODE");
         }
         assert_eq!(TestMode::from_env(), TestMode::Mock);
 
-        // 设置为 mock
         unsafe {
             std::env::set_var("TEST_MODE", "mock");
         }
         assert_eq!(TestMode::from_env(), TestMode::Mock);
 
-        // 设置为 light
         unsafe {
             std::env::set_var("TEST_MODE", "light");
         }
         assert_eq!(TestMode::from_env(), TestMode::Light);
 
-        // 设置为 full
         unsafe {
             std::env::set_var("TEST_MODE", "full");
         }
         assert_eq!(TestMode::from_env(), TestMode::Full);
 
-        // 清理
         unsafe {
             std::env::remove_var("TEST_MODE");
         }
@@ -507,14 +494,12 @@ mod bf16_precision_tests {
             .embed_batch(&texts)
             .expect("FP32 batch embed failed");
 
-        // BF16
         let engine_bf16 = AnyEngine::new(&config, Precision::Bf16)
             .expect("Failed to create BF16 engine");
         let embeddings_bf16 = engine_bf16
             .embed_batch(&texts)
             .expect("BF16 batch embed failed");
 
-        // Compare each text's embedding
         for (i, (fp32_vec, bf16_vec)) in embeddings_fp32
             .iter()
             .zip(embeddings_bf16.iter())

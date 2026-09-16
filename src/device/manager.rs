@@ -914,10 +914,7 @@ mod tests {
     async fn test_get_device_info_amd_returns_some() {
         let manager = DeviceManager::new();
         // AMD 设备可能是 Amd 或 OpenCL 类型
-        let info = manager
-            .get_device_info(&DeviceType::Amd)
-            .await
-            .or_else(|| None); // 如果没有 Amd，尝试 OpenCL
+        let info = manager.get_device_info(&DeviceType::Amd).await;
         let info = info.or(manager.get_device_info(&DeviceType::OpenCL).await);
         assert!(info.is_some(), "应该有 AMD/OpenCL 设备");
         assert!(

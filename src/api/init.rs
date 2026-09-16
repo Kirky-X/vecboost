@@ -11,6 +11,7 @@
 
 use crate::VecboostState;
 use crate::error::VecboostError;
+use crate::i18n;
 use std::sync::OnceLock;
 
 static STATE: OnceLock<VecboostState> = OnceLock::new();
@@ -18,12 +19,12 @@ static STATE: OnceLock<VecboostState> = OnceLock::new();
 pub fn init_state(state: VecboostState) -> Result<(), VecboostError> {
     STATE
         .set(state)
-        .map_err(|_| VecboostError::InternalError("init_state already called".to_string()))
+        .map_err(|_| VecboostError::InternalError(i18n::tr("api-init-state-called")))
 }
 
 pub fn state() -> Result<VecboostState, VecboostError> {
     STATE
         .get()
         .cloned()
-        .ok_or_else(|| VecboostError::InternalError("init_state not called".to_string()))
+        .ok_or_else(|| VecboostError::InternalError(i18n::tr("api-init-state-missing")))
 }

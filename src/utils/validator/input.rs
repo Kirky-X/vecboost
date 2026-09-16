@@ -4,6 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 use crate::error::VecboostError;
+use crate::i18n;
 use crate::utils::constants::{
     MAX_BATCH_SIZE, MAX_CONCURRENT_REQUESTS, MAX_FILE_SIZE_BYTES, MAX_SEARCH_RESULTS,
     MAX_TEXT_LENGTH, MIN_TEXT_LENGTH,
@@ -100,31 +101,34 @@ impl InputValidator {
 
     fn validate_text_content(&self, text: &str) -> Result<(), VecboostError> {
         if text.is_empty() {
-            return Err(VecboostError::InvalidInput(
-                "Text cannot be empty".to_string(),
-            ));
+            return Err(VecboostError::InvalidInput(i18n::tr("validate-text-empty")));
         }
 
         let char_count = text.chars().count();
         if char_count < self.config.min_text_length {
-            return Err(VecboostError::InvalidInput(format!(
-                "Text too short: {} characters (minimum: {})",
-                char_count, self.config.min_text_length
+            return Err(VecboostError::InvalidInput(i18n::tr_with_args(
+                "validate-text-too-short",
+                i18n::tr_args(&[
+                    ("got", &char_count.to_string()),
+                    ("min", &self.config.min_text_length.to_string()),
+                ]),
             )));
         }
 
         if char_count > self.config.max_text_length.get() {
-            return Err(VecboostError::InvalidInput(format!(
-                "Text too long: {} characters (maximum: {})",
-                char_count,
-                self.config.max_text_length.get()
+            return Err(VecboostError::InvalidInput(i18n::tr_with_args(
+                "validate-text-too-long",
+                i18n::tr_args(&[
+                    ("got", &char_count.to_string()),
+                    ("max", &self.config.max_text_length.get().to_string()),
+                ]),
             )));
         }
 
         if text.trim().is_empty() {
-            return Err(VecboostError::InvalidInput(
-                "Text contains only whitespace".to_string(),
-            ));
+            return Err(VecboostError::InvalidInput(i18n::tr(
+                "validate-text-whitespace",
+            )));
         }
 
         Ok(())
@@ -138,24 +142,26 @@ impl TextValidator for InputValidator {
 
     fn validate_batch(&self, texts: &[String]) -> Result<(), VecboostError> {
         if texts.is_empty() {
-            return Err(VecboostError::InvalidInput(
-                "Batch cannot be empty".to_string(),
-            ));
+            return Err(VecboostError::InvalidInput(i18n::tr(
+                "validate-batch-empty",
+            )));
         }
 
         if texts.len() > self.config.max_batch_size.get() {
-            return Err(VecboostError::InvalidInput(format!(
-                "Batch size {} exceeds maximum {}",
-                texts.len(),
-                self.config.max_batch_size.get()
+            return Err(VecboostError::InvalidInput(i18n::tr_with_args(
+                "validate-batch-size",
+                i18n::tr_args(&[
+                    ("size", &texts.len().to_string()),
+                    ("max", &self.config.max_batch_size.get().to_string()),
+                ]),
             )));
         }
 
         for (idx, text) in texts.iter().enumerate() {
             self.validate_text_content(text).map_err(|e| {
-                VecboostError::InvalidInput(format!(
-                    "Validation failed for text at index {}: {}",
-                    idx, e
+                VecboostError::InvalidInput(i18n::tr_with_args(
+                    "validate-text-index-failed",
+                    i18n::tr_args(&[("index", &idx.to_string()), ("detail", &e.to_string())]),
                 ))
             })?;
         }
@@ -172,39 +178,43 @@ impl TextValidator for InputValidator {
         self.validate_text_content(query)?;
 
         if texts.is_empty() {
-            return Err(VecboostError::InvalidInput(
-                "Search texts list cannot be empty".to_string(),
-            ));
+            return Err(VecboostError::InvalidInput(i18n::tr(
+                "validate-search-empty",
+            )));
         }
 
         if texts.len() > self.config.max_search_results.get() {
-            return Err(VecboostError::InvalidInput(format!(
-                "Search results count {} exceeds maximum {}",
-                texts.len(),
-                self.config.max_search_results.get()
+            return Err(VecboostError::InvalidInput(i18n::tr_with_args(
+                "rerank-too-many-docs",
+                i18n::tr_args(&[
+                    ("count", &texts.len().to_string()),
+                    ("max", &self.config.max_search_results.get().to_string()),
+                ]),
             )));
         }
 
         if let Some(k) = top_k {
             if k == 0 {
-                return Err(VecboostError::InvalidInput(
-                    "top_k must be at least 1".to_string(),
-                ));
+                return Err(VecboostError::InvalidInput(i18n::tr(
+                    "rerank-invalid-top-k",
+                )));
             }
             if k > self.config.max_search_results.get() {
-                return Err(VecboostError::InvalidInput(format!(
-                    "top_k {} exceeds maximum {}",
-                    k,
-                    self.config.max_search_results.get()
+                return Err(VecboostError::InvalidInput(i18n::tr_with_args(
+                    "validate-top-k-exceeded",
+                    i18n::tr_args(&[
+                        ("got", &k.to_string()),
+                        ("max", &self.config.max_search_results.get().to_string()),
+                    ]),
                 )));
             }
         }
 
         for (idx, text) in texts.iter().enumerate() {
             self.validate_text_content(text).map_err(|e| {
-                VecboostError::InvalidInput(format!(
-                    "Validation failed for search text at index {}: {}",
-                    idx, e
+                VecboostError::InvalidInput(i18n::tr_with_args(
+                    "validate-text-index-failed",
+                    i18n::tr_args(&[("index", &idx.to_string()), ("detail", &e.to_string())]),
                 ))
             })?;
         }
@@ -223,16 +233,19 @@ impl InputValidator {
                 if file_size > MAX_FILE_SIZE_BYTES {
                     let size_mb = file_size as f64 / (1024.0 * 1024.0);
                     let max_mb = MAX_FILE_SIZE_BYTES as f64 / (1024.0 * 1024.0);
-                    return Err(VecboostError::InvalidInput(format!(
-                        "File size {:.2} MB exceeds maximum allowed size {:.2} MB",
-                        size_mb, max_mb
+                    return Err(VecboostError::InvalidInput(i18n::tr_with_args(
+                        "file-too-large",
+                        i18n::tr_args(&[
+                            ("size", &format!("{:.2}", size_mb)),
+                            ("max", &format!("{:.2}", max_mb)),
+                        ]),
                     )));
                 }
                 Ok(())
             }
-            Err(e) => Err(VecboostError::InvalidInput(format!(
-                "Cannot access file {}: {}",
-                path, e
+            Err(e) => Err(VecboostError::InvalidInput(i18n::tr_with_args(
+                "file-access-failed",
+                i18n::tr_args(&[("path", path), ("detail", &e.to_string())]),
             ))),
         }
     }
@@ -241,13 +254,14 @@ impl InputValidator {
         let ext = path
             .rsplit('.')
             .next()
-            .ok_or_else(|| VecboostError::InvalidInput("File has no extension".to_string()))?;
+            .ok_or_else(|| VecboostError::InvalidInput(i18n::tr("file-no-extension")))?;
 
         let ext_lower = ext.to_ascii_lowercase();
         if !ALLOWED_FILE_EXTENSIONS.contains(&ext_lower.as_str()) {
-            return Err(VecboostError::InvalidInput(format!(
-                "File extension '.{}' is not allowed. Allowed extensions: {:?}",
-                ext, ALLOWED_FILE_EXTENSIONS
+            let allowed = ALLOWED_FILE_EXTENSIONS.join(", ");
+            return Err(VecboostError::InvalidInput(i18n::tr_with_args(
+                "file-extension-not-allowed",
+                i18n::tr_args(&[("ext", &ext_lower), ("allowed", &allowed)]),
             )));
         }
 
@@ -257,15 +271,22 @@ impl InputValidator {
     fn validate_file_content(&self, path: &str) -> Result<(), VecboostError> {
         use std::fs::File;
 
-        let file = File::open(path)
-            .map_err(|e| VecboostError::InvalidInput(format!("Cannot open file: {}", e)))?;
+        let file = File::open(path).map_err(|e| {
+            VecboostError::InvalidInput(i18n::tr_with_args(
+                "file-open-failed",
+                i18n::tr_args(&[("detail", &e.to_string())]),
+            ))
+        })?;
 
         let mut buffer = [0u8; MAX_MAGIC_BYTES];
         let mut reader = std::io::BufReader::new(file);
 
-        let bytes_read = reader
-            .read(&mut buffer)
-            .map_err(|e| VecboostError::InvalidInput(format!("Cannot read file: {}", e)))?;
+        let bytes_read = reader.read(&mut buffer).map_err(|e| {
+            VecboostError::InvalidInput(i18n::tr_with_args(
+                "file-read-failed",
+                i18n::tr_args(&[("detail", &e.to_string())]),
+            ))
+        })?;
 
         if bytes_read == 0 {
             return Ok(());
@@ -295,9 +316,9 @@ impl InputValidator {
         if !has_text_marker {
             for &byte in file_header.iter().take(256) {
                 if byte < 0x09 || (byte > 0x0A && byte < 0x20 && byte != 0x1E && byte != 0x1F) {
-                    return Err(VecboostError::InvalidInput(
-                        "File contains non-text binary data".to_string(),
-                    ));
+                    return Err(VecboostError::InvalidInput(i18n::tr(
+                        "file-binary-rejected",
+                    )));
                 }
             }
         }
@@ -326,6 +347,10 @@ impl FileValidator for InputValidator {
 #[cfg(test)]
 mod validator_tests {
     use super::*;
+
+    fn ensure_i18n_init() {
+        i18n::init();
+    }
 
     #[test]
     fn test_empty_text_validation() {
@@ -438,6 +463,7 @@ mod validator_tests {
 
     #[test]
     fn test_text_exceeding_max_length_rejected() {
+        ensure_i18n_init();
         let validator = InputValidator::with_default();
         // MAX_TEXT_LENGTH = 10000
         let long_text = "a".repeat(MAX_TEXT_LENGTH + 1);
@@ -459,6 +485,7 @@ mod validator_tests {
 
     #[test]
     fn test_text_below_min_length_rejected() {
+        ensure_i18n_init();
         // MIN_TEXT_LENGTH = 1, 空字符串已被空检查捕获,
         // 但配置更高 min 时应触发 too short
         let config = ValidationConfig::new(
@@ -492,6 +519,7 @@ mod validator_tests {
 
     #[test]
     fn test_batch_empty_rejected() {
+        ensure_i18n_init();
         let validator = InputValidator::with_default();
         let result = validator.validate_batch(&[]);
         assert!(result.is_err());
@@ -503,6 +531,7 @@ mod validator_tests {
 
     #[test]
     fn test_batch_with_empty_text_rejected_with_index() {
+        ensure_i18n_init();
         let validator = InputValidator::with_default();
         let texts = vec!["valid".to_string(), "".to_string()];
         let result = validator.validate_batch(&texts);
@@ -531,6 +560,7 @@ mod validator_tests {
 
     #[test]
     fn test_batch_exceeds_max_size_rejected() {
+        ensure_i18n_init();
         let config = ValidationConfig::new(
             NonZeroUsize::new(MAX_TEXT_LENGTH),
             Some(1),
@@ -543,30 +573,32 @@ mod validator_tests {
         let result = validator.validate_batch(&texts);
         assert!(result.is_err());
         match result.unwrap_err() {
-            VecboostError::InvalidInput(msg) => assert!(msg.contains("exceeds maximum")),
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("exceeds max")),
             _ => panic!("Expected InvalidInput"),
         }
     }
 
     #[test]
     fn test_search_with_top_k_zero_rejected() {
+        ensure_i18n_init();
         let validator = InputValidator::with_default();
         let result = validator.validate_search("query", &["text1".to_string()], Some(0));
         assert!(result.is_err());
         match result.unwrap_err() {
-            VecboostError::InvalidInput(msg) => assert!(msg.contains("top_k must be at least 1")),
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("top_k")),
             _ => panic!("Expected InvalidInput"),
         }
     }
 
     #[test]
     fn test_search_with_top_k_exceeding_max_rejected() {
+        ensure_i18n_init();
         let validator = InputValidator::with_default();
         let k = MAX_SEARCH_RESULTS + 1;
         let result = validator.validate_search("query", &["text1".to_string()], Some(k));
         assert!(result.is_err());
         match result.unwrap_err() {
-            VecboostError::InvalidInput(msg) => assert!(msg.contains("exceeds maximum")),
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("exceeds max")),
             _ => panic!("Expected InvalidInput"),
         }
     }
@@ -587,6 +619,7 @@ mod validator_tests {
 
     #[test]
     fn test_search_texts_exceed_max_rejected() {
+        ensure_i18n_init();
         let config = ValidationConfig::new(
             NonZeroUsize::new(MAX_TEXT_LENGTH),
             Some(1),
@@ -599,13 +632,14 @@ mod validator_tests {
         let result = validator.validate_search("query", &texts, Some(1));
         assert!(result.is_err());
         match result.unwrap_err() {
-            VecboostError::InvalidInput(msg) => assert!(msg.contains("exceeds maximum")),
+            VecboostError::InvalidInput(msg) => assert!(msg.contains("exceeds max")),
             _ => panic!("Expected InvalidInput"),
         }
     }
 
     #[test]
     fn test_search_with_invalid_text_in_list_rejected_with_index() {
+        ensure_i18n_init();
         let validator = InputValidator::with_default();
         let texts = vec!["valid".to_string(), "".to_string()];
         let result = validator.validate_search("query", &texts, Some(1));
@@ -711,6 +745,7 @@ mod validator_tests {
 
     #[test]
     fn test_file_size_validation_nonexistent_file_rejected() {
+        ensure_i18n_init();
         let validator = InputValidator::with_default();
         let result = validator.validate_file_size("/nonexistent/path/file.txt");
         assert!(result.is_err());
@@ -779,6 +814,7 @@ mod validator_tests {
 
     #[test]
     fn test_file_content_validation_nonexistent_file_rejected() {
+        ensure_i18n_init();
         let validator = InputValidator::with_default();
         let result = validator.validate_file_content("/nonexistent/path/file.txt");
         assert!(result.is_err());
@@ -798,6 +834,7 @@ mod validator_tests {
 
     #[test]
     fn test_file_path_validation_rejects_disallowed_extension() {
+        ensure_i18n_init();
         let validator = InputValidator::with_default();
         let result = validator.validate_file_path("/some/path/file.exe");
         // 扩展名检查在前,应先失败
@@ -826,6 +863,7 @@ mod validator_tests {
 
     #[test]
     fn test_whitespace_only_text_rejected_with_correct_message() {
+        ensure_i18n_init();
         let validator = InputValidator::with_default();
         let result = validator.validate_text("   \t\n  ");
         assert!(result.is_err());
@@ -833,5 +871,46 @@ mod validator_tests {
             VecboostError::InvalidInput(msg) => assert!(msg.contains("whitespace")),
             _ => panic!("Expected InvalidInput for whitespace-only text"),
         }
+    }
+
+    #[test]
+    fn test_validate_file_size_oversized() {
+        ensure_i18n_init();
+        let validator = InputValidator::with_default();
+        // Create a sparse file that appears to be larger than MAX_FILE_SIZE_BYTES (100MB)
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let file = temp.as_file();
+        file.set_len(MAX_FILE_SIZE_BYTES + 1).unwrap();
+        let result = validator.validate_file_path(temp.path().to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "file exceeding max size should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_validate_file_content_rejects_binary() {
+        ensure_i18n_init();
+        let validator = InputValidator::with_default();
+        // Create a file with binary content (bytes < 0x09 or in 0x0B-0x1F range excluding 0x1E/0x1F)
+        let mut temp = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        // Write binary bytes: 0x00 is < 0x09, so it should be detected as binary
+        temp.write_all(&[0x00, 0x01, 0x02, 0x03, 0x04, 0x05])
+            .unwrap();
+        temp.flush().unwrap();
+        let result = validator.validate_file_content(temp.path().to_str().unwrap());
+        assert!(result.is_err(), "binary file should be rejected");
+    }
+
+    #[test]
+    fn test_validate_file_content_accepts_text() {
+        let validator = InputValidator::with_default();
+        let mut temp = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        temp.write_all(b"Hello, this is plain text!\n").unwrap();
+        temp.flush().unwrap();
+        let result = validator.validate_file_content(temp.path().to_str().unwrap());
+        assert!(result.is_ok(), "text file should be accepted: {:?}", result);
     }
 }

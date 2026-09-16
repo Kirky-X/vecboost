@@ -13,7 +13,6 @@ use axum::{
 use regex::Regex;
 #[cfg(feature = "http")]
 use serde_json::json;
-use thiserror::Error;
 
 #[cfg(feature = "http")]
 const MAX_ERROR_MESSAGE_LENGTH: usize = 200;
@@ -26,16 +25,8 @@ static SANITIZE_PATTERNS: std::sync::OnceLock<Vec<(Regex, &'static str)>> =
 fn get_sanitize_patterns() -> &'static Vec<(Regex, &'static str)> {
     SANITIZE_PATTERNS.get_or_init(|| {
         vec![
-            (
-                Regex::new(r#"/[a-zA-Z0-9/_.-]+/[a-zA-Z0-9/_.-]+\.\w+"#)
-                    .expect("sanitize pattern: valid Unix path regex"),
-                "[REDACTED_PATH]",
-            ),
-            (
-                Regex::new(r#"C:\\[a-zA-Z0-9_\\]+\.\w+"#)
-                    .expect("sanitize pattern: valid Windows path regex"),
-                "[REDACTED_WINDOWS_PATH]",
-            ),
+            // 移除全局路径脱敏——模型/配置路径对调试至关重要，
+            // 仅对用户输入派生路径在 API 边界脱敏。
             (
                 Regex::new(r#"token \d+"#).expect("sanitize pattern: valid token regex"),
                 "token [ID]",
@@ -76,59 +67,37 @@ fn sanitize_error_message(msg: &str) -> String {
     sanitized
 }
 
-#[derive(Error, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum VecboostError {
-    #[error("Config error: {0}")]
     ConfigError(String),
-
-    #[error("Model load error: {0}")]
     ModelLoadError(String),
-
-    #[error("Model file corrupted: {0}")]
     ModelFileCorrupted(String),
-
-    #[error("Model file integrity check failed: {0}")]
     ModelIntegrityError(String),
-
-    #[error("Tokenization error: {0}")]
     TokenizationError(String),
-
-    #[error("Inference error: {0}")]
     InferenceError(String),
-
-    #[error("Out of memory error: {0}")]
     OutOfMemory(String),
-
-    #[error("Invalid input: {0}")]
     InvalidInput(String),
-
-    #[error("Not found: {0}")]
     NotFound(String),
-
-    #[error("Model not loaded: {0}")]
     ModelNotLoaded(String),
-
-    #[error("Authentication error: {0}")]
     AuthenticationError(String),
-
-    #[error("Security error: {0}")]
     SecurityError(String),
-
-    #[error("IO error: {0}")]
     IoError(String),
-
-    #[error("Validation error: {0}")]
     ValidationError(String),
-
-    #[error("Rate limit exceeded: {0}")]
     RateLimitExceeded(String),
-
-    #[error("Database error: {0}")]
     DatabaseError(String),
-
-    #[error("Internal error: {0}")]
     InternalError(String),
 }
+
+impl std::fmt::Display for VecboostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let detail = self.error_detail();
+        let args = crate::i18n::tr_args(&[("detail", detail)]);
+        let msg = crate::i18n::tr_with_args(self.error_code(), args);
+        write!(f, "{}", msg)
+    }
+}
+
+impl std::error::Error for VecboostError {}
 
 impl VecboostError {
     pub fn config_error(message: String) -> Self {
@@ -198,12 +167,58 @@ impl VecboostError {
     pub fn internal_error(message: String) -> Self {
         VecboostError::InternalError(message)
     }
+
+    /// Return a stable Fluent message key for this error variant.
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            VecboostError::ConfigError(_) => "error-config",
+            VecboostError::ModelLoadError(_) => "error-model-load",
+            VecboostError::ModelFileCorrupted(_) => "error-model-corrupted",
+            VecboostError::ModelIntegrityError(_) => "error-model-integrity",
+            VecboostError::TokenizationError(_) => "error-tokenization",
+            VecboostError::InferenceError(_) => "error-inference",
+            VecboostError::OutOfMemory(_) => "error-oom",
+            VecboostError::InvalidInput(_) => "error-invalid-input",
+            VecboostError::NotFound(_) => "error-not-found",
+            VecboostError::ModelNotLoaded(_) => "error-model-not-loaded",
+            VecboostError::AuthenticationError(_) => "error-authentication",
+            VecboostError::SecurityError(_) => "error-security",
+            VecboostError::IoError(_) => "error-io",
+            VecboostError::ValidationError(_) => "error-validation",
+            VecboostError::RateLimitExceeded(_) => "error-rate-limit",
+            VecboostError::DatabaseError(_) => "error-database",
+            VecboostError::InternalError(_) => "error-internal",
+        }
+    }
+
+    /// Return the inner detail string for this error.
+    pub fn error_detail(&self) -> &str {
+        match self {
+            VecboostError::ConfigError(s)
+            | VecboostError::ModelLoadError(s)
+            | VecboostError::ModelFileCorrupted(s)
+            | VecboostError::ModelIntegrityError(s)
+            | VecboostError::TokenizationError(s)
+            | VecboostError::InferenceError(s)
+            | VecboostError::OutOfMemory(s)
+            | VecboostError::InvalidInput(s)
+            | VecboostError::NotFound(s)
+            | VecboostError::ModelNotLoaded(s)
+            | VecboostError::AuthenticationError(s)
+            | VecboostError::SecurityError(s)
+            | VecboostError::IoError(s)
+            | VecboostError::ValidationError(s)
+            | VecboostError::RateLimitExceeded(s)
+            | VecboostError::DatabaseError(s)
+            | VecboostError::InternalError(s) => s.as_str(),
+        }
+    }
 }
 
 #[cfg(feature = "http")]
 impl IntoResponse for VecboostError {
     fn into_response(self) -> Response {
-        let status = match self {
+        let status = match &self {
             VecboostError::ConfigError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             VecboostError::ModelLoadError(_) => StatusCode::FAILED_DEPENDENCY,
             VecboostError::ModelFileCorrupted(_) => StatusCode::FAILED_DEPENDENCY,
@@ -223,11 +238,15 @@ impl IntoResponse for VecboostError {
             VecboostError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
-        let sanitized_message = sanitize_error_message(&self.to_string());
+        let error_code = self.error_code();
+        let args = crate::i18n::tr_args(&[("detail", self.error_detail())]);
+        let translated_message = crate::i18n::tr_with_args(error_code, args);
+        let sanitized_message = sanitize_error_message(&translated_message);
 
         let body = Json(json!({
             "error": sanitized_message,
-            "code": status.as_u16()
+            "code": status.as_u16(),
+            "error_code": error_code
         }));
 
         (status, body).into_response()
@@ -285,21 +304,26 @@ impl From<tokio::task::JoinError> for VecboostError {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "http")]
-    #[test]
-    fn test_sanitize_error_message_unix_path() {
-        let msg = "Failed to load /home/user/model/file.safetensors";
-        let sanitized = sanitize_error_message(msg);
-        assert!(sanitized.contains("[REDACTED_PATH]"));
-        assert!(!sanitized.contains("/home/user/model/file.safetensors"));
+    fn ensure_init() {
+        crate::i18n::init();
     }
 
     #[cfg(feature = "http")]
     #[test]
-    fn test_sanitize_error_message_windows_path() {
+    fn test_sanitize_error_message_unix_path_preserved() {
+        // 路径不再全局脱敏，保留原始路径以便调试
+        let msg = "Failed to load /home/user/model/file.safetensors";
+        let sanitized = sanitize_error_message(msg);
+        assert!(sanitized.contains("/home/user/model/file.safetensors"));
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_sanitize_error_message_windows_path_preserved() {
+        // Windows 路径同样保留
         let msg = r#"Failed to load C:\Users\admin\config.json"#;
         let sanitized = sanitize_error_message(msg);
-        assert!(sanitized.contains("[REDACTED_WINDOWS_PATH]"));
+        assert!(sanitized.contains(r#"C:\Users\admin\config.json"#));
     }
 
     #[cfg(feature = "http")]
@@ -455,8 +479,13 @@ mod tests {
 
     #[test]
     fn test_error_display() {
+        ensure_init();
         let err = VecboostError::ConfigError("test message".to_string());
-        assert_eq!(format!("{}", err), "Config error: test message");
+        let expected = crate::i18n::tr_with_args(
+            "error-config",
+            crate::i18n::tr_args(&[("detail", "test message")]),
+        );
+        assert_eq!(format!("{}", err), expected);
     }
 
     #[cfg(feature = "http")]
@@ -561,7 +590,8 @@ mod tests {
         assert!(sanitized.contains("at position [REDACTED]"));
         assert!(sanitized.contains("[INTERNAL_ERROR]"));
         assert!(sanitized.contains("token [ID]"));
-        assert!(sanitized.contains("[REDACTED_PATH]"));
+        // 路径不再脱敏
+        assert!(sanitized.contains("/home/user/model/file.safetensors"));
     }
 
     #[cfg(feature = "http")]
@@ -584,21 +614,160 @@ mod tests {
 
     #[test]
     fn test_all_error_variants_display() {
-        assert_eq!(
-            format!("{}", VecboostError::OutOfMemory("oom".to_string())),
-            "Out of memory error: oom"
-        );
-        assert_eq!(
-            format!("{}", VecboostError::DatabaseError("db".to_string())),
-            "Database error: db"
-        );
-        assert_eq!(
-            format!("{}", VecboostError::InternalError("int".to_string())),
-            "Internal error: int"
-        );
-        assert_eq!(
-            format!("{}", VecboostError::RateLimitExceeded("rl".to_string())),
-            "Rate limit exceeded: rl"
-        );
+        ensure_init();
+        let cases: Vec<(VecboostError, &str, &str)> = vec![
+            (VecboostError::OutOfMemory("oom".into()), "error-oom", "oom"),
+            (
+                VecboostError::DatabaseError("db".into()),
+                "error-database",
+                "db",
+            ),
+            (
+                VecboostError::InternalError("int".into()),
+                "error-internal",
+                "int",
+            ),
+            (
+                VecboostError::RateLimitExceeded("rl".into()),
+                "error-rate-limit",
+                "rl",
+            ),
+        ];
+        for (err, code, detail) in cases {
+            let expected =
+                crate::i18n::tr_with_args(code, crate::i18n::tr_args(&[("detail", detail)]));
+            assert_eq!(format!("{}", err), expected, "mismatch for {}", code);
+        }
+    }
+
+    #[test]
+    fn test_error_constructors() {
+        let _ = VecboostError::config_error("cfg".into());
+        let _ = VecboostError::model_load_error("ml".into());
+        let _ = VecboostError::model_file_corrupted("mfc".into());
+        let _ = VecboostError::model_integrity_error("mi".into());
+        let _ = VecboostError::tokenization_error("tok".into());
+        let _ = VecboostError::inference_error("inf".into());
+        let _ = VecboostError::invalid_input("ii".into());
+        let _ = VecboostError::not_found("nf".into());
+        let _ = VecboostError::model_not_loaded("mnl".into());
+        let _ = VecboostError::authentication_error("auth".into());
+        let _ = VecboostError::security_error("sec".into());
+        let _ = VecboostError::io_error("io".into());
+        let _ = VecboostError::validation_error("val".into());
+        let _ = VecboostError::database_error("db".into());
+        let _ = VecboostError::rate_limit_exceeded("rl".into());
+        let _ = VecboostError::out_of_memory("oom".into());
+        let _ = VecboostError::internal_error("int".into());
+    }
+
+    #[test]
+    fn test_error_code_all_variants() {
+        let variants: Vec<VecboostError> = vec![
+            VecboostError::ConfigError("x".into()),
+            VecboostError::ModelLoadError("x".into()),
+            VecboostError::ModelFileCorrupted("x".into()),
+            VecboostError::ModelIntegrityError("x".into()),
+            VecboostError::TokenizationError("x".into()),
+            VecboostError::InferenceError("x".into()),
+            VecboostError::OutOfMemory("x".into()),
+            VecboostError::InvalidInput("x".into()),
+            VecboostError::NotFound("x".into()),
+            VecboostError::ModelNotLoaded("x".into()),
+            VecboostError::AuthenticationError("x".into()),
+            VecboostError::SecurityError("x".into()),
+            VecboostError::IoError("x".into()),
+            VecboostError::ValidationError("x".into()),
+            VecboostError::RateLimitExceeded("x".into()),
+            VecboostError::DatabaseError("x".into()),
+            VecboostError::InternalError("x".into()),
+        ];
+        for v in &variants {
+            assert!(!v.error_code().is_empty());
+            assert!(!v.error_detail().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_error_is_error_trait() {
+        let err = VecboostError::ConfigError("test".into());
+        let _: &dyn std::error::Error = &err;
+    }
+
+    #[test]
+    fn test_error_display_all_remaining_variants() {
+        ensure_init();
+        let remaining: Vec<(VecboostError, &str)> = vec![
+            (
+                VecboostError::ModelLoadError("ml".into()),
+                "error-model-load",
+            ),
+            (
+                VecboostError::ModelFileCorrupted("mfc".into()),
+                "error-model-corrupted",
+            ),
+            (
+                VecboostError::ModelIntegrityError("mi".into()),
+                "error-model-integrity",
+            ),
+            (
+                VecboostError::TokenizationError("tok".into()),
+                "error-tokenization",
+            ),
+            (
+                VecboostError::InferenceError("inf".into()),
+                "error-inference",
+            ),
+            (
+                VecboostError::InvalidInput("ii".into()),
+                "error-invalid-input",
+            ),
+            (VecboostError::NotFound("nf".into()), "error-not-found"),
+            (
+                VecboostError::ModelNotLoaded("mnl".into()),
+                "error-model-not-loaded",
+            ),
+            (
+                VecboostError::AuthenticationError("auth".into()),
+                "error-authentication",
+            ),
+            (VecboostError::SecurityError("sec".into()), "error-security"),
+            (VecboostError::IoError("io".into()), "error-io"),
+            (
+                VecboostError::ValidationError("val".into()),
+                "error-validation",
+            ),
+        ];
+        for (err, code) in remaining {
+            let expected = crate::i18n::tr_with_args(
+                code,
+                crate::i18n::tr_args(&[("detail", err.error_detail())]),
+            );
+            assert_eq!(format!("{}", err), expected, "mismatch for {}", code);
+        }
+    }
+
+    #[cfg(feature = "auth")]
+    #[test]
+    fn test_from_garrison_error_not_login() {
+        let ge = garrison::error::GarrisonError::NotLogin("not logged in".to_string());
+        let ve: VecboostError = ge.into();
+        assert!(matches!(ve, VecboostError::AuthenticationError(_)));
+    }
+
+    #[cfg(feature = "auth")]
+    #[test]
+    fn test_from_garrison_error_config() {
+        let ge = garrison::error::GarrisonError::Config("bad config".to_string());
+        let ve: VecboostError = ge.into();
+        assert!(matches!(ve, VecboostError::ConfigError(_)));
+    }
+
+    #[cfg(feature = "auth")]
+    #[test]
+    fn test_from_garrison_error_internal() {
+        let ge = garrison::error::GarrisonError::Internal("internal".to_string());
+        let ve: VecboostError = ge.into();
+        assert!(matches!(ve, VecboostError::InternalError(_)));
     }
 }

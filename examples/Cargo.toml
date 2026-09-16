@@ -8,7 +8,7 @@ publish = false
 description = "Functional examples for the VecBoost embedding service"
 
 [dependencies]
-# 通过 path 依赖主 crate,默认开启所有非引擎 features
+# 通过 path 依赖主 crate,启用 http/auth/cli/grpc/db
 # 引擎 features(onnx/metal)通过本 crate 的 features 透传,可选启用
 # 注:oxcache/limiteron/inklog/confers 在主 crate 中已是必选依赖,无需在此声明 feature
 vecboost = { path = "..", default-features = false, features = [
@@ -17,17 +17,16 @@ vecboost = { path = "..", default-features = false, features = [
     "cli",
     "grpc",
     "db",
-    "redis",
 ] }
 
 # 示例直接使用的第三方 crate
-tokio = { version = "1.0", default-features = false, features = ["full"] }
+tokio = { version = "1.53", default-features = false, features = ["full"] }
 async-trait = { version = "0.1", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 reqwest = { version = "0.13", default-features = false, features = ["default-tls"] }
 hf-hub = { version = "1.0", default-features = false, features = ["blocking", "rustls-tls"] }
-tempfile = { version = "3.0", default-features = false }
+tempfile = { version = "3.27", default-features = false }
 prometheus = { version = "0.14", default-features = false, features = ["process"] }
 
 [features]

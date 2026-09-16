@@ -6,7 +6,7 @@
 //! 共享测试 fixtures
 //!
 //! 提供集成测试与性能测试共用的工具函数、`MockEngine` 与 `RealTestEngine`。
-//! 本模块合并自原 `tests/integration/real_engine.rs`（D8 重组）。
+//! 本模块合并自原 `tests/integration/real_engine.rs`。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -67,8 +67,8 @@ pub fn get_test_model_config() -> ModelConfig {
         TestMode::Light => ModelConfig {
             name: "bge-small-en-v1.5".to_string(),
             engine_type: EngineType::Candle,
-            model_path: PathBuf::from("models/bge-small-en-v1.5"),
-            tokenizer_path: Some(PathBuf::from("models/bge-small-en-v1.5-tokenizer")),
+            model_path: PathBuf::from("models/BAAI-bge-small-en-v1.5"),
+            tokenizer_path: None,
             device: vecboost::config::model::DeviceType::Cpu,
             max_batch_size: 16,
             pooling_mode: None,
@@ -76,6 +76,7 @@ pub fn get_test_model_config() -> ModelConfig {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         },
         TestMode::Full => ModelConfig {
             name: "bge-m3".to_string(),
@@ -89,6 +90,7 @@ pub fn get_test_model_config() -> ModelConfig {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            quantized: false,
         },
     }
 }

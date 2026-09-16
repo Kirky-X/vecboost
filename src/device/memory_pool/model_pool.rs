@@ -91,20 +91,17 @@ impl ModelWeightPool {
         model_name: &str,
         memory_bytes: u64,
     ) -> Result<(), String> {
-        // 检查是否已存在
         if self.model_slots.contains_key(model_name) {
             warn!("Model {} already allocated", model_name);
             return Ok(());
         }
 
-        // 检查是否有足够内存
         // 使用比较交换实现原子分配
         loop {
             let current_allocated = self.allocated_memory.load(Ordering::Acquire);
             let available = self.max_memory.saturating_sub(current_allocated);
 
             if memory_bytes > available {
-                // 尝试释放未使用的模型
                 if self.cache_enabled {
                     let needed = memory_bytes - available;
                     let freed = self.reclaim_memory(needed);
@@ -125,7 +122,6 @@ impl ModelWeightPool {
                 }
             }
 
-            // 原子更新分配的内存
             let new_allocated = current_allocated + memory_bytes;
             match self.allocated_memory.compare_exchange_weak(
                 current_allocated,
@@ -134,18 +130,15 @@ impl ModelWeightPool {
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    // 成功分配，退出循环
                     break;
                 }
                 Err(_) => {
-                    // 失败，重试
                     debug!("Memory allocation race detected, retrying...");
                     continue;
                 }
             }
         }
 
-        // 创建槽位
         let slot = ModelSlot {
             model_name: model_name.to_string(),
             memory_allocated: memory_bytes,
@@ -333,7 +326,6 @@ mod tests {
 
         let mut pool = ModelWeightPool::new("test_device".to_string(), config);
 
-        // 分配 512MB
         let result = pool.allocate_for_model("model1", 512 * 1024 * 1024);
         assert!(result.is_ok());
 
@@ -364,14 +356,11 @@ mod tests {
 
         let mut pool = ModelWeightPool::new("test_device".to_string(), config);
 
-        // 初始状态应该可以加载
         assert!(pool.can_load_model(512 * 1024 * 1024));
 
-        // 分配 512MB
         pool.allocate_for_model("model1", 512 * 1024 * 1024)
             .unwrap();
 
-        // 标记为未加载
         pool.mark_model_unloaded("model1");
 
         // 应该仍然可以加载，因为可以回收
@@ -388,11 +377,9 @@ mod tests {
 
         let mut pool = ModelWeightPool::new("test_device".to_string(), config);
 
-        // 分配 512MB
         pool.allocate_for_model("model1", 512 * 1024 * 1024)
             .unwrap();
 
-        // 尝试再分配 512MB，应该失败
         let result = pool.allocate_for_model("model2", 512 * 1024 * 1024);
         assert!(result.is_err());
     }
@@ -408,7 +395,6 @@ mod tests {
         let slot_before = pool.get_model_slot("model1").unwrap();
         let last_used_before = slot_before.last_used;
 
-        // 等待一小段时间
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         pool.update_model_usage("model1");

@@ -21,7 +21,7 @@ use crate::utils::vquant::{
     BinaryVector, I8Vector, cosine_binary, dot_i8, quantize_binary, quantize_i8,
 };
 
-/// 语义缓存向量比较模式（T018）。
+/// 语义缓存向量比较模式。
 ///
 /// - `Exact`（默认）：行为与现状完全一致，不调用任何量化路径；
 /// - `I8` / `Binary`：候选粗筛用 vquant 估计器，命中后用原始向量精确复验。
@@ -157,7 +157,7 @@ impl SemanticCache {
         }
     }
 
-    /// 清空全部语义索引与底层精确缓存（T035 审查安全1：模型切换防跨模型污染）。
+    /// 清空全部语义索引与底层精确缓存（模型切换防跨模型污染）。
     pub async fn clear(&self) {
         self.semantic_index.write().await.clear();
         self.total_entries.store(0, Ordering::SeqCst);
@@ -307,7 +307,7 @@ impl SemanticCache {
         self.total_entries.store(index.len(), Ordering::Relaxed);
     }
 
-    /// 向量相似度查找（T018）：按 `comparison_mode` 比较查询向量与索引条目。
+    /// 向量相似度查找：按 `comparison_mode` 比较查询向量与索引条目。
     ///
     /// - `Exact`：全量余弦精确扫描；
     /// - `I8` / `Binary`：vquant 估计器粗筛（阈值放宽 10% 防假阴性），
@@ -662,7 +662,7 @@ mod tests {
         assert!(ComparisonMode::from_str("fp16").is_err());
     }
 
-    /// T018：exact 模式输出与现状一致（暴力余弦扫描等价）。
+    /// exact 模式输出与现状一致（暴力余弦扫描等价）。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_vector_search_exact_mode_matches_brute_force() {
         let cache = SemanticCache::with_capacity(0.7, 16);
@@ -677,7 +677,7 @@ mod tests {
         assert_eq!(cache.quantized_entry_count().await, 0);
     }
 
-    /// T018：i8 模式对完全相同文本仍精确命中（无假阴性），命中为原始向量。
+    /// i8 模式对完全相同文本仍精确命中（无假阴性），命中为原始向量。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_vector_search_i8_mode_exact_text_hit() {
         let cache = SemanticCache::with_capacity(0.7, 16).with_comparison_mode(ComparisonMode::I8);
@@ -691,7 +691,7 @@ mod tests {
         assert_eq!(hit, va, "i8 模式对相同向量必须精确命中原始向量");
     }
 
-    /// T018：binary 模式对完全相同文本仍精确命中。
+    /// binary 模式对完全相同文本仍精确命中。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_vector_search_binary_mode_exact_text_hit() {
         let cache =

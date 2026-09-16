@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! 物理核线程调优（T008–T010，port 自 colibri omp_tune.h 策略）。
+//! 物理核线程调优（port 自 colibri omp_tune.h 策略）。
 //!
 //! - 物理核检测：Linux 解析 `/sys/.../thread_siblings_list` 去重 SMT；
 //!   macOS 取 `hw.perflevel0.physicalcpu`；Windows 返回 None 落回 num_cpus。
@@ -60,7 +60,7 @@ pub fn parse_thread_siblings_lists(lines: &[&str]) -> Option<usize> {
     Some(uniq.len())
 }
 
-/// 纯函数解析层：解析 `lscpu` 输出统计 socket 数（T010）。
+/// 纯函数解析层：解析 `lscpu` 输出统计 socket 数。
 ///
 /// 优先匹配 `Socket(s):` 字段；缺失时回退统计 `NUMA node` 行数；
 /// 均无则返回 None。
@@ -146,7 +146,7 @@ fn detect_physical_cores_macos() -> Option<usize> {
     None
 }
 
-/// 解析优先级：显式配置 > 检测值 > 回退值（T009 单测覆盖）。
+/// 解析优先级：显式配置 > 检测值 > 回退值（单测覆盖）。
 pub fn resolve_worker_threads(
     explicit: Option<usize>,
     detected: Option<usize>,

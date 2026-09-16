@@ -1,4 +1,4 @@
-//! 吞吐基线基准（T012）：单文本 embed 与 32 文本 embed_batch 两场景。
+//! 吞吐基线基准：单文本 embed 与 32 文本 embed_batch 两场景。
 //!
 //! 模型经环境变量 `VECBOOST_BENCH_MODEL` 指定（本地模型目录）；未设置时
 //! skip 并输出提示（`cargo bench` 不失败）。基线数字记入 `docs/benchmarks/`，

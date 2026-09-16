@@ -33,12 +33,12 @@ pub struct PrometheusCollector {
     // 批处理大小
     batch_size: HistogramVec,
 
-    // 时间窗拼批指标（T004）：批次大小与等待时长
+    // 时间窗拼批指标：批次大小与等待时长
     vecboost_batch_size: HistogramVec,
     vecboost_batch_wait_seconds: HistogramVec,
-    // 批内去重率（T007）：滚动 gauge
+    // 批内去重率：滚动 gauge
     vecboost_inbatch_dedup_ratio: GaugeVec,
-    // 引擎分阶段延迟（T026）：tokenize/inference/pool
+    // 引擎分阶段延迟：tokenize/inference/pool
     vecboost_stage_seconds: HistogramVec,
 
     // 缓存命中率
@@ -102,7 +102,7 @@ impl PrometheusCollector {
             registry.clone()
         )?;
 
-        // T004：时间窗拼批批次大小与等待时长（标签 operation 完整）
+        // 时间窗拼批批次大小与等待时长（标签 operation 完整）
         let vecboost_batch_size = register_histogram_vec_with_registry!(
             "vecboost_batch_size",
             "Worker time-window batch size",
@@ -117,14 +117,14 @@ impl PrometheusCollector {
             vec![0.0, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1],
             registry.clone()
         )?;
-        // T007：批内去重率滚动 gauge
+        // 批内去重率滚动 gauge
         let vecboost_inbatch_dedup_ratio = register_gauge_vec_with_registry!(
             "vecboost_inbatch_dedup_ratio",
             "In-batch dedup ratio (n_unique savings)",
             &["operation"],
             registry.clone()
         )?;
-        // T026：引擎分阶段延迟（stage 标签枚举固定为 tokenize|inference|pool）。
+        // 引擎分阶段延迟（stage 标签枚举固定为 tokenize|inference|pool）。
         let vecboost_stage_seconds = register_histogram_vec_with_registry!(
             "vecboost_stage_seconds",
             "Engine stage latency in seconds",
@@ -216,7 +216,7 @@ impl PrometheusCollector {
             .observe(size);
     }
 
-    /// T004：在 assemble_batch 返回处埋点。`batch_wait_ms=0` 时调用方传 wait_secs=0。
+    /// 在 assemble_batch 返回处埋点。`batch_wait_ms=0` 时调用方传 wait_secs=0。
     pub fn observe_batch(&self, operation: &str, size: usize, wait_secs: f64) {
         self.vecboost_batch_size
             .with_label_values(&[operation])
@@ -226,14 +226,14 @@ impl PrometheusCollector {
             .observe(wait_secs);
     }
 
-    /// T007：更新批内去重率滚动 gauge。
+    /// 更新批内去重率滚动 gauge。
     pub fn set_dedup_ratio(&self, operation: &str, ratio: f64) {
         self.vecboost_inbatch_dedup_ratio
             .with_label_values(&[operation])
             .set(ratio);
     }
 
-    /// T026：汇出引擎分阶段延迟快照（drain 语义，来自 StageStats::take）。
+    /// 汇出引擎分阶段延迟快照（drain 语义，来自 StageStats::take）。
     /// 快照聚合了多次调用，直方图按"每次调用均值"观测（秒/计数）；
     /// 计数为 0 的阶段跳过，避免向空桶写入无意义样本。
     pub fn record_stage_snapshot(&self, snapshot: &crate::engine::StageSnapshot) {

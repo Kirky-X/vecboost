@@ -22,7 +22,7 @@ pub use inference::InferenceCollector;
 #[cfg(feature = "http")]
 pub use prometheus_exporter::PrometheusCollector;
 
-/// 批内去重率（T007）：`1 - unique/total`；空批为 0。
+/// 批内去重率：`1 - unique/total`；空批为 0。
 /// 无重复时为 0；n 条全重复（unique=1）时为 `(n-1)/n`。
 pub fn inbatch_dedup_ratio(total: usize, unique: usize) -> f64 {
     if total == 0 || unique >= total {

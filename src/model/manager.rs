@@ -25,7 +25,7 @@ const RECENCY_BUCKETS: u64 = 8;
 /// 每桶覆盖的序列步长。
 const RECENCY_BUCKET_SPAN: u64 = 128;
 
-/// 驻留管理配置（T019，port 自 colibri tier.h/LFRU）。
+/// 驻留管理配置（port 自 colibri tier.h/LFRU）。
 #[derive(Clone, Copy, Debug)]
 pub struct ResidencyConfig {
     /// 最大驻留模型数。
@@ -71,7 +71,7 @@ impl ModelManager {
         }
     }
 
-    /// 启用 LFRU 驻留管理（T019）。默认不限制（现状行为）。
+    /// 启用 LFRU 驻留管理。默认不限制（现状行为）。
     /// `max_models = 0` 视为不限制。
     pub fn with_residency(mut self, max_models: usize, memory_budget_mb: Option<u64>) -> Self {
         if max_models == 0 {
@@ -241,7 +241,7 @@ impl ModelManager {
         }
     }
 
-    /// 驻留 enforcement（T019）：超驻留上限时按 LFRU 驱逐。
+    /// 驻留 enforcement：超驻留上限时按 LFRU 驱逐。
     ///
     /// - 受害者 = `score=(heat<<8)|recency_bucket` 最低的驻留模型；
     /// - 迟滞：新条目 heat 低于受害者 heat 的 25%+4 点时不驱逐（防乒乓，
@@ -342,7 +342,7 @@ impl ModelManager {
         let mut total = 0u64;
         for model in models.values() {
             if let Ok(meta) = std::fs::metadata(model.path()) {
-                // T035 审查架构6：GGUF 量化引擎是加载期反量化桥，运行期内存
+                // GGUF 量化引擎是加载期反量化桥，运行期内存
                 // ≈ 文件体积的数倍（Q8_0 ~4×、Q4_K ~7×），统一按保守 4× 估算，
                 // 否则 memory_budget 对量化模型形同虚设。
                 let is_quantized = model
@@ -1386,7 +1386,7 @@ mod tests {
         assert_eq!(manager.count().await, 0);
     }
 
-    // ===== T019 LFRU 驻留管理测试 =====
+    // ===== LFRU 驻留管理测试 =====
 
     fn residency_config_for(name: &str, dir: &std::path::Path) -> ModelConfig {
         ModelConfig {

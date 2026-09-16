@@ -85,7 +85,7 @@ pub trait InferenceEngine: Send + Sync {
         Ok(0) // 调用方回退到 bytes/4
     }
 
-    /// 取出并清零分阶段延迟累计（T026）。默认无埋点（None）；
+    /// 取出并清零分阶段延迟累计。默认无埋点（None）；
     /// candle 引擎覆盖为真实三阶段快照。
     fn take_stage_snapshot(&self) -> Option<StageSnapshot> {
         None
@@ -95,7 +95,7 @@ pub trait InferenceEngine: Send + Sync {
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
 }
 
-/// 推理分阶段标签（T026）。枚举固定为三值，不得扩展（指标标签稳定性）。
+/// 推理分阶段标签。枚举固定为三值，不得扩展（指标标签稳定性）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum Stage {
@@ -146,7 +146,7 @@ impl StageSnapshot {
     }
 }
 
-/// 分阶段延迟累加器（T026）：纯原子累加，无锁快路径。
+/// 分阶段延迟累加器：纯原子累加，无锁快路径。
 #[derive(Debug, Default)]
 pub struct StageStats {
     nanos: [std::sync::atomic::AtomicU64; 3],
@@ -200,7 +200,7 @@ pub enum AnyEngine {
     Candle(candle_engine::CandleEngine),
     #[cfg(feature = "onnx")]
     Onnx(onnx_engine::OnnxEngine),
-    /// GGUF 量化引擎（Q8_0/Q4_K 加载期反量化桥，T035）。
+    /// GGUF 量化引擎（Q8_0/Q4_K 加载期反量化桥，）。
     #[cfg(feature = "quantized-gguf")]
     Quantized(quantized_engine::QuantizedCandleEngine),
 }
@@ -434,7 +434,7 @@ mod tests {
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
     }
 
-    // -- T026 分阶段延迟埋点 --
+    // -- 分阶段延迟埋点 --
 
     #[test]
     fn test_stage_labels_enum_complete() {

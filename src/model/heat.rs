@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! 模型热度持久化（T020，port 自 colibri `.coli_usage` 原子写 + warmstart pin）。
+//! 模型热度持久化（port 自 colibri `.coli_usage` 原子写 + warmstart pin）。
 //!
 //! - 落盘 `data/model_heat.json`：原子写（tmp + rename）；
 //! - 头部含模型指纹（name + schema 版本）；启动加载作 warmstart 初始 heat；
@@ -17,7 +17,7 @@ use std::path::Path;
 /// 热度表 schema 版本（指纹组成部分）。
 pub const HEAT_SCHEMA_VERSION: u32 = 1;
 
-/// 热度表默认落盘路径（T033 server 接线：启动 warmstart + 卸载/切换后保存）。
+/// 热度表默认落盘路径（server 接线：启动 warmstart + 卸载/切换后保存）。
 pub const DEFAULT_HEAT_PATH: &str = "data/model_heat.json";
 
 /// 单条目指纹：`{name}:v{schema}`。

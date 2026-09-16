@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! 硬件感知启动规划（T023，port 自 colibri `resource_plan.py`）。
+//! 硬件感知启动规划（port 自 colibri `resource_plan.py`）。
 //!
 //! 纯函数设计：探测层结果以 [`Probes`] 注入，`plan()` 输出 [`HardwarePlan`]。
 //! 规则保守默认；探测值为 None 的项不参与规则（不猜测）；全部探测失败时
@@ -151,7 +151,7 @@ pub struct PlanOverride {
     pub batch_wait_ms: Option<u64>,
 }
 
-/// 应用计划：仅填充未显式配置的字段（T024）。
+/// 应用计划：仅填充未显式配置的字段。
 pub fn apply_plan(
     worker_threads: &mut usize,
     max_batch_size: &mut usize,

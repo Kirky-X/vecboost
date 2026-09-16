@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! doctor 只读诊断集成测试（T027/T028）。
+//! doctor 只读诊断集成测试。
 //!
 //! 合法默认配置下：核心检查（config/cache-persist/threads）必须 PASS，
 //! 报告整体无 FAIL（tokenizer/models 依赖本地模型存在性，缺失时为 WARN，

@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! `vecboost doctor` — 只读诊断（T027/T028）。
+//! `vecboost doctor` — 只读诊断。
 //!
 //! 检查链：① 配置校验 ② tokenizer 加载自检 ③ 缓存持久层可写性
 //! ④ 线程调优报告（物理核/逻辑核/NUMA）⑤ GPU 探测 ⑥ 模型文件完整性。
@@ -17,7 +17,7 @@
 
 use crate::config::AppConfig;
 
-/// 检查结论（枚举固定三值，与 spec R-observability-002 一致）。
+/// 检查结论（枚举固定三值，与 spec 一致）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckStatus {
     Pass,
@@ -288,7 +288,7 @@ pub async fn check_gpu(config: &AppConfig) -> CheckResult {
     }
 }
 
-/// ⑥ 模型文件完整性（T028）。遍历 `models/` 下每个模型子目录，
+/// ⑥ 模型文件完整性。遍历 `models/` 下每个模型子目录，
 /// 按角色分类文件并校验；目录缺失为 WARN（HF 下载模式合法）。
 pub fn check_models(config: &AppConfig) -> Vec<CheckResult> {
     let mut results = Vec::new();
@@ -466,7 +466,7 @@ struct SafetensorsInfo {
 
 fn scan_safetensors(path: &std::path::Path) -> Result<SafetensorsInfo, String> {
     // 只读头部（8 字节长度 + header_len JSON），不整文件载入内存
-    // （数 GB 权重文件的资源放大，T035 审查安全5）。
+    // （数 GB 权重文件的资源放大，）。
     let mut file =
         std::fs::File::open(path).map_err(|e| format!("权重文件不可读 {}: {e}", path.display()))?;
     let display = path.display();
@@ -524,7 +524,7 @@ fn scan_safetensors(path: &std::path::Path) -> Result<SafetensorsInfo, String> {
             two_d_dims.push((d0, d1));
         }
     }
-    // 溢出安全比较（offset 来自不可信文件；T035 审查安全5）
+    // 溢出安全比较（offset 来自不可信文件；）
     let data_begin = 8 + header_len;
     let available = file_len.saturating_sub(data_begin);
     if max_end > available {

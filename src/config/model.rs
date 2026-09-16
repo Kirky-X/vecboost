@@ -191,7 +191,7 @@ pub struct ModelConfig {
     pub memory_limit_bytes: Option<u64>,
     pub oom_fallback_enabled: bool,
     pub model_sha256: Option<String>,
-    /// GGUF 量化模型开关（T013）：true 且 `model_path` 以 `.gguf` 结尾时
+    /// GGUF 量化模型开关：true 且 `model_path` 以 `.gguf` 结尾时
     /// 路由至 `QuantizedCandleEngine`；默认 false（safetensors 路径不变）。
     #[serde(default)]
     pub quantized: bool,

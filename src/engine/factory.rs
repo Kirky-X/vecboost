@@ -41,7 +41,7 @@ impl EngineFactory {
         engine_type: EngineType,
         config: &ModelConfig,
     ) -> Result<AnyEngine, VecboostError> {
-        // T013/T035 loader 路由：.gguf + quantized=true 走量化引擎
+        // loader 路由：.gguf + quantized=true 走量化引擎
         // （加载期反量化桥），否则维持 safetensors 路径。
         if should_use_quantized_engine(&config.model_path, config.quantized) {
             #[cfg(feature = "quantized-gguf")]

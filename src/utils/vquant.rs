@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! 向量输出量化（T016–T018，port 自 colibri `kv_tq.h` 旋转技巧）。
+//! 向量输出量化（port 自 colibri `kv_tq.h` 旋转技巧）。
 //!
 //! - Hadamard 旋转：splitmix32 符号向量 + 迭代 FWHT，无矩阵存储 O(n log n)；
 //!   形式 `S·H·S/√n`（两侧符号）保证自逆性与范数保持。

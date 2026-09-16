@@ -3,7 +3,7 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! `hgemm_` 符号垫片（feature `mkl`，T035 收敛修复）。
+//! `hgemm_` 符号垫片（feature `mkl`， 收敛修复）。
 //!
 //! 上游版本错配（证据链见 docs/PERFORMANCE.md）：candle-core 0.11 的 mkl 后端调用
 //! fp16 GEMM `hgemm_`，而 intel-mkl-src 0.8.1 在 Linux 静态路径锁死 MKL 2020.1
@@ -58,7 +58,7 @@ pub unsafe extern "C" fn hgemm_(
 ) {
     let (m, n, k) = (*m, *n, *k);
     let (lda, ldb, ldc) = (*lda, *ldb, *ldc);
-    // 纵深防御（T035 审查安全4）：BLAS 调用方约定传正值，负值/零经 as usize
+    // 纵深防御：BLAS 调用方约定传正值，负值/零经 as usize
     // 回绕会越界读；直接拒绝畸形输入。
     if m <= 0 || n <= 0 || k <= 0 || lda <= 0 || ldb <= 0 || ldc <= 0 {
         return;

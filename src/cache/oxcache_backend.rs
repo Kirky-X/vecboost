@@ -17,7 +17,7 @@ use oxcache::features::bloom_filter::BloomFilter;
 
 use super::persist;
 
-/// 持久层状态（T021）：两段追加 WAL。文件操作经互斥串行，无后台线程。
+/// 持久层状态：两段追加 WAL。文件操作经互斥串行，无后台线程。
 struct PersistState {
     path: std::path::PathBuf,
     tag: String,
@@ -26,7 +26,7 @@ struct PersistState {
 }
 
 struct PersistInner {
-    /// 带用户态缓冲的 WAL 句柄（T035 审查 F1：合并系统调用）。
+    /// 带用户态缓冲的 WAL 句柄（合并系统调用）。
     file: std::io::BufWriter<std::fs::File>,
     /// 已提交记录数（回放初始化，追加递增，紧凑化重置）。
     nrec: u64,
@@ -78,7 +78,7 @@ impl OxCacheBackend {
         }
     }
 
-    /// 创建带 WAL 持久层的缓存后端（T021）。
+    /// 创建带 WAL 持久层的缓存后端。
     ///
     /// `model_tag` 为模型指纹（回放时不匹配的记录被弃用）；`max_bytes`
     /// 为紧凑化阈值。构造时回放已有文件计数 nrec；内存重建需调用方在
@@ -104,7 +104,7 @@ impl OxCacheBackend {
         let approx_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
         let is_new = approx_bytes == 0;
         let (_, committed) = persist::replay(&path, &model_tag);
-        // 新文件构造时一次性写头（追加路径不再逐插入 stat，T035 审查 F1）。
+        // 新文件构造时一次性写头（追加路径不再逐插入 stat， 审查）。
         let mut writer = std::io::BufWriter::new(file);
         if is_new && let Err(e) = persist::write_header(&mut writer) {
             log::warn!("persist: {} 写头失败: {}", path.display(), e);
@@ -127,7 +127,7 @@ impl OxCacheBackend {
         self.persist.as_ref().map(|p| p.path.clone())
     }
 
-    /// 启动回放：顺序重放持久文件重建内存缓存（T022）。
+    /// 启动回放：顺序重放持久文件重建内存缓存。
     /// 版本头/指纹不匹配或 checksum 失败的记录被弃用并 warn。
     pub async fn load_persisted(&self) {
         let Some(ps) = self.persist.as_ref() else {
@@ -742,7 +742,7 @@ mod tests {
     }
 
     // ========================================================================
-    // T021/T022: WAL 持久层测试
+    // WAL 持久层测试
     // ========================================================================
 
     fn persist_backend(
@@ -755,7 +755,7 @@ mod tests {
         (backend, path)
     }
 
-    /// T021：每次插入产生数据记录 + 提交记录；崩溃截断尾部半条后重放无脏数据。
+    /// 每次插入产生数据记录 + 提交记录；崩溃截断尾部半条后重放无脏数据。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_persist_write_path_two_phase_append() {
         let dir = tempfile::tempdir().unwrap();
@@ -785,7 +785,7 @@ mod tests {
         );
     }
 
-    /// T022：roundtrip（写入 N 条 → 重启后命中 N 条）。
+    /// roundtrip（写入 N 条 → 重启后命中 N 条）。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_persist_roundtrip_restart() {
         let dir = tempfile::tempdir().unwrap();
@@ -807,7 +807,7 @@ mod tests {
         }
     }
 
-    /// T022：中段损坏跳过继续 + 指纹不匹配弃用。
+    /// 中段损坏跳过继续 + 指纹不匹配弃用。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_persist_replay_skips_corrupt_middle() {
         let dir = tempfile::tempdir().unwrap();
@@ -842,7 +842,7 @@ mod tests {
         assert!(cache3.get("good-b").await.is_none(), "指纹不匹配应弃用");
     }
 
-    /// T022：超限触发紧凑化（文件收缩、去重且数据完整）。
+    /// 超限触发紧凑化（文件收缩、去重且数据完整）。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_persist_compaction_on_limit() {
         let dir = tempfile::tempdir().unwrap();

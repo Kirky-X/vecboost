@@ -553,11 +553,11 @@ async fn test_cli_compute_similarity_empty_source_returns_error() {
 }
 
 // ---------------------------------------------------------------------------
-// forge handler require calls bounded under 100 requests (R-api-routing-004)
+// forge handler require calls bounded under 100 requests
 // ---------------------------------------------------------------------------
 
 /// Verify that forge handlers make a bounded number of `kit.require::<Module>()`
-/// calls per request. R-api-routing-004 acceptance criterion 2 requires total
+/// calls per request. acceptance criterion 2 requires total
 /// require calls ≤ 4 × request_count (≤ 400 for 100 requests).
 ///
 /// `forge_embed` (src/api/embedding.rs L128-141) calls `require::<EmbeddingModule>()`

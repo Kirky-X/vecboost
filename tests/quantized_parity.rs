@@ -4,7 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 #![cfg(feature = "quantized-gguf")]
-//! 量化质量门（T014/T035，feature `quantized-gguf`）：golden 语料上量化 vs
+//! 量化质量门（feature `quantized-gguf`）：golden 语料上量化 vs
 //! fp32 余弦相似度中位数 Q8_0 ≥ 0.98、Q4_K ≥ 0.95 方可发布为推荐配置。
 //!
 //! 模型来源优先级：

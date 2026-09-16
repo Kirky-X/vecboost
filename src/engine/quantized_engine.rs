@@ -3,13 +3,13 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! GGUF 量化推理引擎（T013/T035，feature `quantized-gguf`）。
+//! GGUF 量化推理引擎（feature `quantized-gguf`）。
 //!
 //! 路由规则：`model_path` 以 `.gguf` 结尾（大小写不敏感）**且**
 //! `ModelConfig.quantized=true` 时选用量化引擎；否则维持 safetensors 路径不变。
 //! 路由判定单一真源在 `super::factory::should_use_quantized_engine`（常编译）。
 //!
-//! 实现方式（T035 收敛落地）：**加载期反量化桥**。candle-transformers 0.11
+//! 实现方式（收敛落地）：**加载期反量化桥**。candle-transformers 0.11
 //! 没有 `quantized_bert` 模型，但 `candle-core::quantized` 提供完整的 GGUF
 //! 读/写（v2）与 k-quants（Q8_0/Q4_K 等）张量。本引擎：
 //! - `write_gguf_from_safetensors`：把 safetensors 模型按 llama.cpp BERT 命名
@@ -61,7 +61,7 @@ pub fn validate_gguf_magic(path: &Path) -> Result<(), VecboostError> {
     Ok(())
 }
 
-/// candle BERT 变量名 → llama.cpp GGUF 张量名（T035 写出约定）。
+/// candle BERT 变量名 → llama.cpp GGUF 张量名（写出约定）。
 /// 未列出的键（如 `embeddings.position_ids` 缓冲）由调用方过滤。
 pub fn candle_to_gguf(name: &str) -> Option<String> {
     const FIXED: &[(&str, &str)] = &[

@@ -65,8 +65,8 @@ pub use utils::vector::{TaskType, information_retention_rate, recommended_dimens
 // 重新导出内存分页类型（供 benchmark 和外部集成测试使用）
 pub use device::memory_paging::{PagingConfig, PagingStats, WeightPagingManager};
 
-/// 线程调优公共 API（T008–T010）：bin 与外部工具共享物理核检测与优先级解析。
-/// 模型驻留管理（T033 server 接线）：`model` 为 pub(crate)，
+/// 线程调优公共 API：bin 与外部工具共享物理核检测与优先级解析。
+/// 模型驻留管理（server 接线）：`model` 为 pub(crate)，
 /// 经最小面重导出供 bin 装配 ModelManager。
 pub mod model_management {
     pub use crate::model::heat::DEFAULT_HEAT_PATH;
@@ -81,7 +81,7 @@ pub mod thread_tune {
     };
 }
 
-/// 硬件感知启动规划公共 API（T023–T024）。
+/// 硬件感知启动规划公共 API。
 pub mod planner {
     pub use crate::device::planner::{
         Bottleneck, HardwarePlan, PlanOverride, Probes, apply_plan, plan,

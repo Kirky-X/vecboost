@@ -76,7 +76,7 @@ enum ModelWrapper {
     XlmRoberta(XLMRobertaModel),
 }
 
-/// 分阶段计时守卫（T026）：作用域退出（含 `?` 提前返回）时自动累加耗时。
+/// 分阶段计时守卫：作用域退出（含 `?` 提前返回）时自动累加耗时。
 /// 无锁快路径：底层为原子 fetch_add。
 struct StageTimer<'a> {
     stats: &'a StageStats,
@@ -114,7 +114,7 @@ pub struct CandleEngine {
     _model_name: String,
     /// 模型隐藏层大小（从 config.hidden_size 读取）
     hidden_size: usize,
-    /// 分阶段延迟累加器（T026）：tokenize/inference/pooling，无锁原子累加。
+    /// 分阶段延迟累加器：tokenize/inference/pooling，无锁原子累加。
     stage_stats: Arc<StageStats>,
     /// 模型参数数量估算（从 config 计算）
     parameter_count: u64,
@@ -726,7 +726,7 @@ impl CandleEngine {
 
     // 纯同步 forward_pass——使用 encode_sync 绕过异步缓存，移除 GPU 监控 await
     fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
-        // T026 分阶段埋点：tokenize（守卫 Drop 时累加，`?` 提前返回亦覆盖）。
+        // 分阶段埋点：tokenize（守卫 Drop 时累加，`?` 提前返回亦覆盖）。
         let encoding = {
             let _timer = StageTimer::new(&self.stage_stats, Stage::Tokenize);
             self.tokenizer
@@ -821,7 +821,7 @@ impl CandleEngine {
 
         // 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
 
-        // T026：pooling 计时守卫驻留至函数返回，覆盖全部三个出口（2D/1D/err）。
+        // pooling 计时守卫驻留至函数返回，覆盖全部三个出口。
         let _pool_timer = StageTimer::new(&self.stage_stats, Stage::Pooling);
         let dims = embeddings.dims();
         let hidden_dim = self.hidden_size;
@@ -1009,7 +1009,7 @@ impl CandleEngine {
 
         // 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
 
-        // T026：pooling 计时守卫驻留至函数返回，覆盖正常与 fallback 出口。
+        // pooling 计时守卫驻留至函数返回，覆盖正常与 fallback 出口。
         let _pool_timer = StageTimer::new(&self.stage_stats, Stage::Pooling);
 
         // 提取每个样本的嵌入向量（使用 CLS token）
@@ -2634,7 +2634,7 @@ mod tests {
         assert_eq!(infer_pooling_mode("E5-Large"), PoolingMode::Mean);
     }
 
-    // -- T026 StageTimer --
+    // -- StageTimer --
 
     #[test]
     fn stage_timer_records_on_scope_exit() {

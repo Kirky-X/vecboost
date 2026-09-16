@@ -147,7 +147,7 @@ rayon = { version = "1.12", default-features = false }
 [target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
 tikv-jemallocator = { version = "0.7", default-features = false, features = ["background_threads"] }
 
-# T011：平台加速后端（opt-in features）。
+# 平台加速后端（opt-in features）。
 # 原计划为 target-conditional 自动追加 candle `mkl`，但实测本机链接失败
 #（intel-mkl-src 2020.1 静态库缺 `hgemm_`，candle 0.11 mkl.rs 必需；证据见
 # docs/PERFORMANCE.md「加速后端说明」），自动启用会使所有 profile 无法链接。故改为显式 feature，
@@ -191,10 +191,10 @@ auth = ["dep:garrison", "dep:aes-gcm"]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:nvml-wrapper", "dep:cudarc"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/alternative-backend"]
-# T011：CPU 加速后端（opt-in；见上方 target 表注释）。
+# CPU 加速后端（opt-in；见上方 target 表注释）。
 mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl", "dep:half"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
-# T013：GGUF 量化引擎开关。启用后编译 engine/quantized_engine.rs；
+# GGUF 量化引擎开关。启用后编译 engine/quantized_engine.rs；
 # 推理后端待 candle 上游 quantized BERT 落地（见模块文档）。
 quantized-gguf = []
 

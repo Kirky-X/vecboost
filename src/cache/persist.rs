@@ -3,12 +3,12 @@
 // Licensed under the MIT License
 // See LICENSE file in the project root for full license information.
 
-//! embedding 缓存崩溃安全 WAL（T021–T022，port 自 colibri `kv_persist.h`）。
+//! embedding 缓存崩溃安全 WAL（port 自 colibri `kv_persist.h`）。
 //!
 //! 两段追加协议：先写数据记录（key + 向量 + 模型指纹 + checksum），后写提交
 //! 记录（nrec+1）。崩溃时最多丢最后一条，绝不把半条当完整记录。
 //!
-//! 持久化保证的诚实边界（T035 审查修正）：实现为 write 到 page cache +
+//! 持久化保证的诚实边界（审查修正）：实现为 write 到 page cache +
 //! 用户态缓冲 flush，**无 fsync**——仅防进程崩溃，不防断电/系统崩溃
 //! （断电时丢失量可能超过一条，由 checksum 兜底不产生脏数据）；
 //! checksum 为无密钥 xxh3_64 混合，不防本地篡改（信任边界为本地文件）。
@@ -57,7 +57,7 @@ fn read_u64(r: &mut impl Read) -> std::io::Result<u64> {
     Ok(u64::from_le_bytes(b))
 }
 
-/// 写文件头（新文件构造时调用一次；追加路径不再逐次 stat，见 T035 审查 F1）。
+/// 写文件头（新文件构造时调用一次；追加路径不再逐次 stat，见 审查）。
 pub fn write_header(file: &mut impl std::io::Write) -> std::io::Result<()> {
     file.write_all(&FILE_MAGIC)?;
     write_u32(file, FILE_VERSION)?;
@@ -66,7 +66,7 @@ pub fn write_header(file: &mut impl std::io::Write) -> std::io::Result<()> {
 }
 
 /// 追加一条数据记录 + 提交记录（调用方持有文件锁）。
-/// 记录先序列化进调用方缓冲，合并为 **2 次 write**（T035 审查 F1：
+/// 记录先序列化进调用方缓冲，合并为 **2 次 write**（审查
 /// 逐字段写会产生 ~10 次系统调用/插入）。返回提交后的 nrec。
 pub fn append_record<W: std::io::Write>(
     file: &mut W,

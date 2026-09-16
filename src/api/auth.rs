@@ -68,9 +68,13 @@ pub async fn forge_login(
     // 单管理员登录判定(纯函数,见 verify_login_decision 测试):
     // 非 admin 用户名/错误密码 → 401;无哈希配置(启动闸门漏网)→ 503。
     let decision = crate::auth::verify_login_decision(&auth_handle, &req.username, &req.password);
+    // garrison metrics-prometheus：garrison_login_total 计数（vecboost 登录走自有
+    // forge_login，不进 garrison 内部 login 路径，此处补齐指标口径）
+    let metrics = garrison::observability::GarrisonMetrics::new();
     match decision {
         crate::auth::LoginDecision::Authenticated => {}
         crate::auth::LoginDecision::InvalidCredentials => {
+            metrics.record_login(false);
             if let Some(logger) = audit_logger {
                 logger.log_login_failed(
                     &req.username,
@@ -98,6 +102,7 @@ pub async fn forge_login(
     // 通过 garrison 创建会话（login_id = username）
     match GarrisonUtil::login_simple(&req.username).await {
         Ok(token) => {
+            metrics.record_login(true);
             if let Some(logger) = audit_logger {
                 logger.log_login_success(&req.username, Some(peer_ip.clone()));
             }

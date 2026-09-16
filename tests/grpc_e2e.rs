@@ -10,7 +10,8 @@
 //! - 协议等价性：同一请求 HTTP vs gRPC 结果一致（GP-EQ01/02）
 //! - 异常：未知 method、超 1MiB 载荷、坏 JSON、空文本业务错误（GP-A01…GP-A04）
 //! - 生命周期：grpc_require_auth=true 且 auth 未启用拒绝启动（GP-L01）；
-//!   require_auth 下无/有 token 的认证矩阵（GP-L02，需 auth feature）
+//!   require_auth 下无/有 token 的认证矩阵（GP-L02，需 auth feature）；
+//!   HTTP logout 吊销跨协议即时生效（GP-L03，需 auth feature）
 //!
 //! 运行条件：`cargo test --features http,grpc[,auth]`。
 //! 服务器以子进程方式从 `CARGO_BIN_EXE_vecboost` 启动（M1 本地模型，CPU）。
@@ -810,4 +811,77 @@ async fn grpc_auth_matrix_unauthenticated_vs_valid() {
     .await
     .expect("authed call");
     assert_eq!(v["success"], json!(true), "有效 token 应成功: {v}");
+}
+
+/// GP-L03：跨协议吊销即时生效 —— HTTP logout 后同一 token 的 gRPC 调用立即被拒。
+///
+/// 回归锚点：garrison 0.9 吸收前 gRPC 走 sdforge BearerAuth（无状态 JWT 校验 +
+/// 独立内存黑名单），HTTP revoke_token 写的是 garrison DAO，gRPC 侧到 exp 前仍放行。
+/// 现 gRPC 挂 GarrisonGrpcAuthLayer（check_login 读同一 GarrisonDaoOxcache），
+/// 吊销必须跨协议即时生效。
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn grpc_token_revoked_on_http_logout_rejected_on_grpc() {
+    let server = spawn_server(
+        "grpc-revoke",
+        &ServerOpts {
+            auth: true,
+            grpc_require_auth: true,
+        },
+        &[
+            ("VECBOOST_JWT_SECRET", JWT_SECRET),
+            ("VECBOOST_ADMIN_PASSWORD", ADMIN_PASS),
+        ],
+    );
+    let mut client = connect_grpc(server.grpc_port).await;
+
+    // HTTP login 获取 token
+    let (status, body) = http_request(
+        server.http_port,
+        "POST",
+        "/api/1/auth/login",
+        Some(&json!({"username": "admin", "password": ADMIN_PASS}).to_string()),
+        None,
+    )
+    .expect("login");
+    assert_eq!(status, 200, "login 失败: {body}");
+    let login: Value = serde_json::from_str(&body).expect("login json");
+    let token = login["token"].as_str().expect("token field").to_string();
+
+    // 吊销前：gRPC 调用成功
+    let v = call_raw(
+        &mut client,
+        "vecboost.embed",
+        &json!({"text": "pre-logout"}).to_string(),
+        Some(&token),
+    )
+    .await
+    .expect("pre-logout call");
+    assert_eq!(v["success"], json!(true), "吊销前 gRPC 应成功: {v}");
+
+    // HTTP logout（garrison revoke_token 写入共享 DAO）
+    let (status, body) = http_request(
+        server.http_port,
+        "POST",
+        "/api/1/auth/logout",
+        None,
+        Some(&token),
+    )
+    .expect("logout");
+    assert_eq!(status, 200, "logout 失败: {body}");
+
+    // 吊销后：同一 token 的 gRPC 调用必须 UNAUTHENTICATED（即时生效）
+    let err = call_raw(
+        &mut client,
+        "vecboost.embed",
+        &json!({"text": "post-logout"}).to_string(),
+        Some(&token),
+    )
+    .await
+    .expect_err("吊销后 gRPC 应被拒绝");
+    assert_eq!(
+        err.code(),
+        tonic::Code::Unauthenticated,
+        "HTTP logout 吊销的 token 在 gRPC 侧应立即失效: {err}"
+    );
 }

@@ -157,10 +157,9 @@ use vecboost::auth::{
     garrison_csrf_middleware, map_auth_config_to_garrison,
 };
 
-#[cfg(feature = "grpc")]
-use sdforge::grpc::{GrpcServerConfig, build_server_with_config};
-#[cfg(all(feature = "grpc", feature = "auth"))]
-use sdforge::security::BearerAuth;
+// gRPC 服务器经 tonic Server 直接装配（garrison GarrisonGrpcAuthLayer server 级挂载，
+// 服务本体复用 sdforge pub 类型）—— build_server_with_config 的 auth 槽位为
+// BearerAuth 具体类型，无 layer 挂载点，不再使用
 #[cfg(feature = "grpc")]
 use sdforge::security::ratelimit::LimiteronAdapter as SdforgeLimiteronAdapter;
 
@@ -591,6 +590,11 @@ async fn init_auth(
             .build()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to init GarrisonManager: {}", e))?;
+
+        // garrison metrics-prometheus：eager 创建 OnceLock 单例，把 garrison_* auth 域
+        // 指标注册到 prometheus default_registry（/metrics 端点合并导出；
+        // 惰性路径会漏掉首次记录前的零值序列）
+        let _ = garrison::observability::GarrisonMetrics::new();
 
         let admin_password_hash = config.auth.default_admin_password.as_ref().map(|pw| {
             garrison::account::credential::password::Argon2Hasher::default()
@@ -1632,35 +1636,24 @@ async fn spawn_grpc_server(
     // config.server.grpc_require_auth defaults to Some(true) in ServerConfig::default().
     let require_auth = config.server.grpc_require_auth.unwrap_or(true);
 
-    // Build BearerAuth when auth is enabled and a JWT secret is configured.
-    // sdforge's GrpcServerConfig requires `auth: Option<BearerAuth>` (gated by
-    // sdforge/security feature, which vecboost's grpc feature pulls in).
-    let bearer_auth = if require_auth {
+    // garrison 0.9 吸收：gRPC 鉴权由 GarrisonGrpcAuthLayer 承担 —— check_login 全异步
+    // 会话校验（过期/吊销/防火墙），与 HTTP 侧共用同一 GarrisonDaoOxcache 会话宇宙。
+    // 替代 sdforge BearerAuth（无状态 JWT 校验 + 独立内存黑名单：HTTP revoke_token
+    // 吊销的 token 此前在 gRPC 侧 exp 前仍有效，双协议鉴权语义分裂）。
+    // vuln-0006 fail-fast 语义保持：require_auth=true 时 auth 未启用/无 secret 拒绝启动。
+    if require_auth {
         #[cfg(feature = "auth")]
         {
-            if config.auth.enabled {
-                if let Some(secret) = config.auth.jwt_secret.as_ref() {
-                    match BearerAuth::try_new(secret.clone()) {
-                        Ok(b) => {
-                            log::info!("gRPC BearerAuth enabled (auth.enabled=true)");
-                            Some(b)
-                        }
-                        Err(e) => {
-                            anyhow::bail!(
-                                "{}",
-                                vecboost::i18n::tr_with_args(
-                                    "startup-grpc-bearer-failed",
-                                    vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
-                                )
-                            );
-                        }
-                    }
-                } else {
-                    anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-no-secret"));
-                }
-            } else {
+            if !config.auth.enabled {
                 anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-auth-disabled"));
             }
+            if config.auth.jwt_secret.is_none() {
+                anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-no-secret"));
+            }
+            log::info!(
+                "gRPC garrison auth layer enabled (full session validation, \
+                 revocation shared with HTTP)"
+            );
         }
         #[cfg(not(feature = "auth"))]
         {
@@ -1671,8 +1664,7 @@ async fn spawn_grpc_server(
             "gRPC server starting with require_auth=false — \
                  this is insecure; use only for development behind network isolation"
         );
-        None
-    };
+    }
 
     // Build sdforge rate_limiter (gated by sdforge/ratelimit feature, which
     // vecboost's grpc feature pulls in). Uses default config (100 burst, 10 req/s).
@@ -1699,18 +1691,60 @@ async fn spawn_grpc_server(
         }
     };
 
-    let grpc_config = GrpcServerConfig {
-        max_connections: config.server.grpc_max_connections.unwrap_or(1000),
-        timeout_seconds: config.server.grpc_timeout_seconds.unwrap_or(30),
-        require_auth,
-        auth: bearer_auth,
-        state: None,
-        rate_limiter,
-    };
+    // 服务装配与 build_server_with_config 内部一致（state=None + rate_limiter +
+    // 4MiB 解码上限），复用 sdforge pub 类型自行装配 —— GrpcServerConfig 的 auth
+    // 槽位是 BearerAuth 具体类型、无 layer 挂载点，garrison 鉴权层在 server 级挂载
+    //（GarrisonGrpcAuthLayer 未实现 NamedService，无法 per-service 包裹）。
+    let service =
+        sdforge::grpc::SdForgeGrpcService::with_state_and_rate_limiter(None, rate_limiter);
+    let forge_service =
+        sdforge::grpc::sdforge_v1::sd_forge_service_server::SdForgeServiceServer::new(service)
+            .max_decoding_message_size(4 * 1024 * 1024);
+
+    let max_connections = config.server.grpc_max_connections.unwrap_or(1000);
+    let timeout_seconds = config.server.grpc_timeout_seconds.unwrap_or(30);
 
     log::info!("gRPC server enabled on {}", grpc_addr);
     bg_tasks.spawn(async move {
-        if let Err(e) = build_server_with_config(&grpc_addr, grpc_config).await {
+        // 地址校验沿用 build_server_with_config 的安全修复（先解析后绑定，错误仅记日志）
+        let addr: std::net::SocketAddr = match grpc_addr.parse() {
+            Ok(a) => a,
+            Err(e) => {
+                log::error!("Invalid gRPC server address format: {}", e);
+                return;
+            }
+        };
+        // layer() 改变 Server 泛型类型，鉴权/非鉴权两条 builder 链无法共用变量，
+        // 按 require_auth 分支装配（true 时上方 fail-fast 已保证 garrison 就绪）
+        let served = if require_auth {
+            #[cfg(feature = "auth")]
+            {
+                let mut builder = tonic::transport::Server::builder()
+                    .layer(garrison::grpc::GarrisonGrpcAuthLayer);
+                if max_connections > 0 {
+                    builder = builder.concurrency_limit_per_connection(max_connections);
+                }
+                if timeout_seconds > 0 {
+                    builder = builder.timeout(std::time::Duration::from_secs(timeout_seconds));
+                }
+                builder.add_service(forge_service).serve(addr).await
+            }
+            #[cfg(not(feature = "auth"))]
+            {
+                drop(forge_service);
+                Ok::<(), tonic::transport::Error>(())
+            }
+        } else {
+            let mut builder = tonic::transport::Server::builder();
+            if max_connections > 0 {
+                builder = builder.concurrency_limit_per_connection(max_connections);
+            }
+            if timeout_seconds > 0 {
+                builder = builder.timeout(std::time::Duration::from_secs(timeout_seconds));
+            }
+            builder.add_service(forge_service).serve(addr).await
+        };
+        if let Err(e) = served {
             log::error!("gRPC server error: {}", e);
         }
     });

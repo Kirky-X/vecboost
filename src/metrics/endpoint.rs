@@ -109,7 +109,12 @@ pub async fn metrics_endpoint(
     }
 
     let encoder = prometheus::TextEncoder::new();
-    let metric_families = prometheus_collector.registry().gather();
+    let mut metric_families = prometheus_collector.registry().gather();
+    // garrison metrics-prometheus（auth feature）：GarrisonMetrics::new() 的 OnceLock
+    // 单例把 garrison_* auth 域指标注册在 prometheus default_registry，与上方
+    // collector 自有 registry 是两个注册表，此处合并导出（garrison_ 前缀无重名冲突）
+    #[cfg(feature = "auth")]
+    metric_families.extend(prometheus::default_registry().gather());
     let mut buffer = Vec::new();
 
     if let Err(e) = encoder.encode(&metric_families, &mut buffer) {

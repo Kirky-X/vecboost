@@ -38,13 +38,13 @@ vecboost 的性能/质量验证分三层，职责边界如下：
 
 ## 🗂️ 场景套件矩阵（tests/scenario）
 
-每个"配置档 profile"是一个独立服务器进程：配置写入 `tests/scenario/run/<name>/config/config.toml`，以该目录为 CWD 启动编译产物二进制（应用从 CWD 读 `config/config.toml`）。全部断言走 HTTP/进程行为的黑盒观测，不依赖内部状态。用例名以 `R-<域>-NNN` 开头对账（场景 ID 见 specmark 变更 specs）。
+每个"配置档 profile"是一个独立服务器进程：配置写入 `tests/scenario/run/<name>/config/config.toml`，以该目录为 CWD 启动编译产物二进制（应用从 CWD 读 `config/config.toml`）。全部断言走 HTTP/进程行为的黑盒观测，不依赖内部状态。用例名以 `R-<域>-NNN` 开头对账（场景 ID 见 specmark 变更 specs）。pytest 场景服务器端口段：会话夹具 9101-9107、模型矩阵 9111-9114、坏模型 9120-9122、探针 9130-9132、生命周期 9141-9143、gRPC 9151、配置探针 9155-9161、容错契约 9165、语义缓存 9166-9167、认证过期 9133、API 审计 9171-9174。
 
 | 套件 | 场景 ID | 用例数 | 覆盖内容 |
 |------|---------|--------|----------|
 | `test_embed_normal.py` | R-embed-001 ~ R-embed-008 | 8 | 嵌入服务正常场景（M1 = BAAI/bge-small-en-v1.5，384 维） |
 | `test_embed_abnormal.py` | R-embed-009 ~ R-embed-010 | 5 | 嵌入服务异常场景（超长文本、非法输入等错误路径） |
-| `test_auth.py` | R-auth-001 ~ R-auth-008 | 8 | 认证场景（auth 配置档，端口 9103） |
+| `test_auth.py` | R-auth-001 ~ R-auth-011 | 11 | 认证场景（auth 配置档，端口 9103/9133；含无效 refresh_token、畸形 Authorization、秒级过期全链路） |
 | `test_security.py` | R-auth-009 ~ R-auth-011 | 6 | 限流、白名单、路径遍历、错误脱敏、审计日志 |
 | `test_server_modes.py` | R-server-001 ~ R-server-008 | 9 | 服务器模式（默认/自定义配置/MCP 模式等启动路径） |
 | `test_lifecycle.py` | R-server-002 / R-auth-002 | 3 | 生命周期补缺（优雅关闭、信号处理） |
@@ -53,10 +53,12 @@ vecboost 的性能/质量验证分三层，职责边界如下：
 | `test_http_matrix.py` | R-api-001 / R-embed-002/003 / R-rerank-002 | 21 | HTTP 协议矩阵（补齐 design.md M2 缺口） |
 | `test_rerank.py` | R-rerank-001 ~ R-rerank-006 | 6 | 重排服务（M1 9101 英文 + M2 9102 中文双模型） |
 | `test_model_matrix.py` | R-model-001（design.md M0） | 3 | 模型矩阵：4 模型 × 3 厂商 × 2 架构经 HTTP 验证 |
-| `test_model_zh.py` | R-model-002 ~ R-model-007 | 6 | 模型管理（zh 配置档 = M2 服务端 HF 镜像下载，512 维） |
+| `test_model_zh.py` | R-model-002 ~ R-model-007 | 6 | 模型管理（zh 配置档 = M2 服务端 HF 镜像下载，512 维；热切换回切走本地路径） |
 | `test_api_enhancements.py` | AE-*（api-config-enhancements） | 10 | API/配置增强（语义检索、模型卸载、similarity metric 等） |
+| `test_fault_tolerance.py` | FT-*（fault-tolerance-contract，端口 9165） | 12 | 容错与 API 逻辑契约：批上界 64/去重 scatter/并发拼批一致性/rerank 严格契约与部分失败容错/search 契约/metrics 格式/dimension 自洽/Matryoshka 前缀/限流 IETF 头与 429 |
+| `test_semantic_cache.py` | SC-*（semantic-cache-e2e，端口 9166-9167） | 5 | 语义缓存：精确命中/trigram 语义命中（黑盒信号=缓存向量逐位相等）/对照组（无缓存服务器同文本对向量必异）/非法 comparison_mode 拒启 |
 
-合计 15 个套件、99 个场景用例（另有 `tests/perf` 的 27 个 pytest 用例，见下节）。CI 中该层为每夜定时任务（`scenario-tests.yml`，UTC 03:00），不阻塞 PR；本地用 `scripts/run-scenario-tests.sh` 一键运行。
+合计 17 个套件、128 个场景用例（另有 `tests/perf` 的 27 个 pytest 用例，见下节）。pytest 配置 `filterwarnings = ["error"]`（根 pyproject.toml）——**零告警门禁**：任何运行期 warning 直接判失败。CI 中该层为每夜定时任务（`scenario-tests.yml`，UTC 03:00），不阻塞 PR；本地用 `scripts/run-scenario-tests.sh` 一键运行。
 
 ---
 
@@ -72,7 +74,7 @@ vecboost 的性能/质量验证分三层，职责边界如下：
 | `tests/model_snapshot_regression.rs` | 回归 | 模型快照回归（向量输出与快照比对） |
 | `tests/common/mod.rs` | 共享夹具 | `MockEngine`（FNV-1a + LCG 确定性向量）、`create_test_engine()` |
 
-> 已知偏离（D8）：`tests/integration.rs` 与 `tests/integration/` 子目录并存、`tests/perf.rs` 与 `tests/perf/` 子目录并存，会产生 Rust 模块系统警告；合并修复推迟到 v0.3.0。
+> 已知偏离（D8）：`tests/integration.rs` / `tests/perf.rs` 与同名子目录并存——入口文件以 `#[path = "..."] mod ...;` 显式声明模块，`cargo test --tests` 构建零模块系统警告（原 v0.2 计划的"合并"不再必要）。
 
 ---
 
@@ -129,8 +131,13 @@ cargo test -p vecboost -p vecboost-examples
 cargo test -p vecboost --features http,grpc --test grpc_e2e
 
 # 场景测试（CI：scenario-tests.yml 每夜）
-cargo build -p vecboost --features http
+# 注意：套件覆盖 auth/CLI/MCP/gRPC 能力，二进制必须带全部协议 feature——
+# 仅 --features http 构建会导致 auth 套件整组失败（login 404）与 CLI/MCP skip。
+cargo build -p vecboost --features http,auth,cli,mcp,grpc
 pytest tests/scenario -q --junitxml=scenario-results.xml
+
+# API 逻辑审查 + 审计记录生成（拉起 4 个配置档，写 docs/audits/）
+python3 scripts/audit_api_probe.py
 
 # 性能回归阈值（Rust）
 cargo test -p vecboost --test perf

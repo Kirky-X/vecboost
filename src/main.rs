@@ -574,18 +574,21 @@ async fn init_auth(
 
         let garrison_config = map_auth_config_to_garrison(&config.auth);
 
-        garrison::prelude::GarrisonManager::init(
-            Arc::new(dao),
-            Arc::new(garrison_config.clone()),
-            Arc::new(VecBoostInterface::new(
+        // garrison 0.9：init(dao, config, interface) → builder 链（build() 启动全局单例
+        // 后台 task）；firewall-* feature 启用时 builder 自动注入防火墙检查钩子（CRIT-010）
+        garrison::prelude::GarrisonManager::builder()
+            .dao(Arc::new(dao))
+            .config(Arc::new(garrison_config.clone()))
+            .interface(Arc::new(VecBoostInterface::new(
                 config
                     .auth
                     .default_admin_username
                     .clone()
                     .unwrap_or_else(|| "admin".to_string()),
-            )),
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to init GarrisonManager: {}", e))?;
+            )))
+            .build()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to init GarrisonManager: {}", e))?;
 
         let admin_password_hash = config.auth.default_admin_password.as_ref().map(|pw| {
             garrison::account::credential::password::Argon2Hasher::default()

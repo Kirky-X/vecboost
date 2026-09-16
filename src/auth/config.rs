@@ -40,7 +40,8 @@ pub fn map_auth_config_to_garrison(auth: &AuthConfig) -> GarrisonConfig {
         _ => DEFAULT_TOKEN_EXPIRATION_SECS,
     };
 
-    // JWT 签名密钥（account-credential-zeroize 启用时为 Zeroizing<String>）
+    // JWT 签名密钥（garrison 0.9 起 Zeroizing 门控在 protocol-zeroize feature；
+    // credential-zeroize 负责凭证清零）
     if let Some(ref secret) = auth.jwt_secret {
         config.jwt_secret = secret.clone().into();
     }

@@ -39,11 +39,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|| "admin".to_string()),
     );
 
-    GarrisonManager::init(
-        Arc::new(dao),
-        Arc::new(garrison_config),
-        Arc::new(interface),
-    )?;
+    // garrison 0.9：init(dao, config, interface) → builder 链
+    GarrisonManager::builder()
+        .dao(Arc::new(dao))
+        .config(Arc::new(garrison_config))
+        .interface(Arc::new(interface))
+        .build()
+        .await?;
     println!("✅ Garrison 初始化成功");
 
     // 3. 用户登录（login_id = username）

@@ -116,7 +116,17 @@ reqwest = { version = "0.13", optional = true, default-features = false, feature
 # gRPC is fully handled by sdforge (unified Call protocol via #[forge(grpc_method)])
 
 # Auth feature — 全量安全加固：firewall 系列/TOTP/凭证清零/异常检测/协议扩展/生命周期/多租户/注解宏
-garrison = { version = "0.8", optional = true, default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "account-credential", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "listener", "i18n", "firewall", "firewall-bruteforce", "firewall-ratelimit", "firewall-ddos", "firewall-anomalous", "secure-totp", "account-credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-ct-eq", "secure-simple-token", "web-cors"] }
+# 0.9.0-rc.1（[patch.crates-io] 桥接本地 ~/projects/garrison）：account-credential-zeroize
+# 改名 credential-zeroize；web-security-headers（0.9 新增）注入 nosniff/DENY/no-store
+# 安全响应头（src/api/mod.rs 挂载 garrison::web::security_headers 中间件）；
+# cache-audit：GarrisonDaoOxcache 缓存审计事件自动接线（tracing 桥接，键名脱敏）；
+# metrics-prometheus：garrison_* auth 域指标（OnceLock 单例注册 default_registry，
+# /metrics 端点合并导出，src/metrics/endpoint.rs）；
+# grpc：GarrisonGrpcAuthLayer（main.rs spawn_grpc_server server 级挂载，替代
+# sdforge BearerAuth 的独立会话宇宙——HTTP revoke 的 token 此前在 gRPC 侧 exp 前仍有效）。
+# audit-inklog-http/siem、firewall-gcra、backend-shutdown 等 0.9 新 face 为纯透传
+# feature（garrison src 零引用），按 feature 瘦身原则不接。
+garrison = { version = "0.9.0-rc.1", optional = true, default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "cache-audit", "account-credential", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "listener", "i18n", "firewall", "firewall-bruteforce", "firewall-ratelimit", "firewall-ddos", "firewall-anomalous", "secure-totp", "credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-ct-eq", "secure-simple-token", "web-cors", "web-security-headers", "metrics-prometheus", "grpc"] }
 aes-gcm = { version = "0.11", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
 
 # Redis feature
@@ -136,6 +146,12 @@ nvml-wrapper = { version = "0.13", optional = true, default-features = false }
 # context(2026-09-16 吸收)：request_id/trace_id 跨协议传播 + X-Request-Id/X-Trace-Id
 # 响应头回显（替代 main.rs 手写 x-request-id 闭包；traceparent/W3C 兼容）
 sdforge = { version = "0.5.0-rc.4", path = "../base/sdforge", optional = true, default-features = false, features = ["i18n", "inklog", "context"] }
+
+# gRPC server 装配（grpc feature）—— garrison GarrisonGrpcAuthLayer 需要 server 级
+# tonic builder：sdforge build_server_with_config 的 auth 槽位是 BearerAuth 具体类型、
+# 无 layer 挂载点；服务本体复用 sdforge pub 类型（SdForgeGrpcService /
+# sdforge_v1::sd_forge_service_server）自行装配
+tonic = { version = "0.14", optional = true, default-features = false, features = ["transport"] }
 
 # CLI argument parsing (cli feature)
 clap = { version = "4.6", optional = true, default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
@@ -164,7 +180,7 @@ default = ["http"]
 # dbnexus feature(含 failover/replica-routing)—— inklog integrations::infra
 # 无条件构造这两个 DbConfig 字段,缺 feature 时 inklog 无法编译(见 dbnexus 依赖处注释)
 http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:base64", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/cache", "sdforge/streaming", "sdforge/timestamp", "sdforge/docs", "dep:dbnexus"]
-grpc = ["sdforge/grpc", "sdforge/ratelimit", "sdforge/security"]
+grpc = ["sdforge/grpc", "sdforge/ratelimit", "sdforge/security", "dep:tonic"]
 cli = ["sdforge/cli", "dep:clap"]
 openapi = ["schema", "dep:utoipa-swagger-ui", "sdforge/openapi", "sdforge/docs"]
 
@@ -271,3 +287,6 @@ inklog = { path = "../base/inklog" }
 limiteron = { path = "../base/limiteron" }
 dbnexus = { path = "../base/dbnexus" }
 sdforge = { path = "../base/sdforge" }
+# garrison 0.9.0-rc.1 尚未发布，patch 桥接本地仓库（发布后可拆）。
+# 其内部 garrison-macros 是 workspace path 依赖，随 garrison 一并走本地，无需单独 patch。
+garrison = { path = "../garrison" }

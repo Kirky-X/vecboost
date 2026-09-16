@@ -1,7 +1,7 @@
 """full-scenario-testing — 黑盒场景测试骨架。
 
 约定：
-- 场景 ID 见 specmark/changes/full-scenario-testing/specs/*/spec.md，用例名以 R-<域>-NNN 开头对账。
+- 场景 ID 见 specmark/archive/2026-09-05-full-scenario-testing/specs/*/spec.md，用例名以 R-<域>-NNN 开头对账。
 - 每个"配置档 profile"是一个独立服务器进程：配置写入 tests/scenario/run/<name>/config/config.toml，
   以该目录为 CWD 启动编译产物二进制（应用从 CWD 读 config/config.toml）。
 - 全部断言走 HTTP/进程行为的黑盒观测，不依赖内部状态。

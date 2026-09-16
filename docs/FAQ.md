@@ -7,13 +7,13 @@
 <details open>
 <summary>📑 目录（点击展开）</summary>
 
-- [通用问题](#-通用问题)
-- [安装与构建](#-安装与构建)
-- [模型与推理](#-模型与推理)
-- [配置与部署](#️-配置与部署)
-- [认证与安全](#-认证与安全)
-- [API 使用](#-api-使用)
-- [测试与性能](#-测试与性能)
+- [通用问题](#通用问题)
+- [安装与构建](#安装与构建)
+- [模型与推理](#模型与推理)
+- [配置与部署](#配置与部署)
+- [认证与安全](#认证与安全)
+- [API 使用](#api-使用)
+- [测试与性能](#测试与性能)
 
 </details>
 
@@ -69,7 +69,7 @@ cargo build --release          # 默认 http feature
 | 认证 | `--features auth` |
 | CI 全特性 | `--features grpc,cli,auth,onnx,db,openapi,mcp` |
 
-`confers`/`inklog`/`oxcache`/`limiteron`/`trait-kit` 为必选依赖始终启用，无需 feature。完整矩阵见 README [🏷️ Feature 标志](../README.md#️-feature-标志)。
+`confers`/`inklog`/`oxcache`/`limiteron`/`trait-kit` 为必选依赖始终启用，无需 feature。完整矩阵见 README [🏷️ Feature 标志](../README.md#feature-标志)。
 
 ### ❓ 构建失败提示链接错误（hgemm_）？
 
@@ -119,7 +119,7 @@ Unreleased 版本将分词器统一为全平台 HuggingFace `tokenizers`（更�
 
 ### ❓ 哪些配置项必须用环境变量？
 
-敏感项必须走环境变量（前缀 `VECBOOST_`）：`VECBOOST_JWT_SECRET`（启用认证时必填，≥32 字符）、`VECBOOST_ADMIN_PASSWORD`（启用认证时必填，≥12 位）、`VECBOOST_ENCRYPTION_KEY` 等。完整清单见 [📖 用户指南 · 环境变量](USER_GUIDE.md#-环境变量) 一节。
+敏感项必须走环境变量（前缀 `VECBOOST_`）：`VECBOOST_JWT_SECRET`（启用认证时必填，≥32 字符）、`VECBOOST_ADMIN_PASSWORD`（启用认证时必填，≥12 位）、`VECBOOST_ENCRYPTION_KEY` 等。完整清单见 [📖 用户指南 · 环境变量](USER_GUIDE.md#环境变量) 一节。
 
 ### ❓ `[flow_control]` / `[cache]` 配置段为什么不生效？
 

@@ -8,7 +8,7 @@
 
 **高性能、生产级嵌入向量服务，使用 Rust 编写。VecBoost 提供高效的文本向量化服务，支持多种推理引擎、GPU 加速和企业级功能。**
 
-[✨ 功能特性](#-功能特性) • [🚀 快速开始](#-快速开始) • [📚 文档](#-文档) • [💻 示例](#-示例) • [🤝 参与贡献](#-参与贡献)
+[✨ 功能特性](#功能特性) • [🚀 快速开始](#快速开始) • [📚 文档](#文档) • [💻 示例](#示例) • [🤝 参与贡献](#参与贡献)
 
 </div>
 
@@ -35,23 +35,23 @@
 
 ## 📋 目录
 
-- [✨ 功能特性](#-功能特性)
-- [🚀 快速开始](#-快速开始)
-- [🔌 API 使用](#-api-使用)
-- [⚙️ 配置](#️-配置)
-- [📚 文档](#-文档)
-- [💻 示例](#-示例)
-- [🏗️ 架构](#️-架构)
-- [🧪 测试](#-测试)
-- [📊 性能](#-性能)
-- [🔒 安全](#-安全)
-- [🗺️ 开发路线图](#️-开发路线图)
-- [🤝 参与贡献](#-参与贡献)
-- [📋 更新日志](#-更新日志)
-- [📄 许可证](#-许可证)
-- [🙏 致谢](#-致谢)
-- [📞 联系与支持](#-联系与支持)
-- [⭐ Star 历史](#-star-历史)
+- [✨ 功能特性](#功能特性)
+- [🚀 快速开始](#快速开始)
+- [🔌 API 使用](#api-使用)
+- [⚙️ 配置](#配置)
+- [📚 文档](#文档)
+- [💻 示例](#示例)
+- [🏗️ 架构](#架构)
+- [🧪 测试](#测试)
+- [📊 性能](#性能)
+- [🔒 安全](#安全)
+- [🗺️ 开发路线图](#开发路线图)
+- [🤝 参与贡献](#参与贡献)
+- [📋 更新日志](#更新日志)
+- [📄 许可证](#许可证)
+- [🙏 致谢](#致谢)
+- [📞 联系与支持](#联系与支持)
+- [⭐ Star 历史](#star-历史)
 
 ---
 
@@ -88,7 +88,7 @@
 </tr>
 </table>
 
-除上述核心能力外，OpenAI 兼容端点（`POST /v1/embeddings`，支持 `encoding_format=base64`）、BF16 推理与 SIMD 向量相似度、GPU 内存分页、`vecboost doctor` 只读诊断、Library SDK 集成（Library 模式）与 `config_full.toml` / `config_minimal.toml` 配置预设也已可用；端点与参数明细见 [🔌 API 使用](#-api-使用) 一节，配置项说明见 [⚙️ 配置](#️-配置) 一节。
+除上述核心能力外，OpenAI 兼容端点（`POST /v1/embeddings`，支持 `encoding_format=base64`）、BF16 推理与 SIMD 向量相似度、GPU 内存分页、`vecboost doctor` 只读诊断、Library SDK 集成（Library 模式）与 `config_full.toml` / `config_minimal.toml` 配置预设也已可用；端点与参数明细见 [🔌 API 使用](#api-使用) 一节，配置项说明见 [⚙️ 配置](#配置) 一节。
 
 ---
 
@@ -150,7 +150,7 @@ cp config/config.toml config/config_custom.toml
 
 > **✅ 成功**: 服务默认在 `http://127.0.0.1:9002` 启动（安全默认仅监听回环地址）。
 
-> **🐳 Docker**：`docker build -t vecboost:latest .` 后挂载 `config/` 与 `models/` 运行即可；Docker Compose 与 Kubernetes 部署见 [📖 用户指南 · Docker 部署](docs/USER_GUIDE.md#-docker-部署)。
+> **🐳 Docker**：`docker build -t vecboost:latest .` 后挂载 `config/` 与 `models/` 运行即可；Docker Compose 与 Kubernetes 部署见 [📖 用户指南 · Docker 部署](docs/USER_GUIDE.md#docker-部署)。
 
 ### 💡 最小示例
 
@@ -185,7 +185,7 @@ cargo run --features cli -- embed --text "Hello, world!"
 - **四协议单一源**：`src/api/embedding.rs` 中的处理函数经 `#[forge(...)]` 宏标注，由 `sdforge` 生成 HTTP/gRPC/MCP/CLI 绑定，禁止手写协议代码。
 - **7 库生态**：`trait-kit` 以 typestate 模块注册中心（`Kit<Unbuilt> → Kit<Ready>`）装配全部模块；`confers` 接管配置、`inklog` 日志、`oxcache` 缓存、`limiteron` 限流、`dbnexus` 持久化（`db` feature）、`sdforge` 接口生成。
 - **配置优先级**：TOML 文件 + `VECBOOST_` 前缀环境变量覆盖（敏感项 `VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD` 必须走环境变量）；配置文件变更校验并打日志，重启后生效。
-- **特性门控**：全部可选能力均为独立 feature（见 [🏷️ Feature 标志](#️-feature-标志)），最小构建只含 HTTP 服务。
+- **特性门控**：全部可选能力均为独立 feature（见 [🏷️ Feature 标志](#feature-标志)），最小构建只含 HTTP 服务。
 
 ---
 
@@ -198,11 +198,11 @@ VecBoost 由 `sdforge` 从 `src/api/embedding.rs` 单一源生成四种协议接
 - **Matryoshka 维度约简**：`/v1/embeddings` 传 `dimensions`（256/512/1024 等）换取更小更快的向量，截断后自动 L2 重归一化保证余弦相似度正确；
 - **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 13 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto），JWT 认证、限流、最大连接数与超时均可配置；
 - **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露 `embed` / `embed_batch` / `similarity` / `list_models` 工具；
-- **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank 子命令（见 [💡 最小示例](#-最小示例)）；
+- **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank 子命令（见 [💡 最小示例](#最小示例)）；
 - **推理引擎**：Candle（原生 Rust，默认）与 ONNX Runtime（`onnx` feature），经 `EngineFactory::create` 工厂切换；
 - **可观测性与运维**：`/metrics`（Prometheus 指标）、`/health`（存活探针）与 `/health?depth=full`（真实就绪探测）、`/api-docs`（Swagger UI）；只读诊断 `vecboost doctor`（config / tokenizer / 缓存 / 线程 / GPU / 模型完整性，FAIL 退出码 1）。
 
-交互式 OpenAPI 文档：`http://localhost:9002/api-docs`（Swagger UI）与 `/api-docs/openapi.json`（规范 JSON，需 `openapi` feature；ReDoc 推迟到 v0.3.0）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/PERFORMANCE.md#-新增指标)。
+交互式 OpenAPI 文档：`http://localhost:9002/api-docs`（Swagger UI）与 `/api-docs/openapi.json`（规范 JSON，需 `openapi` feature；ReDoc 推迟到 v0.3.0）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/PERFORMANCE.md#新增指标)。
 
 ### 🏷️ Feature 标志
 
@@ -234,9 +234,9 @@ VecBoost 由 `sdforge` 从 `src/api/embedding.rs` 单一源生成四种协议接
 
 默认从 `config/config.toml` 读取（`--config <path>` 指定其他路径，路径不存在时 fail-fast 报错退出；预置 `config_full.toml` / `config_minimal.toml` 示例）。环境变量以 `VECBOOST_` 前缀覆盖配置文件，敏感项（`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD`）必须走环境变量；配置文件变更会校验并打日志，重启后生效。
 
-全部配置段（server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device）的逐项键位、默认值、环境变量全表与完整示例配置见 [📖 用户指南 · 配置](docs/USER_GUIDE.md#️-配置)，也可直接查看 [`config/config.toml`](config/config.toml)。
+全部配置段（server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device）的逐项键位、默认值、环境变量全表与完整示例配置见 [📖 用户指南 · 配置](docs/USER_GUIDE.md#配置)，也可直接查看 [`config/config.toml`](config/config.toml)。
 
-> **⚠️ 注意**：`[flow_control]` 与 `[cache]` 两个 TOML 段当前版本不解析（历史遗留段名）；限流走 `[rate_limit]`，缓存走 `[embedding]` 与 `[semantic_cache]`。见 [❓ FAQ](docs/FAQ.md#️-配置与部署)。
+> **⚠️ 注意**：`[flow_control]` 与 `[cache]` 两个 TOML 段当前版本不解析（历史遗留段名）；限流走 `[rate_limit]`，缓存走 `[embedding]` 与 `[semantic_cache]`。见 [❓ FAQ](docs/FAQ.md#配置与部署)。
 
 ---
 
@@ -336,7 +336,7 @@ cargo audit
 
 ## 📊 性能
 
-基准数据来自 `docs/benchmarks/` 实测归档（criterion，2026-08 采集，Linux x86_64，噪声约 ±5-10%）：SIMD 向量相似度较标量最高 **3.06x** 加速（1024 维 cosine 约 341.7 ns），`ContinuousBatchLoop` 连续批调度较固定等待 **5.6x**（100 请求稳定负载 1.110s vs 6.194s），语义缓存精确命中约 10 ns；吞吐基线（`embed_throughput_bench`）需本地模型，**待实测**。完整基准表、性能设计要点（时间窗拼批/批内去重/SIMD/线程调优/jemalloc）、GGUF 量化与调优开关注册表见 [⚡ 性能指南](docs/PERFORMANCE.md)，微基准可用 `cargo bench` 复现（命令见上文[测试](#-测试)一节）。
+基准数据来自 `docs/benchmarks/` 实测归档（criterion，2026-08 采集，Linux x86_64，噪声约 ±5-10%）：SIMD 向量相似度较标量最高 **3.06x** 加速（1024 维 cosine 约 341.7 ns），`ContinuousBatchLoop` 连续批调度较固定等待 **5.6x**（100 请求稳定负载 1.110s vs 6.194s），语义缓存精确命中约 10 ns；吞吐基线（`embed_throughput_bench`）需本地模型，**待实测**。完整基准表、性能设计要点（时间窗拼批/批内去重/SIMD/线程调优/jemalloc）、GGUF 量化与调优开关注册表见 [⚡ 性能指南](docs/PERFORMANCE.md)，微基准可用 `cargo bench` 复现（命令见上文[测试](#测试)一节）。
 
 ---
 
@@ -348,7 +348,7 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 
 ### ⛓️ 供应链与门禁
 
-`cargo audit`、`cargo deny check`、CodeQL、Trivy/Checkov 镜像扫描、gitleaks 私密信息扫描与 pre-commit 钩子在 CI 与本地双重执行，完整清单与处置策略见 [🔒 安全文档 · 供应链与安全门禁](docs/SECURITY.md#️-供应链与安全门禁)。
+`cargo audit`、`cargo deny check`、CodeQL、Trivy/Checkov 镜像扫描、gitleaks 私密信息扫描与 pre-commit 钩子在 CI 与本地双重执行，完整清单与处置策略见 [🔒 安全文档 · 供应链与安全门禁](docs/SECURITY.md#供应链与安全门禁)。
 
 ### 🚨 报告安全漏洞
 
@@ -364,7 +364,7 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 <tr><td align="center">✅</td><td>生态集成</td><td>7 库生态接线（trait-kit 注册中心、confers 配置、inklog 日志、oxcache 缓存、limiteron 限流、dbnexus 持久化、sdforge 接口）</td></tr>
 <tr><td align="center">✅</td><td>安全与 i18n</td><td>JWT/CSRF/RBAC/TOTP、安全默认值收敛、审计日志、ICU+Fluent 双语错误</td></tr>
 <tr><td align="center">✅</td><td>性能基座</td><td>SIMD 相似度、连续批处理、语义缓存、GPU 内存分页、BF16 推理、Matryoshka 降维</td></tr>
-<tr><td align="center">🚧</td><td>审计修复（Unreleased）</td><td>安全默认值/登录收敛/XFF 信任反转/RBAC 接线/缓存键模型命名空间等破坏性行为变更（见 [更新日志](#-更新日志)）</td></tr>
+<tr><td align="center">🚧</td><td>审计修复（Unreleased）</td><td>安全默认值/登录收敛/XFF 信任反转/RBAC 接线/缓存键模型命名空间等破坏性行为变更（见 [更新日志](#更新日志)）</td></tr>
 <tr><td align="center">🚧</td><td>调优开关（Unreleased）</td><td>GGUF 量化、向量输出量化、多模型 LFRU 驻留、缓存 WAL、硬件感知规划、doctor 诊断、启动预热</td></tr>
 <tr><td align="center">📋</td><td>量化推理后端</td><td>GGUF 推理后端待 candle-transformers 上游 quantized BERT 落地（路由/魔数校验/质量门脚手架已就绪）</td></tr>
 <tr><td align="center">📋</td><td>多副本会话外置</td><td>auth 会话外置需 garrison db 后端补齐（pool-backed DAO）</td></tr>
@@ -426,7 +426,7 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 | 0.2.0 | 2026-07-24 | sdforge 四协议统一生成、7 库生态接线、Matryoshka 截断重归一化、vuln-0009 repo_id 校验 |
 | 0.1.0 | 2025-12-15 | VecBoost 初始发布 |
 
-Unreleased 含多项破坏性行为变更（安全默认值收敛、登录收敛、XFF 信任反转、RBAC 接线、缓存键/分词器变更等），**升级必读**：逐项「旧行为 → 新行为 → 迁移动作」对照表见 [📋 更新日志 · Unreleased](docs/CHANGELOG.md#unreleased)。多副本边界（auth 会话存进程内存，仅限单副本）与热重载语义（配置变更重启后生效）见 [❓ FAQ](docs/FAQ.md#️-配置与部署)。
+Unreleased 含多项破坏性行为变更（安全默认值收敛、登录收敛、XFF 信任反转、RBAC 接线、缓存键/分词器变更等），**升级必读**：逐项「旧行为 → 新行为 → 迁移动作」对照表见 [📋 更新日志 · Unreleased](docs/CHANGELOG.md#unreleased)。多副本边界（auth 会话存进程内存，仅限单副本）与热重载语义（配置变更重启后生效）见 [❓ FAQ](docs/FAQ.md#配置与部署)。
 
 ---
 

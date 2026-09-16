@@ -8,7 +8,7 @@
 
 **A high-performance, production-grade embedding vector service written in Rust. VecBoost provides efficient text vectorization with multiple inference engines, GPU acceleration, and enterprise-grade features.**
 
-[✨ Features](#-features) • [🚀 Quick Start](#-quick-start) • [📚 Documentation](#-documentation) • [💻 Examples](#-examples) • [🤝 Contributing](#-contributing)
+[✨ Features](#features) • [🚀 Quick Start](#quick-start) • [📚 Documentation](#documentation) • [💻 Examples](#examples) • [🤝 Contributing](#contributing)
 
 </div>
 
@@ -35,23 +35,23 @@ Interface handlers are written just once; `sdforge` macros generate all four pro
 
 ## 📋 Table of Contents
 
-- [✨ Features](#-features)
-- [🚀 Quick Start](#-quick-start)
-- [🔌 API Usage](#-api-usage)
-- [⚙️ Configuration](#️-configuration)
-- [📚 Documentation](#-documentation)
-- [💻 Examples](#-examples)
-- [🏗️ Architecture](#️-architecture)
-- [🧪 Testing](#-testing)
-- [📊 Performance](#-performance)
-- [🔒 Security](#-security)
-- [🗺️ Roadmap](#️-roadmap)
-- [🤝 Contributing](#-contributing)
-- [📋 Changelog](#-changelog)
-- [📄 License](#-license)
-- [🙏 Acknowledgements](#-acknowledgements)
-- [📞 Contact & Support](#-contact--support)
-- [⭐ Star History](#-star-history)
+- [✨ Features](#features)
+- [🚀 Quick Start](#quick-start)
+- [🔌 API Usage](#api-usage)
+- [⚙️ Configuration](#configuration)
+- [📚 Documentation](#documentation)
+- [💻 Examples](#examples)
+- [🏗️ Architecture](#architecture)
+- [🧪 Testing](#testing)
+- [📊 Performance](#performance)
+- [🔒 Security](#security)
+- [🗺️ Roadmap](#roadmap)
+- [🤝 Contributing](#contributing)
+- [📋 Changelog](#changelog)
+- [📄 License](#license)
+- [🙏 Acknowledgements](#acknowledgements)
+- [📞 Contact & Support](#contact--support)
+- [⭐ Star History](#star-history)
 
 ---
 
@@ -88,7 +88,7 @@ Interface handlers are written just once; `sdforge` macros generate all four pro
 </tr>
 </table>
 
-In addition to the core capabilities above, an OpenAI-compatible endpoint (`POST /v1/embeddings`, with `encoding_format=base64` support), BF16 inference and SIMD vector similarity, GPU memory paging, read-only `vecboost doctor` diagnostics, Library SDK integration (library mode), and the `config_full.toml` / `config_minimal.toml` config presets are also available; see [🔌 API Usage](#-api-usage) for endpoint details and [⚙️ Configuration](#️-configuration) for configuration options.
+In addition to the core capabilities above, an OpenAI-compatible endpoint (`POST /v1/embeddings`, with `encoding_format=base64` support), BF16 inference and SIMD vector similarity, GPU memory paging, read-only `vecboost doctor` diagnostics, Library SDK integration (library mode), and the `config_full.toml` / `config_minimal.toml` config presets are also available; see [🔌 API Usage](#api-usage) for endpoint details and [⚙️ Configuration](#configuration) for configuration options.
 
 ---
 
@@ -150,7 +150,7 @@ cp config/config.toml config/config_custom.toml
 
 > **✅ Success**: the service starts at `http://127.0.0.1:9002` by default (secure default: loopback only).
 
-> **🐳 Docker**: `docker build -t vecboost:latest .`, then run with `config/` and `models/` mounted; Docker Compose and Kubernetes deployment are covered in the [📖 User Guide · Docker deployment](docs/USER_GUIDE.md#-docker-部署).
+> **🐳 Docker**: `docker build -t vecboost:latest .`, then run with `config/` and `models/` mounted; Docker Compose and Kubernetes deployment are covered in the [📖 User Guide · Docker deployment](docs/USER_GUIDE.md#docker-部署).
 
 ### 💡 Minimal Example
 
@@ -185,7 +185,7 @@ cargo run --features cli -- embed --text "Hello, world!"
 - **Four protocols, one source**: handlers in `src/api/embedding.rs` are annotated with `#[forge(...)]` macros; `sdforge` generates the HTTP/gRPC/MCP/CLI bindings. Hand-written protocol code is forbidden.
 - **7-library ecosystem**: `trait-kit` wires all modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`); `confers` owns configuration, `inklog` logging, `oxcache` caching, `limiteron` rate limiting, `dbnexus` persistence (`db` feature), and `sdforge` interface generation.
 - **Configuration precedence**: TOML file + `VECBOOST_`-prefixed environment variable overrides (secrets such as `VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD` must be provided via env vars); config file changes are validated and logged, taking effect after restart.
-- **Feature gating**: every optional capability is an independent feature (see [🏷️ Feature Flags](#️-feature-flags)); the minimal build contains only the HTTP server.
+- **Feature gating**: every optional capability is an independent feature (see [🏷️ Feature Flags](#feature-flags)); the minimal build contains only the HTTP server.
 
 ---
 
@@ -198,11 +198,11 @@ VecBoost generates its four protocol interfaces from the single source `src/api/
 - **Matryoshka dimensionality reduction**: pass `dimensions` (256/512/1024, etc.) to `/v1/embeddings` for smaller, faster vectors; truncated vectors are automatically L2 re-normalized to keep cosine similarity correct;
 - **gRPC**: with the `grpc` feature, 13 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — with JWT auth, rate limiting, max connections, and timeouts all configurable;
 - **MCP**: the `mcp` feature exposes the `embed` / `embed_batch` / `similarity` / `list_models` tools to LLMs over stdio (`vecboost --mcp`);
-- **CLI**: the `cli` feature provides the embed / embed_batch / compute_similarity / search / rerank subcommands (see [💡 Minimal Example](#-minimal-example));
+- **CLI**: the `cli` feature provides the embed / embed_batch / compute_similarity / search / rerank subcommands (see [💡 Minimal Example](#minimal-example));
 - **Inference engines**: Candle (native Rust, default) and ONNX Runtime (`onnx` feature), switched via the `EngineFactory::create` factory;
 - **Observability & operations**: `/metrics` (Prometheus), `/health` (liveness) and `/health?depth=full` (real readiness probe), `/api-docs` (Swagger UI); read-only diagnostics with `vecboost doctor` (config / tokenizer / cache / threads / GPU / model integrity; exit code 1 on FAIL).
 
-Interactive OpenAPI docs: `http://localhost:9002/api-docs` (Swagger UI) and `/api-docs/openapi.json` (spec JSON, requires the `openapi` feature; ReDoc is deferred to v0.3.0). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/PERFORMANCE.md#-新增指标).
+Interactive OpenAPI docs: `http://localhost:9002/api-docs` (Swagger UI) and `/api-docs/openapi.json` (spec JSON, requires the `openapi` feature; ReDoc is deferred to v0.3.0). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/PERFORMANCE.md#新增指标).
 
 ### 🏷️ Feature Flags
 
@@ -234,9 +234,9 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 
 The default config path is `config/config.toml` (`--config <path>` selects another; a missing explicit path fails fast with exit code 2; the repo ships `config_full.toml` / `config_minimal.toml` presets). Environment variables with the `VECBOOST_` prefix override the config file, and secrets (`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD`) must be provided via env vars; config file changes are validated and logged, taking effect after restart.
 
-Per-key options and defaults for every config section (server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device), the full environment-variable table, and a complete example config are documented in the [📖 User Guide · Configuration](docs/USER_GUIDE.md#️-配置); you can also read [`config/config.toml`](config/config.toml) directly.
+Per-key options and defaults for every config section (server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device), the full environment-variable table, and a complete example config are documented in the [📖 User Guide · Configuration](docs/USER_GUIDE.md#配置); you can also read [`config/config.toml`](config/config.toml) directly.
 
-> **⚠️ Note**: the `[flow_control]` and `[cache]` TOML sections are not parsed in the current version (legacy section names); rate limiting uses `[rate_limit]`, caching uses `[embedding]` and `[semantic_cache]`. See the [❓ FAQ](docs/FAQ.md#️-配置与部署).
+> **⚠️ Note**: the `[flow_control]` and `[cache]` TOML sections are not parsed in the current version (legacy section names); rate limiting uses `[rate_limit]`, caching uses `[embedding]` and `[semantic_cache]`. See the [❓ FAQ](docs/FAQ.md#配置与部署).
 
 ---
 
@@ -336,7 +336,7 @@ As of the v0.2.1 workspace: ~1700+ inline unit tests in `src/`, 61 Rust integrat
 
 ## 📊 Performance
 
-Benchmark data comes from the measured `docs/benchmarks/` archive (criterion, collected 2026-08 on Linux x86_64, noise roughly ±5-10%): SIMD vector similarity is up to **3.06x** faster than the scalar baseline (~341.7 ns for 1024-dim cosine), `ContinuousBatchLoop` continuous batch scheduling is **5.6x** faster than fixed waiting (1.110 s vs 6.194 s for a 100-request steady load), and exact semantic-cache hits take ~10 ns; the throughput baseline (`embed_throughput_bench`) requires a local model and is **to be measured**. The full benchmark tables, performance design highlights (time-window batching / in-batch dedup / SIMD / thread tuning / jemalloc), GGUF quantization, and the tuning-switch registry are in the [⚡ Performance Guide](docs/PERFORMANCE.md); microbenchmarks can be reproduced with `cargo bench` (see the [Testing](#-testing) section above).
+Benchmark data comes from the measured `docs/benchmarks/` archive (criterion, collected 2026-08 on Linux x86_64, noise roughly ±5-10%): SIMD vector similarity is up to **3.06x** faster than the scalar baseline (~341.7 ns for 1024-dim cosine), `ContinuousBatchLoop` continuous batch scheduling is **5.6x** faster than fixed waiting (1.110 s vs 6.194 s for a 100-request steady load), and exact semantic-cache hits take ~10 ns; the throughput baseline (`embed_throughput_bench`) requires a local model and is **to be measured**. The full benchmark tables, performance design highlights (time-window batching / in-batch dedup / SIMD / thread tuning / jemalloc), GGUF quantization, and the tuning-switch registry are in the [⚡ Performance Guide](docs/PERFORMANCE.md); microbenchmarks can be reproduced with `cargo bench` (see the [Testing](#testing) section above).
 
 ---
 
@@ -348,7 +348,7 @@ VecBoost is secure by default: the factory config binds to loopback only, and no
 
 ### ⛓️ Supply Chain & Gates
 
-`cargo audit`, `cargo deny check`, CodeQL, Trivy/Checkov image scanning, gitleaks secret scanning, and pre-commit hooks run both in CI and locally; the full list and triage policy are in the [🔒 Security document · Supply chain & gates](docs/SECURITY.md#️-供应链与安全门禁).
+`cargo audit`, `cargo deny check`, CodeQL, Trivy/Checkov image scanning, gitleaks secret scanning, and pre-commit hooks run both in CI and locally; the full list and triage policy are in the [🔒 Security document · Supply chain & gates](docs/SECURITY.md#供应链与安全门禁).
 
 ### 🚨 Reporting a Vulnerability
 
@@ -364,7 +364,7 @@ Please do not report security vulnerabilities through public issues; contact the
 <tr><td align="center">✅</td><td>Ecosystem integration</td><td>7-library ecosystem wiring (trait-kit registry, confers config, inklog logging, oxcache cache, limiteron rate limiting, dbnexus persistence, sdforge interfaces)</td></tr>
 <tr><td align="center">✅</td><td>Security & i18n</td><td>JWT/CSRF/RBAC/TOTP, secure defaults hardening, audit logging, ICU+Fluent bilingual errors</td></tr>
 <tr><td align="center">✅</td><td>Performance foundation</td><td>SIMD similarity, continuous batching, semantic cache, GPU memory paging, BF16 inference, Matryoshka reduction</td></tr>
-<tr><td align="center">🚧</td><td>Audit remediation (Unreleased)</td><td>Breaking behavioral changes: secure defaults / login convergence / XFF trust inversion / RBAC wiring / model-scoped cache keys (see [Changelog](#-changelog))</td></tr>
+<tr><td align="center">🚧</td><td>Audit remediation (Unreleased)</td><td>Breaking behavioral changes: secure defaults / login convergence / XFF trust inversion / RBAC wiring / model-scoped cache keys (see [Changelog](#changelog))</td></tr>
 <tr><td align="center">🚧</td><td>Tuning switches (Unreleased)</td><td>GGUF quantization, quantized vector comparison, multi-model LFRU residency, cache WAL, hardware-aware planning, doctor diagnostics, startup warmup</td></tr>
 <tr><td align="center">📋</td><td>Quantized inference backend</td><td>GGUF inference backend awaits upstream quantized BERT in candle-transformers (routing/magic-number checks/quality gate scaffolding ready)</td></tr>
 <tr><td align="center">📋</td><td>Multi-replica session offload</td><td>Externalized auth sessions require the garrison db backend (pool-backed DAO)</td></tr>
@@ -426,7 +426,7 @@ The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (followin
 | 0.2.0 | 2026-07-24 | sdforge four-protocol generation, 7-library ecosystem wiring, Matryoshka truncation re-normalization, vuln-0009 repo_id validation |
 | 0.1.0 | 2025-12-15 | Initial VecBoost release |
 
-Unreleased contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · Unreleased](docs/CHANGELOG.md#unreleased). The multi-replica boundary (auth sessions live in process memory; single replica only) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#️-配置与部署).
+Unreleased contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · Unreleased](docs/CHANGELOG.md#unreleased). The multi-replica boundary (auth sessions live in process memory; single replica only) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#配置与部署).
 
 ---
 

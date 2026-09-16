@@ -136,9 +136,6 @@ cargo test -p vecboost --features http,grpc --test grpc_e2e
 cargo build -p vecboost --features http,auth,cli,mcp,grpc
 pytest tests/scenario -q --junitxml=scenario-results.xml
 
-# API 逻辑审查 + 审计记录生成（拉起 4 个配置档，写 docs/audits/）
-python3 scripts/audit_api_probe.py
-
 # 性能回归阈值（Rust）
 cargo test -p vecboost --test perf
 

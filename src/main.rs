@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
-use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
+#[cfg(not(feature = "auth"))]
+use tower_http::set_header::SetResponseHeaderLayer;
+use tower_http::trace::TraceLayer;
 use trait_kit::prelude::{AsyncShutdownCoordinator, BuildObserver, ShutdownPhase};
 use vecboost::AppConfig;
 use vecboost::logger::LoggerModule;
@@ -1370,8 +1372,18 @@ async fn app_main() -> anyhow::Result<()> {
                 resp
             },
         ));
+        let app = app.layer(TraceLayer::new_for_http());
+        // 安全响应头（garrison 0.9 web-security-headers 吸收）：auth 构建改用
+        // garrison::web::security_headers 中间件，替代原 4 个手写 SetResponseHeaderLayer，
+        // 并新增 Cache-Control: no-store / Pragma: no-cache（防敏感认证响应被缓存）；
+        // HSTS 仅 garrison tls feature 下注入（明文 HTTP 注入无意义且可被降级利用，
+        // 原 stack 无条件注入系过度设置）。非 auth 构建无 garrison 依赖，保留手写头栈。
+        #[cfg(feature = "auth")]
+        let app = app.layer(axum::middleware::from_fn(
+            garrison::web::security_headers::security_headers_middleware,
+        ));
+        #[cfg(not(feature = "auth"))]
         let app = app
-            .layer(TraceLayer::new_for_http())
             .layer(SetResponseHeaderLayer::overriding(
                 axum::http::header::X_CONTENT_TYPE_OPTIONS,
                 axum::http::HeaderValue::from_static("nosniff"),

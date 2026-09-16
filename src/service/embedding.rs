@@ -56,7 +56,7 @@ pub struct EmbeddingService {
 
 impl EmbeddingService {
     /// 统一内部构造入口：所有可选组件通过参数控制，消除 5 个构造器间的字段初始化重复。
-    /// `cache_persist` 为 `Some((path, max_bytes))` 时启用 WAL 持久层（T021/T022）。
+    /// `cache_persist` 为 `Some((path, max_bytes))` 时启用 WAL 持久层。
     fn build(
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
         validator: InputValidator,
@@ -68,7 +68,7 @@ impl EmbeddingService {
     ) -> Self {
         let cache = match (cache_size, cache_persist) {
             (Some(size), Some((path, max_bytes))) => {
-                // T035 审查安全7/架构3：指纹绑定权重内容（sha256 可用时），
+                // /架构3：指纹绑定权重内容（sha256 可用时），
                 // 同名换权重的旧向量在回放时被指纹不匹配淘汰。
                 let fingerprint = model_config
                     .as_ref()
@@ -198,13 +198,13 @@ impl EmbeddingService {
         )
     }
 
-    /// T033：注入 ModelManager（server 模式装配；switch/unload 与 LFRU 驻留依赖它）。
+    /// 注入 ModelManager（server 模式装配；switch/unload 与 LFRU 驻留依赖它）。
     pub fn with_model_manager(mut self, manager: Arc<ModelManager>) -> Self {
         self.model_manager = Some(manager);
         self
     }
 
-    /// T033：模型热度落盘（switch/unload 成功路径调用；失败仅 warn 不阻断业务）。
+    /// 模型热度落盘（switch/unload 成功路径调用；失败仅 warn 不阻断业务）。
     async fn save_model_heat(&self) {
         if let Some(ref manager) = self.model_manager {
             if let Err(e) = manager
@@ -216,7 +216,7 @@ impl EmbeddingService {
         }
     }
 
-    /// T022：启动时顺序回放 WAL 重建缓存。persist 未启用时为 no-op。
+    /// 启动时顺序回放 WAL 重建缓存。persist 未启用时为 no-op。
     pub async fn load_persisted_cache(&self) {
         if let Some(path) = self.cache.persist_path() {
             log::info!("Embedding cache WAL replay from {}", path.display());
@@ -354,6 +354,7 @@ impl EmbeddingService {
         req: EmbedRequest,
         target_dimension: Option<usize>,
     ) -> Result<EmbedResponse, VecboostError> {
+        let start = std::time::Instant::now();
         self.validator.validate_text(&req.text)?;
 
         // 缓存键包含 model_id 和文本哈希，避免跨模型污染
@@ -414,7 +415,7 @@ impl EmbeddingService {
         Ok(EmbedResponse {
             dimension,
             embedding,
-            processing_time_ms: 0,
+            processing_time_ms: start.elapsed().as_millis(),
             information_retention_rate: None,
         })
     }
@@ -457,7 +458,7 @@ impl EmbeddingService {
             }
         }
         let unique_results = self.engine.read().await.embed_batch(&unique_texts)?;
-        // T026 埋点：drain 引擎分阶段延迟（tokenize/inference/pool）进 prometheus。
+        // 埋点：drain 引擎分阶段延迟（tokenize/inference/pool）进 prometheus。
         // 单文本 embed 的累计值延迟到下一次批次 drain 或抓取时汇出（take 语义不丢数据）。
         #[cfg(feature = "http")]
         {
@@ -469,7 +470,7 @@ impl EmbeddingService {
             }
         }
         let ratio = crate::metrics::inbatch_dedup_ratio(texts.len(), unique_texts.len());
-        // T007 埋点：批内去重率滚动 gauge（全局 collector 未设置时零开销跳过）
+        // 埋点：批内去重率滚动 gauge（全局 collector 未设置时零开销跳过）
         #[cfg(feature = "http")]
         if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
             collector.set_dedup_ratio("embed", ratio);
@@ -1303,7 +1304,7 @@ impl EmbeddingService {
                     .unwrap_or(false)
             }),
             model_sha256: None,
-            // .gguf 路径走 EngineFactory 量化路由（与启动路径同一判定，T035 审查架构1）
+            // gguf 路径走 EngineFactory 量化路由（与启动路径同一判定，）
             quantized: req.model_name.ends_with(".gguf"),
         };
 
@@ -1317,7 +1318,7 @@ impl EmbeddingService {
             }
         }
 
-        // 统一经 EngineFactory 创建（GGUF 量化路由单一入口，T035 审查架构1）。
+        // 统一经 EngineFactory 创建（GGUF 量化路由单一入口，）。
         let new_engine =
             crate::engine::EngineFactory::create(model_config.engine_type.clone(), &model_config)
                 .map_err(|e| {
@@ -1334,11 +1335,11 @@ impl EmbeddingService {
 
         // 切模型后清缓存，避免旧模型向量污染新模型
         self.cache.clear().await;
-        // T035 审查安全1：语义缓存键为纯文本，跨模型必须一并清空
+        // 语义缓存键为纯文本，跨模型必须一并清空
         if let Some(ref semantic) = self.semantic_cache {
             semantic.clear().await;
         }
-        // T033：切换改变热度分布，落盘供下次 warmstart
+        // 切换改变热度分布，落盘供下次 warmstart
         self.save_model_heat().await;
 
         Ok(ModelSwitchResponse {
@@ -1353,7 +1354,7 @@ impl EmbeddingService {
         if let Some(ref manager) = self.model_manager {
             manager.unload(name).await?;
             log::info!("Model {} unloaded via ModelManager", name);
-            // T033：卸载后落盘热度表
+            // 卸载后落盘热度表
             self.save_model_heat().await;
         }
 

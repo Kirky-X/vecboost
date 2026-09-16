@@ -240,6 +240,8 @@ impl AuditLogger {
     /// DB 写重试耗尽后的死信落地 —— 追加写 `logs/audit_dead_letter.jsonl`
     /// (含失败原因),保证审计事件可事后重放。写死信自身的失败仅记 error
     /// (无更深兜底介质)。
+    // 调用方 run_db_writer 与 dead_letter_tests 均为 db/test 门控,缺一即死代码
+    #[cfg(any(test, feature = "db"))]
     fn write_dead_letter(event: &SecurityEvent, db_error: &str) {
         let event = serde_json::to_value(event)
             .unwrap_or_else(|_| serde_json::json!({"serialize_error": true}));

@@ -66,7 +66,7 @@ pub struct Worker {
     config: WorkerConfig,
 }
 
-/// 时间窗批组装纯函数（T002）。
+/// 时间窗批组装纯函数。
 ///
 /// 语义：首请求到达后开启 `batch_wait_ms` 窗口，窗口内继续出队，
 /// 凑满 `max_batch_size` 或窗口关闭即返回；`batch_wait_ms=0` 时立即
@@ -416,7 +416,7 @@ impl WorkerManager {
                     )
                     .await;
                     let waited_secs = wait_start.elapsed().as_secs_f64();
-                    // T004 埋点：批次大小与窗口等待时长（全局 collector 未设置时零开销跳过）
+                    // 埋点：批次大小与窗口等待时长（全局 collector 未设置时零开销跳过）
                     #[cfg(feature = "http")]
                     if let Some(collector) = crate::metrics::prometheus_exporter::global_collector()
                     {
@@ -622,11 +622,14 @@ impl WorkerManager {
 
         // 批量推理
         let service_guard = embedding_service.read().await;
+        let batch_started = std::time::Instant::now();
         let batch_result = service_guard.embed_batch_texts(&texts).await;
         drop(service_guard);
 
         match batch_result {
             Ok(embeddings) => {
+                // 批内各请求共享本次批量推理耗时（拼批语义下的真实处理时长）
+                let batch_millis = batch_started.elapsed().as_millis();
                 // 按 request_id 切分结果
                 for (j, &idx) in valid_indices.iter().enumerate() {
                     let req = &batch[idx];
@@ -642,7 +645,7 @@ impl WorkerManager {
                                 Ok(EmbedResponse {
                                     dimension,
                                     embedding,
-                                    processing_time_ms: 0,
+                                    processing_time_ms: batch_millis,
                                     information_retention_rate: None,
                                 }),
                             )

@@ -570,7 +570,16 @@ async fn model_switch_handler(req: ModelSwitchRequest) -> Result<ModelSwitchResp
             .unwrap_or_default();
         let validator = model_path_validator(server_cfg.grpc_allowed_roots.as_deref());
         for path in req.model_path.iter().chain(req.tokenizer_path.iter()) {
-            validator.validate_directory(path).map_err(to_api_error)?;
+            // 与 /embed/file 的路径校验一致：validator 拒绝（越界/不存在/非目录）
+            // 都属客户端输入错误，映射 400；若走 to_api_error 会落入
+            // SecurityError→500，把输入错误伪装成服务端故障。
+            validator
+                .validate_directory(path)
+                .map_err(|e| ApiError::InvalidInput {
+                    message: e.to_string(),
+                    field: Some("model_path".to_string()),
+                    value: Some(serde_json::Value::String(path.display().to_string())),
+                })?;
         }
     }
 

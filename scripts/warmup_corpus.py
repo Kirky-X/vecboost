@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""warmup_corpus.py — 暖语料回放（T031，仅 Python 标准库）。
+"""warmup_corpus.py — 暖语料回放（仅 Python 标准库）。
 
 读取语料文件（每行一条文本），去重保序后分批调 `/embed/batch` 预热
 服务端结果缓存——`.coli_usage` 暖语料思想的 embedding 映射：高频语料

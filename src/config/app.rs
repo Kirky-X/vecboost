@@ -209,7 +209,7 @@ pub struct AuthConfig {
     )]
     pub jwt_secret: Option<String>,
     pub token_expiration_hours: Option<i64>,
-    /// Token 有效期秒数覆盖（R-4 审计建议：亚小时粒度，供 E2E 过期测试与
+    /// Token 有效期秒数覆盖（审计建议：亚小时粒度，供 E2E 过期测试与
     /// 调试用）。设置且 >0 时优先于 `token_expiration_hours`；生产配置不建议使用。
     #[serde(default)]
     pub token_expiration_seconds: Option<i64>,

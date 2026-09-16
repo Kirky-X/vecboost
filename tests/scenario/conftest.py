@@ -264,7 +264,7 @@ def base_server():
 def zh_server():
     """M2 服务端 HF 在线下载 / 512 维 / 端口 9102。
 
-    DEFECT-HUB-001：hf-hub 客户端对 hf-mirror.com 报 "missing ETag header"，
+    hf-hub 客户端对 hf-mirror.com 报 "missing ETag header"，
     镜像下载不可用 → 自动回退直连 huggingface.co；实际来源记录于 run/zh/endpoint.txt。
     """
     s = None

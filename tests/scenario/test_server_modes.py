@@ -212,7 +212,7 @@ def test_r007_metrics_prometheus_format(base_server):
     st, body = http_get(base_server["port"], "/metrics")
     assert st == 200, f"/metrics HTTP {st}"
     text = body if isinstance(body, str) else json.dumps(body)
-    assert text.strip(), "DEFECT-METRICS-001: /metrics 返回空 body（Prometheus 导出未生效）"
+    assert text.strip(), "/metrics 返回空 body（Prometheus 导出未生效）"
 
 
 def test_r001_graceful_shutdown_sigterm():
@@ -269,7 +269,7 @@ def test_r006_library_mode_artifacts():
     text = f.read_text()
     if meta.exists() and meta.read_text().strip() != "0":
         pytest.fail(
-            f"DEFECT-LIB-001: library_usage 示例崩溃（退出码 {meta.read_text().strip()}）——"
+            f"library_usage 示例崩溃（退出码 {meta.read_text().strip()}）——"
             f"示例在 async runtime 内再次 block_on。输出尾部: {text[-200:]}"
         )
     assert "SDK 示例完成" in text or "embedding" in text.lower(), f"library 示例输出异常: {text[:200]}"

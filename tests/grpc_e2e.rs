@@ -3,7 +3,7 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information.
 
-//! gRPC E2E 集成测试 — sdforge 统一 Call 协议
+//! gRPC E2E 集成测试 — sdforge 统一 Call 协议（R-server-001 / R-api-001）
 //!
 //! 覆盖场景：
 //! - 11 个 grpc_method 正常路径（GP-N01…GP-N11）
@@ -514,7 +514,7 @@ async fn grpc_model_switch_roundtrip_and_failure_protection() {
 }
 
 // ---------------------------------------------------------------------------
-// 协议等价性（GP-EQ01/02）
+// 协议等价性（GP-EQ01/02，R-api-001）
 // ---------------------------------------------------------------------------
 
 #[tokio::test]

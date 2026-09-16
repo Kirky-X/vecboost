@@ -32,7 +32,7 @@ pub fn map_auth_config_to_garrison(auth: &AuthConfig) -> GarrisonConfig {
     // 会话超时：VecBoost 用小时（可选秒级覆盖），garrison 用秒。
     // 缺省 1 小时：不再回落 garrison 的 30 天默认 —— 滑动会话过长会使
     // token 泄漏后的窗口不可接受。
-    // token_expiration_seconds >0 时优先（R-4：亚小时粒度，供 E2E 过期
+    // token_expiration_seconds >0 时优先（亚小时粒度，供 E2E 过期
     // 测试/调试；生产不建议使用）。
     config.timeout = match (auth.token_expiration_seconds, auth.token_expiration_hours) {
         (Some(secs), _) if secs > 0 => secs,
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn test_map_timeout_seconds_override() {
-        // R-4：秒级覆盖优先于小时粒度（E2E 过期测试依赖）
+        // 秒级覆盖优先于小时粒度（E2E 过期测试依赖）
         let mut auth = make_auth_config();
         auth.token_expiration_seconds = Some(5);
         let garrison = map_auth_config_to_garrison(&auth);

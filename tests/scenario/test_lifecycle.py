@@ -1,4 +1,4 @@
-"""生命周期补缺套件（design.md M6 增量，R-server-002 / R-auth-002）。
+"""生命周期补缺套件（R-server-002 / R-auth-002）。
 
 现有套件已覆盖：非法配置拒启（r004）、env 端口覆盖（r002）、SIGTERM 优雅关闭
 （server_modes r001）、并发（r002）、限流 429/白名单/审计（r009/r011）、损坏
@@ -126,7 +126,7 @@ def test_lc03_graceful_shutdown_under_load():
             stop["flag"] = True
             proc.kill()
             proc.wait(timeout=10)
-            assert False, "LC03: 负载下 SIGTERM 35s 未退出（SHUTDOWN-001/002 回归）"
+            assert False, "LC03: 负载下 SIGTERM 35s 未退出（关停回归）"
         stop["flag"] = True
         for f in futures:
             try:

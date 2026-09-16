@@ -3,7 +3,7 @@
 #
 # Licensed under the MIT License
 # See LICENSE file in the project root for full license information.
-"""实测调优脚本（T025，port 自 colibri `autotune.py` 坐标下降思想）。
+"""实测调优脚本（port 自 colibri `autotune.py` 坐标下降思想）。
 
 对本机运行中的 vecboost 做坐标下降调优。候选轴：
   batch_wait_ms   ∈ {0, 2, 5, 10}
@@ -176,7 +176,7 @@ def self_test() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        description="vecboost 坐标下降实测调优（T025）。仅依赖 Python 标准库；"
+        description="vecboost 坐标下降实测调优。仅依赖 Python 标准库；"
                     "调优需本机运行中的 vecboost 服务。",
     )
     ap.add_argument("--base-url", default="http://127.0.0.1:8080",

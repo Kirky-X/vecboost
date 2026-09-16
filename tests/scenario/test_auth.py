@@ -150,7 +150,7 @@ def test_r010_malformed_authorization_header_rejected(auth_server):
 
 
 def test_r011_token_expiration_seconds_graceful():
-    """R-auth-011: token_expiration_seconds 秒级过期（R-4）——登录可用、
+    """R-auth-011: token_expiration_seconds 秒级过期——登录可用、
     过期后 401、服务存活。刷新 token 与 access token 同生命周期。"""
     port = 9133
     # token_expiration_seconds 属 [auth] 段:插在 [database] 段之前

@@ -307,7 +307,7 @@ pub struct BatchRerankResponse {
     pub statuses: Vec<BatchRerankQueryStatus>,
 }
 
-/// 批量重排单条 query 的处理状态（R-2 审计建议：消除"静默跳过"不可观测性）
+/// 批量重排单条 query 的处理状态（审计建议：消除"静默跳过"不可观测性）
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct BatchRerankQueryStatus {

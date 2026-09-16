@@ -3,7 +3,7 @@
 // Licensed under MIT License
 // See LICENSE file in the project root for full license information.
 
-//! Extractor 拒绝响应规范化中间件（R-1 审计建议）。
+//! Extractor 拒绝响应规范化中间件（审计建议）。
 //!
 //! axum 原生 `Json` extractor 的拒绝（缺字段/类型错/非法 JSON/缺 Content-Type）
 //! 产生 text/plain 错误体，与 handler 层结构化 `{type, message, field, value}`

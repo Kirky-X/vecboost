@@ -576,7 +576,7 @@ async fn init_auth(
         let garrison_config = map_auth_config_to_garrison(&config.auth);
 
         // garrison 0.9：init(dao, config, interface) → builder 链（build() 启动全局单例
-        // 后台 task）；firewall-* feature 启用时 builder 自动注入防火墙检查钩子（CRIT-010）
+        // 后台 task）；firewall-* feature 启用时 builder 自动注入防火墙检查钩子
         garrison::prelude::GarrisonManager::builder()
             .dao(Arc::new(dao))
             .config(Arc::new(garrison_config.clone()))
@@ -1273,7 +1273,7 @@ async fn app_main() -> anyhow::Result<()> {
             .with_state(app_state.clone());
         let mut app = app.merge(metrics_router);
 
-        // 404 fallback：未知路由返回结构化 JSON（与 R-1 错误契约一致）
+        // 404 fallback：未知路由返回结构化 JSON（与错误契约一致）
         app = app.fallback(|| async {
             use axum::http::{StatusCode, header};
             use axum::response::IntoResponse;
@@ -1309,7 +1309,7 @@ async fn app_main() -> anyhow::Result<()> {
             app = app.layer(from_fn(vecboost::i18n::i18n_middleware));
         }
 
-        // Extractor 拒绝规范化（R-1 审计建议）— axum Json extractor 拒绝的
+        // Extractor 拒绝规范化（审计建议）— axum Json extractor 拒绝的
         // text/plain 错误体改写为 handler 层同构的结构化错误 JSON
         #[cfg(feature = "http")]
         {

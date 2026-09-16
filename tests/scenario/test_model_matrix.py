@@ -1,4 +1,4 @@
-"""模型矩阵 HTTP 套件 — 4 模型 × 3 厂商 × 2 架构经 HTTP 验证（design.md M0，R-model-001）。
+"""模型矩阵 HTTP 套件 — 4 模型 × 3 厂商 × 2 架构经 HTTP 验证（R-model-001）。
 
 每个模型独立服务器进程（本地目录，无网络依赖）：
 - M1 BAAI/bge-small-en-v1.5     (BAAI, Bert, 384)

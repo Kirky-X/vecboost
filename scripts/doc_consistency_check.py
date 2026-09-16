@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""文档-代码一致性核验（specmark change: exhaustive-scenario-testing / T011）。
+"""文档-代码一致性核验。
 
 系统性提取文档中可验证声明并与代码核对：
 1. HTTP 端点：文档声明的 /api/1/* 与 /v1/*、/health、/metrics 路径必须存在于 #[forge] 注册

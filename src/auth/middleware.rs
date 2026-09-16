@@ -208,7 +208,7 @@ fn forbidden_response() -> Response {
     resp
 }
 
-/// 401 响应：结构化错误体（与 handler 层 R-1 契约 `{type, message, field, value}` 一致）。
+/// 401 响应：结构化错误体（与 handler 层错误契约 `{type, message, field, value}` 一致）。
 fn unauthorized_response(message_key: &str) -> Response {
     use axum::http::header;
     let body = serde_json::json!({
@@ -226,7 +226,7 @@ fn unauthorized_response(message_key: &str) -> Response {
     resp
 }
 
-/// 429 响应：结构化错误体（与 handler 层 R-1 契约一致）。
+/// 429 响应：结构化错误体（与 handler 层错误契约一致）。
 fn rate_limited_response() -> Response {
     use axum::http::header;
     let body = serde_json::json!({
@@ -601,7 +601,7 @@ mod tests {
         );
     }
 
-    /// 401 响应结构验证:含 R-1 契约的 `{type, message, field, value}` 结构
+    /// 401 响应结构验证:含错误契约的 `{type, message, field, value}` 结构
     #[test]
     fn unauthorized_response_has_structured_json_body() {
         let resp = unauthorized_response("auth-credentials-missing");
@@ -616,7 +616,7 @@ mod tests {
         );
     }
 
-    /// 429 响应结构验证:含 R-1 契约的 `{type, message, field, value}` 结构
+    /// 429 响应结构验证:含错误契约的 `{type, message, field, value}` 结构
     #[test]
     fn rate_limited_response_has_structured_json_body() {
         let resp = rate_limited_response();

@@ -62,7 +62,7 @@ pub async fn rerank_batch(
             Err(e) => {
                 log::warn!("Batch rerank: individual query failed, skipping: {}", e);
                 // 单个 query 失败不影响其他 query 的处理；失败经 statuses
-                // 可视化（R-2 审计建议），调用方可将响应对位回请求
+                // 可视化（审计建议），调用方可将响应对位回请求
                 statuses.push(BatchRerankQueryStatus {
                     index,
                     ok: false,
@@ -295,7 +295,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sdk_rerank_batch_partial_failure_statuses() {
-        // R-2 容错可视化：失败 query 不产生响应，但在 statuses 中可见
+        // 容错可视化：失败 query 不产生响应，但在 statuses 中可见
         let svc = make_svc();
         let req = BatchRerankRequest {
             queries: vec![

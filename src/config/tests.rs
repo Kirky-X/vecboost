@@ -268,7 +268,7 @@ enabled = true
 
 /// Regression test for trusted_proxies + max_text_length field defaults.
 /// Validates that configs omitting these fields fall back to defaults
-/// (验收点 6), and configs including them load correctly.
+/// (R-config-001/002 验收点 6), and configs including them load correctly.
 #[test]
 fn test_trusted_proxies_and_max_text_length_defaults_when_omitted() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());

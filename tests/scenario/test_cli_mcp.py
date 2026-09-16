@@ -1,6 +1,6 @@
-"""CLI / MCP 模式探针套件（design.md M4/M5，R-server-003）。
+"""CLI / MCP 模式探针套件（R-server-003）。
 
-- CLI 4 子命令：stdout 输出合法 JSON 结果（CLI-001 根因修复验证）、退出码 0
+- CLI 4 子命令：stdout 输出合法 JSON 结果（根因修复验证）、退出码 0
 - CLI 异常输入：空文本 → 退出码非 0 或错误输出
 - MCP：--mcp stdio 握手 + tools/list 含三工具 + tools/call 正常/异常
 - 二进制需以 cli / mcp feature 构建；缺失时 skip（打印提示）
@@ -81,7 +81,7 @@ def _extract_json(stdout: str) -> dict:
 
 @pytest.mark.skipif(not BIN.exists(), reason="二进制未构建")
 def test_cli_m01_embed_outputs_json():
-    """CLI-M01: embed 子命令输出合法 JSON 向量（CLI-001 根因修复验证）。"""
+    """CLI-M01: embed 子命令输出合法 JSON 向量（根因修复验证）。"""
     if not _cli_feature_available():
         pytest.skip("二进制未启用 cli feature（用 http,grpc,cli,auth 特性集构建后重跑）")
     r = _run_cli(["embed", "--req", json.dumps({"text": "cli probe hello"})])

@@ -1,11 +1,11 @@
-"""HTTP 协议矩阵套件 — 补齐 design.md M2 缺口（R-api-001 / R-embed-002/003 / R-rerank-002）。
+"""HTTP 协议矩阵套件（R-api-001 / R-embed-002/003 / R-rerank-002）。
 
 覆盖场景 ID（HM-*）：
 - OpenAI 兼容端点：单串/数组/base64/Matryoshka 维度/usage（HM-O01…HM-O05）
-- 相似度语义回归（SIM-002 不回归）：无关文本不得返回 1.0（HM-S01/HM-S02）
+- 相似度语义回归：无关文本不得返回 1.0（HM-S01/HM-S02）
 - 文件嵌入：正常 txt + 路径遍历拒绝 + 敏感目录拒绝（HM-F01…HM-F03）
 - 模型端点：current/info/models 可用（HM-M01…HM-M03）
-- 本地热切换往返 + 切换失败保护（HM-M04/HM-M05，SWITCH-001 不回归）
+- 本地热切换往返 + 切换失败保护（HM-M04/HM-M05）
 - 异常输入矩阵：非法 JSON/类型错误/top_k=0/空 documents/超长 rerank query（HM-A01…HM-A05）
 - i18n：Accept-Language zh/en 错误消息语言（HM-I01/HM-I02）
 """
@@ -81,7 +81,7 @@ def test_hm_o05_openai_empty_input_rejected(base_server):
     assert st == 400, f"空 input 应 400，实际 {st}: {str(body)[:150]}"
 
 
-# ---------------- 相似度语义回归（HM-S01/HM-S02，SIM-002 不回归） ----------------
+# ---------------- 相似度语义回归（HM-S01/HM-S02） ----------------
 
 def test_hm_s01_similarity_same_text_is_one(base_server):
     """HM-S01: 同文本 similarity = 1.0。"""
@@ -92,11 +92,11 @@ def test_hm_s01_similarity_same_text_is_one(base_server):
 
 
 def test_hm_s02_similarity_unrelated_not_one(base_server):
-    """HM-S02: 无关文本对不得返回 1.0（SIM-002 回归）。"""
+    """HM-S02: 无关文本对不得返回 1.0。"""
     st, body = http_post(base_server["port"], "/api/1/similarity",
                          {"source": "机器学习模型训练", "target": "今天的午餐是面条"})
     assert st == 200, f"{st}: {str(body)[:200]}"
-    assert body["score"] < 0.99, f"SIM-002 回归：无关文本 score={body['score']}"
+    assert body["score"] < 0.99, f"语义回归：无关文本 score={body['score']}"
 
 
 # ---------------- 文件嵌入（HM-F01…HM-F03） ----------------
@@ -159,10 +159,10 @@ def test_hm_m03_switch_roundtrip_local_paths(base_server):
 
 
 def test_hm_m04_switch_nonexistent_model_4xx(base_server):
-    """HM-M04/HM-M05: 切换不存在模型 → 4xx（SWITCH-001 不回归）且原模型可用。"""
+    """HM-M04/HM-M05: 切换不存在模型 → 4xx 且原模型可用。"""
     st, body = http_post(base_server["port"], "/api/1/model/switch",
                          {"model_name": "definitely-not-a-model-xyz"})
-    assert 400 <= st < 500, f"SWITCH-001 回归：应 4xx，实际 {st}: {str(body)[:150]}"
+    assert 400 <= st < 500, f"切换回归：应 4xx，实际 {st}: {str(body)[:150]}"
     st, emb = http_post(base_server["port"], "/api/1/embed", {"text": "still alive"})
     assert st == 200 and find_vector(emb) is not None, "切换失败后原模型应继续可用"
 

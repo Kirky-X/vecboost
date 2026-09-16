@@ -278,8 +278,9 @@ pub async fn require_role_middleware(request: Request, next: Next) -> Result<Res
 
 /// Auth 端点速率限制中间件(vuln-0006 修复)
 ///
-/// 应用到 `/api/1/auth/login`、`/api/1/auth/refresh`、`/api/1/auth/logout`
-/// 和 `/api/1/auth/me` 等认证端点,防止暴力破解和 token 枚举攻击。
+/// 应用到全部路由(main.rs 全局挂载):业务限流 + IETF RateLimit-* 头注入,
+/// 防资源耗尽;`/health`、`/metrics` 与 IP 白名单主机豁免。
+/// 认证端点(login/refresh)的暴力破解防护由本中间件的 path 语义覆盖。
 ///
 /// 通过 limiteron Governor 的 RequestContext 驱动限流。
 /// 白名单内的 IP 跳过限流。限流未启用时直接放行。
@@ -306,6 +307,14 @@ pub async fn auth_rate_limit_middleware(
         });
 
     if !rate_limit_enabled {
+        return Ok(next.run(request).await);
+    }
+
+    // 探活/指标端点豁免业务限流:LB/K8s 探针与 Prometheus 抓取器高频访问,
+    // 若被 429 会被编排层误判为不健康而摘除实例(探活雪崩)。/metrics 自带
+    // fail-closed 的 RateLimitModule 健康检查(metrics::endpoint),不受影响。
+    let path = request.uri().path();
+    if path == "/health" || path == "/metrics" {
         return Ok(next.run(request).await);
     }
 

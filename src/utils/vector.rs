@@ -174,10 +174,10 @@ pub fn calculate_similarity(
     }
 }
 
-/// 批量计算相似度 — 使用 rayon 并行化候选向量匹配。
+/// 批量计算相似度 — 串行迭代候选向量。
 ///
-/// 对应鲲鹏文档「阿姆达尔定律」：P（并行比例）越大加速越显著。
-/// 对 100+ 候选场景可获得显著多核加速。
+/// 有意不并行：`collect::<Result<_>>` 在 rayon 并行调度下"第一个错误"不可复现，
+/// 串行保证错误顺序确定。单对计算本身已是 SIMD 向量化实现。
 pub fn calculate_similarity_batch(
     query: &[f32],
     candidates: &[&[f32]],

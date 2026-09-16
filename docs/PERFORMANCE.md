@@ -10,7 +10,7 @@ VecBoost 为高吞吐、低延迟的嵌入向量服务而生。本指南汇总�
 <summary>📑 目录（点击展开）</summary>
 
 - [基准数据（实测）](#基准数据实测)
-- [吞吐基线（待实测）](#吞吐基线)
+- [吞吐基线](#吞吐基线)
 - [性能设计要点](#性能设计要点)
 - [GGUF 量化](#gguf-量化)
 - [开关与环境变量注册表](#开关与环境变量注册表)
@@ -25,6 +25,8 @@ VecBoost 为高吞吐、低延迟的嵌入向量服务而生。本指南汇总�
 ## 📊 基准数据（实测）
 
 > 口径：以下数据来自 `docs/benchmarks/` 归档，criterion 测量（`cargo bench --release` / `--quick`），采集日期 2026-08（Linux x86_64，Rust stable）。微基准测量噪声约 ±5-10%；`kunpeng_tuning_after.md` 中 dot_product/768 与 manhattan_distance/1024 的波动在正常范围内。环境差异（CPU 频率、系统负载、编译器版本）可导致 ±50% 级波动（见 `gpu_pipeline_after.md` 归因分析）。
+>
+> **2026-09-16 回归扫描**：以上基准已全量复测，全部无回退（最差 +5.8%，噪声带内），详见 [regression_sweep_2026-09-16.md](benchmarks/regression_sweep_2026-09-16.md)。
 
 ### 向量相似度（similarity_bench）
 
@@ -42,7 +44,11 @@ VecBoost 为高吞吐、低延迟的嵌入向量服务而生。本指南汇总�
 
 全部函数在全部维度下加速超过 1.4x；零 unsafe 代码、零新依赖。完整数据见 [baseline_results.md](benchmarks/baseline_results.md)。
 
+2026-09-16 复测：16 项中 10 项快于 `kunpeng_tuning_after` 基线（cosine/1024 356.8 ns，标量对照 2.9x），最差 +5.8% 在噪声带内，无回退。
+
 ### 批调度（batch_scheduling_bench）
+
+> **⚠️ 历史数据**：DynamicBatchScheduler 与 ContinuousBatchLoop 已于 f70016e（2026-09-16）退役，现行机制为时间窗拼批 `assemble_batch`（`[pipeline.worker] batch_wait_ms`，默认 5ms，`0` = 排空式 kill-switch）。下表为退役组件的归档记录，**不可与现行机制对比**。
 
 DynamicBatchScheduler（固定等待窗）与 ContinuousBatchLoop（1ms tick + 条件刷新）对比（Mock 引擎，100 请求稳定负载 / 3 轮 × 50 请求突发负载）：
 
@@ -53,6 +59,13 @@ DynamicBatchScheduler（固定等待窗）与 ContinuousBatchLoop（1ms tick + �
 | **ContinuousBatchLoop** | **1.110 s（5.6x）** | **157 ms（2.9x）** |
 
 完整数据见 [batch_baseline_results.md](benchmarks/batch_baseline_results.md)。
+
+现行时间窗拼批基准（2026-09-16，预填队列口径——稳态耗时 ≈ 窗口时长 + ~1ms 轮询开销）：
+
+| 场景 | wait_50ms | wait_20ms | wait_5ms |
+|------|-----------|-----------|----------|
+| steady（预填 100 请求排空） | 50.9 ms | 21.0 ms | 6.1 ms |
+| burst（3 轮 × 50 请求） | 152.7 ms | 62.7 ms | 18.3 ms |
 
 ### 语义缓存（semantic_cache_bench）
 
@@ -65,6 +78,8 @@ DynamicBatchScheduler（固定等待窗）与 ContinuousBatchLoop（1ms tick + �
 | trigram 搜索（10,000 条目） | ~9.6 ms |
 
 精确匹配为纳秒级（O(1)）；trigram 暴力搜索 O(n) 线性增长，10K 条目 < 10 ms。完整数据见 [semantic_cache_baseline_results.md](benchmarks/semantic_cache_baseline_results.md) 与 [kunpeng_tuning_after.md](benchmarks/kunpeng_tuning_after.md)。
+
+2026-09-16 复测：hit 9.5 ns / miss 9.7 ns / trigram 90.6 µs / 912 µs / 9.14 ms，全部持平或更快，无回退。
 
 ---
 
@@ -80,6 +95,7 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 |------|------|--------|---------------|------|
 | AMD Ryzen 9 9950X（WSL2 可见 6C/12T），70GB RAM，Linux(WSL2) x86_64 | 默认构建 | 中位 70.3 ms | 中位 173.6 ms（≈184 texts/s） | 2026-09-15 |
 | 同上 | `--features mkl`（hgemm_ 垫片） | 中位 17.5 ms（**4.0×**） | 中位 148.4 ms（**1.17×**） | 2026-09-16；`RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"` 绕开 lld 链接 MKL 的已知问题 |
+| 同上 | 默认构建 + `--features mkl`（同晚连续复测） | 默认 81.8 ms / mkl 20.5 ms（**4.0×**） | 默认 193.7 ms / mkl 157.6 ms（**1.23×**） | 2026-09-16 晚回归扫描（[regression_sweep_2026-09-16.md](benchmarks/regression_sweep_2026-09-16.md)）；绝对值较上两行整体上浮 ~15-17% 为持续负载降频（同代码 quick 口径实测 69.7 ms 与 2026-09-15 行吻合），**加速比不变，非代码回退** |
 
 > **加速后端说明（T011 → T035 收敛闭环）**：mkl 已可用。上游版本错配——candle 0.11 调用 fp16 GEMM `hgemm_`，而 intel-mkl-src 0.8.1 Linux 静态路径锁死 MKL 2020.1（ghcr.io/rust-math，无该符号）——由 `src/engine/mkl_shim.rs` 的 `hgemm_` 垫片解决（f16 入 → f32 累加 `sgemm_` → f16 出，与硬件 hgemm 数值语义一致）。两个注意点：① 本机 rust-lld 链接 MKL 存在额外问题，需 `RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"`；② `--features mkl` 保持 opt-in，默认构建不引入 MKL。accelerate（macOS）保持 opt-in，本机无法验证。单文本 4.0× 主要来自 fp32 GEMM；32 批仅 1.17×，说明批路径瓶颈已不在 matmul。
 
@@ -89,7 +105,7 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 
 - **时间窗动态拼批**：`[pipeline.worker] batch_wait_ms`（默认 5ms，`0` 还原排空式），窗口内聚合请求凑满 `max_batch_size` 提前发出；
 - **批内去重**：`/embed/batch` 相同文本批内只推理一次，结果按索引回填（字节等同）；
-- **SIMD 相似度**：`src/utils/vector.rs` chunk-based 展开向量化；批量相似度经 rayon `par_iter()` 并行（多候选场景约 3-5x，8 核）；
+- **SIMD 相似度**：`src/utils/vector.rs` chunk-based 展开向量化；批量相似度 `calculate_similarity_batch` 为串行迭代（有意取舍：`collect::<Result>` 在 rayon 并行下"第一个错误"不可复现；该函数当前仅测试使用，服务热路径无批量相似度调用）；
 - **批量 CLS 提取**：`narrow(1,0,1).squeeze(1).to_vec2()` 单次批量张量操作替代逐样本索引（批量 32 样本 ~30x 张量索引开销减少）；
 - **物理核线程调优**：tokio/rayon 按物理核生效（SMT/E-core 检测），`VECBOOST_NO_THREAD_TUNE=1` 关闭；多 socket 启动输出 numactl 建议；
 - **jemalloc**：Linux glibc 下 tikv-jemallocator 全局分配器（background_threads）；
@@ -103,7 +119,7 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 - **开关**：`[model] quantized = true` + `model_path` 指向 `.gguf` 文件，且构建启用 `--features quantized-gguf`。默认 `false`（safetensors fp32 路径不变）。
 - **回退**：`quantized = false` 或路径非 `.gguf` 即回原路径；未启用 feature 的构建遇到 GGUF 配置时启动报错（不静默回退）。
 - **GGUF 获取**：外部文件用 `llama.cpp` 的 `convert_hf_to_gguf.py` + `llama-quantize` 转换（放 `models/` 下记录 sha256），经 `VECBOOST_GGUF_MODEL` 供质量门；也可用内置 `write_gguf_from_safetensors` 从本地 safetensors 自产（llama.cpp 命名约定，质量门缺省路径，零网络依赖）。
-- **质量门**（`tests/quantized_parity.rs`，golden 语料 32 条中英混合）：Q8_0 与 fp32 输出余弦中位数 ≥ **0.98**，Q4_K ≥ **0.95**；未达门值不得标注为推荐配置。——**2026-09-16 实测通过**：
+- **质量门**（`tests/quantized_parity.rs`，golden 语料 32 条中英混合）：Q8_0 与 fp32 输出余弦中位数 ≥ **0.98**，Q4_K ≥ **0.95**；未达门值不得标注为推荐配置。——**2026-09-16 实测通过（当晚回归扫描复测逐位一致）**：
   - Q8_0：余弦中位数 **0.9999**（min 0.9998）✓
   - Q4_K：余弦中位数 **0.9987**（min 0.9955）✓
 - **压缩实测**（bge-small-en-v1.5，fp32 133.5 MB）：Q8_0 **35.5 MB（3.76×）**，75 张量零兜底；Q4_K 56.4 MB（2.37×），63/75 张量因 384 维对 Q4_K 256 块不整除回退 F16（candle 0.11 量化无 padding）。**bge-small 级模型推荐 Q8_0**；Q4_K 真正生效需上游 padding 能力。

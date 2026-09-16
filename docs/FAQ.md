@@ -207,7 +207,7 @@ cargo bench -p vecboost
 
 ### ❓ 性能数据在哪里？为什么 README 不写具体 QPS？
 
-基准数据一律来自 `docs/benchmarks/` 实测归档（相似度 SIMD 3.06x、ContinuousBatchLoop 5.6x、语义缓存 ~10ns 命中等），吞吐基线（`embed_throughput_bench`）依赖本地模型，**标注待实测**——项目禁止编造基准数字。测量方法与复现命令见 [⚡ 性能指南](PERFORMANCE.md)。
+基准数据一律来自 `docs/benchmarks/` 实测归档（相似度 SIMD 3.06x、语义缓存 ~10ns 命中等），吞吐基线（`embed_throughput_bench`）已用本地 bge-small 实测：默认构建单文本 70.3 ms / 32 批 173.6 ms，`--features mkl` 4.0× 加速——项目禁止编造基准数字。2026-09-16 回归扫描全量复测无回退，详见 [回归扫描归档](benchmarks/regression_sweep_2026-09-16.md)；测量方法与复现命令见 [⚡ 性能指南](PERFORMANCE.md)。注意：旧归档中 `ContinuousBatchLoop 5.6x` 批调度数据对应已退役组件，现行时间窗拼批口径不可与其直接对比。
 
 ### ❓ 如何诊断服务状态？
 

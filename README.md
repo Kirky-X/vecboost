@@ -336,7 +336,7 @@ cargo audit
 
 ## 📊 性能
 
-基准数据来自 `docs/benchmarks/` 实测归档（criterion，2026-08 采集，Linux x86_64，噪声约 ±5-10%）：SIMD 向量相似度较标量最高 **3.06x** 加速（1024 维 cosine 约 341.7 ns），`ContinuousBatchLoop` 连续批调度较固定等待 **5.6x**（100 请求稳定负载 1.110s vs 6.194s），语义缓存精确命中约 10 ns；吞吐基线（`embed_throughput_bench`）需本地模型，**待实测**。完整基准表、性能设计要点（时间窗拼批/批内去重/SIMD/线程调优/jemalloc）、GGUF 量化与调优开关注册表见 [⚡ 性能指南](docs/PERFORMANCE.md)，微基准可用 `cargo bench` 复现（命令见上文[测试](#测试)一节）。
+基准数据来自 `docs/benchmarks/` 实测归档（criterion，2026-08 采集、2026-09-16 回归扫描复测无回退，Linux x86_64，噪声约 ±5-10%）：SIMD 向量相似度较标量最高 **3.06x** 加速（1024 维 cosine 约 341.7 ns），语义缓存精确命中约 10 ns，吞吐基线（`embed_throughput_bench`，本地 bge-small）默认构建单文本 70.3 ms、`--features mkl` **4.0×** 加速。完整基准表、性能设计要点（时间窗拼批/批内去重/SIMD/线程调优/jemalloc）、GGUF 量化与调优开关注册表见 [⚡ 性能指南](docs/PERFORMANCE.md)，微基准可用 `cargo bench` 复现（命令见上文[测试](#测试)一节）。
 
 ---
 
@@ -368,7 +368,7 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 <tr><td align="center">🚧</td><td>调优开关（Unreleased）</td><td>GGUF 量化、向量输出量化、多模型 LFRU 驻留、缓存 WAL、硬件感知规划、doctor 诊断、启动预热</td></tr>
 <tr><td align="center">📋</td><td>量化推理后端</td><td>GGUF 推理后端待 candle-transformers 上游 quantized BERT 落地（路由/魔数校验/质量门脚手架已就绪）</td></tr>
 <tr><td align="center">📋</td><td>多副本会话外置</td><td>auth 会话外置需 garrison db 后端补齐（pool-backed DAO）</td></tr>
-<tr><td align="center">📋</td><td>性能基线补全</td><td><code>embed_throughput_bench</code> 吞吐基线待实测；MKL/Accelerate 在链接正常工具链上的对比基线</td></tr>
+<tr><td align="center">📋</td><td>性能基线补全</td><td>吞吐基线与 MKL 对比基线已实测（2026-09-16，见 <a href="docs/PERFORMANCE.md">性能指南</a>）；Accelerate（macOS）待验证</td></tr>
 <tr><td align="center">📋</td><td>文档与可观测性</td><td>ReDoc 文档（v0.3.0）、Grafana 预配置仪表板</td></tr>
 </table>
 

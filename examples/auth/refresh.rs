@@ -22,6 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         enabled: true,
         jwt_secret: Some("demo-secret-at-least-32-characters-long!!".to_string()),
         token_expiration_hours: Some(24),
+        token_expiration_seconds: None,
         default_admin_username: Some("admin".to_string()),
         default_admin_password: Some("SecurePass123!".to_string()),
         csrf: vecboost::config::app::CsrfConfig::default(),

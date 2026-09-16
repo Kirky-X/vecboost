@@ -12,7 +12,9 @@
 use crate::api::embedding::{kit_internal_error, to_api_error};
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 use crate::api::init::state;
-use crate::domain::{BatchRerankRequest, BatchRerankResponse, RerankRequest, RerankResponse};
+use crate::domain::{
+    BatchRerankQueryStatus, BatchRerankRequest, BatchRerankResponse, RerankRequest, RerankResponse,
+};
 use crate::error::VecboostError;
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 use crate::registry::RerankModule;
@@ -46,16 +48,33 @@ pub async fn rerank_batch(
     max_query_length: usize,
 ) -> Result<BatchRerankResponse, VecboostError> {
     let mut responses = Vec::with_capacity(req.queries.len());
-    for q in req.queries {
+    let mut statuses = Vec::with_capacity(req.queries.len());
+    for (index, q) in req.queries.into_iter().enumerate() {
         match svc.process_rerank(q, max_documents, max_query_length).await {
-            Ok(resp) => responses.push(resp),
+            Ok(resp) => {
+                responses.push(resp);
+                statuses.push(BatchRerankQueryStatus {
+                    index,
+                    ok: true,
+                    error: None,
+                });
+            }
             Err(e) => {
                 log::warn!("Batch rerank: individual query failed, skipping: {}", e);
-                // 单个 query 失败不影响其他 query 的处理
+                // 单个 query 失败不影响其他 query 的处理；失败经 statuses
+                // 可视化（R-2 审计建议），调用方可将响应对位回请求
+                statuses.push(BatchRerankQueryStatus {
+                    index,
+                    ok: false,
+                    error: Some(e.to_string()),
+                });
             }
         }
     }
-    Ok(BatchRerankResponse { responses })
+    Ok(BatchRerankResponse {
+        responses,
+        statuses,
+    })
 }
 
 // =============================================================================
@@ -261,6 +280,8 @@ mod tests {
         };
         let result = rerank_batch(&svc, req, 100, 8192).await.unwrap();
         assert_eq!(result.responses.len(), 2);
+        assert_eq!(result.statuses.len(), 2);
+        assert!(result.statuses.iter().all(|s| s.ok && s.error.is_none()));
     }
 
     #[tokio::test]
@@ -269,6 +290,36 @@ mod tests {
         let req = BatchRerankRequest { queries: vec![] };
         let result = rerank_batch(&svc, req, 100, 8192).await.unwrap();
         assert!(result.responses.is_empty());
+        assert!(result.statuses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sdk_rerank_batch_partial_failure_statuses() {
+        // R-2 容错可视化：失败 query 不产生响应，但在 statuses 中可见
+        let svc = make_svc();
+        let req = BatchRerankRequest {
+            queries: vec![
+                RerankRequest {
+                    query: "valid".to_string(),
+                    documents: vec!["doc a".to_string()],
+                    top_k: None,
+                    return_documents: None,
+                },
+                RerankRequest {
+                    query: String::new(),
+                    documents: vec!["doc b".to_string()],
+                    top_k: None,
+                    return_documents: None,
+                },
+            ],
+        };
+        let result = rerank_batch(&svc, req, 100, 8192).await.unwrap();
+        assert_eq!(result.responses.len(), 1, "失败 query 不产生响应");
+        assert_eq!(result.statuses.len(), 2, "statuses 与请求一一对位");
+        assert!(result.statuses[0].ok);
+        assert!(!result.statuses[1].ok);
+        assert!(result.statuses[1].error.is_some());
+        assert_eq!(result.statuses[1].index, 1);
     }
 
     #[tokio::test]

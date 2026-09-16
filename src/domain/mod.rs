@@ -301,6 +301,23 @@ impl FromStr for BatchRerankRequest {
 #[cfg_attr(feature = "schema", derive(ToSchema))]
 pub struct BatchRerankResponse {
     pub responses: Vec<RerankResponse>,
+    /// 与请求 queries 按下标一一对应的状态位（容错语义可视化）：
+    /// 单个 query 失败不产生响应（responses 仅含成功项），但在此处可见
+    /// 失败原因，调用方据此把响应对位回请求。
+    pub statuses: Vec<BatchRerankQueryStatus>,
+}
+
+/// 批量重排单条 query 的处理状态（R-2 审计建议：消除"静默跳过"不可观测性）
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(ToSchema))]
+pub struct BatchRerankQueryStatus {
+    /// 对应请求 queries 的下标
+    pub index: usize,
+    /// 该 query 是否成功产出响应
+    pub ok: bool,
+    /// 失败原因（ok=true 时省略）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// 服务响应枚举 — pipeline 调度器统一返回类型
@@ -515,9 +532,32 @@ mod tests {
 
     #[test]
     fn test_batch_rerank_response_serialize() {
-        let resp = BatchRerankResponse { responses: vec![] };
+        let resp = BatchRerankResponse {
+            responses: vec![],
+            statuses: vec![BatchRerankQueryStatus {
+                index: 0,
+                ok: false,
+                error: Some("empty query".to_string()),
+            }],
+        };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("responses"));
+        assert!(json.contains("statuses"));
+        // 失败状态必须携带 error;成功状态的 error 字段省略
+        assert!(json.contains("error"));
+        let ok_only = BatchRerankResponse {
+            responses: vec![],
+            statuses: vec![BatchRerankQueryStatus {
+                index: 0,
+                ok: true,
+                error: None,
+            }],
+        };
+        let ok_json = serde_json::to_string(&ok_only).unwrap();
+        assert!(
+            !ok_json.contains("\"error\""),
+            "成功状态不应序列化 error 字段"
+        );
     }
 
     #[test]

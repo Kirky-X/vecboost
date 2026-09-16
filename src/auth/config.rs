@@ -18,7 +18,8 @@ pub const DEFAULT_TOKEN_EXPIRATION_SECS: i64 = 3600;
 /// 将 VecBoost `AuthConfig` 映射为 garrison `GarrisonConfig`。
 ///
 /// 映射规则：
-/// - `token_expiration_hours` → `timeout`（hours × 3600 秒）
+/// - `token_expiration_seconds` >0 时 → `timeout`（秒，最高优先级）
+/// - 否则 `token_expiration_hours` → `timeout`（hours × 3600 秒）
 /// - `jwt_secret` → `jwt_secret`（JWT 签名密钥）
 /// - `token_style` 固定 `"jwt"`
 /// - `throw_on_not_login` = `auth.enabled`
@@ -28,12 +29,14 @@ pub const DEFAULT_TOKEN_EXPIRATION_SECS: i64 = 3600;
 pub fn map_auth_config_to_garrison(auth: &AuthConfig) -> GarrisonConfig {
     let mut config = GarrisonConfig::default_config();
 
-    // 会话超时：VecBoost 用小时，garrison 用秒。
+    // 会话超时：VecBoost 用小时（可选秒级覆盖），garrison 用秒。
     // 缺省 1 小时：不再回落 garrison 的 30 天默认 —— 滑动会话过长会使
     // token 泄漏后的窗口不可接受。
-    config.timeout = match auth.token_expiration_hours {
-        Some(hours) if hours > 0 => hours * 3600,
-        Some(0) | None => DEFAULT_TOKEN_EXPIRATION_SECS,
+    // token_expiration_seconds >0 时优先（R-4：亚小时粒度，供 E2E 过期
+    // 测试/调试；生产不建议使用）。
+    config.timeout = match (auth.token_expiration_seconds, auth.token_expiration_hours) {
+        (Some(secs), _) if secs > 0 => secs,
+        (_, Some(hours)) if hours > 0 => hours * 3600,
         _ => DEFAULT_TOKEN_EXPIRATION_SECS,
     };
 
@@ -66,6 +69,7 @@ mod tests {
             enabled: true,
             jwt_secret: Some("test-jwt-secret-at-least-32-chars!!".to_string()),
             token_expiration_hours: Some(24),
+            token_expiration_seconds: None,
             default_admin_username: Some("admin".to_string()),
             default_admin_password: Some("SecurePass123!".to_string()),
             csrf: crate::config::app::CsrfConfig::default(),
@@ -76,6 +80,24 @@ mod tests {
     #[test]
     fn test_map_timeout_from_hours() {
         let auth = make_auth_config();
+        let garrison = map_auth_config_to_garrison(&auth);
+        assert_eq!(garrison.timeout, 24 * 3600);
+    }
+
+    #[test]
+    fn test_map_timeout_seconds_override() {
+        // R-4：秒级覆盖优先于小时粒度（E2E 过期测试依赖）
+        let mut auth = make_auth_config();
+        auth.token_expiration_seconds = Some(5);
+        let garrison = map_auth_config_to_garrison(&auth);
+        assert_eq!(garrison.timeout, 5);
+    }
+
+    #[test]
+    fn test_map_timeout_seconds_non_positive_ignored() {
+        // 非正秒数不生效，回落小时粒度
+        let mut auth = make_auth_config();
+        auth.token_expiration_seconds = Some(0);
         let garrison = map_auth_config_to_garrison(&auth);
         assert_eq!(garrison.timeout, 24 * 3600);
     }

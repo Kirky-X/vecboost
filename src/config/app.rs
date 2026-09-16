@@ -81,16 +81,16 @@ pub struct ModelConfig {
     pub expected_dimension: Option<usize>,
     #[garde(skip)]
     pub max_sequence_length: Option<usize>,
-    /// GGUF 量化模型开关（T013/T015）：true 且 model_path 以 `.gguf` 结尾时
+    /// GGUF 量化模型开关：true 且 model_path 以 `.gguf` 结尾时
     /// 选用量化引擎；默认 false。对应运行时 `ModelConfig.quantized`。
     #[garde(skip)]
     #[serde(default)]
     pub quantized: bool,
-    /// 最大驻留模型数（T019）：对应 `ModelManager::with_residency`；
+    /// 最大驻留模型数：对应 `ModelManager::with_residency`；
     /// None = 不限制（现状行为）。
     #[garde(skip)]
     pub max_resident_models: Option<usize>,
-    /// 驻留内存预算 MB（T019）：超预算按 LFRU 硬驱逐；None = 不限制。
+    /// 驻留内存预算 MB：超预算按 LFRU 硬驱逐；None = 不限制。
     #[garde(skip)]
     pub resident_memory_budget_mb: Option<u64>,
 }
@@ -106,10 +106,10 @@ pub struct EmbeddingConfig {
     pub cache_enabled: bool,
     #[garde(skip)]
     pub cache_size: usize,
-    /// T021：embedding 缓存 WAL 持久文件路径（None = 纯内存，默认）。
+    /// embedding 缓存 WAL 持久文件路径（None = 纯内存，默认）。
     #[garde(skip)]
     pub persist_path: Option<String>,
-    /// T022：WAL 超过该字节数触发启动紧凑化（None = 1 GiB）。
+    /// WAL 超过该字节数触发启动紧凑化（None = 1 GiB）。
     #[garde(skip)]
     pub persist_max_bytes: Option<u64>,
     #[garde(range(min = 1))]
@@ -212,6 +212,10 @@ pub struct AuthConfig {
     )]
     pub jwt_secret: Option<String>,
     pub token_expiration_hours: Option<i64>,
+    /// Token 有效期秒数覆盖（R-4 审计建议：亚小时粒度，供 E2E 过期测试与
+    /// 调试用）。设置且 >0 时优先于 `token_expiration_hours`；生产配置不建议使用。
+    #[serde(default)]
+    pub token_expiration_seconds: Option<i64>,
     pub default_admin_username: Option<String>,
     #[serde(
         default,
@@ -303,7 +307,7 @@ pub struct SemanticCacheConfig {
     pub similarity_threshold: f32,
     /// 语义索引最大条目数
     pub capacity: usize,
-    /// 向量比较模式（T018）：exact（默认）| i8 | binary；
+    /// 向量比较模式：exact（默认）| i8 | binary；
     /// i8/binary 用 vquant 粗筛 + 原始向量复验，仅内部比较路径。
     #[serde(default = "default_comparison_mode")]
     pub comparison_mode: String,
@@ -324,11 +328,11 @@ fn default_comparison_mode() -> String {
     "exact".to_string()
 }
 
-/// 设备与硬件感知配置（T024，`[device]` 段）。
+/// 设备与硬件感知配置（`[device]` 段）。
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct DeviceConfig {
-    /// 硬件感知启动规划（T023 planner）：true 时用探测计划填充**未显式配置**
+    /// 硬件感知启动规划（planner）：true 时用探测计划填充**未显式配置**
     /// 的字段（显式值优先），计划全文进启动日志；默认 false（零计划行为）。
     pub auto_plan: bool,
 }
@@ -641,9 +645,10 @@ impl Default for AuthConfig {
             enabled: false,
             jwt_secret: None,
             token_expiration_hours: Some(DEFAULT_TOKEN_EXPIRATION_HOURS),
+            token_expiration_seconds: None,
             default_admin_username: None,
             default_admin_password: None,
-            // T020 修订:CSRF 默认关闭。本 API 为纯 Bearer 认证(garrison
+            // 修订:CSRF 默认关闭。本 API 为纯 Bearer 认证(garrison
             // is_read_cookie=false),无 Cookie 则无 CSRF 攻击面;默认开启反而令
             // 标准 API 客户端(无 Origin 头的服务器间调用)被 403 拒绝(实测)。
             // 需要浏览器会话场景时显式设 csrf.enabled=true。
@@ -986,7 +991,7 @@ mod tests {
 
         assert!(!config.auth.enabled);
         assert_eq!(config.auth.token_expiration_hours, Some(24));
-        // T020 修订:CSRF 默认关闭(纯 Bearer API 无 Cookie 攻击面)
+        // 修订:CSRF 默认关闭(纯 Bearer API 无 Cookie 攻击面)
         assert!(!config.auth.csrf.enabled);
 
         assert!(config.audit.enabled);
@@ -1267,6 +1272,7 @@ mod tests {
             enabled: true,
             jwt_secret: Some("my-secret-key-at-least-32-chars!!".to_string()),
             token_expiration_hours: Some(48),
+            token_expiration_seconds: None,
             default_admin_username: Some("admin".to_string()),
             default_admin_password: Some("MyPassword123!".to_string()),
             csrf: CsrfConfig { enabled: true },

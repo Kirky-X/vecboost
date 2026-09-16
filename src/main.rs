@@ -27,7 +27,7 @@ const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 /// 常驻任务（inklog 定时器等）不可取消，默认 Drop 会无限等待导致进程挂死。
 const SHUTDOWN_RUNTIME_DRAIN_SECS: u64 = 10;
 
-/// 线程调优（T009/T010）：解析优先级 显式配置 > 物理核检测 > num_cpus 回退。
+/// 线程调优：解析优先级 显式配置 > 物理核检测 > num_cpus 回退。
 /// `VECBOOST_NO_THREAD_TUNE=1` 时跳过检测直接回退。
 fn resolve_runtime_threads(explicit: Option<usize>) -> (usize, Option<usize>, usize) {
     if std::env::var("VECBOOST_NO_THREAD_TUNE").as_deref() == Ok("1") {
@@ -44,7 +44,7 @@ fn resolve_runtime_threads(explicit: Option<usize>) -> (usize, Option<usize>, us
     (effective, detected, fallback)
 }
 
-/// T024 探测采集：RAM（sys-info）、物理核（thread_tune）、模型目录大小。
+/// 探测采集：RAM（sys-info）、物理核（thread_tune）、模型目录大小。
 /// 任一探针失败即为 None，不参与规划（不猜测）；GPU 探测暂无 bin 可达路径，记 None。
 fn gather_probes(config: &AppConfig) -> vecboost::planner::Probes {
     let avail_ram_mb = sys_info::mem_info().ok().map(|m| m.avail / 1024);
@@ -95,7 +95,7 @@ fn model_dir_size_mb(path: &str) -> Option<u64> {
     }
 }
 
-/// NUMA 检测（T010）：多 socket 时返回建议文本，单 socket/解析失败返回 None。
+/// NUMA 检测：多 socket 时返回建议文本，单 socket/解析失败返回 None。
 fn numa_advice() -> Option<String> {
     let out = std::process::Command::new("lscpu").output().ok()?;
     if !out.status.success() {
@@ -289,7 +289,7 @@ async fn init_engine_and_services(
     let cache_enabled = config.embedding.cache_enabled;
     let cache_size = config.embedding.cache_size;
 
-    // T021/T022：[embedding] persist_path 配置时启用 WAL 持久层并在启动时回放。
+    // [embedding] persist_path 配置时启用 WAL 持久层并在启动时回放。
     const DEFAULT_PERSIST_MAX_BYTES: u64 = 1 << 30;
     let service = if cache_enabled && cache_size > 0 {
         log::info!("KV Cache enabled with size: {}", cache_size);
@@ -321,7 +321,7 @@ async fn init_engine_and_services(
         EmbeddingService::new(engine.clone(), Some(model_config.clone()))
     };
 
-    // T033：server 模式装配 ModelManager——LFRU 驻留配置 + heat warmstart。
+    // server 模式装配 ModelManager——LFRU 驻留配置 + heat warmstart。
     // 此前 service 的 model_manager 恒 None：switch/unload 在服务模式不可用，
     // [model] max_resident_models / resident_memory_budget_mb 无人消费。
     let model_manager = {
@@ -351,7 +351,7 @@ async fn init_engine_and_services(
         .await;
     let service = service.with_model_manager(Arc::new(model_manager));
 
-    // T034：server 模式注入语义缓存（[semantic_cache] enabled=true 时；
+    // server 模式注入语义缓存（[semantic_cache] enabled=true 时；
     // 默认 false 行为不变）。comparison_mode 非法值启动报错，不静默回退。
     let service = if config.semantic_cache.enabled {
         let mode: vecboost::ComparisonMode = config
@@ -378,7 +378,7 @@ async fn init_engine_and_services(
     };
 
     let service = Arc::new(RwLock::new(service));
-    // T022：启动回放 WAL 重建缓存（未启用持久层时为 no-op）。
+    // 启动回放 WAL 重建缓存（未启用持久层时为 no-op）。
     service.read().await.load_persisted_cache().await;
 
     let rerank_service = Arc::new(RwLock::new(RerankService::new(
@@ -419,7 +419,7 @@ async fn run_mcp_server(
 /// CLI 子命令名单的单一来源 —— sdforge inventory 注册(forge CLI 宏),
 /// 不再维护手工数组。docs 子命令由 sdforge 自动附加。
 /// `doctor` 例外：在服务装配前短路运行（诊断必须能在模型损坏时工作），
-/// 不走需要 EmbeddingService 的 inventory 分发路径（T027）。
+/// 不走需要 EmbeddingService 的 inventory 分发路径。
 #[cfg(feature = "cli")]
 fn cli_subcommand_names() -> Vec<String> {
     let mut names: Vec<String> = CliBuilder::new()
@@ -661,7 +661,7 @@ async fn init_pipeline(
             batch_wait_ms: config.pipeline.worker.batch_wait_ms,
         };
 
-        // T024：[device] auto_plan 为 true 时，用硬件探测计划填充未显式配置字段。
+        // [device] auto_plan 为 true 时，用硬件探测计划填充未显式配置字段。
         // 显式判定：server.workers（Option，Some 即显式）；其余字段以"与编译期
         // 默认不同"近似判定（显式设为默认值会被视为未显式，见注释与启动日志）。
         if config.device.auto_plan {
@@ -690,7 +690,7 @@ async fn init_pipeline(
             let mut bw = worker_config.batch_wait_ms;
             vecboost::planner::apply_plan(&mut wt, &mut bs, &mut bw, &hw_plan, &explicit);
             // worker_threads 语义：plan 值为 tokio/rayon 级线程建议，此处仅日志；
-            // 实际 runtime 线程数在 main() 启动时已按 T009 确定（显式优先）。
+            // 实际 runtime 线程数在 main() 启动时已按 确定（显式优先）。
             log::info!(
                 "auto_plan: 应用结果 max_batch_size={} batch_wait_ms={} \
                  （计划 max_batch_size={} batch_wait_ms={} worker_threads 建议={}）",
@@ -807,7 +807,7 @@ fn validate_bind_safety(host: &str, auth_enabled: bool) -> anyhow::Result<()> {
 }
 
 fn main() {
-    // T009：tokio runtime 线程数取物理核检测（显式 server.workers 优先，
+    // tokio runtime 线程数取物理核检测（显式 server.workers 优先，
     // VECBOOST_NO_THREAD_TUNE=1 回退 num_cpus）。配置在运行时前 best-effort
     // 预读，失败则由 app_main 内正式加载路径报错。
     let pre_explicit: Option<usize> = AppConfig::load_via_confers()
@@ -868,6 +868,11 @@ fn strip_config_args(mut args: Vec<String>) -> (Vec<String>, Option<String>) {
             args.remove(i);
             if i < args.len() {
                 config_path = Some(args.remove(i));
+            } else {
+                // fail-fast:`--config` 悬空（缺路径参数）不得静默回落默认配置启动,
+                // 否则用户以为在改自定义配置、实际跑的是默认值。退出码与未知子命令一致。
+                eprintln!("Error: --config requires a path argument (--config <path>)");
+                std::process::exit(2);
             }
         } else if let Some(path) = args[i].strip_prefix("--config=") {
             config_path = Some(path.to_string());
@@ -879,7 +884,7 @@ fn strip_config_args(mut args: Vec<String>) -> (Vec<String>, Option<String>) {
     (args, config_path)
 }
 
-/// 解析 `--warmup N` / `--warmup=N`（T031）。默认 0 = 不预热；
+/// 解析 `--warmup N` / `--warmup=N`。默认 0 = 不预热；
 /// 缺参/非法值一律按 0（不猜）。
 fn parse_warmup_count(args: &[String]) -> u32 {
     let mut i = 0;
@@ -983,7 +988,7 @@ async fn app_main() -> anyhow::Result<()> {
         }
     };
 
-    // T027：doctor 只读诊断——在 logger/引擎装配之前短路运行。
+    // doctor 只读诊断 ——在 logger/引擎装配之前短路运行。
     // 诊断必须能在模型损坏、依赖缺失时工作，因此不走需要
     // EmbeddingService 的 run_cli_command 分发路径。
     #[cfg(feature = "cli")]
@@ -1129,7 +1134,7 @@ async fn app_main() -> anyhow::Result<()> {
     let (_engine, service, rerank_service, _model_config) =
         init_engine_and_services(&config).await?;
 
-    // T031：`--warmup N` 启动预热——N 条合成短文本推理，预热 mkl/代码路径/
+    // `--warmup N` 启动预热 ——N 条合成短文本推理，预热 mkl/代码路径/
     // tokenizer 缓存。放在 MCP/CLI 分流之前，三种模式均受益。
     let warmup = parse_warmup_count(&_filtered_args);
     if warmup > 0 {
@@ -1276,6 +1281,16 @@ async fn app_main() -> anyhow::Result<()> {
         {
             use axum::middleware::from_fn;
             app = app.layer(from_fn(vecboost::i18n::i18n_middleware));
+        }
+
+        // Extractor 拒绝规范化（R-1 审计建议）— axum Json extractor 拒绝的
+        // text/plain 错误体改写为 handler 层同构的结构化错误 JSON
+        #[cfg(feature = "http")]
+        {
+            use axum::middleware::from_fn;
+            app = app.layer(from_fn(
+                vecboost::api::rejection_normalize::rejection_normalizer,
+            ));
         }
 
         // 全局限流中间件 — 应用到所有路由
@@ -1785,7 +1800,7 @@ async fn build_module_registry(
                 )
             )
         })?);
-    // T026：全局桥——worker/服务热路径拿不到 kit 状态，经 OnceLock 取指标写入口。
+    // 全局桥 ——worker/服务热路径拿不到 kit 状态，经 OnceLock 取指标写入口。
     let _ =
         vecboost::metrics::prometheus_exporter::set_global_collector(prometheus_collector.clone());
     kit.set_config(Some(prometheus_collector));

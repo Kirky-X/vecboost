@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """语义缓存端到端套件（semantic-cache-e2e，SC-*）。
 
 黑盒可观测性设计：语义缓存命中时返回的是**已缓存文本**的原始向量（未经当前文本

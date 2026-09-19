@@ -1,7 +1,5 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! 物理核线程调优（port 自 colibri omp_tune.h 策略）。
 //!

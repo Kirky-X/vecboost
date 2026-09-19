@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """安全场景（R-auth-009 ~ R-auth-011）：限流、白名单、路径遍历、错误脱敏、审计日志。"""
 from __future__ import annotations
 

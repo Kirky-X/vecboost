@@ -1,7 +1,5 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! 审计日志示例 — 演示 AuditLogger 的安全事件记录与文件轮转
 //!

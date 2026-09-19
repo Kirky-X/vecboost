@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """生命周期补缺套件（R-server-002 / R-auth-002）。
 
 现有套件已覆盖：非法配置拒启（r004）、env 端口覆盖（r002）、SIGTERM 优雅关闭

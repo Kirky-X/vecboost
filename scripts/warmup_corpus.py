@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """warmup_corpus.py — 暖语料回放（仅 Python 标准库）。
 
 读取语料文件（每行一条文本），去重保序后分批调 `/embed/batch` 预热

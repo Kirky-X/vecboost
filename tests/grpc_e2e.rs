@@ -1,7 +1,5 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under MIT License
-// See LICENSE file in the project root for full license information.
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! gRPC E2E 集成测试 — sdforge 统一 Call 协议（R-server-001 / R-api-001）
 //!

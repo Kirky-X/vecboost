@@ -246,7 +246,7 @@ sample_every_n = 10
 keyword_whitelist = []
 
 # ============ 流控配置 (limiteron, 需要 limiteron feature) ============
-# ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。
+# ⚠️ 注意：当前版本（v0.3.x）的 VecboostConfig 未解析此配置段，编辑此段不会生效。
 # 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
 [flow_control]
 # 是否启用流控
@@ -265,7 +265,7 @@ circuit_breaker_failure_threshold = 0.5
 circuit_breaker_recovery_secs = 30
 
 # ============ 缓存配置 (oxcache, 需要 oxcache feature) ============
-# ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。
+# ⚠️ 注意：当前版本（v0.3.x）的 VecboostConfig 未解析此配置段，编辑此段不会生效。
 # 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
 [cache]
 # 是否启用缓存
@@ -290,7 +290,7 @@ eviction_policy = "lru"
 # ⚠️ WAL 落盘示例已移至 [embedding] 段（persist_path / persist_max_bytes，该段真实生效）。
 
 # ============ 设备配置 ============
-# ✅ 本段由 AppConfig 解析（T024 接线）。
+# ✅ 本段由 VecboostConfig 解析（T024 接线）。
 [device]
 # 硬件感知启动规划 (T024): true 时用探测计划填充未显式配置的字段，
 # 任何显式配置优先于计划；计划全文进启动日志。默认 false（零计划行为）
@@ -309,7 +309,7 @@ preferred = "auto"
 gpu_memory_reservation = 0.1
 
 # ============ 高级配置 ============
-# ⚠️ 注意：当前版本（v0.3.x）的 AppConfig 未解析此配置段，编辑此段不会生效。
+# ⚠️ 注意：当前版本（v0.3.x）的 VecboostConfig 未解析此配置段，编辑此段不会生效。
 # 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
 [advanced]
 # 是否启用 ONNX Runtime 作为备用引擎

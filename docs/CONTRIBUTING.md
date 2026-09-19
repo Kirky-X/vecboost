@@ -63,7 +63,7 @@ python3 scripts/doc_consistency_check.py   # 修改 README/API 后
 
 - `clippy.toml` 开启了 `allow-unwrap-in-tests`：生产代码禁止 `unwrap/expect` panic 面，测试豁免。
 - `deny.toml` 为 cargo-deny 配置(advisories/licenses/bans)；新豁免须写明理由。
-- pre-commit 钩子（`.pre-commit-config.yaml` → `scripts/pre-commit.sh`）：fmt / clippy / check / build + MIT 版权头检查。
+- pre-commit 钩子（`.pre-commit-config.yaml` → `scripts/pre-commit.sh`）：fmt / clippy / check / build + Apache-2.0 版权头检查。
 
 ## 🔄 变更管理(specmark)
 

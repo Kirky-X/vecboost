@@ -1,11 +1,9 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! confers-based configuration loader for VecBoost.
 //!
-//! `AppConfig` 通过 `#[derive(Config)]` 从 `confers` crate 派生,统一接管 TOML
+//! `VecboostConfig` 通过 `#[derive(Config)]` 从 `confers` crate 派生,统一接管 TOML
 //! 文件加载与环境变量覆盖。confers 是必选依赖(`Cargo.toml` 中无 `optional`),
 //! 禁止任何手写 `config`/`toml` 解析逻辑。
 //!
@@ -36,7 +34,7 @@ use crate::pipeline::PipelineConfig;
 #[derive(Config, Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[config(env_prefix = "VECBOOST_")]
 #[serde(default)]
-pub struct AppConfig {
+pub struct VecboostConfig {
     pub server: ServerConfig,
     pub model: ModelConfig,
     pub embedding: EmbeddingConfig,
@@ -56,7 +54,7 @@ pub struct AppConfig {
     pub database: DatabaseConfig,
 }
 
-impl AppConfig {
+impl VecboostConfig {
     /// 通过 confers 从默认路径 `config/config.toml` 加载配置。
     ///
     /// 文件不存在时回退到 `Default` 实现 + `VECBOOST_` 前缀环境变量。
@@ -85,7 +83,7 @@ impl AppConfig {
         Ok(config)
     }
 
-    /// Generate TypeScript type definitions for `AppConfig` using confers'
+    /// Generate TypeScript type definitions for `VecboostConfig` using confers'
     /// `TypeScriptGenerator` (backed by `schemars` JSON Schema).
     ///
     /// Useful for generating configuration documentation or frontend type stubs.
@@ -127,9 +125,9 @@ impl AppConfig {
     }
 }
 
-// trait-kit reload 装配：使 AppConfig 可通过 Kit::reload_config::<AppConfig>() 热重载
+// trait-kit reload 装配：使 VecboostConfig 可通过 Kit::reload_config::<VecboostConfig>() 热重载
 // 依赖 trait-kit `reload` + `confers` feature，底层复用 confers 的 load_via_confers
-impl trait_kit::kit::Configurable for AppConfig {
+impl trait_kit::kit::Configurable for VecboostConfig {
     fn load() -> Result<Self, Box<dyn std::error::Error + Send + 'static>> {
         Self::load_via_confers().map_err(|e| Box::new(e) as _)
     }
@@ -137,17 +135,17 @@ impl trait_kit::kit::Configurable for AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::AppConfig;
+    use super::VecboostConfig;
     use crate::config::app::test_support::ENV_LOCK;
 
     #[test]
     fn test_confers_app_config_compiles() {
-        let _ = AppConfig::default();
+        let _ = VecboostConfig::default();
     }
 
     #[test]
     fn test_app_config_default_values() {
-        let config = AppConfig::default();
+        let config = VecboostConfig::default();
         assert!(!config.server.grpc_enabled);
         assert!(config.model.batch_size > 0);
         assert!(config.embedding.max_batch_size > 0);
@@ -160,7 +158,7 @@ mod tests {
             std::env::remove_var("VECBOOST_JWT_SECRET");
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
         }
-        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        let result = VecboostConfig::load_via_confers_with_path("/nonexistent/config.toml");
         assert!(result.is_ok(), "should fall back to defaults");
         let config = result.unwrap();
         assert!(!config.server.grpc_enabled);
@@ -193,7 +191,7 @@ max_batch_size = 128
         )
         .expect("Failed to write config");
 
-        let result = AppConfig::load_via_confers_with_path(&config_path);
+        let result = VecboostConfig::load_via_confers_with_path(&config_path);
         assert!(result.is_ok());
         let config = result.unwrap();
         assert_eq!(config.server.port, 8080);
@@ -214,7 +212,7 @@ max_batch_size = 128
         let config_path = temp_dir.path().join("empty.toml");
         std::fs::write(&config_path, "").expect("Failed to write empty config");
 
-        let result = AppConfig::load_via_confers_with_path(&config_path);
+        let result = VecboostConfig::load_via_confers_with_path(&config_path);
         assert!(result.is_ok());
         let config = result.unwrap();
         assert!(!config.server.grpc_enabled);
@@ -229,7 +227,7 @@ max_batch_size = 128
                 "this-is-a-valid-jwt-secret-32chars!!",
             );
         }
-        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        let result = VecboostConfig::load_via_confers_with_path("/nonexistent/config.toml");
         let config = result.expect("load should succeed with valid JWT secret");
         unsafe {
             std::env::remove_var("VECBOOST_JWT_SECRET");
@@ -246,7 +244,7 @@ max_batch_size = 128
         unsafe {
             std::env::set_var("VECBOOST_JWT_SECRET", "");
         }
-        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        let result = VecboostConfig::load_via_confers_with_path("/nonexistent/config.toml");
         unsafe {
             std::env::remove_var("VECBOOST_JWT_SECRET");
         }
@@ -262,7 +260,7 @@ max_batch_size = 128
         unsafe {
             std::env::set_var("VECBOOST_JWT_SECRET", "tooshort");
         }
-        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        let result = VecboostConfig::load_via_confers_with_path("/nonexistent/config.toml");
         unsafe {
             std::env::remove_var("VECBOOST_JWT_SECRET");
         }
@@ -278,7 +276,7 @@ max_batch_size = 128
         unsafe {
             std::env::set_var("VECBOOST_ADMIN_PASSWORD", "SuperSecurePass123!");
         }
-        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        let result = VecboostConfig::load_via_confers_with_path("/nonexistent/config.toml");
         let config = result.expect("load should succeed with valid admin password");
         unsafe {
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
@@ -295,7 +293,7 @@ max_batch_size = 128
         unsafe {
             std::env::set_var("VECBOOST_ADMIN_PASSWORD", "");
         }
-        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        let result = VecboostConfig::load_via_confers_with_path("/nonexistent/config.toml");
         unsafe {
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
         }
@@ -311,7 +309,7 @@ max_batch_size = 128
         unsafe {
             std::env::set_var("VECBOOST_ADMIN_PASSWORD", "short");
         }
-        let result = AppConfig::load_via_confers_with_path("/nonexistent/config.toml");
+        let result = VecboostConfig::load_via_confers_with_path("/nonexistent/config.toml");
         unsafe {
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
         }
@@ -339,7 +337,7 @@ port = 9999
         )
         .expect("Failed to write partial config");
 
-        let result = AppConfig::load_via_confers_with_path(&config_path);
+        let result = VecboostConfig::load_via_confers_with_path(&config_path);
         assert!(result.is_ok());
         let config = result.unwrap();
         assert_eq!(config.server.port, 9999);
@@ -347,42 +345,42 @@ port = 9999
 
     #[test]
     fn test_app_config_clone() {
-        let config = AppConfig::default();
+        let config = VecboostConfig::default();
         let cloned = config.clone();
         assert_eq!(config.server.port, cloned.server.port);
     }
 
     #[test]
     fn test_app_config_debug_format() {
-        let config = AppConfig::default();
+        let config = VecboostConfig::default();
         let debug_str = format!("{:?}", config);
-        assert!(debug_str.contains("AppConfig"));
+        assert!(debug_str.contains("VecboostConfig"));
     }
 
     #[test]
     fn test_app_config_validate_default_succeeds() {
-        let config = AppConfig::default();
+        let config = VecboostConfig::default();
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_app_config_validate_bad_server_port() {
-        let mut config = AppConfig::default();
+        let mut config = VecboostConfig::default();
         config.server.port = 0;
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_app_config_serialize_roundtrip() {
-        let config = AppConfig::default();
+        let config = VecboostConfig::default();
         let json = serde_json::to_string(&config).unwrap();
-        let deserialized: AppConfig = serde_json::from_str(&json).unwrap();
+        let deserialized: VecboostConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.server.port, config.server.port);
     }
 
     #[test]
     fn test_app_config_generate_schema() {
-        let result = AppConfig::generate_schema();
+        let result = VecboostConfig::generate_schema();
         assert!(result.is_ok());
         let schema = result.unwrap();
         assert!(!schema.is_empty());
@@ -395,7 +393,7 @@ port = 9999
             std::env::remove_var("VECBOOST_JWT_SECRET");
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
         }
-        let result = AppConfig::load_via_confers();
+        let result = VecboostConfig::load_via_confers();
         assert!(result.is_ok());
     }
 
@@ -408,7 +406,7 @@ port = 9999
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
         }
         // Call the Configurable trait's load() explicitly to cover the trait impl
-        let result = <AppConfig as Configurable>::load();
+        let result = <VecboostConfig as Configurable>::load();
         assert!(result.is_ok());
     }
 }

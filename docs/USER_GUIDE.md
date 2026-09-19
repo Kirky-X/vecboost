@@ -168,7 +168,7 @@ cp config/config.toml config/config_custom.toml
 
 ### 🗂️ 配置段总览
 
-下表对应 `AppConfig`（`src/config/app_config.rs`）实际解析的配置段：
+下表对应 `VecboostConfig`（`src/config/app_config.rs`）实际解析的配置段：
 
 | 区块 | 说明 | 依赖库 / Feature |
 |------|------|------------------|

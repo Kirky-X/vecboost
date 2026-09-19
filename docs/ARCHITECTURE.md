@@ -680,7 +680,7 @@ impl AuditLogger {
 ```
 src/config/
 ├── app.rs            # 配置子结构体定义（ServerConfig/ModelConfig/EmbeddingConfig 等）
-├── app_config.rs     # AppConfig 定义（confers #[derive(Config)] 接管配置加载）
+├── app_config.rs     # VecboostConfig 定义（confers #[derive(Config)] 接管配置加载）
 ├── encryption.rs     # 配置加密支持
 ├── model.rs          # 模型配置（Precision/DeviceType 等类型）
 ├── mod.rs            # 模块导出

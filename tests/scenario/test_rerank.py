@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """重排服务场景（R-rerank-001 ~ R-rerank-006）。M1（9101 英文）+ M2（9102 中文）双模型。"""
 from __future__ import annotations
 

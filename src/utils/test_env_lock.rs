@@ -1,3 +1,6 @@
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
+
 //! 测试专用:进程级环境变量的串行访问锁。
 //!
 //! Rust 测试默认并行,多个测试同时 set/remove 同一环境变量会产生竞态

@@ -1,19 +1,17 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! Tests for confers-based configuration loading.
 //!
 //! Covers three scenarios required by the spec:
-//! 1. Loading `AppConfig` from `config_minimal.toml`
+//! 1. Loading `VecboostConfig` from `config_minimal.toml`
 //! 2. Environment variable `VECBOOST_JWT_SECRET` overriding TOML values
 //! 3. Hot-reload subscribe callback via `confers::bus::InMemoryBus`
 
 use std::io::Write;
 
 use super::app::test_support::ENV_LOCK;
-use super::app_config::AppConfig;
+use super::app_config::VecboostConfig;
 
 /// Helper: write a minimal TOML config to a temp file and return its path.
 fn write_temp_toml(content: &str) -> (tempfile::TempDir, std::path::PathBuf) {
@@ -25,9 +23,9 @@ fn write_temp_toml(content: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     (dir, path)
 }
 
-/// Test 1: Load `AppConfig` from `config_minimal.toml` and verify key fields.
+/// Test 1: Load `VecboostConfig` from `config_minimal.toml` and verify key fields.
 /// Verifies that confers correctly deserialises the TOML file into the
-/// nested `AppConfig` struct, including server port, model repo, and
+/// nested `VecboostConfig` struct, including server port, model repo, and
 /// embedding settings.
 #[test]
 fn test_confers_load_from_minimal_toml() {
@@ -72,7 +70,7 @@ enabled = false
 "#;
 
     let (_dir, path) = write_temp_toml(toml_content);
-    let config = AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+    let config = VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
 
     assert_eq!(config.server.host, "127.0.0.1");
     assert_eq!(config.server.port, 9002);
@@ -142,7 +140,7 @@ enabled = false
     let (_dir, path) = write_temp_toml(toml_content);
 
     let config_no_env =
-        AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+        VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
     assert!(
         config_no_env.auth.jwt_secret.is_none(),
         "jwt_secret should be None when VECBOOST_JWT_SECRET is not set"
@@ -159,7 +157,7 @@ enabled = false
     }
 
     let config_with_env =
-        AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+        VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
     assert_eq!(
         config_with_env.auth.jwt_secret,
         Some(test_secret.to_string()),
@@ -186,7 +184,7 @@ fn test_confers_defaults_when_no_file() {
     }
 
     let non_existent = std::path::PathBuf::from("/tmp/vecboost_nonexistent_config_9999.toml");
-    let config = AppConfig::load_via_confers_with_path(&non_existent)
+    let config = VecboostConfig::load_via_confers_with_path(&non_existent)
         .expect("should load with defaults when file is missing");
 
     // Verify defaults from app.rs Default impls
@@ -245,7 +243,7 @@ enabled = true
 "#;
 
     let (_dir, path) = write_temp_toml(toml_content);
-    let config = AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+    let config = VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
 
     // Verify TOML overrode defaults
     assert_eq!(config.server.host, "10.0.0.1");
@@ -315,7 +313,7 @@ enabled = false
 "#;
 
     let (_dir, path) = write_temp_toml(toml_content);
-    let config = AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+    let config = VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
 
     // 验证 fallback 到 default
     assert!(
@@ -374,7 +372,7 @@ trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
 "#;
 
     let (_dir, path) = write_temp_toml(toml_content);
-    let config = AppConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+    let config = VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
 
     // 验证字段被正确加载
     assert_eq!(
@@ -421,7 +419,7 @@ enabled = false
 "#;
 
     let (_dir, path) = write_temp_toml(toml_content);
-    let result = AppConfig::load_via_confers_with_path(&path);
+    let result = VecboostConfig::load_via_confers_with_path(&path);
     assert!(result.is_err(), "port=0 must be rejected by validation");
     let err_msg = format!("{}", result.unwrap_err());
     assert!(
@@ -459,7 +457,7 @@ enabled = false
 "#;
 
     let (_dir, path) = write_temp_toml(toml_content);
-    let result = AppConfig::load_via_confers_with_path(&path);
+    let result = VecboostConfig::load_via_confers_with_path(&path);
     assert!(
         result.is_err(),
         "empty model_repo must be rejected by validation"
@@ -500,7 +498,7 @@ enabled = false
 "#;
 
     let (_dir, path) = write_temp_toml(toml_content);
-    let result = AppConfig::load_via_confers_with_path(&path);
+    let result = VecboostConfig::load_via_confers_with_path(&path);
     assert!(
         result.is_err(),
         "batch_size=0 must be rejected by validation"
@@ -515,7 +513,7 @@ enabled = false
 /// default config passes validation.
 #[test]
 fn test_validation_default_config_passes() {
-    let config = AppConfig::default();
+    let config = VecboostConfig::default();
     let result = config.validate();
     assert!(
         result.is_ok(),
@@ -727,7 +725,7 @@ fn test_encryption_none_values_pass_through() {
 /// Schema generation produces non-empty TypeScript output.
 #[test]
 fn test_schema_generation_produces_typescript() {
-    let schema = AppConfig::generate_schema().expect("schema generation should succeed");
+    let schema = VecboostConfig::generate_schema().expect("schema generation should succeed");
     assert!(!schema.is_empty(), "generated schema should not be empty");
     // TypeScript output should contain interface definitions
     assert!(

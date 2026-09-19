@@ -1,7 +1,5 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! 语义缓存层：在精确匹配缓存之上添加 trigram Jaccard 文本相似度检查。
 //!

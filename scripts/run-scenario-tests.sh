@@ -20,7 +20,7 @@ mkdir -p "$MODES"
 
 echo "=== [1/4] 构建 ==="
 if [ "$SKIP_BUILD" -eq 0 ]; then
-  cargo build --features "http,grpc,cli,auth,db,mcp" 2>&1 | tail -2 || exit 1
+  cargo build --features "http,grpc,cli,auth,db,sqlite,mcp" 2>&1 | tail -2 || exit 1
 fi
 [ -x "$BIN" ] || { echo "二进制不存在: $BIN"; exit 1; }
 
@@ -111,7 +111,7 @@ done
 
 echo "=== [4/4] 现有测试回归 (cargo test) ==="
 if [ "$SKIP_CARGO" -eq 0 ]; then
-  cargo test --features "http,cli,auth,db" 2>&1 | tail -5
+  cargo test --features "http,cli,auth,db,sqlite" 2>&1 | tail -5
   echo "cargo_test_exit=$?" | tee "$MODES/cargo_test.meta"
 fi
 

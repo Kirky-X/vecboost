@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """认证场景（R-auth-001 ~ R-auth-008）。auth 配置档（9103）。
 
 凭据来源：测试专用凭证统一由 conftest 常量提供（VECBOOST_ADMIN_PASSWORD 环境变量注入服务器），

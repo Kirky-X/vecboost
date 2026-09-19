@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """HTTP 协议矩阵套件（R-api-001 / R-embed-002/003 / R-rerank-002）。
 
 覆盖场景 ID（HM-*）：

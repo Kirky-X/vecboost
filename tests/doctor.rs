@@ -1,7 +1,5 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! doctor 只读诊断集成测试。
 //!
@@ -11,7 +9,7 @@
 
 #[tokio::test]
 async fn doctor_legal_config_has_no_failures() {
-    let mut config = vecboost::AppConfig::default();
+    let mut config = vecboost::VecboostConfig::default();
     // 仓库自带的本地模型（存在时进入真实 tokenizer 加载路径；缺失时 WARN 合法）
     let local_model = std::path::Path::new("models/all-MiniLM-L6-v2");
     if local_model.is_dir() {
@@ -40,7 +38,7 @@ async fn doctor_legal_config_has_no_failures() {
 async fn doctor_detects_invalid_config_as_fail() {
     // 构造必然校验失败的配置：空 model_repo 且无本地路径 → tokenizer/config 链路异常。
     // validate() 的具体失败面随版本演进，这里锁定"报告能反映 FAIL"这一契约。
-    let mut config = vecboost::AppConfig::default();
+    let mut config = vecboost::VecboostConfig::default();
     config.model.model_repo = String::new();
     config.model.model_path = None;
     let report = vecboost::doctor::DoctorReport::run(&config).await;

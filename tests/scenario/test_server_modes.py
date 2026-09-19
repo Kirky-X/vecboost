@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """服务器模式场景（R-server-001 ~ R-server-008）。
 
 gRPC：sdforge 免 proto，统一服务 sdforge.v1.SdForgeService/Call，

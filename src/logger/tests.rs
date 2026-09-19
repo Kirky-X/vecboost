@@ -1,7 +1,5 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! Tests for inklog integration.
 //!
@@ -27,13 +25,25 @@
 //! - `log::info!` 宏需要全局 LogLogger,会污染其他测试,因此省略;
 //!   LogLogger 功能由 inklog 自己的测试覆盖。
 //! - 测试 1/5 不触发日志写入,无需 `tokio::spawn`。
-
 use std::sync::Arc;
 
 use tracing_subscriber::prelude::*;
 use trait_kit::AsyncKit;
 
 use super::LoggerModule;
+
+/// `LoggerManager::build_detached` 的第二参数（数据库句柄）由 inklog 的 db 驱动
+/// feature 门控（sqlite/postgres/mysql/duckdb）。vecboost 侧由顶层 `sqlite` /
+/// `postgres` feature 透传 inklog 驱动（二者均激活 inklog `database` 谓词，
+/// 签名为双参）；无驱动组合（如 library 面）为单参签名。
+macro_rules! build_detached {
+    ($config:expr) => {{
+        #[cfg(any(feature = "sqlite", feature = "postgres"))]
+        { inklog::LoggerManager::build_detached($config, None).await }
+        #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+        { inklog::LoggerManager::build_detached($config).await }
+    }};
+}
 
 // ---------------------------------------------------------------------------
 // 测试 1: LoggerModule::build 返回 Arc<LoggerManager>
@@ -45,9 +55,7 @@ async fn test_logger_module_build_returns_manager() {
         console_sink: None,
         ..Default::default()
     };
-    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
-        .await
-        .expect("build_detached");
+    let (manager, _subscriber, _filter) = build_detached!(config).expect("build_detached");
     let manager = Arc::new(manager);
 
     let mut kit = AsyncKit::new();
@@ -89,9 +97,7 @@ async fn test_logger_writes_to_file() {
         ..Default::default()
     };
 
-    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
-        .await
-        .expect("build_detached");
+    let (manager, subscriber, _filter) = build_detached!(config).expect("build_detached");
 
     // 在 worker 线程上执行日志写入,确保 block_in_place 能工作
     let handle = tokio::spawn(async move {
@@ -136,9 +142,7 @@ async fn test_log_macro_works() {
         ..Default::default()
     };
 
-    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
-        .await
-        .expect("build_detached");
+    let (manager, subscriber, _filter) = build_detached!(config).expect("build_detached");
 
     // 在 worker 线程上调用 tracing 宏,确保 block_in_place 能工作
     let handle = tokio::spawn(async move {
@@ -172,9 +176,7 @@ async fn test_logger_console_output() {
         ..Default::default()
     };
 
-    let (manager, subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
-        .await
-        .expect("build_detached");
+    let (manager, subscriber, _filter) = build_detached!(config).expect("build_detached");
 
     // 在 worker 线程上执行日志写入,确保 block_in_place 能工作
     let handle = tokio::spawn(async move {
@@ -216,9 +218,7 @@ async fn test_logger_module_contains_after_register() {
         console_sink: None,
         ..Default::default()
     };
-    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
-        .await
-        .expect("build_detached");
+    let (manager, _subscriber, _filter) = build_detached!(config).expect("build_detached");
     let manager = Arc::new(manager);
 
     let mut kit = AsyncKit::new();
@@ -250,9 +250,7 @@ async fn test_logger_module_coexists_with_other_modules() {
         console_sink: None,
         ..Default::default()
     };
-    let (manager, _subscriber, _filter) = inklog::LoggerManager::build_detached(config, None)
-        .await
-        .expect("build_detached");
+    let (manager, _subscriber, _filter) = build_detached!(config).expect("build_detached");
     let manager = Arc::new(manager);
 
     let mut kit = AsyncKit::new();

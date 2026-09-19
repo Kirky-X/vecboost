@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """VecBoost 测试包
 
 包含 VecBoost 服务的所有测试用例，包括：

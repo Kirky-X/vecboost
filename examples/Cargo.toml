@@ -17,6 +17,7 @@ vecboost = { path = "..", default-features = false, features = [
     "cli",
     "grpc",
     "db",
+    "sqlite",
 ] }
 
 # 示例直接使用的第三方 crate

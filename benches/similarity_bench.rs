@@ -1,3 +1,6 @@
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use vecboost::utils::vector::{
     cosine_similarity, dot_product, euclidean_distance, manhattan_distance,

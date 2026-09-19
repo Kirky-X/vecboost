@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """配置与设备场景（R-config-001 ~ R-config-006）。"""
 from __future__ import annotations
 

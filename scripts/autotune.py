@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-# Copyright (c) 2025-2026 Kirky.X
-#
-# Licensed under the MIT License
-# See LICENSE file in the project root for full license information.
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
 """实测调优脚本（port 自 colibri `autotune.py` 坐标下降思想）。
 
 对本机运行中的 vecboost 做坐标下降调优。候选轴：

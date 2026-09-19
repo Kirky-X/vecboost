@@ -43,7 +43,9 @@ jobs:
           - name: grpc
             features: "grpc"
           - name: ecosystem
-            features: "auth,redis,db,onnx"
+            features: "auth,db,sqlite,onnx"
+          - name: postgres-driver
+            features: "postgres"
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -67,7 +69,11 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Check all features compile
-        run: cargo check --features "grpc,cli,auth,onnx,db,redis,openapi,mcp"
+        run: cargo check --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
+
+      - name: Check examples crate
+        # 2026-09-19 审计补腿：examples 是 workspace 成员但此前从未进 CI
+        run: cargo check -p vecboost-examples --all-targets
 
       - name: Run clippy
         if: matrix.features != ''
@@ -86,7 +92,7 @@ jobs:
         run: cargo build
 
       - name: Run tests
-        if: matrix.features != ''
+        if: matrix.features != '' && matrix.name != 'postgres-driver'
         run: cargo test --features "${{ matrix.features }}" --lib
 
       - name: Run tests (default features)

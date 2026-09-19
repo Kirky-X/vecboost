@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """API 客户端和模拟器
 
 提供统一的 API 客户端和模拟器基类，用于 API 接口测试。

@@ -122,7 +122,7 @@ cargo deny check
 | 镜像漏洞扫描 | Trivy（CRITICAL 即失败） | `.github/workflows/docker.yml` |
 | Dockerfile 扫描 | Checkov | `.github/workflows/health-check.yml` |
 | 私密信息扫描 | gitleaks | `.gitleaks.toml`（docs/target 等排除项） |
-| 提交前检查 | pre-commit（fmt/clippy/check/build + MIT 版权头） | `.pre-commit-config.yaml` → `scripts/pre-commit.sh` |
+| 提交前检查 | pre-commit（fmt/clippy/check/build + Apache-2.0 版权头） | `.pre-commit-config.yaml` → `scripts/pre-commit.sh` |
 | panic 面门禁 | `clippy::unwrap_used` + `RUSTFLAGS="-D warnings"` | CI env；测试经 `clippy.toml` 豁免 |
 | Python 脚本扫描 | bandit（生产代码 src/、scripts/ 全量；tests/ 惯用 assert 误报排除） | `pyproject.toml` |
 

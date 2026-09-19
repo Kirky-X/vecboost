@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """测试夹具
 
 提供 pytest fixture 支持真实模型推理和 Mock 回退。

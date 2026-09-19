@@ -1,10 +1,7 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under MIT License
-// See LICENSE file in the project root for full license information
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 #![allow(clippy::manual_checked_ops, clippy::identity_op)]
-
 use super::InferenceEngine;
 use super::{Stage, StageSnapshot, StageStats};
 use crate::config::model::{DeviceType, ModelConfig, Precision};
@@ -725,6 +722,13 @@ impl CandleEngine {
 
     // 纯同步 forward_pass——使用 encode_sync 绕过异步缓存，移除 GPU 监控 await
     fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
+        self.forward_pass_inner(text).map(|mut v| {
+            l2_normalize_in_place(&mut v);
+            v
+        })
+    }
+
+    fn forward_pass_inner(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         // 分阶段埋点：tokenize（守卫 Drop 时累加，`?` 提前返回亦覆盖）。
         let encoding = {
             let _timer = StageTimer::new(&self.stage_stats, Stage::Tokenize);
@@ -860,9 +864,10 @@ impl CandleEngine {
                 .collect()
         } else if dims.len() == 1 {
             // 1D: 模型已输出单向量(某些特殊架构),直接返回
-            let vec = embeddings
+            let mut vec = embeddings
                 .to_vec1::<f32>()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+            l2_normalize_in_place(&mut vec);
             return Ok(vec);
         } else {
             return Err(VecboostError::InferenceError(format!(
@@ -1059,6 +1064,11 @@ impl CandleEngine {
             "Batch processing completed, {} embeddings generated",
             results.len()
         );
+        // 引擎出口 L2 归一化（平台契约 normalize: Some(true)）
+        let mut results = results;
+        for v in results.iter_mut() {
+            l2_normalize_in_place(v);
+        }
         Ok(results)
     }
 }
@@ -1337,6 +1347,17 @@ pub(crate) fn infer_pooling_mode(model_name: &str) -> crate::config::model::Pool
 /// CLS pooling:取序列第一个 token 的 hidden state。
 ///
 /// `hidden` 为 `[seq_len × hidden_dim]` 行优先展平向量。
+/// 引擎出口 L2 归一化（平台契约 normalize: Some(true) 要求所有 embed
+/// 输出为单位向量）。近零向量（退化输出）保持原样，交由上游判空。
+fn l2_normalize_in_place(vec: &mut [f32]) {
+    let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-12 {
+        for x in vec.iter_mut() {
+            *x /= norm;
+        }
+    }
+}
+
 pub(crate) fn pool_cls(hidden: &[f32], _mask: &[u32], hidden_dim: usize) -> Vec<f32> {
     hidden[..hidden_dim].to_vec()
 }

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """文档-代码一致性核验。
 
 系统性提取文档中可验证声明并与代码核对：
 1. HTTP 端点：文档声明的 /api/1/* 与 /v1/*、/health、/metrics 路径必须存在于 #[forge] 注册
 2. gRPC 方法：文档声明的 vecboost.* 必须与 #[forge(grpc_method=...)] 一致
-3. 环境变量：文档声明的 VECBOOST_* 必须能映射到 AppConfig 字段或被代码显式消费
+3. 环境变量：文档声明的 VECBOOST_* 必须能映射到 VecboostConfig 字段或被代码显式消费
 4. CLI 子命令：文档示例的子命令必须在 CLI 注册中
 
 输出：差异清单（stdout）。退出码 0=一致，1=存在差异。
@@ -140,7 +143,7 @@ def main() -> int:
     env_vars = set(re.findall(r"VECBOOST_[A-Z0-9_]+", docs_text))
     for var in sorted(env_vars):
         if not env_var_resolvable(var, src):
-            issues.append(f"[env] 文档声明 {var} 无代码消费且无法经 confers 映射到 AppConfig 字段")
+            issues.append(f"[env] 文档声明 {var} 无代码消费且无法经 confers 映射到 VecboostConfig 字段")
 
     # 4. CLI 子命令
     cli_cmds = code_cli_subcommands(src)

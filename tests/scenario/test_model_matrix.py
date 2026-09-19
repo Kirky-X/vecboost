@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """模型矩阵 HTTP 套件 — 4 模型 × 3 厂商 × 2 架构经 HTTP 验证（R-model-001）。
 
 每个模型独立服务器进程（本地目录，无网络依赖）：

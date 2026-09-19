@@ -1,11 +1,9 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under MIT License
-// See LICENSE file in the project root for full license information
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! 配置子结构体定义(数据结构层)。
 //!
-//! `AppConfig` 的 confers 加载逻辑见 `app_config.rs`(confers 完全接管配置加载,
+//! `VecboostConfig` 的 confers 加载逻辑见 `app_config.rs`(confers 完全接管配置加载,
 //! 禁止手写 config/toml 解析)。本文件只保留子结构体定义、默认值实现、
 //! 安全环境变量覆盖和优先级默认值。
 
@@ -683,7 +681,7 @@ pub(crate) fn apply_priority_defaults(priority: &mut crate::pipeline::PriorityCo
 /// For sensitive values like JWT secrets and passwords, environment variables
 /// are required for production deployments. Validates minimum length constraints.
 pub(crate) fn apply_security_env_overrides(
-    cfg: &mut super::app_config::AppConfig,
+    cfg: &mut super::app_config::VecboostConfig,
 ) -> Result<(), VecboostError> {
     use std::env;
 
@@ -746,7 +744,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::config::app_config::AppConfig;
+    use crate::config::app_config::VecboostConfig;
     use std::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
@@ -880,7 +878,7 @@ mod tests {
 
     #[test]
     fn test_app_config_default() {
-        let config = AppConfig::default();
+        let config = VecboostConfig::default();
         assert_eq!(config.server.port, 9002);
         assert_eq!(config.model.model_repo, "BAAI/bge-m3");
         assert!(config.embedding.cache_enabled);
@@ -891,7 +889,7 @@ mod tests {
 
     #[test]
     fn test_apply_priority_defaults_with_empty_weights() {
-        let mut cfg = AppConfig::default();
+        let mut cfg = VecboostConfig::default();
         cfg.pipeline.priority.user_tier_weights.clear();
         cfg.pipeline.priority.source_weights.clear();
         apply_priority_defaults(&mut cfg.pipeline.priority);
@@ -909,7 +907,7 @@ mod tests {
 
     #[test]
     fn test_apply_priority_defaults_preserves_existing() {
-        let mut cfg = AppConfig::default();
+        let mut cfg = VecboostConfig::default();
         cfg.pipeline
             .priority
             .user_tier_weights
@@ -968,7 +966,7 @@ mod tests {
 
     #[test]
     fn test_app_config_default_full_structure() {
-        let config = AppConfig::default();
+        let config = VecboostConfig::default();
         // 验证所有子配置默认值
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 9002);
@@ -1005,7 +1003,7 @@ mod tests {
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
         }
 
-        let mut cfg = AppConfig::default();
+        let mut cfg = VecboostConfig::default();
         cfg.auth.jwt_secret = None;
         cfg.auth.default_admin_password = None;
         let result = apply_security_env_overrides(&mut cfg);
@@ -1021,7 +1019,7 @@ mod tests {
         unsafe {
             std::env::set_var("VECBOOST_JWT_SECRET", "");
         }
-        let mut cfg = AppConfig::default();
+        let mut cfg = VecboostConfig::default();
         let result = apply_security_env_overrides(&mut cfg);
         unsafe {
             std::env::remove_var("VECBOOST_JWT_SECRET");
@@ -1041,7 +1039,7 @@ mod tests {
         unsafe {
             std::env::set_var("VECBOOST_JWT_SECRET", "tooshort");
         }
-        let mut cfg = AppConfig::default();
+        let mut cfg = VecboostConfig::default();
         let result = apply_security_env_overrides(&mut cfg);
         unsafe {
             std::env::remove_var("VECBOOST_JWT_SECRET");
@@ -1061,7 +1059,7 @@ mod tests {
         unsafe {
             std::env::set_var("VECBOOST_JWT_SECRET", &secret);
         }
-        let mut cfg = AppConfig::default();
+        let mut cfg = VecboostConfig::default();
         let result = apply_security_env_overrides(&mut cfg);
         unsafe {
             std::env::remove_var("VECBOOST_JWT_SECRET");
@@ -1077,7 +1075,7 @@ mod tests {
         unsafe {
             std::env::set_var("VECBOOST_ADMIN_PASSWORD", "");
         }
-        let mut cfg = AppConfig::default();
+        let mut cfg = VecboostConfig::default();
         let result = apply_security_env_overrides(&mut cfg);
         unsafe {
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
@@ -1097,7 +1095,7 @@ mod tests {
         unsafe {
             std::env::set_var("VECBOOST_ADMIN_PASSWORD", "short");
         }
-        let mut cfg = AppConfig::default();
+        let mut cfg = VecboostConfig::default();
         let result = apply_security_env_overrides(&mut cfg);
         unsafe {
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
@@ -1117,7 +1115,7 @@ mod tests {
         unsafe {
             std::env::set_var("VECBOOST_ADMIN_PASSWORD", &password);
         }
-        let mut cfg = AppConfig::default();
+        let mut cfg = VecboostConfig::default();
         let result = apply_security_env_overrides(&mut cfg);
         unsafe {
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
@@ -1128,7 +1126,7 @@ mod tests {
 
     #[test]
     fn test_apply_priority_defaults_idempotent() {
-        let mut cfg = AppConfig::default();
+        let mut cfg = VecboostConfig::default();
         apply_priority_defaults(&mut cfg.pipeline.priority);
         let tier_count = cfg.pipeline.priority.user_tier_weights.len();
         let source_count = cfg.pipeline.priority.source_weights.len();
@@ -1140,7 +1138,7 @@ mod tests {
 
     #[test]
     fn test_apply_priority_defaults_source_weights_values() {
-        let mut cfg = AppConfig::default();
+        let mut cfg = VecboostConfig::default();
         cfg.pipeline.priority.source_weights.clear();
         apply_priority_defaults(&mut cfg.pipeline.priority);
         assert_eq!(cfg.pipeline.priority.source_weights.get("http"), Some(&1.0));
@@ -1163,7 +1161,7 @@ mod tests {
 
     #[test]
     fn test_app_config_clone_preserves_values() {
-        let original = AppConfig::default();
+        let original = VecboostConfig::default();
         let cloned = original.clone();
         assert_eq!(original.server.port, cloned.server.port);
         assert_eq!(original.model.model_repo, cloned.model.model_repo);

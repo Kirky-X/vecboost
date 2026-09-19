@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """模型管理场景（R-model-002 ~ R-model-007）。zh 配置档 = M2 服务端 HF 镜像下载，512 维。
 
 R-model-001（本地加载）由 base 配置档的启动本身覆盖（model_path=本地目录）。

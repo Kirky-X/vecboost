@@ -40,7 +40,7 @@ repos:
     hooks:
       - id: copyright-header
         name: Check copyright headers
-        description: Verify all .rs files have MIT copyright headers (Kirky.X)
+        description: Verify all .rs files have Apache-2.0 copyright headers (Kirky.X🌠)
         entry: bash scripts/pre-commit.sh copyright
         language: system
         pass_filenames: false

@@ -34,8 +34,8 @@ get_features() {
     fi
     case "$(uname -s)" in
         Linux)  echo "onnx,grpc" ;;
-        Darwin) echo "metal,onnx,grpc,redis" ;;
-        MINGW*|CYGWIN*|MSYS*) echo "onnx,grpc,redis" ;;
+        Darwin) echo "metal,onnx,grpc" ;;
+        MINGW*|CYGWIN*|MSYS*) echo "onnx,grpc" ;;
         *) echo "grpc" ;;
     esac
 }
@@ -116,13 +116,13 @@ cmd_copyright() {
     for file in "${files[@]}"; do
         local header
         header=$(head -5 "$file" 2>/dev/null || echo "")
-        if ! echo "$header" | grep -qE "Copyright \(c\) 2025(-2026)? Kirky\.X"; then
+        if ! echo "$header" | grep -qE "Copyright \(c\) 2025-2026 Kirky\.X🌠"; then
             violated_files="${violated_files}\n  - $file (missing/incorrect copyright)"
             violations=$((violations + 1))
             continue
         fi
-        if ! echo "$header" | grep -q "MIT License"; then
-            violated_files="${violated_files}\n  - $file (missing MIT License)"
+        if ! echo "$header" | grep -q "SPDX-License-Identifier: Apache-2.0"; then
+            violated_files="${violated_files}\n  - $file (missing Apache-2.0 SPDX line)"
             violations=$((violations + 1))
             continue
         fi
@@ -134,10 +134,8 @@ cmd_copyright() {
         echo -e "$violated_files"
         echo ""
         echo "Expected header format:"
-        echo "  // Copyright (c) 2025-2026 Kirky.X"
-        echo "  //"
-        echo "  // Licensed under the MIT License"
-        echo "  // See LICENSE file in the project root for full license information."
+        echo "  // Copyright (c) 2025-2026 Kirky.X🌠"
+        echo "  // SPDX-License-Identifier: Apache-2.0"
         exit 1
     fi
 
@@ -217,8 +215,8 @@ cmd_run() {
 declare -a COMBINATIONS=(
     "default|"
     "grpc|grpc"
-    "ecosystem|auth,redis,db,onnx"
-    "cuda-network|cuda,grpc,auth,redis"
+    "ecosystem|auth,db,sqlite,onnx"
+    "cuda-network|cuda,grpc,auth"
 )
 
 # 尊重 --dry-run：打印命令但不执行；否则走 run_timed（带超时）

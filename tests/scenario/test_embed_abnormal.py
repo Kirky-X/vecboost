@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """嵌入服务异常场景（R-embed-009 ~ R-embed-010）。"""
 from __future__ import annotations
 

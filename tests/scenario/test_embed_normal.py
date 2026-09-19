@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """嵌入服务正常场景（R-embed-001 ~ R-embed-008）。M1 = BAAI/bge-small-en-v1.5，384 维。"""
 from __future__ import annotations
 

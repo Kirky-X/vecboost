@@ -1,7 +1,5 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under MIT License
-// See LICENSE file in the project root for full license information
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! 调度抽象类型(优先级/请求来源/服务请求/队列请求)。
 //!

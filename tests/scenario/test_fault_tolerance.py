@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """容错与 API 逻辑契约套件（fault-tolerance-contract，FT-*）。
 
 容错语境：pipeline（队列/拼批/OOM 回退）默认开启；本套件在"容错开启"的默认形态下

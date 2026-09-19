@@ -1,3 +1,6 @@
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::collections::HashSet;
 use std::time::Duration;

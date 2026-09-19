@@ -86,7 +86,7 @@ run_check "http+mcp" \
     cargo check --features "http,mcp"
 
 run_check "http+db" \
-    cargo check --features "http,db"
+    cargo check --features "http,db,sqlite"
 
 run_check "http+onnx" \
     cargo check --features "http,onnx"
@@ -94,8 +94,8 @@ run_check "http+onnx" \
 run_check "auth+onnx (no http)" \
     cargo check --no-default-features --features "auth,onnx"
 
-run_check "full (http+auth+onnx+db+grpc+cli+mcp)" \
-    cargo check --features "http,auth,onnx,db,grpc,cli,mcp"
+run_check "full (http+auth+onnx+db+sqlite+grpc+cli+mcp)" \
+    cargo check --features "http,auth,onnx,db,sqlite,grpc,cli,mcp"
 
 echo ""
 echo "--- 测试验证 ---"
@@ -110,13 +110,13 @@ run_test "http+onnx" \
     cargo test --features "http,onnx" --lib
 
 run_test "http+db" \
-    cargo test --features "http,db" --lib
+    cargo test --features "http,db,sqlite" --lib
 
 run_test "http+auth+onnx" \
     cargo test --features "http,auth,onnx" --lib
 
-run_test "full (http+auth+onnx+db+grpc+cli+mcp)" \
-    cargo test --features "http,auth,onnx,db,grpc,cli,mcp" --lib
+run_test "full (http+auth+onnx+db+sqlite+grpc+cli+mcp)" \
+    cargo test --features "http,auth,onnx,db,sqlite,grpc,cli,mcp" --lib
 
 run_test "no-default-features (lib)" \
     cargo test --no-default-features --lib
@@ -134,16 +134,16 @@ echo "--- 扩展组合编译验证 (api-config-enhancements) ---"
 run_check "openapi-only" \
     cargo check --no-default-features --features openapi
 
-run_check "redis-only" \
+run_check "no-default (原 redis-only: redis 后端已裁除)" \
     cargo check --no-default-features 
 run_check "http+openapi" \
     cargo check --features "http,openapi"
 
-run_check "http+redis" \
+run_check "http" \
     cargo check --features "http"
 
-run_check "ci-full (http+grpc+cli+auth+db+redis+openapi+mcp)" \
-    cargo check --features "http,grpc,cli,auth,db,openapi,mcp"
+run_check "ci-full (http+grpc+cli+auth+db+sqlite+openapi+mcp)" \
+    cargo check --features "http,grpc,cli,auth,db,sqlite,openapi,mcp"
 
 echo ""
 echo "--- clippy 零告警门禁 (-D warnings) ---"
@@ -152,7 +152,7 @@ run_check "clippy (default)" \
     cargo clippy --all-targets -- -D warnings
 
 run_check "clippy (ci-full)" \
-    cargo clippy --features "http,grpc,cli,auth,db,openapi,mcp" --all-targets -- -D warnings
+    cargo clippy --features "http,grpc,cli,auth,db,sqlite,openapi,mcp" --all-targets -- -D warnings
 
 echo ""
 echo "--- GPU 特性编译级验证（本机无 GPU/工具链时记 SKIP） ---"

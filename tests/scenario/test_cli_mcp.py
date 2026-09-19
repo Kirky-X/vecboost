@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026 Kirky.X🌠
+# SPDX-License-Identifier: Apache-2.0
+
 """CLI / MCP 模式探针套件（R-server-003）。
 
 - CLI 4 子命令：stdout 输出合法 JSON 结果（根因修复验证）、退出码 0

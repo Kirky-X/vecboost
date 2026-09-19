@@ -910,10 +910,7 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
         return Err(ApiError::InvalidInput {
             message: crate::i18n::tr_with_args(
                 "openai-input-too-large",
-                crate::i18n::tr_args(&[
-                    ("max", "2048"),
-                    ("effective", &effective.to_string()),
-                ]),
+                crate::i18n::tr_args(&[("max", "2048"), ("effective", &effective.to_string())]),
             ),
             field: Some("input".to_string()),
             value: openai_error_detail("invalid_request_error", "batch_too_large"),

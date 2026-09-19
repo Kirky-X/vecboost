@@ -212,7 +212,10 @@ mod tests {
         let fmt = I18nFormatter::new("zh").unwrap();
         let result = fmt.format_number(1234567.0).unwrap();
         assert!(!result.is_empty(), "zh grouping: {result}");
-        assert!(result.contains('1'), "zh grouping contains digits: {result}");
+        assert!(
+            result.contains('1'),
+            "zh grouping contains digits: {result}"
+        );
     }
 
     #[test]

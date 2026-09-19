@@ -70,7 +70,8 @@ enabled = false
 "#;
 
     let (_dir, path) = write_temp_toml(toml_content);
-    let config = VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+    let config =
+        VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
 
     assert_eq!(config.server.host, "127.0.0.1");
     assert_eq!(config.server.port, 9002);
@@ -243,7 +244,8 @@ enabled = true
 "#;
 
     let (_dir, path) = write_temp_toml(toml_content);
-    let config = VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+    let config =
+        VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
 
     // Verify TOML overrode defaults
     assert_eq!(config.server.host, "10.0.0.1");
@@ -313,7 +315,8 @@ enabled = false
 "#;
 
     let (_dir, path) = write_temp_toml(toml_content);
-    let config = VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+    let config =
+        VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
 
     // 验证 fallback 到 default
     assert!(
@@ -372,7 +375,8 @@ trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
 "#;
 
     let (_dir, path) = write_temp_toml(toml_content);
-    let config = VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
+    let config =
+        VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
 
     // 验证字段被正确加载
     assert_eq!(

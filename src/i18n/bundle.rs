@@ -66,9 +66,7 @@ impl I18nBundle {
     ) -> String {
         let lang = locale.language.as_str();
         format_from_bundle(lang, key, args)
-            .or_else(|| {
-                format_from_bundle(Self::fallback_locale().language.as_str(), key, args)
-            })
+            .or_else(|| format_from_bundle(Self::fallback_locale().language.as_str(), key, args))
             .unwrap_or_else(|| key.to_string())
     }
 

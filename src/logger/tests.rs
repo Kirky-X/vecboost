@@ -39,9 +39,13 @@ use super::LoggerModule;
 macro_rules! build_detached {
     ($config:expr) => {{
         #[cfg(any(feature = "sqlite", feature = "postgres"))]
-        { inklog::LoggerManager::build_detached($config, None).await }
+        {
+            inklog::LoggerManager::build_detached($config, None).await
+        }
         #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
-        { inklog::LoggerManager::build_detached($config).await }
+        {
+            inklog::LoggerManager::build_detached($config).await
+        }
     }};
 }
 

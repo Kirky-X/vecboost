@@ -8,7 +8,7 @@ description = "High-performance embedding vector service written in Rust"
 repository = "https://github.com/Kirky-X/vecboost"
 documentation = "https://github.com/Kirky-X/vecboost"
 homepage = "https://github.com/Kirky-X/vecboost"
-license = "MIT"
+license = "Apache-2.0"
 keywords = ["embedding", "vector", "ml", "ai", "inference"]
 categories = ["asynchronous", "science", "web-programming::http-server"]
 
@@ -25,7 +25,6 @@ regex = { version = "1.13", default-features = false, features = ["std"] }
 sha2 = { version = "0.11", default-features = false, features = ["alloc"] }
 rand = { version = "0.10", default-features = false, features = ["thread_rng", "alloc"] }
 hex = { version = "0.4", default-features = false, features = ["std"] }
-url = { version = "2.5", default-features = false }
 zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 # 0.6 起 hash_password_into 被 alloc feature 门控（derive_key 依赖它）
 argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
@@ -35,13 +34,16 @@ serde = { version = "1.0", default-features = false, features = ["derive", "std"
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 
 # Error Handling (base)
-thiserror = { version = "2.0", default-features = false }
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 
 # Internationalization (i18n) — ICU+Fluent 中英双语支持
-# FTL 文件使用轻量解析器加载（FluentBundle 非 Send+Sync，不适合 static 存储）
+# fluent-bundle concurrent 变体为 Send+Sync，双束可入 static OnceLock（dbnexus 模式）；
+# icu 2.3 compiled_data 内置 CLDR 数据，无需运行时加载
 sys-locale = { version = "0.3", default-features = false }
 unic-langid = { version = "0.9", default-features = false, features = ["likelysubtags"] }
+fluent-bundle = "0.16"
+icu = { version = "2.3", default-features = false, features = ["compiled_data"] }
+writeable = "0.6"
 
 # Module Registry (always required) — 保留 reload/confers 热重载 + i18n 模块消息国际化
 # negotiate(2026-09-16 吸收)：模块能力版本协商（build 时 semver 校验），
@@ -55,8 +57,9 @@ confers = { version = "0.6.0-rc.4", path = "../base/confers", default-features =
 garde = { version = "0.23", default-features = false, features = ["derive"] }
 schemars = { version = "1.2", default-features = false }
 
-# Logging infrastructure — 启用 sqlite 持久化后端 + trait-kit 生命周期集成
-inklog = { version = "0.3.0-rc.4", path = "../base/inklog", default-features = false, features = ["compression", "fast-masking", "sqlite", "kit"] }
+# Logging infrastructure — 仅核心日志面（LoggerManager/sink）。kit 集成未使用故不启用；
+# 驱动由顶层 sqlite/postgres feature 透传 inklog/sqlite、inklog/postgres（kit 需搭配驱动，见 inklog 守卫）
+inklog = { version = "0.3.0-rc.4", path = "../base/inklog", default-features = false, features = ["compression", "fast-masking"] }
 log = { version = "0.4", default-features = false }
 
 # Cache infrastructure — 启用 trait-kit 生命周期集成
@@ -75,11 +78,14 @@ limiteron = { version = "0.3.0-rc.4", path = "../base/limiteron", default-featur
 # Database infrastructure (db feature) — kit/migration 等未接线项按需启用
 # dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
 # Direct sea-orm dependency is still required for those types.
-dbnexus = { version = "0.6.0-rc.4", path = "../base/dbnexus", optional = true, default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "pool-warmup", "retry", "config-env", "observability", "failover", "replica-routing"] }
+# 驱动选择（sqlite/postgres 互斥，由 dbnexus compile_error 强制）通过顶层
+# `sqlite` / `postgres` feature 进行——不得在依赖声明里硬编码任何驱动，
+# 否则另一驱动永久不可用（dbnexus 全图互斥）。
+dbnexus = { version = "0.6.0-rc.4", path = "../base/dbnexus", optional = true, default-features = false, features = ["runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "pool-warmup", "retry", "config-env", "observability", "failover", "replica-routing"] }
 # failover/replica-routing:inklog integrations::infra 无条件构造 DbConfig 的
 # failover_config/replica_config 字段(2026-09-14 dbnexus 加入门控),缺此二者
 # inklog 无法编译;../base 侧修复前由 vecboost 侧补齐。
-sea-orm = { version = "2.0", optional = true, default-features = false }
+sea-orm = { version = "2.0", default-features = false, optional = true }
 
 # AI & Math (base)
 candle-core = { version = "0.11", default-features = false, features = [] }
@@ -107,11 +113,14 @@ uuid = { version = "1.26", optional = true, default-features = false, features =
 base64 = { version = "0.23", optional = true, default-features = false, features = ["std"] }
 
 # Monitoring (http feature)
+# 业务指标直接注册 prometheus default_registry（pipeline gauge + garrison metrics-prometheus 桥接共用），
+# 不引入 axum-prometheus 网关式指标（2026-09-19 审计：零引用死依赖，已移除）。
 prometheus = { version = "0.14", optional = true, default-features = false, features = ["process"] }
-axum-prometheus = { version = "0.10", optional = true, default-features = false }
 
 # HTTP client (http feature)
-reqwest = { version = "0.13", optional = true, default-features = false, features = ["stream", "charset", "http2", "default-tls"] }
+# TLS 统一到 rustls（2026-09-19 审计）：此前 default-tls(native-tls) 与 hf-hub 的
+# rustls-tls 并存，默认构建链接两套 TLS 栈；对齐 crawlrs 侧（其 reqwest 亦统一 rustls）。
+reqwest = { version = "0.13", optional = true, default-features = false, features = ["stream", "charset", "http2", "rustls"] }
 
 # gRPC is fully handled by sdforge (unified Call protocol via #[forge(grpc_method)])
 
@@ -126,7 +135,7 @@ reqwest = { version = "0.13", optional = true, default-features = false, feature
 # sdforge BearerAuth 的独立会话宇宙——HTTP revoke 的 token 此前在 gRPC 侧 exp 前仍有效）。
 # audit-inklog-http/siem、firewall-gcra、backend-shutdown 等 0.9 新 face 为纯透传
 # feature（garrison src 零引用），按 feature 瘦身原则不接。
-garrison = { version = "0.9.0-rc.1", optional = true, default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "cache-audit", "account-credential", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "listener", "i18n", "firewall", "firewall-bruteforce", "firewall-ratelimit", "firewall-ddos", "firewall-anomalous", "secure-totp", "credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-ct-eq", "secure-simple-token", "web-cors", "web-security-headers", "metrics-prometheus", "grpc"] }
+garrison = { version = "0.9.0-rc.1", path = "../garrison", default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "cache-audit", "account-credential", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "listener", "i18n", "firewall", "firewall-bruteforce", "firewall-ratelimit", "firewall-ddos", "firewall-anomalous", "secure-totp", "credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-ct-eq", "secure-simple-token", "web-cors", "web-security-headers", "metrics-prometheus", "grpc"], optional = true }
 aes-gcm = { version = "0.11", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
 
 # ONNX feature
@@ -177,7 +186,7 @@ default = ["http"]
 # sdforge/docs:Swagger UI(/api-docs);dep:dbnexus:在所有 http 构建中统一
 # dbnexus feature(含 failover/replica-routing)—— inklog integrations::infra
 # 无条件构造这两个 DbConfig 字段,缺 feature 时 inklog 无法编译(见 dbnexus 依赖处注释)
-http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:base64", "dep:prometheus", "dep:axum-prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/cache", "sdforge/streaming", "sdforge/timestamp", "sdforge/docs", "dep:dbnexus"]
+http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:base64", "dep:prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/cache", "sdforge/streaming", "sdforge/timestamp", "sdforge/docs", "dep:dbnexus"]
 grpc = ["sdforge/grpc", "sdforge/ratelimit", "sdforge/security", "dep:tonic"]
 cli = ["sdforge/cli", "dep:clap"]
 openapi = ["schema", "dep:utoipa-swagger-ui", "sdforge/openapi", "sdforge/docs"]
@@ -194,9 +203,12 @@ schema = ["dep:utoipa"]
 # Run with: `vecboost --mcp`.
 mcp = ["dep:sdforge", "sdforge/mcp"]
 
-# 存储特性
+# 存储特性 — db 为驱动无关基础设施；驱动由 sqlite / postgres 显式二选一
+# （互斥由 dbnexus compile_error 强制，与 limiteron/garrison 同一约定）。
+# 单独启用 db（无驱动）仅保证编译，运行时连接需要搭配一个驱动 feature。
 db = ["dep:dbnexus", "dep:sea-orm"]
-postgres = ["db", "dbnexus/postgres"]
+sqlite = ["db", "dbnexus/sqlite", "inklog/sqlite"]
+postgres = ["db", "dbnexus/postgres", "inklog/postgres"]
 
 # 功能特性
 auth = ["dep:garrison", "dep:aes-gcm"]
@@ -271,7 +283,7 @@ members = [".", "examples"]
 resolver = "2"
 
 [workspace.package]
-license = "MIT"
+license = "Apache-2.0"
 edition = "2024"
 authors = ["Kirky-X <Kirky-X@outlook.com>"]
 

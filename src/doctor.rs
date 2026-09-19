@@ -1,7 +1,5 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! `vecboost doctor` — 只读诊断。
 //!
@@ -14,8 +12,7 @@
 //!   仍被正确识别，避免"按字面名误报缺文件"类问题。
 //!
 //! doctor 在服务装配**之前**短路运行：模型损坏、依赖缺失时诊断必须仍然可用。
-
-use crate::config::AppConfig;
+use crate::config::VecboostConfig;
 
 /// 检查结论（枚举固定三值，与 spec 一致）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +58,7 @@ pub struct DoctorReport {
 
 impl DoctorReport {
     /// 运行全部检查（只读）。任何单项失败不中断后续检查。
-    pub async fn run(config: &AppConfig) -> Self {
+    pub async fn run(config: &VecboostConfig) -> Self {
         let mut results = Vec::new();
         results.push(check_config(config));
         results.push(check_tokenizer(config));
@@ -111,7 +108,7 @@ impl DoctorReport {
 }
 
 /// 解析模型目录：显式 model_path 优先，否则以 model_repo 名（本地目录约定）。
-pub fn resolve_model_dir(config: &AppConfig) -> std::path::PathBuf {
+pub fn resolve_model_dir(config: &VecboostConfig) -> std::path::PathBuf {
     match config.model.model_path.as_deref() {
         Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
         _ => std::path::PathBuf::from(&config.model.model_repo),
@@ -119,15 +116,15 @@ pub fn resolve_model_dir(config: &AppConfig) -> std::path::PathBuf {
 }
 
 /// ① 配置校验。
-pub fn check_config(config: &AppConfig) -> CheckResult {
+pub fn check_config(config: &VecboostConfig) -> CheckResult {
     match config.validate() {
-        Ok(()) => CheckResult::new("config", CheckStatus::Pass, "AppConfig::validate 通过"),
+        Ok(()) => CheckResult::new("config", CheckStatus::Pass, "VecboostConfig::validate 通过"),
         Err(e) => CheckResult::new("config", CheckStatus::Fail, format!("配置校验失败: {e}")),
     }
 }
 
 /// ② tokenizer 加载自检。模型目录缺失时 WARN（运行时会回退 HF 下载），不武断 FAIL。
-pub fn check_tokenizer(config: &AppConfig) -> CheckResult {
+pub fn check_tokenizer(config: &VecboostConfig) -> CheckResult {
     let dir = resolve_model_dir(config);
     let tok_path = dir.join("tokenizer.json");
     if !dir.exists() {
@@ -161,7 +158,7 @@ pub fn check_tokenizer(config: &AppConfig) -> CheckResult {
 /// ③ 缓存持久层可写性。未配置 persist_path 时为纯内存模式（PASS）。
 /// 可写性探测：创建探针文件后立即删除（不残留）；已存在的 WAL 文件以
 /// append 打开验证权限，不改动内容。
-pub fn check_cache_persist(config: &AppConfig) -> CheckResult {
+pub fn check_cache_persist(config: &VecboostConfig) -> CheckResult {
     let Some(path) = config.embedding.persist_path.as_deref() else {
         return CheckResult::new(
             "cache-persist",
@@ -253,7 +250,7 @@ pub fn check_threads() -> CheckResult {
 
 /// ⑤ GPU 探测。use_gpu=false 时 CPU 模式（PASS）；请求 GPU 但未编译 cuda
 /// feature 为 FAIL（启动必然失败或静默回退，属于配置-构建不匹配）。
-pub async fn check_gpu(config: &AppConfig) -> CheckResult {
+pub async fn check_gpu(config: &VecboostConfig) -> CheckResult {
     if !config.model.use_gpu {
         return CheckResult::new("gpu", CheckStatus::Pass, "CPU 模式（use_gpu=false）");
     }
@@ -289,7 +286,7 @@ pub async fn check_gpu(config: &AppConfig) -> CheckResult {
 
 /// ⑥ 模型文件完整性。遍历 `models/` 下每个模型子目录，
 /// 按角色分类文件并校验；目录缺失为 WARN（HF 下载模式合法）。
-pub fn check_models(config: &AppConfig) -> Vec<CheckResult> {
+pub fn check_models(config: &VecboostConfig) -> Vec<CheckResult> {
     let mut results = Vec::new();
     let models_dir = std::path::Path::new("models");
     // 显式 model_path 指向单模型目录时同样纳入检查
@@ -443,7 +440,7 @@ fn inspect_model_dir(dir: &std::path::Path) -> (CheckStatus, String) {
         config_hidden_size
     );
     if !tokenizer_json {
-        detail.push_str("；⚠️ 未按内容识别到 tokenizer 词表文件");
+        detail.push_str(&crate::i18n::tr("doctor-tokenizer-vocab-missing"));
     }
     (CheckStatus::Pass, detail)
 }
@@ -685,7 +682,7 @@ mod tests {
         let (dir, _guard) = temp_model_dir();
         // 在无 models/ 的工作目录下运行（chick：不能污染真实仓库目录 ——
         // check_models 读取相对路径 "models"，此处仅断言不 panic 且有结论）
-        let mut config = crate::config::AppConfig::default();
+        let mut config = crate::config::VecboostConfig::default();
         config.model.model_path = Some(dir.path().to_string_lossy().to_string());
         let results = check_models(&config);
         assert!(!results.is_empty());
@@ -701,7 +698,7 @@ mod tests {
 
     #[test]
     fn check_cache_persist_modes() {
-        let mut config = crate::config::AppConfig::default();
+        let mut config = crate::config::VecboostConfig::default();
         config.embedding.persist_path = None;
         assert_eq!(check_cache_persist(&config).status, CheckStatus::Pass);
 
@@ -742,7 +739,7 @@ mod tests {
 
     #[tokio::test]
     async fn check_gpu_cpu_mode_passes() {
-        let mut config = crate::config::AppConfig::default();
+        let mut config = crate::config::VecboostConfig::default();
         config.model.use_gpu = false;
         assert_eq!(check_gpu(&config).await.status, CheckStatus::Pass);
     }

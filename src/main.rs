@@ -1,7 +1,5 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 // Performance: jemalloc global memory allocator
 // Only enabled on Linux glibc platforms; macOS/musl use the system default allocator
@@ -18,7 +16,7 @@ use tokio::sync::RwLock;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use trait_kit::prelude::{AsyncShutdownCoordinator, BuildObserver, ShutdownPhase};
-use vecboost::AppConfig;
+use vecboost::VecboostConfig;
 use vecboost::logger::LoggerModule;
 use vecboost::registry::RateLimitModule;
 
@@ -48,7 +46,7 @@ fn resolve_runtime_threads(explicit: Option<usize>) -> (usize, Option<usize>, us
 
 /// 探测采集：RAM（sys-info）、物理核（thread_tune）、模型目录大小。
 /// 任一探针失败即为 None，不参与规划（不猜测）；GPU 探测暂无 bin 可达路径，记 None。
-fn gather_probes(config: &AppConfig) -> vecboost::planner::Probes {
+fn gather_probes(config: &VecboostConfig) -> vecboost::planner::Probes {
     let avail_ram_mb = sys_info::mem_info().ok().map(|m| m.avail / 1024);
     let physical_cores = vecboost::thread_tune::detect_physical_cores();
     let logical_cores = Some(num_cpus::get());
@@ -106,9 +104,9 @@ fn numa_advice() -> Option<String> {
     let text = String::from_utf8_lossy(&out.stdout);
     let sockets = vecboost::thread_tune::parse_lscpu_sockets(&text)?;
     if sockets >= 2 {
-        Some(format!(
-            "NUMA detected: {} sockets; 建议使用 `numactl --interleave=all` 或 `--cpunodebind` 启动以均衡内存带宽（不做进程内绑定）",
-            sockets
+        Some(vecboost::i18n::tr_with_args(
+            "numa-advice",
+            vecboost::i18n::tr_args(&[("sockets", &sockets.to_string())]),
         ))
     } else {
         None
@@ -197,7 +195,7 @@ impl BuildObserver for LoggingObserver {
 
 #[cfg(feature = "db")]
 async fn init_db_pool(
-    config: &AppConfig,
+    config: &VecboostConfig,
 ) -> anyhow::Result<(DbPool, Arc<dbnexus::MetricsCollector>)> {
     log::info!(
         "Initializing database pool with url={}",
@@ -257,7 +255,7 @@ async fn init_db_pool(
 }
 
 async fn init_engine_and_services(
-    config: &AppConfig,
+    config: &VecboostConfig,
 ) -> anyhow::Result<(
     Arc<RwLock<AnyEngine>>,
     Arc<RwLock<EmbeddingService>>,
@@ -451,10 +449,22 @@ fn validate_cli_invocation(filtered_args: &[String]) {
     }
     let known = cli_subcommand_names();
     if !known.contains(first) {
-        eprintln!("Error: unknown subcommand '{first}'");
+        eprintln!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "cli-unknown-subcommand",
+                vecboost::i18n::tr_args(&[("name", first)]),
+            )
+        );
         eprintln!();
-        eprintln!("Available subcommands: {}", known.join(", "));
-        eprintln!("Run 'vecboost --help' for usage.");
+        eprintln!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "cli-available-subcommands",
+                vecboost::i18n::tr_args(&[("list", &known.join(", "))]),
+            )
+        );
+        eprintln!("{}", vecboost::i18n::tr("cli-usage-hint"));
         std::process::exit(2);
     }
 }
@@ -539,7 +549,7 @@ async fn run_cli_command(
 
 #[cfg(feature = "auth")]
 async fn init_auth(
-    config: &AppConfig,
+    config: &VecboostConfig,
 ) -> anyhow::Result<(Option<Arc<GarrisonHandle>>, Option<Arc<GarrisonCsrfConfig>>)> {
     let garrison_handle: Option<Arc<GarrisonHandle>> = if config.auth.enabled {
         if let Some(ref secret) = config.auth.jwt_secret {
@@ -633,7 +643,7 @@ async fn init_auth(
 }
 
 async fn init_pipeline(
-    config: &AppConfig,
+    config: &VecboostConfig,
     service: &Arc<RwLock<EmbeddingService>>,
 ) -> anyhow::Result<(
     Arc<PriorityRequestQueue>,
@@ -816,10 +826,13 @@ fn validate_bind_safety(host: &str, auth_enabled: bool) -> anyhow::Result<()> {
 }
 
 fn main() {
+    // i18n 必须先于一切用户可见输出：thread-tune 提示（numa_advice）与
+    // CLI fail-fast 文案（未知子命令/--config 校验）均已接线 FTL，早于 app_main。
+    vecboost::i18n::init();
     // tokio runtime 线程数取物理核检测（显式 server.workers 优先，
     // VECBOOST_NO_THREAD_TUNE=1 回退 num_cpus）。配置在运行时前 best-effort
     // 预读，失败则由 app_main 内正式加载路径报错。
-    let pre_explicit: Option<usize> = AppConfig::load_via_confers()
+    let pre_explicit: Option<usize> = VecboostConfig::load_via_confers()
         .ok()
         .and_then(|c| c.server.workers)
         .or_else(|| {
@@ -880,7 +893,7 @@ fn strip_config_args(mut args: Vec<String>) -> (Vec<String>, Option<String>) {
             } else {
                 // fail-fast:`--config` 悬空（缺路径参数）不得静默回落默认配置启动,
                 // 否则用户以为在改自定义配置、实际跑的是默认值。退出码与未知子命令一致。
-                eprintln!("Error: --config requires a path argument (--config <path>)");
+                eprintln!("{}", vecboost::i18n::tr("cli-config-requires-path"));
                 std::process::exit(2);
             }
         } else if let Some(path) = args[i].strip_prefix("--config=") {
@@ -974,13 +987,19 @@ async fn app_main() -> anyhow::Result<()> {
         if let Some(p) = config_path.as_deref()
             && !std::path::Path::new(p).exists()
         {
-            eprintln!("Error: config file not found: {p}");
-            eprintln!("The --config path must point to an existing TOML file.");
+            eprintln!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "cli-config-not-found",
+                    vecboost::i18n::tr_args(&[("path", p)]),
+                )
+            );
+            eprintln!("{}", vecboost::i18n::tr("cli-config-not-file-hint"));
             std::process::exit(2);
         }
         let result = match config_path.as_deref() {
-            Some(p) => AppConfig::load_via_confers_with_path(p),
-            None => AppConfig::load_via_confers(),
+            Some(p) => VecboostConfig::load_via_confers_with_path(p),
+            None => VecboostConfig::load_via_confers(),
         };
         match result {
             Ok(c) => c,
@@ -1255,7 +1274,7 @@ async fn app_main() -> anyhow::Result<()> {
 
     // sdforge #[forge] 路由（Router<()>，从 inventory 收集所有 forge 函数注册的路由）
     /// HTTP 路由装配(sdforge 路由 + Swagger/metrics/中间件/CORS)。
-    async fn build_http_router(config: &AppConfig) -> anyhow::Result<axum::Router> {
+    async fn build_http_router(config: &VecboostConfig) -> anyhow::Result<axum::Router> {
         // app_state 由调用方保证已 init_state(所有能力经 kit.require 获取)
         let app_state = vecboost::api::state().map_err(|e| anyhow::anyhow!("{e}"))?;
         // 版本前缀:路由注册为 /api/1/*(forge version=1)。
@@ -1519,7 +1538,7 @@ async fn run_server_lifecycle(
     listener: tokio::net::TcpListener,
     app: axum::Router,
     signal: impl std::future::Future<Output = ()> + Send + 'static,
-    _config: &AppConfig,
+    _config: &VecboostConfig,
     mut bg_tasks: tokio::task::JoinSet<()>,
     shutdown_coordinator: AsyncShutdownCoordinator,
 ) -> anyhow::Result<()> {
@@ -1635,7 +1654,7 @@ fn register_shutdown_hooks(
 /// 装配并启动 gRPC 服务器(BearerAuth/限流/连接上限/超时)。
 #[cfg(feature = "grpc")]
 async fn spawn_grpc_server(
-    config: &AppConfig,
+    config: &VecboostConfig,
     bg_tasks: &mut tokio::task::JoinSet<()>,
 ) -> anyhow::Result<()> {
     let grpc_host = config
@@ -1789,7 +1808,7 @@ fn spawn_config_watcher(bg_tasks: &mut tokio::task::JoinSet<()>, config_path: Op
             let reload_path = config_path.to_string();
             while let Some(changed_path) = fs_watcher.recv().await {
                 log::info!("Config file changed: {:?}, reloading...", changed_path);
-                match AppConfig::load_via_confers_with_path(&reload_path) {
+                match VecboostConfig::load_via_confers_with_path(&reload_path) {
                     Ok(_new_config) => {
                         log::info!(
                             "Configuration reloaded and validated successfully (hot-swap pending trait-kit AsyncKit reload)"
@@ -1808,7 +1827,7 @@ fn spawn_config_watcher(bg_tasks: &mut tokio::task::JoinSet<()>, config_path: Op
 /// Module 注册 + 生命周期/健康检查挂载。从 `app_main` 拆出。
 #[allow(clippy::too_many_arguments)]
 async fn build_module_registry(
-    config: &AppConfig,
+    config: &VecboostConfig,
     service: Arc<RwLock<EmbeddingService>>,
     rerank_service: Arc<RwLock<RerankService>>,
     rate_limiter: Arc<LimiteronAdapter>,
@@ -2115,7 +2134,7 @@ mod tests {
     #[cfg(feature = "auth")]
     #[tokio::test]
     async fn init_auth_rejects_missing_admin_password() {
-        let mut config = AppConfig::default();
+        let mut config = VecboostConfig::default();
         config.auth.enabled = true;
         config.auth.jwt_secret = Some("test-secret-0123456789abcdef0123".to_string());
         config.auth.default_admin_password = None;

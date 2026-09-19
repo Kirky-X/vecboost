@@ -1,14 +1,11 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! 模型热度持久化（port 自 colibri `.coli_usage` 原子写 + warmstart pin）。
 //!
 //! - 落盘 `data/model_heat.json`：原子写（tmp + rename）；
 //! - 头部含模型指纹（name + schema 版本）；启动加载作 warmstart 初始 heat；
 //! - 损坏/指纹不匹配即弃用并 warn（绝不污染新会话）。
-
 use log::warn;
 use std::collections::HashMap;
 use std::io;
@@ -90,9 +87,14 @@ pub fn load_heat(path: &Path) -> HashMap<String, u32> {
         Ok(t) => t,
         Err(e) => {
             warn!(
-                "model heat: 无法读取 {}（{}），warmstart 跳过",
-                path.display(),
-                e
+                "{}",
+                crate::i18n::tr_with_args(
+                    "heat-read-failed",
+                    crate::i18n::tr_args(&[
+                        ("path", &path.display().to_string()),
+                        ("detail", &e.to_string()),
+                    ]),
+                )
             );
             return HashMap::new();
         }
@@ -101,24 +103,41 @@ pub fn load_heat(path: &Path) -> HashMap<String, u32> {
         Ok(f) => f,
         Err(e) => {
             warn!(
-                "model heat: {} 解析失败（{}），弃用并 warn",
-                path.display(),
-                e
+                "{}",
+                crate::i18n::tr_with_args(
+                    "heat-parse-failed",
+                    crate::i18n::tr_args(&[
+                        ("path", &path.display().to_string()),
+                        ("detail", &e.to_string()),
+                    ]),
+                )
             );
             return HashMap::new();
         }
     };
     if file.schema_version != HEAT_SCHEMA_VERSION {
         warn!(
-            "model heat: schema 版本不匹配（文件 {}，期望 {}），弃用",
-            file.schema_version, HEAT_SCHEMA_VERSION
+            "{}",
+            crate::i18n::tr_with_args(
+                "heat-schema-mismatch",
+                crate::i18n::tr_args(&[
+                    ("got", &file.schema_version.to_string()),
+                    ("expected", &HEAT_SCHEMA_VERSION.to_string()),
+                ]),
+            )
         );
         return HashMap::new();
     }
     let mut out = HashMap::with_capacity(file.entries.len());
     for (name, entry) in file.entries {
         if entry.fingerprint != heat_fingerprint(&name) {
-            warn!("model heat: 条目 '{}' 指纹不匹配，弃用该条", name);
+            warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "heat-entry-fingerprint-mismatch",
+                    crate::i18n::tr_args(&[("name", &name)]),
+                )
+            );
             continue;
         }
         out.insert(name, entry.heat);

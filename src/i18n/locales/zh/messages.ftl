@@ -8,7 +8,8 @@ sensitive-dir-refused = 拒绝使用敏感目录 '{ $path }' 作为允许根目�
 
 # ── OpenAI 兼容端点 ──
 openai-input-empty = 输入不能为空
-openai-input-too-large = 输入数组过大（最多 { $max } 项）
+openai-input-too-large = 输入数组过大（最多 { $max } 项；服务端 embedding.max_batch_size = { $effective }）
+openai-model-not-found = 模型 '{ $model }' 不存在。可用模型：{ $available }
 
 # ── 认证消息 ──
 auth-admin-password-missing = 服务端未配置管理员密码，认证不可用；请设置 VECBOOST_ADMIN_PASSWORD 并重启
@@ -29,6 +30,7 @@ model-load-failed = 加载模型 '{ $name }' 失败：{ $detail }
 file-empty = 文件为空
 file-no-paragraphs = 文件中未找到段落
 file-invalid-encoding = 无效的路径编码：路径包含非法 UTF-8 字符
+embed-file-too-large = 文件超过 /embed/file 的 { $max } MiB 上限（实际 { $got } 字节）
 
 # ── 内存不足 / 降级 ──
 oom-no-fallback = 内存不足且已尝试降级回退
@@ -36,6 +38,8 @@ oom-no-fallback = 内存不足且已尝试降级回退
 # ── 健康检查 ──
 health-ok = 正常
 health-check-failed = { $module }：健康检查失败：{ $detail }
+health-engine-probe-failed = tokenizer/engine 流水线探测失败
+health-limiter-failed = limiteron 健康检查失败
 
 # ── Rerank 验证 ──
 rerank-empty-docs = 文档列表不能为空
@@ -131,3 +135,19 @@ cli-no-handler = 未注册 CLI 命令处理器：{ $name }
 cli-failed = CLI 命令 '{ $name }' 执行失败：{ $detail }
 engine-bert-config-required = Bert 模型需要 Bert 配置
 engine-xlm-config-required = XLM-RoBERTa 模型需要 XLM-RoBERTa 配置
+
+# ── CLI 调用错误（main.rs fail-fast 路径） ──
+cli-unknown-subcommand = 错误：未知子命令 '{ $name }'
+cli-available-subcommands = 可用子命令：{ $list }
+cli-usage-hint = 运行 'vecboost --help' 查看用法。
+cli-config-requires-path = 错误：--config 需要路径参数（--config <path>）
+cli-config-not-found = 错误：配置文件未找到：{ $path }
+cli-config-not-file-hint = --config 路径必须指向已存在的 TOML 文件。
+
+# ── 运行时诊断 / 日志 ──
+numa-advice = 检测到 NUMA：{ $sockets } 个 socket；建议使用 `numactl --interleave=all` 或 `--cpunodebind` 启动以均衡内存带宽（不做进程内绑定）
+heat-read-failed = 模型热度表：无法读取 { $path }（{ $detail }），warmstart 跳过
+heat-parse-failed = 模型热度表：{ $path } 解析失败（{ $detail }），弃用整个文件
+heat-schema-mismatch = 模型热度表：schema 版本不匹配（文件 { $got }，期望 { $expected }），弃用
+heat-entry-fingerprint-mismatch = 模型热度表：条目 '{ $name }' 指纹不匹配，弃用该条
+doctor-tokenizer-vocab-missing = ；⚠️ 未按内容识别到 tokenizer 词表文件

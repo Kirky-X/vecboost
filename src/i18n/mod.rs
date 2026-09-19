@@ -1,3 +1,6 @@
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
+
 //! Internationalization (i18n) module — ICU+Fluent based bilingual support.
 //!
 //! Provides translation functions backed by Project Fluent FTL files.
@@ -20,9 +23,11 @@
 //! ```
 
 mod bundle;
+mod i18n_impl;
 pub mod locale;
 
 pub(crate) use bundle::I18nBundle;
+pub use i18n_impl::{I18nError, I18nFormatter};
 
 use std::collections::HashMap;
 use std::sync::OnceLock;

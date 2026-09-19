@@ -1,7 +1,5 @@
-// Copyright (c) 2025-2026 Kirky.X
-//
-// Licensed under the MIT License
-// See LICENSE file in the project root for full license information.
+// Copyright (c) 2025-2026 Kirky.X🌠
+// SPDX-License-Identifier: Apache-2.0
 
 //! Embedding forge handlers — HTTP/MCP/CLI/gRPC protocol-agnostic.
 //!
@@ -260,10 +258,12 @@ const FILE_EMBED_MAX_BYTES: u64 = 10 * 1024 * 1024;
 #[cfg(any(feature = "http", feature = "grpc"))]
 fn check_file_embed_size(len: u64) -> Result<(), String> {
     if len > FILE_EMBED_MAX_BYTES {
-        Err(format!(
-            "File exceeds the {} MiB limit for /embed/file (got {} bytes)",
-            FILE_EMBED_MAX_BYTES / (1024 * 1024),
-            len
+        Err(crate::i18n::tr_with_args(
+            "embed-file-too-large",
+            crate::i18n::tr_args(&[
+                ("max", &(FILE_EMBED_MAX_BYTES / (1024 * 1024)).to_string()),
+                ("got", &len.to_string()),
+            ]),
         ))
     } else {
         Ok(())
@@ -540,7 +540,7 @@ async fn run_deep_health_checks(st: &crate::VecboostState) -> Vec<serde_json::Va
     if !engine_probe_ok(st).await {
         failures.push(serde_json::json!({
             "component": "engine",
-            "error": "tokenizer/engine pipeline probe failed",
+            "error": crate::i18n::tr("health-engine-probe-failed"),
         }));
     }
 
@@ -549,7 +549,7 @@ async fn run_deep_health_checks(st: &crate::VecboostState) -> Vec<serde_json::Va
     {
         failures.push(serde_json::json!({
             "component": "rate_limit",
-            "error": "limiteron health check failed",
+            "error": crate::i18n::tr("health-limiter-failed"),
         }));
     }
 
@@ -908,13 +908,12 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
     if req.input.len() > 2048 {
         let effective = max_batch_size_from_kit(&state().map_err(to_api_error)?.kit);
         return Err(ApiError::InvalidInput {
-            message: format!(
-                "{} (server embedding.max_batch_size = {})",
-                crate::i18n::tr_with_args(
-                    "openai-input-too-large",
-                    crate::i18n::tr_args(&[("max", "2048")]),
-                ),
-                effective
+            message: crate::i18n::tr_with_args(
+                "openai-input-too-large",
+                crate::i18n::tr_args(&[
+                    ("max", "2048"),
+                    ("effective", &effective.to_string()),
+                ]),
             ),
             field: Some("input".to_string()),
             value: openai_error_detail("invalid_request_error", "batch_too_large"),
@@ -935,15 +934,15 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
         // 400 + 可用模型列表(OpenAI 契约的 model_not_found 本应 404;
         // NotFound 变体无自由槽位,故用 InvalidInput(BAD_REQUEST) 并经 value 槽
         // 附带 openai_error_type/openai_code 供 OpenAI SDK 识别)
+        let available_list = available
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         return Err(ApiError::InvalidInput {
-            message: format!(
-                "The model '{}' does not exist. Available models: {}",
-                req.model,
-                available
-                    .iter()
-                    .map(|m| m.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+            message: crate::i18n::tr_with_args(
+                "openai-model-not-found",
+                crate::i18n::tr_args(&[("model", &req.model), ("available", &available_list)]),
             ),
             field: Some("model".to_string()),
             value: openai_error_detail("invalid_request_error", "model_not_found"),
@@ -1240,9 +1239,12 @@ mod tests {
     /// 文件大小上限(10 MiB 内通过,超限报错并给出限值)
     #[test]
     fn check_file_embed_size_enforces_limit() {
+        // 报错文案经 FTL 输出,先确保 i18n 就绪(未 init 时 tr 退化为裸键)
+        crate::i18n::init();
         assert!(check_file_embed_size(0).is_ok());
         assert!(check_file_embed_size(10 * 1024 * 1024).is_ok());
         let err = check_file_embed_size(10 * 1024 * 1024 + 1).unwrap_err();
+        // en("10 MiB limit")/zh("10 MiB 上限") 双语均含 "10 MiB"
         assert!(err.contains("10 MiB"));
     }
 

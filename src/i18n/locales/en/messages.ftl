@@ -8,7 +8,8 @@ sensitive-dir-refused = Refusing to use sensitive directory '{ $path }' as allow
 
 # ── OpenAI-compatible endpoint ──
 openai-input-empty = Input cannot be empty
-openai-input-too-large = Input array too large (max { $max } items)
+openai-input-too-large = Input array too large (max { $max } items; server embedding.max_batch_size = { $effective })
+openai-model-not-found = The model '{ $model }' does not exist. Available models: { $available }
 
 # ── Authentication messages ──
 auth-admin-password-missing = Server has no admin password configured; authentication is unavailable. Set VECBOOST_ADMIN_PASSWORD and restart
@@ -29,6 +30,7 @@ model-load-failed = Failed to load model '{ $name }': { $detail }
 file-empty = File is empty
 file-no-paragraphs = No paragraphs found in file
 file-invalid-encoding = Invalid path encoding: path contains invalid UTF-8
+embed-file-too-large = File exceeds the { $max } MiB limit for /embed/file (got { $got } bytes)
 
 # ── OOM / fallback ──
 oom-no-fallback = Out of memory and fallback already attempted
@@ -36,6 +38,8 @@ oom-no-fallback = Out of memory and fallback already attempted
 # ── Health check ──
 health-ok = OK
 health-check-failed = { $module }: health check failed: { $detail }
+health-engine-probe-failed = tokenizer/engine pipeline probe failed
+health-limiter-failed = limiteron health check failed
 
 # ── Rerank validation ──
 rerank-empty-docs = Documents list cannot be empty
@@ -131,3 +135,19 @@ cli-no-handler = No handler registered for CLI command: { $name }
 cli-failed = CLI command '{ $name }' failed: { $detail }
 engine-bert-config-required = Bert config is required for Bert model
 engine-xlm-config-required = XLM-RoBERTa config is required
+
+# ── CLI invocation errors (main.rs fail-fast paths) ──
+cli-unknown-subcommand = Error: unknown subcommand '{ $name }'
+cli-available-subcommands = Available subcommands: { $list }
+cli-usage-hint = Run 'vecboost --help' for usage.
+cli-config-requires-path = Error: --config requires a path argument (--config <path>)
+cli-config-not-found = Error: config file not found: { $path }
+cli-config-not-file-hint = The --config path must point to an existing TOML file.
+
+# ── Runtime diagnostics / logs ──
+numa-advice = NUMA detected: { $sockets } sockets; consider starting with `numactl --interleave=all` or `--cpunodebind` to balance memory bandwidth (no in-process binding)
+heat-read-failed = model heat: failed to read { $path } ({ $detail }); warmstart skipped
+heat-parse-failed = model heat: failed to parse { $path } ({ $detail }); file discarded
+heat-schema-mismatch = model heat: schema version mismatch (file { $got }, expected { $expected }); file discarded
+heat-entry-fingerprint-mismatch = model heat: entry '{ $name }' fingerprint mismatch; entry discarded
+doctor-tokenizer-vocab-missing = ; ⚠️ tokenizer vocab file not identified by content

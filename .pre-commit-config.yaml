@@ -48,14 +48,15 @@ repos:
         types: [rust]
 
   # Remove trailing whitespace
+  # 注：以下三个钩子原为 language: system + 自定义 entry，但系统中并无
+  # trailing-whitespace-fixer / check-merge-conflict / check-added-large-files
+  # 可执行文件，钩子会以 "Executable ... not found" 失败并拦下所有提交。
+  # 故改为使用仓库自带环境（由 pre-commit 按 rev 固定版本安装），入口取默认值。
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
         name: Check trailing whitespace
-        entry: trailing-whitespace-fixer
-        language: system
-        pass_filenames: true
 
   # Check for merge conflicts
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -63,9 +64,6 @@ repos:
     hooks:
       - id: check-merge-conflict
         name: Check for merge conflict markers
-        entry: check-merge-conflict
-        language: system
-        pass_filenames: true
 
   # Detect large files
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -73,10 +71,7 @@ repos:
     hooks:
       - id: check-added-large-files
         name: Check for large files
-        entry: check-added-large-files
         args: ['--maxkb=1000']
-        language: system
-        pass_filenames: true
 
   # === 提交完成后清理本地编译产物（post-commit 阶段；启用: pre-commit install -t post-commit） ===
   - repo: local

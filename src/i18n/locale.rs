@@ -3,14 +3,18 @@
 
 //! Language detection and locale resolution.
 //!
-//! Priority chain:
+//! Priority chain (reference-pattern §2):
 //! 1. `VECBOOST_LANG` environment variable
 //! 2. `LC_ALL` environment variable
-//! 3. `LANG` environment variable
-//! 4. `sys-locale` system locale
-//! 5. Fallback to `"en"`
+//! 3. `LC_MESSAGES` environment variable
+//! 4. `LANG` environment variable
+//! 5. `sys-locale` system locale
+//! 6. Fallback to `"en"`
 
 /// Detect the user's preferred locale from environment and system settings.
+///
+/// Priority chain (reference-pattern §2):
+/// `VECBOOST_LANG` → `LC_ALL` → `LC_MESSAGES` → `LANG` → `sys-locale` → `"en"`.
 ///
 /// Returns a normalized locale string: `"en"` or `"zh"`.
 pub fn detect_locale() -> String {
@@ -30,7 +34,15 @@ pub fn detect_locale() -> String {
         }
     }
 
-    // 3. LANG
+    // 3. LC_MESSAGES (POSIX 消息类目专用变量；未设 LC_ALL 时优先于 LANG)
+    if let Ok(lc) = std::env::var("LC_MESSAGES") {
+        let trimmed = lc.trim();
+        if !trimmed.is_empty() {
+            return normalize_locale(trimmed);
+        }
+    }
+
+    // 4. LANG
     if let Ok(lang) = std::env::var("LANG") {
         let trimmed = lang.trim();
         if !trimmed.is_empty() {
@@ -38,12 +50,12 @@ pub fn detect_locale() -> String {
         }
     }
 
-    // 4. System locale
+    // 5. System locale
     if let Some(sys_locale) = sys_locale::get_locale() {
         return normalize_locale(&sys_locale);
     }
 
-    // 5. Fallback
+    // 6. Fallback
     "en".to_string()
 }
 
@@ -124,6 +136,42 @@ mod tests {
 
     use super::*;
 
+    /// 环境变量临时改写守卫：构造时保存并清空给定变量，析构时恢复原值
+    /// （断言失败 / panic 亦恢复，避免测试间环境串扰）。
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn clear(keys: &[&'static str]) -> Self {
+            let saved: Vec<(&'static str, Option<String>)> =
+                keys.iter().map(|k| (*k, std::env::var(k).ok())).collect();
+            for key in keys {
+                unsafe { std::env::remove_var(key) };
+            }
+            Self { saved }
+        }
+
+        fn set(&self, key: &str, value: &str) {
+            unsafe { std::env::set_var(key, value) };
+        }
+
+        fn remove(&self, key: &str) {
+            unsafe { std::env::remove_var(key) };
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                match value {
+                    Some(v) => unsafe { std::env::set_var(key, v) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_normalize_locale() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -187,10 +235,12 @@ mod tests {
         // Clear all locale env vars to test fallback
         let saved_vb = std::env::var("VECBOOST_LANG").ok();
         let saved_lc = std::env::var("LC_ALL").ok();
+        let saved_lc_messages = std::env::var("LC_MESSAGES").ok();
         let saved_lang = std::env::var("LANG").ok();
         unsafe {
             std::env::remove_var("VECBOOST_LANG");
             std::env::remove_var("LC_ALL");
+            std::env::remove_var("LC_MESSAGES");
             std::env::remove_var("LANG");
         }
         // Without env vars, falls through to sys_locale or "en"
@@ -202,6 +252,9 @@ mod tests {
         }
         if let Some(v) = saved_lc {
             unsafe { std::env::set_var("LC_ALL", v) }
+        }
+        if let Some(v) = saved_lc_messages {
+            unsafe { std::env::set_var("LC_MESSAGES", v) }
         }
         if let Some(v) = saved_lang {
             unsafe { std::env::set_var("LANG", v) }
@@ -229,15 +282,51 @@ mod tests {
         }
     }
 
+    /// 检测链层级完整性（reference-pattern §2）：
+    /// `VECBOOST_LANG` → `LC_ALL` → `LC_MESSAGES` → `LANG` → sys-locale → `en`。
+    /// 此前 `LC_MESSAGES` 层级缺失，`LC_MESSAGES=zh_CN.UTF-8` 会被 `LANG=en_US.UTF-8` 覆盖。
+    #[test]
+    fn test_detect_locale_lc_messages() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // 四级变量全部清空后逐级注入，逐级断言优先级
+        let env = EnvGuard::clear(&["VECBOOST_LANG", "LC_ALL", "LC_MESSAGES", "LANG"]);
+        env.set("LANG", "en_US.UTF-8");
+
+        // LC_MESSAGES 生效（修复前落到 LANG=en，返回 "en"）
+        env.set("LC_MESSAGES", "zh_CN.UTF-8");
+        assert_eq!(detect_locale(), "zh");
+
+        // LC_ALL 优先于 LC_MESSAGES
+        env.set("LC_ALL", "en_US.UTF-8");
+        assert_eq!(detect_locale(), "en");
+
+        // LC_MESSAGES 优先于 LANG（LC_ALL 清空后由 LC_MESSAGES 接管）
+        env.remove("LC_ALL");
+        assert_eq!(detect_locale(), "zh");
+
+        // VECBOOST_LANG 优先于 LC_MESSAGES
+        env.set("VECBOOST_LANG", "en");
+        assert_eq!(detect_locale(), "en");
+
+        // LC_MESSAGES 空值（trim 后）与无效值 → 回退链继续（不 panic，链尾非空）
+        env.remove("VECBOOST_LANG");
+        env.set("LC_MESSAGES", "  ");
+        assert_eq!(detect_locale(), "en");
+        env.set("LC_MESSAGES", "zh_TW.UTF-8");
+        assert_eq!(detect_locale(), "zh");
+    }
+
     #[test]
     fn test_detect_locale_lang() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved_vb = std::env::var("VECBOOST_LANG").ok();
         let saved_lc = std::env::var("LC_ALL").ok();
+        let saved_lc_messages = std::env::var("LC_MESSAGES").ok();
         let saved_lang = std::env::var("LANG").ok();
         unsafe {
             std::env::remove_var("VECBOOST_LANG");
             std::env::remove_var("LC_ALL");
+            std::env::remove_var("LC_MESSAGES");
             std::env::set_var("LANG", "en_US.UTF-8");
         }
         assert_eq!(detect_locale(), "en");
@@ -249,6 +338,10 @@ mod tests {
         match saved_lc {
             Some(v) => unsafe { std::env::set_var("LC_ALL", v) },
             None => unsafe { std::env::remove_var("LC_ALL") },
+        }
+        match saved_lc_messages {
+            Some(v) => unsafe { std::env::set_var("LC_MESSAGES", v) },
+            None => unsafe { std::env::remove_var("LC_MESSAGES") },
         }
         match saved_lang {
             Some(v) => unsafe { std::env::set_var("LANG", v) },

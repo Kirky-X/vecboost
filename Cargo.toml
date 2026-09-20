@@ -77,7 +77,7 @@ limiteron = { version = "0.3.0-rc.4", path = "../base/limiteron", default-featur
 
 # Database infrastructure (db feature) — kit/migration 等未接线项按需启用
 # dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
-# Direct sea-orm dependency is still required for those types.
+# sea-orm 类型统一经 dbnexus::sea_orm re-export（2026-09-20 收敛，原直依赖已移除）。
 # 驱动选择（sqlite/postgres 互斥，由 dbnexus compile_error 强制）通过顶层
 # `sqlite` / `postgres` feature 进行——不得在依赖声明里硬编码任何驱动，
 # 否则另一驱动永久不可用（dbnexus 全图互斥）。
@@ -85,7 +85,6 @@ dbnexus = { version = "0.6.0-rc.4", path = "../base/dbnexus", optional = true, d
 # failover/replica-routing:inklog integrations::infra 无条件构造 DbConfig 的
 # failover_config/replica_config 字段(2026-09-14 dbnexus 加入门控),缺此二者
 # inklog 无法编译;../base 侧修复前由 vecboost 侧补齐。
-sea-orm = { version = "2.0", default-features = false, optional = true }
 
 # AI & Math (base)
 candle-core = { version = "0.11", default-features = false, features = [] }
@@ -206,7 +205,7 @@ mcp = ["dep:sdforge", "sdforge/mcp"]
 # 存储特性 — db 为驱动无关基础设施；驱动由 sqlite / postgres 显式二选一
 # （互斥由 dbnexus compile_error 强制，与 limiteron/garrison 同一约定）。
 # 单独启用 db（无驱动）仅保证编译，运行时连接需要搭配一个驱动 feature。
-db = ["dep:dbnexus", "dep:sea-orm"]
+db = ["dep:dbnexus"]
 sqlite = ["db", "dbnexus/sqlite", "inklog/sqlite"]
 postgres = ["db", "dbnexus/postgres", "inklog/postgres"]
 

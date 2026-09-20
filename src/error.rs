@@ -258,8 +258,8 @@ impl From<std::io::Error> for VecboostError {
 }
 
 #[cfg(feature = "db")]
-impl From<sea_orm::DbErr> for VecboostError {
-    fn from(e: sea_orm::DbErr) -> Self {
+impl From<dbnexus::sea_orm::DbErr> for VecboostError {
+    fn from(e: dbnexus::sea_orm::DbErr) -> Self {
         VecboostError::DatabaseError(e.to_string())
     }
 }
@@ -570,7 +570,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[test]
     fn test_from_db_error() {
-        let db_err = sea_orm::DbErr::RecordNotFound("not found".to_string());
+        let db_err = dbnexus::sea_orm::DbErr::RecordNotFound("not found".to_string());
         let vecboost_err: VecboostError = db_err.into();
         match vecboost_err {
             VecboostError::DatabaseError(msg) => {

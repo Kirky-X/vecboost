@@ -13,7 +13,7 @@ use tokio::time::{Duration, MissedTickBehavior};
 
 use crate::error::VecboostError;
 #[cfg(feature = "db")]
-use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
+use dbnexus::sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
 
 use super::{AuditConfig, SecurityEvent, SecurityEventType};
 

@@ -57,42 +57,6 @@ jobs:
         run: cargo test --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --lib
 
 
-  build-docker:
-    name: Build Docker Image
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_TOKEN }}
-
-      - name: Extract metadata for Docker
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-        with:
-          images: vecboost/vecboost
-          tags: |
-            type=semver,pattern=v{{version}}
-            type=sha
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
 
   github-release:
     name: Create GitHub Release
@@ -176,22 +140,18 @@ jobs:
 
   notify:
     name: Notify Status
-    needs: [build-docker, github-release, publish-crates]
+    needs: [github-release, publish-crates]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
     steps:
       - name: Check status
         run: |
-          echo "build-docker: ${{ needs.build-docker.result }}"
           echo "github-release: ${{ needs.github-release.result }}"
           echo "publish-crates: ${{ needs.publish-crates.result }}"
           if [[ "${{ needs.github-release.result }}" == "success" ]] && \
              [[ "${{ needs.publish-crates.result }}" == "success" ]]; then
             echo "✅ Release completed successfully!"
-            if [[ "${{ needs.build-docker.result }}" != "success" ]]; then
-              echo "⚠️  Docker image build failed (non-blocking)"
-            fi
             exit 0
           else
             echo "❌ Release failed!"

@@ -85,7 +85,7 @@ DynamicBatchScheduler（固定等待窗）与 ContinuousBatchLoop（1ms tick + �
 
 ## ⏱️ 吞吐基线
 
-`embed_throughput_bench`（T012）度量单文本 `embed` 与 32 文本 `embed_batch`（bge-small 级模型，CPU），criterion 100 samples 取中位：
+`embed_throughput_bench` 度量单文本 `embed` 与 32 文本 `embed_batch`（bge-small 级模型，CPU），criterion 100 samples 取中位：
 
 ```bash
 VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_throughput_bench
@@ -97,7 +97,7 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 | 同上 | `--features mkl`（hgemm_ 垫片） | 中位 17.5 ms（**4.0×**） | 中位 148.4 ms（**1.17×**） | 2026-09-16；`RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"` 绕开 lld 链接 MKL 的已知问题 |
 | 同上 | 默认构建 + `--features mkl`（同晚连续复测） | 默认 81.8 ms / mkl 20.5 ms（**4.0×**） | 默认 193.7 ms / mkl 157.6 ms（**1.23×**） | 2026-09-16 晚回归扫描（[regression_sweep_2026-09-16.md](benchmarks/regression_sweep_2026-09-16.md)）；绝对值较上两行整体上浮 ~15-17% 为持续负载降频（同代码 quick 口径实测 69.7 ms 与 2026-09-15 行吻合），**加速比不变，非代码回退** |
 
-> **加速后端说明（T011 → T035 收敛闭环）**：mkl 已可用。上游版本错配——candle 0.11 调用 fp16 GEMM `hgemm_`，而 intel-mkl-src 0.8.1 Linux 静态路径锁死 MKL 2020.1（ghcr.io/rust-math，无该符号）——由 `src/engine/mkl_shim.rs` 的 `hgemm_` 垫片解决（f16 入 → f32 累加 `sgemm_` → f16 出，与硬件 hgemm 数值语义一致）。两个注意点：① 本机 rust-lld 链接 MKL 存在额外问题，需 `RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"`；② `--features mkl` 保持 opt-in，默认构建不引入 MKL。accelerate（macOS）保持 opt-in，本机无法验证。单文本 4.0× 主要来自 fp32 GEMM；32 批仅 1.17×，说明批路径瓶颈已不在 matmul。
+> **加速后端说明**：mkl 已可用。上游版本错配——candle 0.11 调用 fp16 GEMM `hgemm_`，而 intel-mkl-src 0.8.1 Linux 静态路径锁死 MKL 2020.1（ghcr.io/rust-math，无该符号）——由 `src/engine/mkl_shim.rs` 的 `hgemm_` 垫片解决（f16 入 → f32 累加 `sgemm_` → f16 出，与硬件 hgemm 数值语义一致）。两个注意点：① 本机 rust-lld 链接 MKL 存在额外问题，需 `RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"`；② `--features mkl` 保持 opt-in，默认构建不引入 MKL。accelerate（macOS）保持 opt-in，本机无法验证。单文本 4.0× 主要来自 fp32 GEMM；32 批仅 1.17×，说明批路径瓶颈已不在 matmul。
 
 ---
 
@@ -123,7 +123,7 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
   - Q8_0：余弦中位数 **0.9999**（min 0.9998）✓
   - Q4_K：余弦中位数 **0.9987**（min 0.9955）✓
 - **压缩实测**（bge-small-en-v1.5，fp32 133.5 MB）：Q8_0 **35.5 MB（3.76×）**，75 张量零兜底；Q4_K 56.4 MB（2.37×），63/75 张量因 384 维对 Q4_K 256 块不整除回退 F16（candle 0.11 量化无 padding）。**bge-small 级模型推荐 Q8_0**；Q4_K 真正生效需上游 padding 能力。
-- **实现方式（T035 收敛落地）**：加载期反量化桥。candle-transformers 0.11 无 `quantized_bert`，故 `write_gguf_from_safetensors`（写出）+ `QuantizedCandleEngine::load`（逐张量反量化 f32 → 复用 `BertModel` 前向，路由经 `EngineFactory`）。收益为**存储与加载体积**，运行期计算与 fp32 等价，不宣称算力加速；算力加速走 `--features mkl`。
+- **实现方式**：加载期反量化桥。candle-transformers 0.11 无 `quantized_bert`，故 `write_gguf_from_safetensors`（写出）+ `QuantizedCandleEngine::load`（逐张量反量化 f32 → 复用 `BertModel` 前向，路由经 `EngineFactory`）。收益为**存储与加载体积**，运行期计算与 fp32 等价，不宣称算力加速；算力加速走 `--features mkl`。
 
 ---
 
@@ -146,7 +146,7 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 | `[model] resident_memory_budget_mb` | 配置 | None | 未设 = 不按内存预算驱逐 | 同上 |
 | `[device] auto_plan` | 配置 | false | false = 零计划行为；true 时计划仅填充未显式配置的字段 | `device::planner` 测试 |
 | `vecboost doctor` | CLI | — | 只读诊断：config/tokenizer/cache-persist/threads/gpu/models；有 FAIL 退出码 1 | `tests/doctor.rs` |
-| `vecboost --warmup N` | CLI | 0 | 0 = 不预热 | 启动预热（T031） |
+| `vecboost --warmup N` | CLI | 0 | 0 = 不预热 | 启动预热 |
 | `scripts/autotune.py` | 脚本 | — | 手动运行；安全门（漂移>1e-6 取消/增益<3% 不采纳/胜者反序复测） | `--help` |
 
 ---

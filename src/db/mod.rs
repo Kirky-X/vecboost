@@ -209,9 +209,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_users_crud() {
-        let pool = DbPool::new("sqlite::memory:")
-            .await
-            .expect("Failed to create pool");
+        // sqlite::memory: 的每个连接是独立数据库;限制单连接,
+        // 确保 init_schema 与 CRUD 落在同一连接(CI 冷环境必现 no such table)
+        let pool = DbPool::with_config(DbConfig {
+            url: "sqlite::memory:".to_string(),
+            pool_config: dbnexus::PoolConfig {
+                max_connections: 1,
+                min_connections: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("Failed to create pool");
         init_schema(&pool).await.expect("Failed to init schema");
         let session = pool
             .get_session("admin")

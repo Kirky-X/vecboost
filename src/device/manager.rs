@@ -792,6 +792,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_gpu_info_with_stats_and_cuda_device() {
+        // 该用例断言真实 NVIDIA GPU 信息;无 NVIDIA 驱动的环境(如 CI 裸机)直接跳过
+        if std::process::Command::new("nvidia-smi").output().is_err() {
+            eprintln!("Skipping test: nvidia-smi not available on this host");
+            return;
+        }
         let monitor = Arc::new(MemoryMonitor::new());
         monitor
             .update_gpu_memory(1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024)

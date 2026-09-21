@@ -72,8 +72,8 @@ RUN apt-get update && apt-get install -y \
 # 创建非 root 用户
 RUN groupadd -r vecboost && useradd -r -g vecboost vecboost
 
-# 创建必要的目录
-RUN mkdir -p /app/models /app/logs /app/cache /app/config \
+# 创建必要的目录(/app/cache/hf 为 HuggingFace 模型缓存目录)
+RUN mkdir -p /app/models /app/logs /app/cache/hf /app/config \
     && chown -R vecboost:vecboost /app
 
 # 设置工作目录
@@ -109,7 +109,10 @@ ENV RUST_LOG=vecboost=info \
     VECBOOST_ALLOW_INSECURE=1 \
     VECBOOST_MODEL_PATH=/app/models \
     VECBOOST_LOG_PATH=/app/logs \
-    VECBOOST_CACHE_PATH=/app/cache
+    VECBOOST_CACHE_PATH=/app/cache \
+    # hf-hub 默认写 ~/.cache/huggingface,而运行时用户无家目录(权限拒绝),
+    # 显式指到可写缓存卷
+    HF_HOME=/app/cache/hf
 
 # 启动应用
 CMD ["/app/vecboost"]

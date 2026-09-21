@@ -69,7 +69,10 @@ jobs:
       - name: Verify image
         run: |
           docker images | grep vecboost
-          docker run --rm ${{ steps.meta.outputs.tags }} --version || true
+          # meta.outputs.tags 为多行串(每行一个 tag),原样插值会把后续 tag
+          # 折成独立命令行导致 exit 1;取首行并保留 || true 容忍语义
+          TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          docker run --rm "$TAG" --version || true
 
   scan:
     name: Security Scan

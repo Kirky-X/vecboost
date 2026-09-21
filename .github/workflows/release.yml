@@ -141,8 +141,38 @@ jobs:
           shared-key: "release-publish"
           cache-targets: false
 
+      # 幂等:已发布版本直接跳过,避免重跑时"already exists"报错
+      - name: Check already published
+        id: published
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -H 'User-Agent: kirky-x-release-verify' \
+            "https://crates.io/api/v1/crates/vecboost/${VERSION}")
+          echo "vecboost ${VERSION}: HTTP ${CODE}"
+          echo "exists=$([[ "$CODE" == "200" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+
       - name: Publish to crates.io
+        if: steps.published.outputs.exists == 'false'
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      # crates.io 版本硬校验:防止任何形式的静默漏发
+      - name: Verify on crates.io
+        if: always()
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          ok=""
+          for i in 1 2 3 4 5; do
+            sleep 20
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" -H 'User-Agent: kirky-x-release-verify' \
+              "https://crates.io/api/v1/crates/vecboost/${VERSION}")
+            echo "try$i: HTTP ${CODE}"
+            if [ "$CODE" = "200" ]; then ok=1; break; fi
+            if [ "$CODE" != "403" ]; then break; fi
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::vecboost ${VERSION} 未出现在 crates.io"
+            exit 1
+          fi
 
   notify:
     name: Notify Status

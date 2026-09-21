@@ -20,15 +20,15 @@ vecboost = { path = "..", default-features = false, features = [
     "sqlite",
 ] }
 
-# 示例直接使用的第三方 crate
-tokio = { version = "1.53", default-features = false, features = ["full"] }
-async-trait = { version = "0.1", default-features = false }
-serde = { version = "1.0", default-features = false, features = ["derive"] }
-serde_json = { version = "1.0", default-features = false, features = ["std"] }
-reqwest = { version = "0.13", default-features = false, features = ["default-tls"] }
-hf-hub = { version = "1.0", default-features = false, features = ["blocking", "rustls-tls"] }
-tempfile = { version = "3.27", default-features = false }
-prometheus = { version = "0.14", default-features = false, features = ["process"] }
+# 示例直接使用的第三方 crate（经 workspace.dependencies 引用，与主 crate 同源）
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+reqwest = { workspace = true, features = ["default-tls"] }
+hf-hub = { workspace = true }
+tempfile = { workspace = true }
+prometheus = { workspace = true }
 
 [features]
 default = []

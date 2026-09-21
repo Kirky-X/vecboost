@@ -14,8 +14,8 @@ categories = ["asynchronous", "science", "web-programming::http-server"]
 
 [dependencies]
 # Base async runtime & utilities (always required)
-tokio = { version = "1.53", default-features = false, features = ["full"] }
-async-trait = { version = "0.1", default-features = false }
+tokio = { workspace = true }
+async-trait = { workspace = true }
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 sys-info = { version = "0.9", default-features = false }
 num_cpus = { version = "1.17", default-features = false }
@@ -30,8 +30,8 @@ zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
 
 # Serialization (base)
-serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
-serde_json = { version = "1.0", default-features = false, features = ["std"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true }
 
 # Error Handling (base)
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
@@ -92,7 +92,7 @@ candle-nn = { version = "0.11", default-features = false }
 candle-transformers = { version = "0.11", default-features = false }
 # hgemm_ 垫片（mkl feature，见 src/engine/mkl_shim.rs）：f16 类型 ABI 兼容层
 half = { version = "2.7", default-features = false, optional = true }
-hf-hub = { version = "1.0", default-features = false, features = ["blocking", "rustls-tls"] }
+hf-hub = { workspace = true }
 # tokenizers 全平台直接依赖（移除 cfg(target_os) 门控）
 tokenizers = { version = "0.23", default-features = false, features = ["http", "onig"] }
 
@@ -114,12 +114,12 @@ base64 = { version = "0.23", optional = true, default-features = false, features
 # Monitoring (http feature)
 # 业务指标直接注册 prometheus default_registry（pipeline gauge + garrison metrics-prometheus 桥接共用），
 # 不引入 axum-prometheus 网关式指标（2026-09-19 审计：零引用死依赖，已移除）。
-prometheus = { version = "0.14", optional = true, default-features = false, features = ["process"] }
+prometheus = { workspace = true, optional = true, features = ["process"] }
 
 # HTTP client (http feature)
 # TLS 统一到 rustls（2026-09-19 审计）：此前 default-tls(native-tls) 与 hf-hub 的
 # rustls-tls 并存，默认构建链接两套 TLS 栈；对齐 crawlrs 侧（其 reqwest 亦统一 rustls）。
-reqwest = { version = "0.13", optional = true, default-features = false, features = ["stream", "charset", "http2", "rustls"] }
+reqwest = { workspace = true, optional = true, features = ["stream", "charset", "http2", "rustls"] }
 
 # gRPC is fully handled by sdforge (unified Call protocol via #[forge(grpc_method)])
 
@@ -228,8 +228,8 @@ required-features = ["http"]
 
 [dev-dependencies]
 tower = { version = "0.5", default-features = false, features = ["util"] }
-tokio = { version = "1.53", default-features = false, features = ["test-util", "macros", "rt-multi-thread"] }
-tempfile = { version = "3.27", default-features = false }
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+tempfile = { workspace = true }
 # tracing/tracing-subscriber/toml 仅测试用(logger/tests.rs 验证 inklog subscriber 集成 + config 测试解析 toml)
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter"] }
@@ -237,7 +237,7 @@ toml = { version = "1.1", default-features = false }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 # gRPC E2E 测试客户端（tests/grpc_e2e.rs；生成的客户端经由 vecboost::sdforge 再导出访问）
 tonic = { version = "0.14", default-features = false, features = ["transport", "codegen"] }
-serde_json = { version = "1.0", default-features = false, features = ["std"] }
+serde_json = { workspace = true }
 
 [[bench]]
 name = "similarity_bench"
@@ -276,4 +276,17 @@ resolver = "2"
 license = "Apache-2.0"
 edition = "2024"
 authors = ["Kirky-X <Kirky-X@outlook.com>"]
+
+# 依赖集中管理：主 crate 与 workspace 成员（examples）的重复依赖在此声明一次，
+# 成员以 `dep = { workspace = true }` 引用，差异 features（含 optional）在成员侧声明，
+# 与 garrison/sinnan 同一惯例。
+[workspace.dependencies]
+tokio = { version = "1.53", default-features = false, features = ["full"] }
+async-trait = { version = "0.1", default-features = false }
+serde = { version = "1.0", default-features = false }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+reqwest = { version = "0.13", default-features = false }
+hf-hub = { version = "1.0", default-features = false, features = ["blocking", "rustls-tls"] }
+tempfile = { version = "3.27", default-features = false }
+prometheus = { version = "0.14", default-features = false, features = ["process"] }
 

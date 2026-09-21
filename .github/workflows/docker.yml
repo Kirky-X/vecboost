@@ -62,7 +62,9 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
+          # docker exporter(load: true)不支持多平台 manifest list;
+          # 本 job 需 load 后本地 run 验证,故仅构建 amd64
+          platforms: linux/amd64
 
       - name: Verify image
         run: |
@@ -163,7 +165,9 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
+          # docker exporter(load: true)不支持多平台 manifest list;
+          # 本 job 需 load 后本地 run 验证,故仅构建 amd64
+          platforms: linux/amd64
 
       - name: Digest verification
         run: |

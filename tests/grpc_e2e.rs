@@ -36,7 +36,11 @@ const M2_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/models/all-MiniLM-L6
 // 白名单内——显式配置会整体替换默认根"models"(安全契约,见 model_path_validator)
 const MODELS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/models");
 const HTTP_TIMEOUT_SECS: u64 = 120;
+// 仅 auth 测试腿使用；grpc-only 构建(Feature Matrix)下随调用点一并裁剪，
+// 否则 -D warnings 下报 dead_code（Feature Matrix grpc 腿 clippy 红）
+#[cfg(feature = "auth")]
 const JWT_SECRET: &str = "grpc-e2e-jwt-secret-0123456789ABCDEF";
+#[cfg(feature = "auth")]
 const ADMIN_PASS: &str = "GrpcE2e#2026Pass";
 
 type Client = SdForgeServiceClient<tonic::transport::Channel>;

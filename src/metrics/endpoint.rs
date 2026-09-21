@@ -69,11 +69,7 @@ pub async fn metrics_endpoint(
                         "RateLimitModule not available while RateLimitEnabled=true: {}. Denying request.",
                         e
                     );
-                    return Response::builder()
-                        .status(500)
-                        .body(Body::from(i18n::tr("metrics-limiter-unavailable")))
-                        .unwrap()
-                        .into_response();
+                    return json_error_response(500, &i18n::tr("metrics-limiter-unavailable"));
                 }
             };
             // 记录限流决策指标
@@ -117,14 +113,13 @@ pub async fn metrics_endpoint(
     let mut buffer = Vec::new();
 
     if let Err(e) = encoder.encode(&metric_families, &mut buffer) {
-        return Response::builder()
-            .status(500)
-            .body(Body::from(i18n::tr_with_args(
+        return json_error_response(
+            500,
+            &i18n::tr_with_args(
                 "metrics-encode-failed",
                 i18n::tr_args(&[("detail", &e.to_string())]),
-            )))
-            .unwrap()
-            .into_response();
+            ),
+        );
     }
 
     // Append dbnexus MetricsCollector output (pool/connection/query metrics)
@@ -140,12 +135,17 @@ pub async fn metrics_endpoint(
         }
     }
 
-    Response::builder()
+    match Response::builder()
         .status(200)
         .header("Content-Type", encoder.format_type())
         .body(Body::from(buffer))
-        .unwrap()
-        .into_response()
+    {
+        Ok(resp) => resp.into_response(),
+        Err(e) => {
+            log::error!("Failed to build metrics response: {}", e);
+            json_error_response(500, &i18n::tr("metrics-encode-failed"))
+        }
+    }
 }
 
 /// Prometheus HTTP 请求指标记录中间件。

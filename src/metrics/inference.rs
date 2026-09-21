@@ -283,21 +283,13 @@ impl InferenceCollector {
 
         let min = samples
             .iter()
-            .min_by(|a, b| {
-                a.inference_time_ms
-                    .partial_cmp(&b.inference_time_ms)
-                    .unwrap()
-            })
+            .min_by(|a, b| a.inference_time_ms.total_cmp(&b.inference_time_ms))
             .cloned()
             .unwrap_or_default();
 
         let max = samples
             .iter()
-            .max_by(|a, b| {
-                a.inference_time_ms
-                    .partial_cmp(&b.inference_time_ms)
-                    .unwrap()
-            })
+            .max_by(|a, b| a.inference_time_ms.total_cmp(&b.inference_time_ms))
             .cloned()
             .unwrap_or_default();
 

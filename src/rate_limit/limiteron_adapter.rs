@@ -59,13 +59,11 @@ fn tighter(
     match (a, b) {
         (None, b) => b,
         (a, None) => a,
-        (a, b) => Some(
-            if a.as_ref().unwrap().remaining <= b.as_ref().unwrap().remaining {
-                a.unwrap()
-            } else {
-                b.unwrap()
-            },
-        ),
+        (a, b) => {
+            // 此臂 a/b 必为 Some（None 臂已在上方拦截）；用 ? 收窄避免 unwrap
+            let (a, b) = (a?, b?);
+            Some(if a.remaining <= b.remaining { a } else { b })
+        }
     }
 }
 

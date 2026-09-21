@@ -315,7 +315,8 @@ impl SmartGpuMemoryManager {
         }
 
         let mut sorted = data.to_vec();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // total_cmp：全序比较，NaN 不会 panic（替代 partial_cmp().unwrap()）
+        sorted.sort_by(f64::total_cmp);
 
         let index = (percentile * (sorted.len() - 1) as f64).round() as usize;
         sorted[index]

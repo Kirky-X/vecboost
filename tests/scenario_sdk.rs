@@ -119,7 +119,9 @@ async fn model_matrix_case(label: &str, dirname: &str, dim: usize) {
     assert_eq!(ranked.results.len(), 3, "top_k=None 返回全量");
     let scores: Vec<f32> = ranked.results.iter().map(|r| r.score).collect();
     let mut sorted = scores.clone();
-    sorted.sort_by(|a, b| b.partial_cmp(a).unwrap());
+    // total_cmp：全序比较，不依赖 partial_cmp 的 Option 解包（CI unwrap_used 门禁；
+    // 本函数为多测试共享的 helper，不在 allow-unwrap-in-tests 豁免范围）
+    sorted.sort_by(|a, b| b.total_cmp(a));
     assert_eq!(scores, sorted, "rerank 分数应降序: {scores:?}");
     // 语义断言：任一 ML 相关文档（index 0/2）排在无关文档（index 1，午餐）之前
     assert_ne!(

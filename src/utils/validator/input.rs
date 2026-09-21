@@ -42,16 +42,36 @@ pub struct ValidationConfig {
 impl Default for ValidationConfig {
     fn default() -> Self {
         Self {
-            max_text_length: NonZeroUsize::new(MAX_TEXT_LENGTH).unwrap(),
+            max_text_length: Self::NZ_MAX_TEXT_LENGTH,
             min_text_length: MIN_TEXT_LENGTH,
-            max_batch_size: NonZeroUsize::new(MAX_BATCH_SIZE).unwrap(),
-            max_search_results: NonZeroUsize::new(MAX_SEARCH_RESULTS).unwrap(),
-            max_concurrent_requests: NonZeroUsize::new(MAX_CONCURRENT_REQUESTS).unwrap(),
+            max_batch_size: Self::NZ_MAX_BATCH_SIZE,
+            max_search_results: Self::NZ_MAX_SEARCH_RESULTS,
+            max_concurrent_requests: Self::NZ_MAX_CONCURRENT_REQUESTS,
         }
     }
 }
 
 impl ValidationConfig {
+    /// NonZero 上限常量在编译期求值：若上游常量被误配为 0 将直接编译失败，
+    /// 运行时零 panic 面（替代 NonZeroUsize::new(..).unwrap()）。
+    const NZ_MAX_TEXT_LENGTH: NonZeroUsize = match NonZeroUsize::new(MAX_TEXT_LENGTH) {
+        Some(n) => n,
+        None => panic!("MAX_TEXT_LENGTH must be non-zero"),
+    };
+    const NZ_MAX_BATCH_SIZE: NonZeroUsize = match NonZeroUsize::new(MAX_BATCH_SIZE) {
+        Some(n) => n,
+        None => panic!("MAX_BATCH_SIZE must be non-zero"),
+    };
+    const NZ_MAX_SEARCH_RESULTS: NonZeroUsize = match NonZeroUsize::new(MAX_SEARCH_RESULTS) {
+        Some(n) => n,
+        None => panic!("MAX_SEARCH_RESULTS must be non-zero"),
+    };
+    const NZ_MAX_CONCURRENT_REQUESTS: NonZeroUsize =
+        match NonZeroUsize::new(MAX_CONCURRENT_REQUESTS) {
+            Some(n) => n,
+            None => panic!("MAX_CONCURRENT_REQUESTS must be non-zero"),
+        };
+
     pub fn new(
         max_text_length: Option<NonZeroUsize>,
         min_text_length: Option<usize>,
@@ -60,15 +80,12 @@ impl ValidationConfig {
         max_concurrent_requests: Option<NonZeroUsize>,
     ) -> Self {
         Self {
-            max_text_length: max_text_length
-                .unwrap_or_else(|| NonZeroUsize::new(MAX_TEXT_LENGTH).unwrap()),
+            max_text_length: max_text_length.unwrap_or(Self::NZ_MAX_TEXT_LENGTH),
             min_text_length: min_text_length.unwrap_or(MIN_TEXT_LENGTH),
-            max_batch_size: max_batch_size
-                .unwrap_or_else(|| NonZeroUsize::new(MAX_BATCH_SIZE).unwrap()),
-            max_search_results: max_search_results
-                .unwrap_or_else(|| NonZeroUsize::new(MAX_SEARCH_RESULTS).unwrap()),
+            max_batch_size: max_batch_size.unwrap_or(Self::NZ_MAX_BATCH_SIZE),
+            max_search_results: max_search_results.unwrap_or(Self::NZ_MAX_SEARCH_RESULTS),
             max_concurrent_requests: max_concurrent_requests
-                .unwrap_or_else(|| NonZeroUsize::new(MAX_CONCURRENT_REQUESTS).unwrap()),
+                .unwrap_or(Self::NZ_MAX_CONCURRENT_REQUESTS),
         }
     }
 }

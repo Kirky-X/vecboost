@@ -70,9 +70,7 @@ impl BufferPool {
         info!("Preallocating buffers...");
 
         for &size in &self.config.text_buffer_sizes {
-            self.text_buffers.entry(size).or_default();
-
-            let pool = self.text_buffers.get_mut(&size).unwrap();
+            let pool = self.text_buffers.entry(size).or_default();
             let pool_size = self.config.pool_size_per_size;
 
             for _ in 0..pool_size {
@@ -84,9 +82,7 @@ impl BufferPool {
 
         // 预分配向量缓冲区
         for &size in &self.config.vector_buffer_sizes {
-            self.vector_buffers.entry(size).or_default();
-
-            let pool = self.vector_buffers.get_mut(&size).unwrap();
+            let pool = self.vector_buffers.entry(size).or_default();
             let pool_size = self.config.pool_size_per_size;
 
             for _ in 0..pool_size {
@@ -134,9 +130,7 @@ impl BufferPool {
 
         buffer.clear();
 
-        self.text_buffers.entry(size).or_default();
-
-        let pool = self.text_buffers.get_mut(&size).unwrap();
+        let pool = self.text_buffers.entry(size).or_default();
 
         if pool.len() < self.config.pool_size_per_size {
             pool.push_back(buffer);
@@ -179,9 +173,7 @@ impl BufferPool {
 
         buffer.clear();
 
-        self.vector_buffers.entry(size).or_default();
-
-        let pool = self.vector_buffers.get_mut(&size).unwrap();
+        let pool = self.vector_buffers.entry(size).or_default();
 
         if pool.len() < self.config.pool_size_per_size {
             pool.push_back(buffer);

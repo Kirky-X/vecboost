@@ -70,7 +70,11 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
             let config = config_clone.clone();
 
             let handle = tokio::spawn(async move {
-                let _permit = semaphore.acquire().await.unwrap();
+                // 信号量在本函数生命周期内不会 close；acquire 失败仅作防御，
+                // 该 worker 以零计数收场而非 panic
+                let Ok(_permit) = semaphore.acquire().await else {
+                    return (0, 0, 0);
+                };
 
                 barrier.wait().await;
 

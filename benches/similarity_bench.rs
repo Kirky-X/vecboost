@@ -1,6 +1,11 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+// benchmark 不属于交付物生产 panic 面：热路径内的 unwrap 避免 Result 解包
+// 分支扰动计时；Runtime::new() 失败属环境级致命错误。故整体豁免
+// clippy::unwrap_used（CI 门禁 -W clippy::unwrap_used 不适用于 bench target）。
+#![allow(clippy::unwrap_used)]
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use vecboost::utils::vector::{
     cosine_similarity, dot_product, euclidean_distance, manhattan_distance,

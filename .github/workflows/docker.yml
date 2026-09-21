@@ -79,6 +79,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 20
+    # 上传 SARIF 到 Security 标签页需要写权限(仅此 job 放宽)
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

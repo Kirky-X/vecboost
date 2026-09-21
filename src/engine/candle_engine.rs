@@ -1445,7 +1445,7 @@ mod tests {
     /// 改用 `block_in_place` 后,Tokio 会将其他任务调度到其他 worker,避免死锁。
     ///
     /// 注:CandleEngine 构造需要真实模型文件,无法在单元测试中实例化;
-    /// 此测试验证 block_in_place 调用模式本身的正确性——这是 H6 修复的核心。
+    /// 此测试验证 block_in_place 调用模式本身的正确性——这是 修复的核心。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_block_in_place_pattern_completes_without_panic() {
         let result = tokio::task::block_in_place(|| {
@@ -1923,12 +1923,20 @@ mod tests {
     }
 
     fn require_real_model() -> bool {
-        let path = format!("{}/config.json", REAL_MODEL_PATH);
-        if !std::path::Path::new(&path).exists() {
+        // 权重文件(而非仅配置)存在才可加载;仓库通常只含 tokenizer/config,
+        // GGUF 量化产物不满足 CandleEngine 的 safetensors 加载路径。
+        let has_weights = ["model.safetensors", "pytorch_model.bin"]
+            .iter()
+            .any(|w| std::path::Path::new(&format!("{REAL_MODEL_PATH}/{w}")).exists());
+        if !has_weights {
             eprintln!(
-                "Skipping test: model files not found at {}",
-                REAL_MODEL_PATH
+                "Skipping test: model weights not found at {REAL_MODEL_PATH}/(model.safetensors|pytorch_model.bin)"
             );
+            return false;
+        }
+        let path = format!("{REAL_MODEL_PATH}/config.json");
+        if !std::path::Path::new(&path).exists() {
+            eprintln!("Skipping test: model files not found at {REAL_MODEL_PATH}");
             return false;
         }
         true

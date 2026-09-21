@@ -1,6 +1,6 @@
 [package]
 name = "vecboost"
-version = "0.2.1"
+version = "0.3.0-rc.1"
 edition = "2024"
 rust-version = "1.91"
 authors = ["Kirky-X <Kirky-X@outlook.com>"]
@@ -48,22 +48,22 @@ writeable = "0.6"
 # Module Registry (always required) — 保留 reload/confers 热重载 + i18n 模块消息国际化
 # negotiate(2026-09-16 吸收)：模块能力版本协商（build 时 semver 校验），
 # vecboost 全部 17 个模块已在 ModuleMeta 声明 VERSION，为跨库模块接入提供 fail-fast
-trait-kit = { version = "0.5.0-rc.5", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "confers", "i18n", "negotiate"] }
+trait-kit = { version = "0.5.0-rc.6", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "confers", "i18n", "negotiate"] }
 
 # Configuration infrastructure
 # feature 瘦身:仅保留实际接线能力(toml/env 加载、校验、watch 热重载、
 # 加密、schema 导出);config-bus/etcd/consul/nats/redis-bus/remote 等零接线项裁剪。
-confers = { version = "0.6.0-rc.4", path = "../base/confers", default-features = false, features = ["toml", "env", "validation", "watch", "encryption", "schema", "typescript-schema", "modules"] }
+confers = { version = "0.6.0-rc.5", default-features = false, features = ["toml", "env", "validation", "watch", "encryption", "schema", "typescript-schema", "modules"] }
 garde = { version = "0.23", default-features = false, features = ["derive"] }
 schemars = { version = "1.2", default-features = false }
 
 # Logging infrastructure — 仅核心日志面（LoggerManager/sink）。kit 集成未使用故不启用；
 # 驱动由顶层 sqlite/postgres feature 透传 inklog/sqlite、inklog/postgres（kit 需搭配驱动，见 inklog 守卫）
-inklog = { version = "0.3.0-rc.4", path = "../base/inklog", default-features = false, features = ["compression", "fast-masking"] }
+inklog = { version = "0.3.0-rc.5", default-features = false, features = ["compression", "fast-masking"] }
 log = { version = "0.4", default-features = false }
 
 # Cache infrastructure — 启用 trait-kit 生命周期集成
-oxcache = { version = "0.5.0-rc.4", path = "../base/oxcache", default-features = false, features = ["core", "bloom", "compression", "macros", "batch", "lock", "kit"] }
+oxcache = { version = "0.5.0-rc.5", default-features = false, features = ["core", "bloom", "compression", "macros", "batch", "lock", "kit"] }
 
 # Rate limiting infrastructure
 # feature 瘦身:仅保留实际接线能力(Governor/存储/matchers/审计事件/宏)。
@@ -73,7 +73,7 @@ oxcache = { version = "0.5.0-rc.4", path = "../base/oxcache", default-features =
 # 其 middleware::headers 模块被该 feature 门控;dep:tower/http 均已在依赖图内,零新增 crate)。
 # 若 ../base 后续演进需要其中某能力,按需回补。
 # 熔断(circuit-breaker)评估:当前唯一外部依赖是本地 DB(有重试),熔断无标的,不接线。
-limiteron = { version = "0.3.0-rc.4", path = "../base/limiteron", default-features = false, features = ["ban-manager", "gcra", "macros", "metrics", "validation", "kit", "fallback", "audit-log", "multi-tenant", "tower-middleware"] }
+limiteron = { version = "0.3.0-rc.5", default-features = false, features = ["ban-manager", "gcra", "macros", "metrics", "validation", "kit", "fallback", "audit-log", "multi-tenant", "tower-middleware"] }
 
 # Database infrastructure (db feature) — kit/migration 等未接线项按需启用
 # dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
@@ -81,7 +81,7 @@ limiteron = { version = "0.3.0-rc.4", path = "../base/limiteron", default-featur
 # 驱动选择（sqlite/postgres 互斥，由 dbnexus compile_error 强制）通过顶层
 # `sqlite` / `postgres` feature 进行——不得在依赖声明里硬编码任何驱动，
 # 否则另一驱动永久不可用（dbnexus 全图互斥）。
-dbnexus = { version = "0.6.0-rc.4", path = "../base/dbnexus", optional = true, default-features = false, features = ["runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "pool-warmup", "retry", "config-env", "observability", "failover", "replica-routing"] }
+dbnexus = { version = "0.6.0-rc.5", optional = true, default-features = false, features = ["runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "pool-warmup", "retry", "config-env", "observability", "failover", "replica-routing"] }
 # failover/replica-routing:inklog integrations::infra 无条件构造 DbConfig 的
 # failover_config/replica_config 字段(2026-09-14 dbnexus 加入门控),缺此二者
 # inklog 无法编译;../base 侧修复前由 vecboost 侧补齐。
@@ -124,17 +124,8 @@ reqwest = { version = "0.13", optional = true, default-features = false, feature
 # gRPC is fully handled by sdforge (unified Call protocol via #[forge(grpc_method)])
 
 # Auth feature — 安全加固：firewall 系列/TOTP/凭证清零/异常检测/协议扩展/生命周期/注解宏
-# 0.9.0-rc.1（[patch.crates-io] 桥接本地 ~/projects/garrison）：account-credential-zeroize
-# 改名 credential-zeroize；web-security-headers（0.9 新增）注入 nosniff/DENY/no-store
-# 安全响应头（src/api/mod.rs 挂载 garrison::web::security_headers 中间件）；
-# cache-audit：GarrisonDaoOxcache 缓存审计事件自动接线（tracing 桥接，键名脱敏）；
-# metrics-prometheus：garrison_* auth 域指标（OnceLock 单例注册 default_registry，
-# /metrics 端点合并导出，src/metrics/endpoint.rs）；
-# grpc：GarrisonGrpcAuthLayer（main.rs spawn_grpc_server server 级挂载，替代
-# sdforge BearerAuth 的独立会话宇宙——HTTP revoke 的 token 此前在 gRPC 侧 exp 前仍有效）。
-# audit-inklog-http/siem、firewall-gcra、backend-shutdown 等 0.9 新 face 为纯透传
-# feature（garrison src 零引用），按 feature 瘦身原则不接。
-garrison = { version = "0.9.0-rc.1", path = "../garrison", default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "cache-audit", "account-credential", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "listener", "i18n", "firewall", "firewall-bruteforce", "firewall-ratelimit", "firewall-ddos", "firewall-anomalous", "secure-totp", "credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-ct-eq", "secure-simple-token", "web-cors", "web-security-headers", "metrics-prometheus", "grpc"], optional = true }
+# 0.9.0-rc.1（
+garrison = { version = "0.9.0-rc.2", default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "cache-audit", "account-credential", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "listener", "i18n", "firewall", "firewall-bruteforce", "firewall-ratelimit", "firewall-ddos", "firewall-anomalous", "secure-totp", "credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-ct-eq", "secure-simple-token", "web-cors", "web-security-headers", "metrics-prometheus", "grpc"], optional = true }
 aes-gcm = { version = "0.11", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
 
 # ONNX feature
@@ -151,7 +142,7 @@ nvml-wrapper = { version = "0.13", optional = true, default-features = false }
 # Multi-protocol SDK framework — 启用 i18n 国际化 + inklog 日志集成
 # context(2026-09-16 吸收)：request_id/trace_id 跨协议传播 + X-Request-Id/X-Trace-Id
 # 响应头回显（替代 main.rs 手写 x-request-id 闭包；traceparent/W3C 兼容）
-sdforge = { version = "0.5.0-rc.4", path = "../base/sdforge", optional = true, default-features = false, features = ["i18n", "inklog", "context"] }
+sdforge = { version = "0.5.0-rc.5", optional = true, default-features = false, features = ["i18n", "inklog", "context"] }
 
 # gRPC server 装配（grpc feature）—— garrison GarrisonGrpcAuthLayer 需要 server 级
 # tonic builder：sdforge build_server_with_config 的 auth 槽位是 BearerAuth 具体类型、
@@ -286,16 +277,3 @@ license = "Apache-2.0"
 edition = "2024"
 authors = ["Kirky-X <Kirky-X@outlook.com>"]
 
-# ../base 生态发布中态：跨库相互引用的 rc 版本（如 trait-kit rc.5 → confers rc.4）
-# 与本地路径版本统一，用本地路径补丁覆盖 crates.io 解析
-[patch.crates-io]
-oxcache = { path = "../base/oxcache" }
-trait-kit = { path = "../base/trait-kit" }
-confers = { path = "../base/confers" }
-inklog = { path = "../base/inklog" }
-limiteron = { path = "../base/limiteron" }
-dbnexus = { path = "../base/dbnexus" }
-sdforge = { path = "../base/sdforge" }
-# garrison 0.9.0-rc.1 尚未发布，patch 桥接本地仓库（发布后可拆）。
-# 其内部 garrison-macros 是 workspace path 依赖，随 garrison 一并走本地，无需单独 patch。
-garrison = { path = "../garrison" }

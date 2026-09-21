@@ -107,6 +107,7 @@ pub async fn metrics_endpoint(
     }
 
     let encoder = prometheus::TextEncoder::new();
+    #[allow(unused_mut)] // extend 仅在 metrics 聚合 feature 下发生
     let mut metric_families = prometheus_collector.registry().gather();
     // garrison metrics-prometheus（auth feature）：GarrisonMetrics::new() 的 OnceLock
     // 单例把 garrison_* auth 域指标注册在 prometheus default_registry，与上方

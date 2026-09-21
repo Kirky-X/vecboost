@@ -72,8 +72,8 @@ curl -X POST http://localhost:9002/api/1/embed \
 
 | 依赖 | 最低版本 | 说明 | 可选 |
 |------|----------|------|------|
-| **Rust** | 1.75+ | 编程语言（需要 2024 版） | ❌ |
-| **Cargo** | 1.75+ | 构建工具（随 Rust 附带） | ❌ |
+| **Rust** | 1.91+ | 编程语言（需要 2024 版） | ❌ |
+| **Cargo** | 1.91+ | 构建工具（随 Rust 附带） | ❌ |
 | **CUDA Toolkit** | 12.0 | NVIDIA GPU 支持 | ✅ |
 | **Metal SDK** | - | Apple Silicon GPU 支持 | ✅ |
 
@@ -83,7 +83,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 
 ```bash
 # 检查 Rust 版本
-rustc --version  # 应输出: rustc 1.75+
+rustc --version  # 应输出: rustc 1.91+
 
 # 检查 Cargo 版本
 cargo --version

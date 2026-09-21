@@ -198,10 +198,8 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
             }
         };
         let mut v = Vec::with_capacity(dim);
-        for chunk in vec_b.chunks_exact(4) {
-            v.push(f32::from_bits(u32::from_le_bytes([
-                chunk[0], chunk[1], chunk[2], chunk[3],
-            ])));
+        for chunk in vec_b.as_chunks::<4>().0 {
+            v.push(f32::from_le_bytes(*chunk));
         }
         valid.push((key, v));
     }

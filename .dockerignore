@@ -1,6 +1,7 @@
 # Rust 构建产物
+# 注意:Cargo.lock 不排除——应用镜像构建需锁定依赖版本保证可复现(Dockerfile COPY Cargo.lock);
+# 构建上下文即仓库根目录(context: .),此前的排除是父目录上下文时代的布局
 target/
-Cargo.lock
 
 # 开发工具
 .vscode/
@@ -15,6 +16,8 @@ docs/
 benchmarks/
 *.md
 !README.md
+# workspace 成员 examples 的清单必须进构建上下文,否则容器内 cargo 拒绝加载 workspace
+!examples/Cargo.toml
 
 # Git
 .git/

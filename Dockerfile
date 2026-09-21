@@ -1,17 +1,13 @@
-# VecBoost 生产环境 Dockerfile(edition 2024,需 Rust ≥ 1.85)
+# VecBoost 生产环境 Dockerfile(edition 2024;生态库 MSRV confers/limiteron rc.5
+# 需 rustc ≥ 1.97.1,故基础镜像取 rust:1.98,与 CI stable 工具链同版)
 #
 # 多阶段构建,优化镜像大小和安全性。
 #
-# 构建上下文约定:vecboost 通过路径依赖引用同级 `base/` 生态库(trait-kit、
-# confers、inklog、oxcache、limiteron、dbnexus、sdforge),因此构建 context
-# 必须是同时包含两个仓库的目录。在工作区父目录执行:
+# 构建上下文约定:本仓库的跨仓 path 依赖(trait-kit、confers、inklog、oxcache、
+# limiteron、dbnexus、sdforge)已全部切换 crates.io 发布版,不再需要同级 base/
+# 生态库目录,构建 context 即本仓库根目录(CI docker.yml 的 context: . 一致):
 #
-#   docker build -f vecboost/Dockerfile -t vecboost:latest .
-#
-# 目录布局要求:
-#   <context>/
-#     ├── vecboost/   # 本仓库
-#     └── base/       # 生态库集合(trait-kit/ confers/ inklog/ ...)
+#   docker build -t vecboost:latest .
 #
 # 默认构建不启用 cuda(镜像内无 NVIDIA 工具链);需要 GPU 时请基于
 # nvidia/cuda 镜像自建并追加 --features cuda,onnx。
@@ -19,31 +15,44 @@
 # ============================================
 # 阶段 1: 构建阶段
 # ============================================
-FROM rust:1.85-slim AS builder
+# bookworm 变体:与运行时镜像 debian:bookworm-slim 的 libssl/glibc ABI 一致
+FROM rust:1.98-slim-bookworm AS builder
 
 # 设置工作目录
 WORKDIR /build
 
 # 安装构建依赖
+# make:tikv-jemalloc-sys 的 configure 需要;curl:utoipa-swagger-ui build.rs
+# 经系统 curl 下载 swagger-ui 资源(slim 镜像均不预装)
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     ca-certificates \
+    make \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制清单(含路径依赖的 base/ 生态库)以预编译依赖(利用 Docker 缓存)
-COPY vecboost/Cargo.toml vecboost/Cargo.lock vecboost/build.rs ./vecboost/
-COPY base ./base
+# 复制清单以预编译依赖(利用 Docker 缓存);workspace 成员 examples 的
+# 清单一并复制,否则 cargo 因 workspace member 清单缺失拒绝加载
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY examples/Cargo.toml ./examples/
 
-WORKDIR /build/vecboost
-RUN mkdir src && \
+# 根清单显式声明 4 个 [[bench]] 目标(harness=false),清单解析要求文件存在:
+# stub 阶段以同名空 main 占位(真实 bench 不参与 -p vecboost 构建,仅占位)
+RUN mkdir -p src examples/src benches && \
     echo "fn main() {}" > src/main.rs && \
+    echo "fn main() {}" > examples/src/main.rs && \
+    for b in similarity_bench batch_scheduling_bench semantic_cache_bench embed_throughput_bench; do \
+        echo "fn main() {}" > "benches/$b.rs"; \
+    done && \
     cargo build --release -p vecboost && \
-    rm -rf src
+    rm -rf src examples/src benches
 
-# 复制源代码与资源
-COPY vecboost/src ./src
-COPY vecboost/config ./config
+# 复制源代码与资源;examples/Cargo.toml 由上一层的 COPY 保留(workspace 加载必需),
+# benches 补回真实实现([[bench]] 目标文件存在是清单解析的硬性要求)
+COPY src ./src
+COPY benches ./benches
+COPY config ./config
 
 # 构建 Release 版本(默认 HTTP 特性;按需追加 --features)
 RUN touch src/main.rs && cargo build --release -p vecboost --features http
@@ -71,8 +80,8 @@ RUN mkdir -p /app/models /app/logs /app/cache /app/config \
 WORKDIR /app
 
 # 从构建阶段复制二进制文件与出厂配置
-COPY --from=builder /build/vecboost/target/release/vecboost /app/vecboost
-COPY --from=builder /build/vecboost/config/config.toml /app/config/config.toml
+COPY --from=builder /build/target/release/vecboost /app/vecboost
+COPY --from=builder /build/config/config.toml /app/config/config.toml
 
 # 设置权限
 RUN chmod +x /app/vecboost && \

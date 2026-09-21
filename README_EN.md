@@ -330,7 +330,7 @@ cargo audit
 
 ### 📊 Test Scale
 
-As of the v0.2.1 workspace: ~1700+ inline unit tests in `src/`, 61 Rust integration/specialized tests (`tests/*.rs`), 126 Python scenario/performance cases (15 scenario suites), and 4 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 80% (tarpaulin), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
+As of the v0.3.0-rc.1 workspace: ~1700+ inline unit tests in `src/`, 61 Rust integration/specialized tests (`tests/*.rs`), 126 Python scenario/performance cases (15 scenario suites), and 4 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 80% (tarpaulin), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
 
 ---
 

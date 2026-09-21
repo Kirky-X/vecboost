@@ -2,7 +2,7 @@
 
 **安装、配置和使用的完整说明**
 
-[![Version 0.2.1](https://img.shields.io/badge/Version-0.2.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002)
+[![Version 0.3.0-rc.1](https://img.shields.io/badge/Version-0.3.0--rc.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002)
 
 *安装、配置和使用 VecBoost 的完整说明。*
 
@@ -1072,4 +1072,4 @@ free -h     # 内存
 
 ---
 
-> **📝 最后更新**: 2026-09-06 | **版本**: 0.2.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-09-06 | **版本**: 0.3.0-rc.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

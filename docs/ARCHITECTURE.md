@@ -2,7 +2,7 @@
 
 **内部架构、关键组件、数据流和设计决策详解**
 
-[![Version 0.2.1](https://img.shields.io/badge/Version-0.2.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![Version 0.3.0-rc.1](https://img.shields.io/badge/Version-0.3.0--rc.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
 *VecBoost 的内部架构，解释关键组件、数据流和设计决策。*
 

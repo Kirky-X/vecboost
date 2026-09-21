@@ -330,7 +330,7 @@ cargo audit
 
 ### 📊 测试规模
 
-截至 v0.2.1 工作区：单元测试（`src/` 内联）约 1700+、Rust 集成/专项测试（`tests/*.rs`）61 个、Python 场景/性能用例 126 个（15 个场景套件）、Criterion 微基准 4 组；CI 硬门禁为行覆盖率不低于 80%（tarpaulin），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
+截至 v0.3.0-rc.1 工作区：单元测试（`src/` 内联）约 1700+、Rust 集成/专项测试（`tests/*.rs`）61 个、Python 场景/性能用例 126 个（15 个场景套件）、Criterion 微基准 4 组；CI 硬门禁为行覆盖率不低于 80%（tarpaulin），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
 
 ---
 

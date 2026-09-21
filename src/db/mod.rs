@@ -158,9 +158,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_session_admin_role() {
-        let pool = DbPool::new("sqlite::memory:")
-            .await
-            .expect("Failed to create pool");
+        // sqlite::memory: 每连接独立库;单连接池确保建表与查询同源(CI 必现 no such table)
+        let pool = DbPool::with_config(DbConfig {
+            url: "sqlite::memory:".to_string(),
+            pool_config: dbnexus::PoolConfig {
+                max_connections: 1,
+                min_connections: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("Failed to create pool");
         let session = pool
             .get_session("admin")
             .await
@@ -170,9 +179,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_session_user_role_rejected() {
-        let pool = DbPool::new("sqlite::memory:")
-            .await
-            .expect("Failed to create pool");
+        // sqlite::memory: 每连接独立库;单连接池确保建表与查询同源(CI 必现 no such table)
+        let pool = DbPool::with_config(DbConfig {
+            url: "sqlite::memory:".to_string(),
+            pool_config: dbnexus::PoolConfig {
+                max_connections: 1,
+                min_connections: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("Failed to create pool");
         let result = pool.get_session("user").await;
         assert!(
             result.is_err(),
@@ -182,9 +200,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_init_schema_creates_tables() {
-        let pool = DbPool::new("sqlite::memory:")
-            .await
-            .expect("Failed to create pool");
+        // sqlite::memory: 每连接独立库;单连接池确保建表与查询同源(CI 必现 no such table)
+        let pool = DbPool::with_config(DbConfig {
+            url: "sqlite::memory:".to_string(),
+            pool_config: dbnexus::PoolConfig {
+                max_connections: 1,
+                min_connections: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("Failed to create pool");
         init_schema(&pool).await.expect("Failed to init schema");
 
         let session = pool
@@ -295,9 +322,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_pool_clone_shares_connections() {
-        let pool = DbPool::new("sqlite::memory:")
-            .await
-            .expect("Failed to create pool");
+        // 本测试验证 clone 后连接共享,需要 ≥2 连接(与建表类测试的单连接要求相反)
+        let pool = DbPool::with_config(DbConfig {
+            url: "sqlite::memory:".to_string(),
+            pool_config: dbnexus::PoolConfig {
+                max_connections: 2,
+                min_connections: 2,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("Failed to create pool");
         let cloned = pool.clone();
 
         // 验证 clone 后两者都能获取 session(NexusDbPool 内部 Arc 共享)

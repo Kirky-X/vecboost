@@ -459,11 +459,12 @@ fn query_nvml_info(nvml: &nvml_wrapper::Nvml) -> Result<NvidiaDriverInfo, String
         .map_err(|e| format!("NVML driver_version query failed: {}", e))?;
 
     Ok(NvidiaDriverInfo {
-        cuda_version: if memory_info.total > 0 {
-            Some(11)
-        } else {
-            None
-        },
+        // NVML 官方 CUDA driver version 接口（编码 major*1000+minor*10），
+        // 取 major；此前 VRAM>0 即伪造 Some(11)（审计 D25）
+        cuda_version: nvml
+            .sys_cuda_driver_version()
+            .ok()
+            .map(|v| (v / 1000) as u32),
         driver_version: Some(driver_version),
         device_name: Some(name),
         total_vram_bytes: memory_info.total,
@@ -521,9 +522,42 @@ fn detect_via_nvidia_smi() -> Result<NvidiaDriverInfo, String> {
 
     info.driver_version = cuda_version_output;
 
-    if info.total_vram_bytes > 0 {
-        info.cuda_version = Some(11);
+    // CUDA 版本从 nvidia-smi banner 真实解析，仅取 major；解析失败如实 None。
+    // 兼容两种 banner：旧版 "CUDA Version: 12.9" 与新版 "CUDA UMD Version: 13.3"
+    if info.cuda_version.is_none()
+        && let Some(out) = Command::new("nvidia-smi")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+        && let Ok(text) = String::from_utf8(out.stdout)
+    {
+        let mut search_from = 0usize;
+        while let Some(cuda_pos) = text[search_from..].find("CUDA") {
+            let segment = &text[search_from + cuda_pos..];
+            if let Some(vpos) = segment.find("Version:") {
+                let rest = &segment[vpos + "Version:".len()..];
+                let numeric: String = rest
+                    .chars()
+                    .skip_while(|c| c.is_whitespace())
+                    .take_while(|c| c.is_ascii_digit() || *c == '.')
+                    .collect();
+                if let Some(major) = numeric
+                    .split('.')
+                    .next()
+                    .and_then(|m| m.parse::<u32>().ok())
+                {
+                    info.cuda_version = Some(major);
+                    break;
+                }
+            }
+            search_from += cuda_pos + 4;
+        }
     }
+
+    debug!(
+        "CUDA version probe result: cuda_version={:?}",
+        info.cuda_version
+    );
 
     Ok(info)
 }

@@ -312,11 +312,21 @@ impl DeviceManager {
                 device_id: cuda_device.device_id(),
                 name: cuda_device.name().to_string(),
                 total_memory_bytes: cuda_device.total_memory(),
-                available_memory_bytes: self
+                available_memory_bytes: match self
                     .cuda_device_manager
                     .available_memory(cuda_device.device_id())
                     .await
-                    .unwrap_or(cuda_device.total_memory()),
+                {
+                    Some(v) => v,
+                    None => {
+                        // 查询失败按 0 可用处理（保守），不得伪装显存充足（审计 D24）
+                        warn!(
+                            "available_memory query failed for device {}, reporting 0 available",
+                            cuda_device.device_id()
+                        );
+                        0
+                    }
+                },
                 compute_capability: cuda_device.compute_capability(),
                 supports_float16: cuda_device.capability().supports_float16,
                 supports_tensor_cores: cuda_device.capability().supports_tensor_cores,
@@ -354,11 +364,20 @@ impl DeviceManager {
 
         let mut result = Vec::with_capacity(cuda_devices.len());
         for d in &cuda_devices {
-            let avail = self
+            let avail = match self
                 .cuda_device_manager
                 .available_memory(d.device_id())
                 .await
-                .unwrap_or(d.total_memory());
+            {
+                Some(v) => v,
+                None => {
+                    warn!(
+                        "available_memory query failed for device {}, reporting 0 available",
+                        d.device_id()
+                    );
+                    0
+                }
+            };
             result.push(CudaGpuInfo {
                 device_id: d.device_id(),
                 name: d.name().to_string(),

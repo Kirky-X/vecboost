@@ -1,7 +1,8 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::config::CudaPoolConfig;
@@ -14,8 +15,8 @@ use super::config::CudaPoolConfig;
 pub struct CudaMemoryPool {
     /// 设备 ID
     device_id: i32,
-    /// 已分配内存（字节）
-    allocated_memory: AtomicU64,
+    /// 已分配内存（字节）——Arc 以便 CudaMemoryPtr::Drop 归还计数
+    allocated_memory: Arc<AtomicU64>,
     /// 最大内存（字节）
     max_memory: u64,
     /// 配置
@@ -61,7 +62,7 @@ impl CudaMemoryPool {
 
         Ok(Self {
             device_id,
-            allocated_memory: AtomicU64::new(0),
+            allocated_memory: Arc::new(AtomicU64::new(0)),
             max_memory,
             config,
             _ctx: ctx,
@@ -114,6 +115,8 @@ impl CudaMemoryPool {
             device_id: self.device_id,
             size,
             ptr: dev_ptr,
+            // Drop 路径归还池计数——此前 Drop 只释放显存不减计数，记账永久虚高（审计 D20）
+            pool_counter: Some(Arc::clone(&self.allocated_memory)),
         })
     }
 
@@ -130,7 +133,13 @@ impl CudaMemoryPool {
         // Safe because `ptr.ptr` was allocated by `malloc_sync` in the same context
         // and has not been freed yet (verified by pool tracking).
         if let Err(e) = unsafe { cudarc::driver::result::free_sync(ptr.ptr) } {
-            warn!("CUDA free failed for device {}: {}", self.device_id, e);
+            // free 失败 = 显存实际仍占用，记账不得归还（否则超额预订真实 VRAM）
+            error!(
+                "CUDA free FAILED for device {} ({} bytes): {} — accounting kept",
+                self.device_id, ptr.size, e
+            );
+            std::mem::forget(ptr);
+            return;
         }
 
         self.allocated_memory
@@ -160,11 +169,17 @@ impl CudaMemoryPool {
         (used / total) * 100.0
     }
 
-    /// 清空池
+    /// 清空池内部空闲状态。
+    ///
+    /// 注意：本方法不释放任何调用方仍持有的 [`CudaMemoryPtr`]（无法越过
+    /// 所有权释放），因此**不重置** `allocated_memory` 记账——旧实现把计数
+    /// 清零会造成假清空，后续 allocate 低估占用、超额预订真实 VRAM（审计 D20）。
     pub fn clear(&mut self) {
-        info!("Clearing CUDA memory pool on device {}...", self.device_id);
-        self.allocated_memory.store(0, Ordering::Relaxed);
-        info!("CUDA memory pool cleared");
+        info!(
+            "Clearing CUDA memory pool on device {} ({} bytes still tracked as allocated;              outstanding CudaMemoryPtr must be dropped to free VRAM)",
+            self.device_id,
+            self.allocated_memory.load(Ordering::Relaxed)
+        );
     }
 }
 
@@ -181,6 +196,8 @@ pub struct CudaMemoryPtr {
     pub size: usize,
     /// CUDA 设备指针（cuMemAlloc_v2 返回）
     pub ptr: cudarc::driver::sys::CUdeviceptr,
+    /// 所属池的记账计数器（Drop 时归还）；直接构造的 ptr 为 None
+    pool_counter: Option<Arc<AtomicU64>>,
 }
 
 #[cfg(feature = "cuda")]
@@ -199,6 +216,10 @@ impl Drop for CudaMemoryPtr {
                     "CUDA free on drop failed for device {}: {}",
                     self.device_id, e
                 );
+            }
+            // 归还池记账（无论 free 成败都递减：free 失败已显性 error 记账偏差）
+            if let Some(counter) = &self.pool_counter {
+                counter.fetch_sub(self.size as u64, Ordering::Relaxed);
             }
         }
     }

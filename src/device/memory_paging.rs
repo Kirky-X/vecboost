@@ -1,10 +1,15 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! GPU 显存分页管理器：基于 LRU-K 策略的模型权重分层管理。
+//! GPU 显存分页管理器：基于 LRU-K 策略的模型权重分层**驻留**管理。
 //!
-//! 热层常驻 GPU，冷层按需从 CPU 内存换入/换出。
-//! 支持预取优化：根据当前推理层预测后续层，提前换入。
+//! 本管理器跟踪各层权重的驻留位置（元数据状态机），不搬运字节：
+//! CPU 侧始终持有权威副本，`page_in` 语义为"上传副本到 GPU 并计入预算"，
+//! `page_out` 语义为"释放 GPU 副本"（CPU 权威副本仍在，可再次换入）。
+//! 接入真实 CUDA memcpy 属独立变更。
+//!
+//! 支持预取优化：根据当前推理层预测后续层，提前标记换入；
+//! 预取完成与普通换入一样受显存预算约束。
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
@@ -171,8 +176,24 @@ impl WeightPagingManager {
             return Ok(()); // 已在 GPU 上，无需操作
         }
 
-        // InTransfer → OnGpu：完成预取传输
+        // InTransfer → OnGpu：完成预取传输。预算不足时先驱逐——
+        // 旧实现此路径完全绕过预算检查（审计 D22）
         if location == LayerLocation::InTransfer {
+            if self.current_gpu_usage + size > self.gpu_memory_budget {
+                let _ = self.evict_until_fits(size);
+            }
+            if self.current_gpu_usage + size > self.gpu_memory_budget {
+                // 预算仍不足：回滚预取标记，显性失败
+                if let Some(meta) = self.layers.get_mut(name) {
+                    meta.location = LayerLocation::OnCpu;
+                }
+                return Err(PagingError::OutOfGpuMemory {
+                    needed: size,
+                    available: self
+                        .gpu_memory_budget
+                        .saturating_sub(self.current_gpu_usage),
+                });
+            }
             let start = Instant::now();
             let meta = self
                 .layers
@@ -189,13 +210,10 @@ impl WeightPagingManager {
             return Ok(());
         }
 
-        // 检查显存是否足够（此时不持有 layers 的引用）
+        // 检查显存是否足够（此时不持有 layers 的引用）；
+        // 循环驱逐直至放得下或无可驱逐（旧实现只驱逐一个 victim）
         if self.current_gpu_usage + size > self.gpu_memory_budget {
-            // 尝试驱逐一个冷层
-            if let Some(victim) = self.evict_candidate() {
-                self.page_out(&victim)?;
-            }
-            // 再次检查
+            let _ = self.evict_until_fits(size);
             if self.current_gpu_usage + size > self.gpu_memory_budget {
                 return Err(PagingError::OutOfGpuMemory {
                     needed: size,
@@ -243,6 +261,22 @@ impl WeightPagingManager {
         self.current_gpu_usage = self.current_gpu_usage.saturating_sub(size);
         self.page_out_count += 1;
 
+        Ok(())
+    }
+
+    /// 循环驱逐冷层直至 size 字节可放入预算，或无可驱逐层时返回 Err。
+    fn evict_until_fits(&mut self, size: u64) -> Result<(), PagingError> {
+        while self.current_gpu_usage + size > self.gpu_memory_budget {
+            let Some(victim) = self.evict_candidate() else {
+                return Err(PagingError::OutOfGpuMemory {
+                    needed: size,
+                    available: self
+                        .gpu_memory_budget
+                        .saturating_sub(self.current_gpu_usage),
+                });
+            };
+            self.page_out(&victim)?;
+        }
         Ok(())
     }
 
@@ -608,5 +642,73 @@ mod tests {
         let mut mgr = WeightPagingManager::new(&test_config());
         mgr.register_layer("cpu_only", 100);
         assert!(mgr.evict_candidate().is_none());
+    }
+
+    /// D22：预算不足时完成预取必须显性失败并回滚 InTransfer 标记，
+    /// 不得绕过预算检查直接计入用量。
+    #[test]
+    fn test_prefetch_completion_respects_budget() {
+        let config = PagingConfig {
+            enabled: true,
+            gpu_memory_budget_bytes: 250,
+            lru_k: 2,
+            prefetch_depth: 1,
+        };
+        let mut mgr = WeightPagingManager::new(&config);
+        mgr.register_layer("resident", 200);
+        mgr.register_layer("huge", 300);
+
+        mgr.page_in("resident").unwrap();
+        // 预取标记 huge（300 > 预算 250，即便驱逐 resident 200 也放不下）
+        mgr.prefetch(&["huge".to_string()]);
+        assert_eq!(
+            mgr.layers.get("huge").unwrap().location,
+            LayerLocation::InTransfer
+        );
+
+        let result = mgr.page_in("huge");
+        assert!(result.is_err(), "oversized prefetch completion must fail");
+        assert_eq!(
+            mgr.layers.get("huge").unwrap().location,
+            LayerLocation::OnCpu,
+            "failed prefetch must roll back to OnCpu"
+        );
+        // 驱逐尝试合法：resident 被逐出后仍放不下 300 → 显性 OOM
+        assert_eq!(
+            mgr.gpu_usage(),
+            0,
+            "resident evicted during eviction attempt"
+        );
+        assert!(
+            !mgr.is_on_gpu("resident"),
+            "resident was the only evictable victim"
+        );
+    }
+
+    /// D22：单 victim 不够时继续驱逐，直至满足预算。
+    #[test]
+    fn test_page_in_evicts_multiple_victims_until_fit() {
+        let config = PagingConfig {
+            enabled: true,
+            gpu_memory_budget_bytes: 300,
+            lru_k: 2,
+            prefetch_depth: 1,
+        };
+        let mut mgr = WeightPagingManager::new(&config);
+        mgr.register_layer("a", 100);
+        mgr.register_layer("b", 100);
+        mgr.register_layer("c", 250);
+
+        mgr.page_in("a").unwrap();
+        mgr.page_in("b").unwrap();
+        assert_eq!(mgr.gpu_usage(), 200);
+
+        // c 需 250：须驱逐 a、b 两个 victim（旧实现只驱逐一个后即报 OOM）
+        mgr.page_in("c").unwrap();
+        assert!(
+            mgr.is_on_gpu("c"),
+            "c should be resident after multi-eviction"
+        );
+        assert_eq!(mgr.gpu_usage(), 250);
     }
 }

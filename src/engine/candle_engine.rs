@@ -1144,6 +1144,13 @@ impl InferenceEngine for CandleEngine {
         self.forward_pass(text)
     }
 
+    fn attach_memory_limit_controller(
+        &mut self,
+        controller: std::sync::Arc<crate::device::memory_limit::MemoryLimitController>,
+    ) {
+        self.set_memory_limit_controller(controller);
+    }
+
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
         let texts_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
         self.forward_pass_batch(&texts_refs)

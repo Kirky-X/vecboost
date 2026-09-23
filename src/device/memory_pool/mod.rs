@@ -7,6 +7,9 @@
 //! - BufferPool: CPU 缓冲区池
 //! - ModelWeightPool: 模型权重内存池
 //! - CudaPool: CUDA 内存池
+//!
+//! （历史：tensor_pool.rs 曾是未接线孤儿文件——mod 未声明、引用缺失的
+//! TensorPoolConfig、记账缺陷，且功能与 BufferPool 重叠，已删除。）
 
 mod buffer_pool;
 mod config;

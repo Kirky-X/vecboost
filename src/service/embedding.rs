@@ -50,6 +50,8 @@ pub struct EmbeddingService {
     memory_manager: Option<SharedGpuMemoryManager>,
     buffer_pool: Option<Arc<tokio::sync::RwLock<BufferPool>>>,
     semantic_cache: Option<Arc<SemanticCache>>,
+    /// 模型常驻内存上限控制器（memory_limit_bytes 配置时启用，T021 执法）
+    memory_limit: Option<Arc<crate::device::memory_limit::MemoryLimitController>>,
 }
 
 impl EmbeddingService {
@@ -83,6 +85,20 @@ impl EmbeddingService {
             ),
             _ => OxCacheBackend::disabled(),
         };
+        let memory_limit = model_config
+            .as_ref()
+            .and_then(|c| c.memory_limit_bytes)
+            .map(|limit| {
+                Arc::new(
+                    crate::device::memory_limit::MemoryLimitController::with_config(
+                        crate::device::memory_limit::MemoryLimitConfig {
+                            limit_bytes: limit,
+                            warning_threshold_percent: 80,
+                            critical_threshold_percent: 95,
+                        },
+                    ),
+                )
+            });
         Self {
             engine,
             validator,
@@ -92,6 +108,7 @@ impl EmbeddingService {
             memory_manager,
             buffer_pool: None,
             semantic_cache: None,
+            memory_limit,
         }
     }
 
@@ -1326,6 +1343,20 @@ impl EmbeddingService {
             quantized: req.model_name.ends_with(".gguf"),
         };
 
+        // 内存上限执法（T021/D21）：超限拒绝加载——此前控制器只记账不执法
+        if let Some(ctrl) = &self.memory_limit
+            && matches!(
+                ctrl.check_limit().await,
+                crate::device::memory_limit::MemoryLimitStatus::Exceeded
+            )
+        {
+            return Err(VecboostError::ModelLoadError(format!(
+                "memory limit exceeded: usage {} bytes (limit {} bytes); unload models before switching",
+                ctrl.current_usage(),
+                ctrl.current_usage() + ctrl.available_bytes()
+            )));
+        }
+
         if let Some(ref manager) = self.model_manager {
             log::debug!("Using ModelManager for model switching");
             let _loaded_model = manager.load(&model_config).await?;
@@ -1346,7 +1377,22 @@ impl EmbeddingService {
                 ))
             })?;
 
-        self.engine = Arc::new(RwLock::new(new_engine));
+        let new_engine_arc = Arc::new(RwLock::new(new_engine));
+        // 接线控制器 + 按模型目录文件大小粗估常驻内存记账
+        if let Some(ctrl) = &self.memory_limit {
+            new_engine_arc
+                .write()
+                .await
+                .attach_memory_limit_controller(Arc::clone(ctrl));
+            let est = estimate_model_bytes(&model_config.model_path);
+            ctrl.update_usage(est).await;
+            log::info!(
+                "memory limit accounting: model {} ≈ {} bytes",
+                model_config.name,
+                est
+            );
+        }
+        self.engine = new_engine_arc;
         self.model_config = Some(model_config);
 
         log::info!("Model switched successfully to {}", req.model_name);
@@ -1435,6 +1481,38 @@ impl EmbeddingService {
             total_count,
         }
     }
+}
+
+/// 粗估模型常驻内存：模型目录下一层文件的字节总和（权重为主）。
+/// 作为内存上限记账的输入——精确显存占用需运行时探针，属独立变更。
+fn estimate_model_bytes(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    total += meta.len();
+                } else if meta.is_dir() {
+                    total += dir_size(&entry.path());
+                }
+            }
+        }
+    }
+    total
+}
+
+fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    total += meta.len();
+                }
+            }
+        }
+    }
+    total
 }
 
 #[cfg(test)]
@@ -1542,6 +1620,73 @@ mod tests {
             _config: &ModelConfig,
         ) -> Result<(), VecboostError> {
             Ok(())
+        }
+    }
+
+    /// 回归钉（T021/D21）：memory_limit_bytes 配置时 switch_model 真实执法——
+    /// 加载后记账超限，再切换被显性拒绝（此前只记账不执法）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_memory_limit_enforced_on_switch_model() {
+        const MINILM: &str = "models/all-MiniLM-L6-v2";
+        if !std::path::Path::new(&format!("{MINILM}/model.safetensors")).exists() {
+            eprintln!("Skipping test: model weights not found at {MINILM}");
+            return;
+        }
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let baseline = ModelConfig {
+            name: "baseline".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from(MINILM),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 8,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+            memory_limit_bytes: Some(1024), // 1KB 上限：任何真实模型加载后必超限
+            oom_fallback_enabled: true,
+            model_sha256: None,
+            quantized: false,
+        };
+        let service = EmbeddingService::new(engine, Some(baseline));
+
+        let mk_req = |name: &str| crate::domain::ModelSwitchRequest {
+            model_name: name.to_string(),
+            model_path: Some(std::path::PathBuf::from(MINILM)),
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+        };
+
+        // 第一次切换：控制器初始 usage=0 → 放行；加载后记账 MiniLM 权重(~133MB) > 1KB → Exceeded
+        let service = tokio::sync::RwLock::new(service);
+        let first = {
+            let mut guard = service.write().await;
+            guard.switch_model(mk_req("m1")).await
+        };
+        assert!(
+            first.is_ok(),
+            "first switch must succeed (usage starts at 0): {:?}",
+            first.err()
+        );
+
+        // 第二次切换：已超限 → 显性拒绝
+        let second = {
+            let mut guard = service.write().await;
+            guard.switch_model(mk_req("m2")).await
+        };
+        let err = second
+            .err()
+            .expect("second switch must be rejected by memory limit");
+        match err {
+            VecboostError::ModelLoadError(msg) => {
+                assert!(msg.contains("memory limit exceeded"), "got: {msg}");
+            }
+            other => panic!("expected ModelLoadError, got {:?}", other),
         }
     }
 

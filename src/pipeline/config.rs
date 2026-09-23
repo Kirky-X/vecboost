@@ -49,6 +49,9 @@ pub struct WorkerConfig {
     pub scale_up_threshold: usize,
     pub scale_down_threshold: usize,
     pub idle_timeout_secs: u64,
+    /// 优雅停机排空等待（秒）：进入 shutdown 后给在途批的完成窗口；
+    /// 到期后强制 abort。0 = 不等待。默认 5。
+    pub drain_timeout_secs: u64,
     pub scale_check_interval_secs: u64,
     /// 排空拼批最大请求数（worker 单次从队列取出的最大请求数）
     pub max_batch_size: usize,
@@ -71,6 +74,7 @@ impl Default for WorkerConfig {
             scale_up_threshold: 100,
             scale_down_threshold: 10,
             idle_timeout_secs: 60,
+            drain_timeout_secs: 5,
             scale_check_interval_secs: 5,
             max_batch_size: 8,
             batch_wait_ms: default_batch_wait_ms(),

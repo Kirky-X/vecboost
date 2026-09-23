@@ -82,7 +82,7 @@ impl ServiceRequest {
 }
 
 /// 队列请求
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QueuedRequest {
     /// 请求 ID
     pub request_id: String,
@@ -101,7 +101,7 @@ pub struct QueuedRequest {
 // ---- PriorityRequestQueue ----
 
 use log::{debug, warn};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
@@ -111,6 +111,58 @@ use tokio::sync::Notify;
 /// 老化语义=跳级(公平性),不等于超时:被跳过的队首由 [`PriorityRequestQueue::dequeue_expired`]
 /// 按各自 SLA 收割,或在下级队列为空时被兜底服务,任何情况下不永久滞留。
 const DEFAULT_AGING_THRESHOLD: Duration = Duration::from_secs(5);
+
+/// 请求取消注册表：request_id → 取消标志（T030 断连取消传播）。
+///
+/// handler 在入队前注册；客户端断连/超时置位；调度器出队时检查，
+/// 已取消请求直接丢弃（释放队列槽位、不消耗推理算力）。
+/// 释放时机：worker 完成后或调度器丢弃时——不早于最后一次检查。
+#[derive(Default)]
+pub struct CancellationRegistry {
+    flags: std::sync::Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>,
+}
+
+impl CancellationRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 注册并返回可克隆的取消标志。
+    pub fn register(&self, request_id: &str) -> Arc<std::sync::atomic::AtomicBool> {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.flags
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(request_id.to_string(), Arc::clone(&flag));
+        flag
+    }
+
+    pub fn is_cancelled(&self, request_id: &str) -> bool {
+        self.flags
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(request_id)
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub fn cancel(&self, request_id: &str) {
+        if let Some(f) = self
+            .flags
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(request_id)
+        {
+            f.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    pub fn release(&self, request_id: &str) {
+        self.flags
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(request_id);
+    }
+}
 
 /// 优先级请求队列
 pub struct PriorityRequestQueue {
@@ -124,6 +176,8 @@ pub struct PriorityRequestQueue {
     notify: Arc<Notify>,
     /// 老化跳级阈值（`with_aging_threshold` 可覆盖默认值）
     aging_threshold: Duration,
+    /// 取消注册表（出队跳过已取消请求）
+    cancellations: Arc<CancellationRegistry>,
 }
 
 impl PriorityRequestQueue {
@@ -139,7 +193,13 @@ impl PriorityRequestQueue {
             current_size: Arc::new(AtomicUsize::new(0)),
             notify: Arc::new(Notify::new()),
             aging_threshold: DEFAULT_AGING_THRESHOLD,
+            cancellations: Arc::new(CancellationRegistry::new()),
         }
+    }
+
+    /// 取消注册表句柄（handler 注册标志、worker 完成后释放）
+    pub fn cancellations(&self) -> Arc<CancellationRegistry> {
+        Arc::clone(&self.cancellations)
     }
 
     /// 覆盖老化跳级阈值（测试与部署调优用）
@@ -221,7 +281,17 @@ impl PriorityRequestQueue {
                     }
                     continue;
                 }
-                if let Some(request) = queue.pop_front() {
+                while let Some(request) = queue.pop_front() {
+                    // 已取消请求：丢弃（释放槽位），继续扫描（T030）
+                    if self.cancellations.is_cancelled(&request.request_id) {
+                        self.current_size.fetch_sub(1, Ordering::Relaxed);
+                        self.cancellations.release(&request.request_id);
+                        debug!(
+                            "Cancelled request {} dropped at dequeue",
+                            request.request_id
+                        );
+                        continue;
+                    }
                     let new_size = self.current_size.fetch_sub(1, Ordering::Relaxed) - 1;
 
                     debug!(
@@ -332,6 +402,11 @@ impl PriorityRequestQueue {
                         break;
                     }
                     if let Some(request) = queue.pop_front() {
+                        if self.cancellations.is_cancelled(&request.request_id) {
+                            self.current_size.fetch_sub(1, Ordering::Relaxed);
+                            self.cancellations.release(&request.request_id);
+                            continue;
+                        }
                         self.current_size.fetch_sub(1, Ordering::Relaxed);
                         result.push(request);
                     } else {
@@ -389,6 +464,24 @@ impl PriorityRequestQueue {
     /// 获取入队通知引用，供 worker select! 使用
     pub fn notify(&self) -> &Notify {
         &self.notify
+    }
+
+    /// 排空队列并返回全部请求（优雅停机善后用，调用方负责完成响应）。
+    pub async fn dequeue_all_for_shutdown(&self) -> Vec<QueuedRequest> {
+        let mut queues = self.queues.write().await;
+        let mut all = Vec::new();
+        for queue in queues.values_mut() {
+            while let Some(req) = queue.pop_front() {
+                self.cancellations.release(&req.request_id);
+                all.push(req);
+            }
+        }
+        queues.clear();
+        self.current_size.store(0, Ordering::Relaxed);
+        if !all.is_empty() {
+            warn!("Shutdown drain: {} queued requests evacuated", all.len());
+        }
+        all
     }
 
     /// 清空队列

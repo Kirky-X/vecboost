@@ -683,6 +683,7 @@ async fn init_pipeline(
             scale_down_threshold: config.pipeline.worker.scale_down_threshold,
             scale_check_interval_secs: config.pipeline.worker.scale_check_interval_secs,
             idle_timeout_secs: config.pipeline.worker.idle_timeout_secs,
+            drain_timeout_secs: config.pipeline.worker.drain_timeout_secs,
             max_batch_size: config.embedding.max_batch_size,
             batch_wait_ms: config.pipeline.worker.batch_wait_ms,
         };
@@ -737,9 +738,9 @@ async fn init_pipeline(
             service.clone(),
         ));
 
-        for _ in 0..worker_config.min_workers {
-            worker_manager.spawn_worker().await;
-        }
+        // start() = spawn min_workers + 启动扩缩容 monitor（T033——
+        // 此前只 spawn min_workers，max_workers/scale 阈值全是死配置）
+        worker_manager.start().await;
 
         log::info!("Pipeline components initialized successfully");
 

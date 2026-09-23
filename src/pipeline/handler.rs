@@ -43,9 +43,28 @@ pub async fn handle_pipeline_request(
     req: EmbedRequest,
     ip: String,
 ) -> Result<axum::Json<crate::domain::EmbedResponse>, VecboostError> {
+    use std::sync::atomic::Ordering;
+
     let request_id = next_request_id();
     // 进入 pipeline 等待即计为在途(RAII,任何退出路径自动递减)
     let _in_flight = InFlightGuard::enter();
+
+    // 取消传播（T030）：handler 被 drop（客户端断连）时置位取消标志，
+    // 调度器出队检查后丢弃——不再消耗推理算力
+    let queue_handle = state
+        .kit
+        .require::<crate::registry::PipelineQueueModule>()
+        .expect("PipelineQueueModule not registered");
+    let cancel_flag = queue_handle.cancellations().register(&request_id);
+    struct CancelOnDrop(Option<std::sync::Arc<std::sync::atomic::AtomicBool>>);
+    impl Drop for CancelOnDrop {
+        fn drop(&mut self) {
+            if let Some(f) = &self.0 {
+                f.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+    let mut cancel_guard = CancelOnDrop(Some(std::sync::Arc::clone(&cancel_flag)));
 
     let response_rx = state
         .kit
@@ -80,21 +99,23 @@ pub async fn handle_pipeline_request(
         source: crate::pipeline::RequestSource::http(ip),
     };
 
-    state
-        .kit
-        .require::<crate::registry::PipelineQueueModule>()
-        .expect("PipelineQueueModule not registered")
-        .enqueue(queued_request)
-        .await?;
+    queue_handle.enqueue(queued_request).await?;
 
-    match tokio::time::timeout(Duration::from_secs(30), response_rx).await {
+    let result = match tokio::time::timeout(Duration::from_secs(30), response_rx).await {
         Ok(Ok(Ok(response))) => Ok(axum::Json(response)),
         Ok(Ok(Err(e))) => Err(e),
         Ok(Err(_)) => Err(VecboostError::InternalError(i18n::tr(
             "pipeline-channel-error",
         ))),
-        Err(_) => Err(VecboostError::ValidationError(i18n::tr("pipeline-timeout"))),
-    }
+        // 服务端超时 → 504 语义（T031），且置位取消：请求若仍在队列则被丢弃
+        Err(_) => {
+            cancel_flag.store(true, Ordering::Relaxed);
+            Err(VecboostError::RequestTimeout(i18n::tr("pipeline-timeout")))
+        }
+    };
+    // 请求正常完成：解除断连自动取消（否则 Drop 误标后续无主请求）
+    cancel_guard.0.take();
+    result
 }
 
 #[cfg(test)]
@@ -449,10 +470,10 @@ mod tests {
         let result = handle_pipeline_request(state, req, "127.0.0.1".to_string()).await;
         assert!(result.is_err());
         match result.unwrap_err() {
-            VecboostError::ValidationError(msg) => {
+            VecboostError::RequestTimeout(msg) => {
                 assert!(msg.contains("timeout"), "got: {}", msg);
             }
-            other => panic!("expected ValidationError, got {:?}", other),
+            other => panic!("expected RequestTimeout, got {:?}", other),
         }
     }
 

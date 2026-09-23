@@ -6,7 +6,7 @@
     reason = "WorkerManager is used via queue in handler; tests cover all methods, production uses shared queue"
 )]
 
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -24,10 +24,6 @@ use crate::service::embedding::EmbeddingService;
 /// 包含两种变体：处理请求和优雅关闭。
 #[derive(Debug)]
 pub enum WorkerTask {
-    ProcessRequest {
-        request_id: String,
-        request: ServiceRequest,
-    },
     /// 优雅关闭信号
     Shutdown {
         /// 是否立即关闭（不等待当前请求完成）
@@ -217,10 +213,27 @@ impl WorkerManager {
     }
 
     /// 优雅关闭所有 Worker
+    ///
+    /// 排空语义（T032）：进入 shutdown 即清空队列并对每个排队请求完成
+    /// 503（不再悬挂至客户端超时）；在途批获得 `drain_timeout_secs`（默认 5s）
+    /// 的完成窗口，到期后 abort。`Shutdown { immediate: true }` 跳过等待。
     pub async fn shutdown(&self) {
         info!("Shutting down WorkerManager...");
 
         self.running.store(false, Ordering::SeqCst);
+
+        // 排空队列：排队请求快速失败（503），不再无限悬挂
+        let drained = self.queue.dequeue_all_for_shutdown().await;
+        for req in drained {
+            self.response_channel
+                .complete(
+                    req.request_id.clone(),
+                    Err(VecboostError::InferenceError(
+                        "server is shutting down".to_string(),
+                    )),
+                )
+                .await;
+        }
 
         let senders = {
             let guard = self.worker_senders.lock().await;
@@ -231,8 +244,9 @@ impl WorkerManager {
             let _ = sender.send(WorkerTask::Shutdown { immediate: false }).await;
         }
 
-        // 等待一段时间让 worker 完成当前请求
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        // 可配排空窗口（此前硬编码 5s）
+        let drain = Duration::from_secs(self.config.drain_timeout_secs);
+        tokio::time::sleep(drain).await;
 
         // 强制关闭剩余的 worker
         for sender in &senders {
@@ -380,13 +394,6 @@ impl WorkerManager {
                             }
                             break;
                         }
-                        WorkerTask::ProcessRequest { .. } => {
-                            debug!(
-                                "Worker {} received ProcessRequest via task_receiver \
-                                 (ignored, queue is primary route)",
-                                worker_id
-                            );
-                        }
                     }
                 }
                 Some(request) = queue.dequeue() => {
@@ -436,6 +443,15 @@ impl WorkerManager {
                     let now = std::time::Instant::now();
                     let mut valid_batch = Vec::with_capacity(batch.len());
                     for req in batch {
+                        // 排队延迟可观测（T033）：入队→出队等待时长
+                        #[cfg(feature = "http")]
+                        if let Some(collector) = crate::metrics::prometheus_exporter::global_collector()
+                        {
+                            collector.observe_queue_wait(
+                                "embed",
+                                now.duration_since(req.submitted_at).as_secs_f64(),
+                            );
+                        }
                         if now.duration_since(req.submitted_at) >= req.timeout {
                             warn!(
                                 "Request {} expired in queue ({:.1}s), rejecting",
@@ -466,7 +482,42 @@ impl WorkerManager {
                         worker_id, valid_batch.len()
                     );
 
-                    Self::process_batch_requests(&valid_batch, &embedding_service, &response_channel).await;
+                    // panic 隔离（T029）：推理 panic 不再带走 worker——
+                    // 经 JoinHandle 捕获，批内未完成请求统一补 InternalError
+                    let batch_for_panic: Vec<String> = valid_batch
+                        .iter()
+                        .map(|r| r.request_id.clone())
+                        .collect();
+                    let svc = Arc::clone(&embedding_service);
+                    let chan = Arc::clone(&response_channel);
+                    let batch_owned = valid_batch.clone();
+                    let handle = tokio::spawn(async move {
+                        Self::process_batch_requests(&batch_owned, &svc, &chan).await
+                    });
+                    match handle.await {
+                        Ok(()) => {}
+                        Err(join_err) => {
+                            error!(
+                                "Worker {} inference panicked: {}",
+                                worker_id,
+                                join_err
+                            );
+                            for rid in &batch_for_panic {
+                                response_channel
+                                    .complete(
+                                        rid.clone(),
+                                        Err(VecboostError::InternalError(
+                                            "inference task panicked".to_string(),
+                                        )),
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                    // 释放取消注册表条目（响应已送达或已补错）
+                    for req in &valid_batch {
+                        queue.cancellations().release(&req.request_id);
+                    }
                 }
                 // 队列为空时等待入队通知，消除指数退避轮询
                 // 使用 timeout 实现空闲超时退出
@@ -910,6 +961,67 @@ mod tests {
                 .iter()
                 .map(|_| vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
                 .collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    /// 测试用 panic 引擎——armed 时 embed/embed_batch 均 panic，
+    /// 随后自解除（验证 panic 隔离与 worker 存活）。
+    struct PanicOnceEngine {
+        armed: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl InferenceEngine for PanicOnceEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                panic!("engine exploded in single inference");
+            }
+            Ok(vec![1.0, 2.0, 3.0, 4.0])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                panic!("engine exploded in batch inference");
+            }
+            Ok(texts.iter().map(|_| vec![1.0, 2.0, 3.0, 4.0]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    /// 测试用慢引擎——embed/embed_batch 睡 300ms（占住 worker 模拟在途推理）。
+    struct SlowEngine;
+
+    #[async_trait]
+    impl InferenceEngine for SlowEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(vec![1.0, 2.0, 3.0, 4.0])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(texts.iter().map(|_| vec![1.0, 2.0, 3.0, 4.0]).collect())
         }
         fn precision(&self) -> &Precision {
             &Precision::Fp32
@@ -1629,57 +1741,177 @@ mod tests {
         }
     }
 
-    /// 验证 worker_loop 收到 ProcessRequest 任务时仅 debug 日志,不真正处理。
+    /// 回归钉（T029/D03）：引擎推理 panic 被隔离——批内请求收到
+    /// InternalError，worker 存活并继续服务后续请求。
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_worker_loop_ignores_process_request_via_task_receiver() {
+    async fn test_worker_survives_engine_panic() {
         let queue = Arc::new(PriorityRequestQueue::new(100));
         let response_channel = Arc::new(ResponseChannel::new());
         let config = WorkerConfig::default();
+        let panic_armed = Arc::new(AtomicBool::new(true));
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
-            Arc::new(RwLock::new(MockEngine));
+            Arc::new(RwLock::new(PanicOnceEngine {
+                armed: Arc::clone(&panic_armed),
+            }));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
 
-        let manager = WorkerManager::new(queue, response_channel, config, service);
+        let manager = WorkerManager::new(
+            Arc::clone(&queue),
+            Arc::clone(&response_channel),
+            config,
+            service,
+        );
         manager.spawn_worker().await;
-        assert_eq!(manager.current_workers(), 1);
 
-        {
-            let senders = manager.worker_senders.lock().await;
-            senders[0]
-                .send(WorkerTask::ProcessRequest {
-                    request_id: "ignored-1".to_string(),
-                    request: ServiceRequest::Embed(EmbedRequest {
-                        text: "hello".to_string(),
-                        normalize: Some(true),
-                    }),
-                })
-                .await
-                .expect("send ProcessRequest must succeed");
-        }
+        let rx1 = response_channel.register("panic-1".to_string()).await;
+        let rx2 = response_channel.register("after-panic".to_string()).await;
+        // 错峰入队：两请求分属不同批（panic 只波及第一批）
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "panic-1".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "trigger".to_string(),
+                    normalize: Some(false),
+                }),
+                priority: Priority::Normal,
+                submitted_at: std::time::Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::http("127.0.0.1".to_string()),
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "after-panic".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "recover".to_string(),
+                    normalize: Some(false),
+                }),
+                priority: Priority::Normal,
+                submitted_at: std::time::Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::http("127.0.0.1".to_string()),
+            })
+            .await
+            .unwrap();
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        assert_eq!(
-            manager.current_workers(),
-            1,
-            "worker must still be running after receiving ProcessRequest"
+        let r1 = tokio::time::timeout(Duration::from_secs(5), rx1)
+            .await
+            .expect("panic batch must complete promptly")
+            .expect("channel open");
+        assert!(
+            r1.is_err(),
+            "panicked batch must yield explicit error, got {:?}",
+            r1
         );
 
-        {
-            let senders = manager.worker_senders.lock().await;
-            senders[0]
-                .send(WorkerTask::Shutdown { immediate: true })
+        // worker 存活：后续请求正常完成
+        let r2 = tokio::time::timeout(Duration::from_secs(5), rx2)
+            .await
+            .expect("worker must survive panic and serve next request")
+            .expect("channel open");
+        assert!(
+            r2.is_ok(),
+            "post-panic request must succeed: {:?}",
+            r2.err()
+        );
+
+        manager.running.store(false, Ordering::SeqCst);
+        let senders = manager.worker_senders.lock().await.clone();
+        for s_ in &senders {
+            let _ = s_.send(WorkerTask::Shutdown { immediate: true }).await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    /// 回归钉（T030/D04）：已取消请求在出队时被丢弃——不触发引擎调用，
+    /// 队列槽位释放。
+    #[tokio::test]
+    async fn test_cancelled_request_skipped_at_dequeue() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+
+        let flag = queue.cancellations().register("cancelled-1");
+        flag.store(true, Ordering::SeqCst);
+
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "cancelled-1".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "ghost".to_string(),
+                    normalize: Some(false),
+                }),
+                priority: Priority::Normal,
+                submitted_at: std::time::Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::http("127.0.0.1".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(queue.size(), 1);
+
+        let dequeued = queue.dequeue().await;
+        assert!(
+            dequeued.is_none(),
+            "cancelled request must be dropped, not served"
+        );
+        assert_eq!(queue.size(), 0, "queue slot must be released");
+    }
+
+    /// 回归钉（T032/D07）：shutdown 排空——排队请求立即收到
+    /// "server is shutting down" 错误而非悬挂到客户端超时。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_shutdown_drains_queue_with_immediate_error() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig {
+            min_workers: 1,
+            max_workers: 1,
+            batch_wait_ms: 0,
+            ..Default::default()
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(SlowEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+
+        let manager = WorkerManager::new(
+            Arc::clone(&queue),
+            Arc::clone(&response_channel),
+            config,
+            service,
+        );
+        manager.spawn_worker().await;
+
+        let rx_queued = response_channel.register("drain-me".to_string()).await;
+        for id in ["in-flight", "drain-me"] {
+            queue
+                .enqueue(QueuedRequest {
+                    request_id: id.to_string(),
+                    request: ServiceRequest::Embed(EmbedRequest {
+                        text: format!("text {id}"),
+                        normalize: Some(false),
+                    }),
+                    priority: Priority::Normal,
+                    submitted_at: std::time::Instant::now(),
+                    timeout: Duration::from_secs(30),
+                    source: RequestSource::http("127.0.0.1".to_string()),
+                })
                 .await
                 .unwrap();
         }
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-        loop {
-            if manager.current_workers() == 0 {
-                break;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        manager.shutdown().await;
+
+        let outcome = tokio::time::timeout(Duration::from_secs(1), rx_queued).await;
+        match outcome {
+            Ok(Ok(Err(VecboostError::InferenceError(msg)))) => {
+                assert!(msg.contains("shutting down"), "got: {msg}");
             }
-            if tokio::time::Instant::now() >= deadline {
-                panic!("worker did not exit after Shutdown");
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok(Ok(Ok(_))) => panic!("queued request must be drained with error, got success"),
+            Ok(Ok(Err(other))) => panic!("unexpected error type: {:?}", other),
+            Ok(Err(_)) => panic!("response channel closed without completing"),
+            Err(_) => panic!("queued request must complete promptly during shutdown"),
         }
     }
 
@@ -2019,6 +2251,7 @@ mod tests {
             scale_up_threshold: 10,
             scale_down_threshold: 5,
             idle_timeout_secs: 60,
+            drain_timeout_secs: 5,
             scale_check_interval_secs: 1,
             max_batch_size: 8,
             batch_wait_ms: 5,
@@ -2097,6 +2330,7 @@ mod tests {
             scale_up_threshold: 100,
             scale_down_threshold: 10,
             idle_timeout_secs: 60,
+            drain_timeout_secs: 5,
             scale_check_interval_secs: 1,
             max_batch_size: 8,
             batch_wait_ms: 5,

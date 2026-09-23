@@ -39,6 +39,7 @@ pub struct PrometheusCollector {
     // 引擎分阶段延迟：tokenize/inference/pool
     vecboost_stage_seconds: HistogramVec,
     semantic_cache_fuzzy_hits: prometheus::IntCounter,
+    vecboost_queue_wait_seconds: prometheus::HistogramVec,
 
     // 缓存命中率
     cache_hits: CounterVec,
@@ -73,6 +74,15 @@ impl PrometheusCollector {
         )?;
 
         // pipeline 队列深度与在途请求(pull 时快照,热路径零开销)
+        let vecboost_queue_wait_seconds = register_histogram_vec_with_registry!(
+            "vecboost_queue_wait_seconds",
+            "Per-request wait from enqueue to dequeue",
+            &["operation"],
+            vec![
+                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0
+            ],
+            registry.clone()
+        )?;
         let semantic_cache_fuzzy_hits = prometheus::register_int_counter_with_registry!(
             "vecboost_semantic_cache_fuzzy_hits_total",
             "Trigram fuzzy hits served by the semantic cache",
@@ -183,6 +193,7 @@ impl PrometheusCollector {
             vecboost_inbatch_dedup_ratio,
             vecboost_stage_seconds,
             semantic_cache_fuzzy_hits,
+            vecboost_queue_wait_seconds,
             cache_hits,
             cache_misses,
             rate_limit_allowed,
@@ -235,6 +246,13 @@ impl PrometheusCollector {
     /// 语义缓存 trigram 模糊命中计数（D26b 可观测性）。
     pub fn inc_semantic_fuzzy_hits(&self) {
         self.semantic_cache_fuzzy_hits.inc();
+    }
+
+    /// 逐请求入队→出队等待时长观测（T033 排队延迟可观测）。
+    pub fn observe_queue_wait(&self, operation: &str, wait_secs: f64) {
+        self.vecboost_queue_wait_seconds
+            .with_label_values(&[operation])
+            .observe(wait_secs);
     }
 
     /// 更新批内去重率滚动 gauge。

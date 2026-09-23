@@ -22,7 +22,7 @@ use async_trait::async_trait;
 /// 推理引擎抽象接口
 #[async_trait]
 pub trait InferenceEngine: Send + Sync {
-    /// 执行推理，返回未归一化的向量
+    /// 执行推理，返回 L2 归一化的向量（引擎出口契约；服务层归一化幂等保留）
     fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError>;
 
     /// 批量推理

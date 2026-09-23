@@ -144,8 +144,21 @@ pub fn gguf_to_candle(name: &str) -> Option<String> {
         "ffn_up.bias" => "intermediate.dense.bias",
         "ffn_down.weight" => "output.dense.weight",
         "ffn_down.bias" => "output.dense.bias",
-        "attn_norm.weight" => "output.LayerNorm.weight",
-        "attn_norm.bias" => "output.LayerNorm.bias",
+        // 注意：attn_norm → output.LayerNorm 是本仓转换器的自定义约定
+        // （写读配对自洽）；llama.cpp 惯例中 blk.N.attn_norm 指 attention 后
+        // LayerNorm，接入外部转换的标准 GGUF 时该映射会错位——显性告警一次
+        other @ ("attn_norm.weight" | "attn_norm.bias") => {
+            static ATTN_NORM_WARN: std::sync::Once = std::sync::Once::new();
+            ATTN_NORM_WARN.call_once(|| {
+                log::warn!(
+                    "GGUF tensor '{other}': 本仓约定将其映射为 final-LN(output.LayerNorm)，                     与 llama.cpp 的 attention-LN 惯例不同；外部转换的 GGUF 请改用 output_norm 命名"
+                );
+            });
+            match other {
+                "attn_norm.weight" => "output.LayerNorm.weight",
+                _ => "output.LayerNorm.bias",
+            }
+        }
         _ => return None,
     };
     Some(format!("encoder.layer.{idx}.{candle_tail}"))
@@ -348,13 +361,49 @@ impl QuantizedCandleEngine {
             .map(|t| t.dim(0).unwrap_or(2))
             .unwrap_or(2);
 
+        // tokenizer 与 pooling 约定沿用 fp32 路径：GGUF 同目录的 tokenizer.json，
+        // 池化按模型目录名推断（bge→Cls / MiniLM→Mean / e5→Mean）。
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        // 激活函数三级回退（T027）：GGUF 同目录 config.json 的 hidden_act →
+        // 解析失败回落 Gelu 并 warn——此前硬编码 Gelu，非 Gelu 模型静默出错
+        let hidden_act = std::fs::read_to_string(parent.join("config.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|v| {
+                v.get("hidden_act")
+                    .and_then(|a| a.as_str().map(|s| s.to_string()))
+            })
+            .and_then(|act| match act.to_ascii_lowercase().as_str() {
+                "gelu" | "gelu_new" | "gelu_python" => {
+                    Some(candle_transformers::models::bert::HiddenAct::Gelu)
+                }
+                "relu" => Some(candle_transformers::models::bert::HiddenAct::Relu),
+                "swish" | "silu" => {
+                    log::warn!("GGUF hidden_act '{act}' 在 candle BERT 中无对应变体，回落 Gelu");
+                    None
+                }
+                other => {
+                    log::warn!("GGUF config.json 未知 hidden_act '{other}'，回落 Gelu");
+                    None
+                }
+            })
+            .unwrap_or_else(|| {
+                log::warn!(
+                    "GGUF config.json 未提供可识别的 hidden_act，回落 Gelu（原硬编码行为的显性化）"
+                );
+                candle_transformers::models::bert::HiddenAct::Gelu
+            });
+
         let config = candle_transformers::models::bert::Config {
             vocab_size,
             hidden_size: hidden,
             num_hidden_layers: num_layers,
             num_attention_heads: num_heads,
             intermediate_size: intermediate,
-            hidden_act: candle_transformers::models::bert::HiddenAct::Gelu,
+            hidden_act,
             hidden_dropout_prob: 0.1,
             max_position_embeddings: max_pos,
             type_vocab_size,
@@ -370,12 +419,6 @@ impl QuantizedCandleEngine {
         let model = candle_transformers::models::bert::BertModel::load(vb, &config)
             .map_err(|e| VecboostError::ModelLoadError(format!("GGUF BERT 装配失败: {e}")))?;
 
-        // tokenizer 与 pooling 约定沿用 fp32 路径：GGUF 同目录的 tokenizer.json，
-        // 池化按模型目录名推断（bge→Cls / MiniLM→Mean / e5→Mean）。
-        let parent = path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
         let tok_path = parent.join("tokenizer.json");
         let hf = tokenizers::Tokenizer::from_file(tok_path.as_os_str()).map_err(|e| {
             VecboostError::ModelLoadError(format!(
@@ -384,14 +427,25 @@ impl QuantizedCandleEngine {
             ))
         })?;
         let tokenizer = crate::text::tokenizer::CachedTokenizer::new(hf, MAX_LEN, 1024);
+        // 池化推断来源与 fp32 路径对齐（T027）：优先 config.json 的模型身份，
+        // 目录名仅作回退——两路径目录名不一致时池化方式不再分叉
         let dir_name = parent
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let pooling = match infer_pooling_mode(&dir_name) {
+        let pool_identity = std::fs::read_to_string(parent.join("config.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|v| {
+                v.get("_name_or_path")
+                    .and_then(|n| n.as_str().map(|s| s.to_string()))
+            })
+            .unwrap_or(dir_name);
+        let pooling = match infer_pooling_mode(&pool_identity) {
             PoolingMode::Auto => PoolingMode::Cls, // 推断失败按 BERT 惯例 Cls
             other => other,
         };
+        log::info!("GGUF pooling inferred as {pooling:?} from identity '{pool_identity}'");
 
         Ok(Self {
             model_path: path.to_path_buf(),
@@ -409,7 +463,7 @@ impl QuantizedCandleEngine {
     }
 
     /// 单文本前向：与 fp32 CandleEngine::forward_pass 相同的
-    /// tokenize → forward → pooling 链路（不含归一化，行为对齐 fp32 引擎）。
+    /// tokenize → forward → pooling → L2 归一化链路（引擎出口契约见 trait 文档）。
     fn forward_one(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         let encoding = self
             .tokenizer
@@ -476,6 +530,10 @@ impl QuantizedCandleEngine {
             PoolingMode::Max => pool_max(&seq_hidden, &mask_for_pooling, self.hidden_size),
             PoolingMode::Auto => unreachable!("Auto 已在 load 时解析"),
         };
+        // 引擎出口契约：L2 归一化（T026——此前本引擎不归一化，与 fp32 引擎
+        // 批量路径行为相悖；原注释谎称"不含归一化，行为对齐 fp32 引擎"）
+        let mut pooled = pooled;
+        crate::utils::vector::normalize_l2(&mut pooled)?;
         Ok(pooled)
     }
 }

@@ -893,6 +893,9 @@ impl CandleEngine {
         };
 
         log::debug!("Final embedding dim: {}", vec.len());
+        // 引擎出口契约：L2 归一化（与批量路径、量化引擎一致，见 trait 文档）
+        let mut vec = vec;
+        l2_normalize_in_place(&mut vec);
         Ok(vec)
     }
 

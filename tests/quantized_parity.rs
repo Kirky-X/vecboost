@@ -198,6 +198,42 @@ fn test_q8_0_parity_gate() {
     );
 }
 
+/// 引擎出口契约（T026/D14）：量化引擎 embed 输出必须 L2 归一化（‖v‖≈1），
+/// 与 fp32 引擎一致。此前量化引擎不归一化，两路径范数契约相悖。
+#[test]
+fn test_quantized_engine_output_is_l2_normalized() {
+    let Some(gguf) = self_produce("q8_0") else {
+        eprintln!("quantized_parity: 本地 bge-small 缺失，范数契约测试 skip");
+        return;
+    };
+    let quant = quantized_engine(&gguf);
+    let quant_norms: Vec<f64> = ["contract norm probe one", "contract norm probe two"]
+        .iter()
+        .map(|t| {
+            let v = InferenceEngine::embed(&quant, t).expect("量化 embed 失败");
+            v.iter()
+                .map(|x| (*x as f64) * (*x as f64))
+                .sum::<f64>()
+                .sqrt()
+        })
+        .collect();
+    for n in &quant_norms {
+        assert!(
+            (*n - 1.0).abs() < 1e-3,
+            "量化引擎出口范数 {n} 偏离 1（引擎契约要求 L2 归一化）"
+        );
+    }
+    // fp32 引擎同文本范数亦为 1（契约双向一致）
+    let fp32 = fp32_engine(Path::new("models/BAAI-bge-small-en-v1.5"));
+    let v = InferenceEngine::embed(&fp32, "contract norm probe one").expect("fp32 embed 失败");
+    let n: f64 = v
+        .iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt();
+    assert!((n - 1.0).abs() < 1e-3, "fp32 引擎出口范数 {n} 偏离 1");
+}
+
 /// Q4_K 质量门：余弦中位数 ≥ 0.95。
 #[test]
 fn test_q4_k_parity_gate() {

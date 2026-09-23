@@ -77,7 +77,10 @@ impl EmbeddingService {
                     .unwrap_or_default();
                 OxCacheBackend::with_persist(size, path, max_bytes, fingerprint)
             }
-            (Some(size), None) => OxCacheBackend::new(size),
+            (Some(size), None) => OxCacheBackend::with_ttl(
+                size,
+                Some(crate::cache::oxcache_backend::DEFAULT_CACHE_TTL),
+            ),
             _ => OxCacheBackend::disabled(),
         };
         Self {
@@ -368,8 +371,9 @@ impl EmbeddingService {
             // 语义缓存启用：精确匹配 → trigram 搜索 → 计算回填
             self.handle_oom_fallback(|| async {
                 semantic_cache
-                    .get_or_compute(&req.text, || async {
+                    .get_or_compute(model_id, &req.text, || async {
                         let embedding = self.engine.read().await.embed(&req.text)?;
+                        crate::utils::vector::ensure_finite_embedding(&embedding)?;
                         Ok(embedding)
                     })
                     .await
@@ -380,14 +384,19 @@ impl EmbeddingService {
                 self.cache
                     .get_or_insert::<_, _, VecboostError>(&cache_key, || async {
                         let embedding = self.engine.read().await.embed(&req.text)?;
+                        crate::utils::vector::ensure_finite_embedding(&embedding)?;
                         Ok(embedding)
                     })
                     .await
             })
             .await?
         } else {
-            self.handle_oom_fallback(|| async { self.engine.read().await.embed(&req.text) })
-                .await?
+            self.handle_oom_fallback(|| async {
+                let embedding = self.engine.read().await.embed(&req.text)?;
+                crate::utils::vector::ensure_finite_embedding(&embedding)?;
+                Ok(embedding)
+            })
+            .await?
         };
 
         let mut embedding = embedding;
@@ -456,6 +465,17 @@ impl EmbeddingService {
             }
         }
         let unique_results = self.engine.read().await.embed_batch(&unique_texts)?;
+        for v in &unique_results {
+            crate::utils::vector::ensure_finite_embedding(v)?;
+        }
+        // 引擎返回向量数不足时显性报错——索引越界 panic 会拖垮 worker（T007）
+        if unique_results.len() < unique_texts.len() {
+            return Err(VecboostError::InferenceError(format!(
+                "engine returned {} embeddings for {} unique inputs",
+                unique_results.len(),
+                unique_texts.len()
+            )));
+        }
         // 埋点：drain 引擎分阶段延迟（tokenize/inference/pool）进 prometheus。
         // 单文本 embed 的累计值延迟到下一次批次 drain 或抓取时汇出（take 语义不丢数据）。
         #[cfg(feature = "http")]
@@ -1363,6 +1383,10 @@ impl EmbeddingService {
 
         // 卸载模型后清缓存
         self.cache.clear().await;
+        // 语义缓存含该模型向量，一并清空防跨模型污染（T015）
+        if let Some(ref semantic) = self.semantic_cache {
+            semantic.clear().await;
+        }
 
         Ok(())
     }
@@ -1377,6 +1401,11 @@ impl EmbeddingService {
 
     pub fn has_model_manager(&self) -> bool {
         self.model_manager.is_some()
+    }
+
+    /// 当前引擎句柄——切模型后传播给 RerankService 等外部持有者（T015）。
+    pub fn engine_handle(&self) -> Arc<RwLock<dyn InferenceEngine + Send + Sync>> {
+        Arc::clone(&self.engine)
     }
 
     pub fn list_available_models(&self) -> ModelListResponse {
@@ -1480,6 +1509,61 @@ mod tests {
             _config: &ModelConfig,
         ) -> Result<(), VecboostError> {
             Ok(())
+        }
+    }
+
+    /// 引擎返回向量数不足时 embed_batch_texts 必须显性报错而非越界 panic（T007）
+    struct ShortBatchEngine;
+
+    #[async_trait]
+    impl InferenceEngine for ShortBatchEngine {
+        fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(TestEngine::new(8).generate_embedding(text))
+        }
+
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts
+                .iter()
+                .take(texts.len().saturating_sub(1))
+                .map(|t| TestEngine::new(8).generate_embedding(t))
+                .collect())
+        }
+
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_embed_batch_texts_short_engine_result_is_error_not_panic() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(ShortBatchEngine));
+        let service = EmbeddingService::new(engine, None);
+        let texts = vec!["a".to_string(), "b".to_string()];
+        let result = service.embed_batch_texts(&texts).await;
+        assert!(
+            result.is_err(),
+            "short engine result must be an explicit error, not an index panic"
+        );
+        match result.unwrap_err() {
+            VecboostError::InferenceError(msg) => {
+                assert!(
+                    msg.contains("1 embeddings for 2 unique inputs"),
+                    "got: {msg}"
+                );
+            }
+            other => panic!("expected InferenceError, got {:?}", other),
         }
     }
 

@@ -82,6 +82,8 @@ pub enum VecboostError {
     IoError(String),
     ValidationError(String),
     RateLimitExceeded(String),
+    /// 请求在队列等待或处理中超过其 SLA（服务端超时，区别于客户端断连）
+    RequestTimeout(String),
     DatabaseError(String),
     InternalError(String),
 }
@@ -184,6 +186,7 @@ impl VecboostError {
             VecboostError::IoError(_) => "error-io",
             VecboostError::ValidationError(_) => "error-validation",
             VecboostError::RateLimitExceeded(_) => "error-rate-limit",
+            VecboostError::RequestTimeout(_) => "error-request-timeout",
             VecboostError::DatabaseError(_) => "error-database",
             VecboostError::InternalError(_) => "error-internal",
         }
@@ -207,6 +210,7 @@ impl VecboostError {
             | VecboostError::IoError(s)
             | VecboostError::ValidationError(s)
             | VecboostError::RateLimitExceeded(s)
+            | VecboostError::RequestTimeout(s)
             | VecboostError::DatabaseError(s)
             | VecboostError::InternalError(s) => s.as_str(),
         }
@@ -232,6 +236,7 @@ impl IntoResponse for VecboostError {
             VecboostError::IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             VecboostError::ValidationError(_) => StatusCode::BAD_REQUEST,
             VecboostError::RateLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
+            VecboostError::RequestTimeout(_) => StatusCode::GATEWAY_TIMEOUT,
             VecboostError::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             VecboostError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };

@@ -45,6 +45,12 @@ impl RerankService {
         }
     }
 
+    /// 替换底层引擎——EmbeddingService::switch_model 成功后由 API 层传播，
+    /// 修复切模型后 rerank 仍用旧引擎的失联（审计 D27）。
+    pub fn replace_engine(&mut self, new_engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>) {
+        self.engine = new_engine;
+    }
+
     pub fn new(
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
         model_config: Option<ModelConfig>,
@@ -149,8 +155,21 @@ impl RerankService {
             let mut uncached_indices = Vec::new();
             let mut uncached_docs = Vec::new();
 
+            let model_id = self
+                .model_config
+                .as_ref()
+                .map(|c| c.name.as_str())
+                .unwrap_or("unknown");
+            let query_hash = xxhash_rust::xxh3::xxh3_128(query.as_bytes());
             for (i, doc) in documents_vec.iter().enumerate() {
-                let cache_key = format!("rerank:{}:{}", query, doc);
+                // 键 = model + query/doc 各自哈希——裸拼接 ("a","b:c") 与
+                // ("a:b","c") 同键互染（审计 D28）
+                let cache_key = format!(
+                    "rerank:{}:{}:{:016x}",
+                    model_id,
+                    query_hash,
+                    xxhash_rust::xxh3::xxh3_128(doc.as_bytes())
+                );
                 if let Some(cached) = cache.get(&cache_key).await {
                     // 缓存命中：单元素 Vec<f32>
                     scores.push((i, cached.first().copied().unwrap_or(0.0)));
@@ -176,7 +195,12 @@ impl RerankService {
 
                 // 存入缓存并收集结果
                 for (idx, &score) in uncached_indices.iter().zip(uncached_scores.iter()) {
-                    let cache_key = format!("rerank:{}:{}", query, documents_vec[*idx]);
+                    let cache_key = format!(
+                        "rerank:{}:{}:{:016x}",
+                        model_id,
+                        query_hash,
+                        xxhash_rust::xxh3::xxh3_128(documents_vec[*idx].as_bytes())
+                    );
                     cache.put(&cache_key, vec![score]).await;
                     scores.push((*idx, score));
                 }
@@ -326,6 +350,108 @@ mod tests {
 
     fn make_service(engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>) -> RerankService {
         RerankService::new(engine, None)
+    }
+
+    /// 回归钉（T016/D28）：("a","b:c") 与 ("a:b","c") 的缓存键不得互染。
+    /// Mock 分数按 doc 长度：前者 0.03，后者 0.01；旧裸拼接键使两次同键，
+    /// 第二次命中返回 0.03。
+    #[tokio::test]
+    async fn test_rerank_cache_keys_distinguish_query_doc_boundaries() {
+        let cache = Arc::new(OxCacheBackend::with_ttl(100, None));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockRerankEngine));
+        let service = RerankService::with_cache(engine, None, Arc::clone(&cache));
+
+        let mk = |query: &str, doc: &str| RerankRequest {
+            query: query.to_string(),
+            documents: vec![doc.to_string()],
+            top_k: None,
+            return_documents: Some(false),
+        };
+
+        let r1 = service
+            .process_rerank(mk("a", "b:c"), 10, 8192)
+            .await
+            .unwrap();
+        assert!(
+            (r1.results[0].score - 0.03).abs() < 1e-6,
+            "b:c len=3 → 0.03"
+        );
+
+        let r2 = service
+            .process_rerank(mk("a:b", "c"), 10, 8192)
+            .await
+            .unwrap();
+        assert!(
+            (r2.results[0].score - 0.01).abs() < 1e-6,
+            "boundary-shifted pair must compute fresh (0.01), got cached {:?}",
+            r2.results[0].score
+        );
+    }
+
+    /// 回归钉（T015/D27）：replace_engine 后 rerank 使用新引擎。
+    #[tokio::test]
+    async fn test_replace_engine_switches_scoring_source() {
+        struct LenEngineA;
+        struct LenEngineB;
+        macro_rules! impl_len_engine {
+            ($t:ident, $scale:expr) => {
+                #[async_trait]
+                impl InferenceEngine for $t {
+                    fn embed(&self, _t: &str) -> Result<Vec<f32>, VecboostError> {
+                        Ok(vec![0.0; 8])
+                    }
+                    fn embed_batch(&self, ts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+                        Ok(ts.iter().map(|_| vec![0.0; 8]).collect())
+                    }
+                    fn precision(&self) -> &Precision {
+                        &Precision::Fp32
+                    }
+                    fn supports_mixed_precision(&self) -> bool {
+                        false
+                    }
+                    fn rerank(&self, _q: &str, d: &str) -> Result<f32, VecboostError> {
+                        Ok(d.len() as f32 * $scale)
+                    }
+                    fn rerank_batch(
+                        &self,
+                        q: &str,
+                        ds: &[String],
+                    ) -> Result<Vec<f32>, VecboostError> {
+                        Ok(ds.iter().map(|d| self.rerank(q, d).unwrap()).collect())
+                    }
+                    async fn try_fallback_to_cpu(
+                        &mut self,
+                        _: &crate::config::model::ModelConfig,
+                    ) -> Result<(), VecboostError> {
+                        Ok(())
+                    }
+                }
+            };
+        }
+        impl_len_engine!(LenEngineA, 1.0);
+        impl_len_engine!(LenEngineB, 100.0);
+
+        let engine_a: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(LenEngineA));
+        let mut service = make_service(engine_a);
+        let req = RerankRequest {
+            query: "q".to_string(),
+            documents: vec!["abcd".to_string()],
+            top_k: None,
+            return_documents: Some(false),
+        };
+        let r1 = service.process_rerank(req.clone(), 10, 8192).await.unwrap();
+        assert!((r1.results[0].score - 4.0).abs() < 1e-6);
+
+        let engine_b: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(LenEngineB));
+        service.replace_engine(engine_b);
+        let r2 = service.process_rerank(req, 10, 8192).await.unwrap();
+        assert!(
+            (r2.results[0].score - 400.0).abs() < 1e-6,
+            "must score via new engine"
+        );
     }
 
     #[tokio::test]

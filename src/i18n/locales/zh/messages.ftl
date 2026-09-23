@@ -60,6 +60,7 @@ auth-username-charset = 用户名只能包含字母、数字、下划线和连�
 validate-text-empty = 文本不能为空
 validate-text-too-short = 文本过短：{ $got } 个字符（最少 { $min } 个）
 validate-text-too-long = 文本过长：{ $got } 个字符（最多 { $max } 个）
+validate-text-control-chars = 文本包含非法控制字符
 validate-text-whitespace = 文本仅包含空白字符
 validate-batch-empty = 批处理不能为空
 validate-text-index-failed = 索引 { $index } 处文本校验失败：{ $detail }

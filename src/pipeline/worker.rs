@@ -392,6 +392,21 @@ impl WorkerManager {
                 Some(request) = queue.dequeue() => {
                     idle_count = 0;
 
+                    // SLA 收割——排队超过自身 timeout 的请求完成超时响应，不入推理。
+                    // 与老化跳级正交：收割保证任何请求的排队滞留有上界。
+                    for expired_req in queue.dequeue_expired().await {
+                        response_channel
+                            .complete(
+                                expired_req.request_id.clone(),
+                                Err(VecboostError::RequestTimeout(format!(
+                                    "request waited {:.1}s in queue, exceeding its {}s SLA",
+                                    expired_req.submitted_at.elapsed().as_secs_f64(),
+                                    expired_req.timeout.as_secs_f64()
+                                ))),
+                            )
+                            .await;
+                    }
+
                     // 时间窗动态拼批——首请求后开 batch_wait_ms 窗口继续聚合，
                     // batch_wait_ms=0 时 assemble_batch 立即返回仅首请求（旧排空语义）。
                     let wait_start = tokio::time::Instant::now();
@@ -417,12 +432,11 @@ impl WorkerManager {
                         config.batch_wait_ms
                     );
 
-                    // 过期淘汰——submitted_at 超过 30s 的请求直接超时响应,不入推理
-                    const QUEUE_EXPIRY: Duration = Duration::from_secs(30);
+                    // SLA 淘汰——拼批窗口内可能有请求到达自身 timeout，出批时再查一次
                     let now = std::time::Instant::now();
                     let mut valid_batch = Vec::with_capacity(batch.len());
                     for req in batch {
-                        if now.duration_since(req.submitted_at) > QUEUE_EXPIRY {
+                        if now.duration_since(req.submitted_at) >= req.timeout {
                             warn!(
                                 "Request {} expired in queue ({:.1}s), rejecting",
                                 req.request_id,
@@ -431,9 +445,11 @@ impl WorkerManager {
                             response_channel
                                 .complete(
                                     req.request_id.clone(),
-                                    Err(VecboostError::RateLimitExceeded(
-                                        "Request expired in queue".to_string(),
-                                    )),
+                                    Err(VecboostError::RequestTimeout(format!(
+                                        "request waited {:.1}s in queue, exceeding its {}s SLA",
+                                        now.duration_since(req.submitted_at).as_secs_f64(),
+                                        req.timeout.as_secs_f64()
+                                    ))),
                                 )
                                 .await;
                         } else {
@@ -464,7 +480,20 @@ impl WorkerManager {
                             idle_count = 0;
                         }
                         Err(_) => {
-                            // 超时:增加空闲计数
+                            // 空闲超时:顺带收割过期请求（兜底全部 worker 挂起时
+                            // 队列残留过期项的场景），再增加空闲计数
+                            for expired_req in queue.dequeue_expired().await {
+                                response_channel
+                                    .complete(
+                                        expired_req.request_id.clone(),
+                                        Err(VecboostError::RequestTimeout(format!(
+                                            "request waited {:.1}s in queue, exceeding its {}s SLA",
+                                            expired_req.submitted_at.elapsed().as_secs_f64(),
+                                            expired_req.timeout.as_secs_f64()
+                                        ))),
+                                    )
+                                    .await;
+                            }
                             idle_count = idle_count.saturating_add(1);
                             debug!(
                                 "Worker {} idle timeout ({}s), idle_count={}",
@@ -1652,6 +1681,78 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// 回归钉（T006 唤醒不塌缩）：N 个突发请求入队、W 个空闲 worker，
+    /// 全部请求必须在 5s 内完成（tokio Notify permit 语义保证不丢唤醒；
+    /// 未被唤醒的 worker 由出队臂兜底消费队列）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_burst_enqueues_all_complete_with_idle_workers() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig {
+            min_workers: 3,
+            max_workers: 3,
+            batch_wait_ms: 0,
+            ..Default::default()
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+
+        let manager = WorkerManager::new(
+            Arc::clone(&queue),
+            Arc::clone(&response_channel),
+            config,
+            service,
+        );
+        manager.start().await.unwrap();
+        assert_eq!(manager.current_workers(), 3);
+
+        let mut rxs = Vec::with_capacity(6);
+        for i in 0..6 {
+            rxs.push(response_channel.register(format!("burst-{}", i)).await);
+        }
+        for i in 0..6 {
+            queue
+                .enqueue(QueuedRequest {
+                    request_id: format!("burst-{}", i),
+                    request: ServiceRequest::Embed(EmbedRequest {
+                        text: format!("burst text {}", i),
+                        normalize: Some(false),
+                    }),
+                    priority: Priority::Normal,
+                    submitted_at: std::time::Instant::now(),
+                    timeout: Duration::from_secs(30),
+                    source: RequestSource::http("127.0.0.1".to_string()),
+                })
+                .await
+                .unwrap();
+        }
+
+        for (i, rx) in rxs.into_iter().enumerate() {
+            let result = tokio::time::timeout(Duration::from_secs(5), rx).await;
+            assert!(
+                result.is_ok(),
+                "burst request {} not completed within 5s",
+                i
+            );
+            let response = result.unwrap().expect("channel open");
+            assert!(
+                response.is_ok(),
+                "burst request {} must succeed: {:?}",
+                i,
+                response.err()
+            );
+        }
+
+        // 清理
+        manager.running.store(false, Ordering::SeqCst);
+        let senders = manager.worker_senders.lock().await.clone();
+        for s in &senders {
+            let _ = s.send(WorkerTask::Shutdown { immediate: true }).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     /// 验证 spawn_worker 后 worker_senders 与 worker_health 一致增长。

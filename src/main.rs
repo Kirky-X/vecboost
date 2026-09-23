@@ -364,11 +364,18 @@ async fn init_engine_and_services(
             config.semantic_cache.capacity,
             config.semantic_cache.comparison_mode
         );
+        if mode != vecboost::ComparisonMode::Exact {
+            log::warn!(
+                "[semantic_cache] comparison_mode={} 已废弃：该配置无生产消费者，将被忽略并在未来版本移除",
+                mode
+            );
+        }
         let semantic = Arc::new(
             vecboost::SemanticCache::with_capacity(
                 config.semantic_cache.similarity_threshold,
                 config.semantic_cache.capacity,
             )
+            .with_fuzzy_threshold(config.semantic_cache.fuzzy_threshold)
             .with_comparison_mode(mode),
         );
         service.with_semantic_cache(semantic)

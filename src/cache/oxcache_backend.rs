@@ -47,6 +47,9 @@ struct PersistInner {
 /// bloom 只增不减,达到阈值后整体重建,防止长运行进程的负过滤失效(误判率回弹)与内存无界增长。
 const BLOOM_REBUILD_THRESHOLD: usize = 1_000_000;
 
+/// 生产主路径默认 TTL：防"永不过期的陈旧向量"（审计 D29）
+pub(crate) const DEFAULT_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+
 pub(crate) struct OxCacheBackend {
     cache: Option<Cache<String, Vec<f32>>>,
     bloom: Option<BloomFilter>,
@@ -62,8 +65,20 @@ impl OxCacheBackend {
     ///
     /// 同时初始化 bloom filter (FPR=0.01, capacity=capacity)。
     pub fn new(capacity: usize) -> Self {
+        Self::with_ttl(capacity, None)
+    }
+
+    /// 创建指定容量、可选 TTL 的缓存后端。
+    ///
+    /// `Some(ttl)` 传递给 moka per-entry 过期（生产主路径默认 3600s，
+    /// 防"永不过期的陈旧向量"——审计 D29）；`None` 行为与旧 `new` 一致（测试用）。
+    pub fn with_ttl(capacity: usize, ttl: Option<std::time::Duration>) -> Self {
         let cap = capacity.max(1);
-        let moka = MokaMemoryBackend::builder().capacity(cap as u64).build();
+        let mut builder = MokaMemoryBackend::builder().capacity(cap as u64);
+        if let Some(ttl) = ttl {
+            builder = builder.ttl(ttl);
+        }
+        let moka = builder.build();
         let cache = Cache::with_dependencies(Arc::new(moka));
         // Bloom filter for negative query filtering
         let bloom = BloomFilter::new(cap, 0.01);
@@ -87,7 +102,8 @@ impl OxCacheBackend {
         max_bytes: u64,
         model_tag: String,
     ) -> Self {
-        let mut backend = Self::new(capacity);
+        // WAL 路径同样应用生产默认 TTL，防永不过期的陈旧向量（D29）
+        let mut backend = Self::with_ttl(capacity, Some(DEFAULT_CACHE_TTL));
         let file = std::fs::OpenOptions::new()
             .read(true)
             .create(true)
@@ -191,6 +207,14 @@ impl OxCacheBackend {
 
     async fn put_inner(&self, key: &str, value: Vec<f32>, do_persist: bool) {
         if !self.enabled {
+            return;
+        }
+        // NaN/Inf 拒绝入库（D33）：坏向量经 bloom/WAL 扩散后难以回收
+        if value.iter().any(|x| !x.is_finite()) {
+            log::warn!(
+                "rejecting non-finite vector put for key prefix {}",
+                &key[..key.len().min(32)]
+            );
             return;
         }
         if let Some(cache) = &self.cache {

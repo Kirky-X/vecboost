@@ -306,6 +306,9 @@ pub struct SemanticCacheConfig {
     /// i8/binary 用 vquant 粗筛 + 原始向量复验，仅内部比较路径。
     #[serde(default = "default_comparison_mode")]
     pub comparison_mode: String,
+    /// trigram 模糊命中阈值（与 similarity_threshold 语义无关；
+    /// 模糊命中为有损近似，独立收紧默认 0.85，设 1.0 即只精确命中）
+    pub fuzzy_threshold: f32,
 }
 
 impl Default for SemanticCacheConfig {
@@ -315,6 +318,7 @@ impl Default for SemanticCacheConfig {
             similarity_threshold: DEFAULT_SIMILARITY_THRESHOLD,
             capacity: DEFAULT_SEMANTIC_CACHE_CAPACITY,
             comparison_mode: default_comparison_mode(),
+            fuzzy_threshold: 0.85,
         }
     }
 }

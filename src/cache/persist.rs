@@ -106,7 +106,7 @@ pub fn append_record<W: std::io::Write>(
 pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64) {
     let mut out = Vec::new();
     let mut committed: u64 = 0;
-    let mut valid: Vec<(String, Vec<f32>)> = Vec::new();
+    let mut valid: Vec<(u64, String, Vec<f32>)> = Vec::new();
     let mut file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) => {
@@ -131,6 +131,7 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
         }
         Err(_) => return (out, committed), // 头撕裂
     }
+    let mut seq: u64 = 0; // 数据记录文件序号（校验失败被跳过的也占位）
     loop {
         let mut t = [0u8; 1];
         match file.read_exact(&mut t) {
@@ -153,6 +154,7 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
             break;
         }
         // 数据记录：长度先行，超限即视为撕裂尾。
+        seq += 1;
         let key_len = match read_u32(&mut file) {
             Ok(n) if n <= MAX_SANE_LEN => n as usize,
             _ => break,
@@ -181,7 +183,7 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
         if file.read_exact(&mut sum_b).is_err() {
             break;
         }
-        // 校验：checksum/指纹/UTF-8，失败则弃该条、继续。
+        // 校验：checksum/指纹/UTF-8，失败则弃该条、继续（序号已占位）。
         if u64::from_le_bytes(sum_b) != checksum(&key_b, &vec_b, &tag_b) {
             warn!("persist: {} 一条记录 checksum 失败，已跳过", path.display());
             continue;
@@ -201,10 +203,17 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
         for chunk in vec_b.as_chunks::<4>().0 {
             v.push(f32::from_le_bytes(*chunk));
         }
-        valid.push((key, v));
+        valid.push((seq, key, v));
     }
-    // 仅应用已提交前缀（崩溃撕裂尾 beyond committed 被丢弃）。
-    out.extend(valid.into_iter().take(committed as usize));
+    // 仅应用文件序号 ≤ committed 的记录：按序号而非过滤后列表位置对齐。
+    // committed 前缀内有一条损坏记录时，位置计数会把尾部"已写未提交"
+    // 记录错位复活（审计 D30）。
+    out.extend(
+        valid
+            .into_iter()
+            .filter(|(rec_seq, _, _)| *rec_seq <= committed)
+            .map(|(_, key, v)| (key, v)),
+    );
     (out, committed)
 }
 
@@ -298,4 +307,66 @@ pub fn record_counts(path: &Path) -> (usize, u64) {
         data += 1;
     }
     (data, last_commit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// T030：committed 前缀内的损坏记录不得使尾部"已写未提交"记录复活。
+    /// 构造：A/B/C 各自带 commit(1/2/3)，D 只写数据不写 commit；
+    /// 破坏 B 的 payload 字节（checksum 失败→跳过）。
+    /// 正确结果：仅恢复 A、C（文件序号 ≤ committed=3）；旧位置计数会复活 D。
+    #[test]
+    fn test_replay_corrupt_middle_does_not_resurrect_uncommitted_tail() {
+        let tag = "model-fingerprint";
+        let mut buf: Vec<u8> = Vec::new();
+        write_header(&mut buf).expect("write header");
+
+        // 单个 Cursor 贯穿全部 append（write_header 已写 8 字节头，
+        // Cursor 位置与 buf 长度一致，追加即正确续写）
+        let mut cursor = Cursor::new(&mut buf);
+        cursor.set_position(8); // FILE_MAGIC(4) + FILE_VERSION(4)
+        let mut nrec: u64 = 0;
+        let mut offsets = Vec::new(); // 每条记录起始偏移（相对文件头后）
+        for key in ["aaa", "bbb", "ccc"] {
+            let v = vec![key.len() as f32; 4];
+            offsets.push(cursor.position() as usize);
+            nrec = append_record(&mut cursor, key, &v, tag, nrec)
+                .expect("append committed record")
+                .0;
+        }
+        // D：只写数据记录（截掉 append_record 追加的 9 字节 commit）
+        let d_start = cursor.position() as usize;
+        let (_nrec, d_written) = append_record(&mut cursor, "ddd", &vec![9.0; 4], tag, nrec)
+            .expect("append uncommitted record D");
+        assert!(d_written > 9, "record+commit must exceed commit size");
+        buf.truncate(d_start + d_written - 9);
+
+        // 破坏 B 记录的第一个 payload 字节：B 起始 + 1(type) + 4(key_len)
+        // + key.len() + 4(dim) 指向 vec 数据首字节
+        let b_start = offsets[1];
+        let payload_off = b_start + 1 + 4 + 3 + 4;
+        buf[payload_off] ^= 0xFF;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("wal.bin");
+        std::fs::write(&path, &buf).expect("write wal");
+
+        let (out, committed) = replay(&path, tag);
+        assert_eq!(committed, 3, "committed counter from commits A/B/C");
+        let keys: Vec<&String> = out.iter().map(|(k, _)| k).collect();
+        assert!(
+            !keys.contains(&&"ddd".to_string()),
+            "uncommitted tail record D must NOT be resurrected, got {:?}",
+            keys
+        );
+        assert!(
+            keys.contains(&&"ccc".to_string()) && keys.contains(&&"aaa".to_string()),
+            "committed A and C must survive B's corruption, got {:?}",
+            keys
+        );
+        assert_eq!(out.len(), 2, "corrupt B dropped, A/C kept");
+    }
 }

@@ -160,6 +160,25 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 
 ---
 
+## 🧮 SIMD 向量归约与编译目标
+
+`src/utils/vector_simd.rs` 的四个热函数（dot/sum_of_squares/euclidean/manhattan）
+使用 4 个独立累加器消除串行依赖链，编译器可将其自动向量化为 SIMD 归约。
+**实际代码生成依赖编译目标特性**：
+
+| 场景 | RUSTFLAGS | 预期 |
+|:-----|:----------|:-----|
+| 默认构建 | （无） | x86-64 SSE2 基线 / aarch64 NEON 基线 |
+| 生产建议 | `-C target-cpu=native` | 本机全部可用 ISA（AVX2/FMA/AVX-512） |
+| 白金发行 | `RUSTFLAGS="-C target-cpu=skylake-avx512"` 等 | 面向特定机型发行 |
+
+验证方法：`cargo bench --bench similarity_bench` 对比 cosine_similarity 各维度吞吐；
+或 `cargo rustc -- --emit asm` 检查 `vmulps/vaddps`（向量化）vs `vmulss`（标量）。
+注意：不同 target-cpu 产生的浮点归约顺序一致（4 累加器合并顺序固定），
+但 SIMD 内部lane 合并可能与标量基线有 1e-7 量级差异——语义缓存阈值判定不受影响。
+
+---
+
 ## 🔧 调优建议
 
 | 目标 | 建议 |

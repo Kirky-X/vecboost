@@ -6,7 +6,7 @@
 //! 查询路径：精确匹配 → trigram 搜索 → 计算回填。
 //! 核心价值：精确 miss 后、模型推理前，插入一层零开销的文本相似度检查。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
@@ -65,11 +65,16 @@ impl std::fmt::Display for ComparisonMode {
 
 /// 语义缓存默认相似度阈值（trigram Jaccard）
 const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.7;
+/// trigram 模糊命中阈值默认值——与 `similarity_threshold` 语义无关：
+/// 0.7 的 Jaccard 假阳性率高（审计 D26b），模糊命中独立收紧到 0.85。
+pub(crate) const DEFAULT_FUZZY_THRESHOLD: f32 = 0.85;
 /// 语义索引默认最大条目数
 const DEFAULT_CAPACITY: usize = 10000;
 
 /// 语义缓存条目
 struct SemanticEntry {
+    /// 所属模型——fuzzy 路径同样必须按模型隔离（同文本跨模型向量不同）
+    model_id: String,
     /// 缓存的 trigram 集合，避免重复计算
     trigrams: HashSet<u32>,
     embedding: Vec<f32>,
@@ -109,14 +114,39 @@ impl Default for SemanticCacheConfig {
     }
 }
 
+/// single-flight 许可守卫：释放时若无等待者（引用计数仅剩 map+entry）则
+/// 移除映射条目，防 per-key 锁映射随历史文本无界增长。
+struct SingleFlightGuard {
+    map: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    key: String,
+    entry: Arc<tokio::sync::Mutex<()>>,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl Drop for SingleFlightGuard {
+    fn drop(&mut self) {
+        // map(1) + self.entry(1) + OwnedMutexGuard 内部(1)；等待者每多一个 +1。
+        // == 3 即无等待者，可回收条目。
+        if Arc::strong_count(&self.entry) == 3
+            && let Ok(mut map) = self.map.lock()
+        {
+            map.remove(&self.key);
+        }
+    }
+}
+
 /// 语义缓存：在 OxCacheBackend 精确匹配之上添加 trigram 文本相似度检查。
 pub struct SemanticCache {
     exact_cache: Arc<OxCacheBackend>,
     semantic_index: RwLock<Vec<SemanticEntry>>,
     similarity_threshold: f32,
+    /// trigram 模糊命中阈值（第二级查找），与 similarity_threshold 解耦
+    fuzzy_threshold: f32,
     capacity: usize,
     enabled: bool,
     comparison_mode: ComparisonMode,
+    /// per-key single-flight：并发同 key 计算去重（T019）
+    inflight: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     // Stats counters
     exact_hits: AtomicU64,
     semantic_hits: AtomicU64,
@@ -145,9 +175,11 @@ impl SemanticCache {
             exact_cache,
             semantic_index: RwLock::new(Vec::with_capacity(capacity.min(1024))),
             similarity_threshold,
+            fuzzy_threshold: DEFAULT_FUZZY_THRESHOLD,
             capacity,
             enabled: true,
             comparison_mode: ComparisonMode::Exact,
+            inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             exact_hits: AtomicU64::new(0),
             semantic_hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
@@ -171,9 +203,11 @@ impl SemanticCache {
             exact_cache: Arc::new(OxCacheBackend::disabled()),
             semantic_index: RwLock::new(Vec::new()),
             similarity_threshold: DEFAULT_SIMILARITY_THRESHOLD,
+            fuzzy_threshold: DEFAULT_FUZZY_THRESHOLD,
             capacity: 0,
             enabled: false,
             comparison_mode: ComparisonMode::Exact,
+            inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             exact_hits: AtomicU64::new(0),
             semantic_hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
@@ -185,6 +219,28 @@ impl SemanticCache {
     pub fn with_comparison_mode(mut self, mode: ComparisonMode) -> Self {
         self.comparison_mode = mode;
         self
+    }
+
+    /// 设置 trigram 模糊命中阈值（builder）。默认 0.85；设 1.0 即只精确命中。
+    pub fn with_fuzzy_threshold(mut self, threshold: f32) -> Self {
+        self.fuzzy_threshold = threshold;
+        self
+    }
+
+    /// 注册 single-flight 锁并获取许可：同 key 并发调用串行化，
+    /// 后到者等前者写入缓存后由内部 double-check 命中返回。
+    async fn inflight_permit(&self, key: &str) -> SingleFlightGuard {
+        let entry = {
+            let mut map = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
+            map.entry(key.to_string()).or_default().clone()
+        };
+        let guard = entry.clone().lock_owned().await;
+        SingleFlightGuard {
+            map: Arc::clone(&self.inflight),
+            key: key.to_string(),
+            entry: Arc::clone(&entry),
+            _guard: guard,
+        }
     }
 
     /// 返回当前向量比较模式。
@@ -199,9 +255,12 @@ impl SemanticCache {
 
     /// 核心查询方法：精确匹配 → trigram 搜索 → 计算回填。
     ///
+    /// `model_id` 参与缓存键——不同模型对同一文本的向量不同，缺模型身份
+    /// 会导致跨模型污染（审计 D26）。
     /// `compute_fn` 是模型推理回调，仅在精确 miss 且语义 miss 时调用。
     pub async fn get_or_compute<F, Fut>(
         &self,
+        model_id: &str,
         text: &str,
         compute_fn: F,
     ) -> Result<Vec<f32>, crate::error::VecboostError>
@@ -213,7 +272,7 @@ impl SemanticCache {
             return compute_fn().await;
         }
 
-        let cache_key = format!("text:{}", text);
+        let cache_key = format!("text:{}:{}", model_id, text);
 
         // 第一级：精确匹配
         if let Some(embedding) = self.exact_cache.get(&cache_key).await {
@@ -221,26 +280,41 @@ impl SemanticCache {
             return Ok(embedding);
         }
 
-        // 第二级：trigram 语义搜索
-        if let Some(embedding) = self.find_similar(text).await {
+        // single-flight（T019）：同 key 并发只放一个进模糊查找+推理，
+        // 后到者获锁后 double-check 精确缓存直接命中。
+        let _permit = self.inflight_permit(&cache_key).await;
+        if let Some(embedding) = self.exact_cache.get(&cache_key).await {
+            self.exact_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(embedding);
+        }
+
+        // 第二级：trigram 语义搜索（有损模糊命中，阈值独立配置）
+        if let Some(embedding) = self.find_similar(model_id, text).await {
             self.semantic_hits.fetch_add(1, Ordering::Relaxed);
+            #[cfg(feature = "http")]
+            if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
+                collector.inc_semantic_fuzzy_hits();
+            }
             return Ok(embedding);
         }
 
         // 第三级：模型推理
         self.misses.fetch_add(1, Ordering::Relaxed);
         let embedding = compute_fn().await?;
+        // NaN/Inf 拒绝入库（D33）：坏向量精确命中会永久返回坏数据
+        crate::utils::vector::ensure_finite_embedding(&embedding)?;
 
         // 回填到精确缓存和语义索引
         self.exact_cache.put(&cache_key, embedding.clone()).await;
-        self.insert_to_index(text, embedding.clone()).await;
+        self.insert_to_index(model_id, text, embedding.clone())
+            .await;
 
         Ok(embedding)
     }
 
     /// 在语义索引中查找与 query 最相似的条目。
     /// 返回 Some(embedding) 当最大相似度 > threshold。
-    pub async fn find_similar(&self, query: &str) -> Option<Vec<f32>> {
+    pub async fn find_similar(&self, model_id: &str, query: &str) -> Option<Vec<f32>> {
         // 纯读操作使用 read 锁
         let index = self.semantic_index.read().await;
         let mut best_sim = 0.0f32;
@@ -251,11 +325,15 @@ impl SemanticCache {
         let query_len = query_trigrams.len();
 
         for (i, entry) in index.iter().enumerate() {
+            // 模型隔离：非本模型的条目不参与 fuzzy 命中
+            if entry.model_id != model_id {
+                continue;
+            }
             // 大小差预过滤 —— Jaccard 上限 = min/max;大小差超过阈值时
             // 不可能达标,跳过昂贵的集合交/并
             let upper_bound = query_len.min(entry.trigrams.len()) as f32
                 / query_len.max(entry.trigrams.len()).max(1) as f32;
-            if upper_bound < self.similarity_threshold {
+            if upper_bound < self.fuzzy_threshold {
                 continue;
             }
             let sim = trigram_jaccard_with_set(&query_trigrams, &entry.trigrams);
@@ -265,16 +343,26 @@ impl SemanticCache {
             }
         }
 
-        if best_sim >= self.similarity_threshold
+        if best_sim >= self.fuzzy_threshold
             && let Some(idx) = best_idx
         {
-            return Some(index[idx].embedding.clone());
+            // LRU touch（T017）：命中刷新 last_access，驱逐按真实 LRU。
+            // 读锁升级写锁需先降级；idx 经边界检查防并发驱逐。
+            drop(index);
+            let embedding = {
+                let mut windex = self.semantic_index.write().await;
+                if idx < windex.len() {
+                    windex[idx].last_access = Instant::now();
+                }
+                windex[idx].embedding.clone()
+            };
+            return Some(embedding);
         }
         None
     }
 
     /// 插入新条目到语义索引，必要时执行 LRU 驱逐。
-    async fn insert_to_index(&self, text: &str, embedding: Vec<f32>) {
+    async fn insert_to_index(&self, model_id: &str, text: &str, embedding: Vec<f32>) {
         let mut index = self.semantic_index.write().await;
 
         // LRU 驱逐：达到容量时移除最久未访问的条目
@@ -296,6 +384,7 @@ impl SemanticCache {
             ComparisonMode::Binary => (None, Some(quantize_binary(&embedding))),
         };
         index.push(SemanticEntry {
+            model_id: model_id.to_string(),
             trigrams: pack_trigrams(text.as_bytes()),
             embedding,
             i8code,
@@ -487,6 +576,88 @@ mod tests {
         assert_eq!(trigram_jaccard("hello", ""), 0.0);
         assert_eq!(trigram_jaccard("ab", "abc"), 0.0);
     }
+    /// T019：并发同 (model,text) 只允许一次 compute（single-flight）。
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+
+    async fn test_singleflight_concurrent_same_text_one_compute() {
+        let cache = std::sync::Arc::new(SemanticCache::with_capacity(0.7, 100));
+
+        let calls = std::sync::Arc::new(AtomicU64::new(0));
+
+        let mut handles = Vec::new();
+
+        for _ in 0..10 {
+            let cache = std::sync::Arc::clone(&cache);
+
+            let calls = std::sync::Arc::clone(&calls);
+
+            handles.push(tokio::spawn(async move {
+                cache
+                    .get_or_compute("m", "same text", || {
+                        let calls = std::sync::Arc::clone(&calls);
+
+                        async move {
+                            calls.fetch_add(1, Ordering::SeqCst);
+
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+                            Ok(vec![1.0f32; 8])
+                        }
+                    })
+                    .await
+                    .unwrap()
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "10 concurrent same-key requests must trigger exactly 1 compute"
+        );
+    }
+
+    /// T013：不同 model_id 同文本不得互相命中。
+
+    #[tokio::test]
+
+    async fn test_different_model_ids_do_not_cross_hit() {
+        let cache = SemanticCache::with_capacity(0.7, 100);
+
+        cache
+            .get_or_compute("modelA", "共享文本", || async { Ok(vec![1.0, 2.0]) })
+            .await
+            .unwrap();
+
+        let compute_calls = std::sync::Arc::new(AtomicU64::new(0));
+
+        let calls_for_check = std::sync::Arc::clone(&compute_calls);
+
+        let emb = cache
+            .get_or_compute("modelB", "共享文本", || {
+                let calls = std::sync::Arc::clone(&calls_for_check);
+
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+
+                    Ok(vec![3.0, 4.0])
+                }
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(emb, vec![3.0, 4.0], "modelB must not reuse modelA's vector");
+
+        assert_eq!(
+            compute_calls.load(Ordering::SeqCst),
+            1,
+            "modelB must compute on miss"
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_semantic_cache_exact_hit() {
@@ -494,11 +665,13 @@ mod tests {
         let cache = SemanticCache::new(backend.clone(), 0.7, 100);
 
         // 预先存入精确缓存
-        backend.put("text:hello", vec![1.0, 2.0, 3.0]).await;
+        backend
+            .put("text:test-model:hello", vec![1.0, 2.0, 3.0])
+            .await;
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         let result = cache
-            .get_or_compute("hello", || async { Ok(vec![9.0, 9.0, 9.0]) })
+            .get_or_compute("test-model", "hello", || async { Ok(vec![9.0, 9.0, 9.0]) })
             .await
             .unwrap();
         assert_eq!(result, vec![1.0, 2.0, 3.0]);
@@ -512,7 +685,7 @@ mod tests {
 
         // 存入一个文本到语义索引（通过 compute_fn）
         let _ = cache
-            .get_or_compute("今天天气怎么样", || async {
+            .get_or_compute("test-model", "今天天气怎么样", || async {
                 Ok(vec![1.0, 2.0, 3.0])
             })
             .await
@@ -520,7 +693,7 @@ mod tests {
 
         // 用近似改写查询——应语义命中
         let result = cache
-            .get_or_compute("今天天气怎么样啊", || async {
+            .get_or_compute("test-model", "今天天气怎么样啊", || async {
                 Ok(vec![9.0, 9.0, 9.0])
             })
             .await
@@ -540,7 +713,9 @@ mod tests {
 
         // 完全不同的文本——应 miss 并存储
         let result = cache
-            .get_or_compute("机器学习", || async { Ok(vec![5.0, 6.0]) })
+            .get_or_compute("test-model", "机器学习", || async {
+                Ok(vec![5.0, 6.0])
+            })
             .await
             .unwrap();
         assert_eq!(result, vec![5.0, 6.0]);
@@ -550,7 +725,9 @@ mod tests {
         // 注意：moka 异步索引可能需要短暂等待
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         let result2 = cache
-            .get_or_compute("机器学习", || async { Ok(vec![9.0, 9.0]) })
+            .get_or_compute("test-model", "机器学习", || async {
+                Ok(vec![9.0, 9.0])
+            })
             .await
             .unwrap();
         // 可能精确命中或语义命中（相似度 = 1.0）
@@ -564,17 +741,17 @@ mod tests {
 
         // 存入 3 个不同文本
         cache
-            .get_or_compute("aaa_text_one", || async { Ok(vec![1.0]) })
+            .get_or_compute("test-model", "aaa_text_one", || async { Ok(vec![1.0]) })
             .await
             .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
         cache
-            .get_or_compute("bbb_text_two", || async { Ok(vec![2.0]) })
+            .get_or_compute("test-model", "bbb_text_two", || async { Ok(vec![2.0]) })
             .await
             .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
         cache
-            .get_or_compute("ccc_text_three", || async { Ok(vec![3.0]) })
+            .get_or_compute("test-model", "ccc_text_three", || async { Ok(vec![3.0]) })
             .await
             .unwrap();
 
@@ -587,7 +764,9 @@ mod tests {
         // 再存入一个——应驱逐最老的
         tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
         cache
-            .get_or_compute("ddd_completely_different", || async { Ok(vec![4.0]) })
+            .get_or_compute("test-model", "ddd_completely_different", || async {
+                Ok(vec![4.0])
+            })
             .await
             .unwrap();
         {
@@ -606,7 +785,9 @@ mod tests {
 
         // 1 miss
         cache
-            .get_or_compute("unique_text_alpha", || async { Ok(vec![1.0]) })
+            .get_or_compute("test-model", "unique_text_alpha", || async {
+                Ok(vec![1.0])
+            })
             .await
             .unwrap();
         let stats = cache.stats();
@@ -616,7 +797,9 @@ mod tests {
 
         // 1 semantic hit (similar text)
         let _ = cache
-            .get_or_compute("unique_text_alpha_beta", || async { Ok(vec![2.0]) })
+            .get_or_compute("test-model", "unique_text_alpha_beta", || async {
+                Ok(vec![2.0])
+            })
             .await;
         let stats = cache.stats();
         // total_entries 可能是 1 或 2（取决于是否语义命中）
@@ -629,7 +812,7 @@ mod tests {
         assert!(!cache.is_enabled());
 
         let result = cache
-            .get_or_compute("any text", || async { Ok(vec![42.0]) })
+            .get_or_compute("test-model", "any text", || async { Ok(vec![42.0]) })
             .await
             .unwrap();
         assert_eq!(result, vec![42.0]);
@@ -666,8 +849,8 @@ mod tests {
         let cache = SemanticCache::with_capacity(0.7, 16);
         let va = vec![1.0f32, 0.0, 0.0, 0.0];
         let vb = vec![0.9f32, 0.1, 0.0, 0.0];
-        cache.insert_to_index("a", va.clone()).await;
-        cache.insert_to_index("b", vb.clone()).await;
+        cache.insert_to_index("m", "a", va.clone()).await;
+        cache.insert_to_index("m", "b", vb.clone()).await;
         // 暴力余弦最优应为 a（与查询完全相同）。
         let hit = cache.find_similar_by_vector(&va).await.unwrap();
         assert_eq!(hit, va, "exact 模式必须返回余弦最优的原始向量");
@@ -683,7 +866,7 @@ mod tests {
         let va: Vec<f32> = (0..384)
             .map(|i| ((i * 13 + 7) % 101) as f32 / 101.0 - 0.5)
             .collect();
-        cache.insert_to_index("dup", va.clone()).await;
+        cache.insert_to_index("m", "dup", va.clone()).await;
         assert_eq!(cache.quantized_entry_count().await, 1);
         let hit = cache.find_similar_by_vector(&va).await.unwrap();
         assert_eq!(hit, va, "i8 模式对相同向量必须精确命中原始向量");
@@ -697,7 +880,7 @@ mod tests {
         let va: Vec<f32> = (0..384)
             .map(|i| ((i * 29 + 3) % 89) as f32 / 89.0 - 0.5)
             .collect();
-        cache.insert_to_index("dup", va.clone()).await;
+        cache.insert_to_index("m", "dup", va.clone()).await;
         let hit = cache.find_similar_by_vector(&va).await.unwrap();
         assert_eq!(hit, va, "binary 模式对相同向量必须精确命中原始向量");
     }
@@ -708,7 +891,7 @@ mod tests {
         assert!(cache.is_enabled());
         // Should work like a normal enabled cache
         let result = cache
-            .get_or_compute("test query", || async { Ok(vec![1.0, 2.0]) })
+            .get_or_compute("test-model", "test query", || async { Ok(vec![1.0, 2.0]) })
             .await
             .unwrap();
         assert_eq!(result, vec![1.0, 2.0]);

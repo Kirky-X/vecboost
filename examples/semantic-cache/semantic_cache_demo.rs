@@ -37,7 +37,9 @@ async fn main() {
     // 3. 首次查询 — 应 miss 并触发模型推理
     println!("📝 查询 1: \"机器学习是什么\"");
     let result = cache
-        .get_or_compute("机器学习是什么", || compute("机器学习是什么"))
+        .get_or_compute("demo-model", "机器学习是什么", || {
+            compute("机器学习是什么")
+        })
         .await
         .unwrap();
     println!("  结果: {:?}\n", result);
@@ -45,7 +47,9 @@ async fn main() {
     // 4. 精确重复查询 — 应精确命中缓存
     println!("📝 查询 2: \"机器学习是什么\"（重复查询）");
     let result = cache
-        .get_or_compute("机器学习是什么", || compute("机器学习是什么"))
+        .get_or_compute("demo-model", "机器学习是什么", || {
+            compute("机器学习是什么")
+        })
         .await
         .unwrap();
     println!("  结果: {:?}\n", result);
@@ -53,7 +57,9 @@ async fn main() {
     // 5. 近似文本查询 — 应语义命中（trigram Jaccard 相似度 > 0.5）
     println!("📝 查询 3: \"机器学习是什么呢\"（近似改写）");
     let result = cache
-        .get_or_compute("机器学习是什么呢", || compute("机器学习是什么呢"))
+        .get_or_compute("demo-model", "机器学习是什么呢", || {
+            compute("机器学习是什么呢")
+        })
         .await
         .unwrap();
     println!("  结果: {:?}\n", result);
@@ -61,7 +67,9 @@ async fn main() {
     // 6. 完全不同文本 — 应 miss
     println!("📝 查询 4: \"今天天气怎么样\"（完全不同）");
     let result = cache
-        .get_or_compute("今天天气怎么样", || compute("今天天气怎么样"))
+        .get_or_compute("demo-model", "今天天气怎么样", || {
+            compute("今天天气怎么样")
+        })
         .await
         .unwrap();
     println!("  结果: {:?}\n", result);
@@ -79,7 +87,7 @@ async fn main() {
     let disabled = SemanticCache::disabled();
     println!("  启用: {}", disabled.is_enabled());
     let result = disabled
-        .get_or_compute("any text", || async { Ok(vec![42.0]) })
+        .get_or_compute("demo-model", "any text", || async { Ok(vec![42.0]) })
         .await
         .unwrap();
     println!("  直接计算结果: {:?}", result);

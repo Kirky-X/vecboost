@@ -16,6 +16,9 @@ use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 use tokenizers::{PaddingParams, PaddingStrategy};
 
+/// ONNX 引擎序列截断上限，与 tokenizer 层 max_length=512 对齐
+pub(crate) const ONNX_MAX_INPUT_LENGTH: usize = 512;
+
 pub struct OnnxEngine {
     session: Arc<Mutex<Session>>,
     tokenizer: Tokenizer,
@@ -187,7 +190,9 @@ impl OnnxEngine {
             config.expected_dimension
         );
         log::info!("Final hidden_size value: {}", hidden_size);
-        let max_input_length = std::cmp::min(vocab_size, 512);
+        // 序列截断上限与 tokenizer 层一致取 512；
+        // 词表大小是 embedding 数量，与序列长度是两个量纲，不可混用
+        let max_input_length = ONNX_MAX_INPUT_LENGTH;
 
         let actual_precision = match precision {
             Precision::Fp16 => {
@@ -389,24 +394,13 @@ impl OnnxEngine {
             ));
         }
 
-        let mut weighted_sum = vec![0.0f32; self.hidden_size];
-        let mut mask_sum = 0.0f32;
-
-        for (seq_idx, &mask_val) in attention_mask.iter().enumerate().take(seq_len) {
-            if mask_val == 1 {
-                for h in 0..self.hidden_size {
-                    let token_embedding = last_hidden_state[[seq_idx, h]];
-                    weighted_sum[h] += token_embedding * mask_val as f32;
-                    mask_sum += mask_val as f32;
-                }
+        let mut flat = Vec::with_capacity(attention_mask.len() * self.hidden_size);
+        for seq_idx in 0..attention_mask.len() {
+            for h in 0..self.hidden_size {
+                flat.push(last_hidden_state[[seq_idx, h]]);
             }
         }
-
-        if mask_sum > 0.0 {
-            weighted_sum.iter_mut().for_each(|v| *v /= mask_sum);
-        }
-
-        Ok(weighted_sum)
+        Ok(onnx_pool_mean(&flat, &attention_mask, self.hidden_size))
     }
 
     pub async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
@@ -558,33 +552,43 @@ impl OnnxEngine {
                 actual_seq_len
             );
 
-            let mut weighted_sum = vec![0.0f32; self.hidden_size];
-            let mut mask_sum = 0.0f32;
-
             let effective_max_seq = std::cmp::min(max_seq_len, actual_seq_len);
+            let mut flat = Vec::with_capacity(effective_max_seq * self.hidden_size);
             for seq_idx in 0..effective_max_seq {
-                let mask_val = attention_mask[seq_idx];
-                if mask_val == 1 {
-                    for h in 0..self.hidden_size {
-                        let token_embedding = last_hidden_state[[batch_idx, seq_idx, h]];
-                        weighted_sum[h] += token_embedding * mask_val as f32;
-                        mask_sum += mask_val as f32;
-                    }
+                for h in 0..self.hidden_size {
+                    flat.push(last_hidden_state[[batch_idx, seq_idx, h]]);
                 }
             }
-
-            if mask_sum > 0.0 {
-                weighted_sum
-                    .iter_mut()
-                    .take(self.hidden_size)
-                    .for_each(|v| *v /= mask_sum);
-            }
-
-            results.push(weighted_sum);
+            results.push(onnx_pool_mean(
+                &flat,
+                &attention_mask[..effective_max_seq],
+                self.hidden_size,
+            ));
         }
 
         Ok(results)
     }
+}
+
+/// 对单个样本的扁平 hidden states `[seq_len, hidden_size]` 做 mean pooling。
+/// mask 每 token 计一次——除数是 token 计数，与 hidden_size 无关；
+/// mask=0 的 token（含前导 padding）整行排除。
+pub(crate) fn onnx_pool_mean(hidden: &[f32], mask: &[i64], hidden_size: usize) -> Vec<f32> {
+    let mut weighted_sum = vec![0.0f32; hidden_size];
+    let mut mask_sum = 0.0f32;
+    for (seq_idx, &mask_val) in mask.iter().enumerate() {
+        if mask_val == 1 {
+            mask_sum += 1.0;
+            let row = &hidden[seq_idx * hidden_size..(seq_idx + 1) * hidden_size];
+            for (h, &v) in row.iter().enumerate() {
+                weighted_sum[h] += v;
+            }
+        }
+    }
+    if mask_sum > 0.0 {
+        weighted_sum.iter_mut().for_each(|v| *v /= mask_sum);
+    }
+    weighted_sum
 }
 
 #[async_trait]
@@ -619,6 +623,25 @@ mod tests {
     use super::*;
     use crate::config::model::{EngineType, ModelConfig};
     use std::path::PathBuf;
+
+    /// 回归钉：mean 池化除数是 token 计数，不随 hidden_size 放大。
+    /// 旧实现 mask_sum 累加写在 hidden 维循环内，除数被放大 hidden_size 倍。
+    #[test]
+    fn onnx_pool_mean_divides_by_token_count_not_hidden() {
+        let hidden = vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let mask = vec![1, 1];
+        let out = onnx_pool_mean(&hidden, &mask, 4);
+        assert_eq!(out, vec![0.5, 0.5, 0.0, 0.0]);
+    }
+
+    /// 前导 padding（mask=0）的 token 必须被排除，不污染均值。
+    #[test]
+    fn onnx_pool_mean_excludes_masked_out_tokens() {
+        let hidden = vec![100.0, 100.0, 5.0, 7.0];
+        let mask = vec![0, 1];
+        let out = onnx_pool_mean(&hidden, &mask, 2);
+        assert_eq!(out, vec![5.0, 7.0]);
+    }
 
     fn test_config() -> ModelConfig {
         ModelConfig {

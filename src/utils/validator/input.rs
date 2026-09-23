@@ -146,6 +146,17 @@ impl InputValidator {
             )));
         }
 
+        // 控制字符拒绝（T010）：NUL/C0 可用于注入或触发下游 tokenizer 异常；
+        // \t \n \r 属正常文本格式化字符豁免
+        if text
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+        {
+            return Err(VecboostError::InvalidInput(i18n::tr(
+                "validate-text-control-chars",
+            )));
+        }
+
         Ok(())
     }
 }

@@ -66,8 +66,11 @@ fn l2_norm(v: &[f32]) -> f32 {
 fn model_snapshot_regression() {
     for snap in SNAPSHOTS {
         let model_dir = PathBuf::from(snap.path);
-        if !model_dir.join("config.json").exists() {
-            eprintln!("SKIP {}: model files not present", snap.name);
+        // 与 lib 测试 require_real_model 同口径：有权重才跑（config/tokenizer
+        // 存在但 safetensors 缺席时加载必失败，SKIP 而非 FAIL）
+        let has_weights = model_dir.join("model.safetensors").exists();
+        if !model_dir.join("config.json").exists() || !has_weights {
+            eprintln!("SKIP {}: fp32 weights not present", snap.name);
             continue;
         }
 

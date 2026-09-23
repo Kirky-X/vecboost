@@ -60,6 +60,7 @@ auth-username-charset = Username may only contain letters, digits, underscores a
 validate-text-empty = Text cannot be empty
 validate-text-too-short = Text too short: { $got } characters (minimum: { $min })
 validate-text-too-long = Text too long: { $got } characters (maximum: { $max })
+validate-text-control-chars = Text contains illegal control characters
 validate-text-whitespace = Text contains only whitespace
 validate-batch-empty = Batch cannot be empty
 validate-text-index-failed = Validation failed for text at index { $index }: { $detail }

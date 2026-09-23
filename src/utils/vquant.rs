@@ -71,7 +71,11 @@ pub fn hadamard_block(x: &[f32], block_idx: u64) -> Vec<f32> {
 }
 
 /// 全向量旋转：按 256/128/64 贪心分块，尾部不足 64 维保持原样。
+///
+/// 尾部未旋转段没有离群值分散保护，量化质量会下降（审计 D35）；
+/// 出现该情况时进程内告警一次。Matryoshka 截断出非整块维度即触发。
 pub fn rotate(v: &[f32]) -> Vec<f32> {
+    static TAIL_WARN: std::sync::Once = std::sync::Once::new();
     let mut out = Vec::with_capacity(v.len());
     let mut offset = 0usize;
     let mut block_idx = 0u64;
@@ -87,6 +91,14 @@ pub fn rotate(v: &[f32]) -> Vec<f32> {
         out.extend(hadamard_block(&v[offset..offset + dim], block_idx));
         offset += dim;
         block_idx += 1;
+    }
+    if offset < v.len() {
+        TAIL_WARN.call_once(|| {
+            log::warn!(
+                "rotate: trailing {} dims are not Hadamard-rotated (quantization quality degraded for this segment)",
+                v.len() - offset
+            );
+        });
     }
     out.extend_from_slice(&v[offset..]);
     out
@@ -104,6 +116,14 @@ pub fn quantize_i8(v: &[f32]) -> I8Vector {
     let r = rotate(v);
     let amax = r.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
     if amax == 0.0 || !amax.is_finite() {
+        if !amax.is_finite() {
+            // 输入含 NaN/Inf：amax 被 f32::max 吞掉后仍有限，但坏分量会
+            // 饱和 cast 成 0——显性告警，避免静默量化失真（审计 D33）
+            log::warn!(
+                "quantize_i8: non-finite input vector (len={}), zeroed",
+                v.len()
+            );
+        }
         return I8Vector {
             data: vec![0; v.len()],
             scale: 1.0,

@@ -96,6 +96,13 @@ pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
         )));
     }
 
+    // NaN/Inf 显性拒绝——放行会产出 NaN 分数污染排序与缓存判定
+    if v1.iter().chain(v2).any(|x| !x.is_finite()) {
+        return Err(VecboostError::InvalidInput(
+            "cosine similarity is undefined for non-finite vector components".to_string(),
+        ));
+    }
+
     let dot_product = vector_simd::dot_product_chunked(v1, v2);
     let norm_a = vector_simd::sum_of_squares_chunked(v1).sqrt();
     let norm_b = vector_simd::sum_of_squares_chunked(v2).sqrt();
@@ -192,6 +199,12 @@ pub fn calculate_similarity_batch(
 /// 若向量范数接近零（≤ 1e-12），归一化在数学上无意义，
 /// 返回 `Err` 以避免下游获得未归一化的向量。
 pub fn normalize_l2(v: &mut [f32]) -> Result<(), VecboostError> {
+    // NaN/Inf 显性拒绝：NaN 使 norm<=1e-12 判 false 直接放行（审计 D33）
+    if v.iter().any(|x| !x.is_finite()) {
+        return Err(VecboostError::InvalidInput(
+            "cannot normalize vector with non-finite components".to_string(),
+        ));
+    }
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm <= 1e-12 {
         return Err(VecboostError::InvalidInput(format!(
@@ -201,6 +214,17 @@ pub fn normalize_l2(v: &mut [f32]) -> Result<(), VecboostError> {
     }
     for x in v.iter_mut() {
         *x /= norm;
+    }
+    Ok(())
+}
+
+/// 校验 embedding 向量全部有限。NaN/Inf 一旦入库会在精确命中时
+/// 永久返回坏向量，故所有缓存写入与响应出口前必须调用。
+pub fn ensure_finite_embedding(v: &[f32]) -> Result<(), VecboostError> {
+    if v.iter().any(|x| !x.is_finite()) {
+        return Err(VecboostError::InferenceError(
+            "engine produced non-finite embedding components".to_string(),
+        ));
     }
     Ok(())
 }
@@ -658,5 +682,29 @@ mod similarity_tests {
     fn test_recommended_dimension_capped_by_max() {
         assert_eq!(recommended_dimension(TaskType::Retrieval, 512), 512);
         assert_eq!(recommended_dimension(TaskType::SemanticSearch, 256), 256);
+    }
+
+    /// NaN/Inf 向量归一化必须显性报错（审计 D33：NaN 曾穿透 norm<=1e-12 检查）
+    #[test]
+    fn test_normalize_l2_rejects_non_finite() {
+        let mut nan_vec = vec![1.0, f32::NAN];
+        assert!(normalize_l2(&mut nan_vec).is_err());
+        let mut inf_vec = vec![1.0, f32::INFINITY];
+        assert!(normalize_l2(&mut inf_vec).is_err());
+        let mut ok = vec![3.0, 4.0];
+        assert!(normalize_l2(&mut ok).is_ok());
+        assert!((ok[0] - 0.6).abs() < 1e-6 && (ok[1] - 0.8).abs() < 1e-6);
+    }
+
+    /// NaN 向量余弦必须显性报错而非返回 NaN 分数
+    #[test]
+    fn test_cosine_similarity_rejects_non_finite() {
+        let a = vec![1.0, 0.0];
+        let nan = vec![0.5, f32::NAN];
+        assert!(cosine_similarity(&a, &nan).is_err());
+        assert!(cosine_similarity(&nan, &a).is_err());
+        let inf = vec![f32::INFINITY, 0.0];
+        assert!(cosine_similarity(&a, &inf).is_err());
+        assert!(cosine_similarity(&a, &a).is_ok());
     }
 }

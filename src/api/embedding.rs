@@ -586,7 +586,16 @@ async fn model_switch_handler(req: ModelSwitchRequest) -> Result<ModelSwitchResp
         .require::<EmbeddingModule>()
         .map_err(kit_internal_error)?;
     let mut guard = svc.write().await;
-    guard.switch_model(req).await.map_err(to_api_error)
+    let switch_result = guard.switch_model(req).await;
+    let new_engine = guard.engine_handle();
+    drop(guard);
+    let response = switch_result.map_err(to_api_error)?;
+    // 切模型传播到 rerank：RerankService 持有旧引擎克隆，不替换则
+    // 切换后 rerank 继续用旧模型打分（审计 D27）
+    if let Ok(rerank) = st.kit.require::<RerankModule>() {
+        rerank.write().await.replace_engine(new_engine);
+    }
+    Ok(response)
 }
 
 #[cfg(any(feature = "http", feature = "grpc"))]

@@ -930,8 +930,10 @@ impl CandleEngine {
             .min(self.tokenizer.max_length());
 
         if max_seq_len == 0 {
-            let hidden_size = self.get_hidden_size();
-            return Ok(vec![vec![0f32; hidden_size]; texts.len()]);
+            return Err(VecboostError::InferenceError(
+                "Empty token sequence: all inputs produced zero tokens after truncation"
+                    .to_string(),
+            ));
         }
 
         let batch_size = texts.len();
@@ -960,6 +962,8 @@ impl CandleEngine {
         }
 
         // 动态分配 attention_mask 张量（Candle Tensor 不可变，池化无收益）
+        // 克隆一份留给 Mean/Max 池化构建逐样本 mask
+        let pooling_mask = batch_mask.clone();
         let attention_mask_tensor = Tensor::new(batch_mask, &self.device)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?
             .reshape(&[batch_size, max_seq_len])
@@ -1009,55 +1013,115 @@ impl CandleEngine {
 
         // pooling 计时守卫驻留至函数返回，覆盖正常与 fallback 出口。
         let _pool_timer = StageTimer::new(&self.stage_stats, Stage::Pooling);
+        let hidden_size = self.hidden_size;
 
-        // 提取每个样本的嵌入向量（使用 CLS token）
-        // 优化：使用 narrow + squeeze + to_vec2 单次提取所有 CLS token，
-        // 替代逐样本 get(i).get(0).to_vec1() 的 N 次 GPU kernel + N 次 DMA 传输。
-        // 对应鲲鹏文档「理论计算极限」：减少全局内存访问延迟（400-600 clocks）。
+        // 按引擎配置的 pooling_mode 汇聚。CLS 走 narrow 单次提取全部 token；
+        // Mean/Max 逐样本取 [seq_len, hidden] 并携带各自 attention mask 传入 pool_* 纯函数，
+        // 与单条路径（forward_pass）行为一致。
         let results = if embeddings.dims().len() == 3 {
-            let cls_all = embeddings
-                .narrow(1, 0, 1)
-                .map_err(|e| {
-                    VecboostError::InferenceError(format!("Failed to narrow CLS dim: {}", e))
-                })?
-                .squeeze(1)
-                .map_err(|e| {
-                    VecboostError::InferenceError(format!("Failed to squeeze CLS dim: {}", e))
-                })?;
-            // 需要根据实际 dtype 转换：模型可能输出 f16/bf16，需先 cast 到 f32
-            let cls_f32 = if cls_all.dtype() == DType::F32 {
-                cls_all
-            } else {
-                cls_all.to_dtype(DType::F32).map_err(|e| {
-                    VecboostError::InferenceError(format!("Failed to cast CLS to f32: {}", e))
-                })?
-            };
-            cls_f32.to_vec2::<f32>().map_err(|e| {
-                VecboostError::InferenceError(format!("Failed to convert CLS batch to vec2: {}", e))
-            })?
-        } else {
-            // Fallback：非 3D 输出退化为逐样本提取
-            let mut fallback = Vec::with_capacity(batch_size);
-            for i in 0..batch_size {
-                let embedding_tensor = embeddings
-                    .get(i)
-                    .map_err(|e| {
-                        VecboostError::InferenceError(format!("Failed to get batch {}: {}", i, e))
-                    })?
-                    .get(0)
-                    .map_err(|e| {
+            match &self.pooling_mode {
+                crate::config::model::PoolingMode::Cls => {
+                    // 优化：使用 narrow + squeeze + to_vec2 单次提取所有 CLS token，
+                    // 替代逐样本 get(i).get(0).to_vec1() 的 N 次 GPU kernel + N 次 DMA 传输。
+                    // 对应鲲鹏文档「理论计算极限」：减少全局内存访问延迟（400-600 clocks）。
+                    let cls_all = embeddings
+                        .narrow(1, 0, 1)
+                        .map_err(|e| {
+                            VecboostError::InferenceError(format!(
+                                "Failed to narrow CLS dim: {}",
+                                e
+                            ))
+                        })?
+                        .squeeze(1)
+                        .map_err(|e| {
+                            VecboostError::InferenceError(format!(
+                                "Failed to squeeze CLS dim: {}",
+                                e
+                            ))
+                        })?;
+                    // 需要根据实际 dtype 转换：模型可能输出 f16/bf16，需先 cast 到 f32
+                    let cls_f32 = if cls_all.dtype() == DType::F32 {
+                        cls_all
+                    } else {
+                        cls_all.to_dtype(DType::F32).map_err(|e| {
+                            VecboostError::InferenceError(format!(
+                                "Failed to cast CLS to f32: {}",
+                                e
+                            ))
+                        })?
+                    };
+                    cls_f32.to_vec2::<f32>().map_err(|e| {
                         VecboostError::InferenceError(format!(
-                            "Failed to get CLS token for batch {}: {}",
-                            i, e
+                            "Failed to convert CLS batch to vec2: {}",
+                            e
                         ))
                     })?
-                    .clone();
-                let vec = embedding_tensor
-                    .to_vec1::<f32>()
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-                fallback.push(vec);
+                }
+                mode @ (crate::config::model::PoolingMode::Mean
+                | crate::config::model::PoolingMode::Max) => {
+                    let mut out = Vec::with_capacity(batch_size);
+                    for i in 0..batch_size {
+                        let sample = embeddings.get(i).map_err(|e| {
+                            VecboostError::InferenceError(format!(
+                                "Failed to get batch {}: {}",
+                                i, e
+                            ))
+                        })?;
+                        let cast = if sample.dtype() == DType::F32 {
+                            sample
+                        } else {
+                            sample.to_dtype(DType::F32).map_err(|e| {
+                                VecboostError::InferenceError(format!(
+                                    "Failed to cast sample {} to f32: {}",
+                                    i, e
+                                ))
+                            })?
+                        };
+                        let seq_hidden: Vec<f32> = cast
+                            .to_vec2::<f32>()
+                            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+                            .into_iter()
+                            .flatten()
+                            .collect();
+                        let mask: Vec<u32> = pooling_mask[i * max_seq_len..(i + 1) * max_seq_len]
+                            .iter()
+                            .map(|&m| m as u32)
+                            .collect();
+                        let vec = match mode {
+                            crate::config::model::PoolingMode::Mean => {
+                                pool_mean(&seq_hidden, &mask, hidden_size)
+                            }
+                            crate::config::model::PoolingMode::Max => {
+                                pool_max(&seq_hidden, &mask, hidden_size)
+                            }
+                            _ => unreachable!("matched Mean/Max above"),
+                        };
+                        out.push(vec);
+                    }
+                    out
+                }
+                crate::config::model::PoolingMode::Auto => {
+                    unreachable!("Auto pooling should have been resolved at construction time")
+                }
             }
-            fallback
+        } else if embeddings.dims().len() == 2 {
+            // 模型已输出 [batch, hidden]（架构内建池化），逐行取出即可
+            let cast = if embeddings.dtype() == DType::F32 {
+                embeddings.clone()
+            } else {
+                embeddings.to_dtype(DType::F32).map_err(|e| {
+                    VecboostError::InferenceError(format!("Failed to cast to f32: {}", e))
+                })?
+            };
+            cast.to_vec2::<f32>().map_err(|e| {
+                VecboostError::InferenceError(format!("Failed to convert batch to vec2: {}", e))
+            })?
+        } else {
+            return Err(VecboostError::InferenceError(format!(
+                "Unsupported batch embedding dimensions: {} (shape: {:?})",
+                embeddings.dims().len(),
+                embeddings.shape()
+            )));
         };
 
         log::debug!(
@@ -2208,6 +2272,12 @@ mod tests {
         if !require_real_model() {
             return;
         }
+        // 该测试依赖源目录存在 pytorch_model.bin（HF pickle 权重）——
+        // 仅 safetensors 的 checkout 无此文件，跳过而非误报
+        if !std::path::Path::new(&format!("{REAL_MODEL_PATH}/pytorch_model.bin")).exists() {
+            eprintln!("Skipping test: pytorch_model.bin not present in {REAL_MODEL_PATH}");
+            return;
+        }
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let real_path = std::path::Path::new(REAL_MODEL_PATH)
             .canonicalize()
@@ -2408,6 +2478,44 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 验证 Mean pooling 模型(MiniLM)批量推理与单条推理一致。
+    /// 回归钉：批量路径曾硬编码 CLS 提取，Mean/Max 模型批量结果错误。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_real_model_mean_pooling_batch_vs_single_consistency() {
+        const MEAN_MODEL_PATH: &str = "models/all-MiniLM-L6-v2";
+        let has_weights =
+            std::path::Path::new(&format!("{MEAN_MODEL_PATH}/model.safetensors")).exists();
+        if !has_weights {
+            eprintln!("Skipping test: model weights not found at {MEAN_MODEL_PATH}");
+            return;
+        }
+        use crate::config::model::PoolingMode;
+        let config = ModelConfig {
+            name: "all-MiniLM-L6-v2".to_string(),
+            model_path: PathBuf::from(MEAN_MODEL_PATH),
+            pooling_mode: Some(PoolingMode::Mean),
+            ..real_model_config()
+        };
+        let engine =
+            CandleEngine::new(&config, Precision::Fp32).expect("Failed to load MiniLM model");
+        let text = "vector search quality matters";
+        let single = engine.embed(text).expect("single embed failed");
+        let batch = engine
+            .embed_batch(&[text.to_string()])
+            .expect("batch embed failed");
+        assert_eq!(batch.len(), 1);
+        let batch_emb = &batch[0];
+        let dot: f32 = single
+            .iter()
+            .zip(batch_emb.iter())
+            .map(|(a, b)| a * b)
+            .sum();
+        assert!(
+            dot >= 0.999,
+            "Mean pooling batch vs single cosine {dot} < 0.999 (batch path likely pooling CLS)"
+        );
     }
 
     /// 验证 Unicode 文本(中文+emoji)推理覆盖 tokenizer 多字节路径

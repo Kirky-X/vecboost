@@ -1,14 +1,21 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! Chunk-based vector operations with 4-wide manual unrolling.
+//! Chunk-based vector operations with 4 independent accumulators.
 //!
-//! The compiler auto-vectorizes these loops into SIMD instructions
-//! (SSE2/AVX on x86-64, NEON on ARM64). Benchmarks show this outperforms
-//! explicit SIMD crates like `wide` because the compiler can generate
-//! aligned vector loads from contiguous slice access patterns.
+//! Each function keeps four separate `f32` accumulators so the hot loop has
+//! no serial dependency chain: LLVM is free to vectorize the independent
+//! accumulation lanes (SSE2/AVX on x86-64, NEON on ARM64) because Rust's
+//! restriction on float reassociation only applies *within* each accumulator.
+//! A single-accumulator `sum += a*b + ...` chain cannot be auto-vectorized
+//! into a vector reduction at all.
+//!
+//! Note: actual SIMD codegen additionally depends on the compilation target
+//! features (see docs/PERFORMANCE.md for `RUSTFLAGS` guidance). Without
+//! `target-feature=+avx2` (or `-C target-cpu=native`) the loop still runs on
+//! the SSE2 baseline, with correct-but-slower scalar fallback semantics.
 
-/// Compute dot product of two f32 slices (4-wide unrolled).
+/// Compute dot product of two f32 slices (4 independent accumulators).
 ///
 /// The slices must have equal length. Caller is responsible for validation.
 #[inline]
@@ -23,31 +30,31 @@ pub fn dot_product_chunked(v1: &[f32], v2: &[f32]) -> f32 {
     let len = v1.len();
     let chunks = len / 4;
 
-    let mut sum = 0.0f32;
+    let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
 
     for i in 0..chunks {
         let base = i * 4;
-        sum += v1[base] * v2[base]
-            + v1[base + 1] * v2[base + 1]
-            + v1[base + 2] * v2[base + 2]
-            + v1[base + 3] * v2[base + 3];
+        s0 += v1[base] * v2[base];
+        s1 += v1[base + 1] * v2[base + 1];
+        s2 += v1[base + 2] * v2[base + 2];
+        s3 += v1[base + 3] * v2[base + 3];
     }
 
-    let tail_start = chunks * 4;
-    for i in tail_start..len {
-        sum += v1[i] * v2[i];
+    let mut tail_sum = 0.0f32;
+    for i in chunks * 4..len {
+        tail_sum += v1[i] * v2[i];
     }
 
-    sum
+    (s0 + s1) + (s2 + s3) + tail_sum
 }
 
-/// Compute sum of squares of a f32 slice (4-wide unrolled).
+/// Compute sum of squares of a f32 slice (4 independent accumulators).
 #[inline]
 pub fn sum_of_squares_chunked(v: &[f32]) -> f32 {
     let len = v.len();
     let chunks = len / 4;
 
-    let mut sum = 0.0f32;
+    let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
 
     for i in 0..chunks {
         let base = i * 4;
@@ -55,18 +62,21 @@ pub fn sum_of_squares_chunked(v: &[f32]) -> f32 {
         let b = v[base + 1];
         let c = v[base + 2];
         let d = v[base + 3];
-        sum += a * a + b * b + c * c + d * d;
+        s0 += a * a;
+        s1 += b * b;
+        s2 += c * c;
+        s3 += d * d;
     }
 
-    let tail_start = chunks * 4;
-    for val in &v[tail_start..] {
-        sum += val * val;
+    let mut tail_sum = 0.0f32;
+    for val in &v[chunks * 4..] {
+        tail_sum += val * val;
     }
 
-    sum
+    (s0 + s1) + (s2 + s3) + tail_sum
 }
 
-/// Compute squared euclidean distance (4-wide unrolled).
+/// Compute squared euclidean distance (4 independent accumulators).
 #[inline]
 pub fn squared_euclidean_chunked(v1: &[f32], v2: &[f32]) -> f32 {
     assert_eq!(
@@ -79,7 +89,7 @@ pub fn squared_euclidean_chunked(v1: &[f32], v2: &[f32]) -> f32 {
     let len = v1.len();
     let chunks = len / 4;
 
-    let mut sum = 0.0f32;
+    let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
 
     for i in 0..chunks {
         let base = i * 4;
@@ -87,19 +97,22 @@ pub fn squared_euclidean_chunked(v1: &[f32], v2: &[f32]) -> f32 {
         let d1 = v1[base + 1] - v2[base + 1];
         let d2 = v1[base + 2] - v2[base + 2];
         let d3 = v1[base + 3] - v2[base + 3];
-        sum += d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
+        s0 += d0 * d0;
+        s1 += d1 * d1;
+        s2 += d2 * d2;
+        s3 += d3 * d3;
     }
 
-    let tail_start = chunks * 4;
-    for i in tail_start..len {
+    let mut tail_sum = 0.0f32;
+    for i in chunks * 4..len {
         let d = v1[i] - v2[i];
-        sum += d * d;
+        tail_sum += d * d;
     }
 
-    sum
+    (s0 + s1) + (s2 + s3) + tail_sum
 }
 
-/// Compute manhattan distance (4-wide unrolled).
+/// Compute manhattan distance (4 independent accumulators).
 #[inline]
 pub fn manhattan_distance_chunked(v1: &[f32], v2: &[f32]) -> f32 {
     assert_eq!(
@@ -112,22 +125,22 @@ pub fn manhattan_distance_chunked(v1: &[f32], v2: &[f32]) -> f32 {
     let len = v1.len();
     let chunks = len / 4;
 
-    let mut sum = 0.0f32;
+    let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
 
     for i in 0..chunks {
         let base = i * 4;
-        sum += (v1[base] - v2[base]).abs()
-            + (v1[base + 1] - v2[base + 1]).abs()
-            + (v1[base + 2] - v2[base + 2]).abs()
-            + (v1[base + 3] - v2[base + 3]).abs();
+        s0 += (v1[base] - v2[base]).abs();
+        s1 += (v1[base + 1] - v2[base + 1]).abs();
+        s2 += (v1[base + 2] - v2[base + 2]).abs();
+        s3 += (v1[base + 3] - v2[base + 3]).abs();
     }
 
-    let tail_start = chunks * 4;
-    for i in tail_start..len {
-        sum += (v1[i] - v2[i]).abs();
+    let mut tail_sum = 0.0f32;
+    for i in chunks * 4..len {
+        tail_sum += (v1[i] - v2[i]).abs();
     }
 
-    sum
+    (s0 + s1) + (s2 + s3) + tail_sum
 }
 
 #[cfg(test)]

@@ -106,9 +106,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
 
-/// 优先级老化阈值(5s)—— 必须显著小于请求超时(30s),否则
+/// 优先级老化阈值(默认 5s)—— 必须显著小于请求 SLA(默认 30s),否则
 /// 老化跳过在请求可达超时前永不触发,四级优先队列形同虚设。
-const AGING_THRESHOLD_DURATION: Duration = Duration::from_secs(5);
+/// 老化语义=跳级(公平性),不等于超时:被跳过的队首由 [`PriorityRequestQueue::dequeue_expired`]
+/// 按各自 SLA 收割,或在下级队列为空时被兜底服务,任何情况下不永久滞留。
+const DEFAULT_AGING_THRESHOLD: Duration = Duration::from_secs(5);
 
 /// 优先级请求队列
 pub struct PriorityRequestQueue {
@@ -120,6 +122,8 @@ pub struct PriorityRequestQueue {
     current_size: Arc<AtomicUsize>,
     /// 入队通知——worker 通过 notified() 等待，消除轮询退避
     notify: Arc<Notify>,
+    /// 老化跳级阈值（`with_aging_threshold` 可覆盖默认值）
+    aging_threshold: Duration,
 }
 
 impl PriorityRequestQueue {
@@ -134,7 +138,14 @@ impl PriorityRequestQueue {
             max_queue_size,
             current_size: Arc::new(AtomicUsize::new(0)),
             notify: Arc::new(Notify::new()),
+            aging_threshold: DEFAULT_AGING_THRESHOLD,
         }
+    }
+
+    /// 覆盖老化跳级阈值（测试与部署调优用）
+    pub fn with_aging_threshold(mut self, threshold: Duration) -> Self {
+        self.aging_threshold = threshold;
+        self
     }
 
     /// 入队
@@ -183,14 +194,16 @@ impl PriorityRequestQueue {
 
     /// 出队（按优先级,含老化机制防止低优先级饥饿）
     ///
-    /// 当高优先级队列队首请求等待超过 30s 时,跳过该优先级处理下级队列,
-    /// 防止低优先级请求永久饥饿。`Priority::Low` 不参与老化跳过。
+    /// 队首等待超过老化阈值(默认 5s)的非 Low 优先级被跳过,防止低优先级
+    /// 请求永久饥饿。被跳过的请求不会滞留:`dequeue_expired` 按各自 SLA 收割,
+    /// 或在所有可服务层级均已空时,兜底弹出最高优先级的 aged 队首（其仍在
+    /// 自身 SLA 内,正常服务优于悬挂到超时）。
     pub async fn dequeue(&self) -> Option<QueuedRequest> {
         let mut queues = self.queues.write().await;
         let now = Instant::now();
-        const AGING_THRESHOLD: Duration = AGING_THRESHOLD_DURATION;
 
         // 按优先级从高到低查找
+        let mut aged_front: Option<Priority> = None;
         for priority in [
             Priority::Critical,
             Priority::High,
@@ -198,11 +211,14 @@ impl PriorityRequestQueue {
             Priority::Low,
         ] {
             if let Some(queue) = queues.get_mut(&priority) {
-                // 老化检查:高优先级队列队首请求已超时 → 跳到下一优先级
+                // 老化检查:队首等待超阈值 → 记录并跳到下一优先级
                 if priority != Priority::Low
                     && let Some(front) = queue.front()
-                    && now.duration_since(front.submitted_at) > AGING_THRESHOLD
+                    && now.duration_since(front.submitted_at) > self.aging_threshold
                 {
+                    if aged_front.is_none() {
+                        aged_front = Some(priority);
+                    }
                     continue;
                 }
                 if let Some(request) = queue.pop_front() {
@@ -222,7 +238,66 @@ impl PriorityRequestQueue {
             }
         }
 
+        // 兜底:无非 aged 请求可服务时,弹出最高优先级的 aged 队首,避免滞留
+        if let Some(priority) = aged_front
+            && let Some(queue) = queues.get_mut(&priority)
+            && let Some(request) = queue.pop_front()
+        {
+            let new_size = self.current_size.fetch_sub(1, Ordering::Relaxed) - 1;
+            debug!(
+                "Aged front served as fallback, priority={:?}, queue_size={}",
+                priority, new_size
+            );
+            if queue.is_empty() {
+                queues.remove(&priority);
+            }
+            return Some(request);
+        }
+
         None
+    }
+
+    /// 收割已超过自身 SLA（`QueuedRequest.timeout`）的排队请求。
+    ///
+    /// 与老化跳级正交:老化是公平性机制（秒级）,收割是 SLA 机制（默认 30s）。
+    /// worker 循环周期性调用并对其完成超时响应,保证任何请求在队列中的
+    /// 滞留时间有上界,不会出现"队首被跳过后永久搁浅"的泄漏。
+    pub async fn dequeue_expired(&self) -> Vec<QueuedRequest> {
+        let mut queues = self.queues.write().await;
+        let now = Instant::now();
+        let mut expired = Vec::new();
+
+        let priorities: Vec<Priority> = queues.keys().copied().collect();
+        for priority in priorities {
+            if let Some(queue) = queues.get_mut(&priority) {
+                let mut remaining = VecDeque::new();
+                for req in queue.drain(..) {
+                    if now.duration_since(req.submitted_at) >= req.timeout {
+                        expired.push(req);
+                    } else {
+                        remaining.push_back(req);
+                    }
+                }
+                *queue = remaining;
+                if queue.is_empty() {
+                    queues.remove(&priority);
+                }
+            }
+        }
+
+        if !expired.is_empty() {
+            let new_size = self
+                .current_size
+                .fetch_sub(expired.len(), Ordering::Relaxed)
+                - expired.len();
+            warn!(
+                "Reaped {} expired requests from queue, queue_size={}",
+                expired.len(),
+                new_size
+            );
+        }
+
+        expired
     }
 
     /// 批量出队——取首个请求后继续 try_dequeue 至 max_batch_size。
@@ -233,7 +308,7 @@ impl PriorityRequestQueue {
         let mut result = Vec::with_capacity(max_batch_size);
         let mut queues = self.queues.write().await;
         let now = Instant::now();
-        const AGING_THRESHOLD: Duration = AGING_THRESHOLD_DURATION;
+        let mut aged_front: Option<Priority> = None;
 
         for priority in [
             Priority::Critical,
@@ -249,8 +324,11 @@ impl PriorityRequestQueue {
                     // 老化检查
                     if priority != Priority::Low
                         && let Some(front) = queue.front()
-                        && now.duration_since(front.submitted_at) > AGING_THRESHOLD
+                        && now.duration_since(front.submitted_at) > self.aging_threshold
                     {
+                        if aged_front.is_none() {
+                            aged_front = Some(priority);
+                        }
                         break;
                     }
                     if let Some(request) = queue.pop_front() {
@@ -263,6 +341,19 @@ impl PriorityRequestQueue {
                 if queue.is_empty() {
                     queues.remove(&priority);
                 }
+            }
+        }
+
+        // 兜底:未凑到任何请求时,弹出最高优先级 aged 队首,避免滞留
+        if result.is_empty()
+            && let Some(priority) = aged_front
+            && let Some(queue) = queues.get_mut(&priority)
+            && let Some(request) = queue.pop_front()
+        {
+            self.current_size.fetch_sub(1, Ordering::Relaxed);
+            result.push(request);
+            if queue.is_empty() {
+                queues.remove(&priority);
             }
         }
 
@@ -474,7 +565,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_aging_prevents_low_priority_starvation() {
-        let queue = PriorityRequestQueue::new(100);
+        // 可配阈值加速测试：50ms 老化窗口 + 80ms 等待
+        let queue = PriorityRequestQueue::new(100).with_aging_threshold(Duration::from_millis(50));
 
         // 入队 Critical 请求(会老化)
         let critical_req = QueuedRequest {
@@ -507,8 +599,8 @@ mod tests {
         };
         queue.enqueue(low_req).await.unwrap();
 
-        // 等待超过老化阈值(5s;阈值须远小于请求超时 30s 才有实效)
-        tokio::time::sleep(Duration::from_secs(6)).await;
+        // 等待超过老化阈值(50ms)
+        tokio::time::sleep(Duration::from_millis(80)).await;
 
         // dequeue 应先返回 Low(Critical 已老化,跳过)
         let dequeued = queue.dequeue().await.unwrap();
@@ -517,6 +609,92 @@ mod tests {
             Priority::Low,
             "aged Critical should be skipped, Low should be dequeued first"
         );
+    }
+
+    /// 回归钉（D01 老化反向）：仅剩 aged 队首时 dequeue 必须兜底弹出，
+    /// 而非返回 None 使该请求永久搁浅。旧行为：跳过整级且不弹队首 → None。
+    #[tokio::test]
+    async fn test_aged_front_served_when_no_lower_priority() {
+        let queue = PriorityRequestQueue::new(100).with_aging_threshold(Duration::from_millis(50));
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "critical-aged".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: Some(true),
+                }),
+                priority: Priority::Critical,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let dequeued = queue
+            .dequeue()
+            .await
+            .expect("aged front must be served when no lower priority exists");
+        assert_eq!(dequeued.request_id, "critical-aged");
+        assert_eq!(
+            queue.size(),
+            0,
+            "queue must be empty after serving aged front"
+        );
+    }
+
+    /// 回归钉（T008 SLA 收割）：超过自身 timeout 的排队请求被 dequeue_expired
+    /// 收割并移出队列，出队计数归零，dequeue 不再返回它。
+    #[tokio::test]
+    async fn test_dequeue_expired_reaps_past_sla_requests() {
+        let queue = PriorityRequestQueue::new(100);
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "short-sla".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: Some(true),
+                }),
+                priority: Priority::Normal,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_millis(50),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+            })
+            .await
+            .unwrap();
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "long-sla".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "test-2".to_string(),
+                    normalize: Some(true),
+                }),
+                priority: Priority::Normal,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let expired = queue.dequeue_expired().await;
+        assert_eq!(expired.len(), 1, "only the past-SLA request is reaped");
+        assert_eq!(expired[0].request_id, "short-sla");
+        assert_eq!(queue.size(), 1, "long-SLA request must stay queued");
+
+        // 收割后再 dequeue 只会拿到未过期请求
+        let served = queue.dequeue().await.unwrap();
+        assert_eq!(served.request_id, "long-sla");
+        assert!(queue.dequeue_expired().await.is_empty());
+        assert_eq!(queue.size(), 0);
     }
 
     // ===== peek_highest_priority tests =====

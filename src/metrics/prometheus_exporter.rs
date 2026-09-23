@@ -38,6 +38,7 @@ pub struct PrometheusCollector {
     vecboost_inbatch_dedup_ratio: GaugeVec,
     // 引擎分阶段延迟：tokenize/inference/pool
     vecboost_stage_seconds: HistogramVec,
+    semantic_cache_fuzzy_hits: prometheus::IntCounter,
 
     // 缓存命中率
     cache_hits: CounterVec,
@@ -72,6 +73,12 @@ impl PrometheusCollector {
         )?;
 
         // pipeline 队列深度与在途请求(pull 时快照,热路径零开销)
+        let semantic_cache_fuzzy_hits = prometheus::register_int_counter_with_registry!(
+            "vecboost_semantic_cache_fuzzy_hits_total",
+            "Trigram fuzzy hits served by the semantic cache",
+            registry.clone()
+        )
+        .expect("register semantic_cache_fuzzy_hits");
         let pipeline_queue_depth = prometheus::register_int_gauge_with_registry!(
             "vecboost_pipeline_queue_depth",
             "Number of requests waiting in the pipeline priority queue",
@@ -175,6 +182,7 @@ impl PrometheusCollector {
             vecboost_batch_wait_seconds,
             vecboost_inbatch_dedup_ratio,
             vecboost_stage_seconds,
+            semantic_cache_fuzzy_hits,
             cache_hits,
             cache_misses,
             rate_limit_allowed,
@@ -222,6 +230,11 @@ impl PrometheusCollector {
         self.vecboost_batch_wait_seconds
             .with_label_values(&[operation])
             .observe(wait_secs);
+    }
+
+    /// 语义缓存 trigram 模糊命中计数（D26b 可观测性）。
+    pub fn inc_semantic_fuzzy_hits(&self) {
+        self.semantic_cache_fuzzy_hits.inc();
     }
 
     /// 更新批内去重率滚动 gauge。
@@ -326,11 +339,13 @@ mod tests {
         let collector = PrometheusCollector::default();
         let registry = collector.registry();
         let families = registry.gather();
-        // 仅常驻的 pipeline 快照 gauge(初值 0)存在于未记录状态
+        // 仅常驻的 pipeline 快照 gauge(初值 0)与语义缓存 fuzzy 命中
+        // 计数器存在于未记录状态
         for family in &families {
             let name = family.name();
             assert!(
-                name.starts_with("vecboost_pipeline_"),
+                name.starts_with("vecboost_pipeline_")
+                    || name == "vecboost_semantic_cache_fuzzy_hits_total",
                 "unexpected always-on family: {name}"
             );
         }

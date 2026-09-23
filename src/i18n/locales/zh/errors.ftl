@@ -15,6 +15,7 @@ error-authentication = 认证错误：{ $detail }
 error-security = 安全错误：{ $detail }
 error-io = IO 错误：{ $detail }
 error-validation = 校验错误：{ $detail }
+error-request-timeout = 请求超时：{ $detail }
 error-rate-limit = 超出速率限制：{ $detail }
 error-database = 数据库错误：{ $detail }
 error-internal = 内部错误：{ $detail }

@@ -695,6 +695,33 @@ mod tests {
         }
     }
 
+    /// 回归钉（T037/R-engine-007）：双命名映射——自产 legacy final-LN 命名与
+    /// llama.cpp 惯例 final-LN 命名各自归位到正确的 candle 张量名。
+    #[test]
+    fn test_gguf_to_candle_dual_final_ln_naming() {
+        use super::gguf_to_candle;
+        // 自产 legacy：attn_norm → output.LayerNorm（本仓约定）
+        assert_eq!(
+            gguf_to_candle("blk.3.attn_norm.weight").as_deref(),
+            Some("encoder.layer.3.output.LayerNorm.weight")
+        );
+        // llama.cpp 惯例：output_norm → encoder.layer_norm（final LN）
+        assert_eq!(
+            gguf_to_candle("output_norm.weight").as_deref(),
+            Some("encoder.layer_norm.weight")
+        );
+        assert_eq!(
+            gguf_to_candle("output.output_norm.bias").as_deref(),
+            Some("encoder.layer_norm.bias")
+        );
+        // attention 后 LN（llama.cpp 常见 per-layer 命名）→ attention.output.LayerNorm
+        assert_eq!(
+            gguf_to_candle("blk.1.attn_output_norm.weight").as_deref(),
+            Some("encoder.layer.1.attention.output.LayerNorm.weight")
+        );
+        assert_eq!(gguf_to_candle("unknown.tensor"), None);
+    }
+
     #[test]
     fn test_validate_gguf_magic_roundtrip() {
         let dir = tempfile::tempdir().unwrap();

@@ -940,3 +940,28 @@ mod validator_tests {
         assert!(result.is_ok(), "text file should be accepted: {:?}", result);
     }
 }
+
+#[cfg(test)]
+mod control_char_tests {
+    use super::*;
+    use crate::utils::validator::TextValidator;
+
+    /// 回归钉（T010/D34）：NUL 与 C0 控制字符拒绝，tab/LF/CR 豁免，正常文本通过。
+    #[test]
+    fn test_validate_text_rejects_control_chars() {
+        let validator = InputValidator::with_default();
+
+        // 正常文本基线（多行文本 tab/LF/CR 豁免）
+        assert!(validator.validate_text("hello world").is_ok());
+        assert!(
+            validator
+                .validate_text("line one\nline two\ttabbed\r")
+                .is_ok()
+        );
+
+        // NUL 与 C0 控制字符拒绝
+        assert!(validator.validate_text("bad\0null").is_err());
+        assert!(validator.validate_text("bad\u{01}ctrl").is_err());
+        assert!(validator.validate_text("bad\u{1f}unit-sep").is_err());
+    }
+}

@@ -184,7 +184,7 @@ pub struct EmbeddingService {
 ```rust
 #[async_trait]
 pub trait InferenceEngine: Send + Sync {
-    /// 执行推理，返回未归一化的向量
+    /// 执行推理，返回 L2 归一化的向量（引擎出口契约，三引擎一致）
     fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError>;
 
     /// 批量推理
@@ -256,6 +256,12 @@ if let Some(target_dim) = matryoshka_target {
 ```
 
 > 🔒 **正确性修复**：v0.2.0 修复了截断后未重归一化导致向量范数 < 1 的 bug，影响余弦相似度计算的准确性。
+
+### 缓存键与语义缓存隔离
+
+- 精确缓存键：`emb:{model_id}:{xxh3_128(text)}`；语义缓存键：`text:{model_id}:{text}`——model_id 参与键且语义索引条目记录模型身份，fuzzy 命中按模型过滤，杜绝跨模型向量污染。
+- 语义缓存三级流程：精确命中 -> trigram 模糊命中（阈值 `fuzzy_threshold` 独立配置，命中计数 `vecboost_semantic_cache_fuzzy_hits_total`）-> 模型推理回填；写入侧拒绝非有限（NaN/Inf）向量；同键并发经 single-flight 去重。
+- 引擎出口契约：三个引擎（candle fp32 / candle 量化 / ONNX）`embed`/`embed_batch` 均返回 L2 归一化向量，服务层归一化幂等保留。
 
 ---
 

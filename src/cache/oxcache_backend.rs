@@ -50,6 +50,39 @@ const BLOOM_REBUILD_THRESHOLD: usize = 1_000_000;
 /// 生产主路径默认 TTL：防"永不过期的陈旧向量"（审计 D29）
 pub(crate) const DEFAULT_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
+/// single-flight 许可守卫：释放时若无等待者（引用计数仅剩 map+entry+owned guard）
+/// 则移除映射条目，防 per-key 锁映射随历史 key 无界增长。
+struct SingleFlightPermit {
+    map: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    key: String,
+    entry: Arc<tokio::sync::Mutex<()>>,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl Drop for SingleFlightPermit {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.entry) == 3
+            && let Ok(mut map) = self.map.lock()
+        {
+            map.remove(&self.key);
+        }
+    }
+}
+
+/// oxcache 审计脱敏 `redact_key_for_audit` 按字节索引截断（`&key[..32]` /
+/// `&key[len-2..]`），非 ASCII 键落在字符边界外会 panic。仅当键非纯 ASCII
+/// 时替换为 SHA-256 前 16 字节 hex（32 个 ASCII 字符，任意字节截断均安全）；
+/// bloom filter 与 WAL 仍使用原始键，仅 oxcache Cache 存取走此变换。
+fn oxcache_safe_key(key: &str) -> String {
+    if key.is_ascii() {
+        return key.to_string();
+    }
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    hex::encode(&hasher.finalize()[..16])
+}
+
 pub(crate) struct OxCacheBackend {
     cache: Option<Cache<String, Vec<f32>>>,
     bloom: Option<BloomFilter>,
@@ -58,6 +91,9 @@ pub(crate) struct OxCacheBackend {
     bloom_insertions: std::sync::atomic::AtomicUsize,
     /// 可选 WAL 持久层（`persist_path` 设置时启用，默认 None = 纯内存）。
     persist: Option<Arc<PersistState>>,
+    /// per-key single-flight（审计 D31：并发同 key 只放一个 compute，
+    /// 后到者经内部 double-check 命中缓存；默认精确缓存路径与语义缓存路径同权受益）
+    inflight: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 impl OxCacheBackend {
@@ -88,6 +124,7 @@ impl OxCacheBackend {
             enabled: true,
             bloom_insertions: std::sync::atomic::AtomicUsize::new(0),
             persist: None,
+            inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -170,6 +207,7 @@ impl OxCacheBackend {
             enabled: false,
             bloom_insertions: std::sync::atomic::AtomicUsize::new(0),
             persist: None,
+            inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -194,7 +232,7 @@ impl OxCacheBackend {
         }
         let cache = self.cache.as_ref()?;
         // 直接存取原始 Vec<f32>(原 gzip 压缩/解压每命中 10-50µs + unsafe 转换,净负收益)
-        cache.get(&key.to_string()).await.ok().flatten()
+        cache.get(&oxcache_safe_key(key)).await.ok().flatten()
     }
 
     /// 写入缓存(禁用时为空操作)。
@@ -213,12 +251,12 @@ impl OxCacheBackend {
         if value.iter().any(|x| !x.is_finite()) {
             log::warn!(
                 "rejecting non-finite vector put for key prefix {}",
-                &key[..key.len().min(32)]
+                key.get(..32).unwrap_or(key)
             );
             return;
         }
         if let Some(cache) = &self.cache {
-            let _ = cache.set(&key.to_string(), &value).await;
+            let _ = cache.set(&oxcache_safe_key(key), &value).await;
         }
         // Insert into bloom filter after successful set
         if let Some(bloom) = &self.bloom {
@@ -316,9 +354,32 @@ impl OxCacheBackend {
         if let Some(cached) = self.get(key).await {
             return Ok(cached);
         }
+        // per-key single-flight（审计 D31）：同 key 并发只放一个 compute，
+        // 后到者获锁后 double-check 直接命中——防缓存击穿
+        let permit = self.inflight_permit(key).await;
+        if let Some(cached) = self.get(key).await {
+            drop(permit);
+            return Ok(cached);
+        }
         let embedding = f().await?;
         self.put(key, embedding.clone()).await;
+        drop(permit);
         Ok(embedding)
+    }
+
+    /// 注册 single-flight 锁并获取许可。
+    async fn inflight_permit(&self, key: &str) -> SingleFlightPermit {
+        let entry = {
+            let mut map = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
+            map.entry(key.to_string()).or_default().clone()
+        };
+        let guard = entry.clone().lock_owned().await;
+        SingleFlightPermit {
+            map: Arc::clone(&self.inflight),
+            key: key.to_string(),
+            entry: Arc::clone(&entry),
+            _guard: guard,
+        }
     }
 
     /// 删除 key,返回是否命中。
@@ -331,7 +392,7 @@ impl OxCacheBackend {
             return false;
         }
         match &self.cache {
-            Some(cache) => cache.delete(&key.to_string()).await.is_ok(),
+            Some(cache) => cache.delete(&oxcache_safe_key(key)).await.is_ok(),
             None => false,
         }
     }
@@ -412,6 +473,45 @@ impl OxCacheBackend {
 
 #[cfg(test)]
 mod tests {
+
+    /// 回归钉（D31 精确缓存层）：并发同 key 只放一个 compute，
+    /// 后到者经 double-check 命中缓存——防缓存击穿。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_get_or_insert_single_flight_one_compute() {
+        use std::sync::Arc as StdArc;
+        use std::sync::atomic::AtomicU64;
+        let backend = OxCacheBackend::with_ttl(100, None);
+        let backend = StdArc::new(backend);
+        let calls = StdArc::new(AtomicU64::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let backend = StdArc::clone(&backend);
+            let calls = StdArc::clone(&calls);
+            handles.push(tokio::spawn(async move {
+                backend
+                    .get_or_insert::<_, _, std::convert::Infallible>("hot-key", || {
+                        let calls = StdArc::clone(&calls);
+                        async move {
+                            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                            Ok::<Vec<f32>, std::convert::Infallible>(vec![1.0f32; 8])
+                        }
+                    })
+                    .await
+                    .unwrap()
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "10 concurrent same-key get_or_insert must trigger exactly 1 compute"
+        );
+    }
+
     use super::*;
     use std::time::Duration;
 
@@ -901,5 +1001,37 @@ mod tests {
         assert!(cache.persist_path().is_none());
         cache.put("k", vec![1.0]).await;
         assert_eq!(cache.get("k").await, Some(vec![1.0]));
+    }
+
+    /// 非 ASCII 键存取不 panic 且往返正确（oxcache 审计脱敏字节截断回归）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_unicode_key_roundtrip_no_panic() {
+        let cache = OxCacheBackend::new(16);
+        let key = "text:test-model:今天天气怎么样";
+        assert!(
+            key.len() > 32,
+            "precondition: multi-byte key exceeds 32 bytes"
+        );
+        cache.put(key, vec![1.0, 2.0, 3.0]).await;
+        assert_eq!(cache.get(key).await, Some(vec![1.0, 2.0, 3.0]));
+        assert!(cache.remove(key).await);
+        assert!(cache.get(key).await.is_none());
+    }
+
+    /// ASCII 键原样透传（不触发哈希变换）。
+    #[test]
+    fn test_oxcache_safe_key_ascii_passthrough() {
+        assert_eq!(oxcache_safe_key("text:hello"), "text:hello");
+        let long = "a".repeat(64);
+        assert_eq!(oxcache_safe_key(&long), long);
+    }
+
+    /// 非 ASCII 键哈希为 32 个 ASCII hex 字符。
+    #[test]
+    fn test_oxcache_safe_key_unicode_hashes_to_safe_hex() {
+        let safe = oxcache_safe_key("text:test-model:今天天气怎么样");
+        assert_eq!(safe.len(), 32);
+        assert!(safe.is_ascii());
+        assert!(safe.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

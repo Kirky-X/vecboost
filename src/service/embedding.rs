@@ -1538,15 +1538,24 @@ impl EmbeddingService {
 /// 作为内存上限记账的输入——精确显存占用需运行时探针，属独立变更。
 fn estimate_model_bytes(path: &std::path::Path) -> u64 {
     let mut total = 0u64;
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
-            if let Ok(meta) = entry.metadata() {
-                if meta.is_file() {
-                    total += meta.len();
-                } else if meta.is_dir() {
-                    total += dir_size(&entry.path());
+    match std::fs::read_dir(path) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_file() {
+                        total += meta.len();
+                    } else if meta.is_dir() {
+                        total += dir_size(&entry.path());
+                    }
                 }
             }
+        }
+        Err(e) => {
+            // 目录不可读时粗估为 0——执法被无声绕过，必须显性化（回归审查 LOW）
+            log::warn!(
+                "estimate_model_bytes: 无法读取模型目录 {}（{e}），按 0 字节记账",
+                path.display()
+            );
         }
     }
     total
@@ -1720,9 +1729,7 @@ mod tests {
             guard.switch_model(mk_req("m1")).await
         };
         // 投影预检（T021）：新模型 est(~133MB) > 1KB 上限 → 首次切换即拒绝
-        let err = first
-            .err()
-            .expect("oversized model switch must be rejected");
+        let err = first.expect_err("oversized model switch must be rejected");
         match err {
             VecboostError::ModelLoadError(msg) => {
                 assert!(msg.contains("memory limit exceeded"), "got: {msg}");

@@ -339,7 +339,7 @@ mod tests {
         }
         // D：只写数据记录（截掉 append_record 追加的 9 字节 commit）
         let d_start = cursor.position() as usize;
-        let (_nrec, d_written) = append_record(&mut cursor, "ddd", &vec![9.0; 4], tag, nrec)
+        let (_nrec, d_written) = append_record(&mut cursor, "ddd", &[9.0; 4], tag, nrec)
             .expect("append uncommitted record D");
         assert!(d_written > 9, "record+commit must exceed commit size");
         buf.truncate(d_start + d_written - 9);

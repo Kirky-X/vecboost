@@ -439,13 +439,20 @@ impl PriorityRequestQueue {
         }
 
         // 兜底:未凑到任何请求时,弹出最高优先级 aged 队首,避免滞留
+        // (已取消请求照常丢弃，与 dequeue() 主路径语义一致——回归审查 INFO)
         if result.is_empty()
             && let Some(priority) = aged_front
             && let Some(queue) = queues.get_mut(&priority)
-            && let Some(request) = queue.pop_front()
         {
-            self.current_size.fetch_sub(1, Ordering::Relaxed);
-            result.push(request);
+            while let Some(request) = queue.pop_front() {
+                self.current_size.fetch_sub(1, Ordering::Relaxed);
+                if self.cancellations.is_cancelled(&request.request_id) {
+                    self.cancellations.release(&request.request_id);
+                    continue;
+                }
+                result.push(request);
+                break;
+            }
             if queue.is_empty() {
                 queues.remove(&priority);
             }

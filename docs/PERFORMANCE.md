@@ -177,6 +177,11 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 注意：不同 target-cpu 产生的浮点归约顺序一致（4 累加器合并顺序固定），
 但 SIMD 内部lane 合并可能与标量基线有 1e-7 量级差异——语义缓存阈值判定不受影响。
 
+**⚠️ fat-LTO 代码生成漂移观察（2026-09-24）**：本仓 `[profile.release] lto = "fat"` +
+`codegen-units = 1` 下，向量归约是否被向量化取决于**全程序 IR 总体形态**——crate 规模
+增长可能令同一函数在跨胖 LTO 汇编时从向量化退化为标量（同条件实测 2.1× 差距）。
+基准对比务必在**同一棵提交树**内做 A/B；跨树对比见 `docs/benchmarks/` 归档说明。
+
 ---
 
 ## 🔧 调优建议

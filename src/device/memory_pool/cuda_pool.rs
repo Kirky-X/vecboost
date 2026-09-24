@@ -212,13 +212,13 @@ impl Drop for CudaMemoryPtr {
             // allocated by `malloc_sync` in a valid CUDA context and is being freed
             // exactly once (Drop guarantees single invocation).
             if let Err(e) = unsafe { cudarc::driver::result::free_sync(self.ptr) } {
-                warn!(
-                    "CUDA free on drop failed for device {}: {}",
-                    self.device_id, e
+                // free 失败 = 显存仍占用：记账保留（与 deallocate 路径同语义），
+                // 偏差经 error 日志显性化（审查 H4——此前无条件递减掩盖泄漏）
+                error!(
+                    "CUDA free on drop FAILED for device {} ({} bytes): {} — accounting kept",
+                    self.device_id, self.size, e
                 );
-            }
-            // 归还池记账（无论 free 成败都递减：free 失败已显性 error 记账偏差）
-            if let Some(counter) = &self.pool_counter {
+            } else if let Some(counter) = &self.pool_counter {
                 counter.fetch_sub(self.size as u64, Ordering::Relaxed);
             }
         }

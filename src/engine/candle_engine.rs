@@ -720,12 +720,9 @@ impl CandleEngine {
         }
     }
 
-    // 纯同步 forward_pass——使用 encode_sync 绕过异步缓存，移除 GPU 监控 await
+    // 纯同步 forward_pass——归一化已由 forward_pass_inner 出口统一完成（T026）
     fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
-        self.forward_pass_inner(text).map(|mut v| {
-            l2_normalize_in_place(&mut v);
-            v
-        })
+        self.forward_pass_inner(text)
     }
 
     fn forward_pass_inner(&self, text: &str) -> Result<Vec<f32>, VecboostError> {

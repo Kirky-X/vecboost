@@ -618,14 +618,17 @@ impl QuantizedCandleEngine {
             .map(|(b, (_, mask))| {
                 let start = b * seq_len * self.hidden_size;
                 let slice = &flat[start..start + seq_len * self.hidden_size];
-                match self.pooling {
+                let mut pooled = match self.pooling {
                     PoolingMode::Cls => pool_cls(slice, &mask, self.hidden_size),
                     PoolingMode::Mean => pool_mean(slice, &mask, self.hidden_size),
                     PoolingMode::Max => pool_max(slice, &mask, self.hidden_size),
                     PoolingMode::Auto => unreachable!("Auto 已在 load 时解析"),
-                }
+                };
+                // 引擎出口契约：L2 归一化（T026——批量路径此前缺失）
+                crate::utils::vector::normalize_l2(&mut pooled)?;
+                Ok(pooled)
             })
-            .collect())
+            .collect::<Result<Vec<_>, VecboostError>>()?)
     }
 }
 

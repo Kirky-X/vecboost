@@ -52,6 +52,8 @@ pub struct EmbeddingService {
     semantic_cache: Option<Arc<SemanticCache>>,
     /// 模型常驻内存上限控制器（memory_limit_bytes 配置时启用，T021 执法）
     memory_limit: Option<Arc<crate::device::memory_limit::MemoryLimitController>>,
+    /// 当前记账模型字节数（控制器 update_usage 为 set 语义，本字段跟踪投影基数）
+    memory_used_est: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl EmbeddingService {
@@ -109,6 +111,7 @@ impl EmbeddingService {
             buffer_pool: None,
             semantic_cache: None,
             memory_limit,
+            memory_used_est: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -321,7 +324,17 @@ impl EmbeddingService {
         for chunk in texts.chunks(batch_size) {
             match self.engine.read().await.embed_batch(chunk) {
                 Ok(embeddings) => {
-                    for (text, embedding) in chunk.iter().zip(embeddings.into_iter()) {
+                    for (text, mut embedding) in chunk.iter().zip(embeddings.into_iter()) {
+                        // NaN 拒绝入库（审查 MEDIUM-5）
+                        if let Err(e) = crate::utils::vector::ensure_finite_embedding(&embedding) {
+                            warn!(
+                                "warm-up: skip non-finite embedding for '{}...'",
+                                &text[..text.len().min(16)]
+                            );
+                            let _ = e;
+                            continue;
+                        }
+                        crate::utils::vector::normalize_l2(&mut embedding)?;
                         cache_entries.insert(text.clone(), embedding);
                         processed_count += 1;
                     }
@@ -452,6 +465,10 @@ impl EmbeddingService {
         &self,
         texts: &[String],
     ) -> Result<Vec<Vec<f32>>, VecboostError> {
+        // 逐条复用文本校验（含控制字符检查，审查 MEDIUM-2：批路径此前绕过防线）
+        for t in texts {
+            self.validator.validate_text(t)?;
+        }
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -562,6 +579,7 @@ impl EmbeddingService {
                 cache
                     .get_or_insert::<_, _, VecboostError>(&cache_key_source, || async {
                         let embedding = engine.read().await.embed(&req.source)?;
+                        crate::utils::vector::ensure_finite_embedding(&embedding)?;
                         Ok(embedding)
                     })
                     .await
@@ -573,6 +591,7 @@ impl EmbeddingService {
                 cache
                     .get_or_insert::<_, _, VecboostError>(&cache_key_target, || async {
                         let embedding = engine.read().await.embed(&req.target)?;
+                        crate::utils::vector::ensure_finite_embedding(&embedding)?;
                         Ok(embedding)
                     })
                     .await
@@ -1343,18 +1362,22 @@ impl EmbeddingService {
             quantized: req.model_name.ends_with(".gguf"),
         };
 
-        // 内存上限执法（T021/D21）：超限拒绝加载——此前控制器只记账不执法
-        if let Some(ctrl) = &self.memory_limit
-            && matches!(
-                ctrl.check_limit().await,
-                crate::device::memory_limit::MemoryLimitStatus::Exceeded
-            )
-        {
-            return Err(VecboostError::ModelLoadError(format!(
-                "memory limit exceeded: usage {} bytes (limit {} bytes); unload models before switching",
-                ctrl.current_usage(),
-                ctrl.current_usage() + ctrl.available_bytes()
-            )));
+        // 内存上限执法（T021/D21）：按"当前记账 - 旧模型 + 新模型"投影判断，
+        // 在替换前执行——旧实现只查上一次记账（已超限才挡新加载，首个超大
+        // 模型照样放行，审查 M4 时点矛盾）
+        let new_est = estimate_model_bytes(&model_config.model_path);
+        if let Some(ctrl) = &self.memory_limit {
+            let limit = ctrl.current_usage() + ctrl.available_bytes();
+            let projected = self
+                .memory_used_est
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .saturating_sub(ctrl.current_usage())
+                + new_est;
+            if projected > limit {
+                return Err(VecboostError::ModelLoadError(format!(
+                    "memory limit exceeded: new model ~{new_est} bytes, projected {projected} > limit {limit} bytes"
+                )));
+            }
         }
 
         if let Some(ref manager) = self.model_manager {
@@ -1384,12 +1407,12 @@ impl EmbeddingService {
                 .write()
                 .await
                 .attach_memory_limit_controller(Arc::clone(ctrl));
-            let est = estimate_model_bytes(&model_config.model_path);
-            ctrl.update_usage(est).await;
+            ctrl.update_usage(new_est).await;
+            self.memory_used_est
+                .store(new_est, std::sync::atomic::Ordering::Relaxed);
             log::info!(
-                "memory limit accounting: model {} ≈ {} bytes",
-                model_config.name,
-                est
+                "memory limit accounting: model {} ≈ {new_est} bytes",
+                model_config.name
             );
         }
         self.engine = new_engine_arc;
@@ -1433,6 +1456,12 @@ impl EmbeddingService {
         if let Some(ref semantic) = self.semantic_cache {
             semantic.clear().await;
         }
+        // 记账回冲（审查 M1：set 语义下卸载不回冲会永久占用额度）
+        if let Some(ctrl) = &self.memory_limit {
+            ctrl.update_usage(0).await;
+            self.memory_used_est
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+        }
 
         Ok(())
     }
@@ -1452,6 +1481,28 @@ impl EmbeddingService {
     /// 当前引擎句柄——切模型后传播给 RerankService 等外部持有者（T015）。
     pub fn engine_handle(&self) -> Arc<RwLock<dyn InferenceEngine + Send + Sync>> {
         Arc::clone(&self.engine)
+    }
+
+    /// 启动期接线内存上限：初始引擎 attach 控制器并按模型目录记账。
+    /// server 启动路径调用；构造函数为同步故无法在此完成（审查 M1）。
+    pub async fn init_memory_limit(&self) {
+        let Some(ctrl) = &self.memory_limit else {
+            return;
+        };
+        self.engine
+            .write()
+            .await
+            .attach_memory_limit_controller(Arc::clone(ctrl));
+        if let Some(mc) = &self.model_config {
+            let est = estimate_model_bytes(&mc.model_path);
+            ctrl.update_usage(est).await;
+            self.memory_used_est
+                .store(est, std::sync::atomic::Ordering::Relaxed);
+            log::info!(
+                "memory limit accounting (initial): model {} ≈ {est} bytes",
+                mc.name
+            );
+        }
     }
 
     pub fn list_available_models(&self) -> ModelListResponse {
@@ -1668,20 +1719,10 @@ mod tests {
             let mut guard = service.write().await;
             guard.switch_model(mk_req("m1")).await
         };
-        assert!(
-            first.is_ok(),
-            "first switch must succeed (usage starts at 0): {:?}",
-            first.err()
-        );
-
-        // 第二次切换：已超限 → 显性拒绝
-        let second = {
-            let mut guard = service.write().await;
-            guard.switch_model(mk_req("m2")).await
-        };
-        let err = second
+        // 投影预检（T021）：新模型 est(~133MB) > 1KB 上限 → 首次切换即拒绝
+        let err = first
             .err()
-            .expect("second switch must be rejected by memory limit");
+            .expect("oversized model switch must be rejected");
         match err {
             VecboostError::ModelLoadError(msg) => {
                 assert!(msg.contains("memory limit exceeded"), "got: {msg}");

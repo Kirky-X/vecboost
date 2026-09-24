@@ -99,7 +99,12 @@ pub async fn handle_pipeline_request(
         source: crate::pipeline::RequestSource::http(ip),
     };
 
-    queue_handle.enqueue(queued_request).await?;
+    if let Err(e) = queue_handle.enqueue(queued_request).await {
+        // 队列满早退：取消标志随即释放，注册表不留孤儿条目（审查 H2）
+        cancel_guard.0.take();
+        queue_handle.cancellations().release(&request_id);
+        return Err(e);
+    }
 
     let result = match tokio::time::timeout(Duration::from_secs(30), response_rx).await {
         Ok(Ok(Ok(response))) => Ok(axum::Json(response)),

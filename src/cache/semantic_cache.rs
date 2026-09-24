@@ -320,7 +320,7 @@ impl SemanticCache {
         let mut best_sim = 0.0f32;
         let mut best_idx = None;
 
-        // 构建 query 的 trigram 集合（仅一次，复用于所有比较）
+        // 构建 query 的 trigram 集合（仅一次，复用于所有比较与重锁复核）
         let query_trigrams = pack_trigrams(query.as_bytes());
         let query_len = query_trigrams.len();
 
@@ -347,16 +347,22 @@ impl SemanticCache {
             && let Some(idx) = best_idx
         {
             // LRU touch（T017）：命中刷新 last_access，驱逐按真实 LRU。
-            // 读锁升级写锁需先降级；idx 经边界检查防并发驱逐。
+            // 读锁升级写锁需先降级；重锁后必须复核条目身份——并发
+            // insert_to_index 的 swap_remove 会重排 Vec，旧 idx 可能指向
+            // 其它文本/其它模型的条目（审查 H3），不符则放弃本次模糊命中。
             drop(index);
-            let embedding = {
-                let mut windex = self.semantic_index.write().await;
-                if idx < windex.len() {
-                    windex[idx].last_access = Instant::now();
+            let mut windex = self.semantic_index.write().await;
+            return match windex.get_mut(idx) {
+                Some(entry)
+                    if entry.model_id == model_id
+                        && trigram_jaccard_with_set(&query_trigrams, &entry.trigrams)
+                            >= self.fuzzy_threshold =>
+                {
+                    entry.last_access = Instant::now();
+                    Some(entry.embedding.clone())
                 }
-                windex[idx].embedding.clone()
+                _ => None,
             };
-            return Some(embedding);
         }
         None
     }

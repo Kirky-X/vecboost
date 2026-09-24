@@ -19,6 +19,17 @@ use tokenizers::{PaddingParams, PaddingStrategy};
 /// ONNX 引擎序列截断上限，与 tokenizer 层 max_length=512 对齐
 pub(crate) const ONNX_MAX_INPUT_LENGTH: usize = 512;
 
+/// 原地 L2 归一化（零/近零向量静默跳过，与 candle 引擎同语义）。
+/// 引擎出口契约要求归一化输出（T026——ONNX 两条路径此前均缺失）。
+fn l2_normalize_in_place(v: &mut [f32]) {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-12 {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
+    }
+}
+
 pub struct OnnxEngine {
     session: Arc<Mutex<Session>>,
     tokenizer: Tokenizer,
@@ -400,7 +411,9 @@ impl OnnxEngine {
                 flat.push(last_hidden_state[[seq_idx, h]]);
             }
         }
-        Ok(onnx_pool_mean(&flat, &attention_mask, self.hidden_size))
+        let mut pooled = onnx_pool_mean(&flat, &attention_mask, self.hidden_size);
+        l2_normalize_in_place(&mut pooled);
+        Ok(pooled)
     }
 
     pub async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
@@ -559,11 +572,13 @@ impl OnnxEngine {
                     flat.push(last_hidden_state[[batch_idx, seq_idx, h]]);
                 }
             }
-            results.push(onnx_pool_mean(
+            let mut pooled = onnx_pool_mean(
                 &flat,
                 &attention_mask[..effective_max_seq],
                 self.hidden_size,
-            ));
+            );
+            l2_normalize_in_place(&mut pooled);
+            results.push(pooled);
         }
 
         Ok(results)

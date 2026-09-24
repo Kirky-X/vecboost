@@ -103,7 +103,7 @@ pub struct QueuedRequest {
 use log::{debug, warn};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Notify;
 
 /// 优先级老化阈值(默认 5s)—— 必须显著小于请求 SLA(默认 30s),否则
@@ -178,6 +178,8 @@ pub struct PriorityRequestQueue {
     aging_threshold: Duration,
     /// 取消注册表（出队跳过已取消请求）
     cancellations: Arc<CancellationRegistry>,
+    /// 停机标志：置位后 enqueue 拒绝（T032 排空后入队窗口封口）
+    closed: Arc<AtomicBool>,
 }
 
 impl PriorityRequestQueue {
@@ -194,6 +196,7 @@ impl PriorityRequestQueue {
             notify: Arc::new(Notify::new()),
             aging_threshold: DEFAULT_AGING_THRESHOLD,
             cancellations: Arc::new(CancellationRegistry::new()),
+            closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -210,6 +213,13 @@ impl PriorityRequestQueue {
 
     /// 入队
     pub async fn enqueue(&self, request: QueuedRequest) -> Result<(), VecboostError> {
+        // 停机后拒绝入队（排空后窗口内到达的请求快速失败，不悬挂）
+        if self.closed.load(Ordering::Relaxed) {
+            self.cancellations.release(&request.request_id);
+            return Err(VecboostError::InferenceError(
+                "server is shutting down".to_string(),
+            ));
+        }
         // 使用原子操作确保检查和入队的原子性
         loop {
             let current_size = self.current_size.load(Ordering::Acquire);
@@ -309,19 +319,28 @@ impl PriorityRequestQueue {
         }
 
         // 兜底:无非 aged 请求可服务时,弹出最高优先级的 aged 队首,避免滞留
+        // (已取消请求照常丢弃，跳过继续找，T030 与主路径语义一致)
         if let Some(priority) = aged_front
             && let Some(queue) = queues.get_mut(&priority)
-            && let Some(request) = queue.pop_front()
         {
-            let new_size = self.current_size.fetch_sub(1, Ordering::Relaxed) - 1;
-            debug!(
-                "Aged front served as fallback, priority={:?}, queue_size={}",
-                priority, new_size
-            );
+            while let Some(request) = queue.pop_front() {
+                let released = self.current_size.fetch_sub(1, Ordering::Relaxed) - 1;
+                if self.cancellations.is_cancelled(&request.request_id) {
+                    self.cancellations.release(&request.request_id);
+                    continue;
+                }
+                debug!(
+                    "Aged front served as fallback, priority={:?}, queue_size={}",
+                    priority, released
+                );
+                if queue.is_empty() {
+                    queues.remove(&priority);
+                }
+                return Some(request);
+            }
             if queue.is_empty() {
                 queues.remove(&priority);
             }
-            return Some(request);
         }
 
         None
@@ -468,6 +487,7 @@ impl PriorityRequestQueue {
 
     /// 排空队列并返回全部请求（优雅停机善后用，调用方负责完成响应）。
     pub async fn dequeue_all_for_shutdown(&self) -> Vec<QueuedRequest> {
+        self.closed.store(true, Ordering::Relaxed);
         let mut queues = self.queues.write().await;
         let mut all = Vec::new();
         for queue in queues.values_mut() {
@@ -489,6 +509,11 @@ impl PriorityRequestQueue {
         let mut queues = self.queues.write().await;
         let cleared_count = queues.values().map(|q| q.len()).sum::<usize>();
 
+        for queue in queues.values_mut() {
+            for req in queue.drain(..) {
+                self.cancellations.release(&req.request_id);
+            }
+        }
         queues.clear();
         self.current_size.store(0, Ordering::Relaxed);
 

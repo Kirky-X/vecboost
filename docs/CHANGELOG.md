@@ -16,6 +16,19 @@
 
 ## [Unreleased]
 
+### 修复（fix-audit-defects-r1：六主题审计 35 项发现全量闭环）
+
+- **调度正确性**：优先级老化不再搁浅队首（等待超阈值的队首被兜底服务而非整级永久跳过）；新增 `dequeue_expired` 按请求 SLA 收割排队请求，杜绝"队首被跳过后永久搁浅+队列/响应通道泄漏"；批组装窗口内到达自身 timeout 的请求出批时完成 504 而非伪装限流
+- **批量推理正确性**：candle fp32 批量池化按 `pooling_mode` 分派（此前硬编码 CLS，Mean/Max 模型批量结果错误，单/批余弦仅 ~0.5）；ONNX mean 池化除数不再随 hidden_size 放大；`max_seq_len==0` 显性报错替代静默零向量
+- **引擎出口契约**：统一为"L2 归一化向量"——量化引擎补归一化、candle 单条路径补归一化、trait 文档修正（`normalize_l2` 幂等，服务层行为不变）
+- **NaN/Inf 全链路防线**：`normalize_l2`/`cosine_similarity` 对非有限输入显性报错；引擎输出→缓存写入→响应出口逐层 `is_finite` 校验，坏向量不再入库或直达客户端
+- **语义缓存**：内部键加入 model_id 且语义索引按模型隔离（跨模型不再互相污染）；模糊命中阈值独立为 `fuzzy_threshold`（默认 0.85，`similarity_threshold` 不再混用两种量纲）；模糊命中打点 `vecboost_semantic_cache_fuzzy_hits_total`；`comparison_mode` 标记废弃；`unload_model`/`switch_model` 均清语义缓存；切模型同步传播到 rerank（`replace_engine`）；rerank 缓存键哈希化消除拼接歧义并纳入模型名
+- **缓存健壮性**：生产 TTL 默认 3600s（`OxCacheBackend::with_ttl`）；语义索引读路径 touch `last_access`（驱逐从 FIFO 修正为真 LRU）；WAL 回放按文件序号对齐 committed（前缀内损坏记录不再使尾部未提交记录复活）；per-key single-flight（并发同文本只推理一次）
+- **向量计算**：同条件基准实测证伪"伪向量化"推断——原单累加器实现在基线构建下已被 LLVM 向量化（1024 维 353ns）；4 独立累加器改写反而 2.2× 劣化，故循环体保持原实现，`rotate` 尾部未旋转段一次性告警；PERFORMANCE.md 补 RUSTFLAGS 向量化说明与 fat-LTO 代码生成漂移观察
+- **GPU 内存**：CUDA 池记账三修（Drop 归还计数 / free 失败不归还+error 日志 / clear 不再假清零）；内存上限真实执法（`[model] memory_limit_bytes` 配置时模型加载前检查、超限显性拒绝，加载后按目录大小记账）；显存查询失败按 0 可用+warn（不再伪装充足）；CUDA 版本改真实探测（NVML `sys_cuda_driver_version` / nvidia-smi banner 解析，替代伪造的 `Some(11)`）；删除未接线的 `tensor_pool.rs` 孤儿文件；分页预取完成路径补预算检查+回滚，换入驱逐改多 victim 循环
+- **pipeline 韧性**：worker 推理 panic 隔离（批内请求统一补显性错误，worker 存活）；客户端断连取消传播（`CancellationRegistry`，出队丢弃已取消请求释放槽位）；服务端超时独立 `RequestTimeout` 错误码（HTTP 主路径 503+Retry-After=1，`VecboostError` 直返路径 504，不再伪装 400/429）；优雅停机排空队列（排队请求立即收到 shutting down 503）+ `drain_timeout_secs` 可配；扩缩容 monitor 生产启动（`WorkerManager::start`）+ 新指标 `vecboost_queue_wait_seconds`；移除无消费者的 `WorkerTask::ProcessRequest` 死分支
+- **测试资产**：`model_snapshot_regression` SKIP 判定对齐权重存在性（与 lib 测试同口径）；pytorch bin 加载测试补前置检查；补齐 bge-small-en fp32 权重
+
 ### 新增
 
 - **推理正确性**:`PoolingMode::{Cls,Mean,Max,Auto}` 完整实现(Auto 按模型名推断),mean 为 attention-mask 加权平均;全平台统一 HuggingFace `tokenizers`,删除自研 WordPiece 与 250 词静默回退;vocab_size 从模型 config.json 推导;`/v1/embeddings` usage 为真实 token 计数(audit-remediation)

@@ -359,30 +359,26 @@ async fn init_engine_and_services(
             .parse()
             .map_err(|e: String| anyhow::anyhow!("[semantic_cache] comparison_mode 无效: {e}"))?;
         log::info!(
-            "semantic cache enabled: threshold={} capacity={} mode={}",
+            "semantic cache enabled: threshold={} fuzzy_threshold={} capacity={}",
             config.semantic_cache.similarity_threshold,
-            config.semantic_cache.capacity,
-            config.semantic_cache.comparison_mode
+            config.semantic_cache.fuzzy_threshold,
+            config.semantic_cache.capacity
         );
-        if mode != vecboost::ComparisonMode::Exact {
-            log::warn!(
-                "[semantic_cache] comparison_mode={} 已废弃：该配置无生产消费者，将被忽略并在未来版本移除",
-                mode
-            );
-        }
+        // comparison_mode 已废弃：解析保留兼容（非法值仍启动报错），但不再应用——
+        // 该配置无生产消费者，行为与告警文案一致（审查 L3）
         let semantic = Arc::new(
             vecboost::SemanticCache::with_capacity(
                 config.semantic_cache.similarity_threshold,
                 config.semantic_cache.capacity,
             )
-            .with_fuzzy_threshold(config.semantic_cache.fuzzy_threshold)
-            .with_comparison_mode(mode),
+            .with_fuzzy_threshold(config.semantic_cache.fuzzy_threshold),
         );
         service.with_semantic_cache(semantic)
     } else {
         service
     };
 
+    service.init_memory_limit().await;
     let service = Arc::new(RwLock::new(service));
     // 启动回放 WAL 重建缓存（未启用持久层时为 no-op）。
     service.read().await.load_persisted_cache().await;
@@ -740,7 +736,9 @@ async fn init_pipeline(
 
         // start() = spawn min_workers + 启动扩缩容 monitor（T033——
         // 此前只 spawn min_workers，max_workers/scale 阈值全是死配置）
-        worker_manager.start().await;
+        if let Err(e) = worker_manager.start().await {
+            log::error!("WorkerManager start failed: {e}");
+        }
 
         log::info!("Pipeline components initialized successfully");
 

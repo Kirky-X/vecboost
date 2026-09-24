@@ -121,6 +121,11 @@ impl RerankService {
             )));
         }
 
+        // 逐条校验 documents（审查 LOW-4：此前 rerank 文档面无长度/控制字符防线）
+        for doc in &req.documents {
+            self.validator.validate_text(doc)?;
+        }
+
         // 验证 top_k 有效性（0 无意义，应拒绝）
         if let Some(top_k) = req.top_k
             && top_k == 0

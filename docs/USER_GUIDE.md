@@ -182,8 +182,8 @@ cp config/config.toml config/config_custom.toml
 | `[audit]` | 审计日志 | inklog |
 | `[database]` | 数据库连接（`[database] url = "sqlite:vecboost.db"`） | dbnexus（`db`） |
 | `[logging]` | 日志级别、控制台、文件轮转 | inklog |
-| `[pipeline.worker]` | 时间窗拼批 `batch_wait_ms` / `max_batch_size` | - |
-| `[semantic_cache]` | 语义缓存 `comparison_mode` | oxcache |
+| `[pipeline.worker]` | 时间窗拼批 `batch_wait_ms` / `max_batch_size` / 停机排空 `drain_timeout_secs` | - |
+| `[semantic_cache]` | 语义缓存 `comparison_mode`（已废弃，配置保留但不生效）、`fuzzy_threshold` | oxcache |
 | `[device]` | 硬件感知规划 `auto_plan` | - |
 
 > **⚠️ 注意**：`[flow_control]` 与 `[cache]` 两个 TOML 段**当前版本不解析，编辑不生效**（历史遗留段名）；限流走 `[rate_limit]`，缓存走 `[embedding]` 与 `[semantic_cache]`。调优开关注册表见 [⚡ 性能指南](PERFORMANCE.md)。

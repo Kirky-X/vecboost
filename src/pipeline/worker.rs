@@ -361,6 +361,7 @@ impl WorkerManager {
         debug!("Worker {} loop started", worker_id);
 
         let mut idle_count: usize = 0;
+        let mut last_reap = std::time::Instant::now();
         const MAX_IDLE_COUNT: usize = 10; // 最大空闲计数
 
         loop {
@@ -401,17 +402,23 @@ impl WorkerManager {
 
                     // SLA 收割——排队超过自身 timeout 的请求完成超时响应，不入推理。
                     // 与老化跳级正交：收割保证任何请求的排队滞留有上界。
-                    for expired_req in queue.dequeue_expired().await {
-                        response_channel
-                            .complete(
-                                expired_req.request_id.clone(),
-                                Err(VecboostError::RequestTimeout(format!(
-                                    "request waited {:.1}s in queue, exceeding its {}s SLA",
-                                    expired_req.submitted_at.elapsed().as_secs_f64(),
-                                    expired_req.timeout.as_secs_f64()
-                                ))),
-                            )
-                            .await;
+                    // 时间门控 250ms：收割目标 ≥30s SLA，全表扫描频率无需随批循环
+                    // （每 5ms 一次在深队列下持写锁重排，审查 PERF-6）
+                    if last_reap.elapsed() >= Duration::from_millis(250) {
+                        last_reap = std::time::Instant::now();
+                        for expired_req in queue.dequeue_expired().await {
+                            queue.cancellations().release(&expired_req.request_id);
+                            response_channel
+                                .complete(
+                                    expired_req.request_id.clone(),
+                                    Err(VecboostError::RequestTimeout(format!(
+                                        "request waited {:.1}s in queue, exceeding its {}s SLA",
+                                        expired_req.submitted_at.elapsed().as_secs_f64(),
+                                        expired_req.timeout.as_secs_f64()
+                                    ))),
+                                )
+                                .await;
+                        }
                     }
 
                     // 时间窗动态拼批——首请求后开 batch_wait_ms 窗口继续聚合，
@@ -458,6 +465,7 @@ impl WorkerManager {
                                 req.request_id,
                                 now.duration_since(req.submitted_at).as_secs_f64()
                             );
+                            queue.cancellations().release(&req.request_id);
                             response_channel
                                 .complete(
                                     req.request_id.clone(),
@@ -534,6 +542,7 @@ impl WorkerManager {
                             // 空闲超时:顺带收割过期请求（兜底全部 worker 挂起时
                             // 队列残留过期项的场景），再增加空闲计数
                             for expired_req in queue.dequeue_expired().await {
+                                queue.cancellations().release(&expired_req.request_id);
                                 response_channel
                                     .complete(
                                         expired_req.request_id.clone(),

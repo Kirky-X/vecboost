@@ -100,9 +100,11 @@ pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
             resource: "resource".to_string(),
             resource_id: Some(msg),
         },
-        VecboostError::RateLimitExceeded(msg) => ApiError::ServiceUnavailable {
+        VecboostError::RequestTimeout(msg) => ApiError::ServiceUnavailable {
+            // sdforge ApiError 无 504 变体（外部 crate）：以 503+Retry-After=1
+            // 表达"服务端瞬时过载/超时，可立即重试"语义（区别于 400/500）
             service: msg,
-            retry_after: Some(60),
+            retry_after: Some(1),
             source: None,
         },
         other => {

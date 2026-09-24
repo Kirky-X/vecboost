@@ -1157,7 +1157,7 @@ cargo run --features cli -- rerank --query "什么是机器学习" --documents d
 | `403` | 🚫 禁止访问（权限不足） |
 | `429` | ⚡ 请求过于频繁（速率限制） |
 | `500` | 💥 服务器内部错误 |
-| `503` | ⏸️ 服务不可用 |
+| `503` | ⏸️ 服务不可用（队列满/服务端超时，携带 Retry-After；超时经 `REQUEST_TIMEOUT` 错误码区分） |
 
 ---
 
@@ -1192,6 +1192,8 @@ cargo run --features cli -- rerank --query "什么是机器学习" --documents d
 | `MODEL_LOAD_FAILED` | 424 | 模型加载失败（依赖缺失） | 检查模型文件和配置 |
 | `TOKENIZATION_ERROR` | 422 | 分词错误 | 检查输入文本编码 |
 | `RATE_LIMITED` | 429 | 超出速率限制 | 使用指数退避重试 |
+| `REQUEST_TIMEOUT` | 503 (Retry-After: 1) | 服务端排队/处理超时（可安全重试；区别于客户端 400 错误） | 稍后重试；减小批量 |
+| `REQUEST_TIMEOUT` | 504 | 服务端请求超时（排队超过 SLA 或 pipeline 处理超时） | 减小请求批量、稍后重试；区别于客户端错误 |
 | `INFERENCE_ERROR` | 503 | 推理失败 | 检查模型状态 |
 | `GPU_OOM` | 507 | GPU/CPU 内存耗尽 | 减小批处理大小或使用 CPU |
 | `CONFIG_ERROR` | 500 | 配置错误 | 检查配置文件 |

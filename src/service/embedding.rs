@@ -3859,6 +3859,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_search_zero_top_k_rejected() {
+        crate::i18n::init(); // 断言依赖 ftl 文案（含 "top_k"），未初始化时 tr 返回键名
         let mock_engine = TestEngine::new(64);
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));

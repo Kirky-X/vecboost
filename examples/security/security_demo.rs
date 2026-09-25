@@ -4,7 +4,7 @@
 //! 安全模块示例 — 演示密钥管理、盐值生成和敏感数据清理
 //!
 //! 涵盖：
-//! - `KeyStore` / `EnvironmentKeyStore`: 环境变量密钥存储
+//! - `KeyStore` / `EnvironmentKeyStore`: 环境变量密钥存储（只读,set/delete 拒绝写入）
 //! - `SecretKey`: 密钥类型与掩码显示
 //! - `SaltStore`: Argon2 盐值生成与序列化
 //! - `sanitize_*`: 日志中敏感数据的脱敏处理
@@ -51,51 +51,46 @@ async fn main() {
         model_key.mask_value()
     );
 
-    // ─── EnvironmentKeyStore ────────────────────────────────────────────
-    println!("📝 EnvironmentKeyStore 操作:");
+    // ─── EnvironmentKeyStore（只读安全设计） ───────────────────────────
+    println!("📝 EnvironmentKeyStore 操作（只读）:");
 
-    // 存储密钥到环境变量
     let store =
         vecboost::security::create_key_store(&vecboost::security::SecurityConfig::default())
             .await
             .unwrap();
 
+    // set 被拒绝:环境变量是父进程注入源,写回会经 /proc/<pid>/environ 泄漏给同机读者与子进程
     let key = SecretKey::api_key("demo_service", "demo_api_key_value_12345");
-    store.set(&key).await.unwrap();
-    println!("  已存储 API Key: {}", key.name);
-
-    // 读取密钥
-    if let Some(retrieved) = store.get(&KeyType::ApiKey, "demo_service").await.unwrap() {
-        println!(
-            "  读取成功: {} = {}",
-            retrieved.name,
-            retrieved.mask_value()
-        );
+    match store.set(&key).await {
+        Ok(()) => println!("  set 成功(与只读设计矛盾,不应出现)"),
+        Err(e) => println!("  set 拒绝(预期): {}", e.error_detail()),
     }
 
-    // 检查存在性
+    // 读取:仅当父进程已注入 VECBOOST_API_KEY_* 时才有值
+    let retrieved = store.get(&KeyType::ApiKey, "demo_service").await.unwrap();
+    println!(
+        "  读取 demo_service: {}",
+        if retrieved.is_some() {
+            "命中"
+        } else {
+            "未注入"
+        }
+    );
+
     let exists = store
         .exists(&KeyType::ApiKey, "demo_service")
         .await
         .unwrap();
     println!("  存在性检查: {}", exists);
 
-    // 列出同类型密钥
     let keys = store.list(&KeyType::ApiKey).await.unwrap();
     println!("  API Key 列表: {} 个", keys.len());
 
-    // 删除密钥
-    store
-        .delete(&KeyType::ApiKey, "demo_service")
-        .await
-        .unwrap();
-    println!("  已删除 API Key");
-
-    let exists_after = store
-        .exists(&KeyType::ApiKey, "demo_service")
-        .await
-        .unwrap();
-    println!("  删除后存在性: {}\n", exists_after);
+    // delete 同样只读:运行时不可撤销父进程注入的环境变量
+    match store.delete(&KeyType::ApiKey, "demo_service").await {
+        Ok(()) => println!("  delete 成功(与只读设计矛盾,不应出现)"),
+        Err(e) => println!("  delete 拒绝(预期): {}\n", e.error_detail()),
+    }
 
     // ─── SaltStore ──────────────────────────────────────────────────────
     println!("📝 SaltStore 盐值管理:");
@@ -114,25 +109,13 @@ async fn main() {
     println!("📝 敏感数据脱敏:");
 
     let secret = "my_super_secret_key_12345";
-    println!(
-        "  sanitize_secret(\"{}\"): {}",
-        secret,
-        sanitize_secret(secret)
-    );
+    println!("  sanitize_secret: {}", sanitize_secret(secret));
 
     let password = "password123";
-    println!(
-        "  sanitize_password(\"{}\"): {}",
-        password,
-        sanitize_password(password)
-    );
+    println!("  sanitize_password: {}", sanitize_password(password));
 
     let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
-    println!(
-        "  sanitize_jwt_secret(\"{}\"): {}",
-        jwt,
-        sanitize_jwt_secret(jwt)
-    );
+    println!("  sanitize_jwt_secret: {}", sanitize_jwt_secret(jwt));
 
     // CJK 安全脱敏（不会 panic）
     let cjk_secret = "密钥内容不能泄露abcdefgh";

@@ -62,8 +62,11 @@ RUN touch src/main.rs && cargo build --release -p vecboost --features http
 # ============================================
 FROM debian:bookworm-slim
 
-# 安装运行时依赖
-RUN apt-get update && apt-get install -y \
+# 安装运行时依赖;upgrade 拉取基础镜像发布后的安全补丁,
+# 消除 Trivy 对 bookworm-slim 预装包的可修复 OS CVE 命中
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
     curl \

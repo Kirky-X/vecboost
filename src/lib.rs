@@ -47,7 +47,8 @@ pub use config::app::DatabaseConfig;
 pub use config::app::{AuthConfig, CsrfConfig, RateLimitConfig, RerankConfig, ServerConfig};
 pub use config::model::ModelConfig;
 pub use domain::{
-    EmbedRequest, EmbedResponse, RerankRequest, RerankResponse, SimilarityRequest,
+    DecisionAnswer, DecisionAnswerBody, DecisionQuestion, DecisionRequest, DecisionResponse,
+    EmbedRequest, EmbedResponse, QuestionType, RerankRequest, RerankResponse, SimilarityRequest,
     SimilarityResponse,
 };
 pub use error::VecboostError;

@@ -1389,6 +1389,23 @@ impl EmbeddingService {
             }
         }
 
+        // 统一经 EngineFactory 创建（GGUF 量化路由单一入口）。
+        // create 先于 manager.load/unload 执行：失败时 manager 状态未被扰动，
+        // 消除"新模型条目残留+旧模型已卸载+服务未切换"的失败次序窗口（评审 R7 四轮）。
+        let new_engine =
+            crate::engine::EngineFactory::create(model_config.engine_type.clone(), &model_config)
+                .map_err(|e| {
+                // UnsupportedTask 直传：fail-fast 错误须走 to_api_error 的 400 臂
+                //（调用方可换任务/端点），不得与权重缺失混同为 404（评审 R3 四轮）
+                if matches!(e, VecboostError::UnsupportedTask(_)) {
+                    return e;
+                }
+                VecboostError::NotFound(crate::i18n::tr_with_args(
+                    "model-load-failed",
+                    crate::i18n::tr_args(&[("name", &req.model_name), ("detail", &e.to_string())]),
+                ))
+            })?;
+
         if let Some(ref manager) = self.model_manager {
             log::debug!("Using ModelManager for model switching");
             let _loaded_model = manager.load(&model_config).await?;
@@ -1398,16 +1415,6 @@ impl EmbeddingService {
                 let _ = manager.unload(prev_name).await;
             }
         }
-
-        // 统一经 EngineFactory 创建（GGUF 量化路由单一入口）。
-        let new_engine =
-            crate::engine::EngineFactory::create(model_config.engine_type.clone(), &model_config)
-                .map_err(|e| {
-                VecboostError::NotFound(crate::i18n::tr_with_args(
-                    "model-load-failed",
-                    crate::i18n::tr_args(&[("name", &req.model_name), ("detail", &e.to_string())]),
-                ))
-            })?;
 
         let new_engine_arc = Arc::new(RwLock::new(new_engine));
         // 接线控制器 + 按模型目录文件大小粗估常驻内存记账
@@ -4090,6 +4097,48 @@ mod tests {
         };
         let result = service.switch_model(req).await;
         assert!(result.is_err(), "AnyEngine::new should fail");
+    }
+
+    /// switch_model 的 UnsupportedTask 必须透传（to_api_error 400 口径），
+    /// 不得被 model-load-failed 包装成 NotFound/404（评审 R3 四轮）。
+    /// 真实模型权重缺失时 SKIP。
+    #[tokio::test]
+    async fn test_switch_model_unsupported_task_passthrough() {
+        let has_weights = ["model.safetensors", "pytorch_model.bin"].iter().any(|w| {
+            std::path::Path::new("models/BAAI-bge-small-en-v1.5")
+                .join(w)
+                .exists()
+        });
+        if !has_weights {
+            eprintln!("Skipping test: model weights not found at models/BAAI-bge-small-en-v1.5");
+            return;
+        }
+        let real_path = PathBuf::from("models/BAAI-bge-small-en-v1.5");
+        let mock_engine = TestEngine::new(384);
+        let mut model_config = make_model_config("decision-current", 384);
+        model_config.task = crate::config::model::ModelTask::Decision;
+        model_config.model_path = real_path.clone();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let mut service = EmbeddingService::new(engine, Some(model_config));
+
+        let req = ModelSwitchRequest {
+            model_name: "switched-model".to_string(),
+            model_path: Some(real_path),
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+        };
+        let err = service.switch_model(req).await.unwrap_err();
+        assert!(
+            matches!(err, VecboostError::UnsupportedTask(_)),
+            "UnsupportedTask 必须透传而非包装为 NotFound，got {:?}",
+            err
+        );
     }
 
     #[tokio::test]

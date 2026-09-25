@@ -11,16 +11,25 @@ use crate::error::VecboostError;
 use crate::utils::validator::input::has_disallowed_control_chars;
 
 /// 错误 detail 回显截断：用户输入不得原文进入错误消息（name 上限 10K 字符
-/// 可被完整回显进 wire/日志），64 字符足够定位（评审 R2）
+/// 可被完整回显进 wire/日志），64 字符足够定位（评审 R2）。豁免集内的
+/// `\t` `\n` `\r` 字面量化，使回显物单行化——换行可伪造日志行（评审 R1 四轮）。
+/// 单次遍历：数到 MAX+1 即截断返回，不全量 count（评审 R8 四轮）。
 fn echo(s: &str) -> String {
     const MAX_ECHO_CHARS: usize = 64;
-    if s.chars().count() <= MAX_ECHO_CHARS {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(MAX_ECHO_CHARS).collect();
-        out.push_str("...");
-        out
+    let mut out = String::new();
+    for (n, c) in s.chars().enumerate() {
+        if n == MAX_ECHO_CHARS {
+            out.push_str("...");
+            return out;
+        }
+        match c {
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
     }
+    out
 }
 
 /// 递归检查 state 所有字符串叶子的控制字符。serde_json 只拒绝裸控制字节，
@@ -567,6 +576,33 @@ mod tests {
         let mut req = valid_request();
         req.state = serde_json::json!({"topic": "vacation", "budget": [1, 2.5, true]});
         req.validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_error_echo_single_line() {
+        // echo 必须字面量化豁免集字符（\t\n\r）：换行 name 不得把伪造日志行
+        // 带入错误 detail（日志注入面，评审 R1 四轮）
+        let mut req = valid_request();
+        let evil_name = "evil\nFAKE LOG LINE".to_string();
+        req.questions[0].name = evil_name.clone();
+        req.questions.push(DecisionQuestion {
+            name: evil_name,
+            qtype: QuestionType::Noul,
+            instructions: "x".to_string(),
+            options: vec![],
+        });
+        let err = req.validate().unwrap_err();
+        let detail = err.error_detail();
+        assert!(
+            !detail.contains('\n'),
+            "回显必须单行化，detail={:?}",
+            detail
+        );
+        assert!(
+            detail.contains("\\n"),
+            "换行应字面量化，detail={:?}",
+            detail
+        );
     }
 
     #[test]

@@ -83,6 +83,11 @@ pub trait InferenceEngine: Send + Sync {
     /// 默认返回 `UnsupportedTask`——当前无引擎覆盖此方法，调用方按
     /// 4xx 语义引导客户端换模型/换端点。
     ///
+    /// # 输入契约
+    /// 实现方必须假定请求已过 [`DecisionRequest::validate`](crate::domain::DecisionRequest::validate)
+    /// （数量/长度/总量预算/控制字符防线），或自行调用 validate；
+    /// 服务入口不得绕过校验直调本方法。
+    ///
     /// # 调用方约束
     /// 实现方为阻塞推理（与 `embed`/`embed_batch` 同约，服务层以
     /// `block_in_place` 包裹）：async 上下文调用必须经 `block_in_place`/

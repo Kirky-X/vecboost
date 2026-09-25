@@ -14,6 +14,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 
 use crate::cache::OxCacheBackend;
+use crate::cache::single_flight::{FlightMap, SingleFlightPermit};
 use crate::utils::vector::cosine_similarity;
 use crate::utils::vquant::{
     BinaryVector, I8Vector, cosine_binary, dot_i8, quantize_binary, quantize_i8,
@@ -114,27 +115,6 @@ impl Default for SemanticCacheConfig {
     }
 }
 
-/// single-flight 许可守卫：释放时若无等待者（引用计数仅剩 map+entry）则
-/// 移除映射条目，防 per-key 锁映射随历史文本无界增长。
-struct SingleFlightGuard {
-    map: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
-    key: String,
-    entry: Arc<tokio::sync::Mutex<()>>,
-    _guard: tokio::sync::OwnedMutexGuard<()>,
-}
-
-impl Drop for SingleFlightGuard {
-    fn drop(&mut self) {
-        // map(1) + self.entry(1) + OwnedMutexGuard 内部(1)；等待者每多一个 +1。
-        // == 3 即无等待者，可回收条目。
-        if Arc::strong_count(&self.entry) == 3
-            && let Ok(mut map) = self.map.lock()
-        {
-            map.remove(&self.key);
-        }
-    }
-}
-
 /// 语义缓存：在 OxCacheBackend 精确匹配之上添加 trigram 文本相似度检查。
 pub struct SemanticCache {
     exact_cache: Arc<OxCacheBackend>,
@@ -146,7 +126,7 @@ pub struct SemanticCache {
     enabled: bool,
     comparison_mode: ComparisonMode,
     /// per-key single-flight：并发同 key 计算去重（T019）
-    inflight: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    inflight: FlightMap,
     // Stats counters
     exact_hits: AtomicU64,
     semantic_hits: AtomicU64,
@@ -229,18 +209,8 @@ impl SemanticCache {
 
     /// 注册 single-flight 锁并获取许可：同 key 并发调用串行化，
     /// 后到者等前者写入缓存后由内部 double-check 命中返回。
-    async fn inflight_permit(&self, key: &str) -> SingleFlightGuard {
-        let entry = {
-            let mut map = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
-            map.entry(key.to_string()).or_default().clone()
-        };
-        let guard = entry.clone().lock_owned().await;
-        SingleFlightGuard {
-            map: Arc::clone(&self.inflight),
-            key: key.to_string(),
-            entry: Arc::clone(&entry),
-            _guard: guard,
-        }
+    async fn inflight_permit(&self, key: &str) -> SingleFlightPermit {
+        SingleFlightPermit::acquire(&self.inflight, key).await
     }
 
     /// 返回当前向量比较模式。

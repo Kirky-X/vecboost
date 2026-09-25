@@ -14,6 +14,7 @@ use oxcache::cache::Cache;
 use oxcache::features::bloom_filter::BloomFilter;
 
 use super::persist;
+use super::single_flight::{FlightMap, SingleFlightPermit};
 
 /// 持久层状态：两段追加 WAL。文件操作经互斥串行，无后台线程。
 struct PersistState {
@@ -50,29 +51,23 @@ const BLOOM_REBUILD_THRESHOLD: usize = 1_000_000;
 /// 生产主路径默认 TTL：防"永不过期的陈旧向量"（审计 D29）
 pub(crate) const DEFAULT_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
-/// single-flight 许可守卫：释放时若无等待者（引用计数仅剩 map+entry+owned guard）
-/// 则移除映射条目，防 per-key 锁映射随历史 key 无界增长。
-struct SingleFlightPermit {
-    map: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
-    key: String,
-    entry: Arc<tokio::sync::Mutex<()>>,
-    _guard: tokio::sync::OwnedMutexGuard<()>,
-}
-
-impl Drop for SingleFlightPermit {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.entry) == 3
-            && let Ok(mut map) = self.map.lock()
-        {
-            map.remove(&self.key);
-        }
+/// 日志用键前缀：截到 ≤32 字节的最后合法字符边界，
+/// 非边界处不 panic 也不回退为全量键（防用户原文进日志）。
+fn key_log_prefix(key: &str) -> &str {
+    let mut end = 32.min(key.len());
+    while end > 0 && !key.is_char_boundary(end) {
+        end -= 1;
     }
+    &key[..end]
 }
 
 /// oxcache 审计脱敏 `redact_key_for_audit` 按字节索引截断（`&key[..32]` /
 /// `&key[len-2..]`），非 ASCII 键落在字符边界外会 panic。仅当键非纯 ASCII
 /// 时替换为 SHA-256 前 16 字节 hex（32 个 ASCII 字符，任意字节截断均安全）；
 /// bloom filter 与 WAL 仍使用原始键，仅 oxcache Cache 存取走此变换。
+///
+/// 不碰撞前提：生产精确键均带 `emb:`/`rerank:` 等 ASCII 前缀，哈希输出为
+/// 纯 hex 无 `:`，跨态碰撞不可达；语义键 `text:` 同理。
 fn oxcache_safe_key(key: &str) -> String {
     if key.is_ascii() {
         return key.to_string();
@@ -92,8 +87,8 @@ pub(crate) struct OxCacheBackend {
     /// 可选 WAL 持久层（`persist_path` 设置时启用，默认 None = 纯内存）。
     persist: Option<Arc<PersistState>>,
     /// per-key single-flight（审计 D31：并发同 key 只放一个 compute，
-    /// 后到者经内部 double-check 命中缓存；默认精确缓存路径与语义缓存路径同权受益）
-    inflight: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// 后到者经内部 double-check 命中缓存；覆盖走 `get_or_insert` 的精确路径）。
+    inflight: FlightMap,
 }
 
 impl OxCacheBackend {
@@ -251,7 +246,7 @@ impl OxCacheBackend {
         if value.iter().any(|x| !x.is_finite()) {
             log::warn!(
                 "rejecting non-finite vector put for key prefix {}",
-                key.get(..32).unwrap_or(key)
+                key_log_prefix(key)
             );
             return;
         }
@@ -369,17 +364,7 @@ impl OxCacheBackend {
 
     /// 注册 single-flight 锁并获取许可。
     async fn inflight_permit(&self, key: &str) -> SingleFlightPermit {
-        let entry = {
-            let mut map = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
-            map.entry(key.to_string()).or_default().clone()
-        };
-        let guard = entry.clone().lock_owned().await;
-        SingleFlightPermit {
-            map: Arc::clone(&self.inflight),
-            key: key.to_string(),
-            entry: Arc::clone(&entry),
-            _guard: guard,
-        }
+        SingleFlightPermit::acquire(&self.inflight, key).await
     }
 
     /// 删除 key,返回是否命中。

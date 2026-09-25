@@ -97,7 +97,9 @@ impl fmt::Display for Precision {
 ///
 /// 不设 Rerank 变体：rerank 是 embed 引擎的 trait 默认能力（`InferenceEngine::rerank`
 /// 及其批量变体，bi-encoder 语义），无独立引擎类型可分派，任务维度上不构成独立 task。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelTask {
     /// 向量嵌入（既有部署语义，默认值）

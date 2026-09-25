@@ -277,7 +277,7 @@ async fn init_engine_and_services(
         memory_limit_bytes: None,
         oom_fallback_enabled: false,
         model_sha256: None,
-        task: vecboost::config::model::ModelTask::Embedding,
+        task: config.model.task,
         quantized: config.model.quantized,
     };
 

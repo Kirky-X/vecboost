@@ -1360,8 +1360,14 @@ impl EmbeddingService {
                     .unwrap_or(false)
             }),
             model_sha256: None,
+            // task 从当前模型继承（与上方 device/max_batch_size 等回退模式
+            // 对齐），防止 decision 模型被 switch 静默降级为 embedding
+            task: self
+                .model_config
+                .as_ref()
+                .map(|c| c.task)
+                .unwrap_or(crate::config::model::ModelTask::Embedding),
             // gguf 路径走 EngineFactory 量化路由（与启动路径同一判定）
-            task: crate::config::model::ModelTask::Embedding,
             quantized: req.model_name.ends_with(".gguf"),
         };
 
@@ -2955,6 +2961,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_switch_model_same_name() {
+        // message 断言依赖 i18n 文案：显式 init 消除测试顺序依赖
+        // （与 process_search top_k 测试同款修复，96af4bf）
+        crate::i18n::init();
         let mock_engine = TestEngine::new(384);
         let model_config = make_model_config("same-model", 384);
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =

@@ -262,9 +262,11 @@ max_sequence_length = 8192  # 每请求最大令牌数
 | `max_sequence_length` | `8192` | 最大序列长度 |
 
 > **`task`（引擎级 ModelConfig 字段，默认 `embedding`）**：任务维度，可选
-> `embedding` / `decision`。decision 推理端点与配置面接线落地前，该字段暂
-> 不可达（引擎级构造硬编码 `embedding`，见任务组 G2+ 记录）；`#[serde(default)]`
-> 保证旧配置文件零破坏。
+> `embedding` / `decision`。`[model]` 段已支持 `task` 配置；非法值（如
+> `"rerank"`)在配置解析时显性报错。配置 `task = "decision"` 时因当前无引擎
+> 实现决策推理，服务在**启动期**显性报 `UnsupportedTask`（fail-fast，decision
+> 引擎与 `/v1/decisions` 端点落地后自动放行）。`#[serde(default)]` 保证旧
+> 配置文件零破坏。
 
 ---
 

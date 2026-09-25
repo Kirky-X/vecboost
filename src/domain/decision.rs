@@ -9,6 +9,31 @@
 
 use crate::error::VecboostError;
 use crate::utils::validator::input::has_disallowed_control_chars;
+
+/// 错误 detail 回显截断：用户输入不得原文进入错误消息（name 上限 10K 字符
+/// 可被完整回显进 wire/日志），64 字符足够定位（评审 R2）
+fn echo(s: &str) -> String {
+    const MAX_ECHO_CHARS: usize = 64;
+    if s.chars().count() <= MAX_ECHO_CHARS {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(MAX_ECHO_CHARS).collect();
+        out.push_str("...");
+        out
+    }
+}
+
+/// 递归检查 state 所有字符串叶子的控制字符。serde_json 只拒绝裸控制字节，
+/// `\uXXXX` 转义形式可解析并还原为真实控制字符（评审 R1），
+/// 故 state 与自由文本字段适用同一防线。
+fn state_has_control_chars(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => has_disallowed_control_chars(s),
+        serde_json::Value::Array(items) => items.iter().any(state_has_control_chars),
+        serde_json::Value::Object(map) => map.values().any(state_has_control_chars),
+        _ => false,
+    }
+}
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 #[cfg(feature = "schema")]
@@ -81,8 +106,8 @@ impl FromStr for DecisionRequest {
 impl DecisionRequest {
     /// 输入校验：数量/长度/字节上限 + qtype 与 options 的跨字段一致性 +
     /// prompt 展开总量预算 + 控制字符拒绝（与 embed 校验同款防线，
-    /// `\t` `\n` `\r` 豁免）。state 为 JSON 结构化数据豁免控制字符检查：
-    /// serde_json 本身拒绝裸控制字符，注入面与自由文本不同。
+    /// `\t` `\n` `\r` 豁免）。state 的字符串叶子同样递归过控制字符防线：
+    /// serde_json 只拒绝裸控制字节，`\uXXXX` 转义可还原真实控制字符。
     /// serde 无法表达跨字段约束，必须显式代码。失败以
     /// `ValidationError` 显式返回，禁止静默截断或忽略。
     pub fn validate(&self) -> Result<(), VecboostError> {
@@ -111,9 +136,14 @@ impl DecisionRequest {
                 },
             ));
         }
+        if state_has_control_chars(&self.state) {
+            return Err(VecboostError::validation_error(
+                "state contains control characters in string values".to_string(),
+            ));
+        }
         let mut total_prompt_bytes: usize = 0;
         let mut seen_names = std::collections::HashSet::new();
-        for q in &self.questions {
+        for (question_index, q) in self.questions.iter().enumerate() {
             // answer 按 question 名回显：空/空白 name 使消费方无法对应问题，
             // 重复 name 使按名索引有歧义（协议按 questions 数组下标对应，
             // name 仅作诊断与路由提示）
@@ -129,15 +159,15 @@ impl DecisionRequest {
                 )));
             }
             if has_disallowed_control_chars(&q.name) {
+                // 不回显原文：控制字符直入 wire/日志即日志注入面（评审 R2）
                 return Err(VecboostError::validation_error(format!(
-                    "question {} name contains control characters",
-                    q.name
+                    "question at index {question_index} name contains control characters"
                 )));
             }
-            if !seen_names.insert(q.name.clone()) {
+            if !seen_names.insert(q.name.as_str()) {
                 return Err(VecboostError::validation_error(format!(
                     "duplicate question name: {}",
-                    q.name
+                    echo(&q.name)
                 )));
             }
             let instructions_chars = q.instructions.chars().count();
@@ -145,26 +175,26 @@ impl DecisionRequest {
                 return Err(VecboostError::validation_error(format!(
                     "question {} instructions too long: {instructions_chars} chars > \
                      {MAX_DECISION_FIELD_LENGTH}",
-                    q.name
+                    echo(&q.name)
                 )));
             }
             if has_disallowed_control_chars(&q.instructions) {
                 return Err(VecboostError::validation_error(format!(
-                    "question {} instructions contain control characters",
-                    q.name
+                    "question at index {question_index} instructions contain control characters"
                 )));
             }
             match q.qtype {
                 QuestionType::Choice if q.options.is_empty() => {
                     return Err(VecboostError::validation_error(format!(
                         "choice question {} requires non-empty options",
-                        q.name
+                        echo(&q.name)
                     )));
                 }
                 QuestionType::Score | QuestionType::Noul if !q.options.is_empty() => {
                     return Err(VecboostError::validation_error(format!(
                         "question {} of type {:?} must not carry options",
-                        q.name, q.qtype
+                        echo(&q.name),
+                        q.qtype
                     )));
                 }
                 _ => {}
@@ -172,7 +202,7 @@ impl DecisionRequest {
             if q.options.len() > MAX_OPTIONS_PER_QUESTION {
                 return Err(VecboostError::validation_error(format!(
                     "question {} has too many options: {} > {MAX_OPTIONS_PER_QUESTION}",
-                    q.name,
+                    echo(&q.name),
                     q.options.len()
                 )));
             }
@@ -182,13 +212,12 @@ impl DecisionRequest {
                     return Err(VecboostError::validation_error(format!(
                         "question {} has an option too long: {option_chars} chars > \
                          {MAX_DECISION_FIELD_LENGTH}",
-                        q.name
+                        echo(&q.name)
                     )));
                 }
                 if has_disallowed_control_chars(option) {
                     return Err(VecboostError::validation_error(format!(
-                        "question {} has an option containing control characters",
-                        q.name
+                        "question at index {question_index} has an option containing control characters"
                     )));
                 }
             }
@@ -508,6 +537,72 @@ mod tests {
             "重复 name 错误必须携带问题名，err={}",
             err.error_detail()
         );
+    }
+
+    #[test]
+    fn test_validate_rejects_state_control_chars_via_escape() {
+        // serde_json 只拒裸控制字节：\u0000 转义可解析并还原真实控制字符
+        // （评审 R1），state 字符串叶子必须同样过控制字符防线
+        let mut req = valid_request();
+        req.state = serde_json::from_str(r#"{"note":"line1\u0000line2"}"#).unwrap();
+        assert!(
+            req.validate().is_err(),
+            "state 字符串叶子含控制字符必须拒绝"
+        );
+    }
+
+    #[test]
+    fn test_validate_state_control_chars_check_recurses() {
+        // 嵌套 object/array 内的字符串叶子同样覆盖
+        let mut req = valid_request();
+        req.state = serde_json::json!({
+            "outer": {"arr": ["ok", 1, true, {"deep": "bad\u{0}char"}]}
+        });
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_accepts_clean_state() {
+        // 合法 state（含数字/布尔/嵌套）不受控制字符检查影响
+        let mut req = valid_request();
+        req.state = serde_json::json!({"topic": "vacation", "budget": [1, 2.5, true]});
+        req.validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_error_echo_truncated() {
+        // 错误 detail 回显截断（评审 R2）：10K 字符 name 不得被完整回显
+        let long_name = "n".repeat(MAX_DECISION_FIELD_LENGTH);
+        let mut req = valid_request();
+        req.questions[0].name = long_name.clone();
+        req.questions.push(DecisionQuestion {
+            name: long_name,
+            qtype: QuestionType::Noul,
+            instructions: "x".to_string(),
+            options: vec![],
+        });
+        let err = req.validate().unwrap_err();
+        assert!(
+            err.error_detail().len() < 200,
+            "错误回显必须截断，len={}",
+            err.error_detail().len()
+        );
+    }
+
+    #[test]
+    fn test_validate_control_char_error_does_not_echo_raw() {
+        // 控制字符臂不得回显原文（控制字符直入日志 = 日志注入面，评审 R2）：
+        // detail 必须不含任何控制字符（含构造输入里的 NUL）
+        let mut req = valid_request();
+        req.questions[0].name = "ab_cd".repeat(100).replace('_', "\u{0}");
+        let err = req.validate().unwrap_err();
+        let detail = err.error_detail();
+        assert!(
+            !detail.chars().any(|c| c.is_control()),
+            "控制字符错误不得回显原文，detail={:?}",
+            detail
+        );
+        assert!(!detail.contains("ab_cd"), "原文不得出现在 detail");
     }
 
     #[test]

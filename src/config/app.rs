@@ -81,6 +81,13 @@ pub struct ModelConfig {
     #[garde(skip)]
     #[serde(default)]
     pub quantized: bool,
+    /// 任务维度：embedding（默认）/ decision。对应运行时 `ModelConfig.task`；
+    /// 非法值（如 "rerank"）在反序列化边界显性报错而非静默忽略。
+    /// 配置 decision 时当前无引擎实现，`EngineFactory` fail-fast 在启动期
+    /// 显性报 `UnsupportedTask`（decision 引擎落地后自动放行）。
+    #[garde(skip)]
+    #[serde(default)]
+    pub task: crate::config::model::ModelTask,
     /// 最大驻留模型数：对应 `ModelManager::with_residency`；
     /// None = 不限制（现状行为）。
     #[garde(skip)]
@@ -595,6 +602,7 @@ impl Default for ModelConfig {
             expected_dimension: Some(DEFAULT_EXPECTED_DIMENSION),
             max_sequence_length: Some(DEFAULT_MAX_SEQUENCE_LENGTH),
             quantized: false,
+            task: crate::config::model::ModelTask::Embedding,
             max_resident_models: None,
             resident_memory_budget_mb: None,
         }
@@ -1235,6 +1243,7 @@ mod tests {
             expected_dimension: Some(384),
             max_sequence_length: Some(512),
             quantized: false,
+            task: crate::config::model::ModelTask::Embedding,
             max_resident_models: None,
             resident_memory_budget_mb: None,
         };
@@ -1242,6 +1251,23 @@ mod tests {
         assert!(config.use_gpu);
         assert_eq!(config.batch_size, 128);
         assert_eq!(config.expected_dimension, Some(384));
+    }
+
+    /// [model].task 配置面（评审 R6）：缺省回落 Embedding、decision 可解析、
+    /// 非法值在反序列化边界显性报错（而非 serde 静默忽略）
+    #[test]
+    fn test_model_config_task_toml() {
+        use crate::config::model::ModelTask;
+
+        let legacy: ModelConfig = toml::from_str("model_repo = \"bge-m3\"").unwrap();
+        assert_eq!(legacy.task, ModelTask::Embedding, "缺省必须回落 Embedding");
+
+        let decision: ModelConfig =
+            toml::from_str("model_repo = \"bge-m3\"\ntask = \"decision\"").unwrap();
+        assert_eq!(decision.task, ModelTask::Decision);
+
+        let invalid = toml::from_str::<ModelConfig>("model_repo = \"bge-m3\"\ntask = \"rerank\"");
+        assert!(invalid.is_err(), "非法 task 值必须显性报错");
     }
 
     #[test]

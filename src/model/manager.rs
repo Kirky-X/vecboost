@@ -396,9 +396,11 @@ impl ModelManager {
                 memory_limit_bytes: None,
                 oom_fallback_enabled: false,
                 model_sha256: None,
-                // 从 LoadedModel 透传任务维度（连同上方字段一并自模型反推）
+                // task/quantized 从 LoadedModel 透传（防静默降级）；device/
+                // pooling_mode/memory_limit_bytes/max_batch_size 仍为有损重建
+                // （既有模式，LocalModelLoader 未持久化这些字段），接线组补齐
                 task: model.task(),
-                quantized: false,
+                quantized: model.quantized(),
             }
         };
 
@@ -527,6 +529,7 @@ mod tests {
                 path: config.model_path.clone(),
                 name: config.name.clone(),
                 task: config.task,
+                quantized: config.quantized,
             });
 
             Ok(model)
@@ -545,6 +548,7 @@ mod tests {
         path: PathBuf,
         name: String,
         task: crate::config::model::ModelTask,
+        quantized: bool,
     }
 
     impl LoadedModel for CandleModel {
@@ -562,6 +566,10 @@ mod tests {
 
         fn task(&self) -> crate::config::model::ModelTask {
             self.task
+        }
+
+        fn quantized(&self) -> bool {
+            self.quantized
         }
 
         fn reload(&self) -> Result<(), VecboostError> {
@@ -1033,6 +1041,7 @@ mod tests {
                     path: config.model_path.clone(),
                     name: config.name.clone(),
                     task: config.task,
+                    quantized: config.quantized,
                 }))
             }
 
@@ -1079,6 +1088,77 @@ mod tests {
             Some(&crate::config::model::ModelTask::Decision),
             "reload 后 load 收到的 task 必须仍是 Decision（透传），got {:?}",
             *tasks
+        );
+    }
+
+    /// reload 必须从 LoadedModel 透传 quantized：.gguf 量化模型 reload 后
+    /// 标志不得静默丢失（评审 R4，与 task 同款有损重建问题）
+    #[tokio::test]
+    async fn test_reload_preserves_quantized_flag() {
+        use std::sync::Mutex;
+
+        struct QuantCapturingLoader {
+            quantized: Mutex<Vec<bool>>,
+        }
+
+        #[async_trait]
+        impl ModelLoader for QuantCapturingLoader {
+            async fn load(
+                &self,
+                config: &ModelConfig,
+            ) -> Result<Arc<dyn LoadedModel>, VecboostError> {
+                self.quantized.lock().unwrap().push(config.quantized);
+                Ok(Arc::new(CandleModel {
+                    path: config.model_path.clone(),
+                    name: config.name.clone(),
+                    task: config.task,
+                    quantized: config.quantized,
+                }))
+            }
+
+            async fn get_model_path(&self, config: &ModelConfig) -> Result<PathBuf, VecboostError> {
+                Ok(config.model_path.clone())
+            }
+
+            async fn is_model_cached(&self, _config: &ModelConfig) -> bool {
+                true
+            }
+        }
+
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join("quant-model.gguf");
+        create_test_model_file(&model_path);
+
+        let loader = Arc::new(QuantCapturingLoader {
+            quantized: Mutex::new(Vec::new()),
+        });
+        let manager = ModelManager::with_loader(loader.clone());
+
+        let config = ModelConfig {
+            name: "quant-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path,
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
+            quantized: true,
+        };
+        manager.load(&config).await.unwrap();
+
+        manager.reload("quant-model").await.unwrap();
+
+        let quantized = loader.quantized.lock().unwrap();
+        assert_eq!(
+            *quantized,
+            vec![true, true],
+            "reload 后 load 收到的 quantized 必须仍为 true（透传），got {:?}",
+            *quantized
         );
     }
 

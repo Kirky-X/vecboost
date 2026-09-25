@@ -26,6 +26,12 @@ pub trait LoadedModel: Send + Sync {
     fn task(&self) -> crate::config::model::ModelTask {
         crate::config::model::ModelTask::Embedding
     }
+
+    /// GGUF 量化标志。reload 据此透传（与 task 同款防有损重建），
+    /// 默认 false；`EngineFactory::should_use_quantized_engine` 消费该标志。
+    fn quantized(&self) -> bool {
+        false
+    }
     fn reload(&self) -> Result<(), VecboostError>;
 }
 
@@ -33,6 +39,7 @@ struct CandleModel {
     path: PathBuf,
     name: String,
     task: crate::config::model::ModelTask,
+    quantized: bool,
 }
 
 #[allow(
@@ -43,6 +50,7 @@ struct OnnxModel {
     path: PathBuf,
     name: String,
     task: crate::config::model::ModelTask,
+    quantized: bool,
 }
 
 impl LoadedModel for CandleModel {
@@ -60,6 +68,10 @@ impl LoadedModel for CandleModel {
 
     fn task(&self) -> crate::config::model::ModelTask {
         self.task
+    }
+
+    fn quantized(&self) -> bool {
+        self.quantized
     }
 
     fn reload(&self) -> Result<(), VecboostError> {
@@ -90,6 +102,10 @@ impl LoadedModel for OnnxModel {
 
     fn task(&self) -> crate::config::model::ModelTask {
         self.task
+    }
+
+    fn quantized(&self) -> bool {
+        self.quantized
     }
 
     fn reload(&self) -> Result<(), VecboostError> {
@@ -123,12 +139,14 @@ impl ModelLoader for LocalModelLoader {
                 path: config.model_path.clone(),
                 name: config.name.clone(),
                 task: config.task,
+                quantized: config.quantized,
             }),
             #[cfg(feature = "onnx")]
             EngineType::Onnx => Arc::new(OnnxModel {
                 path: config.model_path.clone(),
                 name: config.name.clone(),
                 task: config.task,
+                quantized: config.quantized,
             }),
         };
 
@@ -203,6 +221,7 @@ mod tests {
             path: path.clone(),
             name: "test-candle".to_string(),
             task: crate::config::model::ModelTask::Embedding,
+            quantized: false,
         };
 
         assert_eq!(model.name(), "test-candle");
@@ -216,6 +235,7 @@ mod tests {
             path: PathBuf::from("/test/onnx/path"),
             name: "onnx-no-gate".to_string(),
             task: crate::config::model::ModelTask::Embedding,
+            quantized: false,
         };
         assert_eq!(model.name(), "onnx-no-gate");
         assert_eq!(model.path(), Path::new("/test/onnx/path"));
@@ -230,6 +250,7 @@ mod tests {
             path: path.clone(),
             name: "test-onnx".to_string(),
             task: crate::config::model::ModelTask::Embedding,
+            quantized: false,
         };
 
         assert_eq!(model.name(), "test-onnx");
@@ -244,6 +265,7 @@ mod tests {
             path,
             name: "test-candle".to_string(),
             task: crate::config::model::ModelTask::Embedding,
+            quantized: false,
         };
         assert!(model.reload().is_ok());
     }
@@ -256,6 +278,7 @@ mod tests {
             path,
             name: "test-onnx".to_string(),
             task: crate::config::model::ModelTask::Embedding,
+            quantized: false,
         };
         assert!(model.reload().is_ok());
     }
@@ -434,6 +457,7 @@ mod tests {
             path,
             name: "reload-test".to_string(),
             task: crate::config::model::ModelTask::Embedding,
+            quantized: false,
         };
         assert!(model.reload().is_ok());
     }
@@ -446,6 +470,7 @@ mod tests {
             path,
             name: "onnx-reload-test".to_string(),
             task: crate::config::model::ModelTask::Embedding,
+            quantized: false,
         };
         assert!(model.reload().is_ok());
     }

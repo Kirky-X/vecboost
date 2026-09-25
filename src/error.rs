@@ -84,6 +84,8 @@ pub enum VecboostError {
     RateLimitExceeded(String),
     /// 请求在队列等待或处理中超过其 SLA（服务端超时，区别于客户端断连）
     RequestTimeout(String),
+    /// 当前引擎/模型不支持所请求的任务维度（如对 embedding 引擎调用 decide）
+    UnsupportedTask(String),
     DatabaseError(String),
     InternalError(String),
 }
@@ -168,6 +170,10 @@ impl VecboostError {
         VecboostError::InternalError(message)
     }
 
+    pub fn unsupported_task(message: String) -> Self {
+        VecboostError::UnsupportedTask(message)
+    }
+
     /// Return a stable Fluent message key for this error variant.
     pub fn error_code(&self) -> &'static str {
         match self {
@@ -187,6 +193,7 @@ impl VecboostError {
             VecboostError::ValidationError(_) => "error-validation",
             VecboostError::RateLimitExceeded(_) => "error-rate-limit",
             VecboostError::RequestTimeout(_) => "error-request-timeout",
+            VecboostError::UnsupportedTask(_) => "error-unsupported-task",
             VecboostError::DatabaseError(_) => "error-database",
             VecboostError::InternalError(_) => "error-internal",
         }
@@ -211,6 +218,7 @@ impl VecboostError {
             | VecboostError::ValidationError(s)
             | VecboostError::RateLimitExceeded(s)
             | VecboostError::RequestTimeout(s)
+            | VecboostError::UnsupportedTask(s)
             | VecboostError::DatabaseError(s)
             | VecboostError::InternalError(s) => s.as_str(),
         }
@@ -239,6 +247,8 @@ impl IntoResponse for VecboostError {
             // 429 归 auth 限流中间件；同一错误双映射已统一）
             VecboostError::RateLimitExceeded(_) => StatusCode::SERVICE_UNAVAILABLE,
             VecboostError::RequestTimeout(_) => StatusCode::GATEWAY_TIMEOUT,
+            // 调用方可换模型/换端点解决的客户端错误 → 4xx
+            VecboostError::UnsupportedTask(_) => StatusCode::BAD_REQUEST,
             VecboostError::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             VecboostError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
@@ -473,6 +483,28 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INSUFFICIENT_STORAGE);
     }
 
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_into_response_unsupported_task() {
+        // 调用方可换模型/换端点的客户端错误语义 → 4xx
+        let err = VecboostError::UnsupportedTask("decision not implemented".to_string());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_unsupported_task_error_code_and_display() {
+        ensure_init();
+        let err = VecboostError::unsupported_task("decision".into());
+        assert_eq!(err.error_code(), "error-unsupported-task");
+        assert_eq!(err.error_detail(), "decision");
+        let expected = crate::i18n::tr_with_args(
+            "error-unsupported-task",
+            crate::i18n::tr_args(&[("detail", "decision")]),
+        );
+        assert_eq!(format!("{}", err), expected);
+    }
+
     #[test]
     fn test_from_io_error() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
@@ -665,6 +697,7 @@ mod tests {
         let _ = VecboostError::rate_limit_exceeded("rl".into());
         let _ = VecboostError::out_of_memory("oom".into());
         let _ = VecboostError::internal_error("int".into());
+        let _ = VecboostError::unsupported_task("ut".into());
     }
 
     #[test]
@@ -687,6 +720,7 @@ mod tests {
             VecboostError::RateLimitExceeded("x".into()),
             VecboostError::DatabaseError("x".into()),
             VecboostError::InternalError("x".into()),
+            VecboostError::UnsupportedTask("x".into()),
         ];
         for v in &variants {
             assert!(!v.error_code().is_empty());
@@ -742,6 +776,10 @@ mod tests {
             (
                 VecboostError::ValidationError("val".into()),
                 "error-validation",
+            ),
+            (
+                VecboostError::UnsupportedTask("ut".into()),
+                "error-unsupported-task",
             ),
         ];
         for (err, code) in remaining {

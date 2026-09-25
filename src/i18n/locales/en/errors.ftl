@@ -19,3 +19,4 @@ error-request-timeout = Request timeout: { $detail }
 error-rate-limit = Rate limit exceeded: { $detail }
 error-database = Database error: { $detail }
 error-internal = Internal error: { $detail }
+error-unsupported-task = Unsupported task: { $detail }

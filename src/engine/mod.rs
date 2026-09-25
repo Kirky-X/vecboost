@@ -15,7 +15,8 @@ pub mod mkl_shim;
 #[cfg(feature = "quantized-gguf")]
 pub mod quantized_engine;
 
-use crate::config::model::{ModelConfig, Precision};
+use crate::config::model::{ModelConfig, ModelTask, Precision};
+use crate::domain::{DecisionRequest, DecisionResponse};
 use crate::error::VecboostError;
 use async_trait::async_trait;
 
@@ -75,6 +76,24 @@ pub trait InferenceEngine: Send + Sync {
     /// 默认返回 true — bi-encoder rerank 对任何 embedding 引擎都可用。
     fn supports_rerank(&self) -> bool {
         true
+    }
+
+    /// 决策推理：对给定 state 回答一组 choice/score/noul 问题。
+    ///
+    /// 默认返回 `UnsupportedTask`——当前无引擎覆盖此方法，调用方按
+    /// 4xx 语义引导客户端换模型/换端点。
+    fn decide(&self, _req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
+        Err(VecboostError::unsupported_task(
+            "当前引擎未实现决策推理".to_string(),
+        ))
+    }
+
+    /// 引擎是否支持给定任务维度。
+    ///
+    /// 默认仅 embedding：rerank 是 embed 引擎的 trait 默认能力（见 `rerank`），
+    /// 不构成独立 task，故 `ModelTask` 无 Rerank 变体。
+    fn supports_task(&self, task: ModelTask) -> bool {
+        task == ModelTask::Embedding
     }
 
     /// 统计文本的 token 数(用于 API usage.prompt_tokens)。
@@ -214,7 +233,7 @@ pub enum AnyEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::{DeviceType, EngineType, Precision};
+    use crate::config::model::{DeviceType, EngineType, ModelTask, Precision};
     use async_trait::async_trait;
 
     /// Mock engine that returns deterministic embeddings for testing default trait methods.
@@ -301,6 +320,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: ModelTask::Embedding,
             quantized: false,
         }
     }
@@ -317,6 +337,28 @@ mod tests {
     fn test_default_supports_rerank_returns_true() {
         let engine = MockEngine { dimension: 4 };
         assert!(engine.supports_rerank());
+    }
+
+    // -- decide default --
+    #[test]
+    fn test_default_decide_returns_unsupported_task() {
+        let engine = MockEngine { dimension: 4 };
+        let req: crate::domain::DecisionRequest =
+            serde_json::from_str(r#"{"state":{},"questions":[]}"#).unwrap();
+        let err = engine.decide(&req).unwrap_err();
+        assert!(
+            matches!(err, VecboostError::UnsupportedTask(_)),
+            "默认 decide 必须返回 UnsupportedTask，got {:?}",
+            err
+        );
+    }
+
+    // -- supports_task default --
+    #[test]
+    fn test_default_supports_task_only_embedding() {
+        let engine = MockEngine { dimension: 4 };
+        assert!(engine.supports_task(ModelTask::Embedding));
+        assert!(!engine.supports_task(ModelTask::Decision));
     }
 
     // -- rerank default (identical vectors → cosine=1 → sigmoid(1)≈0.731) --

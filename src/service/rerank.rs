@@ -796,6 +796,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
@@ -841,6 +842,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());

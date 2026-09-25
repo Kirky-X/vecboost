@@ -1361,6 +1361,7 @@ impl EmbeddingService {
             }),
             model_sha256: None,
             // gguf 路径走 EngineFactory 量化路由（与启动路径同一判定）
+            task: crate::config::model::ModelTask::Embedding,
             quantized: req.model_name.ends_with(".gguf"),
         };
 
@@ -1708,6 +1709,7 @@ mod tests {
             memory_limit_bytes: Some(1024), // 1KB 上限：任何真实模型加载后必超限
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
         let service = EmbeddingService::new(engine, Some(baseline));
@@ -1802,6 +1804,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -1839,6 +1842,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -1876,6 +1880,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -1935,6 +1940,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -1963,6 +1969,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -2004,6 +2011,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -2210,6 +2218,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -2281,6 +2290,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -2455,6 +2465,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         }
     }
@@ -3376,6 +3387,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
         manager.load(&config).await.unwrap();
@@ -4087,6 +4099,7 @@ mod tests {
             memory_limit_bytes: Some(1024),
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =

@@ -74,6 +74,7 @@ pub fn get_test_model_config() -> ModelConfig {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: vecboost::config::model::ModelTask::Embedding,
             quantized: false,
         },
         TestMode::Full => ModelConfig {
@@ -88,6 +89,7 @@ pub fn get_test_model_config() -> ModelConfig {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: vecboost::config::model::ModelTask::Embedding,
             quantized: false,
         },
     }

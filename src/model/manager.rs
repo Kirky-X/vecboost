@@ -396,6 +396,7 @@ impl ModelManager {
                 memory_limit_bytes: None,
                 oom_fallback_enabled: false,
                 model_sha256: None,
+                task: crate::config::model::ModelTask::Embedding,
                 quantized: false,
             }
         };
@@ -601,6 +602,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -631,6 +633,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -649,6 +652,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -703,6 +707,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -763,6 +768,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -791,6 +797,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -821,6 +828,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -861,6 +869,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -899,6 +908,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -949,6 +959,7 @@ mod tests {
                 memory_limit_bytes: None,
                 oom_fallback_enabled: false,
                 model_sha256: None,
+                task: crate::config::model::ModelTask::Embedding,
                 quantized: false,
             };
             manager.load(&config).await.unwrap();
@@ -981,6 +992,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -1043,6 +1055,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -1079,6 +1092,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
         manager.set_default_config(config);
@@ -1110,6 +1124,7 @@ mod tests {
                 memory_limit_bytes: None,
                 oom_fallback_enabled: false,
                 model_sha256: None,
+                task: crate::config::model::ModelTask::Embedding,
                 quantized: false,
             };
             manager.load(&config).await.unwrap();
@@ -1152,6 +1167,7 @@ mod tests {
                     memory_limit_bytes: None,
                     oom_fallback_enabled: false,
                     model_sha256: None,
+                    task: crate::config::model::ModelTask::Embedding,
                     quantized: false,
                 };
                 mgr.load(&config).await.unwrap();
@@ -1245,6 +1261,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -1275,6 +1292,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
 
@@ -1303,6 +1321,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
         let path = loader.get_model_path(&config).await.unwrap();
@@ -1326,6 +1345,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
         let model = loader.load(&config).await.unwrap();
@@ -1349,6 +1369,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
         let path = loader.get_model_path(&config).await.unwrap();
@@ -1376,6 +1397,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         };
         manager.load(&config).await.unwrap();
@@ -1399,6 +1421,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: false,
             model_sha256: None,
+            task: crate::config::model::ModelTask::Embedding,
             quantized: false,
         }
     }

@@ -124,6 +124,7 @@ fn make_service(dimension: usize) -> EmbeddingService {
         memory_limit_bytes: None,
         oom_fallback_enabled: true,
         model_sha256: None,
+        task: crate::config::model::ModelTask::Embedding,
         quantized: false,
     };
     let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(mock_engine));

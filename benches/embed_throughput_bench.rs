@@ -31,6 +31,7 @@ fn load_engine(model_dir: &std::path::Path) -> Option<Box<dyn InferenceEngine>> 
         memory_limit_bytes: None,
         oom_fallback_enabled: false,
         model_sha256: None,
+        task: vecboost::config::model::ModelTask::Embedding,
         quantized: false,
     };
     match EngineFactory::create(EngineType::Candle, &config) {

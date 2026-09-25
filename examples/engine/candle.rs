@@ -61,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         memory_limit_bytes: None,
         oom_fallback_enabled: false,
         model_sha256: None,
+        task: vecboost::config::model::ModelTask::Embedding,
         quantized: false,
     };
 

@@ -4,7 +4,8 @@
 //! AnyEngine 的实现块
 
 use super::{AnyEngine, InferenceEngine};
-use crate::config::model::{EngineType, ModelConfig, Precision};
+use crate::config::model::{EngineType, ModelConfig, ModelTask, Precision};
+use crate::domain::{DecisionRequest, DecisionResponse};
 use crate::error::VecboostError;
 use async_trait::async_trait;
 
@@ -111,12 +112,32 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.try_fallback_to_cpu(config).await,
         }
     }
+
+    fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
+        match self {
+            AnyEngine::Candle(engine) => engine.decide(req),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(engine) => engine.decide(req),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.decide(req),
+        }
+    }
+
+    fn supports_task(&self, task: ModelTask) -> bool {
+        match self {
+            AnyEngine::Candle(engine) => engine.supports_task(task),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(engine) => engine.supports_task(task),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.supports_task(task),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::{DeviceType, EngineType, ModelConfig};
+    use crate::config::model::{DeviceType, EngineType, ModelConfig, ModelTask};
     use std::path::PathBuf;
 
     fn test_config_candle() -> ModelConfig {
@@ -132,6 +153,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: ModelTask::Embedding,
             quantized: false,
         }
     }
@@ -150,6 +172,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: ModelTask::Embedding,
             quantized: false,
         }
     }
@@ -423,6 +446,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: ModelTask::Embedding,
             quantized: false,
         };
         let ctx = InferenceContext::with_config(&config, Precision::Fp16);
@@ -440,6 +464,53 @@ mod tests {
         assert_eq!(ctx.batch_size, 32);
         assert_eq!(ctx.max_sequence_length, 8192);
         assert_eq!(ctx.precision, Precision::Fp32);
+    }
+
+    /// 真实模型 AnyEngine（candle 变体）转发 decide/supports_task。
+    /// 与 candle_engine::tests::require_real_model 同口径：权重缺失时 SKIP。
+    fn real_model_available() -> bool {
+        ["model.safetensors", "pytorch_model.bin"].iter().any(|w| {
+            std::path::Path::new("models/BAAI-bge-small-en-v1.5")
+                .join(w)
+                .exists()
+        })
+    }
+
+    #[test]
+    fn test_any_engine_forwards_decide_and_supports_task() {
+        if !real_model_available() {
+            eprintln!("Skipping test: model weights not found at models/BAAI-bge-small-en-v1.5");
+            return;
+        }
+        let config = ModelConfig {
+            name: "bge-small-en-forward".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from("models/BAAI-bge-small-en-v1.5"),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+            task: ModelTask::Embedding,
+            quantized: false,
+        };
+        let engine =
+            AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("load real model");
+
+        assert!(engine.supports_task(ModelTask::Embedding));
+        assert!(!engine.supports_task(ModelTask::Decision));
+
+        let req: crate::domain::DecisionRequest =
+            serde_json::from_str(r#"{"state":{},"questions":[]}"#).unwrap();
+        let err = engine.decide(&req).unwrap_err();
+        assert!(
+            matches!(err, VecboostError::UnsupportedTask(_)),
+            "AnyEngine::Candle 未覆盖 decide，转发必须落到 trait 默认 UnsupportedTask，got {:?}",
+            err
+        );
     }
 
     #[test]

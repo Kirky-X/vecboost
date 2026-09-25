@@ -93,6 +93,38 @@ impl fmt::Display for Precision {
     }
 }
 
+/// 模型任务维度。
+///
+/// 不设 Rerank 变体：rerank 是 embed 引擎的 trait 默认能力（`InferenceEngine::rerank`
+/// 及其批量变体，bi-encoder 语义），无独立引擎类型可分派，任务维度上不构成独立 task。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelTask {
+    /// 向量嵌入（既有部署语义，默认值）
+    #[default]
+    Embedding,
+    /// 决策推理（多问题作答：choice/score/noul）
+    Decision,
+}
+
+impl fmt::Display for ModelTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ModelTask::Embedding => write!(f, "embedding"),
+            ModelTask::Decision => write!(f, "decision"),
+        }
+    }
+}
+
+impl ModelTask {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ModelTask::Embedding => "embedding",
+            ModelTask::Decision => "decision",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InferenceContext {
     pub model_name: String,
@@ -193,6 +225,9 @@ pub struct ModelConfig {
     /// 路由至 `QuantizedCandleEngine`；默认 false（safetensors 路径不变）。
     #[serde(default)]
     pub quantized: bool,
+    /// 任务维度：旧配置缺省该字段时回落 Embedding（#[serde(default)] 向后兼容）。
+    #[serde(default)]
+    pub task: ModelTask,
 }
 
 impl Default for ModelConfig {
@@ -210,6 +245,7 @@ impl Default for ModelConfig {
             oom_fallback_enabled: true,
             model_sha256: None,
             quantized: false,
+            task: ModelTask::Embedding,
         }
     }
 }
@@ -245,6 +281,79 @@ mod tests {
             !config.quantized,
             "quantized 默认为 false（safetensors 路径不变）"
         );
+        assert_eq!(
+            config.task,
+            ModelTask::Embedding,
+            "task 默认 Embedding（既有部署语义不变）"
+        );
+    }
+
+    #[test]
+    fn test_model_task_serde_lowercase_roundtrip() {
+        assert_eq!(
+            serde_json::to_string(&ModelTask::Embedding).unwrap(),
+            "\"embedding\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ModelTask::Decision).unwrap(),
+            "\"decision\""
+        );
+
+        let decoded: ModelTask = serde_json::from_str("\"embedding\"").unwrap();
+        assert_eq!(decoded, ModelTask::Embedding);
+        let decoded: ModelTask = serde_json::from_str("\"decision\"").unwrap();
+        assert_eq!(decoded, ModelTask::Decision);
+    }
+
+    #[test]
+    fn test_model_task_invalid_value_rejected() {
+        let invalid: Result<ModelTask, _> = serde_json::from_str("\"rerank\"");
+        assert!(invalid.is_err(), "rerank 不是任务维度（是 trait 默认能力）");
+    }
+
+    #[test]
+    fn test_model_task_display_clone_eq() {
+        assert_eq!(ModelTask::Embedding.to_string(), "embedding");
+        assert_eq!(ModelTask::Decision.to_string(), "decision");
+        assert_eq!(ModelTask::as_str(&ModelTask::Decision), "decision");
+        assert_eq!(ModelTask::default(), ModelTask::Embedding);
+        let cloned = ModelTask::Decision.clone();
+        assert_eq!(cloned, ModelTask::Decision);
+        assert_ne!(ModelTask::Embedding, ModelTask::Decision);
+    }
+
+    #[test]
+    fn test_model_config_legacy_json_without_task_defaults_to_embedding() {
+        // 零破坏核心断言：旧配置 JSON（无 task 字段）必须可解析且回落 Embedding
+        let legacy = r#"{
+            "name": "bge-m3",
+            "engine_type": "candle",
+            "model_path": "/models/bge-m3",
+            "tokenizer_path": null,
+            "device": "cpu",
+            "max_batch_size": 32,
+            "pooling_mode": null,
+            "expected_dimension": null,
+            "memory_limit_bytes": null,
+            "oom_fallback_enabled": true,
+            "model_sha256": null,
+            "quantized": false
+        }"#;
+        let config: ModelConfig = serde_json::from_str(legacy).unwrap();
+        assert_eq!(config.name, "bge-m3");
+        assert_eq!(config.task, ModelTask::Embedding);
+    }
+
+    #[test]
+    fn test_model_config_task_decision_roundtrip() {
+        let config = ModelConfig {
+            task: ModelTask::Decision,
+            ..ModelConfig::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"task\":\"decision\""), "json={}", json);
+        let decoded: ModelConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.task, ModelTask::Decision);
     }
 
     #[test]
@@ -261,6 +370,7 @@ mod tests {
             memory_limit_bytes: Some(8 * 1024 * 1024 * 1024),
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: ModelTask::Embedding,
             quantized: false,
         };
 
@@ -283,6 +393,7 @@ mod tests {
             memory_limit_bytes: Some(8 * 1024 * 1024 * 1024),
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: ModelTask::Embedding,
             quantized: false,
         };
 
@@ -403,6 +514,7 @@ mod tests {
             memory_limit_bytes: None,
             oom_fallback_enabled: true,
             model_sha256: None,
+            task: ModelTask::Embedding,
             quantized: false,
         };
 

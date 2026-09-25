@@ -106,7 +106,9 @@ tower-http = { version = "0.7", optional = true, default-features = false, featu
 # utoipa 5.5.0 内部 schema.rs 引用 crate::utoipa::Number(被 cfg(feature="macros") 门控),
 # 不启用 macros 会导致 schema feature 单独编译失败
 utoipa = { version = "5.5", optional = true, default-features = false, features = ["macros", "axum_extras", "chrono", "uuid"] }
-utoipa-swagger-ui = { version = "9.0", optional = true, default-features = false, features = ["axum", "url"] }
+# vendored：Swagger UI v5.17.14 随 crate 打包（utoipa-swagger-ui-vendored），
+# build script 免联网下载——离线环境（CI 隔离/内网）下 openapi feature 可编译
+utoipa-swagger-ui = { version = "9.0", optional = true, default-features = false, features = ["axum", "url", "vendored"] }
 uuid = { version = "1.26", optional = true, default-features = false, features = ["v4", "serde"] }
 # OpenAI 兼容端点 encoding_format=base64 编码（http feature）
 base64 = { version = "0.23", optional = true, default-features = false, features = ["std"] }

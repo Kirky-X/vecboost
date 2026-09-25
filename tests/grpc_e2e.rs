@@ -13,6 +13,12 @@
 //!
 //! 运行条件：`cargo test --features http,grpc[,auth]`。
 //! 服务器以子进程方式从 `CARGO_BIN_EXE_vecboost` 启动（M1 本地模型，CPU）。
+//! 本地模型缺席（CI 无 `models/`，见 .gitignore）时需模型的用例打印 SKIP 后返回，
+//! 与 model_snapshot_regression / quantized_parity / scenario_sdk 同口径；仅
+//! GP-L01（拒启契约）不依赖模型仍照常执行。
+//!
+//! **覆盖缺口（已知）**：CI 无模型时认证矩阵/吊销/超大载荷等安全契约用例一并
+//! SKIP，不在 CI 验证；需模型的用例覆盖依赖本地或后续 CI fixture。
 
 #![cfg(all(feature = "http", feature = "grpc"))]
 
@@ -44,6 +50,24 @@ const JWT_SECRET: &str = "grpc-e2e-jwt-secret-0123456789ABCDEF";
 const ADMIN_PASS: &str = "GrpcE2e#2026Pass";
 
 type Client = SdForgeServiceClient<tonic::transport::Channel>;
+
+/// 本地模型含权重与 config 才可加载（仅 tokenizer/config 不足以启动服务器）。
+fn model_ready(path: &str) -> bool {
+    let dir = std::path::Path::new(path);
+    dir.join("config.json").exists() && dir.join("model.safetensors").exists()
+}
+
+/// 需健康服务器的用例在模型缺席时的 SKIP 前置检查（返回 true 表示应提前 return）。
+/// 服务器配置固定以 M1 启动；M2 仅 model_switch 用例使用，本地 models/ 通常成套存在。
+fn skip_without_models(test_name: &str) -> bool {
+    if model_ready(M1_PATH) {
+        return false;
+    }
+    eprintln!(
+        "SKIP [{test_name}]: 本地模型缺失（models/ 未 checkout），跳过需健康服务器的 gRPC E2E"
+    );
+    true
+}
 
 // ---------------------------------------------------------------------------
 // 最小 HTTP 客户端（std 实现，避免引入额外 dev 依赖）
@@ -296,6 +320,9 @@ async fn call_raw(
 
 #[tokio::test]
 async fn grpc_info_methods_return_success() {
+    if skip_without_models("grpc_info_methods_return_success") {
+        return;
+    }
     let server = spawn_server("grpc-info", &ServerOpts::default(), &[]);
     let mut client = connect_grpc(server.grpc_port).await;
 
@@ -330,6 +357,9 @@ async fn grpc_info_methods_return_success() {
 
 #[tokio::test]
 async fn grpc_embed_methods_normal() {
+    if skip_without_models("grpc_embed_methods_normal") {
+        return;
+    }
     let server = spawn_server("grpc-embed", &ServerOpts::default(), &[]);
     let mut client = connect_grpc(server.grpc_port).await;
 
@@ -387,6 +417,9 @@ async fn grpc_embed_methods_normal() {
 
 #[tokio::test]
 async fn grpc_rerank_methods_normal() {
+    if skip_without_models("grpc_rerank_methods_normal") {
+        return;
+    }
     let server = spawn_server("grpc-rerank", &ServerOpts::default(), &[]);
     let mut client = connect_grpc(server.grpc_port).await;
 
@@ -434,6 +467,9 @@ async fn grpc_rerank_methods_normal() {
 
 #[tokio::test]
 async fn grpc_embed_file_normal() {
+    if skip_without_models("grpc_embed_file_normal") {
+        return;
+    }
     let server = spawn_server("grpc-file", &ServerOpts::default(), &[]);
     let file = server.dir.join("e2e-sample.txt");
     std::fs::write(&file, "grpc embed file e2e\nsecond line for paragraphs").expect("write file");
@@ -452,6 +488,16 @@ async fn grpc_embed_file_normal() {
 
 #[tokio::test]
 async fn grpc_model_switch_roundtrip_and_failure_protection() {
+    if skip_without_models("grpc_model_switch_roundtrip_and_failure_protection") {
+        return;
+    }
+    if !model_ready(M2_PATH) {
+        eprintln!(
+            "SKIP [grpc_model_switch_roundtrip_and_failure_protection]: M2 模型缺席（{}）",
+            M2_PATH
+        );
+        return;
+    }
     let server = spawn_server("grpc-switch", &ServerOpts::default(), &[]);
     let mut client = connect_grpc(server.grpc_port).await;
 
@@ -521,6 +567,9 @@ async fn grpc_model_switch_roundtrip_and_failure_protection() {
 
 #[tokio::test]
 async fn grpc_embed_matches_http() {
+    if skip_without_models("grpc_embed_matches_http") {
+        return;
+    }
     let server = spawn_server("grpc-parity", &ServerOpts::default(), &[]);
     let mut client = connect_grpc(server.grpc_port).await;
 
@@ -604,6 +653,9 @@ async fn grpc_embed_matches_http() {
 
 #[tokio::test]
 async fn grpc_unknown_method_returns_not_found() {
+    if skip_without_models("grpc_unknown_method_returns_not_found") {
+        return;
+    }
     let server = spawn_server("grpc-unknown", &ServerOpts::default(), &[]);
     let mut client = connect_grpc(server.grpc_port).await;
 
@@ -639,6 +691,9 @@ async fn grpc_unknown_method_returns_not_found() {
 
 #[tokio::test]
 async fn grpc_oversized_payload_rejected() {
+    if skip_without_models("grpc_oversized_payload_rejected") {
+        return;
+    }
     let server = spawn_server("grpc-oversize", &ServerOpts::default(), &[]);
     let mut client = connect_grpc(server.grpc_port).await;
 
@@ -661,6 +716,9 @@ async fn grpc_oversized_payload_rejected() {
 
 #[tokio::test]
 async fn grpc_bad_json_and_empty_text_are_4xx_business_errors() {
+    if skip_without_models("grpc_bad_json_and_empty_text_are_4xx_business_errors") {
+        return;
+    }
     let server = spawn_server("grpc-badjson", &ServerOpts::default(), &[]);
     let mut client = connect_grpc(server.grpc_port).await;
 
@@ -741,6 +799,9 @@ async fn grpc_require_auth_without_auth_config_refuses_startup() {
 #[cfg(feature = "auth")]
 #[tokio::test]
 async fn grpc_auth_matrix_unauthenticated_vs_valid() {
+    if skip_without_models("grpc_auth_matrix_unauthenticated_vs_valid") {
+        return;
+    }
     let server = spawn_server(
         "grpc-auth",
         &ServerOpts {
@@ -824,6 +885,9 @@ async fn grpc_auth_matrix_unauthenticated_vs_valid() {
 #[cfg(feature = "auth")]
 #[tokio::test]
 async fn grpc_token_revoked_on_http_logout_rejected_on_grpc() {
+    if skip_without_models("grpc_token_revoked_on_http_logout_rejected_on_grpc") {
+        return;
+    }
     let server = spawn_server(
         "grpc-revoke",
         &ServerOpts {

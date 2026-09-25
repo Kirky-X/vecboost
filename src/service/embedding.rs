@@ -925,13 +925,15 @@ impl EmbeddingService {
                 optimal_batch_size
             );
 
-            for chunk in uncached_refs.chunks(optimal_batch_size) {
+            for (chunk_base, chunk) in uncached_refs.chunks(optimal_batch_size).enumerate() {
+                let chunk_base = chunk_base * optimal_batch_size;
                 let chunk_embeddings = self.engine.read().await.embed_batch(chunk)?;
                 for (i, mut emb) in chunk_embeddings.into_iter().enumerate() {
                     normalize_l2(&mut emb)?;
-                    let original_idx = uncached_texts[i].0;
+                    let global_i = chunk_base + i;
+                    let original_idx = uncached_texts[global_i].0;
                     // 写入缓存供后续使用
-                    let text_hash = xxhash_rust::xxh3::xxh3_128(uncached_refs[i].as_bytes());
+                    let text_hash = xxhash_rust::xxh3::xxh3_128(uncached_refs[global_i].as_bytes());
                     let cache_key = format!("emb:{}:{:016x}", model_id, text_hash);
                     self.cache.put(&cache_key, emb.clone()).await;
                     embeddings[original_idx] = Some(emb);
@@ -4197,6 +4199,40 @@ mod tests {
         let texts: Vec<String> = (0..3).map(|i| format!("cfg {}", i)).collect();
         let result = service.process_search_batch("query", &texts, Some(2)).await;
         assert!(result.is_ok());
+    }
+
+    /// 回归钉：process_search_batch 多 chunk 偏移——第二 chunk 必须写回
+    /// `chunk_base + i` 全局下标，否则第二 chunk 文本向量永不落位、
+    /// 第一 chunk 文本被错误覆盖。
+    #[tokio::test]
+    async fn test_process_search_batch_multi_chunk_offset() {
+        let mock_engine = TestEngine::new(64);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let service = EmbeddingService::new(engine, None);
+
+        // 无 memory_manager 时 optimal_batch_size 回退 MAX_BATCH_SIZE=100，
+        // 101 条唯一文本 → chunks(100) 得 [0..100] + [100..101] 两片。
+        let texts: Vec<String> = (0..=MAX_BATCH_SIZE)
+            .map(|i| format!("chunk-offset candidate {}", i))
+            .collect();
+        let last = &texts[MAX_BATCH_SIZE];
+
+        let resp = service
+            .process_search_batch(last, &texts, Some(MAX_TOP_K))
+            .await
+            .expect("multi-chunk search should succeed");
+
+        let hit = resp
+            .results
+            .iter()
+            .find(|r| &r.text == last)
+            .expect("second-chunk text must have an embedding and appear in results");
+        assert!(
+            (hit.score - 1.0).abs() < 1e-4,
+            "query equals last candidate, expected cosine≈1, got {}",
+            hit.score
+        );
     }
 
     #[tokio::test]

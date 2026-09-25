@@ -46,7 +46,9 @@ impl EngineFactory {
             {
                 let engine =
                     super::quantized_engine::QuantizedCandleEngine::load(&config.model_path)?;
-                return Ok(AnyEngine::Quantized(engine));
+                let any = AnyEngine::Quantized(engine);
+                ensure_supports_task(&any, config)?;
+                return Ok(any);
             }
             #[cfg(not(feature = "quantized-gguf"))]
             {
@@ -58,8 +60,25 @@ impl EngineFactory {
             }
         }
         let precision = Precision::Fp32;
-        AnyEngine::new(config, engine_type, precision)
+        let engine = AnyEngine::new(config, engine_type, precision)?;
+        // fail-fast（评审 R5）：配置任务维度超出引擎能力时创建即失败，
+        // 而非延迟到 decide 调用才以 4xx 暴露（decision 引擎落地后自动放行）
+        ensure_supports_task(&engine, config)?;
+        Ok(engine)
     }
+}
+
+/// fail-fast 校验：引擎不支持配置的任务维度时报 UnsupportedTask（显性失败，
+/// 禁止静默加载后由调用时 4xx 兜底）
+fn ensure_supports_task(engine: &AnyEngine, config: &ModelConfig) -> Result<(), VecboostError> {
+    use super::InferenceEngine;
+    if !engine.supports_task(config.task) {
+        return Err(VecboostError::unsupported_task(format!(
+            "engine does not support configured task {}",
+            config.task
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -92,6 +111,56 @@ mod tests {
         let result = EngineFactory::create(EngineType::Candle, &config);
         // Candle 引擎会因模型路径不存在而返回错误
         assert!(result.is_err());
+    }
+
+    /// fail-fast（评审 R5）：配置 task=decision 但引擎只支持 embedding 时，
+    /// 工厂创建即报 UnsupportedTask，而非延迟到 decide 调用才以 4xx 暴露。
+    /// 真实模型权重缺失时 SKIP（与 impl_.rs 同口径）。
+    #[test]
+    fn test_create_rejects_unsupported_task() {
+        let has_weights = ["model.safetensors", "pytorch_model.bin"].iter().any(|w| {
+            std::path::Path::new("models/BAAI-bge-small-en-v1.5")
+                .join(w)
+                .exists()
+        });
+        if !has_weights {
+            eprintln!("Skipping test: model weights not found at models/BAAI-bge-small-en-v1.5");
+            return;
+        }
+        let mut config = test_config();
+        config.model_path = PathBuf::from("models/BAAI-bge-small-en-v1.5");
+        config.task = crate::config::model::ModelTask::Decision;
+        let result = EngineFactory::create(EngineType::Candle, &config);
+        match result {
+            Err(VecboostError::UnsupportedTask(msg)) => {
+                assert!(
+                    msg.contains("decision"),
+                    "错误必须标明不支持的 task，msg={msg}"
+                );
+            }
+            other => panic!("expected Err(UnsupportedTask), got {:?}", other.err()),
+        }
+    }
+
+    /// task=embedding（默认）的既有加载路径不受 fail-fast 校验影响
+    #[test]
+    fn test_create_accepts_embedding_task() {
+        let has_weights = ["model.safetensors", "pytorch_model.bin"].iter().any(|w| {
+            std::path::Path::new("models/BAAI-bge-small-en-v1.5")
+                .join(w)
+                .exists()
+        });
+        if !has_weights {
+            eprintln!("Skipping test: model weights not found at models/BAAI-bge-small-en-v1.5");
+            return;
+        }
+        let mut config = test_config();
+        config.model_path = PathBuf::from("models/BAAI-bge-small-en-v1.5");
+        config.task = crate::config::model::ModelTask::Embedding;
+        use crate::engine::InferenceEngine;
+        let engine = EngineFactory::create(EngineType::Candle, &config)
+            .expect("embedding task must load unchanged");
+        assert!(engine.supports_task(crate::config::model::ModelTask::Embedding));
     }
 
     #[test]

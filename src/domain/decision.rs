@@ -8,21 +8,27 @@
 //! （`{"type":"choice",...}`）以钉死对外契约。
 
 use crate::error::VecboostError;
+use crate::utils::validator::input::has_disallowed_control_chars;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 #[cfg(feature = "schema")]
 use utoipa::ToSchema;
 
-/// Decision 请求输入上限（与 embed 的 `MAX_TEXT_LENGTH` 同口径防线）：
+/// Decision 请求输入上限（与 embed 的 `MAX_TEXT_LENGTH` 同源默认值防线）：
 /// prompt 构造按 questions×options 展开，无上限时 token 成本可被恶意放大。
 /// handler 落地时必须强制走 [`DecisionRequest::validate`]，
 /// 不得仅依赖 HTTP 层 body size limit。
 pub const MAX_QUESTIONS: usize = 32;
 pub const MAX_OPTIONS_PER_QUESTION: usize = 64;
-/// 单条 name/instructions/option 的字符长度上限（同 embed 文本口径）
+/// 单条 name/instructions/option 的字符长度上限（口径与 embed 校验一致，
+/// 按 `chars().count()` 计而非字节数；默认值同源 `constants::MAX_TEXT_LENGTH`）
 pub const MAX_DECISION_FIELD_LENGTH: usize = crate::utils::constants::MAX_TEXT_LENGTH;
 /// state JSON 序列化字节上限
 pub const MAX_STATE_BYTES: usize = 64 * 1024;
+/// prompt 展开总量预算（字节）：sum(name + instructions + options)。
+/// 单维度上限的合法乘积（32 问 × 64 选项 × 10K 字符）理论可达 ~20MB prompt，
+/// 该跨字段总量防线将其压至 128KB（数万 token 量级）。
+pub const MAX_TOTAL_PROMPT_BYTES: usize = 128 * 1024;
 
 /// 决策问题类型：choice（选项作答）/ score（分值分布）/ noul（真值概率）
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -47,6 +53,7 @@ pub struct DecisionQuestion {
 }
 
 impl FromStr for DecisionQuestion {
+    /// 红线同 [`DecisionRequest::from_str`]：handler 不得把 serde 错误原样透传客户端。
     type Err = serde_json::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         serde_json::from_str(s)
@@ -62,6 +69,9 @@ pub struct DecisionRequest {
 }
 
 impl FromStr for DecisionRequest {
+    /// # 红线（handler 落地时）
+    /// `Err = serde_json::Error` 携带内部结构名与字节偏移，handler 必须
+    /// 映射为通用 `VecboostError::validation_error` 文案，禁止原样透传客户端。
     type Err = serde_json::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         serde_json::from_str(s)
@@ -69,8 +79,11 @@ impl FromStr for DecisionRequest {
 }
 
 impl DecisionRequest {
-    /// 输入校验：数量/长度/字节上限 + qtype 与 options 的跨字段一致性
-    /// （serde 无法表达跨字段约束，必须显式代码）。失败以
+    /// 输入校验：数量/长度/字节上限 + qtype 与 options 的跨字段一致性 +
+    /// prompt 展开总量预算 + 控制字符拒绝（与 embed 校验同款防线，
+    /// `\t` `\n` `\r` 豁免）。state 为 JSON 结构化数据豁免控制字符检查：
+    /// serde_json 本身拒绝裸控制字符，注入面与自由文本不同。
+    /// serde 无法表达跨字段约束，必须显式代码。失败以
     /// `ValidationError` 显式返回，禁止静默截断或忽略。
     pub fn validate(&self) -> Result<(), VecboostError> {
         if self.questions.is_empty() {
@@ -84,27 +97,61 @@ impl DecisionRequest {
                 self.questions.len()
             )));
         }
-        let state_bytes = serde_json::to_vec(&self.state).map_err(|e| {
-            VecboostError::validation_error(format!("state is not serializable: {e}"))
-        })?;
-        if state_bytes.len() > MAX_STATE_BYTES {
-            return Err(VecboostError::validation_error(format!(
-                "state too large: {} bytes > {MAX_STATE_BYTES}",
-                state_bytes.len()
-            )));
+        // 封顶计数序列化：命中 MAX_STATE_BYTES 即停，不完整展开 state
+        let mut counter = CappedWriter {
+            written: 0,
+            cap: MAX_STATE_BYTES,
+        };
+        if let Err(e) = serde_json::to_writer(&mut counter, &self.state) {
+            return Err(VecboostError::validation_error(
+                if counter.written > MAX_STATE_BYTES {
+                    format!("state too large: > {MAX_STATE_BYTES} bytes")
+                } else {
+                    format!("state is not serializable: {e}")
+                },
+            ));
         }
+        let mut total_prompt_bytes: usize = 0;
+        let mut seen_names = std::collections::HashSet::new();
         for q in &self.questions {
-            if q.name.len() > MAX_DECISION_FIELD_LENGTH {
+            // answer 按 question 名回显：空/空白 name 使消费方无法对应问题，
+            // 重复 name 使按名索引有歧义（协议按 questions 数组下标对应，
+            // name 仅作诊断与路由提示）
+            if q.name.trim().is_empty() {
+                return Err(VecboostError::validation_error(
+                    "question name must not be empty or blank".to_string(),
+                ));
+            }
+            let name_chars = q.name.chars().count();
+            if name_chars > MAX_DECISION_FIELD_LENGTH {
                 return Err(VecboostError::validation_error(format!(
-                    "question name too long: {} chars > {MAX_DECISION_FIELD_LENGTH}",
-                    q.name.len()
+                    "question name too long: {name_chars} chars > {MAX_DECISION_FIELD_LENGTH}"
                 )));
             }
-            if q.instructions.len() > MAX_DECISION_FIELD_LENGTH {
+            if has_disallowed_control_chars(&q.name) {
                 return Err(VecboostError::validation_error(format!(
-                    "question {} instructions too long: {} chars > {MAX_DECISION_FIELD_LENGTH}",
-                    q.name,
-                    q.instructions.len()
+                    "question {} name contains control characters",
+                    q.name
+                )));
+            }
+            if !seen_names.insert(q.name.clone()) {
+                return Err(VecboostError::validation_error(format!(
+                    "duplicate question name: {}",
+                    q.name
+                )));
+            }
+            let instructions_chars = q.instructions.chars().count();
+            if instructions_chars > MAX_DECISION_FIELD_LENGTH {
+                return Err(VecboostError::validation_error(format!(
+                    "question {} instructions too long: {instructions_chars} chars > \
+                     {MAX_DECISION_FIELD_LENGTH}",
+                    q.name
+                )));
+            }
+            if has_disallowed_control_chars(&q.instructions) {
+                return Err(VecboostError::validation_error(format!(
+                    "question {} instructions contain control characters",
+                    q.name
                 )));
             }
             match q.qtype {
@@ -129,18 +176,57 @@ impl DecisionRequest {
                     q.options.len()
                 )));
             }
-            if let Some(oversized) = q
-                .options
-                .iter()
-                .find(|o| o.len() > MAX_DECISION_FIELD_LENGTH)
-            {
+            for option in &q.options {
+                let option_chars = option.chars().count();
+                if option_chars > MAX_DECISION_FIELD_LENGTH {
+                    return Err(VecboostError::validation_error(format!(
+                        "question {} has an option too long: {option_chars} chars > \
+                         {MAX_DECISION_FIELD_LENGTH}",
+                        q.name
+                    )));
+                }
+                if has_disallowed_control_chars(option) {
+                    return Err(VecboostError::validation_error(format!(
+                        "question {} has an option containing control characters",
+                        q.name
+                    )));
+                }
+            }
+            // prompt 展开总量（字节）：单维度合法的乘积在此被跨字段预算截停
+            total_prompt_bytes += q.name.len()
+                + q.instructions.len()
+                + q.options.iter().map(String::len).sum::<usize>();
+            if total_prompt_bytes > MAX_TOTAL_PROMPT_BYTES {
                 return Err(VecboostError::validation_error(format!(
-                    "question {} has an option too long: {} chars > {MAX_DECISION_FIELD_LENGTH}",
-                    q.name,
-                    oversized.len()
+                    "total prompt budget exceeded: {total_prompt_bytes} bytes > \
+                     {MAX_TOTAL_PROMPT_BYTES}"
                 )));
             }
         }
+        Ok(())
+    }
+}
+
+/// 封顶计数 writer：累计字节数超过 cap 即返回错误，
+/// 使 state 大小校验在命中上限时停止而非完整序列化（评审 R10）
+struct CappedWriter {
+    written: usize,
+    cap: usize,
+}
+
+impl std::io::Write for CappedWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.written = self.written.saturating_add(buf.len());
+        if self.written > self.cap {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "state exceeds budget",
+            ));
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
@@ -325,6 +411,103 @@ mod tests {
         let mut req = valid_request();
         req.state = serde_json::json!({ "blob": "x".repeat(MAX_STATE_BYTES + 1) });
         assert!(req.validate().is_err(), "state 超字节上限必须拒绝");
+    }
+
+    #[test]
+    fn test_validate_rejects_total_prompt_over_budget() {
+        // 乘积防线（评审 R1）：每个问题单独看均合法（noul 无 options、
+        // instructions 远小于单字段上限），但 questions×字段总量超预算必须拒绝
+        let mut req = valid_request();
+        req.questions.clear();
+        for i in 0..MAX_QUESTIONS {
+            req.questions.push(DecisionQuestion {
+                name: format!("q{i}"),
+                qtype: QuestionType::Noul,
+                instructions: "x".repeat(5000),
+                options: vec![],
+            });
+        }
+        let err = req.validate().unwrap_err();
+        assert!(
+            err.error_detail().contains("total"),
+            "总量超预算错误必须标明 total，err={}",
+            err.error_detail()
+        );
+    }
+
+    #[test]
+    fn test_validate_at_total_budget_boundary_passes() {
+        // 32 问 × 4000 字节 instructions（每问均低于单字段上限），
+        // 总量 ~128KB 恰在预算内应通过；与超预算测试构成边界两侧
+        let mut req = valid_request();
+        req.questions.clear();
+        for i in 0..MAX_QUESTIONS {
+            req.questions.push(DecisionQuestion {
+                name: format!("q{i}"),
+                qtype: QuestionType::Noul,
+                instructions: "x".repeat(4000),
+                options: vec![],
+            });
+        }
+        req.validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_char_count_not_bytes() {
+        // 口径与 embed 校验一致按字符数计（评审 R2/R8）：多字节字符
+        // 不因字节数提前触发上限（10000 个 3 字节字符 = 30000 字节）
+        let mut req = valid_request();
+        req.questions[0].instructions = "水".repeat(MAX_DECISION_FIELD_LENGTH);
+        req.validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_rejects_control_chars() {
+        // 与 embed 侧 validate_text_content 同款防线（评审 R3）：
+        // NUL/C0 拒绝，\t \n \r 豁免
+        let mut req = valid_request();
+        req.questions[0].name.push('\u{0}');
+        assert!(req.validate().is_err(), "name 含 NUL 必须拒绝");
+
+        let mut req = valid_request();
+        req.questions[0].instructions.push('\u{1}');
+        assert!(req.validate().is_err(), "instructions 含 C0 必须拒绝");
+
+        let mut req = valid_request();
+        req.questions[0].options[0].push('\u{0}');
+        assert!(req.validate().is_err(), "options 含 NUL 必须拒绝");
+    }
+
+    #[test]
+    fn test_validate_allows_tab_newline_carriage_return() {
+        let mut req = valid_request();
+        req.questions[0].instructions = "line1\nline2\ttabbed\rend".to_string();
+        req.validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_rejects_blank_name() {
+        // answer 按 question 名回显，空/纯空白 name 使消费方无法对应问题（评审 R9）
+        let mut req = valid_request();
+        req.questions[0].name = "   ".to_string();
+        assert!(req.validate().is_err(), "纯空白 name 必须拒绝");
+
+        let mut req = valid_request();
+        req.questions[0].name = String::new();
+        assert!(req.validate().is_err(), "空 name 必须拒绝");
+    }
+
+    #[test]
+    fn test_validate_rejects_duplicate_names() {
+        // 重复 name 产生两个同名 answer，按名索引有歧义（评审 R9）
+        let mut req = valid_request();
+        req.questions.push(choice_question());
+        let err = req.validate().unwrap_err();
+        assert!(
+            err.error_detail().contains("destination"),
+            "重复 name 错误必须携带问题名，err={}",
+            err.error_detail()
+        );
     }
 
     #[test]

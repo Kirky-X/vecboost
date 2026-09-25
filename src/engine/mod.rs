@@ -82,9 +82,14 @@ pub trait InferenceEngine: Send + Sync {
     ///
     /// 默认返回 `UnsupportedTask`——当前无引擎覆盖此方法，调用方按
     /// 4xx 语义引导客户端换模型/换端点。
+    ///
+    /// # 调用方约束
+    /// 实现方为阻塞推理（与 `embed`/`embed_batch` 同约，服务层以
+    /// `block_in_place` 包裹）：async 上下文调用必须经 `block_in_place`/
+    /// `spawn_blocking` 包裹，禁止直调阻塞 tokio worker 线程。
     fn decide(&self, _req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
         Err(VecboostError::unsupported_task(
-            "当前引擎未实现决策推理".to_string(),
+            "decision inference not implemented by this engine".to_string(),
         ))
     }
 

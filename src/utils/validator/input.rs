@@ -146,12 +146,8 @@ impl InputValidator {
             )));
         }
 
-        // 控制字符拒绝（T010）：NUL/C0 可用于注入或触发下游 tokenizer 异常；
-        // \t \n \r 属正常文本格式化字符豁免
-        if text
-            .chars()
-            .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
-        {
+        // 控制字符拒绝（T010）：NUL/C0 可用于注入或触发下游 tokenizer 异常
+        if has_disallowed_control_chars(text) {
             return Err(VecboostError::InvalidInput(i18n::tr(
                 "validate-text-control-chars",
             )));
@@ -159,6 +155,15 @@ impl InputValidator {
 
         Ok(())
     }
+}
+
+/// 控制字符检查：NUL/C0 可用于注入或触发下游 tokenizer 异常；
+/// `\t` `\n` `\r` 属正常文本格式化字符豁免。
+/// embed（`validate_text_content`）与 decision（`domain::decision`）共用同一规则，
+/// 禁止各处复制实现导致豁免集漂移。
+pub fn has_disallowed_control_chars(text: &str) -> bool {
+    text.chars()
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
 }
 
 impl TextValidator for InputValidator {

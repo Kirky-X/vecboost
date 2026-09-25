@@ -347,11 +347,29 @@ fn test_to_api_error_model_load_error() {
     }
 }
 
+/// 队列满/过载背压 → 503 + Retry-After=60（回归钉：曾因超时映射误删分支致 500）。
+#[cfg(any(feature = "http", feature = "cli"))]
+#[test]
+fn test_to_api_error_rate_limit_exceeded_is_503() {
+    let err = VecboostError::RateLimitExceeded("queue full".to_string());
+    match to_api_error(err) {
+        ApiError::ServiceUnavailable {
+            service,
+            retry_after,
+            ..
+        } => {
+            assert_eq!(service, "queue full");
+            assert_eq!(retry_after, Some(60));
+        }
+        other => panic!("Expected ServiceUnavailable, got {:?}", other),
+    }
+}
+
 #[cfg(any(feature = "http", feature = "cli"))]
 #[test]
 fn test_to_api_error_other_variants_become_internal() {
     // Note: ValidationError → InvalidInput, ModelLoadError → NotFound,
-    // RateLimitExceeded → ServiceUnavailable (tested separately)
+    // RateLimitExceeded → ServiceUnavailable（test_to_api_error_rate_limit_exceeded_is_503）
     let variants = vec![
         VecboostError::ConfigError("cfg err".to_string()),
         VecboostError::InferenceError("inf err".to_string()),

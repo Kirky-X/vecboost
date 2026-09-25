@@ -235,7 +235,9 @@ impl IntoResponse for VecboostError {
             VecboostError::SecurityError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             VecboostError::IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             VecboostError::ValidationError(_) => StatusCode::BAD_REQUEST,
-            VecboostError::RateLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
+            // 队列满/过载背压与 to_api_error 同口径：503（非 429——
+            // 429 归 auth 限流中间件；同一错误双映射已统一）
+            VecboostError::RateLimitExceeded(_) => StatusCode::SERVICE_UNAVAILABLE,
             VecboostError::RequestTimeout(_) => StatusCode::GATEWAY_TIMEOUT,
             VecboostError::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             VecboostError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -427,7 +429,8 @@ mod tests {
     fn test_into_response_rate_limit_exceeded() {
         let err = VecboostError::RateLimitExceeded("test".to_string());
         let response = err.into_response();
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        // 与 to_api_error 一致：队列满/过载 → 503（429 属 auth 限流中间件）
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[cfg(feature = "http")]

@@ -314,8 +314,8 @@ mod tests {
         assert_eq!(ModelTask::Decision.to_string(), "decision");
         assert_eq!(ModelTask::as_str(&ModelTask::Decision), "decision");
         assert_eq!(ModelTask::default(), ModelTask::Embedding);
-        let cloned = ModelTask::Decision.clone();
-        assert_eq!(cloned, ModelTask::Decision);
+        let copied = ModelTask::Decision;
+        assert_eq!(copied, ModelTask::Decision);
         assert_ne!(ModelTask::Embedding, ModelTask::Decision);
         // Copy：supports_task(task) 以值传参，config 借用持有的场景不得被迫 clone
         fn assert_copy<T: Copy>() {}

@@ -1028,11 +1028,11 @@ mod tests {
                 &self,
                 config: &ModelConfig,
             ) -> Result<Arc<dyn LoadedModel>, VecboostError> {
-                self.tasks.lock().unwrap().push(config.task.clone());
+                self.tasks.lock().unwrap().push(config.task);
                 Ok(Arc::new(CandleModel {
                     path: config.model_path.clone(),
                     name: config.name.clone(),
-                    task: config.task.clone(),
+                    task: config.task,
                 }))
             }
 

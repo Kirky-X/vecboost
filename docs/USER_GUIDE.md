@@ -390,7 +390,7 @@ batch_wait_ms = 5
 max_batch_size = 8
 
 [semantic_cache]      # 向量输出量化比较
-comparison_mode = "exact"   # exact | i8 | binary
+comparison_mode = "exact"   # exact | i8 | binary（已废弃：仅校验合法性，不生效）
 ```
 
 ---

@@ -302,8 +302,8 @@ pub struct SemanticCacheConfig {
     pub similarity_threshold: f32,
     /// 语义索引最大条目数
     pub capacity: usize,
-    /// 向量比较模式：exact（默认）| i8 | binary；
-    /// i8/binary 用 vquant 粗筛 + 原始向量复验，仅内部比较路径。
+    /// 向量比较模式：exact（默认）| i8 | binary。
+    /// **已废弃**：解析保留兼容（非法值启动报错），当前版本不生效（恒为 exact）。
     #[serde(default = "default_comparison_mode")]
     pub comparison_mode: String,
     /// trigram 模糊命中阈值（与 similarity_threshold 语义无关；

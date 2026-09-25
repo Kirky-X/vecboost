@@ -353,11 +353,18 @@ async fn init_engine_and_services(
     // server 模式注入语义缓存（[semantic_cache] enabled=true 时；
     // 默认 false 行为不变）。comparison_mode 非法值启动报错，不静默回退。
     let service = if config.semantic_cache.enabled {
+        // comparison_mode 仅校验合法性（非法值启动报错）；取值本身已废弃不消费。
         let mode: vecboost::ComparisonMode = config
             .semantic_cache
             .comparison_mode
             .parse()
             .map_err(|e: String| anyhow::anyhow!("[semantic_cache] comparison_mode 无效: {e}"))?;
+        if mode != vecboost::ComparisonMode::Exact {
+            log::warn!(
+                "[semantic_cache] comparison_mode={:?} 已废弃，当前版本不生效（恒为 exact）",
+                mode
+            );
+        }
         log::info!(
             "semantic cache enabled: threshold={} fuzzy_threshold={} capacity={}",
             config.semantic_cache.similarity_threshold,

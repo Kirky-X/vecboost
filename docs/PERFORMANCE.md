@@ -141,7 +141,7 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 | `--features mkl` / `--features accelerate` | 构建 | 关（opt-in） | 不启用 = candle 默认内核。mkl 经 `hgemm_` 垫片已可链接（见吞吐基线节），本机需 `RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"`；accelerate 仅 macOS 未验证 | `benches/embed_throughput_bench.rs`（模型经 `VECBOOST_BENCH_MODEL`） |
 | `[embedding] persist_path` | 配置 | None | 未设 = 纯内存，零写盘 | `cache::oxcache_backend` WAL 测试 |
 | `[embedding] persist_max_bytes` | 配置 | None → 1 GiB | 超限触发启动紧凑化 | 同上 |
-| `[semantic_cache] comparison_mode` | 配置 | exact | `exact` = 原始向量比较（现状）；`i8`/`binary` = vquant 粗筛+精确复验 | `cache::semantic_cache` 测试 |
+| `[semantic_cache] comparison_mode` | 配置（已废弃） | exact | **已废弃不生效**：解析保留兼容（非法值启动报错），恒为 exact | `cache::semantic_cache` 测试 |
 | `[model] max_resident_models` | 配置 | None | 未设 = 不限制驻留（现状） | `model::manager` LFRU 测试 |
 | `[model] resident_memory_budget_mb` | 配置 | None | 未设 = 不按内存预算驱逐 | 同上 |
 | `[device] auto_plan` | 配置 | false | false = 零计划行为；true 时计划仅填充未显式配置的字段 | `device::planner` 测试 |
@@ -189,7 +189,7 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 | 目标 | 建议 |
 |------|------|
 | 降低 P99 延迟 | 缩短 `[pipeline.worker] batch_wait_ms`（或 `0` 关闭时间窗）；确认物理核线程调优生效（不要设置 `VECBOOST_NO_THREAD_TUNE=1`） |
-| 提升吞吐 | 增大 `[pipeline.worker] max_batch_size` 与 `[model] batch_size`；启用批内去重；评估 `[semantic_cache] comparison_mode = i8` |
+| 提升吞吐 | 增大 `[pipeline.worker] max_batch_size` 与 `[model] batch_size`；启用批内去重 |
 | 降低内存/体积 | GGUF 量化（过质量门后）；`[model] max_resident_models` / `resident_memory_budget_mb` 限制驻留 |
 | 长期驻留缓存 | `[embedding] persist_path` 开启 WAL 落盘，配合 `persist_max_bytes` 控制紧凑化 |
 | 硬件不匹配 | `[device] auto_plan = true` 生成保守计划；GPU 部署先跑 `scripts/gpu-tuning.sh`；极端性能场景评估 `scripts/pgo-build.sh`（PGO 构建） |

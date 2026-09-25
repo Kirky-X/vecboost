@@ -209,6 +209,17 @@ pub trait InferenceEngine: Send + Sync {
     /// 检查引擎是否支持重排序（默认返回 true）
     fn supports_rerank(&self) -> bool { true }
 
+    /// 统计文本 token 数（默认 bytes/4 估算，真实引擎覆盖为 tokenizer 精确计数）
+    fn count_tokens(&self, text: &str) -> Result<usize, VecboostError> { ... }
+
+    /// 决策推理：对给定 state 回答一组 choice/score/noul 问题
+    /// （默认返回 UnsupportedTask——当前无引擎覆盖，调用方按 4xx 引导换模型/端点）
+    fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> { ... }
+
+    /// 引擎是否支持给定任务维度（默认仅 embedding；
+    /// rerank 是 embed 引擎的 trait 默认能力，不构成独立 task）
+    fn supports_task(&self, task: ModelTask) -> bool { ... }
+
     /// 尝试降级到 CPU（在 OOM 时调用）
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
 }

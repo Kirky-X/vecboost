@@ -396,7 +396,8 @@ impl ModelManager {
                 memory_limit_bytes: None,
                 oom_fallback_enabled: false,
                 model_sha256: None,
-                task: crate::config::model::ModelTask::Embedding,
+                // 从 LoadedModel 透传任务维度（连同上方字段一并自模型反推）
+                task: model.task(),
                 quantized: false,
             }
         };
@@ -525,6 +526,7 @@ mod tests {
             let model: Arc<dyn LoadedModel> = Arc::new(CandleModel {
                 path: config.model_path.clone(),
                 name: config.name.clone(),
+                task: config.task,
             });
 
             Ok(model)
@@ -542,6 +544,7 @@ mod tests {
     struct CandleModel {
         path: PathBuf,
         name: String,
+        task: crate::config::model::ModelTask,
     }
 
     impl LoadedModel for CandleModel {
@@ -555,6 +558,10 @@ mod tests {
 
         fn engine_type(&self) -> EngineType {
             EngineType::Candle
+        }
+
+        fn task(&self) -> crate::config::model::ModelTask {
+            self.task
         }
 
         fn reload(&self) -> Result<(), VecboostError> {
@@ -1003,6 +1010,76 @@ mod tests {
         assert!(reloaded.is_ok());
         assert_eq!(manager.count().await, 1);
         assert!(manager.is_loaded("reload-model").await);
+    }
+
+    /// reload 必须从 LoadedModel 透传 task：task=decision 的模型 reload 后
+    /// 不得被静默降级回 Embedding（评审 R5/R16）
+    #[tokio::test]
+    async fn test_reload_preserves_model_task() {
+        use std::sync::Mutex;
+
+        struct CapturingLoader {
+            tasks: Mutex<Vec<crate::config::model::ModelTask>>,
+        }
+
+        #[async_trait]
+        impl ModelLoader for CapturingLoader {
+            async fn load(
+                &self,
+                config: &ModelConfig,
+            ) -> Result<Arc<dyn LoadedModel>, VecboostError> {
+                self.tasks.lock().unwrap().push(config.task.clone());
+                Ok(Arc::new(CandleModel {
+                    path: config.model_path.clone(),
+                    name: config.name.clone(),
+                    task: config.task.clone(),
+                }))
+            }
+
+            async fn get_model_path(&self, config: &ModelConfig) -> Result<PathBuf, VecboostError> {
+                Ok(config.model_path.clone())
+            }
+
+            async fn is_model_cached(&self, _config: &ModelConfig) -> bool {
+                true
+            }
+        }
+
+        let cache_dir = tempdir().unwrap();
+        let model_path = cache_dir.path().join("decision-model");
+        create_test_model_file(&model_path);
+
+        let loader = Arc::new(CapturingLoader {
+            tasks: Mutex::new(Vec::new()),
+        });
+        let manager = ModelManager::with_loader(loader.clone());
+
+        let config = ModelConfig {
+            name: "decision-model".to_string(),
+            engine_type: EngineType::Candle,
+            model_path,
+            tokenizer_path: None,
+            device: crate::config::model::DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+            task: crate::config::model::ModelTask::Decision,
+            quantized: false,
+        };
+        manager.load(&config).await.unwrap();
+
+        manager.reload("decision-model").await.unwrap();
+
+        let tasks = loader.tasks.lock().unwrap();
+        assert_eq!(
+            tasks.last(),
+            Some(&crate::config::model::ModelTask::Decision),
+            "reload 后 load 收到的 task 必须仍是 Decision（透传），got {:?}",
+            *tasks
+        );
     }
 
     #[tokio::test]

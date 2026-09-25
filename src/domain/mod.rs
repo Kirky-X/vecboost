@@ -1,6 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod decision;
 pub mod openai_embedding;
 pub mod scheduling;
 
@@ -326,105 +327,15 @@ pub enum ServiceResponse {
     Rerank(RerankResponse),
 }
 
-// =============================================================================
-// Decision 领域类型
-// =============================================================================
-
-/// 决策问题类型（文档 §2.2 编码：choice=0 / score=1 / noul=2）
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[cfg_attr(feature = "schema", derive(ToSchema))]
-#[serde(rename_all = "lowercase")]
-pub enum QuestionType {
-    Choice,
-    Score,
-    Noul,
-}
-
-impl QuestionType {
-    /// 下游引擎/日志使用的稳定整数编码。
-    pub fn as_code(&self) -> i64 {
-        match self {
-            QuestionType::Choice => 0,
-            QuestionType::Score => 1,
-            QuestionType::Noul => 2,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[cfg_attr(feature = "schema", derive(ToSchema))]
-pub struct DecisionQuestion {
-    pub name: String,
-    pub qtype: QuestionType,
-    pub instructions: String,
-    /// choice 型必填选项集；score/noul 型可缺省（serde default 回落空 vec）
-    #[serde(default)]
-    pub options: Vec<String>,
-}
-
-impl FromStr for DecisionQuestion {
-    type Err = serde_json::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_json::from_str(s)
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[cfg_attr(feature = "schema", derive(ToSchema))]
-pub struct DecisionRequest {
-    /// 决策上下文（自由 JSON，由调用方与模型约定语义）
-    pub state: serde_json::Value,
-    pub questions: Vec<DecisionQuestion>,
-}
-
-impl FromStr for DecisionRequest {
-    type Err = serde_json::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_json::from_str(s)
-    }
-}
-
-/// 单个问题的答案体，按 qtype 三型。
-///
-/// serde 表示显式钉死为 internally tagged（`{"type":"choice",...}` 形态）——
-/// 默认 externally tagged 会产出 `{"Choice":{...}}`，破坏对外契约。
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "schema", derive(ToSchema))]
-#[serde(rename_all = "lowercase", tag = "type")]
-pub enum DecisionAnswerBody {
-    Choice {
-        index: usize,
-        option: String,
-        probabilities: std::collections::BTreeMap<String, f32>,
-    },
-    Score {
-        expected: f32,
-        distribution: std::collections::BTreeMap<String, f32>,
-    },
-    Noul {
-        p_true: f32,
-    },
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "schema", derive(ToSchema))]
-pub struct DecisionAnswer {
-    pub question: String,
-    pub answer: DecisionAnswerBody,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "schema", derive(ToSchema))]
-pub struct DecisionResponse {
-    pub answers: Vec<DecisionAnswer>,
-    pub processing_time_ms: u128,
-}
+pub use decision::{
+    DecisionAnswer, DecisionAnswerBody, DecisionQuestion, DecisionRequest, DecisionResponse,
+    QuestionType,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json;
-    use std::collections::BTreeMap;
 
     #[test]
     fn test_embed_request_from_str() {
@@ -732,110 +643,5 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("embedding"));
-    }
-
-    // -------------------------------------------------------------------------
-    // Decision 领域类型
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_decision_request_from_str() {
-        let req: DecisionRequest = r#"{
-            "state": {"topic": "vacation"},
-            "questions": [
-                {
-                    "name": "destination",
-                    "qtype": "choice",
-                    "instructions": "pick one",
-                    "options": ["beach", "mountain"]
-                },
-                {"name": "budget", "qtype": "score", "instructions": "rate 1-5"}
-            ]
-        }"#
-        .parse()
-        .unwrap();
-        assert_eq!(req.questions.len(), 2);
-        assert_eq!(req.questions[0].qtype, QuestionType::Choice);
-        assert_eq!(
-            req.questions[0].options,
-            vec!["beach".to_string(), "mountain".to_string()]
-        );
-        // options 缺省必须回落空 vec（score/noul 型无选项）
-        assert!(req.questions[1].options.is_empty());
-        assert_eq!(req.questions[1].qtype, QuestionType::Score);
-    }
-
-    #[test]
-    fn test_decision_question_from_str() {
-        let q: DecisionQuestion = r#"{
-            "name": "confidence",
-            "qtype": "noul",
-            "instructions": "state your p(true)"
-        }"#
-        .parse()
-        .unwrap();
-        assert_eq!(q.name, "confidence");
-        assert_eq!(q.qtype, QuestionType::Noul);
-        assert!(q.options.is_empty());
-    }
-
-    #[test]
-    fn test_question_type_as_code() {
-        // 文档 §2.2 编码：choice=0 / score=1 / noul=2
-        assert_eq!(QuestionType::Choice.as_code(), 0);
-        assert_eq!(QuestionType::Score.as_code(), 1);
-        assert_eq!(QuestionType::Noul.as_code(), 2);
-    }
-
-    #[test]
-    fn test_decision_answer_body_noul_wire_shape() {
-        let body = DecisionAnswerBody::Noul { p_true: 0.5 };
-        let v = serde_json::to_value(&body).unwrap();
-        assert_eq!(v["type"], "noul");
-        assert_eq!(v["p_true"], serde_json::json!(0.5));
-    }
-
-    #[test]
-    fn test_decision_answer_body_choice_wire_shape() {
-        let body = DecisionAnswerBody::Choice {
-            index: 1,
-            option: "mountain".to_string(),
-            probabilities: BTreeMap::from([
-                ("beach".to_string(), 0.25),
-                ("mountain".to_string(), 0.75),
-            ]),
-        };
-        let v = serde_json::to_value(&body).unwrap();
-        // internally tagged：tag 必须是 "type" 字段而非 externally tagged 形态
-        assert_eq!(v["type"], "choice");
-        assert_eq!(v["index"], 1);
-        assert_eq!(v["option"], "mountain");
-        assert_eq!(v["probabilities"]["mountain"], serde_json::json!(0.75));
-    }
-
-    #[test]
-    fn test_decision_answer_body_score_wire_shape() {
-        let body = DecisionAnswerBody::Score {
-            expected: 3.5,
-            distribution: BTreeMap::from([("3".to_string(), 0.5), ("4".to_string(), 0.5)]),
-        };
-        let v = serde_json::to_value(&body).unwrap();
-        assert_eq!(v["type"], "score");
-        assert_eq!(v["expected"], serde_json::json!(3.5));
-        assert_eq!(v["distribution"]["4"], serde_json::json!(0.5));
-    }
-
-    #[test]
-    fn test_decision_response_serialize() {
-        let resp = DecisionResponse {
-            answers: vec![DecisionAnswer {
-                question: "destination".to_string(),
-                answer: DecisionAnswerBody::Noul { p_true: 0.9 },
-            }],
-            processing_time_ms: 7,
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        assert!(json.contains("\"answers\""), "json={}", json);
-        assert!(json.contains("\"processing_time_ms\":7"), "json={}", json);
     }
 }

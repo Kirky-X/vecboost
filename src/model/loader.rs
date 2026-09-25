@@ -21,12 +21,18 @@ pub trait LoadedModel: Send + Sync {
     fn name(&self) -> &str;
     fn path(&self) -> &Path;
     fn engine_type(&self) -> EngineType;
+    /// 模型任务维度。reload 据此透传重建 ModelConfig，防止 task=decision 的
+    /// 模型被静默降级回 Embedding；默认 Embedding（既有实现语义不变）。
+    fn task(&self) -> crate::config::model::ModelTask {
+        crate::config::model::ModelTask::Embedding
+    }
     fn reload(&self) -> Result<(), VecboostError>;
 }
 
 struct CandleModel {
     path: PathBuf,
     name: String,
+    task: crate::config::model::ModelTask,
 }
 
 #[allow(
@@ -36,6 +42,7 @@ struct CandleModel {
 struct OnnxModel {
     path: PathBuf,
     name: String,
+    task: crate::config::model::ModelTask,
 }
 
 impl LoadedModel for CandleModel {
@@ -49,6 +56,10 @@ impl LoadedModel for CandleModel {
 
     fn engine_type(&self) -> EngineType {
         EngineType::Candle
+    }
+
+    fn task(&self) -> crate::config::model::ModelTask {
+        self.task
     }
 
     fn reload(&self) -> Result<(), VecboostError> {
@@ -75,6 +86,10 @@ impl LoadedModel for OnnxModel {
         {
             unreachable!()
         }
+    }
+
+    fn task(&self) -> crate::config::model::ModelTask {
+        self.task
     }
 
     fn reload(&self) -> Result<(), VecboostError> {
@@ -107,11 +122,13 @@ impl ModelLoader for LocalModelLoader {
             EngineType::Candle => Arc::new(CandleModel {
                 path: config.model_path.clone(),
                 name: config.name.clone(),
+                task: config.task,
             }),
             #[cfg(feature = "onnx")]
             EngineType::Onnx => Arc::new(OnnxModel {
                 path: config.model_path.clone(),
                 name: config.name.clone(),
+                task: config.task,
             }),
         };
 
@@ -185,6 +202,7 @@ mod tests {
         let model = CandleModel {
             path: path.clone(),
             name: "test-candle".to_string(),
+            task: crate::config::model::ModelTask::Embedding,
         };
 
         assert_eq!(model.name(), "test-candle");
@@ -197,6 +215,7 @@ mod tests {
         let model = OnnxModel {
             path: PathBuf::from("/test/onnx/path"),
             name: "onnx-no-gate".to_string(),
+            task: crate::config::model::ModelTask::Embedding,
         };
         assert_eq!(model.name(), "onnx-no-gate");
         assert_eq!(model.path(), Path::new("/test/onnx/path"));
@@ -210,6 +229,7 @@ mod tests {
         let model = OnnxModel {
             path: path.clone(),
             name: "test-onnx".to_string(),
+            task: crate::config::model::ModelTask::Embedding,
         };
 
         assert_eq!(model.name(), "test-onnx");
@@ -223,6 +243,7 @@ mod tests {
         let model = CandleModel {
             path,
             name: "test-candle".to_string(),
+            task: crate::config::model::ModelTask::Embedding,
         };
         assert!(model.reload().is_ok());
     }
@@ -234,6 +255,7 @@ mod tests {
         let model = OnnxModel {
             path,
             name: "test-onnx".to_string(),
+            task: crate::config::model::ModelTask::Embedding,
         };
         assert!(model.reload().is_ok());
     }
@@ -411,6 +433,7 @@ mod tests {
         let model = CandleModel {
             path,
             name: "reload-test".to_string(),
+            task: crate::config::model::ModelTask::Embedding,
         };
         assert!(model.reload().is_ok());
     }
@@ -422,6 +445,7 @@ mod tests {
         let model = OnnxModel {
             path,
             name: "onnx-reload-test".to_string(),
+            task: crate::config::model::ModelTask::Embedding,
         };
         assert!(model.reload().is_ok());
     }

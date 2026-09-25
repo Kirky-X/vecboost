@@ -92,6 +92,14 @@ pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
             field: None,
             value: None,
         },
+        // 与 IntoResponse 直返路径同口径 400：调用方可换模型/换端点的客户端
+        // 错误，禁止落入 other=>Internal 的 500 catch-all（口径统一先例：
+        // RateLimitExceeded，1e11e42）
+        VecboostError::UnsupportedTask(msg) => ApiError::InvalidInput {
+            message: msg,
+            field: None,
+            value: None,
+        },
         VecboostError::ModelLoadError(msg) => ApiError::NotFound {
             resource: "model".to_string(),
             resource_id: Some(msg),
@@ -1239,6 +1247,17 @@ mod tests {
             wire["details"]["context"]["extra"]["error_code"],
             "error-internal"
         );
+    }
+
+    /// UnsupportedTask 在 to_api_error 路径必须与 IntoResponse 直返路径同口径 400，
+    /// 禁止落入 other=>Internal 的 500 catch-all（口径统一先例：RateLimitExceeded）
+    #[test]
+    fn to_api_error_unsupported_task_maps_to_invalid_input() {
+        let api = to_api_error(VecboostError::unsupported_task("decision".into()));
+        let svc = api.to_service_error();
+        let wire = serde_json::to_value(&svc).unwrap();
+        assert_eq!(wire["code"], "INVALID_INPUT", "wire={}", wire);
+        assert_eq!(wire["http_status"], 400, "wire={}", wire);
     }
 
     /// OpenAI 错误槽位(type/code)可经 value 槽到达 wire

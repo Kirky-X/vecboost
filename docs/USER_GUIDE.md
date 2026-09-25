@@ -261,6 +261,11 @@ max_sequence_length = 8192  # 每请求最大令牌数
 | `expected_dimension` | `1024` | 嵌入向量维度 |
 | `max_sequence_length` | `8192` | 最大序列长度 |
 
+> **`task`（引擎级 ModelConfig 字段，默认 `embedding`）**：任务维度，可选
+> `embedding` / `decision`。decision 推理端点与配置面接线落地前，该字段暂
+> 不可达（引擎级构造硬编码 `embedding`，见任务组 G2+ 记录）；`#[serde(default)]`
+> 保证旧配置文件零破坏。
+
 ---
 
 #### 缓存与文本长度设置

@@ -112,13 +112,13 @@ pub(crate) fn state_text(state: &serde_json::Value) -> String {
 
 /// 单题预处理产物：input_ids 已含 [CLS]/[SEP]/[MASK] 手工拼接
 /// （encode(add_special_tokens=false)，特殊 token 由本管线自管）。
-/// attention_mask 逐位 1——padding 只发生在 [`collate_batch`]。
+/// attention_mask 恒为行前缀全 1（无行内 padding），由 [`collate_batch`]
+/// 直接生成，不落字段。
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct QuestionRow {
     pub input_ids: Vec<i64>,
     /// 每个选项 [MASK] 在 input_ids 中的位置（与 options/marker 顺序对齐）
     pub marker_pos: Vec<i64>,
-    pub attention_mask: Vec<i64>,
 }
 
 /// score/noul 固定 marker 的预编码 id（只依赖 tokenizer、请求间恒定）。
@@ -183,8 +183,10 @@ pub(crate) fn build_question_row(
     );
     let head_ids = encode_ids(tokenizer, &head_text)?;
 
-    // choice 的 marker 文本为请求侧 options（借用不深拷贝，现场编码）
-    let choice_marker_ids;
+    // choice 的 marker 文本为请求侧 options（借用不深拷贝，现场编码）；
+    // 逐 option 累积预算，超 head_max_len 即提前拒绝（超预算请求不白跑
+    // 剩余 option 的 tokenize，拒绝路径受 128KB validate 上界封顶）
+    let mut choice_marker_ids: Vec<Vec<i64>> = Vec::new();
     let marker_ids: Vec<&[i64]> = match question.qtype {
         QuestionType::Choice => {
             if question.options.is_empty() {
@@ -193,11 +195,18 @@ pub(crate) fn build_question_row(
                     echo(&question.name)
                 )));
             }
-            choice_marker_ids = question
-                .options
-                .iter()
-                .map(|opt| encode_ids(tokenizer, &format!(" {}", opt.as_str())))
-                .collect::<Result<Vec<_>, _>>()?;
+            let mut budget = head_ids.len();
+            for opt in &question.options {
+                let ids = encode_ids(tokenizer, &format!(" {}", opt.as_str()))?;
+                budget += 1 + ids.len();
+                if budget > head_max_len {
+                    return Err(VecboostError::invalid_input(format!(
+                        "question {} head+options exceeds head_max_len {head_max_len}",
+                        echo(&question.name)
+                    )));
+                }
+                choice_marker_ids.push(ids);
+            }
             choice_marker_ids.iter().map(|v| v.as_slice()).collect()
         }
         QuestionType::Score => fixed.score.iter().map(|v| v.as_slice()).collect(),
@@ -229,11 +238,9 @@ pub(crate) fn build_question_row(
     input_ids.push(sep_id);
     input_ids.extend_from_slice(state_ids);
     input_ids.push(sep_id);
-    let attention_mask = vec![1i64; input_ids.len()];
     Ok(QuestionRow {
         input_ids,
         marker_pos,
-        attention_mask,
     })
 }
 
@@ -284,8 +291,10 @@ pub(crate) fn collate_batch(
 
     for (b, row) in rows.iter().enumerate() {
         input_ids[b * seq_len..b * seq_len + row.input_ids.len()].copy_from_slice(&row.input_ids);
-        attention_mask[b * seq_len..b * seq_len + row.attention_mask.len()]
-            .copy_from_slice(&row.attention_mask);
+        // 行前缀全 1（无行内 padding）、pad 位 0——attention_mask 在此直接
+        // 生成，QuestionRow 不携带恒全 1 的冗余字段
+        let row_mask = &mut attention_mask[b * seq_len..b * seq_len + row.input_ids.len()];
+        row_mask.fill(1);
         for (n, &pos) in row.marker_pos.iter().enumerate() {
             marker_pos[b * max_markers + n] = pos;
             marker_mask[b * max_markers + n] = true;
@@ -430,20 +439,22 @@ impl TemperatureCalibration {
 
 /// choice 后处理：argmax + 完整概率表（选项名 → 校准后概率）。
 /// logits 长度必须与 options 一致，重复选项名显式拒绝（静默合并即丢概率）。
+/// 错误回显统一走公共 `echo`（64 字符截断+控制字符字面量化，防日志注入）
 pub(crate) fn choice_answer(
     question_name: &str,
     options: &[String],
     logits: &[f32],
     temperature: f32,
 ) -> Result<DecisionAnswer, VecboostError> {
+    let name = echo(question_name);
     if options.is_empty() {
         return Err(VecboostError::invalid_input(format!(
-            "choice question {question_name} requires at least one option"
+            "choice question {name} requires at least one option"
         )));
     }
     if options.len() != logits.len() {
         return Err(VecboostError::inference_error(format!(
-            "choice question {question_name}: got {} logits for {} options",
+            "choice question {name}: got {} logits for {} options",
             logits.len(),
             options.len()
         )));
@@ -452,8 +463,9 @@ pub(crate) fn choice_answer(
     for option in options {
         if !seen.insert(option.as_str()) {
             return Err(VecboostError::invalid_input(format!(
-                "choice question {question_name} has duplicate option {option:?}: \
-                 probability table keys would silently merge"
+                "choice question {name} has duplicate option {:?}: \
+                 probability table keys would silently merge",
+                echo(option)
             )));
         }
     }
@@ -512,8 +524,9 @@ pub(crate) fn noul_answer(
 ) -> Result<DecisionAnswer, VecboostError> {
     if logits.len() != NOUL_MARKERS {
         return Err(VecboostError::inference_error(format!(
-            "noul question {question_name}: expected exactly {NOUL_MARKERS} logits \
+            "noul question {}: expected exactly {NOUL_MARKERS} logits \
              ([false, true] marker order), got {}",
+            echo(question_name),
             logits.len()
         )));
     }
@@ -792,7 +805,16 @@ impl DecisionPipeline {
                         .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
                 ])
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-            outputs["logits"]
+            // get 而非 Index：Index 缺名时 panic（ort output.rs:189-192），
+            // 与全文件显性失败口径不符——缺名属 bundle 模型资产与协议不符，
+            // 显性报错并列出实际输出名清单
+            let logits_value = outputs.get("logits").ok_or_else(|| {
+                let names: Vec<&str> = outputs.iter().map(|(k, _)| k).collect();
+                VecboostError::InferenceError(format!(
+                    "decision model has no `logits` output; actual outputs: {names:?}"
+                ))
+            })?;
+            logits_value
                 .try_extract_array::<f32>()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?
                 .to_owned()
@@ -811,13 +833,23 @@ impl DecisionPipeline {
                 batch.batch_size, batch.max_markers
             )));
         }
+        let logits_2d = logits
+            .view()
+            .into_dimensionality::<ndarray::Ix2>()
+            .map_err(|e| VecboostError::InferenceError(format!("logits dims: {e}")))?;
 
         let mut answers = Vec::with_capacity(batch.batch_size);
         for (b, question) in req.questions.iter().enumerate() {
             let marker_count = rows[b].marker_pos.len();
-            let row_logits: Vec<f32> = (0..marker_count).map(|n| logits[[b, n]]).collect();
+            // [B,N] 行主序 C-contiguous：行前缀切片必连续，零分配借用；
+            // 非连续属数组构造异常，显性报错而非 panic
+            let row = logits_2d.row(b);
+            let row_view = row.slice(ndarray::s![..marker_count]);
+            let row_logits = row_view.to_slice().ok_or_else(|| {
+                VecboostError::InferenceError("logits row slice is not contiguous".to_string())
+            })?;
             let temperature = self.calibration.temperature_for(marker_count);
-            answers.push(answer_for_question(question, &row_logits, temperature)?);
+            answers.push(answer_for_question(question, row_logits, temperature)?);
         }
         let elapsed = started.elapsed();
         // 埋点：决策链路调用时延直方图（histogram _count 即调用计数）与
@@ -902,7 +934,10 @@ impl InferenceEngine for DecisionPipeline {
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
         *session_guard = session;
         drop(session_guard);
-        self.precision = Precision::Fp32;
+        // 与加载路径单一事实源：降级复用同一 bundle（可能为 quantized/int8 图），
+        // 标签按探测文件名映射，不得硬编码 Fp32 失真（onnx_engine 降级真下载
+        // Fp32 model.onnx，其硬编码在那边语义成立，此处不同）
+        self.precision = precision_for_model_file(&model_file);
         log::info!("Successfully fell back to CPU for decision pipeline");
         Ok(())
     }
@@ -1039,11 +1074,6 @@ mod tests {
         expected.push(sep_id);
 
         assert_eq!(row.input_ids, expected, "序列协议布局必须精确匹配");
-        assert_eq!(
-            row.attention_mask,
-            vec![1i64; expected.len()],
-            "行内 attention_mask 全 1（padding 只发生在 collate）"
-        );
         // marker_pos 指向两个 [MASK]
         assert_eq!(row.marker_pos.len(), 2);
         assert_eq!(row.marker_pos[0] as usize, 1 + head_ids.len() + 1);
@@ -1304,15 +1334,16 @@ mod tests {
 
         let mask_id = tok.token_to_id("[MASK]").expect("[MASK]") as i64;
         for (b, row) in rows.iter().enumerate() {
-            // 行前缀原样保留（input_ids/attention_mask 按行对位）
+            // 行前缀原样保留（input_ids 按行对位；attention_mask 行前缀全 1
+            // 由 collate 直接生成——QuestionRow 不携带恒全 1 冗余字段）
             assert_eq!(
                 &batch.input_ids[b * batch.seq_len..b * batch.seq_len + row.input_ids.len()],
                 &row.input_ids[..]
             );
             assert_eq!(
-                &batch.attention_mask
-                    [b * batch.seq_len..b * batch.seq_len + row.attention_mask.len()],
-                &row.attention_mask[..]
+                &batch.attention_mask[b * batch.seq_len..b * batch.seq_len + row.input_ids.len()],
+                &vec![1i64; row.input_ids.len()][..],
+                "attention_mask 行前缀必须全 1"
             );
             // 行尾 padding：pad id=0、mask=0
             for s in row.input_ids.len()..batch.seq_len {
@@ -1352,7 +1383,6 @@ mod tests {
         let row = QuestionRow {
             input_ids: vec![1, 2, 3],
             marker_pos: vec![2],
-            attention_mask: vec![1, 1, 1],
         };
         let err = collate_batch(std::slice::from_ref(&row), &[]).unwrap_err();
         assert!(
@@ -1608,6 +1638,28 @@ mod tests {
             matches!(err, VecboostError::InvalidInput(_)),
             "重复选项名必须显式拒绝，got {err:?}"
         );
+    }
+
+    #[test]
+    fn test_choice_answer_error_echo_is_sanitized() {
+        // 测试钉：重复选项错误的 name/option 回显必须经公共 echo——
+        // 换行字面量化（单行化，防日志注入）+ 超长原文截断。
+        // domain validate 现已前置拒绝重复 option（defense in depth：
+        // 引擎层防御臂直调可达，回显同样不得裸内插）
+        let long_evil = format!("evil\n{}\tsame", "x".repeat(200));
+        let options = vec![long_evil.clone(), long_evil];
+        let err = choice_answer("q", &options, &[1.0, 2.0], 1.0).unwrap_err();
+        let detail = err.error_detail();
+        assert!(
+            !detail.contains('\n') && !detail.contains('\t'),
+            "回显必须单行化（\\n\\t 字面量化），detail={detail:?}"
+        );
+        assert!(
+            detail.len() < 300,
+            "name/option 原文（200+ 字符）必须被截断，len={}",
+            detail.len()
+        );
+        assert!(detail.contains("duplicate option"));
     }
 
     #[test]

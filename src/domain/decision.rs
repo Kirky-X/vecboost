@@ -198,6 +198,7 @@ impl DecisionRequest {
                 )));
             }
             let mut options_bytes: usize = 0;
+            let mut seen_options = std::collections::HashSet::new();
             for option in &q.options {
                 // 与 name 同口径：option 按字符串匹配消费，空/纯空白 option
                 // 使匹配结果有歧义（answer 的 index 权威，但空白串本身无意义）
@@ -218,6 +219,15 @@ impl DecisionRequest {
                 if has_disallowed_control_chars(option) {
                     return Err(VecboostError::validation_error(format!(
                         "question at index {question_index} has an option containing control characters"
+                    )));
+                }
+                // 重复 option 使概率表键合并/索引匹配歧义——校验层显性拒绝，
+                // 避免合法请求白跑一次推理后才在引擎层被拒
+                if !seen_options.insert(option.as_str()) {
+                    return Err(VecboostError::validation_error(format!(
+                        "question {} has duplicate option {}",
+                        echo(&q.name),
+                        echo(option)
                     )));
                 }
                 options_bytes += option.len();
@@ -629,6 +639,41 @@ mod tests {
             detail
         );
         assert!(!detail.contains("ab_cd"), "原文不得出现在 detail");
+    }
+
+    #[test]
+    fn test_validate_rejects_duplicate_options() {
+        // 重复 option 使概率表键合并/索引匹配歧义：校验层前置拒绝（引擎层
+        // choice_answer 保留防御性查重），错误在推理前显性返回
+        let mut req = valid_request();
+        req.questions[0].options[1] = "beach".to_string();
+        let err = req.validate().unwrap_err();
+        let detail = err.error_detail();
+        assert!(
+            detail.contains("duplicate option"),
+            "重复 option 必须显性拒绝，err={detail}"
+        );
+        assert!(
+            detail.contains("destination"),
+            "错误必须携带问题名定位，err={detail}"
+        );
+    }
+
+    #[test]
+    fn test_validate_duplicate_option_error_echo_single_line() {
+        // 重复 option 错误回显必须单行化+截断（echo 防线），换行 option
+        // 不得把伪造日志行带入 detail
+        let mut req = valid_request();
+        req.questions[0].options[0] = "evil\nFAKE LOG LINE".repeat(20);
+        req.questions[0].options[1] = "evil\nFAKE LOG LINE".repeat(20);
+        let err = req.validate().unwrap_err();
+        let detail = err.error_detail();
+        assert!(!detail.contains('\n'), "回显必须单行化，detail={detail:?}");
+        assert!(
+            detail.len() < 300,
+            "重复 option 原文（40×17 字符）必须被 echo 截断，len={}",
+            detail.len()
+        );
     }
 
     #[test]

@@ -39,6 +39,10 @@
 
 ### 新增
 
+- **Laya 决策管线（G2）**:`src/engine/decision.rs`——`[CLS] head [SEP] [MASK] option… [SEP] state [SEP]` 预处理（marker_pos/qtype 编码、head+options 192 token 预算前置校验、state 256 token 截断）、5 张量 ONNX 推理（input_ids/attention_mask/marker_pos/marker_mask bool/qtype）、per-cardinality 温度校准（`laya_config.json`，加载即钳制 [0.5,5]，缺桶回退 1.2，缺失 warn 不静默）、choice/score/noul 三型后处理（argmax+完整概率表 / 期望等级 Σi·p_i+分布 / P(true)）
+- **factory task 分派臂**:`EngineFactory::create` 对 `task=decision` 一律路由决策管线（`AnyEngine::Decision` 生产构造点，embed/rerank 端点对决策模型以 UnsupportedTask 400 显性拒绝）
+- **决策指标**:`vecboost_decision_seconds`(决策链路逐请求总时延直方图，`_count` 即调用计数);决策管线 take_stage_snapshot 恒 None（Stage 三值豁免，观测走独立指标）
+- **laya_poc P0 数值对照 example**:`cargo run -p vecboost-examples --bin laya_poc --features onnx`——经 EngineFactory→AnyEngine→trait 全链调用，`LAYA_GOLDEN_JSON` 指向 Python onnxruntime 导出文件时逐值断言概率差 <1e-4，bundle 缺失打印下载指引后 SKIP
 - **推理正确性**:`PoolingMode::{Cls,Mean,Max,Auto}` 完整实现(Auto 按模型名推断),mean 为 attention-mask 加权平均;全平台统一 HuggingFace `tokenizers`,删除自研 WordPiece 与 250 词静默回退;vocab_size 从模型 config.json 推导;`/v1/embeddings` usage 为真实 token 计数(audit-remediation)
 - **Swagger UI**:`/api-docs/openapi.json` + `/swagger-ui/`(sdforge 动态生成 OpenAPI)(audit-remediation-gaps)
 - **真实就绪探测**:`/health?depth=full`(DB SELECT 1 + 引擎 dummy 推理 + 限流器健康)(audit-remediation-gaps)

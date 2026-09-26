@@ -263,10 +263,12 @@ max_sequence_length = 8192  # 每请求最大令牌数
 
 > **`task`（引擎级 ModelConfig 字段，默认 `embedding`）**：任务维度，可选
 > `embedding` / `decision`。`[model]` 段已支持 `task` 配置；非法值（如
-> `"rerank"`)在配置解析时显性报错。配置 `task = "decision"` 时因当前无引擎
-> 实现决策推理，服务在**启动期**显性报 `UnsupportedTask`（fail-fast，decision
-> 引擎与 `/v1/decisions` 端点落地后自动放行）。`#[serde(default)]` 保证旧
-> 配置文件零破坏。
+> `"rerank"`)在配置解析时显性报错。配置 `task = "decision"` 时经
+> `EngineFactory` 的 task 分派臂加载 Laya 决策管线（bundle 就绪时成功；
+> bundle 缺失/不完整时报 `ModelLoadError`）。决策模型上 `/embed` 等向量
+> 端点以 `UnsupportedTask`（400）显性拒绝。`#[serde(default)]` 保证旧
+> 配置文件零破坏。`/api/1/decisions` 决策端点属后续任务组，尚未落地
+> （引擎链路已就绪，可经 `examples/engine/laya_poc.rs` 全链验证）。
 
 > **⚠️ 键名拼写提示**: TOML 配置段**未知键名会被静默忽略**（TOML 解析未启用
 > `deny_unknown_fields`）。键名拼错（如 `task` 误写为 `tsak`）不会报错，
@@ -631,9 +633,10 @@ curl -X POST http://localhost:9002/api/1/model/switch \
 ```
 
 > **⚠️ 已知限制**: 切换请求暂不支持 `task` 字段，新模型**继承当前模型的
-> 任务维度**（防止 decision 模型被静默降级为 embedding）。当前任务维度恒
-> 为 `embedding`（`task = "decision"` 的模型在启动期即被拒绝加载）；decision
-> 引擎落地后将增补请求侧 `task` 字段。
+> 任务维度**（防止 decision 模型被静默降级为 embedding）。当前任务维度为
+> `embedding` 时行为不变；`task = "decision"` 的模型可正常加载决策管线
+> （bundle 缺失时报 `ModelLoadError`），决策引擎落地后将增补请求侧 `task`
+> 字段。
 
 ---
 

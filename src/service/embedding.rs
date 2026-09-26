@@ -4107,47 +4107,14 @@ mod tests {
         assert!(result.is_err(), "AnyEngine::new should fail");
     }
 
-    /// switch_model 的 UnsupportedTask 必须透传（to_api_error 400 口径），
-    /// 不得被 model-load-failed 包装成 NotFound/404（评审 R3 四轮）。
-    /// 真实模型权重缺失时 SKIP。
-    #[tokio::test]
-    async fn test_switch_model_unsupported_task_passthrough() {
-        let has_weights = ["model.safetensors", "pytorch_model.bin"].iter().any(|w| {
-            std::path::Path::new("models/BAAI-bge-small-en-v1.5")
-                .join(w)
-                .exists()
-        });
-        if !has_weights {
-            eprintln!("Skipping test: model weights not found at models/BAAI-bge-small-en-v1.5");
-            return;
-        }
-        let real_path = PathBuf::from("models/BAAI-bge-small-en-v1.5");
-        let mock_engine = TestEngine::new(384);
-        let mut model_config = make_model_config("decision-current", 384);
-        model_config.task = crate::config::model::ModelTask::Decision;
-        model_config.model_path = real_path.clone();
-        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
-            Arc::new(RwLock::new(mock_engine));
-        let mut service = EmbeddingService::new(engine, Some(model_config));
-
-        let req = ModelSwitchRequest {
-            model_name: "switched-model".to_string(),
-            model_path: Some(real_path),
-            tokenizer_path: None,
-            device: None,
-            max_batch_size: None,
-            pooling_mode: None,
-            expected_dimension: None,
-            memory_limit_bytes: None,
-            oom_fallback_enabled: None,
-        };
-        let err = service.switch_model(req).await.unwrap_err();
-        assert!(
-            matches!(err, VecboostError::UnsupportedTask(_)),
-            "UnsupportedTask 必须透传而非包装为 NotFound，got {:?}",
-            err
-        );
-    }
+    /// （原 test_switch_model_unsupported_task_passthrough 已删除：其构造场景
+    /// ——task=Decision + embedding 权重目录触发工厂 UnsupportedTask——已随
+    /// factory task 分派臂接线消失，task=Decision 现一律路由决策管线，加载期
+    /// 错误为 bundle 探测 ModelLoadError（正确口径），分派生效断言见
+    /// engine::factory::test_create_decision_task_dispatches_to_decision_pipeline。
+    /// switch_model 内的 UnsupportedTask 直传分支保留为防御性错误映射：
+    /// 未来工厂再产生 UnsupportedTask（新 task 变体）时仍走 to_api_error 400 臂
+    /// 而非误包装 404（评审 R3 四轮）。）
 
     #[tokio::test]
     async fn test_switch_model_preserves_previous_config_fields() {

@@ -31,6 +31,9 @@ pub struct PrometheusCollector {
     // 批处理大小
     batch_size: HistogramVec,
 
+    // 决策管线逐请求总时延
+    vecboost_decision_seconds: HistogramVec,
+
     // 时间窗拼批指标：批次大小与等待时长
     vecboost_batch_size: HistogramVec,
     vecboost_batch_wait_seconds: HistogramVec,
@@ -148,6 +151,17 @@ impl PrometheusCollector {
             registry.clone()
         )?;
 
+        // 决策管线逐请求总时延（预处理→推理→后处理整链；histogram _count
+        // 即调用计数。决策管线不映射 Stage 三值——该枚举语义属 embedding
+        // 分阶段，决策观测走本独立指标）
+        let vecboost_decision_seconds = register_histogram_vec_with_registry!(
+            "vecboost_decision_seconds",
+            "Decision pipeline end-to-end latency in seconds",
+            &["operation"],
+            vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0],
+            registry.clone()
+        )?;
+
         // 缓存命中
         let cache_hits = register_counter_vec_with_registry!(
             "cache_hits_total",
@@ -192,6 +206,7 @@ impl PrometheusCollector {
             vecboost_batch_wait_seconds,
             vecboost_inbatch_dedup_ratio,
             vecboost_stage_seconds,
+            vecboost_decision_seconds,
             semantic_cache_fuzzy_hits,
             vecboost_queue_wait_seconds,
             cache_hits,
@@ -241,6 +256,15 @@ impl PrometheusCollector {
         self.vecboost_batch_wait_seconds
             .with_label_values(&[operation])
             .observe(wait_secs);
+    }
+
+    /// 决策管线逐请求总时延观测（预处理→推理→后处理整链；
+    /// histogram `_count` 即调用计数。决策管线不映射 Stage 三值，
+    /// 观测走本独立指标）。
+    pub fn observe_decision_seconds(&self, secs: f64) {
+        self.vecboost_decision_seconds
+            .with_label_values(&["decision"])
+            .observe(secs);
     }
 
     /// 语义缓存 trigram 模糊命中计数（D26b 可观测性）。

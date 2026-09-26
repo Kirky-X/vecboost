@@ -114,7 +114,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("🔧 EngineFactory::create(Onnx, task=decision) ...");
-    let engine = EngineFactory::create(EngineType::Onnx, &config)?;
+    // 全链入口：EngineFactory（task 分派臂 → DecisionPipeline）→
+    // AnyEngine::Decision → trait decide。不得绕过工厂直构管线
+    // （decision mod 为 pub(crate)）——此形态同时把分派臂、Decision
+    // 变体与转发臂纳入在线闸门。失败时可诊断：区分 bundle 资产缺失
+    // 与 UnsupportedTask（构建未含决策管线）两类成因。
+    let engine = EngineFactory::create(EngineType::Onnx, &config).map_err(|e| {
+        format!(
+            "EngineFactory::create(task=decision) 失败：{e}\n\
+             排查：① bundle 是否含模型文件（model.onnx|model_quantized.onnx|\
+             laya.onnx|laya_int8.onnx）与 tokenizer.json（或 tokenizer/ 子目录）\n\
+             ② UnsupportedTask 则说明本次构建未含决策管线（需 onnx feature）"
+        )
+    })?;
 
     println!(
         "🧠 InferenceEngine::decide（{} 题）...",

@@ -245,7 +245,7 @@ pub enum AnyEngine {
     #[cfg(feature = "onnx")]
     Onnx(onnx_engine::OnnxEngine),
     /// 决策管线引擎（Laya 类 System-1 决策，task=decision）。
-    /// 构造接线由 factory 的 task 分派臂负责（G3）。
+    /// 构造点为 [`crate::engine::EngineFactory::create`] 的 task 分派臂。
     #[cfg(feature = "onnx")]
     // 管线类型 pub(crate)（不扩大 API 面）：外部经变体只能取得不可命名的
     // 具体类型，可用面以 pub trait `InferenceEngine` 为界（service/rerank.rs

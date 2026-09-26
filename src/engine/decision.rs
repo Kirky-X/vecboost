@@ -29,6 +29,7 @@ use crate::domain::{
     QuestionType,
 };
 use crate::error::VecboostError;
+use crate::utils::validator::input::echo;
 use ndarray::Array2;
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Tensor;
@@ -120,16 +121,54 @@ pub(crate) struct QuestionRow {
     pub attention_mask: Vec<i64>,
 }
 
+/// score/noul 固定 marker 的预编码 id（只依赖 tokenizer、请求间恒定）。
+/// 加载期编码一次，热路径每题零重复 encode（choice 的 marker 文本为请求侧
+/// options，请求相关，无法预编码）。
+#[derive(Debug, Clone)]
+pub(crate) struct FixedMarkers {
+    score: Vec<Vec<i64>>,
+    noul: Vec<Vec<i64>>,
+}
+
+impl FixedMarkers {
+    pub(crate) fn new(tokenizer: &Tokenizer) -> Result<Self, VecboostError> {
+        // score=等级索引文本；noul=固定 [false, true]（P0 待校准项）
+        let score = (0..SCORE_LEVELS)
+            .map(|i| encode_ids(tokenizer, &format!(" {i}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let noul = ["false", "true"]
+            .iter()
+            .map(|t| encode_ids(tokenizer, &format!(" {t}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { score, noul })
+    }
+
+    #[cfg(test)]
+    fn score_len(&self) -> usize {
+        self.score.len()
+    }
+
+    #[cfg(test)]
+    fn noul_len(&self) -> usize {
+        self.noul.len()
+    }
+}
+
 /// 单题序列构造（§4.2）：
 /// `[CLS] + head + [SEP]`，随后逐选项 `[MASK] + option_tokens`，
 /// 末尾 `[SEP] + state(截断) + [SEP]`。
 ///
+/// `state_ids` 由调用方对整个请求编码一次后传入（同一 state 的多题共享，
+/// 消除逐题重复 tokenize）；本函数内截断到 `state_max_tokens`（防御性，
+/// 未截断的调用方也安全）。
+///
 /// head + 全部 options（含各自 [MASK]）超过 `head_max_len` 时报
-/// `InvalidInput`（§2.1 风险前置校验）；state 截断到 `state_max_tokens`。
+/// `InvalidInput`（§2.1 风险前置校验）。
 pub(crate) fn build_question_row(
     tokenizer: &Tokenizer,
     question: &DecisionQuestion,
-    state: &str,
+    state_ids: &[i64],
+    fixed: &FixedMarkers,
     head_max_len: usize,
     state_max_tokens: usize,
 ) -> Result<QuestionRow, VecboostError> {
@@ -144,53 +183,51 @@ pub(crate) fn build_question_row(
     );
     let head_ids = encode_ids(tokenizer, &head_text)?;
 
-    // marker 数与 marker 前置文本由题型决定（P0 待校准项）：
-    // choice=请求侧 options 原文；score=固定等级索引文本；noul=固定 [false, true]
-    let marker_texts: Vec<String> = match question.qtype {
+    // choice 的 marker 文本为请求侧 options（借用不深拷贝，现场编码）
+    let choice_marker_ids;
+    let marker_ids: Vec<&[i64]> = match question.qtype {
         QuestionType::Choice => {
             if question.options.is_empty() {
                 return Err(VecboostError::invalid_input(format!(
                     "choice question {} requires at least one option",
-                    question.name
+                    echo(&question.name)
                 )));
             }
-            question.options.clone()
+            choice_marker_ids = question
+                .options
+                .iter()
+                .map(|opt| encode_ids(tokenizer, &format!(" {}", opt.as_str())))
+                .collect::<Result<Vec<_>, _>>()?;
+            choice_marker_ids.iter().map(|v| v.as_slice()).collect()
         }
-        QuestionType::Score => (0..SCORE_LEVELS).map(|i| i.to_string()).collect(),
-        QuestionType::Noul => vec!["false".to_string(), "true".to_string()],
+        QuestionType::Score => fixed.score.iter().map(|v| v.as_slice()).collect(),
+        QuestionType::Noul => fixed.noul.iter().map(|v| v.as_slice()).collect(),
     };
-    let option_ids: Vec<Vec<i64>> = marker_texts
-        .iter()
-        .map(|text| encode_ids(tokenizer, &format!(" {text}")))
-        .collect::<Result<Vec<_>, _>>()?;
 
-    let options_budget: usize = option_ids.iter().map(|ids| 1 + ids.len()).sum();
+    let options_budget: usize = marker_ids.iter().map(|ids| 1 + ids.len()).sum();
     let head_budget = head_ids.len() + options_budget;
     if head_budget > head_max_len {
         return Err(VecboostError::invalid_input(format!(
             "question {} head+options requires {head_budget} tokens > head_max_len {head_max_len}",
-            question.name
+            echo(&question.name)
         )));
     }
 
-    let state_ids: Vec<i64> = encode_ids(tokenizer, state)?
-        .into_iter()
-        .take(state_max_tokens)
-        .collect();
+    let state_ids = &state_ids[..state_ids.len().min(state_max_tokens)];
 
     let mut input_ids =
         Vec::with_capacity(1 + head_ids.len() + 1 + options_budget + 1 + state_ids.len() + 1);
-    let mut marker_pos = Vec::with_capacity(marker_texts.len());
+    let mut marker_pos = Vec::with_capacity(marker_ids.len());
     input_ids.push(cls_id);
     input_ids.extend_from_slice(&head_ids);
     input_ids.push(sep_id);
-    for ids in &option_ids {
+    for ids in &marker_ids {
         marker_pos.push(input_ids.len() as i64);
         input_ids.push(mask_id);
         input_ids.extend_from_slice(ids);
     }
     input_ids.push(sep_id);
-    input_ids.extend_from_slice(&state_ids);
+    input_ids.extend_from_slice(state_ids);
     input_ids.push(sep_id);
     let attention_mask = vec![1i64; input_ids.len()];
     Ok(QuestionRow {
@@ -507,6 +544,8 @@ pub(crate) struct DecisionPipeline {
     session: Arc<Mutex<Session>>,
     tokenizer: Tokenizer,
     calibration: TemperatureCalibration,
+    /// score/noul 固定 marker 的预编码 id（加载期一次，热路径复用）
+    fixed_markers: FixedMarkers,
     precision: Precision,
     /// 已探明的本地 bundle 目录（try_fallback_to_cpu 重建 CPU Session 用，
     /// 无网络依赖）
@@ -559,6 +598,21 @@ fn probe_tokenizer_file(
     )))
 }
 
+/// 探测命中的模型文件名 → 对外精度标签：`*_quantized`/`*_int8` 候选命中时
+/// 报 Int8，其余 Fp32（supports_mixed_precision 恒 false 已诚实，仅加载期
+/// 标签与探测结果一致，避免 quantized/int8 bundle 对外失真报 Fp32）
+fn precision_for_model_file(model_file: &Path) -> Precision {
+    let name = model_file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if name.contains("quantized") || name.contains("int8") {
+        Precision::Int8
+    } else {
+        Precision::Fp32
+    }
+}
+
 /// Session 构建：Level3 图优化 + intra threads + CUDA EP 分支
 /// （onnx_engine.rs:128-159 同模式）
 fn build_session(model_file: &Path, device: &DeviceType) -> Result<Session, VecboostError> {
@@ -606,9 +660,6 @@ impl DecisionPipeline {
     /// `tokenizer/tokenizer.json` 子目录探测（装配侧 `tokenizer_path: None`
     /// 不影响 fallback 链）；全 miss 报 `ModelLoadError` 含尝试路径清单。
     /// 校准表缺失 warn + 空表兜底；损坏报 `ModelFileCorrupted`。
-    // 生产调用点为 factory 的 task 分派臂（G3 接线）；接线前仅 bundle 守卫
-    // 测试调用，allow(dead_code) 使下游校准/探测链不按 dead 传播
-    #[allow(dead_code)]
     pub(crate) fn load(config: &ModelConfig) -> Result<Self, VecboostError> {
         let bundle_dir = config.model_path.clone();
         if !bundle_dir.is_dir() {
@@ -648,13 +699,16 @@ impl DecisionPipeline {
         })?;
         tokenizer.with_padding(None);
 
+        let fixed_markers = FixedMarkers::new(&tokenizer)?;
         let session = build_session(&model_file, &config.device)?;
         let calibration = TemperatureCalibration::from_bundle(&bundle_dir)?;
+        let precision = precision_for_model_file(&model_file);
 
         log::info!(
-            "Decision pipeline initialized: bundle={}, model={}, calibration_buckets={}",
+            "Decision pipeline initialized: bundle={}, model={:?}, precision={:?}, calibration_buckets={}",
             bundle_dir.display(),
-            model_file.display(),
+            model_file,
+            precision,
             calibration.temperatures.len()
         );
 
@@ -662,7 +716,8 @@ impl DecisionPipeline {
             session: Arc::new(Mutex::new(session)),
             tokenizer,
             calibration,
-            precision: Precision::Fp32,
+            fixed_markers,
+            precision,
             bundle_dir,
             fallback_triggered: false,
             fallback_lock: Arc::new(Mutex::new(())),
@@ -684,14 +739,18 @@ impl DecisionPipeline {
         // 管线自行调用（crate 内直调场景同样被输入防线覆盖）
         req.validate()?;
 
+        // 同一请求内 state 全题共享：只 encode 一次（32 题上界下消除 31 次
+        // 重复 tokenize），截断在 build_question_row 内防御性执行
         let state = state_text(&req.state);
+        let state_ids = encode_ids(&self.tokenizer, &state)?;
         let mut rows = Vec::with_capacity(req.questions.len());
         let mut qtype_codes = Vec::with_capacity(req.questions.len());
         for question in &req.questions {
             rows.push(build_question_row(
                 &self.tokenizer,
                 question,
-                &state,
+                &state_ids,
+                &self.fixed_markers,
                 HEAD_MAX_LEN,
                 STATE_MAX_TOKENS,
             )?);
@@ -740,29 +799,40 @@ impl DecisionPipeline {
         };
 
         let logits_shape = logits.shape().to_vec();
-        if logits.ndim() != 2 || logits_shape[0] != batch.batch_size {
+        // §2.2 dense gather 协议：logits 宽度恰为 [B, N]（N=batch 内最大
+        // marker 数）。等值校验一次到位——宽度异常偏大（如误导出的
+        // [B, seq_len] 图）在此显性报错，而非静默取前 N 个 logit 错答
+        if logits.ndim() != 2
+            || logits_shape[0] != batch.batch_size
+            || logits_shape[1] != batch.max_markers
+        {
             return Err(VecboostError::InferenceError(format!(
-                "unexpected logits shape {logits_shape:?}, expected [{}, N]",
-                batch.batch_size
+                "unexpected logits shape {logits_shape:?}, expected [{}, {}]",
+                batch.batch_size, batch.max_markers
             )));
         }
 
         let mut answers = Vec::with_capacity(batch.batch_size);
         for (b, question) in req.questions.iter().enumerate() {
             let marker_count = rows[b].marker_pos.len();
-            if logits_shape[1] < marker_count {
-                return Err(VecboostError::InferenceError(format!(
-                    "logits width {} < marker count {marker_count} for question {}",
-                    logits_shape[1], question.name
-                )));
-            }
             let row_logits: Vec<f32> = (0..marker_count).map(|n| logits[[b, n]]).collect();
             let temperature = self.calibration.temperature_for(marker_count);
             answers.push(answer_for_question(question, &row_logits, temperature)?);
         }
+        let elapsed = started.elapsed();
+        // 埋点：决策链路调用时延直方图（histogram _count 即调用计数）与
+        // 批大小。collector 未设置时零开销跳过。
+        // Stage 三值豁免口径：Stage 枚举固定 tokenize/inference/pool（指标
+        // 标签稳定性），语义属 embedding 管线分阶段；决策管线不强行映射，
+        // take_stage_snapshot 恒 None，观测走本处的独立 decision 指标
+        #[cfg(feature = "http")]
+        if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
+            collector.observe_decision_seconds(elapsed.as_secs_f64());
+            collector.record_batch_size("decision", req.questions.len() as f64);
+        }
         Ok(DecisionResponse {
             answers,
-            processing_time_ms: started.elapsed().as_millis(),
+            processing_time_ms: elapsed.as_millis(),
         })
     }
 }
@@ -892,6 +962,13 @@ mod tests {
         }
     }
 
+    /// 与生产 decision() 同口径的行输入：state 编码一次 + 加载期 FixedMarkers
+    fn row_inputs(tok: &Tokenizer, state: &str) -> (Vec<i64>, FixedMarkers) {
+        let state_ids = encode_ids(tok, state).expect("state ids");
+        let fixed = FixedMarkers::new(tok).expect("fixed markers");
+        (state_ids, fixed)
+    }
+
     // ── qtype 编码 ──
 
     #[test]
@@ -910,8 +987,9 @@ mod tests {
             return;
         };
         let q = choice_q();
-        let state = "billed twice";
-        let row = build_question_row(&tok, &q, state, HEAD_MAX_LEN, STATE_MAX_TOKENS).expect("row");
+        let (state_ids, fixed) = row_inputs(&tok, "billed twice");
+        let row = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+            .expect("row");
 
         let cls_id = tok.token_to_id("[CLS]").expect("[CLS] in vocab") as i64;
         let sep_id = tok.token_to_id("[SEP]").expect("[SEP] in vocab") as i64;
@@ -941,8 +1019,8 @@ mod tests {
             .iter()
             .map(|&i| i as i64)
             .collect();
-        let state_ids: Vec<i64> = tok
-            .encode(state, false)
+        let expected_state_ids: Vec<i64> = tok
+            .encode("billed twice", false)
             .expect("state encode")
             .get_ids()
             .iter()
@@ -957,7 +1035,7 @@ mod tests {
         expected.push(mask_id);
         expected.extend(&opt1_ids);
         expected.push(sep_id);
-        expected.extend(&state_ids);
+        expected.extend(&expected_state_ids);
         expected.push(sep_id);
 
         assert_eq!(row.input_ids, expected, "序列协议布局必须精确匹配");
@@ -987,21 +1065,16 @@ mod tests {
             return;
         };
         // state 字符串原样编码，不做 JSON 引号包装
+        let (state_ids, fixed) = row_inputs(&tok, "hello world");
         let row = build_question_row(
             &tok,
             &choice_q(),
-            "hello world",
+            &state_ids,
+            &fixed,
             HEAD_MAX_LEN,
             STATE_MAX_TOKENS,
         )
         .expect("row");
-        let state_ids: Vec<i64> = tok
-            .encode("hello world", false)
-            .expect("state")
-            .get_ids()
-            .iter()
-            .map(|&i| i as i64)
-            .collect();
         let tail =
             &row.input_ids[row.input_ids.len() - state_ids.len() - 1..row.input_ids.len() - 1];
         assert_eq!(tail, &state_ids[..], "字符串 state 必须原文进入序列尾部");
@@ -1019,15 +1092,16 @@ mod tests {
             !compact.contains(' '),
             "serde_json to_string 必须紧凑: {compact}"
         );
-        let row = build_question_row(&tok, &choice_q(), &compact, HEAD_MAX_LEN, STATE_MAX_TOKENS)
-            .expect("row");
-        let state_ids: Vec<i64> = tok
-            .encode(compact.as_str(), false)
-            .expect("state")
-            .get_ids()
-            .iter()
-            .map(|&i| i as i64)
-            .collect();
+        let (state_ids, fixed) = row_inputs(&tok, &compact);
+        let row = build_question_row(
+            &tok,
+            &choice_q(),
+            &state_ids,
+            &fixed,
+            HEAD_MAX_LEN,
+            STATE_MAX_TOKENS,
+        )
+        .expect("row");
         assert_eq!(
             &row.input_ids[row.input_ids.len() - state_ids.len() - 1..row.input_ids.len() - 1],
             &state_ids[..]
@@ -1044,8 +1118,9 @@ mod tests {
         // head（前缀 + instructions）自身已超预算
         let mut q = choice_q();
         q.instructions = "word ".repeat(200);
-        let err =
-            build_question_row(&tok, &q, "state", HEAD_MAX_LEN, STATE_MAX_TOKENS).unwrap_err();
+        let (state_ids, fixed) = row_inputs(&tok, "state");
+        let err = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+            .unwrap_err();
         assert!(
             matches!(err, VecboostError::InvalidInput(_)),
             "head 超预算必须 InvalidInput，got {err:?}"
@@ -1063,8 +1138,9 @@ mod tests {
         q.options = (0..40)
             .map(|i| format!("option number {i} with several tokens here"))
             .collect();
-        let err =
-            build_question_row(&tok, &q, "state", HEAD_MAX_LEN, STATE_MAX_TOKENS).unwrap_err();
+        let (state_ids, fixed) = row_inputs(&tok, "state");
+        let err = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+            .unwrap_err();
         assert!(
             matches!(err, VecboostError::InvalidInput(_)),
             "options 超预算必须 InvalidInput，got {err:?}"
@@ -1077,8 +1153,16 @@ mod tests {
             return;
         };
         // 恰好在预算内的短问题必须通过
-        build_question_row(&tok, &choice_q(), "state", HEAD_MAX_LEN, STATE_MAX_TOKENS)
-            .expect("合法问题必须通过预算检查");
+        let (state_ids, fixed) = row_inputs(&tok, "state");
+        build_question_row(
+            &tok,
+            &choice_q(),
+            &state_ids,
+            &fixed,
+            HEAD_MAX_LEN,
+            STATE_MAX_TOKENS,
+        )
+        .expect("合法问题必须通过预算检查");
     }
 
     #[test]
@@ -1086,16 +1170,40 @@ mod tests {
         let Some(tok) = mini_lm_tokenizer() else {
             return;
         };
-        let noul_row = build_question_row(&tok, &noul_q(), "state", HEAD_MAX_LEN, STATE_MAX_TOKENS)
-            .expect("noul row");
+        let (state_ids, fixed) = row_inputs(&tok, "state");
+        assert_eq!(
+            fixed.score_len(),
+            SCORE_LEVELS,
+            "加载期预编码 5 组 score marker"
+        );
+        assert_eq!(
+            fixed.noul_len(),
+            NOUL_MARKERS,
+            "加载期预编码 2 组 noul marker"
+        );
+        let noul_row = build_question_row(
+            &tok,
+            &noul_q(),
+            &state_ids,
+            &fixed,
+            HEAD_MAX_LEN,
+            STATE_MAX_TOKENS,
+        )
+        .expect("noul row");
         assert_eq!(
             noul_row.marker_pos.len(),
             NOUL_MARKERS,
             "noul 固定 [false, true] 两 marker"
         );
-        let score_row =
-            build_question_row(&tok, &score_q(), "state", HEAD_MAX_LEN, STATE_MAX_TOKENS)
-                .expect("score row");
+        let score_row = build_question_row(
+            &tok,
+            &score_q(),
+            &state_ids,
+            &fixed,
+            HEAD_MAX_LEN,
+            STATE_MAX_TOKENS,
+        )
+        .expect("score row");
         assert_eq!(
             score_row.marker_pos.len(),
             SCORE_LEVELS,
@@ -1112,15 +1220,13 @@ mod tests {
         };
         let long_state = "word ".repeat(600);
         let q = choice_q();
-        let row =
-            build_question_row(&tok, &q, &long_state, HEAD_MAX_LEN, STATE_MAX_TOKENS).expect("row");
-        let state_ids: Vec<i64> = tok
-            .encode(long_state.as_str(), false)
-            .expect("state")
-            .get_ids()
-            .iter()
-            .map(|&i| i as i64)
-            .collect();
+        let (state_ids, fixed) = row_inputs(&tok, &long_state);
+        assert!(
+            state_ids.len() > STATE_MAX_TOKENS,
+            "前置条件：原始 state 超长"
+        );
+        let row = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+            .expect("row");
         let head_len = tok
             .encode("choice question: pick one", false)
             .expect("head")
@@ -1136,10 +1242,6 @@ mod tests {
             row.input_ids.len(),
             expected_len,
             "state 必须截断到 {STATE_MAX_TOKENS} token"
-        );
-        assert!(
-            state_ids.len() > STATE_MAX_TOKENS,
-            "前置条件：原始 state 超长"
         );
         assert_eq!(
             &row.input_ids[expected_len - 1 - STATE_MAX_TOKENS..expected_len - 1],
@@ -1158,10 +1260,35 @@ mod tests {
         // 3 题混合：choice(3 opt) / noul(2) / score(5)——N = 5
         let mut choice3 = choice_q();
         choice3.options = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let (state_ids, fixed) = row_inputs(&tok, "state");
         let rows = [
-            build_question_row(&tok, &choice3, "state", HEAD_MAX_LEN, STATE_MAX_TOKENS).unwrap(),
-            build_question_row(&tok, &noul_q(), "state", HEAD_MAX_LEN, STATE_MAX_TOKENS).unwrap(),
-            build_question_row(&tok, &score_q(), "state", HEAD_MAX_LEN, STATE_MAX_TOKENS).unwrap(),
+            build_question_row(
+                &tok,
+                &choice3,
+                &state_ids,
+                &fixed,
+                HEAD_MAX_LEN,
+                STATE_MAX_TOKENS,
+            )
+            .unwrap(),
+            build_question_row(
+                &tok,
+                &noul_q(),
+                &state_ids,
+                &fixed,
+                HEAD_MAX_LEN,
+                STATE_MAX_TOKENS,
+            )
+            .unwrap(),
+            build_question_row(
+                &tok,
+                &score_q(),
+                &state_ids,
+                &fixed,
+                HEAD_MAX_LEN,
+                STATE_MAX_TOKENS,
+            )
+            .unwrap(),
         ];
         let batch = collate_batch(&rows, &[0, 2, 1]).expect("batch");
 
@@ -1681,6 +1808,68 @@ mod tests {
             task: crate::config::model::ModelTask::Decision,
             quantized: false,
         }
+    }
+
+    // ── 错误回显防线：引擎层回显必须走公共 echo（截断+字面量化）──
+
+    #[test]
+    fn test_error_echo_truncates_long_name() {
+        let Some(tok) = mini_lm_tokenizer() else {
+            return;
+        };
+        // name 超长（直调纯函数不过 domain validate）+ head 超预算触发回显：
+        // detail 必须被 64 字符截断，不得携带原文全文
+        let mut q = choice_q();
+        q.name = "n".repeat(500);
+        q.instructions = "word ".repeat(200);
+        let (state_ids, fixed) = row_inputs(&tok, "state");
+        let err = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+            .unwrap_err();
+        let detail = err.error_detail();
+        assert!(detail.len() < 200, "回显必须截断，len={}", detail.len());
+        assert!(
+            !detail.contains(&"n".repeat(100)),
+            "原文不得完整进入 detail"
+        );
+    }
+
+    #[test]
+    fn test_error_echo_literalizes_control_chars() {
+        let Some(tok) = mini_lm_tokenizer() else {
+            return;
+        };
+        // name 含换行：回显必须单行化（日志注入面），\n 字面量化为 \\n
+        let mut q = choice_q();
+        q.instructions = "word ".repeat(200);
+        q.name = "evil\nFAKE LOG LINE".to_string();
+        let (state_ids, fixed) = row_inputs(&tok, "state");
+        let err = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+            .unwrap_err();
+        let detail = err.error_detail();
+        assert!(!detail.contains('\n'), "回显必须单行化，detail={detail:?}");
+        assert!(detail.contains("\\n"), "换行应字面量化，detail={detail:?}");
+    }
+
+    // ── precision 标签与探测文件一致 ──
+
+    #[test]
+    fn test_precision_for_model_file_names() {
+        assert_eq!(
+            precision_for_model_file(Path::new("bundle/model.onnx")),
+            Precision::Fp32
+        );
+        assert_eq!(
+            precision_for_model_file(Path::new("bundle/laya.onnx")),
+            Precision::Fp32
+        );
+        assert_eq!(
+            precision_for_model_file(Path::new("bundle/model_quantized.onnx")),
+            Precision::Int8
+        );
+        assert_eq!(
+            precision_for_model_file(Path::new("bundle/laya_int8.onnx")),
+            Precision::Int8
+        );
     }
 
     #[test]

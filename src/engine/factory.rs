@@ -4,7 +4,7 @@
 //! 引擎工厂：根据 `EngineType` 创建对应的推理引擎实例
 
 use super::AnyEngine;
-use crate::config::model::{EngineType, ModelConfig, Precision};
+use crate::config::model::{EngineType, ModelConfig, ModelTask, Precision};
 use crate::error::VecboostError;
 use std::path::Path;
 
@@ -39,6 +39,27 @@ impl EngineFactory {
         engine_type: EngineType,
         config: &ModelConfig,
     ) -> Result<AnyEngine, VecboostError> {
+        // task 路由（主维度）：task=decision 一律走决策管线——Laya bundle
+        // 为 onnx 格式，`engine_type` 在该任务下不参与分派（模型运行框架
+        // 的 task-first 语义）。ensure_supports_task 因 DecisionPipeline
+        // 的 supports_task(Decision)=true 覆盖自动放行。
+        if config.task == ModelTask::Decision {
+            #[cfg(feature = "onnx")]
+            {
+                let engine = super::decision::DecisionPipeline::load(config)?;
+                let any = AnyEngine::Decision(engine);
+                ensure_supports_task(&any, config)?;
+                return Ok(any);
+            }
+            #[cfg(not(feature = "onnx"))]
+            {
+                return Err(VecboostError::ConfigError(
+                    "检测到 task=decision 模型配置，但本次构建未启用 `onnx` feature；\
+                     请以 `--features onnx` 重新构建"
+                        .to_string(),
+                ));
+            }
+        }
         // loader 路由：.gguf + quantized=true 走量化引擎
         // （加载期反量化桥），否则维持 safetensors 路径。
         if should_use_quantized_engine(&config.model_path, config.quantized) {
@@ -62,7 +83,7 @@ impl EngineFactory {
         let precision = Precision::Fp32;
         let engine = AnyEngine::new(config, engine_type, precision)?;
         // fail-fast（评审 R5）：配置任务维度超出引擎能力时创建即失败，
-        // 而非延迟到 decide 调用才以 4xx 暴露（decision 引擎落地后自动放行）
+        // 而非延迟到 decide 调用才以 4xx 暴露
         ensure_supports_task(&engine, config)?;
         Ok(engine)
     }
@@ -71,10 +92,10 @@ impl EngineFactory {
 /// fail-fast 校验：引擎不支持配置的任务维度时报 UnsupportedTask（显性失败，
 /// 禁止静默加载后由调用时 4xx 兜底）。
 ///
-/// 故意在 load 之后（而非 load 前按 config.task 静态短路）校验：当前所有
-/// 引擎的 `supports_task` 恰为与实例无关的静态判定（仅 embedding），load 前
-/// 短路可省一次误配置下的无效权重加载；但把它固化为工厂前置契约，会在
-/// decision 引擎按实例能力 override 判定后被误拒——故保留 load 后以实例作答。
+/// 故意在 load 之后（而非 load 前按 config.task 静态短路）校验：把它固化
+/// 为工厂前置契约，未来新增 task 变体时按实例能力作答不会被误拒。
+/// 当前 embedding 路径上 `supports_task` 恒真（task=Decision 已被分派臂
+/// 截走），本防线作为契约保留。
 fn ensure_supports_task(engine: &AnyEngine, config: &ModelConfig) -> Result<(), VecboostError> {
     use super::InferenceEngine;
     if !engine.supports_task(config.task) {
@@ -118,35 +139,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// fail-fast（评审 R5）：配置 task=decision 但引擎只支持 embedding 时，
-    /// 工厂创建即报 UnsupportedTask，而非延迟到 decide 调用才以 4xx 暴露。
-    /// 真实模型权重缺失时 SKIP（与 impl_.rs 同口径）。
-    #[test]
-    fn test_create_rejects_unsupported_task() {
-        let has_weights = ["model.safetensors", "pytorch_model.bin"].iter().any(|w| {
-            std::path::Path::new("models/BAAI-bge-small-en-v1.5")
-                .join(w)
-                .exists()
-        });
-        if !has_weights {
-            eprintln!("Skipping test: model weights not found at models/BAAI-bge-small-en-v1.5");
-            return;
-        }
-        let mut config = test_config();
-        config.model_path = PathBuf::from("models/BAAI-bge-small-en-v1.5");
-        config.task = crate::config::model::ModelTask::Decision;
-        let result = EngineFactory::create(EngineType::Candle, &config);
-        match result {
-            Err(VecboostError::UnsupportedTask(msg)) => {
-                assert!(
-                    msg.contains("decision"),
-                    "错误必须标明不支持的 task，msg={msg}"
-                );
-            }
-            other => panic!("expected Err(UnsupportedTask), got {:?}", other.err()),
-        }
-    }
-
     /// task=embedding（默认）的既有加载路径不受 fail-fast 校验影响
     #[test]
     fn test_create_accepts_embedding_task() {
@@ -166,6 +158,34 @@ mod tests {
         let engine = EngineFactory::create(EngineType::Candle, &config)
             .expect("embedding task must load unchanged");
         assert!(engine.supports_task(crate::config::model::ModelTask::Embedding));
+    }
+
+    /// task=decision 走决策管线分派臂：空 bundle 时报 ModelLoadError
+    /// （bundle 探测失败）而非 UnsupportedTask——证明分派到达
+    /// DecisionPipeline::load，而非落进 embedding 引擎的 fail-fast
+    /// （评审：AnyEngine::Decision 曾全库零构造点，全链在线闸门不可达）。
+    /// 探测失败发生在 Session 构建之前，本测试不触发 ort。engine_type
+    /// 取 Candle 亦走决策臂，钉住 task 主维度语义。
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_create_decision_task_dispatches_to_decision_pipeline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = test_config();
+        config.task = crate::config::model::ModelTask::Decision;
+        config.model_path = dir.path().to_path_buf();
+        let result = EngineFactory::create(EngineType::Candle, &config);
+        match result {
+            Err(VecboostError::ModelLoadError(msg)) => {
+                assert!(
+                    msg.contains("model.onnx"),
+                    "分派臂必须报 bundle 探测错误，msg={msg}"
+                );
+            }
+            Err(VecboostError::UnsupportedTask(msg)) => {
+                panic!("分派臂接线后 task=decision 不得落入 embedding 引擎 fail-fast：{msg}")
+            }
+            other => panic!("期望 ModelLoadError，got {:?}", other.err()),
+        }
     }
 
     #[test]

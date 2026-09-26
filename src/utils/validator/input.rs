@@ -7,6 +7,7 @@ use crate::utils::constants::{
     MAX_BATCH_SIZE, MAX_CONCURRENT_REQUESTS, MAX_FILE_SIZE_BYTES, MAX_SEARCH_RESULTS,
     MAX_TEXT_LENGTH, MIN_TEXT_LENGTH,
 };
+use std::fmt::Write as _;
 use std::io::Read;
 use std::num::NonZeroUsize;
 
@@ -168,6 +169,40 @@ pub fn has_disallowed_control_chars(text: &str) -> bool {
     text.chars().any(|c| {
         (c.is_control() && !matches!(c, '\t' | '\n' | '\r')) || matches!(c, '\u{2028}' | '\u{2029}')
     })
+}
+
+/// 错误 detail 回显截断上限（字符数）：name 上限 10K 字符可被完整回显进
+/// wire/日志，64 字符足够定位（评审 R2）。
+pub const MAX_ECHO_CHARS: usize = 64;
+
+/// 错误 detail 回显截断：用户输入不得原文进入错误消息。豁免集内的
+/// `\t` `\n` `\r` 与拒绝集全体成员（C0 其余/DEL/C1——含 U+0085 NEL——及
+/// U+2028/U+2029）一并字面量化，使回显物单行化——换行/行分隔符可伪造
+/// 日志行（评审 R1 四轮）；拒绝集字面量化不依赖调用方先过防线（防御纵深，
+/// 集合须与 [`has_disallowed_control_chars`] 同集）。
+/// 单次遍历：数到 MAX+1 即截断返回，不全量 count（评审 R8 四轮）。
+pub fn echo(s: &str) -> String {
+    // 最坏情形一次分配：字面量化后单字符最大展开 8B（`\u{XXXX}`）
+    let mut out = String::with_capacity(MAX_ECHO_CHARS * 8 + 3);
+    for (n, c) in s.chars().enumerate() {
+        if n == MAX_ECHO_CHARS {
+            out.push_str("...");
+            return out;
+        }
+        match c {
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\u{2028}' => out.push_str("\\u{2028}"),
+            '\u{2029}' => out.push_str("\\u{2029}"),
+            // 拒绝集其余成员（C0/DEL/C1，含 U+0085 NEL）同集字面量化
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{{{:04x}}}", c as u32);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 impl TextValidator for InputValidator {
@@ -954,6 +989,43 @@ mod validator_tests {
 mod control_char_tests {
     use super::*;
     use crate::utils::validator::TextValidator;
+
+    // ── echo 回显防线（实现同文件，测试随实现走）──
+
+    #[test]
+    fn test_echo_literalizes_line_separators() {
+        // U+2028/U+2029 在拒绝集（has_disallowed_control_chars）内，echo 的
+        // 字面量化须与防线同集合（防御纵深）：未来新增 echo 调用点未先过
+        // 控制字符臂时，行分隔符不得原样进入 detail/日志重开渲染级注入面
+        let out = echo("a\u{2028}b\u{2029}c");
+        assert!(
+            !out.contains('\u{2028}') && !out.contains('\u{2029}'),
+            "行分隔符必须字面量化，out={out:?}"
+        );
+        assert_eq!(out, "a\\u{2028}b\\u{2029}c");
+    }
+
+    #[test]
+    fn test_echo_literalizes_control_chars() {
+        // 拒绝集其余成员（C1 NEL、C0 VT/NUL、DEL）与防线同集字面量化：
+        // 未来新增 echo 调用点未先过控制字符臂时不得原样进入 detail/日志
+        let out = echo("a\u{85}b\u{0b}c\u{0}d\u{7f}");
+        assert_eq!(out, "a\\u{0085}b\\u{000b}c\\u{0000}d\\u{007f}");
+        assert!(
+            !out.chars().any(|c| c.is_control()),
+            "回显物不得含控制字符，out={out:?}"
+        );
+    }
+
+    #[test]
+    fn test_echo_worst_case_expansion_matches_capacity_budget() {
+        // 最坏展开：64 个行分隔符逐字符字面量化为 8B ASCII（\u{2028}），
+        // 截断后输出 64×8+3=515B，与 with_capacity(MAX_ECHO_CHARS×8+3) 的
+        // 最坏估算一致
+        let out = echo(&"\u{2028}".repeat(MAX_ECHO_CHARS + 8));
+        assert_eq!(out.len(), MAX_ECHO_CHARS * 8 + 3);
+        assert!(out.ends_with("..."));
+    }
 
     /// 回归钉（T010/D34）：NUL 与 C0 控制字符拒绝，tab/LF/CR 豁免，正常文本通过。
     #[test]

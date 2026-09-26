@@ -29,6 +29,14 @@
 - **pipeline 韧性**：worker 推理 panic 隔离（批内请求统一补显性错误，worker 存活）；客户端断连取消传播（`CancellationRegistry`，出队丢弃已取消请求释放槽位）；服务端超时独立 `RequestTimeout` 错误码（HTTP 主路径 503+Retry-After=1，`VecboostError` 直返路径 504，不再伪装 400/429）；优雅停机排空队列（排队请求立即收到 shutting down 503）+ `drain_timeout_secs` 可配；扩缩容 monitor 生产启动（`WorkerManager::start`）+ 新指标 `vecboost_queue_wait_seconds`；移除无消费者的 `WorkerTask::ProcessRequest` 死分支
 - **测试资产**：`model_snapshot_regression` SKIP 判定对齐权重存在性（与 lib 测试同口径）；pytorch bin 加载测试补前置检查；补齐 bge-small-en fp32 权重
 
+### 修复（G1 评审残留闭环）
+
+- **内存上限执法接线**：`AnyEngine` 的 `InferenceEngine` 实现补 `attach_memory_limit_controller` 转发（此前漏转发，服务层 switch_model 与启动期接线的控制器全部落在 trait 默认 no-op 上，Candle/ONNX 引擎内 Exceeded/Critical 自动 CPU 回退链路静默失效）
+- **输入面收紧**：`/v1/embeddings` 与决策请求（name/options/state 字符串叶子）对 U+2028/U+2029（LINE/PARAGRAPH SEPARATOR）从接受改为 400——渲染级日志混淆面与 `\n` 同罪；错误回显同步将这两字符字面量化（回显单行化不依赖前置校验，防御纵深）。存量数据入库前请清洗（说明见 USER_GUIDE「输入字符防线」）
+- **决策请求校验**：choice 型 option 拒绝空/纯空白串（与 name 同口径，消除按字符串匹配消费的歧义）
+- **量化路由口径**：`switch_model` 的 `.gguf` 路径判定改复用 `should_use_quantized_engine`（大小写不敏感，与启动路径一致；`"MODEL.GGUF"` 此前会分叉到 safetensors 路径报错）
+- **配置显性失败**：引擎级 `ModelConfig` 反序列化加 `deny_unknown_fields`（键名拼错如 `tsak` 显性报错，不再静默忽略后回落默认值）；TOML `[model]` 段的未知键仍为静默忽略，已在 USER_GUIDE 配置节标注
+
 ### 新增
 
 - **推理正确性**:`PoolingMode::{Cls,Mean,Max,Auto}` 完整实现(Auto 按模型名推断),mean 为 attention-mask 加权平均;全平台统一 HuggingFace `tokenizers`,删除自研 WordPiece 与 250 词静默回退;vocab_size 从模型 config.json 推导;`/v1/embeddings` usage 为真实 token 计数(audit-remediation)

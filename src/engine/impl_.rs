@@ -132,6 +132,26 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.supports_task(task),
         }
     }
+
+    fn attach_memory_limit_controller(
+        &mut self,
+        controller: std::sync::Arc<crate::device::memory_limit::MemoryLimitController>,
+    ) {
+        match self {
+            // Candle/Onnx 有真实覆盖（落引擎内 controller，供 Exceeded/Critical
+            // 自动 CPU 回退执法）；漏转发会让服务层接线全部落在 trait 默认
+            // no-op 上，引擎侧内存执法链路静默失效
+            AnyEngine::Candle(engine) => engine.attach_memory_limit_controller(controller),
+            #[cfg(feature = "quantized-gguf")]
+            // 量化引擎无内存感知分支，UFCS 显式走 trait 默认 no-op
+            //（与 is_fallback_triggered 的 Quantized 臂同口径）
+            AnyEngine::Quantized(engine) => {
+                InferenceEngine::attach_memory_limit_controller(engine, controller)
+            }
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.attach_memory_limit_controller(controller),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -510,6 +530,62 @@ mod tests {
             matches!(err, VecboostError::UnsupportedTask(_)),
             "AnyEngine::Candle 未覆盖 decide，转发必须落到 trait 默认 UnsupportedTask，got {:?}",
             err
+        );
+    }
+
+    /// 真实模型 AnyEngine（candle 变体）转发 attach_memory_limit_controller：
+    /// attach 后引擎内 controller 必须就位（get_memory_status 从 None 变
+    /// Some(Ok)）。漏转发会让服务层两处真实接线（switch_model / 启动期
+    /// init_memory_limit）全部落在 trait 默认 no-op 上，引擎侧内存执法
+    /// 链路静默失效。权重缺失时 SKIP（与上一测试同口径）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_any_engine_forwards_attach_memory_limit_controller() {
+        use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
+        use std::sync::Arc;
+        if !real_model_available() {
+            eprintln!("Skipping test: model weights not found at models/BAAI-bge-small-en-v1.5");
+            return;
+        }
+        let config = ModelConfig {
+            name: "bge-small-en-attach".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from("models/BAAI-bge-small-en-v1.5"),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+            task: ModelTask::Embedding,
+            quantized: false,
+        };
+        let mut engine =
+            AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("load real model");
+
+        let status_before = match &engine {
+            AnyEngine::Candle(candle) => candle.get_memory_status().await,
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(_) => panic!("expected Candle variant"),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(_) => panic!("expected Candle variant"),
+        };
+        assert_eq!(status_before, None, "attach 前引擎内不得有 controller");
+
+        engine.attach_memory_limit_controller(Arc::new(MemoryLimitController::new()));
+
+        let status = match &engine {
+            AnyEngine::Candle(candle) => candle.get_memory_status().await,
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(_) => panic!("expected Candle variant"),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(_) => panic!("expected Candle variant"),
+        };
+        assert_eq!(
+            status,
+            Some(MemoryLimitStatus::Ok),
+            "attach 必须经 AnyEngine 转发落进引擎内真实 controller"
         );
     }
 

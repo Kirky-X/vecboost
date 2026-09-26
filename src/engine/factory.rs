@@ -69,7 +69,12 @@ impl EngineFactory {
 }
 
 /// fail-fast 校验：引擎不支持配置的任务维度时报 UnsupportedTask（显性失败，
-/// 禁止静默加载后由调用时 4xx 兜底）
+/// 禁止静默加载后由调用时 4xx 兜底）。
+///
+/// 故意在 load 之后（而非 load 前按 config.task 静态短路）校验：当前所有
+/// 引擎的 `supports_task` 恰为与实例无关的静态判定（仅 embedding），load 前
+/// 短路可省一次误配置下的无效权重加载；但把它固化为工厂前置契约，会在
+/// decision 引擎按实例能力 override 判定后被误拒——故保留 load 后以实例作答。
 fn ensure_supports_task(engine: &AnyEngine, config: &ModelConfig) -> Result<(), VecboostError> {
     use super::InferenceEngine;
     if !engine.supports_task(config.task) {

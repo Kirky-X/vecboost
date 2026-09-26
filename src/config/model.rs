@@ -133,6 +133,10 @@ pub struct InferenceContext {
     pub precision: Precision,
     pub batch_size: usize,
     pub max_sequence_length: usize,
+    /// 任务维度随上下文透传：decision 引擎复用本结构时不得静默缺 task。
+    /// 旧 JSON 缺该字段回落 Embedding（#[serde(default)] 向后兼容）。
+    #[serde(default)]
+    pub task: ModelTask,
 }
 
 impl Default for InferenceContext {
@@ -145,6 +149,7 @@ impl Default for InferenceContext {
             precision: Precision::Fp32,
             batch_size: 32,
             max_sequence_length: 8192,
+            task: ModelTask::Embedding,
         }
     }
 }
@@ -159,6 +164,7 @@ impl InferenceContext {
             precision,
             batch_size: config.max_batch_size,
             max_sequence_length: 8192,
+            task: config.task,
         }
     }
 }
@@ -207,7 +213,11 @@ pub enum PoolingMode {
     Cls,
 }
 
+/// 键名拼错显性失败（如 "tsak" 报错而非被静默忽略后 task 回落默认值，
+/// 模型以错误任务身份加载成功、错误延迟到 decide 调用才暴露）；
+/// 序列化产物为对称全字段集合，回读不受影响。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelConfig {
     pub name: String,
     pub engine_type: EngineType,
@@ -347,6 +357,31 @@ mod tests {
         let config: ModelConfig = serde_json::from_str(legacy).unwrap();
         assert_eq!(config.name, "bge-m3");
         assert_eq!(config.task, ModelTask::Embedding);
+    }
+
+    #[test]
+    fn test_model_config_unknown_key_rejected() {
+        // deny_unknown_fields：键名拼错（"tsak"）必须显性报错而非被静默忽略
+        // 后 task 回落 Embedding（模型以错误任务身份加载成功、错误延迟到
+        // decide 调用才暴露）
+        let typo = r#"{
+            "name": "bge-m3",
+            "engine_type": "candle",
+            "model_path": "/models/bge-m3",
+            "tokenizer_path": null,
+            "device": "cpu",
+            "max_batch_size": 32,
+            "pooling_mode": null,
+            "expected_dimension": null,
+            "memory_limit_bytes": null,
+            "oom_fallback_enabled": true,
+            "model_sha256": null,
+            "quantized": false,
+            "task": "embedding",
+            "tsak": "decision"
+        }"#;
+        let result: Result<ModelConfig, _> = serde_json::from_str(typo);
+        assert!(result.is_err(), "未知键 tsak 必须显性拒绝");
     }
 
     #[test]
@@ -503,6 +538,11 @@ mod tests {
         assert_eq!(context.precision, Precision::Fp32);
         assert_eq!(context.batch_size, 32);
         assert_eq!(context.max_sequence_length, 8192);
+        assert_eq!(
+            context.task,
+            ModelTask::Embedding,
+            "task 默认 Embedding（与 ModelConfig 默认同源）"
+        );
     }
 
     #[test]
@@ -530,6 +570,8 @@ mod tests {
         assert_eq!(context.device, DeviceType::Cuda);
         assert_eq!(context.precision, Precision::Fp16);
         assert_eq!(context.batch_size, 64);
+        // task 必须经 with_config 从 config 透传，不得静默缺省
+        assert_eq!(context.task, config.task);
     }
 
     #[test]

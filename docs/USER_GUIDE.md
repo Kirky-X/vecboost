@@ -268,6 +268,18 @@ max_sequence_length = 8192  # 每请求最大令牌数
 > 引擎与 `/v1/decisions` 端点落地后自动放行）。`#[serde(default)]` 保证旧
 > 配置文件零破坏。
 
+> **⚠️ 键名拼写提示**: TOML 配置段**未知键名会被静默忽略**（TOML 解析未启用
+> `deny_unknown_fields`）。键名拼错（如 `task` 误写为 `tsak`）不会报错，
+> 该字段回落默认值。修改配置后请通过 `vecboost doctor` 确认配置按预期生效
+> ——`config` 检查项会回显解析后的 `model.task`（如
+> `VecboostConfig::validate 通过（model.task=embedding）`），拼错的 `task`
+> 在此显示为回落值 `embedding`。
+>
+> 引擎级 `vecboost::config::model::ModelConfig`（库 API 面）已启用
+> `deny_unknown_fields`：其序列化产物（配置快照/持久化配置）跨版本读写时，
+> 升级新增的字段对旧二进制是**显性反序列化错误**而非静默忽略——降级前请
+> 核对产物字段集合。
+
 ---
 
 #### 缓存与文本长度设置
@@ -525,6 +537,30 @@ curl -X POST http://localhost:9002/api/1/embed \
 
 ---
 
+#### 输入字符防线
+
+嵌入与决策推理的文本输入执行统一的控制字符校验，命中即返回 400 `ValidationError`：
+
+| 字符类别 | 处理 | 说明 |
+|----------|------|------|
+| NUL / C0 控制字符（U+0000–U+001F 中除 `\t` `\n` `\r`） | **拒绝** | 注入面与下游 tokenizer 异常防护 |
+| C1 控制字符（含 U+0085 NEL） | **拒绝** | 同上 |
+| U+2028 / U+2029（LINE/PARAGRAPH SEPARATOR） | **拒绝** | 部分日志查看器/终端按其分行渲染，属渲染级日志混淆面，与 `\n` 同罪 |
+| `\t` `\n` `\r` | 豁免 | 正常文本格式化字符 |
+
+> **⚠️ 兼容提示**: U+2028/U+2029 的拒绝为输入面收紧——网页抓取文本、JS
+> 源码中偶见的行/段分隔符此前可通过 `/v1/embeddings`，现返回 400。存量
+> 数据入库前请清洗这两类字符（校验同时作用于决策请求的 name/options/state
+> 字符串叶子）。
+
+> **解析口径说明**: 决策请求体（`DecisionRequest`/`DecisionQuestion`）的
+> JSON 反序列化**未启用** `deny_unknown_fields`——未知/拼错键名（如
+> `instructions` 误写）会被静默忽略，字段以缺省形态（空串）通过校验进入
+> 下游。这是 API 请求面的前向兼容取舍，与配置面引擎级 `ModelConfig` 的
+> 显性失败口径不同；客户端请对照 OpenAPI schema 核对请求字段名。
+
+---
+
 ### 📊 计算相似度
 
 ```bash
@@ -585,6 +621,19 @@ curl http://localhost:9002/api/1/model/info
 ```bash
 curl http://localhost:9002/api/1/models
 ```
+
+#### 运行时切换模型
+
+```bash
+curl -X POST http://localhost:9002/api/1/model/switch \
+  -H "Content-Type: application/json" \
+  -d '{"model_name": "bge-m3-st"}'
+```
+
+> **⚠️ 已知限制**: 切换请求暂不支持 `task` 字段，新模型**继承当前模型的
+> 任务维度**（防止 decision 模型被静默降级为 embedding）。当前任务维度恒
+> 为 `embedding`（`task = "decision"` 的模型在启动期即被拒绝加载）；decision
+> 引擎落地后将增补请求侧 `task` 字段。
 
 ---
 

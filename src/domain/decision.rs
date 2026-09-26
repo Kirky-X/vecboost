@@ -9,14 +9,25 @@
 
 use crate::error::VecboostError;
 use crate::utils::validator::input::has_disallowed_control_chars;
+use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
+use std::str::FromStr;
+#[cfg(feature = "schema")]
+use utoipa::ToSchema;
 
-/// 错误 detail 回显截断：用户输入不得原文进入错误消息（name 上限 10K 字符
-/// 可被完整回显进 wire/日志），64 字符足够定位（评审 R2）。豁免集内的
-/// `\t` `\n` `\r` 字面量化，使回显物单行化——换行可伪造日志行（评审 R1 四轮）。
+/// 错误 detail 回显截断上限（字符数）：name 上限 10K 字符可被完整回显进
+/// wire/日志，64 字符足够定位（评审 R2）。
+const MAX_ECHO_CHARS: usize = 64;
+
+/// 错误 detail 回显截断：用户输入不得原文进入错误消息。豁免集内的
+/// `\t` `\n` `\r` 与拒绝集全体成员（C0 其余/DEL/C1——含 U+0085 NEL——及
+/// U+2028/U+2029）一并字面量化，使回显物单行化——换行/行分隔符可伪造
+/// 日志行（评审 R1 四轮）；拒绝集字面量化不依赖调用方先过防线（防御纵深，
+/// 集合须与 `has_disallowed_control_chars` 同集）。
 /// 单次遍历：数到 MAX+1 即截断返回，不全量 count（评审 R8 四轮）。
 fn echo(s: &str) -> String {
-    const MAX_ECHO_CHARS: usize = 64;
-    let mut out = String::new();
+    // 最坏情形一次分配：字面量化后单字符最大展开 8B（`\u{XXXX}`）
+    let mut out = String::with_capacity(MAX_ECHO_CHARS * 8 + 3);
     for (n, c) in s.chars().enumerate() {
         if n == MAX_ECHO_CHARS {
             out.push_str("...");
@@ -26,6 +37,12 @@ fn echo(s: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
+            '\u{2028}' => out.push_str("\\u{2028}"),
+            '\u{2029}' => out.push_str("\\u{2029}"),
+            // 拒绝集其余成员（C0/DEL/C1，含 U+0085 NEL）同集字面量化
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{{{:04x}}}", c as u32);
+            }
             _ => out.push(c),
         }
     }
@@ -43,10 +60,6 @@ fn state_has_control_chars(value: &serde_json::Value) -> bool {
         _ => false,
     }
 }
-use serde::{Deserialize, Serialize};
-use std::str::FromStr;
-#[cfg(feature = "schema")]
-use utoipa::ToSchema;
 
 /// Decision 请求输入上限（与 embed 的 `MAX_TEXT_LENGTH` 同源默认值防线）：
 /// prompt 构造按 questions×options 展开，无上限时 token 成本可被恶意放大。
@@ -62,6 +75,10 @@ pub const MAX_STATE_BYTES: usize = 64 * 1024;
 /// prompt 展开总量预算（字节）：sum(name + instructions + options)。
 /// 单维度上限的合法乘积（32 问 × 64 选项 × 10K 字符）理论可达 ~20MB prompt，
 /// 该跨字段总量防线将其压至 128KB（数万 token 量级）。
+/// 字节口径仅为粗防线：tokenizer 精确 token 预算与 head 截断由 prompt
+/// 构造方（decide 引擎落地组）负责，本层不重复实现——落地入口与输入契约见
+/// [`crate::engine::InferenceEngine::decide`]，CJK 输入 128KB 可达数万
+/// token，落地时遗漏精确预算可超模型窗口。
 pub const MAX_TOTAL_PROMPT_BYTES: usize = 128 * 1024;
 
 /// 决策问题类型：choice（选项作答）/ score（分值分布）/ noul（真值概率）
@@ -215,7 +232,16 @@ impl DecisionRequest {
                     q.options.len()
                 )));
             }
+            let mut options_bytes: usize = 0;
             for option in &q.options {
+                // 与 name 同口径：option 按字符串匹配消费，空/纯空白 option
+                // 使匹配结果有歧义（answer 的 index 权威，但空白串本身无意义）
+                if option.trim().is_empty() {
+                    return Err(VecboostError::validation_error(format!(
+                        "question {} has an empty or blank option",
+                        echo(&q.name)
+                    )));
+                }
                 let option_chars = option.chars().count();
                 if option_chars > MAX_DECISION_FIELD_LENGTH {
                     return Err(VecboostError::validation_error(format!(
@@ -229,11 +255,10 @@ impl DecisionRequest {
                         "question at index {question_index} has an option containing control characters"
                     )));
                 }
+                options_bytes += option.len();
             }
             // prompt 展开总量（字节）：单维度合法的乘积在此被跨字段预算截停
-            total_prompt_bytes += q.name.len()
-                + q.instructions.len()
-                + q.options.iter().map(String::len).sum::<usize>();
+            total_prompt_bytes += q.name.len() + q.instructions.len() + options_bytes;
             if total_prompt_bytes > MAX_TOTAL_PROMPT_BYTES {
                 return Err(VecboostError::validation_error(format!(
                     "total prompt budget exceeded: {total_prompt_bytes} bytes > \
@@ -626,6 +651,40 @@ mod tests {
     }
 
     #[test]
+    fn test_echo_literalizes_line_separators() {
+        // U+2028/U+2029 在拒绝集（has_disallowed_control_chars）内，echo 的
+        // 字面量化须与防线同集合（防御纵深）：未来新增 echo 调用点未先过
+        // 控制字符臂时，行分隔符不得原样进入 detail/日志重开渲染级注入面
+        let out = echo("a\u{2028}b\u{2029}c");
+        assert!(
+            !out.contains('\u{2028}') && !out.contains('\u{2029}'),
+            "行分隔符必须字面量化，out={out:?}"
+        );
+        assert_eq!(out, "a\\u{2028}b\\u{2029}c");
+    }
+
+    #[test]
+    fn test_echo_literalizes_control_chars() {
+        // 拒绝集其余成员（C1 NEL、C0 VT/NUL、DEL）与防线同集字面量化：
+        // 未来新增 echo 调用点未先过控制字符臂时不得原样进入 detail/日志
+        let out = echo("a\u{85}b\u{0b}c\u{0}d\u{7f}");
+        assert_eq!(out, "a\\u{0085}b\\u{000b}c\\u{0000}d\\u{007f}");
+        assert!(
+            !out.chars().any(|c| c.is_control()),
+            "回显物不得含控制字符，out={out:?}"
+        );
+    }
+
+    #[test]
+    fn test_echo_worst_case_expansion_matches_capacity_budget() {
+        // 最坏展开：64 个行分隔符逐字符字面量化为 8B ASCII（\u{2028}），
+        // 截断后输出 64×8+3=515B，与 with_capacity(MECHO×8+3) 的最坏估算一致
+        let out = echo(&"\u{2028}".repeat(MAX_ECHO_CHARS + 8));
+        assert_eq!(out.len(), MAX_ECHO_CHARS * 8 + 3);
+        assert!(out.ends_with("..."));
+    }
+
+    #[test]
     fn test_validate_control_char_error_does_not_echo_raw() {
         // 控制字符臂不得回显原文（控制字符直入日志 = 日志注入面，评审 R2）：
         // detail 必须不含任何控制字符（含构造输入里的 NUL）
@@ -651,6 +710,24 @@ mod tests {
             "错误必须携带问题名定位，err={}",
             err.error_detail()
         );
+    }
+
+    #[test]
+    fn test_validate_rejects_blank_option() {
+        // 与 name 同口径：choice 型 option 按字符串匹配消费，
+        // 空/纯空白 option 的匹配结果有歧义
+        let mut req = valid_request();
+        req.questions[0].options[0] = "   ".to_string();
+        let err = req.validate().unwrap_err();
+        assert!(
+            err.error_detail().contains("blank option"),
+            "纯空白 option 必须拒绝且错误指明 option，err={}",
+            err.error_detail()
+        );
+
+        let mut req = valid_request();
+        req.questions[0].options[0] = String::new();
+        assert!(req.validate().is_err(), "空 option 必须拒绝");
     }
 
     #[test]

@@ -159,11 +159,15 @@ impl InputValidator {
 
 /// 控制字符检查：NUL/C0 可用于注入或触发下游 tokenizer 异常；
 /// `\t` `\n` `\r` 属正常文本格式化字符豁免。
+/// U+2028/U+2029（LINE/PARAGRAPH SEPARATOR）不属 Cc 类、`is_control()` 为
+/// false，但部分日志查看器/终端按其分行渲染——渲染级日志混淆面与 `\n`
+/// 同罪，一并拒绝（`\u{85}` NEL 属 C1，已被 `is_control` 覆盖）。
 /// embed（`validate_text_content`）与 decision（`domain::decision`）共用同一规则，
 /// 禁止各处复制实现导致豁免集漂移。
 pub fn has_disallowed_control_chars(text: &str) -> bool {
-    text.chars()
-        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+    text.chars().any(|c| {
+        (c.is_control() && !matches!(c, '\t' | '\n' | '\r')) || matches!(c, '\u{2028}' | '\u{2029}')
+    })
 }
 
 impl TextValidator for InputValidator {
@@ -968,5 +972,12 @@ mod control_char_tests {
         assert!(validator.validate_text("bad\0null").is_err());
         assert!(validator.validate_text("bad\u{01}ctrl").is_err());
         assert!(validator.validate_text("bad\u{1f}unit-sep").is_err());
+
+        // U+2028/U+2029 非 Cc 类（is_control() 为 false），但部分终端/日志
+        // 查看器按其分行渲染——渲染级日志混淆面，与 \n 同等拒绝
+        assert!(validator.validate_text("bad\u{2028}line-sep").is_err());
+        assert!(validator.validate_text("bad\u{2029}para-sep").is_err());
+        // C1 NEL（\u{85}）由 is_control 覆盖，豁免集不得误放
+        assert!(validator.validate_text("bad\u{85}nel").is_err());
     }
 }

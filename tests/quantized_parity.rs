@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use vecboost::config::model::{DeviceType, EngineType, ModelConfig, Precision};
+use vecboost::config::model::{DeviceType, EngineType, ModelConfig, ModelTask, Precision};
 use vecboost::engine::{AnyEngine, InferenceEngine};
 
 fn cosine(a: &[f32], b: &[f32]) -> f64 {
@@ -123,6 +123,7 @@ fn fp32_engine(model_path: &Path) -> AnyEngine {
         memory_limit_bytes: None,
         oom_fallback_enabled: false,
         model_sha256: None,
+        task: ModelTask::Embedding,
         quantized: false,
     };
     AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("fp32 引擎加载失败")
@@ -141,6 +142,7 @@ fn quantized_engine(gguf_path: &Path) -> AnyEngine {
         memory_limit_bytes: None,
         oom_fallback_enabled: false,
         model_sha256: None,
+        task: ModelTask::Embedding,
         quantized: true,
     };
     // 必须经 EngineFactory（量化路由在此）；AnyEngine::new 是不走路由的原始构造

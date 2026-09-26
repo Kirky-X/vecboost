@@ -25,7 +25,7 @@ use candle_core::quantized::gguf_file::{self, Value as GgufValue};
 use candle_core::quantized::{GgmlDType, QTensor};
 use candle_core::{DType, Device, Tensor};
 use std::collections::HashMap;
-use std::io::{BufReader, BufWriter, Seek, Write};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use super::candle_engine::{infer_pooling_mode, pool_cls, pool_max, pool_mean};

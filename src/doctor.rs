@@ -115,10 +115,18 @@ pub fn resolve_model_dir(config: &VecboostConfig) -> std::path::PathBuf {
     }
 }
 
-/// ① 配置校验。
+/// ① 配置校验。通过时回显解析后的 `model.task`：`[model]` 段（TOML 面）
+/// 未启用未知键拒绝，拼写错误会静默回落默认值，doctor 是该字段的观测点。
 pub fn check_config(config: &VecboostConfig) -> CheckResult {
     match config.validate() {
-        Ok(()) => CheckResult::new("config", CheckStatus::Pass, "VecboostConfig::validate 通过"),
+        Ok(()) => CheckResult::new(
+            "config",
+            CheckStatus::Pass,
+            format!(
+                "VecboostConfig::validate 通过（model.task={}）",
+                config.model.task
+            ),
+        ),
         Err(e) => CheckResult::new("config", CheckStatus::Fail, format!("配置校验失败: {e}")),
     }
 }
@@ -555,6 +563,22 @@ fn verify_gguf_magic(path: &std::path::Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// `[model]` 段未知键静默回落默认值，doctor 的 config 检查项必须回显
+    /// 解析后的 model.task 作为观测点（USER_GUIDE 键名拼写提示依赖此输出）。
+    #[test]
+    fn check_config_pass_detail_reports_model_task() {
+        let config = VecboostConfig::default();
+        let result = check_config(&config);
+        assert_eq!(result.status, CheckStatus::Pass);
+        assert!(
+            result
+                .detail
+                .contains(&format!("model.task={}", config.model.task)),
+            "detail 必须回显 model.task，detail={}",
+            result.detail
+        );
+    }
 
     fn temp_model_dir() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");

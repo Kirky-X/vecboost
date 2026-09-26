@@ -1367,8 +1367,13 @@ impl EmbeddingService {
                 .as_ref()
                 .map(|c| c.task)
                 .unwrap_or(crate::config::model::ModelTask::Embedding),
-            // gguf 路径走 EngineFactory 量化路由（与启动路径同一判定）
-            quantized: req.model_name.ends_with(".gguf"),
+            // gguf 路径走 EngineFactory 量化路由：复用工厂的路径侧判定为单一
+            // 事实源，大小写口径与启动路径一致（"MODEL.GGUF" 同样路由量化，
+            // ends_with(".gguf") 的大小写敏感写法会分叉到 safetensors 路径）
+            quantized: crate::engine::factory::should_use_quantized_engine(
+                Path::new(&req.model_name),
+                true,
+            ),
         };
 
         // 内存上限执法（T021/D21）：按"当前记账 - 旧模型 + 新模型"投影判断，
@@ -1392,6 +1397,9 @@ impl EmbeddingService {
         // 统一经 EngineFactory 创建（GGUF 量化路由单一入口）。
         // create 先于 manager.load/unload 执行：失败时 manager 状态未被扰动，
         // 消除"新模型条目残留+旧模型已卸载+服务未切换"的失败次序窗口（评审 R7 四轮）。
+        // 权衡：此后 manager.load 失败经 `?` 返回时，create 已完成的权重加载被
+        // 整体 drop——可接受（manager.load 现仅走元数据构造，几乎不失败）；
+        // 若未来 load 变重（真实权重加载）应改为 create 延后或 load 结果预检。
         let new_engine =
             crate::engine::EngineFactory::create(model_config.engine_type.clone(), &model_config)
                 .map_err(|e| {

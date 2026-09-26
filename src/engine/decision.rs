@@ -102,11 +102,11 @@ fn special_id(tokenizer: &Tokenizer, token: &str) -> Result<i64, VecboostError> 
         .ok_or_else(|| VecboostError::TokenizationError(format!("tokenizer vocab missing {token}")))
 }
 
-/// state 文本化：字符串原样使用，其余 serde_json 紧凑序列化（§4.2）
-pub(crate) fn state_text(state: &serde_json::Value) -> String {
+/// state 文本化：字符串原样借用（零拷贝），其余 serde_json 紧凑序列化（§4.2）
+pub(crate) fn state_text(state: &serde_json::Value) -> std::borrow::Cow<'_, str> {
     match state {
-        serde_json::Value::String(s) => s.clone(),
-        other => other.to_string(),
+        serde_json::Value::String(s) => std::borrow::Cow::Borrowed(s),
+        other => std::borrow::Cow::Owned(other.to_string()),
     }
 }
 
@@ -334,13 +334,16 @@ pub(crate) fn softmax_with_temperature(
         ));
     }
     let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let exps: Vec<f32> = logits
+    let mut exps: Vec<f32> = logits
         .iter()
         .map(|&l| ((l - max) / temperature).exp())
         .collect();
     let sum: f32 = exps.iter().sum();
-    // 减 max 后最大项 exp(0)=1，sum ∈ [1, len] 恒有限，不会除零
-    Ok(exps.iter().map(|&e| e / sum).collect())
+    // 减 max 后最大项 exp(0)=1，sum ∈ [1, len] 恒有限，不会除零；就地归一化
+    for e in &mut exps {
+        *e /= sum;
+    }
+    Ok(exps)
 }
 
 fn clamp_temperature(t: f32) -> f32 {
@@ -556,6 +559,12 @@ pub(crate) fn answer_for_question(
 pub(crate) struct DecisionPipeline {
     session: Arc<Mutex<Session>>,
     tokenizer: Tokenizer,
+    /// state 专用：主 tokenizer 克隆 + 编码期截断到 [`STATE_MAX_TOKENS`]。
+    /// 截断取前缀，与后置 `state_ids[..256]` 切片逐 token 一致——避免 64KB
+    /// 上界 state（CJK 数万 token）全量 tokenize 后仅取前 256 的白跑。
+    /// head/options 编码继续用无截断实例（超预算靠显性 InvalidInput 拒绝，
+    /// 截断会改题意）。
+    state_tokenizer: Tokenizer,
     calibration: TemperatureCalibration,
     /// score/noul 固定 marker 的预编码 id（加载期一次，热路径复用）
     fixed_markers: FixedMarkers,
@@ -673,6 +682,14 @@ impl DecisionPipeline {
     /// `tokenizer/tokenizer.json` 子目录探测（装配侧 `tokenizer_path: None`
     /// 不影响 fallback 链）；全 miss 报 `ModelLoadError` 含尝试路径清单。
     /// 校准表缺失 warn + 空表兜底；损坏报 `ModelFileCorrupted`。
+    ///
+    /// # 完整性校验覆盖边界（威胁模型声明）
+    /// `config.model_sha256` 仅校验探测命中的主模型文件。bundle 内
+    /// tokenizer.json 与 laya_config.json 温度校准表**不受 sha256 校验**——
+    /// 它们与本管线同目录读取，威胁模型将 bundle 目录视为可信本地资产；
+    /// 能写 bundle 目录的攻击者无需替换模型即可经篡改校准温度（分布尖锐化/
+    /// 操纵置信呈现）或词表（分词漂移）改变下游语义。部署上以目录权限而非
+    /// 文件哈希作为该资产的边界；bundle 清单化校验待 config 契约扩展任务组。
     pub(crate) fn load(config: &ModelConfig) -> Result<Self, VecboostError> {
         let bundle_dir = config.model_path.clone();
         if !bundle_dir.is_dir() {
@@ -712,6 +729,18 @@ impl DecisionPipeline {
         })?;
         tokenizer.with_padding(None);
 
+        // state 专用实例：编码期截断到 STATE_MAX_TOKENS（LongestFirst 取前缀，
+        // 与后置切片逐 token 一致），超长 state 不再全量 tokenize 后白跑 98%+
+        let mut state_tokenizer = tokenizer.clone();
+        state_tokenizer
+            .with_truncation(Some(tokenizers::tokenizer::TruncationParams {
+                max_length: STATE_MAX_TOKENS,
+                ..Default::default()
+            }))
+            .map_err(|e| {
+                VecboostError::ModelLoadError(format!("Failed to set state truncation: {e}"))
+            })?;
+
         let fixed_markers = FixedMarkers::new(&tokenizer)?;
         let session = build_session(&model_file, &config.device)?;
         let calibration = TemperatureCalibration::from_bundle(&bundle_dir)?;
@@ -728,6 +757,7 @@ impl DecisionPipeline {
         Ok(Self {
             session: Arc::new(Mutex::new(session)),
             tokenizer,
+            state_tokenizer,
             calibration,
             fixed_markers,
             precision,
@@ -753,9 +783,10 @@ impl DecisionPipeline {
         req.validate()?;
 
         // 同一请求内 state 全题共享：只 encode 一次（32 题上界下消除 31 次
-        // 重复 tokenize），截断在 build_question_row 内防御性执行
+        // 重复 tokenize）；编码期截断到 STATE_MAX_TOKENS（state_tokenizer），
+        // build_question_row 内的切片为防御性兜底
         let state = state_text(&req.state);
-        let state_ids = encode_ids(&self.tokenizer, &state)?;
+        let state_ids = encode_ids(&self.state_tokenizer, &state)?;
         let mut rows = Vec::with_capacity(req.questions.len());
         let mut qtype_codes = Vec::with_capacity(req.questions.len());
         for question in &req.questions {
@@ -925,7 +956,6 @@ impl InferenceEngine for DecisionPipeline {
             return Ok(());
         }
         log::info!("Attempting fallback to CPU for decision pipeline");
-        self.fallback_triggered = true;
         let model_file = probe_model_file(&self.bundle_dir)?;
         let session = build_session(&model_file, &DeviceType::Cpu)?;
         let mut session_guard = self
@@ -938,6 +968,9 @@ impl InferenceEngine for DecisionPipeline {
         // 标签按探测文件名映射，不得硬编码 Fp32 失真（onnx_engine 降级真下载
         // Fp32 model.onnx，其硬编码在那边语义成立，此处不同）
         self.precision = precision_for_model_file(&model_file);
+        // 置位于 session 替换成功之后：probe/build 失败时状态位保持 false，
+        // 后续 OOM 降级尝试不会被双重检查恒短路掩盖
+        self.fallback_triggered = true;
         log::info!("Successfully fell back to CPU for decision pipeline");
         Ok(())
     }
@@ -1277,6 +1310,32 @@ mod tests {
             &row.input_ids[expected_len - 1 - STATE_MAX_TOKENS..expected_len - 1],
             &state_ids[..STATE_MAX_TOKENS],
             "截断取前缀"
+        );
+    }
+
+    #[test]
+    fn test_state_truncation_tokenizer_matches_prefix_slice() {
+        // state 专用截断实例（加载期构造）的编码期截断必须与后置前缀切片
+        // 逐 token 一致——否则管线内两处截断路径会产生不同序列
+        let Some(tok) = mini_lm_tokenizer() else {
+            return;
+        };
+        let mut state_tok = tok.clone();
+        state_tok
+            .with_truncation(Some(tokenizers::tokenizer::TruncationParams {
+                max_length: STATE_MAX_TOKENS,
+                ..Default::default()
+            }))
+            .expect("set truncation");
+        let long_state = "word ".repeat(600);
+        let truncated = encode_ids(&state_tok, long_state.as_str()).expect("truncated");
+        let full = encode_ids(&tok, long_state.as_str()).expect("full");
+        assert!(full.len() > STATE_MAX_TOKENS, "前置条件：state 超长");
+        assert_eq!(truncated.len(), STATE_MAX_TOKENS, "编码期截断到 256");
+        assert_eq!(
+            truncated.as_slice(),
+            &full[..STATE_MAX_TOKENS],
+            "编码期截断与后置前缀切片逐 token 一致"
         );
     }
 

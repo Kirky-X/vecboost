@@ -269,6 +269,13 @@ max_sequence_length = 8192  # 每请求最大令牌数
 > 端点以 `UnsupportedTask`（400）显性拒绝。`#[serde(default)]` 保证旧
 > 配置文件零破坏。`/api/1/decisions` 决策端点属后续任务组，尚未落地
 > （引擎链路已就绪，可经 `examples/engine/laya_poc.rs` 全链验证）。
+>
+> 决策请求 token 上界：每题 head+options（题干 + 选项）合计 ≤192 token，
+> state 段 ≤256 token（超长取前缀）；超界请求以 400 显性拒绝（不截断
+> 题干/选项——截断会改题意）。本层字符/字节校验放行的长请求可能因该
+> token 口径被拒（CJK 字符 token 密度更高）。`model_sha256` 仅校验决策
+> bundle 的主模型文件；tokenizer.json 与 laya_config.json 以 bundle 目录
+> 权限作为可信边界（建议部署时对该目录做最小写权限）。
 
 > **⚠️ 键名拼写提示**: TOML 配置段**未知键名会被静默忽略**（TOML 解析未启用
 > `deny_unknown_fields`）。键名拼错（如 `task` 误写为 `tsak`）不会报错，

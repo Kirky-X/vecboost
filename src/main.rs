@@ -1178,17 +1178,53 @@ async fn app_main() -> anyhow::Result<()> {
 
     // `--warmup N` 启动预热 ——N 条合成短文本推理，预热 mkl/代码路径/
     // tokenizer 缓存。放在 MCP/CLI 分流之前，三种模式均受益。
+    // 按 task 分派：task=decision 时 embed 恒 UnsupportedTask（决策引擎
+    // 不产向量），改用单题 noul decide 预热全链（预处理→5 张量推理→后
+    // 处理）；预热失败显性记录，不再以成功日志掩盖零次执行（规则 11）。
     let warmup = parse_warmup_count(&_filtered_args);
     if warmup > 0 {
         let start = std::time::Instant::now();
-        for i in 0..warmup {
-            let text = format!(
-                "vecboost warmup sentence {i}: the quick brown fox jumps over the lazy dog"
+        let guard = _engine.read().await;
+        let decision_pipeline = vecboost::engine::InferenceEngine::supports_task(
+            &*guard,
+            vecboost::config::model::ModelTask::Decision,
+        );
+        let failures = if decision_pipeline {
+            let req: vecboost::domain::DecisionRequest = serde_json::from_str(
+                r#"{"state":"vecboost warmup","questions":[{"name":"warmup","qtype":"noul","instructions":"warm up the decision pipeline"}]}"#,
+            )
+            .expect("static warmup decision request");
+            match vecboost::engine::InferenceEngine::decide(&*guard, &req) {
+                Ok(_) => 0,
+                Err(e) => {
+                    log::warn!("warmup: 决策管线全链预热失败：{e}");
+                    1
+                }
+            }
+        } else {
+            (0..warmup)
+                .filter(|i| {
+                    let text = format!(
+                        "vecboost warmup sentence {i}: the quick brown fox jumps over the lazy dog"
+                    );
+                    vecboost::engine::InferenceEngine::embed(&*guard, &text).is_err()
+                })
+                .count()
+        };
+        let mode = if decision_pipeline {
+            "decide×1（决策管线全链）"
+        } else {
+            "embed"
+        };
+        if failures > 0 {
+            log::warn!(
+                "warmup: 预热未完全生效（{mode}，{} 次失败，{:?}）——首次请求可能更慢",
+                failures,
+                start.elapsed()
             );
-            let guard = _engine.read().await;
-            let _ = vecboost::engine::InferenceEngine::embed(&*guard, &text);
+        } else {
+            log::info!("warmup: 预热推理完成（{mode}，{:?}）", start.elapsed());
         }
-        log::info!("warmup: {warmup} 次预热推理完成（{:?}）", start.elapsed());
     }
 
     #[cfg(feature = "mcp")]

@@ -40,10 +40,12 @@ pub const MAX_STATE_BYTES: usize = 64 * 1024;
 /// prompt 展开总量预算（字节）：sum(name + instructions + options)。
 /// 单维度上限的合法乘积（32 问 × 64 选项 × 10K 字符）理论可达 ~20MB prompt，
 /// 该跨字段总量防线将其压至 128KB（数万 token 量级）。
-/// 字节口径仅为粗防线：tokenizer 精确 token 预算与 head 截断由 prompt
-/// 构造方（decide 引擎落地组）负责，本层不重复实现——落地入口与输入契约见
-/// [`crate::engine::InferenceEngine::decide`]，CJK 输入 128KB 可达数万
-/// token，落地时遗漏精确预算可超模型窗口。
+/// 字节口径仅为粗防线：tokenizer 精确 token 预算由 prompt 构造方（decide
+/// 引擎）负责，本层不重复实现——落地入口与输入契约见
+/// [`crate::engine::InferenceEngine::decide`]。两层口径差异已定稿：本层按
+/// 字节/字符放行（CJK 下 128KB 可达数万 token），引擎层 head+options 超
+/// token 预算（英文 checkpoint 192 token）**显性拒绝而非截断**——截断会
+/// 改题意导致模型答非所问；state 侧截断除外（取前缀，语义等价编码期截断）。
 pub const MAX_TOTAL_PROMPT_BYTES: usize = 128 * 1024;
 
 /// 决策问题类型：choice（选项作答）/ score（分值分布）/ noul（真值概率）

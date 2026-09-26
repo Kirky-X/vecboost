@@ -186,8 +186,10 @@ pub struct ModelSwitchRequest {
     pub memory_limit_bytes: Option<u64>,
     pub oom_fallback_enabled: Option<bool>,
     // 已知限制（评审 R6 四轮）：无 task 字段，switch 时任务维度从当前模型
-    // 继承——运行时无法把任务切到 decision；decision 引擎落地时须增补
-    // `task: Option<ModelTask>` 并以 req.task 优先、继承当前回退。
+    // 继承。决策引擎已落地（EngineFactory 的 task=decision 分派臂），但
+    // switch 协议仍无 task 字段、无法运行时切换任务维度；增补
+    // `task: Option<ModelTask>`（req.task 优先、继承当前回退）待 switch
+    // 契约扩展任务组承接。
 }
 
 impl FromStr for ModelSwitchRequest {

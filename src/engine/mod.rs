@@ -92,10 +92,12 @@ pub trait InferenceEngine: Send + Sync {
     /// 服务入口不得绕过校验直调本方法。
     ///
     /// 字节总量预算（`MAX_TOTAL_PROMPT_BYTES`，128KB）只是字节粗防线而非
-    /// token 预算：实现方负责按 tokenizer 精确 token 预算构造 prompt 并做
-    /// head 截断（CJK 下 128KB 可达数万 token，可超模型窗口），不得以字节
-    /// 预算冒充精确预算（见
-    /// [`crate::domain::decision::MAX_TOTAL_PROMPT_BYTES`] 契约声明）。
+    /// token 预算：实现方负责按 tokenizer 精确 token 预算构造 prompt——
+    /// head+options 超 token 预算时**显性拒绝**（`InvalidInput`），不做
+    /// head 截断（截断会改题意导致模型答非所问；state 侧截断除外，取前缀
+    /// 且逐 token 等价于编码期截断）。CJK 下 128KB 字节预算可达数万 token，
+    /// 域层放行的合法请求可能在引擎层因该 token 预算被拒——两层口径见
+    /// [`crate::domain::decision::MAX_TOTAL_PROMPT_BYTES`] 契约声明。
     ///
     /// # 调用方约束
     /// 实现方为阻塞推理（与 `embed`/`embed_batch` 同约，服务层以

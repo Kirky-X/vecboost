@@ -11,12 +11,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
-#[allow(
-    dead_code,
-    reason = "Test helper / trait dispatch / inventory, not directly called"
-)]
 pub struct DecisionService {
     engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+    /// 预构建装配随引擎克隆的模型元信息（main.rs 启动注入）；当前无读取方，
+    /// 保留供引擎元信息消费接入，不作为行为开关
     #[allow(dead_code)]
     model_config: Option<ModelConfig>,
 }
@@ -47,6 +45,15 @@ impl DecisionService {
     /// 长度/总量预算与控制字符防线，域层单一实现）→ 引擎能力门
     /// `supports_task(Decision)`（false 报 UnsupportedTask，调用方按 400
     /// 语义换端点/模型）→ 经 trait `decide` 分发。
+    ///
+    /// decide 为 CPU 密集阻塞推理（单请求最多 32 题的 5 张量 batch，数十至
+    /// 数百毫秒），按 [`InferenceEngine::decide`] 的调用方契约以
+    /// `spawn_blocking` 移出 tokio worker 调度面——并发决策请求在引擎内
+    /// Session 互斥锁上排队时，阻塞的是 blocking 池线程而非 worker，embed/
+    /// 健康检查等端点不被饿死；闭包内 `blocking_read` 与 gate 读锁分离，
+    /// gate 与推理之间引擎被 replace_engine 替换时本请求走新引擎（与
+    /// switch 传播语义一致）。JoinError（引擎 panic）显性映射
+    /// InferenceError，不吞错。
     pub async fn process_decision(
         &self,
         req: DecisionRequest,
@@ -80,8 +87,17 @@ impl DecisionService {
                 crate::i18n::tr("decision-unsupported").to_string(),
             ));
         }
-        let mut response = engine.decide(&req)?;
         drop(engine);
+
+        let engine = self.engine.clone();
+        let mut response = tokio::task::spawn_blocking(move || {
+            let guard = engine.blocking_read();
+            guard.decide(&req)
+        })
+        .await
+        .map_err(|e| {
+            VecboostError::InferenceError(format!("decision inference task failed: {e}"))
+        })??;
         response.processing_time_ms = start.elapsed().as_millis();
         Ok(response)
     }
@@ -443,5 +459,63 @@ mod tests {
             (p_true - 0.9).abs() < 1e-5,
             "replace_engine 后决策必须走新引擎，p_true={p_true}"
         );
+    }
+
+    /// 引擎 decide panic 经 spawn_blocking JoinError 必须显性映射
+    /// InferenceError（规则 11：不吞错、不落默认值）
+    #[tokio::test]
+    async fn test_process_decision_engine_panic_maps_to_inference_error() {
+        struct PanickingDecisionEngine;
+
+        #[async_trait]
+        impl InferenceEngine for PanickingDecisionEngine {
+            fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+                Ok(vec![0.0; 8])
+            }
+
+            fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+                Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+            }
+
+            fn precision(&self) -> &Precision {
+                &Precision::Fp32
+            }
+
+            fn supports_mixed_precision(&self) -> bool {
+                false
+            }
+
+            fn supports_task(&self, task: ModelTask) -> bool {
+                matches!(task, ModelTask::Embedding | ModelTask::Decision)
+            }
+
+            fn decide(&self, _req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
+                panic!("engine exploded mid-inference");
+            }
+
+            async fn try_fallback_to_cpu(
+                &mut self,
+                _config: &ModelConfig,
+            ) -> Result<(), VecboostError> {
+                Ok(())
+            }
+        }
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(PanickingDecisionEngine));
+        let service = DecisionService::new(engine, None);
+        let err = service
+            .process_decision(mixed_request(), 32)
+            .await
+            .unwrap_err();
+        match err {
+            VecboostError::InferenceError(msg) => {
+                assert!(
+                    msg.contains("decision inference task"),
+                    "JoinError 映射文案必须可定位，got: {msg}"
+                );
+            }
+            other => panic!("Expected InferenceError, got: {other:?}"),
+        }
     }
 }

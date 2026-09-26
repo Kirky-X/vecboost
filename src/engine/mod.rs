@@ -102,8 +102,8 @@ pub trait InferenceEngine: Send + Sync {
     ///
     /// # 调用方约束
     /// 实现方为阻塞推理（与 `embed`/`embed_batch` 同约，服务层以
-    /// `block_in_place` 包裹）：async 上下文调用必须经 `block_in_place`/
-    /// `spawn_blocking` 包裹，禁止直调阻塞 tokio worker 线程。
+    /// `spawn_blocking` 包裹）：async 上下文调用必须经 `spawn_blocking`/
+    /// `block_in_place` 包裹，禁止直调阻塞 tokio worker 线程。
     ///
     /// 豁免口径：`main.rs` 启动序列的 `--warmup` 预热路径可直调（含
     /// `embed` 同款）——启动期服务未开始接受请求，单次调用在 multi-thread

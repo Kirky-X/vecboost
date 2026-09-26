@@ -83,8 +83,9 @@ pub trait InferenceEngine: Send + Sync {
 
     /// 决策推理：对给定 state 回答一组 choice/score/noul 问题。
     ///
-    /// 默认返回 `UnsupportedTask`——当前无引擎覆盖此方法，调用方按
-    /// 4xx 语义引导客户端换模型/换端点。
+    /// 默认返回 `UnsupportedTask`；当前仅 DecisionPipeline 覆盖（task=decision
+    /// 经 [`crate::engine::EngineFactory`] 的 task 分派臂构造），其余引擎继承
+    /// 默认，调用方按 4xx 语义引导客户端换模型/换端点。
     ///
     /// # 输入契约
     /// 实现方必须假定请求已过 [`DecisionRequest::validate`](crate::domain::DecisionRequest::validate)

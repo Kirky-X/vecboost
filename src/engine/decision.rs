@@ -462,15 +462,16 @@ pub(crate) fn choice_answer(
     logits: &[f32],
     temperature: f32,
 ) -> Result<DecisionAnswer, VecboostError> {
-    let name = echo(question_name);
     if options.is_empty() {
         return Err(VecboostError::invalid_input(format!(
-            "choice question {name} requires at least one option"
+            "choice question {} requires at least one option",
+            echo(question_name)
         )));
     }
     if options.len() != logits.len() {
         return Err(VecboostError::inference_error(format!(
-            "choice question {name}: got {} logits for {} options",
+            "choice question {}: got {} logits for {} options",
+            echo(question_name),
             logits.len(),
             options.len()
         )));
@@ -479,8 +480,9 @@ pub(crate) fn choice_answer(
     for option in options {
         if !seen.insert(option.as_str()) {
             return Err(VecboostError::invalid_input(format!(
-                "choice question {name} has duplicate option {:?}: \
+                "choice question {} has duplicate option {:?}: \
                  probability table keys would silently merge",
+                echo(question_name),
                 echo(option)
             )));
         }

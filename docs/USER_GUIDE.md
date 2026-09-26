@@ -265,11 +265,16 @@ max_sequence_length = 8192  # 每请求最大令牌数
 > `embedding` / `decision`。`[model]` 段已支持 `task` 配置；非法值（如
 > `"rerank"`)在配置解析时显性报错。配置 `task = "decision"` 时经
 > `EngineFactory` 的 task 分派臂加载 Laya 决策管线（bundle 就绪时成功；
-> bundle 缺失/不完整时报 `ModelLoadError`）。决策模型上 `/embed` 等向量
-> 端点以 `UnsupportedTask`（400）显性拒绝。`#[serde(default)]` 保证旧
-> 配置文件零破坏。`/api/1/decisions` 决策端点属后续任务组，尚未落地
-> （引擎链路已就绪，可经 `examples/engine/laya_poc.rs` 全链验证）。
+> bundle 缺失/不完整时报 `ModelLoadError`），`/api/1/decisions` 决策端点
+> 可用，`/embed` 等向量端点以 `UnsupportedTask`（400）显性拒绝——任务
+> 二选一，见 `config/config.toml` `[model]` 段 bundle 布局说明。
+> `#[serde(default)]` 保证旧配置文件零破坏。
 >
+> **`engine_type`（引擎级 ModelConfig 字段，默认 `candle`）**：推理引擎
+> 类型，可选 `candle` / `onnx`。`[model]` 段已支持 `engine_type` 配置
+> （缺省 `None` = candle，现状行为零破坏）；`"onnx"` 需以 `--features
+> onnx` 构建，未知值启动期显性报错。`task = "decision"` 时本字段不参与
+> 分派（Laya bundle 为 onnx 格式，task 主维度优先）。
 > 决策请求 token 上界：每题 head+options（题干 + 选项）合计 ≤192 token，
 > state 段 ≤256 token（超长取前缀）；超界请求以 400 显性拒绝（不截断
 > 题干/选项——截断会改题意）。本层字符/字节校验放行的长请求可能因该
@@ -639,11 +644,12 @@ curl -X POST http://localhost:9002/api/1/model/switch \
   -d '{"model_name": "bge-m3-st"}'
 ```
 
-> **⚠️ 已知限制**: 切换请求暂不支持 `task` 字段，新模型**继承当前模型的
-> 任务维度**（防止 decision 模型被静默降级为 embedding）。当前任务维度为
-> `embedding` 时行为不变；`task = "decision"` 的模型可正常加载决策管线
-> （bundle 缺失时报 `ModelLoadError`），决策引擎落地后将增补请求侧 `task`
-> 字段。
+> **`task` 字段（已落地）**: 切换请求可携带可选 `task` 字段（`embedding` /
+> `decision`）运行时切换任务维度，回退链为**请求值优先 → 缺省继承当前模型 →
+> 无当前模型回落 `embedding`**。请求 `task = "decision"` 时经 `EngineFactory`
+> 的 task 分派臂加载决策管线（bundle 缺失/不完整时报 `ModelLoadError`）；
+> 切换成功后 rerank 与 decision 服务同步替换底层引擎（切模型传播），不
+> 传 `task` 字段的旧请求体行为不变（`#[serde(default)]` 零破坏）。
 
 ---
 

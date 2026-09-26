@@ -53,7 +53,8 @@ impl DecisionService {
     /// 健康检查等端点不被饿死；闭包内 `blocking_read` 与 gate 读锁分离，
     /// gate 与推理之间引擎被 replace_engine 替换时本请求走新引擎（与
     /// switch 传播语义一致）。JoinError（引擎 panic）显性映射
-    /// InferenceError，不吞错。
+    /// InferenceError，不吞错；wire 文案为固定脱敏前缀，panic 载荷原文
+    /// 只入服务端日志（CWE-209）。
     pub async fn process_decision(
         &self,
         req: DecisionRequest,
@@ -96,7 +97,15 @@ impl DecisionService {
         })
         .await
         .map_err(|e| {
-            VecboostError::InferenceError(format!("decision inference task failed: {e}"))
+            // JoinError 的 Display 携带 panic 载荷原文（tokio
+            // runtime/task/error.rs 的 Panic 分支），经 to_api_error 的 500
+            // catch-all 会直达响应体（CWE-209 信息暴露面）：wire 侧只回
+            // 可定位的固定文案，载荷与 task id 全量留在服务端日志
+            log::error!("decision inference task failed: {e}");
+            VecboostError::InferenceError(
+                "decision inference task failed (engine task panicked); see server logs"
+                    .to_string(),
+            )
         })??;
         response.processing_time_ms = start.elapsed().as_millis();
         Ok(response)
@@ -462,7 +471,9 @@ mod tests {
     }
 
     /// 引擎 decide panic 经 spawn_blocking JoinError 必须显性映射
-    /// InferenceError（规则 11：不吞错、不落默认值）
+    /// InferenceError（规则 11：不吞错、不落默认值），且 wire 文案不得
+    /// 携带 panic 载荷原文（CWE-209：载荷经 to_api_error 500 catch-all
+    /// 直达响应体，全量细节只允许入服务端日志）
     #[tokio::test]
     async fn test_process_decision_engine_panic_maps_to_inference_error() {
         struct PanickingDecisionEngine;
@@ -513,6 +524,10 @@ mod tests {
                 assert!(
                     msg.contains("decision inference task"),
                     "JoinError 映射文案必须可定位，got: {msg}"
+                );
+                assert!(
+                    !msg.contains("engine exploded mid-inference"),
+                    "wire 文案不得携带 panic 载荷原文（CWE-209），got: {msg}"
                 );
             }
             other => panic!("Expected InferenceError, got: {other:?}"),

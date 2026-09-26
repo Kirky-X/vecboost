@@ -39,6 +39,7 @@
 
 ### 新增
 
+- **决策管线接入层（G3）**:`/api/1/decisions` 四协议端点（HTTP/MCP/CLI/gRPC `vecboost.decide`）——`DecisionService`（state/questions 校验链 + 域层 validate 复用 + supports_task 先门后调 + spawn_blocking 阻塞推理隔离）、`DecisionModule` 注册贯通 server/MCP/CLI 三处 kit 装配；`[model] engine_type` / `task` 配置驱动（消灭启动路径硬编码 Candle，未知值启动期显性报错）；switch 契约扩展 `task` 字段（请求值优先→继承当前→回落 embedding）并传播替换决策引擎；切模型二选一语义（`task=decision` 时 embed/rerank 端点 400，反之 decisions 端点 400）
 - **Laya 决策管线（G2）**:`src/engine/decision.rs`——`[CLS] head [SEP] [MASK] option… [SEP] state [SEP]` 预处理（marker_pos/qtype 编码、head+options 192 token 预算前置校验、state 256 token 截断）、5 张量 ONNX 推理（input_ids/attention_mask/marker_pos/marker_mask bool/qtype）、per-cardinality 温度校准（`laya_config.json`，加载即钳制 [0.5,5]，缺桶回退 1.2，缺失 warn 不静默）、choice/score/noul 三型后处理（argmax+完整概率表 / 期望等级 Σi·p_i+分布 / P(true)）
 - **factory task 分派臂**:`EngineFactory::create` 对 `task=decision` 一律路由决策管线（`AnyEngine::Decision` 生产构造点，embed/rerank 端点对决策模型以 UnsupportedTask 400 显性拒绝）
 - **决策指标**:`vecboost_decision_seconds`(决策链路逐请求总时延直方图，`_count` 即调用计数);决策管线 take_stage_snapshot 恒 None（Stage 三值豁免，观测走独立指标）

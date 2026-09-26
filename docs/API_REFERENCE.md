@@ -553,6 +553,72 @@ curl -X POST http://localhost:9002/api/1/rerank \
 
 ---
 
+### 决策问答（Decisions）
+
+对给定决策上下文 `state` 回答一组 choice / score / noul 问题（Laya 决策管线，`onnx` feature）。
+
+**端点:** `POST /api/1/decisions`
+
+> **⚠️ 任务二选一**: 仅 `[model] task = "decision"` 配置下可用；`task = "embedding"`（默认）时调用返回 `400`（`UnsupportedTask`，提示切换模型/端点）。
+
+**请求字段:**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `state` | any JSON | ✅ | 决策上下文（自由 JSON，与模型约定语义），字符串叶子含控制字符将被 400 拒绝 |
+| `questions` | array | ✅ | 问题数组（1–32 个），按数组顺序作答 |
+| `questions[].name` | string | ✅ | 问题名（非空、不重复，答案按名回显） |
+| `questions[].qtype` | string | ✅ | `choice` / `score` / `noul` |
+| `questions[].instructions` | string | ✅ | 题目指令 |
+| `questions[].options` | array | 条件 | choice 型必填非空选项集（≤64 个）；score/noul 型不得携带 |
+
+**请求示例（三题型各一）:**
+
+```bash
+curl -X POST http://localhost:9002/api/1/decisions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "state": {"topic": "vacation"},
+    "questions": [
+      {"name": "destination", "qtype": "choice", "instructions": "pick one", "options": ["beach", "mountain"]},
+      {"name": "budget", "qtype": "score", "instructions": "rate 1-5"},
+      {"name": "confident", "qtype": "noul", "instructions": "state your p(true)"}
+    ]
+  }'
+```
+
+**响应:**
+
+```json
+{
+  "answers": [
+    {
+      "question": "destination",
+      "answer": {"type": "choice", "index": 1, "option": "mountain", "probabilities": {"beach": 0.25, "mountain": 0.75}}
+    },
+    {
+      "question": "budget",
+      "answer": {"type": "score", "expected": 3.5, "distribution": {"3": 0.5, "4": 0.5}}
+    },
+    {
+      "question": "confident",
+      "answer": {"type": "noul", "p_true": 0.9}
+    }
+  ],
+  "processing_time_ms": 12
+}
+```
+
+**三题型响应结构（`answer.type` internally tagged）:**
+
+| qtype | answer 字段 | 说明 |
+|-------|-------------|------|
+| `choice` | `index` / `option` / `probabilities` | 命中选项下标与原文 + 各选项完整概率表（归一） |
+| `score` | `expected` / `distribution` | 期望等级 Σ(i·p_i) + 完整等级分布 |
+| `noul` | `p_true` | 两选项 softmax 的 P(true) |
+
+---
+
 ### 模型管理
 
 #### 获取当前模型
@@ -657,6 +723,7 @@ curl -X POST http://localhost:9002/api/1/rerank \
 | `expected_dimension` | integer | ❌ | 期望维度 |
 | `memory_limit_bytes` | integer | ❌ | 内存限制（字节） |
 | `oom_fallback_enabled` | boolean | ❌ | OOM 自动降级 |
+| `task` | string | ❌ | 任务维度 (`embedding` / `decision`)；缺省继承当前模型，无当前模型回落 `embedding`（`task=decision` 经 EngineFactory 分派臂加载决策管线，bundle 缺失报 `ModelLoadError`） |
 
 **请求示例:**
 
@@ -768,7 +835,7 @@ http://localhost:9002/api-docs/openapi.json  # 拉取 OpenAPI 规范
 
 ### 服务定义
 
-v0.2.0 起，VecBoost 的 gRPC 接口不再依赖手写 `.proto` 文件，而是由 `sdforge` 框架通过 `#[forge(grpc_method = "...")]` 宏从 `src/api/embedding.rs` 中的单一源定义自动生成。客户端通过 sdforge 统一的 `SdForgeService/Call` RPC 调用对应方法：
+v0.2.0 起，VecBoost 的 gRPC 接口不再依赖手写 `.proto` 文件，而是由 `sdforge` 框架通过 `#[forge(grpc_method = "...")]` 宏从处理函数单一源定义自动生成（`src/api/embedding.rs` 与 `src/api/decisions.rs`）。客户端通过 sdforge 统一的 `SdForgeService/Call` RPC 调用对应方法：
 
 - 请求载荷为 JSON 序列化的领域类型，通过 `CallRequest.data` 传递
 - 响应载荷为 JSON 序列化的领域类型，通过 `CallResponse.data` 返回
@@ -788,7 +855,7 @@ pub async fn grpc_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
 }
 ```
 
-> **💡 提示**: 无需 `proto/` 目录或 `tonic-build` 生成客户端存根。所有 gRPC 方法都在 `src/api/embedding.rs` 中通过 `#[forge(grpc_method = "...")]` 宏注册。
+> **💡 提示**: 无需 `proto/` 目录或 `tonic-build` 生成客户端存根。所有 gRPC 方法都在 `src/api/embedding.rs` / `src/api/decisions.rs` 中通过 `#[forge(grpc_method = "...")]` 宏注册。
 
 ### gRPC 服务配置
 
@@ -822,6 +889,7 @@ gRPC 服务通过 `sdforge::grpc::build_server_with_config` 启动，配置项�
 | `vecboost.embed_file` | `grpc_embed_file` | `FileEmbedRequest` | `FileEmbedResponse` | 文件嵌入（路径校验） |
 | `vecboost.rerank` | `grpc_rerank` | `RerankRequest` | `RerankResponse` | 按相关性重排序文档 |
 | `vecboost.rerank_batch` | `grpc_rerank_batch` | `BatchRerankRequest` | `BatchRerankResponse` | 批量重排序 |
+| `vecboost.decide` | `grpc_decisions` | `DecisionRequest` | `DecisionResponse` | 决策问答（choice/score/noul，`task=decision` 配置下可用） |
 | `vecboost.model_switch` | `grpc_model_switch` | `ModelSwitchRequest` | `ModelSwitchResponse` | 切换模型 |
 | `vecboost.get_current_model` | `grpc_get_current_model` | （空） | `ModelInfo` | 获取当前模型信息 |
 | `vecboost.get_model_info` | `grpc_get_model_info` | （空） | `ModelMetadata` | 获取模型元数据 |
@@ -1125,7 +1193,7 @@ cargo run --features mcp -- --mcp
 # 在 MCP 客户端（如 Claude Desktop）中配置 stdio 启动命令：vecboost --mcp
 ```
 
-暴露的工具：`embed` / `embed_batch` / `similarity` / `list_models`。工具由 `#[forge(tool_name = ...)]` 宏从与 REST/gRPC 相同的处理函数生成，入参/出参复用上方消息类型定义中的同名领域类型（JSON 格式）。
+暴露的工具：`embed` / `embed_batch` / `similarity` / `decisions` / `list_models`。工具由 `#[forge(tool_name = ...)]` 宏从与 REST/gRPC 相同的处理函数生成，入参/出参复用上方消息类型定义中的同名领域类型（JSON 格式）；`decisions` 工具仅在 `[model] task = "decision"` 配置下可成功调用（否则返回 400 Unsupported task）。
 
 ---
 
@@ -1139,6 +1207,7 @@ cargo run --features cli -- embed_batch --input texts.txt               # 批量
 cargo run --features cli -- compute_similarity --text1 "机器学习" --text2 "人工智能"  # 相似度
 cargo run --features cli -- search --text "查询文本" --candidates candidates.txt     # 语义检索
 cargo run --features cli -- rerank --query "什么是机器学习" --documents docs.txt     # 重排序
+cargo run --features cli -- decisions --req '{"state":{"topic":"vacation"},"questions":[{"name":"confident","qtype":"noul","instructions":"state your p(true)"}]}'  # 决策问答（嵌套请求经 --req 传 JSON；task=decision 配置下可用）
 ```
 
 > **ℹ️ 说明**: 未知子命令会输出用法提示并退出（码 2），不再静默启动 HTTP 服务器。

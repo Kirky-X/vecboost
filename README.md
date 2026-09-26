@@ -219,7 +219,7 @@ cargo run --features cli -- embed --text "Hello, world!"
 
 ## 🔌 API 使用
 
-VecBoost 由 `sdforge` 从 `src/api/embedding.rs` 单一源生成四种协议接口。全部端点、参数、请求/响应示例、gRPC 方法表与消息类型见 [📘 API 参考](docs/API_REFERENCE.md)，概要如下：
+VecBoost 由 `sdforge` 从处理函数单一源生成四种协议接口（`src/api/embedding.rs` 与 `src/api/decisions.rs`）。全部端点、参数、请求/响应示例、gRPC 方法表与消息类型见 [📘 API 参考](docs/API_REFERENCE.md)，概要如下：
 
 - **HTTP/REST**：`/api/1/*` 提供嵌入（单文本/批量/文件）、相似度、语义检索、重排序、决策问答（choice/score/noul）、模型管理与健康检查端点；
 - **OpenAI 兼容**：`POST /v1/embeddings`，响应遵循 OpenAI 格式（`object` / `data` / `usage`），支持 `encoding_format=base64`；

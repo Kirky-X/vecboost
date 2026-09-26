@@ -14,14 +14,17 @@ use std::str::FromStr;
 #[cfg(feature = "schema")]
 use utoipa::ToSchema;
 
-/// 递归检查 state 所有字符串叶子的控制字符。serde_json 只拒绝裸控制字节，
-/// `\uXXXX` 转义形式可解析并还原为真实控制字符（评审 R1），
-/// 故 state 与自由文本字段适用同一防线。
+/// 递归检查 state 所有字符串叶子与**对象键**的控制字符。serde_json 只拒绝
+/// 裸控制字节，`\uXXXX` 转义形式可解析并还原为真实控制字符（评审 R1），
+/// 故 state 与自由文本字段适用同一防线。键位检查不可省：DEL/C1（含
+/// U+0085 NEL）/U+2028 经紧凑序列化原样透传并随 state 文本进入 tokenizer。
 fn state_has_control_chars(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::String(s) => has_disallowed_control_chars(s),
         serde_json::Value::Array(items) => items.iter().any(state_has_control_chars),
-        serde_json::Value::Object(map) => map.values().any(state_has_control_chars),
+        serde_json::Value::Object(map) => map
+            .iter()
+            .any(|(k, v)| has_disallowed_control_chars(k) || state_has_control_chars(v)),
         _ => false,
     }
 }
@@ -570,6 +573,28 @@ mod tests {
             "outer": {"arr": ["ok", 1, true, {"deep": "bad\u{0}char"}]}
         });
         assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_control_chars_in_state_keys() {
+        // 测试钉：对象键位同样过防线——\uXXXX 转义键可携带控制字符
+        // （DEL/C1/U+2028 经紧凑序列化原样透传进 tokenizer 输入）
+        let mut req = valid_request();
+        req.state = serde_json::from_str(r#"{"bad\u0000key": "clean value"}"#).unwrap();
+        assert!(req.validate().is_err(), "键位 NUL（转义形式）必须拒绝");
+
+        let mut req = valid_request();
+        req.state = serde_json::from_str(r#"{"bad\u2028key": "clean value"}"#).unwrap();
+        assert!(req.validate().is_err(), "键位 U+2028（行分隔符）必须拒绝");
+
+        let mut req = valid_request();
+        req.state = serde_json::from_str(r#"{"nested": {"bad\u007fkey": 1}}"#).unwrap();
+        assert!(req.validate().is_err(), "嵌套键位 DEL 必须拒绝");
+
+        // 合法键不受影响
+        let mut req = valid_request();
+        req.state = serde_json::json!({"topic": "vacation", "预算": 1});
+        req.validate().unwrap();
     }
 
     #[test]

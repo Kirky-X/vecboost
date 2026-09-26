@@ -121,17 +121,24 @@ pub(crate) struct QuestionRow {
     pub marker_pos: Vec<i64>,
 }
 
-/// score/noul 固定 marker 的预编码 id（只依赖 tokenizer、请求间恒定）。
-/// 加载期编码一次，热路径每题零重复 encode（choice 的 marker 文本为请求侧
-/// options，请求相关，无法预编码）。
+/// score/noul 固定 marker 的预编码 id 与序列协议特殊 token id（只依赖
+/// tokenizer、请求间恒定）。加载期解析/编码一次，热路径每题零重复
+/// encode 与词表查询（choice 的 marker 文本为请求侧 options，请求相关，
+/// 无法预编码）。
 #[derive(Debug, Clone)]
 pub(crate) struct FixedMarkers {
+    pub(crate) cls: i64,
+    pub(crate) sep: i64,
+    pub(crate) mask: i64,
     score: Vec<Vec<i64>>,
     noul: Vec<Vec<i64>>,
 }
 
 impl FixedMarkers {
     pub(crate) fn new(tokenizer: &Tokenizer) -> Result<Self, VecboostError> {
+        let cls = special_id(tokenizer, "[CLS]")?;
+        let sep = special_id(tokenizer, "[SEP]")?;
+        let mask = special_id(tokenizer, "[MASK]")?;
         // score=等级索引文本；noul=固定 [false, true]（P0 待校准项）
         let score = (0..SCORE_LEVELS)
             .map(|i| encode_ids(tokenizer, &format!(" {i}")))
@@ -140,7 +147,13 @@ impl FixedMarkers {
             .iter()
             .map(|t| encode_ids(tokenizer, &format!(" {t}")))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { score, noul })
+        Ok(Self {
+            cls,
+            sep,
+            mask,
+            score,
+            noul,
+        })
     }
 
     #[cfg(test)]
@@ -172,9 +185,9 @@ pub(crate) fn build_question_row(
     head_max_len: usize,
     state_max_tokens: usize,
 ) -> Result<QuestionRow, VecboostError> {
-    let cls_id = special_id(tokenizer, "[CLS]")?;
-    let sep_id = special_id(tokenizer, "[SEP]")?;
-    let mask_id = special_id(tokenizer, "[MASK]")?;
+    let cls_id = fixed.cls;
+    let sep_id = fixed.sep;
+    let mask_id = fixed.mask;
 
     let head_text = format!(
         "{} question: {}",
@@ -559,12 +572,6 @@ pub(crate) fn answer_for_question(
 pub(crate) struct DecisionPipeline {
     session: Arc<Mutex<Session>>,
     tokenizer: Tokenizer,
-    /// state 专用：主 tokenizer 克隆 + 编码期截断到 [`STATE_MAX_TOKENS`]。
-    /// 截断取前缀，与后置 `state_ids[..256]` 切片逐 token 一致——避免 64KB
-    /// 上界 state（CJK 数万 token）全量 tokenize 后仅取前 256 的白跑。
-    /// head/options 编码继续用无截断实例（超预算靠显性 InvalidInput 拒绝，
-    /// 截断会改题意）。
-    state_tokenizer: Tokenizer,
     calibration: TemperatureCalibration,
     /// score/noul 固定 marker 的预编码 id（加载期一次，热路径复用）
     fixed_markers: FixedMarkers,
@@ -729,18 +736,6 @@ impl DecisionPipeline {
         })?;
         tokenizer.with_padding(None);
 
-        // state 专用实例：编码期截断到 STATE_MAX_TOKENS（LongestFirst 取前缀，
-        // 与后置切片逐 token 一致），超长 state 不再全量 tokenize 后白跑 98%+
-        let mut state_tokenizer = tokenizer.clone();
-        state_tokenizer
-            .with_truncation(Some(tokenizers::tokenizer::TruncationParams {
-                max_length: STATE_MAX_TOKENS,
-                ..Default::default()
-            }))
-            .map_err(|e| {
-                VecboostError::ModelLoadError(format!("Failed to set state truncation: {e}"))
-            })?;
-
         let fixed_markers = FixedMarkers::new(&tokenizer)?;
         let session = build_session(&model_file, &config.device)?;
         let calibration = TemperatureCalibration::from_bundle(&bundle_dir)?;
@@ -757,7 +752,6 @@ impl DecisionPipeline {
         Ok(Self {
             session: Arc::new(Mutex::new(session)),
             tokenizer,
-            state_tokenizer,
             calibration,
             fixed_markers,
             precision,
@@ -783,10 +777,14 @@ impl DecisionPipeline {
         req.validate()?;
 
         // 同一请求内 state 全题共享：只 encode 一次（32 题上界下消除 31 次
-        // 重复 tokenize）；编码期截断到 STATE_MAX_TOKENS（state_tokenizer），
-        // build_question_row 内的切片为防御性兜底
+        // 重复 tokenize）。取前 256 token 由 build_question_row 内防御性切片
+        // 完成——tokenizers 0.23.2 的 encode 无编码期截断（normalize→
+        // pre_tokenize→tokenize 全量完成后 post_process 才丢弃尾部），编码期
+        // 截断与后置切片逐 token 等价；64KB 上界的全量 tokenize 为毫秒级、
+        // 相对单次推理非瓶颈，如需消除须字符级前缀粗剪（预剪点须对齐
+        // pre-token 边界才保证等价），待真实负载数据立项后再做
         let state = state_text(&req.state);
-        let state_ids = encode_ids(&self.state_tokenizer, &state)?;
+        let state_ids = encode_ids(&self.tokenizer, &state)?;
         let mut rows = Vec::with_capacity(req.questions.len());
         let mut qtype_codes = Vec::with_capacity(req.questions.len());
         for question in &req.questions {
@@ -1310,32 +1308,6 @@ mod tests {
             &row.input_ids[expected_len - 1 - STATE_MAX_TOKENS..expected_len - 1],
             &state_ids[..STATE_MAX_TOKENS],
             "截断取前缀"
-        );
-    }
-
-    #[test]
-    fn test_state_truncation_tokenizer_matches_prefix_slice() {
-        // state 专用截断实例（加载期构造）的编码期截断必须与后置前缀切片
-        // 逐 token 一致——否则管线内两处截断路径会产生不同序列
-        let Some(tok) = mini_lm_tokenizer() else {
-            return;
-        };
-        let mut state_tok = tok.clone();
-        state_tok
-            .with_truncation(Some(tokenizers::tokenizer::TruncationParams {
-                max_length: STATE_MAX_TOKENS,
-                ..Default::default()
-            }))
-            .expect("set truncation");
-        let long_state = "word ".repeat(600);
-        let truncated = encode_ids(&state_tok, long_state.as_str()).expect("truncated");
-        let full = encode_ids(&tok, long_state.as_str()).expect("full");
-        assert!(full.len() > STATE_MAX_TOKENS, "前置条件：state 超长");
-        assert_eq!(truncated.len(), STATE_MAX_TOKENS, "编码期截断到 256");
-        assert_eq!(
-            truncated.as_slice(),
-            &full[..STATE_MAX_TOKENS],
-            "编码期截断与后置前缀切片逐 token 一致"
         );
     }
 

@@ -83,8 +83,9 @@ pub struct ModelConfig {
     pub quantized: bool,
     /// 任务维度：embedding（默认）/ decision。对应运行时 `ModelConfig.task`；
     /// 非法值（如 "rerank"）在反序列化边界显性报错而非静默忽略。
-    /// 配置 decision 时当前无引擎实现，`EngineFactory` fail-fast 在启动期
-    /// 显性报 `UnsupportedTask`（decision 引擎落地后自动放行）。
+    /// 配置 decision 时经 `EngineFactory` 的 task 分派臂加载 Laya 决策管线
+    /// （bundle 缺失/不完整时启动期报 `ModelLoadError`；口径同
+    /// USER_GUIDE「task 字段」节）。
     #[garde(skip)]
     #[serde(default)]
     pub task: crate::config::model::ModelTask,

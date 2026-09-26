@@ -81,6 +81,12 @@ pub struct ModelConfig {
     #[garde(skip)]
     #[serde(default)]
     pub quantized: bool,
+    /// 推理引擎类型：None = candle（现状默认，零破坏）。对应运行时
+    /// `ModelConfig.engine_type`，由 `init_engine_and_services` 启动解析
+    /// （"onnx" 需 `onnx` feature 构建；未知值启动期 anyhow 显性报错，
+    /// 消灭该解析点的硬编码 Candle）。
+    #[garde(skip)]
+    pub engine_type: Option<String>,
     /// 任务维度：embedding（默认）/ decision。对应运行时 `ModelConfig.task`；
     /// 非法值（如 "rerank"）在反序列化边界显性报错而非静默忽略。
     /// 配置 decision 时经 `EngineFactory` 的 task 分派臂加载 Laya 决策管线
@@ -603,6 +609,7 @@ impl Default for ModelConfig {
             expected_dimension: Some(DEFAULT_EXPECTED_DIMENSION),
             max_sequence_length: Some(DEFAULT_MAX_SEQUENCE_LENGTH),
             quantized: false,
+            engine_type: None,
             task: crate::config::model::ModelTask::Embedding,
             max_resident_models: None,
             resident_memory_budget_mb: None,
@@ -1244,6 +1251,7 @@ mod tests {
             expected_dimension: Some(384),
             max_sequence_length: Some(512),
             quantized: false,
+            engine_type: None,
             task: crate::config::model::ModelTask::Embedding,
             max_resident_models: None,
             resident_memory_budget_mb: None,
@@ -1252,6 +1260,23 @@ mod tests {
         assert!(config.use_gpu);
         assert_eq!(config.batch_size, 128);
         assert_eq!(config.expected_dimension, Some(384));
+    }
+
+    /// [model].engine_type 配置面：TOML 值必须真实写进字段（防回归为
+    /// serde(skip)——skip 后 TOML 与 env 覆盖永远写不进字段，配置驱动落空）；
+    /// 缺省 None = 现状 candle 语义零破坏
+    #[test]
+    fn test_model_config_engine_type_toml() {
+        let legacy: ModelConfig = toml::from_str("model_repo = \"bge-m3\"").unwrap();
+        assert_eq!(legacy.engine_type, None, "缺省必须为 None（candle 现状）");
+
+        let onnx: ModelConfig =
+            toml::from_str("model_repo = \"bge-m3\"\nengine_type = \"onnx\"").unwrap();
+        assert_eq!(onnx.engine_type.as_deref(), Some("onnx"));
+
+        let candle: ModelConfig =
+            toml::from_str("model_repo = \"bge-m3\"\nengine_type = \"candle\"").unwrap();
+        assert_eq!(candle.engine_type.as_deref(), Some("candle"));
     }
 
     /// [model].task 配置面（评审 R6）：缺省回落 Embedding、decision 可解析、

@@ -1360,12 +1360,13 @@ impl EmbeddingService {
                     .unwrap_or(false)
             }),
             model_sha256: None,
-            // task 从当前模型继承（与上方 device/max_batch_size 等回退模式
-            // 对齐），防止 decision 模型被 switch 静默降级为 embedding
-            task: self
-                .model_config
-                .as_ref()
-                .map(|c| c.task)
+            // task：req.task 优先（switch 契约的任务维度切换入口，经
+            // EngineFactory 分派臂加载对应管线），缺省继承当前模型（与上方
+            // device/max_batch_size 等回退模式对齐），无当前模型回落
+            // Embedding——decision 模型不被 switch 静默降级为 embedding
+            task: req
+                .task
+                .or_else(|| self.model_config.as_ref().map(|c| c.task))
                 .unwrap_or(crate::config::model::ModelTask::Embedding),
             // gguf 路径走 EngineFactory 量化路由：复用工厂的路径侧判定为单一
             // 事实源，大小写口径与启动路径一致（"MODEL.GGUF" 同样路由量化，
@@ -1602,7 +1603,7 @@ fn dir_size(path: &std::path::Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::{DeviceType, EngineType, Precision};
+    use crate::config::model::{DeviceType, EngineType, ModelTask, Precision};
     use async_trait::async_trait;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1745,6 +1746,7 @@ mod tests {
             expected_dimension: None,
             memory_limit_bytes: None,
             oom_fallback_enabled: None,
+            task: None,
         };
 
         // 第一次切换：控制器初始 usage=0 → 放行；加载后记账 MiniLM 权重(~133MB) > 1KB → Exceeded
@@ -2995,6 +2997,7 @@ mod tests {
             expected_dimension: None,
             memory_limit_bytes: None,
             oom_fallback_enabled: None,
+            task: None,
         };
         let result = service.switch_model(req).await;
         assert!(result.is_ok());
@@ -3007,6 +3010,68 @@ mod tests {
             "expected 'Already' message, got: {}",
             resp.message
         );
+    }
+
+    /// 切模型传播钉：req.task=decision 必须传进 switch_model 构造的
+    /// ModelConfig 并抵达 EngineFactory 的 task=decision 分派臂（bundle
+    /// 缺失报 decision 探测错误，而非落进 embedding 引擎加载）；无 task
+    /// 字段时继承当前模型（Embedding），错误与决策臂无关——两条路径对照
+    /// 钉住 req.task 优先、继承回退的契约。
+    #[tokio::test]
+    async fn test_switch_model_task_decision_reaches_decision_dispatch() {
+        crate::i18n::init();
+        let mock_engine = TestEngine::new(384);
+        let model_config = make_model_config("emb-origin", 384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let mut service = EmbeddingService::new(engine, Some(model_config));
+
+        // 对照臂用本地存在但无权重的目录：路径不存在时 candle 会当作 HF
+        // repo id 触发网络下载，违反测试离线约束；模型名不含 "decision"
+        // （错误文案回显 model_name，避免与断言子串撞车）
+        let empty_dir = tempdir().unwrap();
+        let mk_req =
+            |task: Option<crate::config::model::ModelTask>,
+             model_path: Option<std::path::PathBuf>| ModelSwitchRequest {
+                model_name: "missing-weights-model".to_string(),
+                model_path,
+                tokenizer_path: None,
+                device: None,
+                max_batch_size: None,
+                pooling_mode: None,
+                expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: None,
+                task,
+            };
+
+        // req.task=Decision → 分派臂错误 detail 必含 decision 探测文案
+        // （bundle 路径不存在：DecisionPipeline 探测先行报错，离线）
+        let err = service
+            .switch_model(mk_req(Some(ModelTask::Decision), None))
+            .await
+            .unwrap_err();
+        match err {
+            VecboostError::NotFound(msg) => assert!(
+                msg.contains("decision"),
+                "task=decision 必须抵达分派臂（detail 含 decision 探测错误），got: {msg}"
+            ),
+            other => panic!("expected NotFound(ModelLoadError 包装), got: {other:?}"),
+        }
+
+        // 对照：无 task 字段 → 继承当前 Embedding，走 candle 本地加载
+        // （空目录无权重文件报错），与决策臂无关
+        let err = service
+            .switch_model(mk_req(None, Some(empty_dir.path().to_path_buf())))
+            .await
+            .unwrap_err();
+        match err {
+            VecboostError::NotFound(msg) => assert!(
+                !msg.contains("decision"),
+                "无 task 字段不得进决策分派臂，got: {msg}"
+            ),
+            other => panic!("expected NotFound(ModelLoadError 包装), got: {other:?}"),
+        }
     }
 
     #[test]
@@ -4050,6 +4115,7 @@ mod tests {
             expected_dimension: None,
             memory_limit_bytes: None,
             oom_fallback_enabled: None,
+            task: None,
         };
         let result = service.switch_model(req).await;
         assert!(result.is_err(), "switch to nonexistent model should fail");
@@ -4078,6 +4144,7 @@ mod tests {
             expected_dimension: None,
             memory_limit_bytes: None,
             oom_fallback_enabled: None,
+            task: None,
         };
         let result = service.switch_model(req).await;
         assert!(result.is_err(), "load via manager should fail");
@@ -4102,6 +4169,7 @@ mod tests {
             expected_dimension: None,
             memory_limit_bytes: None,
             oom_fallback_enabled: None,
+            task: None,
         };
         let result = service.switch_model(req).await;
         assert!(result.is_err(), "AnyEngine::new should fail");
@@ -4149,6 +4217,7 @@ mod tests {
             expected_dimension: None,
             memory_limit_bytes: None,
             oom_fallback_enabled: None,
+            task: None,
         };
         let result = service.switch_model(req).await;
         assert!(result.is_err());
@@ -4171,6 +4240,7 @@ mod tests {
             expected_dimension: None,
             memory_limit_bytes: None,
             oom_fallback_enabled: None,
+            task: None,
         };
         let result = service.switch_model(req).await;
         assert!(result.is_err());

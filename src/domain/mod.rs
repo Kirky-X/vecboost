@@ -5,7 +5,7 @@ pub mod decision;
 pub mod openai_embedding;
 pub mod scheduling;
 
-use crate::config::model::{DeviceType, PoolingMode};
+use crate::config::model::{DeviceType, ModelTask, PoolingMode};
 use crate::utils::AggregationMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -185,11 +185,12 @@ pub struct ModelSwitchRequest {
     pub expected_dimension: Option<usize>,
     pub memory_limit_bytes: Option<u64>,
     pub oom_fallback_enabled: Option<bool>,
-    // 已知限制（评审 R6 四轮）：无 task 字段，switch 时任务维度从当前模型
-    // 继承。决策引擎已落地（EngineFactory 的 task=decision 分派臂），但
-    // switch 协议仍无 task 字段、无法运行时切换任务维度；增补
-    // `task: Option<ModelTask>`（req.task 优先、继承当前回退）待 switch
-    // 契约扩展任务组承接。
+    /// 任务维度（可选）：switch_model 构造 ModelConfig 时 req.task 优先，
+    /// 缺省继承当前模型、无当前模型回落 Embedding。Option 缺省 None =
+    /// 旧 JSON 反序列化零破坏（评审 R6 四轮「switch 无法切换任务维度」
+    /// 已知限制的契约扩展落点）。
+    #[serde(default)]
+    pub task: Option<ModelTask>,
 }
 
 impl FromStr for ModelSwitchRequest {
@@ -442,6 +443,31 @@ mod tests {
     fn test_model_switch_request_from_str() {
         let req: Result<ModelSwitchRequest, _> = r#"{"model_name":"test"}"#.parse();
         assert!(req.is_ok());
+    }
+
+    #[test]
+    fn test_model_switch_request_task_serde() {
+        // 旧 JSON（无 task 字段）零破坏：反序列化成功且 task=None
+        let legacy: ModelSwitchRequest = serde_json::from_str(r#"{"model_name":"m"}"#).unwrap();
+        assert_eq!(legacy.task, None, "缺 task 字段必须回落 None（零破坏）");
+
+        let decision: ModelSwitchRequest =
+            serde_json::from_str(r#"{"model_name":"m","task":"decision"}"#).unwrap();
+        assert_eq!(
+            decision.task,
+            Some(crate::config::model::ModelTask::Decision)
+        );
+
+        let embedding: ModelSwitchRequest =
+            serde_json::from_str(r#"{"model_name":"m","task":"embedding"}"#).unwrap();
+        assert_eq!(
+            embedding.task,
+            Some(crate::config::model::ModelTask::Embedding)
+        );
+
+        let invalid: Result<ModelSwitchRequest, _> =
+            serde_json::from_str(r#"{"model_name":"m","task":"rerank"}"#);
+        assert!(invalid.is_err(), "rerank 非任务维度，必须显性拒绝");
     }
 
     #[test]

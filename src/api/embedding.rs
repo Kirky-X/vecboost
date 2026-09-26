@@ -33,7 +33,7 @@ use crate::error::VecboostError;
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 use crate::registry::EmbeddingModule;
 #[cfg(any(feature = "http", feature = "grpc"))]
-use crate::registry::{CacheModule, RateLimitModule, RerankModule};
+use crate::registry::{CacheModule, DecisionModule, RateLimitModule, RerankModule};
 #[cfg(any(feature = "http", feature = "grpc"))]
 use crate::utils::{AggregationMode, PathValidator};
 #[cfg(any(feature = "http", feature = "grpc"))]
@@ -609,7 +609,12 @@ async fn model_switch_handler(req: ModelSwitchRequest) -> Result<ModelSwitchResp
     // 切模型传播到 rerank：RerankService 持有旧引擎克隆，不替换则
     // 切换后 rerank 继续用旧模型打分（审计 D27）
     if let Ok(rerank) = st.kit.require::<RerankModule>() {
-        rerank.write().await.replace_engine(new_engine);
+        rerank.write().await.replace_engine(new_engine.clone());
+    }
+    // 同款传播到 decision：DecisionService 持有旧引擎克隆，不替换则
+    // 切换后 decisions 端点继续用旧模型作答（D27 同源缺陷）
+    if let Ok(decision) = st.kit.require::<DecisionModule>() {
+        decision.write().await.replace_engine(new_engine);
     }
     Ok(response)
 }

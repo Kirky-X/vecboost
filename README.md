@@ -172,6 +172,34 @@ curl -X POST http://localhost:9002/api/1/embed \
 }
 ```
 
+决策问答（需 `[model] task = "decision"` 的 Laya 决策管线，`onnx` feature 构建；三题型 choice/score/noul 各有明确响应结构，答案按问题顺序回显）：
+
+```bash
+curl -X POST http://localhost:9002/api/1/decisions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "state": {"topic": "vacation"},
+    "questions": [
+      {"name": "destination", "qtype": "choice", "instructions": "pick one", "options": ["beach", "mountain"]},
+      {"name": "budget", "qtype": "score", "instructions": "rate 1-5"},
+      {"name": "confident", "qtype": "noul", "instructions": "state your p(true)"}
+    ]
+  }'
+```
+
+响应（choice=argmax+各选项概率表，score=期望等级+完整分布，noul=两选项 softmax 的 P(true)）：
+
+```json
+{
+  "answers": [
+    {"question": "destination", "answer": {"type": "choice", "index": 1, "option": "mountain", "probabilities": {"beach": 0.25, "mountain": 0.75}}},
+    {"question": "budget", "answer": {"type": "score", "expected": 3.5, "distribution": {"3": 0.5, "4": 0.5}}},
+    {"question": "confident", "answer": {"type": "noul", "p_true": 0.9}}
+  ],
+  "processing_time_ms": 12
+}
+```
+
 也可以直接使用 CLI（`cli` feature）或 library SDK（`library` 模式）：
 
 ```bash
@@ -193,13 +221,13 @@ cargo run --features cli -- embed --text "Hello, world!"
 
 VecBoost 由 `sdforge` 从 `src/api/embedding.rs` 单一源生成四种协议接口。全部端点、参数、请求/响应示例、gRPC 方法表与消息类型见 [📘 API 参考](docs/API_REFERENCE.md)，概要如下：
 
-- **HTTP/REST**：`/api/1/*` 提供嵌入（单文本/批量/文件）、相似度、语义检索、重排序、模型管理与健康检查端点；
+- **HTTP/REST**：`/api/1/*` 提供嵌入（单文本/批量/文件）、相似度、语义检索、重排序、决策问答（choice/score/noul）、模型管理与健康检查端点；
 - **OpenAI 兼容**：`POST /v1/embeddings`，响应遵循 OpenAI 格式（`object` / `data` / `usage`），支持 `encoding_format=base64`；
 - **Matryoshka 维度约简**：`/v1/embeddings` 传 `dimensions`（256/512/1024 等）换取更小更快的向量，截断后自动 L2 重归一化保证余弦相似度正确；
-- **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 13 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto），JWT 认证、限流、最大连接数与超时均可配置；
-- **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露 `embed` / `embed_batch` / `similarity` / `list_models` 工具；
-- **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank 子命令（见 [💡 最小示例](#最小示例)）；
-- **推理引擎**：Candle（原生 Rust，默认）与 ONNX Runtime（`onnx` feature），经 `EngineFactory::create` 工厂切换；
+- **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 14 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto），JWT 认证、限流、最大连接数与超时均可配置；
+- **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露 `embed` / `embed_batch` / `similarity` / `decisions` / `list_models` 工具；
+- **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank / decisions 子命令（见 [💡 最小示例](#最小示例)）；
+- **推理引擎**：Candle（原生 Rust，默认）与 ONNX Runtime（`onnx` feature），经 `EngineFactory::create` 工厂切换；`[model]` 的 `engine_type` / `task` 配置驱动引擎与任务维度选择——⚠️ `task = "decision"`（Laya 决策管线）与 `task = "embedding"`（默认）为二选一：decision 模式下 embed/rerank 端点返回 400 Unsupported task，embedding 模式下 decisions 端点返回 400（bundle 布局见 [`config/config.toml`](config/config.toml) `[model]` 段注释）；
 - **可观测性与运维**：`/metrics`（Prometheus 指标）、`/health`（存活探针）与 `/health?depth=full`（真实就绪探测）、`/api-docs`（Swagger UI）；只读诊断 `vecboost doctor`（config / tokenizer / 缓存 / 线程 / GPU / 模型完整性，FAIL 退出码 1）。
 
 交互式 OpenAPI 文档：`http://localhost:9002/api-docs`（Swagger UI）与 `/api-docs/openapi.json`（规范 JSON，需 `openapi` feature；ReDoc 推迟到 v0.3.0）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/PERFORMANCE.md#新增指标)。

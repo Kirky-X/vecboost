@@ -136,11 +136,11 @@ use vecboost::{
     rate_limit::{LimiteronAdapter, RateLimitSettings},
     registry::{
         AuditModule, CacheConfig, CacheModule, ConfigWatcherModule, DbConfig, DbModule,
-        EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineQueueModule,
-        PriorityCalculatorModule, PrometheusCollectorModule, RerankModule, ResponseChannelModule,
-        WorkerManagerModule,
+        DecisionModule, EmbeddingModule, IpWhitelistModule, MetricsCollectorModule,
+        PipelineQueueModule, PriorityCalculatorModule, PrometheusCollectorModule, RerankModule,
+        ResponseChannelModule, WorkerManagerModule,
     },
-    service::{embedding::EmbeddingService, rerank::RerankService},
+    service::{decision::DecisionService, embedding::EmbeddingService, rerank::RerankService},
 };
 
 #[cfg(feature = "cli")]
@@ -260,11 +260,31 @@ async fn init_engine_and_services(
     Arc<RwLock<AnyEngine>>,
     Arc<RwLock<EmbeddingService>>,
     Arc<RwLock<RerankService>>,
+    Arc<RwLock<DecisionService>>,
     ModelConfig,
 )> {
+    // [model].engine_type 配置驱动：None/"candle" → Candle，"onnx" → Onnx
+    // （需 onnx feature 构建），未知值启动期显性报错——消灭此处的硬编码 Candle
+    let engine_type = match config.model.engine_type.as_deref() {
+        None | Some("candle") => EngineType::Candle,
+        #[cfg(feature = "onnx")]
+        Some("onnx") => EngineType::Onnx,
+        Some(other) => {
+            let hint = if other == "onnx" && cfg!(not(feature = "onnx")) {
+                "（engine_type=\"onnx\" 需以 --features onnx 重新构建）"
+            } else {
+                ""
+            };
+            return Err(anyhow::anyhow!(
+                "[model] engine_type 未知值 \"{other}\"{hint}，支持: candle, onnx"
+            ));
+        }
+    };
     let model_config = ModelConfig {
         name: config.model.model_repo.clone(),
-        engine_type: EngineType::Candle,
+        engine_type: engine_type.clone(),
+        // tokenizer_path 保持 None（裁决4）：不代赋 bundle 路径，避免
+        // Some(不存在路径) 破坏 DecisionPipeline 的三级探测 fallback 链
         model_path: match &config.model.model_path {
             Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
             _ => std::path::PathBuf::from(&config.model.model_repo),
@@ -283,7 +303,7 @@ async fn init_engine_and_services(
 
     log::info!("Initializing Inference Engine (this may take a while to download models)...");
     let engine: Arc<RwLock<AnyEngine>> = Arc::new(RwLock::new(
-        vecboost::engine::EngineFactory::create(EngineType::Candle, &model_config)?,
+        vecboost::engine::EngineFactory::create(engine_type, &model_config)?,
     ));
 
     let cache_enabled = config.embedding.cache_enabled;
@@ -396,13 +416,28 @@ async fn init_engine_and_services(
         Some(model_config.clone()),
     )));
 
-    Ok((engine, service, rerank_service, model_config))
+    // 决策服务无条件预构建（零成本，三种模式签名统一）：非 decision 配置下
+    // decide 经 trait 默认臂/能力门返回 UnsupportedTask（HTTP 400），端点
+    // 始终可注册应答，不随 engine_type/task 配置缺省而消失
+    let decision_service = Arc::new(RwLock::new(DecisionService::new(
+        engine.clone(),
+        Some(model_config.clone()),
+    )));
+
+    Ok((
+        engine,
+        service,
+        rerank_service,
+        decision_service,
+        model_config,
+    ))
 }
 
 #[cfg(feature = "mcp")]
 async fn run_mcp_server(
     service: Arc<RwLock<EmbeddingService>>,
     rerank_service: Arc<RwLock<RerankService>>,
+    decision_service: Arc<RwLock<DecisionService>>,
 ) -> anyhow::Result<()> {
     use sdforge::rmcp::{ServiceExt, transport::io::stdio};
 
@@ -410,10 +445,13 @@ async fn run_mcp_server(
     let mut kit = trait_kit::AsyncKit::new();
     kit.set_config(service);
     kit.set_config(rerank_service);
+    kit.set_config(decision_service);
     kit.register::<EmbeddingModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RerankModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
+    kit.register::<DecisionModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register DecisionModule: {}", e))?;
     let kit = kit
         .build()
         .await
@@ -484,6 +522,7 @@ fn validate_cli_invocation(filtered_args: &[String]) {
 async fn run_cli_command(
     service: Arc<RwLock<EmbeddingService>>,
     rerank_service: Arc<RwLock<RerankService>>,
+    decision_service: Arc<RwLock<DecisionService>>,
     cli_args: Vec<String>,
 ) -> anyhow::Result<bool> {
     let cli_cmd = CliBuilder::new().with_name("vecboost").build();
@@ -504,10 +543,13 @@ async fn run_cli_command(
     let mut kit = trait_kit::AsyncKit::new();
     kit.set_config(service);
     kit.set_config(rerank_service);
+    kit.set_config(decision_service);
     kit.register::<EmbeddingModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RerankModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
+    kit.register::<DecisionModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register DecisionModule: {}", e))?;
     let kit = kit
         .build()
         .await
@@ -1173,7 +1215,7 @@ async fn app_main() -> anyhow::Result<()> {
     #[cfg(feature = "db")]
     let _ = vecboost::db::register_global_pool(std::sync::Arc::new(db_pool.clone()));
 
-    let (_engine, service, rerank_service, _model_config) =
+    let (_engine, service, rerank_service, decision_service, _model_config) =
         init_engine_and_services(&config).await?;
 
     // `--warmup N` 启动预热 ——N 条合成短文本推理，预热 mkl/代码路径/
@@ -1229,13 +1271,14 @@ async fn app_main() -> anyhow::Result<()> {
 
     #[cfg(feature = "mcp")]
     if std::env::args().any(|a| a == "--mcp") {
-        return run_mcp_server(service, rerank_service).await;
+        return run_mcp_server(service, rerank_service, decision_service).await;
     }
 
     #[cfg(feature = "cli")]
     if run_cli_command(
         service.clone(),
         rerank_service.clone(),
+        decision_service.clone(),
         _filtered_args.clone(),
     )
     .await?
@@ -1290,6 +1333,7 @@ async fn app_main() -> anyhow::Result<()> {
         &config,
         service.clone(),
         rerank_service.clone(),
+        decision_service.clone(),
         rate_limiter.clone(),
         audit_logger.clone(),
         pipeline_queue.clone(),
@@ -1873,13 +1917,14 @@ fn spawn_config_watcher(bg_tasks: &mut tokio::task::JoinSet<()>, config_path: Op
     });
 }
 
-/// 构建模块注册中心(trait-kit AsyncKit)—— 预构建能力注入 + 17 个
+/// 构建模块注册中心(trait-kit AsyncKit)—— 预构建能力注入 + 18 个
 /// Module 注册 + 生命周期/健康检查挂载。从 `app_main` 拆出。
 #[allow(clippy::too_many_arguments)]
 async fn build_module_registry(
     config: &VecboostConfig,
     service: Arc<RwLock<EmbeddingService>>,
     rerank_service: Arc<RwLock<RerankService>>,
+    decision_service: Arc<RwLock<DecisionService>>,
     rate_limiter: Arc<LimiteronAdapter>,
     audit_logger: Option<Arc<AuditLogger>>,
     pipeline_queue: Arc<PriorityRequestQueue>,
@@ -1907,6 +1952,7 @@ async fn build_module_registry(
     // 注入预构建的能力对象（kit 是 single source of truth）— 已清理未被任何 Module/Handler 消费的冗余注入
     kit.set_config(service.clone());
     kit.set_config(rerank_service.clone());
+    kit.set_config(decision_service.clone());
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {
         enabled: config.embedding.cache_enabled,
@@ -1961,13 +2007,15 @@ async fn build_module_registry(
         kit.set_config(garrison_csrf_config.clone());
     }
 
-    // 注册模块（15 个非 auth + 2 个 auth feature = 17 个 Module）
+    // 注册模块（16 个非 auth + 2 个 auth feature = 18 个 Module）
     kit.register::<EmbeddingModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RateLimitModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RateLimitModule: {}", e))?;
     kit.register::<RerankModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
+    kit.register::<DecisionModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register DecisionModule: {}", e))?;
     kit.register::<CacheModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register CacheModule: {}", e))?;
     kit.register::<DbModule>()
@@ -2005,11 +2053,13 @@ async fn build_module_registry(
 
     kit.register_lifecycle::<EmbeddingModule>();
     kit.register_lifecycle::<RerankModule>();
+    kit.register_lifecycle::<DecisionModule>();
     kit.register_lifecycle::<RateLimitModule>();
     kit.register_lifecycle::<AuditModule>();
     kit.register_lifecycle::<ConfigWatcherModule>();
     kit.register_health_check::<EmbeddingModule>();
     kit.register_health_check::<RerankModule>();
+    kit.register_health_check::<DecisionModule>();
     kit.register_health_check::<RateLimitModule>();
     kit.register_health_check::<CacheModule>();
 

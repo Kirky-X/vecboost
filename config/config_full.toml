@@ -50,6 +50,20 @@ max_sequence_length = 8192
 # 注意: 非 CUDA 设备请求 fp16/bf16 会自动回退到 fp32
 # precision = "fp32"
 
+# 推理引擎类型 (可选，默认 candle)
+# 可选值: candle / onnx
+# onnx 需以 `--features onnx` 构建；未知值启动期显性报错
+# engine_type = "candle"
+
+# 任务维度 (可选，默认 embedding)
+# 可选值: embedding / decision —— 二选一语义：
+# ⚠️ task=decision 时模型加载为 Laya 决策管线，仅 /api/1/decisions 可用，
+#    embed/rerank 端点调用返回 400 Unsupported task；task=embedding 时反之。
+# decision bundle 目录布局（model_path 指向 bundle 根）: laya.onnx +
+# laya_config.json + tokenizer/tokenizer.json；Windows 下 .data 与主图同目录
+# 需要以 `--features onnx` 构建；完整说明见 config/config.toml [model] 段
+# task = "embedding"
+
 # ============ 向量化配置 ============
 [embedding]
 # 默认聚合模式

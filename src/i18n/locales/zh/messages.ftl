@@ -48,6 +48,12 @@ rerank-invalid-top-k = 指定 top_k 时必须大于 0
 rerank-unsupported = 当前引擎不支持 rerank
 rerank-query-too-long = 查询长度 { $length } 超过最大允许长度 { $max }
 
+# ── Decision 验证 ──
+decision-empty-state = state 不能为空（决策上下文 state 必填）
+decision-empty-questions = questions 不能为空（至少一个问题）
+decision-too-many-questions = questions 数量 { $count } 超过单次请求上限 { $max }
+decision-unsupported = 当前引擎不支持 decision 决策推理
+
 # ── 目录错误 ──
 dir-get-cwd-failed = 获取当前目录失败：{ $detail }
 

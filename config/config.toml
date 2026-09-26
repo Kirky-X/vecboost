@@ -63,6 +63,27 @@ max_sequence_length = 8192
 # 需要以 `--features quantized-gguf` 构建；质量门见 docs/PERFORMANCE.md「GGUF 量化」节
 # quantized = false
 
+# 推理引擎类型 (可选，默认 candle)
+# 可选值: candle / onnx
+# onnx 需以 `--features onnx` 构建；未知值启动期显性报错。
+# task=decision 时本字段不参与分派（Laya bundle 为 onnx 格式，task 主维度优先）
+# engine_type = "candle"
+
+# 任务维度 (可选，默认 embedding)
+# 可选值: embedding / decision —— 二选一语义：
+# ⚠️ task=decision 时模型加载为 Laya 决策管线，仅 /api/1/decisions 可用，
+#    embed/rerank 端点调用返回 400 Unsupported task；
+#    task=embedding（默认）时反之，decisions 端点返回 400。
+# decision bundle 目录布局（model_path 指向 bundle 根目录）:
+#   <bundle>/laya.onnx                 # 主模型（探测名 model.onnx / laya.onnx 等）
+#   <bundle>/laya_config.json          # per-cardinality 温度校准表（缺失 warn 兜底）
+#   <bundle>/tokenizer/tokenizer.json  # 或 bundle 根下 tokenizer.json
+#   Windows: .data 外部权重文件必须与主图同目录
+# 需要以 `--features onnx` 构建；示例:
+# task = "decision"
+# model_path = "models/laya-decision"
+# task = "embedding"
+
 # 最大驻留模型数 (T019, 可选，默认不限制): 超限按 LFRU 驱逐 score 最低者
 # max_resident_models = 4
 

@@ -21,6 +21,9 @@ pub struct EmbeddingModule;
 /// 重排序服务模块 — 提供 `Arc<RwLock<RerankService>>` 能力
 pub struct RerankModule;
 
+/// 决策服务模块 — 提供 `Arc<RwLock<DecisionService>>` 能力
+pub struct DecisionModule;
+
 /// 认证模块 — 提供 `Option<Arc<GarrisonHandle>>` 能力（需要 auth feature）
 #[cfg(feature = "auth")]
 pub struct AuthModule;

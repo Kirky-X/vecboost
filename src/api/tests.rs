@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::VecboostState;
+#[cfg(feature = "http")]
+use crate::api::decisions::forge_decisions;
 #[cfg(feature = "cli")]
 use crate::api::embedding::{cli_compute_similarity, cli_embed};
 use crate::api::embedding::{compute_similarity, embed, embed_batch};
@@ -9,15 +11,20 @@ use crate::api::embedding::{compute_similarity, embed, embed_batch};
 use crate::api::embedding::{forge_compute_similarity, forge_embed, forge_embed_batch};
 #[cfg(any(feature = "http", feature = "cli"))]
 use crate::api::embedding::{to_api_error, uuid_like_id};
-use crate::config::model::{DeviceType, EngineType, ModelConfig, Precision};
-use crate::domain::{BatchEmbedRequest, EmbedRequest, SimilarityRequest};
+use crate::config::model::{DeviceType, EngineType, ModelConfig, ModelTask, Precision};
+use crate::domain::{
+    BatchEmbedRequest, DecisionRequest, DecisionResponse, EmbedRequest, SimilarityRequest,
+};
 use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
-use crate::registry::EmbeddingModule;
+use crate::registry::{DecisionModule, EmbeddingModule, RerankModule};
+use crate::service::decision::DecisionService;
 use crate::service::embedding::EmbeddingService;
+use crate::service::rerank::RerankService;
 use async_trait::async_trait;
 #[cfg(any(feature = "http", feature = "cli"))]
 use sdforge::prelude::ApiError;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -25,22 +32,43 @@ use tokio::sync::RwLock;
 
 /// Ensure the global STATE is initialized for forge handler tests.
 ///
-/// Builds a minimal `AsyncKit` with only `EmbeddingModule` registered and
-/// injects via `init_state`. Under parallel test execution, multiple tests
-/// may race to initialize; `OnceLock` ensures first-writer-wins, and
-/// subsequent `init_state` errors are silently ignored (expected behavior).
+/// Builds a minimal `AsyncKit` with `EmbeddingModule` / `RerankModule` /
+/// `DecisionModule` registered and injects via `init_state`. Under parallel
+/// test execution, multiple tests may race to initialize; `OnceLock` ensures
+/// first-writer-wins, and subsequent `init_state` errors are silently ignored
+/// (expected behavior). Decision 服务必须随首写一并注入：state 是进程级单例，
+/// 后到的注入静默失效，缺注册会让 forge_decisions require 失败必 500。
 async fn ensure_state_initialized() {
     if crate::api::state().is_ok() {
         return;
     }
     let svc = Arc::new(RwLock::new(make_service(384)));
+    let rerank_svc = Arc::new(RwLock::new(RerankService::new(
+        make_mock_engine_arc(),
+        None,
+    )));
+    let decision_svc = Arc::new(RwLock::new(DecisionService::new(
+        make_mock_engine_arc(),
+        None,
+    )));
     let mut kit = trait_kit::AsyncKit::new();
     kit.set_config(svc);
+    kit.set_config(rerank_svc);
+    kit.set_config(decision_svc);
     kit.register::<EmbeddingModule>()
         .expect("register EmbeddingModule in test kit");
+    kit.register::<RerankModule>()
+        .expect("register RerankModule in test kit");
+    kit.register::<DecisionModule>()
+        .expect("register DecisionModule in test kit");
     let kit = kit.build().await.expect("build test kit");
     // Ignore error: under parallel execution another test may have initialized first
     let _ = crate::api::init_state(VecboostState { kit: Arc::new(kit) });
+}
+
+/// Arc 包装的 mock 决策引擎（rerank/decision 服务共用占位引擎）
+fn make_mock_engine_arc() -> Arc<RwLock<dyn InferenceEngine + Send + Sync>> {
+    Arc::new(RwLock::new(MockDecisionEngine))
 }
 
 /// Deterministic mock engine for API layer tests.
@@ -102,6 +130,71 @@ impl InferenceEngine for TestEngine {
 
     fn supports_mixed_precision(&self) -> bool {
         false
+    }
+
+    async fn try_fallback_to_cpu(&mut self, _config: &ModelConfig) -> Result<(), VecboostError> {
+        Ok(())
+    }
+}
+
+/// 固定作答的 mock 决策引擎：按 qtype 三题型确定性作答，覆盖自身 decide
+/// 与 supports_task(Decision)，供 DecisionService / forge_decisions 走通
+/// trait 分发全链（不依赖 onnx feature 与模型资产，离线可跑）。
+struct MockDecisionEngine;
+
+#[async_trait]
+impl InferenceEngine for MockDecisionEngine {
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+        Ok(vec![0.0; 8])
+    }
+
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+        Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+    }
+
+    fn precision(&self) -> &Precision {
+        &Precision::Fp32
+    }
+
+    fn supports_mixed_precision(&self) -> bool {
+        false
+    }
+
+    fn supports_task(&self, task: ModelTask) -> bool {
+        matches!(task, ModelTask::Embedding | ModelTask::Decision)
+    }
+
+    fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
+        use crate::domain::{DecisionAnswer, DecisionAnswerBody, QuestionType};
+        let answers = req
+            .questions
+            .iter()
+            .map(|q| DecisionAnswer {
+                question: q.name.clone(),
+                answer: match q.qtype {
+                    QuestionType::Choice => DecisionAnswerBody::Choice {
+                        index: 0,
+                        option: q.options.first().cloned().unwrap_or_default(),
+                        probabilities: q
+                            .options
+                            .iter()
+                            .map(|o| (o.clone(), 1.0 / q.options.len().max(1) as f32))
+                            .collect::<BTreeMap<_, _>>(),
+                    },
+                    QuestionType::Score => DecisionAnswerBody::Score {
+                        expected: 3.0,
+                        distribution: (1..=5)
+                            .map(|i| (i.to_string(), 0.2))
+                            .collect::<BTreeMap<_, _>>(),
+                    },
+                    QuestionType::Noul => DecisionAnswerBody::Noul { p_true: 0.7 },
+                },
+            })
+            .collect();
+        Ok(DecisionResponse {
+            answers,
+            processing_time_ms: 0,
+        })
     }
 
     async fn try_fallback_to_cpu(&mut self, _config: &ModelConfig) -> Result<(), VecboostError> {
@@ -666,4 +759,93 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
         content.contains(username),
         "username should match the login user in logout event"
     );
+}
+
+// ---------------------------------------------------------------------------
+// forge_decisions —— /api/1/decisions 端点（DecisionModule kit 装配链）
+// ---------------------------------------------------------------------------
+
+fn decision_mixed_request() -> DecisionRequest {
+    use crate::domain::{DecisionQuestion, QuestionType};
+    DecisionRequest {
+        state: serde_json::json!({"topic": "vacation"}),
+        questions: vec![
+            DecisionQuestion {
+                name: "destination".to_string(),
+                qtype: QuestionType::Choice,
+                instructions: "pick one".to_string(),
+                options: vec!["beach".to_string(), "mountain".to_string()],
+            },
+            DecisionQuestion {
+                name: "budget".to_string(),
+                qtype: QuestionType::Score,
+                instructions: "rate 1-5".to_string(),
+                options: vec![],
+            },
+            DecisionQuestion {
+                name: "confident".to_string(),
+                qtype: QuestionType::Noul,
+                instructions: "state your p(true)".to_string(),
+                options: vec![],
+            },
+        ],
+    }
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_decisions_success_all_three_qtypes() {
+    ensure_state_initialized().await;
+    let result = forge_decisions(decision_mixed_request()).await;
+    assert!(
+        result.is_ok(),
+        "forge_decisions should succeed: {:?}",
+        result.err()
+    );
+    let response = result.unwrap();
+    assert_eq!(response.answers.len(), 3, "三题型必须逐一作答");
+    let json = serde_json::to_value(&response).unwrap();
+    let answers = json["answers"].as_array().unwrap();
+    // wire 形态：internally tagged（{"type":"choice"|"score"|"noul",...}）
+    assert_eq!(answers[0]["answer"]["type"], "choice");
+    assert_eq!(answers[0]["answer"]["option"], "beach");
+    assert_eq!(
+        answers[0]["answer"]["probabilities"]["mountain"].as_f64(),
+        Some(0.5)
+    );
+    assert_eq!(answers[1]["answer"]["type"], "score");
+    assert_eq!(answers[1]["answer"]["expected"].as_f64(), Some(3.0));
+    assert_eq!(
+        answers[1]["answer"]["distribution"]
+            .as_object()
+            .unwrap()
+            .len(),
+        5
+    );
+    assert_eq!(answers[2]["answer"]["type"], "noul");
+    // f32→f64 精度：0.7f32 经 serde 提升为 0.699999988...，用近似比较
+    let p_true = answers[2]["answer"]["p_true"].as_f64().unwrap();
+    assert!((p_true - 0.7).abs() < 1e-6, "p_true={p_true}");
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_decisions_empty_questions_returns_400() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let req = DecisionRequest {
+        state: serde_json::json!({}),
+        questions: vec![],
+    };
+    let result = forge_decisions(req).await;
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        ApiError::InvalidInput { message, .. } => {
+            assert!(
+                message.to_lowercase().contains("questions"),
+                "400 文案必须指明 questions，got: {message}"
+            );
+        }
+        other => panic!("Expected InvalidInput(400), got {:?}", other),
+    }
 }

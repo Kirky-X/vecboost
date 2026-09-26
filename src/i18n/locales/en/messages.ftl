@@ -48,6 +48,12 @@ rerank-invalid-top-k = top_k must be greater than 0 when specified
 rerank-unsupported = Current engine does not support rerank
 rerank-query-too-long = Query length { $length } exceeds maximum allowed length { $max }
 
+# ── Decision validation ──
+decision-empty-state = state must not be empty (decision context state is required)
+decision-empty-questions = questions must not be empty (at least one question required)
+decision-too-many-questions = questions count { $count } exceeds max per request { $max }
+decision-unsupported = Current engine does not support decision inference
+
 # ── Directory errors ──
 dir-get-cwd-failed = Failed to get current directory: { $detail }
 

@@ -94,7 +94,7 @@ pub use sdforge;
 ///
 /// 所有能力通过 `AsyncKit<Ready>` 查询。
 /// 启动时由 `main.rs` 通过 `kit.set_config()` 注入预构建对象 + `kit.register::<M>()`
-/// 注册 17 个 Module,`kit.build().await` 后注入到 `VecboostState`。
+/// 注册 18 个 Module,`kit.build().await` 后注入到 `VecboostState`。
 ///
 /// 路由 handler 通过 `state.kit.require::<M>().expect("...")` 检索能力,
 /// 或通过 Axum `FromRef` 自动注入(`FromRef` impl 也走 `kit.require`)。
@@ -103,7 +103,7 @@ pub struct VecboostState {
     /// trait-kit AsyncKit — 模块能力管理中心
     ///
     /// `AsyncKit<Ready>` 是 `Send + Sync`(基于 `Arc<RwLock>`),可安全存入
-    /// `VecboostState` 并跨线程共享。包含 17 个 Module 的能力查询入口:
+    /// `VecboostState` 并跨线程共享。包含 18 个 Module 的能力查询入口:
     /// - 4 现有:EmbeddingModule/AuthModule/RateLimitModule/AuditModule
     /// - 13 新增:覆盖原 14 字段剩余 13 个(详见 registry/mod.rs)
     pub(crate) kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,

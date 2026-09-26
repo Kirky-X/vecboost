@@ -5,13 +5,14 @@
 //!
 //! `#[forge]`-annotated functions are registered via sdforge inventory for
 //! HTTP/MCP/CLI protocol generation. Embedding handlers in `embedding.rs`,
-//! rerank handlers in `rerank.rs`, auth handlers in `auth.rs`,
-//! state singleton in `init.rs`.
+//! rerank handlers in `rerank.rs`, decision handlers in `decisions.rs`,
+//! auth handlers in `auth.rs`, state singleton in `init.rs`.
 
 #![allow(unexpected_cfgs)]
 
 #[cfg(all(feature = "auth", feature = "http"))]
 pub mod auth;
+pub mod decisions;
 pub mod embedding;
 pub mod init;
 #[cfg(feature = "http")]
@@ -20,6 +21,7 @@ pub mod rerank;
 #[cfg(test)]
 mod tests;
 
+pub use decisions::decide;
 pub use embedding::{compute_similarity, embed, embed_batch};
 pub use init::{init_state, state};
 pub use rerank::{rerank, rerank_batch};
@@ -43,6 +45,11 @@ mod mcp_registration_tests {
         assert!(
             names.iter().any(|n| n == "compute_similarity"),
             "compute_similarity not registered; tools: {:?}",
+            names
+        );
+        assert!(
+            names.iter().any(|n| n == "decisions"),
+            "decisions not registered; tools: {:?}",
             names
         );
     }

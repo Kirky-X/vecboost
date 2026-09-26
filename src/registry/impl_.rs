@@ -22,7 +22,7 @@ use super::CsrfConfigModule;
 use super::PrometheusCollectorModule;
 use super::RateLimitModule;
 use super::{
-    AuditModule, CacheConfig, CacheModule, ConfigWatcherModule, DbConfig, DbModule,
+    AuditModule, CacheConfig, CacheModule, ConfigWatcherModule, DbConfig, DbModule, DecisionModule,
     EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineQueueModule,
     PriorityCalculatorModule, RerankModule, ResponseChannelModule, WorkerManagerModule,
 };
@@ -32,6 +32,7 @@ use crate::auth::GarrisonHandle;
 #[cfg(feature = "http")]
 use crate::metrics::PrometheusCollector;
 use crate::rate_limit::LimiteronAdapter;
+use crate::service::decision::DecisionService;
 use crate::service::embedding::EmbeddingService;
 use crate::service::rerank::RerankService;
 use crate::{
@@ -121,6 +122,47 @@ impl AsyncLifecycle for RerankModule {
 }
 
 impl AsyncHealthCheck for RerankModule {
+    fn check(_cap: &Self::Capability) -> HealthStatus {
+        HealthStatus::Healthy
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DecisionModule
+// ---------------------------------------------------------------------------
+
+impl ModuleMeta for DecisionModule {
+    const NAME: &'static str = "decision";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
+
+    fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
+        &[]
+    }
+}
+
+impl AsyncAutoBuilder for DecisionModule {
+    type Capability = Arc<RwLock<DecisionService>>;
+    type Error = TraitKitError;
+
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { kit.config::<Self::Capability>() })
+    }
+}
+
+impl AsyncLifecycle for DecisionModule {
+    fn on_ready<'a>(
+        _kit: &'a AsyncKit<trait_kit::AsyncReady>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
+        Box::pin(async {
+            log::info!("DecisionModule: decision service ready");
+            Ok(())
+        })
+    }
+}
+
+impl AsyncHealthCheck for DecisionModule {
     fn check(_cap: &Self::Capability) -> HealthStatus {
         HealthStatus::Healthy
     }
@@ -616,6 +658,11 @@ mod impl_tests {
     }
 
     #[test]
+    fn test_decision_module_name() {
+        assert_eq!(DecisionModule::NAME, "decision");
+    }
+
+    #[test]
     fn test_rate_limit_module_name() {
         assert_eq!(RateLimitModule::NAME, "rate_limit");
     }
@@ -693,6 +740,7 @@ mod impl_tests {
     fn test_all_modules_have_no_dependencies() {
         assert!(EmbeddingModule::dependencies().is_empty());
         assert!(RerankModule::dependencies().is_empty());
+        assert!(DecisionModule::dependencies().is_empty());
         assert!(RateLimitModule::dependencies().is_empty());
         assert!(CacheModule::dependencies().is_empty());
         assert!(DbModule::dependencies().is_empty());

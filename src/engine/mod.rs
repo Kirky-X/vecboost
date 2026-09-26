@@ -9,6 +9,9 @@ pub(crate) mod impl_;
 #[cfg(feature = "onnx")]
 pub(crate) mod onnx_engine;
 
+#[cfg(feature = "onnx")]
+pub(crate) mod decision;
+
 #[cfg(feature = "mkl")]
 pub mod mkl_shim;
 
@@ -241,6 +244,14 @@ pub enum AnyEngine {
     Candle(candle_engine::CandleEngine),
     #[cfg(feature = "onnx")]
     Onnx(onnx_engine::OnnxEngine),
+    /// 决策管线引擎（Laya 类 System-1 决策，task=decision）。
+    /// 构造接线由 factory 的 task 分派臂负责（G3）。
+    #[cfg(feature = "onnx")]
+    // 管线类型 pub(crate)（不扩大 API 面）：外部经变体只能取得不可命名的
+    // 具体类型，可用面以 pub trait `InferenceEngine` 为界（service/rerank.rs
+    // 同款 lint 抑制先例）
+    #[allow(private_interfaces)]
+    Decision(decision::DecisionPipeline),
     /// GGUF 量化引擎（Q8_0/Q4_K 加载期反量化桥，）。
     #[cfg(feature = "quantized-gguf")]
     Quantized(quantized_engine::QuantizedCandleEngine),

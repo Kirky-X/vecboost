@@ -72,6 +72,12 @@ name = "onnx"
 path = "engine/onnx.rs"
 required-features = ["onnx"]
 
+# laya_poc — Laya 决策管线 P0 数值对照（EngineFactory→AnyEngine→trait 全链）
+[[bin]]
+name = "laya_poc"
+path = "engine/laya_poc.rs"
+required-features = ["onnx"]
+
 [[bin]]
 name = "switch"
 path = "engine/switch.rs"

@@ -36,6 +36,9 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Quantized(engine) => engine.embed(text),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.embed(text),
+            #[cfg(feature = "onnx")]
+            // 决策引擎的 embed 覆盖返回 UnsupportedTask（不产向量）
+            AnyEngine::Decision(engine) => engine.embed(text),
         }
     }
 
@@ -46,6 +49,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Quantized(engine) => engine.embed_batch(texts),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.embed_batch(texts),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Decision(engine) => engine.embed_batch(texts),
         }
     }
 
@@ -56,6 +61,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Quantized(engine) => engine.precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.precision(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Decision(engine) => engine.precision(),
         }
     }
 
@@ -66,6 +73,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Quantized(engine) => engine.supports_mixed_precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.supports_mixed_precision(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Decision(engine) => engine.supports_mixed_precision(),
         }
     }
 
@@ -77,6 +86,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Quantized(engine) => InferenceEngine::is_fallback_triggered(engine),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.is_fallback_triggered(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Decision(engine) => engine.is_fallback_triggered(),
         }
     }
 
@@ -87,6 +98,9 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Quantized(engine) => engine.count_tokens(text),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.count_tokens(text),
+            #[cfg(feature = "onnx")]
+            // 决策管线未覆盖 count_tokens，走 trait 默认（调用方回退 bytes/4）
+            AnyEngine::Decision(engine) => InferenceEngine::count_tokens(engine, text),
         }
     }
 
@@ -100,6 +114,9 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Quantized(engine) => InferenceEngine::take_stage_snapshot(engine),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.take_stage_snapshot(),
+            #[cfg(feature = "onnx")]
+            // 决策管线暂无分阶段埋点，走 trait 默认 None
+            AnyEngine::Decision(engine) => InferenceEngine::take_stage_snapshot(engine),
         }
     }
 
@@ -110,6 +127,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Quantized(engine) => engine.try_fallback_to_cpu(config).await,
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.try_fallback_to_cpu(config).await,
+            #[cfg(feature = "onnx")]
+            AnyEngine::Decision(engine) => engine.try_fallback_to_cpu(config).await,
         }
     }
 
@@ -120,6 +139,10 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Quantized(engine) => engine.decide(req),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.decide(req),
+            #[cfg(feature = "onnx")]
+            // trait 方法（DecisionPipeline 固有方法名为 decision()，无同名
+            // 遮蔽）：覆盖后经 trait 自然进决策管线，漏转发即恒 UnsupportedTask
+            AnyEngine::Decision(engine) => engine.decide(req),
         }
     }
 
@@ -130,6 +153,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Quantized(engine) => engine.supports_task(task),
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.supports_task(task),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Decision(engine) => engine.supports_task(task),
         }
     }
 
@@ -150,6 +175,12 @@ impl InferenceEngine for AnyEngine {
             }
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.attach_memory_limit_controller(controller),
+            #[cfg(feature = "onnx")]
+            // 决策管线无内存感知分支，UFCS 显式走 trait 默认 no-op
+            //（与 Quantized 臂同口径）
+            AnyEngine::Decision(engine) => {
+                InferenceEngine::attach_memory_limit_controller(engine, controller)
+            }
         }
     }
 }
@@ -568,6 +599,8 @@ mod tests {
             AnyEngine::Candle(candle) => candle.get_memory_status().await,
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(_) => panic!("expected Candle variant"),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Decision(_) => panic!("expected Candle variant"),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(_) => panic!("expected Candle variant"),
         };
@@ -579,6 +612,8 @@ mod tests {
             AnyEngine::Candle(candle) => candle.get_memory_status().await,
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(_) => panic!("expected Candle variant"),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Decision(_) => panic!("expected Candle variant"),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(_) => panic!("expected Candle variant"),
         };

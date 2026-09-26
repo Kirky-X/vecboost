@@ -8,6 +8,7 @@
 |------|------|--------------|
 | `candle.rs` | Candle 引擎初始化与推理(使用 MockEngine 演示 `InferenceEngine` trait) | `http` |
 | `onnx.rs` | ONNX 引擎初始化(启用 `onnx` 时演示真实引擎创建,否则使用 MockEngine) | `onnx` |
+| `laya_poc.rs` | Laya 决策管线 P0 数值对照(经 EngineFactory→AnyEngine→trait 全链,与 golden 概率逐值对照) | `onnx` |
 | `switch.rs` | 运行时通过 `EmbeddingService::switch_model` 切换模型 | `http` |
 
 ## 运行命令
@@ -18,6 +19,9 @@ cargo run -p vecboost-examples --bin candle --features http
 
 # ONNX 引擎示例
 cargo run -p vecboost-examples --bin onnx --features onnx
+
+# Laya 决策管线 P0 数值对照(需本地 bundle,默认 models/laya;缺失时打印下载指引后退出)
+cargo run -p vecboost-examples --bin laya_poc --features onnx
 
 # 运行时模型切换示例
 cargo run -p vecboost-examples --bin switch --features http

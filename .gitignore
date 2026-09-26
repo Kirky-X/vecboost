@@ -99,6 +99,7 @@ test_report*.json
 *.o
 *.a
 *.so
+*.so.*
 *.dll
 *.dylib
 models/

@@ -208,7 +208,7 @@ auth = ["dep:garrison", "dep:aes-gcm"]
 # 引擎特性
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:nvml-wrapper", "dep:cudarc"]
 metal = ["candle-core/metal", "candle-nn/metal"]
-onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/alternative-backend"]
+onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/load-dynamic"]
 # CPU 加速后端（opt-in；见上方 target 表注释）。
 mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl", "dep:half"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]

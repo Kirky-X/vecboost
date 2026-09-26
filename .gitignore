@@ -104,6 +104,7 @@ test_report*.json
 *.dylib
 models/
 *.wasm
+3rdparty/
 .gitnexus
 .codenexus
 

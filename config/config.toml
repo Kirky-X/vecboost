@@ -37,6 +37,14 @@ model_revision = "main"
 # 本地模型路径 (可选，设置后优先使用本地模型)
 # model_path = "models/bge-m3-st"
 
+# tokenizer 显式路径覆盖 (可选，默认不配置)
+# 消费者：onnx 本地 bundle 分支 (按 engine_type="onnx") + 决策管线
+# (按 task="decision"，engine_type 不参与)。两类路径均为：本地 bundle 加载时
+# 优先于根目录与 tokenizer/ 子目录探测，配置了不存在的路径在引擎加载期报错；
+# 其余组合 (candle embedding、onnx 非本地路径/HF 拉取、非本地目录) 不消费该
+# 字段，启动期 warn
+# tokenizer_path = "models/laya-decision/tokenizer/tokenizer.json"
+
 # 是否使用 GPU 加速
 # 安全/可用性默认:false。默认构建不含 GPU feature,置 true 会在无 GPU 环境回退 CPU 并告警。
 # 需要启用时先以相应 cargo feature 构建:

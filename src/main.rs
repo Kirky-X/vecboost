@@ -127,7 +127,7 @@ use vecboost::registry::{AuthModule, CsrfConfigModule};
 use vecboost::{
     VecboostState,
     audit::{AuditConfig, AuditLogger},
-    config::model::{EngineType, ModelConfig},
+    config::model::{EngineType, ModelConfig, ModelTask},
     engine::AnyEngine,
     pipeline::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
@@ -254,17 +254,11 @@ async fn init_db_pool(
     Ok((pool, db_metrics))
 }
 
-async fn init_engine_and_services(
-    config: &VecboostConfig,
-) -> anyhow::Result<(
-    Arc<RwLock<AnyEngine>>,
-    Arc<RwLock<EmbeddingService>>,
-    Arc<RwLock<RerankService>>,
-    Arc<RwLock<DecisionService>>,
-    ModelConfig,
-)> {
-    // [model].engine_type 配置驱动：None/"candle" → Candle，"onnx" → Onnx
-    // （需 onnx feature 构建），未知值启动期显性报错——消灭此处的硬编码 Candle
+/// 引擎级 `ModelConfig` 装配（装配三问①：`[model]` 配置面 → 运行时
+/// ModelConfig）。`[model].engine_type` 未知值启动期显性报错；
+/// `[model].tokenizer_path` 仅用户显式配置时注入，路径缺失在引擎加载期
+/// 显性报错，不代赋。
+fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelConfig> {
     let engine_type = match config.model.engine_type.as_deref() {
         None | Some("candle") => EngineType::Candle,
         #[cfg(feature = "onnx")]
@@ -275,21 +269,40 @@ async fn init_engine_and_services(
             } else {
                 ""
             };
-            return Err(anyhow::anyhow!(
-                "[model] engine_type 未知值 \"{other}\"{hint}，支持: candle, onnx"
-            ));
+            anyhow::bail!("[model] engine_type 未知值 \"{other}\"{hint}，支持: candle, onnx");
         }
     };
-    let model_config = ModelConfig {
+    let model_path = match &config.model.model_path {
+        Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+        _ => std::path::PathBuf::from(&config.model.model_repo),
+    };
+    // tokenizer_path 消费者：onnx 本地 bundle 分支（按 engine_type）+ 决策
+    // 管线（按 task——工厂 task-first 分派臂 DecisionPipeline::load 消费，
+    // engine_type 不参与）；candle embedding 路径与 onnx HF 拉取分支均无
+    // 消费者，配置值会静默 no-op——沿用 use_gpu 无 feature 回退告警惯例，
+    // 启动期显性提示。本地判定与 onnx_engine with_device 同口径
+    // （exists() && is_dir()）。
+    if config.model.tokenizer_path.is_some()
+        && tokenizer_path_is_noop(&engine_type, &config.model.task, &model_path)
+    {
+        log::warn!(
+            "[model].tokenizer_path is configured but no consumer matches \
+             engine_type={} task={}: consumers are the onnx local bundle branch \
+             (engine_type=onnx + local directory) and the decision pipeline \
+             (task=decision + local directory); the value is a no-op",
+            engine_type,
+            config.model.task
+        );
+    }
+    Ok(ModelConfig {
         name: config.model.model_repo.clone(),
-        engine_type: engine_type.clone(),
-        // tokenizer_path 保持 None（裁决4）：不代赋 bundle 路径，避免
-        // Some(不存在路径) 破坏 DecisionPipeline 的三级探测 fallback 链
-        model_path: match &config.model.model_path {
-            Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
-            _ => std::path::PathBuf::from(&config.model.model_repo),
-        },
-        tokenizer_path: None,
+        engine_type,
+        model_path,
+        tokenizer_path: config
+            .model
+            .tokenizer_path
+            .as_deref()
+            .map(std::path::PathBuf::from),
         device: resolve_device_config(config.model.use_gpu),
         max_batch_size: config.model.batch_size,
         pooling_mode: None,
@@ -299,7 +312,42 @@ async fn init_engine_and_services(
         model_sha256: None,
         task: config.model.task,
         quantized: config.model.quantized,
-    };
+    })
+}
+
+/// `[model].tokenizer_path` 在该引擎/任务/模型路径组合下是否静默 no-op。
+/// 两个真实消费者：onnx 本地 bundle 分支（`resolve_local_bundle` 的
+/// explicit 路径，按 engine_type）与决策管线（工厂 task-first 分派臂
+/// `DecisionPipeline::load` 的 explicit 路径，按 task，engine_type 不
+/// 参与）；本地判定与 `onnx_engine` 的 `with_device` 同口径
+/// （`exists() && is_dir()`）。其余组合（candle embedding、onnx HF 拉取
+/// 分支、任何非本地路径）不读该字段。
+fn tokenizer_path_is_noop(
+    engine_type: &EngineType,
+    task: &ModelTask,
+    model_path: &std::path::Path,
+) -> bool {
+    if *task == ModelTask::Decision {
+        return !(model_path.exists() && model_path.is_dir());
+    }
+    match engine_type {
+        EngineType::Candle => true,
+        #[cfg(feature = "onnx")]
+        EngineType::Onnx => !(model_path.exists() && model_path.is_dir()),
+    }
+}
+
+async fn init_engine_and_services(
+    config: &VecboostConfig,
+) -> anyhow::Result<(
+    Arc<RwLock<AnyEngine>>,
+    Arc<RwLock<EmbeddingService>>,
+    Arc<RwLock<RerankService>>,
+    Arc<RwLock<DecisionService>>,
+    ModelConfig,
+)> {
+    let model_config = resolve_engine_model_config(config)?;
+    let engine_type = model_config.engine_type.clone();
 
     log::info!("Initializing Inference Engine (this may take a while to download models)...");
     let engine: Arc<RwLock<AnyEngine>> = Arc::new(RwLock::new(
@@ -2183,6 +2231,70 @@ mod tests {
         assert!(should_warn_plaintext_secrets(false, true, false));
         assert!(!should_warn_plaintext_secrets(true, true, true));
         assert!(!should_warn_plaintext_secrets(false, false, false));
+    }
+
+    // 装配三问①：[model].tokenizer_path 透传进引擎级 ModelConfig（spec
+    // R-model-bundle-fetch-002），注入值原样可达引擎加载分支
+    #[test]
+    fn engine_model_config_passes_through_tokenizer_path() {
+        let mut config = VecboostConfig::default();
+        config.model.tokenizer_path = Some("models/laya/tokenizer/tokenizer.json".to_string());
+        let model_config = resolve_engine_model_config(&config).expect("config resolves");
+        assert_eq!(
+            model_config.tokenizer_path.as_deref(),
+            Some(std::path::Path::new("models/laya/tokenizer/tokenizer.json")),
+            "[model].tokenizer_path 必须透传进引擎级 ModelConfig"
+        );
+    }
+
+    // 未配置 tokenizer_path 时保持 None（探测走根目录 → tokenizer/ 子目录链）
+    #[test]
+    fn engine_model_config_tokenizer_path_defaults_to_none() {
+        let config = VecboostConfig::default();
+        let model_config = resolve_engine_model_config(&config).expect("config resolves");
+        assert!(model_config.tokenizer_path.is_none());
+    }
+
+    // tokenizer_path no-op 判定覆盖面：消费者有两类——onnx 本地 bundle
+    // 分支（按 engine_type）与决策管线（按 task，engine_type 不参与，
+    // 含 candle+decision 组合）；其余（candle embedding、onnx HF 拉取、
+    // 任何非本地目录）一律 no-op 纳入启动期 warn（防配置值静默失效无感知）
+    #[test]
+    fn tokenizer_path_noop_covers_candle_and_onnx_hf_pull() {
+        let bundle = std::env::temp_dir().join(format!("vb_tok_noop_{}", std::process::id()));
+        std::fs::create_dir_all(&bundle).expect("create bundle dir");
+        let hf_repo = std::path::Path::new("BAAI/bge-small-en-v1.5");
+
+        assert!(
+            tokenizer_path_is_noop(&EngineType::Candle, &ModelTask::Embedding, &bundle),
+            "candle embedding 路径无消费者，本地目录亦 no-op"
+        );
+        assert!(
+            !tokenizer_path_is_noop(&EngineType::Candle, &ModelTask::Decision, &bundle),
+            "决策管线按 task 消费（工厂 task-first 臂），candle+decision+本地目录非 no-op"
+        );
+        assert!(
+            tokenizer_path_is_noop(&EngineType::Candle, &ModelTask::Decision, hf_repo),
+            "决策管线非本地路径无 bundle 可探测，no-op 告警保留"
+        );
+
+        #[cfg(feature = "onnx")]
+        {
+            assert!(
+                !tokenizer_path_is_noop(&EngineType::Onnx, &ModelTask::Embedding, &bundle),
+                "onnx 本地 bundle 目录（exists && is_dir）有消费者"
+            );
+            assert!(
+                tokenizer_path_is_noop(&EngineType::Onnx, &ModelTask::Embedding, hf_repo),
+                "onnx HF 拉取分支（非本地目录）必须按 no-op 告警"
+            );
+            assert!(
+                !tokenizer_path_is_noop(&EngineType::Onnx, &ModelTask::Decision, &bundle),
+                "onnx+decision+本地目录经决策臂消费，非 no-op"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&bundle);
     }
 
     // Swagger UI 挂载验证 —— openapi.json 与 UI 资源均可访问

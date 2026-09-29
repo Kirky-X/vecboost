@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use ndarray::{Array1, Array2};
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Tensor;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 use tokenizers::{PaddingParams, PaddingStrategy};
@@ -28,6 +29,68 @@ fn l2_normalize_in_place(v: &mut [f32]) {
             *x /= norm;
         }
     }
+}
+
+/// 本地 bundle 探测（spec R-model-bundle-fetch-002，embedding 引擎口径）。
+///
+/// onnx 文件名优先级：`model_quantized.onnx` → `model.onnx` → 目录内唯一
+/// `*.onnx`（官方 laya bundle 为 `laya.onnx`），多个候选时显性报错并列出
+/// 全部候选文件名。注意：决策管线（decision.rs `MODEL_CANDIDATES`）对同一
+/// 目录按 model.onnx 优先的固定清单探测——优先级分歧是任务协议约定
+/// （embedding 侧要求 quantized 优先；决策侧要求 fp32 主模型优先），两处
+/// 均有测试钉，改动须同步评估另一侧。
+///
+/// tokenizer 解析委托 [`super::local_bundle::resolve_tokenizer_path`]
+/// （与决策管线共用的单一事实源）。
+fn resolve_local_bundle(
+    model_dir: &Path,
+    tokenizer_override: Option<&Path>,
+) -> Result<(PathBuf, PathBuf), VecboostError> {
+    let onnx_path = if model_dir.join("model_quantized.onnx").is_file() {
+        model_dir.join("model_quantized.onnx")
+    } else if model_dir.join("model.onnx").is_file() {
+        model_dir.join("model.onnx")
+    } else {
+        let mut candidates: Vec<PathBuf> = std::fs::read_dir(model_dir)
+            .map_err(|e| {
+                VecboostError::ModelLoadError(format!(
+                    "No ONNX model found in {model_dir:?}: cannot read directory ({e})"
+                ))
+            })?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|p| p.is_file() && p.extension().is_some_and(|ext| ext == "onnx"))
+            .collect();
+        candidates.sort();
+        match candidates.as_slice() {
+            [] => {
+                return Err(VecboostError::ModelLoadError(format!(
+                    "No ONNX model found in {model_dir:?}"
+                )));
+            }
+            [only] => only.clone(),
+            many => {
+                let names: Vec<String> = many
+                    .iter()
+                    .map(|p| {
+                        p.file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .collect();
+                return Err(VecboostError::ModelLoadError(format!(
+                    "Multiple ONNX candidates in {model_dir:?}: {}. Set \
+                     [model].model_path to a directory containing exactly one \
+                     ONNX file",
+                    names.join(", ")
+                )));
+            }
+        }
+    };
+
+    let tokenizer_path =
+        super::local_bundle::resolve_tokenizer_path(model_dir, tokenizer_override)?;
+    Ok((onnx_path, tokenizer_path))
 }
 
 pub struct OnnxEngine {
@@ -60,42 +123,7 @@ impl OnnxEngine {
 
         let (onnx_filename, tokenizer_filename) = if is_local_path {
             log::info!("Using local model path: {:?}", model_path);
-            let onnx_filename = if model_path.join("model_quantized.onnx").exists() {
-                model_path.join("model_quantized.onnx")
-            } else if model_path.join("model.onnx").exists() {
-                model_path.join("model.onnx")
-            } else {
-                return Err(VecboostError::ModelLoadError(format!(
-                    "No ONNX model found in {:?}",
-                    model_path
-                )));
-            };
-            let tokenizer_filename = if model_path.join("tokenizer.json").exists() {
-                model_path.join("tokenizer.json")
-            } else {
-                let parent = model_path.parent().and_then(|p| p.parent());
-                let cache_path = parent.ok_or_else(|| {
-                    VecboostError::ModelLoadError(format!(
-                        "Cannot determine HuggingFace cache path from {:?}",
-                        model_path
-                    ))
-                })?;
-                let cache_tokenizer = cache_path.join("tokenizer.json");
-                if cache_tokenizer.exists() {
-                    log::info!(
-                        "Using tokenizer from HuggingFace cache: {:?}",
-                        cache_tokenizer
-                    );
-                    cache_tokenizer
-                } else {
-                    return Err(VecboostError::ModelLoadError(format!(
-                        "Tokenizer not found at {:?} or {:?}",
-                        model_path.join("tokenizer.json"),
-                        cache_tokenizer
-                    )));
-                }
-            };
-            (onnx_filename, tokenizer_filename)
+            resolve_local_bundle(model_path, config.tokenizer_path.as_deref())?
         } else {
             log::info!("Using HuggingFace Hub for model: {:?}", model_path);
             let repo_id = model_path.to_string_lossy().into_owned();
@@ -907,10 +935,12 @@ mod tests {
         }
     }
 
-    /// 验证 tokenizer.json 不在 model_path 中但从 HuggingFace cache 路径(parent's parent)加载
-    #[ignore = "ort crate environment cleanup crashes test runner when Session::builder() is called"]
+    /// 回归钉：HuggingFace cache 父目录（parent's parent）的 tokenizer.json
+    /// 不再被本地分支探测——spec R-model-bundle-fetch-002 三级顺序
+    /// （tokenizer_path → 根目录 → tokenizer/ 子目录）皆缺即显性报错。
+    /// 探测失败发生在 Session 构造之前，不触发 ort 环境。
     #[test]
-    fn test_onnx_engine_tokenizer_from_cache_path() {
+    fn test_onnx_engine_cache_tokenizer_no_longer_consulted() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let cache_dir = temp_dir.path();
         let intermediate = cache_dir.join("intermediate");
@@ -925,13 +955,10 @@ mod tests {
         config.model_path = model_dir;
 
         let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Cpu);
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert!(
-                matches!(e, VecboostError::ModelLoadError(_)),
-                "Expected ModelLoadError after cache tokenizer load, got {:?}",
-                e
-            );
+        if let Err(VecboostError::ModelLoadError(msg)) = result {
+            assert!(msg.contains("Tokenizer not found"), "got: {msg}");
+        } else {
+            panic!("Expected ModelLoadError: cache-parent tokenizer must not be consulted");
         }
     }
 
@@ -1060,9 +1087,10 @@ mod tests {
         }
     }
 
-    /// 验证 model_path 无 parent's parent 时返回 "Cannot determine HuggingFace cache path" 错误
+    /// 三级 tokenizer 探测皆缺时返回 "Tokenizer not found" 错误
+    /// （错误消息列出检查过的路径：根目录与 tokenizer/ 子目录）
     #[test]
-    fn test_onnx_engine_no_cache_path_determinable() {
+    fn test_onnx_engine_tokenizer_missing_reports_checked_paths() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         std::fs::write(temp_dir.path().join("model.onnx"), b"fake onnx")
             .expect("Failed to write fake model.onnx");
@@ -1074,17 +1102,22 @@ mod tests {
         assert!(result.is_err());
         if let Err(VecboostError::ModelLoadError(msg)) = result {
             assert!(
-                msg.contains("Tokenizer not found") || msg.contains("Cannot determine"),
-                "Expected tokenizer/cache path error, got: {}",
+                msg.contains("Tokenizer not found"),
+                "Expected 'Tokenizer not found', got: {}",
+                msg
+            );
+            assert!(
+                msg.contains("tokenizer.json"),
+                "错误必须列出检查过的 tokenizer 路径清单, got: {}",
                 msg
             );
         }
     }
 
-    /// 验证 cache path 可确定(parent's parent 存在)但 tokenizer 不在 cache path 时,
-    /// 返回包含两个路径的 "Tokenizer not found" 错误
+    /// 嵌套目录中的 bundle 同样走三级探测，皆缺时报 "Tokenizer not found"
+    /// 且消息含 tokenizer/ 子目录候选
     #[test]
-    fn test_onnx_engine_cache_path_determinable_no_tokenizer() {
+    fn test_onnx_engine_nested_bundle_tokenizer_missing_lists_subdir_candidate() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let intermediate = temp_dir.path().join("intermediate");
         let model_dir = intermediate.join("model_dir");
@@ -1104,8 +1137,8 @@ mod tests {
                 msg
             );
             assert!(
-                !msg.contains("Cannot determine"),
-                "Should not be 'Cannot determine' since cache path exists, got: {}",
+                msg.contains("tokenizer"),
+                "清单必须含 tokenizer/ 子目录候选, got: {}",
                 msg
             );
         }
@@ -1202,5 +1235,143 @@ mod tests {
 
         let result = OnnxEngine::with_device(&config, Precision::Fp32, DeviceType::Metal);
         assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // resolve_local_bundle 本地 bundle 探测测试（离线，不经 Session 构造）
+    // =========================================================================
+
+    fn write_file(dir: &std::path::Path, rel: &str, contents: &[u8]) {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create parent dir");
+        }
+        std::fs::write(path, contents).expect("write test file");
+    }
+
+    /// 官方 laya bundle 形态：`laya.onnx`（非 model.onnx 命名）被识别
+    #[test]
+    fn resolve_local_bundle_recognizes_laya_onnx() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        write_file(dir.path(), "laya.onnx", b"fake");
+        write_file(dir.path(), "tokenizer/tokenizer.json", b"{}");
+
+        let (onnx, tokenizer) =
+            resolve_local_bundle(dir.path(), None).expect("laya bundle recognized");
+        assert_eq!(onnx, dir.path().join("laya.onnx"));
+        assert_eq!(tokenizer, dir.path().join("tokenizer/tokenizer.json"));
+    }
+
+    /// tokenizer 子目录形态被识别（根目录无 tokenizer.json 时）
+    #[test]
+    fn resolve_local_bundle_recognizes_tokenizer_subdir() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        write_file(dir.path(), "model.onnx", b"fake");
+        write_file(dir.path(), "tokenizer/tokenizer.json", b"{}");
+
+        let (onnx, tokenizer) =
+            resolve_local_bundle(dir.path(), None).expect("subdir tokenizer recognized");
+        assert_eq!(onnx, dir.path().join("model.onnx"));
+        assert_eq!(tokenizer, dir.path().join("tokenizer/tokenizer.json"));
+    }
+
+    /// 多个非 model 命名的 onnx 候选时显性报错并列出全部候选文件名
+    #[test]
+    fn resolve_local_bundle_multiple_onnx_candidates_error() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        write_file(dir.path(), "laya.onnx", b"fake");
+        write_file(dir.path(), "other.onnx", b"fake");
+
+        let err = resolve_local_bundle(dir.path(), None).unwrap_err();
+        match err {
+            VecboostError::ModelLoadError(msg) => {
+                assert!(msg.contains("laya.onnx"), "candidate list missing: {msg}");
+                assert!(msg.contains("other.onnx"), "candidate list missing: {msg}");
+            }
+            other => panic!("Expected ModelLoadError, got: {other:?}"),
+        }
+    }
+
+    /// 优先级钉：model_quantized.onnx > model.onnx > 唯一 *.onnx
+    #[test]
+    fn resolve_local_bundle_onnx_priority_order() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        write_file(dir.path(), "model_quantized.onnx", b"fake");
+        write_file(dir.path(), "model.onnx", b"fake");
+        write_file(dir.path(), "tokenizer.json", b"{}");
+
+        let (onnx, _) = resolve_local_bundle(dir.path(), None).expect("quantized recognized");
+        assert_eq!(onnx, dir.path().join("model_quantized.onnx"));
+
+        let dir2 = tempfile::tempdir().expect("temp dir");
+        write_file(dir2.path(), "model.onnx", b"fake");
+        write_file(dir2.path(), "laya.onnx", b"fake");
+        write_file(dir2.path(), "tokenizer.json", b"{}");
+        let (onnx2, _) = resolve_local_bundle(dir2.path(), None).expect("model.onnx picked");
+        assert_eq!(onnx2, dir2.path().join("model.onnx"));
+    }
+
+    /// tokenizer_path 显式配置优先于根目录与子目录
+    #[test]
+    fn resolve_local_bundle_tokenizer_override_wins() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        write_file(dir.path(), "model.onnx", b"fake");
+        write_file(dir.path(), "tokenizer.json", b"{}");
+        write_file(dir.path(), "tokenizer/tokenizer.json", b"{}");
+        write_file(dir.path(), "custom/tok.json", b"{}");
+        let override_path = dir.path().join("custom/tok.json");
+
+        let (_, tokenizer) =
+            resolve_local_bundle(dir.path(), Some(&override_path)).expect("override recognized");
+        assert_eq!(tokenizer, override_path);
+    }
+
+    /// tokenizer_path 已配置但路径不存在时显性报错，禁止静默回落
+    #[test]
+    fn resolve_local_bundle_missing_tokenizer_override_errors() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        write_file(dir.path(), "model.onnx", b"fake");
+        write_file(dir.path(), "tokenizer.json", b"{}");
+        let missing = dir.path().join("nowhere/tok.json");
+
+        let err = resolve_local_bundle(dir.path(), Some(&missing)).unwrap_err();
+        match err {
+            VecboostError::ModelLoadError(msg) => {
+                assert!(
+                    msg.contains("nowhere/tok.json") || msg.contains("nowhere"),
+                    "error must name the configured override path, got: {msg}"
+                );
+            }
+            other => panic!("Expected ModelLoadError, got: {other:?}"),
+        }
+    }
+
+    /// 三级 tokenizer 探测皆缺时显性报错
+    #[test]
+    fn resolve_local_bundle_no_tokenizer_anywhere_errors() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        write_file(dir.path(), "model.onnx", b"fake");
+
+        let err = resolve_local_bundle(dir.path(), None).unwrap_err();
+        match err {
+            VecboostError::ModelLoadError(msg) => {
+                assert!(msg.contains("Tokenizer not found"), "got: {msg}");
+            }
+            other => panic!("Expected ModelLoadError, got: {other:?}"),
+        }
+    }
+
+    /// 目录无任何 onnx 文件时报 No ONNX model found（既有口径不回退）
+    #[test]
+    fn resolve_local_bundle_no_onnx_error() {
+        let dir = tempfile::tempdir().expect("temp dir");
+
+        let err = resolve_local_bundle(dir.path(), None).unwrap_err();
+        match err {
+            VecboostError::ModelLoadError(msg) => {
+                assert!(msg.contains("No ONNX model found"), "got: {msg}");
+            }
+            other => panic!("Expected ModelLoadError, got: {other:?}"),
+        }
     }
 }

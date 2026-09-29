@@ -396,9 +396,12 @@ impl ModelManager {
                 memory_limit_bytes: None,
                 oom_fallback_enabled: false,
                 model_sha256: None,
-                // task/quantized 从 LoadedModel 透传（防静默降级）；device/
-                // pooling_mode/memory_limit_bytes/max_batch_size 仍为有损重建
-                // （既有模式，LocalModelLoader 未持久化这些字段），接线组补齐
+                // task/quantized 从 LoadedModel 透传（防静默降级）；tokenizer_path/
+                // device/pooling_mode/memory_limit_bytes/max_batch_size 仍为有损
+                // 重建（既有模式，LocalModelLoader 未持久化这些字段），接线组补齐
+                // ——tokenizer_path 置 None 后 onnx/决策引擎 reload 会回落 bundle
+                // 内探测，用户显式配置被静默丢弃（分词漂移无信号），持久化接线
+                // 时须一并覆盖
                 task: model.task(),
                 quantized: model.quantized(),
             }

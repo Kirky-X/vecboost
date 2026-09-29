@@ -1322,11 +1322,12 @@ impl EmbeddingService {
                 .model_path
                 .clone()
                 .unwrap_or_else(|| std::path::PathBuf::from(req.model_name.clone())),
-            tokenizer_path: req.tokenizer_path.clone().or_else(|| {
-                self.model_config
-                    .as_ref()
-                    .and_then(|c| c.tokenizer_path.clone())
-            }),
+            // tokenizer_path 是模型内生属性（词表与模型绑定），不得跨模型
+            // 继承——local_bundle::resolve_tokenizer_path 对已存在的显式路径
+            // 命中即用零报错，继承旧模型的值会让新模型静默消费异构词表
+            // （分词漂移无信号）。缺省回落新模型 bundle 内探测；与 device/
+            // max_batch_size 等宿主级旋钮的继承不同类，不适用同款回退。
+            tokenizer_path: req.tokenizer_path.clone(),
             device: req
                 .device
                 .clone()
@@ -3069,6 +3070,57 @@ mod tests {
             VecboostError::NotFound(msg) => assert!(
                 !msg.contains("decision"),
                 "无 task 字段不得进决策分派臂，got: {msg}"
+            ),
+            other => panic!("expected NotFound(ModelLoadError 包装), got: {other:?}"),
+        }
+    }
+
+    /// 跨模型 tokenizer 不继承钉：tokenizer_path 是模型内生属性（词表与
+    /// 模型绑定），switch_model 构造的新 ModelConfig 不得缺省继承旧模型的
+    /// 值——local_bundle::resolve_tokenizer_path 对已存在的显式路径命中
+    /// 即用零报错，继承会让新模型静默消费旧模型词表产出错误输出（分词
+    /// 漂移无信号）。场景：旧 config 携带真实存在的 tokenizer 文件，切换
+    /// 到无任何 tokenizer 的 decision bundle（req.tokenizer_path 缺省）——
+    /// 正确行为回落 bundle 内探测报 "Tokenizer not found"；继承回归时
+    /// explicit 命中后 from_file 报 "Failed to load tokenizer"，本钉变红。
+    /// bundle 探测先于 Session 构建，测试离线、不触发 ort。决策臂在
+    /// onnx feature 门内（与 factory 分派钉同口径）。
+    #[cfg(feature = "onnx")]
+    #[tokio::test]
+    async fn test_switch_model_does_not_inherit_previous_tokenizer() {
+        crate::i18n::init();
+        let mock_engine = TestEngine::new(384);
+        let old_tok_dir = tempdir().unwrap();
+        let old_tokenizer = old_tok_dir.path().join("old-tokenizer.json");
+        std::fs::write(&old_tokenizer, b"{}").expect("write old tokenizer file");
+        let mut old_config = make_model_config("tok-origin", 384);
+        old_config.tokenizer_path = Some(old_tokenizer);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let mut service = EmbeddingService::new(engine, Some(old_config));
+
+        let bundle_dir = tempdir().unwrap();
+        std::fs::write(bundle_dir.path().join("model.onnx"), b"fake onnx")
+            .expect("write fake model.onnx");
+
+        let req = ModelSwitchRequest {
+            model_name: "tok-target".to_string(),
+            model_path: Some(bundle_dir.path().to_path_buf()),
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+            task: Some(ModelTask::Decision),
+        };
+        let err = service.switch_model(req).await.unwrap_err();
+        match err {
+            VecboostError::NotFound(msg) => assert!(
+                msg.contains("Tokenizer not found"),
+                "缺省必须回落新 bundle 内探测；若继承旧 tokenizer 路径会报 \
+                 Failed to load tokenizer，got: {msg}"
             ),
             other => panic!("expected NotFound(ModelLoadError 包装), got: {other:?}"),
         }

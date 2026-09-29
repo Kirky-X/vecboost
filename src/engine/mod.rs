@@ -12,6 +12,9 @@ pub(crate) mod onnx_engine;
 #[cfg(feature = "onnx")]
 pub(crate) mod decision;
 
+#[cfg(feature = "onnx")]
+pub(crate) mod local_bundle;
+
 #[cfg(feature = "mkl")]
 pub mod mkl_shim;
 

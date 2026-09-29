@@ -68,6 +68,12 @@ pub struct ModelConfig {
     pub model_revision: String,
     #[garde(skip)]
     pub model_path: Option<String>,
+    /// tokenizer 显式路径覆盖：对应引擎级 `ModelConfig.tokenizer_path`，
+    /// 本地 bundle 加载时优先于根目录与 `tokenizer/` 子目录探测；已配置但
+    /// 路径不存在时引擎加载期显性报错。
+    #[garde(skip)]
+    #[serde(default)]
+    pub tokenizer_path: Option<String>,
     #[garde(skip)]
     pub use_gpu: bool,
     #[garde(range(min = 1, max = 1024))]
@@ -604,6 +610,7 @@ impl Default for ModelConfig {
             model_repo: "BAAI/bge-m3".to_string(),
             model_revision: "main".to_string(),
             model_path: None,
+            tokenizer_path: None,
             use_gpu: false,
             batch_size: DEFAULT_BATCH_SIZE,
             expected_dimension: Some(DEFAULT_EXPECTED_DIMENSION),
@@ -1246,6 +1253,7 @@ mod tests {
             model_repo: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
             model_revision: "v1.0".to_string(),
             model_path: Some("/path/to/model".to_string()),
+            tokenizer_path: None,
             use_gpu: true,
             batch_size: 128,
             expected_dimension: Some(384),

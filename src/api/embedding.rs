@@ -572,6 +572,82 @@ async fn run_deep_health_checks(st: &crate::VecboostState) -> Vec<serde_json::Va
     failures
 }
 
+/// switch 显式路径校验：`model_path` 为目录语义（bundle 目录），
+/// `tokenizer_path` 为文件语义——与引擎期 `resolve_tokenizer_path` 的
+/// explicit 分支 `is_file()` 契约同型；校验类型若与消费契约错位，文件路径
+/// 被这里 400 拒绝、目录路径放行后在引擎期报错，两条路皆死。
+/// validator 拒绝（越界/不存在/类型不符）都属客户端输入错误，映射 400；
+/// 若走 to_api_error 会落入 SecurityError→500，把输入错误伪装成服务端故障。
+#[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
+const SWITCH_PATH_REJECTED_MESSAGE: &str = "path rejected: must be an existing path \
+     inside the allowed roots (model_path must be a directory, tokenizer_path must \
+     be a file); see server logs";
+
+/// switch 引擎加载失败的 wire 固定文案：失败原文（EngineFactory 的
+/// model-load-failed 包装、local_bundle 探测清单）携带服务器 canonical
+/// 绝对路径，to_api_error 的 NotFound 臂把原文整体放进 resource_id 直达
+/// 响应体（sdforge wire 的 details.resource_id），与本 handler 前半段
+/// SWITCH_PATH_REJECTED_MESSAGE 封住的路径拒绝通道同型（CWE-209/497）。
+/// 原文全量入服务端日志；UnsupportedTask 例外——客户端可换任务纠正的
+/// fail-fast 错误，保留 to_api_error 的 400 臂。
+#[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
+const SWITCH_MODEL_LOAD_FAILED_MESSAGE: &str = "model load failed; see server logs";
+
+/// switch 失败 → wire 错误映射（纯函数，可单测），口径见
+/// [`SWITCH_MODEL_LOAD_FAILED_MESSAGE`]。
+#[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
+fn switch_error_to_api_error(e: VecboostError) -> ApiError {
+    match e {
+        // UnsupportedTask 直传：客户端可换任务/端点纠正，不得与加载失败
+        // 混同为 404（EngineFactory 分派注释钉死的契约）
+        VecboostError::UnsupportedTask(_) => to_api_error(e),
+        e => {
+            log::error!("switch_model failed: {e}");
+            ApiError::NotFound {
+                resource: "model".to_string(),
+                resource_id: Some(SWITCH_MODEL_LOAD_FAILED_MESSAGE.to_string()),
+            }
+        }
+    }
+}
+
+/// switch 显式路径校验：`model_path` 为目录语义（bundle 目录），
+/// `tokenizer_path` 为文件语义——与引擎期 `resolve_tokenizer_path` 的
+/// explicit 分支 `is_file()` 契约同型；校验类型若与消费契约错位，文件路径
+/// 被这里 400 拒绝、目录路径放行后在引擎期报错，两条路皆死。
+/// validator 拒绝（越界/不存在/类型不符）都属客户端输入错误，映射 400；
+/// 若走 to_api_error 会落入 SecurityError→500，把输入错误伪装成服务端故障。
+/// wire 固定文案：PathValidator 的 SecurityError 原文携带服务器 canonical
+/// 路径与 Allowed roots 清单（`grpc_allowed_roots` 配置面），回显给能触达
+/// switch 端点的客户端即目录布局探测线索（CWE-209/CWE-497）——拒绝详情
+/// 全量只入服务端日志（与 decision JoinError 的 wire 脱敏同口径）。
+#[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
+fn validate_switch_paths(
+    validator: &PathValidator,
+    model_path: Option<&std::path::Path>,
+    tokenizer_path: Option<&std::path::Path>,
+) -> Result<(), ApiError> {
+    let invalid_input = |field: &str, path: &std::path::Path, e: VecboostError| -> ApiError {
+        log::warn!("switch path validation rejected {field}={path:?}: {e}");
+        ApiError::InvalidInput {
+            message: SWITCH_PATH_REJECTED_MESSAGE.to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::Value::String(path.display().to_string())),
+        }
+    };
+    if let Some(path) = model_path {
+        validator
+            .validate_directory(path)
+            .map_err(|e| invalid_input("model_path", path, e))?;
+    }
+    if let Some(path) = tokenizer_path {
+        validator
+            .validate_file(path)
+            .map_err(|e| invalid_input("tokenizer_path", path, e))?;
+    }
+    Ok(())
+}
+
 #[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
 async fn model_switch_handler(req: ModelSwitchRequest) -> Result<ModelSwitchResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
@@ -583,18 +659,11 @@ async fn model_switch_handler(req: ModelSwitchRequest) -> Result<ModelSwitchResp
             .config::<crate::config::app::ServerConfig>()
             .unwrap_or_default();
         let validator = model_path_validator(server_cfg.grpc_allowed_roots.as_deref());
-        for path in req.model_path.iter().chain(req.tokenizer_path.iter()) {
-            // 与 /embed/file 的路径校验一致：validator 拒绝（越界/不存在/非目录）
-            // 都属客户端输入错误，映射 400；若走 to_api_error 会落入
-            // SecurityError→500，把输入错误伪装成服务端故障。
-            validator
-                .validate_directory(path)
-                .map_err(|e| ApiError::InvalidInput {
-                    message: e.to_string(),
-                    field: Some("model_path".to_string()),
-                    value: Some(serde_json::Value::String(path.display().to_string())),
-                })?;
-        }
+        validate_switch_paths(
+            &validator,
+            req.model_path.as_deref(),
+            req.tokenizer_path.as_deref(),
+        )?;
     }
 
     let svc = st
@@ -605,7 +674,7 @@ async fn model_switch_handler(req: ModelSwitchRequest) -> Result<ModelSwitchResp
     let switch_result = guard.switch_model(req).await;
     let new_engine = guard.engine_handle();
     drop(guard);
-    let response = switch_result.map_err(to_api_error)?;
+    let response = switch_result.map_err(switch_error_to_api_error)?;
     // 切模型传播到 rerank：RerankService 持有旧引擎克隆，不替换则
     // 切换后 rerank 继续用旧模型打分（审计 D27）
     if let Ok(rerank) = st.kit.require::<RerankModule>() {
@@ -1284,6 +1353,129 @@ mod tests {
         let err = check_file_embed_size(10 * 1024 * 1024 + 1).unwrap_err();
         // en("10 MiB limit")/zh("10 MiB 上限") 双语均含 "10 MiB"
         assert!(err.contains("10 MiB"));
+    }
+
+    /// switch 显式路径校验分流：tokenizer_path 文件语义（与引擎期
+    /// is_file() 契约同型）、model_path 目录语义；越界一律 400 语义拒绝，
+    /// 且 wire 为固定脱敏文案——validator 原文（canonical 路径 +
+    /// Allowed roots 清单）不得外泄到响应体
+    #[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
+    #[test]
+    fn switch_path_validation_splits_file_and_dir_semantics() {
+        let base = std::env::temp_dir().join(format!("vb_switch_paths_{}", std::process::id()));
+        let model_dir = base.join("bundle");
+        std::fs::create_dir_all(&model_dir).expect("create model dir");
+        let tok_file = model_dir.join("tokenizer.json");
+        std::fs::write(&tok_file, b"{}").expect("write tokenizer file");
+
+        let roots = vec![base.to_string_lossy().to_string()];
+        let validator = model_path_validator(Some(&roots));
+
+        // 目录 model_path + 文件 tokenizer_path：各按语义放行
+        assert!(validate_switch_paths(&validator, Some(&model_dir), Some(&tok_file)).is_ok());
+
+        // tokenizer_path 传目录 → 400 语义拒绝（引擎期 is_file() 必败的前置拦截）
+        let canonical_model_dir = model_dir.canonicalize().unwrap();
+        match validate_switch_paths(&validator, Some(&model_dir), Some(&model_dir)) {
+            Err(ApiError::InvalidInput {
+                message,
+                field,
+                value,
+            }) => {
+                assert_eq!(
+                    field.as_deref(),
+                    Some("tokenizer_path"),
+                    "错误必须点名 tokenizer_path 字段"
+                );
+                // wire 固定脱敏文案：validator 原文携带 canonical 路径与
+                // Allowed roots 清单，回显即服务器目录布局泄露（CWE-209/497）
+                assert_eq!(
+                    message, SWITCH_PATH_REJECTED_MESSAGE,
+                    "wire 必须是固定文案，禁止拼接 validator 原文: {message}"
+                );
+                assert!(
+                    !message.contains("Allowed roots")
+                        && !message.contains(canonical_model_dir.to_string_lossy().as_ref()),
+                    "wire 不得携带服务器内部路径信息: {message}"
+                );
+                // value 槽回显客户端自供的原始输入（非服务器 canonical），允许
+                assert_eq!(
+                    value.as_ref().map(|v| v.as_str().unwrap()),
+                    Some(model_dir.to_str().unwrap())
+                );
+            }
+            Err(other) => panic!("期望 InvalidInput，got {other:?}"),
+            Ok(()) => panic!("目录 tokenizer_path 不得放行"),
+        }
+
+        // tokenizer_path 文件越界 → 拒绝
+        let outside_file =
+            std::env::temp_dir().join(format!("vb_outside_tok_{}.json", std::process::id()));
+        std::fs::write(&outside_file, b"{}").expect("write outside file");
+        match validate_switch_paths(&validator, None, Some(&outside_file)) {
+            Err(ApiError::InvalidInput { message, field, .. }) => {
+                assert_eq!(field.as_deref(), Some("tokenizer_path"));
+                // 越界拒绝的原文含 "Allowed roots: <roots 配置>"，同样不得上线
+                assert_eq!(message, SWITCH_PATH_REJECTED_MESSAGE, "got: {message}");
+                assert!(
+                    !message.contains("Allowed roots"),
+                    "越界拒绝的 wire 文案不得携带 Allowed roots 清单: {message}"
+                );
+            }
+            Err(other) => panic!("期望 InvalidInput，got {other:?}"),
+            Ok(()) => panic!("越界 tokenizer_path 必须拒绝"),
+        }
+
+        // model_path 传文件 → 拒绝（目录语义）
+        assert!(
+            validate_switch_paths(&validator, Some(&tok_file), None).is_err(),
+            "文件 model_path 必须拒绝"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_file(&outside_file);
+    }
+
+    /// switch 加载失败 wire 脱敏钉：ModelLoadError/NotFound 原文携带服务器
+    /// canonical 绝对路径（local_bundle 探测清单、EngineFactory detail），
+    /// 旧映射把它们整体塞进 NotFound.resource_id 直达响应体（CWE-209/497），
+    /// 与同 handler 前半段 SWITCH_PATH_REJECTED_MESSAGE 封住的路径拒绝通道
+    /// 构成同端点泄漏面——wire 必须是固定文案；UnsupportedTask 保留
+    /// to_api_error 的 400 InvalidInput 臂（客户端可换任务纠正，不混同 404）
+    #[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
+    #[test]
+    fn switch_error_wire_mapping_sanitizes_load_failure_details() {
+        let server_only = "/srv/only-server-knows/models/laya";
+        for raw in [
+            VecboostError::ModelLoadError(format!(
+                "Tokenizer not found: no [model].tokenizer_path configured; \
+                 checked {server_only:?} and {server_only}/tokenizer/tokenizer.json"
+            )),
+            VecboostError::NotFound(format!("model-load-failed: detail checked {server_only:?}")),
+        ] {
+            match switch_error_to_api_error(raw) {
+                ApiError::NotFound {
+                    resource,
+                    resource_id: Some(id),
+                } => {
+                    assert_eq!(resource, "model", "404 语义保留");
+                    assert_eq!(
+                        id, SWITCH_MODEL_LOAD_FAILED_MESSAGE,
+                        "wire 必须是固定文案: {id}"
+                    );
+                    assert!(
+                        !id.contains(server_only),
+                        "canonical 路径不得外泄到 wire: {id}"
+                    );
+                }
+                other => panic!("期望 NotFound，got {other:?}"),
+            }
+        }
+
+        match switch_error_to_api_error(VecboostError::unsupported_task("decision".into())) {
+            ApiError::InvalidInput { .. } => {}
+            other => panic!("UnsupportedTask 须保留 400 臂，got {other:?}"),
+        }
     }
 
     /// model_path 白名单 —— 配置根内通过,越界拒绝,未配置回落 models/

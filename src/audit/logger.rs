@@ -953,10 +953,14 @@ mod tests {
         );
     }
 
-    /// 1000 条审计事件 log_* 调用总耗时 < 100ms。
+    /// 1000 条审计事件 log_* 调用总耗时 < 100ms（3 轮取最小值）。
     ///
     /// `log_*` 方法仅 `sender.send(LoggerCommand::Event(event))`（mpsc unbounded，
     /// 非阻塞），1000 次 send 应在毫秒级完成。后台 writer task 异步批量写入不计入耗时。
+    /// 墙钟测量取 3 轮最小值：全量测试套件并行执行时 OS 调度可能把单轮
+    /// 推迟数十至上百毫秒（纯内存 send 实测被抢占到 121ms），单轮断言会把
+    /// 调度噪声误判为热路径回归；真实回归类别（log_* 误入同步 I/O）单轮
+    /// 即达秒级，最小值口径不影响其钉力。
     #[tokio::test]
     async fn test_1000_log_calls_under_100ms() {
         let temp_dir = TempDir::new().unwrap();
@@ -968,11 +972,16 @@ mod tests {
         };
         let logger = AuditLogger::new(config);
 
-        let start = std::time::Instant::now();
-        for i in 0..1000 {
-            logger.log_login_success(&format!("user{}", i), Some("127.0.0.1".to_string()));
-        }
-        let elapsed = start.elapsed();
+        let elapsed = (0..3)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                for i in 0..1000 {
+                    logger.log_login_success(&format!("user{}", i), Some("127.0.0.1".to_string()));
+                }
+                start.elapsed()
+            })
+            .min()
+            .unwrap();
 
         assert!(
             elapsed.as_millis() < 100,
@@ -1014,12 +1023,18 @@ mod tests {
 
         // 连续 100 次调用 log_*（与 test_batch_flush_at_100_entries 相同模式）
         // 若 log_* 内有 fs::metadata syscall，100 次同步调用会显著慢于 1ms；
-        // 由于是 sender.send（非阻塞），100 次应在微秒级完成。
-        let start = std::time::Instant::now();
-        for i in 0..100 {
-            logger.log_login_success(&format!("user{}", i), None);
-        }
-        let elapsed = start.elapsed();
+        // 由于是 sender.send（非阻塞），100 次应在微秒级完成。3 轮取最小值
+        // 过滤套件并行执行下的调度尖峰（同 test_1000_log_calls_under_100ms）。
+        let elapsed = (0..3)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                for i in 0..100 {
+                    logger.log_login_success(&format!("user{}", i), None);
+                }
+                start.elapsed()
+            })
+            .min()
+            .unwrap();
         assert!(
             elapsed.as_millis() < 10,
             "100 log_* calls took {}ms, expected < 10ms (non-blocking send)",

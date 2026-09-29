@@ -256,6 +256,8 @@ max_sequence_length = 8192  # 每请求最大令牌数
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `model_repo` | `BAAI/bge-m3` | HuggingFace 模型 ID |
+| `model_path` | - | 本地模型路径（设置后优先于 HF 拉取） |
+| `tokenizer_path` | - | tokenizer 显式路径覆盖：**消费者为 onnx 本地 bundle 分支（按 engine_type）与决策管线（按 task="decision"，engine_type 不参与）**——本地 bundle 加载时优先于根目录与 `tokenizer/` 子目录探测，配置了不存在的路径在引擎加载期显性报错；其余组合（candle/quantized embedding、onnx HF 拉取分支、非本地目录）不消费该字段（启动期 warn） |
 | `use_gpu` | `false` | 是否使用 GPU |
 | `batch_size` | `32` | 批处理大小 |
 | `expected_dimension` | `1024` | 嵌入向量维度 |
@@ -293,6 +295,60 @@ max_sequence_length = 8192  # 每请求最大令牌数
 > `deny_unknown_fields`：其序列化产物（配置快照/持久化配置）跨版本读写时，
 > 升级新增的字段对旧二进制是**显性反序列化错误**而非静默忽略——降级前请
 > 核对产物字段集合。
+
+#### Laya 决策 bundle 获取
+
+`task = "decision"` 需要 Laya ONNX bundle 就绪。除手动下载外，可通过库 API
+`vecboost::utils::hf_hub::download_files` 一次拉取官方 bundle（仅 HF 直连；
+hf-mirror.com 等镜像因 hf-hub 1.0.0 ETag 限制不受支持）：
+
+```rust
+use vecboost::utils::hf_hub::{LAYA_BUNDLE_FILES, LAYA_BUNDLE_REPO, download_files};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let manifest: Vec<(String, std::path::PathBuf)> = LAYA_BUNDLE_FILES
+        .iter()
+        .map(|f| ((*f).to_string(), std::path::PathBuf::from(f)))
+        .collect();
+    let downloaded = download_files(
+        LAYA_BUNDLE_REPO,
+        &manifest,
+        std::path::Path::new("models/laya-decision"),
+    )
+    .await?;
+    println!("downloaded {} files", downloaded.len());
+    Ok(())
+}
+```
+
+- 内置清单常量 `LAYA_BUNDLE_REPO = "receptron/laya-onnx"`，共 5 文件：
+  `laya.onnx`、`laya.onnx.data`、`laya_config.json`、
+  `tokenizer/tokenizer.json`、`tokenizer/tokenizer_config.json`。内置常量与
+  上游实际文件的一致性由联网集成测试钉住（上游增删文件时先行红灯）：
+  `HF_INTEGRATION=1 cargo test -p vecboost --test hf_hub_integration`。
+- 任一文件下载失败即聚合报错，错误消息同时列出已成功与失败文件及各自原因
+  （无静默部分成功）；远端路径含 `..` 穿越、空清单、非法 repo_id 均在不发起
+  网络请求前显性拒绝。
+- 落位文件已存在**且字节数与远端一致**时跳过重下（hf-hub local_dir 下载直写
+  最终路径、中断会留部分文件，size 校验防部分文件被当成功；size 无法确认时
+  一律重下）。清单下载使用独立 HTTP 客户端（连接超时 10s、不设总超时），
+  慢速直连链路下载 1.6 GB 级资产不会被 300s 级总超时中断。
+- 约 1.6 GB 的 `laya.onnx.data` 落位 `models/`（已被 `.gitignore` 覆盖），
+  不入 git。下载后配置 `model_path = "models/laya-decision"` 指向 bundle 目录。
+
+> **⚠️ 禁用注记**：`Mattepiu/laya-onnx` 为 marker 维静态 `[.,2]` 坏产物，
+> **禁止作为下载目标**——该产物把 marker gather 维度以静态 shape 导出，
+> 无法按变长题面推理。只使用官方 `receptron/laya-onnx`。
+
+本地 bundle 目录加载口径：tokenizer 由 embedding 与 decision 两管线共用同一
+契约解析——按 `[model].tokenizer_path`（已配置但路径不存在时显性报错，不静默
+回落）→ 根目录 `tokenizer.json` → `tokenizer/tokenizer.json` 顺序（皆缺报错）。
+ONNX 主模型文件探测按管线分化（任务协议约定）：embedding（`engine_type =
+"onnx"`）按 `model_quantized.onnx` → `model.onnx` → 目录内唯一 `*.onnx`（多个
+候选报错并列出清单）；decision（`task = "decision"`）按 `model.onnx` →
+`model_quantized.onnx` → `laya.onnx` → `laya_int8.onnx` 固定清单（fp32 主模型
+优先）。
 
 ---
 

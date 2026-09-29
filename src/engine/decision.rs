@@ -55,7 +55,10 @@ const MAX_TEMPERATURE: f32 = 5.0;
 pub(crate) const DEFAULT_TEMPERATURE: f32 = 1.2;
 
 /// bundle 内模型文件探测顺序（任务协议：model.onnx → model_quantized.onnx
-/// → laya.onnx → laya_int8.onnx）
+/// → laya.onnx → laya_int8.onnx；决策侧要求 fp32 主模型优先 + 显式枚举
+/// laya 变体名。与 onnx_engine::resolve_local_bundle 的 embedding 口径
+/// ——quantized 优先 + 唯一 `*.onnx` 扫描——分歧为任务协议约定，两侧
+/// 均有测试钉，改动须同步评估另一侧）
 const MODEL_CANDIDATES: [&str; 4] = [
     "model.onnx",
     "model_quantized.onnx",
@@ -603,32 +606,6 @@ fn probe_model_file(bundle_dir: &Path) -> Result<PathBuf, VecboostError> {
     )))
 }
 
-/// tokenizer 探测：显式路径 → bundle 根 tokenizer.json → tokenizer/ 子目录；
-/// 全 miss 报含尝试路径清单的 `ModelLoadError`
-fn probe_tokenizer_file(
-    bundle_dir: &Path,
-    explicit: Option<&Path>,
-) -> Result<PathBuf, VecboostError> {
-    let mut candidates = Vec::with_capacity(3);
-    if let Some(p) = explicit {
-        candidates.push(p.to_path_buf());
-    }
-    candidates.push(bundle_dir.join("tokenizer.json"));
-    candidates.push(bundle_dir.join("tokenizer").join("tokenizer.json"));
-    let mut tried = Vec::with_capacity(candidates.len());
-    for candidate in &candidates {
-        if candidate.is_file() {
-            return Ok(candidate.clone());
-        }
-        tried.push(candidate.display().to_string());
-    }
-    Err(VecboostError::ModelLoadError(format!(
-        "Tokenizer not found for decision bundle {}; tried: {}",
-        bundle_dir.display(),
-        tried.join(", ")
-    )))
-}
-
 /// 探测命中的模型文件名 → 对外精度标签：`*_quantized`/`*_int8` 候选命中时
 /// 报 Int8，其余 Fp32（supports_mixed_precision 恒 false 已诚实，仅加载期
 /// 标签与探测结果一致，避免 quantized/int8 bundle 对外失真报 Fp32）
@@ -686,11 +663,12 @@ fn build_session(model_file: &Path, device: &DeviceType) -> Result<Session, Vecb
 }
 
 impl DecisionPipeline {
-    /// 从 bundle 目录加载：模型按 [`MODEL_CANDIDATES`] 探测，tokenizer 按
-    /// `config.tokenizer_path` 显式 → bundle 根 `tokenizer.json` →
-    /// `tokenizer/tokenizer.json` 子目录探测（装配侧 `tokenizer_path: None`
-    /// 不影响 fallback 链）；全 miss 报 `ModelLoadError` 含尝试路径清单。
-    /// 校准表缺失 warn + 空表兜底；损坏报 `ModelFileCorrupted`。
+    /// 从 bundle 目录加载：模型按 [`MODEL_CANDIDATES`] 探测，tokenizer 经
+    /// `local_bundle::resolve_tokenizer_path` 共享契约解析——
+    /// `config.tokenizer_path` 显式路径（已配置但不存在时显性报错，不回落）
+    /// → bundle 根 `tokenizer.json` → `tokenizer/tokenizer.json` 子目录；
+    /// 皆缺报 `ModelLoadError` 含检查路径清单。校准表缺失 warn + 空表兜底；
+    /// 损坏报 `ModelFileCorrupted`。
     ///
     /// # 完整性校验覆盖边界（威胁模型声明）
     /// `config.model_sha256` 仅校验探测命中的主模型文件。bundle 内
@@ -723,7 +701,10 @@ impl DecisionPipeline {
             }
         }
 
-        let tokenizer_file = probe_tokenizer_file(&bundle_dir, config.tokenizer_path.as_deref())?;
+        let tokenizer_file = super::local_bundle::resolve_tokenizer_path(
+            &bundle_dir,
+            config.tokenizer_path.as_deref(),
+        )?;
         // bundle tokenizer.json 常自带 truncation/padding 配置（如 MiniLM 的
         // fixed-128 padding）——决策协议自管特殊 token 拼接与 collate 填充，
         // 两者必须清除，否则序列被静默 pad/截断（协议漂移）
@@ -1847,6 +1828,21 @@ mod tests {
                     msg.contains("model.onnx") && msg.contains("laya.onnx"),
                     "错误必须列出尝试的模型路径清单，msg={msg}"
                 );
+                // 顺序钉 MODEL_CANDIDATES 探测优先级（fp32 主模型优先的任务
+                // 协议约定）：tried 清单按候选顺序生成，长度钉挡不住乱序
+                // 回归；与 onnx_engine::resolve_local_bundle 的 embedding 侧
+                // 优先级钉配对（两侧注释宣称的「均有测试钉」以此为准）
+                let positions = [
+                    msg.find("model.onnx"),
+                    msg.find("model_quantized.onnx"),
+                    msg.find("laya.onnx"),
+                    msg.find("laya_int8.onnx"),
+                ];
+                assert!(
+                    positions.iter().all(|p| p.is_some())
+                        && positions.windows(2).all(|w| w[0] < w[1]),
+                    "tried 清单必须按 MODEL_CANDIDATES 顺序排列，msg={msg}"
+                );
             }
             Err(other) => panic!("期望 ModelLoadError，got {other:?}"),
             Ok(_) => panic!("空 bundle 必须加载失败"),
@@ -1874,6 +1870,33 @@ mod tests {
             // 正常情况在 fake onnx 的 session 构建前即失败（探测先于 Session::builder，
             // 不触发 ort 环境崩溃问题）
             Ok(_) => panic!("缺 tokenizer 必须加载失败"),
+        }
+    }
+
+    // tokenizer_path 已配置但路径不存在时必须显性报错——即使 bundle 根目录
+    // 有 tokenizer.json 也不得静默回落（静默换用其他 tokenizer 产生分词漂移，
+    // 与 onnx_engine::resolve_local_bundle 同一契约，探测先于 Session 构建）
+    #[test]
+    fn test_decision_pipeline_load_bad_explicit_tokenizer_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("model.onnx"), b"fake onnx").expect("write model");
+        std::fs::write(dir.path().join("tokenizer.json"), b"{}").expect("write root tokenizer");
+        let mut config = test_config();
+        config.model_path = dir.path().to_path_buf();
+        config.tokenizer_path = Some(dir.path().join("nowhere/tok.json"));
+        match DecisionPipeline::load(&config) {
+            Err(VecboostError::ModelLoadError(msg)) => {
+                assert!(
+                    msg.contains("nowhere"),
+                    "错误必须点名配置的 override 路径，msg={msg}"
+                );
+                assert!(
+                    msg.contains("tokenizer_path"),
+                    "错误必须指向 [model].tokenizer_path 配置面，msg={msg}"
+                );
+            }
+            Err(other) => panic!("期望 ModelLoadError，got {other:?}"),
+            Ok(_) => panic!("坏 explicit tokenizer 路径不得静默回落加载成功"),
         }
     }
 

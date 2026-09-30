@@ -544,7 +544,7 @@ impl WorkerManager {
                     let chan = Arc::clone(&response_channel);
                     let batch_owned = std::mem::take(&mut valid_batch);
                     let handle = tokio::spawn(async move {
-                        Self::process_batch_requests(&batch_owned, &svc, ds.as_ref(), &chan).await
+                        Self::process_batch_requests(batch_owned, &svc, ds.as_ref(), &chan).await
                     });
                     match handle.await {
                         Ok(()) => {}
@@ -641,26 +641,21 @@ impl WorkerManager {
         current_workers.fetch_sub(1, Ordering::SeqCst) - 1
     }
 
-    /// 处理请求
+    /// 处理请求（按值消费——text/DecisionRequest 的所有权直接下沉到推理
+    /// 调用，不做用户输入定大小的深拷贝，三路评审 M）
     async fn process_request(
-        request: &super::queue::QueuedRequest,
+        request: super::queue::QueuedRequest,
         embedding_service: &Arc<RwLock<EmbeddingService>>,
         decision_service: Option<&Arc<RwLock<DecisionService>>>,
     ) -> Result<ServiceResponse, VecboostError> {
-        match &request.request {
+        match request.request {
             ServiceRequest::Embed(embed_request) => {
                 debug!("Processing embedding request");
 
                 let service_guard = embedding_service.read().await;
 
                 let result = service_guard
-                    .process_text(
-                        crate::domain::EmbedRequest {
-                            text: embed_request.text.clone(),
-                            normalize: embed_request.normalize,
-                        },
-                        None, // metrics_collector 可选
-                    )
+                    .process_text(embed_request, None) // metrics_collector 可选
                     .await;
 
                 drop(service_guard); // 显式释放锁
@@ -686,13 +681,11 @@ impl WorkerManager {
                 // 决策执行保留 decide 契约：DecisionService::process_decision
                 // 内部以 spawn_blocking 包裹阻塞推理（0c2b164 口径不回退）
                 let service = decision_service.ok_or_else(|| {
-                    VecboostError::InternalError(
-                        "Decision service not configured for worker".to_string(),
-                    )
+                    VecboostError::InternalError(crate::i18n::tr("decision-not-configured"))
                 })?;
                 let service_guard = service.read().await;
                 let result = service_guard
-                    .process_decision(decision_req.clone(), crate::domain::decision::MAX_QUESTIONS)
+                    .process_decision(decision_req, crate::domain::decision::MAX_QUESTIONS)
                     .await;
                 drop(service_guard);
                 result.map(ServiceResponse::Decision)
@@ -708,7 +701,7 @@ impl WorkerManager {
     /// 引擎读写锁并发），embed 推理与批内决策并行推进——决策不 inline await，
     /// 否则队头阻塞同批 embed 推理、拖慢 worker 出队节奏（三路评审 M）。
     async fn process_batch_requests(
-        batch: &[super::queue::QueuedRequest],
+        batch: Vec<super::queue::QueuedRequest>,
         embedding_service: &Arc<RwLock<EmbeddingService>>,
         decision_service: Option<&Arc<RwLock<DecisionService>>>,
         response_channel: &Arc<ResponseChannel>,
@@ -717,37 +710,45 @@ impl WorkerManager {
             return;
         }
 
-        // 单条请求走快速路径
+        // 单条请求走快速路径（id 短字符串一次 clone 供 complete；请求体按值
+        // 下沉推理，无用户输入定大小的深拷贝）
         if batch.len() == 1 {
-            let result =
-                Self::process_request(&batch[0], embedding_service, decision_service).await;
-            response_channel
-                .complete(batch[0].request_id.clone(), result)
-                .await;
+            let req = batch.into_iter().next().expect("len checked == 1");
+            let request_id = req.request_id.clone();
+            let result = Self::process_request(req, embedding_service, decision_service).await;
+            response_channel.complete(request_id, result).await;
             return;
         }
 
-        let mut texts = Vec::with_capacity(batch.len());
-        let mut normalize_flags = Vec::with_capacity(batch.len());
-        let mut valid_indices = Vec::with_capacity(batch.len());
+        let batch_len = batch.len();
+        let mut texts = Vec::with_capacity(batch_len);
+        let mut normalize_flags = Vec::with_capacity(batch_len);
+        // embed 收集序 → (批内原始位置, request_id)：text 按值 move 进收集，
+        // scatter 回填直接用留存的 id complete
+        let mut embed_entries: Vec<(usize, String)> = Vec::with_capacity(batch_len);
         // 批内决策的并发执行句柄：(request_id, JoinHandle)
         let mut pending_decisions: Vec<(
             String,
             tokio::task::JoinHandle<Result<ServiceResponse, VecboostError>>,
         )> = Vec::new();
 
-        for (i, req) in batch.iter().enumerate() {
-            match &req.request {
+        for (i, req) in batch.into_iter().enumerate() {
+            let super::queue::QueuedRequest {
+                request_id,
+                request,
+                ..
+            } = req;
+            match request {
                 ServiceRequest::Embed(embed_req) => {
-                    texts.push(embed_req.text.clone());
+                    texts.push(embed_req.text);
                     normalize_flags.push(embed_req.normalize.unwrap_or(false));
-                    valid_indices.push(i);
+                    embed_entries.push((i, request_id));
                 }
                 ServiceRequest::Rerank(_) => {
                     // Rerank 不支持，直接给该请求返回错误
                     response_channel
                         .complete(
-                            req.request_id.clone(),
+                            request_id,
                             Err(VecboostError::InternalError(
                                 "Rerank not supported by embedding worker".to_string(),
                             )),
@@ -756,12 +757,11 @@ impl WorkerManager {
                 }
                 ServiceRequest::Decision(decision_req) => {
                     // spawn 并发执行（decide 内部 spawn_blocking 不占 worker 面），
-                    // 结果在 embed 推理发起后统一收齐
+                    // DecisionRequest 所有权直接 move 进任务（state 递归 Value
+                    // 深拷贝成本高且由用户输入定大小，三路评审 M）
                     match decision_service {
                         Some(service) => {
                             let service = Arc::clone(service);
-                            let decision_req = decision_req.clone();
-                            let request_id = req.request_id.clone();
                             let handle = tokio::spawn(async move {
                                 let guard = service.read().await;
                                 guard
@@ -777,10 +777,10 @@ impl WorkerManager {
                         None => {
                             response_channel
                                 .complete(
-                                    req.request_id.clone(),
-                                    Err(VecboostError::InternalError(
-                                        "Decision service not configured for worker".to_string(),
-                                    )),
+                                    request_id,
+                                    Err(VecboostError::InternalError(crate::i18n::tr(
+                                        "decision-not-configured",
+                                    ))),
                                 )
                                 .await;
                         }
@@ -803,11 +803,10 @@ impl WorkerManager {
                 Ok(embeddings) => {
                     // 批内各请求共享本次批量推理耗时（拼批语义下的真实处理时长）
                     let batch_millis = batch_started.elapsed().as_millis();
-                    // 按 request_id 切分结果（j 为收集序——texts/normalize_flags 按
-                    // 收集序 push，idx 是批内原始位置，混批时两者不同；既有实现
-                    // 以下标互查在 embed 不位于 0 位时越界，三路评审混批测试实抓）
-                    for (j, &idx) in valid_indices.iter().enumerate() {
-                        let req = &batch[idx];
+                    // 按 request_id 切分结果（j 为收集序——texts/normalize_flags
+                    // 按 embed 收集序 push；请求按值解构后 id 已留存于
+                    // embed_entries，不再回查批下标）
+                    for (j, (_, request_id)) in embed_entries.iter().enumerate() {
                         if j < embeddings.len() {
                             let mut embedding = embeddings[j].clone();
                             if normalize_flags[j] {
@@ -816,7 +815,7 @@ impl WorkerManager {
                             let dimension = embedding.len();
                             response_channel
                                 .complete(
-                                    req.request_id.clone(),
+                                    request_id.clone(),
                                     Ok(ServiceResponse::Embed(EmbedResponse {
                                         dimension,
                                         embedding,
@@ -829,7 +828,7 @@ impl WorkerManager {
                             // 引擎返回的向量数少于输入
                             response_channel
                                 .complete(
-                                    req.request_id.clone(),
+                                    request_id.clone(),
                                     Err(VecboostError::InternalError(
                                         "Batch inference returned fewer embeddings than inputs"
                                             .to_string(),
@@ -842,12 +841,10 @@ impl WorkerManager {
                 Err(e) => {
                     // 批量推理失败——所有请求收错
                     warn!("Batch inference failed: {}", e);
-                    for req in batch.iter() {
-                        if matches!(req.request, ServiceRequest::Embed(_)) {
-                            response_channel
-                                .complete(req.request_id.clone(), Err(e.clone()))
-                                .await;
-                        }
+                    for (_, request_id) in embed_entries.iter() {
+                        response_channel
+                            .complete(request_id.clone(), Err(e.clone()))
+                            .await;
                     }
                 }
             }
@@ -1075,7 +1072,7 @@ mod tests {
         let rx1 = channel.register("b1".to_string()).await;
         let rx2 = channel.register("b2".to_string()).await;
         let rx3 = channel.register("b3".to_string()).await;
-        WorkerManager::process_batch_requests(&batch, &service, None, &channel).await;
+        WorkerManager::process_batch_requests(batch, &service, None, &channel).await;
         let unwrap_embed = |r: ServiceResponse| match r {
             ServiceResponse::Embed(resp) => resp,
             other => panic!("expected Embed response, got {other:?}"),
@@ -1612,7 +1609,7 @@ mod tests {
             source: RequestSource::http("127.0.0.1".to_string()),
         };
 
-        let result = WorkerManager::process_request(&request, &service, None).await;
+        let result = WorkerManager::process_request(request, &service, None).await;
         assert!(result.is_ok(), "process_request should succeed");
         let ServiceResponse::Embed(response) = result.unwrap() else {
             panic!("expected Embed response");
@@ -1639,7 +1636,7 @@ mod tests {
             source: RequestSource::http("127.0.0.1".to_string()),
         };
 
-        let result = WorkerManager::process_request(&request, &service, None).await;
+        let result = WorkerManager::process_request(request, &service, None).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             VecboostError::InferenceError(msg) => {
@@ -1947,7 +1944,7 @@ mod tests {
         let embed_rx = channel.register("mixed-embed".to_string()).await;
 
         let start = std::time::Instant::now();
-        WorkerManager::process_batch_requests(&batch, &service, Some(&decision_service), &channel)
+        WorkerManager::process_batch_requests(batch, &service, Some(&decision_service), &channel)
             .await;
         let elapsed = start.elapsed();
 
@@ -2016,7 +2013,7 @@ mod tests {
         let rx1 = channel.register("dec-only-1".to_string()).await;
         let rx2 = channel.register("dec-only-2".to_string()).await;
 
-        WorkerManager::process_batch_requests(&batch, &service, Some(&decision_service), &channel)
+        WorkerManager::process_batch_requests(batch, &service, Some(&decision_service), &channel)
             .await;
 
         // 返回即收齐：不依赖 detached 任务、无 30s SLA 悬挂
@@ -2100,7 +2097,7 @@ mod tests {
         let rx1 = channel.register("dec-panic-1".to_string()).await;
         let rx2 = channel.register("dec-panic-2".to_string()).await;
 
-        WorkerManager::process_batch_requests(&batch, &service, Some(&decision_service), &channel)
+        WorkerManager::process_batch_requests(batch, &service, Some(&decision_service), &channel)
             .await;
 
         assert_eq!(channel.pending_count().await, 0);
@@ -2707,7 +2704,7 @@ mod tests {
             source: RequestSource::http("127.0.0.1".to_string()),
         };
 
-        let result = WorkerManager::process_request(&request, &service, None).await;
+        let result = WorkerManager::process_request(request, &service, None).await;
         assert!(result.is_ok());
         let ServiceResponse::Embed(response) = result.unwrap() else {
             panic!("expected Embed response");

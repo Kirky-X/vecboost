@@ -141,21 +141,35 @@ impl InputValidator {
             )));
         }
 
-        if text.trim().is_empty() {
-            return Err(VecboostError::InvalidInput(i18n::tr(
-                "validate-text-whitespace",
-            )));
-        }
-
-        // 控制字符拒绝（T010）：NUL/C0 可用于注入或触发下游 tokenizer 异常
-        if has_disallowed_control_chars(text) {
-            return Err(VecboostError::InvalidInput(i18n::tr(
-                "validate-text-control-chars",
-            )));
-        }
-
-        Ok(())
+        validate_text_basic(text)
     }
+}
+
+/// 文本内容三查（空串/纯空白/控制字符）——嵌入服务校验与 pipeline 入队门
+/// 共用的单一实现：pipeline 拼批下批内一条非法文本会让整批 embed 在服务层
+/// 校验处整批失败、错误扩散给批内其他合法请求，入队门用同一规则在 O(1) 内
+/// 400 拒绝、不占队列槽位；两处同源避免规则漂移重新打开毒化面（三路评审 M）。
+/// 长度维度不在此查——入队门已有 kit 配置口径的 validate_text_length，
+/// 服务层校验带独立 config，双查会引入两套长度上限冲突。
+pub fn validate_text_basic(text: &str) -> Result<(), VecboostError> {
+    if text.is_empty() {
+        return Err(VecboostError::InvalidInput(i18n::tr("validate-text-empty")));
+    }
+
+    if text.trim().is_empty() {
+        return Err(VecboostError::InvalidInput(i18n::tr(
+            "validate-text-whitespace",
+        )));
+    }
+
+    // 控制字符拒绝（T010）：NUL/C0 可用于注入或触发下游 tokenizer 异常
+    if has_disallowed_control_chars(text) {
+        return Err(VecboostError::InvalidInput(i18n::tr(
+            "validate-text-control-chars",
+        )));
+    }
+
+    Ok(())
 }
 
 /// 控制字符检查：NUL/C0 可用于注入或触发下游 tokenizer 异常；

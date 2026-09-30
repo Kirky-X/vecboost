@@ -44,6 +44,12 @@ pub async fn handle_pipeline_request(
     req: EmbedRequest,
     ip: String,
 ) -> Result<axum::Json<crate::domain::EmbedResponse>, VecboostError> {
+    // 入队前内容三查（与决策侧 validate_request 同构）：批内一条非法文本
+    // 会让整批 embed 在服务层校验处整批失败、错误扩散给批内其他合法请求——
+    // O(1) 在此 400 拒绝，不占队列槽位与 worker 出队周期（三路评审 M）。
+    // 长度维度由调用侧 validate_text_length 按 kit 配置口径先行
+    crate::utils::validator::input::validate_text_basic(&req.text)?;
+
     let request_id = next_request_id();
     // 进入 pipeline 等待即计为在途(RAII,任何退出路径自动递减)
     let _in_flight = InFlightGuard::enter();
@@ -634,6 +640,38 @@ mod tests {
             queue.size(),
             0,
             "invalid request must never occupy a queue slot"
+        );
+    }
+
+    /// 入队内容门钉（三路评审 M）：非法文本（控制字符）在入队前 400 拒绝
+    /// 且不占队列槽位——旧缺陷：非法文本入队后毒化整批 embed（服务层批校验
+    /// 整批 Err，错误扩散给批内其他合法请求）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_rejects_invalid_text_before_enqueue() {
+        ensure_i18n_init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+
+        for bad in ["bad\u{0001}text", "   ", ""] {
+            let req = EmbedRequest {
+                text: bad.to_string(),
+                normalize: Some(true),
+            };
+            let result = handle_pipeline_request(state.clone(), req, "127.0.0.1".to_string()).await;
+            assert!(
+                matches!(result, Err(VecboostError::InvalidInput(_))),
+                "text {bad:?} must be rejected before enqueue, got {result:?}"
+            );
+        }
+        assert_eq!(
+            queue.size(),
+            0,
+            "invalid text must never occupy a queue slot"
         );
     }
 

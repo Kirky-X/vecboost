@@ -4,9 +4,10 @@
 //! 流水线请求处理函数
 
 use crate::VecboostState;
-use crate::domain::EmbedRequest;
+use crate::domain::{EmbedRequest, ServiceResponse};
 use crate::error::VecboostError;
 use crate::i18n;
+use crate::pipeline::QueuedRequest;
 use std::time::Duration;
 
 /// 处理流水线请求
@@ -43,11 +44,102 @@ pub async fn handle_pipeline_request(
     req: EmbedRequest,
     ip: String,
 ) -> Result<axum::Json<crate::domain::EmbedResponse>, VecboostError> {
-    use std::sync::atomic::Ordering;
-
     let request_id = next_request_id();
     // 进入 pipeline 等待即计为在途(RAII,任何退出路径自动递减)
     let _in_flight = InFlightGuard::enter();
+
+    let priority = state
+        .kit
+        .require::<crate::registry::PriorityCalculatorModule>()
+        .expect("PriorityCalculatorModule not registered")
+        .calculate(crate::pipeline::PriorityInput {
+            base_priority: crate::pipeline::Priority::Normal,
+            time_until_timeout: Duration::from_secs(30),
+            user_tier: None,
+            source: crate::pipeline::RequestSource::http(ip.clone()),
+            queue_length: state
+                .kit
+                .require::<crate::registry::PipelineQueueModule>()
+                .expect("PipelineQueueModule not registered")
+                .size(),
+        });
+
+    let queued_request = crate::pipeline::QueuedRequest {
+        request_id,
+        request: crate::pipeline::ServiceRequest::Embed(req),
+        priority,
+        submitted_at: std::time::Instant::now(),
+        timeout: Duration::from_secs(30),
+        source: crate::pipeline::RequestSource::http(ip),
+    };
+
+    let response = enqueue_and_await_response(state, queued_request).await?;
+    let ServiceResponse::Embed(resp) = response else {
+        return Err(VecboostError::InternalError(i18n::tr(
+            "pipeline-response-type-mismatch",
+        )));
+    };
+    Ok(axum::Json(resp))
+}
+
+/// 决策 pipeline 处理：与 embed 同一入队/等待语义（共享队列、共享优先级
+/// 计算器与基准、取消传播），仅请求/响应类型为决策。优先级与 embed 同口径
+/// 由「同一 PriorityCalculator + 同一 Normal 基准 + 同一 http 来源权重」保证。
+pub async fn handle_decision_pipeline_request(
+    state: VecboostState,
+    req: crate::domain::DecisionRequest,
+) -> Result<crate::domain::DecisionResponse, VecboostError> {
+    let request_id = next_request_id();
+    let _in_flight = InFlightGuard::enter();
+
+    let priority = state
+        .kit
+        .require::<crate::registry::PriorityCalculatorModule>()
+        .expect("PriorityCalculatorModule not registered")
+        .calculate(crate::pipeline::PriorityInput {
+            base_priority: crate::pipeline::Priority::Normal,
+            time_until_timeout: Duration::from_secs(30),
+            user_tier: None,
+            source: crate::pipeline::RequestSource::http(API_SOURCE_ID.to_string()),
+            queue_length: state
+                .kit
+                .require::<crate::registry::PipelineQueueModule>()
+                .expect("PipelineQueueModule not registered")
+                .size(),
+        });
+
+    let queued_request = crate::pipeline::QueuedRequest {
+        request_id,
+        request: crate::pipeline::ServiceRequest::Decision(req),
+        priority,
+        submitted_at: std::time::Instant::now(),
+        timeout: Duration::from_secs(30),
+        source: crate::pipeline::RequestSource::http(API_SOURCE_ID.to_string()),
+    };
+
+    let response = enqueue_and_await_response(state, queued_request).await?;
+    let ServiceResponse::Decision(resp) = response else {
+        return Err(VecboostError::InternalError(i18n::tr(
+            "pipeline-response-type-mismatch",
+        )));
+    };
+    Ok(resp)
+}
+
+/// embed/decision handler 共用的 pipeline 来源标识（wire 层无客户端 IP 可取，
+/// 两侧一致以保证同口径优先级）
+const API_SOURCE_ID: &str = "api";
+
+/// 入队并等待 worker 完成的公共内核：取消传播（T030）、响应通道注册、
+/// 入队（队列满早退释放取消标志，审查 H2）、30s 服务端等待超时（T031）。
+/// embed 与 decision handler 共用，保证两条路径的排队语义完全一致。
+async fn enqueue_and_await_response(
+    state: VecboostState,
+    request: QueuedRequest,
+) -> Result<ServiceResponse, VecboostError> {
+    use std::sync::atomic::Ordering;
+
+    let request_id = request.request_id.clone();
 
     // 取消传播（T030）：handler 被 drop（客户端断连）时置位取消标志，
     // 调度器出队检查后丢弃——不再消耗推理算力
@@ -73,33 +165,7 @@ pub async fn handle_pipeline_request(
         .register(request_id.clone())
         .await;
 
-    let priority = state
-        .kit
-        .require::<crate::registry::PriorityCalculatorModule>()
-        .expect("PriorityCalculatorModule not registered")
-        .calculate(crate::pipeline::PriorityInput {
-            base_priority: crate::pipeline::Priority::Normal,
-            time_until_timeout: Duration::from_secs(30),
-            user_tier: None,
-            source: crate::pipeline::RequestSource::http(ip.clone()),
-            queue_length: state
-                .kit
-                .require::<crate::registry::PipelineQueueModule>()
-                .expect("PipelineQueueModule not registered")
-                .size(),
-        });
-
-    // 不再创建被丢弃的 oneshot —— 响应统一走 ResponseChannel.register
-    let queued_request = crate::pipeline::QueuedRequest {
-        request_id: request_id.clone(),
-        request: crate::pipeline::ServiceRequest::Embed(req),
-        priority,
-        submitted_at: std::time::Instant::now(),
-        timeout: Duration::from_secs(30),
-        source: crate::pipeline::RequestSource::http(ip),
-    };
-
-    if let Err(e) = queue_handle.enqueue(queued_request).await {
+    if let Err(e) = queue_handle.enqueue(request).await {
         // 队列满早退：取消标志随即释放，注册表不留孤儿条目（审查 H2）
         cancel_guard.0.take();
         queue_handle.cancellations().release(&request_id);
@@ -107,7 +173,7 @@ pub async fn handle_pipeline_request(
     }
 
     let result = match tokio::time::timeout(Duration::from_secs(30), response_rx).await {
-        Ok(Ok(Ok(response))) => Ok(axum::Json(response)),
+        Ok(Ok(Ok(response))) => Ok(response),
         Ok(Ok(Err(e))) => Err(e),
         Ok(Err(_)) => Err(VecboostError::InternalError(i18n::tr(
             "pipeline-channel-error",
@@ -130,18 +196,83 @@ mod tests {
     fn ensure_i18n_init() {
         i18n::init();
     }
-    use crate::config::model::{ModelConfig, Precision};
-    use crate::domain::EmbedRequest;
+    use crate::config::model::{ModelConfig, ModelTask, Precision};
+    use crate::domain::{
+        DecisionAnswer, DecisionAnswerBody, DecisionQuestion, DecisionRequest, DecisionResponse,
+        EmbedRequest, QuestionType, ServiceResponse,
+    };
     use crate::engine::InferenceEngine;
     use crate::pipeline::{
-        PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
-        WorkerManager,
+        PriorityCalculator, PriorityConfig, PriorityInput, PriorityRequestQueue, ResponseChannel,
+        WorkerConfig, WorkerManager,
     };
     use crate::rate_limit::LimiteronAdapter;
+    use crate::service::decision::DecisionService;
     use crate::service::embedding::EmbeddingService;
     use async_trait::async_trait;
     use std::sync::Arc;
     use tokio::sync::RwLock;
+
+    /// 固定作答的 mock 决策引擎（noul 0.7 / choice 0 / score 3），供决策
+    /// pipeline 测试的 DecisionService 装配；与 embed 的 TestEngine 互不影响。
+    struct DecisionTestEngine;
+
+    #[async_trait]
+    impl InferenceEngine for DecisionTestEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.0; 8])
+        }
+
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+        }
+
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        fn supports_task(&self, task: ModelTask) -> bool {
+            matches!(task, ModelTask::Embedding | ModelTask::Decision)
+        }
+
+        fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
+            let answers = req
+                .questions
+                .iter()
+                .map(|q| DecisionAnswer {
+                    question: q.name.clone(),
+                    answer: DecisionAnswerBody::Noul { p_true: 0.7 },
+                })
+                .collect();
+            Ok(DecisionResponse {
+                answers,
+                processing_time_ms: 0,
+            })
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    fn decision_noul_request() -> DecisionRequest {
+        DecisionRequest {
+            state: serde_json::json!({"topic": "vacation"}),
+            questions: vec![DecisionQuestion {
+                name: "confident".to_string(),
+                qtype: QuestionType::Noul,
+                instructions: "state your p(true)".to_string(),
+                options: vec![],
+            }],
+        }
+    }
 
     struct TestEngine {
         dimension: usize,
@@ -211,6 +342,9 @@ mod tests {
         let rerank_service = Arc::new(RwLock::new(crate::service::rerank::RerankService::new(
             engine, None,
         )));
+        let decision_engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(DecisionTestEngine));
+        let decision_service = Arc::new(RwLock::new(DecisionService::new(decision_engine, None)));
         let queue = Arc::new(PriorityRequestQueue::new(queue_capacity));
         let response_channel = Arc::new(ResponseChannel::new());
         let priority_calculator = Arc::new(PriorityCalculator::new(PriorityConfig::default()));
@@ -225,6 +359,7 @@ mod tests {
         let mut kit = trait_kit::AsyncKit::new();
         kit.set_config(service.clone());
         kit.set_config(rerank_service);
+        kit.set_config(decision_service);
         kit.set_config(rate_limiter.clone());
         kit.set_config(queue.clone());
         kit.set_config(response_channel.clone());
@@ -251,6 +386,7 @@ mod tests {
 
         kit.register::<crate::registry::EmbeddingModule>().unwrap();
         kit.register::<crate::registry::RerankModule>().unwrap();
+        kit.register::<crate::registry::DecisionModule>().unwrap();
         kit.register::<crate::registry::RateLimitModule>().unwrap();
         kit.register::<crate::registry::CacheModule>().unwrap();
         kit.register::<crate::registry::DbModule>().unwrap();
@@ -311,7 +447,9 @@ mod tests {
                         )
                         .await;
                     drop(service_guard);
-                    response_channel.complete(request_id, result).await;
+                    response_channel
+                        .complete(request_id, result.map(ServiceResponse::Embed))
+                        .await;
                     return;
                 }
                 if tokio::time::Instant::now() >= deadline {
@@ -334,7 +472,8 @@ mod tests {
         consumer.await.unwrap();
     }
 
-    /// 验证 handle_pipeline_request 在队列满时返回 RateLimitExceeded。
+    /// 验证 handle_pipeline_request 在队列满时返回 Overloaded（背压语义
+    /// 独立变体，禁止复用 RateLimitExceeded——spec R-decision-throughput-002）。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_queue_full() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -348,10 +487,108 @@ mod tests {
         let result = handle_pipeline_request(state, req, "127.0.0.1".to_string()).await;
         assert!(result.is_err());
         match result.unwrap_err() {
-            VecboostError::RateLimitExceeded(msg) => {
+            VecboostError::Overloaded(msg) => {
                 assert!(msg.contains("Queue is full"));
             }
-            other => panic!("expected RateLimitExceeded, got {:?}", other),
+            other => panic!("expected Overloaded, got {:?}", other),
+        }
+    }
+
+    /// 决策请求经 pipeline 入队（T016）：请求以 ServiceRequest::Decision
+    /// 入队、优先级由共享 PriorityCalculator 按 embed 同口径计算（同输入
+    /// 同结果）、出队由持有方以 DecisionService 消费并 complete 回达。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_decision_pipeline_request_success() {
+        ensure_i18n_init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+        let decision_service = state
+            .kit
+            .require::<crate::registry::DecisionModule>()
+            .expect("DecisionModule not registered");
+        let priority_calculator = state
+            .kit
+            .require::<crate::registry::PriorityCalculatorModule>()
+            .expect("PriorityCalculatorModule not registered");
+
+        let consumer = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue.dequeue().await {
+                    // 优先级同口径：决策请求携带的优先级必须等于共享计算器
+                    // 对同一输入（base Normal / 30s SLA / http 来源 / 空队列）
+                    // 的计算结果——决策不引入第二套优先级算法
+                    let expected_priority = priority_calculator.calculate(PriorityInput {
+                        base_priority: crate::pipeline::Priority::Normal,
+                        time_until_timeout: Duration::from_secs(30),
+                        user_tier: None,
+                        source: crate::pipeline::RequestSource::http("api".to_string()),
+                        queue_length: 0,
+                    });
+                    assert_eq!(
+                        req.priority, expected_priority,
+                        "decision priority must be same-scale as embed"
+                    );
+                    let request_id = req.request_id.clone();
+                    let dreq = match req.request {
+                        crate::pipeline::ServiceRequest::Decision(d) => d,
+                        other => panic!("expected Decision request, got {other:?}"),
+                    };
+                    let guard = decision_service.read().await;
+                    let result = guard
+                        .process_decision(dreq, crate::domain::decision::MAX_QUESTIONS)
+                        .await
+                        .map(ServiceResponse::Decision);
+                    drop(guard);
+                    response_channel.complete(request_id, result).await;
+                    return;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        let result = handle_decision_pipeline_request(state, decision_noul_request()).await;
+        assert!(result.is_ok(), "decision pipeline request should succeed");
+        let resp = result.unwrap();
+        assert_eq!(resp.answers.len(), 1);
+        match &resp.answers[0].answer {
+            DecisionAnswerBody::Noul { p_true } => {
+                assert!((p_true - 0.7).abs() < 1e-5);
+            }
+            other => panic!("Expected Noul answer, got {other:?}"),
+        }
+
+        consumer.await.unwrap();
+    }
+
+    /// 决策请求队列满背压：/api/1/decisions 在队列容量置零时收到
+    /// Overloaded（503 语义，spec R-decision-throughput-002 可构造断言），
+    /// 与 auth 限流的 RateLimitExceeded 互斥。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_decision_pipeline_request_queue_full_overloaded() {
+        ensure_i18n_init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(0, engine).await;
+
+        let result = handle_decision_pipeline_request(state, decision_noul_request()).await;
+        match result {
+            Err(VecboostError::Overloaded(msg)) => {
+                assert!(msg.contains("Queue is full"), "got: {msg}");
+            }
+            other => panic!("expected Overloaded, got {other:?}"),
         }
     }
 
@@ -387,7 +624,9 @@ mod tests {
                         )
                         .await;
                     drop(service_guard);
-                    response_channel.complete(request_id, result).await;
+                    response_channel
+                        .complete(request_id, result.map(ServiceResponse::Embed))
+                        .await;
                     return;
                 }
                 if tokio::time::Instant::now() >= deadline {
@@ -514,7 +753,9 @@ mod tests {
                         )
                         .await;
                     drop(service_guard);
-                    response_channel.complete(request_id, result).await;
+                    response_channel
+                        .complete(request_id, result.map(ServiceResponse::Embed))
+                        .await;
                     return;
                 }
                 if tokio::time::Instant::now() >= deadline {
@@ -569,7 +810,9 @@ mod tests {
                             )
                             .await;
                         drop(service_guard);
-                        response_channel.complete(request_id, result).await;
+                        response_channel
+                            .complete(request_id, result.map(ServiceResponse::Embed))
+                            .await;
                         return;
                     }
                     if tokio::time::Instant::now() >= deadline {
@@ -625,7 +868,9 @@ mod tests {
                         )
                         .await;
                     drop(service_guard);
-                    response_channel.complete(request_id, result).await;
+                    response_channel
+                        .complete(request_id, result.map(ServiceResponse::Embed))
+                        .await;
                     return;
                 }
                 if tokio::time::Instant::now() >= deadline {
@@ -681,7 +926,9 @@ mod tests {
                         )
                         .await;
                     drop(service_guard);
-                    response_channel.complete(request_id, result).await;
+                    response_channel
+                        .complete(request_id, result.map(ServiceResponse::Embed))
+                        .await;
                     return;
                 }
                 if tokio::time::Instant::now() >= deadline {
@@ -844,7 +1091,9 @@ mod tests {
                         )
                         .await;
                     drop(service_guard);
-                    response_channel.complete(request_id, result).await;
+                    response_channel
+                        .complete(request_id, result.map(ServiceResponse::Embed))
+                        .await;
                     return;
                 }
                 if tokio::time::Instant::now() >= deadline {
@@ -898,7 +1147,9 @@ mod tests {
                         )
                         .await;
                     drop(service_guard);
-                    response_channel.complete(request_id, result).await;
+                    response_channel
+                        .complete(request_id, result.map(ServiceResponse::Embed))
+                        .await;
                     return;
                 }
                 if tokio::time::Instant::now() >= deadline {
@@ -953,7 +1204,9 @@ mod tests {
                             )
                             .await;
                         drop(service_guard);
-                        response_channel.complete(request_id, result).await;
+                        response_channel
+                            .complete(request_id, result.map(ServiceResponse::Embed))
+                            .await;
                         return;
                     }
                     if tokio::time::Instant::now() >= deadline {
@@ -1008,7 +1261,9 @@ mod tests {
                         )
                         .await;
                     drop(service_guard);
-                    response_channel.complete(request_id, result).await;
+                    response_channel
+                        .complete(request_id, result.map(ServiceResponse::Embed))
+                        .await;
                     if ids.len() >= 2 {
                         assert_ne!(ids[0], ids[1], "request IDs should be unique");
                         return;
@@ -1078,7 +1333,9 @@ mod tests {
                         )
                         .await;
                     drop(service_guard);
-                    response_channel.complete(request_id, result).await;
+                    response_channel
+                        .complete(request_id, result.map(ServiceResponse::Embed))
+                        .await;
                     return;
                 }
                 if tokio::time::Instant::now() >= deadline {

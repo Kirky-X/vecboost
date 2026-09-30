@@ -17,6 +17,7 @@ error-io = IO error: { $detail }
 error-validation = Validation error: { $detail }
 error-request-timeout = Request timeout: { $detail }
 error-rate-limit = Rate limit exceeded: { $detail }
+error-overloaded = Service overloaded: { $detail }
 error-database = Database error: { $detail }
 error-internal = Internal error: { $detail }
 error-unsupported-task = Unsupported task: { $detail }

@@ -12,6 +12,7 @@ use super::worker::WorkerManager;
 use crate::domain::ServiceResponse;
 use crate::error::VecboostError;
 use crate::i18n;
+use crate::service::decision::DecisionService;
 use crate::service::embedding::EmbeddingService;
 use crate::service::rerank::RerankService;
 
@@ -27,6 +28,8 @@ pub struct PipelineScheduler {
     service: Arc<RwLock<EmbeddingService>>,
     /// 重排序服务
     rerank_service: Option<Arc<RwLock<RerankService>>>,
+    /// 决策服务
+    decision_service: Option<Arc<RwLock<DecisionService>>>,
 }
 
 impl PipelineScheduler {
@@ -44,12 +47,19 @@ impl PipelineScheduler {
             worker_manager,
             service,
             rerank_service: None,
+            decision_service: None,
         }
     }
 
     /// 设置重排序服务
     pub fn with_rerank_service(mut self, rerank_service: Arc<RwLock<RerankService>>) -> Self {
         self.rerank_service = Some(rerank_service);
+        self
+    }
+
+    /// 设置决策服务
+    pub fn with_decision_service(mut self, decision_service: Arc<RwLock<DecisionService>>) -> Self {
+        self.decision_service = Some(decision_service);
         self
     }
 
@@ -73,6 +83,16 @@ impl PipelineScheduler {
                 let service = rerank_service.read().await;
                 let resp = service.process_rerank(rerank_req, 100, 8192).await?;
                 Ok(ServiceResponse::Rerank(resp))
+            }
+            ServiceRequest::Decision(decision_req) => {
+                let decision_service = self.decision_service.as_ref().ok_or_else(|| {
+                    VecboostError::InternalError(i18n::tr("decision-not-configured"))
+                })?;
+                let service = decision_service.read().await;
+                let resp = service
+                    .process_decision(decision_req, crate::domain::decision::MAX_QUESTIONS)
+                    .await?;
+                Ok(ServiceResponse::Decision(resp))
             }
         }
     }
@@ -100,12 +120,16 @@ mod tests {
     fn ensure_i18n_init() {
         i18n::init();
     }
-    use crate::config::model::{ModelConfig, Precision};
-    use crate::domain::EmbedRequest;
+    use crate::config::model::{ModelConfig, ModelTask, Precision};
+    use crate::domain::{
+        DecisionAnswer, DecisionAnswerBody, DecisionQuestion, DecisionRequest, DecisionResponse,
+        EmbedRequest, QuestionType, ServiceResponse,
+    };
     use crate::engine::InferenceEngine;
     use crate::pipeline::config::{PriorityConfig, WorkerConfig};
     use crate::pipeline::priority::{Priority, PriorityInput, RequestSource};
     use crate::pipeline::queue::PriorityRequestQueue;
+    use crate::service::decision::DecisionService;
     use crate::service::rerank::RerankService;
     use async_trait::async_trait;
     use std::time::{Duration, Instant};
@@ -966,6 +990,223 @@ mod tests {
             }
             other => panic!("Expected InternalError, got: {:?}", other),
         }
+    }
+
+    // =========================================================================
+    // ServiceRequest::Decision routing tests
+    // =========================================================================
+
+    /// 固定作答的 mock 决策引擎（同构 service/decision.rs tests 的 mock，
+    /// noul 题型确定性作答，覆盖 supports_task(Decision) 与 decide 分发契约）
+    struct DecisionCapableEngine;
+
+    #[async_trait]
+    impl InferenceEngine for DecisionCapableEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.0; 8])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        fn supports_task(&self, task: ModelTask) -> bool {
+            matches!(task, ModelTask::Embedding | ModelTask::Decision)
+        }
+        fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
+            let answers = req
+                .questions
+                .iter()
+                .map(|q| DecisionAnswer {
+                    question: q.name.clone(),
+                    answer: DecisionAnswerBody::Noul { p_true: 0.7 },
+                })
+                .collect();
+            Ok(DecisionResponse {
+                answers,
+                processing_time_ms: 0,
+            })
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    fn create_decision_service() -> Arc<RwLock<DecisionService>> {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(DecisionCapableEngine));
+        Arc::new(RwLock::new(DecisionService::new(engine, None)))
+    }
+
+    fn decision_noul_request() -> DecisionRequest {
+        DecisionRequest {
+            state: serde_json::json!({"topic": "vacation"}),
+            questions: vec![DecisionQuestion {
+                name: "confident".to_string(),
+                qtype: QuestionType::Noul,
+                instructions: "state your p(true)".to_string(),
+                options: vec![],
+            }],
+        }
+    }
+
+    /// 决策请求经 scheduler.process_request 路由到 DecisionService，
+    /// 返回 ServiceResponse::Decision（与 embed/rerank 同一调度入口）
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_service_request_decision_routes_to_decision_service() {
+        ensure_i18n_init();
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+        let decision_service = create_decision_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        )
+        .with_decision_service(decision_service);
+
+        let request = QueuedRequest {
+            request_id: "decision-route-test".to_string(),
+            request: ServiceRequest::Decision(decision_noul_request()),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+
+        let result = scheduler.process_request(request).await.unwrap();
+        match result {
+            ServiceResponse::Decision(resp) => {
+                assert_eq!(resp.answers.len(), 1);
+                assert_eq!(resp.answers[0].question, "confident");
+                match &resp.answers[0].answer {
+                    DecisionAnswerBody::Noul { p_true } => {
+                        assert!((p_true - 0.7).abs() < 1e-5);
+                    }
+                    other => panic!("Expected Noul answer, got {other:?}"),
+                }
+            }
+            other => panic!("Expected ServiceResponse::Decision, got {other:?}"),
+        }
+    }
+
+    /// 决策请求未配置 decision_service 时显性报错（同 rerank not-configured 口径）
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_decision_without_service_returns_error() {
+        ensure_i18n_init();
+        let priority_calculator = PriorityCalculator::new(PriorityConfig::default());
+        let response_channel = Arc::new(ResponseChannel::new());
+        let service = create_test_service();
+
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+
+        let scheduler = PipelineScheduler::new(
+            priority_calculator,
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let request = QueuedRequest {
+            request_id: "decision-no-service".to_string(),
+            request: ServiceRequest::Decision(decision_noul_request()),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Http {
+                ip: "127.0.0.1".to_string(),
+            },
+        };
+
+        let result = scheduler.process_request(request).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            VecboostError::InternalError(msg) => {
+                assert!(msg.contains("not configured"), "got: {msg}");
+            }
+            other => panic!("Expected InternalError, got: {other:?}"),
+        }
+    }
+
+    /// 决策请求优先级与 embed 同口径：同一 PriorityCalculator、同一基准
+    /// （base Normal / 30s SLA / queue_length 0）下计算结果一致，且该优先级
+    /// 在队列中按既有四级语义出队（决策不引入第二套优先级算法）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_decision_priority_same_scale_as_embed() {
+        let calculator = PriorityCalculator::new(PriorityConfig::default());
+        let mk_input = |source: RequestSource| PriorityInput {
+            base_priority: Priority::Normal,
+            time_until_timeout: Duration::from_secs(30),
+            user_tier: None,
+            source,
+            queue_length: 0,
+        };
+        let decision_priority = calculator.calculate(mk_input(RequestSource::Internal));
+        let embed_priority = calculator.calculate(mk_input(RequestSource::Internal));
+        assert_eq!(
+            decision_priority, embed_priority,
+            "decision must share the embed priority scale (same calculator, same inputs)"
+        );
+
+        // 同口径优先级在同一队列中按优先级序出队：决策 Normal 先于 embed Low
+        let queue = PriorityRequestQueue::new(100);
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "decision-normal".to_string(),
+                request: ServiceRequest::Decision(decision_noul_request()),
+                priority: decision_priority,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Internal,
+            })
+            .await
+            .unwrap();
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "embed-low".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "low".to_string(),
+                    normalize: None,
+                }),
+                priority: Priority::Low,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Internal,
+            })
+            .await
+            .unwrap();
+
+        let first = queue.dequeue().await.unwrap();
+        assert_eq!(
+            first.request_id, "decision-normal",
+            "same-scale decision priority must dequeue by the shared priority order"
+        );
+        let second = queue.dequeue().await.unwrap();
+        assert_eq!(second.request_id, "embed-low");
     }
 
     // -- Direct mock method calls to cover unused trait impls --

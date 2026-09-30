@@ -768,6 +768,7 @@ async fn init_auth(
 async fn init_pipeline(
     config: &VecboostConfig,
     service: &Arc<RwLock<EmbeddingService>>,
+    decision_service: &Arc<RwLock<DecisionService>>,
 ) -> anyhow::Result<(
     Arc<PriorityRequestQueue>,
     Arc<ResponseChannel>,
@@ -847,12 +848,16 @@ async fn init_pipeline(
             worker_config.batch_wait_ms = bw;
         }
 
-        let worker_manager = Arc::new(WorkerManager::new(
-            pipeline_queue.clone(),
-            response_channel.clone(),
-            worker_config.clone(),
-            service.clone(),
-        ));
+        let worker_manager = Arc::new(
+            WorkerManager::new(
+                pipeline_queue.clone(),
+                response_channel.clone(),
+                worker_config.clone(),
+                service.clone(),
+            )
+            // 决策请求经共享队列出队后由 worker 执行（P2-3 决策任务入队）
+            .with_decision_service(decision_service.clone()),
+        );
 
         // start() = spawn min_workers + 启动扩缩容 monitor（T033——
         // 此前只 spawn min_workers，max_workers/scale 阈值全是死配置）
@@ -875,12 +880,15 @@ async fn init_pipeline(
             Arc::new(PriorityRequestQueue::new(0)),
             Arc::new(ResponseChannel::new()),
             Arc::new(PriorityCalculator::new(PriorityConfig::default())),
-            Arc::new(WorkerManager::new(
-                Arc::new(PriorityRequestQueue::new(0)),
-                Arc::new(ResponseChannel::new()),
-                WorkerConfig::default(),
-                service.clone(),
-            )),
+            Arc::new(
+                WorkerManager::new(
+                    Arc::new(PriorityRequestQueue::new(0)),
+                    Arc::new(ResponseChannel::new()),
+                    WorkerConfig::default(),
+                    service.clone(),
+                )
+                .with_decision_service(decision_service.clone()),
+            ),
         ))
     }
 }
@@ -1415,7 +1423,7 @@ async fn app_main() -> anyhow::Result<()> {
     };
 
     let (pipeline_queue, response_channel, priority_calculator, worker_manager) =
-        init_pipeline(&config, &service).await?;
+        init_pipeline(&config, &service, &decision_service).await?;
 
     let kit = build_module_registry(
         &config,
@@ -2087,6 +2095,10 @@ async fn build_module_registry(
     kit.set_config(response_channel.clone());
     kit.set_config(priority_calculator.clone());
     kit.set_config(worker_manager.clone());
+    // PipelineEnabled 真接线（装配三问）：embed/decision handler 的入队分支
+    // 按此开关分流；此前仅库内 make_app_state 注入 false，生产 server 缺注入
+    // 使 config() 恒 Err、队列路径不可达（P2-3 决策入队 e2e 实抓）
+    kit.set_config(vecboost::registry::PipelineEnabled(config.pipeline.enabled));
     // LoggerModule: Arc<inklog::LoggerManager> 能力注入
     kit.set_config(logger_manager.clone());
     #[cfg(feature = "auth")]

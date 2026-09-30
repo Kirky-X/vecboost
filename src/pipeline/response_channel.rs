@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, oneshot};
 
-use crate::domain::EmbedResponse;
+use crate::domain::ServiceResponse;
 use crate::error::VecboostError;
 
 /// 待处理的响应条目。
@@ -16,7 +16,7 @@ use crate::error::VecboostError;
 /// Worker 处理完请求后通过 `tx` 将结果发回给等待的 handler。
 pub struct PendingResponse {
     /// 响应发送器
-    pub tx: oneshot::Sender<Result<EmbedResponse, VecboostError>>,
+    pub tx: oneshot::Sender<Result<ServiceResponse, VecboostError>>,
     /// 提交时间
     pub submitted_at: Instant,
     /// 超时时间
@@ -58,7 +58,7 @@ impl ResponseChannel {
     pub async fn register(
         &self,
         request_id: String,
-    ) -> oneshot::Receiver<Result<EmbedResponse, VecboostError>> {
+    ) -> oneshot::Receiver<Result<ServiceResponse, VecboostError>> {
         let (tx, rx) = oneshot::channel();
 
         let pending = PendingResponse {
@@ -84,7 +84,7 @@ impl ResponseChannel {
     pub async fn complete(
         &self,
         request_id: String,
-        response: Result<EmbedResponse, VecboostError>,
+        response: Result<ServiceResponse, VecboostError>,
     ) {
         let pending_response = {
             let mut pending = self.pending.write().await;
@@ -159,6 +159,7 @@ impl Default for ResponseChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::EmbedResponse;
 
     #[tokio::test]
     async fn test_response_channel_creation() {
@@ -173,12 +174,12 @@ mod tests {
         let rx = channel.register("test-1".to_string()).await;
         assert_eq!(channel.pending_count().await, 1);
 
-        let response = Ok(EmbedResponse {
+        let response = Ok(ServiceResponse::Embed(EmbedResponse {
             embedding: vec![0.0; 768],
             dimension: 768,
             processing_time_ms: 100,
             information_retention_rate: None,
-        });
+        }));
 
         channel.complete("test-1".to_string(), response).await;
 
@@ -221,7 +222,7 @@ mod tests {
         let channel = ResponseChannel::new();
         let rx = channel.register("err-1".to_string()).await;
 
-        let error_response: Result<EmbedResponse, VecboostError> =
+        let error_response: Result<ServiceResponse, VecboostError> =
             Err(VecboostError::InferenceError("boom".to_string()));
 
         channel.complete("err-1".to_string(), error_response).await;
@@ -243,12 +244,12 @@ mod tests {
         channel
             .complete(
                 "unknown".to_string(),
-                Ok(EmbedResponse {
+                Ok(ServiceResponse::Embed(EmbedResponse {
                     embedding: vec![0.0; 4],
                     dimension: 4,
                     processing_time_ms: 1,
                     information_retention_rate: None,
-                }),
+                })),
             )
             .await;
         assert_eq!(channel.pending_count().await, 0);
@@ -265,12 +266,12 @@ mod tests {
         channel
             .complete(
                 "drop-1".to_string(),
-                Ok(EmbedResponse {
+                Ok(ServiceResponse::Embed(EmbedResponse {
                     embedding: vec![0.0; 4],
                     dimension: 4,
                     processing_time_ms: 1,
                     information_retention_rate: None,
-                }),
+                })),
             )
             .await;
         assert_eq!(channel.pending_count().await, 0);
@@ -328,12 +329,12 @@ mod tests {
             let request_id = format!("conc-{}", i);
             handles.push(tokio::spawn(async move {
                 let rx = channel_clone.register(request_id.clone()).await;
-                let response = Ok(EmbedResponse {
+                let response = Ok(ServiceResponse::Embed(EmbedResponse {
                     embedding: vec![0.0; 8],
                     dimension: 8,
                     processing_time_ms: 1,
                     information_retention_rate: None,
-                });
+                }));
                 channel_clone.complete(request_id, response).await;
                 rx.await
             }));
@@ -361,18 +362,21 @@ mod tests {
         channel
             .complete(
                 "dup-1".to_string(),
-                Ok(EmbedResponse {
+                Ok(ServiceResponse::Embed(EmbedResponse {
                     embedding: vec![1.0; 4],
                     dimension: 4,
                     processing_time_ms: 0,
                     information_retention_rate: None,
-                }),
+                })),
             )
             .await;
 
         let result = rx2.await;
         assert!(result.is_ok());
         let response = result.unwrap().unwrap();
+        let ServiceResponse::Embed(response) = response else {
+            panic!("expected Embed response");
+        };
         assert_eq!(response.embedding, vec![1.0; 4]);
     }
 
@@ -388,12 +392,12 @@ mod tests {
         channel
             .complete(
                 "cleared-1".to_string(),
-                Ok(EmbedResponse {
+                Ok(ServiceResponse::Embed(EmbedResponse {
                     embedding: vec![],
                     dimension: 0,
                     processing_time_ms: 0,
                     information_retention_rate: None,
-                }),
+                })),
             )
             .await;
     }

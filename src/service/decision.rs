@@ -81,6 +81,14 @@ impl DecisionService {
         }
         req.validate()?;
 
+        // 热路径埋点：请求/问题计数（校验受理后计数，400 拒绝不计；
+        // 全局 collector 未设置时零开销跳过——library 模式/单测环境）
+        #[cfg(feature = "http")]
+        if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
+            collector.inc_decision_requests();
+            collector.add_decision_questions(req.questions.len());
+        }
+
         let start = Instant::now();
         let engine = self.engine.read().await;
         if !engine.supports_task(ModelTask::Decision) {

@@ -331,6 +331,7 @@ pub struct BatchRerankQueryStatus {
 pub enum ServiceResponse {
     Embed(EmbedResponse),
     Rerank(RerankResponse),
+    Decision(DecisionResponse),
 }
 
 pub use decision::{

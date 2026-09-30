@@ -21,10 +21,6 @@ use crate::api::embedding::{kit_internal_error, to_api_error};
 use crate::api::init::state;
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 use crate::registry::DecisionModule;
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
-use std::sync::Arc;
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
-use tokio::sync::RwLock;
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 use sdforge::prelude::*;
@@ -45,18 +41,30 @@ pub async fn decide(
 // Protocol-agnostic handlers
 // =============================================================================
 
-/// Load decision service from the global kit.
-#[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
-async fn load_decision_service() -> Result<Arc<RwLock<DecisionService>>, ApiError> {
-    let st = state().map_err(to_api_error)?;
-    st.kit
-        .require::<DecisionModule>()
-        .map_err(kit_internal_error)
-}
-
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 async fn decisions_handler(req: DecisionRequest) -> Result<DecisionResponse, ApiError> {
-    let svc = load_decision_service().await?;
+    let st = state().map_err(to_api_error)?;
+
+    // pipeline 启用时决策请求经优先级队列入队（与 embed/rerank 同一套调度
+    // 语义，P2-3）；disabled 或 CLI/gRPC-only 构建走进程内直连。
+    #[cfg(feature = "http")]
+    {
+        let pipeline_enabled = st
+            .kit
+            .config::<crate::registry::PipelineEnabled>()
+            .map(|c| c.0)
+            .unwrap_or(false);
+        if pipeline_enabled {
+            return crate::pipeline::handle_decision_pipeline_request(st.clone(), req)
+                .await
+                .map_err(to_api_error);
+        }
+    }
+
+    let svc = st
+        .kit
+        .require::<DecisionModule>()
+        .map_err(kit_internal_error)?;
     let guard = svc.read().await;
     decide(&guard, req, crate::domain::decision::MAX_QUESTIONS)
         .await
@@ -118,6 +126,8 @@ mod tests {
     use crate::engine::InferenceEngine;
     use async_trait::async_trait;
     use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
 
     /// 固定作答的 mock 决策引擎（与 service 层 mock 同构，三题型确定性作答）
     struct MockDecisionEngine;

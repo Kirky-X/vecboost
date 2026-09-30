@@ -109,7 +109,14 @@ pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
             resource_id: Some(msg),
         },
         VecboostError::RateLimitExceeded(msg) => ApiError::ServiceUnavailable {
-            // 队列满/过载背压：503+Retry-After=60（回归审查发现的映射回归已还原）
+            // 限流背压：503+Retry-After=60（回归审查发现的映射回归已还原）
+            service: msg,
+            retry_after: Some(60),
+            source: None,
+        },
+        VecboostError::Overloaded(msg) => ApiError::ServiceUnavailable {
+            // 队列满/过载背压：与 IntoResponse 直返路径同口径 503+Retry-After=60；
+            // 独立变体（error-overloaded），禁止与 RateLimitExceeded 互用
             service: msg,
             retry_after: Some(60),
             source: None,
@@ -1332,6 +1339,21 @@ mod tests {
         let wire = serde_json::to_value(&svc).unwrap();
         assert_eq!(wire["code"], "INVALID_INPUT", "wire={}", wire);
         assert_eq!(wire["http_status"], 400, "wire={}", wire);
+    }
+
+    /// Overloaded（队列满背压）在 to_api_error 路径必须与 IntoResponse 直返
+    /// 路径同口径 503（双路径一致性，spec R-decision-throughput-002；对齐
+    /// RateLimitExceeded 1e11e42 钉测试模式）。事件码独立性由
+    /// error.rs::test_overloaded_error_code_distinct_from_rate_limit 钉死
+    /// （ServiceUnavailable 臂的 wire 不携带 error_code context，与
+    /// RateLimitExceeded 同一形状）
+    #[test]
+    fn to_api_error_overloaded_maps_to_service_unavailable_503() {
+        let api = to_api_error(VecboostError::Overloaded("queue is full".into()));
+        let svc = api.to_service_error();
+        let wire = serde_json::to_value(&svc).unwrap();
+        assert_eq!(wire["http_status"], 503, "wire={}", wire);
+        assert_eq!(wire["code"], "SERVICE_UNAVAILABLE", "wire={}", wire);
     }
 
     /// OpenAI 错误槽位(type/code)可经 value 槽到达 wire

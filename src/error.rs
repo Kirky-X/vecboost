@@ -82,6 +82,10 @@ pub enum VecboostError {
     IoError(String),
     ValidationError(String),
     RateLimitExceeded(String),
+    /// 队列满/过载背压（pipeline 优先级队列容量耗尽）。独立变体：客户端
+    /// 需区分「队列满退避」与「限流背压」以选择退避策略，禁止与
+    /// RateLimitExceeded 互用（后者语义归 auth 限流，wire 同为 503）
+    Overloaded(String),
     /// 请求在队列等待或处理中超过其 SLA（服务端超时，区别于客户端断连）
     RequestTimeout(String),
     /// 当前引擎/模型不支持所请求的任务维度（如对 embedding 引擎调用 decide）
@@ -162,6 +166,10 @@ impl VecboostError {
         VecboostError::RateLimitExceeded(message)
     }
 
+    pub fn overloaded(message: String) -> Self {
+        VecboostError::Overloaded(message)
+    }
+
     pub fn out_of_memory(message: String) -> Self {
         VecboostError::OutOfMemory(message)
     }
@@ -192,6 +200,7 @@ impl VecboostError {
             VecboostError::IoError(_) => "error-io",
             VecboostError::ValidationError(_) => "error-validation",
             VecboostError::RateLimitExceeded(_) => "error-rate-limit",
+            VecboostError::Overloaded(_) => "error-overloaded",
             VecboostError::RequestTimeout(_) => "error-request-timeout",
             VecboostError::UnsupportedTask(_) => "error-unsupported-task",
             VecboostError::DatabaseError(_) => "error-database",
@@ -217,6 +226,7 @@ impl VecboostError {
             | VecboostError::IoError(s)
             | VecboostError::ValidationError(s)
             | VecboostError::RateLimitExceeded(s)
+            | VecboostError::Overloaded(s)
             | VecboostError::RequestTimeout(s)
             | VecboostError::UnsupportedTask(s)
             | VecboostError::DatabaseError(s)
@@ -243,9 +253,12 @@ impl IntoResponse for VecboostError {
             VecboostError::SecurityError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             VecboostError::IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             VecboostError::ValidationError(_) => StatusCode::BAD_REQUEST,
+            // 限流背压专用（auth 限流语义保留口径）；队列满走 Overloaded——
+            // 两者 wire 同为 503（与 to_api_error 双路径统一），事件码不同
+            VecboostError::RateLimitExceeded(_) => StatusCode::SERVICE_UNAVAILABLE,
             // 队列满/过载背压与 to_api_error 同口径：503（非 429——
             // 429 归 auth 限流中间件；同一错误双映射已统一）
-            VecboostError::RateLimitExceeded(_) => StatusCode::SERVICE_UNAVAILABLE,
+            VecboostError::Overloaded(_) => StatusCode::SERVICE_UNAVAILABLE,
             VecboostError::RequestTimeout(_) => StatusCode::GATEWAY_TIMEOUT,
             // 调用方可换模型/换端点解决的客户端错误 → 4xx
             VecboostError::UnsupportedTask(_) => StatusCode::BAD_REQUEST,
@@ -439,8 +452,40 @@ mod tests {
     fn test_into_response_rate_limit_exceeded() {
         let err = VecboostError::RateLimitExceeded("test".to_string());
         let response = err.into_response();
-        // 与 to_api_error 一致：队列满/过载 → 503（429 属 auth 限流中间件）
+        // 限流背压专用：503（429 属 auth 限流中间件），队列满走 Overloaded
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// Overloaded（队列满/过载背压）IntoResponse 直返路径钉：统一 503，
+    /// 不得复用 RateLimitExceeded（spec R-decision-throughput-002）
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_into_response_overloaded() {
+        let err = VecboostError::Overloaded("queue is full".to_string());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// 双路径一致性钉：Overloaded 的稳定事件码独立于 RateLimitExceeded
+    /// （客户端可区分「队列满退避」与「限流背压」），detail 透传
+    #[test]
+    fn test_overloaded_error_code_distinct_from_rate_limit() {
+        ensure_init();
+        let overloaded = VecboostError::Overloaded("queue is full".into());
+        let rate_limit = VecboostError::RateLimitExceeded("limited".into());
+        assert_eq!(overloaded.error_code(), "error-overloaded");
+        assert_eq!(rate_limit.error_code(), "error-rate-limit");
+        assert_ne!(
+            overloaded.error_code(),
+            rate_limit.error_code(),
+            "Overloaded must be an independent event code, not a RateLimitExceeded reuse"
+        );
+        assert_eq!(overloaded.error_detail(), "queue is full");
+        let expected = crate::i18n::tr_with_args(
+            "error-overloaded",
+            crate::i18n::tr_args(&[("detail", "queue is full")]),
+        );
+        assert_eq!(format!("{}", overloaded), expected);
     }
 
     #[cfg(feature = "http")]
@@ -670,6 +715,11 @@ mod tests {
                 "error-rate-limit",
                 "rl",
             ),
+            (
+                VecboostError::Overloaded("ov".into()),
+                "error-overloaded",
+                "ov",
+            ),
         ];
         for (err, code, detail) in cases {
             let expected =
@@ -695,6 +745,7 @@ mod tests {
         let _ = VecboostError::validation_error("val".into());
         let _ = VecboostError::database_error("db".into());
         let _ = VecboostError::rate_limit_exceeded("rl".into());
+        let _ = VecboostError::overloaded("ov".into());
         let _ = VecboostError::out_of_memory("oom".into());
         let _ = VecboostError::internal_error("int".into());
         let _ = VecboostError::unsupported_task("ut".into());
@@ -718,6 +769,7 @@ mod tests {
             VecboostError::IoError("x".into()),
             VecboostError::ValidationError("x".into()),
             VecboostError::RateLimitExceeded("x".into()),
+            VecboostError::Overloaded("x".into()),
             VecboostError::DatabaseError("x".into()),
             VecboostError::InternalError("x".into()),
             VecboostError::UnsupportedTask("x".into()),

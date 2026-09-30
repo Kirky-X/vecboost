@@ -80,6 +80,21 @@ fn http_request(
     body: Option<&str>,
     token: Option<&str>,
 ) -> Result<(u16, String), std::io::Error> {
+    let (status, _, body) = http_request_full(port, method, path, body, token)?;
+    Ok((status, body))
+}
+
+/// 带响应头的 HTTP 请求（限流头/背压口径断言用）。
+/// 返回 (status, 响应头键值对（键小写）, body)。
+type HttpResponse = (u16, Vec<(String, String)>, String);
+
+fn http_request_full(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    token: Option<&str>,
+) -> Result<HttpResponse, std::io::Error> {
     let mut stream = TcpStream::connect(("127.0.0.1", port))?;
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     let body = body.unwrap_or("");
@@ -105,6 +120,14 @@ fn http_request(
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    let headers: Vec<(String, String)> = head
+        .lines()
+        .skip(1)
+        .filter_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            Some((k.trim().to_ascii_lowercase(), v.trim().to_string()))
+        })
+        .collect();
     let mut body = parts.next().unwrap_or("").to_string();
     if head
         .to_ascii_lowercase()
@@ -112,7 +135,7 @@ fn http_request(
     {
         body = decode_chunked(&body);
     }
-    Ok((status, body))
+    Ok((status, headers, body))
 }
 
 fn decode_chunked(input: &str) -> String {
@@ -166,19 +189,71 @@ fn free_port() -> u16 {
 struct ServerOpts {
     auth: bool,
     grpc_require_auth: bool,
+    /// [rate_limit] 段覆盖（None = 既有 enabled=false 缺省，限流路径零干扰）
+    rate_limit: Option<RateLimitOpts>,
+    /// [pipeline.queue] max_queue_size 覆盖（None = 缺省 10000）
+    queue_max_size: Option<usize>,
+    /// [model] 段整体替换（决策 bundle 测试：laya onnx + task=decision）
+    model_section: Option<String>,
+}
+
+struct RateLimitOpts {
+    ip_requests_per_minute: u64,
+    headers_enabled: bool,
+}
+
+/// 官方 laya 决策 bundle（receptron/laya-onnx 产物，P2-1 探测口径）与
+/// onnxruntime 动态库的本地资产探测——决策 200 e2e 的 SKIP 守卫。
+/// server 侧 engine_type="onnx" 需 onnx feature 构建，故随测试一并 cfg 门。
+#[cfg(feature = "onnx")]
+const LAYA_BUNDLE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/models/laya");
+#[cfg(feature = "onnx")]
+const ORT_DYLIB_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/libonnxruntime.so"
+);
+
+#[cfg(feature = "onnx")]
+fn decision_assets_ready() -> bool {
+    std::path::Path::new(LAYA_BUNDLE_PATH)
+        .join("laya.onnx")
+        .exists()
+        && std::path::Path::new(ORT_DYLIB_PATH).exists()
+}
+
+#[cfg(feature = "onnx")]
+fn decision_model_section() -> String {
+    format!(
+        "[model]\nmodel_path = \"{LAYA_BUNDLE_PATH}\"\nengine_type = \"onnx\"\ntask = \"decision\"\n\n"
+    )
 }
 
 fn config_text(http_port: u16, grpc_port: u16, dir: &std::path::Path, opts: &ServerOpts) -> String {
+    let rate_limit_section = match &opts.rate_limit {
+        Some(rl) => format!(
+            "[rate_limit]\nenabled = true\nip_requests_per_minute = {}\nheaders_enabled = {}\n\n",
+            rl.ip_requests_per_minute, rl.headers_enabled
+        ),
+        None => "[rate_limit]\nenabled = false\n\n".to_string(),
+    };
+    let queue_section = opts
+        .queue_max_size
+        .map(|n| format!("[pipeline.queue]\nmax_queue_size = {n}\n\n"))
+        .unwrap_or_default();
+    let model_section = opts.model_section.clone().unwrap_or_else(|| {
+        format!("[model]\nmodel_path = \"{M1_PATH}\"\nexpected_dimension = 384\n\n")
+    });
     format!(
         "[server]\nhost = \"127.0.0.1\"\nport = {http_port}\n\
          grpc_enabled = true\ngrpc_port = {grpc_port}\n\
          grpc_require_auth = {grpc_require_auth}\n\
          grpc_allowed_roots = [\"{}\", \"{}\"]\n\n\
-         [model]\nmodel_path = \"{M1_PATH}\"\nexpected_dimension = 384\n\n\
+         {model_section}\
          [embedding]\ncache_enabled = true\n\n\
-         [rate_limit]\nenabled = false\n\n\
+         {rate_limit_section}\
          [auth]\nenabled = {}\n{}\n\
-         [database]\nurl = \"sqlite::memory:\"\n",
+         [database]\nurl = \"sqlite::memory:\"\n\
+         {queue_section}",
         dir.display(),
         MODELS_DIR,
         opts.auth,
@@ -764,6 +839,7 @@ async fn grpc_require_auth_without_auth_config_refuses_startup() {
         &ServerOpts {
             auth: false,
             grpc_require_auth: true,
+            ..Default::default()
         },
     );
     std::fs::write(dir.join("config").join("config.toml"), cfg).expect("config");
@@ -807,6 +883,7 @@ async fn grpc_auth_matrix_unauthenticated_vs_valid() {
         &ServerOpts {
             auth: true,
             grpc_require_auth: true,
+            ..Default::default()
         },
         &[
             ("VECBOOST_JWT_SECRET", JWT_SECRET),
@@ -893,6 +970,7 @@ async fn grpc_token_revoked_on_http_logout_rejected_on_grpc() {
         &ServerOpts {
             auth: true,
             grpc_require_auth: true,
+            ..Default::default()
         },
         &[
             ("VECBOOST_JWT_SECRET", JWT_SECRET),
@@ -950,4 +1028,181 @@ async fn grpc_token_revoked_on_http_logout_rejected_on_grpc() {
         tonic::Code::Unauthenticated,
         "HTTP logout 吊销的 token 在 gRPC 侧应立即失效: {err}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 决策三口径互斥（R-decision-throughput-003）：auth 限流 429 / 队列满 503
+// Overloaded / 正常 200 无限流头，三口径各有独立断言且语义互斥
+// ---------------------------------------------------------------------------
+
+fn decision_noul_body() -> String {
+    json!({
+        "state": {"topic": "vacation"},
+        "questions": [{
+            "name": "confident",
+            "qtype": "noul",
+            "instructions": "state your p(true)",
+            "options": []
+        }]
+    })
+    .to_string()
+}
+
+/// 口径一：auth 限流命中 → 429，且 `[rate_limit] headers_enabled = true` 时
+/// 携带 IETF RateLimit-* / Retry-After 头。前 `ip_requests_per_minute` 个
+/// 请求（M1 embedding 模型下决策端点为 400 业务错）消耗 IP 配额，超额即 429
+/// ——限流发生在中间件层，先于业务语义。限流中间件挂载于 auth feature 门
+/// （main.rs 路由段），非 auth 构建无限流链路，故本测试随门裁剪。
+#[cfg(feature = "auth")]
+#[tokio::test]
+async fn decision_auth_rate_limit_hit_returns_429_with_headers() {
+    let server = spawn_server(
+        "decision-rl429",
+        &ServerOpts {
+            rate_limit: Some(RateLimitOpts {
+                ip_requests_per_minute: 2,
+                headers_enabled: true,
+            }),
+            ..Default::default()
+        },
+        &[],
+    );
+    let body = decision_noul_body();
+    let mut hit = false;
+    for i in 0..6 {
+        let (status, headers, _resp_body) = http_request_full(
+            server.http_port,
+            "POST",
+            "/api/1/decisions",
+            Some(&body),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("request {i} failed: {e}"));
+        if status == 429 {
+            hit = true;
+            let has = |name: &str| headers.iter().any(|(k, _)| k == name);
+            assert!(
+                has("ratelimit-limit") && has("ratelimit-remaining") && has("ratelimit-reset"),
+                "429 must carry IETF RateLimit-* headers (headers_enabled=true), got {headers:?}"
+            );
+            assert!(
+                has("retry-after"),
+                "429 must carry Retry-After, got {headers:?}"
+            );
+            break;
+        }
+    }
+    assert!(
+        hit,
+        "exceeding ip_requests_per_minute=2 on /api/1/decisions must yield 429"
+    );
+}
+
+/// 口径二：队列满背压 → 503 + Overloaded（`[pipeline.queue]
+/// max_queue_size = 0` 构造），错误体为 SERVICE_UNAVAILABLE、message 为
+/// 队列满文案——与 auth 限流的 429/RateLimit-* 口径互斥，不混用限流语义。
+#[tokio::test]
+async fn decision_backpressure_queue_full_returns_503_overloaded() {
+    let server = spawn_server(
+        "decision-overloaded",
+        &ServerOpts {
+            queue_max_size: Some(0),
+            ..Default::default()
+        },
+        &[],
+    );
+    let (status, headers, body) = http_request_full(
+        server.http_port,
+        "POST",
+        "/api/1/decisions",
+        Some(&decision_noul_body()),
+        None,
+    )
+    .expect("decision request");
+    assert_eq!(status, 503, "queue-full must backpressure with 503: {body}");
+    let wire: Value = serde_json::from_str(&body).expect("error body json");
+    // sdforge ApiError::ServiceUnavailable wire：{type, service, retry_after}
+    assert_eq!(wire["type"], "ServiceUnavailable", "wire={wire}");
+    assert_eq!(wire["retry_after"], 60, "wire={wire}");
+    let service = wire["service"].as_str().unwrap_or_default();
+    assert!(
+        service.contains("Queue is full"),
+        "backpressure message must be the queue-full copy, got: {service}"
+    );
+    assert!(
+        !headers
+            .iter()
+            .any(|(k, _)| k == "retry-after" || k.starts_with("ratelimit-")),
+        "Overloaded (503) must not borrow rate-limit headers, got {headers:?}"
+    );
+}
+
+/// 口径三：正常决策请求 → 200，wire 三题型形态正确，且（`[rate_limit]
+/// enabled = false` 下）响应不含限流头误注入；顺带断言 /metrics 输出
+/// 决策三指标（R-decision-throughput-004 的导出可见性）。
+/// 资产守卫：models/laya bundle + ORT_DYLIB_PATH 缺一即 SKIP；
+/// engine_type="onnx" 需 onnx feature 构建的 server bin。
+#[cfg(feature = "onnx")]
+#[tokio::test]
+async fn decision_normal_200_without_rate_limit_headers_and_metrics_visible() {
+    if decision_assets_ready() {
+        // 资产就位，继续
+    } else {
+        eprintln!(
+            "SKIP [decision_normal_200_without_rate_limit_headers_and_metrics_visible]: \
+             models/laya bundle 或 onnxruntime 动态库缺失"
+        );
+        return;
+    }
+    let server = spawn_server(
+        "decision-200",
+        &ServerOpts {
+            model_section: Some(decision_model_section()),
+            ..Default::default()
+        },
+        &[("ORT_DYLIB_PATH", ORT_DYLIB_PATH)],
+    );
+    let (status, headers, body) = http_request_full(
+        server.http_port,
+        "POST",
+        "/api/1/decisions",
+        Some(&decision_noul_body()),
+        None,
+    )
+    .expect("decision request");
+    assert_eq!(
+        status, 200,
+        "decision with laya bundle should succeed: {body}"
+    );
+    assert!(
+        !headers
+            .iter()
+            .any(|(k, _)| k == "retry-after" || k.starts_with("ratelimit-")),
+        "normal 200 must not carry rate-limit headers, got {headers:?}"
+    );
+    let resp: Value = serde_json::from_str(&body).expect("decision json");
+    let answers = resp["answers"].as_array().expect("answers array");
+    assert_eq!(answers.len(), 1, "one question answered");
+    assert_eq!(answers[0]["question"], "confident");
+    assert_eq!(answers[0]["answer"]["type"], "noul");
+    assert!(
+        answers[0]["answer"]["p_true"].is_number(),
+        "noul answer must carry numeric p_true: {}",
+        answers[0]["answer"]
+    );
+
+    // 决策指标导出可见（热路径 observe 后 /metrics 出现）
+    let (metrics_status, _, metrics_body) =
+        http_request_full(server.http_port, "GET", "/metrics", None, None).expect("metrics");
+    assert_eq!(metrics_status, 200);
+    for metric in [
+        "vecboost_decision_requests_total",
+        "vecboost_decision_questions_total",
+        "vecboost_decision_queue_wait_seconds",
+    ] {
+        assert!(
+            metrics_body.contains(metric),
+            "/metrics must expose {metric}"
+        );
+    }
 }

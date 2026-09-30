@@ -17,6 +17,7 @@ error-io = IO 错误：{ $detail }
 error-validation = 校验错误：{ $detail }
 error-request-timeout = 请求超时：{ $detail }
 error-rate-limit = 超出速率限制：{ $detail }
+error-overloaded = 服务过载：{ $detail }
 error-database = 数据库错误：{ $detail }
 error-internal = 内部错误：{ $detail }
 error-unsupported-task = 不支持的任务：{ $detail }

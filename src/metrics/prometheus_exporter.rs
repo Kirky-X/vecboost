@@ -34,6 +34,11 @@ pub struct PrometheusCollector {
     // 决策管线逐请求总时延
     vecboost_decision_seconds: HistogramVec,
 
+    // 决策请求/问题计数与队列等待（P2-3 可观测补齐）
+    vecboost_decision_requests_total: prometheus::IntCounter,
+    vecboost_decision_questions_total: prometheus::IntCounter,
+    vecboost_decision_queue_wait_seconds: prometheus::Histogram,
+
     // 时间窗拼批指标：批次大小与等待时长
     vecboost_batch_size: HistogramVec,
     vecboost_batch_wait_seconds: HistogramVec,
@@ -162,6 +167,27 @@ impl PrometheusCollector {
             registry.clone()
         )?;
 
+        // 决策请求/问题计数与队列等待直方图（入队→开始执行）；
+        // buckets 与既有 vecboost_queue_wait_seconds 同一口径
+        let vecboost_decision_requests_total = prometheus::register_int_counter_with_registry!(
+            "vecboost_decision_requests_total",
+            "Total number of decision requests accepted for processing",
+            registry.clone()
+        )?;
+        let vecboost_decision_questions_total = prometheus::register_int_counter_with_registry!(
+            "vecboost_decision_questions_total",
+            "Total number of decision questions processed",
+            registry.clone()
+        )?;
+        let vecboost_decision_queue_wait_seconds = prometheus::register_histogram_with_registry!(
+            "vecboost_decision_queue_wait_seconds",
+            "Decision request wait from enqueue to start of execution",
+            vec![
+                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0
+            ],
+            registry.clone()
+        )?;
+
         // 缓存命中
         let cache_hits = register_counter_vec_with_registry!(
             "cache_hits_total",
@@ -207,6 +233,9 @@ impl PrometheusCollector {
             vecboost_inbatch_dedup_ratio,
             vecboost_stage_seconds,
             vecboost_decision_seconds,
+            vecboost_decision_requests_total,
+            vecboost_decision_questions_total,
+            vecboost_decision_queue_wait_seconds,
             semantic_cache_fuzzy_hits,
             vecboost_queue_wait_seconds,
             cache_hits,
@@ -265,6 +294,21 @@ impl PrometheusCollector {
         self.vecboost_decision_seconds
             .with_label_values(&["decision"])
             .observe(secs);
+    }
+
+    /// 决策请求计数（热路径：DecisionService::process_decision 校验受理后）。
+    pub fn inc_decision_requests(&self) {
+        self.vecboost_decision_requests_total.inc();
+    }
+
+    /// 决策问题计数（按请求内问题数累加）。
+    pub fn add_decision_questions(&self, count: usize) {
+        self.vecboost_decision_questions_total.inc_by(count as u64);
+    }
+
+    /// 决策请求入队→开始执行等待时长（worker 出队处 observe）。
+    pub fn observe_decision_queue_wait(&self, wait_secs: f64) {
+        self.vecboost_decision_queue_wait_seconds.observe(wait_secs);
     }
 
     /// 语义缓存 trigram 模糊命中计数（D26b 可观测性）。
@@ -381,16 +425,72 @@ mod tests {
         let collector = PrometheusCollector::default();
         let registry = collector.registry();
         let families = registry.gather();
-        // 仅常驻的 pipeline 快照 gauge(初值 0)与语义缓存 fuzzy 命中
-        // 计数器存在于未记录状态
+        // 仅常驻的 pipeline 快照 gauge(初值 0)、语义缓存 fuzzy 命中
+        // 计数器与决策请求/问题计数器、队列等待直方图存在于未记录状态
         for family in &families {
             let name = family.name();
             assert!(
                 name.starts_with("vecboost_pipeline_")
-                    || name == "vecboost_semantic_cache_fuzzy_hits_total",
+                    || name == "vecboost_semantic_cache_fuzzy_hits_total"
+                    || name == "vecboost_decision_requests_total"
+                    || name == "vecboost_decision_questions_total"
+                    || name == "vecboost_decision_queue_wait_seconds",
                 "unexpected always-on family: {name}"
             );
         }
+    }
+
+    /// 决策三指标（P2-3）：注册可见、observe 后值/样本正确——
+    /// /metrics 导出走同一 registry（R-decision-throughput-004）
+    #[test]
+    fn test_decision_metrics_register_and_observe() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.inc_decision_requests();
+        collector.inc_decision_requests();
+        collector.add_decision_questions(3);
+        collector.add_decision_questions(5);
+        collector.observe_decision_queue_wait(0.02);
+        collector.observe_decision_seconds(0.5);
+
+        let families = collector.registry().gather();
+
+        let requests = families
+            .iter()
+            .find(|m| m.name() == "vecboost_decision_requests_total")
+            .expect("vecboost_decision_requests_total should be registered");
+        assert_eq!(
+            requests.get_metric()[0].get_counter().value(),
+            2.0,
+            "request counter should be 2 after two incs"
+        );
+
+        let questions = families
+            .iter()
+            .find(|m| m.name() == "vecboost_decision_questions_total")
+            .expect("vecboost_decision_questions_total should be registered");
+        assert_eq!(
+            questions.get_metric()[0].get_counter().value(),
+            8.0,
+            "question counter should accumulate per-request counts (3+5)"
+        );
+
+        let queue_wait = families
+            .iter()
+            .find(|m| m.name() == "vecboost_decision_queue_wait_seconds")
+            .expect("vecboost_decision_queue_wait_seconds should be registered");
+        let hist = queue_wait.get_metric()[0].get_histogram();
+        assert_eq!(hist.get_sample_count(), 1, "one queue-wait observation");
+
+        // 既有 vecboost_decision_seconds 行为不变（R-decision-throughput-004）
+        let seconds = families
+            .iter()
+            .find(|m| m.name() == "vecboost_decision_seconds")
+            .expect("vecboost_decision_seconds should stay registered");
+        assert_eq!(
+            seconds.get_metric()[0].get_histogram().get_sample_count(),
+            1,
+            "existing decision_seconds histogram must keep working"
+        );
     }
 
     #[test]

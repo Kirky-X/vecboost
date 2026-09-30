@@ -9,7 +9,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::domain::{EmbedRequest, RerankRequest};
+use crate::domain::{DecisionRequest, EmbedRequest, RerankRequest};
 use crate::error::VecboostError;
 use crate::i18n;
 
@@ -62,11 +62,12 @@ impl RequestSource {
     }
 }
 
-/// 服务请求枚举 — 支持嵌入和重排序两种请求类型
+/// 服务请求枚举 — 支持嵌入、重排序与决策三种请求类型
 #[derive(Debug, Clone)]
 pub enum ServiceRequest {
     Embed(EmbedRequest),
     Rerank(RerankRequest),
+    Decision(DecisionRequest),
 }
 
 impl ServiceRequest {
@@ -74,9 +75,9 @@ impl ServiceRequest {
     pub fn into_embed(self) -> Result<EmbedRequest, VecboostError> {
         match self {
             ServiceRequest::Embed(req) => Ok(req),
-            ServiceRequest::Rerank(_) => Err(VecboostError::InternalError(i18n::tr(
-                "queue-type-mismatch",
-            ))),
+            ServiceRequest::Rerank(_) | ServiceRequest::Decision(_) => Err(
+                VecboostError::InternalError(i18n::tr("queue-type-mismatch")),
+            ),
         }
     }
 }
@@ -225,9 +226,9 @@ impl PriorityRequestQueue {
             let current_size = self.current_size.load(Ordering::Acquire);
 
             if current_size >= self.max_queue_size {
-                return Err(VecboostError::RateLimitExceeded(i18n::tr(
-                    "queue-full-rejected",
-                )));
+                // 队列满背压走专属 Overloaded 变体（RateLimitExceeded 语义归
+                // auth 限流，spec R-decision-throughput-002 禁止互用）
+                return Err(VecboostError::Overloaded(i18n::tr("queue-full-rejected")));
             }
 
             match self.current_size.compare_exchange_weak(

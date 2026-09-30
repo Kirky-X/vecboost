@@ -435,6 +435,12 @@ impl WorkerManager {
                                 )
                                 .await;
                         }
+                        // 过期响应条目清扫：取消丢弃路径（断连/服务端超时置位
+                        // 取消后出队即弃）的通道条目永远不会被 complete——worker
+                        // 看不到该请求，deregister 仅覆盖入队失败分支。条目按
+                        // 自身 timeout 到期在此移除，闭合无界增长面（三路评审
+                        // M×3）；此时 handler 已返回、rx 已 drop，清扫零副作用
+                        response_channel.cleanup_expired().await;
                     }
 
                     // 时间窗动态拼批——首请求后开 batch_wait_ms 窗口继续聚合，
@@ -593,6 +599,9 @@ impl WorkerManager {
                                     )
                                     .await;
                             }
+                            // 空闲路径同样清扫过期响应条目（取消丢弃泄漏类的
+                            // 兜底通道，与出队分支收割点同语义）
+                            response_channel.cleanup_expired().await;
                             idle_count = idle_count.saturating_add(1);
                             debug!(
                                 "Worker {} idle timeout ({}s), idle_count={}",
@@ -2337,6 +2346,9 @@ mod tests {
     #[tokio::test]
     async fn test_cancelled_request_skipped_at_dequeue() {
         let queue = Arc::new(PriorityRequestQueue::new(100));
+        // 短 timeout 通道：取消丢弃路径的条目由 cleanup_expired 按自身
+        // timeout 到期回收（worker 收割点生产接线），此处钉回收闭环
+        let response_channel = Arc::new(ResponseChannel::with_timeout(Duration::from_millis(80)));
 
         let flag = queue.cancellations().register("cancelled-1");
         flag.store(true, Ordering::SeqCst);
@@ -2357,12 +2369,32 @@ mod tests {
             .unwrap();
         assert_eq!(queue.size(), 1);
 
+        // handler 侧注册的通道条目在断连/超时后不再有人接收——
+        // register 的 rx 随 handler drop，仅剩 map 条目滞留
+        let _rx_dropped = response_channel.register("cancelled-1".to_string()).await;
+        drop(_rx_dropped);
+
         let dequeued = queue.dequeue().await;
         assert!(
             dequeued.is_none(),
             "cancelled request must be dropped, not served"
         );
         assert_eq!(queue.size(), 0, "queue slot must be released");
+
+        // 取消丢弃不产生 complete：条目滞留至自身 timeout，由 worker 收割点的
+        // cleanup_expired 回收（无界增长面闭合钉，三路评审 M×3）
+        assert_eq!(
+            response_channel.pending_count().await,
+            1,
+            "entry must survive until its own timeout (no complete for cancelled drops)"
+        );
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        response_channel.cleanup_expired().await;
+        assert_eq!(
+            response_channel.pending_count().await,
+            0,
+            "expired entry of a cancelled-dropped request must be reclaimed by cleanup"
+        );
     }
 
     /// 回归钉（T032/D07）：shutdown 排空——排队请求立即收到

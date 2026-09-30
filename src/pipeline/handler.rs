@@ -48,30 +48,12 @@ pub async fn handle_pipeline_request(
     // 进入 pipeline 等待即计为在途(RAII,任何退出路径自动递减)
     let _in_flight = InFlightGuard::enter();
 
-    let priority = state
-        .kit
-        .require::<crate::registry::PriorityCalculatorModule>()
-        .expect("PriorityCalculatorModule not registered")
-        .calculate(crate::pipeline::PriorityInput {
-            base_priority: crate::pipeline::Priority::Normal,
-            time_until_timeout: Duration::from_secs(30),
-            user_tier: None,
-            source: crate::pipeline::RequestSource::http(ip.clone()),
-            queue_length: state
-                .kit
-                .require::<crate::registry::PipelineQueueModule>()
-                .expect("PipelineQueueModule not registered")
-                .size(),
-        });
-
-    let queued_request = crate::pipeline::QueuedRequest {
+    let queued_request = build_queued_request(
+        &state,
         request_id,
-        request: crate::pipeline::ServiceRequest::Embed(req),
-        priority,
-        submitted_at: std::time::Instant::now(),
-        timeout: Duration::from_secs(30),
-        source: crate::pipeline::RequestSource::http(ip),
-    };
+        ip,
+        crate::pipeline::ServiceRequest::Embed(req),
+    )?;
 
     let response = enqueue_and_await_response(state, queued_request).await?;
     let ServiceResponse::Embed(resp) = response else {
@@ -84,38 +66,29 @@ pub async fn handle_pipeline_request(
 
 /// 决策 pipeline 处理：与 embed 同一入队/等待语义（共享队列、共享优先级
 /// 计算器与基准、取消传播），仅请求/响应类型为决策。优先级与 embed 同口径
-/// 由「同一 PriorityCalculator + 同一 Normal 基准 + 同一 http 来源权重」保证。
+/// 由「同一 build_queued_request 构造（同一 PriorityCalculator + 同一 Normal
+/// 基准 + 同一来源标识）」结构性保证；校验在入队前完成（400 不占队列槽位）。
 pub async fn handle_decision_pipeline_request(
     state: VecboostState,
     req: crate::domain::DecisionRequest,
 ) -> Result<crate::domain::DecisionResponse, VecboostError> {
+    // 入队前 O(1) 校验：非法请求在此 400 拒绝，不占队列槽位与 worker 出队
+    // 周期；否则队列满时 503 Overloaded 会把永久性客户端错误伪装成可重试
+    // 背压（三路评审 M）。与 service 直连路径共用同一校验实现
+    crate::service::decision::DecisionService::validate_request(
+        &req,
+        crate::domain::decision::MAX_QUESTIONS,
+    )?;
+
     let request_id = next_request_id();
     let _in_flight = InFlightGuard::enter();
 
-    let priority = state
-        .kit
-        .require::<crate::registry::PriorityCalculatorModule>()
-        .expect("PriorityCalculatorModule not registered")
-        .calculate(crate::pipeline::PriorityInput {
-            base_priority: crate::pipeline::Priority::Normal,
-            time_until_timeout: Duration::from_secs(30),
-            user_tier: None,
-            source: crate::pipeline::RequestSource::http(API_SOURCE_ID.to_string()),
-            queue_length: state
-                .kit
-                .require::<crate::registry::PipelineQueueModule>()
-                .expect("PipelineQueueModule not registered")
-                .size(),
-        });
-
-    let queued_request = crate::pipeline::QueuedRequest {
+    let queued_request = build_queued_request(
+        &state,
         request_id,
-        request: crate::pipeline::ServiceRequest::Decision(req),
-        priority,
-        submitted_at: std::time::Instant::now(),
-        timeout: Duration::from_secs(30),
-        source: crate::pipeline::RequestSource::http(API_SOURCE_ID.to_string()),
-    };
+        API_SOURCE_ID.to_string(),
+        crate::pipeline::ServiceRequest::Decision(req),
+    )?;
 
     let response = enqueue_and_await_response(state, queued_request).await?;
     let ServiceResponse::Decision(resp) = response else {
@@ -126,12 +99,51 @@ pub async fn handle_decision_pipeline_request(
     Ok(resp)
 }
 
-/// embed/decision handler 共用的 pipeline 来源标识（wire 层无客户端 IP 可取，
-/// 两侧一致以保证同口径优先级）
-const API_SOURCE_ID: &str = "api";
+/// 请求 SLA：排队+执行的预算上界。time_until_timeout（优先级输入）、
+/// QueuedRequest.timeout（SLA 收割依据）与 enqueue_and_await_response 的
+/// 服务端等待超时三处共用同一常量，杜绝多处硬编码漂移（三路评审 L）。
+const REQUEST_SLA: Duration = Duration::from_secs(30);
+
+/// embed/decision handler 共用的 pipeline 来源标识与 QueuedRequest 构造——
+/// 优先级计算与 SLA 只此一份，两侧调用点（api/embedding.rs 传
+/// [`API_SOURCE_ID`]）无法各自漂移，「同口径优先级」成为结构性事实
+/// （三路评审 L）
+pub const API_SOURCE_ID: &str = "api";
+
+fn build_queued_request(
+    state: &VecboostState,
+    request_id: String,
+    source_id: String,
+    request: crate::pipeline::ServiceRequest,
+) -> Result<QueuedRequest, VecboostError> {
+    let priority = state
+        .kit
+        .require::<crate::registry::PriorityCalculatorModule>()
+        .expect("PriorityCalculatorModule not registered")
+        .calculate(crate::pipeline::PriorityInput {
+            base_priority: crate::pipeline::Priority::Normal,
+            time_until_timeout: REQUEST_SLA,
+            user_tier: None,
+            source: crate::pipeline::RequestSource::http(source_id.clone()),
+            queue_length: state
+                .kit
+                .require::<crate::registry::PipelineQueueModule>()
+                .expect("PipelineQueueModule not registered")
+                .size(),
+        });
+
+    Ok(QueuedRequest {
+        request_id,
+        request,
+        priority,
+        submitted_at: std::time::Instant::now(),
+        timeout: REQUEST_SLA,
+        source: crate::pipeline::RequestSource::http(source_id),
+    })
+}
 
 /// 入队并等待 worker 完成的公共内核：取消传播（T030）、响应通道注册、
-/// 入队（队列满早退释放取消标志，审查 H2）、30s 服务端等待超时（T031）。
+/// 入队（队列满早退释放取消标志，审查 H2）、SLA 服务端等待超时（T031）。
 /// embed 与 decision handler 共用，保证两条路径的排队语义完全一致。
 async fn enqueue_and_await_response(
     state: VecboostState,
@@ -172,7 +184,7 @@ async fn enqueue_and_await_response(
         return Err(e);
     }
 
-    let result = match tokio::time::timeout(Duration::from_secs(30), response_rx).await {
+    let result = match tokio::time::timeout(REQUEST_SLA, response_rx).await {
         Ok(Ok(Ok(response))) => Ok(response),
         Ok(Ok(Err(e))) => Err(e),
         Ok(Err(_)) => Err(VecboostError::InternalError(i18n::tr(
@@ -529,7 +541,7 @@ mod tests {
                     // 的计算结果——决策不引入第二套优先级算法
                     let expected_priority = priority_calculator.calculate(PriorityInput {
                         base_priority: crate::pipeline::Priority::Normal,
-                        time_until_timeout: Duration::from_secs(30),
+                        time_until_timeout: REQUEST_SLA,
                         user_tier: None,
                         source: crate::pipeline::RequestSource::http("api".to_string()),
                         queue_length: 0,
@@ -571,6 +583,39 @@ mod tests {
         }
 
         consumer.await.unwrap();
+    }
+
+    /// 入队前校验钉（三路评审 M）：非法 DecisionRequest 在 pipeline 分支
+    /// 入队前 400 拒绝（InvalidInput），不占队列槽位——否则队列满时同一
+    /// 请求会得到 503 Overloaded，把永久性客户端错误伪装成可重试背压。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_decision_pipeline_request_rejects_invalid_before_enqueue() {
+        ensure_i18n_init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+
+        let mut invalid = decision_noul_request();
+        invalid.questions.clear();
+        let result = handle_decision_pipeline_request(state, invalid).await;
+        match result {
+            Err(VecboostError::InvalidInput(msg)) => {
+                assert!(
+                    msg.to_lowercase().contains("question"),
+                    "400 copy must locate the invalid field, got: {msg}"
+                );
+            }
+            other => panic!("expected InvalidInput before enqueue, got {other:?}"),
+        }
+        assert_eq!(
+            queue.size(),
+            0,
+            "invalid request must never occupy a queue slot"
+        );
     }
 
     /// 决策请求队列满背压：/api/1/decisions 在队列容量置零时收到

@@ -60,26 +60,7 @@ impl DecisionService {
         req: DecisionRequest,
         max_questions: usize,
     ) -> Result<DecisionResponse, VecboostError> {
-        if req.state.is_null() {
-            return Err(VecboostError::InvalidInput(
-                crate::i18n::tr("decision-empty-state").to_string(),
-            ));
-        }
-        if req.questions.is_empty() {
-            return Err(VecboostError::InvalidInput(
-                crate::i18n::tr("decision-empty-questions").to_string(),
-            ));
-        }
-        if req.questions.len() > max_questions {
-            return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
-                "decision-too-many-questions",
-                crate::i18n::tr_args(&[
-                    ("count", &req.questions.len().to_string()),
-                    ("max", &max_questions.to_string()),
-                ]),
-            )));
-        }
-        req.validate()?;
+        Self::validate_request(&req, max_questions)?;
 
         // 热路径埋点：请求/问题计数（校验受理后计数，400 拒绝不计；
         // 全局 collector 未设置时零开销跳过——library 模式/单测环境）
@@ -117,6 +98,39 @@ impl DecisionService {
         })??;
         response.processing_time_ms = start.elapsed().as_millis();
         Ok(response)
+    }
+
+    /// 决策请求前置校验的单一实现：state/questions 非空与数量上限（i18n
+    /// 文案，InvalidInput 语义）→ 域层
+    /// [`DecisionRequest::validate`](crate::domain::DecisionRequest::validate)
+    /// （choice/score/noul 跨字段一致性等）。直连路径（process_decision）与
+    /// pipeline 入队路径（handle_decision_pipeline_request）共用，保证
+    /// 400 类拒绝在入队前 O(1) 完成——非法请求不占队列槽位，也不会在
+    /// 队列满时被 503 Overloaded 伪装成可重试的瞬时背压（三路评审 M）。
+    pub fn validate_request(
+        req: &DecisionRequest,
+        max_questions: usize,
+    ) -> Result<(), VecboostError> {
+        if req.state.is_null() {
+            return Err(VecboostError::InvalidInput(
+                crate::i18n::tr("decision-empty-state").to_string(),
+            ));
+        }
+        if req.questions.is_empty() {
+            return Err(VecboostError::InvalidInput(
+                crate::i18n::tr("decision-empty-questions").to_string(),
+            ));
+        }
+        if req.questions.len() > max_questions {
+            return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+                "decision-too-many-questions",
+                crate::i18n::tr_args(&[
+                    ("count", &req.questions.len().to_string()),
+                    ("max", &max_questions.to_string()),
+                ]),
+            )));
+        }
+        req.validate()
     }
 }
 

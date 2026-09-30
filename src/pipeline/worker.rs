@@ -676,8 +676,10 @@ impl WorkerManager {
     /// 批量处理请求——用 embed_batch 合并推理，按 request_id 切分结果分别 complete。
     ///
     /// 单条文本失败仅该请求收错，不影响其他请求。
-    /// 决策请求不并入 embed 拼批（问题级 collate 是 DecisionPipeline 内部能力），
-    /// 按请求单独执行。
+    /// 决策请求不并入 embed 拼批（问题级 collate 是 DecisionPipeline 内部能力）：
+    /// 先逐个 `tokio::spawn` 并发执行（decide 内部 spawn_blocking，多决策可借
+    /// 引擎读写锁并发），embed 推理与批内决策并行推进——决策不 inline await，
+    /// 否则队头阻塞同批 embed 推理、拖慢 worker 出队节奏（三路评审 M）。
     async fn process_batch_requests(
         batch: &[super::queue::QueuedRequest],
         embedding_service: &Arc<RwLock<EmbeddingService>>,
@@ -701,6 +703,11 @@ impl WorkerManager {
         let mut texts = Vec::with_capacity(batch.len());
         let mut normalize_flags = Vec::with_capacity(batch.len());
         let mut valid_indices = Vec::with_capacity(batch.len());
+        // 批内决策的并发执行句柄：(request_id, JoinHandle)
+        let mut pending_decisions: Vec<(
+            String,
+            tokio::task::JoinHandle<Result<ServiceResponse, VecboostError>>,
+        )> = Vec::new();
 
         for (i, req) in batch.iter().enumerate() {
             match &req.request {
@@ -721,25 +728,36 @@ impl WorkerManager {
                         .await;
                 }
                 ServiceRequest::Decision(decision_req) => {
-                    // 决策单独执行（内部 spawn_blocking），不阻塞 embed 收集
-                    let result = match decision_service {
+                    // spawn 并发执行（decide 内部 spawn_blocking 不占 worker 面），
+                    // 结果在 embed 推理发起后统一收齐
+                    match decision_service {
                         Some(service) => {
-                            let guard = service.read().await;
-                            guard
-                                .process_decision(
-                                    decision_req.clone(),
-                                    crate::domain::decision::MAX_QUESTIONS,
-                                )
-                                .await
-                                .map(ServiceResponse::Decision)
+                            let service = Arc::clone(service);
+                            let decision_req = decision_req.clone();
+                            let request_id = req.request_id.clone();
+                            let handle = tokio::spawn(async move {
+                                let guard = service.read().await;
+                                guard
+                                    .process_decision(
+                                        decision_req,
+                                        crate::domain::decision::MAX_QUESTIONS,
+                                    )
+                                    .await
+                                    .map(ServiceResponse::Decision)
+                            });
+                            pending_decisions.push((request_id, handle));
                         }
-                        None => Err(VecboostError::InternalError(
-                            "Decision service not configured for worker".to_string(),
-                        )),
-                    };
-                    response_channel
-                        .complete(req.request_id.clone(), result)
-                        .await;
+                        None => {
+                            response_channel
+                                .complete(
+                                    req.request_id.clone(),
+                                    Err(VecboostError::InternalError(
+                                        "Decision service not configured for worker".to_string(),
+                                    )),
+                                )
+                                .await;
+                        }
+                    }
                 }
             }
         }
@@ -757,12 +775,14 @@ impl WorkerManager {
             Ok(embeddings) => {
                 // 批内各请求共享本次批量推理耗时（拼批语义下的真实处理时长）
                 let batch_millis = batch_started.elapsed().as_millis();
-                // 按 request_id 切分结果
+                // 按 request_id 切分结果（j 为收集序——texts/normalize_flags 按
+                // 收集序 push，idx 是批内原始位置，混批时两者不同；既有实现
+                // 以下标互查在 embed 不位于 0 位时越界，三路评审混批测试实抓）
                 for (j, &idx) in valid_indices.iter().enumerate() {
                     let req = &batch[idx];
                     if j < embeddings.len() {
                         let mut embedding = embeddings[j].clone();
-                        if normalize_flags[idx] {
+                        if normalize_flags[j] {
                             crate::utils::vector::normalize_l2(&mut embedding).ok();
                         }
                         let dimension = embedding.len();
@@ -802,6 +822,22 @@ impl WorkerManager {
                     }
                 }
             }
+        }
+
+        // 收齐批内决策结果（spawn 时已与 embed 推理并行推进）。决策任务
+        // panic 经 JoinError 显性映射 InferenceError，不吞错不悬挂等待方
+        for (request_id, handle) in pending_decisions {
+            let result = match handle.await {
+                Ok(result) => result,
+                Err(join_err) => {
+                    log::error!("decision inference task failed: {join_err}");
+                    Err(VecboostError::InferenceError(
+                        "decision inference task failed (engine task panicked); see server logs"
+                            .to_string(),
+                    ))
+                }
+            };
+            response_channel.complete(request_id, result).await;
         }
     }
 
@@ -1801,6 +1837,115 @@ mod tests {
             let _ = s.send(WorkerTask::Shutdown { immediate: true }).await;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    /// 混批并发钉（三路评审 M）：批内决策与 embed 同批时决策 spawn 并发执行、
+    /// embed 推理不被决策 inline await 阻塞（慢决策 + 快 embed 同批，embed
+    /// 必须先于决策完成回达），两类请求最终都收到正确响应。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_batch_mixed_embed_and_decision_run_concurrently() {
+        struct SlowDecisionEngine;
+
+        #[async_trait]
+        impl InferenceEngine for SlowDecisionEngine {
+            fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+                Ok(vec![0.0; 8])
+            }
+            fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+                Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+            }
+            fn precision(&self) -> &Precision {
+                &Precision::Fp32
+            }
+            fn supports_mixed_precision(&self) -> bool {
+                false
+            }
+            fn supports_task(&self, task: ModelTask) -> bool {
+                matches!(task, ModelTask::Embedding | ModelTask::Decision)
+            }
+            fn decide(&self, _req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
+                // 慢决策：占住 inline await 的旧实现会把同批 embed 拖到其后
+                std::thread::sleep(Duration::from_millis(300));
+                Ok(DecisionResponse {
+                    answers: vec![DecisionAnswer {
+                        question: "confident".to_string(),
+                        answer: DecisionAnswerBody::Noul { p_true: 0.7 },
+                    }],
+                    processing_time_ms: 300,
+                })
+            }
+            async fn try_fallback_to_cpu(
+                &mut self,
+                _config: &ModelConfig,
+            ) -> Result<(), VecboostError> {
+                Ok(())
+            }
+        }
+
+        let service = Arc::new(RwLock::new(EmbeddingService::new(
+            Arc::new(RwLock::new(MockEngine)) as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+            None,
+        )));
+        let decision_service = Arc::new(RwLock::new(DecisionService::new(
+            Arc::new(RwLock::new(SlowDecisionEngine))
+                as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+            None,
+        )));
+        let channel = Arc::new(ResponseChannel::new());
+
+        let decision_req = QueuedRequest {
+            request_id: "mixed-decision".to_string(),
+            request: ServiceRequest::Decision(DecisionRequest {
+                state: serde_json::json!({}),
+                questions: vec![DecisionQuestion {
+                    name: "confident".to_string(),
+                    qtype: QuestionType::Noul,
+                    instructions: "state your p(true)".to_string(),
+                    options: vec![],
+                }],
+            }),
+            priority: Priority::Normal,
+            submitted_at: std::time::Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::http("127.0.0.1".to_string()),
+        };
+        // embed 在决策之后入批（数组序），旧 inline 实现会先等 300ms 决策完成
+        let embed_req = make_queued("mixed-embed");
+        let batch = vec![decision_req, embed_req];
+
+        let decision_rx = channel.register("mixed-decision".to_string()).await;
+        let embed_rx = channel.register("mixed-embed".to_string()).await;
+
+        let start = std::time::Instant::now();
+        WorkerManager::process_batch_requests(&batch, &service, Some(&decision_service), &channel)
+            .await;
+        let elapsed = start.elapsed();
+
+        // embed 先回达且在决策的 300ms 推理窗口内完成（未被队头阻塞）
+        let embed_result = tokio::time::timeout(Duration::from_millis(250), embed_rx).await;
+        assert!(
+            embed_result.is_ok(),
+            "embed must complete within the slow-decision window (no head-of-line blocking)"
+        );
+        let ServiceResponse::Embed(embed_resp) = embed_result.unwrap().unwrap().unwrap() else {
+            panic!("expected Embed response");
+        };
+        assert_eq!(embed_resp.dimension, 8);
+
+        // 决策最终也正确回达（收齐路径）
+        let decision_result = tokio::time::timeout(Duration::from_secs(5), decision_rx).await;
+        assert!(decision_result.is_ok(), "decision response should arrive");
+        let ServiceResponse::Decision(decision_resp) = decision_result.unwrap().unwrap().unwrap()
+        else {
+            panic!("expected Decision response");
+        };
+        assert_eq!(decision_resp.answers.len(), 1);
+
+        // 整批耗时应与单次慢决策同量级（决策与 embed 并行，而非串行叠加）
+        assert!(
+            elapsed < Duration::from_millis(900),
+            "mixed batch should not serialize decision + embed, took {elapsed:?}"
+        );
     }
 
     /// 验证 worker 退出后健康信息标记为 is_alive=false。

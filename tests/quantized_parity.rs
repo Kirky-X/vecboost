@@ -125,6 +125,7 @@ fn fp32_engine(model_path: &Path) -> AnyEngine {
         model_sha256: None,
         task: ModelTask::Embedding,
         quantized: false,
+        decision_params: None,
     };
     AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("fp32 引擎加载失败")
 }
@@ -144,6 +145,7 @@ fn quantized_engine(gguf_path: &Path) -> AnyEngine {
         model_sha256: None,
         task: ModelTask::Embedding,
         quantized: true,
+        decision_params: None,
     };
     // 必须经 EngineFactory（量化路由在此）；AnyEngine::new 是不走路由的原始构造
     vecboost::engine::EngineFactory::create(EngineType::Candle, &config)

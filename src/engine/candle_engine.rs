@@ -1506,6 +1506,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         }
     }
 
@@ -1992,6 +1993,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         }
     }
 

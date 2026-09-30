@@ -39,6 +39,7 @@
 
 ### 新增
 
+- **多 checkpoint 配置面（laya-p2p3-coverage P2-2）**:`[model.checkpoints.<name>]` 预设表——`switch_model` 按名命中即应用该 checkpoint 的决策序列预算（`head_max_len`/`max_len`，参数化 `DecisionParams` 替代编译期常量直传）与 model_path/task/engine_type/tokenizer_path（请求显式值优先、预设为缺省层，engine_type 未配置继承当前加载模型）；内置 `laya-multilingual` 预设（head_max_len 256 / max_len 256，文档 §2.1 多语言口径）零配置可切换，同名显式条目按字段级覆盖内置（未写的可选字段逐字段继承内置值，只定制 model_path 不丢多语言预算）；预设表经启动 fail-fast 校验（未知字段/缺失必填/参数为 0 或超硬上限——单字段 8192 或 head+state+4 固定特殊 token 组合超窗/表键与 name 漂移均拒绝启动，拒绝静默钳制）并注入 EmbeddingService 供 switch 查表；未配置时行为与现状完全等价
 - **决策管线接入层（G3）**:`/api/1/decisions` 四协议端点（HTTP/MCP/CLI/gRPC `vecboost.decide`）——`DecisionService`（state/questions 校验链 + 域层 validate 复用 + supports_task 先门后调 + spawn_blocking 阻塞推理隔离）、`DecisionModule` 注册贯通 server/MCP/CLI 三处 kit 装配；`[model] engine_type` / `task` 配置驱动（消灭启动路径硬编码 Candle，未知值启动期显性报错）；switch 契约扩展 `task` 字段（请求值优先→继承当前→回落 embedding）并传播替换决策引擎；切模型二选一语义（`task=decision` 时 embed/rerank 端点 400，反之 decisions 端点 400）
 - **Laya 决策管线（G2）**:`src/engine/decision.rs`——`[CLS] head [SEP] [MASK] option… [SEP] state [SEP]` 预处理（marker_pos/qtype 编码、head+options 192 token 预算前置校验、state 256 token 截断）、5 张量 ONNX 推理（input_ids/attention_mask/marker_pos/marker_mask bool/qtype）、per-cardinality 温度校准（`laya_config.json`，加载即钳制 [0.5,5]，缺桶回退 1.2，缺失 warn 不静默）、choice/score/noul 三型后处理（argmax+完整概率表 / 期望等级 Σi·p_i+分布 / P(true)）
 - **factory task 分派臂**:`EngineFactory::create` 对 `task=decision` 一律路由决策管线（`AnyEngine::Decision` 生产构造点，embed/rerank 端点对决策模型以 UnsupportedTask 400 显性拒绝）

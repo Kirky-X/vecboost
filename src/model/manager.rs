@@ -401,9 +401,14 @@ impl ModelManager {
                 // 重建（既有模式，LocalModelLoader 未持久化这些字段），接线组补齐
                 // ——tokenizer_path 置 None 后 onnx/决策引擎 reload 会回落 bundle
                 // 内探测，用户显式配置被静默丢弃（分词漂移无信号），持久化接线
-                // 时须一并覆盖
+                // 时须一并覆盖；decision_params 同属有损重建——switch 期经预设表
+                // 查得的序列预算（如内置 laya-multilingual 256/256）reload 后回落
+                // 英文缺省 192/256（decision 请求按缺省预算校验/截断），恢复须重新
+                // switch 命中预设（LoadedModel 未持久化该运行时值，透传需 accessor
+                // 基础设施，随持久化接线一并补）
                 task: model.task(),
                 quantized: model.quantized(),
+                decision_params: None,
             }
         };
 
@@ -622,6 +627,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let _model = manager.load(&config).await.unwrap();
@@ -653,6 +659,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let config2 = ModelConfig {
@@ -672,6 +679,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         fs::create_dir_all(&config1.model_path).unwrap();
@@ -727,6 +735,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -788,6 +797,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -817,6 +827,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -848,6 +859,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -889,6 +901,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         fs::create_dir_all(&config.model_path).unwrap();
@@ -928,6 +941,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let loaded = manager.load(&config).await.unwrap();
@@ -979,6 +993,7 @@ mod tests {
                 model_sha256: None,
                 task: crate::config::model::ModelTask::Embedding,
                 quantized: false,
+                decision_params: None,
             };
             manager.load(&config).await.unwrap();
         }
@@ -1012,6 +1027,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let _ = manager.load(&config).await.unwrap();
@@ -1080,6 +1096,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Decision,
             quantized: false,
+            decision_params: None,
         };
         manager.load(&config).await.unwrap();
 
@@ -1151,6 +1168,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: true,
+            decision_params: None,
         };
         manager.load(&config).await.unwrap();
 
@@ -1217,6 +1235,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let result = manager.load(&config).await;
@@ -1254,6 +1273,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         manager.set_default_config(config);
 
@@ -1286,6 +1306,7 @@ mod tests {
                 model_sha256: None,
                 task: crate::config::model::ModelTask::Embedding,
                 quantized: false,
+                decision_params: None,
             };
             manager.load(&config).await.unwrap();
         }
@@ -1329,6 +1350,7 @@ mod tests {
                     model_sha256: None,
                     task: crate::config::model::ModelTask::Embedding,
                     quantized: false,
+                    decision_params: None,
                 };
                 mgr.load(&config).await.unwrap();
             }));
@@ -1423,6 +1445,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let first = manager.load(&config).await.unwrap();
@@ -1454,6 +1477,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let _first = manager.load(&config).await.unwrap();
@@ -1483,6 +1507,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         let path = loader.get_model_path(&config).await.unwrap();
         assert_eq!(path, PathBuf::from("/slow/path"));
@@ -1507,6 +1532,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         let model = loader.load(&config).await.unwrap();
         assert_eq!(model.name(), "slow-load");
@@ -1531,6 +1557,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         let path = loader.get_model_path(&config).await.unwrap();
         assert_eq!(path, PathBuf::from("/fail/path"));
@@ -1559,6 +1586,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         manager.load(&config).await.unwrap();
         assert_eq!(manager.count().await, 1);
@@ -1583,6 +1611,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         }
     }
 

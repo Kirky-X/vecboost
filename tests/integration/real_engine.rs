@@ -68,6 +68,7 @@ pub fn get_test_model_config() -> ModelConfig {
             model_sha256: None,
             task: vecboost::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         },
         TestMode::Full => ModelConfig {
             name: "bge-m3".to_string(),
@@ -83,6 +84,7 @@ pub fn get_test_model_config() -> ModelConfig {
             model_sha256: None,
             task: vecboost::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         },
     }
 }

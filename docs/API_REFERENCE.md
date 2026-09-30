@@ -714,16 +714,16 @@ curl -X POST http://localhost:9002/api/1/decisions \
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `model_name` | string | ✅ | 模型名称 |
-| `model_path` | string | ❌ | 本地模型路径 |
-| `tokenizer_path` | string | ❌ | 分词器路径 |
-| `device` | string | ❌ | 设备类型 (`cpu`, `cuda`, `metal`) |
-| `max_batch_size` | integer | ❌ | 最大批处理大小 |
-| `pooling_mode` | string | ❌ | 池化模式 |
-| `expected_dimension` | integer | ❌ | 期望维度 |
-| `memory_limit_bytes` | integer | ❌ | 内存限制（字节） |
-| `oom_fallback_enabled` | boolean | ❌ | OOM 自动降级 |
-| `task` | string | ❌ | 任务维度 (`embedding` / `decision`)；缺省继承当前模型，无当前模型回落 `embedding`（`task=decision` 经 EngineFactory 分派臂加载决策管线，bundle 缺失报 `ModelLoadError`） |
+| `model_name` | string | ✅ | 模型名称；命中 `[model.checkpoints.<name>]` 预设名（含内置 `laya-multilingual`）时该预设各字段作为缺省层（见 [USER_GUIDE「多 checkpoint 配置与切换」](USER_GUIDE.md#多-checkpoint-配置与切换)） |
+| `model_path` | string | ❌ | 本地模型路径；请求显式值优先，预设命中时预设 `model_path` 为缺省层 |
+| `tokenizer_path` | string | ❌ | 分词器路径；请求显式值优先，预设命中时预设 `tokenizer_path` 为缺省层 |
+| `device` | string | ❌ | 设备类型 (`cpu`, `cuda`, `metal`)；缺省继承当前模型 |
+| `max_batch_size` | integer | ❌ | 最大批处理大小；缺省继承当前模型 |
+| `pooling_mode` | string | ❌ | 池化模式；缺省继承当前模型 |
+| `expected_dimension` | integer | ❌ | 期望维度；缺省继承当前模型 |
+| `memory_limit_bytes` | integer | ❌ | 内存限制（字节）；缺省继承当前模型 |
+| `oom_fallback_enabled` | boolean | ❌ | OOM 自动降级；缺省继承当前模型 |
+| `task` | string | ❌ | 任务维度 (`embedding` / `decision`)；缺省链：请求值优先 → `[model.checkpoints]` 预设命中次之 → 继承当前模型 → 无当前模型回落 `embedding`（`task=decision` 经 EngineFactory 分派臂加载决策管线，bundle 缺失报 `ModelLoadError`） |
 
 **请求示例:**
 

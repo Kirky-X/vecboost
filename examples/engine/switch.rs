@@ -63,6 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         model_sha256: None,
         task: vecboost::config::model::ModelTask::Embedding,
         quantized: false,
+        decision_params: None,
     };
     println!("📊 初始模型: {}", model_config.name);
 
@@ -82,6 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         expected_dimension: None,
         memory_limit_bytes: None,
         oom_fallback_enabled: None,
+        task: None,
     };
     let resp = service.switch_model(req).await?;
     println!("  success: {}", resp.success);
@@ -100,6 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         expected_dimension: Some(768),
         memory_limit_bytes: None,
         oom_fallback_enabled: Some(true),
+        task: None,
     };
     match service.switch_model(req).await {
         Ok(resp) => println!("  ✅ 切换成功: {}", resp.message),

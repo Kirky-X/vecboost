@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::config::model::{DeviceType, ModelConfig, ModelTask, Precision};
+use crate::config::model::{DecisionParams, DeviceType, ModelConfig, ModelTask, Precision};
 use crate::domain::{
     DecisionAnswer, DecisionAnswerBody, DecisionQuestion, DecisionRequest, DecisionResponse,
     QuestionType,
@@ -37,11 +37,6 @@ use tokenizers::Tokenizer;
 
 use super::InferenceEngine;
 
-/// head（qtype 前缀 + instructions）+ 全部 options（含各自 [MASK]）的 token 预算
-/// （英文 checkpoint 口径，文档 §2.1；超限直接 InvalidInput，风险前置校验）
-pub(crate) const HEAD_MAX_LEN: usize = 192;
-/// state 部分 token 截断上限（文档 §2.1：截断后约 256）
-pub(crate) const STATE_MAX_TOKENS: usize = 256;
 /// noul 固定两 marker（[false, true] 顺序）
 pub(crate) const NOUL_MARKERS: usize = 2;
 /// score 等级数：domain 契约（`DecisionQuestion::validate`）禁止 score 携带
@@ -178,16 +173,18 @@ impl FixedMarkers {
 /// 消除逐题重复 tokenize）；本函数内截断到 `state_max_tokens`（防御性，
 /// 未截断的调用方也安全）。
 ///
-/// head + 全部 options（含各自 [MASK]）超过 `head_max_len` 时报
-/// `InvalidInput`（§2.1 风险前置校验）。
+/// head + 全部 options（含各自 [MASK]）超过 `params.head_max_len` 时报
+/// `InvalidInput`（§2.1 风险前置校验；报错消息含实际生效的 head_max_len 数值，
+/// per-checkpoint 参数漂移可从错误面直接观察）。
 pub(crate) fn build_question_row(
     tokenizer: &Tokenizer,
     question: &DecisionQuestion,
     state_ids: &[i64],
     fixed: &FixedMarkers,
-    head_max_len: usize,
-    state_max_tokens: usize,
+    params: DecisionParams,
 ) -> Result<QuestionRow, VecboostError> {
+    let head_max_len = params.head_max_len;
+    let state_max_tokens = params.state_max_tokens;
     let cls_id = fixed.cls;
     let sep_id = fixed.sep;
     let mask_id = fixed.mask;
@@ -580,6 +577,8 @@ pub(crate) struct DecisionPipeline {
     calibration: TemperatureCalibration,
     /// score/noul 固定 marker 的预编码 id（加载期一次，热路径复用）
     fixed_markers: FixedMarkers,
+    /// per-checkpoint 序列预算（加载期定值，热路径逐题消费）
+    params: DecisionParams,
     precision: Precision,
     /// 已探明的本地 bundle 目录（try_fallback_to_cpu 重建 CPU Session 用，
     /// 无网络依赖）
@@ -678,6 +677,15 @@ impl DecisionPipeline {
     /// 操纵置信呈现）或词表（分词漂移）改变下游语义。部署上以目录权限而非
     /// 文件哈希作为该资产的边界；bundle 清单化校验待 config 契约扩展任务组。
     pub(crate) fn load(config: &ModelConfig) -> Result<Self, VecboostError> {
+        // decision_params 理论恒经合法路径构造（预设表解析期校验 + 启动
+        // fail-fast + switch_override 复检），但字段全 pub 且 derive
+        // Deserialize，库内直构非法值可绕过 new——加载期防御性复检（与
+        // switch_override 同一原则的第二处落点），先于资产探测显性拒绝，
+        // 而非延迟到每个决策请求期才以 InvalidInput 暴露
+        let params = match config.decision_params {
+            Some(p) => DecisionParams::new(p.head_max_len, p.state_max_tokens)?,
+            None => DecisionParams::default(),
+        };
         let bundle_dir = config.model_path.clone();
         if !bundle_dir.is_dir() {
             return Err(VecboostError::ModelLoadError(format!(
@@ -737,6 +745,7 @@ impl DecisionPipeline {
             tokenizer,
             calibration,
             fixed_markers,
+            params,
             precision,
             bundle_dir,
             fallback_triggered: false,
@@ -776,8 +785,7 @@ impl DecisionPipeline {
                 question,
                 &state_ids,
                 &self.fixed_markers,
-                HEAD_MAX_LEN,
-                STATE_MAX_TOKENS,
+                self.params,
             )?);
             qtype_codes.push(qtype_code(&question.qtype));
         }
@@ -965,6 +973,7 @@ impl InferenceEngine for DecisionPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::model::{HEAD_MAX_LEN, MAX_DECISION_SEQ_LEN, STATE_MAX_TOKENS};
 
     /// 本地 tokenizer 资产守卫：缺失时 SKIP（不硬失败——离线约束）。
     /// 与生产 load 同款清洗：资产自带的 truncation/padding 会污染协议
@@ -1018,6 +1027,170 @@ mod tests {
         (state_ids, fixed)
     }
 
+    // ── DecisionParams 解析：缺省口径 / 非法值显性拒绝 ──
+
+    #[test]
+    fn test_decision_params_default_matches_constants() {
+        let p = DecisionParams::default();
+        assert_eq!(p.head_max_len, HEAD_MAX_LEN, "缺省必须与 HEAD_MAX_LEN 同源");
+        assert_eq!(
+            p.state_max_tokens, STATE_MAX_TOKENS,
+            "缺省必须与 STATE_MAX_TOKENS 同源"
+        );
+        // 英文 checkpoint 口径数值钉：漂移即序列协议变更，须显性确认
+        assert_eq!(p.head_max_len, 192);
+        assert_eq!(p.state_max_tokens, 256);
+    }
+
+    #[test]
+    fn test_decision_params_new_accepts_multilingual_profile() {
+        // laya-multilingual 口径（head 256 / state 256）：合法且逐字段保真
+        let p = DecisionParams::new(256, 256).expect("multilingual 口径合法");
+        assert_eq!(p.head_max_len, 256);
+        assert_eq!(p.state_max_tokens, 256);
+    }
+
+    #[test]
+    fn test_decision_params_rejects_zero() {
+        for (head, state) in [(0usize, 256usize), (192, 0), (0, 0)] {
+            let err = DecisionParams::new(head, state).unwrap_err();
+            assert!(
+                matches!(err, VecboostError::ConfigError(_)),
+                "head={head} state={state} 必须解析期显性拒绝（禁止静默钳制），got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decision_params_rejects_over_hard_limit() {
+        for (head, state) in [
+            (MAX_DECISION_SEQ_LEN + 1, 256usize),
+            (192, MAX_DECISION_SEQ_LEN + 1),
+        ] {
+            let err = DecisionParams::new(head, state).unwrap_err();
+            assert!(
+                matches!(err, VecboostError::ConfigError(_)),
+                "head={head} state={state} 超硬上限必须解析期显性拒绝，got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decision_params_error_message_names_field_and_value() {
+        let err = DecisionParams::new(0, 256).unwrap_err();
+        let detail = err.error_detail();
+        assert!(
+            detail.contains("head_max_len") && detail.contains('0'),
+            "错误必须点名字段与实际值，detail={detail}"
+        );
+        let err = DecisionParams::new(192, MAX_DECISION_SEQ_LEN + 1).unwrap_err();
+        let detail = err.error_detail();
+        assert!(
+            detail.contains("state_max_tokens"),
+            "错误必须点名 state_max_tokens，detail={detail}"
+        );
+    }
+
+    #[test]
+    fn test_decision_params_combined_budget_rejected() {
+        use crate::config::model::DECISION_ROW_FIXED_TOKENS;
+        // 两字段各自合规（=单字段上限）但组合超窗：启动期显性拒绝而非延迟到
+        // 请求期以推理错误暴露（单字段口径不保证行总长 ≤ 位置编码窗宽）
+        let err = DecisionParams::new(MAX_DECISION_SEQ_LEN, MAX_DECISION_SEQ_LEN).unwrap_err();
+        assert!(
+            matches!(err, VecboostError::ConfigError(_)),
+            "组合超窗必须解析期显性拒绝，got {err:?}"
+        );
+        assert!(
+            err.error_detail().contains("combined sequence budget"),
+            "错误必须点名组合口径，detail={}",
+            err.error_detail()
+        );
+        // 边界钉：head + state + 固定 marker 恰达窗宽合法，超出 1 token 拒绝
+        let at_window = MAX_DECISION_SEQ_LEN - 4000 - DECISION_ROW_FIXED_TOKENS;
+        let ok = DecisionParams::new(4000, at_window).expect("组合恰达窗宽必须合法");
+        assert_eq!(
+            ok.head_max_len + ok.state_max_tokens + DECISION_ROW_FIXED_TOKENS,
+            MAX_DECISION_SEQ_LEN
+        );
+        let err = DecisionParams::new(4000, at_window + 1).unwrap_err();
+        assert!(
+            matches!(err, VecboostError::ConfigError(_)),
+            "组合超窗 1 token 也必须拒绝，got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_decision_params_effective_on_budget_behavior() {
+        let Some(tok) = mini_lm_tokenizer() else {
+            return;
+        };
+        let q = choice_q();
+        let (state_ids, fixed) = row_inputs(&tok, "state");
+        // 同一请求在收紧预算(8)下超限拒绝，报错消息携带实际生效的 8——
+        // 钉死「报错含实际生效 head_max_len」的参数化语义（拒绝静默用编译期常量）
+        let err = build_question_row(
+            &tok,
+            &q,
+            &state_ids,
+            &fixed,
+            DecisionParams::new(8, 8).expect("收紧口径合法"),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, VecboostError::InvalidInput(_)),
+            "收紧预算必须拒绝，got {err:?}"
+        );
+        assert!(
+            err.error_detail().contains("head_max_len 8"),
+            "报错必须含实际生效的 head_max_len 数值，detail={}",
+            err.error_detail()
+        );
+        // 同一请求在缺省英文口径下通过——参数真实生效而非常量直传
+        build_question_row(&tok, &q, &state_ids, &fixed, DecisionParams::default())
+            .expect("同一请求在缺省预算下必须通过");
+    }
+
+    #[test]
+    fn test_pipeline_load_rejects_invalid_decision_params_before_asset_probe() {
+        // 字段全 pub + derive Deserialize：库内直构非法值可绕过
+        // DecisionParams::new——load 处防御性复检（与 switch_override 同一
+        // 原则），加载期显性拒绝且先于资产探测（model_path 不存在也先报
+        // 参数错，本测试无需 bundle 资产）
+        let config = ModelConfig {
+            name: "laya-bad-params".to_string(),
+            engine_type: crate::config::model::EngineType::Candle,
+            model_path: PathBuf::from("__definitely_missing_bundle__"),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+            task: ModelTask::Decision,
+            quantized: false,
+            decision_params: Some(DecisionParams {
+                head_max_len: 0,
+                state_max_tokens: 256,
+            }),
+        };
+        let err = match DecisionPipeline::load(&config) {
+            Err(e) => e,
+            Ok(_) => panic!("直构非法 decision_params 必须在加载期被拒绝"),
+        };
+        assert!(
+            matches!(err, VecboostError::ConfigError(_)),
+            "直构非法参数必须在加载期显性拒绝（ConfigError），got {err:?}"
+        );
+        assert!(
+            err.error_detail().contains("head_max_len"),
+            "错误必须点名字段，detail={}",
+            err.error_detail()
+        );
+    }
+
     // ── qtype 编码 ──
 
     #[test]
@@ -1037,7 +1210,7 @@ mod tests {
         };
         let q = choice_q();
         let (state_ids, fixed) = row_inputs(&tok, "billed twice");
-        let row = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+        let row = build_question_row(&tok, &q, &state_ids, &fixed, DecisionParams::default())
             .expect("row");
 
         let cls_id = tok.token_to_id("[CLS]").expect("[CLS] in vocab") as i64;
@@ -1115,8 +1288,7 @@ mod tests {
             &choice_q(),
             &state_ids,
             &fixed,
-            HEAD_MAX_LEN,
-            STATE_MAX_TOKENS,
+            DecisionParams::default(),
         )
         .expect("row");
         let tail =
@@ -1142,8 +1314,7 @@ mod tests {
             &choice_q(),
             &state_ids,
             &fixed,
-            HEAD_MAX_LEN,
-            STATE_MAX_TOKENS,
+            DecisionParams::default(),
         )
         .expect("row");
         assert_eq!(
@@ -1163,7 +1334,7 @@ mod tests {
         let mut q = choice_q();
         q.instructions = "word ".repeat(200);
         let (state_ids, fixed) = row_inputs(&tok, "state");
-        let err = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+        let err = build_question_row(&tok, &q, &state_ids, &fixed, DecisionParams::default())
             .unwrap_err();
         assert!(
             matches!(err, VecboostError::InvalidInput(_)),
@@ -1183,7 +1354,7 @@ mod tests {
             .map(|i| format!("option number {i} with several tokens here"))
             .collect();
         let (state_ids, fixed) = row_inputs(&tok, "state");
-        let err = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+        let err = build_question_row(&tok, &q, &state_ids, &fixed, DecisionParams::default())
             .unwrap_err();
         assert!(
             matches!(err, VecboostError::InvalidInput(_)),
@@ -1203,8 +1374,7 @@ mod tests {
             &choice_q(),
             &state_ids,
             &fixed,
-            HEAD_MAX_LEN,
-            STATE_MAX_TOKENS,
+            DecisionParams::default(),
         )
         .expect("合法问题必须通过预算检查");
     }
@@ -1230,8 +1400,7 @@ mod tests {
             &noul_q(),
             &state_ids,
             &fixed,
-            HEAD_MAX_LEN,
-            STATE_MAX_TOKENS,
+            DecisionParams::default(),
         )
         .expect("noul row");
         assert_eq!(
@@ -1244,8 +1413,7 @@ mod tests {
             &score_q(),
             &state_ids,
             &fixed,
-            HEAD_MAX_LEN,
-            STATE_MAX_TOKENS,
+            DecisionParams::default(),
         )
         .expect("score row");
         assert_eq!(
@@ -1269,7 +1437,7 @@ mod tests {
             state_ids.len() > STATE_MAX_TOKENS,
             "前置条件：原始 state 超长"
         );
-        let row = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+        let row = build_question_row(&tok, &q, &state_ids, &fixed, DecisionParams::default())
             .expect("row");
         let head_len = tok
             .encode("choice question: pick one", false)
@@ -1311,8 +1479,7 @@ mod tests {
                 &choice3,
                 &state_ids,
                 &fixed,
-                HEAD_MAX_LEN,
-                STATE_MAX_TOKENS,
+                DecisionParams::default(),
             )
             .unwrap(),
             build_question_row(
@@ -1320,8 +1487,7 @@ mod tests {
                 &noul_q(),
                 &state_ids,
                 &fixed,
-                HEAD_MAX_LEN,
-                STATE_MAX_TOKENS,
+                DecisionParams::default(),
             )
             .unwrap(),
             build_question_row(
@@ -1329,8 +1495,7 @@ mod tests {
                 &score_q(),
                 &state_ids,
                 &fixed,
-                HEAD_MAX_LEN,
-                STATE_MAX_TOKENS,
+                DecisionParams::default(),
             )
             .unwrap(),
         ];
@@ -1915,6 +2080,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Decision,
             quantized: false,
+            decision_params: None,
         }
     }
 
@@ -1931,7 +2097,7 @@ mod tests {
         q.name = "n".repeat(500);
         q.instructions = "word ".repeat(200);
         let (state_ids, fixed) = row_inputs(&tok, "state");
-        let err = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+        let err = build_question_row(&tok, &q, &state_ids, &fixed, DecisionParams::default())
             .unwrap_err();
         let detail = err.error_detail();
         assert!(detail.len() < 200, "回显必须截断，len={}", detail.len());
@@ -1951,7 +2117,7 @@ mod tests {
         q.instructions = "word ".repeat(200);
         q.name = "evil\nFAKE LOG LINE".to_string();
         let (state_ids, fixed) = row_inputs(&tok, "state");
-        let err = build_question_row(&tok, &q, &state_ids, &fixed, HEAD_MAX_LEN, STATE_MAX_TOKENS)
+        let err = build_question_row(&tok, &q, &state_ids, &fixed, DecisionParams::default())
             .unwrap_err();
         let detail = err.error_detail();
         assert!(!detail.contains('\n'), "回显必须单行化，detail={detail:?}");

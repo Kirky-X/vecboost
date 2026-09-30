@@ -9,7 +9,7 @@
 
 use crate::cache::OxCacheBackend;
 use crate::cache::SemanticCache;
-use crate::config::model::ModelConfig;
+use crate::config::model::{CheckpointPreset, ModelConfig};
 use crate::device::memory_optimizer::SharedGpuMemoryManager;
 use crate::device::memory_pool::BufferPool;
 use crate::domain::{
@@ -54,6 +54,10 @@ pub struct EmbeddingService {
     memory_limit: Option<Arc<crate::device::memory_limit::MemoryLimitController>>,
     /// 当前记账模型字节数（控制器 update_usage 为 set 语义，本字段跟踪投影基数）
     memory_used_est: Arc<std::sync::atomic::AtomicU64>,
+    /// `[model.checkpoints]` resolved 预设表（含内置 laya-multilingual，main.rs
+    /// 装配注入）：switch_model 按名命中时把预设参数/任务/路径作为缺省层应用。
+    /// None = 未装配（库内直连场景），switch 走自由切换、行为与无预设表等价
+    checkpoints: Option<Arc<std::collections::BTreeMap<String, CheckpointPreset>>>,
 }
 
 impl EmbeddingService {
@@ -112,6 +116,7 @@ impl EmbeddingService {
             semantic_cache: None,
             memory_limit,
             memory_used_est: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            checkpoints: None,
         }
     }
 
@@ -254,6 +259,16 @@ impl EmbeddingService {
     /// 设置语义缓存
     pub fn with_semantic_cache(mut self, semantic_cache: Arc<SemanticCache>) -> Self {
         self.semantic_cache = Some(semantic_cache);
+        self
+    }
+
+    /// 注入 `[model.checkpoints]` resolved 预设表（main.rs 装配；switch_model
+    /// 按名命中时应用预设的 model_path/task/tokenizer_path/decision_params）
+    pub fn with_checkpoints(
+        mut self,
+        checkpoints: Arc<std::collections::BTreeMap<String, CheckpointPreset>>,
+    ) -> Self {
+        self.checkpoints = Some(checkpoints);
         self
     }
 
@@ -1303,31 +1318,104 @@ impl EmbeddingService {
         if let Some(ref prev_name) = previous_model
             && prev_name == &req.model_name
         {
-            return Ok(ModelSwitchResponse {
-                previous_model: previous_model.clone(),
-                current_model: req.model_name,
-                success: true,
-                message: crate::i18n::tr("model-already-current"),
-            });
+            // 同名早退的例外：命中预设且按 fall-through 归一化（req 显式优先 →
+            // 预设缺省层 → 继承当前）得到的加载面配置 ≠ 当前生效配置时必须重载
+            // ——否则 API 报成功而预设契约未兑现（主模型以预设名部署时，同名
+            // 切换是应用预设 task/预算/model_path 的唯一途径，如内置
+            // laya-multilingual 的 decision 任务与 256/256 预算）。device/
+            // max_batch_size 等宿主级旋钮缺省继承当前、req 无显式时归一化恒
+            // 等价，不参与比较；params 按**生效预算**归一化（当前 None 与预设
+            // resolved 缺省同为英文口径 192/256，不构成差异）——误判差异会
+            // 触发全量权重重载 + 双缓存清空，把幂等切换打成缓存命中归零
+            let preset_overrides_differ = match self.checkpoints.as_deref() {
+                Some(table) => {
+                    crate::config::model::lookup_checkpoint_override(table, &req.model_name)?
+                        .is_some_and(|ov| {
+                            let effective_path = req
+                                .model_path
+                                .clone()
+                                .unwrap_or_else(|| ov.model_path.clone());
+                            let effective_tokenizer = req
+                                .tokenizer_path
+                                .clone()
+                                .or_else(|| ov.tokenizer_path.clone());
+                            let effective_engine = ov
+                                .engine_type
+                                .clone()
+                                .or_else(|| {
+                                    self.model_config.as_ref().map(|c| c.engine_type.clone())
+                                })
+                                .unwrap_or(crate::config::model::EngineType::Candle);
+                            let effective_task = req
+                                .task
+                                .or(Some(ov.task))
+                                .or_else(|| self.model_config.as_ref().map(|c| c.task))
+                                .unwrap_or(crate::config::model::ModelTask::Embedding);
+                            match self.model_config.as_ref() {
+                                Some(current) => {
+                                    current.model_path != effective_path
+                                        || current.tokenizer_path != effective_tokenizer
+                                        || current.engine_type != effective_engine
+                                        || current.task != effective_task
+                                        || current.decision_params.unwrap_or_default()
+                                            != ov.decision_params
+                                }
+                                // previous_model 来自 model_config，此臂理论不可达；
+                                // 无当前生效值可比时保守重载
+                                None => true,
+                            }
+                        })
+                }
+                None => false,
+            };
+            if !preset_overrides_differ {
+                return Ok(ModelSwitchResponse {
+                    previous_model: previous_model.clone(),
+                    current_model: req.model_name,
+                    success: true,
+                    message: crate::i18n::tr("model-already-current"),
+                });
+            }
+            log::info!(
+                "preset overrides differ for already-current model {}, reloading",
+                req.model_name
+            );
         }
+
+        // [model.checkpoints] 预设命中：查表复用 config 层单一实现（与钉测试
+        // 同源），命中时预设值为缺省层、请求显式值仍优先；decision_params
+        // 请求 wire 无此维度，预设是唯一来源（R-multi-checkpoint-002）
+        let checkpoint = match self.checkpoints.as_deref() {
+            Some(table) => {
+                crate::config::model::lookup_checkpoint_override(table, &req.model_name)?
+            }
+            None => None,
+        };
 
         let model_config = ModelConfig {
             name: req.model_name.clone(),
-            engine_type: self
-                .model_config
+            // 预设 engine_type 为缺省层（req wire 无此维度），未配置继承当前
+            // 加载模型（启动时即 [model].engine_type），无当前模型回落 Candle
+            engine_type: checkpoint
                 .as_ref()
-                .map(|c| c.engine_type.clone())
+                .and_then(|c| c.engine_type.clone())
+                .or_else(|| self.model_config.as_ref().map(|c| c.engine_type.clone()))
                 .unwrap_or(crate::config::model::EngineType::Candle),
             model_path: req
                 .model_path
                 .clone()
+                .or_else(|| checkpoint.as_ref().map(|c| c.model_path.clone()))
                 .unwrap_or_else(|| std::path::PathBuf::from(req.model_name.clone())),
             // tokenizer_path 是模型内生属性（词表与模型绑定），不得跨模型
             // 继承——local_bundle::resolve_tokenizer_path 对已存在的显式路径
             // 命中即用零报错，继承旧模型的值会让新模型静默消费异构词表
             // （分词漂移无信号）。缺省回落新模型 bundle 内探测；与 device/
             // max_batch_size 等宿主级旋钮的继承不同类，不适用同款回退。
-            tokenizer_path: req.tokenizer_path.clone(),
+            // 预设 tokenizer_path 是显式配置（非跨模型继承），可作缺省层
+            tokenizer_path: req
+                .tokenizer_path
+                .clone()
+                .or_else(|| checkpoint.as_ref().and_then(|c| c.tokenizer_path.clone())),
             device: req
                 .device
                 .clone()
@@ -1362,11 +1450,13 @@ impl EmbeddingService {
             }),
             model_sha256: None,
             // task：req.task 优先（switch 契约的任务维度切换入口，经
-            // EngineFactory 分派臂加载对应管线），缺省继承当前模型（与上方
+            // EngineFactory 分派臂加载对应管线），预设命中次之（如内置
+            // laya-multilingual 即 decision 任务），再缺省继承当前模型（与上方
             // device/max_batch_size 等回退模式对齐），无当前模型回落
             // Embedding——decision 模型不被 switch 静默降级为 embedding
             task: req
                 .task
+                .or(checkpoint.as_ref().map(|c| c.task))
                 .or_else(|| self.model_config.as_ref().map(|c| c.task))
                 .unwrap_or(crate::config::model::ModelTask::Embedding),
             // gguf 路径走 EngineFactory 量化路由：复用工厂的路径侧判定为单一
@@ -1376,6 +1466,9 @@ impl EmbeddingService {
                 Path::new(&req.model_name),
                 true,
             ),
+            // 预设命中即应用该 checkpoint 的序列预算（DecisionPipeline::load
+            // 消费）；未命中保持 None = 引擎缺省英文口径 192/256
+            decision_params: checkpoint.as_ref().map(|c| c.decision_params),
         };
 
         // 内存上限执法（T021/D21）：按"当前记账 - 旧模型 + 新模型"投影判断，
@@ -1418,11 +1511,24 @@ impl EmbeddingService {
 
         if let Some(ref manager) = self.model_manager {
             log::debug!("Using ModelManager for model switching");
-            let _loaded_model = manager.load(&model_config).await?;
+            // 同名差异重载：load 对同名条目复用既有实例直接返回（不按新
+            // config 重建），原「先 load 后 unload」顺序会把该条目卸掉——
+            // 终态 manager 无此模型，与跨名 switch 终态（持有新条目）不一致
+            // （resident_bytes 少计、LFRU/内存预算执法基数失真、后续
+            // manager.get 不命中）。同名先卸后载使终态对齐跨名路径；unload
+            // 的 NotFound 臂经 let _ 容忍，create 已先行故此处失败不扰动
+            // service 生效面（见上方失败次序注释）
+            let same_name = previous_model.as_ref() == Some(&model_config.name);
+            if same_name {
+                let _ = manager.unload(&model_config.name).await;
+            }
+            manager.load(&model_config).await?;
 
             if let Some(ref prev_name) = previous_model {
-                log::info!("Unloading previous model: {}", prev_name);
-                let _ = manager.unload(prev_name).await;
+                if !same_name {
+                    log::info!("Unloading previous model: {}", prev_name);
+                    let _ = manager.unload(prev_name).await;
+                }
             }
         }
 
@@ -1734,6 +1840,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         let service = EmbeddingService::new(engine, Some(baseline));
 
@@ -1830,6 +1937,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1868,6 +1976,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1906,6 +2015,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1966,6 +2076,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1995,6 +2106,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -2037,6 +2149,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -2244,6 +2357,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -2316,6 +2430,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -2491,6 +2606,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         }
     }
 
@@ -3075,6 +3191,409 @@ mod tests {
         }
     }
 
+    /// [model.checkpoints] 预设命中钉（R-multi-checkpoint-002）：switch 到
+    /// laya-multilingual（req 全缺省）→ 预设 task=Decision 作为缺省层
+    /// 进决策分派臂、预设 model_path 作为缺省层进 bundle 探测（错误回显
+    /// 预设路径）；req 显式 model_path 优先于预设；未命中预设名走自由切换
+    /// 不进决策臂。decision_params 字段级应用由 config 层
+    /// lookup_checkpoint_override 钉测试覆盖（switch 与 task 消费同一
+    /// override 结构，路径同源）。
+    ///
+    /// 失败夹具显式自建：同名条目覆盖内置预设、model_path 指向 tempdir 内
+    /// 不存在子路径——探测错误回显该路径即证明预设路径生效，断言不依赖
+    /// 工作区是否有 models/laya-multilingual bundle（按文档部署后仍恒真）。
+    #[cfg(feature = "onnx")]
+    #[tokio::test]
+    async fn test_switch_model_hits_builtin_checkpoint_preset() {
+        crate::i18n::init();
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        // 同名条目只改 model_path（task 必填仍 Decision，head/max 缺省继承
+        // 内置 256/256）：merge 字段级覆盖后预设路径为显式失败夹具
+        let absent_bundle_dir = tempdir().unwrap();
+        let absent_bundle = absent_bundle_dir.path().join("absent-laya-multilingual");
+        let mut table = std::collections::BTreeMap::new();
+        table.insert(
+            "laya-multilingual".to_string(),
+            crate::config::model::CheckpointPreset {
+                name: "laya-multilingual".to_string(),
+                model_path: absent_bundle.clone(),
+                task: crate::config::model::ModelTask::Decision,
+                engine_type: None,
+                tokenizer_path: None,
+                head_max_len: None,
+                max_len: None,
+            },
+        );
+        let mut service = EmbeddingService::new(engine, None).with_checkpoints(Arc::new(
+            crate::config::model::merge_builtin_checkpoints(table)
+                .expect("同名覆盖条目 head/max 缺省，merge 必须通过"),
+        ));
+
+        let mk_req =
+            |model_name: &str, model_path: Option<std::path::PathBuf>| ModelSwitchRequest {
+                model_name: model_name.to_string(),
+                model_path,
+                tokenizer_path: None,
+                device: None,
+                max_batch_size: None,
+                pooling_mode: None,
+                expected_dimension: None,
+                memory_limit_bytes: None,
+                oom_fallback_enabled: None,
+                task: None,
+            };
+
+        // req 全缺省：预设填充 task=Decision + model_path（bundle 缺失时
+        // 决策臂探测错误同时回显预设路径与 decision 语义）
+        let absent_path_str = absent_bundle.to_string_lossy().into_owned();
+        let err = service
+            .switch_model(mk_req("laya-multilingual", None))
+            .await
+            .unwrap_err();
+        match err {
+            VecboostError::NotFound(msg) => assert!(
+                msg.contains("decision") && msg.contains(&*absent_path_str),
+                "预设必须作为缺省层生效（task=Decision 进分派臂 + 预设 model_path \
+                 进探测），got: {msg}"
+            ),
+            other => panic!("expected NotFound, got: {other:?}"),
+        }
+
+        // req 显式 model_path 优先于预设（预设只补缺省层）；显式空目录
+        // 走决策臂探测报 No Laya ONNX（不含预设路径）
+        let empty_dir = tempdir().unwrap();
+        let err = service
+            .switch_model(mk_req(
+                "laya-multilingual",
+                Some(empty_dir.path().to_path_buf()),
+            ))
+            .await
+            .unwrap_err();
+        match err {
+            VecboostError::NotFound(msg) => {
+                assert!(
+                    msg.contains("No Laya ONNX"),
+                    "req 显式 model_path 必须优先于预设，got: {msg}"
+                );
+                assert!(
+                    !msg.contains(&*absent_path_str),
+                    "预设路径不得覆盖 req 显式值，got: {msg}"
+                );
+            }
+            other => panic!("expected NotFound, got: {other:?}"),
+        }
+
+        // 对照：未命中预设名（req 全缺省）→ task 回落 Embedding，走 candle
+        // 本地加载（空目录无权重报错），不进决策臂
+        let empty_dir2 = tempdir().unwrap();
+        let err = service
+            .switch_model(mk_req(
+                "missing-weights-model",
+                Some(empty_dir2.path().to_path_buf()),
+            ))
+            .await
+            .unwrap_err();
+        match err {
+            VecboostError::NotFound(msg) => assert!(
+                !msg.contains("decision"),
+                "未命中预设名不得进决策分派臂，got: {msg}"
+            ),
+            other => panic!("expected NotFound, got: {other:?}"),
+        }
+    }
+
+    /// 同名切换的预设预算例外钉（R-multi-checkpoint-002）：主模型以预设名
+    /// 部署时（启动 decision_params=None 英文缺省），切换到同名预设是应用
+    /// 256/256 预算的唯一途径——already-current 早退必须让位于预算差异
+    /// 重载，否则 API 报成功而预算契约未兑现。重载路径断言 Err（早退必
+    /// Ok）：空目录 bundle 即 factory Err，Err 即证明未走早退。
+    /// 失败夹具显式自建（同名条目覆盖预设、model_path 指向 tempdir 空目录），
+    /// 断言不依赖工作区是否存在 models/laya-multilingual bundle。
+    #[tokio::test]
+    async fn test_switch_model_same_name_preset_params_differ_reloads() {
+        crate::i18n::init();
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let empty_bundle_dir = tempdir().unwrap();
+        let empty_bundle = empty_bundle_dir.path().to_path_buf();
+        let mut table = std::collections::BTreeMap::new();
+        table.insert(
+            "laya-multilingual".to_string(),
+            crate::config::model::CheckpointPreset {
+                name: "laya-multilingual".to_string(),
+                model_path: empty_bundle.clone(),
+                task: crate::config::model::ModelTask::Decision,
+                engine_type: None,
+                tokenizer_path: None,
+                head_max_len: Some(256),
+                max_len: Some(256),
+            },
+        );
+        let mut service = EmbeddingService::new(engine, None).with_checkpoints(Arc::new(
+            crate::config::model::merge_builtin_checkpoints(table)
+                .expect("成对 256/256 覆盖条目 merge 必须通过"),
+        ));
+        // model_path/task 对齐预设归一化值，隔离 params 为唯一差异维
+        let mut current = make_model_config("laya-multilingual", 384);
+        current.task = crate::config::model::ModelTask::Decision;
+        current.model_path = empty_bundle;
+        service.model_config = Some(current);
+
+        let req = ModelSwitchRequest {
+            model_name: "laya-multilingual".to_string(),
+            model_path: None,
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+            task: None,
+        };
+        assert!(
+            service.switch_model(req).await.is_err(),
+            "同名但预设预算（256/256）≠ 当前生效（英文缺省）时必须重载而非 \
+             already-current 早退"
+        );
+    }
+
+    /// 同名差异重载的 manager 终态钉：already-current 早退按预设归一化差异
+    /// 放行的重载走 manager 段时，`ModelManager::load` 对同名条目复用既有
+    /// 实例直接返回（不按新 config 重建），若沿用「先 load 后 unload」顺序
+    /// 会把同名条目卸掉——终态 manager 无此模型、与跨名 switch 终态（持有
+    /// 新条目）不一致（resident_bytes 少计、LFRU/内存预算执法基数失真、
+    /// 后续 manager.get 不命中）。钉住修复后的终态：count==1 且 get 命中。
+    /// create 须成功才达 manager 段，model_path 用真实 candle 权重资产
+    /// （缺失 SKIP）；manager.load 仅元数据构造（loader.rs），不重复加载权重。
+    #[tokio::test]
+    async fn test_switch_model_same_name_reload_keeps_manager_entry() {
+        crate::i18n::init();
+        let has_weights = ["model.safetensors", "pytorch_model.bin"].iter().any(|w| {
+            std::path::Path::new("models/BAAI-bge-small-en-v1.5")
+                .join(w)
+                .exists()
+        });
+        if !has_weights {
+            eprintln!("Skipping test: model weights not found at models/BAAI-bge-small-en-v1.5");
+            return;
+        }
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let weights_dir = std::path::PathBuf::from("models/BAAI-bge-small-en-v1.5");
+        // 同名预设只落 params 差异维（256/256 vs 当前英文缺省），task 保持
+        // Embedding、model_path 对齐当前——归一化后 create 走 candle 加载臂
+        let mut table = std::collections::BTreeMap::new();
+        table.insert(
+            "laya-multilingual".to_string(),
+            crate::config::model::CheckpointPreset {
+                name: "laya-multilingual".to_string(),
+                model_path: weights_dir.clone(),
+                task: crate::config::model::ModelTask::Embedding,
+                engine_type: None,
+                tokenizer_path: None,
+                head_max_len: Some(256),
+                max_len: Some(256),
+            },
+        );
+        let manager = Arc::new(ModelManager::new());
+        let mut service = EmbeddingService::new(engine, None)
+            .with_model_manager(Arc::clone(&manager))
+            .with_checkpoints(Arc::new(
+                crate::config::model::merge_builtin_checkpoints(table)
+                    .expect("成对 256/256 覆盖条目 merge 必须通过"),
+            ));
+        // 当前生效配置对齐预设归一化值（params=None 英文缺省），隔离 params
+        // 为唯一差异维；manager 预置同名条目模拟启动加载后的驻留状态
+        let mut current = make_model_config("laya-multilingual", 384);
+        current.model_path = weights_dir;
+        manager.load(&current).await.expect("预置同名条目");
+        assert_eq!(manager.count().await, 1);
+        service.model_config = Some(current);
+
+        let req = ModelSwitchRequest {
+            model_name: "laya-multilingual".to_string(),
+            model_path: None,
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+            task: None,
+        };
+        let resp = service
+            .switch_model(req)
+            .await
+            .expect("预设 params 差异必须重载成功（candle 权重就位）");
+
+        assert_eq!(
+            manager.count().await,
+            1,
+            "同名重载后 manager 必须持有该模型条目（不得被同名 unload 移除）"
+        );
+        assert!(
+            manager.get("laya-multilingual").await.is_some(),
+            "manager.get 必须命中同名重载后的条目"
+        );
+        assert_eq!(resp.current_model, "laya-multilingual");
+    }
+
+    /// 幂等早退保持钉：同名切换且预设预算与当前生效一致时，already-current
+    /// 早退契约不变（不得因预算例外把幂等切换变成强制重载）。
+    #[tokio::test]
+    async fn test_switch_model_same_name_preset_params_equal_short_circuits() {
+        crate::i18n::init();
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let mut service = EmbeddingService::new(engine, None).with_checkpoints(Arc::new(
+            crate::config::model::merge_builtin_checkpoints(Default::default())
+                .expect("内置表 merge 恒通过"),
+        ));
+        let mut current = make_model_config("laya-multilingual", 384);
+        current.task = crate::config::model::ModelTask::Decision;
+        // model_path 对齐内置预设归一化值（else path 维差异会掩盖 params 等
+        // 价语义、误触发重载）
+        current.model_path = std::path::PathBuf::from("models/laya-multilingual");
+        current.decision_params =
+            Some(crate::config::model::DecisionParams::new(256, 256).expect("256/256 合法"));
+        service.model_config = Some(current);
+
+        let req = ModelSwitchRequest {
+            model_name: "laya-multilingual".to_string(),
+            model_path: None,
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+            task: None,
+        };
+        let resp = service
+            .switch_model(req)
+            .await
+            .expect("预算一致的同名切换必须幂等早退");
+        assert!(
+            resp.success,
+            "already-current 早退契约保持，got: {}",
+            resp.message
+        );
+    }
+
+    /// 生效预算归一化钉：当前 decision_params=None（生效=英文缺省 192/256）
+    /// + 同名预设未配参数（resolved 同为缺省 192/256），且 task/model_path
+    /// 逐维与预设归一化值一致 → 生效配置等价，必须幂等早退。误判差异会触发
+    /// 全量权重重载 + 双缓存清空（纯浪费；重载后引擎逐字段等价重建）。
+    #[tokio::test]
+    async fn test_switch_model_same_name_preset_default_params_short_circuits() {
+        crate::i18n::init();
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let mut table = std::collections::BTreeMap::new();
+        table.insert(
+            "plain-decision".to_string(),
+            crate::config::model::CheckpointPreset {
+                name: "plain-decision".to_string(),
+                model_path: std::path::PathBuf::from("models/plain"),
+                task: crate::config::model::ModelTask::Decision,
+                engine_type: None,
+                tokenizer_path: None,
+                head_max_len: None,
+                max_len: None,
+            },
+        );
+        let mut service = EmbeddingService::new(engine, None).with_checkpoints(Arc::new(table));
+        // 当前各维对齐预设归一化值（task=Decision、model_path 同预设），
+        // 唯一待验证格是 params：None 生效值 vs 预设缺省 192/256
+        let mut current = make_model_config("plain-decision", 384);
+        current.task = crate::config::model::ModelTask::Decision;
+        current.model_path = std::path::PathBuf::from("models/plain");
+        service.model_config = Some(current);
+
+        let req = ModelSwitchRequest {
+            model_name: "plain-decision".to_string(),
+            model_path: None,
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+            task: None,
+        };
+        let resp = service
+            .switch_model(req)
+            .await
+            .expect("生效预算等价（None vs 缺省 192/256）的同名切换必须幂等早退");
+        assert!(
+            resp.success,
+            "already-current 早退契约保持，got: {}",
+            resp.message
+        );
+    }
+
+    /// 预设 task 维差异钉：同名预设 task=Decision vs 当前 Embedding（其余维
+    /// 等价，params 均为生效缺省）→ 必须重载而非 already-current 报成功——
+    /// 否则切换成败取决于切换前恰好加载了什么，且 decide 端点随后 400。
+    /// 空目录 bundle 即 factory Err，Err 即证明未走早退。失败夹具显式自建
+    /// （预设 model_path 指向 tempdir 空目录），断言不依赖工作区状态。
+    #[tokio::test]
+    async fn test_switch_model_same_name_preset_task_differs_reloads() {
+        crate::i18n::init();
+        let mock_engine = TestEngine::new(384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(mock_engine));
+        let empty_bundle_dir = tempdir().unwrap();
+        let empty_bundle = empty_bundle_dir.path().to_path_buf();
+        let mut table = std::collections::BTreeMap::new();
+        table.insert(
+            "plain-decision".to_string(),
+            crate::config::model::CheckpointPreset {
+                name: "plain-decision".to_string(),
+                model_path: empty_bundle.clone(),
+                task: crate::config::model::ModelTask::Decision,
+                engine_type: None,
+                tokenizer_path: None,
+                head_max_len: None,
+                max_len: None,
+            },
+        );
+        let mut service = EmbeddingService::new(engine, None).with_checkpoints(Arc::new(table));
+        // 当前为同名 embedding 模型（[model] 误配 task=embedding 的部署形态），
+        // model_path 对齐预设以隔离 task 为唯一差异维
+        let mut current = make_model_config("plain-decision", 384);
+        current.model_path = empty_bundle;
+        service.model_config = Some(current);
+
+        let req = ModelSwitchRequest {
+            model_name: "plain-decision".to_string(),
+            model_path: None,
+            tokenizer_path: None,
+            device: None,
+            max_batch_size: None,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: None,
+            task: None,
+        };
+        assert!(
+            service.switch_model(req).await.is_err(),
+            "同名预设 task=Decision vs 当前 Embedding 必须重载而非 already-current \
+             早退报成功"
+        );
+    }
+
     /// 跨模型 tokenizer 不继承钉：tokenizer_path 是模型内生属性（词表与
     /// 模型绑定），switch_model 构造的新 ModelConfig 不得缺省继承旧模型的
     /// 值——local_bundle::resolve_tokenizer_path 对已存在的显式路径命中
@@ -3530,6 +4049,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         manager.load(&config).await.unwrap();
         manager
@@ -4254,6 +4774,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));

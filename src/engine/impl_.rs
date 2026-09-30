@@ -206,6 +206,7 @@ mod tests {
             model_sha256: None,
             task: ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         }
     }
 
@@ -225,6 +226,7 @@ mod tests {
             model_sha256: None,
             task: ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         }
     }
 
@@ -499,6 +501,7 @@ mod tests {
             model_sha256: None,
             task: ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         let ctx = InferenceContext::with_config(&config, Precision::Fp16);
         assert_eq!(ctx.model_name, "ctx-test");
@@ -547,6 +550,7 @@ mod tests {
             model_sha256: None,
             task: ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         let engine =
             AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("load real model");
@@ -591,6 +595,7 @@ mod tests {
             model_sha256: None,
             task: ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         let mut engine =
             AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("load real model");

@@ -127,7 +127,7 @@ use vecboost::registry::{AuthModule, CsrfConfigModule};
 use vecboost::{
     VecboostState,
     audit::{AuditConfig, AuditLogger},
-    config::model::{EngineType, ModelConfig, ModelTask},
+    config::model::{CheckpointPreset, EngineType, ModelConfig, ModelTask},
     engine::AnyEngine,
     pipeline::{
         PriorityCalculator, PriorityConfig, PriorityRequestQueue, ResponseChannel, WorkerConfig,
@@ -312,6 +312,7 @@ fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelC
         model_sha256: None,
         task: config.model.task,
         quantized: config.model.quantized,
+        decision_params: None,
     })
 }
 
@@ -322,6 +323,22 @@ fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelC
 /// 参与）；本地判定与 `onnx_engine` 的 `with_device` 同口径
 /// （`exists() && is_dir()`）。其余组合（candle embedding、onnx HF 拉取
 /// 分支、任何非本地路径）不读该字段。
+/// `[model.checkpoints]` 启动 fail-fast（沿用既有装配口径：配置错误拒绝
+/// 启动而非静默忽略，对齐 [semantic_cache].comparison_mode 校验位）：
+/// 合并内置 `laya-multilingual` 预设后逐条目校验 + TOML 键与条目 name
+/// 一致性校验（内置条目同样过闸，代码常量漂移由测试钉兜住）。返回表供
+/// kit.set_config 注入与 EmbeddingService switch 查表共用（装配点单一事实源）。
+fn resolve_checkpoints_fail_fast(
+    config: &VecboostConfig,
+) -> anyhow::Result<std::collections::BTreeMap<String, CheckpointPreset>> {
+    let resolved =
+        vecboost::config::model::merge_builtin_checkpoints(config.model.checkpoints.clone())
+            .map_err(|e| anyhow::anyhow!("[model.checkpoints] {}", e.error_detail()))?;
+    vecboost::config::model::validate_checkpoint_map(&resolved)
+        .map_err(|e| anyhow::anyhow!("[model.checkpoints] {}", e.error_detail()))?;
+    Ok(resolved)
+}
+
 fn tokenizer_path_is_noop(
     engine_type: &EngineType,
     task: &ModelTask,
@@ -339,6 +356,7 @@ fn tokenizer_path_is_noop(
 
 async fn init_engine_and_services(
     config: &VecboostConfig,
+    checkpoints: &std::collections::BTreeMap<String, CheckpointPreset>,
 ) -> anyhow::Result<(
     Arc<RwLock<AnyEngine>>,
     Arc<RwLock<EmbeddingService>>,
@@ -453,6 +471,10 @@ async fn init_engine_and_services(
     } else {
         service
     };
+
+    // [model.checkpoints] 预设表注入（MCP/CLI/server 三模式共用——switch_model
+    // 按名命中预设时应用参数；查表消费唯一入口为 EmbeddingService 持有的该表）
+    let service = service.with_checkpoints(Arc::new(checkpoints.clone()));
 
     service.init_memory_limit().await;
     let service = Arc::new(RwLock::new(service));
@@ -1263,8 +1285,26 @@ async fn app_main() -> anyhow::Result<()> {
     #[cfg(feature = "db")]
     let _ = vecboost::db::register_global_pool(std::sync::Arc::new(db_pool.clone()));
 
+    // [model.checkpoints] 预设表启动 fail-fast：非法条目在此拒绝启动，
+    // resolved 表供 server kit 注入与 EmbeddingService switch 查表共用
+    let checkpoints = resolve_checkpoints_fail_fast(&config)?;
+    // 同名显式条目对内置做字段级覆盖、不产生第二条目（merge 语义），
+    // 单列计数避免运维据「总 resolved + explicit」盘点得出重复总数
+    let builtin_overrides = config
+        .model
+        .checkpoints
+        .contains_key(vecboost::config::model::BUILTIN_MULTILINGUAL_CHECKPOINT)
+        as usize;
+    log::info!(
+        "model checkpoints resolved: {} total (builtin laya-multilingual + {} user-configured, \
+         {} overriding the builtin)",
+        checkpoints.len(),
+        config.model.checkpoints.len(),
+        builtin_overrides
+    );
+
     let (_engine, service, rerank_service, decision_service, _model_config) =
-        init_engine_and_services(&config).await?;
+        init_engine_and_services(&config, &checkpoints).await?;
 
     // `--warmup N` 启动预热 ——N 条合成短文本推理，预热 mkl/代码路径/
     // tokenizer 缓存。放在 MCP/CLI 分流之前，三种模式均受益。
@@ -2253,6 +2293,104 @@ mod tests {
         let config = VecboostConfig::default();
         let model_config = resolve_engine_model_config(&config).expect("config resolves");
         assert!(model_config.tokenizer_path.is_none());
+    }
+
+    // ── 装配三问②：[model.checkpoints] 预设表启动 fail-fast ──
+
+    fn checkpoint_preset(name: &str) -> CheckpointPreset {
+        CheckpointPreset {
+            name: name.to_string(),
+            model_path: std::path::PathBuf::from("models/laya"),
+            task: ModelTask::Decision,
+            engine_type: None,
+            tokenizer_path: None,
+            head_max_len: None,
+            max_len: None,
+        }
+    }
+
+    #[test]
+    fn checkpoints_fail_fast_merges_builtin_into_empty_table() {
+        let config = VecboostConfig::default();
+        let resolved = resolve_checkpoints_fail_fast(&config).expect("空配置必须通过");
+        assert_eq!(resolved.len(), 1, "内置 laya-multilingual 零配置可用");
+        let builtin = &resolved[vecboost::config::model::BUILTIN_MULTILINGUAL_CHECKPOINT];
+        assert_eq!(builtin.task, ModelTask::Decision);
+        assert_eq!(builtin.head_max_len, Some(256));
+        assert_eq!(builtin.max_len, Some(256));
+    }
+
+    #[test]
+    fn checkpoints_fail_fast_accepts_valid_entry() {
+        let mut config = VecboostConfig::default();
+        config
+            .model
+            .checkpoints
+            .insert("laya".to_string(), checkpoint_preset("laya"));
+        let resolved = resolve_checkpoints_fail_fast(&config).expect("合法条目必须通过");
+        assert_eq!(resolved.len(), 2, "内置 + 用户显式条目并存");
+        assert_eq!(resolved["laya"].name, "laya");
+        assert_eq!(resolved["laya"].task, ModelTask::Decision);
+        // 用户显式配置同名条目覆盖内置（显式优先）
+        let mut config = VecboostConfig::default();
+        let mut preset =
+            checkpoint_preset(vecboost::config::model::BUILTIN_MULTILINGUAL_CHECKPOINT);
+        preset.head_max_len = Some(512);
+        preset.max_len = Some(512);
+        config.model.checkpoints.insert(preset.name.clone(), preset);
+        let resolved = resolve_checkpoints_fail_fast(&config).expect("覆盖内置必须通过");
+        assert_eq!(resolved.len(), 1, "同名覆盖不产生双条目");
+        assert_eq!(
+            resolved[vecboost::config::model::BUILTIN_MULTILINGUAL_CHECKPOINT].head_max_len,
+            Some(512)
+        );
+    }
+
+    #[test]
+    fn checkpoints_fail_fast_rejects_key_name_mismatch() {
+        let mut config = VecboostConfig::default();
+        config
+            .model
+            .checkpoints
+            .insert("wrong-key".to_string(), checkpoint_preset("laya"));
+        let err = resolve_checkpoints_fail_fast(&config).unwrap_err();
+        assert!(
+            err.to_string().contains("[model.checkpoints]")
+                && err.to_string().contains("wrong-key"),
+            "启动 fail-fast 必须拒绝键名漂移并点名配置段与键，got {err}"
+        );
+    }
+
+    // 内置名不得绕过成对闸门：单向写法经字段级 .or 继承会与内置 256 拼成
+    // 合法对（head 384/state 256 非对称预算静默生效），merge 前必须对用户
+    // 原始条目先跑成对校验，与非内置名同语义启动期拒绝
+    #[test]
+    fn checkpoints_fail_fast_rejects_one_sided_params_on_builtin_name() {
+        let mut config = VecboostConfig::default();
+        let mut preset =
+            checkpoint_preset(vecboost::config::model::BUILTIN_MULTILINGUAL_CHECKPOINT);
+        preset.head_max_len = Some(384);
+        config.model.checkpoints.insert(preset.name.clone(), preset);
+        let err = resolve_checkpoints_fail_fast(&config).unwrap_err();
+        assert!(
+            err.to_string().contains("[model.checkpoints]")
+                && err.to_string().contains("head_max_len")
+                && err.to_string().contains("must be set together"),
+            "内置名单向 head_max_len 必须与非内置名同语义启动期拒绝，got {err}"
+        );
+    }
+
+    #[test]
+    fn checkpoints_fail_fast_rejects_unknown_engine_type() {
+        let mut config = VecboostConfig::default();
+        let mut preset = checkpoint_preset("laya");
+        preset.engine_type = Some("tensorrt".to_string());
+        config.model.checkpoints.insert("laya".to_string(), preset);
+        let err = resolve_checkpoints_fail_fast(&config).unwrap_err();
+        assert!(
+            err.to_string().contains("tensorrt"),
+            "engine_type 非法取值必须启动期拒绝，got {err}"
+        );
     }
 
     // tokenizer_path no-op 判定覆盖面：消费者有两类——onnx 本地 bundle

@@ -111,6 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         model_sha256: None,
         task: ModelTask::Decision,
         quantized: false,
+        decision_params: None,
     };
 
     println!("🔧 EngineFactory::create(Onnx, task=decision) ...");

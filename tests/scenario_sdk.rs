@@ -51,6 +51,7 @@ fn model_config(dirname: &str, dim: usize) -> ModelConfig {
         model_sha256: None,
         task: vecboost::config::model::ModelTask::Embedding,
         quantized: false,
+        decision_params: None,
     }
 }
 

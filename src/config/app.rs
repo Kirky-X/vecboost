@@ -108,6 +108,12 @@ pub struct ModelConfig {
     /// 驻留内存预算 MB：超预算按 LFRU 硬驱逐；None = 不限制。
     #[garde(skip)]
     pub resident_memory_budget_mb: Option<u64>,
+    /// `[model.checkpoints.<name>]` 预设表：可被 switch_model 按名切换的
+    /// checkpoint 预设（TOML 键 = 预设名）。空表 = 现状行为（只有主模型）。
+    /// 启动 fail-fast 校验见 `crate::config::model::validate_checkpoint_map`。
+    #[garde(skip)]
+    #[serde(default)]
+    pub checkpoints: std::collections::BTreeMap<String, crate::config::model::CheckpointPreset>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
@@ -620,6 +626,7 @@ impl Default for ModelConfig {
             task: crate::config::model::ModelTask::Embedding,
             max_resident_models: None,
             resident_memory_budget_mb: None,
+            checkpoints: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -1263,6 +1270,7 @@ mod tests {
             task: crate::config::model::ModelTask::Embedding,
             max_resident_models: None,
             resident_memory_budget_mb: None,
+            checkpoints: std::collections::BTreeMap::new(),
         };
         assert_eq!(config.model_repo, "sentence-transformers/all-MiniLM-L6-v2");
         assert!(config.use_gpu);

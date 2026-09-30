@@ -5,6 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::error::VecboostError;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ModelType {
@@ -213,6 +215,84 @@ pub enum PoolingMode {
     Cls,
 }
 
+/// head（qtype 前缀 + instructions）+ 全部 options（含各自 [MASK]）的 token
+/// 预算默认值（英文 checkpoint 口径，文档 §2.1）。
+/// `DecisionPipeline` 消费 [`DecisionParams`] 而非编译期常量直传；
+/// 本常量是 [`DecisionParams::default`] 的唯一来源。
+pub const HEAD_MAX_LEN: usize = 192;
+/// state 部分 token 截断上限默认值（文档 §2.1：截断后约 256）——
+/// [`DecisionParams::default`] 的来源，交叉引用同 [`HEAD_MAX_LEN`]
+pub const STATE_MAX_TOKENS: usize = 256;
+/// 决策序列预算硬上限（ModernBERT 位置编码窗宽，与 InferenceContext
+/// max_sequence_length 同口径）：配置值超限解析期显性拒绝，禁止静默钳制
+pub const MAX_DECISION_SEQ_LEN: usize = 8192;
+/// 决策行手工拼接的固定特殊 token 数：`[CLS] + [SEP]×3`（head 后、state
+/// 前、行尾各一；拼接结构见 `engine::decision::build_question_row`）。
+/// 组合预算硬上限 = head_max_len + state_max_tokens + 本常量 ≤
+/// [`MAX_DECISION_SEQ_LEN`]，单字段口径放行、组合超窗的组合在此挡下
+/// （否则超窗错误延迟到请求期）
+pub const DECISION_ROW_FIXED_TOKENS: usize = 4;
+
+/// per-checkpoint 决策推理序列预算参数：决策预处理调用链消费它而非
+/// 编译期常量直传。缺省为英文 checkpoint 口径（192/256），
+/// `laya-multilingual` 等 checkpoint 经 `[model.checkpoints.<name>]`
+/// 预设表覆盖。本类型定义于 config 层（配置面单一事实源）：预设表
+/// 解析与决策管线（onnx feature 门内）共同消费，避免 config →
+/// engine 的 feature 门依赖。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct DecisionParams {
+    pub head_max_len: usize,
+    pub state_max_tokens: usize,
+}
+
+impl Default for DecisionParams {
+    fn default() -> Self {
+        Self {
+            head_max_len: HEAD_MAX_LEN,
+            state_max_tokens: STATE_MAX_TOKENS,
+        }
+    }
+}
+
+impl DecisionParams {
+    /// 校验构造：0 值与超 [`MAX_DECISION_SEQ_LEN`] 硬上限均显性报错
+    /// （错误消息含字段名与实际值，拒绝静默钳制）
+    pub fn new(head_max_len: usize, state_max_tokens: usize) -> Result<Self, VecboostError> {
+        for (field, value) in [
+            ("head_max_len", head_max_len),
+            ("state_max_tokens", state_max_tokens),
+        ] {
+            if value == 0 {
+                return Err(VecboostError::config_error(format!(
+                    "{field} must be a positive integer, got 0"
+                )));
+            }
+            if value > MAX_DECISION_SEQ_LEN {
+                return Err(VecboostError::config_error(format!(
+                    "{field} exceeds hard limit: got {value}, max is {MAX_DECISION_SEQ_LEN} \
+                     (model positional-encoding window)"
+                )));
+            }
+        }
+        // 组合口径：两段独立合规不保证行总长不超窗——上界为
+        // head_max_len + state_max_tokens + [CLS]/[SEP]x3 固定 token。
+        // 两值已过单字段校验（各 ≤ 8192），加法无溢出。
+        if head_max_len + state_max_tokens + DECISION_ROW_FIXED_TOKENS > MAX_DECISION_SEQ_LEN {
+            return Err(VecboostError::config_error(format!(
+                "combined sequence budget exceeds hard limit: head_max_len {head_max_len} + \
+                 state_max_tokens {state_max_tokens} + {DECISION_ROW_FIXED_TOKENS} fixed \
+                 markers > {MAX_DECISION_SEQ_LEN} (model positional-encoding window)"
+            )));
+        }
+        Ok(Self {
+            head_max_len,
+            state_max_tokens,
+        })
+    }
+}
+
 /// 键名拼错显性失败（如 "tsak" 报错而非被静默忽略后 task 回落默认值，
 /// 模型以错误任务身份加载成功、错误延迟到 decide 调用才暴露）；
 /// 序列化产物为对称全字段集合，回读不受影响。
@@ -237,6 +317,13 @@ pub struct ModelConfig {
     /// 任务维度：旧配置缺省该字段时回落 Embedding（#[serde(default)] 向后兼容）。
     #[serde(default)]
     pub task: ModelTask,
+    /// 决策推理序列预算（head_max_len/state_max_tokens，per-checkpoint）：
+    /// None = 引擎缺省英文口径（192/256，与 [`HEAD_MAX_LEN`] 同源）；
+    /// `Some` 仅对 task=decision 的加载路径有意义（`DecisionPipeline::load`
+    /// 消费），其余任务下为 no-op。由 `[model.checkpoints.<name>]` 预设表
+    /// 解析或 switch_model 命中预设时填充。
+    #[serde(default)]
+    pub decision_params: Option<DecisionParams>,
 }
 
 impl Default for ModelConfig {
@@ -255,6 +342,7 @@ impl Default for ModelConfig {
             model_sha256: None,
             quantized: false,
             task: ModelTask::Embedding,
+            decision_params: None,
         }
     }
 }
@@ -270,6 +358,216 @@ impl Default for ModelRepository {
             models: vec![ModelConfig::default()],
         }
     }
+}
+
+/// `[model.checkpoints.<name>]` 预设表条目：一个可被 switch_model 按名切换的
+/// checkpoint 预设。必填 name/model_path/task（serde 反序列化边界显性报错）；
+/// engine_type 缺省继承当前加载模型（启动时即 `[model].engine_type`；同主段
+/// `Option<String>` 口径，非法值校验期显性报错）；`head_max_len`/`max_len`
+/// 缺省 = 引擎缺省英文口径（`DecisionParams::default`，192/256），配置时必须
+/// 成对出现。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointPreset {
+    pub name: String,
+    pub model_path: PathBuf,
+    pub task: ModelTask,
+    /// 缺省回落主段 engine_type；字符串口径与 `[model].engine_type` 一致
+    /// （"candle"/"onnx"），非法值校验期显性报错
+    #[serde(default)]
+    pub engine_type: Option<String>,
+    #[serde(default)]
+    pub tokenizer_path: Option<PathBuf>,
+    #[serde(default)]
+    pub head_max_len: Option<usize>,
+    /// state 序列预算（TOML 字段名 `max_len`，映射 `DecisionParams.state_max_tokens`）
+    #[serde(default)]
+    pub max_len: Option<usize>,
+}
+
+impl CheckpointPreset {
+    /// 解析条目的决策序列预算：head_max_len/max_len 必须成对出现
+    /// （部分配置语义不明，显性拒绝），值合法性委托
+    /// [`DecisionParams::new`]（0/超硬上限/组合超窗报错）；
+    /// 全缺省回落英文口径。
+    pub fn resolved_decision_params(&self) -> Result<DecisionParams, VecboostError> {
+        match (self.head_max_len, self.max_len) {
+            (None, None) => Ok(DecisionParams::default()),
+            (Some(head), Some(state)) => DecisionParams::new(head, state),
+            (Some(_), None) => Err(VecboostError::config_error(format!(
+                "checkpoint {} configures head_max_len without max_len; \
+                 they must be set together",
+                self.name
+            ))),
+            (None, Some(_)) => Err(VecboostError::config_error(format!(
+                "checkpoint {} configures max_len without head_max_len; \
+                 they must be set together",
+                self.name
+            ))),
+        }
+    }
+
+    /// 条目级校验（启动 fail-fast 与测试共用）：name/model_path 非空、
+    /// 决策参数合法、engine_type 取值合法（candle / onnx[onnx feature]）。
+    pub fn validate(&self) -> Result<(), VecboostError> {
+        if self.name.trim().is_empty() {
+            return Err(VecboostError::config_error(
+                "checkpoint name must not be empty".to_string(),
+            ));
+        }
+        if self.model_path.as_os_str().is_empty() {
+            return Err(VecboostError::config_error(format!(
+                "checkpoint {} model_path must not be empty",
+                self.name
+            )));
+        }
+        self.resolved_decision_params()?;
+        self.resolved_engine_type()?;
+        Ok(())
+    }
+
+    /// engine_type 字符串 → 枚举解析（validate 与 switch 覆盖集构造共用的
+    /// 单一事实源）：`None` = 未配置（switch 期继承当前加载模型），非法取值
+    /// 显性报错（onnx 取值需 `--features onnx` 构建，错误消息含重建提示）。
+    pub fn resolved_engine_type(&self) -> Result<Option<EngineType>, VecboostError> {
+        match self.engine_type.as_deref() {
+            None => Ok(None),
+            Some("candle") => Ok(Some(EngineType::Candle)),
+            #[cfg(feature = "onnx")]
+            Some("onnx") => Ok(Some(EngineType::Onnx)),
+            Some(other) => {
+                let hint = if other == "onnx" {
+                    "（engine_type=\"onnx\" 需以 --features onnx 重新构建）"
+                } else {
+                    ""
+                };
+                Err(VecboostError::config_error(format!(
+                    "checkpoint {} engine_type 未知值 \"{other}\"{hint}，支持: candle, onnx",
+                    self.name
+                )))
+            }
+        }
+    }
+}
+
+/// 预设表整体校验：TOML 键（`[model.checkpoints.<name>]` 的 `<name>`）必须与
+/// 条目 name 字段一致（双写漂移即路由歧义：按名查找走键、条目内部用 name，
+/// 显性拒绝静默分叉）；逐条目 [`CheckpointPreset::validate`]。
+pub fn validate_checkpoint_map(
+    checkpoints: &std::collections::BTreeMap<String, CheckpointPreset>,
+) -> Result<(), VecboostError> {
+    for (key, preset) in checkpoints {
+        preset.validate()?;
+        if *key != preset.name {
+            return Err(VecboostError::config_error(format!(
+                "checkpoint table key \"{key}\" does not match entry name \"{}\"; \
+                 the two must be identical",
+                preset.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// 内置 `laya-multilingual` 预设的表键名（switch_model 按名命中）
+pub const BUILTIN_MULTILINGUAL_CHECKPOINT: &str = "laya-multilingual";
+
+impl CheckpointPreset {
+    /// 内置 `laya-multilingual` 预设：head_max_len 256 / max_len 256（文档
+    /// §2.1 多语言 checkpoint 口径）。model_path 为仓库相对惯例路径
+    /// （bundle 资产由部署方放置），engine_type 缺省回落 `[model].engine_type`。
+    /// 零配置可用性兜底：用户未写任何 TOML 也可 switch 到该名并拿到正确
+    /// 参数；显式配置同名条目时以用户配置为准（[`merge_builtin_checkpoints`]）。
+    pub fn builtin_laya_multilingual() -> Self {
+        Self {
+            name: BUILTIN_MULTILINGUAL_CHECKPOINT.to_string(),
+            model_path: PathBuf::from("models/laya-multilingual"),
+            task: ModelTask::Decision,
+            engine_type: None,
+            tokenizer_path: None,
+            head_max_len: Some(256),
+            max_len: Some(256),
+        }
+    }
+}
+
+/// 预设表解析：内置 `laya-multilingual` 打底，用户显式配置的同名条目对内置
+/// 做**字段级覆盖**——可选字段（engine_type/tokenizer_path/head_max_len/
+/// max_len）为 `None` 时逐字段继承内置值（用户只定制 model_path 时内置
+/// 256/256 多语言口径不被整条替换静默丢弃），必填字段（name/model_path/
+/// task）serde 必填强制显式、天然以用户为准；其余条目整条插入。
+/// 单向写 `head_max_len`/`max_len` 之一在内置名上**同样显性拒绝**（覆盖前
+/// 先对用户原始条目跑 [`CheckpointPreset::resolved_decision_params`]）——
+/// 否则字段级继承会把用户单向值与内置值拼成合法对，同一段 TOML 语法在内置
+/// 名静默生效非对称预算、在非内置名报错。输出表即运行时唯一事实源：
+/// main.rs fail-fast 校验 + kit.set_config 注入 + EmbeddingService switch
+/// 查表共用同一 resolved 结果。
+pub fn merge_builtin_checkpoints(
+    configured: std::collections::BTreeMap<String, CheckpointPreset>,
+) -> Result<std::collections::BTreeMap<String, CheckpointPreset>, VecboostError> {
+    let mut merged = std::collections::BTreeMap::new();
+    merged.insert(
+        BUILTIN_MULTILINGUAL_CHECKPOINT.to_string(),
+        CheckpointPreset::builtin_laya_multilingual(),
+    );
+    for (key, preset) in configured {
+        if key == BUILTIN_MULTILINGUAL_CHECKPOINT {
+            preset.resolved_decision_params()?;
+            let builtin = &merged[BUILTIN_MULTILINGUAL_CHECKPOINT];
+            let overlay = CheckpointPreset {
+                name: preset.name,
+                model_path: preset.model_path,
+                task: preset.task,
+                engine_type: preset.engine_type.or_else(|| builtin.engine_type.clone()),
+                tokenizer_path: preset
+                    .tokenizer_path
+                    .or_else(|| builtin.tokenizer_path.clone()),
+                head_max_len: preset.head_max_len.or(builtin.head_max_len),
+                max_len: preset.max_len.or(builtin.max_len),
+            };
+            merged.insert(key, overlay);
+        } else {
+            merged.insert(key, preset);
+        }
+    }
+    Ok(merged)
+}
+
+/// switch_model 命中预设时的字段覆盖集：请求显式值优先，预设值为缺省层
+/// （与 switch_model 既有「req 优先、缺省继承」模式对齐）。engine_type 为
+/// `None` 表示预设未配置该字段（switch 期继承当前加载模型）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckpointSwitchOverride {
+    pub model_path: PathBuf,
+    pub engine_type: Option<EngineType>,
+    pub tokenizer_path: Option<PathBuf>,
+    pub task: ModelTask,
+    pub decision_params: DecisionParams,
+}
+
+impl CheckpointPreset {
+    /// 预设条目 → switch 覆盖集。决策参数经 [`Self::resolved_decision_params`]、
+    /// engine_type 经 [`Self::resolved_engine_type`] 校验构造（启动 fail-fast
+    /// 已挡非法值，此处防御性复检——switch 路径拿到的表理论恒合法，损坏即
+    /// 显性报错而非静默缺省）。
+    pub fn switch_override(&self) -> Result<CheckpointSwitchOverride, VecboostError> {
+        Ok(CheckpointSwitchOverride {
+            model_path: self.model_path.clone(),
+            engine_type: self.resolved_engine_type()?,
+            tokenizer_path: self.tokenizer_path.clone(),
+            task: self.task,
+            decision_params: self.resolved_decision_params()?,
+        })
+    }
+}
+
+/// 按名查预设（resolved 表，含内置 `laya-multilingual`）：命中返回覆盖集，
+/// 未命中 None（switch 走既有自由切换路径，行为与现状等价）。
+pub fn lookup_checkpoint_override(
+    table: &std::collections::BTreeMap<String, CheckpointPreset>,
+    name: &str,
+) -> Result<Option<CheckpointSwitchOverride>, VecboostError> {
+    table.get(name).map(|p| p.switch_override()).transpose()
 }
 
 #[cfg(test)]
@@ -412,6 +710,7 @@ mod tests {
             model_sha256: None,
             task: ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         assert_eq!(config.name, "bge-m3");
@@ -435,6 +734,7 @@ mod tests {
             model_sha256: None,
             task: ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -452,6 +752,392 @@ mod tests {
         let repo = ModelRepository::default();
         assert_eq!(repo.models.len(), 1);
         assert_eq!(repo.models[0].name, "default");
+    }
+
+    // ── [model.checkpoints.<name>] 预设表解析 ──
+
+    fn full_preset_json() -> &'static str {
+        r#"{
+            "name": "laya-multilingual",
+            "model_path": "models/laya-multilingual",
+            "task": "decision",
+            "engine_type": "onnx",
+            "tokenizer_path": "models/laya-multilingual/tokenizer/tokenizer.json",
+            "head_max_len": 256,
+            "max_len": 256
+        }"#
+    }
+
+    #[test]
+    fn test_checkpoint_preset_parses_full_fields() {
+        let preset: CheckpointPreset = serde_json::from_str(full_preset_json()).unwrap();
+        assert_eq!(preset.name, "laya-multilingual");
+        assert_eq!(preset.model_path, PathBuf::from("models/laya-multilingual"));
+        assert_eq!(preset.task, ModelTask::Decision);
+        assert_eq!(preset.engine_type.as_deref(), Some("onnx"));
+        assert_eq!(
+            preset.tokenizer_path,
+            Some(PathBuf::from(
+                "models/laya-multilingual/tokenizer/tokenizer.json"
+            ))
+        );
+        assert_eq!(preset.head_max_len, Some(256));
+        assert_eq!(preset.max_len, Some(256));
+    }
+
+    #[test]
+    fn test_checkpoint_preset_optional_fields_default() {
+        // 仅必填三字段可解析：engine_type 回落主段、参数回落引擎缺省口径
+        let preset: CheckpointPreset = serde_json::from_str(
+            r#"{"name": "laya", "model_path": "models/laya", "task": "decision"}"#,
+        )
+        .unwrap();
+        assert_eq!(preset.engine_type, None);
+        assert_eq!(preset.tokenizer_path, None);
+        assert_eq!(preset.head_max_len, None);
+        assert_eq!(preset.max_len, None);
+        let params = preset.resolved_decision_params().expect("缺省参数合法");
+        assert_eq!(
+            params,
+            DecisionParams::default(),
+            "缺省回落英文口径 192/256"
+        );
+        assert_eq!(params.head_max_len, 192);
+        assert_eq!(params.state_max_tokens, 256);
+    }
+
+    #[test]
+    fn test_checkpoint_preset_missing_required_rejected() {
+        for json in [
+            r#"{"model_path": "m", "task": "decision"}"#,
+            r#"{"name": "laya", "task": "decision"}"#,
+            r#"{"name": "laya", "model_path": "m"}"#,
+        ] {
+            let result: Result<CheckpointPreset, _> = serde_json::from_str(json);
+            assert!(result.is_err(), "缺失必填字段必须显性拒绝: {json}");
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_preset_unknown_field_rejected() {
+        let result: Result<CheckpointPreset, _> = serde_json::from_str(
+            r#"{"name": "laya", "model_path": "m", "task": "decision", "head_max_lenght": 1}"#,
+        );
+        assert!(
+            result.is_err(),
+            "未知字段必须显性拒绝（deny_unknown_fields）"
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_preset_invalid_task_rejected() {
+        let result: Result<CheckpointPreset, _> =
+            serde_json::from_str(r#"{"name": "laya", "model_path": "m", "task": "rerank"}"#);
+        assert!(
+            result.is_err(),
+            "task 非法取值必须显性拒绝（无 Rerank 任务维度）"
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_preset_invalid_engine_type_rejected() {
+        let mut preset: CheckpointPreset = serde_json::from_str(
+            r#"{"name": "laya", "model_path": "m", "task": "decision", "engine_type": "tensorrt"}"#,
+        )
+        .unwrap();
+        let err = preset.validate().unwrap_err();
+        assert!(
+            matches!(err, VecboostError::ConfigError(_)),
+            "engine_type 非法取值校验期显性报错，got {err:?}"
+        );
+        preset.engine_type = Some("onnx".to_string());
+        if cfg!(feature = "onnx") {
+            preset.validate().expect("onnx 取值在 onnx feature 下合法");
+        } else {
+            assert!(preset.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_preset_resolved_engine_type() {
+        // None = 未配置（switch 期继承当前加载模型），不产生引擎枚举值
+        let mut preset: CheckpointPreset =
+            serde_json::from_str(r#"{"name": "laya", "model_path": "m", "task": "decision"}"#)
+                .unwrap();
+        assert_eq!(
+            preset.resolved_engine_type().expect("None 合法"),
+            None,
+            "未配置 = 继承当前，不预设引擎"
+        );
+        preset.engine_type = Some("candle".to_string());
+        assert_eq!(
+            preset.resolved_engine_type().expect("candle 合法"),
+            Some(EngineType::Candle)
+        );
+        // EngineType::Onnx 变体本身 feature 门内（cfg! 运行时宏不门控编译，
+        // 非 onnx 构建下引用即 E0599），两分支用 #[cfg] 编译期切换
+        preset.engine_type = Some("onnx".to_string());
+        #[cfg(feature = "onnx")]
+        assert_eq!(
+            preset.resolved_engine_type().expect("onnx 合法"),
+            Some(EngineType::Onnx)
+        );
+        #[cfg(not(feature = "onnx"))]
+        assert!(
+            preset.resolved_engine_type().is_err(),
+            "onnx 取值在非 onnx feature 下显性报错（含重建提示）"
+        );
+        preset.engine_type = Some("tensorrt".to_string());
+        let err = preset.resolved_engine_type().unwrap_err();
+        assert!(
+            matches!(err, VecboostError::ConfigError(_)) && err.error_detail().contains("tensorrt"),
+            "非法取值报错点名实际值，got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_preset_params_must_be_paired() {
+        for (head, max) in [(Some(256), None), (None, Some(256))] {
+            let preset = CheckpointPreset {
+                name: "laya".to_string(),
+                model_path: PathBuf::from("models/laya"),
+                task: ModelTask::Decision,
+                engine_type: None,
+                tokenizer_path: None,
+                head_max_len: head,
+                max_len: max,
+            };
+            let err = preset.resolved_decision_params().unwrap_err();
+            assert!(
+                matches!(err, VecboostError::ConfigError(_)),
+                "head_max_len/max_len 必须成对配置，got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_preset_invalid_params_rejected_on_validate() {
+        for (head, max) in [(0usize, 256usize), (192, 9000)] {
+            let preset = CheckpointPreset {
+                name: "laya".to_string(),
+                model_path: PathBuf::from("models/laya"),
+                task: ModelTask::Decision,
+                engine_type: None,
+                tokenizer_path: None,
+                head_max_len: Some(head),
+                max_len: Some(max),
+            };
+            let err = preset.validate().unwrap_err();
+            assert!(
+                matches!(err, VecboostError::ConfigError(_)),
+                "head={head} max={max} 必须 validate 期显性拒绝（拒绝静默钳制），got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_preset_resolve_multilingual_params() {
+        let preset: CheckpointPreset = serde_json::from_str(full_preset_json()).unwrap();
+        let params = preset
+            .resolved_decision_params()
+            .expect("multilingual 参数合法");
+        assert_eq!(params.head_max_len, 256);
+        assert_eq!(params.state_max_tokens, 256);
+    }
+
+    #[test]
+    fn test_validate_checkpoint_map_key_mismatch_rejected() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(
+            "wrong-key".to_string(),
+            CheckpointPreset {
+                name: "laya".to_string(),
+                model_path: PathBuf::from("models/laya"),
+                task: ModelTask::Decision,
+                engine_type: None,
+                tokenizer_path: None,
+                head_max_len: None,
+                max_len: None,
+            },
+        );
+        let err = validate_checkpoint_map(&map).unwrap_err();
+        assert!(
+            matches!(err, VecboostError::ConfigError(_))
+                && err.error_detail().contains("wrong-key"),
+            "TOML 键与条目 name 不一致必须显性拒绝，got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_checkpoint_map_empty_ok() {
+        let map = std::collections::BTreeMap::new();
+        validate_checkpoint_map(&map).expect("空表 = 现状行为，必须通过");
+    }
+
+    // ── 内置 laya-multilingual 预设与 switch 覆盖集（R-multi-checkpoint-002）──
+
+    #[test]
+    fn test_builtin_laya_multilingual_profile() {
+        let builtin = CheckpointPreset::builtin_laya_multilingual();
+        assert_eq!(builtin.name, "laya-multilingual");
+        assert_eq!(
+            builtin.model_path,
+            PathBuf::from("models/laya-multilingual")
+        );
+        assert_eq!(builtin.task, ModelTask::Decision);
+        assert_eq!(
+            builtin.engine_type, None,
+            "engine_type 缺省继承当前加载模型（启动时即 [model] 主段）"
+        );
+        // 文档 §2.1 多语言 checkpoint 口径数值钉：漂移即协议变更，须显性确认
+        assert_eq!(builtin.head_max_len, Some(256));
+        assert_eq!(builtin.max_len, Some(256));
+        builtin.validate().expect("内置预设必须过自身校验闸");
+        let params = builtin.resolved_decision_params().expect("内置参数合法");
+        assert_eq!(params.head_max_len, 256);
+        assert_eq!(params.state_max_tokens, 256);
+    }
+
+    #[test]
+    fn test_merge_builtin_checkpoints_defaults_and_override() {
+        let merged = merge_builtin_checkpoints(Default::default()).expect("空配置 merge 恒通过");
+        assert_eq!(merged.len(), 1, "零配置仅含内置预设（零配置可用性兜底）");
+        assert!(merged.contains_key(BUILTIN_MULTILINGUAL_CHECKPOINT));
+
+        // 用户同名显式配置覆盖内置（显式优先：可改 model_path/参数不绕内置）
+        let user = CheckpointPreset {
+            name: BUILTIN_MULTILINGUAL_CHECKPOINT.to_string(),
+            model_path: PathBuf::from("data/laya-multi"),
+            task: ModelTask::Decision,
+            engine_type: None,
+            tokenizer_path: None,
+            head_max_len: Some(384),
+            max_len: Some(384),
+        };
+        let merged = merge_builtin_checkpoints(
+            [(BUILTIN_MULTILINGUAL_CHECKPOINT.to_string(), user)]
+                .into_iter()
+                .collect(),
+        )
+        .expect("成对覆盖内置必须通过");
+        assert_eq!(merged.len(), 1, "同名覆盖不产生双条目");
+        assert_eq!(
+            merged[BUILTIN_MULTILINGUAL_CHECKPOINT].model_path,
+            PathBuf::from("data/laya-multi")
+        );
+        assert_eq!(
+            merged[BUILTIN_MULTILINGUAL_CHECKPOINT].head_max_len,
+            Some(384)
+        );
+    }
+
+    #[test]
+    fn test_merge_builtin_checkpoints_partial_overlay_inherits_builtin_params() {
+        // 最常见定制场景：同名条目只写必填三字段（换 model_path）——可选
+        // 字段必须逐字段继承内置 256/256 多语言口径，而非整条替换后静默
+        // 落回英文缺省 192/256 让 head 193-256 的合法请求报错
+        let user = CheckpointPreset {
+            name: BUILTIN_MULTILINGUAL_CHECKPOINT.to_string(),
+            model_path: PathBuf::from("data/laya-multi"),
+            task: ModelTask::Decision,
+            engine_type: None,
+            tokenizer_path: None,
+            head_max_len: None,
+            max_len: None,
+        };
+        let merged = merge_builtin_checkpoints(
+            [(BUILTIN_MULTILINGUAL_CHECKPOINT.to_string(), user)]
+                .into_iter()
+                .collect(),
+        )
+        .expect("全缺省同名覆盖必须通过");
+        let m = &merged[BUILTIN_MULTILINGUAL_CHECKPOINT];
+        assert_eq!(
+            m.model_path,
+            PathBuf::from("data/laya-multi"),
+            "必填字段以用户为准"
+        );
+        assert_eq!(
+            m.head_max_len,
+            Some(256),
+            "未写的 head_max_len 继承内置多语言口径"
+        );
+        assert_eq!(m.max_len, Some(256), "未写的 max_len 继承内置多语言口径");
+        let params = m.resolved_decision_params().expect("合并后参数合法");
+        assert_eq!(
+            (params.head_max_len, params.state_max_tokens),
+            (256, 256),
+            "合并结果的决策序列预算保持内置口径"
+        );
+    }
+
+    #[test]
+    fn test_merge_builtin_checkpoints_one_sided_params_rejected_like_non_builtin() {
+        // 内置名不得绕过成对闸门：单向写 head_max_len/max_len 之一若在字段级
+        // 覆盖后才校验，.or 继承会把用户单向值与内置 256 拼成合法对，同一 TOML
+        // 语法在内置名静默生效非对称预算、在非内置名报错。覆盖前先对用户原始
+        // 条目跑 resolved_decision_params，两种名字同语义显性拒绝。
+        for (field, head, max) in [
+            ("head_max_len", Some(384usize), None),
+            ("max_len", None, Some(384usize)),
+        ] {
+            let user = CheckpointPreset {
+                name: BUILTIN_MULTILINGUAL_CHECKPOINT.to_string(),
+                model_path: PathBuf::from("data/laya-multi"),
+                task: ModelTask::Decision,
+                engine_type: None,
+                tokenizer_path: None,
+                head_max_len: head,
+                max_len: max,
+            };
+            let err = merge_builtin_checkpoints(
+                [(BUILTIN_MULTILINGUAL_CHECKPOINT.to_string(), user)]
+                    .into_iter()
+                    .collect(),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(err, VecboostError::ConfigError(_))
+                    && err.error_detail().contains(BUILTIN_MULTILINGUAL_CHECKPOINT)
+                    && err.error_detail().contains(field)
+                    && err.error_detail().contains("must be set together"),
+                "内置名单向写 {field} 必须与非内置名同语义显性拒绝，got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_lookup_checkpoint_override_hits_builtin_profile() {
+        let table = merge_builtin_checkpoints(Default::default()).expect("内置表 merge 恒通过");
+        let hit = lookup_checkpoint_override(&table, BUILTIN_MULTILINGUAL_CHECKPOINT)
+            .expect("内置预设参数合法")
+            .expect("内置名必须命中");
+        assert_eq!(
+            hit.model_path,
+            PathBuf::from("models/laya-multilingual"),
+            "预设 model_path 作为 switch 缺省层"
+        );
+        assert_eq!(hit.task, ModelTask::Decision);
+        assert_eq!(
+            hit.engine_type, None,
+            "内置未配 engine_type = switch 期继承当前加载模型"
+        );
+        assert_eq!(hit.tokenizer_path, None);
+        assert_eq!(
+            hit.decision_params,
+            DecisionParams::new(256, 256).expect("256/256 合法"),
+            "switch 命中后决策请求按该 checkpoint 的 DecisionParams 生效"
+        );
+    }
+
+    #[test]
+    fn test_lookup_checkpoint_override_miss_returns_none() {
+        let table = merge_builtin_checkpoints(Default::default()).expect("内置表 merge 恒通过");
+        let miss = lookup_checkpoint_override(&table, "not-a-checkpoint").expect("未命中不报错");
+        assert!(
+            miss.is_none(),
+            "未命中 None = switch 走自由切换、与现状等价"
+        );
     }
 
     #[test]
@@ -561,6 +1247,7 @@ mod tests {
             model_sha256: None,
             task: ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
 
         let context = InferenceContext::with_config(&config, Precision::Fp16);

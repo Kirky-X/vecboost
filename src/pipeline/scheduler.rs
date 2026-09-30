@@ -1007,6 +1007,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
     }
@@ -1047,6 +1048,7 @@ mod tests {
             model_sha256: None,
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
+            decision_params: None,
         };
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
     }

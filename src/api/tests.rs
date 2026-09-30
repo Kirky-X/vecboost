@@ -219,6 +219,7 @@ fn make_service(dimension: usize) -> EmbeddingService {
         model_sha256: None,
         task: crate::config::model::ModelTask::Embedding,
         quantized: false,
+        decision_params: None,
     };
     let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(mock_engine));
     // NOTE: temp_dir is intentionally dropped here. TestEngine does not read from

@@ -350,6 +350,49 @@ ONNX 主模型文件探测按管线分化（任务协议约定）：embedding（
 `model_quantized.onnx` → `laya.onnx` → `laya_int8.onnx` 固定清单（fp32 主模型
 优先）。
 
+#### 多 checkpoint 配置与切换
+
+`[model.checkpoints.<name>]` 预设表为多 checkpoint 部署提供命名配置：每个
+条目是一个可被 `POST /api/1/model/switch` 按名切换的 checkpoint 预设
+（三 checkpoint 生态：laya / laya-multilingual / laya-typed-decisions）：
+
+```toml
+[model]
+model_repo = "BAAI/bge-m3"        # 主模型（启动加载），checkpoints 不改变启动行为
+
+[model.checkpoints.laya]           # 表键 = 预设名（必须与条目 name 一致，漂移启动报错）
+name = "laya"
+model_path = "models/laya"         # 必填
+task = "decision"                  # 必填：embedding | decision
+# 以下可选：
+# engine_type = "onnx"             # 缺省继承当前加载模型（启动时即 [model].engine_type；"candle"/"onnx"）
+# tokenizer_path = "models/laya/tokenizer/tokenizer.json"
+# head_max_len = 192               # head+options token 预算（默认 192，英文口径）
+# max_len = 256                    # state 截断上限（默认 256）；与 head_max_len 必须成对配置
+```
+
+**内置 `laya-multilingual` 预设**（无需任何配置即可切换）：
+`task = "decision"`、`model_path = "models/laya-multilingual"`、
+`head_max_len = 256`、`max_len = 256`（多语言 checkpoint 口径）。把
+bundle 放到 `models/laya-multilingual/` 后直接切换即可拿到正确的序列预算；
+在预设表写同名条目时按**字段级**覆盖内置——写了的字段以你的为准，没写的
+可选字段（engine_type/tokenizer_path/head_max_len/max_len）逐字段继承内置
+值（例如只定制 `model_path` 不会丢掉内置 256/256 多语言预算）。
+
+**与 switch_model 的关系**：切换请求的 `model_name` 命中预设名（含内置）时，
+预设的 `model_path`/`task`/`engine_type`/`tokenizer_path` 作为**缺省层**
+应用——请求显式字段仍然优先，未命中预设名的切换行为与无预设表完全一致。
+命中即生效该 checkpoint 的序列预算：超预算请求的报错消息会携带实际生效的
+`head_max_len` 数值，可据此确认切换成功。
+
+**fail-fast 语义**：未知字段、缺失必填字段（name/model_path/task）、
+task/engine_type 非法取值、参数为 0 或超硬上限（单字段 8192，或
+head_max_len + max_len + 4 个固定特殊 token 组合超窗）、表键与条目 name
+不一致——均在**启动期显性报错**拒绝启动，不做静默钳制或忽略。
+`head_max_len`/`max_len` 只写其一同样启动报错——内置 `laya-multilingual`
+名下的同名条目同语义（字段级继承只作用于成对缺省，不会把你的单向值与
+内置值拼成合法对）。
+
 ---
 
 #### 缓存与文本长度设置
@@ -706,6 +749,11 @@ curl -X POST http://localhost:9002/api/1/model/switch \
 > 的 task 分派臂加载决策管线（bundle 缺失/不完整时报 `ModelLoadError`）；
 > 切换成功后 rerank 与 decision 服务同步替换底层引擎（切模型传播），不
 > 传 `task` 字段的旧请求体行为不变（`#[serde(default)]` 零破坏）。
+>
+> **`[model.checkpoints]` 预设联动**: `model_name` 命中预设名（含内置
+> `laya-multilingual`）时，预设的 `model_path`/`task`/`tokenizer_path`/
+> 序列预算作为缺省层应用（请求显式字段仍优先），详见「配置 → 多
+> checkpoint 配置与切换」。
 
 ---
 

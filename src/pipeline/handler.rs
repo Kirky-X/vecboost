@@ -178,9 +178,17 @@ async fn enqueue_and_await_response(
         .await;
 
     if let Err(e) = queue_handle.enqueue(request).await {
-        // 队列满早退：取消标志随即释放，注册表不留孤儿条目（审查 H2）
+        // 队列满早退：取消标志与响应通道条目随即释放——请求从未入队即无
+        // worker 会 complete，channel 条目不清将永久滞留（持续过载下无界
+        // 增长，三路评审 M；审查 H2 的「注册表不留孤儿」此处补全到两侧）
         cancel_guard.0.take();
         queue_handle.cancellations().release(&request_id);
+        state
+            .kit
+            .require::<crate::registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered")
+            .deregister(&request_id)
+            .await;
         return Err(e);
     }
 
@@ -486,11 +494,17 @@ mod tests {
 
     /// 验证 handle_pipeline_request 在队列满时返回 Overloaded（背压语义
     /// 独立变体，禁止复用 RateLimitExceeded——spec R-decision-throughput-002）。
+    /// 并钉通道条目清理（三路评审 M）：请求从未入队，response channel 条目
+    /// 必须同步移除，否则持续过载下无界增长。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_queue_full() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(0, engine).await;
+        let response_channel = state
+            .kit
+            .require::<crate::registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
 
         let req = EmbedRequest {
             text: "hello".to_string(),
@@ -504,6 +518,11 @@ mod tests {
             }
             other => panic!("expected Overloaded, got {:?}", other),
         }
+        assert_eq!(
+            response_channel.pending_count().await,
+            0,
+            "rejected request must not leak a response channel entry"
+        );
     }
 
     /// 决策请求经 pipeline 入队（T016）：请求以 ServiceRequest::Decision
@@ -628,6 +647,10 @@ mod tests {
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(0, engine).await;
 
+        let response_channel = state
+            .kit
+            .require::<crate::registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
         let result = handle_decision_pipeline_request(state, decision_noul_request()).await;
         match result {
             Err(VecboostError::Overloaded(msg)) => {
@@ -635,6 +658,11 @@ mod tests {
             }
             other => panic!("expected Overloaded, got {other:?}"),
         }
+        assert_eq!(
+            response_channel.pending_count().await,
+            0,
+            "rejected decision request must not leak a response channel entry"
+        );
     }
 
     /// 验证 handle_pipeline_request 在引擎出错时传播 InferenceError。

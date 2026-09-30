@@ -165,6 +165,29 @@ impl CancellationRegistry {
     }
 }
 
+/// 入队槽位预留守卫：CAS 成功即创建（armed），push 完成后
+/// [`SlotGuard::disarm`]；在此之间任何路径（调用方 future 于
+/// `queues.write().await` 锁等待处被取消、push 期间 unwind）drop 时回滚
+/// current_size，容量计数与实际入队数保持精确一致。
+struct SlotGuard<'a> {
+    counter: &'a AtomicUsize,
+    armed: bool,
+}
+
+impl SlotGuard<'_> {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SlotGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.counter.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
+
 /// 优先级请求队列
 pub struct PriorityRequestQueue {
     /// 队列: Priority -> 请求队列
@@ -246,11 +269,22 @@ impl PriorityRequestQueue {
             }
         }
 
+        // CAS 已预留槽位——此后到 push_back 之间隔着 queues.write().await
+        // 取消点（tokio future 在锁等待上被 drop 即泄漏 +1，容量渐近假满，
+        // 三路评审 M）。槽位守卫保证任何取消/panic 路径都回滚计数，push
+        // 成功后 disarm；push_back 自身 panic 时守卫尚未 disarm 同样覆盖
+        let mut guard = SlotGuard {
+            counter: &self.current_size,
+            armed: true,
+        };
+
         let mut queues = self.queues.write().await;
 
         let priority = request.priority;
         let queue = queues.entry(priority).or_insert_with(VecDeque::new);
         queue.push_back(request);
+
+        guard.disarm();
 
         self.notify.notify_one();
 
@@ -1134,5 +1168,115 @@ mod tests {
         let queue = PriorityRequestQueue::new(100);
         let batch = queue.dequeue_batch(5).await;
         assert!(batch.is_empty());
+    }
+
+    /// 槽位守卫取消回滚钉（三路评审 M）：确定性构造——持写锁逼使 enqueue
+    /// 停在 queues.write().await（CAS 已预留槽位），abort 该 future。旧实现
+    /// 计数永久泄漏 +1（容量渐近假满）；守卫实现必须回滚为 0，且容量未被
+    /// 侵蚀（10 容量仍可入满）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_enqueue_cancelled_at_lock_wait_rolls_back_slot_count() {
+        let queue = Arc::new(PriorityRequestQueue::new(10));
+        let lock = Arc::clone(&queue.queues);
+        let blocker = lock.write().await;
+
+        let q = Arc::clone(&queue);
+        let handle = tokio::spawn(async move {
+            q.enqueue(QueuedRequest {
+                request_id: "cancelled-at-lock".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "test".to_string(),
+                    normalize: Some(true),
+                }),
+                priority: Priority::Normal,
+                submitted_at: Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::Http {
+                    ip: "127.0.0.1".to_string(),
+                },
+            })
+            .await
+        });
+        // 让任务跑完同步段（closed 检查 + CAS 预留），停在 write().await
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(queue.size(), 1, "CAS reservation must be visible pre-push");
+        handle.abort();
+        drop(blocker);
+        // abort 异步生效：future 在调度器下次运行该任务时才被 drop（守卫
+        // Drop 执行回滚），留出调度窗口再断言
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert_eq!(
+            queue.size(),
+            0,
+            "cancellation at the lock wait must roll back the reserved slot"
+        );
+
+        // 容量未侵蚀：10 容量仍可入满
+        for i in 0..10 {
+            queue
+                .enqueue(QueuedRequest {
+                    request_id: format!("after-cancel-{i}"),
+                    request: ServiceRequest::Embed(EmbedRequest {
+                        text: "test".to_string(),
+                        normalize: Some(true),
+                    }),
+                    priority: Priority::Normal,
+                    submitted_at: Instant::now(),
+                    timeout: Duration::from_secs(30),
+                    source: RequestSource::Http {
+                        ip: "127.0.0.1".to_string(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(queue.size(), 10);
+    }
+
+    /// 精确不变量压力钉：并发 enqueue 与 abort 交错下，queue.size() 必须
+    /// 恰等于成功入队（Ok）的任务数——被 abort 的 future 无论停在哪个取消
+    /// 点都不得占位（旧实现 CAS 后 push 前被 abort 即泄漏，size > ok 数）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_enqueue_abort_invariant_size_equals_completed_count() {
+        let queue = Arc::new(PriorityRequestQueue::new(500));
+        let mut handles = Vec::new();
+        for i in 0..200 {
+            let q = Arc::clone(&queue);
+            handles.push(tokio::spawn(async move {
+                q.enqueue(QueuedRequest {
+                    request_id: format!("abort-{i}"),
+                    request: ServiceRequest::Embed(EmbedRequest {
+                        text: "test".to_string(),
+                        normalize: Some(true),
+                    }),
+                    priority: Priority::Normal,
+                    submitted_at: Instant::now(),
+                    timeout: Duration::from_secs(30),
+                    source: RequestSource::Http {
+                        ip: "127.0.0.1".to_string(),
+                    },
+                })
+                .await
+            }));
+            // 交错制造不同取消落点（未 poll / write().await / 已完成）
+            if i % 3 == 0 {
+                tokio::task::yield_now().await;
+            }
+        }
+        for h in &handles {
+            h.abort();
+        }
+        let mut completed = 0usize;
+        for h in handles {
+            if let Ok(Ok(())) = h.await {
+                completed += 1;
+            }
+        }
+        assert_eq!(
+            queue.size(),
+            completed,
+            "size must exactly equal completed enqueues; any gap is slot leakage"
+        );
     }
 }

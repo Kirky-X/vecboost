@@ -448,11 +448,25 @@ impl WorkerManager {
                     )
                     .await;
                     let waited_secs = wait_start.elapsed().as_secs_f64();
-                    // 埋点：批次大小与窗口等待时长（全局 collector 未设置时零开销跳过）
+                    // 埋点：批次大小与窗口等待时长，按批构成选标签——决策接入
+                    // 共享拼批后混批是常态，恒挂 embed 标签会把决策负载误计入
+                    // embed 容量画像（三路评审 M）。HistogramVec operation 为
+                    // 自由标签，无需新注册
                     #[cfg(feature = "http")]
                     if let Some(collector) = crate::metrics::prometheus_exporter::global_collector()
                     {
-                        collector.observe_batch("embed", batch.len(), waited_secs);
+                        let has_embed = batch
+                            .iter()
+                            .any(|r| matches!(r.request, ServiceRequest::Embed(_)));
+                        let has_decision = batch
+                            .iter()
+                            .any(|r| matches!(r.request, ServiceRequest::Decision(_)));
+                        let operation = match (has_embed, has_decision) {
+                            (true, false) => "embed",
+                            (false, true) => "decision",
+                            _ => "mixed",
+                        };
+                        collector.observe_batch(operation, batch.len(), waited_secs);
                     }
                     debug!(
                         "Worker {} assembled batch of {} (wait {:.3}s, window {}ms)",
@@ -511,7 +525,10 @@ impl WorkerManager {
                     );
 
                     // panic 隔离（T029）：推理 panic 不再带走 worker——
-                    // 经 JoinHandle 捕获，批内未完成请求统一补 InternalError
+                    // 经 JoinHandle 捕获，批内未完成请求统一补 InternalError。
+                    // 整批 mem::take move 进闭包（决策请求含递归 Value 深拷贝
+                    // 成本高且由用户输入定大小，热路径不做整批 clone，三路
+                    // 评审 M）；批后清理只按 request_id 释放取消注册表
                     let batch_for_panic: Vec<String> = valid_batch
                         .iter()
                         .map(|r| r.request_id.clone())
@@ -519,7 +536,7 @@ impl WorkerManager {
                     let svc = Arc::clone(&embedding_service);
                     let ds = decision_service.clone();
                     let chan = Arc::clone(&response_channel);
-                    let batch_owned = valid_batch.clone();
+                    let batch_owned = std::mem::take(&mut valid_batch);
                     let handle = tokio::spawn(async move {
                         Self::process_batch_requests(&batch_owned, &svc, ds.as_ref(), &chan).await
                     });
@@ -543,9 +560,10 @@ impl WorkerManager {
                             }
                         }
                     }
-                    // 释放取消注册表条目（响应已送达或已补错）
-                    for req in &valid_batch {
-                        queue.cancellations().release(&req.request_id);
+                    // 释放取消注册表条目（响应已送达或已补错）——
+                    // batch_for_panic 与整批的 request_id 集合一致
+                    for rid in &batch_for_panic {
+                        queue.cancellations().release(rid);
                     }
                 }
                 // 队列为空时等待入队通知，消除指数退避轮询
@@ -762,70 +780,73 @@ impl WorkerManager {
             }
         }
 
-        if texts.is_empty() {
-            return;
-        }
+        // texts 为空（纯决策批）只跳过 embed 推理段——决策收齐循环必须
+        // 无条件执行：早退会把已 spawn 的 JoinHandle 随局部变量 drop（脱离
+        // 监控），panic 无 JoinError 映射、等待方悬挂到 SLA 超时，且 worker
+        // 不等决策完成即出队下一批、任务堆积不受配额约束（三路评审 H×3）
+        if !texts.is_empty() {
+            let service_guard = embedding_service.read().await;
+            let batch_started = std::time::Instant::now();
+            let batch_result = service_guard.embed_batch_texts(&texts).await;
+            drop(service_guard);
 
-        let service_guard = embedding_service.read().await;
-        let batch_started = std::time::Instant::now();
-        let batch_result = service_guard.embed_batch_texts(&texts).await;
-        drop(service_guard);
-
-        match batch_result {
-            Ok(embeddings) => {
-                // 批内各请求共享本次批量推理耗时（拼批语义下的真实处理时长）
-                let batch_millis = batch_started.elapsed().as_millis();
-                // 按 request_id 切分结果（j 为收集序——texts/normalize_flags 按
-                // 收集序 push，idx 是批内原始位置，混批时两者不同；既有实现
-                // 以下标互查在 embed 不位于 0 位时越界，三路评审混批测试实抓）
-                for (j, &idx) in valid_indices.iter().enumerate() {
-                    let req = &batch[idx];
-                    if j < embeddings.len() {
-                        let mut embedding = embeddings[j].clone();
-                        if normalize_flags[j] {
-                            crate::utils::vector::normalize_l2(&mut embedding).ok();
+            match batch_result {
+                Ok(embeddings) => {
+                    // 批内各请求共享本次批量推理耗时（拼批语义下的真实处理时长）
+                    let batch_millis = batch_started.elapsed().as_millis();
+                    // 按 request_id 切分结果（j 为收集序——texts/normalize_flags 按
+                    // 收集序 push，idx 是批内原始位置，混批时两者不同；既有实现
+                    // 以下标互查在 embed 不位于 0 位时越界，三路评审混批测试实抓）
+                    for (j, &idx) in valid_indices.iter().enumerate() {
+                        let req = &batch[idx];
+                        if j < embeddings.len() {
+                            let mut embedding = embeddings[j].clone();
+                            if normalize_flags[j] {
+                                crate::utils::vector::normalize_l2(&mut embedding).ok();
+                            }
+                            let dimension = embedding.len();
+                            response_channel
+                                .complete(
+                                    req.request_id.clone(),
+                                    Ok(ServiceResponse::Embed(EmbedResponse {
+                                        dimension,
+                                        embedding,
+                                        processing_time_ms: batch_millis,
+                                        information_retention_rate: None,
+                                    })),
+                                )
+                                .await;
+                        } else {
+                            // 引擎返回的向量数少于输入
+                            response_channel
+                                .complete(
+                                    req.request_id.clone(),
+                                    Err(VecboostError::InternalError(
+                                        "Batch inference returned fewer embeddings than inputs"
+                                            .to_string(),
+                                    )),
+                                )
+                                .await;
                         }
-                        let dimension = embedding.len();
-                        response_channel
-                            .complete(
-                                req.request_id.clone(),
-                                Ok(ServiceResponse::Embed(EmbedResponse {
-                                    dimension,
-                                    embedding,
-                                    processing_time_ms: batch_millis,
-                                    information_retention_rate: None,
-                                })),
-                            )
-                            .await;
-                    } else {
-                        // 引擎返回的向量数少于输入
-                        response_channel
-                            .complete(
-                                req.request_id.clone(),
-                                Err(VecboostError::InternalError(
-                                    "Batch inference returned fewer embeddings than inputs"
-                                        .to_string(),
-                                )),
-                            )
-                            .await;
                     }
                 }
-            }
-            Err(e) => {
-                // 批量推理失败——所有请求收错
-                warn!("Batch inference failed: {}", e);
-                for req in batch.iter() {
-                    if matches!(req.request, ServiceRequest::Embed(_)) {
-                        response_channel
-                            .complete(req.request_id.clone(), Err(e.clone()))
-                            .await;
+                Err(e) => {
+                    // 批量推理失败——所有请求收错
+                    warn!("Batch inference failed: {}", e);
+                    for req in batch.iter() {
+                        if matches!(req.request, ServiceRequest::Embed(_)) {
+                            response_channel
+                                .complete(req.request_id.clone(), Err(e.clone()))
+                                .await;
+                        }
                     }
                 }
             }
         }
 
-        // 收齐批内决策结果（spawn 时已与 embed 推理并行推进）。决策任务
-        // panic 经 JoinError 显性映射 InferenceError，不吞错不悬挂等待方
+        // 收齐批内决策结果（spawn 时已与 embed 推理并行推进；纯决策批也走到
+        // 这里）。决策任务 panic 经 JoinError 显性映射 InferenceError，不吞错
+        // 不悬挂等待方；收齐返回前完成，保证决策执行速率与出队节奏耦合（节流）
         for (request_id, handle) in pending_decisions {
             let result = match handle.await {
                 Ok(result) => result,
@@ -1946,6 +1967,147 @@ mod tests {
             elapsed < Duration::from_millis(900),
             "mixed batch should not serialize decision + embed, took {elapsed:?}"
         );
+    }
+
+    /// 纯决策批回归钉（三路评审 H×3）：批内 2 条慢决策、0 条 embed 时，
+    /// process_batch_requests 返回前两条响应必须已全部 complete（旧缺陷：
+    /// texts.is_empty() 早退跳过收齐循环，JoinHandle 脱离监控——响应靠
+    /// detached 任务碰巧回达、panic 无映射、节流失效）。断言
+    /// pending_count 归零证明 complete 发生在本函数内而非 detached 任务。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_batch_decision_only_batch_completes_before_return() {
+        let service = Arc::new(RwLock::new(EmbeddingService::new(
+            Arc::new(RwLock::new(MockEngine)) as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+            None,
+        )));
+        let decision_service = Arc::new(RwLock::new(DecisionService::new(
+            Arc::new(RwLock::new(DecisionCapableEngine))
+                as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+            None,
+        )));
+        let channel = Arc::new(ResponseChannel::new());
+
+        let mk = |id: &str| QueuedRequest {
+            request_id: id.to_string(),
+            request: ServiceRequest::Decision(DecisionRequest {
+                state: serde_json::json!({}),
+                questions: vec![DecisionQuestion {
+                    name: "confident".to_string(),
+                    qtype: QuestionType::Noul,
+                    instructions: "state your p(true)".to_string(),
+                    options: vec![],
+                }],
+            }),
+            priority: Priority::Normal,
+            submitted_at: std::time::Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::http("127.0.0.1".to_string()),
+        };
+        let batch = vec![mk("dec-only-1"), mk("dec-only-2")];
+        let rx1 = channel.register("dec-only-1".to_string()).await;
+        let rx2 = channel.register("dec-only-2".to_string()).await;
+
+        WorkerManager::process_batch_requests(&batch, &service, Some(&decision_service), &channel)
+            .await;
+
+        // 返回即收齐：不依赖 detached 任务、无 30s SLA 悬挂
+        assert_eq!(
+            channel.pending_count().await,
+            0,
+            "decision-only batch must be fully completed before process_batch_requests returns"
+        );
+        for (rx, rid) in [(rx1, "dec-only-1"), (rx2, "dec-only-2")] {
+            let result = tokio::time::timeout(Duration::from_millis(100), rx).await;
+            assert!(result.is_ok(), "{rid} response should already be sent");
+            let ServiceResponse::Decision(resp) = result.unwrap().unwrap().unwrap() else {
+                panic!("{rid} expected Decision response");
+            };
+            assert_eq!(resp.answers.len(), 1);
+        }
+    }
+
+    /// 纯决策批 panic 传播钉（三路评审 H）：批内决策任务 panic 时等待方
+    /// 必须及时收到 InferenceError（JoinError 显性映射），而非 detached
+    /// 悬挂到 SLA 超时收 RequestTimeout。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_batch_decision_only_batch_panics_map_to_inference_error() {
+        struct PanickingDecisionEngine;
+        #[async_trait]
+        impl InferenceEngine for PanickingDecisionEngine {
+            fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+                Ok(vec![0.0; 8])
+            }
+            fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+                Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+            }
+            fn precision(&self) -> &Precision {
+                &Precision::Fp32
+            }
+            fn supports_mixed_precision(&self) -> bool {
+                false
+            }
+            fn supports_task(&self, task: ModelTask) -> bool {
+                matches!(task, ModelTask::Embedding | ModelTask::Decision)
+            }
+            fn decide(&self, _req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
+                panic!("decision engine exploded");
+            }
+            async fn try_fallback_to_cpu(
+                &mut self,
+                _config: &ModelConfig,
+            ) -> Result<(), VecboostError> {
+                Ok(())
+            }
+        }
+
+        let service = Arc::new(RwLock::new(EmbeddingService::new(
+            Arc::new(RwLock::new(MockEngine)) as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+            None,
+        )));
+        let decision_service = Arc::new(RwLock::new(DecisionService::new(
+            Arc::new(RwLock::new(PanickingDecisionEngine))
+                as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+            None,
+        )));
+        let channel = Arc::new(ResponseChannel::new());
+
+        let mk = |id: &str| QueuedRequest {
+            request_id: id.to_string(),
+            request: ServiceRequest::Decision(DecisionRequest {
+                state: serde_json::json!({}),
+                questions: vec![DecisionQuestion {
+                    name: "confident".to_string(),
+                    qtype: QuestionType::Noul,
+                    instructions: "state your p(true)".to_string(),
+                    options: vec![],
+                }],
+            }),
+            priority: Priority::Normal,
+            submitted_at: std::time::Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::http("127.0.0.1".to_string()),
+        };
+        let batch = vec![mk("dec-panic-1"), mk("dec-panic-2")];
+        let rx1 = channel.register("dec-panic-1".to_string()).await;
+        let rx2 = channel.register("dec-panic-2".to_string()).await;
+
+        WorkerManager::process_batch_requests(&batch, &service, Some(&decision_service), &channel)
+            .await;
+
+        assert_eq!(channel.pending_count().await, 0);
+        for (rx, rid) in [(rx1, "dec-panic-1"), (rx2, "dec-panic-2")] {
+            let result = tokio::time::timeout(Duration::from_secs(2), rx).await;
+            assert!(result.is_ok(), "{rid} must not hang past the collect loop");
+            match result.unwrap().unwrap() {
+                Err(VecboostError::InferenceError(msg)) => {
+                    assert!(
+                        msg.contains("decision inference task"),
+                        "panic must map to InferenceError, got: {msg}"
+                    );
+                }
+                other => panic!("{rid} expected InferenceError, got {other:?}"),
+            }
+        }
     }
 
     /// 验证 worker 退出后健康信息标记为 is_alive=false。

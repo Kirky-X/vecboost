@@ -77,6 +77,20 @@ impl ResponseChannel {
         rx
     }
 
+    /// 移除待处理条目（不发送任何结果）——入队失败早退路径使用：请求从未
+    /// 入队即无 worker 会 complete，receiver 随 handler 返回 drop，条目若不
+    /// 显式移除将永久滞留（cleanup_expired 无生产调用点），持续过载下成为
+    /// 无界增长面（三路评审 M）。
+    pub async fn deregister(&self, request_id: &str) {
+        let removed = {
+            let mut pending = self.pending.write().await;
+            pending.remove(request_id)
+        };
+        if removed.is_some() {
+            debug!("Deregistered response entry for request {}", request_id);
+        }
+    }
+
     /// 完成响应，将结果发送给等待的 handler。
     ///
     /// 锁临界区优化：先在锁内移除并提取 PendingResponse，再在锁外执行 send，

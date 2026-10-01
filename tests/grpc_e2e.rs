@@ -609,11 +609,14 @@ async fn grpc_model_switch_roundtrip_and_failure_protection() {
     .expect("embed after switch");
     assert_eq!(v["embedding"].as_array().map(Vec::len), Some(384));
 
-    // 回归（gRPC 侧）：切换不存在的模型 → 业务错误 success=false 且 4xx，非 5xx
+    // 回归（gRPC 侧）：切换不存在的模型 → 业务错误 success=false 且 4xx，非 5xx。
+    // 用非法 repo-id 格式（含空格，is_valid_hf_repo_id 必拒）：合法格式的不存在
+    // 名会被 candle 引擎当作 HF repo 联网探测，DNS 黑洞/离线环境下挂到 hf 客户端
+    // 超时（实测 ~30s），先撞 gRPC 超时层变 Timeout——e2e 必须离线可跑
     let v = call_raw(
         &mut client,
         "vecboost.model_switch",
-        &json!({"model_name": "definitely-not-a-model-xyz"}).to_string(),
+        &json!({"model_name": "definitely not a model"}).to_string(),
         None,
     )
     .await

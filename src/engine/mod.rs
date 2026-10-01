@@ -1,6 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+pub(crate) mod candle_decision;
 pub(crate) mod candle_engine;
 pub mod factory;
 pub use factory::EngineFactory;
@@ -12,7 +13,10 @@ pub(crate) mod onnx_engine;
 #[cfg(feature = "onnx")]
 pub(crate) mod decision;
 
-#[cfg(feature = "onnx")]
+pub(crate) mod decision_protocol;
+
+// 纯路径探测、无推理后端依赖：onnx（decision）与 candle（candle_decision）
+// 两条决策加载路径共用同一 tokenizer 解析契约
 pub(crate) mod local_bundle;
 
 #[cfg(feature = "mkl")]
@@ -86,9 +90,10 @@ pub trait InferenceEngine: Send + Sync {
 
     /// 决策推理：对给定 state 回答一组 choice/score/noul 问题。
     ///
-    /// 默认返回 `UnsupportedTask`；当前仅 DecisionPipeline 覆盖（task=decision
-    /// 经 [`crate::engine::EngineFactory`] 的 task 分派臂构造），其余引擎继承
-    /// 默认，调用方按 4xx 语义引导客户端换模型/换端点。
+    /// 默认返回 `UnsupportedTask`；当前 DecisionPipeline 与 CandleDecisionEngine
+    /// 覆盖（决策两路，task=decision 经 [`crate::engine::EngineFactory`]
+    /// 的 task 分派臂构造），其余引擎继承默认，调用方按 4xx 语义引导
+    /// 客户端换模型/换端点。
     ///
     /// # 输入契约
     /// 实现方必须假定请求已过 [`DecisionRequest::validate`](crate::domain::DecisionRequest::validate)
@@ -114,6 +119,17 @@ pub trait InferenceEngine: Send + Sync {
     fn decide(&self, _req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
         Err(VecboostError::unsupported_task(
             "decision inference not implemented by this engine".to_string(),
+        ))
+    }
+
+    /// 对齐/诊断出口：未校准逐 marker logits（每行长度 = 该题有效 marker 数，
+    /// 温度施加前的模型原始输出）。仅决策引擎覆盖（onnx/candle 两路）；
+    /// 非决策引擎默认显性 UnsupportedTask。消费方为对齐闸门
+    /// `tests/candle_decision_parity.rs`（`|Δlogit| ≤ 1e-4` 硬闸门），非
+    /// wire 契约，不得作为业务 API 依赖。
+    fn decide_logits(&self, _req: &DecisionRequest) -> Result<Vec<Vec<f32>>, VecboostError> {
+        Err(VecboostError::unsupported_task(
+            "per-marker logits are only produced by decision engines".to_string(),
         ))
     }
 
@@ -262,6 +278,11 @@ pub enum AnyEngine {
     // 同款 lint 抑制先例）
     #[allow(private_interfaces)]
     Decision(decision::DecisionPipeline),
+    /// Candle 原生决策引擎（task=decision + engine_type=candle，无
+    /// onnxruntime 依赖）。构造点同上。
+    // 变体类型 pub(crate)，注释理由同 Decision 臂
+    #[allow(private_interfaces)]
+    CandleDecision(candle_decision::CandleDecisionEngine),
     /// GGUF 量化引擎（Q8_0/Q4_K 加载期反量化桥，）。
     #[cfg(feature = "quantized-gguf")]
     Quantized(quantized_engine::QuantizedCandleEngine),

@@ -1474,7 +1474,11 @@ impl EmbeddingService {
         // 内存上限执法（T021/D21）：按"当前记账 - 旧模型 + 新模型"投影判断，
         // 在替换前执行——旧实现只查上一次记账（已超限才挡新加载，首个超大
         // 模型照样放行，审查 M4 时点矛盾）
-        let new_est = estimate_model_bytes(&model_config.model_path);
+        let new_est = estimate_resident_bytes(
+            model_config.task,
+            &model_config.engine_type,
+            &model_config.model_path,
+        );
         if let Some(ctrl) = &self.memory_limit {
             let limit = ctrl.current_usage() + ctrl.available_bytes();
             let projected = self
@@ -1495,9 +1499,17 @@ impl EmbeddingService {
         // 权衡：此后 manager.load 失败经 `?` 返回时，create 已完成的权重加载被
         // 整体 drop——可接受（manager.load 现仅走元数据构造，几乎不失败）；
         // 若未来 load 变重（真实权重加载）应改为 create 延后或 load 结果预检。
-        let new_engine =
-            crate::engine::EngineFactory::create(model_config.engine_type.clone(), &model_config)
-                .map_err(|e| {
+        // create 走 spawn_blocking（与 decide 的推理口径一致）：candle 决策臂
+        // 的 sha256 校验与 F16→F32 权重物化是秒级同步负载，内联会阻塞
+        // runtime worker。
+        let new_engine = {
+            let cfg = model_config.clone();
+            let engine_type = cfg.engine_type.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::engine::EngineFactory::create(engine_type, &cfg)
+            })
+            .await?
+            .map_err(|e| {
                 // UnsupportedTask 直传：fail-fast 错误须走 to_api_error 的 400 臂
                 //（调用方可换任务/端点），不得与权重缺失混同为 404（评审 R3 四轮）
                 if matches!(e, VecboostError::UnsupportedTask(_)) {
@@ -1507,7 +1519,8 @@ impl EmbeddingService {
                     "model-load-failed",
                     crate::i18n::tr_args(&[("name", &req.model_name), ("detail", &e.to_string())]),
                 ))
-            })?;
+            })?
+        };
 
         if let Some(ref manager) = self.model_manager {
             log::debug!("Using ModelManager for model switching");
@@ -1626,7 +1639,7 @@ impl EmbeddingService {
             .await
             .attach_memory_limit_controller(Arc::clone(ctrl));
         if let Some(mc) = &self.model_config {
-            let est = estimate_model_bytes(&mc.model_path);
+            let est = estimate_resident_bytes(mc.task, &mc.engine_type, &mc.model_path);
             ctrl.update_usage(est).await;
             self.memory_used_est
                 .store(est, std::sync::atomic::Ordering::Relaxed);
@@ -1666,8 +1679,31 @@ impl EmbeddingService {
     }
 }
 
-/// 粗估模型常驻内存：模型目录下一层文件的字节总和（权重为主）。
-/// 作为内存上限记账的输入——精确显存占用需运行时探针，属独立变更。
+/// 内存上限记账入口（switch_model 投影执法与启动期 init 共用）：磁盘粗估
+/// × 引擎驻留系数。candle 决策臂的 F16 checkpoint 以 DType::F32 物化驻留
+/// （candle_decision.rs 的 VarBuilder 构造），磁盘口径系统性低估约 2×，且
+/// 该路径 try_fallback_to_cpu 显性拒绝运行时降级——OOM 防线只剩加载前
+/// 执法，记账必须与 F32 驻留同量级；系数 2 即 F16(2B/参数)→F32(4B/参数)
+/// upcast，F32 磁盘资产被高估属保守方向（更早拒绝超限加载）。
+fn estimate_resident_bytes(
+    task: crate::config::model::ModelTask,
+    engine_type: &crate::config::model::EngineType,
+    path: &std::path::Path,
+) -> u64 {
+    let disk = estimate_model_bytes(path);
+    if task == crate::config::model::ModelTask::Decision
+        && *engine_type == crate::config::model::EngineType::Candle
+    {
+        disk.saturating_mul(2)
+    } else {
+        disk
+    }
+}
+
+/// 粗估模型磁盘占用：模型目录下一层文件的字节总和（权重为主）。
+/// 作为内存上限记账的底数——精确显存占用需运行时探针，属独立变更。
+/// 已知口径偏差：gguf 反量化路径驻留高于磁盘且更大；部署侧预留口径见
+/// docs/USER_GUIDE.md「Candle 原生决策路径」限制节。
 fn estimate_model_bytes(path: &std::path::Path) -> u64 {
     let mut total = 0u64;
     match std::fs::read_dir(path) {
@@ -1871,6 +1907,28 @@ mod tests {
             }
             other => panic!("expected ModelLoadError, got {:?}", other),
         }
+    }
+
+    /// 记账口径钉：candle 决策臂 F16 checkpoint 以 F32 物化驻留（约 2× 磁盘），
+    /// 记账入口须按驻留放大；其余 task/engine 组合维持磁盘口径。
+    #[test]
+    fn test_estimate_resident_bytes_candle_decision_f32_upcast() {
+        let temp_dir = tempdir().unwrap();
+        std::fs::write(temp_dir.path().join("model.safetensors"), vec![0u8; 1000]).unwrap();
+
+        assert_eq!(
+            estimate_resident_bytes(ModelTask::Decision, &EngineType::Candle, temp_dir.path()),
+            2000
+        );
+        assert_eq!(
+            estimate_resident_bytes(ModelTask::Embedding, &EngineType::Candle, temp_dir.path()),
+            1000
+        );
+        #[cfg(feature = "onnx")]
+        assert_eq!(
+            estimate_resident_bytes(ModelTask::Decision, &EngineType::Onnx, temp_dir.path()),
+            1000
+        );
     }
 
     #[tokio::test]
@@ -3220,7 +3278,9 @@ mod tests {
                 name: "laya-multilingual".to_string(),
                 model_path: absent_bundle.clone(),
                 task: crate::config::model::ModelTask::Decision,
-                engine_type: None,
+                // 决策臂按 engine_type 分派后端：本测试钉 ort DecisionPipeline
+                // 的错误面（"No Laya ONNX"），显式 onnx 而非回落 Candle
+                engine_type: Some("onnx".to_string()),
                 tokenizer_path: None,
                 head_max_len: None,
                 max_len: None,
@@ -3614,6 +3674,9 @@ mod tests {
         std::fs::write(&old_tokenizer, b"{}").expect("write old tokenizer file");
         let mut old_config = make_model_config("tok-origin", 384);
         old_config.tokenizer_path = Some(old_tokenizer);
+        // 决策臂按 engine_type 分派后端：本测试钉 ort DecisionPipeline 的
+        // tokenizer 探测错误面，切换有效 engine_type 需显式 onnx
+        old_config.engine_type = crate::config::model::EngineType::Onnx;
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
         let mut service = EmbeddingService::new(engine, Some(old_config));

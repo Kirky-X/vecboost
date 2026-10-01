@@ -277,11 +277,11 @@ fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelC
         _ => std::path::PathBuf::from(&config.model.model_repo),
     };
     // tokenizer_path 消费者：onnx 本地 bundle 分支（按 engine_type）+ 决策
-    // 管线（按 task——工厂 task-first 分派臂 DecisionPipeline::load 消费，
-    // engine_type 不参与）；candle embedding 路径与 onnx HF 拉取分支均无
-    // 消费者，配置值会静默 no-op——沿用 use_gpu 无 feature 回退告警惯例，
-    // 启动期显性提示。本地判定与 onnx_engine with_device 同口径
-    // （exists() && is_dir()）。
+    // 管线（task=decision 时工厂按 engine_type 分派决策后端——candle 原生
+    // 决策头与 onnx DecisionPipeline 两路均消费）；candle embedding 路径与
+    // onnx HF 拉取分支均无消费者，配置值会静默 no-op——沿用 use_gpu 无
+    // feature 回退告警惯例，启动期显性提示。本地判定与 onnx_engine
+    // with_device 同口径（exists() && is_dir()）。
     if config.model.tokenizer_path.is_some()
         && tokenizer_path_is_noop(&engine_type, &config.model.task, &model_path)
     {
@@ -318,11 +318,11 @@ fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelC
 
 /// `[model].tokenizer_path` 在该引擎/任务/模型路径组合下是否静默 no-op。
 /// 两个真实消费者：onnx 本地 bundle 分支（`resolve_local_bundle` 的
-/// explicit 路径，按 engine_type）与决策管线（工厂 task-first 分派臂
-/// `DecisionPipeline::load` 的 explicit 路径，按 task，engine_type 不
-/// 参与）；本地判定与 `onnx_engine` 的 `with_device` 同口径
-/// （`exists() && is_dir()`）。其余组合（candle embedding、onnx HF 拉取
-/// 分支、任何非本地路径）不读该字段。
+/// explicit 路径，按 engine_type）与决策管线（工厂 task=decision 分派臂
+/// 按 engine_type 选后端——candle 原生决策头与 onnx `DecisionPipeline`
+/// 两路的 explicit 路径均消费）；本地判定与 `onnx_engine` 的
+/// `with_device` 同口径（`exists() && is_dir()`）。其余组合（candle
+/// embedding、onnx HF 拉取分支、任何非本地路径）不读该字段。
 /// `[model.checkpoints]` 启动 fail-fast（沿用既有装配口径：配置错误拒绝
 /// 启动而非静默忽略，对齐 [semantic_cache].comparison_mode 校验位）：
 /// 合并内置 `laya-multilingual` 预设后逐条目校验 + TOML 键与条目 name
@@ -2406,9 +2406,10 @@ mod tests {
     }
 
     // tokenizer_path no-op 判定覆盖面：消费者有两类——onnx 本地 bundle
-    // 分支（按 engine_type）与决策管线（按 task，engine_type 不参与，
-    // 含 candle+decision 组合）；其余（candle embedding、onnx HF 拉取、
-    // 任何非本地目录）一律 no-op 纳入启动期 warn（防配置值静默失效无感知）
+    // 分支（按 engine_type）与决策管线（task=decision 时按 engine_type
+    // 分派后端，candle/onnx 两路均消费，判定本身不分 engine_type）；
+    // 其余（candle embedding、onnx HF 拉取、任何非本地目录）一律 no-op
+    // 纳入启动期 warn（防配置值静默失效无感知）
     #[test]
     fn tokenizer_path_noop_covers_candle_and_onnx_hf_pull() {
         let bundle = std::env::temp_dir().join(format!("vb_tok_noop_{}", std::process::id()));
@@ -2421,7 +2422,7 @@ mod tests {
         );
         assert!(
             !tokenizer_path_is_noop(&EngineType::Candle, &ModelTask::Decision, &bundle),
-            "决策管线按 task 消费（工厂 task-first 臂），candle+decision+本地目录非 no-op"
+            "决策管线按 engine_type 分派后端（candle/onnx 两路均消费），candle+decision+本地目录非 no-op"
         );
         assert!(
             tokenizer_path_is_noop(&EngineType::Candle, &ModelTask::Decision, hf_repo),

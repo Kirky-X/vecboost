@@ -350,6 +350,97 @@ ONNX 主模型文件探测按管线分化（任务协议约定）：embedding（
 `model_quantized.onnx` → `laya.onnx` → `laya_int8.onnx` 固定清单（fp32 主模型
 优先）。
 
+#### Candle 原生决策路径
+
+`engine_type = "candle"` + `task = "decision"` 走 Rust 原生决策头前向
+（ModernBERT-large 骨干 + 决策头，**无 onnxruntime 动态库依赖**），与
+`engine_type = "onnx"` 的 ort 管线消费不同形态的官方资产：
+
+```toml
+[model]
+model_path = "models/laya-pytorch"   # PyTorch checkpoint 目录（布局见下）
+task = "decision"
+engine_type = "candle"               # 缺省即 candle，显式写出便于辨认
+```
+
+`engine_type = "onnx"` 时同一配置消费 `models/laya-decision` 的 ONNX
+bundle（上文「Laya 决策 bundle 获取」）；两路共用同一预处理协议、三类
+后处理与温度校准语义，`|Δlogit| ≤ 1e-4` 数值对齐由离线闸门测试钉住。
+
+官方 PyTorch checkpoint 为 `convaiinnovations/laya` 的 safetensors
+权重，通过库 API `download_files` 拉取以下 5 文件到 `models/laya-pytorch/`
+（仅 HF 直连，镜像限制同上）：
+
+```rust
+use std::path::Path;
+use vecboost::utils::hf_hub::download_files;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let files = [
+        "model.safetensors",
+        "rl_agent_config.json",
+        "encoder/config.json",
+        "tokenizer/tokenizer.json",
+        "tokenizer/tokenizer_config.json",
+    ];
+    let manifest: Vec<(String, std::path::PathBuf)> = files
+        .iter()
+        .map(|f| ((*f).to_string(), std::path::PathBuf::from(f)))
+        .collect();
+    let downloaded = download_files(
+        "convaiinnovations/laya",
+        &manifest,
+        Path::new("models/laya-pytorch"),
+    )
+    .await?;
+    println!("downloaded {} files", downloaded.len());
+    Ok(())
+}
+```
+
+也可用 huggingface-cli 等价预取：
+`huggingface-cli download convaiinnovations/laya model.safetensors rl_agent_config.json encoder/config.json tokenizer/tokenizer.json tokenizer/tokenizer_config.json --local-dir models/laya-pytorch`。
+
+- `model.safetensors`（842,609,210 字节 ≈ 0.84 GB，F16 存储，运行时自动
+  upcast F32）：ModernBERT-large 骨干（`encoder/` 键前缀）+ 决策头（
+  `head/`/`scorer/`/`act_head/`/`type_emb` 键）。
+- `models/` 已被 `.gitignore` 覆盖，checkpoint 不入 git。
+- `tokenizer/` 落位契合 bundle 同款解析契约（根目录 `tokenizer.json` →
+  `tokenizer/tokenizer.json`）。
+- `rl_agent_config.json` 为决策头超参参考（head_layers=2、head_max_len=192、
+  分桶校准温度 `temperature_by_options`）；其分桶键格式（如 `choice:3-5`）
+  与 bundle 侧 `laya_config.json` 的 cardinality 整数键不同，当前不解析——
+  candle 路径温度校准沿用「缺 `laya_config.json` 回退 1.2」的现状。
+- 对齐闸门测试（candle 原生前向 vs onnx `DecisionPipeline` 同题对照，
+  `|Δlogit| ≤ 1e-4`）以该 checkpoint 与 `ORT_DYLIB_PATH` 就位为先决条件，
+  缺失时整文件 SKIP（探测函数集中于 `tests/common/mod.rs`）。
+
+**限制与注意**：
+
+- 权重以 F16 存储，加载时统一 upcast F32 计算；`[model] device` 沿用
+  candle 惯例（CUDA/Metal 可用即用，AMD/OpenCL 显性回退 CPU），无 ort 的
+  CUDA EP 执行提供方切换。
+- 温度校准沿用「checkpoint 目录缺 `laya_config.json` 回退 1.2」的现状；
+  `rl_agent_config.json` 的分桶键格式（如 `choice:3-5`）与 bundle 校准表
+  的整数 cardinality 键不同，当前不解析。需要校准概率的部署请使用 onnx
+  bundle 路径（bundle 自带校准文件）。
+- 预算/校验面与 onnx 路径完全一致：head+options ≤192 token（默认口径）、
+  state ≤256 token，超界 400；`model_sha256` 仅校验主权重文件。
+- **并发内存轮廓**：决策前向逐层物化 `[B, H, T, T]` 注意力得分张量
+  （B=批内题数、H=注意力头数、T=序列长度），瞬态内存 O(B·H·T²)，决策
+  前向无内部串行化——并发请求数 K 线性放大瞬态峰值（onnx 路径由 ort
+  session 互斥天然串行，candle 路径无此约束）。容量规划按「峰值并发 ×
+  单请求峰值」预留内存。
+- **`memory_limit` 记账按 F32 驻留口径**：candle 决策权重 F16 存储（磁盘
+  ≈0.84 GB）加载后统一 upcast F32 驻留（≈1.7 GB），decision + candle 组合
+  的记账按 2× 磁盘大小放大以对齐驻留（F32 checkpoint 磁盘资产会被高估，
+  属保守方向）；gguf 反量化路径（embedding 任务）记账仍按磁盘口径，实际
+  驻留更高，需部署侧自行预留余量。
+- 对拍侧断言 `|Δlogit| ≤ 1e-4` 为硬闸门（`tests/candle_decision_parity.rs`，
+  `--features onnx` 构建下运行），checkpoint 或 onnx bundle 任一漂移会先行
+  红灯。
+
 #### 多 checkpoint 配置与切换
 
 `[model.checkpoints.<name>]` 预设表为多 checkpoint 部署提供命名配置：每个

@@ -39,11 +39,18 @@ impl EngineFactory {
         engine_type: EngineType,
         config: &ModelConfig,
     ) -> Result<AnyEngine, VecboostError> {
-        // task 路由（主维度）：task=decision 一律走决策管线——Laya bundle
-        // 为 onnx 格式，`engine_type` 在该任务下不参与分派（模型运行框架
-        // 的 task-first 语义）。ensure_supports_task 因 DecisionPipeline
-        // 的 supports_task(Decision)=true 覆盖自动放行。
+        // task 路由（主维度）：task=decision 一律走决策引擎。engine_type
+        // 在该任务下决定推理后端：candle → 原生决策头（无 onnxruntime 依赖，
+        // 消费 convaiinnovations/laya PyTorch checkpoint）；onnx → ort 管线
+        // （消费 receptron/laya-onnx bundle）。ensure_supports_task 因决策
+        // 引擎的 supports_task(Decision)=true 覆盖自动放行。
         if config.task == ModelTask::Decision {
+            if engine_type == EngineType::Candle {
+                let engine = super::candle_decision::CandleDecisionEngine::load(config)?;
+                let any = AnyEngine::CandleDecision(engine);
+                ensure_supports_task(&any, config)?;
+                return Ok(any);
+            }
             #[cfg(feature = "onnx")]
             {
                 let engine = super::decision::DecisionPipeline::load(config)?;
@@ -161,20 +168,19 @@ mod tests {
         assert!(engine.supports_task(crate::config::model::ModelTask::Embedding));
     }
 
-    /// task=decision 走决策管线分派臂：空 bundle 时报 ModelLoadError
-    /// （bundle 探测失败）而非 UnsupportedTask——证明分派到达
-    /// DecisionPipeline::load，而非落进 embedding 引擎的 fail-fast
+    /// task=decision + engine_type=onnx 走 ort 决策管线分派臂：空 bundle 时
+    /// 报 ModelLoadError（bundle 探测失败）而非 UnsupportedTask——证明分派
+    /// 到达 DecisionPipeline::load，而非落进 embedding 引擎的 fail-fast
     /// （评审：AnyEngine::Decision 曾全库零构造点，全链在线闸门不可达）。
-    /// 探测失败发生在 Session 构建之前，本测试不触发 ort。engine_type
-    /// 取 Candle 亦走决策臂，钉住 task 主维度语义。
+    /// 探测失败发生在 Session 构建之前，本测试不触发 ort。
     #[cfg(feature = "onnx")]
     #[test]
-    fn test_create_decision_task_dispatches_to_decision_pipeline() {
+    fn test_create_decision_task_dispatches_to_onnx_pipeline() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = test_config();
         config.task = crate::config::model::ModelTask::Decision;
         config.model_path = dir.path().to_path_buf();
-        let result = EngineFactory::create(EngineType::Candle, &config);
+        let result = EngineFactory::create(EngineType::Onnx, &config);
         match result {
             Err(VecboostError::ModelLoadError(msg)) => {
                 assert!(
@@ -186,6 +192,77 @@ mod tests {
                 panic!("分派臂接线后 task=decision 不得落入 embedding 引擎 fail-fast：{msg}")
             }
             other => panic!("期望 ModelLoadError，got {:?}", other.err()),
+        }
+    }
+
+    /// task=decision + engine_type=candle 走 candle 原生决策头分派臂（无
+    /// onnx runtime 依赖）：空目录时报 candle 加载路径的目录探测错误而非
+    /// UnsupportedTask——钉住 engine_type 在决策任务下的后端分派语义。
+    #[test]
+    fn test_create_decision_task_dispatches_to_candle_engine() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = test_config();
+        config.task = crate::config::model::ModelTask::Decision;
+        config.model_path = dir.path().to_path_buf();
+        let result = EngineFactory::create(EngineType::Candle, &config);
+        match result {
+            Err(VecboostError::ModelLoadError(msg)) => {
+                assert!(
+                    msg.contains("checkpoint not found"),
+                    "分派臂必须报 candle 决策引擎资产探测错误，msg={msg}"
+                );
+            }
+            Err(VecboostError::UnsupportedTask(msg)) => {
+                panic!("candle 决策分派臂不得落入 embedding 引擎 fail-fast：{msg}")
+            }
+            other => panic!("期望 ModelLoadError，got {:?}", other.err()),
+        }
+    }
+
+    /// 离线端到端：合成 checkpoint bundle（tiny 权重 + 官方 5.0 嵌套
+    /// rope_parameters 格式 encoder config + WordLevel tokenizer）→
+    /// EngineFactory 按 task=Decision + engine_type=candle 分派成功创建 →
+    /// decide 三题型各一答案（qtype 0/1/2 wire 三分支），不产向量/不报
+    /// rerank（诚实语义与 DecisionPipeline 同款）。
+    #[test]
+    fn test_create_candle_decision_engine_end_to_end() {
+        use crate::domain::{DecisionAnswerBody, DecisionRequest};
+        use crate::engine::InferenceEngine;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bundle = crate::engine::candle_decision::test_support::write_bundle(dir.path());
+        let mut config = test_config();
+        config.task = crate::config::model::ModelTask::Decision;
+        config.model_path = bundle;
+        let engine = EngineFactory::create(EngineType::Candle, &config)
+            .expect("合成 bundle 必须分派成功创建 candle 决策引擎");
+        assert!(engine.supports_task(crate::config::model::ModelTask::Decision));
+        assert!(!engine.supports_task(crate::config::model::ModelTask::Embedding));
+        let req: DecisionRequest = serde_json::from_str(
+            r#"{"state":"hello","questions":[
+                {"name":"destination","qtype":"choice","instructions":"pick one","options":["beach","mountain"]},
+                {"name":"urgency","qtype":"score","instructions":"rate urgency"},
+                {"name":"churn_risk","qtype":"noul","instructions":"churning?"}
+            ]}"#,
+        )
+        .expect("guard request");
+        let resp = engine.decide(&req).expect("decide");
+        assert_eq!(resp.answers.len(), 3, "三题型各一答案");
+        assert!(matches!(
+            resp.answers[0].answer,
+            DecisionAnswerBody::Choice { .. }
+        ));
+        assert!(matches!(
+            resp.answers[1].answer,
+            DecisionAnswerBody::Score { .. }
+        ));
+        assert!(matches!(
+            resp.answers[2].answer,
+            DecisionAnswerBody::Noul { .. }
+        ));
+        assert!(!engine.supports_rerank(), "决策引擎不得谎报 rerank 能力");
+        match engine.embed("text") {
+            Err(VecboostError::UnsupportedTask(_)) => {}
+            other => panic!("决策引擎 embed 必须显性 UnsupportedTask，got {other:?}"),
         }
     }
 

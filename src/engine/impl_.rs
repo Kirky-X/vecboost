@@ -39,6 +39,7 @@ impl InferenceEngine for AnyEngine {
             #[cfg(feature = "onnx")]
             // 决策引擎的 embed 覆盖返回 UnsupportedTask（不产向量）
             AnyEngine::Decision(engine) => engine.embed(text),
+            AnyEngine::CandleDecision(engine) => engine.embed(text),
         }
     }
 
@@ -51,6 +52,7 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.embed_batch(texts),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.embed_batch(texts),
+            AnyEngine::CandleDecision(engine) => engine.embed_batch(texts),
         }
     }
 
@@ -63,6 +65,7 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.precision(),
+            AnyEngine::CandleDecision(engine) => engine.precision(),
         }
     }
 
@@ -75,6 +78,7 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.supports_mixed_precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.supports_mixed_precision(),
+            AnyEngine::CandleDecision(engine) => engine.supports_mixed_precision(),
         }
     }
 
@@ -88,6 +92,7 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.is_fallback_triggered(),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.is_fallback_triggered(),
+            AnyEngine::CandleDecision(engine) => engine.is_fallback_triggered(),
         }
     }
 
@@ -101,6 +106,8 @@ impl InferenceEngine for AnyEngine {
             #[cfg(feature = "onnx")]
             // 决策管线未覆盖 count_tokens，走 trait 默认（调用方回退 bytes/4）
             AnyEngine::Decision(engine) => InferenceEngine::count_tokens(engine, text),
+            // candle 决策引擎同口径：未覆盖 count_tokens，走 trait 默认
+            AnyEngine::CandleDecision(engine) => InferenceEngine::count_tokens(engine, text),
         }
     }
 
@@ -117,6 +124,8 @@ impl InferenceEngine for AnyEngine {
             #[cfg(feature = "onnx")]
             // 决策管线暂无分阶段埋点，走 trait 默认 None
             AnyEngine::Decision(engine) => InferenceEngine::take_stage_snapshot(engine),
+            // candle 决策引擎同口径：无分阶段埋点，走 trait 默认 None
+            AnyEngine::CandleDecision(engine) => InferenceEngine::take_stage_snapshot(engine),
         }
     }
 
@@ -129,6 +138,7 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.try_fallback_to_cpu(config).await,
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.try_fallback_to_cpu(config).await,
+            AnyEngine::CandleDecision(engine) => engine.try_fallback_to_cpu(config).await,
         }
     }
 
@@ -143,6 +153,24 @@ impl InferenceEngine for AnyEngine {
             // trait 方法（DecisionPipeline 固有方法名为 decision()，无同名
             // 遮蔽）：覆盖后经 trait 自然进决策管线，漏转发即恒 UnsupportedTask
             AnyEngine::Decision(engine) => engine.decide(req),
+            // trait 方法（CandleDecisionEngine 固有方法名为 decide_impl()，
+            // 无同名遮蔽）：覆盖后经 trait 自然进 candle 决策头
+            AnyEngine::CandleDecision(engine) => engine.decide(req),
+        }
+    }
+
+    /// 对齐/诊断出口按变体转发：仅决策两路有真实覆盖，其余引擎走 trait
+    /// 默认 UnsupportedTask（与 decide 同款漏转发即恒失败的分布口径）
+    fn decide_logits(&self, req: &DecisionRequest) -> Result<Vec<Vec<f32>>, VecboostError> {
+        match self {
+            AnyEngine::Candle(engine) => engine.decide_logits(req),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(engine) => engine.decide_logits(req),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.decide_logits(req),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Decision(engine) => engine.decide_logits(req),
+            AnyEngine::CandleDecision(engine) => engine.decide_logits(req),
         }
     }
 
@@ -155,6 +183,23 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.supports_task(task),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.supports_task(task),
+            AnyEngine::CandleDecision(engine) => engine.supports_task(task),
+        }
+    }
+
+    /// rerank 能力自报必须按变体转发：决策引擎（onnx/candle 两路）覆盖
+    /// false（不产向量），漏转发会让 service/rerank 的能力检查误放行。
+    /// embedding 引擎继承 trait 默认 true（bi-encoder rerank）。
+    fn supports_rerank(&self) -> bool {
+        match self {
+            AnyEngine::Candle(engine) => engine.supports_rerank(),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(engine) => engine.supports_rerank(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => engine.supports_rerank(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Decision(engine) => engine.supports_rerank(),
+            AnyEngine::CandleDecision(engine) => engine.supports_rerank(),
         }
     }
 
@@ -179,6 +224,10 @@ impl InferenceEngine for AnyEngine {
             // 决策管线无内存感知分支，UFCS 显式走 trait 默认 no-op
             //（与 Quantized 臂同口径）
             AnyEngine::Decision(engine) => {
+                InferenceEngine::attach_memory_limit_controller(engine, controller)
+            }
+            // candle 决策引擎同口径：无内存感知分支，UFCS 显式走 trait 默认 no-op
+            AnyEngine::CandleDecision(engine) => {
                 InferenceEngine::attach_memory_limit_controller(engine, controller)
             }
         }
@@ -606,6 +655,7 @@ mod tests {
             AnyEngine::Onnx(_) => panic!("expected Candle variant"),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(_) => panic!("expected Candle variant"),
+            AnyEngine::CandleDecision(_) => panic!("expected Candle variant"),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(_) => panic!("expected Candle variant"),
         };
@@ -619,6 +669,7 @@ mod tests {
             AnyEngine::Onnx(_) => panic!("expected Candle variant"),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(_) => panic!("expected Candle variant"),
+            AnyEngine::CandleDecision(_) => panic!("expected Candle variant"),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(_) => panic!("expected Candle variant"),
         };

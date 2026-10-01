@@ -389,6 +389,12 @@ fn aggregate_download_error(
 mod tests {
     use super::*;
 
+    /// detect_mirror_risk 三用例都要改写进程全局 HF_ENDPOINT；cargo test
+    /// 默认多线程并行，无锁时 no_env 用例的 remove→assert 窗口会被 mirror
+    /// 用例的 set 并发撞穿（全量回归偶发断言失败）。该变量全仓仅
+    /// detect_mirror_risk 一处读取，三用例互斥即根治。
+    static HF_ENDPOINT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     // =========================================================================
     // is_valid_hf_repo_id 单元测试(vuln-0009 修复)
     // =========================================================================
@@ -480,6 +486,7 @@ mod tests {
 
     #[test]
     fn test_detect_mirror_risk_no_env() {
+        let _guard = HF_ENDPOINT_ENV_LOCK.lock().unwrap();
         let saved = std::env::var("HF_ENDPOINT").ok();
         unsafe { std::env::remove_var("HF_ENDPOINT") };
         assert!(detect_mirror_risk().is_none());
@@ -490,6 +497,7 @@ mod tests {
 
     #[test]
     fn test_detect_mirror_risk_official_endpoint() {
+        let _guard = HF_ENDPOINT_ENV_LOCK.lock().unwrap();
         let saved = std::env::var("HF_ENDPOINT").ok();
         unsafe { std::env::set_var("HF_ENDPOINT", "https://huggingface.co") };
         assert!(detect_mirror_risk().is_none());
@@ -501,6 +509,7 @@ mod tests {
 
     #[test]
     fn test_detect_mirror_risk_mirror_endpoint() {
+        let _guard = HF_ENDPOINT_ENV_LOCK.lock().unwrap();
         let saved = std::env::var("HF_ENDPOINT").ok();
         unsafe { std::env::set_var("HF_ENDPOINT", "https://hf-mirror.com") };
         let result = detect_mirror_risk();

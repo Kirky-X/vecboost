@@ -82,12 +82,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !bundle_path.is_dir() {
         println!("⚠️ bundle 目录不存在: {bundle}");
         println!("   SKIP 语义：打印下载指引后正常退出。");
-        println!("\n📥 下载指引（任选一种）：");
-        println!("   huggingface-cli download Mattepiu/laya-onnx --local-dir {bundle}");
+        println!("\n📥 下载指引（推荐：库 API 一次拉取官方 bundle，仅 HF 直连）：");
+        println!(
+            "   vecboost::utils::hf_hub::download_files(LAYA_BUNDLE_REPO, &manifest, Path::new(\"{bundle}\"))"
+        );
+        println!("   # 官方仓库 receptron/laya-onnx，清单常量 LAYA_BUNDLE_FILES（5 文件），");
+        println!("   # 完整用法见 USER_GUIDE「Laya 决策 bundle 获取」节。");
         println!("   # 或从 convaiinnovations/laya 系列 checkpoint 导出后放置：");
         println!("   #   {bundle}/model.onnx | laya.onnx（模型图 + 外部权重数据文件同目录）");
         println!("   #   {bundle}/tokenizer.json 或 {bundle}/tokenizer/tokenizer.json");
         println!("   #   {bundle}/laya_config.json（可选，per-cardinality 温度校准）");
+        println!(
+            "   ⚠️ 禁用注记：Mattepiu/laya-onnx 为 marker 维静态 [.,2] 坏产物，禁止作为下载目标。"
+        );
         return Ok(());
     }
 

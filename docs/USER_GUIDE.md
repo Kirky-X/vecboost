@@ -185,6 +185,7 @@ cp config/config.toml config/config_custom.toml
 | `[pipeline.worker]` | 时间窗拼批 `batch_wait_ms` / `max_batch_size` / 停机排空 `drain_timeout_secs` | - |
 | `[semantic_cache]` | 语义缓存 `comparison_mode`（已废弃，配置保留但不生效）、`fuzzy_threshold` | oxcache |
 | `[device]` | 硬件感知规划 `auto_plan` | - |
+| `[translation]` | 翻译多语言对 `[[translation.pairs]]`（路由、bundle 路径、token 预算） | -（需 `onnx` feature） |
 
 > **⚠️ 注意**：`[flow_control]` 与 `[cache]` 两个 TOML 段**当前版本不解析，编辑不生效**（历史遗留段名）；限流走 `[rate_limit]`，缓存走 `[embedding]` 与 `[semantic_cache]`。调优开关注册表见 [⚡ 性能指南](PERFORMANCE.md)。
 
@@ -264,19 +265,24 @@ max_sequence_length = 8192  # 每请求最大令牌数
 | `max_sequence_length` | `8192` | 最大序列长度 |
 
 > **`task`（引擎级 ModelConfig 字段，默认 `embedding`）**：任务维度，可选
-> `embedding` / `decision`。`[model]` 段已支持 `task` 配置；非法值（如
+> `embedding` / `decision` / `translate`。`[model]` 段已支持 `task` 配置；非法值（如
 > `"rerank"`)在配置解析时显性报错。配置 `task = "decision"` 时经
 > `EngineFactory` 的 task 分派臂加载 Laya 决策管线（bundle 就绪时成功；
 > bundle 缺失/不完整时报 `ModelLoadError`），`/api/1/decisions` 决策端点
-> 可用，`/embed` 等向量端点以 `UnsupportedTask`（400）显性拒绝——任务
-> 二选一，见 `config/config.toml` `[model]` 段 bundle 布局说明。
+> 可用，`/embed` 等向量端点以 `UnsupportedTask`（400）显性拒绝——见
+> `config/config.toml` `[model]` 段 bundle 布局说明。
+> 配置 `task = "translate"` 时经分派臂加载 ONNX seq2seq 翻译引擎（仅
+> `engine_type = "onnx"`，candle 显性拒绝），`/api/1/translate` 端点可用；
+> 翻译语言对不消费 `[model]` 段——走 `[translation]` 配置段（见下文
+> 「翻译多语言对配置」节）。
 > `#[serde(default)]` 保证旧配置文件零破坏。
 >
 > **`engine_type`（引擎级 ModelConfig 字段，默认 `candle`）**：推理引擎
 > 类型，可选 `candle` / `onnx`。`[model]` 段已支持 `engine_type` 配置
 > （缺省 `None` = candle，现状行为零破坏）；`"onnx"` 需以 `--features
 > onnx` 构建，未知值启动期显性报错。`task = "decision"` 时本字段不参与
-> 分派（Laya bundle 为 onnx 格式，task 主维度优先）。
+> 分派（Laya bundle 为 onnx 格式，task 主维度优先）；`task = "translate"`
+> 时强制 onnx（candle 无 seq2seq 实现，配置即启动期报错）。
 > 决策请求 token 上界：每题 head+options（题干 + 选项）合计 ≤192 token，
 > state 段 ≤256 token（超长取前缀）；超界请求以 400 显性拒绝（不截断
 > 题干/选项——截断会改题意）。本层字符/字节校验放行的长请求可能因该
@@ -415,6 +421,122 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - 对齐闸门测试（candle 原生前向 vs onnx `DecisionPipeline` 同题对照，
   `|Δlogit| ≤ 1e-4`）以该 checkpoint 与 `ORT_DYLIB_PATH` 就位为先决条件，
   缺失时整文件 SKIP（探测函数集中于 `tests/common/mod.rs`）。
+
+---
+
+### 翻译多语言对配置
+
+翻译由 `[translation]` 段的 `[[translation.pairs]]` 数组表驱动（与
+`[model]` 任务段正交）：每对启动期急切构建（`EngineFactory` task=translate
+分派臂，`onnx` feature），任一 bundle 缺失**启动期 fail-fast**（错误含语言
+对标识）；零配置时服务仍无条件预构建，`/api/1/translate` 端点注册、请求
+以 `400`（`translate-not-configured`）显性拒绝。
+
+```toml
+[translation]
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "zh"
+model_path = "models/opus-mt-en-zh"
+# tokenizer_path = "models/opus-mt-en-zh/tokenizer.json"   # 可选显式覆盖
+# max_source_tokens = 512    # 可选（缺省 512，硬上限 1024）
+# max_new_tokens = 512       # 可选（缺省 512，硬上限 1024）
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "es"
+model_path = "models/opus-mt-en-es"
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `source_language` / `target_language` | ✅ | 小写 ISO 639-1 码（无等价者 639-3），`^[a-z]{2,3}$`，大写显性拒绝，无大小写归一；`(source,target)` 重复对启动期报错 |
+| `model_path` | ✅ | 翻译 bundle 目录（契约见下节） |
+| `tokenizer_path` | ❌ | tokenizer 显式覆盖（缺省 bundle 内 `tokenizer.json`） |
+| `max_source_tokens` / `max_new_tokens` | ❌ | token 预算（缺省 512/512，硬上限 1024，超限启动期报错） |
+
+pair 数上限 16（每对一个驻留 bundle，内存预算防线）。请求按
+`(source_language, target_language)` 精确路由：未命中返回 `400`
+`translate-unsupported-pair`（消息含请求对与已配置 pairs 全集）；`source_language`
+缺省时经 whatlang auto 检测（与 `/api/1/detect` 同一实现），不可靠（纯数字/
+过短文本）返回 `400` `translate-detect-failed`，可靠则回填
+`detected_source_language`。无可用模型报错示例（bundle 缺失，启动期）：
+
+```text
+Error: [translation] pairs[0] (en-zh) 加载失败: No encoder model found in
+translation bundle models/opus-mt-en-zh; tried: …/onnx/encoder_model.onnx,
+…/onnx/encoder_model_quantized.onnx
+```
+
+### 翻译 bundle 契约
+
+目录结构（`model_path` 指向 bundle 根）：
+
+```text
+<bundle>/tokenizer.json                        # 强制：tokenizers 0.23 仅支持
+                                               # tokenizer.json 四类模型（.spm 不支持）
+<bundle>/generation_config.json                # 解码锚点（decoder_start/eos token）
+<bundle>/onnx/encoder_model.onnx               # fp32（探测优先）或 _quantized 变体
+<bundle>/onnx/decoder_model_merged.onnx        # merged 变体（自回归必需）
+```
+
+推荐仓库（HF，Xenova 转换版）：`Xenova/opus-mt-en-zh`、
+`Xenova/opus-mt-en-es`。下载方式（库 API，与 Laya bundle 同一
+`download_files` 通道，仅 HF 直连）：
+
+```rust
+use vecboost::utils::hf_hub::{TRANSLATE_BUNDLE_FILES, TRANSLATE_BUNDLE_REPO, download_files};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let manifest: Vec<(String, std::path::PathBuf)> = TRANSLATE_BUNDLE_FILES
+        .iter()
+        .map(|f| ((*f).to_string(), std::path::PathBuf::from(f)))
+        .collect();
+    let downloaded = download_files(
+        TRANSLATE_BUNDLE_REPO,
+        &manifest,
+        std::path::Path::new("models/opus-mt-en-zh"),
+    )
+    .await?;
+    println!("downloaded {} files", downloaded.len());
+    Ok(())
+}
+```
+
+内置清单常量 `TRANSLATE_BUNDLE_REPO = "Xenova/opus-mt-en-zh"`，共 7 文件
+（config.json、generation_config.json、tokenizer.json、onnx/ 下 encoder 与
+decoder_model_merged 的 fp32 与 quantized 变体），与上游实际文件的一致性由
+联网集成测试钉住。
+
+- `model_sha256` 配置仅校验探测命中的 encoder/decoder 主模型（双模型任一
+  失配即拒绝）；tokenizer.json 与 generation_config.json 以 bundle 目录权限
+  作为可信边界（与决策 bundle 同一口径）。
+- 容量与内存：每 bundle 磁盘约 559 MB（fp32 双模型 + int8 变体 + tokenizer）；
+  驻留记账按磁盘 × 保守系数 2.0 估算（int8 驻留系数无实测标定，实测后修正）；
+  pair 上限 16 为内存预算防线。
+
+**限制与注意**：
+
+- Marian（2019 架构）质量上限，不承诺 BLEU 指标。
+- **同 pair 串行与背压**（评审 RES-1/PERF-1）：每个语言对推理严格串行
+  （permits=1 信号量），同 pair 并发请求超过 1 个时立即返回 `503`
+  Overloaded（非无限排队）——客户端应按 pair 维度做请求合并/退避重试；
+  不同 pair 之间可并行。
+- `is_reliable` 短文本边界：whatlang 对过短/纯数字/纯符号文本判不可靠，
+  auto 检测路径显性 400（`translate-detect-failed`）；建议这类请求显式指定
+  `source_language`。语言白名单（`/detect` 的 `allow` 与
+  `translation.pairs[].source_language`）仅接受检测引擎已发布的语言码
+  （"sw"/"yo" 等真实 ISO 639-1 码不在 whatlang 70 变体内，配置/请求期
+  显性拒绝）。
+- `task = "translate"` 主模型用法的 token 参数恒为默认 512/512（无配置
+  入口）；参数可调的翻译部署请使用 `[translation].pairs`（评审 SEC-5）。
+- 贪心解码走无缓存分支（Xenova merged 图缓存分支存在导出缺陷，每步全量
+  重算，O(L²) 成本有界于 `max_new_tokens`）——正确性优先的取舍，见
+  `src/engine/onnx_translate.rs` 模块文档。
+- CJK 字符混排进英文源文本时 en-es 等拉丁词表 pair 会产生 mojibake（OOV
+  产物）；CJK 内容建议以 en-zh 类 pair 承载。
 
 **限制与注意**：
 
@@ -833,6 +955,63 @@ curl -X POST http://localhost:9002/api/1/model/switch \
   -H "Content-Type: application/json" \
   -d '{"model_name": "bge-m3-st"}'
 ```
+
+---
+
+### 🌍 翻译与语言检测
+
+翻译（需 `onnx` feature 构建 + `[translation]` 段配置语言对，见
+[翻译多语言对配置](#翻译多语言对配置)）：
+
+```bash
+curl -X POST http://localhost:9002/api/1/translate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello, my dog is cute", "source_language": "en", "target_language": "zh"}'
+```
+
+**响应:**
+
+```json
+{
+  "translation": "你好,我的狗好可爱",
+  "source_language": "en",
+  "target_language": "zh",
+  "detected_source_language": null,
+  "processing_time_ms": 258
+}
+```
+
+行为要点：`source_language` 缺省或 `null` 时经 whatlang auto 检测（不可靠返回
+`400` `translate-detect-failed`，可靠则结果回填 `detected_source_language`）；
+`(source, target)` 未命中已配置语言对返回 `400` `translate-unsupported-pair`
+（消息回显已配置 pairs 全集）；同一语言对推理严格串行，并发第二个请求立即
+`503` Overloaded（不同语言对之间可并行）。完整 400 错误码语义见
+[API 参考 · 翻译](API_REFERENCE.md#翻译translate)。
+
+语言检测（无模型依赖，任何构建均可用；亦是翻译 auto 检测的同一实现）：
+
+```bash
+curl -X POST http://localhost:9002/api/1/detect \
+  -H "Content-Type: application/json" \
+  -d '{"text": "The quick brown fox jumps over the lazy dog."}'
+```
+
+**响应:**
+
+```json
+{
+  "language": "en",
+  "script": "Latin",
+  "confidence": 1.0,
+  "is_reliable": true,
+  "processing_time_ms": 0
+}
+```
+
+不可判定（空判定信号/纯数字/纯符号）返回 **200** + `language: null` +
+`is_reliable: false`（显性表达，不虚构语言）；`allow` 字段可传语言码白名单
+收窄候选集（非法码 400）。语言码契约（小写 ISO 639-1 优先、无等价者 639-3
+码）与全部错误语义见 [API 参考 · 语言检测](API_REFERENCE.md#语言检测detect)。
 
 > **`task` 字段（已落地）**: 切换请求可携带可选 `task` 字段（`embedding` /
 > `decision`）运行时切换任务维度，回退链为**请求值优先 → 缺省继承当前模型 →

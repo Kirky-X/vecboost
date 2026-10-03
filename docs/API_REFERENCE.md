@@ -619,6 +619,108 @@ curl -X POST http://localhost:9002/api/1/decisions \
 
 ---
 
+### 翻译（Translate）
+
+将文本在已配置的语言对之间翻译（Marian/opus-mt seq2seq，`onnx` feature，贪心解码）。
+
+**端点:** `POST /api/1/translate`
+
+> **⚠️ 配置语义**: 语言对来自 `[translation]` 配置段的 `[[translation.pairs]]`（启动期急切构建）；零配置时端点仍注册，任意请求返回 `400`（`translate-not-configured`）。
+
+**请求字段:**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `text` | string | ✅ | 待翻译文本（≤10,000 字符按字符计；控制字符 400 拒绝） |
+| `source_language` | string | ❌ | 源语言码（小写 ISO 639-1）；缺省或 `null` = auto 检测（不可靠时 400 `translate-detect-failed`，检测结果回填 `detected_source_language`） |
+| `target_language` | string | ✅ | 目标语言码（小写 ISO 639-1；不得与源语言相同） |
+
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/1/translate   -H "Content-Type: application/json"   -d '{"text": "Hello, my dog is cute", "source_language": "en", "target_language": "zh"}'
+```
+
+**响应:**
+
+```json
+{
+  "translation": "你好,我的狗好可爱",
+  "source_language": "en",
+  "target_language": "zh",
+  "detected_source_language": null,
+  "processing_time_ms": 258
+}
+```
+
+auto 检测时 `source_language` 为 `null`、`detected_source_language` 回填检测码（如 `"en"`）——null 键显性出现不省略。
+
+**错误码 400 语义:**
+
+| 消息键 | 触发条件 |
+|--------|----------|
+| `translate-empty-text` | text 为空 |
+| `translate-too-long` | text 超 10,000 字符（按字符计） |
+| `translate-not-configured` | 零语言对配置 |
+| `translate-unsupported-pair` | `(source,target)` 未命中路由表（消息含请求对与已配置 pairs 全集） |
+| `translate-unsupported` | 路由命中的引擎不支持翻译任务 |
+| `translate-detect-failed` | auto 检测不可靠（纯数字/过短文本） |
+| `translate-too-many-source-tokens` | 源文本 token 数超该语言对 `max_source_tokens`（消息含实际值与上限） |
+
+---
+
+### 语言检测（Detect）
+
+检测文本的自然语言（whatlang n-gram 统计，µs 级纯 CPU，无模型依赖；亦是翻译 auto 检测的同一事实源）。
+
+**端点:** `POST /api/1/detect`
+
+**请求字段:**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `text` | string | ✅ | 待检测文本（≤10,000 字符按字符计） |
+| `allow` | array | ❌ | 语言码白名单（收窄候选集，空表 = 不收窄；非法码 400） |
+
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/1/detect   -H "Content-Type: application/json"   -d '{"text": "The quick brown fox jumps over the lazy dog near the riverbank every morning."}'
+```
+
+**响应:**
+
+```json
+{
+  "language": "en",
+  "script": "Latin",
+  "confidence": 1.0,
+  "is_reliable": true,
+  "processing_time_ms": 0
+}
+```
+
+不可判定（空判定信号/纯数字/纯符号）返回 **200** + `language: null` + `is_reliable: false`（显性表达，禁止静默成功或虚构语言）。
+
+---
+
+### 语言码契约与翻译限制
+
+**语言码契约**（翻译与检测共用）：
+
+- 小写 ISO 639-1 码优先（如 `en`/`zh`/`ja`）；whatlang 无 639-1 等价的变体回退 639-3 码（如 `epo` 世界语）
+- 全链小写强制（`^[a-z]{2,3}$`），大写（`"EN"`）显性 400，无大小写归一
+- 非 BCP-47（无地区子标签）
+
+**翻译限制:**
+
+- Marian（2019 架构）质量上限，不承诺 BLEU 指标
+- 默认 512 token 窗口（`max_source_tokens`/`max_new_tokens` 可配，硬上限 1024）；超限**显性拒绝而非截断**
+- 单文本请求，无批量端点
+- 贪心解码（无缓存分支，Xenova merged 图缓存分支存在导出缺陷，见 `src/engine/onnx_translate.rs` 模块文档）
+
+---
+
 ### 模型管理
 
 #### 获取当前模型
@@ -835,7 +937,7 @@ http://localhost:9002/api-docs/openapi.json  # 拉取 OpenAPI 规范
 
 ### 服务定义
 
-v0.2.0 起，VecBoost 的 gRPC 接口不再依赖手写 `.proto` 文件，而是由 `sdforge` 框架通过 `#[forge(grpc_method = "...")]` 宏从处理函数单一源定义自动生成（`src/api/embedding.rs` 与 `src/api/decisions.rs`）。客户端通过 sdforge 统一的 `SdForgeService/Call` RPC 调用对应方法：
+v0.2.0 起，VecBoost 的 gRPC 接口不再依赖手写 `.proto` 文件，而是由 `sdforge` 框架通过 `#[forge(grpc_method = "...")]` 宏从处理函数单一源定义自动生成（`src/api/` 下 embedding / rerank / decisions / translate / detect 各域一份单一源）。客户端通过 sdforge 统一的 `SdForgeService/Call` RPC 调用对应方法：
 
 - 请求载荷为 JSON 序列化的领域类型，通过 `CallRequest.data` 传递
 - 响应载荷为 JSON 序列化的领域类型，通过 `CallResponse.data` 返回
@@ -855,7 +957,7 @@ pub async fn grpc_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
 }
 ```
 
-> **💡 提示**: 无需 `proto/` 目录或 `tonic-build` 生成客户端存根。所有 gRPC 方法都在 `src/api/embedding.rs` / `src/api/decisions.rs` 中通过 `#[forge(grpc_method = "...")]` 宏注册。
+> **💡 提示**: 无需 `proto/` 目录或 `tonic-build` 生成客户端存根。所有 gRPC 方法都在 `src/api/` 各域单一源（embedding / rerank / decisions / translate / detect）中通过 `#[forge(grpc_method = "...")]` 宏注册，共 16 个 `vecboost.*` 方法。
 
 ### gRPC 服务配置
 
@@ -890,6 +992,8 @@ gRPC 服务通过 `sdforge::grpc::build_server_with_config` 启动，配置项�
 | `vecboost.rerank` | `grpc_rerank` | `RerankRequest` | `RerankResponse` | 按相关性重排序文档 |
 | `vecboost.rerank_batch` | `grpc_rerank_batch` | `BatchRerankRequest` | `BatchRerankResponse` | 批量重排序 |
 | `vecboost.decide` | `grpc_decisions` | `DecisionRequest` | `DecisionResponse` | 决策问答（choice/score/noul，`task=decision` 配置下可用） |
+| `vecboost.translate` | `grpc_translate` | `TranslateRequest` | `TranslateResponse` | 翻译（`[translation]` 已配置语言对） |
+| `vecboost.detect` | `grpc_detect` | `DetectRequest` | `DetectResponse` | 语言检测（无模型依赖） |
 | `vecboost.model_switch` | `grpc_model_switch` | `ModelSwitchRequest` | `ModelSwitchResponse` | 切换模型 |
 | `vecboost.get_current_model` | `grpc_get_current_model` | （空） | `ModelInfo` | 获取当前模型信息 |
 | `vecboost.get_model_info` | `grpc_get_model_info` | （空） | `ModelMetadata` | 获取模型元数据 |
@@ -1055,6 +1159,45 @@ struct BatchRerankResponse {
 }
 ```
 
+#### 翻译与语言检测
+
+```rust
+// 翻译请求（source_language 缺省或 null = auto 检测，
+// 不可靠时 400 translate-detect-failed，检测语言回填 detected_source_language）
+struct TranslateRequest {
+    text: String,
+    source_language: Option<String>,  // 小写 ISO 639-1；None = auto
+    target_language: String,          // 不得与源语言相同
+}
+
+// 翻译响应（auto 语义时 source_language 为 null、detected_source_language
+// 回填检测码——null 键显性出现不省略）
+struct TranslateResponse {
+    translation: String,
+    source_language: Option<String>,
+    target_language: String,
+    detected_source_language: Option<String>,
+    processing_time_ms: u64,
+}
+
+// 语言检测请求（allow 为发布码白名单，空表与 None 等价 = 不收窄）
+struct DetectRequest {
+    text: String,
+    allow: Option<Vec<String>>,
+}
+
+// 语言检测响应（不可判定 → 200 + language: null + is_reliable: false）
+struct DetectResponse {
+    language: Option<String>,   // ISO 639-1（无等价者 639-3 码）
+    script: Option<String>,
+    confidence: f64,
+    is_reliable: bool,
+    processing_time_ms: u64,
+}
+```
+
+> **ℹ️ 说明**: 请求/响应字段语义、400 错误码全集与语言码契约见上方 REST 节 [翻译（Translate）](#翻译translate) / [语言检测（Detect）](#语言检测detect)；`vecboost.translate` 需 `[translation]` 已配置语言对，`vecboost.detect` 无配置依赖。
+
 #### 健康检查
 
 ```rust
@@ -1193,7 +1336,7 @@ cargo run --features mcp -- --mcp
 # 在 MCP 客户端（如 Claude Desktop）中配置 stdio 启动命令：vecboost --mcp
 ```
 
-暴露的工具：`embed` / `embed_batch` / `similarity` / `decisions` / `list_models`。工具由 `#[forge(tool_name = ...)]` 宏从与 REST/gRPC 相同的处理函数生成，入参/出参复用上方消息类型定义中的同名领域类型（JSON 格式）；`decisions` 工具仅在 `[model] task = "decision"` 配置下可成功调用（否则返回 400 Unsupported task）。
+暴露的工具：`embed` / `embed_batch` / `similarity` / `decisions` / `translate` / `detect` / `list_models`。工具由 `#[forge(tool_name = ...)]` 宏从与 REST/gRPC 相同的处理函数生成，入参/出参复用上方消息类型定义中的同名领域类型（JSON 格式）；`decisions` 工具仅在 `[model] task = "decision"` 配置下可成功调用（否则返回 400 Unsupported task）；`translate` 工具需 `[translation]` 已配置语言对（否则 400 `translate-not-configured`）；`detect` 工具无配置依赖。
 
 ---
 
@@ -1208,6 +1351,8 @@ cargo run --features cli -- compute_similarity --text1 "机器学习" --text2 "�
 cargo run --features cli -- search --text "查询文本" --candidates candidates.txt     # 语义检索
 cargo run --features cli -- rerank --query "什么是机器学习" --documents docs.txt     # 重排序
 cargo run --features cli -- decisions --req '{"state":{"topic":"vacation"},"questions":[{"name":"confident","qtype":"noul","instructions":"state your p(true)"}]}'  # 决策问答（嵌套请求经 --req 传 JSON；task=decision 配置下可用）
+cargo run --features cli -- translate --req '{"text":"Hello, my dog is cute","source_language":"en","target_language":"zh"}'  # 翻译（[translation] 已配置语言对；source_language 缺省 = auto 检测）
+cargo run --features cli -- detect --req '{"text":"The quick brown fox jumps over the lazy dog."}'  # 语言检测（无模型依赖；可选 allow 白名单字段）
 ```
 
 > **ℹ️ 说明**: 未知子命令会输出用法提示并退出（码 2），不再静默启动 HTTP 服务器。

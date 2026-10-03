@@ -6,7 +6,7 @@
 
 **中文** | [English](README_EN.md)
 
-**高性能、生产级嵌入向量服务，使用 Rust 编写。VecBoost 提供高效的文本向量化服务，支持多种推理引擎、GPU 加速和企业级功能。**
+**高性能、生产级多功能推理服务，使用 Rust 编写。VecBoost 提供文本嵌入、重排序、决策问答、翻译与语言检测五类推理能力，支持多种推理引擎、GPU 加速和企业级功能。**
 
 [✨ 功能特性](#功能特性) • [🚀 快速开始](#快速开始) • [📚 文档](#文档) • [💻 示例](#示例) • [🤝 参与贡献](#参与贡献)
 
@@ -65,6 +65,10 @@
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🔁 <b>Rerank 重排序</b><br><span style="color:#64748B">基于 bi-encoder 的文档重排序，HTTP/gRPC/CLI 三协议支持</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">🌍 <b>国际化（i18n）</b><br><span style="color:#64748B">ICU+Fluent 中英双语错误响应，<code>Accept-Language</code> 请求级语言协商</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>翻译与语言检测</b><br><span style="color:#64748B">Marian/opus-mt 多语言对翻译（(src,tgt) 路由 + auto 检测）与 whatlang 语言检测，<code>onnx</code> feature</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🎮 <b>决策问答</b><br><span style="color:#64748B">Laya 决策管线：choice / score / noul 三题型，带温度校准的概率输出</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🎮 <b>GPU 加速</b><br><span style="color:#64748B">NVIDIA CUDA、Apple Metal 原生支持；<code>mkl</code>/<code>accelerate</code> CPU 加速后端 opt-in</span></td>
@@ -219,16 +223,42 @@ cargo run --features cli -- embed --text "Hello, world!"
 
 ## 🔌 API 使用
 
-VecBoost 由 `sdforge` 从处理函数单一源生成四种协议接口（`src/api/embedding.rs` 与 `src/api/decisions.rs`）。全部端点、参数、请求/响应示例、gRPC 方法表与消息类型见 [📘 API 参考](docs/API_REFERENCE.md)，概要如下：
+VecBoost 由 `sdforge` 从处理函数单一源生成四种协议接口（`src/api/` 下 embedding / rerank / decisions / translate / detect 各域一份单一源）。全部端点、参数、请求/响应示例、gRPC 方法表与消息类型见 [📘 API 参考](docs/API_REFERENCE.md)，概要如下：
 
-- **HTTP/REST**：`/api/1/*` 提供嵌入（单文本/批量/文件）、相似度、语义检索、重排序、决策问答（choice/score/noul）、模型管理与健康检查端点；
+- **HTTP/REST**：`/api/1/*` 提供嵌入（单文本/批量/文件）、相似度、语义检索、重排序、决策问答（choice/score/noul）、翻译（多语言对 + auto 检测）、语言检测、模型管理与健康检查端点；
 - **OpenAI 兼容**：`POST /v1/embeddings`，响应遵循 OpenAI 格式（`object` / `data` / `usage`），支持 `encoding_format=base64`；
 - **Matryoshka 维度约简**：`/v1/embeddings` 传 `dimensions`（256/512/1024 等）换取更小更快的向量，截断后自动 L2 重归一化保证余弦相似度正确；
-- **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 14 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto），JWT 认证、限流、最大连接数与超时均可配置；
-- **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露 `embed` / `embed_batch` / `similarity` / `decisions` / `list_models` 工具；
-- **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank / decisions 子命令（见 [💡 最小示例](#最小示例)）；
-- **推理引擎**：Candle（原生 Rust，默认）与 ONNX Runtime（`onnx` feature），经 `EngineFactory::create` 工厂切换；`[model]` 的 `engine_type` / `task` 配置驱动引擎与任务维度选择——⚠️ `task = "decision"`（Laya 决策管线）与 `task = "embedding"`（默认）为二选一：decision 模式下 embed/rerank 端点返回 400 Unsupported task，embedding 模式下 decisions 端点返回 400（bundle 布局见 [`config/config.toml`](config/config.toml) `[model]` 段注释）；
+- **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 16 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto，含 `vecboost.translate` / `vecboost.detect`），JWT 认证、限流、最大连接数与超时均可配置；
+- **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露 `embed` / `embed_batch` / `similarity` / `decisions` / `translate` / `detect` / `list_models` 工具；
+- **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect 子命令（见 [💡 最小示例](#最小示例)）；
+- **推理引擎**：Candle（原生 Rust，默认）与 ONNX Runtime（`onnx` feature），经 `EngineFactory::create` 工厂切换；`[model]` 的 `engine_type` / `task` 配置驱动引擎与任务维度选择——`task = "embedding"`（默认）/ `task = "decision"`（Laya 决策管线）/ `task = "translate"`（seq2seq 翻译，仅 onnx）三态，非当前任务的端点以 400 Unsupported task 显性拒绝（bundle 布局见 [`config/config.toml`](config/config.toml) `[model]` 段注释，翻译语言对见 `[translation]` 段）；
 - **可观测性与运维**：`/metrics`（Prometheus 指标）、`/health`（存活探针）与 `/health?depth=full`（真实就绪探测）、`/api-docs`（Swagger UI）；只读诊断 `vecboost doctor`（config / tokenizer / 缓存 / 线程 / GPU / 模型完整性，FAIL 退出码 1）。
+
+翻译与语言检测请求示例（与 [API 参考](docs/API_REFERENCE.md) 字段一致）：
+
+```bash
+curl -X POST http://localhost:9002/api/1/translate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello, my dog is cute", "source_language": "en", "target_language": "zh"}'
+
+curl -X POST http://localhost:9002/api/1/detect \
+  -H "Content-Type: application/json" \
+  -d '{"text": "The quick brown fox jumps over the lazy dog near the riverbank every morning."}'
+```
+
+检测响应（`language: null` + `is_reliable: false` 表示不可判定——纯数字/过短文本，显性表达不虚构语言；完整错误语义见 [API 参考](docs/API_REFERENCE.md#翻译translate)）：
+
+```json
+{
+  "language": "en",
+  "script": "Latin",
+  "confidence": 1.0,
+  "is_reliable": true,
+  "processing_time_ms": 0
+}
+```
+
+> **⚠️ 前置**：翻译需 `--features onnx` 构建并在 `[translation]` 段配置 `[[translation.pairs]]` 语言对（缺省请求以 400 `translate-not-configured` 显性拒绝）；语言检测无模型依赖，任何构建均可用。
 
 交互式 OpenAPI 文档：`http://localhost:9002/api-docs`（Swagger UI）与 `/api-docs/openapi.json`（规范 JSON，需 `openapi` feature；ReDoc 推迟到 v0.3.0）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/PERFORMANCE.md#新增指标)。
 
@@ -449,7 +479,7 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
-| Unreleased | - | 审计修复与调优开关：安全默认值收敛、HF tokenizers 全平台统一、时间窗拼批/批内去重、GGUF 量化路径、语义缓存比较模式、多模型 LFRU、缓存 WAL、doctor 诊断、启动预热 |
+| Unreleased | - | 审计修复与调优开关：安全默认值收敛、HF tokenizers 全平台统一、时间窗拼批/批内去重、GGUF 量化路径、语义缓存比较模式、多模型 LFRU、缓存 WAL、doctor 诊断、启动预热；**新增翻译与语言检测**（多语言对路由 + auto 检测，项目定位升级为多功能推理服务） |
 | 0.2.1 | 2026-09-06 | i18n 国际化（114 个翻译键）、Rerank 重排序三协议、语义缓存三级查询、BF16 精度、SIMD 相似度、连续批处理调度、GPU 内存分页、Library 模式 |
 | 0.2.0 | 2026-07-24 | sdforge 四协议统一生成、7 库生态接线、Matryoshka 截断重归一化、vuln-0009 repo_id 校验 |
 | 0.1.0 | 2025-12-15 | VecBoost 初始发布 |

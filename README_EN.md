@@ -6,7 +6,7 @@
 
 [中文](README.md) | **English**
 
-**A high-performance, production-grade embedding vector service written in Rust. VecBoost provides efficient text vectorization with multiple inference engines, GPU acceleration, and enterprise-grade features.**
+**A high-performance, production-grade multi-task inference service written in Rust. VecBoost provides five inference capabilities — text embedding, reranking, decision answering, translation, and language detection — with multiple inference engines, GPU acceleration, and enterprise-grade features.**
 
 [✨ Features](#features) • [🚀 Quick Start](#quick-start) • [📚 Documentation](#documentation) • [💻 Examples](#examples) • [🤝 Contributing](#contributing)
 
@@ -65,6 +65,10 @@ Interface handlers are written just once; `sdforge` macros generate all four pro
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🔁 <b>Rerank</b><br><span style="color:#64748B">Bi-encoder based document reranking over HTTP/gRPC/CLI</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">🌍 <b>Internationalization (i18n)</b><br><span style="color:#64748B">ICU+Fluent bilingual (English/Chinese) error responses with <code>Accept-Language</code> per-request negotiation</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>Translation & Language Detection</b><br><span style="color:#64748B">Marian/opus-mt multi-pair translation ((src,tgt) routing + auto detection) and whatlang language detection, <code>onnx</code> feature</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🎮 <b>Decision Answering</b><br><span style="color:#64748B">Laya decision pipeline: choice / score / noul with temperature-calibrated probabilities</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🎮 <b>GPU Acceleration</b><br><span style="color:#64748B">Native NVIDIA CUDA and Apple Metal support; opt-in <code>mkl</code>/<code>accelerate</code> CPU backends</span></td>
@@ -191,16 +195,42 @@ cargo run --features cli -- embed --text "Hello, world!"
 
 ## 🔌 API Usage
 
-VecBoost generates its four protocol interfaces from the single source `src/api/embedding.rs` via `sdforge`. All endpoints, parameters, request/response examples, the gRPC method table, and message types are documented in the [📘 API Reference](docs/API_REFERENCE.md); summary:
+VecBoost generates its four protocol interfaces from single-source handlers via `sdforge` (one source per domain under `src/api/`: embedding / rerank / decisions / translate / detect). All endpoints, parameters, request/response examples, the gRPC method table, and message types are documented in the [📘 API Reference](docs/API_REFERENCE.md); summary:
 
-- **HTTP/REST**: `/api/1/*` provides embedding (single / batch / file), similarity, semantic search, rerank, model management, and health endpoints;
+- **HTTP/REST**: `/api/1/*` provides embedding (single / batch / file), similarity, semantic search, rerank, decision answering (choice/score/noul), translation (multi-pair + auto detection), language detection, model management, and health endpoints;
 - **OpenAI-compatible**: `POST /v1/embeddings`, responding in the OpenAI format (`object` / `data` / `usage`) with `encoding_format=base64` support;
 - **Matryoshka dimensionality reduction**: pass `dimensions` (256/512/1024, etc.) to `/v1/embeddings` for smaller, faster vectors; truncated vectors are automatically L2 re-normalized to keep cosine similarity correct;
-- **gRPC**: with the `grpc` feature, 13 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — with JWT auth, rate limiting, max connections, and timeouts all configurable;
-- **MCP**: the `mcp` feature exposes the `embed` / `embed_batch` / `similarity` / `list_models` tools to LLMs over stdio (`vecboost --mcp`);
-- **CLI**: the `cli` feature provides the embed / embed_batch / compute_similarity / search / rerank subcommands (see [💡 Minimal Example](#minimal-example));
-- **Inference engines**: Candle (native Rust, default) and ONNX Runtime (`onnx` feature), switched via the `EngineFactory::create` factory;
+- **gRPC**: with the `grpc` feature, 16 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — including `vecboost.translate` / `vecboost.detect`, with JWT auth, rate limiting, max connections, and timeouts all configurable;
+- **MCP**: the `mcp` feature exposes the `embed` / `embed_batch` / `similarity` / `decisions` / `translate` / `detect` / `list_models` tools to LLMs over stdio (`vecboost --mcp`);
+- **CLI**: the `cli` feature provides the embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect subcommands (see [💡 Minimal Example](#minimal-example));
+- **Inference engines**: Candle (native Rust, default) and ONNX Runtime (`onnx` feature), switched via the `EngineFactory::create` factory; the `[model]` `engine_type` / `task` configuration drives engine and task-dimension selection — `task = "embedding"` (default) / `task = "decision"` (Laya decision pipeline) / `task = "translate"` (seq2seq translation, onnx only); endpoints of non-current tasks respond with 400 Unsupported task (bundle layouts in [`config/config.toml`](config/config.toml) `[model]` comments, translation pairs in the `[translation]` section);
 - **Observability & operations**: `/metrics` (Prometheus), `/health` (liveness) and `/health?depth=full` (real readiness probe), `/api-docs` (Swagger UI); read-only diagnostics with `vecboost doctor` (config / tokenizer / cache / threads / GPU / model integrity; exit code 1 on FAIL).
+
+Translation and language detection request examples (fields match the [API Reference](docs/API_REFERENCE.md)):
+
+```bash
+curl -X POST http://localhost:9002/api/1/translate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello, my dog is cute", "source_language": "en", "target_language": "zh"}'
+
+curl -X POST http://localhost:9002/api/1/detect \
+  -H "Content-Type: application/json" \
+  -d '{"text": "The quick brown fox jumps over the lazy dog near the riverbank every morning."}'
+```
+
+Detection response (`language: null` + `is_reliable: false` means "undetectable" — digits-only / too-short text; explicitly reported, never a guessed language; full error semantics in the [API Reference](docs/API_REFERENCE.md#翻译translate)):
+
+```json
+{
+  "language": "en",
+  "script": "Latin",
+  "confidence": 1.0,
+  "is_reliable": true,
+  "processing_time_ms": 0
+}
+```
+
+> **⚠️ Prerequisites**: translation requires an `--features onnx` build and `[[translation.pairs]]` language pairs configured in the `[translation]` section (unconfigured requests get 400 `translate-not-configured`); language detection has no model dependency and works with any build.
 
 Interactive OpenAPI docs: `http://localhost:9002/api-docs` (Swagger UI) and `/api-docs/openapi.json` (spec JSON, requires the `openapi` feature; ReDoc is deferred to v0.3.0). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/PERFORMANCE.md#新增指标).
 
@@ -421,7 +451,7 @@ The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (followin
 
 | Version | Date | Highlights |
 |------|------|------|
-| Unreleased | - | Audit remediation and tuning switches: secure defaults hardening, HF tokenizers on all platforms, time-window batching / in-batch dedup, GGUF quantization path, semantic-cache comparison modes, multi-model LFRU, cache WAL, doctor diagnostics, startup warmup |
+| Unreleased | - | Audit remediation and tuning switches: secure defaults hardening, HF tokenizers on all platforms, time-window batching / in-batch dedup, GGUF quantization path, semantic-cache comparison modes, multi-model LFRU, cache WAL, doctor diagnostics, startup warmup; **new translation & language detection** (multi-pair routing + auto detection; project repositioned as a multi-task inference service) |
 | 0.2.1 | 2026-09-06 | i18n (114 translation keys), three-protocol rerank, three-stage semantic cache, BF16 precision, SIMD similarity, continuous batch scheduling, GPU memory paging, library mode |
 | 0.2.0 | 2026-07-24 | sdforge four-protocol generation, 7-library ecosystem wiring, Matryoshka truncation re-normalization, vuln-0009 repo_id validation |
 | 0.1.0 | 2025-12-15 | Initial VecBoost release |

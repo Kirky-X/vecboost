@@ -108,7 +108,7 @@ pub struct VecboostState {
 
 ### 🔌 协议生成层（sdforge）
 
-VecBoost 通过 **sdforge** 框架统一生成 HTTP/gRPC/MCP/CLI 四种协议绑定，**禁止手写** Axum handler、tonic gRPC、clap CLI 或 proto 文件。所有协议处理函数集中定义在 `src/api/embedding.rs`，通过 `#[forge(...)]` 宏标注生成各协议绑定。
+VecBoost 通过 **sdforge** 框架统一生成 HTTP/gRPC/MCP/CLI 四种协议绑定，**禁止手写** Axum handler、tonic gRPC、clap CLI 或 proto 文件。协议处理函数按业务域集中定义在 `src/api/` 各单一源（`embedding.rs` / `rerank.rs` / `decisions.rs` / `translate.rs` / `detect.rs`），通过 `#[forge(...)]` 宏标注生成各协议绑定。
 
 #### 架构设计：协议无关 handler
 
@@ -213,8 +213,12 @@ pub trait InferenceEngine: Send + Sync {
     fn count_tokens(&self, text: &str) -> Result<usize, VecboostError> { ... }
 
     /// 决策推理：对给定 state 回答一组 choice/score/noul 问题
-    /// （默认返回 UnsupportedTask——当前无引擎覆盖，调用方按 4xx 引导换模型/端点）
+    /// （默认 UnsupportedTask；DecisionPipeline 与 CandleDecisionEngine 两路覆盖）
     fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> { ... }
+
+    /// 翻译推理（seq2seq，task=translate）：默认 UnsupportedTask，
+    /// 仅 OnnxTranslationEngine 覆盖（贪心解码，服务层 spawn_blocking 包裹）
+    fn translate(&self, req: &TranslateRequest) -> Result<TranslateResponse, VecboostError> { ... }
 
     /// 引擎是否支持给定任务维度（默认仅 embedding；
     /// rerank 是 embed 引擎的 trait 默认能力，不构成独立 task）
@@ -233,6 +237,7 @@ pub trait InferenceEngine: Send + Sync {
 |------|------|------|------|----------|
 | **Candle** | 原生 Rust | 无外部依赖、启动快、WASM 支持 | 生态系统较小 | CPU 推理、边缘计算 |
 | **ONNX Runtime** | 跨平台 | 成熟稳定、优化良好、硬件支持广 | 需要导出模型 | 通用推理、生产环境 |
+| **OnnxTranslationEngine** | 跨平台（seq2seq） | encoder/decoder 双 Session 贪心解码，仓库首个生成式推理路径 | 无 CUDA EP 切换、缓存分支禁用（Xenova merged 图导出缺陷，每步全量重算 O(L²) 有界） | Marian/opus-mt 翻译（`task = "translate"` 或 `[translation].pairs`） |
 
 ---
 
@@ -251,6 +256,12 @@ pub enum ModelArchitecture {
 |------|----------|----------|----------|
 | **Bert** | `candle_transformers::models::bert::BertModel` | ~110M | BAAI/bge-small, bert-base-uncased |
 | **XlmRoberta** | `candle_transformers::models::xlm_roberta::XLMRobertaModel` | ~270M | BAAI/bge-m3, xlm-roberta-base |
+
+---
+
+#### ONNX seq2seq 翻译引擎
+
+`OnnxTranslationEngine`（`src/engine/onnx_translate.rs`，`onnx` feature）是仓库首个非单次前向推理路径：encoder 单次前向 + `decoder_model_merged` 逐步贪心解码（EOS 停止 / `max_new_tokens` 硬顶，响应不含停止符），`past_key_values` 簿记以实测图 inspection 为准。诚实语义与其他引擎一致：`supports_task(Translate)=true` 且 `supports_task(Embedding)=false`，`count_tokens` 为 tokenizer 精确计数。服务侧 `TranslateService`（`src/service/translate.rs`）持 `(source, target)` 多引擎路由表（每 pair 启动期急切构建、`permits=1` 信号量同 pair 串行背压、超 `max_source_tokens` 显性 400），`source_language` 缺省时与 `/api/1/detect` 共用 `src/text/langdetect.rs` 检测核心（whatlang，单一事实源）路由到对应 pair；语言检测本身为 µs 级纯 CPU 统计，无引擎字段、不经 pipeline（`DetectService` 直连返回）。翻译 pair 引擎不参与 switch_model 引擎传播（传播会破坏 (src,tgt) 路由语义，见 design D6）。
 
 ---
 
@@ -388,15 +399,19 @@ graph TB
         RateLim[速率限制 令牌桶]
     end
 
-    subgraph Pipeline["请求管道层"]
+    subgraph Pipeline["请求管道层<br/>embed/rerank 主线"]
         PriorityQueue[优先级队列]
         Scheduler[调度器]
         Workers[工作线程]
     end
 
+    subgraph Direct["直连分支<br/>decisions / translate / detect"]
+        DirectSvc[领域 Service<br/>spawn_blocking / µs 级检测]
+    end
+
     subgraph Inference["推理层"]
         CacheCheck[缓存检查 oxcache + SemanticCache]
-        ModelInference[模型推理 Candle/ONNX]
+        ModelInference[模型推理 Candle/ONNX/seq2seq]
     end
 
     subgraph Response["响应层"]
@@ -409,11 +424,13 @@ graph TB
     Auth --> RateLim
 
     RateLim --> PriorityQueue
+    RateLim --> DirectSvc
     PriorityQueue --> Scheduler
     Scheduler --> Workers
 
     Workers --> CacheCheck
     Workers --> ModelInference
+    DirectSvc --> ModelInference
 
     CacheCheck --> ResponseBuilder
     ModelInference --> ResponseBuilder
@@ -433,6 +450,8 @@ graph TB
 | **6. 模型推理** | Engine | 执行嵌入计算 | ❌ |
 | **7. 缓存更新** | Cache Layer | 存储新结果 | ✅ |
 | **8. 返回响应** | Response Builder | 格式化并返回 | ❌ |
+
+> **ℹ️ 直连分支**: 上表为 embed/rerank 主线（pipeline 队列 + 缓存）。`/api/1/decisions`、`/api/1/translate`、`/api/1/detect` 为**直连处理**（与 `pipeline_enabled` 配置无关）：decisions/translate 是阻塞模型推理，服务层经 `spawn_blocking` 隔离后直调引擎（翻译另经 pair 级信号量背压）；detect 为 µs 级纯 CPU 统计（whatlang n-gram），亚毫秒同步返回——三者入队调度收益为负（`src/api/decisions.rs`、`src/api/translate.rs`、`src/api/detect.rs` 模块注释）。
 
 ---
 

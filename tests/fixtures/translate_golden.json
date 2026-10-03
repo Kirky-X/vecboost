@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "decoding": "greedy, cache-branch disabled (see onnx_translate module docs)",
+    "model_repo_en_es": "Xenova/opus-mt-en-es",
+    "model_repo_en_zh": "Xenova/opus-mt-en-zh",
+    "note": "meta 字段仅供人工溯源，E2E 断言忽略",
+    "quantization": "fp32 (encoder_model + decoder_model_merged)",
+    "pinned_at": "2026-10-02",
+    "review": "T026 人工逐句抽验：两轮句集调整（问候类短句 en-zh 幻觉续写、OpenAI 误译、CJK 字符 en-es OOV mojibake），终版 20 句语义忠实判定合格后固化；golden 钉住 fp32 贪心（无缓存分支）确定性输出"
+  },
+  "pairs": {
+    "en-es": {
+      "cjk-culture": "Disfruto comiendo sushi y ramen los fines de semana en Kyoto.",
+      "long-news": "El equipo internacional de investigación publicó un estudio amplio sobre el cambio climático, en el que se destacaba la urgente necesidad de contar con políticas de cooperación mundial y desarrollo sostenible en todos los sectores industriales.",
+      "long-story": "Érase una vez, en un pequeño pueblo rodeado de montañas, una joven descubrió un antiguo mapa escondido debajo de las tablas del piso de la casa de su abuela, y lo que encontró cambió la historia de toda la región.",
+      "medium-daily": "Ella caminó al mercado y compró pan fresco y verduras para cenar.",
+      "medium-tech": "Los modelos de aprendizaje automático procesan grandes cantidades de datos para encontrar patrones.",
+      "proper-noun": "Einstein visitó Tokio, París y Nueva York durante su famosa gira mundial.",
+      "proper-noun-tech": "Microsoft y Google compiten en el mercado de computación en la nube.",
+      "question": "¿Dónde está la estación de tren más cercana?",
+      "short-daily": "El tiempo es bueno hoy.",
+      "short-greet": "Hoy estoy feliz."
+    },
+    "en-zh": {
+      "cjk-culture": "我喜欢在京都周末吃寿司和拉面",
+      "long-news": "国际研究小组发表了关于气候变化的综合研究报告,强调迫切需要在所有工业部门开展全球合作和可持续发展政策。",
+      "long-story": "很久以前,在一个山地周围的小村庄里,一个年轻女孩发现了一张古老的地图,藏在她祖母家的地板下,她发现的东西改变了整个地区的历史。",
+      "medium-daily": "她步行到市场,买了新鲜面包和蔬菜来吃饭。",
+      "medium-tech": "机器学习模型处理大量数据以寻找模式。",
+      "proper-noun": "爱因斯坦在著名的世界之旅期间访问了东京、巴黎和纽约。",
+      "proper-noun-tech": "微软和谷歌在云计算市场上竞争。",
+      "question": "最近的火车站在哪里?",
+      "short-daily": "今天天气不错",
+      "short-greet": "今天我很高兴"
+    }
+  }
+}

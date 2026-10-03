@@ -10,3 +10,9 @@ mod common;
 
 #[path = "integration/api_test.rs"]
 mod api_test;
+
+#[path = "integration/detect_test.rs"]
+mod detect_test;
+
+#[path = "integration/translate_test.rs"]
+mod translate_test;

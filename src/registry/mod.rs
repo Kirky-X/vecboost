@@ -24,6 +24,18 @@ pub struct RerankModule;
 /// 决策服务模块 — 提供 `Arc<RwLock<DecisionService>>` 能力
 pub struct DecisionModule;
 
+/// 语言检测服务模块 — 提供 `DetectService` 能力
+///
+/// 检测服务无状态（unit + Copy），Capability 直接为值类型，
+/// 不像引擎持有型服务那样包 `Arc<RwLock<>>`（无内部可变性需求）。
+pub struct DetectModule;
+
+/// 翻译服务模块 — 提供 `Arc<TranslateService>` 能力
+///
+/// 服务构造后不可变（无 replace_engine 入口），Capability 为
+/// `Arc<TranslateService>` 共享句柄（非 `Arc<RwLock<>>`，无内部可变性需求）。
+pub struct TranslateModule;
+
 /// 认证模块 — 提供 `Option<Arc<GarrisonHandle>>` 能力（需要 auth feature）
 #[cfg(feature = "auth")]
 pub struct AuthModule;

@@ -54,6 +54,20 @@ decision-empty-questions = questions must not be empty (at least one question re
 decision-too-many-questions = questions count { $count } exceeds max per request { $max }
 decision-unsupported = Current engine does not support decision inference
 
+# ── Detect validation ──
+detect-empty-text = text must not be empty (language detection requires text)
+detect-too-long = text length { $length } exceeds maximum allowed length { $max }
+detect-invalid-allowlist = language code in allowlist is not supported: { $code } (only codes published by the detection engine)
+
+# ── Translate validation & routing ──
+translate-empty-text = text must not be empty (translation requires text)
+translate-too-long = text length { $length } exceeds maximum allowed length { $max }
+translate-unsupported = Current engine does not support translation inference
+translate-not-configured = Translation service has no language pairs configured (add [[translation.pairs]] under [translation])
+translate-unsupported-pair = Requested language pair { $requested } is not configured (configured: { $pairs })
+translate-detect-failed = Source language detection is unreliable; specify source_language explicitly
+translate-too-many-source-tokens = Source text length { $count } exceeds the pair limit { $max }
+
 # ── Directory errors ──
 dir-get-cwd-failed = Failed to get current directory: { $detail }
 

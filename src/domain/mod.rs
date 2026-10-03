@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod decision;
+pub mod detect;
 pub mod openai_embedding;
 pub mod scheduling;
+pub mod translate;
 
 use crate::config::model::{DeviceType, ModelTask, PoolingMode};
 use crate::utils::AggregationMode;
@@ -338,6 +340,8 @@ pub use decision::{
     DecisionAnswer, DecisionAnswerBody, DecisionQuestion, DecisionRequest, DecisionResponse,
     QuestionType,
 };
+pub use detect::{DetectRequest, DetectResponse};
+pub use translate::{TranslateRequest, TranslateResponse};
 
 #[cfg(test)]
 mod tests {

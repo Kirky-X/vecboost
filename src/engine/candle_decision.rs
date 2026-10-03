@@ -1255,6 +1255,7 @@ mod tests {
             task: ModelTask::Decision,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         };
         let dir = tempfile::tempdir().expect("tempdir");
         // 基线：词表相等（tokenizer 20 / encoder 20）合法加载

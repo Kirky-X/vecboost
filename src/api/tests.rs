@@ -4,6 +4,8 @@
 use crate::VecboostState;
 #[cfg(feature = "http")]
 use crate::api::decisions::forge_decisions;
+#[cfg(feature = "http")]
+use crate::api::detect::forge_detect;
 #[cfg(feature = "cli")]
 use crate::api::embedding::{cli_compute_similarity, cli_embed};
 use crate::api::embedding::{compute_similarity, embed, embed_batch};
@@ -11,16 +13,23 @@ use crate::api::embedding::{compute_similarity, embed, embed_batch};
 use crate::api::embedding::{forge_compute_similarity, forge_embed, forge_embed_batch};
 #[cfg(any(feature = "http", feature = "cli"))]
 use crate::api::embedding::{to_api_error, uuid_like_id};
+#[cfg(feature = "http")]
+use crate::api::translate::forge_translate;
 use crate::config::model::{DeviceType, EngineType, ModelConfig, ModelTask, Precision};
 use crate::domain::{
-    BatchEmbedRequest, DecisionRequest, DecisionResponse, EmbedRequest, SimilarityRequest,
+    BatchEmbedRequest, DecisionRequest, DecisionResponse, DetectRequest, EmbedRequest,
+    SimilarityRequest, TranslateRequest,
 };
 use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
-use crate::registry::{DecisionModule, EmbeddingModule, RerankModule};
+use crate::registry::{
+    DecisionModule, DetectModule, EmbeddingModule, RerankModule, TranslateModule,
+};
 use crate::service::decision::DecisionService;
+use crate::service::detect::DetectService;
 use crate::service::embedding::EmbeddingService;
 use crate::service::rerank::RerankService;
+use crate::service::translate::TranslateService;
 use async_trait::async_trait;
 #[cfg(any(feature = "http", feature = "cli"))]
 use sdforge::prelude::ApiError;
@@ -33,11 +42,12 @@ use tokio::sync::RwLock;
 /// Ensure the global STATE is initialized for forge handler tests.
 ///
 /// Builds a minimal `AsyncKit` with `EmbeddingModule` / `RerankModule` /
-/// `DecisionModule` registered and injects via `init_state`. Under parallel
+/// `DecisionModule` / `DetectModule` registered and injects via `init_state`. Under parallel
 /// test execution, multiple tests may race to initialize; `OnceLock` ensures
 /// first-writer-wins, and subsequent `init_state` errors are silently ignored
 /// (expected behavior). Decision 服务必须随首写一并注入：state 是进程级单例，
 /// 后到的注入静默失效，缺注册会让 forge_decisions require 失败必 500。
+/// detect 服务同理（无状态 unit，直接注入值）。
 async fn ensure_state_initialized() {
     if crate::api::state().is_ok() {
         return;
@@ -51,16 +61,35 @@ async fn ensure_state_initialized() {
         make_mock_engine_arc(),
         None,
     )));
+    let detect_svc = DetectService::new();
+    // 翻译服务注入含 en-zh mock 路由（评审 ARC-4：forge_translate 装配链
+    // 单测面——漏 register/set_config 的回归由本测试兜住，不再只依赖需
+    // onnx+真机 bundle 的集成测试）；mock 译文带 marker 供路由断言
+    let mut translate_pairs = std::collections::HashMap::new();
+    translate_pairs.insert(
+        ("en".to_string(), "zh".to_string()),
+        crate::service::translate::TranslatePairRoute::new(
+            Arc::new(RwLock::new(MockDecisionEngine)),
+            crate::config::model::TranslationParams::default(),
+        ),
+    );
+    let translate_svc = Arc::new(TranslateService::new(translate_pairs));
     let mut kit = trait_kit::AsyncKit::new();
     kit.set_config(svc);
     kit.set_config(rerank_svc);
     kit.set_config(decision_svc);
+    kit.set_config(detect_svc);
+    kit.set_config(translate_svc);
     kit.register::<EmbeddingModule>()
         .expect("register EmbeddingModule in test kit");
     kit.register::<RerankModule>()
         .expect("register RerankModule in test kit");
     kit.register::<DecisionModule>()
         .expect("register DecisionModule in test kit");
+    kit.register::<DetectModule>()
+        .expect("register DetectModule in test kit");
+    kit.register::<TranslateModule>()
+        .expect("register TranslateModule in test kit");
     let kit = kit.build().await.expect("build test kit");
     // Ignore error: under parallel execution another test may have initialized first
     let _ = crate::api::init_state(VecboostState { kit: Arc::new(kit) });
@@ -161,7 +190,24 @@ impl InferenceEngine for MockDecisionEngine {
     }
 
     fn supports_task(&self, task: ModelTask) -> bool {
-        matches!(task, ModelTask::Embedding | ModelTask::Decision)
+        matches!(
+            task,
+            ModelTask::Embedding | ModelTask::Decision | ModelTask::Translate
+        )
+    }
+
+    fn translate(
+        &self,
+        req: &TranslateRequest,
+    ) -> Result<crate::domain::TranslateResponse, VecboostError> {
+        // 评审 ARC-4：可辨识 marker 译文，forge_translate 路由/能力门链路断言用
+        Ok(crate::domain::TranslateResponse {
+            translation: format!("[mock-en-zh] {}", req.text),
+            source_language: req.source_language.clone(),
+            target_language: req.target_language.clone(),
+            detected_source_language: None,
+            processing_time_ms: 0,
+        })
     }
 
     fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
@@ -220,6 +266,7 @@ fn make_service(dimension: usize) -> EmbeddingService {
         task: crate::config::model::ModelTask::Embedding,
         quantized: false,
         decision_params: None,
+        translation_params: None,
     };
     let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(mock_engine));
     // NOTE: temp_dir is intentionally dropped here. TestEngine does not read from
@@ -848,6 +895,139 @@ async fn test_forge_decisions_empty_questions_returns_400() {
                 message.to_lowercase().contains("questions"),
                 "400 文案必须指明 questions，got: {message}"
             );
+        }
+        other => panic!("Expected InvalidInput(400), got {:?}", other),
+    }
+}
+
+// =============================================================================
+// forge_detect —— /api/1/detect 端点（DetectModule kit 装配链）
+// =============================================================================
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_detect_success_returns_language() {
+    ensure_state_initialized().await;
+    let result = forge_detect(DetectRequest {
+        text: "The quick brown fox jumps over the lazy dog near the riverbank every morning."
+            .to_string(),
+        allow: None,
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "forge_detect should succeed: {:?}",
+        result.err()
+    );
+    let response = result.unwrap();
+    assert_eq!(response.language.as_deref(), Some("en"));
+    assert_eq!(response.script.as_deref(), Some("Latin"));
+    assert!(response.is_reliable);
+    // wire 五键齐全
+    let json = serde_json::to_value(&response).unwrap();
+    for key in [
+        "language",
+        "script",
+        "confidence",
+        "is_reliable",
+        "processing_time_ms",
+    ] {
+        assert!(json.get(key).is_some(), "missing key {key}, json={json}");
+    }
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_detect_empty_text_returns_400() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = forge_detect(DetectRequest {
+        text: String::new(),
+        allow: None,
+    })
+    .await;
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        ApiError::InvalidInput { message, .. } => {
+            // 400 语义（InvalidInput 映射）；文案为 i18n 键 detect-empty-text
+            // 或缺键回退的键名，两者均可（FTL 条目随 i18n 任务落地）
+            assert!(!message.is_empty(), "400 必须携带文案，got: {message}");
+        }
+        other => panic!("Expected InvalidInput(400), got {:?}", other),
+    }
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_detect_undetectable_returns_200_null_language() {
+    ensure_state_initialized().await;
+    // 纯数字：200 语义的 language:null + is_reliable:false（显性表达，非 Err）
+    let result = forge_detect(DetectRequest {
+        text: "1234567890".to_string(),
+        allow: None,
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "不可判定必须 200 显性表达而非 4xx/5xx: {:?}",
+        result.err()
+    );
+    let response = result.unwrap();
+    assert!(response.language.is_none());
+    assert!(!response.is_reliable);
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_translate_mock_route_success_200() {
+    ensure_state_initialized().await;
+    let result = forge_translate(TranslateRequest {
+        text: "hello".to_string(),
+        source_language: Some("en".to_string()),
+        target_language: "zh".to_string(),
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "forge_translate 应经装配链成功: {:?}",
+        result.err()
+    );
+    let resp = result.unwrap();
+    assert!(
+        resp.translation.contains("[mock-en-zh]"),
+        "路由必须命中 mock 引擎（marker 可辨识），got: {}",
+        resp.translation
+    );
+    // wire 五键齐全
+    let json = serde_json::to_value(&resp).unwrap();
+    for key in [
+        "translation",
+        "source_language",
+        "target_language",
+        "detected_source_language",
+        "processing_time_ms",
+    ] {
+        assert!(json.get(key).is_some(), "missing key {key}");
+    }
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_translate_unconfigured_pair_400_with_pairs_list() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = forge_translate(TranslateRequest {
+        text: "hello".to_string(),
+        source_language: Some("en".to_string()),
+        target_language: "fr".to_string(),
+    })
+    .await;
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        ApiError::InvalidInput { message, .. } => {
+            // 未配置对 400 含请求对与清单（评审 ARC-4 第二例）
+            assert!(message.contains("en-fr"), "msg={message}");
+            assert!(message.contains("en-zh"), "msg={message}");
         }
         other => panic!("Expected InvalidInput(400), got {:?}", other),
     }

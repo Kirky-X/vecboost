@@ -185,6 +185,14 @@ pub fn has_disallowed_control_chars(text: &str) -> bool {
     })
 }
 
+/// 语言码格式校验，等价 `^[a-z]{2,3}$`（大写显性拒绝，与配置面同一口径，
+/// 无大小写归一）。ASCII 小写均为单字节，字节长度即字符长度。
+/// 单一事实源：域层（detect 请求 allowlist）、服务层（detect-invalid-allowlist
+/// 文案判定）与配置层（[translation.pairs] 语言码）共用，禁止第二份实现。
+pub fn is_valid_language_code(code: &str) -> bool {
+    (code.len() == 2 || code.len() == 3) && code.bytes().all(|b| b.is_ascii_lowercase())
+}
+
 /// 错误 detail 回显截断上限（字符数）：name 上限 10K 字符可被完整回显进
 /// wire/日志，64 字符足够定位（评审 R2）。
 pub const MAX_ECHO_CHARS: usize = 64;

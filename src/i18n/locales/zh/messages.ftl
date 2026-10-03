@@ -54,6 +54,20 @@ decision-empty-questions = questions 不能为空（至少一个问题）
 decision-too-many-questions = questions 数量 { $count } 超过单次请求上限 { $max }
 decision-unsupported = 当前引擎不支持 decision 决策推理
 
+# ── Detect 验证 ──
+detect-empty-text = 文本不能为空（语言检测 text 必填）
+detect-too-long = 文本长度 { $length } 超过最大允许长度 { $max }
+detect-invalid-allowlist = allowlist 语言码不支持：{ $code }（仅接受检测引擎已发布的语言码）
+
+# ── Translate 验证与路由 ──
+translate-empty-text = 文本不能为空（翻译 text 必填）
+translate-too-long = 文本长度 { $length } 超过最大允许长度 { $max }
+translate-unsupported = 当前引擎不支持 translate 翻译推理
+translate-not-configured = 翻译服务未配置语言对（请在 [translation] 配置段添加 [[translation.pairs]]）
+translate-unsupported-pair = 请求的语言对 { $requested } 未配置（已配置：{ $pairs }）
+translate-detect-failed = 源语言检测不可靠，无法确定翻译路径（请显式指定 source_language）
+translate-too-many-source-tokens = 源文本长度 { $count } 超过该语言对上限 { $max }
+
 # ── 目录错误 ──
 dir-get-cwd-failed = 获取当前目录失败：{ $detail }
 

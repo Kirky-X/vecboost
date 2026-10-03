@@ -34,6 +34,7 @@ fn load_engine(model_dir: &std::path::Path) -> Option<Box<dyn InferenceEngine>> 
         task: vecboost::config::model::ModelTask::Embedding,
         quantized: false,
         decision_params: None,
+        translation_params: None,
     };
     match EngineFactory::create(EngineType::Candle, &config) {
         Ok(engine) => Some(Box::new(engine) as Box<dyn InferenceEngine>),

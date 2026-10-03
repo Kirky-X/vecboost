@@ -13,6 +13,12 @@ pub(crate) mod onnx_engine;
 #[cfg(feature = "onnx")]
 pub(crate) mod decision;
 
+#[cfg(feature = "onnx")]
+pub(crate) mod onnx_translate;
+
+#[cfg(feature = "onnx")]
+pub use onnx_translate::set_session_intra_threads;
+
 pub(crate) mod decision_protocol;
 
 // 纯路径探测、无推理后端依赖：onnx（decision）与 candle（candle_decision）
@@ -26,7 +32,7 @@ pub mod mkl_shim;
 pub mod quantized_engine;
 
 use crate::config::model::{ModelConfig, ModelTask, Precision};
-use crate::domain::{DecisionRequest, DecisionResponse};
+use crate::domain::{DecisionRequest, DecisionResponse, TranslateRequest, TranslateResponse};
 use crate::error::VecboostError;
 use async_trait::async_trait;
 
@@ -130,6 +136,16 @@ pub trait InferenceEngine: Send + Sync {
     fn decide_logits(&self, _req: &DecisionRequest) -> Result<Vec<Vec<f32>>, VecboostError> {
         Err(VecboostError::unsupported_task(
             "per-marker logits are only produced by decision engines".to_string(),
+        ))
+    }
+
+    /// 翻译推理（seq2seq，task=translate）。默认 UnsupportedTask：
+    /// 仅 onnx_translate 引擎覆盖（encapsulated seq2seq 贪心解码）。
+    /// 实现方为阻塞推理（与 `decide` 同约，服务层以 `spawn_blocking`
+    /// 包裹）。
+    fn translate(&self, _req: &TranslateRequest) -> Result<TranslateResponse, VecboostError> {
+        Err(VecboostError::unsupported_task(
+            "translation inference not implemented by this engine".to_string(),
         ))
     }
 
@@ -283,9 +299,28 @@ pub enum AnyEngine {
     // 变体类型 pub(crate)，注释理由同 Decision 臂
     #[allow(private_interfaces)]
     CandleDecision(candle_decision::CandleDecisionEngine),
+    /// ONNX seq2seq 翻译引擎（task=translate，Marian/opus-mt）。
+    /// 构造点为 [`crate::engine::EngineFactory::create`] 的 task 分派臂
+    /// （T017）。变体类型 pub(crate)，注释理由同 Decision 臂。
+    #[cfg(feature = "onnx")]
+    #[allow(private_interfaces)]
+    OnnxTranslate(onnx_translate::OnnxTranslationEngine),
     /// GGUF 量化引擎（Q8_0/Q4_K 加载期反量化桥，）。
     #[cfg(feature = "quantized-gguf")]
     Quantized(quantized_engine::QuantizedCandleEngine),
+}
+
+impl AnyEngine {
+    /// 最近一次成功翻译解码的生成 token 数（评审 converge T033：质量观测
+    /// 通道——仅 OnnxTranslate 变体有真实值，其余变体恒 0；wire 五键契约
+    /// 不扩，e2e 质量输出经本方法读取）
+    pub fn translate_output_tokens(&self) -> u64 {
+        match self {
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.last_output_tokens(),
+            _ => 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -381,6 +416,7 @@ mod tests {
             task: ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         }
     }
 

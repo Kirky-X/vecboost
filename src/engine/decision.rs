@@ -655,6 +655,7 @@ mod tests {
                 head_max_len: 0,
                 state_max_tokens: 256,
             }),
+            translation_params: None,
         };
         let err = match DecisionPipeline::load(&config) {
             Err(e) => e,
@@ -687,6 +688,7 @@ mod tests {
             task: crate::config::model::ModelTask::Decision,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         }
     }
 

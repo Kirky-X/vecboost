@@ -52,6 +52,7 @@ fn model_config(dirname: &str, dim: usize) -> ModelConfig {
         task: vecboost::config::model::ModelTask::Embedding,
         quantized: false,
         decision_params: None,
+        translation_params: None,
     }
 }
 

@@ -67,6 +67,33 @@ impl EngineFactory {
                 ));
             }
         }
+        // task=translate 路由：seq2seq 翻译仅 onnx 实现（Marian/opus-mt
+        // bundle，ort 双 Session 贪心解码）。candle 显性拒绝并给出换引擎
+        // 提示；ensure_supports_task 因 supports_task(Translate)=true 覆盖
+        // 自动放行。
+        if config.task == ModelTask::Translate {
+            if engine_type == EngineType::Candle {
+                return Err(VecboostError::ConfigError(
+                    "翻译仅支持 onnx 引擎：请将 engine_type 配置为 onnx（task=translate 无 candle 实现；更改后需重启服务重新加载）"
+                        .to_string(),
+                ));
+            }
+            #[cfg(feature = "onnx")]
+            {
+                let engine = super::onnx_translate::OnnxTranslationEngine::load(config)?;
+                let any = AnyEngine::OnnxTranslate(engine);
+                ensure_supports_task(&any, config)?;
+                return Ok(any);
+            }
+            #[cfg(not(feature = "onnx"))]
+            {
+                return Err(VecboostError::ConfigError(
+                    "检测到 task=translate 模型配置，但本次构建未启用 `onnx` feature；\
+                     请以 `--features onnx` 重新构建"
+                        .to_string(),
+                ));
+            }
+        }
         // loader 路由：.gguf + quantized=true 走量化引擎
         // （加载期反量化桥），否则维持 safetensors 路径。
         if should_use_quantized_engine(&config.model_path, config.quantized) {
@@ -136,6 +163,7 @@ mod tests {
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         }
     }
 
@@ -192,6 +220,59 @@ mod tests {
                 panic!("分派臂接线后 task=decision 不得落入 embedding 引擎 fail-fast：{msg}")
             }
             other => panic!("期望 ModelLoadError，got {:?}", other.err()),
+        }
+    }
+
+    /// task=translate + engine_type=onnx 走翻译引擎分派臂：空目录时报
+    /// bundle 探测错误（ModelLoadError）而非 UnsupportedTask——钉住分派臂
+    /// 接线（探针错误信息含 encoder 候选路径，探测发生在 Session 构建前，
+    /// 本测试不触发 ort）。
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_create_translate_task_dispatches_to_onnx_engine() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = test_config();
+        config.task = crate::config::model::ModelTask::Translate;
+        config.model_path = dir.path().to_path_buf();
+        let result = EngineFactory::create(EngineType::Onnx, &config);
+        match result {
+            Err(VecboostError::ModelLoadError(msg)) => {
+                assert!(
+                    msg.contains("onnx/encoder_model.onnx"),
+                    "分派臂必须报翻译 bundle 探测错误，msg={msg}"
+                );
+            }
+            Err(VecboostError::UnsupportedTask(msg)) => {
+                panic!("分派臂接线后 task=translate 不得落入 embedding 引擎 fail-fast：{msg}")
+            }
+            other => panic!("期望 ModelLoadError，got {:?}", other.err()),
+        }
+    }
+
+    /// task=translate + engine_type=candle 显性拒绝：翻译无 candle 实现，
+    /// ConfigError 必须携带 feature/重建提示（禁止静默落入 embedding 引擎
+    /// 后在调用期以 UnsupportedTask 暴露）。
+    #[test]
+    fn test_create_translate_task_rejects_candle_engine() {
+        let mut config = test_config();
+        config.task = crate::config::model::ModelTask::Translate;
+        config.model_path = PathBuf::from("models/opus-mt-en-zh");
+        let result = EngineFactory::create(EngineType::Candle, &config);
+        match result {
+            Err(VecboostError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("翻译仅支持 onnx 引擎"),
+                    "错误必须携带换引擎提示，msg={msg}"
+                );
+                assert!(
+                    msg.contains("engine_type"),
+                    "错误必须指明 engine_type 配置项，msg={msg}"
+                );
+            }
+            other => panic!(
+                "期望 ConfigError（翻译不支持 candle），got {:?}",
+                other.err()
+            ),
         }
     }
 

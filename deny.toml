@@ -3,11 +3,11 @@
 
 [advisories]
 version = 2
-# 漏洞(vulnerability)必须修复;unmaintained/yanked/unsound 为信息性警告,
-# 不阻断 CI,但 cargo audit 仍会显示,发布前人工复核并记录处置结论。
+# 漏洞(vulnerability)必须修复;unmaintained/yanked 为信息性警告,不阻断 CI,
+# 但 cargo audit 仍会显示,发布前人工复核并记录处置结论。
+# unsound 键已被 cargo-deny 0.18 移除(EmbarkStudios/cargo-deny#611,无替代键),故不配置。
 unmaintained = "none"
 yanked = "allow"
-unsound = "none"
 # 处置策略:出现新 advisory 时,若为不可达路径(transitive/未启用 feature)
 # 可在此以 { id = "...", reason = "..." } 记录豁免;否则必须升级修复。
 ignore = [

@@ -109,6 +109,8 @@ pub enum ModelTask {
     Embedding,
     /// 决策推理（多问题作答：choice/score/noul）
     Decision,
+    /// 翻译推理（seq2seq 多语言对，engine_type=onnx 强制）
+    Translate,
 }
 
 impl fmt::Display for ModelTask {
@@ -122,6 +124,7 @@ impl ModelTask {
         match self {
             ModelTask::Embedding => "embedding",
             ModelTask::Decision => "decision",
+            ModelTask::Translate => "translate",
         }
     }
 }
@@ -293,6 +296,64 @@ impl DecisionParams {
     }
 }
 
+/// 翻译源文本 token 预算硬上限（Marian 512 位置编码窗口的 2 倍防御余量）：
+/// 配置值超限解析期显性拒绝，禁止静默钳制
+pub const MAX_TRANSLATE_SOURCE_TOKENS: usize = 1024;
+/// 翻译新生成 token 硬上限（贪心解码 EOS 停止前的生成步数封顶）
+pub const MAX_TRANSLATE_NEW_TOKENS: usize = 1024;
+
+/// per-checkpoint 翻译推理参数：引擎贪心解码与源文本预算检查消费它而非
+/// 编译期常量直传。缺省为 Marian 512/512 口径。本类型定义于 config 层
+///（配置面单一事实源），与 [`DecisionParams`] 同一先例。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct TranslationParams {
+    pub max_source_tokens: usize,
+    pub max_new_tokens: usize,
+}
+
+impl Default for TranslationParams {
+    fn default() -> Self {
+        Self {
+            max_source_tokens: 512,
+            max_new_tokens: 512,
+        }
+    }
+}
+
+impl TranslationParams {
+    /// 校验构造：0 值与超硬上限均显性报错（错误消息含字段名与实际值，
+    /// 拒绝静默钳制）。源文本与新生成长度分属 encoder/decoder 两个窗口，
+    /// 无共享窗组合校验（与 DecisionParams 的组合口径不同源）。
+    pub fn new(max_source_tokens: usize, max_new_tokens: usize) -> Result<Self, VecboostError> {
+        for (field, value, hard_limit) in [
+            (
+                "max_source_tokens",
+                max_source_tokens,
+                MAX_TRANSLATE_SOURCE_TOKENS,
+            ),
+            ("max_new_tokens", max_new_tokens, MAX_TRANSLATE_NEW_TOKENS),
+        ] {
+            if value == 0 {
+                return Err(VecboostError::config_error(format!(
+                    "{field} must be a positive integer, got 0"
+                )));
+            }
+            if value > hard_limit {
+                return Err(VecboostError::config_error(format!(
+                    "{field} exceeds hard limit: got {value}, max is {hard_limit} \
+                     (model positional-encoding window)"
+                )));
+            }
+        }
+        Ok(Self {
+            max_source_tokens,
+            max_new_tokens,
+        })
+    }
+}
+
 /// 键名拼错显性失败（如 "tsak" 报错而非被静默忽略后 task 回落默认值，
 /// 模型以错误任务身份加载成功、错误延迟到 decide 调用才暴露）；
 /// 序列化产物为对称全字段集合，回读不受影响。
@@ -324,6 +385,11 @@ pub struct ModelConfig {
     /// 解析或 switch_model 命中预设时填充。
     #[serde(default)]
     pub decision_params: Option<DecisionParams>,
+    /// 翻译推理参数（max_source_tokens/max_new_tokens，per-checkpoint）：
+    /// None = 引擎缺省 512/512（与 [`TranslationParams::default`] 同源）；
+    /// `Some` 仅对 task=translate 的加载路径有意义，其余任务下为 no-op。
+    #[serde(default)]
+    pub translation_params: Option<TranslationParams>,
 }
 
 impl Default for ModelConfig {
@@ -343,6 +409,7 @@ impl Default for ModelConfig {
             quantized: false,
             task: ModelTask::Embedding,
             decision_params: None,
+            translation_params: None,
         }
     }
 }
@@ -605,11 +672,108 @@ mod tests {
             serde_json::to_string(&ModelTask::Decision).unwrap(),
             "\"decision\""
         );
+        assert_eq!(
+            serde_json::to_string(&ModelTask::Translate).unwrap(),
+            "\"translate\""
+        );
 
         let decoded: ModelTask = serde_json::from_str("\"embedding\"").unwrap();
         assert_eq!(decoded, ModelTask::Embedding);
         let decoded: ModelTask = serde_json::from_str("\"decision\"").unwrap();
         assert_eq!(decoded, ModelTask::Decision);
+        let decoded: ModelTask = serde_json::from_str("\"translate\"").unwrap();
+        assert_eq!(decoded, ModelTask::Translate);
+    }
+
+    #[test]
+    fn test_model_task_translate_display_and_as_str() {
+        assert_eq!(ModelTask::Translate.as_str(), "translate");
+        assert_eq!(ModelTask::Translate.to_string(), "translate");
+    }
+
+    #[test]
+    fn test_translation_params_new_valid() {
+        let params = TranslationParams::new(512, 512).unwrap();
+        assert_eq!(params.max_source_tokens, 512);
+        assert_eq!(params.max_new_tokens, 512);
+
+        // 硬上限边界值合法
+        TranslationParams::new(MAX_TRANSLATE_SOURCE_TOKENS, MAX_TRANSLATE_NEW_TOKENS).unwrap();
+
+        // 缺省 512/512（Marian 口径）
+        assert_eq!(
+            TranslationParams::default(),
+            TranslationParams::new(512, 512).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_translation_params_zero_rejected() {
+        let err = TranslationParams::new(0, 512).unwrap_err();
+        assert!(
+            err.error_detail().contains("max_source_tokens"),
+            "0 值错误必须指明字段名，err={}",
+            err.error_detail()
+        );
+        let err = TranslationParams::new(512, 0).unwrap_err();
+        assert!(
+            err.error_detail().contains("max_new_tokens"),
+            "0 值错误必须指明字段名，err={}",
+            err.error_detail()
+        );
+    }
+
+    #[test]
+    fn test_translation_params_over_hard_limit_rejected() {
+        let err = TranslationParams::new(MAX_TRANSLATE_SOURCE_TOKENS + 1, 512).unwrap_err();
+        assert!(
+            err.error_detail().contains("exceeds hard limit"),
+            "err={}",
+            err.error_detail()
+        );
+        let err = TranslationParams::new(512, MAX_TRANSLATE_NEW_TOKENS + 1).unwrap_err();
+        assert!(
+            err.error_detail().contains("exceeds hard limit"),
+            "err={}",
+            err.error_detail()
+        );
+    }
+
+    #[test]
+    fn test_translation_params_serde_roundtrip() {
+        let params = TranslationParams::new(256, 384).unwrap();
+        let json = serde_json::to_string(&params).unwrap();
+        assert!(
+            json.contains("max_source_tokens") && json.contains("max_new_tokens"),
+            "json={json}"
+        );
+        let decoded: TranslationParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn test_model_config_translation_params_field() {
+        // 旧配置缺 translation_params 字段 → None（零破坏）
+        let legacy: ModelConfig = serde_json::from_str(
+            r#"{"name":"m","engine_type":"candle","model_path":"models/m","device":"cpu","max_batch_size":32,"oom_fallback_enabled":true}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.translation_params, None);
+
+        // 带 translation_params 的往返
+        let config = ModelConfig {
+            translation_params: Some(TranslationParams::new(256, 384).unwrap()),
+            task: ModelTask::Translate,
+            ..ModelConfig::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"task\":\"translate\""), "json={json}");
+        let decoded: ModelConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.task, ModelTask::Translate);
+        assert_eq!(
+            decoded.translation_params,
+            Some(TranslationParams::new(256, 384).unwrap())
+        );
     }
 
     #[test]
@@ -711,6 +875,7 @@ mod tests {
             task: ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         };
 
         assert_eq!(config.name, "bge-m3");
@@ -735,6 +900,7 @@ mod tests {
             task: ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -1248,6 +1414,7 @@ mod tests {
             task: ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         };
 
         let context = InferenceContext::with_config(&config, Precision::Fp16);

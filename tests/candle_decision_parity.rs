@@ -45,6 +45,7 @@ fn decision_config(model_path: PathBuf, engine_type: EngineType) -> ModelConfig 
         task: ModelTask::Decision,
         quantized: false,
         decision_params: None,
+        translation_params: None,
     }
 }
 

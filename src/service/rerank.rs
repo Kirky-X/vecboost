@@ -785,6 +785,7 @@ mod tests {
     async fn test_mock_rerank_engine_try_fallback() {
         let mut engine = MockRerankEngine;
         let config = crate::config::model::ModelConfig {
+            translation_params: None,
             name: "test".to_string(),
             engine_type: crate::config::model::EngineType::Candle,
             model_path: std::path::PathBuf::from("/tmp"),
@@ -832,6 +833,7 @@ mod tests {
     async fn test_no_rerank_engine_try_fallback() {
         let mut engine = NoRerankEngine;
         let config = crate::config::model::ModelConfig {
+            translation_params: None,
             name: "test".to_string(),
             engine_type: crate::config::model::EngineType::Candle,
             model_path: std::path::PathBuf::from("/tmp"),

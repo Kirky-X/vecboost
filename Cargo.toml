@@ -4,12 +4,12 @@ version = "0.3.0-rc.1"
 edition = "2024"
 rust-version = "1.91"
 authors = ["Kirky-X <Kirky-X@outlook.com>"]
-description = "High-performance embedding vector service written in Rust"
+description = "High-performance multi-task inference service: embeddings, rerank, decision, translation, and language detection"
 repository = "https://github.com/Kirky-X/vecboost"
 documentation = "https://github.com/Kirky-X/vecboost"
 homepage = "https://github.com/Kirky-X/vecboost"
 license = "Apache-2.0"
-keywords = ["embedding", "vector", "ml", "ai", "inference"]
+keywords = ["embedding", "vector", "ml", "ai", "inference", "translation", "language-detection"]
 categories = ["asynchronous", "science", "web-programming::http-server"]
 
 [dependencies]
@@ -95,6 +95,8 @@ half = { version = "2.7", default-features = false, optional = true }
 hf-hub = { workspace = true }
 # tokenizers 全平台直接依赖（移除 cfg(target_os) 门控）
 tokenizers = { version = "0.23", default-features = false, features = ["http", "onig"] }
+# 语言检测（非 optional）：翻译 auto 检测（source_language 缺省时）与 /detect 端点共用同一检测核心
+whatlang = { version = "0.18", default-features = false }
 
 # Web Framework (http feature)
 axum = { version = "0.8", optional = true, default-features = false, features = ["http1", "json", "tokio", "tracing", "macros", "matched-path", "original-uri", "query"] }

@@ -22,7 +22,7 @@ use super::app::DatabaseConfig;
 use super::app::{
     AuditConfig, AuthConfig, DeviceConfig, EmbeddingConfig, MemoryPagingConfig, MemoryPoolConfig,
     ModelConfig, MonitoringConfig, RateLimitConfig, RerankConfig, SemanticCacheConfig,
-    ServerConfig, apply_priority_defaults, apply_security_env_overrides,
+    ServerConfig, TranslationConfig, apply_priority_defaults, apply_security_env_overrides,
 };
 use crate::pipeline::PipelineConfig;
 
@@ -39,6 +39,9 @@ pub struct VecboostConfig {
     pub model: ModelConfig,
     pub embedding: EmbeddingConfig,
     pub rerank: RerankConfig,
+    /// 翻译语言对配置（`[translation]` 段 + `[[translation.pairs]]` 数组表）：
+    /// 缺省空表 = 未配置，端点仍注册（translate-not-configured 400 显性拒绝）
+    pub translation: TranslationConfig,
     pub monitoring: MonitoringConfig,
     pub auth: AuthConfig,
     pub rate_limit: RateLimitConfig,
@@ -113,6 +116,9 @@ impl VecboostConfig {
         collect("model", self.model.validate());
         collect("embedding", self.embedding.validate());
         collect("rerank", self.rerank.validate());
+        if let Err(e) = self.translation.validate() {
+            errors.push(format!("translation: {}", e.error_detail()));
+        }
 
         if errors.is_empty() {
             Ok(())
@@ -149,6 +155,78 @@ mod tests {
         assert!(!config.server.grpc_enabled);
         assert!(config.model.batch_size > 0);
         assert!(config.embedding.max_batch_size > 0);
+        // 缺 [translation] 段 → 空表（未配置语义），校验通过
+        assert!(config.translation.pairs.is_empty());
+        VecboostConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn test_load_via_confers_translation_section() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("test_config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[translation]
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "zh"
+model_path = "models/opus-mt-en-zh"
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "es"
+model_path = "models/opus-mt-en-es"
+"#,
+        )
+        .expect("write config");
+        let config =
+            VecboostConfig::load_via_confers_with_path(config_path.to_str().expect("utf8 path"))
+                .expect("translation 段应可加载");
+        assert_eq!(config.translation.pairs.len(), 2);
+        assert_eq!(config.translation.pairs[0].source_language, "en");
+        assert_eq!(config.translation.pairs[1].target_language, "es");
+    }
+
+    #[test]
+    fn test_load_via_confers_duplicate_translation_pair_rejected() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("VECBOOST_JWT_SECRET");
+            std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
+        }
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("test_config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[translation]
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "zh"
+model_path = "models/opus-mt-en-zh"
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "zh"
+model_path = "models/opus-mt-en-zh-2"
+"#,
+        )
+        .expect("write config");
+        // 解析成功但校验期显性拒绝（重复对静默覆盖 = 路由语义缺陷）
+        let result =
+            VecboostConfig::load_via_confers_with_path(config_path.to_str().expect("utf8 path"));
+        assert!(
+            result.is_err(),
+            "重复 (source,target) 对必须在启动期显性拒绝"
+        );
     }
 
     #[test]

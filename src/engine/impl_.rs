@@ -5,7 +5,7 @@
 
 use super::{AnyEngine, InferenceEngine};
 use crate::config::model::{EngineType, ModelConfig, ModelTask, Precision};
-use crate::domain::{DecisionRequest, DecisionResponse};
+use crate::domain::{DecisionRequest, DecisionResponse, TranslateRequest, TranslateResponse};
 use crate::error::VecboostError;
 use async_trait::async_trait;
 
@@ -39,6 +39,8 @@ impl InferenceEngine for AnyEngine {
             #[cfg(feature = "onnx")]
             // 决策引擎的 embed 覆盖返回 UnsupportedTask（不产向量）
             AnyEngine::Decision(engine) => engine.embed(text),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.embed(text),
             AnyEngine::CandleDecision(engine) => engine.embed(text),
         }
     }
@@ -52,6 +54,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.embed_batch(texts),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.embed_batch(texts),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.embed_batch(texts),
             AnyEngine::CandleDecision(engine) => engine.embed_batch(texts),
         }
     }
@@ -65,6 +69,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.precision(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.precision(),
             AnyEngine::CandleDecision(engine) => engine.precision(),
         }
     }
@@ -78,6 +84,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.supports_mixed_precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.supports_mixed_precision(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.supports_mixed_precision(),
             AnyEngine::CandleDecision(engine) => engine.supports_mixed_precision(),
         }
     }
@@ -92,6 +100,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.is_fallback_triggered(),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.is_fallback_triggered(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.is_fallback_triggered(),
             AnyEngine::CandleDecision(engine) => engine.is_fallback_triggered(),
         }
     }
@@ -106,6 +116,8 @@ impl InferenceEngine for AnyEngine {
             #[cfg(feature = "onnx")]
             // 决策管线未覆盖 count_tokens，走 trait 默认（调用方回退 bytes/4）
             AnyEngine::Decision(engine) => InferenceEngine::count_tokens(engine, text),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => InferenceEngine::count_tokens(engine, text),
             // candle 决策引擎同口径：未覆盖 count_tokens，走 trait 默认
             AnyEngine::CandleDecision(engine) => InferenceEngine::count_tokens(engine, text),
         }
@@ -124,6 +136,8 @@ impl InferenceEngine for AnyEngine {
             #[cfg(feature = "onnx")]
             // 决策管线暂无分阶段埋点，走 trait 默认 None
             AnyEngine::Decision(engine) => InferenceEngine::take_stage_snapshot(engine),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => InferenceEngine::take_stage_snapshot(engine),
             // candle 决策引擎同口径：无分阶段埋点，走 trait 默认 None
             AnyEngine::CandleDecision(engine) => InferenceEngine::take_stage_snapshot(engine),
         }
@@ -138,6 +152,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.try_fallback_to_cpu(config).await,
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.try_fallback_to_cpu(config).await,
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.try_fallback_to_cpu(config).await,
             AnyEngine::CandleDecision(engine) => engine.try_fallback_to_cpu(config).await,
         }
     }
@@ -153,9 +169,28 @@ impl InferenceEngine for AnyEngine {
             // trait 方法（DecisionPipeline 固有方法名为 decision()，无同名
             // 遮蔽）：覆盖后经 trait 自然进决策管线，漏转发即恒 UnsupportedTask
             AnyEngine::Decision(engine) => engine.decide(req),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.decide(req),
             // trait 方法（CandleDecisionEngine 固有方法名为 decide_impl()，
             // 无同名遮蔽）：覆盖后经 trait 自然进 candle 决策头
             AnyEngine::CandleDecision(engine) => engine.decide(req),
+        }
+    }
+
+    /// 翻译推理按变体转发：仅 OnnxTranslate 有真实覆盖，其余引擎走 trait
+    /// 默认 UnsupportedTask（与 decide 同款漏转发即恒失败的分布口径）
+    fn translate(&self, req: &TranslateRequest) -> Result<TranslateResponse, VecboostError> {
+        match self {
+            AnyEngine::Candle(engine) => InferenceEngine::translate(engine, req),
+            #[cfg(feature = "quantized-gguf")]
+            AnyEngine::Quantized(engine) => InferenceEngine::translate(engine, req),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Onnx(engine) => InferenceEngine::translate(engine, req),
+            #[cfg(feature = "onnx")]
+            AnyEngine::Decision(engine) => InferenceEngine::translate(engine, req),
+            AnyEngine::CandleDecision(engine) => InferenceEngine::translate(engine, req),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.translate(req),
         }
     }
 
@@ -170,6 +205,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.decide_logits(req),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.decide_logits(req),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.decide_logits(req),
             AnyEngine::CandleDecision(engine) => engine.decide_logits(req),
         }
     }
@@ -183,6 +220,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.supports_task(task),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.supports_task(task),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.supports_task(task),
             AnyEngine::CandleDecision(engine) => engine.supports_task(task),
         }
     }
@@ -199,6 +238,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => engine.supports_rerank(),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => engine.supports_rerank(),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(engine) => engine.supports_rerank(),
             AnyEngine::CandleDecision(engine) => engine.supports_rerank(),
         }
     }
@@ -212,6 +253,11 @@ impl InferenceEngine for AnyEngine {
             // 自动 CPU 回退执法）；漏转发会让服务层接线全部落在 trait 默认
             // no-op 上，引擎侧内存执法链路静默失效
             AnyEngine::Candle(engine) => engine.attach_memory_limit_controller(controller),
+            #[cfg(feature = "onnx")]
+            // 翻译引擎无内存感知覆盖，UFCS 显式走 trait 默认 no-op（同量化臂口径）
+            AnyEngine::OnnxTranslate(engine) => {
+                InferenceEngine::attach_memory_limit_controller(engine, controller)
+            }
             #[cfg(feature = "quantized-gguf")]
             // 量化引擎无内存感知分支，UFCS 显式走 trait 默认 no-op
             //（与 is_fallback_triggered 的 Quantized 臂同口径）
@@ -256,6 +302,7 @@ mod tests {
             task: ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         }
     }
 
@@ -276,6 +323,7 @@ mod tests {
             task: ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         }
     }
 
@@ -551,6 +599,7 @@ mod tests {
             task: ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         };
         let ctx = InferenceContext::with_config(&config, Precision::Fp16);
         assert_eq!(ctx.model_name, "ctx-test");
@@ -600,6 +649,7 @@ mod tests {
             task: ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         };
         let engine =
             AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("load real model");
@@ -615,6 +665,47 @@ mod tests {
             "AnyEngine::Candle 未覆盖 decide，转发必须落到 trait 默认 UnsupportedTask，got {:?}",
             err
         );
+    }
+
+    /// AnyEngine::Candle 未覆盖 translate：转发必须落到 trait 默认
+    /// UnsupportedTask（漏转发即恒失败的分布口径，decide 同款测试）。
+    #[test]
+    fn test_any_engine_candle_translate_falls_to_default_unsupported() {
+        if !real_model_available() {
+            eprintln!("Skipping test: model weights not found at models/BAAI-bge-small-en-v1.5");
+            return;
+        }
+        let config = ModelConfig {
+            name: "bge-small-en-translate-default".to_string(),
+            engine_type: EngineType::Candle,
+            model_path: PathBuf::from("models/BAAI-bge-small-en-v1.5"),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 32,
+            pooling_mode: None,
+            expected_dimension: Some(384),
+            memory_limit_bytes: None,
+            oom_fallback_enabled: true,
+            model_sha256: None,
+            task: ModelTask::Embedding,
+            quantized: false,
+            decision_params: None,
+            translation_params: None,
+        };
+        let engine =
+            AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("load real model");
+
+        let req: crate::domain::TranslateRequest =
+            serde_json::from_str(r#"{"text":"hello","target_language":"zh"}"#).unwrap();
+        let err = engine.translate(&req).unwrap_err();
+        assert!(
+            matches!(err, VecboostError::UnsupportedTask(_)),
+            "AnyEngine::Candle 未覆盖 translate，转发必须落到 trait 默认 UnsupportedTask，got {:?}",
+            err
+        );
+        // OnnxTranslate 语义钉：仅 Translate 任务为 true（纯函数断言经
+        // supports_task 契约面，真机加载由 bundle 守卫测试覆盖）
+        assert!(!engine.supports_task(ModelTask::Translate));
     }
 
     /// 真实模型 AnyEngine（candle 变体）转发 attach_memory_limit_controller：
@@ -645,6 +736,7 @@ mod tests {
             task: ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         };
         let mut engine =
             AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("load real model");
@@ -655,6 +747,8 @@ mod tests {
             AnyEngine::Onnx(_) => panic!("expected Candle variant"),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(_) => panic!("expected Candle variant"),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(_) => panic!("expected Candle variant"),
             AnyEngine::CandleDecision(_) => panic!("expected Candle variant"),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(_) => panic!("expected Candle variant"),
@@ -669,6 +763,8 @@ mod tests {
             AnyEngine::Onnx(_) => panic!("expected Candle variant"),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(_) => panic!("expected Candle variant"),
+            #[cfg(feature = "onnx")]
+            AnyEngine::OnnxTranslate(_) => panic!("expected Candle variant"),
             AnyEngine::CandleDecision(_) => panic!("expected Candle variant"),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(_) => panic!("expected Candle variant"),

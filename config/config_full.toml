@@ -324,3 +324,32 @@ half_open_requests = 3
 
 # 熔断恢复超时 (秒)
 recovery_timeout = 30
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 翻译多语言对配置（可选；默认无 [translation] 段 = 未配置，
+# /api/1/translate 端点仍注册、请求以 400 translate-not-configured 显性拒绝）
+#
+# 每对 [[translation.pairs]] 启动期急切构建（EngineFactory task=translate 分派，
+# 需 onnx feature；任一 bundle 缺失启动期 fail-fast）；请求按
+# (source_language, target_language) 精确路由，source 缺省时经 whatlang
+# auto 检测（不可靠 → 400）。
+# 语言码契约：小写 ISO 639-1（无等价者 639-3 码），与 /detect 同一口径。
+# pair 数上限 16；token 参数缺省 512/512（硬上限 1024）。
+#
+# 推荐仓库（HF）：Xenova/opus-mt-en-zh、Xenova/opus-mt-en-es
+# （bundle 契约与下载方式见 docs/USER_GUIDE.md「翻译 bundle 契约」节）
+#
+# [translation]
+#
+# [[translation.pairs]]
+# source_language = "en"
+# target_language = "zh"
+# model_path = "models/opus-mt-en-zh"
+# # tokenizer_path = "models/opus-mt-en-zh/tokenizer.json"   # 可选显式覆盖
+# # max_source_tokens = 512                                  # 可选（缺省 512）
+# # max_new_tokens = 512                                     # 可选（缺省 512）
+#
+# [[translation.pairs]]
+# source_language = "en"
+# target_language = "es"
+# model_path = "models/opus-mt-en-es"

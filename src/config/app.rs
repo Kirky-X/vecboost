@@ -5,12 +5,16 @@
 //!
 //! `VecboostConfig` 的 confers 加载逻辑见 `app_config.rs`(confers 完全接管配置加载,
 //! 禁止手写 config/toml 解析)。本文件只保留子结构体定义、默认值实现、
-//! 安全环境变量覆盖和优先级默认值。
+//! 安全环境变量覆盖和优先级默认值；`VecboostConfig` 本体在
+//! `app_config.rs`（字段列表见其定义处），此处不定义容器结构。
 
 #![allow(clippy::derivable_impls)]
 
 use crate::error::VecboostError;
+use crate::text::is_published_language_code;
+use crate::utils::validator::input::is_valid_language_code;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
 #[serde(default)]
@@ -150,6 +154,112 @@ pub struct RerankConfig {
     pub cache_enabled: bool,
     #[garde(skip)]
     pub cache_size: usize,
+}
+
+/// 翻译语言对数量上限：每 pair 一个驻留 bundle（int8 量化驻留估算见
+/// service/embedding 的 resident-bytes 口径），16 对为内存预算硬上限，
+/// 超出启动期显性拒绝（禁止静默钳制或截断配置）。
+pub const MAX_TRANSLATE_PAIRS: usize = 16;
+
+/// 翻译配置（`[translation]` 段）。
+///
+/// 缺省空 pairs = 翻译未配置：端点仍注册，请求以 translate-not-configured
+/// 400 显性拒绝（与 decision 无条件预构建语义对齐，不静默消失）。
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
+pub struct TranslationConfig {
+    /// `[[translation.pairs]]` 数组表：每条一个 (source,target) 语言对。
+    /// 字段级 `#[serde(default)]` 提供缺省语义（缺 `[translation]` 段时空表）；
+    /// 不加容器级 `#[serde(default)]`——toml 1.1 Deserializer 对「容器缺省 +
+    /// `[[table.field]]` 数组表」组合会静默丢弃 pairs（T011 实测），显性解析
+    /// 优于静默丢数据。
+    #[serde(default)]
+    pub pairs: Vec<TranslationPairConfig>,
+}
+
+impl Default for TranslationConfig {
+    fn default() -> Self {
+        Self { pairs: Vec::new() }
+    }
+}
+
+impl TranslationConfig {
+    /// 配置面校验：语言码格式（与域层/服务层同一谓词）、model_path 非空、
+    /// (source,target) 重复对显性拒绝（路由表会静默覆盖后者，必须在
+    /// 解析期暴露）、pair 数上限。
+    pub fn validate(&self) -> Result<(), VecboostError> {
+        if self.pairs.len() > MAX_TRANSLATE_PAIRS {
+            return Err(VecboostError::config_error(format!(
+                "translation.pairs count {} exceeds hard limit {MAX_TRANSLATE_PAIRS} \
+                 (per-pair resident bundle memory budget)",
+                self.pairs.len()
+            )));
+        }
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        for (index, pair) in self.pairs.iter().enumerate() {
+            for (field, code) in [
+                ("source_language", &pair.source_language),
+                ("target_language", &pair.target_language),
+            ] {
+                if !is_valid_language_code(code) {
+                    return Err(VecboostError::config_error(format!(
+                        "translation.pairs[{index}].{field}: invalid language code \
+                         {code:?} (lowercase ISO 639-1 codes only)"
+                    )));
+                }
+            }
+            // source 发布码校验（评审 PERF-7，与检测核心发布集同源）：
+            // auto 检测路由键恒为发布码，source 配置非发布码即死 pair
+            //（仅显式指定可达，静默浪费驻留资源）；target 由 bundle 决定、
+            // 显式指定可达，维持格式校验即可
+            if !is_published_language_code(&pair.source_language) {
+                return Err(VecboostError::config_error(format!(
+                    "translation.pairs[{index}].source_language: {:?} is not a published language code (auto detection can never route to this pair)",
+                    pair.source_language
+                )));
+            }
+            // token 参数校验上移（评审 ARC-2）：0/超硬上限启动期显性拒绝
+            //（错误带 pairs[index] 定位），不再延迟到引擎加载期；缺省值取
+            // TranslationParams::default() 单一事实源（评审 RES-2：512 字面量
+            // 不得出现第二处来源）
+            let defaults = crate::config::model::TranslationParams::default();
+            crate::config::model::TranslationParams::new(
+                pair.max_source_tokens.unwrap_or(defaults.max_source_tokens),
+                pair.max_new_tokens.unwrap_or(defaults.max_new_tokens),
+            )
+            .map_err(|e| VecboostError::config_error(format!("translation.pairs[{index}]: {e}")))?;
+            if pair.model_path.as_os_str().is_empty() {
+                return Err(VecboostError::config_error(format!(
+                    "translation.pairs[{index}].model_path must not be empty"
+                )));
+            }
+            if !seen.insert((pair.source_language.clone(), pair.target_language.clone())) {
+                return Err(VecboostError::config_error(format!(
+                    "translation.pairs[{index}]: duplicate (source,target) pair \
+                     ({}, {}) — routing would silently shadow the earlier entry",
+                    pair.source_language, pair.target_language
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 单个翻译语言对（`[[translation.pairs]]` 条目）。
+///
+/// 语言码为发布码契约（ISO 639-1 优先、无等价者 639-3 码，全小写，
+/// 与 /detect 及翻译请求同一口径，无大小写归一）；model_path 指向本地
+/// seq2seq bundle 目录（强制含 tokenizer.json，契约见文档）；token 参数
+/// 缺省回落引擎默认 512/512（`TranslationParams::default`）。
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
+pub struct TranslationPairConfig {
+    pub source_language: String,
+    pub target_language: String,
+    pub model_path: PathBuf,
+    /// tokenizer 显式路径覆盖（可选；缺省取 bundle 目录内 tokenizer.json）
+    pub tokenizer_path: Option<PathBuf>,
+    pub max_source_tokens: Option<usize>,
+    pub max_new_tokens: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
@@ -775,6 +885,151 @@ mod tests {
     #[test]
     fn authconfig_default_csrf_disabled() {
         assert!(!AuthConfig::default().csrf.enabled);
+    }
+
+    #[test]
+    fn test_translation_config_default_empty() {
+        let config = TranslationConfig::default();
+        assert!(config.pairs.is_empty(), "空 [translation] 表 = 未配置");
+    }
+
+    #[test]
+    fn test_translation_pairs_toml_parse_two_pairs() {
+        let toml_text = r#"
+[translation]
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "zh"
+model_path = "models/opus-mt-en-zh"
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "es"
+model_path = "models/opus-mt-en-es"
+tokenizer_path = "models/opus-mt-en-es/tokenizer.json"
+max_source_tokens = 256
+max_new_tokens = 384
+"#;
+        // 经 toml::Value 中介反序列化。不直接用 toml::from_str::<
+        // TranslationConfig>：dev-dep toml 1.1.6 流式 Deserializer 对
+        // 「嵌套数组表（[[x.y]]）」文档会把根表呈为空映射（PlainProbe
+        // 探针 Err "missing field \`pairs\`，keys: []"，T011 实测），而
+        // Value 路径与生产加载器（confers → toml 0.8.23）均正确——后者
+        // 由 app_config::tests::test_load_via_confers_translation_section 钉住。
+        let value: toml::Value = toml::from_str(toml_text).unwrap();
+        let config: TranslationConfig = value
+            .get("translation")
+            .expect("translation 段")
+            .clone()
+            .try_into()
+            .unwrap();
+        assert_eq!(config.pairs.len(), 2);
+        assert_eq!(config.pairs[0].source_language, "en");
+        assert_eq!(config.pairs[0].target_language, "zh");
+        assert_eq!(config.pairs[0].tokenizer_path, None);
+        assert_eq!(config.pairs[0].max_source_tokens, None);
+        assert_eq!(
+            config.pairs[1].tokenizer_path,
+            Some(PathBuf::from("models/opus-mt-en-es/tokenizer.json"))
+        );
+        assert_eq!(config.pairs[1].max_source_tokens, Some(256));
+        assert_eq!(config.pairs[1].max_new_tokens, Some(384));
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn test_translation_duplicate_pair_rejected() {
+        let config = TranslationConfig {
+            pairs: vec![
+                TranslationPairConfig {
+                    source_language: "en".to_string(),
+                    target_language: "zh".to_string(),
+                    model_path: "models/a".into(),
+                    tokenizer_path: None,
+                    max_source_tokens: None,
+                    max_new_tokens: None,
+                },
+                TranslationPairConfig {
+                    source_language: "en".to_string(),
+                    target_language: "zh".to_string(),
+                    model_path: "models/b".into(),
+                    tokenizer_path: None,
+                    max_source_tokens: None,
+                    max_new_tokens: None,
+                },
+            ],
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.error_detail().contains("duplicate"),
+            "(source,target) 重复对必须显性拒绝，err={}",
+            err.error_detail()
+        );
+    }
+
+    #[test]
+    fn test_translation_invalid_language_code_rejected() {
+        for (src, tgt) in [("en", "EN"), ("e", "zh"), ("toolong", "zh"), ("xx1", "zh")] {
+            let config = TranslationConfig {
+                pairs: vec![TranslationPairConfig {
+                    source_language: src.to_string(),
+                    target_language: tgt.to_string(),
+                    model_path: "models/a".into(),
+                    tokenizer_path: None,
+                    max_source_tokens: None,
+                    max_new_tokens: None,
+                }],
+            };
+            let err = config.validate().unwrap_err();
+            assert!(
+                err.error_detail().contains("invalid language code"),
+                "非法语言码 ({src},{tgt}) 必须拒绝，err={}",
+                err.error_detail()
+            );
+        }
+    }
+
+    #[test]
+    fn test_translation_empty_model_path_rejected() {
+        let config = TranslationConfig {
+            pairs: vec![TranslationPairConfig {
+                source_language: "en".to_string(),
+                target_language: "zh".to_string(),
+                model_path: "".into(),
+                tokenizer_path: None,
+                max_source_tokens: None,
+                max_new_tokens: None,
+            }],
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.error_detail().contains("model_path"),
+            "model_path 非空校验必须生效，err={}",
+            err.error_detail()
+        );
+    }
+
+    #[test]
+    fn test_translation_max_pairs_rejected() {
+        let pairs = (0..=MAX_TRANSLATE_PAIRS)
+            .map(|i| TranslationPairConfig {
+                source_language: format!("z{i}"),
+                target_language: "zh".to_string(),
+                model_path: "models/a".into(),
+                tokenizer_path: None,
+                max_source_tokens: None,
+                max_new_tokens: None,
+            })
+            .collect();
+        let config = TranslationConfig { pairs };
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.error_detail()
+                .contains(&MAX_TRANSLATE_PAIRS.to_string()),
+            "pair 数上限 {MAX_TRANSLATE_PAIRS} 必须生效，err={}",
+            err.error_detail()
+        );
     }
 
     use super::*;

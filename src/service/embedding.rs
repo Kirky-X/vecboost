@@ -1393,6 +1393,7 @@ impl EmbeddingService {
         };
 
         let model_config = ModelConfig {
+            translation_params: None,
             name: req.model_name.clone(),
             // 预设 engine_type 为缺省层（req wire 无此维度），未配置继承当前
             // 加载模型（启动时即 [model].engine_type），无当前模型回落 Candle
@@ -1696,6 +1697,17 @@ fn estimate_resident_bytes(
     {
         disk.saturating_mul(2)
     } else {
+        // Translate/Onnx 臂（cfg 门：EngineType::Onnx 变体仅在 onnx feature
+        // 下存在）：翻译 bundle（Marian fp32/int8）驻留系数无实测标定
+        // （报告 R8）——int8 权重驻留 ≈ 磁盘，但 fp32 变体 + tokenizer +
+        // logits 工作区高于磁盘；取保守系数 2.0（同 Decision/Candle upcast
+        // 口径量级），高估方向安全（更早拒绝超限）。实测标定后修正。
+        #[cfg(feature = "onnx")]
+        if task == crate::config::model::ModelTask::Translate
+            && *engine_type == crate::config::model::EngineType::Onnx
+        {
+            return disk.saturating_mul(2);
+        }
         disk
     }
 }
@@ -1863,6 +1875,7 @@ mod tests {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let baseline = ModelConfig {
+            translation_params: None,
             name: "baseline".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(MINILM),
@@ -1931,6 +1944,48 @@ mod tests {
         );
     }
 
+    /// Translate 臂（int8 bundle 驻留估算）：磁盘 × 保守系数 2.0——
+    /// ≥ 磁盘字节数（保守方向），且与 Decision/Embedding 臂相异
+    ///（记账区分度：同 bundle 不同任务不得共享用同一估算线）。
+    #[test]
+    fn test_estimate_resident_bytes_translate_onnx_conservative() {
+        let temp_dir = tempdir().unwrap();
+        // 模拟 bundle：根层 config/tokenizer + onnx/ 子目录双模型
+        std::fs::write(temp_dir.path().join("tokenizer.json"), vec![0u8; 300]).unwrap();
+        std::fs::create_dir(temp_dir.path().join("onnx")).unwrap();
+        std::fs::write(
+            temp_dir.path().join("onnx/encoder_model.onnx"),
+            vec![0u8; 400],
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("onnx/decoder_model_merged.onnx"),
+            vec![0u8; 500],
+        )
+        .unwrap();
+        // 非 onnx 构建面本测试仅验证磁盘求和口径不进 Translate 臂（评审 SEC-4）
+        #[cfg_attr(not(feature = "onnx"), allow(unused_variables))]
+        let disk = 300 + 400 + 500;
+
+        #[cfg(feature = "onnx")]
+        {
+            let est =
+                estimate_resident_bytes(ModelTask::Translate, &EngineType::Onnx, temp_dir.path());
+            assert_eq!(est, disk * 2, "Translate/Onnx 臂 = 磁盘 × 2 保守系数");
+            assert!(est >= disk, "保守系数语义：驻留估算不得低于磁盘占用");
+            assert_ne!(
+                est,
+                estimate_resident_bytes(ModelTask::Decision, &EngineType::Onnx, temp_dir.path()),
+                "与 Decision/Onnx 臂（磁盘口径）相异"
+            );
+            assert_ne!(
+                est,
+                estimate_resident_bytes(ModelTask::Embedding, &EngineType::Candle, temp_dir.path()),
+                "与 Embedding/Candle 臂（磁盘口径）相异"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn test_embed_batch_texts_short_engine_result_is_error_not_panic() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1982,6 +2037,7 @@ mod tests {
         let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
+            translation_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2021,6 +2077,7 @@ mod tests {
         let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
+            translation_params: None,
             name: "bge-m3".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2060,6 +2117,7 @@ mod tests {
         let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
+            translation_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2121,6 +2179,7 @@ mod tests {
         let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
+            translation_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2151,6 +2210,7 @@ mod tests {
         let mock_engine = TestEngine::new(1024);
 
         let model_config = ModelConfig {
+            translation_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2194,6 +2254,7 @@ mod tests {
         let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
+            translation_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2402,6 +2463,7 @@ mod tests {
         let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
+            translation_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2475,6 +2537,7 @@ mod tests {
         let mock_engine = TestEngine::new(384);
 
         let model_config = ModelConfig {
+            translation_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(_temp_dir.path()),
@@ -2651,6 +2714,7 @@ mod tests {
     fn make_model_config(name: &str, dimension: usize) -> ModelConfig {
         let temp_dir = tempdir().unwrap();
         ModelConfig {
+            translation_params: None,
             name: name.to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -4099,6 +4163,7 @@ mod tests {
         ));
         let manager = Arc::new(ModelManager::with_loader(loader));
         let config = ModelConfig {
+            translation_params: None,
             name: model_name.to_string(),
             engine_type: EngineType::Candle,
             model_path,
@@ -4824,6 +4889,7 @@ mod tests {
         let mock_engine = TestEngine::new(384);
         let temp_dir = tempdir().unwrap();
         let model_config = ModelConfig {
+            translation_params: None,
             name: "preserve-orig".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),

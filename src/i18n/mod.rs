@@ -239,6 +239,123 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_validation_keys_resolved_zh() {
+        ensure_init();
+        // 缺键时 tr 回退键名本身：断言不等于键名即证明 FTL 已配置
+        let empty = tr_locale("detect-empty-text", Some("zh"));
+        assert_ne!(empty, "detect-empty-text", "zh detect-empty-text 键缺失");
+        assert!(empty.contains("文本不能为空"), "zh 文案不符: {empty}");
+
+        let too_long = tr_locale("detect-too-long", Some("zh"));
+        assert_ne!(too_long, "detect-too-long", "zh detect-too-long 键缺失");
+
+        let invalid = tr_locale("detect-invalid-allowlist", Some("zh"));
+        assert_ne!(
+            invalid, "detect-invalid-allowlist",
+            "zh detect-invalid-allowlist 键缺失"
+        );
+    }
+
+    #[test]
+    fn test_detect_validation_keys_resolved_en() {
+        ensure_init();
+        let empty = tr_locale("detect-empty-text", Some("en"));
+        assert_ne!(empty, "detect-empty-text", "en detect-empty-text 键缺失");
+        assert!(empty.contains("must not be empty"), "en 文案不符: {empty}");
+
+        let too_long = tr_locale("detect-too-long", Some("en"));
+        assert_ne!(too_long, "detect-too-long", "en detect-too-long 键缺失");
+
+        let invalid = tr_locale("detect-invalid-allowlist", Some("en"));
+        assert_ne!(
+            invalid, "detect-invalid-allowlist",
+            "en detect-invalid-allowlist 键缺失"
+        );
+    }
+
+    #[test]
+    fn test_detect_validation_keys_interpolation() {
+        ensure_init();
+        // 插值与 locale 无关：参数值必须出现在渲染结果中（缺键回退键名则不含）
+        let too_long = tr_with_args(
+            "detect-too-long",
+            tr_args(&[("length", "10001"), ("max", "10000")]),
+        );
+        assert_ne!(too_long, "detect-too-long", "detect-too-long 键缺失");
+        assert!(
+            too_long.contains("10001") && too_long.contains("10000"),
+            "length/max 插值必须生效: {too_long}"
+        );
+
+        let invalid = tr_with_args("detect-invalid-allowlist", tr_args(&[("code", "EN")]));
+        assert_ne!(
+            invalid, "detect-invalid-allowlist",
+            "detect-invalid-allowlist 键缺失"
+        );
+        assert!(invalid.contains("EN"), "code 插值必须生效: {invalid}");
+    }
+
+    #[test]
+    fn test_translate_keys_resolved_both_locales() {
+        ensure_init();
+        let keys = [
+            "translate-empty-text",
+            "translate-too-long",
+            "translate-unsupported",
+            "translate-not-configured",
+            "translate-unsupported-pair",
+            "translate-detect-failed",
+            "translate-too-many-source-tokens",
+        ];
+        for key in keys {
+            for locale in ["zh", "en"] {
+                let rendered = tr_locale(key, Some(locale));
+                assert_ne!(
+                    rendered, key,
+                    "{locale} 侧 {key} 键缺失（tr 回退键名即未配置）"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_translate_keys_interpolation() {
+        ensure_init();
+        // unsupported-pair：$requested/$pairs 插值
+        let pair = tr_with_args(
+            "translate-unsupported-pair",
+            tr_args(&[("requested", "en-fr"), ("pairs", "en-zh, en-es")]),
+        );
+        assert!(
+            pair.contains("en-fr") && pair.contains("en-zh"),
+            "插值必须生效: {pair}"
+        );
+
+        // too-many-source-tokens：$count/$max 插值
+        let over = tr_with_args(
+            "translate-too-many-source-tokens",
+            tr_args(&[("count", "10001"), ("max", "512")]),
+        );
+        assert!(
+            over.contains("10001") && over.contains("512"),
+            "插值必须生效: {over}"
+        );
+
+        // too-long：$length/$max 插值
+        let long = tr_with_args(
+            "translate-too-long",
+            tr_args(&[("length", "20000"), ("max", "10000")]),
+        );
+        assert!(
+            long.contains("20000") && long.contains("10000"),
+            "插值必须生效: {long}"
+        );
+
+        // zh 文案锚点（detect 同款最小语义断言）
+        assert!(tr_locale("translate-not-configured", Some("zh")).contains("语言对"));
+    }
+
+    #[test]
     fn test_tr_args_helper() {
         let args = tr_args(&[("key1", "val1"), ("key2", "val2")]);
         assert_eq!(args.len(), 2);

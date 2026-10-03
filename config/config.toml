@@ -74,11 +74,12 @@ max_sequence_length = 8192
 # 推理引擎类型 (可选，默认 candle)
 # 可选值: candle / onnx
 # onnx 需以 `--features onnx` 构建；未知值启动期显性报错。
-# task=decision 时本字段不参与分派（Laya bundle 为 onnx 格式，task 主维度优先）
+# task=decision 时本字段不参与分派（Laya bundle 为 onnx 格式，task 主维度优先）；
+# task=translate 时强制 onnx（candle 无 seq2seq 实现，配置即启动期报错）
 # engine_type = "candle"
 
 # 任务维度 (可选，默认 embedding)
-# 可选值: embedding / decision —— 二选一语义：
+# 可选值: embedding / decision / translate —— 三态语义：
 # ⚠️ task=decision 时模型加载为 Laya 决策管线，仅 /api/1/decisions 可用，
 #    embed/rerank 端点调用返回 400 Unsupported task；
 #    task=embedding（默认）时反之，decisions 端点返回 400。
@@ -90,6 +91,19 @@ max_sequence_length = 8192
 # 需要以 `--features onnx` 构建；示例:
 # task = "decision"
 # model_path = "models/laya-decision"
+# ⚠️ task=translate 时模型加载为 seq2seq 翻译引擎（仅 engine_type=onnx，
+#    candle 显性拒绝），仅 /api/1/translate 可用；翻译语言对不读本段——
+#    走文件尾部 [translation] 配置段（多语言对路由表）。
+#    注意：task=translate 主模型用法的 token 参数恒为默认 512/512
+#    （无配置入口），参数可调的翻译部署请使用 [translation].pairs。
+# 翻译 bundle 目录布局（同 onnx 契约：tokenizer.json 必填）:
+#   <bundle>/tokenizer.json                        # 强制（tokenizers 0.23 不支持 .spm）
+#   <bundle>/generation_config.json                # 解码锚点（decoder_start/eos token）
+#   <bundle>/onnx/encoder_model.onnx               # 推荐仓库 Xenova/opus-mt-en-zh / -en-es
+#   <bundle>/onnx/decoder_model_merged.onnx
+# 需要以 `--features onnx` 构建；示例:
+# task = "translate"
+# model_path = "models/opus-mt-en-zh"
 # task = "embedding"
 
 # 最大驻留模型数 (T019, 可选，默认不限制): 超限按 LFRU 驱逐 score 最低者
@@ -371,3 +385,32 @@ half_open_requests = 3
 
 # 熔断恢复超时 (秒)
 recovery_timeout = 30
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 翻译多语言对配置（可选；默认无 [translation] 段 = 未配置，
+# /api/1/translate 端点仍注册、请求以 400 translate-not-configured 显性拒绝）
+#
+# 每对 [[translation.pairs]] 启动期急切构建（EngineFactory task=translate 分派，
+# 任一 bundle 缺失启动期 fail-fast）；请求按 (source_language, target_language)
+# 精确路由，source 缺省时经 whatlang auto 检测（不可靠 → 400）。
+# 语言码契约：小写 ISO 639-1（无等价者 639-3 码），与 /detect 同一口径。
+# pair 数上限 16；token 参数缺省 512/512（硬上限 1024）。
+#
+# 推荐仓库（HF）：Xenova/opus-mt-en-zh、Xenova/opus-mt-en-es
+# （下载方式：cargo run --example download_model -- --model Xenova/opus-mt-en-zh，
+#  或经 src/utils/hf_hub.rs::download_files 取 TRANSLATE_BUNDLE_FILES 七文件清单）
+#
+# [translation]
+#
+# [[translation.pairs]]
+# source_language = "en"
+# target_language = "zh"
+# model_path = "models/opus-mt-en-zh"
+# # tokenizer_path = "models/opus-mt-en-zh/tokenizer.json"   # 可选显式覆盖
+# # max_source_tokens = 512                                   # 可选（缺省 512）
+# # max_new_tokens = 512                                      # 可选（缺省 512）
+#
+# [[translation.pairs]]
+# source_language = "en"
+# target_language = "es"
+# model_path = "models/opus-mt-en-es"

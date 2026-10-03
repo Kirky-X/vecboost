@@ -3,5 +3,7 @@
 
 pub mod common;
 pub mod decision;
+pub mod detect;
 pub mod embedding;
 pub mod rerank;
+pub mod translate;

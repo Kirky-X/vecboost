@@ -165,6 +165,27 @@ pub const LAYA_BUNDLE_FILES: &[&str] = &[
     "tokenizer/tokenizer_config.json",
 ];
 
+/// 翻译 bundle 默认仓库（T013 首日实测存续核对：private=false、gated=false、
+/// 七文件清单全部在位）。
+pub const TRANSLATE_BUNDLE_REPO: &str = "Xenova/opus-mt-en-zh";
+
+/// 翻译 bundle 内置下载清单（远端路径，与落位相对路径一致；T013 实下验证
+/// 每文件磁盘字节数见 specmark notes/first-day-verification.md）。
+///
+/// tokenizer.json 强制在位：tokenizers 0.23 仅支持 tokenizer.json 四类模型
+/// （Marian 原生 .spm 不支持）；decoder 取 merged 变体（自回归单 session，
+/// past_key_values 簿记，张量清单实测见同 notes）。上游增删文件时由联网
+/// 集成测试先行红灯（与 LAYA_BUNDLE_FILES 同一先例）。
+pub const TRANSLATE_BUNDLE_FILES: &[&str] = &[
+    "config.json",
+    "generation_config.json",
+    "tokenizer.json",
+    "onnx/encoder_model.onnx",
+    "onnx/encoder_model_quantized.onnx",
+    "onnx/decoder_model_merged.onnx",
+    "onnx/decoder_model_merged_quantized.onnx",
+];
+
 /// 下载 repo 内指定文件列表到 out_dir。
 ///
 /// 按 `(远端路径, 相对 out_dir 落位路径)` 清单逐文件下载；远端相对路径结构
@@ -697,5 +718,41 @@ mod tests {
         }
         assert!(LAYA_BUNDLE_FILES.contains(&"laya.onnx"));
         assert!(LAYA_BUNDLE_FILES.contains(&"tokenizer/tokenizer.json"));
+    }
+
+    /// 翻译 bundle 清单红线（T013 首日实测核对：七文件在 Xenova 仓库
+    /// 存续且已实下落位）；tokenizer.json 强制在位（tokenizers 0.23
+    /// 不支持 .spm）。
+    #[test]
+    fn test_translate_bundle_constants() {
+        assert_eq!(TRANSLATE_BUNDLE_REPO, "Xenova/opus-mt-en-zh");
+        assert!(
+            is_valid_hf_repo_id(TRANSLATE_BUNDLE_REPO),
+            "翻译默认仓库 ID 必须通过 download_files 同款格式校验"
+        );
+        assert_eq!(TRANSLATE_BUNDLE_FILES.len(), 7, "实测清单为 7 文件");
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in TRANSLATE_BUNDLE_FILES {
+            assert!(!entry.is_empty());
+            assert!(
+                !entry.contains(".."),
+                "manifest entry must not traverse: {entry}"
+            );
+            assert!(seen.insert(*entry), "duplicate manifest entry: {entry}");
+        }
+        for required in [
+            "config.json",
+            "generation_config.json",
+            "tokenizer.json",
+            "onnx/encoder_model.onnx",
+            "onnx/encoder_model_quantized.onnx",
+            "onnx/decoder_model_merged.onnx",
+            "onnx/decoder_model_merged_quantized.onnx",
+        ] {
+            assert!(
+                TRANSLATE_BUNDLE_FILES.contains(&required),
+                "missing {required}"
+            );
+        }
     }
 }

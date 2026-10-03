@@ -124,6 +124,8 @@ const DB_WARMUP_TIMEOUT_SECS: u64 = 10;
 const DB_WARMUP_RETRIES: u32 = 2;
 #[cfg(feature = "auth")]
 use vecboost::registry::{AuthModule, CsrfConfigModule};
+#[cfg(feature = "onnx")]
+use vecboost::service::translate::TranslatePairRoute;
 use vecboost::{
     VecboostState,
     audit::{AuditConfig, AuditLogger},
@@ -136,11 +138,14 @@ use vecboost::{
     rate_limit::{LimiteronAdapter, RateLimitSettings},
     registry::{
         AuditModule, CacheConfig, CacheModule, ConfigWatcherModule, DbConfig, DbModule,
-        DecisionModule, EmbeddingModule, IpWhitelistModule, MetricsCollectorModule,
+        DecisionModule, DetectModule, EmbeddingModule, IpWhitelistModule, MetricsCollectorModule,
         PipelineQueueModule, PriorityCalculatorModule, PrometheusCollectorModule, RerankModule,
-        ResponseChannelModule, WorkerManagerModule,
+        ResponseChannelModule, TranslateModule, WorkerManagerModule,
     },
-    service::{decision::DecisionService, embedding::EmbeddingService, rerank::RerankService},
+    service::{
+        decision::DecisionService, detect::DetectService, embedding::EmbeddingService,
+        rerank::RerankService, translate::TranslateService,
+    },
 };
 
 #[cfg(feature = "cli")]
@@ -313,6 +318,7 @@ fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelC
         task: config.model.task,
         quantized: config.model.quantized,
         decision_params: None,
+        translation_params: None,
     })
 }
 
@@ -362,6 +368,8 @@ async fn init_engine_and_services(
     Arc<RwLock<EmbeddingService>>,
     Arc<RwLock<RerankService>>,
     Arc<RwLock<DecisionService>>,
+    DetectService,
+    Arc<TranslateService>,
     ModelConfig,
 )> {
     let model_config = resolve_engine_model_config(config)?;
@@ -494,11 +502,100 @@ async fn init_engine_and_services(
         Some(model_config.clone()),
     )));
 
+    // 检测服务无条件预构建（零配置可用）：无引擎无状态（µs 级 whatlang
+    // 统计），端点始终可注册应答
+    let detect_service = DetectService::new();
+
+    // 翻译路由表：启动期消费 [translation].pairs 逐 pair 急切构建
+    // （EngineFactory task=translate 分派臂），任一 bundle 缺失 fail-fast；
+    // 空 pairs = 空表服务（端点注册、请求 400 translate-not-configured），
+    // 与 decision 无条件预构建语义对齐
+    #[cfg_attr(not(feature = "onnx"), allow(unused_mut))]
+    let mut translate_pairs = std::collections::HashMap::new();
+    // 评审 PERF-4：按 pair 数分摊 per-Session intra 线程预算（防多 pair
+    // Session 全核过订阅）；单 pair/空表回退全核
+    #[cfg(feature = "onnx")]
+    if config.translation.pairs.len() > 1 {
+        let cores = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(1);
+        let divisor = config.translation.pairs.len().clamp(1, 4);
+        let budget = (cores / divisor).clamp(1, cores);
+        vecboost::engine::set_session_intra_threads(budget);
+        log::info!(
+            "translation: per-session intra threads budget = {budget} ({} pairs)",
+            config.translation.pairs.len()
+        );
+    }
+    for (index, pair) in config.translation.pairs.iter().enumerate() {
+        #[cfg(feature = "onnx")]
+        {
+            // 缺省值取 TranslationParams::default() 单一事实源（评审 ARC-2：
+            // 禁止 512 字面量第二处来源，default 变更时自动联动）
+            let defaults = vecboost::config::model::TranslationParams::default();
+            let translation_params = vecboost::config::model::TranslationParams::new(
+                pair.max_source_tokens.unwrap_or(defaults.max_source_tokens),
+                pair.max_new_tokens.unwrap_or(defaults.max_new_tokens),
+            )
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "[translation] pairs[{index}] ({}-{}) 参数非法: {e}",
+                    pair.source_language,
+                    pair.target_language
+                )
+            })?;
+            let pair_config = vecboost::config::model::ModelConfig {
+                name: format!(
+                    "translate-{}-{}",
+                    pair.source_language, pair.target_language
+                ),
+                engine_type: vecboost::config::model::EngineType::Onnx,
+                model_path: pair.model_path.clone(),
+                tokenizer_path: pair.tokenizer_path.clone(),
+                device: model_config.device.clone(),
+                max_batch_size: 1,
+                oom_fallback_enabled: true,
+                task: vecboost::config::model::ModelTask::Translate,
+                translation_params: Some(translation_params),
+                ..Default::default()
+            };
+            let any = vecboost::engine::EngineFactory::create(
+                vecboost::config::model::EngineType::Onnx,
+                &pair_config,
+            )
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "[translation] pairs[{index}] ({}-{}) 加载失败: {e}",
+                    pair.source_language,
+                    pair.target_language
+                )
+            })?;
+            translate_pairs.insert(
+                (pair.source_language.clone(), pair.target_language.clone()),
+                TranslatePairRoute::new(Arc::new(RwLock::new(any)), translation_params),
+            );
+        }
+        #[cfg(not(feature = "onnx"))]
+        {
+            let _ = (index, pair);
+            return Err(anyhow::anyhow!(
+                "[translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建"
+            ));
+        }
+    }
+    let translate_service = Arc::new(TranslateService::new(translate_pairs));
+    log::info!(
+        "translation service initialized: {} pair(s) configured",
+        translate_service.configured_pairs().len()
+    );
+
     Ok((
         engine,
         service,
         rerank_service,
         decision_service,
+        detect_service,
+        translate_service,
         model_config,
     ))
 }
@@ -508,6 +605,8 @@ async fn run_mcp_server(
     service: Arc<RwLock<EmbeddingService>>,
     rerank_service: Arc<RwLock<RerankService>>,
     decision_service: Arc<RwLock<DecisionService>>,
+    detect_service: DetectService,
+    translate_service: Arc<TranslateService>,
 ) -> anyhow::Result<()> {
     use sdforge::rmcp::{ServiceExt, transport::io::stdio};
 
@@ -516,12 +615,18 @@ async fn run_mcp_server(
     kit.set_config(service);
     kit.set_config(rerank_service);
     kit.set_config(decision_service);
+    kit.set_config(detect_service);
+    kit.set_config(translate_service.clone());
     kit.register::<EmbeddingModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RerankModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
     kit.register::<DecisionModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register DecisionModule: {}", e))?;
+    kit.register::<DetectModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register DetectModule: {}", e))?;
+    kit.register::<TranslateModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register TranslateModule: {}", e))?;
     let kit = kit
         .build()
         .await
@@ -593,6 +698,8 @@ async fn run_cli_command(
     service: Arc<RwLock<EmbeddingService>>,
     rerank_service: Arc<RwLock<RerankService>>,
     decision_service: Arc<RwLock<DecisionService>>,
+    detect_service: DetectService,
+    translate_service: Arc<TranslateService>,
     cli_args: Vec<String>,
 ) -> anyhow::Result<bool> {
     let cli_cmd = CliBuilder::new().with_name("vecboost").build();
@@ -614,12 +721,18 @@ async fn run_cli_command(
     kit.set_config(service);
     kit.set_config(rerank_service);
     kit.set_config(decision_service);
+    kit.set_config(detect_service);
+    kit.set_config(translate_service.clone());
     kit.register::<EmbeddingModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RerankModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
     kit.register::<DecisionModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register DecisionModule: {}", e))?;
+    kit.register::<DetectModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register DetectModule: {}", e))?;
+    kit.register::<TranslateModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register TranslateModule: {}", e))?;
     let kit = kit
         .build()
         .await
@@ -1311,8 +1424,15 @@ async fn app_main() -> anyhow::Result<()> {
         builtin_overrides
     );
 
-    let (_engine, service, rerank_service, decision_service, _model_config) =
-        init_engine_and_services(&config, &checkpoints).await?;
+    let (
+        _engine,
+        service,
+        rerank_service,
+        decision_service,
+        detect_service,
+        translate_service,
+        _model_config,
+    ) = init_engine_and_services(&config, &checkpoints).await?;
 
     // `--warmup N` 启动预热 ——N 条合成短文本推理，预热 mkl/代码路径/
     // tokenizer 缓存。放在 MCP/CLI 分流之前，三种模式均受益。
@@ -1367,7 +1487,14 @@ async fn app_main() -> anyhow::Result<()> {
 
     #[cfg(feature = "mcp")]
     if std::env::args().any(|a| a == "--mcp") {
-        return run_mcp_server(service, rerank_service, decision_service).await;
+        return run_mcp_server(
+            service,
+            rerank_service,
+            decision_service,
+            detect_service,
+            translate_service,
+        )
+        .await;
     }
 
     #[cfg(feature = "cli")]
@@ -1375,6 +1502,8 @@ async fn app_main() -> anyhow::Result<()> {
         service.clone(),
         rerank_service.clone(),
         decision_service.clone(),
+        detect_service,
+        translate_service.clone(),
         _filtered_args.clone(),
     )
     .await?
@@ -1430,6 +1559,8 @@ async fn app_main() -> anyhow::Result<()> {
         service.clone(),
         rerank_service.clone(),
         decision_service.clone(),
+        detect_service,
+        translate_service,
         rate_limiter.clone(),
         audit_logger.clone(),
         pipeline_queue.clone(),
@@ -2021,6 +2152,8 @@ async fn build_module_registry(
     service: Arc<RwLock<EmbeddingService>>,
     rerank_service: Arc<RwLock<RerankService>>,
     decision_service: Arc<RwLock<DecisionService>>,
+    detect_service: DetectService,
+    translate_service: Arc<TranslateService>,
     rate_limiter: Arc<LimiteronAdapter>,
     audit_logger: Option<Arc<AuditLogger>>,
     pipeline_queue: Arc<PriorityRequestQueue>,
@@ -2049,6 +2182,8 @@ async fn build_module_registry(
     kit.set_config(service.clone());
     kit.set_config(rerank_service.clone());
     kit.set_config(decision_service.clone());
+    kit.set_config(detect_service);
+    kit.set_config(translate_service);
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {
         enabled: config.embedding.cache_enabled,
@@ -2116,6 +2251,10 @@ async fn build_module_registry(
         .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
     kit.register::<DecisionModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register DecisionModule: {}", e))?;
+    kit.register::<DetectModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register DetectModule: {}", e))?;
+    kit.register::<TranslateModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register TranslateModule: {}", e))?;
     kit.register::<CacheModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register CacheModule: {}", e))?;
     kit.register::<DbModule>()
@@ -2154,12 +2293,16 @@ async fn build_module_registry(
     kit.register_lifecycle::<EmbeddingModule>();
     kit.register_lifecycle::<RerankModule>();
     kit.register_lifecycle::<DecisionModule>();
+    kit.register_lifecycle::<DetectModule>();
+    kit.register_lifecycle::<TranslateModule>();
     kit.register_lifecycle::<RateLimitModule>();
     kit.register_lifecycle::<AuditModule>();
     kit.register_lifecycle::<ConfigWatcherModule>();
     kit.register_health_check::<EmbeddingModule>();
     kit.register_health_check::<RerankModule>();
     kit.register_health_check::<DecisionModule>();
+    kit.register_health_check::<DetectModule>();
+    kit.register_health_check::<TranslateModule>();
     kit.register_health_check::<RateLimitModule>();
     kit.register_health_check::<CacheModule>();
 

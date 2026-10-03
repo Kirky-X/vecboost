@@ -1507,6 +1507,7 @@ mod tests {
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         }
     }
 
@@ -1994,6 +1995,7 @@ mod tests {
             task: crate::config::model::ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         }
     }
 

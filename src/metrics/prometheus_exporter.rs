@@ -39,6 +39,12 @@ pub struct PrometheusCollector {
     vecboost_decision_questions_total: prometheus::IntCounter,
     vecboost_decision_queue_wait_seconds: prometheus::Histogram,
 
+    // 检测请求计数（DetectService 热路径）
+    vecboost_detect_requests_total: prometheus::IntCounter,
+
+    // 翻译请求计数（TranslateService 热路径）
+    vecboost_translate_requests_total: prometheus::IntCounter,
+
     // 时间窗拼批指标：批次大小与等待时长
     vecboost_batch_size: HistogramVec,
     vecboost_batch_wait_seconds: HistogramVec,
@@ -188,6 +194,20 @@ impl PrometheusCollector {
             registry.clone()
         )?;
 
+        // 检测请求计数（DetectService 热路径校验受理后 inc）
+        let vecboost_detect_requests_total = prometheus::register_int_counter_with_registry!(
+            "vecboost_detect_requests_total",
+            "Total number of detect requests accepted for processing",
+            registry.clone()
+        )?;
+
+        // 翻译请求计数（TranslateService 热路径校验受理后 inc）
+        let vecboost_translate_requests_total = prometheus::register_int_counter_with_registry!(
+            "vecboost_translate_requests_total",
+            "Total number of translate requests accepted for processing",
+            registry.clone()
+        )?;
+
         // 缓存命中
         let cache_hits = register_counter_vec_with_registry!(
             "cache_hits_total",
@@ -236,6 +256,8 @@ impl PrometheusCollector {
             vecboost_decision_requests_total,
             vecboost_decision_questions_total,
             vecboost_decision_queue_wait_seconds,
+            vecboost_detect_requests_total,
+            vecboost_translate_requests_total,
             semantic_cache_fuzzy_hits,
             vecboost_queue_wait_seconds,
             cache_hits,
@@ -299,6 +321,16 @@ impl PrometheusCollector {
     /// 决策请求计数（热路径：DecisionService::process_decision 校验受理后）。
     pub fn inc_decision_requests(&self) {
         self.vecboost_decision_requests_total.inc();
+    }
+
+    /// 检测请求计数（热路径：DetectService::process_detect 校验受理后）。
+    pub fn inc_detect_requests(&self) {
+        self.vecboost_detect_requests_total.inc();
+    }
+
+    /// 翻译请求计数（热路径：TranslateService::process_translate 校验受理后）。
+    pub fn inc_translate_requests(&self) {
+        self.vecboost_translate_requests_total.inc();
     }
 
     /// 决策问题计数（按请求内问题数累加）。
@@ -426,7 +458,7 @@ mod tests {
         let registry = collector.registry();
         let families = registry.gather();
         // 仅常驻的 pipeline 快照 gauge(初值 0)、语义缓存 fuzzy 命中
-        // 计数器与决策请求/问题计数器、队列等待直方图存在于未记录状态
+        // 计数器与决策/检测请求计数器、队列等待直方图存在于未记录状态
         for family in &families {
             let name = family.name();
             assert!(
@@ -434,10 +466,52 @@ mod tests {
                     || name == "vecboost_semantic_cache_fuzzy_hits_total"
                     || name == "vecboost_decision_requests_total"
                     || name == "vecboost_decision_questions_total"
-                    || name == "vecboost_decision_queue_wait_seconds",
+                    || name == "vecboost_decision_queue_wait_seconds"
+                    || name == "vecboost_detect_requests_total"
+                    || name == "vecboost_translate_requests_total",
                 "unexpected always-on family: {name}"
             );
         }
+    }
+
+    /// 检测请求计数：注册可见、inc 后值正确——/metrics 导出走同一 registry
+    /// （DetectService 热路径校验受理后调用）
+    #[test]
+    fn test_detect_metric_register_and_observe() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.inc_detect_requests();
+        collector.inc_detect_requests();
+
+        let families = collector.registry().gather();
+        let requests = families
+            .iter()
+            .find(|m| m.name() == "vecboost_detect_requests_total")
+            .expect("vecboost_detect_requests_total should be registered");
+        assert_eq!(
+            requests.get_metric()[0].get_counter().value(),
+            2.0,
+            "detect request counter should be 2 after two incs"
+        );
+    }
+
+    /// 翻译请求计数：注册可见、inc 后值正确——/metrics 导出走同一 registry
+    /// （TranslateService 热路径校验受理后调用）
+    #[test]
+    fn test_translate_metric_register_and_observe() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.inc_translate_requests();
+        collector.inc_translate_requests();
+
+        let families = collector.registry().gather();
+        let requests = families
+            .iter()
+            .find(|m| m.name() == "vecboost_translate_requests_total")
+            .expect("vecboost_translate_requests_total should be registered");
+        assert_eq!(
+            requests.get_metric()[0].get_counter().value(),
+            2.0,
+            "translate request counter should be 2 after two incs"
+        );
     }
 
     /// 决策三指标（P2-3）：注册可见、observe 后值/样本正确——

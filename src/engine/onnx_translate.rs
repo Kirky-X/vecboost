@@ -578,6 +578,7 @@ impl OnnxTranslationEngine {
             })?
             .trim()
             .to_string();
+        let translation = normalize_cjk_punctuation(translation, &req.target_language);
         Ok(TranslateResponse {
             translation,
             source_language: req.source_language.clone(),
@@ -586,6 +587,53 @@ impl OnnxTranslationEngine {
             processing_time_ms: started.elapsed().as_millis() as u64,
         })
     }
+}
+
+/// CJK 目标语言半角标点归一：Marian 译文系统性带半角标点（质量评审
+/// golden 抽验：zh 句含半角 `,` `?`，模型固有输出特性）；目标语言命中
+/// 中/日/韩码族（639-1 及等价 639-3：zh/zho/cmn/yue、ja/jpn、ko/kor，
+/// 配置面 target 为 `^[a-z]{2,3}$` 格式校验，两码空间均可配置到达）时
+/// 归一为全角。数字两侧同时夹数字时不归一（千分位 `3,000`/时间 `12:30`
+/// 误转即语义错误）；句号不归一（`.`→`。` 对小数/缩写有误伤风险，且
+/// 模型句末已输出全角「。」）。
+///
+/// 引擎层后处理（TemperatureCalibration 同款先例）：golden 闸门、质量
+/// 输出与四协议面度量/交付同一译文，服务层不重复处理。
+fn normalize_cjk_punctuation(text: String, target_language: &str) -> String {
+    if !matches!(
+        target_language,
+        "zh" | "zho" | "cmn" | "yue" | "ja" | "jpn" | "ko" | "kor"
+    ) {
+        return text;
+    }
+    // 快速路径：无半角目标标点（模型已输出全角/纯文本句）零分配直返
+    if !text
+        .bytes()
+        .any(|b| matches!(b, b',' | b';' | b':' | b'?' | b'!'))
+    {
+        return text;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    // 映射为 1B ASCII → 3B UTF-8，最坏全句映射：len × 3 为容量上界
+    let mut out = String::with_capacity(text.len() * 3);
+    for (i, &ch) in chars.iter().enumerate() {
+        let mapped = match ch {
+            ',' => '，',
+            ';' => '；',
+            ':' => '：',
+            '?' => '？',
+            '!' => '！',
+            _ => ch,
+        };
+        let prev_digit = i > 0 && chars[i - 1].is_ascii_digit();
+        let next_digit = i + 1 < chars.len() && chars[i + 1].is_ascii_digit();
+        if mapped != ch && prev_digit && next_digit {
+            out.push(ch);
+        } else {
+            out.push(mapped);
+        }
+    }
+    out
 }
 
 use std::borrow::Cow;
@@ -861,4 +909,65 @@ mod tests {
 
     // ── 域行为（真机 bundle 守卫测试内断言 supports_task；mock-free 的
     //    形式主义测试已按评审 ARC-8 删除）────────────────────────────────
+
+    #[test]
+    fn test_cjk_punctuation_normalized_for_zh() {
+        // 质量评审（golden 抽验）：Marian zh 输出系统性带半角标点（, ? !）
+        assert_eq!(
+            normalize_cjk_punctuation("她步行到市场,买了面包,对吗?".to_string(), "zh"),
+            "她步行到市场，买了面包，对吗？"
+        );
+        assert_eq!(
+            normalize_cjk_punctuation("注意:风险;小心!".to_string(), "zh"),
+            "注意：风险；小心！"
+        );
+    }
+
+    #[test]
+    fn test_cjk_punctuation_digit_context_kept_halfwidth() {
+        // 数字上下文不归一：千分位/时间冒号误转即语义错误
+        assert_eq!(
+            normalize_cjk_punctuation("共 3,000 台,12:30 出发,别迟到".to_string(), "zh"),
+            "共 3,000 台，12:30 出发，别迟到"
+        );
+    }
+
+    #[test]
+    fn test_cjk_punctuation_applies_to_cjk_code_family() {
+        // 639-1 与等价 639-3 码同口径（配置面两码空间均可到达）
+        assert_eq!(
+            normalize_cjk_punctuation("テスト,です?".to_string(), "jpn"),
+            "テスト，です？"
+        );
+        assert_eq!(
+            normalize_cjk_punctuation("테스트,입니까?".to_string(), "kor"),
+            "테스트，입니까？"
+        );
+        assert_eq!(
+            normalize_cjk_punctuation("广东话,测试!".to_string(), "yue"),
+            "广东话，测试！"
+        );
+    }
+
+    #[test]
+    fn test_non_cjk_target_untouched() {
+        assert_eq!(
+            normalize_cjk_punctuation("Hello, world? Wait: yes; ok!".to_string(), "en"),
+            "Hello, world? Wait: yes; ok!"
+        );
+        assert_eq!(
+            normalize_cjk_punctuation("Hola, mundo? Sí: claro!".to_string(), "es"),
+            "Hola, mundo? Sí: claro!"
+        );
+    }
+
+    #[test]
+    fn test_cjk_punctuation_period_and_empty_untouched() {
+        // 句号不归一：模型已输出全角「。」，`.`→`。` 对小数/缩写有误伤风险
+        assert_eq!(
+            normalize_cjk_punctuation("版本 3.5 发布了。".to_string(), "zh"),
+            "版本 3.5 发布了。"
+        );
+        assert_eq!(normalize_cjk_punctuation(String::new(), "zh"), "");
+    }
 }

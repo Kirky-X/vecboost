@@ -41,6 +41,9 @@ pub(crate) mod monitor;
 pub(crate) mod text;
 
 // 重新导出必要的内部类型（最小化暴露原则）
+/// 轻量文本语言检测入口（/api/1/detect 与翻译 auto 路由的同一实现）；
+/// 返回类型 [`Detection`](text::langdetect::Detection) 随函数一并公开
+pub use crate::text::langdetect::{Detection, detect_language};
 pub use config::VecboostConfig;
 #[cfg(feature = "db")]
 pub use config::app::DatabaseConfig;

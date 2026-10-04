@@ -1,9 +1,5 @@
 [package]
 name = "transcribe-poc"
-
-# Standalone crate, deliberately not a member of the worktree workspace.
-[workspace]
-
 version = "0.1.0"
 edition = "2021"
 description = "Self-contained Qwen3-ASR transcription pipeline PoC (ort + hand-written VAD/fbank/decoding); sherpa-onnx is a porting reference only, never a dependency"
@@ -21,3 +17,7 @@ rustfft = { version = "6.4", default-features = false }
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+# Standalone crate, deliberately not a member of the worktree workspace
+# (workspace table must stay last: keys after a table header belong to it).
+[workspace]

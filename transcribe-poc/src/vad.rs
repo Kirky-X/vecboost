@@ -170,11 +170,12 @@ pub struct SileroVadModel {
 }
 
 impl SileroVadModel {
-    pub fn new(model_path: &Path, config: &VadConfig) -> ort::Result<Self> {
+    pub fn new(model_path: &Path, config: &VadConfig) -> VadResult<Self> {
         // sherpa VAD 默认 num_threads=1（vad-model-config.h:20）
         let session = Session::builder()?
             .with_intra_threads(1)?
-            .commit_from_file(model_path)?;
+            .commit_from_file(model_path)
+            .map_err(|e| format!("load vad model {} failed: {e}", model_path.display()))?;
         Ok(Self {
             session,
             state: SpeechStateMachine::new(config),

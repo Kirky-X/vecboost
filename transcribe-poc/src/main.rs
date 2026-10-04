@@ -88,7 +88,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     eprintln!("transcribe-own: vad model loaded: {}", model_path.display());
     let segments = vad::detect_segments(model, &samples, &config)?;
 
-    std::fs::create_dir_all(&args.out_dir)?;
+    std::fs::create_dir_all(&args.out_dir)
+        .map_err(|e| format!("create outDir {} failed: {e}", args.out_dir.display()))?;
     let seg_path = args.out_dir.join("segments.txt");
     let mut text = String::new();
     for s in &segments {
@@ -97,7 +98,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         // 契约行格式「起 -- 止: 文本」；解码文本属后续阶段，此处留空
         text.push_str(&format!("{start_s:.2} -- {end_s:.2}: \n"));
     }
-    std::fs::write(&seg_path, text)?;
+    std::fs::write(&seg_path, text)
+        .map_err(|e| format!("write {} failed: {e}", seg_path.display()))?;
     eprintln!(
         "transcribe-own: vad done in {:.3}s, {} segments -> {}",
         t0.elapsed().as_secs_f32(),

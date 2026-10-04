@@ -6,7 +6,8 @@ use std::error::Error;
 use std::path::Path;
 
 pub fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>, Box<dyn Error>> {
-    let reader = hound::WavReader::open(path)?;
+    let reader = hound::WavReader::open(path)
+        .map_err(|e| format!("open wav {} failed: {e}", path.display()))?;
     let spec = reader.spec();
     if spec.sample_format != hound::SampleFormat::Int || spec.bits_per_sample != 16 {
         return Err(format!(

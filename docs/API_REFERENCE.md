@@ -626,6 +626,8 @@ curl -X POST http://localhost:9002/api/1/decisions \
 **端点:** `POST /api/1/translate`
 
 > **⚠️ 配置语义**: 语言对来自 `[translation]` 配置段的 `[[translation.pairs]]`（启动期急切构建）；零配置时端点仍注册，任意请求返回 `400`（`translate-not-configured`）。
+>
+> **行为**: 目标语言命中中/日/韩码族（`zh`/`zho`/`cmn`/`yue`、`ja`/`jpn`、`ko`/`kor`）时译文经 CJK 半角标点归一（`,;:?!` → 全角；数字两侧夹数字的千分位/时间上下文与句号除外，详见 USER_GUIDE「译文标点归一」）。
 
 **请求字段:**
 
@@ -645,7 +647,7 @@ curl -X POST http://localhost:9002/api/1/translate   -H "Content-Type: applicati
 
 ```json
 {
-  "translation": "你好,我的狗好可爱",
+  "translation": "你好，我的狗好可爱",
   "source_language": "en",
   "target_language": "zh",
   "detected_source_language": null,

@@ -461,7 +461,17 @@ pair 数上限 16（每对一个驻留 bundle，内存预算防线）。请求�
 `translate-unsupported-pair`（消息含请求对与已配置 pairs 全集）；`source_language`
 缺省时经 whatlang auto 检测（与 `/api/1/detect` 同一实现），不可靠（纯数字/
 过短文本）返回 `400` `translate-detect-failed`，可靠则回填
-`detected_source_language`。无可用模型报错示例（bundle 缺失，启动期）：
+`detected_source_language`。
+
+**译文标点归一**：目标语言命中中/日/韩码族（`zh`/`zho`/`cmn`/`yue`、`ja`/
+`jpn`、`ko`/`kor`）时，引擎对译文做 CJK 半角标点归一（`,;:?!` → 全角）——
+Marian 小模型系统性输出半角标点，属模型输出特性。三类例外保留半角：数字
+两侧同时夹数字（千分位 `3,000`、时间 `12:30` 误转即语义错误）；句号
+（`.` → `。` 对小数/缩写有误伤风险，模型句末已输出全角）；URL/代码片段中
+的冒号问号无法与标点角色区分，译入 CJK 目标时可能被误转全角（含 URL/代码
+的源文本建议译后人工核对）。处理在引擎层（`src/engine/onnx_translate.rs`），
+E2E 金标与实际交付同一译文。
+无可用模型报错示例（bundle 缺失，启动期）：
 
 ```text
 Error: [translation] pairs[0] (en-zh) 加载失败: No encoder model found in

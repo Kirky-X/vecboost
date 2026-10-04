@@ -259,6 +259,11 @@ harness = false
 name = "embed_throughput_bench"
 harness = false
 
+[[bench]]
+name = "translate_bench"
+harness = false
+required-features = ["onnx"]
+
 [profile.dev]
 opt-level = 1
 

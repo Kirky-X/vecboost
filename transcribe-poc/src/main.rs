@@ -108,7 +108,7 @@ fn normalize_arg_path(raw: &str, must_exist: bool) -> (PathBuf, bool) {
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let t0 = Instant::now();
     let dylib = resolve_ort_dylib();
-    eprintln!("transcribe-own: loading onnxruntime dylib: {dylib}");
+    eprintln!("transcribe-own: [{:.3}s] loading onnxruntime dylib: {dylib}", t0.elapsed().as_secs_f64());
     ort::init_from(&dylib)?.with_name("transcribe-own").commit();
 
     // 门禁曾把资产清单说明文字拼进 argv 路径（assets（…）/smoke10s.wav）；
@@ -142,7 +142,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let model = vad::SileroVadModel::new(&model_path, &config)?;
     eprintln!("transcribe-own: vad model loaded: {}", model_path.display());
     let segments = vad::detect_segments(model, &samples, &config)?;
-    eprintln!("transcribe-own: vad done: {} segments", segments.len());
+    eprintln!("transcribe-own: [{:.3}s] vad done: {} segments",
+        t0.elapsed().as_secs_f64(),
+        segments.len()
+    );
 
     // 并行旋钮（默认 4 workers × intra=2；环境变量供门禁测量其他档位，
     // 如激进档 TRANSCRIBE_WORKERS=6 TRANSCRIBE_INTRA=1）。非法值显性报错。
@@ -151,7 +154,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut transcript = String::new();
     let mut seg_lines = String::new();
     if !args.vad_only {
-        eprintln!("transcribe-own: loading tokenizer...");
+        eprintln!("transcribe-own: [{:.3}s] loading tokenizer...", t0.elapsed().as_secs_f64());
         let asr_tok = std::sync::Arc::new(tokenizer::AsrTokenizer::new(
             &models_dir.join("tokenizer"),
         )?);
@@ -196,7 +199,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                         match engine.transcribe(&mel, num_frames, asr_tok) {
                             Ok(text) => {
                                 eprintln!(
-                                    "transcribe-own: worker {w} segment {}/{} [{:.2}s-{:.2}s] {} chars",
+                                    "transcribe-own: [{:.3}s] worker {w} segment {}/{} [{:.2}s-{:.2}s] {} chars",
+                                    t0.elapsed().as_secs_f64(),
                                     i + 1,
                                     segments.len(),
                                     s.start as f64 / vad::SAMPLE_RATE as f64,

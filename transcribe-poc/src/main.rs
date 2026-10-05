@@ -6,6 +6,7 @@ mod asr;
 mod batch;
 mod features;
 mod gpu;
+mod pytorch_backend;
 mod tokenizer;
 mod vad;
 mod wav;
@@ -109,6 +110,29 @@ fn normalize_arg_path(raw: &str, must_exist: bool) -> (PathBuf, bool) {
 
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let t0 = Instant::now();
+
+    // TRANSCRIBE_BACKEND=py-torch：嵌入 torch 后端（PyO3 内嵌 CPython，
+    // GPU 上跑 1.7B bf16 原生精度），不经 ort/VAD/fbank 管线
+    let backend = std::env::var("TRANSCRIBE_BACKEND").unwrap_or_default();
+    if backend == "py-torch" {
+        let uv_prefix = "/home/dev/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu";
+        std::env::set_var("PYTHONHOME", uv_prefix);
+        std::env::set_var(
+            "PYTHONPATH",
+            "/home/dev/projects/vecboost-transcribe/.venv-export/lib/python3.11/site-packages",
+        );
+        let model_dir = "/home/dev/video/Qwen3-ASR-1.7B";
+        eprintln!("transcribe-own: backend=py-torch (embedded CPython, GPU 1.7B bf16)");
+        let text = pytorch_backend::transcribe(&args.wav, model_dir)?;
+        std::fs::create_dir_all(&args.out_dir)?;
+        std::fs::write(args.out_dir.join("transcript.txt"), &text)?;
+        let wall_s = t0.elapsed().as_secs_f64();
+        println!("WALL_S={wall_s:.3}");
+        println!("TRANSCRIPT_CHARS={}", text.chars().count());
+        println!("MODE=embedded-pytorch,1.7B-bf16,cuda");
+        return Ok(());
+    }
+
     let dylib = resolve_ort_dylib();
     eprintln!("transcribe-own: [{:.3}s] loading onnxruntime dylib: {dylib}", t0.elapsed().as_secs_f64());
     // TRANSCRIBE_ENV_POOL=<n>：环境级全局线程池（n 线程，关 spin），各 session

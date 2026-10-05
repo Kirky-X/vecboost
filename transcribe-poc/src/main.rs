@@ -144,33 +144,93 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let segments = vad::detect_segments(model, &samples, &config)?;
     eprintln!("transcribe-own: vad done: {} segments", segments.len());
 
+    // 并行旋钮（默认 4 workers × intra=2；环境变量供门禁测量其他档位，
+    // 如激进档 TRANSCRIBE_WORKERS=6 TRANSCRIBE_INTRA=1）。非法值显性报错。
+    let (workers, intra) = parallel_knobs()?;
+
     let mut transcript = String::new();
     let mut seg_lines = String::new();
     if !args.vad_only {
         eprintln!("transcribe-own: loading tokenizer...");
-        let asr_tok = tokenizer::AsrTokenizer::new(&models_dir.join("tokenizer"))?;
-        eprintln!("transcribe-own: loading qwen3 models...");
-        let mut qwen = asr::Qwen3Asr::new(&models_dir)?;
-        eprintln!("transcribe-own: qwen3 models loaded");
-        let fbank = features::WhisperFbank::new();
+        let asr_tok = std::sync::Arc::new(tokenizer::AsrTokenizer::new(
+            &models_dir.join("tokenizer"),
+        )?);
+        let fbank = std::sync::Arc::new(features::WhisperFbank::new());
+        eprintln!(
+            "transcribe-own: decoding {segments_len} segments with {workers} workers (ort-intra={intra}); loading {workers} session sets...",
+            segments_len = segments.len()
+        );
 
-        for (i, s) in segments.iter().enumerate() {
-            let seg_samples = &samples[s.start as usize..s.end as usize];
-            let num_frames = seg_samples.len() / features::FRAME_SHIFT;
-            let mel = fbank.compute(seg_samples);
-            let text = qwen.transcribe(&mel, num_frames, &asr_tok)?;
-            eprintln!(
-                "transcribe-own: segment {}/{} [{:.2}s-{:.2}s] {} chars",
-                i + 1,
-                segments.len(),
-                s.start as f64 / vad::SAMPLE_RATE as f64,
-                s.end as f64 / vad::SAMPLE_RATE as f64,
-                text.chars().count()
-            );
+        // ort rc.13 禁止并发 Run 同一 Session（session/mod.rs:118-122），
+        // 每 worker 独立加载一套 conv/encoder/decoder（权重内存 ×workers）
+        let next_job = std::sync::atomic::AtomicUsize::new(0);
+        let results: std::sync::Mutex<Vec<(usize, String)>> = std::sync::Mutex::new(Vec::new());
+        let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            let models_dir = &models_dir;
+            let segments = &segments;
+            for w in 0..workers {
+                let next_job = &next_job;
+                let results = &results;
+                let errors = &errors;
+                let asr_tok = &asr_tok;
+                let fbank = &fbank;
+                let samples = &samples;
+                scope.spawn(move || {
+                    let mut engine = match asr::Qwen3Asr::new(models_dir, intra) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            errors.lock().unwrap().push(format!("worker {w}: {e}"));
+                            return;
+                        }
+                    };
+                    loop {
+                        let i = next_job.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if i >= segments.len() {
+                            return;
+                        }
+                        let s = &segments[i];
+                        let seg_samples = &samples[s.start as usize..s.end as usize];
+                        let num_frames = seg_samples.len() / features::FRAME_SHIFT;
+                        let mel = fbank.compute(seg_samples);
+                        match engine.transcribe(&mel, num_frames, asr_tok) {
+                            Ok(text) => {
+                                eprintln!(
+                                    "transcribe-own: worker {w} segment {}/{} [{:.2}s-{:.2}s] {} chars",
+                                    i + 1,
+                                    segments.len(),
+                                    s.start as f64 / vad::SAMPLE_RATE as f64,
+                                    s.end as f64 / vad::SAMPLE_RATE as f64,
+                                    text.chars().count()
+                                );
+                                results.lock().unwrap().push((i, text));
+                            }
+                            Err(e) => {
+                                errors
+                                    .lock()
+                                    .unwrap()
+                                    .push(format!("worker {w} segment {}: {e}", i + 1));
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        let errors = errors.into_inner().unwrap();
+        if !errors.is_empty() {
+            return Err(errors.into_iter().next().unwrap().into());
+        }
+        // 段文本按时间顺序合并（并行解码乱序完成，按段索引排序）
+        let mut done = results.into_inner().unwrap();
+        done.sort_by_key(|(i, _)| *i);
+        for (i, text) in &done {
+            let s = &segments[*i];
             let start_s = s.start as f64 / vad::SAMPLE_RATE as f64;
             let end_s = s.end as f64 / vad::SAMPLE_RATE as f64;
             seg_lines.push_str(&format!("{start_s:.2} -- {end_s:.2}: {text}\n"));
-            transcript.push_str(&text);
+            transcript.push_str(text);
         }
     }
 
@@ -199,9 +259,31 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         println!("RTF={:.4}", wall_s / audio_seconds.max(f64::MIN_POSITIVE));
         println!("SEGMENTS={}", segments.len());
         println!("TRANSCRIPT_CHARS={}", transcript.chars().count());
-        println!("MODE=seg-parallel:1workers,ort-intra:1");
+        println!("MODE=seg-parallel:{workers}workers,ort-intra:{intra}");
     }
     Ok(())
+}
+
+/// 并行度旋钮：TRANSCRIBE_WORKERS / TRANSCRIBE_INTRA，默认 4 × 2
+/// （nproc=12 实测，8 活跃线程+主线程+fbank/IO 余量）
+fn parallel_knobs() -> Result<(usize, usize), Box<dyn Error>> {
+    let parse_env = |key: &str, default: usize, min: usize, max: usize| -> Result<usize, String> {
+        match std::env::var(key) {
+            Ok(v) => {
+                let n: usize = v
+                    .parse()
+                    .map_err(|_| format!("{key}={v} is not a valid integer"))?;
+                if n < min || n > max {
+                    return Err(format!("{key}={n} out of range [{min},{max}]"));
+                }
+                Ok(n)
+            }
+            Err(_) => Ok(default),
+        }
+    };
+    let workers = parse_env("TRANSCRIBE_WORKERS", 4, 1, 12).map_err(|e| e.to_string())?;
+    let intra = parse_env("TRANSCRIBE_INTRA", 2, 1, 12).map_err(|e| e.to_string())?;
+    Ok((workers, intra))
 }
 
 fn main() -> ExitCode {

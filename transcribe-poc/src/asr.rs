@@ -43,10 +43,11 @@ const MIN_FRAMES: usize = 2; // impl.cc:1177：帧数 <2 直接空结果
 const LOOP_WINDOW: usize = 64;
 const LOOP_MAX_DISTINCT: usize = 3;
 
-fn session_from(path: &Path) -> AsrResult<Session> {
+fn session_from(path: &Path, intra_threads: usize) -> AsrResult<Session> {
     Ok(Session::builder()?
-        .with_intra_threads(1)?
-        .commit_from_file(path)?)
+        .with_intra_threads(intra_threads)?
+        .commit_from_file(path)
+        .map_err(|e| format!("load {} failed: {e}", path.display()))?)
 }
 
 /// FeatToAudioTokensLen（impl.cc:77-108）
@@ -147,8 +148,10 @@ pub struct Qwen3Asr {
 }
 
 impl Qwen3Asr {
-    pub fn new(models_dir: &Path) -> AsrResult<Self> {
-        let conv = session_from(&models_dir.join("qwen3-conv_frontend.onnx"))?;
+    /// 每个 worker 独立加载一套 session（ort rc.13 禁止并发 Run 同一 Session，
+    /// session/mod.rs:118-122 官方推荐 per-thread session；权重内存 ×worker 数）
+    pub fn new(models_dir: &Path, intra_threads: usize) -> AsrResult<Self> {
+        let conv = session_from(&models_dir.join("qwen3-conv_frontend.onnx"), intra_threads)?;
         if conv.inputs().len() != 1 || conv.outputs().len() != 1 {
             return Err(format!(
                 "conv_frontend IO mismatch: {} inputs / {} outputs, expect 1/1",
@@ -157,7 +160,7 @@ impl Qwen3Asr {
             )
             .into());
         }
-        let encoder = session_from(&models_dir.join("qwen3-encoder.int8.onnx"))?;
+        let encoder = session_from(&models_dir.join("qwen3-encoder.int8.onnx"), intra_threads)?;
         if encoder.inputs().len() != 2 || encoder.outputs().len() != 1 {
             return Err(format!(
                 "encoder IO mismatch: {} inputs / {} outputs, expect 2/1",
@@ -166,7 +169,7 @@ impl Qwen3Asr {
             )
             .into());
         }
-        let decoder = session_from(&models_dir.join("qwen3-decoder.int8.onnx"))?;
+        let decoder = session_from(&models_dir.join("qwen3-decoder.int8.onnx"), intra_threads)?;
 
         let num_outputs = decoder.outputs().len();
         if num_outputs < 1 || (num_outputs - 1) % 2 != 0 {

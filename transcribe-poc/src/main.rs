@@ -165,11 +165,20 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     // 如激进档 TRANSCRIBE_WORKERS=6 TRANSCRIBE_INTRA=1）。非法值显性报错。
     let (workers, intra) = parallel_knobs()?;
     let no_spin = matches!(std::env::var("TRANSCRIBE_NO_SPIN").as_deref(), Ok("1"));
+    // 执行后端旋钮：TRANSCRIBE_EP=cpu（默认）| cuda。cuda 要求 ORT_DYLIB_PATH
+    // 指向带 CUDA EP 的 onnxruntime 动态库；EP 注册失败显性报错，不静默回退。
+    let ep = match std::env::var("TRANSCRIBE_EP").as_deref() {
+        Ok("cuda") => "cuda",
+        Ok("cpu") | Err(_) => "cpu",
+        Ok(other) => return Err(format!("TRANSCRIBE_EP={other} invalid (cpu|cuda)").into()),
+    };
     let session_opts = asr::SessionOpts {
         intra_threads: intra,
         no_spin,
         env_pool: env_pool.is_some(),
+        cuda: ep == "cuda",
     };
+    eprintln!("transcribe-own: execution provider: {ep}");
 
     let mut transcript = String::new();
     let mut seg_lines = String::new();
@@ -283,7 +292,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         println!("RTF={:.4}", wall_s / audio_seconds.max(f64::MIN_POSITIVE));
         println!("SEGMENTS={}", segments.len());
         println!("TRANSCRIPT_CHARS={}", transcript.chars().count());
-        println!("MODE=seg-parallel:{workers}workers,ort-intra:{intra}");
+        println!("MODE=seg-parallel:{workers}workers,ort-intra:{intra},ep:{ep}");
     }
     Ok(())
 }

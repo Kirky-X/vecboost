@@ -45,12 +45,14 @@ const LOOP_MAX_DISTINCT: usize = 3;
 
 /// session 线程配置：env_pool=true 时环境已建全局线程池，session 跳过
 /// intra 设置（ORT 自动用 env pool）；no_spin 关闭 intra 线程自旋，
-/// 多 session 并发时减少核间争抢
+/// 多 session 并发时减少核间争抢；cuda=true 注册 CUDA EP（需 dylib 带
+/// CUDA EP，由 TRANSCRIBE_EP=cuda 开启，失败显性报错不静默回退）
 #[derive(Debug, Clone, Copy)]
 pub struct SessionOpts {
     pub intra_threads: usize,
     pub no_spin: bool,
     pub env_pool: bool,
+    pub cuda: bool,
 }
 
 fn session_from(path: &Path, opts: &SessionOpts) -> AsrResult<Session> {
@@ -60,6 +62,9 @@ fn session_from(path: &Path, opts: &SessionOpts) -> AsrResult<Session> {
     }
     if opts.no_spin {
         builder = builder.with_config_entry("session.intra_op.allow_spinning", "0")?;
+    }
+    if opts.cuda {
+        builder = builder.with_execution_providers([ort::ep::CUDA::default().build()])?;
     }
     Ok(builder
         .commit_from_file(path)

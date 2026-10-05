@@ -9,7 +9,7 @@ name = "transcribe-own"
 path = "src/main.rs"
 
 [dependencies]
-ort = { version = "2.0.0-rc.13", default-features = false, features = ["load-dynamic", "ndarray", "std"] }
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["load-dynamic", "ndarray", "std", "cuda"] }
 ndarray = { version = "0.17", default-features = false } # 与 ort 0.17 同版，KV view 输入用
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 hound = { version = "3.5", default-features = false }

@@ -30,10 +30,20 @@ pub struct BatchItem {
     pub num_frames: usize,
 }
 
-struct Slot {
-    prompt_len: usize,
-    done: bool,
-    generated: Vec<i64>,
+pub(crate) struct Slot {
+    pub(crate) prompt_len: usize,
+    pub(crate) done: bool,
+    pub(crate) generated: Vec<i64>,
+}
+
+/// conv/encoder 合批 + 逐 item prompt 构建的结果（batch 与 gpu 两路共用）
+pub(crate) struct Prepared {
+    pub(crate) slots: Vec<Slot>,
+    pub(crate) prompts: Vec<Vec<i64>>,
+    pub(crate) audio_buf: Vec<f32>,
+    pub(crate) a_max: usize,
+    pub(crate) a_hidden: usize,
+    pub(crate) p_max: usize,
 }
 
 pub struct BatchAsr {
@@ -204,113 +214,12 @@ impl BatchAsr {
         tok: &AsrTokenizer,
     ) -> AsrResult<Vec<String>> {
         let b = items.len();
-
-        // ---- conv 合批：帧维右填充（零帧 → 输出被 encoder mask 排除） ----
-        let f_max = items.iter().map(|it| it.num_frames).max().unwrap_or(0);
-        if f_max < MIN_FRAMES {
-            return Ok(vec![String::new(); b]);
-        }
-        let mel_dim = crate::features::MEL_DIM;
-        let mut mel = vec![0f32; b * f_max * mel_dim];
-        for (bi, it) in items.iter().enumerate() {
-            let len = it.num_frames * mel_dim;
-            mel[bi * f_max * mel_dim..bi * f_max * mel_dim + len]
-                .copy_from_slice(&it.mel[..len]);
-        }
-        let mut inputs: HashMap<&str, SessionInputValue> = HashMap::new();
-        inputs.insert(
-            self.conv_in.as_str(),
-            SessionInputValue::from(Tensor::from_array((
-                vec![b as i64, f_max as i64, mel_dim as i64],
-                mel,
-            ))?),
-        );
-        let outputs = self.conv.run(inputs)?;
-        let (cshape, cdata) = {
-            let (s, d) = outputs[self.conv_out.as_str()].try_extract_tensor::<f32>()?;
-            (s[..].to_vec(), d.to_vec())
-        };
-        drop(outputs);
-        if cshape.len() != 3 || cshape[1] <= 0 || cshape[2] <= 0 {
-            return Err(format!("unexpected conv output shape {cshape:?}").into());
-        }
-        let t_conv = cshape[1] as usize;
-        let c_dim = cshape[2] as usize;
-
-        // ---- encoder 合批：静音填充帧全部为真实输入（官方 chunk 同款），全真 mask ----
-        let expected = feat_to_audio_tokens_len(f_max as i32, CONV_CHUNK_SIZE).max(0) as usize;
-        let valid = expected.min(t_conv);
-        let enc_mask = vec![true; b * t_conv];
-        let mut inputs: HashMap<&str, SessionInputValue> = HashMap::new();
-        inputs.insert(
-            self.enc_in0.as_str(),
-            SessionInputValue::from(Tensor::from_array((
-                vec![b as i64, t_conv as i64, c_dim as i64],
-                cdata,
-            ))?),
-        );
-        inputs.insert(
-            self.enc_in1.as_str(),
-            SessionInputValue::from(Tensor::from_array((
-                vec![b as i64, t_conv as i64],
-                enc_mask,
-            ))?),
-        );
-        let outputs = self.encoder.run(inputs)?;
-        let (eshape, edata) = {
-            let (s, d) = outputs[self.enc_out.as_str()].try_extract_tensor::<f32>()?;
-            (s[..].to_vec(), d.to_vec())
-        };
-        drop(outputs);
-        if eshape.len() != 3 || eshape[1] as usize != t_conv || eshape[2] <= 0 {
-            return Err(format!("unexpected encoder output shape {eshape:?}").into());
-        }
-        let a_hidden = eshape[2] as usize;
-
-        // ---- 逐 item：有效音频长（valid + 尾部静音裁剪 impl.cc:129-207）与 prompt ----
-        let before =
-            tok.encode("<|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>")?;
-        let after = tok.encode("<|audio_end|><|im_end|>\n<|im_start|>assistant\n")?;
-        let mut slots: Vec<Slot> = Vec::with_capacity(b);
-        let mut prompts: Vec<Vec<i64>> = Vec::with_capacity(b);
-        let mut audio_rows: Vec<Vec<f32>> = Vec::with_capacity(b);
-        let audio_tokens = valid;
-        for bi in 0..b {
-            let base = bi * t_conv * a_hidden;
-            let mut ids = before.clone();
-            ids.extend(std::iter::repeat_n(AUDIO_PAD_ID, audio_tokens));
-            ids.extend_from_slice(&after);
-            // context 超限截断音频占位（impl.cc:873-938）
-            if ids.len() > MAX_TOTAL_LEN as usize {
-                let keep = MAX_TOTAL_LEN as usize - before.len() - after.len();
-                if keep == 0 {
-                    return Err("no room for audio placeholders within max_total_len".into());
-                }
-                ids.truncate(before.len() + after.len());
-                ids.splice(
-                    before.len()..before.len(),
-                    std::iter::repeat_n(AUDIO_PAD_ID, keep),
-                );
-                slots.push(Slot { prompt_len: ids.len(), done: false, generated: Vec::new() });
-                audio_rows.push(edata[base..base + keep * a_hidden].to_vec());
-                prompts.push(ids);
-                continue;
-            } else {
-                slots.push(Slot { prompt_len: ids.len(), done: false, generated: Vec::new() });
-                audio_rows.push(edata[base..base + audio_tokens * a_hidden].to_vec());
-            }
-            prompts.push(ids);
-        }
-
-        let p_max = prompts.iter().map(|p| p.len()).max().unwrap_or(0);
-        let a_max = audio_rows
-            .iter()
-            .map(|a| if a_hidden > 0 { a.len() / a_hidden } else { 0 })
-            .max()
-            .unwrap_or(0);
-        if p_max == 0 || a_max == 0 {
-            return Ok(vec![String::new(); b]);
-        }
+        let prepared = conv_encoder_prepare(
+            &mut self.conv, &mut self.encoder,
+            &self.conv_in, &self.conv_out, &self.enc_in0, &self.enc_in1, &self.enc_out,
+            items, tok,
+        )?;
+        let Prepared { mut slots, prompts, audio_buf, a_max, a_hidden, p_max } = prepared;
 
         // ---- 解码输入缓冲（prefill 建、每步复用） ----
         let mut ids_buf = vec![0i64; b * p_max];
@@ -318,10 +227,6 @@ impl BatchAsr {
         for (bi, p) in prompts.iter().enumerate() {
             ids_buf[bi * p_max..bi * p_max + p.len()].copy_from_slice(p);
             mask_buf[bi * p_max..bi * p_max + p.len()].fill(1);
-        }
-        let mut audio_buf = vec![0f32; b * a_max * a_hidden];
-        for (bi, a) in audio_rows.iter().enumerate() {
-            audio_buf[bi * a_max * a_hidden..bi * a_max * a_hidden + a.len()].copy_from_slice(a);
         }
 
         // 逐层连续 KV：单 view [B,512,8,128] 覆盖 batch
@@ -408,15 +313,160 @@ impl BatchAsr {
             }
         }
 
-        // ---- 逐 item 文本还原 ----
-        let texts = slots
-            .into_iter()
-            .map(|s| {
-                let cleaned = strip_language_prefix(&s.generated, tok);
-                let text = tok.decode(&cleaned);
-                AsrTokenizer::remove_replacement_chars(&text)
-            })
-            .collect();
-        Ok(texts)
+        Ok(finalize_texts(slots, tok))
     }
+}
+
+/// conv/encoder 合批 + 逐 item prompt 构建（batch 与 gpu 两路共用）。
+/// 填充策略：官方 split_audio_into_chunks 同款——mel 补真实静音帧至批内最长，
+/// encoder 全真 mask，批内占位数/prompt 长一致，不存在 pad KV。
+pub(crate) fn conv_encoder_prepare(
+    conv: &mut Session,
+    encoder: &mut Session,
+    conv_in: &str,
+    conv_out: &str,
+    enc_in0: &str,
+    enc_in1: &str,
+    enc_out: &str,
+    items: &[&BatchItem],
+    tok: &AsrTokenizer,
+) -> AsrResult<Prepared> {
+    let b = items.len();
+
+    // ---- conv 合批：帧维右填充（零帧 → 输出被 encoder mask 排除） ----
+    let f_max = items.iter().map(|it| it.num_frames).max().unwrap_or(0);
+    if f_max < MIN_FRAMES {
+        return Ok(Prepared {
+            slots: (0..b).map(|_| Slot { prompt_len: 0, done: true, generated: Vec::new() }).collect(),
+            prompts: Vec::new(),
+            audio_buf: Vec::new(),
+            a_max: 0,
+            a_hidden: 0,
+            p_max: 0,
+        });
+    }
+    let mel_dim = crate::features::MEL_DIM;
+    let mut mel = vec![0f32; b * f_max * mel_dim];
+    for (bi, it) in items.iter().enumerate() {
+        let len = it.num_frames * mel_dim;
+        mel[bi * f_max * mel_dim..bi * f_max * mel_dim + len]
+            .copy_from_slice(&it.mel[..len]);
+    }
+    let mut inputs: HashMap<&str, SessionInputValue> = HashMap::new();
+    inputs.insert(
+        conv_in,
+        SessionInputValue::from(Tensor::from_array((
+            vec![b as i64, f_max as i64, mel_dim as i64],
+            mel,
+        ))?),
+    );
+    let outputs = conv.run(inputs)?;
+    let (cshape, cdata) = {
+        let (s, d) = outputs[conv_out].try_extract_tensor::<f32>()?;
+        (s[..].to_vec(), d.to_vec())
+    };
+    drop(outputs);
+    if cshape.len() != 3 || cshape[1] <= 0 || cshape[2] <= 0 {
+        return Err(format!("unexpected conv output shape {cshape:?}").into());
+    }
+    let t_conv = cshape[1] as usize;
+    let c_dim = cshape[2] as usize;
+
+    // ---- encoder 合批：静音填充帧全部为真实输入（官方 chunk 同款），全真 mask ----
+    let expected = feat_to_audio_tokens_len(f_max as i32, CONV_CHUNK_SIZE).max(0) as usize;
+    let valid = expected.min(t_conv);
+    let enc_mask = vec![true; b * t_conv];
+    let mut inputs: HashMap<&str, SessionInputValue> = HashMap::new();
+    inputs.insert(
+        enc_in0,
+        SessionInputValue::from(Tensor::from_array((
+            vec![b as i64, t_conv as i64, c_dim as i64],
+            cdata,
+        ))?),
+    );
+    inputs.insert(
+        enc_in1,
+        SessionInputValue::from(Tensor::from_array((
+            vec![b as i64, t_conv as i64],
+            enc_mask,
+        ))?),
+    );
+    let outputs = encoder.run(inputs)?;
+    let (eshape, edata) = {
+        let (s, d) = outputs[enc_out].try_extract_tensor::<f32>()?;
+        (s[..].to_vec(), d.to_vec())
+    };
+    drop(outputs);
+    if eshape.len() != 3 || eshape[1] as usize != t_conv || eshape[2] <= 0 {
+        return Err(format!("unexpected encoder output shape {eshape:?}").into());
+    }
+    let a_hidden = eshape[2] as usize;
+
+    // ---- 逐 item：统一占位数（静音填充后批内一致）与 prompt ----
+    let before =
+        tok.encode("<|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>")?;
+    let after = tok.encode("<|audio_end|><|im_end|>\n<|im_start|>assistant\n")?;
+    let mut slots: Vec<Slot> = Vec::with_capacity(b);
+    let mut prompts: Vec<Vec<i64>> = Vec::with_capacity(b);
+    let mut audio_rows: Vec<Vec<f32>> = Vec::with_capacity(b);
+    let audio_tokens = valid;
+    for bi in 0..b {
+        let base = bi * t_conv * a_hidden;
+        let mut ids = before.clone();
+        ids.extend(std::iter::repeat_n(AUDIO_PAD_ID, audio_tokens));
+        ids.extend_from_slice(&after);
+        // context 超限截断音频占位（impl.cc:873-938）
+        if ids.len() > MAX_TOTAL_LEN as usize {
+            let keep = MAX_TOTAL_LEN as usize - before.len() - after.len();
+            if keep == 0 {
+                return Err("no room for audio placeholders within max_total_len".into());
+            }
+            ids.truncate(before.len() + after.len());
+            ids.splice(
+                before.len()..before.len(),
+                std::iter::repeat_n(AUDIO_PAD_ID, keep),
+            );
+            audio_rows.push(edata[base..base + keep * a_hidden].to_vec());
+        } else {
+            audio_rows.push(edata[base..base + audio_tokens * a_hidden].to_vec());
+        }
+        slots.push(Slot { prompt_len: ids.len(), done: false, generated: Vec::new() });
+        prompts.push(ids);
+    }
+
+    let p_max = prompts.iter().map(|p| p.len()).max().unwrap_or(0);
+    let a_max = audio_rows
+        .iter()
+        .map(|a| if a_hidden > 0 { a.len() / a_hidden } else { 0 })
+        .max()
+        .unwrap_or(0);
+    if p_max == 0 || a_max == 0 {
+        return Ok(Prepared {
+            slots: (0..b).map(|_| Slot { prompt_len: 0, done: true, generated: Vec::new() }).collect(),
+            prompts: Vec::new(),
+            audio_buf: Vec::new(),
+            a_max: 0,
+            a_hidden: 0,
+            p_max: 0,
+        });
+    }
+
+    let mut audio_buf = vec![0f32; b * a_max * a_hidden];
+    for (bi, a) in audio_rows.iter().enumerate() {
+        audio_buf[bi * a_max * a_hidden..bi * a_max * a_hidden + a.len()].copy_from_slice(a);
+    }
+
+    Ok(Prepared { slots, prompts, audio_buf, a_max, a_hidden, p_max })
+}
+
+/// 逐 item 文本还原（两路共用）
+pub(crate) fn finalize_texts(slots: Vec<Slot>, tok: &AsrTokenizer) -> Vec<String> {
+    slots
+        .into_iter()
+        .map(|s| {
+            let cleaned = strip_language_prefix(&s.generated, tok);
+            let text = tok.decode(&cleaned);
+            AsrTokenizer::remove_replacement_chars(&text)
+        })
+        .collect()
 }

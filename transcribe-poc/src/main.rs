@@ -5,6 +5,7 @@
 mod asr;
 mod batch;
 mod features;
+mod gpu;
 mod tokenizer;
 mod vad;
 mod wav;
@@ -168,6 +169,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let no_spin = matches!(std::env::var("TRANSCRIBE_NO_SPIN").as_deref(), Ok("1"));
     // TRANSCRIBE_BATCH=<n>（n≥2 启用合批 lockstep 解码，单 session 高 intra；
     // 0/1 = 传统多 worker 逐段并行）
+    let gpu_on = matches!(std::env::var("TRANSCRIBE_GPU").as_deref(), Ok("1"));
     let batch: usize = std::env::var("TRANSCRIBE_BATCH")
         .ok()
         .map(|v| v.parse::<usize>().map_err(|_| format!("TRANSCRIBE_BATCH={v} invalid")))
@@ -197,13 +199,15 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         )?);
         let fbank = std::sync::Arc::new(features::WhisperFbank::new());
         let results: std::sync::Mutex<Vec<(usize, String)>> = std::sync::Mutex::new(Vec::new());
-        if batch >= 2 {
+        if batch >= 2 || gpu_on {
+            // TRANSCRIBE_GPU=1：KV 常驻显存实验通路（ort rc.13 io-binding 存在
+            // 非确定性读回问题，见 out/transcribe-poc/own-engine/summary.md §11；
+            // 生产 GPU 请用 TRANSCRIBE_EP=cuda + batch.rs 路径：已验证正确）
             // 合批 lockstep：单 session（intra 建议拉高），批内多段共享权重流量
             eprintln!(
-                "transcribe-own: decoding {} segments in batches of {batch} (ort-intra={intra}, ep={ep})",
+                "transcribe-own: decoding {} segments in batches of {batch} (ort-intra={intra}, ep={ep}, gpu={gpu_on})",
                 segments.len()
             );
-            let mut engine = batch::BatchAsr::new(&models_dir, &session_opts)?;
             let items: Vec<batch::BatchItem> = segments
                 .iter()
                 .map(|s| {
@@ -212,7 +216,17 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     batch::BatchItem { mel: fbank.compute(seg_samples), num_frames }
                 })
                 .collect();
-            let texts = engine.transcribe_all(&items, &asr_tok, batch)?;
+            let texts = if gpu_on {
+                // CUDA EP 对这些 int8 导出在 batch≥2 时输出异常（实测即时 EOS），GPU 仅支持逐段
+                if ep != "cuda" {
+                    return Err("TRANSCRIBE_GPU=1 requires TRANSCRIBE_EP=cuda".into());
+                }
+                let mut engine = gpu::GpuBatchAsr::new(&models_dir, &session_opts)?;
+                engine.transcribe_all(&items, &asr_tok, batch)?
+            } else {
+                let mut engine = batch::BatchAsr::new(&models_dir, &session_opts)?;
+                engine.transcribe_all(&items, &asr_tok, batch)?
+            };
             for (i, text) in texts.into_iter().enumerate() {
                 eprintln!(
                     "transcribe-own: [{:.3}s] batch segment {}/{} {} chars",
@@ -328,7 +342,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         println!("RTF={:.4}", wall_s / audio_seconds.max(f64::MIN_POSITIVE));
         println!("SEGMENTS={}", segments.len());
         println!("TRANSCRIPT_CHARS={}", transcript.chars().count());
-        println!("MODE=seg-parallel:{workers}workers,ort-intra:{intra},ep:{ep},batch:{batch}");
+        println!("MODE=seg-parallel:{workers}workers,ort-intra:{intra},ep:{ep},batch:{batch},gpu:{gpu_on}");
     }
     Ok(())
 }

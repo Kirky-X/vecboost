@@ -152,8 +152,9 @@ pub(crate) fn greedy_argmax(row: &[f32], avoid: Option<i64>) -> i64 {
 }
 
 /// 前缀脚手架清理（impl.cc:1105-1123）：模型可能自发生成
-/// "language Chinese<asr_text>" 前缀（不传 language 也可能出现），在前 16 个
-/// token 内找到 <asr_text> 且前缀以 "language " 开头时，从其后开始保留
+/// "language Chinese<asr_text>" 类前缀（1.7B int8 导出实测高频出现，且可能带
+/// 前导空格/不同语言词），只要前 16 个 token 内出现 <asr_text>，就丢弃其及
+/// 之前全部内容（sherpa 原实现同样只按 <asr_text> 位置裁剪）
 pub(crate) fn strip_language_prefix(generated: &[i64], tok: &AsrTokenizer) -> Vec<i64> {
     if generated.is_empty() {
         return Vec::new();
@@ -164,13 +165,7 @@ pub(crate) fn strip_language_prefix(generated: &[i64], tok: &AsrTokenizer) -> Ve
         .position(|&id| id == crate::tokenizer::ASR_TEXT_ID)
     {
         if pos > 0 {
-            let prefix_text = tok.decode(&generated[..=pos]);
-            if prefix_text.starts_with("language ")
-                && prefix_text.len() >= 10
-                && prefix_text.ends_with("<asr_text>")
-            {
-                return generated[pos + 1..].to_vec();
-            }
+            return generated[pos + 1..].to_vec();
         }
     }
     generated.to_vec()

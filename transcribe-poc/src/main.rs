@@ -109,7 +109,21 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let t0 = Instant::now();
     let dylib = resolve_ort_dylib();
     eprintln!("transcribe-own: [{:.3}s] loading onnxruntime dylib: {dylib}", t0.elapsed().as_secs_f64());
-    ort::init_from(&dylib)?.with_name("transcribe-own").commit();
+    // TRANSCRIBE_ENV_POOL=<n>：环境级全局线程池（n 线程，关 spin），各 session
+    // 共享（实验旋钮；未设置时 per-session 线程）
+    let env_pool = std::env::var("TRANSCRIBE_ENV_POOL")
+        .ok()
+        .map(|v| v.parse::<usize>().map_err(|_| format!("TRANSCRIBE_ENV_POOL={v} invalid")))
+        .transpose()?;
+    let mut env = ort::init_from(&dylib)?.with_name("transcribe-own");
+    if let Some(n) = env_pool {
+        env = env.with_global_thread_pool(
+            ort::environment::GlobalThreadPoolOptions::default()
+                .with_intra_threads(n)?
+                .with_spin_control(false)?,
+        );
+    }
+    env.commit();
 
     // 门禁曾把资产清单说明文字拼进 argv 路径（assets（…）/smoke10s.wav）；
     // 原路径优先，仅在原路径不可用时显性归一化（stderr 留痕）
@@ -150,6 +164,12 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     // 并行旋钮（默认 4 workers × intra=2；环境变量供门禁测量其他档位，
     // 如激进档 TRANSCRIBE_WORKERS=6 TRANSCRIBE_INTRA=1）。非法值显性报错。
     let (workers, intra) = parallel_knobs()?;
+    let no_spin = matches!(std::env::var("TRANSCRIBE_NO_SPIN").as_deref(), Ok("1"));
+    let session_opts = asr::SessionOpts {
+        intra_threads: intra,
+        no_spin,
+        env_pool: env_pool.is_some(),
+    };
 
     let mut transcript = String::new();
     let mut seg_lines = String::new();
@@ -180,7 +200,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 let fbank = &fbank;
                 let samples = &samples;
                 scope.spawn(move || {
-                    let mut engine = match asr::Qwen3Asr::new(models_dir, intra) {
+                    let mut engine = match asr::Qwen3Asr::new(models_dir, &session_opts) {
                         Ok(e) => e,
                         Err(e) => {
                             errors.lock().unwrap().push(format!("worker {w}: {e}"));

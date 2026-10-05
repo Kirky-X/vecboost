@@ -5,12 +5,13 @@
 ## 调用形式
 
 ```
-transcribe-own <wav> <outDir> [--models <dir>]
+transcribe-own <wav> <outDir> [--models <dir>] [--vad-only]
 ```
 
 - `<wav>`：16kHz 单声道 16-bit PCM WAV（PoC 不做重采样；输入即 `assets/audio_from_m4a.wav` 或 `assets/smoke10s.wav`）
 - `<outDir>`：输出目录，不存在则创建
 - `[--models <dir>]`：模型目录，缺省为 `assets/models`（相对进程 CWD）；门禁调用时显式传入
+- `[--vad-only]`：只跑 VAD，stdout 仅 `SEGMENTS=` 一行，写 `<outDir>/segments.txt`（文本列留空）
 
 ## 模型目录布局（--models 指向）
 
@@ -24,16 +25,19 @@ transcribe-own <wav> <outDir> [--models <dir>]
 <models>/tokenizer/tokenizer_config.json
 ```
 
-## stdout 关键行（运行中打印且仅打印这些行）
+## stdout 关键行（全管线运行中打印且仅打印这些行）
 
 ```
-WALL_S=<浮点秒>      # 端到端 wall 时钟（秒，浮点）
-RTF=<浮点>           # wall_s / 音频时长_s
-SEGMENTS=<整数>      # VAD 切出的段数
-MODE=<并行方式描述>   # 如 "seg-parallel:4x{intra:3}"，自由文本但单行无换行符
+WALL_S=<浮点秒>            # 端到端 wall 时钟（秒，浮点）
+RTF=<浮点>                 # wall_s / 音频时长_s
+SEGMENTS=<整数>            # VAD 切出的段数
+TRANSCRIPT_CHARS=<整数>    # transcript.txt 全文字符数（各段文本拼接，不含换行）
+MODE=<并行方式描述>         # 如 "seg-parallel:4x{intra:3}"，自由文本但单行无换行符
 ```
 
-进度/日志一律走 stderr；stdout 除以上四行外不得有任何其他输出。
+`--vad-only` 模式只打印 `SEGMENTS=<整数>` 一行。
+
+进度/日志一律走 stderr；stdout 除以上行外不得有任何其他输出。
 
 ## 输出文件
 

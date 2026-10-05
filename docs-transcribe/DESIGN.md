@@ -111,8 +111,11 @@ feature_size=128, dither=0。
 - dither=0，preemph=0，remove_dc_offset=false，snip_edges=false
 - 功率谱：|FFT|²，取 201 个 bin
 - mel：128 bins，low=0，high=8kHz（Nyquist），librosa 式三角（bin 数 201+1、中心/左右斜坡，
-  knf-mel-computations.cc:299-375），mel 尺度用 HTK 公式（use_slaney_mel_scale=false），
-  无 slaney 归一化（norm 为空），输出**线性**能量（whisper 通路不取 log，knf-feature-fbank.cc:98-102 仅 fbank 通路取 log；whisper-feature.cc:147-167 无 log）
+  knf-mel-computations.cc:299-375）。mel 尺度与归一化：knf-whisper-feature.cc:139-144 只设
+  num_bins/low_freq/is_librosa=true，`norm="slaney"` 与 `use_slaney_mel_scale=true` 保持
+  mel-computations.h:58-70 默认值 → 实际为 **Slaney 尺度 + Slaney 归一化**（与 librosa.filters.mel
+  默认一致；本文档此前写「HTK 公式、无 slaney 归一化」与源码不符，2026-10-05 实现阶段核对
+  后修正），输出**线性**能量（whisper 通路不取 log，knf-feature-fbank.cc:98-102 仅 fbank 通路取 log；whisper-feature.cc:147-167 无 log）
 - **居中对齐**：AcceptWaveform 前先补 80 样本（16000×0.01/2）静音，帧数取 floor(N/160)，
   丢掉尾部多出的 1 帧（offline-stream.cc:84-94 注释；sherpa#3535：不做会对齐会让 1.7B 塌缩成复读）
 - **归一化**（math.cc:115-132，全局一次）：

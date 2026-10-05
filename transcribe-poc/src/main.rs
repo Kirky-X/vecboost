@@ -1,8 +1,10 @@
-//! transcribe-own：自研 Qwen3-ASR 转录管线 PoC。
-//! 本轮交付 VAD 阶段：读 wav + silero VAD；`--vad-only` 输出 SEGMENTS= 与
-//! segments.txt。fbank/编码/KV-cache 解码属后续阶段。
-//! stdout 契约见 transcribe-poc/CONTRACT.md：运行关键行外不得有任何 stdout 输出。
+//! transcribe-own：自研 Qwen3-ASR 转录管线 PoC（VAD → whisper log-mel fbank →
+//! conv_frontend → encoder → KV-cache 贪心解码 → BPE 还原）。`--vad-only` 只跑
+//! VAD。stdout 契约见 transcribe-poc/CONTRACT.md：运行关键行外不得有任何 stdout 输出。
 
+mod asr;
+mod features;
+mod tokenizer;
 mod vad;
 mod wav;
 
@@ -104,14 +106,6 @@ fn normalize_arg_path(raw: &str, must_exist: bool) -> (PathBuf, bool) {
 }
 
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
-    if !args.vad_only {
-        // 解码链（fbank/conv/encoder/KV-cache greedy）未实现；实现后删除本分支
-        return Err(
-            "full pipeline not implemented yet (this phase ships wav+VAD only; use --vad-only)"
-                .into(),
-        );
-    }
-
     let t0 = Instant::now();
     let dylib = resolve_ort_dylib();
     eprintln!("transcribe-own: loading onnxruntime dylib: {dylib}");
@@ -137,10 +131,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let _ = (w, m, o);
 
     let samples = wav::read_wav_16k_mono(&wav_path)?;
+    let audio_seconds = samples.len() as f64 / vad::SAMPLE_RATE as f64;
     eprintln!(
-        "transcribe-own: wav loaded: {} samples, {:.3}s",
-        samples.len(),
-        samples.len() as f32 / vad::SAMPLE_RATE as f32
+        "transcribe-own: wav loaded: {} samples, {audio_seconds:.3}s",
+        samples.len()
     );
 
     let config = vad::VadConfig::default();
@@ -148,27 +142,65 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let model = vad::SileroVadModel::new(&model_path, &config)?;
     eprintln!("transcribe-own: vad model loaded: {}", model_path.display());
     let segments = vad::detect_segments(model, &samples, &config)?;
+    eprintln!("transcribe-own: vad done: {} segments", segments.len());
+
+    let mut transcript = String::new();
+    let mut seg_lines = String::new();
+    if !args.vad_only {
+        eprintln!("transcribe-own: loading tokenizer...");
+        let asr_tok = tokenizer::AsrTokenizer::new(&models_dir.join("tokenizer"))?;
+        eprintln!("transcribe-own: loading qwen3 models...");
+        let mut qwen = asr::Qwen3Asr::new(&models_dir)?;
+        eprintln!("transcribe-own: qwen3 models loaded");
+        let fbank = features::WhisperFbank::new();
+
+        for (i, s) in segments.iter().enumerate() {
+            let seg_samples = &samples[s.start as usize..s.end as usize];
+            let num_frames = seg_samples.len() / features::FRAME_SHIFT;
+            let mel = fbank.compute(seg_samples);
+            let text = qwen.transcribe(&mel, num_frames, &asr_tok)?;
+            eprintln!(
+                "transcribe-own: segment {}/{} [{:.2}s-{:.2}s] {} chars",
+                i + 1,
+                segments.len(),
+                s.start as f64 / vad::SAMPLE_RATE as f64,
+                s.end as f64 / vad::SAMPLE_RATE as f64,
+                text.chars().count()
+            );
+            let start_s = s.start as f64 / vad::SAMPLE_RATE as f64;
+            let end_s = s.end as f64 / vad::SAMPLE_RATE as f64;
+            seg_lines.push_str(&format!("{start_s:.2} -- {end_s:.2}: {text}\n"));
+            transcript.push_str(&text);
+        }
+    }
 
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| format!("create outDir {} failed: {e}", out_dir.display()))?;
     let seg_path = out_dir.join("segments.txt");
-    let mut text = String::new();
-    for s in &segments {
-        let start_s = s.start as f64 / vad::SAMPLE_RATE as f64;
-        let end_s = s.end as f64 / vad::SAMPLE_RATE as f64;
-        // 契约行格式「起 -- 止: 文本」；解码文本属后续阶段，此处留空
-        text.push_str(&format!("{start_s:.2} -- {end_s:.2}: \n"));
-    }
-    std::fs::write(&seg_path, text)
+    std::fs::write(&seg_path, &seg_lines)
         .map_err(|e| format!("write {} failed: {e}", seg_path.display()))?;
-    eprintln!(
-        "transcribe-own: vad done in {:.3}s, {} segments -> {}",
-        t0.elapsed().as_secs_f32(),
-        segments.len(),
-        seg_path.display()
-    );
 
-    println!("SEGMENTS={}", segments.len());
+    let wall_s = t0.elapsed().as_secs_f64();
+    if args.vad_only {
+        eprintln!(
+            "transcribe-own: vad-only done in {wall_s:.3}s -> {}",
+            seg_path.display()
+        );
+        println!("SEGMENTS={}", segments.len());
+    } else {
+        let transcript_path = out_dir.join("transcript.txt");
+        std::fs::write(&transcript_path, &transcript)
+            .map_err(|e| format!("write {} failed: {e}", transcript_path.display()))?;
+        eprintln!(
+            "transcribe-own: pipeline done in {wall_s:.3}s -> {}",
+            transcript_path.display()
+        );
+        println!("WALL_S={wall_s:.3}");
+        println!("RTF={:.4}", wall_s / audio_seconds.max(f64::MIN_POSITIVE));
+        println!("SEGMENTS={}", segments.len());
+        println!("TRANSCRIPT_CHARS={}", transcript.chars().count());
+        println!("MODE=seg-parallel:1workers,ort-intra:1");
+    }
     Ok(())
 }
 

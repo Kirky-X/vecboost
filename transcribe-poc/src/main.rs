@@ -3,6 +3,7 @@
 //! VAD。stdout 契约见 transcribe-poc/CONTRACT.md：运行关键行外不得有任何 stdout 输出。
 
 mod asr;
+mod batch;
 mod features;
 mod tokenizer;
 mod vad;
@@ -165,6 +166,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     // 如激进档 TRANSCRIBE_WORKERS=6 TRANSCRIBE_INTRA=1）。非法值显性报错。
     let (workers, intra) = parallel_knobs()?;
     let no_spin = matches!(std::env::var("TRANSCRIBE_NO_SPIN").as_deref(), Ok("1"));
+    // TRANSCRIBE_BATCH=<n>（n≥2 启用合批 lockstep 解码，单 session 高 intra；
+    // 0/1 = 传统多 worker 逐段并行）
+    let batch: usize = std::env::var("TRANSCRIBE_BATCH")
+        .ok()
+        .map(|v| v.parse::<usize>().map_err(|_| format!("TRANSCRIBE_BATCH={v} invalid")))
+        .transpose()?
+        .unwrap_or(0);
     // 执行后端旋钮：TRANSCRIBE_EP=cpu（默认）| cuda。cuda 要求 ORT_DYLIB_PATH
     // 指向带 CUDA EP 的 onnxruntime 动态库；EP 注册失败显性报错，不静默回退。
     let ep = match std::env::var("TRANSCRIBE_EP").as_deref() {
@@ -188,16 +196,43 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             &models_dir.join("tokenizer"),
         )?);
         let fbank = std::sync::Arc::new(features::WhisperFbank::new());
-        eprintln!(
-            "transcribe-own: decoding {segments_len} segments with {workers} workers (ort-intra={intra}); loading {workers} session sets...",
-            segments_len = segments.len()
-        );
-
-        // ort rc.13 禁止并发 Run 同一 Session（session/mod.rs:118-122），
-        // 每 worker 独立加载一套 conv/encoder/decoder（权重内存 ×workers）
-        let next_job = std::sync::atomic::AtomicUsize::new(0);
         let results: std::sync::Mutex<Vec<(usize, String)>> = std::sync::Mutex::new(Vec::new());
-        let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        if batch >= 2 {
+            // 合批 lockstep：单 session（intra 建议拉高），批内多段共享权重流量
+            eprintln!(
+                "transcribe-own: decoding {} segments in batches of {batch} (ort-intra={intra}, ep={ep})",
+                segments.len()
+            );
+            let mut engine = batch::BatchAsr::new(&models_dir, &session_opts)?;
+            let items: Vec<batch::BatchItem> = segments
+                .iter()
+                .map(|s| {
+                    let seg_samples = &samples[s.start as usize..s.end as usize];
+                    let num_frames = seg_samples.len() / features::FRAME_SHIFT;
+                    batch::BatchItem { mel: fbank.compute(seg_samples), num_frames }
+                })
+                .collect();
+            let texts = engine.transcribe_all(&items, &asr_tok, batch)?;
+            for (i, text) in texts.into_iter().enumerate() {
+                eprintln!(
+                    "transcribe-own: [{:.3}s] batch segment {}/{} {} chars",
+                    t0.elapsed().as_secs_f64(),
+                    i + 1,
+                    segments.len(),
+                    text.chars().count()
+                );
+                results.lock().unwrap().push((i, text));
+            }
+        } else {
+            eprintln!(
+                "transcribe-own: decoding {segments_len} segments with {workers} workers (ort-intra={intra}); loading {workers} session sets...",
+                segments_len = segments.len()
+            );
+
+            // ort rc.13 禁止并发 Run 同一 Session（session/mod.rs:118-122），
+            // 每 worker 独立加载一套 conv/encoder/decoder（权重内存 ×workers）
+            let next_job = std::sync::atomic::AtomicUsize::new(0);
+            let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
         std::thread::scope(|scope| {
             let models_dir = &models_dir;
             let segments = &segments;
@@ -251,11 +286,12 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             }
         });
 
-        let errors = errors.into_inner().unwrap();
-        if !errors.is_empty() {
-            return Err(errors.into_iter().next().unwrap().into());
+            let errors = errors.into_inner().unwrap();
+            if !errors.is_empty() {
+                return Err(errors.into_iter().next().unwrap().into());
+            }
         }
-        // 段文本按时间顺序合并（并行解码乱序完成，按段索引排序）
+        // 段文本按时间顺序合并（并行/合批均按段索引排序）
         let mut done = results.into_inner().unwrap();
         done.sort_by_key(|(i, _)| *i);
         for (i, text) in &done {
@@ -292,7 +328,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         println!("RTF={:.4}", wall_s / audio_seconds.max(f64::MIN_POSITIVE));
         println!("SEGMENTS={}", segments.len());
         println!("TRANSCRIPT_CHARS={}", transcript.chars().count());
-        println!("MODE=seg-parallel:{workers}workers,ort-intra:{intra},ep:{ep}");
+        println!("MODE=seg-parallel:{workers}workers,ort-intra:{intra},ep:{ep},batch:{batch}");
     }
     Ok(())
 }

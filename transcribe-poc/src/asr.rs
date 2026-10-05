@@ -32,12 +32,12 @@ use crate::tokenizer::{AsrTokenizer, EOS_ID};
 
 pub type AsrResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-const MAX_TOTAL_LEN: i64 = 512;
-const KV_HEADS: i64 = 8;
+pub(crate) const MAX_TOTAL_LEN: i64 = 512;
+pub(crate) const KV_HEADS: i64 = 8;
 const HEAD_DIM: i64 = 128;
-const CONV_CHUNK_SIZE: i32 = 100; // kQwen3ChunkSize（impl.cc:43）
-const MAX_NEW_TOKENS: usize = 128; // sherpa CLI 默认（config.h:34）
-const MIN_FRAMES: usize = 2; // impl.cc:1177：帧数 <2 直接空结果
+pub(crate) const CONV_CHUNK_SIZE: i32 = 100; // kQwen3ChunkSize（impl.cc:43）
+pub(crate) const MAX_NEW_TOKENS: usize = 128; // sherpa CLI 默认（config.h:34）
+pub(crate) const MIN_FRAMES: usize = 2; // impl.cc:1177：帧数 <2 直接空结果
 
 /// 复读守卫常量（impl.cc:321-322）
 const LOOP_WINDOW: usize = 64;
@@ -55,7 +55,7 @@ pub struct SessionOpts {
     pub cuda: bool,
 }
 
-fn session_from(path: &Path, opts: &SessionOpts) -> AsrResult<Session> {
+pub(crate) fn session_from(path: &Path, opts: &SessionOpts) -> AsrResult<Session> {
     let mut builder = Session::builder()?;
     if !opts.env_pool {
         builder = builder.with_intra_threads(opts.intra_threads)?;
@@ -96,7 +96,7 @@ pub fn feat_to_audio_tokens_len(feat_len: i32, chunk_size: i32) -> i32 {
 }
 
 /// 复读守卫（impl.cc:326-350）：最近 LOOP_WINDOW 个 token 内 distinct ≤3
-fn is_degenerate_repetition(ids: &[i64]) -> bool {
+pub(crate) fn is_degenerate_repetition(ids: &[i64]) -> bool {
     if ids.len() < LOOP_WINDOW {
         return false;
     }
@@ -116,7 +116,7 @@ fn is_degenerate_repetition(ids: &[i64]) -> bool {
 }
 
 /// 裁掉塌缩循环尾部（impl.cc:357-389）：只删属于末窗口 token 集的尾 token
-fn trim_degenerate_tail(ids: &mut Vec<i64>) {
+pub(crate) fn trim_degenerate_tail(ids: &mut Vec<i64>) {
     let mut distinct = [0i64; LOOP_MAX_DISTINCT];
     let mut num_distinct = 0usize;
     for &id in &ids[ids.len() - LOOP_WINDOW..] {
@@ -134,7 +134,7 @@ fn trim_degenerate_tail(ids: &mut Vec<i64>) {
 }
 
 /// 贪心 argmax，temperature=1e-6 语义：跳过非有限值（impl.cc:593-627）
-fn greedy_argmax(row: &[f32], avoid: Option<i64>) -> i64 {
+pub(crate) fn greedy_argmax(row: &[f32], avoid: Option<i64>) -> i64 {
     let mut best = 0i64;
     let mut best_val = f32::NEG_INFINITY;
     let mut found = false;
@@ -149,6 +149,31 @@ fn greedy_argmax(row: &[f32], avoid: Option<i64>) -> i64 {
         }
     }
     if found { best } else { 0 }
+}
+
+/// 前缀脚手架清理（impl.cc:1105-1123）：模型可能自发生成
+/// "language Chinese<asr_text>" 前缀（不传 language 也可能出现），在前 16 个
+/// token 内找到 <asr_text> 且前缀以 "language " 开头时，从其后开始保留
+pub(crate) fn strip_language_prefix(generated: &[i64], tok: &AsrTokenizer) -> Vec<i64> {
+    if generated.is_empty() {
+        return Vec::new();
+    }
+    let prefix_window = 16.min(generated.len());
+    if let Some(pos) = generated[..prefix_window]
+        .iter()
+        .position(|&id| id == crate::tokenizer::ASR_TEXT_ID)
+    {
+        if pos > 0 {
+            let prefix_text = tok.decode(&generated[..=pos]);
+            if prefix_text.starts_with("language ")
+                && prefix_text.len() >= 10
+                && prefix_text.ends_with("<asr_text>")
+            {
+                return generated[pos + 1..].to_vec();
+            }
+        }
+    }
+    generated.to_vec()
 }
 
 pub struct Qwen3Asr {
@@ -527,30 +552,8 @@ impl Qwen3Asr {
             }
         }
 
-        // 前缀脚手架清理（impl.cc:1105-1123）：smoke 实测模型会自发生成
-        // "language Chinese<asr_text>" 前缀（不传 language 也可能出现），
-        // 在前 16 个 token 内找到 <asr_text> 且前缀文本以 "language " 开头、
-        // 以 "<asr_text>" 结尾时，从其后开始保留
-        let mut cleaned: &[i64] = &generated;
-        if !generated.is_empty() {
-            let prefix_window = 16.min(generated.len());
-            if let Some(pos) = generated[..prefix_window]
-                .iter()
-                .position(|&id| id == crate::tokenizer::ASR_TEXT_ID)
-            {
-                if pos > 0 {
-                    let prefix_text = tok.decode(&generated[..=pos]);
-                    if prefix_text.starts_with("language ")
-                        && prefix_text.len() >= 10
-                        && prefix_text.ends_with("<asr_text>")
-                    {
-                        cleaned = &generated[pos + 1..];
-                    }
-                }
-            }
-        }
-
-        let text = tok.decode(cleaned);
+        let cleaned = strip_language_prefix(&generated, tok);
+        let text = tok.decode(&cleaned);
         Ok(AsrTokenizer::remove_replacement_chars(&text))
     }
 }

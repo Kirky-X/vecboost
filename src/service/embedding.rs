@@ -997,22 +997,7 @@ impl EmbeddingService {
         let texts_len = texts.len();
 
         // 去重：相同文本只推理一次，结果映射回原始位置
-        let mut unique_map: std::collections::HashMap<&str, usize> =
-            std::collections::HashMap::with_capacity(texts_len);
-        let mut unique_texts: Vec<String> = Vec::with_capacity(texts_len);
-        let mut index_to_unique: Vec<usize> = Vec::with_capacity(texts_len); // original_idx → unique_idx
-
-        for text in &texts {
-            if let Some(&uidx) = unique_map.get(text.as_str()) {
-                index_to_unique.push(uidx);
-            } else {
-                let uidx = unique_texts.len();
-                unique_map.insert(text.as_str(), uidx);
-                unique_texts.push(text.clone());
-                index_to_unique.push(uidx);
-            }
-        }
-
+        let (unique_texts, index_to_unique) = Self::deduplicate_texts(&texts);
         let dedup_saved = texts_len - unique_texts.len();
         if dedup_saved > 0 {
             debug!(
@@ -1025,23 +1010,10 @@ impl EmbeddingService {
 
         // 检测一个示例文本的序列长度（用于计算内存需求）
         let sequence_length = unique_texts.first().map_or(0, |t| t.len());
-
-        // 检测输出维度（如果有模型配置则使用配置值）
-        let output_dimension = self
-            .model_config
-            .as_ref()
-            .and_then(|c| c.expected_dimension)
-            .unwrap_or(768);
-
-        // 获取最优批量大小
         let optimal_batch_size = self
-            .get_optimal_batch_size(sequence_length, output_dimension)
+            .get_optimal_batch_size(sequence_length, self.configured_output_dimension())
             .await;
-
-        // 使用动态批量大小进行分块（基于去重后的文本）
-        let chunks: Vec<&[String]> = unique_texts.chunks(optimal_batch_size).collect();
-
-        let num_chunks = chunks.len();
+        let num_chunks = unique_texts.len().div_ceil(optimal_batch_size);
 
         debug!(
             "Processing batch: {} unique texts ({} original), optimal_batch_size={}, chunks={}",
@@ -1051,129 +1023,121 @@ impl EmbeddingService {
             num_chunks
         );
 
-        // 根据实际负载和系统资源动态调整并发数
-        let cpu_count = num_cpus::get();
-        let max_concurrent_chunks = std::cmp::min(
-            cpu_count * 2, // 每个 CPU 核心最多处理 2 个并发任务
-            std::cmp::max(4, unique_texts.len() / optimal_batch_size), // 至少 4 个并发
-        );
-
+        let max_concurrent_chunks =
+            self.max_concurrent_chunks(unique_texts.len(), optimal_batch_size);
         debug!(
             "Processing batch with concurrent chunks: {} (CPU cores: {}, chunks: {})",
-            max_concurrent_chunks, cpu_count, num_chunks
+            max_concurrent_chunks,
+            num_cpus::get(),
+            num_chunks
         );
 
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent_chunks));
+        let mut all_results = self
+            .embed_chunks_concurrent(unique_texts, optimal_batch_size, max_concurrent_chunks)
+            .await?;
+        all_results.sort_by_key(|r| r.0);
 
+        let effective_dimension = self.resolve_effective_dimension(target_dimension)?;
+
+        // Matryoshka 截断 + 构建 unique_idx → (embedding, preview) 查找表
+        let unique_results: Vec<(Vec<f32>, String)> = all_results
+            .into_iter()
+            .map(|(_, embedding, preview)| {
+                let embedding = if let Some(dim) = effective_dimension {
+                    let mut truncated = truncate_vector(&embedding, dim);
+                    if let Err(e) = normalize_l2(&mut truncated) {
+                        log::warn!("normalize_l2 failed for truncated embedding: {}", e);
+                    }
+                    truncated
+                } else {
+                    embedding
+                };
+                (embedding, preview)
+            })
+            .collect();
+
+        // 将去重结果映射回原始顺序（重复文本复用同一 embedding）
+        let results = Self::remap_deduplicated_results(&unique_results, &index_to_unique);
+
+        let dimension =
+            effective_dimension.unwrap_or_else(|| results.first().map_or(0, |r| r.embedding.len()));
+
+        let processing_time = start_time.elapsed();
+        self.adapt_batch_size_if_needed(processing_time.as_millis() as f64)
+            .await;
+
+        Ok(BatchEmbedResponse {
+            embeddings: results,
+            dimension,
+            processing_time_ms: processing_time.as_millis(),
+        })
+    }
+
+    /// 相同文本只保留一个推理槽位；返回去重文本与 original_idx →
+    /// unique_idx 映射（重复文本复用同一 embedding）。
+    fn deduplicate_texts(texts: &[String]) -> (Vec<String>, Vec<usize>) {
+        let mut unique_map: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::with_capacity(texts.len());
+        let mut unique_texts: Vec<String> = Vec::with_capacity(texts.len());
+        let mut index_to_unique: Vec<usize> = Vec::with_capacity(texts.len());
+
+        for text in texts {
+            if let Some(&uidx) = unique_map.get(text.as_str()) {
+                index_to_unique.push(uidx);
+            } else {
+                let uidx = unique_texts.len();
+                unique_map.insert(text.as_str(), uidx);
+                unique_texts.push(text.clone());
+                index_to_unique.push(uidx);
+            }
+        }
+
+        (unique_texts, index_to_unique)
+    }
+
+    /// 输出维度：有模型配置用配置值，否则 768 兜底。
+    fn configured_output_dimension(&self) -> usize {
+        self.model_config
+            .as_ref()
+            .and_then(|c| c.expected_dimension)
+            .unwrap_or(768)
+    }
+
+    /// 根据实际负载和系统资源动态调整并发数：每核最多 2 个并发块，至少 4。
+    fn max_concurrent_chunks(&self, unique_count: usize, optimal_batch_size: usize) -> usize {
+        let cpu_count = num_cpus::get();
+        std::cmp::min(
+            cpu_count * 2,
+            std::cmp::max(4, unique_count / optimal_batch_size),
+        )
+    }
+
+    /// 分块并发推理：信号量限并发，单块超时显性失败；块内 OOM 走
+    /// CPU 回退重试（`embed_single_chunk`）。返回顺序不保证，调用方排序。
+    async fn embed_chunks_concurrent(
+        &self,
+        unique_texts: Vec<String>,
+        optimal_batch_size: usize,
+        max_concurrent_chunks: usize,
+    ) -> Result<Vec<(usize, Vec<f32>, String)>, VecboostError> {
+        let chunks: Vec<&[String]> = unique_texts.chunks(optimal_batch_size).collect();
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent_chunks));
         let engine = Arc::clone(&self.engine);
 
-        let mut tasks = Vec::with_capacity(num_chunks);
-
+        let mut tasks = Vec::with_capacity(chunks.len());
         for (chunk_idx, chunk) in chunks.iter().enumerate() {
             let chunk = chunk.to_vec();
-
             let engine = Arc::clone(&engine);
-
             let semaphore = Arc::clone(&semaphore);
 
-            let task = tokio::spawn(async move {
+            tasks.push(tokio::spawn(async move {
                 // 获取信号量许可，限制并发数
-
                 let _permit = semaphore.acquire().await.map_err(|e| {
                     VecboostError::InferenceError(format!("Failed to acquire semaphore: {}", e))
                 })?;
 
-                let mut attempts = 0;
-
-                loop {
-                    attempts += 1;
-
-                    let embed_result = {
-                        let guard = engine.read().await;
-                        guard.embed_batch(&chunk)
-                    };
-
-                    match embed_result {
-                        Ok(embeddings) => {
-                            let mut results: Vec<(usize, Vec<f32>, String)> =
-                                Vec::with_capacity(embeddings.len());
-
-                            for (text_idx, (text, embedding)) in
-                                chunk.iter().zip(embeddings.into_iter()).enumerate()
-                            {
-                                let mut emb = embedding;
-
-                                normalize_l2(&mut emb)?;
-
-                                let global_idx = chunk_idx * optimal_batch_size + text_idx;
-
-                                let text_preview = if text.len() > 100 {
-                                    &text[..text.floor_char_boundary(100)]
-                                } else {
-                                    text
-                                }
-                                .to_string();
-
-                                results.push((global_idx, emb, text_preview));
-                            }
-
-                            return Ok(results);
-                        }
-
-                        Err(error)
-                            if Self::is_oom_error(&error) && attempts <= MAX_FALLBACK_ATTEMPTS =>
-                        {
-                            warn!(
-                                "OOM error detected in batch chunk {}: {}. Attempting fallback to CPU (attempt {}/{})",
-                                chunk_idx, error, attempts, MAX_FALLBACK_ATTEMPTS
-                            );
-
-                            let current_engine = engine.read().await;
-
-                            if current_engine.is_fallback_triggered() {
-                                warn!("Fallback already triggered, cannot retry");
-
-                                return Err(VecboostError::OutOfMemory(
-                                    crate::i18n::tr("oom-no-fallback").to_string(),
-                                ));
-                            }
-
-                            drop(current_engine);
-
-                            let mut engine_guard = engine.write().await;
-
-                            let config_clone = ModelConfig::default();
-
-                            let fallback_result =
-                                engine_guard.try_fallback_to_cpu(&config_clone).await;
-
-                            match fallback_result {
-                                Ok(()) => {
-                                    warn!(
-                                        "Successfully fell back to CPU, retrying batch chunk {}",
-                                        chunk_idx
-                                    );
-
-                                    continue;
-                                }
-
-                                Err(e) => {
-                                    warn!("Failed to fallback to CPU: {}", e);
-
-                                    return Err(VecboostError::OutOfMemory(format!(
-                                        "OOM error and fallback failed: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                        }
-
-                        Err(error) => return Err(error),
-                    }
-                }
-            });
-
-            tasks.push(task);
+                Self::embed_single_chunk(engine, chunk, chunk_idx, optimal_batch_size).await
+            }));
         }
 
         let mut all_results: Vec<(usize, Vec<f32>, String)> =
@@ -1192,46 +1156,131 @@ impl EmbeddingService {
                         )));
                     }
                 };
-            for (idx, embedding, preview) in chunk_results {
-                all_results.push((idx, embedding, preview));
-            }
+            all_results.extend(chunk_results);
         }
 
-        all_results.sort_by_key(|r| r.0);
+        Ok(all_results)
+    }
 
-        // Apply Matryoshka dimension reduction if requested
-        let effective_dimension = if let Some(target_dim) = target_dimension {
-            let max_dim = self
-                .model_config
-                .as_ref()
-                .and_then(|c| c.expected_dimension)
-                .unwrap_or(1024);
-            validate_dimension(Some(target_dim), max_dim)
-                .map_err(|e| VecboostError::InvalidInput(e.to_string()))?;
-            Some(target_dim)
-        } else {
-            None
-        };
+    /// 单块推理 + OOM CPU 回退重试循环：成功产出（全局下标, L2 归一化
+    /// 向量, 截断预览）三元组；回退已触发或回退失败显性 OOM 失败。
+    async fn embed_single_chunk(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        chunk: Vec<String>,
+        chunk_idx: usize,
+        optimal_batch_size: usize,
+    ) -> Result<Vec<(usize, Vec<f32>, String)>, VecboostError> {
+        let mut attempts = 0;
 
-        // 构建 unique_idx → (embedding, preview) 查找表
-        let unique_results: Vec<(Vec<f32>, String)> = all_results
-            .into_iter()
-            .map(|(_, embedding, preview)| {
-                let embedding = if let Some(dim) = effective_dimension {
-                    let mut truncated = truncate_vector(&embedding, dim);
-                    if let Err(e) = normalize_l2(&mut truncated) {
-                        log::warn!("normalize_l2 failed for truncated embedding: {}", e);
+        loop {
+            attempts += 1;
+
+            let embed_result = {
+                let guard = engine.read().await;
+                guard.embed_batch(&chunk)
+            };
+
+            match embed_result {
+                Ok(embeddings) => {
+                    let mut results: Vec<(usize, Vec<f32>, String)> =
+                        Vec::with_capacity(embeddings.len());
+
+                    for (text_idx, (text, embedding)) in
+                        chunk.iter().zip(embeddings.into_iter()).enumerate()
+                    {
+                        let mut emb = embedding;
+
+                        normalize_l2(&mut emb)?;
+
+                        let global_idx = chunk_idx * optimal_batch_size + text_idx;
+
+                        let text_preview = if text.len() > 100 {
+                            &text[..text.floor_char_boundary(100)]
+                        } else {
+                            text
+                        }
+                        .to_string();
+
+                        results.push((global_idx, emb, text_preview));
                     }
-                    truncated
-                } else {
-                    embedding
-                };
-                (embedding, preview)
-            })
-            .collect();
 
-        // 将去重结果映射回原始顺序（重复文本复用同一 embedding）
-        let results: Vec<BatchEmbeddingResult> = index_to_unique
+                    return Ok(results);
+                }
+
+                Err(error) if Self::is_oom_error(&error) && attempts <= MAX_FALLBACK_ATTEMPTS => {
+                    warn!(
+                        "OOM error detected in batch chunk {}: {}. Attempting fallback to CPU (attempt {}/{})",
+                        chunk_idx, error, attempts, MAX_FALLBACK_ATTEMPTS
+                    );
+
+                    let current_engine = engine.read().await;
+
+                    if current_engine.is_fallback_triggered() {
+                        warn!("Fallback already triggered, cannot retry");
+
+                        return Err(VecboostError::OutOfMemory(
+                            crate::i18n::tr("oom-no-fallback").to_string(),
+                        ));
+                    }
+
+                    drop(current_engine);
+
+                    let mut engine_guard = engine.write().await;
+
+                    let config_clone = ModelConfig::default();
+
+                    let fallback_result = engine_guard.try_fallback_to_cpu(&config_clone).await;
+
+                    match fallback_result {
+                        Ok(()) => {
+                            warn!(
+                                "Successfully fell back to CPU, retrying batch chunk {}",
+                                chunk_idx
+                            );
+
+                            continue;
+                        }
+
+                        Err(e) => {
+                            warn!("Failed to fallback to CPU: {}", e);
+
+                            return Err(VecboostError::OutOfMemory(format!(
+                                "OOM error and fallback failed: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Matryoshka 目标维度校验（不得超过配置维度上限）。
+    fn resolve_effective_dimension(
+        &self,
+        target_dimension: Option<usize>,
+    ) -> Result<Option<usize>, VecboostError> {
+        let Some(target_dim) = target_dimension else {
+            return Ok(None);
+        };
+        let max_dim = self
+            .model_config
+            .as_ref()
+            .and_then(|c| c.expected_dimension)
+            .unwrap_or(1024);
+        validate_dimension(Some(target_dim), max_dim)
+            .map(|_| Some(target_dim))
+            .map_err(|e| VecboostError::InvalidInput(e.to_string()))
+    }
+
+    /// original_idx 顺序重建结果（重复文本复用其 unique 槽位的向量）。
+    fn remap_deduplicated_results(
+        unique_results: &[(Vec<f32>, String)],
+        index_to_unique: &[usize],
+    ) -> Vec<BatchEmbeddingResult> {
+        index_to_unique
             .iter()
             .map(|&uidx| {
                 let (ref embedding, ref preview) = unique_results[uidx];
@@ -1240,15 +1289,11 @@ impl EmbeddingService {
                     embedding: embedding.clone(),
                 }
             })
-            .collect();
+            .collect()
+    }
 
-        let dimension =
-            effective_dimension.unwrap_or_else(|| results.first().map_or(0, |r| r.embedding.len()));
-
-        let processing_time = start_time.elapsed();
-        let processing_time_ms = processing_time.as_millis() as f64;
-
-        // 记录内存使用情况，用于动态调整
+    /// 记录内存使用情况并动态调整批量大小（未启用内存管理器时 no-op）。
+    async fn adapt_batch_size_if_needed(&self, processing_time_ms: f64) {
         if let Some(ref mm) = self.memory_manager {
             let memory_usage = mm.get_memory_usage_percent().await;
             mm.adjust_batch_size_dynamically(processing_time_ms, memory_usage)
@@ -1258,12 +1303,6 @@ impl EmbeddingService {
                 processing_time_ms, memory_usage
             );
         }
-
-        Ok(BatchEmbedResponse {
-            embeddings: results,
-            dimension,
-            processing_time_ms: processing_time.as_millis(),
-        })
     }
 
     pub fn get_model_info(&self) -> Option<ModelInfo> {
@@ -1317,69 +1356,14 @@ impl EmbeddingService {
 
         if let Some(ref prev_name) = previous_model
             && prev_name == &req.model_name
+            && !self.preset_overrides_differ(&req)?
         {
-            // 同名早退的例外：命中预设且按 fall-through 归一化（req 显式优先 →
-            // 预设缺省层 → 继承当前）得到的加载面配置 ≠ 当前生效配置时必须重载
-            // ——否则 API 报成功而预设契约未兑现（主模型以预设名部署时，同名
-            // 切换是应用预设 task/预算/model_path 的唯一途径，如内置
-            // laya-multilingual 的 decision 任务与 256/256 预算）。device/
-            // max_batch_size 等宿主级旋钮缺省继承当前、req 无显式时归一化恒
-            // 等价，不参与比较；params 按**生效预算**归一化（当前 None 与预设
-            // resolved 缺省同为英文口径 192/256，不构成差异）——误判差异会
-            // 触发全量权重重载 + 双缓存清空，把幂等切换打成缓存命中归零
-            let preset_overrides_differ = match self.checkpoints.as_deref() {
-                Some(table) => {
-                    crate::config::model::lookup_checkpoint_override(table, &req.model_name)?
-                        .is_some_and(|ov| {
-                            let effective_path = req
-                                .model_path
-                                .clone()
-                                .unwrap_or_else(|| ov.model_path.clone());
-                            let effective_tokenizer = req
-                                .tokenizer_path
-                                .clone()
-                                .or_else(|| ov.tokenizer_path.clone());
-                            let effective_engine = ov
-                                .engine_type
-                                .clone()
-                                .or_else(|| {
-                                    self.model_config.as_ref().map(|c| c.engine_type.clone())
-                                })
-                                .unwrap_or(crate::config::model::EngineType::Candle);
-                            let effective_task = req
-                                .task
-                                .or(Some(ov.task))
-                                .or_else(|| self.model_config.as_ref().map(|c| c.task))
-                                .unwrap_or(crate::config::model::ModelTask::Embedding);
-                            match self.model_config.as_ref() {
-                                Some(current) => {
-                                    current.model_path != effective_path
-                                        || current.tokenizer_path != effective_tokenizer
-                                        || current.engine_type != effective_engine
-                                        || current.task != effective_task
-                                        || current.decision_params.unwrap_or_default()
-                                            != ov.decision_params
-                                }
-                                // previous_model 来自 model_config，此臂理论不可达；
-                                // 无当前生效值可比时保守重载
-                                None => true,
-                            }
-                        })
-                }
-                None => false,
-            };
-            if !preset_overrides_differ {
-                return Ok(ModelSwitchResponse {
-                    previous_model: previous_model.clone(),
-                    current_model: req.model_name,
-                    success: true,
-                    message: crate::i18n::tr("model-already-current"),
-                });
-            }
-            log::info!(
-                "preset overrides differ for already-current model {}, reloading",
-                req.model_name
-            );
+            return Ok(ModelSwitchResponse {
+                previous_model: previous_model.clone(),
+                current_model: req.model_name,
+                success: true,
+                message: crate::i18n::tr("model-already-current"),
+            });
         }
 
         // [model.checkpoints] 预设命中：查表复用 config 层单一实现（与钉测试
@@ -1392,31 +1376,126 @@ impl EmbeddingService {
             None => None,
         };
 
-        let model_config = ModelConfig {
+        let model_config = self.build_switch_model_config(&req, checkpoint.as_ref());
+
+        let new_est = estimate_resident_bytes(
+            model_config.task,
+            &model_config.engine_type,
+            &model_config.model_path,
+        );
+        self.enforce_memory_limit_projection(&new_est).await?;
+
+        // 统一经 EngineFactory 创建（GGUF 量化路由单一入口）。
+        // create 先于 manager.load/unload 执行：失败时 manager 状态未被扰动，
+        // 消除"新模型条目残留+旧模型已卸载+服务未切换"的失败次序窗口（评审 R7 四轮）。
+        // 权衡：此后 manager.load 失败经 `?` 返回时，create 已完成的权重加载被
+        // 整体 drop——可接受（manager.load 现仅走元数据构造，几乎不失败）；
+        // 若未来 load 变重（真实权重加载）应改为 create 延后或 load 结果预检。
+        let new_engine = self
+            .create_engine_via_factory(&model_config, &req.model_name)
+            .await?;
+
+        self.swap_manager_entries(&model_config, previous_model.as_ref())
+            .await?;
+
+        let new_engine_arc = Arc::new(RwLock::new(new_engine));
+        self.finalize_switch(new_engine_arc, model_config, new_est)
+            .await;
+
+        log::info!("Model switched successfully to {}", req.model_name);
+
+        Ok(ModelSwitchResponse {
+            previous_model,
+            current_model: req.model_name,
+            success: true,
+            message: crate::i18n::tr("model-switch-success"),
+        })
+    }
+
+    /// 同名早退的例外判定：命中预设且按 fall-through 归一化（req 显式优先 →
+    /// 预设缺省层 → 继承当前）得到的加载面配置 ≠ 当前生效配置时必须重载
+    /// ——否则 API 报成功而预设契约未兑现（主模型以预设名部署时，同名
+    /// 切换是应用预设 task/预算/model_path 的唯一途径，如内置
+    /// laya-multilingual 的 decision 任务与 256/256 预算）。device/
+    /// max_batch_size 等宿主级旋钮缺省继承当前、req 无显式时归一化恒
+    /// 等价，不参与比较；params 按**生效预算**归一化（当前 None 与预设
+    /// resolved 缺省同为英文口径 192/256，不构成差异）——误判差异会
+    /// 触发全量权重重载 + 双缓存清空，把幂等切换打成缓存命中归零。
+    /// 非同名切换恒为 false（无需比较）。
+    fn preset_overrides_differ(&self, req: &ModelSwitchRequest) -> Result<bool, VecboostError> {
+        if self.model_config.as_ref().map(|c| &c.name) != Some(&req.model_name) {
+            return Ok(false);
+        }
+        match self.checkpoints.as_deref() {
+            Some(table) => Ok(crate::config::model::lookup_checkpoint_override(
+                table,
+                &req.model_name,
+            )?
+            .is_some_and(|ov| {
+                let effective_path = req
+                    .model_path
+                    .clone()
+                    .unwrap_or_else(|| ov.model_path.clone());
+                let effective_tokenizer = req
+                    .tokenizer_path
+                    .clone()
+                    .or_else(|| ov.tokenizer_path.clone());
+                let effective_engine = ov
+                    .engine_type
+                    .clone()
+                    .or_else(|| self.model_config.as_ref().map(|c| c.engine_type.clone()))
+                    .unwrap_or(crate::config::model::EngineType::Candle);
+                let effective_task = req
+                    .task
+                    .or(Some(ov.task))
+                    .or_else(|| self.model_config.as_ref().map(|c| c.task))
+                    .unwrap_or(crate::config::model::ModelTask::Embedding);
+                match self.model_config.as_ref() {
+                    Some(current) => {
+                        current.model_path != effective_path
+                            || current.tokenizer_path != effective_tokenizer
+                            || current.engine_type != effective_engine
+                            || current.task != effective_task
+                            || current.decision_params.unwrap_or_default() != ov.decision_params
+                    }
+                    // previous_model 来自 model_config，此臂理论不可达；
+                    // 无当前生效值可比时保守重载
+                    None => true,
+                }
+            })),
+            None => Ok(false),
+        }
+    }
+
+    /// 按优先级 fall-through 构建切换后的加载面配置：req 显式值 → 预设
+    /// 缺省层（命中时）→ 继承当前模型 → 类型缺省。例外：
+    /// tokenizer_path 是模型内生属性（词表与模型绑定），不继承当前模型
+    /// （local_bundle 对显式路径命中即用零报错；继承旧模型会让新模型静默
+    /// 消费异构词表，分词漂移无信号）——预设 tokenizer_path 是显式配置
+    /// （非跨模型继承），可作缺省层。
+    fn build_switch_model_config(
+        &self,
+        req: &ModelSwitchRequest,
+        checkpoint: Option<&crate::config::model::CheckpointSwitchOverride>,
+    ) -> ModelConfig {
+        ModelConfig {
             translation_params: None,
             name: req.model_name.clone(),
             // 预设 engine_type 为缺省层（req wire 无此维度），未配置继承当前
             // 加载模型（启动时即 [model].engine_type），无当前模型回落 Candle
             engine_type: checkpoint
-                .as_ref()
                 .and_then(|c| c.engine_type.clone())
                 .or_else(|| self.model_config.as_ref().map(|c| c.engine_type.clone()))
                 .unwrap_or(crate::config::model::EngineType::Candle),
             model_path: req
                 .model_path
                 .clone()
-                .or_else(|| checkpoint.as_ref().map(|c| c.model_path.clone()))
+                .or_else(|| checkpoint.map(|c| c.model_path.clone()))
                 .unwrap_or_else(|| std::path::PathBuf::from(req.model_name.clone())),
-            // tokenizer_path 是模型内生属性（词表与模型绑定），不得跨模型
-            // 继承——local_bundle::resolve_tokenizer_path 对已存在的显式路径
-            // 命中即用零报错，继承旧模型的值会让新模型静默消费异构词表
-            // （分词漂移无信号）。缺省回落新模型 bundle 内探测；与 device/
-            // max_batch_size 等宿主级旋钮的继承不同类，不适用同款回退。
-            // 预设 tokenizer_path 是显式配置（非跨模型继承），可作缺省层
             tokenizer_path: req
                 .tokenizer_path
                 .clone()
-                .or_else(|| checkpoint.as_ref().and_then(|c| c.tokenizer_path.clone())),
+                .or_else(|| checkpoint.and_then(|c| c.tokenizer_path.clone())),
             device: req
                 .device
                 .clone()
@@ -1452,12 +1531,12 @@ impl EmbeddingService {
             model_sha256: None,
             // task：req.task 优先（switch 契约的任务维度切换入口，经
             // EngineFactory 分派臂加载对应管线），预设命中次之（如内置
-            // laya-multilingual 即 decision 任务），再缺省继承当前模型（与上方
+            // laya-multilingual 即 decision 任务），再缺省继承当前模型（与
             // device/max_batch_size 等回退模式对齐），无当前模型回落
             // Embedding——decision 模型不被 switch 静默降级为 embedding
             task: req
                 .task
-                .or(checkpoint.as_ref().map(|c| c.task))
+                .or(checkpoint.map(|c| c.task))
                 .or_else(|| self.model_config.as_ref().map(|c| c.task))
                 .unwrap_or(crate::config::model::ModelTask::Embedding),
             // gguf 路径走 EngineFactory 量化路由：复用工厂的路径侧判定为单一
@@ -1469,85 +1548,94 @@ impl EmbeddingService {
             ),
             // 预设命中即应用该 checkpoint 的序列预算（DecisionPipeline::load
             // 消费）；未命中保持 None = 引擎缺省英文口径 192/256
-            decision_params: checkpoint.as_ref().map(|c| c.decision_params),
-        };
-
-        // 内存上限执法（T021/D21）：按"当前记账 - 旧模型 + 新模型"投影判断，
-        // 在替换前执行——旧实现只查上一次记账（已超限才挡新加载，首个超大
-        // 模型照样放行，审查 M4 时点矛盾）
-        let new_est = estimate_resident_bytes(
-            model_config.task,
-            &model_config.engine_type,
-            &model_config.model_path,
-        );
-        if let Some(ctrl) = &self.memory_limit {
-            let limit = ctrl.current_usage() + ctrl.available_bytes();
-            let projected = self
-                .memory_used_est
-                .load(std::sync::atomic::Ordering::Relaxed)
-                .saturating_sub(ctrl.current_usage())
-                + new_est;
-            if projected > limit {
-                return Err(VecboostError::ModelLoadError(format!(
-                    "memory limit exceeded: new model ~{new_est} bytes, projected {projected} > limit {limit} bytes"
-                )));
-            }
+            decision_params: checkpoint.map(|c| c.decision_params),
         }
+    }
 
-        // 统一经 EngineFactory 创建（GGUF 量化路由单一入口）。
-        // create 先于 manager.load/unload 执行：失败时 manager 状态未被扰动，
-        // 消除"新模型条目残留+旧模型已卸载+服务未切换"的失败次序窗口（评审 R7 四轮）。
-        // 权衡：此后 manager.load 失败经 `?` 返回时，create 已完成的权重加载被
-        // 整体 drop——可接受（manager.load 现仅走元数据构造，几乎不失败）；
-        // 若未来 load 变重（真实权重加载）应改为 create 延后或 load 结果预检。
-        // create 走 spawn_blocking（与 decide 的推理口径一致）：candle 决策臂
-        // 的 sha256 校验与 F16→F32 权重物化是秒级同步负载，内联会阻塞
-        // runtime worker。
-        let new_engine = {
-            let cfg = model_config.clone();
-            let engine_type = cfg.engine_type.clone();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::EngineFactory::create(engine_type, &cfg)
-            })
+    /// 内存上限执法（T021/D21）：按"当前记账 - 旧模型 + 新模型"投影判断，
+    /// 在替换前执行——旧实现只查上一次记账（已超限才挡新加载，首个超大
+    /// 模型照样放行，审查 M4 时点矛盾）。
+    async fn enforce_memory_limit_projection(&self, new_est: &u64) -> Result<(), VecboostError> {
+        let Some(ctrl) = &self.memory_limit else {
+            return Ok(());
+        };
+        let limit = ctrl.current_usage() + ctrl.available_bytes();
+        let projected = self
+            .memory_used_est
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .saturating_sub(ctrl.current_usage())
+            + new_est;
+        if projected > limit {
+            return Err(VecboostError::ModelLoadError(format!(
+                "memory limit exceeded: new model ~{new_est} bytes, projected {projected} > limit {limit} bytes"
+            )));
+        }
+        Ok(())
+    }
+
+    /// EngineFactory 创建走 spawn_blocking（与 decide 的推理口径一致）：
+    /// candle 决策臂的 sha256 校验与 F16→F32 权重物化是秒级同步负载，
+    /// 内联会阻塞 runtime worker。UnsupportedTask 直传：fail-fast 错误须走
+    /// to_api_error 的 400 臂（调用方可换任务/端点），不得与权重缺失混同
+    /// 为 404（评审 R3 四轮）；其余映射 model-load-failed NotFound。
+    async fn create_engine_via_factory(
+        &self,
+        model_config: &ModelConfig,
+        model_name: &str,
+    ) -> Result<crate::engine::AnyEngine, VecboostError> {
+        let cfg = model_config.clone();
+        let engine_type = cfg.engine_type.clone();
+        tokio::task::spawn_blocking(move || crate::engine::EngineFactory::create(engine_type, &cfg))
             .await?
             .map_err(|e| {
-                // UnsupportedTask 直传：fail-fast 错误须走 to_api_error 的 400 臂
-                //（调用方可换任务/端点），不得与权重缺失混同为 404（评审 R3 四轮）
                 if matches!(e, VecboostError::UnsupportedTask(_)) {
                     return e;
                 }
                 VecboostError::NotFound(crate::i18n::tr_with_args(
                     "model-load-failed",
-                    crate::i18n::tr_args(&[("name", &req.model_name), ("detail", &e.to_string())]),
+                    crate::i18n::tr_args(&[("name", model_name), ("detail", &e.to_string())]),
                 ))
-            })?
+            })
+    }
+
+    /// ModelManager 条目编排：同名先卸后载（load 对同名条目复用既有实例
+    /// 直接返回（不按新 config 重建），原「先 load 后 unload」顺序会把该
+    /// 条目卸掉——同名先卸后载使终态对齐跨名路径（resident_bytes 少计、
+    /// LFRU/内存预算执法基数失真、后续 manager.get 不命中）；unload 的
+    /// NotFound 臂经 let _ 容忍，create 已先行故此处失败不扰动 service
+    /// 生效面），跨名载新卸旧。无 manager 时 no-op。
+    async fn swap_manager_entries(
+        &self,
+        model_config: &ModelConfig,
+        previous_model: Option<&String>,
+    ) -> Result<(), VecboostError> {
+        let Some(ref manager) = self.model_manager else {
+            return Ok(());
         };
+        log::debug!("Using ModelManager for model switching");
+        let same_name = previous_model == Some(&model_config.name);
+        if same_name {
+            let _ = manager.unload(&model_config.name).await;
+        }
+        manager.load(model_config).await?;
 
-        if let Some(ref manager) = self.model_manager {
-            log::debug!("Using ModelManager for model switching");
-            // 同名差异重载：load 对同名条目复用既有实例直接返回（不按新
-            // config 重建），原「先 load 后 unload」顺序会把该条目卸掉——
-            // 终态 manager 无此模型，与跨名 switch 终态（持有新条目）不一致
-            // （resident_bytes 少计、LFRU/内存预算执法基数失真、后续
-            // manager.get 不命中）。同名先卸后载使终态对齐跨名路径；unload
-            // 的 NotFound 臂经 let _ 容忍，create 已先行故此处失败不扰动
-            // service 生效面（见上方失败次序注释）
-            let same_name = previous_model.as_ref() == Some(&model_config.name);
-            if same_name {
-                let _ = manager.unload(&model_config.name).await;
-            }
-            manager.load(&model_config).await?;
-
-            if let Some(ref prev_name) = previous_model {
-                if !same_name {
-                    log::info!("Unloading previous model: {}", prev_name);
-                    let _ = manager.unload(prev_name).await;
-                }
+        if let Some(ref prev_name) = previous_model {
+            if !same_name {
+                log::info!("Unloading previous model: {}", prev_name);
+                let _ = manager.unload(prev_name).await;
             }
         }
+        Ok(())
+    }
 
-        let new_engine_arc = Arc::new(RwLock::new(new_engine));
-        // 接线控制器 + 按模型目录文件大小粗估常驻内存记账
+    /// 切换生效收尾：新引擎接线内存控制器 + 记账、替换 service 生效引擎
+    /// 与配置、双缓存清空（旧模型向量污染防线）、热度落盘供下次 warmstart。
+    async fn finalize_switch(
+        &mut self,
+        new_engine_arc: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: ModelConfig,
+        new_est: u64,
+    ) {
         if let Some(ctrl) = &self.memory_limit {
             new_engine_arc
                 .write()
@@ -1564,8 +1652,6 @@ impl EmbeddingService {
         self.engine = new_engine_arc;
         self.model_config = Some(model_config);
 
-        log::info!("Model switched successfully to {}", req.model_name);
-
         // 切模型后清缓存，避免旧模型向量污染新模型
         self.cache.clear().await;
         // 语义缓存键为纯文本，跨模型必须一并清空
@@ -1574,13 +1660,6 @@ impl EmbeddingService {
         }
         // 切换改变热度分布，落盘供下次 warmstart
         self.save_model_heat().await;
-
-        Ok(ModelSwitchResponse {
-            previous_model,
-            current_model: req.model_name,
-            success: true,
-            message: crate::i18n::tr("model-switch-success"),
-        })
     }
 
     pub async fn unload_model(&mut self, name: &str) -> Result<(), VecboostError> {
@@ -2776,6 +2855,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_text_oom_recovery_no_fallback() {
+        crate::i18n::init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(OomEngine));
         let service = EmbeddingService::new(engine, None);
@@ -2863,6 +2943,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_text_too_long_input() {
+        crate::i18n::init();
         let mock_engine = TestEngine::new(384);
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(mock_engine));
@@ -4187,6 +4268,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_oom_fallback_already_triggered() {
+        crate::i18n::init();
         let engine = ConfigurableOomEngine::new(true, true);
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
         let model_config = make_model_config("oom-fb-triggered", 384);
@@ -4209,6 +4291,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_oom_fallback_failure() {
+        crate::i18n::init();
         let engine = ConfigurableOomEngine::new(false, false);
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
         let model_config = make_model_config("oom-fb-fail", 384);
@@ -4231,6 +4314,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_oom_fallback_success_max_attempts_exceeded() {
+        crate::i18n::init();
         let engine = ConfigurableOomEngine::new(false, true);
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
         let model_config = make_model_config("oom-fb-success", 384);
@@ -4257,6 +4341,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_oom_fallback_model_not_in_manager() {
+        crate::i18n::init();
         let engine = ConfigurableOomEngine::new(false, true);
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
         let model_config = make_model_config("oom-model-missing", 384);
@@ -4281,6 +4366,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_batch_oom_fallback_already_triggered() {
+        crate::i18n::init();
         let engine = ConfigurableOomEngine::new(true, true);
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
         let service = EmbeddingService::new(engine, None);
@@ -4772,6 +4858,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_embed_file_invalid_utf8_path() {
+        crate::i18n::init();
         use std::os::unix::ffi::OsStrExt;
 
         let invalid_bytes = [0xFF, 0xFE, 0xFD];

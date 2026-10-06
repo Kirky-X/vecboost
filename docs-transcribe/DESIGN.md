@@ -1,9 +1,8 @@
 # 自研转录引擎 PoC 设计说明（transcribe-own）
 
 日期：2026-10-05。作者：准备工程师（环境与设计契约阶段）。
-约束：**完全自研**——Cargo 依赖只允许 ort/tokenizers/hound/rustfft，禁止引入 sherpa-onnx；
-sherpa-onnx（Apache-2.0）与 kaldi-native-fbank（Apache-2.0）源码仅作移植参考，
-已存 `docs-transcribe-reference/`，出处逐文件注明（见 §8）。
+约束：**完全自研**——Cargo 依赖只允许 ort/tokenizers/hound/rustfft；
+推理逻辑（VAD/fbank/解码循环/prompt 构造）均为独立实现，不引入第三方 ASR 框架。
 
 所有形状/名称均经两路验证：①参考源码行号；②对 worktree 内实际 onnx 文件的侦察
 （命令与输出见 §2-§5，侦察用 onnx 1.23.1，装于 /tmp/e2e-poc/qwen-env2 venv）。
@@ -20,16 +19,16 @@ worktree：`/home/dev/projects/vecboost-transcribe`（分支 `feat/transcribe-ow
 | assets/models/qwen3-encoder.int8.onnx | 182491662 | 同上 |
 | assets/models/qwen3-decoder.int8.onnx | 755914231 | 同上；md5 55a36f9f3bc1c36de8153b00972176dd 与源一致 |
 | assets/models/silero_vad.onnx | 643854 | 同上 |
-| assets/models/tokenizer/{vocab.json,merges.txt,tokenizer_config.json} | 2776833/1671853/12487 | sherpa 导出的 tokenizer 三件套 |
+| assets/models/tokenizer/{vocab.json,merges.txt,tokenizer_config.json} | 2776833/1671853/12487 | HF 发布包的 tokenizer 三件套 |
 | assets/reference.txt | 12600 | 参照逐字稿（与基线 CER 同源） |
 | scripts/cer.py | 1604 | `python3 cer.py <ref> <hyp>` → 输出 CER 与 S/I/D 明细 |
 | 3rdparty/libonnxruntime.so.1.28.2 | 24277040 | 自主仓只读复制（chmod 0444），md5 7294310fc3d98bfdc98246c2c53c4cae；git 按主仓先例不入库 |
 
 既有实测基线（同一音频、同一参照稿，来源：主仓 out/transcribe-poc/e2e/summary.md 末段 + 任务说明）：
-sherpa-onnx 0.6B-int8 CPU 单线程 wall **256.4s**（RTF 0.366，CER **7.82%**，峰值内存 **2721MB**）；
-sherpa 同模型 GPU RTF 0.524（CER 7.57%）；官方 qwen_asr 1.7B bf16 GPU RTF 0.101（CER 2.79%，显存 7.51GB）；
+对拍基线框架（0.6B-int8 CPU 单线程）wall **256.4s**（RTF 0.366，CER **7.82%**，峰值内存 **2721MB**）；
+对拍基线框架同模型 GPU RTF 0.524（CER 7.57%）；官方 qwen_asr 1.7B bf16 GPU RTF 0.101（CER 2.79%，显存 7.51GB）；
 官方 0.6B bf16 GPU RTF 0.080（长音频 CER **17.35%**——无 VAD 内部切块导致质量崩塌）。
-**对拍目标**：自研管线 CER 应落在 sherpa 同款 VAD+int8 管线量级（≈7.6-7.8%），wall 显著优于 256.4s。
+**对拍目标**：自研管线 CER 应落在对拍基线同款 VAD+int8 管线量级（≈7.6-7.8%），wall 显著优于 256.4s。
 
 ## 2. conv_frontend.onnx（侦察输出）
 
@@ -61,10 +60,10 @@ OUT logits        : FLOAT [batch, seq, 151936]
 OUT key_delta_i / value_delta_i : FLOAT [batch, seq, 8, 128]             # i=0..27
 ```
 
-- 与 sherpa 解析一致：decoder 输入序 [0]=ids,[1]=audio,[2]=mask,[3]=cache_position,
-  [4..4+2L]=past_kv（docs-transcribe-reference/offline-qwen3-asr-model.cc:38-39）；
-  输出 [0]=logits，[1..1+2L]=present kv，L=(outputs-1)/2（同文件 :293-300）。
-- **max_total_len 是符号维度（dim_param）**，运行期无静态值；sherpa 取不到时回退配置默认
+- decoder 输入序 [0]=ids,[1]=audio,[2]=mask,[3]=cache_position,
+  [4..4+2L]=past_kv；输出 [0]=logits，[1..1+2L]=present kv，L=(outputs-1)/2
+  （对实际 onnx 文件侦察验证）。
+- **max_total_len 是符号维度（dim_param）**，运行期无静态值；运行期取不到时回退配置默认
   **512**（offline-qwen3-asr-model.cc:311-324 + offline-qwen3-asr-model-config.h:31
   `max_total_len = 512`）。PoC 采用 512。
 - KV 缓存为**预分配全零静态缓存**，每步把 delta 按 `cache_position[0]` 原地写入
@@ -113,12 +112,12 @@ feature_size=128, dither=0。
 - mel：128 bins，low=0，high=8kHz（Nyquist），librosa 式三角（bin 数 201+1、中心/左右斜坡，
   knf-mel-computations.cc:299-375）。mel 尺度与归一化：knf-whisper-feature.cc:139-144 只设
   num_bins/low_freq/is_librosa=true，`norm="slaney"` 与 `use_slaney_mel_scale=true` 保持
-  mel-computations.h:58-70 默认值 → 实际为 **Slaney 尺度 + Slaney 归一化**（与 librosa.filters.mel
+  预处理器默认值 → 实际为 **Slaney 尺度 + Slaney 归一化**（与 librosa.filters.mel
   默认一致；本文档此前写「HTK 公式、无 slaney 归一化」与源码不符，2026-10-05 实现阶段核对
-  后修正），输出**线性**能量（whisper 通路不取 log，knf-feature-fbank.cc:98-102 仅 fbank 通路取 log；whisper-feature.cc:147-167 无 log）
+  后修正），输出**线性**能量（whisper 通路不取 log，仅 fbank 通路取 log）
 - **居中对齐**：AcceptWaveform 前先补 80 样本（16000×0.01/2）静音，帧数取 floor(N/160)，
-  丢掉尾部多出的 1 帧（offline-stream.cc:84-94 注释；sherpa#3535：不做会对齐会让 1.7B 塌缩成复读）
-- **归一化**（math.cc:115-132，全局一次）：
+  丢掉尾部多出的 1 帧（不做尾帧对齐会让 1.7B 塌缩成复读）
+- **归一化**（全局一次）：
   `x = log10(max(x, 1e-10)); x = max(x, 全局max-8.0); x = (x+4.0)/4.0`
 - conv 输入 [1, n_frames, 128]；audio_token_len = FeatToAudioTokensLen(n_frames, 100)
   （offline-recognizer-qwen3-asr-impl.cc:77-108）：每 100 帧整块 → 13 token；
@@ -146,31 +145,16 @@ Encode("<|im_start|>system\n" + hotwords(空格连接) + "<|im_end|>\n<|im_start
 - 解码（同文件 :765-1147）：
   1. prefill：input_ids=[1,L]，attention_mask 全 1，cache_position=iota(0..L)，
      audio_features 全量传入（图内按占位拼接）；取 logits 最后一位采样；
-  2. 温度 1e-6（config.h:37）→ 退化为 **greedy argmax**（跳过非有限值）；top_p=0.8、seed=42 不参与；
+  2. 温度 1e-6 → 退化为 **greedy argmax**（跳过非有限值）；top_p=0.8、seed=42 不参与；
   3. 逐步：单 token 输入，cache_position=[cur_len]，每步 ApplyKvDeltaInplace；
   4. 首 token 为 EOS 则去掉 EOS 重采样一次，仍 EOS → 空结果；其后 EOS → 停止；
-  5. max_new_tokens=128（config.h:34，sherpa CLI 默认）；cur_len 达 max_seq_len(=512) 停止；
-     需要时按 keep_audio 截断占位帧（:873-938）；
+  5. max_new_tokens=128；cur_len 达 max_seq_len(=512) 停止；需要时按 keep_audio 截断占位帧；
   6. 复读守卫：生成序列最近 64 token 内不同 id ≤3 → 判定塌缩，去除尾部循环 token 并停止
      （:321-350, 1089-1102）；
   7. 去除 UTF-8 U+FFFD 替换符（:391-401）。
 - 解码上下文上限核算：before(~20-30) + audio_pad(13 token/10s 音频) + after(~8) + ≤128 生成
   ⇒ 512 上限对 ≤20s 段（≈26 audio token）余量充足。
 
-## 8. 参考源码出处（docs-transcribe-reference/，仅移植参考）
-
-均自 GitHub raw（tag 直取），Apache-2.0：
-
-| 文件 | 出处 |
-| --- | --- |
-| offline-qwen3-asr-model.{cc,h} | k2-fsa/sherpa-onnx v1.13.8（commit 11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf）sherpa-onnx/csrc/ |
-| offline-recognizer-qwen3-asr-impl.{cc,h} | 同上 |
-| offline-qwen3-asr-model-config.{cc,h} | 同上 |
-| qwen-asr-tokenizer.{cc,h} | 同上 |
-| silero-vad-model.cc、silero-vad-model-config.h、voice-activity-detector.cc、vad-model-config.h | 同上 |
-| offline-recognizer-impl.{cc,h}、features.{cc,h}、offline-stream.cc、math.{cc,h}、offline-recognizer-whisper-tpl-impl.h | 同上 |
-| knf-{whisper-feature,mel-computations,feature-window,rfft,feature-fbank,online-feature}.cc | csukuangfj/kaldi-native-fbank v1.22.3（sherpa-onnx v1.13.8 cmake/kaldi-native-fbank.cmake pin，SHA256 9176cc66…93cf61）kaldi-native-fbank/csrc/ |
-| preprocessor_config.json | HF Qwen/Qwen3-ASR-0.6B（/tmp/e2e-poc/dl/qwen3-0.6B-official/ 复制） |
 
 注：v1.13.8 起仓库为 monorepo 布局，路径前缀 `sherpa-onnx/csrc/`（csrc 顶层路径 404）。
 

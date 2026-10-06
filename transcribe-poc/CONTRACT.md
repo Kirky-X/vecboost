@@ -50,8 +50,7 @@ MODE=<并行方式描述>         # 如 "seg-parallel:4x{intra:3}"，自由文�
   （自主仓 `/home/dev/projects/vecboost/3rdparty/onnxruntime/libonnxruntime.so.1.28.2` 只读复制，
   md5=7294310fc3d98bfdc98246c2c53c4cae，24277040 字节；ort crate 以 `load-dynamic` 加载）
 - Cargo 依赖（见 Cargo.toml）：ort 2.0.0-rc.13（load-dynamic+ndarray+std）、tokenizers 0.23、
-  hound 3.5、rustfft 6.4；全部 default-features=false。**禁止引入 sherpa-onnx**（其源码仅作移植参考，
-  见 docs-transcribe-reference/ 与 docs-transcribe/DESIGN.md 出处注记）
+  hound 3.5、rustfft 6.4；全部 default-features=false，白名单之外一律禁止引入。
 
 ## 退出码
 

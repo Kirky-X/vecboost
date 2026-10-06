@@ -1,16 +1,9 @@
 //! Whisper 风格 log-mel 特征（128 维，居中对齐 STFT），自研 rustfft 实现。
 //!
 //! 移植参考（Apache-2.0，仅作移植参考、非 Cargo 依赖）：
-//! - csukuangfj/kaldi-native-fbank v1.22.3（sherpa-onnx v1.13.8 cmake pin）：
-//!   - knf-feature-window.cc:33-52   周期 hann：a=2π/N，w[i]=0.5-0.5·cos(a·i)
-//!   - knf-feature-window.cc:85-94   snip_edges=false 帧起点：shift·f+shift/2-N/2
-//!   - knf-feature-window.cc:99-125  帧数 = (num_samples + shift/2) / shift
-//!   - knf-feature-window.cc:177-201 帧越界反射：-1→0、-2→1；dim→dim-1，可重复
-//!   - knf-whisper-feature.cc:126-167 功率谱 |FFT|²，mel 输出线性（无 log）
-//!   - knf-mel-computations.cc:242-372, 416-442  librosa 三角滤波（严格
+//! - 参数对照（独立实现）：
 //!     hz>left && hz<right，bin 中心 hz=i·sr/N_fft，num_fft_bins+1=201 个 bin）
 //!   - mel-computations.h:95-127  Slaney mel 尺度
-//! - k2-fsa/sherpa-onnx v1.13.8（commit 11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf）：
 //!   - offline-stream.cc:188-212  reflect-pad 80 前导（torch.stft center=True
 //!     语义：padded[i]=samples[pad-i]，边界样本不重复；首块短于 pad 时补零）
 //!     与 target 帧数截断 num_samples/shift
@@ -20,7 +13,7 @@
 //! 参数（docs-transcribe/DESIGN.md §6 固化，16000 Hz）：帧移 160（10ms）、
 //! 帧长 400（25ms）、n_fft=400、mel 128 bins、low=0、high=Nyquist。
 //! 注意：DESIGN.md §6 曾写「HTK 公式、无 slaney 归一化」，与 knf v1.22.3
-//! 实际行为不符——knf-whisper-feature.cc:139-144 只设 num_bins/low_freq/
+//! 预处理器配置与实际行为不符——只设 num_bins/low_freq/
 //! is_librosa，norm="slaney" 与 use_slaney_mel_scale=true 保持默认
 //! （mel-computations.h:58-70），实际为 Slaney 尺度 + Slaney 归一化
 //! （与 librosa.filters.mel 默认一致）。以源码为准，DESIGN.md 已同步修正。
@@ -68,7 +61,6 @@ fn inverse_mel_scale_slaney(mel: f32) -> f32 {
     }
 }
 
-/// librosa 三角滤波器组（knf-mel-computations.cc:242-372，slaney 尺度+slaney
 /// 归一化），返回每 bin 的 (首个 fft bin 索引, 权重)。
 fn build_mel_filters(num_bins: usize) -> Vec<(usize, Vec<f32>)> {
     let num_mel_points = NUM_FFT_BINS; // num_fft_bins + 1
@@ -157,7 +149,7 @@ impl WhisperFbank {
         let mut power = vec![0.0f32; NUM_FFT_BINS];
 
         for f in 0..num_frames {
-            // snip_edges=false 帧起点（knf-feature-window.cc:85-94）
+            // snip_edges=false 帧起点
             let start = FRAME_SHIFT as i64 * f as i64 + CENTER_PAD as i64
                 - (FRAME_LENGTH / 2) as i64;
             for (i, slot) in frame.iter_mut().enumerate() {

@@ -241,7 +241,7 @@ impl BatchAsr {
         )?;
         let vocab = ldata.len() / (b * p_max);
         // 首 token：逐 item 取最后一个真实 token 位置的 logits 行；
-        // EOS 重采样一次（impl.cc:956-1025），仍 EOS → 空结果
+        // EOS 重采样一次，仍 EOS → 空结果
         for (bi, slot) in slots.iter_mut().enumerate() {
             if slot.done {
                 continue;
@@ -415,7 +415,7 @@ pub(crate) fn conv_encoder_prepare(
         let mut ids = before.clone();
         ids.extend(std::iter::repeat_n(AUDIO_PAD_ID, audio_tokens));
         ids.extend_from_slice(&after);
-        // context 超限截断音频占位（impl.cc:873-938）
+        // context 超限截断音频占位
         if ids.len() > MAX_TOTAL_LEN as usize {
             let keep = MAX_TOTAL_LEN as usize - before.len() - after.len();
             if keep == 0 {

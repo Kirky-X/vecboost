@@ -2,7 +2,7 @@
 name = "transcribe-poc"
 version = "0.1.0"
 edition = "2021"
-description = "Self-contained Qwen3-ASR transcription pipeline PoC (ort + hand-written VAD/fbank/decoding); sherpa-onnx is a porting reference only, never a dependency"
+description = "Self-contained Qwen3-ASR transcription pipeline PoC (ort + hand-written VAD/fbank/decoding)"
 
 [[bin]]
 name = "transcribe-own"

@@ -238,7 +238,7 @@ impl GpuBatchAsr {
         }
         drop(outputs);
 
-        // 首 token 采样（impl.cc:956-1025：EOS 重采样一次，仍 EOS → 空结果）
+        // 首 token 采样
         for (bi, slot) in slots.iter_mut().enumerate() {
             let row = &ldata[(bi * p_max + slot.prompt_len - 1) * vocab..][..vocab];
             let mut next = greedy_argmax(row, None);

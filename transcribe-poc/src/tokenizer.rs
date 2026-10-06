@@ -1,6 +1,5 @@
 //! Qwen3-ASR tokenizer 封装（HF tokenizers crate，vocab.json + merges.txt BPE）。
 //!
-//! 行为对照 k2-fsa/sherpa-onnx v1.13.8（commit 11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf）
 //! qwen-asr-tokenizer.cc（Apache-2.0，仅作移植参考）：
 //! - Encode 特殊 token 整体查表（:1202-1244）：本实现以固定 id 表手工切分，
 //!   普通段交给 BPE。**不**使用 tokenizers 的 add_special_tokens——那会按
@@ -175,7 +174,7 @@ impl AsrTokenizer {
         text
     }
 
-    /// 移除 U+FFFD 替换符（offline-recognizer-qwen3-asr-impl.cc:391-401）
+    /// 移除 U+FFFD 替换符
     pub fn remove_replacement_chars(s: &str) -> String {
         s.replace('\u{FFFD}', "")
     }

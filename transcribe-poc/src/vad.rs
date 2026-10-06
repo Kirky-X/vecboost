@@ -1,14 +1,6 @@
-//! 自研 Silero VAD（k2-fsa 导出的 v4 型 ONNX：x[1,512] / h,c[2,1,64] → prob/new_h/new_c）。
 //!
-//! 移植参考（Apache-2.0，仅作移植参考、非 Cargo 依赖），sherpa-onnx v1.13.8
-//! （commit 11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf）：
-//! - sherpa-onnx/csrc/silero-vad-model.cc:97-173  IsSpeech 状态机与 neg_threshold 规则
-//! - sherpa-onnx/csrc/silero-vad-model-config.h:20-41  默认参数
-//! - sherpa-onnx/csrc/voice-activity-detector.cc:46-135,170-194  段切分与 Flush
-//! - sherpa-onnx/csrc/sherpa-onnx-vad-with-offline-asr.cc:208-240  逐窗喂入节奏与 <0.1s 段过滤
 //!
 //! 与参考实现的分层一致：状态机在模型侧（`VadModel::is_speech` = 前向 + 状态机），
-//! 段切分在 `VoiceActivityDetector`；sherpa 的 `CircularBuffer` 在此以绝对索引
 //! [head, tail) 在外部样本上模拟，段只记录样本索引、不拷贝音频。
 
 use std::path::Path;
@@ -23,7 +15,6 @@ pub const SAMPLE_RATE: i32 = 16000;
 // LSTM 状态形状 [2, 1, 64] 的元素数（层数×batch×hidden）
 const LSTM_STATE_ELEMS: usize = 128;
 
-/// Silero VAD 参数，默认值照搬 silero-vad-model-config.h:20-41。
 #[derive(Debug, Clone)]
 pub struct VadConfig {
     pub threshold: f32,
@@ -147,7 +138,6 @@ impl SpeechStateMachine {
 
 }
 
-/// VAD 模型抽象：单窗前向 + IsSpeech 判定（与 sherpa 分层一致）。
 /// 抽成 trait 以便用概率序列 mock 驱动状态机与切分逻辑的测试。
 pub trait VadModel {
     fn is_speech(&mut self, window: &[f32]) -> VadResult<bool>;
@@ -160,7 +150,6 @@ pub trait VadModel {
     fn set_threshold(&mut self, threshold: f32);
 }
 
-/// k2-fsa 导出的 silero v4 ONNX 前向（x[1,N]/h,c[2,1,64] → prob/new_h/new_c），
 /// LSTM 状态零初始化并在窗间滚动（silero-vad-model.cc:247-267, 416-449）。
 pub struct SileroVadModel {
     session: Session,
@@ -171,7 +160,6 @@ pub struct SileroVadModel {
 
 impl SileroVadModel {
     pub fn new(model_path: &Path, config: &VadConfig) -> VadResult<Self> {
-        // sherpa VAD 默认 num_threads=1（vad-model-config.h:20）
         let session = Session::builder()?
             .with_intra_threads(1)?
             .commit_from_file(model_path)
@@ -367,7 +355,6 @@ impl<M: VadModel> VoiceActivityDetector<M> {
 }
 
 /// 离线整段 VAD。喂入节奏与段过滤照搬
-/// sherpa-onnx-vad-with-offline-asr.cc:208-240：逐窗（window_size）喂入、
 /// 尾部不足一窗时 Flush、时长 <0.1s 的段丢弃。
 /// 注意：与该参考一致，样本数为窗长整数倍时不会触发 Flush，
 /// 延续到文件尾且未闭合的语音段会被丢弃。

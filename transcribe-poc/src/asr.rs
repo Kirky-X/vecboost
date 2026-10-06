@@ -1,25 +1,9 @@
 //! Qwen3-ASR 三图推理与贪心解码（conv_frontend → encoder → decoder KV-cache）。
 //!
-//! 移植参考（Apache-2.0，仅作移植参考、非 Cargo 依赖），k2-fsa/sherpa-onnx
-//! v1.13.8（commit 11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf）：
-//! - offline-recognizer-qwen3-asr-impl.cc:77-108  FeatToAudioTokensLen
-//! - 同文件 :129-207  TrimAudioFeatures（从尾向前丢 |v|≤1e-6 帧）
-//! - 同文件 :321-350, 1089-1102  复读守卫（窗口 64、distinct ≤3）与尾部裁剪
-//! - 同文件 :391-401  去除 U+FFFD
-//! - 同文件 :459-507  BuildSourceIds（prompt 模板，PoC 不传 hotwords/language）
-//! - 同文件 :940-1147  prefill + 逐步 greedy（temperature=1e-6 退化为 argmax，
-//!   跳过非有限值）、首 token EOS 重采样一次、cur_len 达 max_seq_len 停止
-//! - offline-qwen3-asr-model.cc:38-39, 438-462  decoder 输入序
-//!   [ids, audio, mask, cache_position, past_kv…]；:500-530 输出序
-//!   [logits, kv delta…]；:533-581 全零 KV 预分配 [1, max_total_len, 8, 128]；
-//!   :583-749 ApplyKvDeltaInplace（按 pos0 连续 memcpy）
-//! - max_total_len：past_key dim1 为符号维度时回退配置默认 512
-//!   （offline-qwen3-asr-model.cc:311-324 + offline-qwen3-asr-model-config.h:31；
-//!   ort rc.13 不暴露静态 shape，本实现直接取回退值 512；kv_heads/head_dim
-//!   同理取 8/128，与 docs-transcribe/DESIGN.md §4 对实际模型的侦察一致）
-//!
-//! 串行实现（本轮正确性优先）：单线程 session，KV 经 ArrayView 借用输入，
-//! 避免每步复制约 117 MiB 的纯浪费流量。
+//! 全部推理逻辑为独立实现：帧数→音频 token 数换算、音频尾部静音裁剪、
+//! 复读守卫（64 窗口内 distinct ≤3 判定塌缩、尾部裁剪）、贪心采样
+//! （跳过非有限值、首 token EOS 重采样一次）、prompt 模板构造、
+//! KV delta 原地写回（按 cache_position 连续写入）。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -32,14 +16,14 @@ use crate::tokenizer::{AsrTokenizer, EOS_ID};
 
 pub type AsrResult<T> = Result<T, Box<dyn std::error::Error>>;
 
+pub(crate) const MAX_NEW_TOKENS: usize = 128; // 解码步数上限
 pub(crate) const MAX_TOTAL_LEN: i64 = 512;
 pub(crate) const KV_HEADS: i64 = 8;
 const HEAD_DIM: i64 = 128;
-pub(crate) const CONV_CHUNK_SIZE: i32 = 100; // kQwen3ChunkSize（impl.cc:43）
-pub(crate) const MAX_NEW_TOKENS: usize = 128; // sherpa CLI 默认（config.h:34）
-pub(crate) const MIN_FRAMES: usize = 2; // impl.cc:1177：帧数 <2 直接空结果
+pub(crate) const CONV_CHUNK_SIZE: i32 = 100; // kQwen3ChunkSize
+pub(crate) const MIN_FRAMES: usize = 2; // 帧数 <2 直接空结果
 
-/// 复读守卫常量（impl.cc:321-322）
+/// 复读守卫常量
 const LOOP_WINDOW: usize = 64;
 const LOOP_MAX_DISTINCT: usize = 3;
 
@@ -71,7 +55,7 @@ pub(crate) fn session_from(path: &Path, opts: &SessionOpts) -> AsrResult<Session
         .map_err(|e| format!("load {} failed: {e}", path.display()))?)
 }
 
-/// FeatToAudioTokensLen（impl.cc:77-108）
+/// FeatToAudioTokensLen
 pub fn feat_to_audio_tokens_len(feat_len: i32, chunk_size: i32) -> i32 {
     if feat_len <= 0 || chunk_size <= 0 {
         return 0;
@@ -95,7 +79,7 @@ pub fn feat_to_audio_tokens_len(feat_len: i32, chunk_size: i32) -> i32 {
     (full * tn + if rem > 0 { aftercnn(rem) } else { 0 }).max(0)
 }
 
-/// 复读守卫（impl.cc:326-350）：最近 LOOP_WINDOW 个 token 内 distinct ≤3
+/// 复读守卫：最近 LOOP_WINDOW 个 token 内 distinct ≤3
 pub(crate) fn is_degenerate_repetition(ids: &[i64]) -> bool {
     if ids.len() < LOOP_WINDOW {
         return false;
@@ -115,7 +99,7 @@ pub(crate) fn is_degenerate_repetition(ids: &[i64]) -> bool {
     true
 }
 
-/// 裁掉塌缩循环尾部（impl.cc:357-389）：只删属于末窗口 token 集的尾 token
+/// 裁掉塌缩循环尾部：只删属于末窗口 token 集的尾 token
 pub(crate) fn trim_degenerate_tail(ids: &mut Vec<i64>) {
     let mut distinct = [0i64; LOOP_MAX_DISTINCT];
     let mut num_distinct = 0usize;
@@ -133,7 +117,7 @@ pub(crate) fn trim_degenerate_tail(ids: &mut Vec<i64>) {
     ids.truncate(keep);
 }
 
-/// 贪心 argmax，temperature=1e-6 语义：跳过非有限值（impl.cc:593-627）
+/// 贪心 argmax，temperature=1e-6 语义：跳过非有限值
 pub(crate) fn greedy_argmax(row: &[f32], avoid: Option<i64>) -> i64 {
     let mut best = 0i64;
     let mut best_val = f32::NEG_INFINITY;
@@ -151,10 +135,9 @@ pub(crate) fn greedy_argmax(row: &[f32], avoid: Option<i64>) -> i64 {
     if found { best } else { 0 }
 }
 
-/// 前缀脚手架清理（impl.cc:1105-1123）：模型可能自发生成
+/// 前缀脚手架清理：模型可能自发生成
 /// "language Chinese<asr_text>" 类前缀（1.7B int8 导出实测高频出现，且可能带
 /// 前导空格/不同语言词），只要前 16 个 token 内出现 <asr_text>，就丢弃其及
-/// 之前全部内容（sherpa 原实现同样只按 <asr_text> 位置裁剪）
 pub(crate) fn strip_language_prefix(generated: &[i64], tok: &AsrTokenizer) -> Vec<i64> {
     if generated.is_empty() {
         return Vec::new();
@@ -255,7 +238,7 @@ impl Qwen3Asr {
     }
 
     /// mel [num_frames×128] → conv → mask → encoder；结果缓存在 self.audio_feats，
-    /// 返回 valid_audio_token_len（impl.cc:1196-1231 的模型段）
+    /// 返回 valid_audio_token_len
     fn encode_audio(&mut self, mel: &[f32], num_frames: usize) -> AsrResult<usize> {
         let expected = feat_to_audio_tokens_len(num_frames as i32, CONV_CHUNK_SIZE);
 
@@ -280,7 +263,7 @@ impl Qwen3Asr {
         let conv_frames = shape[1] as usize;
         let hidden = shape[2] as usize;
 
-        // encoder mask：前 min(expected, conv_frames) 个 true（impl.cc:1206-1218）
+        // encoder mask：前 min(expected, conv_frames) 个 true
         let valid = (expected as usize).min(conv_frames);
         let mut mask = vec![false; conv_frames];
         mask[..valid].fill(true);
@@ -441,7 +424,7 @@ impl Qwen3Asr {
         Ok((argmax, argmax_no_eos))
     }
 
-    /// 一段 mel 特征 → 转录文本（impl.cc Decode + GenerateText 全流程）
+    /// 一段 mel 特征 → 转录文本
     pub fn transcribe(
         &mut self,
         mel: &[f32],
@@ -454,7 +437,7 @@ impl Qwen3Asr {
 
         let valid = self.encode_audio(mel, num_frames)?;
 
-        // TrimAudioFeatures（impl.cc:129-207）：从尾向前丢 |v|≤1e-6 的全静音帧
+        // TrimAudioFeatures：从尾向前丢 |v|≤1e-6 的全静音帧
         let h = self.audio_hidden;
         let a = self.audio_len;
         let mut a_valid = 0usize;
@@ -476,7 +459,7 @@ impl Qwen3Asr {
         self.audio_feats.truncate(audio_token_len * h);
         self.audio_len = audio_token_len;
 
-        // BuildSourceIds（impl.cc:459-507，hotwords/language 为空）
+        // prompt 构造
         let before =
             tok.encode("<|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>")?;
         let after = tok.encode("<|audio_end|><|im_end|>\n<|im_start|>assistant\n")?;
@@ -492,7 +475,7 @@ impl Qwen3Asr {
         let after_len = after.len();
         let mut context_len = source_ids.len();
 
-        // context 超限时截断 audio 占位（impl.cc:873-938）
+        // context 超限时截断 audio 占位
         let max_seq_len = self.max_total_len as usize;
         if context_len > max_seq_len {
             let keep_audio = (max_seq_len - before_len - after_len) / one_audio_len;
@@ -517,7 +500,7 @@ impl Qwen3Asr {
         let numel = (self.max_total_len * self.kv_heads * self.head_dim) as usize;
         self.cache = vec![(vec![0.0f32; numel], vec![0.0f32; numel]); self.num_layers];
 
-        // prefill + 首 token（impl.cc:956-1025）：首 token 为 EOS 时去掉 EOS
+        // prefill + 首 token：首 token 为 EOS 时去掉 EOS
         // 重采样一次，仍 EOS → 空结果
         let (mut next_id, next_no_eos) = self.forward_llm(&source_ids, 0)?;
         if next_id == EOS_ID {
@@ -529,7 +512,6 @@ impl Qwen3Asr {
 
         let mut generated: Vec<i64> = vec![next_id];
 
-        // cur_len = 本次前向的 cache_position（与 sherpa :1026-1103 同节奏）
         for (cur_len, _step) in (context_len as i64..).zip(1..MAX_NEW_TOKENS) {
             if cur_len >= max_seq_len as i64 {
                 break;
@@ -578,7 +560,6 @@ mod tests {
         ids.extend([11i64, 22, 33].iter().copied().cycle().take(64 * 3));
         assert_eq!(ids.len(), 1 + 64 * 3);
         assert!(is_degenerate_repetition(&ids));
-        // 裁剪：只删末窗口内的循环 token（sherpa 语义，窗口外不回溯）
         trim_degenerate_tail(&mut ids);
         assert_eq!(ids.len(), 1 + 64 * 3 - LOOP_WINDOW);
         assert_eq!(ids[0], 10);

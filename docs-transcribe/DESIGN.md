@@ -156,7 +156,6 @@ Encode("<|im_start|>system\n" + hotwords(空格连接) + "<|im_end|>\n<|im_start
   ⇒ 512 上限对 ≤20s 段（≈26 audio token）余量充足。
 
 
-注：v1.13.8 起仓库为 monorepo 布局，路径前缀 `sherpa-onnx/csrc/`（csrc 顶层路径 404）。
 
 ## 9. PoC 实现顺序建议（给实现阶段）
 
@@ -169,11 +168,11 @@ Encode("<|im_start|>system\n" + hotwords(空格连接) + "<|im_end|>\n<|im_start
 
 ## 10. 并行策略（nproc=12，命令 `nproc` 实测）
 
-- 基线反事实：sherpa 单线程 RTF 0.366 ⇒ 700s 音频 wall 256.4s；解码（自回归逐步）占大头。
+- 基线反事实：对拍基线单线程 RTF 0.366 ⇒ 700s 音频 wall 256.4s；解码（自回归逐步）占大头。
 - 段间并行优先：VAD 段相互独立，conv/encoder 天然可并发；ORT 同一 Session 允许并发 Run，
   权重只加载一份，各 worker 仅自持 KV 缓存（112 MiB/段）。
 - 推荐：**4 个段 worker × decoder/encoder intra=2**（≈8 活跃线程 + 主线程，留 3-4 核给
-  fbank/IO/系统，避免 WSL2 上超订阅）；内存增量 ≈ 4×112 MiB KV + 权重 ≈ 与 sherpa 峰值
+  fbank/IO/系统，避免 WSL2 上超订阅）；内存增量 ≈ 4×112 MiB KV + 权重 ≈ 与对拍基线峰值
   2721MB 同量级。激进档 6 workers × intra=1（内存 +672 MiB KV）。
 - MODE 行建议格式：`seg-parallel:<W>workers,ort-intra:<T>`。
 - 以上为假设，需以 SEGMENTS 实测与门禁数据验证（预期收益 2-4×，未实测前不作为结论）。

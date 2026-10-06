@@ -114,22 +114,8 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
             return (out, committed);
         }
     };
-    // 文件头。
-    let mut magic = [0u8; 4];
-    if file.read_exact(&mut magic).is_err() {
-        return (out, committed); // 空文件
-    }
-    if magic != FILE_MAGIC {
-        warn!("persist: {} 魔数不匹配，整体弃用", path.display());
-        return (out, committed);
-    }
-    match read_u32(&mut file) {
-        Ok(v) if v == FILE_VERSION => {}
-        Ok(v) => {
-            warn!("persist: {} 版本 {} 不匹配，整体弃用", path.display(), v);
-            return (out, committed);
-        }
-        Err(_) => return (out, committed), // 头撕裂
+    if !verify_persist_header(&mut file, path) {
+        return (out, committed); // 空文件/魔数不匹配/版本不匹配/头撕裂
     }
     let mut seq: u64 = 0; // 数据记录文件序号（校验失败被跳过的也占位）
     loop {
@@ -155,55 +141,11 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
         }
         // 数据记录：长度先行，超限即视为撕裂尾。
         seq += 1;
-        let key_len = match read_u32(&mut file) {
-            Ok(n) if n <= MAX_SANE_LEN => n as usize,
-            _ => break,
-        };
-        let mut key_b = vec![0u8; key_len];
-        if file.read_exact(&mut key_b).is_err() {
-            break;
+        match read_data_record(&mut file, path, expected_tag, seq) {
+            None => break, // 撕裂尾
+            Some(Some((key, v))) => valid.push((seq, key, v)),
+            Some(None) => {} // 校验失败跳过，序号已占位
         }
-        let dim = match read_u32(&mut file) {
-            Ok(n) if n <= MAX_SANE_LEN / 4 => n as usize,
-            _ => break,
-        };
-        let mut vec_b = vec![0u8; dim * 4];
-        if file.read_exact(&mut vec_b).is_err() {
-            break;
-        }
-        let tag_len = match read_u32(&mut file) {
-            Ok(n) if n <= MAX_SANE_LEN => n as usize,
-            _ => break,
-        };
-        let mut tag_b = vec![0u8; tag_len];
-        if file.read_exact(&mut tag_b).is_err() {
-            break;
-        }
-        let mut sum_b = [0u8; 8];
-        if file.read_exact(&mut sum_b).is_err() {
-            break;
-        }
-        // 校验：checksum/指纹/UTF-8，失败则弃该条、继续（序号已占位）。
-        if u64::from_le_bytes(sum_b) != checksum(&key_b, &vec_b, &tag_b) {
-            warn!("persist: {} 一条记录 checksum 失败，已跳过", path.display());
-            continue;
-        }
-        if tag_b != expected_tag.as_bytes() {
-            warn!("persist: {} 一条记录指纹不匹配，已跳过", path.display());
-            continue;
-        }
-        let key = match String::from_utf8(key_b) {
-            Ok(k) => k,
-            Err(_) => {
-                warn!("persist: {} 一条记录 key 非 UTF-8，已跳过", path.display());
-                continue;
-            }
-        };
-        let mut v = Vec::with_capacity(dim);
-        for chunk in vec_b.as_chunks::<4>().0 {
-            v.push(f32::from_le_bytes(*chunk));
-        }
-        valid.push((seq, key, v));
     }
     // 仅应用文件序号 ≤ committed 的记录：按序号而非过滤后列表位置对齐。
     // committed 前缀内有一条损坏记录时，位置计数会把尾部"已写未提交"
@@ -215,6 +157,89 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
             .map(|(_, key, v)| (key, v)),
     );
     (out, committed)
+}
+
+/// 文件头校验：魔数 + 版本；空文件/不匹配/头撕裂一律整体弃用（返回
+/// false，调用方视为空缓存）。
+fn verify_persist_header(file: &mut std::fs::File, path: &Path) -> bool {
+    let mut magic = [0u8; 4];
+    if file.read_exact(&mut magic).is_err() {
+        return false; // 空文件
+    }
+    if magic != FILE_MAGIC {
+        warn!("persist: {} 魔数不匹配，整体弃用", path.display());
+        return false;
+    }
+    match read_u32(file) {
+        Ok(v) if v == FILE_VERSION => true,
+        Ok(v) => {
+            warn!("persist: {} 版本 {} 不匹配，整体弃用", path.display(), v);
+            false
+        }
+        Err(_) => false, // 头撕裂
+    }
+}
+
+/// 读取一条数据记录：长度先行（key_len/dim/tag_len/sum），任一字段越限
+/// 或读不全即撕裂尾（返回 None 终止回放）。checksum/指纹/UTF-8 校验
+/// 失败弃该条、继续（返回 Some(空) 占位，序号已消费）。
+/// 返回 None = 撕裂尾，调用方 break。
+#[allow(clippy::type_complexity)]
+fn read_data_record(
+    file: &mut std::fs::File,
+    path: &Path,
+    expected_tag: &str,
+    _seq: u64,
+) -> Option<Option<(String, Vec<f32>)>> {
+    let key_len = match read_u32(file) {
+        Ok(n) if n <= MAX_SANE_LEN => n as usize,
+        _ => return None,
+    };
+    let mut key_b = vec![0u8; key_len];
+    if file.read_exact(&mut key_b).is_err() {
+        return None;
+    }
+    let dim = match read_u32(file) {
+        Ok(n) if n <= MAX_SANE_LEN / 4 => n as usize,
+        _ => return None,
+    };
+    let mut vec_b = vec![0u8; dim * 4];
+    if file.read_exact(&mut vec_b).is_err() {
+        return None;
+    }
+    let tag_len = match read_u32(file) {
+        Ok(n) if n <= MAX_SANE_LEN => n as usize,
+        _ => return None,
+    };
+    let mut tag_b = vec![0u8; tag_len];
+    if file.read_exact(&mut tag_b).is_err() {
+        return None;
+    }
+    let mut sum_b = [0u8; 8];
+    if file.read_exact(&mut sum_b).is_err() {
+        return None;
+    }
+    // 校验：checksum/指纹/UTF-8，失败则弃该条、继续（序号已占位）。
+    if u64::from_le_bytes(sum_b) != checksum(&key_b, &vec_b, &tag_b) {
+        warn!("persist: {} 一条记录 checksum 失败，已跳过", path.display());
+        return Some(None);
+    }
+    if tag_b != expected_tag.as_bytes() {
+        warn!("persist: {} 一条记录指纹不匹配，已跳过", path.display());
+        return Some(None);
+    }
+    let key = match String::from_utf8(key_b) {
+        Ok(k) => k,
+        Err(_) => {
+            warn!("persist: {} 一条记录 key 非 UTF-8，已跳过", path.display());
+            return Some(None);
+        }
+    };
+    let mut v = Vec::with_capacity(dim);
+    for chunk in vec_b.as_chunks::<4>().0 {
+        v.push(f32::from_le_bytes(*chunk));
+    }
+    Some(Some((key, v)))
 }
 
 /// 快照重写紧凑化（tmp + rename 原子替换）。`entries` 为去重后全集。

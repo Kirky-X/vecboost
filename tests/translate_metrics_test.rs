@@ -64,19 +64,13 @@ fn req(src: Option<&str>, tgt: &str, text: &str) -> TranslateRequest {
     }
 }
 
-#[tokio::test]
-async fn translate_counter_counts_only_successful_requests() {
-    vecboost::i18n::init();
-
-    // 本测试二进制无其他 set_global_collector 调用方，set 必成功 →
-    // 计数差断言无并发竞态
-    let collector = Arc::new(PrometheusCollector::new().expect("collector"));
-    assert!(
-        set_global_collector(collector.clone()),
-        "独立测试二进制内 collector 必可注册"
-    );
-    let c0 = read_counter(&collector);
-
+/// 400 拒绝段聚合断言：零配置 / auto 检测失败 / 路由未命中 / 能力门四类
+/// 拒绝均不得计数；返回含 embed-only 路由的服务句柄（onnx 成功段复用
+/// collector 而非本服务）。
+async fn assert_rejection_segments_not_counted(
+    collector: &Arc<PrometheusCollector>,
+    c0: u64,
+) -> (TranslateService, u64) {
     // ── 零配置 400：translate-not-configured，不计 ──
     let empty = TranslateService::new(std::collections::HashMap::new());
     let err = empty
@@ -88,7 +82,7 @@ async fn translate_counter_counts_only_successful_requests() {
         vecboost::error::VecboostError::InvalidInput(_)
     ));
     assert_eq!(
-        read_counter(&collector),
+        read_counter(collector),
         c0,
         "零配置 400（translate-not-configured）不得计数"
     );
@@ -112,7 +106,7 @@ async fn translate_counter_counts_only_successful_requests() {
         vecboost::error::VecboostError::InvalidInput(_)
     ));
     assert_eq!(
-        read_counter(&collector),
+        read_counter(collector),
         c0,
         "auto 检测失败 400（translate-detect-failed）不得计数"
     );
@@ -127,7 +121,7 @@ async fn translate_counter_counts_only_successful_requests() {
         vecboost::error::VecboostError::InvalidInput(_)
     ));
     assert_eq!(
-        read_counter(&collector),
+        read_counter(collector),
         c0,
         "路由未命中 400（translate-unsupported-pair）不得计数"
     );
@@ -142,10 +136,28 @@ async fn translate_counter_counts_only_successful_requests() {
         vecboost::error::VecboostError::UnsupportedTask(_)
     ));
     assert_eq!(
-        read_counter(&collector),
+        read_counter(collector),
         c0,
         "能力门 400（translate-unsupported）不得计数"
     );
+
+    (svc, c0)
+}
+
+#[tokio::test]
+async fn translate_counter_counts_only_successful_requests() {
+    vecboost::i18n::init();
+
+    // 本测试二进制无其他 set_global_collector 调用方，set 必成功 →
+    // 计数差断言无并发竞态
+    let collector = Arc::new(PrometheusCollector::new().expect("collector"));
+    assert!(
+        set_global_collector(collector.clone()),
+        "独立测试二进制内 collector 必可注册"
+    );
+    let c0 = read_counter(&collector);
+
+    let _svc = assert_rejection_segments_not_counted(&collector, c0).await;
 
     // ── 成功请求：+1（真机 bundle 守卫；缺失时跳过该段，拒绝段断言不受
     // 影响。dylib 探测必须在 Session 构建前：ort/load-dynamic 缺库为

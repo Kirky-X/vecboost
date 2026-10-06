@@ -742,105 +742,26 @@ impl CandleEngine {
 
         // 按引擎配置的 pooling_mode 汇聚
         if embeddings.dims().len() == 3 {
-            match &self.pooling_mode {
-                crate::config::model::PoolingMode::Cls => {
-                    // 优化：使用 narrow + squeeze + to_vec2 单次提取所有 CLS token，
-                    // 替代逐样本 get(i).get(0).to_vec1() 的 N 次 GPU kernel + N 次 DMA 传输。
-                    // 对应鲲鹏文档「理论计算极限」：减少全局内存访问延迟（400-600 clocks）。
-                    let cls_all = embeddings
-                        .narrow(1, 0, 1)
-                        .map_err(|e| {
-                            VecboostError::InferenceError(format!(
-                                "Failed to narrow CLS dim: {}",
-                                e
-                            ))
-                        })?
-                        .squeeze(1)
-                        .map_err(|e| {
-                            VecboostError::InferenceError(format!(
-                                "Failed to squeeze CLS dim: {}",
-                                e
-                            ))
-                        })?;
-                    // 需要根据实际 dtype 转换：模型可能输出 f16/bf16，需先 cast 到 f32
-                    let cls_f32 = if cls_all.dtype() == DType::F32 {
-                        cls_all
-                    } else {
-                        cls_all.to_dtype(DType::F32).map_err(|e| {
-                            VecboostError::InferenceError(format!(
-                                "Failed to cast CLS to f32: {}",
-                                e
-                            ))
-                        })?
-                    };
-                    return cls_f32.to_vec2::<f32>().map_err(|e| {
-                        VecboostError::InferenceError(format!(
-                            "Failed to convert CLS batch to vec2: {}",
-                            e
-                        ))
-                    });
-                }
+            return match &self.pooling_mode {
+                crate::config::model::PoolingMode::Cls => Self::pool_batch_cls(embeddings),
                 mode @ (crate::config::model::PoolingMode::Mean
-                | crate::config::model::PoolingMode::Max) => {
-                    let mut out = Vec::with_capacity(batch_size);
-                    for i in 0..batch_size {
-                        let sample = embeddings.get(i).map_err(|e| {
-                            VecboostError::InferenceError(format!(
-                                "Failed to get batch {}: {}",
-                                i, e
-                            ))
-                        })?;
-                        let cast = if sample.dtype() == DType::F32 {
-                            sample
-                        } else {
-                            sample.to_dtype(DType::F32).map_err(|e| {
-                                VecboostError::InferenceError(format!(
-                                    "Failed to cast sample {} to f32: {}",
-                                    i, e
-                                ))
-                            })?
-                        };
-                        let seq_hidden: Vec<f32> = cast
-                            .to_vec2::<f32>()
-                            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                            .into_iter()
-                            .flatten()
-                            .collect();
-                        let mask: Vec<u32> = pooling_mask[i * max_seq_len..(i + 1) * max_seq_len]
-                            .iter()
-                            .map(|&m| m as u32)
-                            .collect();
-                        let vec = match mode {
-                            crate::config::model::PoolingMode::Mean => {
-                                pool_mean(&seq_hidden, &mask, hidden_size)
-                            }
-                            crate::config::model::PoolingMode::Max => {
-                                pool_max(&seq_hidden, &mask, hidden_size)
-                            }
-                            _ => unreachable!("matched Mean/Max above"),
-                        };
-                        out.push(vec);
-                    }
-                    return Ok(out);
-                }
+                | crate::config::model::PoolingMode::Max) => self.pool_batch_mean_max(
+                    embeddings,
+                    mode,
+                    pooling_mask,
+                    batch_size,
+                    max_seq_len,
+                    hidden_size,
+                ),
                 crate::config::model::PoolingMode::Auto => {
                     unreachable!("Auto pooling should have been resolved at construction time")
                 }
-            }
+            };
         }
 
         if embeddings.dims().len() == 2 {
             // 模型已输出 [batch, hidden]（架构内建池化），逐行取出即可
-            let cast = if embeddings.dtype() == DType::F32 {
-                embeddings.clone()
-            } else {
-                embeddings.to_dtype(DType::F32).map_err(|e| {
-                    VecboostError::InferenceError(format!("Failed to cast to f32: {}", e))
-                })?
-            };
-            return cast.to_vec2::<f32>().map_err(|e| {
-                VecboostError::InferenceError(format!("Failed to convert batch to vec2: {}", e))
-            });
+            return Self::flatten_batch_rows(embeddings);
         }
 
         Err(VecboostError::InferenceError(format!(
@@ -848,6 +769,94 @@ impl CandleEngine {
             embeddings.dims().len(),
             embeddings.shape()
         )))
+    }
+
+    /// [batch, hidden] 输出（架构内建池化）逐行取出；f16/bf16 先 cast f32。
+    fn flatten_batch_rows(embeddings: &Tensor) -> Result<Vec<Vec<f32>>, VecboostError> {
+        let cast = if embeddings.dtype() == DType::F32 {
+            embeddings.clone()
+        } else {
+            embeddings.to_dtype(DType::F32).map_err(|e| {
+                VecboostError::InferenceError(format!("Failed to cast to f32: {}", e))
+            })?
+        };
+        cast.to_vec2::<f32>().map_err(|e| {
+            VecboostError::InferenceError(format!("Failed to convert batch to vec2: {}", e))
+        })
+    }
+
+    /// CLS 批量池化：narrow + squeeze + to_vec2 单次提取所有 CLS token，
+    /// 替代逐样本 get(i).get(0).to_vec1() 的 N 次 GPU kernel + N 次 DMA 传输。
+    /// 对应鲲鹏文档「理论计算极限」：减少全局内存访问延迟（400-600 clocks）。
+    /// f16/bf16 输出先 cast 到 f32。
+    fn pool_batch_cls(embeddings: &Tensor) -> Result<Vec<Vec<f32>>, VecboostError> {
+        let cls_all = embeddings
+            .narrow(1, 0, 1)
+            .map_err(|e| VecboostError::InferenceError(format!("Failed to narrow CLS dim: {}", e)))?
+            .squeeze(1)
+            .map_err(|e| {
+                VecboostError::InferenceError(format!("Failed to squeeze CLS dim: {}", e))
+            })?;
+        // 需要根据实际 dtype 转换：模型可能输出 f16/bf16，需先 cast 到 f32
+        let cls_f32 = if cls_all.dtype() == DType::F32 {
+            cls_all
+        } else {
+            cls_all.to_dtype(DType::F32).map_err(|e| {
+                VecboostError::InferenceError(format!("Failed to cast CLS to f32: {}", e))
+            })?
+        };
+        cls_f32.to_vec2::<f32>().map_err(|e| {
+            VecboostError::InferenceError(format!("Failed to convert CLS batch to vec2: {}", e))
+        })
+    }
+
+    /// Mean/Max 批量池化：逐样本取 [seq_len, hidden] 并携带各自 attention
+    /// mask 传入 pool_* 纯函数，与单条路径（forward_pass）行为一致。
+    #[allow(clippy::too_many_arguments)]
+    fn pool_batch_mean_max(
+        &self,
+        embeddings: &Tensor,
+        mode: &crate::config::model::PoolingMode,
+        pooling_mask: &[i64],
+        batch_size: usize,
+        max_seq_len: usize,
+        hidden_size: usize,
+    ) -> Result<Vec<Vec<f32>>, VecboostError> {
+        let mut out = Vec::with_capacity(batch_size);
+        for i in 0..batch_size {
+            let sample = embeddings.get(i).map_err(|e| {
+                VecboostError::InferenceError(format!("Failed to get batch {}: {}", i, e))
+            })?;
+            let cast = if sample.dtype() == DType::F32 {
+                sample
+            } else {
+                sample.to_dtype(DType::F32).map_err(|e| {
+                    VecboostError::InferenceError(format!(
+                        "Failed to cast sample {} to f32: {}",
+                        i, e
+                    ))
+                })?
+            };
+            let seq_hidden: Vec<f32> = cast
+                .to_vec2::<f32>()
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+                .into_iter()
+                .flatten()
+                .collect();
+            let mask: Vec<u32> = pooling_mask[i * max_seq_len..(i + 1) * max_seq_len]
+                .iter()
+                .map(|&m| m as u32)
+                .collect();
+            let vec = match mode {
+                crate::config::model::PoolingMode::Mean => {
+                    pool_mean(&seq_hidden, &mask, hidden_size)
+                }
+                crate::config::model::PoolingMode::Max => pool_max(&seq_hidden, &mask, hidden_size),
+                _ => unreachable!("matched Mean/Max above"),
+            };
+            out.push(vec);
+        }
+        Ok(out)
     }
 }
 
@@ -952,66 +961,8 @@ impl CandleEngine {
 
         let model_path = &config.model_path;
         let is_local_path = model_path.exists() && model_path.is_dir();
-
-        let (config_filename, tokenizer_filename, weights_filename): (
-            std::path::PathBuf,
-            std::path::PathBuf,
-            std::path::PathBuf,
-        ) = if is_local_path {
-            log::info!(
-                "Loading model from local path for fallback: {:?}",
-                model_path
-            );
-            let config_path = model_path.join("config.json");
-            let tokenizer_path = model_path.join("tokenizer.json");
-            let weights_path = model_path.join("model.safetensors");
-            let alt_weights_path = model_path.join("pytorch_model.bin");
-
-            let weights_filename = if weights_path.exists() {
-                weights_path
-            } else if alt_weights_path.exists() {
-                alt_weights_path
-            } else {
-                return Err(VecboostError::ModelLoadError(
-                    "No model weights file found during fallback".to_string(),
-                ));
-            };
-
-            (config_path, tokenizer_path, weights_filename)
-        } else {
-            log::info!(
-                "Loading model from HuggingFace Hub for fallback: {:?}",
-                model_path
-            );
-            let repo_id = model_path.to_string_lossy().into_owned();
-            let repo = build_hf_repo(&repo_id)?;
-
-            let config_filename = repo
-                .download_file()
-                .filename("config.json")
-                .send()
-                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-            let tokenizer_filename = repo
-                .download_file()
-                .filename("tokenizer.json")
-                .send()
-                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-            let weights_filename = repo
-                .download_file()
-                .filename("model.safetensors")
-                .send()
-                .or_else(|_| {
-                    log::warn!(
-                        "model.safetensors unavailable, falling back to pytorch_model.bin; \
-                         pickle format carries code-execution risk — only load .bin models \
-                         from trusted sources, prefer safetensors"
-                    );
-                    repo.download_file().filename("pytorch_model.bin").send()
-                })
-                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-
-            (config_filename, tokenizer_filename, weights_filename)
-        };
+        let (config_filename, tokenizer_filename, weights_filename) =
+            resolve_model_files(config, model_path, is_local_path)?;
 
         let config_content = std::fs::read_to_string(config_filename)?;
         let model_config_json: ModelConfigJson = serde_json::from_str(&config_content)
@@ -1437,22 +1388,30 @@ fn ensure_model_integrity(
 
     log::info!("Model file integrity check passed");
 
-    if let Some(ref expected_hash) = config.model_sha256 {
-        log::info!("Verifying model file SHA256 hash...");
-        let is_valid = verify_sha256(weights_filename, expected_hash).map_err(|e| {
-            VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e))
-        })?;
+    verify_model_sha256(config, weights_filename)?;
 
-        if !is_valid {
-            return Err(VecboostError::ModelFileCorrupted(format!(
-                "Model file SHA256 verification failed. Expected: {}, File: {:?}",
-                expected_hash, weights_filename
-            )));
-        }
+    Ok(())
+}
 
-        log::info!("Model file SHA256 verification passed");
+/// 配置声明 model_sha256 时对权重文件做 SHA256 终验（完整性校验链
+/// 最后一环，防 tampering/supply-chain）。不匹配即 ModelFileCorrupted。
+fn verify_model_sha256(
+    config: &ModelConfig,
+    weights_filename: &std::path::PathBuf,
+) -> Result<(), VecboostError> {
+    let Some(ref expected_hash) = config.model_sha256 else {
+        return Ok(());
+    };
+    log::info!("Verifying model file SHA256 hash...");
+    let is_valid = verify_sha256(weights_filename, expected_hash)
+        .map_err(|e| VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e)))?;
+    if !is_valid {
+        return Err(VecboostError::ModelFileCorrupted(format!(
+            "Model file SHA256 verification failed. Expected: {}, File: {:?}",
+            expected_hash, weights_filename
+        )));
     }
-
+    log::info!("Model file SHA256 verification passed");
     Ok(())
 }
 

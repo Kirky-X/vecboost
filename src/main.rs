@@ -1693,37 +1693,35 @@ fn init_audit_logger(
 
 /// Signal-aware graceful shutdown（SIGINT + SIGTERM）；SIGTERM 安装失败
 /// 时降级仅 ctrl_c（不阻断启动）。
-fn install_signal_handlers() -> impl std::future::Future<Output = ()> + Send + 'static {
-    async {
-        #[cfg(unix)]
-        {
-            let mut sigterm =
-                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::error!("Failed to install SIGTERM handler: {}", e);
-                        // SIGTERM unavailable — continue with ctrl_c only
-                        tokio::signal::ctrl_c().await.ok();
-                        log::info!("Received SIGINT, initiating graceful shutdown");
-                        return;
-                    }
-                };
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
+async fn install_signal_handlers() {
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("Failed to install SIGTERM handler: {}", e);
+                    // SIGTERM unavailable — continue with ctrl_c only
+                    tokio::signal::ctrl_c().await.ok();
                     log::info!("Received SIGINT, initiating graceful shutdown");
+                    return;
                 }
-                _ = sigterm.recv() => {
-                    log::info!("Received SIGTERM, initiating graceful shutdown");
-                }
+            };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                log::info!("Received SIGINT, initiating graceful shutdown");
+            }
+            _ = sigterm.recv() => {
+                log::info!("Received SIGTERM, initiating graceful shutdown");
             }
         }
-        #[cfg(not(unix))]
-        {
-            if let Err(e) = tokio::signal::ctrl_c().await {
-                log::error!("Failed to install CTRL-C handler: {}", e);
-            }
-            log::info!("Received CTRL-C, initiating graceful shutdown");
+    }
+    #[cfg(not(unix))]
+    {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            log::error!("Failed to install CTRL-C handler: {}", e);
         }
+        log::info!("Received CTRL-C, initiating graceful shutdown");
     }
 }
 

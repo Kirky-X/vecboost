@@ -60,13 +60,15 @@ impl RerankService {
         Self::build(engine, model_config, cache)
     }
 
-    /// 执行重排序：对 query 和 documents 列表计算相关性分数
-    pub async fn process_rerank(
+    /// 请求校验链：query 非空/长度上限、documents 非空/数量上限/逐条
+    /// 文本防线（审查 LOW-4：此前 rerank 文档面无长度/控制字符防线）、
+    /// top_k 有效性（0 无意义，应拒绝）。
+    fn validate_rerank_request(
         &self,
-        req: RerankRequest,
+        req: &RerankRequest,
         max_documents: usize,
         max_query_length: usize,
-    ) -> Result<RerankResponse, VecboostError> {
+    ) -> Result<(), VecboostError> {
         // 验证 query 非空
         self.validator.validate_text(&req.query)?;
 
@@ -113,6 +115,103 @@ impl RerankService {
             ));
         }
 
+        Ok(())
+    }
+
+    /// 分数计算：缓存启用时逐文档查缓存（键 = model + query/doc 各自哈希，
+    /// 裸拼接 ("a","b:c") 与 ("a:b","c") 同键互染——审计 D28），未命中批量
+    /// 走引擎并回填；禁用时整批直通。OOM 降级经 handle_oom_fallback 包装。
+    async fn compute_rerank_scores(
+        &self,
+        query: &str,
+        documents: &[String],
+    ) -> Result<Vec<f32>, VecboostError> {
+        let engine = self.engine.clone();
+        let query = query.to_string();
+        let documents_vec = documents.to_vec();
+
+        if !self.cache.is_enabled() {
+            // 缓存禁用：直接批量调用引擎
+            return common::handle_oom_fallback(&engine, &self.model_config, &None, || {
+                let engine = engine.clone();
+                let query = query.clone();
+                let docs = documents_vec.clone();
+                async move {
+                    let engine = engine.read().await;
+                    engine.rerank_batch(&query, &docs)
+                }
+            })
+            .await;
+        }
+
+        // 缓存启用：逐个检查缓存，仅对未命中的 document 调用引擎
+        let mut scores: Vec<(usize, f32)> = Vec::with_capacity(documents_vec.len());
+        let mut uncached_indices = Vec::new();
+        let mut uncached_docs = Vec::new();
+
+        let model_id = self
+            .model_config
+            .as_ref()
+            .map(|c| c.name.as_str())
+            .unwrap_or("unknown");
+        let query_hash = xxhash_rust::xxh3::xxh3_128(query.as_bytes());
+        for (i, doc) in documents_vec.iter().enumerate() {
+            let cache_key = format!(
+                "rerank:{}:{}:{:016x}",
+                model_id,
+                query_hash,
+                xxhash_rust::xxh3::xxh3_128(doc.as_bytes())
+            );
+            if let Some(cached) = self.cache.get(&cache_key).await {
+                // 缓存命中：单元素 Vec<f32>
+                scores.push((i, cached.first().copied().unwrap_or(0.0)));
+            } else {
+                uncached_indices.push(i);
+                uncached_docs.push(doc.clone());
+            }
+        }
+
+        if !uncached_docs.is_empty() {
+            // 对未命中的 document 批量调用引擎
+            let uncached_scores =
+                common::handle_oom_fallback(&engine, &self.model_config, &None, || {
+                    let engine = engine.clone();
+                    let query = query.clone();
+                    let docs = uncached_docs.clone();
+                    async move {
+                        let engine = engine.read().await;
+                        engine.rerank_batch(&query, &docs)
+                    }
+                })
+                .await?;
+
+            // 存入缓存并收集结果
+            for (idx, &score) in uncached_indices.iter().zip(uncached_scores.iter()) {
+                let cache_key = format!(
+                    "rerank:{}:{}:{:016x}",
+                    model_id,
+                    query_hash,
+                    xxhash_rust::xxh3::xxh3_128(documents_vec[*idx].as_bytes())
+                );
+                self.cache.put(&cache_key, vec![score]).await;
+                scores.push((*idx, score));
+            }
+        }
+
+        // 按原始顺序排列分数
+        scores.sort_by_key(|(i, _)| *i);
+        Ok(scores.into_iter().map(|(_, s)| s).collect())
+    }
+
+    /// 执行重排序：对 query 和 documents 列表计算相关性分数
+    pub async fn process_rerank(
+        &self,
+        req: RerankRequest,
+        max_documents: usize,
+        max_query_length: usize,
+    ) -> Result<RerankResponse, VecboostError> {
+        self.validate_rerank_request(&req, max_documents, max_query_length)?;
+
         let documents = &req.documents;
 
         let start = Instant::now();
@@ -126,85 +225,7 @@ impl RerankService {
         }
         drop(engine_read);
 
-        // 使用 OOM 降级包装的批量推理，支持缓存
-        let query = req.query.clone();
-        let documents_vec = documents.to_vec();
-        let cache = self.cache.clone();
-        let engine = self.engine.clone();
-
-        let scores = if cache.is_enabled() {
-            // 缓存启用：逐个检查缓存，仅对未命中的 document 调用引擎
-            let mut scores = Vec::with_capacity(documents_vec.len());
-            let mut uncached_indices = Vec::new();
-            let mut uncached_docs = Vec::new();
-
-            let model_id = self
-                .model_config
-                .as_ref()
-                .map(|c| c.name.as_str())
-                .unwrap_or("unknown");
-            let query_hash = xxhash_rust::xxh3::xxh3_128(query.as_bytes());
-            for (i, doc) in documents_vec.iter().enumerate() {
-                // 键 = model + query/doc 各自哈希——裸拼接 ("a","b:c") 与
-                // ("a:b","c") 同键互染（审计 D28）
-                let cache_key = format!(
-                    "rerank:{}:{}:{:016x}",
-                    model_id,
-                    query_hash,
-                    xxhash_rust::xxh3::xxh3_128(doc.as_bytes())
-                );
-                if let Some(cached) = cache.get(&cache_key).await {
-                    // 缓存命中：单元素 Vec<f32>
-                    scores.push((i, cached.first().copied().unwrap_or(0.0)));
-                } else {
-                    uncached_indices.push(i);
-                    uncached_docs.push(doc.clone());
-                }
-            }
-
-            if !uncached_docs.is_empty() {
-                // 对未命中的 document 批量调用引擎
-                let uncached_scores =
-                    common::handle_oom_fallback(&engine, &self.model_config, &None, || {
-                        let engine = engine.clone();
-                        let query = query.clone();
-                        let docs = uncached_docs.clone();
-                        async move {
-                            let engine = engine.read().await;
-                            engine.rerank_batch(&query, &docs)
-                        }
-                    })
-                    .await?;
-
-                // 存入缓存并收集结果
-                for (idx, &score) in uncached_indices.iter().zip(uncached_scores.iter()) {
-                    let cache_key = format!(
-                        "rerank:{}:{}:{:016x}",
-                        model_id,
-                        query_hash,
-                        xxhash_rust::xxh3::xxh3_128(documents_vec[*idx].as_bytes())
-                    );
-                    cache.put(&cache_key, vec![score]).await;
-                    scores.push((*idx, score));
-                }
-            }
-
-            // 按原始顺序排列分数
-            scores.sort_by_key(|(i, _)| *i);
-            scores.into_iter().map(|(_, s)| s).collect()
-        } else {
-            // 缓存禁用：直接批量调用引擎
-            common::handle_oom_fallback(&engine, &self.model_config, &None, || {
-                let engine = engine.clone();
-                let query = query.clone();
-                let docs = documents_vec.clone();
-                async move {
-                    let engine = engine.read().await;
-                    engine.rerank_batch(&query, &docs)
-                }
-            })
-            .await?
-        };
+        let scores = self.compute_rerank_scores(&req.query, documents).await?;
 
         // 构建结果并排序
         let return_documents = req.return_documents.unwrap_or(false);
@@ -585,6 +606,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rerank_unsupported_engine_returns_error() {
+        crate::i18n::init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(NoRerankEngine));
         let service = make_service(engine);
@@ -608,6 +630,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rerank_query_length_exceeded_returns_error() {
+        crate::i18n::init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockRerankEngine));
         let service = make_service(engine);
@@ -631,6 +654,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rerank_documents_exceeding_limit_returns_error() {
+        crate::i18n::init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockRerankEngine));
         let service = make_service(engine);

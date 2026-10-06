@@ -372,6 +372,36 @@ impl CandleEngine {
                 .map_err(|e| VecboostError::TokenizationError(e.to_string()))?
         };
 
+        // 从 config.json 读取的 vocab_size(替代硬编码 250002)
+        let vocab_size = self.vocab_size as u32;
+        let max_len = self.tokenizer.max_length().min(512);
+        let (token_ids, token_type_ids, attention_mask_tensor, mask_for_pooling) =
+            self.prepare_single_input(&encoding, vocab_size, max_len)?;
+
+        let embeddings = {
+            let _timer = StageTimer::new(&self.stage_stats, Stage::Inference);
+            self.run_model_forward(
+                &token_ids,
+                &token_type_ids,
+                &attention_mask_tensor,
+                &encoding,
+                max_len,
+            )?
+        };
+
+        // pooling 计时守卫驻留至函数返回，覆盖全部三个出口。
+        let _pool_timer = StageTimer::new(&self.stage_stats, Stage::Pooling);
+        self.pool_single_embedding(&embeddings, mask_for_pooling)
+    }
+
+    /// 单条输入张量化：vocab 越界 clamp（warn 一次）+ max_len 截断，产出
+    /// ids/type_ids/mask 三张量与池化用 mask 副本。
+    fn prepare_single_input(
+        &self,
+        encoding: &Encoding,
+        vocab_size: u32,
+        max_len: usize,
+    ) -> Result<(Tensor, Tensor, Tensor, Vec<u32>), VecboostError> {
         let ids = encoding.get_ids();
         let attention_mask = encoding.get_attention_mask();
 
@@ -379,8 +409,6 @@ impl CandleEngine {
         log::debug!("Max token ID: {}", ids.iter().max().copied().unwrap_or(0));
         log::debug!("Attention mask: {:?}", attention_mask);
 
-        // 从 config.json 读取的 vocab_size(替代硬编码 250002)
-        let vocab_size = self.vocab_size as u32;
         let max_id = ids.iter().max().copied().unwrap_or(0);
         if max_id >= vocab_size {
             log::warn!(
@@ -389,8 +417,6 @@ impl CandleEngine {
                 vocab_size
             );
         }
-
-        let max_len = self.tokenizer.max_length().min(512);
 
         let ids_slice: Vec<u32> = ids
             .iter()
@@ -427,40 +453,61 @@ impl CandleEngine {
             .unsqueeze(0)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-        let embeddings = {
-            let _timer = StageTimer::new(&self.stage_stats, Stage::Inference);
-            match &self.model {
-                ModelWrapper::Bert(bert_model) => bert_model
-                    .forward(&token_ids, &token_type_ids, Some(&attention_mask_tensor))
-                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
-                ModelWrapper::XlmRoberta(xlm_model) => {
-                    let type_ids_slice: Vec<u32> =
-                        encoding.type_ids.iter().take(max_len).cloned().collect();
-                    let token_type_ids = Tensor::new(type_ids_slice, &self.device)
-                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                        .unsqueeze(0)
-                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-                    xlm_model
-                        .forward(
-                            &token_ids,
-                            &attention_mask_tensor,
-                            &token_type_ids,
-                            None,
-                            None,
-                            None,
-                        )
-                        .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-                }
-            }
-        };
+        Ok((
+            token_ids,
+            token_type_ids,
+            attention_mask_tensor,
+            mask_for_pooling,
+        ))
+    }
 
+    /// 模型前向（单条）：BERT 臂 (ids, type_ids, Some(mask))；XLM-R 臂
+    /// 签名不同（mask 居第二位）且内部重建 type_ids（重复构建原样保留）。
+    fn run_model_forward(
+        &self,
+        token_ids: &Tensor,
+        token_type_ids: &Tensor,
+        attention_mask_tensor: &Tensor,
+        encoding: &Encoding,
+        max_len: usize,
+    ) -> Result<Tensor, VecboostError> {
+        match &self.model {
+            ModelWrapper::Bert(bert_model) => bert_model
+                .forward(token_ids, token_type_ids, Some(attention_mask_tensor))
+                .map_err(|e| VecboostError::InferenceError(e.to_string())),
+            ModelWrapper::XlmRoberta(xlm_model) => {
+                let type_ids_slice: Vec<u32> =
+                    encoding.type_ids.iter().take(max_len).cloned().collect();
+                let token_type_ids = Tensor::new(type_ids_slice, &self.device)
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+                    .unsqueeze(0)
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+                xlm_model
+                    .forward(
+                        token_ids,
+                        attention_mask_tensor,
+                        &token_type_ids,
+                        None,
+                        None,
+                        None,
+                    )
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))
+            }
+        }
+    }
+
+    /// 单条池化：1D 输出（架构内建单向量）早退；3D/2D 展平后按
+    /// pooling_mode 汇聚，出口 L2 归一化（与批量路径、量化引擎一致）。
+    fn pool_single_embedding(
+        &self,
+        embeddings: &Tensor,
+        mask_for_pooling: Vec<u32>,
+    ) -> Result<Vec<f32>, VecboostError> {
         log::debug!("Embeddings shape: {:?}", embeddings.shape());
         log::debug!("Embeddings dims: {:?}", embeddings.dims());
 
         // 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
 
-        // pooling 计时守卫驻留至函数返回，覆盖全部三个出口。
-        let _pool_timer = StageTimer::new(&self.stage_stats, Stage::Pooling);
         let dims = embeddings.dims();
         let hidden_dim = self.hidden_size;
 
@@ -534,8 +581,6 @@ impl CandleEngine {
         Ok(vec)
     }
 
-    /// 优化的批量前向传播，使用真正的批量处理而非串行处理
-    // 纯同步 forward_pass_batch
     fn forward_pass_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VecboostError> {
         if texts.is_empty() {
             return Ok(vec![]);
@@ -575,52 +620,8 @@ impl CandleEngine {
         }
 
         let batch_size = texts.len();
-
-        let mut batch_ids = vec![0i64; batch_size * max_seq_len];
-        for (batch_idx, encoding) in encodings.iter().enumerate() {
-            let ids = encoding.get_ids();
-            for (seq_idx, &id) in ids.iter().enumerate().take(max_seq_len) {
-                batch_ids[batch_idx * max_seq_len + seq_idx] = id as i64;
-            }
-        }
-
-        // 直接动态分配 token_ids 张量
-        // （Candle Tensor 不可变，张量池取出后仍需重建，无实际收益）
-        let token_ids = Tensor::new(batch_ids, &self.device)
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-            .reshape(&[batch_size, max_seq_len])
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-
-        let mut batch_mask = vec![0i64; batch_size * max_seq_len];
-        for (batch_idx, encoding) in encodings.iter().enumerate() {
-            let mask = encoding.get_attention_mask();
-            for (seq_idx, &m) in mask.iter().enumerate().take(max_seq_len) {
-                batch_mask[batch_idx * max_seq_len + seq_idx] = m as i64;
-            }
-        }
-
-        // 动态分配 attention_mask 张量（Candle Tensor 不可变，池化无收益）
-        // 克隆一份留给 Mean/Max 池化构建逐样本 mask
-        let pooling_mask = batch_mask.clone();
-        let attention_mask_tensor = Tensor::new(batch_mask, &self.device)
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-            .reshape(&[batch_size, max_seq_len])
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-
-        // 修复：构建批量 token_type_ids 并将 attention_mask
-        // 以 Some(...) 正确传入（旧实现把 mask 传到 type_ids 槽位、mask 传 None，
-        // 导致批内 padding 无隔离，短序列向量被长序列污染，cos 仅 ~0.59）。
-        let mut batch_type_ids = vec![0i64; batch_size * max_seq_len];
-        for (batch_idx, encoding) in encodings.iter().enumerate() {
-            let type_ids = encoding.get_type_ids();
-            for (seq_idx, &tid) in type_ids.iter().enumerate().take(max_seq_len) {
-                batch_type_ids[batch_idx * max_seq_len + seq_idx] = tid as i64;
-            }
-        }
-        let token_type_ids = Tensor::new(batch_type_ids, &self.device)
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
-            .reshape(&[batch_size, max_seq_len])
-            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+        let (token_ids, token_type_ids, attention_mask_tensor, pooling_mask) =
+            self.build_batch_tensors(&encodings, batch_size, max_seq_len)?;
 
         let embeddings = {
             let _timer = StageTimer::new(&self.stage_stats, Stage::Inference);
@@ -647,16 +648,100 @@ impl CandleEngine {
             }
         };
 
-        // 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
-
         // pooling 计时守卫驻留至函数返回，覆盖正常与 fallback 出口。
         let _pool_timer = StageTimer::new(&self.stage_stats, Stage::Pooling);
+        let mut results =
+            self.pool_batch_embeddings(&embeddings, &pooling_mask, batch_size, max_seq_len)?;
+
+        log::debug!(
+            "Batch processing completed, {} embeddings generated",
+            results.len()
+        );
+        // 引擎出口 L2 归一化（平台契约 normalize: Some(true)）
+        for v in results.iter_mut() {
+            l2_normalize_in_place(v);
+        }
+        Ok(results)
+    }
+
+    /// 批量输入张量化：三组 [batch, max_seq_len] 平面缓冲（ids/mask/
+    /// type_ids）按行填充后成张量；mask 克隆一份留给 Mean/Max 池化构建
+    /// 逐样本 mask。
+    fn build_batch_tensors(
+        &self,
+        encodings: &[Encoding],
+        batch_size: usize,
+        max_seq_len: usize,
+    ) -> Result<(Tensor, Tensor, Tensor, Vec<i64>), VecboostError> {
+        let mut batch_ids = vec![0i64; batch_size * max_seq_len];
+        for (batch_idx, encoding) in encodings.iter().enumerate() {
+            let ids = encoding.get_ids();
+            for (seq_idx, &id) in ids.iter().enumerate().take(max_seq_len) {
+                batch_ids[batch_idx * max_seq_len + seq_idx] = id as i64;
+            }
+        }
+
+        // 直接动态分配 token_ids 张量
+        // （Candle Tensor 不可变，张量池取出后仍需重建，无实际收益）
+        let token_ids = Tensor::new(batch_ids, &self.device)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+            .reshape(&[batch_size, max_seq_len])
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+
+        let mut batch_mask = vec![0i64; batch_size * max_seq_len];
+        for (batch_idx, encoding) in encodings.iter().enumerate() {
+            let mask = encoding.get_attention_mask();
+            for (seq_idx, &m) in mask.iter().enumerate().take(max_seq_len) {
+                batch_mask[batch_idx * max_seq_len + seq_idx] = m as i64;
+            }
+        }
+
+        // 动态分配 attention_mask 张量（Candle Tensor 不可变，池化无收益）
+        let pooling_mask = batch_mask.clone();
+        let attention_mask_tensor = Tensor::new(batch_mask, &self.device)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+            .reshape(&[batch_size, max_seq_len])
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+
+        // 修复：构建批量 token_type_ids 并将 attention_mask
+        // 以 Some(...) 正确传入（旧实现把 mask 传到 type_ids 槽位、mask 传 None，
+        // 导致批内 padding 无隔离，短序列向量被长序列污染，cos 仅 ~0.59）。
+        let mut batch_type_ids = vec![0i64; batch_size * max_seq_len];
+        for (batch_idx, encoding) in encodings.iter().enumerate() {
+            let type_ids = encoding.get_type_ids();
+            for (seq_idx, &tid) in type_ids.iter().enumerate().take(max_seq_len) {
+                batch_type_ids[batch_idx * max_seq_len + seq_idx] = tid as i64;
+            }
+        }
+        let token_type_ids = Tensor::new(batch_type_ids, &self.device)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?
+            .reshape(&[batch_size, max_seq_len])
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+
+        Ok((
+            token_ids,
+            token_type_ids,
+            attention_mask_tensor,
+            pooling_mask,
+        ))
+    }
+
+    /// 批量池化：CLS 走 narrow 单次提取全部 token（一次 kernel 传输替代
+    /// 逐样本 N 次 GPU kernel + DMA，见鲲鹏文档「理论计算极限」）；
+    /// Mean/Max 逐样本取 [seq_len, hidden] 并携带各自 attention mask 传入
+    /// pool_* 纯函数，与单条路径（forward_pass）行为一致；2D 输出
+    /// （架构内建池化）逐行取出。归一化由调用方统一执行。
+    fn pool_batch_embeddings(
+        &self,
+        embeddings: &Tensor,
+        pooling_mask: &[i64],
+        batch_size: usize,
+        max_seq_len: usize,
+    ) -> Result<Vec<Vec<f32>>, VecboostError> {
         let hidden_size = self.hidden_size;
 
-        // 按引擎配置的 pooling_mode 汇聚。CLS 走 narrow 单次提取全部 token；
-        // Mean/Max 逐样本取 [seq_len, hidden] 并携带各自 attention mask 传入 pool_* 纯函数，
-        // 与单条路径（forward_pass）行为一致。
-        let results = if embeddings.dims().len() == 3 {
+        // 按引擎配置的 pooling_mode 汇聚
+        if embeddings.dims().len() == 3 {
             match &self.pooling_mode {
                 crate::config::model::PoolingMode::Cls => {
                     // 优化：使用 narrow + squeeze + to_vec2 单次提取所有 CLS token，
@@ -688,12 +773,12 @@ impl CandleEngine {
                             ))
                         })?
                     };
-                    cls_f32.to_vec2::<f32>().map_err(|e| {
+                    return cls_f32.to_vec2::<f32>().map_err(|e| {
                         VecboostError::InferenceError(format!(
                             "Failed to convert CLS batch to vec2: {}",
                             e
                         ))
-                    })?
+                    });
                 }
                 mode @ (crate::config::model::PoolingMode::Mean
                 | crate::config::model::PoolingMode::Max) => {
@@ -736,13 +821,15 @@ impl CandleEngine {
                         };
                         out.push(vec);
                     }
-                    out
+                    return Ok(out);
                 }
                 crate::config::model::PoolingMode::Auto => {
                     unreachable!("Auto pooling should have been resolved at construction time")
                 }
             }
-        } else if embeddings.dims().len() == 2 {
+        }
+
+        if embeddings.dims().len() == 2 {
             // 模型已输出 [batch, hidden]（架构内建池化），逐行取出即可
             let cast = if embeddings.dtype() == DType::F32 {
                 embeddings.clone()
@@ -751,27 +838,16 @@ impl CandleEngine {
                     VecboostError::InferenceError(format!("Failed to cast to f32: {}", e))
                 })?
             };
-            cast.to_vec2::<f32>().map_err(|e| {
+            return cast.to_vec2::<f32>().map_err(|e| {
                 VecboostError::InferenceError(format!("Failed to convert batch to vec2: {}", e))
-            })?
-        } else {
-            return Err(VecboostError::InferenceError(format!(
-                "Unsupported batch embedding dimensions: {} (shape: {:?})",
-                embeddings.dims().len(),
-                embeddings.shape()
-            )));
-        };
-
-        log::debug!(
-            "Batch processing completed, {} embeddings generated",
-            results.len()
-        );
-        // 引擎出口 L2 归一化（平台契约 normalize: Some(true)）
-        let mut results = results;
-        for v in results.iter_mut() {
-            l2_normalize_in_place(v);
+            });
         }
-        Ok(results)
+
+        Err(VecboostError::InferenceError(format!(
+            "Unsupported batch embedding dimensions: {} (shape: {:?})",
+            embeddings.dims().len(),
+            embeddings.shape()
+        )))
     }
 }
 

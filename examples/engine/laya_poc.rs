@@ -119,6 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         task: ModelTask::Decision,
         quantized: false,
         decision_params: None,
+        translation_params: None,
     };
 
     println!("🔧 EngineFactory::create(Onnx, task=decision) ...");

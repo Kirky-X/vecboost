@@ -35,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         task: vecboost::config::model::ModelTask::Embedding,
         quantized: false,
         decision_params: None,
+        translation_params: None,
     };
 
     let config = LibraryConfig {

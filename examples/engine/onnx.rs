@@ -64,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             task: vecboost::config::model::ModelTask::Embedding,
             quantized: false,
             decision_params: None,
+            translation_params: None,
         };
         match AnyEngine::new(&config, EngineType::Onnx, Precision::Fp32) {
             Ok(engine) => {

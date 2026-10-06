@@ -94,32 +94,9 @@ impl AuditLogger {
         max_file_size: u64,
         max_files: usize,
     ) {
-        if let Some(parent) = log_file_path.parent()
-            && let Err(e) = tokio::fs::create_dir_all(parent).await
-        {
-            log::error!("Failed to create log directory: {}", e);
+        let Some((mut file, current_size)) = Self::open_audit_log_file(&log_file_path).await else {
             return;
-        }
-
-        let mut file = match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file_path)
-            .await
-        {
-            Ok(f) => f,
-            Err(e) => {
-                log::error!("Failed to open audit log file: {}", e);
-                return;
-            }
         };
-
-        let current_size = AtomicU64::new(
-            tokio::fs::metadata(&log_file_path)
-                .await
-                .map(|m| m.len())
-                .unwrap_or(0),
-        );
 
         let mut buffer: Vec<String> = Vec::with_capacity(100);
         let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -127,6 +104,22 @@ impl AuditLogger {
 
         let mut consecutive_errors: u32 = 0;
         const ERROR_THRESHOLD: u32 = 10;
+
+        macro_rules! flush_or_die {
+            () => {{
+                consecutive_errors = Self::flush_buffer(
+                    &mut file,
+                    &mut buffer,
+                    &log_file_path,
+                    max_file_size,
+                    max_files,
+                    &current_size,
+                    consecutive_errors,
+                )
+                .await;
+                consecutive_errors >= ERROR_THRESHOLD
+            }};
+        }
 
         loop {
             tokio::select! {
@@ -136,72 +129,80 @@ impl AuditLogger {
                             if let Ok(line) = serde_json::to_string(&event) {
                                 current_size.fetch_add(line.len() as u64 + 1, Ordering::Relaxed);
                                 buffer.push(line);
-                                if buffer.len() >= 100 {
-                                    consecutive_errors = Self::flush_buffer(
-                                        &mut file,
-                                        &mut buffer,
-                                        &log_file_path,
-                                        max_file_size,
-                                        max_files,
-                                        &current_size,
-                                        consecutive_errors,
-                                    ).await;
-                                    if consecutive_errors >= ERROR_THRESHOLD { break; }
+                                if buffer.len() >= 100 && flush_or_die!() {
+                                    break;
                                 }
                             }
                         }
                         Some(LoggerCommand::Flush(ack)) => {
                             // Drain pending events before flushing
-                            while let Ok(cmd) = receiver.try_recv() {
-                                if let LoggerCommand::Event(event) = cmd
-                                    && let Ok(line) = serde_json::to_string(&event)
-                                {
-                                    current_size.fetch_add(line.len() as u64 + 1, Ordering::Relaxed);
-                                    buffer.push(line);
-                                }
-                                // Drop nested Flush acks — caller's flush is in flight
+                            Self::drain_pending_events(&mut receiver, &mut buffer, &current_size);
+                            if flush_or_die!() {
+                                break;
                             }
-                            consecutive_errors = Self::flush_buffer(
-                                &mut file,
-                                &mut buffer,
-                                &log_file_path,
-                                max_file_size,
-                                max_files,
-                                &current_size,
-                                consecutive_errors,
-                            ).await;
                             let _ = ack.send(());
-                            if consecutive_errors >= ERROR_THRESHOLD { break; }
                         }
                         None => {
-                            // Channel closed: final flush and exit
-                            Self::flush_buffer(
-                                &mut file,
-                                &mut buffer,
-                                &log_file_path,
-                                max_file_size,
-                                max_files,
-                                &current_size,
-                                consecutive_errors,
-                            ).await;
+                            // Channel closed: final flush and exit（阈值检查随退出无意义）
+                            let _ = flush_or_die!();
                             break;
                         }
                     }
                 }
                 _ = interval.tick() => {
-                    if !buffer.is_empty() {
-                        consecutive_errors = Self::flush_buffer(
-                            &mut file,
-                            &mut buffer,
-                            &log_file_path,
-                            max_file_size,
-                            max_files,
-                            &current_size,
-                            consecutive_errors,
-                        ).await;
-                        if consecutive_errors >= ERROR_THRESHOLD { break; }
+                    if !buffer.is_empty() && flush_or_die!() {
+                        break;
                     }
                 }
+            }
+        }
+    }
+
+    /// 打开（或创建）审计日志文件并快照当前尺寸；目录缺失先建，失败时
+    /// 由调用方直接退出（审计落盘不可用必须显性缺失而非静默丢弃）。
+    async fn open_audit_log_file(log_file_path: &PathBuf) -> Option<(tokio::fs::File, AtomicU64)> {
+        if let Some(parent) = log_file_path.parent()
+            && let Err(e) = tokio::fs::create_dir_all(parent).await
+        {
+            log::error!("Failed to create log directory: {}", e);
+            return None;
+        }
+
+        let file = match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file_path)
+            .await
+        {
+            Ok(f) => f,
+            Err(e) => {
+                log::error!("Failed to open audit log file: {}", e);
+                return None;
+            }
+        };
+
+        let current_size = AtomicU64::new(
+            tokio::fs::metadata(log_file_path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0),
+        );
+        Some((file, current_size))
+    }
+
+    /// Flush 前排水：把通道中积压的 Event 并入缓冲（嵌套 Flush ack 直接
+    /// 丢弃——调用方的 flush 已在途）。
+    fn drain_pending_events(
+        receiver: &mut mpsc::UnboundedReceiver<LoggerCommand>,
+        buffer: &mut Vec<String>,
+        current_size: &AtomicU64,
+    ) {
+        while let Ok(cmd) = receiver.try_recv() {
+            if let LoggerCommand::Event(event) = cmd
+                && let Ok(line) = serde_json::to_string(&event)
+            {
+                current_size.fetch_add(line.len() as u64 + 1, Ordering::Relaxed);
+                buffer.push(line);
             }
         }
     }

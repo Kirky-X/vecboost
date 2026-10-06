@@ -16,7 +16,6 @@ use vecboost::engine::{AnyEngine, InferenceEngine};
 use vecboost::error::VecboostError;
 
 /// 默认 Mock 向量维度
-#[allow(dead_code)]
 pub const DEFAULT_MOCK_DIMENSION: usize = 1024;
 
 // ---------------------------------------------------------------------------
@@ -48,12 +47,6 @@ impl TestMode {
     /// 检查是否使用 Mock 模式
     pub fn is_mock(&self) -> bool {
         matches!(self, TestMode::Mock)
-    }
-
-    /// 检查是否使用真实推理
-    #[allow(dead_code)]
-    pub fn is_real(&self) -> bool {
-        matches!(self, TestMode::Light | TestMode::Full)
     }
 }
 
@@ -192,7 +185,6 @@ pub struct RealTestEngine {
     expected_dimension: usize,
 }
 
-#[allow(dead_code)]
 impl RealTestEngine {
     /// 创建新的 RealTestEngine
     ///
@@ -251,19 +243,9 @@ impl RealTestEngine {
         }
     }
 
-    /// 检查是否使用真实推理
-    pub fn is_using_real_engine(&self) -> bool {
-        self.real_engine.is_some() && !self.use_fallback
-    }
-
     /// 检查是否使用回退
     pub fn is_using_fallback(&self) -> bool {
         self.use_fallback
-    }
-
-    /// 获取当前使用的引擎信息
-    pub fn engine_info(&self) -> &str {
-        if self.use_fallback { "mock" } else { "real" }
     }
 }
 
@@ -386,7 +368,6 @@ impl InferenceEngine for RealTestEngine {
 ///
 /// 默认使用 `RealTestEngine`（mock 模式，无外部依赖）。
 /// 通过 `TEST_MODE` 环境变量可切换为真实推理。
-#[allow(dead_code)]
 pub fn create_test_engine()
 -> Result<Arc<RwLock<dyn InferenceEngine + Send + Sync>>, Box<dyn std::error::Error>> {
     let mode = TestMode::from_env();
@@ -401,91 +382,11 @@ pub fn create_test_engine()
 }
 
 /// 创建指定维度的测试引擎
-#[allow(dead_code)]
 pub fn create_test_engine_with_dimension(
     dimension: usize,
 ) -> Result<Arc<RwLock<dyn InferenceEngine + Send + Sync>>, Box<dyn std::error::Error>> {
     let engine = RealTestEngine::with_dimension(dimension);
     Ok(Arc::new(RwLock::new(engine)))
-}
-
-// ---------------------------------------------------------------------------
-// Candle 决策头对齐测试先决条件（集中一处，candle_decision_parity 复用）
-// ---------------------------------------------------------------------------
-
-/// onnxruntime 动态库的平台默认落位（`ort/load-dynamic` 运行时依赖，
-/// 见 3rdparty/onnxruntime/README.md）。
-#[cfg(target_os = "macos")]
-const ORT_DEFAULT_DYLIB: &str = "3rdparty/onnxruntime/libonnxruntime.dylib";
-#[cfg(target_os = "windows")]
-const ORT_DEFAULT_DYLIB: &str = "3rdparty/onnxruntime/libonnxruntime.dll";
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-const ORT_DEFAULT_DYLIB: &str = "3rdparty/onnxruntime/libonnxruntime.so";
-
-/// candle 原生决策头与 onnx `DecisionPipeline` 同题对拍的先决资产。
-#[allow(dead_code)]
-pub struct CandleParityAssets {
-    /// 官方 `convaiinnovations/laya` checkpoint（获取步骤见
-    /// docs/USER_GUIDE.md「Candle 原生决策路径」）。
-    pub checkpoint: PathBuf,
-    /// onnx 对拍侧会话加载所需的动态库路径。
-    pub ort_dylib: PathBuf,
-    /// onnx 对拍侧官方 bundle（receptron/laya-onnx 产物）。
-    pub onnx_bundle: PathBuf,
-}
-
-impl CandleParityAssets {
-    /// 确保进程内 `ORT_DYLIB_PATH` 环境变量就位（未显式设置时回填默认落位；
-    /// ort/load-dynamic 在首个 Session 创建时按该变量加载动态库）。
-    #[allow(dead_code)]
-    pub fn ensure_ort_env(&self) {
-        if std::env::var_os("ORT_DYLIB_PATH").is_none() {
-            unsafe {
-                std::env::set_var("ORT_DYLIB_PATH", &self.ort_dylib);
-            }
-        }
-    }
-}
-
-/// 聚合探测 checkpoint safetensors、onnxruntime 动态库与 onnx 对拍 bundle；
-/// `Err` 携带缺失原因清单，调用方据此 SKIP（离线红线：资产缺失不硬失败）。
-#[allow(dead_code)]
-pub fn candle_parity_assets() -> Result<CandleParityAssets, String> {
-    let checkpoint = PathBuf::from("models/laya-pytorch/model.safetensors");
-    let ort_dylib = match std::env::var("ORT_DYLIB_PATH") {
-        Ok(p) => PathBuf::from(p),
-        Err(_) => PathBuf::from(ORT_DEFAULT_DYLIB),
-    };
-    let onnx_bundle = PathBuf::from("models/laya");
-    let mut missing = Vec::new();
-    if !checkpoint.is_file() {
-        missing.push(format!(
-            "checkpoint 缺失：{}（获取步骤见 docs/USER_GUIDE.md）",
-            checkpoint.display()
-        ));
-    }
-    if !ort_dylib.is_file() {
-        missing.push(format!(
-            "onnxruntime 动态库缺失：{}（ORT_DYLIB_PATH 或默认落位）",
-            ort_dylib.display()
-        ));
-    }
-    if !onnx_bundle.join("laya.onnx").is_file() {
-        missing.push(format!(
-            "onnx 对拍 bundle 缺失：{}/laya.onnx（receptron/laya-onnx，获取步骤见 \
-             docs/USER_GUIDE.md）",
-            onnx_bundle.display()
-        ));
-    }
-    if missing.is_empty() {
-        Ok(CandleParityAssets {
-            checkpoint,
-            ort_dylib,
-            onnx_bundle,
-        })
-    } else {
-        Err(missing.join("; "))
-    }
 }
 
 #[cfg(test)]

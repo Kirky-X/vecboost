@@ -9,22 +9,33 @@
 //!
 //! 口径（spec R-observability-002）：仅通过服务层校验链且通过业务判定的
 //! 请求 +1；零配置 / 未配置 pair 等 400 拒绝不计数。
+//!
+//! prometheus_exporter 模块由 http feature 门控，非 http 构建下本文件整体
+//! 不编译（#![cfg]）。
 
-use std::path::{Path, PathBuf};
+#![cfg(feature = "http")]
+
 use std::sync::Arc;
 
-use serde_json::json;
 use tokio::sync::RwLock;
 
 use async_trait::async_trait;
-use vecboost::config::model::{DeviceType, EngineType, ModelConfig, ModelTask, TranslationParams};
+#[cfg(feature = "onnx")]
+use std::path::Path;
+#[cfg(feature = "onnx")]
+use vecboost::config::model::{DeviceType, EngineType, ModelTask};
+use vecboost::config::model::{ModelConfig, TranslationParams};
 use vecboost::domain::TranslateRequest;
-use vecboost::engine::{AnyEngine, EngineFactory, InferenceEngine};
+#[cfg(feature = "onnx")]
+use vecboost::engine::EngineFactory;
+use vecboost::engine::InferenceEngine;
 use vecboost::metrics::prometheus_exporter::{PrometheusCollector, set_global_collector};
 use vecboost::service::translate::{TranslatePairRoute, TranslateService};
 
+#[cfg(feature = "onnx")]
 const OPUS_EN_ZH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/models/opus-mt-en-zh");
 
+#[cfg(feature = "onnx")]
 fn opus_ready() -> bool {
     Path::new(OPUS_EN_ZH)
         .join("onnx/encoder_model.onnx")
@@ -139,67 +150,71 @@ async fn translate_counter_counts_only_successful_requests() {
     // ── 成功请求：+1（真机 bundle 守卫；缺失时跳过该段，拒绝段断言不受
     // 影响。dylib 探测必须在 Session 构建前：ort/load-dynamic 缺库为
     // 非 unwinding panic 会 SIGABRT 拖垮测试进程——decision.rs 同款先例）──
-    let dylib = std::env::var("ORT_DYLIB_PATH").unwrap_or_else(|_| {
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/3rdparty/onnxruntime/libonnxruntime.so"
-        )
-        .to_string()
-    });
-    if !Path::new(&dylib).is_file() {
-        println!("SKIP [success-path segment]: onnxruntime dylib 缺失（{dylib}）");
-        return;
-    }
-    if std::env::var_os("ORT_DYLIB_PATH").is_none() {
-        // SAFETY: 测试进程内单线程时点回填一次
-        unsafe {
-            std::env::set_var("ORT_DYLIB_PATH", &dylib);
+    // 段内 EngineType::Onnx 由 onnx feature 门控，无 onnx 构建下整段不编译。
+    #[cfg(feature = "onnx")]
+    {
+        let dylib = std::env::var("ORT_DYLIB_PATH").unwrap_or_else(|_| {
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/3rdparty/onnxruntime/libonnxruntime.so"
+            )
+            .to_string()
+        });
+        if !Path::new(&dylib).is_file() {
+            println!("SKIP [success-path segment]: onnxruntime dylib 缺失（{dylib}）");
+            return;
         }
-    }
-    if !opus_ready() {
-        println!("SKIP [success-path segment]: opus-mt-en-zh bundle 缺失");
-        return;
-    }
-    let any = EngineFactory::create(
-        EngineType::Onnx,
-        &ModelConfig {
-            name: "counter-e2e".to_string(),
-            engine_type: EngineType::Onnx,
-            model_path: PathBuf::from(OPUS_EN_ZH),
-            device: DeviceType::Cpu,
-            max_batch_size: 1,
-            oom_fallback_enabled: false,
-            task: ModelTask::Translate,
-            translation_params: Some(TranslationParams::new(512, 512).unwrap()),
-            ..Default::default()
-        },
-    )
-    .expect("bundle 就绪时必须可加载");
-    let engine: Arc<RwLock<dyn InferenceEngine>> = Arc::new(RwLock::new(any));
-    assert!(engine.read().await.supports_task(ModelTask::Translate));
+        if std::env::var_os("ORT_DYLIB_PATH").is_none() {
+            // SAFETY: 测试进程内单线程时点回填一次
+            unsafe {
+                std::env::set_var("ORT_DYLIB_PATH", &dylib);
+            }
+        }
+        if !opus_ready() {
+            println!("SKIP [success-path segment]: opus-mt-en-zh bundle 缺失");
+            return;
+        }
+        let any = EngineFactory::create(
+            EngineType::Onnx,
+            &ModelConfig {
+                name: "counter-e2e".to_string(),
+                engine_type: EngineType::Onnx,
+                model_path: std::path::PathBuf::from(OPUS_EN_ZH),
+                device: DeviceType::Cpu,
+                max_batch_size: 1,
+                oom_fallback_enabled: false,
+                task: ModelTask::Translate,
+                translation_params: Some(TranslationParams::new(512, 512).unwrap()),
+                ..Default::default()
+            },
+        )
+        .expect("bundle 就绪时必须可加载");
+        let engine: Arc<RwLock<dyn InferenceEngine>> = Arc::new(RwLock::new(any));
+        assert!(engine.read().await.supports_task(ModelTask::Translate));
 
-    let mut pairs = std::collections::HashMap::new();
-    pairs.insert(
-        ("en".to_string(), "zh".to_string()),
-        TranslatePairRoute::new(engine, TranslationParams::default()),
-    );
-    let svc = TranslateService::new(pairs);
-    let resp = svc
-        .process_translate(req(Some("en"), "zh", "hello"))
-        .await
-        .expect("成功路径必须 200");
-    assert!(!resp.translation.trim().is_empty());
-    assert_eq!(
-        read_counter(&collector),
-        c0 + 1,
-        "成功请求必须恰好 +1（400 类不得贡献计数）"
-    );
+        let mut pairs = std::collections::HashMap::new();
+        pairs.insert(
+            ("en".to_string(), "zh".to_string()),
+            TranslatePairRoute::new(engine, TranslationParams::default()),
+        );
+        let svc = TranslateService::new(pairs);
+        let resp = svc
+            .process_translate(req(Some("en"), "zh", "hello"))
+            .await
+            .expect("成功路径必须 200");
+        assert!(!resp.translation.trim().is_empty());
+        assert_eq!(
+            read_counter(&collector),
+            c0 + 1,
+            "成功请求必须恰好 +1（400 类不得贡献计数）"
+        );
 
-    // 二次成功：再 +1
-    svc.process_translate(req(Some("en"), "zh", "world"))
-        .await
-        .expect("second success");
-    assert_eq!(read_counter(&collector), c0 + 2, "第二次成功再 +1");
+        // 二次成功：再 +1
+        svc.process_translate(req(Some("en"), "zh", "world"))
+            .await
+            .expect("second success");
+        assert_eq!(read_counter(&collector), c0 + 2, "第二次成功再 +1");
+    }
 }
 
 struct EmbeddingOnlyEngine;
@@ -232,14 +247,4 @@ impl InferenceEngine for EmbeddingOnlyEngine {
     ) -> Result<(), vecboost::error::VecboostError> {
         Ok(())
     }
-}
-
-// AnyEngine unused 抑制（成功段经 EngineFactory 产出 AnyEngine 装入 trait object）
-#[allow(unused)]
-fn _any_engine_type_pin(_e: &AnyEngine) {}
-
-// json 未直接使用（保留与 e2e 同构的依赖位），避免 unused 警告
-#[allow(unused)]
-fn _json_dep_pin() -> serde_json::Value {
-    json!(null)
 }

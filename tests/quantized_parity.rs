@@ -9,6 +9,7 @@
 //! 1. env `VECBOOST_GGUF_MODEL`（真实 llama.cpp 转换文件，走 gguf 加载路径）；
 //! 2. 本地 `models/BAAI-bge-small-en-v1.5` 自产 GGUF（写出门 + 加载桥端到端，
 //!    零网络依赖；feature `quantized-gguf` 必须启用）。
+//!
 //! 两者都不可用时 skip。余弦计算内嵌实现，不依赖 GPU 与外部服务。
 
 use std::path::{Path, PathBuf};
@@ -126,6 +127,7 @@ fn fp32_engine(model_path: &Path) -> AnyEngine {
         task: ModelTask::Embedding,
         quantized: false,
         decision_params: None,
+        translation_params: None,
     };
     AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("fp32 引擎加载失败")
 }
@@ -146,6 +148,7 @@ fn quantized_engine(gguf_path: &Path) -> AnyEngine {
         task: ModelTask::Embedding,
         quantized: true,
         decision_params: None,
+        translation_params: None,
     };
     // 必须经 EngineFactory（量化路由在此）；AnyEngine::new 是不走路由的原始构造
     vecboost::engine::EngineFactory::create(EngineType::Candle, &config)

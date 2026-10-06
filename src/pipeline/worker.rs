@@ -422,25 +422,7 @@ impl WorkerManager {
                     // （每 5ms 一次在深队列下持写锁重排，审查 PERF-6）
                     if last_reap.elapsed() >= Duration::from_millis(250) {
                         last_reap = std::time::Instant::now();
-                        for expired_req in queue.dequeue_expired().await {
-                            queue.cancellations().release(&expired_req.request_id);
-                            response_channel
-                                .complete(
-                                    expired_req.request_id.clone(),
-                                    Err(VecboostError::RequestTimeout(format!(
-                                        "request waited {:.1}s in queue, exceeding its {}s SLA",
-                                        expired_req.submitted_at.elapsed().as_secs_f64(),
-                                        expired_req.timeout.as_secs_f64()
-                                    ))),
-                                )
-                                .await;
-                        }
-                        // 过期响应条目清扫：取消丢弃路径（断连/服务端超时置位
-                        // 取消后出队即弃）的通道条目永远不会被 complete——worker
-                        // 看不到该请求，deregister 仅覆盖入队失败分支。条目按
-                        // 自身 timeout 到期在此移除，闭合无界增长面（三路评审
-                        // M×3）；此时 handler 已返回、rx 已 drop，清扫零副作用
-                        response_channel.cleanup_expired().await;
+                        Self::reap_expired_requests(&queue, &response_channel).await;
                     }
 
                     // 时间窗动态拼批——首请求后开 batch_wait_ms 窗口继续聚合，
@@ -454,26 +436,7 @@ impl WorkerManager {
                     )
                     .await;
                     let waited_secs = wait_start.elapsed().as_secs_f64();
-                    // 埋点：批次大小与窗口等待时长，按批构成选标签——决策接入
-                    // 共享拼批后混批是常态，恒挂 embed 标签会把决策负载误计入
-                    // embed 容量画像（三路评审 M）。HistogramVec operation 为
-                    // 自由标签，无需新注册
-                    #[cfg(feature = "http")]
-                    if let Some(collector) = crate::metrics::prometheus_exporter::global_collector()
-                    {
-                        let has_embed = batch
-                            .iter()
-                            .any(|r| matches!(r.request, ServiceRequest::Embed(_)));
-                        let has_decision = batch
-                            .iter()
-                            .any(|r| matches!(r.request, ServiceRequest::Decision(_)));
-                        let operation = match (has_embed, has_decision) {
-                            (true, false) => "embed",
-                            (false, true) => "decision",
-                            _ => "mixed",
-                        };
-                        collector.observe_batch(operation, batch.len(), waited_secs);
-                    }
+                    Self::record_batch_composition(&batch, waited_secs);
                     debug!(
                         "Worker {} assembled batch of {} (wait {:.3}s, window {}ms)",
                         worker_id,
@@ -483,43 +446,8 @@ impl WorkerManager {
                     );
 
                     // SLA 淘汰——拼批窗口内可能有请求到达自身 timeout，出批时再查一次
-                    let now = std::time::Instant::now();
-                    let mut valid_batch = Vec::with_capacity(batch.len());
-                    for req in batch {
-                        // 排队延迟可观测（T033）：入队→出队等待时长；
-                        // 决策请求走专属指标（P2-3），embed/rerank 维持既有口径
-                        #[cfg(feature = "http")]
-                        if let Some(collector) = crate::metrics::prometheus_exporter::global_collector()
-                        {
-                            let wait_secs = now.duration_since(req.submitted_at).as_secs_f64();
-                            match &req.request {
-                                ServiceRequest::Decision(_) => {
-                                    collector.observe_decision_queue_wait(wait_secs);
-                                }
-                                _ => collector.observe_queue_wait("embed", wait_secs),
-                            }
-                        }
-                        if now.duration_since(req.submitted_at) >= req.timeout {
-                            warn!(
-                                "Request {} expired in queue ({:.1}s), rejecting",
-                                req.request_id,
-                                now.duration_since(req.submitted_at).as_secs_f64()
-                            );
-                            queue.cancellations().release(&req.request_id);
-                            response_channel
-                                .complete(
-                                    req.request_id.clone(),
-                                    Err(VecboostError::RequestTimeout(format!(
-                                        "request waited {:.1}s in queue, exceeding its {}s SLA",
-                                        now.duration_since(req.submitted_at).as_secs_f64(),
-                                        req.timeout.as_secs_f64()
-                                    ))),
-                                )
-                                .await;
-                        } else {
-                            valid_batch.push(req);
-                        }
-                    }
+                    let valid_batch =
+                        Self::evict_expired_batch_requests(&queue, &response_channel, batch).await;
 
                     if valid_batch.is_empty() {
                         continue;
@@ -530,47 +458,15 @@ impl WorkerManager {
                         worker_id, valid_batch.len()
                     );
 
-                    // panic 隔离（T029）：推理 panic 不再带走 worker——
-                    // 经 JoinHandle 捕获，批内未完成请求统一补 InternalError。
-                    // 整批 mem::take move 进闭包（决策请求含递归 Value 深拷贝
-                    // 成本高且由用户输入定大小，热路径不做整批 clone，三路
-                    // 评审 M）；批后清理只按 request_id 释放取消注册表
-                    let batch_for_panic: Vec<String> = valid_batch
-                        .iter()
-                        .map(|r| r.request_id.clone())
-                        .collect();
-                    let svc = Arc::clone(&embedding_service);
-                    let ds = decision_service.clone();
-                    let chan = Arc::clone(&response_channel);
-                    let batch_owned = std::mem::take(&mut valid_batch);
-                    let handle = tokio::spawn(async move {
-                        Self::process_batch_requests(batch_owned, &svc, ds.as_ref(), &chan).await
-                    });
-                    match handle.await {
-                        Ok(()) => {}
-                        Err(join_err) => {
-                            error!(
-                                "Worker {} inference panicked: {}",
-                                worker_id,
-                                join_err
-                            );
-                            for rid in &batch_for_panic {
-                                response_channel
-                                    .complete(
-                                        rid.clone(),
-                                        Err(VecboostError::InternalError(
-                                            "inference task panicked".to_string(),
-                                        )),
-                                    )
-                                    .await;
-                            }
-                        }
-                    }
-                    // 释放取消注册表条目（响应已送达或已补错）——
-                    // batch_for_panic 与整批的 request_id 集合一致
-                    for rid in &batch_for_panic {
-                        queue.cancellations().release(rid);
-                    }
+                    Self::execute_batch_with_panic_isolation(
+                        worker_id,
+                        &queue,
+                        &response_channel,
+                        &embedding_service,
+                        decision_service.as_ref(),
+                        valid_batch,
+                    )
+                    .await;
                 }
                 // 队列为空时等待入队通知，消除指数退避轮询
                 // 使用 timeout 实现空闲超时退出
@@ -586,22 +482,7 @@ impl WorkerManager {
                         Err(_) => {
                             // 空闲超时:顺带收割过期请求（兜底全部 worker 挂起时
                             // 队列残留过期项的场景），再增加空闲计数
-                            for expired_req in queue.dequeue_expired().await {
-                                queue.cancellations().release(&expired_req.request_id);
-                                response_channel
-                                    .complete(
-                                        expired_req.request_id.clone(),
-                                        Err(VecboostError::RequestTimeout(format!(
-                                            "request waited {:.1}s in queue, exceeding its {}s SLA",
-                                            expired_req.submitted_at.elapsed().as_secs_f64(),
-                                            expired_req.timeout.as_secs_f64()
-                                        ))),
-                                    )
-                                    .await;
-                            }
-                            // 空闲路径同样清扫过期响应条目（取消丢弃泄漏类的
-                            // 兜底通道，与出队分支收割点同语义）
-                            response_channel.cleanup_expired().await;
+                            Self::reap_expired_requests(&queue, &response_channel).await;
                             idle_count = idle_count.saturating_add(1);
                             debug!(
                                 "Worker {} idle timeout ({}s), idle_count={}",
@@ -637,6 +518,147 @@ impl WorkerManager {
     }
 
     /// 减少 worker 计数并返回剩余数量
+    /// SLA 收割 + 过期响应条目清扫：排队超过自身 timeout 的请求统一补
+    /// 超时响应并释放取消注册；取消丢弃路径（断连/服务端超时置位取消后
+    /// 出队即弃）的通道条目永远不会被 complete——worker 看不到该请求，
+    /// deregister 仅覆盖入队失败分支，条目按自身 timeout 到期在此移除，
+    /// 闭合无界增长面（三路评审 M×3）；此时 handler 已返回、rx 已 drop，
+    /// 清扫零副作用。出队臂（时间门控后）与空闲超时臂共用。
+    async fn reap_expired_requests(
+        queue: &Arc<PriorityRequestQueue>,
+        response_channel: &Arc<ResponseChannel>,
+    ) {
+        for expired_req in queue.dequeue_expired().await {
+            queue.cancellations().release(&expired_req.request_id);
+            response_channel
+                .complete(
+                    expired_req.request_id.clone(),
+                    Err(VecboostError::RequestTimeout(format!(
+                        "request waited {:.1}s in queue, exceeding its {}s SLA",
+                        expired_req.submitted_at.elapsed().as_secs_f64(),
+                        expired_req.timeout.as_secs_f64()
+                    ))),
+                )
+                .await;
+        }
+        response_channel.cleanup_expired().await;
+    }
+
+    /// 批构成埋点：批次大小与窗口等待时长，按批构成选标签——决策接入
+    /// 共享拼批后混批是常态，恒挂 embed 标签会把决策负载误计入
+    /// embed 容量画像（三路评审 M）。HistogramVec operation 为
+    /// 自由标签，无需新注册。
+    fn record_batch_composition(batch: &[QueuedRequest], waited_secs: f64) {
+        #[cfg(feature = "http")]
+        if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
+            let has_embed = batch
+                .iter()
+                .any(|r| matches!(r.request, ServiceRequest::Embed(_)));
+            let has_decision = batch
+                .iter()
+                .any(|r| matches!(r.request, ServiceRequest::Decision(_)));
+            let operation = match (has_embed, has_decision) {
+                (true, false) => "embed",
+                (false, true) => "decision",
+                _ => "mixed",
+            };
+            collector.observe_batch(operation, batch.len(), waited_secs);
+        }
+        #[cfg(not(feature = "http"))]
+        let _ = (batch, waited_secs);
+    }
+
+    /// 出批 SLA 淘汰：拼批窗口内可能有请求到达自身 timeout。逐请求记录
+    /// 排队延迟（决策请求走专属指标 P2-3，embed/rerank 维持既有口径），
+    /// 过期请求补超时响应并释放取消注册，返回存活批。
+    async fn evict_expired_batch_requests(
+        queue: &Arc<PriorityRequestQueue>,
+        response_channel: &Arc<ResponseChannel>,
+        batch: Vec<QueuedRequest>,
+    ) -> Vec<QueuedRequest> {
+        let now = std::time::Instant::now();
+        let mut valid_batch = Vec::with_capacity(batch.len());
+        for req in batch {
+            // 排队延迟可观测（T033）：入队→出队等待时长
+            #[cfg(feature = "http")]
+            if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
+                let wait_secs = now.duration_since(req.submitted_at).as_secs_f64();
+                match &req.request {
+                    ServiceRequest::Decision(_) => {
+                        collector.observe_decision_queue_wait(wait_secs);
+                    }
+                    _ => collector.observe_queue_wait("embed", wait_secs),
+                }
+            }
+            if now.duration_since(req.submitted_at) >= req.timeout {
+                warn!(
+                    "Request {} expired in queue ({:.1}s), rejecting",
+                    req.request_id,
+                    now.duration_since(req.submitted_at).as_secs_f64()
+                );
+                queue.cancellations().release(&req.request_id);
+                response_channel
+                    .complete(
+                        req.request_id.clone(),
+                        Err(VecboostError::RequestTimeout(format!(
+                            "request waited {:.1}s in queue, exceeding its {}s SLA",
+                            now.duration_since(req.submitted_at).as_secs_f64(),
+                            req.timeout.as_secs_f64()
+                        ))),
+                    )
+                    .await;
+            } else {
+                valid_batch.push(req);
+            }
+        }
+        valid_batch
+    }
+
+    /// panic 隔离（T029）：推理 panic 不再带走 worker——经 JoinHandle 捕获，
+    /// 批内未完成请求统一补 InternalError。整批 mem::take move 进闭包
+    /// （决策请求含递归 Value 深拷贝成本高且由用户输入定大小，热路径不做
+    /// 整批 clone，三路评审 M）；批后清理只按 request_id 释放取消注册表。
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_batch_with_panic_isolation(
+        worker_id: usize,
+        queue: &Arc<PriorityRequestQueue>,
+        response_channel: &Arc<ResponseChannel>,
+        embedding_service: &Arc<RwLock<EmbeddingService>>,
+        decision_service: Option<&Arc<RwLock<DecisionService>>>,
+        valid_batch: Vec<QueuedRequest>,
+    ) {
+        let batch_for_panic: Vec<String> =
+            valid_batch.iter().map(|r| r.request_id.clone()).collect();
+        let svc = Arc::clone(embedding_service);
+        let ds = decision_service.cloned();
+        let chan = Arc::clone(response_channel);
+        let batch_owned = valid_batch;
+        let handle = tokio::spawn(async move {
+            Self::process_batch_requests(batch_owned, &svc, ds.as_ref(), &chan).await
+        });
+        match handle.await {
+            Ok(()) => {}
+            Err(join_err) => {
+                error!("Worker {} inference panicked: {}", worker_id, join_err);
+                for rid in &batch_for_panic {
+                    response_channel
+                        .complete(
+                            rid.clone(),
+                            Err(VecboostError::InternalError(
+                                "inference task panicked".to_string(),
+                            )),
+                        )
+                        .await;
+                }
+            }
+        }
+        // 释放取消注册表条目（响应已送达或已补错）——
+        // batch_for_panic 与整批的 request_id 集合一致
+        for rid in &batch_for_panic {
+            queue.cancellations().release(rid);
+        }
+    }
+
     fn decrement_worker_count(current_workers: &Arc<AtomicUsize>) -> usize {
         current_workers.fetch_sub(1, Ordering::SeqCst) - 1
     }

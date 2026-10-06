@@ -27,8 +27,6 @@ pub async fn metrics_endpoint(
     State(app_state): State<crate::VecboostState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    use prometheus::Encoder;
-
     let ip = addr.ip().to_string();
 
     // 提前获取 PrometheusCollector（限流指标记录 + 指标导出共用）
@@ -40,50 +38,10 @@ pub async fn metrics_endpoint(
             None
         });
 
-    if app_state
-        .kit
-        .config::<crate::registry::RateLimitEnabled>()
-        .map(|c| c.0)
-        .unwrap_or(false)
+    if let Some(rejection) =
+        enforce_metrics_rate_limit(&app_state, &ip, collector_opt.as_ref()).await
     {
-        let ip_whitelist = app_state
-            .kit
-            .require::<crate::registry::IpWhitelistModule>()
-            .unwrap_or_else(|e| {
-                log::error!("IpWhitelistModule not registered: {}", e);
-                Vec::new()
-            });
-
-        if !is_ip_whitelisted(&ip, &ip_whitelist) {
-            let context = crate::rate_limit::RequestContext {
-                client_ip: Some(ip.clone()),
-                path: "/metrics".to_string(),
-                method: "GET".to_string(),
-                ..Default::default()
-            };
-            let allowed = match app_state.kit.require::<crate::registry::RateLimitModule>() {
-                Ok(limiter) => limiter.check_rate_limit(&context).await,
-                Err(e) => {
-                    // Fail-closed: RateLimitEnabled=true but module unavailable → deny request
-                    log::error!(
-                        "RateLimitModule not available while RateLimitEnabled=true: {}. Denying request.",
-                        e
-                    );
-                    return json_error_response(500, &i18n::tr("metrics-limiter-unavailable"));
-                }
-            };
-            // 记录限流决策指标
-            if let Some(prom) = collector_opt.as_ref() {
-                if allowed {
-                    prom.record_rate_limit_allowed("metrics_ip");
-                } else {
-                    prom.record_rate_limit_denied("metrics_ip");
-                }
-            }
-            if !allowed {
-                return json_error_response(429, &i18n::tr("metrics-rate-limited"));
-            }
-        }
+        return rejection;
     }
 
     let prometheus_collector = match collector_opt.as_ref() {
@@ -92,52 +50,16 @@ pub async fn metrics_endpoint(
             return json_error_response(500, &i18n::tr("metrics-collector-missing"));
         }
     };
-    // 拉取时快照 pipeline 状态(队列深度 / 在途请求)
-    if let Ok(queue) = app_state
-        .kit
-        .require::<crate::registry::PipelineQueueModule>()
-    {
-        let in_flight =
-            crate::pipeline::handler::IN_FLIGHT_REQUESTS.load(std::sync::atomic::Ordering::Relaxed);
-        prometheus_collector.set_pipeline_snapshot(queue.size() as i64, in_flight as i64);
-    }
+    snapshot_pipeline_state(&app_state, prometheus_collector);
 
-    let encoder = prometheus::TextEncoder::new();
-    #[allow(unused_mut)] // extend 仅在 metrics 聚合 feature 下发生
-    let mut metric_families = prometheus_collector.registry().gather();
-    // garrison metrics-prometheus（auth feature）：GarrisonMetrics::new() 的 OnceLock
-    // 单例把 garrison_* auth 域指标注册在 prometheus default_registry，与上方
-    // collector 自有 registry 是两个注册表，此处合并导出（garrison_ 前缀无重名冲突）
-    #[cfg(feature = "auth")]
-    metric_families.extend(prometheus::default_registry().gather());
-    let mut buffer = Vec::new();
-
-    if let Err(e) = encoder.encode(&metric_families, &mut buffer) {
-        return json_error_response(
-            500,
-            &i18n::tr_with_args(
-                "metrics-encode-failed",
-                i18n::tr_args(&[("detail", &e.to_string())]),
-            ),
-        );
-    }
-
-    // Append dbnexus MetricsCollector output (pool/connection/query metrics)
-    #[cfg(feature = "db")]
-    if let Ok(Some(db_metrics)) = app_state
-        .kit
-        .config::<Option<Arc<dbnexus::MetricsCollector>>>()
-    {
-        let db_text = db_metrics.export_prometheus();
-        if !db_text.is_empty() {
-            buffer.extend_from_slice(b"\n");
-            buffer.extend_from_slice(db_text.as_bytes());
-        }
-    }
+    let (buffer, content_type) = match encode_metrics_body(&app_state, prometheus_collector) {
+        Ok(body) => body,
+        Err((status, message)) => return json_error_response(status, &message),
+    };
 
     match Response::builder()
         .status(200)
-        .header("Content-Type", encoder.format_type())
+        .header("Content-Type", content_type)
         .body(Body::from(buffer))
     {
         Ok(resp) => resp.into_response(),
@@ -146,6 +68,132 @@ pub async fn metrics_endpoint(
             json_error_response(500, &i18n::tr("metrics-encode-failed"))
         }
     }
+}
+
+/// /metrics 限流闸门：RateLimitEnabled=true 时按 IP 白名单边界执行
+/// 限流判定并记录决策指标。`Some(resp)` = 拒绝（429）或限流器不可用
+/// （fail-closed 500）；`None` = 放行。
+async fn enforce_metrics_rate_limit(
+    app_state: &crate::VecboostState,
+    ip: &str,
+    collector: Option<&std::sync::Arc<crate::metrics::prometheus_exporter::PrometheusCollector>>,
+) -> Option<axum::response::Response> {
+    if !app_state
+        .kit
+        .config::<crate::registry::RateLimitEnabled>()
+        .map(|c| c.0)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let ip_whitelist = app_state
+        .kit
+        .require::<crate::registry::IpWhitelistModule>()
+        .unwrap_or_else(|e| {
+            log::error!("IpWhitelistModule not registered: {}", e);
+            Vec::new()
+        });
+
+    if is_ip_whitelisted(ip, &ip_whitelist) {
+        return None;
+    }
+    let context = crate::rate_limit::RequestContext {
+        client_ip: Some(ip.to_string()),
+        path: "/metrics".to_string(),
+        method: "GET".to_string(),
+        ..Default::default()
+    };
+    let allowed = match app_state.kit.require::<crate::registry::RateLimitModule>() {
+        Ok(limiter) => limiter.check_rate_limit(&context).await,
+        Err(e) => {
+            // Fail-closed: RateLimitEnabled=true but module unavailable → deny request
+            log::error!(
+                "RateLimitModule not available while RateLimitEnabled=true: {}. Denying request.",
+                e
+            );
+            return Some(json_error_response(
+                500,
+                &i18n::tr("metrics-limiter-unavailable"),
+            ));
+        }
+    };
+    // 记录限流决策指标
+    if let Some(prom) = collector {
+        if allowed {
+            prom.record_rate_limit_allowed("metrics_ip");
+        } else {
+            prom.record_rate_limit_denied("metrics_ip");
+        }
+    }
+    if !allowed {
+        return Some(json_error_response(429, &i18n::tr("metrics-rate-limited")));
+    }
+    None
+}
+
+/// 拉取时快照 pipeline 状态（队列深度 / 在途请求），热路径零开销、
+/// pull 时点才采样。
+fn snapshot_pipeline_state(
+    app_state: &crate::VecboostState,
+    collector: &crate::metrics::prometheus_exporter::PrometheusCollector,
+) {
+    if let Ok(queue) = app_state
+        .kit
+        .require::<crate::registry::PipelineQueueModule>()
+    {
+        let in_flight =
+            crate::pipeline::handler::IN_FLIGHT_REQUESTS.load(std::sync::atomic::Ordering::Relaxed);
+        collector.set_pipeline_snapshot(queue.size() as i64, in_flight as i64);
+    }
+}
+
+/// 汇集 collector 自有 registry 与各聚合源（garrison auth 域指标、
+/// dbnexus MetricsCollector）为 text/plain 编码体；成功返回
+/// `(buffer, Content-Type)`（TextEncoder::format_type 单一事实源），
+/// 失败返回 `(status, i18n 文案)`。
+fn encode_metrics_body(
+    // dbnexus 追加段是唯一消费者；无 db 构建下参数不参与
+    #[cfg_attr(not(feature = "db"), allow(unused_variables))] app_state: &crate::VecboostState,
+    collector: &crate::metrics::prometheus_exporter::PrometheusCollector,
+) -> Result<(Vec<u8>, String), (u16, String)> {
+    use prometheus::Encoder;
+
+    let encoder = prometheus::TextEncoder::new();
+    #[allow(unused_mut)] // extend 仅在 metrics 聚合 feature 下发生
+    let mut metric_families = collector.registry().gather();
+    // garrison metrics-prometheus（auth feature）：GarrisonMetrics::new() 的 OnceLock
+    // 单例把 garrison_* auth 域指标注册在 prometheus default_registry，与上方
+    // collector 自有 registry 是两个注册表，此处合并导出（garrison_ 前缀无重名冲突）
+    #[cfg(feature = "auth")]
+    metric_families.extend(prometheus::default_registry().gather());
+    let mut buffer = Vec::new();
+
+    let content_type = encoder.format_type().to_string();
+    if let Err(e) = encoder.encode(&metric_families, &mut buffer) {
+        return Err((
+            500,
+            i18n::tr_with_args(
+                "metrics-encode-failed",
+                i18n::tr_args(&[("detail", &e.to_string())]),
+            )
+            .to_string(),
+        ));
+    }
+
+    // Append dbnexus MetricsCollector output (pool/connection/query metrics)
+    #[cfg(feature = "db")]
+    if let Ok(Some(db_metrics)) = app_state
+        .kit
+        .config::<Option<std::sync::Arc<dbnexus::MetricsCollector>>>()
+    {
+        let db_text = db_metrics.export_prometheus();
+        if !db_text.is_empty() {
+            buffer.extend_from_slice(b"\n");
+            buffer.extend_from_slice(db_text.as_bytes());
+        }
+    }
+
+    Ok((buffer, content_type))
 }
 
 /// Prometheus HTTP 请求指标记录中间件。

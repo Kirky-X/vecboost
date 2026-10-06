@@ -6,8 +6,9 @@
 //! 提供核心指标的收集和暴露功能
 
 use prometheus::{
-    CounterVec, GaugeVec, HistogramVec, Registry, register_counter_vec_with_registry,
-    register_gauge_vec_with_registry, register_histogram_vec_with_registry,
+    CounterVec, GaugeVec, Histogram, HistogramVec, IntCounter, IntGauge, Registry,
+    register_counter_vec_with_registry, register_gauge_vec_with_registry,
+    register_histogram_vec_with_registry,
 };
 use std::sync::Arc;
 
@@ -68,177 +69,29 @@ impl PrometheusCollector {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let registry = Arc::new(Registry::new());
 
-        // HTTP 请求总数（按端点、方法、状态码）
-        let http_requests_total = register_counter_vec_with_registry!(
-            "http_requests_total",
-            "Total number of HTTP requests",
-            &["method", "endpoint", "status"],
-            registry.clone()
-        )?;
-
-        // HTTP 请求延迟（按端点、方法）
-        let http_request_duration_seconds = register_histogram_vec_with_registry!(
-            "http_request_duration_seconds",
-            "HTTP request duration in seconds",
-            &["method", "endpoint"],
-            vec![
-                0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0
-            ],
-            registry.clone()
-        )?;
-
-        // pipeline 队列深度与在途请求(pull 时快照,热路径零开销)
-        let vecboost_queue_wait_seconds = register_histogram_vec_with_registry!(
-            "vecboost_queue_wait_seconds",
-            "Per-request wait from enqueue to dequeue",
-            &["operation"],
-            vec![
-                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0
-            ],
-            registry.clone()
-        )?;
-        let semantic_cache_fuzzy_hits = prometheus::register_int_counter_with_registry!(
-            "vecboost_semantic_cache_fuzzy_hits_total",
-            "Trigram fuzzy hits served by the semantic cache",
-            registry.clone()
-        )
-        .expect("register semantic_cache_fuzzy_hits");
-        let pipeline_queue_depth = prometheus::register_int_gauge_with_registry!(
-            "vecboost_pipeline_queue_depth",
-            "Number of requests waiting in the pipeline priority queue",
-            registry.clone()
-        )?;
-        let pipeline_in_flight = prometheus::register_int_gauge_with_registry!(
-            "vecboost_pipeline_in_flight_requests",
-            "Number of requests currently inside the pipeline (dequeued, awaiting completion)",
-            registry.clone()
-        )?;
-
-        // 活跃连接数
-        let active_connections = register_gauge_vec_with_registry!(
-            "active_connections",
-            "Number of active connections",
-            &["type"],
-            registry.clone()
-        )?;
-
-        // 批处理大小
-        let batch_size = register_histogram_vec_with_registry!(
-            "batch_size",
-            "Batch processing size",
-            &["operation"],
-            vec![1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0],
-            registry.clone()
-        )?;
-
-        // 时间窗拼批批次大小与等待时长（标签 operation 完整）
-        let vecboost_batch_size = register_histogram_vec_with_registry!(
-            "vecboost_batch_size",
-            "Worker time-window batch size",
-            &["operation"],
-            vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0],
-            registry.clone()
-        )?;
-        let vecboost_batch_wait_seconds = register_histogram_vec_with_registry!(
-            "vecboost_batch_wait_seconds",
-            "Worker time-window batch wait duration in seconds",
-            &["operation"],
-            vec![0.0, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1],
-            registry.clone()
-        )?;
-        // 批内去重率滚动 gauge
-        let vecboost_inbatch_dedup_ratio = register_gauge_vec_with_registry!(
-            "vecboost_inbatch_dedup_ratio",
-            "In-batch dedup ratio (n_unique savings)",
-            &["operation"],
-            registry.clone()
-        )?;
-        // 引擎分阶段延迟（stage 标签枚举固定为 tokenize|inference|pool）。
-        let vecboost_stage_seconds = register_histogram_vec_with_registry!(
-            "vecboost_stage_seconds",
-            "Engine stage latency in seconds",
-            &["stage"],
-            vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0],
-            registry.clone()
-        )?;
-
-        // 决策管线逐请求总时延（预处理→推理→后处理整链；histogram _count
-        // 即调用计数。决策管线不映射 Stage 三值——该枚举语义属 embedding
-        // 分阶段，决策观测走本独立指标）
-        let vecboost_decision_seconds = register_histogram_vec_with_registry!(
-            "vecboost_decision_seconds",
-            "Decision pipeline end-to-end latency in seconds",
-            &["operation"],
-            vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0],
-            registry.clone()
-        )?;
-
-        // 决策请求/问题计数与队列等待直方图（入队→开始执行）；
-        // buckets 与既有 vecboost_queue_wait_seconds 同一口径
-        let vecboost_decision_requests_total = prometheus::register_int_counter_with_registry!(
-            "vecboost_decision_requests_total",
-            "Total number of decision requests accepted for processing",
-            registry.clone()
-        )?;
-        let vecboost_decision_questions_total = prometheus::register_int_counter_with_registry!(
-            "vecboost_decision_questions_total",
-            "Total number of decision questions processed",
-            registry.clone()
-        )?;
-        let vecboost_decision_queue_wait_seconds = prometheus::register_histogram_with_registry!(
-            "vecboost_decision_queue_wait_seconds",
-            "Decision request wait from enqueue to start of execution",
-            vec![
-                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0
-            ],
-            registry.clone()
-        )?;
-
-        // 检测请求计数（DetectService 热路径校验受理后 inc）
-        let vecboost_detect_requests_total = prometheus::register_int_counter_with_registry!(
-            "vecboost_detect_requests_total",
-            "Total number of detect requests accepted for processing",
-            registry.clone()
-        )?;
-
-        // 翻译请求计数（TranslateService 热路径校验受理后 inc）
-        let vecboost_translate_requests_total = prometheus::register_int_counter_with_registry!(
-            "vecboost_translate_requests_total",
-            "Total number of translate requests accepted for processing",
-            registry.clone()
-        )?;
-
-        // 缓存命中
-        let cache_hits = register_counter_vec_with_registry!(
-            "cache_hits_total",
-            "Total number of cache hits",
-            &["cache_type"],
-            registry.clone()
-        )?;
-
-        // 缓存未命中
-        let cache_misses = register_counter_vec_with_registry!(
-            "cache_misses_total",
-            "Total number of cache misses",
-            &["cache_type"],
-            registry.clone()
-        )?;
-
-        // 限流允许通过的请求数
-        let rate_limit_allowed = register_counter_vec_with_registry!(
-            "rate_limit_allowed_total",
-            "Total number of rate-limited requests allowed",
-            &["dimension"],
-            registry.clone()
-        )?;
-
-        // 限流拒绝的请求数
-        let rate_limit_denied = register_counter_vec_with_registry!(
-            "rate_limit_denied_total",
-            "Total number of rate-limited requests denied",
-            &["dimension"],
-            registry.clone()
-        )?;
+        let (http_requests_total, http_request_duration_seconds, active_connections) =
+            register_http_metrics(&registry)?;
+        let (
+            vecboost_queue_wait_seconds,
+            pipeline_queue_depth,
+            pipeline_in_flight,
+            batch_size,
+            vecboost_batch_size,
+            vecboost_batch_wait_seconds,
+            vecboost_inbatch_dedup_ratio,
+            vecboost_stage_seconds,
+            semantic_cache_fuzzy_hits,
+        ) = register_pipeline_metrics(&registry)?;
+        let (
+            vecboost_decision_seconds,
+            vecboost_decision_requests_total,
+            vecboost_decision_questions_total,
+            vecboost_decision_queue_wait_seconds,
+        ) = register_decision_metrics(&registry)?;
+        let (vecboost_detect_requests_total, vecboost_translate_requests_total) =
+            register_request_counters(&registry)?;
+        let (cache_hits, cache_misses, rate_limit_allowed, rate_limit_denied) =
+            register_cache_and_rate_limit_metrics(&registry)?;
 
         Ok(Self {
             registry,
@@ -266,7 +119,259 @@ impl PrometheusCollector {
             rate_limit_denied,
         })
     }
+}
 
+/// HTTP 面指标：请求计数（端点/方法/状态码）、延迟直方图、活跃连接。
+fn register_http_metrics(
+    registry: &Arc<Registry>,
+) -> Result<(CounterVec, HistogramVec, GaugeVec), Box<dyn std::error::Error>> {
+    // HTTP 请求总数（按端点、方法、状态码）
+    let http_requests_total = register_counter_vec_with_registry!(
+        "http_requests_total",
+        "Total number of HTTP requests",
+        &["method", "endpoint", "status"],
+        registry.clone()
+    )?;
+
+    // HTTP 请求延迟（按端点、方法）
+    let http_request_duration_seconds = register_histogram_vec_with_registry!(
+        "http_request_duration_seconds",
+        "HTTP request duration in seconds",
+        &["method", "endpoint"],
+        vec![
+            0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0
+        ],
+        registry.clone()
+    )?;
+
+    // 活跃连接数
+    let active_connections = register_gauge_vec_with_registry!(
+        "active_connections",
+        "Number of active connections",
+        &["type"],
+        registry.clone()
+    )?;
+
+    Ok((
+        http_requests_total,
+        http_request_duration_seconds,
+        active_connections,
+    ))
+}
+
+/// pipeline 拼批/队列面指标：队列等待与深度、批大小分布、批内去重率、
+/// 引擎分阶段延迟、语义缓存模糊命中。
+#[allow(clippy::type_complexity)]
+fn register_pipeline_metrics(
+    registry: &Arc<Registry>,
+) -> Result<
+    (
+        HistogramVec,
+        IntGauge,
+        IntGauge,
+        HistogramVec,
+        HistogramVec,
+        HistogramVec,
+        GaugeVec,
+        HistogramVec,
+        IntCounter,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    // pipeline 队列深度与在途请求(pull 时快照,热路径零开销)
+    let vecboost_queue_wait_seconds = register_histogram_vec_with_registry!(
+        "vecboost_queue_wait_seconds",
+        "Per-request wait from enqueue to dequeue",
+        &["operation"],
+        vec![
+            0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0
+        ],
+        registry.clone()
+    )?;
+    let semantic_cache_fuzzy_hits = prometheus::register_int_counter_with_registry!(
+        "vecboost_semantic_cache_fuzzy_hits_total",
+        "Trigram fuzzy hits served by the semantic cache",
+        registry.clone()
+    )
+    .expect("register semantic_cache_fuzzy_hits");
+    let pipeline_queue_depth = prometheus::register_int_gauge_with_registry!(
+        "vecboost_pipeline_queue_depth",
+        "Number of requests waiting in the pipeline priority queue",
+        registry.clone()
+    )?;
+    let pipeline_in_flight = prometheus::register_int_gauge_with_registry!(
+        "vecboost_pipeline_in_flight_requests",
+        "Number of requests currently inside the pipeline (dequeued, awaiting completion)",
+        registry.clone()
+    )?;
+
+    // 批处理大小
+    let batch_size = register_histogram_vec_with_registry!(
+        "batch_size",
+        "Batch processing size",
+        &["operation"],
+        vec![1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0],
+        registry.clone()
+    )?;
+
+    // 时间窗拼批批次大小与等待时长（标签 operation 完整）
+    let vecboost_batch_size = register_histogram_vec_with_registry!(
+        "vecboost_batch_size",
+        "Worker time-window batch size",
+        &["operation"],
+        vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0],
+        registry.clone()
+    )?;
+    let vecboost_batch_wait_seconds = register_histogram_vec_with_registry!(
+        "vecboost_batch_wait_seconds",
+        "Worker time-window batch wait duration in seconds",
+        &["operation"],
+        vec![0.0, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1],
+        registry.clone()
+    )?;
+    // 批内去重率滚动 gauge
+    let vecboost_inbatch_dedup_ratio = register_gauge_vec_with_registry!(
+        "vecboost_inbatch_dedup_ratio",
+        "In-batch dedup ratio (n_unique savings)",
+        &["operation"],
+        registry.clone()
+    )?;
+    // 引擎分阶段延迟（stage 标签枚举固定为 tokenize|inference|pool）。
+    let vecboost_stage_seconds = register_histogram_vec_with_registry!(
+        "vecboost_stage_seconds",
+        "Engine stage latency in seconds",
+        &["stage"],
+        vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0],
+        registry.clone()
+    )?;
+
+    Ok((
+        vecboost_queue_wait_seconds,
+        pipeline_queue_depth,
+        pipeline_in_flight,
+        batch_size,
+        vecboost_batch_size,
+        vecboost_batch_wait_seconds,
+        vecboost_inbatch_dedup_ratio,
+        vecboost_stage_seconds,
+        semantic_cache_fuzzy_hits,
+    ))
+}
+
+/// 决策管线面指标：端到端延迟、请求/问题计数、队列等待直方图
+/// （buckets 与 vecboost_queue_wait_seconds 同一口径）。
+fn register_decision_metrics(
+    registry: &Arc<Registry>,
+) -> Result<(HistogramVec, IntCounter, IntCounter, Histogram), Box<dyn std::error::Error>> {
+    // 决策管线逐请求总时延（预处理→推理→后处理整链；histogram _count
+    // 即调用计数。决策管线不映射 Stage 三值——该枚举语义属 embedding
+    // 分阶段，决策观测走本独立指标）
+    let vecboost_decision_seconds = register_histogram_vec_with_registry!(
+        "vecboost_decision_seconds",
+        "Decision pipeline end-to-end latency in seconds",
+        &["operation"],
+        vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0],
+        registry.clone()
+    )?;
+
+    // 决策请求/问题计数与队列等待直方图（入队→开始执行）；
+    // buckets 与既有 vecboost_queue_wait_seconds 同一口径
+    let vecboost_decision_requests_total = prometheus::register_int_counter_with_registry!(
+        "vecboost_decision_requests_total",
+        "Total number of decision requests accepted for processing",
+        registry.clone()
+    )?;
+    let vecboost_decision_questions_total = prometheus::register_int_counter_with_registry!(
+        "vecboost_decision_questions_total",
+        "Total number of decision questions processed",
+        registry.clone()
+    )?;
+    let vecboost_decision_queue_wait_seconds = prometheus::register_histogram_with_registry!(
+        "vecboost_decision_queue_wait_seconds",
+        "Decision request wait from enqueue to start of execution",
+        vec![
+            0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0
+        ],
+        registry.clone()
+    )?;
+
+    Ok((
+        vecboost_decision_seconds,
+        vecboost_decision_requests_total,
+        vecboost_decision_questions_total,
+        vecboost_decision_queue_wait_seconds,
+    ))
+}
+
+/// 检测/翻译请求计数（各自服务层热路径校验受理后 inc）。
+fn register_request_counters(
+    registry: &Arc<Registry>,
+) -> Result<(IntCounter, IntCounter), Box<dyn std::error::Error>> {
+    // 检测请求计数（DetectService 热路径校验受理后 inc）
+    let vecboost_detect_requests_total = prometheus::register_int_counter_with_registry!(
+        "vecboost_detect_requests_total",
+        "Total number of detect requests accepted for processing",
+        registry.clone()
+    )?;
+
+    // 翻译请求计数（TranslateService 热路径校验受理后 inc）
+    let vecboost_translate_requests_total = prometheus::register_int_counter_with_registry!(
+        "vecboost_translate_requests_total",
+        "Total number of translate requests accepted for processing",
+        registry.clone()
+    )?;
+
+    Ok((
+        vecboost_detect_requests_total,
+        vecboost_translate_requests_total,
+    ))
+}
+
+/// 缓存命中率与限流决策计数器。
+fn register_cache_and_rate_limit_metrics(
+    registry: &Arc<Registry>,
+) -> Result<(CounterVec, CounterVec, CounterVec, CounterVec), Box<dyn std::error::Error>> {
+    // 缓存命中
+    let cache_hits = register_counter_vec_with_registry!(
+        "cache_hits_total",
+        "Total number of cache hits",
+        &["cache_type"],
+        registry.clone()
+    )?;
+
+    // 缓存未命中
+    let cache_misses = register_counter_vec_with_registry!(
+        "cache_misses_total",
+        "Total number of cache misses",
+        &["cache_type"],
+        registry.clone()
+    )?;
+
+    // 限流允许通过的请求数
+    let rate_limit_allowed = register_counter_vec_with_registry!(
+        "rate_limit_allowed_total",
+        "Total number of rate-limited requests allowed",
+        &["dimension"],
+        registry.clone()
+    )?;
+
+    // 限流拒绝的请求数
+    let rate_limit_denied = register_counter_vec_with_registry!(
+        "rate_limit_denied_total",
+        "Total number of rate-limited requests denied",
+        &["dimension"],
+        registry.clone()
+    )?;
+
+    Ok((
+        cache_hits,
+        cache_misses,
+        rate_limit_allowed,
+        rate_limit_denied,
+    ))
+}
+
+impl PrometheusCollector {
     /// 记录 HTTP 请求
     pub fn record_http_request(&self, method: &str, endpoint: &str, status_code: u16) {
         self.http_requests_total

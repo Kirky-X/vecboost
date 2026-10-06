@@ -107,6 +107,29 @@ impl DecisionRequest {
     /// serde 无法表达跨字段约束，必须显式代码。失败以
     /// `ValidationError` 显式返回，禁止静默截断或忽略。
     pub fn validate(&self) -> Result<(), VecboostError> {
+        self.validate_state()?;
+
+        let mut total_prompt_bytes: usize = 0;
+        let mut seen_names = std::collections::HashSet::new();
+        for (question_index, q) in self.questions.iter().enumerate() {
+            Self::validate_question(q, question_index, &mut seen_names)?;
+            // prompt 展开总量（字节）：单维度合法的乘积在此被跨字段预算截停
+            let options_bytes: usize = q.options.iter().map(|o| o.len()).sum();
+            total_prompt_bytes += q.name.len() + q.instructions.len() + options_bytes;
+            if total_prompt_bytes > MAX_TOTAL_PROMPT_BYTES {
+                return Err(VecboostError::validation_error(format!(
+                    "total prompt budget exceeded: {total_prompt_bytes} bytes > \
+                     {MAX_TOTAL_PROMPT_BYTES}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// state 面：questions 数量上限 + 封顶计数序列化（命中
+    /// MAX_STATE_BYTES 即停，不完整展开）+ 字符串叶子控制字符递归防线
+    /// （serde_json 只拒绝裸控制字节，`\uXXXX` 转义可还原真实控制字符）。
+    fn validate_state(&self) -> Result<(), VecboostError> {
         if self.questions.is_empty() {
             return Err(VecboostError::validation_error(
                 "decision request must contain at least one question".to_string(),
@@ -118,7 +141,6 @@ impl DecisionRequest {
                 self.questions.len()
             )));
         }
-        // 封顶计数序列化：命中 MAX_STATE_BYTES 即停，不完整展开 state
         let mut counter = CappedWriter {
             written: 0,
             cap: MAX_STATE_BYTES,
@@ -137,112 +159,117 @@ impl DecisionRequest {
                 "state contains control characters in string values".to_string(),
             ));
         }
-        let mut total_prompt_bytes: usize = 0;
-        let mut seen_names = std::collections::HashSet::new();
-        for (question_index, q) in self.questions.iter().enumerate() {
-            // answer 按 question 名回显：空/空白 name 使消费方无法对应问题，
-            // 重复 name 使按名索引有歧义（协议按 questions 数组下标对应，
-            // name 仅作诊断与路由提示）
-            if q.name.trim().is_empty() {
-                return Err(VecboostError::validation_error(
-                    "question name must not be empty or blank".to_string(),
-                ));
-            }
-            let name_chars = q.name.chars().count();
-            if name_chars > MAX_DECISION_FIELD_LENGTH {
+        Ok(())
+    }
+
+    /// 单题面：name/instructions 的非空、长度与控制字符校验 + qtype 与
+    /// options 跨字段一致性 + options 逐项校验。
+    fn validate_question<'a>(
+        q: &'a DecisionQuestion,
+        question_index: usize,
+        seen_names: &mut std::collections::HashSet<&'a str>,
+    ) -> Result<(), VecboostError> {
+        // answer 按 question 名回显：空/空白 name 使消费方无法对应问题，
+        // 重复 name 使按名索引有歧义（协议按 questions 数组下标对应，
+        // name 仅作诊断与路由提示）
+        if q.name.trim().is_empty() {
+            return Err(VecboostError::validation_error(
+                "question name must not be empty or blank".to_string(),
+            ));
+        }
+        let name_chars = q.name.chars().count();
+        if name_chars > MAX_DECISION_FIELD_LENGTH {
+            return Err(VecboostError::validation_error(format!(
+                "question name too long: {name_chars} chars > {MAX_DECISION_FIELD_LENGTH}"
+            )));
+        }
+        if has_disallowed_control_chars(&q.name) {
+            // 不回显原文：控制字符直入 wire/日志即日志注入面（评审 R2）
+            return Err(VecboostError::validation_error(format!(
+                "question at index {question_index} name contains control characters"
+            )));
+        }
+        if !seen_names.insert(q.name.as_str()) {
+            return Err(VecboostError::validation_error(format!(
+                "duplicate question name: {}",
+                echo(&q.name)
+            )));
+        }
+        let instructions_chars = q.instructions.chars().count();
+        if instructions_chars > MAX_DECISION_FIELD_LENGTH {
+            return Err(VecboostError::validation_error(format!(
+                "question {} instructions too long: {instructions_chars} chars > \
+                 {MAX_DECISION_FIELD_LENGTH}",
+                echo(&q.name)
+            )));
+        }
+        if has_disallowed_control_chars(&q.instructions) {
+            return Err(VecboostError::validation_error(format!(
+                "question at index {question_index} instructions contain control characters"
+            )));
+        }
+        Self::validate_question_options(q, question_index)
+    }
+
+    /// options 面：qtype 与 options 的一致性（choice 必须携带、score/noul
+    /// 不得携带）+ 数量上限 + 逐项非空/长度/控制字符/查重。
+    fn validate_question_options(
+        q: &DecisionQuestion,
+        question_index: usize,
+    ) -> Result<(), VecboostError> {
+        match q.qtype {
+            QuestionType::Choice if q.options.is_empty() => {
                 return Err(VecboostError::validation_error(format!(
-                    "question name too long: {name_chars} chars > {MAX_DECISION_FIELD_LENGTH}"
-                )));
-            }
-            if has_disallowed_control_chars(&q.name) {
-                // 不回显原文：控制字符直入 wire/日志即日志注入面（评审 R2）
-                return Err(VecboostError::validation_error(format!(
-                    "question at index {question_index} name contains control characters"
-                )));
-            }
-            if !seen_names.insert(q.name.as_str()) {
-                return Err(VecboostError::validation_error(format!(
-                    "duplicate question name: {}",
+                    "choice question {} requires non-empty options",
                     echo(&q.name)
                 )));
             }
-            let instructions_chars = q.instructions.chars().count();
-            if instructions_chars > MAX_DECISION_FIELD_LENGTH {
+            QuestionType::Score | QuestionType::Noul if !q.options.is_empty() => {
                 return Err(VecboostError::validation_error(format!(
-                    "question {} instructions too long: {instructions_chars} chars > \
+                    "question {} of type {:?} must not carry options",
+                    echo(&q.name),
+                    q.qtype
+                )));
+            }
+            _ => {}
+        }
+        if q.options.len() > MAX_OPTIONS_PER_QUESTION {
+            return Err(VecboostError::validation_error(format!(
+                "question {} has too many options: {} > {MAX_OPTIONS_PER_QUESTION}",
+                echo(&q.name),
+                q.options.len()
+            )));
+        }
+        let mut seen_options = std::collections::HashSet::new();
+        for option in &q.options {
+            // 与 name 同口径：option 按字符串匹配消费，空/纯空白 option
+            // 使匹配结果有歧义（answer 的 index 权威，但空白串本身无意义）
+            if option.trim().is_empty() {
+                return Err(VecboostError::validation_error(format!(
+                    "question {} has an empty or blank option",
+                    echo(&q.name)
+                )));
+            }
+            let option_chars = option.chars().count();
+            if option_chars > MAX_DECISION_FIELD_LENGTH {
+                return Err(VecboostError::validation_error(format!(
+                    "question {} has an option too long: {option_chars} chars > \
                      {MAX_DECISION_FIELD_LENGTH}",
                     echo(&q.name)
                 )));
             }
-            if has_disallowed_control_chars(&q.instructions) {
+            if has_disallowed_control_chars(option) {
                 return Err(VecboostError::validation_error(format!(
-                    "question at index {question_index} instructions contain control characters"
+                    "question at index {question_index} has an option containing control characters"
                 )));
             }
-            match q.qtype {
-                QuestionType::Choice if q.options.is_empty() => {
-                    return Err(VecboostError::validation_error(format!(
-                        "choice question {} requires non-empty options",
-                        echo(&q.name)
-                    )));
-                }
-                QuestionType::Score | QuestionType::Noul if !q.options.is_empty() => {
-                    return Err(VecboostError::validation_error(format!(
-                        "question {} of type {:?} must not carry options",
-                        echo(&q.name),
-                        q.qtype
-                    )));
-                }
-                _ => {}
-            }
-            if q.options.len() > MAX_OPTIONS_PER_QUESTION {
+            // 重复 option 使概率表键合并/索引匹配歧义——校验层显性拒绝，
+            // 避免合法请求白跑一次推理后才在引擎层被拒
+            if !seen_options.insert(option.as_str()) {
                 return Err(VecboostError::validation_error(format!(
-                    "question {} has too many options: {} > {MAX_OPTIONS_PER_QUESTION}",
+                    "question {} has duplicate option {}",
                     echo(&q.name),
-                    q.options.len()
-                )));
-            }
-            let mut options_bytes: usize = 0;
-            let mut seen_options = std::collections::HashSet::new();
-            for option in &q.options {
-                // 与 name 同口径：option 按字符串匹配消费，空/纯空白 option
-                // 使匹配结果有歧义（answer 的 index 权威，但空白串本身无意义）
-                if option.trim().is_empty() {
-                    return Err(VecboostError::validation_error(format!(
-                        "question {} has an empty or blank option",
-                        echo(&q.name)
-                    )));
-                }
-                let option_chars = option.chars().count();
-                if option_chars > MAX_DECISION_FIELD_LENGTH {
-                    return Err(VecboostError::validation_error(format!(
-                        "question {} has an option too long: {option_chars} chars > \
-                         {MAX_DECISION_FIELD_LENGTH}",
-                        echo(&q.name)
-                    )));
-                }
-                if has_disallowed_control_chars(option) {
-                    return Err(VecboostError::validation_error(format!(
-                        "question at index {question_index} has an option containing control characters"
-                    )));
-                }
-                // 重复 option 使概率表键合并/索引匹配歧义——校验层显性拒绝，
-                // 避免合法请求白跑一次推理后才在引擎层被拒
-                if !seen_options.insert(option.as_str()) {
-                    return Err(VecboostError::validation_error(format!(
-                        "question {} has duplicate option {}",
-                        echo(&q.name),
-                        echo(option)
-                    )));
-                }
-                options_bytes += option.len();
-            }
-            // prompt 展开总量（字节）：单维度合法的乘积在此被跨字段预算截停
-            total_prompt_bytes += q.name.len() + q.instructions.len() + options_bytes;
-            if total_prompt_bytes > MAX_TOTAL_PROMPT_BYTES {
-                return Err(VecboostError::validation_error(format!(
-                    "total prompt budget exceeded: {total_prompt_bytes} bytes > \
-                     {MAX_TOTAL_PROMPT_BYTES}"
+                    echo(option)
                 )));
             }
         }

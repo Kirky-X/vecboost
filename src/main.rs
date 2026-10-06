@@ -124,7 +124,6 @@ const DB_WARMUP_TIMEOUT_SECS: u64 = 10;
 const DB_WARMUP_RETRIES: u32 = 2;
 #[cfg(feature = "auth")]
 use vecboost::registry::{AuthModule, CsrfConfigModule};
-#[cfg(feature = "onnx")]
 use vecboost::{
     VecboostState,
     audit::{AuditConfig, AuditLogger},
@@ -1379,7 +1378,6 @@ async fn app_main() -> anyhow::Result<()> {
 
     assemble_and_serve_http(
         &config,
-        &_filtered_args,
         config_path,
         service,
         rerank_service,
@@ -1738,6 +1736,8 @@ async fn dispatch_non_server_modes(
 ) -> anyhow::Result<bool> {
     #[cfg(feature = "mcp")]
     if std::env::args().any(|a| a == "--mcp") {
+        // MCP 启动失败必须传播（拆分前的 `return ...await` 语义）：
+        // 吞掉错误会以 exit 0 假成功退出，客户端只看到流中断
         run_mcp_server(
             service.clone(),
             rerank_service.clone(),
@@ -1745,7 +1745,7 @@ async fn dispatch_non_server_modes(
             *detect_service,
             translate_service.clone(),
         )
-        .await;
+        .await?;
         return Ok(true);
     }
 
@@ -1772,7 +1772,6 @@ async fn dispatch_non_server_modes(
 #[allow(clippy::too_many_arguments)]
 async fn assemble_and_serve_http(
     config: &VecboostConfig,
-    _filtered_args: &[String],
     config_path: Option<String>,
     service: Arc<RwLock<EmbeddingService>>,
     rerank_service: Arc<RwLock<RerankService>>,
@@ -1883,7 +1882,7 @@ fn apply_auth_middlewares(
     app: axum::Router,
     config: &VecboostConfig,
     app_state: crate::VecboostState,
-) -> axum::Router {
+) -> anyhow::Result<axum::Router> {
     use axum::middleware::from_fn_with_state;
 
     // 全局限流中间件 — 应用到所有路由
@@ -1907,17 +1906,21 @@ fn apply_auth_middlewares(
 
     // CSRF 保护（条件性应用：auth 启用且 csrf 启用时）
     // 直接使用 garrison garrison_csrf_middleware（包含 Origin + Token 双重校验）
+    // require 失败必须中止装配（fail-closed）：吞掉错误会以无 CSRF 防护的
+    // app 静默起服——恢复拆分前 `?` 传播语义。
     if config.auth.enabled && config.auth.csrf.enabled {
+        use axum::middleware::from_fn_with_state;
         let csrf_config = app_state
             .kit()
             .require::<CsrfConfigModule>()
-            .map_err(|e| anyhow::anyhow!("Failed to require CsrfConfigModule: {}", e));
-        match csrf_config {
-            Ok(Some(cfg)) => app.layer(from_fn_with_state(cfg, garrison_csrf_middleware)),
-            _ => app,
+            .map_err(|e| anyhow::anyhow!("Failed to require CsrfConfigModule: {}", e))?;
+        if let Some(cfg) = csrf_config {
+            Ok(app.layer(from_fn_with_state(cfg, garrison_csrf_middleware)))
+        } else {
+            Ok(app)
         }
     } else {
-        app
+        Ok(app)
     }
 }
 
@@ -1927,9 +1930,9 @@ fn apply_auth_middlewares(
     app: axum::Router,
     config: &VecboostConfig,
     app_state: crate::VecboostState,
-) -> axum::Router {
+) -> anyhow::Result<axum::Router> {
     let _ = (config, app_state);
-    app
+    Ok(app)
 }
 
 /// 传输面层栈：请求体大小上限（默认 5 MiB，防超大 payload DoS）→ 全局
@@ -2071,7 +2074,7 @@ async fn build_http_router(config: &VecboostConfig) -> anyhow::Result<axum::Rout
     let app = apply_request_middlewares(app, app_state.clone());
 
     // auth 限流/认证/CSRF 中间件（内部按路径白名单放行公开端点）
-    let app = apply_auth_middlewares(app, config, app_state);
+    let app = apply_auth_middlewares(app, config, app_state)?;
 
     // 请求体上限/超时/请求上下文/trace/安全响应头/压缩/CORS
     let app = apply_transport_layers(app, config);

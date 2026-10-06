@@ -141,7 +141,7 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
         }
         // 数据记录：长度先行，超限即视为撕裂尾。
         seq += 1;
-        match read_data_record(&mut file, path, expected_tag, seq) {
+        match read_data_record(&mut file, path, expected_tag) {
             None => break, // 撕裂尾
             Some(Some((key, v))) => valid.push((seq, key, v)),
             Some(None) => {} // 校验失败跳过，序号已占位
@@ -189,7 +189,6 @@ fn read_data_record(
     file: &mut std::fs::File,
     path: &Path,
     expected_tag: &str,
-    _seq: u64,
 ) -> Option<Option<(String, Vec<f32>)>> {
     let key_len = match read_u32(file) {
         Ok(n) if n <= MAX_SANE_LEN => n as usize,

@@ -105,6 +105,8 @@ impl AuditLogger {
         let mut consecutive_errors: u32 = 0;
         const ERROR_THRESHOLD: u32 = 10;
 
+        // 用宏而非函数：需捕获并推进局部 consecutive_errors 可变状态，
+        // 并在阈值命中时对主循环执行 break 控制流——函数两者皆不可达。
         macro_rules! flush_or_die {
             () => {{
                 consecutive_errors = Self::flush_buffer(

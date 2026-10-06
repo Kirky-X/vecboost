@@ -1,0 +1,25 @@
+[package]
+name = "transcribe-poc"
+version = "0.1.0"
+edition = "2021"
+description = "Self-contained Qwen3-ASR transcription pipeline PoC (ort + hand-written VAD/fbank/decoding)"
+
+[[bin]]
+name = "transcribe-own"
+path = "src/main.rs"
+
+[dependencies]
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["load-dynamic", "ndarray", "std", "cuda"] }
+ndarray = { version = "0.17", default-features = false } # 与 ort 0.17 同版，KV view 输入用
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+hound = { version = "3.5", default-features = false }
+rustfft = { version = "6.4", default-features = false }
+pyo3 = { version = "=0.22.6", features = ["auto-initialize"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+# Standalone crate, deliberately not a member of the worktree workspace
+# (workspace table must stay last: keys after a table header belong to it).
+[workspace]

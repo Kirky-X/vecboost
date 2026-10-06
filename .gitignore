@@ -158,3 +158,10 @@ data/
 
 # E2E 质量输出（translate_quality 等 JSON 产物），照 3rdparty/ 先例不入仓库
 out/
+
+# -----------------------------------------------------------------------------
+# 13. Transcribe PoC（feat/transcribe-own-ort）
+# -----------------------------------------------------------------------------
+# 大体积音频/模型资产不入库（复制来源与 md5 见 docs-transcribe/DESIGN.md §1）；
+# 3rdparty/、models/、*.so.* 已在上方小节忽略，这里覆盖 assets/ 整目录
+assets/

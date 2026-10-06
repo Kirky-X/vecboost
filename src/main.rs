@@ -125,7 +125,6 @@ const DB_WARMUP_RETRIES: u32 = 2;
 #[cfg(feature = "auth")]
 use vecboost::registry::{AuthModule, CsrfConfigModule};
 #[cfg(feature = "onnx")]
-use vecboost::service::translate::TranslatePairRoute;
 use vecboost::{
     VecboostState,
     audit::{AuditConfig, AuditLogger},

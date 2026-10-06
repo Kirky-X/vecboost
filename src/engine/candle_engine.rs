@@ -162,405 +162,50 @@ impl CandleEngine {
         precision: Precision,
         device_type: DeviceType,
     ) -> Result<Self, VecboostError> {
-        let device = if device_type == DeviceType::Cuda && candle_core::utils::cuda_is_available() {
-            log::info!("Using CUDA GPU");
-            Device::new_cuda(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?
-        } else if device_type == DeviceType::Metal && candle_core::utils::metal_is_available() {
-            log::info!("Using Metal GPU");
-            Device::new_metal(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?
-        } else if matches!(device_type, DeviceType::Amd | DeviceType::OpenCL) {
-            log::warn!(
-                "Candle engine does not natively support AMD GPUs. AMD GPU support requires ROCm-enabled Candle build or ONNX Runtime. Falling back to CPU."
-            );
-            Device::Cpu
-        } else {
-            log::info!("Using CPU");
-            Device::Cpu
-        };
-
+        let device = resolve_compute_device(&device_type)?;
         // 确定计算数据类型（FP16/BF16 按设备映射；INT8 量化未实现，诚实回退 FP32）
-        let compute_dtype = match (&precision, device.is_cuda()) {
-            (Precision::Int8, true) => {
-                // INT8 量化未实现，诚实告知用户
-                log::warn!(
-                    "INT8 quantization is not yet implemented; running in FP32 mode. \
-                    The use_quantization flag has no effect until INT8 support is added."
-                );
-                DType::F32
-            }
-            (Precision::Int8, false) => {
-                log::warn!(
-                    "INT8 quantization is not yet implemented; running in FP32 mode. \
-                    The use_quantization flag has no effect until INT8 support is added."
-                );
-                DType::F32
-            }
-            (Precision::Fp16, true) => {
-                log::info!("Using FP16 precision");
-                DType::F16
-            }
-            (Precision::Fp16, false) => {
-                log::warn!("FP16 not supported on non-CUDA devices, falling back to FP32");
-                DType::F32
-            }
-            (Precision::Bf16, true) => {
-                log::info!("Using BF16 precision (Brain Float 16)");
-                DType::BF16
-            }
-            (Precision::Bf16, false) => {
-                log::warn!("BF16 not supported on non-CUDA devices, falling back to FP32");
-                DType::F32
-            }
-            (Precision::Fp32, _) => {
-                log::info!("Using FP32 precision");
-                DType::F32
-            }
-        };
-
-        // INT8 量化未实现，use_quantization 始终为 false
-        let (dtype, use_quantization) = if matches!(precision, Precision::Int8) {
-            (DType::F32, false) // INT8 未实现，回退 FP32
-        } else {
-            (compute_dtype, false)
-        };
+        let (dtype, use_quantization) = resolve_compute_dtype(&precision, device.is_cuda());
 
         let model_path = &config.model_path;
         let is_local_path = model_path.exists() && model_path.is_dir();
-
-        // 安全增强：本地路径进行路径遍历攻击检测，直接拒绝
-        if is_local_path {
-            let model_path_str = model_path.to_string_lossy();
-            if model_path_str.contains("..") || model_path_str.contains('~') {
-                return Err(VecboostError::ModelLoadError(format!(
-                    "Rejected model path due to potential path traversal attack: {:?}. \
-                         Path must not contain '..' or '~'.",
-                    model_path
-                )));
-            }
-        }
-
-        let (config_filename, tokenizer_filename, weights_filename): (
-            std::path::PathBuf,
-            std::path::PathBuf,
-            std::path::PathBuf,
-        ) = if is_local_path {
-            log::info!("Loading model from local path: {:?}", model_path);
-            let config_path = model_path.join("config.json");
-            let tokenizer_path = model_path.join("tokenizer.json");
-            let weights_path = model_path.join("model.safetensors");
-            let alt_weights_path = model_path.join("pytorch_model.bin");
-
-            let weights_filename = if weights_path.exists() {
-                weights_path
-            } else if alt_weights_path.exists() {
-                alt_weights_path
-            } else {
-                return Err(VecboostError::ModelLoadError(
-                    "No model weights file found (model.safetensors or pytorch_model.bin)"
-                        .to_string(),
-                ));
-            };
-
-            (config_path, tokenizer_path, weights_filename)
-        } else {
-            // vuln-0009 修复:repo_id 格式校验由 build_hf_repo 统一执行，防止恶意配置注入
-            let repo_id = model_path.to_string_lossy().into_owned();
-
-            // vuln-0009 加固:远程下载时若未设置 model_sha256,记录警告
-            // .bin(pickle)格式有代码执行风险,model_sha256 是完整性校验的最后防线
-            if config.model_sha256.is_none() {
-                log::warn!(
-                    "Loading model from remote HuggingFace repo '{}' without model_sha256 \
-                     verification — recommend setting model_sha256 in config to prevent \
-                     tampering and supply-chain attacks",
-                    repo_id
-                );
-            }
-
-            log::info!(
-                "Downloading/Loading model from HuggingFace Hub: {:?}",
-                model_path
-            );
-            let repo = build_hf_repo(&repo_id)?;
-
-            let config_filename = repo
-                .download_file()
-                .filename("config.json")
-                .send()
-                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-            let tokenizer_filename = repo
-                .download_file()
-                .filename("tokenizer.json")
-                .send()
-                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-            let weights_filename = repo
-                .download_file()
-                .filename("model.safetensors")
-                .send()
-                .or_else(|_| {
-                    log::warn!(
-                        "model.safetensors unavailable, falling back to pytorch_model.bin; \
-                         pickle format carries code-execution risk — only load .bin models \
-                         from trusted sources, prefer safetensors"
-                    );
-                    repo.download_file().filename("pytorch_model.bin").send()
-                })
-                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-
-            (config_filename, tokenizer_filename, weights_filename)
-        };
+        let (config_filename, tokenizer_filename, weights_filename) =
+            resolve_model_files(config, model_path, is_local_path)?;
 
         let config_content = std::fs::read_to_string(&config_filename)?;
-        let model_config_json: ModelConfigJson = serde_json::from_str(&config_content)
-            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-        let model_architecture = model_config_json.get_architecture();
+        let parsed = parse_model_config(&config_content)?;
 
+        let model_architecture = parsed.architecture;
         log::info!("Detected model architecture: {:?}", model_architecture);
-
-        let (bert_config, xlm_config) = match &model_architecture {
-            ModelArchitecture::Bert => {
-                let bert_config: BertConfig = serde_json::from_str(&config_content)
-                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-                (Some(bert_config), None)
-            }
-            ModelArchitecture::XlmRoberta => {
-                let xlm_config: XlmRobertaConfig = serde_json::from_str(&config_content)
-                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-                (None, Some(xlm_config))
-            }
-        };
-
-        // 从 config 提取 hidden_size、vocab_size 和估算参数数量（在 config 被模型构造消费前）
-        let (hidden_size, vocab_size, parameter_count) = match (&bert_config, &xlm_config) {
-            (Some(bc), _) => {
-                let params = estimate_bert_params(
-                    bc.vocab_size,
-                    bc.hidden_size,
-                    bc.num_hidden_layers,
-                    bc.intermediate_size,
-                    bc.num_attention_heads,
-                );
-                (bc.hidden_size, bc.vocab_size, params)
-            }
-            (_, Some(xc)) => {
-                let params = estimate_bert_params(
-                    xc.vocab_size,
-                    xc.hidden_size,
-                    xc.num_hidden_layers,
-                    xc.intermediate_size,
-                    xc.num_attention_heads,
-                );
-                (xc.hidden_size, xc.vocab_size, params)
-            }
-            _ => (768, 30522, 110_000_000), // fallback: BERT-base vocab
-        };
 
         let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+        let tokenizer = SyncTokenizer::new(hf_tokenizer, parsed.max_position_embeddings);
 
-        let max_position_embeddings = match (&model_architecture, &bert_config, &xlm_config) {
-            (ModelArchitecture::Bert, Some(bert), _) => bert.max_position_embeddings,
-            (ModelArchitecture::XlmRoberta, _, Some(xlm)) => xlm.max_position_embeddings,
-            _ => {
-                return Err(VecboostError::ModelLoadError(format!(
-                    "Invalid configuration for architecture: {:?}",
-                    model_architecture
-                )));
-            }
-        };
-
-        let tokenizer = SyncTokenizer::new(hf_tokenizer, max_position_embeddings);
+        ensure_model_integrity(
+            config,
+            model_path,
+            is_local_path,
+            &[
+                config_filename.clone(),
+                tokenizer_filename.clone(),
+                weights_filename.clone(),
+            ],
+        )?;
 
         let is_pytorch = weights_filename.to_string_lossy().ends_with(".bin");
-
-        let config_str = config_filename.to_string_lossy().to_string();
-        let tokenizer_str = tokenizer_filename.to_string_lossy().to_string();
-        let weights_str = weights_filename.to_string_lossy().to_string();
-
-        let files_to_check = vec![
-            (config_str.clone(), None),
-            (tokenizer_str.clone(), None),
-            (weights_str.clone(), config.model_sha256.clone()),
-        ];
-
-        let min_sizes = {
-            let mut sizes = HashMap::new();
-            sizes.insert(config_str.clone(), 100);
-            sizes.insert(tokenizer_str.clone(), 1000);
-            sizes.insert(weights_str.clone(), 1024 * 1024);
-            sizes
-        };
-
-        log::info!("Checking model file integrity...");
-        let integrity_report = check_model_integrity(&config.name, files_to_check, Some(min_sizes))
-            .map_err(|e| {
-                VecboostError::ModelIntegrityError(format!("Integrity check failed: {}", e))
-            })?;
-
-        if !integrity_report.overall_valid {
-            log::error!("Model file integrity check failed!");
-            for check in &integrity_report.files_checked {
-                if !check.is_valid {
-                    log::error!(
-                        "  File: {}, Error: {}",
-                        check.file_path,
-                        check.error_message.as_deref().unwrap_or("Unknown error")
-                    );
-                }
-            }
-
-            log::info!("Attempting automatic recovery of corrupted files...");
-            let recovery_config = RecoveryConfig::default();
-            let recovery = ModelRecovery::new(recovery_config);
-
-            let repo_id_str = if !is_local_path {
-                Some(config.model_path.to_string_lossy().to_string())
-            } else {
-                None
-            };
-
-            let repo_id = repo_id_str.as_deref();
-
-            let recovery_result = recovery
-                .recover_corrupted_files(
-                    &config.name,
-                    model_path,
-                    repo_id,
-                    &integrity_report.corrupted_files,
-                )
-                .map_err(|e| {
-                    VecboostError::ModelIntegrityError(format!("Recovery failed: {}", e))
-                })?;
-
-            if recovery_result.success {
-                log::info!("Successfully recovered all corrupted files");
-                log::info!("Re-running integrity check after recovery...");
-
-                let files_to_check = vec![
-                    (config_str.clone(), None),
-                    (tokenizer_str.clone(), None),
-                    (weights_str.clone(), config.model_sha256.clone()),
-                ];
-
-                let min_sizes = {
-                    let mut sizes = HashMap::new();
-                    sizes.insert(config_str, 100);
-                    sizes.insert(tokenizer_str, 1000);
-                    sizes.insert(weights_str, 1024 * 1024);
-                    sizes
-                };
-
-                let recovery_integrity_report =
-                    check_model_integrity(&config.name, files_to_check, Some(min_sizes)).map_err(
-                        |e| {
-                            VecboostError::ModelIntegrityError(format!(
-                                "Post-recovery integrity check failed: {}",
-                                e
-                            ))
-                        },
-                    )?;
-
-                if !recovery_integrity_report.overall_valid {
-                    return Err(VecboostError::ModelFileCorrupted(format!(
-                        "Model files still corrupted after recovery. Corrupted files: {:?}",
-                        recovery_integrity_report.corrupted_files
-                    )));
-                }
-
-                log::info!("Post-recovery integrity check passed");
-            } else {
-                return Err(VecboostError::ModelFileCorrupted(format!(
-                    "Failed to recover corrupted files after {} attempts. Corrupted files: {:?}",
-                    recovery_result.attempts, recovery_result.failed_files
-                )));
-            }
-        }
-
-        log::info!("Model file integrity check passed");
-
-        if let Some(ref expected_hash) = config.model_sha256 {
-            log::info!("Verifying model file SHA256 hash...");
-            let is_valid = verify_sha256(&weights_filename, expected_hash).map_err(|e| {
-                VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e))
-            })?;
-
-            if !is_valid {
-                return Err(VecboostError::ModelFileCorrupted(format!(
-                    "Model file SHA256 verification failed. Expected: {}, File: {:?}",
-                    expected_hash, weights_filename
-                )));
-            }
-
-            log::info!("Model file SHA256 verification passed");
-        }
-
-        let vb: VarBuilder = if is_pytorch {
-            log::info!("Loading PyTorch model weights from: {:?}", weights_filename);
-
-            let file_size = std::fs::metadata(&weights_filename)
-                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-                .len();
-
-            if file_size > PYTORCH_LARGE_FILE_WARN_BYTES {
-                log::warn!(
-                    "PyTorch model file is large ({} GB). Large pyTorch files may have loading issues.",
-                    file_size as f64 / 1024.0 / 1024.0 / 1024.0
-                );
-                log::info!("Consider converting to safetensors format for better performance:");
-                log::info!(
-                    "  python -c \"from transformers import AutoModel; AutoModel.from_pretrained('{}').save_pretrained('./model_converted')\"",
-                    config.model_path.to_string_lossy()
-                );
-                log::info!(
-                    "  Then use './model_converted' as the model_path in config/config.toml"
-                );
-            }
-
-            let mut varmap = VarMap::new();
-            match varmap.load(&weights_filename) {
-                Ok(_) => {
-                    log::info!("PyTorch weights loaded successfully");
-                }
-                Err(e) => {
-                    log::error!("Failed to load PyTorch weights: {}", e);
-                    log::error!("This is often due to large model files or incompatible formats.");
-                    log::error!("Please convert the model to safetensors format:");
-                    log::error!("  pip install optimum");
-                    log::error!(
-                        "  optimum-cli export onnx --model {} --task feature-extraction ./model_safetensors",
-                        config.model_path.to_string_lossy()
-                    );
-                    return Err(VecboostError::ModelLoadError(format!(
-                        "Failed to load PyTorch weights: {}. Please convert the model to safetensors format.",
-                        e
-                    )));
-                }
-            }
-            VarBuilder::from_varmap(&varmap, dtype, &device)
-        } else {
-            log::info!(
-                "Loading safetensors model weights from: {:?}",
-                weights_filename
-            );
-            // SAFETY: `VarBuilder::from_mmaped_safetensors` memory-maps model weight files
-            // from disk. This is safe because:
-            // 1. The file path is validated to exist before this call.
-            // 2. The mmap is read-only and managed by candle's internal lifetime tracking.
-            // 3. The OS handles page faults; no manual pointer manipulation is needed.
-            let vb =
-                unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], dtype, &device) };
-            vb.map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-        };
-
-        if is_pytorch {
-            log::info!("Loaded PyTorch model weights successfully");
-        } else {
-            log::info!("Loaded safetensors model weights successfully");
-        }
+        let mut varmap = VarMap::new();
+        let vb = load_weights_varbuilder(
+            is_pytorch,
+            &weights_filename,
+            &mut varmap,
+            dtype,
+            &device,
+            config,
+        )?;
 
         let model = match &model_architecture {
             ModelArchitecture::Bert => {
-                let config = bert_config.ok_or_else(|| {
+                let config = parsed.bert_config.ok_or_else(|| {
                     VecboostError::ModelLoadError(crate::i18n::tr("engine-bert-config-required"))
                 })?;
                 let bert_model = BertModel::load(vb, &config)
@@ -568,7 +213,7 @@ impl CandleEngine {
                 ModelWrapper::Bert(bert_model)
             }
             ModelArchitecture::XlmRoberta => {
-                let config = xlm_config.ok_or_else(|| {
+                let config = parsed.xlm_config.ok_or_else(|| {
                     VecboostError::ModelLoadError(crate::i18n::tr("engine-xlm-config-required"))
                 })?;
                 let xlm_model = XLMRobertaModel::new(&config, vb)
@@ -606,10 +251,10 @@ impl CandleEngine {
             model_architecture,
             use_quantization,
             _model_name: config.name.clone(),
-            hidden_size,
-            parameter_count,
+            hidden_size: parsed.hidden_size,
+            parameter_count: parsed.parameter_count,
             pooling_mode: resolved_pooling,
-            vocab_size,
+            vocab_size: parsed.vocab_size,
             stage_stats: Arc::new(StageStats::default()),
         })
     }
@@ -1380,6 +1025,429 @@ impl CandleEngine {
 // ============================================================================
 // Pooling 数学纯函数(与 candle Tensor 解耦,可独立单测)
 // ============================================================================
+
+/// 加载期解析产物：架构判定、架构专属 config、规模元数据与位置上限。
+struct ParsedModelConfig {
+    architecture: ModelArchitecture,
+    bert_config: Option<BertConfig>,
+    xlm_config: Option<XlmRobertaConfig>,
+    hidden_size: usize,
+    vocab_size: usize,
+    parameter_count: u64,
+    max_position_embeddings: usize,
+}
+
+/// 设备落位：CUDA/Metal 可用即用之；AMD/OpenCL 显性告知不原生支持并
+/// 回退 CPU（ROCm 级 Candle 构建或 ONNX Runtime 才有 AMD 路径）。
+fn resolve_compute_device(device_type: &DeviceType) -> Result<Device, VecboostError> {
+    if *device_type == DeviceType::Cuda && candle_core::utils::cuda_is_available() {
+        log::info!("Using CUDA GPU");
+        Ok(Device::new_cuda(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?)
+    } else if *device_type == DeviceType::Metal && candle_core::utils::metal_is_available() {
+        log::info!("Using Metal GPU");
+        Ok(Device::new_metal(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?)
+    } else if matches!(device_type, DeviceType::Amd | DeviceType::OpenCL) {
+        log::warn!(
+            "Candle engine does not natively support AMD GPUs. AMD GPU support requires ROCm-enabled Candle build or ONNX Runtime. Falling back to CPU."
+        );
+        Ok(Device::Cpu)
+    } else {
+        log::info!("Using CPU");
+        Ok(Device::Cpu)
+    }
+}
+
+/// 计算数据类型映射：FP16/BF16 仅 CUDA 生效（其余设备诚实回退 FP32）；
+/// INT8 量化未实现，一律 FP32 且 use_quantization 恒 false。
+fn resolve_compute_dtype(precision: &Precision, is_cuda: bool) -> (DType, bool) {
+    let compute_dtype = match (&precision, is_cuda) {
+        (Precision::Int8, _) => {
+            log::warn!(
+                "INT8 quantization is not yet implemented; running in FP32 mode. \
+                The use_quantization flag has no effect until INT8 support is added."
+            );
+            DType::F32
+        }
+        (Precision::Fp16, true) => {
+            log::info!("Using FP16 precision");
+            DType::F16
+        }
+        (Precision::Fp16, false) => {
+            log::warn!("FP16 not supported on non-CUDA devices, falling back to FP32");
+            DType::F32
+        }
+        (Precision::Bf16, true) => {
+            log::info!("Using BF16 precision (Brain Float 16)");
+            DType::BF16
+        }
+        (Precision::Bf16, false) => {
+            log::warn!("BF16 not supported on non-CUDA devices, falling back to FP32");
+            DType::F32
+        }
+        (Precision::Fp32, _) => {
+            log::info!("Using FP32 precision");
+            DType::F32
+        }
+    };
+    let use_quantization = false;
+    if matches!(precision, Precision::Int8) {
+        (DType::F32, use_quantization)
+    } else {
+        (compute_dtype, use_quantization)
+    }
+}
+
+/// 模型三文件（config/tokenizer/weights）落位：本地路径做路径遍历攻击
+/// 检测（`..`/`~` 直接拒绝）与权重文件嗅探；远程 repo 走 build_hf_repo
+/// 的 vuln-0009 校验与下载。
+fn resolve_model_files(
+    config: &ModelConfig,
+    model_path: &std::path::Path,
+    is_local_path: bool,
+) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), VecboostError> {
+    // 安全增强：本地路径进行路径遍历攻击检测，直接拒绝
+    if is_local_path {
+        let model_path_str = model_path.to_string_lossy();
+        if model_path_str.contains("..") || model_path_str.contains('~') {
+            return Err(VecboostError::ModelLoadError(format!(
+                "Rejected model path due to potential path traversal attack: {:?}. \
+                     Path must not contain '..' or '~'.",
+                model_path
+            )));
+        }
+
+        log::info!("Loading model from local path: {:?}", model_path);
+        let config_path = model_path.join("config.json");
+        let tokenizer_path = model_path.join("tokenizer.json");
+        let weights_path = model_path.join("model.safetensors");
+        let alt_weights_path = model_path.join("pytorch_model.bin");
+
+        let weights_filename = if weights_path.exists() {
+            weights_path
+        } else if alt_weights_path.exists() {
+            alt_weights_path
+        } else {
+            return Err(VecboostError::ModelLoadError(
+                "No model weights file found (model.safetensors or pytorch_model.bin)".to_string(),
+            ));
+        };
+
+        return Ok((config_path, tokenizer_path, weights_filename));
+    }
+
+    // vuln-0009 修复:repo_id 格式校验由 build_hf_repo 统一执行，防止恶意配置注入
+    let repo_id = model_path.to_string_lossy().into_owned();
+
+    // vuln-0009 加固:远程下载时若未设置 model_sha256,记录警告
+    // .bin(pickle)格式有代码执行风险,model_sha256 是完整性校验的最后防线
+    if config.model_sha256.is_none() {
+        log::warn!(
+            "Loading model from remote HuggingFace repo '{}' without model_sha256 \
+             verification — recommend setting model_sha256 in config to prevent \
+             tampering and supply-chain attacks",
+            repo_id
+        );
+    }
+
+    log::info!(
+        "Downloading/Loading model from HuggingFace Hub: {:?}",
+        model_path
+    );
+    let repo = build_hf_repo(&repo_id)?;
+
+    let config_filename = repo
+        .download_file()
+        .filename("config.json")
+        .send()
+        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+    let tokenizer_filename = repo
+        .download_file()
+        .filename("tokenizer.json")
+        .send()
+        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+    let weights_filename = repo
+        .download_file()
+        .filename("model.safetensors")
+        .send()
+        .or_else(|_| {
+            log::warn!(
+                "model.safetensors unavailable, falling back to pytorch_model.bin; \
+                 pickle format carries code-execution risk — only load .bin models \
+                 from trusted sources, prefer safetensors"
+            );
+            repo.download_file().filename("pytorch_model.bin").send()
+        })
+        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+
+    Ok((config_filename, tokenizer_filename, weights_filename))
+}
+
+/// config.json 解析：架构判定 → 架构专属 config 反序列化 → 规模元数据
+/// （hidden/vocab/参数估算，在 config 被模型构造消费前提取）与位置上限。
+fn parse_model_config(config_content: &str) -> Result<ParsedModelConfig, VecboostError> {
+    let model_config_json: ModelConfigJson = serde_json::from_str(config_content)
+        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+    let architecture = model_config_json.get_architecture();
+
+    let (bert_config, xlm_config) = match &architecture {
+        ModelArchitecture::Bert => {
+            let bert_config: BertConfig = serde_json::from_str(config_content)
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+            (Some(bert_config), None)
+        }
+        ModelArchitecture::XlmRoberta => {
+            let xlm_config: XlmRobertaConfig = serde_json::from_str(config_content)
+                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+            (None, Some(xlm_config))
+        }
+    };
+
+    // 从 config 提取 hidden_size、vocab_size 和估算参数数量
+    let (hidden_size, vocab_size, parameter_count) = match (&bert_config, &xlm_config) {
+        (Some(bc), _) => {
+            let params = estimate_bert_params(
+                bc.vocab_size,
+                bc.hidden_size,
+                bc.num_hidden_layers,
+                bc.intermediate_size,
+                bc.num_attention_heads,
+            );
+            (bc.hidden_size, bc.vocab_size, params)
+        }
+        (_, Some(xc)) => {
+            let params = estimate_bert_params(
+                xc.vocab_size,
+                xc.hidden_size,
+                xc.num_hidden_layers,
+                xc.intermediate_size,
+                xc.num_attention_heads,
+            );
+            (xc.hidden_size, xc.vocab_size, params)
+        }
+        _ => (768, 30522, 110_000_000), // fallback: BERT-base vocab
+    };
+
+    let max_position_embeddings = match (&architecture, &bert_config, &xlm_config) {
+        (ModelArchitecture::Bert, Some(bert), _) => bert.max_position_embeddings,
+        (ModelArchitecture::XlmRoberta, _, Some(xlm)) => xlm.max_position_embeddings,
+        _ => {
+            return Err(VecboostError::ModelLoadError(format!(
+                "Invalid configuration for architecture: {:?}",
+                architecture
+            )));
+        }
+    };
+
+    Ok(ParsedModelConfig {
+        architecture,
+        bert_config,
+        xlm_config,
+        hidden_size,
+        vocab_size,
+        parameter_count,
+        max_position_embeddings,
+    })
+}
+
+/// 完整性校验 + 损坏自动恢复 + 恢复后复检 + 可选 SHA256 终验；任何
+/// 一环失败即显性 ModelLoadError/ModelFileCorrupted，禁止带病加载。
+fn ensure_model_integrity(
+    config: &ModelConfig,
+    model_path: &std::path::Path,
+    is_local_path: bool,
+    filenames: &[std::path::PathBuf; 3],
+) -> Result<(), VecboostError> {
+    let [config_filename, tokenizer_filename, weights_filename] = filenames;
+    let config_str = config_filename.to_string_lossy().to_string();
+    let tokenizer_str = tokenizer_filename.to_string_lossy().to_string();
+    let weights_str = weights_filename.to_string_lossy().to_string();
+
+    let files_to_check = vec![
+        (config_str.clone(), None),
+        (tokenizer_str.clone(), None),
+        (weights_str.clone(), config.model_sha256.clone()),
+    ];
+
+    let min_sizes = {
+        let mut sizes = HashMap::new();
+        sizes.insert(config_str.clone(), 100);
+        sizes.insert(tokenizer_str.clone(), 1000);
+        sizes.insert(weights_str.clone(), 1024 * 1024);
+        sizes
+    };
+
+    log::info!("Checking model file integrity...");
+    let integrity_report = check_model_integrity(&config.name, files_to_check, Some(min_sizes))
+        .map_err(|e| {
+            VecboostError::ModelIntegrityError(format!("Integrity check failed: {}", e))
+        })?;
+
+    if !integrity_report.overall_valid {
+        log::error!("Model file integrity check failed!");
+        for check in &integrity_report.files_checked {
+            if !check.is_valid {
+                log::error!(
+                    "  File: {}, Error: {}",
+                    check.file_path,
+                    check.error_message.as_deref().unwrap_or("Unknown error")
+                );
+            }
+        }
+
+        log::info!("Attempting automatic recovery of corrupted files...");
+        let recovery_config = RecoveryConfig::default();
+        let recovery = ModelRecovery::new(recovery_config);
+
+        let repo_id_str = if !is_local_path {
+            Some(config.model_path.to_string_lossy().to_string())
+        } else {
+            None
+        };
+
+        let repo_id = repo_id_str.as_deref();
+
+        let recovery_result = recovery
+            .recover_corrupted_files(
+                &config.name,
+                model_path,
+                repo_id,
+                &integrity_report.corrupted_files,
+            )
+            .map_err(|e| VecboostError::ModelIntegrityError(format!("Recovery failed: {}", e)))?;
+
+        if recovery_result.success {
+            log::info!("Successfully recovered all corrupted files");
+            log::info!("Re-running integrity check after recovery...");
+
+            let files_to_check = vec![
+                (config_str.clone(), None),
+                (tokenizer_str.clone(), None),
+                (weights_str.clone(), config.model_sha256.clone()),
+            ];
+
+            let min_sizes = {
+                let mut sizes = HashMap::new();
+                sizes.insert(config_str, 100);
+                sizes.insert(tokenizer_str, 1000);
+                sizes.insert(weights_str, 1024 * 1024);
+                sizes
+            };
+
+            let recovery_integrity_report =
+                check_model_integrity(&config.name, files_to_check, Some(min_sizes)).map_err(
+                    |e| {
+                        VecboostError::ModelIntegrityError(format!(
+                            "Post-recovery integrity check failed: {}",
+                            e
+                        ))
+                    },
+                )?;
+
+            if !recovery_integrity_report.overall_valid {
+                return Err(VecboostError::ModelFileCorrupted(format!(
+                    "Model files still corrupted after recovery. Corrupted files: {:?}",
+                    recovery_integrity_report.corrupted_files
+                )));
+            }
+
+            log::info!("Post-recovery integrity check passed");
+        } else {
+            return Err(VecboostError::ModelFileCorrupted(format!(
+                "Failed to recover corrupted files after {} attempts. Corrupted files: {:?}",
+                recovery_result.attempts, recovery_result.failed_files
+            )));
+        }
+    }
+
+    log::info!("Model file integrity check passed");
+
+    if let Some(ref expected_hash) = config.model_sha256 {
+        log::info!("Verifying model file SHA256 hash...");
+        let is_valid = verify_sha256(weights_filename, expected_hash).map_err(|e| {
+            VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e))
+        })?;
+
+        if !is_valid {
+            return Err(VecboostError::ModelFileCorrupted(format!(
+                "Model file SHA256 verification failed. Expected: {}, File: {:?}",
+                expected_hash, weights_filename
+            )));
+        }
+
+        log::info!("Model file SHA256 verification passed");
+    }
+
+    Ok(())
+}
+
+/// 权重 → VarBuilder：PyTorch .bin 走 VarMap 全量加载（大文件提示转换
+/// safetensors），safetensors 走 mmap 零拷贝路径。
+fn load_weights_varbuilder<'a>(
+    is_pytorch: bool,
+    weights_filename: &'a std::path::PathBuf,
+    // VarBuilder<'a> 的保活锚：pytorch 分支的 from_varmap 借用调用方持有的
+    // VarMap（局部 VarMap 会在本函数结束时 drop，无法满足 'a）
+    varmap: &'a mut VarMap,
+    dtype: DType,
+    device: &Device,
+    config: &ModelConfig,
+) -> Result<VarBuilder<'a>, VecboostError> {
+    if is_pytorch {
+        log::info!("Loading PyTorch model weights from: {:?}", weights_filename);
+
+        let file_size = std::fs::metadata(weights_filename)
+            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
+            .len();
+
+        if file_size > PYTORCH_LARGE_FILE_WARN_BYTES {
+            log::warn!(
+                "PyTorch model file is large ({} GB). Large pyTorch files may have loading issues.",
+                file_size as f64 / 1024.0 / 1024.0 / 1024.0
+            );
+            log::info!("Consider converting to safetensors format for better performance:");
+            log::info!(
+                "  python -c \"from transformers import AutoModel; AutoModel.from_pretrained('{}').save_pretrained('./model_converted')\"",
+                config.model_path.to_string_lossy()
+            );
+            log::info!("  Then use './model_converted' as the model_path in config/config.toml");
+        }
+
+        match varmap.load(weights_filename) {
+            Ok(_) => {
+                log::info!("PyTorch weights loaded successfully");
+            }
+            Err(e) => {
+                log::error!("Failed to load PyTorch weights: {}", e);
+                log::error!("This is often due to large model files or incompatible formats.");
+                log::error!("Please convert the model to safetensors format:");
+                log::error!("  pip install optimum");
+                log::error!(
+                    "  optimum-cli export onnx --model {} --task feature-extraction ./model_safetensors",
+                    config.model_path.to_string_lossy()
+                );
+                return Err(VecboostError::ModelLoadError(format!(
+                    "Failed to load PyTorch weights: {}. Please convert the model to safetensors format.",
+                    e
+                )));
+            }
+        }
+        return Ok(VarBuilder::from_varmap(varmap, dtype, device));
+    }
+
+    log::info!(
+        "Loading safetensors model weights from: {:?}",
+        weights_filename
+    );
+    // SAFETY: `VarBuilder::from_mmaped_safetensors` memory-maps model weight files
+    // from disk. This is safe because:
+    // 1. The file path is validated to exist before this call.
+    // 2. The mmap is read-only and managed by candle's internal lifetime tracking.
+    // 3. The OS handles page faults; no manual pointer manipulation is needed.
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], dtype, device) };
+    let vb = vb.map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+    log::info!("Loaded safetensors model weights successfully");
+    Ok(vb)
+}
 
 /// Auto pooling 推断——按模型名推断最佳 pooling 策略。
 ///

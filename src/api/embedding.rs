@@ -1006,54 +1006,10 @@ pub async fn forge_unload_model(req: UnloadModelRequest) -> Result<UnloadModelRe
     description = "OpenAI-compatible embeddings endpoint"
 )]
 pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedResponse, ApiError> {
-    if req.input.is_empty() {
-        return Err(ApiError::InvalidInput {
-            message: crate::i18n::tr("openai-input-empty"),
-            field: Some("input".to_string()),
-            value: openai_error_detail("invalid_request_error", "empty_input"),
-        });
-    }
-    // OpenAI 契约上限 2048;错误文案同时给出 embedding.max_batch_size 生效值
-    if req.input.len() > 2048 {
-        let effective = max_batch_size_from_kit(&state().map_err(to_api_error)?.kit);
-        return Err(ApiError::InvalidInput {
-            message: crate::i18n::tr_with_args(
-                "openai-input-too-large",
-                crate::i18n::tr_args(&[("max", "2048"), ("effective", &effective.to_string())]),
-            ),
-            field: Some("input".to_string()),
-            value: openai_error_detail("invalid_request_error", "batch_too_large"),
-        });
-    }
+    validate_openai_embed_input(&req)?;
 
     let st = state().map_err(to_api_error)?;
-    // model 不在可用模型集合中 → 400 + 可用列表
-    let available = {
-        let svc = st
-            .kit
-            .require::<EmbeddingModule>()
-            .map_err(kit_internal_error)?;
-        let guard = svc.read().await;
-        guard.list_available_models().models
-    };
-    if !available.iter().any(|m| m.name == req.model) {
-        // 400 + 可用模型列表(OpenAI 契约的 model_not_found 本应 404;
-        // NotFound 变体无自由槽位,故用 InvalidInput(BAD_REQUEST) 并经 value 槽
-        // 附带 openai_error_type/openai_code 供 OpenAI SDK 识别)
-        let available_list = available
-            .iter()
-            .map(|m| m.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(ApiError::InvalidInput {
-            message: crate::i18n::tr_with_args(
-                "openai-model-not-found",
-                crate::i18n::tr_args(&[("model", &req.model), ("available", &available_list)]),
-            ),
-            field: Some("model".to_string()),
-            value: openai_error_detail("invalid_request_error", "model_not_found"),
-        });
-    }
+    ensure_openai_model_available(&st, &req.model).await?;
     validate_batch_size(req.input.len(), max_batch_size_from_kit(&st.kit)).map_err(to_api_error)?;
     let svc = st
         .kit
@@ -1080,11 +1036,90 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
         .await
         .map_err(to_api_error)?;
 
-    // 修复：实现 OpenAI 规范的 encoding_format=base64
-    // （小端 f32 字节流的 base64 编码），旧实现直接忽略该参数。
-    let as_base64 = req.encoding_format.as_deref() == Some("base64");
-    let embedding_objects: Vec<EmbeddingObject> = batch_response
-        .embeddings
+    let prompt_tokens = if real_token_count > 0 {
+        real_token_count as u32
+    } else {
+        (total_chars / 4) as u32
+    };
+
+    Ok(OpenAIEmbedResponse {
+        object: "list".to_string(),
+        data: build_openai_embedding_objects(batch_response.embeddings, req.encoding_format),
+        model: req.model.clone(),
+        usage: Usage {
+            prompt_tokens,
+            total_tokens: prompt_tokens,
+        },
+    })
+}
+
+/// OpenAI 契约入参校验：input 非空 + 批量上限 2048（错误文案同时给出
+/// embedding.max_batch_size 生效值）。
+fn validate_openai_embed_input(req: &OpenAIEmbedRequest) -> Result<(), ApiError> {
+    if req.input.is_empty() {
+        return Err(ApiError::InvalidInput {
+            message: crate::i18n::tr("openai-input-empty"),
+            field: Some("input".to_string()),
+            value: openai_error_detail("invalid_request_error", "empty_input"),
+        });
+    }
+    // OpenAI 契约上限 2048;错误文案同时给出 embedding.max_batch_size 生效值
+    if req.input.len() > 2048 {
+        let effective = max_batch_size_from_kit(&state().map_err(to_api_error)?.kit);
+        return Err(ApiError::InvalidInput {
+            message: crate::i18n::tr_with_args(
+                "openai-input-too-large",
+                crate::i18n::tr_args(&[("max", "2048"), ("effective", &effective.to_string())]),
+            ),
+            field: Some("input".to_string()),
+            value: openai_error_detail("invalid_request_error", "batch_too_large"),
+        });
+    }
+    Ok(())
+}
+
+/// model 可用性：不在可用模型集合中 → 400 + 可用模型列表(OpenAI 契约的
+/// model_not_found 本应 404;NotFound 变体无自由槽位,故用
+/// InvalidInput(BAD_REQUEST) 并经 value 槽附带 openai_error_type/openai_code
+/// 供 OpenAI SDK 识别)。
+async fn ensure_openai_model_available(
+    st: &crate::VecboostState,
+    model: &str,
+) -> Result<(), ApiError> {
+    let available = {
+        let svc = st
+            .kit
+            .require::<EmbeddingModule>()
+            .map_err(kit_internal_error)?;
+        let guard = svc.read().await;
+        guard.list_available_models().models
+    };
+    if available.iter().any(|m| m.name == model) {
+        return Ok(());
+    }
+    let available_list = available
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(ApiError::InvalidInput {
+        message: crate::i18n::tr_with_args(
+            "openai-model-not-found",
+            crate::i18n::tr_args(&[("model", model), ("available", &available_list)]),
+        ),
+        field: Some("model".to_string()),
+        value: openai_error_detail("invalid_request_error", "model_not_found"),
+    })
+}
+
+/// 批结果 → wire 对象：实现 OpenAI 规范的 encoding_format=base64
+/// （小端 f32 字节流的 base64 编码），缺省 Floats。
+fn build_openai_embedding_objects(
+    embeddings: Vec<crate::domain::BatchEmbeddingResult>,
+    encoding_format: Option<String>,
+) -> Vec<EmbeddingObject> {
+    let as_base64 = encoding_format.as_deref() == Some("base64");
+    embeddings
         .into_iter()
         .enumerate()
         .map(|(idx, result)| {
@@ -1113,24 +1148,7 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
                 index: idx,
             }
         })
-        .collect();
-
-    // 优先使用 tokenizer 真实计数,回退到 bytes/4
-    let prompt_tokens = if real_token_count > 0 {
-        real_token_count as u32
-    } else {
-        (total_chars / 4) as u32
-    };
-
-    Ok(OpenAIEmbedResponse {
-        object: "list".to_string(),
-        data: embedding_objects,
-        model: req.model.clone(),
-        usage: Usage {
-            prompt_tokens,
-            total_tokens: prompt_tokens,
-        },
-    })
+        .collect()
 }
 
 // =============================================================================

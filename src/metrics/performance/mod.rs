@@ -42,17 +42,47 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
         }
 
         let start_time = Instant::now();
-        let total_requests = Arc::new(AtomicUsize::new(0));
-        let successful_requests = Arc::new(AtomicUsize::new(0));
-        let failed_requests = Arc::new(AtomicUsize::new(0));
-        let total_tokens = Arc::new(AtomicUsize::new(0));
-        let peak_memory = Arc::new(AtomicUsize::new(0));
-
+        let counters = Arc::new(ThroughputCounters::default());
         let barrier = Arc::new(Barrier::new(config.concurrent_requests));
         let semaphore = Arc::new(Semaphore::new(config.concurrent_requests));
+        let text_gen: Arc<dyn Fn(usize) -> String + Send + Sync> = Arc::new(text_generator);
 
-        let text_gen = Arc::new(text_generator);
-        let config_clone = config.clone();
+        let handles =
+            self.spawn_throughput_workers(&config, &barrier, &semaphore, &counters, &text_gen);
+
+        let results: Vec<Result<(usize, usize, usize), tokio::task::JoinError>> =
+            futures::future::join_all(handles).await;
+
+        let mut total_successful = 0usize;
+        let mut total_failed = 0usize;
+
+        for (s, f, _) in results.into_iter().flatten() {
+            total_successful += s;
+            total_failed += f;
+        }
+
+        Ok(finalize_throughput_result(
+            start_time,
+            counters.total_requests.load(Ordering::SeqCst),
+            total_successful,
+            total_failed,
+            counters.total_tokens.load(Ordering::SeqCst),
+        ))
+    }
+
+    /// 起 `concurrent_requests` 个 barrier 对齐的吞吐 worker：每个 worker
+    /// 分得 `total_requests / concurrent_requests` 个请求槽，warmup 请求
+    /// 只执行不记指标。返回局部成功/失败/token 三元组供 join 侧聚合。
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_throughput_workers(
+        &self,
+        config: &PerformanceTestConfig,
+        barrier: &Arc<Barrier>,
+        semaphore: &Arc<Semaphore>,
+        counters: &Arc<ThroughputCounters>,
+        text_gen: &Arc<dyn Fn(usize) -> String + Send + Sync>,
+    ) -> Vec<tokio::task::JoinHandle<(usize, usize, usize)>> {
+        let config = config.clone();
 
         let mut handles = Vec::with_capacity(config.concurrent_requests);
 
@@ -61,13 +91,9 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
             let semaphore = semaphore.clone();
             let engine = self.engine.clone();
             let metrics = self.metrics.clone();
-            let total_requests = total_requests.clone();
-            let successful_requests = successful_requests.clone();
-            let failed_requests = failed_requests.clone();
-            let total_tokens = total_tokens.clone();
-            let peak_memory = peak_memory.clone();
+            let counters = counters.clone();
             let text_gen = text_gen.clone();
-            let config = config_clone.clone();
+            let config = config.clone();
 
             let handle = tokio::spawn(async move {
                 // 信号量在本函数生命周期内不会 close；acquire 失败仅作防御，
@@ -78,7 +104,6 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
 
                 barrier.wait().await;
 
-                let _batch_start = Instant::now();
                 let mut local_successful = 0usize;
                 let mut local_failed = 0usize;
                 let mut local_tokens = 0usize;
@@ -128,16 +153,22 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
                         }
                     }
 
-                    total_requests.fetch_add(1, Ordering::SeqCst);
-                    successful_requests.fetch_add(local_successful, Ordering::SeqCst);
-                    failed_requests.fetch_add(local_failed, Ordering::SeqCst);
-                    total_tokens.fetch_add(local_tokens, Ordering::SeqCst);
+                    counters.total_requests.fetch_add(1, Ordering::SeqCst);
+                    counters
+                        .successful_requests
+                        .fetch_add(local_successful, Ordering::SeqCst);
+                    counters
+                        .failed_requests
+                        .fetch_add(local_failed, Ordering::SeqCst);
+                    counters
+                        .total_tokens
+                        .fetch_add(local_tokens, Ordering::SeqCst);
 
                     if let Ok(mem_info) = sys_info::mem_info() {
                         let current_mem = (mem_info.total - mem_info.avail) as usize;
-                        let current_peak = peak_memory.load(Ordering::SeqCst);
+                        let current_peak = counters.peak_memory.load(Ordering::SeqCst);
                         if current_mem > current_peak {
-                            peak_memory.store(current_mem, Ordering::SeqCst);
+                            counters.peak_memory.store(current_mem, Ordering::SeqCst);
                         }
                     }
                 }
@@ -148,43 +179,7 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
             handles.push(handle);
         }
 
-        let results: Vec<Result<(usize, usize, usize), tokio::task::JoinError>> =
-            futures::future::join_all(handles).await;
-
-        let mut total_successful = 0usize;
-        let mut total_failed = 0usize;
-
-        for (s, f, _) in results.into_iter().flatten() {
-            total_successful += s;
-            total_failed += f;
-        }
-
-        let total_duration = start_time.elapsed();
-
-        let tokens: usize = total_tokens.load(Ordering::SeqCst);
-
-        let qps = if total_duration.as_secs_f64() > 0.0 {
-            total_successful as f64 / total_duration.as_secs_f64()
-        } else {
-            0.0
-        };
-
-        let error_rate = if total_successful + total_failed > 0 {
-            total_failed as f64 / (total_successful + total_failed) as f64
-        } else {
-            0.0
-        };
-
-        Ok(ThroughputResult {
-            total_requests: total_requests.load(Ordering::SeqCst),
-            successful_requests: total_successful,
-            failed_requests: total_failed,
-            total_duration_ms: total_duration.as_millis() as u64,
-            qps,
-            error_rate,
-            total_tokens_processed: tokens as u64,
-            tokens_per_second: tokens as f64 / total_duration.as_secs_f64(),
-        })
+        handles
     }
 
     pub async fn run_latency_benchmark(
@@ -274,126 +269,177 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
         text_generator: impl Fn(usize) -> String + Send + Sync + 'static,
     ) -> Result<ThroughputResult, VecboostError> {
         let start_time = Instant::now();
-        let total_requests = Arc::new(AtomicUsize::new(0));
-        let successful_requests = Arc::new(AtomicUsize::new(0));
-        let failed_requests = Arc::new(AtomicUsize::new(0));
-        let total_tokens = Arc::new(AtomicUsize::new(0));
-
-        let semaphore = Arc::new(Semaphore::new(concurrent_requests));
+        let counters = Arc::new(ThroughputCounters::default());
         let running = Arc::new(AtomicUsize::new(0));
 
-        let text_gen = Arc::new(text_generator);
+        let text_gen: Arc<dyn Fn(usize) -> String + Send + Sync> = Arc::new(text_generator);
 
-        let stress_task = {
-            let semaphore = semaphore.clone();
-            let engine = self.engine.clone();
-            let metrics = self.metrics.clone();
-            let total_requests = total_requests.clone();
-            let successful_requests = successful_requests.clone();
-            let failed_requests = failed_requests.clone();
-            let total_tokens = total_tokens.clone();
-            let running = running.clone();
-            let text_gen = text_gen.clone();
-
-            tokio::spawn(async move {
-                loop {
-                    let permit =
-                        tokio::time::timeout(Duration::from_secs(1), semaphore.acquire()).await;
-
-                    if permit.is_err() {
-                        break;
-                    }
-
-                    if start_time.elapsed().as_secs() >= duration_seconds {
-                        break;
-                    }
-
-                    running.fetch_add(1, Ordering::SeqCst);
-
-                    let text = text_gen(100);
-                    let req_start = Instant::now();
-
-                    let result = {
-                        let engine = engine.write().await;
-                        engine.embed(&text)
-                    };
-
-                    match result {
-                        Ok(mut embedding) => {
-                            let _ = normalize_l2(&mut embedding);
-                            successful_requests.fetch_add(1, Ordering::SeqCst);
-                            total_tokens.fetch_add(embedding.len(), Ordering::SeqCst);
-                            metrics
-                                .record_inference_complete(
-                                    "stress-test",
-                                    req_start.elapsed(),
-                                    1,
-                                    embedding.len(),
-                                )
-                                .await;
-                        }
-                        Err(_) => {
-                            failed_requests.fetch_add(1, Ordering::SeqCst);
-                            metrics.record_inference_error("stress-test").await;
-                        }
-                    }
-
-                    total_requests.fetch_add(1, Ordering::SeqCst);
-                    running.fetch_sub(1, Ordering::SeqCst);
-                }
-            })
-        };
-
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
-        loop {
-            interval.tick().await;
-
-            if start_time.elapsed().as_secs() >= duration_seconds {
-                break;
-            }
-
-            let elapsed = start_time.elapsed().as_secs();
-            let completed = total_requests.load(Ordering::SeqCst);
-            let qps = completed as f64 / elapsed.max(1) as f64;
-
-            info!(
-                "Stress test: {}s elapsed, {} requests, QPS={:.2}, running={}",
-                elapsed,
-                completed,
-                qps,
-                running.load(Ordering::SeqCst)
-            );
-        }
-
+        let stress_task = self.spawn_stress_worker(
+            concurrent_requests,
+            duration_seconds,
+            start_time,
+            &counters,
+            &running,
+            &text_gen,
+        );
+        log_stress_progress(
+            duration_seconds,
+            start_time,
+            &counters.total_requests,
+            &running,
+        )
+        .await;
         drop(stress_task);
 
-        let total_duration = start_time.elapsed();
-        let successful = successful_requests.load(Ordering::SeqCst);
-        let failed = failed_requests.load(Ordering::SeqCst);
-        let tokens = total_tokens.load(Ordering::SeqCst);
+        Ok(finalize_throughput_result(
+            start_time,
+            counters.total_requests.load(Ordering::SeqCst),
+            counters.successful_requests.load(Ordering::SeqCst),
+            counters.failed_requests.load(Ordering::SeqCst),
+            counters.total_tokens.load(Ordering::SeqCst),
+        ))
+    }
 
-        let qps = if total_duration.as_secs_f64() > 0.0 {
-            successful as f64 / total_duration.as_secs_f64()
-        } else {
-            0.0
-        };
+    /// 压测 worker：信号量限并发，1s 内拿不到许可或到达时长上限即停。
+    fn spawn_stress_worker(
+        &self,
+        concurrent_requests: usize,
+        duration_seconds: u64,
+        start_time: Instant,
+        counters: &Arc<ThroughputCounters>,
+        running: &Arc<AtomicUsize>,
+        text_gen: &Arc<dyn Fn(usize) -> String + Send + Sync>,
+    ) -> tokio::task::JoinHandle<()> {
+        let semaphore = Arc::new(Semaphore::new(concurrent_requests));
+        let engine = self.engine.clone();
+        let metrics = self.metrics.clone();
+        let counters = counters.clone();
+        let running = running.clone();
+        let text_gen = text_gen.clone();
 
-        let error_rate = if successful + failed > 0 {
-            failed as f64 / (successful + failed) as f64
-        } else {
-            0.0
-        };
+        tokio::spawn(async move {
+            loop {
+                let permit =
+                    tokio::time::timeout(Duration::from_secs(1), semaphore.acquire()).await;
 
-        Ok(ThroughputResult {
-            total_requests: total_requests.load(Ordering::SeqCst),
-            successful_requests: successful,
-            failed_requests: failed,
-            total_duration_ms: total_duration.as_millis() as u64,
-            qps,
-            error_rate,
-            total_tokens_processed: tokens as u64,
-            tokens_per_second: tokens as f64 / total_duration.as_secs_f64(),
+                if permit.is_err() {
+                    break;
+                }
+
+                if start_time.elapsed().as_secs() >= duration_seconds {
+                    break;
+                }
+
+                running.fetch_add(1, Ordering::SeqCst);
+
+                let text = text_gen(100);
+                let req_start = Instant::now();
+
+                let result = {
+                    let engine = engine.write().await;
+                    engine.embed(&text)
+                };
+
+                match result {
+                    Ok(mut embedding) => {
+                        let _ = normalize_l2(&mut embedding);
+                        counters.successful_requests.fetch_add(1, Ordering::SeqCst);
+                        counters
+                            .total_tokens
+                            .fetch_add(embedding.len(), Ordering::SeqCst);
+                        metrics
+                            .record_inference_complete(
+                                "stress-test",
+                                req_start.elapsed(),
+                                1,
+                                embedding.len(),
+                            )
+                            .await;
+                    }
+                    Err(_) => {
+                        counters.failed_requests.fetch_add(1, Ordering::SeqCst);
+                        metrics.record_inference_error("stress-test").await;
+                    }
+                }
+
+                counters.total_requests.fetch_add(1, Ordering::SeqCst);
+                running.fetch_sub(1, Ordering::SeqCst);
+            }
         })
+    }
+}
+
+/// 吞吐/压测共享的原子计数器组（压测不用 peak_memory，保持默认 0）。
+#[derive(Default)]
+struct ThroughputCounters {
+    total_requests: AtomicUsize,
+    successful_requests: AtomicUsize,
+    failed_requests: AtomicUsize,
+    total_tokens: AtomicUsize,
+    peak_memory: AtomicUsize,
+}
+
+/// 计数快照 + 时长 → 统一的 QPS/错误率/TPS 聚合结果。
+fn finalize_throughput_result(
+    start_time: Instant,
+    total_requests: usize,
+    successful: usize,
+    failed: usize,
+    tokens: usize,
+) -> ThroughputResult {
+    let total_duration = start_time.elapsed();
+
+    let qps = if total_duration.as_secs_f64() > 0.0 {
+        successful as f64 / total_duration.as_secs_f64()
+    } else {
+        0.0
+    };
+
+    let error_rate = if successful + failed > 0 {
+        failed as f64 / (successful + failed) as f64
+    } else {
+        0.0
+    };
+
+    ThroughputResult {
+        total_requests,
+        successful_requests: successful,
+        failed_requests: failed,
+        total_duration_ms: total_duration.as_millis() as u64,
+        qps,
+        error_rate,
+        total_tokens_processed: tokens as u64,
+        tokens_per_second: tokens as f64 / total_duration.as_secs_f64(),
+    }
+}
+
+/// 压测进度日志：每秒 tick 一次输出已耗时/请求数/QPS/在途数，到达时长
+/// 上限即返回。
+async fn log_stress_progress(
+    duration_seconds: u64,
+    start_time: Instant,
+    total_requests: &AtomicUsize,
+    running: &AtomicUsize,
+) {
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    loop {
+        interval.tick().await;
+
+        if start_time.elapsed().as_secs() >= duration_seconds {
+            break;
+        }
+
+        let elapsed = start_time.elapsed().as_secs();
+        let completed = total_requests.load(Ordering::SeqCst);
+        let qps = completed as f64 / elapsed.max(1) as f64;
+
+        info!(
+            "Stress test: {}s elapsed, {} requests, QPS={:.2}, running={}",
+            elapsed,
+            completed,
+            qps,
+            running.load(Ordering::SeqCst)
+        );
     }
 }
 

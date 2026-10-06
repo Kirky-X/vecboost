@@ -7,8 +7,6 @@
 //! 因此保留手写 handler 作为 HTTP 路由的例外。
 
 use std::net::SocketAddr;
-#[cfg(feature = "db")]
-use std::sync::Arc;
 
 use axum::{
     body::Body,

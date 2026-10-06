@@ -360,6 +360,204 @@ fn tokenizer_path_is_noop(
     }
 }
 
+/// [embedding] 缓存配置 → EmbeddingService 构建分流：persist_path 配置时
+/// 启用 WAL 持久层（compact 阈值缺省 1 GiB），cache 关闭时走无缓存构造。
+fn build_embedding_service(
+    engine: &Arc<RwLock<AnyEngine>>,
+    config: &VecboostConfig,
+    model_config: Option<ModelConfig>,
+) -> EmbeddingService {
+    let cache_enabled = config.embedding.cache_enabled;
+    let cache_size = config.embedding.cache_size;
+
+    const DEFAULT_PERSIST_MAX_BYTES: u64 = 1 << 30;
+    if cache_enabled && cache_size > 0 {
+        log::info!("KV Cache enabled with size: {}", cache_size);
+        match config.embedding.persist_path.as_deref() {
+            Some(path) => {
+                let max_bytes = config
+                    .embedding
+                    .persist_max_bytes
+                    .unwrap_or(DEFAULT_PERSIST_MAX_BYTES);
+                log::info!(
+                    "Embedding cache WAL persistence enabled: {} (compact threshold {} bytes)",
+                    path,
+                    max_bytes
+                );
+                EmbeddingService::with_cache_persist(
+                    engine.clone(),
+                    model_config,
+                    cache_size,
+                    std::path::PathBuf::from(path),
+                    max_bytes,
+                )
+            }
+            None => EmbeddingService::with_cache(engine.clone(), model_config, cache_size),
+        }
+    } else {
+        log::info!("KV Cache disabled");
+        EmbeddingService::new(engine.clone(), model_config)
+    }
+}
+
+/// server 模式装配 ModelManager——LFRU 驻留配置 + heat warmstart。
+/// 此前 service 的 model_manager 恒 None：switch/unload 在服务模式不可用，
+/// [model] max_resident_models / resident_memory_budget_mb 无人消费。
+async fn attach_model_manager(
+    service: EmbeddingService,
+    config: &VecboostConfig,
+) -> EmbeddingService {
+    let loader = Arc::new(vecboost::model_management::LocalModelLoader::new(
+        std::path::PathBuf::from("models"),
+    ));
+    let manager = vecboost::model_management::ModelManager::with_loader(loader);
+    let manager = match (
+        config.model.max_resident_models,
+        config.model.resident_memory_budget_mb,
+    ) {
+        (None, None) => manager,
+        (max, budget) => {
+            log::info!(
+                "model residency: max_resident_models={} budget_mb={:?}",
+                max.unwrap_or(usize::MAX),
+                budget
+            );
+            manager.with_residency(max.unwrap_or(usize::MAX), budget)
+        }
+    };
+    manager
+        .load_heat_file(std::path::Path::new(
+            vecboost::model_management::DEFAULT_HEAT_PATH,
+        ))
+        .await;
+    service.with_model_manager(Arc::new(manager))
+}
+
+/// server 模式注入语义缓存（[semantic_cache] enabled=true 时；默认 false
+/// 行为不变）。comparison_mode 非法值启动报错，不静默回退；取值本身已
+/// 废弃不消费（解析保留兼容，非法值仍启动报错——审查 L3）。
+fn attach_semantic_cache(service: EmbeddingService, config: &VecboostConfig) -> EmbeddingService {
+    if !config.semantic_cache.enabled {
+        return service;
+    }
+    let mode: vecboost::ComparisonMode = config
+        .semantic_cache
+        .comparison_mode
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!("[semantic_cache] comparison_mode 无效: {e}"))
+        .expect("semantic_cache.comparison_mode validated at parse");
+    if mode != vecboost::ComparisonMode::Exact {
+        log::warn!(
+            "[semantic_cache] comparison_mode={:?} 已废弃，当前版本不生效（恒为 exact）",
+            mode
+        );
+    }
+    log::info!(
+        "semantic cache enabled: threshold={} fuzzy_threshold={} capacity={}",
+        config.semantic_cache.similarity_threshold,
+        config.semantic_cache.fuzzy_threshold,
+        config.semantic_cache.capacity
+    );
+    let semantic = Arc::new(
+        vecboost::SemanticCache::with_capacity(
+            config.semantic_cache.similarity_threshold,
+            config.semantic_cache.capacity,
+        )
+        .with_fuzzy_threshold(config.semantic_cache.fuzzy_threshold),
+    );
+    service.with_semantic_cache(semantic)
+}
+
+/// 翻译路由表：启动期消费 [translation].pairs 逐 pair 急切构建
+/// （EngineFactory task=translate 分派臂），任一 bundle 缺失 fail-fast；
+/// 空 pairs = 空表服务（端点注册、请求 400 translate-not-configured）。
+/// 评审 PERF-4：按 pair 数分摊 per-Session intra 线程预算（防多 pair
+/// Session 全核过订阅）；单 pair/空表回退全核。
+#[allow(unused_variables)]
+fn build_translate_pairs(
+    config: &VecboostConfig,
+    device: vecboost::config::model::DeviceType,
+) -> anyhow::Result<
+    std::collections::HashMap<(String, String), vecboost::service::translate::TranslatePairRoute>,
+> {
+    #[cfg_attr(not(feature = "onnx"), allow(unused_mut))]
+    let mut translate_pairs = std::collections::HashMap::new();
+
+    #[cfg(feature = "onnx")]
+    if config.translation.pairs.len() > 1 {
+        let cores = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(1);
+        let divisor = config.translation.pairs.len().clamp(1, 4);
+        let budget = (cores / divisor).clamp(1, cores);
+        vecboost::engine::set_session_intra_threads(budget);
+        log::info!(
+            "translation: per-session intra threads budget = {budget} ({} pairs)",
+            config.translation.pairs.len()
+        );
+    }
+    #[cfg(not(feature = "onnx"))]
+    if !config.translation.pairs.is_empty() {
+        return Err(anyhow::anyhow!(
+            "[translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建"
+        ));
+    }
+
+    #[cfg(feature = "onnx")]
+    for (index, pair) in config.translation.pairs.iter().enumerate() {
+        // 缺省值取 TranslationParams::default() 单一事实源（评审 ARC-2：
+        // 禁止 512 字面量第二处来源，default 变更时自动联动）
+        let defaults = vecboost::config::model::TranslationParams::default();
+        let translation_params = vecboost::config::model::TranslationParams::new(
+            pair.max_source_tokens.unwrap_or(defaults.max_source_tokens),
+            pair.max_new_tokens.unwrap_or(defaults.max_new_tokens),
+        )
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "[translation] pairs[{index}] ({}-{}) 参数非法: {e}",
+                pair.source_language,
+                pair.target_language
+            )
+        })?;
+        let pair_config = vecboost::config::model::ModelConfig {
+            name: format!(
+                "translate-{}-{}",
+                pair.source_language, pair.target_language
+            ),
+            engine_type: vecboost::config::model::EngineType::Onnx,
+            model_path: pair.model_path.clone(),
+            tokenizer_path: pair.tokenizer_path.clone(),
+            device: device.clone(),
+            max_batch_size: 1,
+            oom_fallback_enabled: true,
+            task: vecboost::config::model::ModelTask::Translate,
+            translation_params: Some(translation_params),
+            ..Default::default()
+        };
+        translate_pairs.insert(
+            (pair.source_language.clone(), pair.target_language.clone()),
+            vecboost::service::translate::TranslatePairRoute::new(
+                Arc::new(RwLock::new(
+                    vecboost::engine::EngineFactory::create(
+                        vecboost::config::model::EngineType::Onnx,
+                        &pair_config,
+                    )
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "[translation] pairs[{index}] ({}-{}) 加载失败: {e}",
+                            pair.source_language,
+                            pair.target_language
+                        )
+                    })?,
+                )),
+                translation_params,
+            ),
+        );
+    }
+
+    Ok(translate_pairs)
+}
+
 async fn init_engine_and_services(
     config: &VecboostConfig,
     checkpoints: &std::collections::BTreeMap<String, CheckpointPreset>,
@@ -380,40 +578,8 @@ async fn init_engine_and_services(
         vecboost::engine::EngineFactory::create(engine_type, &model_config)?,
     ));
 
-    let cache_enabled = config.embedding.cache_enabled;
-    let cache_size = config.embedding.cache_size;
-
-    // [embedding] persist_path 配置时启用 WAL 持久层并在启动时回放。
-    const DEFAULT_PERSIST_MAX_BYTES: u64 = 1 << 30;
-    let service = if cache_enabled && cache_size > 0 {
-        log::info!("KV Cache enabled with size: {}", cache_size);
-        match config.embedding.persist_path.as_deref() {
-            Some(path) => {
-                let max_bytes = config
-                    .embedding
-                    .persist_max_bytes
-                    .unwrap_or(DEFAULT_PERSIST_MAX_BYTES);
-                log::info!(
-                    "Embedding cache WAL persistence enabled: {} (compact threshold {} bytes)",
-                    path,
-                    max_bytes
-                );
-                EmbeddingService::with_cache_persist(
-                    engine.clone(),
-                    Some(model_config.clone()),
-                    cache_size,
-                    std::path::PathBuf::from(path),
-                    max_bytes,
-                )
-            }
-            None => {
-                EmbeddingService::with_cache(engine.clone(), Some(model_config.clone()), cache_size)
-            }
-        }
-    } else {
-        log::info!("KV Cache disabled");
-        EmbeddingService::new(engine.clone(), Some(model_config.clone()))
-    };
+    let service = build_embedding_service(&engine, config, Some(model_config.clone()));
+    let service = attach_model_manager(service, config).await;
 
     // server 模式装配 ModelManager——LFRU 驻留配置 + heat warmstart。
     // 此前 service 的 model_manager 恒 None：switch/unload 在服务模式不可用，
@@ -445,40 +611,7 @@ async fn init_engine_and_services(
         .await;
     let service = service.with_model_manager(Arc::new(model_manager));
 
-    // server 模式注入语义缓存（[semantic_cache] enabled=true 时；
-    // 默认 false 行为不变）。comparison_mode 非法值启动报错，不静默回退。
-    let service = if config.semantic_cache.enabled {
-        // comparison_mode 仅校验合法性（非法值启动报错）；取值本身已废弃不消费。
-        let mode: vecboost::ComparisonMode = config
-            .semantic_cache
-            .comparison_mode
-            .parse()
-            .map_err(|e: String| anyhow::anyhow!("[semantic_cache] comparison_mode 无效: {e}"))?;
-        if mode != vecboost::ComparisonMode::Exact {
-            log::warn!(
-                "[semantic_cache] comparison_mode={:?} 已废弃，当前版本不生效（恒为 exact）",
-                mode
-            );
-        }
-        log::info!(
-            "semantic cache enabled: threshold={} fuzzy_threshold={} capacity={}",
-            config.semantic_cache.similarity_threshold,
-            config.semantic_cache.fuzzy_threshold,
-            config.semantic_cache.capacity
-        );
-        // comparison_mode 已废弃：解析保留兼容（非法值仍启动报错），但不再应用——
-        // 该配置无生产消费者，行为与告警文案一致（审查 L3）
-        let semantic = Arc::new(
-            vecboost::SemanticCache::with_capacity(
-                config.semantic_cache.similarity_threshold,
-                config.semantic_cache.capacity,
-            )
-            .with_fuzzy_threshold(config.semantic_cache.fuzzy_threshold),
-        );
-        service.with_semantic_cache(semantic)
-    } else {
-        service
-    };
+    let service = attach_semantic_cache(service, config);
 
     // [model.checkpoints] 预设表注入（MCP/CLI/server 三模式共用——switch_model
     // 按名命中预设时应用参数；查表消费唯一入口为 EmbeddingService 持有的该表）
@@ -503,83 +636,11 @@ async fn init_engine_and_services(
     // 统计），端点始终可注册应答
     let detect_service = DetectService::new();
 
-    // 翻译路由表：启动期消费 [translation].pairs 逐 pair 急切构建
-    // （EngineFactory task=translate 分派臂），任一 bundle 缺失 fail-fast；
-    // 空 pairs = 空表服务（端点注册、请求 400 translate-not-configured），
-    // 与 decision 无条件预构建语义对齐
-    #[cfg_attr(not(feature = "onnx"), allow(unused_mut))]
-    let mut translate_pairs = std::collections::HashMap::new();
-    // 评审 PERF-4：按 pair 数分摊 per-Session intra 线程预算（防多 pair
-    // Session 全核过订阅）；单 pair/空表回退全核
-    #[cfg(feature = "onnx")]
-    if config.translation.pairs.len() > 1 {
-        let cores = std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(1);
-        let divisor = config.translation.pairs.len().clamp(1, 4);
-        let budget = (cores / divisor).clamp(1, cores);
-        vecboost::engine::set_session_intra_threads(budget);
-        log::info!(
-            "translation: per-session intra threads budget = {budget} ({} pairs)",
-            config.translation.pairs.len()
-        );
-    }
-    #[cfg(not(feature = "onnx"))]
-    if !config.translation.pairs.is_empty() {
-        return Err(anyhow::anyhow!(
-            "[translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建"
-        ));
-    }
-    #[cfg(feature = "onnx")]
-    for (index, pair) in config.translation.pairs.iter().enumerate() {
-        {
-            // 缺省值取 TranslationParams::default() 单一事实源（评审 ARC-2：
-            // 禁止 512 字面量第二处来源，default 变更时自动联动）
-            let defaults = vecboost::config::model::TranslationParams::default();
-            let translation_params = vecboost::config::model::TranslationParams::new(
-                pair.max_source_tokens.unwrap_or(defaults.max_source_tokens),
-                pair.max_new_tokens.unwrap_or(defaults.max_new_tokens),
-            )
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "[translation] pairs[{index}] ({}-{}) 参数非法: {e}",
-                    pair.source_language,
-                    pair.target_language
-                )
-            })?;
-            let pair_config = vecboost::config::model::ModelConfig {
-                name: format!(
-                    "translate-{}-{}",
-                    pair.source_language, pair.target_language
-                ),
-                engine_type: vecboost::config::model::EngineType::Onnx,
-                model_path: pair.model_path.clone(),
-                tokenizer_path: pair.tokenizer_path.clone(),
-                device: model_config.device.clone(),
-                max_batch_size: 1,
-                oom_fallback_enabled: true,
-                task: vecboost::config::model::ModelTask::Translate,
-                translation_params: Some(translation_params),
-                ..Default::default()
-            };
-            let any = vecboost::engine::EngineFactory::create(
-                vecboost::config::model::EngineType::Onnx,
-                &pair_config,
-            )
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "[translation] pairs[{index}] ({}-{}) 加载失败: {e}",
-                    pair.source_language,
-                    pair.target_language
-                )
-            })?;
-            translate_pairs.insert(
-                (pair.source_language.clone(), pair.target_language.clone()),
-                TranslatePairRoute::new(Arc::new(RwLock::new(any)), translation_params),
-            );
-        }
-    }
-    let translate_service = Arc::new(TranslateService::new(translate_pairs));
+    let translate_service = Arc::new(TranslateService::new(build_translate_pairs(
+        config,
+        model_config.device.clone(),
+    )?));
+
     log::info!(
         "translation service initialized: {} pair(s) configured",
         translate_service.configured_pairs().len()
@@ -874,6 +935,52 @@ async fn init_auth(
     Ok((garrison_handle, garrison_csrf_config))
 }
 
+/// [device] auto_plan：硬件探测计划填充 WorkerConfig 未显式配置字段。
+/// 显式判定：server.workers（Option，Some 即显式）；其余字段以"与编译期
+/// 默认不同"近似判定（显式设为默认值会被视为未显式，见注释与启动日志）。
+fn apply_auto_plan(config: &VecboostConfig, worker_config: &mut vecboost::pipeline::WorkerConfig) {
+    if !config.device.auto_plan {
+        return;
+    }
+    let probes = gather_probes(config);
+    let hw_plan = vecboost::planner::plan(&probes);
+    log::info!(
+        "auto_plan: 硬件规划 worker_threads={} max_batch_size={} batch_wait_ms={} \
+         quantized_recommended={} bottleneck={} rationale={}",
+        hw_plan.worker_threads,
+        hw_plan.max_batch_size,
+        hw_plan.batch_wait_ms,
+        hw_plan.quantized_recommended,
+        hw_plan.bottleneck,
+        hw_plan.rationale
+    );
+    let d = vecboost::pipeline::WorkerConfig::default();
+    let explicit = vecboost::planner::PlanOverride {
+        worker_threads: config.server.workers,
+        max_batch_size: (config.embedding.max_batch_size != d.max_batch_size)
+            .then_some(config.embedding.max_batch_size),
+        batch_wait_ms: (config.pipeline.worker.batch_wait_ms != d.batch_wait_ms)
+            .then_some(config.pipeline.worker.batch_wait_ms),
+    };
+    let mut wt = hw_plan.worker_threads; // 仅计划日志用（见下）
+    let mut bs = worker_config.max_batch_size;
+    let mut bw = worker_config.batch_wait_ms;
+    vecboost::planner::apply_plan(&mut wt, &mut bs, &mut bw, &hw_plan, &explicit);
+    // worker_threads 语义：plan 值为 tokio/rayon 级线程建议，此处仅日志；
+    // 实际 runtime 线程数在 main() 启动时已按 确定（显式优先）。
+    log::info!(
+        "auto_plan: 应用结果 max_batch_size={} batch_wait_ms={} \
+         （计划 max_batch_size={} batch_wait_ms={} worker_threads 建议={}）",
+        bs,
+        bw,
+        hw_plan.max_batch_size,
+        hw_plan.batch_wait_ms,
+        wt
+    );
+    worker_config.max_batch_size = bs;
+    worker_config.batch_wait_ms = bw;
+}
+
 async fn init_pipeline(
     config: &VecboostConfig,
     service: &Arc<RwLock<EmbeddingService>>,
@@ -917,45 +1024,7 @@ async fn init_pipeline(
         // [device] auto_plan 为 true 时，用硬件探测计划填充未显式配置字段。
         // 显式判定：server.workers（Option，Some 即显式）；其余字段以"与编译期
         // 默认不同"近似判定（显式设为默认值会被视为未显式，见注释与启动日志）。
-        if config.device.auto_plan {
-            let probes = gather_probes(config);
-            let hw_plan = vecboost::planner::plan(&probes);
-            log::info!(
-                "auto_plan: 硬件规划 worker_threads={} max_batch_size={} batch_wait_ms={} \
-                 quantized_recommended={} bottleneck={} rationale={}",
-                hw_plan.worker_threads,
-                hw_plan.max_batch_size,
-                hw_plan.batch_wait_ms,
-                hw_plan.quantized_recommended,
-                hw_plan.bottleneck,
-                hw_plan.rationale
-            );
-            let d = vecboost::pipeline::WorkerConfig::default();
-            let explicit = vecboost::planner::PlanOverride {
-                worker_threads: config.server.workers,
-                max_batch_size: (config.embedding.max_batch_size != d.max_batch_size)
-                    .then_some(config.embedding.max_batch_size),
-                batch_wait_ms: (config.pipeline.worker.batch_wait_ms != d.batch_wait_ms)
-                    .then_some(config.pipeline.worker.batch_wait_ms),
-            };
-            let mut wt = hw_plan.worker_threads; // 仅计划日志用（见下）
-            let mut bs = worker_config.max_batch_size;
-            let mut bw = worker_config.batch_wait_ms;
-            vecboost::planner::apply_plan(&mut wt, &mut bs, &mut bw, &hw_plan, &explicit);
-            // worker_threads 语义：plan 值为 tokio/rayon 级线程建议，此处仅日志；
-            // 实际 runtime 线程数在 main() 启动时已按 确定（显式优先）。
-            log::info!(
-                "auto_plan: 应用结果 max_batch_size={} batch_wait_ms={} \
-                 （计划 max_batch_size={} batch_wait_ms={} worker_threads 建议={}）",
-                bs,
-                bw,
-                hw_plan.max_batch_size,
-                hw_plan.batch_wait_ms,
-                wt
-            );
-            worker_config.max_batch_size = bs;
-            worker_config.batch_wait_ms = bw;
-        }
+        apply_auto_plan(config, &mut worker_config);
 
         let worker_manager = Arc::new(
             WorkerManager::new(
@@ -1224,40 +1293,7 @@ async fn app_main() -> anyhow::Result<()> {
 
     // 配置先行加载：logger 的级别/文件参数来自 [logging] 配置段，
     // 因此配置必须在 logger 之前就绪；此时尚无日志后端，错误经 stderr 输出。
-    let config = {
-        // 显式指定的 --config 文件不存在 → 立即报错退出(码 2),
-        // 杜绝"以为自定义配置生效,实际跑默认配置"的静默回退
-        if let Some(p) = config_path.as_deref()
-            && !std::path::Path::new(p).exists()
-        {
-            eprintln!(
-                "{}",
-                vecboost::i18n::tr_with_args(
-                    "cli-config-not-found",
-                    vecboost::i18n::tr_args(&[("path", p)]),
-                )
-            );
-            eprintln!("{}", vecboost::i18n::tr("cli-config-not-file-hint"));
-            std::process::exit(2);
-        }
-        let result = match config_path.as_deref() {
-            Some(p) => VecboostConfig::load_via_confers_with_path(p),
-            None => VecboostConfig::load_via_confers(),
-        };
-        match result {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!(
-                    "Error: {}",
-                    vecboost::i18n::tr_with_args(
-                        "startup-config",
-                        vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
-                    )
-                );
-                std::process::exit(1);
-            }
-        }
-    };
+    let config = load_startup_config(config_path.as_deref());
 
     // doctor 只读诊断 ——在 logger/引擎装配之前短路运行。
     // 诊断必须能在模型损坏、依赖缺失时工作，因此不走需要
@@ -1269,9 +1305,209 @@ async fn app_main() -> anyhow::Result<()> {
             .print_and_exit();
     }
 
-    // [logging] 配置段接入 logger；
-    // VECBOOST_LOG_LEVEL 环境变量优先级高于配置文件。
-    // 白名单含 inklog 合法别名（warning 等）
+    let (logger_manager, log_level) = init_logger(&config, cli_mode, mcp_mode).await?;
+
+    log::info!(
+        "Starting Rust Embedding Service... (log level: {log_level}, config: {})",
+        config_path.as_deref().unwrap_or("config/config.toml")
+    );
+
+    #[cfg(any(feature = "http", feature = "mcp", feature = "cli", feature = "grpc"))]
+    {
+        let _counts = sdforge::init_all_plugins();
+    }
+
+    log::info!(
+        "Configuration loaded: {} auth={} audit={}",
+        if config.auth.enabled {
+            "auth enabled"
+        } else {
+            "auth disabled"
+        },
+        config.auth.enabled,
+        config.audit.enabled
+    );
+
+    enforce_encryption_gate(&config)?;
+
+    #[cfg(feature = "db")]
+    let (db_pool, _db_metrics) = init_db_pool(&config).await?;
+    // 供 /health?depth=full 的 DB 就绪探测
+    #[cfg(feature = "db")]
+    let _ = vecboost::db::register_global_pool(std::sync::Arc::new(db_pool.clone()));
+
+    // [model.checkpoints] 预设表启动 fail-fast：非法条目在此拒绝启动，
+    // resolved 表供 server kit 注入与 EmbeddingService switch 查表共用
+    let checkpoints = resolve_checkpoints_fail_fast(&config)?;
+    log_checkpoints_resolved(&config, &checkpoints);
+
+    let (
+        _engine,
+        service,
+        rerank_service,
+        decision_service,
+        detect_service,
+        translate_service,
+        _model_config,
+    ) = init_engine_and_services(&config, &checkpoints).await?;
+
+    // `--warmup N` 启动预热 ——N 条合成短文本推理，预热 mkl/代码路径/
+    // tokenizer 缓存。放在 MCP/CLI 分流之前，三种模式均受益。
+    let warmup = parse_warmup_count(&_filtered_args);
+    if warmup > 0 {
+        run_startup_warmup(&_engine, warmup).await;
+    }
+
+    if dispatch_non_server_modes(
+        &service,
+        &rerank_service,
+        &decision_service,
+        &detect_service,
+        &translate_service,
+        &_filtered_args,
+    )
+    .await?
+    {
+        return Ok(());
+    }
+
+    let security = init_security_stack(
+        &config,
+        #[cfg(feature = "db")]
+        db_pool.clone(),
+    )
+    .await?;
+
+    assemble_and_serve_http(
+        &config,
+        &_filtered_args,
+        config_path,
+        service,
+        rerank_service,
+        decision_service,
+        detect_service,
+        translate_service,
+        logger_manager,
+        security,
+        #[cfg(feature = "db")]
+        db_pool,
+    )
+    .await
+}
+
+/// 预设表解析结果盘点日志：同名显式条目对内置做字段级覆盖、不产生
+/// 第二条目（merge 语义），单列计数避免运维据「总 resolved + explicit」
+/// 盘点得出重复总数。
+fn log_checkpoints_resolved(
+    config: &VecboostConfig,
+    checkpoints: &std::collections::BTreeMap<String, CheckpointPreset>,
+) {
+    let builtin_overrides = config
+        .model
+        .checkpoints
+        .contains_key(vecboost::config::model::BUILTIN_MULTILINGUAL_CHECKPOINT)
+        as usize;
+    log::info!(
+        "model checkpoints resolved: {} total (builtin laya-multilingual + {} user-configured, \
+         {} overriding the builtin)",
+        checkpoints.len(),
+        config.model.checkpoints.len(),
+        builtin_overrides
+    );
+}
+
+/// server 路径安全栈：绑定安全闸门（fail-fast）→ 限流适配器 → auth
+/// （garrison handle + CSRF 配置，auth feature）→ 审计日志。
+/// 仅 HTTP 服务器路径需要（MCP/CLI 均已提前返回）。
+struct SecurityStack {
+    rate_limiter: Arc<LimiteronAdapter>,
+    audit_logger: Option<Arc<AuditLogger>>,
+    #[cfg(feature = "auth")]
+    garrison_handle: Option<Arc<vecboost::auth::GarrisonHandle>>,
+    #[cfg(feature = "auth")]
+    garrison_csrf_config: Option<Arc<vecboost::auth::GarrisonCsrfConfig>>,
+}
+
+async fn init_security_stack(
+    config: &VecboostConfig,
+    #[cfg(feature = "db")] db_pool: crate::DbPool,
+) -> anyhow::Result<SecurityStack> {
+    validate_bind_safety(&config.server.host, config.auth.enabled)?;
+
+    let rate_limiter = Arc::new(
+        LimiteronAdapter::new(RateLimitSettings {
+            global_requests_per_minute: config.rate_limit.global_requests_per_minute,
+            ip_requests_per_minute: config.rate_limit.ip_requests_per_minute,
+            user_requests_per_minute: config.rate_limit.user_requests_per_minute,
+            api_key_requests_per_minute: config.rate_limit.api_key_requests_per_minute,
+        })
+        .await,
+    );
+
+    #[cfg(feature = "auth")]
+    let (garrison_handle, garrison_csrf_config) = init_auth(config).await?;
+
+    let audit_logger = init_audit_logger(
+        config,
+        #[cfg(feature = "db")]
+        db_pool,
+    );
+
+    Ok(SecurityStack {
+        rate_limiter,
+        audit_logger,
+        #[cfg(feature = "auth")]
+        garrison_handle,
+        #[cfg(feature = "auth")]
+        garrison_csrf_config,
+    })
+}
+
+/// 启动配置加载：显式指定的 --config 文件不存在 → 立即报错退出(码 2)，
+/// 杜绝"以为自定义配置生效,实际跑默认配置"的静默回退；加载失败以
+/// stderr 输出后退出(码 1)——此时尚无日志后端。
+fn load_startup_config(config_path: Option<&str>) -> VecboostConfig {
+    if let Some(p) = config_path
+        && !std::path::Path::new(p).exists()
+    {
+        eprintln!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "cli-config-not-found",
+                vecboost::i18n::tr_args(&[("path", p)]),
+            )
+        );
+        eprintln!("{}", vecboost::i18n::tr("cli-config-not-file-hint"));
+        std::process::exit(2);
+    }
+    let result = match config_path {
+        Some(p) => VecboostConfig::load_via_confers_with_path(p),
+        None => VecboostConfig::load_via_confers(),
+    };
+    match result {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "Error: {}",
+                vecboost::i18n::tr_with_args(
+                    "startup-config",
+                    vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
+/// [logging] 配置段接入 logger；VECBOOST_LOG_LEVEL 环境变量优先级高于
+/// 配置文件（白名单含 inklog 合法别名 warning 等）。CLI/MCP 模式将全部
+/// 日志级别路由到 stderr——stdout 只承载机器可读 JSON / JSON-RPC 协议
+/// 消息（inklog ConsoleSink 不消费 enabled 标志，上游缺陷绕过）。
+async fn init_logger(
+    config: &VecboostConfig,
+    cli_mode: bool,
+    mcp_mode: bool,
+) -> anyhow::Result<(Arc<inklog::LoggerManager>, String)> {
     let log_level = std::env::var("VECBOOST_LOG_LEVEL")
         .ok()
         .filter(|l| {
@@ -1280,9 +1516,6 @@ async fn app_main() -> anyhow::Result<()> {
         })
         .unwrap_or_else(|| config.logging.level.clone());
 
-    // 绕过：inklog ConsoleSink 不消费 enabled 标志（上游缺陷，
-    // console(false) 无法关闭输出）。CLI/MCP 模式下将全部日志级别路由到 stderr，
-    // 保证 stdout 只承载机器可读 JSON / JSON-RPC 协议消息。
     let mut logger_builder = inklog::LoggerManager::builder()
         .level(&log_level)
         .console(true);
@@ -1333,30 +1566,12 @@ async fn app_main() -> anyhow::Result<()> {
             )
         )
     })?);
+    Ok((logger_manager, log_level))
+}
 
-    log::info!(
-        "Starting Rust Embedding Service... (log level: {log_level}, config: {})",
-        config_path.as_deref().unwrap_or("config/config.toml")
-    );
-
-    #[cfg(any(feature = "http", feature = "mcp", feature = "cli", feature = "grpc"))]
-    {
-        let _counts = sdforge::init_all_plugins();
-    }
-
-    log::info!(
-        "Configuration loaded: {} auth={} audit={}",
-        if config.auth.enabled {
-            "auth enabled"
-        } else {
-            "auth disabled"
-        },
-        config.auth.enabled,
-        config.audit.enabled
-    );
-
-    // Enforce encryption key when explicitly required (production hardening).
-    // Set VECBOOST_REQUIRE_ENCRYPTION=1 to refuse startup without a valid key.
+/// 加密闸门（production hardening）：VECBOOST_REQUIRE_ENCRYPTION=1 时
+/// 无有效 key 拒绝启动；未强制时检测到敏感配置仅提示明文存储风险。
+fn enforce_encryption_gate(config: &VecboostConfig) -> anyhow::Result<()> {
     if std::env::var("VECBOOST_REQUIRE_ENCRYPTION")
         .map(|v| v == "1" || v == "true")
         .unwrap_or(false)
@@ -1395,412 +1610,91 @@ async fn app_main() -> anyhow::Result<()> {
             );
         }
     }
+    Ok(())
+}
 
-    #[cfg(feature = "db")]
-    let (db_pool, _db_metrics) = init_db_pool(&config).await?;
-    // 供 /health?depth=full 的 DB 就绪探测
-    #[cfg(feature = "db")]
-    let _ = vecboost::db::register_global_pool(std::sync::Arc::new(db_pool.clone()));
-
-    // [model.checkpoints] 预设表启动 fail-fast：非法条目在此拒绝启动，
-    // resolved 表供 server kit 注入与 EmbeddingService switch 查表共用
-    let checkpoints = resolve_checkpoints_fail_fast(&config)?;
-    // 同名显式条目对内置做字段级覆盖、不产生第二条目（merge 语义），
-    // 单列计数避免运维据「总 resolved + explicit」盘点得出重复总数
-    let builtin_overrides = config
-        .model
-        .checkpoints
-        .contains_key(vecboost::config::model::BUILTIN_MULTILINGUAL_CHECKPOINT)
-        as usize;
-    log::info!(
-        "model checkpoints resolved: {} total (builtin laya-multilingual + {} user-configured, \
-         {} overriding the builtin)",
-        checkpoints.len(),
-        config.model.checkpoints.len(),
-        builtin_overrides
+/// `--warmup N` 启动预热：N 条合成短文本推理，预热 mkl/代码路径/
+/// tokenizer 缓存。按 task 分派：task=decision 时 embed 恒
+/// UnsupportedTask（决策引擎不产向量），改用单题 noul decide 预热全链
+/// （预处理→5 张量推理→后处理）；预热失败显性记录，不再以成功日志掩盖
+/// 零次执行（规则 11）。
+async fn run_startup_warmup(engine: &Arc<RwLock<AnyEngine>>, warmup: u32) {
+    let start = std::time::Instant::now();
+    let guard = engine.read().await;
+    let decision_pipeline = vecboost::engine::InferenceEngine::supports_task(
+        &*guard,
+        vecboost::config::model::ModelTask::Decision,
     );
-
-    let (
-        _engine,
-        service,
-        rerank_service,
-        decision_service,
-        detect_service,
-        translate_service,
-        _model_config,
-    ) = init_engine_and_services(&config, &checkpoints).await?;
-
-    // `--warmup N` 启动预热 ——N 条合成短文本推理，预热 mkl/代码路径/
-    // tokenizer 缓存。放在 MCP/CLI 分流之前，三种模式均受益。
-    // 按 task 分派：task=decision 时 embed 恒 UnsupportedTask（决策引擎
-    // 不产向量），改用单题 noul decide 预热全链（预处理→5 张量推理→后
-    // 处理）；预热失败显性记录，不再以成功日志掩盖零次执行（规则 11）。
-    let warmup = parse_warmup_count(&_filtered_args);
-    if warmup > 0 {
-        let start = std::time::Instant::now();
-        let guard = _engine.read().await;
-        let decision_pipeline = vecboost::engine::InferenceEngine::supports_task(
-            &*guard,
-            vecboost::config::model::ModelTask::Decision,
-        );
-        let failures = if decision_pipeline {
-            let req: vecboost::domain::DecisionRequest = serde_json::from_str(
-                r#"{"state":"vecboost warmup","questions":[{"name":"warmup","qtype":"noul","instructions":"warm up the decision pipeline"}]}"#,
-            )
-            .expect("static warmup decision request");
-            match vecboost::engine::InferenceEngine::decide(&*guard, &req) {
-                Ok(_) => 0,
-                Err(e) => {
-                    log::warn!("warmup: 决策管线全链预热失败：{e}");
-                    1
-                }
-            }
-        } else {
-            (0..warmup)
-                .filter(|i| {
-                    let text = format!(
-                        "vecboost warmup sentence {i}: the quick brown fox jumps over the lazy dog"
-                    );
-                    vecboost::engine::InferenceEngine::embed(&*guard, &text).is_err()
-                })
-                .count()
-        };
-        let mode = if decision_pipeline {
-            "decide×1（决策管线全链）"
-        } else {
-            "embed"
-        };
-        if failures > 0 {
-            log::warn!(
-                "warmup: 预热未完全生效（{mode}，{} 次失败，{:?}）——首次请求可能更慢",
-                failures,
-                start.elapsed()
-            );
-        } else {
-            log::info!("warmup: 预热推理完成（{mode}，{:?}）", start.elapsed());
-        }
-    }
-
-    #[cfg(feature = "mcp")]
-    if std::env::args().any(|a| a == "--mcp") {
-        return run_mcp_server(
-            service,
-            rerank_service,
-            decision_service,
-            detect_service,
-            translate_service,
+    let failures = if decision_pipeline {
+        let req: vecboost::domain::DecisionRequest = serde_json::from_str(
+            r#"{"state":"vecboost warmup","questions":[{"name":"warmup","qtype":"noul","instructions":"warm up the decision pipeline"}]}"#,
         )
-        .await;
-    }
-
-    #[cfg(feature = "cli")]
-    if run_cli_command(
-        service.clone(),
-        rerank_service.clone(),
-        decision_service.clone(),
-        detect_service,
-        translate_service.clone(),
-        _filtered_args.clone(),
-    )
-    .await?
-    {
-        return Ok(());
-    }
-
-    // 安全闸门:仅 HTTP 服务器路径需要(上方 MCP/CLI 均已提前返回)。
-    validate_bind_safety(&config.server.host, config.auth.enabled)?;
-
-    let rate_limiter = Arc::new(
-        LimiteronAdapter::new(RateLimitSettings {
-            global_requests_per_minute: config.rate_limit.global_requests_per_minute,
-            ip_requests_per_minute: config.rate_limit.ip_requests_per_minute,
-            user_requests_per_minute: config.rate_limit.user_requests_per_minute,
-            api_key_requests_per_minute: config.rate_limit.api_key_requests_per_minute,
-        })
-        .await,
-    );
-
-    #[cfg(feature = "auth")]
-    let (garrison_handle, garrison_csrf_config) = init_auth(&config).await?;
-
-    let audit_logger = if config.audit.enabled {
-        log::info!("Audit logging enabled");
-        let audit_config = AuditConfig {
-            enabled: true,
-            log_file_path: std::path::PathBuf::from(&config.audit.log_file_path),
-            log_level: config.audit.log_level.clone(),
-            max_file_size_mb: config.audit.max_file_size_mb,
-            max_files: config.audit.max_files,
-            async_write: true,
-        };
-        #[cfg(feature = "db")]
-        {
-            Some(Arc::new(AuditLogger::new_with_db(
-                audit_config,
-                db_pool.clone(),
-            )))
+        .expect("static warmup decision request");
+        match vecboost::engine::InferenceEngine::decide(&*guard, &req) {
+            Ok(_) => 0,
+            Err(e) => {
+                log::warn!("warmup: 决策管线全链预热失败：{e}");
+                1
+            }
         }
-        #[cfg(not(feature = "db"))]
-        Some(Arc::new(AuditLogger::new(audit_config)))
     } else {
-        log::warn!("Audit logging is DISABLED - security events will not be logged!");
-        None
-    };
-
-    let (pipeline_queue, response_channel, priority_calculator, worker_manager) =
-        init_pipeline(&config, &service, &decision_service).await?;
-
-    let kit = build_module_registry(
-        &config,
-        service.clone(),
-        rerank_service.clone(),
-        decision_service.clone(),
-        detect_service,
-        translate_service,
-        rate_limiter.clone(),
-        audit_logger.clone(),
-        pipeline_queue.clone(),
-        response_channel.clone(),
-        priority_calculator.clone(),
-        worker_manager.clone(),
-        logger_manager.clone(),
-        #[cfg(feature = "auth")]
-        garrison_handle.clone(),
-        #[cfg(feature = "auth")]
-        garrison_csrf_config.clone(),
-    )
-    .await?;
-
-    let shutdown_coordinator = AsyncShutdownCoordinator::new();
-    shutdown_coordinator
-        .set_global_timeout(Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS))
-        .map_err(|e| anyhow::anyhow!("Failed to set shutdown timeout: {}", e))?;
-    register_shutdown_hooks(&shutdown_coordinator, &kit, &worker_manager)?;
-
-    log::info!("AsyncKit module registry built successfully");
-
-    let mut bg_tasks = tokio::task::JoinSet::<()>::new();
-
-    spawn_config_watcher(&mut bg_tasks, config_path);
-
-    // VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
-    let app_state = VecboostState::new(kit);
-
-    // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state().kit.require 访问）
-    vecboost::api::init_state(app_state.clone()).map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    // sdforge #[forge] 路由（Router<()>，从 inventory 收集所有 forge 函数注册的路由）
-    /// HTTP 路由装配(sdforge 路由 + Swagger/metrics/中间件/CORS)。
-    async fn build_http_router(config: &VecboostConfig) -> anyhow::Result<axum::Router> {
-        // app_state 由调用方保证已 init_state(所有能力经 kit.require 获取)
-        let app_state = vecboost::api::state().map_err(|e| anyhow::anyhow!("{e}"))?;
-        // 版本前缀:路由注册为 /api/1/*(forge version=1)。
-        // 实施期决策:不启用 build_with_redirect —— 它会把 /api/1/* 重定向到
-        // 不存在的 /api/v1/*,破坏全部 API 路由(实测 301)。
-        let app = sdforge::http::build();
-
-        // 挂载 Swagger UI(/api-docs/openapi.json + /swagger-ui/),
-        // openapi.json 由 sdforge 从 forge 注册路由动态生成
-        let app = app.merge(sdforge::docs::swagger_ui_router());
-
-        // metrics 端点（手写例外：Prometheus text/plain 响应，forge 不支持非 JSON）
-        let metrics_router = axum::Router::new()
-            .route("/metrics", axum::routing::get(metrics_endpoint))
-            .with_state(app_state.clone());
-        let mut app = app.merge(metrics_router);
-
-        // 404 fallback：未知路由返回结构化 JSON（与错误契约一致）
-        app = app.fallback(|| async {
-            use axum::http::{StatusCode, header};
-            use axum::response::IntoResponse;
-            let body = serde_json::json!({
-                "type": "NotFound",
-                "message": vecboost::i18n::tr("route-not-found"),
-                "field": null,
-                "value": null,
-            });
-            (
-                StatusCode::NOT_FOUND,
-                [(header::CONTENT_TYPE, "application/json")],
-                body.to_string(),
-            )
-                .into_response()
-        });
-
-        // Prometheus 指标记录中间件 — 无条件应用到所有路由
-        #[cfg(feature = "http")]
-        {
-            use axum::middleware::from_fn_with_state;
-            app = app.layer(from_fn_with_state(
-                app_state.clone(),
-                vecboost::metrics::metrics_middleware,
-            ));
-        }
-
-        // i18n Accept-Language 中间件 — 解析请求语言，设置请求级 locale
-        // 使所有下游 handler 和 IntoResponse 自动使用正确的语言
-        #[cfg(feature = "http")]
-        {
-            use axum::middleware::from_fn;
-            app = app.layer(from_fn(vecboost::i18n::i18n_middleware));
-        }
-
-        // Extractor 拒绝规范化（审计建议）— axum Json extractor 拒绝的
-        // text/plain 错误体改写为 handler 层同构的结构化错误 JSON
-        #[cfg(feature = "http")]
-        {
-            use axum::middleware::from_fn;
-            app = app.layer(from_fn(
-                vecboost::api::rejection_normalize::rejection_normalizer,
-            ));
-        }
-
-        // 全局限流中间件 — 应用到所有路由
-        // 内部通过 RateLimitEnabled 配置控制是否生效
-        // 注：auth_rate_limit_middleware 定义在 auth 模块下，需 feature = "auth" 门控
-        #[cfg(feature = "auth")]
-        {
-            use axum::middleware::from_fn_with_state;
-            app = app.layer(from_fn_with_state(
-                app_state.clone(),
-                vecboost::auth::auth_rate_limit_middleware,
-            ));
-        }
-
-        // auth_middleware：应用到所有路由，内部用路径白名单放行公开端点
-        // (/health, /api/1/auth/login, /api/1/auth/refresh)
-        #[cfg(feature = "auth")]
-        let app = if config.auth.enabled {
-            use axum::middleware::from_fn_with_state;
-            app.layer(from_fn_with_state(
-                app_state.clone(),
-                vecboost::auth::auth_middleware,
-            ))
-        } else {
-            app
-        };
-
-        // CSRF 保护（条件性应用：auth 启用且 csrf 启用时）
-        // 直接使用 garrison garrison_csrf_middleware（包含 Origin + Token 双重校验）
-        #[cfg(feature = "auth")]
-        let app = if config.auth.enabled && config.auth.csrf.enabled {
-            use axum::middleware::from_fn_with_state;
-            let csrf_config = app_state
-                .kit()
-                .require::<CsrfConfigModule>()
-                .map_err(|e| anyhow::anyhow!("Failed to require CsrfConfigModule: {}", e))?;
-            if let Some(cfg) = csrf_config {
-                app.layer(from_fn_with_state(cfg, garrison_csrf_middleware))
-            } else {
-                app
-            }
-        } else {
-            app
-        };
-
-        // 安全 headers + trace
-        // 请求体大小上限(默认 5 MiB,防超大 payload DoS)
-        let app = app.layer(tower_http::limit::RequestBodyLimitLayer::new(
-            config.server.body_limit_mb.max(1) as usize * 1024 * 1024,
-        ));
-        // HTTP 全局请求超时(默认 60s,配置 server.request_timeout_seconds)
-        let app = app.layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            axum::http::StatusCode::GATEWAY_TIMEOUT,
-            std::time::Duration::from_secs(config.server.request_timeout_seconds.max(1)),
-        ));
-        // 请求上下文（sdforge context 吸收）：入口解析/生成 X-Request-Id 与
-        // X-Trace-Id（兼容 W3C traceparent），task-local 贯穿请求链，响应回显
-        // 双头；替代原先手写的 x-request-id 响应头闭包。此处包一层观测：
-        // debug 级请求生命周期日志携带双 id + 耗时，实现日志按请求关联。
-        let app = app.layer(axum::middleware::from_fn(
-            |req: axum::extract::Request, next: axum::middleware::Next| async move {
-                let started = std::time::Instant::now();
-                let method = req.method().clone();
-                let path = req.uri().path().to_string();
-                let resp = sdforge::context::context_middleware(req, next).await;
-                let (request_id, trace_id) = sdforge::context::current()
-                    .map(|c| (c.request_id().to_string(), c.trace_id().to_string()))
-                    .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
-                log::debug!(
-                    "http_request method={method} path={path} status={} duration_ms={} request_id={request_id} trace_id={trace_id}",
-                    resp.status().as_u16(),
-                    started.elapsed().as_millis()
+        (0..warmup)
+            .filter(|i| {
+                let text = format!(
+                    "vecboost warmup sentence {i}: the quick brown fox jumps over the lazy dog"
                 );
-                resp
-            },
-        ));
-        let app = app.layer(TraceLayer::new_for_http());
-        // 安全响应头（garrison 0.9 web-security-headers 吸收）：auth 构建改用
-        // garrison::web::security_headers 中间件，替代原 4 个手写 SetResponseHeaderLayer，
-        // 并新增 Cache-Control: no-store / Pragma: no-cache（防敏感认证响应被缓存）；
-        // HSTS 仅 garrison tls feature 下注入（明文 HTTP 注入无意义且可被降级利用，
-        // 原 stack 无条件注入系过度设置）。非 auth 构建无 garrison 依赖，保留手写头栈。
-        #[cfg(feature = "auth")]
-        let app = app.layer(axum::middleware::from_fn(
-            garrison::web::security_headers::security_headers_middleware,
-        ));
-        #[cfg(not(feature = "auth"))]
-        let app = app
-            .layer(SetResponseHeaderLayer::overriding(
-                axum::http::header::X_CONTENT_TYPE_OPTIONS,
-                axum::http::HeaderValue::from_static("nosniff"),
-            ))
-            .layer(SetResponseHeaderLayer::overriding(
-                axum::http::header::X_FRAME_OPTIONS,
-                axum::http::HeaderValue::from_static("DENY"),
-            ))
-            .layer(SetResponseHeaderLayer::overriding(
-                axum::http::header::X_XSS_PROTECTION,
-                axum::http::HeaderValue::from_static("1; mode=block"),
-            ))
-            .layer(SetResponseHeaderLayer::overriding(
-                axum::http::header::STRICT_TRANSPORT_SECURITY,
-                axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
-            ));
-
-        // 响应压缩（gzip）——客户端经 Accept-Encoding 协商
-        #[cfg(feature = "http")]
-        let app = app.layer(tower_http::compression::CompressionLayer::new());
-
-        // CORS（配置开关，默认关闭）：[server] cors_enabled / cors_allow_origins
-        #[cfg(feature = "http")]
-        let app = if config.server.cors_enabled {
-            use axum::http::{HeaderName, HeaderValue, Method};
-            let origins = config.server.cors_allow_origins.clone();
-            let mut cors = tower_http::cors::CorsLayer::new()
-                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                .allow_headers([
-                    HeaderName::from_static("content-type"),
-                    HeaderName::from_static("authorization"),
-                    HeaderName::from_static("accept-language"),
-                ]);
-            if origins.is_empty() || origins.iter().any(|o| o == "*") {
-                cors = cors.allow_origin(tower_http::cors::Any);
-            } else {
-                let list: Vec<HeaderValue> = origins
-                    .iter()
-                    .filter_map(|o| HeaderValue::from_str(o).ok())
-                    .collect();
-                cors = cors.allow_origin(list);
-            }
-            app.layer(cors)
-        } else {
-            app
-        };
-
-        // ConnectInfo is automatically available when using axum::serve with a TcpListener
-        // No additional layer needed
-        Ok(app)
+                vecboost::engine::InferenceEngine::embed(&*guard, &text).is_err()
+            })
+            .count()
+    };
+    let mode = if decision_pipeline {
+        "decide×1（决策管线全链）"
+    } else {
+        "embed"
+    };
+    if failures > 0 {
+        log::warn!(
+            "warmup: 预热未完全生效（{mode}，{} 次失败，{:?}）——首次请求可能更慢",
+            failures,
+            start.elapsed()
+        );
+    } else {
+        log::info!("warmup: 预热推理完成（{mode}，{:?}）", start.elapsed());
     }
+}
 
-    let app = build_http_router(&config).await?;
+/// 审计日志装配：[audit] enabled 时构建（db 构建下挂 DB 双写），禁用时
+/// 显性 warn（安全事件不留痕必须可感知）。
+#[allow(unused_variables)]
+fn init_audit_logger(
+    config: &VecboostConfig,
+    #[cfg(feature = "db")] db_pool: crate::DbPool,
+) -> Option<Arc<AuditLogger>> {
+    if !config.audit.enabled {
+        log::warn!("Audit logging is DISABLED - security events will not be logged!");
+        return None;
+    }
+    log::info!("Audit logging enabled");
+    let audit_config = AuditConfig {
+        enabled: true,
+        log_file_path: std::path::PathBuf::from(&config.audit.log_file_path),
+        log_level: config.audit.log_level.clone(),
+        max_file_size_mb: config.audit.max_file_size_mb,
+        max_files: config.audit.max_files,
+        async_write: true,
+    };
+    #[cfg(feature = "db")]
+    {
+        Some(Arc::new(AuditLogger::new_with_db(audit_config, db_pool)))
+    }
+    #[cfg(not(feature = "db"))]
+    Some(Arc::new(AuditLogger::new(audit_config)))
+}
 
-    let addr = format!("{}:{}", config.server.host, config.server.port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    log::info!("Server listening on {}", addr);
-
-    // Signal-aware graceful shutdown (SIGINT + SIGTERM)
-    let signal = async {
+/// Signal-aware graceful shutdown（SIGINT + SIGTERM）；SIGTERM 安装失败
+/// 时降级仅 ctrl_c（不阻断启动）。
+fn install_signal_handlers() -> impl std::future::Future<Output = ()> + Send + 'static {
+    async {
         #[cfg(unix)]
         {
             let mut sigterm =
@@ -1830,23 +1724,364 @@ async fn app_main() -> anyhow::Result<()> {
             }
             log::info!("Received CTRL-C, initiating graceful shutdown");
         }
-    };
+    }
+}
+
+/// 非 server 模式分流：`--mcp`（stdio JSON-RPC）与 CLI 子命令。命中即
+/// 消费服务句柄并返回 true（调用方直接返回）；server 路径继续装配。
+/// CLI 判定消费 &args 克隆；MCP 分流置 stdio 抑制日志。
+#[allow(unused_variables)]
+async fn dispatch_non_server_modes(
+    service: &Arc<RwLock<EmbeddingService>>,
+    rerank_service: &Arc<RwLock<RerankService>>,
+    decision_service: &Arc<RwLock<DecisionService>>,
+    detect_service: &DetectService,
+    translate_service: &Arc<TranslateService>,
+    _filtered_args: &[String],
+) -> anyhow::Result<bool> {
+    #[cfg(feature = "mcp")]
+    if std::env::args().any(|a| a == "--mcp") {
+        run_mcp_server(
+            service.clone(),
+            rerank_service.clone(),
+            decision_service.clone(),
+            *detect_service,
+            translate_service.clone(),
+        )
+        .await;
+        return Ok(true);
+    }
+
+    #[cfg(feature = "cli")]
+    if run_cli_command(
+        service.clone(),
+        rerank_service.clone(),
+        decision_service.clone(),
+        *detect_service,
+        translate_service.clone(),
+        _filtered_args.to_vec(),
+    )
+    .await?
+    {
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+/// HTTP 服务器模式装配与启动：pipeline → AsyncKit 模块注册表 → 分级
+/// 关停协调器 → 后台任务 → VecboostState/api 注入 → 路由 → 监听 →
+/// 生命周期（分级优雅关闭）。MCP/CLI 分流之后才会走到这里。
+#[allow(clippy::too_many_arguments)]
+async fn assemble_and_serve_http(
+    config: &VecboostConfig,
+    _filtered_args: &[String],
+    config_path: Option<String>,
+    service: Arc<RwLock<EmbeddingService>>,
+    rerank_service: Arc<RwLock<RerankService>>,
+    decision_service: Arc<RwLock<DecisionService>>,
+    detect_service: DetectService,
+    translate_service: Arc<TranslateService>,
+    logger_manager: Arc<inklog::LoggerManager>,
+    security: SecurityStack,
+    #[cfg(feature = "db")] db_pool: crate::DbPool,
+) -> anyhow::Result<()> {
+    let audit_logger = security.audit_logger.clone();
+
+    let (pipeline_queue, response_channel, priority_calculator, worker_manager) =
+        init_pipeline(config, &service, &decision_service).await?;
+
+    let kit = build_module_registry(
+        config,
+        service.clone(),
+        rerank_service.clone(),
+        decision_service.clone(),
+        detect_service,
+        translate_service,
+        security.rate_limiter.clone(),
+        audit_logger.clone(),
+        pipeline_queue.clone(),
+        response_channel.clone(),
+        priority_calculator.clone(),
+        worker_manager.clone(),
+        logger_manager,
+        #[cfg(feature = "auth")]
+        security.garrison_handle.clone(),
+        #[cfg(feature = "auth")]
+        security.garrison_csrf_config.clone(),
+    )
+    .await?;
+
+    let shutdown_coordinator = AsyncShutdownCoordinator::new();
+    shutdown_coordinator
+        .set_global_timeout(Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS))
+        .map_err(|e| anyhow::anyhow!("Failed to set shutdown timeout: {}", e))?;
+    register_shutdown_hooks(&shutdown_coordinator, &kit, &worker_manager)?;
+
+    log::info!("AsyncKit module registry built successfully");
+
+    let mut bg_tasks = tokio::task::JoinSet::<()>::new();
+
+    spawn_config_watcher(&mut bg_tasks, config_path);
+
+    // VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
+    let app_state = VecboostState::new(kit);
+
+    // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state().kit.require 访问）
+    vecboost::api::init_state(app_state.clone()).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let app = build_http_router(config).await?;
+
+    let addr = format!("{}:{}", config.server.host, config.server.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    log::info!("Server listening on {}", addr);
+
+    // Signal-aware graceful shutdown (SIGINT + SIGTERM)
+    let signal = install_signal_handlers();
     #[cfg(feature = "grpc")]
     if config.server.grpc_enabled {
-        spawn_grpc_server(&config, &mut bg_tasks).await?;
+        spawn_grpc_server(config, &mut bg_tasks).await?;
     }
 
     run_server_lifecycle(
         listener,
         app,
         signal,
-        &config,
+        config,
         bg_tasks,
         shutdown_coordinator,
     )
-    .await?;
+    .await
+}
 
-    Ok(())
+#[cfg(feature = "http")]
+/// 请求级观测/本地化中间件：Prometheus 指标记录（无条件应用）、
+/// Accept-Language → 请求级 locale、axum Json extractor 拒绝体规范化
+/// （审计建议：text/plain 错误改写为 handler 同构结构化 JSON）。
+fn apply_request_middlewares(app: axum::Router, app_state: crate::VecboostState) -> axum::Router {
+    // Prometheus 指标记录中间件 — 无条件应用到所有路由
+    use axum::middleware::from_fn_with_state;
+    let app = app.layer(from_fn_with_state(
+        app_state.clone(),
+        vecboost::metrics::metrics_middleware,
+    ));
+
+    // i18n Accept-Language 中间件 — 解析请求语言，设置请求级 locale
+    // 使所有下游 handler 和 IntoResponse 自动使用正确的语言
+    use axum::middleware::from_fn;
+    let app = app.layer(from_fn(vecboost::i18n::i18n_middleware));
+
+    // Extractor 拒绝规范化（审计建议）— axum Json extractor 拒绝的
+    // text/plain 错误体改写为 handler 层同构的结构化错误 JSON
+    app.layer(from_fn(
+        vecboost::api::rejection_normalize::rejection_normalizer,
+    ))
+}
+
+/// auth 中间件栈：全局限流（内部按 RateLimitEnabled 配置决定生效）→
+/// 认证（路径白名单放行 /health、/api/1/auth/login、/api/1/auth/refresh）→
+/// CSRF（auth+csrf 双启用时，garrison Origin+Token 双重校验）。
+#[cfg(feature = "auth")]
+fn apply_auth_middlewares(
+    app: axum::Router,
+    config: &VecboostConfig,
+    app_state: crate::VecboostState,
+) -> axum::Router {
+    use axum::middleware::from_fn_with_state;
+
+    // 全局限流中间件 — 应用到所有路由
+    // 内部通过 RateLimitEnabled 配置控制是否生效
+    // 注：auth_rate_limit_middleware 定义在 auth 模块下，需 feature = "auth" 门控
+    let app = app.layer(from_fn_with_state(
+        app_state.clone(),
+        vecboost::auth::auth_rate_limit_middleware,
+    ));
+
+    // auth_middleware：应用到所有路由，内部用路径白名单放行公开端点
+    // (/health, /api/1/auth/login, /api/1/auth/refresh)
+    let app = if config.auth.enabled {
+        app.layer(from_fn_with_state(
+            app_state.clone(),
+            vecboost::auth::auth_middleware,
+        ))
+    } else {
+        app
+    };
+
+    // CSRF 保护（条件性应用：auth 启用且 csrf 启用时）
+    // 直接使用 garrison garrison_csrf_middleware（包含 Origin + Token 双重校验）
+    if config.auth.enabled && config.auth.csrf.enabled {
+        let csrf_config = app_state
+            .kit()
+            .require::<CsrfConfigModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to require CsrfConfigModule: {}", e));
+        match csrf_config {
+            Ok(Some(cfg)) => app.layer(from_fn_with_state(cfg, garrison_csrf_middleware)),
+            _ => app,
+        }
+    } else {
+        app
+    }
+}
+
+/// 非 auth 构建的 auth 中间件栈恒等函数（保持调用点 cfg-free）。
+#[cfg(not(feature = "auth"))]
+fn apply_auth_middlewares(
+    app: axum::Router,
+    config: &VecboostConfig,
+    app_state: crate::VecboostState,
+) -> axum::Router {
+    let _ = (config, app_state);
+    app
+}
+
+/// 传输面层栈：请求体大小上限（默认 5 MiB，防超大 payload DoS）→ 全局
+/// 请求超时 → 请求上下文（X-Request-Id/X-Trace-Id，W3C traceparent 兼容）
+/// → trace → 安全响应头（auth 构建走 garrison web-security-headers；
+/// 非 auth 构建保留手写头栈，HSTS 仅 garrison tls feature 注入）→ 压缩 →
+/// CORS（配置开关，默认关闭）。
+fn apply_transport_layers(app: axum::Router, config: &VecboostConfig) -> axum::Router {
+    // 安全 headers + trace
+    // 请求体大小上限(默认 5 MiB,防超大 payload DoS)
+    let app = app.layer(tower_http::limit::RequestBodyLimitLayer::new(
+        config.server.body_limit_mb.max(1) as usize * 1024 * 1024,
+    ));
+    // HTTP 全局请求超时(默认 60s,配置 server.request_timeout_seconds)
+    let app = app.layer(tower_http::timeout::TimeoutLayer::with_status_code(
+        axum::http::StatusCode::GATEWAY_TIMEOUT,
+        std::time::Duration::from_secs(config.server.request_timeout_seconds.max(1)),
+    ));
+    // 请求上下文（sdforge context 吸收）：入口解析/生成 X-Request-Id 与
+    // X-Trace-Id（兼容 W3C traceparent），task-local 贯穿请求链，响应回显
+    // 双头；替代原先手写的 x-request-id 响应头闭包。此处包一层观测：
+    // debug 级请求生命周期日志携带双 id + 耗时，实现日志按请求关联。
+    let app = app.layer(axum::middleware::from_fn(
+        |req: axum::extract::Request, next: axum::middleware::Next| async move {
+            let started = std::time::Instant::now();
+            let method = req.method().clone();
+            let path = req.uri().path().to_string();
+            let resp = sdforge::context::context_middleware(req, next).await;
+            let (request_id, trace_id) = sdforge::context::current()
+                .map(|c| (c.request_id().to_string(), c.trace_id().to_string()))
+                .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
+            log::debug!(
+                "http_request method={method} path={path} status={} duration_ms={} request_id={request_id} trace_id={trace_id}",
+                resp.status().as_u16(),
+                started.elapsed().as_millis()
+            );
+            resp
+        },
+    ));
+    let app = app.layer(TraceLayer::new_for_http());
+    // 安全响应头（garrison 0.9 web-security-headers 吸收）：auth 构建改用
+    // garrison::web::security_headers 中间件，替代原 4 个手写 SetResponseHeaderLayer，
+    // 并新增 Cache-Control: no-store / Pragma: no-cache（防敏感认证响应被缓存）；
+    // HSTS 仅 garrison tls feature 下注入（明文 HTTP 注入无意义且可被降级利用，
+    // 原 stack 无条件注入系过度设置）。非 auth 构建无 garrison 依赖，保留手写头栈。
+    #[cfg(feature = "auth")]
+    let app = app.layer(axum::middleware::from_fn(
+        garrison::web::security_headers::security_headers_middleware,
+    ));
+    #[cfg(not(feature = "auth"))]
+    let app = app
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::X_CONTENT_TYPE_OPTIONS,
+            axum::http::HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::X_FRAME_OPTIONS,
+            axum::http::HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::X_XSS_PROTECTION,
+            axum::http::HeaderValue::from_static("1; mode=block"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::STRICT_TRANSPORT_SECURITY,
+            axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        ));
+
+    // 响应压缩（gzip）——客户端经 Accept-Encoding 协商
+    #[cfg(feature = "http")]
+    let app = app.layer(tower_http::compression::CompressionLayer::new());
+
+    // CORS（配置开关，默认关闭）：[server] cors_enabled / cors_allow_origins
+    #[cfg(feature = "http")]
+    let app = if config.server.cors_enabled {
+        use axum::http::{HeaderName, HeaderValue, Method};
+        let origins = config.server.cors_allow_origins.clone();
+        let mut cors = tower_http::cors::CorsLayer::new()
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers([
+                HeaderName::from_static("content-type"),
+                HeaderName::from_static("authorization"),
+                HeaderName::from_static("accept-language"),
+            ]);
+        if origins.is_empty() || origins.iter().any(|o| o == "*") {
+            cors = cors.allow_origin(tower_http::cors::Any);
+        } else {
+            let list: Vec<HeaderValue> = origins
+                .iter()
+                .filter_map(|o| HeaderValue::from_str(o).ok())
+                .collect();
+            cors = cors.allow_origin(list);
+        }
+        app.layer(cors)
+    } else {
+        app
+    };
+
+    app
+}
+
+async fn build_http_router(config: &VecboostConfig) -> anyhow::Result<axum::Router> {
+    // app_state 由调用方保证已 init_state(所有能力经 kit.require 获取)
+    let app_state = vecboost::api::state().map_err(|e| anyhow::anyhow!("{e}"))?;
+    // 版本前缀:路由注册为 /api/1/*(forge version=1)。
+    // 实施期决策:不启用 build_with_redirect —— 它会把 /api/1/* 重定向到
+    // 不存在的 /api/v1/*,破坏全部 API 路由(实测 301)。
+    let app = sdforge::http::build();
+
+    // 挂载 Swagger UI(/api-docs/openapi.json + /swagger-ui/),
+    // openapi.json 由 sdforge 从 forge 注册路由动态生成
+    let app = app.merge(sdforge::docs::swagger_ui_router());
+
+    // metrics 端点（手写例外：Prometheus text/plain 响应，forge 不支持非 JSON）
+    let metrics_router = axum::Router::new()
+        .route("/metrics", axum::routing::get(metrics_endpoint))
+        .with_state(app_state.clone());
+    let mut app = app.merge(metrics_router);
+
+    // 404 fallback：未知路由返回结构化 JSON（与错误契约一致）
+    app = app.fallback(|| async {
+        use axum::http::{StatusCode, header};
+        use axum::response::IntoResponse;
+        let body = serde_json::json!({
+            "type": "NotFound",
+            "message": vecboost::i18n::tr("route-not-found"),
+            "field": null,
+            "value": null,
+        });
+        (
+            StatusCode::NOT_FOUND,
+            [(header::CONTENT_TYPE, "application/json")],
+            body.to_string(),
+        )
+            .into_response()
+    });
+
+    // Prometheus 指标记录/i18n/拒绝规范化中间件
+    let app = apply_request_middlewares(app, app_state.clone());
+
+    // auth 限流/认证/CSRF 中间件（内部按路径白名单放行公开端点）
+    let app = apply_auth_middlewares(app, config, app_state);
+
+    // 请求体上限/超时/请求上下文/trace/安全响应头/压缩/CORS
+    let app = apply_transport_layers(app, config);
+
+    // ConnectInfo is automatically available when using axum::serve with a TcpListener
+    // No additional layer needed
+    Ok(app)
 }
 
 /// 服务器生命周期 —— 阻塞等待退出信号,执行分级优雅关闭。
@@ -2140,6 +2375,60 @@ fn spawn_config_watcher(bg_tasks: &mut tokio::task::JoinSet<()>, config_path: Op
     });
 }
 
+/// 注册 16 个非 auth + 2 个 auth feature 的全部 Module（ConfigWatcher
+/// 的 WatcherGuard 能力注入在此一并完成）。
+fn register_all_modules(kit: &mut trait_kit::AsyncKit) -> anyhow::Result<()> {
+    // 注册模块（16 个非 auth + 2 个 auth feature = 18 个 Module）
+    kit.register::<EmbeddingModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
+    kit.register::<RateLimitModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register RateLimitModule: {}", e))?;
+    kit.register::<RerankModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
+    kit.register::<DecisionModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register DecisionModule: {}", e))?;
+    kit.register::<DetectModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register DetectModule: {}", e))?;
+    kit.register::<TranslateModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register TranslateModule: {}", e))?;
+    kit.register::<CacheModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register CacheModule: {}", e))?;
+    kit.register::<DbModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register DbModule: {}", e))?;
+    kit.register::<AuditModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register AuditModule: {}", e))?;
+    kit.register::<MetricsCollectorModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register MetricsCollectorModule: {}", e))?;
+    kit.register::<PrometheusCollectorModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register PrometheusCollectorModule: {}", e))?;
+    kit.register::<IpWhitelistModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register IpWhitelistModule: {}", e))?;
+    kit.register::<PipelineQueueModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register PipelineQueueModule: {}", e))?;
+    kit.register::<ResponseChannelModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register ResponseChannelModule: {}", e))?;
+    kit.register::<PriorityCalculatorModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register PriorityCalculatorModule: {}", e))?;
+    kit.register::<WorkerManagerModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register WorkerManagerModule: {}", e))?;
+    // ConfigWatcherModule — monitors config.toml for hot reload
+    let watcher_guard = Arc::new(confers::watcher::WatcherGuard::new());
+    kit.set_config(watcher_guard);
+    kit.register::<ConfigWatcherModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register ConfigWatcherModule: {}", e))?;
+    kit.register::<LoggerModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register LoggerModule: {}", e))?;
+    #[cfg(feature = "auth")]
+    {
+        kit.register::<AuthModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to register AuthModule: {}", e))?;
+        kit.register::<CsrfConfigModule>()
+            .map_err(|e| anyhow::anyhow!("Failed to register CsrfConfigModule: {}", e))?;
+    }
+
+    Ok(())
+}
+
 /// 构建模块注册中心(trait-kit AsyncKit)—— 预构建能力注入 + 18 个
 /// Module 注册 + 生命周期/健康检查挂载。从 `app_main` 拆出。
 #[allow(clippy::too_many_arguments)]
@@ -2238,53 +2527,7 @@ async fn build_module_registry(
         kit.set_config(garrison_csrf_config.clone());
     }
 
-    // 注册模块（16 个非 auth + 2 个 auth feature = 18 个 Module）
-    kit.register::<EmbeddingModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
-    kit.register::<RateLimitModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register RateLimitModule: {}", e))?;
-    kit.register::<RerankModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
-    kit.register::<DecisionModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register DecisionModule: {}", e))?;
-    kit.register::<DetectModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register DetectModule: {}", e))?;
-    kit.register::<TranslateModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register TranslateModule: {}", e))?;
-    kit.register::<CacheModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register CacheModule: {}", e))?;
-    kit.register::<DbModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register DbModule: {}", e))?;
-    kit.register::<AuditModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register AuditModule: {}", e))?;
-    kit.register::<MetricsCollectorModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register MetricsCollectorModule: {}", e))?;
-    kit.register::<PrometheusCollectorModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register PrometheusCollectorModule: {}", e))?;
-    kit.register::<IpWhitelistModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register IpWhitelistModule: {}", e))?;
-    kit.register::<PipelineQueueModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register PipelineQueueModule: {}", e))?;
-    kit.register::<ResponseChannelModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register ResponseChannelModule: {}", e))?;
-    kit.register::<PriorityCalculatorModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register PriorityCalculatorModule: {}", e))?;
-    kit.register::<WorkerManagerModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register WorkerManagerModule: {}", e))?;
-    // ConfigWatcherModule — monitors config.toml for hot reload
-    let watcher_guard = Arc::new(confers::watcher::WatcherGuard::new());
-    kit.set_config(watcher_guard);
-    kit.register::<ConfigWatcherModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register ConfigWatcherModule: {}", e))?;
-    kit.register::<LoggerModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register LoggerModule: {}", e))?;
-    #[cfg(feature = "auth")]
-    {
-        kit.register::<AuthModule>()
-            .map_err(|e| anyhow::anyhow!("Failed to register AuthModule: {}", e))?;
-        kit.register::<CsrfConfigModule>()
-            .map_err(|e| anyhow::anyhow!("Failed to register CsrfConfigModule: {}", e))?;
-    }
+    register_all_modules(&mut kit)?;
 
     kit.register_lifecycle::<EmbeddingModule>();
     kit.register_lifecycle::<RerankModule>();

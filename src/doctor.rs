@@ -149,7 +149,7 @@ pub fn check_tokenizer(config: &VecboostConfig) -> CheckResult {
             format!("tokenizer.json 不存在: {}", tok_path.display()),
         );
     }
-    match crate::text::tokenizer::Tokenizer::from_file(tok_path.to_string_lossy().as_ref()) {
+    match crate::text::SyncTokenizer::from_file(tok_path.to_string_lossy().as_ref()) {
         Ok(_) => CheckResult::new(
             "tokenizer",
             CheckStatus::Pass,

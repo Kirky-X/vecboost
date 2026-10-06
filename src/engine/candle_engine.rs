@@ -9,7 +9,7 @@ use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
 use crate::error::VecboostError;
 use crate::model::recovery::{ModelRecovery, RecoveryConfig};
 use crate::monitor::MemoryMonitor;
-use crate::text::{CachedTokenizer, Encoding};
+use crate::text::{Encoding, SyncTokenizer};
 use crate::utils::hash::{check_model_integrity, verify_sha256};
 use crate::utils::hf_hub::build_hf_repo;
 use async_trait::async_trait;
@@ -22,9 +22,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 // 全平台统一使用 tokenizers crate
 use tokenizers::Tokenizer as HfTokenizer;
-
-/// Tokenizer 缓存容量（缓存最近 N 个文本的分词结果）
-const DEFAULT_TOKENIZER_CACHE_CAPACITY: usize = 2048;
 
 /// PyTorch 大文件警告阈值（2 GB）
 const PYTORCH_LARGE_FILE_WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -99,7 +96,7 @@ impl Drop for StageTimer<'_> {
 
 pub struct CandleEngine {
     model: ModelWrapper,
-    tokenizer: CachedTokenizer,
+    tokenizer: SyncTokenizer,
     device: Device,
     precision: Precision,
     memory_monitor: Option<Arc<MemoryMonitor>>,
@@ -372,11 +369,7 @@ impl CandleEngine {
             }
         };
 
-        let tokenizer = CachedTokenizer::new(
-            hf_tokenizer,
-            max_position_embeddings,
-            DEFAULT_TOKENIZER_CACHE_CAPACITY,
-        );
+        let tokenizer = SyncTokenizer::new(hf_tokenizer, max_position_embeddings);
 
         let is_pytorch = weights_filename.to_string_lossy().ends_with(".bin");
 
@@ -730,7 +723,7 @@ impl CandleEngine {
         let encoding = {
             let _timer = StageTimer::new(&self.stage_stats, Stage::Tokenize);
             self.tokenizer
-                .encode_sync(text, true)
+                .encode(text, true)
                 .map_err(|e| VecboostError::TokenizationError(e.to_string()))?
         };
 
@@ -908,14 +901,14 @@ impl CandleEngine {
             texts.len()
         );
 
-        // 批量编码所有文本——使用 encode_sync 绕过异步缓存
+        // 批量编码所有文本——同步直通编码（spawn_blocking 上下文，无异步缓存）
         let encodings: Vec<Encoding> = {
             let _timer = StageTimer::new(&self.stage_stats, Stage::Tokenize);
             let mut encodings = Vec::with_capacity(texts.len());
             for &text in texts {
                 let encoding = self
                     .tokenizer
-                    .encode_sync(text, true)
+                    .encode(text, true)
                     .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
                 encodings.push(encoding);
             }
@@ -1336,11 +1329,7 @@ impl CandleEngine {
             }
         };
 
-        self.tokenizer = CachedTokenizer::new(
-            hf_tokenizer,
-            max_position_embeddings,
-            DEFAULT_TOKENIZER_CACHE_CAPACITY,
-        );
+        self.tokenizer = SyncTokenizer::new(hf_tokenizer, max_position_embeddings);
 
         // 保留原始精度对应的 dtype（CPU 上 FP16/BF16 不可用，回退到 FP32）
         let compute_dtype = match self.precision {

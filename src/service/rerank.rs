@@ -5,7 +5,6 @@
 
 use crate::cache::OxCacheBackend;
 use crate::config::model::ModelConfig;
-use crate::device::memory_optimizer::SharedGpuMemoryManager;
 use crate::domain::{RerankRequest, RerankResponse, RerankResult};
 use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
@@ -16,16 +15,12 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
-#[allow(
-    dead_code,
-    reason = "Test helper / trait dispatch / inventory, not directly called"
-)]
+/// Rerank 服务：引擎 + 输入校验 + 语义缓存聚合。
 pub struct RerankService {
     engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
     validator: InputValidator,
     model_config: Option<ModelConfig>,
     cache: Arc<OxCacheBackend>,
-    memory_manager: Option<SharedGpuMemoryManager>,
 }
 
 impl RerankService {
@@ -34,14 +29,12 @@ impl RerankService {
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
         model_config: Option<ModelConfig>,
         cache: Arc<OxCacheBackend>,
-        memory_manager: Option<SharedGpuMemoryManager>,
     ) -> Self {
         Self {
             engine,
             validator: InputValidator::with_default(),
             model_config,
             cache,
-            memory_manager,
         }
     }
 
@@ -55,12 +48,7 @@ impl RerankService {
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
         model_config: Option<ModelConfig>,
     ) -> Self {
-        Self::build(
-            engine,
-            model_config,
-            Arc::new(OxCacheBackend::disabled()),
-            None,
-        )
+        Self::build(engine, model_config, Arc::new(OxCacheBackend::disabled()))
     }
 
     #[allow(private_interfaces)]
@@ -69,17 +57,7 @@ impl RerankService {
         model_config: Option<ModelConfig>,
         cache: Arc<OxCacheBackend>,
     ) -> Self {
-        Self::build(engine, model_config, cache, None)
-    }
-
-    #[allow(private_interfaces)]
-    pub fn with_all(
-        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
-        model_config: Option<ModelConfig>,
-        cache: Arc<OxCacheBackend>,
-        memory_manager: Option<SharedGpuMemoryManager>,
-    ) -> Self {
-        Self::build(engine, model_config, cache, memory_manager)
+        Self::build(engine, model_config, cache)
     }
 
     /// 执行重排序：对 query 和 documents 列表计算相关性分数
@@ -737,11 +715,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rerank_with_all_constructors() {
+    async fn test_rerank_with_cache_constructor() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockRerankEngine));
         let cache = Arc::new(OxCacheBackend::new(50));
-        let service = RerankService::with_all(engine, None, cache, None);
+        let service = RerankService::with_cache(engine, None, cache);
 
         let req = RerankRequest {
             query: "test".to_string(),

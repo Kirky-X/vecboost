@@ -197,7 +197,7 @@ mod tests {
     fn make_svc() -> DecisionService {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockDecisionEngine));
-        DecisionService::new(engine, None)
+        DecisionService::new(engine)
     }
 
     fn mixed_request() -> DecisionRequest {

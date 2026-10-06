@@ -5,4 +5,4 @@ pub(crate) mod langdetect;
 pub(crate) mod tokenizer;
 
 pub(crate) use langdetect::{detect_language, is_published_language_code};
-pub(crate) use tokenizer::{CachedTokenizer, Encoding};
+pub(crate) use tokenizer::{Encoding, SyncTokenizer};

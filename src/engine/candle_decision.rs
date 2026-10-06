@@ -45,12 +45,15 @@ use crate::error::VecboostError;
 /// 决策头层数（官方 rl_agent_config.json `head_layers`）
 pub(crate) const HEAD_LAYERS: usize = 2;
 /// act/escalate 头输出类数（n_act = len(act_costs) + 1）
+#[cfg(test)]
 pub(crate) const ACT_CLASSES: usize = 2;
 /// qtype 类型嵌入词表宽（choice/score/noul 三分支）
 pub(crate) const QTYPE_VOCAB: usize = 3;
 /// act 头特征宽：pooled [CLS] + (top1, top1−top2, 归一化熵, 有效 marker 占比)
+#[cfg(test)]
 pub(crate) const ACT_FEATS: usize = 4;
 /// act 头隐层宽（官方 nn.Sequential(nn.Linear(d+4, 256), ...)）
+#[cfg(test)]
 pub(crate) const ACT_HIDDEN: usize = 256;
 /// PyTorch `nn.LayerNorm` 默认 eps（决策头 norm1/norm2/scorer.0 均未显式
 /// 指定，取默认值；骨干 eps 走 candle Config.layer_norm_eps）
@@ -127,16 +130,18 @@ pub(crate) struct CandleLayaWeights {
     scorer_hidden: candle_nn::Linear,
     scorer_out: candle_nn::Linear,
     /// act/escalate 头：Linear(hidden+4→ACT_HIDDEN) → GELU → Linear(ACT_HIDDEN→ACT_CLASSES)。
-    /// 生产热路径不消费（见 forward_act 注释），加载保留为 R-001 键映射完整性
-    #[allow(dead_code)]
+    /// act 输出无 wire 消费者（见 forward_act 注释），权重构造与编译由
+    /// `#[cfg(test)]` 门控；checkpoint 键仍全量校验（R-001）。
+    #[cfg(test)]
     act_hidden: candle_nn::Linear,
-    #[allow(dead_code)]
+    #[cfg(test)]
     act_out: candle_nn::Linear,
     /// checkpoint 自带的 per-qtype 温度 [QTYPE_VOCAB]（F32）。加载即校验
-    /// 键存在与 F32 upcast（键映射完整性）；运行时校准以 bundle
-    /// `laya_config.json` 的 cardinality 分桶为准（decision.rs 同源）——
-    /// checkpoint 缓冲是训练侧 fitted 产物，官方 API 推理路径亦不消费它。
-    #[allow(dead_code)]
+    /// 键存在与 F32 upcast（键映射完整性，测试构建下构造）；
+    /// 运行时校准以 bundle `laya_config.json` 的 cardinality 分桶为准
+    /// （decision.rs 同源）——checkpoint 缓冲是训练侧 fitted 产物，
+    /// 官方 API 推理路径亦不消费它。
+    #[cfg(test)]
     temperature: Tensor,
     /// 前向张量落位设备（与权重一致）
     device: Device,
@@ -184,10 +189,13 @@ impl CandleLayaWeights {
             linear(hidden, hidden, vb.pp("scorer.1")).map_err(|e| model_load("scorer.1", e))?;
         let scorer_out =
             linear(hidden, 1, vb.pp("scorer.3")).map_err(|e| model_load("scorer.3", e))?;
+        #[cfg(test)]
         let act_hidden = linear(hidden + ACT_FEATS, ACT_HIDDEN, vb.pp("act_head.0"))
             .map_err(|e| model_load("act_head.0", e))?;
+        #[cfg(test)]
         let act_out = linear(ACT_HIDDEN, ACT_CLASSES, vb.pp("act_head.2"))
             .map_err(|e| model_load("act_head.2", e))?;
+        #[cfg(test)]
         let temperature = vb
             .get(QTYPE_VOCAB, "temperature")
             .map_err(|e| model_load("temperature", e))?
@@ -200,8 +208,11 @@ impl CandleLayaWeights {
             scorer_norm,
             scorer_hidden,
             scorer_out,
+            #[cfg(test)]
             act_hidden,
+            #[cfg(test)]
             act_out,
+            #[cfg(test)]
             temperature,
             device: vb.device().clone(),
         })
@@ -321,10 +332,9 @@ impl CandleLayaWeights {
     /// top1−top2/归一化熵/有效 marker 占比）。特征从 softmax 概率按官方
     /// 公式以 f32 逐位重算（与 PyTorch 数值一致；detach 在推理期无语义）。
     /// act 输出不进入 wire 契约（onnx 对拍侧同无）——生产热路径不调用
-    /// （评审定案：softmax D2H 同步 + 特征提取 + act 线性层是无消费者开销），
-    /// 权重仍按 R-001 键映射完整加载；唯一现役消费者是单元测试，未来
-    /// act 概率进 API 时即插即用。
-    #[allow(dead_code)]
+    /// （评审定案：softmax D2H 同步 + 特征提取 + act 线性层是无消费者开销）；
+    /// 编译由 `#[cfg(test)]` 门控，未来 act 概率进 API 时改挂 feature 即插即用。
+    #[cfg(test)]
     pub(crate) fn forward_act(
         &self,
         logits: &Tensor,
@@ -953,6 +963,8 @@ pub(crate) mod test_support {
         put("scorer.1.bias", f16_1d(d));
         put("scorer.3.weight", f16((1, d)));
         put("scorer.3.bias", f16_1d(1));
+        // ACT_* 常量与 test_support 同在 cfg(test) 门控域，直接复用
+        // （单一事实源）；required_keys 在所有构建下全量校验。
         put("act_head.0.weight", f16((ACT_HIDDEN, d + ACT_FEATS)));
         put("act_head.0.bias", f16_1d(ACT_HIDDEN));
         put("act_head.2.weight", f16((ACT_CLASSES, ACT_HIDDEN)));

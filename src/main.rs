@@ -497,10 +497,7 @@ async fn init_engine_and_services(
     // 决策服务无条件预构建（零成本，三种模式签名统一）：非 decision 配置下
     // decide 经 trait 默认臂/能力门返回 UnsupportedTask（HTTP 400），端点
     // 始终可注册应答，不随 engine_type/task 配置缺省而消失
-    let decision_service = Arc::new(RwLock::new(DecisionService::new(
-        engine.clone(),
-        Some(model_config.clone()),
-    )));
+    let decision_service = Arc::new(RwLock::new(DecisionService::new(engine.clone())));
 
     // 检测服务无条件预构建（零配置可用）：无引擎无状态（µs 级 whatlang
     // 统计），端点始终可注册应答
@@ -527,8 +524,14 @@ async fn init_engine_and_services(
             config.translation.pairs.len()
         );
     }
+    #[cfg(not(feature = "onnx"))]
+    if !config.translation.pairs.is_empty() {
+        return Err(anyhow::anyhow!(
+            "[translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建"
+        ));
+    }
+    #[cfg(feature = "onnx")]
     for (index, pair) in config.translation.pairs.iter().enumerate() {
-        #[cfg(feature = "onnx")]
         {
             // 缺省值取 TranslationParams::default() 单一事实源（评审 ARC-2：
             // 禁止 512 字面量第二处来源，default 变更时自动联动）
@@ -574,13 +577,6 @@ async fn init_engine_and_services(
                 (pair.source_language.clone(), pair.target_language.clone()),
                 TranslatePairRoute::new(Arc::new(RwLock::new(any)), translation_params),
             );
-        }
-        #[cfg(not(feature = "onnx"))]
-        {
-            let _ = (index, pair);
-            return Err(anyhow::anyhow!(
-                "[translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建"
-            ));
         }
     }
     let translate_service = Arc::new(TranslateService::new(translate_pairs));

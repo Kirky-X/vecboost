@@ -3,7 +3,7 @@
 
 //! Decision 服务实现
 
-use crate::config::model::{ModelConfig, ModelTask};
+use crate::config::model::ModelTask;
 use crate::domain::{DecisionRequest, DecisionResponse};
 use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
@@ -13,21 +13,11 @@ use tokio::sync::RwLock;
 
 pub struct DecisionService {
     engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
-    /// 预构建装配随引擎克隆的模型元信息（main.rs 启动注入）；当前无读取方，
-    /// 保留供引擎元信息消费接入，不作为行为开关
-    #[allow(dead_code)]
-    model_config: Option<ModelConfig>,
 }
 
 impl DecisionService {
-    pub fn new(
-        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
-        model_config: Option<ModelConfig>,
-    ) -> Self {
-        Self {
-            engine,
-            model_config,
-        }
+    pub fn new(engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>) -> Self {
+        Self { engine }
     }
 
     /// 替换底层引擎——EmbeddingService::switch_model 成功后由 API 层传播。
@@ -137,7 +127,7 @@ impl DecisionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::model::Precision;
+    use crate::config::model::{ModelConfig, Precision};
     use crate::domain::{DecisionAnswer, DecisionAnswerBody, DecisionQuestion, QuestionType};
     use async_trait::async_trait;
     use std::collections::BTreeMap;
@@ -244,7 +234,7 @@ mod tests {
     fn make_service(p_true: f32) -> DecisionService {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockDecisionEngine { p_true }));
-        DecisionService::new(engine, None)
+        DecisionService::new(engine)
     }
 
     fn choice_q() -> DecisionQuestion {
@@ -447,7 +437,7 @@ mod tests {
         crate::i18n::init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(EmbeddingOnlyEngine));
-        let service = DecisionService::new(engine, None);
+        let service = DecisionService::new(engine);
         let err = service
             .process_decision(mixed_request(), 32)
             .await
@@ -468,7 +458,7 @@ mod tests {
     async fn test_replace_engine_switches_decision_source() {
         let engine_a: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(MockDecisionEngine { p_true: 0.1 }));
-        let mut service = DecisionService::new(engine_a, None);
+        let mut service = DecisionService::new(engine_a);
         let req = DecisionRequest {
             state: serde_json::json!({}),
             questions: vec![noul_q()],
@@ -536,7 +526,7 @@ mod tests {
 
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(PanickingDecisionEngine));
-        let service = DecisionService::new(engine, None);
+        let service = DecisionService::new(engine);
         let err = service
             .process_decision(mixed_request(), 32)
             .await

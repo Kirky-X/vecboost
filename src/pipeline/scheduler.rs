@@ -1042,7 +1042,7 @@ mod tests {
     fn create_decision_service() -> Arc<RwLock<DecisionService>> {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(DecisionCapableEngine));
-        Arc::new(RwLock::new(DecisionService::new(engine, None)))
+        Arc::new(RwLock::new(DecisionService::new(engine)))
     }
 
     fn decision_noul_request() -> DecisionRequest {

@@ -229,6 +229,7 @@ mod tests {
     use crate::config::model::Precision;
     #[cfg(feature = "http")]
     use crate::engine::InferenceEngine;
+    #[cfg(feature = "http")]
     use crate::logger::LoggerModule;
     #[cfg(feature = "http")]
     use crate::pipeline::{PriorityConfig, WorkerConfig};

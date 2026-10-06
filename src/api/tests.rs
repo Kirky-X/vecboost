@@ -57,10 +57,7 @@ async fn ensure_state_initialized() {
         make_mock_engine_arc(),
         None,
     )));
-    let decision_svc = Arc::new(RwLock::new(DecisionService::new(
-        make_mock_engine_arc(),
-        None,
-    )));
+    let decision_svc = Arc::new(RwLock::new(DecisionService::new(make_mock_engine_arc())));
     let detect_svc = DetectService::new();
     // 翻译服务注入含 en-zh mock 路由（评审 ARC-4：forge_translate 装配链
     // 单测面——漏 register/set_config 的回归由本测试兜住，不再只依赖需

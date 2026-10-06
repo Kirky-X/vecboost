@@ -82,7 +82,10 @@ pub(crate) fn build_hf_repo(
 /// 上限两条路径一致保留。
 fn build_hf_repo_with_http(
     repo_id: &str,
-    total_timeout: Option<std::time::Duration>,
+    // total_timeout 仅被下方 http feature 块消费（reqwest client 注入）
+    #[cfg_attr(not(feature = "http"), allow(unused_variables))] total_timeout: Option<
+        std::time::Duration,
+    >,
 ) -> Result<HFRepositorySync<RepoTypeModel>, VecboostError> {
     if !is_valid_hf_repo_id(repo_id) {
         return Err(VecboostError::ModelLoadError(format!(

@@ -1806,7 +1806,7 @@ mod tests {
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
         let decision_engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(DecisionCapableEngine));
-        let decision_service = Arc::new(RwLock::new(DecisionService::new(decision_engine, None)));
+        let decision_service = Arc::new(RwLock::new(DecisionService::new(decision_engine)));
 
         let manager = WorkerManager::new(
             Arc::clone(&queue),
@@ -1913,11 +1913,10 @@ mod tests {
             Arc::new(RwLock::new(MockEngine)) as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
             None,
         )));
-        let decision_service = Arc::new(RwLock::new(DecisionService::new(
-            Arc::new(RwLock::new(SlowDecisionEngine))
-                as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
-            None,
-        )));
+        let decision_service = Arc::new(RwLock::new(DecisionService::new(Arc::new(RwLock::new(
+            SlowDecisionEngine,
+        ))
+            as Arc<RwLock<dyn InferenceEngine + Send + Sync>>)));
         let channel = Arc::new(ResponseChannel::new());
 
         let decision_req = QueuedRequest {
@@ -1986,11 +1985,10 @@ mod tests {
             Arc::new(RwLock::new(MockEngine)) as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
             None,
         )));
-        let decision_service = Arc::new(RwLock::new(DecisionService::new(
-            Arc::new(RwLock::new(DecisionCapableEngine))
-                as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
-            None,
-        )));
+        let decision_service = Arc::new(RwLock::new(DecisionService::new(Arc::new(RwLock::new(
+            DecisionCapableEngine,
+        ))
+            as Arc<RwLock<dyn InferenceEngine + Send + Sync>>)));
         let channel = Arc::new(ResponseChannel::new());
 
         let mk = |id: &str| QueuedRequest {
@@ -2070,11 +2068,10 @@ mod tests {
             Arc::new(RwLock::new(MockEngine)) as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
             None,
         )));
-        let decision_service = Arc::new(RwLock::new(DecisionService::new(
-            Arc::new(RwLock::new(PanickingDecisionEngine))
-                as Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
-            None,
-        )));
+        let decision_service = Arc::new(RwLock::new(DecisionService::new(Arc::new(RwLock::new(
+            PanickingDecisionEngine,
+        ))
+            as Arc<RwLock<dyn InferenceEngine + Send + Sync>>)));
         let channel = Arc::new(ResponseChannel::new());
 
         let mk = |id: &str| QueuedRequest {

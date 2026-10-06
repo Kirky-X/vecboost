@@ -51,7 +51,9 @@ async fn current_token_is_admin() -> bool {
 }
 
 /// 供 api 层(embed/file text_preview 收权)复用的 admin 判定入口。
-#[cfg_attr(not(feature = "grpc"), allow(dead_code))]
+/// 唯一消费者 `requester_may_preview` 与本函数同条件编译（any(http, grpc)
+/// 且 auth 启用）；其余构建下整体不编译，零死代码。
+#[cfg(all(any(feature = "http", feature = "grpc"), feature = "auth"))]
 pub async fn current_token_is_admin_pub() -> bool {
     current_token_is_admin().await
 }

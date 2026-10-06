@@ -370,7 +370,7 @@ mod tests {
         )));
         let decision_engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(DecisionTestEngine));
-        let decision_service = Arc::new(RwLock::new(DecisionService::new(decision_engine, None)));
+        let decision_service = Arc::new(RwLock::new(DecisionService::new(decision_engine)));
         let queue = Arc::new(PriorityRequestQueue::new(queue_capacity));
         let response_channel = Arc::new(ResponseChannel::new());
         let priority_calculator = Arc::new(PriorityCalculator::new(PriorityConfig::default()));

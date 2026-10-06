@@ -251,7 +251,7 @@ pub fn write_gguf_from_safetensors(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
-    let metadata = vec![
+    let metadata = [
         (
             "general.architecture",
             GgufValue::String("bert".to_string()),
@@ -282,7 +282,7 @@ pub fn write_gguf_from_safetensors(
 /// GGUF 量化 candle 引擎（Q8_0/Q4_K，加载期反量化桥）。
 pub struct QuantizedCandleEngine {
     model_path: PathBuf,
-    tokenizer: crate::text::tokenizer::CachedTokenizer,
+    tokenizer: crate::text::SyncTokenizer,
     model: candle_transformers::models::bert::BertModel,
     pooling: PoolingMode,
     hidden_size: usize,
@@ -306,7 +306,7 @@ impl QuantizedCandleEngine {
             .metadata
             .get("general.architecture")
             .and_then(|v| v.to_string().ok())
-            .map(|s| s.clone())
+            .cloned()
             .unwrap_or_default();
         if arch != "bert" {
             return Err(VecboostError::ModelLoadError(format!(
@@ -426,7 +426,7 @@ impl QuantizedCandleEngine {
                 tok_path.display()
             ))
         })?;
-        let tokenizer = crate::text::tokenizer::CachedTokenizer::new(hf, MAX_LEN, 1024);
+        let tokenizer = crate::text::SyncTokenizer::new(hf, MAX_LEN);
         // 池化推断来源与 fp32 路径对齐（T027）：优先 config.json 的模型身份，
         // 目录名仅作回退——两路径目录名不一致时池化方式不再分叉
         let dir_name = parent
@@ -467,7 +467,7 @@ impl QuantizedCandleEngine {
     fn forward_one(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         let encoding = self
             .tokenizer
-            .encode_sync(text, true)
+            .encode(text, true)
             .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
         let out = self.forward_encoded(
             encoding.get_ids(),
@@ -543,7 +543,7 @@ impl QuantizedCandleEngine {
     fn forward_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VecboostError> {
         let encodings: Vec<_> = texts
             .iter()
-            .map(|t| self.tokenizer.encode_sync(t, true))
+            .map(|t| self.tokenizer.encode(t, true))
             .collect::<Result<_, _>>()
             .map_err(|e| VecboostError::TokenizationError(e.to_string()))?;
         let seq_len = encodings
@@ -575,10 +575,11 @@ impl QuantizedCandleEngine {
                 .collect();
             let pad = seq_len - ids.len();
             all_ids.extend(ids.iter().copied());
-            all_ids.extend(std::iter::repeat(0u32).take(pad));
+            let pad_zeros = std::iter::repeat_n(0u32, pad);
+            all_ids.extend(pad_zeros.clone());
             all_types.extend(types);
-            all_types.extend(std::iter::repeat(0u32).take(pad));
-            mask.extend(std::iter::repeat(0u32).take(pad));
+            all_types.extend(pad_zeros.clone());
+            mask.extend(pad_zeros);
             per_sample_masks.push(mask.clone());
             all_masks.extend(mask);
         }
@@ -611,7 +612,7 @@ impl QuantizedCandleEngine {
             .flatten()
             .collect();
 
-        Ok(encodings
+        encodings
             .iter()
             .zip(per_sample_masks)
             .enumerate()
@@ -628,7 +629,7 @@ impl QuantizedCandleEngine {
                 crate::utils::vector::normalize_l2(&mut pooled)?;
                 Ok(pooled)
             })
-            .collect::<Result<Vec<_>, VecboostError>>()?)
+            .collect::<Result<Vec<_>, VecboostError>>()
     }
 }
 
@@ -827,7 +828,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let model_dir = dir.path().join("tiny-bert");
         std::fs::create_dir(&model_dir).unwrap();
-        candle_core::safetensors::save(&t, &model_dir.join("model.safetensors")).unwrap();
+        candle_core::safetensors::save(&t, model_dir.join("model.safetensors")).unwrap();
         std::fs::write(
             model_dir.join("config.json"),
             format!(

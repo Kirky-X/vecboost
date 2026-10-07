@@ -140,6 +140,177 @@ struct GenerationConfig {
     eos_token_id: u32,
 }
 
+/// 语言 token 风格（m2m_100 家族内二分；load 期以 tokenizer 探测判定）。
+/// Marian pair 专用 bundle 无语言 token。
+#[derive(Debug, Clone, PartialEq)]
+enum LangTokenStyle {
+    None,
+    /// M2M100：`__{iso}__`（vocab 内建百语言码，token_to_id 探测验证）
+    M2m,
+    /// NLLB-200：`{iso639-3}_{script}` 显式映射表
+    Nllb,
+}
+
+/// m2m_100 家族图几何：past 交叉注意力 KV 名表按层数动态生成、占位形状
+/// 按（头数, 头维）实例化。字段读自 bundle config.json（load 期 fail-fast）。
+/// 实测：M2M100-418M 与 NLLB-200-distilled-600M 均 12 层 / 16 头 / 头维 64。
+#[derive(Debug)]
+struct M2mGraph {
+    past_names: Vec<String>,
+    head_shape: [i64; 4],
+}
+
+impl M2mGraph {
+    fn from_config(config: &serde_json::Value) -> Result<Self, VecboostError> {
+        let field = |name: &str| -> Result<i64, VecboostError> {
+            config.get(name).and_then(|v| v.as_i64()).ok_or_else(|| {
+                VecboostError::ModelLoadError(format!(
+                    "bundle config.json missing or invalid numeric field '{name}'"
+                ))
+            })
+        };
+        let decoder_layers = field("decoder_layers")?;
+        let heads = field("encoder_attention_heads")?;
+        let d_model = field("d_model")?;
+        if decoder_layers <= 0 || heads <= 0 || d_model <= 0 || d_model % heads != 0 {
+            return Err(VecboostError::ModelLoadError(format!(
+                "invalid m2m graph geometry: decoder_layers={decoder_layers}, \
+                 heads={heads}, d_model={d_model}"
+            )));
+        }
+        let head_dim = d_model / heads;
+        let past_names = (0..decoder_layers)
+            .flat_map(|i| {
+                [
+                    format!("past_key_values.{i}.decoder.key"),
+                    format!("past_key_values.{i}.decoder.value"),
+                    format!("past_key_values.{i}.encoder.key"),
+                    format!("past_key_values.{i}.encoder.value"),
+                ]
+            })
+            .collect();
+        Ok(Self {
+            past_names,
+            head_shape: [1, heads, 0, head_dim],
+        })
+    }
+}
+
+/// 模型家族（load 期按 bundle config.json `model_type` 分派；图输入/输出
+/// 命名两族同构——input_ids / use_cache_branch / encoder_attention_mask /
+/// encoder_hidden_states / past_key_values.N.{decoder,encoder}.{key,value} /
+/// last_hidden_state / logits，实测 Xenova 导出）。
+#[derive(Debug)]
+enum Family {
+    /// Helsinki Marian：6 层静态名表；tokenizer post_processor 自带
+    /// `</s>`（T015：add_special_tokens 必须 true）
+    Marian,
+    /// Meta M2M100 / NLLB-200（同 m2m_100 架构）：源序列显式构造
+    /// `[src_lang] + ids + [eos]`，decoder 起始 `[decoder_start, tgt_lang]`
+    M2m {
+        graph: M2mGraph,
+        lang_style: LangTokenStyle,
+    },
+}
+
+/// NLLB 语言码映射（ISO 639-1 及引擎契约的 639-3 等价码 →
+/// NLLB-200 语言 token）。未收录码显性拒绝（不猜测）。
+fn nllb_lang_token(iso: &str) -> Option<&'static str> {
+    match iso {
+        "en" => Some("eng_Latn"),
+        "zh" | "zho" | "cmn" => Some("zho_Hans"),
+        "yue" => Some("yue_Hant"),
+        "fr" => Some("fra_Latn"),
+        "de" => Some("deu_Latn"),
+        "es" => Some("spa_Latn"),
+        "pt" => Some("por_Latn"),
+        "it" => Some("ita_Latn"),
+        "ru" => Some("rus_Cyrl"),
+        "ja" => Some("jpn_Jpan"),
+        "ko" => Some("kor_Hang"),
+        "ar" => Some("arb_Arab"),
+        "nl" => Some("nld_Latn"),
+        "pl" => Some("pol_Latn"),
+        "tr" => Some("tur_Latn"),
+        "vi" => Some("vie_Latn"),
+        "th" => Some("tha_Thai"),
+        "id" => Some("ind_Latn"),
+        _ => None,
+    }
+}
+
+impl Family {
+    /// 从 bundle config.json + tokenizer 探测家族（load 期；未支持
+    /// model_type 显性 ModelLoadError）
+    fn detect(config: &serde_json::Value, tokenizer: &Tokenizer) -> Result<Self, VecboostError> {
+        let model_type = config
+            .get("model_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        match model_type {
+            "marian" => Ok(Family::Marian),
+            "m2m_100" => {
+                let graph = M2mGraph::from_config(config)?;
+                let lang_style = if tokenizer.token_to_id("__en__").is_some() {
+                    LangTokenStyle::M2m
+                } else if tokenizer.token_to_id("eng_Latn").is_some() {
+                    LangTokenStyle::Nllb
+                } else {
+                    return Err(VecboostError::ModelLoadError(
+                        "m2m_100 bundle tokenizer exposes no known language tokens \
+                         (neither '__en__' nor 'eng_Latn')"
+                            .to_string(),
+                    ));
+                };
+                Ok(Family::M2m { graph, lang_style })
+            }
+            other => Err(VecboostError::ModelLoadError(format!(
+                "unsupported translation model_type '{other}'; supported: marian, \
+                 m2m_100 (M2M100 / NLLB)"
+            ))),
+        }
+    }
+
+    /// 语言码 → 语言 token id（请求期；未支持码 InvalidInput 显性拒绝）
+    fn lang_token_id(&self, tokenizer: &Tokenizer, iso: &str) -> Result<u32, VecboostError> {
+        let token: String = match self {
+            Family::Marian => {
+                return Err(VecboostError::InvalidInput(
+                    "marian bundles are pair-specific and take no language token".to_string(),
+                ));
+            }
+            Family::M2m {
+                lang_style: LangTokenStyle::M2m,
+                ..
+            } => format!("__{iso}__"),
+            Family::M2m {
+                lang_style: LangTokenStyle::Nllb,
+                ..
+            } => nllb_lang_token(iso)
+                .ok_or_else(|| {
+                    VecboostError::InvalidInput(format!(
+                        "language code '{iso}' is not supported by this NLLB bundle; \
+                         supported examples: en, zh, yue, fr, de, es, pt, it, ru, ja, ko, \
+                         ar, nl, pl, tr, vi, th, id"
+                    ))
+                })?
+                .to_string(),
+            Family::M2m {
+                lang_style: LangTokenStyle::None,
+                ..
+            } => unreachable!("m2m family load-time detection never yields None style"),
+        };
+        tokenizer
+            .token_to_id(&token)
+            .map(|id| id as u32)
+            .ok_or_else(|| {
+                VecboostError::InvalidInput(format!(
+                    "language token '{token}' not present in bundle vocabulary"
+                ))
+            })
+    }
+}
+
 /// ONNX seq2seq 翻译引擎：bundle 自持（encoder/decoder/tokenizer/
 /// generation_config）。
 pub(crate) struct OnnxTranslationEngine {
@@ -147,6 +318,10 @@ pub(crate) struct OnnxTranslationEngine {
     tokenizer: Tokenizer,
     decoder_start_token_id: u32,
     eos_token_id: u32,
+    /// 模型家族（ Marian / M2M100 / NLLB，load 期探测）
+    family: Family,
+    /// 解码图静态契约（past KV 名表 + 空占位形状；贪心循环消费）
+    decode_graph: DecodeGraph,
     /// per-checkpoint 翻译预算（加载期定值，热路径消费）
     params: TranslationParams,
     precision: Precision,
@@ -157,6 +332,31 @@ pub(crate) struct OnnxTranslationEngine {
     /// 最近一次成功解码的生成 token 数（评审 converge T033：质量观测通道，
     /// wire 五键契约不扩——e2e 质量输出经引擎级查询读取）
     output_tokens_last: std::sync::atomic::AtomicU64,
+}
+
+/// 解码图静态契约：past KV 输入名表 + 空占位张量形状（seq_len=0）
+struct DecodeGraph {
+    past_names: Vec<String>,
+    head_shape: [i64; 4],
+}
+
+impl DecodeGraph {
+    fn for_marian() -> Self {
+        Self {
+            past_names: PAST_TENSOR_NAMES
+                .iter()
+                .map(|(name, _, _)| (*name).to_string())
+                .collect(),
+            head_shape: [1, 8, 0, 64],
+        }
+    }
+
+    fn for_m2m(graph: &M2mGraph) -> Self {
+        Self {
+            past_names: graph.past_names.clone(),
+            head_shape: graph.head_shape,
+        }
+    }
 }
 
 /// bundle 内模型文件探测：候选按序首中，全 miss 报 `ModelLoadError`
@@ -182,8 +382,10 @@ fn probe_model_file(
 }
 
 /// tokenizer 加载（T013 U1 换路 shim，见模块文档）：
-/// 内存内移除 null `precompiled_charsmap` 的 Precompiled normalizer
-/// （等价 identity 归一化），不改磁盘 bundle；其余字段原样反序列化。
+/// ① 内存内移除 null `precompiled_charsmap` 的 Precompiled normalizer
+/// （等价 identity 归一化）；② 过滤 added_tokens 中 content 不在 model
+/// vocab 的条目（Xenova m2m100 导出含越词表 token——`Token 'ଙ' out of
+/// vocabulary` 解析期即失败）；均不改磁盘 bundle，其余字段原样反序列化。
 fn load_tokenizer(tokenizer_file: &Path) -> Result<Tokenizer, VecboostError> {
     let raw = std::fs::read_to_string(tokenizer_file).map_err(|e| {
         VecboostError::ModelLoadError(format!(
@@ -197,15 +399,71 @@ fn load_tokenizer(tokenizer_file: &Path) -> Result<Tokenizer, VecboostError> {
             tokenizer_file.display()
         ))
     })?;
-    let shim_applied = value["normalizer"]["type"] == "Precompiled"
-        && value["normalizer"]["precompiled_charsmap"].is_null();
-    if shim_applied {
+    let mut shims: Vec<&str> = Vec::new();
+    if value["normalizer"]["type"] == "Precompiled"
+        && value["normalizer"]["precompiled_charsmap"].is_null()
+    {
         if let Some(obj) = value.as_object_mut() {
             obj.remove("normalizer");
         }
+        shims.push("removed no-op Precompiled normalizer (null precompiled_charsmap)");
+    }
+    // 词表事实源先提取为 owned 集合（BPE 对象 / wordlevel 列表），避免与
+    // 后续可变借用冲突；语言/特殊 token（__xx__、*_Latn）均在 vocab 内
+    let vocab_keys: std::collections::HashSet<String> = match value["model"].get("vocab") {
+        Some(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
+        Some(serde_json::Value::Array(list)) => list
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        _ => Vec::new().into_iter().collect(),
+    };
+    let vocab_nonempty = !vocab_keys.is_empty();
+    // ② added_tokens 越词表过滤
+    if let Some(added) = value.get_mut("added_tokens").and_then(|v| v.as_array_mut()) {
+        let before = added.len();
+        added.retain(|entry| {
+            entry
+                .get("content")
+                .and_then(|c| c.as_str())
+                .map_or(true, |content| {
+                    !vocab_nonempty || vocab_keys.contains(content)
+                })
+        });
+        if added.len() != before {
+            shims.push("filtered added_tokens entries missing from model vocab");
+        }
+    }
+    // ③ merges 越词表过滤（Xenova m2m100 导出缺陷：数百个 merge 的部件或
+    // 结果 token 不在 vocab——`Token 'ଙ' out of vocabulary` 解析期即失败）。
+    // tokenizers 0.23 BPE 构建同时校验部件与拼接结果，两处都须在词表
+    if vocab_nonempty {
+        if let Some(merges) = value["model"]
+            .get_mut("merges")
+            .and_then(|v| v.as_array_mut())
+        {
+            let before = merges.len();
+            merges.retain(|merge| {
+                let parts: Vec<&str> = match merge {
+                    // 旧格式 "a b" 单字符串；新格式 ["a","b"] 二元组
+                    serde_json::Value::String(line) => line.split(' ').collect(),
+                    serde_json::Value::Array(list) => {
+                        list.iter().filter_map(|v| v.as_str()).collect()
+                    }
+                    _ => return true,
+                };
+                !parts.is_empty()
+                    && parts.iter().all(|part| vocab_keys.contains(*part))
+                    && vocab_keys.contains(&parts.concat())
+            });
+            if merges.len() != before {
+                shims.push("filtered merge entries referencing tokens missing from vocab");
+            }
+        }
+    }
+    for shim in &shims {
         log::info!(
-            "tokenizer {}: removed no-op Precompiled normalizer (null precompiled_charsmap; \
-             tokenizers 0.23 rejects null charsmap, T013 first-day finding)",
+            "tokenizer {}: {shim} (in-memory; tokenizers 0.23 parse contract)",
             tokenizer_file.display()
         );
     }
@@ -374,17 +632,19 @@ fn run_encoder(
     Ok((enc_shape.to_vec(), enc_data.to_vec()))
 }
 
-/// 贪心解码循环：每步对 [start + 已生成] 全量重算、取末位 logits argmax
+/// 贪心解码循环：每步对 [初始序列 + 已生成] 全量重算、取末位 logits argmax
 ///（无缓存分支，依据见模块文档「缓存分支禁用」）；EOS 停止、
-/// `max_new_tokens` 硬顶。past 输入以 24 个 [1,8,0,64] 空张量占位（图输入
-/// 必填，else 分支不消费值）。
+/// `max_new_tokens` 硬顶。past 输入以零长占位张量（图输入必填，else 分支
+/// 不消费值）；初始序列与 past 名表/形状按模型家族注入。
 fn greedy_decode(
     decoder: &mut Session,
     enc_dims: &[i64],
     enc_data: &[f32],
     source_len: usize,
     max_new_tokens: usize,
-    decoder_start_token_id: u32,
+    decoder_init: &[i64],
+    past_names: &[String],
+    head_shape: [i64; 4],
     eos_token_id: u32,
 ) -> Result<Vec<u32>, VecboostError> {
     // 评审 PERF-2：循环不变输入循环外构造一次，经 TensorRef 视图借用调用方
@@ -402,7 +662,7 @@ fn greedy_decode(
     .map_err(inference_err("attention mask view"))?;
 
     let mut generated: Vec<u32> = Vec::with_capacity(max_new_tokens);
-    let mut decoder_ids: Vec<i64> = vec![decoder_start_token_id as i64];
+    let mut decoder_ids: Vec<i64> = decoder_init.to_vec();
     for _step in 0..max_new_tokens {
         let dec_len = decoder_ids.len() as i64;
         let mut inputs = ort::inputs![
@@ -413,12 +673,12 @@ fn greedy_decode(
             "encoder_attention_mask" => &*mask_view,
             "encoder_hidden_states" => &*enc_hidden_view,
         ];
-        // 静态名表（评审 PERF-2）：消除每步 24 次 format! 堆分配；
-        // 空占位张量零数据元素，每步重建成本可忽略
-        for (name, _, _) in PAST_TENSOR_NAMES {
+        // 静态名表：消除每步 format! 堆分配（家族 load 期生成，Marian 24 /
+        // m2m 12 层 48）；空占位张量零数据元素，每步重建成本可忽略
+        for name in past_names {
             inputs.push((
-                Cow::Borrowed(name),
-                Tensor::from_array((vec![1i64, 8, 0i64, 64], Vec::<f32>::new()))
+                Cow::Borrowed(name.as_str()),
+                Tensor::from_array((head_shape, Vec::<f32>::new()))
                     .map_err(inference_err("decoder past placeholder"))?
                     .into(),
             ));
@@ -514,6 +774,28 @@ impl OnnxTranslationEngine {
         tokenizer.with_padding(None);
 
         let generation = GenerationConfig::from_bundle(&bundle_dir, &tokenizer)?;
+        // 家族探测：bundle config.json model_type 分派（marian / m2m_100），
+        // 未支持类型启动期 fail-fast（多厂商模型支持：Meta M2M100/NLLB）
+        let bundle_config: serde_json::Value = {
+            let path = bundle_dir.join("config.json");
+            let raw = std::fs::read_to_string(&path).map_err(|e| {
+                VecboostError::ModelLoadError(format!(
+                    "Failed to read bundle config {}: {e}",
+                    path.display()
+                ))
+            })?;
+            serde_json::from_str(&raw).map_err(|e| {
+                VecboostError::ModelFileCorrupted(format!(
+                    "bundle config {} is not valid JSON: {e}",
+                    path.display()
+                ))
+            })?
+        };
+        let family = Family::detect(&bundle_config, &tokenizer)?;
+        let decode_graph = match &family {
+            Family::Marian => DecodeGraph::for_marian(),
+            Family::M2m { graph, .. } => DecodeGraph::for_m2m(graph),
+        };
         let encoder = build_session(&encoder_file, &config.device)?;
         let decoder = build_session(&decoder_file, &config.device)?;
         let precision = precision_for_model_file(&decoder_file);
@@ -521,7 +803,7 @@ impl OnnxTranslationEngine {
         log::info!(
             "Translation engine initialized: bundle={}, encoder={:?}, decoder={:?}, \
              precision={:?}, max_source_tokens={}, max_new_tokens={}, \
-             decoder_start_token_id={}, eos_token_id={}",
+             decoder_start_token_id={}, eos_token_id={}, past_tensors={}",
             bundle_dir.display(),
             encoder_file,
             decoder_file,
@@ -529,7 +811,8 @@ impl OnnxTranslationEngine {
             params.max_source_tokens,
             params.max_new_tokens,
             generation.decoder_start_token_id,
-            generation.eos_token_id
+            generation.eos_token_id,
+            decode_graph.past_names.len(),
         );
 
         Ok(Self {
@@ -537,6 +820,8 @@ impl OnnxTranslationEngine {
             tokenizer,
             decoder_start_token_id: generation.decoder_start_token_id,
             eos_token_id: generation.eos_token_id,
+            family,
+            decode_graph,
             params,
             precision,
             bundle_dir,
@@ -564,9 +849,47 @@ impl OnnxTranslationEngine {
         req: &TranslateRequest,
     ) -> Result<TranslateResponse, VecboostError> {
         let started = std::time::Instant::now();
-        // 整段编码 + 预算校验（锁外：tokenize 无 Session 依赖）
-        let source_ids = encode_source_ids(&self.tokenizer, &req.text)?;
+        // 源语言解析：显式码优先；缺省时引擎侧 whatlang 兜底（m2m 家族
+        // 需要具体语言码构造 src token；Marian 不消费，维持 None 直通）
+        let source_language = match (&self.family, req.source_language.as_deref()) {
+            (Family::M2m { .. }, Some(iso)) => iso.to_string(),
+            (Family::M2m { .. }, None) => {
+                let detection = crate::text::detect_language(&req.text, None);
+                if !detection.is_reliable || detection.language.is_empty() {
+                    return Err(VecboostError::InvalidInput(crate::i18n::tr(
+                        "translate-detect-failed",
+                    )));
+                }
+                detection.language
+            }
+            (Family::Marian, _) => String::new(),
+        };
+        // 源序列构造（家族分派）+ 预算校验（锁外：tokenize 无 Session 依赖）
+        let source_ids = match &self.family {
+            Family::Marian => encode_source_ids(&self.tokenizer, &req.text)?,
+            Family::M2m { .. } => {
+                let src_token = self
+                    .family
+                    .lang_token_id(&self.tokenizer, &source_language)?;
+                let mut ids = vec![src_token as i64];
+                ids.extend(encode_raw_ids(&self.tokenizer, &req.text)?);
+                ids.push(self.eos_token_id as i64);
+                ids
+            }
+        };
         check_token_budget(source_ids.len(), self.params.max_source_tokens, "text")?;
+
+        // decoder 初始序列：Marian [start]；m2m [start, tgt_lang]（目标语言
+        // token 由解码器强制作为首个生成位；未支持码显性拒绝）
+        let decoder_init: Vec<i64> = match &self.family {
+            Family::Marian => vec![self.decoder_start_token_id as i64],
+            Family::M2m { .. } => {
+                let tgt_token = self
+                    .family
+                    .lang_token_id(&self.tokenizer, &req.target_language)?;
+                vec![self.decoder_start_token_id as i64, tgt_token as i64]
+            }
+        };
 
         // 第一遍整段直解。评审 PERF-3：panic 后恢复中毒锁（into_inner 取回
         // 内层数据）——每步解码输入独立构造、Session 无跨请求可变状态，恢复
@@ -583,7 +906,9 @@ impl OnnxTranslationEngine {
                 &enc_data,
                 source_ids.len(),
                 self.params.max_new_tokens,
-                self.decoder_start_token_id,
+                &decoder_init,
+                &self.decode_graph.past_names,
+                self.decode_graph.head_shape,
                 self.eos_token_id,
             )?;
             // 退化判据 token 级（空生成 = 立即 EOS，同判退化转救援）
@@ -654,7 +979,9 @@ impl OnnxTranslationEngine {
                         &sentence_data,
                         sentence_ids.len(),
                         rescue_budget,
-                        self.decoder_start_token_id,
+                        &decoder_init,
+                        &self.decode_graph.past_names,
+                        self.decode_graph.head_shape,
                         self.eos_token_id,
                     )?;
                     rescue_budget = rescue_budget.saturating_sub(generated.len());
@@ -724,10 +1051,19 @@ fn is_degenerate_generation(generated: &[u32], hit_budget: bool) -> bool {
     false
 }
 
-/// 源文本编码（Marian 源序列需结尾 </s>——T015 实测，缺它解码退化为
-/// 重复循环，故 add_special_tokens 恒 true）
+/// 源文本编码（Marian：post_processor 自带 `</s>`——T015 实测缺它解码
+/// 退化为重复循环，add_special_tokens 恒 true）
 fn encode_source_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<i64>, VecboostError> {
     let encoding = tokenizer.encode(text, true).map_err(|e| {
+        VecboostError::InferenceError(format!("translation tokenization failed: {e}"))
+    })?;
+    Ok(encoding.get_ids().iter().map(|&i| i as i64).collect())
+}
+
+/// 原始编码（m2m 家族：语言 token 与 eos 由引擎显式构造，
+/// post_processor 的英文硬编码模板不适用非英语源）
+fn encode_raw_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<i64>, VecboostError> {
+    let encoding = tokenizer.encode(text, false).map_err(|e| {
         VecboostError::InferenceError(format!("translation tokenization failed: {e}"))
     })?;
     Ok(encoding.get_ids().iter().map(|&i| i as i64).collect())
@@ -1404,6 +1740,152 @@ mod tests {
             detail.contains("513") && detail.contains("512"),
             "err={detail}"
         );
+    }
+
+    // ── 多厂商模型家族（M2M100/NLLB 支持的离线面） ─────────────────────
+
+    #[test]
+    fn test_m2m_graph_spec_from_config() {
+        let config: serde_json::Value = serde_json::json!({
+            "model_type": "m2m_100",
+            "decoder_layers": 12,
+            "encoder_attention_heads": 16,
+            "d_model": 1024,
+        });
+        let graph = M2mGraph::from_config(&config).unwrap();
+        assert_eq!(graph.past_names.len(), 12 * 4);
+        assert!(
+            graph
+                .past_names
+                .contains(&"past_key_values.11.decoder.key".to_string()),
+            "末层 decoder.key 必须在名表"
+        );
+        assert!(
+            graph
+                .past_names
+                .contains(&"past_key_values.0.encoder.value".to_string())
+        );
+        assert_eq!(graph.head_shape, [1, 16, 0, 64]);
+    }
+
+    #[test]
+    fn test_m2m_graph_spec_rejects_invalid_geometry() {
+        let missing: serde_json::Value = serde_json::json!({ "model_type": "m2m_100" });
+        assert!(matches!(
+            M2mGraph::from_config(&missing),
+            Err(VecboostError::ModelLoadError(_))
+        ));
+        let indivisible: serde_json::Value = serde_json::json!({
+            "decoder_layers": 12, "encoder_attention_heads": 16, "d_model": 1000,
+        });
+        assert!(matches!(
+            M2mGraph::from_config(&indivisible),
+            Err(VecboostError::ModelLoadError(_))
+        ));
+    }
+
+    #[test]
+    fn test_nllb_lang_token_mapping() {
+        assert_eq!(nllb_lang_token("en"), Some("eng_Latn"));
+        assert_eq!(nllb_lang_token("zh"), Some("zho_Hans"));
+        assert_eq!(nllb_lang_token("zho"), Some("zho_Hans"));
+        assert_eq!(nllb_lang_token("cmn"), Some("zho_Hans"));
+        assert_eq!(nllb_lang_token("yue"), Some("yue_Hant"));
+        assert_eq!(nllb_lang_token("ja"), Some("jpn_Jpan"));
+        assert_eq!(nllb_lang_token("xx"), None);
+    }
+
+    #[test]
+    fn test_family_detect_rejects_unknown_model_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokenizer.json");
+        // 最小合法 tokenizer（tokenizers 0.23 反序列化契约）
+        std::fs::write(
+            &path,
+            r#"{"version":"1.0","added_tokens":[],"normalizer":null,
+                "pre_tokenizer":null,"post_processor":null,"decoder":null,
+                "model":{"type":"BPE","vocab":{},"merges":[]}}"#,
+        )
+        .unwrap();
+        let tokenizer = load_tokenizer(&path).unwrap();
+        let config: serde_json::Value = serde_json::json!({ "model_type": "some_future_arch" });
+        let err = Family::detect(&config, &tokenizer).unwrap_err();
+        assert!(matches!(err, VecboostError::ModelLoadError(_)));
+        let detail = err.error_detail();
+        assert!(detail.contains("some_future_arch"), "err={detail}");
+    }
+
+    #[test]
+    fn test_load_tokenizer_filters_added_tokens_missing_from_vocab() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokenizer.json");
+        // 越词表 added_token（ଙ 不在 vocab）必须被 shim 过滤，否则解析失败
+        std::fs::write(
+            &path,
+            r#"{"version":"1.0","added_tokens":[
+                 {"id":128022,"content":"__en__","single_word":false,"lstrip":false,
+                  "rstrip":false,"normalized":false,"special":true},
+                 {"id":128111,"content":"ଙ","single_word":false,"lstrip":false,
+                  "rstrip":false,"normalized":false,"special":true}],
+                "normalizer":null,"pre_tokenizer":null,"post_processor":null,
+                "decoder":null,
+                "model":{"type":"BPE","vocab":{"__en__":128022,"hello":0},"merges":[]}}"#,
+        )
+        .unwrap();
+        let tokenizer = load_tokenizer(&path).expect("shim 后必须可加载");
+        assert_eq!(tokenizer.token_to_id("__en__"), Some(128022_u32.into()));
+    }
+
+    #[test]
+    fn test_translate_m2m_real_bundle_end_to_end() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/m2m100_418M");
+        if !dir.is_dir() {
+            eprintln!("SKIP: models/m2m100_418M 缺失（离线环境）");
+            return;
+        }
+        let dylib = std::env::var("ORT_DYLIB_PATH")
+            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+        if !std::path::Path::new(&dylib).is_file() {
+            eprintln!("SKIP: onnxruntime dylib 缺失（{dylib}）");
+            return;
+        }
+        if std::env::var_os("ORT_DYLIB_PATH").is_none() {
+            // SAFETY: 测试进程内单线程时点回填一次
+            unsafe {
+                std::env::set_var("ORT_DYLIB_PATH", &dylib);
+            }
+        }
+        let config = ModelConfig {
+            name: "m2m-smoke".to_string(),
+            engine_type: crate::config::model::EngineType::Onnx,
+            model_path: dir,
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+            task: ModelTask::Translate,
+            quantized: false,
+            decision_params: None,
+            translation_params: None,
+        };
+        let engine = OnnxTranslationEngine::load(&config).expect("m2m bundle 必须可加载");
+        let req = TranslateRequest {
+            text: "Hello, my dog is cute".to_string(),
+            source_language: Some("en".to_string()),
+            target_language: "zh".to_string(),
+        };
+        let resp = OnnxTranslationEngine::translate(&engine, &req).expect("m2m 贪心解码必须成功");
+        assert!(!resp.translation.trim().is_empty(), "译文非空");
+        assert!(
+            !resp.translation.contains("__") && !resp.translation.contains("</s>"),
+            "语言/特殊 token 不得泄漏: {:?}",
+            resp.translation
+        );
+        println!("SMOKE m2m100 translate(en→zh): {:?}", resp.translation);
     }
 
     // ── CJK 字间空格清理（离线纯函数；Marian 解码伪影） ─────────────────

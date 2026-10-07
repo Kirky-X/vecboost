@@ -344,6 +344,124 @@ fn inference_err(step: &str) -> impl Fn(ort::Error) -> VecboostError + '_ {
     move |e: ort::Error| VecboostError::InferenceError(format!("translation {step} failed: {e}"))
 }
 
+/// encoder 单次前向：last_hidden_state → (shape, data) owned 返回
+///（输出名 ≠ 输入名，U2 清单实测；owned 化避免视图借用跨函数存活）
+fn run_encoder(
+    encoder: &mut Session,
+    source_ids: &[i64],
+) -> Result<(Vec<i64>, Vec<f32>), VecboostError> {
+    let source_len = source_ids.len() as i64;
+    let outputs = encoder
+        .run(ort::inputs![
+            "input_ids" => Tensor::from_array((vec![1i64, source_len], source_ids.to_vec()))
+                .map_err(inference_err("encoder input_ids"))?,
+            "attention_mask" => Tensor::from_array(
+                (vec![1i64, source_len], vec![1i64; source_len as usize])
+            )
+            .map_err(inference_err("encoder attention_mask"))?,
+        ])
+        .map_err(inference_err("encoder run"))?;
+    // 显性取键（审查 SEC-2 延伸）：缺键是图契约损坏，显性 InferenceError
+    // 而非 HashMap Index panic
+    let enc_output = outputs.get("last_hidden_state").ok_or_else(|| {
+        VecboostError::InferenceError(
+            "encoder graph output 'last_hidden_state' missing".to_string(),
+        )
+    })?;
+    let (enc_shape, enc_data) = enc_output
+        .try_extract_tensor::<f32>()
+        .map_err(inference_err("encoder last_hidden_state"))?;
+    Ok((enc_shape.to_vec(), enc_data.to_vec()))
+}
+
+/// 贪心解码循环：每步对 [start + 已生成] 全量重算、取末位 logits argmax
+///（无缓存分支，依据见模块文档「缓存分支禁用」）；EOS 停止、
+/// `max_new_tokens` 硬顶。past 输入以 24 个 [1,8,0,64] 空张量占位（图输入
+/// 必填，else 分支不消费值）。
+fn greedy_decode(
+    decoder: &mut Session,
+    enc_dims: &[i64],
+    enc_data: &[f32],
+    source_len: usize,
+    max_new_tokens: usize,
+    decoder_start_token_id: u32,
+    eos_token_id: u32,
+) -> Result<Vec<u32>, VecboostError> {
+    // 评审 PERF-2：循环不变输入循环外构造一次，经 TensorRef 视图借用调用方
+    // 切片（源 512 token≈1MB）。注意：每步必须以 `&*view` 引用传入（命中
+    // From<&Value> → SessionInputValue::View 零拷贝），不可 .clone()——
+    // ValueRef 无 Clone，经 Deref 解析到 owned Value::clone（ort copy.rs）
+    // 是深拷贝且内部运行 identity ORT session，热路径每步双份 memcpy
+    let enc_hidden_view = ort::value::TensorRef::from_array_view((enc_dims, enc_data))
+        .map_err(inference_err("encoder hidden view"))?;
+    let attention_mask: Vec<i64> = vec![1; source_len];
+    let mask_view = ort::value::TensorRef::from_array_view((
+        [1i64, source_len as i64],
+        attention_mask.as_slice(),
+    ))
+    .map_err(inference_err("attention mask view"))?;
+
+    let mut generated: Vec<u32> = Vec::with_capacity(max_new_tokens);
+    let mut decoder_ids: Vec<i64> = vec![decoder_start_token_id as i64];
+    for _step in 0..max_new_tokens {
+        let dec_len = decoder_ids.len() as i64;
+        let mut inputs = ort::inputs![
+            "input_ids" => Tensor::from_array((vec![1i64, dec_len], decoder_ids.clone()))
+                .map_err(inference_err("decoder input_ids"))?,
+            "use_cache_branch" => Tensor::from_array((vec![1usize], vec![false]))
+                .map_err(inference_err("decoder use_cache_branch"))?,
+            "encoder_attention_mask" => &*mask_view,
+            "encoder_hidden_states" => &*enc_hidden_view,
+        ];
+        // 静态名表（评审 PERF-2）：消除每步 24 次 format! 堆分配；
+        // 空占位张量零数据元素，每步重建成本可忽略
+        for (name, _, _) in PAST_TENSOR_NAMES {
+            inputs.push((
+                Cow::Borrowed(name),
+                Tensor::from_array((vec![1i64, 8, 0i64, 64], Vec::<f32>::new()))
+                    .map_err(inference_err("decoder past placeholder"))?
+                    .into(),
+            ));
+        }
+        let outputs = decoder.run(inputs).map_err(inference_err("decoder step"))?;
+
+        // 显性取键（审查 SEC-2 延伸）：缺键是图契约损坏，显性 InferenceError
+        // 而非 HashMap Index panic
+        let logits_output = outputs.get("logits").ok_or_else(|| {
+            VecboostError::InferenceError("decoder graph output 'logits' missing".to_string())
+        })?;
+        let (logits_shape, logits_data) = logits_output
+            .try_extract_tensor::<f32>()
+            .map_err(inference_err("decoder logits"))?;
+        // 评审 SEC-2：图契约运行时校验（release 生效，替代仅 debug 的
+        // debug_assert）——换导出仓库/量化变体时显性 InferenceError
+        // 附实际形状，而非 index-out-of-bounds panic
+        if let Err(msg) = validate_logits_shape(logits_shape, dec_len, logits_data.len()) {
+            return Err(VecboostError::InferenceError(format!(
+                "decoder logits contract mismatch: {msg}"
+            )));
+        }
+        // 末位 token 的分布（logits [1, dec_len, V]，取最后一行）
+        let vocab = logits_shape[2] as usize;
+        let last_row = &logits_data[(dec_len as usize - 1) * vocab..dec_len as usize * vocab];
+        // 评审 PERF-3/ARC-6：total_cmp 全序比较（NaN 排序确定不 panic、
+        // 不中毒锁；与 candle_decision 的容忍先例同语义强度）
+        let (best, _score) = last_row
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .expect("logits 非空");
+        let best = best as u32;
+
+        if best == eos_token_id {
+            break;
+        }
+        generated.push(best);
+        decoder_ids.push(best as i64);
+    }
+    Ok(generated)
+}
+
 impl OnnxTranslationEngine {
     /// 从 bundle 目录加载：encoder/decoder 按 [`ENCODER_CANDIDATES`]/
     /// [`DECODER_CANDIDATES`] 探测，tokenizer.json 必填（bundle 根，
@@ -435,150 +553,141 @@ impl OnnxTranslationEngine {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// 翻译本体：encode → 预算二次校验（显性拒绝，禁止静默截断——截断会
-    /// 丢源语义致译文错译）→ encoder 单次前向 → 贪心循环（argmax、EOS
-    /// 停止、`max_new_tokens` 硬顶；无缓存全量重算，依据见模块文档）→ decode。
+    /// 翻译本体：两遍策略——第一遍整段直解（最大上下文：实体消歧、句间衔接
+    /// 最佳）；经确定性退化检测（4-gram 重复循环 / 压满预算不出 EOS，见
+    /// [`is_degenerate_generation`]）命中时第二遍按句切分逐句解码救援（消除
+    /// 上下文相关失效，带全局输出预算与句数上限）。Session 锁临界区仅含
+    /// 推理（tokenize/detok/切分均在锁外，架构审查 L1）；之后按目标语言
+    /// 拼接（CJK 直接相连）→ CJK 标点归一 + 字间空格清理。
     pub(crate) fn translate(
         &self,
         req: &TranslateRequest,
     ) -> Result<TranslateResponse, VecboostError> {
         let started = std::time::Instant::now();
-        // add_special_tokens 必须为 true：Marian 源序列需结尾 </s>
-        // （T015 实测，缺它解码退化为重复循环）
-        let encoding = self
-            .tokenizer
-            .encode(req.text.as_str(), true)
-            .map_err(|e| {
-                VecboostError::InferenceError(format!("translation tokenization failed: {e}"))
-            })?;
-        let source_ids: Vec<i64> = encoding.get_ids().iter().map(|&i| i as i64).collect();
-        let source_len = source_ids.len();
-        if source_len > self.params.max_source_tokens {
-            // InvalidInput（to_api_error 映射 400）：design D2 承诺超限冒泡为
-            // 400 语义；服务层预判为第一道，此处为引擎兜底（口径一致）
-            return Err(VecboostError::InvalidInput(format!(
-                "source text exceeds token budget: {source_len} tokens > {} (max_source_tokens); \
-                 shorten the text or raise [translation.pairs] max_source_tokens",
-                self.params.max_source_tokens
-            )));
-        }
-        let attention_mask: Vec<i64> = vec![1; source_len];
+        // 整段编码 + 预算校验（锁外：tokenize 无 Session 依赖）
+        let source_ids = encode_source_ids(&self.tokenizer, &req.text)?;
+        check_token_budget(source_ids.len(), self.params.max_source_tokens, "text")?;
 
-        let generated: Vec<u32> = {
-            // 评审 PERF-3：panic 后恢复中毒锁（into_inner 取回内层数据）——
-            // 每步解码输入独立构造、Session 无跨请求可变状态，恢复安全；
-            // 否则单次 panic 即该 pair 永久 "lock poisoned" 直至重启
+        // 第一遍整段直解。评审 PERF-3：panic 后恢复中毒锁（into_inner 取回
+        // 内层数据）——每步解码输入独立构造、Session 无跨请求可变状态，恢复
+        // 安全；否则单次 panic 即该 pair 永久 "lock poisoned" 直至重启
+        let (generated, degenerate) = {
             let mut sessions = self
                 .sessions
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-            // encoder 单次前向：last_hidden_state → decoder 侧
-            // encoder_hidden_states（输出名 ≠ 输入名，改名搬运，U2 清单实测）
-            let enc_outputs = sessions
-                .encoder
-                .run(ort::inputs![
-                    "input_ids" => Tensor::from_array((vec![1i64, source_len as i64], source_ids.clone()))
-                        .map_err(inference_err("encoder input_ids"))?,
-                    "attention_mask" => Tensor::from_array(
-                        (vec![1i64, source_len as i64], attention_mask.clone())
-                    )
-                    .map_err(inference_err("encoder attention_mask"))?,
-                ])
-                .map_err(inference_err("encoder run"))?;
-            let (enc_shape, enc_data) = enc_outputs["last_hidden_state"]
-                .try_extract_tensor::<f32>()
-                .map_err(inference_err("encoder last_hidden_state"))?;
-            let enc_dims: Vec<i64> = enc_shape.to_vec();
-            let enc_data = enc_data.to_vec();
-            drop(enc_outputs);
-            // 评审 PERF-2：循环不变输入循环外构造一次（review 建议的 Arc 共享
-            // 在 ort rc.13 pub API 不可用——Value 无 pub Clone），改借用 view
-            //（TensorRef::from_array_view）消除每步 enc_data（源 512 token≈1MB）
-            // 整份克隆；view 借用 enc_data/attention_mask，存活至循环结束
-            let enc_hidden_view =
-                ort::value::TensorRef::from_array_view((enc_dims.as_slice(), enc_data.as_slice()))
-                    .map_err(inference_err("encoder hidden view"))?;
-            let mask_view = ort::value::TensorRef::from_array_view((
-                [1i64, source_len as i64],
-                attention_mask.as_slice(),
-            ))
-            .map_err(inference_err("attention mask view"))?;
-
-            // 贪心循环（无缓存分支，依据见模块文档「缓存分支禁用」）：每步
-            // 对 [start + 已生成] 全量重算、取末位 logits argmax。past 输入
-            // 以 24 个 [1,8,0,64] 空张量占位（图输入必填，else 分支不消费值）。
-            let mut generated: Vec<u32> = Vec::with_capacity(self.params.max_new_tokens);
-            let mut decoder_ids: Vec<i64> = vec![self.decoder_start_token_id as i64];
-            for _step in 0..self.params.max_new_tokens {
-                let dec_len = decoder_ids.len() as i64;
-                let mut inputs = ort::inputs![
-                    "input_ids" => Tensor::from_array((vec![1i64, dec_len], decoder_ids.clone()))
-                        .map_err(inference_err("decoder input_ids"))?,
-                    "use_cache_branch" => Tensor::from_array((vec![1usize], vec![false]))
-                        .map_err(inference_err("decoder use_cache_branch"))?,
-                    "encoder_attention_mask" => mask_view.clone(),
-                    "encoder_hidden_states" => enc_hidden_view.clone(),
-                ];
-                // 静态名表（评审 PERF-2）：消除每步 24 次 format! 堆分配；
-                // 空占位张量零数据元素，每步重建成本可忽略
-                for (name, _, _) in PAST_TENSOR_NAMES {
-                    inputs.push((
-                        Cow::Borrowed(name),
-                        Tensor::from_array((vec![1i64, 8, 0i64, 64], Vec::<f32>::new()))
-                            .map_err(inference_err("decoder past placeholder"))?
-                            .into(),
-                    ));
-                }
-                let outputs = sessions
-                    .decoder
-                    .run(inputs)
-                    .map_err(inference_err("decoder step"))?;
-
-                let (logits_shape, logits_data) = outputs["logits"]
-                    .try_extract_tensor::<f32>()
-                    .map_err(inference_err("decoder logits"))?;
-                // 评审 SEC-2：图契约运行时校验（release 生效，替代仅 debug 的
-                // debug_assert）——换导出仓库/量化变体时显性 InferenceError
-                // 附实际形状，而非 index-out-of-bounds panic
-                if let Err(msg) = validate_logits_shape(logits_shape, dec_len, logits_data.len()) {
-                    return Err(VecboostError::InferenceError(format!(
-                        "decoder logits contract mismatch: {msg}"
-                    )));
-                }
-                // 末位 token 的分布（logits [1, dec_len, V]，取最后一行）
-                let vocab = logits_shape[2] as usize;
-                let last_row =
-                    &logits_data[(dec_len as usize - 1) * vocab..dec_len as usize * vocab];
-                // 评审 PERF-3/ARC-6：total_cmp 全序比较（NaN 排序确定不 panic、
-                // 不中毒锁；与 candle_decision 的容忍先例同语义强度）
-                let (best, _score) = last_row
-                    .iter()
-                    .enumerate()
-                    .max_by(|a, b| a.1.total_cmp(b.1))
-                    .expect("logits 非空");
-                let best = best as u32;
-
-                if best == self.eos_token_id {
-                    break;
-                }
-                generated.push(best);
-                decoder_ids.push(best as i64);
-            }
-            generated
+            let (enc_dims, enc_data) = run_encoder(&mut sessions.encoder, &source_ids)?;
+            let generated = greedy_decode(
+                &mut sessions.decoder,
+                &enc_dims,
+                &enc_data,
+                source_ids.len(),
+                self.params.max_new_tokens,
+                self.decoder_start_token_id,
+                self.eos_token_id,
+            )?;
+            // 退化判据 token 级（空生成 = 立即 EOS，同判退化转救援）
+            let degenerate = generated.is_empty()
+                || is_degenerate_generation(
+                    &generated,
+                    generated.len() >= self.params.max_new_tokens,
+                );
+            (generated, degenerate)
         };
 
+        // 第二遍救援：按句切分逐句解码（run1 评审实测：长段重复循环消除；
+        // 代价是句间上下文丢失，仅作退化救援路径）。救援带全局输出 token
+        // 预算与句数上限（审查 F2：无界救援按句数放大解码步数并占死 pair
+        // 信号量），耗尽即截断并显性告警，禁止静默丢句
+        let (generated_sets, generated_total) = if !degenerate {
+            let generated_total = generated.len();
+            (vec![generated], generated_total)
+        } else {
+            let sentences = split_source_sentences(&req.text);
+            log::warn!(
+                "translation whole-text decode degenerated ({} tokens generated, \
+                 {} sentences); retrying per-sentence with output budget {}",
+                generated.len(),
+                sentences.len(),
+                self.params.max_new_tokens
+            );
+            if sentences.len() > MAX_RESCUE_SENTENCES {
+                log::warn!(
+                    "rescue sentence count {} exceeds cap {MAX_RESCUE_SENTENCES}; \
+                     remaining sentences dropped",
+                    sentences.len()
+                );
+            }
+            let sentence_ids_list = sentences
+                .iter()
+                .take(MAX_RESCUE_SENTENCES)
+                .map(|sentence| encode_source_ids(&self.tokenizer, sentence))
+                .collect::<Result<Vec<_>, VecboostError>>()?;
+            for sentence_ids in &sentence_ids_list {
+                check_token_budget(
+                    sentence_ids.len(),
+                    self.params.max_source_tokens,
+                    "sentence",
+                )?;
+            }
+            let generated_sets = {
+                let mut sessions = self
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut generated_sets = Vec::with_capacity(sentence_ids_list.len());
+                let mut rescue_budget = self.params.max_new_tokens;
+                let mut produced: usize = 0;
+                for sentence_ids in &sentence_ids_list {
+                    if rescue_budget == 0 {
+                        log::warn!(
+                            "rescue output budget exhausted after {produced} tokens; \
+                             remaining sentences dropped"
+                        );
+                        break;
+                    }
+                    let (sentence_dims, sentence_data) =
+                        run_encoder(&mut sessions.encoder, sentence_ids)?;
+                    let generated = greedy_decode(
+                        &mut sessions.decoder,
+                        &sentence_dims,
+                        &sentence_data,
+                        sentence_ids.len(),
+                        rescue_budget,
+                        self.decoder_start_token_id,
+                        self.eos_token_id,
+                    )?;
+                    rescue_budget = rescue_budget.saturating_sub(generated.len());
+                    produced += generated.len();
+                    generated_sets.push(generated);
+                }
+                generated_sets
+            };
+            let total: usize = generated_sets.iter().map(|g| g.len()).sum();
+            (generated_sets, total)
+        };
+
+        // detok 统一锁外（架构审查 L1：临界区仅含推理）
+        let mut pieces: Vec<String> = Vec::with_capacity(generated_sets.len());
+        for generated in &generated_sets {
+            let text = decode_output_text(&self.tokenizer, generated)?;
+            if !text.is_empty() {
+                pieces.push(text);
+            }
+        }
+
         self.output_tokens_last
-            .store(generated.len() as u64, std::sync::atomic::Ordering::Relaxed);
-        let translation = self
-            .tokenizer
-            .decode(&generated, true)
-            .map_err(|e| {
-                VecboostError::InferenceError(format!("translation detokenization failed: {e}"))
-            })?
-            .trim()
-            .to_string();
-        let translation = normalize_cjk_punctuation(translation, &req.target_language);
+            .store(generated_total as u64, std::sync::atomic::Ordering::Relaxed);
+        let joined = pieces.join(translation_joiner(&req.target_language));
+        let translation = normalize_cjk_punctuation(joined, &req.target_language);
+        // 中/日目标额外清除字间/标点旁半角空格（Marian 解码系统性伪影，
+        // 质量评审 run1 实测：“取代 ” ， 后者”“。 许多”“ — —”）。韩语
+        // 不参与（空格有辨义作用），见 is_zh_ja_target 文档
+        let translation = if is_zh_ja_target(&req.target_language) {
+            collapse_cjk_spaces(&translation)
+        } else {
+            translation
+        };
         Ok(TranslateResponse {
             translation,
             source_language: req.source_language.clone(),
@@ -587,6 +696,70 @@ impl OnnxTranslationEngine {
             processing_time_ms: started.elapsed().as_millis() as u64,
         })
     }
+}
+
+/// 救援遍句数上限（审查 F2：句数无界时按句放大解码前向次数并占死 pair
+/// 信号量；64 句覆盖正常段落，超出按截断显性告警）
+const MAX_RESCUE_SENTENCES: usize = 64;
+
+/// 生成退化检测：opus-mt 长段整解的实测失效模式是重复循环（run1 评审：
+/// 「伟大的替代理论 — — 一个伟大的替代理论 — —」）与压满解码预算不出
+/// EOS。任一 4-gram 重复 ≥3 次或压满预算即判定退化。确定性规则，零模型
+/// 参与（规则7：确定性决策不得交给模型）。
+fn is_degenerate_generation(generated: &[u32], hit_budget: bool) -> bool {
+    if hit_budget {
+        return true;
+    }
+    if generated.len() < 8 {
+        return false;
+    }
+    let mut seen: std::collections::HashMap<&[u32], usize> = std::collections::HashMap::new();
+    for window in generated.windows(4) {
+        let count = seen.entry(window).or_insert(0);
+        *count += 1;
+        if *count >= 3 {
+            return true;
+        }
+    }
+    false
+}
+
+/// 源文本编码（Marian 源序列需结尾 </s>——T015 实测，缺它解码退化为
+/// 重复循环，故 add_special_tokens 恒 true）
+fn encode_source_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<i64>, VecboostError> {
+    let encoding = tokenizer.encode(text, true).map_err(|e| {
+        VecboostError::InferenceError(format!("translation tokenization failed: {e}"))
+    })?;
+    Ok(encoding.get_ids().iter().map(|&i| i as i64).collect())
+}
+
+/// 源序列解码（跳过特殊 token + trim）
+fn decode_output_text(tokenizer: &Tokenizer, generated: &[u32]) -> Result<String, VecboostError> {
+    Ok(tokenizer
+        .decode(generated, true)
+        .map_err(|e| {
+            VecboostError::InferenceError(format!("translation detokenization failed: {e}"))
+        })?
+        .trim()
+        .to_string())
+}
+
+/// 源序列预算二次校验（显性拒绝，禁止静默截断——截断会丢源语义致译文错译）
+fn check_token_budget(
+    source_len: usize,
+    max_source_tokens: usize,
+    scope: &str,
+) -> Result<(), VecboostError> {
+    if source_len > max_source_tokens {
+        // InvalidInput（to_api_error 映射 400）：design D2 承诺超限冒泡为
+        // 400 语义；服务层预判为第一道，此处为引擎兜底（口径一致）
+        return Err(VecboostError::InvalidInput(format!(
+            "source {scope} exceeds token budget: {source_len} tokens > \
+             {max_source_tokens} (max_source_tokens); shorten the text or \
+             raise the pair's max_source_tokens limit"
+        )));
+    }
+    Ok(())
 }
 
 /// CJK 目标语言半角标点归一：Marian 译文系统性带半角标点（质量评审
@@ -632,6 +805,153 @@ fn normalize_cjk_punctuation(text: String, target_language: &str) -> String {
         } else {
             out.push(mapped);
         }
+    }
+    out
+}
+
+/// 句终标点连串后吸收的闭引号/闭括号（句界归属前句）
+const SENTENCE_CLOSERS: [char; 8] = ['"', '\'', '”', '’', ')', ']', '】', '」'];
+
+/// 缩写守卫表（小写、去点后比对）：句点命中即不切分，误切丢语义
+const SENTENCE_ABBREVIATIONS: [&str; 27] = [
+    "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "eg", "ie", "al", "no", "fig",
+    "inc", "ltd", "co", "dept", "univ", "approx", "cf", "pp", "vol", "us", "uk", "eu",
+];
+
+/// 判定句点前片段是否缩写或单字母首字母（"U.S." / "e.g." / "X. Kendi"）
+fn is_abbreviation_or_initial(chars: &[char]) -> bool {
+    let mut reversed = String::new();
+    for &c in chars.iter().rev() {
+        if c.is_alphanumeric() || c == '.' {
+            reversed.push(c.to_ascii_lowercase());
+        } else {
+            break;
+        }
+    }
+    let word: String = reversed.chars().rev().collect();
+    let word = word.replace('.', "");
+    if word.is_empty() {
+        return false;
+    }
+    if word.chars().count() == 1 && word.chars().next().is_some_and(char::is_alphabetic) {
+        return true;
+    }
+    SENTENCE_ABBREVIATIONS.contains(&word.as_str())
+}
+
+/// 按句切分源文本：opus-mt 以句对训练，多句整段直解在长输入上实测产生
+/// 重复循环、从句并装错误与实体退化（质量评审 run1），逐句解码为确定性
+/// 前置手段。句界 = 句终标点（`.!?…`）连串 + 紧随闭引号/闭括号 + 后随
+/// 空白/文末；缩写、单字母首字母、小数与「标点后紧跟实字符/数字」不切。
+/// 无句终标点的文本单片段返回。
+fn split_source_sentences(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut pieces: Vec<String> = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < chars.len() {
+        if !matches!(chars[i], '.' | '!' | '?' | '…') {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < chars.len() && matches!(chars[j], '.' | '!' | '?' | '…') {
+            j += 1;
+        }
+        while j < chars.len() && SENTENCE_CLOSERS.contains(&chars[j]) {
+            j += 1;
+        }
+        // 边界不成立：标点后紧跟实字符（小数 `3.5`、域名等）——前移续扫
+        if j < chars.len() && !chars[j].is_whitespace() {
+            i = j;
+            continue;
+        }
+        let next = chars[j..]
+            .iter()
+            .position(|c| !c.is_whitespace())
+            .map_or(chars.len(), |p| j + p);
+        // 编号列表（"… . 5)"）后随数字：保守不切分
+        if next < chars.len() && chars[next].is_ascii_digit() {
+            i = j;
+            continue;
+        }
+        if matches!(chars[i], '.') && is_abbreviation_or_initial(&chars[start..i]) {
+            i = j;
+            continue;
+        }
+        let piece: String = chars[start..j].iter().collect();
+        let trimmed = piece.trim();
+        if !trimmed.is_empty() {
+            pieces.push(trimmed.to_string());
+        }
+        start = next;
+        i = next;
+    }
+    if start < chars.len() {
+        let tail: String = chars[start..].iter().collect();
+        let trimmed = tail.trim();
+        if !trimmed.is_empty() {
+            pieces.push(trimmed.to_string());
+        }
+    }
+    if pieces.is_empty() {
+        let whole = text.trim();
+        if !whole.is_empty() {
+            return vec![whole.to_string()];
+        }
+    }
+    pieces
+}
+
+/// 分句译文拼接符：中/日句末自带句读直接相连；韩语与其余语言以空格相连
+fn translation_joiner(target_language: &str) -> &'static str {
+    if is_zh_ja_target(target_language) {
+        ""
+    } else {
+        " "
+    }
+}
+
+/// 中/日目标语言码族（639-1 及等价 639-3）：分句拼接零分隔与字间空格清理
+/// 共用判据（架构审查 M2：单一事实源）。注意 `normalize_cjk_punctuation`
+/// 为刻意超集（含韩语——标点归一对韩语适用；空格清理不适用，韩语空格
+/// 有辨义作用）。
+fn is_zh_ja_target(target_language: &str) -> bool {
+    matches!(target_language, "zh" | "zho" | "cmn" | "yue" | "ja" | "jpn")
+}
+
+/// 中日文排印字符判定（清理判定用）：CJK 统一表意及扩展、假名、CJK/全角
+/// 标点、破折号/弯引号/省略号/间隔号。韩文不参与（空格有辨义作用）。
+fn is_cjk_typography_char(c: char) -> bool {
+    matches!(c as u32,
+        0x3000..=0x303F   // CJK 标点（、。〈〉《》「」『』【】〔〕）
+        | 0x3040..=0x30FF // 平假名/片假名
+        | 0x3400..=0x4DBF // CJK 扩展 A
+        | 0x4E00..=0x9FFF // CJK 统一表意
+        | 0xF900..=0xFAFF // CJK 兼容表意
+        | 0xFF00..=0xFFEF // 全角形式（，！？：；）
+        | 0x00B7          // 间隔号 ·
+        | 0x2014          // 破折号 —
+        | 0x2018..=0x201F // 弯引号
+        | 0x2026) // 省略号 …
+}
+
+/// 清除中日译文中的字间/标点旁半角空格（Marian 解码系统性伪影，质量评审
+/// 实测：“取代 ” ， 后者”“。 许多”“— —”）；词内拉丁空格（"Elon Musk"）
+/// 保留。引擎层后处理（normalize 同款先例）：golden 闸门、质量输出与
+/// 四协议面交付同一译文。
+fn collapse_cjk_spaces(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    for (k, &ch) in chars.iter().enumerate() {
+        if ch == ' ' {
+            let prev = k > 0 && is_cjk_typography_char(chars[k - 1]);
+            let next = k + 1 < chars.len() && is_cjk_typography_char(chars[k + 1]);
+            if prev || next {
+                continue;
+            }
+        }
+        out.push(ch);
     }
     out
 }
@@ -969,5 +1289,222 @@ mod tests {
             "版本 3.5 发布了。"
         );
         assert_eq!(normalize_cjk_punctuation(String::new(), "zh"), "");
+    }
+
+    // ── 按句切分（离线纯函数；长难段质量调优的确定性前置） ──────────────
+
+    #[test]
+    fn test_split_multi_sentence() {
+        assert_eq!(
+            split_source_sentences("Rust is fast. It is safe. It is fun."),
+            ["Rust is fast.", "It is safe.", "It is fun."]
+        );
+    }
+
+    #[test]
+    fn test_split_question_exclamation() {
+        assert_eq!(
+            split_source_sentences("Really? Yes! Fine."),
+            ["Really?", "Yes!", "Fine."]
+        );
+    }
+
+    #[test]
+    fn test_split_abbreviation_guard() {
+        // 缩写不切分：Dr. / U.S. / e.g.
+        assert_eq!(
+            split_source_sentences("Dr. Smith joined the U.S. delegation in 2024. He spoke first."),
+            [
+                "Dr. Smith joined the U.S. delegation in 2024.",
+                "He spoke first."
+            ]
+        );
+        assert_eq!(
+            split_source_sentences("Agents, e.g. Claude, automate work. Risks remain."),
+            ["Agents, e.g. Claude, automate work.", "Risks remain."]
+        );
+    }
+
+    #[test]
+    fn test_split_single_letter_initial_not_boundary() {
+        assert_eq!(
+            split_source_sentences("Ibram X. Kendi wrote it. Sales followed."),
+            ["Ibram X. Kendi wrote it.", "Sales followed."]
+        );
+    }
+
+    #[test]
+    fn test_split_decimal_not_boundary() {
+        // 小数点后紧跟数字不切分
+        assert_eq!(
+            split_source_sentences("Revenue rose 12.5 percent. Costs fell."),
+            ["Revenue rose 12.5 percent.", "Costs fell."]
+        );
+    }
+
+    #[test]
+    fn test_split_closing_quote_boundary() {
+        // 句终标点 + 闭引号归前句
+        assert_eq!(
+            split_source_sentences("He said, “go all out.” Then he left."),
+            ["He said, “go all out.”", "Then he left."]
+        );
+    }
+
+    #[test]
+    fn test_split_no_terminal_punct_single_piece() {
+        assert_eq!(
+            split_source_sentences("AI should be no different"),
+            ["AI should be no different"]
+        );
+        assert_eq!(split_source_sentences(""), Vec::<String>::new());
+    }
+
+    // ── 生成退化检测（离线纯函数；两遍策略的切换判据） ──────────────────
+
+    #[test]
+    fn test_degenerate_repeated_ngram_detected() {
+        // 任一 4-gram 重复 ≥3 次 → 退化（重复循环）
+        assert!(is_degenerate_generation(
+            &[7, 8, 9, 10, 7, 8, 9, 10, 7, 8, 9, 10],
+            false
+        ));
+        assert!(is_degenerate_generation(
+            &[1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5],
+            false
+        ));
+    }
+
+    #[test]
+    fn test_degenerate_budget_hit_detected() {
+        assert!(is_degenerate_generation(&[1, 2, 3, 4, 5, 6, 7, 8], true));
+    }
+
+    #[test]
+    fn test_normal_generation_not_degenerate() {
+        // 无重复 4-gram 的正常序列（含 2 次重复不足判据）
+        assert!(!is_degenerate_generation(
+            &[1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 9, 9, 9, 9],
+            false
+        ));
+        // 短序列（<8 token）不判定
+        assert!(!is_degenerate_generation(&[1, 2, 3, 4, 1, 2, 3, 4], false));
+        assert!(!is_degenerate_generation(&[], false));
+    }
+
+    #[test]
+    fn test_check_token_budget_within_and_over() {
+        // 预算内通过；超限 InvalidInput 且消息含 scope 与上限数值
+        check_token_budget(511, 512, "text").unwrap();
+        let err = check_token_budget(513, 512, "sentence").unwrap_err();
+        assert!(matches!(err, VecboostError::InvalidInput(_)));
+        let detail = err.error_detail();
+        assert!(detail.contains("sentence"), "err={detail}");
+        assert!(
+            detail.contains("513") && detail.contains("512"),
+            "err={detail}"
+        );
+    }
+
+    // ── CJK 字间空格清理（离线纯函数；Marian 解码伪影） ─────────────────
+
+    #[test]
+    fn test_collapse_spaces_between_cjk_chars() {
+        // 评审 run1 实测伪影：标点旁/字间半角空格
+        assert_eq!(
+            collapse_cjk_spaces("取代 ” ， 后者由精英策划"),
+            "取代”，后者由精英策划"
+        );
+        assert_eq!(
+            collapse_cjk_spaces("《思想链 》 与 《 实践 》"),
+            "《思想链》与《实践》"
+        );
+        assert_eq!(collapse_cjk_spaces("。 许多公司"), "。许多公司");
+    }
+
+    #[test]
+    fn test_collapse_keeps_latin_inner_spaces() {
+        // 词内拉丁空格保留；CJK↔拉丁边界空格按百度基准口径清除
+        assert_eq!(
+            collapse_cjk_spaces("Elon Musk 是该党的坚定支持者"),
+            "Elon Musk是该党的坚定支持者"
+        );
+        assert_eq!(collapse_cjk_spaces("埃隆 · 马斯克"), "埃隆·马斯克");
+    }
+
+    #[test]
+    fn test_collapse_em_dash_run() {
+        assert_eq!(
+            collapse_cjk_spaces("伟大的替代理论 — — 一个现象"),
+            "伟大的替代理论——一个现象"
+        );
+    }
+
+    #[test]
+    fn test_collapse_ascii_only_untouched() {
+        assert_eq!(
+            collapse_cjk_spaces("Hello, my dog is cute"),
+            "Hello, my dog is cute"
+        );
+    }
+
+    // ── 真机多句链路（bundle 守卫；钉住按句切分后的 e2e 可译性） ─────────
+
+    #[test]
+    fn test_translate_multi_sentence_real_bundle() {
+        let Some(dir) = opus_bundle() else {
+            eprintln!("SKIP: models/opus-mt-en-zh 缺失（离线环境）");
+            return;
+        };
+        let dylib = std::env::var("ORT_DYLIB_PATH")
+            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+        if !std::path::Path::new(&dylib).is_file() {
+            eprintln!("SKIP: onnxruntime dylib 缺失（{dylib}）");
+            return;
+        }
+        if std::env::var_os("ORT_DYLIB_PATH").is_none() {
+            // SAFETY: 测试进程内单线程时点回填一次
+            unsafe {
+                std::env::set_var("ORT_DYLIB_PATH", &dylib);
+            }
+        }
+        let config = ModelConfig {
+            name: "opus-smoke-multi".to_string(),
+            engine_type: crate::config::model::EngineType::Onnx,
+            model_path: dir,
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+            task: ModelTask::Translate,
+            quantized: false,
+            decision_params: None,
+            translation_params: None,
+        };
+        let engine = OnnxTranslationEngine::load(&config).expect("bundle 就绪时必须可加载");
+        let req = TranslateRequest {
+            text: "Rust is a systems programming language. It guarantees memory safety \
+                   without a garbage collector."
+                .to_string(),
+            source_language: Some("en".to_string()),
+            target_language: "zh".to_string(),
+        };
+        let resp = OnnxTranslationEngine::translate(&engine, &req).expect("分句贪心解码必须成功");
+        assert!(!resp.translation.trim().is_empty(), "译文非空");
+        assert!(
+            !resp.translation.contains("</s>") && !resp.translation.contains("<pad>"),
+            "特殊 token 不得泄漏: {:?}",
+            resp.translation
+        );
+        // 两个句片段均成功解码（无句被空译文吞掉）
+        assert!(engine.last_output_tokens() > 0);
+        println!(
+            "SMOKE multi-sentence translate(en→zh): {:?}",
+            resp.translation
+        );
     }
 }

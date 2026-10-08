@@ -11,7 +11,8 @@
 //! 逐有效 marker `|Δlogit| ≤ 1e-4`（未校准 logits，温度施加前）。
 //!
 //! 先决条件（checkpoint safetensors、ORT_DYLIB_PATH、onnx bundle）缺失时
-//! 整文件 SKIP（探测集中于 `tests/common/mod.rs`）；测试不依赖 Python 与
+//! 整文件 SKIP（探测函数 `candle_parity_assets` 内联于本文件、单一消费者，
+//! 见下方「对拍先决条件资产」注记）；测试不依赖 Python 与
 //! 外部进程——双实现同进程纯 Rust 对拍。
 //!
 //! ```text

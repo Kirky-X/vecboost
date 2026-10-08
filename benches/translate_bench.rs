@@ -48,7 +48,7 @@ fn load_pair_engine(bundle_path: &str) -> AnyEngine {
     let config = ModelConfig {
         name: Path::new(bundle_path)
             .file_name()
-            .unwrap()
+            .expect("bench bundle_path 需有文件名")
             .to_string_lossy()
             .to_string(),
         engine_type: EngineType::Onnx,

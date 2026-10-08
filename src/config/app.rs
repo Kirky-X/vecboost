@@ -226,6 +226,7 @@ impl TranslationConfig {
             crate::config::model::TranslationParams::new(
                 pair.max_source_tokens.unwrap_or(defaults.max_source_tokens),
                 pair.max_new_tokens.unwrap_or(defaults.max_new_tokens),
+                pair.min_new_tokens.unwrap_or(defaults.min_new_tokens),
             )
             .map_err(|e| VecboostError::config_error(format!("translation.pairs[{index}]: {e}")))?;
             if pair.model_path.as_os_str().is_empty() {
@@ -260,6 +261,9 @@ pub struct TranslationPairConfig {
     pub tokenizer_path: Option<PathBuf>,
     pub max_source_tokens: Option<usize>,
     pub max_new_tokens: Option<usize>,
+    /// EOS 抑制窗口（可选；缺省 0 = 禁用）。生成 token 数未达该值前
+    /// 解码 argmax 排除 EOS——抑制贪心解码提前截断（NLLB 质量评审实测）
+    pub min_new_tokens: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
@@ -949,6 +953,7 @@ max_new_tokens = 384
                     tokenizer_path: None,
                     max_source_tokens: None,
                     max_new_tokens: None,
+                    min_new_tokens: None,
                 },
                 TranslationPairConfig {
                     source_language: "en".to_string(),
@@ -957,6 +962,7 @@ max_new_tokens = 384
                     tokenizer_path: None,
                     max_source_tokens: None,
                     max_new_tokens: None,
+                    min_new_tokens: None,
                 },
             ],
         };
@@ -979,6 +985,7 @@ max_new_tokens = 384
                     tokenizer_path: None,
                     max_source_tokens: None,
                     max_new_tokens: None,
+                    min_new_tokens: None,
                 }],
             };
             let err = config.validate().unwrap_err();
@@ -1000,6 +1007,7 @@ max_new_tokens = 384
                 tokenizer_path: None,
                 max_source_tokens: None,
                 max_new_tokens: None,
+                min_new_tokens: None,
             }],
         };
         let err = config.validate().unwrap_err();
@@ -1020,6 +1028,7 @@ max_new_tokens = 384
                 tokenizer_path: None,
                 max_source_tokens: None,
                 max_new_tokens: None,
+                min_new_tokens: None,
             })
             .collect();
         let config = TranslationConfig { pairs };

@@ -495,7 +495,7 @@ mod tests {
                     panic_on_translate: false,
                 })),
                 // 收紧预算：8 token（mock count_tokens 按字符计）
-                TranslationParams::new(8, 512).unwrap(),
+                TranslationParams::new(8, 512, 0).unwrap(),
             ),
         );
         let svc = TranslateService::new(pairs);

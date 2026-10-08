@@ -128,7 +128,7 @@ fn load_pair_engine(bundle_path: &str, max_source_tokens: usize) -> AnyEngine {
     let config = ModelConfig {
         name: Path::new(bundle_path)
             .file_name()
-            .unwrap()
+            .expect("translate_e2e bundle_path 需有文件名")
             .to_string_lossy()
             .to_string(),
         engine_type: EngineType::Onnx,
@@ -139,7 +139,7 @@ fn load_pair_engine(bundle_path: &str, max_source_tokens: usize) -> AnyEngine {
         oom_fallback_enabled: false,
         task: ModelTask::Translate,
         translation_params: Some(
-            TranslationParams::new(max_source_tokens, 512).expect("params valid"),
+            TranslationParams::new(max_source_tokens, 512, 0).expect("params valid"),
         ),
         ..Default::default()
     };
@@ -249,14 +249,14 @@ fn translate_e2e_golden_gate_and_quality() {
                     max_batch_size: 1,
                     oom_fallback_enabled: false,
                     task: ModelTask::Translate,
-                    translation_params: Some(TranslationParams::new(512, 512).unwrap()),
+                    translation_params: Some(TranslationParams::new(512, 512, 0).unwrap()),
                     ..Default::default()
                 };
                 Arc::new(tokio::sync::RwLock::new(
                     EngineFactory::create(EngineType::Onnx, &cfg).unwrap(),
                 ))
             },
-            TranslationParams::new(512, 512).unwrap(),
+            TranslationParams::new(512, 512, 0).unwrap(),
         ),
     );
     let service = TranslateService::new(pairs_map);

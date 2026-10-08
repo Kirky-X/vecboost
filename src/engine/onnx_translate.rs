@@ -144,7 +144,6 @@ struct GenerationConfig {
 /// Marian pair 专用 bundle 无语言 token。
 #[derive(Debug, Clone, PartialEq)]
 enum LangTokenStyle {
-    None,
     /// M2M100：`__{iso}__`（vocab 内建百语言码，token_to_id 探测验证）
     M2m,
     /// NLLB-200：`{iso639-3}_{script}` 显式映射表
@@ -295,19 +294,12 @@ impl Family {
                     ))
                 })?
                 .to_string(),
-            Family::M2m {
-                lang_style: LangTokenStyle::None,
-                ..
-            } => unreachable!("m2m family load-time detection never yields None style"),
         };
-        tokenizer
-            .token_to_id(&token)
-            .map(|id| id as u32)
-            .ok_or_else(|| {
-                VecboostError::InvalidInput(format!(
-                    "language token '{token}' not present in bundle vocabulary"
-                ))
-            })
+        tokenizer.token_to_id(&token).ok_or_else(|| {
+            VecboostError::InvalidInput(format!(
+                "language token '{token}' not present in bundle vocabulary"
+            ))
+        })
     }
 }
 
@@ -409,7 +401,10 @@ fn load_tokenizer(tokenizer_file: &Path) -> Result<Tokenizer, VecboostError> {
         shims.push("removed no-op Precompiled normalizer (null precompiled_charsmap)");
     }
     // 词表事实源先提取为 owned 集合（BPE 对象 / wordlevel 列表），避免与
-    // 后续可变借用冲突；语言/特殊 token（__xx__、*_Latn）均在 vocab 内
+    // 后续可变借用冲突。注意：只过滤 merges、不动 added_tokens——特殊
+    // token（`</s>`/`<pad>` 等）合法地仅存在于 added_tokens 而不在 vocab
+    // （marian 词表实测），过滤 added_tokens 会误删 EOS 锚点；BPE 构建
+    // 的词表成员校验只发生在 merges（m2m100 的 546 个坏 merge 全在此）
     let vocab_keys: std::collections::HashSet<String> = match value["model"].get("vocab") {
         Some(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
         Some(serde_json::Value::Array(list)) => list
@@ -418,47 +413,25 @@ fn load_tokenizer(tokenizer_file: &Path) -> Result<Tokenizer, VecboostError> {
             .collect(),
         _ => Vec::new().into_iter().collect(),
     };
-    let vocab_nonempty = !vocab_keys.is_empty();
-    // ② added_tokens 越词表过滤
-    if let Some(added) = value.get_mut("added_tokens").and_then(|v| v.as_array_mut()) {
-        let before = added.len();
-        added.retain(|entry| {
-            entry
-                .get("content")
-                .and_then(|c| c.as_str())
-                .map_or(true, |content| {
-                    !vocab_nonempty || vocab_keys.contains(content)
-                })
-        });
-        if added.len() != before {
-            shims.push("filtered added_tokens entries missing from model vocab");
-        }
-    }
-    // ③ merges 越词表过滤（Xenova m2m100 导出缺陷：数百个 merge 的部件或
-    // 结果 token 不在 vocab——`Token 'ଙ' out of vocabulary` 解析期即失败）。
-    // tokenizers 0.23 BPE 构建同时校验部件与拼接结果，两处都须在词表
-    if vocab_nonempty {
-        if let Some(merges) = value["model"]
+    if !vocab_keys.is_empty()
+        && let Some(merges) = value["model"]
             .get_mut("merges")
             .and_then(|v| v.as_array_mut())
-        {
-            let before = merges.len();
-            merges.retain(|merge| {
-                let parts: Vec<&str> = match merge {
-                    // 旧格式 "a b" 单字符串；新格式 ["a","b"] 二元组
-                    serde_json::Value::String(line) => line.split(' ').collect(),
-                    serde_json::Value::Array(list) => {
-                        list.iter().filter_map(|v| v.as_str()).collect()
-                    }
-                    _ => return true,
-                };
-                !parts.is_empty()
-                    && parts.iter().all(|part| vocab_keys.contains(*part))
-                    && vocab_keys.contains(&parts.concat())
-            });
-            if merges.len() != before {
-                shims.push("filtered merge entries referencing tokens missing from vocab");
-            }
+    {
+        let before = merges.len();
+        merges.retain(|merge| {
+            let parts: Vec<&str> = match merge {
+                // 旧格式 "a b" 单字符串；新格式 ["a","b"] 二元组
+                serde_json::Value::String(line) => line.split(' ').collect(),
+                serde_json::Value::Array(list) => list.iter().filter_map(|v| v.as_str()).collect(),
+                _ => return true,
+            };
+            !parts.is_empty()
+                && parts.iter().all(|part| vocab_keys.contains(*part))
+                && vocab_keys.contains(&parts.concat())
+        });
+        if merges.len() != before {
+            shims.push("filtered merge entries referencing tokens missing from vocab");
         }
     }
     for shim in &shims {
@@ -498,20 +471,23 @@ impl GenerationConfig {
                 bundle_dir.display()
             ))
         })?;
-        let start = value["decoder_start_token_id"].as_u64();
-        let eos = value["eos_token_id"].as_u64();
-        if start.is_none() || eos.is_none() {
-            log::warn!(
-                "translation bundle {}: generation_config.json missing decoder_start_token_id/eos_token_id; \
-                 falling back to tokenizer special tokens for decode anchors",
-                bundle_dir.display()
-            );
-            return Self::from_tokenizer_fallback(bundle_dir, tokenizer);
+        match (
+            value["decoder_start_token_id"].as_u64(),
+            value["eos_token_id"].as_u64(),
+        ) {
+            (Some(start), Some(eos)) => Ok(Self {
+                decoder_start_token_id: start as u32,
+                eos_token_id: eos as u32,
+            }),
+            _ => {
+                log::warn!(
+                    "translation bundle {}: generation_config.json missing decoder_start_token_id/eos_token_id; \
+                     falling back to tokenizer special tokens for decode anchors",
+                    bundle_dir.display()
+                );
+                Self::from_tokenizer_fallback(bundle_dir, tokenizer)
+            }
         }
-        Ok(Self {
-            decoder_start_token_id: start.unwrap() as u32,
-            eos_token_id: eos.unwrap() as u32,
-        })
     }
 
     fn from_tokenizer_fallback(
@@ -528,7 +504,10 @@ impl GenerationConfig {
                     bundle_dir.display()
                 ))
             })?;
-        let start = tokenizer.token_to_id("pad").unwrap_or(eos);
+        let start = tokenizer
+            .token_to_id("<pad>")
+            .or_else(|| tokenizer.token_to_id("pad"))
+            .unwrap_or(eos);
         Ok(Self {
             decoder_start_token_id: start,
             eos_token_id: eos,
@@ -632,16 +611,35 @@ fn run_encoder(
     Ok((enc_shape.to_vec(), enc_data.to_vec()))
 }
 
+/// 末位分布 argmax（total_cmp 全序，评审 PERF-3/ARC-6 语义不变）。EOS
+/// 抑制：`exclude` 提供时该索引不参与——未达 min_new_tokens 窗口前排除
+/// EOS（HF min_new_tokens 同语义，NLLB 质量评审实测贪心提前截断丢句）。
+/// 全部被排除（vocab==1 病态图）返回 None，调用方回退含 EOS 的正常 argmax。
+fn argmax_index(row: &[f32], exclude: Option<usize>) -> Option<usize> {
+    row.iter()
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != exclude)
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(i, _)| i)
+}
+
 /// 贪心解码循环：每步对 [初始序列 + 已生成] 全量重算、取末位 logits argmax
 ///（无缓存分支，依据见模块文档「缓存分支禁用」）；EOS 停止、
-/// `max_new_tokens` 硬顶。past 输入以零长占位张量（图输入必填，else 分支
-/// 不消费值）；初始序列与 past 名表/形状按模型家族注入。
+/// `max_new_tokens` 硬顶、`min_new_tokens` 窗口内抑制 EOS。past 输入以
+/// 零长占位张量（图输入必填，else 分支不消费值）；初始序列与 past 名表/
+/// 形状按模型家族注入。
+//
+// 9 参为贪心解码热循环「编码器输出 / past / init」的自然分组，保持扁平签名
+// 以免波及两处调用点；用 #[expect]（非 #[allow]）显式钉住，参数若降至阈值内
+// 会反向告警提示可移除（设计文档 D4）。
+#[expect(clippy::too_many_arguments)]
 fn greedy_decode(
     decoder: &mut Session,
     enc_dims: &[i64],
     enc_data: &[f32],
     source_len: usize,
     max_new_tokens: usize,
+    min_new_tokens: usize,
     decoder_init: &[i64],
     past_names: &[String],
     head_shape: [i64; 4],
@@ -701,15 +699,15 @@ fn greedy_decode(
                 "decoder logits contract mismatch: {msg}"
             )));
         }
-        // 末位 token 的分布（logits [1, dec_len, V]，取最后一行）
+        // 末位 token 的分布（logits [1, dec_len, V]，取最后一行）；
+        // EOS 抑制窗口内排除 EOS（vocab==1 病态图回退正常 argmax 即停止）
         let vocab = logits_shape[2] as usize;
         let last_row = &logits_data[(dec_len as usize - 1) * vocab..dec_len as usize * vocab];
         // 评审 PERF-3/ARC-6：total_cmp 全序比较（NaN 排序确定不 panic、
         // 不中毒锁；与 candle_decision 的容忍先例同语义强度）
-        let (best, _score) = last_row
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.total_cmp(b.1))
+        let exclude = (generated.len() < min_new_tokens).then_some(eos_token_id as usize);
+        let best = argmax_index(last_row, exclude)
+            .or_else(|| argmax_index(last_row, None))
             .expect("logits 非空");
         let best = best as u32;
 
@@ -731,7 +729,9 @@ impl OnnxTranslationEngine {
         // 校验），字段全 pub 可库内直构——加载期防御性复检（decision_params
         // 同款先例），先于资产探测显性拒绝
         let params = match config.translation_params {
-            Some(p) => TranslationParams::new(p.max_source_tokens, p.max_new_tokens)?,
+            Some(p) => {
+                TranslationParams::new(p.max_source_tokens, p.max_new_tokens, p.min_new_tokens)?
+            }
             None => TranslationParams::default(),
         };
         let bundle_dir = config.model_path.clone();
@@ -906,12 +906,14 @@ impl OnnxTranslationEngine {
                 &enc_data,
                 source_ids.len(),
                 self.params.max_new_tokens,
+                self.params.min_new_tokens,
                 &decoder_init,
                 &self.decode_graph.past_names,
                 self.decode_graph.head_shape,
                 self.eos_token_id,
             )?;
-            // 退化判据 token 级（空生成 = 立即 EOS，同判退化转救援）
+            // 退化判据 token 级（空生成 = 立即 EOS，同判退化转救援；
+            // min_new_tokens 抑制窗口内不计 EOS 故空生成仅在窗口为 0 时可达）
             let degenerate = generated.is_empty()
                 || is_degenerate_generation(
                     &generated,
@@ -979,6 +981,9 @@ impl OnnxTranslationEngine {
                         &sentence_data,
                         sentence_ids.len(),
                         rescue_budget,
+                        // 抑制窗口不得超剩余预算（max ≥ min 不变式；预算
+                        // 递减后窗口随之收缩，压满即按退化判据显性暴露）
+                        self.params.min_new_tokens.min(rescue_budget),
                         &decoder_init,
                         &self.decode_graph.past_names,
                         self.decode_graph.head_shape,
@@ -1497,6 +1502,32 @@ mod tests {
         assert_eq!(config.eos_token_id, tokenizer.token_to_id("</s>").unwrap());
     }
 
+    #[test]
+    fn test_generation_config_partial_keys_falls_back_without_panic() {
+        // D2 回归：generation_config.json 存在但缺 decoder_start_token_id →
+        // 穷尽 match 落 `_` 分支走 tokenizer 兜底，绝不触及旧实现里被
+        // guard 保证安全的 unwrap（离线红线：不 panic、不硬失败）。
+        let Some(dir) = opus_bundle() else {
+            eprintln!("SKIP: models/opus-mt-en-zh 缺失（离线环境）");
+            return;
+        };
+        let tokenizer = load_tokenizer(&dir.join("tokenizer.json")).unwrap();
+        let partial = tempfile::tempdir().unwrap();
+        std::fs::write(
+            partial.path().join("generation_config.json"),
+            r#"{"eos_token_id": 0}"#,
+        )
+        .unwrap();
+        // 缺 decoder_start → `_` 兜底：decoder_start 取 `<pad>` 特殊 token
+        // （Marian 口径，R-translation-decode-004），确证走兜底分支且全程无 panic/Err。
+        let config = GenerationConfig::from_bundle(partial.path(), &tokenizer)
+            .expect("缺 decoder_start 应落 tokenizer 兜底而非 panic/Err");
+        assert_eq!(
+            config.decoder_start_token_id,
+            tokenizer.token_to_id("<pad>").unwrap()
+        );
+    }
+
     // ── 真机贪心链路（bundle 守卫；T025 E2E 做逐句 golden，此处钉实现级
     //    可译性：加载→编码→解码→detok 全链不炸且译文非空） ─────────────
 
@@ -1795,6 +1826,24 @@ mod tests {
         assert_eq!(nllb_lang_token("xx"), None);
     }
 
+    // ── EOS 抑制窗口（NLLB 提前截断的确定性修复） ───────────────────────
+
+    #[test]
+    fn test_argmax_index_excludes_eos_under_min_window() {
+        // eos(2) 是全局最优：无排除时选中；窗口内排除后选次优(5)
+        let row = [0.1f32, 0.2, 9.0, 0.3, 0.4, 5.0];
+        assert_eq!(argmax_index(&row, None), Some(2));
+        assert_eq!(argmax_index(&row, Some(2)), Some(5));
+        // eos 非最优时排除无影响
+        assert_eq!(argmax_index(&row, Some(5)), Some(2));
+        // NaN 排序确定（total_cmp 全序：正 NaN > 数值，平局取末位——
+        // 与既有贪心 argmax 语义一致，不 panic 即为本测试目标）
+        let nan_row = [f32::NAN, 1.0, f32::NAN];
+        assert_eq!(argmax_index(&nan_row, None), Some(2));
+        // vocab==1 且排除唯一索引 → None（调用方回退）
+        assert_eq!(argmax_index(&[1.0], Some(0)), None);
+    }
+
     #[test]
     fn test_family_detect_rejects_unknown_model_type() {
         let dir = tempfile::tempdir().unwrap();
@@ -1816,24 +1865,50 @@ mod tests {
     }
 
     #[test]
-    fn test_load_tokenizer_filters_added_tokens_missing_from_vocab() {
+    fn test_load_tokenizer_shim_keeps_specials_and_filters_bad_merges() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tokenizer.json");
-        // 越词表 added_token（ଙ 不在 vocab）必须被 shim 过滤，否则解析失败
+        // shim 契约：added_tokens 一律保留（`</s>` 等特殊 token 合法地不在
+        // vocab——误删即丢 EOS 锚点）；仅 merges 按部件+结果越词表过滤
         std::fs::write(
             &path,
             r#"{"version":"1.0","added_tokens":[
-                 {"id":128022,"content":"__en__","single_word":false,"lstrip":false,
+                 {"id":0,"content":"</s>","single_word":false,"lstrip":false,
                   "rstrip":false,"normalized":false,"special":true},
-                 {"id":128111,"content":"ଙ","single_word":false,"lstrip":false,
+                 {"id":128022,"content":"__en__","single_word":false,"lstrip":false,
                   "rstrip":false,"normalized":false,"special":true}],
                 "normalizer":null,"pre_tokenizer":null,"post_processor":null,
                 "decoder":null,
-                "model":{"type":"BPE","vocab":{"__en__":128022,"hello":0},"merges":[]}}"#,
+                "model":{"type":"BPE","vocab":{"h":0,"ello":1,"hello":2},
+                         "merges":["h ello","hello x","ଙ h"]}}"#,
         )
         .unwrap();
         let tokenizer = load_tokenizer(&path).expect("shim 后必须可加载");
-        assert_eq!(tokenizer.token_to_id("__en__"), Some(128022_u32.into()));
+        // 特殊/语言 token 不在 vocab 也必须存活（手写 id 与 BPE vocab id 空间
+        // 冲突会被解析器重排，故只断存在性，R-translation-decode-003）
+        assert!(
+            tokenizer.token_to_id("</s>").is_some(),
+            "`</s>` 不得被 shim 误删"
+        );
+        assert!(
+            tokenizer.token_to_id("__en__").is_some(),
+            "`__en__` 不得被 shim 误删"
+        );
+    }
+
+    #[test]
+    fn test_load_tokenizer_marian_specials_survive() {
+        // bundle 回归：marian 词表 dict 不含 `</s>`（仅 added_tokens 承载），
+        // shim 后必须存活——generation_config 兜底与 decode 都依赖它
+        let Some(dir) = opus_bundle() else {
+            eprintln!("SKIP: models/opus-mt-en-zh 缺失（离线环境）");
+            return;
+        };
+        let tokenizer = load_tokenizer(&dir.join("tokenizer.json")).unwrap();
+        assert!(
+            tokenizer.token_to_id("</s>").is_some(),
+            "`</s>` 不得被 shim 误删"
+        );
     }
 
     #[test]

@@ -509,6 +509,7 @@ fn build_translate_pairs(
         let translation_params = vecboost::config::model::TranslationParams::new(
             pair.max_source_tokens.unwrap_or(defaults.max_source_tokens),
             pair.max_new_tokens.unwrap_or(defaults.max_new_tokens),
+            pair.min_new_tokens.unwrap_or(defaults.min_new_tokens),
         )
         .map_err(|e| {
             anyhow::anyhow!(
@@ -1780,7 +1781,7 @@ async fn assemble_and_serve_http(
     translate_service: Arc<TranslateService>,
     logger_manager: Arc<inklog::LoggerManager>,
     security: SecurityStack,
-    #[cfg(feature = "db")] db_pool: crate::DbPool,
+    #[cfg(feature = "db")] _db_pool: crate::DbPool,
 ) -> anyhow::Result<()> {
     let audit_logger = security.audit_logger.clone();
 

@@ -196,7 +196,7 @@ async fn translate_counter_counts_only_successful_requests() {
                 max_batch_size: 1,
                 oom_fallback_enabled: false,
                 task: ModelTask::Translate,
-                translation_params: Some(TranslationParams::new(512, 512).unwrap()),
+                translation_params: Some(TranslationParams::new(512, 512, 0).unwrap()),
                 ..Default::default()
             },
         )

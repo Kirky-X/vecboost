@@ -303,14 +303,18 @@ pub const MAX_TRANSLATE_SOURCE_TOKENS: usize = 1024;
 pub const MAX_TRANSLATE_NEW_TOKENS: usize = 1024;
 
 /// per-checkpoint 翻译推理参数：引擎贪心解码与源文本预算检查消费它而非
-/// 编译期常量直传。缺省为 Marian 512/512 口径。本类型定义于 config 层
-///（配置面单一事实源），与 [`DecisionParams`] 同一先例。
+/// 编译期常量直传。缺省为 Marian 512/512 口径，EOS 抑制禁用。本类型定义
+/// 于 config 层（配置面单一事实源），与 [`DecisionParams`] 同一先例。
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 pub struct TranslationParams {
     pub max_source_tokens: usize,
     pub max_new_tokens: usize,
+    /// EOS 抑制窗口：生成 token 数未达该值前 argmax 排除 EOS（HF
+    /// min_new_tokens 同语义），抑制贪心解码提前截断（NLLB 质量评审实测
+    /// 中途 EOS 丢句）。0 = 禁用（缺省，Marian 行为不变）。
+    pub min_new_tokens: usize,
 }
 
 impl Default for TranslationParams {
@@ -318,6 +322,7 @@ impl Default for TranslationParams {
         Self {
             max_source_tokens: 512,
             max_new_tokens: 512,
+            min_new_tokens: 0,
         }
     }
 }
@@ -325,8 +330,13 @@ impl Default for TranslationParams {
 impl TranslationParams {
     /// 校验构造：0 值与超硬上限均显性报错（错误消息含字段名与实际值，
     /// 拒绝静默钳制）。源文本与新生成长度分属 encoder/decoder 两个窗口，
-    /// 无共享窗组合校验（与 DecisionParams 的组合口径不同源）。
-    pub fn new(max_source_tokens: usize, max_new_tokens: usize) -> Result<Self, VecboostError> {
+    /// 无共享窗组合校验（与 DecisionParams 的组合口径不同源）；
+    /// min_new_tokens 为组合窗口：0 = 禁用，非 0 时不得超 max_new_tokens。
+    pub fn new(
+        max_source_tokens: usize,
+        max_new_tokens: usize,
+        min_new_tokens: usize,
+    ) -> Result<Self, VecboostError> {
         for (field, value, hard_limit) in [
             (
                 "max_source_tokens",
@@ -347,9 +357,16 @@ impl TranslationParams {
                 )));
             }
         }
+        if min_new_tokens > max_new_tokens {
+            return Err(VecboostError::config_error(format!(
+                "min_new_tokens must not exceed max_new_tokens: got {min_new_tokens} > \
+                 {max_new_tokens} (EOS suppression window cannot outlive the decode budget)"
+            )));
+        }
         Ok(Self {
             max_source_tokens,
             max_new_tokens,
+            min_new_tokens,
         })
     }
 }
@@ -693,29 +710,34 @@ mod tests {
 
     #[test]
     fn test_translation_params_new_valid() {
-        let params = TranslationParams::new(512, 512).unwrap();
+        let params = TranslationParams::new(512, 512, 0).unwrap();
         assert_eq!(params.max_source_tokens, 512);
         assert_eq!(params.max_new_tokens, 512);
 
         // 硬上限边界值合法
-        TranslationParams::new(MAX_TRANSLATE_SOURCE_TOKENS, MAX_TRANSLATE_NEW_TOKENS).unwrap();
+        TranslationParams::new(
+            MAX_TRANSLATE_SOURCE_TOKENS,
+            MAX_TRANSLATE_NEW_TOKENS,
+            MAX_TRANSLATE_NEW_TOKENS,
+        )
+        .unwrap();
 
         // 缺省 512/512（Marian 口径）
         assert_eq!(
             TranslationParams::default(),
-            TranslationParams::new(512, 512).unwrap()
+            TranslationParams::new(512, 512, 0).unwrap()
         );
     }
 
     #[test]
     fn test_translation_params_zero_rejected() {
-        let err = TranslationParams::new(0, 512).unwrap_err();
+        let err = TranslationParams::new(0, 512, 0).unwrap_err();
         assert!(
             err.error_detail().contains("max_source_tokens"),
             "0 值错误必须指明字段名，err={}",
             err.error_detail()
         );
-        let err = TranslationParams::new(512, 0).unwrap_err();
+        let err = TranslationParams::new(512, 0, 0).unwrap_err();
         assert!(
             err.error_detail().contains("max_new_tokens"),
             "0 值错误必须指明字段名，err={}",
@@ -725,13 +747,13 @@ mod tests {
 
     #[test]
     fn test_translation_params_over_hard_limit_rejected() {
-        let err = TranslationParams::new(MAX_TRANSLATE_SOURCE_TOKENS + 1, 512).unwrap_err();
+        let err = TranslationParams::new(MAX_TRANSLATE_SOURCE_TOKENS + 1, 512, 0).unwrap_err();
         assert!(
             err.error_detail().contains("exceeds hard limit"),
             "err={}",
             err.error_detail()
         );
-        let err = TranslationParams::new(512, MAX_TRANSLATE_NEW_TOKENS + 1).unwrap_err();
+        let err = TranslationParams::new(512, MAX_TRANSLATE_NEW_TOKENS + 1, 0).unwrap_err();
         assert!(
             err.error_detail().contains("exceeds hard limit"),
             "err={}",
@@ -741,10 +763,12 @@ mod tests {
 
     #[test]
     fn test_translation_params_serde_roundtrip() {
-        let params = TranslationParams::new(256, 384).unwrap();
+        let params = TranslationParams::new(256, 384, 0).unwrap();
         let json = serde_json::to_string(&params).unwrap();
         assert!(
-            json.contains("max_source_tokens") && json.contains("max_new_tokens"),
+            json.contains("max_source_tokens")
+                && json.contains("max_new_tokens")
+                && json.contains("min_new_tokens"),
             "json={json}"
         );
         let decoded: TranslationParams = serde_json::from_str(&json).unwrap();
@@ -762,7 +786,7 @@ mod tests {
 
         // 带 translation_params 的往返
         let config = ModelConfig {
-            translation_params: Some(TranslationParams::new(256, 384).unwrap()),
+            translation_params: Some(TranslationParams::new(256, 384, 0).unwrap()),
             task: ModelTask::Translate,
             ..ModelConfig::default()
         };
@@ -772,7 +796,7 @@ mod tests {
         assert_eq!(decoded.task, ModelTask::Translate);
         assert_eq!(
             decoded.translation_params,
-            Some(TranslationParams::new(256, 384).unwrap())
+            Some(TranslationParams::new(256, 384, 0).unwrap())
         );
     }
 

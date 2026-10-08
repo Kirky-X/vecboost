@@ -32,10 +32,11 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
+use super::session::{SessionOpts, build_session, precision_for_model_file, probe_model_file};
 use crate::config::model::{DeviceType, ModelConfig, ModelTask, Precision, TranslationParams};
 use crate::domain::{TranslateRequest, TranslateResponse};
 use crate::error::VecboostError;
-use ort::session::{Session, builder::GraphOptimizationLevel};
+use ort::session::Session;
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
 
@@ -351,27 +352,7 @@ impl DecodeGraph {
     }
 }
 
-/// bundle 内模型文件探测：候选按序首中，全 miss 报 `ModelLoadError`
-/// 含尝试路径清单（decision.rs::probe_model_file 同款显性化）
-fn probe_model_file(
-    bundle_dir: &Path,
-    candidates: &[&str],
-    role: &str,
-) -> Result<PathBuf, VecboostError> {
-    let mut tried = Vec::with_capacity(candidates.len());
-    for name in candidates {
-        let candidate = bundle_dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-        tried.push(candidate.display().to_string());
-    }
-    Err(VecboostError::ModelLoadError(format!(
-        "No {role} model found in translation bundle {}; tried: {}",
-        bundle_dir.display(),
-        tried.join(", ")
-    )))
-}
+// probe_model_file / precision_for_model_file 本体已收编至 [`super::session`]（单一事实源）。
 
 /// tokenizer 加载（T013 U1 换路 shim，见模块文档）：
 /// ① 内存内移除 null `precompiled_charsmap` 的 Precompiled normalizer
@@ -515,66 +496,8 @@ impl GenerationConfig {
     }
 }
 
-/// Session 构建（decision.rs::build_session 同模式：Level3 优化 + intra
-/// threads + CUDA EP feature 分支）
-fn build_session(model_file: &Path, device: &DeviceType) -> Result<Session, VecboostError> {
-    // 评审 PERF-4：多 pair 时消费启动期分摊的全局预算（防 16×2 Session
-    // 全核过订阅）；0 = 未设置回退全核（单 pair 场景）
-    let num_threads = match SESSION_INTRA_THREADS.load(std::sync::atomic::Ordering::Relaxed) {
-        0 => std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(4),
-        n => n,
-    };
-    log::info!(
-        "Initializing ONNX Runtime session for translation: {model_file:?} (intra_threads={num_threads})"
-    );
-    let builder = Session::builder()
-        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-        .with_optimization_level(GraphOptimizationLevel::Level3)
-        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-        .with_intra_threads(num_threads)
-        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-
-    let mut session = if *device == DeviceType::Cuda {
-        #[cfg(feature = "cuda")]
-        {
-            builder
-                .with_execution_providers([
-                    ort::execution_providers::CUDAExecutionProvider::default().build(),
-                ])
-                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            log::warn!(
-                "CUDA execution provider requires the cuda feature flag; \
-                 using CPU execution provider for translation engine"
-            );
-            builder
-        }
-    } else {
-        builder
-    };
-
-    session
-        .commit_from_file(model_file)
-        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))
-}
-
-/// 探测命中的模型文件名 → 对外精度标签（quantized 变体报 Int8，
-/// decision.rs::precision_for_model_file 同口径，不硬编码 Fp32 失真）
-fn precision_for_model_file(model_file: &Path) -> Precision {
-    let name = model_file
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    if name.contains("quantized") || name.contains("int8") {
-        Precision::Int8
-    } else {
-        Precision::Fp32
-    }
-}
+// Session 构建、probe/precision 已全部收编至 [`super::session`]（单一事实源）；
+// 线程预算 `SESSION_INTRA_THREADS` 由各调用点读入 `SessionOpts.intra_threads`。
 
 /// ort 调用错误 → InferenceError（wire 由上层 to_api_error 统一脱敏）
 fn inference_err(step: &str) -> impl Fn(ort::Error) -> VecboostError + '_ {
@@ -796,8 +719,23 @@ impl OnnxTranslationEngine {
             Family::Marian => DecodeGraph::for_marian(),
             Family::M2m { graph, .. } => DecodeGraph::for_m2m(graph),
         };
-        let encoder = build_session(&encoder_file, &config.device)?;
-        let decoder = build_session(&decoder_file, &config.device)?;
+        let intra_threads = SESSION_INTRA_THREADS.load(std::sync::atomic::Ordering::Relaxed);
+        let encoder = build_session(
+            &encoder_file,
+            &SessionOpts {
+                intra_threads,
+                device: config.device.clone(),
+                extra_config: &[],
+            },
+        )?;
+        let decoder = build_session(
+            &decoder_file,
+            &SessionOpts {
+                intra_threads,
+                device: config.device.clone(),
+                extra_config: &[],
+            },
+        )?;
         let precision = precision_for_model_file(&decoder_file);
 
         log::info!(
@@ -1361,8 +1299,23 @@ impl InferenceEngine for OnnxTranslationEngine {
         log::info!("Attempting fallback to CPU for translation engine");
         let encoder_file = probe_model_file(&self.bundle_dir, &ENCODER_CANDIDATES, "encoder")?;
         let decoder_file = probe_model_file(&self.bundle_dir, &DECODER_CANDIDATES, "decoder")?;
-        let encoder = build_session(&encoder_file, &DeviceType::Cpu)?;
-        let decoder = build_session(&decoder_file, &DeviceType::Cpu)?;
+        let intra_threads = SESSION_INTRA_THREADS.load(std::sync::atomic::Ordering::Relaxed);
+        let encoder = build_session(
+            &encoder_file,
+            &SessionOpts {
+                intra_threads,
+                device: DeviceType::Cpu,
+                extra_config: &[],
+            },
+        )?;
+        let decoder = build_session(
+            &decoder_file,
+            &SessionOpts {
+                intra_threads,
+                device: DeviceType::Cpu,
+                extra_config: &[],
+            },
+        )?;
         {
             let mut guard = self
                 .sessions

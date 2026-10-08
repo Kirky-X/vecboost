@@ -19,6 +19,10 @@ pub(crate) mod onnx_translate;
 #[cfg(feature = "onnx")]
 pub use onnx_translate::set_session_intra_threads;
 
+// 公共 ONNX Session 构建层（build_session/probe/precision），三引擎共享
+#[cfg(feature = "onnx")]
+pub(crate) mod session;
+
 pub(crate) mod decision_protocol;
 
 // 纯路径探测、无推理后端依赖：onnx（decision）与 candle（candle_decision）

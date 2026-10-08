@@ -53,6 +53,7 @@ fn model_config(dirname: &str, dim: usize) -> ModelConfig {
         quantized: false,
         decision_params: None,
         translation_params: None,
+        transcription_params: None,
     }
 }
 

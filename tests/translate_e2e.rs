@@ -250,6 +250,7 @@ fn translate_e2e_golden_gate_and_quality() {
                     oom_fallback_enabled: false,
                     task: ModelTask::Translate,
                     translation_params: Some(TranslationParams::new(512, 512, 0).unwrap()),
+                    transcription_params: None,
                     ..Default::default()
                 };
                 Arc::new(tokio::sync::RwLock::new(

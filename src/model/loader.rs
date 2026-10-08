@@ -195,6 +195,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "nonexistent-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from("/nonexistent/path"),
@@ -288,6 +289,7 @@ mod tests {
     fn make_config(name: &str, model_path: PathBuf) -> ModelConfig {
         ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: name.to_string(),
             engine_type: EngineType::Candle,
             model_path,

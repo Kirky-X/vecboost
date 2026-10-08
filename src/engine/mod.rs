@@ -23,6 +23,10 @@ pub use onnx_translate::set_session_intra_threads;
 #[cfg(feature = "onnx")]
 pub(crate) mod session;
 
+// 转录引擎（Qwen3-ASR 三图 + silero VAD + fbank），transcribe feature 门控
+#[cfg(feature = "transcribe")]
+pub(crate) mod transcribe;
+
 pub(crate) mod decision_protocol;
 
 // 纯路径探测、无推理后端依赖：onnx（decision）与 candle（candle_decision）
@@ -36,7 +40,10 @@ pub mod mkl_shim;
 pub mod quantized_engine;
 
 use crate::config::model::{ModelConfig, ModelTask, Precision};
-use crate::domain::{DecisionRequest, DecisionResponse, TranslateRequest, TranslateResponse};
+use crate::domain::{
+    DecisionRequest, DecisionResponse, TranscribeRequest, TranscribeResponse, TranslateRequest,
+    TranslateResponse,
+};
 use crate::error::VecboostError;
 use async_trait::async_trait;
 
@@ -150,6 +157,15 @@ pub trait InferenceEngine: Send + Sync {
     fn translate(&self, _req: &TranslateRequest) -> Result<TranslateResponse, VecboostError> {
         Err(VecboostError::unsupported_task(
             "translation inference not implemented by this engine".to_string(),
+        ))
+    }
+
+    /// 转录推理（Qwen3-ASR，task=transcribe）。默认 UnsupportedTask：
+    /// 仅 `transcribe` feature 下的 `Qwen3AsrEngine` 覆盖。实现方为阻塞推理
+    /// （与 `decide`/`translate` 同约，服务层以 `spawn_blocking` 包裹）。
+    fn transcribe(&self, _req: &TranscribeRequest) -> Result<TranscribeResponse, VecboostError> {
+        Err(VecboostError::unsupported_task(
+            "transcription inference not implemented by this engine".to_string(),
         ))
     }
 
@@ -309,6 +325,12 @@ pub enum AnyEngine {
     #[cfg(feature = "onnx")]
     #[allow(private_interfaces)]
     OnnxTranslate(onnx_translate::OnnxTranslationEngine),
+    /// Qwen3-ASR 转录引擎（task=transcribe，三图+VAD，engine_type=onnx 强制；
+    /// 需 feature `transcribe`）。构造点为 EngineFactory 的 task 分派臂（T014）。
+    /// 变体类型 pub(crate)，注释理由同 Decision 臂。
+    #[cfg(feature = "transcribe")]
+    #[allow(private_interfaces)]
+    Transcribe(transcribe::engine::Qwen3AsrEngine),
     /// GGUF 量化引擎（Q8_0/Q4_K 加载期反量化桥，）。
     #[cfg(feature = "quantized-gguf")]
     Quantized(quantized_engine::QuantizedCandleEngine),
@@ -421,6 +443,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         }
     }
 

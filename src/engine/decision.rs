@@ -599,6 +599,7 @@ mod tests {
                 state_max_tokens: 256,
             }),
             translation_params: None,
+            transcription_params: None,
         };
         let err = match DecisionPipeline::load(&config) {
             Err(e) => e,
@@ -632,6 +633,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         }
     }
 

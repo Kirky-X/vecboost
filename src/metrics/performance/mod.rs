@@ -997,6 +997,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
     }
@@ -1037,6 +1038,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
     }

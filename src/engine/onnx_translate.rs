@@ -1518,6 +1518,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
         let engine = OnnxTranslationEngine::load(&config).expect("bundle 就绪时必须可加载");
         // 评审 ARC-8：supports_task 真实断言（替代已删的同义反复恒真测试）
@@ -1899,6 +1900,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
         let engine = OnnxTranslationEngine::load(&config).expect("m2m bundle 必须可加载");
         let req = TranslateRequest {
@@ -1994,6 +1996,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
         let engine = OnnxTranslationEngine::load(&config).expect("bundle 就绪时必须可加载");
         let req = TranslateRequest {

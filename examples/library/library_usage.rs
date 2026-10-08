@@ -36,6 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         quantized: false,
         decision_params: None,
         translation_params: None,
+        transcription_params: None,
     };
 
     let config = LibraryConfig {

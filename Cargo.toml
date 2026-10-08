@@ -137,6 +137,9 @@ ndarray = { version = "0.17", optional = true, default-features = false, feature
 # RC 版本保留完整 semver:ort 至今(2026-09-16 核实)从未发布稳定版,
 # 2.0.0-rc.13 即 crates.io 最新发布版本,"仅稳定版"规则对 ort 无稳定标的可用
 ort = { version = "2.0.0-rc.13", optional = true, default-features = false }
+# 转录引擎（onnx-engine-unify D3）：WAV 解码头 + fbank FFT；仅经 `transcribe` 引入
+hound = { version = "3.5", optional = true, default-features = false }
+rustfft = { version = "6.4", optional = true, default-features = false }
 
 # CUDA feature (candle-core/cuda 传递依赖 cudarc 0.19,支持 CUDA 13)
 # 项目代码直接使用 cudarc driver API 进行 CUDA 内存管理
@@ -211,6 +214,8 @@ auth = ["dep:garrison", "dep:aes-gcm"]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:nvml-wrapper", "dep:cudarc"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/load-dynamic"]
+# 转录引擎（Qwen3-ASR 三图 + silero VAD）：ort/cuda 仅经此 feature 引入，不进 default
+transcribe = ["onnx", "ort/cuda", "dep:hound", "dep:rustfft"]
 # CPU 加速后端（opt-in；见上方 target 表注释）。
 mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl", "dep:half"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]

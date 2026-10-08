@@ -123,6 +123,7 @@ fn decision_config(model_path: PathBuf, engine_type: EngineType) -> ModelConfig 
         quantized: false,
         decision_params: None,
         translation_params: None,
+        transcription_params: None,
     }
 }
 

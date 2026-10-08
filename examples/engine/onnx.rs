@@ -65,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
         match AnyEngine::new(&config, EngineType::Onnx, Precision::Fp32) {
             Ok(engine) => {

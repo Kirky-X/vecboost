@@ -94,6 +94,31 @@ impl EngineFactory {
                 ));
             }
         }
+        // task=transcribe 路由：Qwen3-ASR 三图仅 onnx 实现（需 feature `transcribe`）。
+        // candle 显性拒绝并给出换引擎提示；feature 未启用 → ConfigError 提示重建。
+        if config.task == ModelTask::Transcribe {
+            if engine_type == EngineType::Candle {
+                return Err(VecboostError::ConfigError(
+                    "转录仅支持 onnx 引擎：请将 engine_type 配置为 onnx（task=transcribe 无 candle 实现）"
+                        .to_string(),
+                ));
+            }
+            #[cfg(feature = "transcribe")]
+            {
+                let engine = super::transcribe::engine::Qwen3AsrEngine::load(config)?;
+                let any = AnyEngine::Transcribe(engine);
+                ensure_supports_task(&any, config)?;
+                return Ok(any);
+            }
+            #[cfg(not(feature = "transcribe"))]
+            {
+                return Err(VecboostError::ConfigError(
+                    "检测到 task=transcribe 模型配置，但本次构建未启用 `transcribe` feature；\
+                     请以 `--features onnx,transcribe` 重新构建"
+                        .to_string(),
+                ));
+            }
+        }
         // loader 路由：.gguf + quantized=true 走量化引擎
         // （加载期反量化桥），否则维持 safetensors 路径。
         if should_use_quantized_engine(&config.model_path, config.quantized) {
@@ -164,6 +189,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         }
     }
 

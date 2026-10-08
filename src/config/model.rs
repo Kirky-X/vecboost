@@ -111,6 +111,8 @@ pub enum ModelTask {
     Decision,
     /// 翻译推理（seq2seq 多语言对，engine_type=onnx 强制）
     Translate,
+    /// 转录推理（Qwen3-ASR 三图 + VAD，engine_type=onnx 强制；需 feature `transcribe`）
+    Transcribe,
 }
 
 impl fmt::Display for ModelTask {
@@ -125,6 +127,7 @@ impl ModelTask {
             ModelTask::Embedding => "embedding",
             ModelTask::Decision => "decision",
             ModelTask::Translate => "translate",
+            ModelTask::Transcribe => "transcribe",
         }
     }
 }
@@ -407,6 +410,10 @@ pub struct ModelConfig {
     /// `Some` 仅对 task=translate 的加载路径有意义，其余任务下为 no-op。
     #[serde(default)]
     pub translation_params: Option<TranslationParams>,
+    /// 转录推理参数（models_dir/vad_threshold）：None = 引擎 POC 缺省；
+    /// `Some` 仅对 task=transcribe 加载路径有意义（`Qwen3AsrEngine::load` 消费），其余任务下为 no-op。
+    #[serde(default)]
+    pub transcription_params: Option<TranscriptionParams>,
 }
 
 impl Default for ModelConfig {
@@ -427,6 +434,25 @@ impl Default for ModelConfig {
             task: ModelTask::Embedding,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
+        }
+    }
+}
+
+/// 转录推理参数（onnx-engine-unify T012）：`models_dir`（三图 bundle 目录，
+/// 缺省取 model_path）、`vad_threshold`（silero 概率阈值，缺省 0.5，POC 实测值显性化）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TranscriptionParams {
+    pub models_dir: Option<PathBuf>,
+    pub vad_threshold: f32,
+}
+
+impl Default for TranscriptionParams {
+    fn default() -> Self {
+        Self {
+            models_dir: None,
+            vad_threshold: 0.5,
         }
     }
 }
@@ -787,6 +813,7 @@ mod tests {
         // 带 translation_params 的往返
         let config = ModelConfig {
             translation_params: Some(TranslationParams::new(256, 384, 0).unwrap()),
+            transcription_params: None,
             task: ModelTask::Translate,
             ..ModelConfig::default()
         };
@@ -900,6 +927,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
 
         assert_eq!(config.name, "bge-m3");
@@ -925,6 +953,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -1439,6 +1468,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
 
         let context = InferenceContext::with_config(&config, Precision::Fp16);

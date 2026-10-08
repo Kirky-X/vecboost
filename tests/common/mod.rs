@@ -72,6 +72,7 @@ pub fn get_test_model_config() -> ModelConfig {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         },
         TestMode::Full => ModelConfig {
             name: "bge-m3".to_string(),
@@ -89,6 +90,7 @@ pub fn get_test_model_config() -> ModelConfig {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         },
     }
 }

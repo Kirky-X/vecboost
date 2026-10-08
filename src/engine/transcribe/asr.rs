@@ -192,8 +192,26 @@ pub struct Qwen3Asr {
 
 impl Qwen3Asr {
     /// 每个 worker 独立加载一套 session（ort rc.13 禁止并发 Run 同一 Session，
-    /// session/mod.rs:118-122 官方推荐 per-thread session；权重内存 ×worker 数）
+    /// session/mod.rs:118-122 官方推荐 per-thread session；权重内存 ×worker 数）。
+    /// 三图先探测后构建（decision/translate 同款"探测先于 Session::builder"——
+    /// ort/load-dynamic 缺动态库时 builder 触发 non-unwinding panic，缺失必须
+    /// 在此之前以 ModelLoadError 显性返回，R-transcribe-engine-004）。
     pub fn new(models_dir: &Path, opts: &AsrSessionOpts) -> AsrResult<Self> {
+        crate::engine::session::probe_model_file(
+            models_dir,
+            &["qwen3-conv_frontend.onnx"],
+            "conv_frontend",
+        )?;
+        crate::engine::session::probe_model_file(
+            models_dir,
+            &["qwen3-encoder.int8.onnx"],
+            "encoder",
+        )?;
+        crate::engine::session::probe_model_file(
+            models_dir,
+            &["qwen3-decoder.int8.onnx"],
+            "decoder",
+        )?;
         let conv = session_from(&models_dir.join("qwen3-conv_frontend.onnx"), opts)?;
         if conv.inputs().len() != 1 || conv.outputs().len() != 1 {
             return Err(asr_load(format!(

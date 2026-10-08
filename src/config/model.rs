@@ -719,6 +719,10 @@ mod tests {
             serde_json::to_string(&ModelTask::Translate).unwrap(),
             "\"translate\""
         );
+        assert_eq!(
+            serde_json::to_string(&ModelTask::Transcribe).unwrap(),
+            "\"transcribe\""
+        );
 
         let decoded: ModelTask = serde_json::from_str("\"embedding\"").unwrap();
         assert_eq!(decoded, ModelTask::Embedding);
@@ -726,6 +730,8 @@ mod tests {
         assert_eq!(decoded, ModelTask::Decision);
         let decoded: ModelTask = serde_json::from_str("\"translate\"").unwrap();
         assert_eq!(decoded, ModelTask::Translate);
+        let decoded: ModelTask = serde_json::from_str("\"transcribe\"").unwrap();
+        assert_eq!(decoded, ModelTask::Transcribe);
     }
 
     #[test]

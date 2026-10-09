@@ -8,6 +8,35 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
+/// 确定性 Mock 向量生成（FNV-1a + LCG PRNG + L2 归一化）。
+///
+/// 仅供  与集成测试 mock 引擎使用；生产推理路径不触达。
+pub fn mock_embedding(text: &str, dimension: usize) -> Vec<f32> {
+    let mut embedding = vec![0.0f32; dimension];
+    let bytes = text.as_bytes();
+
+    let mut hash: u64 = 1469598103934665603;
+    for &byte in bytes {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+
+    let mut state = hash;
+    for val in embedding.iter_mut() {
+        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+        *val = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+    }
+
+    let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for val in embedding.iter_mut() {
+            *val /= norm;
+        }
+    }
+
+    embedding
+}
+
 #[derive(Debug, Clone)]
 pub struct FileIntegrityCheck {
     pub file_path: String,

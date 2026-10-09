@@ -143,35 +143,9 @@ impl MockEngine {
         Self { dimension }
     }
 
-    /// 生成确定性 Mock 向量
+    /// 生成确定性 Mock 向量（委托 vecboost::utils::hash::mock_embedding）
     pub fn generate_embedding(&self, text: &str) -> Vec<f32> {
-        let mut embedding = vec![0.0; self.dimension];
-        let bytes = text.as_bytes();
-
-        // FNV-1a 哈希算法
-        let mut hash: u64 = 1469598103934665603;
-        for &byte in bytes {
-            hash ^= byte as u64;
-            hash = hash.wrapping_mul(1099511628211);
-        }
-
-        // 线性同余生成器
-        let mut state = hash;
-        for val in embedding.iter_mut() {
-            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
-            let float_val = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
-            *val = float_val;
-        }
-
-        // 归一化
-        let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            for val in embedding.iter_mut() {
-                *val /= norm;
-            }
-        }
-
-        embedding
+        vecboost::utils::hash::mock_embedding(text, self.dimension)
     }
 }
 

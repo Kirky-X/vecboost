@@ -1854,31 +1854,7 @@ mod tests {
         }
 
         fn generate_embedding(&self, text: &str) -> Vec<f32> {
-            let mut embedding = vec![0.0f32; self.dimension];
-            let bytes = text.as_bytes();
-
-            let mut hash: u64 = 1469598103934665603;
-            for &byte in bytes {
-                hash ^= byte as u64;
-                hash = hash.wrapping_mul(1099511628211);
-            }
-
-            let seed = hash;
-            let mut state = seed;
-            for val in embedding.iter_mut() {
-                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
-                let float_val = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
-                *val = float_val;
-            }
-
-            let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-            if norm > 0.0 {
-                for val in embedding.iter_mut() {
-                    *val /= norm;
-                }
-            }
-
-            embedding
+            crate::utils::hash::mock_embedding(text, self.dimension)
         }
     }
 

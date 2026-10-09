@@ -16,6 +16,11 @@ port = 9002
 # 请求超时时间 (秒)
 timeout = 30
 
+# HTTP 全局请求超时 (秒；缺省 60，main.rs 消费)。
+# 300：论文摘要级长文本在 CPU seq2seq (m2m100_418M) 下耗时 15-60+s，
+# 60s 实测贴线（59.7s）且超线即 504（paper-translate-quality 评测），留 4× 余量
+request_timeout_seconds = 300
+
 # CORS 跨域开关（默认 false）；允许来源列表
 #
 # ⚠️ 通配符 "*" 语义说明:
@@ -414,3 +419,44 @@ recovery_timeout = 30
 # source_language = "en"
 # target_language = "es"
 # model_path = "models/opus-mt-en-es"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 翻译多语言对路由（活动配置；2026-10-09 重建——autostash 事故丢失后按本会话
+# 读取证据逐字恢复 4 对；原 5-8 对语言码无证据，显性缺失待所有者补录）
+# 译文输出修复表 output_fixes：from→to 字面替换（按声明序），修复模型级
+# 高频误译（paper-translate-quality 评测实测损伤）
+[translation]
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "zh"
+model_path = "models/m2m100_418M"
+
+# m2m100 en→zh 实测误译修复（评测实录：downstream→下流 / fine-tuned→精细的 / de novo→回合）
+[[translation.pairs.output_fixes]]
+from = "下流任务"
+to = "下游任务"
+
+[[translation.pairs.output_fixes]]
+from = "精细的LLaMA"
+to = "微调的LLaMA"
+
+[[translation.pairs.output_fixes]]
+from = "回合和新药物设计"
+to = "从头药物设计"
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "fr"
+model_path = "models/opus-mt-en-fr"
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "de"
+model_path = "models/nllb-200-distilled-600M"
+min_new_tokens = 16
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "es"
+model_path = "models/m2m100_418M"

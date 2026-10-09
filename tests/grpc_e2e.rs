@@ -29,6 +29,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
+mod common;
+use common::{free_port, model_ready};
+
 use serde_json::{Value, json};
 use tonic::Request;
 use tonic::Status;
@@ -50,12 +53,6 @@ const JWT_SECRET: &str = "grpc-e2e-jwt-secret-0123456789ABCDEF";
 const ADMIN_PASS: &str = "GrpcE2e#2026Pass";
 
 type Client = SdForgeServiceClient<tonic::transport::Channel>;
-
-/// 本地模型含权重与 config 才可加载（仅 tokenizer/config 不足以启动服务器）。
-fn model_ready(path: &str) -> bool {
-    let dir = std::path::Path::new(path);
-    dir.join("config.json").exists() && dir.join("model.safetensors").exists()
-}
 
 /// 需健康服务器的用例在模型缺席时的 SKIP 前置检查（返回 true 表示应提前 return）。
 /// 服务器配置固定以 M1 启动；M2 仅 model_switch 用例使用，本地 models/ 通常成套存在。
@@ -177,13 +174,7 @@ impl Drop for TestServer {
     }
 }
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind :0")
-        .local_addr()
-        .expect("local_addr")
-        .port()
-}
+// free_port/model_ready 复用 mod common
 
 #[derive(Default)]
 struct ServerOpts {

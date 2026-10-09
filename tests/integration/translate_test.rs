@@ -16,9 +16,11 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::path::Path;
+use std::process::{Command, Stdio};
 use std::time::Duration;
+
+use crate::common::{TestServer, free_port, model_ready};
 
 use serde_json::{Value, json};
 
@@ -30,11 +32,6 @@ const HTTP_TIMEOUT_SECS: u64 = 120;
 const JWT_SECRET: &str = "translate-e2e-jwt-secret-0123456789ABCDEF";
 #[cfg(feature = "auth")]
 const ADMIN_PASS: &str = "TranslateE2e#2026Pass";
-
-fn model_ready(path: &str) -> bool {
-    let dir = Path::new(path);
-    dir.join("config.json").exists() && dir.join("model.safetensors").exists()
-}
 
 /// opus bundle 探测：真机翻译用例的 SKIP 守卫（onnx 权重文件在位即可，
 /// encoder/decoder 的 onnx 子目录文件由 T013 下载流程保证成套）
@@ -48,27 +45,7 @@ fn opus_ready() -> bool {
         && Path::new(OPUS_EN_ZH).join("tokenizer.json").exists()
 }
 
-struct TestServer {
-    child: Child,
-    http_port: u16,
-    dir: PathBuf,
-}
-
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind :0")
-        .local_addr()
-        .expect("local_addr")
-        .port()
-}
+// TestServer, free_port, model_ready 复用 crate::common
 
 #[derive(Default)]
 struct ServerOpts {

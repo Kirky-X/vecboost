@@ -15,9 +15,10 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::Duration;
+
+use crate::common::{TestServer, free_port, model_ready};
 
 use serde_json::{Value, json};
 
@@ -30,12 +31,6 @@ const JWT_SECRET: &str = "detect-e2e-jwt-secret-0123456789ABCDEF";
 #[cfg(feature = "auth")]
 const ADMIN_PASS: &str = "DetectE2e#2026Pass";
 
-/// 本地模型含权重与 config 才可加载（仅 tokenizer/config 不足以启动服务器）
-fn model_ready(path: &str) -> bool {
-    let dir = Path::new(path);
-    dir.join("config.json").exists() && dir.join("model.safetensors").exists()
-}
-
 fn skip_without_model(test_name: &str) -> bool {
     if model_ready(MODEL_PATH) {
         return false;
@@ -45,30 +40,8 @@ fn skip_without_model(test_name: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// 服务器进程管理（grpc_e2e 同款，裁剪 grpc 面）
+// 服务器进程管理（复用 crate::common::{TestServer, free_port, model_ready}）
 // ---------------------------------------------------------------------------
-
-struct TestServer {
-    child: Child,
-    http_port: u16,
-    dir: PathBuf,
-}
-
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind :0")
-        .local_addr()
-        .expect("local_addr")
-        .port()
-}
 
 #[derive(Default)]
 struct ServerOpts {

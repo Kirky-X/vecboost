@@ -6,7 +6,7 @@
 //! 提供集成测试与性能测试共用的工具函数、`MockEngine` 与 `RealTestEngine`。
 //! 本模块合并自原 `tests/integration/real_engine.rs`。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,6 +17,36 @@ use vecboost::error::VecboostError;
 
 /// 默认 Mock 向量维度
 pub const DEFAULT_MOCK_DIMENSION: usize = 1024;
+
+/// 本地模型含权重与 config 才可加载（仅 tokenizer/config 不足以启动服务器）
+pub fn model_ready(path: &str) -> bool {
+    let dir = Path::new(path);
+    dir.join("config.json").exists() && dir.join("model.safetensors").exists()
+}
+
+/// 获取随机可用端口
+pub fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("bind :0")
+        .local_addr()
+        .expect("local_addr")
+        .port()
+}
+
+/// HTTP 集成测试服务器进程（kill+wait+remove_dir 生命周期）
+pub struct TestServer {
+    pub child: std::process::Child,
+    pub http_port: u16,
+    pub dir: PathBuf,
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // TestMode

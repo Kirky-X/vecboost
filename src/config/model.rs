@@ -305,9 +305,8 @@ pub const MAX_TRANSLATE_NEW_TOKENS: usize = 1024;
 /// per-checkpoint 翻译推理参数：引擎贪心解码与源文本预算检查消费它而非
 /// 编译期常量直传。缺省为 Marian 512/512 口径，EOS 抑制禁用。本类型定义
 /// 于 config 层（配置面单一事实源），与 [`DecisionParams`] 同一先例。
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
+/// 含译文输出修复表（非 Copy：Vec 字段，paper-translate-quality T004）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct TranslationParams {
     pub max_source_tokens: usize,
     pub max_new_tokens: usize,
@@ -315,6 +314,9 @@ pub struct TranslationParams {
     /// min_new_tokens 同语义），抑制贪心解码提前截断（NLLB 质量评审实测
     /// 中途 EOS 丢句）。0 = 禁用（缺省，Marian 行为不变）。
     pub min_new_tokens: usize,
+    /// 译文输出修复表（from→to 字面全量替换，按声明序；缺省空表 = 行为不变）
+    #[serde(default)]
+    pub output_fixes: Vec<OutputFix>,
 }
 
 impl Default for TranslationParams {
@@ -323,6 +325,7 @@ impl Default for TranslationParams {
             max_source_tokens: 512,
             max_new_tokens: 512,
             min_new_tokens: 0,
+            output_fixes: Vec::new(),
         }
     }
 }
@@ -367,8 +370,20 @@ impl TranslationParams {
             max_source_tokens,
             max_new_tokens,
             min_new_tokens,
+            output_fixes: Vec::new(),
         })
     }
+}
+
+/// 译文输出修复对：`from`→`to` 字面全量替换（按声明序应用）。承载模型级
+/// 高频误译的配置化修复（如 m2m100 en→zh 实测 "下流任务"→"下游任务"），
+/// 无需改代码即可扩充（paper-translate-quality T004）。
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct OutputFix {
+    pub from: String,
+    pub to: String,
 }
 
 /// 键名拼错显性失败（如 "tsak" 报错而非被静默忽略后 task 回落默认值，

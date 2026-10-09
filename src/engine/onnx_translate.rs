@@ -32,7 +32,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use crate::config::model::{DeviceType, ModelConfig, ModelTask, Precision, TranslationParams};
+use crate::config::model::{
+    DeviceType, ModelConfig, ModelTask, OutputFix, Precision, TranslationParams,
+};
 use crate::domain::{TranslateRequest, TranslateResponse};
 use crate::error::VecboostError;
 use ort::session::{Session, builder::GraphOptimizationLevel};
@@ -316,6 +318,8 @@ pub(crate) struct OnnxTranslationEngine {
     decode_graph: DecodeGraph,
     /// per-checkpoint 翻译预算（加载期定值，热路径消费）
     params: TranslationParams,
+    /// 译文输出修复表（加载期定值，出口按声明序字面替换；paper-translate-quality）
+    output_fixes: Vec<OutputFix>,
     precision: Precision,
     /// 已探明的本地 bundle 目录（try_fallback_to_cpu 重建 CPU Session 用）
     bundle_dir: PathBuf,
@@ -729,7 +733,7 @@ impl OnnxTranslationEngine {
         // 校验），字段全 pub 可库内直构——加载期防御性复检（decision_params
         // 同款先例），先于资产探测显性拒绝
         let params = match config.translation_params {
-            Some(p) => {
+            Some(ref p) => {
                 TranslationParams::new(p.max_source_tokens, p.max_new_tokens, p.min_new_tokens)?
             }
             None => TranslationParams::default(),
@@ -822,6 +826,7 @@ impl OnnxTranslationEngine {
             eos_token_id: generation.eos_token_id,
             family,
             decode_graph,
+            output_fixes: params.output_fixes.clone(),
             params,
             precision,
             bundle_dir,
@@ -1020,6 +1025,16 @@ impl OnnxTranslationEngine {
         } else {
             translation
         };
+        // zh 目标繁→简归一化（m2m100 实测繁简混排："人類製作複雜"）
+        let translation = if req.target_language.starts_with("zh") {
+            simplify_chinese_output(translation)
+        } else {
+            translation
+        };
+        // 符号损伤确定性修复（URL 全角冒号 / LaTeX 转义反斜杠，论文评测实测）
+        let translation = repair_symbol_damage(translation);
+        // config 驱动译文修复表（按声明序字面替换）
+        let translation = apply_output_fixes(translation, &self.output_fixes);
         Ok(TranslateResponse {
             translation,
             source_language: req.source_language.clone(),
@@ -1033,6 +1048,34 @@ impl OnnxTranslationEngine {
 /// 救援遍句数上限（审查 F2：句数无界时按句放大解码前向次数并占死 pair
 /// 信号量；64 句覆盖正常段落，超出按截断显性告警）
 const MAX_RESCUE_SENTENCES: usize = 64;
+
+/// zh 目标输出繁→简归一化（paper-translate-quality：m2m100 en→zh 实测
+/// 繁简混排——"人類可以努力製作高複雜的指示"）。
+fn simplify_chinese_output(text: String) -> String {
+    character_converter::traditional_to_simplified(&text).into_owned()
+}
+
+/// 符号损伤确定性修复：seq2seq 模型对符号 token 的实测损伤（论文评测）——
+/// URL 协议分隔符冒号被本地化（"https：//"）与源文 LaTeX 转义忠实拷贝
+/// （"90\%"）。仅处理无歧义模式：全角冒号仅出现在 "：//" 语境即归位；
+/// 反斜杠仅清理 `\%`/`\$`/`\&` 三种转义，`\pi` 等命令不动。
+fn repair_symbol_damage(text: String) -> String {
+    text.replace("：//", "://")
+        .replace("\\%", "%")
+        .replace("\\$", "$")
+        .replace("\\&", "&")
+}
+
+/// config 驱动译文修复表：from→to 字面全量替换，按声明序应用
+/// （空 from 跳过，防误配置把整个译文替换掉）。
+fn apply_output_fixes(mut text: String, fixes: &[OutputFix]) -> String {
+    for fix in fixes {
+        if !fix.from.is_empty() {
+            text = text.replace(&fix.from, &fix.to);
+        }
+    }
+    text
+}
 
 /// 生成退化检测：opus-mt 长段整解的实测失效模式是重复循环（run1 评审：
 /// 「伟大的替代理论 — — 一个伟大的替代理论 — —」）与压满解码预算不出
@@ -1596,6 +1639,61 @@ mod tests {
 
     // ── 域行为（真机 bundle 守卫测试内断言 supports_task；mock-free 的
     //    形式主义测试已按评审 ARC-8 删除）────────────────────────────────
+
+    #[test]
+    fn test_repair_symbol_damage_url_colon_and_latex_escape() {
+        // URL 协议分隔符被本地化（论文评测实测）→ 归位半角
+        assert_eq!(
+            repair_symbol_damage("代码见 https：//github.com/x/y".to_string()),
+            "代码见 https://github.com/x/y"
+        );
+        // LaTeX 转义反斜杠清理（源文 "90\%" 被忠实拷贝进译文）
+        assert_eq!(
+            repair_symbol_damage("准确率达 90\\%".to_string()),
+            "准确率达 90%"
+        );
+        assert_eq!(repair_symbol_damage("成本 \\$5".to_string()), "成本 $5");
+        // 非转义命令不动（\pi 等保留）
+        assert_eq!(
+            repair_symbol_damage("\\pi 近似 3.14".to_string()),
+            "\\pi 近似 3.14"
+        );
+    }
+
+    #[test]
+    fn test_simplify_chinese_output_normalizes_variants() {
+        assert_eq!(
+            simplify_chinese_output("人類製作複雜的指示".to_string()),
+            "人类制作复杂的指示"
+        );
+        assert_eq!(simplify_chinese_output("下游任务".to_string()), "下游任务");
+    }
+
+    #[test]
+    fn test_apply_output_fixes_ordered_literal_replacement() {
+        let fixes = vec![
+            OutputFix {
+                from: "下流任务".to_string(),
+                to: "下游任务".to_string(),
+            },
+            OutputFix {
+                from: "精细的".to_string(),
+                to: "微调的".to_string(),
+            },
+        ];
+        assert_eq!(
+            apply_output_fixes("NLP下流任务与精细的模型".to_string(), &fixes),
+            "NLP下游任务与微调的模型"
+        );
+        // 空 from 跳过（防误配置全量替换）
+        let bad = vec![OutputFix {
+            from: String::new(),
+            to: "X".to_string(),
+        }];
+        assert_eq!(apply_output_fixes("保持原样".to_string(), &bad), "保持原样");
+        // 空表行为不变
+        assert_eq!(apply_output_fixes("不变".to_string(), &[]), "不变");
+    }
 
     #[test]
     fn test_cjk_punctuation_normalized_for_zh() {

@@ -264,6 +264,9 @@ pub struct TranslationPairConfig {
     /// EOS 抑制窗口（可选；缺省 0 = 禁用）。生成 token 数未达该值前
     /// 解码 argmax 排除 EOS——抑制贪心解码提前截断（NLLB 质量评审实测）
     pub min_new_tokens: Option<usize>,
+    /// 译文输出修复表（可选；缺省空表 = 行为不变，paper-translate-quality）
+    #[serde(default)]
+    pub output_fixes: Vec<crate::config::model::OutputFix>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
@@ -954,6 +957,7 @@ max_new_tokens = 384
                     max_source_tokens: None,
                     max_new_tokens: None,
                     min_new_tokens: None,
+                    output_fixes: Vec::new(),
                 },
                 TranslationPairConfig {
                     source_language: "en".to_string(),
@@ -963,6 +967,7 @@ max_new_tokens = 384
                     max_source_tokens: None,
                     max_new_tokens: None,
                     min_new_tokens: None,
+                    output_fixes: Vec::new(),
                 },
             ],
         };
@@ -986,6 +991,7 @@ max_new_tokens = 384
                     max_source_tokens: None,
                     max_new_tokens: None,
                     min_new_tokens: None,
+                    output_fixes: Vec::new(),
                 }],
             };
             let err = config.validate().unwrap_err();
@@ -1008,6 +1014,7 @@ max_new_tokens = 384
                 max_source_tokens: None,
                 max_new_tokens: None,
                 min_new_tokens: None,
+                output_fixes: Vec::new(),
             }],
         };
         let err = config.validate().unwrap_err();
@@ -1029,6 +1036,7 @@ max_new_tokens = 384
                 max_source_tokens: None,
                 max_new_tokens: None,
                 min_new_tokens: None,
+                output_fixes: Vec::new(),
             })
             .collect();
         let config = TranslationConfig { pairs };

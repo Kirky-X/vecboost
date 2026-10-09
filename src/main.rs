@@ -506,7 +506,7 @@ fn build_translate_pairs(
         // 缺省值取 TranslationParams::default() 单一事实源（评审 ARC-2：
         // 禁止 512 字面量第二处来源，default 变更时自动联动）
         let defaults = vecboost::config::model::TranslationParams::default();
-        let translation_params = vecboost::config::model::TranslationParams::new(
+        let mut translation_params = vecboost::config::model::TranslationParams::new(
             pair.max_source_tokens.unwrap_or(defaults.max_source_tokens),
             pair.max_new_tokens.unwrap_or(defaults.max_new_tokens),
             pair.min_new_tokens.unwrap_or(defaults.min_new_tokens),
@@ -518,6 +518,7 @@ fn build_translate_pairs(
                 pair.target_language
             )
         })?;
+        translation_params.output_fixes = pair.output_fixes.clone();
         let pair_config = vecboost::config::model::ModelConfig {
             name: format!(
                 "translate-{}-{}",
@@ -530,7 +531,7 @@ fn build_translate_pairs(
             max_batch_size: 1,
             oom_fallback_enabled: true,
             task: vecboost::config::model::ModelTask::Translate,
-            translation_params: Some(translation_params),
+            translation_params: Some(translation_params.clone()),
             ..Default::default()
         };
         translate_pairs.insert(

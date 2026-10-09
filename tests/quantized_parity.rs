@@ -128,6 +128,7 @@ fn fp32_engine(model_path: &Path) -> AnyEngine {
         quantized: false,
         decision_params: None,
         translation_params: None,
+        transcription_params: None,
     };
     AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("fp32 引擎加载失败")
 }
@@ -149,6 +150,7 @@ fn quantized_engine(gguf_path: &Path) -> AnyEngine {
         quantized: true,
         decision_params: None,
         translation_params: None,
+        transcription_params: None,
     };
     // 必须经 EngineFactory（量化路由在此）；AnyEngine::new 是不走路由的原始构造
     vecboost::engine::EngineFactory::create(EngineType::Candle, &config)

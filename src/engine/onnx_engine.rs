@@ -10,7 +10,7 @@ use crate::utils::hash::verify_sha256;
 use crate::utils::hf_hub::build_hf_repo;
 use async_trait::async_trait;
 use ndarray::{Array1, Array2};
-use ort::session::{Session, builder::GraphOptimizationLevel};
+use ort::session::Session;
 use ort::value::Tensor;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -145,47 +145,12 @@ impl OnnxEngine {
             (onnx_filename, tokenizer_filename)
         };
 
-        let num_threads = std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(4);
-
         let supports_cuda = device_type == DeviceType::Cuda;
         let supports_amd = matches!(device_type, DeviceType::Amd | DeviceType::OpenCL);
 
-        log::info!("Initializing ONNX Runtime session...");
-        let session = Session::builder()
-            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-            .with_intra_threads(num_threads)
-            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-
-        let mut session = if supports_cuda {
-            log::info!("Attempting to configure CUDA execution provider for ONNX Runtime");
-            #[cfg(feature = "cuda")]
-            {
-                let cuda_provider =
-                    ort::execution_providers::CUDAExecutionProvider::default().build();
-                session
-                    .with_execution_providers([cuda_provider])
-                    .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                log::warn!(
-                    "CUDA execution provider not available. ONNX Runtime CUDA support requires cuda feature flag. Using CPU execution provider."
-                );
-                session
-            }
-        } else if supports_amd {
-            log::info!(
-                "AMD GPU detected but ROCm execution provider is not configured in this build. Using CPU execution provider."
-            );
-            session
-        } else {
-            session
-        };
-
+        // SHA256 完整性校验与 AMD warn 属引擎专属、不在 builder 链内，保留调用侧
+        // （R-engine-inference-001 只收编 `Session::builder()` 链）；SHA256 先于
+        // build_session（其内部 commit）执行，与原「建 builder→校验→commit」语义等价。
         if let Some(ref expected_hash) = config.model_sha256 {
             log::info!("Verifying model file SHA256 hash...");
             let is_valid = verify_sha256(&onnx_filename, expected_hash).map_err(|e| {
@@ -202,9 +167,18 @@ impl OnnxEngine {
             log::info!("Model file SHA256 verification passed");
         }
 
-        let session = session
-            .commit_from_file(onnx_filename)
-            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+        if matches!(device_type, DeviceType::Amd | DeviceType::OpenCL) {
+            log::info!(
+                "AMD GPU detected but ROCm execution provider is not configured in this build. Using CPU execution provider."
+            );
+        }
+
+        let opts = super::session::SessionOpts {
+            intra_threads: 0,
+            device: device_type.clone(),
+            extra_config: &[],
+        };
+        let session = super::session::build_session(&onnx_filename, &opts)?;
 
         log::info!("Loading tokenizer...");
         #[allow(unused_mut)]
@@ -472,18 +446,14 @@ impl OnnxEngine {
             .or_else(|_| repo.download_file().filename("model_quantized.onnx").send())
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
-        let num_threads = std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(4);
-
-        let new_session = Session::builder()
-            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-            .with_intra_threads(num_threads)
-            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-            .commit_from_file(onnx_filename)
-            .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+        let new_session = super::session::build_session(
+            &onnx_filename,
+            &super::session::SessionOpts {
+                intra_threads: 0,
+                device: DeviceType::Cpu,
+                extra_config: &[],
+            },
+        )?;
 
         let mut session_guard = self
             .session
@@ -710,6 +680,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         }
     }
 

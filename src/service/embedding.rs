@@ -1480,6 +1480,7 @@ impl EmbeddingService {
     ) -> ModelConfig {
         ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: req.model_name.clone(),
             // 预设 engine_type 为缺省层（req wire 无此维度），未配置继承当前
             // 加载模型（启动时即 [model].engine_type），无当前模型回落 Candle
@@ -1955,6 +1956,7 @@ mod tests {
             Arc::new(RwLock::new(TestEngine::new(8)));
         let baseline = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "baseline".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(MINILM),
@@ -2117,6 +2119,7 @@ mod tests {
 
         let model_config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2157,6 +2160,7 @@ mod tests {
 
         let model_config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "bge-m3".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2197,6 +2201,7 @@ mod tests {
 
         let model_config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2259,6 +2264,7 @@ mod tests {
 
         let model_config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2290,6 +2296,7 @@ mod tests {
 
         let model_config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2334,6 +2341,7 @@ mod tests {
 
         let model_config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2543,6 +2551,7 @@ mod tests {
 
         let model_config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -2617,6 +2626,7 @@ mod tests {
 
         let model_config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(_temp_dir.path()),
@@ -2794,6 +2804,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: name.to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),
@@ -4245,6 +4256,7 @@ mod tests {
         let manager = Arc::new(ModelManager::with_loader(loader));
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: model_name.to_string(),
             engine_type: EngineType::Candle,
             model_path,
@@ -4977,6 +4989,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let model_config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "preserve-orig".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from(temp_dir.path()),

@@ -59,6 +59,7 @@ fn load_pair_engine(bundle_path: &str) -> AnyEngine {
         oom_fallback_enabled: false,
         task: ModelTask::Translate,
         translation_params: Some(TranslationParams::default()),
+        transcription_params: None,
         ..Default::default()
     };
     EngineFactory::create(EngineType::Onnx, &config).expect("bundle 就绪时必须可加载")

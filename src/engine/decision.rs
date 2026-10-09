@@ -10,14 +10,14 @@
 //! 序列构造 / collate / 校准 / 后处理的协议实现与测试见
 //! [`super::decision_protocol`]（onnx 与 candle 两路共享，无 feature 门）。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::config::model::{DecisionParams, DeviceType, ModelConfig, ModelTask, Precision};
 use crate::domain::{DecisionRequest, DecisionResponse};
 use crate::error::VecboostError;
 use ndarray::Array2;
-use ort::session::{Session, builder::GraphOptimizationLevel};
+use ort::session::Session;
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
 
@@ -26,12 +26,14 @@ use super::decision_protocol::{
     FixedMarkers, TemperatureCalibration, answer_for_question, build_question_row, collate_batch,
     encode_ids, qtype_code, state_text,
 };
+use super::session::{SessionOpts, build_session, precision_for_model_file, probe_model_file};
 
 /// bundle 内模型文件探测顺序（任务协议：model.onnx → model_quantized.onnx
 /// → laya.onnx → laya_int8.onnx；决策侧要求 fp32 主模型优先 + 显式枚举
 /// laya 变体名。与 onnx_engine::resolve_local_bundle 的 embedding 口径
 /// ——quantized 优先 + 唯一 `*.onnx` 扫描——分歧为任务协议约定，两侧
-/// 均有测试钉，改动须同步评估另一侧）
+/// 均有测试钉，改动须同步评估另一侧）。
+/// probe/precision/build_session 本体已收编至 [`super::session`]（单一事实源）。
 const MODEL_CANDIDATES: [&str; 4] = [
     "model.onnx",
     "model_quantized.onnx",
@@ -54,80 +56,6 @@ pub(crate) struct DecisionPipeline {
     bundle_dir: PathBuf,
     fallback_triggered: bool,
     fallback_lock: Arc<Mutex<()>>,
-}
-
-/// bundle 内模型文件探测（顺序见 [`MODEL_CANDIDATES`]）；
-/// 全 miss 报 `ModelLoadError` 含尝试路径清单（onnx_engine.rs 同款显性化）
-fn probe_model_file(bundle_dir: &Path) -> Result<PathBuf, VecboostError> {
-    let mut tried = Vec::with_capacity(MODEL_CANDIDATES.len());
-    for name in MODEL_CANDIDATES {
-        let candidate = bundle_dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-        tried.push(candidate.display().to_string());
-    }
-    Err(VecboostError::ModelLoadError(format!(
-        "No Laya ONNX model found in {}; tried: {}",
-        bundle_dir.display(),
-        tried.join(", ")
-    )))
-}
-
-/// 探测命中的模型文件名 → 对外精度标签：`*_quantized`/`*_int8` 候选命中时
-/// 报 Int8，其余 Fp32（supports_mixed_precision 恒 false 已诚实，仅加载期
-/// 标签与探测结果一致，避免 quantized/int8 bundle 对外失真报 Fp32）
-fn precision_for_model_file(model_file: &Path) -> Precision {
-    let name = model_file
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    if name.contains("quantized") || name.contains("int8") {
-        Precision::Int8
-    } else {
-        Precision::Fp32
-    }
-}
-
-/// Session 构建：Level3 图优化 + intra threads + CUDA EP 分支
-/// （onnx_engine.rs:128-159 同模式）
-fn build_session(model_file: &Path, device: &DeviceType) -> Result<Session, VecboostError> {
-    let num_threads = std::thread::available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(4);
-    log::info!("Initializing ONNX Runtime session for decision pipeline...");
-    let builder = Session::builder()
-        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-        .with_optimization_level(GraphOptimizationLevel::Level3)
-        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-        .with_intra_threads(num_threads)
-        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-
-    let mut session = if *device == DeviceType::Cuda {
-        log::info!("Attempting to configure CUDA execution provider for decision pipeline");
-        #[cfg(feature = "cuda")]
-        {
-            builder
-                .with_execution_providers([
-                    ort::execution_providers::CUDAExecutionProvider::default().build(),
-                ])
-                .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            log::warn!(
-                "CUDA execution provider requires the cuda feature flag; \
-                 using CPU execution provider for decision pipeline"
-            );
-            builder
-        }
-    } else {
-        builder
-    };
-
-    session
-        .commit_from_file(model_file)
-        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))
 }
 
 impl DecisionPipeline {
@@ -162,7 +90,7 @@ impl DecisionPipeline {
                 bundle_dir.display()
             )));
         }
-        let model_file = probe_model_file(&bundle_dir)?;
+        let model_file = probe_model_file(&bundle_dir, &MODEL_CANDIDATES, "Laya ONNX")?;
 
         if let Some(ref expected_hash) = config.model_sha256 {
             log::info!("Verifying decision model file SHA256 hash...");
@@ -197,7 +125,14 @@ impl DecisionPipeline {
         tokenizer.with_padding(None);
 
         let fixed_markers = FixedMarkers::new(&tokenizer)?;
-        let session = build_session(&model_file, &config.device)?;
+        let session = build_session(
+            &model_file,
+            &SessionOpts {
+                intra_threads: 0,
+                device: config.device.clone(),
+                extra_config: &[],
+            },
+        )?;
         let calibration = TemperatureCalibration::from_bundle(&bundle_dir)?;
         let precision = precision_for_model_file(&model_file);
 
@@ -441,8 +376,15 @@ impl InferenceEngine for DecisionPipeline {
             return Ok(());
         }
         log::info!("Attempting fallback to CPU for decision pipeline");
-        let model_file = probe_model_file(&self.bundle_dir)?;
-        let session = build_session(&model_file, &DeviceType::Cpu)?;
+        let model_file = probe_model_file(&self.bundle_dir, &MODEL_CANDIDATES, "Laya ONNX")?;
+        let session = build_session(
+            &model_file,
+            &SessionOpts {
+                intra_threads: 0,
+                device: DeviceType::Cpu,
+                extra_config: &[],
+            },
+        )?;
         let mut session_guard = self
             .session
             .lock()
@@ -468,6 +410,7 @@ impl InferenceEngine for DecisionPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     // ── 防回归钉①：decide 必须作为 trait 方法对 DecisionPipeline 可解析 ──
     //
@@ -656,6 +599,7 @@ mod tests {
                 state_max_tokens: 256,
             }),
             translation_params: None,
+            transcription_params: None,
         };
         let err = match DecisionPipeline::load(&config) {
             Err(e) => e,
@@ -689,6 +633,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         }
     }
 

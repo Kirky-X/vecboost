@@ -386,6 +386,7 @@ impl ModelManager {
 
             ModelConfig {
                 translation_params: None,
+                transcription_params: None,
                 name: name.to_string(),
                 engine_type: model.engine_type(),
                 model_path: model.path().to_path_buf(),
@@ -616,6 +617,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path,
@@ -649,6 +651,7 @@ mod tests {
 
         let config1 = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "model-1".to_string(),
             engine_type: EngineType::Candle,
             model_path: cache_dir.path().join("model-1"),
@@ -667,6 +670,7 @@ mod tests {
 
         let config2 = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "model-2".to_string(),
             #[cfg(feature = "onnx")]
             engine_type: EngineType::Onnx,
@@ -727,6 +731,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: cache_dir.path().join("test-model"),
@@ -790,6 +795,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "timeout-test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: cache_dir.path().join("timeout-test-model"),
@@ -821,6 +827,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "reuse-test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: cache_dir.path().join("reuse-test-model"),
@@ -854,6 +861,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "slow-timeout-test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: cache_dir.path().join("slow-timeout-test-model"),
@@ -897,6 +905,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "success-after-timeout-test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: cache_dir.path().join("success-after-timeout-test-model"),
@@ -938,6 +947,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "get-model".to_string(),
             engine_type: EngineType::Candle,
             model_path,
@@ -991,6 +1001,7 @@ mod tests {
             create_test_model_file(&model_path);
             let config = ModelConfig {
                 translation_params: None,
+                transcription_params: None,
                 name: name.to_string(),
                 engine_type: EngineType::Candle,
                 model_path,
@@ -1026,6 +1037,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "reload-model".to_string(),
             engine_type: EngineType::Candle,
             model_path,
@@ -1096,6 +1108,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "decision-model".to_string(),
             engine_type: EngineType::Candle,
             model_path,
@@ -1169,6 +1182,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "quant-model".to_string(),
             engine_type: EngineType::Candle,
             model_path,
@@ -1237,6 +1251,7 @@ mod tests {
         let cache_dir = tempdir().unwrap();
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "fail-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: cache_dir.path().join("fail-model"),
@@ -1276,6 +1291,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "default-test-model".to_string(),
             engine_type: EngineType::Candle,
             model_path,
@@ -1310,6 +1326,7 @@ mod tests {
             create_test_model_file(&model_path);
             let config = ModelConfig {
                 translation_params: None,
+                transcription_params: None,
                 name: name.to_string(),
                 engine_type: EngineType::Candle,
                 model_path,
@@ -1355,6 +1372,7 @@ mod tests {
 
                 let config = ModelConfig {
                     translation_params: None,
+                    transcription_params: None,
                     name: name.clone(),
                     engine_type: EngineType::Candle,
                     model_path,
@@ -1451,6 +1469,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "reuse-model".to_string(),
             engine_type: EngineType::Candle,
             model_path,
@@ -1484,6 +1503,7 @@ mod tests {
 
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "recreate-model".to_string(),
             engine_type: EngineType::Candle,
             model_path,
@@ -1515,6 +1535,7 @@ mod tests {
         let loader = SlowModelLoader::new(10);
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "slow-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from("/slow/path"),
@@ -1541,6 +1562,7 @@ mod tests {
         let loader = SlowModelLoader::new(10);
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "slow-load".to_string(),
             engine_type: EngineType::Candle,
             model_path: cache_dir.path().join("slow-load"),
@@ -1567,6 +1589,7 @@ mod tests {
         let loader = FailingLoader;
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "fail-model".to_string(),
             engine_type: EngineType::Candle,
             model_path: PathBuf::from("/fail/path"),
@@ -1597,6 +1620,7 @@ mod tests {
         create_test_model_file(&model_path);
         let config = ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: "unload-single".to_string(),
             engine_type: EngineType::Candle,
             model_path,
@@ -1623,6 +1647,7 @@ mod tests {
     fn residency_config_for(name: &str, dir: &std::path::Path) -> ModelConfig {
         ModelConfig {
             translation_params: None,
+            transcription_params: None,
             name: name.to_string(),
             engine_type: EngineType::Candle,
             model_path: dir.join(name),

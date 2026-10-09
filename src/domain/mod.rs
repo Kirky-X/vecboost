@@ -5,6 +5,7 @@ pub mod decision;
 pub mod detect;
 pub mod openai_embedding;
 pub mod scheduling;
+pub mod transcribe;
 pub mod translate;
 
 use crate::config::model::{DeviceType, ModelTask, PoolingMode};
@@ -341,6 +342,7 @@ pub use decision::{
     QuestionType,
 };
 pub use detect::{DetectRequest, DetectResponse};
+pub use transcribe::{TranscribeRequest, TranscribeResponse, TranscribeSegment};
 pub use translate::{TranslateRequest, TranslateResponse};
 
 #[cfg(test)]

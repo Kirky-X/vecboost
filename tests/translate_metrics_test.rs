@@ -197,6 +197,7 @@ async fn translate_counter_counts_only_successful_requests() {
                 oom_fallback_enabled: false,
                 task: ModelTask::Translate,
                 translation_params: Some(TranslationParams::new(512, 512, 0).unwrap()),
+                transcription_params: None,
                 ..Default::default()
             },
         )

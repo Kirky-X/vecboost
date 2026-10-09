@@ -1600,6 +1600,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         }
     }
 
@@ -2088,6 +2089,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         }
     }
 

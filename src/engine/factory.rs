@@ -94,6 +94,31 @@ impl EngineFactory {
                 ));
             }
         }
+        // task=transcribe 路由：Qwen3-ASR 三图仅 onnx 实现（需 feature `transcribe`）。
+        // candle 显性拒绝并给出换引擎提示；feature 未启用 → ConfigError 提示重建。
+        if config.task == ModelTask::Transcribe {
+            if engine_type == EngineType::Candle {
+                return Err(VecboostError::ConfigError(
+                    "转录仅支持 onnx 引擎：请将 engine_type 配置为 onnx（task=transcribe 无 candle 实现）"
+                        .to_string(),
+                ));
+            }
+            #[cfg(feature = "transcribe")]
+            {
+                let engine = super::transcribe::engine::Qwen3AsrEngine::load(config)?;
+                let any = AnyEngine::Transcribe(engine);
+                ensure_supports_task(&any, config)?;
+                return Ok(any);
+            }
+            #[cfg(not(feature = "transcribe"))]
+            {
+                return Err(VecboostError::ConfigError(
+                    "检测到 task=transcribe 模型配置，但本次构建未启用 `transcribe` feature；\
+                     请以 `--features onnx,transcribe` 重新构建"
+                        .to_string(),
+                ));
+            }
+        }
         // loader 路由：.gguf + quantized=true 走量化引擎
         // （加载期反量化桥），否则维持 safetensors 路径。
         if should_use_quantized_engine(&config.model_path, config.quantized) {
@@ -164,6 +189,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         }
     }
 
@@ -252,6 +278,57 @@ mod tests {
     /// task=translate + engine_type=candle 显性拒绝：翻译无 candle 实现，
     /// ConfigError 必须携带 feature/重建提示（禁止静默落入 embedding 引擎
     /// 后在调用期以 UnsupportedTask 暴露）。
+    /// task=transcribe + engine_type=onnx 走转录引擎分派臂：空 bundle 时报
+    /// ModelLoadError（Qwen3-ASR 三图候选加载失败）而非 UnsupportedTask——钉住
+    /// 分派臂接线（同 decision/translate 先例）。
+    #[cfg(feature = "transcribe")]
+    #[test]
+    fn test_create_transcribe_task_dispatches_to_onnx_engine() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = test_config();
+        config.task = crate::config::model::ModelTask::Transcribe;
+        config.model_path = dir.path().to_path_buf();
+        let result = EngineFactory::create(EngineType::Onnx, &config);
+        match result {
+            Err(VecboostError::ModelLoadError(msg)) => {
+                assert!(
+                    msg.contains("qwen3-conv_frontend"),
+                    "分派臂必须报转录 bundle 加载错误（含候选路径），msg={msg}"
+                );
+            }
+            Err(VecboostError::UnsupportedTask(msg)) => {
+                panic!("分派臂接线后 task=transcribe 不得落入 embedding 引擎 fail-fast：{msg}")
+            }
+            other => panic!("期望 ModelLoadError，got {:?}", other.err()),
+        }
+    }
+
+    /// task=transcribe + engine_type=candle 显性拒绝：转录无 candle 实现，
+    /// ConfigError 必须携带换引擎提示（禁止静默落入 embedding 引擎）。
+    #[test]
+    fn test_create_transcribe_task_rejects_candle_engine() {
+        let mut config = test_config();
+        config.task = crate::config::model::ModelTask::Transcribe;
+        config.model_path = PathBuf::from("models/qwen3-asr");
+        let result = EngineFactory::create(EngineType::Candle, &config);
+        match result {
+            Err(VecboostError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("转录仅支持 onnx 引擎"),
+                    "错误必须携带换引擎提示，msg={msg}"
+                );
+                assert!(
+                    msg.contains("engine_type"),
+                    "错误必须指明 engine_type 配置项，msg={msg}"
+                );
+            }
+            other => panic!(
+                "期望 ConfigError（转录不支持 candle），got {:?}",
+                other.err()
+            ),
+        }
+    }
+
     #[test]
     fn test_create_translate_task_rejects_candle_engine() {
         let mut config = test_config();

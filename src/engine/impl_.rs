@@ -41,6 +41,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => engine.embed(text),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.embed(text),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.embed(text),
             AnyEngine::CandleDecision(engine) => engine.embed(text),
         }
     }
@@ -56,6 +58,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => engine.embed_batch(texts),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.embed_batch(texts),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.embed_batch(texts),
             AnyEngine::CandleDecision(engine) => engine.embed_batch(texts),
         }
     }
@@ -71,6 +75,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => engine.precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.precision(),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.precision(),
             AnyEngine::CandleDecision(engine) => engine.precision(),
         }
     }
@@ -86,6 +92,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => engine.supports_mixed_precision(),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.supports_mixed_precision(),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.supports_mixed_precision(),
             AnyEngine::CandleDecision(engine) => engine.supports_mixed_precision(),
         }
     }
@@ -102,6 +110,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => engine.is_fallback_triggered(),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.is_fallback_triggered(),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.is_fallback_triggered(),
             AnyEngine::CandleDecision(engine) => engine.is_fallback_triggered(),
         }
     }
@@ -118,6 +128,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => InferenceEngine::count_tokens(engine, text),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => InferenceEngine::count_tokens(engine, text),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => InferenceEngine::count_tokens(engine, text),
             // candle 决策引擎同口径：未覆盖 count_tokens，走 trait 默认
             AnyEngine::CandleDecision(engine) => InferenceEngine::count_tokens(engine, text),
         }
@@ -138,6 +150,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => InferenceEngine::take_stage_snapshot(engine),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => InferenceEngine::take_stage_snapshot(engine),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => InferenceEngine::take_stage_snapshot(engine),
             // candle 决策引擎同口径：无分阶段埋点，走 trait 默认 None
             AnyEngine::CandleDecision(engine) => InferenceEngine::take_stage_snapshot(engine),
         }
@@ -154,6 +168,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => engine.try_fallback_to_cpu(config).await,
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.try_fallback_to_cpu(config).await,
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.try_fallback_to_cpu(config).await,
             AnyEngine::CandleDecision(engine) => engine.try_fallback_to_cpu(config).await,
         }
     }
@@ -171,6 +187,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => engine.decide(req),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.decide(req),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.decide(req),
             // trait 方法（CandleDecisionEngine 固有方法名为 decide_impl()，
             // 无同名遮蔽）：覆盖后经 trait 自然进 candle 决策头
             AnyEngine::CandleDecision(engine) => engine.decide(req),
@@ -191,6 +209,22 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::CandleDecision(engine) => InferenceEngine::translate(engine, req),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.translate(req),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.translate(req),
+        }
+    }
+
+    /// 转录推理按变体转发：仅 Transcribe（Qwen3AsrEngine）有真实覆盖，其余引擎显性 UnsupportedTask。
+    fn transcribe(
+        &self,
+        req: &crate::domain::TranscribeRequest,
+    ) -> Result<crate::domain::TranscribeResponse, VecboostError> {
+        match self {
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.transcribe(req),
+            _ => Err(VecboostError::unsupported_task(
+                "transcription not supported by this engine".to_string(),
+            )),
         }
     }
 
@@ -207,6 +241,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => engine.decide_logits(req),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.decide_logits(req),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.decide_logits(req),
             AnyEngine::CandleDecision(engine) => engine.decide_logits(req),
         }
     }
@@ -222,6 +258,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => engine.supports_task(task),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.supports_task(task),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.supports_task(task),
             AnyEngine::CandleDecision(engine) => engine.supports_task(task),
         }
     }
@@ -240,6 +278,8 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Decision(engine) => engine.supports_rerank(),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.supports_rerank(),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => engine.supports_rerank(),
             AnyEngine::CandleDecision(engine) => engine.supports_rerank(),
         }
     }
@@ -256,6 +296,10 @@ impl InferenceEngine for AnyEngine {
             #[cfg(feature = "onnx")]
             // 翻译引擎无内存感知覆盖，UFCS 显式走 trait 默认 no-op（同量化臂口径）
             AnyEngine::OnnxTranslate(engine) => {
+                InferenceEngine::attach_memory_limit_controller(engine, controller)
+            }
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(engine) => {
                 InferenceEngine::attach_memory_limit_controller(engine, controller)
             }
             #[cfg(feature = "quantized-gguf")]
@@ -303,6 +347,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         }
     }
 
@@ -324,6 +369,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         }
     }
 
@@ -600,6 +646,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
         let ctx = InferenceContext::with_config(&config, Precision::Fp16);
         assert_eq!(ctx.model_name, "ctx-test");
@@ -650,6 +697,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
         let engine =
             AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("load real model");
@@ -691,6 +739,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
         let engine =
             AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("load real model");
@@ -737,6 +786,7 @@ mod tests {
             quantized: false,
             decision_params: None,
             translation_params: None,
+            transcription_params: None,
         };
         let mut engine =
             AnyEngine::new(&config, EngineType::Candle, Precision::Fp32).expect("load real model");
@@ -749,6 +799,8 @@ mod tests {
             AnyEngine::Decision(_) => panic!("expected Candle variant"),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(_) => panic!("expected Candle variant"),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(_) => panic!("expected Candle variant"),
             AnyEngine::CandleDecision(_) => panic!("expected Candle variant"),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(_) => panic!("expected Candle variant"),
@@ -765,6 +817,8 @@ mod tests {
             AnyEngine::Decision(_) => panic!("expected Candle variant"),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(_) => panic!("expected Candle variant"),
+            #[cfg(feature = "transcribe")]
+            AnyEngine::Transcribe(_) => panic!("expected Candle variant"),
             AnyEngine::CandleDecision(_) => panic!("expected Candle variant"),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(_) => panic!("expected Candle variant"),

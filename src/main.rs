@@ -317,6 +317,7 @@ fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelC
         quantized: config.model.quantized,
         decision_params: None,
         translation_params: None,
+        transcription_params: None,
     })
 }
 
@@ -532,6 +533,7 @@ fn build_translate_pairs(
             oom_fallback_enabled: true,
             task: vecboost::config::model::ModelTask::Translate,
             translation_params: Some(translation_params.clone()),
+            transcription_params: None,
             ..Default::default()
         };
         translate_pairs.insert(

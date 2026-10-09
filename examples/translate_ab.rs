@@ -47,6 +47,7 @@ fn config_for(model_path: &str) -> ModelConfig {
         quantized: false,
         decision_params: None,
         translation_params: None,
+        transcription_params: None,
     }
 }
 
@@ -89,11 +90,7 @@ fn main() {
     for model in ["models/opus-mt-en-zh", "models/m2m100_418M"] {
         let t0 = Instant::now();
         let engine = match EngineFactory::create(EngineType::Onnx, &config_for(model)) {
-            Ok(vecboost::engine::AnyEngine::OnnxTranslate(e)) => e,
-            Ok(_) => {
-                eprintln!("{model}: 构造返回非翻译引擎");
-                continue;
-            }
+            Ok(e) => e,
             Err(e) => {
                 eprintln!("{model}: 构造失败 {e}");
                 continue;
@@ -109,7 +106,7 @@ fn main() {
             };
             let s = Instant::now();
             let dt = s.elapsed();
-            match engine.translate(&req) {
+            match InferenceEngine::translate(&engine, &req) {
                 Ok(resp) => {
                     md.push_str(&format!(
                         "## {id}（{:.1}s）\n\n{}\n\n",

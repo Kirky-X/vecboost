@@ -109,6 +109,14 @@ max_sequence_length = 8192
 # 需要以 `--features onnx` 构建；示例:
 # task = "translate"
 # model_path = "models/opus-mt-en-zh"
+# ⚠️ task=transcribe 时模型加载为 Qwen3-ASR 转录引擎（三图 + silero VAD +
+#    whisper fbank；engine_type=onnx 强制，candle 显性拒绝），目前仅库内
+#    InferenceEngine::transcribe 入口消费，HTTP/gRPC 服务面未接线。
+#    需要以 `--features transcribe` 构建。引擎级参数 transcription_params
+#    （models_dir 缺省取 model_path；vad_threshold 缺省 0.5）经库 /
+#    model-repository API 构造 ModelConfig 时设置，服务 [model] 段不暴露。示例:
+# task = "transcribe"
+# model_path = "models/qwen3-asr"
 # task = "embedding"
 
 # 最大驻留模型数 (T019, 可选，默认不限制): 超限按 LFRU 驱逐 score 最低者

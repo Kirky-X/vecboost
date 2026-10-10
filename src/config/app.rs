@@ -97,8 +97,8 @@ pub struct ModelConfig {
     /// 消灭该解析点的硬编码 Candle）。
     #[garde(skip)]
     pub engine_type: Option<String>,
-    /// 任务维度：embedding（默认）/ decision。对应运行时 `ModelConfig.task`；
-    /// 非法值（如 "rerank"）在反序列化边界显性报错而非静默忽略。
+    /// 任务维度：embedding（默认）/ decision / translate / transcribe。对应运行时
+    /// `ModelConfig.task`；非法值（如 "rerank"）在反序列化边界显性报错而非静默忽略。
     /// 配置 decision 时经 `EngineFactory` 的 task 分派臂加载 Laya 决策管线
     /// （bundle 缺失/不完整时启动期报 `ModelLoadError`；口径同
     /// USER_GUIDE「task 字段」节）。

@@ -252,11 +252,14 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 | `cuda` | - | NVIDIA CUDA GPU acceleration |
 | `metal` | - | Apple Silicon Metal GPU |
 | `onnx` | - | ONNX Runtime engine |
+| `transcribe` | - | Qwen3-ASR transcription engine (three-graph + silero VAD + fbank), library-level `InferenceEngine::transcribe` entry; HTTP/gRPC endpoints not wired yet |
 | `mkl` | - | x86_64 CPU MKL acceleration backend (opt-in; requires a toolchain that links cleanly) |
 | `accelerate` | - | aarch64 macOS Accelerate backend (opt-in) |
 | `quantized-gguf` | - | GGUF quantization engine switch (inference backend pending upstream candle support) |
 
 > **📦 Built-in dependencies**: `confers` (config), `inklog` (logging), `oxcache` (cache), `limiteron` (rate limiting), and `trait-kit` (module registry) are mandatory dependencies that are always enabled — no feature flag needed. `sdforge` is enabled by any protocol feature (`http`/`grpc`/`cli`/`mcp`).
+
+> **🧪 Experiment path**: `transcribe-poc/` (standalone crate, binary `transcribe-own`) is retained as the transcription experiment and benchmark path (lockstep batching, GPU io-binding, and py-torch baseline comparison — knobs not carried by the main crate) and is not shipped with the main crate; the productized implementation lives in `src/engine/transcribe/` — see [DEPRECATED.md](DEPRECATED.md).
 
 ---
 

@@ -63,6 +63,10 @@ max_sequence_length = 8192
 # laya_config.json + tokenizer/tokenizer.json；Windows 下 .data 与主图同目录
 # 需要以 `--features onnx` 构建；完整说明见 config/config.toml [model] 段
 # task = "embedding"
+# 可选值: embedding / decision / translate / transcribe 四选一；
+# task=transcribe 为 Qwen3-ASR 转录管线（engine_type=onnx 强制，需
+# `--features transcribe` 构建；引擎级参数 models_dir/vad_threshold 经库 API
+# 设置，服务 [model] 段不暴露），完整说明见 config/config.toml [model] 段
 
 # ============ 向量化配置 ============
 [embedding]

@@ -280,11 +280,14 @@ curl -X POST http://localhost:9002/api/1/detect \
 | `cuda` | - | NVIDIA CUDA GPU 加速 |
 | `metal` | - | Apple Silicon Metal GPU |
 | `onnx` | - | ONNX Runtime 引擎 |
+| `transcribe` | - | Qwen3-ASR 转录引擎（三图 + silero VAD + fbank），库内 `InferenceEngine::transcribe` 入口；HTTP/gRPC 服务面未接线 |
 | `mkl` | - | x86_64 CPU MKL 加速后端（opt-in，需链接正常的工具链） |
 | `accelerate` | - | aarch64 macOS Accelerate 加速后端（opt-in） |
 | `quantized-gguf` | - | GGUF 量化引擎开关（推理后端待 candle 上游落地） |
 
 > **📦 内置依赖说明**: `confers`（配置）、`inklog`（日志）、`oxcache`（缓存）、`limiteron`（限流）、`trait-kit`（模块注册）为必选依赖，始终启用，无需通过 feature 开启。`sdforge` 在 `http`/`grpc`/`cli`/`mcp` 任一协议 feature 下启用。
+
+> **🧪 实验通路**: `transcribe-poc/`（独立 crate，二进制 `transcribe-own`）保留为转录实验与基准通路（含 lockstep 合批、GPU io-binding、py-torch 基线对拍等主 crate 未承接的旋钮），不随主 crate 发布；产品化转录实现见 `src/engine/transcribe/`，详见 [DEPRECATED.md](DEPRECATED.md)。
 
 ---
 

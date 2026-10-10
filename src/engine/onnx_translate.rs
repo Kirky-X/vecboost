@@ -133,6 +133,51 @@ pub(crate) struct TranslateSessions {
     decoder: Session,
 }
 
+/// 构建一对 encoder/decoder Session（主路径与并行 worker 共用）。
+fn build_translate_sessions(
+    encoder_file: &Path,
+    decoder_file: &Path,
+    intra_threads: usize,
+    device: &DeviceType,
+) -> Result<TranslateSessions, VecboostError> {
+    let encoder = build_session(
+        encoder_file,
+        &SessionOpts {
+            intra_threads,
+            device: device.clone(),
+            extra_config: &[],
+        },
+    )?;
+    let decoder = build_session(
+        decoder_file,
+        &SessionOpts {
+            intra_threads,
+            device: device.clone(),
+            extra_config: &[],
+        },
+    )?;
+    Ok(TranslateSessions { encoder, decoder })
+}
+
+/// 句级并行 worker 数（含主 Session）：`TRANSLATION_PARALLEL_WORKERS` 覆盖，
+/// 缺省 4，钳 1..=8。1 = 关闭并行（整段直解）。worker 各自独占 Session 集，
+/// 内存随 worker 数线性增长（int8 418M 每套约 0.5GB 级）。
+const DEFAULT_TRANSLATION_PARALLEL_WORKERS: usize = 4;
+const MAX_TRANSLATION_PARALLEL_WORKERS: usize = 8;
+
+fn translation_parallel_workers() -> usize {
+    std::env::var("TRANSLATION_PARALLEL_WORKERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_TRANSLATION_PARALLEL_WORKERS)
+        .clamp(1, MAX_TRANSLATION_PARALLEL_WORKERS)
+}
+
+/// 长输入并行阈值：受保护文本字符数 ≥ 此值且句数 ≥2 才走句级并行（短文本
+/// 整段直解保留跨句上下文）。paper-translate-quality P7：论文摘要 1k+ 字符
+/// 整段贪心 150s+，并行后时延 ÷ worker 数。
+const PARALLEL_MIN_CHARS: usize = 600;
+
 /// generation_config.json 解析结果（贪心解码锚点）。
 ///
 /// `num_beams` 等 beam 参数不消费：本引擎恒贪心（argmax），与配置文件
@@ -310,6 +355,9 @@ impl Family {
 /// generation_config）。
 pub(crate) struct OnnxTranslationEngine {
     sessions: Arc<Mutex<TranslateSessions>>,
+    /// 句级并行 worker 的附加 Session 集（workers-1 个；ort rc.13 禁并发 Run
+    /// 同一 Session，每 worker 独占一套）。空 = 并行关闭（整段直解路径）。
+    parallel_sessions: Vec<Arc<Mutex<TranslateSessions>>>,
     tokenizer: Tokenizer,
     decoder_start_token_id: u32,
     eos_token_id: u32,
@@ -724,22 +772,24 @@ impl OnnxTranslationEngine {
             Family::M2m { graph, .. } => DecodeGraph::for_m2m(graph),
         };
         let intra_threads = SESSION_INTRA_THREADS.load(std::sync::atomic::Ordering::Relaxed);
-        let encoder = build_session(
-            &encoder_file,
-            &SessionOpts {
-                intra_threads,
-                device: config.device.clone(),
-                extra_config: &[],
-            },
-        )?;
-        let decoder = build_session(
-            &decoder_file,
-            &SessionOpts {
-                intra_threads,
-                device: config.device.clone(),
-                extra_config: &[],
-            },
-        )?;
+        let sessions =
+            build_translate_sessions(&encoder_file, &decoder_file, intra_threads, &config.device)?;
+        // 句级并行 worker 集：workers-1 个附加 Session（内存常驻）。
+        // paper-translate-quality P7：长摘要整段贪心解码 150s+，按句 4 路并行
+        // 后时延除以 worker 数（rtx/实测见 tasks.md T003 记录）。
+        let parallel_workers = translation_parallel_workers();
+        let mut parallel_sessions = Vec::new();
+        if parallel_workers > 1 {
+            for w in 1..parallel_workers {
+                parallel_sessions.push(Arc::new(Mutex::new(build_translate_sessions(
+                    &encoder_file,
+                    &decoder_file,
+                    intra_threads,
+                    &config.device,
+                )?)));
+                log::info!("translation parallel worker {w}/{parallel_workers} session set loaded");
+            }
+        }
         let precision = precision_for_model_file(&decoder_file);
 
         log::info!(
@@ -758,7 +808,8 @@ impl OnnxTranslationEngine {
         );
 
         Ok(Self {
-            sessions: Arc::new(Mutex::new(TranslateSessions { encoder, decoder })),
+            sessions: Arc::new(Mutex::new(sessions)),
+            parallel_sessions,
             tokenizer,
             decoder_start_token_id: generation.decoder_start_token_id,
             eos_token_id: generation.eos_token_id,
@@ -807,20 +858,17 @@ impl OnnxTranslationEngine {
             }
             (Family::Marian, _) => String::new(),
         };
-        // 源序列构造（家族分派）+ 预算校验（锁外：tokenize 无 Session 依赖）
-        let source_ids = match &self.family {
-            Family::Marian => encode_source_ids(&self.tokenizer, &req.text)?,
-            Family::M2m { .. } => {
-                let src_token = self
-                    .family
-                    .lang_token_id(&self.tokenizer, &source_language)?;
-                let mut ids = vec![src_token as i64];
-                ids.extend(encode_raw_ids(&self.tokenizer, &req.text)?);
-                ids.push(self.eos_token_id as i64);
-                ids
-            }
-        };
-        check_token_budget(source_ids.len(), self.params.max_source_tokens, "text")?;
+        // 译前 token 保护（R-001 设计）：URL/LaTeX 转义/arXiv·DOI 标识符/全大写
+        // 缩写替换为占位符，译文出口按槽位回填——修复 seq2seq 对这类 token 的
+        // 实测丢失（论文评测：DTI 缩写与 arXiv:1908.05156 被整段丢弃）。占位
+        // 吞没风险由真 bundle 存活率单测钉住；未命中显性 warn，不静默丢内容。
+        let (protected_text, protected_slots) = protect_tokens(&req.text);
+        // 长输入句级并行（P7）：字符数与句数双达阈值且 worker 集就绪时走
+        // 并行；短文本/单句走整段直解（保留跨句上下文）。decoder_init 两路共用
+        let sentences = split_source_sentences(&protected_text);
+        let use_parallel = !self.parallel_sessions.is_empty()
+            && sentences.len() >= 2
+            && protected_text.chars().count() >= PARALLEL_MIN_CHARS;
 
         // decoder 初始序列：Marian [start]；m2m [start, tgt_lang]（目标语言
         // token 由解码器强制作为首个生成位；未支持码显性拒绝）
@@ -834,122 +882,142 @@ impl OnnxTranslationEngine {
             }
         };
 
-        // 第一遍整段直解。评审 PERF-3：panic 后恢复中毒锁（into_inner 取回
-        // 内层数据）——每步解码输入独立构造、Session 无跨请求可变状态，恢复
-        // 安全；否则单次 panic 即该 pair 永久 "lock poisoned" 直至重启
-        let (generated, degenerate) = {
-            let mut sessions = self
-                .sessions
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let (enc_dims, enc_data) = run_encoder(&mut sessions.encoder, &source_ids)?;
-            let generated = greedy_decode(
-                &mut sessions.decoder,
-                &enc_dims,
-                &enc_data,
-                source_ids.len(),
-                self.params.max_new_tokens,
-                self.params.min_new_tokens,
-                &decoder_init,
-                &self.decode_graph.past_names,
-                self.decode_graph.head_shape,
-                self.eos_token_id,
-            )?;
-            // 退化判据 token 级（空生成 = 立即 EOS，同判退化转救援；
-            // min_new_tokens 抑制窗口内不计 EOS 故空生成仅在窗口为 0 时可达）
-            let degenerate = generated.is_empty()
-                || is_degenerate_generation(
-                    &generated,
-                    generated.len() >= self.params.max_new_tokens,
-                );
-            (generated, degenerate)
-        };
-
-        // 第二遍救援：按句切分逐句解码（run1 评审实测：长段重复循环消除；
-        // 代价是句间上下文丢失，仅作退化救援路径）。救援带全局输出 token
-        // 预算与句数上限（审查 F2：无界救援按句数放大解码步数并占死 pair
-        // 信号量），耗尽即截断并显性告警，禁止静默丢句
-        let (generated_sets, generated_total) = if !degenerate {
-            let generated_total = generated.len();
-            (vec![generated], generated_total)
+        let (pieces, generated_total) = if use_parallel {
+            // 并行路径在 worker 内直接 detok 产出文本
+            self.decode_sentences_parallel(&sentences, &source_language, &decoder_init)?
         } else {
-            let sentences = split_source_sentences(&req.text);
-            log::warn!(
-                "translation whole-text decode degenerated ({} tokens generated, \
-                 {} sentences); retrying per-sentence with output budget {}",
-                generated.len(),
-                sentences.len(),
-                self.params.max_new_tokens
-            );
-            if sentences.len() > MAX_RESCUE_SENTENCES {
-                log::warn!(
-                    "rescue sentence count {} exceeds cap {MAX_RESCUE_SENTENCES}; \
-                     remaining sentences dropped",
-                    sentences.len()
-                );
-            }
-            let sentence_ids_list = sentences
-                .iter()
-                .take(MAX_RESCUE_SENTENCES)
-                .map(|sentence| encode_source_ids(&self.tokenizer, sentence))
-                .collect::<Result<Vec<_>, VecboostError>>()?;
-            for sentence_ids in &sentence_ids_list {
-                check_token_budget(
-                    sentence_ids.len(),
-                    self.params.max_source_tokens,
-                    "sentence",
-                )?;
-            }
-            let generated_sets = {
+            // 源序列构造（家族分派）+ 预算校验（锁外：tokenize 无 Session 依赖）
+            let source_ids = match &self.family {
+                Family::Marian => encode_source_ids(&self.tokenizer, &protected_text)?,
+                Family::M2m { .. } => {
+                    let src_token = self
+                        .family
+                        .lang_token_id(&self.tokenizer, &source_language)?;
+                    let mut ids = vec![src_token as i64];
+                    ids.extend(encode_raw_ids(&self.tokenizer, &protected_text)?);
+                    ids.push(self.eos_token_id as i64);
+                    ids
+                }
+            };
+            check_token_budget(source_ids.len(), self.params.max_source_tokens, "text")?;
+
+            // 第一遍整段直解。评审 PERF-3：panic 后恢复中毒锁（into_inner 取回
+            // 内层数据）——每步解码输入独立构造、Session 无跨请求可变状态，恢复
+            // 安全；否则单次 panic 即该 pair 永久 "lock poisoned" 直至重启
+            let (generated, degenerate) = {
                 let mut sessions = self
                     .sessions
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let mut generated_sets = Vec::with_capacity(sentence_ids_list.len());
-                let mut rescue_budget = self.params.max_new_tokens;
-                let mut produced: usize = 0;
-                for sentence_ids in &sentence_ids_list {
-                    if rescue_budget == 0 {
-                        log::warn!(
-                            "rescue output budget exhausted after {produced} tokens; \
-                             remaining sentences dropped"
-                        );
-                        break;
-                    }
-                    let (sentence_dims, sentence_data) =
-                        run_encoder(&mut sessions.encoder, sentence_ids)?;
-                    let generated = greedy_decode(
-                        &mut sessions.decoder,
-                        &sentence_dims,
-                        &sentence_data,
-                        sentence_ids.len(),
-                        rescue_budget,
-                        // 抑制窗口不得超剩余预算（max ≥ min 不变式；预算
-                        // 递减后窗口随之收缩，压满即按退化判据显性暴露）
-                        self.params.min_new_tokens.min(rescue_budget),
-                        &decoder_init,
-                        &self.decode_graph.past_names,
-                        self.decode_graph.head_shape,
-                        self.eos_token_id,
-                    )?;
-                    rescue_budget = rescue_budget.saturating_sub(generated.len());
-                    produced += generated.len();
-                    generated_sets.push(generated);
-                }
-                generated_sets
+                let (enc_dims, enc_data) = run_encoder(&mut sessions.encoder, &source_ids)?;
+                let generated = greedy_decode(
+                    &mut sessions.decoder,
+                    &enc_dims,
+                    &enc_data,
+                    source_ids.len(),
+                    self.params.max_new_tokens,
+                    self.params.min_new_tokens,
+                    &decoder_init,
+                    &self.decode_graph.past_names,
+                    self.decode_graph.head_shape,
+                    self.eos_token_id,
+                )?;
+                // 退化判据 token 级（空生成 = 立即 EOS，同判退化转救援；
+                // min_new_tokens 抑制窗口内不计 EOS 故空生成仅在窗口为 0 时可达）
+                let degenerate = generated.is_empty()
+                    || is_degenerate_generation(
+                        &generated,
+                        generated.len() >= self.params.max_new_tokens,
+                    );
+                (generated, degenerate)
             };
-            let total: usize = generated_sets.iter().map(|g| g.len()).sum();
-            (generated_sets, total)
-        };
 
-        // detok 统一锁外（架构审查 L1：临界区仅含推理）
-        let mut pieces: Vec<String> = Vec::with_capacity(generated_sets.len());
-        for generated in &generated_sets {
-            let text = decode_output_text(&self.tokenizer, generated)?;
-            if !text.is_empty() {
-                pieces.push(text);
+            // 第二遍救援：按句切分逐句解码（run1 评审实测：长段重复循环消除；
+            // 代价是句间上下文丢失，仅作退化救援路径）。救援带全局输出 token
+            // 预算与句数上限（审查 F2：无界救援按句数放大解码步数并占死 pair
+            // 信号量），耗尽即截断并显性告警，禁止静默丢句
+            let (generated_sets, generated_total) = if !degenerate {
+                let generated_total = generated.len();
+                (vec![generated], generated_total)
+            } else {
+                let sentences = split_source_sentences(&protected_text);
+                log::warn!(
+                    "translation whole-text decode degenerated ({} tokens generated, \
+                 {} sentences); retrying per-sentence with output budget {}",
+                    generated.len(),
+                    sentences.len(),
+                    self.params.max_new_tokens
+                );
+                if sentences.len() > MAX_RESCUE_SENTENCES {
+                    log::warn!(
+                        "rescue sentence count {} exceeds cap {MAX_RESCUE_SENTENCES}; \
+                     remaining sentences dropped",
+                        sentences.len()
+                    );
+                }
+                let sentence_ids_list = sentences
+                    .iter()
+                    .take(MAX_RESCUE_SENTENCES)
+                    .map(|sentence| encode_source_ids(&self.tokenizer, sentence))
+                    .collect::<Result<Vec<_>, VecboostError>>()?;
+                for sentence_ids in &sentence_ids_list {
+                    check_token_budget(
+                        sentence_ids.len(),
+                        self.params.max_source_tokens,
+                        "sentence",
+                    )?;
+                }
+                let generated_sets = {
+                    let mut sessions = self
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let mut generated_sets = Vec::with_capacity(sentence_ids_list.len());
+                    let mut rescue_budget = self.params.max_new_tokens;
+                    let mut produced: usize = 0;
+                    for sentence_ids in &sentence_ids_list {
+                        if rescue_budget == 0 {
+                            log::warn!(
+                                "rescue output budget exhausted after {produced} tokens; \
+                             remaining sentences dropped"
+                            );
+                            break;
+                        }
+                        let (sentence_dims, sentence_data) =
+                            run_encoder(&mut sessions.encoder, sentence_ids)?;
+                        let generated = greedy_decode(
+                            &mut sessions.decoder,
+                            &sentence_dims,
+                            &sentence_data,
+                            sentence_ids.len(),
+                            rescue_budget,
+                            // 抑制窗口不得超剩余预算（max ≥ min 不变式；预算
+                            // 递减后窗口随之收缩，压满即按退化判据显性暴露）
+                            self.params.min_new_tokens.min(rescue_budget),
+                            &decoder_init,
+                            &self.decode_graph.past_names,
+                            self.decode_graph.head_shape,
+                            self.eos_token_id,
+                        )?;
+                        rescue_budget = rescue_budget.saturating_sub(generated.len());
+                        produced += generated.len();
+                        generated_sets.push(generated);
+                    }
+                    generated_sets
+                };
+                let total: usize = generated_sets.iter().map(|g| g.len()).sum();
+                (generated_sets, total)
+            };
+            // detok 统一锁外（架构审查 L1：临界区仅含推理）
+            let mut pieces: Vec<String> = Vec::with_capacity(generated_sets.len());
+            for generated in &generated_sets {
+                let text = decode_output_text(&self.tokenizer, generated)?;
+                if !text.is_empty() {
+                    pieces.push(text);
+                }
             }
-        }
+            (pieces, generated_total)
+        };
 
         self.output_tokens_last
             .store(generated_total as u64, std::sync::atomic::Ordering::Relaxed);
@@ -969,6 +1037,10 @@ impl OnnxTranslationEngine {
         } else {
             translation
         };
+        // 占位回填置于 CJK 归一化之后、符号修复之前：回填的原文（URL /
+        // arXiv:ID / \% 等）随后统一经 repair 清创，半角形态不被 normalize
+        // 本地化；output_fixes 仍可对回填后的内容生效
+        let translation = backfill_protected(translation, &protected_slots);
         // 符号损伤确定性修复（URL 全角冒号 / LaTeX 转义反斜杠，论文评测实测）
         let translation = repair_symbol_damage(translation);
         // config 驱动译文修复表（按声明序字面替换）
@@ -980,6 +1052,147 @@ impl OnnxTranslationEngine {
             detected_source_language: None,
             processing_time_ms: started.elapsed().as_millis() as u64,
         })
+    }
+
+    /// 句级并行解码（P7 长输入路径）：按句切分源文，worker 各领一句解码
+    /// （每 worker 独占 Session 集——ort rc.13 禁并发 Run 同一 Session），
+    /// 在 worker 内直接 detok 产出文本，按句序返回。任一句失败即整请求显性
+    /// 失败（禁静默丢句）；句数超 MAX_RESCUE_SENTENCES 截断并 warn。
+    fn decode_sentences_parallel(
+        &self,
+        sentences: &[String],
+        source_language: &str,
+        decoder_init: &[i64],
+    ) -> Result<(Vec<String>, usize), VecboostError> {
+        if sentences.len() > MAX_RESCUE_SENTENCES {
+            log::warn!(
+                "parallel sentence count {} exceeds cap {MAX_RESCUE_SENTENCES};                  remaining sentences dropped",
+                sentences.len()
+            );
+        }
+        let sentences: Vec<&String> = sentences.iter().take(MAX_RESCUE_SENTENCES).collect();
+        let sentences = &sentences;
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let pieces: std::sync::Mutex<Vec<(usize, String, usize)>> =
+            std::sync::Mutex::new(Vec::with_capacity(sentences.len()));
+        let failure: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+        // worker 0 = 主 Session 集；1.. = 并行附加集
+        let worker_sessions: Vec<&Arc<Mutex<TranslateSessions>>> = std::iter::once(&self.sessions)
+            .chain(self.parallel_sessions.iter())
+            .collect();
+        std::thread::scope(|scope| {
+            for sessions in worker_sessions {
+                let next = &next;
+                let pieces = &pieces;
+                let failure = &failure;
+                scope.spawn(move || {
+                    loop {
+                        if failure
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .is_some()
+                        {
+                            return;
+                        }
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if i >= sentences.len() {
+                            return;
+                        }
+                        let sentence = sentences[i];
+                        // 家族分派句编码（与整段路径同构）
+                        let ids = match self.sentence_ids(sentence, source_language) {
+                            Ok(ids) => ids,
+                            Err(e) => {
+                                *failure
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                    Some(format!("sentence {i} encode: {e}"));
+                                return;
+                            }
+                        };
+                        if let Err(e) =
+                            check_token_budget(ids.len(), self.params.max_source_tokens, "sentence")
+                        {
+                            *failure
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                Some(format!("sentence {i} budget: {e}"));
+                            return;
+                        }
+                        let decoded = {
+                            let mut guard = sessions
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            (|| -> Result<(String, usize), VecboostError> {
+                                let (dims, data) = run_encoder(&mut guard.encoder, &ids)?;
+                                let generated = greedy_decode(
+                                    &mut guard.decoder,
+                                    &dims,
+                                    &data,
+                                    ids.len(),
+                                    self.params.max_new_tokens,
+                                    self.params.min_new_tokens,
+                                    decoder_init,
+                                    &self.decode_graph.past_names,
+                                    self.decode_graph.head_shape,
+                                    self.eos_token_id,
+                                )?;
+                                let text = decode_output_text(&self.tokenizer, &generated)?;
+                                Ok((text, generated.len()))
+                            })()
+                        };
+                        match decoded {
+                            Ok((text, tokens)) => pieces
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .push((i, text, tokens)),
+                            Err(e) => {
+                                *failure
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                    Some(format!("sentence {i} decode: {e}"));
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        if let Some(e) = failure
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            return Err(VecboostError::InferenceError(format!(
+                "parallel translation failed: {e}"
+            )));
+        }
+        let mut done = pieces
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        done.sort_by_key(|(i, _, _)| *i);
+        let total: usize = done.iter().map(|(_, _, t)| *t).sum();
+        Ok((done.into_iter().map(|(_, text, _)| text).collect(), total))
+    }
+
+    /// 单句源序列（家族分派，与整段路径同构）：Marian 直编；m2m 显式
+    /// src lang token + eos 包裹。
+    fn sentence_ids(
+        &self,
+        sentence: &str,
+        source_language: &str,
+    ) -> Result<Vec<i64>, VecboostError> {
+        match &self.family {
+            Family::Marian => encode_source_ids(&self.tokenizer, sentence),
+            Family::M2m { .. } => {
+                let src_token = self
+                    .family
+                    .lang_token_id(&self.tokenizer, source_language)?;
+                let mut ids = vec![src_token as i64];
+                ids.extend(encode_raw_ids(&self.tokenizer, sentence)?);
+                ids.push(self.eos_token_id as i64);
+                Ok(ids)
+            }
+        }
     }
 }
 
@@ -1013,6 +1226,153 @@ fn apply_output_fixes(mut text: String, fixes: &[OutputFix]) -> String {
         }
     }
     text
+}
+
+// ── 译前 token 保护与译后回填（R-001）────────────────────────────────────
+//
+// seq2seq 模型对 URL / LaTeX 转义 / arXiv·DOI 标识符 / 全大写缩写有实测丢失
+// （论文评测：DTI 与 arXiv:1908.05156 被整段丢弃，出口修复无从恢复不存在
+// 的内容）。译前把这些 token 替换为占位符 ⟦Pn⟧、译后按槽位回填原文，是
+// 唯一能让源 token 穿过解码器的机制。占位吞没风险（模型不吐出占位符）由
+// 真 bundle 存活率测试钉住；未命中显性 warn，绝不静默。
+
+/// 保护槽位：占位符 ↔ 原文。
+struct ProtectedSlot {
+    placeholder: String,
+    original: String,
+}
+
+/// 单请求保护条数上限：防病态输入把源文几乎全部变成占位符。
+const PROTECT_MAX_SLOTS: usize = 64;
+
+/// 全大写缩写停用词（与评测 acronyms() 同口径）：冠词/介词/系动词不保护。
+const PROTECT_ACRONYM_STOPWORDS: &[&str] = &[
+    "THE", "AND", "FOR", "WE", "IN", "ON", "TO", "OF", "IS", "ARE", "IT",
+];
+
+/// 四个保护模式（常量编译一次）：URL / arXiv·DOI 标识符 / LaTeX 转义 /
+/// 全大写缩写。
+fn protect_patterns() -> &'static (regex::Regex, regex::Regex, regex::Regex, regex::Regex) {
+    use std::sync::OnceLock;
+    static P: OnceLock<(regex::Regex, regex::Regex, regex::Regex, regex::Regex)> = OnceLock::new();
+    P.get_or_init(|| {
+        (
+            regex::Regex::new(r"https?://[^\s]+").expect("const regex: url"),
+            regex::Regex::new(r"(?:[Aa]rXiv)\s*:\s*\d{4}\.\d{4,5}(?:v\d+)?|10\.\d{4,9}/[^\s]+")
+                .expect("const regex: identifier"),
+            regex::Regex::new(r"\\[%$&]").expect("const regex: latex escape"),
+            regex::Regex::new(r"\b[A-Z][A-Z0-9]{1,}\b").expect("const regex: acronym"),
+        )
+    })
+}
+
+/// 回填匹配两级：严格带括号形态（`⟦Z1⟧`）与裸核心形态（`Z1`）——实测
+/// m2m100 会丢弃 ⟦⟧ 括号但完整拷贝 "Z1" 核心（见真 bundle 存活率测试）。
+/// Z+数字在学术文本中几乎不出现，裸匹配误配风险可忽略；槽位消费一次即标记
+/// 已恢复，重复出现不二次注入。
+fn placeholder_res() -> &'static (regex::Regex, regex::Regex) {
+    use std::sync::OnceLock;
+    static P: OnceLock<(regex::Regex, regex::Regex)> = OnceLock::new();
+    P.get_or_init(|| {
+        (
+            regex::Regex::new("⟦\\s*Z\\s*(\\d+)\\s*⟧").expect("const regex: placeholder strict"),
+            regex::Regex::new("Z(\\d+)").expect("const regex: placeholder bare"),
+        )
+    })
+}
+
+/// 区间重叠判定：半开区间 [s,e) 与已占用集合是否存在交叠。
+fn spans_overlap(claimed: &[(usize, usize)], s: usize, e: usize) -> bool {
+    claimed.iter().any(|&(cs, ce)| s < ce && cs < e)
+}
+
+/// 译前保护：按 URL > 标识符 > LaTeX 转义 > 缩写优先级占用区间（URL 内的
+/// 缩写等不再二次保护），返回占位符化文本与槽位表（按出现序编号）。
+fn protect_tokens(text: &str) -> (String, Vec<ProtectedSlot>) {
+    let (url_re, ident_re, latex_re, acronym_re) = protect_patterns();
+    let mut claimed: Vec<(usize, usize)> = Vec::new();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    for re in [url_re, ident_re, latex_re] {
+        for m in re.find_iter(text) {
+            if spans_overlap(&claimed, m.start(), m.end()) {
+                continue;
+            }
+            claimed.push((m.start(), m.end()));
+            spans.push((m.start(), m.end()));
+        }
+    }
+    for m in acronym_re.find_iter(text) {
+        if spans_overlap(&claimed, m.start(), m.end())
+            || PROTECT_ACRONYM_STOPWORDS.contains(&m.as_str())
+            || m.as_str().len() < 2
+        {
+            continue;
+        }
+        claimed.push((m.start(), m.end()));
+        spans.push((m.start(), m.end()));
+    }
+    spans.sort_by_key(|&(s, _)| s);
+    spans.truncate(PROTECT_MAX_SLOTS);
+    if spans.is_empty() {
+        return (text.to_string(), Vec::new());
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut slots = Vec::with_capacity(spans.len());
+    let mut last = 0usize;
+    for (i, (s, e)) in spans.iter().enumerate() {
+        out.push_str(&text[last..*s]);
+        let placeholder = format!("⟦Z{}⟧", i + 1);
+        out.push_str(&placeholder);
+        slots.push(ProtectedSlot {
+            placeholder,
+            original: text[*s..*e].to_string(),
+        });
+        last = *e;
+    }
+    out.push_str(&text[last..]);
+    (out, slots)
+}
+
+/// 译后回填：占位符替换回原文；未命中（模型吞位）逐条 warn 显性暴露。
+/// 两级匹配：先严格括号形态，后对仍未恢复的槽位试裸核心形态（实测模型
+/// 丢括号保核心）；每个槽位只注入一次。
+fn backfill_protected(text: String, slots: &[ProtectedSlot]) -> String {
+    if slots.is_empty() {
+        return text;
+    }
+    let (strict_re, bare_re) = placeholder_res();
+    let mut recovered = vec![false; slots.len()];
+    // 槽位索引 → 待替换区间（形态及命中外延由覆盖写控制：从后向前替换避免
+    // 位移失效；先严格后裸核，重复命中同槽不二次注入）
+    let mut replacements: Vec<(usize, usize, usize)> = Vec::new(); // (start, end, slot_idx)
+    for re in [strict_re, bare_re] {
+        for m in re.find_iter(&text) {
+            let digits: String = m.as_str().chars().filter(char::is_ascii_digit).collect();
+            let Ok(idx) = digits.parse::<usize>() else {
+                continue;
+            };
+            if idx == 0 || idx > slots.len() || recovered[idx - 1] {
+                continue;
+            }
+            replacements.push((m.start(), m.end(), idx - 1));
+            recovered[idx - 1] = true;
+        }
+    }
+    replacements.sort_by_key(|&(s, _, _)| std::cmp::Reverse(s));
+    let mut out = text;
+    for (s, e, slot_idx) in replacements {
+        out.replace_range(s..e, &slots[slot_idx].original);
+    }
+    for (i, slot) in slots.iter().enumerate() {
+        if !recovered[i] {
+            log::warn!(
+                "protected token not recovered in translation (placeholder {}): {:?}",
+                slot.placeholder,
+                slot.original
+            );
+        }
+    }
+    out
 }
 
 /// 生成退化检测：opus-mt 长段整解的实测失效模式是重复循环（run1 评审：
@@ -1387,6 +1747,11 @@ mod tests {
         dir.is_dir().then_some(dir)
     }
 
+    fn m2m100_bundle() -> Option<PathBuf> {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/m2m100_418M");
+        dir.is_dir().then_some(dir)
+    }
+
     // ── 探测：资产缺失显性报错（离线可跑） ──────────────────────────────
 
     #[test]
@@ -1611,6 +1976,178 @@ mod tests {
         assert_eq!(
             repair_symbol_damage("\\pi 近似 3.14".to_string()),
             "\\pi 近似 3.14"
+        );
+    }
+
+    // ── 译前保护 / 译后回填（R-001）────────────────────────────────────
+
+    #[test]
+    fn test_protect_tokens_roundtrip_all_classes() {
+        let text = "We study drug-target interaction (DTI) prediction, see \
+                    arXiv:1908.05156 and https://github.com/x/y with 90\\% gain, \
+                    DOI 10.1234/abcd.5678 for GPT and LLM workloads.";
+        let (protected, slots) = protect_tokens(text);
+        // 五类 token 全部入槽：DTI / arXiv / URL / \% / DOI / GPT / LLM
+        let originals: Vec<&str> = slots.iter().map(|s| s.original.as_str()).collect();
+        for expect in [
+            "DTI",
+            "arXiv:1908.05156",
+            "https://github.com/x/y",
+            "\\%",
+            "10.1234/abcd.5678",
+            "GPT",
+            "LLM",
+        ] {
+            assert!(
+                originals.contains(&expect),
+                "missing {expect} in {originals:?}"
+            );
+        }
+        // 原文不再直现（占位符已替换）
+        assert!(!protected.contains("DTI"));
+        assert!(!protected.contains("github.com"));
+        assert!(!protected.contains("1908.05156"));
+        // 占位符编号连续且唯一
+        let ph: Vec<&str> = slots.iter().map(|s| s.placeholder.as_str()).collect();
+        assert_eq!(ph[0], "⟦Z1⟧");
+        assert_eq!(ph[ph.len() - 1], format!("⟦Z{}⟧", slots.len()).as_str());
+        // 回填还原（译文字序中占位符按同序出现）
+        let translated = slots
+            .iter()
+            .map(|s| s.placeholder.clone())
+            .collect::<Vec<_>>()
+            .join("，");
+        assert_eq!(backfill_protected(translated, &slots), originals.join("，"));
+    }
+
+    #[test]
+    fn test_protect_tokens_skips_stopwords_and_overlaps() {
+        // 停用词（WE/THE 等）不占槽；URL 内的缩写（NLPXucan 非全大写，取
+        // 全大写段）不因 URL 已占用而重复保护
+        let text = "WE visit THE site https://EXAMPLE.com/ABC for data.";
+        let (protected, slots) = protect_tokens(text);
+        let originals: Vec<&str> = slots.iter().map(|s| s.original.as_str()).collect();
+        assert!(!originals.contains(&"WE") && !originals.contains(&"THE"));
+        // URL 整体一条（内部 ABC 不单独立槽）
+        assert_eq!(originals, vec!["https://EXAMPLE.com/ABC"]);
+        assert_eq!(protected, "WE visit THE site ⟦Z1⟧ for data.");
+    }
+
+    #[test]
+    fn test_backfill_protected_tolerates_spacing_and_missing() {
+        let slots = vec![ProtectedSlot {
+            placeholder: "⟦Z1⟧".to_string(),
+            original: "arXiv:1908.05156".to_string(),
+        }];
+        // 模型丢弃括号只留核心（实测 m2m100 行为）仍可回填
+        assert_eq!(
+            backfill_protected("版本为 Z1。".to_string(), &slots),
+            "版本为 arXiv:1908.05156。"
+        );
+        // 带括号且内插空白形态
+        assert_eq!(
+            backfill_protected("版本为 ⟦ Z1 ⟧。".to_string(), &slots),
+            "版本为 arXiv:1908.05156。"
+        );
+        // 重复命中同槽只注入一次
+        assert_eq!(
+            backfill_protected("Z1 与 Z1。".to_string(), &slots),
+            "arXiv:1908.05156 与 Z1。"
+        );
+        // 缺失占位符：原文不注入、文本原样透出（warn 由实现承担）
+        assert_eq!(
+            backfill_protected("版本号丢失。".to_string(), &slots),
+            "版本号丢失。"
+        );
+        // 空槽位零开销
+        assert_eq!(backfill_protected("原文".to_string(), &[]), "原文");
+    }
+
+    #[test]
+    fn test_protect_tokens_empty_input() {
+        let (text, slots) = protect_tokens("");
+        assert!(text.is_empty());
+        assert!(slots.is_empty());
+    }
+
+    /// 真 bundle 存活率（R-001 验收核心）：m2m100 en→zh 必须把占位符吐回，
+    /// DTI 缩写与 arXiv 标识符经保护后出现在译文中。资产缺失即 SKIP。
+    #[test]
+    fn test_protect_tokens_real_bundle_survival() {
+        let Some(dir) = m2m100_bundle() else {
+            eprintln!("SKIP: models/m2m100_418M 缺失（离线环境）");
+            return;
+        };
+        let dylib = std::env::var("ORT_DYLIB_PATH")
+            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+        if !std::path::Path::new(&dylib).is_file() {
+            eprintln!("SKIP: onnxruntime dylib 缺失（{dylib}）");
+            return;
+        }
+        if std::env::var_os("ORT_DYLIB_PATH").is_none() {
+            // SAFETY: 测试进程内单线程时点回填一次
+            unsafe {
+                std::env::set_var("ORT_DYLIB_PATH", &dylib);
+            }
+        }
+        let config = ModelConfig {
+            name: "m2m100-protect".to_string(),
+            engine_type: crate::config::model::EngineType::Onnx,
+            model_path: dir,
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+            task: ModelTask::Translate,
+            quantized: false,
+            decision_params: None,
+            translation_params: None,
+            transcription_params: None,
+        };
+        let engine = OnnxTranslationEngine::load(&config).expect("bundle 就绪时必须可加载");
+        let req = TranslateRequest {
+            text: "We benchmark drug-target interaction (DTI) prediction baselines. \
+                   The protocol is described in arXiv:1908.05156, and code is at \
+                   https://github.com/example/repo. Accuracy improved by 90\\% over \
+                   the GPT-4 baseline."
+                .to_string(),
+            source_language: Some("en".to_string()),
+            target_language: "zh".to_string(),
+        };
+        let resp = OnnxTranslationEngine::translate(&engine, &req).expect("贪心解码必须成功");
+        println!("SMOKE protect(en→zh): {:?}", resp.translation);
+        // 占位符不得泄漏（未回填的 ⟦Pn⟧ 说明回填失败，等同内容丢失）
+        assert!(
+            !resp.translation.contains('⟦') && !resp.translation.contains('⟧'),
+            "placeholder leaked: {:?}",
+            resp.translation
+        );
+        // 受保护 token 必须存活于译文（丢失即模型吞位，本测试红）
+        assert!(
+            resp.translation.contains("DTI"),
+            "DTI not protected through decode: {:?}",
+            resp.translation
+        );
+        assert!(
+            resp.translation.contains("arXiv:1908.05156"),
+            "arXiv id not protected through decode: {:?}",
+            resp.translation
+        );
+        assert!(
+            resp.translation.contains("github.com"),
+            "URL not protected through decode: {:?}",
+            resp.translation
+        );
+        // LaTeX 转义回填后经 repair 清创（模型可能在数字与占位符间插空格，
+        // 评测口径按数字/百分号分别命中）
+        assert!(
+            resp.translation.contains('%') && resp.translation.contains("90"),
+            "LaTeX escape not backfilled: {:?}",
+            resp.translation
         );
     }
 

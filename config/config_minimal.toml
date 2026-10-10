@@ -3,6 +3,9 @@ host = "127.0.0.1"
 port = 9002
 timeout = 30
 
+# 任务维度缺省 embedding；可选 decision / translate / transcribe（引擎级参数
+# models_dir/vad_threshold 经库 API 设置，服务 [model] 段不暴露），完整说明
+# 见 config/config.toml [model] 段注释
 [model]
 model_repo = "BAAI/bge-m3"
 use_gpu = false

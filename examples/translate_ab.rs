@@ -52,7 +52,7 @@ fn config_for(model_path: &str) -> ModelConfig {
 }
 
 /// 重建语料：与 run_translate_eval.py 同款 id 规则（域名-序号，摘要 >500 字符）。
-fn load_corpus() -> Vec<(String, String)> {
+fn load_corpus_all() -> Vec<(String, String)> {
     let mut all: Vec<(String, String)> = Vec::new();
     for (i, dom) in DOMAINS.iter().enumerate() {
         let path = PathBuf::from(ROOT).join(format!("corpus_{}.json", i + 1));
@@ -68,6 +68,11 @@ fn load_corpus() -> Vec<(String, String)> {
             }
         }
     }
+    all
+}
+
+fn load_corpus() -> Vec<(String, String)> {
+    let all = load_corpus_all();
     PICKS
         .iter()
         .filter_map(|id| {
@@ -79,7 +84,34 @@ fn load_corpus() -> Vec<(String, String)> {
 }
 
 fn main() {
-    let items = load_corpus();
+    // 实验旋钮：AB_MODELS=逗号分隔模型路径；AB_IDS=逗号分隔语料 id；
+    // TRANSLATE_INTRA=每 session intra 线程数（覆盖全局默认）
+    if let Ok(v) = std::env::var("TRANSLATE_INTRA")
+        && let Ok(n) = v.parse::<usize>()
+    {
+        vecboost::engine::set_session_intra_threads(n);
+        eprintln!("translate_ab: intra threads override = {n}");
+    }
+    let all_items = load_corpus();
+    let items: Vec<(String, String)> = match std::env::var("AB_IDS") {
+        Ok(ids) => {
+            let want: Vec<&str> = ids
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            // 显式 id 绕过 PICKS 白名单（实验任意语料用）：白名单外 id 从全量语料取
+            let pool = if want.iter().all(|id| all_items.iter().any(|(k, _)| k == id)) {
+                all_items
+            } else {
+                load_corpus_all()
+            };
+            pool.into_iter()
+                .filter(|(id, _)| want.contains(&id.as_str()))
+                .collect()
+        }
+        Err(_) => all_items,
+    };
     println!(
         "语料 {} 篇：{:?}",
         items.len(),
@@ -87,9 +119,20 @@ fn main() {
     );
     let out_dir = PathBuf::from(ROOT).join("ab");
     std::fs::create_dir_all(&out_dir).expect("mkdir ab");
-    for model in ["models/opus-mt-en-zh", "models/m2m100_418M"] {
+    let models: Vec<String> = match std::env::var("AB_MODELS") {
+        Ok(v) => v
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Err(_) => vec![
+            "models/opus-mt-en-zh".to_string(),
+            "models/m2m100_418M".to_string(),
+        ],
+    };
+    for model in models {
         let t0 = Instant::now();
-        let engine = match EngineFactory::create(EngineType::Onnx, &config_for(model)) {
+        let engine = match EngineFactory::create(EngineType::Onnx, &config_for(&model)) {
             Ok(e) => e,
             Err(e) => {
                 eprintln!("{model}: 构造失败 {e}");
@@ -129,7 +172,7 @@ fn main() {
                 }
             }
         }
-        let name = model.rsplit('/').next().unwrap_or(model);
+        let name = model.rsplit('/').next().unwrap_or(model.as_str());
         std::fs::write(out_dir.join(format!("{name}.md")), md).expect("write ab md");
     }
 }

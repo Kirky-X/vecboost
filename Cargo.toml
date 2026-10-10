@@ -162,7 +162,7 @@ clap = { version = "4.6", optional = true, default-features = false, features = 
 
 # Performance: parallel iterator for batch similarity
 rayon = { version = "1.12", default-features = false }
-character_converter = { version = "2.1.5", optional = true }
+character_converter = { version = "2.1.5", default-features = false, optional = true }
 
 # Performance: jemalloc global allocator for multi-threaded workloads
 [target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]

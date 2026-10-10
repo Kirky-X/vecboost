@@ -1,33 +1,28 @@
-# DEPRECATED — transcribe-poc 实验通路
+# DEPRECATED — transcribe-poc 实验通路（薄壳化已完成）
 
-> 日期：2026-10-10 · 关联变更：`specmark/archive/2026-10-10-transcribe-poc-shell/`（裁定记录见其 `design.md` D1）
+> 日期：2026-10-10（勘误更新：薄壳化已执行）· 关联归档：`transcribe-poc-shell`（B 裁定，2026-10-10）、`transcribe-poc-shell-a`（A 执行，2026-10-10）
 
-## 状态
+## 现状
 
-`transcribe-poc/`（独立 crate，二进制 `transcribe-own`）**不再是产品化转录交付物**。它保留为**独立实验与基准通路**，与主仓 `vecboost` 的发布解耦：不在主 workspace 构建、不随主 crate 发布、无兼容性承诺。
+`transcribe-poc/`（独立 crate，二进制 `transcribe-own`）**已收敛为薄壳 CLI**：本地推理实现（asr/vad/features/tokenizer/wav + batch/gpu 实验通路，~1700 行）已全部删除，推理改调主仓公开门面 `vecboost::transcribe`（`transcribe` feature，实现位于 `src/engine/transcribe/`）。CLI 解析 / 路径归一化 / stdout 契约 / 退出码 / py-torch 基线对拍通路保留在本 crate。
 
-## 产品化实现位置
+**语义级双实现已消除**（曾以 `repo-semantic-dedup` 同类口径记录接受，2026-10-10 零接受项指令下彻底解决）。
 
-Qwen3-ASR 转录引擎已由 `onnx-engine-unify` 忠实并入主仓：
+## 历史沿革（为何本文档曾主张降级）
 
-- 实现：`src/engine/transcribe/`（`asr`/`vad`/`features`/`tokenizer`/`wav`/`engine`，feature `transcribe` 门控）
-- 入口：`ModelTask::Transcribe` + `InferenceEngine::transcribe`（经 `EngineFactory::create` 按 task 分派）
-- 配置：`config` 段 `task = "transcribe"` 与 `transcription_params`（`models_dir` / `vad_threshold`）
+1. `onnx-engine-unify` 把转录引擎并入主 crate 时，POC 收敛方式被拆分为独立变更（最小 pub 入口是不可逆单向门）。
+2. `transcribe-poc-shell` 归档件初版裁定 B（D5 降级）：彼时主仓无 VAD-only/段级/wav/旋钮公开面，忠实薄壳需 3+ 公开项、且会丢失 ENV_POOL/BATCH/GPU 实验旋钮，故保留本地实现+本指针（可逆）。
+3. `transcribe-poc-shell-a`（2026-10-10）落地 A 路径：主仓门面建立后执行薄壳化。**本文档"为何降级而非薄壳化"一节的判据已作废**——公开面现已存在（`vecboost::transcribe::{open, read_wav_16k_mono, detect_segments, transcribe_segment, TranscribeOpts}`），契约逐字保持（`CONTRACT.md`：五行 stdout、退出码 0/1/2、输出文件行为含 `--vad-only` 空 segments.txt 复刻）。
 
-**新消费方一律走主仓 API，不要再依赖本目录的本地推理实现。**
+## 实验通路退役说明
 
-## 为何降级而非薄壳化
+`TRANSCRIBE_ENV_POOL` / `TRANSCRIBE_BATCH` / `TRANSCRIBE_GPU` 三个实验旋钮随实验文件删除而退役——**结论已成文**于 `out/transcribe-poc/own-engine/summary.md`（§11：io-binding 非确定性读回；合批与 env-pool 实测档位），代码冗余正是薄壳化消除对象，非缺陷遗留。门禁若设置这些变量，薄壳 stderr 显性告警并忽略（禁静默）。
 
-薄壳化（POC 路径依赖主仓、删除本地推理实现）需要主仓公开面提供：VAD-only 分段、段级转录、wav 读取、会话旋钮（intra/no_spin/env-pool/cuda）——现有公开入口 `InferenceEngine::transcribe` 只有整文件串行语义，无法逐字保持 `CONTRACT.md` 契约（`--vad-only`、默认段级并行 4 workers、`TRANSCRIBE_ENV_POOL`/`TRANSCRIBE_BATCH`/`TRANSCRIBE_GPU` 旋钮）。裁定为保留原实现 + 本指针（完全可逆）。重新薄壳化的前置论证见归档变更的 `design.md` D1/D2。
+## 消费指引
 
-## 保留内容与用途
+- **新消费方**：服务面 `POST /api/1/transcribe`（`[transcribe] enabled=true`，需 `transcribe` feature）或库 API `vecboost::transcribe`；`transcribe-poc` 仅作 CLI/基准 harness 保留。
+- **重新薄壳化的前置论证**（如未来再评估）：见归档 `specmark/archive/2026-10-10-transcribe-poc-shell/design.md` D1/D2 与 `specmark/archive/2026-10-10-transcribe-poc-shell-a/design.md`。
 
-- `pytorch_backend.rs`：pyo3 基线对拍通路（GPU 1.7B bf16），供主仓 int8 引擎做精度/RTF 对照
-- `batch.rs`（lockstep 合批）/ `gpu.rs`（KV io-binding）：实验结论已记录于 `out/transcribe-poc/own-engine/summary.md`，代码随本目录保留备查
-- `CONTRACT.md`：自动门禁调用契约，**不是迁移对象**，保持原样
+## 勘误记录（2026-10-10）
 
-## 构建（仅实验用途）
-
-```bash
-ORT_DYLIB_PATH=<onnxruntime-1.28.2.so> cargo run --release --manifest-path transcribe-poc/Cargo.toml -- <wav> <outDir> [--models <dir>] [--vad-only]
-```
+- `specmark/archive/2026-10-10-transcribe-poc-shell/tasks.md` T004 稿称 stdout"四行契约"为旧稿；`CONTRACT.md` 与 delta spec R-transcribe-poc-cli-001（2026-10-09 勘误）均为**五行**（含 `TRANSCRIPT_CHARS`）。归档只读不改写，以 spec/CONTRACT 为准，特此勘误。

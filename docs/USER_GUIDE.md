@@ -186,6 +186,7 @@ cp config/config.toml config/config_custom.toml
 | `[semantic_cache]` | 语义缓存 `comparison_mode`（已废弃，配置保留但不生效）、`fuzzy_threshold` | oxcache |
 | `[device]` | 硬件感知规划 `auto_plan` | - |
 | `[translation]` | 翻译多语言对 `[[translation.pairs]]`（路由、bundle 路径、token 预算） | -（需 `onnx` feature） |
+| `[transcribe]` | 转录服务开关、Qwen3-ASR bundle 目录、VAD 阈值、会话旋钮（端点恒注册；未启用 400 `transcribe-not-configured`） | -（需 `transcribe` feature） |
 
 > **⚠️ 注意**：`[flow_control]` 与 `[cache]` 两个 TOML 段**当前版本不解析，编辑不生效**（历史遗留段名）；限流走 `[rate_limit]`，缓存走 `[embedding]` 与 `[semantic_cache]`。调优开关注册表见 [⚡ 性能指南](PERFORMANCE.md)。
 
@@ -679,6 +680,27 @@ max_files = 10                  # 保留的日志文件数量
 | `file_path` | `logs/vecboost.log` | 日志文件路径，空字符串表示不写入文件 |
 | `rotation_size_mb` | `100` | 单个日志文件轮转大小（MB），轮转后的历史文件自动压缩 |
 | `max_files` | `10` | 保留的日志文件数量 |
+
+---
+
+### 转录服务配置
+
+`[transcribe]` 段装配 Qwen3-ASR 转录服务（`transcribe` feature；端点
+`POST /api/1/transcribe` 与 gRPC `vecboost.transcribe` 恒注册）：
+
+```toml
+[transcribe]
+enabled = false                  # 缺省 false：未启用时请求 400 transcribe-not-configured
+models_dir = "models/qwen3-asr"  # 三图 + silero_vad.onnx + tokenizer/ 的 bundle 根
+vad_threshold = 0.5              # silero VAD 概率阈值
+intra_threads = 0                # 会话 intra 线程数（0 = available_parallelism）
+no_spin = false                  # ORT spin 控制
+cuda = false                     # CUDA EP（需带 CUDA 的 onnxruntime 动态库）
+```
+
+- `enabled=true` 时启动期急切装配，bundle 缺失 **fail-fast**（与 `[translation]` pairs 同口径）。
+- 输入契约为 16kHz 单声道 f32 样本（≤2h）；WAV 解码由客户端负责，参考 `transcribe-poc` 薄壳 CLI（读 wav → samples → 本端点）。
+- 长音频在服务内经 VAD 分段逐段解码；全静音输入返回空 `segments`/`text`（显性空响应）。
 
 ---
 

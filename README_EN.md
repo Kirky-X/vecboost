@@ -6,7 +6,7 @@
 
 [中文](README.md) | **English**
 
-**A high-performance, production-grade multi-task inference service written in Rust. VecBoost provides five inference capabilities — text embedding, reranking, decision answering, translation, and language detection — with multiple inference engines, GPU acceleration, and enterprise-grade features.**
+**A high-performance, production-grade multi-task inference service written in Rust. VecBoost provides six inference capabilities — text embedding, reranking, decision answering, translation, language detection, and speech transcription — with multiple inference engines, GPU acceleration, and enterprise-grade features.**
 
 [✨ Features](#features) • [🚀 Quick Start](#quick-start) • [📚 Documentation](#documentation) • [💻 Examples](#examples) • [🤝 Contributing](#contributing)
 
@@ -254,14 +254,14 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 | `cuda` | - | NVIDIA CUDA GPU acceleration |
 | `metal` | - | Apple Silicon Metal GPU |
 | `onnx` | - | ONNX Runtime engine |
-| `transcribe` | - | Qwen3-ASR transcription engine (three-graph + silero VAD + fbank), library-level `InferenceEngine::transcribe` entry; HTTP/gRPC endpoints not wired yet |
+| `transcribe` | - | Qwen3-ASR transcription engine (three-graph + silero VAD + fbank), library-level `InferenceEngine::transcribe` entry; HTTP/gRPC endpoints wired (`POST /api/1/transcribe`, configured under `[transcribe]`) |
 | `mkl` | - | x86_64 CPU MKL acceleration backend (opt-in; requires a toolchain that links cleanly) |
 | `accelerate` | - | aarch64 macOS Accelerate backend (opt-in) |
 | `quantized-gguf` | - | GGUF quantization engine switch (inference backend pending upstream candle support) |
 
 > **📦 Built-in dependencies**: `confers` (config), `inklog` (logging), `oxcache` (cache), `limiteron` (rate limiting), and `trait-kit` (module registry) are mandatory dependencies that are always enabled — no feature flag needed. `sdforge` is enabled by any protocol feature (`http`/`grpc`/`cli`/`mcp`).
 
-> **🧪 Experiment path**: `transcribe-poc/` (standalone crate, binary `transcribe-own`) is retained as the transcription experiment and benchmark path (lockstep batching, GPU io-binding, and py-torch baseline comparison — knobs not carried by the main crate) and is not shipped with the main crate; the productized implementation lives in `src/engine/transcribe/` — see [DEPRECATED.md](DEPRECATED.md).
+> **🧪 Experiment path**: `transcribe-poc/` (standalone crate, binary `transcribe-own`) has been converged into a thin-shell CLI — local inference removed, inference goes through the main-crate facade `vecboost::transcribe`; the py-torch baseline path is retained. The lockstep batching / GPU io-binding experiment knobs were retired with the experiment files (conclusions in `out/transcribe-poc/own-engine/summary.md`). The productized implementation lives in `src/engine/transcribe/` — see [DEPRECATED.md](DEPRECATED.md).
 
 ---
 
@@ -269,7 +269,7 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 
 The default config path is `config/config.toml` (`--config <path>` selects another; a missing explicit path fails fast with exit code 2; the repo ships `config_full.toml` / `config_minimal.toml` presets). Environment variables with the `VECBOOST_` prefix override the config file, and secrets (`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD`) must be provided via env vars; config file changes are validated and logged, taking effect after restart.
 
-Per-key options and defaults for every config section (server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device), the full environment-variable table, and a complete example config are documented in the [📖 User Guide · Configuration](docs/USER_GUIDE.md#配置); you can also read [`config/config.toml`](config/config.toml) directly.
+Per-key options and defaults for every config section (server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device / translation / transcribe), the full environment-variable table, and a complete example config are documented in the [📖 User Guide · Configuration](docs/USER_GUIDE.md#配置); you can also read [`config/config.toml`](config/config.toml) directly.
 
 > **⚠️ Note**: the `[flow_control]` and `[cache]` TOML sections are not parsed in the current version (legacy section names); rate limiting uses `[rate_limit]`, caching uses `[embedding]` and `[semantic_cache]`. See the [❓ FAQ](docs/FAQ.md#配置与部署).
 

@@ -6,7 +6,7 @@
 
 **中文** | [English](README_EN.md)
 
-**高性能、生产级多功能推理服务，使用 Rust 编写。VecBoost 提供文本嵌入、重排序、决策问答、翻译与语言检测五类推理能力，支持多种推理引擎、GPU 加速和企业级功能。**
+**高性能、生产级多功能推理服务，使用 Rust 编写。VecBoost 提供文本嵌入、重排序、决策问答、翻译、语言检测与语音转录六类推理能力，支持多种推理引擎、GPU 加速和企业级功能。**
 
 [✨ 功能特性](#功能特性) • [🚀 快速开始](#快速开始) • [📚 文档](#文档) • [💻 示例](#示例) • [🤝 参与贡献](#参与贡献)
 
@@ -282,14 +282,14 @@ curl -X POST http://localhost:9002/api/1/detect \
 | `cuda` | - | NVIDIA CUDA GPU 加速 |
 | `metal` | - | Apple Silicon Metal GPU |
 | `onnx` | - | ONNX Runtime 引擎 |
-| `transcribe` | - | Qwen3-ASR 转录引擎（三图 + silero VAD + fbank），库内 `InferenceEngine::transcribe` 入口；HTTP/gRPC 服务面未接线 |
+| `transcribe` | - | Qwen3-ASR 转录引擎（三图 + silero VAD + fbank），库内 `InferenceEngine::transcribe` 入口；HTTP/gRPC 服务面已接线（`POST /api/1/transcribe`，`[transcribe]` 段装配） |
 | `mkl` | - | x86_64 CPU MKL 加速后端（opt-in，需链接正常的工具链） |
 | `accelerate` | - | aarch64 macOS Accelerate 加速后端（opt-in） |
 | `quantized-gguf` | - | GGUF 量化引擎开关（推理后端待 candle 上游落地） |
 
 > **📦 内置依赖说明**: `confers`（配置）、`inklog`（日志）、`oxcache`（缓存）、`limiteron`（限流）、`trait-kit`（模块注册）为必选依赖，始终启用，无需通过 feature 开启。`sdforge` 在 `http`/`grpc`/`cli`/`mcp` 任一协议 feature 下启用。
 
-> **🧪 实验通路**: `transcribe-poc/`（独立 crate，二进制 `transcribe-own`）保留为转录实验与基准通路（含 lockstep 合批、GPU io-binding、py-torch 基线对拍等主 crate 未承接的旋钮），不随主 crate 发布；产品化转录实现见 `src/engine/transcribe/`，详见 [DEPRECATED.md](DEPRECATED.md)。
+> **🧪 实验通路**: `transcribe-poc/`（独立 crate，二进制 `transcribe-own`）已收敛为薄壳 CLI——本地推理实现删除、推理经主仓门面 `vecboost::transcribe`，保留 py-torch 基线对拍通路；lockstep 合批 / GPU io-binding 实验旋钮随实验文件退役（结论见 `out/transcribe-poc/own-engine/summary.md`）。产品化实现见 `src/engine/transcribe/`，详见 [DEPRECATED.md](DEPRECATED.md)。
 
 ---
 
@@ -297,7 +297,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 
 默认从 `config/config.toml` 读取（`--config <path>` 指定其他路径，路径不存在时 fail-fast 报错退出；预置 `config_full.toml` / `config_minimal.toml` 示例）。环境变量以 `VECBOOST_` 前缀覆盖配置文件，敏感项（`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD`）必须走环境变量；配置文件变更会校验并打日志，重启后生效。
 
-全部配置段（server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device）的逐项键位、默认值、环境变量全表与完整示例配置见 [📖 用户指南 · 配置](docs/USER_GUIDE.md#配置)，也可直接查看 [`config/config.toml`](config/config.toml)。
+全部配置段（server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device / translation / transcribe）的逐项键位、默认值、环境变量全表与完整示例配置见 [📖 用户指南 · 配置](docs/USER_GUIDE.md#配置)，也可直接查看 [`config/config.toml`](config/config.toml)。
 
 > **⚠️ 注意**：`[flow_control]` 与 `[cache]` 两个 TOML 段当前版本不解析（历史遗留段名）；限流走 `[rate_limit]`，缓存走 `[embedding]` 与 `[semantic_cache]`。见 [❓ FAQ](docs/FAQ.md#配置与部署)。
 

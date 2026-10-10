@@ -105,8 +105,9 @@ fn main() {
                 target_language: "zh".into(),
             };
             let s = Instant::now();
+            let outcome = InferenceEngine::translate(&engine, &req);
             let dt = s.elapsed();
-            match InferenceEngine::translate(&engine, &req) {
+            match outcome {
                 Ok(resp) => {
                     md.push_str(&format!(
                         "## {id}（{:.1}s）\n\n{}\n\n",

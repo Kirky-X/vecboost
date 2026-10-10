@@ -217,6 +217,7 @@ impl InferenceEngine for AnyEngine {
     /// 转录推理按变体转发：仅 Transcribe（Qwen3AsrEngine）有真实覆盖，其余引擎显性 UnsupportedTask。
     fn transcribe(
         &self,
+        #[cfg_attr(not(feature = "transcribe"), allow(unused_variables))]
         req: &crate::domain::TranscribeRequest,
     ) -> Result<crate::domain::TranscribeResponse, VecboostError> {
         match self {

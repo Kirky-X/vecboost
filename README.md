@@ -231,7 +231,7 @@ VecBoost 由 `sdforge` 从处理函数单一源生成四种协议接口（`src/a
 - **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 16 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto，含 `vecboost.translate` / `vecboost.detect`），JWT 认证、限流、最大连接数与超时均可配置；
 - **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露 `embed` / `embed_batch` / `similarity` / `decisions` / `translate` / `detect` / `list_models` 工具；
 - **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect 子命令（见 [💡 最小示例](#最小示例)）；
-- **推理引擎**：Candle（原生 Rust，默认）与 ONNX Runtime（`onnx` feature），经 `EngineFactory::create` 工厂切换；`[model]` 的 `engine_type` / `task` 配置驱动引擎与任务维度选择——`task = "embedding"`（默认）/ `task = "decision"`（Laya 决策管线）/ `task = "translate"`（seq2seq 翻译，仅 onnx）三态，非当前任务的端点以 400 Unsupported task 显性拒绝（bundle 布局见 [`config/config.toml`](config/config.toml) `[model]` 段注释，翻译语言对见 `[translation]` 段）；
+- **推理引擎**：Candle（原生 Rust，默认）与 ONNX Runtime（`onnx` feature），经 `EngineFactory::create` 工厂切换；`[model]` 的 `engine_type` / `task` 配置驱动引擎与任务维度选择——`task = "embedding"`（默认）/ `task = "decision"`（Laya 决策管线）/ `task = "translate"`（seq2seq 翻译，仅 onnx）/ `task = "transcribe"`（Qwen3-ASR 转录，需 `transcribe` feature）四态，非当前任务的端点以 400 Unsupported task 显性拒绝（bundle 布局见 [`config/config.toml`](config/config.toml) `[model]` 段注释，翻译语言对见 `[translation]` 段）；
 - **可观测性与运维**：`/metrics`（Prometheus 指标）、`/health`（存活探针）与 `/health?depth=full`（真实就绪探测）、`/api-docs`（Swagger UI）；只读诊断 `vecboost doctor`（config / tokenizer / 缓存 / 线程 / GPU / 模型完整性，FAIL 退出码 1）。
 
 翻译与语言检测请求示例（与 [API 参考](docs/API_REFERENCE.md) 字段一致）：
@@ -259,6 +259,8 @@ curl -X POST http://localhost:9002/api/1/detect \
 ```
 
 > **⚠️ 前置**：翻译需 `--features onnx` 构建并在 `[translation]` 段配置 `[[translation.pairs]]` 语言对（缺省请求以 400 `translate-not-configured` 显性拒绝）；语言检测无模型依赖，任何构建均可用。
+
+> **🔧 译文后处理与超时**：翻译在引擎出口做确定性后处理（服务层与库用户同享）——`target=zh` 时繁→简归一化、URL 协议分隔符与 LaTeX 转义符号修复；模型级高频误译经 `[[translation.pairs.output_fixes]]` 字面替换表（按声明序）修复，见 [`config/config.toml`](config/config.toml) `[translation]` 段。HTTP 全局请求超时经 `[server] request_timeout_seconds` 配置（CPU seq2seq 译论文级长摘要需 15-130+s，`config/config.toml` 已显式设 300s）。
 
 交互式 OpenAPI 文档：`http://localhost:9002/api-docs`（Swagger UI）与 `/api-docs/openapi.json`（规范 JSON，需 `openapi` feature；ReDoc 推迟到 v0.3.0）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/PERFORMANCE.md#新增指标)。
 

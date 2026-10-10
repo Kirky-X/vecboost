@@ -29,6 +29,10 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
+// 本 target 只消费 free_port/model_ready；TestServer 等其余条目由 integration
+// target 消费——dead-code 按 target 计，显性 allow（grpc 特性开启时本 target
+// 含 mod common 但不用 TestServer，否则 -D warnings 误判）。
+#[allow(dead_code)]
 mod common;
 use common::{free_port, model_ready};
 

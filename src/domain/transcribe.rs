@@ -18,8 +18,20 @@ pub const TRANSCRIBE_MAX_SAMPLES: usize = TRANSCRIBE_SAMPLE_RATE * TRANSCRIBE_MA
 
 /// 转录请求：16kHz 单声道 f32 样本（取值 `[-1,1]`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct TranscribeRequest {
     pub samples: Vec<f32>,
+}
+
+impl std::str::FromStr for TranscribeRequest {
+    /// # 红线（cli/grpc forge 落地时）
+    /// `Err = serde_json::Error` 携带内部结构名与字节偏移，handler 必须
+    /// 映射为通用 `VecboostError::validation_error` 文案，禁止原样透传客户端
+    /// （translate 同款红线，src/domain/translate.rs:29-37）。
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
 }
 
 impl TranscribeRequest {
@@ -48,6 +60,7 @@ impl TranscribeRequest {
 
 /// 单个语音段：起止秒 + 段文本。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct TranscribeSegment {
     pub start_sec: f64,
     pub end_sec: f64,
@@ -56,6 +69,7 @@ pub struct TranscribeSegment {
 
 /// 转录响应：`text` 为 `segments` 文本按序拼接；全静音输入 segments 为空、text 为空。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 pub struct TranscribeResponse {
     pub text: String,
     pub segments: Vec<TranscribeSegment>,

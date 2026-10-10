@@ -197,7 +197,7 @@ cargo run --features cli -- embed --text "Hello, world!"
 
 VecBoost generates its four protocol interfaces from single-source handlers via `sdforge` (one source per domain under `src/api/`: embedding / rerank / decisions / translate / detect). All endpoints, parameters, request/response examples, the gRPC method table, and message types are documented in the [📘 API Reference](docs/API_REFERENCE.md); summary:
 
-- **HTTP/REST**: `/api/1/*` provides embedding (single / batch / file), similarity, semantic search, rerank, decision answering (choice/score/noul), translation (multi-pair + auto detection), language detection, model management, and health endpoints;
+- **HTTP/REST**: `/api/1/*` provides embedding (single / batch / file), similarity, semantic search, rerank, decision answering (choice/score/noul), translation (multi-pair + auto detection), transcription (16kHz speech samples to text, `transcribe` feature), language detection, model management, and health endpoints;
 - **OpenAI-compatible**: `POST /v1/embeddings`, responding in the OpenAI format (`object` / `data` / `usage`) with `encoding_format=base64` support;
 - **Matryoshka dimensionality reduction**: pass `dimensions` (256/512/1024, etc.) to `/v1/embeddings` for smaller, faster vectors; truncated vectors are automatically L2 re-normalized to keep cosine similarity correct;
 - **gRPC**: with the `grpc` feature, 16 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — including `vecboost.translate` / `vecboost.detect`, with JWT auth, rate limiting, max connections, and timeouts all configurable;

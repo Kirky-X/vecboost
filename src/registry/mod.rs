@@ -36,6 +36,12 @@ pub struct DetectModule;
 /// `Arc<TranslateService>` 共享句柄（非 `Arc<RwLock<>>`，无内部可变性需求）。
 pub struct TranslateModule;
 
+/// 转录服务模块 — 提供 `Arc<TranscribeService>` 能力
+///
+/// 服务构造后不可变（无 replace_engine 入口），Capability 为
+/// `Arc<TranscribeService>` 共享句柄（引擎内部 asr Mutex 串行化推理）。
+pub struct TranscribeModule;
+
 /// 认证模块 — 提供 `Option<Arc<GarrisonHandle>>` 能力（需要 auth feature）
 #[cfg(feature = "auth")]
 pub struct AuthModule;

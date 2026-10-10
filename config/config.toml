@@ -468,3 +468,16 @@ min_new_tokens = 16
 source_language = "en"
 target_language = "es"
 model_path = "models/m2m100_418M"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 转录服务（[transcribe] 段；transcribe-poc HTTP/gRPC 服务面接线）
+# enabled=false 缺省：端点仍注册，任意请求 400 transcribe-not-configured。
+# 启用需 --features transcribe 构建；bundle 指向 Qwen3-ASR 三图 +
+# silero_vad.onnx + tokenizer/ 的目录，缺失则启动期 fail-fast。
+[transcribe]
+enabled = false
+models_dir = "models/qwen3-asr"
+vad_threshold = 0.5
+intra_threads = 0
+no_spin = false
+cuda = false

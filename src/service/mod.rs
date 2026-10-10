@@ -6,4 +6,5 @@ pub mod decision;
 pub mod detect;
 pub mod embedding;
 pub mod rerank;
+pub mod transcribe;
 pub mod translate;

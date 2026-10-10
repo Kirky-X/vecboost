@@ -42,6 +42,9 @@ pub struct VecboostConfig {
     /// 翻译语言对配置（`[translation]` 段 + `[[translation.pairs]]` 数组表）：
     /// 缺省空表 = 未配置，端点仍注册（translate-not-configured 400 显性拒绝）
     pub translation: TranslationConfig,
+    /// 转录服务配置（`[transcribe]` 段）：`enabled=false` 缺省 = 端点注册但
+    /// 不装配引擎（transcribe-not-configured 400 显性拒绝）
+    pub transcribe: crate::config::app::TranscribeConfig,
     pub monitoring: MonitoringConfig,
     pub auth: AuthConfig,
     pub rate_limit: RateLimitConfig,

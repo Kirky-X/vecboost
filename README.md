@@ -225,7 +225,7 @@ cargo run --features cli -- embed --text "Hello, world!"
 
 VecBoost 由 `sdforge` 从处理函数单一源生成四种协议接口（`src/api/` 下 embedding / rerank / decisions / translate / detect 各域一份单一源）。全部端点、参数、请求/响应示例、gRPC 方法表与消息类型见 [📘 API 参考](docs/API_REFERENCE.md)，概要如下：
 
-- **HTTP/REST**：`/api/1/*` 提供嵌入（单文本/批量/文件）、相似度、语义检索、重排序、决策问答（choice/score/noul）、翻译（多语言对 + auto 检测）、语言检测、模型管理与健康检查端点；
+- **HTTP/REST**：`/api/1/*` 提供嵌入（单文本/批量/文件）、相似度、语义检索、重排序、决策问答（choice/score/noul）、翻译（多语言对 + auto 检测）、转录（16kHz 语音样本 → 文本，`transcribe` feature）、语言检测、模型管理与健康检查端点；
 - **OpenAI 兼容**：`POST /v1/embeddings`，响应遵循 OpenAI 格式（`object` / `data` / `usage`），支持 `encoding_format=base64`；
 - **Matryoshka 维度约简**：`/v1/embeddings` 传 `dimensions`（256/512/1024 等）换取更小更快的向量，截断后自动 L2 重归一化保证余弦相似度正确；
 - **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 16 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto，含 `vecboost.translate` / `vecboost.detect`），JWT 认证、限流、最大连接数与超时均可配置；

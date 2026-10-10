@@ -671,6 +671,56 @@ auto 检测时 `source_language` 为 `null`、`detected_source_language` 回填�
 
 ---
 
+### 转录（Transcribe）
+
+将 16kHz 单声道 f32 语音样本转录为文本（Qwen3-ASR：silero VAD 分段 → 逐段解码 → 段序拼接；`transcribe` feature，阻塞推理经 spawn_blocking 隔离）。
+
+**端点:** `POST /api/1/transcribe`
+
+> **⚠️ 配置语义**: 引擎来自 `[transcribe]` 配置段（`enabled`/`models_dir`/`vad_threshold`，启动期急切构建）；`enabled=false` 或 `transcribe` feature 未启用时端点仍注册，任意请求返回 `400`（`transcribe-not-configured`）。
+>
+> **行为**: 客户端负责 WAV 解码（16kHz 单声道 f32 `[-1,1]`，≤2 小时）；域层校验非空/全有限值/长度上限。VAD 分段为空（全静音）时 `segments` 为空、`text` 为空（显性空响应，非错误）。并发请求经 permits=1 信号量串行，排队即 `503`。
+>
+> **无 CLI 子命令**: 域契约为样本数组，CLI 逐样本传参无实用形态；音频文件入参路径由 `transcribe-poc` 薄壳 CLI（读 wav → samples → 本端点）承接。
+
+**请求字段:**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `samples` | array<number> | ✅ | 16kHz 单声道 f32 样本（`[-1,1]`；非空/全有限值/≤2h，违规 400） |
+
+**请求示例:**
+
+```bash
+curl -X POST http://localhost:9002/api/1/transcribe   -H "Content-Type: application/json"   -d '{"samples": [0.01, -0.02, 0.0]}'
+```
+
+**响应:**
+
+```json
+{
+  "text": "你好世界",
+  "segments": [
+    {
+      "start_sec": 0.0,
+      "end_sec": 5.12,
+      "text": "你好世界"
+    }
+  ],
+  "processing_time_ms": 4210
+}
+```
+
+`text` 恒等于各段 `text` 按序拼接（域层不变式）；`processing_time_ms` 为服务端墙钟。
+
+**错误码 400 语义:**
+
+| 消息键 | 触发条件 |
+|--------|----------|
+| `transcribe-not-configured` | `[transcribe] enabled=false` 或 `transcribe` feature 未启用 |
+
+---
+
 ### 语言检测（Detect）
 
 检测文本的自然语言（whatlang n-gram 统计，µs 级纯 CPU，无模型依赖；亦是翻译 auto 检测的同一事实源）。

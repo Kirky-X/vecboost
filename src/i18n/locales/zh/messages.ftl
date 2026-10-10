@@ -174,3 +174,4 @@ heat-parse-failed = 模型热度表：{ $path } 解析失败（{ $detail }），
 heat-schema-mismatch = 模型热度表：schema 版本不匹配（文件 { $got }，期望 { $expected }），弃用
 heat-entry-fingerprint-mismatch = 模型热度表：条目 '{ $name }' 指纹不匹配，弃用该条
 doctor-tokenizer-vocab-missing = ；⚠️ 未按内容识别到 tokenizer 词表文件
+transcribe-not-configured = 翻译服务未配置：请在 [transcribe] 配置段设置 enabled = true 与 models_dir

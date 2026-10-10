@@ -138,11 +138,11 @@ use vecboost::{
         AuditModule, CacheConfig, CacheModule, ConfigWatcherModule, DbConfig, DbModule,
         DecisionModule, DetectModule, EmbeddingModule, IpWhitelistModule, MetricsCollectorModule,
         PipelineQueueModule, PriorityCalculatorModule, PrometheusCollectorModule, RerankModule,
-        ResponseChannelModule, TranslateModule, WorkerManagerModule,
+        ResponseChannelModule, TranscribeModule, TranslateModule, WorkerManagerModule,
     },
     service::{
         decision::DecisionService, detect::DetectService, embedding::EmbeddingService,
-        rerank::RerankService, translate::TranslateService,
+        rerank::RerankService, transcribe::TranscribeService, translate::TranslateService,
     },
 };
 
@@ -467,6 +467,32 @@ fn attach_semantic_cache(service: EmbeddingService, config: &VecboostConfig) -> 
     service.with_semantic_cache(semantic)
 }
 
+/// 转录服务装配：`[transcribe] enabled=true` 时经公开门面
+/// `vecboost::transcribe::open` 急切构建会话（bundle 缺失 fail-fast，与
+/// translation pairs 同口径）；否则未装配（端点注册、请求 400
+/// transcribe-not-configured）。
+#[cfg(feature = "transcribe")]
+fn build_transcribe_service(config: &VecboostConfig) -> anyhow::Result<TranscribeService> {
+    if !config.transcribe.enabled {
+        return Ok(TranscribeService::unconfigured());
+    }
+    let opts = vecboost::transcribe::TranscribeOpts {
+        intra_threads: config.transcribe.intra_threads,
+        no_spin: config.transcribe.no_spin,
+        cuda: config.transcribe.cuda,
+        vad_threshold: config.transcribe.vad_threshold,
+    };
+    let session =
+        vecboost::transcribe::open(std::path::Path::new(&config.transcribe.models_dir), &opts)
+            .map_err(|e| anyhow::anyhow!("transcribe session open: {e}"))?;
+    Ok(TranscribeService::new(session))
+}
+
+#[cfg(not(feature = "transcribe"))]
+fn build_transcribe_service(_config: &VecboostConfig) -> anyhow::Result<TranscribeService> {
+    Ok(TranscribeService::unconfigured())
+}
+
 /// 翻译路由表：启动期消费 [translation].pairs 逐 pair 急切构建
 /// （EngineFactory task=translate 分派臂），任一 bundle 缺失 fail-fast；
 /// 空 pairs = 空表服务（端点注册、请求 400 translate-not-configured）。
@@ -570,6 +596,7 @@ async fn init_engine_and_services(
     Arc<RwLock<DecisionService>>,
     DetectService,
     Arc<TranslateService>,
+    Arc<TranscribeService>,
     ModelConfig,
 )> {
     let model_config = resolve_engine_model_config(config)?;
@@ -648,6 +675,17 @@ async fn init_engine_and_services(
         translate_service.configured_pairs().len()
     );
 
+    // 转录服务：enabled=false 或 transcribe feature 未启用 → 端点注册但不装配
+    // （transcribe-not-configured 400 显性拒绝）。引擎经 [transcribe].models_dir
+    // 急切装配（bundle 缺失 fail-fast，与 translation pairs 同口径）。
+    let transcribe_service = Arc::new(build_transcribe_service(config)?);
+    if transcribe_service.is_configured() {
+        log::info!(
+            "transcribe service initialized: bundle={}",
+            config.transcribe.models_dir
+        );
+    }
+
     Ok((
         engine,
         service,
@@ -655,6 +693,7 @@ async fn init_engine_and_services(
         decision_service,
         detect_service,
         translate_service,
+        transcribe_service,
         model_config,
     ))
 }
@@ -666,6 +705,7 @@ async fn run_mcp_server(
     decision_service: Arc<RwLock<DecisionService>>,
     detect_service: DetectService,
     translate_service: Arc<TranslateService>,
+    transcribe_service: Arc<TranscribeService>,
 ) -> anyhow::Result<()> {
     use sdforge::rmcp::{ServiceExt, transport::io::stdio};
 
@@ -676,6 +716,7 @@ async fn run_mcp_server(
     kit.set_config(decision_service);
     kit.set_config(detect_service);
     kit.set_config(translate_service.clone());
+    kit.set_config(transcribe_service.clone());
     kit.register::<EmbeddingModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RerankModule>()
@@ -686,6 +727,8 @@ async fn run_mcp_server(
         .map_err(|e| anyhow::anyhow!("Failed to register DetectModule: {}", e))?;
     kit.register::<TranslateModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register TranslateModule: {}", e))?;
+    kit.register::<TranscribeModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register TranscribeModule: {}", e))?;
     let kit = kit
         .build()
         .await
@@ -759,6 +802,7 @@ async fn run_cli_command(
     decision_service: Arc<RwLock<DecisionService>>,
     detect_service: DetectService,
     translate_service: Arc<TranslateService>,
+    transcribe_service: Arc<TranscribeService>,
     cli_args: Vec<String>,
 ) -> anyhow::Result<bool> {
     let cli_cmd = CliBuilder::new().with_name("vecboost").build();
@@ -782,6 +826,7 @@ async fn run_cli_command(
     kit.set_config(decision_service);
     kit.set_config(detect_service);
     kit.set_config(translate_service.clone());
+    kit.set_config(transcribe_service.clone());
     kit.register::<EmbeddingModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RerankModule>()
@@ -792,6 +837,8 @@ async fn run_cli_command(
         .map_err(|e| anyhow::anyhow!("Failed to register DetectModule: {}", e))?;
     kit.register::<TranslateModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register TranslateModule: {}", e))?;
+    kit.register::<TranscribeModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register TranscribeModule: {}", e))?;
     let kit = kit
         .build()
         .await
@@ -1350,6 +1397,7 @@ async fn app_main() -> anyhow::Result<()> {
         decision_service,
         detect_service,
         translate_service,
+        transcribe_service,
         _model_config,
     ) = init_engine_and_services(&config, &checkpoints).await?;
 
@@ -1366,6 +1414,7 @@ async fn app_main() -> anyhow::Result<()> {
         &decision_service,
         &detect_service,
         &translate_service,
+        &transcribe_service,
         &_filtered_args,
     )
     .await?
@@ -1388,6 +1437,7 @@ async fn app_main() -> anyhow::Result<()> {
         decision_service,
         detect_service,
         translate_service,
+        transcribe_service,
         logger_manager,
         security,
         #[cfg(feature = "db")]
@@ -1736,6 +1786,7 @@ async fn dispatch_non_server_modes(
     decision_service: &Arc<RwLock<DecisionService>>,
     detect_service: &DetectService,
     translate_service: &Arc<TranslateService>,
+    transcribe_service: &Arc<TranscribeService>,
     _filtered_args: &[String],
 ) -> anyhow::Result<bool> {
     #[cfg(feature = "mcp")]
@@ -1748,6 +1799,7 @@ async fn dispatch_non_server_modes(
             decision_service.clone(),
             *detect_service,
             translate_service.clone(),
+            transcribe_service.clone(),
         )
         .await?;
         return Ok(true);
@@ -1760,6 +1812,7 @@ async fn dispatch_non_server_modes(
         decision_service.clone(),
         *detect_service,
         translate_service.clone(),
+        transcribe_service.clone(),
         _filtered_args.to_vec(),
     )
     .await?
@@ -1782,6 +1835,7 @@ async fn assemble_and_serve_http(
     decision_service: Arc<RwLock<DecisionService>>,
     detect_service: DetectService,
     translate_service: Arc<TranslateService>,
+    transcribe_service: Arc<TranscribeService>,
     logger_manager: Arc<inklog::LoggerManager>,
     security: SecurityStack,
     #[cfg(feature = "db")] _db_pool: crate::DbPool,
@@ -1798,6 +1852,7 @@ async fn assemble_and_serve_http(
         decision_service.clone(),
         detect_service,
         translate_service,
+        transcribe_service,
         security.rate_limiter.clone(),
         audit_logger.clone(),
         pipeline_queue.clone(),
@@ -2395,6 +2450,8 @@ fn register_all_modules(kit: &mut trait_kit::AsyncKit) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to register DetectModule: {}", e))?;
     kit.register::<TranslateModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register TranslateModule: {}", e))?;
+    kit.register::<TranscribeModule>()
+        .map_err(|e| anyhow::anyhow!("Failed to register TranscribeModule: {}", e))?;
     kit.register::<CacheModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register CacheModule: {}", e))?;
     kit.register::<DbModule>()
@@ -2443,6 +2500,7 @@ async fn build_module_registry(
     decision_service: Arc<RwLock<DecisionService>>,
     detect_service: DetectService,
     translate_service: Arc<TranslateService>,
+    transcribe_service: Arc<TranscribeService>,
     rate_limiter: Arc<LimiteronAdapter>,
     audit_logger: Option<Arc<AuditLogger>>,
     pipeline_queue: Arc<PriorityRequestQueue>,
@@ -2473,6 +2531,7 @@ async fn build_module_registry(
     kit.set_config(decision_service.clone());
     kit.set_config(detect_service);
     kit.set_config(translate_service);
+    kit.set_config(transcribe_service);
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {
         enabled: config.embedding.cache_enabled,

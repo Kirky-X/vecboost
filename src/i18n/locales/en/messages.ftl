@@ -174,3 +174,4 @@ heat-parse-failed = model heat: failed to parse { $path } ({ $detail }); file di
 heat-schema-mismatch = model heat: schema version mismatch (file { $got }, expected { $expected }); file discarded
 heat-entry-fingerprint-mismatch = model heat: entry '{ $name }' fingerprint mismatch; entry discarded
 doctor-tokenizer-vocab-missing = ; ⚠️ tokenizer vocab file not identified by content
+transcribe-not-configured = Transcription service is not configured: set enabled = true and models_dir under [transcribe]

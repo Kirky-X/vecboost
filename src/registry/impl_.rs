@@ -24,8 +24,8 @@ use super::RateLimitModule;
 use super::{
     AuditModule, CacheConfig, CacheModule, ConfigWatcherModule, DbConfig, DbModule, DecisionModule,
     DetectModule, EmbeddingModule, IpWhitelistModule, MetricsCollectorModule, PipelineQueueModule,
-    PriorityCalculatorModule, RerankModule, ResponseChannelModule, TranslateModule,
-    WorkerManagerModule,
+    PriorityCalculatorModule, RerankModule, ResponseChannelModule, TranscribeModule,
+    TranslateModule, WorkerManagerModule,
 };
 use crate::audit::AuditLogger;
 #[cfg(feature = "auth")]
@@ -37,6 +37,7 @@ use crate::service::decision::DecisionService;
 use crate::service::detect::DetectService;
 use crate::service::embedding::EmbeddingService;
 use crate::service::rerank::RerankService;
+use crate::service::transcribe::TranscribeService;
 use crate::service::translate::TranslateService;
 use crate::{
     metrics::InferenceCollector,
@@ -250,6 +251,54 @@ impl AsyncLifecycle for TranslateModule {
 impl AsyncHealthCheck for TranslateModule {
     fn check(_cap: &Self::Capability) -> HealthStatus {
         HealthStatus::Healthy
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TranscribeModule
+// ---------------------------------------------------------------------------
+
+impl ModuleMeta for TranscribeModule {
+    const NAME: &'static str = "transcribe";
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION"); // negotiate：模块能力自声明
+
+    fn dependencies() -> &'static [(&'static str, std::any::TypeId)] {
+        &[]
+    }
+}
+
+impl AsyncAutoBuilder for TranscribeModule {
+    type Capability = Arc<TranscribeService>;
+    type Error = TraitKitError;
+
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { kit.config::<Self::Capability>() })
+    }
+}
+
+impl AsyncLifecycle for TranscribeModule {
+    fn on_ready<'a>(
+        _kit: &'a AsyncKit<trait_kit::AsyncReady>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
+        Box::pin(async {
+            log::info!("TranscribeModule: transcribe service ready");
+            Ok(())
+        })
+    }
+}
+
+impl AsyncHealthCheck for TranscribeModule {
+    fn check(cap: &Self::Capability) -> HealthStatus {
+        // 未装配 = Degraded（端点应答 400 transcribe-not-configured，非崩溃）
+        if cap.is_configured() {
+            HealthStatus::Healthy
+        } else {
+            HealthStatus::Degraded {
+                detail: "transcribe engine not configured (endpoint answers 400 transcribe-not-configured)".into(),
+            }
+        }
     }
 }
 

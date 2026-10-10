@@ -182,6 +182,45 @@ impl Default for TranslationConfig {
     }
 }
 
+/// 转录服务配置（`[transcribe]` 段）：Qwen3-ASR 引擎启动装配。
+/// `enabled=false`（缺省）= 端点仍注册、请求以 transcribe-not-configured 400
+/// 显性拒绝（同 translate 空表口径，禁 404 禁 500）。
+#[derive(Debug, Clone, Deserialize, Serialize, garde::Validate, schemars::JsonSchema)]
+#[serde(default)]
+pub struct TranscribeConfig {
+    /// 是否启用转录服务面（false = 端点注册但不装配引擎）
+    #[garde(skip)]
+    pub enabled: bool,
+    /// 模型 bundle 目录（三图 + silero_vad.onnx + tokenizer/）
+    #[garde(length(min = 1))]
+    pub models_dir: String,
+    /// silero VAD 概率阈值（引擎级缺省 0.5）
+    #[garde(range(min = 0.0, max = 1.0))]
+    pub vad_threshold: f32,
+    /// 会话 intra 线程数（0 = available_parallelism）
+    #[garde(skip)]
+    pub intra_threads: usize,
+    /// ORT spin 控制（false = 关自旋）
+    #[garde(skip)]
+    pub no_spin: bool,
+    /// CUDA EP（需带 CUDA 的 onnxruntime 动态库）
+    #[garde(skip)]
+    pub cuda: bool,
+}
+
+impl Default for TranscribeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            models_dir: "models/qwen3-asr".to_string(),
+            vad_threshold: 0.5,
+            intra_threads: 0,
+            no_spin: false,
+            cuda: false,
+        }
+    }
+}
+
 impl TranslationConfig {
     /// 配置面校验：语言码格式（与域层/服务层同一谓词）、model_path 非空、
     /// (source,target) 重复对显性拒绝（路由表会静默覆盖后者，必须在

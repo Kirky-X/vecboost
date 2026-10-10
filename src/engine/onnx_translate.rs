@@ -2151,6 +2151,67 @@ mod tests {
         );
     }
 
+    /// 并行失败路径（R-009 验收）：长输入中夹入超预算句（>max_source_tokens）
+    /// → 整请求显性 Err，禁静默丢句 Partial。
+    #[test]
+    fn test_parallel_failure_is_explicit_not_partial() {
+        let Some(dir) = m2m100_bundle() else {
+            eprintln!("SKIP: models/m2m100_418M 缺失（离线环境）");
+            return;
+        };
+        let dylib = std::env::var("ORT_DYLIB_PATH")
+            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+        if !std::path::Path::new(&dylib).is_file() {
+            eprintln!("SKIP: onnxruntime dylib 缺失（{dylib}）");
+            return;
+        }
+        if std::env::var_os("ORT_DYLIB_PATH").is_none() {
+            // SAFETY: 测试进程内单线程时点回填一次
+            unsafe {
+                std::env::set_var("ORT_DYLIB_PATH", &dylib);
+            }
+        }
+        let config = ModelConfig {
+            name: "m2m100-parallel-fail".to_string(),
+            engine_type: crate::config::model::EngineType::Onnx,
+            model_path: dir,
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+            task: ModelTask::Translate,
+            quantized: false,
+            decision_params: None,
+            translation_params: None,
+            transcription_params: None,
+        };
+        let engine = OnnxTranslationEngine::load(&config).expect("bundle 就绪时必须可加载");
+        // 首句正常但整体超 600 字符阈值触发并行；次句 3600 连续字符（无句读）
+        // 单句必超 512 source token 预算 → budget 失败必须显性暴露
+        let mut text = String::from("We study graph neural networks for drug discovery. ");
+        text.push_str(&"molecule ".repeat(600));
+        let req = TranslateRequest {
+            text,
+            source_language: Some("en".to_string()),
+            target_language: "zh".to_string(),
+        };
+        let err = OnnxTranslationEngine::translate(&engine, &req)
+            .expect_err("超预算句必须显性失败，禁丢句 Partial");
+        assert!(
+            matches!(err, VecboostError::InferenceError(_)),
+            "并行失败应为 InferenceError（禁静默丢句）: {err:?}"
+        );
+        let dbg = format!("{err:?}");
+        assert!(
+            dbg.contains("budget") || dbg.contains("token"),
+            "错误应指向预算违规: {dbg}"
+        );
+    }
+
     #[test]
     fn test_simplify_chinese_output_normalizes_variants() {
         assert_eq!(

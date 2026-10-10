@@ -50,6 +50,16 @@ impl Qwen3AsrEngine {
     /// 加载三图 + VAD 路径 + tokenizer。bundle 缺失/IO 断言失败 → `ModelLoadError`
     /// （含实际路径，由 `Qwen3Asr::new` 显性抛出）。
     pub(crate) fn load(config: &ModelConfig) -> Result<Self, VecboostError> {
+        Self::load_with_session_opts(config, 0, false)
+    }
+
+    /// 同 `load`，但显式会话旋钮（门面 `TranscribeOpts` 透传：intra 线程数与
+    /// spin 控制）。Factory 路径走 `load` 缺省（库内默认 0/关自旋=false）。
+    pub(crate) fn load_with_session_opts(
+        config: &ModelConfig,
+        intra_threads: usize,
+        no_spin: bool,
+    ) -> Result<Self, VecboostError> {
         let models_dir = config
             .transcription_params
             .as_ref()
@@ -64,8 +74,8 @@ impl Qwen3AsrEngine {
         // 库内默认：intra 未显式设置（0 → available_parallelism），不关自旋，
         // CUDA 仅当 device=Cuda 时启用（transcribe feature 已带 ort/cuda）。
         let opts = AsrSessionOpts {
-            intra_threads: 0,
-            no_spin: false,
+            intra_threads,
+            no_spin,
             cuda: config.device == DeviceType::Cuda,
         };
         let asr = Qwen3Asr::new(&models_dir, &opts)?;
@@ -163,6 +173,36 @@ impl InferenceEngine for Qwen3AsrEngine {
             });
         }
         Ok(TranscribeResponse::from_segments(out))
+    }
+}
+
+impl Qwen3AsrEngine {
+    /// VAD-only 分段（门面消费：`transcribe-poc --vad-only` 与调用方段级
+    /// 并行调度都只要分段、不要解码）。每调用新建 VAD 模型（全新 LSTM 状态），
+    /// 与 `transcribe()` 内部分段同参同构。
+    pub(crate) fn detect_vad_segments(
+        &self,
+        samples: &[f32],
+    ) -> Result<Vec<(i64, i64)>, VecboostError> {
+        let vad_config = VadConfig {
+            threshold: self.vad_threshold,
+            ..VadConfig::default()
+        };
+        let model = SileroVadModel::new(&self.vad_model_path, &vad_config)?;
+        let segments = detect_segments(model, samples, &vad_config)?;
+        Ok(segments.into_iter().map(|s| (s.start, s.end)).collect())
+    }
+
+    /// 段级转录（mel + 贪心解码；VAD 已由调用方完成——门面并行路径每 worker
+    /// 持本会话对分配段调用）。阻塞同步，可重入（内部 asr Mutex 串行化）。
+    pub(crate) fn transcribe_segment(&self, samples: &[f32]) -> Result<String, VecboostError> {
+        let mel = self.fbank.compute(samples);
+        let num_frames = frame_count(&mel);
+        let mut asr = self
+            .asr
+            .lock()
+            .map_err(|e| VecboostError::InferenceError(format!("asr mutex poisoned: {e}")))?;
+        asr.transcribe(&mel, num_frames, &self.tokenizer)
     }
 }
 

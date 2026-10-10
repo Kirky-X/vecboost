@@ -27,6 +27,8 @@ pub mod rate_limit;
 pub mod registry;
 pub mod security;
 pub mod service;
+#[cfg(feature = "transcribe")]
+pub mod transcribe;
 pub mod utils;
 
 pub mod logger;

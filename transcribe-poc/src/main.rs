@@ -1,20 +1,19 @@
-//! transcribe-own：自研 Qwen3-ASR 转录管线 PoC（VAD → whisper log-mel fbank →
-//! conv_frontend → encoder → KV-cache 贪心解码 → BPE 还原）。`--vad-only` 只跑
-//! VAD。stdout 契约见 transcribe-poc/CONTRACT.md：运行关键行外不得有任何 stdout 输出。
+//! transcribe-own：Qwen3-ASR 转录管线的薄壳 CLI（transcribe-poc-shell-a）。
+//!
+//! 推理实现已并入主仓 `vecboost`（`transcribe` feature，`src/engine/transcribe/`），
+//! 本 crate 只保留 CLI 解析 / 路径归一化 / 段级并行调度 / stdout 契约与
+//! py-torch 基线对拍通路。契约见 `CONTRACT.md`：运行关键行外不得有任何
+//! stdout 输出；退出码 0 成功 / 2 用法错误 / 1 运行失败。
 
-mod asr;
-mod batch;
-mod features;
-mod gpu;
 mod pytorch_backend;
-mod tokenizer;
-mod vad;
-mod wav;
 
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+
+use vecboost::transcribe::{TRANSCRIBE_SAMPLE_RATE_HZ, TranscribeOpts, open, read_wav_16k_mono};
 
 const USAGE: &str = "usage: transcribe-own <wav> <outDir> [--models <dir>] [--vad-only]";
 
@@ -56,14 +55,18 @@ fn parse_args() -> Result<Args, String> {
 
 /// 门禁经 ORT_DYLIB_PATH 显式指定；未设置时回退 worktree 3rdparty 同一 dylib，
 /// 便于本地裸跑（CONTRACT.md：库文件在 worktree 3rdparty/，主仓只读复制件）。
-fn resolve_ort_dylib() -> String {
-    std::env::var("ORT_DYLIB_PATH").unwrap_or_else(|_| {
-        concat!(
+/// 主仓 vecboost 以 `ort/load-dynamic` 消费该环境变量加载动态库。
+fn resolve_ort_dylib() {
+    if std::env::var_os("ORT_DYLIB_PATH").is_none() {
+        let fallback = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../3rdparty/libonnxruntime.so.1.28.2"
-        )
-        .to_string()
-    })
+        );
+        // SAFETY: 启动期单线程时点设置一次；load-dynamic 后续读取
+        unsafe {
+            std::env::set_var("ORT_DYLIB_PATH", fallback);
+        }
+    }
 }
 
 /// 剥除路径中的全角括号注释段（如 "…/assets（…说明…）/smoke10s.wav"）。
@@ -108,6 +111,41 @@ fn normalize_arg_path(raw: &str, must_exist: bool) -> (PathBuf, bool) {
     }
 }
 
+/// 并行度旋钮：TRANSCRIBE_WORKERS / TRANSCRIBE_INTRA，默认 4 × 2
+/// （nproc=12 实测，4 worker 各自独立 session 集）。非法值显性报错。
+fn parallel_knobs() -> Result<(usize, usize), Box<dyn Error>> {
+    let parse_env = |key: &str, default: usize, min: usize, max: usize| -> Result<usize, String> {
+        match std::env::var(key) {
+            Ok(v) => {
+                let n: usize = v
+                    .parse()
+                    .map_err(|_| format!("{key}={v} is not a valid integer"))?;
+                if n < min || n > max {
+                    return Err(format!("{key}={n} out of range [{min},{max}]"));
+                }
+                Ok(n)
+            }
+            Err(_) => Ok(default),
+        }
+    };
+    let workers = parse_env("TRANSCRIBE_WORKERS", 4, 1, 12).map_err(|e| e.to_string())?;
+    let intra = parse_env("TRANSCRIBE_INTRA", 2, 1, 12).map_err(|e| e.to_string())?;
+    Ok((workers, intra))
+}
+
+/// 已退役实验旋钮（transcribe-poc-shell-a：随 POC 实验文件删除，结论见
+/// out/transcribe-poc/own-engine/summary.md）——设置时显性告警不静默。
+fn warn_retired_knobs() {
+    for key in ["TRANSCRIBE_ENV_POOL", "TRANSCRIBE_BATCH", "TRANSCRIBE_GPU"] {
+        if std::env::var_os(key).is_some() {
+            eprintln!(
+                "transcribe-own: {key} retired (experiment path removed; \
+                 conclusions recorded in out/transcribe-poc/own-engine/summary.md) — ignored"
+            );
+        }
+    }
+}
+
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let t0 = Instant::now();
 
@@ -123,7 +161,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         );
         let model_dir = "/home/dev/video/Qwen3-ASR-1.7B";
         eprintln!("transcribe-own: backend=py-torch (embedded CPython, GPU 1.7B bf16)");
-        let text = pytorch_backend::transcribe(&args.wav, model_dir)?;
+        let text = pytorch_backend::run_pytorch_baseline(&args.wav, model_dir)?;
         std::fs::create_dir_all(&args.out_dir)?;
         std::fs::write(args.out_dir.join("transcript.txt"), &text)?;
         let wall_s = t0.elapsed().as_secs_f64();
@@ -133,23 +171,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let dylib = resolve_ort_dylib();
-    eprintln!("transcribe-own: [{:.3}s] loading onnxruntime dylib: {dylib}", t0.elapsed().as_secs_f64());
-    // TRANSCRIBE_ENV_POOL=<n>：环境级全局线程池（n 线程，关 spin），各 session
-    // 共享（实验旋钮；未设置时 per-session 线程）
-    let env_pool = std::env::var("TRANSCRIBE_ENV_POOL")
-        .ok()
-        .map(|v| v.parse::<usize>().map_err(|_| format!("TRANSCRIBE_ENV_POOL={v} invalid")))
-        .transpose()?;
-    let mut env = ort::init_from(&dylib)?.with_name("transcribe-own");
-    if let Some(n) = env_pool {
-        env = env.with_global_thread_pool(
-            ort::environment::GlobalThreadPoolOptions::default()
-                .with_intra_threads(n)?
-                .with_spin_control(false)?,
-        );
-    }
-    env.commit();
+    resolve_ort_dylib();
 
     // 门禁曾把资产清单说明文字拼进 argv 路径（assets（…）/smoke10s.wav）；
     // 原路径优先，仅在原路径不可用时显性归一化（stderr 留痕）
@@ -170,143 +192,91 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     }
     let _ = (w, m, o);
 
-    let samples = wav::read_wav_16k_mono(&wav_path)?;
-    let audio_seconds = samples.len() as f64 / vad::SAMPLE_RATE as f64;
-    eprintln!(
-        "transcribe-own: wav loaded: {} samples, {audio_seconds:.3}s",
-        samples.len()
-    );
+    warn_retired_knobs();
 
-    let config = vad::VadConfig::default();
-    let model_path = models_dir.join("silero_vad.onnx");
-    let model = vad::SileroVadModel::new(&model_path, &config)?;
-    eprintln!("transcribe-own: vad model loaded: {}", model_path.display());
-    let segments = vad::detect_segments(model, &samples, &config)?;
-    eprintln!("transcribe-own: [{:.3}s] vad done: {} segments",
-        t0.elapsed().as_secs_f64(),
-        segments.len()
-    );
-
-    // 并行旋钮（默认 4 workers × intra=2；环境变量供门禁测量其他档位，
-    // 如激进档 TRANSCRIBE_WORKERS=6 TRANSCRIBE_INTRA=1）。非法值显性报错。
     let (workers, intra) = parallel_knobs()?;
     let no_spin = matches!(std::env::var("TRANSCRIBE_NO_SPIN").as_deref(), Ok("1"));
-    // TRANSCRIBE_BATCH=<n>（n≥2 启用合批 lockstep 解码，单 session 高 intra；
-    // 0/1 = 传统多 worker 逐段并行）
-    let gpu_on = matches!(std::env::var("TRANSCRIBE_GPU").as_deref(), Ok("1"));
-    let batch: usize = std::env::var("TRANSCRIBE_BATCH")
-        .ok()
-        .map(|v| v.parse::<usize>().map_err(|_| format!("TRANSCRIBE_BATCH={v} invalid")))
-        .transpose()?
-        .unwrap_or(0);
     // 执行后端旋钮：TRANSCRIBE_EP=cpu（默认）| cuda。cuda 要求 ORT_DYLIB_PATH
-    // 指向带 CUDA EP 的 onnxruntime 动态库；EP 注册失败显性报错，不静默回退。
+    // 指向带 CUDA EP 的 onnxruntime 动态库；未知值显性报错。
     let ep = match std::env::var("TRANSCRIBE_EP").as_deref() {
         Ok("cuda") => "cuda",
         Ok("cpu") | Err(_) => "cpu",
         Ok(other) => return Err(format!("TRANSCRIBE_EP={other} invalid (cpu|cuda)").into()),
     };
-    let session_opts = asr::SessionOpts {
+    let opts = TranscribeOpts {
         intra_threads: intra,
         no_spin,
-        env_pool: env_pool.is_some(),
         cuda: ep == "cuda",
+        vad_threshold: 0.5,
     };
-    eprintln!("transcribe-own: execution provider: {ep}");
+
+    let samples = read_wav_16k_mono(&wav_path)?;
+    let audio_seconds = samples.len() as f64 / TRANSCRIBE_SAMPLE_RATE_HZ;
+    eprintln!(
+        "transcribe-own: wav loaded: {} samples, {audio_seconds:.3}s",
+        samples.len()
+    );
+
+    // VAD-only：单会话分段即可（不建 worker 集）
+    let vad_session = open(&models_dir, &opts)
+        .map_err(|e| format!("load transcribe session from {}: {e}", models_dir.display()))?;
+    let segments = vad_session
+        .detect_segments(&samples)
+        .map_err(|e| format!("vad detect: {e}"))?;
+    eprintln!(
+        "transcribe-own: [{:.3}s] vad done: {} segments",
+        t0.elapsed().as_secs_f64(),
+        segments.len()
+    );
 
     let mut transcript = String::new();
     let mut seg_lines = String::new();
     if !args.vad_only {
-        eprintln!("transcribe-own: [{:.3}s] loading tokenizer...", t0.elapsed().as_secs_f64());
-        let asr_tok = std::sync::Arc::new(tokenizer::AsrTokenizer::new(
-            &models_dir.join("tokenizer"),
-        )?);
-        let fbank = std::sync::Arc::new(features::WhisperFbank::new());
+        eprintln!(
+            "transcribe-own: decoding {segments_len} segments with {workers} workers (ort-intra={intra}); loading {workers} session sets...",
+            segments_len = segments.len()
+        );
+        // 段级并行：每 worker 独立会话（ort rc.13 禁并发 Run 同一 Session，
+        // 各持一套三图；内存 ×workers，与原 batch/worker 行为等价）
         let results: std::sync::Mutex<Vec<(usize, String)>> = std::sync::Mutex::new(Vec::new());
-        if batch >= 2 || gpu_on {
-            // TRANSCRIBE_GPU=1：KV 常驻显存实验通路（ort rc.13 io-binding 存在
-            // 非确定性读回问题，见 out/transcribe-poc/own-engine/summary.md §11；
-            // 生产 GPU 请用 TRANSCRIBE_EP=cuda + batch.rs 路径：已验证正确）
-            // 合批 lockstep：单 session（intra 建议拉高），批内多段共享权重流量
-            eprintln!(
-                "transcribe-own: decoding {} segments in batches of {batch} (ort-intra={intra}, ep={ep}, gpu={gpu_on})",
-                segments.len()
-            );
-            let items: Vec<batch::BatchItem> = segments
-                .iter()
-                .map(|s| {
-                    let seg_samples = &samples[s.start as usize..s.end as usize];
-                    let num_frames = seg_samples.len() / features::FRAME_SHIFT;
-                    batch::BatchItem { mel: fbank.compute(seg_samples), num_frames }
-                })
-                .collect();
-            let texts = if gpu_on {
-                // CUDA EP 对这些 int8 导出在 batch≥2 时输出异常（实测即时 EOS），GPU 仅支持逐段
-                if ep != "cuda" {
-                    return Err("TRANSCRIBE_GPU=1 requires TRANSCRIBE_EP=cuda".into());
-                }
-                let mut engine = gpu::GpuBatchAsr::new(&models_dir, &session_opts)?;
-                engine.transcribe_all(&items, &asr_tok, batch)?
-            } else {
-                let mut engine = batch::BatchAsr::new(&models_dir, &session_opts)?;
-                engine.transcribe_all(&items, &asr_tok, batch)?
-            };
-            for (i, text) in texts.into_iter().enumerate() {
-                eprintln!(
-                    "transcribe-own: [{:.3}s] batch segment {}/{} {} chars",
-                    t0.elapsed().as_secs_f64(),
-                    i + 1,
-                    segments.len(),
-                    text.chars().count()
-                );
-                results.lock().unwrap().push((i, text));
-            }
-        } else {
-            eprintln!(
-                "transcribe-own: decoding {segments_len} segments with {workers} workers (ort-intra={intra}); loading {workers} session sets...",
-                segments_len = segments.len()
-            );
-
-            // ort rc.13 禁止并发 Run 同一 Session（session/mod.rs:118-122），
-            // 每 worker 独立加载一套 conv/encoder/decoder（权重内存 ×workers）
-            let next_job = std::sync::atomic::AtomicUsize::new(0);
-            let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        let next_job = AtomicUsize::new(0);
+        let samples = &samples;
+        let segments = &segments;
+        let opts = &opts;
+        let models_dir = &models_dir;
         std::thread::scope(|scope| {
-            let models_dir = &models_dir;
-            let segments = &segments;
             for w in 0..workers {
                 let next_job = &next_job;
                 let results = &results;
                 let errors = &errors;
-                let asr_tok = &asr_tok;
-                let fbank = &fbank;
-                let samples = &samples;
                 scope.spawn(move || {
-                    let mut engine = match asr::Qwen3Asr::new(models_dir, &session_opts) {
-                        Ok(e) => e,
+                    let session = match open(models_dir, opts) {
+                        Ok(s) => s,
                         Err(e) => {
-                            errors.lock().unwrap().push(format!("worker {w}: {e}"));
+                            errors
+                                .lock()
+                                .unwrap()
+                                .push(format!("worker {w}: {e}"));
                             return;
                         }
                     };
                     loop {
-                        let i = next_job.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let i = next_job.fetch_add(1, Ordering::SeqCst);
                         if i >= segments.len() {
                             return;
                         }
-                        let s = &segments[i];
-                        let seg_samples = &samples[s.start as usize..s.end as usize];
-                        let num_frames = seg_samples.len() / features::FRAME_SHIFT;
-                        let mel = fbank.compute(seg_samples);
-                        match engine.transcribe(&mel, num_frames, asr_tok) {
+                        let seg = &segments[i];
+                        let seg_samples = &samples[seg.start_sample as usize..seg.end_sample as usize];
+                        match session.transcribe_segment(seg_samples) {
                             Ok(text) => {
                                 eprintln!(
                                     "transcribe-own: [{:.3}s] worker {w} segment {}/{} [{:.2}s-{:.2}s] {} chars",
                                     t0.elapsed().as_secs_f64(),
                                     i + 1,
                                     segments.len(),
-                                    s.start as f64 / vad::SAMPLE_RATE as f64,
-                                    s.end as f64 / vad::SAMPLE_RATE as f64,
+                                    seg.start_sec,
+                                    seg.end_sec,
                                     text.chars().count()
                                 );
                                 results.lock().unwrap().push((i, text));
@@ -324,19 +294,19 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             }
         });
 
-            let errors = errors.into_inner().unwrap();
-            if !errors.is_empty() {
-                return Err(errors.into_iter().next().unwrap().into());
-            }
+        let errors = errors.into_inner().unwrap();
+        if !errors.is_empty() {
+            return Err(errors.into_iter().next().unwrap().into());
         }
-        // 段文本按时间顺序合并（并行/合批均按段索引排序）
+        // 段文本按时间顺序合并（按段索引排序）
         let mut done = results.into_inner().unwrap();
         done.sort_by_key(|(i, _)| *i);
         for (i, text) in &done {
-            let s = &segments[*i];
-            let start_s = s.start as f64 / vad::SAMPLE_RATE as f64;
-            let end_s = s.end as f64 / vad::SAMPLE_RATE as f64;
-            seg_lines.push_str(&format!("{start_s:.2} -- {end_s:.2}: {text}\n"));
+            let seg = &segments[*i];
+            seg_lines.push_str(&format!(
+                "{:.2} -- {:.2}: {text}\n",
+                seg.start_sec, seg.end_sec
+            ));
             transcript.push_str(text);
         }
     }
@@ -366,31 +336,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         println!("RTF={:.4}", wall_s / audio_seconds.max(f64::MIN_POSITIVE));
         println!("SEGMENTS={}", segments.len());
         println!("TRANSCRIPT_CHARS={}", transcript.chars().count());
-        println!("MODE=seg-parallel:{workers}workers,ort-intra:{intra},ep:{ep},batch:{batch},gpu:{gpu_on}");
+        println!("MODE=seg-parallel:{workers}workers,ort-intra:{intra},ep:{ep}");
     }
     Ok(())
-}
-
-/// 并行度旋钮：TRANSCRIBE_WORKERS / TRANSCRIBE_INTRA，默认 4 × 2
-/// （nproc=12 实测，8 活跃线程+主线程+fbank/IO 余量）
-fn parallel_knobs() -> Result<(usize, usize), Box<dyn Error>> {
-    let parse_env = |key: &str, default: usize, min: usize, max: usize| -> Result<usize, String> {
-        match std::env::var(key) {
-            Ok(v) => {
-                let n: usize = v
-                    .parse()
-                    .map_err(|_| format!("{key}={v} is not a valid integer"))?;
-                if n < min || n > max {
-                    return Err(format!("{key}={n} out of range [{min},{max}]"));
-                }
-                Ok(n)
-            }
-            Err(_) => Ok(default),
-        }
-    };
-    let workers = parse_env("TRANSCRIBE_WORKERS", 4, 1, 12).map_err(|e| e.to_string())?;
-    let intra = parse_env("TRANSCRIBE_INTRA", 2, 1, 12).map_err(|e| e.to_string())?;
-    Ok((workers, intra))
 }
 
 fn main() -> ExitCode {

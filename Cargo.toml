@@ -231,6 +231,12 @@ character_converter = ["dep:character_converter"]
 name = "vecboost"
 required-features = ["http"]
 
+# A/B 对比 harness 构造 EngineType::Onnx / Task=Translate 引擎，须 onnx feature
+# （未启用时该 variant 不存在）；同 [[bin]] required-features 惯例
+[[example]]
+name = "translate_ab"
+required-features = ["onnx"]
+
 # Platform-specific dependencies
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -85,6 +85,28 @@ VECBOOST_RUN_MEMMAX=40G VECBOOST_RUN_MEMHIGH=36G VECBOOST_RUN_SWAPMAX=4G \
 已验证：scope 内 `memory.max=40G`、`memory.swap.max=4G` 内核级生效；总预算
 = MemoryMax + MemorySwapMax，超总预算即 cgroup OOM 击杀。
 
+### 权重量化：int8 opt-in（translation-int8-optin）
+
+翻译 bundle 的 FP32 ONNX 可经 `scripts/quantize-translate-bundles.py` 生成
+dynamic int8 副本（`onnx/*_quantized.onnx`，与探测候选 `_quantized` 次选位
+对齐）。选路由 `TRANSLATION_PREFER_INT8=1` 显式打开（缺省 fp32 优先，契约
+不变）：
+
+```bash
+python3.12 scripts/quantize-translate-bundles.py   # 生成（幂等，--skip-existing 默认）
+TRANSLATION_PREFER_INT8=1 target/release/vecboost config.toml
+# 运行期随时可切回：unset 环境变量即恢复 fp32 候选优先
+```
+
+**实测收益**（3 个配置 bundle）：每对主集 -34%（m2m100 2.47G→1.63G、
+nllb 3.52G→2.28G、opus 0.42G→0.27G；encoder 单独 -75%，decoder 受
+vocab 头 fp32 残留限制）。4 对主集 8.9G→5.8G，服务 idle 预期 -3G 量级。
+
+**质量证据**（门禁测试 `test_int8_quality_gate_*`，`cargo test --features onnx --lib`）：
+m2m100 与 fp32 **逐字节一致**；opus 小模型存在两类量化噪声并被门禁精确
+含纳（单字替换「棕色的狐狸→棕色狐狸」、尾部重复「…好可爱→…好可爱，好
+可爱」）——opus 上启用 int8 需经 paper-translate-quality 评测后再议。
+
 ### 防线 4b：jemalloc decay 烘焙（r2）
 
 jemalloc 默认 dirty/muzzy decay 10s，大请求（长翻译/批量）释放的解码缓冲
@@ -129,6 +151,7 @@ MEM_GUARD_INTERVAL_S=5            # 轮询间隔
 | `VECBOOST_RUN_MEMMAX` / `_MEMHIGH` / `_SWAPMAX` | 40G / 36G / 4G | 通用进程硬/软/swap 上限 |
 | `JEMALLOC_SYS_WITH_MALLOC_CONF`（cargo [env]） | dirty/muzzy 1000ms | jemalloc decay 编译期烘焙 |
 | `MALLOC_CONF`（运行期 env） | 未设 | jemalloc 配置运行期覆盖（优先级最高） |
+| `TRANSLATION_PREFER_INT8` | 未设（fp32 优先） | 翻译 pair 加载优先选 int8 权重 |
 | `VECBOOST_BUILD_JOBS` | 8 | 构建并行度 |
 | `MEM_GUARD_MIN_MB` / `_TARGETS` / `_INTERVAL_S` / `_LOG` | 见上 | 守护参数 |
 
@@ -151,4 +174,5 @@ systemctl --user is-active vecboost-mem-guard
 scripts/build-memcap.sh --version           # scope 内 cargo 可用
 scripts/run-memcap.sh /bin/true             # 通用进程封装可用
 cargo test --features onnx --lib allocator_tune  # decay 烘焙生效值 = (1000,1000)
+cargo test --features onnx --lib int8_quality_gate  # int8 质量门禁（m2m100 strict / opus 容差）
 ```

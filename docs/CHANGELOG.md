@@ -108,6 +108,12 @@
 - 文档:README/API_REFERENCE 与实现不一致处全量纠错;doc_consistency_check 纳入门禁
 - 交付:Dockerfile 兼容 edition 2024;LICENSE 补齐;CI 覆盖率硬门禁 + Python 场景测试 nightly;clippy unwrap_used 门禁
 
+### 新增（translation-int8-optin：翻译权重 int8 量化 opt-in）
+
+- **量化脚本**：`scripts/quantize-translate-bundles.py`（onnxruntime dynamic int8，图 I/O 契约生成即校验）；3 个配置 bundle 实测每对主集 -34%（encoder -75%，decoder 受 vocab fp32 残留限制），磁盘 6.4G→4.2G
+- **选路旋钮**：`TRANSLATION_PREFER_INT8=1` 打开（缺省 fp32 优先，契约零变化）；`candidate_order` 纯函数四态单测
+- **质量门禁**：`test_int8_quality_gate_m2m100`（strict 逐字节一致，实测两句全等）/`test_int8_quality_gate_opus`（容差档：前缀相似度≥0.85 + 尾部外延≤1.5×，实测两类量化噪声被精确含纳）——opus 默认不切，待 paper-translate-quality 评测
+
 ### 新增（wsl2-oom-hardening-r2：第二轮加固）
 
 - **`.wslconfig` 内核阈值**：追加 `vm.min_free_kbytes=262144`（原 44MB → 256MB，OOM 决策前移；下次 `wsl --shutdown` 生效，原文件备份于 temp/）

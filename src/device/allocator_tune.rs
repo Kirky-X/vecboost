@@ -13,7 +13,7 @@
 //!   应用侧强符号永不生效（二进制内实测两个定义共存，opt 仍回落默认）；
 //! - 运行时 mallctl 不可行——无前缀 `dirty_decay_ms`/`muzzy_decay_ms` 在本
 //!   build 不存在，`arena.N.*` 仅已创建 arena 可写；
-//! - **定案**：`.cargo/config.toml [env] JEMALLOC_SYS_WITH_MALLOC_CONF` →
+//! - **定案**：`.cargo/config（旧名入库，config.toml 被 gitignore）[env] JEMALLOC_SYS_WITH_MALLOC_CONF` →
 //!   jemalloc-sys build.rs 转 `--with-malloc-conf` 编译期烘焙，全域（含未来
 //!   arena）生效。优先级最低：运行期 `MALLOC_CONF` 环境变量可覆盖（运维
 //!   逃生口）。
@@ -36,7 +36,7 @@ mod tests {
 
     #[test]
     fn boot_conf_effective_in_test_binary() {
-        // .cargo/config.toml [env] JEMALLOC_SYS_WITH_MALLOC_CONF →
+        // .cargo/config（旧名入库，config.toml 被 gitignore）[env] JEMALLOC_SYS_WITH_MALLOC_CONF →
         // --with-malloc-conf 编译期烘焙；断言实际生效值
         assert_eq!(
             effective_boot_conf().expect("opt probe must succeed on linux gnu test build"),

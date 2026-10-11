@@ -30,7 +30,7 @@
 | 3 | 构建内存上限 | `scripts/build-memcap.sh`（systemd --user scope） | 手动使用 |
 | 4 | 用户级 earlyoom | `scripts/mem-guard.sh` + `mem-guard-install.sh` | 安装后常驻 |
 | 5 | 进程内存上限（通用） | `scripts/run-memcap.sh`（服务自爆保整机） | 手动使用 |
-| 6 | jemalloc decay 烘焙 | `.cargo/config.toml [env]`（大请求后 RSS 秒级回落） | 默认生效 |
+| 6 | jemalloc decay 烘焙 | `.cargo/config [env]`（大请求后 RSS 秒级回落） | 默认生效 |
 
 ### 防线 1：Session 内存门禁
 
@@ -88,7 +88,7 @@ VECBOOST_RUN_MEMMAX=40G VECBOOST_RUN_MEMHIGH=36G VECBOOST_RUN_SWAPMAX=4G \
 ### 防线 4b：jemalloc decay 烘焙（r2）
 
 jemalloc 默认 dirty/muzzy decay 10s，大请求（长翻译/批量）释放的解码缓冲
-滞留 RSS。经 `.cargo/config.toml [env] JEMALLOC_SYS_WITH_MALLOC_CONF` 在
+滞留 RSS。经 `.cargo/config（旧名入库，config.toml 被 gitignore）[env] JEMALLOC_SYS_WITH_MALLOC_CONF` 在
 jemalloc-sys 编译期烘焙为 1000ms（对全部 arena 含未来生效），已实测
 `opt.dirty_decay_ms=1000`。三条注入路径的排除证据链（运行时 mallctl 不存在、
 `je_malloc_conf` 被 hidden visibility 否决）见 design D3。运行期可用

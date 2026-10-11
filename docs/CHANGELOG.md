@@ -112,7 +112,7 @@
 
 - **`.wslconfig` 内核阈值**：追加 `vm.min_free_kbytes=262144`（原 44MB → 256MB，OOM 决策前移；下次 `wsl --shutdown` 生效，原文件备份于 temp/）
 - **通用进程内存上限**：`scripts/run-memcap.sh`（systemd --user scope，服务异常膨胀自爆保整机；MemoryMax/MemoryHigh/MemorySwapMax 三旋钮，cgroup 属性与超限击杀均已实测）
-- **jemalloc decay 编译期烘焙**：`.cargo/config.toml [env] JEMALLOC_SYS_WITH_MALLOC_CONF` → decay 1000ms（大请求后 RSS 秒级回落）；三条注入路径排除证据链（运行时 mallctl 不存在 / `je_malloc_conf` 被 hidden visibility 否决）见 specmark design D3；`effective_boot_conf()` 启动期观测
+- **jemalloc decay 编译期烘焙**：`.cargo/config（旧名入库，config.toml 被 gitignore）[env] JEMALLOC_SYS_WITH_MALLOC_CONF` → decay 1000ms（大请求后 RSS 秒级回落）；三条注入路径排除证据链（运行时 mallctl 不存在 / `je_malloc_conf` 被 hidden visibility 否决）见 specmark design D3；`effective_boot_conf()` 启动期观测
 
 ### 新增（wsl2-oom-hardening：WSL2 OOM 事故四道防线）
 

@@ -173,6 +173,12 @@ fn translation_parallel_workers() -> usize {
         .clamp(1, MAX_TRANSLATION_PARALLEL_WORKERS)
 }
 
+/// 惰性补建数量（wsl2-oom-hardening D2）：worker=1 并行关闭恒 0；
+/// 否则 max(0, workers-1-current)，已有超量不裁剪。
+fn missing_worker_sets(current: usize, worker_count: usize) -> usize {
+    worker_count.saturating_sub(1).saturating_sub(current)
+}
+
 /// 长输入并行阈值：受保护文本字符数 ≥ 此值且句数 ≥2 才走句级并行（短文本
 /// 整段直解保留跨句上下文）。paper-translate-quality P7：论文摘要 1k+ 字符
 /// 整段贪心 150s+，并行后时延 ÷ worker 数。
@@ -356,8 +362,15 @@ impl Family {
 pub(crate) struct OnnxTranslationEngine {
     sessions: Arc<Mutex<TranslateSessions>>,
     /// 句级并行 worker 的附加 Session 集（workers-1 个；ort rc.13 禁并发 Run
-    /// 同一 Session，每 worker 独占一套）。空 = 并行关闭（整段直解路径）。
-    parallel_sessions: Vec<Arc<Mutex<TranslateSessions>>>,
+    /// 同一 Session，每 worker 独占一套）。惰性加载（wsl2-oom-hardening D2）：
+    /// init 期为空、idle 驻留仅主集一份，首次长输入并行请求按需补建。
+    /// 空 = 并行关闭（整段直解路径）。
+    parallel_sessions: Mutex<Vec<Arc<Mutex<TranslateSessions>>>>,
+    /// init 期已探明的 bundle 内 encoder/decoder 路径（惰性补建 worker 集复用）
+    encoder_file: PathBuf,
+    decoder_file: PathBuf,
+    /// init 期装配设备；fallback 已触发后惰性补建改走 Cpu（与主集重建同语义）
+    session_device: DeviceType,
     tokenizer: Tokenizer,
     decoder_start_token_id: u32,
     eos_token_id: u32,
@@ -774,22 +787,16 @@ impl OnnxTranslationEngine {
         let intra_threads = SESSION_INTRA_THREADS.load(std::sync::atomic::Ordering::Relaxed);
         let sessions =
             build_translate_sessions(&encoder_file, &decoder_file, intra_threads, &config.device)?;
-        // 句级并行 worker 集：workers-1 个附加 Session（内存常驻）。
-        // paper-translate-quality P7：长摘要整段贪心解码 150s+，按句 4 路并行
-        // 后时延除以 worker 数（rtx/实测见 tasks.md T003 记录）。
+        // 句级并行 worker 集：惰性加载（wsl2-oom-hardening D2）。ORT 对标准
+        // .onnx 每 Session 独占一份权重堆拷贝（跨 Session 不共享），此前 init
+        // 预载 4 pair × 4 worker 全 FP32 曾致 ~30G+ 常驻 idle；现 idle 驻留
+        // 收敛为每 pair 一套主集，首次长输入并行请求经 ensure_parallel_sessions
+        // 按需补建。P7 时延契约不变（worker 数来源与缺省均不动）。
         let parallel_workers = translation_parallel_workers();
-        let mut parallel_sessions = Vec::new();
-        if parallel_workers > 1 {
-            for w in 1..parallel_workers {
-                parallel_sessions.push(Arc::new(Mutex::new(build_translate_sessions(
-                    &encoder_file,
-                    &decoder_file,
-                    intra_threads,
-                    &config.device,
-                )?)));
-                log::info!("translation parallel worker {w}/{parallel_workers} session set loaded");
-            }
-        }
+        log::info!(
+            "translation parallel workers={parallel_workers} (lazy; extra session sets \
+             build on first long-parallel request)"
+        );
         let precision = precision_for_model_file(&decoder_file);
 
         log::info!(
@@ -809,7 +816,10 @@ impl OnnxTranslationEngine {
 
         Ok(Self {
             sessions: Arc::new(Mutex::new(sessions)),
-            parallel_sessions,
+            parallel_sessions: Mutex::new(Vec::new()),
+            encoder_file,
+            decoder_file,
+            session_device: config.device.clone(),
             tokenizer,
             decoder_start_token_id: generation.decoder_start_token_id,
             eos_token_id: generation.eos_token_id,
@@ -863,10 +873,12 @@ impl OnnxTranslationEngine {
         // 实测丢失（论文评测：DTI 缩写与 arXiv:1908.05156 被整段丢弃）。占位
         // 吞没风险由真 bundle 存活率单测钉住；未命中显性 warn，不静默丢内容。
         let (protected_text, protected_slots) = protect_tokens(&req.text);
-        // 长输入句级并行（P7）：字符数与句数双达阈值且 worker 集就绪时走
-        // 并行；短文本/单句走整段直解（保留跨句上下文）。decoder_init 两路共用
+        // 长输入句级并行（P7）：字符数与句数双达阈值且并行未关闭时走并行；
+        // 短文本/单句走整段直解（保留跨句上下文）。decoder_init 两路共用。
+        // worker 集惰性加载后「是否并行」以旋钮为准（=1 关闭），附加集由
+        // decode_sentences_parallel 按需补建
         let sentences = split_source_sentences(&protected_text);
-        let use_parallel = !self.parallel_sessions.is_empty()
+        let use_parallel = translation_parallel_workers() > 1
             && sentences.len() >= 2
             && protected_text.chars().count() >= PARALLEL_MIN_CHARS;
 
@@ -1054,6 +1066,40 @@ impl OnnxTranslationEngine {
         })
     }
 
+    /// 惰性补建句级并行 worker 附加集（锁内顺序构建；首个并行请求付一次性
+    /// 构建耗时，后续请求复用快照，无重复构建）。
+    fn ensure_parallel_sessions(&self, worker_count: usize) -> Result<(), VecboostError> {
+        let mut sets = self
+            .parallel_sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let missing = missing_worker_sets(sets.len(), worker_count);
+        if missing == 0 {
+            return Ok(());
+        }
+        let device = if self.fallback_triggered {
+            DeviceType::Cpu
+        } else {
+            self.session_device.clone()
+        };
+        let intra_threads = SESSION_INTRA_THREADS.load(std::sync::atomic::Ordering::Relaxed);
+        for _ in 0..missing {
+            let sessions = build_translate_sessions(
+                &self.encoder_file,
+                &self.decoder_file,
+                intra_threads,
+                &device,
+            )?;
+            sets.push(Arc::new(Mutex::new(sessions)));
+            log::info!(
+                "translation parallel worker session set lazy-loaded ({}/{} extra sets ready)",
+                sets.len(),
+                worker_count - 1
+            );
+        }
+        Ok(())
+    }
+
     /// 句级并行解码（P7 长输入路径）：按句切分源文，worker 各领一句解码
     /// （每 worker 独占 Session 集——ort rc.13 禁并发 Run 同一 Session），
     /// 在 worker 内直接 detok 产出文本，按句序返回。任一句失败即整请求显性
@@ -1072,13 +1118,20 @@ impl OnnxTranslationEngine {
         }
         let sentences: Vec<&String> = sentences.iter().take(MAX_RESCUE_SENTENCES).collect();
         let sentences = &sentences;
+        self.ensure_parallel_sessions(translation_parallel_workers())?;
+        // 快照 Arc 列表：锁只护惰性构建，不跨解码持有
+        let parallel_snapshot: Vec<Arc<Mutex<TranslateSessions>>> = self
+            .parallel_sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let next = std::sync::atomic::AtomicUsize::new(0);
         let pieces: std::sync::Mutex<Vec<(usize, String, usize)>> =
             std::sync::Mutex::new(Vec::with_capacity(sentences.len()));
         let failure: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
         // worker 0 = 主 Session 集；1.. = 并行附加集
         let worker_sessions: Vec<&Arc<Mutex<TranslateSessions>>> = std::iter::once(&self.sessions)
-            .chain(self.parallel_sessions.iter())
+            .chain(parallel_snapshot.iter())
             .collect();
         std::thread::scope(|scope| {
             for sessions in worker_sessions {
@@ -1750,6 +1803,19 @@ mod tests {
     fn m2m100_bundle() -> Option<PathBuf> {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/m2m100_418M");
         dir.is_dir().then_some(dir)
+    }
+
+    // ── 惰性 worker 集：补建数量纯函数（离线可测） ─────────────────────
+
+    #[test]
+    fn missing_worker_sets_computes_delta() {
+        assert_eq!(missing_worker_sets(0, 4), 3);
+        assert_eq!(missing_worker_sets(1, 4), 2);
+        assert_eq!(missing_worker_sets(3, 4), 0);
+        // worker=1 并行关闭：永不补建
+        assert_eq!(missing_worker_sets(0, 1), 0);
+        // 已有超量不裁剪
+        assert_eq!(missing_worker_sets(5, 4), 0);
     }
 
     // ── 探测：资产缺失显性报错（离线可跑） ──────────────────────────────

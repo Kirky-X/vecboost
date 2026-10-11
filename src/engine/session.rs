@@ -49,6 +49,10 @@ pub(crate) fn build_session(
     model_file: &Path,
     opts: &SessionOpts<'_>,
 ) -> Result<Session, VecboostError> {
+    // 内存可用量门禁（wsl2-oom-hardening D1）：置于 builder 构造之前，
+    // 拒绝时不产生任何 ORT 分配
+    ensure_memory_available(model_file)?;
+
     let num_threads = resolve_intra_threads(opts.intra_threads);
     let mut builder = Session::builder()
         .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
@@ -127,9 +131,161 @@ pub(crate) fn precision_for_model_file(model_file: &Path) -> Precision {
     }
 }
 
+/// 内存地板缺省值（字节）：`SESSION_MEMORY_FLOOR_MB` 未设/非法时的可用量下限。
+const DEFAULT_MEMORY_FLOOR_MB: u64 = 2048;
+
+/// 门禁开关（纯函数）：`SESSION_MEMORY_GUARD` 读出值等于 `off` 才关停，其余（含未设）恒开。
+fn guard_switch(raw: Option<&str>) -> bool {
+    raw != Some("off")
+}
+
+/// 地板解析（纯函数）：未设 → 默认；非数字 → 默认（warn）；合法 → MB 转字节。
+fn parse_floor_mb(raw: Option<&str>) -> u64 {
+    let mb = match raw {
+        Some(v) => v.trim().parse::<u64>().unwrap_or_else(|_| {
+            log::warn!(
+                "SESSION_MEMORY_FLOOR_MB={v:?} is not a valid integer; \
+                 falling back to default {DEFAULT_MEMORY_FLOOR_MB}MB"
+            );
+            DEFAULT_MEMORY_FLOOR_MB
+        }),
+        None => DEFAULT_MEMORY_FLOOR_MB,
+    };
+    mb.saturating_mul(1024 * 1024)
+}
+
+/// /proc/meminfo 文本 → MemAvailable 字节数；行缺失或数值非法返回 None。
+fn mem_available_bytes(meminfo: &str) -> Option<u64> {
+    for line in meminfo.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let kb: u64 = rest.trim().split_whitespace().next()?.parse().ok()?;
+            return Some(kb.saturating_mul(1024));
+        }
+    }
+    None
+}
+
+/// 门禁判定（纯函数）：`available < need + floor` 拒绝，消息含三个数字与处置建议。
+fn memory_gate_decision(available: u64, need: u64, floor: u64) -> Result<(), String> {
+    let required = need.saturating_add(floor);
+    if available >= required {
+        return Ok(());
+    }
+    Err(format!(
+        "memory gate refused model load: available={available} bytes < need={need} + floor={floor} \
+         = {required} bytes; free memory / reduce translation pairs or workers \
+         (TRANSLATION_PARALLEL_WORKERS), or set SESSION_MEMORY_GUARD=off to bypass"
+    ))
+}
+
+/// 加载前内存可用量门禁（wsl2-oom-hardening D1）：需求按模型文件 ×3/2 估算
+/// （ORT 加载峰值≈2×文件、驻留≈1.1×文件，取中并留余量）。Linux 读
+/// /proc/meminfo 的 MemAvailable；其他平台 no-op（尽力而为语义）。
+/// 拒绝即 ModelLoadError fail-fast，杜绝静默加载到系统级 OOM。
+pub(crate) fn ensure_memory_available(model_file: &Path) -> Result<(), VecboostError> {
+    if !guard_switch(std::env::var("SESSION_MEMORY_GUARD").ok().as_deref()) {
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string("/proc/meminfo").map_err(|e| {
+            VecboostError::ModelLoadError(format!("memory gate: cannot read /proc/meminfo: {e}"))
+        })?;
+        let available = mem_available_bytes(&text).ok_or_else(|| {
+            VecboostError::ModelLoadError(
+                "memory gate: MemAvailable missing in /proc/meminfo".to_string(),
+            )
+        })?;
+        let need = std::fs::metadata(model_file)
+            .map(|m| m.len())
+            .unwrap_or(0)
+            .saturating_mul(3)
+            / 2;
+        let floor = parse_floor_mb(std::env::var("SESSION_MEMORY_FLOOR_MB").ok().as_deref());
+        match memory_gate_decision(available, need, floor) {
+            Ok(()) => {
+                log::info!(
+                    "memory gate passed: model={} need={need} available={available} floor={floor}",
+                    model_file.display()
+                );
+                Ok(())
+            }
+            Err(msg) => {
+                log::error!("{msg} (model={})", model_file.display());
+                Err(VecboostError::ModelLoadError(msg))
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        log::debug!("memory gate skipped: MemAvailable probe is Linux-only");
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guard_switch_only_off_disables() {
+        assert!(!guard_switch(Some("off")));
+        assert!(guard_switch(Some("on")));
+        assert!(guard_switch(Some("OFF"))); // 大小写敏感：非精确 `off` 即开
+        assert!(guard_switch(None));
+    }
+
+    #[test]
+    fn parse_floor_mb_default_on_missing_or_invalid() {
+        assert_eq!(parse_floor_mb(None), DEFAULT_MEMORY_FLOOR_MB * 1024 * 1024);
+        assert_eq!(
+            parse_floor_mb(Some("not-a-number")),
+            DEFAULT_MEMORY_FLOOR_MB * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn parse_floor_mb_valid_value_converts_to_bytes() {
+        assert_eq!(parse_floor_mb(Some("1")), 1024 * 1024);
+        assert_eq!(parse_floor_mb(Some(" 4096 ")), 4096 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_floor_mb_huge_value_saturates_without_panic() {
+        assert_eq!(parse_floor_mb(Some("18446744073709551615")), u64::MAX);
+    }
+
+    #[test]
+    fn mem_available_parses_among_other_lines() {
+        let sample = "MemTotal:       69975212 kB\nMemFree:         1234567 kB\n\
+                      MemAvailable:   62368464 kB\nSwapTotal:      17825792 kB\n";
+        assert_eq!(mem_available_bytes(sample), Some(62368464 * 1024));
+    }
+
+    #[test]
+    fn mem_available_missing_line_returns_none() {
+        assert_eq!(mem_available_bytes("MemTotal: 100 kB\n"), None);
+        assert_eq!(mem_available_bytes(""), None);
+    }
+
+    #[test]
+    fn mem_available_invalid_number_returns_none() {
+        assert_eq!(mem_available_bytes("MemAvailable: abc kB\n"), None);
+    }
+
+    #[test]
+    fn gate_decision_refuses_below_need_plus_floor() {
+        let err = memory_gate_decision(1000, 800, 300).unwrap_err();
+        assert!(err.contains("available=1000"));
+        assert!(err.contains("need=800"));
+        assert!(err.contains("floor=300"));
+    }
+
+    #[test]
+    fn gate_decision_allows_at_exact_boundary() {
+        assert!(memory_gate_decision(1100, 800, 300).is_ok());
+        assert!(memory_gate_decision(1200, 800, 300).is_ok());
+    }
 
     #[test]
     fn resolve_intra_threads_zero_falls_back_to_parallelism() {

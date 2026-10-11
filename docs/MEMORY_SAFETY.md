@@ -60,11 +60,15 @@ TRANSLATION_PARALLEL_WORKERS=2    # worker 数，默认 4，钳 1..=8；1=关闭
 
 ```bash
 scripts/build-memcap.sh build --release   # 代替 cargo build
-VECBOOST_BUILD_MEMMAX=26G VECBOOST_BUILD_MEMHIGH=20G VECBOOST_BUILD_JOBS=8 \
+VECBOOST_BUILD_MEMMAX=26G VECBOOST_BUILD_MEMHIGH=20G VECBOOST_BUILD_SWAPMAX=4G \
+    VECBOOST_BUILD_JOBS=8 \
     scripts/build-memcap.sh build --release --features transcribe
 ```
 
-已验证：scope 内 `memory.max` 内核级真实生效（26G）。
+已验证：scope 内 `memory.max` 内核级真实生效（26G）；cgroup v2 语义下总预
+算 = MemoryMax + MemorySwapMax，超总预算即 cgroup OOM 击杀。仅设 MemoryMax
+而 swap 无限制时，超限页换出即可绕过上限（实测 16M 上限下 133M 分配可存
+活），故必须同设 SwapMax（实测 5G 分配在 16M+4G 预算下被击杀）。
 
 ### 防线 4：用户级 earlyoom（免 root）
 
@@ -93,7 +97,7 @@ MEM_GUARD_INTERVAL_S=5            # 轮询间隔
 | `SESSION_MEMORY_GUARD` | on | Session 加载内存门禁开关（`off` 关停） |
 | `SESSION_MEMORY_FLOOR_MB` | 2048 | 门禁安全地板（MB） |
 | `TRANSLATION_PARALLEL_WORKERS` | 4 | 翻译并行 worker 数（1..=8，1=关闭） |
-| `VECBOOST_BUILD_MEMMAX` / `_MEMHIGH` | 26G / 20G | 构建硬/软上限 |
+| `VECBOOST_BUILD_MEMMAX` / `_MEMHIGH` / `_SWAPMAX` | 26G / 20G / 4G | 构建硬/软/swap 上限 |
 | `VECBOOST_BUILD_JOBS` | 8 | 构建并行度 |
 | `MEM_GUARD_MIN_MB` / `_TARGETS` / `_INTERVAL_S` / `_LOG` | 见上 | 守护参数 |
 

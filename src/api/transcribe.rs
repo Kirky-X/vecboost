@@ -17,12 +17,25 @@
 use crate::domain::{TranscribeRequest, TranscribeResponse};
 use crate::error::VecboostError;
 use crate::service::transcribe::TranscribeService;
+use serde::Deserialize;
 
-#[cfg(any(feature = "http", feature = "grpc"))]
+#[cfg(any(
+    feature = "http",
+    feature = "grpc",
+    all(feature = "cli", feature = "transcribe")
+))]
 use crate::api::embedding::{kit_internal_error, to_api_error};
-#[cfg(any(feature = "http", feature = "grpc"))]
+#[cfg(any(
+    feature = "http",
+    feature = "grpc",
+    all(feature = "cli", feature = "transcribe")
+))]
 use crate::api::init::state;
-#[cfg(any(feature = "http", feature = "grpc"))]
+#[cfg(any(
+    feature = "http",
+    feature = "grpc",
+    all(feature = "cli", feature = "transcribe")
+))]
 use crate::registry::TranscribeModule;
 
 #[cfg(any(feature = "http", feature = "grpc"))]
@@ -83,4 +96,48 @@ pub async fn forge_transcribe(req: TranscribeRequest) -> Result<TranscribeRespon
 )]
 pub async fn grpc_transcribe(req: TranscribeRequest) -> Result<TranscribeResponse, ApiError> {
     transcribe_handler(req).await
+}
+
+// =============================================================================
+// CLI forge handler（音频文件入参）
+// =============================================================================
+
+/// CLI 入参：WAV 文件路径（域契图为 samples 数组，CLI 逐样本传参无实用形态，
+/// 故 CLI 面收敛为单文件路径——读 wav → samples → 域请求）。
+#[cfg(all(feature = "cli", feature = "transcribe"))]
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+pub struct TranscribeWavRequest {
+    pub wav_path: String,
+}
+
+#[cfg(all(feature = "cli", feature = "transcribe"))]
+impl std::str::FromStr for TranscribeWavRequest {
+    /// # 红线（cli/grpc forge 落地时）
+    /// `Err = serde_json::Error` 携带内部结构名与字节偏移，handler 必须
+    /// 映射为通用 `VecboostError::validation_error` 文案（translate 同款）。
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
+}
+
+#[cfg(all(feature = "cli", feature = "transcribe"))]
+#[forge(
+    name = "transcribe",
+    version = 1,
+    cli = true,
+    description = "Transcribe a 16kHz mono WAV file to text (Qwen3-ASR; requires [transcribe] enabled)"
+)]
+pub async fn cli_transcribe(req: TranscribeWavRequest) -> Result<TranscribeResponse, ApiError> {
+    let st = state().map_err(to_api_error)?;
+    let svc = st
+        .kit
+        .require::<TranscribeModule>()
+        .map_err(kit_internal_error)?;
+    let samples = crate::transcribe::read_wav_16k_mono(std::path::Path::new(&req.wav_path))
+        .map_err(to_api_error)?;
+    transcribe(&svc, TranscribeRequest { samples })
+        .await
+        .map_err(to_api_error)
 }

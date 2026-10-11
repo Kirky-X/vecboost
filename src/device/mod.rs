@@ -3,6 +3,8 @@
 
 #![allow(unused)]
 
+#[cfg(all(target_os = "linux", not(target_env = "musl")))]
+pub mod allocator_tune;
 pub(crate) mod amd;
 pub(crate) mod cuda;
 pub(crate) mod gpu_tuning;

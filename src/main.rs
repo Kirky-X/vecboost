@@ -1190,6 +1190,15 @@ fn main() {
     // i18n 必须先于一切用户可见输出：thread-tune 提示（numa_advice）与
     // CLI fail-fast 文案（未知子命令/--config 校验）均已接线 FTL，早于 app_main。
     vecboost::i18n::init();
+    // jemalloc decay 调优（wsl2-oom-hardening-r2 D3）：boot 期 je_malloc_conf
+    // 强符号已于首次分配前生效，此处只做生效性观测与记录
+    #[cfg(all(target_os = "linux", not(target_env = "musl")))]
+    match vecboost::allocator_tune::effective_boot_conf() {
+        Ok((dirty, muzzy)) => {
+            log::info!("jemalloc decay: dirty={dirty}ms muzzy={muzzy}ms (boot conf)");
+        }
+        Err(e) => log::warn!("jemalloc decay probe failed: {e}"),
+    }
     // tokio runtime 线程数取物理核检测（显式 server.workers 优先，
     // VECBOOST_NO_THREAD_TUNE=1 回退 num_cpus）。配置在运行时前 best-effort
     // 预读，失败则由 app_main 内正式加载路径报错。

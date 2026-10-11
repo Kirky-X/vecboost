@@ -82,6 +82,12 @@ pub mod thread_tune {
     };
 }
 
+/// jemalloc decay 调优公共 API（boot 期生效性观测；cfg 与全局分配器一致）。
+#[cfg(all(target_os = "linux", not(target_env = "musl")))]
+pub mod allocator_tune {
+    pub use crate::device::allocator_tune::effective_boot_conf;
+}
+
 /// 硬件感知启动规划公共 API。
 pub mod planner {
     pub use crate::device::planner::{

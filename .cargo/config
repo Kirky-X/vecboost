@@ -1,0 +1,5 @@
+# jemalloc decay 调优（wsl2-oom-hardening-r2 D3）：编译期烘焙进 jemalloc-sys
+# （--with-malloc-conf，对全部 arena 生效）。运行期 MALLOC_CONF 环境变量可覆盖。
+# 同源文档：docs/MEMORY_SAFETY.md 防线 6
+[env]
+JEMALLOC_SYS_WITH_MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:1000"

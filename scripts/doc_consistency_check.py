@@ -65,7 +65,9 @@ def code_env_vars(src: str) -> set[str]:
 
 
 def code_cli_subcommands(src: str) -> set[str]:
-    return set(re.findall(r'name\s*=\s*"(embed|embed_batch|compute_similarity|rerank|search)"\s*,\s*version', src))
+    # 全量 CLI 面：所有 forge(cli = true) 的 name（旧版白名单只覆盖 5 个旧命令，
+    # "代码事实 cli=N" 打印值与真实 CLI 面脱节）
+    return set(re.findall(r'name\s*=\s*"([a-z_]+)"\s*,\s*version\s*=\s*1\s*,\s*cli\s*=\s*true', src))
 
 
 # confers env 映射可用性：VECBOOST_<SECTION>_<FIELD>，FIELD 不含下划线时可达
@@ -147,7 +149,8 @@ def main() -> int:
 
     # 4. CLI 子命令
     cli_cmds = code_cli_subcommands(src)
-    doc_cli = set(re.findall(r"vecboost\s+(embed_batch|compute_similarity|embed|rerank|search)\b", docs_text))
+    doc_cli = set(re.findall(r"vecboost\s+([a-z_]+)\b", docs_text))
+    doc_cli &= set(re.findall(r"`?(embed|embed_batch|compute_similarity|search|rerank|decisions|translate|detect|transcribe)`?", docs_text))
     for cmd in sorted(doc_cli):
         if cmd not in cli_cmds:
             issues.append(f"[cli] 文档声明子命令 {cmd} 未注册")

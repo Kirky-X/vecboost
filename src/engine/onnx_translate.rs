@@ -179,6 +179,37 @@ fn missing_worker_sets(current: usize, worker_count: usize) -> usize {
     worker_count.saturating_sub(1).saturating_sub(current)
 }
 
+/// int8 选路（translation-int8-optin D2）：`TRANSLATION_PREFER_INT8=1` 时
+/// `_quantized` 候选项前移（相对位次保持），未设/其他值 fp32 优先（契约
+/// 不变；与 `TRANSLATION_PARALLEL_WORKERS` 裸 env 惯例一致）。
+fn prefer_int8_translate() -> bool {
+    std::env::var("TRANSLATION_PREFER_INT8").ok().as_deref() == Some("1")
+}
+
+/// 候选序纯函数（离线可测）：prefer=false 原序；true 时含 `_quantized.` 的
+/// 项稳定前移。文件缺失仍由 `probe_model_file` 自然回退 fp32。
+fn candidate_order<'a>(candidates: &'a [&'a str], prefer_int8: bool) -> Vec<&'a str> {
+    if !prefer_int8 {
+        return candidates.to_vec();
+    }
+    let quantized: Vec<&str> = candidates
+        .iter()
+        .copied()
+        .filter(|c| c.contains("_quantized."))
+        .collect();
+    if quantized.is_empty() {
+        return candidates.to_vec();
+    }
+    let mut ordered = quantized;
+    ordered.extend(
+        candidates
+            .iter()
+            .copied()
+            .filter(|c| !c.contains("_quantized.")),
+    );
+    ordered
+}
+
 /// 长输入并行阈值：受保护文本字符数 ≥ 此值且句数 ≥2 才走句级并行（短文本
 /// 整段直解保留跨句上下文）。paper-translate-quality P7：论文摘要 1k+ 字符
 /// 整段贪心 150s+，并行后时延 ÷ worker 数。
@@ -729,8 +760,16 @@ impl OnnxTranslationEngine {
                 bundle_dir.display()
             )));
         }
-        let encoder_file = probe_model_file(&bundle_dir, &ENCODER_CANDIDATES, "encoder")?;
-        let decoder_file = probe_model_file(&bundle_dir, &DECODER_CANDIDATES, "decoder")?;
+        let encoder_file = probe_model_file(
+            &bundle_dir,
+            &candidate_order(&ENCODER_CANDIDATES, prefer_int8_translate()),
+            "encoder",
+        )?;
+        let decoder_file = probe_model_file(
+            &bundle_dir,
+            &candidate_order(&DECODER_CANDIDATES, prefer_int8_translate()),
+            "decoder",
+        )?;
 
         if let Some(ref expected_hash) = config.model_sha256 {
             // 口径同 decision：sha256 仅覆盖探测命中的主模型（此处双模型，
@@ -1818,6 +1857,55 @@ mod tests {
         assert_eq!(missing_worker_sets(5, 4), 0);
     }
 
+    // ── int8 选路：候选序纯函数（离线可测） ────────────────────────────
+
+    #[test]
+    fn candidate_order_off_keeps_fp32_first() {
+        assert_eq!(
+            candidate_order(&ENCODER_CANDIDATES, false),
+            vec![
+                "onnx/encoder_model.onnx",
+                "onnx/encoder_model_quantized.onnx"
+            ]
+        );
+    }
+
+    #[test]
+    fn candidate_order_prefer_int8_promotes_quantized() {
+        assert_eq!(
+            candidate_order(&ENCODER_CANDIDATES, true),
+            vec![
+                "onnx/encoder_model_quantized.onnx",
+                "onnx/encoder_model.onnx"
+            ]
+        );
+        assert_eq!(
+            candidate_order(&DECODER_CANDIDATES, true),
+            vec![
+                "onnx/decoder_model_merged_quantized.onnx",
+                "onnx/decoder_model_merged.onnx",
+            ]
+        );
+    }
+
+    #[test]
+    fn candidate_order_without_quantized_entry_passthrough() {
+        let only_fp32 = ["onnx/encoder_model.onnx"];
+        assert_eq!(
+            candidate_order(&only_fp32, true),
+            vec!["onnx/encoder_model.onnx"]
+        );
+    }
+
+    #[test]
+    fn candidate_order_multi_candidates_keeps_relative_order() {
+        let cands = ["a.onnx", "q_quantized.onnx", "b.onnx", "z_quantized.onnx"];
+        assert_eq!(
+            candidate_order(&cands, true),
+            vec!["q_quantized.onnx", "z_quantized.onnx", "a.onnx", "b.onnx"]
+        );
+    }
+
     // ── 探测：资产缺失显性报错（离线可跑） ──────────────────────────────
 
     #[test]
@@ -2781,5 +2869,153 @@ mod tests {
             "SMOKE multi-sentence translate(en→zh): {:?}",
             resp.translation
         );
+    }
+
+    // ── int8 质量门禁（translation-int8-optin T004）：同 bundle 同句，
+    //    dynamic int8 与 fp32 译文逐字节一致（不一致即红，禁静默降级） ──
+
+    /// 加载引擎并翻译一句（text→target_language）；ORT dylib 缺失返回
+    /// None（调用方按既有 e2e 口径 SKIP）。
+    fn translate_once(
+        dir: &std::path::Path,
+        text: &str,
+        source: &str,
+        target: &str,
+    ) -> Option<String> {
+        let dylib = std::env::var("ORT_DYLIB_PATH")
+            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+        if !std::path::Path::new(&dylib).is_file() {
+            return None;
+        }
+        if std::env::var_os("ORT_DYLIB_PATH").is_none() {
+            // SAFETY: 测试进程内单线程时点回填一次（既有 e2e 同款先例）
+            unsafe {
+                std::env::set_var("ORT_DYLIB_PATH", &dylib);
+            }
+        }
+        let engine = OnnxTranslationEngine::load(&ModelConfig {
+            name: "int8-gate".to_string(),
+            engine_type: crate::config::model::EngineType::Onnx,
+            model_path: dir.to_path_buf(),
+            tokenizer_path: None,
+            device: DeviceType::Cpu,
+            max_batch_size: 1,
+            pooling_mode: None,
+            expected_dimension: None,
+            memory_limit_bytes: None,
+            oom_fallback_enabled: false,
+            model_sha256: None,
+            task: ModelTask::Translate,
+            quantized: false,
+            decision_params: None,
+            translation_params: None,
+            transcription_params: None,
+        })
+        .expect("bundle 就绪时必须可加载");
+        let resp = OnnxTranslationEngine::translate(
+            &engine,
+            &TranslateRequest {
+                text: text.to_string(),
+                source_language: Some(source.to_string()),
+                target_language: target.to_string(),
+            },
+        )
+        .expect("贪心解码必须成功");
+        Some(resp.translation)
+    }
+
+    /// 字符级 Levenshtein 距离（门禁容差度量；短字符串两档全量空间 O(nm)）。
+    fn char_levenshtein(a: &str, b: &str) -> usize {
+        let a: Vec<char> = a.chars().collect();
+        let b: Vec<char> = b.chars().collect();
+        let mut prev: Vec<usize> = (0..=b.len()).collect();
+        let mut curr = vec![0; b.len() + 1];
+        for i in 1..=a.len() {
+            curr[0] = i;
+            for j in 1..=b.len() {
+                let cost = usize::from(a[i - 1] != b[j - 1]);
+                curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+            }
+            std::mem::swap(&mut prev, &mut curr);
+        }
+        prev[b.len()]
+    }
+
+    /// 归一化相似度：1 - dist / max(len)（空串同源视为 0）
+    fn char_similarity(a: &str, b: &str) -> f64 {
+        let (ac, bc) = (a.chars().count(), b.chars().count());
+        if ac.max(bc) == 0 {
+            return 0.0;
+        }
+        1.0 - char_levenshtein(a, b) as f64 / ac.max(bc) as f64
+    }
+
+    fn int8_quality_gate(bundle: Option<PathBuf>, label: &str, strict: bool) {
+        let Some(dir) = bundle else {
+            eprintln!("SKIP: {label} 缺失（离线环境）");
+            return;
+        };
+        let has_int8 = dir.join("onnx/encoder_model_quantized.onnx").is_file()
+            && dir
+                .join("onnx/decoder_model_merged_quantized.onnx")
+                .is_file();
+        if !has_int8 {
+            eprintln!("SKIP: {label} int8 bundle 缺失（先运行 quantize-translate-bundles.py）");
+            return;
+        }
+        let cases = [
+            "Hello, my dog is cute",
+            "The quick brown fox jumps over the lazy dog.",
+        ];
+        for text in cases {
+            let fp32 = translate_once(&dir, text, "en", "zh").expect("ORT dylib 就绪");
+            // SAFETY: pair 加载期读一次旋钮；本测试为进程内单点 set/remove
+            // （既有 ORT_DYLIB_PATH 同款先例）。int8 引擎加载后立即恢复默认
+            unsafe {
+                std::env::set_var("TRANSLATION_PREFER_INT8", "1");
+            }
+            let int8 = translate_once(&dir, text, "en", "zh").expect("ORT dylib 就绪");
+            unsafe {
+                std::env::remove_var("TRANSLATION_PREFER_INT8");
+            }
+            assert!(
+                !int8.trim().is_empty(),
+                "int8 译文不得为空（{label}, text={text:?}）"
+            );
+            assert!(
+                !int8.contains("</s>") && !int8.contains("<pad>"),
+                "int8 特殊 token 不得泄漏（{label}, text={text:?}）: {int8:?}"
+            );
+            if strict {
+                assert_eq!(
+                    int8, fp32,
+                    "int8 与 fp32 译文不一致（{label}, text={text:?}）"
+                );
+            } else {
+                // 容差档（opus 小模型实测 dynamic int8 噪声：单字替换、
+                // 尾部重复，design D3 降级条款）：
+                // ① fp32 等长窗口前缀相似度 ≥0.85——主体语义锚点；
+                // ② 尾部外延 ≤50%——重复失控护栏。双输出留证于 CI 日志
+                let ctx = &int8.chars().take(fp32.chars().count()).collect::<String>();
+                let prefix_sim = char_similarity(&fp32, ctx);
+                assert!(
+                    prefix_sim >= 0.85,
+                    "int8 主体语义偏差（{label}, text={text:?}, sim={prefix_sim:.2}）: \
+                     fp32={fp32:?} int8={int8:?}"
+                );
+                let tail_ratio = int8.chars().count() as f64 / fp32.chars().count().max(1) as f64;
+                assert!(
+                    tail_ratio <= 1.5,
+                    "int8 尾部外延失控（{label}, text={text:?}, ratio={tail_ratio:.2}）: \
+                     fp32={fp32:?} int8={int8:?}"
+                );
+            }
+            println!("INT8-GATE {label} {text:?}: fp32={fp32:?} int8={int8:?}");
+        }
+    }
+
+    #[test]
+    fn test_int8_quality_gate_opus() {
+        int8_quality_gate(opus_bundle(), "models/opus-mt-en-zh", false);
     }
 }

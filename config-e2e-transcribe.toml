@@ -1,0 +1,483 @@
+# VecBoost 配置文件
+# =================
+# 本文件包含 VecBoost 文本向量化的所有配置选项
+# 修改后需要重启服务使配置生效
+
+# ============ 服务配置 ============
+[server]
+# 服务绑定地址
+# 安全默认:仅监听回环地址。auth.enabled=false 时绑定非回环地址会拒绝启动
+# (容器等受信网络场景可设 VECBOOST_ALLOW_INSECURE=1 显式越过,见 README)
+host = "127.0.0.1"
+
+# 服务端口号
+port = 9002
+
+# 请求超时时间 (秒)
+timeout = 30
+
+# HTTP 全局请求超时 (秒；缺省 60，main.rs 消费)。
+# 300：论文摘要级长文本在 CPU seq2seq (m2m100_418M) 下耗时 15-60+s，
+# 60s 实测贴线（59.7s）且超线即 504（paper-translate-quality 评测），留 4× 余量
+request_timeout_seconds = 300
+
+# CORS 跨域开关（默认 false）；允许来源列表
+#
+# ⚠️ 通配符 "*" 语义说明:
+#   - cors_allow_origins = ["*"] 允许任意来源跨域调用,同时放行 Authorization 头
+#   - 意味着任何网页都能以用户自己的 JWT token 调用 API,等同于公开接口
+#   - 生产环境务必显式列出可信来源,例如 ["https://app.example.com"]
+#   - 开发/内网测试可使用 "*",但切勿在公网暴露的服务上启用
+# cors_enabled = false
+# cors_allow_origins = ["*"]
+
+# ============ 模型配置 ============
+[model]
+# HuggingFace 模型仓库 ID
+model_repo = "BAAI/bge-small-en-v1.5"
+
+# 模型版本/分支
+model_revision = "main"
+
+# 本地模型路径 (可选，设置后优先使用本地模型)
+model_path = "models/BAAI-bge-small-en-v1.5"
+
+# tokenizer 显式路径覆盖 (可选，默认不配置)
+# 消费者：onnx 本地 bundle 分支 (按 engine_type="onnx") + 决策管线
+# (按 task="decision"，engine_type 不参与)。两类路径均为：本地 bundle 加载时
+# 优先于根目录与 tokenizer/ 子目录探测，配置了不存在的路径在引擎加载期报错；
+# 其余组合 (candle embedding、onnx 非本地路径/HF 拉取、非本地目录) 不消费该
+# 字段，启动期 warn
+# tokenizer_path = "models/laya-decision/tokenizer/tokenizer.json"
+
+# 是否使用 GPU 加速
+# 安全/可用性默认:false。默认构建不含 GPU feature,置 true 会在无 GPU 环境回退 CPU 并告警。
+# 需要启用时先以相应 cargo feature 构建:
+# - CUDA: cargo build --features cuda
+# - Metal (macOS): cargo build --features metal
+use_gpu = false
+
+# 批处理大小
+batch_size = 32
+
+# 期望的向量维度 (BGE-M3 为 1024)
+expected_dimension = 384
+
+# 最大序列长度 (token 数)
+max_sequence_length = 8192
+
+# 推理精度 (可选，默认 fp32)
+# 可选值: fp32 / fp16 / bf16 / int8
+# bf16 仅 CUDA Ampere+ GPU 支持，其他设备自动回退 fp32
+# precision = "fp32"
+
+# GGUF 量化模型开关 (可选，默认 false)
+# true 且 model_path 指向 .gguf 文件时选用量化引擎（Q8_0/Q4_K）；
+# 需要以 `--features quantized-gguf` 构建；质量门见 docs/PERFORMANCE.md「GGUF 量化」节
+# quantized = false
+
+# 推理引擎类型 (可选，默认 candle)
+# 可选值: candle / onnx
+# onnx 需以 `--features onnx` 构建；未知值启动期显性报错。
+# task=decision 时本字段不参与分派（Laya bundle 为 onnx 格式，task 主维度优先）；
+# task=translate 时强制 onnx（candle 无 seq2seq 实现，配置即启动期报错）
+# engine_type = "candle"
+
+# 任务维度 (可选，默认 embedding)
+# 可选值: embedding / decision / translate —— 三态语义：
+# ⚠️ task=decision 时模型加载为 Laya 决策管线，仅 /api/1/decisions 可用，
+#    embed/rerank 端点调用返回 400 Unsupported task；
+#    task=embedding（默认）时反之，decisions 端点返回 400。
+# decision bundle 目录布局（model_path 指向 bundle 根目录）:
+#   <bundle>/laya.onnx                 # 主模型（探测名 model.onnx / laya.onnx 等）
+#   <bundle>/laya_config.json          # per-cardinality 温度校准表（缺失 warn 兜底）
+#   <bundle>/tokenizer/tokenizer.json  # 或 bundle 根下 tokenizer.json
+#   Windows: .data 外部权重文件必须与主图同目录
+# 需要以 `--features onnx` 构建；示例:
+# task = "decision"
+# model_path = "models/laya-decision"
+# ⚠️ task=translate 时模型加载为 seq2seq 翻译引擎（仅 engine_type=onnx，
+#    candle 显性拒绝），仅 /api/1/translate 可用；翻译语言对不读本段——
+#    走文件尾部 [translation] 配置段（多语言对路由表）。
+#    注意：task=translate 主模型用法的 token 参数恒为默认 512/512
+#    （无配置入口），参数可调的翻译部署请使用 [translation].pairs。
+# 翻译 bundle 目录布局（同 onnx 契约：tokenizer.json 必填）:
+#   <bundle>/tokenizer.json                        # 强制（tokenizers 0.23 不支持 .spm）
+#   <bundle>/generation_config.json                # 解码锚点（decoder_start/eos token）
+#   <bundle>/onnx/encoder_model.onnx               # 推荐仓库 Xenova/opus-mt-en-zh / -en-es
+#   <bundle>/onnx/decoder_model_merged.onnx
+# 需要以 `--features onnx` 构建；示例:
+# task = "translate"
+# model_path = "models/opus-mt-en-zh"
+# ⚠️ task=transcribe 时模型加载为 Qwen3-ASR 转录引擎（三图 + silero VAD +
+#    whisper fbank；engine_type=onnx 强制，candle 显性拒绝），目前仅库内
+#    InferenceEngine::transcribe 入口消费，HTTP/gRPC 服务面未接线。
+#    需要以 `--features transcribe` 构建。引擎级参数 transcription_params
+#    （models_dir 缺省取 model_path；vad_threshold 缺省 0.5）经库 /
+#    model-repository API 构造 ModelConfig 时设置，服务 [model] 段不暴露。示例:
+# task = "transcribe"
+# model_path = "models/qwen3-asr"
+# task = "embedding"
+
+# 最大驻留模型数 (T019, 可选，默认不限制): 超限按 LFRU 驱逐 score 最低者
+# max_resident_models = 4
+
+# 驻留内存预算 MB (T019, 可选，默认不限制): 超预算硬驱逐（忽略迟滞）
+# resident_memory_budget_mb = 8192
+
+# ============ 向量化配置 ============
+[embedding]
+# 默认聚合模式
+# 可选值:
+#   - mean: 平均池化 (加权平均，考虑重叠)
+#   - max: 最大池化
+#   - min: 最小池化
+default_aggregation = "mean"
+
+# 默认相似度度量方法
+# 可选值:
+#   - cosine: 余弦相似度 (推荐)
+#   - euclidean: 欧氏距离
+#   - dot_product: 点积
+#   - manhattan: 曼哈顿距离
+similarity_metric = "cosine"
+
+# 是否启用结果缓存
+cache_enabled = true
+
+# 缓存大小 (最大缓存条目数)
+cache_size = 1024
+
+# 最大批处理大小
+max_batch_size = 64
+
+# 单个文本最大字节长度 (防止资源耗尽攻击)
+max_text_length = 8192
+
+# embedding 缓存 WAL 落盘路径 (T021): 设置后每次插入两段追加落盘，
+# 重启回放重建缓存；默认不设置 = 纯内存
+# persist_path = "data/embedding_cache.wal"
+
+# WAL 紧凑化阈值字节数 (T022): 超过即启动时快照重写；默认 1 GiB
+# persist_max_bytes = 1073741824
+
+# ============ 监控配置 ============
+[monitoring]
+# 内存限制 (MB), None 表示不限制
+memory_limit_mb = 4096
+
+# 内存警告阈值 (0.0-1.0), 达到此比例时发出警告
+memory_warning_threshold = 0.8
+
+# 是否启用性能指标收集
+metrics_enabled = true
+
+# 日志级别
+# 可选值: trace, debug, info, warn, error
+log_level = "info"
+
+# ============ 认证配置 ============
+[auth]
+# 是否启用认证
+enabled = false
+
+# JWT 密钥
+# ⚠️ 重要：生产环境必须通过环境变量设置,禁止在配置文件中填写
+# 使用: export VECBOOST_JWT_SECRET="your-32-char-min-secret"
+# (vuln-0008 修复:不在配置文件中暴露字段名,统一通过环境变量注入)
+
+# Token 过期时间 (小时)
+# 访问 token 有效期: 1 小时
+token_expiration_hours = 1
+
+# 默认管理员用户名 (首次启动时必须设置)
+default_admin_username = "admin"
+
+# 默认管理员密码
+# ⚠️ 重要：生产环境必须通过环境变量设置,禁止在配置文件中填写
+# 使用: export VECBOOST_ADMIN_PASSWORD="your-secure-password"
+# (vuln-0008 修复:不在配置文件中暴露字段名,统一通过环境变量注入)
+
+# 受信任代理 CIDR 列表 (X-Forwarded-For 信任边界)
+# 空列表 = 无条件信任 XFF (向后兼容)
+# 非空 = 仅当 peer IP 匹配列表内 CIDR 时才信任 XFF
+trusted_proxies = []
+
+# ============ 密钥存储配置 ============
+[auth.security]
+# 密钥存储类型: environment, encrypted_file
+storage_type = "environment"
+
+# 加密密钥(用于 encrypted_file 存储类型)
+# ⚠️ 重要：生产环境必须通过环境变量设置,禁止在配置文件中填写
+# 使用: export VECBOOST_ENCRYPTION_KEY="your-encryption-key"
+# (vuln-0008 修复:不在配置文件中暴露字段名,统一通过环境变量注入)
+
+# ============ 审计日志配置 ============
+[audit]
+# 是否启用审计日志
+enabled = true
+
+# 审计日志文件路径
+log_file_path = "logs/audit.log"
+
+# 日志级别
+# 可选值: trace, debug, info, warn, error
+log_level = "info"
+
+# 单个日志文件最大大小 (MB)
+max_file_size_mb = 100
+
+# 保留的日志文件数量
+max_files = 10
+
+# ============ 限流配置 ============
+[rate_limit]
+# 是否启用限流
+enabled = true
+
+# 全局请求限制 (每分钟)
+global_requests_per_minute = 1000
+
+# IP 请求限制 (每分钟)
+ip_requests_per_minute = 100
+
+# 用户请求限制 (每分钟)
+user_requests_per_minute = 200
+
+# API Key 请求限制 (每分钟)
+api_key_requests_per_minute = 500
+
+# 时间窗口大小 (秒)
+window_secs = 60
+
+# IP 白名单 (这些 IP 不受限流限制)
+# 支持单个 IP 和 CIDR 表示法，例如: "127.0.0.1", "192.168.1.0/24"
+ip_whitelist = ["127.0.0.1", "::1"]
+
+# 注入 IETF RateLimit-* 响应头 (RateLimit-Limit/Remaining/Reset/Policy,
+# 429 响应额外携带 Retry-After)，便于客户端按标准头做退避
+headers_enabled = false
+
+# ============ 数据库配置 (dbnexus, 需要 db feature) ============
+[database]
+# 数据库连接 URL
+# SQLite: "sqlite:vecboost.db"
+# PostgreSQL: "postgres://user:pass@localhost:5432/vecboost"
+url = "sqlite:vecboost.db"
+
+# 连接池大小
+max_connections = 10
+
+# 连接超时 (秒)
+connect_timeout_secs = 5
+
+# ============ 日志配置 (inklog，v0.3.0 起生效) ============
+[logging]
+# 日志级别: trace, debug, info, warn, error
+level = "info"
+
+# 是否输出到控制台（注：上游 inklog 缺陷导致运行期关闭暂不生效；
+# CLI/MCP 模式下日志自动改道 stderr，不受此字段影响）
+console = true
+
+# 日志文件路径 (空字符串表示不写入文件)
+file_path = "logs/vecboost.log"
+
+# 日志文件轮转大小 (MB)
+rotation_size_mb = 100
+
+# 保留的日志文件数量
+max_files = 10
+
+# 文件日志采样（高频日志降盘压；只作用于文件 sink）
+[logging.sampling]
+# 启用采样
+enabled = false
+# 级别阈值：≥ 该级别的记录直接放行 (trace/debug/info/warn/error/fatal)
+min_level = "info"
+# 低于阈值的记录 N 取 1 (1 表示全放行)
+sample_every_n = 10
+# 豁免关键词（大小写不敏感子串匹配，命中即放行）
+keyword_whitelist = []
+
+# ============ 流控配置 (limiteron, 需要 limiteron feature) ============
+# ⚠️ 注意：当前版本（v0.3.x）的 VecboostConfig 未解析此配置段，编辑此段不会生效。
+# 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
+[flow_control]
+# 是否启用流控
+enabled = true
+
+# 令牌桶容量
+token_capacity = 100
+
+# 令牌补充速率 (每秒)
+token_refill_rate = 50
+
+# 熔断器失败率阈值 (0.0-1.0)
+circuit_breaker_failure_threshold = 0.5
+
+# 熔断器恢复超时 (秒)
+circuit_breaker_recovery_secs = 30
+
+# ============ 缓存配置 (oxcache, 需要 oxcache feature) ============
+# ⚠️ 注意：当前版本（v0.3.x）的 VecboostConfig 未解析此配置段，编辑此段不会生效。
+# 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
+[cache]
+# 是否启用缓存
+enabled = true
+
+# 缓存后端类型: memory, redis
+backend = "memory"
+
+# 最大缓存条目数
+max_entries = 10000
+
+# 缓存 TTL (秒, 0 表示永不过期)
+ttl_secs = 3600
+
+# 驱逐策略: lru, lfu, fifo
+eviction_policy = "lru"
+
+# 语义缓存向量比较模式: exact（默认，行为不变）| i8 | binary —— 见 [embedding] 段说明，
+# 实际生效配置见上方各段；本段为展示段不生效。
+# comparison_mode = "exact"
+
+# ⚠️ WAL 落盘示例已移至 [embedding] 段（persist_path / persist_max_bytes，该段真实生效）。
+
+# ============ 设备配置 ============
+# ✅ 本段由 VecboostConfig 解析（T024 接线）。
+[device]
+# 硬件感知启动规划 (T024): true 时用探测计划填充未显式配置的字段，
+# 任何显式配置优先于计划；计划全文进启动日志。默认 false（零计划行为）
+# auto_plan = false
+
+# 优先使用的设备类型
+# 可选值:
+#   - cpu: CPU 计算
+#   - cuda: NVIDIA GPU (需要 CUDA support)
+#   - metal: Apple Silicon GPU (需要 Metal support)
+#   - auto: 自动检测并选择最佳设备
+preferred = "auto"
+
+# GPU 内存保留比例 (0.0-1.0)
+# 用于防止 GPU OOM，保留部分显存
+gpu_memory_reservation = 0.1
+
+# ============ 高级配置 ============
+# ⚠️ 注意：当前版本（v0.3.x）的 VecboostConfig 未解析此配置段，编辑此段不会生效。
+# 保留此段仅为展示规划中的配置项；实际生效的配置项见上方各段。
+[advanced]
+# 是否启用 ONNX Runtime 作为备用引擎
+onnx_fallback_enabled = true
+
+# 是否启用 GPU OOM 自动降级
+gpu_oom_fallback_enabled = true
+
+# 重试配置
+[advanced.retry]
+# 最大重试次数
+max_attempts = 3
+
+# 重试间隔 (毫秒)
+delay_ms = 1000
+
+# 指数退避倍率
+exponential_base = 2.0
+
+# 熔断器配置
+[advanced.circuit_breaker]
+# 失败率阈值 (0.0-1.0)
+failure_threshold = 0.5
+
+# 最小请求数
+min_requests = 10
+
+# 半开状态请求数
+half_open_requests = 3
+
+# 熔断恢复超时 (秒)
+recovery_timeout = 30
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 翻译多语言对配置（可选；默认无 [translation] 段 = 未配置，
+# /api/1/translate 端点仍注册、请求以 400 translate-not-configured 显性拒绝）
+#
+# 每对 [[translation.pairs]] 启动期急切构建（EngineFactory task=translate 分派，
+# 任一 bundle 缺失启动期 fail-fast）；请求按 (source_language, target_language)
+# 精确路由，source 缺省时经 whatlang auto 检测（不可靠 → 400）。
+# 语言码契约：小写 ISO 639-1（无等价者 639-3 码），与 /detect 同一口径。
+# pair 数上限 16；token 参数缺省 512/512（硬上限 1024）。
+#
+# 推荐仓库（HF）：Xenova/opus-mt-en-zh、Xenova/opus-mt-en-es
+# （下载方式：cargo run --example download_model -- --model Xenova/opus-mt-en-zh，
+#  或经 src/utils/hf_hub.rs::download_files 取 TRANSLATE_BUNDLE_FILES 七文件清单）
+#
+# [translation]
+#
+# [[translation.pairs]]
+# source_language = "en"
+# target_language = "zh"
+# model_path = "models/opus-mt-en-zh"
+# # tokenizer_path = "models/opus-mt-en-zh/tokenizer.json"   # 可选显式覆盖
+# # max_source_tokens = 512                                   # 可选（缺省 512）
+# # max_new_tokens = 512                                      # 可选（缺省 512）
+#
+# [[translation.pairs]]
+# source_language = "en"
+# target_language = "es"
+# model_path = "models/opus-mt-en-es"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 翻译多语言对路由（活动配置；2026-10-09 重建——autostash 事故丢失后按本会话
+# 读取证据逐字恢复 4 对；原 5-8 对语言码无证据，显性缺失待所有者补录）
+# 译文输出修复表 output_fixes：from→to 字面替换（按声明序），修复模型级
+# 高频误译（paper-translate-quality 评测实测损伤）
+[translation]
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "zh"
+model_path = "models/m2m100_418M"
+
+# m2m100 en→zh 实测误译修复（评测实录：downstream→下流 / fine-tuned→精细的 / de novo→回合）
+[[translation.pairs.output_fixes]]
+from = "下流任务"
+to = "下游任务"
+
+[[translation.pairs.output_fixes]]
+from = "精细的LLaMA"
+to = "微调的LLaMA"
+
+[[translation.pairs.output_fixes]]
+from = "回合和新药物设计"
+to = "从头药物设计"
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "fr"
+model_path = "models/opus-mt-en-fr"
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "de"
+model_path = "models/nllb-200-distilled-600M"
+min_new_tokens = 16
+
+[[translation.pairs]]
+source_language = "en"
+target_language = "es"
+model_path = "models/m2m100_418M"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 转录服务（[transcribe] 段；transcribe-poc HTTP/gRPC 服务面接线）
+# enabled=false 缺省：端点仍注册，任意请求 400 transcribe-not-configured。
+# 启用需 --features transcribe 构建；bundle 指向 Qwen3-ASR 三图 +
+# silero_vad.onnx + tokenizer/ 的目录，缺失则启动期 fail-fast。
+[transcribe]
+enabled = true
+models_dir = "assets/models"
+vad_threshold = 0.5
+intra_threads = 0
+no_spin = false
+cuda = false

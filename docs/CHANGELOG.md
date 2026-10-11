@@ -108,6 +108,12 @@
 - 文档:README/API_REFERENCE 与实现不一致处全量纠错;doc_consistency_check 纳入门禁
 - 交付:Dockerfile 兼容 edition 2024;LICENSE 补齐;CI 覆盖率硬门禁 + Python 场景测试 nightly;clippy unwrap_used 门禁
 
+### 新增（wsl2-oom-hardening-r2：第二轮加固）
+
+- **`.wslconfig` 内核阈值**：追加 `vm.min_free_kbytes=262144`（原 44MB → 256MB，OOM 决策前移；下次 `wsl --shutdown` 生效，原文件备份于 temp/）
+- **通用进程内存上限**：`scripts/run-memcap.sh`（systemd --user scope，服务异常膨胀自爆保整机；MemoryMax/MemoryHigh/MemorySwapMax 三旋钮，cgroup 属性与超限击杀均已实测）
+- **jemalloc decay 编译期烘焙**：`.cargo/config.toml [env] JEMALLOC_SYS_WITH_MALLOC_CONF` → decay 1000ms（大请求后 RSS 秒级回落）；三条注入路径排除证据链（运行时 mallctl 不存在 / `je_malloc_conf` 被 hidden visibility 否决）见 specmark design D3；`effective_boot_conf()` 启动期观测
+
 ### 新增（wsl2-oom-hardening：WSL2 OOM 事故四道防线）
 
 - **Session 内存门禁**：`build_session` 在创建任何 ORT 分配前检查 MemAvailable（需求按模型文件 ×3/2 估算），不足即 fail-fast 显性报错（消息含 available/need/floor 与处置建议），全引擎 6 处调用点统一生效；旋钮 `SESSION_MEMORY_GUARD`（默认开）/`SESSION_MEMORY_FLOOR_MB`（默认 2048）

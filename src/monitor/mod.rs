@@ -88,7 +88,13 @@ impl MemoryMonitor {
                 stats.peak_bytes = std::cmp::max(current, peak);
             }
             Err(e) => {
-                warn!("Failed to get memory info: {}", e);
+                warn!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-monitor-failed-get-memory-info",
+                        crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                    )
+                );
             }
         }
 

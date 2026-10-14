@@ -47,6 +47,18 @@ repos:
         always_run: true
         types: [rust]
 
+  # i18n 一致性门禁（默认英文 + 硬编码文案回流拦截）
+  - repo: local
+    hooks:
+      - id: i18n-consistency
+        name: i18n consistency check
+        description: Verify en FTL has no CJK, en/zh key parity, tr()/i18n_key references resolve, and production user-visible strings are localized or registered
+        entry: python3 scripts/i18n_consistency_check.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        types: [rust]
+
   # Remove trailing whitespace
   # 注：以下三个钩子原为 language: system + 自定义 entry，但系统中并无
   # trailing-whitespace-fixer / check-merge-conflict / check-added-large-files

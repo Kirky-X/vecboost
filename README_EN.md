@@ -261,7 +261,7 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 
 > **📦 Built-in dependencies**: `confers` (config), `inklog` (logging), `oxcache` (cache), `limiteron` (rate limiting), and `trait-kit` (module registry) are mandatory dependencies that are always enabled — no feature flag needed. `sdforge` is enabled by any protocol feature (`http`/`grpc`/`cli`/`mcp`).
 
-> **🧪 Experiment path**: `transcribe-poc/` (standalone crate, binary `transcribe-own`) has been converged into a thin-shell CLI — local inference removed, inference goes through the main-crate facade `vecboost::transcribe`; the py-torch baseline path is retained. The lockstep batching / GPU io-binding experiment knobs were retired with the experiment files (conclusions in `out/transcribe-poc/own-engine/summary.md`). The productized implementation lives in `src/engine/transcribe/` — see [DEPRECATED.md](DEPRECATED.md).
+> **🧪 Experiment path**: `transcribe-poc/` (standalone crate, binary `transcribe-own`) has been converged into a thin-shell CLI — local inference removed, inference goes through the main-crate facade `vecboost::transcribe`; the py-torch baseline path is retained. The lockstep batching / GPU io-binding experiment knobs were retired with the experiment files (conclusions in `out/transcribe-poc/own-engine/summary.md`). The productized implementation lives in `src/engine/transcribe/` — the verbatim CLI contract is in [`transcribe-poc/CONTRACT.md`](transcribe-poc/CONTRACT.md), and the consumption / retirement norms in [🧹 Maintenance Norms](docs/MAINTENANCE.md).
 
 ---
 
@@ -288,6 +288,7 @@ Per-key options and defaults for every config section (server / model / embeddin
 | [🧪 Test Scenarios](docs/TEST_SCENARIOS.md) | Test-stack responsibilities and the scenario matrix |
 | [📋 Changelog](docs/CHANGELOG.md) | Release-by-release change log |
 | [🤝 Contributing](docs/CONTRIBUTING.md) | How to contribute |
+| [🧹 Maintenance Norms](docs/MAINTENANCE.md) | Cross-change standing constraints: transcribe consumption surface, CLI contract, retired-switch discipline, deprecation-doc governance |
 | [📈 Benchmark archive](docs/benchmarks/) | Historical benchmark data (similarity / batch scheduling / semantic cache / GPU pipeline) |
 | [🌍 I18N missing-key audit](docs/I18N_MISSING_AUDIT.md) | Internationalization audit record |
 

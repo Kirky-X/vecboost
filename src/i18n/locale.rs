@@ -13,46 +13,50 @@
 
 /// Detect the user's preferred locale from environment and system settings.
 ///
-/// Priority chain (reference-pattern §2):
-/// `VECBOOST_LANG` → `LC_ALL` → `LC_MESSAGES` → `LANG` → `sys-locale` → `"en"`.
-///
-/// Returns a normalized locale string: `"en"` or `"zh"`.
+/// Thin wrapper over [`detect_from`] feeding the real process environment and
+/// the system locale; the chain itself lives in `detect_from` so it can be
+/// unit-tested without mutating process environment variables.
 pub fn detect_locale() -> String {
+    detect_from(
+        |key| std::env::var(key).ok(),
+        sys_locale::get_locale().as_deref(),
+    )
+}
+
+/// Pure locale-chain resolver: `get_env` lookups plus an optional system
+/// locale, normalized by [`normalize_locale`].
+///
+/// Chain (reference-pattern §2): `VECBOOST_LANG` → `LC_ALL` → `LC_MESSAGES` →
+/// `LANG` → `sys-locale` → `"en"`. Semantics preserved from the original
+/// implementation: a level **present and non-empty after trim** terminates the
+/// chain (unsupported values collapse to `"en"` via [`normalize_locale`] and do
+/// **not** fall through) —— keeping `LC_ALL=C`/`LANG=fr` at "en" rather than
+/// digging further into the environment for a Chinese locale.
+pub(crate) fn detect_from(
+    get_env: impl Fn(&str) -> Option<String>,
+    sys_locale: Option<&str>,
+) -> String {
     // 1. Explicit override
-    if let Ok(lang) = std::env::var("VECBOOST_LANG") {
+    if let Some(lang) = get_env("VECBOOST_LANG") {
         let trimmed = lang.trim();
         if !trimmed.is_empty() {
             return normalize_locale(trimmed);
         }
     }
 
-    // 2. LC_ALL
-    if let Ok(lc) = std::env::var("LC_ALL") {
-        let trimmed = lc.trim();
-        if !trimmed.is_empty() {
-            return normalize_locale(trimmed);
-        }
-    }
-
-    // 3. LC_MESSAGES (POSIX 消息类目专用变量；未设 LC_ALL 时优先于 LANG)
-    if let Ok(lc) = std::env::var("LC_MESSAGES") {
-        let trimmed = lc.trim();
-        if !trimmed.is_empty() {
-            return normalize_locale(trimmed);
-        }
-    }
-
-    // 4. LANG
-    if let Ok(lang) = std::env::var("LANG") {
-        let trimmed = lang.trim();
-        if !trimmed.is_empty() {
-            return normalize_locale(trimmed);
+    // 2-4. POSIX chain (LC_ALL > LC_MESSAGES > LANG；空值继续下探)
+    for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Some(lc) = get_env(key) {
+            let trimmed = lc.trim();
+            if !trimmed.is_empty() {
+                return normalize_locale(trimmed);
+            }
         }
     }
 
     // 5. System locale
-    if let Some(sys_locale) = sys_locale::get_locale() {
-        return normalize_locale(&sys_locale);
+    if let Some(sys_locale) = sys_locale {
+        return normalize_locale(sys_locale);
     }
 
     // 6. Fallback
@@ -401,5 +405,69 @@ mod tests {
         );
         // Quality without q= prefix
         assert_eq!(parse_accept_language("en;0.5"), Some("en".to_string()));
+    }
+
+    // ---- 默认语言守卫（纯函数链路，不依赖进程环境变量）----
+
+    /// 全链无信号（四级变量缺席 + 无系统 locale）时默认必须落 `"en"`。
+    #[test]
+    fn test_detect_from_clean_env_is_en() {
+        assert_eq!(detect_from(|_key: &str| None, None), "en");
+    }
+
+    /// 不支持 / 占位值（`C`、`POSIX`、`fr_FR`、空串）在任一层级都不得产出
+    /// `"zh"`，必须显式落到 `"en"`——「默认显示语言严格为英文」的硬约束。
+    #[test]
+    fn test_detect_from_unsupported_values_never_yield_zh() {
+        for raw in ["C", "POSIX", "fr_FR.UTF-8", "ja_JP", "de", "", "   "] {
+            for key in ["VECBOOST_LANG", "LC_ALL", "LC_MESSAGES", "LANG"] {
+                let injected = raw.to_string();
+                let env = |k: &str| (k == key).then(|| injected.clone());
+                let locale = detect_from(env, None);
+                assert_eq!(locale, "en", "{key}={raw:?} 必须落 en");
+            }
+        }
+    }
+
+    /// `VECBOOST_LANG` 是最高优先级显式覆盖，必须压过 POSIX 链与系统 locale。
+    #[test]
+    fn test_detect_from_vecboost_lang_overrides_everything() {
+        let env = |key: &str| match key {
+            "VECBOOST_LANG" => Some("en".to_string()),
+            "LC_ALL" | "LANG" => Some("zh_CN.UTF-8".to_string()),
+            _ => None,
+        };
+        assert_eq!(detect_from(env, Some("zh-CN")), "en");
+    }
+
+    /// 层级顺序不随实现重构漂移：LC_ALL > LC_MESSAGES > LANG > sys-locale > en。
+    #[test]
+    fn test_detect_from_chain_order() {
+        // LC_ALL 胜后续各级
+        let env = |key: &str| match key {
+            "LC_ALL" => Some("en".to_string()),
+            "LC_MESSAGES" | "LANG" => Some("zh".to_string()),
+            _ => None,
+        };
+        assert_eq!(detect_from(env, Some("zh-CN")), "en");
+
+        // 无 LC_ALL 时 LC_MESSAGES（POSIX 消息类目）胜 LANG
+        let env = |key: &str| match key {
+            "LC_MESSAGES" => Some("en".to_string()),
+            "LANG" => Some("zh".to_string()),
+            _ => None,
+        };
+        assert_eq!(detect_from(env, Some("zh-CN")), "en");
+
+        // 前两级缺席时 LANG 胜系统 locale
+        let env = |key: &str| (key == "LANG").then(|| "en".to_string());
+        assert_eq!(detect_from(env, Some("zh-CN")), "en");
+
+        // 三级全为空值（trim 后）→ 继续下探到系统 locale
+        let env = |_key: &str| Some("   ".to_string());
+        assert_eq!(detect_from(env, Some("zh_CN.UTF-8")), "zh");
+
+        // 系统 locale 也不支持 → 链尾 en
+        assert_eq!(detect_from(|_key: &str| None, Some("de_DE.UTF-8")), "en");
     }
 }

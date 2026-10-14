@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use vecboost::transcribe::{TRANSCRIBE_SAMPLE_RATE_HZ, TranscribeOpts, open, read_wav_16k_mono};
+use vecboost::transcribe::{open, read_wav_16k_mono, TranscribeOpts, TRANSCRIBE_SAMPLE_RATE_HZ};
 
 const USAGE: &str = "usage: transcribe-own <wav> <outDir> [--models <dir>] [--vad-only]";
 
@@ -139,8 +139,11 @@ fn warn_retired_knobs() {
     for key in ["TRANSCRIBE_ENV_POOL", "TRANSCRIBE_BATCH", "TRANSCRIBE_GPU"] {
         if std::env::var_os(key).is_some() {
             eprintln!(
-                "transcribe-own: {key} retired (experiment path removed; \
-                 conclusions recorded in out/transcribe-poc/own-engine/summary.md) — ignored"
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "cli-poc-transcribe-own-key-retired",
+                    vecboost::i18n::tr_args(&[("key", (key))])
+                )
             );
         }
     }
@@ -160,7 +163,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             "/home/dev/projects/vecboost-transcribe/.venv-export/lib/python3.11/site-packages",
         );
         let model_dir = "/home/dev/video/Qwen3-ASR-1.7B";
-        eprintln!("transcribe-own: backend=py-torch (embedded CPython, GPU 1.7B bf16)");
+        eprintln!(
+            "{}",
+            vecboost::i18n::tr("cli-poc-transcribe-own-backend-py")
+        );
         let text = pytorch_backend::run_pytorch_baseline(&args.wav, model_dir)?;
         std::fs::create_dir_all(&args.out_dir)?;
         std::fs::write(args.out_dir.join("transcript.txt"), &text)?;
@@ -185,8 +191,15 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     ] {
         if normalized != raw {
             eprintln!(
-                "transcribe-own: {name} path carries annotation text, normalized: {:?} -> {}",
-                raw, normalized.display()
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "cli-poc-transcribe-own-name-path",
+                    vecboost::i18n::tr_args(&[
+                        ("name", (name)),
+                        ("a1", &format!("{:?}", raw)),
+                        ("a2", &(normalized.display()).to_string())
+                    ])
+                )
             );
         }
     }
@@ -213,8 +226,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let samples = read_wav_16k_mono(&wav_path)?;
     let audio_seconds = samples.len() as f64 / TRANSCRIBE_SAMPLE_RATE_HZ;
     eprintln!(
-        "transcribe-own: wav loaded: {} samples, {audio_seconds:.3}s",
-        samples.len()
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "cli-poc-transcribe-own-wav-loaded",
+            vecboost::i18n::tr_args(&[
+                ("a1", &(samples.len()).to_string()),
+                ("audio_seconds", &format!("{:.3}", audio_seconds))
+            ])
+        )
     );
 
     // VAD-only：单会话分段即可（不建 worker 集）
@@ -224,17 +243,29 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         .detect_segments(&samples)
         .map_err(|e| format!("vad detect: {e}"))?;
     eprintln!(
-        "transcribe-own: [{:.3}s] vad done: {} segments",
-        t0.elapsed().as_secs_f64(),
-        segments.len()
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "cli-poc-transcribe-own-3-s-2",
+            vecboost::i18n::tr_args(&[
+                ("a1", &format!("{:.3}", t0.elapsed().as_secs_f64())),
+                ("a2", &(segments.len()).to_string())
+            ])
+        )
     );
 
     let mut transcript = String::new();
     let mut seg_lines = String::new();
     if !args.vad_only {
         eprintln!(
-            "transcribe-own: decoding {segments_len} segments with {workers} workers (ort-intra={intra}); loading {workers} session sets...",
-            segments_len = segments.len()
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "cli-poc-transcribe-own-decoding-segments",
+                vecboost::i18n::tr_args(&[
+                    ("segments_len", &segments.len().to_string()),
+                    ("workers", &workers.to_string()),
+                    ("intra", &intra.to_string()),
+                ]),
+            )
         );
         // 段级并行：每 worker 独立会话（ort rc.13 禁并发 Run 同一 Session，
         // 各持一套三图；内存 ×workers，与原 batch/worker 行为等价）
@@ -254,10 +285,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     let session = match open(models_dir, opts) {
                         Ok(s) => s,
                         Err(e) => {
-                            errors
-                                .lock()
-                                .unwrap()
-                                .push(format!("worker {w}: {e}"));
+                            errors.lock().unwrap().push(format!("worker {w}: {e}"));
                             return;
                         }
                     };
@@ -267,17 +295,24 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                             return;
                         }
                         let seg = &segments[i];
-                        let seg_samples = &samples[seg.start_sample as usize..seg.end_sample as usize];
+                        let seg_samples =
+                            &samples[seg.start_sample as usize..seg.end_sample as usize];
                         match session.transcribe_segment(seg_samples) {
                             Ok(text) => {
                                 eprintln!(
-                                    "transcribe-own: [{:.3}s] worker {w} segment {}/{} [{:.2}s-{:.2}s] {} chars",
-                                    t0.elapsed().as_secs_f64(),
-                                    i + 1,
-                                    segments.len(),
-                                    seg.start_sec,
-                                    seg.end_sec,
-                                    text.chars().count()
+                                    "{}",
+                                    vecboost::i18n::tr_with_args(
+                                        "cli-poc-transcribe-own-3-s",
+                                        vecboost::i18n::tr_args(&[
+                                            ("a1", &format!("{:.3}", t0.elapsed().as_secs_f64())),
+                                            ("w", &(w).to_string()),
+                                            ("a2", &(i + 1).to_string()),
+                                            ("a3", &(segments.len()).to_string()),
+                                            ("a4", &format!("{:.2}", seg.start_sec)),
+                                            ("a5", &format!("{:.2}", seg.end_sec)),
+                                            ("a6", &(text.chars().count()).to_string())
+                                        ])
+                                    )
                                 );
                                 results.lock().unwrap().push((i, text));
                             }
@@ -320,8 +355,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let wall_s = t0.elapsed().as_secs_f64();
     if args.vad_only {
         eprintln!(
-            "transcribe-own: vad-only done in {wall_s:.3}s -> {}",
-            seg_path.display()
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "cli-poc-transcribe-own-vad-only",
+                vecboost::i18n::tr_args(&[
+                    ("wall_s", &format!("{:.3}", wall_s)),
+                    ("a1", &(seg_path.display()).to_string())
+                ])
+            )
         );
         println!("SEGMENTS={}", segments.len());
     } else {
@@ -329,8 +370,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         std::fs::write(&transcript_path, &transcript)
             .map_err(|e| format!("write {} failed: {e}", transcript_path.display()))?;
         eprintln!(
-            "transcribe-own: pipeline done in {wall_s:.3}s -> {}",
-            transcript_path.display()
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "cli-poc-transcribe-own-pipeline-done",
+                vecboost::i18n::tr_args(&[
+                    ("wall_s", &format!("{:.3}", wall_s)),
+                    ("a1", &(transcript_path.display()).to_string())
+                ])
+            )
         );
         println!("WALL_S={wall_s:.3}");
         println!("RTF={:.4}", wall_s / audio_seconds.max(f64::MIN_POSITIVE));
@@ -342,10 +389,19 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 }
 
 fn main() -> ExitCode {
+    // stderr 诊断文案走 FTL（stdout 五行契约不在此列），故必须先初始化 i18n；
+    // 未 init 时 tr() 会回退成裸键名，污染运维可读输出。
+    vecboost::i18n::init();
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("transcribe-own: {e}");
+            eprintln!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "cli-poc-transcribe-own-e",
+                    vecboost::i18n::tr_args(&[("e", &(e).to_string())])
+                )
+            );
             return ExitCode::from(2);
         }
     };
@@ -353,7 +409,13 @@ fn main() -> ExitCode {
     match run(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("transcribe-own: {e}");
+            eprintln!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "cli-poc-transcribe-own-e",
+                    vecboost::i18n::tr_args(&[("e", &(e).to_string())])
+                )
+            );
             ExitCode::from(1)
         }
     }
@@ -369,7 +431,10 @@ mod tests {
             strip_annotations("/a（资产清单 md5=520fabe9…、smoke10s.wav=10.0s）/smoke10s.wav"),
             "/a/smoke10s.wav"
         );
-        assert_eq!(strip_annotations("/a/models（说明一；说明二）"), "/a/models");
+        assert_eq!(
+            strip_annotations("/a/models（说明一；说明二）"),
+            "/a/models"
+        );
         assert_eq!(strip_annotations("/plain/path.wav"), "/plain/path.wav");
         assert_eq!(strip_annotations("/unclosed（path"), "/unclosed（path");
         assert_eq!(strip_annotations("/reversed）a（b"), "/reversed）a（b");

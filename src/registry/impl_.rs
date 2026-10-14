@@ -77,7 +77,10 @@ impl AsyncLifecycle for EmbeddingModule {
         _kit: &'a AsyncKit<trait_kit::AsyncReady>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
         Box::pin(async {
-            log::info!("EmbeddingModule: model engine ready");
+            log::info!(
+                "EmbeddingModule: {}",
+                crate::i18n::tr("log-registry-engine-ready")
+            );
             Ok(())
         })
     }
@@ -119,7 +122,10 @@ impl AsyncLifecycle for RerankModule {
         _kit: &'a AsyncKit<trait_kit::AsyncReady>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
         Box::pin(async {
-            log::info!("RerankModule: rerank service ready");
+            log::info!(
+                "RerankModule: {}",
+                crate::i18n::tr("log-registry-service-ready")
+            );
             Ok(())
         })
     }
@@ -160,7 +166,10 @@ impl AsyncLifecycle for DecisionModule {
         _kit: &'a AsyncKit<trait_kit::AsyncReady>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
         Box::pin(async {
-            log::info!("DecisionModule: decision service ready");
+            log::info!(
+                "DecisionModule: {}",
+                crate::i18n::tr("log-registry-service-ready")
+            );
             Ok(())
         })
     }
@@ -201,7 +210,10 @@ impl AsyncLifecycle for DetectModule {
         _kit: &'a AsyncKit<trait_kit::AsyncReady>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
         Box::pin(async {
-            log::info!("DetectModule: detect service ready");
+            log::info!(
+                "DetectModule: {}",
+                crate::i18n::tr("log-registry-service-ready")
+            );
             Ok(())
         })
     }
@@ -242,7 +254,10 @@ impl AsyncLifecycle for TranslateModule {
         _kit: &'a AsyncKit<trait_kit::AsyncReady>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
         Box::pin(async {
-            log::info!("TranslateModule: translate service ready");
+            log::info!(
+                "TranslateModule: {}",
+                crate::i18n::tr("log-registry-service-ready")
+            );
             Ok(())
         })
     }
@@ -283,7 +298,10 @@ impl AsyncLifecycle for TranscribeModule {
         _kit: &'a AsyncKit<trait_kit::AsyncReady>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
         Box::pin(async {
-            log::info!("TranscribeModule: transcribe service ready");
+            log::info!(
+                "TranscribeModule: {}",
+                crate::i18n::tr("log-registry-service-ready")
+            );
             Ok(())
         })
     }
@@ -374,7 +392,10 @@ impl AsyncLifecycle for RateLimitModule {
         _kit: &'a AsyncKit<trait_kit::AsyncReady>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
         Box::pin(async {
-            log::info!("RateLimitModule: on_ready — limiteron rate limiter active");
+            log::info!(
+                "RateLimitModule: {}",
+                crate::i18n::tr("log-registry-ratelimit-active")
+            );
             Ok(())
         })
     }
@@ -383,7 +404,10 @@ impl AsyncLifecycle for RateLimitModule {
         _cap: &'a Self::Capability,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async {
-            log::info!("RateLimitModule: on_shutdown — rate limiter shut down");
+            log::info!(
+                "RateLimitModule: {}",
+                crate::i18n::tr("log-registry-ratelimit-shutdown")
+            );
         })
     }
 }
@@ -489,9 +513,18 @@ impl AsyncLifecycle for AuditModule {
     fn on_shutdown<'a>(cap: &'a Self::Capability) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             if let Some(logger) = cap {
-                log::info!("AuditModule: flushing audit log before shutdown");
+                log::info!(
+                    "AuditModule: {}",
+                    crate::i18n::tr("log-registry-audit-flushing")
+                );
                 if let Err(e) = logger.flush().await {
-                    log::error!("AuditModule: failed to flush audit log: {}", e);
+                    log::error!(
+                        "AuditModule: {}",
+                        crate::i18n::tr_with_args(
+                            "log-registry-audit-flush-failed",
+                            crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                        )
+                    );
                 }
             }
         })
@@ -733,16 +766,28 @@ impl AsyncLifecycle for ConfigWatcherModule {
         _kit: &'a AsyncKit<trait_kit::AsyncReady>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
         Box::pin(async {
-            log::info!("ConfigWatcherModule: config file watcher ready");
+            log::info!(
+                "ConfigWatcherModule: {}",
+                crate::i18n::tr("log-registry-watcher-ready")
+            );
             Ok(())
         })
     }
 
     fn on_shutdown<'a>(cap: &'a Self::Capability) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
-            log::info!("ConfigWatcherModule: shutting down config watcher");
+            log::info!(
+                "ConfigWatcherModule: {}",
+                crate::i18n::tr("log-registry-watcher-shutdown")
+            );
             if let Err(e) = cap.shutdown(std::time::Duration::from_secs(5)).await {
-                log::error!("ConfigWatcherModule: error during watcher shutdown: {}", e);
+                log::error!(
+                    "ConfigWatcherModule: {}",
+                    crate::i18n::tr_with_args(
+                        "log-registry-watcher-shutdown-failed",
+                        crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                    )
+                );
             }
         })
     }

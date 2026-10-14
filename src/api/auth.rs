@@ -84,10 +84,7 @@ pub async fn forge_login(
             });
         }
         crate::auth::LoginDecision::AdminPasswordMissing => {
-            log::error!(
-                "Login rejected: auth is enabled but no admin password is configured (missing \
-                 VECBOOST_ADMIN_PASSWORD). This should have failed at startup."
-            );
+            log::error!("{}", crate::i18n::tr("log-api-login-rejected-auth-enabled"));
             return Err(ApiError::service_unavailable_with_source(
                 "auth",
                 None,
@@ -177,9 +174,11 @@ pub async fn forge_refresh(
     // 再撤销旧 token（失败不影响新 token 颁发）
     if let Err(e) = GarrisonUtil::revoke_token(&req.refresh_token).await {
         log::warn!(
-            "Failed to revoke old refresh token during refresh for login_id '{}': {}",
-            login_id,
-            e
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-api-failed-revoke-old-refresh",
+                crate::i18n::tr_args(&[("a1", &(login_id).to_string()), ("a2", &(e).to_string())])
+            )
         );
     }
 
@@ -221,7 +220,13 @@ pub async fn forge_logout(
 
     // 通过 garrison 撤销 token（best-effort：失败时仍返回成功，避免阻断客户端登出）
     if let Err(e) = GarrisonUtil::revoke_token(&auth_ctx.token).await {
-        log::warn!("Logout token revocation failed (best-effort): {}", e);
+        log::warn!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-api-logout-token-revocation-failed",
+                crate::i18n::tr_args(&[("a1", &(e).to_string())])
+            )
+        );
     }
 
     if let Some(logger) = audit_logger {

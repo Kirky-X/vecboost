@@ -62,37 +62,43 @@ impl GpuTuningAdvisor {
 
         if persistence_mode == TuningLevel::Recommended {
             recommendations.push(
-                "建议开启 GPU 持久模式 (nvidia-smi -pm 1)：避免低负载休眠导致唤醒延迟".to_string(),
+                "Enable GPU persistence mode (nvidia-smi -pm 1): avoid wake-up latency after low-load sleep".to_string(),
             );
         }
         if transparent_hugepage == TuningLevel::Recommended {
             recommendations.push(
-                "建议开启透明大页 (echo always > /sys/kernel/mm/transparent_hugepage/enabled)：减少 CPU↔GPU 数据传输 TLB 消耗".to_string(),
+                "Enable transparent hugepages (echo always > /sys/kernel/mm/transparent_hugepage/enabled): reduce TLB overhead of CPU-GPU data transfer".to_string(),
             );
         }
         if clock_frequency == TuningLevel::Recommended {
             recommendations.push(
-                "建议锁定 GPU 时钟频率 (nvidia-smi -ac <mem>,<graphics>)：消除频率波动导致的性能抖动".to_string(),
+                "Lock GPU clock frequency (nvidia-smi -ac <mem>,<graphics>): eliminate jitter from frequency fluctuation".to_string(),
             );
         }
         if ecc_status == TuningLevel::Recommended {
             recommendations.push(
-                "ECC 内存已禁用：生产环境建议开启 (nvidia-smi -e 1) 防止内存位翻转导致计算错误"
+                "ECC memory disabled: enable it in production (nvidia-smi -e 1) to prevent bit-flip induced computation errors"
                     .to_string(),
             );
         }
         if compute_mode == TuningLevel::Recommended {
             recommendations.push(
-                "建议设置 GPU 计算模式为 Exclusive_Process (nvidia-smi -c 1)：避免多进程竞争 GPU 资源".to_string(),
+                "Set GPU compute mode to Exclusive_Process (nvidia-smi -c 1): avoid multi-process contention for GPU resources".to_string(),
             );
         }
 
         if recommendations.is_empty() {
-            info!("GPU 调优检测完成：所有配置已优化");
+            info!(
+                "{}",
+                crate::i18n::tr("log-device-gpu-tuning-check-complete-2")
+            );
         } else {
             warn!(
-                "GPU 调优检测完成，发现 {} 项可优化配置：",
-                recommendations.len()
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-gpu-tuning-check-complete",
+                    crate::i18n::tr_args(&[("a1", &(recommendations.len()).to_string())])
+                )
             );
             for (i, rec) in recommendations.iter().enumerate() {
                 warn!("  {}. {}", i + 1, rec);
@@ -120,10 +126,19 @@ impl GpuTuningAdvisor {
             Some(output) => {
                 let mode = output.trim();
                 if mode == "1" || mode == "Enabled" {
-                    info!("GPU 持久模式：已开启");
+                    info!(
+                        "{}",
+                        crate::i18n::tr("log-device-gpu-persistence-mode-enabled")
+                    );
                     TuningLevel::Optimal
                 } else {
-                    warn!("GPU 持久模式：未开启（当前: {}）", mode);
+                    warn!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-device-gpu-persistence-mode-disabled",
+                            crate::i18n::tr_args(&[("a1", (mode))])
+                        )
+                    );
                     TuningLevel::Recommended
                 }
             }
@@ -139,14 +154,23 @@ impl GpuTuningAdvisor {
             Ok(content) => {
                 // 格式: "always [madvise] never" — 方括号内是当前值
                 if content.contains("[always]") {
-                    info!("透明大页：已开启 (always)");
+                    info!(
+                        "{}",
+                        crate::i18n::tr("log-device-transparent-hugepages-enabled-always")
+                    );
                     TuningLevel::Optimal
                 } else if content.contains("[madvise]") {
                     // GPU 性能指南推荐 madvise：仅对显式映射区域使用大页，避免不必要的内存钉住
-                    info!("透明大页：madvise 模式（GPU 推荐）");
+                    info!(
+                        "{}",
+                        crate::i18n::tr("log-device-transparent-hugepages-madvise-mode")
+                    );
                     TuningLevel::Optimal
                 } else {
-                    warn!("透明大页：未开启");
+                    warn!(
+                        "{}",
+                        crate::i18n::tr("log-device-transparent-hugepages-disabled")
+                    );
                     TuningLevel::Recommended
                 }
             }
@@ -168,10 +192,16 @@ impl GpuTuningAdvisor {
         ]) {
             Some(output) => {
                 let trimmed = output.trim();
-                info!("GPU 当前时钟频率: {}", trimmed);
+                info!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-device-gpu-current-clock-frequency",
+                        crate::i18n::tr_args(&[("a1", (trimmed))])
+                    )
+                );
                 // 如果输出包含 "Not Supported" 或为空，说明无法获取
                 if trimmed.contains("Not Supported") || trimmed.is_empty() {
-                    warn!("无法获取 GPU 当前时钟频率，无法判断是否已锁定");
+                    warn!("{}", crate::i18n::tr("log-device-cannot-read-gpu-current"));
                     TuningLevel::Recommended
                 } else {
                     // 能获取到当前频率，标记为已检测
@@ -191,10 +221,16 @@ impl GpuTuningAdvisor {
             Some(output) => {
                 let mode = output.trim();
                 if mode == "1" || mode.to_lowercase().contains("enabled") {
-                    info!("GPU ECC 内存：已开启");
+                    info!("{}", crate::i18n::tr("log-device-gpu-ecc-memory-enabled"));
                     TuningLevel::Optimal
                 } else {
-                    warn!("GPU ECC 内存：未开启（当前: {}）", mode);
+                    warn!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-device-gpu-ecc-memory-disabled",
+                            crate::i18n::tr_args(&[("a1", (mode))])
+                        )
+                    );
                     TuningLevel::Recommended
                 }
             }
@@ -208,13 +244,22 @@ impl GpuTuningAdvisor {
             Some(output) => {
                 let mode = output.trim().to_lowercase();
                 if mode.contains("exclusive") {
-                    info!("GPU 计算模式：Exclusive（最优）");
+                    info!(
+                        "{}",
+                        crate::i18n::tr("log-device-gpu-compute-mode-exclusive")
+                    );
                     TuningLevel::Optimal
                 } else if mode.contains("default") {
-                    info!("GPU 计算模式：Default（多进程共享）");
+                    info!("{}", crate::i18n::tr("log-device-gpu-compute-mode-default"));
                     TuningLevel::Recommended
                 } else {
-                    info!("GPU 计算模式: {}", mode);
+                    info!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-device-gpu-compute-mode",
+                            crate::i18n::tr_args(&[("a1", &(mode).to_string())])
+                        )
+                    );
                     TuningLevel::NotApplicable
                 }
             }

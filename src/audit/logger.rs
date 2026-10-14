@@ -166,7 +166,13 @@ impl AuditLogger {
         if let Some(parent) = log_file_path.parent()
             && let Err(e) = tokio::fs::create_dir_all(parent).await
         {
-            log::error!("Failed to create log directory: {}", e);
+            log::error!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-audit-failed-create-log-directory",
+                    crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                )
+            );
             return None;
         }
 
@@ -178,7 +184,13 @@ impl AuditLogger {
         {
             Ok(f) => f,
             Err(e) => {
-                log::error!("Failed to open audit log file: {}", e);
+                log::error!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-audit-failed-open-audit-log",
+                        crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                    )
+                );
                 return None;
             }
         };
@@ -262,9 +274,19 @@ impl AuditLogger {
             .open(path)
             .and_then(|mut f| writeln!(f, "{record}"))
         {
-            Ok(()) => log::warn!("Audit event dead-lettered to {}", path.display()),
+            Ok(()) => log::warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-audit-audit-event-dead-lettered",
+                    crate::i18n::tr_args(&[("a1", &(path.display()).to_string())])
+                )
+            ),
             Err(e) => log::error!(
-                "Audit event lost: dead-letter write failed: {e} (db error: {db_error})"
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-audit-audit-event-lost-dead",
+                    crate::i18n::tr_args(&[("e", &(e).to_string()), ("db_error", (db_error))])
+                )
             ),
         }
     }
@@ -299,7 +321,13 @@ impl AuditLogger {
             {
                 Ok(f) => f,
                 Err(e) => {
-                    log::error!("Failed to reopen log file after rotation: {}", e);
+                    log::error!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-audit-failed-reopen-log-file",
+                            crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                        )
+                    );
                     buffer.clear();
                     return consecutive_errors + 1;
                 }
@@ -321,7 +349,13 @@ impl AuditLogger {
                 0
             }
             Err(e) => {
-                log::error!("Failed to write audit log batch: {}", e);
+                log::error!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-audit-failed-write-audit-log",
+                        crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                    )
+                );
                 consecutive_errors + 1
             }
         }
@@ -507,7 +541,16 @@ impl AuditLogger {
             let oldest_log = format!("{}.{}", log_file_path.display(), max_files);
             if let Err(e) = tokio::fs::remove_file(&oldest_log).await {
                 if !e.kind().eq(&std::io::ErrorKind::NotFound) {
-                    log::error!("Failed to remove old log file {}: {}", oldest_log, e);
+                    log::error!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-audit-failed-remove-old-log",
+                            crate::i18n::tr_args(&[
+                                ("a1", &(oldest_log).to_string()),
+                                ("a2", &(e).to_string())
+                            ])
+                        )
+                    );
                 }
             }
         }
@@ -518,14 +561,26 @@ impl AuditLogger {
 
             if let Err(e) = tokio::fs::rename(&old_file, &new_file).await {
                 if !e.kind().eq(&std::io::ErrorKind::NotFound) {
-                    log::error!("Failed to rotate log file: {}", e);
+                    log::error!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-audit-failed-rotate-log-file",
+                            crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                        )
+                    );
                 }
             }
         }
 
         let rotated_log = format!("{}.1", log_file_path.display());
         if let Err(e) = tokio::fs::rename(log_file_path, &rotated_log).await {
-            log::error!("Failed to rotate current log: {}", e);
+            log::error!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-audit-failed-rotate-current-log",
+                    crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                )
+            );
         }
     }
 

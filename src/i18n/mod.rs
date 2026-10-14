@@ -36,6 +36,10 @@ use unic_langid::LanguageIdentifier;
 /// Global i18n state — initialized once at startup.
 static I18N: OnceLock<I18nState> = OnceLock::new();
 
+/// One-shot guard for the sdforge protocol-surface sync (see
+/// [`sync_sdforge_i18n`]); `init()` may be called from several entry points.
+static SDFORGE_SYNCED: OnceLock<()> = OnceLock::new();
+
 // ---------------------------------------------------------------------------
 // Per-request locale (set by HTTP middleware via Accept-Language header)
 // ---------------------------------------------------------------------------
@@ -85,7 +89,38 @@ pub fn init() {
             default_locale: lang_id,
         }
     });
+
+    // 协议面（CLI `--help` 等）走 sdforge 自己的注册表，必须在 `I18N` 就位后同步；
+    // 放在 `get_or_init` 闭包内会读到尚未发布的 `I18N`（回退 en + 裸键名）。
+    sync_sdforge_i18n();
 }
+
+/// Align the sdforge protocol surface with the vecboost locale and feed it our
+/// FTL as the single source of truth.
+///
+/// sdforge carries an independent locale system (`SDFORGE_LANG` plus its own
+/// detection chain). Without this sync, `VECBOOST_LANG=en` on a `zh` host would
+/// still render `--help` in Chinese (or vice versa) — two sources of truth for
+/// one binary, and the “默认显示语言” guarantee would only hold for part of the
+/// surface. `forge-*` messages come from our FTL; sdforge falls back to the
+/// compile-time `description` literal when a key is absent, so `en` never
+/// regresses to a bare key name.
+#[cfg(any(feature = "cli", feature = "mcp", feature = "http", feature = "grpc"))]
+fn sync_sdforge_i18n() {
+    if SDFORGE_SYNCED.set(()).is_err() {
+        return; // 幂等：仅首次真正注册
+    }
+    sdforge::i18n::set_locale(&current_locale());
+    for key in bundle::protocol_message_keys() {
+        for locale in bundle::SUPPORTED_LOCALES {
+            let value = tr_locale(key, Some(locale));
+            sdforge::i18n::register_translation(locale, key, &value);
+        }
+    }
+}
+
+#[cfg(not(any(feature = "cli", feature = "mcp", feature = "http", feature = "grpc")))]
+fn sync_sdforge_i18n() {}
 
 /// Translate a message key.
 ///

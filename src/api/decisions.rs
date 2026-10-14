@@ -97,7 +97,8 @@ pub async fn forge_decisions(req: DecisionRequest) -> Result<DecisionResponse, A
     name = "decisions",
     version = 1,
     cli = true,
-    description = "Answer choice/score/noul questions about a decision state"
+    description = "Answer choice/score/noul questions about a decision state",
+    i18n_key = "forge-cli-decisions"
 )]
 pub async fn cli_decisions(req: DecisionRequest) -> Result<DecisionResponse, ApiError> {
     decisions_handler(req).await

@@ -94,14 +94,26 @@ impl MemoryLimitController {
         match new_status {
             MemoryLimitStatus::Exceeded => {
                 warn!(
-                    "Memory usage exceeded limit: {} bytes (limit: {} bytes)",
-                    current, limit
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-device-memory-usage-exceeded-limit",
+                        crate::i18n::tr_args(&[
+                            ("a1", &(current).to_string()),
+                            ("a2", &(limit).to_string())
+                        ])
+                    )
                 );
             }
             MemoryLimitStatus::Critical => {
                 warn!(
-                    "Memory usage critical: {} bytes ({}%)",
-                    current, usage_percent
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-device-memory-usage-critical-bytes",
+                        crate::i18n::tr_args(&[
+                            ("a1", &(current).to_string()),
+                            ("a2", &(usage_percent).to_string())
+                        ])
+                    )
                 );
             }
             MemoryLimitStatus::Warning => {
@@ -183,7 +195,13 @@ pub fn block_on_async<F: std::future::Future<Output = T>, T>(f: F) -> Option<T> 
         {
             Ok(rt) => rt,
             Err(e) => {
-                log::error!("Failed to create Tokio runtime: {}", e);
+                log::error!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-device-failed-create-tokio-runtime",
+                        crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                    )
+                );
                 return None;
             }
         };
@@ -196,7 +214,13 @@ impl MemoryLimitController {
         {
             let mut config = self.config.write().await;
             config.limit_bytes = limit_bytes;
-            info!("Memory limit set to: {} bytes", limit_bytes);
+            info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-memory-limit-set-bytes",
+                    crate::i18n::tr_args(&[("a1", &(limit_bytes).to_string())])
+                )
+            );
         }
         self.update_status().await;
     }
@@ -226,7 +250,10 @@ impl MemoryLimitController {
     pub async fn trigger_fallback(&self) {
         let mut fallback = self.fallback_triggered.write().await;
         if !*fallback {
-            info!("Memory limit exceeded, triggering fallback to CPU");
+            info!(
+                "{}",
+                crate::i18n::tr("log-device-memory-limit-exceeded-triggering")
+            );
             *fallback = true;
         }
     }

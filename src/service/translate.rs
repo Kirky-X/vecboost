@@ -190,7 +190,13 @@ impl TranslateService {
         .map_err(|e| {
             // JoinError 的 Display 携带 panic 载荷原文：wire 侧只回可定位的
             // 固定文案，载荷与 task id 全量留在服务端日志（CWE-209）
-            log::error!("translation inference task failed: {e}");
+            log::error!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-translation-inference-task-failed",
+                    crate::i18n::tr_args(&[("e", &(e).to_string())])
+                )
+            );
             VecboostError::InferenceError(
                 "translation inference task failed (engine task panicked); see server logs"
                     .to_string(),

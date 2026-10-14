@@ -75,7 +75,13 @@ impl LoadedModel for CandleModel {
     }
 
     fn reload(&self) -> Result<(), VecboostError> {
-        info!("Reloading Candle model from: {}", self.path.display());
+        info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-model-reloading-candle-model-from",
+                crate::i18n::tr_args(&[("a1", &(self.path.display()).to_string())])
+            )
+        );
         Ok(())
     }
 }
@@ -109,7 +115,13 @@ impl LoadedModel for OnnxModel {
     }
 
     fn reload(&self) -> Result<(), VecboostError> {
-        info!("Reloading ONNX model from: {}", self.path.display());
+        info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-model-reloading-onnx-model-from",
+                crate::i18n::tr_args(&[("a1", &(self.path.display()).to_string())])
+            )
+        );
         Ok(())
     }
 }

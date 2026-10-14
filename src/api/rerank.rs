@@ -58,7 +58,13 @@ pub async fn rerank_batch(
                 });
             }
             Err(e) => {
-                log::warn!("Batch rerank: individual query failed, skipping: {}", e);
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-api-batch-rerank-individual-query",
+                        crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                    )
+                );
                 // 单个 query 失败不影响其他 query 的处理；失败经 statuses
                 // 可视化（审计建议），调用方可将响应对位回请求
                 statuses.push(BatchRerankQueryStatus {
@@ -159,7 +165,8 @@ pub async fn forge_rerank_batch(req: BatchRerankRequest) -> Result<BatchRerankRe
     name = "rerank",
     version = 1,
     cli = true,
-    description = "Rerank documents by relevance to a query"
+    description = "Rerank documents by relevance to a query",
+    i18n_key = "forge-cli-rerank"
 )]
 pub async fn cli_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError> {
     rerank_handler(req).await

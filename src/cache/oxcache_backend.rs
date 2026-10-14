@@ -143,8 +143,14 @@ impl OxCacheBackend {
             .open(&path)
             .unwrap_or_else(|e| {
                 panic!(
-                    "persist 文件不可创建 {}: {e}（请检查 [embedding] persist_path 目录权限）",
-                    path.display()
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "cache-persist-uncreatable",
+                        crate::i18n::tr_args(&[
+                            ("path", &path.display().to_string()),
+                            ("detail", &e.to_string()),
+                        ]),
+                    )
                 )
             });
         let approx_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
@@ -153,7 +159,16 @@ impl OxCacheBackend {
         // 新文件构造时一次性写头（追加路径不再逐插入 stat， 审查）。
         let mut writer = std::io::BufWriter::new(file);
         if is_new && let Err(e) = persist::write_header(&mut writer) {
-            log::warn!("persist: {} 写头失败: {}", path.display(), e);
+            log::warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-cache-persist-failed-write-header",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(path.display()).to_string()),
+                        ("a2", &(e).to_string())
+                    ])
+                )
+            );
         }
         backend.persist = Some(Arc::new(PersistState {
             path,
@@ -245,8 +260,11 @@ impl OxCacheBackend {
         // NaN/Inf 拒绝入库（D33）：坏向量经 bloom/WAL 扩散后难以回收
         if value.iter().any(|x| !x.is_finite()) {
             log::warn!(
-                "rejecting non-finite vector put for key prefix {}",
-                key_log_prefix(key)
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-cache-rejecting-non-finite-vector",
+                    crate::i18n::tr_args(&[("a1", (key_log_prefix(key)))])
+                )
             );
             return;
         }
@@ -280,7 +298,13 @@ impl OxCacheBackend {
         let mut guard = match ps.inner.lock() {
             Ok(g) => g,
             Err(e) => {
-                log::warn!("persist: 文件锁中毒，跳过本次落盘: {}", e);
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-cache-persist-file-lock-poisoned",
+                        crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                    )
+                );
                 return;
             }
         };
@@ -301,7 +325,13 @@ impl OxCacheBackend {
                 }
             }
             Err(e) => {
-                log::warn!("persist: 追加失败（{}），本次插入仅内存生效", e);
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-cache-persist-append-failed-this",
+                        crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                    )
+                );
             }
         }
     }
@@ -330,10 +360,22 @@ impl OxCacheBackend {
                         guard.file = std::io::BufWriter::new(file);
                     }
                 }
-                log::info!("persist: 紧凑化完成，{} 条记录", n);
+                log::info!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-cache-persist-compaction-complete-records",
+                        crate::i18n::tr_args(&[("a1", &(n).to_string())])
+                    )
+                );
             }
             Err(e) => {
-                log::warn!("persist: 紧凑化失败（{}），保留原文件", e);
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-cache-persist-compaction-failed-keeping",
+                        crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                    )
+                );
             }
         }
     }
@@ -411,7 +453,13 @@ impl OxCacheBackend {
                     guard.nrec = 0;
                 }
                 Err(e) => {
-                    log::warn!("persist: 清空截断失败（{}）", e);
+                    log::warn!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-cache-persist-truncate-clear-failed",
+                            crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                        )
+                    );
                 }
             }
         }

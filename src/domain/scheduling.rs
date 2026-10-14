@@ -415,9 +415,14 @@ impl PriorityRequestQueue {
                 .fetch_sub(expired.len(), Ordering::Relaxed)
                 - expired.len();
             warn!(
-                "Reaped {} expired requests from queue, queue_size={}",
-                expired.len(),
-                new_size
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-domain-reaped-expired-requests-from",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(expired.len()).to_string()),
+                        ("a2", &(new_size).to_string())
+                    ])
+                )
             );
         }
 
@@ -541,7 +546,13 @@ impl PriorityRequestQueue {
         queues.clear();
         self.current_size.store(0, Ordering::Relaxed);
         if !all.is_empty() {
-            warn!("Shutdown drain: {} queued requests evacuated", all.len());
+            warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-domain-shutdown-drain-queued-requests",
+                    crate::i18n::tr_args(&[("a1", &(all.len()).to_string())])
+                )
+            );
         }
         all
     }
@@ -559,7 +570,13 @@ impl PriorityRequestQueue {
         queues.clear();
         self.current_size.store(0, Ordering::Relaxed);
 
-        warn!("Queue cleared, {} requests discarded", cleared_count);
+        warn!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-domain-queue-cleared-requests-discarded",
+                crate::i18n::tr_args(&[("a1", &(cleared_count).to_string())])
+            )
+        );
     }
 
     /// 获取按优先级分组的队列大小

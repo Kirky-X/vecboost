@@ -136,8 +136,11 @@ impl CudaDeviceManager {
         // 无 CUDA 硬件 / driver 不可用 / 沙箱限制均视为"无可用设备",不算错误。
         let devices = self.detect_cuda_devices().await.unwrap_or_else(|e| {
             warn!(
-                "CUDA detection returned error, treating as no available devices: {}",
-                e
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-cuda-detection-returned-error",
+                    crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                )
             );
             Vec::new()
         });
@@ -154,9 +157,14 @@ impl CudaDeviceManager {
             let memory_manager = SharedGpuMemoryManager::new(device.total_memory(), memory_config);
             memory_managers.insert(device.device_id(), memory_manager);
             info!(
-                "Created memory manager for device {}: {} MB",
-                device.device_id(),
-                device.total_memory() / (1024 * 1024)
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-created-memory-manager-device",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(device.device_id()).to_string()),
+                        ("a2", &(device.total_memory() / (1024 * 1024)).to_string())
+                    ])
+                )
             );
         }
 
@@ -167,8 +175,11 @@ impl CudaDeviceManager {
 
         *initialized = true;
         info!(
-            "CUDA device manager initialized with {} device(s)",
-            devices_guard.len()
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-device-cuda-device-manager-initialized",
+                crate::i18n::tr_args(&[("a1", &(devices_guard.len()).to_string())])
+            )
         );
         Ok(())
     }
@@ -200,10 +211,19 @@ impl CudaDeviceManager {
                     ),
                     _ => {
                         warn!(
-                            "nvidia-smi 查询失败，使用 fallback 默认设备参数 ({}GB, compute {}.{})。建议安装 nvidia-smi 以获取准确信息",
-                            DEFAULT_FALLBACK_VRAM_BYTES / (1024 * 1024 * 1024),
-                            DEFAULT_FALLBACK_COMPUTE_CAP.0,
-                            DEFAULT_FALLBACK_COMPUTE_CAP.1
+                            "{}",
+                            crate::i18n::tr_with_args(
+                                "log-device-nvidia-smi-query-failed",
+                                crate::i18n::tr_args(&[
+                                    (
+                                        "a1",
+                                        &(DEFAULT_FALLBACK_VRAM_BYTES / (1024 * 1024 * 1024))
+                                            .to_string()
+                                    ),
+                                    ("a2", &(DEFAULT_FALLBACK_COMPUTE_CAP.0).to_string()),
+                                    ("a3", &(DEFAULT_FALLBACK_COMPUTE_CAP.1).to_string())
+                                ])
+                            )
                         );
                         (
                             "CUDA Device (candle)".to_string(),
@@ -215,16 +235,27 @@ impl CudaDeviceManager {
 
                 let cuda_device = CudaDevice::new(0, name, vram_bytes, compute_cap);
                 info!(
-                    "Detected CUDA device via candle-core: {} ({} MB, compute {}.{} )",
-                    cuda_device.name(),
-                    vram_bytes / (1024 * 1024),
-                    compute_cap.0,
-                    compute_cap.1
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-device-detected-cuda-device-via",
+                        crate::i18n::tr_args(&[
+                            ("a1", &(cuda_device.name()).to_string()),
+                            ("a2", &(vram_bytes / (1024 * 1024)).to_string()),
+                            ("a3", &(compute_cap.0).to_string()),
+                            ("a4", &(compute_cap.1).to_string())
+                        ])
+                    )
                 );
                 Ok(vec![cuda_device])
             }
             Err(e) => {
-                warn!("Failed to initialize CUDA device via candle-core: {}", e);
+                warn!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-device-failed-initialize-cuda-device",
+                        crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                    )
+                );
                 Err(format!("CUDA device detection failed: {}", e))
             }
         }
@@ -247,7 +278,13 @@ impl CudaDeviceManager {
                     .compute_capability
                     .unwrap_or(DEFAULT_FALLBACK_COMPUTE_CAP),
             );
-            info!("Detected compatible CUDA device: {}", cuda_device.name());
+            info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-detected-compatible-cuda-device",
+                    crate::i18n::tr_args(&[("a1", (cuda_device.name()))])
+                )
+            );
             devices.push(cuda_device);
         }
 
@@ -382,7 +419,13 @@ impl CudaDeviceManager {
 
         let mut primary = self.primary_device_id.write().await;
         *primary = Some(device_id);
-        info!("Primary CUDA device set to: {}", devices[device_id].name());
+        info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-device-primary-cuda-device-set",
+                crate::i18n::tr_args(&[("a1", (devices[device_id].name()))])
+            )
+        );
 
         Ok(())
     }

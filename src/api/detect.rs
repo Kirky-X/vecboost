@@ -76,7 +76,8 @@ pub async fn forge_detect(req: DetectRequest) -> Result<DetectResponse, ApiError
     name = "detect",
     version = 1,
     cli = true,
-    description = "Detect the natural language of a text (ISO 639-1 code with 639-3 fallback)"
+    description = "Detect the natural language of a text (ISO 639-1 code with 639-3 fallback)",
+    i18n_key = "forge-cli-detect"
 )]
 pub async fn cli_detect(req: DetectRequest) -> Result<DetectResponse, ApiError> {
     detect_handler(req).await

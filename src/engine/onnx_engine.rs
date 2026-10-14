@@ -122,14 +122,29 @@ impl OnnxEngine {
         let is_local_path = model_path.exists() && model_path.is_dir();
 
         let (onnx_filename, tokenizer_filename) = if is_local_path {
-            log::info!("Using local model path: {:?}", model_path);
+            log::info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-engine-using-local-model-path",
+                    crate::i18n::tr_args(&[("a1", &format!("{:?}", model_path))])
+                )
+            );
             resolve_local_bundle(model_path, config.tokenizer_path.as_deref())?
         } else {
-            log::info!("Using HuggingFace Hub for model: {:?}", model_path);
+            log::info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-engine-using-huggingface-hub-model",
+                    crate::i18n::tr_args(&[("a1", &format!("{:?}", model_path))])
+                )
+            );
             let repo_id = model_path.to_string_lossy().into_owned();
             let repo = build_hf_repo(&repo_id)?;
 
-            log::info!("Downloading/Loading ONNX model files...");
+            log::info!(
+                "{}",
+                crate::i18n::tr("log-engine-downloading-loading-onnx-model")
+            );
             let onnx_filename = repo
                 .download_file()
                 .filename("model.onnx")
@@ -152,7 +167,10 @@ impl OnnxEngine {
         // （R-engine-inference-001 只收编 `Session::builder()` 链）；SHA256 先于
         // build_session（其内部 commit）执行，与原「建 builder→校验→commit」语义等价。
         if let Some(ref expected_hash) = config.model_sha256 {
-            log::info!("Verifying model file SHA256 hash...");
+            log::info!(
+                "{}",
+                crate::i18n::tr("log-engine-verifying-model-file-sha256")
+            );
             let is_valid = verify_sha256(&onnx_filename, expected_hash).map_err(|e| {
                 VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e))
             })?;
@@ -164,13 +182,14 @@ impl OnnxEngine {
                 )));
             }
 
-            log::info!("Model file SHA256 verification passed");
+            log::info!(
+                "{}",
+                crate::i18n::tr("log-engine-model-file-sha256-verification")
+            );
         }
 
         if matches!(device_type, DeviceType::Amd | DeviceType::OpenCL) {
-            log::info!(
-                "AMD GPU detected but ROCm execution provider is not configured in this build. Using CPU execution provider."
-            );
+            log::info!("{}", crate::i18n::tr("log-engine-amd-gpu-detected-but"));
         }
 
         let opts = super::session::SessionOpts {
@@ -180,7 +199,7 @@ impl OnnxEngine {
         };
         let session = super::session::build_session(&onnx_filename, &opts)?;
 
-        log::info!("Loading tokenizer...");
+        log::info!("{}", crate::i18n::tr("log-engine-loading-tokenizer"));
         #[allow(unused_mut)]
         let mut tokenizer = Tokenizer::from_file(&tokenizer_filename)
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
@@ -199,10 +218,19 @@ impl OnnxEngine {
         let vocab_size = tokenizer.get_vocab_size(true);
         let hidden_size = config.expected_dimension.unwrap_or(1024);
         log::info!(
-            "Using hidden_size from configuration: {:?}",
-            config.expected_dimension
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-using-hidden-size-from",
+                crate::i18n::tr_args(&[("a1", &format!("{:?}", config.expected_dimension))])
+            )
         );
-        log::info!("Final hidden_size value: {}", hidden_size);
+        log::info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-final-hidden-size-value",
+                crate::i18n::tr_args(&[("a1", &(hidden_size).to_string())])
+            )
+        );
         // 序列截断上限与 tokenizer 层一致取 512；
         // 词表大小是 embedding 数量，与序列长度是两个量纲，不可混用
         let max_input_length = ONNX_MAX_INPUT_LENGTH;
@@ -210,25 +238,39 @@ impl OnnxEngine {
         let actual_precision = match precision {
             Precision::Fp16 => {
                 if supports_cuda || supports_amd {
-                    log::info!("Using FP16 precision with GPU acceleration");
+                    log::info!("{}", crate::i18n::tr("log-engine-using-fp16-precision-gpu"));
                     Precision::Fp16
                 } else {
-                    log::warn!("FP16 not supported without GPU acceleration, falling back to FP32");
+                    log::warn!(
+                        "{}",
+                        crate::i18n::tr("log-engine-fp16-supported-without-gpu")
+                    );
                     Precision::Fp32
                 }
             }
             _ => {
-                log::info!("Using {} precision", precision);
+                log::info!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-using-precision",
+                        crate::i18n::tr_args(&[("a1", &(precision).to_string())])
+                    )
+                );
                 precision
             }
         };
 
         log::info!(
-            "ONNX Engine initialized: hidden_size={}, max_input_length={}, vocab_size={}, precision={:?}",
-            hidden_size,
-            max_input_length,
-            vocab_size,
-            actual_precision
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-onnx-engine-initialized-hidden",
+                crate::i18n::tr_args(&[
+                    ("a1", &(hidden_size).to_string()),
+                    ("a2", &(max_input_length).to_string()),
+                    ("a3", &(vocab_size).to_string()),
+                    ("a4", &format!("{:?}", actual_precision))
+                ])
+            )
         );
 
         let memory_monitor = if supports_cuda || supports_amd {
@@ -286,7 +328,13 @@ impl OnnxEngine {
                 {
                     Ok(rt) => rt,
                     Err(e) => {
-                        log::error!("Failed to create Tokio runtime for memory check: {}", e);
+                        log::error!(
+                            "{}",
+                            crate::i18n::tr_with_args(
+                                "log-engine-failed-create-tokio-runtime",
+                                crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                            )
+                        );
                         return false;
                     }
                 };
@@ -315,12 +363,16 @@ impl OnnxEngine {
             let status = controller.check_limit().await;
 
             if status == MemoryLimitStatus::Exceeded {
-                log::warn!("Memory limit exceeded for ONNX engine, attempting fallback to CPU");
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr("log-engine-memory-limit-exceeded-onnx")
+                );
                 self.try_fallback_to_cpu(config).await?;
                 return Ok(true);
             } else if status == MemoryLimitStatus::Critical {
                 log::warn!(
-                    "Memory limit critical for ONNX engine, checking memory pressure for fallback"
+                    "{}",
+                    crate::i18n::tr("log-engine-memory-limit-critical-onnx")
                 );
                 if self.check_memory_pressure(90) {
                     self.try_fallback_to_cpu(config).await?;
@@ -429,7 +481,10 @@ impl OnnxEngine {
             return Ok(());
         }
 
-        log::info!("Attempting fallback from GPU to CPU for ONNX engine");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-attempting-fallback-from-gpu-2")
+        );
 
         self.memory_monitor = None;
         self.device_type = DeviceType::Cpu;
@@ -464,7 +519,10 @@ impl OnnxEngine {
 
         self.precision = Precision::Fp32;
 
-        log::info!("Successfully fell back to CPU for ONNX engine");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-successfully-fell-back-cpu-2")
+        );
         Ok(())
     }
 

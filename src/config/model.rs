@@ -562,13 +562,17 @@ impl CheckpointPreset {
             Some("onnx") => Ok(Some(EngineType::Onnx)),
             Some(other) => {
                 let hint = if other == "onnx" {
-                    "（engine_type=\"onnx\" 需以 --features onnx 重新构建）"
+                    crate::i18n::tr("startup-engine-onnx-rebuild-hint")
                 } else {
-                    ""
+                    String::new()
                 };
-                Err(VecboostError::config_error(format!(
-                    "checkpoint {} engine_type 未知值 \"{other}\"{hint}，支持: candle, onnx",
-                    self.name
+                Err(VecboostError::config_error(crate::i18n::tr_with_args(
+                    "config-checkpoint-engine-unknown",
+                    crate::i18n::tr_args(&[
+                        ("name", self.name.as_str()),
+                        ("got", other),
+                        ("hint", &hint),
+                    ]),
                 )))
             }
         }
@@ -1100,6 +1104,7 @@ mod tests {
 
     #[test]
     fn test_checkpoint_preset_resolved_engine_type() {
+        crate::i18n::init();
         // None = 未配置（switch 期继承当前加载模型），不产生引擎枚举值
         let mut preset: CheckpointPreset =
             serde_json::from_str(r#"{"name": "laya", "model_path": "m", "task": "decision"}"#)

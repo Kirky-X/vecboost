@@ -175,7 +175,13 @@ impl CandleEngine {
         let parsed = parse_model_config(&config_content)?;
 
         let model_architecture = parsed.architecture;
-        log::info!("Detected model architecture: {:?}", model_architecture);
+        log::info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-detected-model-architecture",
+                crate::i18n::tr_args(&[("a1", &format!("{:?}", model_architecture))])
+            )
+        );
 
         let hf_tokenizer = HfTokenizer::from_file(tokenizer_filename.to_string_lossy().as_ref())
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
@@ -234,9 +240,14 @@ impl CandleEngine {
             other => other,
         };
         log::info!(
-            "Pooling mode: {:?} (model: {})",
-            resolved_pooling,
-            config.name
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-pooling-mode-model",
+                crate::i18n::tr_args(&[
+                    ("a1", &format!("{:?}", resolved_pooling)),
+                    ("a2", &(config.name).to_string())
+                ])
+            )
         );
 
         Ok(Self {
@@ -309,7 +320,8 @@ impl CandleEngine {
             // 内存压力解除后，尝试恢复到 GPU
             if !self.check_memory_pressure(50).await {
                 log::info!(
-                    "Memory pressure cleared, resetting fallback flag — GPU may be retried on next model load"
+                    "{}",
+                    crate::i18n::tr("log-engine-memory-pressure-cleared-resetting")
                 );
                 self.fallback_triggered = false;
             }
@@ -320,11 +332,17 @@ impl CandleEngine {
             let status = controller.check_limit().await;
 
             if status == MemoryLimitStatus::Exceeded {
-                log::warn!("Memory limit exceeded, attempting fallback to CPU");
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr("log-engine-memory-limit-exceeded-attempting")
+                );
                 self.try_fallback_to_cpu(config).await?;
                 return Ok(true);
             } else if status == MemoryLimitStatus::Critical {
-                log::warn!("Memory limit critical, checking memory pressure for fallback");
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr("log-engine-memory-limit-critical-checking")
+                );
                 if self.check_memory_pressure(90).await {
                     self.try_fallback_to_cpu(config).await?;
                     return Ok(true);
@@ -412,9 +430,14 @@ impl CandleEngine {
         let max_id = ids.iter().max().copied().unwrap_or(0);
         if max_id >= vocab_size {
             log::warn!(
-                "Token ID {} exceeds vocab_size {}, clamping",
-                max_id,
-                vocab_size
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-engine-token-id-exceeds-vocab",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(max_id).to_string()),
+                        ("a2", &(vocab_size).to_string())
+                    ])
+                )
             );
         }
 
@@ -952,7 +975,10 @@ impl CandleEngine {
             return Ok(());
         }
 
-        log::info!("Attempting fallback from GPU to CPU due to memory pressure");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-attempting-fallback-from-gpu")
+        );
 
         self.memory_monitor = None;
         self.device = Device::Cpu;
@@ -970,8 +996,11 @@ impl CandleEngine {
         let fallback_architecture = model_config_json.get_architecture();
 
         log::info!(
-            "Fallback: Detected model architecture: {:?}",
-            fallback_architecture
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-fallback-detected-model-architecture",
+                crate::i18n::tr_args(&[("a1", &format!("{:?}", fallback_architecture))])
+            )
         );
 
         let (bert_config, xlm_config) = match &fallback_architecture {
@@ -1008,8 +1037,11 @@ impl CandleEngine {
             Precision::Fp32 | Precision::Int8 => DType::F32,
             Precision::Fp16 | Precision::Bf16 => {
                 log::warn!(
-                    "Fallback to CPU: {:?} not supported on CPU, using FP32",
-                    self.precision
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-fallback-cpu-supported-cpu",
+                        crate::i18n::tr_args(&[("a1", &format!("{:?}", self.precision))])
+                    )
                 );
                 DType::F32
             }
@@ -1044,7 +1076,10 @@ impl CandleEngine {
         // 回退时禁用量化
         self.use_quantization = false;
 
-        log::info!("Successfully fell back to CPU");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-successfully-fell-back-cpu")
+        );
         Ok(())
     }
 }
@@ -1068,18 +1103,19 @@ struct ParsedModelConfig {
 /// 回退 CPU（ROCm 级 Candle 构建或 ONNX Runtime 才有 AMD 路径）。
 fn resolve_compute_device(device_type: &DeviceType) -> Result<Device, VecboostError> {
     if *device_type == DeviceType::Cuda && candle_core::utils::cuda_is_available() {
-        log::info!("Using CUDA GPU");
+        log::info!("{}", crate::i18n::tr("log-engine-using-cuda-gpu"));
         Ok(Device::new_cuda(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?)
     } else if *device_type == DeviceType::Metal && candle_core::utils::metal_is_available() {
-        log::info!("Using Metal GPU");
+        log::info!("{}", crate::i18n::tr("log-engine-using-metal-gpu"));
         Ok(Device::new_metal(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?)
     } else if matches!(device_type, DeviceType::Amd | DeviceType::OpenCL) {
         log::warn!(
-            "Candle engine does not natively support AMD GPUs. AMD GPU support requires ROCm-enabled Candle build or ONNX Runtime. Falling back to CPU."
+            "{}",
+            crate::i18n::tr("log-engine-candle-engine-does-natively")
         );
         Ok(Device::Cpu)
     } else {
-        log::info!("Using CPU");
+        log::info!("{}", crate::i18n::tr("log-engine-using-cpu"));
         Ok(Device::Cpu)
     }
 }
@@ -1090,29 +1126,32 @@ fn resolve_compute_dtype(precision: &Precision, is_cuda: bool) -> (DType, bool) 
     let compute_dtype = match (&precision, is_cuda) {
         (Precision::Int8, _) => {
             log::warn!(
-                "INT8 quantization is not yet implemented; running in FP32 mode. \
-                The use_quantization flag has no effect until INT8 support is added."
+                "{}",
+                crate::i18n::tr("log-engine-int8-quantization-yet-implemented")
             );
             DType::F32
         }
         (Precision::Fp16, true) => {
-            log::info!("Using FP16 precision");
+            log::info!("{}", crate::i18n::tr("log-engine-using-fp16-precision"));
             DType::F16
         }
         (Precision::Fp16, false) => {
-            log::warn!("FP16 not supported on non-CUDA devices, falling back to FP32");
+            log::warn!("{}", crate::i18n::tr("log-engine-fp16-supported-non-cuda"));
             DType::F32
         }
         (Precision::Bf16, true) => {
-            log::info!("Using BF16 precision (Brain Float 16)");
+            log::info!(
+                "{}",
+                crate::i18n::tr("log-engine-using-bf16-precision-brain")
+            );
             DType::BF16
         }
         (Precision::Bf16, false) => {
-            log::warn!("BF16 not supported on non-CUDA devices, falling back to FP32");
+            log::warn!("{}", crate::i18n::tr("log-engine-bf16-supported-non-cuda"));
             DType::F32
         }
         (Precision::Fp32, _) => {
-            log::info!("Using FP32 precision");
+            log::info!("{}", crate::i18n::tr("log-engine-using-fp32-precision"));
             DType::F32
         }
     };
@@ -1143,7 +1182,13 @@ fn resolve_model_files(
             )));
         }
 
-        log::info!("Loading model from local path: {:?}", model_path);
+        log::info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-loading-model-from-local",
+                crate::i18n::tr_args(&[("a1", &format!("{:?}", model_path))])
+            )
+        );
         let config_path = model_path.join("config.json");
         let tokenizer_path = model_path.join("tokenizer.json");
         let weights_path = model_path.join("model.safetensors");
@@ -1169,16 +1214,20 @@ fn resolve_model_files(
     // .bin(pickle)格式有代码执行风险,model_sha256 是完整性校验的最后防线
     if config.model_sha256.is_none() {
         log::warn!(
-            "Loading model from remote HuggingFace repo '{}' without model_sha256 \
-             verification — recommend setting model_sha256 in config to prevent \
-             tampering and supply-chain attacks",
-            repo_id
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-loading-model-from-remote",
+                crate::i18n::tr_args(&[("a1", &(repo_id).to_string())])
+            )
         );
     }
 
     log::info!(
-        "Downloading/Loading model from HuggingFace Hub: {:?}",
-        model_path
+        "{}",
+        crate::i18n::tr_with_args(
+            "log-engine-downloading-loading-model-from",
+            crate::i18n::tr_args(&[("a1", &format!("{:?}", model_path))])
+        )
     );
     let repo = build_hf_repo(&repo_id)?;
 
@@ -1198,9 +1247,8 @@ fn resolve_model_files(
         .send()
         .or_else(|_| {
             log::warn!(
-                "model.safetensors unavailable, falling back to pytorch_model.bin; \
-                 pickle format carries code-execution risk — only load .bin models \
-                 from trusted sources, prefer safetensors"
+                "{}",
+                crate::i18n::tr("log-engine-model-safetensors-unavailable-falling")
             );
             repo.download_file().filename("pytorch_model.bin").send()
         })
@@ -1303,25 +1351,42 @@ fn ensure_model_integrity(
         sizes
     };
 
-    log::info!("Checking model file integrity...");
+    log::info!(
+        "{}",
+        crate::i18n::tr("log-engine-checking-model-file-integrity")
+    );
     let integrity_report = check_model_integrity(&config.name, files_to_check, Some(min_sizes))
         .map_err(|e| {
             VecboostError::ModelIntegrityError(format!("Integrity check failed: {}", e))
         })?;
 
     if !integrity_report.overall_valid {
-        log::error!("Model file integrity check failed!");
+        log::error!(
+            "{}",
+            crate::i18n::tr("log-engine-model-file-integrity-check-2")
+        );
         for check in &integrity_report.files_checked {
             if !check.is_valid {
                 log::error!(
-                    "  File: {}, Error: {}",
-                    check.file_path,
-                    check.error_message.as_deref().unwrap_or("Unknown error")
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-file-error",
+                        crate::i18n::tr_args(&[
+                            ("a1", &(check.file_path).to_string()),
+                            (
+                                "a2",
+                                (check.error_message.as_deref().unwrap_or("Unknown error"))
+                            )
+                        ])
+                    )
                 );
             }
         }
 
-        log::info!("Attempting automatic recovery of corrupted files...");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-attempting-automatic-recovery-corrupted")
+        );
         let recovery_config = RecoveryConfig::default();
         let recovery = ModelRecovery::new(recovery_config);
 
@@ -1343,8 +1408,14 @@ fn ensure_model_integrity(
             .map_err(|e| VecboostError::ModelIntegrityError(format!("Recovery failed: {}", e)))?;
 
         if recovery_result.success {
-            log::info!("Successfully recovered all corrupted files");
-            log::info!("Re-running integrity check after recovery...");
+            log::info!(
+                "{}",
+                crate::i18n::tr("log-engine-successfully-recovered-all-corrupted")
+            );
+            log::info!(
+                "{}",
+                crate::i18n::tr("log-engine-re-running-integrity-check")
+            );
 
             let files_to_check = vec![
                 (config_str.clone(), None),
@@ -1377,7 +1448,10 @@ fn ensure_model_integrity(
                 )));
             }
 
-            log::info!("Post-recovery integrity check passed");
+            log::info!(
+                "{}",
+                crate::i18n::tr("log-engine-post-recovery-integrity-check")
+            );
         } else {
             return Err(VecboostError::ModelFileCorrupted(format!(
                 "Failed to recover corrupted files after {} attempts. Corrupted files: {:?}",
@@ -1386,7 +1460,10 @@ fn ensure_model_integrity(
         }
     }
 
-    log::info!("Model file integrity check passed");
+    log::info!(
+        "{}",
+        crate::i18n::tr("log-engine-model-file-integrity-check")
+    );
 
     verify_model_sha256(config, weights_filename)?;
 
@@ -1402,7 +1479,10 @@ fn verify_model_sha256(
     let Some(ref expected_hash) = config.model_sha256 else {
         return Ok(());
     };
-    log::info!("Verifying model file SHA256 hash...");
+    log::info!(
+        "{}",
+        crate::i18n::tr("log-engine-verifying-model-file-sha256")
+    );
     let is_valid = verify_sha256(weights_filename, expected_hash)
         .map_err(|e| VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e)))?;
     if !is_valid {
@@ -1411,7 +1491,10 @@ fn verify_model_sha256(
             expected_hash, weights_filename
         )));
     }
-    log::info!("Model file SHA256 verification passed");
+    log::info!(
+        "{}",
+        crate::i18n::tr("log-engine-model-file-sha256-verification")
+    );
     Ok(())
 }
 
@@ -1428,7 +1511,13 @@ fn load_weights_varbuilder<'a>(
     config: &ModelConfig,
 ) -> Result<VarBuilder<'a>, VecboostError> {
     if is_pytorch {
-        log::info!("Loading PyTorch model weights from: {:?}", weights_filename);
+        log::info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-loading-pytorch-model-weights",
+                crate::i18n::tr_args(&[("a1", &format!("{:?}", weights_filename))])
+            )
+        );
 
         let file_size = std::fs::metadata(weights_filename)
             .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
@@ -1436,29 +1525,59 @@ fn load_weights_varbuilder<'a>(
 
         if file_size > PYTORCH_LARGE_FILE_WARN_BYTES {
             log::warn!(
-                "PyTorch model file is large ({} GB). Large pyTorch files may have loading issues.",
-                file_size as f64 / 1024.0 / 1024.0 / 1024.0
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-engine-pytorch-model-file-large",
+                    crate::i18n::tr_args(&[(
+                        "a1",
+                        &(file_size as f64 / 1024.0 / 1024.0 / 1024.0).to_string()
+                    )])
+                )
             );
-            log::info!("Consider converting to safetensors format for better performance:");
             log::info!(
-                "  python -c \"from transformers import AutoModel; AutoModel.from_pretrained('{}').save_pretrained('./model_converted')\"",
-                config.model_path.to_string_lossy()
+                "{}",
+                crate::i18n::tr("log-engine-consider-converting-safetensors-format")
             );
-            log::info!("  Then use './model_converted' as the model_path in config/config.toml");
+            log::info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-engine-python-c-from-transformers",
+                    crate::i18n::tr_args(&[("a1", (config.model_path.to_string_lossy()).as_ref())])
+                )
+            );
+            log::info!("{}", crate::i18n::tr("log-engine-then-use-model-converted"));
         }
 
         match varmap.load(weights_filename) {
             Ok(_) => {
-                log::info!("PyTorch weights loaded successfully");
+                log::info!(
+                    "{}",
+                    crate::i18n::tr("log-engine-pytorch-weights-loaded-successfully")
+                );
             }
             Err(e) => {
-                log::error!("Failed to load PyTorch weights: {}", e);
-                log::error!("This is often due to large model files or incompatible formats.");
-                log::error!("Please convert the model to safetensors format:");
-                log::error!("  pip install optimum");
                 log::error!(
-                    "  optimum-cli export onnx --model {} --task feature-extraction ./model_safetensors",
-                    config.model_path.to_string_lossy()
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-failed-load-pytorch-weights",
+                        crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                    )
+                );
+                log::error!("{}", crate::i18n::tr("log-engine-this-often-due-large"));
+                log::error!(
+                    "{}",
+                    crate::i18n::tr("log-engine-please-convert-model-safetensors")
+                );
+                log::error!("{}", crate::i18n::tr("log-engine-pip-install-optimum"));
+                log::error!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-optimum-cli-export-onnx",
+                        crate::i18n::tr_args(&[(
+                            "a1",
+                            (config.model_path.to_string_lossy()).as_ref()
+                        )])
+                    )
                 );
                 return Err(VecboostError::ModelLoadError(format!(
                     "Failed to load PyTorch weights: {}. Please convert the model to safetensors format.",
@@ -1470,8 +1589,11 @@ fn load_weights_varbuilder<'a>(
     }
 
     log::info!(
-        "Loading safetensors model weights from: {:?}",
-        weights_filename
+        "{}",
+        crate::i18n::tr_with_args(
+            "log-engine-loading-safetensors-model-weights",
+            crate::i18n::tr_args(&[("a1", &format!("{:?}", weights_filename))])
+        )
     );
     // SAFETY: `VarBuilder::from_mmaped_safetensors` memory-maps model weight files
     // from disk. This is safe because:
@@ -1480,7 +1602,10 @@ fn load_weights_varbuilder<'a>(
     // 3. The OS handles page faults; no manual pointer manipulation is needed.
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], dtype, device) };
     let vb = vb.map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-    log::info!("Loaded safetensors model weights successfully");
+    log::info!(
+        "{}",
+        crate::i18n::tr("log-engine-loaded-safetensors-model-weights")
+    );
     Ok(vb)
 }
 
@@ -1499,9 +1624,11 @@ pub(crate) fn infer_pooling_mode(model_name: &str) -> crate::config::model::Pool
         PoolingMode::Cls
     } else {
         log::warn!(
-            "Auto pooling: unrecognized model family '{}', falling back to CLS. \
-             Set pooling_mode explicitly to silence this warning.",
-            model_name
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-auto-pooling-unrecognized-model",
+                crate::i18n::tr_args(&[("a1", (model_name))])
+            )
         );
         PoolingMode::Cls
     }

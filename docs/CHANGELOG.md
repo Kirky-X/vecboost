@@ -126,6 +126,22 @@
 - **翻译并行 worker 惰性加载**：句级并行附加 Session 集从启动期预载改为首次长输入并行请求按需补建——idle 驻留从 4 pair×4 worker 全 FP32 的 ~30G+ 降为每 pair 一套；P7 时延契约不变（`TRANSLATION_PARALLEL_WORKERS` 语义不变）。根因与实测证据见 [MEMORY_SAFETY](MEMORY_SAFETY.md)
 - **运维防线（免 root）**：`scripts/build-memcap.sh`（systemd --user scope 构建内存上限，cgroup `memory.max` 已验证内核级生效）；`scripts/mem-guard.sh` + `mem-guard-install.sh`（用户级 earlyoom，MemAvailable 阈值杀目标进程，正反向实测通过，已随安装脚本常驻）
 
+### 变更（废弃报告退役与维护规范沉淀）
+
+- **废弃报告移出跟踪**：根目录 `DEPRECATED.md` 与 `transcribe-poc/DEPRECATED.md` 经 `git rm` 删除（历史提交保留，不再跟踪）；沿革与裁定的事实源为 `specmark/archive/**`（只读）
+- **新增 [🧹 维护规范](MAINTENANCE.md)**：沉淀仍有效的长期约束——转录消费面与禁止语义级双实现、`transcribe-own` CLI 契约（stdout 五行含 `TRANSCRIPT_CHARS`、`--vad-only` 仍写空 segments.txt、退出码 0/1/2、日志一律 stderr）、退役配置项“显性告警禁静默”纪律、废弃文档与勘误治理元规则
+- **入链改指**：README 双语的“详见 DEPRECATED.md”改指 `transcribe-poc/CONTRACT.md` 与 [MAINTENANCE](MAINTENANCE.md)；根目录 `AGENTS.md`（按 `.gitignore` 约定不入库）收敛为指向仓库文档的指针，不复制规范正文（避免第二事实源）
+
+### 变更（i18n-audit：全量国际化收口与默认英文加固）
+
+- **默认语言约束可验证化**：`detect_locale()` 抽出纯函数 `detect_from(get_env, sys_locale)`（优先级链与早返回语义零变更），新增 5 个守卫单测：纯净环境必落 `en`、`C`/`POSIX`/不支持值在任一层级均不得产出 `zh`、`VECBOOST_LANG` 压过 POSIX 链与系统 locale、`en` 语言包零中文（含注释）且 `zh` 侧必须含中文
+- **行为变更（协议面跟随 locale）**：`i18n::init()` 末尾新增 `sync_sdforge_i18n()`——将 sdforge 的 locale 对齐本仓 `current_locale()`，并把 FTL 的 `forge-*` 键注册进 sdforge 注册表（单一事实源）。此前 `VECBOOST_LANG` 管不到 CLI `--help`/MCP 描述，它们自行读 `SDFORGE_LANG`/系统 locale（双轨）；现统一为 `VECBOOST_LANG` 权威。9 个 `#[forge(cli = true)]` 已补 `i18n_key = "forge-cli-<name>"`
+- **硬编码中文清零**：`factory.rs` 的 `task=decision` 未启用 onnx 错误改走 `factory-decision-no-onnx-feature`；`transcribe-poc` 补 `i18n::init()`（此前未初始化，任何 `tr()` 都会回退裸键名）并将其 stderr 诊断全部接 FTL；**stdout 五行契约逐字不动**（`CONTRACT.md` 未改）
+- **用户可见文案全量国际化**：启动/装配/引擎/设备/缓存/审计/服务/doctor/CLI 共 300 余处硬编码英文字面量抽取为 FTL 键（en/zh 双侧同批），语言包由 240 键增至 530 键；`Tag: message` 形态的机器可 grep 前缀（`[thread-tune]`、`EmbeddingModule:`、`persist:`、`transcribe-own:`）与 `PASS/WARN/FAIL`、`CheckResult.name`、JSON 字段名、`error_code` 按红线保留英文
+- **新增回归门禁**：`scripts/i18n_consistency_check.py`（R1 默认英文、R2 en/zh 键齐性、R3 `tr()`/`i18n_key` 引用有效、R4 生产码禁硬编码中文、R5 未国际化文案棘轮），已接入 `.pre-commit-config.yaml` / `scripts/pre-commit.sh i18n` / CI `Check` job；豁免记 `scripts/i18n_allowlist.json`（9 条规则覆盖 10 处站点，均带理由：开发者 panic 面、测试夹具、基准仪表），热路径封顶记 `scripts/i18n_baseline.json`（63 处，只降不升）
+- **规范正文**：[MAINTENANCE](MAINTENANCE.md) 新增「🌐 i18n 约束」节（默认英文、协议面单一事实源、机器输出红线、门禁命令）；[CONTRIBUTING](CONTRIBUTING.md) 质量门禁加 i18n 一行
+- **顺手修复（非 i18n，本地工具链 clippy 新增拦截）**：`api/transcribe.rs` 的 `use serde::Deserialize` 按 `cli + transcribe` 门控（否则无 transcribe 的 feature 组合报未用导入）；`engine/session.rs` 去掉 `split_whitespace` 前冗余的 `trim()`
+
 ---
 
 ## [0.2.1] - 2026-09-06

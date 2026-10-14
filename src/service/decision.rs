@@ -80,7 +80,13 @@ impl DecisionService {
             // runtime/task/error.rs 的 Panic 分支），经 to_api_error 的 500
             // catch-all 会直达响应体（CWE-209 信息暴露面）：wire 侧只回
             // 可定位的固定文案，载荷与 task id 全量留在服务端日志
-            log::error!("decision inference task failed: {e}");
+            log::error!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-decision-inference-task-failed",
+                    crate::i18n::tr_args(&[("e", &(e).to_string())])
+                )
+            );
             VecboostError::InferenceError(
                 "decision inference task failed (engine task panicked); see server logs"
                     .to_string(),

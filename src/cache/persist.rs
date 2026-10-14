@@ -110,7 +110,16 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
     let mut file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            warn!("persist: 无法打开 {}（{}），视为空缓存", path.display(), e);
+            warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-cache-persist-cannot-open-treating",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(path.display()).to_string()),
+                        ("a2", &(e).to_string())
+                    ])
+                )
+            );
             return (out, committed);
         }
     };
@@ -133,9 +142,14 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
         }
         if t[0] != REC_DATA {
             warn!(
-                "persist: {} 未知记录类型 {}，停止回放（撕裂）",
-                path.display(),
-                t[0]
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-cache-persist-unknown-record-type",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(path.display()).to_string()),
+                        ("a2", &(t[0]).to_string())
+                    ])
+                )
             );
             break;
         }
@@ -167,13 +181,28 @@ fn verify_persist_header(file: &mut std::fs::File, path: &Path) -> bool {
         return false; // 空文件
     }
     if magic != FILE_MAGIC {
-        warn!("persist: {} 魔数不匹配，整体弃用", path.display());
+        warn!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-cache-persist-magic-mismatch-discarding",
+                crate::i18n::tr_args(&[("a1", &(path.display()).to_string())])
+            )
+        );
         return false;
     }
     match read_u32(file) {
         Ok(v) if v == FILE_VERSION => true,
         Ok(v) => {
-            warn!("persist: {} 版本 {} 不匹配，整体弃用", path.display(), v);
+            warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-cache-persist-version-mismatch-discarding",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(path.display()).to_string()),
+                        ("a2", &(v).to_string())
+                    ])
+                )
+            );
             false
         }
         Err(_) => false, // 头撕裂
@@ -220,17 +249,35 @@ fn read_data_record(
     }
     // 校验：checksum/指纹/UTF-8，失败则弃该条、继续（序号已占位）。
     if u64::from_le_bytes(sum_b) != checksum(&key_b, &vec_b, &tag_b) {
-        warn!("persist: {} 一条记录 checksum 失败，已跳过", path.display());
+        warn!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-cache-persist-one-record-failed",
+                crate::i18n::tr_args(&[("a1", &(path.display()).to_string())])
+            )
+        );
         return Some(None);
     }
     if tag_b != expected_tag.as_bytes() {
-        warn!("persist: {} 一条记录指纹不匹配，已跳过", path.display());
+        warn!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-cache-persist-one-record-fingerprint",
+                crate::i18n::tr_args(&[("a1", &(path.display()).to_string())])
+            )
+        );
         return Some(None);
     }
     let key = match String::from_utf8(key_b) {
         Ok(k) => k,
         Err(_) => {
-            warn!("persist: {} 一条记录 key 非 UTF-8，已跳过", path.display());
+            warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-cache-persist-one-record-key",
+                    crate::i18n::tr_args(&[("a1", &(path.display()).to_string())])
+                )
+            );
             return Some(None);
         }
     };

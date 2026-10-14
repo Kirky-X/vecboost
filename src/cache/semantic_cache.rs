@@ -50,9 +50,9 @@ impl std::str::FromStr for ComparisonMode {
             "exact" => Ok(ComparisonMode::Exact),
             "i8" | "int8" => Ok(ComparisonMode::I8),
             "binary" | "bin" => Ok(ComparisonMode::Binary),
-            other => Err(format!(
-                "未知的 comparison_mode: '{}'（可选 exact|i8|binary）",
-                other
+            other => Err(crate::i18n::tr_with_args(
+                "semantic-cache-mode-unknown",
+                crate::i18n::tr_args(&[("got", other)]),
             )),
         }
     }

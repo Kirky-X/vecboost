@@ -60,6 +60,11 @@ jobs:
         # unwrap_used:生产代码 panic 面门禁(测试代码由 clippy.toml 豁免)
         run: cargo clippy --features "${{ env.FEATURES }}" --all-targets -- -D warnings -W clippy::unwrap_used
 
+      - name: Check i18n consistency
+        # 默认英文(en 语言包零中文) + en/zh 键齐性 + tr()/i18n_key 引用有效 +
+        # 生产码硬编码中文/未登记用户可见文案回流拦截
+        run: python3 scripts/i18n_consistency_check.py
+
   build:
     name: Build
     runs-on: ubuntu-latest

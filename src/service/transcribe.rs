@@ -122,10 +122,15 @@ impl TranscribeService {
             .map_err(|e| VecboostError::InferenceError(format!("transcribe task join: {e}")))??;
 
             log::info!(
-                "transcribe: {} segments, {} chars, {} ms",
-                resp.segments.len(),
-                resp.text.chars().count(),
-                started.elapsed().as_millis(),
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-transcribe-segments-chars-ms",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(resp.segments.len()).to_string()),
+                        ("a2", &(resp.text.chars().count()).to_string()),
+                        ("a3", &(started.elapsed().as_millis()).to_string())
+                    ])
+                )
             );
             Ok(resp)
         }

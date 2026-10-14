@@ -17,6 +17,8 @@
 use crate::domain::{TranscribeRequest, TranscribeResponse};
 use crate::error::VecboostError;
 use crate::service::transcribe::TranscribeService;
+// `Deserialize` 仅 CLI 入参结构（cli + transcribe）消费；其余 feature 组合下不得引入未用导入。
+#[cfg(all(feature = "cli", feature = "transcribe"))]
 use serde::Deserialize;
 
 #[cfg(any(
@@ -127,7 +129,8 @@ impl std::str::FromStr for TranscribeWavRequest {
     name = "transcribe",
     version = 1,
     cli = true,
-    description = "Transcribe a 16kHz mono WAV file to text (Qwen3-ASR; requires [transcribe] enabled)"
+    description = "Transcribe a 16kHz mono WAV file to text (Qwen3-ASR; requires [transcribe] enabled)",
+    i18n_key = "forge-cli-transcribe"
 )]
 pub async fn cli_transcribe(req: TranscribeWavRequest) -> Result<TranscribeResponse, ApiError> {
     let st = state().map_err(to_api_error)?;

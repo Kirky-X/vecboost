@@ -66,12 +66,12 @@ pub fn plan(p: &Probes) -> HardwarePlan {
     let cores = p.physical_cores.or(p.logical_cores);
     let worker_threads = match cores {
         Some(c) if c > 0 => {
-            rationale.push(format!("worker_threads=物理/逻辑核数 {}", c));
+            rationale.push(format!("worker_threads=physical/logical cores {}", c));
             c
         }
         _ => {
             let fb = num_cpus::get().max(1);
-            rationale.push(format!("worker_threads=回退 num_cpus {}", fb));
+            rationale.push(format!("worker_threads=fallback num_cpus {}", fb));
             fb
         }
     };
@@ -81,20 +81,20 @@ pub fn plan(p: &Probes) -> HardwarePlan {
         (Some(avail), Some(model)) if model > 0 => {
             let pressured = avail < model.saturating_mul(2);
             rationale.push(format!(
-                "内存规则：可用 {}MB vs 模型 {}MB（2×={}MB）→ {}",
+                "memory rule: available {}MB vs model {}MB (2x={}MB) -> {}",
                 avail,
                 model,
                 model.saturating_mul(2),
                 if pressured {
-                    "quantized 推荐"
+                    "quantized recommended"
                 } else {
-                    "内存充足"
+                    "memory sufficient"
                 }
             ));
             Some(pressured)
         }
         _ => {
-            rationale.push("内存规则：探测缺失，不参与".to_string());
+            rationale.push("memory rule: probe missing, not considered".to_string());
             None
         }
     };
@@ -103,18 +103,23 @@ pub fn plan(p: &Probes) -> HardwarePlan {
     // 核数规则：物理核 ≥16 → max_batch_size=32（边界含 16），否则维持默认。
     let max_batch_size = match p.physical_cores {
         Some(c) if c >= 16 => {
-            rationale.push(format!("核数规则：物理核 {}≥16 → max_batch_size=32", c));
+            rationale.push(format!(
+                "core rule: physical cores {}>=16 -> max_batch_size=32",
+                c
+            ));
             32
         }
         Some(c) => {
             rationale.push(format!(
-                "核数规则：物理核 {}<16 → max_batch_size 维持 {}",
+                "core rule: physical cores {}<16 -> max_batch_size stays {}",
                 c, DEFAULT_MAX_BATCH_SIZE
             ));
             DEFAULT_MAX_BATCH_SIZE
         }
         None => {
-            rationale.push("核数规则：物理核未知 → max_batch_size 维持默认".to_string());
+            rationale.push(
+                "core rule: physical cores unknown -> max_batch_size stays default".to_string(),
+            );
             DEFAULT_MAX_BATCH_SIZE
         }
     };
@@ -129,7 +134,7 @@ pub fn plan(p: &Probes) -> HardwarePlan {
         (_, _, true) => Bottleneck::Io,
         _ => Bottleneck::Compute,
     };
-    rationale.push(format!("瓶颈分类：{}", bottleneck));
+    rationale.push(format!("bottleneck classification: {}", bottleneck));
 
     HardwarePlan {
         worker_threads,

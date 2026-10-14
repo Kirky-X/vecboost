@@ -60,11 +60,9 @@ impl EngineFactory {
             }
             #[cfg(not(feature = "onnx"))]
             {
-                return Err(VecboostError::ConfigError(
-                    "检测到 task=decision 模型配置，但本次构建未启用 `onnx` feature；\
-                     请以 `--features onnx` 重新构建"
-                        .to_string(),
-                ));
+                return Err(VecboostError::ConfigError(crate::i18n::tr(
+                    "factory-decision-no-onnx-feature",
+                )));
             }
         }
         // task=translate 路由：seq2seq 翻译仅 onnx 实现（Marian/opus-mt
@@ -73,10 +71,9 @@ impl EngineFactory {
         // 自动放行。
         if config.task == ModelTask::Translate {
             if engine_type == EngineType::Candle {
-                return Err(VecboostError::ConfigError(
-                    "翻译仅支持 onnx 引擎：请将 engine_type 配置为 onnx（task=translate 无 candle 实现；更改后需重启服务重新加载）"
-                        .to_string(),
-                ));
+                return Err(VecboostError::ConfigError(crate::i18n::tr(
+                    "factory-translate-onnx-only",
+                )));
             }
             #[cfg(feature = "onnx")]
             {
@@ -87,21 +84,18 @@ impl EngineFactory {
             }
             #[cfg(not(feature = "onnx"))]
             {
-                return Err(VecboostError::ConfigError(
-                    "检测到 task=translate 模型配置，但本次构建未启用 `onnx` feature；\
-                     请以 `--features onnx` 重新构建"
-                        .to_string(),
-                ));
+                return Err(VecboostError::ConfigError(crate::i18n::tr(
+                    "factory-translate-no-onnx-feature",
+                )));
             }
         }
         // task=transcribe 路由：Qwen3-ASR 三图仅 onnx 实现（需 feature `transcribe`）。
         // candle 显性拒绝并给出换引擎提示；feature 未启用 → ConfigError 提示重建。
         if config.task == ModelTask::Transcribe {
             if engine_type == EngineType::Candle {
-                return Err(VecboostError::ConfigError(
-                    "转录仅支持 onnx 引擎：请将 engine_type 配置为 onnx（task=transcribe 无 candle 实现）"
-                        .to_string(),
-                ));
+                return Err(VecboostError::ConfigError(crate::i18n::tr(
+                    "factory-transcribe-onnx-only",
+                )));
             }
             #[cfg(feature = "transcribe")]
             {
@@ -112,11 +106,9 @@ impl EngineFactory {
             }
             #[cfg(not(feature = "transcribe"))]
             {
-                return Err(VecboostError::ConfigError(
-                    "检测到 task=transcribe 模型配置，但本次构建未启用 `transcribe` feature；\
-                     请以 `--features onnx,transcribe` 重新构建"
-                        .to_string(),
-                ));
+                return Err(VecboostError::ConfigError(crate::i18n::tr(
+                    "factory-transcribe-no-transcribe-feature",
+                )));
             }
         }
         // loader 路由：.gguf + quantized=true 走量化引擎
@@ -132,11 +124,9 @@ impl EngineFactory {
             }
             #[cfg(not(feature = "quantized-gguf"))]
             {
-                return Err(VecboostError::ConfigError(
-                    "检测到 GGUF 量化模型配置（.gguf + quantized=true），但本次构建未启用 \
-                     `quantized-gguf` feature；请以 `--features quantized-gguf` 重新构建"
-                        .to_string(),
-                ));
+                return Err(VecboostError::ConfigError(crate::i18n::tr(
+                    "factory-quantized-no-feature",
+                )));
             }
         }
         let precision = Precision::Fp32;
@@ -307,6 +297,7 @@ mod tests {
     /// ConfigError 必须携带换引擎提示（禁止静默落入 embedding 引擎）。
     #[test]
     fn test_create_transcribe_task_rejects_candle_engine() {
+        crate::i18n::init();
         let mut config = test_config();
         config.task = crate::config::model::ModelTask::Transcribe;
         config.model_path = PathBuf::from("models/qwen3-asr");
@@ -314,7 +305,7 @@ mod tests {
         match result {
             Err(VecboostError::ConfigError(msg)) => {
                 assert!(
-                    msg.contains("转录仅支持 onnx 引擎"),
+                    msg.contains(&crate::i18n::tr("factory-transcribe-onnx-only")),
                     "错误必须携带换引擎提示，msg={msg}"
                 );
                 assert!(
@@ -331,6 +322,7 @@ mod tests {
 
     #[test]
     fn test_create_translate_task_rejects_candle_engine() {
+        crate::i18n::init();
         let mut config = test_config();
         config.task = crate::config::model::ModelTask::Translate;
         config.model_path = PathBuf::from("models/opus-mt-en-zh");
@@ -338,7 +330,7 @@ mod tests {
         match result {
             Err(VecboostError::ConfigError(msg)) => {
                 assert!(
-                    msg.contains("翻译仅支持 onnx 引擎"),
+                    msg.contains(&crate::i18n::tr("factory-translate-onnx-only")),
                     "错误必须携带换引擎提示，msg={msg}"
                 );
                 assert!(
@@ -448,6 +440,7 @@ mod tests {
 
     #[test]
     fn test_create_gguf_without_feature_returns_config_error() {
+        crate::i18n::init();
         let mut config = test_config();
         config.model_path = PathBuf::from("/tmp/model-q8_0.gguf");
         config.quantized = true;

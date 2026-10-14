@@ -13,6 +13,7 @@
 //!
 //! doctor 在服务装配**之前**短路运行：模型损坏、依赖缺失时诊断必须仍然可用。
 use crate::config::VecboostConfig;
+use crate::i18n;
 
 /// 检查结论（枚举固定三值，与 spec 一致）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +77,7 @@ impl DoctorReport {
 
     /// 打印人类可读报告到 stdout。
     pub fn print(&self) {
-        println!("vecboost doctor — read-only diagnostics");
+        println!("{}", i18n::tr("doctor-report-title"));
         println!();
         for r in &self.results {
             println!("[{:>4}] {:<12} {}", r.status.as_str(), r.name, r.detail);
@@ -93,9 +94,16 @@ impl DoctorReport {
             .filter(|r| r.status == CheckStatus::Warn)
             .count();
         println!(
-            "{} check(s): {} pass, {warns} warn, {fails} fail",
-            self.results.len(),
-            self.results.len() - fails - warns
+            "{}",
+            i18n::tr_with_args(
+                "doctor-summary",
+                i18n::tr_args(&[
+                    ("total", &self.results.len().to_string()),
+                    ("pass", &(self.results.len() - fails - warns).to_string()),
+                    ("warn", &warns.to_string()),
+                    ("fail", &fails.to_string()),
+                ]),
+            )
         );
     }
 
@@ -122,12 +130,19 @@ pub fn check_config(config: &VecboostConfig) -> CheckResult {
         Ok(()) => CheckResult::new(
             "config",
             CheckStatus::Pass,
-            format!(
-                "VecboostConfig::validate 通过（model.task={}）",
-                config.model.task
+            i18n::tr_with_args(
+                "doctor-config-pass",
+                i18n::tr_args(&[("task", &config.model.task.to_string())]),
             ),
         ),
-        Err(e) => CheckResult::new("config", CheckStatus::Fail, format!("配置校验失败: {e}")),
+        Err(e) => CheckResult::new(
+            "config",
+            CheckStatus::Fail,
+            i18n::tr_with_args(
+                "doctor-config-fail",
+                i18n::tr_args(&[("detail", &e.to_string())]),
+            ),
+        ),
     }
 }
 
@@ -139,26 +154,38 @@ pub fn check_tokenizer(config: &VecboostConfig) -> CheckResult {
         return CheckResult::new(
             "tokenizer",
             CheckStatus::Warn,
-            format!("模型目录不存在: {}（运行时将尝试 HF 下载）", dir.display()),
+            i18n::tr_with_args(
+                "doctor-model-dir-missing",
+                i18n::tr_args(&[("path", &dir.display().to_string())]),
+            ),
         );
     }
     if !tok_path.exists() {
         return CheckResult::new(
             "tokenizer",
             CheckStatus::Warn,
-            format!("tokenizer.json 不存在: {}", tok_path.display()),
+            i18n::tr_with_args(
+                "doctor-tokenizer-json-missing",
+                i18n::tr_args(&[("path", &tok_path.display().to_string())]),
+            ),
         );
     }
     match crate::text::SyncTokenizer::from_file(tok_path.to_string_lossy().as_ref()) {
         Ok(_) => CheckResult::new(
             "tokenizer",
             CheckStatus::Pass,
-            format!("tokenizer.json 加载成功: {}", tok_path.display()),
+            i18n::tr_with_args(
+                "doctor-tokenizer-json-ok",
+                i18n::tr_args(&[("path", &tok_path.display().to_string())]),
+            ),
         ),
         Err(e) => CheckResult::new(
             "tokenizer",
             CheckStatus::Fail,
-            format!("tokenizer.json 加载失败: {e}"),
+            i18n::tr_with_args(
+                "doctor-tokenizer-json-fail",
+                i18n::tr_args(&[("detail", &e.to_string())]),
+            ),
         ),
     }
 }
@@ -171,7 +198,7 @@ pub fn check_cache_persist(config: &VecboostConfig) -> CheckResult {
         return CheckResult::new(
             "cache-persist",
             CheckStatus::Pass,
-            "纯内存模式（未配置 persist_path）",
+            i18n::tr("doctor-cache-memory-only"),
         );
     };
     let wal = std::path::Path::new(path);
@@ -180,12 +207,18 @@ pub fn check_cache_persist(config: &VecboostConfig) -> CheckResult {
             Ok(_) => CheckResult::new(
                 "cache-persist",
                 CheckStatus::Pass,
-                format!("WAL 文件可写: {path}"),
+                i18n::tr_with_args(
+                    "doctor-cache-wal-writable",
+                    i18n::tr_args(&[("path", path)]),
+                ),
             ),
             Err(e) => CheckResult::new(
                 "cache-persist",
                 CheckStatus::Fail,
-                format!("WAL 文件不可写: {path}: {e}"),
+                i18n::tr_with_args(
+                    "doctor-cache-wal-unwritable",
+                    i18n::tr_args(&[("path", path), ("detail", &e.to_string())]),
+                ),
             ),
         };
     }
@@ -193,16 +226,19 @@ pub fn check_cache_persist(config: &VecboostConfig) -> CheckResult {
         return CheckResult::new(
             "cache-persist",
             CheckStatus::Fail,
-            format!("persist_path 无效: {path}"),
+            i18n::tr_with_args(
+                "doctor-cache-path-invalid",
+                i18n::tr_args(&[("path", path)]),
+            ),
         );
     };
     if !parent.exists() {
         return CheckResult::new(
             "cache-persist",
             CheckStatus::Fail,
-            format!(
-                "父目录不存在（启动写盘将失败，请先创建或修正配置）: {}",
-                parent.display()
+            i18n::tr_with_args(
+                "doctor-cache-parent-missing",
+                i18n::tr_args(&[("path", &parent.display().to_string())]),
             ),
         );
     }
@@ -212,15 +248,21 @@ pub fn check_cache_persist(config: &VecboostConfig) -> CheckResult {
         Ok(()) => CheckResult::new(
             "cache-persist",
             CheckStatus::Pass,
-            format!(
-                "目录可写（WAL 尚未创建，首次插入时建立）: {}",
-                parent.display()
+            i18n::tr_with_args(
+                "doctor-cache-dir-writable",
+                i18n::tr_args(&[("path", &parent.display().to_string())]),
             ),
         ),
         Err(e) => CheckResult::new(
             "cache-persist",
             CheckStatus::Fail,
-            format!("目录不可写: {}: {e}", parent.display()),
+            i18n::tr_with_args(
+                "doctor-cache-dir-unwritable",
+                i18n::tr_args(&[
+                    ("path", &parent.display().to_string()),
+                    ("detail", &e.to_string()),
+                ]),
+            ),
         ),
     }
 }
@@ -231,10 +273,17 @@ pub fn check_threads() -> CheckResult {
     let logical = num_cpus::get();
     let physical = crate::device::thread_tune::detect_physical_cores();
     let mut detail = match physical {
-        Some(p) => format!("物理核 {p} / 逻辑核 {logical}（调优按物理核生效）"),
-        None => {
-            format!("物理核检测不可用，回退逻辑核 {logical}（VECBOOST_NO_THREAD_TUNE 可显式控制）")
-        }
+        Some(p) => i18n::tr_with_args(
+            "doctor-threads-detailed",
+            i18n::tr_args(&[
+                ("physical", &p.to_string()),
+                ("logical", &logical.to_string()),
+            ]),
+        ),
+        None => i18n::tr_with_args(
+            "doctor-threads-fallback",
+            i18n::tr_args(&[("logical", &logical.to_string())]),
+        ),
     };
     let status = if physical.is_some() {
         CheckStatus::Pass
@@ -248,8 +297,9 @@ pub fn check_threads() -> CheckResult {
         if let Some(sockets) = crate::device::thread_tune::parse_lscpu_sockets(&text)
             && sockets > 1
         {
-            detail.push_str(&format!(
-                "；检测到 {sockets} 个 socket，建议 numactl --interleave=all 启动"
+            detail.push_str(&i18n::tr_with_args(
+                "doctor-threads-numa",
+                i18n::tr_args(&[("sockets", &sockets.to_string())]),
             ));
         }
     }
@@ -260,24 +310,23 @@ pub fn check_threads() -> CheckResult {
 /// feature 为 FAIL（启动必然失败或静默回退，属于配置-构建不匹配）。
 pub async fn check_gpu(config: &VecboostConfig) -> CheckResult {
     if !config.model.use_gpu {
-        return CheckResult::new("gpu", CheckStatus::Pass, "CPU 模式（use_gpu=false）");
+        return CheckResult::new("gpu", CheckStatus::Pass, i18n::tr("doctor-gpu-cpu-mode"));
     }
     #[cfg(feature = "cuda")]
     {
         let manager = crate::device::manager::DeviceManager::new();
         let gpus = manager.get_cuda_gpu_info().await;
         if gpus.is_empty() {
-            CheckResult::new(
-                "gpu",
-                CheckStatus::Warn,
-                "use_gpu=true 但未探测到 CUDA 设备",
-            )
+            CheckResult::new("gpu", CheckStatus::Warn, i18n::tr("doctor-gpu-no-cuda"))
         } else {
             let names: Vec<String> = gpus.iter().map(|g| g.name.clone()).collect();
             CheckResult::new(
                 "gpu",
                 CheckStatus::Pass,
-                format!("CUDA 设备: {}", names.join(", ")),
+                i18n::tr_with_args(
+                    "doctor-gpu-devices",
+                    i18n::tr_args(&[("names", &names.join(", "))]),
+                ),
             )
         }
     }
@@ -287,7 +336,7 @@ pub async fn check_gpu(config: &VecboostConfig) -> CheckResult {
         CheckResult::new(
             "gpu",
             CheckStatus::Fail,
-            "use_gpu=true 但二进制未编译 cuda feature（构建时启用 --features cuda）",
+            i18n::tr("doctor-gpu-no-cuda-feature"),
         )
     }
 }
@@ -316,7 +365,7 @@ pub fn check_models(config: &VecboostConfig) -> Vec<CheckResult> {
         results.push(CheckResult::new(
             "models",
             CheckStatus::Warn,
-            "未找到本地模型目录（models/ 不存在且未配置 model_path），运行时将依赖 HF 下载",
+            i18n::tr("doctor-models-none"),
         ));
         return results;
     }
@@ -337,7 +386,10 @@ pub fn check_models(config: &VecboostConfig) -> Vec<CheckResult> {
         results.push(CheckResult::new(
             "models",
             CheckStatus::Fail,
-            format!("{total_fail} 个模型目录存在完整性问题"),
+            i18n::tr_with_args(
+                "doctor-models-fail-count",
+                i18n::tr_args(&[("count", &total_fail.to_string())]),
+            ),
         ));
     }
     results
@@ -346,7 +398,7 @@ pub fn check_models(config: &VecboostConfig) -> Vec<CheckResult> {
 /// 单个模型目录的角色化检查。返回 (状态, 描述)。
 fn inspect_model_dir(dir: &std::path::Path) -> (CheckStatus, String) {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return (CheckStatus::Warn, "目录不可读".to_string());
+        return (CheckStatus::Warn, i18n::tr("doctor-dir-unreadable"));
     };
     let mut weights = Vec::new();
     let mut gguf = Vec::new();
@@ -381,14 +433,26 @@ fn inspect_model_dir(dir: &std::path::Path) -> (CheckStatus, String) {
                     Err(e) => {
                         return (
                             CheckStatus::Fail,
-                            format!("JSON 文件解析失败 {}: {e}", path.display()),
+                            i18n::tr_with_args(
+                                "doctor-json-parse-fail",
+                                i18n::tr_args(&[
+                                    ("path", &path.display().to_string()),
+                                    ("detail", &e.to_string()),
+                                ]),
+                            ),
                         );
                     }
                 },
                 Err(e) => {
                     return (
                         CheckStatus::Fail,
-                        format!("JSON 文件不可读 {}: {e}", path.display()),
+                        i18n::tr_with_args(
+                            "doctor-json-unreadable",
+                            i18n::tr_args(&[
+                                ("path", &path.display().to_string()),
+                                ("detail", &e.to_string()),
+                            ]),
+                        ),
                     );
                 }
             }
@@ -421,7 +485,10 @@ fn inspect_model_dir(dir: &std::path::Path) -> (CheckStatus, String) {
         if !any_match {
             return (
                 CheckStatus::Fail,
-                format!("全部二维张量维度均不含 config.hidden_size({h})，权重与配置疑似不配对"),
+                i18n::tr_with_args(
+                    "doctor-dims-no-hidden",
+                    i18n::tr_args(&[("hidden", &h.to_string())]),
+                ),
             );
         }
     }
@@ -431,24 +498,24 @@ fn inspect_model_dir(dir: &std::path::Path) -> (CheckStatus, String) {
         }
     }
     if weights.is_empty() && gguf.is_empty() {
-        return (
-            CheckStatus::Warn,
-            "未发现权重文件（.safetensors/.gguf）".to_string(),
-        );
+        return (CheckStatus::Warn, i18n::tr("doctor-no-weights"));
     }
-    let mut detail = format!(
-        "权重 {} 个、gguf {} 个、tokenizer {}、config.hidden_size {:?}",
-        weights.len(),
-        gguf.len(),
-        if tokenizer_json {
-            "已识别"
-        } else {
-            "未识别"
-        },
-        config_hidden_size
+    let tokenizer = if tokenizer_json {
+        i18n::tr("doctor-tokenizer-recognized")
+    } else {
+        i18n::tr("doctor-tokenizer-unrecognized")
+    };
+    let mut detail = i18n::tr_with_args(
+        "doctor-weights-summary",
+        i18n::tr_args(&[
+            ("weights", &weights.len().to_string()),
+            ("gguf", &gguf.len().to_string()),
+            ("tokenizer", &tokenizer),
+            ("hidden", &format!("{:?}", config_hidden_size)),
+        ]),
     );
     if !tokenizer_json {
-        detail.push_str(&crate::i18n::tr("doctor-tokenizer-vocab-missing"));
+        detail.push_str(&i18n::tr("doctor-tokenizer-vocab-missing"));
     }
     (CheckStatus::Pass, detail)
 }
@@ -471,29 +538,62 @@ struct SafetensorsInfo {
 fn scan_safetensors(path: &std::path::Path) -> Result<SafetensorsInfo, String> {
     // 只读头部（8 字节长度 + header_len JSON），不整文件载入内存
     // （数 GB 权重文件的资源放大）。
-    let mut file =
-        std::fs::File::open(path).map_err(|e| format!("权重文件不可读 {}: {e}", path.display()))?;
+    let mut file = std::fs::File::open(path).map_err(|e| {
+        i18n::tr_with_args(
+            "doctor-weight-unreadable",
+            i18n::tr_args(&[
+                ("path", &path.display().to_string()),
+                ("detail", &e.to_string()),
+            ]),
+        )
+    })?;
     let display = path.display();
     let file_len = file
         .metadata()
-        .map_err(|e| format!("元数据不可读 {display}: {e}"))?
+        .map_err(|e| {
+            i18n::tr_with_args(
+                "doctor-metadata-unreadable",
+                i18n::tr_args(&[("path", &display.to_string()), ("detail", &e.to_string())]),
+            )
+        })?
         .len() as usize;
     if file_len < 8 {
-        return Err(format!("文件过小，不足 8 字节头: {display}"));
+        return Err(i18n::tr_with_args(
+            "doctor-file-too-small",
+            i18n::tr_args(&[("path", &display.to_string())]),
+        ));
     }
     let mut len_b = [0u8; 8];
-    std::io::Read::read_exact(&mut file, &mut len_b)
-        .map_err(|e| format!("头长度读取失败 {display}: {e}"))?;
+    std::io::Read::read_exact(&mut file, &mut len_b).map_err(|e| {
+        i18n::tr_with_args(
+            "doctor-header-len-read-fail",
+            i18n::tr_args(&[("path", &display.to_string()), ("detail", &e.to_string())]),
+        )
+    })?;
     let header_len = u64::from_le_bytes(len_b) as usize;
     if header_len == 0 || 8 + header_len > file_len || header_len > 100 << 20 {
-        return Err(format!("safetensors 头长度非法 ({header_len}): {display}"));
+        return Err(i18n::tr_with_args(
+            "doctor-header-len-invalid",
+            i18n::tr_args(&[
+                ("len", &header_len.to_string()),
+                ("path", &display.to_string()),
+            ]),
+        ));
     }
     let mut header_buf = vec![0u8; header_len];
-    std::io::Read::read_exact(&mut file, &mut header_buf)
-        .map_err(|e| format!("头读取失败 {display}: {e}"))?;
+    std::io::Read::read_exact(&mut file, &mut header_buf).map_err(|e| {
+        i18n::tr_with_args(
+            "doctor-header-read-fail",
+            i18n::tr_args(&[("path", &display.to_string()), ("detail", &e.to_string())]),
+        )
+    })?;
     let header: std::collections::HashMap<String, serde_json::Value> =
-        serde_json::from_slice(&header_buf)
-            .map_err(|e| format!("safetensors 头 JSON 解析失败 {display}: {e}"))?;
+        serde_json::from_slice(&header_buf).map_err(|e| {
+            i18n::tr_with_args(
+                "doctor-header-json-fail",
+                i18n::tr_args(&[("path", &display.to_string()), ("detail", &e.to_string())]),
+            )
+        })?;
     let mut max_end = 0usize;
     let mut two_d_dims = Vec::new();
     for (tensor, meta) in &header {
@@ -502,22 +602,39 @@ fn scan_safetensors(path: &std::path::Path) -> Result<SafetensorsInfo, String> {
             continue;
         }
         let Some(obj) = meta.as_object() else {
-            return Err(format!("张量 {tensor} 元数据不是对象: {display}"));
+            return Err(i18n::tr_with_args(
+                "doctor-tensor-not-object",
+                i18n::tr_args(&[("tensor", tensor), ("path", &display.to_string())]),
+            ));
         };
         if obj.get("dtype").and_then(|d| d.as_str()).is_none() {
-            return Err(format!("张量 {tensor} 缺 dtype: {display}"));
+            return Err(i18n::tr_with_args(
+                "doctor-tensor-no-dtype",
+                i18n::tr_args(&[("tensor", tensor), ("path", &display.to_string())]),
+            ));
         }
         let offsets = obj
             .get("data_offsets")
             .and_then(|o| o.as_array())
-            .ok_or_else(|| format!("张量 {tensor} 缺 data_offsets: {display}"))?;
+            .ok_or_else(|| {
+                i18n::tr_with_args(
+                    "doctor-tensor-no-offsets",
+                    i18n::tr_args(&[("tensor", tensor), ("path", &display.to_string())]),
+                )
+            })?;
         if offsets.len() != 2 {
-            return Err(format!("张量 {tensor} data_offsets 非法: {display}"));
+            return Err(i18n::tr_with_args(
+                "doctor-tensor-offsets-invalid",
+                i18n::tr_args(&[("tensor", tensor), ("path", &display.to_string())]),
+            ));
         }
         let start = offsets[0].as_u64().unwrap_or(0) as usize;
         let end = offsets[1].as_u64().unwrap_or(0) as usize;
         if end < start {
-            return Err(format!("张量 {tensor} data_offsets 逆序: {display}"));
+            return Err(i18n::tr_with_args(
+                "doctor-tensor-offsets-reversed",
+                i18n::tr_args(&[("tensor", tensor), ("path", &display.to_string())]),
+            ));
         }
         max_end = max_end.max(end);
         if let Some(shape) = obj.get("shape").and_then(|s| s.as_array())
@@ -532,10 +649,13 @@ fn scan_safetensors(path: &std::path::Path) -> Result<SafetensorsInfo, String> {
     let data_begin = 8 + header_len;
     let available = file_len.saturating_sub(data_begin);
     if max_end > available {
-        return Err(format!(
-            "文件被截断（声明数据需要 {} 字节，实际 {}）: {display}",
-            data_begin + max_end,
-            file_len
+        return Err(i18n::tr_with_args(
+            "doctor-file-truncated",
+            i18n::tr_args(&[
+                ("need", &(data_begin + max_end).to_string()),
+                ("have", &file_len.to_string()),
+                ("path", &display.to_string()),
+            ]),
         ));
     }
     Ok(SafetensorsInfo { two_d_dims })
@@ -544,16 +664,32 @@ fn scan_safetensors(path: &std::path::Path) -> Result<SafetensorsInfo, String> {
 /// gguf 魔数校验：前 4 字节必须为 "GGUF"。
 fn verify_gguf_magic(path: &std::path::Path) -> Result<(), String> {
     use std::io::Read;
-    let mut f = std::fs::File::open(path)
-        .map_err(|e| format!("gguf 文件不可读 {}: {e}", path.display()))?;
+    let mut f = std::fs::File::open(path).map_err(|e| {
+        i18n::tr_with_args(
+            "doctor-gguf-unreadable",
+            i18n::tr_args(&[
+                ("path", &path.display().to_string()),
+                ("detail", &e.to_string()),
+            ]),
+        )
+    })?;
     let mut magic = [0u8; 4];
-    f.read_exact(&mut magic)
-        .map_err(|e| format!("gguf 文件过小 {}: {e}", path.display()))?;
+    f.read_exact(&mut magic).map_err(|e| {
+        i18n::tr_with_args(
+            "doctor-gguf-too-small",
+            i18n::tr_args(&[
+                ("path", &path.display().to_string()),
+                ("detail", &e.to_string()),
+            ]),
+        )
+    })?;
     if &magic != b"GGUF" {
-        return Err(format!(
-            "gguf 魔数非法（{:02x?}，应为 GGUF）: {}",
-            magic,
-            path.display()
+        return Err(i18n::tr_with_args(
+            "doctor-gguf-bad-magic",
+            i18n::tr_args(&[
+                ("got", &format!("{:02x?}", magic)),
+                ("path", &path.display().to_string()),
+            ]),
         ));
     }
     Ok(())
@@ -568,6 +704,7 @@ mod tests {
     /// 解析后的 model.task 作为观测点（USER_GUIDE 键名拼写提示依赖此输出）。
     #[test]
     fn check_config_pass_detail_reports_model_task() {
+        crate::i18n::init();
         let config = VecboostConfig::default();
         let result = check_config(&config);
         assert_eq!(result.status, CheckStatus::Pass);
@@ -630,6 +767,7 @@ mod tests {
     /// 权重与 config 完全不配对（hidden_size 与任何张量维度都不含）→ FAIL。
     #[test]
     fn inspect_model_dir_fails_on_wrong_config_pairing() {
+        crate::i18n::init();
         let (dir, path) = temp_model_dir();
         std::fs::write(path.join("renamed-cfg.json"), br#"{"hidden_size": 999}"#).unwrap();
         write_safetensors(&path.join("model.safetensors"), false);
@@ -641,6 +779,7 @@ mod tests {
 
     #[test]
     fn verify_safetensors_rejects_truncated_data() {
+        crate::i18n::init();
         let (dir, path) = temp_model_dir();
         let file = path.join("model.safetensors");
         write_safetensors(&file, false);
@@ -648,22 +787,25 @@ mod tests {
         let bytes = std::fs::read(&file).unwrap();
         std::fs::write(&file, &bytes[..8 + 66]).unwrap();
         let err = verify_safetensors(&file).unwrap_err();
-        assert!(err.contains("截断"), "实际: {err}");
+        // locale-stable anchor: the file path is interpolated in both locales
+        assert!(err.contains("model.safetensors"), "实际: {err}");
         drop(dir);
     }
 
     #[test]
     fn verify_safetensors_rejects_bad_header() {
+        crate::i18n::init();
         let (dir, path) = temp_model_dir();
         let file = path.join("model.safetensors");
         write_safetensors(&file, true);
         let err = verify_safetensors(&file).unwrap_err();
-        assert!(err.contains("截断"), "实际: {err}");
+        assert!(err.contains("model.safetensors"), "实际: {err}");
         drop(dir);
     }
 
     #[test]
     fn verify_gguf_magic_accepts_and_rejects() {
+        crate::i18n::init();
         let (dir, path) = temp_model_dir();
         let good = path.join("m.gguf");
         std::fs::write(&good, b"GGUF\x03\x00\x00\x00").unwrap();
@@ -671,12 +813,14 @@ mod tests {
         let bad = path.join("bad.gguf");
         std::fs::write(&bad, b"NOPE").unwrap();
         let err = verify_gguf_magic(&bad).unwrap_err();
-        assert!(err.contains("魔数"), "实际: {err}");
+        // "GGUF" literal is preserved in both locales
+        assert!(err.contains("GGUF"), "实际: {err}");
         drop(dir);
     }
 
     #[test]
     fn inspect_model_dir_recognizes_renamed_roles_by_content() {
+        crate::i18n::init();
         // #1365 教训回归：合法文件改名后按内容仍被识别（非字面名匹配）
         let (dir, path) = temp_model_dir();
         let tokenizer = path.join("renamed-token-file.json");
@@ -691,7 +835,7 @@ mod tests {
         let (status, detail) = inspect_model_dir(&path);
         assert_eq!(status, CheckStatus::Pass, "detail: {detail}");
         assert!(
-            detail.contains("已识别"),
+            detail.contains(&crate::i18n::tr("doctor-tokenizer-recognized")),
             "tokenizer 应按内容识别: {detail}"
         );
         assert!(
@@ -715,9 +859,15 @@ mod tests {
 
     #[test]
     fn check_threads_always_reports() {
+        crate::i18n::init();
         let r = check_threads();
         assert!(matches!(r.status, CheckStatus::Pass | CheckStatus::Warn));
-        assert!(r.detail.contains("逻辑核"), "detail: {}", r.detail);
+        // locale-stable anchor: the logical-core count is interpolated in both locales
+        assert!(
+            r.detail.contains(&num_cpus::get().to_string()),
+            "detail: {}",
+            r.detail
+        );
     }
 
     #[test]

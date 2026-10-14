@@ -58,9 +58,14 @@ impl ModelRecovery {
         corrupted_files: &[String],
     ) -> Result<RecoveryResult, VecboostError> {
         info!(
-            "Starting recovery for model '{}', {} corrupted files detected",
-            model_name,
-            corrupted_files.len()
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-model-starting-recovery-model-corrupted",
+                crate::i18n::tr_args(&[
+                    ("a1", (model_name)),
+                    ("a2", &(corrupted_files.len()).to_string())
+                ])
+            )
         );
 
         let mut recovered_files = Vec::new();
@@ -75,7 +80,13 @@ impl ModelRecovery {
                 .and_then(|n| n.to_str())
                 .unwrap_or("unknown");
 
-            info!("Attempting to recover corrupted file: {}", file_name);
+            info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-model-attempting-recover-corrupted-file",
+                    crate::i18n::tr_args(&[("a1", (file_name))])
+                )
+            );
 
             if self.config.backup_corrupted_files
                 && let Some(backup_path) = self.backup_corrupted_file(file_path)?
@@ -88,17 +99,35 @@ impl ModelRecovery {
 
             if recovery_success {
                 recovered_files.push(corrupted_file.clone());
-                info!("Successfully recovered file: {}", file_name);
+                info!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-model-successfully-recovered-file",
+                        crate::i18n::tr_args(&[("a1", (file_name))])
+                    )
+                );
             } else {
                 failed_files.push(corrupted_file.clone());
-                error!("Failed to recover file: {}", file_name);
+                error!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-model-failed-recover-file",
+                        crate::i18n::tr_args(&[("a1", (file_name))])
+                    )
+                );
             }
         }
 
         if self.config.verify_after_recovery && !recovered_files.is_empty() {
-            info!("Verifying recovered files...");
+            info!("{}", crate::i18n::tr("log-model-verifying-recovered-files"));
             if let Err(e) = self.verify_recovered_files(model_name, model_path, &recovered_files) {
-                warn!("Verification after recovery failed: {}", e);
+                warn!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-model-verification-after-recovery-failed",
+                        crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                    )
+                );
             }
         }
 
@@ -141,7 +170,13 @@ impl ModelRecovery {
             VecboostError::io_error(format!("Failed to backup corrupted file: {}", e))
         })?;
 
-        info!("Backed up corrupted file to: {:?}", backup_path);
+        info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-model-backed-up-corrupted-file",
+                crate::i18n::tr_args(&[("a1", &format!("{:?}", backup_path))])
+            )
+        );
         Ok(Some(backup_path.to_string_lossy().to_string()))
     }
 
@@ -159,8 +194,11 @@ impl ModelRecovery {
                 return self.download_from_huggingface(repo, model_path, file_name, attempts);
             } else {
                 warn!(
-                    "Local model path detected but no repo_id provided for recovery of {}",
-                    file_name
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-model-local-model-path-detected",
+                        crate::i18n::tr_args(&[("a1", (file_name))])
+                    )
                 );
                 return Ok(false);
             }
@@ -172,7 +210,16 @@ impl ModelRecovery {
 
             for attempt in 1..=self.config.max_retries {
                 *attempts += 1;
-                info!("Recovery attempt {} for file: {}", attempt, file_name);
+                info!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-model-recovery-attempt-file",
+                        crate::i18n::tr_args(&[
+                            ("a1", &(attempt).to_string()),
+                            ("a2", (file_name))
+                        ])
+                    )
+                );
 
                 match repo.download_file().filename(file_name).send() {
                     Ok(downloaded_path) => {
@@ -188,8 +235,15 @@ impl ModelRecovery {
                     }
                     Err(e) => {
                         warn!(
-                            "Recovery attempt {} failed for file {}: {}",
-                            attempt, file_name, e
+                            "{}",
+                            crate::i18n::tr_with_args(
+                                "log-model-recovery-attempt-failed-file",
+                                crate::i18n::tr_args(&[
+                                    ("a1", &(attempt).to_string()),
+                                    ("a2", (file_name)),
+                                    ("a3", &(e).to_string())
+                                ])
+                            )
                         );
                         if attempt == self.config.max_retries {
                             return Err(VecboostError::ModelLoadError(format!(
@@ -218,7 +272,13 @@ impl ModelRecovery {
 
         for attempt in 1..=self.config.max_retries {
             *attempts += 1;
-            info!("Download attempt {} for file: {}", attempt, file_name);
+            info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-model-download-attempt-file",
+                    crate::i18n::tr_args(&[("a1", &(attempt).to_string()), ("a2", (file_name))])
+                )
+            );
 
             match repo.download_file().filename(file_name).send() {
                 Ok(downloaded_path) => {
@@ -234,8 +294,15 @@ impl ModelRecovery {
                 }
                 Err(e) => {
                     warn!(
-                        "Download attempt {} failed for file {}: {}",
-                        attempt, file_name, e
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-model-download-attempt-failed-file",
+                            crate::i18n::tr_args(&[
+                                ("a1", &(attempt).to_string()),
+                                ("a2", (file_name)),
+                                ("a3", &(e).to_string())
+                            ])
+                        )
                     );
                     if attempt == self.config.max_retries {
                         return Err(VecboostError::ModelLoadError(format!(
@@ -286,7 +353,10 @@ impl ModelRecovery {
             )));
         }
 
-        info!("All recovered files verified successfully");
+        info!(
+            "{}",
+            crate::i18n::tr("log-model-all-recovered-files-verified")
+        );
         Ok(())
     }
 
@@ -298,7 +368,10 @@ impl ModelRecovery {
         integrity_report: &ModelIntegrityReport,
     ) -> Result<RecoveryResult, VecboostError> {
         if integrity_report.overall_valid {
-            info!("Model integrity check passed, no recovery needed");
+            info!(
+                "{}",
+                crate::i18n::tr("log-model-model-integrity-check-passed")
+            );
             return Ok(RecoveryResult {
                 success: true,
                 recovered_files: Vec::new(),
@@ -309,8 +382,14 @@ impl ModelRecovery {
         }
 
         info!(
-            "Model integrity check failed, initiating recovery for {} corrupted files",
-            integrity_report.corrupted_files.len()
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-model-model-integrity-check-failed",
+                crate::i18n::tr_args(&[(
+                    "a1",
+                    &(integrity_report.corrupted_files.len()).to_string()
+                )])
+            )
         );
 
         self.recover_corrupted_files(

@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "r4_cjk": [
+    {
+      "file": "src/engine/quantized_engine.rs",
+      "match": "Auto 已在 load 时解析",
+      "reason": "unreachable! 的开发者可见 panic 面（PoolingMode::Auto 在 load 期已解析），非用户可见文案"
+    },
+    {
+      "file": "src/utils/vquant.rs",
+      "match": "hadamard_block 仅支持",
+      "reason": "内部不变量断言文案，仅开发者调试可见"
+    },
+    {
+      "file": "src/utils/vquant.rs",
+      "match": "dot_i8 维度必须一致",
+      "reason": "内部不变量断言文案，仅开发者调试可见"
+    },
+    {
+      "file": "src/utils/vquant.rs",
+      "match": "cosine_binary 维度必须一致",
+      "reason": "内部不变量断言文案，仅开发者调试可见"
+    },
+    {
+      "file": "src/metrics/performance/mod.rs",
+      "match": "人工智能",
+      "reason": "generate_test_text 的中文语料夹具（基准/测试数据），非 UI 文案"
+    },
+    {
+      "file": "src/metrics/performance/mod.rs",
+      "match": "机器学习",
+      "reason": "generate_test_text 的中文语料夹具（基准/测试数据），非 UI 文案"
+    },
+    {
+      "file": "src/metrics/performance/mod.rs",
+      "match": "深度学习",
+      "reason": "generate_test_text 的中文语料夹具（基准/测试数据），非 UI 文案"
+    },
+    {
+      "file": "src/metrics/performance/mod.rs",
+      "match": "自然语言处理",
+      "reason": "generate_test_text 的中文语料夹具（基准/测试数据），非 UI 文案"
+    },
+    {
+      "file": "src/metrics/performance/mod.rs",
+      "match": "向量化",
+      "reason": "generate_test_text 的中文语料夹具（基准/测试数据），非 UI 文案"
+    }
+  ],
+  "r5_untranslated": []
+}

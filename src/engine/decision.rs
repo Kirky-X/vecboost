@@ -93,7 +93,10 @@ impl DecisionPipeline {
         let model_file = probe_model_file(&bundle_dir, &MODEL_CANDIDATES, "Laya ONNX")?;
 
         if let Some(ref expected_hash) = config.model_sha256 {
-            log::info!("Verifying decision model file SHA256 hash...");
+            log::info!(
+                "{}",
+                crate::i18n::tr("log-engine-verifying-decision-model-file")
+            );
             let is_valid =
                 crate::utils::hash::verify_sha256(&model_file, expected_hash).map_err(|e| {
                     VecboostError::ModelLoadError(format!("Failed to verify SHA256: {e}"))
@@ -137,11 +140,16 @@ impl DecisionPipeline {
         let precision = precision_for_model_file(&model_file);
 
         log::info!(
-            "Decision pipeline initialized: bundle={}, model={:?}, precision={:?}, calibration_buckets={}",
-            bundle_dir.display(),
-            model_file,
-            precision,
-            calibration.temperatures.len()
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-decision-pipeline-initialized-bundle",
+                crate::i18n::tr_args(&[
+                    ("a1", &(bundle_dir.display()).to_string()),
+                    ("a2", &format!("{:?}", model_file)),
+                    ("a3", &format!("{:?}", precision)),
+                    ("a4", &(calibration.temperatures.len()).to_string())
+                ])
+            )
         );
 
         Ok(Self {
@@ -375,7 +383,10 @@ impl InferenceEngine for DecisionPipeline {
         if self.fallback_triggered {
             return Ok(());
         }
-        log::info!("Attempting fallback to CPU for decision pipeline");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-attempting-fallback-cpu-decision")
+        );
         let model_file = probe_model_file(&self.bundle_dir, &MODEL_CANDIDATES, "Laya ONNX")?;
         let session = build_session(
             &model_file,
@@ -398,7 +409,10 @@ impl InferenceEngine for DecisionPipeline {
         // 置位于 session 替换成功之后：probe/build 失败时状态位保持 false，
         // 后续 OOM 降级尝试不会被双重检查恒短路掩盖
         self.fallback_triggered = true;
-        log::info!("Successfully fell back to CPU for decision pipeline");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-successfully-fell-back-cpu-3")
+        );
         Ok(())
     }
 }

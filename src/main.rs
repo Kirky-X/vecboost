@@ -172,21 +172,37 @@ struct LoggingObserver;
 
 impl BuildObserver for LoggingObserver {
     fn on_module_start(&self, module_name: &'static str) {
-        log::info!("Building module: {}", module_name);
+        log::info!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-building-module",
+                vecboost::i18n::tr_args(&[("module", module_name)])
+            )
+        );
     }
 
     fn on_module_built(&self, module_name: &'static str, elapsed: Duration) {
         if elapsed.as_secs_f64() > 1.0 {
             log::warn!(
-                "Module {} built in {:.2}s (>1s)",
-                module_name,
-                elapsed.as_secs_f64()
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "log-main-module-built-slow",
+                    vecboost::i18n::tr_args(&[
+                        ("module", module_name),
+                        ("seconds", &format!("{:.2}", elapsed.as_secs_f64()))
+                    ])
+                )
             );
         } else {
             log::info!(
-                "Module {} built in {:.2}ms",
-                module_name,
-                elapsed.as_secs_f64() * 1000.0
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "log-main-module-built",
+                    vecboost::i18n::tr_args(&[
+                        ("module", module_name),
+                        ("ms", &format!("{:.2}", elapsed.as_secs_f64() * 1000.0))
+                    ])
+                )
             );
         }
     }
@@ -201,16 +217,22 @@ async fn init_db_pool(
     config: &VecboostConfig,
 ) -> anyhow::Result<(DbPool, Arc<dbnexus::MetricsCollector>)> {
     log::info!(
-        "Initializing database pool with url={}",
-        config
-            .database
-            .url
-            .rsplit_once('@')
-            .map(|(prefix, host)| {
-                let scheme = prefix.split("://").next().unwrap_or("db");
-                format!("{}://***@{}", scheme, host)
-            })
-            .unwrap_or_else(|| config.database.url.clone())
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-db-pool-init",
+            vecboost::i18n::tr_args(&[(
+                "url",
+                &config
+                    .database
+                    .url
+                    .rsplit_once('@')
+                    .map(|(prefix, host)| {
+                        let scheme = prefix.split("://").next().unwrap_or("db");
+                        format!("{}://***@{}", scheme, host)
+                    })
+                    .unwrap_or_else(|| config.database.url.clone())
+            )])
+        )
     );
     let mut db_config = dbnexus::DbConfig {
         url: config.database.url.clone(),
@@ -221,17 +243,25 @@ async fn init_db_pool(
         ..Default::default()
     });
     log::info!(
-        "Database retry policy enabled (max_retries={}, exponential backoff)",
-        DB_MAX_RETRIES
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-db-retry",
+            vecboost::i18n::tr_args(&[("retries", &DB_MAX_RETRIES.to_string())])
+        )
     );
     db_config.pool_config.min_connections = DB_MIN_CONNECTIONS;
     db_config.warmup_timeout = DB_WARMUP_TIMEOUT_SECS;
     db_config.warmup_retries = DB_WARMUP_RETRIES;
     log::info!(
-        "dbnexus pool-warmup enabled: min_connections={}, warmup_timeout={}s, warmup_retries={}",
-        db_config.pool_config.min_connections,
-        db_config.warmup_timeout,
-        db_config.warmup_retries
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-db-warmup",
+            vecboost::i18n::tr_args(&[
+                ("min", &db_config.pool_config.min_connections.to_string()),
+                ("timeout", &db_config.warmup_timeout.to_string()),
+                ("retries", &db_config.warmup_retries.to_string())
+            ])
+        )
     );
     let pool = DbPool::with_config(db_config).await.map_err(|e| {
         anyhow::anyhow!(
@@ -251,9 +281,9 @@ async fn init_db_pool(
             )
         )
     })?;
-    log::info!("Database pool initialized and schema verified");
+    log::info!("{}", vecboost::i18n::tr("log-main-db-ready"));
     let db_metrics = Arc::new(dbnexus::MetricsCollector::new());
-    log::info!("dbnexus MetricsCollector created");
+    log::info!("{}", vecboost::i18n::tr("log-main-db-metrics"));
     Ok((pool, db_metrics))
 }
 
@@ -268,11 +298,17 @@ fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelC
         Some("onnx") => EngineType::Onnx,
         Some(other) => {
             let hint = if other == "onnx" && cfg!(not(feature = "onnx")) {
-                "（engine_type=\"onnx\" 需以 --features onnx 重新构建）"
+                vecboost::i18n::tr("startup-engine-onnx-rebuild-hint")
             } else {
-                ""
+                String::new()
             };
-            anyhow::bail!("[model] engine_type 未知值 \"{other}\"{hint}，支持: candle, onnx");
+            anyhow::bail!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "startup-engine-type-unknown",
+                    vecboost::i18n::tr_args(&[("got", other), ("hint", &hint)]),
+                )
+            );
         }
     };
     let model_path = match &config.model.model_path {
@@ -289,12 +325,14 @@ fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelC
         && tokenizer_path_is_noop(&engine_type, &config.model.task, &model_path)
     {
         log::warn!(
-            "[model].tokenizer_path is configured but no consumer matches \
-             engine_type={} task={}: consumers are the onnx local bundle branch \
-             (engine_type=onnx + local directory) and the decision pipeline \
-             (task=decision + local directory); the value is a no-op",
-            engine_type,
-            config.model.task
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-tokenizer-noop",
+                vecboost::i18n::tr_args(&[
+                    ("engine", &engine_type.to_string()),
+                    ("task", &config.model.task.to_string())
+                ])
+            )
         );
     }
     Ok(ModelConfig {
@@ -371,7 +409,13 @@ fn build_embedding_service(
 
     const DEFAULT_PERSIST_MAX_BYTES: u64 = 1 << 30;
     if cache_enabled && cache_size > 0 {
-        log::info!("KV Cache enabled with size: {}", cache_size);
+        log::info!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-kvcache-enabled",
+                vecboost::i18n::tr_args(&[("size", &cache_size.to_string())])
+            )
+        );
         match config.embedding.persist_path.as_deref() {
             Some(path) => {
                 let max_bytes = config
@@ -379,9 +423,14 @@ fn build_embedding_service(
                     .persist_max_bytes
                     .unwrap_or(DEFAULT_PERSIST_MAX_BYTES);
                 log::info!(
-                    "Embedding cache WAL persistence enabled: {} (compact threshold {} bytes)",
-                    path,
-                    max_bytes
+                    "{}",
+                    vecboost::i18n::tr_with_args(
+                        "log-main-kvcache-wal",
+                        vecboost::i18n::tr_args(&[
+                            ("path", path),
+                            ("bytes", &max_bytes.to_string())
+                        ])
+                    )
                 );
                 EmbeddingService::with_cache_persist(
                     engine.clone(),
@@ -394,7 +443,7 @@ fn build_embedding_service(
             None => EmbeddingService::with_cache(engine.clone(), model_config, cache_size),
         }
     } else {
-        log::info!("KV Cache disabled");
+        log::info!("{}", vecboost::i18n::tr("log-main-kvcache-disabled"));
         EmbeddingService::new(engine.clone(), model_config)
     }
 }
@@ -417,9 +466,14 @@ async fn attach_model_manager(
         (None, None) => manager,
         (max, budget) => {
             log::info!(
-                "model residency: max_resident_models={} budget_mb={:?}",
-                max.unwrap_or(usize::MAX),
-                budget
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "log-main-residency",
+                    vecboost::i18n::tr_args(&[
+                        ("max", &max.unwrap_or(usize::MAX).to_string()),
+                        ("budget", &format!("{:?}", budget))
+                    ])
+                )
             );
             manager.with_residency(max.unwrap_or(usize::MAX), budget)
         }
@@ -443,19 +497,38 @@ fn attach_semantic_cache(service: EmbeddingService, config: &VecboostConfig) -> 
         .semantic_cache
         .comparison_mode
         .parse()
-        .map_err(|e: String| anyhow::anyhow!("[semantic_cache] comparison_mode 无效: {e}"))
+        .map_err(|e: String| {
+            anyhow::anyhow!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "startup-semantic-mode-invalid",
+                    vecboost::i18n::tr_args(&[("detail", &e)]),
+                )
+            )
+        })
         .expect("semantic_cache.comparison_mode validated at parse");
     if mode != vecboost::ComparisonMode::Exact {
         log::warn!(
-            "[semantic_cache] comparison_mode={:?} 已废弃，当前版本不生效（恒为 exact）",
-            mode
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-semantic-mode-deprecated",
+                vecboost::i18n::tr_args(&[("mode", &format!("{:?}", mode))])
+            )
         );
     }
     log::info!(
-        "semantic cache enabled: threshold={} fuzzy_threshold={} capacity={}",
-        config.semantic_cache.similarity_threshold,
-        config.semantic_cache.fuzzy_threshold,
-        config.semantic_cache.capacity
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-semantic-enabled",
+            vecboost::i18n::tr_args(&[
+                (
+                    "threshold",
+                    &config.semantic_cache.similarity_threshold.to_string()
+                ),
+                ("fuzzy", &config.semantic_cache.fuzzy_threshold.to_string()),
+                ("capacity", &config.semantic_cache.capacity.to_string())
+            ])
+        )
     );
     let semantic = Arc::new(
         vecboost::SemanticCache::with_capacity(
@@ -517,14 +590,21 @@ fn build_translate_pairs(
         let budget = (cores / divisor).clamp(1, cores);
         vecboost::engine::set_session_intra_threads(budget);
         log::info!(
-            "translation: per-session intra threads budget = {budget} ({} pairs)",
-            config.translation.pairs.len()
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-translation-threads",
+                vecboost::i18n::tr_args(&[
+                    ("budget", &budget.to_string()),
+                    ("pairs", &config.translation.pairs.len().to_string())
+                ])
+            )
         );
     }
     #[cfg(not(feature = "onnx"))]
     if !config.translation.pairs.is_empty() {
         return Err(anyhow::anyhow!(
-            "[translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建"
+            "{}",
+            vecboost::i18n::tr("startup-translation-no-onnx")
         ));
     }
 
@@ -540,9 +620,16 @@ fn build_translate_pairs(
         )
         .map_err(|e| {
             anyhow::anyhow!(
-                "[translation] pairs[{index}] ({}-{}) 参数非法: {e}",
-                pair.source_language,
-                pair.target_language
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "startup-translate-pair-invalid",
+                    vecboost::i18n::tr_args(&[
+                        ("index", &index.to_string()),
+                        ("src", pair.source_language.as_str()),
+                        ("tgt", pair.target_language.as_str()),
+                        ("detail", &e.to_string()),
+                    ]),
+                )
             )
         })?;
         translation_params.output_fixes = pair.output_fixes.clone();
@@ -572,9 +659,16 @@ fn build_translate_pairs(
                     )
                     .map_err(|e| {
                         anyhow::anyhow!(
-                            "[translation] pairs[{index}] ({}-{}) 加载失败: {e}",
-                            pair.source_language,
-                            pair.target_language
+                            "{}",
+                            vecboost::i18n::tr_with_args(
+                                "startup-translate-pair-load-failed",
+                                vecboost::i18n::tr_args(&[
+                                    ("index", &index.to_string()),
+                                    ("src", pair.source_language.as_str()),
+                                    ("tgt", pair.target_language.as_str()),
+                                    ("detail", &e.to_string()),
+                                ]),
+                            )
                         )
                     })?,
                 )),
@@ -602,7 +696,7 @@ async fn init_engine_and_services(
     let model_config = resolve_engine_model_config(config)?;
     let engine_type = model_config.engine_type.clone();
 
-    log::info!("Initializing Inference Engine (this may take a while to download models)...");
+    log::info!("{}", vecboost::i18n::tr("log-main-engine-init"));
     let engine: Arc<RwLock<AnyEngine>> = Arc::new(RwLock::new(
         vecboost::engine::EngineFactory::create(engine_type, &model_config)?,
     ));
@@ -625,9 +719,14 @@ async fn init_engine_and_services(
             (None, None) => manager,
             (max, budget) => {
                 log::info!(
-                    "model residency: max_resident_models={} budget_mb={:?}",
-                    max.unwrap_or(usize::MAX),
-                    budget
+                    "{}",
+                    vecboost::i18n::tr_with_args(
+                        "log-main-residency",
+                        vecboost::i18n::tr_args(&[
+                            ("max", &max.unwrap_or(usize::MAX).to_string()),
+                            ("budget", &format!("{:?}", budget))
+                        ])
+                    )
                 );
                 manager.with_residency(max.unwrap_or(usize::MAX), budget)
             }
@@ -671,8 +770,14 @@ async fn init_engine_and_services(
     )?));
 
     log::info!(
-        "translation service initialized: {} pair(s) configured",
-        translate_service.configured_pairs().len()
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-translation-ready",
+            vecboost::i18n::tr_args(&[(
+                "pairs",
+                &translate_service.configured_pairs().len().to_string()
+            )])
+        )
     );
 
     // 转录服务：enabled=false 或 transcribe feature 未启用 → 端点注册但不装配
@@ -681,8 +786,11 @@ async fn init_engine_and_services(
     let transcribe_service = Arc::new(build_transcribe_service(config)?);
     if transcribe_service.is_configured() {
         log::info!(
-            "transcribe service initialized: bundle={}",
-            config.transcribe.models_dir
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-transcribe-ready",
+                vecboost::i18n::tr_args(&[("bundle", &config.transcribe.models_dir)])
+            )
         );
     }
 
@@ -709,7 +817,7 @@ async fn run_mcp_server(
 ) -> anyhow::Result<()> {
     use sdforge::rmcp::{ServiceExt, transport::io::stdio};
 
-    log::info!("Starting VecBoost MCP server over stdio");
+    log::info!("{}", vecboost::i18n::tr("log-main-mcp-start"));
     let mut kit = trait_kit::AsyncKit::new();
     kit.set_config(service);
     kit.set_config(rerank_service);
@@ -960,7 +1068,7 @@ async fn init_auth(
             .clone()
             .unwrap_or_else(|| "admin".to_string());
 
-        log::info!("Garrison authentication enabled (JWT + session + password verification)");
+        log::info!("{}", vecboost::i18n::tr("log-main-auth-enabled"));
 
         Some(Arc::new(GarrisonHandle {
             admin_password_hash,
@@ -968,16 +1076,16 @@ async fn init_auth(
             token_timeout_secs: garrison_config.timeout,
         }))
     } else {
-        log::info!("Authentication disabled");
+        log::info!("{}", vecboost::i18n::tr("log-main-auth-disabled"));
         None
     };
 
     let garrison_csrf_config: Option<Arc<GarrisonCsrfConfig>> = if config.auth.csrf.enabled {
         let csrf = GarrisonCsrfConfig::default();
-        log::info!("CSRF protection enabled (garrison)");
+        log::info!("{}", vecboost::i18n::tr("log-main-csrf-enabled"));
         Some(Arc::new(csrf))
     } else {
-        log::info!("CSRF protection disabled");
+        log::info!("{}", vecboost::i18n::tr("log-main-csrf-disabled"));
         None
     };
 
@@ -994,14 +1102,18 @@ fn apply_auto_plan(config: &VecboostConfig, worker_config: &mut vecboost::pipeli
     let probes = gather_probes(config);
     let hw_plan = vecboost::planner::plan(&probes);
     log::info!(
-        "auto_plan: 硬件规划 worker_threads={} max_batch_size={} batch_wait_ms={} \
-         quantized_recommended={} bottleneck={} rationale={}",
-        hw_plan.worker_threads,
-        hw_plan.max_batch_size,
-        hw_plan.batch_wait_ms,
-        hw_plan.quantized_recommended,
-        hw_plan.bottleneck,
-        hw_plan.rationale
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-plan-hardware",
+            vecboost::i18n::tr_args(&[
+                ("threads", &hw_plan.worker_threads.to_string()),
+                ("batch", &hw_plan.max_batch_size.to_string()),
+                ("wait", &hw_plan.batch_wait_ms.to_string()),
+                ("quantized", &hw_plan.quantized_recommended.to_string()),
+                ("bottleneck", &hw_plan.bottleneck.to_string()),
+                ("rationale", &hw_plan.rationale)
+            ])
+        )
     );
     let d = vecboost::pipeline::WorkerConfig::default();
     let explicit = vecboost::planner::PlanOverride {
@@ -1018,13 +1130,17 @@ fn apply_auto_plan(config: &VecboostConfig, worker_config: &mut vecboost::pipeli
     // worker_threads 语义：plan 值为 tokio/rayon 级线程建议，此处仅日志；
     // 实际 runtime 线程数在 main() 启动时已按 确定（显式优先）。
     log::info!(
-        "auto_plan: 应用结果 max_batch_size={} batch_wait_ms={} \
-         （计划 max_batch_size={} batch_wait_ms={} worker_threads 建议={}）",
-        bs,
-        bw,
-        hw_plan.max_batch_size,
-        hw_plan.batch_wait_ms,
-        wt
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-plan-applied",
+            vecboost::i18n::tr_args(&[
+                ("batch", &bs.to_string()),
+                ("wait", &bw.to_string()),
+                ("planned_batch", &hw_plan.max_batch_size.to_string()),
+                ("planned_wait", &hw_plan.batch_wait_ms.to_string()),
+                ("threads", &wt.to_string())
+            ])
+        )
     );
     worker_config.max_batch_size = bs;
     worker_config.batch_wait_ms = bw;
@@ -1042,8 +1158,14 @@ async fn init_pipeline(
 )> {
     if config.pipeline.enabled {
         log::info!(
-            "Request pipeline enabled with queue_size={}",
-            config.pipeline.queue.max_queue_size
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-pipeline-enabled",
+                vecboost::i18n::tr_args(&[(
+                    "size",
+                    &config.pipeline.queue.max_queue_size.to_string()
+                )])
+            )
         );
 
         let pipeline_queue = Arc::new(PriorityRequestQueue::new(
@@ -1089,10 +1211,16 @@ async fn init_pipeline(
         // start() = spawn min_workers + 启动扩缩容 monitor（T033——
         // 此前只 spawn min_workers，max_workers/scale 阈值全是死配置）
         if let Err(e) = worker_manager.start().await {
-            log::error!("WorkerManager start failed: {e}");
+            log::error!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "log-main-worker-start-failed",
+                    vecboost::i18n::tr_args(&[("detail", &e.to_string())])
+                )
+            );
         }
 
-        log::info!("Pipeline components initialized successfully");
+        log::info!("{}", vecboost::i18n::tr("log-main-pipeline-ready"));
 
         Ok((
             pipeline_queue,
@@ -1101,7 +1229,7 @@ async fn init_pipeline(
             worker_manager,
         ))
     } else {
-        log::info!("Request pipeline disabled");
+        log::info!("{}", vecboost::i18n::tr("log-main-pipeline-disabled"));
 
         Ok((
             Arc::new(PriorityRequestQueue::new(0)),
@@ -1136,10 +1264,7 @@ fn resolve_device_config(use_gpu: bool) -> vecboost::config::model::DeviceType {
     }
     #[cfg(not(any(feature = "cuda", feature = "metal")))]
     {
-        log::warn!(
-            "use_gpu=true but no GPU backend is compiled in (missing 'cuda' feature, or \
-             'metal' on macOS) — falling back to CPU. Rebuild with --features cuda for GPU."
-        );
+        log::warn!("{}", vecboost::i18n::tr("log-main-gpu-no-backend"));
         DeviceType::Cpu
     }
 }
@@ -1172,17 +1297,20 @@ fn validate_bind_safety(host: &str, auth_enabled: bool) -> anyhow::Result<()> {
     }
     if std::env::var("VECBOOST_ALLOW_INSECURE").as_deref() == Ok("1") {
         log::error!(
-            "SECURITY RISK: authentication is disabled while binding to non-loopback address \
-             '{host}' (VECBOOST_ALLOW_INSECURE=1). Anyone reachable on this interface can read \
-             files via /embed/file and manage models. Enable auth or bind to 127.0.0.1."
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-insecure-warning",
+                vecboost::i18n::tr_args(&[("host", host)])
+            )
         );
         return Ok(());
     }
     Err(anyhow::anyhow!(
-        "Refusing to start: authentication is disabled (auth.enabled=false) while binding to \
-         non-loopback address '{host}'. Fix one of: (1) set host to 127.0.0.1 in the config, \
-         (2) enable [auth] with VECBOOST_JWT_SECRET and VECBOOST_ADMIN_PASSWORD, or \
-         (3) set VECBOOST_ALLOW_INSECURE=1 to accept the risk explicitly."
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-insecure-refusal",
+            vecboost::i18n::tr_args(&[("host", host)])
+        )
     ))
 }
 
@@ -1195,9 +1323,24 @@ fn main() {
     #[cfg(all(target_os = "linux", not(target_env = "musl")))]
     match vecboost::allocator_tune::effective_boot_conf() {
         Ok((dirty, muzzy)) => {
-            log::info!("jemalloc decay: dirty={dirty}ms muzzy={muzzy}ms (boot conf)");
+            log::info!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "log-main-jemalloc-decay",
+                    vecboost::i18n::tr_args(&[
+                        ("dirty", &dirty.to_string()),
+                        ("muzzy", &muzzy.to_string())
+                    ])
+                )
+            );
         }
-        Err(e) => log::warn!("jemalloc decay probe failed: {e}"),
+        Err(e) => log::warn!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-jemalloc-probe-failed",
+                vecboost::i18n::tr_args(&[("detail", &e.to_string())])
+            )
+        ),
     }
     // tokio runtime 线程数取物理核检测（显式 server.workers 优先，
     // VECBOOST_NO_THREAD_TUNE=1 回退 num_cpus）。配置在运行时前 best-effort
@@ -1214,15 +1357,26 @@ fn main() {
         });
     let (effective_threads, detected, fallback) = resolve_runtime_threads(pre_explicit);
     eprintln!(
-        "[thread-tune] 物理核={} 逻辑核={} 生效线程数={}（显式配置={}）",
-        detected
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "未知(回退)".to_string()),
-        fallback,
-        effective_threads,
-        pre_explicit
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "未设置".to_string()),
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "startup-thread-tune",
+            vecboost::i18n::tr_args(&[
+                (
+                    "physical",
+                    &detected
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| vecboost::i18n::tr("startup-thread-unknown")),
+                ),
+                ("logical", &fallback.to_string()),
+                ("effective", &effective_threads.to_string()),
+                (
+                    "explicit",
+                    &pre_explicit
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| vecboost::i18n::tr("startup-thread-unset")),
+                ),
+            ]),
+        )
     );
     if let Some(advice) = numa_advice() {
         eprintln!("[thread-tune] {}", advice);
@@ -1231,7 +1385,15 @@ fn main() {
     let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(effective_threads)
         .build_global()
-        .map_err(|e| eprintln!("[thread-tune] rayon 全局池已初始化，跳过：{}", e));
+        .map_err(|e| {
+            eprintln!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "startup-rayon-skipped",
+                    vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
+        });
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(effective_threads)
         .enable_all()
@@ -1244,7 +1406,13 @@ fn main() {
     // 显式 shutdown_timeout 保证所有退出路径都能在超时后落地。
     rt.shutdown_timeout(Duration::from_secs(SHUTDOWN_RUNTIME_DRAIN_SECS));
     result.unwrap_or_else(|e| {
-        eprintln!("Error: {e}");
+        eprintln!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "cli-error-prefix",
+                vecboost::i18n::tr_args(&[("detail", &e.to_string())])
+            )
+        );
         std::process::exit(1);
     });
 }
@@ -1693,7 +1861,13 @@ async fn run_startup_warmup(engine: &Arc<RwLock<AnyEngine>>, warmup: u32) {
         match vecboost::engine::InferenceEngine::decide(&*guard, &req) {
             Ok(_) => 0,
             Err(e) => {
-                log::warn!("warmup: 决策管线全链预热失败：{e}");
+                log::warn!(
+                    "{}",
+                    vecboost::i18n::tr_with_args(
+                        "warmup-decision-pipeline-failed",
+                        vecboost::i18n::tr_args(&[("e", &e.to_string())])
+                    )
+                );
                 1
             }
         }
@@ -1708,18 +1882,33 @@ async fn run_startup_warmup(engine: &Arc<RwLock<AnyEngine>>, warmup: u32) {
             .count()
     };
     let mode = if decision_pipeline {
-        "decide×1（决策管线全链）"
+        vecboost::i18n::tr("warmup-mode-decide")
     } else {
-        "embed"
+        vecboost::i18n::tr("warmup-mode-embed")
     };
     if failures > 0 {
         log::warn!(
-            "warmup: 预热未完全生效（{mode}，{} 次失败，{:?}）——首次请求可能更慢",
-            failures,
-            start.elapsed()
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "warmup-incomplete",
+                vecboost::i18n::tr_args(&[
+                    ("mode", &mode),
+                    ("failures", &failures.to_string()),
+                    ("elapsed", &format!("{:?}", start.elapsed())),
+                ])
+            )
         );
     } else {
-        log::info!("warmup: 预热推理完成（{mode}，{:?}）", start.elapsed());
+        log::info!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "warmup-complete",
+                vecboost::i18n::tr_args(&[
+                    ("mode", &mode),
+                    ("elapsed", &format!("{:?}", start.elapsed())),
+                ])
+            )
+        );
     }
 }
 

@@ -175,3 +175,410 @@ heat-schema-mismatch = model heat: schema version mismatch (file { $got }, expec
 heat-entry-fingerprint-mismatch = model heat: entry '{ $name }' fingerprint mismatch; entry discarded
 doctor-tokenizer-vocab-missing = ; ⚠️ tokenizer vocab file not identified by content
 transcribe-not-configured = Transcription service is not configured: set enabled = true and models_dir under [transcribe]
+
+# ── Doctor CLI diagnostics (vecboost doctor stdout) ──
+doctor-config-pass = config validated OK (model.task={ $task })
+doctor-config-fail = config validation failed: { $detail }
+doctor-model-dir-missing = model directory not found: { $path } (will attempt HF download at runtime)
+doctor-tokenizer-json-missing = tokenizer.json not found: { $path }
+doctor-tokenizer-json-ok = tokenizer.json loaded successfully: { $path }
+doctor-tokenizer-json-fail = tokenizer.json failed to load: { $detail }
+doctor-cache-memory-only = in-memory mode only (persist_path not configured)
+doctor-cache-wal-writable = WAL file writable: { $path }
+doctor-cache-wal-unwritable = WAL file not writable: { $path }: { $detail }
+doctor-cache-path-invalid = invalid persist_path: { $path }
+doctor-cache-parent-missing = parent directory does not exist (startup writes would fail; create it or fix config first): { $path }
+doctor-cache-dir-writable = directory writable (WAL not yet created; established on first insert): { $path }
+doctor-cache-dir-unwritable = directory not writable: { $path }: { $detail }
+doctor-threads-detailed = physical cores { $physical } / logical cores { $logical } (tuning uses physical cores)
+doctor-threads-fallback = physical core detection unavailable, falling back to logical cores { $logical } (VECBOOST_NO_THREAD_TUNE can override)
+doctor-threads-numa = ; NUMA detected { $sockets } socket(s), consider numactl --interleave=all
+doctor-gpu-cpu-mode = CPU mode (use_gpu=false)
+doctor-gpu-no-cuda = use_gpu=true but no CUDA device detected
+doctor-gpu-devices = CUDA devices: { $names }
+doctor-gpu-no-cuda-feature = use_gpu=true but binary was built without the cuda feature (rebuild with --features cuda)
+doctor-models-none = no local model directory found (models/ absent and model_path unset); runtime will rely on HF download
+doctor-models-fail-count = { $count } model director(ies) have integrity problems
+doctor-dir-unreadable = directory unreadable
+doctor-json-parse-fail = JSON file failed to parse { $path }: { $detail }
+doctor-json-unreadable = JSON file unreadable { $path }: { $detail }
+doctor-dims-no-hidden = no 2-D tensor dimension matches config.hidden_size({ $hidden }); weights and config appear mismatched
+doctor-no-weights = no weight files found (.safetensors/.gguf)
+doctor-weights-summary = weights: { $weights }, gguf: { $gguf }, tokenizer: { $tokenizer }, config.hidden_size: { $hidden }
+doctor-tokenizer-recognized = recognized
+doctor-tokenizer-unrecognized = not recognized
+doctor-weight-unreadable = weight file unreadable { $path }: { $detail }
+doctor-metadata-unreadable = metadata unreadable { $path }: { $detail }
+doctor-file-too-small = file too small, under 8-byte header: { $path }
+doctor-header-len-read-fail = failed to read header length { $path }: { $detail }
+doctor-header-len-invalid = illegal safetensors header length ({ $len }): { $path }
+doctor-header-read-fail = failed to read header { $path }: { $detail }
+doctor-header-json-fail = safetensors header JSON parse failed { $path }: { $detail }
+doctor-tensor-not-object = tensor { $tensor } metadata is not an object: { $path }
+doctor-tensor-no-dtype = tensor { $tensor } missing dtype: { $path }
+doctor-tensor-no-offsets = tensor { $tensor } missing data_offsets: { $path }
+doctor-tensor-offsets-invalid = tensor { $tensor } illegal data_offsets: { $path }
+doctor-tensor-offsets-reversed = tensor { $tensor } data_offsets reversed: { $path }
+doctor-file-truncated = file truncated (data needs { $need } bytes, have { $have }): { $path }
+doctor-gguf-unreadable = gguf file unreadable { $path }: { $detail }
+doctor-gguf-too-small = gguf file too small { $path }: { $detail }
+doctor-gguf-bad-magic = invalid gguf magic (got { $got }, expected GGUF): { $path }
+
+# ── Startup fail-fast / thread-tune banner (main.rs stderr) ──
+startup-engine-type-unknown = [model] engine_type has unknown value "{ $got }"{ $hint }, supported: candle, onnx
+startup-engine-onnx-rebuild-hint = (engine_type="onnx" requires rebuilding with --features onnx)
+startup-semantic-mode-invalid = [semantic_cache] comparison_mode invalid: { $detail }
+startup-translation-no-onnx = [translation] pairs configured but this build did not enable the `onnx` feature; rebuild with --features onnx
+startup-translate-pair-invalid = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) invalid parameters: { $detail }
+startup-translate-pair-load-failed = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) failed to load: { $detail }
+startup-thread-tune = [thread-tune] physical cores={ $physical } logical cores={ $logical } effective threads={ $effective } (explicit config={ $explicit })
+startup-thread-unknown = unknown (fallback)
+startup-thread-unset = unset
+startup-rayon-skipped = [thread-tune] rayon global pool already initialized, skipping: { $detail }
+semantic-cache-mode-unknown = unknown comparison_mode: '{ $got }' (choose exact|i8|binary)
+
+# ── Engine routing / checkpoint config errors (user-visible error returns) ──
+factory-translate-onnx-only = Translation only supports the onnx engine: set engine_type to onnx (task=translate has no candle implementation; restart the service to reload)
+factory-transcribe-onnx-only = Transcription only supports the onnx engine: set engine_type to onnx (task=transcribe has no candle implementation)
+factory-translate-no-onnx-feature = Detected a task=translate model config, but this build did not enable the `onnx` feature; rebuild with `--features onnx`
+config-checkpoint-engine-unknown = checkpoint { $name } engine_type has unknown value "{ $got }"{ $hint }, supported: candle, onnx
+cache-persist-uncreatable = cannot create persist file { $path }: { $detail } (check the [embedding] persist_path directory permissions)
+factory-transcribe-no-transcribe-feature = Detected a task=transcribe model config, but this build did not enable the `transcribe` feature; rebuild with `--features onnx,transcribe`
+factory-quantized-no-feature = Detected a GGUF quantized model config (.gguf + quantized=true), but this build did not enable the `quantized-gguf` feature; rebuild with `--features quantized-gguf`
+factory-decision-no-onnx-feature = Detected a task=decision model config, but this build did not enable the `onnx` feature; rebuild with `--features onnx`
+
+# ── Quantized GGUF engine errors (feature quantized-gguf; error-model-load/inference detail) ──
+quant-gguf-open-failed = cannot open GGUF file { $path }: { $detail }
+quant-gguf-too-short = GGUF file too short { $path }: { $detail }
+quant-gguf-magic-mismatch = GGUF magic check failed { $path }: expected 0x{ $expected }, got 0x{ $got }
+quant-safetensors-load-failed = safetensors load failed { $path }: { $detail }
+quant-config-json-unreadable = config.json unreadable: { $detail }
+quant-config-json-parse-failed = config.json parse failed: { $detail }
+quant-config-json-missing-key = config.json missing field { $key }
+quant-tensor-no-mapping = safetensors tensor { $name } has no GGUF mapping (unsupported architecture or name drift)
+quant-tensor-dtype-failed = tensor { $name } failed both target dtype and F16 fallback: { $detail }
+quant-tensor-quantize-failed = tensor { $name } quantization failed: { $detail }
+quant-gguf-output-unwritable = GGUF output not writable { $path }: { $detail }
+quant-gguf-write-failed = GGUF write failed: { $detail }
+quant-gguf-flush-failed = GGUF output flush failed: { $detail }
+quant-gguf-openfile-failed = failed to open GGUF file { $path }: { $detail }
+quant-gguf-header-parse-failed = GGUF header parse failed: { $detail }
+quant-gguf-arch-unsupported = GGUF architecture { $arch } not supported (only bert; file: { $path })
+quant-gguf-meta-missing-key = GGUF metadata missing key { $key }
+quant-tensor-read-failed = failed to read GGUF tensor { $name }: { $detail }
+quant-tensor-dequant-failed = failed to dequantize GGUF tensor { $name }: { $detail }
+quant-tensor-no-candle-mapping = GGUF tensor { $name } has no candle mapping
+quant-tensor-mapping-conflict = GGUF tensor { $name } mapping conflict (duplicate { $candle })
+quant-gguf-missing-token-embd = GGUF is missing token_embd.weight
+quant-token-embd-dim-failed = failed to read token_embd dimension: { $detail }
+quant-bert-assembly-failed = GGUF BERT assembly failed: { $detail }
+quant-tokenizer-load-failed = failed to load tokenizer.json from the GGUF directory ({ $path }): { $detail }
+quant-empty-batch = empty batch
+
+# ── Runtime logs: module registry / metrics endpoint / doctor banner ──
+# Convention: `Tag: message` identifier prefixes stay in code (machine-greppable);
+# only the message part is localized here.
+log-registry-engine-ready = model engine ready
+log-registry-service-ready = service ready
+log-registry-ratelimit-active = on_ready — limiteron rate limiter active
+log-registry-ratelimit-shutdown = on_shutdown — rate limiter shut down
+log-registry-audit-flushing = flushing audit log before shutdown
+log-registry-audit-flush-failed = failed to flush audit log: { $detail }
+log-registry-watcher-ready = config file watcher ready
+log-registry-watcher-shutdown = shutting down config watcher
+log-registry-watcher-shutdown-failed = error during watcher shutdown: { $detail }
+log-metrics-collector-unregistered = PrometheusCollectorModule not registered: { $detail }
+log-metrics-response-build-failed = Failed to build metrics response: { $detail }
+log-metrics-ip-allowlist-unregistered = IpWhitelistModule not registered: { $detail }
+log-metrics-ratelimit-unavailable = RateLimitModule not available while RateLimitEnabled=true: { $detail }. Denying request.
+log-metrics-json-response-build-failed = Failed to build JSON error response: { $detail }
+
+# ── Doctor report chrome (stdout; PASS/WARN/FAIL tokens stay untranslated) ──
+doctor-report-title = vecboost doctor — read-only diagnostics
+doctor-summary = { $total } check(s): { $pass } pass, { $warn } warn, { $fail } fail
+
+# ── Runtime logs: server startup / assembly banners (main.rs stdout+stderr) ──
+log-main-building-module = Building module: { $module }
+log-main-module-built-slow = Module { $module } built in { $seconds }s (>1s)
+log-main-module-built = Module { $module } built in { $ms }ms
+log-main-db-pool-init = Initializing database pool with url={ $url }
+log-main-db-retry = Database retry policy enabled (max_retries={ $retries }, exponential backoff)
+log-main-db-warmup = dbnexus pool-warmup enabled: min_connections={ $min }, warmup_timeout={ $timeout }s, warmup_retries={ $retries }
+log-main-db-ready = Database pool initialized and schema verified
+log-main-db-metrics = dbnexus MetricsCollector created
+log-main-tokenizer-noop = [model].tokenizer_path is configured but no consumer matches engine_type={ $engine } task={ $task }: consumers are the onnx local bundle branch (engine_type=onnx + local directory) and the decision pipeline (task=decision + local directory); the value is a no-op
+log-main-kvcache-enabled = KV Cache enabled with size: { $size }
+log-main-kvcache-wal = Embedding cache WAL persistence enabled: { $path } (compact threshold { $bytes } bytes)
+log-main-kvcache-disabled = KV Cache disabled
+log-main-residency = model residency: max_resident_models={ $max } budget_mb={ $budget }
+log-main-semantic-mode-deprecated = [semantic_cache] comparison_mode={ $mode } is deprecated and has no effect in this version (always exact)
+log-main-semantic-enabled = semantic cache enabled: threshold={ $threshold } fuzzy_threshold={ $fuzzy } capacity={ $capacity }
+log-main-translation-threads = translation: per-session intra threads budget = { $budget } ({ $pairs } pairs)
+log-main-engine-init = Initializing Inference Engine (this may take a while to download models)...
+log-main-translation-ready = translation service initialized: { $pairs } pair(s) configured
+log-main-transcribe-ready = transcribe service initialized: bundle={ $bundle }
+log-main-mcp-start = Starting VecBoost MCP server over stdio
+log-main-auth-enabled = Garrison authentication enabled (JWT + session + password verification)
+log-main-auth-disabled = Authentication disabled
+log-main-csrf-enabled = CSRF protection enabled (garrison)
+log-main-csrf-disabled = CSRF protection disabled
+log-main-plan-hardware = auto_plan: hardware plan worker_threads={ $threads } max_batch_size={ $batch } batch_wait_ms={ $wait } quantized_recommended={ $quantized } bottleneck={ $bottleneck } rationale={ $rationale }
+log-main-plan-applied = auto_plan: applied max_batch_size={ $batch } batch_wait_ms={ $wait } (planned max_batch_size={ $planned_batch } batch_wait_ms={ $planned_wait } suggested worker_threads={ $threads })
+log-main-pipeline-enabled = Request pipeline enabled with queue_size={ $size }
+log-main-worker-start-failed = WorkerManager start failed: { $detail }
+log-main-pipeline-ready = Pipeline components initialized successfully
+log-main-pipeline-disabled = Request pipeline disabled
+log-main-gpu-no-backend = use_gpu=true but no GPU backend is compiled in (missing 'cuda' feature, or 'metal' on macOS) — falling back to CPU. Rebuild with --features cuda for GPU.
+log-main-insecure-warning = SECURITY RISK: authentication is disabled while binding to non-loopback address '{ $host }' (VECBOOST_ALLOW_INSECURE=1). Anyone reachable on this interface can read files via /embed/file and manage models. Enable auth or bind to 127.0.0.1.
+log-main-insecure-refusal = Refusing to start: authentication is disabled (auth.enabled=false) while binding to non-loopback address '{ $host }'. Fix one of: (1) set host to 127.0.0.1 in the config, (2) enable [auth] with VECBOOST_JWT_SECRET and VECBOOST_ADMIN_PASSWORD, or (3) set VECBOOST_ALLOW_INSECURE=1 to accept the risk explicitly.
+log-main-jemalloc-decay = jemalloc decay: dirty={ $dirty }ms muzzy={ $muzzy }ms (boot conf)
+log-main-jemalloc-probe-failed = jemalloc decay probe failed: { $detail }
+cli-error-prefix = Error: { $detail }
+
+# ── Runtime logs: engine / device / cache / service / CLI diagnostics ──
+log-audit-failed-rotate-current-log = Failed to rotate current log: { $a1 }
+log-audit-failed-rotate-log-file = Failed to rotate log file: { $a1 }
+log-audit-failed-remove-old-log = Failed to remove old log file { $a1 }: { $a2 }
+log-audit-failed-write-audit-log = Failed to write audit log batch: { $a1 }
+log-audit-failed-reopen-log-file = Failed to reopen log file after rotation: { $a1 }
+log-audit-audit-event-lost-dead = Audit event lost: dead-letter write failed: { $e } (db error: { $db_error })
+log-audit-audit-event-dead-lettered = Audit event dead-lettered to { $a1 }
+log-audit-failed-open-audit-log = Failed to open audit log file: { $a1 }
+log-audit-failed-create-log-directory = Failed to create log directory: { $a1 }
+log-cache-persist-one-record-key = persist: { $a1 } one record key is not UTF-8, skipped
+log-cache-persist-one-record-fingerprint = persist: { $a1 } one record fingerprint mismatch, skipped
+log-cache-persist-one-record-failed = persist: { $a1 } one record failed checksum, skipped
+log-cache-persist-version-mismatch-discarding = persist: { $a1 } version { $a2 } mismatch, discarding whole file
+log-cache-persist-magic-mismatch-discarding = persist: { $a1 } magic mismatch, discarding whole file
+log-cache-persist-unknown-record-type = persist: { $a1 } unknown record type { $a2 }, stopping replay (torn tail)
+log-cache-persist-cannot-open-treating = persist: cannot open { $a1 } ({ $a2 }), treating as empty cache
+log-cache-persist-truncate-clear-failed = persist: truncate on clear failed ({ $a1 })
+log-cache-persist-compaction-failed-keeping = persist: compaction failed ({ $a1 }), keeping original file
+log-cache-persist-compaction-complete-records = persist: compaction complete, { $a1 } records
+log-cache-persist-append-failed-this = persist: append failed ({ $a1 }), this insert stays in-memory only
+log-cache-persist-file-lock-poisoned = persist: file lock poisoned, skipping this flush: { $a1 }
+log-cache-rejecting-non-finite-vector = rejecting non-finite vector put for key prefix { $a1 }
+log-cache-persist-failed-write-header = persist: { $a1 } failed to write header: { $a2 }
+log-engine-auto-pooling-unrecognized-model = Auto pooling: unrecognized model family '{ $a1 }', falling back to CLS. Set pooling_mode explicitly to silence this warning.
+log-engine-loaded-safetensors-model-weights = Loaded safetensors model weights successfully
+log-engine-loading-safetensors-model-weights = Loading safetensors model weights from: { $a1 }
+log-engine-optimum-cli-export-onnx = optimum-cli export onnx --model { $a1 } --task feature-extraction ./model_safetensors
+log-engine-pip-install-optimum = pip install optimum
+log-engine-please-convert-model-safetensors = Please convert the model to safetensors format:
+log-engine-this-often-due-large = This is often due to large model files or incompatible formats.
+log-engine-failed-load-pytorch-weights = Failed to load PyTorch weights: { $a1 }
+log-engine-pytorch-weights-loaded-successfully = PyTorch weights loaded successfully
+log-engine-then-use-model-converted = Then use './model_converted' as the model_path in config/config.toml
+log-engine-python-c-from-transformers = python -c \"from transformers import AutoModel; AutoModel.from_pretrained('{ $a1 }').save_pretrained('./model_converted')\"
+log-engine-consider-converting-safetensors-format = Consider converting to safetensors format for better performance:
+log-engine-pytorch-model-file-large = PyTorch model file is large ({ $a1 } GB). Large pyTorch files may have loading issues.
+log-engine-loading-pytorch-model-weights = Loading PyTorch model weights from: { $a1 }
+log-engine-model-file-sha256-verification = Model file SHA256 verification passed
+log-engine-verifying-model-file-sha256 = Verifying model file SHA256 hash...
+log-engine-model-file-integrity-check = Model file integrity check passed
+log-engine-post-recovery-integrity-check = Post-recovery integrity check passed
+log-engine-re-running-integrity-check = Re-running integrity check after recovery...
+log-engine-successfully-recovered-all-corrupted = Successfully recovered all corrupted files
+log-engine-attempting-automatic-recovery-corrupted = Attempting automatic recovery of corrupted files...
+log-engine-file-error = File: { $a1 }, Error: { $a2 }
+log-engine-model-file-integrity-check-2 = Model file integrity check failed!
+log-engine-checking-model-file-integrity = Checking model file integrity...
+log-engine-model-safetensors-unavailable-falling = model.safetensors unavailable, falling back to pytorch_model.bin; pickle format carries code-execution risk — only load .bin models from trusted sources, prefer safetensors
+log-engine-downloading-loading-model-from = Downloading/Loading model from HuggingFace Hub: { $a1 }
+log-engine-loading-model-from-remote = Loading model from remote HuggingFace repo '{ $a1 }' without model_sha256 verification — recommend setting model_sha256 in config to prevent tampering and supply-chain attacks
+log-engine-loading-model-from-local = Loading model from local path: { $a1 }
+log-engine-using-fp32-precision = Using FP32 precision
+log-engine-bf16-supported-non-cuda = BF16 not supported on non-CUDA devices, falling back to FP32
+log-engine-using-bf16-precision-brain = Using BF16 precision (Brain Float 16)
+log-engine-fp16-supported-non-cuda = FP16 not supported on non-CUDA devices, falling back to FP32
+log-engine-using-fp16-precision = Using FP16 precision
+log-engine-int8-quantization-yet-implemented = INT8 quantization is not yet implemented; running in FP32 mode. The use_quantization flag has no effect until INT8 support is added.
+log-engine-using-cpu = Using CPU
+log-engine-candle-engine-does-natively = Candle engine does not natively support AMD GPUs. AMD GPU support requires ROCm-enabled Candle build or ONNX Runtime. Falling back to CPU.
+log-engine-using-metal-gpu = Using Metal GPU
+log-engine-using-cuda-gpu = Using CUDA GPU
+log-engine-successfully-fell-back-cpu = Successfully fell back to CPU
+log-engine-fallback-cpu-supported-cpu = Fallback to CPU: { $a1 } not supported on CPU, using FP32
+log-engine-fallback-detected-model-architecture = Fallback: Detected model architecture: { $a1 }
+log-engine-attempting-fallback-from-gpu = Attempting fallback from GPU to CPU due to memory pressure
+log-engine-token-id-exceeds-vocab = Token ID { $a1 } exceeds vocab_size { $a2 }, clamping
+log-engine-memory-limit-critical-checking = Memory limit critical, checking memory pressure for fallback
+log-engine-memory-limit-exceeded-attempting = Memory limit exceeded, attempting fallback to CPU
+log-engine-memory-pressure-cleared-resetting = Memory pressure cleared, resetting fallback flag — GPU may be retried on next model load
+log-engine-pooling-mode-model = Pooling mode: { $a1 } (model: { $a2 })
+log-engine-detected-model-architecture = Detected model architecture: { $a1 }
+log-engine-successfully-fell-back-cpu-2 = Successfully fell back to CPU for ONNX engine
+log-engine-attempting-fallback-from-gpu-2 = Attempting fallback from GPU to CPU for ONNX engine
+log-engine-memory-limit-critical-onnx = Memory limit critical for ONNX engine, checking memory pressure for fallback
+log-engine-memory-limit-exceeded-onnx = Memory limit exceeded for ONNX engine, attempting fallback to CPU
+log-engine-failed-create-tokio-runtime = Failed to create Tokio runtime for memory check: { $a1 }
+log-engine-onnx-engine-initialized-hidden = ONNX Engine initialized: hidden_size={ $a1 }, max_input_length={ $a2 }, vocab_size={ $a3 }, precision={ $a4 }
+log-engine-using-precision = Using { $a1 } precision
+log-engine-fp16-supported-without-gpu = FP16 not supported without GPU acceleration, falling back to FP32
+log-engine-using-fp16-precision-gpu = Using FP16 precision with GPU acceleration
+log-engine-final-hidden-size-value = Final hidden_size value: { $a1 }
+log-engine-using-hidden-size-from = Using hidden_size from configuration: { $a1 }
+log-engine-loading-tokenizer = Loading tokenizer...
+log-engine-amd-gpu-detected-but = AMD GPU detected but ROCm execution provider is not configured in this build. Using CPU execution provider.
+log-engine-downloading-loading-onnx-model = Downloading/Loading ONNX model files...
+log-engine-using-huggingface-hub-model = Using HuggingFace Hub for model: { $a1 }
+log-engine-using-local-model-path = Using local model path: { $a1 }
+log-engine-successfully-fell-back-cpu-3 = Successfully fell back to CPU for decision pipeline
+log-engine-attempting-fallback-cpu-decision = Attempting fallback to CPU for decision pipeline
+log-engine-decision-pipeline-initialized-bundle = Decision pipeline initialized: bundle={ $a1 }, model={ $a2 }, precision={ $a3 }, calibration_buckets={ $a4 }
+log-engine-verifying-decision-model-file = Verifying decision model file SHA256 hash...
+log-engine-msg-model = { $msg } (model={ $a1 })
+log-engine-memory-gate-passed-model = memory gate passed: model={ $a1 } need={ $need } available={ $available } floor={ $floor }
+log-engine-session-memory-floor-mb = SESSION_MEMORY_FLOOR_MB={ $v } is not a valid integer; falling back to default { $DEFAULT_MEMORY_FLOOR_MB }MB
+log-engine-cuda-execution-provider-requires = CUDA execution provider requires the cuda feature flag; using CPU execution provider
+log-engine-attempting-configure-cuda-execution = Attempting to configure CUDA execution provider
+log-engine-gguf-pooling-inferred-as = GGUF pooling inferred as { $pooling } from identity '{ $pool_identity }'
+log-engine-gguf-config-json-provides = GGUF config.json provides no recognizable hidden_act, falling back to Gelu (making the previously hardcoded behavior explicit)
+log-engine-gguf-config-json-unknown = GGUF config.json unknown hidden_act '{ $other }', falling back to Gelu
+log-engine-gguf-hidden-act-act = GGUF hidden_act '{ $act }' has no candle BERT counterpart, falling back to Gelu
+log-engine-gguf-tensor-other-this = GGUF tensor '{ $other }': this repo maps it to final-LN (output.LayerNorm), which differs from llama.cpp's attention-LN convention; for externally converted GGUF, rename to output_norm
+log-device-amd-gpu-initialization-complete = AMD GPU initialization complete. Found { $a1 } device(s) (ROCm: { $a2 }, OpenCL: { $a3 })
+log-device-found-opencl-compatible-amd = Found OpenCL-compatible AMD GPU: { $a1 } with { $a2 } bytes VRAM
+log-device-found-rocm-compatible-amd = Found ROCm-compatible AMD GPU: { $a1 } with { $a2 } bytes VRAM
+log-device-initializing-amd-gpu-device = Initializing AMD GPU device manager...
+log-device-rocm-version = ROCm version: { $a1 }
+log-device-rocm-vram-query-failed = ROCm VRAM query failed, using fallback default: { $a1 }GB
+log-device-rocm-vram-rocm-smi = ROCm VRAM (rocm-smi, device { $a1 }): { $a2 } MB
+log-device-amd-driver-version-rocm = AMD driver version (rocm-smi): { $a1 }
+log-device-amd-driver-version-sysfs = AMD driver version (sysfs): { $a1 }
+log-device-gpu-memory-allocation-failed = GPU memory allocation failed: requested { $a1 } bytes, available { $a2 } bytes
+log-device-amd-gpu-opencl-using = AMD GPU (OpenCL) using fallback default parameters ({ $a1 }GB, compute { $a2 }.{ $a3 }). OpenCL cannot query real VRAM; use the ROCm path for accurate info
+log-device-primary-cuda-device-set = Primary CUDA device set to: { $a1 }
+log-device-detected-compatible-cuda-device = Detected compatible CUDA device: { $a1 }
+log-device-failed-initialize-cuda-device = Failed to initialize CUDA device via candle-core: { $a1 }
+log-device-detected-cuda-device-via = Detected CUDA device via candle-core: { $a1 } ({ $a2 } MB, compute { $a3 }.{ $a4 } )
+log-device-nvidia-smi-query-failed = nvidia-smi query failed, using fallback default device parameters ({ $a1 }GB, compute { $a2 }.{ $a3 }). Install nvidia-smi for accurate info
+log-device-cuda-device-manager-initialized = CUDA device manager initialized with { $a1 } device(s)
+log-device-created-memory-manager-device = Created memory manager for device { $a1 }: { $a2 } MB
+log-device-cuda-detection-returned-error = CUDA detection returned error, treating as no available devices: { $a1 }
+log-device-gpu-compute-mode = GPU compute mode: { $a1 }
+log-device-gpu-compute-mode-default = GPU compute mode: Default (shared by multiple processes)
+log-device-gpu-compute-mode-exclusive = GPU compute mode: Exclusive (optimal)
+log-device-gpu-ecc-memory-disabled = GPU ECC memory: disabled (current: { $a1 })
+log-device-gpu-ecc-memory-enabled = GPU ECC memory: enabled
+log-device-cannot-read-gpu-current = cannot read GPU current clock frequency, cannot determine whether it is locked
+log-device-gpu-current-clock-frequency = GPU current clock frequency: { $a1 }
+log-device-transparent-hugepages-disabled = transparent hugepages: disabled
+log-device-transparent-hugepages-madvise-mode = transparent hugepages: madvise mode (recommended for GPU)
+log-device-transparent-hugepages-enabled-always = transparent hugepages: enabled (always)
+log-device-gpu-persistence-mode-disabled = GPU persistence mode: disabled (current: { $a1 })
+log-device-gpu-persistence-mode-enabled = GPU persistence mode: enabled
+log-device-gpu-tuning-check-complete = GPU tuning check complete, found { $a1 } optimizable settings:
+log-device-gpu-tuning-check-complete-2 = GPU tuning check complete: all settings optimized
+log-device-auto-fallback-disabled-skipping = Auto-fallback disabled, skipping fallback to CPU
+log-device-memory-pressure-detected-falling = Memory pressure detected, falling back to CPU
+log-device-available-memory-query-failed = available_memory query failed for device { $a1 }, reporting 0 available
+log-device-available-devices-using-cpu = No available devices, using CPU
+log-device-available-gpu-falling-back = No available GPU, falling back to CPU
+log-device-refresh-devices-amd-device = refresh_devices: AMD device count mismatch (internal: { $a1 }, amd_manager: { $a2 }). Some devices may not be updated.
+log-device-failed-initialize-amd-device = Failed to initialize AMD device manager: { $a1 }
+log-device-cuda-device-initialized = CUDA device initialized: { $a1 }
+log-device-failed-initialize-cuda-device-2 = Failed to initialize CUDA device manager: { $a1 }
+log-device-memory-limit-exceeded-triggering = Memory limit exceeded, triggering fallback to CPU
+log-device-memory-limit-set-bytes = Memory limit set to: { $a1 } bytes
+log-device-failed-create-tokio-runtime = Failed to create Tokio runtime: { $a1 }
+log-device-memory-usage-critical-bytes = Memory usage critical: { $a1 } bytes ({ $a2 }%)
+log-device-memory-usage-exceeded-limit = Memory usage exceeded limit: { $a1 } bytes (limit: { $a2 } bytes)
+log-device-attempted-deallocate-bytes-but = Attempted to deallocate { $a1 } bytes but only { $a2 } bytes allocated
+log-device-decreasing-batch-size-latency = Decreasing batch size to { $a1 } (latency: { $a2 }ms, memory: { $a3 }%)
+log-device-increasing-batch-size-latency = Increasing batch size to { $a1 } (latency: { $a2 }ms, memory: { $a3 }%)
+log-device-insufficient-gpu-memory-model = Insufficient GPU memory for model '{ $a1 }', using minimum batch size { $a2 }
+log-device-registered-memory-requirements-model = Registered memory requirements for model: { $a1 }
+log-api-logout-token-revocation-failed = Logout token revocation failed (best-effort): { $a1 }
+log-api-failed-revoke-old-refresh = Failed to revoke old refresh token during refresh for login_id '{ $a1 }': { $a2 }
+log-api-login-rejected-auth-enabled = Login rejected: auth is enabled but no admin password is configured (missing VECBOOST_ADMIN_PASSWORD). This should have failed at startup.
+log-api-switch-path-validation-rejected = switch path validation rejected { $field }={ $path }: { $e }
+log-api-switch-model-failed-e = switch_model failed: { $e }
+log-api-batch-rerank-individual-query = Batch rerank: individual query failed, skipping: { $a1 }
+log-auth-auth-endpoint-rate-limit = Auth endpoint rate limit exceeded for IP: { $a1 }
+log-auth-ratelimitmodule-registered = RateLimitModule not registered: { $a1 }
+log-auth-ipwhitelistmodule-registered = IpWhitelistModule not registered: { $a1 }
+log-auth-ratelimitenabled-registered-rate-limiting = RateLimitEnabled not registered, rate limiting is disabled. This may leave endpoints unprotected in production.
+log-auth-trusted-proxies-empty-x = trusted_proxies is empty — X-Forwarded-For is ignored; the direct peer IP is used for rate limiting and audit. Behind a reverse proxy, configure trusted_proxies (e.g. [\"10.0.0.0/8\"]) to honor forwarded headers.
+log-config-encryption-key-env-must = { $ENCRYPTION_KEY_ENV } must be exactly 32 bytes for XChaCha20-Poly1305, got { $a1 } bytes — encryption disabled
+log-config-encryption-key-env-set = { $ENCRYPTION_KEY_ENV } not set — sensitive config fields stored as plaintext. Production deployments MUST set this to a 32-byte key (e.g. `openssl rand -hex 32`) and enable VECBOOST_REQUIRE_ENCRYPTION=1.
+log-domain-queue-cleared-requests-discarded = Queue cleared, { $a1 } requests discarded
+log-domain-shutdown-drain-queued-requests = Shutdown drain: { $a1 } queued requests evacuated
+log-domain-reaped-expired-requests-from = Reaped { $a1 } expired requests from queue, queue_size={ $a2 }
+log-model-reloading-onnx-model-from = Reloading ONNX model from: { $a1 }
+log-model-reloading-candle-model-from = Reloading Candle model from: { $a1 }
+log-model-model-integrity-check-failed = Model integrity check failed, initiating recovery for { $a1 } corrupted files
+log-model-model-integrity-check-passed = Model integrity check passed, no recovery needed
+log-model-all-recovered-files-verified = All recovered files verified successfully
+log-model-download-attempt-failed-file = Download attempt { $a1 } failed for file { $a2 }: { $a3 }
+log-model-download-attempt-file = Download attempt { $a1 } for file: { $a2 }
+log-model-recovery-attempt-failed-file = Recovery attempt { $a1 } failed for file { $a2 }: { $a3 }
+log-model-recovery-attempt-file = Recovery attempt { $a1 } for file: { $a2 }
+log-model-local-model-path-detected = Local model path detected but no repo_id provided for recovery of { $a1 }
+log-model-backed-up-corrupted-file = Backed up corrupted file to: { $a1 }
+log-model-verification-after-recovery-failed = Verification after recovery failed: { $a1 }
+log-model-verifying-recovered-files = Verifying recovered files...
+log-model-failed-recover-file = Failed to recover file: { $a1 }
+log-model-successfully-recovered-file = Successfully recovered file: { $a1 }
+log-model-attempting-recover-corrupted-file = Attempting to recover corrupted file: { $a1 }
+log-model-starting-recovery-model-corrupted = Starting recovery for model '{ $a1 }', { $a2 } corrupted files detected
+log-monitor-failed-get-memory-info = Failed to get memory info: { $a1 }
+log-security-failed-read-key-file = Failed to read key file metadata for permission hardening: { $a1 }
+log-security-failed-set-restrictive-permissions = Failed to set restrictive permissions on key file: { $a1 }
+log-service-failed-fallback-cpu = Failed to fallback to CPU: { $a1 }
+log-service-successfully-fell-back-cpu = Successfully fell back to CPU, retrying operation
+log-service-fallback-already-triggered-cannot = Fallback already triggered, cannot retry
+log-service-oom-error-detected-attempting = OOM error detected: { $a1 }. Attempting fallback to CPU (attempt { $a2 }/{ $a3 })
+log-service-decision-inference-task-failed = decision inference task failed: { $e }
+log-service-estimate-model-bytes-cannot = estimate_model_bytes: cannot read model directory { $a1 } ({ $e }), accounting 0 bytes
+log-service-memory-limit-accounting-initial = memory limit accounting (initial): model { $a1 } ≈ { $est } bytes
+log-service-local-model-config-cleared = Local model config cleared for { $a1 }
+log-service-model-unloaded-via-modelmanager = Model { $a1 } unloaded via ModelManager
+log-service-memory-limit-accounting-model = memory limit accounting: model { $a1 } ≈ { $new_est } bytes
+log-service-unloading-previous-model = Unloading previous model: { $a1 }
+log-service-model-switched-successfully = Model switched successfully to { $a1 }
+log-service-switching-model-from = Switching model from { $a1 } to { $a2 }
+log-service-successfully-fell-back-cpu-2 = Successfully fell back to CPU, retrying batch chunk { $a1 }
+log-service-oom-error-detected-batch = OOM error detected in batch chunk { $a1 }: { $a2 }. Attempting fallback to CPU (attempt { $a3 }/{ $a4 })
+log-service-normalize-l2-failed-truncated = normalize_l2 failed for truncated embedding: { $a1 }
+log-service-processed-paragraphs-2-ms = Processed { $a1 } paragraphs in { $a2 }ms
+log-service-processed-lines-2-ms = Processed { $a1 } lines in { $a2 }ms
+log-service-file-streaming-failed = File streaming failed: { $a1 }
+log-service-cache-warm-up-completed = Cache warm-up completed: { $a1 }/{ $a2 } entries preloaded
+log-service-warm-up-batch-failed = Warm-up batch failed, skipping { $a1 } texts: { $a2 }
+log-service-warm-up-skip-non = warm-up: skip non-finite embedding for '{ $a1 }...'
+log-service-dimension-mismatch-expected-got = Dimension mismatch: expected { $a1 }, got { $a2 }. Model '{ $a3 }' may have been configured incorrectly or the wrong model was loaded.
+log-service-embedding-cache-wal-replay = Embedding cache WAL replay from { $a1 }
+log-service-model-heat-save-failed = model heat save failed: { $e }
+log-service-transcribe-segments-chars-ms = transcribe: { $a1 } segments, { $a2 } chars, { $a3 } ms
+log-service-translation-inference-task-failed = translation inference task failed: { $e }
+log-util-list-tree-failed-repo = list_tree failed for '{ $repo_id }' ({ $e }); size-verified short-circuit unavailable, re-downloading all manifest files
+log-util-hf-endpoint-detected-hf = HF_ENDPOINT={ $a1 } detected — hf-hub 1.0.0 requires ETag headers which some mirrors (e.g. hf-mirror.com) may not provide. If model download fails with 'missing ETag header', pre-download the model manually and set `model_path` in config to use local loading instead.
+cli-poc-transcribe-own-e = transcribe-own: { $e }
+cli-poc-transcribe-own-pipeline-done = transcribe-own: pipeline done in { $wall_s }s -> { $a1 }
+cli-poc-transcribe-own-vad-only = transcribe-own: vad-only done in { $wall_s }s -> { $a1 }
+cli-poc-transcribe-own-3-s = transcribe-own: [{ $a1 }s] worker { $w } segment { $a2 }/{ $a3 } [{ $a4 }s-{ $a5 }s] { $a6 } chars
+cli-poc-transcribe-own-3-s-2 = transcribe-own: [{ $a1 }s] vad done: { $a2 } segments
+cli-poc-transcribe-own-wav-loaded = transcribe-own: wav loaded: { $a1 } samples, { $audio_seconds }s
+cli-poc-transcribe-own-name-path = transcribe-own: { $name } path carries annotation text, normalized: { $a1 } -> { $a2 }
+cli-poc-transcribe-own-backend-py = transcribe-own: backend=py-torch (embedded CPython, GPU 1.7B bf16)
+cli-poc-transcribe-own-key-retired = transcribe-own: { $key } retired (experiment path removed; conclusions recorded in out/transcribe-poc/own-engine/summary.md) — ignored
+cli-poc-transcribe-own-decoding-segments = transcribe-own: decoding { $segments_len } segments with { $workers } workers (ort-intra={ $intra }); loading { $workers } session sets...
+
+# ── CLI --help surface (sdforge protocol registry; en mirrors the #[forge(description)] literal) ──
+forge-cli-compute-similarity = Compute cosine similarity between two texts
+forge-cli-decisions = Answer choice/score/noul questions about a decision state
+forge-cli-detect = Detect the natural language of a text (ISO 639-1 code with 639-3 fallback)
+forge-cli-embed = Generate embedding vector for input text
+forge-cli-embed-batch = Generate embedding vectors for multiple texts in batch
+forge-cli-rerank = Rerank documents by relevance to a query
+forge-cli-search = Rank candidate texts by similarity to the query (1-to-N search)
+forge-cli-transcribe = Transcribe a 16kHz mono WAV file to text (Qwen3-ASR; requires [transcribe] enabled)
+forge-cli-translate = Translate text between configured language pairs (seq2seq)
+
+# ── Warmup diagnostics (main.rs warmup paths) ──
+warmup-decision-pipeline-failed = warmup: decision pipeline full-chain warmup failed: { $e }
+warmup-mode-decide = decide×1 (decision pipeline full-chain)
+warmup-mode-embed = embed
+warmup-incomplete = warmup: incomplete (mode={ $mode }, { $failures } failures, { $elapsed }) — first request may be slower
+warmup-complete = warmup: warmup inference complete (mode={ $mode }, { $elapsed })

@@ -144,14 +144,26 @@ impl DeviceManager {
         });
 
         if let Err(e) = self.cuda_device_manager.initialize().await {
-            log::warn!("Failed to initialize CUDA device manager: {}", e);
+            log::warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-failed-initialize-cuda-device-2",
+                    crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                )
+            );
         }
 
         if self.cuda_device_manager.is_supported().await
             && let Some(cuda_device) = self.cuda_device_manager.primary_device().await
         {
             devices.push(cuda_device.info());
-            log::info!("CUDA device initialized: {}", cuda_device.name());
+            log::info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-cuda-device-initialized",
+                    crate::i18n::tr_args(&[("a1", (cuda_device.name()))])
+                )
+            );
         }
 
         if let Some(gpu_stats) = self.memory_monitor.get_gpu_stats().await
@@ -167,7 +179,13 @@ impl DeviceManager {
         }
 
         if let Err(e) = self.amd_device_manager.initialize().await {
-            log::warn!("Failed to initialize AMD device manager: {}", e);
+            log::warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-failed-initialize-amd-device",
+                    crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                )
+            );
         }
 
         let amd_devices = self.amd_device_manager.devices().await;
@@ -222,10 +240,14 @@ impl DeviceManager {
             .count();
         if amd_count != expected_amd {
             log::warn!(
-                "refresh_devices: AMD device count mismatch (internal: {}, amd_manager: {}). \
-                 Some devices may not be updated.",
-                expected_amd,
-                amd_count
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-refresh-devices-amd-device",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(expected_amd).to_string()),
+                        ("a2", &(amd_count).to_string())
+                    ])
+                )
             );
         }
         for (device_info, amd_device) in devices.iter_mut().zip(amd_devices.iter()) {
@@ -260,7 +282,10 @@ impl DeviceManager {
                     return device.device_type.clone();
                 }
             }
-            warn!("No available GPU, falling back to CPU");
+            warn!(
+                "{}",
+                crate::i18n::tr("log-device-available-gpu-falling-back")
+            );
             return DeviceType::Cpu;
         }
 
@@ -278,7 +303,10 @@ impl DeviceManager {
             }
         }
 
-        warn!("No available devices, using CPU");
+        warn!(
+            "{}",
+            crate::i18n::tr("log-device-available-devices-using-cpu")
+        );
         DeviceType::Cpu
     }
 
@@ -321,8 +349,14 @@ impl DeviceManager {
                     None => {
                         // 查询失败按 0 可用处理（保守），不得伪装显存充足（审计 D24）
                         warn!(
-                            "available_memory query failed for device {}, reporting 0 available",
-                            cuda_device.device_id()
+                            "{}",
+                            crate::i18n::tr_with_args(
+                                "log-device-available-memory-query-failed",
+                                crate::i18n::tr_args(&[(
+                                    "a1",
+                                    &(cuda_device.device_id()).to_string()
+                                )])
+                            )
                         );
                         0
                     }
@@ -372,8 +406,11 @@ impl DeviceManager {
                 Some(v) => v,
                 None => {
                     warn!(
-                        "available_memory query failed for device {}, reporting 0 available",
-                        d.device_id()
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-device-available-memory-query-failed",
+                            crate::i18n::tr_args(&[("a1", &(d.device_id()).to_string())])
+                        )
                     );
                     0
                 }
@@ -401,7 +438,10 @@ impl DeviceManager {
     }
 
     pub async fn fallback_to_cpu(&self) -> DeviceType {
-        info!("Memory pressure detected, falling back to CPU");
+        info!(
+            "{}",
+            crate::i18n::tr("log-device-memory-pressure-detected-falling")
+        );
         self.memory_monitor.refresh().await;
         DeviceType::Cpu
     }
@@ -481,7 +521,10 @@ impl DeviceManager {
 
     pub async fn trigger_fallback(&self) -> DeviceType {
         if !self.auto_fallback_enabled {
-            log::info!("Auto-fallback disabled, skipping fallback to CPU");
+            log::info!(
+                "{}",
+                crate::i18n::tr("log-device-auto-fallback-disabled-skipping")
+            );
             return DeviceType::Cpu;
         }
         self.memory_limit_controller.trigger_fallback().await;

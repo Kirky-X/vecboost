@@ -77,7 +77,8 @@ pub async fn forge_translate(req: TranslateRequest) -> Result<TranslateResponse,
     name = "translate",
     version = 1,
     cli = true,
-    description = "Translate text between configured language pairs (seq2seq)"
+    description = "Translate text between configured language pairs (seq2seq)",
+    i18n_key = "forge-cli-translate"
 )]
 pub async fn cli_translate(req: TranslateRequest) -> Result<TranslateResponse, ApiError> {
     translate_handler(req).await

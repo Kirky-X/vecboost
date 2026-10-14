@@ -32,7 +32,13 @@ pub async fn metrics_endpoint(
         .kit
         .require::<crate::registry::PrometheusCollectorModule>()
         .unwrap_or_else(|e| {
-            log::error!("PrometheusCollectorModule not registered: {}", e);
+            log::error!(
+                "{}",
+                i18n::tr_with_args(
+                    "log-metrics-collector-unregistered",
+                    i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
             None
         });
 
@@ -62,7 +68,13 @@ pub async fn metrics_endpoint(
     {
         Ok(resp) => resp.into_response(),
         Err(e) => {
-            log::error!("Failed to build metrics response: {}", e);
+            log::error!(
+                "{}",
+                i18n::tr_with_args(
+                    "log-metrics-response-build-failed",
+                    i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
             json_error_response(500, &i18n::tr("metrics-encode-failed"))
         }
     }
@@ -88,7 +100,13 @@ async fn enforce_metrics_rate_limit(
         .kit
         .require::<crate::registry::IpWhitelistModule>()
         .unwrap_or_else(|e| {
-            log::error!("IpWhitelistModule not registered: {}", e);
+            log::error!(
+                "{}",
+                i18n::tr_with_args(
+                    "log-metrics-ip-allowlist-unregistered",
+                    i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
             Vec::new()
         });
 
@@ -106,8 +124,11 @@ async fn enforce_metrics_rate_limit(
         Err(e) => {
             // Fail-closed: RateLimitEnabled=true but module unavailable → deny request
             log::error!(
-                "RateLimitModule not available while RateLimitEnabled=true: {}. Denying request.",
-                e
+                "{}",
+                i18n::tr_with_args(
+                    "log-metrics-ratelimit-unavailable",
+                    i18n::tr_args(&[("detail", &e.to_string())]),
+                )
             );
             return Some(json_error_response(
                 500,
@@ -255,7 +276,13 @@ pub fn json_error_response(status: u16, message: &str) -> axum::response::Respon
         .header("content-type", "application/json")
         .body(axum::body::Body::from(body.to_string()))
         .unwrap_or_else(|e| {
-            log::error!("Failed to build JSON error response: {}", e);
+            log::error!(
+                "{}",
+                i18n::tr_with_args(
+                    "log-metrics-json-response-build-failed",
+                    i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
             axum::response::Response::new(axum::body::Body::from(r#"{"success":false}"#))
         });
     *resp.status_mut() = axum::http::StatusCode::from_u16(status)

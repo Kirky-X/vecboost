@@ -54,14 +54,24 @@ where
             Ok(result) => return Ok(result),
             Err(error) if is_oom_error(&error) && attempts <= MAX_FALLBACK_ATTEMPTS => {
                 warn!(
-                    "OOM error detected: {}. Attempting fallback to CPU (attempt {}/{})",
-                    error, attempts, MAX_FALLBACK_ATTEMPTS
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-service-oom-error-detected-attempting",
+                        crate::i18n::tr_args(&[
+                            ("a1", &(error).to_string()),
+                            ("a2", &(attempts).to_string()),
+                            ("a3", &(MAX_FALLBACK_ATTEMPTS).to_string())
+                        ])
+                    )
                 );
 
                 let engine_read = engine.read().await;
 
                 if engine_read.is_fallback_triggered() {
-                    warn!("Fallback already triggered, cannot retry");
+                    warn!(
+                        "{}",
+                        crate::i18n::tr("log-service-fallback-already-triggered-cannot")
+                    );
                     return Err(VecboostError::OutOfMemory(i18n::tr("oom-no-fallback")));
                 }
 
@@ -77,11 +87,20 @@ where
 
                     match fallback_result {
                         Ok(()) => {
-                            warn!("Successfully fell back to CPU, retrying operation");
+                            warn!(
+                                "{}",
+                                crate::i18n::tr("log-service-successfully-fell-back-cpu")
+                            );
                             continue;
                         }
                         Err(e) => {
-                            warn!("Failed to fallback to CPU: {}", e);
+                            warn!(
+                                "{}",
+                                crate::i18n::tr_with_args(
+                                    "log-service-failed-fallback-cpu",
+                                    crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                                )
+                            );
                             return Err(VecboostError::OutOfMemory(i18n::tr_with_args(
                                 "oom-fallback-failed",
                                 i18n::tr_args(&[("detail", &e.to_string())]),

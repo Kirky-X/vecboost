@@ -109,7 +109,13 @@ impl SmartGpuMemoryManager {
         let model_name = requirements.model_name.clone();
         self.model_requirements
             .insert(model_name.clone(), requirements);
-        info!("Registered memory requirements for model: {}", model_name);
+        info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-device-registered-memory-requirements-model",
+                crate::i18n::tr_args(&[("a1", &(model_name).to_string())])
+            )
+        );
     }
 
     /// 计算最优批量大小
@@ -151,8 +157,14 @@ impl SmartGpuMemoryManager {
         // 如果找不到合适的批量大小，使用最小值
         if optimal < self.config.min_batch_size {
             warn!(
-                "Insufficient GPU memory for model '{}', using minimum batch size {}",
-                model_name, self.config.min_batch_size
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-insufficient-gpu-memory-model",
+                    crate::i18n::tr_args(&[
+                        ("a1", (model_name)),
+                        ("a2", &(self.config.min_batch_size).to_string())
+                    ])
+                )
             );
             return Ok(self.config.min_batch_size);
         }
@@ -207,15 +219,29 @@ impl SmartGpuMemoryManager {
             // 性能良好，可以增加批量
             new_batch_size = std::cmp::min(new_batch_size * 2, self.config.max_batch_size);
             info!(
-                "Increasing batch size to {} (latency: {:.1}ms, memory: {:.1}%)",
-                new_batch_size, avg_latency, avg_memory
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-increasing-batch-size-latency",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(new_batch_size).to_string()),
+                        ("a2", &format!("{:.1}", avg_latency)),
+                        ("a3", &format!("{:.1}", avg_memory))
+                    ])
+                )
             );
         } else if avg_latency > 100.0 || avg_memory > 90.0 {
             // 性能下降，减少批量
             new_batch_size = std::cmp::max(new_batch_size / 2, self.config.min_batch_size);
             warn!(
-                "Decreasing batch size to {} (latency: {:.1}ms, memory: {:.1}%)",
-                new_batch_size, avg_latency, avg_memory
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-decreasing-batch-size-latency",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(new_batch_size).to_string()),
+                        ("a2", &format!("{:.1}", avg_latency)),
+                        ("a3", &format!("{:.1}", avg_memory))
+                    ])
+                )
             );
         }
 
@@ -246,8 +272,14 @@ impl SmartGpuMemoryManager {
     pub fn deallocate(&mut self, bytes: u64) {
         if bytes > self.current_allocations {
             warn!(
-                "Attempted to deallocate {} bytes but only {} bytes allocated",
-                bytes, self.current_allocations
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-attempted-deallocate-bytes-but",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(bytes).to_string()),
+                        ("a2", &(self.current_allocations).to_string())
+                    ])
+                )
             );
             self.current_allocations = 0;
         } else {

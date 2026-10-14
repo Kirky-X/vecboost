@@ -251,13 +251,22 @@ impl EncryptedFileKeyStore {
                     let mut perms = meta.permissions();
                     perms.set_mode(0o600);
                     if let Err(e) = file.set_permissions(perms).await {
-                        log::warn!("Failed to set restrictive permissions on key file: {}", e);
+                        log::warn!(
+                            "{}",
+                            crate::i18n::tr_with_args(
+                                "log-security-failed-set-restrictive-permissions",
+                                crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                            )
+                        );
                     }
                 }
                 Err(e) => {
                     log::warn!(
-                        "Failed to read key file metadata for permission hardening: {}",
-                        e
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-security-failed-read-key-file",
+                            crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                        )
                     );
                 }
             }

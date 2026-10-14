@@ -100,18 +100,25 @@ fn read_master_key() -> Option<[u8; 32]> {
         Ok(k) => k,
         Err(_) => {
             log::warn!(
-                "{ENCRYPTION_KEY_ENV} not set — sensitive config fields stored as plaintext. \
-                 Production deployments MUST set this to a 32-byte key \
-                 (e.g. `openssl rand -hex 32`) and enable VECBOOST_REQUIRE_ENCRYPTION=1."
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-config-encryption-key-env-set",
+                    crate::i18n::tr_args(&[("ENCRYPTION_KEY_ENV", (ENCRYPTION_KEY_ENV))])
+                )
             );
             return None;
         }
     };
     if key.len() != 32 {
         log::warn!(
-            "{ENCRYPTION_KEY_ENV} must be exactly 32 bytes for XChaCha20-Poly1305, \
-             got {} bytes — encryption disabled",
-            key.len()
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-config-encryption-key-env-must",
+                crate::i18n::tr_args(&[
+                    ("ENCRYPTION_KEY_ENV", (ENCRYPTION_KEY_ENV)),
+                    ("a1", &(key.len()).to_string())
+                ])
+            )
         );
         return None;
     }

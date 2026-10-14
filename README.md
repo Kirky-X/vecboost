@@ -289,7 +289,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 
 > **📦 内置依赖说明**: `confers`（配置）、`inklog`（日志）、`oxcache`（缓存）、`limiteron`（限流）、`trait-kit`（模块注册）为必选依赖，始终启用，无需通过 feature 开启。`sdforge` 在 `http`/`grpc`/`cli`/`mcp` 任一协议 feature 下启用。
 
-> **🧪 实验通路**: `transcribe-poc/`（独立 crate，二进制 `transcribe-own`）已收敛为薄壳 CLI——本地推理实现删除、推理经主仓门面 `vecboost::transcribe`，保留 py-torch 基线对拍通路；lockstep 合批 / GPU io-binding 实验旋钮随实验文件退役（结论见 `out/transcribe-poc/own-engine/summary.md`）。产品化实现见 `src/engine/transcribe/`，详见 [DEPRECATED.md](DEPRECATED.md)。
+> **🧪 实验通路**: `transcribe-poc/`（独立 crate，二进制 `transcribe-own`）已收敛为薄壳 CLI——本地推理实现删除、推理经主仓门面 `vecboost::transcribe`，保留 py-torch 基线对拍通路；lockstep 合批 / GPU io-binding 实验旋钮随实验文件退役（结论见 `out/transcribe-poc/own-engine/summary.md`）。产品化实现见 `src/engine/transcribe/`；调用契约原文见 [`transcribe-poc/CONTRACT.md`](transcribe-poc/CONTRACT.md)，消费面与退役规范见 [🧹 维护规范](docs/MAINTENANCE.md)。
 
 ---
 
@@ -316,6 +316,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 | [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md) | 测试栈职责划分与场景穷举矩阵 |
 | [📋 更新日志](docs/CHANGELOG.md) | 每个版本的变更记录 |
 | [🤝 贡献指南](docs/CONTRIBUTING.md) | 如何参与项目开发 |
+| [🧹 维护规范](docs/MAINTENANCE.md) | 跨变更的长期约束：转录消费面、CLI 契约、退役配置项纪律、废弃文档治理 |
 | [📈 基准数据归档](docs/benchmarks/) | 历史基准数据（相似度/批调度/语义缓存/GPU 管线） |
 | [🌍 I18N 缺失审计](docs/I18N_MISSING_AUDIT.md) | 国际化翻译键审计记录 |
 

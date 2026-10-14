@@ -91,11 +91,18 @@ impl AmdDevice {
 
         // OpenCL 无法直接查询 VRAM，使用 fallback 默认值
         warn!(
-            "AMD GPU (OpenCL) 使用 fallback 默认参数 ({}GB, compute {}.{}). \
-             OpenCL 无法查询真实 VRAM，建议通过 ROCm 路径获取准确信息",
-            DEFAULT_OPENCL_VRAM_BYTES / (1024 * 1024 * 1024),
-            DEFAULT_OPENCL_COMPUTE_CAP.0,
-            DEFAULT_OPENCL_COMPUTE_CAP.1,
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-device-amd-gpu-opencl-using",
+                crate::i18n::tr_args(&[
+                    (
+                        "a1",
+                        &(DEFAULT_OPENCL_VRAM_BYTES / (1024 * 1024 * 1024)).to_string()
+                    ),
+                    ("a2", &(DEFAULT_OPENCL_COMPUTE_CAP.0).to_string()),
+                    ("a3", &(DEFAULT_OPENCL_COMPUTE_CAP.1).to_string())
+                ])
+            )
         );
 
         let info = AmdGpuInfo {
@@ -204,9 +211,14 @@ impl AmdDevice {
             }
             Err(_) => {
                 log::warn!(
-                    "GPU memory allocation failed: requested {} bytes, available {} bytes",
-                    bytes,
-                    self.available_memory()
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-device-gpu-memory-allocation-failed",
+                        crate::i18n::tr_args(&[
+                            ("a1", &(bytes).to_string()),
+                            ("a2", &(self.available_memory()).to_string())
+                        ])
+                    )
                 );
                 false
             }
@@ -252,7 +264,13 @@ fn query_amd_driver_version() -> String {
     if let Ok(version) = std::fs::read_to_string("/sys/module/amdgpu/version") {
         let trimmed = version.trim().to_string();
         if !trimmed.is_empty() {
-            info!("AMD 驱动版本 (sysfs): {}", trimmed);
+            info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-device-amd-driver-version-sysfs",
+                    crate::i18n::tr_args(&[("a1", &(trimmed).to_string())])
+                )
+            );
             return trimmed;
         }
     }
@@ -268,14 +286,20 @@ fn query_amd_driver_version() -> String {
             if let Some(ver) = line.strip_prefix("Driver version:") {
                 let trimmed = ver.trim().to_string();
                 if !trimmed.is_empty() {
-                    info!("AMD 驱动版本 (rocm-smi): {}", trimmed);
+                    info!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-device-amd-driver-version-rocm",
+                            crate::i18n::tr_args(&[("a1", &(trimmed).to_string())])
+                        )
+                    );
                     return trimmed;
                 }
             }
         }
     }
     debug!(
-        "AMD 驱动版本查询失败，使用 fallback: {}",
+        "AMD driver version query failed, using fallback: {}",
         DEFAULT_DRIVER_VERSION
     );
     DEFAULT_DRIVER_VERSION.to_string()
@@ -299,15 +323,30 @@ fn query_rocm_vram(index: usize) -> u64 {
                 // 尝试提取数字 (MiB)
                 if let Some(mib) = extract_number_from_line(line) {
                     let bytes = mib * 1024 * 1024;
-                    info!("ROCm VRAM (rocm-smi, device {}): {} MB", index, mib);
+                    info!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-device-rocm-vram-rocm-smi",
+                            crate::i18n::tr_args(&[
+                                ("a1", &(index).to_string()),
+                                ("a2", &(mib).to_string())
+                            ])
+                        )
+                    );
                     return bytes;
                 }
             }
         }
     }
     warn!(
-        "ROCm VRAM 查询失败，使用 fallback 默认值: {}GB",
-        DEFAULT_ROCM_VRAM_BYTES / (1024 * 1024 * 1024)
+        "{}",
+        crate::i18n::tr_with_args(
+            "log-device-rocm-vram-query-failed",
+            crate::i18n::tr_args(&[(
+                "a1",
+                &(DEFAULT_ROCM_VRAM_BYTES / (1024 * 1024 * 1024)).to_string()
+            )])
+        )
     );
     DEFAULT_ROCM_VRAM_BYTES
 }
@@ -324,7 +363,13 @@ fn query_rocm_version() -> Option<String> {
             if let Some(ver) = line.strip_prefix("ROCm version:") {
                 let trimmed = ver.trim().to_string();
                 if !trimmed.is_empty() {
-                    info!("ROCm 版本: {}", trimmed);
+                    info!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-device-rocm-version",
+                            crate::i18n::tr_args(&[("a1", &(trimmed).to_string())])
+                        )
+                    );
                     return Some(trimmed);
                 }
             }
@@ -384,7 +429,10 @@ impl AmdDeviceManager {
             return Ok(());
         }
 
-        log::info!("Initializing AMD GPU device manager...");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-device-initializing-amd-gpu-device")
+        );
 
         let mut devices = self.devices.write().await;
         devices.clear();
@@ -395,9 +443,14 @@ impl AmdDeviceManager {
         for i in 0..4 {
             if let Some(device) = AmdDevice::from_rocm(i) {
                 log::info!(
-                    "Found ROCm-compatible AMD GPU: {} with {} bytes VRAM",
-                    device.name(),
-                    device.vram_bytes()
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-device-found-rocm-compatible-amd",
+                        crate::i18n::tr_args(&[
+                            ("a1", (device.name())),
+                            ("a2", &(device.vram_bytes()).to_string())
+                        ])
+                    )
                 );
                 devices.push(Arc::new(device));
                 rocm_found = true;
@@ -408,9 +461,14 @@ impl AmdDeviceManager {
             for i in 0..4 {
                 if let Some(device) = AmdDevice::from_opencl(i) {
                     log::info!(
-                        "Found OpenCL-compatible AMD GPU: {} with {} bytes VRAM",
-                        device.name(),
-                        device.vram_bytes()
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-device-found-opencl-compatible-amd",
+                            crate::i18n::tr_args(&[
+                                ("a1", (device.name())),
+                                ("a2", &(device.vram_bytes()).to_string())
+                            ])
+                        )
                     );
                     devices.push(Arc::new(device));
                     opencl_found = true;
@@ -429,10 +487,15 @@ impl AmdDeviceManager {
         self.initialized.store(true, Ordering::SeqCst);
 
         log::info!(
-            "AMD GPU initialization complete. Found {} device(s) (ROCm: {}, OpenCL: {})",
-            devices.len(),
-            rocm_found,
-            opencl_found
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-device-amd-gpu-initialization-complete",
+                crate::i18n::tr_args(&[
+                    ("a1", &(devices.len()).to_string()),
+                    ("a2", &(rocm_found).to_string()),
+                    ("a3", &(opencl_found).to_string())
+                ])
+            )
         );
 
         Ok(())

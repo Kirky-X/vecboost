@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "note": "R5 棘轮基线：只允许下调，禁止上调；常驻豁免面须带 reason",
+  "files": {
+    "src/device/memory_pool/buffer_pool.rs": {
+      "count": 7,
+      "reason": "热路径常驻面（每请求/每分配触发）：按 MAINTENANCE 的日志分层原则保留英文原文，基线为上限、禁止增长；tr() 的 locale 解析与 FluentArgs 构造不应进入该路径"
+    },
+    "src/device/memory_pool/cuda_pool.rs": {
+      "count": 7,
+      "reason": "热路径常驻面（每请求/每分配触发）：按 MAINTENANCE 的日志分层原则保留英文原文，基线为上限、禁止增长；tr() 的 locale 解析与 FluentArgs 构造不应进入该路径"
+    },
+    "src/device/memory_pool/model_pool.rs": {
+      "count": 6,
+      "reason": "热路径常驻面（每请求/每分配触发）：按 MAINTENANCE 的日志分层原则保留英文原文，基线为上限、禁止增长；tr() 的 locale 解析与 FluentArgs 构造不应进入该路径"
+    },
+    "src/device/memory_pool/pool_manager.rs": {
+      "count": 12,
+      "reason": "热路径常驻面（每请求/每分配触发）：按 MAINTENANCE 的日志分层原则保留英文原文，基线为上限、禁止增长；tr() 的 locale 解析与 FluentArgs 构造不应进入该路径"
+    },
+    "src/pipeline/worker.rs": {
+      "count": 17,
+      "reason": "热路径常驻面（每请求/每分配触发）：按 MAINTENANCE 的日志分层原则保留英文原文，基线为上限、禁止增长；tr() 的 locale 解析与 FluentArgs 构造不应进入该路径"
+    },
+    "src/pipeline/response_channel.rs": {
+      "count": 4,
+      "reason": "热路径常驻面（每请求/每分配触发）：按 MAINTENANCE 的日志分层原则保留英文原文，基线为上限、禁止增长；tr() 的 locale 解析与 FluentArgs 构造不应进入该路径"
+    },
+    "src/utils/vquant.rs": {
+      "count": 2,
+      "reason": "每向量量化路径的数值不变量诊断（高频），保留英文以便 grep 与零额外分配"
+    },
+    "src/metrics/performance/mod.rs": {
+      "count": 4,
+      "reason": "基准/压力测试仪表输出（供 criterion 与脚本 grep），非产品 UI 文案"
+    },
+    "src/metrics/inference.rs": {
+      "count": 1,
+      "reason": "基准/压力测试仪表输出（供 criterion 与脚本 grep），非产品 UI 文案"
+    },
+    "src/i18n/mod.rs": {
+      "count": 2,
+      "reason": "i18n 引导自身的日志：此站点执行于 I18N OnceLock 初始化过程中，tr() 尚未可用（会回退裸键名）"
+    },
+    "src/main.rs": {
+      "count": 1,
+      "reason": "日志 tag 前缀 [thread-tune]，机器可 grep 的稳定标识；正文已由 startup-thread-tune / startup-threads-numa 键国际化"
+    }
+  }
+}

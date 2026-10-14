@@ -119,6 +119,31 @@ fn build_zh_bundle() -> FluentBundle<FluentResource> {
     bundle
 }
 
+/// Protocol-surface message keys (`forge-*`) from the embedded EN catalog.
+///
+/// These are the i18n keys handed to sdforge's runtime translation hook
+/// (`CliBuilder` resolves them via `translate_or_fallback` when building
+/// `--help`). Deriving the list from the FTL itself keeps a single source of
+/// truth: adding a `forge-*` message registers it, no second list to update.
+pub(crate) fn protocol_message_keys() -> &'static [String] {
+    static KEYS: OnceLock<Vec<String>> = OnceLock::new();
+    KEYS.get_or_init(|| {
+        EN_FTL
+            .lines()
+            .filter_map(|line| {
+                // 顶格 `key =` 行才算消息定义；注释与缩进续行排除
+                let key = line.split('=').next()?.trim();
+                (line == line.trim_start()
+                    && !key.is_empty()
+                    && !key.starts_with('#')
+                    && key.starts_with("forge-"))
+                .then(|| key.to_string())
+            })
+            .collect()
+    })
+    .as_slice()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,6 +280,24 @@ mod tests {
         assert_eq!(msg, "Text at index 0 exceeds max length 8192 (got 9000)");
     }
 
+    /// 守卫(默认语言):EN 内嵌 FTL 不得出现任何 CJK 字符（含注释）——否则默认
+    /// 环境下 en 用户会看到中文，违反「默认显示语言严格为英文」。
+    /// 同时断言 ZH 侧确实含中文，防止 zh 被误写成英文而使双语静默失效。
+    #[test]
+    fn test_en_bundles_have_no_cjk() {
+        let has_cjk = |c: char| ('\u{4e00}'..='\u{9fff}').contains(&c);
+        let offending: Vec<_> = EN_FTL
+            .lines()
+            .filter(|line| line.chars().any(has_cjk))
+            .map(|line| line.trim().to_string())
+            .collect();
+        assert!(offending.is_empty(), "en FTL 含 CJK 的行: {offending:?}");
+        assert!(
+            ZH_FTL.chars().any(has_cjk),
+            "zh FTL 未包含任何中文：双语回退已失效"
+        );
+    }
+
     #[test]
     fn test_fallback_locale_is_en() {
         assert_eq!(I18nBundle::fallback_locale().language.as_str(), "en");
@@ -263,5 +306,25 @@ mod tests {
     #[test]
     fn test_supported_locales_en_zh_only() {
         assert_eq!(SUPPORTED_LOCALES, &["en", "zh"]);
+    }
+
+    /// 守卫(协议面键):`forge-*` 键仅在 sdforge 注册表里生效（不进 `tr()` 调用面），
+    /// 因此 R3 扫不到它们；此处确保它们存在且双束都能渲染出非键名文案。
+    #[test]
+    fn test_protocol_keys_resolve_in_both_bundles() {
+        let keys = protocol_message_keys();
+        assert!(
+            !keys.is_empty(),
+            "en FTL 应至少包含一个 forge-* 协议面键（CLI --help 国际化入口）"
+        );
+        let no_args = HashMap::new();
+        for key in keys {
+            let en = format_from_bundle("en", key, &no_args);
+            let zh = format_from_bundle("zh", key, &no_args);
+            assert!(en.is_some(), "key '{key}' missing in en bundle");
+            assert!(zh.is_some(), "key '{key}' missing in zh bundle");
+            assert_ne!(en, Some(key.clone()), "en value degenerated to key");
+            assert_ne!(zh, Some(key.clone()), "zh value degenerated to key");
+        }
     }
 }

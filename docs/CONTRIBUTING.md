@@ -59,15 +59,19 @@ cargo fmt --check -p vecboost -p vecboost-examples
 cargo clippy -p vecboost -p vecboost-examples --all-targets -- -D warnings -W clippy::unwrap_used
 cargo test -p vecboost -p vecboost-examples
 python3 scripts/doc_consistency_check.py   # 修改 README/API 后
+python3 scripts/i18n_consistency_check.py # 修改用户可见文案/语言包后
 ```
 
 - `clippy.toml` 开启了 `allow-unwrap-in-tests`：生产代码禁止 `unwrap/expect` panic 面，测试豁免。
 - `deny.toml` 为 cargo-deny 配置(advisories/licenses/bans)；新豁免须写明理由。
+- i18n：**默认显示语言严格为英文**，用户可见文案（错误/日志/CLI 帮助）一律走
+  `src/i18n/locales/{en,zh}/*.ftl` 键位，禁硬编码中文；约束正文见 [MAINTENANCE](MAINTENANCE.md)。
+  豁免与基线分别记在 `scripts/i18n_allowlist.json` / `scripts/i18n_baseline.json`（后者只降不升）。
 - pre-commit 钩子（`.pre-commit-config.yaml` → `scripts/pre-commit.sh`）：fmt / clippy / check / build + Apache-2.0 版权头检查。
 
 ## 🔄 变更管理(specmark)
 
-多步骤变更走 `specmark/` 工作流：propose(proposal/design/tasks/specs)→ analyze → apply → converge → archive。`specmark/` 目录不入库(gitignore)，归档目录只读。
+多步骤变更走 `specmark/` 工作流：propose(proposal/design/tasks/specs)→ analyze → apply → converge → archive。`specmark/` 目录不入库(gitignore)，归档目录只读——发现归档稿与实现不符，勘误落在活文档（主 spec 或契约文件），不改写归档。
 
 ## 📝 提交规范
 
@@ -77,10 +81,11 @@ python3 scripts/doc_consistency_check.py   # 修改 README/API 后
 
 ## 📚 文档约定
 
-- `docs/` 平铺 UPPER_SNAKE 命名：`USER_GUIDE.md`、`API_REFERENCE.md`、`ARCHITECTURE.md`、`CHANGELOG.md`、`CONTRIBUTING.md`、`FAQ.md`、`PERFORMANCE.md`、`SECURITY.md`、`TEST_SCENARIOS.md`。
+- `docs/` 平铺 UPPER_SNAKE 命名：`USER_GUIDE.md`、`API_REFERENCE.md`、`ARCHITECTURE.md`、`CHANGELOG.md`、`CONTRIBUTING.md`、`FAQ.md`、`PERFORMANCE.md`、`SECURITY.md`、`TEST_SCENARIOS.md`、`MAINTENANCE.md`。
 - 每篇文档内部结构：`# <emoji> <标题>` → `## 📋 目录` → emoji 章节。
 - 修改 README/API 后运行 `python3 scripts/doc_consistency_check.py` 保持文档与实现一致。
 - 性能数字必须来自 `docs/benchmarks/` 实测归档或标注测量方法，禁止编造；实验结论回写 [docs/PERFORMANCE.md](PERFORMANCE.md)。
+- 跨变更的长期约束（转录消费面、`transcribe-own` CLI 契约、退役配置项纪律、废弃文档治理）统一沉在 [🧹 维护规范](MAINTENANCE.md)；根目录不保留 `DEPRECATED.md` 这类历史叙述型废弃报告，一次性退役说明随变更进归档。
 
 ## 🔐 安全
 

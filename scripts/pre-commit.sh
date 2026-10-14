@@ -7,6 +7,7 @@
 # 子命令：
 #   check      运行 fmt + clippy + check + build（pre-commit 钩子使用）
 #   copyright   检查所有 .rs 文件的版权头
+#   i18n       i18n 一致性核验（默认英文 + 硬编码文案回流拦截）
 #   install     安装 pre-commit Git 钩子
 #   uninstall   移除 pre-commit Git 钩子
 #   run         手动运行 check
@@ -142,6 +143,24 @@ cmd_copyright() {
     print_success "Copyright Header Check PASSED"
     echo "All ${#files[@]} .rs files have correct copyright headers."
     exit 0
+}
+
+# =============================================================================
+# i18n：一致性核验（默认英文 + 硬编码文案回流拦截）
+# =============================================================================
+cmd_i18n() {
+    print_header "i18n Consistency Check"
+    if python3 "$PROJECT_ROOT/scripts/i18n_consistency_check.py" "$@"; then
+        print_success "i18n consistency check PASSED"
+        exit 0
+    fi
+    print_error "i18n consistency check FAILED"
+    echo "修复路径："
+    echo "  1. 新增/变更用户可见文案 → 在 src/i18n/locales/{en,zh}/*.ftl 双侧同批加键"
+    echo "  2. en 侧出现中文 → 违反默认语言约束，必须改回英文"
+    echo "  3. 例外豁免 → 写进 scripts/i18n_allowlist.json 并附 reason"
+    echo "  4. 热路径未国际化面 → 只能下调 scripts/i18n_baseline.json，禁止上调"
+    exit 1
 }
 
 # =============================================================================
@@ -368,6 +387,7 @@ show_help() {
     echo "Commands:"
     echo "  check       Run fmt + clippy + check + build (pre-commit hook)"
     echo "  copyright    Verify copyright headers in all .rs files"
+    echo "  i18n         Run the i18n consistency gate (use --list for the site inventory)"
     echo "  install      Install pre-commit Git hooks"
     echo "  uninstall    Remove pre-commit Git hooks"
     echo "  run          Run checks manually"
@@ -380,6 +400,7 @@ main() {
     case "${1:-}" in
         check) cmd_check ;;
         copyright) cmd_copyright ;;
+        i18n) cmd_i18n "${@:2}" ;;
         install) cmd_install ;;
         uninstall) cmd_uninstall ;;
         run) cmd_run ;;

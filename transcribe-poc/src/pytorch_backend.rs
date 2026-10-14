@@ -21,12 +21,8 @@ const GLUE_SRC: &str = include_str!("../../tools/torch_backend_glue.py");
 /// 一次性调用：模型以 Python 模块级单例缓存，进程生命周期内只加载一次。
 pub fn run_pytorch_baseline(wav: &Path, model_dir: &str) -> AsrResult<String> {
     Python::with_gil(|py| {
-        let glue = PyModule::from_code_bound(
-            py,
-            GLUE_SRC,
-            "torch_backend_glue.py",
-            "torch_backend_glue",
-        )?;
+        let glue =
+            PyModule::from_code_bound(py, GLUE_SRC, "torch_backend_glue.py", "torch_backend_glue")?;
         glue.call_method1("ensure_model", (model_dir,))?;
         let text: String = glue
             .call_method1("transcribe", (wav.to_string_lossy().as_ref(), model_dir))?

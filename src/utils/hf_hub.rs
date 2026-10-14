@@ -97,11 +97,11 @@ fn build_hf_repo_with_http(
 
     if let Some(endpoint) = detect_mirror_risk() {
         log::warn!(
-            "HF_ENDPOINT={} detected — hf-hub 1.0.0 requires ETag headers which \
-             some mirrors (e.g. hf-mirror.com) may not provide. If model download \
-             fails with 'missing ETag header', pre-download the model manually and \
-             set `model_path` in config to use local loading instead.",
-            endpoint
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-util-hf-endpoint-detected-hf",
+                crate::i18n::tr_args(&[("a1", &(endpoint).to_string())])
+            )
         );
     }
 
@@ -238,28 +238,34 @@ pub async fn download_files(
         // 逐 chunk 写入，无 tmp+rename），流中断/进程被杀都会留下部分文件——
         // dest 存在不等于下载完整。仅当本地字节数与远端一致才允许跳过；
         // size 表获取失败或条目未知时不短路（退化为重下，绝不假成功）。
-        let remote_sizes: std::collections::HashMap<String, u64> =
-            match repo.list_tree().recursive(true).send() {
-                Ok(entries) => entries
-                    .into_iter()
-                    .filter_map(|entry| match entry {
-                        hf_hub::repository::RepoTreeEntry::File { path, size, .. } => {
-                            Some((path, size))
-                        }
-                        _ => None,
-                    })
-                    .collect(),
-                Err(e) => {
-                    // 退化必须显性化（规则 11）：短路不可用意味着本次全清单重下
-                    //（含 1.6 GB 级资产，慢百倍量级），调用方需要可观测线索。
-                    // 安全取舍不变——绝不把未知完整性的本地文件当成功。
-                    log::warn!(
-                        "list_tree failed for '{repo_id}' ({e}); size-verified \
-                     short-circuit unavailable, re-downloading all manifest files"
-                    );
-                    Default::default()
-                }
-            };
+        let remote_sizes: std::collections::HashMap<String, u64> = match repo
+            .list_tree()
+            .recursive(true)
+            .send()
+        {
+            Ok(entries) => entries
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    hf_hub::repository::RepoTreeEntry::File { path, size, .. } => {
+                        Some((path, size))
+                    }
+                    _ => None,
+                })
+                .collect(),
+            Err(e) => {
+                // 退化必须显性化（规则 11）：短路不可用意味着本次全清单重下
+                //（含 1.6 GB 级资产，慢百倍量级），调用方需要可观测线索。
+                // 安全取舍不变——绝不把未知完整性的本地文件当成功。
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-util-list-tree-failed-repo",
+                        crate::i18n::tr_args(&[("repo_id", (repo_id)), ("e", &(e).to_string())])
+                    )
+                );
+                Default::default()
+            }
+        };
         let mut succeeded = Vec::new();
         let mut failures = Vec::new();
         for (remote, placement) in manifest {

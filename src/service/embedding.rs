@@ -237,7 +237,13 @@ impl EmbeddingService {
                 .save_heat_file(std::path::Path::new(crate::model::heat::DEFAULT_HEAT_PATH))
                 .await
             {
-                log::warn!("model heat save failed: {e}");
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-service-model-heat-save-failed",
+                        crate::i18n::tr_args(&[("e", &(e).to_string())])
+                    )
+                );
             }
         }
     }
@@ -245,7 +251,13 @@ impl EmbeddingService {
     /// 启动时顺序回放 WAL 重建缓存。persist 未启用时为 no-op。
     pub async fn load_persisted_cache(&self) {
         if let Some(path) = self.cache.persist_path() {
-            log::info!("Embedding cache WAL replay from {}", path.display());
+            log::info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-embedding-cache-wal-replay",
+                    crate::i18n::tr_args(&[("a1", &(path.display()).to_string())])
+                )
+            );
         }
         self.cache.load_persisted().await;
     }
@@ -278,8 +290,15 @@ impl EmbeddingService {
             && actual_dimension != expected
         {
             warn!(
-                "Dimension mismatch: expected {}, got {}. Model '{}' may have been configured incorrectly or the wrong model was loaded.",
-                expected, actual_dimension, config.name
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-dimension-mismatch-expected-got",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(expected).to_string()),
+                        ("a2", &(actual_dimension).to_string()),
+                        ("a3", &(config.name).to_string())
+                    ])
+                )
             );
         }
     }
@@ -343,8 +362,11 @@ impl EmbeddingService {
                         // NaN 拒绝入库（审查 MEDIUM-5）
                         if let Err(e) = crate::utils::vector::ensure_finite_embedding(&embedding) {
                             warn!(
-                                "warm-up: skip non-finite embedding for '{}...'",
-                                &text[..text.len().min(16)]
+                                "{}",
+                                crate::i18n::tr_with_args(
+                                    "log-service-warm-up-skip-non",
+                                    crate::i18n::tr_args(&[("a1", &text[..text.len().min(16)])])
+                                )
                             );
                             let _ = e;
                             continue;
@@ -357,9 +379,14 @@ impl EmbeddingService {
                 }
                 Err(e) => {
                     warn!(
-                        "Warm-up batch failed, skipping {} texts: {}",
-                        chunk.len(),
-                        e
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-service-warm-up-batch-failed",
+                            crate::i18n::tr_args(&[
+                                ("a1", &(chunk.len()).to_string()),
+                                ("a2", &(e).to_string())
+                            ])
+                        )
                     );
                 }
             }
@@ -368,9 +395,14 @@ impl EmbeddingService {
         self.cache.warm_up(cache_entries).await;
 
         log::info!(
-            "Cache warm-up completed: {}/{} entries preloaded",
-            processed_count,
-            total_texts
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-service-cache-warm-up-completed",
+                crate::i18n::tr_args(&[
+                    ("a1", &(processed_count).to_string()),
+                    ("a2", &(total_texts).to_string())
+                ])
+            )
         );
         Ok(())
     }
@@ -648,7 +680,13 @@ impl EmbeddingService {
         let result = self.process_stream_internal(reader, start_time).await;
 
         if let Err(ref e) = result {
-            log::error!("File streaming failed: {:?}", e);
+            log::error!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-file-streaming-failed",
+                    crate::i18n::tr_args(&[("a1", &format!("{:?}", e))])
+                )
+            );
         }
 
         result
@@ -727,9 +765,14 @@ impl EmbeddingService {
 
             let processing_time = start_time.elapsed();
             log::info!(
-                "Processed {} lines in {:.2}ms",
-                count,
-                processing_time.as_millis() as f64
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-processed-lines-2-ms",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(count).to_string()),
+                        ("a2", &format!("{:.2}", processing_time.as_millis() as f64))
+                    ])
+                )
             );
 
             Ok(EmbedResponse {
@@ -792,9 +835,14 @@ impl EmbeddingService {
 
         let processing_time = start_time.elapsed();
         log::info!(
-            "Processed {} paragraphs in {:.2}ms",
-            paragraph_embeddings.len(),
-            processing_time.as_millis() as f64
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-service-processed-paragraphs-2-ms",
+                crate::i18n::tr_args(&[
+                    ("a1", &(paragraph_embeddings.len()).to_string()),
+                    ("a2", &format!("{:.2}", processing_time.as_millis() as f64))
+                ])
+            )
         );
 
         Ok(EmbeddingOutput::Paragraphs(paragraph_embeddings))
@@ -1046,7 +1094,13 @@ impl EmbeddingService {
                 let embedding = if let Some(dim) = effective_dimension {
                     let mut truncated = truncate_vector(&embedding, dim);
                     if let Err(e) = normalize_l2(&mut truncated) {
-                        log::warn!("normalize_l2 failed for truncated embedding: {}", e);
+                        log::warn!(
+                            "{}",
+                            crate::i18n::tr_with_args(
+                                "log-service-normalize-l2-failed-truncated",
+                                crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                            )
+                        );
                     }
                     truncated
                 } else {
@@ -1209,14 +1263,25 @@ impl EmbeddingService {
 
                 Err(error) if Self::is_oom_error(&error) && attempts <= MAX_FALLBACK_ATTEMPTS => {
                     warn!(
-                        "OOM error detected in batch chunk {}: {}. Attempting fallback to CPU (attempt {}/{})",
-                        chunk_idx, error, attempts, MAX_FALLBACK_ATTEMPTS
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-service-oom-error-detected-batch",
+                            crate::i18n::tr_args(&[
+                                ("a1", &(chunk_idx).to_string()),
+                                ("a2", &(error).to_string()),
+                                ("a3", &(attempts).to_string()),
+                                ("a4", &(MAX_FALLBACK_ATTEMPTS).to_string())
+                            ])
+                        )
                     );
 
                     let current_engine = engine.read().await;
 
                     if current_engine.is_fallback_triggered() {
-                        warn!("Fallback already triggered, cannot retry");
+                        warn!(
+                            "{}",
+                            crate::i18n::tr("log-service-fallback-already-triggered-cannot")
+                        );
 
                         return Err(VecboostError::OutOfMemory(
                             crate::i18n::tr("oom-no-fallback").to_string(),
@@ -1234,15 +1299,24 @@ impl EmbeddingService {
                     match fallback_result {
                         Ok(()) => {
                             warn!(
-                                "Successfully fell back to CPU, retrying batch chunk {}",
-                                chunk_idx
+                                "{}",
+                                crate::i18n::tr_with_args(
+                                    "log-service-successfully-fell-back-cpu-2",
+                                    crate::i18n::tr_args(&[("a1", &(chunk_idx).to_string())])
+                                )
                             );
 
                             continue;
                         }
 
                         Err(e) => {
-                            warn!("Failed to fallback to CPU: {}", e);
+                            warn!(
+                                "{}",
+                                crate::i18n::tr_with_args(
+                                    "log-service-failed-fallback-cpu",
+                                    crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                                )
+                            );
 
                             return Err(VecboostError::OutOfMemory(format!(
                                 "OOM error and fallback failed: {}",
@@ -1349,9 +1423,14 @@ impl EmbeddingService {
         let previous_model = self.model_config.as_ref().map(|c| c.name.clone());
 
         log::info!(
-            "Switching model from {:?} to {}",
-            previous_model,
-            req.model_name
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-service-switching-model-from",
+                crate::i18n::tr_args(&[
+                    ("a1", &format!("{:?}", previous_model)),
+                    ("a2", &(req.model_name).to_string())
+                ])
+            )
         );
 
         if let Some(ref prev_name) = previous_model
@@ -1402,7 +1481,13 @@ impl EmbeddingService {
         self.finalize_switch(new_engine_arc, model_config, new_est)
             .await;
 
-        log::info!("Model switched successfully to {}", req.model_name);
+        log::info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-service-model-switched-successfully",
+                crate::i18n::tr_args(&[("a1", &(req.model_name).to_string())])
+            )
+        );
 
         Ok(ModelSwitchResponse {
             previous_model,
@@ -1622,7 +1707,13 @@ impl EmbeddingService {
 
         if let Some(ref prev_name) = previous_model {
             if !same_name {
-                log::info!("Unloading previous model: {}", prev_name);
+                log::info!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-service-unloading-previous-model",
+                        crate::i18n::tr_args(&[("a1", &(prev_name).to_string())])
+                    )
+                );
                 let _ = manager.unload(prev_name).await;
             }
         }
@@ -1646,8 +1737,14 @@ impl EmbeddingService {
             self.memory_used_est
                 .store(new_est, std::sync::atomic::Ordering::Relaxed);
             log::info!(
-                "memory limit accounting: model {} ≈ {new_est} bytes",
-                model_config.name
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-memory-limit-accounting-model",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(model_config.name).to_string()),
+                        ("new_est", &(new_est).to_string())
+                    ])
+                )
             );
         }
         self.engine = new_engine_arc;
@@ -1666,14 +1763,26 @@ impl EmbeddingService {
     pub async fn unload_model(&mut self, name: &str) -> Result<(), VecboostError> {
         if let Some(ref manager) = self.model_manager {
             manager.unload(name).await?;
-            log::info!("Model {} unloaded via ModelManager", name);
+            log::info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-model-unloaded-via-modelmanager",
+                    crate::i18n::tr_args(&[("a1", (name))])
+                )
+            );
             // 卸载后落盘热度表
             self.save_model_heat().await;
         }
 
         if self.model_config.as_ref().map(|c| &c.name) == Some(&name.to_string()) {
             self.model_config = None;
-            log::info!("Local model config cleared for {}", name);
+            log::info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-local-model-config-cleared",
+                    crate::i18n::tr_args(&[("a1", (name))])
+                )
+            );
         }
 
         // 卸载模型后清缓存
@@ -1725,8 +1834,14 @@ impl EmbeddingService {
             self.memory_used_est
                 .store(est, std::sync::atomic::Ordering::Relaxed);
             log::info!(
-                "memory limit accounting (initial): model {} ≈ {est} bytes",
-                mc.name
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-memory-limit-accounting-initial",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(mc.name).to_string()),
+                        ("est", &(est).to_string())
+                    ])
+                )
             );
         }
     }
@@ -1813,8 +1928,14 @@ fn estimate_model_bytes(path: &std::path::Path) -> u64 {
         Err(e) => {
             // 目录不可读时粗估为 0——执法被无声绕过，必须显性化（回归审查 LOW）
             log::warn!(
-                "estimate_model_bytes: 无法读取模型目录 {}（{e}），按 0 字节记账",
-                path.display()
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-estimate-model-bytes-cannot",
+                    crate::i18n::tr_args(&[
+                        ("a1", &(path.display()).to_string()),
+                        ("e", &(e).to_string())
+                    ])
+                )
             );
         }
     }

@@ -41,19 +41,33 @@ const MAX_LEN: usize = 512;
 pub fn validate_gguf_magic(path: &Path) -> Result<(), VecboostError> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).map_err(|e| {
-        VecboostError::ModelLoadError(format!("无法打开 GGUF 文件 {}: {}", path.display(), e))
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "quant-gguf-open-failed",
+            crate::i18n::tr_args(&[
+                ("path", &path.display().to_string()),
+                ("detail", &e.to_string()),
+            ]),
+        ))
     })?;
     let mut magic = [0u8; 4];
     file.read_exact(&mut magic).map_err(|e| {
-        VecboostError::ModelLoadError(format!("GGUF 文件过短 {}: {}", path.display(), e))
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "quant-gguf-too-short",
+            crate::i18n::tr_args(&[
+                ("path", &path.display().to_string()),
+                ("detail", &e.to_string()),
+            ]),
+        ))
     })?;
     let value = u32::from_le_bytes(magic);
     if value != GGUF_MAGIC {
-        return Err(VecboostError::ModelLoadError(format!(
-            "GGUF 魔数校验失败 {}: 期望 0x{:08X}，实际 0x{:08X}",
-            path.display(),
-            GGUF_MAGIC,
-            value
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "quant-gguf-magic-mismatch",
+            crate::i18n::tr_args(&[
+                ("path", &path.display().to_string()),
+                ("expected", &format!("{:08X}", GGUF_MAGIC)),
+                ("got", &format!("{:08X}", value)),
+            ]),
         )));
     }
     Ok(())
@@ -151,7 +165,11 @@ pub fn gguf_to_candle(name: &str) -> Option<String> {
             static ATTN_NORM_WARN: std::sync::Once = std::sync::Once::new();
             ATTN_NORM_WARN.call_once(|| {
                 log::warn!(
-                    "GGUF tensor '{other}': 本仓约定将其映射为 final-LN(output.LayerNorm)，                     与 llama.cpp 的 attention-LN 惯例不同；外部转换的 GGUF 请改用 output_norm 命名"
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-gguf-tensor-other-this",
+                        crate::i18n::tr_args(&[("other", &(other).to_string())])
+                    )
                 );
             });
             match other {
@@ -183,21 +201,35 @@ pub fn write_gguf_from_safetensors(
 ) -> Result<GgufWriteStats, VecboostError> {
     let weights_path = model_dir.join("model.safetensors");
     let tensors = candle_core::safetensors::load(&weights_path, &Device::Cpu).map_err(|e| {
-        VecboostError::ModelLoadError(format!(
-            "safetensors 加载失败 {}: {e}",
-            weights_path.display()
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "quant-safetensors-load-failed",
+            crate::i18n::tr_args(&[
+                ("path", &weights_path.display().to_string()),
+                ("detail", &e.to_string()),
+            ]),
         ))
     })?;
     let config: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(model_dir.join("config.json"))
-            .map_err(|e| VecboostError::ModelLoadError(format!("config.json 不可读: {e}")))?,
+        &std::fs::read_to_string(model_dir.join("config.json")).map_err(|e| {
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "quant-config-json-unreadable",
+                crate::i18n::tr_args(&[("detail", &e.to_string())]),
+            ))
+        })?,
     )
-    .map_err(|e| VecboostError::ModelLoadError(format!("config.json 解析失败: {e}")))?;
+    .map_err(|e| {
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "quant-config-json-parse-failed",
+            crate::i18n::tr_args(&[("detail", &e.to_string())]),
+        ))
+    })?;
     let u64_field = |key: &str| {
-        config
-            .get(key)
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| VecboostError::ModelLoadError(format!("config.json 缺少 {key}")))
+        config.get(key).and_then(|v| v.as_u64()).ok_or_else(|| {
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "quant-config-json-missing-key",
+                crate::i18n::tr_args(&[("key", key)]),
+            ))
+        })
     };
     let layers = u64_field("num_hidden_layers")? as u32;
     let heads = u64_field("num_attention_heads")? as u32;
@@ -217,8 +249,9 @@ pub fn write_gguf_from_safetensors(
             continue;
         }
         let Some(gguf_name) = candle_to_gguf(name) else {
-            return Err(VecboostError::ModelLoadError(format!(
-                "safetensors 张量 {name} 无 GGUF 映射（架构不支持或命名漂移）"
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "quant-tensor-no-mapping",
+                crate::i18n::tr_args(&[("name", name.as_str())]),
             )));
         };
         let is_2d_weight = tensor.dims().len() == 2 && name.ends_with(".weight");
@@ -230,15 +263,23 @@ pub fn write_gguf_from_safetensors(
                     // 块大小不整除等量化不可行 → F16 兜底（半精度存储，无块约束）
                     f16_fallback += 1;
                     QTensor::quantize(tensor, GgmlDType::F16).map_err(|e| {
-                        VecboostError::ModelLoadError(format!(
-                            "张量 {name} 目标 dtype 与 F16 兜底均失败: {e}"
+                        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                            "quant-tensor-dtype-failed",
+                            crate::i18n::tr_args(&[
+                                ("name", name.as_str()),
+                                ("detail", &e.to_string()),
+                            ]),
                         ))
                     })?
                 }
             }
         } else {
-            QTensor::quantize(tensor, GgmlDType::F32)
-                .map_err(|e| VecboostError::ModelLoadError(format!("张量 {name} 量化失败: {e}")))?
+            QTensor::quantize(tensor, GgmlDType::F32).map_err(|e| {
+                VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "quant-tensor-quantize-failed",
+                    crate::i18n::tr_args(&[("name", name.as_str()), ("detail", &e.to_string())]),
+                ))
+            })?
         };
         converted.push((gguf_name, q));
     }
@@ -268,14 +309,27 @@ pub fn write_gguf_from_safetensors(
     let trefs: Vec<(&str, &QTensor)> = converted.iter().map(|(k, v)| (k.as_str(), v)).collect();
 
     let file = std::fs::File::create(out_path).map_err(|e| {
-        VecboostError::ModelLoadError(format!("GGUF 输出不可写 {}: {e}", out_path.display()))
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "quant-gguf-output-unwritable",
+            crate::i18n::tr_args(&[
+                ("path", &out_path.display().to_string()),
+                ("detail", &e.to_string()),
+            ]),
+        ))
     })?;
     let mut writer = BufWriter::new(file);
-    gguf_file::write(&mut writer, &mrefs, &trefs)
-        .map_err(|e| VecboostError::ModelLoadError(format!("GGUF 写入失败: {e}")))?;
-    writer
-        .flush()
-        .map_err(|e| VecboostError::ModelLoadError(format!("GGUF 输出 flush 失败: {e}")))?;
+    gguf_file::write(&mut writer, &mrefs, &trefs).map_err(|e| {
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "quant-gguf-write-failed",
+            crate::i18n::tr_args(&[("detail", &e.to_string())]),
+        ))
+    })?;
+    writer.flush().map_err(|e| {
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "quant-gguf-flush-failed",
+            crate::i18n::tr_args(&[("detail", &e.to_string())]),
+        ))
+    })?;
     Ok(stats)
 }
 
@@ -296,11 +350,21 @@ impl QuantizedCandleEngine {
     pub fn load(path: &Path) -> Result<Self, VecboostError> {
         validate_gguf_magic(path)?;
         let file = std::fs::File::open(path).map_err(|e| {
-            VecboostError::ModelLoadError(format!("GGUF 打开失败 {}: {e}", path.display()))
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "quant-gguf-openfile-failed",
+                crate::i18n::tr_args(&[
+                    ("path", &path.display().to_string()),
+                    ("detail", &e.to_string()),
+                ]),
+            ))
         })?;
         let mut reader = BufReader::new(file);
-        let content = gguf_file::Content::read(&mut reader)
-            .map_err(|e| VecboostError::ModelLoadError(format!("GGUF 头解析失败: {e}")))?;
+        let content = gguf_file::Content::read(&mut reader).map_err(|e| {
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "quant-gguf-header-parse-failed",
+                crate::i18n::tr_args(&[("detail", &e.to_string())]),
+            ))
+        })?;
 
         let arch = content
             .metadata
@@ -309,9 +373,12 @@ impl QuantizedCandleEngine {
             .cloned()
             .unwrap_or_default();
         if arch != "bert" {
-            return Err(VecboostError::ModelLoadError(format!(
-                "GGUF 架构 {arch:?} 不受支持（仅 bert；文件: {}）",
-                path.display()
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "quant-gguf-arch-unsupported",
+                crate::i18n::tr_args(&[
+                    ("arch", arch.as_str()),
+                    ("path", &path.display().to_string()),
+                ]),
             )));
         }
         let meta_u32 = |key: &str| -> Result<usize, VecboostError> {
@@ -320,7 +387,12 @@ impl QuantizedCandleEngine {
                 .get(key)
                 .and_then(|v| v.to_u32().ok())
                 .map(|v| v as usize)
-                .ok_or_else(|| VecboostError::ModelLoadError(format!("GGUF 元数据缺少 {key}")))
+                .ok_or_else(|| {
+                    VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                        "quant-gguf-meta-missing-key",
+                        crate::i18n::tr_args(&[("key", key)]),
+                    ))
+                })
         };
         let num_layers = meta_u32("bert.block_count")?;
         let num_heads = meta_u32("bert.attention.head_count")?;
@@ -334,17 +406,33 @@ impl QuantizedCandleEngine {
             let qt = info
                 .read(&mut reader, content.tensor_data_offset, &dev)
                 .map_err(|e| {
-                    VecboostError::ModelLoadError(format!("GGUF 张量 {name} 读取失败: {e}"))
+                    VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                        "quant-tensor-read-failed",
+                        crate::i18n::tr_args(&[
+                            ("name", name.as_str()),
+                            ("detail", &e.to_string()),
+                        ]),
+                    ))
                 })?;
             let tensor = qt.dequantize(&dev).map_err(|e| {
-                VecboostError::ModelLoadError(format!("GGUF 张量 {name} 反量化失败: {e}"))
+                VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "quant-tensor-dequant-failed",
+                    crate::i18n::tr_args(&[("name", name.as_str()), ("detail", &e.to_string())]),
+                ))
             })?;
             let candle_name = gguf_to_candle(name).ok_or_else(|| {
-                VecboostError::ModelLoadError(format!("GGUF 张量 {name} 无 candle 映射"))
+                VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "quant-tensor-no-candle-mapping",
+                    crate::i18n::tr_args(&[("name", name.as_str())]),
+                ))
             })?;
             if map.insert(candle_name.clone(), tensor).is_some() {
-                return Err(VecboostError::ModelLoadError(format!(
-                    "GGUF 张量 {name} 映射冲突（{candle_name} 重复）"
+                return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "quant-tensor-mapping-conflict",
+                    crate::i18n::tr_args(&[
+                        ("name", name.as_str()),
+                        ("candle", candle_name.as_str()),
+                    ]),
                 )));
             }
         }
@@ -352,10 +440,15 @@ impl QuantizedCandleEngine {
         let vocab_size = map
             .get("embeddings.word_embeddings.weight")
             .ok_or_else(|| {
-                VecboostError::ModelLoadError("GGUF 缺少 token_embd.weight".to_string())
+                VecboostError::ModelLoadError(crate::i18n::tr("quant-gguf-missing-token-embd"))
             })?
             .dim(0)
-            .map_err(|e| VecboostError::ModelLoadError(format!("token_embd 维度读取失败: {e}")))?;
+            .map_err(|e| {
+                VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "quant-token-embd-dim-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                ))
+            })?;
         let type_vocab_size = map
             .get("embeddings.token_type_embeddings.weight")
             .map(|t| t.dim(0).unwrap_or(2))
@@ -382,17 +475,30 @@ impl QuantizedCandleEngine {
                 }
                 "relu" => Some(candle_transformers::models::bert::HiddenAct::Relu),
                 "swish" | "silu" => {
-                    log::warn!("GGUF hidden_act '{act}' 在 candle BERT 中无对应变体，回落 Gelu");
+                    log::warn!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-engine-gguf-hidden-act-act",
+                            crate::i18n::tr_args(&[("act", &(act).to_string())])
+                        )
+                    );
                     None
                 }
                 other => {
-                    log::warn!("GGUF config.json 未知 hidden_act '{other}'，回落 Gelu");
+                    log::warn!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-engine-gguf-config-json-unknown",
+                            crate::i18n::tr_args(&[("other", &(other).to_string())])
+                        )
+                    );
                     None
                 }
             })
             .unwrap_or_else(|| {
                 log::warn!(
-                    "GGUF config.json 未提供可识别的 hidden_act，回落 Gelu（原硬编码行为的显性化）"
+                    "{}",
+                    crate::i18n::tr("log-engine-gguf-config-json-provides")
                 );
                 candle_transformers::models::bert::HiddenAct::Gelu
             });
@@ -416,14 +522,22 @@ impl QuantizedCandleEngine {
             model_type: Some("bert".to_string()),
         };
         let vb = candle_nn::VarBuilder::from_tensors(map, DType::F32, &dev);
-        let model = candle_transformers::models::bert::BertModel::load(vb, &config)
-            .map_err(|e| VecboostError::ModelLoadError(format!("GGUF BERT 装配失败: {e}")))?;
+        let model =
+            candle_transformers::models::bert::BertModel::load(vb, &config).map_err(|e| {
+                VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "quant-bert-assembly-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                ))
+            })?;
 
         let tok_path = parent.join("tokenizer.json");
         let hf = tokenizers::Tokenizer::from_file(tok_path.as_os_str()).map_err(|e| {
-            VecboostError::ModelLoadError(format!(
-                "GGUF 同目录 tokenizer.json 加载失败（{}）: {e}",
-                tok_path.display()
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "quant-tokenizer-load-failed",
+                crate::i18n::tr_args(&[
+                    ("path", &tok_path.display().to_string()),
+                    ("detail", &e.to_string()),
+                ]),
             ))
         })?;
         let tokenizer = crate::text::SyncTokenizer::new(hf, MAX_LEN);
@@ -445,7 +559,16 @@ impl QuantizedCandleEngine {
             PoolingMode::Auto => PoolingMode::Cls, // 推断失败按 BERT 惯例 Cls
             other => other,
         };
-        log::info!("GGUF pooling inferred as {pooling:?} from identity '{pool_identity}'");
+        log::info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-gguf-pooling-inferred-as",
+                crate::i18n::tr_args(&[
+                    ("pooling", &format!("{:?}", pooling)),
+                    ("pool_identity", &(pool_identity).to_string())
+                ])
+            )
+        );
 
         Ok(Self {
             model_path: path.to_path_buf(),
@@ -520,7 +643,7 @@ impl QuantizedCandleEngine {
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?
             .into_iter()
             .next()
-            .ok_or_else(|| VecboostError::InferenceError("空 batch".to_string()))?
+            .ok_or_else(|| VecboostError::InferenceError(crate::i18n::tr("quant-empty-batch")))?
             .into_iter()
             .flatten()
             .collect();

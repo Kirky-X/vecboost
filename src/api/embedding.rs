@@ -612,7 +612,13 @@ fn switch_error_to_api_error(e: VecboostError) -> ApiError {
         // 混同为 404（EngineFactory 分派注释钉死的契约）
         VecboostError::UnsupportedTask(_) => to_api_error(e),
         e => {
-            log::error!("switch_model failed: {e}");
+            log::error!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-api-switch-model-failed-e",
+                    crate::i18n::tr_args(&[("e", &(e).to_string())])
+                )
+            );
             ApiError::NotFound {
                 resource: "model".to_string(),
                 resource_id: Some(SWITCH_MODEL_LOAD_FAILED_MESSAGE.to_string()),
@@ -638,7 +644,17 @@ fn validate_switch_paths(
     tokenizer_path: Option<&std::path::Path>,
 ) -> Result<(), ApiError> {
     let invalid_input = |field: &str, path: &std::path::Path, e: VecboostError| -> ApiError {
-        log::warn!("switch path validation rejected {field}={path:?}: {e}");
+        log::warn!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-api-switch-path-validation-rejected",
+                crate::i18n::tr_args(&[
+                    ("field", (field)),
+                    ("path", &format!("{:?}", path)),
+                    ("e", &(e).to_string())
+                ])
+            )
+        );
         ApiError::InvalidInput {
             message: SWITCH_PATH_REJECTED_MESSAGE.to_string(),
             field: Some(field.to_string()),
@@ -1160,7 +1176,8 @@ fn build_openai_embedding_objects(
     name = "embed",
     version = 1,
     cli = true,
-    description = "Generate embedding vector for input text"
+    description = "Generate embedding vector for input text",
+    i18n_key = "forge-cli-embed"
 )]
 pub async fn cli_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
     embed_handler(req).await
@@ -1171,7 +1188,8 @@ pub async fn cli_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
     name = "embed_batch",
     version = 1,
     cli = true,
-    description = "Generate embedding vectors for multiple texts in batch"
+    description = "Generate embedding vectors for multiple texts in batch",
+    i18n_key = "forge-cli-embed-batch"
 )]
 pub async fn cli_embed_batch(req: BatchEmbedRequest) -> Result<BatchEmbedResponse, ApiError> {
     embed_batch_handler(req).await
@@ -1182,7 +1200,8 @@ pub async fn cli_embed_batch(req: BatchEmbedRequest) -> Result<BatchEmbedRespons
     name = "compute_similarity",
     version = 1,
     cli = true,
-    description = "Compute cosine similarity between two texts"
+    description = "Compute cosine similarity between two texts",
+    i18n_key = "forge-cli-compute-similarity"
 )]
 pub async fn cli_compute_similarity(
     req: SimilarityRequest,
@@ -1306,7 +1325,8 @@ pub async fn grpc_search(req: SearchRequest) -> Result<SearchResponse, ApiError>
     name = "search",
     version = 1,
     cli = true,
-    description = "Rank candidate texts by similarity to the query (1-to-N search)"
+    description = "Rank candidate texts by similarity to the query (1-to-N search)",
+    i18n_key = "forge-cli-search"
 )]
 pub async fn cli_search(req: SearchRequest) -> Result<SearchResponse, ApiError> {
     search_handler(req).await

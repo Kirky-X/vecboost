@@ -114,11 +114,7 @@ pub async fn auth_middleware(
     static EMPTY_PROXIES_WARN: std::sync::Once = std::sync::Once::new();
     if auth_config.trusted_proxies.is_empty() {
         EMPTY_PROXIES_WARN.call_once(|| {
-            log::info!(
-                "trusted_proxies is empty — X-Forwarded-For is ignored; the direct peer IP is \
-                 used for rate limiting and audit. Behind a reverse proxy, configure \
-                 trusted_proxies (e.g. [\"10.0.0.0/8\"]) to honor forwarded headers."
-            );
+            log::info!("{}", crate::i18n::tr("log-auth-trusted-proxies-empty-x"));
         });
     }
 
@@ -333,8 +329,8 @@ pub async fn auth_rate_limit_middleware(
         .map(|c| c.0)
         .unwrap_or_else(|_| {
             log::warn!(
-                "RateLimitEnabled not registered, rate limiting is disabled. \
-                        This may leave endpoints unprotected in production."
+                "{}",
+                crate::i18n::tr("log-auth-ratelimitenabled-registered-rate-limiting")
             );
             false
         });
@@ -355,7 +351,13 @@ pub async fn auth_rate_limit_middleware(
         .kit
         .require::<crate::registry::IpWhitelistModule>()
         .map_err(|e| {
-            log::error!("IpWhitelistModule not registered: {}", e);
+            log::error!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-auth-ipwhitelistmodule-registered",
+                    crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                )
+            );
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
@@ -381,7 +383,13 @@ pub async fn auth_rate_limit_middleware(
         .kit
         .require::<crate::registry::RateLimitModule>()
         .map_err(|e| {
-            log::error!("RateLimitModule not registered: {}", e);
+            log::error!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-auth-ratelimitmodule-registered",
+                    crate::i18n::tr_args(&[("a1", &(e).to_string())])
+                )
+            );
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
@@ -414,7 +422,13 @@ pub async fn auth_rate_limit_middleware(
     }
 
     if !allowed {
-        log::warn!("Auth endpoint rate limit exceeded for IP: {}", ip);
+        log::warn!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-auth-auth-endpoint-rate-limit",
+                crate::i18n::tr_args(&[("a1", &(ip).to_string())])
+            )
+        );
 
         if let Ok(audit_opt) = state.kit.require::<crate::registry::AuditModule>()
             && let Some(logger) = audit_opt.as_ref()

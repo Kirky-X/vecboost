@@ -67,7 +67,10 @@ pub(crate) fn build_session(
     }
 
     let mut session = if opts.device == DeviceType::Cuda {
-        log::info!("Attempting to configure CUDA execution provider");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-attempting-configure-cuda-execution")
+        );
         #[cfg(feature = "cuda")]
         {
             builder
@@ -79,8 +82,8 @@ pub(crate) fn build_session(
         #[cfg(not(feature = "cuda"))]
         {
             log::warn!(
-                "CUDA execution provider requires the cuda feature flag; \
-                 using CPU execution provider"
+                "{}",
+                crate::i18n::tr("log-engine-cuda-execution-provider-requires")
             );
             builder
         }
@@ -144,8 +147,17 @@ fn parse_floor_mb(raw: Option<&str>) -> u64 {
     let mb = match raw {
         Some(v) => v.trim().parse::<u64>().unwrap_or_else(|_| {
             log::warn!(
-                "SESSION_MEMORY_FLOOR_MB={v:?} is not a valid integer; \
-                 falling back to default {DEFAULT_MEMORY_FLOOR_MB}MB"
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-engine-session-memory-floor-mb",
+                    crate::i18n::tr_args(&[
+                        ("v", &format!("{:?}", v)),
+                        (
+                            "DEFAULT_MEMORY_FLOOR_MB",
+                            &(DEFAULT_MEMORY_FLOOR_MB).to_string()
+                        )
+                    ])
+                )
             );
             DEFAULT_MEMORY_FLOOR_MB
         }),
@@ -158,7 +170,7 @@ fn parse_floor_mb(raw: Option<&str>) -> u64 {
 fn mem_available_bytes(meminfo: &str) -> Option<u64> {
     for line in meminfo.lines() {
         if let Some(rest) = line.strip_prefix("MemAvailable:") {
-            let kb: u64 = rest.trim().split_whitespace().next()?.parse().ok()?;
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
             return Some(kb.saturating_mul(1024));
         }
     }
@@ -205,13 +217,30 @@ pub(crate) fn ensure_memory_available(model_file: &Path) -> Result<(), VecboostE
         match memory_gate_decision(available, need, floor) {
             Ok(()) => {
                 log::info!(
-                    "memory gate passed: model={} need={need} available={available} floor={floor}",
-                    model_file.display()
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-memory-gate-passed-model",
+                        crate::i18n::tr_args(&[
+                            ("a1", &(model_file.display()).to_string()),
+                            ("need", &(need).to_string()),
+                            ("available", &(available).to_string()),
+                            ("floor", &(floor).to_string())
+                        ])
+                    )
                 );
                 Ok(())
             }
             Err(msg) => {
-                log::error!("{msg} (model={})", model_file.display());
+                log::error!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-msg-model",
+                        crate::i18n::tr_args(&[
+                            ("msg", &(msg).to_string()),
+                            ("a1", &(model_file.display()).to_string())
+                        ])
+                    )
+                );
                 Err(VecboostError::ModelLoadError(msg))
             }
         }

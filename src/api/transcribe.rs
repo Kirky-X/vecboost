@@ -43,6 +43,14 @@ use crate::registry::TranscribeModule;
 #[cfg(any(feature = "http", feature = "grpc"))]
 use sdforge::prelude::*;
 
+// 消歧：sdforge prelude 亦再导出其 utoipa(6.0)，显式导入钉住本 crate 的 5.5
+// （http forge 的 #[utoipa::path] 与 CLI 入参 ToSchema 派生均按此名解析）
+#[cfg(any(
+    all(feature = "openapi", feature = "http"),
+    all(feature = "schema", feature = "cli", feature = "transcribe")
+))]
+use ::utoipa;
+
 // =============================================================================
 // Public SDK functions
 // =============================================================================

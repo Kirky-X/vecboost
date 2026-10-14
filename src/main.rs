@@ -1730,7 +1730,8 @@ fn load_startup_config(config_path: Option<&str>) -> VecboostConfig {
 /// [logging] 配置段接入 logger；VECBOOST_LOG_LEVEL 环境变量优先级高于
 /// 配置文件（白名单含 inklog 合法别名 warning 等）。CLI/MCP 模式将全部
 /// 日志级别路由到 stderr——stdout 只承载机器可读 JSON / JSON-RPC 协议
-/// 消息（inklog ConsoleSink 不消费 enabled 标志，上游缺陷绕过）。
+/// 消息（inklog rc.8 已修复 ConsoleSink 忽略 enabled=false 的上游缺陷；
+/// 此处的 stderr 路由与其无关，只为协议纯净性）。
 async fn init_logger(
     config: &VecboostConfig,
     cli_mode: bool,

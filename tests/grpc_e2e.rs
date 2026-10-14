@@ -604,23 +604,24 @@ async fn grpc_model_switch_roundtrip_and_failure_protection() {
     .expect("embed after switch");
     assert_eq!(v["embedding"].as_array().map(Vec::len), Some(384));
 
-    // 回归（gRPC 侧）：切换不存在的模型 → 业务错误 success=false 且 4xx，非 5xx。
-    // 用非法 repo-id 格式（含空格，is_valid_hf_repo_id 必拒）：合法格式的不存在
-    // 名会被 candle 引擎当作 HF repo 联网探测，DNS 黑洞/离线环境下挂到 hf 客户端
-    // 超时（实测 ~30s），先撞 gRPC 超时层变 Timeout——e2e 必须离线可跑
-    let v = call_raw(
+    // 回归（gRPC 侧）：切换不存在的模型 → 业务错误映射真实 gRPC Status（404
+    // NotFound），非 5xx。用非法 repo-id 格式（含空格，is_valid_hf_repo_id 必拒）：
+    // 合法格式的不存在名会被 candle 引擎当作 HF repo 联网探测，DNS 黑洞/离线环境下
+    // 挂到 hf 客户端超时（实测 ~30s），先撞 gRPC 超时层变 Timeout——e2e 必须离线可跑。
+    // sdforge rc.6 起业务错误不再走 success=false 信封，改真实 Status +
+    // details UnifiedError 载荷；switch_error_to_api_error 将加载类失败统一映射 NotFound。
+    let err = call_raw(
         &mut client,
         "vecboost.model_switch",
         &json!({"model_name": "definitely not a model"}).to_string(),
         None,
     )
     .await
-    .expect("bad switch call");
-    assert_eq!(v["success"], json!(false), "无效切换应 success=false: {v}");
-    let code = v["status_code"].as_i64().unwrap_or(0);
-    assert!(
-        (400..500).contains(&code),
-        "无效切换应返回 4xx，实际 {code}: {v}"
+    .expect_err("无效切换应返回 tonic 错误");
+    assert_eq!(
+        err.code(),
+        tonic::Code::NotFound,
+        "无效切换应 404 NotFound，实际 {err}"
     );
 
     // 失败后原模型仍可用（韧性）
@@ -689,8 +690,9 @@ async fn grpc_embed_matches_http() {
         "HTTP 与 gRPC 向量逐分量差应在 1e-6 内，实际 {max_diff}"
     );
 
-    // GP-EQ02：错误映射等价 — 空文本在两协议下均为 4xx 业务错误
-    let (_, http_body) = http_request(
+    // GP-EQ02：错误映射等价 — 空文本在两协议下均为客户端错误
+    // （HTTP 400 / gRPC INVALID_ARGUMENT，经 sdforge 统一映射表对齐）
+    let (http_status, http_body) = http_request(
         server.http_port,
         "POST",
         "/api/1/embed",
@@ -698,26 +700,24 @@ async fn grpc_embed_matches_http() {
         None,
     )
     .expect("http empty");
+    assert_eq!(http_status, 400, "HTTP 空文本应 400: {http_body}");
+    // sdforge rc.6 起 HTTP 错误体为 UnifiedError 载荷 {"code","message",...}
+    // （旧 {type,...} 形已废）；code 为字符串机器码而非数字状态码
     let http_err: Value = serde_json::from_str(&http_body).unwrap_or(Value::Null);
-    // 错误响应体形如 {"error","code","error_code"}；code 缺失时以 0 兜底
-    let http_code = http_err["code"].as_i64().unwrap_or(0);
-    let v = call_raw(
+    assert_eq!(http_err["code"], json!("BAD_REQUEST"), "wire={http_err}");
+    let err = call_raw(
         &mut client,
         "vecboost.embed",
         &json!({"text": ""}).to_string(),
         None,
     )
     .await
-    .expect("grpc empty");
-    let grpc_code = v["status_code"].as_i64().unwrap_or(0);
-    assert!((400..500).contains(&grpc_code), "gRPC 空文本应 4xx: {v}");
-    if http_code != 0 {
-        assert_eq!(
-            http_code % 100,
-            grpc_code % 100,
-            "两协议错误类别应一致（4xx↔4xx）: http={http_code} grpc={grpc_code}"
-        );
-    }
+    .expect_err("gRPC 空文本应返回 tonic 错误");
+    assert_eq!(
+        err.code(),
+        tonic::Code::InvalidArgument,
+        "gRPC 空文本应 INVALID_ARGUMENT（与 HTTP 400 同轴）: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -788,33 +788,38 @@ async fn grpc_oversized_payload_rejected() {
 }
 
 #[tokio::test]
-async fn grpc_bad_json_and_empty_text_are_4xx_business_errors() {
-    if skip_without_models("grpc_bad_json_and_empty_text_are_4xx_business_errors") {
+async fn grpc_bad_json_and_empty_text_map_to_invalid_argument() {
+    if skip_without_models("grpc_bad_json_and_empty_text_map_to_invalid_argument") {
         return;
     }
     let server = spawn_server("grpc-badjson", &ServerOpts::default(), &[]);
     let mut client = connect_grpc(server.grpc_port).await;
 
-    // GP-A03 坏 JSON → success=false + 4xx 等价码（非 tonic 层错误）
-    let v = call_raw(&mut client, "vecboost.embed", "this is not json", None)
+    // GP-A03 坏 JSON → 业务 InvalidInput 映射真实 gRPC Status（INVALID_ARGUMENT，
+    // 与 HTTP 400 同轴；sdforge rc.6 起不再返回 success=false 信封）
+    let err = call_raw(&mut client, "vecboost.embed", "this is not json", None)
         .await
-        .expect("bad json call");
-    assert_eq!(v["success"], json!(false), "坏 JSON 应 success=false: {v}");
-    let code = v["status_code"].as_i64().unwrap_or(0);
-    assert!((400..500).contains(&code), "坏 JSON 应 4xx，实际 {code}");
+        .expect_err("坏 JSON 应返回 tonic 错误");
+    assert_eq!(
+        err.code(),
+        tonic::Code::InvalidArgument,
+        "坏 JSON 应 INVALID_ARGUMENT: {err}"
+    );
 
     // GP-A04 空文本业务校验错误
-    let v = call_raw(
+    let err = call_raw(
         &mut client,
         "vecboost.embed",
         &json!({"text": ""}).to_string(),
         None,
     )
     .await
-    .expect("empty text call");
-    assert_eq!(v["success"], json!(false), "空文本应 success=false: {v}");
-    let code = v["status_code"].as_i64().unwrap_or(0);
-    assert!((400..500).contains(&code), "空文本应 4xx，实际 {code}");
+    .expect_err("空文本应返回 tonic 错误");
+    assert_eq!(
+        err.code(),
+        tonic::Code::InvalidArgument,
+        "空文本应 INVALID_ARGUMENT: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1097,7 +1102,7 @@ async fn decision_auth_rate_limit_hit_returns_429_with_headers() {
 }
 
 /// 口径二：队列满背压 → 503 + Overloaded（`[pipeline.queue]
-/// max_queue_size = 0` 构造），错误体为 SERVICE_UNAVAILABLE、message 为
+/// max_queue_size = 0` 构造），错误体 code 为 UNAVAILABLE、message 为
 /// 队列满文案——与 auth 限流的 429/RateLimit-* 口径互斥，不混用限流语义。
 #[tokio::test]
 async fn decision_backpressure_queue_full_returns_503_overloaded() {
@@ -1119,13 +1124,14 @@ async fn decision_backpressure_queue_full_returns_503_overloaded() {
     .expect("decision request");
     assert_eq!(status, 503, "queue-full must backpressure with 503: {body}");
     let wire: Value = serde_json::from_str(&body).expect("error body json");
-    // sdforge ApiError::ServiceUnavailable wire：{type, service, retry_after}
-    assert_eq!(wire["type"], "ServiceUnavailable", "wire={wire}");
-    assert_eq!(wire["retry_after"], 60, "wire={wire}");
-    let service = wire["service"].as_str().unwrap_or_default();
+    // sdforge rc.6 起 ApiError HTTP 错误体为 UnifiedError 载荷：
+    // {"code","message",trace_id?,field?}（旧 {type,service,retry_after} 形已废，
+    // retry_after 不再出现在 body）
+    assert_eq!(wire["code"], "UNAVAILABLE", "wire={wire}");
+    let message = wire["message"].as_str().unwrap_or_default();
     assert!(
-        service.contains("Queue is full"),
-        "backpressure message must be the queue-full copy, got: {service}"
+        message.contains("Queue is full"),
+        "backpressure message must be the queue-full copy, got: {message}"
     );
     assert!(
         !headers

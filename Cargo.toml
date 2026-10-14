@@ -48,22 +48,33 @@ writeable = "0.6"
 # Module Registry (always required) — 保留 reload/confers 热重载 + i18n 模块消息国际化
 # negotiate(2026-09-16 吸收)：模块能力版本协商（build 时 semver 校验），
 # vecboost 全部 17 个模块已在 ModuleMeta 声明 VERSION，为跨库模块接入提供 fail-fast
-trait-kit = { version = "0.5.0-rc.6", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "confers", "i18n", "negotiate"] }
+# rc.7-rc.9 新增 probe/report/presets(-remote)/di/interface/compose/request-scope/
+# encryption 探测与装配面：/health?depth=full（src/api/embedding.rs）与
+# kit.set_config 装配已有自建实现，全部零接线不启用。
+trait-kit = { version = "0.5.0-rc.9", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "confers", "i18n", "negotiate"] }
 
 # Configuration infrastructure
 # feature 瘦身:仅保留实际接线能力(toml/env 加载、校验、watch 热重载、
 # 加密、schema 导出);config-bus/etcd/consul/nats/redis-bus/remote 等零接线项裁剪。
-confers = { version = "0.6.0-rc.5", default-features = false, features = ["toml", "env", "validation", "watch", "encryption", "schema", "typescript-schema", "modules"] }
+# rc.6-rc.10 新增 interpolation/lazy-parse/audit/key-management/cloud-kms/keyring/
+# progressive-reload/change-stream 等无消费方,同样裁剪;env/schema 为 rc.6 正名后的
+# 兼容别名(dotenv/json-schema),清单照旧解析。rc.6 起 derive_field_key/decrypt 返回
+# Zeroizing（src/config/encryption.rs 已随 rc.10 适配）。
+confers = { version = "0.6.0-rc.10", default-features = false, features = ["toml", "env", "validation", "watch", "encryption", "schema", "typescript-schema", "modules"] }
 garde = { version = "0.23", default-features = false, features = ["derive"] }
 schemars = { version = "1.2", default-features = false }
 
 # Logging infrastructure — 仅核心日志面（LoggerManager/sink）。kit 集成未使用故不启用；
 # 驱动由顶层 sqlite/postgres feature 透传 inklog/sqlite、inklog/postgres（kit 需搭配驱动，见 inklog 守卫）
-inklog = { version = "0.3.0-rc.5", default-features = false, features = ["compression", "fast-masking"] }
+# rc.6-rc.9 新增 secret-scan/schema/audit 桥/i18n/metrics-registry 等能力零接线不启用；
+# rc.8 修复 console sink 忽略 enabled=false 的上游缺陷（src/main.rs init_logger 注释同步订正）
+inklog = { version = "0.3.0-rc.9", default-features = false, features = ["compression", "fast-masking"] }
 log = { version = "0.4", default-features = false }
 
 # Cache infrastructure — 启用 trait-kit 生命周期集成
-oxcache = { version = "0.5.0-rc.5", default-features = false, features = ["core", "bloom", "compression", "macros", "batch", "lock", "kit"] }
+# rc.6-rc.8 新增 hotkey/adaptive-ttl/warmup/stale/offload/disk 等观测与存储面零接线不启用；
+# core 为 rc.6 正名后的 redis-tier 兼容别名，vecboost 仅内存后端（MokaMemoryBackend）
+oxcache = { version = "0.5.0-rc.8", default-features = false, features = ["core", "bloom", "compression", "macros", "batch", "lock", "kit"] }
 
 # Rate limiting infrastructure
 # feature 瘦身:仅保留实际接线能力(Governor/存储/matchers/审计事件/宏)。
@@ -71,9 +82,11 @@ oxcache = { version = "0.5.0-rc.5", default-features = false, features = ["core"
 # config-watcher/telemetry/monitoring/inklog/i18n 等未接线项;
 # tower-middleware 已回补(2026-09-16 吸收 IETF RateLimit-* 响应头注入,
 # 其 middleware::headers 模块被该 feature 门控;dep:tower/http 均已在依赖图内,零新增 crate)。
+# rc.6/rc.7 新增 retry/admission-control 等同样零接线不启用;监控面 rc.6 起
+# monitoring 正名为 prometheus(兼容别名保留,本仓启用 metrics,无需动作)。
 # 若 ../base 后续演进需要其中某能力,按需回补。
 # 熔断(circuit-breaker)评估:当前唯一外部依赖是本地 DB(有重试),熔断无标的,不接线。
-limiteron = { version = "0.3.0-rc.5", default-features = false, features = ["ban-manager", "gcra", "macros", "metrics", "validation", "kit", "fallback", "audit-log", "multi-tenant", "tower-middleware"] }
+limiteron = { version = "0.3.0-rc.7", default-features = false, features = ["ban-manager", "gcra", "macros", "metrics", "validation", "kit", "fallback", "audit-log", "multi-tenant", "tower-middleware"] }
 
 # Database infrastructure (db feature) — kit/migration 等未接线项按需启用
 # dbnexus re-exports ConnectionTrait/TransactionTrait, but not DatabaseBackend/Statement/Value/DbErr.
@@ -81,7 +94,9 @@ limiteron = { version = "0.3.0-rc.5", default-features = false, features = ["ban
 # 驱动选择（sqlite/postgres 互斥，由 dbnexus compile_error 强制）通过顶层
 # `sqlite` / `postgres` feature 进行——不得在依赖声明里硬编码任何驱动，
 # 否则另一驱动永久不可用（dbnexus 全图互斥）。
-dbnexus = { version = "0.6.0-rc.5", optional = true, default-features = false, features = ["runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "pool-warmup", "retry", "config-env", "observability", "failover", "replica-routing"] }
+# rc.9 PermissionCache 吸收进 oxcache（permission/cache 特性依赖图新增
+# oxcache/stale + dbnexus-limiter-port），vecboost 未直接使用该缓存，仅依赖边变化。
+dbnexus = { version = "0.6.0-rc.9", optional = true, default-features = false, features = ["runtime-tokio-rustls", "macros", "permission", "cache", "pool-health-check", "pool-warmup", "retry", "config-env", "observability", "failover", "replica-routing"] }
 # failover/replica-routing:inklog integrations::infra 无条件构造 DbConfig 的
 # failover_config/replica_config 字段(2026-09-14 dbnexus 加入门控),缺此二者
 # inklog 无法编译;../base 侧修复前由 vecboost 侧补齐。
@@ -107,6 +122,9 @@ tower-http = { version = "0.7", optional = true, default-features = false, featu
 # macros 是 utoipa::ToSchema derive 宏必需 feature(schema feature 单独启用时也工作)
 # utoipa 5.5.0 内部 schema.rs 引用 crate::utoipa::Number(被 cfg(feature="macros") 门控),
 # 不启用 macros 会导致 schema feature 单独编译失败
+# sdforge rc.6 起自身依赖 utoipa 6.0 并在 openapi 构建下经 prelude 再导出，与本
+# crate 的 5.5 在 #[forge] 展开处同名歧义（E0659）——7 个 forge 文件用显式
+# `use utoipa;` 钉住本 crate 版本（见 src/api/*.rs）；本 crate 三方版本不动。
 utoipa = { version = "5.5", optional = true, default-features = false, features = ["macros", "axum_extras", "chrono", "uuid"] }
 # vendored：Swagger UI v5.17.14 随 crate 打包（utoipa-swagger-ui-vendored），
 # build script 免联网下载——离线环境（CI 隔离/内网）下 openapi feature 可编译
@@ -128,8 +146,11 @@ reqwest = { workspace = true, optional = true, features = ["stream", "charset", 
 # gRPC is fully handled by sdforge (unified Call protocol via #[forge(grpc_method)])
 
 # Auth feature — 安全加固：firewall 系列/TOTP/凭证清零/异常检测/协议扩展/生命周期/注解宏
-# 0.9.0-rc.1（
-garrison = { version = "0.9.0-rc.2", default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "cache-audit", "account-credential", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "listener", "i18n", "firewall", "firewall-bruteforce", "firewall-ratelimit", "firewall-ddos", "firewall-anomalous", "secure-totp", "credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-ct-eq", "secure-simple-token", "web-cors", "web-security-headers", "metrics-prometheus", "grpc"], optional = true }
+# 0.9.0-rc.3（R01-R18 安全审计整改批）：扫码登录/WebAuthn/密码找回/字段加密等
+# 新产品面零接线不开；基础 i18n 在 rc.3 起无条件编译（发布版无 `i18n` feature，
+# 仅 i18n-icu 未接线），故特性清单删除 i18n，行为零变化。
+# GarrisonError::RateLimited 在 src/error.rs 显式映射限流语义（否则落 _ 兜底成 500）。
+garrison = { version = "0.9.0-rc.3", default-features = false, features = ["web-axum", "protocol-jwt", "web-csrf", "cache-memory", "cache-audit", "account-credential", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "listener", "firewall", "firewall-bruteforce", "firewall-ratelimit", "firewall-ddos", "firewall-anomalous", "secure-totp", "credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-ct-eq", "secure-simple-token", "web-cors", "web-security-headers", "metrics-prometheus", "grpc"], optional = true }
 aes-gcm = { version = "0.11", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
 
 # ONNX feature
@@ -149,7 +170,11 @@ nvml-wrapper = { version = "0.13", optional = true, default-features = false }
 # Multi-protocol SDK framework — 启用 i18n 国际化 + inklog 日志集成
 # context(2026-09-16 吸收)：request_id/trace_id 跨协议传播 + X-Request-Id/X-Trace-Id
 # 响应头回显（替代 main.rs 手写 x-request-id 闭包；traceparent/W3C 兼容）
-sdforge = { version = "0.5.0-rc.5", optional = true, default-features = false, features = ["i18n", "inklog", "context"] }
+# rc.6 起错误契约统一为 UnifiedError 载荷 {"code","message",...}（HTTP body 与
+# gRPC Status details 共享，tests/grpc_e2e.rs 断言已同步）；rc.8 删除 logging
+# 特性/StructuredLogger 栈（vecboost 自建 inklog，不启用）；docs 正名 docgen，
+# 兼容别名 docs 保留（顶层 http/openapi 特性照旧）。
+sdforge = { version = "0.5.0-rc.8", optional = true, default-features = false, features = ["i18n", "inklog", "context"] }
 
 # gRPC server 装配（grpc feature）—— garrison GarrisonGrpcAuthLayer 需要 server 级
 # tonic builder：sdforge build_server_with_config 的 auth 槽位是 BearerAuth 具体类型、

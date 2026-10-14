@@ -311,6 +311,11 @@ impl From<garrison::error::GarrisonError> for VecboostError {
                 VecboostError::InternalError(msg)
             }
             GE::Exception(ex) => VecboostError::AuthenticationError(ex.to_string()),
+            // garrison 0.9.0-rc.3（R04 统一错误模型）新增：显式映射进限流语义，
+            // 避免落 `_` 兜底被误报为 500（限流背压 wire 口径见 to_api_error）
+            GE::RateLimited { retry_after_secs } => VecboostError::RateLimitExceeded(format!(
+                "rate limited: retry after {retry_after_secs}s"
+            )),
             _ => VecboostError::InternalError(e.to_string()),
         }
     }
@@ -865,5 +870,20 @@ mod tests {
         let ge = garrison::error::GarrisonError::Internal("internal".to_string());
         let ve: VecboostError = ge.into();
         assert!(matches!(ve, VecboostError::InternalError(_)));
+    }
+
+    #[cfg(feature = "auth")]
+    #[test]
+    fn test_from_garrison_error_rate_limited() {
+        let ge = garrison::error::GarrisonError::RateLimited {
+            retry_after_secs: 7,
+        };
+        let ve: VecboostError = ge.into();
+        match ve {
+            VecboostError::RateLimitExceeded(msg) => {
+                assert!(msg.contains("retry after 7s"), "unexpected message: {msg}");
+            }
+            other => panic!("Expected RateLimitExceeded, got {:?}", other),
+        }
     }
 }

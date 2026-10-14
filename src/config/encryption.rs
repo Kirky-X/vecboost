@@ -38,6 +38,7 @@
 //! ```
 
 use confers::secret::{XChaCha20Crypto, derive_field_key};
+use zeroize::Zeroizing;
 
 /// Environment variable name for the master encryption key.
 ///
@@ -128,7 +129,10 @@ fn read_master_key() -> Option<[u8; 32]> {
 }
 
 /// Derive a 32-byte field key from the master key via HKDF-SHA256.
-fn derive_key(master: &[u8; 32]) -> Result<[u8; 32], String> {
+///
+/// confers 0.6.0-rc.6 起 `derive_field_key` 返回 `Zeroizing<[u8; 32]>`
+/// （派生密钥离开作用域时自动清零），此处保留该类型不做解包。
+fn derive_key(master: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>, String> {
     derive_field_key(master, FIELD_PATH, KEY_VERSION)
         .map_err(|e| format!("key derivation failed: {e}"))
 }
@@ -138,7 +142,7 @@ fn encrypt_to_hex(plaintext: &[u8], master: &[u8; 32]) -> Result<String, String>
     let field_key = derive_key(master)?;
     let crypto = XChaCha20Crypto::new();
     let (nonce, ciphertext) = crypto
-        .encrypt(plaintext, &field_key)
+        .encrypt(plaintext, &field_key[..])
         .map_err(|e| format!("encryption failed: {e}"))?;
     let mut combined = nonce;
     combined.extend_from_slice(&ciphertext);
@@ -154,8 +158,11 @@ fn decrypt_from_hex(encoded: &str, master: &[u8; 32]) -> Result<Vec<u8>, String>
     let (nonce_bytes, ciphertext) = combined.split_at(confers::secret::NONCE_SIZE);
     let field_key = derive_key(master)?;
     let crypto = XChaCha20Crypto::new();
+    // rc.6 起 decrypt 返回 Zeroizing<Vec<u8>>：立即取回 Vec 以保持本函数
+    // 既有签名（明文随后进入 String，本就不具备清零能力）。
     crypto
-        .decrypt(nonce_bytes, ciphertext, &field_key)
+        .decrypt(nonce_bytes, ciphertext, &field_key[..])
+        .map(|v| v.to_vec())
         .map_err(|e| format!("decryption failed: {e}"))
 }
 

@@ -25,6 +25,10 @@ use tokio::sync::RwLock;
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 use sdforge::prelude::*;
 
+// 消歧：sdforge prelude 亦再导出其 utoipa(6.0)，显式导入钉住本 crate 的 5.5
+#[cfg(all(feature = "openapi", feature = "http"))]
+use ::utoipa;
+
 // =============================================================================
 // Public SDK functions
 // =============================================================================

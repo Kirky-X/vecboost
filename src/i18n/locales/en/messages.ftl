@@ -582,3 +582,41 @@ warmup-mode-decide = decide×1 (decision pipeline full-chain)
 warmup-mode-embed = embed
 warmup-incomplete = warmup: incomplete (mode={ $mode }, { $failures } failures, { $elapsed }) — first request may be slower
 warmup-complete = warmup: warmup inference complete (mode={ $mode }, { $elapsed })
+
+# ── Candle native decision head: error returns + load-time diagnostics ──
+engine-candle-decision-checkpoint-not-found = Laya PyTorch checkpoint not found: { $path } (acquisition steps are in docs/USER_GUIDE.md, "Candle native decision path"; if you already have a receptron/laya-onnx ONNX bundle, set engine_type = "onnx" to reuse the existing assets through the ort pipeline)
+engine-candle-decision-encoder-config-read = failed to read encoder config { $path }: { $detail } (encoder/config.json of the official convaiinnovations/laya repo; acquisition steps are in docs/USER_GUIDE.md)
+log-engine-verifying-candle-decision-checkpoint-sha256 = Verifying candle decision checkpoint SHA256 hash...
+log-engine-candle-decision-engine-initialized = Candle decision engine initialized: bundle={ $a1 }, hidden={ $a2 }, layers={ $a3 }, calibration_buckets={ $a4 }
+log-engine-candle-decision-engine-using-cuda-gpu = Candle decision engine using CUDA GPU
+log-engine-candle-decision-engine-using-metal-gpu = Candle decision engine using Metal GPU
+log-engine-candle-decision-amd-fallback-cpu = Candle engine does not natively support AMD GPUs; candle decision engine falling back to CPU
+
+# ── ONNX translate engine: decode paths + load-time diagnostics ──
+engine-translate-logits-nonempty = logits must not be empty
+log-engine-tokenizer-shim-in-memory = tokenizer { $a1 }: { $a2 } (in-memory; tokenizers 0.23 parse contract)
+log-engine-translate-generation-config-unreadable = translation bundle { $a1 }: generation_config.json unreadable ({ $e }); falling back to tokenizer special tokens for decode anchors
+log-engine-translate-generation-config-missing-ids = translation bundle { $a1 }: generation_config.json missing decoder_start_token_id/eos_token_id; falling back to tokenizer special tokens for decode anchors
+log-engine-translate-parallel-workers-lazy = translation parallel workers={ $a1 } (lazy; extra session sets build on first long-parallel request)
+log-engine-translation-engine-initialized = Translation engine initialized: bundle={ $a1 }, encoder={ $a2 }, decoder={ $a3 }, precision={ $a4 }, max_source_tokens={ $a5 }, max_new_tokens={ $a6 }, decoder_start_token_id={ $a7 }, eos_token_id={ $a8 }, past_tensors={ $a9 }
+log-engine-translate-whole-text-decode-degenerated = translation whole-text decode degenerated ({ $a1 } tokens generated, { $a2 } sentences); retrying per-sentence with output budget { $a3 }
+log-engine-translate-rescue-sentence-count-exceeds = rescue sentence count { $a1 } exceeds cap { $max }; remaining sentences dropped
+log-engine-translate-rescue-budget-exhausted = rescue output budget exhausted after { $a1 } tokens; remaining sentences dropped
+log-engine-translate-parallel-session-lazy-loaded = translation parallel worker session set lazy-loaded ({ $a1 }/{ $a2 } extra sets ready)
+log-engine-translate-parallel-sentence-count-exceeds = parallel sentence count { $a1 } exceeds cap { $max }; remaining sentences dropped
+log-engine-translate-protected-token-not-recovered = protected token not recovered in translation (placeholder { $a1 }): { $a2 }
+log-engine-translate-attempting-cpu-fallback = Attempting fallback to CPU for translation engine
+log-engine-translate-successfully-fell-back-cpu = Successfully fell back to CPU for translation engine
+
+# ── Calibration tables (decision pipeline) + checkpoint inventory (main.rs) ──
+log-engine-calibration-file-missing-fallback-temperature = calibration file missing at { $a1 }: probabilities will be overconfident (uncalibrated ECE 0.466 vs 0.081 calibrated, model card); falling back to temperature { $temp } for all cardinalities
+log-engine-calibration-no-temperature-by-options = { $a1 } has no temperature_by_options field; falling back to temperature { $temp } for all cardinalities
+log-main-model-checkpoints-resolved = model checkpoints resolved: { $a1 } total (builtin laya-multilingual + { $a2 } user-configured, { $a3 } overriding the builtin)
+
+# ── transcribe-own CLI: usage / argument / env knob errors (stderr) ──
+cli-poc-transcribe-own-usage = usage: transcribe-own <wav> <outDir> [--models <dir>] [--vad-only]
+cli-poc-transcribe-own-models-requires-value = --models requires a value
+cli-poc-transcribe-own-unknown-argument = unknown argument: { $a1 }
+cli-poc-transcribe-own-env-not-valid-integer = { $key }={ $value } is not a valid integer
+cli-poc-transcribe-own-env-out-of-range = { $key }={ $value } out of range [{ $min },{ $max }]
+cli-poc-transcribe-own-ep-invalid = TRANSCRIBE_EP={ $a1 } invalid (cpu|cuda)

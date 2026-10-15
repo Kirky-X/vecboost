@@ -513,8 +513,14 @@ fn load_tokenizer(tokenizer_file: &Path) -> Result<Tokenizer, VecboostError> {
     }
     for shim in &shims {
         log::info!(
-            "tokenizer {}: {shim} (in-memory; tokenizers 0.23 parse contract)",
-            tokenizer_file.display()
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-tokenizer-shim-in-memory",
+                crate::i18n::tr_args(&[
+                    ("a1", &tokenizer_file.display().to_string()),
+                    ("a2", shim)
+                ])
+            )
         );
     }
     Tokenizer::from_str(&value.to_string()).map_err(|e| {
@@ -535,9 +541,14 @@ impl GenerationConfig {
             Ok(raw) => raw,
             Err(e) => {
                 log::warn!(
-                    "translation bundle {}: generation_config.json unreadable ({e}); \
-                     falling back to tokenizer special tokens for decode anchors",
-                    bundle_dir.display()
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-translate-generation-config-unreadable",
+                        crate::i18n::tr_args(&[
+                            ("a1", &bundle_dir.display().to_string()),
+                            ("e", &e.to_string())
+                        ])
+                    )
                 );
                 return Self::from_tokenizer_fallback(bundle_dir, tokenizer);
             }
@@ -558,9 +569,11 @@ impl GenerationConfig {
             }),
             _ => {
                 log::warn!(
-                    "translation bundle {}: generation_config.json missing decoder_start_token_id/eos_token_id; \
-                     falling back to tokenizer special tokens for decode anchors",
-                    bundle_dir.display()
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-translate-generation-config-missing-ids",
+                        crate::i18n::tr_args(&[("a1", &bundle_dir.display().to_string())])
+                    )
                 );
                 Self::from_tokenizer_fallback(bundle_dir, tokenizer)
             }
@@ -727,7 +740,7 @@ fn greedy_decode(
         let exclude = (generated.len() < min_new_tokens).then_some(eos_token_id as usize);
         let best = argmax_index(last_row, exclude)
             .or_else(|| argmax_index(last_row, None))
-            .expect("logits 非空");
+            .expect(&crate::i18n::tr("engine-translate-logits-nonempty"));
         let best = best as u32;
 
         if best == eos_token_id {
@@ -833,24 +846,30 @@ impl OnnxTranslationEngine {
         // 按需补建。P7 时延契约不变（worker 数来源与缺省均不动）。
         let parallel_workers = translation_parallel_workers();
         log::info!(
-            "translation parallel workers={parallel_workers} (lazy; extra session sets \
-             build on first long-parallel request)"
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-translate-parallel-workers-lazy",
+                crate::i18n::tr_args(&[("a1", &parallel_workers.to_string())])
+            )
         );
         let precision = precision_for_model_file(&decoder_file);
 
         log::info!(
-            "Translation engine initialized: bundle={}, encoder={:?}, decoder={:?}, \
-             precision={:?}, max_source_tokens={}, max_new_tokens={}, \
-             decoder_start_token_id={}, eos_token_id={}, past_tensors={}",
-            bundle_dir.display(),
-            encoder_file,
-            decoder_file,
-            precision,
-            params.max_source_tokens,
-            params.max_new_tokens,
-            generation.decoder_start_token_id,
-            generation.eos_token_id,
-            decode_graph.past_names.len(),
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-translation-engine-initialized",
+                crate::i18n::tr_args(&[
+                    ("a1", &bundle_dir.display().to_string()),
+                    ("a2", &format!("{encoder_file:?}")),
+                    ("a3", &format!("{decoder_file:?}")),
+                    ("a4", &format!("{precision:?}")),
+                    ("a5", &params.max_source_tokens.to_string()),
+                    ("a6", &params.max_new_tokens.to_string()),
+                    ("a7", &generation.decoder_start_token_id.to_string()),
+                    ("a8", &generation.eos_token_id.to_string()),
+                    ("a9", &decode_graph.past_names.len().to_string())
+                ])
+            )
         );
 
         Ok(Self {
@@ -993,17 +1012,26 @@ impl OnnxTranslationEngine {
             } else {
                 let sentences = split_source_sentences(&protected_text);
                 log::warn!(
-                    "translation whole-text decode degenerated ({} tokens generated, \
-                 {} sentences); retrying per-sentence with output budget {}",
-                    generated.len(),
-                    sentences.len(),
-                    self.params.max_new_tokens
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-translate-whole-text-decode-degenerated",
+                        crate::i18n::tr_args(&[
+                            ("a1", &generated.len().to_string()),
+                            ("a2", &sentences.len().to_string()),
+                            ("a3", &self.params.max_new_tokens.to_string())
+                        ])
+                    )
                 );
                 if sentences.len() > MAX_RESCUE_SENTENCES {
                     log::warn!(
-                        "rescue sentence count {} exceeds cap {MAX_RESCUE_SENTENCES}; \
-                     remaining sentences dropped",
-                        sentences.len()
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-engine-translate-rescue-sentence-count-exceeds",
+                            crate::i18n::tr_args(&[
+                                ("a1", &sentences.len().to_string()),
+                                ("max", &MAX_RESCUE_SENTENCES.to_string())
+                            ])
+                        )
                     );
                 }
                 let sentence_ids_list = sentences
@@ -1029,8 +1057,11 @@ impl OnnxTranslationEngine {
                     for sentence_ids in &sentence_ids_list {
                         if rescue_budget == 0 {
                             log::warn!(
-                                "rescue output budget exhausted after {produced} tokens; \
-                             remaining sentences dropped"
+                                "{}",
+                                crate::i18n::tr_with_args(
+                                    "log-engine-translate-rescue-budget-exhausted",
+                                    crate::i18n::tr_args(&[("a1", &produced.to_string())])
+                                )
                             );
                             break;
                         }
@@ -1131,9 +1162,14 @@ impl OnnxTranslationEngine {
             )?;
             sets.push(Arc::new(Mutex::new(sessions)));
             log::info!(
-                "translation parallel worker session set lazy-loaded ({}/{} extra sets ready)",
-                sets.len(),
-                worker_count - 1
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-engine-translate-parallel-session-lazy-loaded",
+                    crate::i18n::tr_args(&[
+                        ("a1", &sets.len().to_string()),
+                        ("a2", &(worker_count - 1).to_string())
+                    ])
+                )
             );
         }
         Ok(())
@@ -1151,8 +1187,14 @@ impl OnnxTranslationEngine {
     ) -> Result<(Vec<String>, usize), VecboostError> {
         if sentences.len() > MAX_RESCUE_SENTENCES {
             log::warn!(
-                "parallel sentence count {} exceeds cap {MAX_RESCUE_SENTENCES};                  remaining sentences dropped",
-                sentences.len()
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-engine-translate-parallel-sentence-count-exceeds",
+                    crate::i18n::tr_args(&[
+                        ("a1", &sentences.len().to_string()),
+                        ("max", &MAX_RESCUE_SENTENCES.to_string())
+                    ])
+                )
             );
         }
         let sentences: Vec<&String> = sentences.iter().take(MAX_RESCUE_SENTENCES).collect();
@@ -1458,9 +1500,14 @@ fn backfill_protected(text: String, slots: &[ProtectedSlot]) -> String {
     for (i, slot) in slots.iter().enumerate() {
         if !recovered[i] {
             log::warn!(
-                "protected token not recovered in translation (placeholder {}): {:?}",
-                slot.placeholder,
-                slot.original
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-engine-translate-protected-token-not-recovered",
+                    crate::i18n::tr_args(&[
+                        ("a1", &slot.placeholder.to_string()),
+                        ("a2", &format!("{:?}", slot.original))
+                    ])
+                )
             );
         }
     }
@@ -1791,7 +1838,10 @@ impl InferenceEngine for OnnxTranslationEngine {
         if self.fallback_triggered {
             return Ok(());
         }
-        log::info!("Attempting fallback to CPU for translation engine");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-translate-attempting-cpu-fallback")
+        );
         let encoder_file = probe_model_file(&self.bundle_dir, &ENCODER_CANDIDATES, "encoder")?;
         let decoder_file = probe_model_file(&self.bundle_dir, &DECODER_CANDIDATES, "decoder")?;
         let intra_threads = SESSION_INTRA_THREADS.load(std::sync::atomic::Ordering::Relaxed);
@@ -1821,7 +1871,10 @@ impl InferenceEngine for OnnxTranslationEngine {
         }
         self.precision = precision_for_model_file(&decoder_file);
         self.fallback_triggered = true;
-        log::info!("Successfully fell back to CPU for translation engine");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-translate-successfully-fell-back-cpu")
+        );
         Ok(())
     }
 }

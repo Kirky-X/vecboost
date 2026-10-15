@@ -370,10 +370,14 @@ impl TemperatureCalibration {
             Ok(raw) => raw,
             Err(_) => {
                 log::warn!(
-                    "calibration file missing at {}: probabilities will be overconfident \
-                     (uncalibrated ECE 0.466 vs 0.081 calibrated, model card); \
-                     falling back to temperature {DEFAULT_TEMPERATURE} for all cardinalities",
-                    path.display()
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-engine-calibration-file-missing-fallback-temperature",
+                        crate::i18n::tr_args(&[
+                            ("a1", &path.display().to_string()),
+                            ("temp", &DEFAULT_TEMPERATURE.to_string())
+                        ])
+                    )
                 );
                 return Ok(Self {
                     temperatures: HashMap::new(),
@@ -385,9 +389,14 @@ impl TemperatureCalibration {
         })?;
         let Some(table) = value.get("temperature_by_options") else {
             log::warn!(
-                "{} has no temperature_by_options field; falling back to \
-                 temperature {DEFAULT_TEMPERATURE} for all cardinalities",
-                path.display()
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-engine-calibration-no-temperature-by-options",
+                    crate::i18n::tr_args(&[
+                        ("a1", &path.display().to_string()),
+                        ("temp", &DEFAULT_TEMPERATURE.to_string())
+                    ])
+                )
             );
             return Ok(Self {
                 temperatures: HashMap::new(),

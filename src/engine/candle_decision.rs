@@ -536,18 +536,19 @@ impl CandleDecisionEngine {
         }
         let weights_file = bundle_dir.join(WEIGHTS_FILE);
         if !weights_file.is_file() {
-            return Err(VecboostError::ModelLoadError(format!(
-                "Laya PyTorch checkpoint not found: {}（获取步骤见 \
-                 docs/USER_GUIDE.md「Candle 原生决策路径」；若已有 receptron/laya-onnx \
-                 ONNX bundle，可设置 engine_type = \"onnx\" 走 ort 管线沿用既有资产）",
-                weights_file.display()
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "engine-candle-decision-checkpoint-not-found",
+                crate::i18n::tr_args(&[("path", &weights_file.display().to_string())]),
             )));
         }
         let encoder_config_file = bundle_dir.join(ENCODER_CONFIG_FILE);
         let encoder_config = parse_encoder_config(&encoder_config_file)?;
 
         if let Some(ref expected_hash) = config.model_sha256 {
-            log::info!("Verifying candle decision checkpoint SHA256 hash...");
+            log::info!(
+                "{}",
+                crate::i18n::tr("log-engine-verifying-candle-decision-checkpoint-sha256")
+            );
             let is_valid = crate::utils::hash::verify_sha256(&weights_file, expected_hash)
                 .map_err(|e| {
                     VecboostError::ModelLoadError(format!("Failed to verify SHA256: {e}"))
@@ -608,12 +609,16 @@ impl CandleDecisionEngine {
         let weights = CandleLayaWeights::load(&vb, &encoder_config)?;
 
         log::info!(
-            "Candle decision engine initialized: bundle={}, hidden={}, layers={}, \
-             calibration_buckets={}",
-            bundle_dir.display(),
-            encoder_config.hidden_size,
-            encoder_config.num_hidden_layers,
-            calibration.temperatures.len()
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-candle-decision-engine-initialized",
+                crate::i18n::tr_args(&[
+                    ("a1", &bundle_dir.display().to_string()),
+                    ("a2", &(encoder_config.hidden_size).to_string()),
+                    ("a3", &(encoder_config.num_hidden_layers).to_string()),
+                    ("a4", &(calibration.temperatures.len()).to_string())
+                ])
+            )
         );
         Ok(Self {
             weights,
@@ -708,16 +713,22 @@ impl CandleDecisionEngine {
 /// warn 回退 CPU，其余 CPU。
 fn resolve_device(device_type: &DeviceType) -> Result<Device, VecboostError> {
     if *device_type == DeviceType::Cuda && candle_core::utils::cuda_is_available() {
-        log::info!("Candle decision engine using CUDA GPU");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-candle-decision-engine-using-cuda-gpu")
+        );
         Device::new_cuda(0).map_err(|e| VecboostError::InferenceError(e.to_string()))
     } else if *device_type == DeviceType::Metal && candle_core::utils::metal_is_available() {
-        log::info!("Candle decision engine using Metal GPU");
+        log::info!(
+            "{}",
+            crate::i18n::tr("log-engine-candle-decision-engine-using-metal-gpu")
+        );
         Device::new_metal(0).map_err(|e| VecboostError::InferenceError(e.to_string()))
     } else {
         if matches!(device_type, DeviceType::Amd | DeviceType::OpenCL) {
             log::warn!(
-                "Candle engine does not natively support AMD GPUs; \
-                 candle decision engine falling back to CPU"
+                "{}",
+                crate::i18n::tr("log-engine-candle-decision-amd-fallback-cpu")
             );
         }
         Ok(Device::Cpu)
@@ -738,11 +749,12 @@ fn parse_encoder_config(path: &Path) -> Result<ModernBertConfig, VecboostError> 
         ))
     };
     let raw = std::fs::read_to_string(path).map_err(|e| {
-        VecboostError::ModelLoadError(format!(
-            "failed to read encoder config {}: {}（官方 repo convaiinnovations/laya 的 \
-             encoder/config.json，获取步骤见 docs/USER_GUIDE.md）",
-            path.display(),
-            e
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "engine-candle-decision-encoder-config-read",
+            crate::i18n::tr_args(&[
+                ("path", &path.display().to_string()),
+                ("detail", &e.to_string()),
+            ]),
         ))
     })?;
     let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {

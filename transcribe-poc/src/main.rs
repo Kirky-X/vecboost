@@ -15,7 +15,11 @@ use std::time::Instant;
 
 use vecboost::transcribe::{open, read_wav_16k_mono, TranscribeOpts, TRANSCRIBE_SAMPLE_RATE_HZ};
 
-const USAGE: &str = "usage: transcribe-own <wav> <outDir> [--models <dir>] [--vad-only]";
+const USAGE_KEY: &str = "cli-poc-transcribe-own-usage";
+
+fn usage() -> String {
+    vecboost::i18n::tr(USAGE_KEY)
+}
 
 const DEFAULT_MODELS_DIR: &str = "assets/models";
 
@@ -28,18 +32,31 @@ struct Args {
 
 fn parse_args() -> Result<Args, String> {
     let mut it = std::env::args().skip(1);
-    let wav = it.next().ok_or_else(|| USAGE.to_string())?;
-    let out_dir = it.next().ok_or_else(|| USAGE.to_string())?;
+    let wav = it.next().ok_or_else(usage)?;
+    let out_dir = it.next().ok_or_else(usage)?;
 
     let mut models: Option<String> = None;
     let mut vad_only = false;
     while let Some(a) = it.next() {
         match a.as_str() {
             "--models" => {
-                models = Some(it.next().ok_or("--models requires a value")?);
+                models = Some(
+                    it.next().ok_or_else(|| {
+                        vecboost::i18n::tr("cli-poc-transcribe-own-models-requires-value")
+                    })?,
+                );
             }
             "--vad-only" => vad_only = true,
-            other => return Err(format!("unknown argument: {other}\n{USAGE}")),
+            other => {
+                return Err(format!(
+                    "{}\n{}",
+                    vecboost::i18n::tr_with_args(
+                        "cli-poc-transcribe-own-unknown-argument",
+                        vecboost::i18n::tr_args(&[("a1", other)])
+                    ),
+                    usage()
+                ))
+            }
         }
     }
 
@@ -117,11 +134,22 @@ fn parallel_knobs() -> Result<(usize, usize), Box<dyn Error>> {
     let parse_env = |key: &str, default: usize, min: usize, max: usize| -> Result<usize, String> {
         match std::env::var(key) {
             Ok(v) => {
-                let n: usize = v
-                    .parse()
-                    .map_err(|_| format!("{key}={v} is not a valid integer"))?;
+                let n: usize = v.parse().map_err(|_| {
+                    vecboost::i18n::tr_with_args(
+                        "cli-poc-transcribe-own-env-not-valid-integer",
+                        vecboost::i18n::tr_args(&[("key", key), ("value", &v)]),
+                    )
+                })?;
                 if n < min || n > max {
-                    return Err(format!("{key}={n} out of range [{min},{max}]"));
+                    return Err(vecboost::i18n::tr_with_args(
+                        "cli-poc-transcribe-own-env-out-of-range",
+                        vecboost::i18n::tr_args(&[
+                            ("key", key),
+                            ("value", &n.to_string()),
+                            ("min", &min.to_string()),
+                            ("max", &max.to_string()),
+                        ]),
+                    ));
                 }
                 Ok(n)
             }
@@ -214,7 +242,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let ep = match std::env::var("TRANSCRIBE_EP").as_deref() {
         Ok("cuda") => "cuda",
         Ok("cpu") | Err(_) => "cpu",
-        Ok(other) => return Err(format!("TRANSCRIBE_EP={other} invalid (cpu|cuda)").into()),
+        Ok(other) => {
+            return Err(vecboost::i18n::tr_with_args(
+                "cli-poc-transcribe-own-ep-invalid",
+                vecboost::i18n::tr_args(&[("a1", other)]),
+            )
+            .into())
+        }
     };
     let opts = TranscribeOpts {
         intra_threads: intra,

@@ -1636,11 +1636,15 @@ fn log_checkpoints_resolved(
         .contains_key(vecboost::config::model::BUILTIN_MULTILINGUAL_CHECKPOINT)
         as usize;
     log::info!(
-        "model checkpoints resolved: {} total (builtin laya-multilingual + {} user-configured, \
-         {} overriding the builtin)",
-        checkpoints.len(),
-        config.model.checkpoints.len(),
-        builtin_overrides
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-model-checkpoints-resolved",
+            vecboost::i18n::tr_args(&[
+                ("a1", &(checkpoints.len()).to_string()),
+                ("a2", &(config.model.checkpoints.len()).to_string()),
+                ("a3", &(builtin_overrides).to_string())
+            ])
+        )
     );
 }
 

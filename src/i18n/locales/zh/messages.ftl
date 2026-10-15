@@ -581,3 +581,41 @@ warmup-mode-decide = decide×1（决策管线全链）
 warmup-mode-embed = embed
 warmup-incomplete = warmup: 预热未完全生效（mode={ $mode }，{ $failures } 次失败，{ $elapsed }）——首次请求可能更慢
 warmup-complete = warmup: 预热推理完成（mode={ $mode }，{ $elapsed }）
+
+# ── Candle 原生决策头：错误返回 + 加载期诊断 ──
+engine-candle-decision-checkpoint-not-found = 未找到 Laya PyTorch checkpoint：{ $path }（获取步骤见 docs/USER_GUIDE.md「Candle 原生决策路径」；若已有 receptron/laya-onnx 的 ONNX bundle，可设置 engine_type = "onnx" 走 ort 管线沿用既有资产）
+engine-candle-decision-encoder-config-read = 读取 encoder config { $path } 失败：{ $detail }（官方 repo convaiinnovations/laya 的 encoder/config.json，获取步骤见 docs/USER_GUIDE.md）
+log-engine-verifying-candle-decision-checkpoint-sha256 = 正在校验 Candle 决策 checkpoint 的 SHA256 摘要……
+log-engine-candle-decision-engine-initialized = Candle 决策引擎初始化完成：bundle={ $a1 }，hidden={ $a2 }，layers={ $a3 }，calibration_buckets={ $a4 }
+log-engine-candle-decision-engine-using-cuda-gpu = Candle 决策引擎使用 CUDA GPU
+log-engine-candle-decision-engine-using-metal-gpu = Candle 决策引擎使用 Metal GPU
+log-engine-candle-decision-amd-fallback-cpu = Candle 引擎不原生支持 AMD GPU；Candle 决策引擎回退到 CPU
+
+# ── ONNX 翻译引擎：解码路径 + 加载期诊断 ──
+engine-translate-logits-nonempty = logits 非空
+log-engine-tokenizer-shim-in-memory = tokenizer { $a1 }：{ $a2 }（内存内修正；tokenizers 0.23 解析契约）
+log-engine-translate-generation-config-unreadable = 翻译 bundle { $a1 }：generation_config.json 不可读（{ $e }）；解码锚点回退用 tokenizer 特殊 token
+log-engine-translate-generation-config-missing-ids = 翻译 bundle { $a1 }：generation_config.json 缺少 decoder_start_token_id/eos_token_id；解码锚点回退用 tokenizer 特殊 token
+log-engine-translate-parallel-workers-lazy = 翻译并行 worker 数={ $a1 }（惰性；额外会话集在首次长输入并行请求时构建）
+log-engine-translation-engine-initialized = 翻译引擎初始化完成：bundle={ $a1 }，encoder={ $a2 }，decoder={ $a3 }，precision={ $a4 }，max_source_tokens={ $a5 }，max_new_tokens={ $a6 }，decoder_start_token_id={ $a7 }，eos_token_id={ $a8 }，past_tensors={ $a9 }
+log-engine-translate-whole-text-decode-degenerated = 翻译整段解码退化（已生成 { $a1 } 个 token，{ $a2 } 句）；改用逐句重试，输出预算 { $a3 }
+log-engine-translate-rescue-sentence-count-exceeds = 救援句数 { $a1 } 超过上限 { $max }；其余句子已丢弃
+log-engine-translate-rescue-budget-exhausted = 救援输出预算在生成 { $a1 } 个 token 后耗尽；其余句子已丢弃
+log-engine-translate-parallel-session-lazy-loaded = 翻译并行 worker 会话集已惰性加载（{ $a1 }/{ $a2 } 套额外会话就绪）
+log-engine-translate-parallel-sentence-count-exceeds = 并行句数 { $a1 } 超过上限 { $max }；其余句子已丢弃
+log-engine-translate-protected-token-not-recovered = 翻译中受保护 token 未被还原（占位符 { $a1 }）：{ $a2 }
+log-engine-translate-attempting-cpu-fallback = 翻译引擎正在尝试回退到 CPU
+log-engine-translate-successfully-fell-back-cpu = 翻译引擎已成功回退到 CPU
+
+# ── 温度校准表（决策管线）+ checkpoint 盘点（main.rs） ──
+log-engine-calibration-file-missing-fallback-temperature = 校准文件缺失：{ $a1 }；概率将过度自信（模型卡：未校准 ECE 0.466 对已校准 0.081）；全部基数回退温度 { $temp }
+log-engine-calibration-no-temperature-by-options = { $a1 } 缺少 temperature_by_options 字段；全部基数回退温度 { $temp }
+log-main-model-checkpoints-resolved = 预设 checkpoint 解析完成：共 { $a1 } 个（内置 laya-multilingual + { $a2 } 个用户配置，其中 { $a3 } 个覆盖内置条目）
+
+# ── transcribe-own CLI：用法 / 参数 / 环境旋钮报错（stderr） ──
+cli-poc-transcribe-own-usage = 用法：transcribe-own <wav> <outDir> [--models <dir>] [--vad-only]
+cli-poc-transcribe-own-models-requires-value = --models 需要一个取值
+cli-poc-transcribe-own-unknown-argument = 未知参数：{ $a1 }
+cli-poc-transcribe-own-env-not-valid-integer = { $key }={ $value } 不是合法整数
+cli-poc-transcribe-own-env-out-of-range = { $key }={ $value } 超出范围 [{ $min },{ $max }]
+cli-poc-transcribe-own-ep-invalid = TRANSCRIBE_EP={ $a1 } 无效（cpu|cuda）

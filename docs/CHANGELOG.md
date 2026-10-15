@@ -7,6 +7,7 @@
 
 ## 📋 目录
 
+- [0.3.0-rc.2 - 2026-10-15](#030-rc2---2026-10-15)
 - [0.3.0-rc.1 - 2026-09-22](#unreleased)
 - [0.2.1 - 2026-07-30](#021---2026-07-30)
 - [0.2.0 - 2026-07-24](#020---2026-07-24)
@@ -15,6 +16,47 @@
 - [0.1.0 - 2026-01-10](#010---2026-01-10)
 
 ---
+
+<a id="030-rc2---2026-10-15"></a>
+
+## [0.3.0-rc.2] - 2026-10-15
+
+### 新增
+
+- **转录服务（transcribe 引擎与服务面并入主 crate）**：自研转录引擎（自写 fbank + conv/encoder + 28 层 KV-cache 贪心解码 + BPE 还原；自写 silero VAD 与 `--vad-only` 通路；VAD 段间并行 4 workers；全局线程池/EP 旋钮定档，全片 RTF 0.1535）；HTTP/gRPC 服务面接线（`/api/1/transcribe` 端点恒注册 + 装配门 400 + 背压 503、`[transcribe]` 配置段）；CLI 子命令（WAV 路径入参经 `read_wav_16k_mono` 转域请求）；`transcribe-poc` 收敛为薄壳 CLI（推理改调 `vecboost::transcribe` 公开门面，stdout 五行契约，PyO3 torch 后端对拍保留）
+- **翻译推理补强**：译前 token 保护 + 译后回填（DTI 缩写/arXiv 标识符不再模型级丢失，占位符 ⟦Zn⟧ 两级回填）；600+ 字符长输入句级并行（4 worker，最差论文 155.7s→22.0s，7.1×，并行失败整请求显性报错禁 Partial 丢句）；M2M100/NLLB-200 多厂商家族；两遍解码（整段直解 + 退化按句救援）；EOS 抑制窗口 `min_new_tokens`（修复贪心提前截断）；出口后处理链（繁简归一化/符号修复/输出替换表）；`translate_ab` A/B 择优 harness；翻译/语言检测 Criterion 基准与基线数据
+- **决策任务接入优先级队列**：Overloaded 背压与 `vecboost_decision_seconds` 指标补齐
+
+### 修复
+
+- **onnx 路径启动即崩（自 v0.2.1）**：ort feature 由 `alternative-backend` 改 `load-dynamic`——前者要求使用方自供 OrtApi 且全仓无调用点，首次构建 Session 即 panic abort；运行时经 `ORT_DYLIB_PATH` 指向 libonnxruntime ≥1.23（锁定 1.28.2），见 `3rdparty/onnxruntime/README.md`
+- **ort rc.14 进程级 Environment 单例**：rc.14 每进程仅允许构建一个 `Environment`，`build_session` 改 `OnceLock` 进程级共享（并发竞争败者重查而非误报）——同进程构建第二个引擎即崩，由解锁的真实翻译 bundle 测试暴露
+- **warm_up_cache 键方案漂移**：预热以裸文本为键写入、读路径查询 `emb:{model_id}:{xxh3}` 格式键，预热条目永不可读——抽 `cache_key_for` 统一构造并加回归测试钉死
+- **token 缺省双轨漂移**：`DEFAULT_TOKEN_EXPIRATION_SECS=3600`（"缺省 1 小时"）实际不可达，改由 `DEFAULT_TOKEN_EXPIRATION_HOURS` 单一事实源派生（86400），文档/测试/示例统一 24 小时
+- **process_search_batch 多 chunk 全局下标**：第二 chunk 向量永不落位且错误覆盖第一 chunk
+- **RateLimitExceeded 直返路径统一 503**：429 归 auth 限流中间件，同一错误不再双映射
+
+### 变更
+
+- **自研依赖升级至 crates.io 最新 rc**：trait-kit 0.5.0-rc.9 / confers 0.6.0-rc.10 / inklog 0.3.0-rc.9 / oxcache 0.5.0-rc.8 / limiteron 0.3.0-rc.7 / dbnexus 0.6.0-rc.9 / garrison 0.9.0-rc.3 / sdforge 0.5.0-rc.8；升级适配 confers Zeroizing、garrison 发布版 error 新变体、sdforge UnifiedError/gRPC Status 契约与 utoipa 5.5/6.0 显式消歧
+- **ort 2.0.0-rc.13 → rc.14**：`Session::builder(&env)` 显式环境、CUDA EP 迁至 `ort::ep::CUDA`、CUDA EP 门控依据 cuda→transcribe（ort/cuda 实际经 transcribe 特性引入）
+- **重构与收敛**：超长函数拆分 10 批清零（启动编排/worker 状态机/推理热路径等）；公共 ONNX Session 构建层收编三处漂移（probe/precision 单一事实源）；single-flight 抽取共享模块（SemanticCache 与 OxCacheBackend 复用）；死代码清理与测试资产去重
+- **依赖特性裁剪**：fluent-bundle/writeable `default-features = false`；utoipa-swagger-ui vendored（离线环境可编译）
+- **GitHub actions 升级**：codeql-action v4.38.3、setup-buildx v4.4.1、metadata-action v6.2.0 等
+
+### 构建与 CI
+
+- Docker 工作流修复：Dockerfile 对齐仓库根 context（修复每次 push 均红）、HF_HOME 指向可写卷修复容器启动崩溃、Trivy SARIF 上传补 security-events:write、deploy 腿 GHCR/Docker Hub 拆分按凭据条件发布；scenario CI 补 protoc
+
+### 质量与测试
+
+- 行覆盖率达 **90.89%**（llvm-cov，CI 同特性面）；内联单元测试 2237 → 2277（本轮 +124：auth 四 handler 全分支覆盖、翻译真实 bundle 端到端、pipeline SLA 收割/取消传播、doctor/device/utils 边界与错误分支等）
+- 文档一致性检查器泛化：CLI 白名单 5 → 全部 forge(cli=true) 名；env 消费面纳入 scripts/ 运维脚本（消除 memcap 旋钮 8 处误报）
+- 发布前 SAST 整改：transcribe-poc 锁文件 rustls 对齐 0.23.46（4 条 MEDIUM）并同步 ort rc.14；`scripts/autotune.py`/`warmup_corpus.py` 补 http(s) scheme 守卫（bandit B310）；pyo3 0.22.6 已知漏洞（RUSTSEC-2026-0176 等）经评估**接受风险**——仅存在于非发布的 transcribe-poc 本地基线工具，升级需 pyo3 0.22→0.29 major 迁移，待其 /home/dev 解释器钉定解除后处理
+
+### 评估归档
+
+- trait-kit 统一 SDK 封装评估：技术可行但本次不实施（defer_with_proposal；P1 元数据诚实化 → P2 健康探测统一 → P3 装配收敛 → P4 资源契约，前置条件与风险见 [TRAIT-KIT-SDK-ASSESSMENT](TRAIT-KIT-SDK-ASSESSMENT.md)）
 
 <a id="unreleased"></a>
 

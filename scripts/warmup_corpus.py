@@ -52,6 +52,9 @@ def main() -> int:
     for i in range(0, len(unique), batch_size):
         chunk = unique[i:i + batch_size]
         payload = json.dumps({"texts": chunk}).encode("utf-8")
+        # B310 防线：仅允许 http(s)，杜绝 file:// 等 scheme 的任意文件读
+        if not url.startswith(("http://", "https://")):
+            raise ValueError(f"only http(s) URLs are allowed, got: {url!r}")
         req = urllib.request.Request(
             url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
         )

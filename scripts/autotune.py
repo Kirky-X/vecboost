@@ -78,6 +78,9 @@ def reverse_order_check(first: float, second: float) -> bool:
 # --------------------------------------------------------------------------
 
 def post_json(url: str, payload: dict, timeout: int = 30) -> dict:
+    # B310 防线：仅允许 http(s)，杜绝 file:// 等 scheme 的任意文件读
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"only http(s) URLs are allowed, got: {url!r}")
     data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:

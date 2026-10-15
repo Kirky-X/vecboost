@@ -24,7 +24,8 @@ pub(crate) struct SessionOpts<'a> {
     /// intra 线程数；`0` = 未设置 → 回退 [`resolve_intra_threads`]（全核）；
     /// `> 0` 透传。翻译侧经 `SESSION_INTRA_THREADS` 预算读入此字段。
     pub intra_threads: usize,
-    /// 执行设备；仅 [`DeviceType::Cuda`] 且启用 `cuda` feature 时注册 CUDA EP，
+    /// 执行设备；仅 [`DeviceType::Cuda`] 且启用 `transcribe` feature 时注册
+    /// CUDA EP（ort/cuda 仅经该特性引入，与 candle 的 `cuda` feature 无关），
     /// 否则 warn 降 CPU（不报错），与收编前三处现状一致。
     pub device: DeviceType,
     /// ort session config 逐条透传 `with_config_entry`（如转录 POC 的
@@ -49,6 +50,11 @@ fn resolve_intra_threads(intra_threads: usize) -> usize {
 /// 全部 Session 共享同一实例；进程生命周期内持有，`Session::builder` 只借用。
 fn global_env() -> Result<&'static ort::environment::Environment, VecboostError> {
     static ENV: OnceLock<ort::environment::Environment> = OnceLock::new();
+    // 竞争败者的失败窗口：胜者已注册 ort 全局 CURRENT_ENV（build 成功）但
+    // 尚未落 ENV（下一次调度才执行 get_or_init）——单次重查可能读到 None，
+    // 故有界自旋等待胜者入库，超界才判真实失败
+    const MAX_SPINS: usize = 64;
+    let mut spins = 0usize;
     loop {
         if let Some(env) = ENV.get() {
             return Ok(env);
@@ -56,11 +62,14 @@ fn global_env() -> Result<&'static ort::environment::Environment, VecboostError>
         match ort::init().build() {
             Ok(env) => return Ok(ENV.get_or_init(|| env)),
             Err(e) => {
-                // 并发竞争落败：胜者的 Arc 即将进入 ENV，重查即可；否则属真实构建失败
                 if ENV.get().is_some() {
                     continue;
                 }
-                return Err(VecboostError::ModelLoadError(e.to_string()));
+                spins += 1;
+                if spins >= MAX_SPINS {
+                    return Err(VecboostError::ModelLoadError(e.to_string()));
+                }
+                std::thread::yield_now();
             }
         }
     }

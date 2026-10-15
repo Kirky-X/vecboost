@@ -14,7 +14,7 @@ required-features = []
 [dependencies]
 # 推理实现已并入主仓（src/engine/transcribe/）：路径依赖 + transcribe feature
 vecboost = { path = "..", features = ["transcribe"] }
-pyo3 = { version = "=0.22.6", features = ["auto-initialize"] }
+pyo3 = { version = "=0.29.0", features = ["auto-initialize"] }
 
 [profile.release]
 opt-level = 3

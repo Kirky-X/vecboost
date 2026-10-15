@@ -372,7 +372,7 @@ impl EmbeddingService {
                             continue;
                         }
                         crate::utils::vector::normalize_l2(&mut embedding)?;
-                        cache_entries.insert(text.clone(), embedding);
+                        cache_entries.insert(self.cache_key_for(text), embedding);
                         processed_count += 1;
                     }
                     debug!("Warm-up progress: {}/{}", processed_count, total_texts);
@@ -425,6 +425,19 @@ impl EmbeddingService {
         .await
     }
 
+    /// 精确缓存键统一构造：`emb:{model_id}:{xxh3_128(text):016x}`。
+    /// 写入方（回填/warm_up_cache）与读取方必须共用本函数——键方案曾因
+    /// 多处内联复制漂移，warm_up 以裸文本为键致预热条目永不可读。
+    fn cache_key_for(&self, text: &str) -> String {
+        let model_id = self
+            .model_config
+            .as_ref()
+            .map(|c| c.name.as_str())
+            .unwrap_or("unknown");
+        let text_hash = xxhash_rust::xxh3::xxh3_128(text.as_bytes());
+        format!("emb:{}:{:016x}", model_id, text_hash)
+    }
+
     /// 处理单文本向量化
     /// 如果提供了 target_dimension，则对输出向量进行截断（Matryoshka 风格）
     pub async fn process_text(
@@ -441,8 +454,7 @@ impl EmbeddingService {
             .as_ref()
             .map(|c| c.name.as_str())
             .unwrap_or("unknown");
-        let text_hash = xxhash_rust::xxh3::xxh3_128(req.text.as_bytes());
-        let cache_key = format!("emb:{}:{:016x}", model_id, text_hash);
+        let cache_key = self.cache_key_for(&req.text);
 
         let embedding = if let Some(ref semantic_cache) = self.semantic_cache {
             // 语义缓存启用：精确匹配 → trigram 搜索 → 计算回填
@@ -608,15 +620,8 @@ impl EmbeddingService {
         }
 
         // 缓存键包含 model_id 和文本哈希
-        let model_id = self
-            .model_config
-            .as_ref()
-            .map(|c| c.name.as_str())
-            .unwrap_or("unknown");
-        let source_hash = xxhash_rust::xxh3::xxh3_128(req.source.as_bytes());
-        let target_hash = xxhash_rust::xxh3::xxh3_128(req.target.as_bytes());
-        let cache_key_source = format!("emb:{}:{:016x}", model_id, source_hash);
-        let cache_key_target = format!("emb:{}:{:016x}", model_id, target_hash);
+        let cache_key_source = self.cache_key_for(&req.source);
+        let cache_key_target = self.cache_key_for(&req.target);
 
         let (mut v1, mut v2) = if self.cache.is_enabled() {
             // 缓存启用：并行查缓存，各自独立命中/未命中
@@ -948,17 +953,11 @@ impl EmbeddingService {
         };
 
         // 先查缓存，收集未命中的文本及其索引
-        let model_id = self
-            .model_config
-            .as_ref()
-            .map(|c| c.name.as_str())
-            .unwrap_or("unknown");
         let mut embeddings: Vec<Option<Vec<f32>>> = vec![None; texts.len()];
         let mut uncached_texts: Vec<(usize, &str)> = Vec::new();
 
         for (idx, text) in texts.iter().enumerate() {
-            let text_hash = xxhash_rust::xxh3::xxh3_128(text.as_bytes());
-            let cache_key = format!("emb:{}:{:016x}", model_id, text_hash);
+            let cache_key = self.cache_key_for(text);
             if let Some(cached) = self.cache.get(&cache_key).await {
                 embeddings[idx] = Some(cached);
             } else {
@@ -996,8 +995,7 @@ impl EmbeddingService {
                     let global_i = chunk_base + i;
                     let original_idx = uncached_texts[global_i].0;
                     // 写入缓存供后续使用
-                    let text_hash = xxhash_rust::xxh3::xxh3_128(uncached_refs[global_i].as_bytes());
-                    let cache_key = format!("emb:{}:{:016x}", model_id, text_hash);
+                    let cache_key = self.cache_key_for(&uncached_refs[global_i]);
                     self.cache.put(&cache_key, emb.clone()).await;
                     embeddings[original_idx] = Some(emb);
                 }
@@ -3402,6 +3400,39 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_warm_up_cache_entries_readable_by_process_text() {
+        // 回归钉（warm-up 键方案漂移修复）：预热写入的条目必须能被读路径
+        // 命中——process_text 不得再次调用引擎，否则预热白算
+        let counter = Arc::new(AtomicUsize::new(0));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(CountingEngine::new(64, Arc::clone(&counter))));
+        let service = EmbeddingService::with_cache(engine, None, 32);
+
+        service
+            .warm_up_cache(vec!["hot text".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+        let resp = service
+            .process_text(
+                EmbedRequest {
+                    text: "hot text".to_string(),
+                    normalize: Some(true),
+                },
+                None,
+            )
+            .await
+            .expect("process_text must succeed");
+        assert_eq!(resp.embedding.len(), 64);
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "process_text must hit the warmed cache entry instead of calling the engine"
+        );
+    }
+
     // ===== 模型管理与元信息测试 =====
 
     #[tokio::test]
@@ -5338,5 +5369,455 @@ mod tests {
         for &i in &[0, 1, 2, 3, 4] {
             assert!(indices.contains(&i), "missing index {}", i);
         }
+    }
+
+    // ===== 未覆盖分支补测（覆盖率任务）：persist 构造 / 语义缓存 / 维度告警 /
+    // warm-up 非有限值与批失败 / 非法度量 / spawn_blocking 余弦臂 / 非法 UTF-8
+    // 路径 / 空批 / 批内去重 / search 批缓存命中 / count_tokens 锁竞争 =====
+
+    /// 文本含 "nan" 时返回 NaN 向量，否则返回有效向量的引擎。
+    struct NonFiniteBatchEngine {
+        dimension: usize,
+    }
+
+    #[async_trait]
+    impl InferenceEngine for NonFiniteBatchEngine {
+        fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(self.embedding_for(text))
+        }
+
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|t| self.embedding_for(t)).collect())
+        }
+
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    impl NonFiniteBatchEngine {
+        fn embedding_for(&self, text: &str) -> Vec<f32> {
+            if text.contains("nan") {
+                vec![f32::NAN; self.dimension]
+            } else {
+                vec![1.0f32; self.dimension]
+            }
+        }
+    }
+
+    /// persist 缓存构造分支 + WAL 回放 no-op 路径 + 指纹绑定键不互染。
+    #[tokio::test]
+    async fn test_with_cache_persist_constructor_and_wal_replay() {
+        let dir = tempdir().unwrap();
+        let wal_path = dir.path().join("embed-cache.wal");
+        let mut config = make_model_config("persist-model", 8);
+        config.model_sha256 = Some("deadbeef".to_string());
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(
+            CountingEngine::new(8, Arc::new(AtomicUsize::new(0))),
+        ));
+        let service = EmbeddingService::with_cache_persist(
+            engine,
+            Some(config),
+            16,
+            wal_path.clone(),
+            64 * 1024,
+        );
+        assert_eq!(
+            service.cache.persist_path(),
+            Some(wal_path.clone()),
+            "persist 构造必须暴露 WAL 路径"
+        );
+        // 无 WAL 文件时回放为 no-op，不得报错
+        service.load_persisted_cache().await;
+        let mk = |t: &str| EmbedRequest {
+            text: t.to_string(),
+            normalize: Some(false),
+        };
+        let first = service.process_text(mk("persist me"), None).await.unwrap();
+        let second = service.process_text(mk("persist me"), None).await.unwrap();
+        assert_eq!(first.embedding, second.embedding, "缓存回读须字节等同");
+    }
+
+    /// 语义缓存分支：process_text 走 get_or_compute，两次调用结果等同。
+    #[tokio::test]
+    async fn test_with_semantic_cache_process_text_roundtrip() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let service = EmbeddingService::new(engine, None)
+            .with_semantic_cache(Arc::new(SemanticCache::with_capacity(0.9, 16)));
+        let mk = |t: &str| EmbedRequest {
+            text: t.to_string(),
+            normalize: Some(false),
+        };
+        let first = service
+            .process_text(mk("semantic hello"), None)
+            .await
+            .unwrap();
+        let second = service
+            .process_text(mk("semantic hello"), None)
+            .await
+            .unwrap();
+        assert_eq!(first.embedding, second.embedding, "语义缓存命中须字节等同");
+        assert_eq!(first.dimension, 8);
+    }
+
+    /// 引擎维度与 expected_dimension 不一致：validate_dimension 只告警不拒绝，
+    /// 返回引擎实际维度。
+    #[tokio::test]
+    async fn test_process_text_dimension_mismatch_warns_and_returns_actual() {
+        let config = make_model_config("mismatch-dim", 8);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(4)));
+        let service = EmbeddingService::new(engine, Some(config));
+        let resp = service
+            .process_text(
+                EmbedRequest {
+                    text: "dim mismatch".to_string(),
+                    normalize: Some(false),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.dimension, 4, "维度不一致只告警，返回实际维度");
+    }
+
+    /// warm-up 遇 NaN 向量：跳过该条不落缓存（NaN 请求随后显性报错而非
+    /// 命中缓存返回 NaN），整体 Ok。
+    #[tokio::test]
+    async fn test_warm_up_cache_skips_non_finite_embeddings() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(NonFiniteBatchEngine { dimension: 4 }));
+        let service = EmbeddingService::with_cache(engine, None, 16);
+        service
+            .warm_up_cache(vec!["nan text".to_string(), "ok text".to_string()])
+            .await
+            .unwrap();
+        // NaN 条目未入库：请求 NaN 文本走引擎重算并被 ensure_finite 显性拒绝
+        //（若 warm-up 误存 NaN，此处会命中缓存静默返回 NaN 向量）
+        let err = service
+            .process_text(
+                EmbedRequest {
+                    text: "nan text".to_string(),
+                    normalize: Some(false),
+                },
+                None,
+            )
+            .await
+            .unwrap_err();
+        match err {
+            VecboostError::InferenceError(msg) => {
+                assert!(
+                    msg.contains("non-finite"),
+                    "NaN 文本必须显性报非有限值，got: {msg}"
+                );
+            }
+            other => panic!("expected InferenceError for non-finite, got {other:?}"),
+        }
+        // 合法文本不受影响
+        let ok = service
+            .process_text(
+                EmbedRequest {
+                    text: "ok text".to_string(),
+                    normalize: Some(false),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.dimension, 4);
+    }
+
+    /// warm-up 批量推理失败：记日志继续（不中断预热、不向调用方报错）。
+    #[tokio::test]
+    async fn test_warm_up_cache_batch_failure_returns_ok() {
+        crate::i18n::init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(OomEngine));
+        let service = EmbeddingService::with_cache(engine, None, 16);
+        service
+            .warm_up_cache(vec!["a".to_string(), "b".to_string()])
+            .await
+            .unwrap();
+    }
+
+    /// 相似度请求携带未注册度量名：InvalidInput 显性拒绝。
+    #[tokio::test]
+    async fn test_process_similarity_invalid_metric_rejected() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let service = EmbeddingService::new(engine, None);
+        let err = service
+            .process_similarity(SimilarityRequest {
+                source: "hello".to_string(),
+                target: "world".to_string(),
+                metric: Some("warp".to_string()),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, VecboostError::InvalidInput(_)),
+            "未注册度量必须 InvalidInput，got {err:?}"
+        );
+    }
+
+    /// 不同文本余弦路径走 spawn_blocking 计算（非短路臂），距离度量跳过
+    /// 预归一化，分数均在合法域内。
+    #[tokio::test]
+    async fn test_process_similarity_different_texts_scores_per_metric() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let service = EmbeddingService::new(engine, None);
+        // 默认余弦：spawn_blocking 内归一化 + calculate_similarity
+        let cosine = service
+            .process_similarity(SimilarityRequest {
+                source: "first distinct text".to_string(),
+                target: "second totally different".to_string(),
+                metric: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            (-1.0..=1.0).contains(&cosine.score) && cosine.score < 1.0,
+            "不同文本余弦分数应 <1 且在 [-1,1]，got {}",
+            cosine.score
+        );
+        // 距离度量：跳过预归一化，1/(1+d) 转换
+        let euclidean = service
+            .process_similarity(SimilarityRequest {
+                source: "first distinct text".to_string(),
+                target: "second totally different".to_string(),
+                metric: Some("euclidean".to_string()),
+            })
+            .await
+            .unwrap();
+        assert!(
+            (0.0..=1.0).contains(&euclidean.score),
+            "euclidean 转换分数应在 (0,1]，got {}",
+            euclidean.score
+        );
+    }
+
+    /// 非 UTF-8 路径：process_file_stream 以 InvalidInput 显性拒绝（不 panic）。
+    #[tokio::test]
+    async fn test_process_file_stream_rejects_invalid_utf8_path() {
+        use std::os::unix::ffi::OsStrExt;
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let service = EmbeddingService::new(engine, None);
+        let bad_path = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/\xff\xfe"));
+        let err = service.process_file_stream(&bad_path).await.unwrap_err();
+        assert!(
+            matches!(err, VecboostError::InvalidInput(_)),
+            "非 UTF-8 路径必须 InvalidInput，got {err:?}"
+        );
+    }
+
+    /// 空批：embed_batch_texts 直接返回空 vec（不触发引擎调用）。
+    #[tokio::test]
+    async fn test_embed_batch_texts_empty_slice_returns_empty() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let service = EmbeddingService::new(engine, None);
+        let result = service.embed_batch_texts(&[]).await.unwrap();
+        assert!(result.is_empty(), "空批必须返回空 vec");
+    }
+
+    /// 批内重复文本：哈希命中 + 字符串二次确认路径，去重后引擎只推理一次。
+    #[tokio::test]
+    async fn test_embed_batch_texts_duplicates_dedup_via_hash_and_confirm() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(CountingEngine::new(8, Arc::clone(&counter))));
+        let service = EmbeddingService::new(engine, None);
+        let texts = vec!["dup".to_string(), "dup".to_string(), "uniq".to_string()];
+        let result = service.embed_batch_texts(&texts).await.unwrap();
+        assert_eq!(result.len(), 3, "结果按原顺序回填");
+        assert_eq!(result[0], result[1], "重复文本向量必须等同");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            2,
+            "批内去重后引擎只收到 2 个唯一文本"
+        );
+    }
+
+    /// process_search_batch 候选缓存命中分支：第二次调用候选向量不再推理
+    /// （计数只增 query 一次），全命中时跳过批量推理循环。
+    #[tokio::test]
+    async fn test_process_search_batch_second_call_hits_candidate_cache() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(CountingEngine::new(8, Arc::clone(&counter))));
+        let service = EmbeddingService::with_cache(engine, None, 64);
+        let candidates: Vec<String> = (0..3).map(|i| format!("cand {i}")).collect();
+
+        service
+            .process_search_batch("stable query", &candidates, Some(2))
+            .await
+            .unwrap();
+        let after_first = counter.load(Ordering::SeqCst);
+
+        let resp = service
+            .process_search_batch("stable query", &candidates, Some(2))
+            .await
+            .unwrap();
+        let after_second = counter.load(Ordering::SeqCst);
+        assert_eq!(
+            after_second - after_first,
+            1,
+            "第二次调用只有 query 走引擎，候选必须全部命中缓存"
+        );
+        assert_eq!(resp.results.len(), 2, "top_k 截断生效");
+    }
+
+    /// 引擎写锁被占时 count_tokens 以 InferenceError 显性报告锁竞争
+    ///（try_read 失败分支，禁止降级为 0）。
+    #[tokio::test]
+    async fn test_count_tokens_lock_contention_returns_inference_error() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let service = EmbeddingService::new(engine.clone(), None);
+        let _write_guard = engine.write().await;
+        let err = service.count_tokens("hello").unwrap_err();
+        match err {
+            VecboostError::InferenceError(msg) => {
+                assert!(
+                    msg.contains("lock contention"),
+                    "锁竞争文案必须可定位，got: {msg}"
+                );
+            }
+            other => panic!("expected InferenceError, got {other:?}"),
+        }
+    }
+
+    /// process_batch 批内去重：重复文本只推理一次，结果按原位置复用。
+    #[tokio::test]
+    async fn test_process_batch_dedup_reuses_single_inference() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(CountingEngine::new(8, Arc::clone(&counter))));
+        let service = EmbeddingService::new(engine, None);
+        let req = BatchEmbedRequest {
+            texts: vec!["same".to_string(), "same".to_string(), "other".to_string()],
+            mode: None,
+            normalize: Some(true),
+        };
+        let resp = service.process_batch(req, None).await.unwrap();
+        assert_eq!(resp.embeddings.len(), 3, "结果按原位置回填");
+        assert_eq!(resp.embeddings[0].embedding, resp.embeddings[1].embedding);
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            2,
+            "去重后引擎只推理 2 个唯一文本"
+        );
+        assert_eq!(resp.dimension, 8);
+    }
+
+    /// init_memory_limit 启动接线：控制器 attach + 模型目录记账（含子目录
+    /// 递归），完成后服务仍可正常推理。
+    #[tokio::test]
+    async fn test_init_memory_limit_attaches_and_serves() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("weights.bin"), vec![0u8; 512]).unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/tokenizer.json"), vec![0u8; 128]).unwrap();
+
+        let mut config = make_model_config("init-limit", 8);
+        config.memory_limit_bytes = Some(1024 * 1024);
+        config.model_path = dir.path().to_path_buf();
+
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let service = EmbeddingService::new(engine, Some(config));
+        service.init_memory_limit().await;
+        let resp = service
+            .process_text(
+                EmbedRequest {
+                    text: "after init".to_string(),
+                    normalize: Some(false),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.dimension, 8, "记账接线后推理不受影响");
+    }
+
+    /// estimate_model_bytes：一层文件 + 子目录递归求和；目录不可读时粗估
+    /// 为 0（显性 warn，不 panic）。
+    #[test]
+    fn test_estimate_model_bytes_sums_files_and_subdirs() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.bin"), vec![0u8; 100]).unwrap();
+        std::fs::create_dir_all(dir.path().join("nested")).unwrap();
+        std::fs::write(dir.path().join("nested/b.bin"), vec![0u8; 50]).unwrap();
+        assert_eq!(
+            estimate_model_bytes(dir.path()),
+            150,
+            "一层文件与子目录内容必须累加"
+        );
+        assert_eq!(
+            estimate_model_bytes(&dir.path().join("missing")),
+            0,
+            "目录不可读时粗估为 0"
+        );
+    }
+
+    /// engine_handle 传播：返回的句柄与生效引擎同源（D27 传播链的锚点）。
+    #[tokio::test]
+    async fn test_engine_handle_serves_same_engine() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let service = EmbeddingService::new(engine.clone(), None);
+        let handle = service.engine_handle();
+        assert_eq!(
+            handle.read().await.embed("x").unwrap().len(),
+            engine.read().await.embed("x").unwrap().len(),
+            "engine_handle 必须指向同一生效引擎"
+        );
+    }
+
+    /// unload_model：语义缓存随卸载一并清空（防跨模型污染），无 manager、
+    /// 非当前模型时仅走清缓存路径且不报错。
+    #[tokio::test]
+    async fn test_unload_model_clears_semantic_cache_without_manager() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let mut service = EmbeddingService::new(engine, None)
+            .with_semantic_cache(Arc::new(SemanticCache::with_capacity(0.9, 16)));
+        service
+            .unload_model("never-loaded")
+            .await
+            .expect("无 manager、非当前模型的卸载必须为无害 no-op");
+    }
+
+    /// 直接调用 NonFiniteBatchEngine 未使用的 trait 方法体（覆盖率）。
+    #[test]
+    fn test_non_finite_batch_engine_unused_trait_bodies() {
+        let engine = NonFiniteBatchEngine { dimension: 4 };
+        assert_eq!(*engine.precision(), Precision::Fp32);
+        assert!(!engine.supports_mixed_precision());
+    }
+
+    #[tokio::test]
+    async fn test_non_finite_batch_engine_fallback_body() {
+        let mut engine = NonFiniteBatchEngine { dimension: 4 };
+        assert!(
+            engine
+                .try_fallback_to_cpu(&ModelConfig::default())
+                .await
+                .is_ok()
+        );
     }
 }

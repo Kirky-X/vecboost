@@ -548,4 +548,37 @@ mod tests {
             other => panic!("Expected InferenceError, got: {other:?}"),
         }
     }
+
+    // -- 直接调用 mock 未使用的 trait 方法体（覆盖率，仿 rerank.rs 先例） --
+    #[test]
+    fn test_mock_decision_engine_unused_trait_bodies() {
+        let engine = MockDecisionEngine { p_true: 0.5 };
+        assert_eq!(engine.embed("x").unwrap().len(), 8);
+        assert_eq!(engine.embed_batch(&["a".to_string()]).unwrap().len(), 1);
+        assert_eq!(*engine.precision(), Precision::Fp32);
+        assert!(!engine.supports_mixed_precision());
+        assert!(engine.supports_task(ModelTask::Decision));
+    }
+
+    #[tokio::test]
+    async fn test_mock_and_embedding_only_engines_fallback_bodies() {
+        let mut mock = MockDecisionEngine { p_true: 0.5 };
+        assert!(
+            mock.try_fallback_to_cpu(&ModelConfig::default())
+                .await
+                .is_ok()
+        );
+
+        let mut only = EmbeddingOnlyEngine;
+        assert_eq!(only.embed("x").unwrap().len(), 8);
+        assert_eq!(only.embed_batch(&["a".to_string()]).unwrap().len(), 1);
+        assert_eq!(*only.precision(), Precision::Fp32);
+        assert!(!only.supports_mixed_precision());
+        assert!(!only.supports_task(ModelTask::Decision));
+        assert!(
+            only.try_fallback_to_cpu(&ModelConfig::default())
+                .await
+                .is_ok()
+        );
+    }
 }

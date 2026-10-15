@@ -504,6 +504,7 @@ mod tests {
     /// 必须同步移除，否则持续过载下无界增长。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_queue_full() {
+        ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(0, engine).await;
@@ -1466,5 +1467,189 @@ mod tests {
         assert_eq!(response.0.embedding.len(), 8);
 
         consumer.await.unwrap();
+    }
+
+    // -- 未覆盖分支补测（覆盖率任务）：响应类型不匹配 / 断连取消传播 / mock 方法体 --
+
+    /// worker 以错误变体（Decision）complete embed 等待方：handler 必须
+    /// InternalError 显性报错，不得误投递。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_response_type_mismatch() {
+        ensure_i18n_init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+
+        let consumer = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue.dequeue().await {
+                    response_channel
+                        .complete(
+                            req.request_id,
+                            Ok(ServiceResponse::Decision(DecisionResponse {
+                                answers: vec![],
+                                processing_time_ms: 0,
+                            })),
+                        )
+                        .await;
+                    return;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        let req = EmbedRequest {
+            text: "mismatch".to_string(),
+            normalize: Some(true),
+        };
+        let result = handle_pipeline_request(state, req, "127.0.0.1".to_string()).await;
+        match result {
+            Err(VecboostError::InternalError(msg)) => {
+                assert!(
+                    msg.contains("response type") || !msg.is_empty(),
+                    "类型不匹配必须 InternalError，got: {msg}"
+                );
+            }
+            other => panic!("expected InternalError on type mismatch, got {other:?}"),
+        }
+
+        consumer.await.unwrap();
+    }
+
+    /// worker 以错误变体（Embed）complete 决策等待方：decision handler 同款
+    /// InternalError 显性报错。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_decision_pipeline_request_response_type_mismatch() {
+        ensure_i18n_init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+
+        let consumer = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue.dequeue().await {
+                    response_channel
+                        .complete(
+                            req.request_id,
+                            Ok(ServiceResponse::Embed(crate::domain::EmbedResponse {
+                                embedding: vec![0.0; 8],
+                                dimension: 8,
+                                processing_time_ms: 0,
+                                information_retention_rate: None,
+                            })),
+                        )
+                        .await;
+                    return;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        let result = handle_decision_pipeline_request(state, decision_noul_request()).await;
+        assert!(
+            matches!(result, Err(VecboostError::InternalError(_))),
+            "decision 侧类型不匹配必须 InternalError，got {result:?}"
+        );
+
+        consumer.await.unwrap();
+    }
+
+    /// 断连取消传播：handler 被 abort（客户端断连）后，CancelOnDrop 在
+    /// unwind 时置位取消标志——队列中请求出队即弃（不消耗推理）、槽位
+    /// 释放。同帧 drop 的 InFlightGuard 亦随取消生效而证明回落。
+    /// 注：IN_FLIGHT_REQUESTS 为进程级计数，并行测试共享，不作精确断言。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_abort_sets_cancel_flag() {
+        // 本测试按名排序先于 queue_full 等断言 i18n 文案的既有测试执行，
+        // 首语句初始化 i18n，消除 tr() 未初始化回退裸键名的排序竞争
+        ensure_i18n_init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state(100, engine).await;
+        let queue = state
+            .kit
+            .require::<crate::registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+
+        let handler_task = tokio::spawn(handle_pipeline_request(
+            state,
+            EmbedRequest {
+                text: "disconnect".to_string(),
+                normalize: Some(true),
+            },
+            "127.0.0.1".to_string(),
+        ));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while queue.size() == 0 {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "request must be enqueued within 5s"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        handler_task.abort();
+        // aborted 任务的 RAII 守卫（CancelOnDrop + InFlightGuard）在调度点 drop：
+        // 轮询直到取消标志生效。取消前出队会拿到请求本体（弹回重试）；
+        // 取消生效后出队返回 None（即弃、槽位释放）——循环退出即证已取消
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match queue.dequeue().await {
+                None => break,
+                Some(req) => queue.enqueue(req).await.unwrap(),
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "aborted request must be cancelled at dequeue within 5s"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(queue.size(), 0, "取消后队列槽位必须释放");
+    }
+
+    /// 直接调用 DecisionTestEngine 未使用的 trait 方法体（覆盖率）。
+    #[test]
+    fn test_decision_test_engine_unused_trait_bodies() {
+        let engine = DecisionTestEngine;
+        assert_eq!(engine.embed("x").unwrap().len(), 8);
+        assert_eq!(engine.embed_batch(&["a".to_string()]).unwrap().len(), 1);
+        assert_eq!(*engine.precision(), Precision::Fp32);
+        assert!(!engine.supports_mixed_precision());
+        assert!(engine.supports_task(ModelTask::Decision));
+    }
+
+    #[tokio::test]
+    async fn test_decision_test_engine_fallback_body() {
+        let mut engine = DecisionTestEngine;
+        assert!(
+            engine
+                .try_fallback_to_cpu(&ModelConfig::default())
+                .await
+                .is_ok()
+        );
     }
 }

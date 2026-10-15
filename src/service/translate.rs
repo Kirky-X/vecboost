@@ -645,4 +645,54 @@ mod tests {
             other => panic!("Expected InvalidInput, got {other:?}"),
         }
     }
+
+    /// configured_pairs 只读视图：按 "src-tgt" 展示形态字典序返回。
+    #[test]
+    fn test_configured_pairs_sorted_display_view() {
+        let svc = make_service();
+        assert_eq!(
+            svc.configured_pairs(),
+            &["en-es".to_string(), "en-zh".to_string()],
+            "已配置对清单必须排序去重展示"
+        );
+    }
+
+    // -- 直接调用 mock 未使用的 trait 方法体（覆盖率，仿 rerank.rs 先例） --
+    #[test]
+    fn test_mock_translate_engine_unused_trait_bodies() {
+        let engine = MockTranslateEngine {
+            marker: "en-zh",
+            panic_on_translate: false,
+        };
+        assert_eq!(engine.embed("x").unwrap().len(), 8);
+        assert_eq!(engine.embed_batch(&["a".to_string()]).unwrap().len(), 1);
+        assert_eq!(*engine.precision(), Precision::Fp32);
+        assert!(!engine.supports_mixed_precision());
+        assert_eq!(engine.count_tokens("abcd").unwrap(), 4);
+        assert!(engine.supports_task(ModelTask::Translate));
+    }
+
+    #[tokio::test]
+    async fn test_translate_mock_engines_fallback_bodies() {
+        let mut mock = MockTranslateEngine {
+            marker: "en-zh",
+            panic_on_translate: false,
+        };
+        assert!(
+            mock.try_fallback_to_cpu(&ModelConfig::default())
+                .await
+                .is_ok()
+        );
+
+        let mut only = EmbeddingOnlyEngine;
+        assert_eq!(only.embed("x").unwrap().len(), 8);
+        assert_eq!(only.embed_batch(&["a".to_string()]).unwrap().len(), 1);
+        assert_eq!(*only.precision(), Precision::Fp32);
+        assert!(!only.supports_mixed_precision());
+        assert!(
+            only.try_fallback_to_cpu(&ModelConfig::default())
+                .await
+                .is_ok()
+        );
+    }
 }

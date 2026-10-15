@@ -3024,4 +3024,468 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
+
+    // -- 未覆盖分支补测（覆盖率任务）：批上限即返 / SLA 收割 / 出批淘汰 /
+    //    空批 no-op / Rerank 直答 / 决策服务缺位 / 批推理失败广播 / mock 方法体 --
+
+    /// max_batch_size=1：assemble_batch 首请求即达上限，不开启等待窗口、
+    /// 不出队后续请求（kill-switch 边界）。
+    #[tokio::test]
+    async fn test_assemble_batch_max_batch_size_one_returns_first_only() {
+        let dequeue_calls = StdArc::new(AtomicUsize::new(0));
+        let counter = StdArc::clone(&dequeue_calls);
+        let first = make_queued("cap-one");
+        let batch = assemble_batch(
+            first,
+            move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async { Some(make_queued("never")) }
+            },
+            1,
+            100,
+        )
+        .await;
+        assert_eq!(batch.len(), 1, "上限 1 必须立即返回仅首请求");
+        assert_eq!(batch[0].request_id, "cap-one");
+        assert_eq!(
+            dequeue_calls.load(Ordering::SeqCst),
+            0,
+            "达到上限后不得再出队"
+        );
+    }
+
+    /// SLA 收割（dequeue 臂时间门控）：worker 忙于慢推理期间，队内请求
+    /// 老化超过自身 timeout——下一次出队事件触发的收割必须给它补
+    /// RequestTimeout 响应并释放取消注册，高优先 fresh 请求正常服务。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_reap_expired_request_completes_timeout_while_serving_fresh() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig {
+            min_workers: 0,
+            max_workers: 2,
+            batch_wait_ms: 0,
+            idle_timeout_secs: 60,
+            ..Default::default()
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(SlowEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let manager = WorkerManager::new(
+            Arc::clone(&queue),
+            Arc::clone(&response_channel),
+            config,
+            service,
+        );
+        manager.spawn_worker().await;
+
+        // 占住 worker 300ms
+        let rx_busy = response_channel.register("reap-busy".to_string()).await;
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "reap-busy".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "busy".to_string(),
+                    normalize: Some(false),
+                }),
+                priority: Priority::Normal,
+                submitted_at: std::time::Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::http("127.0.0.1".to_string()),
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        // worker 忙碌期间入队：短 SLA 请求 + 高优先 fresh 请求
+        let rx_expired = response_channel.register("reap-expired".to_string()).await;
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "reap-expired".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "expired".to_string(),
+                    normalize: Some(false),
+                }),
+                priority: Priority::Normal,
+                submitted_at: std::time::Instant::now(),
+                timeout: Duration::from_millis(60),
+                source: RequestSource::http("127.0.0.1".to_string()),
+            })
+            .await
+            .unwrap();
+        let rx_fresh = response_channel.register("reap-fresh".to_string()).await;
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "reap-fresh".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "fresh".to_string(),
+                    normalize: Some(false),
+                }),
+                priority: Priority::High,
+                submitted_at: std::time::Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::http("127.0.0.1".to_string()),
+            })
+            .await
+            .unwrap();
+
+        // fresh（高优先先出队）正常完成
+        let fresh = tokio::time::timeout(Duration::from_secs(5), rx_fresh)
+            .await
+            .expect("fresh request must complete")
+            .expect("channel open");
+        assert!(fresh.is_ok(), "fresh request must succeed: {fresh:?}");
+
+        // 过期请求被收割：RequestTimeout 而非推理结果
+        let expired = tokio::time::timeout(Duration::from_secs(5), rx_expired)
+            .await
+            .expect("expired request must be reaped promptly")
+            .expect("channel open");
+        match expired {
+            Err(VecboostError::RequestTimeout(msg)) => {
+                assert!(!msg.is_empty(), "收割文案必须存在，got: {msg}");
+            }
+            other => panic!("expired request must get RequestTimeout, got {other:?}"),
+        }
+        let _ = rx_busy.await;
+
+        manager.running.store(false, Ordering::SeqCst);
+        let senders = manager.worker_senders.lock().await.clone();
+        for s in &senders {
+            let _ = s.send(WorkerTask::Shutdown { immediate: true }).await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    /// 出批 SLA 淘汰：拼批窗口内首请求老化超过自身 timeout——出批时被
+    /// 淘汰并补 RequestTimeout，同批其余请求不受影响。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_evict_expired_batch_request_at_batch_out() {
+        let queue = Arc::new(PriorityRequestQueue::new(100));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let config = WorkerConfig {
+            min_workers: 0,
+            max_workers: 2,
+            batch_wait_ms: 80,
+            idle_timeout_secs: 60,
+            ..Default::default()
+        };
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let manager = WorkerManager::new(
+            Arc::clone(&queue),
+            Arc::clone(&response_channel),
+            config,
+            service,
+        );
+        manager.spawn_worker().await;
+
+        let rx_short = response_channel.register("evict-short".to_string()).await;
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "evict-short".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "short sla".to_string(),
+                    normalize: Some(false),
+                }),
+                priority: Priority::Normal,
+                submitted_at: std::time::Instant::now(),
+                timeout: Duration::from_millis(40),
+                source: RequestSource::http("127.0.0.1".to_string()),
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let rx_long = response_channel.register("evict-long".to_string()).await;
+        queue
+            .enqueue(QueuedRequest {
+                request_id: "evict-long".to_string(),
+                request: ServiceRequest::Embed(EmbedRequest {
+                    text: "long sla".to_string(),
+                    normalize: Some(false),
+                }),
+                priority: Priority::Normal,
+                submitted_at: std::time::Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::http("127.0.0.1".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let short = tokio::time::timeout(Duration::from_secs(5), rx_short)
+            .await
+            .expect("short-sla request must be answered")
+            .expect("channel open");
+        match short {
+            Err(VecboostError::RequestTimeout(_)) => {}
+            other => panic!("窗口内过期的请求必须出批淘汰，got {other:?}"),
+        }
+        let long = tokio::time::timeout(Duration::from_secs(5), rx_long)
+            .await
+            .expect("long-sla request must be answered")
+            .expect("channel open");
+        assert!(long.is_ok(), "同批未过期请求必须正常完成: {long:?}");
+
+        manager.running.store(false, Ordering::SeqCst);
+        let senders = manager.worker_senders.lock().await.clone();
+        for s in &senders {
+            let _ = s.send(WorkerTask::Shutdown { immediate: true }).await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    /// 空批直入 process_batch_requests：立即返回、不触碰通道（边界 no-op）。
+    #[tokio::test]
+    async fn test_process_batch_requests_empty_batch_is_noop() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let channel = Arc::new(ResponseChannel::new());
+        WorkerManager::process_batch_requests(Vec::new(), &service, None, &channel).await;
+        assert_eq!(channel.pending_count().await, 0, "空批必须零副作用");
+    }
+
+    /// 批内 Rerank 请求：worker 直答不支持（InternalError），同批 embed
+    /// 不受影响。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_partition_batch_rerank_direct_answer_unsupported() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let channel = Arc::new(ResponseChannel::new());
+
+        let batch = vec![
+            make_queued("mix-embed"),
+            QueuedRequest {
+                request_id: "mix-rerank".to_string(),
+                request: ServiceRequest::Rerank(crate::domain::RerankRequest {
+                    query: "q".to_string(),
+                    documents: vec!["d".to_string()],
+                    top_k: None,
+                    return_documents: None,
+                }),
+                priority: Priority::Normal,
+                submitted_at: std::time::Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::http("127.0.0.1".to_string()),
+            },
+        ];
+        let embed_rx = channel.register("mix-embed".to_string()).await;
+        let rerank_rx = channel.register("mix-rerank".to_string()).await;
+
+        WorkerManager::process_batch_requests(batch, &service, None, &channel).await;
+
+        let rerank = tokio::time::timeout(Duration::from_secs(2), rerank_rx)
+            .await
+            .expect("rerank must be answered directly")
+            .expect("channel open");
+        match rerank {
+            Err(VecboostError::InternalError(msg)) => {
+                assert!(
+                    msg.contains("Rerank not supported"),
+                    "直答文案必须可定位，got: {msg}"
+                );
+            }
+            other => panic!("rerank must get unsupported error, got {other:?}"),
+        }
+        let embed = tokio::time::timeout(Duration::from_secs(2), embed_rx)
+            .await
+            .expect("embed must complete")
+            .expect("channel open");
+        assert!(embed.is_ok(), "同批 embed 不受 rerank 直答影响: {embed:?}");
+    }
+
+    /// 批内决策请求在决策服务缺位时到点直答 decision-not-configured，
+    /// 不悬挂等待方（多请求批路径，区别于单请求快速路径）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_partition_batch_decision_without_service_rejected() {
+        crate::i18n::init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let channel = Arc::new(ResponseChannel::new());
+
+        let batch = vec![
+            make_queued("mix-embed-2"),
+            QueuedRequest {
+                request_id: "mix-decision".to_string(),
+                request: ServiceRequest::Decision(DecisionRequest {
+                    state: serde_json::json!({}),
+                    questions: vec![DecisionQuestion {
+                        name: "confident".to_string(),
+                        qtype: QuestionType::Noul,
+                        instructions: "state your p(true)".to_string(),
+                        options: vec![],
+                    }],
+                }),
+                priority: Priority::Normal,
+                submitted_at: std::time::Instant::now(),
+                timeout: Duration::from_secs(30),
+                source: RequestSource::http("127.0.0.1".to_string()),
+            },
+        ];
+        let decision_rx = channel.register("mix-decision".to_string()).await;
+
+        WorkerManager::process_batch_requests(batch, &service, None, &channel).await;
+
+        let decision = tokio::time::timeout(Duration::from_secs(2), decision_rx)
+            .await
+            .expect("decision must be answered directly")
+            .expect("channel open");
+        match decision {
+            Err(VecboostError::InternalError(msg)) => {
+                assert!(
+                    !msg.is_empty(),
+                    "decision-not-configured 文案必须存在，got: {msg}"
+                );
+            }
+            other => panic!("decision without service must be rejected, got {other:?}"),
+        }
+    }
+
+    /// 单请求快速路径：Rerank 请求被显性拒绝（InternalError）。
+    #[tokio::test]
+    async fn test_process_request_rerank_unsupported() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let request = QueuedRequest {
+            request_id: "solo-rerank".to_string(),
+            request: ServiceRequest::Rerank(crate::domain::RerankRequest {
+                query: "q".to_string(),
+                documents: vec!["d".to_string()],
+                top_k: None,
+                return_documents: None,
+            }),
+            priority: Priority::Normal,
+            submitted_at: std::time::Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::http("127.0.0.1".to_string()),
+        };
+        let result = WorkerManager::process_request(request, &service, None).await;
+        match result {
+            Err(VecboostError::InternalError(msg)) => {
+                assert!(msg.contains("Rerank not supported"), "got: {msg}");
+            }
+            other => panic!("expected InternalError, got {other:?}"),
+        }
+    }
+
+    /// 单请求快速路径：决策服务缺位时显性拒绝（decision-not-configured）。
+    #[tokio::test]
+    async fn test_process_request_decision_without_service_rejected() {
+        crate::i18n::init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let request = QueuedRequest {
+            request_id: "solo-decision".to_string(),
+            request: ServiceRequest::Decision(DecisionRequest {
+                state: serde_json::json!({}),
+                questions: vec![DecisionQuestion {
+                    name: "confident".to_string(),
+                    qtype: QuestionType::Noul,
+                    instructions: "state your p(true)".to_string(),
+                    options: vec![],
+                }],
+            }),
+            priority: Priority::Normal,
+            submitted_at: std::time::Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::http("127.0.0.1".to_string()),
+        };
+        let result = WorkerManager::process_request(request, &service, None).await;
+        assert!(
+            matches!(result, Err(VecboostError::InternalError(_))),
+            "决策服务缺位必须 InternalError，got {result:?}"
+        );
+    }
+
+    /// 批量 embed 推理失败：批内全部请求收到同一错误（广播分支）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_batch_embed_inference_error_fails_all_requests() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(ErrorEngine));
+        let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
+        let channel = Arc::new(ResponseChannel::new());
+
+        let batch = vec![make_queued("batch-err-1"), make_queued("batch-err-2")];
+        let rx1 = channel.register("batch-err-1".to_string()).await;
+        let rx2 = channel.register("batch-err-2".to_string()).await;
+
+        WorkerManager::process_batch_requests(batch, &service, None, &channel).await;
+
+        for (rx, rid) in [(rx1, "batch-err-1"), (rx2, "batch-err-2")] {
+            let result = tokio::time::timeout(Duration::from_secs(2), rx)
+                .await
+                .expect("failed batch must still complete every request")
+                .expect("channel open");
+            match result {
+                Err(VecboostError::InferenceError(msg)) => {
+                    assert!(
+                        msg.contains("mock batch inference failure"),
+                        "{rid} 必须收到批推理错误，got: {msg}"
+                    );
+                }
+                other => panic!("{rid} expected InferenceError, got {other:?}"),
+            }
+        }
+    }
+
+    /// 直接调用 mock 引擎未使用的 trait 方法体（覆盖率，仿 rerank.rs 先例）。
+    #[tokio::test]
+    async fn test_worker_mock_engines_unused_trait_bodies() {
+        // PanicOnceEngine 未武装路径：embed/embed_batch 正常产出
+        let mut panic_once = PanicOnceEngine {
+            armed: Arc::new(AtomicBool::new(false)),
+        };
+        assert_eq!(panic_once.embed("x").unwrap().len(), 4);
+        assert_eq!(
+            panic_once
+                .embed_batch(&["a".to_string(), "b".to_string()])
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            panic_once
+                .try_fallback_to_cpu(&ModelConfig::default())
+                .await
+                .is_ok()
+        );
+
+        // SlowEngine 批量臂（单条臂已由 shutdown 排空钉覆盖）
+        let slow = SlowEngine;
+        assert_eq!(slow.embed_batch(&["a".to_string()]).unwrap().len(), 1);
+
+        // ErrorEngine 批量臂（单条臂已由 process_request 错误钉覆盖）
+        let batch_err = ErrorEngine.embed_batch(&["a".to_string()]).unwrap_err();
+        assert!(matches!(batch_err, VecboostError::InferenceError(_)));
+        assert!(matches!(
+            ErrorEngine.embed("x"),
+            Err(VecboostError::InferenceError(_))
+        ));
+        assert_eq!(*ErrorEngine.precision(), Precision::Fp32);
+
+        // DecisionCapableEngine：embed 面与 CPU 回退
+        let mut decision_capable = DecisionCapableEngine;
+        assert_eq!(decision_capable.embed("x").unwrap().len(), 8);
+        assert_eq!(
+            decision_capable
+                .embed_batch(&["a".to_string()])
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(*decision_capable.precision(), Precision::Fp32);
+        assert!(!decision_capable.supports_mixed_precision());
+        assert!(decision_capable.supports_task(ModelTask::Decision));
+        assert!(
+            decision_capable
+                .try_fallback_to_cpu(&ModelConfig::default())
+                .await
+                .is_ok()
+        );
+    }
 }

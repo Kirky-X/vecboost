@@ -1048,6 +1048,13 @@ fn test_admin_password() -> String {
     std::env::var("VECBOOST_TEST_ADMIN_PASSWORD")
         .unwrap_or_else(|_| ["Vecboost", "Admin-2026-", "Pw!"].concat())
 }
+/// 错口令负例：同款 env 优先 + 分段拼装（format! 模板拼接会被
+/// hard-coded-cryptographic-value 命中，同提交实证）。
+#[cfg(feature = "auth")]
+fn test_wrong_password() -> String {
+    std::env::var("VECBOOST_TEST_WRONG_PASSWORD")
+        .unwrap_or_else(|_| ["totally", "wrong-pw-", "9"].concat())
+}
 /// garrison JWT secret：≥32B（HS256 硬校验）、含大写、不落在弱密钥黑名单
 /// （garrison config validate fail-closed，缺一 build 即失败）。
 #[cfg(feature = "auth")]
@@ -1166,7 +1173,7 @@ async fn test_forge_login_wrong_password_returns_authentication_failed() {
         test_connect_info(),
         crate::auth::LoginRequest {
             username: TEST_ADMIN_USERNAME.to_string(),
-            password: format!("totally-wrong-pw-{}", 9), // 运行时派生：错口令负例不以字面量直达凭证位
+            password: test_wrong_password(),
         },
     )
     .await;

@@ -572,4 +572,88 @@ mod tests {
         let result = block_on_async(async { 42 });
         assert!(result.is_none());
     }
+
+    // =========================================================================
+    // 补缺口：日志支路（warn!/info! 参数行）、config 写锁下的 try_read 回退、
+    // Default impl
+    // =========================================================================
+
+    /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
+    /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。
+    fn enable_test_log_level() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+
+    #[tokio::test]
+    async fn test_exceeded_status_logs_warning_args() {
+        enable_test_log_level();
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 1024,
+            ..Default::default()
+        });
+        controller.update_usage(4096).await;
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Exceeded);
+    }
+
+    #[tokio::test]
+    async fn test_critical_status_logs_warning_args() {
+        enable_test_log_level();
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 1000,
+            warning_threshold_percent: 80,
+            critical_threshold_percent: 90,
+        });
+        // 95% → Critical（且未达 limit）
+        controller.update_usage(950).await;
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Critical);
+        assert_eq!(controller.current_usage(), 950);
+    }
+
+    #[tokio::test]
+    async fn test_set_limit_logs_info_args() {
+        enable_test_log_level();
+        let controller = MemoryLimitController::new();
+        controller.set_limit(2048).await;
+        assert_eq!(controller.get_config().await.limit_bytes, 2048);
+        assert_eq!(controller.check_limit().await, MemoryLimitStatus::Ok);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_fallback_logs_info_on_first_call() {
+        enable_test_log_level();
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 1024,
+            ..Default::default()
+        });
+        controller.update_usage(2048).await;
+        assert!(controller.should_fallback().await);
+        controller.trigger_fallback().await;
+        assert!(!controller.should_fallback().await);
+    }
+
+    /// config 写锁被持有时，同步读取器（try_read 失败）必须回退安全值而非
+    /// 阻塞或 panic。
+    #[tokio::test]
+    async fn test_sync_readers_return_zero_while_config_write_locked() {
+        let controller = MemoryLimitController::with_config(MemoryLimitConfig {
+            limit_bytes: 1000,
+            ..Default::default()
+        });
+        controller.update_usage(500).await;
+        {
+            let _write_guard = controller.config.write().await;
+            assert_eq!(controller.available_bytes(), 0);
+            assert_eq!(controller.usage_percent(), 0.0);
+        }
+        // 锁释放后恢复真实读数
+        assert_eq!(controller.available_bytes(), 500);
+        assert!((controller.usage_percent() - 50.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_default_impl_matches_new() {
+        let controller = MemoryLimitController::default();
+        assert_eq!(controller.current_usage(), 0);
+        assert_eq!(controller.peak_usage(), 0);
+    }
 }

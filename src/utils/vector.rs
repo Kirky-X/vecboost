@@ -708,3 +708,134 @@ mod similarity_tests {
         assert!(cosine_similarity(&a, &a).is_ok());
     }
 }
+
+/// 补缺口：SimilarityMetric::FromStr 全别名、错误 Display、Manhattan 聚合臂、
+/// 近零向量归一化拒绝、ensure_finite_embedding 错误类型、TaskType Display 全臂。
+#[cfg(test)]
+mod parse_and_error_tests {
+    use super::*;
+
+    #[test]
+    fn test_similarity_metric_from_str_all_aliases_case_insensitive() {
+        assert_eq!(
+            "cosine".parse::<SimilarityMetric>().unwrap(),
+            SimilarityMetric::Cosine
+        );
+        assert_eq!(
+            "COSINE".parse::<SimilarityMetric>().unwrap(),
+            SimilarityMetric::Cosine
+        );
+        assert_eq!(
+            "Euclidean".parse::<SimilarityMetric>().unwrap(),
+            SimilarityMetric::Euclidean
+        );
+        assert_eq!(
+            "dot".parse::<SimilarityMetric>().unwrap(),
+            SimilarityMetric::DotProduct
+        );
+        assert_eq!(
+            "dotproduct".parse::<SimilarityMetric>().unwrap(),
+            SimilarityMetric::DotProduct
+        );
+        assert_eq!(
+            "dot_product".parse::<SimilarityMetric>().unwrap(),
+            SimilarityMetric::DotProduct
+        );
+        assert_eq!(
+            "manhattan".parse::<SimilarityMetric>().unwrap(),
+            SimilarityMetric::Manhattan
+        );
+        assert_eq!(
+            "l1".parse::<SimilarityMetric>().unwrap(),
+            SimilarityMetric::Manhattan
+        );
+    }
+
+    #[test]
+    fn test_similarity_metric_from_str_error_display_names_offender() {
+        let err = "cosin".parse::<SimilarityMetric>().unwrap_err();
+        assert_eq!(
+            err,
+            VectorParseError::UnknownSimilarityMetric("cosin".to_string())
+        );
+        assert!(
+            err.to_string().contains("Unknown similarity metric"),
+            "错误 Display 必须可读: {err}"
+        );
+        assert!(
+            err.to_string().contains("cosin"),
+            "错误必须回显非法输入: {err}"
+        );
+        // TaskType 的未知取值走独立错误臂，Display 同样必须可读且回显输入
+        let err = "retrieval!".parse::<TaskType>().unwrap_err();
+        assert_eq!(
+            err,
+            VectorParseError::UnknownTaskType("retrieval!".to_string())
+        );
+        assert!(
+            err.to_string().contains("Unknown task type") && err.to_string().contains("retrieval!"),
+            "实际: {err}"
+        );
+    }
+
+    #[test]
+    fn test_calculate_similarity_manhattan_and_dotproduct_arms() {
+        let v1 = vec![0.0, 0.0];
+        let v2 = vec![3.0, 4.0];
+        // 曼哈顿距离 7 → 相似度 1/(1+7) = 0.125
+        let manhattan = calculate_similarity(&v1, &v2, SimilarityMetric::Manhattan).unwrap();
+        assert!((manhattan - 0.125).abs() < 1e-6);
+        // 同点向量距离 0 → 相似度 1
+        let same = calculate_similarity(&v2, &v2, SimilarityMetric::Manhattan).unwrap();
+        assert!((same - 1.0).abs() < 1e-6);
+        // 点积臂直通
+        let dot = calculate_similarity(&v1, &v2, SimilarityMetric::DotProduct).unwrap();
+        assert_eq!(dot, 0.0);
+        // 距离度量遇维度不匹配必须透传错误
+        let v3 = vec![1.0];
+        assert!(
+            calculate_similarity(&v2, &v3, SimilarityMetric::Manhattan).is_err(),
+            "维度不匹配必须报错"
+        );
+    }
+
+    #[test]
+    fn test_normalize_l2_rejects_near_zero_vector() {
+        let mut zero = vec![0.0, 0.0];
+        let err = normalize_l2(&mut zero).unwrap_err();
+        match err {
+            VecboostError::InvalidInput(msg) => {
+                assert!(msg.contains("near-zero"), "实际: {msg}");
+            }
+            other => panic!("Expected InvalidInput, got {other:?}"),
+        }
+        // 消息必须携带量化的范数值便于定位
+        let mut tiny = vec![1e-20, 0.0];
+        let err = normalize_l2(&mut tiny).unwrap_err();
+        assert!(err.to_string().contains("near-zero"));
+        // 原向量不得被半途修改
+        assert_eq!(tiny[0], 1e-20);
+    }
+
+    #[test]
+    fn test_ensure_finite_embedding_rejects_non_finite() {
+        assert!(ensure_finite_embedding(&[0.1, -0.2, 0.3]).is_ok());
+        assert!(ensure_finite_embedding(&[]).is_ok());
+        let err = ensure_finite_embedding(&[1.0, f32::NAN]).unwrap_err();
+        match err {
+            VecboostError::InferenceError(msg) => {
+                assert!(msg.contains("non-finite"), "实际: {msg}");
+            }
+            other => panic!("Expected InferenceError, got {other:?}"),
+        }
+        assert!(ensure_finite_embedding(&[f32::NEG_INFINITY]).is_err());
+    }
+
+    #[test]
+    fn test_task_type_display_all_variants() {
+        assert_eq!(TaskType::Retrieval.to_string(), "retrieval");
+        assert_eq!(TaskType::Clustering.to_string(), "clustering");
+        assert_eq!(TaskType::Classification.to_string(), "classification");
+        assert_eq!(TaskType::SemanticSearch.to_string(), "semantic_search");
+    }
+}

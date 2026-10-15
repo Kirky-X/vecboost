@@ -764,4 +764,100 @@ mod tests {
             );
         }
     }
+
+    // =========================================================================
+    // 补缺口：镜像端点告警支路、空/绝对落位路径拒绝、move_into_place、
+    // 聚合错误的空成功清单支路
+    // =========================================================================
+
+    /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
+    /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。
+    fn enable_test_log_level() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+
+    /// HF_ENDPOINT 指向镜像时 build_hf_repo 必须走告警支路（客户端构造本身
+    /// 不联网），repo 句柄仍须成功返回。
+    #[test]
+    fn test_build_hf_repo_warns_on_mirror_endpoint() {
+        enable_test_log_level();
+        let _guard = HF_ENDPOINT_ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("HF_ENDPOINT").ok();
+        unsafe { std::env::set_var("HF_ENDPOINT", "https://hf-mirror.example") };
+        let result = build_hf_repo("BAAI/bge-m3");
+        match saved {
+            Some(v) => unsafe { std::env::set_var("HF_ENDPOINT", v) },
+            None => unsafe { std::env::remove_var("HF_ENDPOINT") },
+        }
+        assert!(result.is_ok(), "镜像告警不得阻断合法 repo 句柄构造");
+    }
+
+    /// 空落位路径在发起网络请求前显性拒绝。
+    #[tokio::test]
+    async fn test_download_files_rejects_empty_placement_path() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let files = vec![manifest_entry("laya.onnx", "")];
+        let result = download_files("receptron/laya-onnx", &files, tmp.path()).await;
+        match result.unwrap_err() {
+            VecboostError::ModelLoadError(msg) => {
+                assert!(msg.contains("empty placement path"), "got: {msg}");
+            }
+            other => panic!("Expected ModelLoadError, got: {other:?}"),
+        }
+    }
+
+    /// 绝对落位路径会替换整条 out_dir 落盘路径（write-through），必须拒绝。
+    #[tokio::test]
+    async fn test_download_files_rejects_absolute_placement_path() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let files = vec![manifest_entry("laya.onnx", "/abs/escape.onnx")];
+        let result = download_files("receptron/laya-onnx", &files, tmp.path()).await;
+        match result.unwrap_err() {
+            VecboostError::ModelLoadError(msg) => {
+                assert!(
+                    msg.contains("escape.onnx"),
+                    "error must name the offending placement, got: {msg}"
+                );
+            }
+            other => panic!("Expected ModelLoadError, got: {other:?}"),
+        }
+    }
+
+    /// 远端与落位路径不一致时，下载产物必须搬到落位位置（含父目录创建）。
+    #[test]
+    fn test_move_into_place_creates_parent_and_moves() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let downloaded = dir.path().join("downloaded.bin");
+        std::fs::write(&downloaded, b"artifact").expect("write artifact");
+
+        let dest = dir.path().join("nested").join("tokenizer.json");
+        let moved = move_into_place(&downloaded, &dest).expect("move must succeed");
+
+        assert_eq!(moved, dest);
+        assert!(dest.is_file(), "落位文件必须存在");
+        assert!(!downloaded.exists(), "原始下载产物必须被搬走");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"artifact");
+    }
+
+    /// 全部文件失败时聚合错误必须显性标注空成功清单（规则 11，禁止静默）。
+    #[test]
+    fn test_aggregate_download_error_marks_empty_succeeded_list() {
+        let err = aggregate_download_error(
+            "receptron/laya-onnx",
+            &[],
+            &[
+                ("laya.onnx".to_string(), "404 not found".to_string()),
+                ("laya_config.json".to_string(), "timeout".to_string()),
+            ],
+        );
+        match err {
+            VecboostError::ModelLoadError(msg) => {
+                assert!(msg.contains("(none)"), "空成功清单必须显性: {msg}");
+                assert!(msg.contains("0 succeeded"), "got: {msg}");
+                assert!(msg.contains("2 failed"), "got: {msg}");
+                assert!(msg.contains("timeout"), "逐文件原因缺失: {msg}");
+            }
+            other => panic!("Expected ModelLoadError, got: {other:?}"),
+        }
+    }
 }

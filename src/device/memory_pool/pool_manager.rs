@@ -505,4 +505,96 @@ mod tests {
         assert_eq!(buffer_stats.current_text_pool_size, 0);
         assert_eq!(buffer_stats.current_vector_pool_size, 0);
     }
+
+    // =========================================================================
+    // 补缺口：initialize_all 装配 buffer/model 池（CUDA 关闭）的全量成功路径
+    // =========================================================================
+
+    /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
+    /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。
+    fn enable_test_log_level() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+
+    /// buffer_pool + model_pool 启用、CUDA 关闭：initialize_all 必须装配两个
+    /// CPU 池且缓冲区真实入池（preallocate 生效）。
+    #[tokio::test]
+    async fn test_initialize_all_enables_cpu_pools_without_cuda() {
+        enable_test_log_level();
+        let config = MemoryPoolConfig {
+            buffer_pool: BufferPoolConfig {
+                enabled: true,
+                text_buffer_sizes: vec![16],
+                vector_buffer_sizes: vec![16],
+                pool_size_per_size: 2,
+            },
+            model_pool: ModelWeightPoolConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            cuda_pool: CudaPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        manager
+            .initialize_all(Some(candle_core::Device::Cpu), None)
+            .await
+            .expect("CPU 池装配必须成功");
+
+        let stats = manager.get_memory_stats().await;
+        let buffer_stats = stats
+            .buffer_pool_stats
+            .as_ref()
+            .expect("启用的 buffer_pool 必须有统计");
+        assert!(
+            buffer_stats.current_text_pool_size > 0,
+            "preallocate 必须真实入池"
+        );
+        assert!(stats.model_pool_stats.is_some(), "model_pool 必须有统计");
+
+        manager.clear_all().await;
+    }
+
+    /// 池整体停用：initialize_all 必须跳过装配（不 preallocate、无统计），
+    /// 仍返回成功。
+    #[tokio::test]
+    async fn test_initialize_all_skips_disabled_pools() {
+        enable_test_log_level();
+        let config = MemoryPoolConfig {
+            buffer_pool: BufferPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            model_pool: ModelWeightPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            cuda_pool: CudaPoolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        };
+        let mut manager = MemoryPoolManager::new(config);
+
+        manager
+            .initialize_all(Some(candle_core::Device::Cpu), None)
+            .await
+            .expect("全停用配置必须成功跳过");
+
+        let stats = manager.get_memory_stats().await;
+        assert!(!stats.buffer_pool_enabled, "停用标记必须如实上报");
+        assert!(!stats.model_pool_enabled);
+        assert!(
+            stats
+                .buffer_pool_stats
+                .as_ref()
+                .expect("统计字段恒有")
+                .current_text_pool_size
+                == 0,
+            "跳过 preallocate 时缓冲池必须为空"
+        );
+    }
 }

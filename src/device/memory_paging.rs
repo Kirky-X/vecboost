@@ -711,4 +711,81 @@ mod tests {
         );
         assert_eq!(mgr.gpu_usage(), 250);
     }
+
+    // =========================================================================
+    // 补缺口：普通 page_in 的 OOM 显性失败、两条 page_in 路径的 LRU-K 历史
+    // 裁剪、prefetch/get_prefetch_list 对非 OnCpu 层的跳过
+    // =========================================================================
+
+    /// 层尺寸大于整个预算且无可驱逐层 → 显性 OOM 错误（含 need/available），
+    /// 不得 panic 或静默假成功。
+    #[test]
+    fn test_page_in_oversized_layer_reports_oom() {
+        let mut mgr = WeightPagingManager::new(&test_config());
+        mgr.register_layer("huge", 2000); // 预算 1000
+
+        let err = mgr.page_in("huge").expect_err("超预算层必须失败");
+        let msg = err.to_string();
+        assert!(msg.contains("2000"), "need 字节必须入错误消息: {msg}");
+        assert!(msg.contains("1000"), "available 字节必须入错误消息: {msg}");
+        assert_eq!(mgr.gpu_usage(), 0, "失败换入不得计入用量");
+        assert_eq!(mgr.stats().page_in_count, 0);
+    }
+
+    /// 普通 page_in 路径：访问历史超过 lru_k 必须裁剪最旧记录。
+    #[test]
+    fn test_page_in_trims_access_history_beyond_lru_k() {
+        let mut mgr = WeightPagingManager::new(&test_config());
+        mgr.register_layer("l", 100);
+
+        for _ in 0..3 {
+            mgr.page_in("l").unwrap();
+            mgr.page_out("l").unwrap();
+        }
+        let history_len = mgr.layers.get("l").unwrap().access_history.len();
+        assert!(
+            history_len <= mgr.lru_k,
+            "访问历史应封顶 lru_k={}，实际 {history_len}",
+            mgr.lru_k
+        );
+    }
+
+    /// InTransfer 完成路径：访问历史同样受 lru_k 封顶。
+    #[test]
+    fn test_prefetch_completion_trims_access_history() {
+        let mut mgr = WeightPagingManager::new(&test_config());
+        mgr.register_layer("l", 100);
+
+        for _ in 0..3 {
+            mgr.prefetch(&["l".to_string()]);
+            mgr.page_in("l").unwrap();
+            mgr.page_out("l").unwrap();
+        }
+        let history_len = mgr.layers.get("l").unwrap().access_history.len();
+        assert!(
+            history_len <= mgr.lru_k,
+            "预取完成路径的访问历史应封顶 lru_k，实际 {history_len}"
+        );
+    }
+
+    /// get_prefetch_list 只列 OnCpu 层；prefetch 对已在 GPU 的层是 no-op。
+    #[test]
+    fn test_prefetch_skips_layers_not_on_cpu() {
+        let mut mgr = WeightPagingManager::new(&test_config());
+        mgr.register_layer("l0", 100);
+        mgr.register_layer("l1", 100);
+        let order = vec!["l0".to_string(), "l1".to_string()];
+
+        mgr.page_in("l1").unwrap();
+        // l1 已 OnGpu → 不进预取列表
+        assert!(mgr.get_prefetch_list("l0", &order).is_empty());
+
+        // prefetch 对 OnGpu 层必须保持 OnGpu（不得改写为 InTransfer）
+        mgr.prefetch(&["l1".to_string()]);
+        assert_eq!(
+            mgr.layers.get("l1").unwrap().location,
+            LayerLocation::OnGpu,
+            "prefetch 不得降级已驻留层"
+        );
+    }
 }

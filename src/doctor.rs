@@ -933,4 +933,471 @@ mod tests {
             .push(CheckResult::new("c", CheckStatus::Fail, "bad"));
         assert!(report.has_failures());
     }
+
+    // =========================================================================
+    // 补缺口：CheckStatus 标签契约 / 全量 run / print / resolve_model_dir /
+    // check_config 失败支路 / check_tokenizer 四分支 / cache WAL 分支 /
+    // threads 回退 / GPU 无 cuda feature / models 汇总行 / scan_safetensors
+    // 错误分支矩阵 / gguf 错误分支
+    // =========================================================================
+
+    /// 提升全局 log max_level（无 logger 安装时仅让 warn!/info! 参数求值），
+    /// 使日志宏参数行进入覆盖统计；幂等，无副作用。
+    fn enable_test_log_level() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+
+    #[test]
+    fn test_check_status_as_str_labels() {
+        assert_eq!(CheckStatus::Pass.as_str(), "PASS");
+        assert_eq!(CheckStatus::Warn.as_str(), "WARN");
+        assert_eq!(CheckStatus::Fail.as_str(), "FAIL");
+    }
+
+    #[tokio::test]
+    async fn test_doctor_run_covers_all_sections() {
+        crate::i18n::init();
+        enable_test_log_level();
+        let config = VecboostConfig::default();
+        let report = DoctorReport::run(&config).await;
+        // 六段检查链全部产生结论，且顺序稳定
+        let names: Vec<&str> = report.results.iter().map(|r| r.name).collect();
+        for expected in [
+            "config",
+            "tokenizer",
+            "cache-persist",
+            "threads",
+            "gpu",
+            "models",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "缺少检查段 {expected}，实际 {names:?}"
+            );
+        }
+        // 每条 detail 非空（报告必须可读，不得出现空描述）
+        for r in &report.results {
+            assert!(!r.detail.is_empty(), "段 {} 的 detail 为空", r.name);
+        }
+    }
+
+    #[test]
+    fn test_doctor_print_outputs_all_results() {
+        crate::i18n::init();
+        let mut report = DoctorReport::default();
+        report
+            .results
+            .push(CheckResult::new("alpha", CheckStatus::Pass, "fine"));
+        report
+            .results
+            .push(CheckResult::new("beta", CheckStatus::Fail, "broken"));
+        // print 只写 stdout，不改变退出码；此处验证不 panic 且统计行覆盖全部结果
+        report.print();
+        assert_eq!(report.results.len(), 2);
+    }
+
+    #[test]
+    fn test_resolve_model_dir_explicit_path_wins_and_repo_fallback() {
+        let mut config = VecboostConfig::default();
+        // 显式 model_path 优先（含非空校验）
+        config.model.model_path = Some("/tmp/explicit-model".to_string());
+        assert_eq!(
+            resolve_model_dir(&config),
+            PathBuf::from("/tmp/explicit-model")
+        );
+        // 空串视同未配置 → 回落 model_repo
+        config.model.model_path = Some(String::new());
+        assert_eq!(
+            resolve_model_dir(&config),
+            PathBuf::from(&config.model.model_repo)
+        );
+        // None → 回落 model_repo
+        config.model.model_path = None;
+        assert_eq!(
+            resolve_model_dir(&config),
+            PathBuf::from(&config.model.model_repo)
+        );
+    }
+
+    #[test]
+    fn test_check_config_fails_on_invalid_config() {
+        crate::i18n::init();
+        let mut config = VecboostConfig::default();
+        config.server.port = 0; // garde range(min=1) 违规
+        let result = check_config(&config);
+        assert_eq!(
+            result.status,
+            CheckStatus::Fail,
+            "detail: {}",
+            result.detail
+        );
+        assert!(
+            result.detail.contains("server.port"),
+            "detail 应携带校验错误定位: {}",
+            result.detail
+        );
+    }
+
+    #[test]
+    fn test_check_tokenizer_warns_when_model_dir_missing() {
+        crate::i18n::init();
+        let (dir, _path) = temp_model_dir();
+        let missing = dir.path().join("no-such-model-dir");
+        let mut config = VecboostConfig::default();
+        config.model.model_path = Some(missing.to_string_lossy().to_string());
+        let result = check_tokenizer(&config);
+        assert_eq!(result.status, CheckStatus::Warn);
+        assert!(
+            result.detail.contains("no-such-model-dir"),
+            "detail 应含缺失目录路径: {}",
+            result.detail
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn test_check_tokenizer_warns_when_tokenizer_json_missing() {
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        let mut config = VecboostConfig::default();
+        config.model.model_path = Some(path.to_string_lossy().to_string());
+        let result = check_tokenizer(&config);
+        assert_eq!(result.status, CheckStatus::Warn);
+        assert!(
+            result.detail.contains("tokenizer.json"),
+            "detail 应指名缺失文件: {}",
+            result.detail
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn test_check_tokenizer_passes_with_real_model() {
+        let real = std::path::Path::new("models/BAAI-bge-small-en-v1.5/tokenizer.json");
+        if !real.exists() {
+            eprintln!("Skipping: local model tokenizer.json not available");
+            return;
+        }
+        crate::i18n::init();
+        let mut config = VecboostConfig::default();
+        config.model.model_path = Some(
+            real.parent()
+                .expect("tokenizer.json 必有父目录")
+                .to_string_lossy()
+                .to_string(),
+        );
+        let result = check_tokenizer(&config);
+        assert_eq!(
+            result.status,
+            CheckStatus::Pass,
+            "detail: {}",
+            result.detail
+        );
+    }
+
+    #[test]
+    fn test_check_tokenizer_fails_on_invalid_tokenizer_json() {
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        std::fs::write(path.join("tokenizer.json"), b"{ this is not json ").unwrap();
+        let mut config = VecboostConfig::default();
+        config.model.model_path = Some(path.to_string_lossy().to_string());
+        let result = check_tokenizer(&config);
+        assert_eq!(result.status, CheckStatus::Fail, "损坏 tokenizer 必须 FAIL");
+        drop(dir);
+    }
+
+    #[test]
+    fn test_check_cache_persist_existing_wal_file() {
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        let wal = path.join("existing.wal");
+        std::fs::write(&wal, b"existing wal").unwrap();
+        let mut config = VecboostConfig::default();
+        config.embedding.persist_path = Some(wal.to_string_lossy().to_string());
+        let result = check_cache_persist(&config);
+        assert_eq!(
+            result.status,
+            CheckStatus::Pass,
+            "detail: {}",
+            result.detail
+        );
+
+        // 相对路径无父目录分量 → 显性 FAIL（path invalid），不得 panic
+        config.embedding.persist_path = Some("bare.wal".to_string());
+        let result = check_cache_persist(&config);
+        assert_eq!(result.status, CheckStatus::Fail);
+        drop(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_cache_persist_unwritable_wal_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        let wal = path.join("readonly.wal");
+        std::fs::write(&wal, b"frozen").unwrap();
+        std::fs::set_permissions(&wal, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let mut config = VecboostConfig::default();
+        config.embedding.persist_path = Some(wal.to_string_lossy().to_string());
+        let result = check_cache_persist(&config);
+        // root 不受 0o444 限制（CI 差异），但不得 panic；非 root 必 FAIL
+        assert!(
+            matches!(result.status, CheckStatus::Pass | CheckStatus::Fail),
+            "detail: {}",
+            result.detail
+        );
+        std::fs::set_permissions(&wal, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(dir);
+    }
+
+    /// 检测关闭（环境开关）时 threads 检查降级为 WARN 而非 FAIL。
+    #[test]
+    fn test_check_threads_fallback_warns_when_detection_disabled() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap();
+        crate::i18n::init();
+        enable_test_log_level();
+        let saved = std::env::var("VECBOOST_NO_THREAD_TUNE").ok();
+        unsafe { std::env::set_var("VECBOOST_NO_THREAD_TUNE", "1") };
+        let result = check_threads();
+        match saved {
+            Some(v) => unsafe { std::env::set_var("VECBOOST_NO_THREAD_TUNE", v) },
+            None => unsafe { std::env::remove_var("VECBOOST_NO_THREAD_TUNE") },
+        }
+        assert_eq!(
+            result.status,
+            CheckStatus::Warn,
+            "detail: {}",
+            result.detail
+        );
+        assert!(
+            result.detail.contains(&num_cpus::get().to_string()),
+            "回退描述必须含逻辑核数: {}",
+            result.detail
+        );
+    }
+
+    /// 请求 GPU 但构建未启用 cuda feature → 配置-构建不匹配，必须 FAIL。
+    #[cfg(not(feature = "cuda"))]
+    #[tokio::test]
+    async fn test_check_gpu_fails_when_gpu_requested_without_cuda_feature() {
+        crate::i18n::init();
+        let mut config = VecboostConfig::default();
+        config.model.use_gpu = true;
+        let result = check_gpu(&config).await;
+        assert_eq!(result.status, CheckStatus::Fail);
+    }
+
+    #[test]
+    fn test_check_models_appends_fail_summary_for_corrupt_model() {
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        // 损坏权重（声明偏移越界）→ 该模型目录 FAIL，并触发末尾汇总 FAIL 行
+        write_safetensors(&path.join("broken.safetensors"), true);
+        let mut config = VecboostConfig::default();
+        config.model.model_path = Some(path.to_string_lossy().to_string());
+        let results = check_models(&config);
+        assert!(
+            results.len() >= 2,
+            "真实 models/ 目录 + 显式目录至少两条结论"
+        );
+        assert_eq!(
+            results.last().expect("非空").status,
+            CheckStatus::Fail,
+            "存在 FAIL 模型时末尾必须有汇总行: {:?}",
+            results.last()
+        );
+        drop(dir);
+    }
+
+    #[test]
+    fn test_inspect_model_dir_unreadable_or_empty_warns() {
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        let sealed = path.join("sealed");
+        std::fs::create_dir(&sealed).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let (status, _detail) = inspect_model_dir(&sealed);
+        // 非 root：目录不可读 → Warn(unreadable)；root：目录可读但无权重 →
+        // Warn(no-weights)。两条路径结论都是 WARN。
+        assert_eq!(status, CheckStatus::Warn);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        drop(dir);
+    }
+
+    #[test]
+    fn test_inspect_model_dir_fails_on_invalid_json() {
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        std::fs::write(path.join("config.json"), b"{{ not json").unwrap();
+        write_safetensors(&path.join("model.safetensors"), false);
+        let (status, detail) = inspect_model_dir(&path);
+        assert_eq!(status, CheckStatus::Fail, "detail: {detail}");
+        assert!(detail.contains("config.json"), "detail: {detail}");
+        drop(dir);
+    }
+
+    /// .json 后缀但实为目录：read_to_string 失败 → 显性 FAIL（跨用户确定性，
+    /// 不依赖权限位）。
+    #[test]
+    fn test_inspect_model_dir_fails_on_unreadable_json() {
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        std::fs::create_dir(path.join("actually-a-dir.json")).unwrap();
+        let (status, detail) = inspect_model_dir(&path);
+        assert_eq!(status, CheckStatus::Fail, "detail: {detail}");
+        assert!(detail.contains("actually-a-dir.json"), "detail: {detail}");
+        drop(dir);
+    }
+
+    #[test]
+    fn test_inspect_model_dir_fails_on_corrupt_weights() {
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        write_safetensors(&path.join("weights.safetensors"), true);
+        let (status, detail) = inspect_model_dir(&path);
+        assert_eq!(status, CheckStatus::Fail, "detail: {detail}");
+        assert!(detail.contains("weights.safetensors"), "detail: {detail}");
+        drop(dir);
+    }
+
+    #[test]
+    fn test_inspect_model_dir_fails_on_bad_gguf() {
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        std::fs::write(path.join("model.gguf"), b"NOTG").unwrap();
+        let (status, detail) = inspect_model_dir(&path);
+        assert_eq!(status, CheckStatus::Fail, "detail: {detail}");
+        assert!(detail.contains("GGUF"), "detail: {detail}");
+        drop(dir);
+    }
+
+    /// scan_safetensors 错误分支矩阵：结构非法的权重文件必须逐类显性报错。
+    #[test]
+    fn test_scan_safetensors_rejects_structurally_invalid_files() {
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        let f = |name: &str| path.join(name);
+
+        // 文件不存在
+        let err = verify_safetensors(&f("missing.safetensors")).unwrap_err();
+        assert!(err.contains("missing.safetensors"), "实际: {err}");
+
+        // 不足 8 字节头长度
+        std::fs::write(f("tiny.safetensors"), b"abc").unwrap();
+        let err = verify_safetensors(&f("tiny.safetensors")).unwrap_err();
+        assert!(err.contains("tiny.safetensors"), "实际: {err}");
+
+        // header_len = 0
+        std::fs::write(f("zerolen.safetensors"), 0u64.to_le_bytes()).unwrap();
+        let err = verify_safetensors(&f("zerolen.safetensors")).unwrap_err();
+        assert!(err.contains("zerolen.safetensors"), "实际: {err}");
+
+        // header_len 越过文件末尾
+        let mut bytes = (u64::from(4096u32)).to_le_bytes().to_vec();
+        bytes.extend_from_slice(b"{}");
+        std::fs::write(f("overrun.safetensors"), &bytes).unwrap();
+        let err = verify_safetensors(&f("overrun.safetensors")).unwrap_err();
+        assert!(err.contains("overrun.safetensors"), "实际: {err}");
+
+        // header_len 超过 100MB 上限
+        std::fs::write(
+            f("hugehdr.safetensors"),
+            (101u64 * 1024 * 1024).to_le_bytes(),
+        )
+        .unwrap();
+        let err = verify_safetensors(&f("hugehdr.safetensors")).unwrap_err();
+        assert!(err.contains("hugehdr.safetensors"), "实际: {err}");
+
+        // 头不是合法 JSON
+        let hdr = b"not-json-at-all";
+        let mut bytes = (hdr.len() as u64).to_le_bytes().to_vec();
+        bytes.extend_from_slice(hdr);
+        bytes.extend_from_slice(&[0u8; 8]);
+        std::fs::write(f("badjson.safetensors"), &bytes).unwrap();
+        let err = verify_safetensors(&f("badjson.safetensors")).unwrap_err();
+        assert!(err.contains("badjson.safetensors"), "实际: {err}");
+
+        let write_with_header = |name: &str, header: &[u8], data: &[u8]| {
+            let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+            bytes.extend_from_slice(header);
+            bytes.extend_from_slice(data);
+            std::fs::write(f(name), bytes).unwrap();
+        };
+
+        // 张量元数据不是对象
+        write_with_header("notobj.safetensors", br#"{"w": 42}"#, &[0u8; 16]);
+        let err = verify_safetensors(&f("notobj.safetensors")).unwrap_err();
+        assert!(err.contains("notobj.safetensors"), "实际: {err}");
+
+        // 缺 dtype
+        write_with_header(
+            "nodtype.safetensors",
+            br#"{"w": {"shape": [2, 2], "data_offsets": [0, 16]}}"#,
+            &[0u8; 16],
+        );
+        let err = verify_safetensors(&f("nodtype.safetensors")).unwrap_err();
+        assert!(err.contains("nodtype.safetensors"), "实际: {err}");
+
+        // 缺 data_offsets
+        write_with_header(
+            "nooffsets.safetensors",
+            br#"{"w": {"dtype": "F32", "shape": [2, 2]}}"#,
+            &[0u8; 16],
+        );
+        let err = verify_safetensors(&f("nooffsets.safetensors")).unwrap_err();
+        assert!(err.contains("nooffsets.safetensors"), "实际: {err}");
+
+        // data_offsets 长度 != 2
+        write_with_header(
+            "offsets1.safetensors",
+            br#"{"w": {"dtype": "F32", "shape": [2, 2], "data_offsets": [0]}}"#,
+            &[0u8; 16],
+        );
+        let err = verify_safetensors(&f("offsets1.safetensors")).unwrap_err();
+        assert!(err.contains("offsets1.safetensors"), "实际: {err}");
+
+        // data_offsets 倒置（end < start）
+        write_with_header(
+            "reversed.safetensors",
+            br#"{"w": {"dtype": "F32", "shape": [2, 2], "data_offsets": [16, 0]}}"#,
+            &[0u8; 16],
+        );
+        let err = verify_safetensors(&f("reversed.safetensors")).unwrap_err();
+        assert!(err.contains("reversed.safetensors"), "实际: {err}");
+
+        // __metadata__ 顶层键必须被跳过而非当作张量校验
+        write_with_header(
+            "withmeta.safetensors",
+            br#"{"__metadata__": {"format": "pt"}, "w": {"dtype": "F32", "shape": [2, 2], "data_offsets": [0, 16]}}"#,
+            &[0u8; 16],
+        );
+        assert!(verify_safetensors(&f("withmeta.safetensors")).is_ok());
+
+        drop(dir);
+    }
+
+    #[test]
+    fn test_verify_gguf_magic_unreadable_and_tiny_files() {
+        crate::i18n::init();
+        let (dir, path) = temp_model_dir();
+        let err = verify_gguf_magic(&path.join("missing.gguf")).unwrap_err();
+        assert!(err.contains("missing.gguf"), "实际: {err}");
+
+        let tiny = path.join("tiny.gguf");
+        std::fs::write(&tiny, b"GG").unwrap();
+        let err = verify_gguf_magic(&tiny).unwrap_err();
+        assert!(err.contains("tiny.gguf"), "实际: {err}");
+        drop(dir);
+    }
 }

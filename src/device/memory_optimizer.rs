@@ -795,4 +795,101 @@ mod tests {
         assert_eq!(stats.avg_latency_ms, 0.0);
         assert_eq!(stats.current_batch_size, 16);
     }
+
+    // =========================================================================
+    // 补缺口：日志支路（register/insufficient/increase/decrease 参数行）、
+    // performance_history 100 条封顶裁剪
+    // =========================================================================
+
+    /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
+    /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。
+    fn enable_test_log_level() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+
+    #[test]
+    fn test_register_model_logs_and_stores() {
+        enable_test_log_level();
+        let mut manager =
+            SmartGpuMemoryManager::new(8 * 1024 * 1024 * 1024, GpuMemoryConfig::default());
+        manager.register_model(ModelMemoryRequirements {
+            model_name: "logged-model".to_string(),
+            base_memory_bytes: 1,
+            per_token_memory_bytes: 1,
+            per_vector_memory_bytes: 1,
+            max_sequence_length: 8,
+        });
+        assert!(
+            manager
+                .calculate_optimal_batch_size("logged-model", 8, 8)
+                .is_ok(),
+            "注册后的模型必须可查询"
+        );
+    }
+
+    #[test]
+    fn test_insufficient_memory_logs_and_falls_back_to_min_batch() {
+        enable_test_log_level();
+        let mut manager = SmartGpuMemoryManager::new(
+            1024,
+            GpuMemoryConfig {
+                min_batch_size: 3,
+                max_batch_size: 256,
+                ..Default::default()
+            },
+        );
+        manager.register_model(ModelMemoryRequirements {
+            model_name: "huge".to_string(),
+            base_memory_bytes: u64::MAX / 2,
+            per_token_memory_bytes: 1,
+            per_vector_memory_bytes: 1,
+            max_sequence_length: 8,
+        });
+        // base 2GB 级远超设备 1KB → 二分无解 → 回退 min_batch_size 且必须显性告警
+        let result = manager.calculate_optimal_batch_size("huge", 8, 8);
+        assert_eq!(result.expect("应回退最小批"), 3);
+    }
+
+    #[test]
+    fn test_performance_history_capped_at_100_samples() {
+        let mut manager =
+            SmartGpuMemoryManager::new(8 * 1024 * 1024 * 1024, GpuMemoryConfig::default());
+        for _ in 0..105 {
+            manager.adjust_batch_size_dynamically(20.0, 60.0);
+        }
+        assert!(
+            manager.performance_history.len() <= 100,
+            "history 必须封顶 100，实际 {}",
+            manager.performance_history.len()
+        );
+        // 裁剪的是最旧样本：首条时间戳不得早于窗口内任意样本
+        if let (Some(first), Some(last)) = (
+            manager.performance_history.first(),
+            manager.performance_history.last(),
+        ) {
+            assert!(first.timestamp <= last.timestamp);
+        }
+    }
+
+    #[test]
+    fn test_dynamic_adjustment_logs_scale_up_and_down() {
+        enable_test_log_level();
+        let mut manager =
+            SmartGpuMemoryManager::new(8 * 1024 * 1024 * 1024, GpuMemoryConfig::default());
+        // 6 样本达最低统计窗：低延迟低内存 → 扩批日志支路
+        for _ in 0..6 {
+            manager.adjust_batch_size_dynamically(10.0, 30.0);
+        }
+        let scaled_up = manager.current_batch_size;
+        assert!(scaled_up > 16, "低负载应扩批，实际 {scaled_up}");
+        // 高延迟高内存 → 缩批日志支路
+        for _ in 0..6 {
+            manager.adjust_batch_size_dynamically(200.0, 95.0);
+        }
+        assert!(
+            manager.current_batch_size < scaled_up,
+            "过载应缩批，实际 {}",
+            manager.current_batch_size
+        );
+    }
 }

@@ -271,4 +271,26 @@ mod tests {
             (manhattan_distance_chunked(&v1, &v2) - expected).abs() < TOLERANCE * expected.abs()
         );
     }
+
+    // =========================================================================
+    // 补缺口：长度不匹配的显性 panic 契约（调用方负责校验，此处验证防线）
+    // =========================================================================
+
+    #[test]
+    #[should_panic(expected = "dot_product_chunked: slice length mismatch")]
+    fn test_dot_product_chunked_panics_on_length_mismatch() {
+        let _ = dot_product_chunked(&[1.0, 2.0], &[1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "squared_euclidean_chunked: slice length mismatch")]
+    fn test_squared_euclidean_chunked_panics_on_length_mismatch() {
+        let _ = squared_euclidean_chunked(&[1.0], &[1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "manhattan_distance_chunked: slice length mismatch")]
+    fn test_manhattan_distance_chunked_panics_on_length_mismatch() {
+        let _ = manhattan_distance_chunked(&[1.0, 2.0, 3.0], &[1.0]);
+    }
 }

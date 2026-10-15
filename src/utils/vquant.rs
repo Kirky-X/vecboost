@@ -428,4 +428,111 @@ mod tests {
             mse_raw
         );
     }
+
+    // =========================================================================
+    // 补缺口：尾部不足 64 维直通、非有限/零向量 i8 量化、median_of 直接单测、
+    // 空维度 binary 余弦
+    // =========================================================================
+
+    /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
+    /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。
+    fn enable_test_log_level() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+
+    /// 尾部 <64 维（如 Matryoshka 截断出 70 维）必须原样直通：
+    /// 量化质量下降要告警，但语义不得改变。
+    #[test]
+    fn test_rotate_tail_below_64_dims_passes_through() {
+        enable_test_log_level();
+        let v: Vec<f32> = (0..70).map(|i| i as f32 * 0.1).collect();
+        let out = rotate(&v);
+        assert_eq!(out.len(), 70);
+        // 前 64 维被旋转（范数保持），尾 6 维必须逐元素相等
+        let tail_same = out[64..]
+            .iter()
+            .zip(v[64..].iter())
+            .all(|(a, b)| (a - b).abs() < f32::EPSILON);
+        assert!(
+            tail_same,
+            "尾部未旋转段必须原样保留: {:?} vs {:?}",
+            &out[64..],
+            &v[64..]
+        );
+        let n_before = l2(&v[..64]);
+        let n_after = l2(&out[..64]);
+        assert!(
+            ((n_before - n_after) / n_before).abs() < 1e-4,
+            "旋转块必须范数保持: {n_before} vs {n_after}"
+        );
+        // 384 = 256 + 128：整块无尾部
+        let v384: Vec<f32> = (0..384).map(|i| (i % 13) as f32).collect();
+        assert_eq!(rotate(&v384).len(), 384);
+    }
+
+    #[test]
+    fn test_quantize_i8_zero_and_non_finite_inputs_degrade_to_zeros() {
+        enable_test_log_level();
+        // 全零输入：amax=0 → 零向量 + scale 1.0，不得除零产生 NaN
+        let q0 = quantize_i8(&[0.0; 384]);
+        assert!(q0.data.iter().all(|&d| d == 0));
+        assert_eq!(q0.scale, 1.0);
+
+        // 含 Inf：amax 非有限 → 零向量降级 + 显性告警，不得 saturate 出垃圾
+        let mut inf_vec = vec![1.0f32; 64];
+        inf_vec[0] = f32::INFINITY;
+        let qi = quantize_i8(&inf_vec);
+        assert_eq!(qi.data.len(), 64);
+        assert!(
+            qi.data.iter().all(|&d| d == 0),
+            "非有限输入必须降级为零向量"
+        );
+        assert_eq!(qi.scale, 1.0);
+
+        // 含 NaN：fold 吞掉后 amax=0 → 同样零向量降级
+        let mut nan_vec = vec![0.0f32; 64];
+        nan_vec[7] = f32::NAN;
+        let qn = quantize_i8(&nan_vec);
+        assert!(qn.data.iter().all(|&d| d == 0));
+    }
+
+    #[test]
+    fn test_median_of_direct_properties() {
+        assert_eq!(median_of(vec![]), 0.0, "空输入回退 0.0");
+        assert!(
+            (median_of(vec![3.0, 1.0, 2.0]) - 2.0).abs() < f32::EPSILON,
+            "奇数个取中位"
+        );
+        assert!(
+            (median_of(vec![4.0, 1.0, 3.0, 2.0]) - 2.5).abs() < f32::EPSILON,
+            "偶数个取两中均值"
+        );
+        assert!(
+            (median_of(vec![5.0]) - 5.0).abs() < f32::EPSILON,
+            "单元素即自身"
+        );
+        assert!(
+            (median_of(vec![-1.0, 1.0]) - 0.0).abs() < f32::EPSILON,
+            "无序输入必须排序后取中位"
+        );
+    }
+
+    #[test]
+    fn test_cosine_binary_empty_dims_returns_zero() {
+        let a = BinaryVector {
+            words: vec![],
+            dim: 0,
+            median: 0.0,
+        };
+        let b = a.clone();
+        assert_eq!(cosine_binary(&a, &b), 0.0, "零维必须回退 0.0 而非除零");
+    }
+
+    /// rotate 对不支持的非块维度输入：hadamard_block 仅在整块路径调用，
+    /// 直接调用必须以显性 panic 拒绝（契约防线）。
+    #[test]
+    #[should_panic(expected = "hadamard_block 仅支持")]
+    fn test_hadamard_block_rejects_unsupported_dim() {
+        let _ = hadamard_block(&[0.5, 0.5], 0);
+    }
 }

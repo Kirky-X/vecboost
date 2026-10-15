@@ -518,4 +518,24 @@ mod tests {
             );
         }
     }
+
+    // =========================================================================
+    // 补缺口：非 CUDA 桩的 deallocate no-op 支路
+    // =========================================================================
+
+    /// 非 CUDA 构建：deallocate 是显式 no-op，接收桩指针不得 panic。
+    #[test]
+    #[cfg(not(feature = "cuda"))]
+    fn test_cuda_pool_no_cuda_deallocate_is_noop() {
+        let mut pool = CudaMemoryPool::new(0, CudaPoolConfig::default()).unwrap();
+        // 分配恒失败（桩语义），错误信息必须显性
+        let err = pool.allocate(1024).expect_err("stub allocate must fail");
+        assert!(err.contains("CUDA feature not enabled"), "实际: {err}");
+        // 桩指针直接释放：no-op 路径不得 panic
+        let ptr = CudaMemoryPtr { _size: 1024 };
+        pool.deallocate(ptr);
+        assert_eq!(pool.get_memory_usage(), (0, 0));
+        assert_eq!(pool.get_memory_usage_percent(), 0.0);
+        pool.clear();
+    }
 }

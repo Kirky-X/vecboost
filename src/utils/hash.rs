@@ -577,4 +577,69 @@ mod tests {
         let result = compute_sha256(temp_dir.path());
         assert!(result.is_err());
     }
+
+    // =========================================================================
+    // 补缺口：check_model_integrity 的「存在但不可读」错误支路
+    // =========================================================================
+
+    /// 文件存在但打开失败（unix 权限位）→ 单文件检查必须显性失败并记入
+    /// corrupted_files；root 不受权限位限制时走哈希分支，整体结论仍必须为
+    /// 无效（expected_hash 故意不匹配）。
+    #[cfg(unix)]
+    #[test]
+    fn test_check_model_integrity_reports_existing_but_unreadable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("weights.bin");
+        std::fs::write(&file_path, b"payload").unwrap();
+        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let report = check_model_integrity(
+            "sealed-model",
+            vec![(
+                file_path.to_string_lossy().to_string(),
+                Some("deadbeef".to_string()),
+            )],
+            None,
+        )
+        .unwrap();
+
+        assert!(!report.overall_valid, "无效文件不得整体通过");
+        assert_eq!(report.corrupted_files.len(), 1);
+        let check = &report.files_checked[0];
+        assert!(!check.is_valid);
+        assert!(
+            check.error_message.is_some(),
+            "失败原因必须显性（File not readable 或 Hash mismatch）"
+        );
+
+        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    /// 汇总语义：任一文件无效即 overall_valid=false，且有效文件计数不受污染。
+    #[test]
+    fn test_check_model_integrity_overall_valid_requires_all_files_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.bin");
+        let missing = dir.path().join("missing.bin");
+        std::fs::write(&good, b"good").unwrap();
+        let good_hash = compute_sha256(&good).unwrap();
+
+        let report = check_model_integrity(
+            "mixed-model",
+            vec![
+                (good.to_string_lossy().to_string(), Some(good_hash)),
+                (missing.to_string_lossy().to_string(), None),
+            ],
+            None,
+        )
+        .unwrap();
+
+        assert!(!report.overall_valid, "缺失文件必须拖垮整体结论");
+        assert_eq!(report.files_checked.len(), 2);
+        assert!(report.files_checked[0].is_valid, "有效文件不得被误伤");
+        assert!(!report.files_checked[1].is_valid);
+        assert!(report.files_checked[1].error_message.as_deref() == Some("File does not exist"));
+    }
 }

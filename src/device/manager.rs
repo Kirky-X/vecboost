@@ -1042,4 +1042,72 @@ mod tests {
         let status = manager.check_memory_limit().await;
         assert_eq!(status, MemoryLimitStatus::Warning);
     }
+
+    // =========================================================================
+    // 补缺口：auto_fallback 关闭时的 trigger_fallback 短路、fallback_to_cpu、
+    // require_gpu 选择契约、非 CUDA 设备的批量建议下界
+    // =========================================================================
+
+    /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
+    /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。
+    fn enable_test_log_level() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_fallback_short_circuits_when_disabled() {
+        enable_test_log_level();
+        let mut manager = DeviceManager::new();
+        manager.set_auto_fallback(false);
+        assert!(!manager.is_auto_fallback_enabled());
+        // 关闭自动回退：显式触发不得驱逐到 GPU 语义，恒返回 CPU
+        assert_eq!(manager.trigger_fallback().await, DeviceType::Cpu);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_to_cpu_under_active_log_level() {
+        enable_test_log_level();
+        let manager = DeviceManager::new();
+        assert_eq!(manager.fallback_to_cpu().await, DeviceType::Cpu);
+    }
+
+    /// require_gpu=true：有任何可用 GPU（CUDA/Metal/AMD/OpenCL）必须返回该
+    /// GPU 类型；全无 GPU 的宿主必须回落 CPU（警告支路）。
+    #[tokio::test]
+    async fn test_select_device_require_gpu_contract() {
+        enable_test_log_level();
+        let manager = DeviceManager::new();
+        let _ = manager.list_devices().await;
+        let device = manager.select_device(&DeviceType::Cuda, true).await;
+        match device {
+            DeviceType::Cpu => {
+                // 无 GPU 宿主：所有 GPU 探测都必须为不可用
+                assert!(
+                    !manager.check_device_available(&DeviceType::Cuda).await
+                        && !manager.check_device_available(&DeviceType::Metal).await
+                        && !manager.check_device_available(&DeviceType::Amd).await
+                        && !manager.check_device_available(&DeviceType::OpenCL).await,
+                    "回落 CPU 时不得存在任何可用 GPU"
+                );
+            }
+            gpu => {
+                assert!(
+                    matches!(
+                        gpu,
+                        DeviceType::Cuda | DeviceType::Metal | DeviceType::Amd | DeviceType::OpenCL
+                    ),
+                    "require_gpu 只能返回 GPU 类型或 CPU，实际 {gpu:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_optimal_batch_size_metal_and_amd_positive() {
+        let manager = DeviceManager::new();
+        assert_eq!(manager.get_optimal_batch_size(&DeviceType::Metal).await, 16);
+        // AMD/OpenCL：无设备时 12，有设备时按可用显存推算，均必须为正
+        let amd_batch = manager.get_optimal_batch_size(&DeviceType::Amd).await;
+        assert!(amd_batch > 0, "批量建议必须为正，实际 {amd_batch}");
+    }
 }

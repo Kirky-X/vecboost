@@ -678,4 +678,55 @@ mod tests {
         assert!(pool.can_load_model(512 * 1024 * 1024));
         assert!(!pool.can_load_model(2048 * 1024 * 1024));
     }
+
+    // =========================================================================
+    // 补缺口：零总量使用率回退、缓存回收路径（reclaim 释放卸载模型）
+    // =========================================================================
+
+    /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
+    /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。
+    fn enable_test_log_level() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+
+    /// max_memory 为 0 时使用率必须回退 0.0，不得除零产生 NaN。
+    #[test]
+    fn test_get_memory_usage_percent_zero_total_returns_zero() {
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 0,
+            ..Default::default()
+        };
+        let pool = ModelWeightPool::new("zero".to_string(), config);
+        assert_eq!(pool.get_memory_usage(), (0, 0));
+        assert!(pool.get_memory_usage_percent() == 0.0);
+        assert!(pool.get_memory_usage_percent().is_finite());
+    }
+
+    /// cache_models 启用时，超预算分配必须回收已卸载模型的记账内存并移除槽位，
+    /// 新分配成功后旧槽不得残留。
+    #[test]
+    fn test_allocate_reclaims_unloaded_model_when_cache_enabled() {
+        enable_test_log_level();
+        let config = ModelWeightPoolConfig {
+            max_memory_mb: 512,
+            cache_models: true,
+            ..Default::default()
+        };
+        let mut pool = ModelWeightPool::new("test".to_string(), config);
+
+        pool.allocate_for_model("old-model", 512 * 1024 * 1024)
+            .expect("old-model 应可分配");
+        pool.mark_model_unloaded("old-model");
+
+        // 256MB 放不下（512 已占用）→ 回收已卸载的 old-model 后成功
+        pool.allocate_for_model("new-model", 256 * 1024 * 1024)
+            .expect("回收后 new-model 应可分配");
+
+        assert!(
+            pool.get_model_slot("old-model").is_none(),
+            "被回收模型槽位必须移除"
+        );
+        let (used, _) = pool.get_memory_usage();
+        assert_eq!(used, 256 * 1024 * 1024, "记账必须只含 new-model");
+    }
 }

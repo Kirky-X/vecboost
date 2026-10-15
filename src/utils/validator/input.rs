@@ -1005,6 +1005,55 @@ mod validator_tests {
         let result = validator.validate_file_content(temp.path().to_str().unwrap());
         assert!(result.is_ok(), "text file should be accepted: {:?}", result);
     }
+
+    // =========================================================================
+    // 补缺口：echo 的 \t \n \r 字面量化臂、validate_file_path 对合法扩展名
+    // 超大文件的 size 拒绝支路、全链通过支路
+    // =========================================================================
+
+    /// 豁免集三字符（\t \n \r）必须全部字面量化——原样回显可伪造日志行。
+    #[test]
+    fn test_echo_literalizes_tab_lf_cr() {
+        let out = echo("a\tb\nc\rd");
+        assert_eq!(out, "a\\tb\\nc\\rd");
+        assert!(
+            !out.contains('\t') && !out.contains('\n') && !out.contains('\r'),
+            "回显物不得含裸豁免集字符: {out:?}"
+        );
+    }
+
+    /// 回归钉：合法扩展名的超大文件必须在 size 支路被拒（此前测试用 .tmp
+    /// 名先被扩展名支路拦截，size 支路从未触达）。
+    #[test]
+    fn test_validate_file_path_oversized_txt_rejected_at_size_check() {
+        ensure_i18n_init();
+        let validator = InputValidator::with_default();
+        let temp = tempfile::Builder::new().suffix(".txt").tempfile().unwrap();
+        temp.as_file()
+            .set_len(MAX_FILE_SIZE_BYTES + 1)
+            .expect("sparse file");
+        let result = validator.validate_file_path(temp.path().to_str().unwrap());
+        match result.unwrap_err() {
+            VecboostError::InvalidInput(msg) => {
+                // i18n "file-too-large" 模板插值后必须携带体积数字
+                assert!(
+                    msg.contains("MB") || msg.contains("size") || msg.contains("过大"),
+                    "size 拒绝消息必须说明体积，实际: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput from size check, got {other:?}"),
+        }
+    }
+
+    /// 合法扩展名 + 合规体积 + 纯文本内容 → validate_file_path 全链通过。
+    #[test]
+    fn test_validate_file_path_full_chain_accepts_text_file() {
+        let validator = InputValidator::with_default();
+        let temp = tempfile::Builder::new().suffix(".md").tempfile().unwrap();
+        std::fs::write(temp.path(), "# plain markdown content\n").unwrap();
+        let result = validator.validate_file_path(temp.path().to_str().unwrap());
+        assert!(result.is_ok(), "全链必须通过: {:?}", result.err());
+    }
 }
 
 #[cfg(test)]

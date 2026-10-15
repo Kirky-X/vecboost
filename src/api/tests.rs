@@ -42,7 +42,9 @@ use tokio::sync::RwLock;
 /// Ensure the global STATE is initialized for forge handler tests.
 ///
 /// Builds a minimal `AsyncKit` with `EmbeddingModule` / `RerankModule` /
-/// `DecisionModule` / `DetectModule` registered and injects via `init_state`. Under parallel
+/// `DecisionModule` / `DetectModule` / `TranslateModule` / `TranscribeModule` /
+/// `AuditModule`（auth feature 下含 `AuthModule`）registered and injects via
+/// `init_state`. Under parallel
 /// test execution, multiple tests may race to initialize; `OnceLock` ensures
 /// first-writer-wins, and subsequent `init_state` errors are silently ignored
 /// (expected behavior). Decision 服务必须随首写一并注入：state 是进程级单例，
@@ -71,12 +73,23 @@ async fn ensure_state_initialized() {
         ),
     );
     let translate_svc = Arc::new(TranslateService::new(translate_pairs));
+    // 转录服务注入未装配实例：forge_transcribe 错误分支（400 transcribe-not-configured）
+    // 的装配前提——缺注册会让 require 失败退 500，测不到业务分支。
+    let transcribe_svc = Arc::new(crate::service::transcribe::TranscribeService::unconfigured());
     let mut kit = trait_kit::AsyncKit::new();
     kit.set_config(svc);
     kit.set_config(rerank_svc);
     kit.set_config(decision_svc);
     kit.set_config(detect_svc);
     kit.set_config(translate_svc);
+    kit.set_config(transcribe_svc);
+    // forge_login/refresh/logout 无条件 require AuditModule；Logger 置 None——
+    // 审计事件落盘路径由 test_audit_logger_called_by_forge_handler_pattern 单独覆盖。
+    kit.set_config(Option::<Arc<crate::audit::AuditLogger>>::None);
+    // auth feature 下注入 Some(handle)（与 main.rs init_auth 同构）：None 只能测到
+    // auth-disabled 500，校验/登录分支全部不可达。
+    #[cfg(feature = "auth")]
+    kit.set_config(Some(Arc::new(test_garrison_handle())));
     kit.register::<EmbeddingModule>()
         .expect("register EmbeddingModule in test kit");
     kit.register::<RerankModule>()
@@ -87,6 +100,13 @@ async fn ensure_state_initialized() {
         .expect("register DetectModule in test kit");
     kit.register::<TranslateModule>()
         .expect("register TranslateModule in test kit");
+    kit.register::<crate::registry::AuditModule>()
+        .expect("register AuditModule in test kit");
+    kit.register::<crate::registry::TranscribeModule>()
+        .expect("register TranscribeModule in test kit");
+    #[cfg(feature = "auth")]
+    kit.register::<crate::registry::AuthModule>()
+        .expect("register AuthModule in test kit");
     let kit = kit.build().await.expect("build test kit");
     // Ignore error: under parallel execution another test may have initialized first
     let _ = crate::api::init_state(VecboostState { kit: Arc::new(kit) });
@@ -143,16 +163,20 @@ impl InferenceEngine for TestEngine {
 /// 固定作答的 mock 决策引擎：按 qtype 三题型确定性作答，覆盖自身 decide
 /// 与 supports_task(Decision)，供 DecisionService / forge_decisions 走通
 /// trait 分发全链（不依赖 onnx feature 与模型资产，离线可跑）。
+///
+/// embed 返回非零常向量：零向量会使 InferenceEngine 默认 rerank 实现的
+/// 余弦相似度在零范数处报错（forge_rerank 全分支不可达）；decide/translate
+/// 不消费 embed，非零取值对既有断言无影响。
 struct MockDecisionEngine;
 
 #[async_trait]
 impl InferenceEngine for MockDecisionEngine {
     fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
-        Ok(vec![0.0; 8])
+        Ok(vec![0.1; 8])
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
-        Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+        Ok(texts.iter().map(|_| vec![0.1; 8]).collect())
     }
 
     fn precision(&self) -> &Precision {
@@ -1003,6 +1027,546 @@ async fn test_forge_translate_unconfigured_pair_400_with_pairs_list() {
             // 未配置对 400 含请求对与清单（评审 ARC-4 第二例）
             assert!(message.contains("en-fr"), "msg={message}");
             assert!(message.contains("en-zh"), "msg={message}");
+        }
+        other => panic!("Expected InvalidInput(400), got {:?}", other),
+    }
+}
+
+// =============================================================================
+// forge auth handlers —— login/refresh/logout/me（auth feature，进程内直调）
+// =============================================================================
+
+/// 测试管理员用户名/口令：`test_garrison_handle` 的 Argon2 哈希与
+/// `ensure_garrison_initialized` 的 VecBoostInterface 均以此为准（单管理员模型）。
+#[cfg(feature = "auth")]
+const TEST_ADMIN_USERNAME: &str = "admin";
+#[cfg(feature = "auth")]
+const TEST_ADMIN_PASSWORD: &str = "VecboostAdmin-2026-Pw!";
+/// garrison JWT secret：≥32B（HS256 硬校验）、含大写、不落在弱密钥黑名单
+/// （garrison config validate fail-closed，缺一 build 即失败）。
+#[cfg(feature = "auth")]
+const TEST_JWT_SECRET: &str = "Vecboost-Test-Jwt-Secret-0123456789-ABCDEF";
+
+/// kit 内 AuthModule 能力句柄（与 main.rs init_auth 装配同构：
+/// Argon2 哈希 + admin 用户名 + token 时长）。
+#[cfg(feature = "auth")]
+fn test_garrison_handle() -> crate::auth::GarrisonHandle {
+    use crate::auth::{Argon2Hasher, PasswordHasher};
+    crate::auth::GarrisonHandle {
+        admin_password_hash: Some(
+            Argon2Hasher::default()
+                .hash(TEST_ADMIN_PASSWORD)
+                .expect("admin password hash must succeed"),
+        ),
+        admin_username: TEST_ADMIN_USERNAME.to_string(),
+        token_timeout_secs: 3600,
+    }
+}
+
+/// garrison 全局单例装配（DAO + config + interface，与 main.rs init_auth 同构）。
+/// garrison 0.9 `build()` 允许重复调用（last-writer-wins、BUILD_LOCK 串行），
+/// OnceCell 保证进程内只构建一次；`GarrisonUtil` 静态方法依赖此单例。
+#[cfg(all(feature = "http", feature = "auth"))]
+async fn ensure_garrison_initialized() {
+    use crate::auth::{
+        GarrisonDaoOxcache, GarrisonManager, VecBoostInterface, map_auth_config_to_garrison,
+    };
+    static GARRISON: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    GARRISON
+        .get_or_init(|| async {
+            let auth_config = crate::config::app::AuthConfig {
+                enabled: true,
+                jwt_secret: Some(TEST_JWT_SECRET.to_string()),
+                token_expiration_hours: Some(24),
+                token_expiration_seconds: None,
+                default_admin_username: Some(TEST_ADMIN_USERNAME.to_string()),
+                default_admin_password: Some(TEST_ADMIN_PASSWORD.to_string()),
+                csrf: crate::config::app::CsrfConfig::default(),
+                trusted_proxies: vec![],
+            };
+            let dao = GarrisonDaoOxcache::new()
+                .await
+                .expect("test garrison dao must initialize");
+            GarrisonManager::builder()
+                .dao(Arc::new(dao))
+                .config(Arc::new(map_auth_config_to_garrison(&auth_config)))
+                .interface(Arc::new(VecBoostInterface::new(
+                    TEST_ADMIN_USERNAME.to_string(),
+                )))
+                .build()
+                .await
+                .expect("garrison manager must initialize in tests");
+        })
+        .await;
+}
+
+#[cfg(all(feature = "http", feature = "auth"))]
+fn test_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
+    axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 4242)))
+}
+
+/// 构造 AuthContext（auth_middleware 验证通过后注入的同一结构）。
+#[cfg(all(feature = "http", feature = "auth"))]
+fn auth_context(username: &str, token: &str) -> crate::auth::middleware::AuthContext {
+    crate::auth::middleware::AuthContext {
+        user: crate::auth::User {
+            username: username.to_string(),
+            role: String::new(),
+            permissions: vec![],
+        },
+        token: token.to_string(),
+    }
+}
+
+/// admin 正确凭据 → 200 语义：Bearer token + expires_in 取自 handle，
+/// 且 token 可经 garrison 反查 login_id（会话确已建立）。
+/// multi_thread flavor：garrison oxcache DAO 的 sync 面在 current-thread
+/// runtime 内禁用（tokio 禁止嵌套 blocking driver）。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_forge_login_success_returns_bearer_token() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    ensure_garrison_initialized().await;
+    let resp = crate::api::auth::forge_login(
+        test_connect_info(),
+        crate::auth::LoginRequest {
+            username: TEST_ADMIN_USERNAME.to_string(),
+            password: TEST_ADMIN_PASSWORD.to_string(),
+        },
+    )
+    .await
+    .unwrap_or_else(|e| panic!("forge_login should succeed: {e:?}"));
+    assert_eq!(resp.token_type, "Bearer");
+    assert_eq!(
+        resp.expires_in, 3600,
+        "expires_in 必须取自 GarrisonHandle.token_timeout_secs"
+    );
+    assert!(!resp.token.is_empty());
+    let login_id = crate::auth::GarrisonUtil::get_login_id_by_token(&resp.token)
+        .await
+        .expect("token lookup must not error");
+    assert_eq!(login_id.as_deref(), Some(TEST_ADMIN_USERNAME));
+}
+
+/// admin 错误密码 → 401 语义（AuthenticationFailed），reason 与 i18n 键一致。
+/// 纯本地判定（Argon2 verify），不触 garrison 会话面，无需 garrison 装配。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test]
+async fn test_forge_login_wrong_password_returns_authentication_failed() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = crate::api::auth::forge_login(
+        test_connect_info(),
+        crate::auth::LoginRequest {
+            username: TEST_ADMIN_USERNAME.to_string(),
+            password: "totally-wrong-pw-9".to_string(),
+        },
+    )
+    .await;
+    match result {
+        Err(ApiError::AuthenticationFailed { reason }) => {
+            assert_eq!(
+                reason,
+                crate::i18n::tr("auth-invalid-credentials"),
+                "reason 必须来自 auth-invalid-credentials 键"
+            );
+        }
+        other => panic!("Expected AuthenticationFailed(401), got {:?}", other),
+    }
+}
+
+/// 单管理员模型：非 admin 用户名即使持有正确口令也 401（防持共享口令者
+/// 伪造审计身份），且不产生 garrison 会话（纯本地判定，无需 garrison 装配）。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test]
+async fn test_forge_login_non_admin_username_rejected_even_with_valid_password() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = crate::api::auth::forge_login(
+        test_connect_info(),
+        crate::auth::LoginRequest {
+            username: "root".to_string(),
+            password: TEST_ADMIN_PASSWORD.to_string(),
+        },
+    )
+    .await;
+    match result {
+        Err(ApiError::AuthenticationFailed { .. }) => {}
+        other => panic!("Expected AuthenticationFailed(401), got {:?}", other),
+    }
+}
+
+/// 空密码 → 400 语义 InvalidInput，field 指明 password（结构化错误契约）。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test]
+async fn test_forge_login_empty_password_rejected_with_password_field() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = crate::api::auth::forge_login(
+        test_connect_info(),
+        crate::auth::LoginRequest {
+            username: TEST_ADMIN_USERNAME.to_string(),
+            password: String::new(),
+        },
+    )
+    .await;
+    match result {
+        Err(ApiError::InvalidInput {
+            field: Some(field),
+            value: None,
+            ..
+        }) => assert_eq!(field, "password"),
+        other => panic!("Expected InvalidInput(field=password), got {:?}", other),
+    }
+}
+
+/// 用户名格式非法（长度 <3）→ 400 语义 InvalidInput，field 指明 username。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test]
+async fn test_forge_login_invalid_username_rejected_with_username_field() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = crate::api::auth::forge_login(
+        test_connect_info(),
+        crate::auth::LoginRequest {
+            username: "ab".to_string(),
+            password: TEST_ADMIN_PASSWORD.to_string(),
+        },
+    )
+    .await;
+    match result {
+        Err(ApiError::InvalidInput {
+            field: Some(field),
+            value: None,
+            ..
+        }) => assert_eq!(field, "username"),
+        other => panic!("Expected InvalidInput(field=username), got {:?}", other),
+    }
+}
+
+/// 空 refresh_token → 400 语义 InvalidInput，field 指明 refresh_token。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test]
+async fn test_forge_refresh_empty_token_rejected_with_field() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = crate::api::auth::forge_refresh(
+        test_connect_info(),
+        crate::auth::RefreshTokenRequest {
+            refresh_token: String::new(),
+        },
+    )
+    .await;
+    match result {
+        Err(ApiError::InvalidInput {
+            field: Some(field),
+            value: None,
+            ..
+        }) => assert_eq!(field, "refresh_token"),
+        other => panic!(
+            "Expected InvalidInput(field=refresh_token), got {:?}",
+            other
+        ),
+    }
+}
+
+/// 未知/伪造 token → garrison 查无会话 Ok(None) → 400 语义 InvalidInput
+/// （非 500：无效凭证属客户端错误，不得落入 Internal catch-all）。
+/// multi_thread flavor：garrison oxcache DAO 的 sync 面需多线程 runtime。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_forge_refresh_unknown_token_returns_invalid_input() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    ensure_garrison_initialized().await;
+    let result = crate::api::auth::forge_refresh(
+        test_connect_info(),
+        crate::auth::RefreshTokenRequest {
+            refresh_token: "forged.token.value".to_string(),
+        },
+    )
+    .await;
+    match result {
+        Err(ApiError::InvalidInput {
+            field: Some(field),
+            value: None,
+            ..
+        }) => assert_eq!(field, "refresh_token"),
+        other => panic!(
+            "Expected InvalidInput(field=refresh_token), got {:?}",
+            other
+        ),
+    }
+}
+
+/// 全链路：login → refresh → me → logout。
+/// refresh 轮换新 token 并撤销旧 token；me 经 task_local token 查询 admin
+/// 角色/全量权限；logout 后 token 立即失效（跨协议吊销语义）。
+/// multi_thread flavor：garrison oxcache DAO 的 sync 面需多线程 runtime。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_forge_login_refresh_me_logout_full_chain() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    ensure_garrison_initialized().await;
+
+    // 1. login
+    let login_resp = crate::api::auth::forge_login(
+        test_connect_info(),
+        crate::auth::LoginRequest {
+            username: TEST_ADMIN_USERNAME.to_string(),
+            password: TEST_ADMIN_PASSWORD.to_string(),
+        },
+    )
+    .await
+    .unwrap_or_else(|e| panic!("login should succeed: {e:?}"));
+
+    // 2. refresh：新 token 可用、旧 token 立即失效
+    let refresh_resp = crate::api::auth::forge_refresh(
+        test_connect_info(),
+        crate::auth::RefreshTokenRequest {
+            refresh_token: login_resp.token.clone(),
+        },
+    )
+    .await
+    .unwrap_or_else(|e| panic!("refresh should succeed: {e:?}"));
+    assert_ne!(
+        refresh_resp.token, login_resp.token,
+        "refresh 必须轮换出新 token"
+    );
+    assert_eq!(refresh_resp.token_type, "Bearer");
+    let old_owner = crate::auth::GarrisonUtil::get_login_id_by_token(&login_resp.token)
+        .await
+        .expect("old token lookup must not error");
+    assert!(old_owner.is_none(), "refresh 后旧 token 必须已撤销");
+
+    // 3. me：middleware 同口径以 task_local token 查询权限/角色
+    let me = crate::auth::with_current_token(
+        refresh_resp.token.clone(),
+        crate::api::auth::forge_me(auth_context(TEST_ADMIN_USERNAME, &refresh_resp.token)),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("me should succeed: {e:?}"));
+    assert_eq!(me["username"], TEST_ADMIN_USERNAME);
+    assert_eq!(me["role"], "admin");
+    assert_eq!(me["permissions"], serde_json::json!(["*"]));
+
+    // 4. logout：吊销当前 token，随后查无会话
+    let msg = crate::api::auth::forge_logout(
+        auth_context(TEST_ADMIN_USERNAME, &refresh_resp.token),
+        test_connect_info(),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("logout should succeed: {e:?}"));
+    assert_eq!(msg, crate::i18n::tr("logout-success"));
+    let after_logout = crate::auth::GarrisonUtil::get_login_id_by_token(&refresh_resp.token)
+        .await
+        .expect("post-logout token lookup must not error");
+    assert!(after_logout.is_none(), "logout 后 token 必须失效");
+}
+
+/// me 的 admin 分支：admin login_id → role=admin + 通配权限。
+/// multi_thread flavor：garrison oxcache DAO 的 sync 面需多线程 runtime。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_forge_me_admin_wildcard_permissions() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    ensure_garrison_initialized().await;
+    let token = crate::auth::GarrisonUtil::login_simple(TEST_ADMIN_USERNAME)
+        .await
+        .expect("login_simple must succeed");
+    let me = crate::auth::with_current_token(
+        token.clone(),
+        crate::api::auth::forge_me(auth_context(TEST_ADMIN_USERNAME, &token)),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("forge_me should succeed: {e:?}"));
+    assert_eq!(me["role"], "admin");
+    assert_eq!(me["permissions"], serde_json::json!(["*"]));
+}
+
+/// me 的 user 分支：非 admin login_id → role=user + 基础嵌入权限（RBAC 收敛）。
+/// multi_thread flavor：garrison oxcache DAO 的 sync 面需多线程 runtime。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_forge_me_regular_user_permissions() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    ensure_garrison_initialized().await;
+    let token = crate::auth::GarrisonUtil::login_simple("alice")
+        .await
+        .expect("login_simple must succeed");
+    let me = crate::auth::with_current_token(
+        token.clone(),
+        crate::api::auth::forge_me(auth_context("alice", &token)),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("forge_me should succeed: {e:?}"));
+    assert_eq!(me["username"], "alice");
+    assert_eq!(me["role"], "user");
+    assert_eq!(
+        me["permissions"],
+        serde_json::json!(["embedding:read", "embedding:write"])
+    );
+}
+
+// =============================================================================
+// forge_rerank / forge_rerank_batch 错误分支（此前 forge 级零覆盖）
+// =============================================================================
+
+/// 空 query → 服务层校验拒绝 → 400 语义 InvalidInput。
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_rerank_empty_query_returns_400() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = crate::api::rerank::forge_rerank(crate::domain::RerankRequest {
+        query: String::new(),
+        documents: vec!["doc".to_string()],
+        top_k: None,
+        return_documents: None,
+    })
+    .await;
+    match result {
+        Err(ApiError::InvalidInput { message, .. }) => {
+            assert!(!message.is_empty(), "400 必须携带文案，got: {message}");
+        }
+        other => panic!("Expected InvalidInput(400), got {:?}", other),
+    }
+}
+
+/// 空 documents → 400 语义 InvalidInput（rerank-empty-docs 校验臂）。
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_rerank_empty_documents_returns_400() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = crate::api::rerank::forge_rerank(crate::domain::RerankRequest {
+        query: "query".to_string(),
+        documents: vec![],
+        top_k: None,
+        return_documents: None,
+    })
+    .await;
+    match result {
+        Err(ApiError::InvalidInput { message, .. }) => {
+            assert!(!message.is_empty(), "400 必须携带文案，got: {message}");
+        }
+        other => panic!("Expected InvalidInput(400), got {:?}", other),
+    }
+}
+
+/// batch 容错可视化：失败 query 不产生响应、在 statuses 对位可见
+/// （ok=false + error 文案 + 原 index），成功 query 不受牵连。
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_rerank_batch_partial_failure_statuses() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = crate::api::rerank::forge_rerank_batch(crate::domain::BatchRerankRequest {
+        queries: vec![
+            crate::domain::RerankRequest {
+                query: "valid query".to_string(),
+                documents: vec!["doc a".to_string()],
+                top_k: None,
+                return_documents: None,
+            },
+            crate::domain::RerankRequest {
+                query: String::new(),
+                documents: vec!["doc b".to_string()],
+                top_k: None,
+                return_documents: None,
+            },
+        ],
+    })
+    .await
+    .unwrap_or_else(|e| panic!("batch rerank should not fail wholesale: {e:?}"));
+    assert_eq!(result.responses.len(), 1, "失败 query 不产生响应");
+    assert_eq!(result.statuses.len(), 2, "statuses 与请求一一对位");
+    assert!(result.statuses[0].ok);
+    assert!(!result.statuses[1].ok);
+    assert!(result.statuses[1].error.is_some(), "失败原因必须可见");
+    assert_eq!(result.statuses[1].index, 1);
+}
+
+// =============================================================================
+// forge_transcribe 错误分支（未装配/坏请求）
+// =============================================================================
+
+/// 空 samples → 域层校验先于装配门 → 400 语义 InvalidInput。
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_transcribe_empty_samples_returns_400() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = crate::api::transcribe::forge_transcribe(crate::domain::TranscribeRequest {
+        samples: vec![],
+    })
+    .await;
+    match result {
+        Err(ApiError::InvalidInput { message, .. }) => {
+            assert!(!message.is_empty(), "400 必须携带文案，got: {message}");
+        }
+        other => panic!("Expected InvalidInput(400), got {:?}", other),
+    }
+}
+
+/// 引擎未装配 → 400 语义显性拒绝（transcribe-not-configured），非 500：
+/// 端点常驻注册、能力缺席属调用方可识别的业务态。
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_transcribe_not_configured_returns_400() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let result = crate::api::transcribe::forge_transcribe(crate::domain::TranscribeRequest {
+        samples: vec![0.0; 160],
+    })
+    .await;
+    match result {
+        Err(ApiError::InvalidInput { message, .. }) => {
+            assert_eq!(
+                message,
+                crate::i18n::tr("transcribe-not-configured"),
+                "必须命中 transcribe-not-configured 业务分支，got: {message}"
+            );
+        }
+        other => panic!("Expected InvalidInput(400), got {:?}", other),
+    }
+}
+
+// =============================================================================
+// forge_decisions 错误分支：问题数超上限
+// =============================================================================
+
+/// questions > MAX_QUESTIONS(32) → 服务层校验拒绝 → 400 语义 InvalidInput，
+/// 文案含上限数值（客户端可按此裁剪重试）。
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_decisions_over_max_questions_returns_400() {
+    use crate::domain::{DecisionQuestion, QuestionType};
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let req = DecisionRequest {
+        state: serde_json::json!({}),
+        questions: (0..(crate::domain::decision::MAX_QUESTIONS + 1))
+            .map(|i| DecisionQuestion {
+                name: format!("q{i}"),
+                qtype: QuestionType::Noul,
+                instructions: "state your p(true)".to_string(),
+                options: vec![],
+            })
+            .collect(),
+    };
+    let result = forge_decisions(req).await;
+    match result {
+        Err(ApiError::InvalidInput { message, .. }) => {
+            // 文案携带 数量/上限 数值契约（"questions count 33 exceeds max per request 32"）
+            assert!(
+                message.contains("exceeds") && message.contains("33") && message.contains("32"),
+                "文案必须指明超限语义与数值，got: {message}"
+            );
         }
         other => panic!("Expected InvalidInput(400), got {:?}", other),
     }

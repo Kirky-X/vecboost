@@ -160,8 +160,8 @@ jobs:
       - name: Run tests with coverage
         # tarpaulin 与新 stable 工具链不兼容（pulp 0.22.3 const 断言 E0080
         # 插桩构建必炸，2026-10-15 实录），按发布流水线生态表切换 llvm-cov；
-        # --lib 与本地实测 90.89% 同口径
-        run: cargo llvm-cov --quiet --features "${{ env.FEATURES }}" --lib --lcov --output-path coverage/lcov.info
+        # --lib 与本地实测 90.89% 同口径。llvm-cov 不自建输出目录，须先 mkdir
+        run: mkdir -p coverage/ && cargo llvm-cov --quiet --features "${{ env.FEATURES }}" --lib --lcov --output-path coverage/lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45 # v5

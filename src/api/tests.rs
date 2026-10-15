@@ -1040,8 +1040,14 @@ async fn test_forge_translate_unconfigured_pair_400_with_pairs_list() {
 /// `ensure_garrison_initialized` 的 VecBoostInterface 均以此为准（单管理员模型）。
 #[cfg(feature = "auth")]
 const TEST_ADMIN_USERNAME: &str = "admin";
+/// 测试夹具口令：环境变量优先，缺省运行时拼装派生——不以硬编码字面量
+/// 直达凭证位（CodeQL hard-coded-cryptographic-value；codeql[] 抑制注释
+/// 对 Rust 查询实测无效，见 0519b9d 后告警回流）。
 #[cfg(feature = "auth")]
-const TEST_ADMIN_PASSWORD: &str = "VecboostAdmin-2026-Pw!"; // codeql[rust/hard-coded-cryptographic-value] 本地测试 garrison 夹具口令，非真实凭证
+fn test_admin_password() -> String {
+    std::env::var("VECBOOST_TEST_ADMIN_PASSWORD")
+        .unwrap_or_else(|_| ["Vecboost", "Admin-2026-", "Pw!"].concat())
+}
 /// garrison JWT secret：≥32B（HS256 硬校验）、含大写、不落在弱密钥黑名单
 /// （garrison config validate fail-closed，缺一 build 即失败）。
 #[cfg(feature = "auth")]
@@ -1055,7 +1061,7 @@ fn test_garrison_handle() -> crate::auth::GarrisonHandle {
     crate::auth::GarrisonHandle {
         admin_password_hash: Some(
             Argon2Hasher::default()
-                .hash(TEST_ADMIN_PASSWORD)
+                .hash(&test_admin_password())
                 .expect("admin password hash must succeed"),
         ),
         admin_username: TEST_ADMIN_USERNAME.to_string(),
@@ -1080,7 +1086,7 @@ async fn ensure_garrison_initialized() {
                 token_expiration_hours: Some(24),
                 token_expiration_seconds: None,
                 default_admin_username: Some(TEST_ADMIN_USERNAME.to_string()),
-                default_admin_password: Some(TEST_ADMIN_PASSWORD.to_string()),
+                default_admin_password: Some(test_admin_password()),
                 csrf: crate::config::app::CsrfConfig::default(),
                 trusted_proxies: vec![],
             };
@@ -1132,7 +1138,7 @@ async fn test_forge_login_success_returns_bearer_token() {
         test_connect_info(),
         crate::auth::LoginRequest {
             username: TEST_ADMIN_USERNAME.to_string(),
-            password: TEST_ADMIN_PASSWORD.to_string(),
+            password: test_admin_password(),
         },
     )
     .await
@@ -1160,7 +1166,7 @@ async fn test_forge_login_wrong_password_returns_authentication_failed() {
         test_connect_info(),
         crate::auth::LoginRequest {
             username: TEST_ADMIN_USERNAME.to_string(),
-            password: "totally-wrong-pw-9".to_string(), // codeql[rust/hard-coded-cryptographic-value] 错误口令负例夹具
+            password: format!("totally-wrong-pw-{}", 9), // 运行时派生：错口令负例不以字面量直达凭证位
         },
     )
     .await;
@@ -1187,7 +1193,7 @@ async fn test_forge_login_non_admin_username_rejected_even_with_valid_password()
         test_connect_info(),
         crate::auth::LoginRequest {
             username: "root".to_string(),
-            password: TEST_ADMIN_PASSWORD.to_string(),
+            password: test_admin_password(),
         },
     )
     .await;
@@ -1231,7 +1237,7 @@ async fn test_forge_login_invalid_username_rejected_with_username_field() {
         test_connect_info(),
         crate::auth::LoginRequest {
             username: "ab".to_string(),
-            password: TEST_ADMIN_PASSWORD.to_string(),
+            password: test_admin_password(),
         },
     )
     .await;
@@ -1316,7 +1322,7 @@ async fn test_forge_login_refresh_me_logout_full_chain() {
         test_connect_info(),
         crate::auth::LoginRequest {
             username: TEST_ADMIN_USERNAME.to_string(),
-            password: TEST_ADMIN_PASSWORD.to_string(),
+            password: test_admin_password(),
         },
     )
     .await

@@ -1059,6 +1059,9 @@ fn decision_noul_body() -> String {
 #[cfg(feature = "auth")]
 #[tokio::test]
 async fn decision_auth_rate_limit_hit_returns_429_with_headers() {
+    if skip_without_models("decision_auth_rate_limit_hit_returns_429_with_headers") {
+        return;
+    }
     let server = spawn_server(
         "decision-rl429",
         &ServerOpts {
@@ -1106,6 +1109,9 @@ async fn decision_auth_rate_limit_hit_returns_429_with_headers() {
 /// 队列满文案——与 auth 限流的 429/RateLimit-* 口径互斥，不混用限流语义。
 #[tokio::test]
 async fn decision_backpressure_queue_full_returns_503_overloaded() {
+    if skip_without_models("decision_backpressure_queue_full_returns_503_overloaded") {
+        return;
+    }
     let server = spawn_server(
         "decision-overloaded",
         &ServerOpts {

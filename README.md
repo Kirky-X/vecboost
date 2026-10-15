@@ -381,8 +381,8 @@ pytest tests/scenario -q --junitxml=scenario-results.xml
 pytest tests/perf -m "not sim"   # 只跑真实服务用例
 pytest tests/perf -m sim          # 只跑模拟器用例
 
-# 覆盖率（CI 硬门禁：行覆盖率 ≥ 80%，tarpaulin）
-cargo tarpaulin --features "grpc,cli,auth,onnx,db,openapi,mcp" --all-targets --out lcov --out xml --output-dir coverage/
+# 覆盖率（CI 硬门禁：行覆盖率 ≥ 80%，llvm-cov；本地实测 90.89%）
+cargo llvm-cov --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --lib --lcov --output-path coverage/lcov.info
 
 # 基准测试（CI benchmark job）
 cargo bench --features "grpc,cli,auth,onnx,db,openapi,mcp"
@@ -396,7 +396,7 @@ cargo audit
 
 ### 📊 测试规模
 
-截至 v0.3.0-rc.2 工作区：单元测试（`src/` 内联）2277 个、Rust 集成/专项测试（`tests/*.rs`）63 个测试函数、Python 场景/性能用例 146 个（场景 119 + 性能 27，15 个场景套件）、Criterion 微基准 5 组；CI 硬门禁为行覆盖率不低于 80%（tarpaulin），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
+截至 v0.3.0-rc.2 工作区：单元测试（`src/` 内联）2277 个、Rust 集成/专项测试（`tests/*.rs`）63 个测试函数、Python 场景/性能用例 146 个（场景 119 + 性能 27，15 个场景套件）、Criterion 微基准 5 组；CI 硬门禁为行覆盖率不低于 80%（llvm-cov），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
 
 ---
 

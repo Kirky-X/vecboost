@@ -353,8 +353,8 @@ pytest tests/scenario -q --junitxml=scenario-results.xml
 pytest tests/perf -m "not sim"   # real-service cases only
 pytest tests/perf -m sim          # simulator cases only
 
-# Coverage (CI hard gate: line coverage >= 80%, tarpaulin)
-cargo tarpaulin --features "grpc,cli,auth,onnx,db,openapi,mcp" --all-targets --out lcov --out xml --output-dir coverage/
+# Coverage (CI hard gate: line coverage >= 80%, llvm-cov; measured 90.89% locally)
+cargo llvm-cov --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --lib --lcov --output-path coverage/lcov.info
 
 # Benchmarks (CI benchmark job)
 cargo bench --features "grpc,cli,auth,onnx,db,openapi,mcp"
@@ -368,7 +368,7 @@ cargo audit
 
 ### 📊 Test Scale
 
-As of the v0.3.0-rc.2 workspace: 2277 inline unit tests in `src/`, 63 Rust integration/specialized test functions (`tests/*.rs`), 146 Python scenario/performance cases (119 scenario + 27 performance, 15 scenario suites), and 5 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 80% (tarpaulin), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
+As of the v0.3.0-rc.2 workspace: 2277 inline unit tests in `src/`, 63 Rust integration/specialized test functions (`tests/*.rs`), 146 Python scenario/performance cases (119 scenario + 27 performance, 15 scenario suites), and 5 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 80% (llvm-cov), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
 
 ---
 

@@ -143,15 +143,15 @@ cargo test -p vecboost --test perf
 # 微基准
 cargo bench -p vecboost
 
-# 覆盖率（CI 硬门禁：行覆盖率 ≥ 80%）
-cargo tarpaulin --features "grpc,cli,auth,onnx,db,openapi,mcp" --all-targets --out lcov --out xml --output-dir coverage/
+# 覆盖率（CI 硬门禁：行覆盖率 ≥ 80%，llvm-cov）
+cargo llvm-cov --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --lib --lcov --output-path coverage/lcov.info
 ```
 
 CI 工作流与测试的对应关系：
 
 | 工作流 | 触发 | 测试内容 |
 |--------|------|----------|
-| `health-check.yml`（CI） | push/PR（main、develop） | fmt、clippy（含 unwrap_used 门禁）、构建矩阵（default/onnx/grpc）、`--lib` + `--tests`、tarpaulin 覆盖率 ≥80% 硬门禁、Windows 测试（continue-on-error）、`cargo doc` 死链、`cargo audit`、main 分支 push 跑 benchmark |
+| `health-check.yml`（CI） | push/PR（main、develop） | fmt、clippy（含 unwrap_used 门禁）、构建矩阵（default/onnx/grpc）、`--lib` + `--tests`、llvm-cov 覆盖率 ≥80% 硬门禁（2026-10-15 起，替代表现已与新 stable 工具链不兼容的 tarpaulin）、Windows 测试（continue-on-error）、`cargo doc` 死链、`cargo audit`、main 分支 push 跑 benchmark |
 | `feature-matrix.yml` | push/PR | default/grpc/ecosystem（auth,db,sqlite,onnx）/postgres-driver 四档 fmt + check + clippy + build + `--lib` 测试（postgres-driver 腿免跑 `--lib`） |
 | `scenario-tests.yml` | 每夜 UTC 03:00 + 手动 | 构建 http 二进制后 `pytest tests/scenario`（无模型环境自动 SKIP 推理类用例） |
 | `codeql.yml` / `docker.yml` | push/PR/每周 | CodeQL 静态分析；Docker 构建 + Trivy 扫描（CRITICAL 即失败） |

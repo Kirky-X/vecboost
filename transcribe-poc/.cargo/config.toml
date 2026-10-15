@@ -1,3 +1,0 @@
-# 嵌入 torch 后端：pyo3 构建期钉定 uv 独立 Python 3.11（libpython 3.11 由 build.rs rpath 固化）
-[env]
-PYO3_PYTHON = "/home/dev/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/bin/python3"

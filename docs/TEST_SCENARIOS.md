@@ -114,7 +114,7 @@ pytest tests/perf -m sim          # 只跑模拟器用例
 
 ## 🧱 单元测试
 
-`src/` 各模块内联 `#[cfg(test)]` 模块（grep 统计 `#[test]` / `#[tokio::test]` 共 2237 个），随 `cargo test --lib` 执行。测试代码允许 `unwrap`（`clippy.toml` 开启 `allow-unwrap-in-tests`），生产代码禁止。共享环境变量竞态经 `ENV_LOCK` 串行化（安全默认值测试组）。
+`src/` 各模块内联 `#[cfg(test)]` 模块（grep 统计 `#[test]` / `#[tokio::test]` 共 2277 个），随 `cargo test --lib` 执行。测试代码允许 `unwrap`（`clippy.toml` 开启 `allow-unwrap-in-tests`），生产代码禁止。共享环境变量竞态经 `ENV_LOCK` 串行化（安全默认值测试组）。
 
 ---
 

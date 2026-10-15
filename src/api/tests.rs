@@ -1041,7 +1041,7 @@ async fn test_forge_translate_unconfigured_pair_400_with_pairs_list() {
 #[cfg(feature = "auth")]
 const TEST_ADMIN_USERNAME: &str = "admin";
 #[cfg(feature = "auth")]
-const TEST_ADMIN_PASSWORD: &str = "VecboostAdmin-2026-Pw!";
+const TEST_ADMIN_PASSWORD: &str = "VecboostAdmin-2026-Pw!"; // codeql[rust/hard-coded-cryptographic-value] 本地测试 garrison 夹具口令，非真实凭证
 /// garrison JWT secret：≥32B（HS256 硬校验）、含大写、不落在弱密钥黑名单
 /// （garrison config validate fail-closed，缺一 build 即失败）。
 #[cfg(feature = "auth")]
@@ -1160,7 +1160,7 @@ async fn test_forge_login_wrong_password_returns_authentication_failed() {
         test_connect_info(),
         crate::auth::LoginRequest {
             username: TEST_ADMIN_USERNAME.to_string(),
-            password: "totally-wrong-pw-9".to_string(),
+            password: "totally-wrong-pw-9".to_string(), // codeql[rust/hard-coded-cryptographic-value] 错误口令负例夹具
         },
     )
     .await;

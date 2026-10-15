@@ -111,11 +111,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  sanitize_password: {}", sanitize_password(password));
 
     let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
-    println!("  sanitize_jwt_secret: {}", sanitize_jwt_secret(jwt));
+    println!(
+        "  sanitize_jwt_secret: {}",
+        sanitize_jwt_secret(jwt) // codeql[rust/cleartext-logging] 打印的即脱敏函数输出（演示脱敏效果），无明文泄漏
+    );
 
     // CJK 安全脱敏（不会 panic）
     let cjk_secret = "密钥内容不能泄露abcdefgh";
-    println!("  sanitize_secret(CJK): {}", sanitize_secret(cjk_secret));
+    println!("  sanitize_secret(CJK): {}", sanitize_secret(cjk_secret)); // codeql[rust/cleartext-logging] 打印的即脱敏函数输出（演示脱敏效果），无明文泄漏
 
     println!("\n✅ 安全模块示例完成");
 

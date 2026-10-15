@@ -313,3 +313,7 @@ impl<R: ManagedResource> trait_kit::AsyncAutoBuilder for ResourceModule<R> {
 `probe`/`report` feature 的窗口；② 修复（或显式豁免）`doc_consistency_check.py`
 的 8 处 env 声明不一致；③ `/health` 与 `/health?depth=full` 的 e2e 用例先行；
 ④ 每次改动跑全部门禁并贴证据。前置条件满足后，按 §4 P1→P2→P3→(P4) 顺序重估。
+
+> 2026-10-15 更新：前置条件②已解决——8 处 `VECBOOST_BUILD_*/RUN_*` 系
+> `scripts/{build,run}-memcap.sh` 真实消费、检查器只扫 Rust 面的误报，env 消费面
+> 已纳入 `scripts/`（另过滤族前缀写法截断），门禁转绿；其余前置条件不变。

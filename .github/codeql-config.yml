@@ -1,0 +1,5 @@
+# CodeQL 高级配置：examples/ 为演示代码（安全演示刻意展示敏感数据的
+# 脱敏与掩码用法，cleartext-logging 类查询必然命中演示意图），移出分析面；
+# 生产分析面（src/benches/tests）保持全量。
+paths-ignore:
+  - examples

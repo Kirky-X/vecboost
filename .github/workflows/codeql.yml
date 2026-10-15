@@ -28,6 +28,7 @@ jobs:
         uses: github/codeql-action/init@cee97f86b972a3ded3c58d04148362b193ddc518 # v4.38.3
         with:
           languages: rust
+          config-file: ./.github/codeql-config.yml
       - name: Autobuild
         uses: github/codeql-action/autobuild@cee97f86b972a3ded3c58d04148362b193ddc518 # v4.38.3
       - name: Perform CodeQL Analysis

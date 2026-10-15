@@ -105,6 +105,9 @@ jobs:
           image-ref: 'vecboost/scan:latest'
           format: 'sarif'
           output: 'trivy-results.sarif'
+          # 上游无修复版的 CVE 属不可行动告警（Fixed Version 为空），不入库；
+          # 修复发布后 Trivy 自动重新报出
+          options: '--ignore-unfixed'
 
       - name: Upload Trivy scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@cee97f86b972a3ded3c58d04148362b193ddc518 # v4.38.3

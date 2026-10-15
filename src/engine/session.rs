@@ -12,6 +12,7 @@
 //! AMD/ROCm warn 分支）不属 builder 链，保留在调用侧——本层只做公共核。
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::config::model::{DeviceType, Precision};
 use crate::error::VecboostError;
@@ -43,6 +44,28 @@ fn resolve_intra_threads(intra_threads: usize) -> usize {
     }
 }
 
+/// ort 进程级全局环境：rc.14 起每进程仅允许构建一个 `Environment`
+/// （二次 `build()` 即报 "only one environment is allowed per process"），
+/// 全部 Session 共享同一实例；进程生命周期内持有，`Session::builder` 只借用。
+fn global_env() -> Result<&'static ort::environment::Environment, VecboostError> {
+    static ENV: OnceLock<ort::environment::Environment> = OnceLock::new();
+    loop {
+        if let Some(env) = ENV.get() {
+            return Ok(env);
+        }
+        match ort::init().build() {
+            Ok(env) => return Ok(ENV.get_or_init(|| env)),
+            Err(e) => {
+                // 并发竞争落败：胜者的 Arc 即将进入 ENV，重查即可；否则属真实构建失败
+                if ENV.get().is_some() {
+                    continue;
+                }
+                return Err(VecboostError::ModelLoadError(e.to_string()));
+            }
+        }
+    }
+}
+
 /// 构建并 `commit_from_file` 一个 Level3 优化、指定 intra 线程与 EP 策略的
 /// Session。所有 ort 构建错误统一映射 [`VecboostError::ModelLoadError`]。
 pub(crate) fn build_session(
@@ -54,10 +77,7 @@ pub(crate) fn build_session(
     ensure_memory_available(model_file)?;
 
     let num_threads = resolve_intra_threads(opts.intra_threads);
-    let env = ort::init()
-        .build()
-        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
-    let mut builder = Session::builder(&env)
+    let mut builder = Session::builder(global_env()?)
         .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?

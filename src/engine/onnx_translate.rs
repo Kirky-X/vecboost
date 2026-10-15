@@ -755,7 +755,10 @@ fn greedy_decode(
 impl OnnxTranslationEngine {
     /// 从 bundle 目录加载：encoder/decoder 按 [`ENCODER_CANDIDATES`]/
     /// [`DECODER_CANDIDATES`] 探测，tokenizer.json 必填（bundle 根，
-    /// 经 `resolve_tokenizer_path` 共享契约：显式路径 → 根 → 子目录）。
+    /// 经 `resolve_tokenizer_path` 共享契约：显式路径 → 根 → 子目录）；
+    /// **generation_config.json 同为必备资产**——缺失时回落 tokenizer
+    /// 特殊 token 推断 decoder_start/eos，对 m2m100 族会以 `<pad>`(1) 充当
+    /// decoder start（真值 `</s>`(2)），贪心解码第 0 步即 EOS、译文恒空。
     pub(crate) fn load(config: &ModelConfig) -> Result<Self, VecboostError> {
         // translation_params 理论恒经合法路径构造（TranslationParams::new
         // 校验），字段全 pub 可库内直构——加载期防御性复检（decision_params

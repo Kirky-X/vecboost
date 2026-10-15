@@ -125,7 +125,7 @@ pub struct SemanticCache {
     capacity: usize,
     enabled: bool,
     comparison_mode: ComparisonMode,
-    /// per-key single-flight：并发同 key 计算去重（T019）
+    /// per-key single-flight：并发同 key 计算去重
     inflight: FlightMap,
     // Stats counters
     exact_hits: AtomicU64,
@@ -142,10 +142,6 @@ impl SemanticCache {
     }
 
     /// 创建启用的语义缓存。
-    #[allow(
-        dead_code,
-        reason = "Test helper / trait dispatch / inventory, not directly called"
-    )]
     pub(crate) fn new(
         exact_cache: Arc<OxCacheBackend>,
         similarity_threshold: f32,
@@ -250,7 +246,7 @@ impl SemanticCache {
             return Ok(embedding);
         }
 
-        // single-flight（T019）：同 key 并发只放一个进模糊查找+推理，
+        // single-flight：同 key 并发只放一个进模糊查找+推理，
         // 后到者获锁后 double-check 精确缓存直接命中。
         let _permit = self.inflight_permit(&cache_key).await;
         if let Some(embedding) = self.exact_cache.get(&cache_key).await {
@@ -316,10 +312,10 @@ impl SemanticCache {
         if best_sim >= self.fuzzy_threshold
             && let Some(idx) = best_idx
         {
-            // LRU touch（T017）：命中刷新 last_access，驱逐按真实 LRU。
+            // LRU touch：命中刷新 last_access，驱逐按真实 LRU。
             // 读锁升级写锁需先降级；重锁后必须复核条目身份——并发
             // insert_to_index 的 swap_remove 会重排 Vec，旧 idx 可能指向
-            // 其它文本/其它模型的条目（审查 H3），不符则放弃本次模糊命中。
+            // 其它文本/其它模型的条目，不符则放弃本次模糊命中。
             drop(index);
             let mut windex = self.semantic_index.write().await;
             return match windex.get_mut(idx) {
@@ -552,7 +548,7 @@ mod tests {
         assert_eq!(trigram_jaccard("hello", ""), 0.0);
         assert_eq!(trigram_jaccard("ab", "abc"), 0.0);
     }
-    /// T019：并发同 (model,text) 只允许一次 compute（single-flight）。
+    /// 并发同 (model,text) 只允许一次 compute（single-flight）。
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 
@@ -597,7 +593,7 @@ mod tests {
         );
     }
 
-    /// T013：不同 model_id 同文本不得互相命中。
+    /// 不同 model_id 同文本不得互相命中。
 
     #[tokio::test]
 

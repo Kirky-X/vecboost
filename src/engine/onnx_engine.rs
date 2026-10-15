@@ -21,7 +21,7 @@ use tokenizers::{PaddingParams, PaddingStrategy};
 pub(crate) const ONNX_MAX_INPUT_LENGTH: usize = 512;
 
 /// 原地 L2 归一化（零/近零向量静默跳过，与 candle 引擎同语义）。
-/// 引擎出口契约要求归一化输出（T026——ONNX 两条路径此前均缺失）。
+/// 引擎出口契约要求归一化输出（ONNX 两条路径此前均缺失）。
 fn l2_normalize_in_place(v: &mut [f32]) {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 1e-12 {

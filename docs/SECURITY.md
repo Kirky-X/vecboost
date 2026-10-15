@@ -22,7 +22,7 @@ VecBoost 将安全性作为核心设计目标。本文档介绍 VecBoost 的安�
 
 | 版本 | 状态 | 说明 |
 |------|------|------|
-| Unreleased（0.3.0-dev 工作区） | ✅ 开发中 | 安全默认值收敛、RBAC 接线、XFF 信任反转等破坏性加固（见 [CHANGELOG](CHANGELOG.md)） |
+| Unreleased（0.3.0-rc.1 工作区） | ✅ 开发中 | 安全默认值收敛、RBAC 接线、XFF 信任反转等破坏性加固（见 [CHANGELOG](CHANGELOG.md)） |
 | 0.2.1 | ✅ 支持 | i18n、Rerank、语义缓存、AES-256-GCM 配置加密 |
 | 0.2.0 | ⚠️ 仅关键修复 | sdforge 四协议、7 库生态接线 |
 | 0.1.0 | ❌ 不再支持 | 初始发布 |
@@ -84,7 +84,7 @@ cargo deny check
 - JWT 认证（`protocol-jwt`）+ CSRF 保护（跟随 `auth.enabled`）+ Web CORS/防火墙系列（bruteforce / ratelimit / ddos / anomalous）。
 - RBAC：`/api/1/model/*` 与 `/embed/file` 要求 **admin 角色**。
 - 登录收敛：仅 `default_admin_username`（默认 admin）可登录；启用认证时必须配置 `VECBOOST_ADMIN_PASSWORD`（≥12 位，缺失拒绝启动）。
-- Token 生命周期：`token_expiration_hours` 缺省 1 小时；支持 TOTP（`secure-totp`）、账号锁定（`account-lockout`）、凭证清零（`account-credential-zeroize`）、异常检测（`anomalous-detector-dual`）与安全告警。
+- Token 生命周期：`token_expiration_hours` 缺省 24 小时；支持 TOTP（`secure-totp`）、账号锁定（`account-lockout`）、凭证清零（`account-credential-zeroize`）、异常检测（`anomalous-detector-dual`）与安全告警。
 - 会话存储：进程内存（oxcache DAO），**auth 开启时仅限单副本**；外置会话需 garrison db 后端（规划中）。
 
 ### 请求边界防护
@@ -145,7 +145,7 @@ cargo deny check
 
 - 始终通过 HTTPS 暴露服务；反代部署显式配置 `trusted_proxies`。
 - 启用 `auth.enabled = true`，`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD` 经环境变量或密钥管理注入，不入库不入镜像。
-- 按需评估 `token_expiration_hours`（默认 1 小时）；纯 Bearer API 可显式关闭 CSRF。
+- 按需评估 `token_expiration_hours`（默认 24 小时）；纯 Bearer API 可显式关闭 CSRF。
 - CORS 勿用通配符 `"*"`（等同公开接口）；显式列出可信来源。
 - auth 开启时为单副本部署（会话在进程内存）；水平扩展需先外置会话（待 garrison db 后端）。
 - 容器等受信网络如需非回环绑定，显式设置 `VECBOOST_ALLOW_INSECURE=1` 并理解 ERROR 告警含义。

@@ -50,7 +50,7 @@ pub struct EmbeddingService {
     memory_manager: Option<SharedGpuMemoryManager>,
     buffer_pool: Option<Arc<tokio::sync::RwLock<BufferPool>>>,
     semantic_cache: Option<Arc<SemanticCache>>,
-    /// 模型常驻内存上限控制器（memory_limit_bytes 配置时启用，T021 执法）
+    /// 模型常驻内存上限控制器（memory_limit_bytes 配置时启用，执法）
     memory_limit: Option<Arc<crate::device::memory_limit::MemoryLimitController>>,
     /// 当前记账模型字节数（控制器 update_usage 为 set 语义，本字段跟踪投影基数）
     memory_used_est: Arc<std::sync::atomic::AtomicU64>,
@@ -359,7 +359,7 @@ impl EmbeddingService {
             match self.engine.read().await.embed_batch(chunk) {
                 Ok(embeddings) => {
                     for (text, mut embedding) in chunk.iter().zip(embeddings.into_iter()) {
-                        // NaN 拒绝入库（审查 MEDIUM-5）
+                        // NaN 拒绝入库
                         if let Err(e) = crate::utils::vector::ensure_finite_embedding(&embedding) {
                             warn!(
                                 "{}",
@@ -512,7 +512,7 @@ impl EmbeddingService {
         &self,
         texts: &[String],
     ) -> Result<Vec<Vec<f32>>, VecboostError> {
-        // 逐条复用文本校验（含控制字符检查，审查 MEDIUM-2：批路径此前绕过防线）
+        // 逐条复用文本校验（含控制字符检查，审查：批路径此前绕过防线）
         for t in texts {
             self.validator.validate_text(t)?;
         }
@@ -549,7 +549,7 @@ impl EmbeddingService {
         for v in &unique_results {
             crate::utils::vector::ensure_finite_embedding(v)?;
         }
-        // 引擎返回向量数不足时显性报错——索引越界 panic 会拖垮 worker（T007）
+        // 引擎返回向量数不足时显性报错——索引越界 panic 会拖垮 worker
         if unique_results.len() < unique_texts.len() {
             return Err(VecboostError::InferenceError(format!(
                 "engine returned {} embeddings for {} unique inputs",
@@ -1638,9 +1638,9 @@ impl EmbeddingService {
         }
     }
 
-    /// 内存上限执法（T021/D21）：按"当前记账 - 旧模型 + 新模型"投影判断，
+    /// 内存上限执法：按"当前记账 - 旧模型 + 新模型"投影判断，
     /// 在替换前执行——旧实现只查上一次记账（已超限才挡新加载，首个超大
-    /// 模型照样放行，审查 M4 时点矛盾）。
+    /// 模型照样放行，时点矛盾）。
     async fn enforce_memory_limit_projection(&self, new_est: &u64) -> Result<(), VecboostError> {
         let Some(ctrl) = &self.memory_limit else {
             return Ok(());
@@ -1787,11 +1787,11 @@ impl EmbeddingService {
 
         // 卸载模型后清缓存
         self.cache.clear().await;
-        // 语义缓存含该模型向量，一并清空防跨模型污染（T015）
+        // 语义缓存含该模型向量，一并清空防跨模型污染
         if let Some(ref semantic) = self.semantic_cache {
             semantic.clear().await;
         }
-        // 记账回冲（审查 M1：set 语义下卸载不回冲会永久占用额度）
+        // 记账回冲（set 语义下卸载不回冲会永久占用额度）
         if let Some(ctrl) = &self.memory_limit {
             ctrl.update_usage(0).await;
             self.memory_used_est
@@ -1813,13 +1813,13 @@ impl EmbeddingService {
         self.model_manager.is_some()
     }
 
-    /// 当前引擎句柄——切模型后传播给 RerankService 等外部持有者（T015）。
+    /// 当前引擎句柄——切模型后传播给 RerankService 等外部持有者。
     pub fn engine_handle(&self) -> Arc<RwLock<dyn InferenceEngine + Send + Sync>> {
         Arc::clone(&self.engine)
     }
 
     /// 启动期接线内存上限：初始引擎 attach 控制器并按模型目录记账。
-    /// server 启动路径调用；构造函数为同步故无法在此完成（审查 M1）。
+    /// server 启动路径调用；构造函数为同步故无法在此完成。
     pub async fn init_memory_limit(&self) {
         let Some(ctrl) = &self.memory_limit else {
             return;
@@ -2007,7 +2007,7 @@ mod tests {
         }
     }
 
-    /// 引擎返回向量数不足时 embed_batch_texts 必须显性报错而非越界 panic（T007）
+    /// 引擎返回向量数不足时 embed_batch_texts 必须显性报错而非越界 panic
     struct ShortBatchEngine;
 
     #[async_trait]
@@ -2040,7 +2040,7 @@ mod tests {
         }
     }
 
-    /// 回归钉（T021/D21）：memory_limit_bytes 配置时 switch_model 真实执法——
+    /// 回归钉：memory_limit_bytes 配置时 switch_model 真实执法——
     /// 加载后记账超限，再切换被显性拒绝（此前只记账不执法）。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_memory_limit_enforced_on_switch_model() {
@@ -2090,7 +2090,7 @@ mod tests {
             let mut guard = service.write().await;
             guard.switch_model(mk_req("m1")).await
         };
-        // 投影预检（T021）：新模型 est(~133MB) > 1KB 上限 → 首次切换即拒绝
+        // 投影预检：新模型 est(~133MB) > 1KB 上限 → 首次切换即拒绝
         let err = first.expect_err("oversized model switch must be rejected");
         match err {
             VecboostError::ModelLoadError(msg) => {

@@ -71,7 +71,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 {
   "token": "eyJhbGciOiJIUzI1NiIs...",
   "token_type": "Bearer",
-  "expires_in": 0
+  "expires_in": 86400
 }
 ```
 
@@ -79,9 +79,9 @@ curl -X POST http://localhost:9002/api/1/embed \
 |------|------|------|
 | `token` | string | JWT 访问令牌 |
 | `token_type` | string | 令牌类型（始终为 `Bearer`） |
-| `expires_in` | integer | 令牌过期时间（秒），由 `token_timeout_secs` 配置决定 |
+| `expires_in` | integer | 令牌到期秒数（服务端返回的实际值，非 0）；默认由 `[auth] token_expiration_hours`（缺省 24 → 86400s）决定，`token_expiration_seconds` 可覆盖 |
 
-> **ℹ️ 注意**: 令牌过期时间由配置项 `[auth] token_timeout_secs` 决定。
+> **ℹ️ 注意**: 令牌到期秒数由配置项 `[auth] token_expiration_hours`（缺省 24 小时）决定，仅调试/E2E 可用 `[auth] token_expiration_seconds` 覆盖。`src/api/auth.rs` 将 garrison 句柄的实效秒数原样回填到 `expires_in`。
 
 ### 刷新令牌
 
@@ -213,7 +213,7 @@ curl -X POST http://localhost:9002/api/1/embed/batch \
 | `dimension` | integer | 向量维度 |
 | `processing_time_ms` | number | 总处理时间（毫秒） |
 
-> **⚠️ 批量大小校验**: 批量请求数量受 `EmbeddingConfig.max_batch_size` 限制（默认 64）。超限时返回 `400 INVALID_INPUT`。
+> **⚠️ 批量大小校验**: 批量请求数量受 `EmbeddingConfig.max_batch_size` 限制（默认 64）。超限时返回 `400`（error_code `error-invalid-input`）。
 
 ---
 
@@ -226,7 +226,7 @@ curl -X POST http://localhost:9002/api/1/embed/batch \
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `path` | string | ✅ | 文件路径（受 `grpc_allowed_roots` 路径校验约束） |
-| `mode` | string | ❌ | 聚合模式 (`document` 或 `paragraph`，默认: `document`) |
+| `mode` | string | ❌ | 聚合模式：`sliding_window` / `document` / `paragraph` / `paragraphs` / `fixed_size` / `average` / `max_pooling` / `min_pooling`（默认: `document`） |
 
 **请求示例:**
 
@@ -681,7 +681,7 @@ auto 检测时 `source_language` 为 `null`、`detected_source_language` 回填�
 >
 > **行为**: 客户端负责 WAV 解码（16kHz 单声道 f32 `[-1,1]`，≤2 小时）；域层校验非空/全有限值/长度上限。VAD 分段为空（全静音）时 `segments` 为空、`text` 为空（显性空响应，非错误）。并发请求经 permits=1 信号量串行，排队即 `503`。
 >
-> **无 CLI 子命令**: 域契约为样本数组，CLI 逐样本传参无实用形态；音频文件入参路径由 `transcribe-poc` 薄壳 CLI（读 wav → samples → 本端点）承接。
+> **有 CLI 子命令**: `transcribe` 注册 `cli=true`，通过 `--req` 传 JSON（如 `--req '{"wav_path":"audio.wav"}'`；CLI 入参结构为 `TranscribeWavRequest { wav_path }`，读 wav → samples → 域请求）；域契约为样本数组（HTTP/gRPC 直传）。
 
 **请求字段:**
 
@@ -877,7 +877,7 @@ curl -X POST http://localhost:9002/api/1/detect   -H "Content-Type: application/
 | `expected_dimension` | integer | ❌ | 期望维度；缺省继承当前模型 |
 | `memory_limit_bytes` | integer | ❌ | 内存限制（字节）；缺省继承当前模型 |
 | `oom_fallback_enabled` | boolean | ❌ | OOM 自动降级；缺省继承当前模型 |
-| `task` | string | ❌ | 任务维度 (`embedding` / `decision`)；缺省链：请求值优先 → `[model.checkpoints]` 预设命中次之 → 继承当前模型 → 无当前模型回落 `embedding`（`task=decision` 经 EngineFactory 分派臂加载决策管线，bundle 缺失报 `ModelLoadError`） |
+| `task` | string | ❌ | 任务维度 (`embedding` / `decision` / `translate` / `transcribe`)；缺省链：请求值优先 → `[model.checkpoints]` 预设命中次之 → 继承当前模型 → 无当前模型回落 `embedding`（`task=decision` 经 EngineFactory 分派臂加载决策管线，bundle 缺失报 `ModelLoadError`） |
 
 **请求示例:**
 
@@ -971,17 +971,17 @@ VecBoost 内置 Swagger UI 与 OpenAPI 规范端点（由 `utoipa` + `utoipa-swa
 
 | 端点 | 说明 |
 |------|------|
-| `GET /api-docs` | Swagger UI 交互式文档（可在浏览器中直接发起请求） |
+| `GET /swagger-ui/` | Swagger UI 交互式文档（可在浏览器中直接发起请求） |
 | `GET /api-docs/openapi.json` | OpenAPI 3.0 规范 JSON |
 
 **访问示例:**
 
 ```
-http://localhost:9002/api-docs           # 浏览器打开 Swagger UI
+http://localhost:9002/swagger-ui/           # 浏览器打开 Swagger UI
 http://localhost:9002/api-docs/openapi.json  # 拉取 OpenAPI 规范
 ```
 
-> **ℹ️ 说明**: v0.2.0 的 Swagger UI 路径为 `/api-docs`（基于 `utoipa-swagger-ui` 默认配置）。ReDoc 端点推迟到 v0.3.0 提供。所有 REST API（含 OpenAI 兼容 `/v1/embeddings`）的请求/响应 schema 均在 OpenAPI 规范中描述，可直接用于生成客户端 SDK。
+> **ℹ️ 说明**: Swagger UI 路径为 `/swagger-ui/`（含 `/swagger-ui/{*rest}`），规范 JSON 为 `/api-docs/openapi.json`；根路径 `/api-docs` **未注册路由**，浏览器直接访问 `/api-docs` 或 `/api-docs/` 均返回 `404 Not Found`。ReDoc 端点推迟到 v0.3.0 提供。所有 REST API（含 OpenAI 兼容 `/v1/embeddings`）的请求/响应 schema 均在 OpenAPI 规范中描述，可直接用于生成客户端 SDK。
 
 ---
 
@@ -1009,7 +1009,7 @@ pub async fn grpc_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
 }
 ```
 
-> **💡 提示**: 无需 `proto/` 目录或 `tonic-build` 生成客户端存根。所有 gRPC 方法都在 `src/api/` 各域单一源（embedding / rerank / decisions / translate / detect）中通过 `#[forge(grpc_method = "...")]` 宏注册，共 16 个 `vecboost.*` 方法。
+> **💡 提示**: 无需 `proto/` 目录或 `tonic-build` 生成客户端存根。所有 gRPC 方法都在 `src/api/` 各域单一源（embedding / rerank / decisions / translate / detect）中通过 `#[forge(grpc_method = "...")]` 宏注册，共 17 个 `vecboost.*` 方法。
 
 ### gRPC 服务配置
 
@@ -1045,6 +1045,7 @@ gRPC 服务通过 `sdforge::grpc::build_server_with_config` 启动，配置项�
 | `vecboost.rerank_batch` | `grpc_rerank_batch` | `BatchRerankRequest` | `BatchRerankResponse` | 批量重排序 |
 | `vecboost.decide` | `grpc_decisions` | `DecisionRequest` | `DecisionResponse` | 决策问答（choice/score/noul，`task=decision` 配置下可用） |
 | `vecboost.translate` | `grpc_translate` | `TranslateRequest` | `TranslateResponse` | 翻译（`[translation]` 已配置语言对） |
+| `vecboost.transcribe` | `grpc_transcribe` | `TranscribeRequest` | `TranscribeResponse` | 语音转录（`[transcribe] enabled=true`） |
 | `vecboost.detect` | `grpc_detect` | `DetectRequest` | `DetectResponse` | 语言检测（无模型依赖） |
 | `vecboost.model_switch` | `grpc_model_switch` | `ModelSwitchRequest` | `ModelSwitchResponse` | 切换模型 |
 | `vecboost.get_current_model` | `grpc_get_current_model` | （空） | `ModelInfo` | 获取当前模型信息 |
@@ -1090,7 +1091,7 @@ struct BatchEmbedResponse {
 }
 ```
 
-> **⚠️ 批量大小校验**: 批量请求数量受 `validate_batch_size` 限制，上限取自 `EmbeddingConfig.max_batch_size`（默认 64）。超限时返回 `400 INVALID_INPUT`，错误信息形如 `batch size N exceeds max M (config embedding.max_batch_size)`。HTTP `/api/1/embed/batch` 与 OpenAI 兼容 `/v1/embeddings` 批量端点均执行此校验。
+> **⚠️ 批量大小校验**: 批量请求数量受 `validate_batch_size` 限制，上限取自 `EmbeddingConfig.max_batch_size`（默认 64）。超限时返回 `400`（error_code `error-invalid-input`），错误信息形如 `batch size N exceeds max M (config embedding.max_batch_size)`。HTTP `/api/1/embed/batch` 与 OpenAI 兼容 `/v1/embeddings` 批量端点均执行此校验。
 
 #### 相似度请求/响应
 
@@ -1098,6 +1099,7 @@ struct BatchEmbedResponse {
 struct SimilarityRequest {
     source: String,  // 源文本（服务端自动嵌入后计算）
     target: String,  // 目标文本
+    metric: Option<String>,  // 度量：cosine（默认）/ euclidean / dot_product / manhattan
 }
 
 struct SimilarityResponse {
@@ -1110,7 +1112,7 @@ struct SimilarityResponse {
 ```rust
 struct FileEmbedRequest {
     path: String,
-    mode: Option<AggregationMode>,  // "document" | "paragraph"
+    mode: Option<AggregationMode>,  // snake_case: sliding_window / document / paragraph / paragraphs / fixed_size / average / max_pooling / min_pooling
 }
 
 struct FileEmbedResponse {
@@ -1149,6 +1151,7 @@ struct ModelSwitchRequest {
     expected_dimension: Option<usize>,
     memory_limit_bytes: Option<u64>,
     oom_fallback_enabled: Option<bool>,
+    task: Option<ModelTask>,          // "embedding"（默认）/ "decision" / "translate" / "transcribe"
 }
 
 struct ModelSwitchResponse {
@@ -1208,6 +1211,9 @@ struct BatchRerankRequest {
 
 struct BatchRerankResponse {
     responses: Vec<RerankResponse>,
+    // 与 queries 按下标一一对应的状态位：responses 仅含成功项，
+    // 单条失败原因在此处可见（消除"静默跳过"不可观测性）
+    statuses: Vec<BatchRerankQueryStatus>,
 }
 ```
 
@@ -1388,7 +1394,7 @@ cargo run --features mcp -- --mcp
 # 在 MCP 客户端（如 Claude Desktop）中配置 stdio 启动命令：vecboost --mcp
 ```
 
-暴露的工具：`embed` / `embed_batch` / `similarity` / `decisions` / `translate` / `detect` / `list_models`。工具由 `#[forge(tool_name = ...)]` 宏从与 REST/gRPC 相同的处理函数生成，入参/出参复用上方消息类型定义中的同名领域类型（JSON 格式）；`decisions` 工具仅在 `[model] task = "decision"` 配置下可成功调用（否则返回 400 Unsupported task）；`translate` 工具需 `[translation]` 已配置语言对（否则 400 `translate-not-configured`）；`detect` 工具无配置依赖。
+暴露的工具为 `#[forge(tool_name = ...)]` 注册的 MCP 工具名（**注意与 HTTP 端点名不同**）：`embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models` / `get_current_model` / `get_model_info` / `model_switch` / `model_unload` / `health` / `openai_embed`。工具由 `#[forge(tool_name = ...)]` 宏从与 REST/gRPC 相同的处理函数生成，入参/出参复用上方消息类型定义中的同名领域类型（JSON 格式）；`decisions` 工具仅在 `[model] task = "decision"` 配置下可成功调用（否则返回 400 Unsupported task）；`translate` 工具需 `[translation]` 已配置语言对（否则 400 `translate-not-configured`）；`detect` 工具无配置依赖。
 
 ---
 
@@ -1397,11 +1403,11 @@ cargo run --features mcp -- --mcp
 `cli` feature 提供 clap 命令行工具（由 sdforge 从与 HTTP/gRPC 相同的处理函数生成）。`--config` 等全局参数须写在子命令之前：
 
 ```bash
-cargo run --features cli -- embed --text "Hello, world!"                # 单文本嵌入
-cargo run --features cli -- embed_batch --input texts.txt               # 批量嵌入（从文件读取）
-cargo run --features cli -- compute_similarity --text1 "机器学习" --text2 "人工智能"  # 相似度
-cargo run --features cli -- search --text "查询文本" --candidates candidates.txt     # 语义检索
-cargo run --features cli -- rerank --query "什么是机器学习" --documents docs.txt     # 重排序
+cargo run --features cli -- embed --req '{"text":"Hello, world!"}'                # 单文本嵌入
+cargo run --features cli -- embed_batch --req '{"texts":["文本1","文本2"]}'       # 批量嵌入
+cargo run --features cli -- compute_similarity --req '{"source":"机器学习","target":"人工智能"}'  # 相似度
+cargo run --features cli -- search --req '{"query":"查询文本","texts":["候选1","候选2"]}'     # 语义检索
+cargo run --features cli -- rerank --req '{"query":"什么是机器学习","documents":["文档1","文档2"]}'     # 重排序
 cargo run --features cli -- decisions --req '{"state":{"topic":"vacation"},"questions":[{"name":"confident","qtype":"noul","instructions":"state your p(true)"}]}'  # 决策问答（嵌套请求经 --req 传 JSON；task=decision 配置下可用）
 cargo run --features cli -- translate --req '{"text":"Hello, my dog is cute","source_language":"en","target_language":"zh"}'  # 翻译（[translation] 已配置语言对；source_language 缺省 = auto 检测）
 cargo run --features cli -- detect --req '{"text":"The quick brown fox jumps over the lazy dog."}'  # 语言检测（无模型依赖；可选 allow 白名单字段）
@@ -1418,12 +1424,17 @@ cargo run --features cli -- detect --req '{"text":"The quick brown fox jumps ove
 | 状态码 | 说明 |
 |--------|------|
 | `200` | ✅ 成功 |
-| `400` | ❌ 请求参数错误 |
+| `400` | ❌ 请求参数/校验错误 |
 | `401` | 🔒 未授权（缺少或无效令牌） |
-| `403` | 🚫 禁止访问（权限不足） |
-| `429` | ⚡ 请求过于频繁（速率限制） |
-| `500` | 💥 服务器内部错误 |
-| `503` | ⏸️ 服务不可用（队列满/服务端超时，携带 Retry-After；超时经 `REQUEST_TIMEOUT` 错误码区分） |
+| `403` | 🚫 禁止访问（RBAC 权限不足，auth 中间件返回） |
+| `404` | 🔍 资源/模型不存在 |
+| `422` | 🧩 分词失败 |
+| `424` | 🔗 模型加载失败/未加载 |
+| `429` | ⚡ 请求过于频繁（仅 auth 限流中间件按 IP/用户/API Key 返回；应用层限流/队列背压走 `503`） |
+| `500` | 💥 服务器内部错误（含配置/DB/IO） |
+| `503` | ⏸️ 服务不可用（应用层限流 `error-rate-limit`、队列满 `error-overloaded`、推理失败 `error-inference`；携带 Retry-After） |
+| `504` | ⏳ 服务端请求超时（`error-request-timeout`，排队/处理超过 SLA） |
+| `507` | 🧊 内存耗尽（GPU/CPU OOM） |
 
 ---
 
@@ -1449,23 +1460,28 @@ cargo run --features cli -- detect --req '{"text":"The quick brown fox jumps ove
 
 ### 常见错误码
 
-| 错误码 | HTTP 状态码 | 说明 | 解决方案 |
+| error_code（Fluent 键）| HTTP 状态码 | 说明 | 解决方案 |
 |--------|-------------|------|----------|
-| `INVALID_INPUT` | 400 | 请求参数无效 | 检查请求体格式 |
-| `UNAUTHORIZED` | 401 | 认证失败 | 获取并使用有效令牌 |
-| `FORBIDDEN` | 403 | 权限不足 | 联系管理员提升权限 |
-| `MODEL_NOT_FOUND` | 404 | 模型不存在 | 检查模型名称 |
-| `MODEL_LOAD_FAILED` | 424 | 模型加载失败（依赖缺失） | 检查模型文件和配置 |
-| `TOKENIZATION_ERROR` | 422 | 分词错误 | 检查输入文本编码 |
-| `RATE_LIMITED` | 429 | 超出速率限制 | 使用指数退避重试 |
-| `REQUEST_TIMEOUT` | 503 (Retry-After: 1) | 服务端排队/处理超时（可安全重试；区别于客户端 400 错误） | 稍后重试；减小批量 |
-| `REQUEST_TIMEOUT` | 504 | 服务端请求超时（排队超过 SLA 或 pipeline 处理超时） | 减小请求批量、稍后重试；区别于客户端错误 |
-| `INFERENCE_ERROR` | 503 | 推理失败 | 检查模型状态 |
-| `GPU_OOM` | 507 | GPU/CPU 内存耗尽 | 减小批处理大小或使用 CPU |
-| `CONFIG_ERROR` | 500 | 配置错误 | 检查配置文件 |
-| `INTERNAL_ERROR` | 500 | 内部错误 | 联系管理员 |
+| `error-invalid-input` | 400 | 请求参数无效 | 检查请求体格式 |
+| `error-validation` | 400 | 输入校验失败 | 检查输入内容 |
+| `error-unsupported-task` | 400 | 当前引擎/模型不支持该任务维度 | 切换模型或换端点 |
+| `error-authentication` | 401 | 认证失败/令牌无效 | 获取并使用有效令牌 |
+| `error-not-found` | 404 | 资源/模型不存在 | 检查资源名称 |
+| `error-tokenization` | 422 | 分词失败 | 检查输入文本编码 |
+| `error-model-load` | 424 | 模型加载失败（依赖缺失）| 检查模型文件与配置 |
+| `error-model-not-loaded` | 424 | 模型未加载 | 先加载模型 |
+| `error-rate-limit` | 503 | 应用层限流背压（auth 限流语义，wire 为 503 非 429）| 指数退避重试 |
+| `error-overloaded` | 503 | 优先级队列满/过载背压（`Retry-After`）| 退避后重试 |
+| `error-request-timeout` | 504 | 服务端排队/处理超过 SLA | 减小批量、稍后重试 |
+| `error-inference` | 503 | 推理失败 | 检查模型状态 |
+| `error-oom` | 507 | GPU/CPU 内存耗尽 | 减小批处理或使用 CPU |
+| `error-config` | 500 | 配置错误 | 检查配置文件 |
+| `error-database` | 500 | 数据库错误 | 检查 DB 连接与配置 |
+| `error-internal` | 500 | 内部错误 | 联系管理员 |
 
-> **💡 提示**: 启用认证时，401 错误也可能表示令牌已过期。
+> **ℹ️ 边界**: 上表 `error_code` 均由 `VecboostError::error_code()`（`src/error.rs`）生成，为 Fluent 消息键（形如 `error-config`）；HTTP 响应体用 `error_code` 回填该值，并伴隨即时数值 `code`（HTTP 状态码）与本地化 `error` 文案。两个状态码不由 `VecboostError` 产生：`429` 由 auth 限流中间件（garrison，按 IP/用户/API Key）返回，`403` 由 RBAC 权限判定返回——二者无对应 `VecboostError` 变体。
+
+> **💡 提示**: 启用认证时，`error-authentication`（401）错误也可能表示令牌已过期。
 
 ---
 
@@ -1522,39 +1538,35 @@ VecBoost 支持中英双语错误响应，基于 ICU+Fluent 框架实现。HTTP 
 
 ### 速率限制响应头
 
-所有响应包含速率限制信息：
+限流中间件按 IETF `RateLimit-*` 头族返回令牌桶配额（由 `[rate_limit] headers_enabled` 控制，**默认关闭**）；注意这是 `RateLimit-*` 头族而非 `X-RateLimit-*`。被拒绝（429/auth 限流）时另附 `Retry-After`：
 
 | 头信息 | 说明 |
 |--------|------|
-| `X-RateLimit-Limit` | 当前限制的最大请求数 |
-| `X-RateLimit-Remaining` | 剩余请求数 |
-| `X-RateLimit-Reset` | 限制重置时间戳（Unix） |
+| `RateLimit-Policy` | 限流策略串（如 `100;w=60`：配额 100 + 窗口 60 秒）|
+| `RateLimit-Limit` | 当前限流维度在窗口内的最大请求数 |
+| `RateLimit-Remaining` | 窗口内剩余请求数 |
+| `RateLimit-Reset` | 窗口重置前的剩余秒数 |
 
 **示例:**
 
 ```
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 95
-X-RateLimit-Reset: 1640995200
+RateLimit-Policy: 100;w=60
+RateLimit-Limit: 100
+RateLimit-Remaining: 95
+RateLimit-Reset: 43
 ```
 
 ---
 
 ### 超出速率限制
 
-当超出速率限制时，返回 `429 Too Many Requests` 错误：
+应用层限流/队列背压超限时返回 `503 Service Unavailable` 并附 `Retry-After`（**非 429**：管线限流 `error_rate_limit`/队列满 `error-overloaded` 均映射 503；`429` 仅由 auth IP/用户/API-Key 限流中间件返回）：
 
 ```json
 {
-  "error": {
-    "code": "RATE_LIMITED",
-    "message": "Rate limit exceeded. Try again in 30 seconds.",
-    "details": {
-      "retry_after": 30,
-      "limit": 100,
-      "current": 100
-    }
-  }
+  "error": "Rate limit exceeded. Try again in 30 seconds.",
+  "code": 503,
+  "error_code": "error-rate-limit"
 }
 ```
 
@@ -1581,9 +1593,11 @@ ip_whitelist = ["127.0.0.1"]
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
-| `0.2.1` | 2026-08-09 | 🐛 文档同步更新、代码质量改进 |
-| `0.2.0` | 2026-02-01 | ✨ 生态重构：7 库架构、trait-kit 模块注册、多协议接口；gRPC 由 sdforge `#[forge(grpc_method)]` 宏生成，移除 `proto/`、`src/grpc/`、`src/routes/`、`src/cli/` |
+| `0.3.0-rc.1` | 2026-09-22 | 转录（Qwen3-ASR）接口、翻译与语言检测全协议接入、PARQ 存储、统一 generate 接口 |
+| `0.2.1` | 2026-07-30 | 🐛 文档同步更新、代码质量改进 |
+| `0.2.0` | 2026-07-24 | ✨ 生态重构：7 库架构、trait-kit 模块注册、多协议接口；gRPC 由 sdforge `#[forge(grpc_method)]` 宏生成，移除 `proto/`、`src/grpc/`、`src/routes/`、`src/cli/` |
 | `0.1.2` | 2026-01-16 | ✨ 添加 Matryoshka 维度约简支持、OpenAI 兼容 API |
+| `0.1.1` | 2026-01-15 | ✨ 补丁修订 |
 | `0.1.0` | 2026-01-10 | ✨ 初始发布，支持 REST 和 gRPC API |
 
 ---

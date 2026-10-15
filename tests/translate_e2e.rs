@@ -15,7 +15,7 @@
 //!
 //! golden 闸门首跑语义（规则 11 显性表达）：tests/fixtures/translate_golden.json
 //! 不存在时进入生成模式——写出 tests/fixtures/translate_golden.candidate.json、
-//! 输出末尾显性标注 `GOLDEN_PENDING`、以非零退出码结束（提示 T026 人工
+//! 输出末尾显性标注 `GOLDEN_PENDING`、以非零退出码结束（提示人工
 //! 逐句抽验后固化）；golden 在位后逐句相等断言生效。
 //!
 //! 运行时写出 out/translate-quality.json（E2E 质量输出，gitignored）。
@@ -44,7 +44,7 @@ const QUALITY_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/out/translate-q
 
 /// 固定句集：短句/中句/长句/CJK 混排/专有名词各覆盖（≥8 条）
 const SENTENCES: &[(&str, &str)] = &[
-    // T026 两轮抽验：问候类短句在 en-zh 系统性幻觉续写（"Hello."→
+    // 两轮抽验：问候类短句在 en-zh 系统性幻觉续写（"Hello."→
     // 「你好,我叫艾莉森」；"Good morning."→「早上好,我刚从你家回来」）——
     // 换主谓宾完整的信息性短句
     ("short-greet", "I am happy today."),
@@ -69,7 +69,7 @@ const SENTENCES: &[(&str, &str)] = &[
          discovered an ancient map hidden beneath the floorboards of her grandmother's \
          house, and what she found changed the history of the entire region.",
     ),
-    // CJK 字符混排不入选（T026 抽验：en-es 词表对 CJK 全 OOV，译文必现
+    // CJK 字符混排不入选（抽验：en-es 词表对 CJK 全 OOV，译文必现
     // mojibake）——译入 CJK 的覆盖由 en-zh pair 整体承担；文化专有名词以
     // 罗马字保留覆盖
     (
@@ -80,7 +80,7 @@ const SENTENCES: &[(&str, &str)] = &[
         "proper-noun",
         "Einstein visited Tokyo, Paris, and New York during his famous world tour.",
     ),
-    // T026 抽验替换：OpenAI 在 en-zh 词表被误译为「开放国际」
+    // 抽验替换：OpenAI 在 en-zh 词表被误译为「开放国际」
     (
         "proper-noun-tech",
         "Microsoft and Google compete in the cloud computing market.",
@@ -175,7 +175,7 @@ fn translate_e2e_golden_gate_and_quality() {
     let skipped_reason = String::new();
 
     for (src, tgt) in PAIRS {
-        // 评审 converge T033：经 AnyEngine::translate_output_tokens 读生成
+        // 评审：经 AnyEngine::translate_output_tokens 读生成
         // token 数（wire 五键契约不扩，质量观测走引擎级查询通道）
         let engine: &AnyEngine = if tgt == "zh" { &engine_zh } else { &engine_es };
         let output_tokens = |e: &AnyEngine| -> u64 { e.translate_output_tokens() };
@@ -350,7 +350,7 @@ fn translate_e2e_golden_gate_and_quality() {
         println!("E2E-PASS: golden 闸门全绿（{matched} 句完全相等）");
         println!("quality output: {QUALITY_PATH}");
     } else {
-        // 生成模式：写候选 + 显性 GOLDEN_PENDING + 非零退出（提示 T026）
+        // 生成模式：写候选 + 显性 GOLDEN_PENDING + 非零退出（提示）
         if let Some(parent) = Path::new(CANDIDATE_PATH).parent() {
             std::fs::create_dir_all(parent).expect("create fixtures dir");
         }

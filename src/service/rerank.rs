@@ -61,7 +61,7 @@ impl RerankService {
     }
 
     /// 请求校验链：query 非空/长度上限、documents 非空/数量上限/逐条
-    /// 文本防线（审查 LOW-4：此前 rerank 文档面无长度/控制字符防线）、
+    /// 文本防线（此前 rerank 文档面无长度/控制字符防线）、
     /// top_k 有效性（0 无意义，应拒绝）。
     fn validate_rerank_request(
         &self,
@@ -101,7 +101,7 @@ impl RerankService {
             )));
         }
 
-        // 逐条校验 documents（审查 LOW-4：此前 rerank 文档面无长度/控制字符防线）
+        // 逐条校验 documents（此前 rerank 文档面无长度/控制字符防线）
         for doc in &req.documents {
             self.validator.validate_text(doc)?;
         }
@@ -356,7 +356,7 @@ mod tests {
         RerankService::new(engine, None)
     }
 
-    /// 回归钉（T016/D28）：("a","b:c") 与 ("a:b","c") 的缓存键不得互染。
+    /// 回归钉：("a","b:c") 与 ("a:b","c") 的缓存键不得互染。
     /// Mock 分数按 doc 长度：前者 0.03，后者 0.01；旧裸拼接键使两次同键，
     /// 第二次命中返回 0.03。
     #[tokio::test]
@@ -393,7 +393,7 @@ mod tests {
         );
     }
 
-    /// 回归钉（T015/D27）：replace_engine 后 rerank 使用新引擎。
+    /// 回归钉：replace_engine 后 rerank 使用新引擎。
     #[tokio::test]
     async fn test_replace_engine_switches_scoring_source() {
         struct LenEngineA;

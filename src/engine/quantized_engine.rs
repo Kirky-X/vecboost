@@ -460,7 +460,7 @@ impl QuantizedCandleEngine {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        // 激活函数三级回退（T027）：GGUF 同目录 config.json 的 hidden_act →
+        // 激活函数三级回退：GGUF 同目录 config.json 的 hidden_act →
         // 解析失败回落 Gelu 并 warn——此前硬编码 Gelu，非 Gelu 模型静默出错
         let hidden_act = std::fs::read_to_string(parent.join("config.json"))
             .ok()
@@ -541,7 +541,7 @@ impl QuantizedCandleEngine {
             ))
         })?;
         let tokenizer = crate::text::SyncTokenizer::new(hf, MAX_LEN);
-        // 池化推断来源与 fp32 路径对齐（T027）：优先 config.json 的模型身份，
+        // 池化推断来源与 fp32 路径对齐：优先 config.json 的模型身份，
         // 目录名仅作回退——两路径目录名不一致时池化方式不再分叉
         let dir_name = parent
             .file_name()
@@ -653,7 +653,7 @@ impl QuantizedCandleEngine {
             PoolingMode::Max => pool_max(&seq_hidden, &mask_for_pooling, self.hidden_size),
             PoolingMode::Auto => unreachable!("Auto 已在 load 时解析"),
         };
-        // 引擎出口契约：L2 归一化（T026——此前本引擎不归一化，与 fp32 引擎
+        // 引擎出口契约：L2 归一化（此前本引擎不归一化，与 fp32 引擎
         // 批量路径行为相悖；原注释谎称"不含归一化，行为对齐 fp32 引擎"）
         let mut pooled = pooled;
         crate::utils::vector::normalize_l2(&mut pooled)?;
@@ -748,7 +748,7 @@ impl QuantizedCandleEngine {
                     PoolingMode::Max => pool_max(slice, &mask, self.hidden_size),
                     PoolingMode::Auto => unreachable!("Auto 已在 load 时解析"),
                 };
-                // 引擎出口契约：L2 归一化（T026——批量路径此前缺失）
+                // 引擎出口契约：L2 归一化（批量路径此前缺失）
                 crate::utils::vector::normalize_l2(&mut pooled)?;
                 Ok(pooled)
             })
@@ -819,7 +819,7 @@ mod tests {
         }
     }
 
-    /// 回归钉（T037/R-engine-007）：双命名映射——自产 legacy final-LN 命名与
+    /// 回归钉（R-engine-007）：双命名映射——自产 legacy final-LN 命名与
     /// llama.cpp 惯例 final-LN 命名各自归位到正确的 candle 张量名。
     #[test]
     fn test_gguf_to_candle_dual_final_ln_naming() {

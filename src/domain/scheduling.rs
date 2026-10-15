@@ -113,7 +113,7 @@ use tokio::sync::Notify;
 /// 按各自 SLA 收割,或在下级队列为空时被兜底服务,任何情况下不永久滞留。
 const DEFAULT_AGING_THRESHOLD: Duration = Duration::from_secs(5);
 
-/// 请求取消注册表：request_id → 取消标志（T030 断连取消传播）。
+/// 请求取消注册表：request_id → 取消标志（断连取消传播）。
 ///
 /// handler 在入队前注册；客户端断连/超时置位；调度器出队时检查，
 /// 已取消请求直接丢弃（释放队列槽位、不消耗推理算力）。
@@ -202,7 +202,7 @@ pub struct PriorityRequestQueue {
     aging_threshold: Duration,
     /// 取消注册表（出队跳过已取消请求）
     cancellations: Arc<CancellationRegistry>,
-    /// 停机标志：置位后 enqueue 拒绝（T032 排空后入队窗口封口）
+    /// 停机标志：置位后 enqueue 拒绝（排空后入队窗口封口）
     closed: Arc<AtomicBool>,
 }
 
@@ -327,7 +327,7 @@ impl PriorityRequestQueue {
                     continue;
                 }
                 while let Some(request) = queue.pop_front() {
-                    // 已取消请求：丢弃（释放槽位），继续扫描（T030）
+                    // 已取消请求：丢弃（释放槽位），继续扫描
                     if self.cancellations.is_cancelled(&request.request_id) {
                         self.current_size.fetch_sub(1, Ordering::Relaxed);
                         self.cancellations.release(&request.request_id);
@@ -354,7 +354,7 @@ impl PriorityRequestQueue {
         }
 
         // 兜底:无非 aged 请求可服务时,弹出最高优先级的 aged 队首,避免滞留
-        // (已取消请求照常丢弃，跳过继续找，T030 与主路径语义一致)
+        // (已取消请求照常丢弃，跳过继续找，与主路径语义一致)
         if let Some(priority) = aged_front
             && let Some(queue) = queues.get_mut(&priority)
         {
@@ -823,7 +823,7 @@ mod tests {
         );
     }
 
-    /// 回归钉（T008 SLA 收割）：超过自身 timeout 的排队请求被 dequeue_expired
+    /// 回归钉（SLA 收割）：超过自身 timeout 的排队请求被 dequeue_expired
     /// 收割并移出队列，出队计数归零，dequeue 不再返回它。
     #[tokio::test]
     async fn test_dequeue_expired_reaps_past_sla_requests() {

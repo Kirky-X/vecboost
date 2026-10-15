@@ -16,9 +16,9 @@ export PATH="$PWD/target/release:$PATH"
 
 | 示例 | 说明 | 子命令 |
 |------|------|--------|
-| `embed_cli.rs` | 单文本嵌入 | `vecboost embed --text "hello"` |
-| `batch_cli.rs` | 批量文件嵌入 | `vecboost batch --input texts.txt` |
-| `rerank_cli.rs` | 文档重排序 | `vecboost rerank --query "..." --documents docs.txt` |
+| `embed_cli.rs` | 单文本嵌入 | `vecboost embed --req '{"text":"hello"}'` |
+| `batch_cli.rs` | 批量文件嵌入 | `vecboost embed_batch --req '{"texts":["..."]}'` |
+| `rerank_cli.rs` | 文档重排序 | `vecboost rerank --req '{"query":"...","documents":[...]}'` |
 
 ## 运行方式
 
@@ -36,10 +36,10 @@ cargo run -p vecboost-examples --bin rerank_cli
 ## CLI 子命令参考
 
 ```
-vecboost embed --text "Hello"              # 单文本嵌入,输出 JSON
-vecboost batch --input file.txt            # 批量嵌入(每行一条文本),输出 JSON
-vecboost similarity --text1 "a" --text2 "b" # 计算余弦相似度,输出 JSON
-vecboost rerank --query "..." --documents docs.txt # 文档重排序,输出 JSON
+vecboost embed --req '{"text":"Hello"}'              # 单文本嵌入,输出 JSON
+vecboost embed_batch --req '{"texts":["a","b"]}'    # 批量嵌入(每行一条文本),输出 JSON
+vecboost compute_similarity --req '{"source":"a","target":"b"}' # 计算余弦相似度,输出 JSON
+vecboost rerank --req '{"query":"...","documents":["..."]}' # 文档重排序,输出 JSON
 ```
 
 所有子命令输出 JSON 到 stdout,便于脚本化处理。

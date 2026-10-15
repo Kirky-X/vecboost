@@ -376,7 +376,7 @@ impl CandleEngine {
         }
     }
 
-    // 纯同步 forward_pass——归一化已由 forward_pass_inner 出口统一完成（T026）
+    // 纯同步 forward_pass——归一化已由 forward_pass_inner 出口统一完成
     fn forward_pass(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         self.forward_pass_inner(text)
     }

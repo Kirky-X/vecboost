@@ -15,8 +15,6 @@ use crate::error::VecboostError;
 ///
 /// 打开/解码 IO 失败 → [`VecboostError::ModelLoadError`]；格式不符
 /// （非 16-bit / 非 16kHz / 非 mono）→ [`VecboostError::InvalidInput`] 且消息含实际值。
-// 预留给 T016 POC CLI 薄壳 / 服务域消费（引擎按 samples 入参，lib 内暂无调用方）。
-#[allow(dead_code)]
 pub(crate) fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>, VecboostError> {
     let reader = hound::WavReader::open(path).map_err(|e| {
         VecboostError::ModelLoadError(format!("open wav {} failed: {e}", path.display()))

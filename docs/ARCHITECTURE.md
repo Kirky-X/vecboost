@@ -2,11 +2,10 @@
 
 **内部架构、关键组件、数据流和设计决策详解**
 
-[![Version 0.3.0-rc.1](https://img.shields.io/badge/Version-0.3.0--rc.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![Version 0.3.0-rc.1](https://img.shields.io/badge/Version-0.3.0--rc.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge)](https://www.apache.org/licenses/LICENSE-2.0)
 
 *VecBoost 的内部架构，解释关键组件、数据流和设计决策。*
 
-**[English](ARCHITECTURE.md)**
 
 ---
 
@@ -37,7 +36,7 @@
 
 ## 📌 概述
 
-VecBoost 是一个使用 Rust 构建的**高性能嵌入向量服务**。它为文本向量化提供可扩展、生产就绪的解决方案，包含企业级功能。
+VecBoost 是一个使用 Rust 构建的**多功能推理服务**。它为文本向量化提供可扩展、生产就绪的解决方案，包含企业级功能。
 
 ### 🎯 设计目标
 
@@ -45,7 +44,7 @@ VecBoost 是一个使用 Rust 构建的**高性能嵌入向量服务**。它为�
 |------|------|----------|
 | **高性能** | 最小化延迟 | 批处理、并发执行、高效内存管理 |
 | **可扩展性** | 水平扩展 | Kubernetes 原生支持 |
-| **可靠性** | 稳定运行 | 熔断器、重试机制、健康检查 |
+| **可靠性** | 稳定运行 | limiteron 令牌桶限流背压（Governor 内置熔断，非用户可配旋钮）、重试机制、健康检查 |
 | **安全性** | 企业级安全 | 认证、授权、审计日志 |
 | **灵活性** | 多引擎支持 | Candle、ONNX Runtime 抽象 |
 
@@ -76,13 +75,13 @@ VecBoost 是一个使用 Rust 构建的**高性能嵌入向量服务**。它为�
 
 | 库 | 版本 | 用途 | Feature |
 |----|------|------|---------|
-| **trait-kit** | `0.5.0-rc.3` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
-| **confers** | `0.6.0-rc.3` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | 始终启用 |
-| **inklog** | `0.3.0-rc.3` | 结构化日志基础设施（控制台 + 文件轮转） | 始终启用 |
-| **oxcache** | `0.5.0-rc.3` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | 始终启用 |
-| **limiteron** | `0.3.0-rc.3` | 令牌桶限流器（多维度独立计数） | 始终启用 |
-| **dbnexus** | `0.6.0-rc.3` | 数据库持久化（SQLite/PostgreSQL + 权限角色） | `db` |
-| **sdforge** | `0.5.0-rc.3` | 多协议接口生成（HTTP/gRPC/MCP/CLI 单一源定义） | `http`/`grpc`/`cli`/`mcp` |
+| **trait-kit** | `0.5.0-rc.9` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
+| **confers** | `0.6.0-rc.10` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | 始终启用 |
+| **inklog** | `0.3.0-rc.9` | 结构化日志基础设施（控制台 + 文件轮转） | 始终启用 |
+| **oxcache** | `0.5.0-rc.8` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | 始终启用 |
+| **limiteron** | `0.3.0-rc.7` | 令牌桶限流器（多维度独立计数） | 始终启用 |
+| **dbnexus** | `0.6.0-rc.9` | 数据库持久化（SQLite/PostgreSQL + 权限角色） | `db` |
+| **sdforge** | `0.5.0-rc.8` | 多协议接口生成（HTTP/gRPC/MCP/CLI 单一源定义） | `http`/`grpc`/`cli`/`mcp` |
 
 > `../base/*` 七库为路径依赖的活仓库，版本号以根目录 `Cargo.toml` 为准。
 
@@ -97,7 +96,7 @@ VecBoost 是一个使用 Rust 构建的**高性能嵌入向量服务**。它为�
 ```rust
 pub struct VecboostState {
     /// trait-kit AsyncKit — 模块能力管理中心
-    /// 包含 17 个 Module 的能力查询入口
+    /// 能力查询入口：`src/registry/impl_.rs` 共 20 个 `ModuleMeta` 实现（部分随 `auth` 等 feature 门控）
     pub(crate) kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,
 }
 ```
@@ -168,12 +167,15 @@ pub struct EmbeddingService {
     model_manager: Option<Arc<ModelManager>>,               // 模型管理器
     cache: Arc<OxCacheBackend>,                             // oxcache 缓存后端
     memory_manager: Option<SharedGpuMemoryManager>,         // GPU 内存管理
-    batch_scheduler: Option<Arc<DynamicBatchScheduler>>,    // 动态批处理调度
     buffer_pool: Option<Arc<RwLock<BufferPool>>>,           // GPU 缓冲区池
-    continuous_batch_loop: Option<Arc<ContinuousBatchLoop>>, // 连续批处理循环
     semantic_cache: Option<Arc<SemanticCache>>,             // 语义缓存
+    memory_limit: Option<Arc<MemoryLimitController>>,       // 模型常驻内存上限执法
+    memory_used_est: AtomicU64,                             // 当前记账模型字节数
+    checkpoints: Option<BTreeMap<String, CheckpointPreset>>, // [model.checkpoints] 预设表
 }
 ```
+
+> **⏱️ 拼批口径**: 原 `batch_scheduler`（DynamicBatchScheduler）与 `continuous_batch_loop`（ContinuousBatchLoop）两字段已于 `f70016e` 随组件退役，被**时间窗拼批**取代，`EmbeddingService` 不再持有这两者（拼批在 pipeline worker 侧组装）。详见 [⚡ 性能指南](PERFORMANCE.md) 退役说明。
 
 ---
 
@@ -299,7 +301,6 @@ src/device/
 ├── manager.rs          # 设备生命周期管理
 ├── memory_limit.rs     # 内存限制和 OOM 处理
 ├── memory_optimizer.rs # GPU 内存优化器
-├── batch_scheduler.rs  # 批处理优化调度
 └── memory_pool/        # GPU 内存池子模块
     ├── buffer_pool.rs  # 缓冲区池
     ├── cuda_pool.rs    # CUDA 内存池
@@ -947,9 +948,7 @@ pub trait InferenceEngine: Send + Sync {
 
 ### 💾 添加新缓存策略
 
-1. 在 `src/cache/` 实现 `Cache` trait
-2. 将缓存类型添加到 `CacheType` 枚举
-3. 更新 `EmbeddingService` 中的缓存工厂
+缓存策略由 `oxcache` 库统一管理，VecBoost 通过 `OxCacheBackend` 直接调用 oxcache 原生 API，不维护额外的 Cache trait 或策略枚举。如需扩展缓存行为，请在 `oxcache` 上游库提交 issue 或 PR。
 
 ---
 
@@ -998,7 +997,7 @@ tests/
 
 ---
 
-> **📝 最后更新**: 2026-08-09 | **版本**: 0.2.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-08-09 | **版本**: 0.3.0-rc.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
 
 ---
 
@@ -1015,7 +1014,7 @@ src/i18n/
 ├── locale.rs       # 语言检测 + Accept-Language 解析
 └── locales/
     ├── en/
-    │   ├── errors.ftl    # 17 个错误变体翻译
+    │   ├── errors.ftl    # 20 个错误变体翻译
     │   └── messages.ftl  # 响应消息翻译
     └── zh/
         ├── errors.ftl

@@ -321,12 +321,12 @@ pub enum AnyEngine {
     CandleDecision(candle_decision::CandleDecisionEngine),
     /// ONNX seq2seq 翻译引擎（task=translate，Marian/opus-mt）。
     /// 构造点为 [`crate::engine::EngineFactory::create`] 的 task 分派臂
-    /// （T017）。变体类型 pub(crate)，注释理由同 Decision 臂。
+    /// 变体类型 pub(crate)，注释理由同 Decision 臂。
     #[cfg(feature = "onnx")]
     #[allow(private_interfaces)]
     OnnxTranslate(onnx_translate::OnnxTranslationEngine),
     /// Qwen3-ASR 转录引擎（task=transcribe，三图+VAD，engine_type=onnx 强制；
-    /// 需 feature `transcribe`）。构造点为 EngineFactory 的 task 分派臂（T014）。
+    /// 需 feature `transcribe`）。构造点为 EngineFactory 的 task 分派臂。
     /// 变体类型 pub(crate)，注释理由同 Decision 臂。
     #[cfg(feature = "transcribe")]
     #[allow(private_interfaces)]
@@ -337,7 +337,7 @@ pub enum AnyEngine {
 }
 
 impl AnyEngine {
-    /// 最近一次成功翻译解码的生成 token 数（评审 converge T033：质量观测
+    /// 最近一次成功翻译解码的生成 token 数（评审：质量观测
     /// 通道——仅 OnnxTranslate 变体有真实值，其余变体恒 0；wire 五键契约
     /// 不扩，e2e 质量输出经本方法读取）
     pub fn translate_output_tokens(&self) -> u64 {

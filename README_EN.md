@@ -88,7 +88,7 @@ Interface handlers are written just once; `sdforge` macros generate all four pro
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🔍 <b>Observability</b><br><span style="color:#64748B">Prometheus metrics, health checks, structured logging (inklog console + file rotation)</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>Cloud-Native Deployment</b><br><span style="color:#64748B">Multi-arch Docker images (linux/amd64 + arm64); Kubernetes deployment guidance (manifests bring-your-own)</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>Cloud-Native Deployment</b><br><span style="color:#64748B">Docker image (linux/amd64, single-arch by default build); Kubernetes deployment guidance (manifests bring-your-own)</span></td>
 </tr>
 </table>
 
@@ -180,12 +180,12 @@ You can also use the CLI (`cli` feature) or the library SDK (library mode):
 
 ```bash
 # Single-text embedding
-cargo run --features cli -- embed --text "Hello, world!"
+cargo run --features cli -- embed --req '{"text":"Hello, world!"}'
 ```
 
 ### 🧭 Core Concepts
 
-- **Models & engines**: `ModelConfig` declares a HuggingFace model (default `BAAI/bge-small-en-v1.5`); `EngineFactory::create(engine_type, config)` creates a `Candle` (default) or `ONNX` (`onnx` feature) engine; Bert / XlmRoberta architectures and mean/cls/max pooling are supported.
+- **Models & engines**: `ModelConfig` declares a HuggingFace model (code default `BAAI/bge-m3`, 1024 dims; the shipped `config/config.toml` explicitly sets `BAAI/bge-small-en-v1.5`); `EngineFactory::create(engine_type, config)` creates a `Candle` (default) or `ONNX` (`onnx` feature) engine; Bert / XlmRoberta architectures and mean/cls/max pooling are supported.
 - **Four protocols, one source**: handlers in `src/api/embedding.rs` are annotated with `#[forge(...)]` macros; `sdforge` generates the HTTP/gRPC/MCP/CLI bindings. Hand-written protocol code is forbidden.
 - **7-library ecosystem**: `trait-kit` wires all modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`); `confers` owns configuration, `inklog` logging, `oxcache` caching, `limiteron` rate limiting, `dbnexus` persistence (`db` feature), and `sdforge` interface generation.
 - **Configuration precedence**: TOML file + `VECBOOST_`-prefixed environment variable overrides (secrets such as `VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD` must be provided via env vars); config file changes are validated and logged, taking effect after restart.
@@ -200,11 +200,11 @@ VecBoost generates its four protocol interfaces from single-source handlers via 
 - **HTTP/REST**: `/api/1/*` provides embedding (single / batch / file), similarity, semantic search, rerank, decision answering (choice/score/noul), translation (multi-pair + auto detection), transcription (16kHz speech samples to text, `transcribe` feature), language detection, model management, and health endpoints;
 - **OpenAI-compatible**: `POST /v1/embeddings`, responding in the OpenAI format (`object` / `data` / `usage`) with `encoding_format=base64` support;
 - **Matryoshka dimensionality reduction**: pass `dimensions` (256/512/1024, etc.) to `/v1/embeddings` for smaller, faster vectors; truncated vectors are automatically L2 re-normalized to keep cosine similarity correct;
-- **gRPC**: with the `grpc` feature, 16 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — including `vecboost.translate` / `vecboost.detect`, with JWT auth, rate limiting, max connections, and timeouts all configurable;
-- **MCP**: the `mcp` feature exposes the `embed` / `embed_batch` / `similarity` / `decisions` / `translate` / `detect` / `list_models` tools to LLMs over stdio (`vecboost --mcp`);
+- **gRPC**: with the `grpc` feature, 17 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — including `vecboost.translate` / `vecboost.detect`, with JWT auth, rate limiting, max connections, and timeouts all configurable;
+- **MCP**: the `mcp` feature exposes tools registered by `#[forge(tool_name=…)]` to LLMs over stdio (`vecboost --mcp`) — tool names are `embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models`, etc. (MCP `tool_name` is not the HTTP endpoint name; the full list is in the [📘 API Reference](docs/API_REFERENCE.md));
 - **CLI**: the `cli` feature provides the embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect / transcribe subcommands (see [💡 Minimal Example](#minimal-example); the `transcribe` subcommand takes a WAV file path and reads 16kHz mono samples);
 - **Inference engines**: Candle (native Rust, default) and ONNX Runtime (`onnx` feature), switched via the `EngineFactory::create` factory; the `[model]` `engine_type` / `task` configuration drives engine and task-dimension selection — `task = "embedding"` (default) / `task = "decision"` (Laya decision pipeline) / `task = "translate"` (seq2seq translation, onnx only) / `task = "transcribe"` (Qwen3-ASR transcription, `transcribe` feature); endpoints of non-current tasks respond with 400 Unsupported task (bundle layouts in [`config/config.toml`](config/config.toml) `[model]` comments, translation pairs in the `[translation]` section);
-- **Observability & operations**: `/metrics` (Prometheus), `/health` (liveness) and `/health?depth=full` (real readiness probe), `/api-docs` (Swagger UI); read-only diagnostics with `vecboost doctor` (config / tokenizer / cache / threads / GPU / model integrity; exit code 1 on FAIL).
+- **Observability & operations**: `/metrics` (Prometheus), `/health` (liveness) and `/health?depth=full` (real readiness probe), `/swagger-ui/` (interactive OpenAPI docs, requires the `openapi`/`http` feature; spec JSON at `/api-docs/openapi.json`); read-only diagnostics with `vecboost doctor` (config / tokenizer / cache / threads / GPU / model integrity; exit code 1 on FAIL).
 
 Translation and language detection request examples (fields match the [API Reference](docs/API_REFERENCE.md)):
 
@@ -234,7 +234,7 @@ Detection response (`language: null` + `is_reliable: false` means "undetectable"
 
 > **🔧 Output post-processing & timeout**: translation applies deterministic post-processing at the engine exit (shared by the service layer and library users) — Traditional→Simplified normalization for `target=zh`, repair of URL protocol separators and LaTeX escape symbols; model-level mistranslations are fixed by the literal replacement table `[[translation.pairs.output_fixes]]` (in declaration order), see the `[translation]` section of [`config/config.toml`](config/config.toml). The HTTP global request timeout is configured via `[server] request_timeout_seconds` (CPU seq2seq translation of paper-length abstracts takes 15-130+s; `config/config.toml` sets it to 300s explicitly).
 
-Interactive OpenAPI docs: `http://localhost:9002/api-docs` (Swagger UI) and `/api-docs/openapi.json` (spec JSON, requires the `openapi` feature; ReDoc is deferred to v0.3.0). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/PERFORMANCE.md#新增指标).
+Interactive OpenAPI docs (Swagger UI): `http://localhost:9002/swagger-ui/`; spec JSON: `/api-docs/openapi.json` (both require the `openapi` feature; the root path `/api-docs` serves no UI; ReDoc is deferred to v0.3.0). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/PERFORMANCE.md#新增指标).
 
 ### 🏷️ Feature Flags
 
@@ -248,8 +248,9 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 | `mcp` | - | MCP protocol interface (LLM tool integration, stdio mode) |
 | `openapi` | - | OpenAPI/Swagger UI docs (independent of `http`) |
 | `schema` | - | OpenAPI schema derive (auto-enabled by `http`/`openapi`; for library-mode type export) |
-| `db` | - | dbnexus database persistence (SQLite) |
-| `postgres` | - | PostgreSQL support (implies `db`) |
+| `db` | - | dbnexus database persistence infrastructure (driver-agnostic; requires picking one driver feature `sqlite` or `postgres`) |
+| `sqlite` | - | SQLite database driver (implies `db` + `dbnexus/sqlite` + `inklog/sqlite`) |
+| `postgres` | - | PostgreSQL database driver (implies `db` + `dbnexus/postgres` + `inklog/postgres`) |
 | `auth` | - | JWT auth + CSRF + RBAC + AES-256-GCM encryption |
 | `cuda` | - | NVIDIA CUDA GPU acceleration |
 | `metal` | - | Apple Silicon Metal GPU |
@@ -258,6 +259,7 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 | `mkl` | - | x86_64 CPU MKL acceleration backend (opt-in; requires a toolchain that links cleanly) |
 | `accelerate` | - | aarch64 macOS Accelerate backend (opt-in) |
 | `quantized-gguf` | - | GGUF quantization engine switch (inference backend pending upstream candle support) |
+| `character_converter` | - | Enable the `character_converter` character-conversion dependency standalone (already implied by `onnx`) |
 
 > **📦 Built-in dependencies**: `confers` (config), `inklog` (logging), `oxcache` (cache), `limiteron` (rate limiting), and `trait-kit` (module registry) are mandatory dependencies that are always enabled — no feature flag needed. `sdforge` is enabled by any protocol feature (`http`/`grpc`/`cli`/`mcp`).
 
@@ -296,7 +298,7 @@ Per-key options and defaults for every config section (server / model / embeddin
 
 ## 💻 Examples
 
-All examples live in [`examples/`](examples/), an independent workspace-member crate `vecboost-examples` (13 categories, 30 runnable binaries) covering basic embedding, HTTP/CLI calls, engine switching, auth, caching, rate limiting, monitoring, audit, semantic cache, and Library SDK integration; the per-category listing is in [`examples/README.md`](examples/README.md).
+All examples live in [`examples/`](examples/), an independent workspace-member crate `vecboost-examples` (12 categories, 31 runnable binaries) covering basic embedding, HTTP/CLI calls, engine switching, auth, caching, rate limiting, monitoring, audit, semantic cache, and Library SDK integration; the per-category listing is in [`examples/README.md`](examples/README.md).
 
 ```bash
 # Run a single example
@@ -312,7 +314,7 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 
 ## 🏗️ Architecture
 
-VecBoost uses a modular ecosystem architecture: `trait-kit` wires 17 modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`), `sdforge` generates the four protocol bindings from the single source `src/api/embedding.rs`, inference is abstracted behind `EngineFactory` to the Candle / ONNX engines, and requests flow through a priority queue and time-window batching into the inference pipeline.
+VecBoost uses a modular ecosystem architecture: `trait-kit` wires modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`); `src/registry/` has 20 `ModuleMeta` implementations (several are feature-gated, e.g. under `auth`), `sdforge` generates the four protocol bindings from the single source `src/api/embedding.rs`, inference is abstracted behind `EngineFactory` to the Candle / ONNX engines, and requests flow through a priority queue and time-window batching into the inference pipeline.
 
 The 7-library ecosystem (trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge) versions and responsibilities, the module dependency graph, data flow, and the cache / security / deployment architecture and extension points are documented in the [🏗️ Architecture document](docs/ARCHITECTURE.md).
 
@@ -322,7 +324,7 @@ The 7-library ecosystem (trait-kit / confers / inklog / oxcache / limiteron / db
 
 ### 🎯 Testing Strategy
 
-The test stack has six layers: inline unit tests in `src/`, integration tests in `tests/integration/`, specialized integration tests (doctor / gRPC E2E / model snapshot regression / quantization quality gate / SDK matrix), real-service scenario tests in `tests/scenario/*.py` (15 pytest suites), performance regression thresholds in `tests/perf/`, and 4 Criterion microbenchmark suites in `benches/`. The `TEST_MODE` environment variable controls the test engine (`mock` default / `light` / `full`). Layer responsibilities, the exhaustive scenario matrix, and the CI workflow mapping are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
+The test stack has six layers: inline unit tests in `src/`, integration tests in `tests/integration/`, specialized integration tests (doctor / gRPC E2E / model snapshot regression / quantization quality gate / SDK matrix), real-service scenario tests in `tests/scenario/*.py` (15 pytest suites), performance regression thresholds in `tests/perf/`, and 5 Criterion microbenchmark suites in `benches/`. The `TEST_MODE` environment variable controls the test engine (`mock` default / `light` / `full`). Layer responsibilities, the exhaustive scenario matrix, and the CI workflow mapping are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
 
 ### ▶️ Commands (identical to CI)
 
@@ -366,13 +368,13 @@ cargo audit
 
 ### 📊 Test Scale
 
-As of the v0.3.0-rc.1 workspace: ~1700+ inline unit tests in `src/`, 61 Rust integration/specialized tests (`tests/*.rs`), 126 Python scenario/performance cases (15 scenario suites), and 4 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 80% (tarpaulin), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
+As of the v0.3.0-rc.1 workspace: 2237 inline unit tests in `src/`, 63 Rust integration/specialized test functions (`tests/*.rs`), 146 Python scenario/performance cases (119 scenario + 27 performance, 15 scenario suites), and 5 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 80% (tarpaulin), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
 
 ---
 
 ## 📊 Performance
 
-Benchmark data comes from the measured `docs/benchmarks/` archive (criterion, collected 2026-08 on Linux x86_64, noise roughly ±5-10%): SIMD vector similarity is up to **3.06x** faster than the scalar baseline (~341.7 ns for 1024-dim cosine), `ContinuousBatchLoop` continuous batch scheduling is **5.6x** faster than fixed waiting (1.110 s vs 6.194 s for a 100-request steady load), and exact semantic-cache hits take ~10 ns; the throughput baseline (`embed_throughput_bench`) requires a local model and is **to be measured**. The full benchmark tables, performance design highlights (time-window batching / in-batch dedup / SIMD / thread tuning / jemalloc), GGUF quantization, and the tuning-switch registry are in the [⚡ Performance Guide](docs/PERFORMANCE.md); microbenchmarks can be reproduced with `cargo bench` (see the [Testing](#testing) section above).
+Benchmark data comes from the measured `docs/benchmarks/` archive (criterion, collected 2026-08 on Linux x86_64, noise roughly ±5-10%): SIMD vector similarity is up to **3.06x** faster than the scalar baseline (~341.7 ns for 1024-dim cosine), `ContinuousBatchLoop` continuous batch scheduling is **5.6x** faster than fixed waiting (1.110 s vs 6.194 s for a 100-request steady load; **deprecated** — no longer available in current versions), and exact semantic-cache hits take ~10 ns; the throughput baseline (`embed_throughput_bench`) has been **measured** and is documented in [⚡ Performance Guide](docs/PERFORMANCE.md). The full benchmark tables, performance design highlights (time-window batching / in-batch dedup / SIMD / thread tuning / jemalloc), GGUF quantization, and the tuning-switch registry are in the [⚡ Performance Guide](docs/PERFORMANCE.md); microbenchmarks can be reproduced with `cargo bench` (see the [Testing](#testing) section above).
 
 ---
 
@@ -458,9 +460,12 @@ The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (followin
 | Version | Date | Highlights |
 |------|------|------|
 | Unreleased | - | Audit remediation and tuning switches: secure defaults hardening, HF tokenizers on all platforms, time-window batching / in-batch dedup, GGUF quantization path, semantic-cache comparison modes, multi-model LFRU, cache WAL, doctor diagnostics, startup warmup; **new translation & language detection** (multi-pair routing + auto detection; project repositioned as a multi-task inference service) |
-| 0.2.1 | 2026-09-06 | i18n (114 translation keys), three-protocol rerank, three-stage semantic cache, BF16 precision, SIMD similarity, continuous batch scheduling, GPU memory paging, library mode |
+| 0.3.0-rc.1 | 2026-09-22 | Current release candidate: transcription (Qwen3-ASR) endpoints, translation/language-detection across protocols, PARQ storage replacing oxcache, unified "generate" interface |
+| 0.2.1 | 2026-07-30 | i18n, three-protocol rerank, three-stage semantic cache, BF16 precision, SIMD similarity, continuous batch scheduling, GPU memory paging, library mode |
 | 0.2.0 | 2026-07-24 | sdforge four-protocol generation, 7-library ecosystem wiring, Matryoshka truncation re-normalization, vuln-0009 repo_id validation |
-| 0.1.0 | 2025-12-15 | Initial VecBoost release |
+| 0.1.2 | 2026-01-16 | Patch fixes |
+| 0.1.1 | 2026-01-15 | Patch fixes |
+| 0.1.0 | 2026-01-10 | Initial VecBoost release |
 
 Unreleased contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · Unreleased](docs/CHANGELOG.md#unreleased). The multi-replica boundary (auth sessions live in process memory; single replica only) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#配置与部署).
 

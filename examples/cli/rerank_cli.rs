@@ -28,18 +28,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Reinforcement learning optimizes policies through rewards"
     )?;
     let temp_path = temp_file.into_temp_path();
-    let input_path = temp_path.to_str().unwrap();
+    let input_path = temp_path.to_str().ok_or("temp path is not valid UTF-8")?;
 
     let query = "what is machine learning?";
     println!("📝 查询: \"{}\"", query);
     println!("📄 文档文件: {} (5 条文档)", input_path);
     println!(
-        "📝 调用: vecboost rerank --query \"{}\" --documents {}\n",
-        query, input_path
+        "📝 调用: vecboost rerank --req '{{\"query\":\"{}\",\"documents\":[...]}}'\n",
+        query
     );
 
+    let documents = std::fs::read_to_string(&temp_path)?;
+    let docs: Vec<&str> = documents.lines().collect();
+    let req_json = serde_json::json!({
+        "query": query,
+        "documents": docs
+    });
     let output = Command::new("vecboost")
-        .args(["rerank", "--query", query, "--documents", input_path])
+        .args(["rerank", "--req", &req_json.to_string()])
         .output();
 
     match output {

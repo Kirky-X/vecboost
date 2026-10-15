@@ -308,7 +308,7 @@ pub const MAX_TRANSLATE_NEW_TOKENS: usize = 1024;
 /// per-checkpoint 翻译推理参数：引擎贪心解码与源文本预算检查消费它而非
 /// 编译期常量直传。缺省为 Marian 512/512 口径，EOS 抑制禁用。本类型定义
 /// 于 config 层（配置面单一事实源），与 [`DecisionParams`] 同一先例。
-/// 含译文输出修复表（非 Copy：Vec 字段，paper-translate-quality T004）。
+/// 含译文输出修复表（非 Copy：Vec 字段）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct TranslationParams {
     pub max_source_tokens: usize,
@@ -380,7 +380,7 @@ impl TranslationParams {
 
 /// 译文输出修复对：`from`→`to` 字面全量替换（按声明序应用）。承载模型级
 /// 高频误译的配置化修复（如 m2m100 en→zh 实测 "下流任务"→"下游任务"），
-/// 无需改代码即可扩充（paper-translate-quality T004）。
+/// 无需改代码即可扩充。
 #[derive(
     Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
@@ -454,7 +454,7 @@ impl Default for ModelConfig {
     }
 }
 
-/// 转录推理参数（onnx-engine-unify T012）：`models_dir`（三图 bundle 目录，
+/// 转录推理参数：`models_dir`（三图 bundle 目录，
 /// 缺省取 model_path）、`vad_threshold`（silero 概率阈值，缺省 0.5，POC 实测值显性化）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

@@ -163,7 +163,7 @@ Encode("<|im_start|>system\n" + hotwords(空格连接) + "<|im_end|>\n<|im_start
 2. conv_frontend → FeatToAudioTokensLen → mask → encoder → TrimAudioFeatures
 3. silero VAD（512 窗，v4 状态机）→ 段列表（起/止样本）
 4. 每段：BuildSourceIds → 静态 KV(512) → prefill/逐步 greedy（§7）
-5. CLI 契约按 transcribe-poc/CONTRACT.md（stdout 仅 WALL_S/RTF/SEGMENTS/MODE 四行）
+5. CLI 契约按 transcribe-poc/CONTRACT.md（stdout 仅 WALL_S/RTF/SEGMENTS/MODE/TRANSCRIPT_CHARS 五行）
 6. 对拍：`python3 scripts/cer.py assets/reference.txt <outDir>/transcript.txt`
 
 ## 10. 并行策略（nproc=12，命令 `nproc` 实测）

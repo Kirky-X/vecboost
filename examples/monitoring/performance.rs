@@ -77,8 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let avg = times.iter().sum::<u128>() as f64 / times.len() as f64;
-    let max = *times.iter().max().unwrap();
-    let min = *times.iter().min().unwrap();
+    let max = *times.iter().max().expect("times non-empty");
+    let min = *times.iter().min().expect("times non-empty");
 
     println!("\n性能报告:");
     println!("  样本数: {}", times.len());

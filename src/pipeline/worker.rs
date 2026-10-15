@@ -1,11 +1,6 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-#![allow(
-    dead_code,
-    reason = "WorkerManager is used via queue in handler; tests cover all methods, production uses shared queue"
-)]
-
 use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -30,35 +25,6 @@ pub enum WorkerTask {
         /// 是否立即关闭（不等待当前请求完成）
         immediate: bool,
     },
-}
-
-/// Worker 生命周期状态。
-///
-/// 状态转换：Idle → Processing → Idle（循环）；
-/// 收到 Shutdown 后转为 Stopping → Stopped。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkerState {
-    Idle,
-    Processing,
-    Stopping,
-    Stopped,
-}
-
-/// Worker 实例 — 从任务队列接收请求并调用 EmbeddingService 处理。
-///
-/// 每个 Worker 在独立 tokio task 中运行，通过 mpsc channel 接收任务，
-/// 通过 ResponseChannel 返回结果。
-pub struct Worker {
-    /// Worker ID
-    worker_id: usize,
-    /// 运行标志
-    running: Arc<AtomicBool>,
-    /// 当前状态
-    state: Arc<Mutex<WorkerState>>,
-    /// 任务接收器
-    receiver: mpsc::Receiver<WorkerTask>,
-    /// 配置
-    config: WorkerConfig,
 }
 
 /// 时间窗批组装纯函数。
@@ -152,7 +118,6 @@ pub struct WorkerManager {
 struct WorkerHealthInfo {
     worker_id: usize,
     last_active_time: std::time::Instant,
-    crash_count: usize,
     is_alive: bool,
 }
 
@@ -161,17 +126,12 @@ impl WorkerHealthInfo {
         Self {
             worker_id,
             last_active_time: std::time::Instant::now(),
-            crash_count: 0,
             is_alive: true,
         }
     }
 
     fn update_activity(&mut self) {
         self.last_active_time = std::time::Instant::now();
-    }
-
-    fn record_crash(&mut self) {
-        self.crash_count += 1;
     }
 }
 
@@ -225,7 +185,7 @@ impl WorkerManager {
 
     /// 优雅关闭所有 Worker
     ///
-    /// 排空语义（T032）：进入 shutdown 即清空队列并对每个排队请求完成
+    /// 排空语义：进入 shutdown 即清空队列并对每个排队请求完成
     /// 503（不再悬挂至客户端超时）；在途批获得 `drain_timeout_secs`（默认 5s）
     /// 的完成窗口，到期后 abort。`Shutdown { immediate: true }` 跳过等待。
     pub async fn shutdown(&self) {
@@ -501,10 +461,15 @@ impl WorkerManager {
             response_channel
                 .complete(
                     expired_req.request_id.clone(),
-                    Err(VecboostError::RequestTimeout(format!(
-                        "request waited {:.1}s in queue, exceeding its {}s SLA",
-                        expired_req.submitted_at.elapsed().as_secs_f64(),
-                        expired_req.timeout.as_secs_f64()
+                    Err(VecboostError::RequestTimeout(crate::i18n::tr_with_args(
+                        "request-queue-sla-exceeded",
+                        crate::i18n::tr_args(&[
+                            (
+                                "waited",
+                                &format!("{:.1}", expired_req.submitted_at.elapsed().as_secs_f64()),
+                            ),
+                            ("sla", &expired_req.timeout.as_secs_f64().to_string()),
+                        ]),
                     ))),
                 )
                 .await;
@@ -601,7 +566,7 @@ impl WorkerManager {
         let now = std::time::Instant::now();
         let mut valid_batch = Vec::with_capacity(batch.len());
         for req in batch {
-            // 排队延迟可观测（T033）：入队→出队等待时长
+            // 排队延迟可观测：入队→出队等待时长
             #[cfg(feature = "http")]
             if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
                 let wait_secs = now.duration_since(req.submitted_at).as_secs_f64();
@@ -622,10 +587,18 @@ impl WorkerManager {
                 response_channel
                     .complete(
                         req.request_id.clone(),
-                        Err(VecboostError::RequestTimeout(format!(
-                            "request waited {:.1}s in queue, exceeding its {}s SLA",
-                            now.duration_since(req.submitted_at).as_secs_f64(),
-                            req.timeout.as_secs_f64()
+                        Err(VecboostError::RequestTimeout(crate::i18n::tr_with_args(
+                            "request-queue-sla-exceeded",
+                            crate::i18n::tr_args(&[
+                                (
+                                    "waited",
+                                    &format!(
+                                        "{:.1}",
+                                        now.duration_since(req.submitted_at).as_secs_f64()
+                                    ),
+                                ),
+                                ("sla", &req.timeout.as_secs_f64().to_string()),
+                            ]),
                         ))),
                     )
                     .await;
@@ -636,7 +609,7 @@ impl WorkerManager {
         valid_batch
     }
 
-    /// panic 隔离（T029）：推理 panic 不再带走 worker——经 JoinHandle 捕获，
+    /// panic 隔离：推理 panic 不再带走 worker——经 JoinHandle 捕获，
     /// 批内未完成请求统一补 InternalError。整批 mem::take move 进闭包
     /// （决策请求含递归 Value 深拷贝成本高且由用户输入定大小，热路径不做
     /// 整批 clone，三路评审 M）；批后清理只按 request_id 释放取消注册表。
@@ -661,14 +634,23 @@ impl WorkerManager {
         match handle.await {
             Ok(()) => {}
             Err(join_err) => {
-                error!("Worker {} inference panicked: {}", worker_id, join_err);
+                error!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-worker-inference-panicked",
+                        crate::i18n::tr_args(&[
+                            ("worker_id", &worker_id.to_string()),
+                            ("e", &join_err.to_string()),
+                        ]),
+                    )
+                );
                 for rid in &batch_for_panic {
                     response_channel
                         .complete(
                             rid.clone(),
-                            Err(VecboostError::InternalError(
-                                "inference task panicked".to_string(),
-                            )),
+                            Err(VecboostError::InternalError(crate::i18n::tr(
+                                "inference-task-panicked",
+                            ))),
                         )
                         .await;
                 }
@@ -783,11 +765,16 @@ impl WorkerManager {
             let result = match handle.await {
                 Ok(result) => result,
                 Err(join_err) => {
-                    log::error!("decision inference task failed: {join_err}");
-                    Err(VecboostError::InferenceError(
-                        "decision inference task failed (engine task panicked); see server logs"
-                            .to_string(),
-                    ))
+                    log::error!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-service-decision-inference-task-failed",
+                            crate::i18n::tr_args(&[("e", &join_err.to_string())]),
+                        )
+                    );
+                    Err(VecboostError::InferenceError(crate::i18n::tr(
+                        "decision-inference-task-panicked",
+                    )))
                 }
             };
             response_channel.complete(request_id, result).await;
@@ -2240,7 +2227,6 @@ mod tests {
     fn test_worker_health_info_new() {
         let health = WorkerHealthInfo::new(42);
         assert_eq!(health.worker_id, 42);
-        assert_eq!(health.crash_count, 0);
         assert!(health.is_alive);
     }
 
@@ -2252,17 +2238,6 @@ mod tests {
         std::thread::sleep(Duration::from_millis(5));
         health.update_activity();
         assert!(health.last_active_time > original);
-    }
-
-    /// 验证 record_crash 递增 crash_count。
-    #[test]
-    fn test_worker_health_info_record_crash() {
-        let mut health = WorkerHealthInfo::new(0);
-        assert_eq!(health.crash_count, 0);
-        health.record_crash();
-        assert_eq!(health.crash_count, 1);
-        health.record_crash();
-        assert_eq!(health.crash_count, 2);
     }
 
     /// 验证 WorkerTask::Shutdown 变体 immediate 字段。
@@ -2279,17 +2254,6 @@ mod tests {
             WorkerTask::Shutdown { immediate: true } => {}
             _ => panic!("immediate shutdown should have immediate=true"),
         }
-    }
-
-    /// 验证 WorkerState 所有变体的相等性。
-    #[test]
-    fn test_worker_state_variants() {
-        assert_eq!(WorkerState::Idle, WorkerState::Idle);
-        assert_eq!(WorkerState::Processing, WorkerState::Processing);
-        assert_eq!(WorkerState::Stopping, WorkerState::Stopping);
-        assert_eq!(WorkerState::Stopped, WorkerState::Stopped);
-        assert_ne!(WorkerState::Idle, WorkerState::Processing);
-        assert_ne!(WorkerState::Stopping, WorkerState::Stopped);
     }
 
     /// 验证 worker_loop 在 running=false 时立即退出。
@@ -2330,7 +2294,7 @@ mod tests {
         }
     }
 
-    /// 回归钉（T029/D03）：引擎推理 panic 被隔离——批内请求收到
+    /// 回归钉：引擎推理 panic 被隔离——批内请求收到
     /// InternalError，worker 存活并继续服务后续请求。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_worker_survives_engine_panic() {
@@ -2414,7 +2378,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    /// 回归钉（T030/D04）：已取消请求在出队时被丢弃——不触发引擎调用，
+    /// 回归钉：已取消请求在出队时被丢弃——不触发引擎调用，
     /// 队列槽位释放。
     #[tokio::test]
     async fn test_cancelled_request_skipped_at_dequeue() {
@@ -2470,7 +2434,7 @@ mod tests {
         );
     }
 
-    /// 回归钉（T032/D07）：shutdown 排空——排队请求立即收到
+    /// 回归钉：shutdown 排空——排队请求立即收到
     /// "server is shutting down" 错误而非悬挂到客户端超时。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_shutdown_drains_queue_with_immediate_error() {
@@ -2527,7 +2491,7 @@ mod tests {
         }
     }
 
-    /// 回归钉（T006 唤醒不塌缩）：N 个突发请求入队、W 个空闲 worker，
+    /// 回归钉（唤醒不塌缩）：N 个突发请求入队、W 个空闲 worker，
     /// 全部请求必须在 5s 内完成（tokio Notify permit 语义保证不丢唤醒；
     /// 未被唤醒的 worker 由出队臂兜底消费队列）。
     #[tokio::test(flavor = "multi_thread")]

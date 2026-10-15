@@ -4,7 +4,7 @@
 //! ONNX seq2seq 翻译引擎（Marian/opus-mt，encoder + decoder_model_merged
 //! 双 Session 贪心解码）。
 //!
-//! 张量契约（T013 首日实测，notes/u2-inspection-raw.txt）：
+//! 张量契约（首日实测，notes/u2-inspection-raw.txt）
 //! - encoder：inputs `input_ids`/`attention_mask` (Int64[-1,-1]) →
 //!   output `last_hidden_state` (F32[-1,-1,512])
 //! - decoder_model_merged：inputs `input_ids`/`encoder_attention_mask`/
@@ -23,7 +23,7 @@
 //! 序列全量重算、取末位 logits——O(L²) 成本有界于 `max_new_tokens`，
 //! 正确性优先（端到端实测译文正确）。
 //!
-//! tokenizer shim（T013 U1 换路，语义保持）：Xenova Marian bundle 的
+//! tokenizer shim（U1 换路，语义保持）：Xenova Marian bundle 的
 //! `normalizer.precompiled_charsmap = null` 使 tokenizers 0.23.2 在
 //! Precompiled 反序列化分支 panic（不可捕获）——加载前在内存中移除该
 //! no-op normalizer（等价 identity，id 序列与净副本一致），不改磁盘 bundle。
@@ -287,7 +287,7 @@ impl M2mGraph {
 #[derive(Debug)]
 enum Family {
     /// Helsinki Marian：6 层静态名表；tokenizer post_processor 自带
-    /// `</s>`（T015：add_special_tokens 必须 true）
+    /// `</s>`（add_special_tokens 必须 true）
     Marian,
     /// Meta M2M100 / NLLB-200（同 m2m_100 架构）：源序列显式构造
     /// `[src_lang] + ids + [eos]`，decoder 起始 `[decoder_start, tgt_lang]`
@@ -418,7 +418,7 @@ pub(crate) struct OnnxTranslationEngine {
     bundle_dir: PathBuf,
     fallback_triggered: bool,
     fallback_lock: Arc<Mutex<()>>,
-    /// 最近一次成功解码的生成 token 数（评审 converge T033：质量观测通道，
+    /// 最近一次成功解码的生成 token 数（评审：质量观测通道，
     /// wire 五键契约不扩——e2e 质量输出经引擎级查询读取）
     output_tokens_last: std::sync::atomic::AtomicU64,
 }
@@ -450,7 +450,7 @@ impl DecodeGraph {
 
 // probe_model_file / precision_for_model_file 本体已收编至 [`super::session`]（单一事实源）。
 
-/// tokenizer 加载（T013 U1 换路 shim，见模块文档）：
+/// tokenizer 加载（U1 换路 shim，见模块文档）
 /// ① 内存内移除 null `precompiled_charsmap` 的 Precompiled normalizer
 /// （等价 identity 归一化）；② 过滤 added_tokens 中 content 不在 model
 /// vocab 的条目（Xenova m2m100 导出含越词表 token——`Token 'ଙ' out of
@@ -740,7 +740,7 @@ fn greedy_decode(
         let exclude = (generated.len() < min_new_tokens).then_some(eos_token_id as usize);
         let best = argmax_index(last_row, exclude)
             .or_else(|| argmax_index(last_row, None))
-            .expect(&crate::i18n::tr("engine-translate-logits-nonempty"));
+            .unwrap_or_else(|| panic!("{}", crate::i18n::tr("engine-translate-logits-nonempty")));
         let best = best as u32;
 
         if best == eos_token_id {
@@ -904,7 +904,7 @@ impl OnnxTranslationEngine {
     /// 最佳）；经确定性退化检测（4-gram 重复循环 / 压满预算不出 EOS，见
     /// [`is_degenerate_generation`]）命中时第二遍按句切分逐句解码救援（消除
     /// 上下文相关失效，带全局输出预算与句数上限）。Session 锁临界区仅含
-    /// 推理（tokenize/detok/切分均在锁外，架构审查 L1）；之后按目标语言
+    /// 推理（tokenize/detok/切分均在锁外）；之后按目标语言
     /// 拼接（CJK 直接相连）→ CJK 标点归一 + 字间空格清理。
     pub(crate) fn translate(
         &self,
@@ -1090,7 +1090,7 @@ impl OnnxTranslationEngine {
                 let total: usize = generated_sets.iter().map(|g| g.len()).sum();
                 (generated_sets, total)
             };
-            // detok 统一锁外（架构审查 L1：临界区仅含推理）
+            // detok 统一锁外（临界区仅含推理）
             let mut pieces: Vec<String> = Vec::with_capacity(generated_sets.len());
             for generated in &generated_sets {
                 let text = decode_output_text(&self.tokenizer, generated)?;
@@ -1536,7 +1536,7 @@ fn is_degenerate_generation(generated: &[u32], hit_budget: bool) -> bool {
     false
 }
 
-/// 源文本编码（Marian：post_processor 自带 `</s>`——T015 实测缺它解码
+/// 源文本编码（Marian：post_processor 自带 `</s>`——实测缺它解码
 /// 退化为重复循环，add_special_tokens 恒 true）
 fn encode_source_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<i64>, VecboostError> {
     let encoding = tokenizer.encode(text, true).map_err(|e| {
@@ -1734,7 +1734,7 @@ fn translation_joiner(target_language: &str) -> &'static str {
 }
 
 /// 中/日目标语言码族（639-1 及等价 639-3）：分句拼接零分隔与字间空格清理
-/// 共用判据（架构审查 M2：单一事实源）。注意 `normalize_cjk_punctuation`
+/// 共用判据（单一事实源）。注意 `normalize_cjk_punctuation`
 /// 为刻意超集（含韩语——标点归一对韩语适用；空格清理不适用，韩语空格
 /// 有辨义作用）。
 fn is_zh_ja_target(target_language: &str) -> bool {
@@ -1880,7 +1880,7 @@ impl InferenceEngine for OnnxTranslationEngine {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 测试：探测/契约面（离线可跑）。真机贪心链路由 T025 E2E 覆盖。
+// 测试：探测/契约面（离线可跑）。真机贪心链路由 E2E 覆盖。
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2036,7 +2036,7 @@ mod tests {
             return;
         };
         let tokenizer = load_tokenizer(&dir.join("tokenizer.json")).unwrap();
-        // from_file 对同文件会 panic（T013 红灯）——shim 后必须可加载且可用
+        // from_file 对同文件会 panic（红灯）——shim 后必须可加载且可用
         let encoding = tokenizer.encode("Hello", false).unwrap();
         assert!(!encoding.get_ids().is_empty());
         assert_eq!(tokenizer.get_vocab_size(true), VOCAB_DIM_EN_ZH);
@@ -2052,7 +2052,7 @@ mod tests {
         };
         let tokenizer = load_tokenizer(&dir.join("tokenizer.json")).unwrap();
         let config = GenerationConfig::from_bundle(&dir, &tokenizer).unwrap();
-        // T013 实测值：decoder_start_token_id=65000(pad)、eos_token_id=0
+        // 实测值：decoder_start_token_id=65000(pad)、eos_token_id=0
         assert_eq!(config.decoder_start_token_id, 65000);
         assert_eq!(config.eos_token_id, 0);
     }
@@ -2096,7 +2096,7 @@ mod tests {
         );
     }
 
-    // ── 真机贪心链路（bundle 守卫；T025 E2E 做逐句 golden，此处钉实现级
+    // ── 真机贪心链路（bundle 守卫；E2E 做逐句 golden，此处钉实现级
     //    可译性：加载→编码→解码→detok 全链不炸且译文非空） ─────────────
 
     #[test]
@@ -2145,7 +2145,7 @@ mod tests {
             source_language: Some("en".to_string()),
             target_language: "zh".to_string(),
         };
-        // trait 分发面（引擎经 AnyEngine 由 T016 接线；此处直接调固有方法）
+        // trait 分发面（引擎经 AnyEngine 接线；此处直接调固有方法）
         let resp = OnnxTranslationEngine::translate(&engine, &req).expect("贪心解码必须成功");
         assert!(!resp.translation.trim().is_empty(), "译文非空");
         assert!(
@@ -2156,7 +2156,7 @@ mod tests {
         println!("SMOKE translate(en→zh): {:?}", resp.translation);
         assert_eq!(resp.target_language, "zh");
         assert!(resp.processing_time_ms > 0 || !resp.translation.is_empty());
-        // 评审 converge T033：生成 token 数透出通道（>0 断言）
+        // 评审：生成 token 数透出通道（>0 断言）
         assert!(
             engine.last_output_tokens() > 0,
             "成功解码后 last_output_tokens 必须 > 0"
@@ -2924,7 +2924,7 @@ mod tests {
         );
     }
 
-    // ── int8 质量门禁（translation-int8-optin T004）：同 bundle 同句，
+    // ── int8 质量门禁：同 bundle 同句，
     //    dynamic int8 与 fp32 译文逐字节一致（不一致即红，禁静默降级） ──
 
     /// 加载引擎并翻译一句（text→target_language）；ORT dylib 缺失返回

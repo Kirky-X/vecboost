@@ -25,6 +25,8 @@ logout-success = 登出成功。令牌已撤销。
 model-switch-success = 模型切换成功
 model-already-current = 已在使用该模型
 model-load-failed = 加载模型 '{ $name }' 失败：{ $detail }
+switch-path-rejected = 路径被拒绝：必须是允许根目录内已存在的路径（model_path 须为目录、tokenizer_path 须为文件）；详见服务端日志
+switch-model-load-failed = 模型加载失败；详见服务端日志
 
 # ── 文件嵌入 ──
 file-empty = 文件为空
@@ -53,6 +55,7 @@ decision-empty-state = state 不能为空（决策上下文 state 必填）
 decision-empty-questions = questions 不能为空（至少一个问题）
 decision-too-many-questions = questions 数量 { $count } 超过单次请求上限 { $max }
 decision-unsupported = 当前引擎不支持 decision 决策推理
+decision-inference-task-panicked = 决策推理任务失败（引擎任务 panic）；详见服务端日志
 
 # ── Detect 验证 ──
 detect-empty-text = 文本不能为空（语言检测 text 必填）
@@ -67,6 +70,7 @@ translate-not-configured = 翻译服务未配置语言对（请在 [translation]
 translate-unsupported-pair = 请求的语言对 { $requested } 未配置（已配置：{ $pairs }）
 translate-detect-failed = 源语言检测不可靠，无法确定翻译路径（请显式指定 source_language）
 translate-too-many-source-tokens = 源文本长度 { $count } 超过该语言对上限 { $max }
+translation-inference-task-panicked = 翻译推理任务失败（引擎任务 panic）；详见服务端日志
 
 # ── 目录错误 ──
 dir-get-cwd-failed = 获取当前目录失败：{ $detail }
@@ -112,6 +116,8 @@ queue-full-rejected = 队列已满，请求被拒绝
 rerank-not-configured = Rerank 服务未配置
 decision-not-configured = 决策服务未配置
 pipeline-response-type-mismatch = Pipeline 返回了类型不匹配的响应
+request-queue-sla-exceeded = 请求在队列中等待 { $waited } 秒，超过其 { $sla } 秒 SLA
+inference-task-panicked = 推理任务已 panic
 auth-disabled = 认证在运行时被禁用
 auth-verify-failed = 密码验证失败
 api-init-state-called = init_state 已被调用
@@ -231,6 +237,7 @@ startup-semantic-mode-invalid = [semantic_cache] comparison_mode 无效：{ $det
 startup-translation-no-onnx = [translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建
 startup-translate-pair-invalid = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) 参数非法：{ $detail }
 startup-translate-pair-load-failed = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) 加载失败：{ $detail }
+startup-transcribe-session-open = 转录会话打开失败：{ $detail }
 startup-thread-tune = [thread-tune] 物理核={ $physical } 逻辑核={ $logical } 生效线程数={ $effective }（显式配置={ $explicit }）
 startup-thread-unknown = 未知(回退)
 startup-thread-unset = 未设置
@@ -429,7 +436,7 @@ log-engine-verifying-decision-model-file = 正在校验决策模型文件 SHA256
 log-engine-msg-model = { $msg }（model={ $a1 }）
 log-engine-memory-gate-passed-model = 内存门禁通过：model={ $a1 } need={ $need } available={ $available } floor={ $floor }
 log-engine-session-memory-floor-mb = SESSION_MEMORY_FLOOR_MB={ $v } 不是合法整数，回退到默认值 { $DEFAULT }
-log-engine-cuda-execution-provider-requires = CUDA 执行提供器需要 cuda feature，本次构建未启用，改用 CPU 执行提供器
+log-engine-cuda-execution-provider-requires = CUDA 执行提供器需要 transcribe feature（含 ort/cuda），本次构建未启用，改用 CPU 执行提供器
 log-engine-attempting-configure-cuda-execution = 正在尝试配置 CUDA 执行提供器
 log-engine-gguf-pooling-inferred-as = 由标识“{ $pool_identity }”推断 GGUF 池化方式为 { $pooling }
 log-engine-gguf-config-json-provides = GGUF 的 config.json 无可识别 hidden_act，回退到 Gelu（可能与原模型不一致）
@@ -437,6 +444,8 @@ log-engine-gguf-config-json-unknown = GGUF 的 config.json 中 hidden_act“{ $o
 log-engine-gguf-hidden-act-act = GGUF hidden_act“{ $act }”在 candle BERT 中无对应实现，回退到 Gelu
 log-engine-gguf-tensor-other-this = GGUF 张量“{ $other }”：该仓库把它映射到 final-LN（output.LayerNorm），语义与常规不同，请自行核对
 log-device-amd-gpu-initialization-complete = AMD GPU 初始化完成。发现 { $a1 } 个设备（ROCm：{ $a2 }，OpenCL：{ $a3 }）
+log-cuda-free-failed = CUDA 显存释放失败：设备 { $device }（{ $bytes } 字节）：{ $e } —— 记账保留
+log-cuda-free-on-drop-failed = Drop 释放 CUDA 显存失败：设备 { $device }（{ $bytes } 字节）：{ $e } —— 记账保留
 log-device-found-opencl-compatible-amd = 发现 OpenCL 兼容的 AMD GPU：{ $a1 }，显存 { $a2 } 字节
 log-device-found-rocm-compatible-amd = 发现 ROCm 兼容的 AMD GPU：{ $a1 }，显存 { $a2 } 字节
 log-device-initializing-amd-gpu-device = 正在初始化 AMD GPU 设备管理器……
@@ -551,8 +560,11 @@ log-service-embedding-cache-wal-replay = 嵌入缓存 WAL 回放来源：{ $a1 }
 log-service-model-heat-save-failed = 模型热度落盘失败：{ $e }
 log-service-transcribe-segments-chars-ms = transcribe：{ $a1 } 段、{ $a2 } 字符、{ $a3 }ms
 log-service-translation-inference-task-failed = 翻译推理任务失败：{ $e }
+log-worker-inference-panicked = Worker { $worker_id } 推理 panic：{ $e }
 log-util-list-tree-failed-repo = 仓库“{ $repo_id }”的 list_tree 失败（{ $e }）；按尺寸校验的短路不可用
 log-util-hf-endpoint-detected-hf = 检测到 HF_ENDPOINT={ $a1 }——hf-hub 1.0.0 依赖 ETag 头，部分镜像不提供
+log-util-vquant-rotate-tail-not-hadamard = rotate：末尾 { $dims } 维未做 Hadamard 旋转（该段量化质量下降）
+log-util-vquant-quantize-i8-non-finite = quantize_i8：输入向量含非有限值（len={ $len }），已置零
 cli-poc-transcribe-own-e = transcribe-own：{ $e }
 cli-poc-transcribe-own-pipeline-done = transcribe-own：全管线完成，耗时 { $wall_s }s -> { $a1 }
 cli-poc-transcribe-own-vad-only = transcribe-own：仅 VAD 完成，耗时 { $wall_s }s -> { $a1 }

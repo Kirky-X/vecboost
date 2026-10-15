@@ -25,6 +25,8 @@ logout-success = Logout successful. Token has been revoked.
 model-switch-success = Model switched successfully
 model-already-current = Already using this model
 model-load-failed = Failed to load model '{ $name }': { $detail }
+switch-path-rejected = path rejected: must be an existing path inside the allowed roots (model_path must be a directory, tokenizer_path must be a file); see server logs
+switch-model-load-failed = model load failed; see server logs
 
 # ── File embedding ──
 file-empty = File is empty
@@ -53,6 +55,7 @@ decision-empty-state = state must not be empty (decision context state is requir
 decision-empty-questions = questions must not be empty (at least one question required)
 decision-too-many-questions = questions count { $count } exceeds max per request { $max }
 decision-unsupported = Current engine does not support decision inference
+decision-inference-task-panicked = decision inference task failed (engine task panicked); see server logs
 
 # ── Detect validation ──
 detect-empty-text = text must not be empty (language detection requires text)
@@ -67,6 +70,7 @@ translate-not-configured = Translation service has no language pairs configured 
 translate-unsupported-pair = Requested language pair { $requested } is not configured (configured: { $pairs })
 translate-detect-failed = Source language detection is unreliable; specify source_language explicitly
 translate-too-many-source-tokens = Source text length { $count } exceeds the pair limit { $max }
+translation-inference-task-panicked = translation inference task failed (engine task panicked); see server logs
 
 # ── Directory errors ──
 dir-get-cwd-failed = Failed to get current directory: { $detail }
@@ -112,6 +116,8 @@ queue-full-rejected = Queue is full, request rejected
 rerank-not-configured = Rerank service not configured
 decision-not-configured = Decision service not configured
 pipeline-response-type-mismatch = Pipeline returned a mismatched response type
+request-queue-sla-exceeded = request waited { $waited }s in queue, exceeding its { $sla }s SLA
+inference-task-panicked = inference task panicked
 auth-disabled = Authentication is disabled at runtime
 auth-verify-failed = Password verification failed
 api-init-state-called = init_state already called
@@ -231,6 +237,7 @@ startup-semantic-mode-invalid = [semantic_cache] comparison_mode invalid: { $det
 startup-translation-no-onnx = [translation] pairs configured but this build did not enable the `onnx` feature; rebuild with --features onnx
 startup-translate-pair-invalid = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) invalid parameters: { $detail }
 startup-translate-pair-load-failed = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) failed to load: { $detail }
+startup-transcribe-session-open = transcribe session open: { $detail }
 startup-thread-tune = [thread-tune] physical cores={ $physical } logical cores={ $logical } effective threads={ $effective } (explicit config={ $explicit })
 startup-thread-unknown = unknown (fallback)
 startup-thread-unset = unset
@@ -430,7 +437,7 @@ log-engine-verifying-decision-model-file = Verifying decision model file SHA256 
 log-engine-msg-model = { $msg } (model={ $a1 })
 log-engine-memory-gate-passed-model = memory gate passed: model={ $a1 } need={ $need } available={ $available } floor={ $floor }
 log-engine-session-memory-floor-mb = SESSION_MEMORY_FLOOR_MB={ $v } is not a valid integer; falling back to default { $DEFAULT_MEMORY_FLOOR_MB }MB
-log-engine-cuda-execution-provider-requires = CUDA execution provider requires the cuda feature flag; using CPU execution provider
+log-engine-cuda-execution-provider-requires = CUDA execution provider requires the transcribe feature (bundles ort/cuda); using CPU execution provider
 log-engine-attempting-configure-cuda-execution = Attempting to configure CUDA execution provider
 log-engine-gguf-pooling-inferred-as = GGUF pooling inferred as { $pooling } from identity '{ $pool_identity }'
 log-engine-gguf-config-json-provides = GGUF config.json provides no recognizable hidden_act, falling back to Gelu (making the previously hardcoded behavior explicit)
@@ -438,6 +445,8 @@ log-engine-gguf-config-json-unknown = GGUF config.json unknown hidden_act '{ $ot
 log-engine-gguf-hidden-act-act = GGUF hidden_act '{ $act }' has no candle BERT counterpart, falling back to Gelu
 log-engine-gguf-tensor-other-this = GGUF tensor '{ $other }': this repo maps it to final-LN (output.LayerNorm), which differs from llama.cpp's attention-LN convention; for externally converted GGUF, rename to output_norm
 log-device-amd-gpu-initialization-complete = AMD GPU initialization complete. Found { $a1 } device(s) (ROCm: { $a2 }, OpenCL: { $a3 })
+log-cuda-free-failed = CUDA free FAILED for device { $device } ({ $bytes } bytes): { $e } — accounting kept
+log-cuda-free-on-drop-failed = CUDA free on drop FAILED for device { $device } ({ $bytes } bytes): { $e } — accounting kept
 log-device-found-opencl-compatible-amd = Found OpenCL-compatible AMD GPU: { $a1 } with { $a2 } bytes VRAM
 log-device-found-rocm-compatible-amd = Found ROCm-compatible AMD GPU: { $a1 } with { $a2 } bytes VRAM
 log-device-initializing-amd-gpu-device = Initializing AMD GPU device manager...
@@ -552,8 +561,11 @@ log-service-embedding-cache-wal-replay = Embedding cache WAL replay from { $a1 }
 log-service-model-heat-save-failed = model heat save failed: { $e }
 log-service-transcribe-segments-chars-ms = transcribe: { $a1 } segments, { $a2 } chars, { $a3 } ms
 log-service-translation-inference-task-failed = translation inference task failed: { $e }
+log-worker-inference-panicked = Worker { $worker_id } inference panicked: { $e }
 log-util-list-tree-failed-repo = list_tree failed for '{ $repo_id }' ({ $e }); size-verified short-circuit unavailable, re-downloading all manifest files
 log-util-hf-endpoint-detected-hf = HF_ENDPOINT={ $a1 } detected — hf-hub 1.0.0 requires ETag headers which some mirrors (e.g. hf-mirror.com) may not provide. If model download fails with 'missing ETag header', pre-download the model manually and set `model_path` in config to use local loading instead.
+log-util-vquant-rotate-tail-not-hadamard = rotate: trailing { $dims } dims are not Hadamard-rotated (quantization quality degraded for this segment)
+log-util-vquant-quantize-i8-non-finite = quantize_i8: non-finite input vector (len={ $len }), zeroed
 cli-poc-transcribe-own-e = transcribe-own: { $e }
 cli-poc-transcribe-own-pipeline-done = transcribe-own: pipeline done in { $wall_s }s -> { $a1 }
 cli-poc-transcribe-own-vad-only = transcribe-own: vad-only done in { $wall_s }s -> { $a1 }

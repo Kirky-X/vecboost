@@ -135,8 +135,15 @@ impl CudaMemoryPool {
         if let Err(e) = unsafe { cudarc::driver::result::free_sync(ptr.ptr) } {
             // free 失败 = 显存实际仍占用，记账不得归还（否则超额预订真实 VRAM）
             error!(
-                "CUDA free FAILED for device {} ({} bytes): {} — accounting kept",
-                self.device_id, ptr.size, e
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-cuda-free-failed",
+                    crate::i18n::tr_args(&[
+                        ("device", &self.device_id.to_string()),
+                        ("bytes", &ptr.size.to_string()),
+                        ("e", &e.to_string()),
+                    ]),
+                )
             );
             std::mem::forget(ptr);
             return;
@@ -213,10 +220,17 @@ impl Drop for CudaMemoryPtr {
             // exactly once (Drop guarantees single invocation).
             if let Err(e) = unsafe { cudarc::driver::result::free_sync(self.ptr) } {
                 // free 失败 = 显存仍占用：记账保留（与 deallocate 路径同语义），
-                // 偏差经 error 日志显性化（审查 H4——此前无条件递减掩盖泄漏）
+                // 偏差经 error 日志显性化（此前无条件递减掩盖泄漏）
                 error!(
-                    "CUDA free on drop FAILED for device {} ({} bytes): {} — accounting kept",
-                    self.device_id, self.size, e
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-cuda-free-on-drop-failed",
+                        crate::i18n::tr_args(&[
+                            ("device", &self.device_id.to_string()),
+                            ("bytes", &self.size.to_string()),
+                            ("e", &e.to_string()),
+                        ]),
+                    )
                 );
             } else if let Some(counter) = &self.pool_counter {
                 counter.fetch_sub(self.size as u64, Ordering::Relaxed);

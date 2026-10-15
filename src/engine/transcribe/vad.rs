@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! silero VAD v4：LSTM 状态机 + 段切分，由 `transcribe-poc/src/vad.rs` 移植
-//! （onnx-engine-unify T009）。参数（threshold=0.5、min_speech=0.25s、
+//! 参数（threshold=0.5、min_speech=0.25s、
 //! min_silence=0.5s、max_speech=20s 强切、neg_threshold=max(thr-0.15,0.01)）
 //! 与 DESIGN.md 固化值一致。
 //!

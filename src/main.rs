@@ -488,7 +488,7 @@ async fn attach_model_manager(
 
 /// server 模式注入语义缓存（[semantic_cache] enabled=true 时；默认 false
 /// 行为不变）。comparison_mode 非法值启动报错，不静默回退；取值本身已
-/// 废弃不消费（解析保留兼容，非法值仍启动报错——审查 L3）。
+/// 废弃不消费（解析保留兼容，非法值仍启动报错）。
 fn attach_semantic_cache(service: EmbeddingService, config: &VecboostConfig) -> EmbeddingService {
     if !config.semantic_cache.enabled {
         return service;
@@ -557,7 +557,15 @@ fn build_transcribe_service(config: &VecboostConfig) -> anyhow::Result<Transcrib
     };
     let session =
         vecboost::transcribe::open(std::path::Path::new(&config.transcribe.models_dir), &opts)
-            .map_err(|e| anyhow::anyhow!("transcribe session open: {e}"))?;
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "{}",
+                    vecboost::i18n::tr_with_args(
+                        "startup-transcribe-session-open",
+                        vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                    )
+                )
+            })?;
     Ok(TranscribeService::new(session))
 }
 
@@ -829,14 +837,51 @@ async fn run_mcp_server(
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RerankModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
-    kit.register::<DecisionModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register DecisionModule: {}", e))?;
-    kit.register::<DetectModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register DetectModule: {}", e))?;
-    kit.register::<TranslateModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register TranslateModule: {}", e))?;
-    kit.register::<TranscribeModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register TranscribeModule: {}", e))?;
+    kit.register::<DecisionModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[
+                    ("module", "DecisionModule"),
+                    ("detail", &e.to_string()),
+                ]),
+            )
+        )
+    })?;
+    kit.register::<DetectModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[("module", "DetectModule"), ("detail", &e.to_string()),]),
+            )
+        )
+    })?;
+    kit.register::<TranslateModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[
+                    ("module", "TranslateModule"),
+                    ("detail", &e.to_string()),
+                ]),
+            )
+        )
+    })?;
+    kit.register::<TranscribeModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[
+                    ("module", "TranscribeModule"),
+                    ("detail", &e.to_string()),
+                ]),
+            )
+        )
+    })?;
     let kit = kit
         .build()
         .await
@@ -939,14 +984,51 @@ async fn run_cli_command(
         .map_err(|e| anyhow::anyhow!("Failed to register EmbeddingModule: {}", e))?;
     kit.register::<RerankModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
-    kit.register::<DecisionModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register DecisionModule: {}", e))?;
-    kit.register::<DetectModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register DetectModule: {}", e))?;
-    kit.register::<TranslateModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register TranslateModule: {}", e))?;
-    kit.register::<TranscribeModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register TranscribeModule: {}", e))?;
+    kit.register::<DecisionModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[
+                    ("module", "DecisionModule"),
+                    ("detail", &e.to_string()),
+                ]),
+            )
+        )
+    })?;
+    kit.register::<DetectModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[("module", "DetectModule"), ("detail", &e.to_string()),]),
+            )
+        )
+    })?;
+    kit.register::<TranslateModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[
+                    ("module", "TranslateModule"),
+                    ("detail", &e.to_string()),
+                ]),
+            )
+        )
+    })?;
+    kit.register::<TranscribeModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[
+                    ("module", "TranscribeModule"),
+                    ("detail", &e.to_string()),
+                ]),
+            )
+        )
+    })?;
     let kit = kit
         .build()
         .await
@@ -1208,7 +1290,7 @@ async fn init_pipeline(
             .with_decision_service(decision_service.clone()),
         );
 
-        // start() = spawn min_workers + 启动扩缩容 monitor（T033——
+        // start() = spawn min_workers + 启动扩缩容 monitor（
         // 此前只 spawn min_workers，max_workers/scale 阈值全是死配置）
         if let Err(e) = worker_manager.start().await {
             log::error!(
@@ -2647,14 +2729,51 @@ fn register_all_modules(kit: &mut trait_kit::AsyncKit) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to register RateLimitModule: {}", e))?;
     kit.register::<RerankModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register RerankModule: {}", e))?;
-    kit.register::<DecisionModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register DecisionModule: {}", e))?;
-    kit.register::<DetectModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register DetectModule: {}", e))?;
-    kit.register::<TranslateModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register TranslateModule: {}", e))?;
-    kit.register::<TranscribeModule>()
-        .map_err(|e| anyhow::anyhow!("Failed to register TranscribeModule: {}", e))?;
+    kit.register::<DecisionModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[
+                    ("module", "DecisionModule"),
+                    ("detail", &e.to_string()),
+                ]),
+            )
+        )
+    })?;
+    kit.register::<DetectModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[("module", "DetectModule"), ("detail", &e.to_string()),]),
+            )
+        )
+    })?;
+    kit.register::<TranslateModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[
+                    ("module", "TranslateModule"),
+                    ("detail", &e.to_string()),
+                ]),
+            )
+        )
+    })?;
+    kit.register::<TranscribeModule>().map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-register-failed",
+                vecboost::i18n::tr_args(&[
+                    ("module", "TranscribeModule"),
+                    ("detail", &e.to_string()),
+                ]),
+            )
+        )
+    })?;
     kit.register::<CacheModule>()
         .map_err(|e| anyhow::anyhow!("Failed to register CacheModule: {}", e))?;
     kit.register::<DbModule>()
@@ -2835,6 +2954,8 @@ mod tests {
     // 拒绝与逃生阀共享进程级环境变量,合并为单测避免并行竞态
     #[test]
     fn bind_safety_rejects_non_loopback_escape_valve_allows() {
+        // FTL 文案断言前置:未 init 时 tr 回退键名,消息不含插值与环境变量名
+        vecboost::i18n::init();
         // SAFETY: 单线程内变更测试专用环境变量;Rust 2024 中 set_var/remove_var 为 unsafe
         unsafe { std::env::remove_var("VECBOOST_ALLOW_INSECURE") };
         let err = validate_bind_safety("0.0.0.0", false).unwrap_err();
@@ -3042,6 +3163,8 @@ mod tests {
 
     #[test]
     fn checkpoints_fail_fast_rejects_unknown_engine_type() {
+        // FTL 文案断言前置:未 init 时 tr 回退键名,消息不含非法取值插值
+        vecboost::i18n::init();
         let mut config = VecboostConfig::default();
         let mut preset = checkpoint_preset("laya");
         preset.engine_type = Some("tensorrt".to_string());

@@ -148,8 +148,8 @@ fn build_queued_request(
     })
 }
 
-/// 入队并等待 worker 完成的公共内核：取消传播（T030）、响应通道注册、
-/// 入队（队列满早退释放取消标志，审查 H2）、SLA 服务端等待超时（T031）。
+/// 入队并等待 worker 完成的公共内核：取消传播、响应通道注册、
+/// 入队（队列满早退释放取消标志）、SLA 服务端等待超时。
 /// embed 与 decision handler 共用，保证两条路径的排队语义完全一致。
 async fn enqueue_and_await_response(
     state: VecboostState,
@@ -159,7 +159,7 @@ async fn enqueue_and_await_response(
 
     let request_id = request.request_id.clone();
 
-    // 取消传播（T030）：handler 被 drop（客户端断连）时置位取消标志，
+    // 取消传播：handler 被 drop（客户端断连）时置位取消标志，
     // 调度器出队检查后丢弃——不再消耗推理算力
     let queue_handle = state
         .kit
@@ -186,7 +186,7 @@ async fn enqueue_and_await_response(
     if let Err(e) = queue_handle.enqueue(request).await {
         // 队列满早退：取消标志与响应通道条目随即释放——请求从未入队即无
         // worker 会 complete，channel 条目不清将永久滞留（持续过载下无界
-        // 增长，三路评审 M；审查 H2 的「注册表不留孤儿」此处补全到两侧）
+        // 增长，三路评审 M；「注册表不留孤儿」此处补全到两侧）
         cancel_guard.0.take();
         queue_handle.cancellations().release(&request_id);
         state
@@ -204,7 +204,7 @@ async fn enqueue_and_await_response(
         Ok(Err(_)) => Err(VecboostError::InternalError(i18n::tr(
             "pipeline-channel-error",
         ))),
-        // 服务端超时 → 504 语义（T031），且置位取消：请求若仍在队列则被丢弃
+        // 服务端超时 → 504 语义，且置位取消：请求若仍在队列则被丢弃
         Err(_) => {
             cancel_flag.store(true, Ordering::Relaxed);
             Err(VecboostError::RequestTimeout(i18n::tr("pipeline-timeout")))
@@ -531,7 +531,7 @@ mod tests {
         );
     }
 
-    /// 决策请求经 pipeline 入队（T016）：请求以 ServiceRequest::Decision
+    /// 决策请求经 pipeline 入队：请求以 ServiceRequest::Decision
     /// 入队、优先级由共享 PriorityCalculator 按 embed 同口径计算（同输入
     /// 同结果）、出队由持有方以 DecisionService 消费并 complete 回达。
     #[tokio::test(flavor = "multi_thread")]

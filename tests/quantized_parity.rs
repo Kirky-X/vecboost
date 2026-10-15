@@ -207,7 +207,7 @@ fn test_q8_0_parity_gate() {
     );
 }
 
-/// 引擎出口契约（T026/D14）：量化引擎 embed 输出必须 L2 归一化（‖v‖≈1），
+/// 引擎出口契约：量化引擎 embed 输出必须 L2 归一化（‖v‖≈1），
 /// 与 fp32 引擎一致。此前量化引擎不归一化，两路径范数契约相悖。
 #[test]
 fn test_quantized_engine_output_is_l2_normalized() {

@@ -45,7 +45,7 @@ cargo check -p vecboost --features mcp
 
 | 层 | 命令 | 说明 |
 |---|---|---|
-| 单元 + 集成(Rust) | `cargo test -p vecboost -p vecboost-examples` | 1700+ 内联测试 + tests/ |
+| 单元 + 集成(Rust) | `cargo test -p vecboost -p vecboost-examples` | 2237 内联测试 + tests/（63 个集成/专项测试函数） |
 | gRPC E2E | `cargo test -p vecboost --features http,grpc --test grpc_e2e` | 拉起真实二进制 |
 | 场景(Python) | `pytest tests/scenario -q` | conftest 拉起真实服务器；models/ 缺席时推理用例自动 SKIP |
 | 微基准 | `cargo bench -p vecboost` | criterion |

@@ -58,7 +58,7 @@ vecboost 的性能/质量验证分三层，职责边界如下：
 | `test_fault_tolerance.py` | FT-*（fault-tolerance-contract，端口 9165） | 12 | 容错与 API 逻辑契约：批上界 64/去重 scatter/并发拼批一致性/rerank 严格契约与部分失败容错/search 契约/metrics 格式/dimension 自洽/Matryoshka 前缀/限流 IETF 头与 429 |
 | `test_semantic_cache.py` | SC-*（semantic-cache-e2e，端口 9166-9167） | 5 | 语义缓存：精确命中/trigram 语义命中（黑盒信号=缓存向量逐位相等）/对照组（无缓存服务器同文本对向量必异）/非法 comparison_mode 拒启 |
 
-合计 17 个套件、128 个场景用例（另有 `tests/perf` 的 27 个 pytest 用例，见下节）。pytest 配置 `filterwarnings = ["error"]`（根 pyproject.toml）——**零告警门禁**：任何运行期 warning 直接判失败。CI 中该层为每夜定时任务（`scenario-tests.yml`，UTC 03:00），不阻塞 PR；本地用 `scripts/run-scenario-tests.sh` 一键运行。
+合计 15 个套件、119 个场景用例（另有 `tests/perf` 的 27 个 pytest 用例，见下节）。pytest 配置 `filterwarnings = ["error"]`（根 pyproject.toml）——**零告警门禁**：任何运行期 warning 直接判失败。CI 中该层为每夜定时任务（`scenario-tests.yml`，UTC 03:00），不阻塞 PR；本地用 `scripts/run-scenario-tests.sh` 一键运行。
 
 ---
 
@@ -106,6 +106,7 @@ pytest tests/perf -m sim          # 只跑模拟器用例
 | `batch_scheduling_bench` | 批调度（稳定/突发负载 × 等待窗口，`assemble_batch` 时间窗路径） |
 | `semantic_cache_bench` | 语义缓存（精确命中/未命中、trigram 搜索规模扩展） |
 | `embed_throughput_bench` | 吞吐基线（单文本 embed 与 32 文本 embed_batch；模型经 `VECBOOST_BENCH_MODEL` 指定，未设置时 skip） |
+| `translate_bench` | 翻译吞吐/时延基线（seq2seq 多语言对；基线见 `docs/benchmarks/translate_baseline_results.md`） |
 
 基线数字记录在 `docs/benchmarks/`（标注环境与噪声区间），调优开关注册表见 [⚡ 性能指南](PERFORMANCE.md)。
 
@@ -113,7 +114,7 @@ pytest tests/perf -m sim          # 只跑模拟器用例
 
 ## 🧱 单元测试
 
-`src/` 各模块内联 `#[cfg(test)]` 模块（grep 统计 `#[test]` / `#[tokio::test]` 约 1700+ 个），随 `cargo test --lib` 执行。测试代码允许 `unwrap`（`clippy.toml` 开启 `allow-unwrap-in-tests`），生产代码禁止。共享环境变量竞态经 `ENV_LOCK` 串行化（安全默认值测试组）。
+`src/` 各模块内联 `#[cfg(test)]` 模块（grep 统计 `#[test]` / `#[tokio::test]` 共 2237 个），随 `cargo test --lib` 执行。测试代码允许 `unwrap`（`clippy.toml` 开启 `allow-unwrap-in-tests`），生产代码禁止。共享环境变量竞态经 `ENV_LOCK` 串行化（安全默认值测试组）。
 
 ---
 
@@ -151,7 +152,7 @@ CI 工作流与测试的对应关系：
 | 工作流 | 触发 | 测试内容 |
 |--------|------|----------|
 | `health-check.yml`（CI） | push/PR（main、develop） | fmt、clippy（含 unwrap_used 门禁）、构建矩阵（default/onnx/grpc）、`--lib` + `--tests`、tarpaulin 覆盖率 ≥80% 硬门禁、Windows 测试（continue-on-error）、`cargo doc` 死链、`cargo audit`、main 分支 push 跑 benchmark |
-| `feature-matrix.yml` | push/PR | default/grpc/ecosystem（auth,redis,db,onnx）三档 fmt + check + clippy + build + `--lib` 测试 |
+| `feature-matrix.yml` | push/PR | default/grpc/ecosystem（auth,db,sqlite,onnx）/postgres-driver 四档 fmt + check + clippy + build + `--lib` 测试（postgres-driver 腿免跑 `--lib`） |
 | `scenario-tests.yml` | 每夜 UTC 03:00 + 手动 | 构建 http 二进制后 `pytest tests/scenario`（无模型环境自动 SKIP 推理类用例） |
 | `codeql.yml` / `docker.yml` | push/PR/每周 | CodeQL 静态分析；Docker 构建 + Trivy 扫描（CRITICAL 即失败） |
 

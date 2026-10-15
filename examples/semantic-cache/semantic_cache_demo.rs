@@ -11,7 +11,7 @@
 use vecboost::SemanticCache;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📦 语义缓存（SemanticCache）示例");
     println!("====================================\n");
 
@@ -40,8 +40,7 @@ async fn main() {
         .get_or_compute("demo-model", "机器学习是什么", || {
             compute("机器学习是什么")
         })
-        .await
-        .unwrap();
+        .await?;
     println!("  结果: {:?}\n", result);
 
     // 4. 精确重复查询 — 应精确命中缓存
@@ -50,8 +49,7 @@ async fn main() {
         .get_or_compute("demo-model", "机器学习是什么", || {
             compute("机器学习是什么")
         })
-        .await
-        .unwrap();
+        .await?;
     println!("  结果: {:?}\n", result);
 
     // 5. 近似文本查询 — 应语义命中（trigram Jaccard 相似度 > 0.5）
@@ -60,8 +58,7 @@ async fn main() {
         .get_or_compute("demo-model", "机器学习是什么呢", || {
             compute("机器学习是什么呢")
         })
-        .await
-        .unwrap();
+        .await?;
     println!("  结果: {:?}\n", result);
 
     // 6. 完全不同文本 — 应 miss
@@ -70,8 +67,7 @@ async fn main() {
         .get_or_compute("demo-model", "今天天气怎么样", || {
             compute("今天天气怎么样")
         })
-        .await
-        .unwrap();
+        .await?;
     println!("  结果: {:?}\n", result);
 
     // 7. 查看统计信息
@@ -88,9 +84,10 @@ async fn main() {
     println!("  启用: {}", disabled.is_enabled());
     let result = disabled
         .get_or_compute("demo-model", "any text", || async { Ok(vec![42.0]) })
-        .await
-        .unwrap();
+        .await?;
     println!("  直接计算结果: {:?}", result);
 
     println!("\n✅ 语义缓存示例完成");
+
+    Ok(())
 }

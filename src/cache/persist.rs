@@ -385,7 +385,7 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    /// T030：committed 前缀内的损坏记录不得使尾部"已写未提交"记录复活。
+    /// committed 前缀内的损坏记录不得使尾部"已写未提交"记录复活。
     /// 构造：A/B/C 各自带 commit(1/2/3)，D 只写数据不写 commit；
     /// 破坏 B 的 payload 字节（checksum 失败→跳过）。
     /// 正确结果：仅恢复 A、C（文件序号 ≤ committed=3）；旧位置计数会复活 D。

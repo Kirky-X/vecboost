@@ -130,8 +130,8 @@ cargo build --release --features metal
 # 全协议（HTTP/gRPC/MCP/CLI）
 cargo build --release --features http,grpc,mcp,cli
 
-# 全协议 + 全可选功能（GPU/ONNX/认证/Redis）
-cargo build --release --features http,grpc,mcp,cli,cuda,onnx,auth,redis
+# 全协议 + 全可选功能（GPU/ONNX/认证/数据库；无 redis feature，见 FAQ）
+cargo build --release --features http,grpc,mcp,cli,cuda,onnx,auth,db
 ```
 
 > **💡 提示**: `default = ["http"]`，默认构建仅启用 HTTP 协议。gRPC/MCP/CLI 协议需通过 `--features` 显式开启。confers（配置）、inklog（日志）、oxcache（缓存）、limiteron（限流）、trait-kit（模块注册）为必选依赖，无需 feature 开启。
@@ -162,7 +162,7 @@ ls -lh target/release/vecboost
 cp config/config.toml config/config_custom.toml
 ```
 
-通过全局参数 `--config <path>`（或 `--config=<path>`）指定配置文件，服务器与 CLI 模式均生效。CLI 子命令模式下该参数须写在子命令之前，例如 `vecboost --config config_custom.toml embed --text "Hello"`。显式路径不存在时 fail-fast 报错退出（码 2）。预置三份配置：`config/config.toml`（默认，安全默认：回环绑定、GPU 关闭）、`config/config_full.toml`（完整示例）、`config/config_minimal.toml`（最小示例）。
+通过全局参数 `--config <path>`（或 `--config=<path>`）指定配置文件，服务器与 CLI 模式均生效。CLI 子命令模式下该参数须写在子命令之前，例如 `vecboost --config config_custom.toml embed --req '{"text":"Hello"}'`。显式路径不存在时 fail-fast 报错退出（码 2）。预置三份配置：`config/config.toml`（默认，安全默认：回环绑定、GPU 关闭）、`config/config_full.toml`（键位较全的示例，注意含历史遗留**不解析**段 `[flow_control]` / `[cache]`（backend="redis"）/ `[advanced]`，且非穷尽已解析段）、`config/config_minimal.toml`（最小示例）。
 
 ---
 
@@ -266,7 +266,7 @@ max_sequence_length = 8192  # 每请求最大令牌数
 | `max_sequence_length` | `8192` | 最大序列长度 |
 
 > **`task`（引擎级 ModelConfig 字段，默认 `embedding`）**：任务维度，可选
-> `embedding` / `decision` / `translate`。`[model]` 段已支持 `task` 配置；非法值（如
+> `embedding` / `decision` / `translate` / `transcribe`。`[model]` 段已支持 `task` 配置；非法值（如
 > `"rerank"`)在配置解析时显性报错。配置 `task = "decision"` 时经
 > `EngineFactory` 的 task 分派臂加载 Laya 决策管线（bundle 就绪时成功；
 > bundle 缺失/不完整时报 `ModelLoadError`），`/api/1/decisions` 决策端点
@@ -653,10 +653,10 @@ trusted_proxies = []  # 受信任代理 CIDR 列表
 |------|--------|------|
 | `enabled` | `false` | 是否启用认证 |
 | `jwt_secret` | - | JWT 密钥（至少 32 字符，**生产环境通过环境变量 `VECBOOST_JWT_SECRET` 设置**） |
-| `token_expiration_hours` | `1` | 服务端令牌超时（小时），实际 `expires_in` 由 garrison 管理 |
-| `default_admin_username` | `admin` | 默认管理员用户名 |
+| `token_expiration_hours` | `24` | 服务端令牌超时（小时），实际 `expires_in` 由 garrison 管理 |
+| `default_admin_username` | `None`（运行时回落 `admin`） | 默认管理员用户名 |
 | `default_admin_password` | - | 默认管理员密码（**生产环境通过环境变量 `VECBOOST_ADMIN_PASSWORD` 设置**） |
-| `trusted_proxies` | `[]` | 受信任代理 CIDR 列表（XFF 信任边界，空列表=无条件信任） |
+| `trusted_proxies` | `[]` | 受信任代理 CIDR 列表（XFF 信任边界，空列表 = 忽略 X-Forwarded-For，使用直连 peer IP（安全默认）） |
 
 > **⚠️ 安全提示**: 生产环境中请通过环境变量设置敏感信息！`jwt_secret` 通过 `VECBOOST_JWT_SECRET`，`default_admin_password` 通过 `VECBOOST_ADMIN_PASSWORD` 注入，禁止在配置文件中明文存储。生产部署建议配置 `trusted_proxies` 为实际反代 CIDR，防止客户端伪造 X-Forwarded-For。
 
@@ -711,11 +711,11 @@ cuda = false                     # CUDA EP（需带 CUDA 的 onnxruntime 动态�
 | 环境变量 | 对应配置 | 示例值 |
 |----------|----------|--------|
 | `VECBOOST_SERVER_PORT` | `server.port` | `9002` |
-| `VECBOOST_MODEL_REPO` | `model.model_repo` | `BAAI/bge-m3` |
+| `VECBOOST_MODEL_REPO` | 无法映射（当前版本未实现该环境变量覆盖） | `BAAI/bge-m3` |
 | `VECBOOST_JWT_SECRET` | `auth.jwt_secret` | `your-secret-key`（≥32 字符） |
 | `VECBOOST_ADMIN_PASSWORD` | `auth.default_admin_password` | `your-admin-password`（≥12 字符） |
 | `VECBOOST_ALLOW_INSECURE` | - | `1` = 允许非回环绑定 + 无认证（打 ERROR 告警，仅供受信网络容器） |
-| `VECBOOST_ENCRYPTION_KEY` | - | 32 字节 hex 密钥（用于敏感配置加密） |
+| `VECBOOST_ENCRYPTION_KEY` | - | 32 字节 UTF-8 明文串（用于敏感配置加密） |
 | `VECBOOST_REQUIRE_ENCRYPTION` | - | 强制加密配置 |
 | `VECBOOST_KEY_STORAGE_TYPE` / `VECBOOST_KEY_FILE_PATH` | - | 密钥存储后端选择与路径 |
 | `VECBOOST_LOG_LEVEL` | `logging.level`（优先级高于配置文件） | `trace`, `debug`, `info`, `warn`/`warning`, `error` |
@@ -1046,7 +1046,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 码）与全部错误语义见 [API 参考 · 语言检测](API_REFERENCE.md#语言检测detect)。
 
 > **`task` 字段（已落地）**: 切换请求可携带可选 `task` 字段（`embedding` /
-> `decision`）运行时切换任务维度，回退链为**请求值优先 → 缺省继承当前模型 →
+> `decision` / `translate` / `transcribe`）运行时切换任务维度，回退链为**请求值优先 → 缺省继承当前模型 →
 > 无当前模型回落 `embedding`**。请求 `task = "decision"` 时经 `EngineFactory`
 > 的 task 分派臂加载决策管线（bundle 缺失/不完整时报 `ModelLoadError`）；
 > 切换成功后 rerank 与 decision 服务同步替换底层引擎（切模型传播），不
@@ -1094,11 +1094,11 @@ curl -X POST http://localhost:9002/api/1/auth/login \
 {
   "token": "eyJhbGciOiJIUzI1NiIs...",
   "token_type": "Bearer",
-  "expires_in": 0
+  "expires_in": 86400
 }
 ```
 
-> **💡 说明**: `expires_in` 为 `0` 表示令牌过期时间由 garrison 服务端统一管理（通过 `GarrisonConfig.timeout` 控制），客户端无需自行计算过期。
+> **💡 说明**: `expires_in` 为服务端返回的令牌到期**秒数**（非 0；默认 `[auth] token_expiration_hours = 24` → 86400s，`token_expiration_seconds` 可覆盖）。服务端凭该值校验过期，客户端可缓存用于到期提示，无需把 `0` 当作「由服务端统一管理」的特殊信号。
 
 ---
 
@@ -1117,7 +1117,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 
 ### 令牌过期
 
-令牌过期时间由 garrison 服务端统一管理（`expires_in` 返回 `0`）。可在 `config/config.toml` 中配置服务端超时：
+令牌到期秒数由服务端返回在登录响应的 `expires_in`（默认 86400s）。在配置文件中调整有效期（小时）：
 
 ```toml
 [auth]
@@ -1179,7 +1179,7 @@ docker-compose up -d
 |------|------|------|
 | `VECBOOST_JWT_SECRET` | JWT 密钥（认证时必需，≥32 字符） | ✅ |
 | `VECBOOST_ADMIN_PASSWORD` | 管理员密码（认证时必需，≥12 字符） | ✅ |
-| `VECBOOST_ENCRYPTION_KEY` | 敏感配置加密密钥（32 字节 hex） | 推荐 |
+| `VECBOOST_ENCRYPTION_KEY` | 敏感配置加密密钥（32 字节 UTF-8 明文串） | 推荐 |
 | `VECBOOST_LANG` | 默认语言（`zh` 或 `en`） | ❌ |
 | `VECBOOST_LOG_LEVEL` | 日志级别 (`trace`, `debug`, `info`, `warn`/`warning`, `error`)，覆盖 `[logging].level` | ❌ |
 
@@ -1269,7 +1269,7 @@ curl -X POST http://localhost:9002/api/1/embed \
   -d '{"text": ""}'
 
 # 响应（中文）
-{"error": {"code": "INVALID_INPUT", "message": "文本不能为空"}}
+{"error": "文本不能为空", "code": 400, "error_code": "error-invalid-input"}
 
 # 英文错误响应（默认）
 curl -X POST http://localhost:9002/api/1/embed \
@@ -1277,10 +1277,10 @@ curl -X POST http://localhost:9002/api/1/embed \
   -d '{"text": ""}'
 
 # 响应（英文）
-{"error": {"code": "INVALID_INPUT", "message": "Text cannot be empty"}}
+{"error": "Text cannot be empty", "code": 400, "error_code": "error-invalid-input"}
 ```
 
-> **💡 说明**: i18n 覆盖所有用户可见消息：HTTP JSON 错误响应、CLI 帮助文本、gRPC 错误详情、启动错误日志。翻译键定义在 `src/i18n/locales/{en,zh}/messages.ftl` 和 `errors.ftl`（共 114 个键）。
+> **💡 说明**: i18n 覆盖所有用户可见消息：HTTP JSON 错误响应、CLI 帮助文本、gRPC 错误详情、启动错误日志。翻译键定义在 `src/i18n/locales/{en,zh}/messages.ftl` 和 `errors.ftl`（每种语言共 577 个键：`messages.ftl` 557 + `errors.ftl` 20）。
 
 ---
 
@@ -1414,14 +1414,14 @@ curl http://localhost:9002/api/1/auth/me \
 
 ---
 
-#### 速率限制
+#### 速率限制 / 过载
 
-**问题**: 429 请求过多。
+**问题**: 触发速率限制——auth 限流中间件（按 IP/用户/API Key）返回 `429`（附 `Retry-After`）；应用层令牌桶限流（`error-rate-limit`）与优先级队列满（`error-overloaded`）返回 `503`。
 
 **解决方案:**
 
-1. 实现指数退避重试
-2. 在配置中增加速率限制
+1. 实现指数退避重试（429 读 `Retry-After`，503 同样退避）
+2. 在 `[rate_limit]` 调整分级阈值（global / ip / user / api_key `*_requests_per_minute`）
 3. 将 IP 添加到白名单
 
 ```toml
@@ -1487,7 +1487,7 @@ free -h     # 内存
 | 检查项 | 建议 |
 |--------|------|
 | 健康检查 | 配置健康检查端点 |
-| 熔断器 | 配置熔断器 |
+| 限流背压 | 配置 `[rate_limit]` 分级阈值（全局/IP/用户/API Key 令牌桶，超限返回 503 + `Retry-After`）|
 | 重试机制 | 实现重试逻辑 |
 | 多副本 | 使用多个副本 |
 | 备份 | 定期备份配置 |

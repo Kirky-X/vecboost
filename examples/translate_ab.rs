@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! A/B 对比：opus-mt-en-zh vs m2m100_418M 论文摘要翻译（paper-translate-quality T003）。
+//! A/B 对比：opus-mt-en-zh vs m2m100_418M 论文摘要翻译。
 //!
 //! 语料：`out/paper-translate-test/corpus_1..4.json`（liuxiang arXiv 检索），
 //! 取评测轮的 4 篇成功 + 4 篇 504 长摘要。译文与耗时写

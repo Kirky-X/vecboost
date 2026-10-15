@@ -54,7 +54,10 @@ pub(crate) fn build_session(
     ensure_memory_available(model_file)?;
 
     let num_threads = resolve_intra_threads(opts.intra_threads);
-    let mut builder = Session::builder()
+    let env = ort::init()
+        .build()
+        .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
+    let mut builder = Session::builder(&env)
         .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
@@ -71,15 +74,16 @@ pub(crate) fn build_session(
             "{}",
             crate::i18n::tr("log-engine-attempting-configure-cuda-execution")
         );
-        #[cfg(feature = "cuda")]
+        // ort CUDA EP 类型由 ort/cuda 提供，而 ort/cuda 仅经 transcribe 特性引入
+        // （Cargo.toml「ort/cuda 仅经此 feature 引入」）；cuda（candle 后端）与
+        // ort EP 无关，不作门控依据。rc.13 起 EP 更名 execution_providers→ep。
+        #[cfg(feature = "transcribe")]
         {
             builder
-                .with_execution_providers([
-                    ort::execution_providers::CUDAExecutionProvider::default().build(),
-                ])
+                .with_execution_providers([ort::ep::CUDA::default().build()])
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?
         }
-        #[cfg(not(feature = "cuda"))]
+        #[cfg(not(feature = "transcribe"))]
         {
             log::warn!(
                 "{}",

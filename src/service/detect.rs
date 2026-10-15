@@ -86,7 +86,7 @@ impl DetectService {
         }
         if let Some(allow) = &req.allow {
             for code in allow {
-                // 双重校验（评审 BUG-1）：格式 + 发布集合成员——"sw"/"xx" 等
+                // 双重校验（评审）：格式 + 发布集合成员——"sw"/"xx" 等
                 // 格式合法码不在 whatlang 发布集，穿透会触发收窄失效
                 if !crate::utils::validator::input::is_valid_language_code(code)
                     || !crate::text::is_published_language_code(code)
@@ -183,7 +183,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_detect_rejects_unpublished_allow_code_400_not_panic() {
-        // 评审 BUG-1/SEC-1/ARC-1 回归钉："sw"（格式合法、未发布）必须 400
+        // 评审 回归钉："sw"（格式合法、未发布）必须 400
         // 显性拒绝，禁止穿透到检测核心 panic（panic 在 async handler 内即
         // 连接重置）
         crate::i18n::init();

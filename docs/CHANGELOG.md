@@ -7,14 +7,18 @@
 
 ## 📋 目录
 
-- [Unreleased](#unreleased)
-- [0.2.1 - 2026-09-06](#021---2026-09-06)
+- [0.3.0-rc.1 - 2026-09-22](#unreleased)
+- [0.2.1 - 2026-07-30](#021---2026-07-30)
 - [0.2.0 - 2026-07-24](#020---2026-07-24)
-- [0.1.0 - 2025-12-15](#010---2025-12-15)
+- [0.1.2 - 2026-01-16](#012---2026-01-16)
+- [0.1.1 - 2026-01-15](#011---2026-01-15)
+- [0.1.0 - 2026-01-10](#010---2026-01-10)
 
 ---
 
-## [Unreleased]
+<a id="unreleased"></a>
+
+## [0.3.0-rc.1] - 2026-09-22
 
 ### 修复（fix-audit-defects-r1：六主题审计 35 项发现全量闭环）
 
@@ -73,8 +77,8 @@
 - **XFF 信任反转**:`trusted_proxies` 为空时忽略 `X-Forwarded-For`(原为无条件信任);反代部署需显式配置 `trusted_proxies`
 - **RBAC 接线**:`/api/1/model/*` 与 `/embed/file` 要求 admin 角色
 - **`/embed/file` 收敛**:必须显式配置 `[server] grpc_allowed_roots`(不再回退 cwd);单文件上限 10 MiB;`text_preview` 仅 admin
-- **Token 生命周期**:`token_expiration_hours` 缺省 1 小时(原 garrison 默认 30 天)
-- **CSRF 默认**:跟随 `auth.enabled`(`AuthConfig` 默认 csrf.enabled=true)
+- **Token 生命周期**:`token_expiration_hours` 缺省 24 小时(原 garrison 默认 30 天)
+- **CSRF 默认**:跟随 `auth.enabled`(`AuthConfig` 默认 csrf.enabled=false)
 - **`--config` fail-fast**:显式指定且文件不存在 → 报错退出(原静默回退默认配置)
 - **缓存与分词行为**:缓存键绑定模型标识(升级后首轮缓存全 miss);HF tokenizers 分词结果与旧自研实现存在差异(更正确),存量向量需重建
 - **CLI**:未知子命令报错退出(码 2),不再静默启动 HTTP 服务器;`--help` 可用
@@ -84,12 +88,12 @@
 | 变更 | 旧行为 | 新行为 | 迁移动作 |
 |------|--------|--------|----------|
 | 绑定安全 | `auth.enabled=false` 可绑定 `0.0.0.0` | 非回环绑定 + 无认证 → **拒绝启动** | 本地开发保持 `127.0.0.1`；受信网络容器设 `VECBOOST_ALLOW_INSECURE=1`（打 ERROR 告警）；生产启用 auth |
-| 管理员密码 | `VECBOOST_ADMIN_PASSWORD` 可选，缺失时任意凭据登录 | `auth.enabled=true` 且缺失 → **拒绝启动** | 设置 `VECBOOST_ADMIN_PASSWORD`（≥8 位） |
+| 管理员密码 | `VECBOOST_ADMIN_PASSWORD` 可选，缺失时任意凭据登录 | `auth.enabled=true` 且缺失 → **拒绝启动** | 设置 `VECBOOST_ADMIN_PASSWORD`（≥12 位） |
 | 登录用户名 | 任意用户名 + admin 口令可登录 | 仅 `default_admin_username`（默认 `admin`）可登录 | 客户端固定使用 admin 用户名 |
 | XFF 信任 | `trusted_proxies` 为空时无条件信任 `X-Forwarded-For` | 为空时**忽略 XFF**，使用直连地址 | 反代部署显式配置 `trusted_proxies = ["10.0.0.0/8"]` 等 |
 | RBAC | `/model/*`、`/embed/file` 仅需登录 | 要求 **admin 角色** | 业务用户使用普通账号即可调 embed；模型管理用 admin |
 | `/embed/file` | 默认允许根 = 进程 cwd，回传文本预览 | 必须显式配置 `grpc_allowed_roots`；单文件 ≤10 MiB；`text_preview` 仅 admin | 配置允许根；客户端不再依赖 preview |
-| Token 有效期 | 缺省 30 天（garrison 默认） | 缺省 **1 小时** | 长会话场景显式配置 `token_expiration_hours` |
+| Token 有效期 | 缺省 30 天（garrison 默认） | 缺省 **24 小时** | 长会话场景显式配置 `token_expiration_hours` |
 | CSRF | 默认关闭 | 跟随 `auth.enabled`（显式 `csrf.enabled=false` 仍生效） | 纯 Bearer API 无影响 |
 | `use_gpu` | 出厂配置 `true`（无 GPU 构建下告警回退） | 出厂 `false`；请求 GPU 但 feature 缺失 → WARN + CPU 回退 | GPU 构建用户显式开启 |
 | `--config` | 路径不存在 → 静默回退默认配置 | **报错退出**（码 2） | 排查路径拼写 |
@@ -120,7 +124,7 @@
 - **通用进程内存上限**：`scripts/run-memcap.sh`（systemd --user scope，服务异常膨胀自爆保整机；MemoryMax/MemoryHigh/MemorySwapMax 三旋钮，cgroup 属性与超限击杀均已实测）
 - **jemalloc decay 编译期烘焙**：`.cargo/config（旧名入库，config.toml 被 gitignore）[env] JEMALLOC_SYS_WITH_MALLOC_CONF` → decay 1000ms（大请求后 RSS 秒级回落）；三条注入路径排除证据链（运行时 mallctl 不存在 / `je_malloc_conf` 被 hidden visibility 否决）见 specmark design D3；`effective_boot_conf()` 启动期观测
 
-### 新增（wsl2-oom-hardening：WSL2 OOM 事故四道防线）
+### 新增（wsl2-oom-hardening：WSL2 OOM 事故六道防线）
 
 - **Session 内存门禁**：`build_session` 在创建任何 ORT 分配前检查 MemAvailable（需求按模型文件 ×3/2 估算），不足即 fail-fast 显性报错（消息含 available/need/floor 与处置建议），全引擎 6 处调用点统一生效；旋钮 `SESSION_MEMORY_GUARD`（默认开）/`SESSION_MEMORY_FLOOR_MB`（默认 2048）
 - **翻译并行 worker 惰性加载**：句级并行附加 Session 集从启动期预载改为首次长输入并行请求按需补建——idle 驻留从 4 pair×4 worker 全 FP32 的 ~30G+ 降为每 pair 一套；P7 时延契约不变（`TRANSLATION_PARALLEL_WORKERS` 语义不变）。根因与实测证据见 [MEMORY_SAFETY](MEMORY_SAFETY.md)
@@ -137,14 +141,14 @@
 - **默认语言约束可验证化**：`detect_locale()` 抽出纯函数 `detect_from(get_env, sys_locale)`（优先级链与早返回语义零变更），新增 5 个守卫单测：纯净环境必落 `en`、`C`/`POSIX`/不支持值在任一层级均不得产出 `zh`、`VECBOOST_LANG` 压过 POSIX 链与系统 locale、`en` 语言包零中文（含注释）且 `zh` 侧必须含中文
 - **行为变更（协议面跟随 locale）**：`i18n::init()` 末尾新增 `sync_sdforge_i18n()`——将 sdforge 的 locale 对齐本仓 `current_locale()`，并把 FTL 的 `forge-*` 键注册进 sdforge 注册表（单一事实源）。此前 `VECBOOST_LANG` 管不到 CLI `--help`/MCP 描述，它们自行读 `SDFORGE_LANG`/系统 locale（双轨）；现统一为 `VECBOOST_LANG` 权威。9 个 `#[forge(cli = true)]` 已补 `i18n_key = "forge-cli-<name>"`
 - **硬编码中文清零**：`factory.rs` 的 `task=decision` 未启用 onnx 错误改走 `factory-decision-no-onnx-feature`；`transcribe-poc` 补 `i18n::init()`（此前未初始化，任何 `tr()` 都会回退裸键名）并将其 stderr 诊断全部接 FTL；**stdout 五行契约逐字不动**（`CONTRACT.md` 未改）
-- **用户可见文案全量国际化**：启动/装配/引擎/设备/缓存/审计/服务/doctor/CLI 共 300 余处硬编码英文字面量抽取为 FTL 键（en/zh 双侧同批），语言包由 240 键增至 530 键；`Tag: message` 形态的机器可 grep 前缀（`[thread-tune]`、`EmbeddingModule:`、`persist:`、`transcribe-own:`）与 `PASS/WARN/FAIL`、`CheckResult.name`、JSON 字段名、`error_code` 按红线保留英文
+- **用户可见文案全量国际化**：启动/装配/引擎/设备/缓存/审计/服务/doctor/CLI 共 300 余处硬编码英文字面量抽取为 FTL 键（en/zh 双侧同批），语言包由 240 键增至 577 键（`messages.ftl` 557 + `errors.ftl` 20）；`Tag: message` 形态的机器可 grep 前缀（`[thread-tune]`、`EmbeddingModule:`、`persist:`、`transcribe-own:`）与 `PASS/WARN/FAIL`、`CheckResult.name`、JSON 字段名、`error_code` 按红线保留英文
 - **新增回归门禁**：`scripts/i18n_consistency_check.py`（R1 默认英文、R2 en/zh 键齐性、R3 `tr()`/`i18n_key` 引用有效、R4 生产码禁硬编码中文、R5 未国际化文案棘轮），已接入 `.pre-commit-config.yaml` / `scripts/pre-commit.sh i18n` / CI `Check` job；豁免记 `scripts/i18n_allowlist.json`（9 条规则覆盖 10 处站点，均带理由：开发者 panic 面、测试夹具、基准仪表），热路径封顶记 `scripts/i18n_baseline.json`（63 处，只降不升）
 - **规范正文**：[MAINTENANCE](MAINTENANCE.md) 新增「🌐 i18n 约束」节（默认英文、协议面单一事实源、机器输出红线、门禁命令）；[CONTRIBUTING](CONTRIBUTING.md) 质量门禁加 i18n 一行
 - **顺手修复（非 i18n，本地工具链 clippy 新增拦截）**：`api/transcribe.rs` 的 `use serde::Deserialize` 按 `cli + transcribe` 门控（否则无 transcribe 的 feature 组合报未用导入）；`engine/session.rs` 去掉 `split_whitespace` 前冗余的 `trim()`
 
 ---
 
-## [0.2.1] - 2026-09-06
+## [0.2.1] - 2026-07-30
 
 ### 新增
 
@@ -244,6 +248,19 @@
 - **UTF-8 安全切片**：所有密钥脱敏和文本预览函数使用字符边界安全切片。
 - **gRPC 路径校验**：`PathValidator` 从配置读取允许的根目录，默认拒绝 `/`、`/etc` 等敏感目录。
 
-## [0.1.0] - 2025-12-15
+## [0.1.2] - 2026-01-16
+
+- 新增 Matryoshka 维度约简功能
+- 新增 OpenAI 兼容的 `/v1/embeddings` 端点
+- 清理未使用的部署配置文件
+
+## [0.1.1] - 2026-01-15
+
+- 安全加固 phase 2 完成
+- 改进错误处理并启用审计日志
+- 测试支持真实推理（mock 回退）
+- 文档增强（Mermaid 可视化）与 cargo publish 元数据
+
+## [0.1.0] - 2026-01-10
 
 VecBoost 初始发布。

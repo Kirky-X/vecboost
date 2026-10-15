@@ -27,7 +27,7 @@ VecBoost 是一个使用 Rust 构建的**高性能嵌入向量服务**：把文�
 
 ### ❓ VecBoost 可以用于生产环境吗？
 
-可以。项目具备：默认安全（回环绑定、无认证拒绝非回环启动）、JWT/CSRF/RBAC 认证授权、审计日志、Prometheus 指标与健康检查、优雅关闭、多架构 Docker 镜像（linux/amd64 + arm64）。升级到 Unreleased 版本前请阅读 [CHANGELOG](CHANGELOG.md) 的破坏性变更清单（安全默认值收敛等 13 项行为变更）。
+可以。项目具备：默认安全（回环绑定、无认证拒绝非回环启动）、JWT/CSRF/RBAC 认证授权、审计日志、Prometheus 指标与健康检查、优雅关闭、Docker 镜像（linux/amd64，当前单架构构建，未提供 arm64）。升级到 Unreleased 版本前请阅读 [CHANGELOG](CHANGELOG.md) 的破坏性变更清单（安全默认值收敛等 13 项行为变更）。
 
 ### ❓ 支持哪些平台？
 
@@ -41,7 +41,7 @@ Linux（x86_64/aarch64，CI 覆盖 Ubuntu + Windows 测试）、macOS（Apple Si
 
 ### ❓ 项目采用什么许可证？
 
-MIT。详见 [LICENSE](../LICENSE)。
+Apache-2.0。详见 [LICENSE](../LICENSE)。
 
 ---
 
@@ -65,7 +65,7 @@ cargo build --release          # 默认 http feature
 | 仅 HTTP 服务（默认） | `cargo build --release` |
 | GPU（NVIDIA / Apple） | `--features cuda` / `--features metal` |
 | gRPC / CLI / MCP | `--features grpc` / `--features cli` / `--features mcp` |
-| 数据库持久化 | `--features db`（SQLite）/ `--features postgres` |
+| 数据库持久化 | `--features sqlite`（SQLite 驱动）/ `--features postgres`（须显式选 driver，`db` 仅基础设施） |
 | 认证 | `--features auth` |
 | CI 全特性 | `--features grpc,cli,auth,onnx,db,openapi,mcp` |
 
@@ -85,7 +85,7 @@ MKL 加速后端（`--features mkl`）依赖 intel-mkl-src 2020.1 静态库，�
 
 ### ❓ 支持哪些模型？
 
-默认 `BAAI/bge-small-en-v1.5`（384 维）。支持 HuggingFace 上 Bert / XlmRoberta 双架构嵌入模型（如 BGE 系列、MiniLM、multilingual-e5），mean/cls/max 池化，`expected_dimension` 按模型设置（BGE-M3 为 1024）。4 模型矩阵（BGE-en 384 / MiniLM 384 / BGE-zh 512 / multilingual-e5-small 384）由场景测试覆盖。
+代码内建默认 `BAAI/bge-m3`（1024 维）；出厂 `config/config.toml` 显式取值 `BAAI/bge-small-en-v1.5`（384 维），故开箱运行（用出厂配置）实取 384。支持 HuggingFace 上 Bert / XlmRoberta 双架构嵌入模型（如 BGE 系列、MiniLM、multilingual-e5），mean/cls/max 池化，`expected_dimension` 按模型设置（BGE-M3 为 1024）。4 模型矩阵（BGE-en 384 / MiniLM 384 / BGE-zh 512 / multilingual-e5-small 384）由场景测试覆盖。
 
 ### ❓ 模型存放在哪里？必须联网下载吗？
 
@@ -127,11 +127,11 @@ Unreleased 版本将分词器统一为全平台 HuggingFace `tokenizers`（更�
 
 ### ❓ 服务绑定失败 / 生产如何暴露端口？
 
-出厂 `host = "127.0.0.1"` 仅回环；`auth.enabled=false` 时绑定非回环地址会拒绝启动。受信网络容器可设 `VECBOOST_ALLOW_INSECURE=1`（打 ERROR 告警），生产环境应启用认证后绑定 `0.0.0.0`，并经反代（HTTPS）暴露，显式配置 `trusted_proxies`。
+出厂配置文件 `host = "127.0.0.1"`（回环；`[server] host` 缺省内建值为 `"0.0.0.0"`）；`auth.enabled=false` 时绑定非回环地址会拒绝启动。受信网络容器可设 `VECBOOST_ALLOW_INSECURE=1`（打 ERROR 告警），生产环境应启用认证后绑定 `0.0.0.0`，并经反代（HTTPS）暴露，显式配置 `trusted_proxies`。
 
 ### ❓ Docker / Kubernetes 怎么部署？
 
-Docker：`docker build -t vecboost:latest .` 后挂载 `config/` 与 `models/` 运行（CI 构建多架构镜像 linux/amd64 + arm64）。Kubernetes：需自备部署清单，用 ConfigMap 滚动更新配置；`/health` 为存活探针、`/health?depth=full` 为真实就绪探测。容器架构与扩展策略见 [🏗️ 架构文档](ARCHITECTURE.md) 部署架构一节。
+Docker：`docker build -t vecboost:latest .` 后挂载 `config/` 与 `models/` 运行（CI 构建单架构镜像 linux/amd64）。Kubernetes：需自备部署清单，用 ConfigMap 滚动更新配置；`/health` 为存活探针、`/health?depth=full` 为真实就绪探测。容器架构与扩展策略见 [🏗️ 架构文档](ARCHITECTURE.md) 部署架构一节。
 
 ### ❓ auth 开启时能多副本部署吗？
 
@@ -150,7 +150,7 @@ enabled = true
 
 ```bash
 export VECBOOST_JWT_SECRET="至少 32 字符的密钥"
-export VECBOOST_ADMIN_PASSWORD="至少 8 位的密码"
+export VECBOOST_ADMIN_PASSWORD="至少 12 位的密码"
 ```
 
 启用后登录端点获取 JWT，业务请求带 `Authorization: Bearer <token>`。完整流程见 [用户指南](USER_GUIDE.md) 认证一节与 [API 参考](API_REFERENCE.md)。
@@ -161,7 +161,7 @@ export VECBOOST_ADMIN_PASSWORD="至少 8 位的密码"
 
 ### ❓ Token 有效期多久？
 
-Unreleased 起 `token_expiration_hours` 缺省 **1 小时**（原 garrison 默认 30 天）。长会话场景请显式配置。
+Unreleased 起 `token_expiration_hours` 缺省 **24 小时**（原 garrison 默认 30 天）。长会话场景请显式配置。
 
 ### ❓ 发现安全漏洞怎么办？
 
@@ -177,11 +177,11 @@ Unreleased 起 `token_expiration_hours` 缺省 **1 小时**（原 garrison 默�
 |------|---------|------|
 | HTTP/REST | `http`（默认） | `http://127.0.0.1:9002/api/1/*` |
 | OpenAI 兼容 | `http` | `POST /v1/embeddings`（支持 `dimensions` 与 base64） |
-| gRPC | `grpc` | `:50051`（11 个 `vecboost.*` 方法） |
-| MCP | `mcp` | `vecboost --mcp`（stdio，工具 embed/embed_batch/similarity/list_models） |
-| CLI | `cli` | `vecboost embed --text "..."` 等 |
+| gRPC | `grpc` | `:50051`（17 个 `vecboost.*` 方法） |
+| MCP | `mcp` | `vecboost --mcp`（stdio，工具 `embed_text`/`embed_batch`/`compute_similarity`/`list_models` 等） |
+| CLI | `cli` | `vecboost embed --req "..."` 等 |
 
-交互式文档：`http://localhost:9002/api-docs`（Swagger UI）。
+交互式文档（Swagger UI）：`http://localhost:9002/swagger-ui/`（规范 JSON：`/api-docs/openapi.json`；根路径 `/api-docs` 未注册 UI，直接访问返回 404）。
 
 ### ❓ 为什么 embeddings 接口的 usage token 数与估算不符？
 

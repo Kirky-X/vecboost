@@ -61,7 +61,9 @@ rotation_size_mb = 10
 max_files = 3
 
 [flow_control]
+# ⚠️ 注意：当前版本的 VecboostConfig 未解析此配置段，编辑此段不会生效。
 enabled = false
 
 [cache]
+# ⚠️ 注意：当前版本的 VecboostConfig 未解析此配置段，编辑此段不会生效。
 enabled = false

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `Qwen3AsrEngine`：把移植进来的 Qwen3-ASR 三图 + silero VAD + whisper fbank
-//! 管线封装为主仓 `InferenceEngine` 实现（onnx-engine-unify T013，R-transcribe-engine-002/004）。
+//! 管线封装为主仓 `InferenceEngine` 实现（R-transcribe-engine-002/004）。
 //!
 //! 并发契约（design D2/R-004）：ort rc.13 禁同 Session 并发 Run → 实例内 `Mutex` 串行；
 //! POC 的 worker/batch/gpu/env_pool 并行旋钮**不进库**（段级并行由调用方持多引擎实例承担）。

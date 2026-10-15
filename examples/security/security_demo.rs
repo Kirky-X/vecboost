@@ -16,7 +16,7 @@ use vecboost::security::{
 };
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔒 安全模块示例");
     println!("================\n");
 
@@ -56,8 +56,7 @@ async fn main() {
 
     let store =
         vecboost::security::create_key_store(&vecboost::security::SecurityConfig::default())
-            .await
-            .unwrap();
+            .await?;
 
     // set 被拒绝:环境变量是父进程注入源,写回会经 /proc/<pid>/environ 泄漏给同机读者与子进程
     let key = SecretKey::api_key("demo_service", "demo_api_key_value_12345");
@@ -67,7 +66,7 @@ async fn main() {
     }
 
     // 读取:仅当父进程已注入 VECBOOST_API_KEY_* 时才有值
-    let retrieved = store.get(&KeyType::ApiKey, "demo_service").await.unwrap();
+    let retrieved = store.get(&KeyType::ApiKey, "demo_service").await?;
     println!(
         "  读取 demo_service: {}",
         if retrieved.is_some() {
@@ -77,13 +76,10 @@ async fn main() {
         }
     );
 
-    let exists = store
-        .exists(&KeyType::ApiKey, "demo_service")
-        .await
-        .unwrap();
+    let exists = store.exists(&KeyType::ApiKey, "demo_service").await?;
     println!("  存在性检查: {}", exists);
 
-    let keys = store.list(&KeyType::ApiKey).await.unwrap();
+    let keys = store.list(&KeyType::ApiKey).await?;
     println!("  API Key 列表: {} 个", keys.len());
 
     // delete 同样只读:运行时不可撤销父进程注入的环境变量
@@ -101,7 +97,7 @@ async fn main() {
 
     // hex 往返序列化
     let hex = salt.to_hex();
-    let restored = SaltStore::from_hex(&hex).unwrap();
+    let restored = SaltStore::from_hex(&hex)?;
     assert_eq!(salt.as_bytes(), restored.as_bytes());
     println!("  hex 往返验证: ✅ 一致\n");
 
@@ -122,4 +118,6 @@ async fn main() {
     println!("  sanitize_secret(CJK): {}", sanitize_secret(cjk_secret));
 
     println!("\n✅ 安全模块示例完成");
+
+    Ok(())
 }

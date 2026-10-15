@@ -87,10 +87,7 @@ impl DecisionService {
                     crate::i18n::tr_args(&[("e", &(e).to_string())])
                 )
             );
-            VecboostError::InferenceError(
-                "decision inference task failed (engine task panicked); see server logs"
-                    .to_string(),
-            )
+            VecboostError::InferenceError(crate::i18n::tr("decision-inference-task-panicked"))
         })??;
         response.processing_time_ms = start.elapsed().as_millis();
         Ok(response)

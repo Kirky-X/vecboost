@@ -50,7 +50,7 @@ pub struct ServerConfig {
     #[garde(skip)]
     pub grpc_require_auth: Option<bool>,
     /// Allowed root directories for `grpc_embed_file` path validation.
-    /// When empty, falls back to current working directory (with sensitive-dir check).
+    /// Must be explicitly configured; requests are rejected with 400 if unset or empty.
     #[garde(skip)]
     pub grpc_allowed_roots: Option<Vec<String>>,
     /// 启用 CORS 中间件（默认关闭）。
@@ -170,7 +170,7 @@ pub struct TranslationConfig {
     /// `[[translation.pairs]]` 数组表：每条一个 (source,target) 语言对。
     /// 字段级 `#[serde(default)]` 提供缺省语义（缺 `[translation]` 段时空表）；
     /// 不加容器级 `#[serde(default)]`——toml 1.1 Deserializer 对「容器缺省 +
-    /// `[[table.field]]` 数组表」组合会静默丢弃 pairs（T011 实测），显性解析
+    /// `[[table.field]]` 数组表」组合会静默丢弃 pairs（实测），显性解析
     /// 优于静默丢数据。
     #[serde(default)]
     pub pairs: Vec<TranslationPairConfig>,
@@ -738,7 +738,10 @@ const DEFAULT_API_KEY_RPM: u64 = 500;
 const DEFAULT_WINDOW_SECS: u64 = 60;
 
 /// 认证配置默认值
-const DEFAULT_TOKEN_EXPIRATION_HOURS: i64 = 24;
+///
+/// `pub(crate)`：`auth::config` 的 garrison 映射回落值由此派生，确保
+/// 「token 缺省有效期」只有这一个事实源（曾出现 24h 与 1h 双轨漂移）。
+pub(crate) const DEFAULT_TOKEN_EXPIRATION_HOURS: i64 = 24;
 
 /// 内存分页配置默认值
 const DEFAULT_LRU_K: usize = 2;
@@ -960,7 +963,7 @@ max_new_tokens = 384
         // 经 toml::Value 中介反序列化。不直接用 toml::from_str::<
         // TranslationConfig>：dev-dep toml 1.1.6 流式 Deserializer 对
         // 「嵌套数组表（[[x.y]]）」文档会把根表呈为空映射（PlainProbe
-        // 探针 Err "missing field \`pairs\`，keys: []"，T011 实测），而
+        // 探针 Err "missing field \`pairs\`，keys: []"，实测），而
         // Value 路径与生产加载器（confers → toml 0.8.23）均正确——后者
         // 由 app_config::tests::test_load_via_confers_translation_section 钉住。
         let value: toml::Value = toml::from_str(toml_text).unwrap();

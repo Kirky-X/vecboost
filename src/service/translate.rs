@@ -54,7 +54,7 @@ pub struct TranslateService {
 }
 
 impl TranslateService {
-    /// 从路由表构建（启动期急切构建，T019 经 EngineFactory 逐 pair 创建；
+    /// 从路由表构建（启动期急切构建，经 EngineFactory 逐 pair 创建；
     /// 零 pairs = 空表服务，请求以 translate-not-configured 400 显性拒绝）。
     pub fn new(pairs: HashMap<(String, String), TranslatePairRoute>) -> Self {
         let mut configured_pairs: Vec<String> =
@@ -197,10 +197,7 @@ impl TranslateService {
                     crate::i18n::tr_args(&[("e", &(e).to_string())])
                 )
             );
-            VecboostError::InferenceError(
-                "translation inference task failed (engine task panicked); see server logs"
-                    .to_string(),
-            )
+            VecboostError::InferenceError(crate::i18n::tr("translation-inference-task-panicked"))
         })??;
         response.processing_time_ms = start.elapsed().as_millis() as u64;
         response.detected_source_language = detected;

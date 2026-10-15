@@ -593,22 +593,24 @@ async fn run_deep_health_checks(st: &crate::VecboostState) -> Vec<serde_json::Va
 /// validator 拒绝（越界/不存在/类型不符）都属客户端输入错误，映射 400；
 /// 若走 to_api_error 会落入 SecurityError→500，把输入错误伪装成服务端故障。
 #[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
-const SWITCH_PATH_REJECTED_MESSAGE: &str = "path rejected: must be an existing path \
-     inside the allowed roots (model_path must be a directory, tokenizer_path must \
-     be a file); see server logs";
+fn switch_path_rejected_message() -> String {
+    crate::i18n::tr("switch-path-rejected")
+}
 
 /// switch 引擎加载失败的 wire 固定文案：失败原文（EngineFactory 的
 /// model-load-failed 包装、local_bundle 探测清单）携带服务器 canonical
 /// 绝对路径，to_api_error 的 NotFound 臂把原文整体放进 resource_id 直达
 /// 响应体（sdforge wire 的 details.resource_id），与本 handler 前半段
-/// SWITCH_PATH_REJECTED_MESSAGE 封住的路径拒绝通道同型（CWE-209/497）。
+/// `switch_path_rejected_message` 封住的路径拒绝通道同型（CWE-209/497）。
 /// 原文全量入服务端日志；UnsupportedTask 例外——客户端可换任务纠正的
 /// fail-fast 错误，保留 to_api_error 的 400 臂。
 #[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
-const SWITCH_MODEL_LOAD_FAILED_MESSAGE: &str = "model load failed; see server logs";
+fn switch_model_load_failed_message() -> String {
+    crate::i18n::tr("switch-model-load-failed")
+}
 
 /// switch 失败 → wire 错误映射（纯函数，可单测），口径见
-/// [`SWITCH_MODEL_LOAD_FAILED_MESSAGE`]。
+/// [`switch_model_load_failed_message`]。
 #[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
 fn switch_error_to_api_error(e: VecboostError) -> ApiError {
     match e {
@@ -625,7 +627,7 @@ fn switch_error_to_api_error(e: VecboostError) -> ApiError {
             );
             ApiError::NotFound {
                 resource: "model".to_string(),
-                resource_id: Some(SWITCH_MODEL_LOAD_FAILED_MESSAGE.to_string()),
+                resource_id: Some(switch_model_load_failed_message()),
             }
         }
     }
@@ -660,7 +662,7 @@ fn validate_switch_paths(
             )
         );
         ApiError::InvalidInput {
-            message: SWITCH_PATH_REJECTED_MESSAGE.to_string(),
+            message: switch_path_rejected_message(),
             field: Some(field.to_string()),
             value: Some(serde_json::Value::String(path.display().to_string())),
         }
@@ -1457,7 +1459,8 @@ mod tests {
                 // wire 固定脱敏文案：validator 原文携带 canonical 路径与
                 // Allowed roots 清单，回显即服务器目录布局泄露（CWE-209/497）
                 assert_eq!(
-                    message, SWITCH_PATH_REJECTED_MESSAGE,
+                    message,
+                    switch_path_rejected_message(),
                     "wire 必须是固定文案，禁止拼接 validator 原文: {message}"
                 );
                 assert!(
@@ -1483,7 +1486,7 @@ mod tests {
             Err(ApiError::InvalidInput { message, field, .. }) => {
                 assert_eq!(field.as_deref(), Some("tokenizer_path"));
                 // 越界拒绝的原文含 "Allowed roots: <roots 配置>"，同样不得上线
-                assert_eq!(message, SWITCH_PATH_REJECTED_MESSAGE, "got: {message}");
+                assert_eq!(message, switch_path_rejected_message(), "got: {message}");
                 assert!(
                     !message.contains("Allowed roots"),
                     "越界拒绝的 wire 文案不得携带 Allowed roots 清单: {message}"
@@ -1506,7 +1509,7 @@ mod tests {
     /// switch 加载失败 wire 脱敏钉：ModelLoadError/NotFound 原文携带服务器
     /// canonical 绝对路径（local_bundle 探测清单、EngineFactory detail），
     /// 旧映射把它们整体塞进 NotFound.resource_id 直达响应体（CWE-209/497），
-    /// 与同 handler 前半段 SWITCH_PATH_REJECTED_MESSAGE 封住的路径拒绝通道
+    /// 与同 handler 前半段 switch_path_rejected_message 封住的路径拒绝通道
     /// 构成同端点泄漏面——wire 必须是固定文案；UnsupportedTask 保留
     /// to_api_error 的 400 InvalidInput 臂（客户端可换任务纠正，不混同 404）
     #[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
@@ -1527,7 +1530,8 @@ mod tests {
                 } => {
                     assert_eq!(resource, "model", "404 语义保留");
                     assert_eq!(
-                        id, SWITCH_MODEL_LOAD_FAILED_MESSAGE,
+                        id,
+                        switch_model_load_failed_message(),
                         "wire 必须是固定文案: {id}"
                     );
                     assert!(

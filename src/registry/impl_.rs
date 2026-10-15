@@ -914,6 +914,38 @@ mod impl_tests {
         assert_eq!(PrometheusCollectorModule::NAME, "prometheus_collector");
     }
 
+    // -- ModuleMeta VERSION (negotiate：模块能力自声明) --
+    // 与 Cargo.toml negotiate 注释承诺对齐：src/registry 全部 ModuleMeta 实现均已
+    // 声明 VERSION，缺声明时 negotiate build 期 semver 校验将退回默认 "0.0.0"。
+    #[test]
+    fn test_all_registry_modules_declare_version() {
+        let expected = env!("CARGO_PKG_VERSION");
+        assert_eq!(EmbeddingModule::VERSION, expected);
+        assert_eq!(RerankModule::VERSION, expected);
+        assert_eq!(DecisionModule::VERSION, expected);
+        assert_eq!(DetectModule::VERSION, expected);
+        assert_eq!(TranslateModule::VERSION, expected);
+        assert_eq!(TranscribeModule::VERSION, expected);
+        assert_eq!(RateLimitModule::VERSION, expected);
+        assert_eq!(CacheModule::VERSION, expected);
+        assert_eq!(DbModule::VERSION, expected);
+        assert_eq!(AuditModule::VERSION, expected);
+        assert_eq!(MetricsCollectorModule::VERSION, expected);
+        assert_eq!(IpWhitelistModule::VERSION, expected);
+        assert_eq!(PipelineQueueModule::VERSION, expected);
+        assert_eq!(ResponseChannelModule::VERSION, expected);
+        assert_eq!(PriorityCalculatorModule::VERSION, expected);
+        assert_eq!(WorkerManagerModule::VERSION, expected);
+        assert_eq!(ConfigWatcherModule::VERSION, expected);
+        #[cfg(feature = "http")]
+        assert_eq!(PrometheusCollectorModule::VERSION, expected);
+        #[cfg(feature = "auth")]
+        {
+            assert_eq!(AuthModule::VERSION, expected);
+            assert_eq!(CsrfConfigModule::VERSION, expected);
+        }
+    }
+
     // -- ModuleMeta dependencies (all should be empty) --
     #[test]
     fn test_all_modules_have_no_dependencies() {

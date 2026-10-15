@@ -1,6 +1,6 @@
 # 内存安全防线（MEMORY_SAFETY）
 
-> 本文记录 2026-10-11 WSL2 OOM 事故的根因与四道防线的使用方法（变更
+> 本文记录 2026-10-11 WSL2 OOM 事故的根因与六道防线的使用方法（变更
 > `wsl2-oom-hardening`）。适用于 Linux/WSL2 部署；非 Linux 平台仅防线二/三
 > 适用（内存门禁为 Linux-only）。
 
@@ -21,16 +21,16 @@
    并发的 release LTO 构建（单 rustc 峰值数十 GB）+ 多个 agent CLI 进程把
    RAM+swap 打穿，VM 冻结而非快速失败。
 
-## 四道防线
+## 六道防线
 
 | # | 防线 | 落点 | 生效条件 |
 |---|------|------|----------|
 | 1 | Session 内存门禁 | `session.rs`（构建前检查 MemAvailable） | 默认开启 |
 | 2 | 并行 worker 惰性加载 | `onnx_translate.rs`（首次长输入并行请求才补建附加集） | 默认开启 |
 | 3 | 构建内存上限 | `scripts/build-memcap.sh`（systemd --user scope） | 手动使用 |
-| 4 | 用户级 earlyoom | `scripts/mem-guard.sh` + `mem-guard-install.sh` | 安装后常驻 |
-| 5 | 进程内存上限（通用） | `scripts/run-memcap.sh`（服务自爆保整机） | 手动使用 |
-| 6 | jemalloc decay 烘焙 | `.cargo/config [env]`（大请求后 RSS 秒级回落） | 默认生效 |
+| 4 | 进程内存上限（通用） | `scripts/run-memcap.sh`（服务自爆保整机） | 手动使用 |
+| 5 | jemalloc decay 烘焙 | `.cargo/config [env]`（大请求后 RSS 秒级回落） | 默认生效 |
+| 6 | 用户级 earlyoom | `scripts/mem-guard.sh` + `mem-guard-install.sh` | 安装后常驻 |
 
 ### 防线 1：Session 内存门禁
 
@@ -72,7 +72,7 @@ VECBOOST_BUILD_MEMMAX=26G VECBOOST_BUILD_MEMHIGH=20G VECBOOST_BUILD_SWAPMAX=4G \
 而 swap 无限制时，超限页换出即可绕过上限（实测 16M 上限下 133M 分配可存
 活），故必须同设 SwapMax（实测 5G 分配在 16M+4G 预算下被击杀）。
 
-### 防线 4a：进程内存上限（免 root，r2）
+### 防线 4：进程内存上限（免 root）
 
 以用户级 cgroup 包裹**任意命令**（主要用途：常驻推理服务）——服务异常膨胀时先被自身上限击杀，而不是等整机逼近极限：
 
@@ -107,7 +107,7 @@ m2m100 与 fp32 **逐字节一致**；opus 小模型存在两类量化噪声并�
 含纳（单字替换「棕色的狐狸→棕色狐狸」、尾部重复「…好可爱→…好可爱，好
 可爱」）——opus 上启用 int8 需经 paper-translate-quality 评测后再议。
 
-### 防线 4b：jemalloc decay 烘焙（r2）
+### 防线 5：jemalloc decay 烘焙
 
 jemalloc 默认 dirty/muzzy decay 10s，大请求（长翻译/批量）释放的解码缓冲
 滞留 RSS。经 `.cargo/config（旧名入库，config.toml 被 gitignore）[env] JEMALLOC_SYS_WITH_MALLOC_CONF` 在
@@ -120,7 +120,7 @@ jemalloc-sys 编译期烘焙为 1000ms（对全部 arena 含未来生效），�
 MALLOC_CONF="dirty_decay_ms:0,muzzy_decay_ms:0" target/release/vecboost config.toml  # 立即归还
 ```
 
-### 防线 4：用户级 earlyoom（免 root）
+### 防线 6：用户级 earlyoom（免 root）
 
 MemAvailable 低于阈值时，在目标列表内按 RSS 杀最大者（SIGTERM → 10s 后仍
 存活升级 SIGKILL），默认只针对 `vecboost`，绝不波及列表外进程；在 OOM

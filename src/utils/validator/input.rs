@@ -162,7 +162,7 @@ pub fn validate_text_basic(text: &str) -> Result<(), VecboostError> {
         )));
     }
 
-    // 控制字符拒绝（T010）：NUL/C0 可用于注入或触发下游 tokenizer 异常
+    // 控制字符拒绝：NUL/C0 可用于注入或触发下游 tokenizer 异常
     if has_disallowed_control_chars(text) {
         return Err(VecboostError::InvalidInput(i18n::tr(
             "validate-text-control-chars",
@@ -1049,7 +1049,7 @@ mod control_char_tests {
         assert!(out.ends_with("..."));
     }
 
-    /// 回归钉（T010/D34）：NUL 与 C0 控制字符拒绝，tab/LF/CR 豁免，正常文本通过。
+    /// 回归钉：NUL 与 C0 控制字符拒绝，tab/LF/CR 豁免，正常文本通过。
     #[test]
     fn test_validate_text_rejects_control_chars() {
         let validator = InputValidator::with_default();

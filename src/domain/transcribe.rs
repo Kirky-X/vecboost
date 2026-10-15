@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! 转录领域类型（onnx-engine-unify T012，R-transcribe-engine-001）。
+//! 转录领域类型（R-transcribe-engine-001）。
 //!
 //! 输入为 16kHz 单声道 f32 `[-1,1]` 样本（`read_wav_16k_mono` 的产物）；
 //! `validate` 以域层 `ValidationError` 显性拒绝非法输入（非空、全部有限、

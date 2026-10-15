@@ -95,8 +95,11 @@ pub fn rotate(v: &[f32]) -> Vec<f32> {
     if offset < v.len() {
         TAIL_WARN.call_once(|| {
             log::warn!(
-                "rotate: trailing {} dims are not Hadamard-rotated (quantization quality degraded for this segment)",
-                v.len() - offset
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-util-vquant-rotate-tail-not-hadamard",
+                    crate::i18n::tr_args(&[("dims", &(v.len() - offset).to_string())]),
+                )
             );
         });
     }
@@ -120,8 +123,11 @@ pub fn quantize_i8(v: &[f32]) -> I8Vector {
             // 输入含 NaN/Inf：amax 被 f32::max 吞掉后仍有限，但坏分量会
             // 饱和 cast 成 0——显性告警，避免静默量化失真（审计 D33）
             log::warn!(
-                "quantize_i8: non-finite input vector (len={}), zeroed",
-                v.len()
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-util-vquant-quantize-i8-non-finite",
+                    crate::i18n::tr_args(&[("len", &v.len().to_string())]),
+                )
             );
         }
         return I8Vector {

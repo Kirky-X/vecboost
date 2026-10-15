@@ -1,6 +1,6 @@
 # VecBoost 完整配置示例
 # =======================
-# 本文件展示 VecBoost 所有配置选项，适合生产环境参考
+# 本文件展示 VecBoost 主要配置选项，适合生产环境参考
 # 实际部署时建议复制为 config.toml 并按需调整
 
 # ============ 服务配置 ============
@@ -155,27 +155,6 @@ trusted_proxies = []
 # 是否启用 CSRF 保护
 enabled = false
 
-# 允许的 Origin 列表 (None = 不验证 Origin)
-# 示例: ["https://example.com", "https://app.example.com"]
-allowed_origins = []
-
-# 是否启用 CSRF Token 验证
-token_validation_enabled = false
-
-# Token 过期时间 (秒)
-token_expiration_secs = 3600
-
-# 是否允许同源请求
-allow_same_origin = true
-
-# ============ 密钥存储配置 ============
-[auth.security]
-# 密钥存储类型: environment, encrypted_file
-storage_type = "environment"
-
-# 加密密钥 (用于 encrypted_file 存储类型)
-encryption_key = ""
-
 # ============ 审计日志配置 ============
 [audit]
 # 是否启用审计日志
@@ -231,7 +210,7 @@ max_connections = 20
 # 连接超时 (秒)
 connect_timeout_secs = 10
 
-# ============ 日志配置 (inklog, 需要 inklog feature) ============
+# ============ 日志配置 (inklog) ============
 [logging]
 # 日志级别: trace, debug, info, warn, error
 level = "info"
@@ -249,6 +228,7 @@ rotation_size_mb = 100
 max_files = 30
 
 # ============ 流控配置 (limiteron, 需要 limiteron feature) ============
+# ⚠️ 注意：当前版本的 VecboostConfig 未解析此配置段，编辑此段不会生效。
 [flow_control]
 # 是否启用流控
 enabled = true
@@ -266,6 +246,7 @@ circuit_breaker_failure_threshold = 0.5
 circuit_breaker_recovery_secs = 30
 
 # ============ 缓存配置 (oxcache, 需要 oxcache feature) ============
+# ⚠️ 注意：当前版本的 VecboostConfig 未解析此配置段，编辑此段不会生效。
 [cache]
 # 是否启用缓存
 enabled = true
@@ -284,19 +265,12 @@ eviction_policy = "lru"
 
 # ============ 设备配置 ============
 [device]
-# 优先使用的设备类型
-# 可选值:
-#   - cpu: CPU 计算
-#   - cuda: NVIDIA GPU (需要 CUDA support)
-#   - metal: Apple Silicon GPU (需要 Metal support)
-#   - auto: 自动检测并选择最佳设备
-preferred = "auto"
-
-# GPU 内存保留比例 (0.0-1.0)
-# 用于防止 GPU OOM，保留部分显存
-gpu_memory_reservation = 0.1
+# 硬件感知启动规划 (T024): true 时用探测计划填充未显式配置的字段，
+# 任何显式配置优先于计划；计划全文进启动日志。默认 false（零计划行为）
+# auto_plan = false
 
 # ============ 高级配置 ============
+# ⚠️ 注意：当前版本的 VecboostConfig 未解析此配置段，编辑此段不会生效。
 [advanced]
 # 是否启用 ONNX Runtime 作为备用引擎
 onnx_fallback_enabled = true

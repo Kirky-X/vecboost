@@ -34,7 +34,7 @@ const JWT_SECRET: &str = "translate-e2e-jwt-secret-0123456789ABCDEF";
 const ADMIN_PASS: &str = "TranslateE2e#2026Pass";
 
 /// opus bundle 探测：真机翻译用例的 SKIP 守卫（onnx 权重文件在位即可，
-/// encoder/decoder 的 onnx 子目录文件由 T013 下载流程保证成套）
+/// encoder/decoder 的 onnx 子目录文件由下载流程保证成套）
 fn opus_ready() -> bool {
     Path::new(OPUS_EN_ZH)
         .join("onnx/encoder_model.onnx")
@@ -325,8 +325,8 @@ async fn translate_wire_shape_and_real_translation() {
 
 #[tokio::test]
 async fn translate_unconfigured_pair_400_with_pairs_list() {
-    if !model_ready(MODEL_PATH) {
-        println!("SKIP [translate_unconfigured_pair_400_with_pairs_list]: 本地模型缺失");
+    if !model_ready(MODEL_PATH) || !opus_ready() {
+        println!("SKIP [translate_unconfigured_pair_400_with_pairs_list]: 本地模型/bundle 缺失");
         return;
     }
     let server = match require_pair_server(
@@ -376,7 +376,7 @@ async fn translate_zero_config_400_not_configured() {
     )
     .expect("zero request");
     assert_eq!(status, 400, "零配置必须 400（端点注册、显性拒绝）: {body}");
-    // T024 落 FTL 后消息为本地化文案（Accept-Language=en 锚定英文），断言
+    // 落 FTL 后消息为本地化文案（Accept-Language=en 锚定英文），断言
     // 文案锚点而非裸键名
     assert!(
         body.contains("no language pairs configured"),

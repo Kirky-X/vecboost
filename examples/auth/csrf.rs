@@ -51,7 +51,7 @@ fn main() {
     let same_result = validate_csrf_token(&token, &token);
     println!("\n✅ 相同 token 校验: {}", same_result);
 
-    let other_token = generate_csrf_token().unwrap();
+    let other_token = generate_csrf_token().expect("CSRF token generation should not fail");
     let diff_result = validate_csrf_token(&token, &other_token);
     println!("🚫 不同 token 校验: {}", diff_result);
 

@@ -132,7 +132,7 @@ pub fn detect_language(text: &str, allow: Option<&[String]>) -> Detection {
                 .collect();
             match resolved {
                 Some(allowlist) => Detector::with_allowlist(allowlist).detect(text),
-                // 防御兜底：上游校验已拦，理论不可达（评审 BUG-1/SEC-1/ARC-1）
+                // 防御兜底：上游校验已拦，理论不可达（评审）
                 None => None,
             }
         }
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn unknown_allowlist_code_degrades_to_undetectable() {
-        // 格式合法但未发布码（"xx"）在域/服务层已被 400 拒绝（BUG-1 修复）；
+        // 格式合法但未发布码（"xx"）在域/服务层已被 400 拒绝；
         // 检测核心对穿透值降级为不可判定（防御兜底，禁 panic——async handler
         // 内 panic 即连接重置）
         let detection = detect_language(EN, Some(&["xx".to_string()]));

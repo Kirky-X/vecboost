@@ -12,7 +12,7 @@
 
 use vecboost::utils::{InputValidator, PathValidator, TextValidator};
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🛡️ 输入验证示例");
     println!("================\n");
 
@@ -82,12 +82,12 @@ fn main() {
     println!("\n📝 路径验证 (PathValidator):");
 
     // 创建临时目录作为白名单根
-    let temp_dir = tempfile::TempDir::new().unwrap();
+    let temp_dir = tempfile::TempDir::new()?;
     let temp_path = temp_dir.path();
 
     // 在临时目录中创建一个测试文件
     let test_file = temp_path.join("test.txt");
-    std::fs::write(&test_file, "hello").unwrap();
+    std::fs::write(&test_file, "hello")?;
 
     let path_validator = PathValidator::new().add_allowed_root(temp_path);
 
@@ -135,4 +135,6 @@ fn main() {
     }
 
     println!("\n✅ 输入验证示例完成");
+
+    Ok(())
 }

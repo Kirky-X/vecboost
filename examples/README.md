@@ -1,6 +1,6 @@
 # VecBoost 示例
 
-本目录是独立的 workspace member crate `vecboost-examples`(`publish = false`)，包含 VecBoost 向量嵌入服务的公共 API 示例代码，按功能分类组织为 13 个分类、30 个可执行二进制。
+本目录是独立的 workspace member crate `vecboost-examples`(`publish = false`)，包含 VecBoost 向量嵌入服务的公共 API 示例代码，按功能分类组织为 12 个分类、31 个可执行二进制。
 
 所有示例专注于展示公共 API 和实际应用场景，不包含内部实现细节。
 
@@ -38,7 +38,7 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 | 分类 | 目录 | 示例数 | 说明 |
 |------|------|--------|------|
 | basic | `basic/` | 6 | 基础用法：嵌入、批量、相似度、重排序、Matryoshka 维度约简、输入验证 |
-| engine | `engine/` | 3 | 引擎抽象：Candle/ONNX 引擎初始化与运行时切换 |
+| engine | `engine/` | 4 | 引擎抽象：Candle/ONNX 引擎初始化、运行时切换、Laya 决策管线数值对照 |
 | http | `http/` | 4 | HTTP API：REST 接口调用（reqwest） |
 | cli | `cli/` | 3 | 命令行工具：CLI 子命令调用 |
 | auth | `auth/` | 3 | 认证授权：JWT 令牌、CSRF 防护、token 刷新 |
@@ -65,6 +65,7 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 ### engine — 引擎抽象
 - `candle` — Candle 引擎初始化与推理
 - `onnx` — ONNX 引擎初始化（需要 `onnx` feature）
+- `laya_poc` — Laya 决策管线 P0 数值对照（EngineFactory → AnyEngine → trait 全链，对拍 pytorch 基线）
 - `switch` — 运行时 `EmbeddingService::switch_model`
 
 ### http — HTTP API
@@ -74,9 +75,9 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 - `rerank_api` — HTTP POST `/api/1/rerank`
 
 ### cli — 命令行工具
-- `embed_cli` — 调用 `vecboost embed --text "hello"`
-- `batch_cli` — 调用 `vecboost batch --input texts.txt`
-- `rerank_cli` — 调用 `vecboost rerank --query "..." --documents docs.txt`
+- `embed_cli` — 调用 `vecboost embed --req '{"text":"hello"}'`
+- `batch_cli` — 调用 `vecboost embed_batch --req '{"texts":["..."]}'`
+- `rerank_cli` — 调用 `vecboost rerank --req '{"query":"...","documents":[...]}'`
 
 ### auth — 认证授权
 - `jwt_auth` — JWT token 生成与验证

@@ -88,7 +88,7 @@
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🔍 <b>可观测性</b><br><span style="color:#64748B">Prometheus 指标、健康检查、结构化日志（inklog 控制台 + 文件轮转）</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>云原生部署</b><br><span style="color:#64748B">多架构 Docker 镜像（linux/amd64 + arm64）；Kubernetes 提供部署指引（清单需自备）</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>云原生部署</b><br><span style="color:#64748B">Docker 镜像（`linux/amd64`，默认单架构构建）；Kubernetes 提供部署指引（清单需自备）</span></td>
 </tr>
 </table>
 
@@ -152,7 +152,7 @@ cp config/config.toml config/config_custom.toml
 ./target/release/vecboost --config config/config_custom.toml
 ```
 
-> **✅ 成功**: 服务默认在 `http://127.0.0.1:9002` 启动（安全默认仅监听回环地址）。
+> **✅ 成功**: 按出厂 `config/config.toml`（`host = "127.0.0.1"`，端口 `9002`）启动时，服务监听 `http://127.0.0.1:9002`（仅本机可访问）；当配置未指定 `host` 时，代码默认 `0.0.0.0`（监听所有接口，供容器/局域网部署——改配置 `[server] host` 即可覆盖）。
 
 > **🐳 Docker**：`docker build -t vecboost:latest .` 后挂载 `config/` 与 `models/` 运行即可；Docker Compose 与 Kubernetes 部署见 [📖 用户指南 · Docker 部署](docs/USER_GUIDE.md#docker-部署)。
 
@@ -208,12 +208,12 @@ curl -X POST http://localhost:9002/api/1/decisions \
 
 ```bash
 # 单文本嵌入
-cargo run --features cli -- embed --text "Hello, world!"
+cargo run --features cli -- embed --req '{"text":"Hello, world!"}'
 ```
 
 ### 🧭 核心概念
 
-- **模型与引擎**：`ModelConfig` 声明 HuggingFace 模型（默认 `BAAI/bge-small-en-v1.5`），`EngineFactory::create(engine_type, config)` 创建 `Candle`（默认）或 `ONNX`（`onnx` feature）引擎；支持 Bert / XlmRoberta 双架构与 mean/cls/max 池化。
+- **模型与引擎**：`ModelConfig` 声明 HuggingFace 模型（默认 `BAAI/bge-m3`，1024 维），`EngineFactory::create(engine_type, config)` 创建 `Candle`（默认）或 `ONNX`（`onnx` feature）引擎；支持 Bert / XlmRoberta 双架构与 mean/cls/max 池化。
 - **四协议单一源**：`src/api/embedding.rs` 中的处理函数经 `#[forge(...)]` 宏标注，由 `sdforge` 生成 HTTP/gRPC/MCP/CLI 绑定，禁止手写协议代码。
 - **7 库生态**：`trait-kit` 以 typestate 模块注册中心（`Kit<Unbuilt> → Kit<Ready>`）装配全部模块；`confers` 接管配置、`inklog` 日志、`oxcache` 缓存、`limiteron` 限流、`dbnexus` 持久化（`db` feature）、`sdforge` 接口生成。
 - **配置优先级**：TOML 文件 + `VECBOOST_` 前缀环境变量覆盖（敏感项 `VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD` 必须走环境变量）；配置文件变更校验并打日志，重启后生效。
@@ -228,11 +228,11 @@ VecBoost 由 `sdforge` 从处理函数单一源生成四种协议接口（`src/a
 - **HTTP/REST**：`/api/1/*` 提供嵌入（单文本/批量/文件）、相似度、语义检索、重排序、决策问答（choice/score/noul）、翻译（多语言对 + auto 检测）、转录（16kHz 语音样本 → 文本，`transcribe` feature）、语言检测、模型管理与健康检查端点；
 - **OpenAI 兼容**：`POST /v1/embeddings`，响应遵循 OpenAI 格式（`object` / `data` / `usage`），支持 `encoding_format=base64`；
 - **Matryoshka 维度约简**：`/v1/embeddings` 传 `dimensions`（256/512/1024 等）换取更小更快的向量，截断后自动 L2 重归一化保证余弦相似度正确；
-- **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 16 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto，含 `vecboost.translate` / `vecboost.detect`），JWT 认证、限流、最大连接数与超时均可配置；
-- **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露 `embed` / `embed_batch` / `similarity` / `decisions` / `translate` / `detect` / `list_models` 工具；
+- **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 17 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto，含 `vecboost.translate` / `vecboost.detect`），JWT 认证、限流、最大连接数与超时均可配置；
+- **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露由 `#[forge(tool_name=…)]` 注册的工具，工具名为 `embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models` 等（注意 MCP `tool_name` 非 HTTP 端点名，完整清单见 [📘 API 参考](docs/API_REFERENCE.md)）；
 - **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect / transcribe 子命令（见 [💡 最小示例](#最小示例)；`transcribe` 子命令收 WAV 文件路径，读 16kHz 单声道样本）；
 - **推理引擎**：Candle（原生 Rust，默认）与 ONNX Runtime（`onnx` feature），经 `EngineFactory::create` 工厂切换；`[model]` 的 `engine_type` / `task` 配置驱动引擎与任务维度选择——`task = "embedding"`（默认）/ `task = "decision"`（Laya 决策管线）/ `task = "translate"`（seq2seq 翻译，仅 onnx）/ `task = "transcribe"`（Qwen3-ASR 转录，需 `transcribe` feature）四态，非当前任务的端点以 400 Unsupported task 显性拒绝（bundle 布局见 [`config/config.toml`](config/config.toml) `[model]` 段注释，翻译语言对见 `[translation]` 段）；
-- **可观测性与运维**：`/metrics`（Prometheus 指标）、`/health`（存活探针）与 `/health?depth=full`（真实就绪探测）、`/api-docs`（Swagger UI）；只读诊断 `vecboost doctor`（config / tokenizer / 缓存 / 线程 / GPU / 模型完整性，FAIL 退出码 1）。
+- **可观测性与运维**：`/metrics`（Prometheus 指标）、`/health`（存活探针）与 `/health?depth=full`（真实就绪探测）、`/swagger-ui/`（交互式 OpenAPI 文档，需 `openapi`/`http` feature，规范 JSON 见 `/api-docs/openapi.json`）；只读诊断 `vecboost doctor`（config / tokenizer / 缓存 / 线程 / GPU / 模型完整性，FAIL 退出码 1）。
 
 翻译与语言检测请求示例（与 [API 参考](docs/API_REFERENCE.md) 字段一致）：
 
@@ -262,7 +262,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 
 > **🔧 译文后处理与超时**：翻译在引擎出口做确定性后处理（服务层与库用户同享）——`target=zh` 时繁→简归一化、URL 协议分隔符与 LaTeX 转义符号修复；模型级高频误译经 `[[translation.pairs.output_fixes]]` 字面替换表（按声明序）修复，见 [`config/config.toml`](config/config.toml) `[translation]` 段。HTTP 全局请求超时经 `[server] request_timeout_seconds` 配置（CPU seq2seq 译论文级长摘要需 15-130+s，`config/config.toml` 已显式设 300s）。
 
-交互式 OpenAPI 文档：`http://localhost:9002/api-docs`（Swagger UI）与 `/api-docs/openapi.json`（规范 JSON，需 `openapi` feature；ReDoc 推迟到 v0.3.0）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/PERFORMANCE.md#新增指标)。
+交互式 OpenAPI 文档（Swagger UI）：`http://localhost:9002/swagger-ui/`；规范 JSON：`/api-docs/openapi.json`（均需 `openapi` feature；注意根路径 `/api-docs` 不提供 UI，ReDoc 推迟到 v0.3.0）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/PERFORMANCE.md#新增指标)。
 
 ### 🏷️ Feature 标志
 
@@ -276,8 +276,9 @@ curl -X POST http://localhost:9002/api/1/detect \
 | `mcp` | - | MCP 协议接口（LLM 工具集成，stdio 模式） |
 | `openapi` | - | OpenAPI/Swagger UI 文档（独立于 `http` 启用） |
 | `schema` | - | OpenAPI Schema 派生（`http`/`openapi` 自动启用；支持 library 模式类型导出） |
-| `db` | - | dbnexus 数据库持久化（SQLite） |
-| `postgres` | - | PostgreSQL 支持（含 `db`） |
+| `db` | - | dbnexus 数据库持久化基础设施（驱动无关，须搭配 `sqlite` 或 `postgres` 驱动 feature 二选一） |
+| `sqlite` | - | SQLite 数据库驱动（含 `db` + `dbnexus/sqlite` + `inklog/sqlite`） |
+| `postgres` | - | PostgreSQL 数据库驱动（含 `db` + `dbnexus/postgres` + `inklog/postgres`） |
 | `auth` | - | JWT 认证 + CSRF + RBAC + AES-256-GCM 加密 |
 | `cuda` | - | NVIDIA CUDA GPU 加速 |
 | `metal` | - | Apple Silicon Metal GPU |
@@ -286,6 +287,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 | `mkl` | - | x86_64 CPU MKL 加速后端（opt-in，需链接正常的工具链） |
 | `accelerate` | - | aarch64 macOS Accelerate 加速后端（opt-in） |
 | `quantized-gguf` | - | GGUF 量化引擎开关（推理后端待 candle 上游落地） |
+| `character_converter` | - | 独立启用 `character_converter` 字符转换依赖（`onnx` feature 已隐含启用） |
 
 > **📦 内置依赖说明**: `confers`（配置）、`inklog`（日志）、`oxcache`（缓存）、`limiteron`（限流）、`trait-kit`（模块注册）为必选依赖，始终启用，无需通过 feature 开启。`sdforge` 在 `http`/`grpc`/`cli`/`mcp` 任一协议 feature 下启用。
 
@@ -324,7 +326,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 
 ## 💻 示例
 
-全部示例位于 [`examples/`](examples/) 目录，作为独立 workspace member crate `vecboost-examples`（13 个分类、30 个可执行二进制），覆盖基础嵌入、HTTP/CLI 调用、引擎切换、认证、缓存、限流、监控、审计、语义缓存与 Library SDK 集成；逐分类清单见 [`examples/README.md`](examples/README.md)。
+全部示例位于 [`examples/`](examples/) 目录，作为独立 workspace member crate `vecboost-examples`（12 个分类、31 个可执行二进制），覆盖基础嵌入、HTTP/CLI 调用、引擎切换、认证、缓存、限流、监控、审计、语义缓存与 Library SDK 集成；逐分类清单见 [`examples/README.md`](examples/README.md)。
 
 ```bash
 # 运行单个示例
@@ -340,7 +342,7 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 
 ## 🏗️ 架构
 
-VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中心（`Kit<Unbuilt> → Kit<Ready>`）装配 17 个模块，`sdforge` 从 `src/api/embedding.rs` 单一源生成四协议绑定，推理经 `EngineFactory` 抽象到 Candle / ONNX 引擎，请求经优先级队列与时间窗拼批进入推理管线。
+VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中心（`Kit<Unbuilt> → Kit<Ready>`）装配模块（`src/registry/` 共 20 个 `ModuleMeta` 实现，部分随 `auth` 等 feature 门控），`sdforge` 从 `src/api/embedding.rs` 单一源生成四协议绑定，推理经 `EngineFactory` 抽象到 Candle / ONNX 引擎，请求经优先级队列与时间窗拼批进入推理管线。
 
 7 库生态（trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge）的版本与分工、模块依赖图、数据流、缓存/安全/部署架构与扩展点说明见 [🏗️ 架构文档](docs/ARCHITECTURE.md)。
 
@@ -350,7 +352,7 @@ VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中
 
 ### 🎯 测试策略
 
-测试栈分六层：`src/` 内联单元测试、`tests/integration/` 集成测试、专项集成（doctor / gRPC E2E / 模型快照回归 / 量化质量门 / SDK 矩阵）、`tests/scenario/*.py` 真实服务场景测试（15 个 pytest 套件）、`tests/perf/` 性能回归阈值与 `benches/` 的 4 组 Criterion 微基准。`TEST_MODE` 环境变量控制测试引擎（`mock` 默认 / `light` / `full`）。各层职责、场景穷举矩阵与 CI 工作流对应关系见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
+测试栈分六层：`src/` 内联单元测试、`tests/integration/` 集成测试、专项集成（doctor / gRPC E2E / 模型快照回归 / 量化质量门 / SDK 矩阵）、`tests/scenario/*.py` 真实服务场景测试（15 个 pytest 套件）、`tests/perf/` 性能回归阈值与 `benches/` 的 5 组 Criterion 微基准。`TEST_MODE` 环境变量控制测试引擎（`mock` 默认 / `light` / `full`）。各层职责、场景穷举矩阵与 CI 工作流对应关系见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
 
 ### ▶️ 运行命令（与 CI 一致）
 
@@ -394,7 +396,7 @@ cargo audit
 
 ### 📊 测试规模
 
-截至 v0.3.0-rc.1 工作区：单元测试（`src/` 内联）约 1700+、Rust 集成/专项测试（`tests/*.rs`）61 个、Python 场景/性能用例 126 个（15 个场景套件）、Criterion 微基准 4 组；CI 硬门禁为行覆盖率不低于 80%（tarpaulin），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
+截至 v0.3.0-rc.1 工作区：单元测试（`src/` 内联）2237 个、Rust 集成/专项测试（`tests/*.rs`）63 个测试函数、Python 场景/性能用例 146 个（场景 119 + 性能 27，15 个场景套件）、Criterion 微基准 5 组；CI 硬门禁为行覆盖率不低于 80%（tarpaulin），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
 
 ---
 
@@ -486,9 +488,12 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 | 版本 | 日期 | 要点 |
 |------|------|------|
 | Unreleased | - | 审计修复与调优开关：安全默认值收敛、HF tokenizers 全平台统一、时间窗拼批/批内去重、GGUF 量化路径、语义缓存比较模式、多模型 LFRU、缓存 WAL、doctor 诊断、启动预热；**新增翻译与语言检测**（多语言对路由 + auto 检测，项目定位升级为多功能推理服务） |
-| 0.2.1 | 2026-09-06 | i18n 国际化（114 个翻译键）、Rerank 重排序三协议、语义缓存三级查询、BF16 精度、SIMD 相似度、连续批处理调度、GPU 内存分页、Library 模式 |
+| 0.3.0-rc.1 | 2026-09-22 | 当前发布候选：转录（Qwen3-ASR）服务面、翻译/语言检测全协议接入、PARQ 存储替换 oxcache、"generate" 统一接口 |
+| 0.2.1 | 2026-07-30 | i18n 国际化、Rerank 重排序三协议、语义缓存三级查询、BF16 精度、SIMD 相似度、连续批处理调度、GPU 内存分页、Library 模式 |
 | 0.2.0 | 2026-07-24 | sdforge 四协议统一生成、7 库生态接线、Matryoshka 截断重归一化、vuln-0009 repo_id 校验 |
-| 0.1.0 | 2025-12-15 | VecBoost 初始发布 |
+| 0.1.2 | 2026-01-16 | 补丁修订 |
+| 0.1.1 | 2026-01-15 | 补丁修订 |
+| 0.1.0 | 2026-01-10 | VecBoost 初始发布 |
 
 Unreleased 含多项破坏性行为变更（安全默认值收敛、登录收敛、XFF 信任反转、RBAC 接线、缓存键/分词器变更等），**升级必读**：逐项「旧行为 → 新行为 → 迁移动作」对照表见 [📋 更新日志 · Unreleased](docs/CHANGELOG.md#unreleased)。多副本边界（auth 会话存进程内存，仅限单副本）与热重载语义（配置变更重启后生效）见 [❓ FAQ](docs/FAQ.md#配置与部署)。
 

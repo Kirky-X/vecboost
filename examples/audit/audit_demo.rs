@@ -15,12 +15,12 @@ use std::path::PathBuf;
 use vecboost::audit::{AuditConfig, AuditLogger};
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📋 审计日志（AuditLogger）示例");
     println!("================================\n");
 
     // 使用临时目录存放审计日志
-    let temp_dir = tempfile::TempDir::new().unwrap();
+    let temp_dir = tempfile::TempDir::new()?;
     let log_path = temp_dir.path().join("audit.log");
 
     // 1. 创建审计日志配置
@@ -84,12 +84,12 @@ async fn main() {
 
     // 3. 同步等待 flush 到磁盘
     println!("📝 等待 flush 到磁盘...");
-    logger.flush().await.unwrap();
+    logger.flush().await?;
     println!("  flush 完成\n");
 
     // 4. 读取并展示日志内容
     println!("📊 审计日志内容:");
-    let content = tokio::fs::read_to_string(&log_path).await.unwrap();
+    let content = tokio::fs::read_to_string(&log_path).await?;
     for line in content.lines() {
         if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
             println!(
@@ -115,7 +115,7 @@ async fn main() {
         elapsed.as_secs_f64() * 1000.0
     );
 
-    logger.flush().await.unwrap();
+    logger.flush().await?;
     println!("  flush 完成");
 
     // 6. 禁用状态演示
@@ -131,4 +131,6 @@ async fn main() {
     println!("  log_* 调用被静默忽略");
 
     println!("\n✅ 审计日志示例完成");
+
+    Ok(())
 }

@@ -26,10 +26,6 @@
       "count": 4,
       "reason": "热路径常驻面（每请求/每分配触发）：按 MAINTENANCE 的日志分层原则保留英文原文，基线为上限、禁止增长；tr() 的 locale 解析与 FluentArgs 构造不应进入该路径"
     },
-    "src/utils/vquant.rs": {
-      "count": 2,
-      "reason": "每向量量化路径的数值不变量诊断（高频），保留英文以便 grep 与零额外分配"
-    },
     "src/metrics/performance/mod.rs": {
       "count": 4,
       "reason": "基准/压力测试仪表输出（供 criterion 与脚本 grep），非产品 UI 文案"

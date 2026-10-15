@@ -453,7 +453,7 @@ impl PrometheusCollector {
         self.semantic_cache_fuzzy_hits.inc();
     }
 
-    /// 逐请求入队→出队等待时长观测（T033 排队延迟可观测）。
+    /// 逐请求入队→出队等待时长观测（排队延迟可观测）。
     pub fn observe_queue_wait(&self, operation: &str, wait_secs: f64) {
         self.vecboost_queue_wait_seconds
             .with_label_values(&[operation])

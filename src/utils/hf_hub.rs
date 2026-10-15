@@ -168,11 +168,11 @@ pub const LAYA_BUNDLE_FILES: &[&str] = &[
     "tokenizer/tokenizer_config.json",
 ];
 
-/// 翻译 bundle 默认仓库（T013 首日实测存续核对：private=false、gated=false、
+/// 翻译 bundle 默认仓库（首日实测存续核对：private=false、gated=false、
 /// 七文件清单全部在位）。
 pub const TRANSLATE_BUNDLE_REPO: &str = "Xenova/opus-mt-en-zh";
 
-/// 翻译 bundle 内置下载清单（远端路径，与落位相对路径一致；T013 实下验证
+/// 翻译 bundle 内置下载清单（远端路径，与落位相对路径一致；实下验证
 /// 每文件磁盘字节数见 specmark notes/first-day-verification.md）。
 ///
 /// tokenizer.json 强制在位：tokenizers 0.23 仅支持 tokenizer.json 四类模型
@@ -729,7 +729,7 @@ mod tests {
         assert!(LAYA_BUNDLE_FILES.contains(&"tokenizer/tokenizer.json"));
     }
 
-    /// 翻译 bundle 清单红线（T013 首日实测核对：七文件在 Xenova 仓库
+    /// 翻译 bundle 清单红线（首日实测核对：七文件在 Xenova 仓库
     /// 存续且已实下落位）；tokenizer.json 强制在位（tokenizers 0.23
     /// 不支持 .spm）。
     #[test]

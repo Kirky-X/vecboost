@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! translate 热路径计数语义测试（评审 converge T032）。
+//! translate 热路径计数语义测试（评审）。
 //!
 //! 独立测试二进制：进程内无其他测试共享全局 collector（lib 测试二进制中
 //! api/forge 成功路径会并发 inc 同一计数器，计数差断言有竞态），故计数差

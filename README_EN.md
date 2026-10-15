@@ -263,7 +263,7 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 
 > **📦 Built-in dependencies**: `confers` (config), `inklog` (logging), `oxcache` (cache), `limiteron` (rate limiting), and `trait-kit` (module registry) are mandatory dependencies that are always enabled — no feature flag needed. `sdforge` is enabled by any protocol feature (`http`/`grpc`/`cli`/`mcp`).
 
-> **🧪 Experiment path**: `transcribe-poc/` (standalone crate, binary `transcribe-own`) has been converged into a thin-shell CLI — local inference removed, inference goes through the main-crate facade `vecboost::transcribe`; the py-torch baseline path is retained. The lockstep batching / GPU io-binding experiment knobs were retired with the experiment files (conclusions in `out/transcribe-poc/own-engine/summary.md`). The productized implementation lives in `src/engine/transcribe/` — the verbatim CLI contract is in [`transcribe-poc/CONTRACT.md`](transcribe-poc/CONTRACT.md), and the consumption / retirement norms in [🧹 Maintenance Norms](docs/MAINTENANCE.md).
+> **🧪 Experiment path**: The local transcription experiment harness (standalone crate, binary `transcribe-own`) has been converged into a thin-shell CLI — inference goes through the main-crate facade `vecboost::transcribe`, with the py-torch baseline path retained; **this directory is local-only and not tracked in git**. The productized implementation lives in `src/engine/transcribe/` — see [🧹 Maintenance Norms](docs/MAINTENANCE.md) for the CLI contract summary and consumption norms.
 
 ---
 

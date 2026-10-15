@@ -291,7 +291,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 
 > **📦 内置依赖说明**: `confers`（配置）、`inklog`（日志）、`oxcache`（缓存）、`limiteron`（限流）、`trait-kit`（模块注册）为必选依赖，始终启用，无需通过 feature 开启。`sdforge` 在 `http`/`grpc`/`cli`/`mcp` 任一协议 feature 下启用。
 
-> **🧪 实验通路**: `transcribe-poc/`（独立 crate，二进制 `transcribe-own`）已收敛为薄壳 CLI——本地推理实现删除、推理经主仓门面 `vecboost::transcribe`，保留 py-torch 基线对拍通路；lockstep 合批 / GPU io-binding 实验旋钮随实验文件退役（结论见 `out/transcribe-poc/own-engine/summary.md`）。产品化实现见 `src/engine/transcribe/`；调用契约原文见 [`transcribe-poc/CONTRACT.md`](transcribe-poc/CONTRACT.md)，消费面与退役规范见 [🧹 维护规范](docs/MAINTENANCE.md)。
+> **🧪 实验通路**: 转录的本地实验 harness（独立 crate，二进制 `transcribe-own`）已收敛为薄壳 CLI——推理经主仓门面 `vecboost::transcribe`，py-torch 基线对拍通路保留；**该目录为本机目录，不入 git 仓库**。产品化实现见 `src/engine/transcribe/`；CLI 契约要点与消费面规范见 [🧹 维护规范](docs/MAINTENANCE.md)。
 
 ---
 

@@ -699,7 +699,7 @@ cuda = false                     # CUDA EP（需带 CUDA 的 onnxruntime 动态�
 ```
 
 - `enabled=true` 时启动期急切装配，bundle 缺失 **fail-fast**（与 `[translation]` pairs 同口径）。
-- 输入契约为 16kHz 单声道 f32 样本（≤2h）；WAV 解码由客户端负责，参考 `transcribe-poc` 薄壳 CLI（读 wav → samples → 本端点）。
+- 输入契约为 16kHz 单声道 f32 样本（≤2h）；WAV 解码由客户端负责，调用序为 读 wav → samples → 本端点（本地薄壳 CLI 即此序，该目录不入库）。
 - 长音频在服务内经 VAD 分段逐段解码；全静音输入返回空 `segments`/`text`（显性空响应）。
 
 ---

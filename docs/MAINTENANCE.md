@@ -20,7 +20,7 @@
 | 服务端 | `POST /api/1/transcribe` | `[transcribe] enabled=true`，需 `transcribe` feature |
 | 库门面 | `vecboost::transcribe::{open, read_wav_16k_mono}`；`TranscribeSession::{detect_segments, transcribe_segment}`；`TranscribeOpts` | 需 `transcribe` feature |
 
-- 推理实现只允许存在于 `src/engine/transcribe/`。`transcribe-poc/`（独立 crate，二进制 `transcribe-own`，非 workspace 成员）仅作 CLI 与基准 harness 保留。
+- 推理实现只允许存在于 `src/engine/transcribe/`。`transcribe-poc/`（独立 crate，二进制 `transcribe-own`，非 workspace 成员）仅作 CLI 与基准 harness 保留；**该目录为本机目录不入库**（2026-10-15 owner 裁定：不发布、与主仓功能面无关，经 `.gitignore` 排除），仓库内以本节与下方 CLI 契约要点为其规范面。
 - **禁止语义级双实现**：不得在 `transcribe-poc` 内重写 asr / vad / features / tokenizer / wav。历史上"为保留实验旋钮而降级保留本地实现"的口径已彻底作废。
 - 段级并行由调用方持有多个 `TranscribeSession` 实现（ort rc.13 禁止同一 Session 并发 `Run`，每会话独占一套），门面内不做线程池/会话池。
 - 公开门面即 POC 的消费面：**不得**为主仓内部实现细节在门面开口子。
@@ -28,7 +28,7 @@
 
 ## 📜 CLI 契约（自动门禁逐字依赖，不得偏离）
 
-权威文本：`transcribe-poc/CONTRACT.md`（门禁依据本身，不是被迁移对象、不得改写）与主 spec `specmark/specs/transcribe-poc-cli/spec.md`（`R-transcribe-poc-cli-001`，`specmark/` 仅本机存在）。要点：
+权威文本：`transcribe-poc/CONTRACT.md`（门禁依据本身，不是被迁移对象、不得改写；**本机文件，不入库**）与主 spec `specmark/specs/transcribe-poc-cli/spec.md`（`R-transcribe-poc-cli-001`，`specmark/` 仅本机存在）。要点：
 
 - **调用形式**：`transcribe-own <wav> <outDir> [--models <dir>] [--vad-only]`；`--models` 缺省为相对进程 CWD 的 `assets/models`，门禁调用时显式传入。
 - **stdout 五行**：全管线运行中打印且**仅**打印 `WALL_S=<浮点秒>`、`RTF=<浮点>`、`SEGMENTS=<整数>`、`TRANSCRIPT_CHARS=<整数>`、`MODE=<单行自由文本>`。
@@ -51,11 +51,12 @@
 - **废弃报告不落根目录**：一次性退役说明随变更进归档；只有跨变更长期有效的约束才提炼进本文。根目录不保留 `DEPRECATED.md` 这类历史叙述型文档。
 - **判据失效即作废**：历史降级/保留理由所依赖的前提一旦消失（例如"当时主仓无公开门面，故保留本地实现"），该判据不得再作为后续决策依据；重新论证须引用归档 `design.md` 的原始决策。
 - **删除前查入链**：移除文档或文件前先 `git grep` 入链并同步修正（`README.md` / `README_EN.md` / `docs/**` / `src/**` 文档注释 / `.gitignore` 注释），避免死链；只删除确认无消费方的产物。
-- **勿误删的关联件**：`transcribe-poc/CONTRACT.md`（契约原文）、`transcribe-poc/src/pytorch_backend.rs`（基线对拍，`main.rs` 实际调用）、`docs-transcribe/DESIGN.md`（被 `src/engine/transcribe/wav.rs` 文档注释引用）、`config-e2e-transcribe.toml`（WAV 链路验收配置）均为在用件，不属于废弃范围。
+- **勿误删的关联件**：`docs-transcribe/DESIGN.md`（被 `src/engine/transcribe/wav.rs` 文档注释引用）与 `config-e2e-transcribe.toml`（WAV 链路验收配置）为在用入库件；`transcribe-poc/` 整目录（契约原文、pytorch 基线对拍）已按 owner 裁定改为**本机不入库目录**——属本地资产而非可废弃件，勿从磁盘删除，也勿重新加入 git。
 
 ## ✅ 门禁命令
 
 ```bash
+# transcribe-poc 为本机不入库目录；torch 后端编译需 PYO3_PYTHON 指向 cpython-3.11
 cargo check --manifest-path transcribe-poc/Cargo.toml --all-targets
 cargo clippy --manifest-path transcribe-poc/Cargo.toml --all-targets -- -D warnings
 python3 scripts/doc_consistency_check.py

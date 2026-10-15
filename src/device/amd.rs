@@ -189,7 +189,10 @@ impl AmdDevice {
     }
 
     pub fn allocate(&self, bytes: u64) -> bool {
-        // 原子 check-then-act：避免并发调用导致超分配
+        // 原子 check-then-act：避免并发调用导致超分配。
+        // fetch_update 在 1.98+ 更名 try_update（仅更名未删除）；MSRV 1.91
+        // 需保留旧名，显式压掉弃用告警，待 MSRV 抬过 1.98 一并更名
+        #[allow(deprecated)]
         let result =
             self.memory_allocated
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {

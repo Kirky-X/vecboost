@@ -123,7 +123,14 @@ jobs:
     name: Publish to crates.io
     needs: [github-release]
     runs-on: ubuntu-latest
-    # 冷缓存全量验证编译曾超 10m 被取消,放宽到 30m
+    # 冷缓存全量验证编译曾超 10m 被取消,放宽到 30m。
+    # crates.io trusted publishing（OIDC，2026-10-16 owner 注册）：
+    # id-token: write 必需；cargo（1.86+ stable 自带）检测 Actions OIDC
+    # 环境自动换取短时凭证，无需 CARGO_REGISTRY_TOKEN。
+    # 注册绑定须与本项目一致：repo=Kirky-X/vecboost，workflow=release.yml
+    permissions:
+      contents: read
+      id-token: write
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -152,7 +159,7 @@ jobs:
 
       - name: Publish to crates.io
         if: steps.published.outputs.exists == 'false'
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
 
       # crates.io 版本硬校验:防止任何形式的静默漏发
       - name: Verify on crates.io

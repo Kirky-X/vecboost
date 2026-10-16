@@ -85,17 +85,23 @@ jobs:
           fi
 
       # Release 只带 GitHub 自动生成的源码压缩包,不附二进制产物。
-      # 幂等：softprops 对同 tag 已有 release 为 upsert 语义（重跑改写而非新建），
-      # 随后 uniqueness 断言钉住恰好 1 个。
-      - name: Create Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          name: Release v${{ steps.version.outputs.VERSION }}
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ steps.meta.outputs.PRERELEASE }}
+      # 幂等：view→create-or-edit 全状态幂等（softprops 对同 tag 存在过
+      # Draft 的场景会走 create 撞 already_exists，2026-10-16 实录）；
+      # uniqueness 断言随后钉住恰好 1 个。
+      - name: Create or update Release
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          TITLE="Release ${TAG#v}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --draft=false \
+              --prerelease="${{ steps.meta.outputs.PRERELEASE }}" --latest=false
+          else
+            gh release create "$TAG" --title "$TITLE" --generate-notes \
+              --draft=false --prerelease="${{ steps.meta.outputs.PRERELEASE }}" \
+              --latest=false
+          fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify release uniqueness (idempotency guard)
         run: |

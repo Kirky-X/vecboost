@@ -1,6 +1,12 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+// M0 矩阵消费 safetensors 权重（candle 路径专属格式，无 onnx bundle）：
+// onnx-primary 下 candle 转 opt-in feature，无 candle 的构建下本测试目标
+// 整体为空（先例 tests/candle_decision_parity.rs；onnx bundle 场景矩阵
+// 待模型资产就位后另立目标）
+#![cfg(feature = "candle")]
+
 //! SDK 场景集成测试 — 模型矩阵 + 正常/异常全场景
 //!
 //! 覆盖场景：

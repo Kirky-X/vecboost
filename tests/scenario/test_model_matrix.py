@@ -43,6 +43,8 @@ def _config_for(port: int, dirname: str, dim: int) -> str:
         "",
         "[model]",
         f'model_path = "{MODELS_DIR / dirname}"',
+        # onnx-primary：矩阵资产为 safetensors（candle 路径专属格式），显式钉 candle
+        'engine_type = "candle"',
         f"expected_dimension = {dim}",
         "",
         "[embedding]",

@@ -32,7 +32,11 @@ use std::time::Duration;
 // 本 target 只消费 free_port/model_ready；TestServer 等其余条目由 integration
 // target 消费——dead-code 按 target 计，显性 allow（grpc 特性开启时本 target
 // 含 mod common 但不用 TestServer，否则 -D warnings 误判）。
-#[allow(dead_code)]
+// 条件化：无 candle 构建下 common/mod.rs 自带文件级豁免（cfg_attr
+// not(candle)）已覆盖本 target 的剩余条目——双豁免叠加会触发
+// clippy::duplicated_attributes（onnx,grpc 组合实测），故此处仅
+// candle 构建下补 allow。
+#[cfg_attr(feature = "candle", allow(dead_code))]
 mod common;
 use common::{free_port, model_ready};
 
@@ -59,13 +63,24 @@ const ADMIN_PASS: &str = "GrpcE2e#2026Pass";
 type Client = SdForgeServiceClient<tonic::transport::Channel>;
 
 /// 需健康服务器的用例在模型缺席时的 SKIP 前置检查（返回 true 表示应提前 return）。
-/// 服务器配置固定以 M1 启动；M2 仅 model_switch 用例使用，本地 models/ 通常成套存在。
+/// 服务器配置固定以 M1 启动（onnx-primary 下按 feature 钉引擎，见 config_text）；
+/// M2 仅 model_switch 用例使用，本地 models/ 通常成套存在。
+/// onnx-primary（2026-10-16）：M1 是 safetensors（candle 路径专属格式），无
+/// candle 的构建需 onnx embedding bundle 才能起健康服务器（资产未就位）——
+/// 模型在但引擎/资产不匹配时同样 SKIP，与模型缺失同一守卫口径。
 fn skip_without_models(test_name: &str) -> bool {
     if model_ready(M1_PATH) {
-        return false;
+        if cfg!(feature = "candle") {
+            return false;
+        }
+        eprintln!(
+            "SKIP [{test_name}]: M1 为 safetensors 资产，无 candle 构建需 onnx \
+             embedding bundle（未就位），跳过需健康服务器的 gRPC E2E"
+        );
+        return true;
     }
     eprintln!(
-        "SKIP [{test_name}]: 本地模型缺失（models/ 未 checkout），跳过需健康服务器的 gRPC E2E"
+        "SKIP [{test_name}]: 本地模型缺失（models/ 未 checkout），跳过需健康 服务器的 gRPC E2E"
     );
     true
 }
@@ -190,6 +205,8 @@ struct ServerOpts {
     queue_max_size: Option<usize>,
     /// [model] 段整体替换（决策 bundle 测试：laya onnx + task=decision）
     model_section: Option<String>,
+    /// 额外配置段（追加在 [database] 后；转录测试注入 [transcribe]）
+    extra_sections: Option<String>,
 }
 
 struct RateLimitOpts {
@@ -235,8 +252,23 @@ fn config_text(http_port: u16, grpc_port: u16, dir: &std::path::Path, opts: &Ser
         .queue_max_size
         .map(|n| format!("[pipeline.queue]\nmax_queue_size = {n}\n\n"))
         .unwrap_or_default();
+    let extra_sections = opts.extra_sections.clone().unwrap_or_default();
     let model_section = opts.model_section.clone().unwrap_or_else(|| {
-        format!("[model]\nmodel_path = \"{M1_PATH}\"\nexpected_dimension = 384\n\n")
+        // 缺省模型资产是 safetensors（candle 路径专属格式）：engine_type 必须与
+        // 资产显式匹配（onnx-primary 下隐式默认已变 onnx，隐式不再可靠）——
+        // candle feature 在编译内时钉 candle（本地 e2e 主场景，rc.2 隐式
+        // 行为的显式化）；否则显式 onnx（M1 无 onnx bundle 时服务器以资产
+        // 缺失显性失败，比隐式默认更可诊断；onnx embedding bundle 就位前
+        // 无 candle 组合不适用本 e2e）
+        if cfg!(feature = "candle") {
+            format!(
+                "[model]\nmodel_path = \"{M1_PATH}\"\nengine_type = \"candle\"\nexpected_dimension = 384\n\n"
+            )
+        } else {
+            format!(
+                "[model]\nmodel_path = \"{M1_PATH}\"\nengine_type = \"onnx\"\nexpected_dimension = 384\n\n"
+            )
+        }
     });
     format!(
         "[server]\nhost = \"127.0.0.1\"\nport = {http_port}\n\
@@ -248,7 +280,8 @@ fn config_text(http_port: u16, grpc_port: u16, dir: &std::path::Path, opts: &Ser
          {rate_limit_section}\
          [auth]\nenabled = {}\n{}\n\
          [database]\nurl = \"sqlite::memory:\"\n\
-         {queue_section}",
+         {queue_section}\
+         {extra_sections}",
         dir.display(),
         MODELS_DIR,
         opts.auth,
@@ -1215,4 +1248,132 @@ async fn decision_normal_200_without_rate_limit_headers_and_metrics_visible() {
             "/metrics must expose {metric}"
         );
     }
+}
+
+/// 决策 gRPC 方法（`vecboost.decide`，sdforge 统一 Call 协议）：与 HTTP
+/// `/api/1/decisions` 同管线（DecisionService 单源，协议差异不得改变语义）。
+/// noul 题型真机推理 → status_code 200 + answers 结构与 HTTP 面同形；
+/// 钉住决策双协议面（HTTP 由上一测试覆盖）。
+#[cfg(feature = "onnx")]
+#[tokio::test]
+async fn grpc_decision_method_normal() {
+    if !decision_assets_ready() {
+        eprintln!(
+            "SKIP [grpc_decision_method_normal]: models/laya bundle 或 onnxruntime 动态库缺失"
+        );
+        return;
+    }
+    let server = spawn_server(
+        "grpc-decision-method",
+        &ServerOpts {
+            model_section: Some(decision_model_section()),
+            ..Default::default()
+        },
+        &[("ORT_DYLIB_PATH", ORT_DYLIB_PATH)],
+    );
+    let mut client = connect_grpc(server.grpc_port).await;
+    let resp = call(&mut client, "vecboost.decide", &decision_noul_body())
+        .await
+        .expect("gRPC decisions 调用必须成功");
+    assert_eq!(
+        resp["grpc_status_code"], 200,
+        "决策 gRPC 应 200（与 HTTP 同管道）: {resp}"
+    );
+    assert_eq!(
+        resp["grpc_success"], true,
+        "决策 gRPC success 标志应为 true: {resp}"
+    );
+    let answers = resp["answers"].as_array().expect("answers array");
+    assert_eq!(answers.len(), 1, "one question answered");
+    assert_eq!(answers[0]["question"], "confident");
+    assert_eq!(answers[0]["answer"]["type"], "noul");
+    assert!(
+        answers[0]["answer"]["p_true"].is_number(),
+        "noul answer must carry numeric p_true: {}",
+        answers[0]["answer"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 转录 gRPC（feature transcribe）
+// ---------------------------------------------------------------------------
+
+/// 16-bit PCM mono WAV → f32 样本（最小解析：遍历 RIFF chunk 定位 `data`；
+/// 转录测试专用，不引入 dev 依赖）。
+#[cfg(feature = "transcribe")]
+fn read_wav_f32(path: &std::path::Path) -> Option<Vec<f32>> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut pos = 12usize;
+    while pos + 8 <= bytes.len() {
+        let id = &bytes[pos..pos + 4];
+        let size = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().ok()?) as usize;
+        let body = pos + 8;
+        if id == b"data" {
+            let end = (body + size).min(bytes.len());
+            let count = (end - body) / 2;
+            let mut out = Vec::with_capacity(count);
+            for i in 0..count {
+                let s = i16::from_le_bytes([bytes[body + i * 2], bytes[body + i * 2 + 1]]);
+                out.push(s as f32 / 32768.0);
+            }
+            return Some(out);
+        }
+        pos = body + size + (size & 1);
+    }
+    None
+}
+
+/// 转录 gRPC 方法（`vecboost.transcribe`，sdforge 统一 Call 协议）：与 HTTP
+/// `/api/1/transcribe` 同管线。**3s 切片**（JSON ≈0.83MB < sdforge Call 层
+/// 1MB 应用上限（`arguments payload size exceeds maximum allowed size`，
+/// 实测先例）——请求体量受协议约束）；更大体量（48s ≈14MB）由 HTTP 面
+/// 覆盖（场景 test_transcribe TR-04，body_limit_mb 配置路径）。
+#[cfg(feature = "transcribe")]
+#[tokio::test]
+async fn grpc_transcribe_method_normal() {
+    let models_dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/models"));
+    let wav = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/audio48s.wav"));
+    if !models_dir.join("qwen3-conv_frontend.onnx").exists()
+        || !models_dir.join("silero_vad.onnx").exists()
+        || !wav.exists()
+        || !std::path::Path::new(ORT_DYLIB_PATH).exists()
+    {
+        eprintln!("SKIP [grpc_transcribe_method_normal]: 转录资产或 ORT 动态库缺失");
+        return;
+    }
+    let mut samples = read_wav_f32(&wav).expect("样例 WAV 必须可解析");
+    samples.truncate(16000 * 3);
+    let body = serde_json::json!({ "samples": samples }).to_string();
+
+    let server = spawn_server(
+        "grpc-transcribe",
+        &ServerOpts {
+            // [transcribe] 段经 extra_sections 注入（config_text 尾部追加）
+            extra_sections: Some(format!(
+                "[transcribe]\nenabled = true\nmodels_dir = \"{}\"\nvad_threshold = 0.5\n",
+                models_dir.display()
+            )),
+            ..Default::default()
+        },
+        &[("ORT_DYLIB_PATH", ORT_DYLIB_PATH)],
+    );
+    let mut client = connect_grpc(server.grpc_port).await;
+    let resp = call(&mut client, "vecboost.transcribe", &body)
+        .await
+        .expect("gRPC transcribe 调用必须成功");
+    assert_eq!(
+        resp["grpc_status_code"], 200,
+        "转录 gRPC 应 200（与 HTTP 同管道）"
+    );
+    assert!(
+        resp["text"].as_str().is_some_and(|t| !t.trim().is_empty()),
+        "转录文本不得为空"
+    );
+    assert!(
+        resp["segments"].as_array().is_some_and(|a| !a.is_empty()),
+        "转录段不得为空"
+    );
 }

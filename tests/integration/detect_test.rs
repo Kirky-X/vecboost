@@ -57,9 +57,16 @@ fn config_text(http_port: u16, opts: &ServerOpts) -> String {
         None => "[rate_limit]\nenabled = false\n\n".to_string(),
     };
     format!(
+        // onnx-primary：M1 是 safetensors（candle 路径专属格式），engine_type 必须
+        // 显式钉（隐式默认已变 onnx）；本模块已随 integration.rs 的 candle 门运行
         "[server]\nhost = \"127.0.0.1\"\nport = {http_port}\n\
          grpc_enabled = false\n\n\
-         [model]\nmodel_path = \"{MODEL_PATH}\"\nexpected_dimension = 384\n\n\
+         [model]
+model_path = \"{MODEL_PATH}\"
+engine_type = \"candle\"
+expected_dimension = 384
+
+\
          [embedding]\ncache_enabled = true\n\n\
          {rate_limit_section}\
          [auth]\nenabled = {}\n{}\n\

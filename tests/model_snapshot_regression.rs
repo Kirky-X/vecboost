@@ -1,6 +1,11 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+// 快照消费 safetensors 权重（candle 路径专属格式）：onnx-primary 下
+// candle 转 opt-in feature，无 candle 的构建下本测试目标整体为空
+// （先例 tests/candle_decision_parity.rs）
+#![cfg(feature = "candle")]
+
 //! 本地模型快照回归测试
 //!
 //! 对 models/ 下 4 个本地模型(缺席自动 SKIP)各取固定输入断言:

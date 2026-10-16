@@ -7,6 +7,7 @@
 
 ## 📋 目录
 
+- [Unreleased](#unreleased)
 - [0.3.0-rc.2 - 2026-10-15](#030-rc2---2026-10-15)
 - [0.3.0-rc.1 - 2026-09-22](#unreleased)
 - [0.2.1 - 2026-07-30](#021---2026-07-30)
@@ -14,6 +15,46 @@
 - [0.1.2 - 2026-01-16](#012---2026-01-16)
 - [0.1.1 - 2026-01-15](#011---2026-01-15)
 - [0.1.0 - 2026-01-10](#010---2026-01-10)
+
+---
+
+<a id="unreleased"></a>
+
+## [Unreleased]
+
+### 变更
+
+- **主推理引擎切换为 onnxruntime（ort），candle 降为 opt-in 回退后端（onnx-primary）**：
+  - `default = ["http", "onnx"]`——默认构建即 ort 主引擎且依赖树不再含 candle（zip 解析风险随之出树；candle 三件套转 optional，暂指 fork `Kirky-X/candle@zip9-optional`，官方 0.11.1 发布后切回）
+  - `EngineType` 枚举与全部 task 路由语义不变（wire/API 契约零变化）；未启用 `candle` feature 而配置 `engine_type="candle"` 时启动期显性拒绝（`startup-engine-candle-not-compiled`，禁止静默降级）
+  - **迁移提示**：旧配置 `model_path` 指向 safetensors 目录（无 `engine_type` 字段）升级后启动报错——需显式 `engine_type = "candle"` 并以 `--features candle` 构建，或迁移至 onnx bundle
+  - feature 语义调整：`cuda` 不再隐含 candle GPU 后端（需叠加 `candle-cuda`）；`metal`/`mkl`/`accelerate`/`quantized-gguf` 均隐含 `candle`；`transcribe` 仍经 `ort/cuda`（不受影响）
+- **缺省 HTTP body 上限实际值 2MB→5MB**：修复隐藏硬顶后 `body_limit_mb`（缺省 5）真实生效（此前提取器层 2MB 先于配置拒绝）
+- **审计日志 DB 模式新增文件双写**：db 构建下 `logs/audit.log`（轮转）与 `audit_logs` 表并存（此前仅写表，文件运维可观测面缺失）
+- **并发同文请求合并（in-flight 去重）**：pipeline 入口对同文同 normalize 请求只推理一次，结果副本多播——同文并发逐位一致由「只算一次」结构性保证
+
+### 修复
+
+- **onnx embedding 真机路径三处兼容缺陷**（此前无真实资产测试，基准真机首跑暴露）：单条输入 rank-1→`[1, seq]` 二维（标准 BERT ONNX 图规格）；三输入图（optimum/transformers.js 导出）按 `session.inputs()` 探测补喂全零 `token_type_ids`；rank-2 输入对应 rank-3 输出索引口径对齐
+- **onnx embedding pooling 硬编码 mean**（对 BGE 系静默改变语义且 `ModelConfig.pooling_mode` 配置无效）→ 构造期按模型名推断（与 candle 同一 `infer_pooling_mode` 单一事实源）+ Cls/Mean/Max 三模式支持；修复后同源双导出逐文本余弦 = 1.000000
+- **onnx HF 拉取不兼容 `onnx/` 子目录 repo**（Xenova 风格直连必失败）→ 候选链 `model.onnx → onnx/model.onnx → model_quantized.onnx → onnx/model_quantized.onnx`
+- **axum 提取器层 `DefaultBodyLimit` 2MB 硬顶**掩盖 `[server].body_limit_mb` 配置（>2MiB 静默失效，转录 48s 音频 413）→ 两层限制统一到同一配置口径
+- **FT-03 并发同文位级不一致**：min_workers>1 下同文落多批、GEMM 批形状差异致位级漂移→ in-flight 去重结构性修复
+- **R-auth-009c 限流审计文件面缺失**：db 构建走 DB-only 写入，场景锚定 `logs/audit.log` 恒空 → DB 双写修复
+- 引擎工厂测试隔离缺陷：`test_create_decision_task_dispatches_to_candle_engine` 断言依赖 i18n 初始化顺序 → 显式 `i18n::init()`
+
+### 质量与测试
+
+- **跨引擎对账基线**：embedding 精度（同源双导出逐文本余弦，阈 0.999）、决策精度（|Δlogit| ≤ 1e-4，既有 parity 闸门）、决策延迟观测（candle 455ms vs onnx 118ms/题，informational）
+- **性能基准**（同机 CPU，criterion）：embedding 单条 onnx 2.89ms vs candle 71.99ms（~25×）、batch×32 27.65ms vs 176.32ms（~6.4×）；`embed_throughput_bench` 支持 `VECBOOST_BENCH_ENGINE` 引擎选择 + ID 含引擎名 + `expect` 防「快速失败假性能」
+- **新增测试**：`onnx_embed_e2e`（真机 embedding 契约与单条-批量一致性）、`engine_backend_parity`（精度对账 + 性能观测）、场景 `test_transcribe.py`（HTTP 转录 e2e：真机 ASR/体量/防线 4 用例）、gRPC `vecboost.decide`/`vecboost.transcribe` 方法测试
+- **测试基建修复**：场景 conftest 二进制路径动态推导（修 worktree 测错目标）、集成/场景配置模板显式 `engine_type`、`scripts/link-assets.sh`（worktree 资产链接）、`download_model --onnx/--translate`（embedding/翻译 bundle 资产获取）
+
+### 已知限制
+
+- 翻译 golden 闸门（`translate_e2e`）需 en-zh + en-es 双 bundle（后者可经 `--translate Xenova/opus-mt-en-es` 获取）；en-zh 真机断言已由集成测试覆盖
+- gRPC 转录请求受 sdforge Call 层 1MB 应用上限约束（大音频走 HTTP 面）；`samples` 数组协议对大音频（48s≈14MB JSON）不友好，流式/分片传输待协议演进
+- candle 单条前向在其 CPU 实现下固有较慢（batch 摊销前 ~85ms@bge-small），已降为回退后端不投入优化
 
 ---
 

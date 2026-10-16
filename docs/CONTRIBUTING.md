@@ -52,6 +52,20 @@ cargo check -p vecboost --features mcp
 
 三层性能测试栈的职责划分与场景穷举见 [docs/TEST_SCENARIOS.md](TEST_SCENARIOS.md)。
 
+### worktree 开发：测试资产准备
+
+大体积资产（`models/`、`3rdparty/`、`assets/`）均不入库（gitignore），
+相关测试（真机推理、场景套件、ORT 动态库）在资产缺席时按守卫 SKIP。
+在 git worktree 中需要真跑这些测试时：
+
+```bash
+bash scripts/link-assets.sh   # 自动探测主工作区并符号链接三类资产
+# 清除: rm models 3rdparty assets
+```
+
+注意：符号链接不被 `.gitignore` 的 `models/`（尾斜杠仅匹配目录）模式
+匹配——`git status` 会显示为 untracked，不要 `git add`。
+
 ## ✅ 质量门禁(提交前必须全绿)
 
 ```bash

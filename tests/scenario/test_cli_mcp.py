@@ -31,6 +31,8 @@ port = 39391
 
 [model]
 model_path = "{m1}"
+# onnx-primary：M1 为 safetensors（candle 路径专属格式），显式钉 candle
+engine_type = "candle"
 expected_dimension = 384
 
 [rate_limit]

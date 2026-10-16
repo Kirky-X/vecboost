@@ -1,6 +1,12 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+// onnx-primary：TestServer/model_ready/free_port 的消费者（detect/translate
+// 模块与 grpc_e2e 服务器用例）随 feature 门控/资产守卫分布——无 candle 的
+// integration 构建下部分符号无消费者，dead_code 豁免（grpc_e2e 目标下
+// 这些符号仍被使用，豁免幂等无害）
+#![cfg_attr(not(feature = "candle"), allow(dead_code))]
+
 //! 共享测试 fixtures
 //!
 //! 提供集成测试与性能测试共用的工具函数、`MockEngine` 与 `RealTestEngine`。

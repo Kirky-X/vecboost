@@ -1,10 +1,11 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-// 对拍侧 EngineType::Onnx 挂 onnx feature 门：无 onnx feature 的构建下本
-// 测试目标整体为空（feature 门盲区惯例，`cargo check --features
-// quantized-gguf --tests` 不受影响）
-#![cfg(feature = "onnx")]
+// 对拍侧双引擎门：onnx（DecisionPipeline）与 candle（原生决策头）均
+// 在编译内时本测试目标才有对拍语义（onnx-primary 下 candle 为 opt-in
+// feature）；无任一 feature 的构建下整体为空（feature 门盲区惯例，
+// `cargo check --features quantized-gguf --tests` 不受影响）
+#![cfg(all(feature = "onnx", feature = "candle"))]
 
 //! 对齐闸门（spec R-candle-decision-head-003）：candle 原生决策头与 onnx
 //! `DecisionPipeline` 同题对照，choice（≥3 选项）/score/noul 各一题，断言

@@ -116,6 +116,10 @@ def make_config(
     lines += [
         f"use_gpu = {'true' if use_gpu else 'false'}",
         f"expected_dimension = {dim}",
+        # 场景资产是 safetensors（candle 路径专属格式）：onnx-primary 下
+        # 默认引擎为 onnx，需显式钉 candle（配套 build 需 --features candle，
+        # 见 scripts/run-scenario-tests.sh）；onnx bundle 场景待资产就位
+        'engine_type = "candle"',
         "",
         "[embedding]",
         "cache_enabled = true",
@@ -177,7 +181,7 @@ def spawn_server(name: str, port: int, config_text: str, env_extra: dict | None 
     log = open(d / "server.log", "ab")
     try:
         proc = subprocess.Popen(
-            ["/home/kirky/projects/vecboost/target/debug/vecboost"],
+            [str(PROJECT_ROOT / "target" / "debug" / "vecboost")],
             cwd=d, stdout=log, stderr=subprocess.STDOUT, env=env, shell=False)
     finally:
         # 子进程已 dup 该 fd,关闭父副本避免 ResourceWarning(零告警门禁)
@@ -230,7 +234,7 @@ def probe_lifecycle(name: str, port: int, config_text: str, env_extra: dict | No
     log = open(d / "server.log", "ab")
     try:
         proc = subprocess.Popen(
-            ["/home/kirky/projects/vecboost/target/debug/vecboost"],
+            [str(PROJECT_ROOT / "target" / "debug" / "vecboost")],
             cwd=d, stdout=log, stderr=subprocess.STDOUT, env=env, shell=False)
     finally:
         log.close()

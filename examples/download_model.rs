@@ -29,6 +29,16 @@ const FULL_MODEL_FILES: &[&str] = &[
     "config_sentence_transformers.json",
 ];
 
+// ONNX 推理引擎资产（onnx-primary 主引擎；`onnx/model.onnx` 为 HF repo
+// 惯例子路径，落盘时经 file_name() 平铺到 bundle 根——与 onnx_engine
+// resolve_local_bundle 的根级 model.onnx 探测口径一致）
+const ONNX_MODEL_FILES: &[&str] = &[
+    "config.json",
+    "tokenizer.json",
+    "special_tokens_map.json",
+    "onnx/model.onnx",
+];
+
 fn print_usage() {
     println!(
         r#"VecBoost 模型下载工具
@@ -42,6 +52,8 @@ fn print_usage() {
     println!(
         r#"  --small             下载测试用的小模型 (BAAI/bge-small-en-v1.5)
   --full                下载完整模型 (BAAI/bge-m3)
+  --onnx <MODEL_ID>     下载 ONNX 资产到 embedding bundle 布局（如 Xenova/bge-small-en-v1.5）
+  --translate <MODEL_ID> 下载翻译 bundle（保留 onnx/ 子目录，落盘 models/<短名>）
   --list                列出支持的模型
   --help, -h            显示此帮助信息
 
@@ -115,6 +127,20 @@ async fn main() {
                 println!("=== VecBoost 模型下载工具 ===\n");
                 println!("下载模型: {}", model_id);
                 download_model(model_id, files).await;
+                return;
+            }
+            "--onnx" if args.len() > 2 => {
+                let model_id = &args[2];
+                println!("=== VecBoost 模型下载工具 ===\n");
+                println!("下载 ONNX 资产（embedding bundle 布局）: {}", model_id);
+                download_model(model_id, ONNX_MODEL_FILES).await;
+                return;
+            }
+            "--translate" if args.len() > 2 => {
+                let model_id = &args[2];
+                println!("=== VecBoost 模型下载工具 ===\n");
+                println!("下载翻译 bundle（保留 onnx/ 子目录结构）: {}", model_id);
+                download_translate_bundle(model_id).await;
                 return;
             }
             _ => {
@@ -194,4 +220,61 @@ async fn download_model(model_id: &str, files: &[&str]) {
     println!();
     println!("使用方法:");
     println!("  cargo run --release -- --model-path {:?}", output_dir);
+}
+
+/// 翻译 bundle 下载：经 `utils::hf_hub::download_files`（远端相对路径原样
+/// 落位，`onnx/` 子目录对齐 onnx_translate 探测契约）；落盘 `models/<短名>`
+/// （如 Xenova/opus-mt-en-es → `models/opus-mt-en-es`，对齐 translate_e2e
+/// 与 config 的 model_path 约定）。取 TRANSLATE_BUNDLE_FILES 的 fp32 子集
+/// （引擎探测 fp32 优先，quantized 仅作冢底；不上传 quantized 的 repo 也
+/// 能完整可用）。
+async fn download_translate_bundle(model_id: &str) {
+    if !vecboost::utils::hf_hub::is_valid_hf_repo_id(model_id) {
+        eprintln!(
+            "错误: 无效的 HuggingFace 模型 ID '{}': 必须符合 '组织/模型名' 格式，",
+            model_id
+        );
+        eprintln!("仅允许字母、数字、'-'、'_'、'.' 字符，禁止 '..'、'//'、开头/结尾的 '/'");
+        return;
+    }
+    let short_name = model_id.rsplit('/').next().unwrap_or(model_id);
+    let output_dir = PathBuf::from("models").join(short_name);
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
+        eprintln!("创建输出目录失败: {}", e);
+        return;
+    }
+    println!();
+    println!("目标目录: {:?}", output_dir);
+    println!();
+
+    let files: Vec<(String, PathBuf)> = vecboost::utils::hf_hub::TRANSLATE_BUNDLE_FILES
+        .iter()
+        .filter(|f| !f.contains("quantized"))
+        .map(|f| (f.to_string(), PathBuf::from(f)))
+        .collect();
+    println!(
+        "开始下载翻译 bundle（{} 文件，保留 onnx/ 结构）...\n",
+        files.len()
+    );
+
+    match vecboost::utils::hf_hub::download_files(model_id, &files, &output_dir).await {
+        Ok(paths) => {
+            let mut total: u64 = 0;
+            for p in &paths {
+                let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+                total += size;
+                println!("  ✓ {} ({})", p.display(), format_size(size));
+            }
+            println!();
+            println!(
+                "下载完成! {} 文件，总大小 {}",
+                paths.len(),
+                format_size(total)
+            );
+            println!("模型文件位于: {:?}", output_dir);
+        }
+        Err(e) => {
+            eprintln!("下载失败: {}", e);
+        }
+    }
 }

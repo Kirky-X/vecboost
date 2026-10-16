@@ -104,9 +104,15 @@ dbnexus = { version = "0.6.0-rc.9", optional = true, default-features = false, f
 # inklog 无法编译;../base 侧修复前由 vecboost 侧补齐。
 
 # AI & Math (base)
-candle-core = { version = "0.11", default-features = false, features = [] }
-candle-nn = { version = "0.11", default-features = false }
-candle-transformers = { version = "0.11", default-features = false }
+# candle 转 optional（onnx-primary，2026-10-16）：主推理引擎切换为
+# onnxruntime（ort，见 `onnx` feature），candle 降级为 opt-in 回退后端
+# （feature `candle`），默认构建的依赖树不含 candle（zip 解析风险随之出树）。
+# candle 暂用 fork 分支（zip9-optional）：zip 8.6.0 被上游全量 yank 致 candle 0.11.0
+# 依赖树不可解析；fork 三改动=zip 升 9.0.3（3 处 API 适配）+ zip 改 optional 新增 feature
+# 门控（本仓 features=[] 不启用，依赖树彻底无 zip）。candle 0.11.1 发布后切回官方版。
+candle-core = { git = "https://github.com/Kirky-X/candle", branch = "zip9-optional", default-features = false, features = [], optional = true }
+candle-nn = { git = "https://github.com/Kirky-X/candle", branch = "zip9-optional", default-features = false, optional = true }
+candle-transformers = { git = "https://github.com/Kirky-X/candle", branch = "zip9-optional", default-features = false, optional = true }
 # hgemm_ 垫片（mkl feature，见 src/engine/mkl_shim.rs）：f16 类型 ABI 兼容层
 half = { version = "2.7", default-features = false, optional = true }
 hf-hub = { workspace = true }
@@ -164,8 +170,9 @@ ort = { version = "2.0.0-rc.14", optional = true, default-features = false }
 hound = { version = "3.5", optional = true, default-features = false }
 rustfft = { version = "6.4", optional = true, default-features = false }
 
-# CUDA feature (candle-core/cuda 传递依赖 cudarc 0.19,支持 CUDA 13)
-# 项目代码直接使用 cudarc driver API 进行 CUDA 内存管理
+# CUDA 设备支持：cudarc driver API（项目代码直接用其做 CUDA 内存管理）+
+# nvml GPU 检测，与推理后端正交——ort 侧经 transcribe（ort/cuda），
+# candle 侧经 candle-cuda。
 cudarc = { version = "0.19", optional = true, default-features = false, features = ["std", "driver", "cuda-version-from-build-system", "dynamic-linking"] }
 nvml-wrapper = { version = "0.13", optional = true, default-features = false }
 
@@ -207,7 +214,8 @@ tikv-jemalloc-ctl = { version = "0.7", default-features = false }
 
 
 [features]
-default = ["http"]
+# onnx-primary（2026-10-16）：默认构建即含 ort 主引擎（http 服务启动即用）
+default = ["http", "onnx"]
 
 # 协议特性 — 保留 cache/streaming/timestamp (轻量)，移除未接线的 logging/kit/inklog
 # sdforge/docs:Swagger UI(/api-docs);dep:dbnexus:在所有 http 构建中统一
@@ -240,18 +248,27 @@ postgres = ["db", "dbnexus/postgres", "inklog/postgres"]
 # 功能特性
 auth = ["dep:garrison", "dep:aes-gcm"]
 
-# 引擎特性
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:nvml-wrapper", "dep:cudarc"]
-metal = ["candle-core/metal", "candle-nn/metal"]
+# 引擎特性 — onnx-primary：ort 为默认主推理引擎；candle 降级 opt-in
+# 回退后端（显式 `--features candle` 启用）。EngineType 枚举两变体无条件
+# 保留（API/wire 契约不变），仅引擎实现按 feature 编译；未启用 candle 时
+# engine_type="candle" 配置在启动期显性拒绝（main.rs
+# resolve_engine_model_config，i18n 键 startup-engine-candle-rebuild-hint）。
 onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/load-dynamic", "dep:character_converter"]
+candle = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers"]
+# CUDA 设备支持（cudarc driver + nvml 检测，后端正交）；candle 的 CUDA
+# 计算后端单独经 candle-cuda（不随 cuda 隐含，避免 ort-only 用户被动拉 candle）。
+cuda = ["dep:nvml-wrapper", "dep:cudarc"]
+candle-cuda = ["candle", "candle-core/cuda", "candle-nn/cuda"]
+metal = ["candle", "candle-core/metal", "candle-nn/metal"]
 # 转录引擎（Qwen3-ASR 三图 + silero VAD）：ort/cuda 仅经此 feature 引入，不进 default
 transcribe = ["onnx", "ort/cuda", "dep:hound", "dep:rustfft"]
-# CPU 加速后端（opt-in；见上方 target 表注释）。
-mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl", "dep:half"]
-accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
-# GGUF 量化引擎开关。启用后编译 engine/quantized_engine.rs；
+# CPU 加速后端（candle 路径 opt-in；见上方 target 表注释）。
+mkl = ["candle", "candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl", "dep:half"]
+accelerate = ["candle", "candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
+# GGUF 量化引擎开关（加载期反量化桥实现于 candle 路径，故隐含 candle）。
+# 启用后编译 engine/quantized_engine.rs；
 # 推理后端待 candle 上游 quantized BERT 落地（见模块文档）。
-quantized-gguf = []
+quantized-gguf = ["candle"]
 character_converter = ["dep:character_converter"]
 
 # Binary target — main.rs 是 HTTP server 入口（axum::serve），

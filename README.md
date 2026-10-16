@@ -60,7 +60,7 @@
 <table style="width:100%; border-collapse: collapse">
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🚀 <b>高性能</b><br><span style="color:#64748B">优化的 Rust 代码库，支持批处理与并发请求处理；Linux 下默认启用 jemalloc 全局分配器</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">🔧 <b>多引擎支持</b><br><span style="color:#64748B"><code>Candle</code>（原生 Rust）和 <code>ONNX Runtime</code> 推理引擎，经 <code>EngineFactory</code> 工厂切换</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🔧 <b>多引擎支持</b><br><span style="color:#64748B"><code>ONNX Runtime</code>（默认）与 <code>Candle</code>（opt-in 回退）推理引擎，经 <code>EngineFactory</code> 工厂切换</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🔁 <b>Rerank 重排序</b><br><span style="color:#64748B">基于 bi-encoder 的文档重排序，HTTP/gRPC/CLI 三协议支持</span></td>
@@ -213,7 +213,7 @@ cargo run --features cli -- embed --req '{"text":"Hello, world!"}'
 
 ### 🧭 核心概念
 
-- **模型与引擎**：`ModelConfig` 声明 HuggingFace 模型（默认 `BAAI/bge-m3`，1024 维），`EngineFactory::create(engine_type, config)` 创建 `Candle`（默认）或 `ONNX`（`onnx` feature）引擎；支持 Bert / XlmRoberta 双架构与 mean/cls/max 池化。
+- **模型与引擎**：`ModelConfig` 声明 HuggingFace 模型（默认 `BAAI/bge-m3`，1024 维），`EngineFactory::create(engine_type, config)` 创建 `ONNX`（默认，`onnx` feature 随 default 启用）或 `Candle`（`candle` feature opt-in 回退）引擎；支持 Bert / XlmRoberta 双架构与 mean/cls/max 池化。
 - **四协议单一源**：`src/api/embedding.rs` 中的处理函数经 `#[forge(...)]` 宏标注，由 `sdforge` 生成 HTTP/gRPC/MCP/CLI 绑定，禁止手写协议代码。
 - **7 库生态**：`trait-kit` 以 typestate 模块注册中心（`Kit<Unbuilt> → Kit<Ready>`）装配全部模块；`confers` 接管配置、`inklog` 日志、`oxcache` 缓存、`limiteron` 限流、`dbnexus` 持久化（`db` feature）、`sdforge` 接口生成。
 - **配置优先级**：TOML 文件 + `VECBOOST_` 前缀环境变量覆盖（敏感项 `VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD` 必须走环境变量）；配置文件变更校验并打日志，重启后生效。
@@ -231,7 +231,7 @@ VecBoost 由 `sdforge` 从处理函数单一源生成四种协议接口（`src/a
 - **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 17 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto，含 `vecboost.translate` / `vecboost.detect`），JWT 认证、限流、最大连接数与超时均可配置；
 - **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露由 `#[forge(tool_name=…)]` 注册的工具，工具名为 `embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models` 等（注意 MCP `tool_name` 非 HTTP 端点名，完整清单见 [📘 API 参考](docs/API_REFERENCE.md)）；
 - **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect / transcribe 子命令（见 [💡 最小示例](#最小示例)；`transcribe` 子命令收 WAV 文件路径，读 16kHz 单声道样本）；
-- **推理引擎**：Candle（原生 Rust，默认）与 ONNX Runtime（`onnx` feature），经 `EngineFactory::create` 工厂切换；`[model]` 的 `engine_type` / `task` 配置驱动引擎与任务维度选择——`task = "embedding"`（默认）/ `task = "decision"`（Laya 决策管线）/ `task = "translate"`（seq2seq 翻译，仅 onnx）/ `task = "transcribe"`（Qwen3-ASR 转录，需 `transcribe` feature）四态，非当前任务的端点以 400 Unsupported task 显性拒绝（bundle 布局见 [`config/config.toml`](config/config.toml) `[model]` 段注释，翻译语言对见 `[translation]` 段）；
+- **推理引擎**：ONNX Runtime（默认，`onnx` feature 随 default 启用）与 Candle（`candle` feature opt-in 回退），经 `EngineFactory::create` 工厂切换；`[model]` 的 `engine_type` / `task` 配置驱动引擎与任务维度选择——`task = "embedding"`（默认）/ `task = "decision"`（Laya 决策管线）/ `task = "translate"`（seq2seq 翻译，仅 onnx）/ `task = "transcribe"`（Qwen3-ASR 转录，需 `transcribe` feature）四态，非当前任务的端点以 400 Unsupported task 显性拒绝（bundle 布局见 [`config/config.toml`](config/config.toml) `[model]` 段注释，翻译语言对见 `[translation]` 段）；
 - **可观测性与运维**：`/metrics`（Prometheus 指标）、`/health`（存活探针）与 `/health?depth=full`（真实就绪探测）、`/swagger-ui/`（交互式 OpenAPI 文档，需 `openapi`/`http` feature，规范 JSON 见 `/api-docs/openapi.json`）；只读诊断 `vecboost doctor`（config / tokenizer / 缓存 / 线程 / GPU / 模型完整性，FAIL 退出码 1）。
 
 翻译与语言检测请求示例（与 [API 参考](docs/API_REFERENCE.md) 字段一致）：
@@ -280,12 +280,14 @@ curl -X POST http://localhost:9002/api/1/detect \
 | `sqlite` | - | SQLite 数据库驱动（含 `db` + `dbnexus/sqlite` + `inklog/sqlite`） |
 | `postgres` | - | PostgreSQL 数据库驱动（含 `db` + `dbnexus/postgres` + `inklog/postgres`） |
 | `auth` | - | JWT 认证 + CSRF + RBAC + AES-256-GCM 加密 |
-| `cuda` | - | NVIDIA CUDA GPU 加速 |
-| `metal` | - | Apple Silicon Metal GPU |
-| `onnx` | - | ONNX Runtime 引擎 |
+| `cuda` | - | CUDA 设备支持（cudarc driver + nvml 检测，后端正交；candle 的 CUDA 后端另经 `candle-cuda`） |
+| `candle-cuda` | - | candle 后端的 CUDA 计算加速（含 `candle`） |
+| `metal` | - | Apple Silicon Metal GPU（candle 后端，含 `candle`） |
+| `onnx` | - | ONNX Runtime 引擎（**默认启用**，随 default） |
+| `candle` | - | candle 回退后端（opt-in：CandleEngine embedding / candle 决策头 / GGUF 量化桥；未启用时 `engine_type="candle"` 启动期显性拒绝） |
 | `transcribe` | - | Qwen3-ASR 转录引擎（三图 + silero VAD + fbank），库内 `InferenceEngine::transcribe` 入口；HTTP/gRPC 服务面已接线（`POST /api/1/transcribe`，`[transcribe]` 段装配） |
-| `mkl` | - | x86_64 CPU MKL 加速后端（opt-in，需链接正常的工具链） |
-| `accelerate` | - | aarch64 macOS Accelerate 加速后端（opt-in） |
+| `mkl` | - | x86_64 CPU MKL 加速后端（candle 路径 opt-in，含 `candle`；需链接正常的工具链） |
+| `accelerate` | - | aarch64 macOS Accelerate 加速后端（candle 路径 opt-in，含 `candle`） |
 | `quantized-gguf` | - | GGUF 量化引擎开关（推理后端待 candle 上游落地） |
 | `character_converter` | - | 独立启用 `character_converter` 字符转换依赖（`onnx` feature 已隐含启用） |
 
@@ -513,7 +515,8 @@ VecBoost 站在以下优秀开源项目的肩膀上：
 
 | 依赖 | 用途 |
 |------|------|
-| [candle](https://github.com/huggingface/candle) | 原生 Rust ML 推理框架（默认引擎） |
+| [onnxruntime](https://github.com/microsoft/onnxruntime) | 跨平台推理运行时（默认引擎，经 [`ort`](https://crates.io/crates/ort) 绑定 + `load-dynamic` 加载 `3rdparty/` 动态库） |
+| [candle](https://github.com/huggingface/candle) | 原生 Rust ML 推理框架（opt-in 回退后端，`candle` feature） |
 | [tokenizers](https://github.com/huggingface/tokenizers) | HuggingFace 分词器（全平台统一） |
 | [hf-hub](https://crates.io/crates/hf-hub) | HuggingFace Hub 模型下载 |
 | [trait-kit](https://crates.io/crates/trait-kit) | 模块注册中心与 typestate 依赖管理 |

@@ -233,6 +233,8 @@ doctor-gguf-bad-magic = invalid gguf magic (got { $got }, expected GGUF): { $pat
 # ── Startup fail-fast / thread-tune banner (main.rs stderr) ──
 startup-engine-type-unknown = [model] engine_type has unknown value "{ $got }"{ $hint }, supported: candle, onnx
 startup-engine-onnx-rebuild-hint = (engine_type="onnx" requires rebuilding with --features onnx)
+# onnx-primary: engine_type="candle" is explicitly rejected in builds without the `candle` feature (candle is an opt-in fallback backend)
+startup-engine-candle-not-compiled = [model] engine_type="candle" but this build did not compile the candle backend (onnx-primary defaults to the onnx engine); rebuild with `--features candle`, or remove the engine_type config to use the default onnx engine
 startup-semantic-mode-invalid = [semantic_cache] comparison_mode invalid: { $detail }
 startup-translation-no-onnx = [translation] pairs configured but this build did not enable the `onnx` feature; rebuild with --features onnx
 startup-translate-pair-invalid = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) invalid parameters: { $detail }

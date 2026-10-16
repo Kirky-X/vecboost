@@ -60,7 +60,7 @@ Interface handlers are written just once; `sdforge` macros generate all four pro
 <table style="width:100%; border-collapse: collapse">
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🚀 <b>High Performance</b><br><span style="color:#64748B">Optimized Rust codebase with batching and concurrent request processing; jemalloc global allocator enabled by default on Linux</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">🔧 <b>Multiple Engines</b><br><span style="color:#64748B"><code>Candle</code> (native Rust) and <code>ONNX Runtime</code> inference engines, switchable via <code>EngineFactory</code></span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🔧 <b>Multiple Engines</b><br><span style="color:#64748B"><code>ONNX Runtime</code> (default) and <code>Candle</code> (opt-in fallback) inference engines, switchable via <code>EngineFactory</code></span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🔁 <b>Rerank</b><br><span style="color:#64748B">Bi-encoder based document reranking over HTTP/gRPC/CLI</span></td>
@@ -185,7 +185,7 @@ cargo run --features cli -- embed --req '{"text":"Hello, world!"}'
 
 ### 🧭 Core Concepts
 
-- **Models & engines**: `ModelConfig` declares a HuggingFace model (code default `BAAI/bge-m3`, 1024 dims; the shipped `config/config.toml` explicitly sets `BAAI/bge-small-en-v1.5`); `EngineFactory::create(engine_type, config)` creates a `Candle` (default) or `ONNX` (`onnx` feature) engine; Bert / XlmRoberta architectures and mean/cls/max pooling are supported.
+- **Models & engines**: `ModelConfig` declares a HuggingFace model (code default `BAAI/bge-m3`, 1024 dims; the shipped `config/config.toml` explicitly sets `BAAI/bge-small-en-v1.5`); `EngineFactory::create(engine_type, config)` creates an `ONNX` (default, `onnx` feature enabled via default features) or `Candle` (`candle` feature opt-in fallback) engine; Bert / XlmRoberta architectures and mean/cls/max pooling are supported.
 - **Four protocols, one source**: handlers in `src/api/embedding.rs` are annotated with `#[forge(...)]` macros; `sdforge` generates the HTTP/gRPC/MCP/CLI bindings. Hand-written protocol code is forbidden.
 - **7-library ecosystem**: `trait-kit` wires all modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`); `confers` owns configuration, `inklog` logging, `oxcache` caching, `limiteron` rate limiting, `dbnexus` persistence (`db` feature), and `sdforge` interface generation.
 - **Configuration precedence**: TOML file + `VECBOOST_`-prefixed environment variable overrides (secrets such as `VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD` must be provided via env vars); config file changes are validated and logged, taking effect after restart.
@@ -203,7 +203,7 @@ VecBoost generates its four protocol interfaces from single-source handlers via 
 - **gRPC**: with the `grpc` feature, 17 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — including `vecboost.translate` / `vecboost.detect`, with JWT auth, rate limiting, max connections, and timeouts all configurable;
 - **MCP**: the `mcp` feature exposes tools registered by `#[forge(tool_name=…)]` to LLMs over stdio (`vecboost --mcp`) — tool names are `embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models`, etc. (MCP `tool_name` is not the HTTP endpoint name; the full list is in the [📘 API Reference](docs/API_REFERENCE.md));
 - **CLI**: the `cli` feature provides the embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect / transcribe subcommands (see [💡 Minimal Example](#minimal-example); the `transcribe` subcommand takes a WAV file path and reads 16kHz mono samples);
-- **Inference engines**: Candle (native Rust, default) and ONNX Runtime (`onnx` feature), switched via the `EngineFactory::create` factory; the `[model]` `engine_type` / `task` configuration drives engine and task-dimension selection — `task = "embedding"` (default) / `task = "decision"` (Laya decision pipeline) / `task = "translate"` (seq2seq translation, onnx only) / `task = "transcribe"` (Qwen3-ASR transcription, `transcribe` feature); endpoints of non-current tasks respond with 400 Unsupported task (bundle layouts in [`config/config.toml`](config/config.toml) `[model]` comments, translation pairs in the `[translation]` section);
+- **Inference engines**: ONNX Runtime (default, `onnx` feature enabled via default features) and Candle (`candle` feature opt-in fallback), switched via the `EngineFactory::create` factory; the `[model]` `engine_type` / `task` configuration drives engine and task-dimension selection — `task = "embedding"` (default) / `task = "decision"` (Laya decision pipeline) / `task = "translate"` (seq2seq translation, onnx only) / `task = "transcribe"` (Qwen3-ASR transcription, `transcribe` feature); endpoints of non-current tasks respond with 400 Unsupported task (bundle layouts in [`config/config.toml`](config/config.toml) `[model]` comments, translation pairs in the `[translation]` section);
 - **Observability & operations**: `/metrics` (Prometheus), `/health` (liveness) and `/health?depth=full` (real readiness probe), `/swagger-ui/` (interactive OpenAPI docs, requires the `openapi`/`http` feature; spec JSON at `/api-docs/openapi.json`); read-only diagnostics with `vecboost doctor` (config / tokenizer / cache / threads / GPU / model integrity; exit code 1 on FAIL).
 
 Translation and language detection request examples (fields match the [API Reference](docs/API_REFERENCE.md)):
@@ -252,12 +252,14 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 | `sqlite` | - | SQLite database driver (implies `db` + `dbnexus/sqlite` + `inklog/sqlite`) |
 | `postgres` | - | PostgreSQL database driver (implies `db` + `dbnexus/postgres` + `inklog/postgres`) |
 | `auth` | - | JWT auth + CSRF + RBAC + AES-256-GCM encryption |
-| `cuda` | - | NVIDIA CUDA GPU acceleration |
-| `metal` | - | Apple Silicon Metal GPU |
-| `onnx` | - | ONNX Runtime engine |
+| `cuda` | - | CUDA device support (cudarc driver + nvml detection, backend-agnostic; candle's CUDA compute backend goes through `candle-cuda`) |
+| `candle-cuda` | - | CUDA compute acceleration for the candle backend (implies `candle`) |
+| `metal` | - | Apple Silicon Metal GPU (candle backend, implies `candle`) |
+| `onnx` | - | ONNX Runtime engine (**enabled by default**, part of default features) |
+| `candle` | - | candle fallback backend (opt-in: CandleEngine embedding / candle decision head / GGUF quantization bridge; `engine_type="candle"` is explicitly rejected at startup when not enabled) |
 | `transcribe` | - | Qwen3-ASR transcription engine (three-graph + silero VAD + fbank), library-level `InferenceEngine::transcribe` entry; HTTP/gRPC endpoints wired (`POST /api/1/transcribe`, configured under `[transcribe]`) |
-| `mkl` | - | x86_64 CPU MKL acceleration backend (opt-in; requires a toolchain that links cleanly) |
-| `accelerate` | - | aarch64 macOS Accelerate backend (opt-in) |
+| `mkl` | - | x86_64 CPU MKL acceleration backend (candle-path opt-in, implies `candle`; requires a toolchain that links cleanly) |
+| `accelerate` | - | aarch64 macOS Accelerate backend (candle-path opt-in, implies `candle`) |
 | `quantized-gguf` | - | GGUF quantization engine switch (inference backend pending upstream candle support) |
 | `character_converter` | - | Enable the `character_converter` character-conversion dependency standalone (already implied by `onnx`) |
 
@@ -485,7 +487,8 @@ VecBoost stands on the shoulders of these excellent open-source projects:
 
 | Dependency | Purpose |
 |------|------|
-| [candle](https://github.com/huggingface/candle) | Native Rust ML inference framework (default engine) |
+| [onnxruntime](https://github.com/microsoft/onnxruntime) | Cross-platform inference runtime (default engine, via the [`ort`](https://crates.io/crates/ort) binding with `load-dynamic` loading the `3rdparty/` shared library) |
+| [candle](https://github.com/huggingface/candle) | Native Rust ML inference framework (opt-in fallback backend, `candle` feature) |
 | [tokenizers](https://github.com/huggingface/tokenizers) | HuggingFace tokenizer (all platforms) |
 | [hf-hub](https://crates.io/crates/hf-hub) | HuggingFace Hub model downloads |
 | [trait-kit](https://crates.io/crates/trait-kit) | Module registry & typestate dependency management |

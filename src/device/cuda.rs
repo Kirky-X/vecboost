@@ -185,18 +185,21 @@ impl CudaDeviceManager {
     }
 
     async fn detect_cuda_devices(&self) -> Result<Vec<CudaDevice>, String> {
-        #[cfg(feature = "cuda")]
+        // candle 探测臂要求 candle 回退后端在编译内（onnx-primary 下 cuda
+        // feature 不再隐含 candle-core，candle-core 本身转 optional）；仅
+        // cuda（cudarc/nvml，ort 侧）构建回退 nvidia-smi compatible 链
+        #[cfg(all(feature = "cuda", feature = "candle"))]
         {
             self.detect_with_candle().await
         }
 
-        #[cfg(not(feature = "cuda"))]
+        #[cfg(not(all(feature = "cuda", feature = "candle")))]
         {
             Ok(self.detect_compatible().await)
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", feature = "candle"))]
     async fn detect_with_candle(&self) -> Result<Vec<CudaDevice>, String> {
         match candle_core::Device::cuda_if_available(0) {
             Ok(_device) => {

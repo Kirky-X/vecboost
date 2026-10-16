@@ -288,12 +288,41 @@ async fn init_db_pool(
 }
 
 /// 引擎级 `ModelConfig` 装配（装配三问①：`[model]` 配置面 → 运行时
-/// ModelConfig）。`[model].engine_type` 未知值启动期显性报错；
+/// ModelConfig）。onnx-primary：`[model].engine_type` 未配置时默认 onnx
+/// （主推理引擎 ort）；`"candle"` 需 feature `candle` 显式启用，未编译时
+/// 启动期显性拒绝（禁止静默降级 onnx）。未知值启动期显性报错；
 /// `[model].tokenizer_path` 仅用户显式配置时注入，路径缺失在引擎加载期
 /// 显性报错，不代赋。
 fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelConfig> {
     let engine_type = match config.model.engine_type.as_deref() {
-        None | Some("candle") => EngineType::Candle,
+        // 未配置 → 默认主引擎 onnx；仅 onnx feature 缺席的定制构建
+        // （--no-default-features）才落 candle 变体（该值在工厂加载期
+        // 显性拒绝，行为与显式配置 candle 一致）
+        None => {
+            #[cfg(feature = "onnx")]
+            {
+                EngineType::Onnx
+            }
+            #[cfg(not(feature = "onnx"))]
+            {
+                EngineType::Candle
+            }
+        }
+        Some("candle") => {
+            // candle 回退后端 opt-in：未编译时启动期显性拒绝（禁止静默降级
+            // onnx——engine_type 是用户显式选择）
+            #[cfg(feature = "candle")]
+            {
+                EngineType::Candle
+            }
+            #[cfg(not(feature = "candle"))]
+            {
+                anyhow::bail!(
+                    "{}",
+                    vecboost::i18n::tr("startup-engine-candle-not-compiled")
+                );
+            }
+        }
         #[cfg(feature = "onnx")]
         Some("onnx") => EngineType::Onnx,
         Some(other) => {
@@ -2287,9 +2316,15 @@ fn apply_auth_middlewares(
 fn apply_transport_layers(app: axum::Router, config: &VecboostConfig) -> axum::Router {
     // 安全 headers + trace
     // 请求体大小上限(默认 5 MiB,防超大 payload DoS)
+    let body_limit_bytes = config.server.body_limit_mb.max(1) as usize * 1024 * 1024;
     let app = app.layer(tower_http::limit::RequestBodyLimitLayer::new(
-        config.server.body_limit_mb.max(1) as usize * 1024 * 1024,
+        body_limit_bytes,
     ));
+    // axum 提取器层默认 body 上限（2MB）独立于上者：`Json`/`bytes` 提取器
+    // 受 DefaultBodyLimit 约束，会先于 RequestBodyLimitLayer 拒绝——导致
+    // `body_limit_mb > 2` 的配置静默失效（转录大样本 413 实测先例）。
+    // 两层统一到同一配置口径，提取器层不再构成隐藏硬顶。
+    let app = app.layer(axum::extract::DefaultBodyLimit::max(body_limit_bytes));
     // HTTP 全局请求超时(默认 60s,配置 server.request_timeout_seconds)
     let app = app.layer(tower_http::timeout::TimeoutLayer::with_status_code(
         axum::http::StatusCode::GATEWAY_TIMEOUT,

@@ -1,6 +1,11 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+// 引擎侧消费者（onnx embedding 引擎 / 决策管线 / candle 决策头）均在
+// feature 门内；no-engine 构建下引擎符号无消费者，dead_code 豁免
+//（CI 矩阵组合均含引擎 feature，不受影响）
+#![cfg_attr(not(any(feature = "candle", feature = "onnx")), allow(dead_code))]
+
 //! 本地 bundle tokenizer 探测的单一事实源。
 //!
 //! onnx embedding 引擎（`onnx_engine::resolve_local_bundle`）与决策管线

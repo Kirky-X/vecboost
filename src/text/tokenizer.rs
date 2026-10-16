@@ -1,6 +1,12 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+// onnx-primary：本模块 encode 面的主消费者（candle embedding/量化引擎）
+// 已转 feature `candle` opt-in；无 candle 构建下仅 doctor 的 from_file
+// 探测保留，其余 encode API 为 candle 构建面保留项，dead_code 整面豁免
+// （CI -D warnings）
+#![cfg_attr(not(feature = "candle"), allow(dead_code))]
+
 use crate::error::VecboostError;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer as HfTokenizer;

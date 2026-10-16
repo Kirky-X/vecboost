@@ -1527,7 +1527,20 @@ impl EmbeddingService {
                     .engine_type
                     .clone()
                     .or_else(|| self.model_config.as_ref().map(|c| c.engine_type.clone()))
-                    .unwrap_or(crate::config::model::EngineType::Candle);
+                    // 防御性缺省（此分支仅在 model_config=None 时可达，而该
+                    // 情形比对直接走保守重载臂）：对齐 onnx-primary 主引擎；
+                    // onnx 变体随 feature 门控，缺省臂 cfg 化（无 onnx 的
+                    // 定制构建回落 candle 变体）
+                    .unwrap_or({
+                        #[cfg(feature = "onnx")]
+                        {
+                            crate::config::model::EngineType::Onnx
+                        }
+                        #[cfg(not(feature = "onnx"))]
+                        {
+                            crate::config::model::EngineType::Candle
+                        }
+                    });
                 let effective_task = req
                     .task
                     .or(Some(ov.task))
@@ -1566,11 +1579,23 @@ impl EmbeddingService {
             transcription_params: None,
             name: req.model_name.clone(),
             // 预设 engine_type 为缺省层（req wire 无此维度），未配置继承当前
-            // 加载模型（启动时即 [model].engine_type），无当前模型回落 Candle
+            // 加载模型（启动时即 [model].engine_type）；无当前模型回落主引擎
+            // onnx（onnx-primary）；onnx 变体随 feature 门控，缺省臂 cfg 化
+            //（无 onnx 的定制构建回落 candle 变体，加载期显性拒绝与启动期
+            // 装配同口径）
             engine_type: checkpoint
                 .and_then(|c| c.engine_type.clone())
                 .or_else(|| self.model_config.as_ref().map(|c| c.engine_type.clone()))
-                .unwrap_or(crate::config::model::EngineType::Candle),
+                .unwrap_or({
+                    #[cfg(feature = "onnx")]
+                    {
+                        crate::config::model::EngineType::Onnx
+                    }
+                    #[cfg(not(feature = "onnx"))]
+                    {
+                        crate::config::model::EngineType::Candle
+                    }
+                }),
             model_path: req
                 .model_path
                 .clone()
@@ -1855,7 +1880,8 @@ impl EmbeddingService {
                 .model_config
                 .as_ref()
                 .map(|c| c.engine_type.to_string())
-                .unwrap_or_else(|| "candle".to_string()),
+                // onnx-primary：无生效配置时展示主引擎
+                .unwrap_or_else(|| "onnx".to_string()),
             dimension: self
                 .model_config
                 .as_ref()
@@ -3476,6 +3502,10 @@ mod tests {
     /// 缺失报 decision 探测错误，而非落进 embedding 引擎加载）；无 task
     /// 字段时继承当前模型（Embedding），错误与决策臂无关——两条路径对照
     /// 钉住 req.task 优先、继承回退的契约。
+    /// （candle 决策分派臂语义钉：fixture engine_type=candle 在 candle
+    /// feature 内运行；onnx 分派臂对应钉见 factory
+    /// test_create_decision_task_dispatches_to_onnx_pipeline）
+    #[cfg(feature = "candle")]
     #[tokio::test]
     async fn test_switch_model_task_decision_reaches_decision_dispatch() {
         crate::i18n::init();
@@ -3545,6 +3575,7 @@ mod tests {
     /// 不存在子路径——探测错误回显该路径即证明预设路径生效，断言不依赖
     /// 工作区是否有 models/laya-multilingual bundle（按文档部署后仍恒真）。
     #[cfg(feature = "onnx")]
+    #[cfg(feature = "candle")]
     #[tokio::test]
     async fn test_switch_model_hits_builtin_checkpoint_preset() {
         crate::i18n::init();
@@ -3713,6 +3744,7 @@ mod tests {
     /// 后续 manager.get 不命中）。钉住修复后的终态：count==1 且 get 命中。
     /// create 须成功才达 manager 段，model_path 用真实 candle 权重资产
     /// （缺失 SKIP）；manager.load 仅元数据构造（loader.rs），不重复加载权重。
+    #[cfg(feature = "candle")]
     #[tokio::test]
     async fn test_switch_model_same_name_reload_keeps_manager_entry() {
         crate::i18n::init();
@@ -5024,6 +5056,11 @@ mod tests {
 
     // ===== switch_model 实际切换路径测试 =====
 
+    /// 跨名切换不存在的模型：candle 加载臂报 ModelLoadError 包装为
+    /// NotFound（404）；fixture engine_type=candle 在 candle feature 内
+    /// 运行（无 candle 时工厂报 candle-not-compiled ConfigError，非本钉
+    /// 语义）。
+    #[cfg(feature = "candle")]
     #[tokio::test]
     async fn test_switch_model_different_name_fails_on_engine_create() {
         let mock_engine = TestEngine::new(384);
@@ -5215,7 +5252,7 @@ mod tests {
         let list = service.list_available_models();
         assert_eq!(list.total_count, 1);
         assert_eq!(list.models[0].name, "default");
-        assert_eq!(list.models[0].engine_type, "candle");
+        assert_eq!(list.models[0].engine_type, "onnx");
         assert!(list.models[0].is_loaded);
     }
 

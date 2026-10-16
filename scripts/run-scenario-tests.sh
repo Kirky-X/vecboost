@@ -20,7 +20,10 @@ mkdir -p "$MODES"
 
 echo "=== [1/4] 构建 ==="
 if [ "$SKIP_BUILD" -eq 0 ]; then
-  cargo build --features "http,grpc,cli,auth,db,sqlite,mcp" 2>&1 | tail -2 || exit 1
+  # candle：场景资产为 safetensors（candle 路径专属格式），onnx-primary 下
+  # 默认引擎为 onnx（opt-in candle），场景配置显式 engine_type="candle" 需
+  # 引擎在编译内（conftest make_config 同步钉值）
+  cargo build --features "http,grpc,cli,auth,db,sqlite,mcp,candle" 2>&1 | tail -2 || exit 1
 fi
 [ -x "$BIN" ] || { echo "二进制不存在: $BIN"; exit 1; }
 
@@ -38,6 +41,8 @@ port = 9101
 model_path = "$ROOT/models/BAAI-bge-small-en-v1.5"
 use_gpu = false
 expected_dimension = 384
+# 场景资产为 safetensors：显式钉 candle（构建侧同步 --features candle）
+engine_type = "candle"
 
 [embedding]
 cache_enabled = true

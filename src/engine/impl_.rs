@@ -3,6 +3,19 @@
 
 //! AnyEngine 的实现块
 
+// no-engine 构建（无 candle/onnx/transcribe/quantized-gguf）下所有转发臂
+// cfg 掉，只剩兜底臂：方法参数失去消费者，文件级豁免（先例：transcribe
+// 方法的 cfg_attr allow(unused_variables) 参数级惯例，此处提为文件级）
+#![cfg_attr(
+    not(any(
+        feature = "candle",
+        feature = "onnx",
+        feature = "transcribe",
+        feature = "quantized-gguf"
+    )),
+    allow(unused_variables)
+)]
+
 use super::{AnyEngine, InferenceEngine};
 use crate::config::model::{EngineType, ModelConfig, ModelTask, Precision};
 use crate::domain::{DecisionRequest, DecisionResponse, TranslateRequest, TranslateResponse};
@@ -16,9 +29,14 @@ impl AnyEngine {
         precision: Precision,
     ) -> Result<Self, VecboostError> {
         match engine_type {
+            // candle 回退后端（feature `candle` opt-in，onnx-primary 默认不含）；
+            // 未编译时显性拒绝（禁止静默降级 onnx——engine_type 是用户显式选择）
+            #[cfg(feature = "candle")]
             EngineType::Candle => Ok(AnyEngine::Candle(super::candle_engine::CandleEngine::new(
                 config, precision,
             )?)),
+            #[cfg(not(feature = "candle"))]
+            EngineType::Candle => Err(super::candle_not_compiled_error()),
             #[cfg(feature = "onnx")]
             EngineType::Onnx => Ok(AnyEngine::Onnx(super::onnx_engine::OnnxEngine::new(
                 config, precision,
@@ -31,6 +49,7 @@ impl AnyEngine {
 impl InferenceEngine for AnyEngine {
     fn embed(&self, text: &str) -> Result<Vec<f32>, VecboostError> {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.embed(text),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(engine) => engine.embed(text),
@@ -43,12 +62,24 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::OnnxTranslate(engine) => engine.embed(text),
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => engine.embed(text),
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => engine.embed(text),
+            // no-engine 构建（无 candle/onnx/transcribe/quantized-gguf）：
+            // AnyEngine 为空枚举不可构造；rustc 对引用匹配恒判 inhabited，
+            // 需显性兜底臂（与工厂 candle-not-compiled 同源的显性失败语义）
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.embed_batch(texts),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(engine) => engine.embed_batch(texts),
@@ -60,12 +91,21 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::OnnxTranslate(engine) => engine.embed_batch(texts),
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => engine.embed_batch(texts),
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => engine.embed_batch(texts),
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
     fn precision(&self) -> &Precision {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.precision(),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(engine) => engine.precision(),
@@ -77,12 +117,21 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::OnnxTranslate(engine) => engine.precision(),
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => engine.precision(),
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => engine.precision(),
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
     fn supports_mixed_precision(&self) -> bool {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.supports_mixed_precision(),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(engine) => engine.supports_mixed_precision(),
@@ -94,12 +143,21 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::OnnxTranslate(engine) => engine.supports_mixed_precision(),
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => engine.supports_mixed_precision(),
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => engine.supports_mixed_precision(),
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
     fn is_fallback_triggered(&self) -> bool {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.is_fallback_triggered(),
             #[cfg(feature = "quantized-gguf")]
             // QuantizedCandleEngine 走 trait 默认实现（恒 false，无回退状态）
@@ -112,12 +170,21 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::OnnxTranslate(engine) => engine.is_fallback_triggered(),
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => engine.is_fallback_triggered(),
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => engine.is_fallback_triggered(),
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
     fn count_tokens(&self, text: &str) -> Result<usize, VecboostError> {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.count_tokens(text),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(engine) => engine.count_tokens(text),
@@ -131,7 +198,15 @@ impl InferenceEngine for AnyEngine {
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => InferenceEngine::count_tokens(engine, text),
             // candle 决策引擎同口径：未覆盖 count_tokens，走 trait 默认
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => InferenceEngine::count_tokens(engine, text),
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
@@ -139,6 +214,7 @@ impl InferenceEngine for AnyEngine {
         match self {
             // UFCS 显式走 trait 方法：CandleEngine 的同名固有方法返回
             // StageSnapshot（非 Option），方法解析时固有方法优先会遮蔽 trait 实现。
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => InferenceEngine::take_stage_snapshot(engine),
             #[cfg(feature = "quantized-gguf")]
             // 量化引擎暂无分阶段埋点，走 trait 默认 None
@@ -153,12 +229,21 @@ impl InferenceEngine for AnyEngine {
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => InferenceEngine::take_stage_snapshot(engine),
             // candle 决策引擎同口径：无分阶段埋点，走 trait 默认 None
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => InferenceEngine::take_stage_snapshot(engine),
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.try_fallback_to_cpu(config).await,
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(engine) => engine.try_fallback_to_cpu(config).await,
@@ -170,12 +255,21 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::OnnxTranslate(engine) => engine.try_fallback_to_cpu(config).await,
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => engine.try_fallback_to_cpu(config).await,
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => engine.try_fallback_to_cpu(config).await,
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
     fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.decide(req),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(engine) => engine.decide(req),
@@ -191,7 +285,15 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Transcribe(engine) => engine.decide(req),
             // trait 方法（CandleDecisionEngine 固有方法名为 decide_impl()，
             // 无同名遮蔽）：覆盖后经 trait 自然进 candle 决策头
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => engine.decide(req),
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
@@ -199,6 +301,7 @@ impl InferenceEngine for AnyEngine {
     /// 默认 UnsupportedTask（与 decide 同款漏转发即恒失败的分布口径）
     fn translate(&self, req: &TranslateRequest) -> Result<TranslateResponse, VecboostError> {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => InferenceEngine::translate(engine, req),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(engine) => InferenceEngine::translate(engine, req),
@@ -206,11 +309,19 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::Onnx(engine) => InferenceEngine::translate(engine, req),
             #[cfg(feature = "onnx")]
             AnyEngine::Decision(engine) => InferenceEngine::translate(engine, req),
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => InferenceEngine::translate(engine, req),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.translate(req),
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => engine.translate(req),
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
@@ -233,6 +344,7 @@ impl InferenceEngine for AnyEngine {
     /// 默认 UnsupportedTask（与 decide 同款漏转发即恒失败的分布口径）
     fn decide_logits(&self, req: &DecisionRequest) -> Result<Vec<Vec<f32>>, VecboostError> {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.decide_logits(req),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(engine) => engine.decide_logits(req),
@@ -244,12 +356,21 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::OnnxTranslate(engine) => engine.decide_logits(req),
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => engine.decide_logits(req),
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => engine.decide_logits(req),
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
     fn supports_task(&self, task: ModelTask) -> bool {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.supports_task(task),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(engine) => engine.supports_task(task),
@@ -261,7 +382,15 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::OnnxTranslate(engine) => engine.supports_task(task),
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => engine.supports_task(task),
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => engine.supports_task(task),
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
@@ -270,6 +399,7 @@ impl InferenceEngine for AnyEngine {
     /// embedding 引擎继承 trait 默认 true（bi-encoder rerank）。
     fn supports_rerank(&self) -> bool {
         match self {
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.supports_rerank(),
             #[cfg(feature = "quantized-gguf")]
             AnyEngine::Quantized(engine) => engine.supports_rerank(),
@@ -281,7 +411,15 @@ impl InferenceEngine for AnyEngine {
             AnyEngine::OnnxTranslate(engine) => engine.supports_rerank(),
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => engine.supports_rerank(),
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => engine.supports_rerank(),
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 
@@ -293,6 +431,7 @@ impl InferenceEngine for AnyEngine {
             // Candle/Onnx 有真实覆盖（落引擎内 controller，供 Exceeded/Critical
             // 自动 CPU 回退执法）；漏转发会让服务层接线全部落在 trait 默认
             // no-op 上，引擎侧内存执法链路静默失效
+            #[cfg(feature = "candle")]
             AnyEngine::Candle(engine) => engine.attach_memory_limit_controller(controller),
             #[cfg(feature = "onnx")]
             // 翻译引擎无内存感知覆盖，UFCS 显式走 trait 默认 no-op（同量化臂口径）
@@ -318,9 +457,17 @@ impl InferenceEngine for AnyEngine {
                 InferenceEngine::attach_memory_limit_controller(engine, controller)
             }
             // candle 决策引擎同口径：无内存感知分支，UFCS 显式走 trait 默认 no-op
+            #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => {
                 InferenceEngine::attach_memory_limit_controller(engine, controller)
             }
+            #[cfg(not(any(
+                feature = "candle",
+                feature = "onnx",
+                feature = "transcribe",
+                feature = "quantized-gguf"
+            )))]
+            _ => unreachable!("no inference engine variants are compiled in this build"),
         }
     }
 }
@@ -331,6 +478,9 @@ mod tests {
     use crate::config::model::{DeviceType, EngineType, ModelConfig, ModelTask};
     use std::path::PathBuf;
 
+    /// candle 分派路径测试共用配置（无 candle feature 时随消费方一并门控，
+    /// 避免 dead_code 触发 CI -D warnings）
+    #[cfg(feature = "candle")]
     fn test_config_candle() -> ModelConfig {
         ModelConfig {
             name: "test-any-candle".to_string(),
@@ -376,6 +526,7 @@ mod tests {
 
     /// 验证 AnyEngine::new 在 Candle 引擎 + 不存在路径时返回错误
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_missing_model() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let mut config = test_config_candle();
@@ -394,6 +545,7 @@ mod tests {
 
     /// 验证 AnyEngine::new 在 Candle 引擎 + 不存在的非目录路径时返回错误
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_nonexistent_path() {
         let config = test_config_candle();
         let result = AnyEngine::new(&config, EngineType::Candle, Precision::Fp32);
@@ -402,6 +554,7 @@ mod tests {
 
     /// 验证 AnyEngine::new 在不同 Precision 下都返回错误(覆盖精度路径)
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_all_precisions_fail() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let mut config = test_config_candle();
@@ -529,6 +682,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_with_sha256() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let mut config = test_config_candle();
@@ -668,6 +822,7 @@ mod tests {
 
     /// 真实模型 AnyEngine（candle 变体）转发 decide/supports_task。
     /// 与 candle_engine::tests::require_real_model 同口径：权重缺失时 SKIP。
+    #[cfg(feature = "candle")]
     fn real_model_available() -> bool {
         ["model.safetensors", "pytorch_model.bin"].iter().any(|w| {
             std::path::Path::new("models/BAAI-bge-small-en-v1.5")
@@ -677,6 +832,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_forwards_decide_and_supports_task() {
         if !real_model_available() {
             eprintln!("Skipping test: model weights not found at models/BAAI-bge-small-en-v1.5");
@@ -719,6 +875,7 @@ mod tests {
     /// AnyEngine::Candle 未覆盖 translate：转发必须落到 trait 默认
     /// UnsupportedTask（漏转发即恒失败的分布口径，decide 同款测试）。
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_candle_translate_falls_to_default_unsupported() {
         if !real_model_available() {
             eprintln!("Skipping test: model weights not found at models/BAAI-bge-small-en-v1.5");
@@ -764,6 +921,7 @@ mod tests {
     /// init_memory_limit）全部落在 trait 默认 no-op 上，引擎侧内存执法
     /// 链路静默失效。权重缺失时 SKIP（与上一测试同口径）。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "candle")]
     async fn test_any_engine_forwards_attach_memory_limit_controller() {
         use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
         use std::sync::Arc;
@@ -849,6 +1007,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_cuda_device_fails() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let mut config = test_config_candle();
@@ -860,6 +1019,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_metal_device_fails() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let mut config = test_config_candle();
@@ -871,6 +1031,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_amd_device_fails() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let mut config = test_config_candle();
@@ -882,6 +1043,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_opencl_device_fails() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let mut config = test_config_candle();
@@ -893,6 +1055,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_engine_factory_create_candle_missing_model() {
         let config = test_config_candle();
         let result = crate::engine::EngineFactory::create(EngineType::Candle, &config);
@@ -908,6 +1071,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_with_pooling_mode() {
         use crate::config::model::PoolingMode;
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
@@ -920,6 +1084,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_with_memory_limit() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let mut config = test_config_candle();
@@ -931,6 +1096,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_with_tokenizer_path() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let mut config = test_config_candle();
@@ -942,6 +1108,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_any_engine_new_candle_oom_fallback_disabled() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let mut config = test_config_candle();

@@ -50,10 +50,11 @@ max_sequence_length = 8192
 # 注意: 非 CUDA 设备请求 fp16/bf16 会自动回退到 fp32
 # precision = "fp32"
 
-# 推理引擎类型 (可选，默认 candle)
-# 可选值: candle / onnx
-# onnx 需以 `--features onnx` 构建；未知值启动期显性报错
-# engine_type = "candle"
+# 推理引擎类型 (可选，默认 onnx —— onnx-primary 主引擎)
+# 可选值: onnx / candle
+# candle 为 opt-in 回退后端，需以 `--features candle` 构建（未启用时配置即启动期报错）；
+# 未知值启动期显性报错
+# engine_type = "onnx"
 
 # 任务维度 (可选，默认 embedding)
 # 可选值: embedding / decision —— 二选一语义：

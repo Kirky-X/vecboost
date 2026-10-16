@@ -71,11 +71,11 @@ impl MemoryPoolManager {
         Ok(())
     }
 
-    /// 初始化所有池
-
+    /// 初始化所有池。原首参 `Option<candle_core::Device>` 为未消费死参数
+    /// （onnx-primary 移除 candle_core 直接依赖时删除）；CUDA 池仅由
+    /// `cuda_device_id` 驱动。
     pub async fn initialize_all(
         &mut self,
-        device: Option<candle_core::Device>,
         cuda_device_id: Option<i32>,
     ) -> Result<(), VecboostError> {
         info!("Initializing all memory pools...");
@@ -287,7 +287,7 @@ mod tests {
 
         let mut manager = MemoryPoolManager::new(config);
 
-        let result = manager.initialize_all(None, None).await;
+        let result = manager.initialize_all(None).await;
         assert!(result.is_ok(), "initialize_all failed: {:?}", result);
 
         let stats = manager.get_memory_stats().await;
@@ -365,7 +365,7 @@ mod tests {
         };
         let mut manager = MemoryPoolManager::new(config);
 
-        let result = manager.initialize_all(None, None).await;
+        let result = manager.initialize_all(None).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             VecboostError::ConfigError(msg) => {
@@ -395,9 +395,7 @@ mod tests {
         };
         let mut manager = MemoryPoolManager::new(config);
 
-        let result = manager
-            .initialize_all(Some(candle_core::Device::Cpu), Some(0))
-            .await;
+        let result = manager.initialize_all(Some(0)).await;
         assert!(result.is_ok(), "initialize_all failed: {:?}", result);
 
         assert!(manager.cuda_pool.is_some());
@@ -423,10 +421,7 @@ mod tests {
         };
         let mut manager = MemoryPoolManager::new(config);
 
-        manager
-            .initialize_all(Some(candle_core::Device::Cpu), Some(0))
-            .await
-            .unwrap();
+        manager.initialize_all(Some(0)).await.unwrap();
 
         let stats = manager.get_memory_stats().await;
         assert!(stats.buffer_pool_enabled);
@@ -493,10 +488,7 @@ mod tests {
             },
         };
         let mut manager = MemoryPoolManager::new(config);
-        manager
-            .initialize_all(Some(candle_core::Device::Cpu), Some(0))
-            .await
-            .unwrap();
+        manager.initialize_all(Some(0)).await.unwrap();
 
         manager.clear_all().await;
 
@@ -540,7 +532,7 @@ mod tests {
         let mut manager = MemoryPoolManager::new(config);
 
         manager
-            .initialize_all(Some(candle_core::Device::Cpu), None)
+            .initialize_all(None)
             .await
             .expect("CPU 池装配必须成功");
 
@@ -580,7 +572,7 @@ mod tests {
         let mut manager = MemoryPoolManager::new(config);
 
         manager
-            .initialize_all(Some(candle_core::Device::Cpu), None)
+            .initialize_all(None)
             .await
             .expect("全停用配置必须成功跳过");
 

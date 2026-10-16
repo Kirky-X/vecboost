@@ -9,7 +9,7 @@ use crate::monitor::MemoryMonitor;
 use crate::utils::hash::verify_sha256;
 use crate::utils::hf_hub::build_hf_repo;
 use async_trait::async_trait;
-use ndarray::{Array1, Array2};
+use ndarray::Array2;
 use ort::session::Session;
 use ort::value::Tensor;
 use std::path::{Path, PathBuf};
@@ -98,6 +98,17 @@ pub struct OnnxEngine {
     tokenizer: Tokenizer,
     hidden_size: usize,
     max_input_length: usize,
+    /// 模型图是否声明 `token_type_ids` 输入（构造期从 session.inputs()
+    /// 探测一次）：BERT 系导出图分两派——去该输入的精简导出（历史 bundle
+    /// 口径）与保留三输入的 optimum/transformers.js 导出（如
+    /// Xenova/bge-small-en-v1.5，缺该输入 run 报 Missing Input）；
+    /// true 时两条前向路径补喂全零 token_type_ids（segment 0 语义）
+    needs_token_type_ids: bool,
+    /// pooling 策略（构造期解析：Auto → infer_pooling_mode，与 candle 引擎
+    /// 同一单一事实源）；此前硬编码 mean——对 BGE 系（官方 CLS pooling）
+    /// 会静默改变输出语义且 `ModelConfig.pooling_mode` 配置无效，
+    /// 真机对比测试暴露后修复
+    pooling_mode: crate::config::model::PoolingMode,
     precision: Precision,
     memory_monitor: Option<Arc<MemoryMonitor>>,
     memory_limit_controller: Option<Arc<MemoryLimitController>>,
@@ -145,11 +156,20 @@ impl OnnxEngine {
                 "{}",
                 crate::i18n::tr("log-engine-downloading-loading-onnx-model")
             );
+            // 候选链：根级（精简导出 / 历史 bundle 口径）→ `onnx/` 子路径
+            // （optimum / transformers.js 导出惯例，如 Xenova 系列）；
+            // 每级 fp32 优先 quantized 兜底
             let onnx_filename = repo
                 .download_file()
                 .filename("model.onnx")
                 .send()
+                .or_else(|_| repo.download_file().filename("onnx/model.onnx").send())
                 .or_else(|_| repo.download_file().filename("model_quantized.onnx").send())
+                .or_else(|_| {
+                    repo.download_file()
+                        .filename("onnx/model_quantized.onnx")
+                        .send()
+                })
                 .map_err(|e| VecboostError::ModelLoadError(e.to_string()))?;
 
             let tokenizer_filename = repo
@@ -198,6 +218,21 @@ impl OnnxEngine {
             extra_config: &[],
         };
         let session = super::session::build_session(&onnx_filename, &opts)?;
+        // 输入自适应（兼容性探测）：三输入 BERT 变体（optimum/transformers.js
+        // 导出，如图共保留 token_type_ids）需补喂该输入，否则 run 报
+        // Missing Input；去输入的精简导出保持两输入（零行为变化）
+        let needs_token_type_ids = session
+            .inputs()
+            .iter()
+            .any(|input| input.name() == "token_type_ids");
+        // pooling 构造期解析（candle 引擎同口径）：Auto 按模型名推断，
+        // 运行期不得再遇 Auto
+        let pooling_mode = match config.pooling_mode.clone().unwrap_or_default() {
+            crate::config::model::PoolingMode::Auto => {
+                crate::engine::infer_pooling_mode(&config.name)
+            }
+            other => other,
+        };
 
         log::info!("{}", crate::i18n::tr("log-engine-loading-tokenizer"));
         #[allow(unused_mut)]
@@ -284,6 +319,8 @@ impl OnnxEngine {
             tokenizer,
             hidden_size,
             max_input_length,
+            needs_token_type_ids,
+            pooling_mode,
             precision: actual_precision,
             memory_monitor,
             memory_limit_controller: None,
@@ -425,25 +462,47 @@ impl OnnxEngine {
             .map(|&v| v as i64)
             .collect();
 
-        let input_ids_array = Array1::from(input_ids);
-        let attention_mask_array = Array1::from(attention_mask.clone());
+        // 输入按 [batch=1, seq] 二维形态（与 forward_pass_batch 及标准
+        // BERT ONNX 导出规格一致；历史 1 维形态从未经真实 onnx embedding
+        // 资产验证，bench 真机首跑暴露 rank 不匹配——rank 1 被图拒绝）
+        let input_len = input_ids.len();
+        let input_ids_array = Array2::from_shape_vec((1, input_len), input_ids)
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+        let attention_mask_array = Array2::from_shape_vec((1, input_len), attention_mask.clone())
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
         let input_ids_tensor = Tensor::from_array(input_ids_array.into_dyn())
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
         let attention_mask_tensor = Tensor::from_array(attention_mask_array.into_dyn())
             .map_err(|e: ort::Error| VecboostError::InferenceError(e.to_string()))?;
+        // 三输入图（optimum/transformers.js 导出）：补喂全零 token_type_ids
+        // （segment 0 语义）；两输入图保持原输入集零行为变化
+        let token_type_tensor = if self.needs_token_type_ids {
+            Some(
+                Tensor::from_array(Array2::from_elem((1, input_len), 0i64).into_dyn())
+                    .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
+            )
+        } else {
+            None
+        };
 
         let last_hidden_state = {
             let mut session_guard = self
                 .session
                 .lock()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-            let outputs = session_guard
-                .run(ort::inputs![
+            let outputs = match token_type_tensor {
+                Some(tt) => session_guard.run(ort::inputs![
+                    "input_ids" => input_ids_tensor,
+                    "attention_mask" => attention_mask_tensor,
+                    "token_type_ids" => tt
+                ]),
+                None => session_guard.run(ort::inputs![
                     "input_ids" => input_ids_tensor,
                     "attention_mask" => attention_mask_tensor
-                ])
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+                ]),
+            }
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
             let output_array = outputs["last_hidden_state"]
                 .try_extract_array::<f32>()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?
@@ -462,10 +521,11 @@ impl OnnxEngine {
         let mut flat = Vec::with_capacity(attention_mask.len() * self.hidden_size);
         for seq_idx in 0..attention_mask.len() {
             for h in 0..self.hidden_size {
-                flat.push(last_hidden_state[[seq_idx, h]]);
+                // 2 维输入对应 3 维输出 [1, seq, hidden]（同 batch 路径口径）
+                flat.push(last_hidden_state[[0, seq_idx, h]]);
             }
         }
-        let mut pooled = onnx_pool_mean(&flat, &attention_mask, self.hidden_size);
+        let mut pooled = onnx_pool(&self.pooling_mode, &flat, &attention_mask, self.hidden_size);
         l2_normalize_in_place(&mut pooled);
         Ok(pooled)
     }
@@ -592,18 +652,36 @@ impl OnnxEngine {
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
         let attention_mask_tensor = Tensor::from_array(attention_mask_array.into_dyn())
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+        // 三输入图（optimum/transformers.js 导出）：补喂全零 token_type_ids；
+        // 两输入图保持原输入集零行为变化（同 forward_pass 口径）
+        let token_type_tensor = if self.needs_token_type_ids {
+            Some(
+                Tensor::from_array(
+                    Array2::from_elem((padded_batch_size, max_seq_len), 0i64).into_dyn(),
+                )
+                .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
+            )
+        } else {
+            None
+        };
 
         let last_hidden_state = {
             let mut session_guard = self
                 .session
                 .lock()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
-            let outputs = session_guard
-                .run(ort::inputs![
+            let outputs = match token_type_tensor {
+                Some(tt) => session_guard.run(ort::inputs![
+                    "input_ids" => input_ids_tensor,
+                    "attention_mask" => attention_mask_tensor,
+                    "token_type_ids" => tt
+                ]),
+                None => session_guard.run(ort::inputs![
                     "input_ids" => input_ids_tensor,
                     "attention_mask" => attention_mask_tensor
-                ])
-                .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
+                ]),
+            }
+            .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
             outputs["last_hidden_state"]
                 .try_extract_array::<f32>()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?
@@ -628,7 +706,8 @@ impl OnnxEngine {
                     flat.push(last_hidden_state[[batch_idx, seq_idx, h]]);
                 }
             }
-            let mut pooled = onnx_pool_mean(
+            let mut pooled = onnx_pool(
+                &self.pooling_mode,
                 &flat,
                 &attention_mask[..effective_max_seq],
                 self.hidden_size,
@@ -638,6 +717,47 @@ impl OnnxEngine {
         }
 
         Ok(results)
+    }
+}
+
+/// pooling 派遣（与 candle 引擎 pool_cls/pool_mean/pool_max 同口径的
+/// 单一事实源）：Cls 取第 0 行（CLS token）；Mean 为 mask 加权平均；
+/// Max 为 mask 内逐维最大（全 mask=0 → 零向量，与 candle 同）。
+/// 构造期已解析 Auto → 具体模式，此处 Auto 为不可达。
+fn onnx_pool(
+    mode: &crate::config::model::PoolingMode,
+    hidden: &[f32],
+    mask: &[i64],
+    hidden_size: usize,
+) -> Vec<f32> {
+    use crate::config::model::PoolingMode;
+    match mode {
+        PoolingMode::Cls => hidden[..hidden_size].to_vec(),
+        PoolingMode::Mean => onnx_pool_mean(hidden, mask, hidden_size),
+        PoolingMode::Max => {
+            let seq_len = mask.len();
+            let mut result = vec![f32::NEG_INFINITY; hidden_size];
+            let mut any_active = false;
+            for (t, &m) in mask.iter().enumerate().take(seq_len) {
+                if m == 0 {
+                    continue;
+                }
+                any_active = true;
+                let offset = t * hidden_size;
+                for (d, &h) in hidden[offset..offset + hidden_size].iter().enumerate() {
+                    if h > result[d] {
+                        result[d] = h;
+                    }
+                }
+            }
+            if !any_active {
+                result.fill(0.0);
+            }
+            result
+        }
+        PoolingMode::Auto => {
+            unreachable!("Auto pooling should have been resolved at construction time")
+        }
     }
 }
 

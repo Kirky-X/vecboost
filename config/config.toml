@@ -76,12 +76,14 @@ max_sequence_length = 8192
 # 需要以 `--features quantized-gguf` 构建；质量门见 docs/PERFORMANCE.md「GGUF 量化」节
 # quantized = false
 
-# 推理引擎类型 (可选，默认 candle)
-# 可选值: candle / onnx
-# onnx 需以 `--features onnx` 构建；未知值启动期显性报错。
-# task=decision 时本字段不参与分派（Laya bundle 为 onnx 格式，task 主维度优先）；
+# 推理引擎类型 (可选，默认 onnx —— onnx-primary 主引擎)
+# 可选值: onnx / candle
+# candle 为 opt-in 回退后端，需以 `--features candle` 构建（未启用时配置即启动期报错）；
+# 未知值启动期显性报错。
+# task=decision 时按本字段分派决策后端（candle 原生决策头需 candle feature；
+# onnx 走 DecisionPipeline，Laya onnx bundle）；
 # task=translate 时强制 onnx（candle 无 seq2seq 实现，配置即启动期报错）
-# engine_type = "candle"
+# engine_type = "onnx"
 
 # 任务维度 (可选，默认 embedding)
 # 可选值: embedding / decision / translate —— 三态语义：

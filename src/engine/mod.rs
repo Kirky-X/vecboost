@@ -1,7 +1,10 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+// candle 回退后端（onnx-primary：主引擎为 ort，candle 经 feature `candle` opt-in）
+#[cfg(feature = "candle")]
 pub(crate) mod candle_decision;
+#[cfg(feature = "candle")]
 pub(crate) mod candle_engine;
 pub mod factory;
 pub use factory::EngineFactory;
@@ -303,6 +306,8 @@ impl StageStats {
 
 #[allow(clippy::large_enum_variant)]
 pub enum AnyEngine {
+    /// candle 回退后端（embedding，feature `candle` opt-in）。
+    #[cfg(feature = "candle")]
     Candle(candle_engine::CandleEngine),
     #[cfg(feature = "onnx")]
     Onnx(onnx_engine::OnnxEngine),
@@ -315,8 +320,9 @@ pub enum AnyEngine {
     #[allow(private_interfaces)]
     Decision(decision::DecisionPipeline),
     /// Candle 原生决策引擎（task=decision + engine_type=candle，无
-    /// onnxruntime 依赖）。构造点同上。
+    /// onnxruntime 依赖）。构造点同上。feature `candle` opt-in。
     // 变体类型 pub(crate)，注释理由同 Decision 臂
+    #[cfg(feature = "candle")]
     #[allow(private_interfaces)]
     CandleDecision(candle_decision::CandleDecisionEngine),
     /// ONNX seq2seq 翻译引擎（task=translate，Marian/opus-mt）。
@@ -346,6 +352,45 @@ impl AnyEngine {
             AnyEngine::OnnxTranslate(engine) => engine.last_output_tokens(),
             _ => 0,
         }
+    }
+}
+
+/// engine_type=candle 在 candle 回退后端未编译时的显性拒绝错误。
+/// 消费方：`impl_.rs AnyEngine::new`、`factory.rs` decision 分派臂、
+/// main.rs `resolve_engine_model_config`——三处共用同一文案，禁止静默
+/// 降级 onnx（engine_type 是用户显式选择）。消费方均在 not(candle) cfg
+/// 块内，candle 构建下本函数无调用方（dead_code 条件豁免）。
+#[cfg_attr(feature = "candle", allow(dead_code))]
+pub(crate) fn candle_not_compiled_error() -> crate::error::VecboostError {
+    crate::error::VecboostError::ConfigError(crate::i18n::tr("startup-engine-candle-not-compiled"))
+}
+
+/// Auto pooling 推断——按模型名推断最佳 pooling 策略（构造期解析契约，
+/// candle/onnx 两引擎共享的单一事实源）。
+///
+/// 规则:
+/// - 模型名含 `minilm`/`e5`/`gte` (不区分大小写) → Mean
+/// - 模型名含 `bge` → Cls（BGE 官方语义）
+/// - 其余 → Cls + warn
+///
+/// 引擎侧 `PoolingMode::Auto` 一律在构造期经本函数解析为具体模式，
+/// 运行期不得再遇 Auto。
+pub(crate) fn infer_pooling_mode(model_name: &str) -> crate::config::model::PoolingMode {
+    use crate::config::model::PoolingMode;
+    let lower = model_name.to_lowercase();
+    if lower.contains("minilm") || lower.contains("e5") || lower.contains("gte") {
+        PoolingMode::Mean
+    } else if lower.contains("bge") {
+        PoolingMode::Cls
+    } else {
+        log::warn!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-auto-pooling-unrecognized-model",
+                crate::i18n::tr_args(&[("a1", (model_name))])
+            )
+        );
+        PoolingMode::Cls
     }
 }
 

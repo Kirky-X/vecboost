@@ -278,11 +278,13 @@ max_sequence_length = 8192  # 每请求最大令牌数
 > 「翻译多语言对配置」节）。
 > `#[serde(default)]` 保证旧配置文件零破坏。
 >
-> **`engine_type`（引擎级 ModelConfig 字段，默认 `candle`）**：推理引擎
-> 类型，可选 `candle` / `onnx`。`[model]` 段已支持 `engine_type` 配置
-> （缺省 `None` = candle，现状行为零破坏）；`"onnx"` 需以 `--features
-> onnx` 构建，未知值启动期显性报错。`task = "decision"` 时本字段不参与
-> 分派（Laya bundle 为 onnx 格式，task 主维度优先）；`task = "translate"`
+> **`engine_type`（引擎级 ModelConfig 字段，默认 `onnx`）**：推理引擎
+> 类型，可选 `onnx` / `candle`。onnx-primary（2026-10-16）起主推理引擎为
+> ONNX Runtime（`onnx` feature 随 default 启用，缺省 `None` = onnx）；
+> `"candle"` 为 opt-in 回退后端，需以 `--features candle` 构建，未启用时
+> 配置即启动期显性报错。未知值启动期显性报错。`task = "decision"` 时本
+> 字段分派决策后端（candle 原生决策头需 `candle` feature；Laya onnx
+> bundle 为 onnx 格式）；`task = "translate"`
 > 时强制 onnx（candle 无 seq2seq 实现，配置即启动期报错）。
 > 决策请求 token 上界：每题 head+options（题干 + 选项）合计 ≤192 token，
 > state 段 ≤256 token（超长取前缀）；超界请求以 400 显性拒绝（不截断
@@ -367,7 +369,7 @@ ONNX 主模型文件探测按管线分化（任务协议约定）：embedding（
 [model]
 model_path = "models/laya-pytorch"   # PyTorch checkpoint 目录（布局见下）
 task = "decision"
-engine_type = "candle"               # 缺省即 candle，显式写出便于辨认
+engine_type = "candle"               # opt-in 回退后端：需 --features candle 构建（缺省主引擎为 onnx）
 ```
 
 `engine_type = "onnx"` 时同一配置消费 `models/laya-decision` 的 ONNX

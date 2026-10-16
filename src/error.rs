@@ -321,6 +321,9 @@ impl From<garrison::error::GarrisonError> for VecboostError {
     }
 }
 
+/// candle 错误转换（candle 回退后端 feature 门内；onnx-primary 下仅
+/// `--features candle` 构建编译）
+#[cfg(feature = "candle")]
 impl From<candle_core::Error> for VecboostError {
     fn from(e: candle_core::Error) -> Self {
         VecboostError::InferenceError(e.to_string())
@@ -633,6 +636,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "candle")]
     fn test_from_candle_error() {
         let candle_err = candle_core::Error::Msg("candle failure".to_string());
         let vecboost_err: VecboostError = candle_err.into();

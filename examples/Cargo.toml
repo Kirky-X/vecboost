@@ -32,8 +32,10 @@ prometheus = { workspace = true }
 
 [features]
 default = []
-# 引擎特性透传
+# 引擎特性透传（onnx-primary：vecboost 默认含 onnx，此处透传为显式 opt-in；
+# candle 为 vecboost opt-in 回退后端，透传后 library_usage 示例可启用）
 onnx = ["vecboost/onnx"]
+candle = ["vecboost/candle"]
 metal = ["vecboost/metal"]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -152,10 +154,13 @@ path = "monitoring/metrics.rs"
 name = "performance"
 path = "monitoring/performance.rs"
 
-# library — VecBoostLibrary SDK（library 模式，异步+同步 API）
+# library — VecBoostLibrary SDK（library 模式，异步+同步 API）。
+# 经工厂真实加载权重（fixture engine_type=candle，消费本地 safetensors）：
+# 挂 vecboost/candle 门，无 candle 的构建下不编译该 target
 [[bin]]
 name = "library_usage"
 path = "library/library_usage.rs"
+required-features = ["candle"]
 
 # semantic-cache — 语义缓存（trigram Jaccard 三级查询策略）
 [[bin]]

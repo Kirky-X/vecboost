@@ -1,6 +1,11 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+// 两路决策引擎消费者（onnx 管线 / candle 决策头）均在 feature 门内；
+// no-engine 构建（--no-default-features 且无 candle）下本模块无消费者，
+// dead_code 豁免（CI 矩阵组合均含引擎 feature，不受影响）
+#![cfg_attr(not(any(feature = "candle", feature = "onnx")), allow(dead_code))]
+
 //! Laya 决策协议层：预处理（序列构造 / marker_pos / qtype 编码）、collate、
 //! 按题 softmax + per-cardinality 温度校准、choice/score/noul 三类后处理。
 //!

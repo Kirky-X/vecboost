@@ -236,7 +236,7 @@ impl CandleEngine {
 
         // 解析 pooling 模式——Auto 按模型名推断为具体模式
         let resolved_pooling = match config.pooling_mode.clone().unwrap_or_default() {
-            crate::config::model::PoolingMode::Auto => infer_pooling_mode(&config.name),
+            crate::config::model::PoolingMode::Auto => super::infer_pooling_mode(&config.name),
             other => other,
         };
         log::info!(
@@ -1609,31 +1609,6 @@ fn load_weights_varbuilder<'a>(
     Ok(vb)
 }
 
-/// Auto pooling 推断——按模型名推断最佳 pooling 策略。
-///
-/// 规则:
-/// - 模型名含 `minilm`/`e5`/`gte` (不区分大小写) → Mean
-/// - 模型名含 `bge` → Cls
-/// - 其余 → Cls + warn
-pub(crate) fn infer_pooling_mode(model_name: &str) -> crate::config::model::PoolingMode {
-    use crate::config::model::PoolingMode;
-    let lower = model_name.to_lowercase();
-    if lower.contains("minilm") || lower.contains("e5") || lower.contains("gte") {
-        PoolingMode::Mean
-    } else if lower.contains("bge") {
-        PoolingMode::Cls
-    } else {
-        log::warn!(
-            "{}",
-            crate::i18n::tr_with_args(
-                "log-engine-auto-pooling-unrecognized-model",
-                crate::i18n::tr_args(&[("a1", (model_name))])
-            )
-        );
-        PoolingMode::Cls
-    }
-}
-
 /// CLS pooling:取序列第一个 token 的 hidden state。
 ///
 /// `hidden` 为 `[seq_len × hidden_dim]` 行优先展平向量。
@@ -2941,9 +2916,12 @@ mod tests {
     #[test]
     fn infer_pooling_minilm_returns_mean() {
         use crate::config::model::PoolingMode;
-        assert_eq!(infer_pooling_mode("all-MiniLM-L6-v2"), PoolingMode::Mean);
         assert_eq!(
-            infer_pooling_mode("paraphrase-MiniLM-L12-v2"),
+            crate::engine::infer_pooling_mode("all-MiniLM-L6-v2"),
+            PoolingMode::Mean
+        );
+        assert_eq!(
+            crate::engine::infer_pooling_mode("paraphrase-MiniLM-L12-v2"),
             PoolingMode::Mean
         );
     }
@@ -2952,11 +2930,11 @@ mod tests {
     fn infer_pooling_e5_returns_mean() {
         use crate::config::model::PoolingMode;
         assert_eq!(
-            infer_pooling_mode("multilingual-e5-small"),
+            crate::engine::infer_pooling_mode("multilingual-e5-small"),
             PoolingMode::Mean
         );
         assert_eq!(
-            infer_pooling_mode("intfloat/e5-small-v2"),
+            crate::engine::infer_pooling_mode("intfloat/e5-small-v2"),
             PoolingMode::Mean
         );
     }
@@ -2965,7 +2943,7 @@ mod tests {
     fn infer_pooling_gte_returns_mean() {
         use crate::config::model::PoolingMode;
         assert_eq!(
-            infer_pooling_mode("Alibaba-NLP/gte-Qwen2-1.5B-instruct"),
+            crate::engine::infer_pooling_mode("Alibaba-NLP/gte-Qwen2-1.5B-instruct"),
             PoolingMode::Mean
         );
     }
@@ -2974,11 +2952,11 @@ mod tests {
     fn infer_pooling_bge_returns_cls() {
         use crate::config::model::PoolingMode;
         assert_eq!(
-            infer_pooling_mode("BAAI/bge-small-en-v1.5"),
+            crate::engine::infer_pooling_mode("BAAI/bge-small-en-v1.5"),
             PoolingMode::Cls
         );
         assert_eq!(
-            infer_pooling_mode("BAAI/bge-large-zh-v1.5"),
+            crate::engine::infer_pooling_mode("BAAI/bge-large-zh-v1.5"),
             PoolingMode::Cls
         );
     }
@@ -2987,15 +2965,27 @@ mod tests {
     fn infer_pooling_unknown_returns_cls() {
         use crate::config::model::PoolingMode;
         // 未知模型家族 → Cls (带 warn)
-        assert_eq!(infer_pooling_mode("some-unknown-model"), PoolingMode::Cls);
+        assert_eq!(
+            crate::engine::infer_pooling_mode("some-unknown-model"),
+            PoolingMode::Cls
+        );
     }
 
     #[test]
     fn infer_pooling_case_insensitive() {
         use crate::config::model::PoolingMode;
-        assert_eq!(infer_pooling_mode("BGE-Small"), PoolingMode::Cls);
-        assert_eq!(infer_pooling_mode("MINILM-v2"), PoolingMode::Mean);
-        assert_eq!(infer_pooling_mode("E5-Large"), PoolingMode::Mean);
+        assert_eq!(
+            crate::engine::infer_pooling_mode("BGE-Small"),
+            PoolingMode::Cls
+        );
+        assert_eq!(
+            crate::engine::infer_pooling_mode("MINILM-v2"),
+            PoolingMode::Mean
+        );
+        assert_eq!(
+            crate::engine::infer_pooling_mode("E5-Large"),
+            PoolingMode::Mean
+        );
     }
 
     // -- StageTimer --

@@ -233,6 +233,8 @@ doctor-gguf-bad-magic = gguf 魔数非法（{ $got }，应为 GGUF）：{ $path 
 # ── 启动 fail-fast / 线程调优横幅（main.rs 标准错误） ──
 startup-engine-type-unknown = [model] engine_type 未知值 "{ $got }"{ $hint }，支持: candle, onnx
 startup-engine-onnx-rebuild-hint = （engine_type="onnx" 需以 --features onnx 重新构建）
+# onnx-primary：candle 降级 opt-in 回退后端后，engine_type="candle" 配置在未启用 feature `candle` 的构建中显性拒绝
+startup-engine-candle-not-compiled = [model] engine_type="candle" 但本次构建未编译 candle 后端（onnx-primary 默认主引擎为 onnx）；请以 `--features candle` 重新构建，或移除 engine_type 配置以使用默认 onnx 引擎
 startup-semantic-mode-invalid = [semantic_cache] comparison_mode 无效：{ $detail }
 startup-translation-no-onnx = [translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建
 startup-translate-pair-invalid = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) 参数非法：{ $detail }

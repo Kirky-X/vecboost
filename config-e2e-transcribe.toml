@@ -453,16 +453,21 @@ to = "微调的LLaMA"
 from = "回合和新药物设计"
 to = "从头药物设计"
 
-[[translation.pairs]]
-source_language = "en"
-target_language = "fr"
-model_path = "models/opus-mt-en-fr"
-
-[[translation.pairs]]
-source_language = "en"
-target_language = "de"
-model_path = "models/nllb-200-distilled-600M"
-min_new_tokens = 16
+# en-fr / en-de 两对暂裁（E2E 修复，2026-10-16）：models/opus-mt-en-fr 与
+# models/nllb-200-distilled-600M 本地资产缺失，而翻译 pair 启动期急切构建
+# 任一缺失即 fail-fast——保留会导致本配置整体不可用（转录 memcap/e2e 均
+# 无法启动）。资产补齐后取消注释即可恢复（原条目：en-fr→opus-mt-en-fr；
+# en-de→nllb-200-distilled-600M, min_new_tokens = 16）。
+# [[translation.pairs]]
+# source_language = "en"
+# target_language = "fr"
+# model_path = "models/opus-mt-en-fr"
+#
+# [[translation.pairs]]
+# source_language = "en"
+# target_language = "de"
+# model_path = "models/nllb-200-distilled-600M"
+# min_new_tokens = 16
 
 [[translation.pairs]]
 source_language = "en"

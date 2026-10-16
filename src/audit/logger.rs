@@ -63,6 +63,13 @@ impl AuditLogger {
     }
 
     /// Create a new audit logger with database backend.
+    ///
+    /// DB 双写（onnx-primary 测试周期修复，R-auth-009c）：DB 是安全事件
+    /// 查询面（audit_logs 表），文件是运维可观测面（可 tail，含轮转）——
+    /// 此前 db 构建只启动 run_db_writer，文件面静默丢失（场景锚定
+    /// logs/audit.log 的用例恒空）。主 channel 由 db writer 消费，Event
+    /// 同步镜像至文件 writer（独立 channel），Flush 先 flush DB 再转发
+    /// 文件侧（文件 writer 1s interval 兜底落盘）。
     #[cfg(feature = "db")]
     pub fn new_with_db(config: AuditConfig, db_pool: crate::db::DbPool) -> Self {
         if !config.enabled {
@@ -74,10 +81,19 @@ impl AuditLogger {
         }
 
         let (sender, receiver) = mpsc::unbounded_channel::<LoggerCommand>();
+        let (file_tx, file_rx) = mpsc::unbounded_channel::<LoggerCommand>();
         let pool = Arc::new(db_pool);
 
         let handle = tokio::spawn(async move {
-            Self::run_db_writer(receiver, pool).await;
+            Self::run_db_writer(receiver, file_tx, pool).await;
+        });
+        // 文件 writer 句柄不驻留（服务生命周期任务，与 run_db_writer 同类；
+        // struct 仅单 _handle 槽位，保持 DB 为主写入面语义不变）
+        let log_file_path = config.log_file_path.clone();
+        let max_file_size = (config.max_file_size_mb * 1024 * 1024) as u64;
+        let max_files = config.max_files;
+        tokio::spawn(async move {
+            Self::run_file_writer(file_rx, log_file_path, max_file_size, max_files).await;
         });
 
         Self {
@@ -225,6 +241,7 @@ impl AuditLogger {
     #[cfg(feature = "db")]
     async fn run_db_writer(
         mut receiver: mpsc::UnboundedReceiver<LoggerCommand>,
+        file_mirror: mpsc::UnboundedSender<LoggerCommand>,
         pool: Arc<crate::db::DbPool>,
     ) {
         while let Some(cmd) = receiver.recv().await {
@@ -234,17 +251,29 @@ impl AuditLogger {
                         // DB 写失败 → 死信文件落地,事件不静默丢失
                         Self::write_dead_letter(&event, &e.to_string());
                     }
+                    // DB 写成功与否均镜像至文件面（运维可观测；DB 失败时
+                    // 文件面反而是事件唯一留存，死信另存重放记录）
+                    let _ = file_mirror.send(LoggerCommand::Event(event));
                 }
                 LoggerCommand::Flush(ack) => {
                     // Drain pending events
+                    let mut drained: Vec<SecurityEvent> = Vec::new();
                     while let Ok(cmd) = receiver.try_recv() {
-                        if let LoggerCommand::Event(event) = cmd
-                            && let Err(e) = Self::write_to_db(&pool, &event).await
-                        {
-                            Self::write_dead_letter(&event, &e.to_string());
+                        if let LoggerCommand::Event(event) = cmd {
+                            drained.push(event);
                         }
                     }
-                    let _ = ack.send(());
+                    for event in &drained {
+                        if let Err(e) = Self::write_to_db(&pool, event).await {
+                            Self::write_dead_letter(event, &e.to_string());
+                        }
+                    }
+                    // 镜像转发（含原 Flush 语义：文件 writer 收到 Flush 后
+                    // 对自身缓冲做同步 flush）
+                    for event in drained {
+                        let _ = file_mirror.send(LoggerCommand::Event(event));
+                    }
+                    let _ = file_mirror.send(LoggerCommand::Flush(ack));
                 }
             }
         }

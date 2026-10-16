@@ -9,7 +9,7 @@ repository = "https://github.com/Kirky-X/vecboost"
 documentation = "https://github.com/Kirky-X/vecboost"
 homepage = "https://github.com/Kirky-X/vecboost"
 license = "Apache-2.0"
-keywords = ["embedding", "vector", "ml", "ai", "inference", "translation", "language-detection"]
+keywords = ["embedding", "vector", "inference", "translation", "language-detection"]
 categories = ["asynchronous", "science", "web-programming::http-server"]
 
 [dependencies]

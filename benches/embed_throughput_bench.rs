@@ -5,8 +5,9 @@
 //!
 //! 模型经环境变量 `VECBOOST_BENCH_MODEL` 指定（本地模型目录或 HF repo id）；
 //! 未设置时 skip 并输出提示（`cargo bench` 不失败）。
-//! 引擎经 `VECBOOST_BENCH_ENGINE` 选择（`candle`（默认，safetensors 本地目录）/`onnx`
-//! ——onnx 支持本地 bundle 目录或 repo id 经 HF 拉取，如 Xenova/bge-small-en-v1.5）；
+//! 引擎经 `VECBOOST_BENCH_ENGINE` 选择（`onnx`（默认，本地 bundle 目录或 repo id
+//! 经 HF 拉取，如 Xenova/bge-small-en-v1.5）/`candle`（safetensors 本地目录，opt-in
+//! 回退后端））；未知值显性退出而非静默回退——回退会把基准数字记到错误引擎名下。
 //! 两引擎同机对比时保持模型同源（bge-small-en-v1.5 系列）与相同输入集。
 //! 基线数字记入 `docs/benchmarks/`，必须标注主机配置（CPU 型号/核数/内存）。
 
@@ -21,30 +22,47 @@ fn bench_model_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// `VECBOOST_BENCH_ENGINE` → 引擎类型（缺省 candle；未知值回退 candle 并提示）。
+/// `VECBOOST_BENCH_ENGINE` → 引擎类型（onnx-primary：缺省 Onnx；未知值显性
+/// 退出而非静默回退——静默回退会把基准数字记到错误引擎名下）。
 fn bench_engine_type() -> EngineType {
     match std::env::var("VECBOOST_BENCH_ENGINE").as_deref() {
-        Ok("onnx") => {
+        Ok("candle") => {
+            #[cfg(feature = "candle")]
+            {
+                EngineType::Candle
+            }
+            #[cfg(not(feature = "candle"))]
+            {
+                eprintln!("embed_throughput_bench: candle 引擎需 --features candle 构建");
+                std::process::exit(1);
+            }
+        }
+        // 未设置（Err(NotPresent)）与 "onnx" → Onnx（默认主引擎，onnx-primary
+        // 对齐 main.rs resolve_engine_model_config 的 None 缺省臂）；其余值显性拒绝
+        Ok(other) if other != "onnx" => {
+            eprintln!(
+                "embed_throughput_bench: 未知 VECBOOST_BENCH_ENGINE={other}（可选值: onnx/candle），拒绝执行"
+            );
+            std::process::exit(1);
+        }
+        _ => {
             #[cfg(feature = "onnx")]
             {
                 EngineType::Onnx
             }
             #[cfg(not(feature = "onnx"))]
             {
-                eprintln!("embed_throughput_bench: onnx 引擎需 --features onnx 构建，回退 candle");
-                EngineType::Candle
+                eprintln!("embed_throughput_bench: onnx 引擎需 --features onnx 构建");
+                std::process::exit(1);
             }
         }
-        Ok(other) if other != "candle" => {
-            eprintln!("embed_throughput_bench: 未知 VECBOOST_BENCH_ENGINE={other}，回退 candle");
-            EngineType::Candle
-        }
-        _ => EngineType::Candle,
     }
 }
 
-fn load_engine(model_dir: &std::path::Path) -> Option<Box<dyn InferenceEngine>> {
-    let engine_type = bench_engine_type();
+fn load_engine(
+    engine_type: EngineType,
+    model_dir: &std::path::Path,
+) -> Option<Box<dyn InferenceEngine>> {
     let config = ModelConfig {
         name: "bench".to_string(),
         engine_type: engine_type.clone(),
@@ -91,13 +109,14 @@ fn bench_embed(c: &mut Criterion) {
         );
         return;
     };
-    let Some(engine) = load_engine(&model_dir) else {
+    let engine_type = bench_engine_type();
+    let Some(engine) = load_engine(engine_type.clone(), &model_dir) else {
         return;
     };
-    // ID 含引擎名：candle/onnx 两次跑各自独立基线，criterion 不把引擎切换
-    // 误报为同 ID 的 regression/improvement
-    let engine_name =
-        std::env::var("VECBOOST_BENCH_ENGINE").unwrap_or_else(|_| "candle".to_string());
+    // ID 含引擎名（随 EngineType Display 派生，与引擎选择单一事实源）：
+    // candle/onnx 两次跑各自独立基线，criterion 不把引擎切换误报为
+    // 同 ID 的 regression/improvement
+    let engine_name = engine_type.to_string();
     let single = "benchmark single text for throughput measurement".to_string();
     let batch = texts(32);
 

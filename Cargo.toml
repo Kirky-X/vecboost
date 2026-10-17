@@ -263,7 +263,7 @@ auth = ["dep:garrison", "dep:aes-gcm"]
 # 回退后端（显式 `--features candle` 启用）。EngineType 枚举两变体无条件
 # 保留（API/wire 契约不变），仅引擎实现按 feature 编译；未启用 candle 时
 # engine_type="candle" 配置在启动期显性拒绝（main.rs
-# resolve_engine_model_config，i18n 键 startup-engine-candle-rebuild-hint）。
+# resolve_engine_model_config，i18n 键 startup-engine-candle-not-compiled）。
 onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/load-dynamic", "dep:character_converter"]
 candle = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers"]
 # CUDA 设备支持（cudarc driver + nvml 检测，后端正交）；candle 的 CUDA

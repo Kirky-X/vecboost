@@ -46,7 +46,7 @@ VecBoost 是一个使用 Rust 构建的**多功能推理服务**。它为文本�
 | **可扩展性** | 水平扩展 | Kubernetes 原生支持 |
 | **可靠性** | 稳定运行 | limiteron 令牌桶限流背压（Governor 内置熔断，非用户可配旋钮）、重试机制、健康检查 |
 | **安全性** | 企业级安全 | 认证、授权、审计日志 |
-| **灵活性** | 多引擎支持 | Candle、ONNX Runtime 抽象 |
+| **灵活性** | 多引擎支持 | ONNX Runtime 主引擎（onnx-primary）、Candle opt-in 回退抽象 |
 
 ---
 
@@ -60,10 +60,10 @@ VecBoost 是一个使用 Rust 构建的**多功能推理服务**。它为文本�
 | **gRPC** | sdforge 统一 Call 协议 | 通过 `#[forge(grpc_method = "...")]` 注册，`build_server_with_config` 启动 |
 | **MCP** | rmcp 2.1 | Model Context Protocol 服务，`#[forge(tool_name = "...")]` 注册工具 |
 | **CLI** | clap 4.6 | 命令行接口（由 sdforge 生成，非手写） |
-| **ML 推理** | Candle 0.11 | 原生 Rust 引擎（支持 Bert / XlmRoberta 架构） |
-| | ONNX Runtime 2.0 | 跨平台推理 |
-| **GPU 加速** | CUDA 12.x | NVIDIA GPU |
-| | Metal | Apple Silicon |
+| **ML 推理** | ONNX Runtime 2.0（`ort`） | **默认主引擎**（onnx-primary，`onnx` feature 随 default 启用） |
+| | Candle 0.11 | opt-in 回退后端（原生 Rust，支持 Bert / XlmRoberta 架构，不投入优化） |
+| **GPU 加速** | CUDA 12.x | NVIDIA GPU（ort 经 `ort/cuda`；candle 后端经 `candle-cuda` opt-in） |
+| | Metal | Apple Silicon（`metal` feature，candle 回退后端专属） |
 | **配置管理** | confers (TOML + env + config-bus) | 配置解析（必选依赖，禁止手写 config） |
 | **日志** | inklog + log | 日志基础设施（必选依赖，禁止手写 tracing） |
 | **缓存** | oxcache | 缓存基础设施（必选依赖，禁止手写 LRU） |
@@ -237,13 +237,21 @@ pub trait InferenceEngine: Send + Sync {
 
 | 引擎 | 类型 | 优势 | 劣势 | 适用场景 |
 |------|------|------|------|----------|
-| **Candle** | 原生 Rust | 无外部依赖、启动快、WASM 支持 | 生态系统较小 | CPU 推理、边缘计算 |
-| **ONNX Runtime** | 跨平台 | 成熟稳定、优化良好、硬件支持广 | 需要导出模型 | 通用推理、生产环境 |
+| **ONNX Runtime**（默认主引擎） | 跨平台 | 成熟稳定、优化良好、硬件支持广 | 需要导出模型 | 通用推理、生产环境 |
+| **Candle**（opt-in 回退） | 原生 Rust | 无外部依赖、启动快、WASM 支持 | 生态系统较小、CPU 单条前向显著慢于 ort（~25×），**不投入优化** | safetensors 资产、candle 原生决策头、GGUF 量化桥、metal/mkl/accelerate 后端 |
 | **OnnxTranslationEngine** | 跨平台（seq2seq） | encoder/decoder 双 Session 贪心解码，仓库首个生成式推理路径 | 无 CUDA EP 切换、缓存分支禁用（Xenova merged 图导出缺陷，每步全量重算 O(L²) 有界） | Marian/opus-mt 翻译（`task = "translate"` 或 `[translation].pairs`） |
 
 ---
 
-#### Candle 引擎模型架构
+#### ONNX 引擎（默认主引擎）
+
+`OnnxEngine`（`src/engine/onnx_engine.rs`，`onnx` feature，随 default 启用）基于 onnxruntime（`ort` crate，`load-dynamic` 运行期加载动态库，路径经 `ORT_DYLIB_PATH` 指定）。模型获取双通路：本地 bundle 目录探测（优先级 `model_quantized.onnx` → `model.onnx` → 目录内唯一 `*.onnx`，多候选显性报错）或 HF repo 拉取，可选 `model_sha256` 加载期校验。池化模式经 `infer_pooling_mode` 单一事实源构造期解析（bge 系 → Cls、minilm/e5/gte → Mean），支持 Cls/Mean/Max 三模式；三输入图（optimum/transformers.js 导出）按 `session.inputs()` 探测补喂全零 `token_type_ids`。精度 Fp32/Fp16/Int8（Fp16 请求在无 GPU 设备时 warn 后落 Fp32），输入截断上限 512，`embed`/`embed_batch` 出口 L2 归一化。跨引擎对账闸门：同源双导出逐文本余弦 ≥ 0.999。
+
+#### Candle 引擎（opt-in 回退后端）
+
+candle 已随 onnx-primary 切换降级为 opt-in 回退后端：`candle` feature 显式启用，默认构建依赖树不含 candle；`engine_type="candle"` 在未启用该 feature 的构建中启动期显性拒绝（i18n 键 `startup-engine-candle-not-compiled`），禁止静默降级 onnx。作为回退后端**不投入性能优化**；其不可替代面：candle 原生决策头（`CandleDecisionEngine`，不依赖 onnxruntime，消费 PyTorch checkpoint）、GGUF 量化桥（`quantized-gguf`）、metal/mkl/accelerate 加速后端、safetensors 资产通路。
+
+> **场景测试为何仍钉 candle**：`tests/scenario/conftest.py` 与 `scripts/run-scenario-tests.sh` 显式配置 `engine_type="candle"`（配套以 `--features candle` 构建），原因是场景测试资产为 safetensors 格式（candle 路径专属），属**有意保留**而非默认引擎口径回退；onnx 路径由 e2e/集成测试覆盖，两者不互斥。
 
 `CandleEngine`（`src/engine/candle_engine.rs`）通过 `ModelArchitecture` 枚举区分两种支持的模型架构，运行时根据 `config.json` 的 `model_type` 字段自动识别：
 
@@ -285,7 +293,7 @@ if let Some(target_dim) = matryoshka_target {
 
 - 精确缓存键：`emb:{model_id}:{xxh3_128(text)}`；语义缓存键：`text:{model_id}:{text}`——model_id 参与键且语义索引条目记录模型身份，fuzzy 命中按模型过滤，杜绝跨模型向量污染。
 - 语义缓存三级流程：精确命中 -> trigram 模糊命中（阈值 `fuzzy_threshold` 独立配置，命中计数 `vecboost_semantic_cache_fuzzy_hits_total`）-> 模型推理回填；写入侧拒绝非有限（NaN/Inf）向量；同键并发经 single-flight 去重。
-- 引擎出口契约：三个引擎（candle fp32 / candle 量化 / ONNX）`embed`/`embed_batch` 均返回 L2 归一化向量，服务层归一化幂等保留。
+- 引擎出口契约：全部 embedding 引擎（onnx 主引擎 / candle fp32 / candle 量化回退）`embed`/`embed_batch` 均返回 L2 归一化向量，服务层归一化幂等保留。
 
 ---
 
@@ -412,7 +420,7 @@ graph TB
 
     subgraph Inference["推理层"]
         CacheCheck[缓存检查 oxcache + SemanticCache]
-        ModelInference[模型推理 Candle/ONNX/seq2seq]
+        ModelInference[模型推理 ONNX 主 / Candle 回退 / seq2seq]
     end
 
     subgraph Response["响应层"]
@@ -887,7 +895,7 @@ graph TB
         end
 
         subgraph Engine["推理引擎层"]
-            InferenceEngine["推理引擎<br/>(Candle / ONNX Runtime)"]
+            InferenceEngine["推理引擎<br/>(ONNX Runtime 主 / Candle 回退)"]
         end
 
         subgraph Device["设备层"]
@@ -997,7 +1005,7 @@ tests/
 
 ---
 
-> **📝 最后更新**: 2026-08-09 | **版本**: 0.3.0-rc.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-10-17 | **版本**: 0.3.0-rc.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
 
 ---
 

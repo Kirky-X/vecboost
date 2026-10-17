@@ -152,7 +152,19 @@ impl Default for InferenceContext {
         Self {
             model_name: "default".to_string(),
             model_type: ModelType::Predefined(PredefinedModelType::M2Bert),
-            engine_type: EngineType::Candle,
+            // onnx-primary：缺省主引擎 onnx（与 main.rs
+            // resolve_engine_model_config 的 None 缺省臂同口径）；
+            // --no-default-features 定制构建回落 Candle 变体。
+            engine_type: {
+                #[cfg(feature = "onnx")]
+                {
+                    EngineType::Onnx
+                }
+                #[cfg(not(feature = "onnx"))]
+                {
+                    EngineType::Candle
+                }
+            },
             device: DeviceType::Cpu,
             precision: Precision::Fp32,
             batch_size: 32,
@@ -1464,6 +1476,11 @@ mod tests {
             context.model_type,
             ModelType::Predefined(PredefinedModelType::M2Bert)
         );
+        // 缺省主引擎随 onnx-primary：onnx 构建为 Onnx，
+        // --no-default-features 定制构建回落 Candle 变体（变体本身 feature 门内）
+        #[cfg(feature = "onnx")]
+        assert_eq!(context.engine_type, EngineType::Onnx);
+        #[cfg(not(feature = "onnx"))]
         assert_eq!(context.engine_type, EngineType::Candle);
         assert_eq!(context.device, DeviceType::Cpu);
         assert_eq!(context.precision, Precision::Fp32);

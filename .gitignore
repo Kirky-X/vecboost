@@ -177,3 +177,15 @@ assets/
 # 无关，不入 git；本地资产保留，规范面见 docs/MAINTENANCE.md）
 # -----------------------------------------------------------------------------
 transcribe-poc/
+
+# -----------------------------------------------------------------------------
+# 15. tools 孤儿脚本（2026-10-18 owner 裁定：非项目所需，取消跟踪、本地保留）
+# - torch_backend_glue.py：唯一消费者是 transcribe-poc/src/pytorch_backend.rs 的
+#   include_str!，而该目录已按 §14 不入库——干净 clone 里此脚本无任何引用方
+# - gen_scatter.py：产物 scatter.onnx 无入库代码消费，转录主链路的 KV delta 由
+#   src/engine/transcribe/asr.rs 原地写回，不经 ScatterND 合并图
+# 仍须保留入库：tools/export-1.7b/ —— assets/models/qwen3-*.onnx 的唯一复现
+# 路径，被 src/engine/transcribe/asr.rs 直接加载（导出与命名约定见基准文档）
+# -----------------------------------------------------------------------------
+tools/torch_backend_glue.py
+tools/gen_scatter.py

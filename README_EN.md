@@ -4,7 +4,7 @@
 
 [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=for-the-badge)](https://www.apache.org/licenses/LICENSE-2.0) [![GitHub release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![Rustc 1.91+](https://img.shields.io/badge/Rustc-1.91+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
 
-[中文](README.md) | **English**
+[Chinese](README.md) | **English**
 
 **A high-performance, production-grade multi-task inference service written in Rust. VecBoost provides six inference capabilities — text embedding, reranking, decision answering, translation, language detection, and speech transcription — with multiple inference engines, GPU acceleration, and enterprise-grade features.**
 

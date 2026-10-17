@@ -52,7 +52,7 @@ cargo deny check
 
 ### 如何报告
 
-**请勿通过公开 issue 报告安全漏洞。** 请发送邮件联系 maintainer：<kirky-x@outlook.com>，并在标题注明 `[security]`。确认时限与披露时间线：待补充（维护者收到报告后会尽快回复）。
+**请勿通过公开 issue 报告安全漏洞。** 请发送邮件联系 maintainer：<kirky-x@outlook.com>，并在标题注明 `[security]`。维护者收到报告后会尽快回复。
 
 ### 报告内容
 

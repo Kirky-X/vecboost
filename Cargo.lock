@@ -700,7 +700,8 @@ dependencies = [
 [[package]]
 name = "candle-core"
 version = "0.11.0"
-source = "git+https://github.com/Kirky-X/candle?branch=zip9-optional#3d0cc6bdd3fc36f797e9dff029c947bbc9b88c84"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ecb245093b0f791b89d3420c3df9c6d49c60ab63ba54db896bf8a3baf486706"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -727,12 +728,14 @@ dependencies = [
  "tokenizers 0.22.2",
  "yoke 0.8.3",
  "zerocopy",
+ "zip 8.6.0",
 ]
 
 [[package]]
 name = "candle-kernels"
 version = "0.11.0"
-source = "git+https://github.com/Kirky-X/candle?branch=zip9-optional#3d0cc6bdd3fc36f797e9dff029c947bbc9b88c84"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67450168a281bbb195a14cc85cf164c7a12023a54a03409a3324f476346e0789"
 dependencies = [
  "cudaforge",
 ]
@@ -740,7 +743,8 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.11.0"
-source = "git+https://github.com/Kirky-X/candle?branch=zip9-optional#3d0cc6bdd3fc36f797e9dff029c947bbc9b88c84"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "242e83c6acf639bb273c929d73c67a882bb4dd08a140f121096e19ba2f213d3e"
 dependencies = [
  "block2",
  "half",
@@ -755,7 +759,8 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.11.0"
-source = "git+https://github.com/Kirky-X/candle?branch=zip9-optional#3d0cc6bdd3fc36f797e9dff029c947bbc9b88c84"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaa10b6ccc365b33210ce404fbf45e60d3e0bdac1004463cf1052e6ee1c1739a"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -774,7 +779,8 @@ dependencies = [
 [[package]]
 name = "candle-transformers"
 version = "0.11.0"
-source = "git+https://github.com/Kirky-X/candle?branch=zip9-optional#3d0cc6bdd3fc36f797e9dff029c947bbc9b88c84"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bcbbf7ff00ff6fe2af22b93600195917fe90e90ff48424a140d1a926c44b1c1"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -794,7 +800,8 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.11.0"
-source = "git+https://github.com/Kirky-X/candle?branch=zip9-optional#3d0cc6bdd3fc36f797e9dff029c947bbc9b88c84"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "257411c33abf7d898a31ac20d80813dfe96ff09e23a73039e22ab293aea9b871"
 dependencies = [
  "ug",
  "ug-cuda",

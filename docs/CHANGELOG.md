@@ -25,7 +25,7 @@
 ### 变更
 
 - **主推理引擎切换为 onnxruntime（ort），candle 降为 opt-in 回退后端（onnx-primary）**：
-  - `default = ["http", "onnx"]`——默认构建即 ort 主引擎且依赖树不再含 candle（zip 解析风险随之出树；candle 三件套转 optional，暂指 fork `Kirky-X/candle@zip9-optional`，官方 0.11.1 发布后切回）
+  - `default = ["http", "onnx"]`——默认构建即 ort 主引擎且依赖树不再含 candle（zip 解析风险随之出树；candle 三件套转 optional；zip 全量 yank 事件于 2026-10-16 被上游解除，candle 回指官方 0.11，应急 fork 已删除）
   - `EngineType` 枚举与全部 task 路由语义不变（wire/API 契约零变化）；未启用 `candle` feature 而配置 `engine_type="candle"` 时启动期显性拒绝（`startup-engine-candle-not-compiled`，禁止静默降级）
   - **迁移提示**：旧配置 `model_path` 指向 safetensors 目录（无 `engine_type` 字段）升级后启动报错——需显式 `engine_type = "candle"` 并以 `--features candle` 构建，或迁移至 onnx bundle
   - feature 语义调整：`cuda` 不再隐含 candle GPU 后端（需叠加 `candle-cuda`）；`metal`/`mkl`/`accelerate`/`quantized-gguf` 均隐含 `candle`；`transcribe` 仍经 `ort/cuda`（不受影响）

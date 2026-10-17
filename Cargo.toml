@@ -107,12 +107,12 @@ dbnexus = { version = "0.6.0-rc.9", optional = true, default-features = false, f
 # candle 转 optional（onnx-primary，2026-10-16）：主推理引擎切换为
 # onnxruntime（ort，见 `onnx` feature），candle 降级为 opt-in 回退后端
 # （feature `candle`），默认构建的依赖树不含 candle（zip 解析风险随之出树）。
-# candle 暂用 fork 分支（zip9-optional）：zip 8.6.0 被上游全量 yank 致 candle 0.11.0
-# 依赖树不可解析；fork 三改动=zip 升 9.0.3（3 处 API 适配）+ zip 改 optional 新增 feature
-# 门控（本仓 features=[] 不启用，依赖树彻底无 zip）。candle 0.11.1 发布后切回官方版。
-candle-core = { git = "https://github.com/Kirky-X/candle", branch = "zip9-optional", default-features = false, features = [], optional = true }
-candle-nn = { git = "https://github.com/Kirky-X/candle", branch = "zip9-optional", default-features = false, optional = true }
-candle-transformers = { git = "https://github.com/Kirky-X/candle", branch = "zip9-optional", default-features = false, optional = true }
+# 官方 0.11 恢复可解析（zip 8.6.0 于 2026-10-16 被上游解除 yank）——与 fork
+# 应急方案（zip 门控、candle 树无 zip）不同，启用 `candle` feature 的构建树
+# 重新含 zip 8.6.0；默认树仍无 zip。
+candle-core = { version = "0.11", default-features = false, features = [], optional = true }
+candle-nn = { version = "0.11", default-features = false, optional = true }
+candle-transformers = { version = "0.11", default-features = false, optional = true }
 # hgemm_ 垫片（mkl feature，见 src/engine/mkl_shim.rs）：f16 类型 ABI 兼容层
 half = { version = "2.7", default-features = false, optional = true }
 hf-hub = { workspace = true }

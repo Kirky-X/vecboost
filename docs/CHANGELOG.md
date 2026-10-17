@@ -32,6 +32,7 @@
 - **缺省 HTTP body 上限实际值 2MB→5MB**：修复隐藏硬顶后 `body_limit_mb`（缺省 5）真实生效（此前提取器层 2MB 先于配置拒绝）
 - **审计日志 DB 模式新增文件双写**：db 构建下 `logs/audit.log`（轮转）与 `audit_logs` 表并存（此前仅写表，文件运维可观测面缺失）
 - **并发同文请求合并（in-flight 去重）**：pipeline 入口对同文同 normalize 请求只推理一次，结果副本多播——同文并发逐位一致由「只算一次」结构性保证
+- **Swagger UI 收敛为 `swagger-ui` feature（默认不编译，挂主服务端口，单二进制一次构建）**：`http`/`openapi` 不再携带 `dep:utoipa-swagger-ui` 与 `sdforge/docs`；交互页面与 `/api-docs/openapi.json` 仅在 `--features swagger-ui` 构建时挂载（与主服务同端口，一次 `cargo build` 产出完整二进制），`openapi` feature 保持为规范程序化导出（sdforge/openapi）。注：Cargo 锁文件为全 feature 并集解析——optional 依赖（解析层）始终存在，feature 隔离只裁剪编译；2026-10-17 实测 zip 3.0.0/8.6.0 已可正常解析（前一天全量 yank 已解除）。
 
 ### 修复
 

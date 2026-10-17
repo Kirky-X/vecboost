@@ -2421,8 +2421,9 @@ async fn build_http_router(config: &VecboostConfig) -> anyhow::Result<axum::Rout
     // 不存在的 /api/v1/*,破坏全部 API 路由(实测 301)。
     let app = sdforge::http::build();
 
-    // 挂载 Swagger UI(/api-docs/openapi.json + /swagger-ui/),
-    // openapi.json 由 sdforge 从 forge 注册路由动态生成
+    // Swagger UI(/api-docs/openapi.json + /swagger-ui/)：feature `swagger-ui`
+    // 显式 opt-in（默认构建不编译；挂主服务端口，单一二进制一次构建完成）
+    #[cfg(feature = "swagger-ui")]
     let app = app.merge(sdforge::docs::swagger_ui_router());
 
     // metrics 端点（手写例外：Prometheus text/plain 响应，forge 不支持非 JSON）
@@ -3255,7 +3256,8 @@ mod tests {
     }
 
     // Swagger UI 挂载验证 —— openapi.json 与 UI 资源均可访问
-    #[cfg(feature = "http")]
+    // （随 feature `swagger-ui` 门控：默认构建不编译 docs 链）
+    #[cfg(feature = "swagger-ui")]
     #[tokio::test]
     async fn swagger_ui_endpoints_served() {
         use tower::ServiceExt;

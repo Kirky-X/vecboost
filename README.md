@@ -232,7 +232,7 @@ VecBoost 由 `sdforge` 从处理函数单一源生成四种协议接口（`src/a
 - **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露由 `#[forge(tool_name=…)]` 注册的工具，工具名为 `embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models` 等（注意 MCP `tool_name` 非 HTTP 端点名，完整清单见 [📘 API 参考](docs/API_REFERENCE.md)）；
 - **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect / transcribe 子命令（见 [💡 最小示例](#最小示例)；`transcribe` 子命令收 WAV 文件路径，读 16kHz 单声道样本）；
 - **推理引擎**：ONNX Runtime（默认，`onnx` feature 随 default 启用）与 Candle（`candle` feature opt-in 回退），经 `EngineFactory::create` 工厂切换；`[model]` 的 `engine_type` / `task` 配置驱动引擎与任务维度选择——`task = "embedding"`（默认）/ `task = "decision"`（Laya 决策管线）/ `task = "translate"`（seq2seq 翻译，仅 onnx）/ `task = "transcribe"`（Qwen3-ASR 转录，需 `transcribe` feature）四态，非当前任务的端点以 400 Unsupported task 显性拒绝（bundle 布局见 [`config/config.toml`](config/config.toml) `[model]` 段注释，翻译语言对见 `[translation]` 段）；
-- **可观测性与运维**：`/metrics`（Prometheus 指标）、`/health`（存活探针）与 `/health?depth=full`（真实就绪探测）、`/swagger-ui/`（交互式 OpenAPI 文档，需 `openapi`/`http` feature，规范 JSON 见 `/api-docs/openapi.json`）；只读诊断 `vecboost doctor`（config / tokenizer / 缓存 / 线程 / GPU / 模型完整性，FAIL 退出码 1）。
+- **可观测性与运维**：`/metrics`（Prometheus 指标）、`/health`（存活探针）与 `/health?depth=full`（真实就绪探测）、`/swagger-ui/`（交互式 OpenAPI 文档，需 `swagger-ui` feature，规范 JSON 见 `/api-docs/openapi.json`）；只读诊断 `vecboost doctor`（config / tokenizer / 缓存 / 线程 / GPU / 模型完整性，FAIL 退出码 1）。
 
 翻译与语言检测请求示例（与 [API 参考](docs/API_REFERENCE.md) 字段一致）：
 
@@ -262,7 +262,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 
 > **🔧 译文后处理与超时**：翻译在引擎出口做确定性后处理（服务层与库用户同享）——`target=zh` 时繁→简归一化、URL 协议分隔符与 LaTeX 转义符号修复；模型级高频误译经 `[[translation.pairs.output_fixes]]` 字面替换表（按声明序）修复，见 [`config/config.toml`](config/config.toml) `[translation]` 段。HTTP 全局请求超时经 `[server] request_timeout_seconds` 配置（CPU seq2seq 译论文级长摘要需 15-130+s，`config/config.toml` 已显式设 300s）。
 
-交互式 OpenAPI 文档（Swagger UI）：`http://localhost:9002/swagger-ui/`；规范 JSON：`/api-docs/openapi.json`（均需 `openapi` feature；注意根路径 `/api-docs` 不提供 UI，ReDoc 推迟到 v0.3.0）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/PERFORMANCE.md#新增指标)。
+交互式 OpenAPI 文档（Swagger UI）：`cargo build --features swagger-ui` 后访问 `http://localhost:9002/swagger-ui/`；规范 JSON：`/api-docs/openapi.json`（单二进制、一次构建；注意根路径 `/api-docs` 不提供 UI，ReDoc 推迟到 v0.3.0）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/PERFORMANCE.md#新增指标)。
 
 ### 🏷️ Feature 标志
 
@@ -274,7 +274,8 @@ curl -X POST http://localhost:9002/api/1/detect \
 | `grpc` | - | gRPC 服务器（sdforge `#[forge(grpc_method)]` 生成） |
 | `cli` | - | CLI 命令行工具 |
 | `mcp` | - | MCP 协议接口（LLM 工具集成，stdio 模式） |
-| `openapi` | - | OpenAPI/Swagger UI 文档（独立于 `http` 启用） |
+| `openapi` | - | OpenAPI 规范程序化导出（sdforge/openapi，不经 swagger-ui 链） |
+| `swagger-ui` | - | Swagger UI 交互页面 + `/api-docs/openapi.json`（挂主服务端口；默认构建不编译，单二进制一次构建） |
 | `schema` | - | OpenAPI Schema 派生（`http`/`openapi` 自动启用；支持 library 模式类型导出） |
 | `db` | - | dbnexus 数据库持久化基础设施（驱动无关，须搭配 `sqlite` 或 `postgres` 驱动 feature 二选一） |
 | `sqlite` | - | SQLite 数据库驱动（含 `db` + `dbnexus/sqlite` + `inklog/sqlite`） |

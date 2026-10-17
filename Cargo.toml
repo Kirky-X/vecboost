@@ -134,8 +134,13 @@ tower-http = { version = "0.7", optional = true, default-features = false, featu
 # crate 的 5.5 在 #[forge] 展开处同名歧义（E0659）——7 个 forge 文件用显式
 # `use utoipa;` 钉住本 crate 版本（见 src/api/*.rs）；本 crate 三方版本不动。
 utoipa = { version = "5.5", optional = true, default-features = false, features = ["macros", "axum_extras", "chrono", "uuid"] }
-# vendored：Swagger UI v5.17.14 随 crate 打包（utoipa-swagger-ui-vendored），
-# build script 免联网下载——离线环境（CI 隔离/内网）下 openapi feature 可编译
+# Swagger UI 交互页面（vendored：v5.17.14 随 crate 打包，build script 免联网下载）。
+# 只经独立 feature `swagger-ui` 引入（默认不编译，裁剪默认构建体积/攻击面）；
+# 启用后 `/swagger-ui/` 与 `/api-docs/openapi.json` 挂主服务端口，单一二进制、
+# 一次 `cargo build --features swagger-ui` 完成。
+# 注：Cargo 锁文件为全 feature 并集解析——optional 依赖即使 feature 未启用也
+# 参与解析（feature 隔离只能裁剪编译；2026-10-17 实测 zip 3.0.0/8.6.0 可正常
+# 解析，yank 已解除）。
 utoipa-swagger-ui = { version = "9.0", optional = true, default-features = false, features = ["axum", "url", "vendored"] }
 uuid = { version = "1.26", optional = true, default-features = false, features = ["v4", "serde"] }
 # OpenAI 兼容端点 encoding_format=base64 编码（http feature）
@@ -218,13 +223,19 @@ tikv-jemalloc-ctl = { version = "0.7", default-features = false }
 default = ["http", "onnx"]
 
 # 协议特性 — 保留 cache/streaming/timestamp (轻量)，移除未接线的 logging/kit/inklog
-# sdforge/docs:Swagger UI(/api-docs);dep:dbnexus:在所有 http 构建中统一
+# Swagger UI（sdforge/docs + utoipa-swagger-ui）为独立 feature `swagger-ui`
+# 显式 opt-in（默认不编译；挂主服务端口）；dep:dbnexus:在所有 http 构建中统一。
 # dbnexus feature(含 failover/replica-routing)—— inklog integrations::infra
 # 无条件构造这两个 DbConfig 字段,缺 feature 时 inklog 无法编译(见 dbnexus 依赖处注释)
-http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:utoipa-swagger-ui", "dep:uuid", "dep:base64", "dep:prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/cache", "sdforge/streaming", "sdforge/timestamp", "sdforge/docs", "dep:dbnexus"]
+http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:uuid", "dep:base64", "dep:prometheus", "dep:reqwest", "sdforge/http", "sdforge/security", "sdforge/cache", "sdforge/streaming", "sdforge/timestamp", "dep:dbnexus"]
 grpc = ["sdforge/grpc", "sdforge/ratelimit", "sdforge/security", "dep:tonic"]
 cli = ["sdforge/cli", "dep:clap"]
-openapi = ["schema", "dep:utoipa-swagger-ui", "sdforge/openapi", "sdforge/docs"]
+openapi = ["schema", "sdforge/openapi"]
+# Swagger UI 交互页面 + /api-docs/openapi.json（挂主服务端口，显式 opt-in）。
+# 默认构建不编译；启用：--features swagger-ui（单二进制、一次构建完成）。
+# 依赖 `openapi`：forge 宏的 OpenAPI 路由注册（OpenApiRouteInfo submit）在
+# 使用方 crate 的 `openapi` cfg 门控下，缺之 spec paths 为空（实测先例）。
+swagger-ui = ["dep:utoipa-swagger-ui", "openapi", "sdforge/docs"]
 
 # OpenAPI Schema 派生特性 — 由 http/openapi 自动启用
 # 单独启用时仅引入 utoipa::ToSchema 派生能力（用于 library 模式下的类型导出），

@@ -967,21 +967,27 @@ vecboost_cache_hit_ratio
 
 ### 📚 OpenAPI 文档
 
-VecBoost 内置 Swagger UI 与 OpenAPI 规范端点（由 `utoipa` + `utoipa-swagger-ui` 生成，需启用 `openapi` feature）：
+VecBoost 内置 Swagger UI 与 OpenAPI 规范端点（由 `utoipa` + `utoipa-swagger-ui` 生成，需以 `--features swagger-ui` 构建——默认构建不编译；单二进制、一次 `cargo build` 完成）：
 
 | 端点 | 说明 |
 |------|------|
 | `GET /swagger-ui/` | Swagger UI 交互式文档（可在浏览器中直接发起请求） |
-| `GET /api-docs/openapi.json` | OpenAPI 3.0 规范 JSON |
+| `GET /api-docs/openapi.json` | OpenAPI 3.1 规范 JSON（动态生成） |
 
 **访问示例:**
+
+```bash
+# 一次构建（含 Swagger UI）
+cargo build --features swagger-ui
+# 启动后访问（端口与主服务一致）
+```
 
 ```
 http://localhost:9002/swagger-ui/           # 浏览器打开 Swagger UI
 http://localhost:9002/api-docs/openapi.json  # 拉取 OpenAPI 规范
 ```
 
-> **ℹ️ 说明**: Swagger UI 路径为 `/swagger-ui/`（含 `/swagger-ui/{*rest}`），规范 JSON 为 `/api-docs/openapi.json`；根路径 `/api-docs` **未注册路由**，浏览器直接访问 `/api-docs` 或 `/api-docs/` 均返回 `404 Not Found`。ReDoc 端点推迟到 v0.3.0 提供。所有 REST API（含 OpenAI 兼容 `/v1/embeddings`）的请求/响应 schema 均在 OpenAPI 规范中描述，可直接用于生成客户端 SDK。
+> **ℹ️ 说明**: Swagger UI 路径为 `/swagger-ui/`（含 `/swagger-ui/{*rest}`），规范 JSON 为 `/api-docs/openapi.json`；根路径 `/api-docs` **未注册路由**，浏览器直接访问 `/api-docs` 或 `/api-docs/` 均返回 `404 Not Found`。默认构建（无 `swagger-ui` feature）不编译 swagger 链——需该能力时以 `--features swagger-ui` 构建（Cargo 锁文件为全 feature 并集解析，optional 依赖在解析层始终存在；2026-10-17 实测 zip 3.0.0/8.6.0 可正常解析，yank 已解除）。ReDoc 端点推迟到 v0.3.0 提供。所有 REST API（含 OpenAI 兼容 `/v1/embeddings`）的请求/响应 schema 均在 OpenAPI 规范中描述，可直接用于生成客户端 SDK。
 
 ---
 

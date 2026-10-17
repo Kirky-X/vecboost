@@ -42,7 +42,8 @@
 - **axum 提取器层 `DefaultBodyLimit` 2MB 硬顶**掩盖 `[server].body_limit_mb` 配置（>2MiB 静默失效，转录 48s 音频 413）→ 两层限制统一到同一配置口径
 - **FT-03 并发同文位级不一致**：min_workers>1 下同文落多批、GEMM 批形状差异致位级漂移→ in-flight 去重结构性修复
 - **R-auth-009c 限流审计文件面缺失**：db 构建走 DB-only 写入，场景锚定 `logs/audit.log` 恒空 → DB 双写修复
-- 引擎工厂测试隔离缺陷：`test_create_decision_task_dispatches_to_candle_engine` 断言依赖 i18n 初始化顺序 → 显式 `i18n::init()`
+- **批处理 OOM 回退未消费真实配置（回退语义失真）**：`embed_chunks_concurrent` 的单块路径此前自带内联回退循环——以 `ModelConfig::default()` 调 `try_fallback_to_cpu`、绕开 `ModelManager` 门控，重试上限另有本地常量 1（与单文本路径的 2 不一致）。现统一委托 `common::handle_oom_fallback`（真实 `ModelConfig`+`ModelManager`、重试上限 2 次）；库模式无 manager 时按 `oom-no-fallback-available` 显性失败而非假装回退。连带删除失效的 `log-service-oom-error-detected-batch` / `log-service-successfully-fell-back-cpu-2` 两条 FTL 键
+- 引擎/决策工厂测试隔离缺陷（2 处）：`test_create_decision_task_dispatches_to_candle_engine`、`test_process_decision_engine_panic_maps_to_inference_error` 断言依赖 i18n 初始化顺序 → 各自显式 `i18n::init()`
 
 ### 质量与测试
 
@@ -50,6 +51,7 @@
 - **性能基准**（同机 CPU，criterion）：embedding 单条 onnx 2.89ms vs candle 71.99ms（~25×）、batch×32 27.65ms vs 176.32ms（~6.4×）；`embed_throughput_bench` 支持 `VECBOOST_BENCH_ENGINE` 引擎选择 + ID 含引擎名 + `expect` 防「快速失败假性能」
 - **新增测试**：`onnx_embed_e2e`（真机 embedding 契约与单条-批量一致性）、`engine_backend_parity`（精度对账 + 性能观测）、场景 `test_transcribe.py`（HTTP 转录 e2e：真机 ASR/体量/防线 4 用例）、gRPC `vecboost.decide`/`vecboost.transcribe` 方法测试
 - **测试基建修复**：场景 conftest 二进制路径动态推导（修 worktree 测错目标）、集成/场景配置模板显式 `engine_type`、`scripts/link-assets.sh`（worktree 资产链接）、`download_model --onnx/--translate`（embedding/翻译 bundle 资产获取）
+- **批处理 OOM 回退契约测试**：`RecordingOomEngine` mock 钉住回退确实消费真实 `ModelConfig`（断言 `name != "default"`、`model_path` 为注入值），且无 manager 时不发起回退（`try_fallback_to_cpu` 零调用）
 
 ### 已知限制
 

@@ -35,8 +35,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
-const MAX_FALLBACK_ATTEMPTS: usize = 1;
-
 /// Per-chunk timeout for batch processing (seconds).
 /// Prevents a single hung inference call from blocking the entire batch indefinitely.
 const BATCH_CHUNK_TIMEOUT_SECS: u64 = 60;
@@ -405,10 +403,6 @@ impl EmbeddingService {
             )
         );
         Ok(())
-    }
-
-    fn is_oom_error(error: &VecboostError) -> bool {
-        crate::service::common::is_oom_error(error)
     }
 
     async fn handle_oom_fallback<F, Fut, T>(&self, operation: F) -> Result<T, VecboostError>
@@ -1175,11 +1169,17 @@ impl EmbeddingService {
         let chunks: Vec<&[String]> = unique_texts.chunks(optimal_batch_size).collect();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent_chunks));
         let engine = Arc::clone(&self.engine);
+        // OOM 回退需要真实模型配置与 manager：克隆进 spawn 任务（block_on
+        // 之外的 async 任务无法借 &self）
+        let model_config = self.model_config.clone();
+        let model_manager = self.model_manager.clone();
 
         let mut tasks = Vec::with_capacity(chunks.len());
         for (chunk_idx, chunk) in chunks.iter().enumerate() {
             let chunk = chunk.to_vec();
             let engine = Arc::clone(&engine);
+            let model_config = model_config.clone();
+            let model_manager = model_manager.clone();
             let semaphore = Arc::clone(&semaphore);
 
             tasks.push(tokio::spawn(async move {
@@ -1188,7 +1188,15 @@ impl EmbeddingService {
                     VecboostError::InferenceError(format!("Failed to acquire semaphore: {}", e))
                 })?;
 
-                Self::embed_single_chunk(engine, chunk, chunk_idx, optimal_batch_size).await
+                Self::embed_single_chunk(
+                    engine,
+                    model_config,
+                    model_manager,
+                    chunk,
+                    chunk_idx,
+                    optimal_batch_size,
+                )
+                .await
             }));
         }
 
@@ -1214,119 +1222,46 @@ impl EmbeddingService {
         Ok(all_results)
     }
 
-    /// 单块推理 + OOM CPU 回退重试循环：成功产出（全局下标, L2 归一化
-    /// 向量, 截断预览）三元组；回退已触发或回退失败显性 OOM 失败。
+    /// 单块推理 + OOM CPU 回退：回退/重试循环统一委托
+    /// `common::handle_oom_fallback`（真实 `ModelConfig` + `ModelManager`
+    /// 门控，重试上限 2 次）；成功产出（全局下标, L2 归一化向量,
+    /// 截断预览）三元组。回退已触发/回退失败/无 manager 均显性 OOM 失败。
     async fn embed_single_chunk(
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+        model_manager: Option<Arc<ModelManager>>,
         chunk: Vec<String>,
         chunk_idx: usize,
         optimal_batch_size: usize,
     ) -> Result<Vec<(usize, Vec<f32>, String)>, VecboostError> {
-        let mut attempts = 0;
+        let embeddings = crate::service::common::handle_oom_fallback(
+            &engine,
+            &model_config,
+            &model_manager,
+            || async { engine.read().await.embed_batch(&chunk) },
+        )
+        .await?;
 
-        loop {
-            attempts += 1;
+        let mut results: Vec<(usize, Vec<f32>, String)> = Vec::with_capacity(embeddings.len());
 
-            let embed_result = {
-                let guard = engine.read().await;
-                guard.embed_batch(&chunk)
-            };
+        for (text_idx, (text, embedding)) in chunk.iter().zip(embeddings.into_iter()).enumerate() {
+            let mut emb = embedding;
 
-            match embed_result {
-                Ok(embeddings) => {
-                    let mut results: Vec<(usize, Vec<f32>, String)> =
-                        Vec::with_capacity(embeddings.len());
+            normalize_l2(&mut emb)?;
 
-                    for (text_idx, (text, embedding)) in
-                        chunk.iter().zip(embeddings.into_iter()).enumerate()
-                    {
-                        let mut emb = embedding;
+            let global_idx = chunk_idx * optimal_batch_size + text_idx;
 
-                        normalize_l2(&mut emb)?;
-
-                        let global_idx = chunk_idx * optimal_batch_size + text_idx;
-
-                        let text_preview = if text.len() > 100 {
-                            &text[..text.floor_char_boundary(100)]
-                        } else {
-                            text
-                        }
-                        .to_string();
-
-                        results.push((global_idx, emb, text_preview));
-                    }
-
-                    return Ok(results);
-                }
-
-                Err(error) if Self::is_oom_error(&error) && attempts <= MAX_FALLBACK_ATTEMPTS => {
-                    warn!(
-                        "{}",
-                        crate::i18n::tr_with_args(
-                            "log-service-oom-error-detected-batch",
-                            crate::i18n::tr_args(&[
-                                ("a1", &(chunk_idx).to_string()),
-                                ("a2", &(error).to_string()),
-                                ("a3", &(attempts).to_string()),
-                                ("a4", &(MAX_FALLBACK_ATTEMPTS).to_string())
-                            ])
-                        )
-                    );
-
-                    let current_engine = engine.read().await;
-
-                    if current_engine.is_fallback_triggered() {
-                        warn!(
-                            "{}",
-                            crate::i18n::tr("log-service-fallback-already-triggered-cannot")
-                        );
-
-                        return Err(VecboostError::OutOfMemory(
-                            crate::i18n::tr("oom-no-fallback").to_string(),
-                        ));
-                    }
-
-                    drop(current_engine);
-
-                    let mut engine_guard = engine.write().await;
-
-                    let config_clone = ModelConfig::default();
-
-                    let fallback_result = engine_guard.try_fallback_to_cpu(&config_clone).await;
-
-                    match fallback_result {
-                        Ok(()) => {
-                            warn!(
-                                "{}",
-                                crate::i18n::tr_with_args(
-                                    "log-service-successfully-fell-back-cpu-2",
-                                    crate::i18n::tr_args(&[("a1", &(chunk_idx).to_string())])
-                                )
-                            );
-
-                            continue;
-                        }
-
-                        Err(e) => {
-                            warn!(
-                                "{}",
-                                crate::i18n::tr_with_args(
-                                    "log-service-failed-fallback-cpu",
-                                    crate::i18n::tr_args(&[("a1", &(e).to_string())])
-                                )
-                            );
-
-                            return Err(VecboostError::OutOfMemory(format!(
-                                "OOM error and fallback failed: {}",
-                                e
-                            )));
-                        }
-                    }
-                }
-
-                Err(error) => return Err(error),
+            let text_preview = if text.len() > 100 {
+                &text[..text.floor_char_boundary(100)]
+            } else {
+                text
             }
+            .to_string();
+
+            results.push((global_idx, emb, text_preview));
         }
+
+        Ok(results)
     }
 
     /// Matryoshka 目标维度校验（不得超过配置维度上限）。
@@ -2943,7 +2878,7 @@ mod tests {
         }
     }
 
-    // ===== OOM 恢复逻辑测试 =====
+    // ===== OOM 恢复逻辑测试（判定实现在 common，批/单文本路径共用） =====
 
     #[test]
     fn test_is_oom_error_recognizes_oom_messages() {
@@ -2958,14 +2893,16 @@ mod tests {
         ];
         for msg in cases {
             assert!(
-                EmbeddingService::is_oom_error(&VecboostError::OutOfMemory(msg.to_string())),
+                crate::service::common::is_oom_error(&VecboostError::OutOfMemory(msg.to_string())),
                 "should recognize OOM: {}",
                 msg
             );
         }
         for msg in cases {
             assert!(
-                EmbeddingService::is_oom_error(&VecboostError::InferenceError(msg.to_string())),
+                crate::service::common::is_oom_error(&VecboostError::InferenceError(
+                    msg.to_string()
+                )),
                 "should recognize InferenceError-wrapped OOM: {}",
                 msg
             );
@@ -2974,13 +2911,13 @@ mod tests {
 
     #[test]
     fn test_is_oom_error_rejects_non_oom_errors() {
-        assert!(!EmbeddingService::is_oom_error(
+        assert!(!crate::service::common::is_oom_error(
             &VecboostError::InferenceError("invalid model weights".to_string(),)
         ));
-        assert!(!EmbeddingService::is_oom_error(
+        assert!(!crate::service::common::is_oom_error(
             &VecboostError::InvalidInput("bad input".to_string(),)
         ));
-        assert!(!EmbeddingService::is_oom_error(
+        assert!(!crate::service::common::is_oom_error(
             &VecboostError::ModelLoadError("missing file".to_string(),)
         ));
     }
@@ -4406,6 +4343,78 @@ mod tests {
         }
     }
 
+    /// 记录型 OOM 引擎：回退前 `embed_batch` 恒 OOM，`try_fallback_to_cpu`
+    /// 把收到的 `ModelConfig` 抄进共享槽位（外部可断言），回退成功后
+    /// `embed_batch` 产出可用向量——钉住「回退消费真实配置」契约。
+    struct RecordingOomEngine {
+        fallback_triggered: bool,
+        fallback_succeeds: bool,
+        dimension: usize,
+        recorded_config: Arc<std::sync::Mutex<Option<ModelConfig>>>,
+    }
+
+    impl RecordingOomEngine {
+        fn new(
+            fallback_succeeds: bool,
+            dimension: usize,
+            recorded_config: Arc<std::sync::Mutex<Option<ModelConfig>>>,
+        ) -> Self {
+            Self {
+                fallback_triggered: false,
+                fallback_succeeds,
+                dimension,
+                recorded_config,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl InferenceEngine for RecordingOomEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Err(VecboostError::OutOfMemory(
+                "CUDA out of memory: allocation failed".to_string(),
+            ))
+        }
+
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            if self.fallback_triggered {
+                Ok(texts
+                    .iter()
+                    .map(|t| crate::utils::hash::mock_embedding(t, self.dimension))
+                    .collect())
+            } else {
+                Err(VecboostError::OutOfMemory(
+                    "CUDA out of memory: allocation failed".to_string(),
+                ))
+            }
+        }
+
+        fn precision(&self) -> &Precision {
+            static PRECISION: Precision = Precision::Fp32;
+            &PRECISION
+        }
+
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+
+        fn is_fallback_triggered(&self) -> bool {
+            self.fallback_triggered
+        }
+
+        async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
+            *self.recorded_config.lock().unwrap() = Some(config.clone());
+            if self.fallback_succeeds {
+                self.fallback_triggered = true;
+                Ok(())
+            } else {
+                Err(VecboostError::InferenceError(
+                    "CPU fallback unavailable".to_string(),
+                ))
+            }
+        }
+    }
+
     async fn make_manager_with_model(model_name: &str) -> Arc<ModelManager> {
         let cache_dir = tempdir().unwrap();
         let model_path = cache_dir.path().join(model_name);
@@ -4534,6 +4543,84 @@ mod tests {
         }
     }
 
+    // ===== 批处理 OOM 回退：真实配置消费契约（T001） =====
+
+    #[tokio::test]
+    async fn test_embed_single_chunk_oom_fallback_uses_real_model_config() {
+        crate::i18n::init();
+        let recorded = Arc::new(std::sync::Mutex::new(None));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(
+            RecordingOomEngine::new(true, 384, Arc::clone(&recorded)),
+        ));
+
+        let model_config = make_model_config("real-model", 384);
+        let manager = make_manager_with_model("real-model").await;
+
+        let result = EmbeddingService::embed_single_chunk(
+            engine,
+            Some(model_config.clone()),
+            Some(manager),
+            vec!["alpha".to_string(), "beta".to_string()],
+            0,
+            8,
+        )
+        .await;
+
+        let results = result.expect("回退成功后 chunk 必须重试产出结果");
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, 0);
+        assert_eq!(results[1].0, 1);
+        assert_eq!(results[0].1.len(), 384);
+
+        let received = recorded
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("OOM 必须触发 try_fallback_to_cpu");
+        assert_eq!(received.name, "real-model", "回退必须消费服务真实配置");
+        assert_ne!(received.name, "default", "禁止 ModelConfig::default 回退");
+        assert_eq!(received.model_path, model_config.model_path);
+        assert_ne!(
+            received.model_path,
+            PathBuf::from("models/default"),
+            "禁止默认模型路径（会被 onnx 回退消费为 HF repo id）"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_embed_single_chunk_oom_without_manager_fails_without_fallback() {
+        crate::i18n::init();
+        let recorded = Arc::new(std::sync::Mutex::new(None));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(
+            RecordingOomEngine::new(true, 384, Arc::clone(&recorded)),
+        ));
+
+        let result = EmbeddingService::embed_single_chunk(
+            engine,
+            Some(make_model_config("no-manager-model", 384)),
+            None,
+            vec!["alpha".to_string()],
+            0,
+            8,
+        )
+        .await;
+
+        match result.unwrap_err() {
+            VecboostError::OutOfMemory(msg) => {
+                assert!(
+                    msg.contains(&crate::i18n::tr("oom-no-fallback-available")),
+                    "got: {}",
+                    msg
+                );
+            }
+            other => panic!("expected OutOfMemory, got {:?}", other),
+        }
+        assert!(
+            recorded.lock().unwrap().is_none(),
+            "无 manager 时不得发起回退尝试（原先是注定失败的默认配置回退）"
+        );
+    }
+
     // ===== process_batch OOM fallback 测试 =====
 
     #[tokio::test]
@@ -4560,9 +4647,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_batch_oom_fallback_success_then_still_oom() {
+        crate::i18n::init();
         let engine = ConfigurableOomEngine::new(false, true);
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
-        let service = EmbeddingService::new(engine, None);
+        // 回退成功但推理持续 OOM → 耗尽 common 侧重试上限（2 次）
+        let model_config = make_model_config("batch-oom-retry", 384);
+        let manager = make_manager_with_model("batch-oom-retry").await;
+        let service = EmbeddingService::with_manager(engine, Some(model_config), manager);
 
         let req = BatchEmbedRequest {
             texts: vec!["a".to_string(), "b".to_string()],
@@ -4573,6 +4664,11 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             VecboostError::OutOfMemory(msg) => {
+                assert!(
+                    msg.contains("Max fallback attempts exceeded"),
+                    "got: {}",
+                    msg
+                );
                 assert!(msg.contains("CUDA out of memory"), "got: {}", msg);
             }
             other => panic!("expected OutOfMemory, got {:?}", other),
@@ -5008,9 +5104,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_batch_oom_fallback_failure() {
+        crate::i18n::init();
         let engine = ConfigurableOomEngine::new(false, false);
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(engine));
-        let service = EmbeddingService::new(engine, None);
+        // 回退路径需要真实配置 + manager 命中模型（无 manager 会短路为
+        // oom-no-fallback-available，见 no_manager 契约测试）
+        let model_config = make_model_config("batch-oom-fail", 384);
+        let manager = make_manager_with_model("batch-oom-fail").await;
+        let service = EmbeddingService::with_manager(engine, Some(model_config), manager);
 
         let req = BatchEmbedRequest {
             texts: vec!["a".to_string(), "b".to_string()],

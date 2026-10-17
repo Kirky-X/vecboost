@@ -491,6 +491,10 @@ mod tests {
     /// 直达响应体，全量细节只允许入服务端日志）
     #[tokio::test]
     async fn test_process_decision_engine_panic_maps_to_inference_error() {
+        // 本用例断言译文文案（含 `decision inference task`），必须自备 i18n
+        // 初始化——此前依赖同批测试先调 init，窄过滤（--lib service）下
+        // tr() 缺初始化返回裸键名而误报失败（2026-10-17 隔离性修复）
+        crate::i18n::init();
         struct PanickingDecisionEngine;
 
         #[async_trait]

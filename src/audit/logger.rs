@@ -23,6 +23,10 @@ enum LoggerCommand {
     Flush(oneshot::Sender<()>),
 }
 
+/// flush ack 等待上限：writer 存活但失联（轮转/写盘卡死、熔断退出未 ack）
+/// 时显性失败而非无限挂起。仅 `flush()` 消费，不进配置面。
+const FLUSH_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Audit logger — async batched writes via background task.
 ///
 /// Events are pushed to an unbounded mpsc channel; a background writer task
@@ -434,11 +438,31 @@ impl AuditLogger {
     }
 
     /// Synchronously wait for all queued events to be flushed to disk/db.
+    ///
+    /// 三段显性失败（原先裸等 ack 且 `let _ = rx.await`，writer 熔断退出后
+    /// 在途 Flush 无 ack，flush 误报 Ok）：send 失败 = writer 已死；
+    /// ack 超时 = writer 存活但失联；oneshot Err = writer 处理中途退出。
     pub async fn flush(&self) -> Result<(), VecboostError> {
         if let Some(sender) = &self.sender {
             let (tx, rx) = oneshot::channel();
-            let _ = sender.send(LoggerCommand::Flush(tx));
-            let _ = rx.await;
+            if sender.send(LoggerCommand::Flush(tx)).is_err() {
+                return Err(VecboostError::InternalError(crate::i18n::tr(
+                    "audit-flush-writer-unavailable",
+                )));
+            }
+            match tokio::time::timeout(FLUSH_ACK_TIMEOUT, rx).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => {
+                    return Err(VecboostError::InternalError(crate::i18n::tr(
+                        "audit-flush-writer-unavailable",
+                    )));
+                }
+                Err(_) => {
+                    return Err(VecboostError::InternalError(crate::i18n::tr(
+                        "audit-flush-timeout",
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -1038,6 +1062,67 @@ mod tests {
             content.contains("drain_user0"),
             "first event should be present"
         );
+    }
+
+    // ===== flush 契约：ack 超时与 writer 失联显性化 =====
+
+    /// writer 启动即退出（日志父路径是文件，目录创建必败）时，flush 必须
+    /// 显性 Err（禁止 `let _ = rx.await` 吞成 Ok），且不挂起。
+    #[tokio::test]
+    async fn test_flush_fails_when_writer_unavailable() {
+        crate::i18n::init();
+        let temp_dir = TempDir::new().unwrap();
+        let blocker = temp_dir.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+
+        let config = AuditConfig {
+            enabled: true,
+            log_file_path: blocker.join("audit.log"),
+            ..Default::default()
+        };
+        let logger = AuditLogger::new(config);
+
+        // writer 任务退出 → receiver drop；send 立即失败而非无限等待 ack
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let started = std::time::Instant::now();
+        let result =
+            tokio::time::timeout(tokio::time::Duration::from_secs(5), logger.flush()).await;
+        let err = result
+            .expect("writer 不可用时 flush 不得挂起")
+            .expect_err("writer 不可用时 flush 必须返回 Err");
+        match err {
+            VecboostError::InternalError(msg) => assert!(
+                msg.contains(&crate::i18n::tr("audit-flush-writer-unavailable")),
+                "got: {}",
+                msg
+            ),
+            other => panic!("expected InternalError, got {:?}", other),
+        }
+        assert!(
+            started.elapsed() < tokio::time::Duration::from_secs(5),
+            "必须快速失败而非耗尽超时"
+        );
+    }
+
+    /// 正常路径回归：flush ack 后事件已落盘且返回 Ok。
+    #[tokio::test]
+    async fn test_flush_ack_ok_and_events_persisted() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "flush_ok.log");
+        for i in 0..3 {
+            logger.log_login_success(&format!("flush_ok_user{}", i), None);
+        }
+        logger.flush().await.expect("writer 健康时 flush 必须 Ok");
+        let content = read_log_content(&log_path).await;
+        for i in 0..3 {
+            assert!(
+                content.contains(&format!("flush_ok_user{}", i)),
+                "flush ack 后事件必须已落盘，missing user{}: {}",
+                i,
+                content
+            );
+        }
     }
 
     /// 1000 条审计事件 log_* 调用总耗时 < 100ms（3 轮取最小值）。

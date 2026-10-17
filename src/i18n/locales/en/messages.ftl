@@ -130,6 +130,10 @@ oom-max-attempts = Max fallback attempts exceeded ({ $attempts }). Last error: {
 engine-semaphore-failed = Failed to acquire semaphore: { $detail }
 engine-batch-timeout = Batch chunk processing timed out after { $secs }s
 
+# ── Audit flush ──
+audit-flush-writer-unavailable = Audit log writer is unavailable; queued events were not flushed
+audit-flush-timeout = Timed out waiting for audit log flush acknowledgement
+
 # ── Middleware error responses ──
 rate-limit-exceeded = Rate limit exceeded
 route-not-found = The requested resource was not found

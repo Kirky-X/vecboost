@@ -43,6 +43,7 @@
 - **FT-03 并发同文位级不一致**：min_workers>1 下同文落多批、GEMM 批形状差异致位级漂移→ in-flight 去重结构性修复
 - **R-auth-009c 限流审计文件面缺失**：db 构建走 DB-only 写入，场景锚定 `logs/audit.log` 恒空 → DB 双写修复
 - **批处理 OOM 回退未消费真实配置（回退语义失真）**：`embed_chunks_concurrent` 的单块路径此前自带内联回退循环——以 `ModelConfig::default()` 调 `try_fallback_to_cpu`、绕开 `ModelManager` 门控，重试上限另有本地常量 1（与单文本路径的 2 不一致）。现统一委托 `common::handle_oom_fallback`（真实 `ModelConfig`+`ModelManager`、重试上限 2 次）；库模式无 manager 时按 `oom-no-fallback-available` 显性失败而非假装回退。连带删除失效的 `log-service-oom-error-detected-batch` / `log-service-successfully-fell-back-cpu-2` 两条 FTL 键
+- **审计 flush 静默误报成功**：`AuditLogger::flush()` 原先 `let _ = rx.await`——writer 因连续写失败熔断退出（`ERROR_THRESHOLD=10`）后在途 Flush 无 ack，flush 照样返回 `Ok(())`，关停路径误判事件已落盘。现三段显性失败：send 失败（writer 已死）/ ack 超时（`FLUSH_ACK_TIMEOUT=5s`，writer 存活但失联）/ oneshot Err（处理中途退出），新增 `audit-flush-writer-unavailable`、`audit-flush-timeout` 两条 FTL 键（`registry/impl_.rs` 关停路径已消费该 Err，无需改动）
 - 引擎/决策工厂测试隔离缺陷（2 处）：`test_create_decision_task_dispatches_to_candle_engine`、`test_process_decision_engine_panic_maps_to_inference_error` 断言依赖 i18n 初始化顺序 → 各自显式 `i18n::init()`
 
 ### 质量与测试
@@ -52,6 +53,7 @@
 - **新增测试**：`onnx_embed_e2e`（真机 embedding 契约与单条-批量一致性）、`engine_backend_parity`（精度对账 + 性能观测）、场景 `test_transcribe.py`（HTTP 转录 e2e：真机 ASR/体量/防线 4 用例）、gRPC `vecboost.decide`/`vecboost.transcribe` 方法测试
 - **测试基建修复**：场景 conftest 二进制路径动态推导（修 worktree 测错目标）、集成/场景配置模板显式 `engine_type`、`scripts/link-assets.sh`（worktree 资产链接）、`download_model --onnx/--translate`（embedding/翻译 bundle 资产获取）
 - **批处理 OOM 回退契约测试**：`RecordingOomEngine` mock 钉住回退确实消费真实 `ModelConfig`（断言 `name != "default"`、`model_path` 为注入值），且无 manager 时不发起回退（`try_fallback_to_cpu` 零调用）
+- **审计 flush 契约测试**：writer 不可用快速 Err / ack 后事件已落盘 / 熔断退出后 flush 快速失败且 break 前事件留存于轮转件
 
 ### 已知限制
 

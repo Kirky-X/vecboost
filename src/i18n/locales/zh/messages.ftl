@@ -130,6 +130,10 @@ oom-max-attempts = 超出最大降级重试次数（{ $attempts }）。最后错
 engine-semaphore-failed = 获取信号量失败：{ $detail }
 engine-batch-timeout = 批处理分块处理超时（{ $secs }s）
 
+# ── 审计日志 flush ──
+audit-flush-writer-unavailable = 审计日志 writer 不可用，排队事件未能落盘
+audit-flush-timeout = 等待审计日志 flush 确认超时
+
 # ── 中间件错误响应 ──
 rate-limit-exceeded = 请求频率超出限制
 route-not-found = 请求的资源不存在

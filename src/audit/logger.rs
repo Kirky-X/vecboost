@@ -1125,6 +1125,99 @@ mod tests {
         }
     }
 
+    // ===== 熔断退出回归：writer 死亡后 flush 快速失败 + 事件留存 =====
+
+    /// 文件 writer 连续写失败达 `ERROR_THRESHOLD=10` 熔断退出后：
+    /// (a) 后续 `flush()` 在超时内返回 Err（不挂起、不误报 Ok）；
+    /// (b) break 前成功写入的事件留存于审计文件（轮转件）。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_writer_circuit_break_flush_fails_fast_and_keeps_written_events() {
+        use std::os::unix::fs::PermissionsExt;
+        crate::i18n::init();
+
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("audit.log");
+        let config = AuditConfig {
+            enabled: true,
+            log_file_path: log_path.clone(),
+            max_file_size_mb: 0, // 任意非空缓冲都触发轮转
+            max_files: 3,
+            ..Default::default()
+        };
+        let logger = AuditLogger::new(config);
+
+        // Phase A：两次「事件 + flush」制造一次成功轮转，
+        // 首条事件落 audit.log.1（供熔断后断言留存），次条落 audit.log
+        logger.log_login_success("pre-break-rotated", None);
+        logger.flush().await.unwrap();
+        logger.log_login_success("pre-break-kept", None);
+        logger.flush().await.unwrap();
+        let rotated = read_log_content(&temp_dir.path().join("audit.log.1")).await;
+        assert!(
+            rotated.contains("pre-break-rotated"),
+            "轮转文件应留存首条事件: {}",
+            rotated
+        );
+
+        // 注入失败：删除日志文件 + 父目录只读 → 每次轮转/重开必败
+        tokio::fs::remove_file(&log_path).await.unwrap();
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        // root 无视 0o555（CAP_DAC_OVERRIDE），注入失效 —— CI/本机环境差异，
+        // 与 doctor.rs「不可写目录」用例同口径：跳过严格断言但不得误报通过注入
+        if std::fs::write(temp_dir.path().join(".root-probe"), b"x").is_ok() {
+            let _ = std::fs::remove_file(temp_dir.path().join(".root-probe"));
+            std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            return;
+        }
+
+        let mut errs_during_injection = 0;
+        for i in 0..10 {
+            logger.log_login_success(&format!("lost_after_break{}", i), None);
+            // 第 10 次驱动 consecutive_errors 达阈值 → writer break
+            if logger.flush().await.is_err() {
+                errs_during_injection += 1;
+            }
+        }
+        assert!(
+            errs_during_injection >= 1,
+            "注入轮转/重开失败后 writer 必须在循环内熔断退出（flush 显性 Err）"
+        );
+
+        // (a) 第 11 次 flush：writer 已熔断退出，必须快速显性 Err
+        let started = std::time::Instant::now();
+        let result =
+            tokio::time::timeout(tokio::time::Duration::from_secs(5), logger.flush()).await;
+        let err = result
+            .expect("writer 死亡后 flush 不得挂起")
+            .expect_err("writer 死亡后 flush 不得误报 Ok");
+        match err {
+            VecboostError::InternalError(msg) => assert!(
+                msg.contains(&crate::i18n::tr("audit-flush-writer-unavailable")),
+                "got: {}",
+                msg
+            ),
+            other => panic!("expected InternalError, got {:?}", other),
+        }
+        assert!(
+            started.elapsed() < tokio::time::Duration::from_secs(5),
+            "熔断退出后的 flush 必须快速失败"
+        );
+
+        // 恢复父目录权限（TempDir 清理需要）
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // (b) break 前成功写入的事件留存于审计文件
+        let kept = read_log_content(&temp_dir.path().join("audit.log.1")).await;
+        assert!(
+            kept.contains("pre-break-rotated"),
+            "熔断退出不得抹掉已落盘事件: {}",
+            kept
+        );
+    }
+
     /// 1000 条审计事件 log_* 调用总耗时 < 100ms（3 轮取最小值）。
     ///
     /// `log_*` 方法仅 `sender.send(LoggerCommand::Event(event))`（mpsc unbounded，

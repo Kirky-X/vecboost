@@ -83,6 +83,9 @@ repos:
     hooks:
       - id: trailing-whitespace
         name: Check trailing whitespace
+        # 保留 markdown 「行尾两空格」硬换行语义，否则文档里故意写的 <br> 会被
+        # 钩子静默删掉（现存量硬换行为 0，属预防性配置）
+        args: ['--markdown-linebreak-ext=md']
 
   # Check for merge conflicts
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -121,12 +124,16 @@ default_stages: [pre-commit]
 minimum_pre_commit_version: '3.0.0'
 
 # Exclude patterns
+# 注：原表还排除了 `\.github/workflows/` 与 `docs/`，使 CI 定义与全部文档长期游离
+# 于 whitespace / merge-conflict / large-files 三个钩子之外（文档锚点门禁也无法按
+# markdown 触发）。2026-10-18 移除这两条：存量尾随空白仅 2 行（docs/ARCHITECTURE.md
+# 代码块内缩进空行、scripts/test-feature-matrix.sh 行尾空格），已随本次提交清理。
+# docs/assets/*.png 不需单列排除——trailing-whitespace 属 types: [text]，
+# pre-commit 用 identify 判为二进制后自动跳过。
 exclude: |
   (?x)^(
     target/|
     \.git/|
     \.cargo/|
-    \.github/workflows/|
-    docs/|
     \.pyc$
   )

@@ -845,7 +845,7 @@ impl MemoryPool {
         if let Some(idx) = self.find_free_buffer(size) {
             return Ok(self.buffers[idx].take().unwrap());
         }
-        
+
         // 2. 分配新缓冲区
         self.allocate_new(size)
     }

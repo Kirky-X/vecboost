@@ -135,7 +135,7 @@ run_check "openapi-only" \
     cargo check --no-default-features --features openapi
 
 run_check "no-default (原 redis-only: redis 后端已裁除)" \
-    cargo check --no-default-features 
+    cargo check --no-default-features
 run_check "http+openapi" \
     cargo check --features "http,openapi"
 

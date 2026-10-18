@@ -60,6 +60,9 @@
 # transcribe-poc 为本机不入库目录；torch 后端编译需 PYO3_PYTHON 指向 cpython-3.11
 cargo check --manifest-path transcribe-poc/Cargo.toml --all-targets
 cargo clippy --manifest-path transcribe-poc/Cargo.toml --all-targets -- -D warnings
+# doc_consistency_check.py 共五类核验：路由 / gRPC / 环境变量 / CLI 子命令 / **文档锚点**
+# （锚点项按实测校准的 GitHub slug 规则校验 `](#frag)` 与 `](path#frag)` 可达性，
+# 并禁止标题残留 U+FE0F 变体选择符）
 python3 scripts/doc_consistency_check.py
 python3 scripts/i18n_consistency_check.py
 ```

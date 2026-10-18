@@ -59,6 +59,20 @@ repos:
         always_run: true
         types: [rust]
 
+  # 文档一致性门禁（声明核对 + 锚点可达性）
+  # 注：本钩子故意不设 types——.pre-commit-config.yaml 的 exclude 排除了整个
+  # docs/，若按 markdown 触发则只改文档的提交会跳过它（锚点回归恰好只在
+  # 改文档时产生）。always_run + pass_filenames:false 不受 exclude 影响。
+  - repo: local
+    hooks:
+      - id: doc-consistency
+        name: doc consistency check
+        description: Verify documented routes/grpc methods/env vars/CLI subcommands match code, and markdown anchors resolve to real GitHub heading ids
+        entry: python3 scripts/doc_consistency_check.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
   # Remove trailing whitespace
   # 注：以下三个钩子原为 language: system + 自定义 entry，但系统中并无
   # trailing-whitespace-fixer / check-merge-conflict / check-added-large-files

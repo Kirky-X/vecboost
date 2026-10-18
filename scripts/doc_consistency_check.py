@@ -10,6 +10,8 @@
 3. 环境变量：文档声明的 VECBOOST_* 必须能映射到 VecboostConfig 字段、被 Rust 代码
    或 scripts/ 运维脚本显式消费
 4. CLI 子命令：文档示例的子命令必须在 CLI 注册中
+5. 文档锚点：`](#frag)` 与 `](path#frag)` 必须解析得到目标的 GitHub heading id，
+   且标题不得含 U+FE0F 变体选择符（会隐形残留进 id）
 
 输出：差异清单（stdout）。退出码 0=一致，1=存在差异。
 """
@@ -130,7 +132,109 @@ def env_var_resolvable(var: str, src: str) -> bool:
     return field.split("_")[0] in fields
 
 
+# ---------------------------------------------------------------- 文档锚点
+
+# slug 规则经浏览器直取 GitHub 渲染结果校准（对 30 条实测 heading id 做到 30/30
+# 复现）：转小写；删除标点与 emoji 基础码位；保留字母数字/CJK/连字符/下划线；
+# 空格转 "-"（故 emoji 开头的标题 id 带前导连字符）；U+FE0F 变体选择符**不删除**，
+# 会残留在 id 首位——因此标题必须避开带 VS16 的 emoji，否则锚点只能写隐形字符。
+VS16 = "\ufe0f"
+
+
+def gh_slug(heading: str) -> str:
+    body = re.sub(r"[`*_]", "", heading).lower()
+    return "".join(c for c in body if c.isalnum() or c in " -_" or c == VS16).replace(" ", "-")
+
+
+def strip_code(text: str) -> str:
+    """挖掉围栏代码块与行内 code span（保留行结构）。
+
+    文档里常有 `](#frag)`、path#frag 这类**示例写法**，以及 ```bash 块里以
+    `#` 开头的 shell 注释；不挖掉会被当成真链接/真标题误报。
+    """
+    out: list[str] = []
+    fence = False
+    for line in text.splitlines():
+        if re.match(r"^\s*(```|~~~)", line):
+            fence = not fence
+            out.append("")
+            continue
+        if fence:
+            out.append("")
+        else:
+            out.append(re.sub(r"`[^`]*`", "", line))
+    return "\n".join(out)
+
+
+def heading_lines(text: str) -> list[tuple[int, str]]:
+    return [
+        (n, m.group(1))
+        for n, line in enumerate(text.splitlines(), 1)
+        for m in [re.match(r"^#{1,6}\s+(.*?)\s*$", line)]
+        if m
+    ]
+
+
+def anchor_targets(path: pathlib.Path) -> set[str]:
+    """一页里所有可作为 #frag 目标的 id：自动 slug（含重名的 -1/-2 后缀）+ 显式 id。"""
+    text = strip_code(path.read_text(errors="replace"))
+    targets: set[str] = set(re.findall(r'<a(?: id| name)="([^"]+)"', text))
+    seen: dict[str, int] = {}
+    for _, h in heading_lines(text):
+        s = gh_slug(h)
+        seen[s] = seen.get(s, 0) + 1
+        # GitHub 对重名标题只给第二个及以后加 -N，首个仍为裸 slug
+        targets.add(s if seen[s] == 1 else f"{s}-{seen[s] - 1}")
+    return targets
+
+
+def resolve_link(from_file: pathlib.Path, ref: str) -> pathlib.Path | None:
+    """跨文件链接按相对当前文件、再相对仓库根依次解析。"""
+    for cand in ((from_file.parent / ref), (ROOT / ref)):
+        p = cand.resolve()
+        if p.exists():
+            return p
+    return None
+
+
 # ---------------------------------------------------------------- 核验
+
+def check_anchors(docs: list[pathlib.Path]) -> tuple[list[str], int]:
+    """锚点可达性与 slug 卫生校验，返回（差异清单, 已校验锚点数）。"""
+    issues: list[str] = []
+    checked = 0
+    cache: dict[pathlib.Path, set[str]] = {}
+    for p in docs:
+        rel = p.relative_to(ROOT)
+        text = strip_code(p.read_text(errors="replace"))
+        for _, h in heading_lines(text):
+            if VS16 in h:
+                issues.append(
+                    f"[anchor] {rel} 标题「{h[:32]}」含 U+FE0F 变体选择符，"
+                    "会隐形残留进 GitHub heading id，须换成无 VS16 的 emoji"
+                )
+        for n, line in enumerate(text.splitlines(), 1):
+            frags = ["#" + f for f in re.findall(r"\]\(#([^)\s]+)\)", line)]
+            frags += re.findall(r"\]\(([^)\s]+#[^)\s]+)\)", line)
+            for t in frags:
+                path_part, _, frag = t.partition("#")
+                if path_part.startswith(("http://", "https://", "mailto:")):
+                    continue
+                checked += 1
+                if path_part:
+                    q = resolve_link(p, path_part)
+                    if q is None:
+                        issues.append(f"[anchor] {rel}:{n} 链接 {path_part} 目标文件不存在")
+                        continue
+                    pool = cache.setdefault(q, anchor_targets(q))
+                else:
+                    pool = cache.setdefault(p, anchor_targets(p))
+                if frag not in pool:
+                    near = sorted(x for x in pool if x.lstrip("-") == frag.lstrip("-"))
+                    hint = f"GitHub 实际 id 应为 {near[0]}" if near else "目标文件中无匹配标题"
+                    issues.append(f"[anchor] {rel}:{n} 锚点 #{frag} 不可达——{hint}")
+    return issues, checked
+
 
 def main() -> int:
     src = src_text()
@@ -170,7 +274,14 @@ def main() -> int:
         if cmd not in cli_cmds:
             issues.append(f"[cli] 文档声明子命令 {cmd} 未注册")
 
-    print(f"代码事实: routes={len(routes)} grpc={len(methods)} cli={len(cli_cmds)}")
+    # 5. 文档锚点与 slug 卫生
+    anchor_issues, anchors_checked = check_anchors([p for p in DOCS if p.exists()])
+    issues += anchor_issues
+
+    print(
+        f"代码事实: routes={len(routes)} grpc={len(methods)} cli={len(cli_cmds)} "
+        f"anchors={anchors_checked}"
+    )
     if issues:
         print(f"\n发现 {len(issues)} 处不一致:")
         for i in issues:

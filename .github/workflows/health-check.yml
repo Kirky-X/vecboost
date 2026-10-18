@@ -65,6 +65,12 @@ jobs:
         # 生产码硬编码中文/未登记用户可见文案回流拦截
         run: python3 scripts/i18n_consistency_check.py
 
+      - name: Check doc consistency
+        # 文档声明的路由/gRPC/环境变量/CLI 子命令与代码核对,并校验文档锚点可达性
+        # (经 GitHub 渲染结果校准的 slug 规则:emoji 标题带前导连字符、U+FE0F
+        #  变体选择符残留于 id 首位,两类坑均在拦截范围)
+        run: python3 scripts/doc_consistency_check.py
+
   build:
     name: Build
     runs-on: ubuntu-latest

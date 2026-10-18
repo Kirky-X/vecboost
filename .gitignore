@@ -57,7 +57,13 @@ ehthumbs.db
 target/
 *.rs.bk
 *.rmeta
-.cargo/config.toml
+# 原规则忽略 `.cargo/config.toml` 并把实体以旧名 `.cargo/config` 入库（目的是给本地
+# 覆盖留文件名）。2026-10-18 作废：旧名已使 cargo 1.97 每次构建都打 deprecation 警告，
+# 且全仓（含 CI/Dockerfile/scripts）无任何对旧名的引用，本地覆盖本来就走
+# `~/.cargo/config.toml` 用户级配置——实体已迁移为 config.toml 并入库，此处不得再忽略，
+# 否则干净 clone 会丢失 jemalloc decay 编译期烘焙（防线 6）。
+# 需要临时覆盖构建环境变量时，放 `~/.cargo/config.toml` 或直接用环境变量。
+.cargo/config
 
 # Note: Cargo.lock SHOULD be tracked - DO NOT add it here
 # Keeping Cargo.lock in version control ensures reproducible builds

@@ -82,6 +82,8 @@ pub(crate) struct OxCacheBackend {
     cache: Option<Cache<String, Vec<f32>>>,
     bloom: Option<BloomFilter>,
     enabled: bool,
+    /// 条目 TTL（Redis 后端无构造期默认 TTL，写入时逐条携带）。
+    ttl: Option<std::time::Duration>,
     /// bloom 累计插入计数(原子,put 热路径无锁)
     bloom_insertions: std::sync::atomic::AtomicUsize,
     /// 可选 WAL 持久层（`persist_path` 设置时启用，默认 None = 纯内存）。
@@ -117,10 +119,40 @@ impl OxCacheBackend {
             cache: Some(cache),
             bloom: Some(bloom),
             enabled: true,
+            ttl,
             bloom_insertions: std::sync::atomic::AtomicUsize::new(0),
             persist: None,
             inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    /// 创建 Redis 精确缓存后端（跨副本共享）。
+    ///
+    /// **bloom 禁用**：负缓存是进程内状态，副本 A 的写入对副本 B 的
+    /// bloom 不可见，若保留会直接短路掉跨副本命中。TTL 逐条写入
+    ///（Redis 后端无构造期默认）。
+    #[cfg(feature = "distributed-redis")]
+    pub async fn with_redis(
+        url: &str,
+        capacity: usize,
+        ttl: Option<std::time::Duration>,
+    ) -> Result<Self, crate::error::VecboostError> {
+        // capacity 保留形参（与内存后端同构；Redis 由服务端淘汰，无本地容量）
+        let _ = capacity;
+        let cache = Cache::<String, Vec<f32>>::redis(url).await.map_err(|e| {
+            crate::error::VecboostError::config_error(format!(
+                "embedding-cache-redis-init-failed: {e}"
+            ))
+        })?;
+        Ok(Self {
+            cache: Some(cache),
+            bloom: None,
+            enabled: true,
+            ttl,
+            bloom_insertions: std::sync::atomic::AtomicUsize::new(0),
+            persist: None,
+            inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        })
     }
 
     /// 创建带 WAL 持久层的缓存后端。
@@ -215,6 +247,7 @@ impl OxCacheBackend {
             cache: None,
             bloom: None,
             enabled: false,
+            ttl: None,
             bloom_insertions: std::sync::atomic::AtomicUsize::new(0),
             persist: None,
             inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -269,7 +302,15 @@ impl OxCacheBackend {
             return;
         }
         if let Some(cache) = &self.cache {
-            let _ = cache.set(&oxcache_safe_key(key), &value).await;
+            let safe_key = oxcache_safe_key(key);
+            match self.ttl {
+                Some(ttl) => {
+                    let _ = cache.set_with_ttl(&safe_key, &value, Some(ttl)).await;
+                }
+                None => {
+                    let _ = cache.set(&safe_key, &value).await;
+                }
+            }
         }
         // Insert into bloom filter after successful set
         if let Some(bloom) = &self.bloom {
@@ -1053,5 +1094,45 @@ mod tests {
         assert_eq!(safe.len(), 32);
         assert!(safe.is_ascii());
         assert!(safe.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    /// Redis 精确缓存跨副本共享（`VECBOOST_TEST_REDIS_URL` 缺失即 SKIP）。
+    #[cfg(feature = "distributed-redis")]
+    #[tokio::test]
+    async fn redis_backend_is_shared_across_instances() {
+        let Ok(url) = std::env::var("VECBOOST_TEST_REDIS_URL") else {
+            eprintln!("SKIP: VECBOOST_TEST_REDIS_URL not set");
+            return;
+        };
+        let key = format!(
+            "redis-shared:{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        );
+        let a = OxCacheBackend::with_redis(&url, 16, Some(std::time::Duration::from_secs(60)))
+            .await
+            .expect("backend a");
+        let b = OxCacheBackend::with_redis(&url, 16, Some(std::time::Duration::from_secs(60)))
+            .await
+            .expect("backend b");
+        let value = vec![1.0_f32, 2.0, 3.0];
+        a.put(&key, value.clone()).await;
+        assert_eq!(b.get(&key).await, Some(value));
+
+        // TTL：1s 写入后过期，两个副本均读空
+        let ttl_key = format!("{key}:ttl");
+        let ttl_a = OxCacheBackend::with_redis(&url, 16, Some(std::time::Duration::from_secs(1)))
+            .await
+            .expect("ttl backend");
+        ttl_a.put(&ttl_key, vec![9.0_f32]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        assert_eq!(
+            ttl_a.get(&ttl_key).await,
+            None,
+            "expired entry must be absent"
+        );
+        assert_eq!(b.get(&ttl_key).await, None, "TTL is shared via Redis");
     }
 }

@@ -120,6 +120,26 @@ pub struct ModelConfig {
     pub checkpoints: std::collections::BTreeMap<String, crate::config::model::CheckpointPreset>,
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum RateLimitBackend {
+    #[default]
+    Memory,
+    Redis,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum CacheBackendKind {
+    #[default]
+    Memory,
+    Redis,
+}
+
 #[derive(Debug, Deserialize, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
 #[serde(default)]
 pub struct EmbeddingConfig {
@@ -141,6 +161,13 @@ pub struct EmbeddingConfig {
     pub max_batch_size: usize,
     #[garde(range(min = 1))]
     pub max_text_length: usize,
+    /// 精确缓存后端：`memory`（默认，进程内 moka）或 `redis`
+    /// （跨副本共享；需 `distributed-redis` feature；与 `persist_path` 互斥）。
+    #[garde(skip)]
+    pub cache_backend: CacheBackendKind,
+    /// Redis 连接 URL（`cache_backend = "redis"` 时必填）。
+    #[garde(skip)]
+    pub redis_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
@@ -468,6 +495,13 @@ pub struct RateLimitConfig {
     /// Inject IETF RateLimit-* headers (limit/remaining/reset/policy) into
     /// HTTP responses; rejected requests additionally carry Retry-After
     pub headers_enabled: bool,
+    /// 限流存储后端：`memory`（默认，进程内）或 `redis`（跨副本共享，
+    /// 需 `distributed-redis` feature）。
+    pub backend: RateLimitBackend,
+    /// Redis 连接 URL（`backend = "redis"` 时必填）。
+    pub redis_url: Option<String>,
+    /// Redis 全局固定窗口毫秒数（默认 60000；仅 redis 后端生效）。
+    pub global_window_ms: u64,
 }
 
 impl Default for RateLimitConfig {
@@ -481,7 +515,37 @@ impl Default for RateLimitConfig {
             window_secs: DEFAULT_WINDOW_SECS,
             ip_whitelist: vec![],
             headers_enabled: false,
+            backend: RateLimitBackend::Memory,
+            redis_url: None,
+            global_window_ms: 60_000,
         }
+    }
+}
+
+impl RateLimitConfig {
+    /// Redis 限流后端的启动校验：未编译 feature 或 URL 为空时显性拒绝；
+    /// `memory`（缺省）在任何构建下放行。
+    pub fn validate_backend(&self) -> Result<(), VecboostError> {
+        if self.backend != RateLimitBackend::Redis {
+            return Ok(());
+        }
+        if !cfg!(feature = "distributed-redis") {
+            return Err(VecboostError::config_error(crate::i18n::tr(
+                "startup-rate-limit-redis-feature-missing",
+            )));
+        }
+        if self
+            .redis_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .is_none()
+        {
+            return Err(VecboostError::config_error(crate::i18n::tr(
+                "startup-rate-limit-redis-url-missing",
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -834,7 +898,40 @@ impl Default for EmbeddingConfig {
             persist_max_bytes: None,
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             max_text_length: DEFAULT_MAX_TEXT_LENGTH,
+            cache_backend: CacheBackendKind::Memory,
+            redis_url: None,
         }
+    }
+}
+
+impl EmbeddingConfig {
+    /// Redis 精确缓存后端的启动校验：feature/URL/WAL 冲突均在启动期拒绝。
+    pub fn validate_cache_backend(&self) -> Result<(), VecboostError> {
+        if self.cache_backend != CacheBackendKind::Redis {
+            return Ok(());
+        }
+        if !cfg!(feature = "distributed-redis") {
+            return Err(VecboostError::config_error(crate::i18n::tr(
+                "startup-cache-redis-feature-missing",
+            )));
+        }
+        if self
+            .redis_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .is_none()
+        {
+            return Err(VecboostError::config_error(crate::i18n::tr(
+                "startup-cache-redis-url-missing",
+            )));
+        }
+        if self.persist_path.is_some() {
+            return Err(VecboostError::config_error(crate::i18n::tr(
+                "startup-cache-redis-persist-conflict",
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -1588,6 +1685,111 @@ max_new_tokens = 384
     }
 
     #[test]
+    fn rate_limit_default_backend_is_memory() {
+        let config = RateLimitConfig::default();
+        assert_eq!(config.backend, RateLimitBackend::Memory);
+        assert_eq!(config.global_window_ms, 60_000);
+    }
+
+    #[test]
+    fn rate_limit_backend_parses_redis() {
+        let value: toml::Value = toml::from_str(
+            "[rate_limit]\nbackend = \"redis\"\nredis_url = \"redis://127.0.0.1:6379\"\nglobal_window_ms = 30000",
+        )
+        .unwrap();
+        let config: RateLimitConfig = value
+            .get("rate_limit")
+            .expect("rate_limit 段")
+            .clone()
+            .try_into()
+            .unwrap();
+        assert_eq!(config.backend, RateLimitBackend::Redis);
+        assert_eq!(config.redis_url.as_deref(), Some("redis://127.0.0.1:6379"));
+        assert_eq!(config.global_window_ms, 30_000);
+    }
+
+    #[test]
+    fn embedding_default_cache_backend_is_memory() {
+        assert_eq!(
+            EmbeddingConfig::default().cache_backend,
+            CacheBackendKind::Memory
+        );
+    }
+
+    #[test]
+    fn embedding_cache_backend_parses_redis() {
+        let value: toml::Value = toml::from_str(
+            "[embedding]\ncache_backend = \"redis\"\nredis_url = \"redis://127.0.0.1:6379\"",
+        )
+        .unwrap();
+        let config: EmbeddingConfig = value
+            .get("embedding")
+            .expect("embedding 段")
+            .clone()
+            .try_into()
+            .unwrap();
+        assert_eq!(config.cache_backend, CacheBackendKind::Redis);
+    }
+
+    #[test]
+    fn rate_limit_memory_backend_always_passes() {
+        assert!(RateLimitConfig::default().validate_backend().is_ok());
+        assert!(EmbeddingConfig::default().validate_cache_backend().is_ok());
+    }
+
+    #[cfg(not(feature = "distributed-redis"))]
+    #[test]
+    fn redis_backends_require_feature() {
+        let rate = RateLimitConfig {
+            backend: RateLimitBackend::Redis,
+            redis_url: Some("redis://127.0.0.1:6379".to_string()),
+            ..Default::default()
+        };
+        let err = rate.validate_backend().expect_err("must reject");
+        assert_eq!(
+            err.error_detail(),
+            crate::i18n::tr("startup-rate-limit-redis-feature-missing")
+        );
+
+        let emb = EmbeddingConfig {
+            cache_backend: CacheBackendKind::Redis,
+            redis_url: Some("redis://127.0.0.1:6379".to_string()),
+            ..Default::default()
+        };
+        let err = emb.validate_cache_backend().expect_err("must reject");
+        assert_eq!(
+            err.error_detail(),
+            crate::i18n::tr("startup-cache-redis-feature-missing")
+        );
+    }
+
+    #[cfg(feature = "distributed-redis")]
+    #[test]
+    fn redis_backends_require_url_and_reject_wal_conflict() {
+        let rate = RateLimitConfig {
+            backend: RateLimitBackend::Redis,
+            ..Default::default()
+        };
+        let err = rate.validate_backend().expect_err("must reject");
+        assert_eq!(
+            err.error_detail(),
+            crate::i18n::tr("startup-rate-limit-redis-url-missing")
+        );
+
+        let emb = EmbeddingConfig {
+            cache_backend: CacheBackendKind::Redis,
+            redis_url: Some("redis://127.0.0.1:6379".to_string()),
+            persist_path: Some("data/cache.wal".to_string()),
+            ..Default::default()
+        };
+        let err = emb.validate_cache_backend().expect_err("must reject");
+        assert_eq!(
+            err.error_detail(),
+            crate::i18n::tr("startup-cache-redis-persist-conflict")
+        );
+    }
+
+    #[test]
     fn test_app_config_clone_preserves_values() {
         let original = VecboostConfig::default();
         let cloned = original.clone();
@@ -1717,6 +1919,8 @@ max_new_tokens = 384
             persist_max_bytes: Some(1024 * 1024),
             max_batch_size: 32,
             max_text_length: 4096,
+            cache_backend: CacheBackendKind::Memory,
+            redis_url: None,
         };
         assert_eq!(config.default_aggregation, "max");
         assert!(!config.cache_enabled);

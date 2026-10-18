@@ -428,11 +428,11 @@ fn tokenizer_path_is_noop(
 
 /// [embedding] 缓存配置 → EmbeddingService 构建分流：persist_path 配置时
 /// 启用 WAL 持久层（compact 阈值缺省 1 GiB），cache 关闭时走无缓存构造。
-fn build_embedding_service(
+async fn build_embedding_service(
     engine: &Arc<RwLock<AnyEngine>>,
     config: &VecboostConfig,
     model_config: Option<ModelConfig>,
-) -> EmbeddingService {
+) -> anyhow::Result<EmbeddingService> {
     let cache_enabled = config.embedding.cache_enabled;
     let cache_size = config.embedding.cache_size;
 
@@ -445,6 +445,33 @@ fn build_embedding_service(
                 vecboost::i18n::tr_args(&[("size", &cache_size.to_string())])
             )
         );
+        if config.embedding.cache_backend == vecboost::config::app::CacheBackendKind::Redis {
+            #[cfg(feature = "distributed-redis")]
+            {
+                let url = config
+                    .embedding
+                    .redis_url
+                    .as_deref()
+                    .filter(|url| !url.trim().is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(vecboost::i18n::tr("startup-cache-redis-url-missing"))
+                    })?;
+                return EmbeddingService::with_cache_redis(
+                    engine.clone(),
+                    model_config,
+                    cache_size,
+                    url,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()));
+            }
+            #[cfg(not(feature = "distributed-redis"))]
+            {
+                return Err(anyhow::anyhow!(vecboost::i18n::tr(
+                    "startup-cache-redis-feature-missing"
+                )));
+            }
+        }
         match config.embedding.persist_path.as_deref() {
             Some(path) => {
                 let max_bytes = config
@@ -461,19 +488,23 @@ fn build_embedding_service(
                         ])
                     )
                 );
-                EmbeddingService::with_cache_persist(
+                Ok(EmbeddingService::with_cache_persist(
                     engine.clone(),
                     model_config,
                     cache_size,
                     std::path::PathBuf::from(path),
                     max_bytes,
-                )
+                ))
             }
-            None => EmbeddingService::with_cache(engine.clone(), model_config, cache_size),
+            None => Ok(EmbeddingService::with_cache(
+                engine.clone(),
+                model_config,
+                cache_size,
+            )),
         }
     } else {
         log::info!("{}", vecboost::i18n::tr("log-main-kvcache-disabled"));
-        EmbeddingService::new(engine.clone(), model_config)
+        Ok(EmbeddingService::new(engine.clone(), model_config))
     }
 }
 
@@ -738,7 +769,7 @@ async fn init_engine_and_services(
         vecboost::engine::EngineFactory::create(engine_type, &model_config)?,
     ));
 
-    let service = build_embedding_service(&engine, config, Some(model_config.clone()));
+    let service = build_embedding_service(&engine, config, Some(model_config.clone())).await?;
     let service = attach_model_manager(service, config).await;
 
     // server 模式装配 ModelManager——LFRU 驻留配置 + heat warmstart。
@@ -1128,11 +1159,21 @@ async fn build_auth_dao(
                         vecboost::i18n::tr("startup-auth-session-backend-db-pool-unavailable")
                     ));
                 };
-                let dao = garrison::dao::DbnexusKvDao::new(pool.inner().clone());
-                dao.ensure_table()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to ensure garrison_kv table: {}", e))?;
-                Ok(Arc::new(dao))
+                #[cfg(any(feature = "sqlite", feature = "postgres"))]
+                {
+                    let dao = vecboost::auth::atomic_kv_dao::build_atomic_dao(pool.inner().clone())
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to build atomic garrison dao: {e}"))?;
+                    Ok(Arc::new(dao))
+                }
+                #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+                {
+                    let _ = pool;
+                    Err(anyhow::anyhow!(
+                        "{}",
+                        vecboost::i18n::tr("startup-auth-session-backend-db-feature-missing")
+                    ))
+                }
             }
             #[cfg(not(feature = "db"))]
             {
@@ -1155,6 +1196,62 @@ fn session_backend_labels(
         vecboost::config::app::SessionBackend::Memory => ("memory", "-"),
         vecboost::config::app::SessionBackend::Database => ("database", "garrison_kv"),
     }
+}
+
+/// Redis URL 脱敏标签：仅保留 scheme + host:port，剔除 userinfo/path/query。
+fn redis_endpoint_label(url: Option<&str>) -> String {
+    let Some(url) = url else {
+        return "-".to_string();
+    };
+    let (scheme, rest) = url.split_once("://").unwrap_or(("redis", url));
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or("");
+    if host_port.is_empty() {
+        "-".to_string()
+    } else {
+        format!("{scheme}://{host_port}")
+    }
+}
+
+/// 启动日志：限流/缓存后端类型 + 脱敏 endpoint（不输出连接串凭据）。
+fn log_shared_state_backends(config: &VecboostConfig) {
+    use vecboost::config::app::{CacheBackendKind, RateLimitBackend};
+
+    let (rate_backend, rate_endpoint) = match config.rate_limit.backend {
+        RateLimitBackend::Memory => ("memory", "-".to_string()),
+        RateLimitBackend::Redis => (
+            "redis",
+            redis_endpoint_label(config.rate_limit.redis_url.as_deref()),
+        ),
+    };
+    log::info!(
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-rate-limit-backend",
+            vecboost::i18n::tr_args(&[
+                ("backend", rate_backend),
+                ("endpoint", rate_endpoint.as_str()),
+            ])
+        )
+    );
+
+    let (cache_backend, cache_endpoint) = match config.embedding.cache_backend {
+        CacheBackendKind::Memory => ("memory", "-".to_string()),
+        CacheBackendKind::Redis => (
+            "redis",
+            redis_endpoint_label(config.embedding.redis_url.as_deref()),
+        ),
+    };
+    log::info!(
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-cache-backend",
+            vecboost::i18n::tr_args(&[
+                ("backend", cache_backend),
+                ("endpoint", cache_endpoint.as_str()),
+            ])
+        )
+    );
 }
 
 #[cfg(feature = "auth")]
@@ -1853,14 +1950,29 @@ async fn init_security_stack(
 ) -> anyhow::Result<SecurityStack> {
     validate_bind_safety(&config.server.host, config.auth.enabled)?;
 
+    // 多副本共享状态后端校验：memory 恒放行；redis 缺 feature/URL 启动期显性拒绝
+    config
+        .rate_limit
+        .validate_backend()
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    config
+        .embedding
+        .validate_cache_backend()
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    log_shared_state_backends(config);
+
     let rate_limiter = Arc::new(
-        LimiteronAdapter::new(RateLimitSettings {
+        LimiteronAdapter::try_new(RateLimitSettings {
             global_requests_per_minute: config.rate_limit.global_requests_per_minute,
             ip_requests_per_minute: config.rate_limit.ip_requests_per_minute,
             user_requests_per_minute: config.rate_limit.user_requests_per_minute,
             api_key_requests_per_minute: config.rate_limit.api_key_requests_per_minute,
+            backend: config.rate_limit.backend,
+            redis_url: config.rate_limit.redis_url.clone(),
+            global_window_ms: config.rate_limit.global_window_ms,
         })
-        .await,
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?,
     );
 
     #[cfg(feature = "auth")]
@@ -3444,5 +3556,16 @@ mod tests {
             session_backend_labels(SessionBackend::Database),
             ("database", "garrison_kv")
         );
+    }
+
+    /// Redis endpoint 日志脱敏：剔除 userinfo/path/query。
+    #[test]
+    fn redis_endpoint_label_strips_credentials_and_path() {
+        assert_eq!(redis_endpoint_label(None), "-");
+        assert_eq!(
+            redis_endpoint_label(Some("redis://user:pass@host:6380/0?x=1")),
+            "redis://host:6380"
+        );
+        assert_eq!(redis_endpoint_label(Some("host:6379")), "redis://host:6379");
     }
 }

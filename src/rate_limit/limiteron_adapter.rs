@@ -23,6 +23,9 @@ use limiteron::middleware::RateLimitHeaderValues;
 use limiteron::storage::{MemoryBanStorage, MemoryStorage};
 use tokio::sync::Mutex;
 
+use crate::config::app::RateLimitBackend;
+use crate::error::VecboostError;
+
 /// 限流决策详情：布尔结果 + 绑定维度快照。
 ///
 /// `headers` 供 IETF RateLimit-* 响应头渲染：allowed 时为剩余额度最紧维度
@@ -92,6 +95,12 @@ pub struct RateLimitSettings {
     pub user_requests_per_minute: u64,
     /// API Key 请求限制（每分钟）
     pub api_key_requests_per_minute: u64,
+    /// 存储后端：memory（缺省）或 redis（跨副本共享）
+    pub backend: RateLimitBackend,
+    /// Redis 连接 URL（backend=redis 必填）
+    pub redis_url: Option<String>,
+    /// Redis 固定窗口毫秒数（默认 60000）
+    pub global_window_ms: u64,
 }
 
 impl Default for RateLimitSettings {
@@ -101,7 +110,136 @@ impl Default for RateLimitSettings {
             ip_requests_per_minute: 100,
             user_requests_per_minute: 200,
             api_key_requests_per_minute: 500,
+            backend: RateLimitBackend::Memory,
+            redis_url: None,
+            global_window_ms: 60_000,
         }
+    }
+}
+
+/// per-key 桶工厂：内存令牌桶（缺省）或 Redis 固定窗口（跨副本）。
+pub trait BucketFactory: Send + Sync {
+    fn create(&self, key: &str, capacity: u64, refill_per_sec: u64) -> Arc<dyn Limiter>;
+}
+
+struct MemoryBucketFactory;
+
+impl BucketFactory for MemoryBucketFactory {
+    fn create(&self, _key: &str, capacity: u64, refill_per_sec: u64) -> Arc<dyn Limiter> {
+        Arc::new(TokenBucketLimiter::new(capacity, refill_per_sec))
+    }
+}
+
+/// Redis 固定窗口限流器（Lua 原子）：
+/// `INCR key`，首次窗口设置 `PEXPIRE`，返回 `{count, pttl}`。
+/// 全局与 per-key 共用同一实现与同一 oxcache Redis Cache。
+#[cfg(feature = "distributed-redis")]
+pub struct RedisWindowLimiter {
+    cache: Arc<oxcache::Cache<String, String>>,
+    key: String,
+    limit: u64,
+    window_ms: u64,
+}
+
+#[cfg(feature = "distributed-redis")]
+const REDIS_WINDOW_LUA: &str = r#"
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('PTTL', KEYS[1])
+return {current, ttl}
+"#;
+
+#[cfg(feature = "distributed-redis")]
+impl RedisWindowLimiter {
+    pub fn new(
+        cache: Arc<oxcache::Cache<String, String>>,
+        key: impl Into<String>,
+        limit: u64,
+        window_ms: u64,
+    ) -> Self {
+        Self {
+            cache,
+            key: key.into(),
+            limit: limit.max(1),
+            window_ms: window_ms.max(1),
+        }
+    }
+
+    fn script_error(op: &str, detail: impl std::fmt::Display) -> limiteron::error::LimiteronError {
+        limiteron::error::LimiteronError::Other(format!("redis-window-{op}: {detail}"))
+    }
+
+    fn parse_count_ttl(
+        value: oxcache::redis::Value,
+    ) -> Result<(u64, i64), limiteron::error::LimiteronError> {
+        let items = match value {
+            oxcache::redis::Value::Array(items) => items,
+            other => {
+                return Err(Self::script_error(
+                    "parse",
+                    format!("unexpected reply {other:?}"),
+                ));
+            }
+        };
+        let count = match items.first() {
+            Some(oxcache::redis::Value::Int(v)) => (*v).max(0) as u64,
+            other => {
+                return Err(Self::script_error(
+                    "count",
+                    format!("unexpected value {other:?}"),
+                ));
+            }
+        };
+        let ttl = match items.get(1) {
+            Some(oxcache::redis::Value::Int(v)) => *v,
+            other => {
+                return Err(Self::script_error(
+                    "ttl",
+                    format!("unexpected value {other:?}"),
+                ));
+            }
+        };
+        Ok((count, ttl))
+    }
+}
+
+#[cfg(feature = "distributed-redis")]
+#[async_trait::async_trait]
+impl Limiter for RedisWindowLimiter {
+    async fn allow(&self, cost: u64) -> Result<bool, limiteron::error::LimiteronError> {
+        let window_ms = self.window_ms.to_string();
+        let value = self
+            .cache
+            .eval_lua(
+                REDIS_WINDOW_LUA,
+                &[self.key.as_str()],
+                &[window_ms.as_str()],
+            )
+            .await
+            .map_err(|e| RedisWindowLimiter::script_error("eval", e))?;
+        let (count, _ttl) = RedisWindowLimiter::parse_count_ttl(value)?;
+        Ok(count.saturating_add(cost.saturating_sub(1)) <= self.limit)
+    }
+}
+
+/// Redis per-key 工厂：全局窗口与所有 per-key 共享同一个 Cache。
+#[cfg(feature = "distributed-redis")]
+struct RedisWindowFactory {
+    cache: Arc<oxcache::Cache<String, String>>,
+    window_ms: u64,
+}
+
+#[cfg(feature = "distributed-redis")]
+impl BucketFactory for RedisWindowFactory {
+    fn create(&self, key: &str, capacity: u64, _refill_per_sec: u64) -> Arc<dyn Limiter> {
+        Arc::new(RedisWindowLimiter::new(
+            self.cache.clone(),
+            format!("vecboost:rl:{key}"),
+            capacity,
+            self.window_ms,
+        ))
     }
 }
 
@@ -111,17 +249,98 @@ impl Default for RateLimitSettings {
 /// 负责维度隔离（每个 IP/User/ApiKey 独立限额）。
 pub struct LimiteronAdapter {
     governor: Governor,
-    ip_buckets: Mutex<HashMap<String, Arc<TokenBucketLimiter>>>,
-    user_buckets: Mutex<HashMap<String, Arc<TokenBucketLimiter>>>,
-    api_key_buckets: Mutex<HashMap<String, Arc<TokenBucketLimiter>>>,
+    #[cfg(feature = "distributed-redis")]
+    global_redis: Option<Arc<RedisWindowLimiter>>,
+    bucket_factory: Arc<dyn BucketFactory>,
+    ip_buckets: Mutex<HashMap<String, Arc<dyn Limiter>>>,
+    user_buckets: Mutex<HashMap<String, Arc<dyn Limiter>>>,
+    api_key_buckets: Mutex<HashMap<String, Arc<dyn Limiter>>>,
     settings: RateLimitSettings,
     /// 缓存的健康状态（由异步检查更新，同步方法读取）
     health_cache: AtomicBool,
 }
 
 impl LimiteronAdapter {
-    /// 使用指定配置创建限流后端。
+    /// 使用指定配置创建内存限流后端（保持既有调用面）。
     pub async fn new(settings: RateLimitSettings) -> Self {
+        Self::build_memory(settings).await
+    }
+
+    async fn build_memory(settings: RateLimitSettings) -> Self {
+        #[cfg(feature = "distributed-redis")]
+        {
+            Self::build(settings, None, Arc::new(MemoryBucketFactory)).await
+        }
+        #[cfg(not(feature = "distributed-redis"))]
+        {
+            Self::build(settings, Arc::new(MemoryBucketFactory)).await
+        }
+    }
+
+    /// 按 `settings.backend` 创建限流后端：redis 初始化失败显性返回错误。
+    pub async fn try_new(settings: RateLimitSettings) -> Result<Self, VecboostError> {
+        match settings.backend {
+            RateLimitBackend::Memory => Ok(Self::build_memory(settings).await),
+            RateLimitBackend::Redis => {
+                #[cfg(feature = "distributed-redis")]
+                {
+                    let url = settings
+                        .redis_url
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|url| !url.is_empty())
+                        .ok_or_else(|| {
+                            VecboostError::config_error(crate::i18n::tr(
+                                "startup-rate-limit-redis-url-missing",
+                            ))
+                        })?;
+                    let backend = oxcache::backend::RedisBackend::builder()
+                        .connection_string(url)
+                        .build()
+                        .await
+                        .map_err(|e| {
+                            VecboostError::config_error(format!(
+                                "rate-limit-redis-init-failed: {e}"
+                            ))
+                        })?;
+                    let cache = Arc::new(oxcache::Cache::<String, String>::with_dependencies(
+                        Arc::new(backend),
+                    ));
+                    let global_redis = if settings.global_requests_per_minute > 0 {
+                        let capacity = ((settings.global_requests_per_minute as u128
+                            * settings.global_window_ms as u128)
+                            .div_ceil(60_000) as u64)
+                            .max(1);
+                        Some(Arc::new(RedisWindowLimiter::new(
+                            cache.clone(),
+                            "vecboost:rl:global",
+                            capacity,
+                            settings.global_window_ms,
+                        )))
+                    } else {
+                        None
+                    };
+                    let factory = Arc::new(RedisWindowFactory {
+                        cache,
+                        window_ms: settings.global_window_ms,
+                    });
+                    Ok(Self::build(settings, global_redis, factory).await)
+                }
+                #[cfg(not(feature = "distributed-redis"))]
+                {
+                    Err(VecboostError::config_error(crate::i18n::tr(
+                        "startup-rate-limit-redis-feature-missing",
+                    )))
+                }
+            }
+        }
+    }
+
+    async fn build(
+        settings: RateLimitSettings,
+        #[cfg(feature = "distributed-redis")] global_redis: Option<Arc<RedisWindowLimiter>>,
+        bucket_factory: Arc<dyn BucketFactory>,
+    ) -> Self {
         let config = build_global_flow_control_config(&settings);
         let storage: Arc<dyn limiteron::storage::Storage> = MemoryStorage::create_storage();
         let ban_storage: Arc<dyn limiteron::storage::BanStorage> =
@@ -138,6 +357,9 @@ impl LimiteronAdapter {
 
         Self {
             governor,
+            #[cfg(feature = "distributed-redis")]
+            global_redis,
+            bucket_factory,
             ip_buckets: Mutex::new(HashMap::with_capacity(64)),
             user_buckets: Mutex::new(HashMap::with_capacity(64)),
             api_key_buckets: Mutex::new(HashMap::with_capacity(64)),
@@ -165,6 +387,25 @@ impl LimiteronAdapter {
     /// 维度（allowed）或触发拒绝维度（rejected）的 `RateLimitHeaderValues`，
     /// 供限流中间件注入 IETF RateLimit-* 响应头。
     pub async fn check_rate_limit_detailed(&self, context: &RequestContext) -> RateLimitDecision {
+        // 0. Redis 全局固定窗口（跨副本共享；memory 后端为 None）
+        #[cfg(feature = "distributed-redis")]
+        if let Some(global) = &self.global_redis {
+            match global.allow(1).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    let window_secs = (self.settings.global_window_ms / 1000).max(1);
+                    return RateLimitDecision::rejected(Some(RateLimitHeaderValues {
+                        limit: global.limit,
+                        remaining: 0,
+                        reset_at: unix_now() + window_secs,
+                        retry_after: Some(window_secs),
+                        policy: "global-redis".to_string(),
+                    }));
+                }
+                Err(_) => return RateLimitDecision::rejected(None),
+            }
+        }
+
         // 1. Governor 全局检查（含封禁、熔断）
         let global_headers = match self.governor.check(context).await {
             // limit==0 表示全局规则未启用（build_global_flow_control_config
@@ -253,17 +494,18 @@ impl LimiteronAdapter {
     /// 非消费快照（`remaining()`）供响应头渲染。
     async fn check_per_key_detailed(
         &self,
-        buckets: &Mutex<HashMap<String, Arc<TokenBucketLimiter>>>,
+        buckets: &Mutex<HashMap<String, Arc<dyn Limiter>>>,
         key: &str,
         rpm: u64,
         dimension: &str,
     ) -> KeyOutcome {
         let bucket = {
             let mut map = buckets.lock().await;
-            map.entry(key.to_string())
+            let composite = format!("{dimension}:{key}");
+            map.entry(composite.clone())
                 .or_insert_with(|| {
                     let refill_rate = (rpm / 60).max(1);
-                    Arc::new(TokenBucketLimiter::new(rpm, refill_rate))
+                    self.bucket_factory.create(&composite, rpm, refill_rate)
                 })
                 .clone()
         };
@@ -378,6 +620,7 @@ mod tests {
             ip_requests_per_minute: 3,
             user_requests_per_minute: 4,
             api_key_requests_per_minute: 2,
+            ..RateLimitSettings::default()
         }
     }
 
@@ -409,6 +652,7 @@ mod tests {
             ip_requests_per_minute: 0,
             user_requests_per_minute: 0,
             api_key_requests_per_minute: 0,
+            ..RateLimitSettings::default()
         };
         let adapter = LimiteronAdapter::new(settings).await;
         let context = ctx_ip("1.2.3.4");
@@ -460,6 +704,7 @@ mod tests {
             ip_requests_per_minute: 0,
             user_requests_per_minute: 4,
             api_key_requests_per_minute: 0,
+            ..RateLimitSettings::default()
         };
         let adapter = LimiteronAdapter::new(settings).await;
         let ctx_alice = ctx_user("alice");
@@ -519,6 +764,7 @@ mod tests {
             ip_requests_per_minute: 3,
             user_requests_per_minute: 0,
             api_key_requests_per_minute: 0,
+            ..RateLimitSettings::default()
         };
         let adapter = LimiteronAdapter::new(settings).await;
         let ctx = ctx_ip("9.9.9.9");

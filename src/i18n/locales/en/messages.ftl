@@ -152,6 +152,11 @@ startup-jwt-missing = JWT secret is required when authentication is enabled. Ple
 startup-admin-password-missing = Admin password is required when authentication is enabled. Set the VECBOOST_ADMIN_PASSWORD environment variable (otherwise any credentials would be able to log in)
 startup-auth-session-backend-without-auth = session_backend="database" requires authentication: set [auth] enabled = true, or switch session_backend to "memory"
 startup-auth-session-backend-db-feature-missing = session_backend="database" requires a build with the db feature (e.g. --features "db,sqlite" or "db,postgres"); this build has db disabled
+startup-rate-limit-redis-feature-missing = backend="redis" requires a build with the distributed-redis feature; this build has it disabled
+startup-rate-limit-redis-url-missing = backend="redis" requires [rate_limit] redis_url
+startup-cache-redis-feature-missing = cache_backend="redis" requires a build with the distributed-redis feature; this build has it disabled
+startup-cache-redis-url-missing = cache_backend="redis" requires [embedding] redis_url
+startup-cache-redis-persist-conflict = cache_backend="redis" conflicts with persist_path (WAL): Redis provides persistence; WAL is only supported for the in-memory backend
 startup-auth-session-backend-db-pool-unavailable = session_backend="database" requires an available database connection pool: check the [database] section and pool initialization
 startup-auth-session-backend-auth-feature-missing = session_backend="database" requires a build with the auth feature (this build has auth disabled, so no session consumer exists); switch to "memory" or build with --features auth
 startup-logger = Failed to initialize inklog logger: { $detail }
@@ -338,6 +343,8 @@ log-main-transcribe-ready = transcribe service initialized: bundle={ $bundle }
 log-main-mcp-start = Starting VecBoost MCP server over stdio
 log-main-auth-enabled = Garrison authentication enabled (JWT + session + password verification)
 log-main-auth-session-backend = Auth session backend: backend={ $backend }, table={ $table }
+log-main-rate-limit-backend = Rate-limit backend: backend={ $backend }, endpoint={ $endpoint }
+log-main-cache-backend = Cache backend: backend={ $backend }, endpoint={ $endpoint }
 log-main-auth-disabled = Authentication disabled
 log-main-csrf-enabled = CSRF protection enabled (garrison)
 log-main-csrf-disabled = CSRF protection disabled

@@ -89,6 +89,25 @@ impl EmbeddingService {
             ),
             _ => OxCacheBackend::disabled(),
         };
+        Self::assemble(
+            engine,
+            validator,
+            model_config,
+            model_manager,
+            cache,
+            memory_manager,
+        )
+    }
+
+    /// 统一装配入口：缓存后端已由调用方选定（内存/WAL/Redis）。
+    fn assemble(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        validator: InputValidator,
+        model_config: Option<ModelConfig>,
+        model_manager: Option<Arc<ModelManager>>,
+        cache: OxCacheBackend,
+        memory_manager: Option<SharedGpuMemoryManager>,
+    ) -> Self {
         let memory_limit = model_config
             .as_ref()
             .and_then(|c| c.memory_limit_bytes)
@@ -116,6 +135,32 @@ impl EmbeddingService {
             memory_used_est: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             checkpoints: None,
         }
+    }
+
+    /// 跨副本共享的精确缓存（`[embedding] cache_backend = "redis"`）。
+    ///
+    /// Redis 初始化失败返回错误（启动期显性拒绝，不静默回落内存）。
+    #[cfg(feature = "distributed-redis")]
+    pub async fn with_cache_redis(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+        cache_size: usize,
+        url: &str,
+    ) -> Result<Self, crate::error::VecboostError> {
+        let cache = OxCacheBackend::with_redis(
+            url,
+            cache_size,
+            Some(crate::cache::oxcache_backend::DEFAULT_CACHE_TTL),
+        )
+        .await?;
+        Ok(Self::assemble(
+            engine,
+            InputValidator::with_default(),
+            model_config,
+            None,
+            cache,
+            None,
+        ))
     }
 
     pub fn new(

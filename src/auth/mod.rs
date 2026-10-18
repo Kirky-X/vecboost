@@ -8,6 +8,8 @@
 //! - `interface` — VecBoostInterface（GarrisonInterface 实现）
 //! - `middleware` — axum 中间件（外壳保留，内部委托 garrison）
 //! - `types` — HTTP 请求/响应类型（serde 序列化，无业务逻辑）
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+pub mod atomic_kv_dao;
 pub mod config;
 pub mod interface;
 #[cfg(feature = "http")]

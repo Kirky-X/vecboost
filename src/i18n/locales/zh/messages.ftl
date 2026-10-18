@@ -152,6 +152,11 @@ startup-jwt-missing = 启用认证时必须提供 JWT 密钥，请设置强 JWT 
 startup-admin-password-missing = 启用认证时必须配置管理员密码，请设置环境变量 VECBOOST_ADMIN_PASSWORD（否则任意凭据均可登录）
 startup-auth-session-backend-without-auth = 会话后端 session_backend="database" 要求启用认证：请设置 [auth] enabled = true，或将 session_backend 改为 "memory"
 startup-auth-session-backend-db-feature-missing = 会话后端 session_backend="database" 需要以 db 特性构建（如 --features "db,sqlite" 或 "db,postgres"），当前构建未启用 db
+startup-rate-limit-redis-feature-missing = 限流后端 backend="redis" 需要以 distributed-redis 特性构建，当前构建未启用
+startup-rate-limit-redis-url-missing = 限流后端 backend="redis" 必须配置 [rate_limit] redis_url
+startup-cache-redis-feature-missing = 缓存后端 cache_backend="redis" 需要以 distributed-redis 特性构建，当前构建未启用
+startup-cache-redis-url-missing = 缓存后端 cache_backend="redis" 必须配置 [embedding] redis_url
+startup-cache-redis-persist-conflict = 缓存后端 cache_backend="redis" 与 persist_path（WAL）互斥：Redis 已提供持久化，WAL 仅适用于内存后端
 startup-auth-session-backend-db-pool-unavailable = 会话后端 session_backend="database" 需要可用的数据库连接池：请检查 [database] 配置与连接池初始化
 startup-auth-session-backend-auth-feature-missing = 会话后端 session_backend="database" 需要以 auth 特性构建（当前构建未启用 auth，无会话消费者），请改为 "memory" 或以 --features auth 构建
 startup-logger = 初始化日志系统失败：{ $detail }
@@ -337,6 +342,8 @@ log-main-transcribe-ready = 转录服务已初始化：bundle={ $bundle }
 log-main-mcp-start = 正在通过 stdio 启动 VecBoost MCP 服务
 log-main-auth-enabled = Garrison 认证已启用（JWT + 会话 + 密码校验）
 log-main-auth-session-backend = 认证会话后端：backend={ $backend }，table={ $table }
+log-main-rate-limit-backend = 限流后端：backend={ $backend }，endpoint={ $endpoint }
+log-main-cache-backend = 缓存后端：backend={ $backend }，endpoint={ $endpoint }
 log-main-auth-disabled = 认证已禁用
 log-main-csrf-enabled = CSRF 防护已启用（garrison）
 log-main-csrf-disabled = CSRF 防护已禁用

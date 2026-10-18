@@ -145,6 +145,74 @@ fn embedding_precision_parity() {
     );
 }
 
+/// ONNX 量化档（int8 / q4） vs fp32 的**精度对账**：同一 Xenova bundle 的
+/// `-int8` / `-q4` 导出与 fp32 基线逐文本余弦（同模型、同 pooling、同输入）。
+/// 阈值沿用仓内量化口径（`tests/quantized_parity.rs` 的 GGUF 门：Q8_0 ≥ 0.98、
+/// Q4_K ≥ 0.95），并打印 min/median 供基线文档引用；维度不一致直接失败
+/// （量化不应改输出维度）。任一资产缺失即 SKIP（大体积资产不入库）。
+#[test]
+fn onnx_quantized_vs_fp32_parity() {
+    let fp32 = PathBuf::from("models/Xenova-bge-small-en-v1.5");
+    let int8 = PathBuf::from("models/Xenova-bge-small-en-v1.5-int8");
+    let q4 = PathBuf::from("models/Xenova-bge-small-en-v1.5-q4");
+    if !fp32.join("model.onnx").exists() || !PathBuf::from(ORT_DYLIB).exists() {
+        eprintln!("SKIP onnx_quantized_vs_fp32_parity: fp32 bundle 或 ORT 动态库缺失");
+        return;
+    }
+    ensure_ort_dylib();
+    vecboost::i18n::init();
+
+    fn load(path: &str) -> AnyEngine {
+        AnyEngine::new(
+            &embedding_config(EngineType::Onnx, path, path),
+            EngineType::Onnx,
+            Precision::Fp32,
+        )
+        .expect("量化档加载必须成功")
+    }
+
+    let texts = [
+        "The quick brown fox jumps over the lazy dog.",
+        "Machine learning models learn representations from data.",
+        "Retrieval augmented generation combines search with generation.",
+        "A quiet afternoon in the park with a good book.",
+        "Vector databases store high-dimensional embeddings for similarity search.",
+    ];
+    let base = load("models/Xenova-bge-small-en-v1.5");
+    let base_vecs: Vec<Vec<f32>> = texts
+        .iter()
+        .map(|t| base.embed(t).expect("fp32 embed"))
+        .collect();
+
+    for (label, dir, gate) in [("int8", &int8, 0.98f32), ("q4", &q4, 0.95f32)] {
+        if !dir.join("model.onnx").exists() {
+            eprintln!("SKIP {label}: 资产缺失 {}", dir.display());
+            continue;
+        }
+        let engine = load(dir.to_str().expect("资产路径须为 UTF-8"));
+        let mut cos = Vec::with_capacity(texts.len());
+        for (i, text) in texts.iter().enumerate() {
+            let v = engine.embed(text).expect("quantized embed");
+            assert_eq!(
+                v.len(),
+                base_vecs[i].len(),
+                "{label} 输出维度必须与 fp32 一致"
+            );
+            let c = cosine(&base_vecs[i], &v);
+            eprintln!("[{label}][{i}] cosine={c:.6}");
+            cos.push(c);
+        }
+        cos.sort_by(|a, b| a.partial_cmp(b).expect("余弦不得为 NaN"));
+        let min = cos[0];
+        let median = cos[cos.len() / 2];
+        eprintln!("onnx_quantized_vs_fp32_parity[{label}]: min={min:.6} median={median:.6}");
+        assert!(
+            median >= gate,
+            "{label} 中位余弦 {median:.6} < {gate}（量化损伤超阈值）"
+        );
+    }
+}
+
 /// candle 单条 vs 单元素批量路径耗时对比（informational）：历史基准中
 /// 单条 72ms / batch32 单价 5.5ms 的 13× 差异——实测结论（2026-10-16）：
 /// single 与 batch1 耗时完全相等（85.56ms/85.56ms，median×10）——单条路径

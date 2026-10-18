@@ -18,10 +18,14 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use vecboost::config::model::{DeviceType, EngineType, ModelConfig, ModelTask, TranslationParams};
+use vecboost::config::model::{EngineType, ModelConfig, ModelTask, TranslationParams};
 use vecboost::detect_language;
 use vecboost::domain::TranslateRequest;
 use vecboost::engine::{AnyEngine, EngineFactory, InferenceEngine};
+
+// 执行设备选择器（`VECBOOST_BENCH_DEVICE`，缺省 CPU）与同目录 bench 共享
+#[path = "common/mod.rs"]
+mod common;
 
 const EN_ZH_BUNDLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/models/opus-mt-en-zh");
 const EN_ES_BUNDLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/models/opus-mt-en-es");
@@ -54,7 +58,7 @@ fn load_pair_engine(bundle_path: &str) -> AnyEngine {
         engine_type: EngineType::Onnx,
         model_path: PathBuf::from(bundle_path),
         tokenizer_path: None,
-        device: DeviceType::Cpu,
+        device: common::bench_device("translate_bench", false),
         max_batch_size: 1,
         oom_fallback_enabled: false,
         task: ModelTask::Translate,

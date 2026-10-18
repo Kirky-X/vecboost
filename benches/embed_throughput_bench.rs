@@ -13,8 +13,12 @@
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::path::PathBuf;
-use vecboost::config::model::{DeviceType, EngineType, ModelConfig};
+use vecboost::config::model::{EngineType, ModelConfig};
 use vecboost::engine::{EngineFactory, InferenceEngine};
+
+// 执行设备选择器（`VECBOOST_BENCH_DEVICE`，缺省 CPU）与同目录 bench 共享
+#[path = "common/mod.rs"]
+mod common;
 
 fn bench_model_dir() -> Option<PathBuf> {
     std::env::var("VECBOOST_BENCH_MODEL")
@@ -68,7 +72,10 @@ fn load_engine(
         engine_type: engine_type.clone(),
         model_path: model_dir.to_path_buf(),
         tokenizer_path: None,
-        device: DeviceType::Cpu,
+        device: common::bench_device(
+            "embed_throughput_bench",
+            matches!(engine_type, EngineType::Candle),
+        ),
         max_batch_size: 32,
         pooling_mode: None,
         expected_dimension: Some(384),

@@ -329,6 +329,12 @@ harness = false
 name = "embed_throughput_bench"
 harness = false
 
+# 重排吞吐基线（bi-encoder 派生成本：单对 rerank 与 1×32 rerank_batch）。
+# 与 embed_throughput_bench 共用 VECBOOST_BENCH_MODEL / _ENGINE / _DEVICE 选择器
+[[bench]]
+name = "rerank_bench"
+harness = false
+
 [[bench]]
 name = "translate_bench"
 harness = false

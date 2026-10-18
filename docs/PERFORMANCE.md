@@ -11,6 +11,7 @@ VecBoost 为高吞吐、低延迟的嵌入向量服务而生。本指南汇总�
 
 - [基准数据（实测）](#基准数据实测)
 - [吞吐基线](#吞吐基线)
+- [引擎选型证据](#引擎选型证据onnx-vs-candle-vs-嵌入-python)
 - [性能设计要点](#性能设计要点)
 - [GGUF 量化](#gguf-量化)
 - [开关与环境变量注册表](#开关与环境变量注册表)
@@ -24,6 +25,8 @@ VecBoost 为高吞吐、低延迟的嵌入向量服务而生。本指南汇总�
 
 ## 📊 基准数据（实测）
 
+> **链接可用性**：`docs/benchmarks/` 为**仅本机保留**目录（`.gitignore`），下文指向 `benchmarks/*.md` 的链接在干净 clone 中不存在；关键数字均已内联在正文。
+>
 > 口径：以下数据来自 `docs/benchmarks/` 归档，criterion 测量（`cargo bench --release` / `--quick`），采集日期 2026-08（Linux x86_64，Rust stable）。微基准测量噪声约 ±5-10%；`kunpeng_tuning_after.md` 中 dot_product/768 与 manhattan_distance/1024 的波动在正常范围内。环境差异（CPU 频率、系统负载、编译器版本）可导致 ±50% 级波动（见 `gpu_pipeline_after.md` 归因分析）。
 >
 > **2026-09-16 回归扫描**：以上基准已全量复测，全部无回退（最差 +5.8%，噪声带内），详见 [regression_sweep_2026-09-16.md](benchmarks/regression_sweep_2026-09-16.md)。
@@ -85,6 +88,9 @@ DynamicBatchScheduler（固定等待窗）与 ContinuousBatchLoop（1ms tick + �
 
 ## ⏱️ 吞吐基线
 
+> **口径提示（onnx-primary）**：本节表格为 **candle（已降为 opt-in 回退后端）** 的历史基线，
+> 用于纵向对比 mkl/负载降频；**主引擎 ort 的对照数据见下一节「引擎选型证据」**。
+
 `embed_throughput_bench` 度量单文本 `embed` 与 32 文本 `embed_batch`（bge-small 级模型，CPU），criterion 100 samples 取中位：
 
 ```bash
@@ -98,6 +104,54 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 | 同上 | 默认构建 + `--features mkl`（同晚连续复测） | 默认 81.8 ms / mkl 20.5 ms（**4.0×**） | 默认 193.7 ms / mkl 157.6 ms（**1.23×**） | 2026-09-16 晚回归扫描（[regression_sweep_2026-09-16.md](benchmarks/regression_sweep_2026-09-16.md)）；绝对值较上两行整体上浮 ~15-17% 为持续负载降频（同代码 quick 口径实测 69.7 ms 与 2026-09-15 行吻合），**加速比不变，非代码回退** |
 
 > **加速后端说明**：mkl 已可用。上游版本错配——candle 0.11 调用 fp16 GEMM `hgemm_`，而 intel-mkl-src 0.8.1 Linux 静态路径锁死 MKL 2020.1（ghcr.io/rust-math，无该符号）——由 `src/engine/mkl_shim.rs` 的 `hgemm_` 垫片解决（f16 入 → f32 累加 `sgemm_` → f16 出，与硬件 hgemm 数值语义一致）。两个注意点：① 本机 rust-lld 链接 MKL 存在额外问题，需 `RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"`；② `--features mkl` 保持 opt-in，默认构建不引入 MKL。accelerate（macOS）保持 opt-in，本机无法验证。单文本 4.0× 主要来自 fp32 GEMM；32 批仅 1.17×，说明批路径瓶颈已不在 matmul。
+
+---
+
+## 🧭 引擎选型证据（onnx vs candle vs 嵌入 Python）
+
+> **采集条件**：2026-10-18，AMD Ryzen 9 9950X（16 核）/ 66 GiB / RTX 5080 16 GiB（WSL2）；
+> ORT ① `3rdparty/libonnxruntime.so.1.28.2`（CPU）② `onnxruntime-node 1.24.3`（含 CUDA EP）；
+> candle 为官方 0.11；嵌入同模型双导出（bge-small-en-v1.5，单条 / 批量×32）；
+> 转录为 Qwen3-ASR（0.6B/1.7B，`assets/audio_from_m4a.wav` 699.777 s）；每格 2~3 遍取稳定值。
+
+### 嵌入与重排
+
+| 引擎 × 设备 | 嵌入单条 | 嵌入批量×32 | 重排单对 | 重排批量×32 | 显存 |
+|---|---|---|---|---|---|
+| **ort × CPU（产品默认）** | **2.56 ms** | **26.35 ms** | 5.55 ms | 47.78 ms | — |
+| candle × CPU | 78.0 ms | 186.5 ms | 109.3 ms | 278.0 ms | — |
+| **ort × CUDA** | 2.70 ms | **3.06 ms** | **2.79 ms** | **3.47 ms** | ~1.96 GB / sm 37.4% |
+| candle × CUDA（`candle-cuda`） | 5.05 ms | 6.70 ms | 5.78 ms | 7.83 ms | ~1.95 GB / sm 44.1% |
+
+- **切主引擎的直接理由**：candle CPU 单条慢 **30.5×**、批量慢 **7.1×**；`--features mkl` 的 4× 只能把单条降到 ~17.5 ms，仍比 ort 慢 ~6.8×。
+- **GPU 同台对比**：ort 比 `candle-cuda` 快 **1.9~2.3×**，显存同级；但 candle GPU 相对自家 CPU 快 **15.4~35.5×**——落后的是引擎实现，不是设备。
+- **嵌入量化**：`int8` 单条 −22% / 批量 −16% / 内存 −55%（204→92 MiB），余弦中位 **0.9971**；`q4` 更快但余弦 0.9849。
+  闸门：`tests/engine_backend_parity.rs::onnx_quantized_vs_fp32_parity`。
+- **内存形态**：嵌入/重排单进程 92~269 MiB；**翻译同进程加载 en-zh + en-es 双 bundle 需 1 927 MiB**。
+
+### 转录（candle 无实现；只有 ort vs 嵌入 Python）
+
+| 通路 | 700 s 音频 | CER | 资源 |
+|---|---|---|---|
+| **ort 0.6B int8 × CPU** | **70.4 s（4 并行）/ 137.2 s（服务串行）** | 7.75% | 零显存 |
+| ort 0.6B int8 × CUDA | 199.4 s | 7.36% | 14.4 GiB（**负优化 2.6×**） |
+| 嵌入 Python 0.6B bf16 × CUDA | 51.2 s | 22.81%（长音频塌缩） | 11.7 GiB + Python 栈 |
+| ort 1.7B int8 × CPU | 135.7~142.1 s | 15.78~18.99% | 零显存 |
+| ort 1.7B int8 × CUDA | 216.4 s | 12.66% | 15.6 GiB（负优化 1.6×） |
+| **ort 1.7B fp32（无损）× CPU** | 698.8 s | **7.24%** | 零显存 |
+| ort 1.7B fp32 × CUDA | 1 576.3 s | 7.24% | 15.9 GiB（负优化 2.3×） |
+| **嵌入 Python 1.7B bf16 × CUDA** | **55.9 s** | **2.49%** | 14.5 GiB + Python 栈 |
+
+- **GPU 对转录全线为负**：三条精度路径无一例外，显卡出力 ~15%、显存吃满；逐段解码 kernel 太小，被启动与同步开销支配。
+- **量化归因**（混合 bundle）：双 fp32 7.24% → **int8 encoder + fp32 decoder 7.27%**（几乎无损、省 6% 时间）
+  → fp32 encoder + int8 decoder **15.13%** → 双 int8 15.78%。**损失全部来自 decoder 的动态量化**。
+- **服务口径**：`TRANSCRIBE_WORKERS=1`（与服务端 `permits=1` 同构）比 4 并行慢 1.8~2.0 倍；
+  HTTP 端到端实测（场景套件）服务端 RTF 0.194，与 CLI 串行档差 0.9%，HTTP+JSON 开销仅 3~5%。
+- **fp16**：引擎为 f32-only（KV cache 与张量 I/O 写死 f32），已加**加载期显性拒绝**；
+  完整支持需 dtype 泛型化（单步 KV 29.4M 元素，f32 117 MiB / f16 59 MiB，边界转换会被内存带宽支配）。
+
+> 完整矩阵与逐格证据（含 md5 指纹、混合拆解、fp16 守卫）在本机保留目录：
+> `docs/benchmarks/transcribe_engine_baseline.md`、`docs/benchmarks/embed_rerank_translate_baseline.md`（按 `.gitignore` 不入库）。
 
 ---
 

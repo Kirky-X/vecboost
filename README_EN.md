@@ -377,7 +377,44 @@ As of the v0.3.0-rc.2 workspace: 2277 inline unit tests in `src/`, 63 Rust integ
 
 ## 📊 Performance
 
-Benchmark data comes from the measured `docs/benchmarks/` archive (criterion, collected 2026-08 on Linux x86_64, noise roughly ±5-10%): SIMD vector similarity is up to **3.06x** faster than the scalar baseline (~341.7 ns for 1024-dim cosine), `ContinuousBatchLoop` continuous batch scheduling is **5.6x** faster than fixed waiting (1.110 s vs 6.194 s for a 100-request steady load; **deprecated** — no longer available in current versions), and exact semantic-cache hits take ~10 ns; the throughput baseline (`embed_throughput_bench`) has been **measured** and is documented in [⚡ Performance Guide](docs/PERFORMANCE.md). The full benchmark tables, performance design highlights (time-window batching / in-batch dedup / SIMD / thread tuning / jemalloc), GGUF quantization, and the tuning-switch registry are in the [⚡ Performance Guide](docs/PERFORMANCE.md); microbenchmarks can be reproduced with `cargo bench` (see the [Testing](#testing) section above).
+Benchmark data comes from the measured `docs/benchmarks/` archive (criterion; that directory is **local-only** and git-ignored, so it does not exist in a clean clone): SIMD vector similarity is up to **3.06x** faster than the scalar baseline (~341.7 ns for 1024-dim cosine), exact semantic-cache hits take ~10 ns, and candle single-text embedding is **4.0x** faster with `--features mkl`. Full benchmark tables, performance design highlights (time-window batching / in-batch dedup / SIMD / thread tuning / jemalloc), GGUF quantization and the tuning-switch registry are in the [⚡ Performance Guide](docs/PERFORMANCE.md).
+
+### 🧭 Engine selection: why onnxruntime is the primary engine (measured evidence)
+
+> **Measurement setup**: 2026-10-18, AMD Ryzen 9 9950X (16 cores) / 66 GiB / RTX 5080 16 GiB (WSL2);
+> ORT ① 1.28.2 (CPU) / ② 1.24.3 (CUDA EP); embeddings use bge-small-en-v1.5 (two exports of the same model),
+> transcription uses Qwen3-ASR (0.6B / 1.7B, 700 s Chinese audio, CER against the same reference); each cell is 2–3 runs.
+
+**Embedding throughput (single / batch×32, lower is better)**
+
+| Engine × device | Single | Batch×32 | Verdict |
+|---|---|---|---|
+| **onnxruntime × CPU** | **2.56 ms** | **26.35 ms** | Product default, best on CPU |
+| candle × CPU | 78.0 ms | 186.5 ms | **30.5× / 7.1×** slower |
+| onnxruntime × CUDA | 2.70 ms | **3.06 ms** | Best for batches |
+| candle × CUDA (`candle-cuda`) | 5.05 ms | 6.70 ms | 15.4×/27.8× faster than candle CPU, still **1.9×/2.2×** slower than ort GPU |
+
+- **The direct reason for the switch**: candle's CPU forward pass is a native implementation that is **not optimized** — 30× slower single, 7× slower batched; even with `--features mkl` (4× on single) it only reaches ~17.5 ms, still **~6.8× slower than ort**.
+- **GPU is not a substitute**: on the same card and model, ort's CUDA EP is still ~2× faster, with the same VRAM footprint (~1.95 GB). candle's GPU is nevertheless a 15–36× win over its own CPU — what lags is the engine implementation, not the device.
+- **Embedding quantization**: `int8` vs fp32 gives **−22%** single / **−16%** batch / **−55%** memory, with median cosine **0.9971** (effectively lossless); `q4` is faster but cosine drops to 0.9849. Gate: `tests/engine_backend_parity.rs::onnx_quantized_vs_fp32_parity`.
+
+**Transcription throughput (Qwen3-ASR, 700 s audio; 4-worker / service-serial)**
+
+| Path | Time | CER | Resources |
+|---|---|---|---|
+| **ort 0.6B int8 × CPU** | **70.4 s / 137.2 s** | 7.75% | no VRAM |
+| ort 0.6B int8 × CUDA | 199.4 s | 7.36% | 14.4 GiB VRAM (**GPU is a regression**) |
+| embedded Python 0.6B bf16 × CUDA | 51.2 s | 22.81% (collapses on long audio) | 11.7 GiB VRAM + Python stack |
+| ort 1.7B int8 × CPU | 135.7–142.1 s | 15.78–18.99% | no VRAM |
+| **ort 1.7B fp32 (lossless) × CPU** | 698.8 s | **7.24%** | no VRAM |
+| **embedded Python 1.7B bf16 × CUDA** | **55.9 s** | **2.49%** | 14.5 GiB VRAM + Python stack |
+
+- **For ort, GPU is a regression across the board** (0.6B 2.6× slower, 1.7B int8 1.6× slower, 1.7B fp32 2.3× slower): SM utilization stays ~15% while VRAM fills up — per-segment decoding kernels are too small and are dominated by launch/sync overhead.
+- **The quality bottleneck is quantization, not the engine**: mixed-bundle decomposition shows **dynamic int8 on the decoder** accounts for all 7.9 CER points, while quantizing the encoder costs almost nothing → the pure-Rust high-quality configuration is **int8 encoder + fp32 decoder (7.27% / 656 s / no VRAM)**.
+- Embedded Python is faster and (at 1.7B) the most accurate, but it **skips VAD segmentation**, so long audio degrades to 22.8% CER; it also pulls a Python runtime into the process and needs 11.7–14.5 GiB VRAM.
+
+> Full matrices (service-serial, HTTP end-to-end, mixed-quantization attribution, fp16 guard) live in the local
+> `docs/benchmarks/transcribe_engine_baseline.md` and `docs/benchmarks/embed_rerank_translate_baseline.md`.
 
 ---
 

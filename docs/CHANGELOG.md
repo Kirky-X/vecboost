@@ -36,6 +36,8 @@
 
 ### 修复
 
+- **candle `device="cuda"` 静默降级**：`cuda_is_available()` 为假时（构建缺 `candle-cuda` 或无可用 GPU）原先只打 INFO 后落 CPU，等于把 CPU 数字记到 GPU 档名下 → 启动期 `ConfigError` 显性拒绝（新 FTL 键 `engine-candle-cuda-unavailable`，中英齐平）+ 回归测试 `resolve_compute_device_rejects_cuda_without_candle_cuda`
+- **转录无损（fp32/fp16）bundle 无入口 + 精度按文件名误报**：`asr.rs` 的 encoder/decoder 候选名写死 `.int8.onnx`、加载处又按字面量二次拼路径 → 候选链（int8 优先、纯名兜底）+ `resolve_graph_paths()` 单一事实源；`session::detect_onnx_weight_precision` 改按**图内容**（QuantizeLinear/DequantizeLinear 算子标记）判定精度、不回退文件名；新增启动 INFO 日志 `log-engine-transcribe-graphs`；5 个回归测试（含跨 1 MiB 读块边界与“改名不误报”）
 - **onnx embedding 真机路径三处兼容缺陷**（此前无真实资产测试，基准真机首跑暴露）：单条输入 rank-1→`[1, seq]` 二维（标准 BERT ONNX 图规格）；三输入图（optimum/transformers.js 导出）按 `session.inputs()` 探测补喂全零 `token_type_ids`；rank-2 输入对应 rank-3 输出索引口径对齐
 - **onnx embedding pooling 硬编码 mean**（对 BGE 系静默改变语义且 `ModelConfig.pooling_mode` 配置无效）→ 构造期按模型名推断（与 candle 同一 `infer_pooling_mode` 单一事实源）+ Cls/Mean/Max 三模式支持；修复后同源双导出逐文本余弦 = 1.000000
 - **onnx HF 拉取不兼容 `onnx/` 子目录 repo**（Xenova 风格直连必失败）→ 候选链 `model.onnx → onnx/model.onnx → model_quantized.onnx → onnx/model_quantized.onnx`
@@ -48,6 +50,9 @@
 
 ### 质量与测试
 
+- **量化档精度闸门**：`engine_backend_parity::onnx_quantized_vs_fp32_parity`（int8 vs fp32 余弦中位 **0.997085**、q4 **0.984944**；阈值沿用仓内 GGUF 量化口径 0.98/0.95；资产缺失自动 SKIP）
+- **重排吞吐基准**：新增 `benches/rerank_bench.rs`（单对 + 1×32 批量），并在 `benches/common/mod.rs` 增加**按引擎分流的设备旋钮**（`VECBOOST_BENCH_DEVICE`；ort 需 `transcribe`、candle 需 `candle-cuda`，缺各自 feature 显性 exit=1，禁止把 CPU 数字记成 GPU）
+- **引擎选型实测（2026-10-18 空闲窗口，每格 2~3 遍）**：嵌入单条 onnx 2.56 ms vs candle 78.0 ms（**30.5×**）、批量 26.35 vs 186.5 ms（**7.1×**）；`candle-cuda` 相对 candle CPU 快 **15.4~35.5×**，同卡下仍比 ort CUDA EP 慢 **1.9~2.3×**（同模型、同显存级需求 ~1.95 GB）；详见 `docs/PERFORMANCE.md`「引擎选型证据」
 - **跨引擎对账基线**：embedding 精度（同源双导出逐文本余弦，阈 0.999）、决策精度（|Δlogit| ≤ 1e-4，既有 parity 闸门）、决策延迟观测（candle 455ms vs onnx 118ms/题，informational）
 - **性能基准**（同机 CPU，criterion）：embedding 单条 onnx 2.89ms vs candle 71.99ms（~25×）、batch×32 27.65ms vs 176.32ms（~6.4×）；`embed_throughput_bench` 支持 `VECBOOST_BENCH_ENGINE` 引擎选择 + ID 含引擎名 + `expect` 防「快速失败假性能」
 - **新增测试**：`onnx_embed_e2e`（真机 embedding 契约与单条-批量一致性）、`engine_backend_parity`（精度对账 + 性能观测）、场景 `test_transcribe.py`（HTTP 转录 e2e：真机 ASR/体量/防线 4 用例）、gRPC `vecboost.decide`/`vecboost.transcribe` 方法测试
@@ -56,6 +61,9 @@
 - **审计 flush 契约测试**：writer 不可用快速 Err / ack 后事件已落盘 / 熔断退出后 flush 快速失败且 break 前事件留存于轮转件
 
 ### 已知限制
+
+- 转录引擎当前为 **f32-only**（KV cache 与张量 I/O 写死 f32）：fp16/bf16 图会在加载期被显性拒绝（`conv_frontend input[0] dtype Float16 is not supported`）；完整 fp16 支持需 dtype 泛型化（单步 KV 29.4M 元素，f32 117 MiB / f16 59 MiB）
+- candle 的 `metal`（Apple Silicon）档无本机硬件可验证；`candle-cuda` 构建需 `PATH` 含 `nvcc`，WSL2 运行需 `LD_LIBRARY_PATH=/usr/lib/wsl/lib`
 
 - 翻译 golden 闸门（`translate_e2e`）需 en-zh + en-es 双 bundle（后者可经 `--translate Xenova/opus-mt-en-es` 获取）；en-zh 真机断言已由集成测试覆盖
 - gRPC 转录请求受 sdforge Call 层 1MB 应用上限约束（大音频走 HTTP 面）；`samples` 数组协议对大音频（48s≈14MB JSON）不友好，流式/分片传输待协议演进

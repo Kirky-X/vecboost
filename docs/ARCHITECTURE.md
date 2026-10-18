@@ -251,6 +251,8 @@ pub trait InferenceEngine: Send + Sync {
 
 candle 已随 onnx-primary 切换降级为 opt-in 回退后端：`candle` feature 显式启用，默认构建依赖树不含 candle；`engine_type="candle"` 在未启用该 feature 的构建中启动期显性拒绝（i18n 键 `startup-engine-candle-not-compiled`），禁止静默降级 onnx。作为回退后端**不投入性能优化**；其不可替代面：candle 原生决策头（`CandleDecisionEngine`，不依赖 onnxruntime，消费 PyTorch checkpoint）、GGUF 量化桥（`quantized-gguf`）、metal/mkl/accelerate 加速后端、safetensors 资产通路。
 
+> **性能定位（实测，详见 [⚡ 性能指南](PERFORMANCE.md)「引擎选型证据」）：** candle CPU 嵌入单条比 ort 慢 ~30×、批量慢 ~7×——这是它降为回退后端的直接原因；但其 CUDA 后端（`candle-cuda`）相对自家 CPU 快 15~36 倍，只比 ort 的 CUDA EP 慢 ~2 倍。同时 `device="cuda"` 而 CUDA 不可用时已改为**启动期显性报错**（键 `engine-candle-cuda-unavailable`），不再静默落 CPU。
+
 > **场景测试为何仍钉 candle**：`tests/scenario/conftest.py` 与 `scripts/run-scenario-tests.sh` 显式配置 `engine_type="candle"`（配套以 `--features candle` 构建），原因是场景测试资产为 safetensors 格式（candle 路径专属），属**有意保留**而非默认引擎口径回退；onnx 路径由 e2e/集成测试覆盖，两者不互斥。
 
 `CandleEngine`（`src/engine/candle_engine.rs`）通过 `ModelArchitecture` 枚举区分两种支持的模型架构，运行时根据 `config.json` 的 `model_type` 字段自动识别：

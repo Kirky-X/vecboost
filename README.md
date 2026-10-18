@@ -405,7 +405,49 @@ cargo audit
 
 ## 📊 性能
 
-基准数据来自 `docs/benchmarks/` 实测归档（criterion，2026-08 采集、2026-09-16 回归扫描复测无回退，Linux x86_64，噪声约 ±5-10%）：SIMD 向量相似度较标量最高 **3.06x** 加速（1024 维 cosine 约 341.7 ns），语义缓存精确命中约 10 ns，吞吐基线（`embed_throughput_bench`，本地 bge-small）默认构建单文本 70.3 ms、`--features mkl` **4.0×** 加速。完整基准表、性能设计要点（时间窗拼批/批内去重/SIMD/线程调优/jemalloc）、GGUF 量化与调优开关注册表见 [⚡ 性能指南](docs/PERFORMANCE.md)，微基准可用 `cargo bench` 复现（命令见上文[测试](#测试)一节）。
+基准数据来自 `docs/benchmarks/` 实测归档（criterion；该目录为**仅本机保留**，见 `.gitignore`，干净 clone 中不存在）：SIMD 向量相似度较标量最高 **3.06x**（1024 维 cosine 约 341.7 ns），语义缓存精确命中约 10 ns，candle 单文本在 `--features mkl` 下 **4.0×** 加速。完整基准表、性能设计要点（时间窗拼批/批内去重/SIMD/线程调优/jemalloc）、GGUF 量化与调优开关注册表见 [⚡ 性能指南](docs/PERFORMANCE.md)。
+
+### 🧭 引擎选型：为什么主引擎是 onnxruntime（实测证据）
+
+> **采集条件**：2026-10-18，AMD Ryzen 9 9950X（16 核）/ 66 GiB / RTX 5080 16 GiB（WSL2）；
+> ORT ① 1.28.2（CPU）/ ② 1.24.3（CUDA EP）；嵌入用 bge-small-en-v1.5（同一模型的两份导出），
+> 转录用 Qwen3-ASR（0.6B / 1.7B，700 秒中文音频，CER 对比同一参照稿）；每格 2~3 遍取稳定值。
+
+**嵌入吞吐（单条 / 批量×32，越小越好）**
+
+| 引擎 × 设备 | 单条 | 批量×32 | 结论 |
+|---|---|---|---|
+| **onnxruntime × CPU** | **2.56 ms** | **26.35 ms** | 产品默认，CPU 最优 |
+| candle × CPU | 78.0 ms | 186.5 ms | 分别慢 **30.5× / 7.1×** |
+| onnxruntime × CUDA | 2.70 ms | **3.06 ms** | 批量最优 |
+| candle × CUDA（`candle-cuda`） | 5.05 ms | 6.70 ms | 比自家 CPU 快 15.4×/27.8×，仍比 ort GPU 慢 **1.9×/2.2×** |
+
+- **切换到 ort 的直接原因**：candle 的 CPU 前向是原生实现且**不投入优化**——单条差 30 倍、批量差 7 倍；
+  即使开 `--features mkl`（单条 4×）也只降到 ~17.5 ms，**仍比 ort 慢约 6.8 倍**。
+- **GPU 不能当替代方案**：同卡同模型，ort 的 CUDA EP 仍快约 2 倍，两者显存同级（~1.95 GB）；
+  但 candle 的 GPU 相对自家 CPU 是质变（15~36 倍），它落后的是引擎实现，不是设备。
+- **嵌入量化**：`int8` 相对 fp32 单条 **−22%** / 批量 **−16%** / 内存 **−55%**，余弦中位 **0.9971**（基本无损）；
+  `q4` 更快但余弦降至 0.9849。精度闸门：`tests/engine_backend_parity.rs::onnx_quantized_vs_fp32_parity`。
+
+**转录吞吐（Qwen3-ASR，700 秒音频；4 并行档 / 服务串行档）**
+
+| 通路 | 耗时 | CER | 资源 |
+|---|---|---|---|
+| **ort 0.6B int8 × CPU** | **70.4 s / 137.2 s** | 7.75% | 零显存 |
+| ort 0.6B int8 × CUDA | 199.4 s | 7.36% | 显存 14.4 GiB（**GPU 负优化**） |
+| 嵌入 Python 0.6B bf16 × CUDA | 51.2 s | 22.81%（长音频塌缩） | 显存 11.7 GiB + Python 栈 |
+| ort 1.7B int8 × CPU | 135.7~142.1 s | 15.78~18.99% | 零显存 |
+| **ort 1.7B fp32（无损）× CPU** | 698.8 s | **7.24%** | 零显存 |
+| **嵌入 Python 1.7B bf16 × CUDA** | **55.9 s** | **2.49%** | 显存 14.5 GiB + Python 栈 |
+
+- **转录上 GPU 对 ort 全线为负**（0.6B 慢 2.6×、1.7B int8 慢 1.6×、1.7B fp32 慢 2.3×）：显卡出力仅 ~15%，显存却吃满；
+  原因是逐段解码的 kernel 太小，被启动与主机↔显存同步支配。
+- **质量瓶颈在量化而非引擎**：混合 bundle 拆解证明 **decoder 动态量化**吃掉全部 7.9 个 CER 点，encoder 量化几乎零代价
+  → 纯 Rust 的高质量档 = **int8 encoder + fp32 decoder（7.27% / 656 s / 零显存）**。
+- 嵌入 Python 更快且（1.7B 时）最准，但**不走 VAD 分段**，长音频质量塌到 22.8%；且需 Python 运行时入进程、显存 11.7~14.5 GiB。
+
+> 完整矩阵（服务口径、HTTP 端到端、混合量化归因、fp16 守卫）见本机
+> `docs/benchmarks/transcribe_engine_baseline.md` 与 `docs/benchmarks/embed_rerank_translate_baseline.md`。
 
 ---
 

@@ -1125,7 +1125,7 @@ async fn build_auth_dao(
                 let Some(pool) = db_pool else {
                     return Err(anyhow::anyhow!(
                         "{}",
-                        vecboost::i18n::tr("startup-auth-session-backend-db-feature-missing")
+                        vecboost::i18n::tr("startup-auth-session-backend-db-pool-unavailable")
                     ));
                 };
                 let dao = garrison::dao::DbnexusKvDao::new(pool.inner().clone());
@@ -1731,6 +1731,15 @@ async fn app_main() -> anyhow::Result<()> {
         config.auth.enabled,
         config.audit.enabled
     );
+
+    // 会话后端校验提前到 DB 池初始化之前：database + auth 关闭等矛盾配置
+    // 在对部署库产生连接/DDL 副作用前即拒绝（init_auth 内保留二次校验纵深）。
+    #[cfg(feature = "auth")]
+    vecboost::auth::config::validate_session_backend(&config.auth)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    #[cfg(not(feature = "auth"))]
+    vecboost::config::app::validate_session_backend_without_auth(&config.auth)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
     enforce_encryption_gate(&config)?;
 
@@ -2677,7 +2686,7 @@ async fn spawn_grpc_server(
     let require_auth = config.server.grpc_require_auth.unwrap_or(true);
 
     // garrison 0.9 吸收：gRPC 鉴权由 GarrisonGrpcAuthLayer 承担 —— check_login 全异步
-    // 会话校验（过期/吊销/防火墙），与 HTTP 侧共用同一 GarrisonDaoOxcache 会话宇宙。
+    // 会话校验（过期/吊销/防火墙），与 HTTP 侧共用同一 garrison 会话宇宙。
     // 替代 sdforge BearerAuth（无状态 JWT 校验 + 独立内存黑名单：HTTP revoke_token
     // 吊销的 token 此前在 gRPC 侧 exp 前仍有效，双协议鉴权语义分裂）。
     // vuln-0006 fail-fast 语义保持：require_auth=true 时 auth 未启用/无 secret 拒绝启动。

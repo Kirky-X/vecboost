@@ -152,6 +152,8 @@ startup-jwt-missing = 启用认证时必须提供 JWT 密钥，请设置强 JWT 
 startup-admin-password-missing = 启用认证时必须配置管理员密码，请设置环境变量 VECBOOST_ADMIN_PASSWORD（否则任意凭据均可登录）
 startup-auth-session-backend-without-auth = 会话后端 session_backend="database" 要求启用认证：请设置 [auth] enabled = true，或将 session_backend 改为 "memory"
 startup-auth-session-backend-db-feature-missing = 会话后端 session_backend="database" 需要以 db 特性构建（如 --features "db,sqlite" 或 "db,postgres"），当前构建未启用 db
+startup-auth-session-backend-db-pool-unavailable = 会话后端 session_backend="database" 需要可用的数据库连接池：请检查 [database] 配置与连接池初始化
+startup-auth-session-backend-auth-feature-missing = 会话后端 session_backend="database" 需要以 auth 特性构建（当前构建未启用 auth，无会话消费者），请改为 "memory" 或以 --features auth 构建
 startup-logger = 初始化日志系统失败：{ $detail }
 startup-config = 加载配置失败：{ $detail }
 startup-encryption = 加密密钥验证失败：{ $detail }

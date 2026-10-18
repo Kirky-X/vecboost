@@ -152,6 +152,8 @@ startup-jwt-missing = JWT secret is required when authentication is enabled. Ple
 startup-admin-password-missing = Admin password is required when authentication is enabled. Set the VECBOOST_ADMIN_PASSWORD environment variable (otherwise any credentials would be able to log in)
 startup-auth-session-backend-without-auth = session_backend="database" requires authentication: set [auth] enabled = true, or switch session_backend to "memory"
 startup-auth-session-backend-db-feature-missing = session_backend="database" requires a build with the db feature (e.g. --features "db,sqlite" or "db,postgres"); this build has db disabled
+startup-auth-session-backend-db-pool-unavailable = session_backend="database" requires an available database connection pool: check the [database] section and pool initialization
+startup-auth-session-backend-auth-feature-missing = session_backend="database" requires a build with the auth feature (this build has auth disabled, so no session consumer exists); switch to "memory" or build with --features auth
 startup-logger = Failed to initialize inklog logger: { $detail }
 startup-config = Failed to load config: { $detail }
 startup-encryption = Encryption key validation failed: { $detail }

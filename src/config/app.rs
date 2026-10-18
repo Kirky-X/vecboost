@@ -394,6 +394,19 @@ pub enum SessionBackend {
     Database,
 }
 
+/// 无 `auth` feature 构建无会话消费者，`database` 后端属矛盾配置——
+/// 与 `engine_type="candle"` 未编译 candle 即拒同一纪律，启动期显性拒绝，
+/// 不静默回落 memory。
+#[cfg(not(feature = "auth"))]
+pub fn validate_session_backend_without_auth(auth: &AuthConfig) -> Result<(), VecboostError> {
+    if auth.session_backend == SessionBackend::Database {
+        return Err(VecboostError::config_error(crate::i18n::tr(
+            "startup-auth-session-backend-auth-feature-missing",
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct AuthConfig {
@@ -985,6 +998,22 @@ mod tests {
         let value: toml::Value = toml::from_str("[auth]\nsession_backend = \"redis\"").unwrap();
         let parsed: Result<AuthConfig, _> = value.get("auth").expect("auth 段").clone().try_into();
         assert!(parsed.is_err(), "unknown session_backend must be rejected");
+    }
+
+    /// 无 auth feature 构建下 `database` 后端显性拒绝、memory 放行
+    /// （随 `cfg(not(feature = "auth"))` 编译，默认构建即执行）。
+    #[cfg(not(feature = "auth"))]
+    #[test]
+    fn session_backend_database_rejected_without_auth_feature() {
+        let value: toml::Value = toml::from_str("[auth]\nsession_backend = \"database\"").unwrap();
+        let auth: AuthConfig = value
+            .get("auth")
+            .expect("auth 段")
+            .clone()
+            .try_into()
+            .unwrap();
+        assert!(super::validate_session_backend_without_auth(&auth).is_err());
+        assert!(super::validate_session_backend_without_auth(&AuthConfig::default()).is_ok());
     }
 
     #[test]

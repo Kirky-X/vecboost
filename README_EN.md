@@ -510,7 +510,7 @@ The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (followin
 | 0.1.1 | 2026-01-15 | Patch fixes |
 | 0.1.0 | 2026-01-10 | Initial VecBoost release |
 
-0.3.0-rc.1 contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · 0.3.0-rc.1](docs/CHANGELOG.md#030-rc1---2026-09-22). The multi-replica boundary (auth sessions default to process memory and can be externalized with `session_backend = "database"`; rate limiting and caches remain per-process) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#-配置与部署).
+0.3.0-rc.1 contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · 0.3.0-rc.1](docs/CHANGELOG.md#030-rc1---2026-09-22). The multi-replica boundary (auth sessions default to process memory and can be externalized with `session_backend = "database"`; rate limiting and caches can now be externalized to Redis via `distributed-redis` — at the rc.1 point both were per-process) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#-配置与部署).
 
 ---
 

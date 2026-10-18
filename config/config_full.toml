@@ -71,6 +71,10 @@ max_sequence_length = 8192
 
 # ============ 向量化配置 ============
 [embedding]
+# 精确缓存后端: memory (默认, 进程内) | redis (跨副本共享, 需 distributed-redis feature；与 persist_path 互斥)
+# cache_backend = "memory"
+# redis_url = "redis://127.0.0.1:6379"  # 非 TLS 连接需 OXCACHE_ALLOW_INSECURE_REDIS=I_UNDERSTAND_THE_RISKS，生产用 rediss://
+
 # 默认聚合模式
 # 可选值:
 #   - mean: 平均池化 (加权平均，考虑重叠)
@@ -184,6 +188,11 @@ max_files = 10
 [rate_limit]
 # 是否启用限流
 enabled = true
+
+# 存储后端: memory (默认, 进程内) | redis (跨副本共享, 需 distributed-redis feature)
+# backend = "memory"
+# redis_url = "redis://127.0.0.1:6379"  # 非 TLS 连接需 OXCACHE_ALLOW_INSECURE_REDIS=I_UNDERSTAND_THE_RISKS，生产用 rediss://
+# global_window_ms = 60000  # Redis 全局固定窗口宽度；仅全局维度生效，per-key 固定 60s
 
 # 全局请求限制 (每分钟)
 global_requests_per_minute = 5000

@@ -155,12 +155,16 @@ max_batch_size = 64
 # 单个文本最大字节长度 (防止资源耗尽攻击)
 max_text_length = 8192
 
-# embedding 缓存 WAL 落盘路径 (T021): 设置后每次插入两段追加落盘，
+# embedding 缓存 WAL 落盘路径: 设置后每次插入两段追加落盘，
 # 重启回放重建缓存；默认不设置 = 纯内存
 # persist_path = "data/embedding_cache.wal"
 
-# WAL 紧凑化阈值字节数 (T022): 超过即启动时快照重写；默认 1 GiB
+# WAL 紧凑化阈值字节数: 超过即启动时快照重写；默认 1 GiB
 # persist_max_bytes = 1073741824
+
+# 精确缓存后端: memory (默认, 进程内) | redis (跨副本共享, 需 distributed-redis feature；与 persist_path 互斥)
+# cache_backend = "memory"
+# redis_url = "redis://127.0.0.1:6379"  # 非 TLS 连接需 OXCACHE_ALLOW_INSECURE_REDIS=I_UNDERSTAND_THE_RISKS，生产用 rediss://
 
 # ============ 监控配置 ============
 [monitoring]
@@ -255,6 +259,11 @@ ip_whitelist = ["127.0.0.1", "::1"]
 # 429 响应额外携带 Retry-After)，便于客户端按标准头做退避
 headers_enabled = false
 
+# 存储后端: memory (默认, 进程内) | redis (跨副本共享, 需 distributed-redis feature)
+# backend = "memory"
+# redis_url = "redis://127.0.0.1:6379"  # 非 TLS 连接需 OXCACHE_ALLOW_INSECURE_REDIS=I_UNDERSTAND_THE_RISKS，生产用 rediss://
+# global_window_ms = 60000  # Redis 全局固定窗口宽度；仅全局维度生效，per-key 固定 60s
+
 # ============ 数据库配置 (dbnexus, 需要 db feature) ============
 [database]
 # 数据库连接 URL
@@ -323,7 +332,7 @@ circuit_breaker_recovery_secs = 30
 # 是否启用缓存
 enabled = true
 
-# 缓存后端类型: memory, redis
+# 缓存后端类型: memory, redis（规划项，未解析；实际生效键为 [embedding] cache_backend）
 backend = "memory"
 
 # 最大缓存条目数

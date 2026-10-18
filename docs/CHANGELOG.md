@@ -26,7 +26,7 @@
 - **构建配置迁移 `.cargo/config` → `.cargo/config.toml`**：旧名使 cargo 1.97 每次调用都打 `deprecated in favor of config.toml` 警告；全仓（CI / Dockerfile / scripts）无任何引用旧名之处，本地覆盖亦走 `~/.cargo/config.toml` 用户级配置，故 `.gitignore` 中「忽略 config.toml、以旧名入库」的留白规则作废，改为反向忽略旧名防止回归。`[env] JEMALLOC_SYS_WITH_MALLOC_CONF` 语义不变——已用 build.rs 临时探针实测迁移后仍注入构建环境（`Ok("dirty_decay_ms:1000,muzzy_decay_ms:1000")`），jemalloc decay 防线无回退
 
 
-- **认证会话支持外置（多副本）**：`[auth] session_backend = "memory" | "database"`（缺省 memory，行为不变）；`database` 经 garrison `DbnexusKvDao` 写入部署库 `garrison_kv` 表（`ensure_table` 幂等建表），需以 `db,sqlite|postgres` 构建并配置 `[database]`；`database` + `auth.enabled=false` 或未编译 `db` 时启动期显性拒绝。限流与语义缓存仍为进程内语义，锁定计数经 `incr` 读-改-写、多副本下为尽力而为。收敛补强：无 `auth` feature 构建下 `session_backend="database"` 亦启动期显性拒绝（`startup-auth-session-backend-auth-feature-missing`，对齐 `engine_type="candle"` 无 candle 即拒的纪律）；会话后端校验提前到数据库池初始化之前（矛盾配置不再对部署库产生连接/DDL 副作用）；`set_if_absent` 过期键清理路径两步非原子与部署库备份等同会话凭据库等边界写入 `docs/SECURITY.md`
+- **认证会话支持外置（多副本）**：`[auth] session_backend = "memory" | "database"`（缺省 memory，行为不变）；`database` 经 garrison `DbnexusKvDao` 写入部署库 `garrison_kv` 表（`ensure_table` 幂等建表），需以 `db,sqlite|postgres` 构建并配置 `[database]`；`database` + `auth.enabled=false` 或未编译 `db` 时启动期显性拒绝。~~限流与语义缓存仍为进程内语义，锁定计数经 `incr` 读-改-写、多副本下为尽力而为~~（同发布内已被下方「多副本共享状态」「锁定计数原子化」条目收敛，保留删除线存档）。收敛补强：无 `auth` feature 构建下 `session_backend="database"` 亦启动期显性拒绝（`startup-auth-session-backend-auth-feature-missing`，对齐 `engine_type="candle"` 无 candle 即拒的纪律）；会话后端校验提前到数据库池初始化之前（矛盾配置不再对部署库产生连接/DDL 副作用）；`set_if_absent` 过期键清理路径两步非原子与部署库备份等同会话凭据库等边界写入 `docs/SECURITY.md`
 
 - **主推理引擎切换为 onnxruntime（ort），candle 降为 opt-in 回退后端（onnx-primary）**：
   - `default = ["http", "onnx"]`——默认构建即 ort 主引擎且依赖树不再含 candle（zip 解析风险随之出树；candle 三件套转 optional；zip 全量 yank 事件于 2026-10-16 被上游解除，candle 回指官方 0.11，应急 fork 已删除）
@@ -40,8 +40,8 @@
 
 ### 新增
 
-- **多副本共享状态（`distributed-redis`）**：`[rate_limit] backend = "redis"`（全局 + IP/User/ApiKey 的 Lua 原子固定窗口）、`[embedding] cache_backend = "redis"`（精确向量缓存共享；bloom 禁用、WAL 互斥）；启动期校验 feature/URL/WAL 冲突；启动日志仅输出脱敏 endpoint
-- **锁定计数原子化**：`session_backend=\"database\"` 下 `AtomicKvDao` 以单语句 `INSERT ... ON CONFLICT ... RETURNING`（SQLite/PostgreSQL）实现 `incr`，跨副本无丢失（`tests/atomic_lockout_counter.rs`）
+- **多副本共享状态（`distributed-redis`）**：`[rate_limit] backend = "redis"`（全局 + IP/User/ApiKey 的 Lua 原子固定窗口；per-key 固定 60s 窗口，`global_window_ms` 仅作用于全局维度；单次 Lua 往返 500ms 有界超时、fail-closed）、`[embedding] cache_backend = "redis"`（精确向量缓存共享；bloom 禁用、WAL 互斥、缓存键绑定权重指纹防换权重陈旧向量跨重启命中）；非 TLS `redis://` 连接默认被 oxcache 护栏拒绝（`rediss://` 或开发逃生阀 `OXCACHE_ALLOW_INSECURE_REDIS`）；启动期校验 feature/URL/WAL 冲突/窗口非零（前置于任何连接副作用）；启动日志仅输出脱敏 endpoint
+- **锁定计数原子化**：`session_backend="database"` 下 `AtomicKvDao` 以单语句 `INSERT ... ON CONFLICT ... RETURNING`（SQLite/PostgreSQL）实现 `incr`，跨副本无丢失（`tests/atomic_lockout_counter.rs` 双实例 50×2 并发 + 单实例 50 并发）；SQLite 并发写启用 WAL + 有界 busy 重试（dbnexus 无 busy_timeout 配置面，池级修复属上游）
 - **ReDoc 端点**：`swagger-ui` feature 下挂载 `GET /redoc`，与 Swagger UI 共用 `/api-docs/openapi.json`；页面 HTML 内嵌，渲染脚本锁定 `redoc@2.5.4` 精确版本并附 `integrity` SRI 校验 + `crossorigin="anonymous"`（防 CDN/npm 供应链篡改；浏览器需外网，Swagger UI 仍为 vendored 离线可用）
 - **Grafana 预配置仪表板**：`deploy/grafana/vecboost-dashboard.json`（14 面板：HTTP/批处理/队列/阶段/缓存/决策/检测/翻译）与导入说明 `deploy/grafana/README.md`
 
@@ -211,7 +211,7 @@
 | 分词器 | Linux 自研 WordPiece（异常时回退 250 词表） | 全平台 HuggingFace `tokenizers`；加载失败**报错** | 存量向量与重建向量不兼容，需重建索引 |
 | CLI | 未知子命令静默启动 HTTP 服务器 | stderr 用法提示 + 退出码 2 | 脚本若依赖旧行为需调整；`--help` 可用 |
 
-**多副本边界**：推理路径无状态，auth 关闭时可水平扩展（限流/缓存为进程内语义）。`auth.enabled=true` 时认证会话存进程内存（oxcache DAO），**仅限单副本**；会话外置需 garrison db 后端补齐（见 [FAQ](FAQ.md) 与 [SECURITY](SECURITY.md)）。
+**多副本边界**：推理路径无状态，auth 关闭时可水平扩展（限流/缓存为进程内语义）。`auth.enabled=true` 时认证会话存进程内存（oxcache DAO），**仅限单副本**；会话外置需 garrison db 后端补齐（见 [FAQ](FAQ.md) 与 [SECURITY](SECURITY.md)）。（状态注：上句为路线图校订时点的原文引用；会话外置与限流/缓存 Redis 共享已在本次发布内由「认证会话支持外置」「多副本共享状态」条目落地，该表述不再描述现状。）
 
 **热重载语义**：配置文件变更会进行校验并打日志，重启后生效（非运行时热切换）。Kubernetes 场景用 ConfigMap 滚动更新。
 

@@ -1307,12 +1307,16 @@ redis_url = "redis://127.0.0.1:6379"
 
 | 状态面 | memory（默认） | redis |
 |--------|----------------|-------|
-| 限流（全局 / IP / User / ApiKey） | 进程内 | 共享（Lua 原子固定窗口） |
-| 精确向量缓存 | 进程内（可选 WAL） | 共享（无 WAL，bloom 禁用） |
+| 限流（全局 / IP / User / ApiKey） | 进程内 | 共享（Lua 原子固定窗口；per-key 固定 60s 窗口） |
+| 精确向量缓存 | 进程内（可选 WAL） | 共享（无 WAL，bloom 禁用，键绑定权重指纹） |
 | 语义缓存模糊命中 | 进程内 | 进程内（仅精确层共享） |
 | 封禁清单 | 进程内 | 进程内 |
 
 构建：`cargo build --features "db,sqlite,distributed-redis"`（或 `db,postgres`）。`cache_backend = "redis"` 与 `[embedding] persist_path` 互斥；Redis 初始化失败时服务拒绝启动（不静默回落内存）。
+
+**TLS 与逃生阀**：oxcache 拒绝一切非 TLS（`redis://`）连接以防生产误用——开发/回环环境设 `OXCACHE_ALLOW_INSECURE_REDIS=I_UNDERSTAND_THE_RISKS` 越过，生产环境使用 `rediss://`（TLS）。
+
+**窗口语义**：per-key 维度固定 60s Lua 固定窗口，`global_window_ms` 仅作用于全局维度（调小它不会等比放宽 per-key 配额）；固定窗口在窗口边界存在至多 2× 配额突发，被拒请求同样计数。Redis 限流检查为 fail-closed：单次 Lua 往返超过 500ms 无响应即拒绝该请求（Redis 半死不会挂起请求线程）。
 
 ## 📊 监控
 

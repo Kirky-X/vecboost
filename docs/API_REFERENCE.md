@@ -988,7 +988,7 @@ http://localhost:9002/redoc                # 浏览器打开 ReDoc
 http://localhost:9002/api-docs/openapi.json  # 拉取 OpenAPI 规范
 ```
 
-> **ℹ️ 说明**: Swagger UI 路径为 `/swagger-ui/`（含 `/swagger-ui/{*rest}`），ReDoc 路径为 `/redoc`（与 Swagger UI 共用同一份 OpenAPI 规范），规范 JSON 为 `/api-docs/openapi.json`；根路径 `/api-docs` **未注册路由**，浏览器直接访问 `/api-docs` 或 `/api-docs/` 均返回 `404 Not Found`。默认构建（无 `swagger-ui` feature）不编译 swagger/ReDoc 链——需该能力时以 `--features swagger-ui` 构建（Cargo 锁文件为全 feature 并集解析，optional 依赖在解析层始终存在；2026-10-17 实测 zip 3.0.0/8.6.0 可正常解析，yank 已解除）。**离线约束**：Swagger UI 静态资源为 vendored（无外网可用）；ReDoc 页面 HTML 内嵌，但渲染脚本引用 `cdn.jsdelivr.net` 上的 `redoc@2` standalone 资源，浏览器无外网时页面不可用。所有 REST API（含 OpenAI 兼容 `/v1/embeddings`）的请求/响应 schema 均在 OpenAPI 规范中描述，可直接用于生成客户端 SDK。
+> **ℹ️ 说明**: Swagger UI 路径为 `/swagger-ui/`（含 `/swagger-ui/{*rest}`），ReDoc 路径为 `/redoc`（与 Swagger UI 共用同一份 OpenAPI 规范），规范 JSON 为 `/api-docs/openapi.json`；根路径 `/api-docs` **未注册路由**，浏览器直接访问 `/api-docs` 或 `/api-docs/` 均返回 `404 Not Found`。默认构建（无 `swagger-ui` feature）不编译 swagger/ReDoc 链——需该能力时以 `--features swagger-ui` 构建（Cargo 锁文件为全 feature 并集解析，optional 依赖在解析层始终存在；2026-10-17 实测 zip 3.0.0/8.6.0 可正常解析，yank 已解除）。**离线约束**：Swagger UI 静态资源为 vendored（无外网可用）；ReDoc 页面 HTML 内嵌，但渲染脚本引用 `cdn.jsdelivr.net` 上锁定版本的 `redoc@2.5.4` standalone 资源（附 `integrity` SRI 校验与 `crossorigin="anonymous"`，防 CDN/npm 供应链篡改），浏览器无外网时页面不可用。所有 REST API（含 OpenAI 兼容 `/v1/embeddings`）的请求/响应 schema 均在 OpenAPI 规范中描述，可直接用于生成客户端 SDK。
 
 ---
 

@@ -234,7 +234,7 @@ Detection response (`language: null` + `is_reliable: false` means "undetectable"
 
 > **🔧 Output post-processing & timeout**: translation applies deterministic post-processing at the engine exit (shared by the service layer and library users) — Traditional→Simplified normalization for `target=zh`, repair of URL protocol separators and LaTeX escape symbols; model-level mistranslations are fixed by the literal replacement table `[[translation.pairs.output_fixes]]` (in declaration order), see the `[translation]` section of [`config/config.toml`](config/config.toml). The HTTP global request timeout is configured via `[server] request_timeout_seconds` (CPU seq2seq translation of paper-length abstracts takes 15-130+s; `config/config.toml` sets it to 300s explicitly).
 
-Interactive OpenAPI docs (Swagger UI): build with `cargo build --features swagger-ui` and open `http://localhost:9002/swagger-ui/`; spec JSON: `/api-docs/openapi.json` (single binary, one build; the root path `/api-docs` serves no UI; ReDoc is deferred to v0.3.0). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/PERFORMANCE.md#-新增指标).
+Interactive OpenAPI docs (Swagger UI): build with `cargo build --features swagger-ui` and open `http://localhost:9002/swagger-ui/`; spec JSON: `/api-docs/openapi.json` (single binary, one build; the root path `/api-docs` serves no UI). Interactive ReDoc under the same feature is served at `/redoc` (rendered via the version-pinned, SRI-checked jsdelivr CDN; unavailable when the browser is offline). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/PERFORMANCE.md#-新增指标).
 
 ### 🔖 Feature Flags
 
@@ -261,7 +261,7 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 | `transcribe` | - | Qwen3-ASR transcription engine (three-graph + silero VAD + fbank), library-level `InferenceEngine::transcribe` entry; HTTP/gRPC endpoints wired (`POST /api/1/transcribe`, configured under `[transcribe]`) |
 | `mkl` | - | x86_64 CPU MKL acceleration backend (candle-path opt-in, implies `candle`; requires a toolchain that links cleanly) |
 | `accelerate` | - | aarch64 macOS Accelerate backend (candle-path opt-in, implies `candle`) |
-| `quantized-gguf` | - | GGUF quantization engine switch (inference backend pending upstream candle support) |
+| `quantized-gguf` | - | GGUF quantization engine switch (load-time dequantization bridge on the candle path, runtime-equivalent to fp32) |
 | `character_converter` | - | Enable the `character_converter` character-conversion dependency standalone (already implied by `onnx`) |
 
 > **📦 Built-in dependencies**: `confers` (config), `inklog` (logging), `oxcache` (cache), `limiteron` (rate limiting), and `trait-kit` (module registry) are mandatory dependencies that are always enabled — no feature flag needed. `sdforge` is enabled by any protocol feature (`http`/`grpc`/`cli`/`mcp`).

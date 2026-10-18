@@ -262,7 +262,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 
 > **🔧 译文后处理与超时**：翻译在引擎出口做确定性后处理（服务层与库用户同享）——`target=zh` 时繁→简归一化、URL 协议分隔符与 LaTeX 转义符号修复；模型级高频误译经 `[[translation.pairs.output_fixes]]` 字面替换表（按声明序）修复，见 [`config/config.toml`](config/config.toml) `[translation]` 段。HTTP 全局请求超时经 `[server] request_timeout_seconds` 配置（CPU seq2seq 译论文级长摘要需 15-130+s，`config/config.toml` 已显式设 300s）。
 
-交互式 OpenAPI 文档（Swagger UI）：`cargo build --features swagger-ui` 后访问 `http://localhost:9002/swagger-ui/`；规范 JSON：`/api-docs/openapi.json`（单二进制、一次构建；注意根路径 `/api-docs` 不提供 UI，ReDoc 推迟到 v0.3.0）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/PERFORMANCE.md#-新增指标)。
+交互式 OpenAPI 文档（Swagger UI）：`cargo build --features swagger-ui` 后访问 `http://localhost:9002/swagger-ui/`；规范 JSON：`/api-docs/openapi.json`（单二进制、一次构建；注意根路径 `/api-docs` 不提供 UI）。同 feature 下交互式 ReDoc 见 `/redoc`（锁定版本 + SRI 校验的 jsdelivr CDN 渲染，浏览器离线时不可用）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/PERFORMANCE.md#-新增指标)。
 
 ### 🔖 Feature 标志
 
@@ -289,7 +289,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 | `transcribe` | - | Qwen3-ASR 转录引擎（三图 + silero VAD + fbank），库内 `InferenceEngine::transcribe` 入口；HTTP/gRPC 服务面已接线（`POST /api/1/transcribe`，`[transcribe]` 段装配） |
 | `mkl` | - | x86_64 CPU MKL 加速后端（candle 路径 opt-in，含 `candle`；需链接正常的工具链） |
 | `accelerate` | - | aarch64 macOS Accelerate 加速后端（candle 路径 opt-in，含 `candle`） |
-| `quantized-gguf` | - | GGUF 量化引擎开关（推理后端待 candle 上游落地） |
+| `quantized-gguf` | - | GGUF 量化引擎开关（加载期反量化桥实现于 candle 路径，运行期与 fp32 等价） |
 | `character_converter` | - | 独立启用 `character_converter` 字符转换依赖（`onnx` feature 已隐含启用） |
 
 > **📦 内置依赖说明**: `confers`（配置）、`inklog`（日志）、`oxcache`（缓存）、`limiteron`（限流）、`trait-kit`（模块注册）为必选依赖，始终启用，无需通过 feature 开启。`sdforge` 在 `http`/`grpc`/`cli`/`mcp` 任一协议 feature 下启用。

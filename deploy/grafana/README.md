@@ -26,4 +26,4 @@
 | 决策延迟 / 决策请求 | `vecboost_decision_seconds_bucket`、`vecboost_decision_requests_total` |
 | 检测请求 / 翻译请求 | `vecboost_detect_requests_total`、`vecboost_translate_requests_total` |
 
-延迟类面板使用 `histogram_quantile(0.95, ...)` 展示 P95；批大小为 `_sum/_count` 的均值。指标定义与调优开关见 [性能指南](../PERFORMANCE.md) 与 [用户指南](../USER_GUIDE.md)。
+延迟类面板使用 `histogram_quantile(0.95, ...)` 展示 P95；批大小为 `_sum/_count` 的均值。指标定义与调优开关见 [性能指南](../../docs/PERFORMANCE.md) 与 [用户指南](../../docs/USER_GUIDE.md)。

@@ -25,6 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         default_admin_password: Some("SecurePass123!".to_string()),
         csrf: vecboost::config::app::CsrfConfig::default(),
         trusted_proxies: vec![],
+        session_backend: vecboost::config::app::SessionBackend::Memory,
     };
 
     let garrison_config = map_auth_config_to_garrison(&auth_config);

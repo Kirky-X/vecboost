@@ -1096,6 +1096,7 @@ async fn ensure_garrison_initialized() {
                 default_admin_password: Some(test_admin_password()),
                 csrf: crate::config::app::CsrfConfig::default(),
                 trusted_proxies: vec![],
+                session_backend: crate::config::app::SessionBackend::Memory,
             };
             let dao = GarrisonDaoOxcache::new()
                 .await

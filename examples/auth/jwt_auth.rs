@@ -25,6 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         default_admin_password: Some("SecurePass123!".to_string()),
         csrf: vecboost::config::app::CsrfConfig::default(),
         trusted_proxies: vec![],
+        session_backend: vecboost::config::app::SessionBackend::Memory,
     };
 
     // 2. 映射为 garrison 配置并初始化全局单例

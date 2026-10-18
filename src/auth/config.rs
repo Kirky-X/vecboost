@@ -63,6 +63,34 @@ pub fn map_auth_config_to_garrison(auth: &AuthConfig) -> GarrisonConfig {
     config
 }
 
+/// 会话后端启动校验（`[auth] session_backend`）。
+///
+/// `database` 后端依赖认证会话与部署库，以下情形必须在装配 Garland 前
+/// 显性拒绕，不得静默回落到内存：
+///
+/// - `auth.enabled=false`：配置自相矛盾（会话无处可建）；
+/// - 构建未启用 `db` feature：缺 dbnexus 依赖与连接池。
+///
+/// `memory` 恒放行（历史行为，仅限单副本）。
+pub fn validate_session_backend(auth: &AuthConfig) -> Result<(), crate::error::VecboostError> {
+    use crate::config::app::SessionBackend;
+
+    if auth.session_backend != SessionBackend::Database {
+        return Ok(());
+    }
+    if !auth.enabled {
+        return Err(crate::error::VecboostError::config_error(crate::i18n::tr(
+            "startup-auth-session-backend-without-auth",
+        )));
+    }
+    if !cfg!(feature = "db") {
+        return Err(crate::error::VecboostError::config_error(crate::i18n::tr(
+            "startup-auth-session-backend-db-feature-missing",
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,6 +106,7 @@ mod tests {
             default_admin_password: Some("SecurePass123!".to_string()),
             csrf: crate::config::app::CsrfConfig::default(),
             trusted_proxies: vec![],
+            session_backend: crate::config::app::SessionBackend::Memory,
         }
     }
 
@@ -179,5 +208,42 @@ mod tests {
         assert!(garrison.frontend_separation);
         assert!(!garrison.is_read_cookie);
         assert!(garrison.is_read_header);
+    }
+
+    /// `database` + auth 关闭 → 配置自相矛盾，必须拒启动。
+    #[test]
+    fn database_backend_requires_auth_enabled() {
+        let mut auth = make_auth_config();
+        auth.session_backend = crate::config::app::SessionBackend::Database;
+        auth.enabled = false;
+        let err = validate_session_backend(&auth).expect_err("must reject");
+        // 与实现同源比较：不依赖 i18n 是否已初始化 / 当前 locale
+        assert_eq!(
+            err.error_detail(),
+            crate::i18n::tr("startup-auth-session-backend-without-auth")
+        );
+    }
+
+    /// `memory` 恒放行：auth 关闭也能过校验（历史行为不变）。
+    #[test]
+    fn memory_backend_always_passes_validation() {
+        let mut auth = make_auth_config();
+        auth.session_backend = crate::config::app::SessionBackend::Memory;
+        auth.enabled = false;
+        assert!(validate_session_backend(&auth).is_ok());
+    }
+
+    /// 无 `db` feature 构建下 `database` 必须拒启动（禁止静默回落内存）。
+    #[cfg(not(feature = "db"))]
+    #[test]
+    fn database_backend_requires_db_feature() {
+        let mut auth = make_auth_config();
+        auth.session_backend = crate::config::app::SessionBackend::Database;
+        auth.enabled = true;
+        let err = validate_session_backend(&auth).expect_err("must reject");
+        assert_eq!(
+            err.error_detail(),
+            crate::i18n::tr("startup-auth-session-backend-db-feature-missing")
+        );
     }
 }

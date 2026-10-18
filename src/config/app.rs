@@ -378,6 +378,22 @@ impl Default for LogSamplingConfig {
     }
 }
 
+/// 会话存储后端（`[auth] session_backend`）。
+///
+/// - `Memory`（缺省）：garrison `GarrisonDaoOxcache` 进程内会话，仅限单副本。
+/// - `Database`：部署库 `garrison_kv` 表（garrison `DbnexusKvDao`），
+///   `auth.enabled=true` 时可跨副本共享会话；需以 `db,sqlite|postgres` 构建
+///   并配置 `[database]`。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionBackend {
+    #[default]
+    Memory,
+    Database,
+}
+
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct AuthConfig {
@@ -412,6 +428,10 @@ pub struct AuthConfig {
     /// trust-all behavior).
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
+    /// 会话存储后端：`memory`（默认，进程内 oxcache）或 `database`
+    /// （部署库 `garrison_kv`，auth 开启时可多副本共享）。
+    #[serde(default)]
+    pub session_backend: SessionBackend,
 }
 
 /// Rate limiting configuration
@@ -842,6 +862,7 @@ impl Default for AuthConfig {
             // 需要浏览器会话场景时显式设 csrf.enabled=true。
             csrf: CsrfConfig::default(),
             trusted_proxies: Vec::new(),
+            session_backend: SessionBackend::Memory,
         }
     }
 }
@@ -934,6 +955,28 @@ mod tests {
     #[test]
     fn authconfig_default_csrf_disabled() {
         assert!(!AuthConfig::default().csrf.enabled);
+    }
+
+    /// 会话后端缺省保持进程内——既有单副本部署启动行为不变。
+    #[test]
+    fn authconfig_default_session_backend_is_memory() {
+        assert_eq!(
+            AuthConfig::default().session_backend,
+            SessionBackend::Memory
+        );
+    }
+
+    /// `session_backend = "database"` 经 serde 小写枚举值解析。
+    #[test]
+    fn auth_session_backend_parses_database() {
+        let value: toml::Value = toml::from_str("[auth]\nsession_backend = \"database\"").unwrap();
+        let auth: AuthConfig = value
+            .get("auth")
+            .expect("auth 段")
+            .clone()
+            .try_into()
+            .unwrap();
+        assert_eq!(auth.session_backend, SessionBackend::Database);
     }
 
     #[test]
@@ -1657,6 +1700,7 @@ max_new_tokens = 384
             default_admin_password: Some("MyPassword123!".to_string()),
             csrf: CsrfConfig { enabled: true },
             trusted_proxies: vec!["10.0.0.0/8".to_string()],
+            session_backend: SessionBackend::Memory,
         };
         assert!(config.enabled);
         assert!(config.jwt_secret.is_some());

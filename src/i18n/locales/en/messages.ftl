@@ -150,6 +150,8 @@ startup-db-schema = Failed to initialize database schema: { $detail }
 startup-jwt-length = JWT secret must be at least 32 characters long for security. Current length: { $got }
 startup-jwt-missing = JWT secret is required when authentication is enabled. Please provide a strong JWT secret
 startup-admin-password-missing = Admin password is required when authentication is enabled. Set the VECBOOST_ADMIN_PASSWORD environment variable (otherwise any credentials would be able to log in)
+startup-auth-session-backend-without-auth = session_backend="database" requires authentication: set [auth] enabled = true, or switch session_backend to "memory"
+startup-auth-session-backend-db-feature-missing = session_backend="database" requires a build with the db feature (e.g. --features "db,sqlite" or "db,postgres"); this build has db disabled
 startup-logger = Failed to initialize inklog logger: { $detail }
 startup-config = Failed to load config: { $detail }
 startup-encryption = Encryption key validation failed: { $detail }
@@ -333,6 +335,7 @@ log-main-translation-ready = translation service initialized: { $pairs } pair(s)
 log-main-transcribe-ready = transcribe service initialized: bundle={ $bundle }
 log-main-mcp-start = Starting VecBoost MCP server over stdio
 log-main-auth-enabled = Garrison authentication enabled (JWT + session + password verification)
+log-main-auth-session-backend = Auth session backend: backend={ $backend }, table={ $table }
 log-main-auth-disabled = Authentication disabled
 log-main-csrf-enabled = CSRF protection enabled (garrison)
 log-main-csrf-disabled = CSRF protection disabled

@@ -1109,9 +1109,52 @@ async fn run_cli_command(
 }
 
 #[cfg(feature = "auth")]
+async fn build_auth_dao(
+    config: &VecboostConfig,
+    #[cfg(feature = "db")] db_pool: Option<&vecboost::db::DbPool>,
+) -> anyhow::Result<Arc<dyn garrison::dao::GarrisonDao>> {
+    match config.auth.session_backend {
+        vecboost::config::app::SessionBackend::Memory => Ok(Arc::new(
+            garrison::dao::GarrisonDaoOxcache::new()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to create GarrisonDaoOxcache: {}", e))?,
+        )),
+        vecboost::config::app::SessionBackend::Database => {
+            #[cfg(feature = "db")]
+            {
+                let Some(pool) = db_pool else {
+                    return Err(anyhow::anyhow!(
+                        "{}",
+                        vecboost::i18n::tr("startup-auth-session-backend-db-feature-missing")
+                    ));
+                };
+                let dao = garrison::dao::DbnexusKvDao::new(pool.inner().clone());
+                dao.ensure_table()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to ensure garrison_kv table: {}", e))?;
+                Ok(Arc::new(dao))
+            }
+            #[cfg(not(feature = "db"))]
+            {
+                Err(anyhow::anyhow!(
+                    "{}",
+                    vecboost::i18n::tr("startup-auth-session-backend-db-feature-missing")
+                ))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "auth")]
 async fn init_auth(
     config: &VecboostConfig,
+    #[cfg(feature = "db")] db_pool: Option<&vecboost::db::DbPool>,
 ) -> anyhow::Result<(Option<Arc<GarrisonHandle>>, Option<Arc<GarrisonCsrfConfig>>)> {
+    // 会话后端校验不分 auth.enabled 分支：database+auth 关闭属配置自相矛盾，
+    // 必须在任何装配前拒启动（不能因 auth 关闭而静默跳过）。
+    vecboost::auth::config::validate_session_backend(&config.auth)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
     let garrison_handle: Option<Arc<GarrisonHandle>> = if config.auth.enabled {
         if let Some(ref secret) = config.auth.jwt_secret {
             if secret.len() < 32 {
@@ -1140,16 +1183,35 @@ async fn init_auth(
             ));
         }
 
-        let dao = garrison::dao::GarrisonDaoOxcache::new()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to create GarrisonDaoOxcache: {}", e))?;
+        let dao = build_auth_dao(
+            config,
+            #[cfg(feature = "db")]
+            db_pool,
+        )
+        .await?;
+
+        let session_backend = match config.auth.session_backend {
+            vecboost::config::app::SessionBackend::Memory => "memory",
+            vecboost::config::app::SessionBackend::Database => "database",
+        };
+        let session_table = match config.auth.session_backend {
+            vecboost::config::app::SessionBackend::Memory => "-",
+            vecboost::config::app::SessionBackend::Database => "garrison_kv",
+        };
+        log::info!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-auth-session-backend",
+                vecboost::i18n::tr_args(&[("backend", session_backend), ("table", session_table),])
+            )
+        );
 
         let garrison_config = map_auth_config_to_garrison(&config.auth);
 
         // garrison 0.9：init(dao, config, interface) → builder 链（build() 启动全局单例
         // 后台 task）；firewall-* feature 启用时 builder 自动注入防火墙检查钩子
         garrison::prelude::GarrisonManager::builder()
-            .dao(Arc::new(dao))
+            .dao(dao)
             .config(Arc::new(garrison_config.clone()))
             .interface(Arc::new(VecBoostInterface::new(
                 config
@@ -1788,7 +1850,12 @@ async fn init_security_stack(
     );
 
     #[cfg(feature = "auth")]
-    let (garrison_handle, garrison_csrf_config) = init_auth(config).await?;
+    let (garrison_handle, garrison_csrf_config) = init_auth(
+        config,
+        #[cfg(feature = "db")]
+        Some(&db_pool),
+    )
+    .await?;
 
     let audit_logger = init_audit_logger(
         config,
@@ -2421,10 +2488,13 @@ async fn build_http_router(config: &VecboostConfig) -> anyhow::Result<axum::Rout
     // 不存在的 /api/v1/*,破坏全部 API 路由(实测 301)。
     let app = sdforge::http::build();
 
-    // Swagger UI(/api-docs/openapi.json + /swagger-ui/)：feature `swagger-ui`
-    // 显式 opt-in（默认构建不编译；挂主服务端口，单一二进制一次构建完成）
+    // Swagger UI(/api-docs/openapi.json + /swagger-ui/) 与 ReDoc(/redoc)：
+    // feature `swagger-ui` 显式 opt-in（默认构建不编译；挂主服务端口，
+    // 单一二进制一次构建完成）
     #[cfg(feature = "swagger-ui")]
-    let app = app.merge(sdforge::docs::swagger_ui_router());
+    let app = app
+        .merge(sdforge::docs::swagger_ui_router())
+        .merge(vecboost::api::redoc_router());
 
     // metrics 端点（手写例外：Prometheus text/plain 响应，forge 不支持非 JSON）
     let metrics_router = axum::Router::new()
@@ -3287,6 +3357,34 @@ mod tests {
         assert_eq!(resp.status(), 200);
     }
 
+    // ReDoc 挂载验证 —— /redoc 返回内嵌 HTML（与 Swagger UI 共用 OpenAPI 规范）
+    #[cfg(feature = "swagger-ui")]
+    #[tokio::test]
+    async fn redoc_endpoint_served_with_docs_router() {
+        use tower::ServiceExt;
+        let app = sdforge::docs::swagger_ui_router().merge(vecboost::api::redoc_router());
+
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/redoc")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let content_type = resp
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert!(
+            content_type.contains("text/html"),
+            "unexpected content-type: {content_type}"
+        );
+    }
+
     // CLI 名单单一来源 + 未知子命令判定
     #[cfg(feature = "cli")]
     #[test]
@@ -3309,7 +3407,13 @@ mod tests {
         config.auth.enabled = true;
         config.auth.jwt_secret = Some("test-secret-0123456789abcdef0123".to_string());
         config.auth.default_admin_password = None;
-        let err = init_auth(&config).await.unwrap_err();
+        let err = init_auth(
+            &config,
+            #[cfg(feature = "db")]
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("VECBOOST_ADMIN_PASSWORD"));
     }
 }

@@ -28,7 +28,8 @@ use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use super::candle_engine::{infer_pooling_mode, pool_cls, pool_max, pool_mean};
+use super::candle_engine::{pool_cls, pool_max, pool_mean};
+use super::infer_pooling_mode;
 use super::{InferenceEngine, ModelConfig};
 
 /// GGUF 文件魔数（"GGUF" little-endian）。

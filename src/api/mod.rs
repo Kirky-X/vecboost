@@ -16,6 +16,8 @@ pub mod decisions;
 pub mod detect;
 pub mod embedding;
 pub mod init;
+#[cfg(feature = "swagger-ui")]
+pub mod redoc;
 #[cfg(feature = "http")]
 pub mod rejection_normalize;
 pub mod rerank;
@@ -28,6 +30,8 @@ pub use decisions::decide;
 pub use detect::detect;
 pub use embedding::{compute_similarity, embed, embed_batch};
 pub use init::{init_state, state};
+#[cfg(feature = "swagger-ui")]
+pub use redoc::redoc_router;
 pub use rerank::{rerank, rerank_batch};
 pub use transcribe::transcribe;
 pub use translate::translate;

@@ -253,8 +253,10 @@ mcp = ["dep:sdforge", "sdforge/mcp"]
 # （互斥由 dbnexus compile_error 强制，与 limiteron/garrison 同一约定）。
 # 单独启用 db（无驱动）仅保证编译，运行时连接需要搭配一个驱动 feature。
 db = ["dep:dbnexus"]
-sqlite = ["db", "dbnexus/sqlite", "inklog/sqlite"]
-postgres = ["db", "dbnexus/postgres", "inklog/postgres"]
+# garrison 的 db-* 驱动仅在启用 auth 时随 sqlite/postgres 联动（garrison? 弱
+# 可选语法）；供 [auth] session_backend = "database" 的 DbnexusKvDao 使用。
+sqlite = ["db", "dbnexus/sqlite", "inklog/sqlite", "garrison?/db-sqlite"]
+postgres = ["db", "dbnexus/postgres", "inklog/postgres", "garrison?/db-postgres"]
 
 # 功能特性
 auth = ["dep:garrison", "dep:aes-gcm"]
@@ -277,8 +279,9 @@ transcribe = ["onnx", "ort/cuda", "dep:hound", "dep:rustfft"]
 mkl = ["candle", "candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl", "dep:half"]
 accelerate = ["candle", "candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
 # GGUF 量化引擎开关（加载期反量化桥实现于 candle 路径，故隐含 candle）。
-# 启用后编译 engine/quantized_engine.rs；
-# 推理后端待 candle 上游 quantized BERT 落地（见模块文档）。
+# 启用后编译 engine/quantized_engine.rs：读 GGUF → 逐张量反量化为 f32 → 复用
+# candle BertModel；收益为存储/加载体积（Q8_0 ≈ 1/4、Q4_K ≈ 1/7），运行期与
+# fp32 等价（无算力加速）。质量门见 tests/quantized_parity.rs。
 quantized-gguf = ["candle"]
 character_converter = ["dep:character_converter"]
 

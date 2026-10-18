@@ -72,3 +72,20 @@ async fn concurrent_incr_from_two_replicas_does_not_lose_counts() {
     let raw = dao_a.get(key).await.expect("get").expect("value exists");
     assert_eq!(raw, "100", "no increments may be lost across replicas");
 }
+
+#[tokio::test]
+async fn concurrent_incr_single_instance_does_not_lose_counts() {
+    let (_dir, dao, _) = dao_pair().await;
+    let key = "lockout:concurrent-single";
+
+    let mut tasks = Vec::new();
+    for _ in 0..50 {
+        tasks.push(dao.incr(key, 3600));
+    }
+    for result in futures::future::join_all(tasks).await {
+        result.expect("incr");
+    }
+
+    let raw = dao.get(key).await.expect("get").expect("value exists");
+    assert_eq!(raw, "50", "single instance must count exactly 50");
+}

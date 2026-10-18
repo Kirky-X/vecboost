@@ -13,12 +13,28 @@ use vecboost::rate_limit::{LimiteronAdapter, RateLimitSettings};
 
 fn redis_url() -> Option<String> {
     match std::env::var("VECBOOST_TEST_REDIS_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
+        Ok(url) if !url.trim().is_empty() => {
+            allow_insecure_redis();
+            Some(url)
+        }
         _ => {
             eprintln!("SKIP: VECBOOST_TEST_REDIS_URL not set");
             None
         }
     }
+}
+
+/// oxcache 拒绝一切非 TLS（`redis://`）连接，防生产误用；本地测试
+/// Redis 无 TLS，显式走开发逃生阀（单次写入，`Once` 保证跨测试线程同步）。
+fn allow_insecure_redis() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: 测试进程内单次写入；后续所有 oxcache 连接读取均发生于
+        // call_once 返回之后（happens-before 由 Once 语义保证）。
+        unsafe {
+            std::env::set_var("OXCACHE_ALLOW_INSECURE_REDIS", "I_UNDERSTAND_THE_RISKS");
+        }
+    });
 }
 
 fn unique_key() -> String {
@@ -66,6 +82,27 @@ async fn two_adapters_share_per_key_quota() {
     assert!(
         !b.check_rate_limit(&context).await,
         "replica B must observe quota exhausted by replica A"
+    );
+}
+
+#[tokio::test]
+async fn redis_init_failure_rejects_startup() {
+    allow_insecure_redis();
+    let settings = RateLimitSettings {
+        global_requests_per_minute: 0,
+        ip_requests_per_minute: 0,
+        user_requests_per_minute: 0,
+        api_key_requests_per_minute: 0,
+        backend: RateLimitBackend::Redis,
+        redis_url: Some("redis://127.0.0.1:1".to_string()),
+        global_window_ms: 60_000,
+    };
+    let Err(err) = LimiteronAdapter::try_new(settings).await else {
+        panic!("unreachable redis must reject startup");
+    };
+    assert!(
+        format!("{err:?}").contains("rate-limit-redis-init-failed"),
+        "unexpected error: {err:?}"
     );
 }
 

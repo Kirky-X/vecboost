@@ -81,7 +81,7 @@ jobs:
 
       - name: Check distributed-redis build
         if: matrix.name == 'default'
-        run: cargo check --features distributed-redis --lib --locked
+        run: cargo check --features distributed-redis --all-targets --locked
 
       - name: Compile quantized quality gate
         if: matrix.name == 'default'

@@ -284,9 +284,10 @@ accelerate = ["candle", "candle-core/accelerate", "candle-nn/accelerate", "candl
 # fp32 等价（无算力加速）。质量门见 tests/quantized_parity.rs。
 quantized-gguf = ["candle"]
 # 多副本共享状态（Redis）：限流 Lua 原子计数 + 精确缓存跨副本共享。
-# 启用后 limiteron 获得 distributed/lua-script、oxcache 获得 redis 后端；
+# 启用后 limiteron 获得 distributed/lua-script、oxcache 获得 redis 与 lua
+# （eval_lua 走 oxcache/lua，显式声明防 limiteron 特性图变动即断）；
 # 默认构建不引入 Redis 依赖。[rate_limit]/[embedding] 的 redis 后端依赖此 feature。
-distributed-redis = ["limiteron/cache-redis", "limiteron/distributed", "limiteron/lua-script", "oxcache/redis"]
+distributed-redis = ["limiteron/cache-redis", "limiteron/distributed", "limiteron/lua-script", "oxcache/redis", "oxcache/lua"]
 character_converter = ["dep:character_converter"]
 
 # Binary target — main.rs 是 HTTP server 入口（axum::serve），

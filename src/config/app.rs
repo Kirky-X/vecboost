@@ -317,7 +317,7 @@ pub struct MonitoringConfig {
     pub log_level: Option<String>,
 }
 
-/// 日志配置（[logging] 段）。
+/// 日志配置（`[logging]` 段）。
 ///
 /// `VECBOOST_LOG_LEVEL` 环境变量优先级高于 `level` 字段。
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]

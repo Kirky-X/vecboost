@@ -233,7 +233,7 @@ pub enum PoolingMode {
     Cls,
 }
 
-/// head（qtype 前缀 + instructions）+ 全部 options（含各自 [MASK]）的 token
+/// head（qtype 前缀 + instructions）+ 全部 options（含各自 `[MASK]`）的 token
 /// 预算默认值（英文 checkpoint 口径，文档 §2.1）。
 /// `DecisionPipeline` 消费 [`DecisionParams`] 而非编译期常量直传；
 /// 本常量是 [`DecisionParams::default`] 的唯一来源。

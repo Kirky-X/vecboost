@@ -13,7 +13,7 @@
 
 /// Detect the user's preferred locale from environment and system settings.
 ///
-/// Thin wrapper over [`detect_from`] feeding the real process environment and
+/// Thin wrapper over `detect_from` feeding the real process environment and
 /// the system locale; the chain itself lives in `detect_from` so it can be
 /// unit-tested without mutating process environment variables.
 pub fn detect_locale() -> String {

@@ -463,9 +463,14 @@ impl OxCacheBackend {
     }
 
     /// 清空缓存,同时重置 bloom filter。
-    pub async fn clear(&self) {
+    ///
+    /// 错误上抛（Redis 后端 `clear` 可能 NotSupported——服务端淘汰面默认
+    /// 关闭），由调用方显性处置；残留条目经键内权重指纹与 TTL 双重隔离。
+    pub async fn clear(&self) -> Result<(), crate::error::VecboostError> {
         if let Some(cache) = &self.cache {
-            let _ = cache.clear().await;
+            cache.clear().await.map_err(|e| {
+                crate::error::VecboostError::InternalError(format!("cache-clear-failed::{e}"))
+            })?;
         }
         if let Some(bloom) = &self.bloom {
             bloom.clear();
@@ -497,6 +502,7 @@ impl OxCacheBackend {
                 }
             }
         }
+        Ok(())
     }
 
     /// 返回当前条目数。
@@ -697,7 +703,7 @@ mod tests {
         let cache = OxCacheBackend::new(16);
         cache.put("a", vec![1.0]).await;
         cache.put("b", vec![2.0]).await;
-        cache.clear().await;
+        let _ = cache.clear().await; // 内存后端 clear 恒成功，丢弃仅限测试
         // moka 异步驱逐,短暂等待
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(cache.get("a").await.is_none(), "a should be cleared");
@@ -806,7 +812,7 @@ mod tests {
         cache.put("b", vec![2.0]).await;
         let bloom = cache.bloom_filter().unwrap();
         assert_eq!(bloom.len(), 2);
-        cache.clear().await;
+        let _ = cache.clear().await; // 内存后端 clear 恒成功，丢弃仅限测试
         assert_eq!(bloom.len(), 0, "bloom should be cleared");
         assert!(!bloom.contains("a"));
         assert!(!bloom.contains("b"));
@@ -1096,6 +1102,19 @@ mod tests {
         assert!(safe.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
+    /// oxcache 拒绝一切非 TLS（`redis://`）连接，防生产误用；本地测试
+    /// Redis 无 TLS，显式走开发逃生阀（单次写入，`Once` 跨测试线程同步）。
+    fn allow_insecure_redis() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            // SAFETY: 测试进程内单次写入；后续所有 oxcache 连接读取均发生于
+            // call_once 返回之后（happens-before 由 Once 语义保证）。
+            unsafe {
+                std::env::set_var("OXCACHE_ALLOW_INSECURE_REDIS", "I_UNDERSTAND_THE_RISKS");
+            }
+        });
+    }
+
     /// Redis 精确缓存跨副本共享（`VECBOOST_TEST_REDIS_URL` 缺失即 SKIP）。
     #[cfg(feature = "distributed-redis")]
     #[tokio::test]
@@ -1104,6 +1123,7 @@ mod tests {
             eprintln!("SKIP: VECBOOST_TEST_REDIS_URL not set");
             return;
         };
+        allow_insecure_redis();
         let key = format!(
             "redis-shared:{}",
             std::time::SystemTime::now()
@@ -1134,5 +1154,19 @@ mod tests {
             "expired entry must be absent"
         );
         assert_eq!(b.get(&ttl_key).await, None, "TTL is shared via Redis");
+    }
+
+    /// Redis 不可达时初始化失败须上抛为启动错误（不静默回落内存）。
+    #[cfg(feature = "distributed-redis")]
+    #[tokio::test]
+    async fn redis_init_failure_surfaces_startup_error() {
+        allow_insecure_redis();
+        let Err(err) = OxCacheBackend::with_redis("redis://127.0.0.1:1", 16, None).await else {
+            panic!("unreachable redis must fail init");
+        };
+        assert!(
+            format!("{err:?}").contains("embedding-cache-redis-init-failed"),
+            "unexpected error: {err:?}"
+        );
     }
 }

@@ -170,7 +170,17 @@ impl SemanticCache {
         self.exact_hits.store(0, Ordering::SeqCst);
         self.semantic_hits.store(0, Ordering::SeqCst);
         self.misses.store(0, Ordering::SeqCst);
-        self.exact_cache.clear().await;
+        if let Err(e) = self.exact_cache.clear().await {
+            // Redis 后端 clear 可能 NotSupported：显性记录（残留条目经
+            // 键内权重指纹与 TTL 隔离，索引重建不受影响）
+            log::warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-cache-clear-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
+        }
     }
 
     /// 创建禁用的语义缓存。

@@ -154,6 +154,8 @@ startup-auth-session-backend-without-auth = 会话后端 session_backend="databa
 startup-auth-session-backend-db-feature-missing = 会话后端 session_backend="database" 需要以 db 特性构建（如 --features "db,sqlite" 或 "db,postgres"），当前构建未启用 db
 startup-rate-limit-redis-feature-missing = 限流后端 backend="redis" 需要以 distributed-redis 特性构建，当前构建未启用
 startup-rate-limit-redis-url-missing = 限流后端 backend="redis" 必须配置 [rate_limit] redis_url
+startup-rate-limit-global-window-invalid = rate_limit.global_window_ms 必须为正整数（当前为 0）：全局固定窗口宽度不能为 0
+log-service-cache-clear-failed = 模型切换/卸载后清缓存失败（残留条目经 TTL 过期与键内权重指纹隔离）：{ $detail }
 startup-cache-redis-feature-missing = 缓存后端 cache_backend="redis" 需要以 distributed-redis 特性构建，当前构建未启用
 startup-cache-redis-url-missing = 缓存后端 cache_backend="redis" 必须配置 [embedding] redis_url
 startup-cache-redis-persist-conflict = 缓存后端 cache_backend="redis" 与 persist_path（WAL）互斥：Redis 已提供持久化，WAL 仅适用于内存后端

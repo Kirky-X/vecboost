@@ -500,7 +500,8 @@ pub struct RateLimitConfig {
     pub backend: RateLimitBackend,
     /// Redis 连接 URL（`backend = "redis"` 时必填）。
     pub redis_url: Option<String>,
-    /// Redis 全局固定窗口毫秒数（默认 60000；仅 redis 后端生效）。
+    /// Redis 全局固定窗口毫秒数（默认 60000；仅 redis 后端的全局维度
+    /// 生效——per-key 维度固定 60s 窗口，不受本值影响）。
     pub global_window_ms: u64,
 }
 
@@ -543,6 +544,11 @@ impl RateLimitConfig {
         {
             return Err(VecboostError::config_error(crate::i18n::tr(
                 "startup-rate-limit-redis-url-missing",
+            )));
+        }
+        if self.global_window_ms == 0 {
+            return Err(VecboostError::config_error(crate::i18n::tr(
+                "startup-rate-limit-global-window-invalid",
             )));
         }
         Ok(())
@@ -1706,6 +1712,37 @@ max_new_tokens = 384
         assert_eq!(config.backend, RateLimitBackend::Redis);
         assert_eq!(config.redis_url.as_deref(), Some("redis://127.0.0.1:6379"));
         assert_eq!(config.global_window_ms, 30_000);
+    }
+
+    /// 未知 rate_limit backend 必须在配置解析期报错（不得静默回落 memory）。
+    #[test]
+    fn rate_limit_backend_rejects_unknown_value() {
+        let value: toml::Value = toml::from_str("[rate_limit]\nbackend = \"etcd\"").unwrap();
+        let parsed: Result<RateLimitConfig, _> = value
+            .get("rate_limit")
+            .expect("rate_limit 段")
+            .clone()
+            .try_into();
+        assert!(
+            parsed.is_err(),
+            "unknown rate_limit backend must be rejected"
+        );
+    }
+
+    /// `global_window_ms = 0` 会使 Redis 全局窗口塌缩为 1ms，显性拒绝。
+    #[cfg(feature = "distributed-redis")]
+    #[test]
+    fn rate_limit_rejects_zero_global_window_ms() {
+        let config = RateLimitConfig {
+            backend: RateLimitBackend::Redis,
+            redis_url: Some("redis://127.0.0.1:6379".to_string()),
+            global_window_ms: 0,
+            ..RateLimitConfig::default()
+        };
+        assert!(
+            config.validate_backend().is_err(),
+            "global_window_ms=0 must be rejected"
+        );
     }
 
     #[test]

@@ -148,8 +148,26 @@ if current == 1 then
   redis.call('PEXPIRE', KEYS[1], ARGV[1])
 end
 local ttl = redis.call('PTTL', KEYS[1])
+if ttl == -1 then
+  -- externally-written key without TTL: re-arm the window so the
+  -- dimension cannot be locked out forever by a TTL-less key
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
 return {current, ttl}
 "#;
+
+/// 单次 Redis Lua 往返的有界时长：oxcache `eval_lua` 直连无响应超时
+/// 且不经熔断器，Redis 半死（接受连接不响应）时若无此界，请求处理
+/// 线程将挂起耗尽。超时与 Redis 错误同为 fail-closed 拒绝。
+#[cfg(feature = "distributed-redis")]
+const EVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// per-key 固定窗口宽度（与「每分钟配额」配置语义一致，独立于
+/// `global_window_ms`——后者仅作用于全局维度，防止运维调小全局窗口
+/// 时按比例静默放宽 per-key 配额）。
+#[cfg(feature = "distributed-redis")]
+const PER_KEY_WINDOW_MS: u64 = 60_000;
 
 #[cfg(feature = "distributed-redis")]
 impl RedisWindowLimiter {
@@ -210,25 +228,34 @@ impl RedisWindowLimiter {
 impl Limiter for RedisWindowLimiter {
     async fn allow(&self, cost: u64) -> Result<bool, limiteron::error::LimiteronError> {
         let window_ms = self.window_ms.to_string();
-        let value = self
-            .cache
-            .eval_lua(
+        let eval = tokio::time::timeout(
+            EVAL_TIMEOUT,
+            self.cache.eval_lua(
                 REDIS_WINDOW_LUA,
                 &[self.key.as_str()],
                 &[window_ms.as_str()],
-            )
-            .await
-            .map_err(|e| RedisWindowLimiter::script_error("eval", e))?;
+            ),
+        )
+        .await;
+        let value = match eval {
+            Ok(Ok(value)) => value,
+            Ok(Err(e)) => return Err(RedisWindowLimiter::script_error("eval", e)),
+            Err(_) => {
+                return Err(RedisWindowLimiter::script_error(
+                    "eval",
+                    format!("timeout after {EVAL_TIMEOUT:?}: redis unresponsive (fail-closed)"),
+                ));
+            }
+        };
         let (count, _ttl) = RedisWindowLimiter::parse_count_ttl(value)?;
         Ok(count.saturating_add(cost.saturating_sub(1)) <= self.limit)
     }
 }
 
-/// Redis per-key 工厂：全局窗口与所有 per-key 共享同一个 Cache。
+/// Redis per-key 工厂：与全局窗口共享同一个 Cache，窗口固定 60s。
 #[cfg(feature = "distributed-redis")]
 struct RedisWindowFactory {
     cache: Arc<oxcache::Cache<String, String>>,
-    window_ms: u64,
 }
 
 #[cfg(feature = "distributed-redis")]
@@ -238,7 +265,7 @@ impl BucketFactory for RedisWindowFactory {
             self.cache.clone(),
             format!("vecboost:rl:{key}"),
             capacity,
-            self.window_ms,
+            PER_KEY_WINDOW_MS,
         ))
     }
 }
@@ -307,10 +334,17 @@ impl LimiteronAdapter {
                         Arc::new(backend),
                     ));
                     let global_redis = if settings.global_requests_per_minute > 0 {
-                        let capacity = ((settings.global_requests_per_minute as u128
-                            * settings.global_window_ms as u128)
-                            .div_ceil(60_000) as u64)
-                            .max(1);
+                        let capacity = u64::try_from(
+                            (settings.global_requests_per_minute as u128
+                                * settings.global_window_ms as u128)
+                                .div_ceil(60_000),
+                        )
+                        .map_err(|_| {
+                            VecboostError::config_error(
+                                "rate-limit-global-window-capacity-overflow".to_string(),
+                            )
+                        })?
+                        .max(1);
                         Some(Arc::new(RedisWindowLimiter::new(
                             cache.clone(),
                             "vecboost:rl:global",
@@ -320,10 +354,7 @@ impl LimiteronAdapter {
                     } else {
                         None
                     };
-                    let factory = Arc::new(RedisWindowFactory {
-                        cache,
-                        window_ms: settings.global_window_ms,
-                    });
+                    let factory = Arc::new(RedisWindowFactory { cache });
                     Ok(Self::build(settings, global_redis, factory).await)
                 }
                 #[cfg(not(feature = "distributed-redis"))]

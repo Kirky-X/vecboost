@@ -1204,8 +1204,10 @@ fn redis_endpoint_label(url: Option<&str>) -> String {
         return "-".to_string();
     };
     let (scheme, rest) = url.split_once("://").unwrap_or(("redis", url));
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host_port = authority.rsplit('@').next().unwrap_or("");
+    // 先剔 userinfo（rsplit 以最后一个 @ 为界——密码可能含未编码的 / ? #，
+    // 顺序反了会把密码片段当 host 输出），再剔 path/query/fragment。
+    let no_userinfo = rest.rsplit('@').next().unwrap_or(rest);
+    let host_port = no_userinfo.split(['/', '?', '#']).next().unwrap_or("");
     if host_port.is_empty() {
         "-".to_string()
     } else {
@@ -1836,6 +1838,17 @@ async fn app_main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     #[cfg(not(feature = "auth"))]
     vecboost::config::app::validate_session_backend_without_auth(&config.auth)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+    // 共享状态后端校验提前到任何连接副作用之前：redis + persist_path 等
+    // 矛盾配置在建连前拒绝；CLI/MCP 分发路径同样消费（不再静默容忍）。
+    config
+        .rate_limit
+        .validate_backend()
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    config
+        .embedding
+        .validate_cache_backend()
         .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
     enforce_encryption_gate(&config)?;
@@ -3567,5 +3580,14 @@ mod tests {
             "redis://host:6380"
         );
         assert_eq!(redis_endpoint_label(Some("host:6379")), "redis://host:6379");
+        // 密码含未编码分隔符：先剔 userinfo 再剔 path，密码片段不得入日志
+        assert_eq!(
+            redis_endpoint_label(Some("redis://user:pa/ss@host:6379")),
+            "redis://host:6379"
+        );
+        assert_eq!(
+            redis_endpoint_label(Some("redis://user:p?x#h@host:6379")),
+            "redis://host:6379"
+        );
     }
 }

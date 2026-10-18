@@ -80,6 +80,56 @@ impl AtomicKvDao {
             .parse::<u64>()
             .map_err(|e| GarrisonError::Dao(format!("atomic-incr-parse::{key}::{value}::{e}")))
     }
+
+    /// SQLite 写-写并发返回 `database is locked`（code 5，SQLITE_BUSY）；
+    /// dbnexus 未暴露 busy_timeout 配置面（池级修复属上游边界），此处
+    /// 以有界退避重试收口：WAL 启用后写锁窗口为单语句，重试即收敛。
+    async fn incr_with_busy_retry(&self, key: &str, ttl_seconds: u64) -> GarrisonResult<u64> {
+        const MAX_ATTEMPTS: usize = 5;
+        const BACKOFF_MS: u64 = 20;
+        let mut attempt = 1;
+        loop {
+            match self.incr_sql(key, ttl_seconds).await {
+                Ok(value) => return Ok(value),
+                Err(e) if attempt < MAX_ATTEMPTS && Self::is_sqlite_busy(&e) => {
+                    attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        BACKOFF_MS * attempt as u64,
+                    ))
+                    .await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    fn is_sqlite_busy(err: &GarrisonError) -> bool {
+        let text = err.to_string();
+        text.contains("code: 5") || text.contains("database is locked")
+    }
+
+    /// SQLite 文件库启用 WAL（库级持久属性，一次设置对全部连接生效）：
+    /// 多副本下读不再阻塞写，缩小写锁窗口。非 sqlite 后端跳过。
+    async fn enable_sqlite_wal(&self) -> GarrisonResult<()> {
+        let session = self
+            .pool
+            .get_session("admin")
+            .await
+            .map_err(|e| GarrisonError::Dao(format!("atomic-wal-session::{e}")))?;
+        if session
+            .connection()
+            .map_err(|e| GarrisonError::Dao(format!("atomic-wal-connection::{e}")))?
+            .get_database_backend()
+            != DbBackend::Sqlite
+        {
+            return Ok(());
+        }
+        session
+            .execute_raw("PRAGMA journal_mode=WAL")
+            .await
+            .map_err(|e| GarrisonError::Dao(format!("atomic-wal-enable::{e}")))?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -123,7 +173,7 @@ impl GarrisonDao for AtomicKvDao {
 
     /// 原子自增（覆盖内层的读-改-写实现）。
     async fn incr(&self, key: &str, ttl_seconds: u64) -> GarrisonResult<u64> {
-        self.incr_sql(key, ttl_seconds).await
+        self.incr_with_busy_retry(key, ttl_seconds).await
     }
 
     async fn decr(&self, key: &str) -> GarrisonResult<u64> {
@@ -195,6 +245,7 @@ pub async fn build_atomic_dao(pool: DbPool) -> GarrisonResult<AtomicKvDao> {
     let inner = DbnexusKvDao::new(pool.clone());
     let dao = AtomicKvDao::new(inner, pool);
     dao.ensure_table().await?;
+    dao.enable_sqlite_wal().await?;
     Ok(dao)
 }
 

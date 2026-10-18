@@ -464,9 +464,11 @@ impl EmbeddingService {
         .await
     }
 
-    /// 精确缓存键统一构造：`emb:{model_id}:{xxh3_128(text):016x}`。
+    /// 精确缓存键统一构造：`emb:{model_id}[:{sha16}]:{xxh3_128(text):016x}`。
     /// 写入方（回填/warm_up_cache）与读取方必须共用本函数——键方案曾因
     /// 多处内联复制漂移，warm_up 以裸文本为键致预热条目永不可读。
+    /// 键绑定权重指纹（sha256 前 16 位，与 WAL 指纹同源）：同名换权重后
+    /// Redis 中的旧向量不再命中——共享缓存跨重启存活，键是唯一防线。
     fn cache_key_for(&self, text: &str) -> String {
         let model_id = self
             .model_config
@@ -474,7 +476,19 @@ impl EmbeddingService {
             .map(|c| c.name.as_str())
             .unwrap_or("unknown");
         let text_hash = xxhash_rust::xxh3::xxh3_128(text.as_bytes());
-        format!("emb:{}:{:016x}", model_id, text_hash)
+        match self
+            .model_config
+            .as_ref()
+            .and_then(|c| c.model_sha256.as_deref())
+        {
+            Some(sha) => format!(
+                "emb:{}:{}:{:016x}",
+                model_id,
+                &sha[..sha.len().min(16)],
+                text_hash
+            ),
+            None => format!("emb:{}:{:016x}", model_id, text_hash),
+        }
     }
 
     /// 处理单文本向量化
@@ -1753,8 +1767,18 @@ impl EmbeddingService {
         self.engine = new_engine_arc;
         self.model_config = Some(model_config);
 
-        // 切模型后清缓存，避免旧模型向量污染新模型
-        self.cache.clear().await;
+        // 切模型后清缓存，避免旧模型向量污染新模型。
+        // Redis 后端 clear 可能 NotSupported（服务端淘汰面默认关闭）：显性
+        // 记录而非静默——残留条目经键内权重指纹与 TTL 双重隔离。
+        if let Err(e) = self.cache.clear().await {
+            log::warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-cache-clear-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
+        }
         // 语义缓存键为纯文本，跨模型必须一并清空
         if let Some(ref semantic) = self.semantic_cache {
             semantic.clear().await;
@@ -1788,8 +1812,16 @@ impl EmbeddingService {
             );
         }
 
-        // 卸载模型后清缓存
-        self.cache.clear().await;
+        // 卸载模型后清缓存（失败显性记录；残留条目由指纹与 TTL 隔离）
+        if let Err(e) = self.cache.clear().await {
+            log::warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-service-cache-clear-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
+        }
         // 语义缓存含该模型向量，一并清空防跨模型污染
         if let Some(ref semantic) = self.semantic_cache {
             semantic.clear().await;

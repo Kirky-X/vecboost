@@ -40,6 +40,8 @@
 
 ### 新增
 
+- **多副本共享状态（`distributed-redis`）**：`[rate_limit] backend = "redis"`（全局 + IP/User/ApiKey 的 Lua 原子固定窗口）、`[embedding] cache_backend = "redis"`（精确向量缓存共享；bloom 禁用、WAL 互斥）；启动期校验 feature/URL/WAL 冲突；启动日志仅输出脱敏 endpoint
+- **锁定计数原子化**：`session_backend=\"database\"` 下 `AtomicKvDao` 以单语句 `INSERT ... ON CONFLICT ... RETURNING`（SQLite/PostgreSQL）实现 `incr`，跨副本无丢失（`tests/atomic_lockout_counter.rs`）
 - **ReDoc 端点**：`swagger-ui` feature 下挂载 `GET /redoc`，与 Swagger UI 共用 `/api-docs/openapi.json`；页面 HTML 内嵌，渲染脚本锁定 `redoc@2.5.4` 精确版本并附 `integrity` SRI 校验 + `crossorigin="anonymous"`（防 CDN/npm 供应链篡改；浏览器需外网，Swagger UI 仍为 vendored 离线可用）
 - **Grafana 预配置仪表板**：`deploy/grafana/vecboost-dashboard.json`（14 面板：HTTP/批处理/队列/阶段/缓存/决策/检测/翻译）与导入说明 `deploy/grafana/README.md`
 

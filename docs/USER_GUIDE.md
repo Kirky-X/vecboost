@@ -1290,6 +1290,30 @@ curl -X POST http://localhost:9002/api/1/embed \
 
 ---
 
+### 多副本共享状态（Redis）
+
+`distributed-redis` feature 下可把限流与精确向量缓存外置到 Redis：
+
+```toml
+[rate_limit]
+backend = "redis"
+redis_url = "redis://127.0.0.1:6379"
+global_window_ms = 60000
+
+[embedding]
+cache_backend = "redis"
+redis_url = "redis://127.0.0.1:6379"
+```
+
+| 状态面 | memory（默认） | redis |
+|--------|----------------|-------|
+| 限流（全局 / IP / User / ApiKey） | 进程内 | 共享（Lua 原子固定窗口） |
+| 精确向量缓存 | 进程内（可选 WAL） | 共享（无 WAL，bloom 禁用） |
+| 语义缓存模糊命中 | 进程内 | 进程内（仅精确层共享） |
+| 封禁清单 | 进程内 | 进程内 |
+
+构建：`cargo build --features "db,sqlite,distributed-redis"`（或 `db,postgres`）。`cache_backend = "redis"` 与 `[embedding] persist_path` 互斥；Redis 初始化失败时服务拒绝启动（不静默回落内存）。
+
 ## 📊 监控
 
 ### 健康端点

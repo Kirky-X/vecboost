@@ -118,6 +118,19 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 
 ---
 
+## 🔗 Redis 共享后端（多副本）
+
+限流与精确缓存的 Redis 路径引入每请求 1~2 次网络往返（Lua eval）。本机未部署 Redis，**未采集延迟数据**；具备环境后按以下口径补充：
+
+- **前置**：Redis 7+、`--features distributed-redis`；
+- **命令**：`VECBOOST_TEST_REDIS_URL=redis://127.0.0.1:6379 cargo bench --bench embed_throughput_bench`（缓存热路径）+ 限流 Lua 延迟专项压测；
+- **口径**：criterion 100 samples 中位、空闲窗口；对比 `memory` 后端的单请求 P50/P95 增量；
+- **记录**：本节补充 `Redis（同机）` 行，并注明网络 RTT；不得以估算值替代实测。
+
+> 功能语义：全局与 per-key 限流均为 Lua 原子固定窗口；精确缓存共享、模糊索引与 bloom 仍按副本。
+
+---
+
 ## 🧭 引擎选型证据（onnx vs candle vs 嵌入 Python）
 
 > **采集条件**：2026-10-18，AMD Ryzen 9 9950X（16 核）/ 66 GiB / RTX 5080 16 GiB（WSL2）；

@@ -86,7 +86,7 @@ cargo deny check
 - 登录收敛：仅 `default_admin_username`（默认 admin）可登录；启用认证时必须配置 `VECBOOST_ADMIN_PASSWORD`（≥12 位，缺失拒绝启动）。
 - Token 生命周期：`token_expiration_hours` 缺省 24 小时；支持 TOTP（`secure-totp`）、账号锁定（`account-lockout`）、凭证清零（`account-credential-zeroize`）、异常检测（`anomalous-detector-dual`）与安全告警。
 - 会话存储：`[auth] session_backend` 可选 `memory`（默认，进程内存 oxcache，**仅限单副本**）或 `database`（部署库 `garrison_kv` 表，garrison `DbnexusKvDao`，auth 开启时可多副本共享）；`database` 需以 `--features "db,sqlite"` 或 `"db,postgres"` 构建并配置 `[database]`，未编译 db 或 auth 关闭时启动期显性拒绝。
-- 多副本语义边界：会话外置后认证可水平扩展，但**限流与语义缓存仍为进程内**（各副本独立计数）；账号锁定计数经 `incr` 读-改-写实现，多副本下为尽力而为（可能少计）；`set_if_absent` 在旧键已过期的清理路径为 DELETE→set 两步非原子，"恰一赢家"语义在该窗口不保证。
+- 多副本语义边界：会话外置后认证可水平扩展，但**限流与语义缓存仍为进程内**（ 各副本独立计数），**封禁清单仍按副本生效**（limiteron `ban-sync` 未启用）；账号锁定计数经 `AtomicKvDao` 单语句原子自增（`INSERT ... ON CONFLICT ... RETURNING`，SQLite/PostgreSQL），跨副本无丢失；`set_if_absent` 在旧键已过期的清理路径为 DELETE→set 两步非原子，"恰一赢家"语义在该窗口不保证。
 - `database` 后端运行前提与会话数据卫生：TTL 以各副本 UTC 墙钟为基准，多副本部署需 NTP 对时（时钟偏移会等量伸缩会话与锁定期限）；会话令牌以明文键值落库，**部署库备份等同会话凭据库，需同等级加密保管**；过期会话行仅在同键再次访问时惰性删除，需运维侧定时清理 `garrison_kv` 过期行（如 `DELETE FROM garrison_kv WHERE expire_at IS NOT NULL AND expire_at <= <unix 秒>`）。
 
 ### 请求边界防护

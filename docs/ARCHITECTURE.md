@@ -869,6 +869,21 @@ graph TB
 
 ## 🚢 部署架构
 
+### 🔗 多副本共享状态
+
+多副本部署下可按面选择共享存储（均默认进程内）：
+
+| 状态面 | 配置 | 共享介质 |
+|--------|------|----------|
+| 认证会话 | `[auth] session_backend = "database"` | 部署库 `garrison_kv`（garrison DbnexusKvDao） |
+| 账号锁定计数 | 同会话后端 | 部署库（`AtomicKvDao` 单语句原子自增） |
+| 限流（全局 / IP / User / ApiKey） | `[rate_limit] backend = "redis"` | Redis（Lua 原子固定窗口） |
+| 精确向量缓存 | `[embedding] cache_backend = "redis"` | Redis（bloom 禁用） |
+| 语义缓存模糊索引 | — | 进程内（按副本） |
+| 封禁清单 | — | 进程内（limiteron `ban-sync` 未启用） |
+
+共享层初始化失败时启动期显性拒绝；运行期 Redis 故障由请求错误显性暴露，不静默回落进程内存。
+
 ### 🧩 Kubernetes 部署
 
 VecBoost 提供 Docker 镜像（通过 `docker build` 或 GitHub Actions 构建），Kubernetes 部署清单需根据实际环境自定义。典型部署资源包括：

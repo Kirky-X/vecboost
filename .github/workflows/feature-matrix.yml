@@ -79,6 +79,10 @@ jobs:
         if: matrix.name == 'default'
         run: cargo check --features quantized-gguf --lib --locked
 
+      - name: Check distributed-redis build
+        if: matrix.name == 'default'
+        run: cargo check --features distributed-redis --lib --locked
+
       - name: Compile quantized quality gate
         if: matrix.name == 'default'
         # 真跑质量门仍需模型资产（缺失自动 SKIP）；此步保证目标持续可编译

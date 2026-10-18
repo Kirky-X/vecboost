@@ -478,7 +478,8 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 <tr><td align="center">✅</td><td>审计修复（0.3.0-rc.1）</td><td>安全默认值/登录收敛/XFF 信任反转/RBAC 接线/缓存键模型命名空间等破坏性行为变更（见 [更新日志](#-更新日志)）</td></tr>
 <tr><td align="center">✅</td><td>调优开关（0.3.0-rc.1）</td><td>GGUF 量化、向量输出量化、多模型 LFRU 驻留、缓存 WAL、硬件感知规划、doctor 诊断、启动预热</td></tr>
 <tr><td align="center">✅</td><td>量化推理后端</td><td>GGUF 引擎经“加载期反量化桥”交付（Q8_0/Q4_K；路由/魔数校验/质量门齐备）；收益为存储与加载体积，运行期与 fp32 等价（无算力加速），质量门需模型资产实跑</td></tr>
-<tr><td align="center">✅</td><td>多副本会话外置</td><td>`[auth] session_backend = "database"`（部署库 `garrison_kv`，garrison DbnexusKvDao）；限流/语义缓存仍为进程内，锁定计数多副本下为尽力而为</td></tr>
+<tr><td align="center">✅</td><td>多副本会话外置</td><td>`[auth] session_backend = "database"`（部署库 `garrison_kv`，garrison DbnexusKvDao）；锁定计数由 `AtomicKvDao` 原子化（见下行）</td></tr>
+<tr><td align="center">✅</td><td>多副本共享状态</td><td>限流与精确缓存 Redis 后端（`distributed-redis`，Lua 原子固定窗口）、锁定计数原子化（`AtomicKvDao`）；模糊语义索引与封禁清单仍按副本</td></tr>
 <tr><td align="center">✅</td><td>性能基线（吞吐 + MKL）</td><td>吞吐基线与 MKL 对比基线已实测（2026-09-16，见 <a href="docs/PERFORMANCE.md">性能指南</a>）</td></tr>
 <tr><td align="center">📋</td><td>性能基线（Accelerate）</td><td>Accelerate（macOS）待验证：无 Apple 硬件，验证协议已登记于性能指南</td></tr>
 <tr><td align="center">✅</td><td>文档与可观测性</td><td>ReDoc（`/redoc`，`swagger-ui` feature）、预配置 Grafana 仪表板（`deploy/grafana/`）</td></tr>

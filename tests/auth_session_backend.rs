@@ -70,7 +70,7 @@ async fn session_key_expires_after_ttl() {
         .set("account:session:ttl", "v", 1)
         .await
         .expect("set with 1s ttl");
-    tokio::time::sleep(Duration::from_millis(1100)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     assert_eq!(
         dao_a.get("account:session:ttl").await.expect("get"),

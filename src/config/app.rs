@@ -979,6 +979,14 @@ mod tests {
         assert_eq!(auth.session_backend, SessionBackend::Database);
     }
 
+    /// 未知值必须在配置解析期报错（不得静默回落 memory）。
+    #[test]
+    fn auth_session_backend_rejects_unknown_value() {
+        let value: toml::Value = toml::from_str("[auth]\nsession_backend = \"redis\"").unwrap();
+        let parsed: Result<AuthConfig, _> = value.get("auth").expect("auth 段").clone().try_into();
+        assert!(parsed.is_err(), "unknown session_backend must be rejected");
+    }
+
     #[test]
     fn test_translation_config_default_empty() {
         let config = TranslationConfig::default();

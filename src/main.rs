@@ -1145,6 +1145,18 @@ async fn build_auth_dao(
     }
 }
 
+/// 会话后端日志标签（backend, table）——`database` 固定 `garrison_kv`；
+/// 仅返回字面量，不携带数据库连接串/凭据。
+#[cfg(feature = "auth")]
+fn session_backend_labels(
+    backend: vecboost::config::app::SessionBackend,
+) -> (&'static str, &'static str) {
+    match backend {
+        vecboost::config::app::SessionBackend::Memory => ("memory", "-"),
+        vecboost::config::app::SessionBackend::Database => ("database", "garrison_kv"),
+    }
+}
+
 #[cfg(feature = "auth")]
 async fn init_auth(
     config: &VecboostConfig,
@@ -1190,14 +1202,7 @@ async fn init_auth(
         )
         .await?;
 
-        let session_backend = match config.auth.session_backend {
-            vecboost::config::app::SessionBackend::Memory => "memory",
-            vecboost::config::app::SessionBackend::Database => "database",
-        };
-        let session_table = match config.auth.session_backend {
-            vecboost::config::app::SessionBackend::Memory => "-",
-            vecboost::config::app::SessionBackend::Database => "garrison_kv",
-        };
+        let (session_backend, session_table) = session_backend_labels(config.auth.session_backend);
         log::info!(
             "{}",
             vecboost::i18n::tr_with_args(
@@ -3415,5 +3420,20 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("VECBOOST_ADMIN_PASSWORD"));
+    }
+
+    /// 会话后端日志标签：database → garrison_kv；memory → "-"（无表）。
+    #[cfg(feature = "auth")]
+    #[test]
+    fn session_backend_labels_map_memory_and_database() {
+        use vecboost::config::app::SessionBackend;
+        assert_eq!(
+            session_backend_labels(SessionBackend::Memory),
+            ("memory", "-")
+        );
+        assert_eq!(
+            session_backend_labels(SessionBackend::Database),
+            ("database", "garrison_kv")
+        );
     }
 }

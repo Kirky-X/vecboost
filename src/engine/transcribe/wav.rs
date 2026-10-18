@@ -3,8 +3,8 @@
 
 //! WAV 读取：16kHz 单声道 16-bit PCM → f32 [-1,1]。
 //!
-//! 归一化 `i16/32768` 与参考链 `normalize_samples=true` 一致
-//! （docs-transcribe/DESIGN.md §6）；不做重采样，非契约格式显性报错
+//! 归一化 `i16/32768` 与参考链 `normalize_samples=true` 一致（参数以本文件与同目录
+//! `features.rs` 为入库事实源）；不做重采样，非契约格式显性报错
 //! （`VecboostError`，R-transcribe-engine-001/004——消除 POC 的 `Box<dyn Error>`）。
 
 use std::path::Path;

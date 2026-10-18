@@ -4,12 +4,12 @@
 
 ## 📋 目录
 
-- [转录能力消费面](#转录能力消费面)
-- [transcribe-own CLI 契约](#cli-契约自动门禁逐字依赖不得偏离)
-- [退役配置项处理纪律](#退役配置项处理纪律显性告警禁静默)
-- [废弃文档与勘误治理](#废弃文档与勘误治理)
-- [i18n 约束](#i18n-约束默认英文禁硬编码中文)
-- [门禁命令](#门禁命令)
+- [转录能力消费面](#-转录能力消费面)
+- [transcribe-own CLI 契约](#-cli-契约自动门禁逐字依赖不得偏离)
+- [退役配置项处理纪律](#-退役配置项处理纪律显性告警禁静默)
+- [废弃文档与勘误治理](#-废弃文档与勘误治理)
+- [i18n 约束](#-i18n-约束默认英文禁硬编码中文)
+- [门禁命令](#-门禁命令)
 
 ---
 
@@ -24,7 +24,7 @@
 - **禁止语义级双实现**：不得在 `transcribe-poc` 内重写 asr / vad / features / tokenizer / wav。历史上"为保留实验旋钮而降级保留本地实现"的口径已彻底作废。
 - 段级并行由调用方持有多个 `TranscribeSession` 实现（ort rc.13 禁止同一 Session 并发 `Run`，每会话独占一套），门面内不做线程池/会话池。
 - 公开门面即 POC 的消费面：**不得**为主仓内部实现细节在门面开口子。
-- 输入格式与特征链事实源为 `docs-transcribe/DESIGN.md` §6；wav 必须是 16kHz / 单声道 / 16-bit PCM，不符即显性报错，**不做静默重采样**。
+- 输入格式与特征链的**入库事实源为代码本身**：`src/engine/transcribe/features.rs`（帧移 160 / 帧长 400 / n_fft=400 / mel 128 bins / Slaney 尺度与归一化 / 前导 80 样本居中对齐 / 全局归一化）与 `src/engine/transcribe/wav.rs`。wav 必须是 16kHz / 单声道 / 16-bit PCM，不符即显性报错，**不做静默重采样**。PoC 期设计稿 `docs-transcribe/DESIGN.md`（原 §6 与本节同义）**已于 2026-10-18 改为本机不入库**，不得作为门禁或实现依据引用。
 
 ## 📜 CLI 契约（自动门禁逐字依赖，不得偏离）
 
@@ -45,13 +45,14 @@
 - 已退役的配置项仍被设置时，必须 stderr 显性告警后忽略（实现见 `transcribe-poc/src/main.rs` 的 `warn_retired_knobs`），**禁止静默吞掉**。同一纪律适用于非契约输入格式与 CUDA EP 不可用：一律显性报错。
 - 实验结论记录于 `out/transcribe-poc/own-engine/summary.md` §11（io-binding 非确定性读回；合批与 env-pool 实测档位）。注意 `out/` 与 `temp/` 均在 `.gitignore` 中（未入库，仅本机可查）：任何以它们为验收证据的门禁都必须准备文件缺失的分支，不得在 CI 中假设其存在。
 
-## 🗑️ 废弃文档与勘误治理
+## 🧹 废弃文档与勘误治理
 
 - **归档只读**：`specmark/archive/**` 一经归档不再改写。发现归档稿与实现/契约不符，勘误落在活文档（主 spec `specmark/specs/**` 或 `CONTRACT.md`），归档正文保留原样。
 - **废弃报告不落根目录**：一次性退役说明随变更进归档；只有跨变更长期有效的约束才提炼进本文。根目录不保留 `DEPRECATED.md` 这类历史叙述型文档。
 - **判据失效即作废**：历史降级/保留理由所依赖的前提一旦消失（例如"当时主仓无公开门面，故保留本地实现"），该判据不得再作为后续决策依据；重新论证须引用归档 `design.md` 的原始决策。
 - **删除前查入链**：移除文档或文件前先 `git grep` 入链并同步修正（`README.md` / `README_EN.md` / `docs/**` / `src/**` 文档注释 / `.gitignore` 注释），避免死链；只删除确认无消费方的产物。
-- **勿误删的关联件**：`docs-transcribe/DESIGN.md`（被 `src/engine/transcribe/wav.rs` 文档注释引用）与 `config-e2e-transcribe.toml`（WAV 链路验收配置）为在用入库件；`transcribe-poc/` 整目录（契约原文、pytorch 基线对拍）已按 owner 裁定改为**本机不入库目录**——属本地资产而非可废弃件，勿从磁盘删除，也勿重新加入 git。
+- **设计文档禁止入库**（2026-10-18 owner 裁定）：PoC 期设计说明、可行性评估这类描述性文档不得出现在 git 仓库（与 `docs/TRAIT-KIT-SDK-ASSESSMENT.md` 等本机专有文档同一口径）；经 `.gitignore` 排除并 `git rm --cached` 取消跟踪，本地保留。其仍有效的结论须提炼进本文或落到代码文档注释，不得以“设计稿已入库”充当事实源。
+- **勿误删的关联件**：`config-e2e-transcribe.toml`（WAV 链路验收配置）为在用入库件。`transcribe-poc/` 整目录（契约原文、pytorch 基线对拍）与 `docs-transcribe/`（PoC 期设计稿，含外机路径与未入库参考源码行号）**均为本机不入库目录**——属本地资产而非可废弃件，勿从磁盘删除，也勿重新加入 git。
 
 ## ✅ 门禁命令
 

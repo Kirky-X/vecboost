@@ -3,8 +3,8 @@
 
 //! Whisper 风格 log-mel 特征（128 维，居中对齐 STFT），自研 rustfft 实现。
 //!
-//! 由 `transcribe-poc/src/features.rs` 逐字移植（参数
-//! 与 DESIGN.md §6 固化值一致，16000 Hz）。移植参考（Apache-2.0，仅参考非依赖）：
+//! 由本机 `transcribe-poc/src/features.rs`（不入库目录）逐字移植，参数
+//! 固化于本文件，本文件即特征链的入库事实源（16000 Hz）。移植参考（Apache-2.0，仅参考非依赖）：
 //!   - mel-computations.h:95-127  Slaney mel 尺度
 //!   - offline-stream.cc:188-212  reflect-pad 80 前导（torch.stft center=True 语义）
 //!   - math.cc:115-132            NormalizeWhisperFeatures

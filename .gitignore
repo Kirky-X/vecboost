@@ -168,8 +168,9 @@ out/
 # -----------------------------------------------------------------------------
 # 13. Transcribe PoC（feat/transcribe-own-ort）
 # -----------------------------------------------------------------------------
-# 大体积音频/模型资产不入库（复制来源与 md5 见 docs-transcribe/DESIGN.md §1）；
-# 3rdparty/、models/、*.so.* 已在上方小节忽略，这里覆盖 assets/ 整目录
+# 大体积音频/模型资产不入库（复制来源与 md5 见本机 `docs-transcribe/DESIGN.md` §1，
+# 该文档按 §16 亦不入库）；3rdparty/、models/、*.so.* 已在上方小节忽略，
+# 这里覆盖 assets/ 整目录
 assets/
 
 # -----------------------------------------------------------------------------
@@ -189,3 +190,14 @@ transcribe-poc/
 # -----------------------------------------------------------------------------
 tools/torch_backend_glue.py
 tools/gen_scatter.py
+
+# -----------------------------------------------------------------------------
+# 16. 设计文档禁入库（2026-10-18 owner 裁定：PoC 期设计说明类文档一律不得出现在
+# git 仓库；本地保留，规范面回落到 docs/MAINTENANCE.md 与 src/engine/transcribe/ 实现）
+# - docs-transcribe/DESIGN.md：转录 PoC 期设计稿，含外机 worktree 绝对路径、未入库
+#   参考源码行号（docs-transcribe-reference/、transcribe-poc/CONTRACT.md、out/）等
+#   本机专有引用，在干净 clone 中必为死链，故取消跟踪
+# - 特征链与输入格式的入库事实源已回落到 src/engine/transcribe/features.rs（§6 参数）
+#   与 wav.rs（16kHz/单声道/16-bit PCM），文档注释不得再指向本文档
+# -----------------------------------------------------------------------------
+docs-transcribe/

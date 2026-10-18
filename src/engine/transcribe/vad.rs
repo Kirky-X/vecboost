@@ -1,10 +1,10 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! silero VAD v4：LSTM 状态机 + 段切分，由 `transcribe-poc/src/vad.rs` 移植
+//! silero VAD v4：LSTM 状态机 + 段切分，由本机 `transcribe-poc/src/vad.rs`（不入库目录）移植
 //! 参数（threshold=0.5、min_speech=0.25s、
 //! min_silence=0.5s、max_speech=20s 强切、neg_threshold=max(thr-0.15,0.01)）
-//! 与 DESIGN.md 固化值一致。
+//! 固化于本文件，本文件即 VAD 段切分参数的入库事实源。
 //!
 //! 移植改造：`Box<dyn Error>` → [`VecboostError`]（R-transcribe-engine-004）；
 //! VAD 模型的 `Session::builder()` 收编至 [`super::session::build_session`]

@@ -13,21 +13,21 @@
 <details open>
 <summary>📑 目录（点击展开）</summary>
 
-- [快速开始](#快速开始)
-- [安装](#安装)
-- [配置](#配置)
-- [运行服务](#运行服务)
-- [使用 API](#使用-api)
-- [认证](#认证)
-- [Docker 部署](#docker-部署)
-- [Kubernetes 部署](#kubernetes-部署)
-- [监控](#监控)
-- [国际化（i18n）](#国际化i18n)
-- [故障排除](#故障排除)
-- [最佳实践](#最佳实践)
+- [快速开始](#-快速开始)
+- [安装](#-安装)
+- [配置](#-配置)
+- [运行服务](#-运行服务)
+- [使用 API](#-使用-api)
+- [认证](#-认证)
+- [Docker 部署](#-docker-部署)
+- [Kubernetes 部署](#-kubernetes-部署)
+- [监控](#-监控)
+- [国际化（i18n）](#-国际化i18n)
+- [故障排除](#-故障排除)
+- [最佳实践](#-最佳实践)
 - [常见问题](#常见问题)
-- [下一步](#下一步)
-- [相关文档](#相关文档)
+- [下一步](#-下一步)
+- [相关文档](#-相关文档)
 
 </details>
 
@@ -152,7 +152,7 @@ ls -lh target/release/vecboost
 
 ---
 
-## ⚙️ 配置
+## 🔧 配置
 
 ### 📄 配置文件
 
@@ -166,7 +166,7 @@ cp config/config.toml config/config_custom.toml
 
 ---
 
-### 🗂️ 配置段总览
+### 📁 配置段总览
 
 下表对应 `VecboostConfig`（`src/config/app_config.rs`）实际解析的配置段：
 
@@ -643,7 +643,7 @@ max_text_length = 8192  # 单个文本最大字节长度
 ```toml
 [auth]
 enabled = true
-# ⚠️ 生产环境必须通过环境变量设置:
+# 🚨 生产环境必须通过环境变量设置:
 # export VECBOOST_JWT_SECRET="your-32-char-min-secret"
 # export VECBOOST_ADMIN_PASSWORD="your-secure-password"
 token_expiration_hours = 1
@@ -756,7 +756,7 @@ cache_size = 2048
 
 [auth]
 enabled = true
-# ⚠️ 敏感信息通过环境变量注入:
+# 🚨 敏感信息通过环境变量注入:
 # VECBOOST_JWT_SECRET / VECBOOST_ADMIN_PASSWORD
 token_expiration_hours = 24
 
@@ -962,7 +962,7 @@ curl -X POST http://localhost:9002/api/1/rerank \
 
 ---
 
-### 🛠️ 管理模型
+### 🔨 管理模型
 
 #### 获取当前模型
 
@@ -1187,7 +1187,7 @@ docker-compose up -d
 
 ---
 
-## ☸️ Kubernetes 部署
+## 🧩 Kubernetes 部署
 
 ### 前置条件
 
@@ -1484,7 +1484,7 @@ free -h     # 内存
 
 ---
 
-### 🛡️ 可靠性
+### 🔒 可靠性
 
 | 检查项 | 建议 |
 |--------|------|

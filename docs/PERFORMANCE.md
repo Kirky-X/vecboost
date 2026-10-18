@@ -9,15 +9,15 @@ VecBoost 为高吞吐、低延迟的嵌入向量服务而生。本指南汇总�
 <details open>
 <summary>📑 目录（点击展开）</summary>
 
-- [基准数据（实测）](#基准数据实测)
-- [吞吐基线](#吞吐基线)
-- [引擎选型证据](#引擎选型证据onnx-vs-candle-vs-嵌入-python)
-- [性能设计要点](#性能设计要点)
-- [GGUF 量化](#gguf-量化)
-- [开关与环境变量注册表](#开关与环境变量注册表)
-- [新增指标](#新增指标)
-- [调优建议](#调优建议)
-- [实验纪律](#实验纪律)
+- [基准数据（实测）](#-基准数据实测)
+- [吞吐基线](#-吞吐基线)
+- [引擎选型证据](#-引擎选型证据onnx-vs-candle-vs-嵌入-python)
+- [性能设计要点](#-性能设计要点)
+- [GGUF 量化](#-gguf-量化)
+- [开关与环境变量注册表](#-开关与环境变量注册表)
+- [新增指标](#-新增指标)
+- [调优建议](#-调优建议)
+- [实验纪律](#-实验纪律)
 
 </details>
 
@@ -86,7 +86,7 @@ DynamicBatchScheduler（固定等待窗）与 ContinuousBatchLoop（1ms tick + �
 
 ---
 
-## ⏱️ 吞吐基线
+## 🕐 吞吐基线
 
 > **口径提示（onnx-primary）**：本节表格为 **candle（已降为 opt-in 回退后端）** 的历史基线，
 > 用于纵向对比 mkl/负载降频；**主引擎 ort 的对照数据见下一节「引擎选型证据」**。
@@ -181,7 +181,7 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 
 ---
 
-## 🎛️ 开关与环境变量注册表
+## 🔀 开关与环境变量注册表
 
 > 命名以代码实现为准。注：变更提案原写 `[cache]` 段，实现时落位于实际解析的 `[embedding]`（persist 两项）与 `[semantic_cache]`（comparison_mode）——**`[cache]` 段当前版本不生效，勿在该段配置**。
 

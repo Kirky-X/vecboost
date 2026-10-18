@@ -10,15 +10,15 @@
 <details open>
 <summary>📑 目录（点击展开）</summary>
 
-- [三层测试栈总览](#三层测试栈总览)
-- [场景套件矩阵（tests/scenario）](#场景套件矩阵testsscenario)
-- [Rust 集成与专项测试](#rust-集成与专项测试)
-- [性能与基准测试](#性能与基准测试)
-- [单元测试](#单元测试)
-- [运行命令（与 CI 一致）](#运行命令与-ci-一致)
-- [测试模式与夹具](#测试模式与夹具)
-- [模型矩阵](#模型矩阵)
-- [约定](#约定)
+- [三层测试栈总览](#-三层测试栈总览)
+- [场景套件矩阵（tests/scenario）](#-场景套件矩阵testsscenario)
+- [Rust 集成与专项测试](#-rust-集成与专项测试)
+- [性能与基准测试](#-性能与基准测试)
+- [单元测试](#-单元测试)
+- [运行命令（与 CI 一致）](#-运行命令与-ci-一致)
+- [测试模式与夹具](#-测试模式与夹具)
+- [模型矩阵](#-模型矩阵)
+- [约定](#-约定)
 
 </details>
 
@@ -36,7 +36,7 @@ vecboost 的性能/质量验证分三层，职责边界如下：
 
 ---
 
-## 🗂️ 场景套件矩阵（tests/scenario）
+## 📁 场景套件矩阵（tests/scenario）
 
 每个"配置档 profile"是一个独立服务器进程：配置写入 `tests/scenario/run/<name>/config/config.toml`，以该目录为 CWD 启动编译产物二进制（应用从 CWD 读 `config/config.toml`）。全部断言走 HTTP/进程行为的黑盒观测，不依赖内部状态。用例名以 `R-<域>-NNN` 开头对账（场景 ID 见 specmark 变更 specs）。pytest 场景服务器端口段：会话夹具 9101-9107、模型矩阵 9111-9114、坏模型 9120-9122、探针 9130-9132、生命周期 9141-9143、gRPC 9151、配置探针 9155-9161、容错契约 9165、语义缓存 9166-9167、认证过期 9133、API 审计 9171-9174。
 
@@ -118,7 +118,7 @@ pytest tests/perf -m sim          # 只跑模拟器用例
 
 ---
 
-## ▶️ 运行命令（与 CI 一致）
+## ⚡ 运行命令（与 CI 一致）
 
 ```bash
 # 单元 + 集成（CI：health-check.yml test job 分 --lib 与 --tests 两步）
@@ -158,7 +158,7 @@ CI 工作流与测试的对应关系：
 
 ---
 
-## 🎛️ 测试模式与夹具
+## 🔀 测试模式与夹具
 
 `TEST_MODE` 环境变量控制测试引擎行为：
 
@@ -172,7 +172,7 @@ CI 工作流与测试的对应关系：
 
 ---
 
-## 🗺️ 模型矩阵
+## 🧭 模型矩阵
 
 `tests/scenario/test_model_matrix.py` 与 `tests/scenario_sdk.rs` 按 `models/<目录名>` 存在性自动 SKIP。本机 4 模型（BGE-en 384 / MiniLM 384 / BGE-zh 512 / multilingual-e5-small 384）齐全时覆盖 XlmRoberta + Bert 双架构、三种 pooling。
 

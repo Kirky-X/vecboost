@@ -8,7 +8,7 @@
 
 **A high-performance, production-grade multi-task inference service written in Rust. VecBoost provides six inference capabilities — text embedding, reranking, decision answering, translation, language detection, and speech transcription — with multiple inference engines, GPU acceleration, and enterprise-grade features.**
 
-[✨ Features](#features) • [🚀 Quick Start](#quick-start) • [📚 Documentation](#documentation) • [💻 Examples](#examples) • [🤝 Contributing](#contributing)
+[✨ Features](#-features) • [🚀 Quick Start](#-quick-start) • [📚 Documentation](#-documentation) • [💻 Examples](#-examples) • [🤝 Contributing](#-contributing)
 
 </div>
 
@@ -35,23 +35,23 @@ Interface handlers are written just once; `sdforge` macros generate all four pro
 
 ## 📋 Table of Contents
 
-- [✨ Features](#features)
-- [🚀 Quick Start](#quick-start)
-- [🔌 API Usage](#api-usage)
-- [⚙️ Configuration](#configuration)
-- [📚 Documentation](#documentation)
-- [💻 Examples](#examples)
-- [🏗️ Architecture](#architecture)
-- [🧪 Testing](#testing)
-- [📊 Performance](#performance)
-- [🔒 Security](#security)
-- [🗺️ Roadmap](#roadmap)
-- [🤝 Contributing](#contributing)
-- [📋 Changelog](#changelog)
-- [📄 License](#license)
-- [🙏 Acknowledgements](#acknowledgements)
-- [📞 Contact & Support](#contact--support)
-- [⭐ Star History](#star-history)
+- [✨ Features](#-features)
+- [🚀 Quick Start](#-quick-start)
+- [🔌 API Usage](#-api-usage)
+- [⚙️ Configuration](#-configuration)
+- [📚 Documentation](#-documentation)
+- [💻 Examples](#-examples)
+- [🏗️ Architecture](#-architecture)
+- [🧪 Testing](#-testing)
+- [📊 Performance](#-performance)
+- [🔒 Security](#-security)
+- [🗺️ Roadmap](#-roadmap)
+- [🤝 Contributing](#-contributing)
+- [📋 Changelog](#-changelog)
+- [📄 License](#-license)
+- [🙏 Acknowledgements](#-acknowledgements)
+- [📞 Contact & Support](#-contact--support)
+- [⭐ Star History](#-star-history)
 
 ---
 
@@ -92,7 +92,7 @@ Interface handlers are written just once; `sdforge` macros generate all four pro
 </tr>
 </table>
 
-In addition to the core capabilities above, an OpenAI-compatible endpoint (`POST /v1/embeddings`, with `encoding_format=base64` support), BF16 inference and SIMD vector similarity, GPU memory paging, read-only `vecboost doctor` diagnostics, Library SDK integration (library mode), and the `config_full.toml` / `config_minimal.toml` config presets are also available; see [🔌 API Usage](#api-usage) for endpoint details and [⚙️ Configuration](#configuration) for configuration options.
+In addition to the core capabilities above, an OpenAI-compatible endpoint (`POST /v1/embeddings`, with `encoding_format=base64` support), BF16 inference and SIMD vector similarity, GPU memory paging, read-only `vecboost doctor` diagnostics, Library SDK integration (library mode), and the `config_full.toml` / `config_minimal.toml` config presets are also available; see [🔌 API Usage](#-api-usage) for endpoint details and [⚙️ Configuration](#-configuration) for configuration options.
 
 ---
 
@@ -154,7 +154,7 @@ cp config/config.toml config/config_custom.toml
 
 > **✅ Success**: the service starts at `http://127.0.0.1:9002` by default (secure default: loopback only).
 
-> **🐳 Docker**: `docker build -t vecboost:latest .`, then run with `config/` and `models/` mounted; Docker Compose and Kubernetes deployment are covered in the [📖 User Guide · Docker deployment](docs/USER_GUIDE.md#docker-部署).
+> **🐳 Docker**: `docker build -t vecboost:latest .`, then run with `config/` and `models/` mounted; Docker Compose and Kubernetes deployment are covered in the [📖 User Guide · Docker deployment](docs/USER_GUIDE.md#-docker-部署).
 
 ### 💡 Minimal Example
 
@@ -189,7 +189,7 @@ cargo run --features cli -- embed --req '{"text":"Hello, world!"}'
 - **Four protocols, one source**: handlers in `src/api/embedding.rs` are annotated with `#[forge(...)]` macros; `sdforge` generates the HTTP/gRPC/MCP/CLI bindings. Hand-written protocol code is forbidden.
 - **7-library ecosystem**: `trait-kit` wires all modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`); `confers` owns configuration, `inklog` logging, `oxcache` caching, `limiteron` rate limiting, `dbnexus` persistence (`db` feature), and `sdforge` interface generation.
 - **Configuration precedence**: TOML file + `VECBOOST_`-prefixed environment variable overrides (secrets such as `VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD` must be provided via env vars); config file changes are validated and logged, taking effect after restart.
-- **Feature gating**: every optional capability is an independent feature (see [🏷️ Feature Flags](#feature-flags)); the minimal build contains only the HTTP server.
+- **Feature gating**: every optional capability is an independent feature (see [🏷️ Feature Flags](#-feature-flags)); the minimal build contains only the HTTP server.
 
 ---
 
@@ -202,7 +202,7 @@ VecBoost generates its four protocol interfaces from single-source handlers via 
 - **Matryoshka dimensionality reduction**: pass `dimensions` (256/512/1024, etc.) to `/v1/embeddings` for smaller, faster vectors; truncated vectors are automatically L2 re-normalized to keep cosine similarity correct;
 - **gRPC**: with the `grpc` feature, 17 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — including `vecboost.translate` / `vecboost.detect`, with JWT auth, rate limiting, max connections, and timeouts all configurable;
 - **MCP**: the `mcp` feature exposes tools registered by `#[forge(tool_name=…)]` to LLMs over stdio (`vecboost --mcp`) — tool names are `embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models`, etc. (MCP `tool_name` is not the HTTP endpoint name; the full list is in the [📘 API Reference](docs/API_REFERENCE.md));
-- **CLI**: the `cli` feature provides the embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect / transcribe subcommands (see [💡 Minimal Example](#minimal-example); the `transcribe` subcommand takes a WAV file path and reads 16kHz mono samples);
+- **CLI**: the `cli` feature provides the embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect / transcribe subcommands (see [💡 Minimal Example](#-minimal-example); the `transcribe` subcommand takes a WAV file path and reads 16kHz mono samples);
 - **Inference engines**: ONNX Runtime (default, `onnx` feature enabled via default features) and Candle (`candle` feature opt-in fallback), switched via the `EngineFactory::create` factory; the `[model]` `engine_type` / `task` configuration drives engine and task-dimension selection — `task = "embedding"` (default) / `task = "decision"` (Laya decision pipeline) / `task = "translate"` (seq2seq translation, onnx only) / `task = "transcribe"` (Qwen3-ASR transcription, `transcribe` feature); endpoints of non-current tasks respond with 400 Unsupported task (bundle layouts in [`config/config.toml`](config/config.toml) `[model]` comments, translation pairs in the `[translation]` section);
 - **Observability & operations**: `/metrics` (Prometheus), `/health` (liveness) and `/health?depth=full` (real readiness probe), `/swagger-ui/` (interactive OpenAPI docs, requires the `swagger-ui` feature; spec JSON at `/api-docs/openapi.json`); read-only diagnostics with `vecboost doctor` (config / tokenizer / cache / threads / GPU / model integrity; exit code 1 on FAIL).
 
@@ -234,9 +234,9 @@ Detection response (`language: null` + `is_reliable: false` means "undetectable"
 
 > **🔧 Output post-processing & timeout**: translation applies deterministic post-processing at the engine exit (shared by the service layer and library users) — Traditional→Simplified normalization for `target=zh`, repair of URL protocol separators and LaTeX escape symbols; model-level mistranslations are fixed by the literal replacement table `[[translation.pairs.output_fixes]]` (in declaration order), see the `[translation]` section of [`config/config.toml`](config/config.toml). The HTTP global request timeout is configured via `[server] request_timeout_seconds` (CPU seq2seq translation of paper-length abstracts takes 15-130+s; `config/config.toml` sets it to 300s explicitly).
 
-Interactive OpenAPI docs (Swagger UI): build with `cargo build --features swagger-ui` and open `http://localhost:9002/swagger-ui/`; spec JSON: `/api-docs/openapi.json` (single binary, one build; the root path `/api-docs` serves no UI; ReDoc is deferred to v0.3.0). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/PERFORMANCE.md#新增指标).
+Interactive OpenAPI docs (Swagger UI): build with `cargo build --features swagger-ui` and open `http://localhost:9002/swagger-ui/`; spec JSON: `/api-docs/openapi.json` (single binary, one build; the root path `/api-docs` serves no UI; ReDoc is deferred to v0.3.0). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/PERFORMANCE.md#-新增指标).
 
-### 🏷️ Feature Flags
+### 🔖 Feature Flags
 
 The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `default = ["http"]`.
 
@@ -270,13 +270,13 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 
 ---
 
-## ⚙️ Configuration
+## 🔧 Configuration
 
 The default config path is `config/config.toml` (`--config <path>` selects another; a missing explicit path fails fast with exit code 2; the repo ships `config_full.toml` / `config_minimal.toml` presets). Environment variables with the `VECBOOST_` prefix override the config file, and secrets (`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD`) must be provided via env vars; config file changes are validated and logged, taking effect after restart.
 
-Per-key options and defaults for every config section (server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device / translation / transcribe), the full environment-variable table, and a complete example config are documented in the [📖 User Guide · Configuration](docs/USER_GUIDE.md#配置); you can also read [`config/config.toml`](config/config.toml) directly.
+Per-key options and defaults for every config section (server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device / translation / transcribe), the full environment-variable table, and a complete example config are documented in the [📖 User Guide · Configuration](docs/USER_GUIDE.md#-配置); you can also read [`config/config.toml`](config/config.toml) directly.
 
-> **⚠️ Note**: the `[flow_control]` and `[cache]` TOML sections are not parsed in the current version (legacy section names); rate limiting uses `[rate_limit]`, caching uses `[embedding]` and `[semantic_cache]`. See the [❓ FAQ](docs/FAQ.md#配置与部署).
+> **⚠️ Note**: the `[flow_control]` and `[cache]` TOML sections are not parsed in the current version (legacy section names); rate limiting uses `[rate_limit]`, caching uses `[embedding]` and `[semantic_cache]`. See the [❓ FAQ](docs/FAQ.md#-配置与部署).
 
 ---
 
@@ -315,7 +315,7 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 
 ---
 
-## 🏗️ Architecture
+## 🧱 Architecture
 
 VecBoost uses a modular ecosystem architecture: `trait-kit` wires modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`); `src/registry/` has 20 `ModuleMeta` implementations (several are feature-gated, e.g. under `auth`), `sdforge` generates the four protocol bindings from the single source `src/api/embedding.rs`, inference is abstracted behind `EngineFactory` to the Candle / ONNX engines, and requests flow through a priority queue and time-window batching into the inference pipeline.
 
@@ -329,7 +329,7 @@ The 7-library ecosystem (trait-kit / confers / inklog / oxcache / limiteron / db
 
 The test stack has six layers: inline unit tests in `src/`, integration tests in `tests/integration/`, specialized integration tests (doctor / gRPC E2E / model snapshot regression / quantization quality gate / SDK matrix), real-service scenario tests in `tests/scenario/*.py` (15 pytest suites), performance regression thresholds in `tests/perf/`, and 5 Criterion microbenchmark suites in `benches/`. The `TEST_MODE` environment variable controls the test engine (`mock` default / `light` / `full`). Layer responsibilities, the exhaustive scenario matrix, and the CI workflow mapping are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
 
-### ▶️ Commands (identical to CI)
+### ⚡ Commands (identical to CI)
 
 The commands below are extracted from `.github/workflows/health-check.yml` (CI), `feature-matrix.yml`, `scenario-tests.yml`, and `docs/CONTRIBUTING.md`. Path-dependency note: the `../base/*` ecosystem libraries are living path dependencies, so local gate commands must be scoped with `-p vecboost -p vecboost-examples`.
 
@@ -420,13 +420,13 @@ Benchmark data comes from the measured `docs/benchmarks/` archive (criterion; th
 
 ## 🔒 Security
 
-### 🛡️ Security Design
+### 🔒 Security Design
 
 VecBoost is secure by default: the factory config binds to loopback only, and non-loopback binding with `auth.enabled=false` refuses to start (the `VECBOOST_ALLOW_INSECURE=1` escape hatch logs an ERROR); authentication and authorization build on garrison (JWT + CSRF + RBAC admin role + TOTP + account lockout), plus XFF trust inversion, file-path allowed roots, input length limits, AES-256-GCM config encryption, audit logging, and i18n bilingual error masking. Mechanism-level details are in the [🔒 Security document](docs/SECURITY.md).
 
-### ⛓️ Supply Chain & Gates
+### 🔗 Supply Chain & Gates
 
-`cargo audit`, `cargo deny check`, CodeQL, Trivy/Checkov image scanning, gitleaks secret scanning, and pre-commit hooks run both in CI and locally; the full list and triage policy are in the [🔒 Security document · Supply chain & gates](docs/SECURITY.md#供应链与安全门禁).
+`cargo audit`, `cargo deny check`, CodeQL, Trivy/Checkov image scanning, gitleaks secret scanning, and pre-commit hooks run both in CI and locally; the full list and triage policy are in the [🔒 Security document · Supply chain & gates](docs/SECURITY.md#-供应链与安全门禁).
 
 ### 🚨 Reporting a Vulnerability
 
@@ -434,7 +434,7 @@ Please do not report security vulnerabilities through public issues; contact the
 
 ---
 
-## 🗺️ Roadmap
+## 🧭 Roadmap
 
 <table style="width:100%; border-collapse: collapse">
 <tr><th style="text-align:center">Status</th><th style="text-align:left">Area</th><th style="text-align:left">Items</th></tr>
@@ -442,7 +442,7 @@ Please do not report security vulnerabilities through public issues; contact the
 <tr><td align="center">✅</td><td>Ecosystem integration</td><td>7-library ecosystem wiring (trait-kit registry, confers config, inklog logging, oxcache cache, limiteron rate limiting, dbnexus persistence, sdforge interfaces)</td></tr>
 <tr><td align="center">✅</td><td>Security & i18n</td><td>JWT/CSRF/RBAC/TOTP, secure defaults hardening, audit logging, ICU+Fluent bilingual errors</td></tr>
 <tr><td align="center">✅</td><td>Performance foundation</td><td>SIMD similarity, continuous batching, semantic cache, GPU memory paging, BF16 inference, Matryoshka reduction</td></tr>
-<tr><td align="center">🚧</td><td>Audit remediation (Unreleased)</td><td>Breaking behavioral changes: secure defaults / login convergence / XFF trust inversion / RBAC wiring / model-scoped cache keys (see [Changelog](#changelog))</td></tr>
+<tr><td align="center">🚧</td><td>Audit remediation (Unreleased)</td><td>Breaking behavioral changes: secure defaults / login convergence / XFF trust inversion / RBAC wiring / model-scoped cache keys (see [Changelog](#-changelog))</td></tr>
 <tr><td align="center">🚧</td><td>Tuning switches (Unreleased)</td><td>GGUF quantization, quantized vector comparison, multi-model LFRU residency, cache WAL, hardware-aware planning, doctor diagnostics, startup warmup</td></tr>
 <tr><td align="center">📋</td><td>Quantized inference backend</td><td>GGUF inference backend awaits upstream quantized BERT in candle-transformers (routing/magic-number checks/quality gate scaffolding ready)</td></tr>
 <tr><td align="center">📋</td><td>Multi-replica session offload</td><td>Externalized auth sessions require the garrison db backend (pool-backed DAO)</td></tr>
@@ -456,7 +456,7 @@ Please do not report security vulnerabilities through public issues; contact the
 
 For the detailed workflow and code standards, see the [🤝 Contributing guide](docs/CONTRIBUTING.md).
 
-### 🛠️ Development Environment
+### 🔨 Development Environment
 
 The toolchain is Rust 1.91+ (`rust-version` in `Cargo.toml` is authoritative) and Python ≥ 3.10 + pytest (optional: protobuf-compiler, docker); before submitting you must pass the four quality gates — fmt / clippy (the `unwrap_used` panic-surface gate) / tests / `scripts/doc_consistency_check.py` — and Git hooks run automatically via [pre-commit](https://pre-commit.com/) (`.pre-commit-config.yaml` → `scripts/pre-commit.sh`); commit messages follow Conventional Commits, and behavioral changes must be recorded in the CHANGELOG `Unreleased` section and mirrored in both READMEs. Environment setup, feature combinations, and the quality-gate commands are in the [🤝 Contributing guide](docs/CONTRIBUTING.md).
 
@@ -507,7 +507,7 @@ The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (followin
 | 0.1.1 | 2026-01-15 | Patch fixes |
 | 0.1.0 | 2026-01-10 | Initial VecBoost release |
 
-Unreleased contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · Unreleased](docs/CHANGELOG.md#unreleased). The multi-replica boundary (auth sessions live in process memory; single replica only) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#配置与部署).
+Unreleased contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · Unreleased](docs/CHANGELOG.md#unreleased). The multi-replica boundary (auth sessions live in process memory; single replica only) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#-配置与部署).
 
 ---
 

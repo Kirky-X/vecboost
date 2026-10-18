@@ -13,17 +13,17 @@
 <details open>
 <summary>📑 目录（点击展开）</summary>
 
-- [基础 URL](#基础-url)
-- [认证](#认证)
-- [REST API](#rest-api)
-- [gRPC API](#grpc-api)
-- [MCP 接口](#mcp-接口)
-- [CLI 工具](#cli-工具)
-- [错误处理](#错误处理)
-- [国际化（i18n）](#国际化i18n)
-- [速率限制](#速率限制)
-- [版本历史](#版本历史)
-- [相关文档](#相关文档)
+- [基础 URL](#-基础-url)
+- [认证](#-认证)
+- [REST API](#-rest-api)
+- [gRPC API](#-grpc-api)
+- [MCP 接口](#-mcp-接口)
+- [CLI 工具](#-cli-工具)
+- [错误处理](#-错误处理)
+- [国际化（i18n）](#-国际化i18n)
+- [速率限制](#-速率限制)
+- [版本历史](#-版本历史)
+- [相关文档](#-相关文档)
 
 </details>
 
@@ -1423,7 +1423,7 @@ cargo run --features cli -- detect --req '{"text":"The quick brown fox jumps ove
 
 ---
 
-## ⚠️ 错误处理
+## 🚨 错误处理
 
 ### HTTP 状态码
 

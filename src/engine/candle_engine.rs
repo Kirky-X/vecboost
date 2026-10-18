@@ -1101,11 +1101,22 @@ struct ParsedModelConfig {
 
 /// 设备落位：CUDA/Metal 可用即用之；AMD/OpenCL 显性告知不原生支持并
 /// 回退 CPU（ROCm 级 Candle 构建或 ONNX Runtime 才有 AMD 路径）。
+///
+/// CUDA 的**静默降级已禁止**（2026-10-18）：用户显式配 `device = "cuda"` 而构建缺
+/// `candle-cuda`（`cuda_is_available()` 恒假）时，原先会打一句 INFO 后落 CPU，
+/// 等于把 CPU 数字记到 GPU 档名下。现改为启动期 `ConfigError` 显性拒绝，
+/// 与 `startup-engine-candle-not-compiled`（engine_type 未编译）同口径。
 fn resolve_compute_device(device_type: &DeviceType) -> Result<Device, VecboostError> {
-    if *device_type == DeviceType::Cuda && candle_core::utils::cuda_is_available() {
+    if *device_type == DeviceType::Cuda {
+        if !candle_core::utils::cuda_is_available() {
+            return Err(VecboostError::ConfigError(crate::i18n::tr(
+                "engine-candle-cuda-unavailable",
+            )));
+        }
         log::info!("{}", crate::i18n::tr("log-engine-using-cuda-gpu"));
-        Ok(Device::new_cuda(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?)
-    } else if *device_type == DeviceType::Metal && candle_core::utils::metal_is_available() {
+        return Device::new_cuda(0).map_err(|e| VecboostError::InferenceError(e.to_string()));
+    }
+    if *device_type == DeviceType::Metal && candle_core::utils::metal_is_available() {
         log::info!("{}", crate::i18n::tr("log-engine-using-metal-gpu"));
         Ok(Device::new_metal(0).map_err(|e| VecboostError::InferenceError(e.to_string()))?)
     } else if matches!(device_type, DeviceType::Amd | DeviceType::OpenCL) {
@@ -3019,6 +3030,21 @@ mod tests {
             stats.snapshot().counts[Stage::Tokenize as usize],
             1,
             "提前返回路径也应记录"
+        );
+    }
+
+    /// 回归钉（2026-10-18）：candle 引擎显式配 `device=cuda` 而构建缺 `candle-cuda` 时，
+    /// 必须**启动期 ConfigError 显性拒绝**，不得静默落 CPU（旧行为只打 INFO，会把
+    /// CPU 数字记到 GPU 档位名下）。仅在无 `candle-cuda` 的构建下断言（有该特性时
+    /// 结果取决于本机 GPU，不属本测试范围）。
+    #[cfg(not(feature = "candle-cuda"))]
+    #[test]
+    fn resolve_compute_device_rejects_cuda_without_candle_cuda() {
+        let err = resolve_compute_device(&DeviceType::Cuda)
+            .expect_err("缺 candle-cuda 时必须显性拒绝，不得静默落 CPU");
+        assert!(
+            matches!(err, VecboostError::ConfigError(_)),
+            "错误类型应为 ConfigError，got {err:?}"
         );
     }
 }

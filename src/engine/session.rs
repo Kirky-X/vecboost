@@ -11,6 +11,9 @@
 //! 各调用点的**引擎专属**前置校验（如 `onnx_engine` 的 SHA256 完整性校验、
 //! AMD/ROCm warn 分支）不属 builder 链，保留在调用侧——本层只做公共核。
 
+// `Read` 仅被 `transcribe` 门控的精度探测器使用（见 `detect_onnx_weight_precision`）
+#[cfg(feature = "transcribe")]
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -165,6 +168,75 @@ pub(crate) fn precision_for_model_file(model_file: &Path) -> Precision {
     } else {
         Precision::Fp32
     }
+}
+
+/// 量化算子标记：`QuantizeLinear` 覆盖静态量化，`DynamicQuantizeLinear` 含其子串
+/// （动态量化导出同样命中），`DequantizeLinear` 为同族冗余标记。
+///
+/// feature 门控：唯一消费方是转录引擎（`transcribe`），无该特性时整体不编译——
+/// 否则 `--features onnx,candle` 构建会留下一组死代码常量（clippy `-D warnings` 会拦）。
+#[cfg(feature = "transcribe")]
+const QUANT_OP_MARKERS: &[&[u8]] = &[b"QuantizeLinear", b"DequantizeLinear"];
+/// 精度探测单次读块大小。
+#[cfg(feature = "transcribe")]
+const PRECISION_SCAN_CHUNK: usize = 1024 * 1024;
+/// 精度探测扫描上限：命中即停；未命中到此上限即截断（防大体积内嵌权重的图拖慢启动）。
+#[cfg(feature = "transcribe")]
+const PRECISION_SCAN_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// ONNX 文件的**实际权重精度**（读内容，不看文件名）。
+///
+/// 判据：图内是否存在量化算子标记（见 [`QUANT_OP_MARKERS`]）。命中即
+/// [`Precision::Int8`]，扫描范围内未命中即 [`Precision::Fp32`]。
+///
+/// 为何不用 [`precision_for_model_file`] 的文件名判定：后缀可被改名绕过——
+/// 2026-10-18 实测把 fp32 图改名 `.int8.onnx` 后能加载却对外误报 Int8。
+/// 故本函数**不回退到文件名**，否则缺陷原样复现。
+///
+/// 扫描上限 [`PRECISION_SCAN_LIMIT_BYTES`]（命中即停）：ORT 量化导出的 Q/DQ
+/// 节点位于图头部（实测首个 MB 内），大权重通常以 external data 外置；上限只用于
+/// 兜住“大体积内嵌权重且无量化算子”的图。
+#[cfg(feature = "transcribe")]
+pub(crate) fn detect_onnx_weight_precision(onnx_file: &Path) -> Result<Precision, VecboostError> {
+    let mut file = std::fs::File::open(onnx_file).map_err(|e| {
+        VecboostError::ModelLoadError(format!(
+            "open onnx for precision probe {}: {e}",
+            onnx_file.display()
+        ))
+    })?;
+    let overlap = QUANT_OP_MARKERS.iter().map(|m| m.len()).max().unwrap_or(1) - 1;
+    let mut buf = vec![0u8; PRECISION_SCAN_CHUNK];
+    let mut tail: Vec<u8> = Vec::with_capacity(overlap);
+    let mut scanned: u64 = 0;
+    loop {
+        let n = file.read(&mut buf).map_err(|e| {
+            VecboostError::ModelLoadError(format!(
+                "read onnx for precision probe {}: {e}",
+                onnx_file.display()
+            ))
+        })?;
+        if n == 0 {
+            break;
+        }
+        // 拼接上一块尾字节：标记可能跨读块边界
+        let mut window = Vec::with_capacity(tail.len() + n);
+        window.extend_from_slice(&tail);
+        window.extend_from_slice(&buf[..n]);
+        if QUANT_OP_MARKERS
+            .iter()
+            .any(|m| window.windows(m.len()).any(|w| w == *m))
+        {
+            return Ok(Precision::Int8);
+        }
+        scanned += n as u64;
+        if scanned >= PRECISION_SCAN_LIMIT_BYTES {
+            break;
+        }
+        let keep = overlap.min(window.len());
+        tail.clear();
+        tail.extend_from_slice(&window[window.len() - keep..]);
+    }
+    Ok(Precision::Fp32)
 }
 
 /// 内存地板缺省值（字节）：`SESSION_MEMORY_FLOOR_MB` 未设/非法时的可用量下限。
@@ -401,6 +473,59 @@ mod tests {
         );
         assert_eq!(
             precision_for_model_file(Path::new("m/model.onnx")),
+            Precision::Fp32
+        );
+    }
+
+    /// 回归钉：内容判定不看文件名——文件名带 int8 但图内无量化算子时必须报 Fp32
+    /// （2026-10-18 缺陷：fp32 图改名 `.int8.onnx` 后对外误报 Int8）。
+    #[cfg(feature = "transcribe")]
+    #[test]
+    fn detect_precision_reads_content_not_filename() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let plain_named_int8 = dir.path().join("qwen3-decoder.int8.onnx");
+        std::fs::write(&plain_named_int8, b"graph nodes without any quant op").unwrap();
+        assert_eq!(
+            detect_onnx_weight_precision(&plain_named_int8).unwrap(),
+            Precision::Fp32
+        );
+
+        let quant_named_plain = dir.path().join("qwen3-decoder.onnx");
+        std::fs::write(&quant_named_plain, b"op_type:DequantizeLinear").unwrap();
+        assert_eq!(
+            detect_onnx_weight_precision(&quant_named_plain).unwrap(),
+            Precision::Int8
+        );
+    }
+
+    /// 标记跨 1 MiB 读块边界也必须命中（回退字节数不足会漏报）。
+    #[cfg(feature = "transcribe")]
+    #[test]
+    fn detect_precision_catches_marker_across_chunk_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.onnx");
+        let marker = b"DynamicQuantizeLinear";
+        let mut bytes = vec![b'x'; PRECISION_SCAN_CHUNK - 4];
+        bytes.extend_from_slice(marker);
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            detect_onnx_weight_precision(&path).unwrap(),
+            Precision::Int8
+        );
+    }
+
+    /// 超出扫描上限的标记不参与判定（上限语义：宁报 Fp32 也不整文件扫）。
+    #[cfg(feature = "transcribe")]
+    #[test]
+    fn detect_precision_respects_scan_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.onnx");
+        let mut bytes = vec![b'x'; PRECISION_SCAN_LIMIT_BYTES as usize];
+        bytes.extend_from_slice(b"QuantizeLinear");
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            detect_onnx_weight_precision(&path).unwrap(),
             Precision::Fp32
         );
     }

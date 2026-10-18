@@ -9,11 +9,11 @@
 //! KV delta 原地写回（按 cache_position 连续写入）。
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ndarray::ArrayView4;
 use ort::session::{Session, SessionInputValue};
-use ort::value::Tensor;
+use ort::value::{Tensor, TensorElementType, ValueType};
 
 use crate::config::model::DeviceType;
 use crate::engine::session::build_session;
@@ -37,6 +37,93 @@ pub(crate) const KV_HEADS: i64 = 8;
 const HEAD_DIM: i64 = 128;
 pub(crate) const CONV_CHUNK_SIZE: i32 = 100; // kQwen3ChunkSize
 pub(crate) const MIN_FRAMES: usize = 2; // 帧数 <2 直接空结果
+
+// ── 三图文件名候选链（**单一事实源**）────────────────────────────────────────────
+// 会话构建与上层精度探测共用本组常量，禁止在别处再写图名字面量。
+// 历史缺陷（2026-10-18 修复）：候选数组各只有一个却写死 `.int8.onnx`，且加载处
+// 又按同一字面量二次拼路径 → 未量化（fp32）/ 半精度 bundle **无入口**。
+//
+// 优先级：int8 在前（与现有资产 `assets/models/` 和该导出通路的约定形态一致），
+// 纯名兜底（无损导出按正名接入）。两图同时存在时取 int8——与修复前行为逐字一致；
+// 想用无损图就不要把 int8 文件放进 bundle。
+pub(crate) const CONV_CANDIDATES: &[&str] = &["qwen3-conv_frontend.onnx"];
+pub(crate) const ENCODER_CANDIDATES: &[&str] = &["qwen3-encoder.int8.onnx", "qwen3-encoder.onnx"];
+pub(crate) const DECODER_CANDIDATES: &[&str] = &["qwen3-decoder.int8.onnx", "qwen3-decoder.onnx"];
+
+/// 探测命中的三图实际路径（探测与加载共用，消除“探测用数组、加载用字面量”的分叉）。
+#[derive(Debug, Clone)]
+pub(crate) struct AsrGraphPaths {
+    pub conv: PathBuf,
+    pub encoder: PathBuf,
+    pub decoder: PathBuf,
+}
+
+/// 按候选链探测三图路径；任一图全 miss → `ModelLoadError`（消息含全部尝试路径）。
+/// 调用方必须先本函数、后 `Session::builder`（ort/load-dynamic 缺库时 builder panic）。
+pub(crate) fn resolve_graph_paths(models_dir: &Path) -> AsrResult<AsrGraphPaths> {
+    Ok(AsrGraphPaths {
+        conv: crate::engine::session::probe_model_file(
+            models_dir,
+            CONV_CANDIDATES,
+            "conv_frontend",
+        )?,
+        encoder: crate::engine::session::probe_model_file(
+            models_dir,
+            ENCODER_CANDIDATES,
+            "encoder",
+        )?,
+        decoder: crate::engine::session::probe_model_file(
+            models_dir,
+            DECODER_CANDIDATES,
+            "decoder",
+        )?,
+    })
+}
+
+/// 允许的 I/O 元素类型：f32（计算与 KV cache）、i64（token id / cache_position / 索引）、
+/// bool（encoder attention mask）。其余浮点宽度（f16/bf16/f64）一律拒绝。
+fn element_type_supported(ty: &TensorElementType) -> bool {
+    matches!(
+        ty,
+        TensorElementType::Float32 | TensorElementType::Int64 | TensorElementType::Bool
+    )
+}
+
+/// 图 I/O dtype 守卫：当前实现为 **f32-only**——KV cache 常驻 `Vec<f32>`、张量按 f32
+/// 构造与提取（`try_extract_tensor::<f32>`）。fp16/bf16 图能加载但会在首次 Run 以
+/// 类型不匹配炸掉，这里在构建后立即显性拒绝并给出可执行提示，避开“加载成功、
+/// 请求时才失败”的假成功。
+///
+/// 为何不在边界做 f32↔f16 转换：1.7B 单步 KV 已是 29.4M 元素（f32 117 MiB /
+/// f16 59 MiB，28 层×8 头×128 维×512），每步转换会被内存搬运支配；要支持 fp16
+/// 必须把 KV 存储与张量 I/O 一起 dtype 泛型化
+/// （见 `docs/benchmarks/transcribe_engine_baseline.md` 的 fp16 书签）。
+fn ensure_f32_io(session: &Session, role: &str) -> AsrResult<()> {
+    for (i, input) in session.inputs().iter().enumerate() {
+        if let ValueType::Tensor { ty, .. } = input.dtype()
+            && !element_type_supported(ty)
+        {
+            return Err(asr_load(format!(
+                "{role} input[{i}] '{}' dtype {ty:?} is not supported: this build runs f32 \
+                 graphs only (KV cache and tensor I/O are f32); fp16/bf16 graphs require \
+                 dtype-generic KV storage",
+                input.name()
+            )));
+        }
+    }
+    for (i, output) in session.outputs().iter().enumerate() {
+        if let ValueType::Tensor { ty, .. } = output.dtype()
+            && !element_type_supported(ty)
+        {
+            return Err(asr_load(format!(
+                "{role} output[{i}] '{}' dtype {ty:?} is not supported: this build runs f32 \
+                 graphs only (logits/KV are extracted as f32)",
+                output.name()
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// 复读守卫常量
 const LOOP_WINDOW: usize = 64;
@@ -196,23 +283,11 @@ impl Qwen3Asr {
     /// 三图先探测后构建（decision/translate 同款"探测先于 Session::builder"——
     /// ort/load-dynamic 缺动态库时 builder 触发 non-unwinding panic，缺失必须
     /// 在此之前以 ModelLoadError 显性返回，R-transcribe-engine-004）。
-    pub fn new(models_dir: &Path, opts: &AsrSessionOpts) -> AsrResult<Self> {
-        crate::engine::session::probe_model_file(
-            models_dir,
-            &["qwen3-conv_frontend.onnx"],
-            "conv_frontend",
-        )?;
-        crate::engine::session::probe_model_file(
-            models_dir,
-            &["qwen3-encoder.int8.onnx"],
-            "encoder",
-        )?;
-        crate::engine::session::probe_model_file(
-            models_dir,
-            &["qwen3-decoder.int8.onnx"],
-            "decoder",
-        )?;
-        let conv = session_from(&models_dir.join("qwen3-conv_frontend.onnx"), opts)?;
+    /// 返回实例与探测到的三图路径：上层（`Qwen3AsrEngine`）需用 decoder 实际路径做
+    /// 精度判定，避免按写死文件名二次拼路径（历史缺陷，见 `DECODER_CANDIDATES`）。
+    pub fn new(models_dir: &Path, opts: &AsrSessionOpts) -> AsrResult<(Self, AsrGraphPaths)> {
+        let graphs = resolve_graph_paths(models_dir)?;
+        let conv = session_from(&graphs.conv, opts)?;
         if conv.inputs().len() != 1 || conv.outputs().len() != 1 {
             return Err(asr_load(format!(
                 "conv_frontend IO mismatch: {} inputs / {} outputs, expect 1/1",
@@ -220,7 +295,7 @@ impl Qwen3Asr {
                 conv.outputs().len()
             )));
         }
-        let encoder = session_from(&models_dir.join("qwen3-encoder.int8.onnx"), opts)?;
+        let encoder = session_from(&graphs.encoder, opts)?;
         if encoder.inputs().len() != 2 || encoder.outputs().len() != 1 {
             return Err(asr_load(format!(
                 "encoder IO mismatch: {} inputs / {} outputs, expect 2/1",
@@ -228,7 +303,11 @@ impl Qwen3Asr {
                 encoder.outputs().len()
             )));
         }
-        let decoder = session_from(&models_dir.join("qwen3-decoder.int8.onnx"), opts)?;
+        let decoder = session_from(&graphs.decoder, opts)?;
+        // I/O dtype 守卫（f32-only，见 ensure_f32_io 文档）
+        ensure_f32_io(&conv, "conv_frontend")?;
+        ensure_f32_io(&encoder, "encoder")?;
+        ensure_f32_io(&decoder, "decoder")?;
 
         let num_outputs = decoder.outputs().len();
         if num_outputs < 1 || (num_outputs - 1) % 2 != 0 {
@@ -259,21 +338,24 @@ impl Qwen3Asr {
         let numel = (MAX_TOTAL_LEN * KV_HEADS * HEAD_DIM) as usize;
         let cache = vec![(vec![0.0f32; numel], vec![0.0f32; numel]); num_layers];
 
-        Ok(Self {
-            conv,
-            encoder,
-            decoder,
-            dec_in,
-            dec_out,
-            num_layers,
-            max_total_len: MAX_TOTAL_LEN,
-            kv_heads: KV_HEADS,
-            head_dim: HEAD_DIM,
-            audio_feats: Vec::new(),
-            audio_len: 0,
-            audio_hidden: 0,
-            cache,
-        })
+        Ok((
+            Self {
+                conv,
+                encoder,
+                decoder,
+                dec_in,
+                dec_out,
+                num_layers,
+                max_total_len: MAX_TOTAL_LEN,
+                kv_heads: KV_HEADS,
+                head_dim: HEAD_DIM,
+                audio_feats: Vec::new(),
+                audio_len: 0,
+                audio_hidden: 0,
+                cache,
+            },
+            graphs,
+        ))
     }
 
     /// mel [num_frames×128] → conv → mask → encoder；结果缓存在 self.audio_feats，
@@ -635,5 +717,65 @@ mod tests {
         assert_eq!(greedy_argmax(&row, None), 2);
         assert_eq!(greedy_argmax(&row, Some(2)), 4);
         assert_eq!(greedy_argmax(&[f32::NAN; 4], None), 0);
+    }
+
+    /// 回归钉（2026-10-18 修复）：纯名（无损导出）图必须能探测到——
+    /// 修复前候选写死 `.int8.onnx`，fp32/fp16 bundle 无入口。
+    /// 两图共存时 int8 优先（与修复前行为逐字一致）。
+    #[test]
+    fn resolve_graph_paths_prefers_int8_then_plain_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("qwen3-conv_frontend.onnx"), b"x").unwrap();
+        std::fs::write(dir.path().join("qwen3-encoder.onnx"), b"x").unwrap();
+        std::fs::write(dir.path().join("qwen3-decoder.onnx"), b"x").unwrap();
+
+        let g = resolve_graph_paths(dir.path()).unwrap();
+        assert_eq!(
+            g.encoder.file_name().unwrap(),
+            "qwen3-encoder.onnx",
+            "纯名无损图必须可探测（修复前无入口）"
+        );
+        assert_eq!(g.decoder.file_name().unwrap(), "qwen3-decoder.onnx");
+
+        std::fs::write(dir.path().join("qwen3-encoder.int8.onnx"), b"x").unwrap();
+        std::fs::write(dir.path().join("qwen3-decoder.int8.onnx"), b"x").unwrap();
+        let g = resolve_graph_paths(dir.path()).unwrap();
+        assert_eq!(g.encoder.file_name().unwrap(), "qwen3-encoder.int8.onnx");
+        assert_eq!(g.decoder.file_name().unwrap(), "qwen3-decoder.int8.onnx");
+    }
+
+    /// miss 时报错消息必须列全**该角色**的全部候选（含纯名），且带角色名，
+    /// 便于定位“导出后缀不对”。首个 miss 即返回（encoder 先于 decoder），
+    /// 故只钉 encoder 候选，不要求 decoder 候选也出现。
+    #[test]
+    fn resolve_graph_paths_miss_lists_all_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("qwen3-conv_frontend.onnx"), b"x").unwrap();
+        let err = resolve_graph_paths(dir.path()).unwrap_err();
+        let msg = err.error_detail();
+        assert!(msg.contains("encoder"), "错误消息须带角色名，got {msg}");
+        for name in ENCODER_CANDIDATES {
+            assert!(msg.contains(name), "错误消息须含候选 {name}，got {msg}");
+        }
+    }
+
+    /// I/O dtype 守卫：只放行 f32 / i64 / bool；fp16、bf16、f64 必须拒绝
+    /// （当前 KV cache 与张量 I/O 均写死 f32，半精度图需 dtype 泛型化才能支持）。
+    #[test]
+    fn element_type_guard_rejects_half_precision() {
+        for ok in [
+            TensorElementType::Float32,
+            TensorElementType::Int64,
+            TensorElementType::Bool,
+        ] {
+            assert!(element_type_supported(&ok), "应当放行 {ok:?}");
+        }
+        for bad in [
+            TensorElementType::Float16,
+            TensorElementType::Bfloat16,
+            TensorElementType::Float64,
+        ] {
+            assert!(!element_type_supported(&bad), "必须拒绝 {bad:?}");
+        }
     }
 }

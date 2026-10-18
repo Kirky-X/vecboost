@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use crate::config::model::{DeviceType, ModelConfig, ModelTask, Precision};
 use crate::domain::{TranscribeRequest, TranscribeResponse, TranscribeSegment};
 use crate::engine::InferenceEngine;
-use crate::engine::session::precision_for_model_file;
+use crate::engine::session::detect_onnx_weight_precision;
 use crate::error::VecboostError;
 
 use super::asr::{AsrSessionOpts, Qwen3Asr};
@@ -78,10 +78,36 @@ impl Qwen3AsrEngine {
             no_spin,
             cuda: config.device == DeviceType::Cuda,
         };
-        let asr = Qwen3Asr::new(&models_dir, &opts)?;
+        let (asr, graphs) = Qwen3Asr::new(&models_dir, &opts)?;
 
-        let decoder_path = models_dir.join("qwen3-decoder.int8.onnx");
-        let precision = precision_for_model_file(&decoder_path);
+        // 精度按 decoder 图**内容**判定（量化算子存在与否），不看文件名：
+        // 文件名判定会把无损（fp32/fp16）图改名后误报 Int8（2026-10-18 修复的缺陷）。
+        // 图名候选链与路径解析统一在 `asr::resolve_graph_paths`（单一事实源）。
+        let precision = detect_onnx_weight_precision(&graphs.decoder)?;
+
+        // 启动期可观测性：候选链实际选中哪张图、按内容判定的精度是什么。
+        // 此前两者都不可见（只能读代码推断）——改名误报之所以能潜伏，就是因为没有
+        // 可观测出口（2026-10-18 缺陷修复的一部分）。
+        let name_of = |p: &std::path::Path| -> String {
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let conv_name = name_of(&graphs.conv);
+        let encoder_name = name_of(&graphs.encoder);
+        let decoder_name = name_of(&graphs.decoder);
+        log::info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-transcribe-graphs",
+                crate::i18n::tr_args(&[
+                    ("conv", &conv_name),
+                    ("encoder", &encoder_name),
+                    ("decoder", &decoder_name),
+                    ("precision", &format!("{precision:?}")),
+                ])
+            )
+        );
 
         let tokenizer = AsrTokenizer::new(&models_dir.join("tokenizer"))
             .map_err(|e| VecboostError::ModelLoadError(format!("load asr tokenizer: {e}")))?;

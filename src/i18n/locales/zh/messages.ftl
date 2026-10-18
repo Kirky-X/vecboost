@@ -239,6 +239,7 @@ startup-engine-type-unknown = [model] engine_type 未知值 "{ $got }"{ $hint }�
 startup-engine-onnx-rebuild-hint = （engine_type="onnx" 需以 --features onnx 重新构建）
 # onnx-primary：candle 降级 opt-in 回退后端后，engine_type="candle" 配置在未启用 feature `candle` 的构建中显性拒绝
 startup-engine-candle-not-compiled = [model] engine_type="candle" 但本次构建未编译 candle 后端（onnx-primary 默认主引擎为 onnx）；请以 `--features candle` 重新构建，或移除 engine_type 配置以使用默认 onnx 引擎
+engine-candle-cuda-unavailable = engine_type="candle" 配置了 device="cuda"，但本次构建/本机 CUDA 不可用：请以 `--features candle-cuda` 重新构建（CUDA 后端），并确认存在可用的 NVIDIA GPU；拒绝静默落到 CPU
 startup-semantic-mode-invalid = [semantic_cache] comparison_mode 无效：{ $detail }
 startup-translation-no-onnx = [translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建
 startup-translate-pair-invalid = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) 参数非法：{ $detail }
@@ -444,6 +445,7 @@ log-engine-memory-gate-passed-model = 内存门禁通过：model={ $a1 } need={ 
 log-engine-session-memory-floor-mb = SESSION_MEMORY_FLOOR_MB={ $v } 不是合法整数，回退到默认值 { $DEFAULT }
 log-engine-cuda-execution-provider-requires = CUDA 执行提供器需要 transcribe feature（含 ort/cuda），本次构建未启用，改用 CPU 执行提供器
 log-engine-attempting-configure-cuda-execution = 正在尝试配置 CUDA 执行提供器
+log-engine-transcribe-graphs = 转录三图：conv={ $conv }，encoder={ $encoder }，decoder={ $decoder }，precision={ $precision }（精度按图内容判定，不看文件名）
 log-engine-gguf-pooling-inferred-as = 由标识“{ $pool_identity }”推断 GGUF 池化方式为 { $pooling }
 log-engine-gguf-config-json-provides = GGUF 的 config.json 无可识别 hidden_act，回退到 Gelu（可能与原模型不一致）
 log-engine-gguf-config-json-unknown = GGUF 的 config.json 中 hidden_act“{ $other }”无法识别，回退到 Gelu

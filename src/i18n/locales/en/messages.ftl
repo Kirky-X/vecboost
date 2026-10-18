@@ -239,6 +239,7 @@ startup-engine-type-unknown = [model] engine_type has unknown value "{ $got }"{ 
 startup-engine-onnx-rebuild-hint = (engine_type="onnx" requires rebuilding with --features onnx)
 # onnx-primary: engine_type="candle" is explicitly rejected in builds without the `candle` feature (candle is an opt-in fallback backend)
 startup-engine-candle-not-compiled = [model] engine_type="candle" but this build did not compile the candle backend (onnx-primary defaults to the onnx engine); rebuild with `--features candle`, or remove the engine_type config to use the default onnx engine
+engine-candle-cuda-unavailable = device="cuda" with engine_type="candle" but CUDA is unavailable in this build/machine: rebuild with `--features candle-cuda` (CUDA backend) and ensure a usable NVIDIA GPU is present; refusing to run silently on CPU
 startup-semantic-mode-invalid = [semantic_cache] comparison_mode invalid: { $detail }
 startup-translation-no-onnx = [translation] pairs configured but this build did not enable the `onnx` feature; rebuild with --features onnx
 startup-translate-pair-invalid = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) invalid parameters: { $detail }
@@ -445,6 +446,7 @@ log-engine-memory-gate-passed-model = memory gate passed: model={ $a1 } need={ $
 log-engine-session-memory-floor-mb = SESSION_MEMORY_FLOOR_MB={ $v } is not a valid integer; falling back to default { $DEFAULT_MEMORY_FLOOR_MB }MB
 log-engine-cuda-execution-provider-requires = CUDA execution provider requires the transcribe feature (bundles ort/cuda); using CPU execution provider
 log-engine-attempting-configure-cuda-execution = Attempting to configure CUDA execution provider
+log-engine-transcribe-graphs = transcribe graphs: conv={ $conv }, encoder={ $encoder }, decoder={ $decoder }, precision={ $precision } (precision is detected from graph content, not file name)
 log-engine-gguf-pooling-inferred-as = GGUF pooling inferred as { $pooling } from identity '{ $pool_identity }'
 log-engine-gguf-config-json-provides = GGUF config.json provides no recognizable hidden_act, falling back to Gelu (making the previously hardcoded behavior explicit)
 log-engine-gguf-config-json-unknown = GGUF config.json unknown hidden_act '{ $other }', falling back to Gelu

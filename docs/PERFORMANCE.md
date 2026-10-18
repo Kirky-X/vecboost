@@ -103,7 +103,18 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 | 同上 | `--features mkl`（hgemm_ 垫片） | 中位 17.5 ms（**4.0×**） | 中位 148.4 ms（**1.17×**） | 2026-09-16；`RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"` 绕开 lld 链接 MKL 的已知问题 |
 | 同上 | 默认构建 + `--features mkl`（同晚连续复测） | 默认 81.8 ms / mkl 20.5 ms（**4.0×**） | 默认 193.7 ms / mkl 157.6 ms（**1.23×**） | 2026-09-16 晚回归扫描（[regression_sweep_2026-09-16.md](benchmarks/regression_sweep_2026-09-16.md)）；绝对值较上两行整体上浮 ~15-17% 为持续负载降频（同代码 quick 口径实测 69.7 ms 与 2026-09-15 行吻合），**加速比不变，非代码回退** |
 
-> **加速后端说明**：mkl 已可用。上游版本错配——candle 0.11 调用 fp16 GEMM `hgemm_`，而 intel-mkl-src 0.8.1 Linux 静态路径锁死 MKL 2020.1（ghcr.io/rust-math，无该符号）——由 `src/engine/mkl_shim.rs` 的 `hgemm_` 垫片解决（f16 入 → f32 累加 `sgemm_` → f16 出，与硬件 hgemm 数值语义一致）。两个注意点：① 本机 rust-lld 链接 MKL 存在额外问题，需 `RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"`；② `--features mkl` 保持 opt-in，默认构建不引入 MKL。accelerate（macOS）保持 opt-in，本机无法验证。单文本 4.0× 主要来自 fp32 GEMM；32 批仅 1.17×，说明批路径瓶颈已不在 matmul。
+> **加速后端说明**：mkl 已可用。上游版本错配——candle 0.11 调用 fp16 GEMM `hgemm_`，而 intel-mkl-src 0.8.1 Linux 静态路径锁死 MKL 2020.1（ghcr.io/rust-math，无该符号）——由 `src/engine/mkl_shim.rs` 的 `hgemm_` 垫片解决（f16 入 → f32 累加 `sgemm_` → f16 出，与硬件 hgemm 数值语义一致）。两个注意点：① 本机 rust-lld 链接 MKL 存在额外问题，需 `RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"`；② `--features mkl` 保持 opt-in，默认构建不引入 MKL。accelerate（macOS）保持 opt-in，本机无法验证（验证协议见下）。单文本 4.0× 主要来自 fp32 GEMM；32 批仅 1.17×，说明批路径瓶颈已不在 matmul。
+
+### Accelerate（macOS）待验证协议
+
+`accelerate` 为 candle 的 macOS 加速后端，与本机 MKL 档同属 opt-in。当前**未采集**任何数据（无 Apple 硬件/OS），基线表不得出现推断值或跨平台移植值。具备条件时按以下协议补测：
+
+- **前置**：macOS 13+（Apple Silicon 或 Intel）、Rust stable、`--features accelerate`（隐含 candle）。
+- **命令**：`VECBOOST_BENCH_MODEL=<bge-small 本地目录> cargo bench --bench embed_throughput_bench`。
+- **口径**：criterion 100 samples 取中位；空闲窗口（无并发负载、电源模式固定、关闭后台索引）；单文本与 32 文本 batch 各 2~3 遍取中位。
+- **记录**：在「吞吐基线」表新增 `macOS + --features accelerate` 行，并同时给出同机 `默认构建` 对照行（否则加速比不可归因）。
+- **判定**：只报告实测加速比，不预设倍数；若批路径 <1.1×，按“批路径瓶颈已不在 matmul”的既有结论记录。
+- **禁用**：不得用 MKL/Linux 数据填充 macOS 行；缺实测时保持“待验证”状态。
 
 ---
 

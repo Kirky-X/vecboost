@@ -649,6 +649,9 @@ enabled = true
 token_expiration_hours = 1
 default_admin_username = "admin"
 trusted_proxies = []  # 受信任代理 CIDR 列表
+# 会话后端: "memory" (默认, 进程内, 仅限单副本) | "database" (部署库共享, 多副本)
+# database 需以 --features "db,sqlite" 或 "db,postgres" 构建并配置 [database]
+session_backend = "memory"
 ```
 
 | 参数 | 默认值 | 说明 |
@@ -659,6 +662,7 @@ trusted_proxies = []  # 受信任代理 CIDR 列表
 | `default_admin_username` | `None`（运行时回落 `admin`） | 默认管理员用户名 |
 | `default_admin_password` | - | 默认管理员密码（**生产环境通过环境变量 `VECBOOST_ADMIN_PASSWORD` 设置**） |
 | `trusted_proxies` | `[]` | 受信任代理 CIDR 列表（XFF 信任边界，空列表 = 忽略 X-Forwarded-For，使用直连 peer IP（安全默认）） |
+| `session_backend` | `memory` | 会话存储后端：`memory`（进程内，仅限单副本）/ `database`（部署库 `garrison_kv` 表，多副本共享；需 `db,sqlite|postgres` 构建且 `enabled = true`） |
 
 > **⚠️ 安全提示**: 生产环境中请通过环境变量设置敏感信息！`jwt_secret` 通过 `VECBOOST_JWT_SECRET`，`default_admin_password` 通过 `VECBOOST_ADMIN_PASSWORD` 注入，禁止在配置文件中明文存储。生产部署建议配置 `trusted_proxies` 为实际反代 CIDR，防止客户端伪造 X-Forwarded-For。
 
@@ -1294,6 +1298,9 @@ curl -X POST http://localhost:9002/api/1/embed \
 |------|------|------|
 | `/health` | GET | 服务健康状态（返回 `{"status": "OK"}` 或 503） |
 | `/metrics` | GET | Prometheus 指标 |
+| `/swagger-ui/` | GET | Swagger UI 交互文档（需 `--features swagger-ui`；静态资源 vendored，离线可用） |
+| `/redoc` | GET | ReDoc 交互文档（需 `--features swagger-ui`；渲染脚本走 CDN，浏览器需外网） |
+| `/api-docs/openapi.json` | GET | OpenAPI 规范 JSON（需 `--features swagger-ui`） |
 
 ---
 
@@ -1316,11 +1323,12 @@ vecboost_embedding_latency_seconds_bucket{le="0.01"} 500
 
 ### Grafana 仪表板
 
-导入 VecBoost 仪表板（Grafana 仪表板配置计划中）：
+仓库提供预配置仪表板 [`deploy/grafana/vecboost-dashboard.json`](../deploy/grafana/vecboost-dashboard.json)（Grafana 10+），覆盖 HTTP、批处理、队列、阶段耗时、语义缓存、决策、检测与翻译指标：
 
-1. 打开 Grafana
-2. 导航到仪表板 → 导入
-3. 上传 JSON 文件（或配置 Prometheus 数据源后手动创建）
+1. 打开 Grafana（已配置 Prometheus 数据源并抓取服务 `/metrics`）
+2. Dashboards → New → Import
+3. 选择 `deploy/grafana/vecboost-dashboard.json`，在 `Prometheus` 下拉选择数据源
+4. 点击 Import（面板与指标口径见 [`deploy/grafana/README.md`](../deploy/grafana/README.md)）
 
 ---
 

@@ -442,12 +442,13 @@ Please do not report security vulnerabilities through public issues; contact the
 <tr><td align="center">✅</td><td>Ecosystem integration</td><td>7-library ecosystem wiring (trait-kit registry, confers config, inklog logging, oxcache cache, limiteron rate limiting, dbnexus persistence, sdforge interfaces)</td></tr>
 <tr><td align="center">✅</td><td>Security & i18n</td><td>JWT/CSRF/RBAC/TOTP, secure defaults hardening, audit logging, ICU+Fluent bilingual errors</td></tr>
 <tr><td align="center">✅</td><td>Performance foundation</td><td>SIMD similarity, continuous batching, semantic cache, GPU memory paging, BF16 inference, Matryoshka reduction</td></tr>
-<tr><td align="center">🚧</td><td>Audit remediation (Unreleased)</td><td>Breaking behavioral changes: secure defaults / login convergence / XFF trust inversion / RBAC wiring / model-scoped cache keys (see [Changelog](#-changelog))</td></tr>
-<tr><td align="center">🚧</td><td>Tuning switches (Unreleased)</td><td>GGUF quantization, quantized vector comparison, multi-model LFRU residency, cache WAL, hardware-aware planning, doctor diagnostics, startup warmup</td></tr>
-<tr><td align="center">📋</td><td>Quantized inference backend</td><td>GGUF inference backend awaits upstream quantized BERT in candle-transformers (routing/magic-number checks/quality gate scaffolding ready)</td></tr>
-<tr><td align="center">📋</td><td>Multi-replica session offload</td><td>Externalized auth sessions require the garrison db backend (pool-backed DAO)</td></tr>
-<tr><td align="center">📋</td><td>Baseline completion</td><td><code>embed_throughput_bench</code> throughput baseline to be measured; MKL/Accelerate comparison baselines on toolchains that link cleanly</td></tr>
-<tr><td align="center">📋</td><td>Docs & observability</td><td>ReDoc (v0.3.0), pre-configured Grafana dashboards</td></tr>
+<tr><td align="center">✅</td><td>Audit remediation (0.3.0-rc.1)</td><td>Breaking behavioral changes: secure defaults / login convergence / XFF trust inversion / RBAC wiring / model-scoped cache keys (see [Changelog](#-changelog))</td></tr>
+<tr><td align="center">✅</td><td>Tuning switches (0.3.0-rc.1)</td><td>GGUF quantization, quantized vector comparison, multi-model LFRU residency, cache WAL, hardware-aware planning, doctor diagnostics, startup warmup</td></tr>
+<tr><td align="center">✅</td><td>Quantized inference backend</td><td>GGUF engine delivered via a load-time dequantization bridge (Q8_0/Q4_K; routing, magic validation and quality gate in place); benefit is storage/load size, runtime is fp32-equivalent (no compute speedup); the quality gate needs model assets to run</td></tr>
+<tr><td align="center">✅</td><td>Multi-replica session offload</td><td><code>[auth] session_backend = "database"</code> (deployment DB <code>garrison_kv</code>, garrison DbnexusKvDao); rate limiting / semantic cache remain per-process and lockout counters are best-effort across replicas</td></tr>
+<tr><td align="center">✅</td><td>Performance baselines (throughput + MKL)</td><td>Throughput and MKL comparison baselines measured (2026-09-16, see <a href="docs/PERFORMANCE.md">performance guide</a>)</td></tr>
+<tr><td align="center">📋</td><td>Performance baseline (Accelerate)</td><td>Accelerate (macOS) pending verification: no Apple hardware available; the verification protocol is documented in the performance guide</td></tr>
+<tr><td align="center">✅</td><td>Docs & observability</td><td>ReDoc (<code>/redoc</code>, <code>swagger-ui</code> feature) and pre-configured Grafana dashboard (<code>deploy/grafana/</code>)</td></tr>
 </table>
 
 ---
@@ -499,15 +500,16 @@ The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (followin
 
 | Version | Date | Highlights |
 |------|------|------|
-| Unreleased | - | Audit remediation and tuning switches: secure defaults hardening, HF tokenizers on all platforms, time-window batching / in-batch dedup, GGUF quantization path, semantic-cache comparison modes, multi-model LFRU, cache WAL, doctor diagnostics, startup warmup; **new translation & language detection** (multi-pair routing + auto detection; project repositioned as a multi-task inference service) |
-| 0.3.0-rc.1 | 2026-09-22 | Current release candidate: transcription (Qwen3-ASR) endpoints, translation/language-detection across protocols, PARQ storage replacing oxcache, unified "generate" interface |
+| Unreleased | - | onnx-primary engine switch (ort default, candle opt-in), audit-log DB/file dual write, in-flight dedup for identical requests, body-limit fix, swagger-ui/ReDoc docs surface, externalized database session backend, Grafana dashboard |
+| 0.3.0-rc.2 | 2026-10-15 | Transcribe (Qwen3-ASR) service surface, translation/language-detection across all protocols, decision-task priority queue, self-maintained dependency upgrades |
+| 0.3.0-rc.1 | 2026-09-22 | Audit remediation and tuning switches (secure defaults / login convergence / XFF / RBAC / cache keys, GGUF/LFRU/WAL/hardware planning/doctor/warmup), PARQ storage replacing oxcache, unified "generate" interface |
 | 0.2.1 | 2026-07-30 | i18n, three-protocol rerank, three-stage semantic cache, BF16 precision, SIMD similarity, continuous batch scheduling, GPU memory paging, library mode |
 | 0.2.0 | 2026-07-24 | sdforge four-protocol generation, 7-library ecosystem wiring, Matryoshka truncation re-normalization, vuln-0009 repo_id validation |
 | 0.1.2 | 2026-01-16 | Patch fixes |
 | 0.1.1 | 2026-01-15 | Patch fixes |
 | 0.1.0 | 2026-01-10 | Initial VecBoost release |
 
-Unreleased contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · Unreleased](docs/CHANGELOG.md#unreleased). The multi-replica boundary (auth sessions live in process memory; single replica only) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#-配置与部署).
+0.3.0-rc.1 contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · 0.3.0-rc.1](docs/CHANGELOG.md#030-rc1---2026-09-22). The multi-replica boundary (auth sessions default to process memory and can be externalized with `session_backend = "database"`; rate limiting and caches remain per-process) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#-配置与部署).
 
 ---
 

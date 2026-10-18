@@ -135,7 +135,7 @@ Docker：`docker build -t vecboost:latest .` 后挂载 `config/` 与 `models/` �
 
 ### ❓ auth 开启时能多副本部署吗？
 
-不能。推理路径无状态可水平扩展，但 `auth.enabled=true` 时认证会话存进程内存（oxcache DAO），**仅限单副本**；会话外置需 garrison db 后端补齐（规划中）。
+可以，但需显式外置会话。推理路径无状态，`auth.enabled=true` 时默认会话存进程内存（`session_backend = "memory"`，仅限单副本）；多副本需设置 `session_backend = "database"`（部署库 `garrison_kv` 表），并以 `--features "db,sqlite"` 或 `"db,postgres"` 构建、配置 `[database]`。注意：限流与语义缓存仍为进程内（各副本独立计数），账号锁定计数在多副本下为尽力而为。
 
 ---
 

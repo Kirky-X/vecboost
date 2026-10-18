@@ -204,6 +204,11 @@ default_admin_username = "admin"
 # 非空 = 仅当 peer IP 匹配列表内 CIDR 时才信任 XFF
 trusted_proxies = []
 
+# 会话存储后端: "memory" (默认, 进程内 oxcache, 仅限单副本) 或 "database"
+# (部署库 garrison_kv 表, auth 开启时多副本共享; 需以 --features "db,sqlite"
+# 或 "db,postgres" 构建并配置 [database]; auth 关闭时禁用)
+# session_backend = "memory"
+
 # ============ 审计日志配置 ============
 [audit]
 # 是否启用审计日志

@@ -9,7 +9,7 @@
 
 - [Unreleased](#unreleased)
 - [0.3.0-rc.2 - 2026-10-15](#030-rc2---2026-10-15)
-- [0.3.0-rc.1 - 2026-09-22](#unreleased)
+- [0.3.0-rc.1 - 2026-09-22](#030-rc1---2026-09-22)
 - [0.2.1 - 2026-07-30](#021---2026-07-30)
 - [0.2.0 - 2026-07-24](#020---2026-07-24)
 - [0.1.2 - 2026-01-16](#012---2026-01-16)
@@ -26,6 +26,8 @@
 - **构建配置迁移 `.cargo/config` → `.cargo/config.toml`**：旧名使 cargo 1.97 每次调用都打 `deprecated in favor of config.toml` 警告；全仓（CI / Dockerfile / scripts）无任何引用旧名之处，本地覆盖亦走 `~/.cargo/config.toml` 用户级配置，故 `.gitignore` 中「忽略 config.toml、以旧名入库」的留白规则作废，改为反向忽略旧名防止回归。`[env] JEMALLOC_SYS_WITH_MALLOC_CONF` 语义不变——已用 build.rs 临时探针实测迁移后仍注入构建环境（`Ok("dirty_decay_ms:1000,muzzy_decay_ms:1000")`），jemalloc decay 防线无回退
 
 
+- **认证会话支持外置（多副本）**：`[auth] session_backend = "memory" | "database"`（缺省 memory，行为不变）；`database` 经 garrison `DbnexusKvDao` 写入部署库 `garrison_kv` 表（`ensure_table` 幂等建表），需以 `db,sqlite|postgres` 构建并配置 `[database]`；`database` + `auth.enabled=false` 或未编译 `db` 时启动期显性拒绝。限流与语义缓存仍为进程内语义，锁定计数经 `incr` 读-改-写、多副本下为尽力而为
+
 - **主推理引擎切换为 onnxruntime（ort），candle 降为 opt-in 回退后端（onnx-primary）**：
   - `default = ["http", "onnx"]`——默认构建即 ort 主引擎且依赖树不再含 candle（zip 解析风险随之出树；candle 三件套转 optional；zip 全量 yank 事件于 2026-10-16 被上游解除，candle 回指官方 0.11，应急 fork 已删除）
   - `EngineType` 枚举与全部 task 路由语义不变（wire/API 契约零变化）；未启用 `candle` feature 而配置 `engine_type="candle"` 时启动期显性拒绝（`startup-engine-candle-not-compiled`，禁止静默降级）
@@ -35,6 +37,11 @@
 - **审计日志 DB 模式新增文件双写**：db 构建下 `logs/audit.log`（轮转）与 `audit_logs` 表并存（此前仅写表，文件运维可观测面缺失）
 - **并发同文请求合并（in-flight 去重）**：pipeline 入口对同文同 normalize 请求只推理一次，结果副本多播——同文并发逐位一致由「只算一次」结构性保证
 - **Swagger UI 收敛为 `swagger-ui` feature（默认不编译，挂主服务端口，单二进制一次构建）**：`http`/`openapi` 不再携带 `dep:utoipa-swagger-ui` 与 `sdforge/docs`；交互页面与 `/api-docs/openapi.json` 仅在 `--features swagger-ui` 构建时挂载（与主服务同端口，一次 `cargo build` 产出完整二进制），`openapi` feature 保持为规范程序化导出（sdforge/openapi）。注：Cargo 锁文件为全 feature 并集解析——optional 依赖（解析层）始终存在，feature 隔离只裁剪编译；2026-10-17 实测 zip 3.0.0/8.6.0 已可正常解析（前一天全量 yank 已解除）。
+
+### 新增
+
+- **ReDoc 端点**：`swagger-ui` feature 下挂载 `GET /redoc`，与 Swagger UI 共用 `/api-docs/openapi.json`；页面 HTML 内嵌，渲染脚本引用 jsdelivr `redoc@2`（浏览器需外网；Swagger UI 仍为 vendored 离线可用）
+- **Grafana 预配置仪表板**：`deploy/grafana/vecboost-dashboard.json`（14 面板：HTTP/批处理/队列/阶段/缓存/决策/检测/翻译）与导入说明 `deploy/grafana/README.md`
 
 ### 修复
 
@@ -52,6 +59,9 @@
 
 ### 质量与测试
 
+- **CI 构建面补全**：feature-matrix 增加 `swagger-ui`、`quantized-gguf --lib` 编译检查与 `quantized_parity` 质量门目标编译（真跑仍需模型资产，缺资产按既有 SKIP 语义）
+- **会话外置回归**：`tests/auth_session_backend.rs`（跨连接写入可见、删除可见、TTL 过期、建表幂等）
+- **Grafana 资产回归**：`tests/grafana_dashboard.rs`（JSON 可解析、datasource 模板变量、必需面板与 PromQL 片段）
 - **量化档精度闸门**：`engine_backend_parity::onnx_quantized_vs_fp32_parity`（int8 vs fp32 余弦中位 **0.997085**、q4 **0.984944**；阈值沿用仓内 GGUF 量化口径 0.98/0.95；资产缺失自动 SKIP）
 - **重排吞吐基准**：新增 `benches/rerank_bench.rs`（单对 + 1×32 批量），并在 `benches/common/mod.rs` 增加**按引擎分流的设备旋钮**（`VECBOOST_BENCH_DEVICE`；ort 需 `transcribe`、candle 需 `candle-cuda`，缺各自 feature 显性 exit=1，禁止把 CPU 数字记成 GPU）
 - **引擎选型实测（2026-10-18 空闲窗口，每格 2~3 遍）**：嵌入单条 onnx 2.56 ms vs candle 78.0 ms（**30.5×**）、批量 26.35 vs 186.5 ms（**7.1×**）；`candle-cuda` 相对 candle CPU 快 **15.4~35.5×**，同卡下仍比 ort CUDA EP 慢 **1.9~2.3×**（同模型、同显存级需求 ~1.95 GB）；详见 `docs/PERFORMANCE.md`「引擎选型证据」
@@ -114,7 +124,7 @@
 
 - trait-kit 统一 SDK 封装评估：技术可行但本次不实施（defer_with_proposal；P1 元数据诚实化 → P2 健康探测统一 → P3 装配收敛 → P4 资源契约，前置条件与风险见 [TRAIT-KIT-SDK-ASSESSMENT](TRAIT-KIT-SDK-ASSESSMENT.md)）
 
-<a id="unreleased"></a>
+<a id="030-rc1---2026-09-22"></a>
 
 ## [0.3.0-rc.1] - 2026-09-22
 

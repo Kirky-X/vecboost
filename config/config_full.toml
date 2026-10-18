@@ -151,6 +151,12 @@ default_admin_password = ""
 # 示例: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 trusted_proxies = []
 
+# 会话存储后端: "memory" (默认, 进程内 oxcache, 仅限单副本) 或 "database"
+# (部署库 garrison_kv 表, auth 开启时多副本共享; 需以 --features "db,sqlite"
+# 或 "db,postgres" 构建并配置 [database]; auth 关闭时禁用)
+# 多副本部署建议: session_backend = "database"
+session_backend = "memory"
+
 # ============ CSRF 保护配置 ============
 [auth.csrf]
 # 是否启用 CSRF 保护

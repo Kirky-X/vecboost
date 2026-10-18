@@ -475,12 +475,13 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 <tr><td align="center">✅</td><td>生态集成</td><td>7 库生态接线（trait-kit 注册中心、confers 配置、inklog 日志、oxcache 缓存、limiteron 限流、dbnexus 持久化、sdforge 接口）</td></tr>
 <tr><td align="center">✅</td><td>安全与 i18n</td><td>JWT/CSRF/RBAC/TOTP、安全默认值收敛、审计日志、ICU+Fluent 双语错误</td></tr>
 <tr><td align="center">✅</td><td>性能基座</td><td>SIMD 相似度、连续批处理、语义缓存、GPU 内存分页、BF16 推理、Matryoshka 降维</td></tr>
-<tr><td align="center">🚧</td><td>审计修复（Unreleased）</td><td>安全默认值/登录收敛/XFF 信任反转/RBAC 接线/缓存键模型命名空间等破坏性行为变更（见 [更新日志](#-更新日志)）</td></tr>
-<tr><td align="center">🚧</td><td>调优开关（Unreleased）</td><td>GGUF 量化、向量输出量化、多模型 LFRU 驻留、缓存 WAL、硬件感知规划、doctor 诊断、启动预热</td></tr>
-<tr><td align="center">📋</td><td>量化推理后端</td><td>GGUF 推理后端待 candle-transformers 上游 quantized BERT 落地（路由/魔数校验/质量门脚手架已就绪）</td></tr>
-<tr><td align="center">📋</td><td>多副本会话外置</td><td>auth 会话外置需 garrison db 后端补齐（pool-backed DAO）</td></tr>
-<tr><td align="center">📋</td><td>性能基线补全</td><td>吞吐基线与 MKL 对比基线已实测（2026-09-16，见 <a href="docs/PERFORMANCE.md">性能指南</a>）；Accelerate（macOS）待验证</td></tr>
-<tr><td align="center">📋</td><td>文档与可观测性</td><td>ReDoc 文档（v0.3.0）、Grafana 预配置仪表板</td></tr>
+<tr><td align="center">✅</td><td>审计修复（0.3.0-rc.1）</td><td>安全默认值/登录收敛/XFF 信任反转/RBAC 接线/缓存键模型命名空间等破坏性行为变更（见 [更新日志](#-更新日志)）</td></tr>
+<tr><td align="center">✅</td><td>调优开关（0.3.0-rc.1）</td><td>GGUF 量化、向量输出量化、多模型 LFRU 驻留、缓存 WAL、硬件感知规划、doctor 诊断、启动预热</td></tr>
+<tr><td align="center">✅</td><td>量化推理后端</td><td>GGUF 引擎经“加载期反量化桥”交付（Q8_0/Q4_K；路由/魔数校验/质量门齐备）；收益为存储与加载体积，运行期与 fp32 等价（无算力加速），质量门需模型资产实跑</td></tr>
+<tr><td align="center">✅</td><td>多副本会话外置</td><td>`[auth] session_backend = "database"`（部署库 `garrison_kv`，garrison DbnexusKvDao）；限流/语义缓存仍为进程内，锁定计数多副本下为尽力而为</td></tr>
+<tr><td align="center">✅</td><td>性能基线（吞吐 + MKL）</td><td>吞吐基线与 MKL 对比基线已实测（2026-09-16，见 <a href="docs/PERFORMANCE.md">性能指南</a>）</td></tr>
+<tr><td align="center">📋</td><td>性能基线（Accelerate）</td><td>Accelerate（macOS）待验证：无 Apple 硬件，验证协议已登记于性能指南</td></tr>
+<tr><td align="center">✅</td><td>文档与可观测性</td><td>ReDoc（`/redoc`，`swagger-ui` feature）、预配置 Grafana 仪表板（`deploy/grafana/`）</td></tr>
 </table>
 
 ---
@@ -532,15 +533,16 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
-| Unreleased | - | 审计修复与调优开关：安全默认值收敛、HF tokenizers 全平台统一、时间窗拼批/批内去重、GGUF 量化路径、语义缓存比较模式、多模型 LFRU、缓存 WAL、doctor 诊断、启动预热；**新增翻译与语言检测**（多语言对路由 + auto 检测，项目定位升级为多功能推理服务） |
-| 0.3.0-rc.1 | 2026-09-22 | 当前发布候选：转录（Qwen3-ASR）服务面、翻译/语言检测全协议接入、PARQ 存储替换 oxcache、"generate" 统一接口 |
+| Unreleased | - | onnx-primary 引擎切换（ort 默认、candle opt-in）、审计日志 DB/文件双写、同文并发去重、body 上限修正、swagger-ui/ReDoc 文档面、会话外置 database 后端、Grafana 仪表板 |
+| 0.3.0-rc.2 | 2026-10-15 | 转录（Qwen3-ASR）服务面、翻译/语言检测全协议接入、决策任务优先级队列、自研依赖升级 |
+| 0.3.0-rc.1 | 2026-09-22 | 审计修复与调优开关（安全默认值/登录收敛/XFF/RBAC/缓存键、GGUF/LFRU/WAL/硬件规划/doctor/预热）、PARQ 存储替换 oxcache、"generate" 统一接口 |
 | 0.2.1 | 2026-07-30 | i18n 国际化、Rerank 重排序三协议、语义缓存三级查询、BF16 精度、SIMD 相似度、连续批处理调度、GPU 内存分页、Library 模式 |
 | 0.2.0 | 2026-07-24 | sdforge 四协议统一生成、7 库生态接线、Matryoshka 截断重归一化、vuln-0009 repo_id 校验 |
 | 0.1.2 | 2026-01-16 | 补丁修订 |
 | 0.1.1 | 2026-01-15 | 补丁修订 |
 | 0.1.0 | 2026-01-10 | VecBoost 初始发布 |
 
-Unreleased 含多项破坏性行为变更（安全默认值收敛、登录收敛、XFF 信任反转、RBAC 接线、缓存键/分词器变更等），**升级必读**：逐项「旧行为 → 新行为 → 迁移动作」对照表见 [📋 更新日志 · Unreleased](docs/CHANGELOG.md#unreleased)。多副本边界（auth 会话存进程内存，仅限单副本）与热重载语义（配置变更重启后生效）见 [❓ FAQ](docs/FAQ.md#-配置与部署)。
+0.3.0-rc.1 含多项破坏性行为变更（安全默认值收敛、登录收敛、XFF 信任反转、RBAC 接线、缓存键/分词器变更等），**升级必读**：逐项「旧行为 → 新行为 → 迁移动作」对照表见 [📋 更新日志 · 0.3.0-rc.1](docs/CHANGELOG.md#030-rc1---2026-09-22)。多副本边界（auth 会话默认进程内存，可经 `session_backend = "database"` 外置；限流/缓存仍为进程内）与热重载语义（配置变更重启后生效）见 [❓ FAQ](docs/FAQ.md#-配置与部署)。
 
 ---
 

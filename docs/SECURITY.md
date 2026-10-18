@@ -85,7 +85,8 @@ cargo deny check
 - RBAC：`/api/1/model/*` 与 `/embed/file` 要求 **admin 角色**。
 - 登录收敛：仅 `default_admin_username`（默认 admin）可登录；启用认证时必须配置 `VECBOOST_ADMIN_PASSWORD`（≥12 位，缺失拒绝启动）。
 - Token 生命周期：`token_expiration_hours` 缺省 24 小时；支持 TOTP（`secure-totp`）、账号锁定（`account-lockout`）、凭证清零（`account-credential-zeroize`）、异常检测（`anomalous-detector-dual`）与安全告警。
-- 会话存储：进程内存（oxcache DAO），**auth 开启时仅限单副本**；外置会话需 garrison db 后端（规划中）。
+- 会话存储：`[auth] session_backend` 可选 `memory`（默认，进程内存 oxcache，**仅限单副本**）或 `database`（部署库 `garrison_kv` 表，garrison `DbnexusKvDao`，auth 开启时可多副本共享）；`database` 需以 `--features "db,sqlite"` 或 `"db,postgres"` 构建并配置 `[database]`，未编译 db 或 auth 关闭时启动期显性拒绝。
+- 多副本语义边界：会话外置后认证可水平扩展，但**限流与语义缓存仍为进程内**（各副本独立计数）；账号锁定计数经 `incr` 读-改-写实现，多副本下为尽力而为（可能少计）。
 
 ### 请求边界防护
 
@@ -147,7 +148,7 @@ cargo deny check
 - 启用 `auth.enabled = true`，`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD` 经环境变量或密钥管理注入，不入库不入镜像。
 - 按需评估 `token_expiration_hours`（默认 24 小时）；纯 Bearer API 可显式关闭 CSRF。
 - CORS 勿用通配符 `"*"`（等同公开接口）；显式列出可信来源。
-- auth 开启时为单副本部署（会话在进程内存）；水平扩展需先外置会话（待 garrison db 后端）。
+- 水平扩展：auth 开启时默认单副本（会话在进程内存）；多副本需设置 `session_backend = "database"` 并以 `db,sqlite|postgres` 构建（会话共享于部署库）；限流/语义缓存仍按副本独立。
 - 容器等受信网络如需非回环绑定，显式设置 `VECBOOST_ALLOW_INSECURE=1` 并理解 ERROR 告警含义。
 
 **密钥与配置**

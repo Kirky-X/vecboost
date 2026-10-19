@@ -37,7 +37,7 @@ Linux（x86_64/aarch64，CI 覆盖 Ubuntu + Windows 测试）、macOS（Apple Si
 
 - 使用问题：[GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
 - 文档：[📖 用户指南](USER_GUIDE.md)、[📘 API 参考](API_REFERENCE.md)、[❓ 本页](FAQ.md)
-- 安全漏洞：**勿用公开 issue**，邮件 <kirky-x@outlook.com>（见 [🔒 安全文档](SECURITY.md)）
+- 安全漏洞：**勿用公开 issue**，优先走 GitHub [Security Advisories](https://github.com/Kirky-X/vecboost/security/policy)，备选邮件 <kirky-x@outlook.com>（受理人 Kirky.X）（见 [🔒 安全文档](SECURITY.md)）
 
 ### ❓ 项目采用什么许可证？
 
@@ -165,7 +165,7 @@ Unreleased 起 `token_expiration_hours` 缺省 **24 小时**（原 garrison 默�
 
 ### ❓ 发现安全漏洞怎么办？
 
-请勿公开 issue，邮件 <kirky-x@outlook.com>。流程与支持版本见 [🔒 安全文档](SECURITY.md)。
+请勿公开 issue，优先走 GitHub [Security Advisories](https://github.com/Kirky-X/vecboost/security/policy)（备选邮件 <kirky-x@outlook.com>，受理人 Kirky.X）。流程与支持版本见 [🔒 安全文档](SECURITY.md)。
 
 ---
 

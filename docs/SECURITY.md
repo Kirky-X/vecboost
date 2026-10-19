@@ -52,7 +52,11 @@ cargo deny check
 
 ### 如何报告
 
-**请勿通过公开 issue 报告安全漏洞。** 请发送邮件联系 maintainer：<kirky-x@outlook.com>，并在标题注明 `[security]`。维护者收到报告后会尽快回复。
+**请勿通过公开 issue 报告安全漏洞。**
+
+**首选渠道**：通过 GitHub [Security Advisories](https://github.com/Kirky-X/vecboost/security/policy) 私密披露通道提交报告（仓库页 **Security → Report a vulnerability**）。
+
+**备选渠道**：仅当首选通道不可用时，发送邮件至 <kirky-x@outlook.com>（受理人：Kirky.X），标题注明 `[security]`。Kirky.X 收到报告后会尽快回复。
 
 ### 报告内容
 

@@ -463,7 +463,7 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 
 ### 🚨 报告安全漏洞
 
-请勿通过公开 issue 报告安全漏洞，请联系 maintainer：<kirky-x@outlook.com>。依赖 advisory 由 CI `cargo-audit` 门禁。完整政策与支持版本见 [SECURITY.md](docs/SECURITY.md)。
+请勿通过公开 issue 报告安全漏洞。请优先使用 GitHub [Security Advisories](https://github.com/Kirky-X/vecboost/security/policy) 私密披露通道提交报告（不可用时再联系 Kirky.X：<kirky-x@outlook.com>）。依赖 advisory 由 CI `cargo-audit` 门禁。完整政策与支持版本见 [SECURITY.md](docs/SECURITY.md)。
 
 ---
 

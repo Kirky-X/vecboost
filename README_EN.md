@@ -430,7 +430,7 @@ VecBoost is secure by default: the factory config binds to loopback only, and no
 
 ### 🚨 Reporting a Vulnerability
 
-Please do not report security vulnerabilities through public issues; contact the maintainer at <kirky-x@outlook.com>. Dependency advisories are gated by CI `cargo-audit`. For the full policy and supported versions, see [SECURITY.md](docs/SECURITY.md).
+Please do not report security vulnerabilities through public issues. Use the GitHub [Security Advisories](https://github.com/Kirky-X/vecboost/security/policy) private disclosure channel as the primary route (fall back to Kirky.X at <kirky-x@outlook.com> only if that channel is unavailable). Dependency advisories are gated by CI `cargo-audit`. For the full policy and supported versions, see [SECURITY.md](docs/SECURITY.md).
 
 ---
 

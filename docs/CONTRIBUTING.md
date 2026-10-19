@@ -103,5 +103,5 @@ python3 scripts/i18n_consistency_check.py # 修改用户可见文案/语言包�
 
 ## 🔐 安全
 
-发现安全漏洞请勿公开 issue，联系 maintainer(kirky-x@outlook.com)，流程见 [docs/SECURITY.md](SECURITY.md)。
+发现安全漏洞请勿公开 issue，优先走 GitHub [Security Advisories](https://github.com/Kirky-X/vecboost/security/policy)（备选联系 Kirky.X：<kirky-x@outlook.com>），流程见 [docs/SECURITY.md](SECURITY.md)。
 依赖 advisory 由 CI `cargo-audit` 门禁；豁免配置在 `.cargo/audit.toml`(须附理由)。

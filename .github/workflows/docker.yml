@@ -100,7 +100,7 @@ jobs:
           platforms: linux/amd64
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # master
+        uses: aquasecurity/trivy-action@6abccf398f78b4c337599c0656f933d91efb91a0 # master
         with:
           image-ref: 'vecboost/scan:latest'
           format: 'sarif'

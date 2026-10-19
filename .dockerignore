@@ -18,6 +18,12 @@ benchmarks/
 !README.md
 # workspace 成员 examples 的清单必须进构建上下文,否则容器内 cargo 拒绝加载 workspace
 !examples/Cargo.toml
+# fluxgate 容器构建以本仓为附加上下文（--build-context vecboost=../vecboost），
+# 其 cargo --locked 解析本仓 manifest 时要求声明的与自动发现的 target 文件在场
+#（examples/*.rs 与 tests/*.rs），缺失即 "can't find ... example/test" 拒绝加载；
+# 本仓镜像层不受影响（Dockerfile 按需 COPY，多出的上下文文件不进层）
+!examples/
+!tests/
 
 # Git
 .git/

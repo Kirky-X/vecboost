@@ -2,7 +2,7 @@
 
 <img src="docs/assets/vecboost.png" alt="VecBoost Logo" width="240"/>
 
-[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=for-the-badge)](https://www.apache.org/licenses/LICENSE-2.0) [![GitHub release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![Rustc 1.91+](https://img.shields.io/badge/Rustc-1.91+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/)
+[![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![Rustc 1.91+](https://img.shields.io/badge/Rustc-1.91+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/) [![release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![CI](https://img.shields.io/github/actions/workflow/status/Kirky-X/vecboost/feature-matrix.yml?branch=main&label=CI&style=for-the-badge)](https://github.com/Kirky-X/vecboost/actions/workflows/feature-matrix.yml) [![security](https://img.shields.io/github/actions/workflow/status/Kirky-X/vecboost/codeql.yml?branch=main&label=security&style=for-the-badge)](https://github.com/Kirky-X/vecboost/actions/workflows/codeql.yml) [![coverage](https://img.shields.io/codecov/c/github/Kirky-X/vecboost?style=for-the-badge)](https://codecov.io/gh/Kirky-X/vecboost) [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=for-the-badge)](https://www.apache.org/licenses/LICENSE-2.0)
 
 [Chinese](README.md) | **English**
 

@@ -35,6 +35,9 @@
 
 ## 📋 目录
 
+<details open>
+<summary>📑 目录</summary>
+
 - [✨ 功能特性](#-功能特性)
 - [🚀 快速开始](#-快速开始)
 - [🔌 API 使用](#-api-使用)
@@ -52,6 +55,8 @@
 - [🙏 致谢](#-致谢)
 - [📞 联系与支持](#-联系与支持)
 - [⭐ Star 历史](#-star-历史)
+
+</details>
 
 ---
 
@@ -102,6 +107,9 @@
 
 前置条件：
 
+<details>
+<summary>📋 表格</summary>
+
 | 依赖项 | 版本 | 说明 |
 |--------|------|------|
 | **Rust** | 1.91+ | edition 2024（以 `Cargo.toml` 的 `rust-version` 字段为权威值） |
@@ -110,7 +118,12 @@
 | **Metal SDK** | 最新版 | 可选，Apple Silicon GPU 支持（`metal` feature） |
 | **protobuf-compiler** | 最新版 | 可选，gRPC E2E 测试需要 |
 
+</details>
+
 > **💡 提示**: 运行 `rustc --version` 验证 Rust 安装。
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # 1. 克隆仓库
@@ -136,9 +149,14 @@ cargo build --release --features mcp
 cargo build --release --features grpc,cli,auth,onnx,db,openapi,mcp
 ```
 
+</details>
+
 最小构建：`cargo build --no-default-features --features http`。
 
 配置并运行：
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # 复制并自定义配置（默认从 config/config.toml 读取）
@@ -152,6 +170,8 @@ cp config/config.toml config/config_custom.toml
 ./target/release/vecboost --config config/config_custom.toml
 ```
 
+</details>
+
 > **✅ 成功**: 按出厂 `config/config.toml`（`host = "127.0.0.1"`，端口 `9002`）启动时，服务监听 `http://127.0.0.1:9002`（仅本机可访问）；当配置未指定 `host` 时，代码默认 `0.0.0.0`（监听所有接口，供容器/局域网部署——改配置 `[server] host` 即可覆盖）。
 
 > **🐳 Docker**：`docker build -t vecboost:latest .` 后挂载 `config/` 与 `models/` 运行即可；Docker Compose 与 Kubernetes 部署见 [📖 用户指南 · Docker 部署](docs/USER_GUIDE.md#-docker-部署)。
@@ -160,13 +180,21 @@ cp config/config.toml config/config_custom.toml
 
 以下示例改编自 [`examples/http/embed_api.rs`](examples/http/embed_api.rs)，通过 HTTP 生成嵌入向量（完整端点见 [📘 API 参考](docs/API_REFERENCE.md)）：
 
+<details>
+<summary>📄 代码 · bash</summary>
+
 ```bash
 curl -X POST http://localhost:9002/api/1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!"}'
 ```
 
+</details>
+
 响应：
+
+<details>
+<summary>📄 代码 · json</summary>
 
 ```json
 {
@@ -176,7 +204,12 @@ curl -X POST http://localhost:9002/api/1/embed \
 }
 ```
 
+</details>
+
 决策问答（需 `[model] task = "decision"` 的 Laya 决策管线，`onnx` feature 构建；三题型 choice/score/noul 各有明确响应结构，答案按问题顺序回显）：
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 curl -X POST http://localhost:9002/api/1/decisions \
@@ -191,7 +224,12 @@ curl -X POST http://localhost:9002/api/1/decisions \
   }'
 ```
 
+</details>
+
 响应（choice=argmax+各选项概率表，score=期望等级+完整分布，noul=两选项 softmax 的 P(true)）：
+
+<details>
+<summary>📄 代码 · json</summary>
 
 ```json
 {
@@ -204,12 +242,19 @@ curl -X POST http://localhost:9002/api/1/decisions \
 }
 ```
 
+</details>
+
 也可以直接使用 CLI（`cli` feature）或 library SDK（`library` 模式）：
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # 单文本嵌入
 cargo run --features cli -- embed --req '{"text":"Hello, world!"}'
 ```
+
+</details>
 
 ### 🧭 核心概念
 
@@ -236,6 +281,9 @@ VecBoost 由 `sdforge` 从处理函数单一源生成四种协议接口（`src/a
 
 翻译与语言检测请求示例（与 [API 参考](docs/API_REFERENCE.md) 字段一致）：
 
+<details>
+<summary>📄 代码 · bash</summary>
+
 ```bash
 curl -X POST http://localhost:9002/api/1/translate \
   -H "Content-Type: application/json" \
@@ -246,7 +294,12 @@ curl -X POST http://localhost:9002/api/1/detect \
   -d '{"text": "The quick brown fox jumps over the lazy dog near the riverbank every morning."}'
 ```
 
+</details>
+
 检测响应（`language: null` + `is_reliable: false` 表示不可判定——纯数字/过短文本，显性表达不虚构语言；完整错误语义见 [API 参考](docs/API_REFERENCE.md#翻译translate)）：
+
+<details>
+<summary>📄 代码 · json</summary>
 
 ```json
 {
@@ -258,6 +311,8 @@ curl -X POST http://localhost:9002/api/1/detect \
 }
 ```
 
+</details>
+
 > **⚠️ 前置**：翻译需 `--features onnx` 构建并在 `[translation]` 段配置 `[[translation.pairs]]` 语言对（缺省请求以 400 `translate-not-configured` 显性拒绝）；语言检测无模型依赖，任何构建均可用。
 
 > **🔧 译文后处理与超时**：翻译在引擎出口做确定性后处理（服务层与库用户同享）——`target=zh` 时繁→简归一化、URL 协议分隔符与 LaTeX 转义符号修复；模型级高频误译经 `[[translation.pairs.output_fixes]]` 字面替换表（按声明序）修复，见 [`config/config.toml`](config/config.toml) `[translation]` 段。HTTP 全局请求超时经 `[server] request_timeout_seconds` 配置（CPU seq2seq 译论文级长摘要需 15-130+s，`config/config.toml` 已显式设 300s）。
@@ -267,6 +322,9 @@ curl -X POST http://localhost:9002/api/1/detect \
 ### 🔖 Feature 标志
 
 下表逐项对应 `Cargo.toml` 的 `[features]` 定义，`default = ["http"]`。
+
+<details>
+<summary>📋 表格</summary>
 
 | Feature | 默认 | 说明 |
 |---------|------|------|
@@ -292,6 +350,8 @@ curl -X POST http://localhost:9002/api/1/detect \
 | `quantized-gguf` | - | GGUF 量化引擎开关（加载期反量化桥实现于 candle 路径，运行期与 fp32 等价） |
 | `character_converter` | - | 独立启用 `character_converter` 字符转换依赖（`onnx` feature 已隐含启用） |
 
+</details>
+
 > **📦 内置依赖说明**: `confers`（配置）、`inklog`（日志）、`oxcache`（缓存）、`limiteron`（限流）、`trait-kit`（模块注册）为必选依赖，始终启用，无需通过 feature 开启。`sdforge` 在 `http`/`grpc`/`cli`/`mcp` 任一协议 feature 下启用。
 
 > **🧪 实验通路**: 转录的本地实验 harness（独立 crate，二进制 `transcribe-own`）已收敛为薄壳 CLI——推理经主仓门面 `vecboost::transcribe`，py-torch 基线对拍通路保留；**该目录为本机目录，不入 git 仓库**。产品化实现见 `src/engine/transcribe/`；CLI 契约要点与消费面规范见 [🧹 维护规范](docs/MAINTENANCE.md)。
@@ -310,6 +370,9 @@ curl -X POST http://localhost:9002/api/1/detect \
 
 ## 📚 文档
 
+<details>
+<summary>📋 表格</summary>
+
 | 文档 | 说明 |
 |------|------|
 | [📖 用户指南](docs/USER_GUIDE.md) | 从安装到进阶的完整使用教程（含部署选项） |
@@ -325,11 +388,16 @@ curl -X POST http://localhost:9002/api/1/detect \
 | [📈 基准数据归档](docs/benchmarks/) | 历史基准数据（相似度/批调度/语义缓存/GPU 管线） |
 | [🌍 I18N 缺失审计](docs/I18N_MISSING_AUDIT.md) | 国际化翻译键审计记录 |
 
+</details>
+
 ---
 
 ## 💻 示例
 
 全部示例位于 [`examples/`](examples/) 目录，作为独立 workspace member crate `vecboost-examples`（12 个分类、31 个可执行二进制），覆盖基础嵌入、HTTP/CLI 调用、引擎切换、认证、缓存、限流、监控、审计、语义缓存与 Library SDK 集成；逐分类清单见 [`examples/README.md`](examples/README.md)。
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # 运行单个示例
@@ -340,6 +408,8 @@ cargo run -p vecboost-examples --bin matryoshka
 # ONNX 引擎示例（需要 ONNX Runtime）
 cargo run -p vecboost-examples --bin onnx --features onnx
 ```
+
+</details>
 
 ---
 
@@ -360,6 +430,9 @@ VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中
 ### ⚡ 运行命令（与 CI 一致）
 
 以下命令提取自 `.github/workflows/health-check.yml`（CI）、`feature-matrix.yml`、`scenario-tests.yml` 与 `docs/CONTRIBUTING.md`。路径依赖提示：`../base/*` 生态库是路径依赖的活仓库，本地门禁命令须以 `-p vecboost -p vecboost-examples` 限定。
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # 格式与 Lint 门禁（CI：clippy unwrap_used 为生产代码 panic 面门禁）
@@ -397,6 +470,8 @@ cargo doc --workspace --no-deps
 cargo audit
 ```
 
+</details>
+
 ### 📊 测试规模
 
 截至 v0.3.0-rc.2 工作区：单元测试（`src/` 内联）2277 个、Rust 集成/专项测试（`tests/*.rs`）63 个测试函数、Python 场景/性能用例 146 个（场景 119 + 性能 27，15 个场景套件）、Criterion 微基准 5 组；CI 硬门禁为行覆盖率不低于 80%（llvm-cov），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
@@ -415,12 +490,17 @@ cargo audit
 
 **嵌入吞吐（单条 / 批量×32，越小越好）**
 
+<details>
+<summary>📋 表格</summary>
+
 | 引擎 × 设备 | 单条 | 批量×32 | 结论 |
 |---|---|---|---|
 | **onnxruntime × CPU** | **2.56 ms** | **26.35 ms** | 产品默认，CPU 最优 |
 | candle × CPU | 78.0 ms | 186.5 ms | 分别慢 **30.5× / 7.1×** |
 | onnxruntime × CUDA | 2.70 ms | **3.06 ms** | 批量最优 |
 | candle × CUDA（`candle-cuda`） | 5.05 ms | 6.70 ms | 比自家 CPU 快 15.4×/27.8×，仍比 ort GPU 慢 **1.9×/2.2×** |
+
+</details>
 
 - **切换到 ort 的直接原因**：candle 的 CPU 前向是原生实现且**不投入优化**——单条差 30 倍、批量差 7 倍；
   即使开 `--features mkl`（单条 4×）也只降到 ~17.5 ms，**仍比 ort 慢约 6.8 倍**。
@@ -431,6 +511,9 @@ cargo audit
 
 **转录吞吐（Qwen3-ASR，700 秒音频；4 并行档 / 服务串行档）**
 
+<details>
+<summary>📋 表格</summary>
+
 | 通路 | 耗时 | CER | 资源 |
 |---|---|---|---|
 | **ort 0.6B int8 × CPU** | **70.4 s / 137.2 s** | 7.75% | 零显存 |
@@ -439,6 +522,8 @@ cargo audit
 | ort 1.7B int8 × CPU | 135.7~142.1 s | 15.78~18.99% | 零显存 |
 | **ort 1.7B fp32（无损）× CPU** | 698.8 s | **7.24%** | 零显存 |
 | **嵌入 Python 1.7B bf16 × CUDA** | **55.9 s** | **2.49%** | 显存 14.5 GiB + Python 栈 |
+
+</details>
 
 - **转录上 GPU 对 ort 全线为负**（0.6B 慢 2.6×、1.7B int8 慢 1.6×、1.7B fp32 慢 2.3×）：显卡出力仅 ~15%，显存却吃满；
   原因是逐段解码的 kernel 太小，被启动与主机↔显存同步支配。
@@ -469,6 +554,9 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 
 ## 🧭 开发路线图
 
+<details>
+<summary>📋 表格</summary>
+
 <table style="width:100%; border-collapse: collapse">
 <tr><th style="text-align:center">状态</th><th style="text-align:left">方向</th><th style="text-align:left">条目</th></tr>
 <tr><td align="center">✅</td><td>核心服务</td><td>四协议单一源生成、Candle/ONNX 双引擎、Bert/XlmRoberta 双架构、优先级队列与时间窗拼批</td></tr>
@@ -484,6 +572,8 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 <tr><td align="center">📋</td><td>性能基线（Accelerate）</td><td>Accelerate（macOS）待验证：无 Apple 硬件，验证协议已登记于性能指南</td></tr>
 <tr><td align="center">✅</td><td>文档与可观测性</td><td>ReDoc（`/redoc`，`swagger-ui` feature）、预配置 Grafana 仪表板（`deploy/grafana/`）</td></tr>
 </table>
+
+</details>
 
 ---
 
@@ -532,6 +622,9 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 
 完整版本历史见 [📋 更新日志](docs/CHANGELOG.md)（遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，语义化版本）。
 
+<details>
+<summary>📋 表格</summary>
+
 | 版本 | 日期 | 要点 |
 |------|------|------|
 | Unreleased | - | onnx-primary 引擎切换（ort 默认、candle opt-in）、审计日志 DB/文件双写、同文并发去重、body 上限修正、swagger-ui/ReDoc 文档面、会话外置 database 后端、Grafana 仪表板 |
@@ -542,6 +635,8 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 | 0.1.2 | 2026-01-16 | 补丁修订 |
 | 0.1.1 | 2026-01-15 | 补丁修订 |
 | 0.1.0 | 2026-01-10 | VecBoost 初始发布 |
+
+</details>
 
 0.3.0-rc.1 含多项破坏性行为变更（安全默认值收敛、登录收敛、XFF 信任反转、RBAC 接线、缓存键/分词器变更等），**升级必读**：逐项「旧行为 → 新行为 → 迁移动作」对照表见 [📋 更新日志 · 0.3.0-rc.1](docs/CHANGELOG.md#030-rc1---2026-09-22)。多副本边界（auth 会话默认进程内存，可经 `session_backend = "database"` 外置；限流/缓存现可经 `distributed-redis` 外置 Redis——rc.1 时点两者仍为进程内）与热重载语义（配置变更重启后生效）见 [❓ FAQ](docs/FAQ.md#-配置与部署)。
 
@@ -558,6 +653,9 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 ### 🌟 核心依赖
 
 VecBoost 站在以下优秀开源项目的肩膀上：
+
+<details>
+<summary>📋 表格</summary>
 
 | 依赖 | 用途 |
 |------|------|
@@ -579,6 +677,8 @@ VecBoost 站在以下优秀开源项目的肩膀上：
 | [prometheus](https://github.com/tikv/rust-prometheus) | 指标导出 |
 | [criterion](https://github.com/bheisler/criterion.rs) | 基准测试 |
 | [tikv-jemallocator](https://github.com/tikv/jemallocator) | jemalloc 全局分配器（Linux glibc） |
+
+</details>
 
 ### 💝 特别感谢
 

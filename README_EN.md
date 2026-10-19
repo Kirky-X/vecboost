@@ -35,6 +35,9 @@ Interface handlers are written just once; `sdforge` macros generate all four pro
 
 ## 📋 Table of Contents
 
+<details open>
+<summary>📑 目录</summary>
+
 - [✨ Features](#-features)
 - [🚀 Quick Start](#-quick-start)
 - [🔌 API Usage](#-api-usage)
@@ -52,6 +55,8 @@ Interface handlers are written just once; `sdforge` macros generate all four pro
 - [🙏 Acknowledgements](#-acknowledgements)
 - [📞 Contact & Support](#-contact--support)
 - [⭐ Star History](#-star-history)
+
+</details>
 
 ---
 
@@ -102,6 +107,9 @@ In addition to the core capabilities above, an OpenAI-compatible endpoint (`POST
 
 Prerequisites:
 
+<details>
+<summary>📋 表格</summary>
+
 | Dependency | Version | Notes |
 |--------|------|------|
 | **Rust** | 1.91+ | edition 2024 (`rust-version` in `Cargo.toml` is authoritative) |
@@ -110,7 +118,12 @@ Prerequisites:
 | **Metal SDK** | latest | optional, Apple Silicon GPU support (`metal` feature) |
 | **protobuf-compiler** | latest | optional, required for gRPC E2E tests |
 
+</details>
+
 > **💡 Tip**: run `rustc --version` to verify your Rust installation.
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # 1. Clone the repository
@@ -136,9 +149,14 @@ cargo build --release --features mcp
 cargo build --release --features grpc,cli,auth,onnx,db,openapi,mcp
 ```
 
+</details>
+
 Minimal build: `cargo build --no-default-features --features http`.
 
 Configure and run:
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # Copy and customize the config (defaults to config/config.toml)
@@ -152,6 +170,8 @@ cp config/config.toml config/config_custom.toml
 ./target/release/vecboost --config config/config_custom.toml
 ```
 
+</details>
+
 > **✅ Success**: the service starts at `http://127.0.0.1:9002` by default (secure default: loopback only).
 
 > **🐳 Docker**: `docker build -t vecboost:latest .`, then run with `config/` and `models/` mounted; Docker Compose and Kubernetes deployment are covered in the [📖 User Guide · Docker deployment](docs/USER_GUIDE.md#-docker-部署).
@@ -160,13 +180,21 @@ cp config/config.toml config/config_custom.toml
 
 The following example is adapted from [`examples/http/embed_api.rs`](examples/http/embed_api.rs) and generates embeddings over HTTP (full endpoints in the [📘 API Reference](docs/API_REFERENCE.md)):
 
+<details>
+<summary>📄 代码 · bash</summary>
+
 ```bash
 curl -X POST http://localhost:9002/api/1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!"}'
 ```
 
+</details>
+
 Response:
+
+<details>
+<summary>📄 代码 · json</summary>
 
 ```json
 {
@@ -176,12 +204,19 @@ Response:
 }
 ```
 
+</details>
+
 You can also use the CLI (`cli` feature) or the library SDK (library mode):
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # Single-text embedding
 cargo run --features cli -- embed --req '{"text":"Hello, world!"}'
 ```
+
+</details>
 
 ### 🧭 Core Concepts
 
@@ -208,6 +243,9 @@ VecBoost generates its four protocol interfaces from single-source handlers via 
 
 Translation and language detection request examples (fields match the [API Reference](docs/API_REFERENCE.md)):
 
+<details>
+<summary>📄 代码 · bash</summary>
+
 ```bash
 curl -X POST http://localhost:9002/api/1/translate \
   -H "Content-Type: application/json" \
@@ -218,7 +256,12 @@ curl -X POST http://localhost:9002/api/1/detect \
   -d '{"text": "The quick brown fox jumps over the lazy dog near the riverbank every morning."}'
 ```
 
+</details>
+
 Detection response (`language: null` + `is_reliable: false` means "undetectable" — digits-only / too-short text; explicitly reported, never a guessed language; full error semantics in the [API Reference](docs/API_REFERENCE.md#翻译translate)):
+
+<details>
+<summary>📄 代码 · json</summary>
 
 ```json
 {
@@ -230,6 +273,8 @@ Detection response (`language: null` + `is_reliable: false` means "undetectable"
 }
 ```
 
+</details>
+
 > **⚠️ Prerequisites**: translation requires an `--features onnx` build and `[[translation.pairs]]` language pairs configured in the `[translation]` section (unconfigured requests get 400 `translate-not-configured`); language detection has no model dependency and works with any build.
 
 > **🔧 Output post-processing & timeout**: translation applies deterministic post-processing at the engine exit (shared by the service layer and library users) — Traditional→Simplified normalization for `target=zh`, repair of URL protocol separators and LaTeX escape symbols; model-level mistranslations are fixed by the literal replacement table `[[translation.pairs.output_fixes]]` (in declaration order), see the `[translation]` section of [`config/config.toml`](config/config.toml). The HTTP global request timeout is configured via `[server] request_timeout_seconds` (CPU seq2seq translation of paper-length abstracts takes 15-130+s; `config/config.toml` sets it to 300s explicitly).
@@ -239,6 +284,9 @@ Interactive OpenAPI docs (Swagger UI): build with `cargo build --features swagge
 ### 🔖 Feature Flags
 
 The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `default = ["http"]`.
+
+<details>
+<summary>📋 表格</summary>
 
 | Feature | Default | Description |
 |---------|------|------|
@@ -264,6 +312,8 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 | `quantized-gguf` | - | GGUF quantization engine switch (load-time dequantization bridge on the candle path, runtime-equivalent to fp32) |
 | `character_converter` | - | Enable the `character_converter` character-conversion dependency standalone (already implied by `onnx`) |
 
+</details>
+
 > **📦 Built-in dependencies**: `confers` (config), `inklog` (logging), `oxcache` (cache), `limiteron` (rate limiting), and `trait-kit` (module registry) are mandatory dependencies that are always enabled — no feature flag needed. `sdforge` is enabled by any protocol feature (`http`/`grpc`/`cli`/`mcp`).
 
 > **🧪 Experiment path**: The local transcription experiment harness (standalone crate, binary `transcribe-own`) has been converged into a thin-shell CLI — inference goes through the main-crate facade `vecboost::transcribe`, with the py-torch baseline path retained; **this directory is local-only and not tracked in git**. The productized implementation lives in `src/engine/transcribe/` — see [🧹 Maintenance Norms](docs/MAINTENANCE.md) for the CLI contract summary and consumption norms.
@@ -282,6 +332,9 @@ Per-key options and defaults for every config section (server / model / embeddin
 
 ## 📚 Documentation
 
+<details>
+<summary>📋 表格</summary>
+
 | Document | Description |
 |------|------|
 | [📖 User Guide](docs/USER_GUIDE.md) | Complete tutorial from installation to advanced usage (incl. deployment) |
@@ -297,11 +350,16 @@ Per-key options and defaults for every config section (server / model / embeddin
 | [📈 Benchmark archive](docs/benchmarks/) | Historical benchmark data (similarity / batch scheduling / semantic cache / GPU pipeline) |
 | [🌍 I18N missing-key audit](docs/I18N_MISSING_AUDIT.md) | Internationalization audit record |
 
+</details>
+
 ---
 
 ## 💻 Examples
 
 All examples live in [`examples/`](examples/), an independent workspace-member crate `vecboost-examples` (12 categories, 31 runnable binaries) covering basic embedding, HTTP/CLI calls, engine switching, auth, caching, rate limiting, monitoring, audit, semantic cache, and Library SDK integration; the per-category listing is in [`examples/README.md`](examples/README.md).
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # Run a single example
@@ -312,6 +370,8 @@ cargo run -p vecboost-examples --bin matryoshka
 # ONNX engine example (requires ONNX Runtime)
 cargo run -p vecboost-examples --bin onnx --features onnx
 ```
+
+</details>
 
 ---
 
@@ -332,6 +392,9 @@ The test stack has six layers: inline unit tests in `src/`, integration tests in
 ### ⚡ Commands (identical to CI)
 
 The commands below are extracted from `.github/workflows/health-check.yml` (CI), `feature-matrix.yml`, `scenario-tests.yml`, and `docs/CONTRIBUTING.md`. Path-dependency note: the `../base/*` ecosystem libraries are living path dependencies, so local gate commands must be scoped with `-p vecboost -p vecboost-examples`.
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # Format and lint gates (CI treats clippy unwrap_used as the production panic-surface gate)
@@ -369,6 +432,8 @@ cargo doc --workspace --no-deps
 cargo audit
 ```
 
+</details>
+
 ### 📊 Test Scale
 
 As of the v0.3.0-rc.2 workspace: 2277 inline unit tests in `src/`, 63 Rust integration/specialized test functions (`tests/*.rs`), 146 Python scenario/performance cases (119 scenario + 27 performance, 15 scenario suites), and 5 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 80% (llvm-cov), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
@@ -387,6 +452,9 @@ Benchmark data comes from the measured `docs/benchmarks/` archive (criterion; th
 
 **Embedding throughput (single / batch×32, lower is better)**
 
+<details>
+<summary>📋 表格</summary>
+
 | Engine × device | Single | Batch×32 | Verdict |
 |---|---|---|---|
 | **onnxruntime × CPU** | **2.56 ms** | **26.35 ms** | Product default, best on CPU |
@@ -394,11 +462,16 @@ Benchmark data comes from the measured `docs/benchmarks/` archive (criterion; th
 | onnxruntime × CUDA | 2.70 ms | **3.06 ms** | Best for batches |
 | candle × CUDA (`candle-cuda`) | 5.05 ms | 6.70 ms | 15.4×/27.8× faster than candle CPU, still **1.9×/2.2×** slower than ort GPU |
 
+</details>
+
 - **The direct reason for the switch**: candle's CPU forward pass is a native implementation that is **not optimized** — 30× slower single, 7× slower batched; even with `--features mkl` (4× on single) it only reaches ~17.5 ms, still **~6.8× slower than ort**.
 - **GPU is not a substitute**: on the same card and model, ort's CUDA EP is still ~2× faster, with the same VRAM footprint (~1.95 GB). candle's GPU is nevertheless a 15–36× win over its own CPU — what lags is the engine implementation, not the device.
 - **Embedding quantization**: `int8` vs fp32 gives **−22%** single / **−16%** batch / **−55%** memory, with median cosine **0.9971** (effectively lossless); `q4` is faster but cosine drops to 0.9849. Gate: `tests/engine_backend_parity.rs::onnx_quantized_vs_fp32_parity`.
 
 **Transcription throughput (Qwen3-ASR, 700 s audio; 4-worker / service-serial)**
+
+<details>
+<summary>📋 表格</summary>
 
 | Path | Time | CER | Resources |
 |---|---|---|---|
@@ -408,6 +481,8 @@ Benchmark data comes from the measured `docs/benchmarks/` archive (criterion; th
 | ort 1.7B int8 × CPU | 135.7–142.1 s | 15.78–18.99% | no VRAM |
 | **ort 1.7B fp32 (lossless) × CPU** | 698.8 s | **7.24%** | no VRAM |
 | **embedded Python 1.7B bf16 × CUDA** | **55.9 s** | **2.49%** | 14.5 GiB VRAM + Python stack |
+
+</details>
 
 - **For ort, GPU is a regression across the board** (0.6B 2.6× slower, 1.7B int8 1.6× slower, 1.7B fp32 2.3× slower): SM utilization stays ~15% while VRAM fills up — per-segment decoding kernels are too small and are dominated by launch/sync overhead.
 - **The quality bottleneck is quantization, not the engine**: mixed-bundle decomposition shows **dynamic int8 on the decoder** accounts for all 7.9 CER points, while quantizing the encoder costs almost nothing → the pure-Rust high-quality configuration is **int8 encoder + fp32 decoder (7.27% / 656 s / no VRAM)**.
@@ -436,6 +511,9 @@ Please do not report security vulnerabilities through public issues. Use the Git
 
 ## 🧭 Roadmap
 
+<details>
+<summary>📋 表格</summary>
+
 <table style="width:100%; border-collapse: collapse">
 <tr><th style="text-align:center">Status</th><th style="text-align:left">Area</th><th style="text-align:left">Items</th></tr>
 <tr><td align="center">✅</td><td>Core service</td><td>Four-protocol single-source generation, Candle/ONNX engines, Bert/XlmRoberta architectures, priority queue and time-window batching</td></tr>
@@ -451,6 +529,8 @@ Please do not report security vulnerabilities through public issues. Use the Git
 <tr><td align="center">📋</td><td>Performance baseline (Accelerate)</td><td>Accelerate (macOS) pending verification: no Apple hardware available; the verification protocol is documented in the performance guide</td></tr>
 <tr><td align="center">✅</td><td>Docs & observability</td><td>ReDoc (<code>/redoc</code>, <code>swagger-ui</code> feature) and pre-configured Grafana dashboard (<code>deploy/grafana/</code>)</td></tr>
 </table>
+
+</details>
 
 ---
 
@@ -499,6 +579,9 @@ Want to contribute code?<br>
 
 The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (following [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), semantic versioning).
 
+<details>
+<summary>📋 表格</summary>
+
 | Version | Date | Highlights |
 |------|------|------|
 | Unreleased | - | onnx-primary engine switch (ort default, candle opt-in), audit-log DB/file dual write, in-flight dedup for identical requests, body-limit fix, swagger-ui/ReDoc docs surface, externalized database session backend, Grafana dashboard |
@@ -509,6 +592,8 @@ The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (followin
 | 0.1.2 | 2026-01-16 | Patch fixes |
 | 0.1.1 | 2026-01-15 | Patch fixes |
 | 0.1.0 | 2026-01-10 | Initial VecBoost release |
+
+</details>
 
 0.3.0-rc.1 contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · 0.3.0-rc.1](docs/CHANGELOG.md#030-rc1---2026-09-22). The multi-replica boundary (auth sessions default to process memory and can be externalized with `session_backend = "database"`; rate limiting and caches can now be externalized to Redis via `distributed-redis` — at the rc.1 point both were per-process) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#-配置与部署).
 
@@ -525,6 +610,9 @@ This project is licensed under the **Apache License 2.0** - see the [LICENSE](LI
 ### 🌟 Core Dependencies
 
 VecBoost stands on the shoulders of these excellent open-source projects:
+
+<details>
+<summary>📋 表格</summary>
 
 | Dependency | Purpose |
 |------|------|
@@ -546,6 +634,8 @@ VecBoost stands on the shoulders of these excellent open-source projects:
 | [prometheus](https://github.com/tikv/rust-prometheus) | Metrics export |
 | [criterion](https://github.com/bheisler/criterion.rs) | Benchmarking |
 | [tikv-jemallocator](https://github.com/tikv/jemallocator) | jemalloc global allocator (Linux glibc) |
+
+</details>
 
 ### 💝 Special Thanks
 

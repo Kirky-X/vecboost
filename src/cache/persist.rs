@@ -440,4 +440,142 @@ mod tests {
         );
         assert_eq!(out.len(), 2, "corrupt B dropped, A/C kept");
     }
+
+    // ── WAL 格式护栏与计数面的补充单测（损坏/缺失/紧凑化） ──
+
+    fn write_wal(entries: &[(&str, &[f32])], tag: &str) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        write_header(&mut buf).expect("write header");
+        {
+            let mut cursor = std::io::Cursor::new(&mut buf);
+            cursor.set_position(8);
+            let mut nrec: u64 = 0;
+            for (key, vec) in entries {
+                nrec = append_record(&mut cursor, key, vec, tag, nrec)
+                    .expect("append")
+                    .0;
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn test_replay_roundtrip_and_counts() {
+        let tag = "fp";
+        let buf = write_wal(&[("k1", &[1.0, 2.0]), ("k2", &[3.0, 4.0])], tag);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("wal.bin");
+        std::fs::write(&path, &buf).expect("write wal");
+        let (out, committed) = replay(&path, tag);
+        assert_eq!(committed, 2);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].1, vec![1.0, 2.0]);
+        assert_eq!(record_counts(&path), (2, 2));
+    }
+
+    #[test]
+    fn test_replay_rejects_bad_magic_version_and_short_header() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bad_magic = dir.path().join("bad_magic.bin");
+        std::fs::write(&bad_magic, b"XXXX\x01\x00\x00\x00").expect("write");
+        assert!(replay(&bad_magic, "fp").0.is_empty(), "魔数不符应整体弃档");
+        assert_eq!(record_counts(&bad_magic), (0, 0));
+
+        let bad_version = dir.path().join("bad_ver.bin");
+        std::fs::write(&bad_version, b"VBC1\x09\x00\x00\x00").expect("write");
+        assert!(replay(&bad_version, "fp").0.is_empty(), "版本不符应弃档");
+
+        let short = dir.path().join("short.bin");
+        std::fs::write(&short, b"VBC").expect("write");
+        assert!(replay(&short, "fp").0.is_empty(), "头部不足 8 字节应弃档");
+        assert_eq!(record_counts(&short), (0, 0));
+    }
+
+    #[test]
+    fn test_replay_missing_and_empty_file_are_silent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("nope.bin");
+        assert!(replay(&missing, "fp").0.is_empty());
+        assert_eq!(record_counts(&missing), (0, 0));
+
+        let empty = dir.path().join("empty.bin");
+        std::fs::write(&empty, b"").expect("write empty");
+        assert!(replay(&empty, "fp").0.is_empty());
+        assert_eq!(record_counts(&empty), (0, 0));
+    }
+
+    #[test]
+    fn test_replay_skips_fingerprint_mismatch() {
+        let buf = write_wal(&[("k1", &[1.0, 2.0])], "fp-a");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("wal.bin");
+        std::fs::write(&path, &buf).expect("write wal");
+        let (out, committed) = replay(&path, "fp-b");
+        assert_eq!(committed, 1, "提交计数仍前进，但指纹不符的记录不返回");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_replay_stops_on_insane_length_prefix() {
+        let mut buf = write_wal(&[("k1", &[1.0, 2.0]), ("k2", &[3.0, 4.0])], "fp");
+        // 在末尾追加一条 key_len 巨大的伪记录（撕裂尾）：回放应在该处停止
+        buf.push(1u8);
+        buf.extend_from_slice(&(u32::MAX).to_le_bytes());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("wal.bin");
+        std::fs::write(&path, &buf).expect("write wal");
+        let (out, committed) = replay(&path, "fp");
+        assert_eq!(out.len(), 2, "长度前缀损坏前的记录仍应恢复");
+        assert!(committed >= 2);
+    }
+
+    #[test]
+    fn test_replay_stops_on_truncated_record_body() {
+        let mut buf = write_wal(&[("k1", &[1.0, 2.0])], "fp");
+        // 追加被截断的数据记录（有 type+key_len，无 payload）
+        buf.push(1u8);
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(b"partial");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("wal.bin");
+        std::fs::write(&path, &buf).expect("write wal");
+        let (out, _) = replay(&path, "fp");
+        assert_eq!(out.len(), 1, "截断尾不得丢已完成提交");
+    }
+
+    #[test]
+    fn test_compact_rewrites_snapshot_and_replays() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("wal.bin");
+        let mut entries: std::collections::HashMap<String, Vec<f32>> =
+            std::collections::HashMap::new();
+        entries.insert("b".to_string(), vec![2.0, 2.0]);
+        entries.insert("a".to_string(), vec![1.0, 1.0]);
+        let written = compact(&path, &entries, "fp").expect("compact");
+        assert_eq!(written, 2);
+        let (out, committed) = replay(&path, "fp");
+        assert_eq!(out.len(), 2);
+        assert_eq!(committed, 2);
+        assert_eq!(out[0].0, "a", "紧凑化按 key 排序写出");
+
+        let empty: std::collections::HashMap<String, Vec<f32>> = std::collections::HashMap::new();
+        assert_eq!(compact(&path, &empty, "fp").expect("compact empty"), 0);
+        assert!(replay(&path, "fp").0.is_empty());
+    }
+
+    #[test]
+    fn test_append_record_propagates_writer_error() {
+        struct FailingWriter;
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("disk full"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut w = FailingWriter;
+        let err = append_record(&mut w, "k", &[1.0], "fp", 0).expect_err("写入失败必须上抛");
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    }
 }

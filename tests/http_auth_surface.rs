@@ -66,7 +66,10 @@ fn try_request(
         .unwrap_or(0);
     Ok((
         status,
-        raw.splitn(2, "\r\n\r\n").nth(1).unwrap_or("").to_string(),
+        raw.split_once("\r\n\r\n")
+            .map(|x| x.1)
+            .unwrap_or("")
+            .to_string(),
     ))
 }
 
@@ -80,7 +83,7 @@ fn request(
     try_request(port, method, path, body, token).expect("server reachable")
 }
 
-fn config_text(port: u16) -> String {
+fn config_text(port: u16, session_backend: &str) -> String {
     format!(
         "[server]\nhost = \"127.0.0.1\"\nport = {port}\n\
          grpc_enabled = false\n\n\
@@ -90,23 +93,30 @@ fn config_text(port: u16) -> String {
          [rate_limit]\nenabled = false\n\n\
          [database]\nurl = \"sqlite::memory:\"\n\n\
          [auth]\nenabled = true\njwt_secret = \"{JWT_SECRET}\"\n\
+         session_backend = \"{session_backend}\"\n\
          default_admin_username = \"admin\"\ndefault_admin_password = \"{ADMIN_PASSWORD}\"\n"
     )
 }
 
-#[test]
-fn auth_login_authorize_refresh_logout() {
+fn auth_flow(session_backend: &str) {
     if !model_ready() {
         println!("SKIP: 本地 ONNX 模型缺失（models/Xenova-bge-small-en-v1.5）");
         return;
     }
 
     let port = free_port();
-    let dir = std::env::temp_dir().join(format!("vecboost-auth-surface-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "vecboost-auth-surface-{}-{}",
+        session_backend,
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("config")).expect("create run dir");
-    std::fs::write(dir.join("config").join("config.toml"), config_text(port))
-        .expect("write config");
+    std::fs::write(
+        dir.join("config").join("config.toml"),
+        config_text(port, session_backend),
+    )
+    .expect("write config");
 
     let log = std::fs::File::create(dir.join("server.log")).expect("create log");
     let mut child = Command::new(env!("CARGO_BIN_EXE_vecboost"))
@@ -257,4 +267,14 @@ fn auth_login_authorize_refresh_logout() {
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auth_login_authorize_refresh_logout() {
+    auth_flow("memory");
+}
+
+#[test]
+fn auth_session_backend_database_login_and_revoke() {
+    auth_flow("database");
 }

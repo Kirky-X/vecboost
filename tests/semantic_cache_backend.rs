@@ -14,6 +14,7 @@ fn memory_backend_is_always_valid() {
 
 #[test]
 fn redis_backend_requires_url() {
+    #[cfg_attr(not(feature = "distributed-redis"), allow(unused_mut))]
     let mut config = SemanticCacheConfig {
         enabled: true,
         backend: CacheBackendKind::Redis,

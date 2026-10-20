@@ -1016,4 +1016,105 @@ mod tests {
         assert!(pack_trigrams(b"ab").is_empty());
         assert!(pack_trigrams(b"").is_empty());
     }
+
+    // ── 向量比较模式与生命周期清理面 ──
+
+    fn vec_cache(mode: ComparisonMode) -> SemanticCache {
+        SemanticCache::with_capacity(0.8, 16)
+            .with_comparison_mode(mode)
+            .with_fuzzy_threshold(0.85)
+    }
+
+    async fn seed(cache: &SemanticCache, text: &str, embedding: Vec<f32>) {
+        cache
+            .get_or_compute("model-a", text, move || async move { Ok(embedding) })
+            .await
+            .expect("seed");
+    }
+
+    #[tokio::test]
+    async fn find_similar_by_vector_covers_all_modes() {
+        for mode in [
+            ComparisonMode::Exact,
+            ComparisonMode::I8,
+            ComparisonMode::Binary,
+        ] {
+            let cache = vec_cache(mode);
+            seed(&cache, "alpha", vec![1.0, 0.0, 0.0]).await;
+            seed(&cache, "bravo", vec![0.0, 1.0, 0.0]).await;
+
+            let hit = cache
+                .find_similar_by_vector(&[1.0, 0.0, 0.0])
+                .await
+                .unwrap_or_else(|| panic!("{mode:?} 应命中同向向量"));
+            assert_eq!(hit, vec![1.0, 0.0, 0.0]);
+
+            assert!(
+                cache
+                    .find_similar_by_vector(&[0.3, 0.3, 0.3])
+                    .await
+                    .is_none(),
+                "{mode:?} 低于阈值的查询不得命中"
+            );
+            assert!(
+                cache.find_similar_by_vector(&[]).await.is_none(),
+                "空向量不得命中"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_index_and_disabled_cache_paths() {
+        let empty = vec_cache(ComparisonMode::Exact);
+        assert!(empty.find_similar_by_vector(&[1.0, 0.0]).await.is_none());
+
+        let disabled = SemanticCache::disabled();
+        let out = disabled
+            .get_or_compute("m", "t", || async { Ok(vec![7.0]) })
+            .await
+            .expect("disabled 直接回源");
+        assert_eq!(out, vec![7.0]);
+        assert_eq!(disabled.stats().total_entries, 0);
+    }
+
+    #[tokio::test]
+    async fn clear_model_and_clear_reset_index_and_stats() {
+        let cache = vec_cache(ComparisonMode::Exact);
+        seed(&cache, "alpha", vec![1.0, 0.0, 0.0]).await;
+        cache
+            .get_or_compute("model-b", "charlie", || async { Ok(vec![0.0, 1.0, 0.0]) })
+            .await
+            .expect("seed model-b");
+        assert_eq!(cache.stats().total_entries, 2);
+
+        cache.clear_model("model-a").await;
+        assert_eq!(cache.stats().total_entries, 1, "仅清除指定模型的条目");
+
+        cache.clear().await;
+        assert_eq!(cache.stats().total_entries, 0);
+        assert!(
+            cache
+                .find_similar_by_vector(&[1.0, 0.0, 0.0])
+                .await
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn comparison_mode_str_and_parse_roundtrip() {
+        for mode in [
+            ComparisonMode::Exact,
+            ComparisonMode::I8,
+            ComparisonMode::Binary,
+        ] {
+            let text = mode.as_str();
+            assert_eq!(text.parse::<ComparisonMode>().unwrap(), mode);
+            assert_eq!(mode.to_string(), text);
+        }
+        assert!("bogus".parse::<ComparisonMode>().is_err());
+        assert_eq!(
+            vec_cache(ComparisonMode::Binary).comparison_mode(),
+            ComparisonMode::Binary
+        );
+    }
 }

@@ -62,7 +62,11 @@ fn try_request(
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(0);
-    let resp_body = raw.splitn(2, "\r\n\r\n").nth(1).unwrap_or("").to_string();
+    let resp_body = raw
+        .split_once("\r\n\r\n")
+        .map(|x| x.1)
+        .unwrap_or("")
+        .to_string();
     Ok((status, resp_body))
 }
 
@@ -254,6 +258,35 @@ fn http_surface_success_and_error_paths() {
         (400..500).contains(&body("/api/v1/embed/file", r#"{"path":"missing.txt"}"#).0),
         "缺失文件应拒绝"
     );
+    // 聚合模式矩阵：段落/均值/滑窗各走一条分支
+    for mode in [
+        "paragraphs",
+        "paragraph",
+        "average",
+        "max_pooling",
+        "min_pooling",
+        "sliding_window",
+    ] {
+        assert_eq!(
+            body(
+                "/api/v1/embed/file",
+                &format!(r#"{{"path":"{}","mode":"{mode}"}}"#, document.display())
+            )
+            .0,
+            200,
+            "聚合模式 {mode} 应成功"
+        );
+    }
+    assert!(
+        (400..500).contains(
+            &body(
+                "/api/v1/embed/file",
+                &format!(r#"{{"path":"{}","mode":"bogus"}}"#, document.display())
+            )
+            .0
+        ),
+        "非法聚合模式必须拒绝"
+    );
 
     // ── model switch / unload ──
     assert!(
@@ -265,6 +298,26 @@ fn http_surface_success_and_error_paths() {
             .0
         ),
         "不存在的切换路径应拒绝"
+    );
+    assert!(
+        (400..500).contains(
+            &body(
+                "/api/v1/model/switch",
+                r#"{"model_name":"x","device":"bogus-device"}"#
+            )
+            .0
+        ),
+        "非法 device 枚举必须拒绝"
+    );
+    assert!(
+        (400..500).contains(
+            &body(
+                "/api/v1/model/switch",
+                r#"{"model_name":"x","expected_dimension":0}"#
+            )
+            .0
+        ),
+        "零维度必须拒绝"
     );
     let (s, _) = body("/api/v1/model/unload", r#"{"model_name":"never-loaded"}"#);
     assert!(
@@ -332,6 +385,48 @@ fn http_surface_success_and_error_paths() {
             .0
         ),
         "空文本必须拒绝"
+    );
+
+    // ── 参数上限：超长文本 / 超大批次 / 超大文件 ──
+    let long_text = "a".repeat(9000);
+    assert!(
+        (400..500).contains(&body("/api/v1/embed", &format!(r#"{{"text":"{long_text}"}}"#)).0),
+        "超长文本必须拒绝"
+    );
+    let many: Vec<String> = (0..600).map(|i| format!("\"t{i}\"")).collect();
+    assert!(
+        (400..500).contains(
+            &body(
+                "/api/v1/embed/batch",
+                &format!(r#"{{"texts":[{}]}}"#, many.join(","))
+            )
+            .0
+        ),
+        "超大批次必须拒绝"
+    );
+    let oversized = dir.join("oversized.txt");
+    std::fs::write(&oversized, vec![b'x'; 11 * 1024 * 1024]).expect("write oversized");
+    assert!(
+        (400..500).contains(
+            &body(
+                "/api/v1/embed/file",
+                &format!(r#"{{"path":"{}"}}"#, oversized.display())
+            )
+            .0
+        ),
+        "超大文件必须拒绝"
+    );
+
+    // ── 翻译：自动检测源语言（短句/不可靠检测显性拒绝，不静默猜测） ──
+    assert!(
+        (400..500).contains(
+            &body(
+                "/api/v1/translate",
+                r#"{"text":"Auto detect this sentence.","target_language":"zh"}"#
+            )
+            .0
+        ),
+        "自动检测不可靠时必须显性拒绝"
     );
 
     // ── 坏 JSON ──
@@ -442,5 +537,86 @@ fn startup_fail_fast_surface() {
         "强制加密且无 key 必须拒绝启动；code={code:?} out={text}"
     );
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `/embed/file` 未配置 `grpc_allowed_roots` 时必须给出配置指引并拒绝。
+#[test]
+fn embed_file_requires_allowed_roots() {
+    if !model_ready() {
+        println!("SKIP: 本地 ONNX 模型缺失");
+        return;
+    }
+    let port = free_port();
+    let dir = std::env::temp_dir().join(format!("vecboost-no-roots-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("config")).expect("create run dir");
+    let config = format!(
+        "[server]\nhost = \"127.0.0.1\"\nport = {port}\ngrpc_enabled = false\n\n\
+         [model]\nmodel_path = \"{MODEL_PATH}\"\nmodel_repo = \"Xenova/bge-small-en-v1.5\"\n\
+         engine_type = \"onnx\"\nexpected_dimension = 384\n\n\
+         [embedding]\ncache_enabled = true\n\n\
+         [rate_limit]\nenabled = false\n\n\
+         [database]\nurl = \"sqlite::memory:\"\n\n\
+         [auth]\nenabled = false\n"
+    );
+    std::fs::write(dir.join("config").join("config.toml"), config).expect("write config");
+    let log = std::fs::File::create(dir.join("server.log")).expect("create log");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_vecboost"))
+        .current_dir(&dir)
+        .env(
+            "ORT_DYLIB_PATH",
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/3rdparty/onnxruntime/libonnxruntime.so"
+            ),
+        )
+        .stdout(Stdio::from(log.try_clone().expect("dup log")))
+        .stderr(Stdio::from(log))
+        .spawn()
+        .expect("spawn vecboost");
+    let deadline = Instant::now() + READY_TIMEOUT;
+    let mut ready = false;
+    while Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            break;
+        }
+        if let Ok((200, _)) = try_request(port, "GET", "/health", None) {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    if !ready {
+        let tail = std::fs::read_to_string(dir.join("server.log")).unwrap_or_default();
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("无 allowed_roots 服务器未就绪:\n{tail}");
+    }
+    let document = dir.join("doc.txt");
+    std::fs::write(&document, "hello\n\nworld\n").expect("write doc");
+    let (status, body) = request(
+        port,
+        "POST",
+        "/api/v1/embed/file",
+        Some(&format!(r#"{{"path":"{}"}}"#, document.display())),
+    );
+    assert!(
+        (400..500).contains(&status),
+        "未配置 allowed_roots 必须拒绝: {status} {body}"
+    );
+    let _ = Command::new("kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if child.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -12,7 +12,7 @@
 //! use crate::i18n;
 //!
 //! // Initialize once at startup (calls detect_locale internally)
-//! i18n::init();
+//! i18n::init;
 //!
 //! // Simple translation
 //! let msg = i18n::tr("health-ok");
@@ -37,22 +37,20 @@ use unic_langid::LanguageIdentifier;
 static I18N: OnceLock<I18nState> = OnceLock::new();
 
 /// One-shot guard for the sdforge protocol-surface sync (see
-/// [`sync_sdforge_i18n`]); `init()` may be called from several entry points.
+/// [`sync_sdforge_i18n`]); `init` may be called from several entry points.
 static SDFORGE_SYNCED: OnceLock<()> = OnceLock::new();
 
-// ---------------------------------------------------------------------------
 // Per-request locale (set by HTTP middleware via Accept-Language header)
-// ---------------------------------------------------------------------------
 
 tokio::task_local! {
     /// Per-request locale extracted from `Accept-Language` header.
-    /// Set by `i18n_middleware`; read by `tr()` / `IntoResponse`.
+    /// Set by `i18n_middleware`; read by `tr` / `IntoResponse`.
     static REQUEST_LOCALE: Option<String>;
 }
 
 /// Run a future within a request-locale scope.
 ///
-/// All `tr()` / `tr_with_args()` / `IntoResponse` calls within `f` will use
+/// All `tr` / `tr_with_args` / `IntoResponse` calls within `f` will use
 /// `locale` instead of the global default.
 pub async fn with_request_locale<F, R>(locale: Option<String>, f: F) -> R
 where
@@ -149,7 +147,7 @@ pub fn tr_locale(key: &str, locale_str: Option<&str>) -> String {
 /// Locale resolution priority:
 /// 1. Explicit `locale_str` parameter (if `Some`)
 /// 2. Per-request locale from `REQUEST_LOCALE` task-local (set by HTTP middleware)
-/// 3. Global default locale (set at startup by `init()`)
+/// 3. Global default locale (set at startup by `init`)
 fn tr_locale_with_args(
     key: &str,
     locale_str: Option<&str>,
@@ -204,9 +202,7 @@ pub fn tr_args(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
 // HTTP middleware — sets per-request locale from Accept-Language header
-// ---------------------------------------------------------------------------
 
 /// Axum middleware that extracts `Accept-Language` and sets the per-request
 /// locale for all downstream handlers and `IntoResponse` conversions.
@@ -404,20 +400,20 @@ mod tests {
         assert!(!loc.is_empty());
     }
 
-    // ---- Per-request locale tests ----
+    // Per-request locale tests
 
     #[tokio::test]
     async fn test_request_locale_overrides_default() {
         ensure_init();
-        // Without request locale, tr() uses global default
+        // Without request locale, tr uses global default
         let default_result = tr("health-ok");
 
-        // With request locale set to "zh", tr() should return Chinese
+        // With request locale set to "zh", tr should return Chinese
         let zh_result =
             with_request_locale(Some("zh".to_string()), async { tr("health-ok") }).await;
         assert_eq!(zh_result, "正常");
 
-        // With request locale set to "en", tr() should return English
+        // With request locale set to "en", tr should return English
         let en_result =
             with_request_locale(Some("en".to_string()), async { tr("health-ok") }).await;
         assert_eq!(en_result, "OK");
@@ -456,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_request_locale_outside_scope_returns_none() {
-        // Outside any with_request_locale scope, request_locale() returns None
+        // Outside any with_request_locale scope, request_locale returns None
         assert!(request_locale().is_none());
     }
 

@@ -934,12 +934,10 @@ mod tests {
         assert!(report.has_failures());
     }
 
-    // =========================================================================
     // 补缺口：CheckStatus 标签契约 / 全量 run / print / resolve_model_dir /
     // check_config 失败支路 / check_tokenizer 四分支 / cache WAL 分支 /
     // threads 回退 / GPU 无 cuda feature / models 汇总行 / scan_safetensors
     // 错误分支矩阵 / gguf 错误分支
-    // =========================================================================
 
     /// 提升全局 log max_level（无 logger 安装时仅让 warn!/info! 参数求值），
     /// 使日志宏参数行进入覆盖统计；幂等，无副作用。

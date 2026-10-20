@@ -1047,7 +1047,6 @@ impl EmbeddingService {
                     normalize_l2(&mut emb)?;
                     let global_i = chunk_base + i;
                     let original_idx = uncached_texts[global_i].0;
-                    // 写入缓存供后续使用
                     let cache_key = self.cache_key_for(&uncached_refs[global_i]);
                     self.cache.put(&cache_key, emb.clone()).await;
                     embeddings[original_idx] = Some(emb);
@@ -1055,7 +1054,6 @@ impl EmbeddingService {
             }
         }
 
-        // 计算相似度
         let mut results: Vec<(usize, f32, String)> = Vec::with_capacity(texts.len());
         for (idx, (text, emb_opt)) in texts.iter().zip(embeddings.into_iter()).enumerate() {
             if let Some(emb) = emb_opt {
@@ -1822,9 +1820,9 @@ impl EmbeddingService {
                 )
             );
         }
-        // 语义缓存含该模型向量，一并清空防跨模型污染
+        // 语义缓存含该模型向量，按模型清空防跨模型污染（共享索引同步清理）
         if let Some(ref semantic) = self.semantic_cache {
-            semantic.clear().await;
+            semantic.clear_model(name).await;
         }
         // 记账回冲（set 语义下卸载不回冲会永久占用额度）
         if let Some(ctrl) = &self.memory_limit {
@@ -2177,7 +2175,7 @@ mod tests {
             vec![0u8; 500],
         )
         .unwrap();
-        // 非 onnx 构建面本测试仅验证磁盘求和口径不进 Translate 臂（评审 SEC-4）
+        // 非 onnx 构建面本测试仅验证磁盘求和口径不进 Translate 臂（评审）
         #[cfg_attr(not(feature = "onnx"), allow(unused_variables))]
         let disk = 300 + 400 + 500;
 
@@ -2850,7 +2848,7 @@ mod tests {
         assert_eq!(response.embeddings[0].text_preview.len(), 100);
     }
 
-    // ===== 辅助 mock 引擎 =====
+    // 辅助 mock 引擎
 
     /// 始终返回 OOM 错误的引擎,用于测试 OOM 恢复逻辑
     struct OomEngine;
@@ -2955,7 +2953,7 @@ mod tests {
         }
     }
 
-    // ===== OOM 恢复逻辑测试（判定实现在 common，批/单文本路径共用） =====
+    // OOM 恢复逻辑测试（判定实现在 common，批/单文本路径共用）
 
     #[test]
     fn test_is_oom_error_recognizes_oom_messages() {
@@ -3039,7 +3037,7 @@ mod tests {
         assert!(result.is_err(), "batch OOM should propagate");
     }
 
-    // ===== 输入验证边界测试 =====
+    // 输入验证边界测试
 
     #[tokio::test]
     async fn test_process_text_empty_input() {
@@ -3111,7 +3109,7 @@ mod tests {
         }
     }
 
-    // ===== Matryoshka 维度截断测试 =====
+    // Matryoshka 维度截断测试
 
     #[tokio::test]
     async fn test_process_text_matryoshka_truncation() {
@@ -3183,7 +3181,7 @@ mod tests {
         }
     }
 
-    // ===== process_similarity 测试 =====
+    // process_similarity 测试
 
     #[tokio::test]
     async fn test_process_similarity_identical_text() {
@@ -3249,7 +3247,7 @@ mod tests {
         }
     }
 
-    // ===== process_search 测试 =====
+    // process_search 测试
 
     #[tokio::test]
     async fn test_process_search_n_results() {
@@ -3366,7 +3364,7 @@ mod tests {
         }
     }
 
-    // ===== 缓存测试 =====
+    // 缓存测试
 
     #[tokio::test]
     async fn test_cache_hit_skips_engine() {
@@ -3473,7 +3471,7 @@ mod tests {
         );
     }
 
-    // ===== 模型管理与元信息测试 =====
+    // 模型管理与元信息测试
 
     #[tokio::test]
     async fn test_switch_model_same_name() {

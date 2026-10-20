@@ -93,9 +93,9 @@ MKL 加速后端（`--features mkl`）依赖 intel-mkl-src 2020.1 静态库，�
 
 ### ❓ 如何切换模型 / 同时驻留多个模型？
 
-- 运行时切换：`POST /api/1/model/switch`（admin 角色）或 gRPC `vecboost.model_switch`；
+- 运行时切换：`POST /api/v1/model/switch`（admin 角色）或 gRPC `vecboost.model_switch`；
 - 多模型驻留：`[model] max_resident_models` / `resident_memory_budget_mb`（LFRU 驱逐 + 热度持久化 `data/model_heat.json`）；
-- 可用模型列表：`GET /api/1/models`。
+- 可用模型列表：`GET /api/v1/models`。
 
 ### ❓ GGUF 量化模型能用了吗？
 
@@ -157,7 +157,7 @@ export VECBOOST_ADMIN_PASSWORD="至少 12 位的密码"
 
 ### ❓ 哪些接口需要 admin 角色？
 
-`/api/1/model/*`（模型管理：switch/unload 等）与 `/embed/file`。业务嵌入调用使用普通账号即可。
+`/api/v1/model/*`（模型管理：switch/unload 等）与 `/embed/file`。业务嵌入调用使用普通账号即可。
 
 ### ❓ Token 有效期多久？
 
@@ -175,7 +175,7 @@ Unreleased 起 `token_expiration_hours` 缺省 **24 小时**（原 garrison 默�
 
 | 协议 | Feature | 入口 |
 |------|---------|------|
-| HTTP/REST | `http`（默认） | `http://127.0.0.1:9002/api/1/*` |
+| HTTP/REST | `http`（默认） | `http://127.0.0.1:9002/api/v1/*` |
 | OpenAI 兼容 | `http` | `POST /v1/embeddings`（支持 `dimensions` 与 base64） |
 | gRPC | `grpc` | `:50051`（17 个 `vecboost.*` 方法） |
 | MCP | `mcp` | `vecboost --mcp`（stdio，工具 `embed_text`/`embed_batch`/`compute_similarity`/`list_models` 等） |

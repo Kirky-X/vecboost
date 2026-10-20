@@ -85,7 +85,7 @@ max_sequence_length = 8192
 
 # 任务维度 (可选，默认 embedding)
 # 可选值: embedding / decision / translate —— 三态语义：
-# ⚠️ task=decision 时模型加载为 Laya 决策管线，仅 /api/1/decisions 可用，
+# ⚠️ task=decision 时模型加载为 Laya 决策管线，仅 /api/v1/decisions 可用，
 #    embed/rerank 端点调用返回 400 Unsupported task；
 #    task=embedding（默认）时反之，decisions 端点返回 400。
 # decision bundle 目录布局（model_path 指向 bundle 根目录）:
@@ -97,7 +97,7 @@ max_sequence_length = 8192
 # task = "decision"
 # model_path = "models/laya-decision"
 # ⚠️ task=translate 时模型加载为 seq2seq 翻译引擎（仅 engine_type=onnx，
-#    candle 显性拒绝），仅 /api/1/translate 可用；翻译语言对不读本段——
+#    candle 显性拒绝），仅 /api/v1/translate 可用；翻译语言对不读本段——
 #    走文件尾部 [translation] 配置段（多语言对路由表）。
 #    注意：task=translate 主模型用法的 token 参数恒为默认 512/512
 #    （无配置入口），参数可调的翻译部署请使用 [translation].pairs。
@@ -401,7 +401,7 @@ recovery_timeout = 30
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 翻译多语言对配置（可选；默认无 [translation] 段 = 未配置，
-# /api/1/translate 端点仍注册、请求以 400 translate-not-configured 显性拒绝）
+# /api/v1/translate 端点仍注册、请求以 400 translate-not-configured 显性拒绝）
 #
 # 每对 [[translation.pairs]] 启动期急切构建（EngineFactory task=translate 分派，
 # 任一 bundle 缺失启动期 fail-fast）；请求按 (source_language, target_language)

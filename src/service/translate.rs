@@ -16,7 +16,7 @@ use tokio::sync::RwLock;
 /// 信号量（评审 RES-1/PERF-1：同 pair 引擎被 Mutex 串行化，无背压时 N 个
 /// 并发请求占 N-1 个 blocking 线程空等；permits=1 使排队显性化——
 /// try_acquire 失败即 503 Overloaded，与队列满口径统一）。
-/// Clone 仅为路由表查询处 `get().cloned()` 的句柄语义（Arc 克隆非引擎克隆）。
+/// Clone 仅为路由表查询处 `get.cloned` 的句柄语义（Arc 克隆非引擎克隆）。
 #[derive(Clone)]
 pub struct TranslatePairRoute {
     pub engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
@@ -41,7 +41,7 @@ impl TranslatePairRoute {
 /// 翻译服务：多语言对路由表。
 ///
 /// **不设 `replace_engine`**（proposal Non-Goal / design D6，编译期保证）：
-/// switch_model 传播的是主模型 `engine_handle()` 克隆，注入 (src,tgt) 多引擎
+/// switch_model 传播的是主模型 `engine_handle` 克隆，注入 (src,tgt) 多引擎
 /// 路由表要么使全部语言对指向同一引擎、要么在主模型为 embedding 任务时注入
 /// `supports_task(Translate)=false` 的引擎——翻译能力被切换操作静默废掉。
 /// pair 引擎不参与 checkpoint 预设表与 switch_model 换型语义。
@@ -91,7 +91,7 @@ impl TranslateService {
     ) -> Result<TranslateResponse, VecboostError> {
         Self::validate_request(&req)?;
 
-        // auto 检测：与 /api/1/detect 共用同一检测核心（单一事实源）
+        // auto 检测：与 /api/v1/detect 共用同一检测核心（单一事实源）
         // 零配置显性语义（spec R-translation-routing-003）：空表 = 未配置，
         // 任意请求 400 translate-not-configured（端点已注册，非 panic 非 500）
         if self.pairs.is_empty() {

@@ -4,7 +4,7 @@
 
 [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![Rustc 1.91+](https://img.shields.io/badge/Rustc-1.91+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/) [![release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![CI](https://img.shields.io/github/actions/workflow/status/Kirky-X/vecboost/feature-matrix.yml?branch=main&label=CI&style=for-the-badge)](https://github.com/Kirky-X/vecboost/actions/workflows/feature-matrix.yml) [![security](https://img.shields.io/github/actions/workflow/status/Kirky-X/vecboost/codeql.yml?branch=main&label=security&style=for-the-badge)](https://github.com/Kirky-X/vecboost/actions/workflows/codeql.yml) [![coverage](https://img.shields.io/codecov/c/github/Kirky-X/vecboost?style=for-the-badge)](https://codecov.io/gh/Kirky-X/vecboost) [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=for-the-badge)](https://www.apache.org/licenses/LICENSE-2.0)
 
-[Chinese](README.md) | **English**
+[中文](README.md) | **English**
 
 **A high-performance, production-grade multi-task inference service written in Rust. VecBoost provides six inference capabilities — text embedding, reranking, decision answering, translation, language detection, and speech transcription — with multiple inference engines, GPU acceleration, and enterprise-grade features.**
 
@@ -16,16 +16,20 @@
 
 <div align="center">
 
-### 🎯 Write the API Once, Get Four Protocols
+### 🎯 Six Inference Capabilities, One Service
 
-Interface handlers are written just once; `sdforge` macros generate all four protocol bindings at compile time — the compiler does the rest.
+Text embedding, reranking, decision answering, translation, language detection, and speech transcription all load models through a single `EngineFactory`, sharing configuration, caching, and rate-limiting infrastructure.
 
 <table style="width:100%; border-collapse: collapse">
 <tr>
-<td align="center" width="25%">🌐<br><b>REST</b><br><span style="color:#64748B">Web clients · On by default</span></td>
-<td align="center" width="25%">📡<br><b>gRPC</b><br><span style="color:#64748B">Microservices · Type-safe</span></td>
-<td align="center" width="25%">🤖<br><b>MCP</b><br><span style="color:#64748B">LLM tools · stdio transport</span></td>
-<td align="center" width="25%">💻<br><b>CLI</b><br><span style="color:#64748B">Scripting · Quick checks</span></td>
+<td align="center" width="33%">🧠<br><b>Text Embedding</b><br><span style="color:#64748B">Batch vectors · Matryoshka · OpenAI-compatible</span></td>
+<td align="center" width="33%">🔁<br><b>Reranking</b><br><span style="color:#64748B">Bi-encoder document relevance</span></td>
+<td align="center" width="33%">🎲<br><b>Decision Answering</b><br><span style="color:#64748B">choice / score / noul tasks</span></td>
+</tr>
+<tr>
+<td align="center" width="33%">🌐<br><b>Translation</b><br><span style="color:#64748B">Marian language pairs · auto source detection</span></td>
+<td align="center" width="33%">🔤<br><b>Language Detection</b><br><span style="color:#64748B">Confidence and reliability flags</span></td>
+<td align="center" width="33%">🎙️<br><b>Speech Transcription</b><br><span style="color:#64748B">Qwen3-ASR with VAD segmentation</span></td>
 </tr>
 </table>
 
@@ -36,7 +40,7 @@ Interface handlers are written just once; `sdforge` macros generate all four pro
 ## 📋 Table of Contents
 
 <details open>
-<summary>📑 目录</summary>
+<summary>📑 Table of Contents</summary>
 
 - [✨ Features](#-features)
 - [🚀 Quick Start](#-quick-start)
@@ -108,7 +112,7 @@ In addition to the core capabilities above, an OpenAI-compatible endpoint (`POST
 Prerequisites:
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Dependency | Version | Notes |
 |--------|------|------|
@@ -123,7 +127,7 @@ Prerequisites:
 > **💡 Tip**: run `rustc --version` to verify your Rust installation.
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
 # 1. Clone the repository
@@ -156,7 +160,7 @@ Minimal build: `cargo build --no-default-features --features http`.
 Configure and run:
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
 # Copy and customize the config (defaults to config/config.toml)
@@ -181,10 +185,10 @@ cp config/config.toml config/config_custom.toml
 The following example is adapted from [`examples/http/embed_api.rs`](examples/http/embed_api.rs) and generates embeddings over HTTP (full endpoints in the [📘 API Reference](docs/API_REFERENCE.md)):
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
-curl -X POST http://localhost:9002/api/1/embed \
+curl -X POST http://localhost:9002/api/v1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!"}'
 ```
@@ -194,7 +198,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 Response:
 
 <details>
-<summary>📄 代码 · json</summary>
+<summary>📄 Code · json</summary>
 
 ```json
 {
@@ -209,7 +213,7 @@ Response:
 You can also use the CLI (`cli` feature) or the library SDK (library mode):
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
 # Single-text embedding
@@ -232,7 +236,7 @@ cargo run --features cli -- embed --req '{"text":"Hello, world!"}'
 
 VecBoost generates its four protocol interfaces from single-source handlers via `sdforge` (one source per domain under `src/api/`: embedding / rerank / decisions / translate / detect). All endpoints, parameters, request/response examples, the gRPC method table, and message types are documented in the [📘 API Reference](docs/API_REFERENCE.md); summary:
 
-- **HTTP/REST**: `/api/1/*` provides embedding (single / batch / file), similarity, semantic search, rerank, decision answering (choice/score/noul), translation (multi-pair + auto detection), transcription (16kHz speech samples to text, `transcribe` feature), language detection, model management, and health endpoints;
+- **HTTP/REST**: `/api/v1/*` provides embedding (single / batch / file), similarity, semantic search, rerank, decision answering (choice/score/noul), translation (multi-pair + auto detection), transcription (16kHz speech samples to text, `transcribe` feature), language detection, model management, and health endpoints;
 - **OpenAI-compatible**: `POST /v1/embeddings`, responding in the OpenAI format (`object` / `data` / `usage`) with `encoding_format=base64` support;
 - **Matryoshka dimensionality reduction**: pass `dimensions` (256/512/1024, etc.) to `/v1/embeddings` for smaller, faster vectors; truncated vectors are automatically L2 re-normalized to keep cosine similarity correct;
 - **gRPC**: with the `grpc` feature, 17 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — including `vecboost.translate` / `vecboost.detect`, with JWT auth, rate limiting, max connections, and timeouts all configurable;
@@ -244,14 +248,14 @@ VecBoost generates its four protocol interfaces from single-source handlers via 
 Translation and language detection request examples (fields match the [API Reference](docs/API_REFERENCE.md)):
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
-curl -X POST http://localhost:9002/api/1/translate \
+curl -X POST http://localhost:9002/api/v1/translate \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, my dog is cute", "source_language": "en", "target_language": "zh"}'
 
-curl -X POST http://localhost:9002/api/1/detect \
+curl -X POST http://localhost:9002/api/v1/detect \
   -H "Content-Type: application/json" \
   -d '{"text": "The quick brown fox jumps over the lazy dog near the riverbank every morning."}'
 ```
@@ -261,7 +265,7 @@ curl -X POST http://localhost:9002/api/1/detect \
 Detection response (`language: null` + `is_reliable: false` means "undetectable" — digits-only / too-short text; explicitly reported, never a guessed language; full error semantics in the [API Reference](docs/API_REFERENCE.md#翻译translate)):
 
 <details>
-<summary>📄 代码 · json</summary>
+<summary>📄 Code · json</summary>
 
 ```json
 {
@@ -286,7 +290,7 @@ Interactive OpenAPI docs (Swagger UI): build with `cargo build --features swagge
 The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `default = ["http"]`.
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Feature | Default | Description |
 |---------|------|------|
@@ -306,7 +310,7 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 | `metal` | - | Apple Silicon Metal GPU (candle backend, implies `candle`) |
 | `onnx` | - | ONNX Runtime engine (**enabled by default**, part of default features) |
 | `candle` | - | candle fallback backend (opt-in: CandleEngine embedding / candle decision head / GGUF quantization bridge; `engine_type="candle"` is explicitly rejected at startup when not enabled) |
-| `transcribe` | - | Qwen3-ASR transcription engine (three-graph + silero VAD + fbank), library-level `InferenceEngine::transcribe` entry; HTTP/gRPC endpoints wired (`POST /api/1/transcribe`, configured under `[transcribe]`) |
+| `transcribe` | - | Qwen3-ASR transcription engine (three-graph + silero VAD + fbank), library-level `InferenceEngine::transcribe` entry; HTTP/gRPC endpoints wired (`POST /api/v1/transcribe`, configured under `[transcribe]`) |
 | `mkl` | - | x86_64 CPU MKL acceleration backend (candle-path opt-in, implies `candle`; requires a toolchain that links cleanly) |
 | `accelerate` | - | aarch64 macOS Accelerate backend (candle-path opt-in, implies `candle`) |
 | `quantized-gguf` | - | GGUF quantization engine switch (load-time dequantization bridge on the candle path, runtime-equivalent to fp32) |
@@ -333,7 +337,7 @@ Per-key options and defaults for every config section (server / model / embeddin
 ## 📚 Documentation
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Document | Description |
 |------|------|
@@ -347,8 +351,6 @@ Per-key options and defaults for every config section (server / model / embeddin
 | [📋 Changelog](docs/CHANGELOG.md) | Release-by-release change log |
 | [🤝 Contributing](docs/CONTRIBUTING.md) | How to contribute |
 | [🧹 Maintenance Norms](docs/MAINTENANCE.md) | Cross-change standing constraints: transcribe consumption surface, CLI contract, retired-switch discipline, deprecation-doc governance |
-| [📈 Benchmark archive](docs/benchmarks/) | Historical benchmark data (similarity / batch scheduling / semantic cache / GPU pipeline) |
-| [🌍 I18N missing-key audit](docs/I18N_MISSING_AUDIT.md) | Internationalization audit record |
 
 </details>
 
@@ -359,7 +361,7 @@ Per-key options and defaults for every config section (server / model / embeddin
 All examples live in [`examples/`](examples/), an independent workspace-member crate `vecboost-examples` (12 categories, 31 runnable binaries) covering basic embedding, HTTP/CLI calls, engine switching, auth, caching, rate limiting, monitoring, audit, semantic cache, and Library SDK integration; the per-category listing is in [`examples/README.md`](examples/README.md).
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
 # Run a single example
@@ -394,7 +396,7 @@ The test stack has six layers: inline unit tests in `src/`, integration tests in
 The commands below are extracted from `.github/workflows/health-check.yml` (CI), `feature-matrix.yml`, `scenario-tests.yml`, and `docs/CONTRIBUTING.md`. Path-dependency note: the `../base/*` ecosystem libraries are living path dependencies, so local gate commands must be scoped with `-p vecboost -p vecboost-examples`.
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
 # Format and lint gates (CI treats clippy unwrap_used as the production panic-surface gate)
@@ -453,7 +455,7 @@ Benchmark data comes from the measured `docs/benchmarks/` archive (criterion; th
 **Embedding throughput (single / batch×32, lower is better)**
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Engine × device | Single | Batch×32 | Verdict |
 |---|---|---|---|
@@ -471,7 +473,7 @@ Benchmark data comes from the measured `docs/benchmarks/` archive (criterion; th
 **Transcription throughput (Qwen3-ASR, 700 s audio; 4-worker / service-serial)**
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Path | Time | CER | Resources |
 |---|---|---|---|
@@ -512,7 +514,7 @@ Please do not report security vulnerabilities through public issues. Use the Git
 ## 🧭 Roadmap
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 <table style="width:100%; border-collapse: collapse">
 <tr><th style="text-align:center">Status</th><th style="text-align:left">Area</th><th style="text-align:left">Items</th></tr>
@@ -580,7 +582,7 @@ Want to contribute code?<br>
 The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (following [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), semantic versioning).
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Version | Date | Highlights |
 |------|------|------|
@@ -612,7 +614,7 @@ This project is licensed under the **Apache License 2.0** - see the [LICENSE](LI
 VecBoost stands on the shoulders of these excellent open-source projects:
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Dependency | Purpose |
 |------|------|

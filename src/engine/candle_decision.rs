@@ -417,7 +417,7 @@ impl DecisionHeadLayer {
             norm1: layer_norm(hidden, PYTORCH_LAYER_NORM_EPS, vb.pp("norm1"))
                 .map_err(|e| model_load("head norm1", e))?,
             // in_proj_weight/in_proj_bias 是 PyTorch MHA 的参数名（非模块
-            // 路径），无法经 pp("in_proj")+linear() 取用，手工构造 Linear
+            // 路径），无法经 pp("in_proj")+linear 取用，手工构造 Linear
             in_proj: {
                 let w = vb
                     .get((hidden * 3, hidden), "self_attn.in_proj_weight")

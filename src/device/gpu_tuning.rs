@@ -336,7 +336,6 @@ mod tests {
     #[test]
     fn test_check_and_advise_produces_correct_recommendations() {
         let report = GpuTuningAdvisor::check_and_advise();
-        // 验证报告结构完整
         assert!(matches!(
             report.persistence_mode,
             TuningLevel::Optimal | TuningLevel::Recommended | TuningLevel::NotApplicable

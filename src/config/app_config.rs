@@ -100,7 +100,7 @@ impl VecboostConfig {
 
     /// Validate configuration fields using garde-derived validation.
     ///
-    /// Delegates to sub-struct `validate()` methods (ServerConfig, ModelConfig,
+    /// Delegates to sub-struct `validate` methods (ServerConfig, ModelConfig,
     /// EmbeddingConfig) which use `#[derive(garde::Validate)]` with field-level
     /// `#[garde(...)]` rules. Aggregates all errors into a single `ConfigError`.
     pub fn validate(&self) -> Result<(), VecboostError> {
@@ -134,7 +134,7 @@ impl VecboostConfig {
     }
 }
 
-// trait-kit reload 装配：使 VecboostConfig 可通过 Kit::reload_config::<VecboostConfig>() 热重载
+// trait-kit reload 装配：使 VecboostConfig 可通过 Kit::reload_config::<VecboostConfig> 热重载
 // 依赖 trait-kit `reload` + `confers` feature，底层复用 confers 的 load_via_confers
 impl trait_kit::kit::Configurable for VecboostConfig {
     fn load() -> Result<Self, Box<dyn std::error::Error + Send + 'static>> {
@@ -486,7 +486,7 @@ port = 9999
             std::env::remove_var("VECBOOST_JWT_SECRET");
             std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
         }
-        // Call the Configurable trait's load() explicitly to cover the trait impl
+        // Call the Configurable trait's load explicitly to cover the trait impl
         let result = <VecboostConfig as Configurable>::load();
         assert!(result.is_ok());
     }

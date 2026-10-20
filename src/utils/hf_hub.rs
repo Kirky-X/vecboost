@@ -78,7 +78,7 @@ pub(crate) fn build_hf_repo(
 /// `total_timeout = None` 供大文件清单下载（`download_files`）使用：
 /// reqwest 总超时覆盖响应体读取全程，300s 上限下 1.6GB 级资产在慢速直连
 /// 链路（< ~5.6MB/s）必然中途超时；hf-hub 的 retry 只重试请求建立
-/// （retry 闭包仅包 `send()`），响应体断流不重试。连接超时 10s 与 retry
+/// （retry 闭包仅包 `send`），响应体断流不重试。连接超时 10s 与 retry
 /// 上限两条路径一致保留。
 fn build_hf_repo_with_http(
     repo_id: &str,

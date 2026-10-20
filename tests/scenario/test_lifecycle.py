@@ -113,7 +113,7 @@ def test_lc03_graceful_shutdown_under_load():
 
     def hammer(i: int):
         while not stop["flag"]:
-            st, _ = http_post(9143, "/api/1/embed", {"text": f"负载请求 {i}"})
+            st, _ = http_post(9143, "/api/v1/embed", {"text": f"负载请求 {i}"})
             if st != 200:
                 failures["count"] += 1
 

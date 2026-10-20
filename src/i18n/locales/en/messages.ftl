@@ -154,8 +154,14 @@ startup-auth-session-backend-without-auth = session_backend="database" requires 
 startup-auth-session-backend-db-feature-missing = session_backend="database" requires a build with the db feature (e.g. --features "db,sqlite" or "db,postgres"); this build has db disabled
 startup-rate-limit-redis-feature-missing = backend="redis" requires a build with the distributed-redis feature; this build has it disabled
 startup-rate-limit-redis-url-missing = backend="redis" requires [rate_limit] redis_url
+startup-semantic-redis-feature-missing = semantic_cache.backend="redis" requires a build with the distributed-redis feature; this build has it disabled
+startup-semantic-redis-url-missing = semantic_cache.backend="redis" requires [semantic_cache] redis_url
 startup-rate-limit-global-window-invalid = rate_limit.global_window_ms must be a positive integer (got 0): the global fixed window width cannot be zero
 log-service-cache-clear-failed = cache clear failed after model switch/unload (stale entries expire via TTL and are isolated by the per-key weight fingerprint): { $detail }
+log-semantic-redis-clear-all-failed = shared semantic index clear failed (local cache unaffected; stale entries expire via LRU): { $detail }
+log-semantic-redis-clear-model-failed = shared semantic index clear for model failed (stale entries expire via LRU): { $detail }
+log-semantic-redis-find-failed = shared semantic index lookup failed; using local index only: { $detail }
+log-semantic-redis-insert-failed = shared semantic index insert failed; entry stays local only: { $detail }
 startup-cache-redis-feature-missing = cache_backend="redis" requires a build with the distributed-redis feature; this build has it disabled
 startup-cache-redis-url-missing = cache_backend="redis" requires [embedding] redis_url
 startup-cache-redis-persist-conflict = cache_backend="redis" conflicts with persist_path (WAL): Redis provides persistence; WAL is only supported for the in-memory backend

@@ -41,7 +41,7 @@ pub(crate) struct Qwen3AsrEngine {
 }
 
 /// 一段样本数 → mel 帧数（features::compute 的 `num_frames` 口径：帧数 = floor(len/FRAME_SHIFT)，
-/// 而 compute 输出长度 = 帧数 × MEL_DIM，故反推 num_frames = mel.len()/MEL_DIM）。
+/// 而 compute 输出长度 = 帧数 × MEL_DIM，故反推 num_frames = mel.len/MEL_DIM）。
 fn frame_count(mel: &[f32]) -> usize {
     mel.len() / MEL_DIM
 }

@@ -136,7 +136,6 @@ async fn enforce_metrics_rate_limit(
             ));
         }
     };
-    // 记录限流决策指标
     if let Some(prom) = collector {
         if allowed {
             prom.record_rate_limit_allowed("metrics_ip");
@@ -180,7 +179,7 @@ fn encode_metrics_body(
     let encoder = prometheus::TextEncoder::new();
     #[allow(unused_mut)] // extend 仅在 metrics 聚合 feature 下发生
     let mut metric_families = collector.registry().gather();
-    // garrison metrics-prometheus（auth feature）：GarrisonMetrics::new() 的 OnceLock
+    // garrison metrics-prometheus（auth feature）：GarrisonMetrics::new 的 OnceLock
     // 单例把 garrison_* auth 域指标注册在 prometheus default_registry，与上方
     // collector 自有 registry 是两个注册表，此处合并导出（garrison_ 前缀无重名冲突）
     #[cfg(feature = "auth")]
@@ -250,9 +249,9 @@ pub async fn metrics_middleware(
 /// 归一化 HTTP 路径，只保留前 4 段以控制 Prometheus label 基数。
 ///
 /// 例如：
-/// - `/api/1/embed` → `/api/1/embed`
-/// - `/api/1/embed/batch` → `/api/1/embed/batch`
-/// - `/api/1/model/switch` → `/api/1/model/switch`
+/// - `/api/v1/embed` → `/api/v1/embed`
+/// - `/api/v1/embed/batch` → `/api/v1/embed/batch`
+/// - `/api/v1/model/switch` → `/api/v1/model/switch`
 /// - `/health` → `/health`
 #[cfg(feature = "http")]
 fn normalize_metrics_path(path: &str) -> String {
@@ -298,31 +297,31 @@ mod tests {
     fn test_normalize_metrics_path_short_paths_unchanged() {
         assert_eq!(normalize_metrics_path("/health"), "/health");
         assert_eq!(normalize_metrics_path("/metrics"), "/metrics");
-        assert_eq!(normalize_metrics_path("/api/1/embed"), "/api/1/embed");
+        assert_eq!(normalize_metrics_path("/api/v1/embed"), "/api/v1/embed");
         assert_eq!(normalize_metrics_path("/v1/embeddings"), "/v1/embeddings");
     }
 
     #[test]
     fn test_normalize_metrics_path_four_segments_preserved() {
         assert_eq!(
-            normalize_metrics_path("/api/1/embed/batch"),
-            "/api/1/embed/batch"
+            normalize_metrics_path("/api/v1/embed/batch"),
+            "/api/v1/embed/batch"
         );
         assert_eq!(
-            normalize_metrics_path("/api/1/model/switch"),
-            "/api/1/model/switch"
+            normalize_metrics_path("/api/v1/model/switch"),
+            "/api/v1/model/switch"
         );
         assert_eq!(
-            normalize_metrics_path("/api/1/auth/login"),
-            "/api/1/auth/login"
+            normalize_metrics_path("/api/v1/auth/login"),
+            "/api/v1/auth/login"
         );
     }
 
     #[test]
     fn test_normalize_metrics_path_truncates_beyond_four() {
         assert_eq!(
-            normalize_metrics_path("/api/1/model/switch/extra"),
-            "/api/1/model/switch"
+            normalize_metrics_path("/api/v1/model/switch/extra"),
+            "/api/v1/model/switch"
         );
         assert_eq!(normalize_metrics_path("/a/b/c/d/e/f"), "/a/b/c/d");
     }

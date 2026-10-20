@@ -14,7 +14,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 VecBoost CLI rerank 示例");
     println!("============================\n");
 
-    // 创建临时文档文件
     let mut temp_file = NamedTempFile::new()?;
     writeln!(
         temp_file,

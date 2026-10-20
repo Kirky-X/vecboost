@@ -19,7 +19,7 @@ use vecboost::config::model::DeviceType;
 /// 数字记成 GPU）：
 /// - ort 引擎：需 `transcribe`（`ort/cuda` 仅经该特性引入），否则 `build_session`
 ///   只 warn 后落 CPU EP；
-/// - candle 引擎：需 `candle-cuda`（`candle_core::utils::cuda_is_available()` 在无该
+/// - candle 引擎：需 `candle-cuda`（`candle_core::utils::cuda_is_available` 在无该
 ///   feature 时恒假）。
 ///
 /// `candle_engine` 由调用方从已选引擎派生（`matches!(engine_type, EngineType::Candle)`）——

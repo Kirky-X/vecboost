@@ -30,7 +30,7 @@ const FULL_MODEL_FILES: &[&str] = &[
 ];
 
 // ONNX 推理引擎资产（onnx-primary 主引擎；`onnx/model.onnx` 为 HF repo
-// 惯例子路径，落盘时经 file_name() 平铺到 bundle 根——与 onnx_engine
+// 惯例子路径，落盘时经 file_name 平铺到 bundle 根——与 onnx_engine
 // resolve_local_bundle 的根级 model.onnx 探测口径一致）
 const ONNX_MODEL_FILES: &[&str] = &[
     "config.json",

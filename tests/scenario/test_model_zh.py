@@ -22,7 +22,7 @@ M2_LOCAL_PATH = str(PROJECT_ROOT / "models" / "BAAI-bge-small-zh-v1.5")
 def test_r002_hf_mirror_server_side_download(zh_server):
     """R-model-002: 服务端 HF 在线下载加载（HF_ENDPOINT=hf-mirror.com）→ 512 维可用。"""
     port = zh_server["port"]
-    st, body = http_post(port, "/api/1/embed", {"text": "中文模型在线下载验证"})
+    st, body = http_post(port, "/api/v1/embed", {"text": "中文模型在线下载验证"})
     assert st == 200, f"HTTP {st}: {str(body)[:200]}"
     vec = find_vector(body)
     assert vec and len(vec) == 512, f"维度 {len(vec) if vec else None} != 512"
@@ -34,39 +34,39 @@ def test_r002_hf_mirror_server_side_download(zh_server):
 def test_r003_model_info_endpoints(zh_server):
     """R-model-003: /models、/model/current、/model/info 三端点。"""
     port = zh_server["port"]
-    st, models = http_get(port, "/api/1/models")
+    st, models = http_get(port, "/api/v1/models")
     assert st == 200, f"models HTTP {st}"
-    st2, cur = http_get(port, "/api/1/model/current")
+    st2, cur = http_get(port, "/api/v1/model/current")
     assert st2 == 200, f"current HTTP {st2}"
     assert "zh" in str(cur).lower() or "bge" in str(cur).lower(), f"current 未反映 M2: {str(cur)[:150]}"
-    st3, info = http_get(port, "/api/1/model/info")
+    st3, info = http_get(port, "/api/v1/model/info")
     assert st3 == 200, f"info HTTP {st3}"
 
 
 def test_r004_hot_switch_dims(zh_server):
     """R-model-004: 热切换 M2→M1→M2，维度 512↔384。回切走本地路径（确定性）。"""
     port = zh_server["port"]
-    st, _ = http_post(port, "/api/1/model/switch",
+    st, _ = http_post(port, "/api/v1/model/switch",
                       {"model_name": M1_REPO, "model_path": M1_PATH, "expected_dimension": 384})
     assert st == 200, f"切换 M1: HTTP {st}: {str(_)[:200]}"
-    st1, b1 = http_post(port, "/api/1/embed", {"text": "切换后验证"})
+    st1, b1 = http_post(port, "/api/v1/embed", {"text": "切换后验证"})
     assert st1 == 200 and len(find_vector(b1)) == 384, "切换 M1 后维度非 384"
-    st2, body2 = http_post(port, "/api/1/model/switch",
+    st2, body2 = http_post(port, "/api/v1/model/switch",
                            {"model_name": "BAAI/bge-small-zh-v1.5",
                             "model_path": M2_LOCAL_PATH, "expected_dimension": 512})
     assert st2 == 200, f"切回 M2: HTTP {st2}: {str(body2)[:200]}"
-    st3, b3 = http_post(port, "/api/1/embed", {"text": "切回验证"})
+    st3, b3 = http_post(port, "/api/v1/embed", {"text": "切回验证"})
     assert st3 == 200 and len(find_vector(b3)) == 512, "切回 M2 后维度非 512"
 
 
 def test_r005_switch_failure_preserves_current(zh_server):
     """R-model-005: 切换到不存在模型失败，原模型继续可用。"""
     port = zh_server["port"]
-    st, body = http_post(port, "/api/1/model/switch",
+    st, body = http_post(port, "/api/v1/model/switch",
                          {"model_name": "BAAI/definitely-not-exist-xyz-123"})
     assert st >= 400, f"无效切换竟返回 {st}"
     assert st in (400, 404, 422), f"无效切换状态码 {st}（预期 4xx）"
-    st2, b2 = http_post(port, "/api/1/embed", {"text": "失败后仍可用"})
+    st2, b2 = http_post(port, "/api/v1/embed", {"text": "失败后仍可用"})
     assert st2 == 200 and len(find_vector(b2)) == 512, "切换失败后原模型不可用"
 
 
@@ -95,7 +95,7 @@ def test_r006_invalid_model_sources():
 def test_r007_unload_not_exposed(zh_server):
     """R-model-007: 卸载能力验证——HTTP 未暴露 unload 路由（能力边界发现）。"""
     port = zh_server["port"]
-    st, _ = http_post(port, "/api/1/model/unload", {"model_name": "x"})
+    st, _ = http_post(port, "/api/v1/model/unload", {"model_name": "x"})
     if st == 404:
         pytest.skip("能力记录：HTTP 未暴露 model/unload 路由（服务层有 unload_model 能力但无端点，记入报告）")
     assert st in (200, 400, 422), f"unload 返回意外状态 {st}"

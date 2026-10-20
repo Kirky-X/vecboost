@@ -25,7 +25,7 @@ pub use interface::VecBoostInterface;
 
 /// Garrison 初始化标记类型。
 ///
-/// garrison 使用全局单例模式（`GarrisonManager::init()` 后通过 `GarrisonUtil` 静态方法访问），
+/// garrison 使用全局单例模式（`GarrisonManager::init` 后通过 `GarrisonUtil` 静态方法访问），
 /// 无需在 kit 中持有 `GarrisonManager` 实例。此 newtype 作为 AuthModule 的 Capability，
 /// `Some` 表示 garrison 已初始化，`None` 表示 auth 未启用。
 ///

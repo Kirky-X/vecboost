@@ -1,7 +1,7 @@
 # Copyright (c) 2025-2026 Kirky.X🌠
 # SPDX-License-Identifier: Apache-2.0
 
-"""转录服务（task=transcribe / `POST /api/1/transcribe`）黑盒场景测试。
+"""转录服务（task=transcribe / `POST /api/v1/transcribe`）黑盒场景测试。
 
 覆盖（R-transcribe 域）：
 - TR-01 线上契约与真机 ASR：16kHz 单声道 f32 样本数组 → 200 +
@@ -141,7 +141,7 @@ def test_tr01_wire_contract_and_real_asr(transcribe_server):
     assert samples, "样例音频不得为空"
     status, body = http_post(
         transcribe_server["port"],
-        "/api/1/transcribe",
+        "/api/v1/transcribe",
         {"samples": samples},
         timeout=TRANSCRIBE_HTTP_TIMEOUT,
     )
@@ -165,7 +165,7 @@ def test_tr02_empty_samples_rejected(transcribe_server):
     """TR-02：空样本数组 → 400（域层显性拒绝，不落引擎）。"""
     status, body = http_post(
         transcribe_server["port"],
-        "/api/1/transcribe",
+        "/api/v1/transcribe",
         {"samples": []},
         timeout=60,
     )
@@ -177,7 +177,7 @@ def test_tr03_non_finite_samples_rejected(transcribe_server):
     """TR-03：非有限值样本 → 400（NaN 字面被 serde 拒绝或域校验拒绝）。"""
     status, body = http_post(
         transcribe_server["port"],
-        "/api/1/transcribe",
+        "/api/v1/transcribe",
         raw_body='{"samples": [NaN]}',
         timeout=60,
     )
@@ -195,7 +195,7 @@ def test_tr04_full_length_body_within_configured_limit(transcribe_server):
     assert len(samples) == 16000 * 48
     status, body = http_post(
         transcribe_server["port"],
-        "/api/1/transcribe",
+        "/api/v1/transcribe",
         {"samples": samples},
         timeout=TRANSCRIBE_HTTP_TIMEOUT,
     )

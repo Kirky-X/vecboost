@@ -1,6 +1,9 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+//! VecBoost：多任务推理服务库（嵌入 / 重排 / 决策 / 翻译 / 语种识别），
+//! 同时提供 HTTP、MCP、CLI 协议面与嵌入式 SDK。
+
 #[cfg(feature = "http")]
 use axum::extract::FromRef;
 use std::sync::Arc;
@@ -43,7 +46,7 @@ pub(crate) mod monitor;
 pub(crate) mod text;
 
 // 重新导出必要的内部类型（最小化暴露原则）
-/// 轻量文本语言检测入口（/api/1/detect 与翻译 auto 路由的同一实现）；
+/// 轻量文本语言检测入口（/api/v1/detect 与翻译 auto 路由的同一实现）；
 /// 返回类型 [`Detection`](text::langdetect::Detection) 随函数一并公开
 pub use crate::text::langdetect::{Detection, detect_language};
 pub use config::VecboostConfig;
@@ -104,10 +107,10 @@ pub use sdforge;
 /// Application state
 ///
 /// 所有能力通过 `AsyncKit<Ready>` 查询。
-/// 启动时由 `main.rs` 通过 `kit.set_config()` 注入预构建对象 + `kit.register::<M>()`
-/// 注册 18 个 Module,`kit.build().await` 后注入到 `VecboostState`。
+/// 启动时由 `main.rs` 通过 `kit.set_config` 注入预构建对象 + `kit.register::<M>`
+/// 注册 18 个 Module,`kit.build.await` 后注入到 `VecboostState`。
 ///
-/// 路由 handler 通过 `state.kit.require::<M>().expect("...")` 检索能力,
+/// 路由 handler 通过 `state.kit.require::<M>.expect("...")` 检索能力,
 /// 或通过 Axum `FromRef` 自动注入(`FromRef` impl 也走 `kit.require`)。
 #[derive(Clone)]
 pub struct VecboostState {
@@ -218,8 +221,8 @@ impl_from_ref_option!(
 
 /// AuthConfig substate extractor — provides `trusted_proxies` and other auth
 /// configuration to middleware via axum's `FromRef` pattern. The config is
-/// injected via `kit.set_config(config.auth.clone())` in `main.rs` and
-/// retrieved through `kit.config::<AuthConfig>()` at request time.
+/// injected via `kit.set_config(config.auth.clone)` in `main.rs` and
+/// retrieved through `kit.config::<AuthConfig>` at request time.
 #[cfg(all(feature = "http", feature = "auth"))]
 impl FromRef<VecboostState> for config::app::AuthConfig {
     fn from_ref(state: &VecboostState) -> Self {
@@ -402,9 +405,7 @@ mod tests {
         .await
     }
 
-    // -------------------------------------------------------------------------
     // 构建与 Clone 测试
-    // -------------------------------------------------------------------------
 
     #[cfg(feature = "http")]
     #[tokio::test]
@@ -441,9 +442,7 @@ mod tests {
         assert!(Arc::ptr_eq(&state.kit, &clone3.kit));
     }
 
-    // -------------------------------------------------------------------------
     // kit.require 能力查询测试
-    // -------------------------------------------------------------------------
 
     #[cfg(feature = "http")]
     #[tokio::test]
@@ -551,9 +550,7 @@ mod tests {
         let _ = logger;
     }
 
-    // -------------------------------------------------------------------------
     // FromRef 测试（http feature）
-    // -------------------------------------------------------------------------
 
     #[cfg(feature = "http")]
     #[tokio::test]
@@ -640,9 +637,7 @@ mod tests {
         assert!(Arc::ptr_eq(&limiter, &kit_limiter));
     }
 
-    // -------------------------------------------------------------------------
     // FromRef panic 测试（None 能力触发 panic）
-    // -------------------------------------------------------------------------
 
     #[cfg(feature = "http")]
     #[tokio::test]
@@ -670,9 +665,7 @@ mod tests {
         );
     }
 
-    // -------------------------------------------------------------------------
     // VecboostState Send + Sync 编译期断言
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_vecboost_state_is_send_sync() {
@@ -686,9 +679,7 @@ mod tests {
         assert_clone::<VecboostState>();
     }
 
-    // -------------------------------------------------------------------------
     // Health check + graceful shutdown integration tests
-    // -------------------------------------------------------------------------
 
     /// Verify health checks return Healthy for all registered modules.
     #[cfg(feature = "http")]
@@ -738,20 +729,20 @@ mod tests {
     #[tokio::test]
     async fn test_kit_shutdown_completes_cleanly() {
         let state = make_app_state().await;
-        // AsyncKit::shutdown_async() awaits async shutdown callbacks (lifecycle modules)
+        // AsyncKit::shutdown_async awaits async shutdown callbacks (lifecycle modules)
         // Should not panic even with async lifecycle modules registered
         state.kit.shutdown_async().await;
     }
 
-    /// VecboostState::new() and kit()
-    /// Verifies that `kit()` returns a reference to the internal `Arc<AsyncKit>`
+    /// VecboostState::new and kit
+    /// Verifies that `kit` returns a reference to the internal `Arc<AsyncKit>`
     /// and that all registered modules are accessible through it.
     #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_vecboost_state_new_and_kit_accessor() {
         let state = make_app_state().await;
         let kit_ref = state.kit();
-        // kit() returns &Arc<AsyncKit>; only `state` owns the Arc → strong_count == 1
+        // kit returns &Arc<AsyncKit>; only `state` owns the Arc → strong_count == 1
         assert_eq!(Arc::strong_count(kit_ref), 1);
         assert!(kit_ref.contains::<EmbeddingModule>());
         assert!(kit_ref.contains::<RerankModule>());
@@ -759,7 +750,7 @@ mod tests {
         assert!(kit_ref.contains::<AuditModule>());
     }
 
-    /// VecboostState::new() constructs from Arc<AsyncKit>
+    /// VecboostState::new constructs from Arc<AsyncKit>
     #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_vecboost_state_constructor() {

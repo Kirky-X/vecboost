@@ -16,7 +16,7 @@ def test_r009_rate_limit_triggers_429(rl_strict_server):
     port = rl_strict_server["port"]
     codes = []
     for _ in range(10):
-        st, _ = http_post(port, "/api/1/embed", {"text": "限流触发探测"})
+        st, _ = http_post(port, "/api/v1/embed", {"text": "限流触发探测"})
         codes.append(st)
     assert 429 in codes, f"10 次请求未触发 429: {codes}"
     # 注：不断言"首批部分成功"——health 探活轮询同样消耗 6/min 配额，属时序竞争
@@ -27,7 +27,7 @@ def test_r009_whitelist_bypass(rl_pass_server):
     port = rl_pass_server["port"]
     codes = []
     for _ in range(10):
-        st, _ = http_post(port, "/api/1/embed", {"text": "白名单直通探测"})
+        st, _ = http_post(port, "/api/v1/embed", {"text": "白名单直通探测"})
         codes.append(st)
     assert all(c == 200 for c in codes), f"白名单 IP 被限流: {codes}"
 
@@ -36,7 +36,7 @@ def test_r009_rate_limit_audit_event(rl_strict_server):
     """R-auth-009c: 触发限流后审计日志含限流事件。"""
     codes = []
     for _ in range(3):
-        st, _ = http_post(rl_strict_server["port"], "/api/1/embed", {"text": "审计前置"})
+        st, _ = http_post(rl_strict_server["port"], "/api/v1/embed", {"text": "审计前置"})
         codes.append(st)
     f = RUN_DIR / "rl_strict" / "logs" / "audit.log"
     assert f.exists(), f"审计日志不存在: {f}"
@@ -55,10 +55,10 @@ def test_r010_path_traversal_rejected(base_server):
     """R-auth-010a: 路径遍历——文件嵌入与模型切换的恶意路径。"""
     port = base_server["port"]
     cases = [
-        ("/api/1/embed/file", {"path": "../../Cargo.toml"}),
-        ("/api/1/embed/file", {"path": "/etc/passwd"}),
-        ("/api/1/model/switch", {"model_name": "x", "model_path": "../../etc"}),
-        ("/api/1/model/switch", {"model_name": "../../etc/passwd"}),
+        ("/api/v1/embed/file", {"path": "../../Cargo.toml"}),
+        ("/api/v1/embed/file", {"path": "/etc/passwd"}),
+        ("/api/v1/model/switch", {"model_name": "x", "model_path": "../../etc"}),
+        ("/api/v1/model/switch", {"model_name": "../../etc/passwd"}),
     ]
     for path, payload in cases:
         st, body = http_post(port, path, payload)
@@ -71,11 +71,11 @@ def test_r010_error_response_sanitized(base_server):
     """R-auth-010b: 错误响应不含源码路径/内部绝对路径/密钥。"""
     port = base_server["port"]
     probes = []
-    st, body = http_post(port, "/api/1/model/switch", {"model_name": "BAAI/nope-xyz"})
+    st, body = http_post(port, "/api/v1/model/switch", {"model_name": "BAAI/nope-xyz"})
     probes.append(str(body))
-    st2, body2 = http_post(port, "/api/1/embed/file", {"path": "../../nonexistent"})
+    st2, body2 = http_post(port, "/api/v1/embed/file", {"path": "../../nonexistent"})
     probes.append(str(body2))
-    st3, body3 = http_post(port, "/api/1/embed", raw_body="{bad json")
+    st3, body3 = http_post(port, "/api/v1/embed", raw_body="{bad json")
     probes.append(str(body3))
     joined = " ".join(probes).lower()
     assert "/home/kirky" not in joined, f"错误响应泄露家目录路径: {joined[:200]}"

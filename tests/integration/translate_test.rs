@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! Translate 端点 HTTP 集成测试 — /api/1/translate
+//! Translate 端点 HTTP 集成测试 — /api/v1/translate
 //!
 //! 沿用 detect_test 的真实服务器子进程模式。翻译路由表在启动期由
 //! [translation].pairs 急切构建：真机用例消费本地 opus-mt bundle（缺席
@@ -274,7 +274,7 @@ async fn translate_wire_shape_and_real_translation() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/translate",
+        "/api/v1/translate",
         Some(&translate_body(Some("en"), "zh", "Hello, my dog is cute")),
         None,
         None,
@@ -306,7 +306,7 @@ async fn translate_wire_shape_and_real_translation() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/translate",
+        "/api/v1/translate",
         Some(&translate_body(
             None,
             "zh",
@@ -353,7 +353,7 @@ async fn translate_unconfigured_pair_400_with_pairs_list() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/translate",
+        "/api/v1/translate",
         Some(&translate_body(Some("en"), "fr", "bonjour")),
         None,
         None,
@@ -376,7 +376,7 @@ async fn translate_zero_config_400_not_configured() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/translate",
+        "/api/v1/translate",
         Some(&translate_body(Some("en"), "zh", "hello")),
         None,
         Some("en"),
@@ -415,7 +415,7 @@ async fn translate_over_budget_400() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/translate",
+        "/api/v1/translate",
         Some(&translate_body(Some("en"), "zh", long_text.trim())),
         None,
         Some("en"),
@@ -452,7 +452,7 @@ async fn translate_unreliable_auto_detection_400() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/translate",
+        "/api/v1/translate",
         Some(&translate_body(None, "zh", "1234567890")),
         None,
         Some("en"),
@@ -491,7 +491,7 @@ async fn translate_unauthenticated_returns_401() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/translate",
+        "/api/v1/translate",
         Some(&translate_body(Some("en"), "zh", "hello")),
         None,
         None,
@@ -502,7 +502,7 @@ async fn translate_unauthenticated_returns_401() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/translate",
+        "/api/v1/translate",
         Some(&translate_body(Some("en"), "zh", "hello")),
         Some("not-a-real-token"),
         None,
@@ -513,7 +513,7 @@ async fn translate_unauthenticated_returns_401() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/auth/login",
+        "/api/v1/auth/login",
         Some(&json!({"username": "admin", "password": ADMIN_PASS}).to_string()),
         None,
         None,
@@ -525,7 +525,7 @@ async fn translate_unauthenticated_returns_401() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/translate",
+        "/api/v1/translate",
         Some(&translate_body(Some("en"), "zh", "hello")),
         Some(&token),
         None,
@@ -558,7 +558,7 @@ async fn translate_rate_limit_returns_429_with_headers() {
         let (status, headers, _body) = http_request_full(
             server.http_port,
             "POST",
-            "/api/1/translate",
+            "/api/v1/translate",
             Some(&translate_body(Some("en"), "zh", "hello")),
             None,
             None,

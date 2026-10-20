@@ -375,6 +375,14 @@ pub(crate) fn candle_not_compiled_error() -> crate::error::VecboostError {
 ///
 /// 引擎侧 `PoolingMode::Auto` 一律在构造期经本函数解析为具体模式，
 /// 运行期不得再遇 Auto。
+///
+/// 仅引擎 feature 会调用本函数；`default-features = false` 的 library/examples
+/// 构建（如 examples crate 只透传 http/auth/cli/grpc/db/sqlite）需豁免
+/// `-D dead-code`，有任一引擎时豁免自动失效。
+#[cfg_attr(
+    not(any(feature = "onnx", feature = "candle", feature = "quantized-gguf")),
+    allow(dead_code)
+)]
 pub(crate) fn infer_pooling_mode(model_name: &str) -> crate::config::model::PoolingMode {
     use crate::config::model::PoolingMode;
     let lower = model_name.to_lowercase();

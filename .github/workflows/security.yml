@@ -1,0 +1,39 @@
+# 安全检查补充 workflow
+# 只包含本仓现有 CI 尚未覆盖的检查，不改动既有 workflow，避免与已有 job 重复。
+# 依赖来源审计由 ci.yml 的 Deny 作业（cargo-deny + deny.toml）承担，
+# 故此处不引入 cargo-vet：cargo-vet 需要 supply-chain 配置，本仓未提供。
+name: security
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # gitleaks 按 --all 扫描全量提交历史，浅克隆会让历史外的提交不可见。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: actionlint
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          # shellcheck 子检查降到 error 级：YAML 语法/表达式错误仍阻断，
+          # 风格级（SC2086/SC2034 等）不阻断，避免打断既有流水线。
+          args: -color -shellcheck=error
+      - name: zizmor (GitHub Actions 安全审计)
+        # 首轮为非阻断基线：既有 workflow 存在一批 unpinned-uses / cache-poisoning /
+        # template-injection 发现，阻断式会直接打断现有流水线。backlog 清零后
+        # 把 continue-on-error 删掉即可转为阻断。
+        continue-on-error: true
+        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+      - name: gitleaks 密钥扫描
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false

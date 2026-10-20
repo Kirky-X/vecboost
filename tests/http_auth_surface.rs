@@ -242,6 +242,18 @@ fn auth_login_authorize_refresh_logout() {
         "登出后的 token 必须失效"
     );
 
+    // 优雅终止（SIGTERM）：让子进程走过 shutdown 钩子并 flush 覆盖率计数器。
+    let _ = Command::new("kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if child.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);

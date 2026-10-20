@@ -1315,11 +1315,25 @@ mod db_tests {
     use super::*;
     use crate::audit::AuditConfig;
 
+    /// `sqlite::memory:` 每个连接是独立库；单连接池保证建表与查询同源，
+    /// 默认多连接池在并行用例下偶发 `no such table: audit_logs`。
+    async fn memory_pool() -> crate::db::DbPool {
+        crate::db::DbPool::with_config(dbnexus::DbConfig {
+            url: "sqlite::memory:".to_string(),
+            pool_config: dbnexus::PoolConfig {
+                max_connections: 1,
+                min_connections: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("Failed to create db pool")
+    }
+
     #[tokio::test]
     async fn test_audit_logger_with_db() {
-        let pool = crate::db::DbPool::new("sqlite::memory:")
-            .await
-            .expect("Failed to create db pool");
+        let pool = memory_pool().await;
         crate::db::init_schema(&pool)
             .await
             .expect("Failed to init schema");
@@ -1345,9 +1359,7 @@ mod db_tests {
             enabled: false,
             ..Default::default()
         };
-        let pool = crate::db::DbPool::new("sqlite::memory:")
-            .await
-            .expect("Failed to create db pool");
+        let pool = memory_pool().await;
 
         let logger = AuditLogger::new_with_db(config, pool);
         assert!(!logger.is_enabled());

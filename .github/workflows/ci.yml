@@ -183,6 +183,11 @@ jobs:
             tar -xzf /tmp/ort.tgz -C "$HOME/.cache/vecboost-ci"
           fi
           echo "ORT_DYLIB_PATH=$ORT_DIR/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+          # tests/http_surface.rs 等以 `ORT_DYLIB_PATH` 覆盖为仓库默认落位
+          # `3rdparty/onnxruntime/libonnxruntime.so`（本地开发口径）；CI 缺该落位
+          # 时这些用例以 ORT dylib 加载 panic 退出，故软链预置 ORT 到该路径。
+          mkdir -p 3rdparty/onnxruntime
+          ln -sf "$ORT_DIR/lib/libonnxruntime.so" 3rdparty/onnxruntime/libonnxruntime.so
       - name: Provision ONNX models
         run: |
           set -euo pipefail

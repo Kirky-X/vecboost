@@ -24,7 +24,7 @@ WORKDIR /build
 # 安装构建依赖
 # make:tikv-jemalloc-sys 的 configure 需要;curl:utoipa-swagger-ui build.rs
 # 经系统 curl 下载 swagger-ui 资源(slim 镜像均不预装)
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     ca-certificates \
@@ -37,14 +37,14 @@ RUN apt-get update && apt-get install -y \
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY examples/Cargo.toml ./examples/
 
-# 根清单显式声明 4 个 [[bench]] 目标(harness=false),清单解析要求文件存在:
+# 根清单声明的 [[bench]] 目标(harness=false)在清单解析时要求文件存在:
 # stub 阶段以同名空 main 占位(真实 bench 不参与 -p vecboost 构建,仅占位);
 # 根清单另声明 translate_ab example 与 translate_bench bench,同样占位
 RUN mkdir -p src examples/src benches && \
     echo "fn main() {}" > src/main.rs && \
     echo "fn main() {}" > examples/src/main.rs && \
     echo "fn main() {}" > examples/translate_ab.rs && \
-    for b in similarity_bench batch_scheduling_bench semantic_cache_bench embed_throughput_bench translate_bench; do \
+    for b in similarity_bench batch_scheduling_bench semantic_cache_bench embed_throughput_bench rerank_bench translate_bench; do \
         echo "fn main() {}" > "benches/$b.rs"; \
     done && \
     cargo build --release -p vecboost && \

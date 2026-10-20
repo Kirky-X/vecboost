@@ -208,9 +208,7 @@ impl BuildObserver for LoggingObserver {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helper functions — extracted from main() to reduce cyclomatic complexity
-// ---------------------------------------------------------------------------
+// Helper functions — extracted from main to reduce cyclomatic complexity
 
 #[cfg(feature = "db")]
 async fn init_db_pool(
@@ -349,7 +347,7 @@ fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelC
     // 决策头与 onnx DecisionPipeline 两路均消费）；candle embedding 路径与
     // onnx HF 拉取分支均无消费者，配置值会静默 no-op——沿用 use_gpu 无
     // feature 回退告警惯例，启动期显性提示。本地判定与 onnx_engine
-    // with_device 同口径（exists() && is_dir()）。
+    // with_device 同口径（exists && is_dir）。
     if config.model.tokenizer_path.is_some()
         && tokenizer_path_is_noop(&engine_type, &config.model.task, &model_path)
     {
@@ -393,7 +391,7 @@ fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelC
 /// explicit 路径，按 engine_type）与决策管线（工厂 task=decision 分派臂
 /// 按 engine_type 选后端——candle 原生决策头与 onnx `DecisionPipeline`
 /// 两路的 explicit 路径均消费）；本地判定与 `onnx_engine` 的
-/// `with_device` 同口径（`exists() && is_dir()`）。其余组合（candle
+/// `with_device` 同口径（`exists && is_dir`）。其余组合（candle
 /// embedding、onnx HF 拉取分支、任何非本地路径）不读该字段。
 /// `[model.checkpoints]` 启动 fail-fast（沿用既有装配口径：配置错误拒绝
 /// 启动而非静默忽略，对齐 [semantic_cache].comparison_mode 校验位）：
@@ -549,10 +547,14 @@ async fn attach_model_manager(
 /// server 模式注入语义缓存（[semantic_cache] enabled=true 时；默认 false
 /// 行为不变）。comparison_mode 非法值启动报错，不静默回退；取值本身已
 /// 废弃不消费（解析保留兼容，非法值仍启动报错）。
-fn attach_semantic_cache(service: EmbeddingService, config: &VecboostConfig) -> EmbeddingService {
+async fn attach_semantic_cache(
+    service: EmbeddingService,
+    config: &VecboostConfig,
+) -> anyhow::Result<EmbeddingService> {
     if !config.semantic_cache.enabled {
-        return service;
+        return Ok(service);
     }
+    config.semantic_cache.validate_backend()?;
     let mode: vecboost::ComparisonMode = config
         .semantic_cache
         .comparison_mode
@@ -590,14 +592,22 @@ fn attach_semantic_cache(service: EmbeddingService, config: &VecboostConfig) -> 
             ])
         )
     );
-    let semantic = Arc::new(
-        vecboost::SemanticCache::with_capacity(
-            config.semantic_cache.similarity_threshold,
-            config.semantic_cache.capacity,
-        )
-        .with_fuzzy_threshold(config.semantic_cache.fuzzy_threshold),
-    );
-    service.with_semantic_cache(semantic)
+    #[cfg_attr(not(feature = "distributed-redis"), allow(unused_mut))]
+    let mut semantic = vecboost::SemanticCache::with_capacity(
+        config.semantic_cache.similarity_threshold,
+        config.semantic_cache.capacity,
+    )
+    .with_fuzzy_threshold(config.semantic_cache.fuzzy_threshold);
+    #[cfg(feature = "distributed-redis")]
+    if config.semantic_cache.backend == vecboost::config::app::CacheBackendKind::Redis {
+        let url = config
+            .semantic_cache
+            .redis_url
+            .as_deref()
+            .unwrap_or_default();
+        semantic = semantic.with_redis_index_url(url).await?;
+    }
+    Ok(service.with_semantic_cache(Arc::new(semantic)))
 }
 
 /// 转录服务装配：`[transcribe] enabled=true` 时经公开门面
@@ -678,7 +688,7 @@ fn build_translate_pairs(
 
     #[cfg(feature = "onnx")]
     for (index, pair) in config.translation.pairs.iter().enumerate() {
-        // 缺省值取 TranslationParams::default() 单一事实源（评审 ARC-2：
+        // 缺省值取 TranslationParams::default 单一事实源（评审 ARC-2：
         // 禁止 512 字面量第二处来源，default 变更时自动联动）
         let defaults = vecboost::config::model::TranslationParams::default();
         let mut translation_params = vecboost::config::model::TranslationParams::new(
@@ -807,7 +817,7 @@ async fn init_engine_and_services(
         .await;
     let service = service.with_model_manager(Arc::new(model_manager));
 
-    let service = attach_semantic_cache(service, config);
+    let service = attach_semantic_cache(service, config).await?;
 
     // [model.checkpoints] 预设表注入（MCP/CLI/server 三模式共用——switch_model
     // 按名命中预设时应用参数；查表消费唯一入口为 EmbeddingService 持有的该表）
@@ -1123,7 +1133,7 @@ async fn run_cli_command(
             })?;
 
         // 根因修复：HandlerFn 返回序列化后的 serde_json::Value，
-        // 打印职责在调用方（sdforge 自带的 execute() 未被 vecboost 使用）。
+        // 打印职责在调用方（sdforge 自带的 execute 未被 vecboost 使用）。
         // 旧实现直接丢弃返回值，导致 CLI 子命令"退出码 0 但无任何结果输出"。
         let value = (handler.handler)(args_map, None).await.map_err(|e| {
             anyhow::anyhow!(
@@ -1312,7 +1322,7 @@ async fn init_auth(
 
         let garrison_config = map_auth_config_to_garrison(&config.auth);
 
-        // garrison 0.9：init(dao, config, interface) → builder 链（build() 启动全局单例
+        // garrison 0.9：init(dao, config, interface) → builder 链（build 启动全局单例
         // 后台 task）；firewall-* feature 启用时 builder 自动注入防火墙检查钩子
         garrison::prelude::GarrisonManager::builder()
             .dao(dao)
@@ -1405,7 +1415,7 @@ fn apply_auto_plan(config: &VecboostConfig, worker_config: &mut vecboost::pipeli
     let mut bw = worker_config.batch_wait_ms;
     vecboost::planner::apply_plan(&mut wt, &mut bs, &mut bw, &hw_plan, &explicit);
     // worker_threads 语义：plan 值为 tokio/rayon 级线程建议，此处仅日志；
-    // 实际 runtime 线程数在 main() 启动时已按 确定（显式优先）。
+    // 实际 runtime 线程数在 main 启动时已按 确定（显式优先）。
     log::info!(
         "{}",
         vecboost::i18n::tr_with_args(
@@ -1485,7 +1495,7 @@ async fn init_pipeline(
             .with_decision_service(decision_service.clone()),
         );
 
-        // start() = spawn min_workers + 启动扩缩容 monitor（
+        // start = spawn min_workers + 启动扩缩容 monitor（
         // 此前只 spawn min_workers，max_workers/scale 阈值全是死配置）
         if let Err(e) = worker_manager.start().await {
             log::error!(
@@ -1677,7 +1687,7 @@ fn main() {
         .build()
         .expect("failed to build tokio runtime");
     let result = rt.block_on(app_main());
-    // 修复：常驻 spawn_blocking 任务（inklog 定时器/写入线程等）
+    // 常驻 spawn_blocking 任务（inklog 定时器/写入线程等）
     // 会让 Runtime::drop 的 BlockingPool::shutdown 无限等待，导致任何退出路径
     // （启动配置错误 bail / SIGTERM 优雅关闭）挂死、最终被 SIGKILL(137)。
     // 显式 shutdown_timeout 保证所有退出路径都能在超时后落地。
@@ -1784,7 +1794,7 @@ async fn app_main() -> anyhow::Result<()> {
     #[cfg(not(feature = "cli"))]
     let cli_mode = false;
 
-    // 修复：MCP stdio 模式下 stdout 只能承载 JSON-RPC 协议消息，
+    // MCP stdio 模式下 stdout 只能承载 JSON-RPC 协议消息，
     // inklog 控制台日志会污染协议流导致客户端解析失败 —— 与 CLI 模式同样关闭控制台输出。
     #[cfg(feature = "mcp")]
     let mcp_mode = std::env::args().any(|a| a == "--mcp");
@@ -2402,7 +2412,7 @@ async fn assemble_and_serve_http(
     // VecboostState 仅持有 kit 单字段，所有能力通过 kit.require 查询
     let app_state = VecboostState::new(kit);
 
-    // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state().kit.require 访问）
+    // 注入 state 到 api 模块（统一入口：所有 forge handler 通过 state.kit.require 访问）
     vecboost::api::init_state(app_state.clone()).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let app = build_http_router(config).await?;
@@ -2454,7 +2464,7 @@ fn apply_request_middlewares(app: axum::Router, app_state: crate::VecboostState)
 }
 
 /// auth 中间件栈：全局限流（内部按 RateLimitEnabled 配置决定生效）→
-/// 认证（路径白名单放行 /health、/api/1/auth/login、/api/1/auth/refresh）→
+/// 认证（路径白名单放行 /health、/api/v1/auth/login、/api/v1/auth/refresh）→
 /// CSRF（auth+csrf 双启用时，garrison Origin+Token 双重校验）。
 #[cfg(feature = "auth")]
 fn apply_auth_middlewares(
@@ -2473,7 +2483,7 @@ fn apply_auth_middlewares(
     ));
 
     // auth_middleware：应用到所有路由，内部用路径白名单放行公开端点
-    // (/health, /api/1/auth/login, /api/1/auth/refresh)
+    // (/health, /api/v1/auth/login, /api/v1/auth/refresh)
     let app = if config.auth.enabled {
         app.layer(from_fn_with_state(
             app_state.clone(),
@@ -2622,9 +2632,9 @@ fn apply_transport_layers(app: axum::Router, config: &VecboostConfig) -> axum::R
 async fn build_http_router(config: &VecboostConfig) -> anyhow::Result<axum::Router> {
     // app_state 由调用方保证已 init_state(所有能力经 kit.require 获取)
     let app_state = vecboost::api::state().map_err(|e| anyhow::anyhow!("{e}"))?;
-    // 版本前缀:路由注册为 /api/1/*(forge version=1)。
-    // 实施期决策:不启用 build_with_redirect —— 它会把 /api/1/* 重定向到
-    // 不存在的 /api/v1/*,破坏全部 API 路由(实测 301)。
+    // 版本前缀：路由由 `#[forge(version = "v1")]` 统一注入 `/api/v1/*`。
+    // 不启用 build_with_redirect：版本化路径已是实际注册路径，未版本化的
+    // `/api/*` 无兜底需求，避免额外 301 与中间件开销。
     let app = sdforge::http::build();
 
     // Swagger UI(/api-docs/openapi.json + /swagger-ui/) 与 ReDoc(/redoc)：
@@ -2745,7 +2755,7 @@ fn register_shutdown_hooks(
             .register_hook(ShutdownPhase::CloseConnections, move || {
                 Box::pin(async move {
                     // Manually invoke async on_shutdown for lifecycle modules
-                    // (AsyncKit::shutdown() is sync and cannot call async fns)
+                    // (AsyncKit::shutdown is sync and cannot call async fns)
                     if let Ok(audit_cap) = kit_for_shutdown.require::<AuditModule>() {
                         <AuditModule as trait_kit::prelude::AsyncLifecycle>::on_shutdown(
                             &audit_cap,
@@ -2807,7 +2817,7 @@ async fn spawn_grpc_server(
     let grpc_addr = format!("{}:{}", grpc_host, grpc_port);
 
     // Secure default: require auth unless explicitly disabled via config.
-    // config.server.grpc_require_auth defaults to Some(true) in ServerConfig::default().
+    // config.server.grpc_require_auth defaults to Some(true) in ServerConfig::default.
     let require_auth = config.server.grpc_require_auth.unwrap_or(true);
 
     // garrison 0.9 吸收：gRPC 鉴权由 GarrisonGrpcAuthLayer 承担 —— check_login 全异步
@@ -3589,5 +3599,109 @@ mod tests {
             redis_endpoint_label(Some("redis://user:p?x#h@host:6379")),
             "redis://host:6379"
         );
+    }
+
+    // ── 硬件探测与启动规划 ──
+
+    #[test]
+    fn model_dir_size_counts_nested_files_and_missing_is_none() {
+        let dir = std::env::temp_dir().join(format!("vecboost-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).expect("mkdir");
+        std::fs::write(dir.join("a.bin"), vec![0u8; 1024 * 1024]).expect("write a");
+        std::fs::write(dir.join("sub/b.bin"), vec![0u8; 512 * 1024]).expect("write b");
+        assert_eq!(model_dir_size_mb(dir.to_str().expect("utf8")), Some(1));
+        assert_eq!(model_dir_size_mb("/definitely/missing"), None);
+        let empty = dir.join("empty");
+        std::fs::create_dir_all(&empty).expect("mkdir empty");
+        assert_eq!(model_dir_size_mb(empty.to_str().expect("utf8")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gather_probes_reports_logical_cores_without_gpu() {
+        let config = VecboostConfig::default();
+        let probes = gather_probes(&config);
+        assert!(probes.logical_cores.unwrap_or(0) >= 1);
+        assert!(probes.gpu_present.is_none(), "bin 无 GPU 探针路径");
+        assert!(probes.model_resident_mb.is_none(), "缺省无 model_path");
+    }
+
+    #[test]
+    fn apply_auto_plan_is_noop_when_disabled() {
+        let config = VecboostConfig::default();
+        assert!(!config.device.auto_plan, "缺省关闭硬件规划");
+        let mut worker = vecboost::pipeline::WorkerConfig::default();
+        let before = (worker.max_batch_size, worker.batch_wait_ms);
+        apply_auto_plan(&config, &mut worker);
+        assert_eq!((worker.max_batch_size, worker.batch_wait_ms), before);
+    }
+
+    #[test]
+    fn apply_auto_plan_fills_batch_bounds_when_enabled() {
+        let mut config = VecboostConfig::default();
+        config.device.auto_plan = true;
+        let mut worker = vecboost::pipeline::WorkerConfig::default();
+        apply_auto_plan(&config, &mut worker);
+        assert!(worker.max_batch_size >= 1, "规划结果必须为正批次上限");
+        assert!(worker.batch_wait_ms <= 200, "拼批窗口必须在合理区间");
+    }
+
+    #[test]
+    fn engine_config_rejects_unknown_engine_type() {
+        let mut config = VecboostConfig::default();
+        config.model.engine_type = Some("bogus".to_string());
+        let err = resolve_engine_model_config(&config).unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[cfg(not(feature = "candle"))]
+    #[test]
+    fn engine_config_rejects_candle_when_not_compiled() {
+        let mut config = VecboostConfig::default();
+        config.model.engine_type = Some("candle".to_string());
+        assert!(resolve_engine_model_config(&config).is_err());
+    }
+
+    #[test]
+    fn engine_config_accepts_explicit_onnx() {
+        let mut config = VecboostConfig::default();
+        config.model.engine_type = Some("onnx".to_string());
+        let resolved = resolve_engine_model_config(&config).expect("onnx 显式选择可用");
+        assert_eq!(resolved.engine_type, EngineType::Onnx);
+    }
+
+    #[test]
+    fn tokenizer_path_noop_matrix() {
+        let dir = std::env::temp_dir().join(format!("vecboost-tok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let missing = std::path::PathBuf::from("/definitely/missing");
+        assert!(tokenizer_path_is_noop(
+            &EngineType::Onnx,
+            &ModelTask::Embedding,
+            &missing
+        ));
+        assert!(!tokenizer_path_is_noop(
+            &EngineType::Onnx,
+            &ModelTask::Embedding,
+            &dir
+        ));
+        assert!(tokenizer_path_is_noop(
+            &EngineType::Candle,
+            &ModelTask::Embedding,
+            &dir
+        ));
+        assert!(!tokenizer_path_is_noop(
+            &EngineType::Onnx,
+            &ModelTask::Decision,
+            &dir
+        ));
+        assert!(tokenizer_path_is_noop(
+            &EngineType::Onnx,
+            &ModelTask::Decision,
+            &missing
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

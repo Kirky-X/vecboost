@@ -347,7 +347,7 @@ impl SmartGpuMemoryManager {
         }
 
         let mut sorted = data.to_vec();
-        // total_cmp：全序比较，NaN 不会 panic（替代 partial_cmp().unwrap()）
+        // total_cmp：全序比较，NaN 不会 panic（替代 partial_cmp.unwrap）
         sorted.sort_by(f64::total_cmp);
 
         let index = (percentile * (sorted.len() - 1) as f64).round() as usize;
@@ -796,10 +796,8 @@ mod tests {
         assert_eq!(stats.current_batch_size, 16);
     }
 
-    // =========================================================================
     // 补缺口：日志支路（register/insufficient/increase/decrease 参数行）、
     // performance_history 100 条封顶裁剪
-    // =========================================================================
 
     /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
     /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。

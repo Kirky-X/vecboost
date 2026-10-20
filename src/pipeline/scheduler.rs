@@ -798,9 +798,7 @@ mod tests {
         assert_eq!(result, Priority::Critical);
     }
 
-    // =========================================================================
     // ServiceRequest::Rerank routing tests
-    // =========================================================================
 
     /// Mock engine that supports rerank with deterministic scores
     struct RerankCapableEngine;
@@ -992,9 +990,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
     // ServiceRequest::Decision routing tests
-    // =========================================================================
 
     /// 固定作答的 mock 决策引擎（同构 service/decision.rs tests 的 mock，
     /// noul 题型确定性作答，覆盖 supports_task(Decision) 与 decide 分发契约）

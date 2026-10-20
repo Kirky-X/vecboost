@@ -650,7 +650,6 @@ mod tests {
             samples.push_back(recent_sample);
         }
 
-        // 添加新样本
         let fresh_sample = PerformanceMetrics::new(Duration::from_millis(50), 5, 512, 1024, 1, 5);
         collector.add_performance_sample(fresh_sample).await;
 

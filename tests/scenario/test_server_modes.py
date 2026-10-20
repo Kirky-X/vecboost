@@ -171,7 +171,7 @@ def test_r003_grpc_authenticated_embed():
                      make_config(hport, model_path=M1_PATH, auth=True, grpc=True, grpc_port=gport),
                      env_extra=AUTH_ENV, timeout=60)
     s["grpc_port"] = gport
-    st, body = http_post(s["port"], "/api/1/auth/login",
+    st, body = http_post(s["port"], "/api/v1/auth/login",
                          {"username": "admin", "password": ADMIN_PASS})
     if st != 200:
         stop_server(s)
@@ -201,7 +201,7 @@ def test_r002_concurrent_embeds(base_server):
     port = base_server["port"]
 
     def one(i):
-        st, body = http_post(port, "/api/1/embed", {"text": f"并发 {i} concurrency {i}"})
+        st, body = http_post(port, "/api/v1/embed", {"text": f"并发 {i} concurrency {i}"})
         return st, find_vector(body) is not None
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:

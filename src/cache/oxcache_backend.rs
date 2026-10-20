@@ -40,7 +40,7 @@ struct PersistInner {
 /// `get_or_insert`/`clear`/`warm_up`（`remove`/`len`/`is_empty` 仅测试消费）。
 ///
 /// 内部集成:
-/// - **Bloom filter**: 负查询过滤,FPR=0.01,`get()` 时先查 bloom,
+/// - **Bloom filter**: 负查询过滤,FPR=0.01,`get` 时先查 bloom,
 ///   miss 则跳过底层缓存查询。
 /// - **Bloom 上限重建**: 插入计数达到 [`BLOOM_REBUILD_THRESHOLD`]
 ///   时重建 bloom filter,防止无界增长导致负过滤失效与内存泄漏。
@@ -159,7 +159,7 @@ impl OxCacheBackend {
     ///
     /// `model_tag` 为模型指纹（回放时不匹配的记录被弃用）；`max_bytes`
     /// 为紧凑化阈值。构造时回放已有文件计数 nrec；内存重建需调用方在
-    /// 启动时显式 `load_persisted().await`（顺序回放重建缓存）。
+    /// 启动时显式 `load_persisted.await`（顺序回放重建缓存）。
     pub fn with_persist(
         capacity: usize,
         path: std::path::PathBuf,
@@ -771,13 +771,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_remove_returns_false_for_missing() {
         let cache = OxCacheBackend::new(16);
-        // oxcache delete 对不存在的 key 返回 Ok(()),因此这里仅验证不 panic
         let _ = cache.remove("missing").await;
     }
 
-    // ========================================================================
     // Bloom filter integration tests
-    // ========================================================================
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bloom_filter_miss_skips_backend_lookup() {
@@ -806,7 +803,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bloom_filter_cleared_with_cache() {
-        // 验证 clear() 同时重置 bloom filter
+        // 验证 clear 同时重置 bloom filter
         let cache = OxCacheBackend::new(100);
         cache.put("a", vec![1.0]).await;
         cache.put("b", vec![2.0]).await;
@@ -818,13 +815,11 @@ mod tests {
         assert!(!bloom.contains("b"));
     }
 
-    // ========================================================================
     // Compression roundtrip tests
-    // ========================================================================
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_compression_roundtrip_preserves_values() {
-        // 历史上的 flate2 压缩路径已移除（净负收益，见 get() 处注释），现直接存取
+        // 历史上的 flate2 压缩路径已移除（净负收益，见 get 处注释），现直接存取
         // 原始 Vec<f32>；本测试验证大向量往返后逐位一致。
         let cache = OxCacheBackend::new(16);
         let original: Vec<f32> = (0..100).map(|i| (i as f32) * 0.01).collect();
@@ -857,9 +852,7 @@ mod tests {
         assert_eq!(got, Some(small));
     }
 
-    // ========================================================================
     // Baseline: exact-match cache hit rate under semantic similarity
-    // ========================================================================
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_cache_hit_rate_under_semantic_similarity() {
@@ -930,9 +923,7 @@ mod tests {
         // 注意：原始文本的命中依赖 moka 异步索引，这里仅验证改写文本全部 miss
     }
 
-    // ========================================================================
     // WAL 持久层测试
-    // ========================================================================
 
     fn persist_backend(
         dir: &std::path::Path,
@@ -1104,6 +1095,7 @@ mod tests {
 
     /// oxcache 拒绝一切非 TLS（`redis://`）连接，防生产误用；本地测试
     /// Redis 无 TLS，显式走开发逃生阀（单次写入，`Once` 跨测试线程同步）。
+    #[cfg(feature = "distributed-redis")]
     fn allow_insecure_redis() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
@@ -1167,6 +1159,125 @@ mod tests {
         assert!(
             format!("{err:?}").contains("embedding-cache-redis-init-failed"),
             "unexpected error: {err:?}"
+        );
+    }
+
+    // ── WAL 持久层（with_persist / append / 紧凑化 / clear 截断） ──
+
+    fn wal_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        dir.join(format!("{name}.wal"))
+    }
+
+    #[tokio::test]
+    async fn persist_roundtrip_rebuilds_memory_across_instances() {
+        use super::*;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = wal_path(dir.path(), "roundtrip");
+        {
+            let backend = OxCacheBackend::with_persist(64, path.clone(), 1 << 20, "tag-1".into());
+            backend.put("k1", vec![1.0, 2.0]).await;
+            backend.put("k2", vec![3.0, 4.0]).await;
+            assert_eq!(backend.get("k1").await, Some(vec![1.0, 2.0]));
+        }
+        assert!(path.exists(), "WAL 文件应已创建");
+        assert!(
+            std::fs::metadata(&path).expect("meta").len() > 8,
+            "WAL 应含记录而不只是头部"
+        );
+
+        let reopened = OxCacheBackend::with_persist(64, path.clone(), 1 << 20, "tag-1".into());
+        reopened.load_persisted().await;
+        assert_eq!(reopened.get("k1").await, Some(vec![1.0, 2.0]));
+        assert_eq!(reopened.get("k2").await, Some(vec![3.0, 4.0]));
+
+        // 指纹不符：旧记录不得被复用
+        let other_tag = OxCacheBackend::with_persist(64, path.clone(), 1 << 20, "tag-2".into());
+        other_tag.load_persisted().await;
+        assert!(
+            other_tag.get("k1").await.is_none(),
+            "指纹不符必须弃用旧记录"
+        );
+    }
+
+    #[tokio::test]
+    async fn tiny_max_bytes_triggers_compaction_and_keeps_latest() {
+        use super::*;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = wal_path(dir.path(), "compact");
+        let backend = OxCacheBackend::with_persist(64, path.clone(), 1, "tag-c".into());
+        for i in 0..5u32 {
+            backend.put("same", vec![i as f32]).await;
+        }
+        assert_eq!(backend.get("same").await, Some(vec![4.0]));
+
+        let reopened = OxCacheBackend::with_persist(64, path.clone(), 1 << 20, "tag-c".into());
+        reopened.load_persisted().await;
+        assert_eq!(
+            reopened.get("same").await,
+            Some(vec![4.0]),
+            "紧凑化后仅保留最新快照"
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_truncates_persist_and_remove_updates_index() {
+        use super::*;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = wal_path(dir.path(), "clear");
+        let backend = OxCacheBackend::with_persist(64, path.clone(), 1 << 20, "tag-x".into());
+        backend.put("a", vec![1.0]).await;
+        backend.put("b", vec![2.0]).await;
+        assert!(
+            backend.remove("a").await,
+            "已存在 key 的 remove 应返回 true"
+        );
+        assert!(backend.get("a").await.is_none());
+        // oxcache delete 语义：调用成功即 true（key 不存在亦成功），
+        // 故此处只钉「重复删除不 panic 且仍读不到」，不钉返回值翻转。
+        assert!(backend.remove("a").await);
+        assert!(backend.get("a").await.is_none(), "重复 remove 后仍读不到");
+
+        backend.clear().await.expect("clear 应成功");
+        assert!(backend.get("b").await.is_none());
+        assert_eq!(
+            std::fs::metadata(&path).expect("meta").len(),
+            0,
+            "clear 必须同步截断 WAL，否则重启会复活已清数据"
+        );
+    }
+
+    #[tokio::test]
+    async fn warm_up_populates_memory_and_persists() {
+        use super::*;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = wal_path(dir.path(), "warmup");
+        let backend = OxCacheBackend::with_persist(64, path.clone(), 1 << 20, "tag-w".into());
+        let mut entries = HashMap::new();
+        entries.insert("w1".to_string(), vec![9.0, 9.0]);
+        backend.warm_up(entries).await;
+        assert_eq!(backend.get("w1").await, Some(vec![9.0, 9.0]));
+        // warm_up 走同一 put 路径：既入内存也入 WAL（重启不丢预热结果）
+        assert!(
+            std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > 8,
+            "warm_up 应经 put 落 WAL"
+        );
+        let reopened = OxCacheBackend::with_persist(64, path.clone(), 1 << 20, "tag-w".into());
+        reopened.load_persisted().await;
+        assert_eq!(reopened.get("w1").await, Some(vec![9.0, 9.0]));
+    }
+
+    #[test]
+    fn with_persist_panics_when_wal_uncreatable() {
+        use super::*;
+        crate::i18n::init();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bad = dir.path().join("missing-subdir").join("deep.wal");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            OxCacheBackend::with_persist(8, bad, 1 << 20, "tag".into())
+        }));
+        assert!(
+            outcome.is_err(),
+            "不可创建的 WAL 路径必须显性失败，不得默默降级为无持久"
         );
     }
 }

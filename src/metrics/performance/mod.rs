@@ -594,7 +594,7 @@ mod tests {
         }
     }
 
-    // === calculate_percentile ===
+    // calculate_percentile
 
     #[test]
     fn test_calculate_percentile_empty() {
@@ -637,7 +637,7 @@ mod tests {
         assert_eq!(calculate_percentile(&latencies, 100.0), 20);
     }
 
-    // === generate_test_text ===
+    // generate_test_text
 
     #[test]
     fn test_generate_test_text_zero_length() {
@@ -672,7 +672,7 @@ mod tests {
         assert!(text.matches("lazy").count() > 1);
     }
 
-    // === PerformanceTester::new / engine() ===
+    // PerformanceTester::new / engine
 
     #[test]
     fn test_performance_tester_new() {
@@ -695,7 +695,7 @@ mod tests {
         assert_eq!(result.unwrap().len(), 128);
     }
 
-    // === run_throughput_test ===
+    // run_throughput_test
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_run_throughput_test_success() {
@@ -859,7 +859,7 @@ mod tests {
         assert_eq!(summary.total_inferences, 2);
     }
 
-    // === run_latency_benchmark ===
+    // run_latency_benchmark
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_run_latency_benchmark_success() {
@@ -890,7 +890,7 @@ mod tests {
         assert!(result.std_dev_ms >= 0.0);
     }
 
-    // === run_stress_test ===
+    // run_stress_test
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_run_stress_test_success() {

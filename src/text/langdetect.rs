@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! whatlang 语言检测核心——`/api/1/detect` 端点与翻译 auto 检测共用的唯一事实源。
+//! whatlang 语言检测核心——`/api/v1/detect` 端点与翻译 auto 检测共用的唯一事实源。
 //! 对外语言码契约：ISO 639-1 优先，无 639-1 等价者回退 639-3 码（非 BCP-47，全小写）。
 
 use whatlang::{Detector, Lang};

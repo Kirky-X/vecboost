@@ -5,7 +5,7 @@
 //!
 //! - 物理核检测：Linux 解析 `/sys/.../thread_siblings_list` 去重 SMT；
 //!   macOS 取 `hw.perflevel0.physicalcpu`；Windows 返回 None 落回 num_cpus。
-//! - 数不出就不猜：任何解析失败返回 None，调用方落回 `num_cpus::get()`。
+//! - 数不出就不猜：任何解析失败返回 None，调用方落回 `num_cpus::get`。
 //! - NUMA 仅检测建议，不做进程内绑定。
 
 use std::collections::HashSet;
@@ -77,7 +77,7 @@ pub fn parse_lscpu_sockets(output: &str) -> Option<usize> {
     None
 }
 
-/// 跨平台物理核检测。失败返回 None，调用方落回 `num_cpus::get()`。
+/// 跨平台物理核检测。失败返回 None，调用方落回 `num_cpus::get`。
 pub fn detect_physical_cores() -> Option<usize> {
     if std::env::var("VECBOOST_NO_THREAD_TUNE").as_deref() == Ok("1") {
         return None;

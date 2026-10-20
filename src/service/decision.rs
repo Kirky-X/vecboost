@@ -274,9 +274,7 @@ mod tests {
         }
     }
 
-    // -------------------------------------------------------------------------
     // 全题型全链（choice / score / noul 逐题型断言）
-    // -------------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_process_decision_answers_all_three_qtypes() {
@@ -320,9 +318,7 @@ mod tests {
         }
     }
 
-    // -------------------------------------------------------------------------
     // 校验失败分支（InvalidInput）
-    // -------------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_process_decision_rejects_null_state() {
@@ -431,9 +427,7 @@ mod tests {
         );
     }
 
-    // -------------------------------------------------------------------------
     // 引擎能力门（先门后调）
-    // -------------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_process_decision_unsupported_engine_returns_unsupported_task() {
@@ -453,9 +447,7 @@ mod tests {
         }
     }
 
-    // -------------------------------------------------------------------------
     // 切模型传播（D27 同源缺陷回归钉，仿 rerank.rs replace 传播钉）
-    // -------------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_replace_engine_switches_decision_source() {
@@ -493,7 +485,7 @@ mod tests {
     async fn test_process_decision_engine_panic_maps_to_inference_error() {
         // 本用例断言译文文案（含 `decision inference task`），必须自备 i18n
         // 初始化——此前依赖同批测试先调 init，窄过滤（--lib service）下
-        // tr() 缺初始化返回裸键名而误报失败（2026-10-17 隔离性修复）
+        // tr 缺初始化返回裸键名而误报失败（2026-10-17 隔离性修复）
         crate::i18n::init();
         struct PanickingDecisionEngine;
 

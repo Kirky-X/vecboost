@@ -39,7 +39,6 @@ impl CudaMemoryPool {
             device_id, config.max_memory_mb
         );
 
-        // 初始化 CUDA 驱动
         cudarc::driver::result::init().map_err(|e| format!("CUDA driver init failed: {}", e))?;
 
         let device = cudarc::driver::result::device::get(device_id)
@@ -47,7 +46,7 @@ impl CudaMemoryPool {
 
         // SAFETY: `primary_ctx::retain` increments the reference count of the CUDA
         // primary context for the given device. Safe because:
-        // 1. `device` was obtained from a validated `device_id` via `device::get()`.
+        // 1. `device` was obtained from a validated `device_id` via `device::get`.
         // 2. cudarc manages the context lifetime via RAII; we hold a reference.
         let ctx = unsafe {
             cudarc::driver::result::primary_ctx::retain(device).map_err(|e| {
@@ -193,7 +192,7 @@ impl CudaMemoryPool {
 /// CUDA 设备内存指针
 ///
 /// 持有 `CUdeviceptr`（真实 CUDA 设备指针）。`Drop` 时通过 `cuMemFree_v2` 释放内存，
-/// 确保即使未显式调用 `deallocate()` 也不会泄漏 GPU 内存。
+/// 确保即使未显式调用 `deallocate` 也不会泄漏 GPU 内存。
 #[cfg(feature = "cuda")]
 #[derive(Debug)]
 pub struct CudaMemoryPtr {
@@ -519,9 +518,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
     // 补缺口：非 CUDA 桩的 deallocate no-op 支路
-    // =========================================================================
 
     /// 非 CUDA 构建：deallocate 是显式 no-op，接收桩指针不得 panic。
     #[test]

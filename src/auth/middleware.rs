@@ -17,23 +17,23 @@ use std::sync::Arc;
 /// 认证上下文 — 由 `auth_middleware` 在验证通过后注入到请求扩展中。
 ///
 /// 包含已解析的用户身份和原始 JWT token，下游 handler 通过
-/// `request.extensions().get::<AuthContext>()` 获取。
+/// `request.extensions.get::<AuthContext>` 获取。
 #[derive(Clone)]
 pub struct AuthContext {
     pub user: User,
     pub token: String,
 }
 
-const PUBLIC_PATHS: &[&str] = &["/health", "/api/1/auth/login", "/api/1/auth/refresh"];
+const PUBLIC_PATHS: &[&str] = &["/health", "/api/v1/auth/login", "/api/v1/auth/refresh"];
 
-/// 需要 admin 角色的路径(前缀匹配)。覆盖带 `/api/1` 前缀与 `no_prefix` 两种注册形态。
+/// 需要 admin 角色的路径(前缀匹配)。覆盖带 `/api/v1` 前缀与 `no_prefix` 两种注册形态。
 ///
-/// - `/api/1/model/*`(switch/unload/current/info):模型管理属高危操作,可造成
+/// - `/api/v1/model/*`(switch/unload/current/info):模型管理属高危操作,可造成
 ///   服务不可用或加载任意本地目录,必须限 admin;
-/// - `/api/1/embed/file`:服务端文件读取原语,text_preview 会回传文件内容。
+/// - `/api/v1/embed/file`:服务端文件读取原语,text_preview 会回传文件内容。
 const ADMIN_PATH_PREFIXES: &[&str] = &[
-    "/api/1/model/",
-    "/api/1/embed/file",
+    "/api/v1/model/",
+    "/api/v1/embed/file",
     "/model/",
     "/embed/file",
 ];
@@ -266,7 +266,7 @@ pub async fn optional_auth_middleware(
     next.run(request).await
 }
 
-/// 权限校验中间件 — 委托 garrison `GarrisonUtil::has_permission()`。
+/// 权限校验中间件 — 委托 garrison `GarrisonUtil::has_permission`。
 ///
 /// 需要 `auth_middleware` 先设置 task_local token（已通过 `with_current_token` 完成）。
 pub async fn require_permission_middleware(
@@ -286,7 +286,7 @@ pub async fn require_permission_middleware(
     }
 }
 
-/// 角色校验中间件 — 委托 garrison `GarrisonUtil::has_role()`。
+/// 角色校验中间件 — 委托 garrison `GarrisonUtil::has_role`。
 ///
 /// 需要 `auth_middleware` 先设置 task_local token（已通过 `with_current_token` 完成）。
 pub async fn require_role_middleware(request: Request, next: Next) -> Result<Response, StatusCode> {
@@ -302,9 +302,7 @@ pub async fn require_role_middleware(request: Request, next: Next) -> Result<Res
     }
 }
 
-// ============================================================================
 // Auth Endpoint Rate Limiting Middleware
-// ============================================================================
 
 /// Auth 端点速率限制中间件(vuln-0006 修复)
 ///
@@ -315,7 +313,7 @@ pub async fn require_role_middleware(request: Request, next: Next) -> Result<Res
 /// 通过 limiteron Governor 的 RequestContext 驱动限流。
 /// 白名单内的 IP 跳过限流。限流未启用时直接放行。
 ///
-/// IP 提取复用 `extract_client_ip()`，遵循 `trusted_proxies` XFF 信任边界，
+/// IP 提取复用 `extract_client_ip`，遵循 `trusted_proxies` XFF 信任边界，
 /// 与 `auth_middleware` 保持一致的客户端 IP 解析逻辑。
 pub async fn auth_rate_limit_middleware(
     State(state): State<VecboostState>,
@@ -479,7 +477,7 @@ mod tests {
         h
     }
 
-    // --- trusted_proxies 非空路径 ---
+    // trusted_proxies 非空路径
 
     #[test]
     fn extract_ip_trusted_proxy_with_xff_returns_xff_ip() {
@@ -512,7 +510,7 @@ mod tests {
         assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50))));
     }
 
-    // --- trusted_proxies 为空路径（secure default:XFF 被忽略）---
+    // trusted_proxies 为空路径（secure default:XFF 被忽略）
 
     #[test]
     fn extract_ip_empty_proxies_with_xff_returns_peer_ip() {
@@ -527,20 +525,20 @@ mod tests {
 
     #[test]
     fn requires_admin_matches_model_and_file_paths() {
-        assert!(requires_admin("/api/1/model/switch"));
-        assert!(requires_admin("/api/1/model/unload"));
-        assert!(requires_admin("/api/1/embed/file"));
+        assert!(requires_admin("/api/v1/model/switch"));
+        assert!(requires_admin("/api/v1/model/unload"));
+        assert!(requires_admin("/api/v1/embed/file"));
         // no_prefix 注册形态兜底
         assert!(requires_admin("/model/switch"));
         assert!(requires_admin("/embed/file"));
         // 普通端点不受限
-        assert!(!requires_admin("/api/1/embed"));
-        assert!(!requires_admin("/api/1/embed/batch"));
-        assert!(!requires_admin("/api/1/auth/login"));
+        assert!(!requires_admin("/api/v1/embed"));
+        assert!(!requires_admin("/api/v1/embed/batch"));
+        assert!(!requires_admin("/api/v1/auth/login"));
         assert!(!requires_admin("/health"));
     }
 
-    // --- 无 XFF 回退 ---
+    // 无 XFF 回退
 
     #[test]
     fn extract_ip_no_xff_returns_peer_ip() {
@@ -561,7 +559,7 @@ mod tests {
         assert_eq!(result, None);
     }
 
-    // --- X-Real-IP 回退 ---
+    // X-Real-IP 回退
 
     #[test]
     fn extract_ip_x_real_ip_used_when_xff_absent() {
@@ -585,7 +583,7 @@ mod tests {
         assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50))));
     }
 
-    // --- IPv6 ---
+    // IPv6
 
     #[test]
     fn extract_ip_ipv6_peer_with_trusted_proxy() {
@@ -598,7 +596,7 @@ mod tests {
         assert_eq!(result, Some(IpAddr::V6(Ipv6Addr::LOCALHOST)));
     }
 
-    // --- RBAC 路径→角色映射契约测试 ---
+    // RBAC 路径→角色映射契约测试
 
     /// 403 响应结构验证:含 i18n 消息与 FORBIDDEN 错误码
     #[test]
@@ -657,12 +655,12 @@ mod tests {
     #[test]
     fn admin_path_prefixes_cover_all_dangerous_endpoints() {
         // 模型管理
-        assert!(requires_admin("/api/1/model/switch"));
-        assert!(requires_admin("/api/1/model/unload"));
-        assert!(requires_admin("/api/1/model/current"));
-        assert!(requires_admin("/api/1/model/info"));
+        assert!(requires_admin("/api/v1/model/switch"));
+        assert!(requires_admin("/api/v1/model/unload"));
+        assert!(requires_admin("/api/v1/model/current"));
+        assert!(requires_admin("/api/v1/model/info"));
         // 文件嵌入(text_preview 回传文件内容)
-        assert!(requires_admin("/api/1/embed/file"));
+        assert!(requires_admin("/api/v1/embed/file"));
         // no_prefix 形态
         assert!(requires_admin("/model/switch"));
         assert!(requires_admin("/embed/file"));
@@ -672,13 +670,13 @@ mod tests {
     #[test]
     fn normal_endpoints_not_blocked_by_admin_check() {
         let safe_paths = [
-            "/api/1/embed",
-            "/api/1/embed/batch",
-            "/api/1/similarity",
-            "/api/1/rerank",
-            "/api/1/auth/login",
-            "/api/1/auth/refresh",
-            "/api/1/auth/logout",
+            "/api/v1/embed",
+            "/api/v1/embed/batch",
+            "/api/v1/similarity",
+            "/api/v1/rerank",
+            "/api/v1/auth/login",
+            "/api/v1/auth/refresh",
+            "/api/v1/auth/logout",
             "/health",
             "/metrics",
             "/api-docs",

@@ -4,6 +4,8 @@
 // oxcache 后端(oxcache 必选,完全接管缓存)
 pub(crate) mod oxcache_backend;
 pub(crate) mod persist;
+#[cfg(feature = "distributed-redis")]
+pub(crate) mod redis_semantic_index;
 pub(crate) mod semantic_cache;
 pub(crate) mod single_flight;
 

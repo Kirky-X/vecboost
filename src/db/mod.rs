@@ -219,7 +219,6 @@ mod tests {
             .await
             .expect("Failed to get session");
 
-        // 验证 users 表存在
         let result = session
             .execute_raw("SELECT COUNT(*) FROM users")
             .await
@@ -270,13 +269,11 @@ mod tests {
             .expect("Failed to select user");
         assert_eq!(select_result.rows_affected(), 1);
 
-        // Update
         session
             .execute_raw("UPDATE users SET role = 'user' WHERE username = 'testuser'")
             .await
             .expect("Failed to update user");
 
-        // Delete
         let delete_result = session
             .execute_raw("DELETE FROM users WHERE username = 'testuser'")
             .await

@@ -20,19 +20,19 @@
 //! 自己的 `AsyncKit` 中，与其他模块共存、共享生命周期管理。
 //!
 //! ```ignore
-//! let mut kit = trait_kit::AsyncKit::new();
+//! let mut kit = trait_kit::AsyncKit::new;
 //! // 注册外部项目自己的模块...
-//! kit.register::<MyAppModule>()?;
+//! kit.register::<MyAppModule>?;
 //!
 //! // 将 VecBoost 能力注入同一个 kit
 //! VecBoostModuleBuilder::new(model_config)
-//!     .embedding()
-//!     .rerank()
+//!     .embedding
+//!     .rerank
 //!     .build(&mut kit)
 //!     .await?;
 //!
-//! let kit = kit.build().await?;
-//! // 通过 kit.require::<EmbeddingModule>() 获取 EmbeddingService
+//! let kit = kit.build.await?;
+//! // 通过 kit.require::<EmbeddingModule> 获取 EmbeddingService
 //! ```
 
 use std::sync::Arc;
@@ -50,9 +50,7 @@ use crate::registry::{EmbeddingModule, RerankModule};
 use crate::service::embedding::EmbeddingService;
 use crate::service::rerank::RerankService;
 
-// ---------------------------------------------------------------------------
 // LibraryConfig
-// ---------------------------------------------------------------------------
 
 /// Library 模式配置
 ///
@@ -77,9 +75,7 @@ impl LibraryConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
 // VecBoostLibrary
-// ---------------------------------------------------------------------------
 
 /// VecBoost Library 入口 — 提供无网络服务的向量化和重排序 API
 ///
@@ -99,7 +95,6 @@ impl VecBoostLibrary {
     /// 通过 `EngineFactory` 创建推理引擎，构建 `EmbeddingService` + `RerankService`，
     /// 注册到最小 `AsyncKit`（仅 `EmbeddingModule` + `RerankModule`）。
     pub async fn new(config: LibraryConfig) -> Result<Self, VecboostError> {
-        // 1. 创建推理引擎
         let engine = EngineFactory::create(
             config.model_config.engine_type.clone(),
             &config.model_config,
@@ -147,9 +142,7 @@ impl VecBoostLibrary {
         Ok(Self { kit: Arc::new(kit) })
     }
 
-    // -----------------------------------------------------------------------
     // 异步 API
-    // -----------------------------------------------------------------------
 
     /// 异步向量化：将单条文本转换为向量表示
     pub async fn embed(&self, text: &str) -> Result<EmbedResponse, VecboostError> {
@@ -209,14 +202,12 @@ impl VecBoostLibrary {
         .await
     }
 
-    // -----------------------------------------------------------------------
     // 同步 API
-    // -----------------------------------------------------------------------
 
     /// 同步向量化：将单条文本转换为向量表示
     ///
     /// 使用进程级共享 runtime 执行异步推理;在 tokio 异步上下文中调用会返回
-    /// 错误(非 panic),应使用 `embed()` 代替。
+    /// 错误(非 panic),应使用 `embed` 代替。
     pub fn embed_sync(&self, text: &str) -> Result<EmbedResponse, VecboostError> {
         let future = self.embed(text);
         Self::block_on_future(future)
@@ -283,9 +274,7 @@ impl<T> IntoSyncResult for Result<T, VecboostError> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // VecBoostModuleBuilder — trait-kit 模块化集成
-// ---------------------------------------------------------------------------
 
 /// VecBoost 模块化构建器 — 将 embedding/rerank 能力注册到外部 `AsyncKit`
 ///
@@ -294,8 +283,8 @@ impl<T> IntoSyncResult for Result<T, VecboostError> {
 ///
 /// # 选择性注册
 ///
-/// 通过 `embedding()` / `rerank()` 按需启用能力，未调用的能力不会注册。
-/// 两者都未调用时 `build()` 不会注册任何模块（也不会报错）。
+/// 通过 `embedding` / `rerank` 按需启用能力，未调用的能力不会注册。
+/// 两者都未调用时 `build` 不会注册任何模块（也不会报错）。
 ///
 /// # 示例
 ///
@@ -303,23 +292,23 @@ impl<T> IntoSyncResult for Result<T, VecboostError> {
 /// use vecboost::{VecBoostModuleBuilder, config::model::ModelConfig};
 ///
 /// let model_config = ModelConfig { /* ... */ };
-/// let mut kit = trait_kit::AsyncKit::new();
+/// let mut kit = trait_kit::AsyncKit::new;
 ///
 /// // 注册自己的模块
-/// kit.register::<MyAppModule>()?;
+/// kit.register::<MyAppModule>?;
 ///
 /// // 注入 VecBoost 能力
 /// VecBoostModuleBuilder::new(model_config)
-///     .embedding()           // 启用 embedding
-///     .rerank()              // 启用 rerank
+///     .embedding           // 启用 embedding
+///     .rerank              // 启用 rerank
 ///     .cache_size(1000)      // 可选：嵌入缓存
 ///     .build(&mut kit)
 ///     .await?;
 ///
-/// let kit = kit.build().await?;
+/// let kit = kit.build.await?;
 ///
 /// // 使用
-/// let embed_svc = kit.require::<vecboost::registry::EmbeddingModule>()?;
+/// let embed_svc = kit.require::<vecboost::registry::EmbeddingModule>?;
 /// ```
 pub struct VecBoostModuleBuilder {
     model_config: ModelConfig,
@@ -370,12 +359,11 @@ impl VecBoostModuleBuilder {
     /// 此方法：
     /// 1. 通过 `EngineFactory` 创建推理引擎
     /// 2. 构建 `EmbeddingService` / `RerankService`（按选择）
-    /// 3. 通过 `kit.set_config()` 注入能力
+    /// 3. 通过 `kit.set_config` 注入能力
     /// 4. 注册对应的 `EmbeddingModule` / `RerankModule` + lifecycle hooks
     ///
-    /// 调用后外部项目继续注册自己的其他模块，最终调用 `kit.build().await`。
+    /// 调用后外部项目继续注册自己的其他模块，最终调用 `kit.build.await`。
     pub async fn build(self, kit: &mut trait_kit::AsyncKit) -> Result<(), VecboostError> {
-        // 1. 创建共享推理引擎
         let engine =
             EngineFactory::create(self.model_config.engine_type.clone(), &self.model_config)?;
         let engine: Arc<RwLock<AnyEngine>> = Arc::new(RwLock::new(engine));
@@ -418,9 +406,7 @@ impl VecBoostModuleBuilder {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -504,9 +490,7 @@ mod tests {
         VecBoostLibrary { kit: Arc::new(kit) }
     }
 
-    // -------------------------------------------------------------------------
     // 构造测试
-    // -------------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_library_construction_succeeds() {
@@ -515,9 +499,7 @@ mod tests {
         assert!(lib.kit.contains::<RerankModule>());
     }
 
-    // -------------------------------------------------------------------------
     // 异步 API 测试
-    // -------------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_embed_returns_correct_dimension() {
@@ -574,9 +556,7 @@ mod tests {
         assert_eq!(response.results.len(), 2);
     }
 
-    // -------------------------------------------------------------------------
     // 同步 API 测试
-    // -------------------------------------------------------------------------
 
     // 在 tokio runtime 上下文调用 sync API → 可操作错误而非 panic
     #[tokio::test]
@@ -622,9 +602,7 @@ mod tests {
         assert_eq!(response.results.len(), 2);
     }
 
-    // -------------------------------------------------------------------------
     // LibraryConfig 测试
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_library_config_default() {
@@ -646,9 +624,7 @@ mod tests {
         assert_eq!(config.cache_size, 0);
     }
 
-    // -------------------------------------------------------------------------
     // VecBoostModuleBuilder 测试
-    // -------------------------------------------------------------------------
 
     /// 测试辅助：通过 mock engine 直接注入 kit（绕过 EngineFactory 需要真实模型）
     async fn make_test_kit_with_builder(
@@ -755,18 +731,14 @@ mod tests {
             .rerank_config(RerankConfig::default());
     }
 
-    // -------------------------------------------------------------------------
     // 同步 API 补充测试
-    // -------------------------------------------------------------------------
 
     // Note: embed_batch_sync and rerank_sync are covered via the existing
     // test_sync_embed_outside_runtime and test_sync_rerank_outside_runtime tests.
     // Additional sync batch testing is skipped because block_on_future creates
     // a current_thread runtime without timers, which batch processing requires.
 
-    // -------------------------------------------------------------------------
     // 异步 API 补充测试
-    // -------------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_embed_empty_string_returns_error() {
@@ -793,9 +765,7 @@ mod tests {
         assert!(result.is_err(), "empty query should return error");
     }
 
-    // -------------------------------------------------------------------------
     // LibraryConfig 补充测试
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_library_config_with_cache_size() {
@@ -815,9 +785,7 @@ mod tests {
         assert!(config.rerank_config.is_some());
     }
 
-    // -------------------------------------------------------------------------
     // VecBoostModuleBuilder 补充测试
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_module_builder_new_defaults() {

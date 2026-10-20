@@ -452,7 +452,7 @@ async fn test_long_text_embedding() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// === 以下测试合并自 test_real_inference.rs ===
+// 以下测试合并自 test_real_inference.rs
 
 /// 测试 RealTestEngine 基本功能
 #[tokio::test]

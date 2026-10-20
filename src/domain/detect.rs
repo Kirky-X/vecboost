@@ -38,7 +38,7 @@ impl FromStr for DetectRequest {
 }
 
 impl DetectRequest {
-    /// 输入校验：非空/长度上限（按 `chars().count()` 计，CJK 不因字节数
+    /// 输入校验：非空/长度上限（按 `chars.count` 计，CJK 不因字节数
     /// 提前触发）/控制字符防线（`\t` `\n` `\r` 豁免）/allow 逐项语言码
     /// 格式。i18n 文案语义（detect-empty-text / detect-too-long /
     /// detect-invalid-allowlist）在服务层表达，域层以 ValidationError

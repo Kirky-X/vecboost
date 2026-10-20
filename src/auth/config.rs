@@ -10,7 +10,7 @@
 use crate::config::app::AuthConfig;
 use garrison::prelude::GarrisonConfig;
 
-/// token 缺省有效期:24 小时。由 `AuthConfig::default()` 的
+/// token 缺省有效期:24 小时。由 `AuthConfig::default` 的
 /// `token_expiration_hours` 派生(单一事实源)。替代 garrison 默认的
 /// 2592000s(30 天)。
 pub const DEFAULT_TOKEN_EXPIRATION_SECS: i64 =
@@ -21,7 +21,7 @@ pub const DEFAULT_TOKEN_EXPIRATION_SECS: i64 =
 /// 映射规则：
 /// - `token_expiration_seconds` >0 时 → `timeout`（秒，最高优先级）
 /// - 否则 `token_expiration_hours` >0 → `timeout`（hours × 3600 秒）
-/// - 两者缺失或非正 → `timeout` = 缺省 24 小时（与 `AuthConfig::default()`
+/// - 两者缺失或非正 → `timeout` = 缺省 24 小时（与 `AuthConfig::default`
 ///   同源，不是另一套读数）
 /// - `jwt_secret` → `jwt_secret`（JWT 签名密钥）
 /// - `token_style` 固定 `"jwt"`
@@ -140,7 +140,7 @@ mod tests {
         let mut auth = make_auth_config();
         auth.token_expiration_hours = None;
         let garrison = map_auth_config_to_garrison(&auth);
-        // 缺省 24h(与 AuthConfig::default() 同源),不再回落 garrison 30 天默认
+        // 缺省 24h(与 AuthConfig::default 同源),不再回落 garrison 30 天默认
         assert_eq!(garrison.timeout, 24 * 3600);
     }
 
@@ -157,10 +157,10 @@ mod tests {
     #[test]
     fn test_map_timeout_default_is_24h_single_source() {
         // 回归(文档审计缺陷):文档与代码曾双轨漂移——USER_GUIDE/SECURITY/FAQ
-        // 及 AuthConfig::default() 钉死缺省 24 小时,而
+        // 及 AuthConfig::default 钉死缺省 24 小时,而
         // DEFAULT_TOKEN_EXPIRATION_SECS 与其注释却声称「缺省 1 小时」
         // (3600)。此处钉住单一事实源:秒级回落常量 == AuthConfig 缺省小时
-        // 数 × 3600,且 AuthConfig::default() 映射结果同值。
+        // 数 × 3600,且 AuthConfig::default 映射结果同值。
         assert_eq!(
             DEFAULT_TOKEN_EXPIRATION_SECS,
             24 * 3600,

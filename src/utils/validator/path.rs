@@ -81,7 +81,6 @@ impl PathValidator {
             ))
         })?;
 
-        // 检查路径是否在允许的根目录内
         if self.allowed_roots.is_empty() {
             return Err(VecboostError::security_error(i18n::tr("path-no-roots")));
         }
@@ -236,7 +235,6 @@ mod tests {
         let validator = PathValidator::new().add_allowed_root(&base);
         let result = validator.validate_path(&attack_path);
 
-        // 清理
         std::fs::remove_dir_all(&base).ok();
 
         // 攻击应被拒绝:canonicalize 解析 symlink 得到 /etc/hostname,

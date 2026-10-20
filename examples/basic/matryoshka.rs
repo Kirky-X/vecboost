@@ -60,7 +60,6 @@ fn main() {
     let mut truncated = truncate_vector(&embedding, target_dim);
     println!("  截断后维度: {}", truncated.len());
 
-    // 计算截断前的 L2 范数
     let original_norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
     let truncated_norm: f32 = truncated.iter().map(|x| x * x).sum::<f32>().sqrt();
     println!("  截断前 L2 范数: {:.4}", original_norm);
@@ -74,7 +73,6 @@ fn main() {
     let normalized_norm: f32 = truncated.iter().map(|x| x * x).sum::<f32>().sqrt();
     println!("  归一化后 L2 范数: {:.4}", normalized_norm);
 
-    // 4. 验证归一化后余弦相似度正确性
     println!("\n📝 验证余弦相似度:");
     let mut other = truncate_vector(
         &(0..full_dimension)

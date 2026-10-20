@@ -29,9 +29,7 @@ use sdforge::prelude::*;
 #[cfg(all(feature = "openapi", feature = "http"))]
 use ::utoipa;
 
-// =============================================================================
 // Public SDK functions
-// =============================================================================
 
 pub async fn rerank(
     svc: &RerankService,
@@ -85,9 +83,7 @@ pub async fn rerank_batch(
     })
 }
 
-// =============================================================================
 // Protocol-agnostic handlers
-// =============================================================================
 
 /// Load rerank service and limits from the global kit.
 ///
@@ -130,14 +126,12 @@ async fn rerank_batch_handler(req: BatchRerankRequest) -> Result<BatchRerankResp
         .map_err(to_api_error)
 }
 
-// =============================================================================
 // HTTP forge handlers
-// =============================================================================
 
 #[cfg(feature = "http")]
 #[forge(
     name = "rerank",
-    version = 1,
+    version = "v1",
     path = "/rerank",
     method = "POST",
     tool_name = "rerank",
@@ -150,7 +144,7 @@ pub async fn forge_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError
 #[cfg(feature = "http")]
 #[forge(
     name = "rerank_batch",
-    version = 1,
+    version = "v1",
     path = "/rerank/batch",
     method = "POST",
     tool_name = "rerank_batch",
@@ -160,14 +154,12 @@ pub async fn forge_rerank_batch(req: BatchRerankRequest) -> Result<BatchRerankRe
     rerank_batch_handler(req).await
 }
 
-// =============================================================================
 // CLI forge handlers
-// =============================================================================
 
 #[cfg(feature = "cli")]
 #[forge(
     name = "rerank",
-    version = 1,
+    version = "v1",
     cli = true,
     description = "Rerank documents by relevance to a query",
     i18n_key = "forge-cli-rerank"
@@ -176,14 +168,12 @@ pub async fn cli_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError> 
     rerank_handler(req).await
 }
 
-// =============================================================================
 // gRPC forge handlers
-// =============================================================================
 
 #[cfg(feature = "grpc")]
 #[forge(
     name = "rerank",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.rerank",
     description = "Rerank documents by relevance to a query"
 )]
@@ -194,7 +184,7 @@ pub async fn grpc_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError>
 #[cfg(feature = "grpc")]
 #[forge(
     name = "rerank_batch",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.rerank_batch",
     description = "Batch rerank multiple queries against document sets"
 )]

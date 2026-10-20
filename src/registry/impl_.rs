@@ -5,7 +5,7 @@
 //!
 //! 基于 trait-kit 0.3 的 `AsyncKit`（`Send + Sync`，基于 `Arc<RwLock>`）。
 //! 所有模块实现 `AsyncAutoBuilder`，`build` 返回 `Pin<Box<dyn Future>>`，
-//! 在 `AsyncKit::build().await` 时按拓扑序异步构造。
+//! 在 `AsyncKit::build.await` 时按拓扑序异步构造。
 
 use std::future::Future;
 use std::pin::Pin;
@@ -44,9 +44,7 @@ use crate::{
     pipeline::{PriorityCalculator, PriorityRequestQueue, ResponseChannel, WorkerManager},
 };
 
-// ---------------------------------------------------------------------------
 // EmbeddingModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for EmbeddingModule {
     const NAME: &'static str = "embedding";
@@ -68,9 +66,7 @@ impl AsyncAutoBuilder for EmbeddingModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // EmbeddingModule — lifecycle + health
-// ---------------------------------------------------------------------------
 
 impl AsyncLifecycle for EmbeddingModule {
     fn on_ready<'a>(
@@ -93,9 +89,7 @@ impl AsyncHealthCheck for EmbeddingModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // RerankModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for RerankModule {
     const NAME: &'static str = "rerank";
@@ -137,9 +131,7 @@ impl AsyncHealthCheck for RerankModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // DecisionModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for DecisionModule {
     const NAME: &'static str = "decision";
@@ -181,9 +173,7 @@ impl AsyncHealthCheck for DecisionModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // DetectModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for DetectModule {
     const NAME: &'static str = "detect";
@@ -225,9 +215,7 @@ impl AsyncHealthCheck for DetectModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // TranslateModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for TranslateModule {
     const NAME: &'static str = "translate";
@@ -269,9 +257,7 @@ impl AsyncHealthCheck for TranslateModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // TranscribeModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for TranscribeModule {
     const NAME: &'static str = "transcribe";
@@ -320,9 +306,7 @@ impl AsyncHealthCheck for TranscribeModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // AuthModule (auth feature only)
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "auth")]
 impl ModuleMeta for AuthModule {
@@ -346,9 +330,7 @@ impl AsyncAutoBuilder for AuthModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // RateLimitModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for RateLimitModule {
     const NAME: &'static str = "rate_limit";
@@ -370,13 +352,11 @@ impl AsyncAutoBuilder for RateLimitModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // RateLimitModule — health + lifecycle
-// ---------------------------------------------------------------------------
 
 impl AsyncHealthCheck for RateLimitModule {
     fn check(cap: &Self::Capability) -> HealthStatus {
-        // 读取 LimiteronAdapter 中缓存的健康状态（由 check_health() 异步更新）
+        // 读取 LimiteronAdapter 中缓存的健康状态（由 check_health 异步更新）
         if cap.is_healthy() {
             HealthStatus::Healthy
         } else {
@@ -412,9 +392,7 @@ impl AsyncLifecycle for RateLimitModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // CacheModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for CacheModule {
     const NAME: &'static str = "cache";
@@ -441,9 +419,7 @@ impl AsyncAutoBuilder for CacheModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // CacheModule — health
-// ---------------------------------------------------------------------------
 
 impl AsyncHealthCheck for CacheModule {
     fn check(cap: &Self::Capability) -> HealthStatus {
@@ -457,9 +433,7 @@ impl AsyncHealthCheck for CacheModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // DbModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for DbModule {
     const NAME: &'static str = "db";
@@ -481,9 +455,7 @@ impl AsyncAutoBuilder for DbModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // AuditModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for AuditModule {
     const NAME: &'static str = "audit";
@@ -505,9 +477,7 @@ impl AsyncAutoBuilder for AuditModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // AuditModule — lifecycle
-// ---------------------------------------------------------------------------
 
 impl AsyncLifecycle for AuditModule {
     fn on_shutdown<'a>(cap: &'a Self::Capability) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
@@ -531,19 +501,15 @@ impl AsyncLifecycle for AuditModule {
     }
 }
 
-// ===========================================================================
 // 覆盖 VecboostState 剩余字段的 13 个 Module 实现
 //
 // 设计原则与现有 6 个 Module 保持一致：
-//   - 复杂类型（Arc<T>、Option<Arc<T>>、Vec<String>）→ `kit.config::<Self::Capability>()`
-//     严格模式：missing config = TraitKitError::MissingConfig
-//   - bool 类型 → `kit.config::<Newtype>().map(|c| c.0).unwrap_or(false)`
-//     宽松模式（与 CacheModule/DbModule 一致）：missing config 默认 false
-// ===========================================================================
+// - 复杂类型（Arc<T>、Option<Arc<T>>、Vec<String>）→ `kit.config::<Self::Capability>`
+// 严格模式：missing config = TraitKitError::MissingConfig
+// - bool 类型 → `kit.config::<Newtype>.map(|c| c.0).unwrap_or(false)`
+// 宽松模式（与 CacheModule/DbModule 一致）：missing config 默认 false
 
-// ---------------------------------------------------------------------------
 // CsrfConfigModule (auth feature)
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "auth")]
 impl ModuleMeta for CsrfConfigModule {
@@ -567,9 +533,7 @@ impl AsyncAutoBuilder for CsrfConfigModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // MetricsCollectorModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for MetricsCollectorModule {
     const NAME: &'static str = "metrics_collector";
@@ -591,9 +555,7 @@ impl AsyncAutoBuilder for MetricsCollectorModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // PrometheusCollectorModule（仅 http feature）
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "http")]
 impl ModuleMeta for PrometheusCollectorModule {
@@ -617,9 +579,7 @@ impl AsyncAutoBuilder for PrometheusCollectorModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // IpWhitelistModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for IpWhitelistModule {
     const NAME: &'static str = "ip_whitelist";
@@ -641,9 +601,7 @@ impl AsyncAutoBuilder for IpWhitelistModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // PipelineQueueModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for PipelineQueueModule {
     const NAME: &'static str = "pipeline_queue";
@@ -665,9 +623,7 @@ impl AsyncAutoBuilder for PipelineQueueModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // ResponseChannelModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for ResponseChannelModule {
     const NAME: &'static str = "response_channel";
@@ -689,9 +645,7 @@ impl AsyncAutoBuilder for ResponseChannelModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // PriorityCalculatorModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for PriorityCalculatorModule {
     const NAME: &'static str = "priority_calculator";
@@ -713,9 +667,7 @@ impl AsyncAutoBuilder for PriorityCalculatorModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // WorkerManagerModule
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for WorkerManagerModule {
     const NAME: &'static str = "worker_manager";
@@ -737,9 +689,7 @@ impl AsyncAutoBuilder for WorkerManagerModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // ConfigWatcherModule — confers watch 集成
-// ---------------------------------------------------------------------------
 
 impl ModuleMeta for ConfigWatcherModule {
     const NAME: &'static str = "config_watcher";

@@ -23,7 +23,7 @@ TEXTS = {
 
 
 def _embed(port, text):
-    return http_post(port, "/api/1/embed", {"text": text})
+    return http_post(port, "/api/v1/embed", {"text": text})
 
 
 def test_r001_single_embed_en_zh_mixed_emoji(base_server):
@@ -48,7 +48,7 @@ def test_r002_batch_32_order_and_consistency(base_server):
     """R-embed-002: 批量 32 条——数量、维度、顺序保持、与逐条一致。"""
     port = base_server["port"]
     batch = [f"批量测试文本 {i}：vecboost scenario {i}" for i in range(32)]
-    st, body = http_post(port, "/api/1/embed/batch", {"texts": batch})
+    st, body = http_post(port, "/api/v1/embed/batch", {"texts": batch})
     assert st == 200, f"HTTP {st}: {str(body)[:200]}"
     # 实际结构：{"embeddings": [{"text_preview":..., "embedding":[...]}, ...]}
     items = body.get("embeddings") if isinstance(body, dict) else None
@@ -68,31 +68,33 @@ def test_r003_similarity_same_pair_high_score(base_server):
     故无关文本对使用英文验证。
     """
     port = base_server["port"]
-    st, body = http_post(port, "/api/1/similarity",
+    st, body = http_post(port, "/api/v1/similarity",
                          {"source": "I love Beijing", "target": "I love Beijing"})
     assert st == 200, f"HTTP {st}: {str(body)[:200]}"
     same = find_scalar_score(body)
     assert same is not None, f"未找到分数: {str(body)[:200]}"
     assert same > 0.99, f"相同文本相似度 {same} 应≈1.0"
-    st2, body2 = http_post(port, "/api/1/similarity",
+    st2, body2 = http_post(port, "/api/v1/similarity",
                            {"source": "machine learning model training", "target": "today lunch is noodles"})
     assert st2 == 200, f"HTTP {st2}"
     diff = find_scalar_score(body2)
     assert diff is not None and diff < same, f"无关文本相似度 {diff} 不应高于相同文本 {same}"
 
 
-def test_r004_search_not_exposed(base_server):
-    """R-embed-004: 搜索能力 HTTP 暴露性验证。
-
-    发现：服务层有 process_search 能力，但未注册 HTTP 路由（仅 /embed /embed/batch
-    /similarity /embed/file /v1/embeddings）——POST /embed/search 返回 404。
-    """
+def test_r004_search_top_k(base_server):
+    """R-embed-004: search 端点返回 ≤ top_k 条且按相似度降序。"""
     port = base_server["port"]
-    st, _ = http_post(port, "/api/1/embed/search",
-                      {"query": "可爱的猫咪", "texts": [f"文档{i}" for i in range(10)], "top_k": 3})
-    if st == 404:
-        pytest.skip("能力记录：embed/search 未暴露 HTTP 路由（服务层能力存在，记入报告）")
-    assert st == 200, f"HTTP {st}"
+    texts = [f"文档{i}" for i in range(10)]
+    st, body = http_post(port, "/api/v1/search",
+                         {"query": "可爱的猫咪", "texts": texts, "top_k": 3})
+    assert st == 200, f"HTTP {st}: {str(body)[:200]}"
+    results = body["results"]
+    assert len(results) <= 3, f"top_k=3 却返回 {len(results)} 条"
+    scores = [r["score"] for r in results]
+    assert scores == sorted(scores, reverse=True), f"未按相似度降序: {scores}"
+    for r in results:
+        assert 0 <= r["index"] < len(texts), f"index 越界: {r['index']}"
+        assert r["text"] == texts[r["index"]], "text 未回显候选原文"
 
 
 def test_r005_file_embed_txt(base_server):
@@ -103,7 +105,7 @@ def test_r005_file_embed_txt(base_server):
         f"第 {i} 段：vecboost 支持文件级嵌入，自动分块并保持重叠语义。section {i}。" for i in range(6)
     )
     path = write_file("base", "files/sample.txt", content)
-    st, body = http_post(port, "/api/1/embed/file", {"path": path})
+    st, body = http_post(port, "/api/v1/embed/file", {"path": path})
     assert st == 200, f"HTTP {st}: {str(body)[:300]}"
     # 实际结构：{"mode":"document","stats":{"total_chunks":N,...},"embedding":[...]}（聚合向量）
     stats = body.get("stats", {}) if isinstance(body, dict) else {}

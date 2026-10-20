@@ -276,14 +276,14 @@ impl InferenceEngine for AnyEngine {
             #[cfg(feature = "onnx")]
             AnyEngine::Onnx(engine) => engine.decide(req),
             #[cfg(feature = "onnx")]
-            // trait 方法（DecisionPipeline 固有方法名为 decision()，无同名
+            // trait 方法（DecisionPipeline 固有方法名为 decision，无同名
             // 遮蔽）：覆盖后经 trait 自然进决策管线，漏转发即恒 UnsupportedTask
             AnyEngine::Decision(engine) => engine.decide(req),
             #[cfg(feature = "onnx")]
             AnyEngine::OnnxTranslate(engine) => engine.decide(req),
             #[cfg(feature = "transcribe")]
             AnyEngine::Transcribe(engine) => engine.decide(req),
-            // trait 方法（CandleDecisionEngine 固有方法名为 decide_impl()，
+            // trait 方法（CandleDecisionEngine 固有方法名为 decide_impl，
             // 无同名遮蔽）：覆盖后经 trait 自然进 candle 决策头
             #[cfg(feature = "candle")]
             AnyEngine::CandleDecision(engine) => engine.decide(req),

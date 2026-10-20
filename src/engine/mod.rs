@@ -375,6 +375,14 @@ pub(crate) fn candle_not_compiled_error() -> crate::error::VecboostError {
 ///
 /// 引擎侧 `PoolingMode::Auto` 一律在构造期经本函数解析为具体模式，
 /// 运行期不得再遇 Auto。
+///
+/// 仅引擎 feature 会调用本函数；`default-features = false` 的 library/examples
+/// 构建（如 examples crate 只透传 http/auth/cli/grpc/db/sqlite）需豁免
+/// `-D dead-code`，有任一引擎时豁免自动失效。
+#[cfg_attr(
+    not(any(feature = "onnx", feature = "candle", feature = "quantized-gguf")),
+    allow(dead_code)
+)]
 pub(crate) fn infer_pooling_mode(model_name: &str) -> crate::config::model::PoolingMode {
     use crate::config::model::PoolingMode;
     let lower = model_name.to_lowercase();
@@ -589,7 +597,7 @@ mod tests {
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
     }
 
-    // -- Direct embed() call --
+    // -- Direct embed call --
     #[test]
     fn test_mock_embed_returns_deterministic_vector() {
         let engine = MockEngine { dimension: 8 };
@@ -598,7 +606,7 @@ mod tests {
         assert!(vec.iter().all(|&v| v == 1.0));
     }
 
-    // -- Direct embed_batch() call --
+    // -- Direct embed_batch call --
     #[test]
     fn test_mock_embed_batch_returns_vectors() {
         let engine = MockEngine { dimension: 4 };
@@ -608,14 +616,14 @@ mod tests {
         assert_eq!(vecs[0].len(), 4);
     }
 
-    // -- precision() accessor --
+    // -- precision accessor --
     #[test]
     fn test_mock_precision_is_fp32() {
         let engine = MockEngine { dimension: 4 };
         assert_eq!(*engine.precision(), Precision::Fp32);
     }
 
-    // -- supports_mixed_precision() --
+    // -- supports_mixed_precision --
     #[test]
     fn test_mock_supports_mixed_precision_false() {
         let engine = MockEngine { dimension: 4 };

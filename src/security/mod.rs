@@ -241,7 +241,7 @@ mod tests {
             key_file_path: None,
         };
         let result = create_key_store(&config).await;
-        // validate() should fail first
+        // validate should fail first
         assert!(result.is_err());
     }
 }

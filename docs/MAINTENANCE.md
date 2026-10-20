@@ -17,7 +17,7 @@
 
 | 消费方式 | 入口 | 前置条件 |
 |---|---|---|
-| 服务端 | `POST /api/1/transcribe` | `[transcribe] enabled=true`，需 `transcribe` feature |
+| 服务端 | `POST /api/v1/transcribe` | `[transcribe] enabled=true`，需 `transcribe` feature |
 | 库门面 | `vecboost::transcribe::{open, read_wav_16k_mono}`；`TranscribeSession::{detect_segments, transcribe_segment}`；`TranscribeOpts` | 需 `transcribe` feature |
 
 - 推理实现只允许存在于 `src/engine/transcribe/`。`transcribe-poc/`（独立 crate，二进制 `transcribe-own`，非 workspace 成员）仅作 CLI 与基准 harness 保留；**该目录为本机目录不入库**（2026-10-15 owner 裁定：不发布、与主仓功能面无关，经 `.gitignore` 排除），仓库内以本节与下方 CLI 契约要点为其规范面。

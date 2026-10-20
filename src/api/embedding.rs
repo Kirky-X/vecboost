@@ -4,7 +4,7 @@
 //! Embedding forge handlers — HTTP/MCP/CLI/gRPC protocol-agnostic.
 //!
 //! All handlers access `EmbeddingService` via
-//! `state()?.kit.require::<EmbeddingModule>()` (returns `Arc<RwLock<EmbeddingService>>`).
+//! `state?.kit.require::<EmbeddingModule>` (returns `Arc<RwLock<EmbeddingService>>`).
 //!
 //! # Architecture
 //!
@@ -46,9 +46,7 @@ use sdforge::prelude::*;
 #[cfg(all(feature = "openapi", feature = "http"))]
 use ::utoipa;
 
-// =============================================================================
 // Public SDK functions — used by examples and external callers
-// =============================================================================
 
 pub async fn embed(
     svc: &crate::service::embedding::EmbeddingService,
@@ -79,9 +77,7 @@ pub async fn search(
     svc.process_search(req).await
 }
 
-// =============================================================================
 // Error conversion helpers
-// =============================================================================
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
@@ -183,9 +179,7 @@ pub(crate) fn kit_internal_error(e: impl std::fmt::Display) -> ApiError {
     }
 }
 
-// =============================================================================
 // Validation helpers
-// =============================================================================
 
 /// Validate that no text exceeds the maximum allowed byte length.
 ///
@@ -223,7 +217,7 @@ fn validate_batch_size(texts_len: usize, max: usize) -> Result<(), VecboostError
 }
 
 /// Retrieve `max_text_length` from kit config, falling back to the default
-/// (`EmbeddingConfig::default().max_text_length` = 8192) when config is absent.
+/// (`EmbeddingConfig::default.max_text_length` = 8192) when config is absent.
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 fn max_text_length_from_kit(kit: &trait_kit::AsyncKit<trait_kit::AsyncReady>) -> usize {
     kit.config::<crate::config::app::EmbeddingConfig>()
@@ -232,7 +226,7 @@ fn max_text_length_from_kit(kit: &trait_kit::AsyncKit<trait_kit::AsyncReady>) ->
 }
 
 /// Retrieve `max_batch_size` from kit config, falling back to the default
-/// (`EmbeddingConfig::default().max_batch_size` = 64) when config is absent.
+/// (`EmbeddingConfig::default.max_batch_size` = 64) when config is absent.
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 fn max_batch_size_from_kit(kit: &trait_kit::AsyncKit<trait_kit::AsyncReady>) -> usize {
     kit.config::<crate::config::app::EmbeddingConfig>()
@@ -297,14 +291,12 @@ fn check_file_embed_size(len: u64) -> Result<(), String> {
     }
 }
 
-// =============================================================================
 // Protocol-agnostic business-logic handlers
 //
 // Each `*_handler` performs state acquisition, input validation, and service
 // dispatch. Protocol-specific `forge_*` / `cli_*` / `grpc_*` functions below
 // delegate to these helpers, keeping each protocol's surface to a single line
 // of delegation plus the `#[forge(...)]` macro registration.
-// =============================================================================
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
@@ -520,9 +512,7 @@ fn model_path_validator(configured_roots: Option<&[String]>) -> PathValidator {
     validator
 }
 
-// ---------------------------------------------------------------------------
 // /health?depth=full 真实就绪探测
-// ---------------------------------------------------------------------------
 
 /// 引擎 dummy 推理探测的结果缓存(500ms):防止健康检查风暴打满推理
 static ENGINE_PROBE_CACHE: std::sync::OnceLock<
@@ -588,7 +578,7 @@ async fn run_deep_health_checks(st: &crate::VecboostState) -> Vec<serde_json::Va
 
 /// switch 显式路径校验：`model_path` 为目录语义（bundle 目录），
 /// `tokenizer_path` 为文件语义——与引擎期 `resolve_tokenizer_path` 的
-/// explicit 分支 `is_file()` 契约同型；校验类型若与消费契约错位，文件路径
+/// explicit 分支 `is_file` 契约同型；校验类型若与消费契约错位，文件路径
 /// 被这里 400 拒绝、目录路径放行后在引擎期报错，两条路皆死。
 /// validator 拒绝（越界/不存在/类型不符）都属客户端输入错误，映射 400；
 /// 若走 to_api_error 会落入 SecurityError→500，把输入错误伪装成服务端故障。
@@ -635,7 +625,7 @@ fn switch_error_to_api_error(e: VecboostError) -> ApiError {
 
 /// switch 显式路径校验：`model_path` 为目录语义（bundle 目录），
 /// `tokenizer_path` 为文件语义——与引擎期 `resolve_tokenizer_path` 的
-/// explicit 分支 `is_file()` 契约同型；校验类型若与消费契约错位，文件路径
+/// explicit 分支 `is_file` 契约同型；校验类型若与消费契约错位，文件路径
 /// 被这里 400 拒绝、目录路径放行后在引擎期报错，两条路皆死。
 /// validator 拒绝（越界/不存在/类型不符）都属客户端输入错误，映射 400；
 /// 若走 to_api_error 会落入 SecurityError→500，把输入错误伪装成服务端故障。
@@ -865,14 +855,12 @@ async fn health_handler(depth: Option<String>) -> Result<serde_json::Value, ApiE
     }
 }
 
-// =============================================================================
 // HTTP forge handlers
-// =============================================================================
 
 #[cfg(feature = "http")]
 #[forge(
     name = "embed",
-    version = 1,
+    version = "v1",
     path = "/embed",
     method = "POST",
     tool_name = "embed_text",
@@ -885,7 +873,7 @@ pub async fn forge_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
 #[cfg(feature = "http")]
 #[forge(
     name = "embed_batch",
-    version = 1,
+    version = "v1",
     path = "/embed/batch",
     method = "POST",
     tool_name = "embed_batch",
@@ -898,7 +886,7 @@ pub async fn forge_embed_batch(req: BatchEmbedRequest) -> Result<BatchEmbedRespo
 #[cfg(feature = "http")]
 #[forge(
     name = "compute_similarity",
-    version = 1,
+    version = "v1",
     path = "/similarity",
     method = "POST",
     tool_name = "compute_similarity",
@@ -913,7 +901,7 @@ pub async fn forge_compute_similarity(
 #[cfg(feature = "http")]
 #[forge(
     name = "search",
-    version = 1,
+    version = "v1",
     path = "/search",
     method = "POST",
     tool_name = "search",
@@ -926,7 +914,7 @@ pub async fn forge_search(req: SearchRequest) -> Result<SearchResponse, ApiError
 #[cfg(feature = "http")]
 #[forge(
     name = "file_embed",
-    version = 1,
+    version = "v1",
     path = "/embed/file",
     method = "POST",
     tool_name = "file_embed",
@@ -939,7 +927,7 @@ pub async fn forge_file_embed(req: FileEmbedRequest) -> Result<FileEmbedResponse
 #[cfg(feature = "http")]
 #[forge(
     name = "health",
-    version = 1,
+    version = "v1",
     path = "/health",
     method = "GET",
     no_prefix = true,
@@ -955,7 +943,7 @@ pub async fn forge_health(
 #[cfg(feature = "http")]
 #[forge(
     name = "model_switch",
-    version = 1,
+    version = "v1",
     path = "/model/switch",
     method = "POST",
     tool_name = "model_switch",
@@ -968,7 +956,7 @@ pub async fn forge_model_switch(req: ModelSwitchRequest) -> Result<ModelSwitchRe
 #[cfg(feature = "http")]
 #[forge(
     name = "get_current_model",
-    version = 1,
+    version = "v1",
     path = "/model/current",
     method = "GET",
     tool_name = "get_current_model",
@@ -981,7 +969,7 @@ pub async fn forge_get_current_model() -> Result<ModelInfo, ApiError> {
 #[cfg(feature = "http")]
 #[forge(
     name = "get_model_info",
-    version = 1,
+    version = "v1",
     path = "/model/info",
     method = "GET",
     tool_name = "get_model_info",
@@ -994,7 +982,7 @@ pub async fn forge_get_model_info() -> Result<ModelMetadata, ApiError> {
 #[cfg(feature = "http")]
 #[forge(
     name = "list_models",
-    version = 1,
+    version = "v1",
     path = "/models",
     method = "GET",
     tool_name = "list_models",
@@ -1007,7 +995,7 @@ pub async fn forge_list_models() -> Result<ModelListResponse, ApiError> {
 #[cfg(feature = "http")]
 #[forge(
     name = "model_unload",
-    version = 1,
+    version = "v1",
     path = "/model/unload",
     method = "POST",
     tool_name = "model_unload",
@@ -1020,7 +1008,7 @@ pub async fn forge_unload_model(req: UnloadModelRequest) -> Result<UnloadModelRe
 #[cfg(feature = "http")]
 #[forge(
     name = "openai_embed",
-    version = 1,
+    version = "v1",
     path = "/v1/embeddings",
     method = "POST",
     no_prefix = true,
@@ -1173,14 +1161,12 @@ fn build_openai_embedding_objects(
         .collect()
 }
 
-// =============================================================================
 // CLI forge handlers
-// =============================================================================
 
 #[cfg(feature = "cli")]
 #[forge(
     name = "embed",
-    version = 1,
+    version = "v1",
     cli = true,
     description = "Generate embedding vector for input text",
     i18n_key = "forge-cli-embed"
@@ -1192,7 +1178,7 @@ pub async fn cli_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
 #[cfg(feature = "cli")]
 #[forge(
     name = "embed_batch",
-    version = 1,
+    version = "v1",
     cli = true,
     description = "Generate embedding vectors for multiple texts in batch",
     i18n_key = "forge-cli-embed-batch"
@@ -1204,7 +1190,7 @@ pub async fn cli_embed_batch(req: BatchEmbedRequest) -> Result<BatchEmbedRespons
 #[cfg(feature = "cli")]
 #[forge(
     name = "compute_similarity",
-    version = 1,
+    version = "v1",
     cli = true,
     description = "Compute cosine similarity between two texts",
     i18n_key = "forge-cli-compute-similarity"
@@ -1215,7 +1201,6 @@ pub async fn cli_compute_similarity(
     compute_similarity_handler(req).await
 }
 
-// =============================================================================
 // gRPC forge handlers — sdforge unified `Call` protocol
 //
 // Each function is registered via `#[forge(grpc_method = "...")]` and invoked
@@ -1223,12 +1208,11 @@ pub async fn cli_compute_similarity(
 // name. Request payloads are JSON-serialized domain types passed via
 // `CallRequest.data`; responses are JSON-serialized domain types returned in
 // `CallResponse.data`.
-// =============================================================================
 
 #[cfg(feature = "grpc")]
 #[forge(
     name = "vecboost_embed",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.embed",
     description = "Generate embedding vector for input text"
 )]
@@ -1239,7 +1223,7 @@ pub async fn grpc_embed(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
 #[cfg(feature = "grpc")]
 #[forge(
     name = "vecboost_embed_batch",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.embed_batch",
     description = "Generate embedding vectors for multiple texts in batch"
 )]
@@ -1250,7 +1234,7 @@ pub async fn grpc_embed_batch(req: BatchEmbedRequest) -> Result<BatchEmbedRespon
 #[cfg(feature = "grpc")]
 #[forge(
     name = "vecboost_compute_similarity",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.compute_similarity",
     description = "Compute similarity between two texts"
 )]
@@ -1263,7 +1247,7 @@ pub async fn grpc_compute_similarity(
 #[cfg(feature = "grpc")]
 #[forge(
     name = "vecboost_embed_file",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.embed_file",
     description = "Embed text from a file with path validation"
 )]
@@ -1274,7 +1258,7 @@ pub async fn grpc_embed_file(req: FileEmbedRequest) -> Result<FileEmbedResponse,
 #[cfg(feature = "grpc")]
 #[forge(
     name = "vecboost_model_switch",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.model_switch",
     description = "Switch the currently loaded model"
 )]
@@ -1285,7 +1269,7 @@ pub async fn grpc_model_switch(req: ModelSwitchRequest) -> Result<ModelSwitchRes
 #[cfg(feature = "grpc")]
 #[forge(
     name = "vecboost_get_current_model",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.get_current_model",
     description = "Get information about the currently loaded model"
 )]
@@ -1296,7 +1280,7 @@ pub async fn grpc_get_current_model() -> Result<ModelInfo, ApiError> {
 #[cfg(feature = "grpc")]
 #[forge(
     name = "vecboost_get_model_info",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.get_model_info",
     description = "Get metadata about the currently loaded model"
 )]
@@ -1307,7 +1291,7 @@ pub async fn grpc_get_model_info() -> Result<ModelMetadata, ApiError> {
 #[cfg(feature = "grpc")]
 #[forge(
     name = "vecboost_list_models",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.list_models",
     description = "List all available models"
 )]
@@ -1318,7 +1302,7 @@ pub async fn grpc_list_models() -> Result<ModelListResponse, ApiError> {
 #[cfg(feature = "grpc")]
 #[forge(
     name = "vecboost_search",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.search",
     description = "1-to-N semantic search over candidate texts"
 )]
@@ -1329,7 +1313,7 @@ pub async fn grpc_search(req: SearchRequest) -> Result<SearchResponse, ApiError>
 #[cfg(feature = "cli")]
 #[forge(
     name = "search",
-    version = 1,
+    version = "v1",
     cli = true,
     description = "Rank candidate texts by similarity to the query (1-to-N search)",
     i18n_key = "forge-cli-search"
@@ -1341,7 +1325,7 @@ pub async fn cli_search(req: SearchRequest) -> Result<SearchResponse, ApiError> 
 #[cfg(feature = "grpc")]
 #[forge(
     name = "vecboost_model_unload",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.model_unload",
     description = "Unload a model from the model manager cache"
 )]
@@ -1352,7 +1336,7 @@ pub async fn grpc_unload_model(req: UnloadModelRequest) -> Result<UnloadModelRes
 #[cfg(feature = "grpc")]
 #[forge(
     name = "vecboost_health_check",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.health_check",
     description = "Service health check"
 )]
@@ -1425,7 +1409,7 @@ mod tests {
     }
 
     /// switch 显式路径校验分流：tokenizer_path 文件语义（与引擎期
-    /// is_file() 契约同型）、model_path 目录语义；越界一律 400 语义拒绝，
+    /// is_file 契约同型）、model_path 目录语义；越界一律 400 语义拒绝，
     /// 且 wire 为固定脱敏文案——validator 原文（canonical 路径 +
     /// Allowed roots 清单）不得外泄到响应体
     #[cfg(any(feature = "http", feature = "grpc", feature = "cli"))]
@@ -1443,7 +1427,7 @@ mod tests {
         // 目录 model_path + 文件 tokenizer_path：各按语义放行
         assert!(validate_switch_paths(&validator, Some(&model_dir), Some(&tok_file)).is_ok());
 
-        // tokenizer_path 传目录 → 400 语义拒绝（引擎期 is_file() 必败的前置拦截）
+        // tokenizer_path 传目录 → 400 语义拒绝（引擎期 is_file 必败的前置拦截）
         let canonical_model_dir = model_dir.canonicalize().unwrap();
         match validate_switch_paths(&validator, Some(&model_dir), Some(&model_dir)) {
             Err(ApiError::InvalidInput {

@@ -240,7 +240,7 @@ pub struct ModelListResponse {
     pub total_count: usize,
 }
 
-/// 卸载模型请求（/api/1/model/unload）
+/// 卸载模型请求（/api/v1/model/unload）
 #[derive(Debug, Deserialize, Clone)]
 pub struct UnloadModelRequest {
     pub model_name: String,
@@ -254,9 +254,7 @@ pub struct UnloadModelResponse {
     pub unloaded: bool,
 }
 
-// =============================================================================
 // Rerank 领域类型
-// =============================================================================
 
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]

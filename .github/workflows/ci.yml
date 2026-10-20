@@ -1,0 +1,259 @@
+# CI 质量门禁：fmt / clippy / check / test / coverage / deny
+#
+# 特性约束：sqlite 与 postgres 由 dbnexus compile_error! 强制互斥，
+# 禁止 --all-features（会同时打开两组驱动）；cuda/metal 无对应硬件。
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # 与 health-check.yml 同口径的“全功能”组合（不含互斥驱动与硬件后端）。
+  FEATURES: "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
+  # 覆盖率口径：与发布主面一致的“可测全集”（含共享状态与集成测试），
+  # 不并入 cli/mcp/grpc 的协议包装层（各自有独立 test 腿验证编译与行为）。
+  COVERAGE_FEATURES: "http,auth,db,sqlite,distributed-redis"
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: clippy
+      - name: Run clippy
+        run: cargo clippy --features "${{ env.FEATURES }}" --all-targets -- -D warnings -W clippy::unwrap_used
+
+  check:
+    name: Check (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["", "grpc", "auth,db,sqlite,onnx", "postgres"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: check-${{ matrix.features }}
+      - name: Check
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo check --no-default-features
+          else
+            cargo check --features "${{ matrix.features }}"
+          fi
+
+  test:
+    name: Test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+          - name: grpc
+            features: "grpc"
+          - name: ecosystem
+            features: "auth,db,sqlite,onnx"
+          - name: shared-state
+            features: "http,auth,db,sqlite,distributed-redis"
+    services:
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: test-${{ matrix.name }}
+      - name: Run tests
+        env:
+          VECBOOST_TEST_REDIS_URL: redis://127.0.0.1:6379
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo test
+          else
+            cargo test --features "${{ matrix.features }}"
+          fi
+
+  coverage:
+    name: Coverage (lines >= 95%)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: coverage
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-llvm-cov
+      # 覆盖率同口径前提：模型/ORT 依赖的测试（HTTP/翻译/引擎 E2E）在缺
+      # 资产时会跳过，使 CI 覆盖率低于本地实测。此处缓存并预置最小资产集。
+      - name: Cache ONNX runtime and models
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cache/vecboost-ci
+            models/Xenova-bge-small-en-v1.5
+            models/opus-mt-en-zh
+            models/Xenova-all-MiniLM-L6-v2
+          key: vecboost-onnx-assets-ort1.28.2-${{ hashFiles('.github/workflows/ci.yml') }}
+      - name: Provision ONNX Runtime 1.28.2
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.cache/vecboost-ci"
+          ORT_DIR="$HOME/.cache/vecboost-ci/onnxruntime-linux-x64-1.28.2"
+          if [ ! -f "$ORT_DIR/lib/libonnxruntime.so" ]; then
+            curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v1.28.2/onnxruntime-linux-x64-1.28.2.tgz" -o /tmp/ort.tgz
+            echo "d7209b8751b27b862b0c76332c2e20e203396edb5dab700ecf4bb485cf147415  /tmp/ort.tgz" | sha256sum -c -
+            tar -xzf /tmp/ort.tgz -C "$HOME/.cache/vecboost-ci"
+          fi
+          echo "ORT_DYLIB_PATH=$ORT_DIR/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+      - name: Provision ONNX models
+        run: |
+          set -euo pipefail
+          python -m pip install -q "huggingface_hub==2.2.0"
+          if [ ! -f models/Xenova-bge-small-en-v1.5/config.json ] \
+            || [ ! -f models/Xenova-bge-small-en-v1.5/tokenizer.json ] \
+            || [ ! -f models/Xenova-bge-small-en-v1.5/model.onnx ]; then
+            hf download Xenova/bge-small-en-v1.5 \
+              config.json tokenizer.json tokenizer_config.json special_tokens_map.json onnx/model.onnx \
+              --revision ea104dacec62c0de699686887e3f920caeb4f3e3 \
+              --local-dir models/Xenova-bge-small-en-v1.5
+            cp models/Xenova-bge-small-en-v1.5/onnx/model.onnx models/Xenova-bge-small-en-v1.5/model.onnx
+          fi
+          if [ ! -f models/opus-mt-en-zh/config.json ] \
+            || [ ! -f models/opus-mt-en-zh/generation_config.json ] \
+            || [ ! -f models/opus-mt-en-zh/tokenizer.json ] \
+            || [ ! -f models/opus-mt-en-zh/onnx/encoder_model.onnx ] \
+            || [ ! -f models/opus-mt-en-zh/onnx/decoder_model_merged.onnx ]; then
+            hf download Xenova/opus-mt-en-zh \
+              config.json generation_config.json tokenizer.json tokenizer_config.json special_tokens_map.json onnx/encoder_model.onnx onnx/decoder_model_merged.onnx \
+              --revision 046f55aec303cdee3e0318604406d4df20f1e8ea \
+              --local-dir models/opus-mt-en-zh
+          fi
+          # server_variants 的第二模型（模型切换/卸载生命周期）
+          if [ ! -f models/Xenova-all-MiniLM-L6-v2/config.json ] \
+            || [ ! -f models/Xenova-all-MiniLM-L6-v2/tokenizer.json ] \
+            || [ ! -f models/Xenova-all-MiniLM-L6-v2/model.onnx ]; then
+            hf download Xenova/all-MiniLM-L6-v2 \
+              config.json tokenizer.json onnx/model.onnx \
+              --revision 751bff37182d3f1213fa05d7196b954e230abad9 \
+              --local-dir models/Xenova-all-MiniLM-L6-v2
+            cp models/Xenova-all-MiniLM-L6-v2/onnx/model.onnx models/Xenova-all-MiniLM-L6-v2/model.onnx
+          fi
+      - name: Generate coverage
+        env:
+          VECBOOST_TEST_REDIS_URL: redis://127.0.0.1:6379
+        # 多腿合并：全功能组合 + 默认构建。禁止 --lib 窄口径：
+        # 集成测试与 examples 的错误分支同样计入分母。
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" --tests
+          cargo llvm-cov --no-report --features "http,auth,db,sqlite" --tests
+          cargo llvm-cov report --lcov --output-path coverage/lcov.info
+      - name: Enforce line coverage
+        # llvm-cov 0.9.1 的 --fail-under-lines 在该版本为空操作，按 lcov 计数硬判。
+        run: |
+          total=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if (lf==0) {print "0.00"} else {printf "%.2f", 100*lh/lf}}' coverage/lcov.info)
+          echo "Coverage: ${total}% (lines)"
+          awk -v t="$total" 'BEGIN{exit !(t+0 >= 95)}' || {
+            echo "::error::行覆盖率 ${total}% < 95%"
+            exit 1
+          }
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45 # v5
+        with:
+          files: coverage/lcov.info
+          fail_ci_if_error: false
+
+  deny:
+    name: Deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-deny
+      - name: cargo deny
+        run: cargo deny check

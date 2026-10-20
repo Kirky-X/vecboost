@@ -102,7 +102,6 @@ enabled = false
 fn test_confers_env_var_jwt_secret_override() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    // Ensure clean state before test
     unsafe {
         std::env::remove_var("VECBOOST_JWT_SECRET");
     }
@@ -178,7 +177,6 @@ enabled = false
 fn test_confers_defaults_when_no_file() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-    // Ensure clean env state
     unsafe {
         std::env::remove_var("VECBOOST_JWT_SECRET");
         std::env::remove_var("VECBOOST_ADMIN_PASSWORD");
@@ -378,7 +376,6 @@ trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
     let config =
         VecboostConfig::load_via_confers_with_path(&path).expect("confers load should succeed");
 
-    // 验证字段被正确加载
     assert_eq!(
         config.auth.trusted_proxies,
         vec!["10.0.0.0/8".to_string(), "192.168.0.0/16".to_string()],
@@ -390,9 +387,7 @@ trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
     );
 }
 
-// =============================================================================
 // Config validation tests (garde validation integration)
-// =============================================================================
 
 /// port=0 is rejected by validation.
 #[test]
@@ -611,9 +606,7 @@ async fn test_watcher_guard_lifecycle() {
     );
 }
 
-// =============================================================================
 // Encryption roundtrip tests
-// =============================================================================
 
 /// Encryption roundtrip — encrypt → serialize → deserialize → decrypt
 /// produces the original value.

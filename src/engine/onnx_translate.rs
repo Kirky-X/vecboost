@@ -1890,14 +1890,30 @@ impl InferenceEngine for OnnxTranslationEngine {
 mod tests {
     use super::*;
 
+    // 就绪判据必须覆盖加载期必需资产：只看目录存在会把半下载 bundle
+    // 误判为可用，让本该 SKIP 的真机测试以 panic 结束。tokenizer 走与
+    // 加载器相同的 `resolve_tokenizer_path`（根或 tokenizer/ 子目录），
+    // 避免合法布局被误跳过。
+    fn bundle_ready(dir: &Path) -> bool {
+        dir.join("config.json").is_file()
+            && dir.join("generation_config.json").is_file()
+            && crate::engine::local_bundle::resolve_tokenizer_path(dir, None).is_ok()
+            && ENCODER_CANDIDATES
+                .iter()
+                .any(|file| dir.join(file).is_file())
+            && DECODER_CANDIDATES
+                .iter()
+                .any(|file| dir.join(file).is_file())
+    }
+
     fn opus_bundle() -> Option<PathBuf> {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/opus-mt-en-zh");
-        dir.is_dir().then_some(dir)
+        bundle_ready(&dir).then_some(dir)
     }
 
     fn m2m100_bundle() -> Option<PathBuf> {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/m2m100_418M");
-        dir.is_dir().then_some(dir)
+        bundle_ready(&dir).then_some(dir)
     }
 
     // ── 惰性 worker 集：补建数量纯函数（离线可测） ─────────────────────
@@ -2773,11 +2789,10 @@ mod tests {
 
     #[test]
     fn test_translate_m2m_real_bundle_end_to_end() {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/m2m100_418M");
-        if !dir.is_dir() {
+        let Some(dir) = m2m100_bundle() else {
             eprintln!("SKIP: models/m2m100_418M 缺失（离线环境）");
             return;
-        }
+        };
         let dylib = std::env::var("ORT_DYLIB_PATH")
             .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
         if !std::path::Path::new(&dylib).is_file() {

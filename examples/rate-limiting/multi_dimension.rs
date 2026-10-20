@@ -18,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ip_requests_per_minute: 5,
         user_requests_per_minute: 3,
         api_key_requests_per_minute: 100,
+        ..Default::default()
     };
     let adapter = LimiteronAdapter::new(settings).await;
 

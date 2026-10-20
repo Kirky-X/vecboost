@@ -308,7 +308,7 @@ mod tests {
         assert_eq!(SUPPORTED_LOCALES, &["en", "zh"]);
     }
 
-    /// 守卫(协议面键):`forge-*` 键仅在 sdforge 注册表里生效（不进 `tr()` 调用面），
+    /// 守卫(协议面键):`forge-*` 键仅在 sdforge 注册表里生效（不进 `tr` 调用面），
     /// 因此 R3 扫不到它们；此处确保它们存在且双束都能渲染出非键名文案。
     #[test]
     fn test_protocol_keys_resolve_in_both_bundles() {

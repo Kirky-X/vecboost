@@ -4,9 +4,9 @@
 //! 公共 ONNX Runtime Session 构建层（onnx-engine-unify D1）。
 //!
 //! 收编 `onnx_engine` / `decision` / `onnx_translate` 三处曾各自漂移的
-//! `Session::builder()` 链，以及成对复制的 `probe_model_file` /
+//! `Session::builder` 链，以及成对复制的 `probe_model_file` /
 //! `precision_for_model_file`，使 EP/优化档位/线程策略单点可调。主仓（非 POC）
-//! 内除本文件外不得再出现 `Session::builder()`（R-engine-inference-001）。
+//! 内除本文件外不得再出现 `Session::builder`（R-engine-inference-001）。
 //!
 //! 各调用点的**引擎专属**前置校验（如 `onnx_engine` 的 SHA256 完整性校验、
 //! AMD/ROCm warn 分支）不属 builder 链，保留在调用侧——本层只做公共核。
@@ -49,7 +49,7 @@ fn resolve_intra_threads(intra_threads: usize) -> usize {
 }
 
 /// ort 进程级全局环境：rc.14 起每进程仅允许构建一个 `Environment`
-/// （二次 `build()` 即报 "only one environment is allowed per process"），
+/// （二次 `build` 即报 "only one environment is allowed per process"），
 /// 全部 Session 共享同一实例；进程生命周期内持有，`Session::builder` 只借用。
 fn global_env() -> Result<&'static ort::environment::Environment, VecboostError> {
     static ENV: OnceLock<ort::environment::Environment> = OnceLock::new();

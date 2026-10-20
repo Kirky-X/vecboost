@@ -6,10 +6,9 @@
 //! 遵循 `src/api/embedding.rs` 相同模式：协议无关的 `decisions_handler`
 //! 包含业务逻辑，`forge_*` / `cli_*` / `grpc_*` 仅为薄包装。
 //!
-//! # 路由偏差说明（文档 4.3 写作 /v1/decisions）
-//! sdforge 按 `version = 1` 统一注入 `/api/{version}` 前缀，实际路由
-//! `/api/1/decisions`——与既有 embed/rerank 端点同一前缀约定，不单独引入
-//! `/v1` 前缀（文档 4.3 的 `/v1/decisions` 为规格期草写）。
+//! # 路由
+//! 端点由 `#[forge(version = "v1")]` 注入 `/api/v1/decisions`，与 embed/rerank
+//! 同一前缀约定。
 
 use crate::domain::{DecisionRequest, DecisionResponse};
 use crate::error::VecboostError;
@@ -29,9 +28,7 @@ use sdforge::prelude::*;
 #[cfg(all(feature = "openapi", feature = "http"))]
 use ::utoipa;
 
-// =============================================================================
 // Public SDK functions
-// =============================================================================
 
 pub async fn decide(
     svc: &DecisionService,
@@ -41,9 +38,7 @@ pub async fn decide(
     svc.process_decision(req, max_questions).await
 }
 
-// =============================================================================
 // Protocol-agnostic handlers
-// =============================================================================
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 async fn decisions_handler(req: DecisionRequest) -> Result<DecisionResponse, ApiError> {
@@ -75,14 +70,12 @@ async fn decisions_handler(req: DecisionRequest) -> Result<DecisionResponse, Api
         .map_err(to_api_error)
 }
 
-// =============================================================================
 // HTTP forge handlers
-// =============================================================================
 
 #[cfg(feature = "http")]
 #[forge(
     name = "decisions",
-    version = 1,
+    version = "v1",
     path = "/decisions",
     method = "POST",
     tool_name = "decisions",
@@ -92,14 +85,12 @@ pub async fn forge_decisions(req: DecisionRequest) -> Result<DecisionResponse, A
     decisions_handler(req).await
 }
 
-// =============================================================================
 // CLI forge handlers
-// =============================================================================
 
 #[cfg(feature = "cli")]
 #[forge(
     name = "decisions",
-    version = 1,
+    version = "v1",
     cli = true,
     description = "Answer choice/score/noul questions about a decision state",
     i18n_key = "forge-cli-decisions"
@@ -108,14 +99,12 @@ pub async fn cli_decisions(req: DecisionRequest) -> Result<DecisionResponse, Api
     decisions_handler(req).await
 }
 
-// =============================================================================
 // gRPC forge handlers
-// =============================================================================
 
 #[cfg(feature = "grpc")]
 #[forge(
     name = "decisions",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.decide",
     description = "Answer choice/score/noul questions about a decision state"
 )]

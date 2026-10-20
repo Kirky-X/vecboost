@@ -1642,7 +1642,7 @@ mod tests {
         assert_eq!(manager.count().await, 0);
     }
 
-    // ===== LFRU 驻留管理测试 =====
+    // LFRU 驻留管理测试
 
     fn residency_config_for(name: &str, dir: &std::path::Path) -> ModelConfig {
         ModelConfig {

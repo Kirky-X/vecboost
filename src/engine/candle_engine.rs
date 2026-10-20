@@ -466,7 +466,7 @@ impl CandleEngine {
             .unsqueeze(0)
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-        // 修复：candle BertModel::forward 签名为
+        // candle BertModel::forward 签名为
         // (input_ids, token_type_ids, attention_mask: Option)——旧实现把
         // attention_mask 误传到 token_type_ids 槽位、mask 传 None，
         // 导致 segment embedding 错误（单条）且批内 padding 完全无隔离（批量）。
@@ -529,7 +529,7 @@ impl CandleEngine {
         log::debug!("Embeddings shape: {:?}", embeddings.shape());
         log::debug!("Embeddings dims: {:?}", embeddings.dims());
 
-        // 移除 update_gpu_memory().await——GPU 监控由独立后台任务负责
+        // 移除 update_gpu_memory.await——GPU 监控由独立后台任务负责
 
         let dims = embeddings.dims();
         let hidden_dim = self.hidden_size;
@@ -726,7 +726,7 @@ impl CandleEngine {
             .reshape(&[batch_size, max_seq_len])
             .map_err(|e| VecboostError::InferenceError(e.to_string()))?;
 
-        // 修复：构建批量 token_type_ids 并将 attention_mask
+        // 构建批量 token_type_ids 并将 attention_mask
         // 以 Some(...) 正确传入（旧实现把 mask 传到 type_ids 槽位、mask 传 None，
         // 导致批内 padding 无隔离，短序列向量被长序列污染，cos 仅 ~0.59）。
         let mut batch_type_ids = vec![0i64; batch_size * max_seq_len];
@@ -809,7 +809,7 @@ impl CandleEngine {
     }
 
     /// CLS 批量池化：narrow + squeeze + to_vec2 单次提取所有 CLS token，
-    /// 替代逐样本 get(i).get(0).to_vec1() 的 N 次 GPU kernel + N 次 DMA 传输。
+    /// 替代逐样本 get(i).get(0).to_vec1 的 N 次 GPU kernel + N 次 DMA 传输。
     /// 对应鲲鹏文档「理论计算极限」：减少全局内存访问延迟（400-600 clocks）。
     /// f16/bf16 输出先 cast 到 f32。
     fn pool_batch_cls(embeddings: &Tensor) -> Result<Vec<Vec<f32>>, VecboostError> {
@@ -1084,9 +1084,7 @@ impl CandleEngine {
     }
 }
 
-// ============================================================================
 // Pooling 数学纯函数(与 candle Tensor 解耦,可独立单测)
-// ============================================================================
 
 /// 加载期解析产物：架构判定、架构专属 config、规模元数据与位置上限。
 struct ParsedModelConfig {
@@ -1103,7 +1101,7 @@ struct ParsedModelConfig {
 /// 回退 CPU（ROCm 级 Candle 构建或 ONNX Runtime 才有 AMD 路径）。
 ///
 /// CUDA 的**静默降级已禁止**（2026-10-18）：用户显式配 `device = "cuda"` 而构建缺
-/// `candle-cuda`（`cuda_is_available()` 恒假）时，原先会打一句 INFO 后落 CPU，
+/// `candle-cuda`（`cuda_is_available` 恒假）时，原先会打一句 INFO 后落 CPU，
 /// 等于把 CPU 数字记到 GPU 档名下。现改为启动期 `ConfigError` 显性拒绝，
 /// 与 `startup-engine-candle-not-compiled`（engine_type 未编译）同口径。
 fn resolve_compute_device(device_type: &DeviceType) -> Result<Device, VecboostError> {

@@ -99,7 +99,7 @@ pub struct QueuedRequest {
     pub source: RequestSource,
 }
 
-// ---- PriorityRequestQueue ----
+// PriorityRequestQueue
 
 use log::{debug, warn};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -167,7 +167,7 @@ impl CancellationRegistry {
 
 /// 入队槽位预留守卫：CAS 成功即创建（armed），push 完成后
 /// [`SlotGuard::disarm`]；在此之间任何路径（调用方 future 于
-/// `queues.write().await` 锁等待处被取消、push 期间 unwind）drop 时回滚
+/// `queues.write.await` 锁等待处被取消、push 期间 unwind）drop 时回滚
 /// current_size，容量计数与实际入队数保持精确一致。
 struct SlotGuard<'a> {
     counter: &'a AtomicUsize,
@@ -196,7 +196,7 @@ pub struct PriorityRequestQueue {
     max_queue_size: usize,
     /// 当前队列大小
     current_size: Arc<AtomicUsize>,
-    /// 入队通知——worker 通过 notified() 等待，消除轮询退避
+    /// 入队通知——worker 通过 notified 等待，消除轮询退避
     notify: Arc<Notify>,
     /// 老化跳级阈值（`with_aging_threshold` 可覆盖默认值）
     aging_threshold: Duration,
@@ -269,7 +269,7 @@ impl PriorityRequestQueue {
             }
         }
 
-        // CAS 已预留槽位——此后到 push_back 之间隔着 queues.write().await
+        // CAS 已预留槽位——此后到 push_back 之间隔着 queues.write.await
         // 取消点（tokio future 在锁等待上被 drop 即泄漏 +1，容量渐近假满，
         // 三路评审 M）。槽位守卫保证任何取消/panic 路径都回滚计数，push
         // 成功后 disarm；push_back 自身 panic 时守卫尚未 disarm 同样覆盖
@@ -479,7 +479,7 @@ impl PriorityRequestQueue {
         }
 
         // 兜底:未凑到任何请求时,弹出最高优先级 aged 队首,避免滞留
-        // (已取消请求照常丢弃，与 dequeue() 主路径语义一致——回归审查 INFO)
+        // (已取消请求照常丢弃，与 dequeue 主路径语义一致——回归审查 INFO)
         if result.is_empty()
             && let Some(priority) = aged_front
             && let Some(queue) = queues.get_mut(&priority)
@@ -874,7 +874,7 @@ mod tests {
         assert_eq!(queue.size(), 0);
     }
 
-    // ===== peek_highest_priority tests =====
+    // peek_highest_priority tests
 
     #[tokio::test]
     async fn test_peek_highest_priority_empty_queue_returns_none() {
@@ -951,7 +951,7 @@ mod tests {
         assert!(queue.peek_highest_priority().await.is_none());
     }
 
-    // ===== size_by_priority tests =====
+    // size_by_priority tests
 
     #[tokio::test]
     async fn test_size_by_priority_empty_queue() {
@@ -1015,7 +1015,7 @@ mod tests {
         assert_eq!(total, 6);
     }
 
-    // ===== dequeue from empty queue =====
+    // dequeue from empty queue
 
     #[tokio::test]
     async fn test_dequeue_empty_queue_returns_none() {
@@ -1046,7 +1046,7 @@ mod tests {
         assert_eq!(queue.size(), 0);
     }
 
-    // ===== clear on empty queue =====
+    // clear on empty queue
 
     #[tokio::test]
     async fn test_clear_empty_queue() {
@@ -1055,7 +1055,7 @@ mod tests {
         assert_eq!(queue.size(), 0);
     }
 
-    // ===== queue size tracking after operations =====
+    // queue size tracking after operations
 
     #[tokio::test]
     async fn test_size_reflects_enqueue_and_dequeue() {
@@ -1126,7 +1126,7 @@ mod tests {
         assert_eq!(dequeued.priority, Priority::Low);
     }
 
-    // ===== dequeue_batch tests =====
+    // dequeue_batch tests
 
     #[tokio::test]
     async fn test_dequeue_batch_returns_all_when_under_limit() {
@@ -1188,7 +1188,7 @@ mod tests {
     }
 
     /// 槽位守卫取消回滚钉（三路评审 M）：确定性构造——持写锁逼使 enqueue
-    /// 停在 queues.write().await（CAS 已预留槽位），abort 该 future。旧实现
+    /// 停在 queues.write.await（CAS 已预留槽位），abort 该 future。旧实现
     /// 计数永久泄漏 +1（容量渐近假满）；守卫实现必须回滚为 0，且容量未被
     /// 侵蚀（10 容量仍可入满）。
     #[tokio::test(flavor = "multi_thread")]
@@ -1214,7 +1214,7 @@ mod tests {
             })
             .await
         });
-        // 让任务跑完同步段（closed 检查 + CAS 预留），停在 write().await
+        // 让任务跑完同步段（closed 检查 + CAS 预留），停在 write.await
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(queue.size(), 1, "CAS reservation must be visible pre-push");
         handle.abort();
@@ -1251,7 +1251,7 @@ mod tests {
         assert_eq!(queue.size(), 10);
     }
 
-    /// 精确不变量压力钉：并发 enqueue 与 abort 交错下，queue.size() 必须
+    /// 精确不变量压力钉：并发 enqueue 与 abort 交错下，queue.size 必须
     /// 恰等于成功入队（Ok）的任务数——被 abort 的 future 无论停在哪个取消
     /// 点都不得占位（旧实现 CAS 后 push 前被 abort 即泄漏，size > ok 数）。
     #[tokio::test(flavor = "multi_thread")]
@@ -1276,7 +1276,7 @@ mod tests {
                 })
                 .await
             }));
-            // 交错制造不同取消落点（未 poll / write().await / 已完成）
+            // 交错制造不同取消落点（未 poll / write.await / 已完成）
             if i % 3 == 0 {
                 tokio::task::yield_now().await;
             }

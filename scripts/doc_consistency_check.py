@@ -5,7 +5,7 @@
 """文档-代码一致性核验。
 
 系统性提取文档中可验证声明并与代码核对：
-1. HTTP 端点：文档声明的 /api/1/* 与 /v1/*、/health、/metrics 路径必须存在于 #[forge] 注册
+1. HTTP 端点：文档声明的 /api/v1/* 与 /v1/*、/health、/metrics 路径必须存在于 #[forge] 注册
 2. gRPC 方法：文档声明的 vecboost.* 必须与 #[forge(grpc_method=...)] 一致
 3. 环境变量：文档声明的 VECBOOST_* 必须能映射到 VecboostConfig 字段、被 Rust 代码
    或 scripts/ 运维脚本显式消费
@@ -51,7 +51,7 @@ def code_routes(src: str) -> set[str]:
             continue
         path = pm.group(1)
         no_prefix = "no_prefix" in attrs and "true" in attrs
-        routes.add(path if no_prefix else f"/api/1{path}")
+        routes.add(path if no_prefix else f"/api/v1{path}")
     # 手写例外
     if 'route("/metrics"' in src:
         routes.add("/metrics")
@@ -82,7 +82,7 @@ def code_env_vars(src: str) -> set[str]:
 def code_cli_subcommands(src: str) -> set[str]:
     # 全量 CLI 面：所有 forge(cli = true) 的 name（旧版白名单只覆盖 5 个旧命令，
     # "代码事实 cli=N" 打印值与真实 CLI 面脱节）
-    return set(re.findall(r'name\s*=\s*"([a-z_]+)"\s*,\s*version\s*=\s*1\s*,\s*cli\s*=\s*true', src))
+    return set(re.findall(r'name\s*=\s*"([a-z_]+)"\s*,\s*version\s*=\s*"v1"\s*,\s*cli\s*=\s*true', src))
 
 
 # confers env 映射可用性：VECBOOST_<SECTION>_<FIELD>，FIELD 不含下划线时可达
@@ -236,6 +236,44 @@ def check_anchors(docs: list[pathlib.Path]) -> tuple[list[str], int]:
     return issues, checked
 
 
+# 旧版本前缀已废弃：除历史记录外，非归档文件不得再引用
+_STALE_PREFIX = "/api/" + "1"
+_STALE_PREFIX_WHITELIST = {"docs/CHANGELOG.md", "tests/scenario/report.md"}
+_STALE_PREFIX_ROOTS = (
+    "README.md",
+    "README_EN.md",
+    "config",
+    "config-e2e-transcribe.toml",
+    "docs",
+    "examples",
+    "scripts",
+    "specmark/specs",
+    "tests",
+)
+_STALE_PREFIX_SUFFIXES = {".md", ".rs", ".py", ".sh", ".toml", ".yaml", ".yml", ".json"}
+
+
+def check_stale_api_prefix() -> list[str]:
+    """扫描已废弃的旧版本前缀引用（排除历史归档与缺陷报告）。"""
+    issues: list[str] = []
+    pattern = re.compile(re.escape(_STALE_PREFIX) + r"(?![0-9])")
+    for rel_root in _STALE_PREFIX_ROOTS:
+        root = ROOT / rel_root
+        paths = [root] if root.is_file() else sorted(root.rglob("*"))
+        for p in paths:
+            if not p.is_file() or p.suffix not in _STALE_PREFIX_SUFFIXES:
+                continue
+            rel = p.relative_to(ROOT).as_posix()
+            if rel in _STALE_PREFIX_WHITELIST:
+                continue
+            for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+                if pattern.search(line):
+                    issues.append(
+                        f"[stale-prefix] {rel}:{n} 仍引用旧前缀 {_STALE_PREFIX}（应为 /api/v1）"
+                    )
+    return issues
+
+
 def main() -> int:
     src = src_text()
     docs_text = "\n".join(p.read_text(errors="replace") for p in DOCS if p.exists())
@@ -243,9 +281,9 @@ def main() -> int:
 
     # 1. HTTP 端点
     routes = code_routes(src)
-    doc_eps = set(re.findall(r"`/(?:api/1|v1)/[a-z0-9/_-]*`", docs_text))
+    doc_eps = set(re.findall(r"`/(?:api/v1|v1)/[a-z0-9/_-]*`", docs_text))
     doc_eps = {e.strip("`") for e in doc_eps}
-    doc_eps = {e for e in doc_eps if not e.endswith("/api/1/") and len(e) > len("/api/1/")}
+    doc_eps = {e for e in doc_eps if not e.endswith("/api/v1/") and len(e) > len("/api/v1/")}
     for ep in sorted(doc_eps):
         if ep not in routes:
             issues.append(f"[endpoint] 文档声明 {ep} 在代码路由中不存在（已注册: {sorted(routes)}）")
@@ -277,6 +315,10 @@ def main() -> int:
     # 5. 文档锚点与 slug 卫生
     anchor_issues, anchors_checked = check_anchors([p for p in DOCS if p.exists()])
     issues += anchor_issues
+
+    # 6. 旧版本前缀回归：废弃前缀不得在非归档文件中回写
+    stale_issues = check_stale_api_prefix()
+    issues += stale_issues
 
     print(
         f"代码事实: routes={len(routes)} grpc={len(methods)} cli={len(cli_cmds)} "

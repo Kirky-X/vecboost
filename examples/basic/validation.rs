@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🛡️ 输入验证示例");
     println!("================\n");
 
-    // ─── 文本验证 ──────────────────────────────────────────────────────
+    // 文本验证
     println!("📝 文本验证 (TextValidator):");
 
     let validator = InputValidator::with_default();
@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => println!("  ❌ 纯空白 — {}", e),
     }
 
-    // ─── 批量验证 ──────────────────────────────────────────────────────
+    // 批量验证
     println!("\n📝 批量验证 (validate_batch):");
 
     let batch = vec![
@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => println!("  ❌ 空批量 — {}", e),
     }
 
-    // ─── 搜索验证 ──────────────────────────────────────────────────────
+    // 搜索验证
     println!("\n📝 搜索验证 (validate_search):");
 
     let query = "什么是向量嵌入";
@@ -78,10 +78,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => println!("  ❌ top_k=0 — {}", e),
     }
 
-    // ─── 路径验证 ──────────────────────────────────────────────────────
+    // 路径验证
     println!("\n📝 路径验证 (PathValidator):");
 
-    // 创建临时目录作为白名单根
     let temp_dir = tempfile::TempDir::new()?;
     let temp_path = temp_dir.path();
 
@@ -108,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => println!("  ❌ 恶意路径 — {}（已拦截）", e),
     }
 
-    // ─── HuggingFace Repo ID 验证 ──────────────────────────────────────
+    // HuggingFace Repo ID 验证
     println!("\n📝 HuggingFace Repo ID 验证:");
 
     let valid_ids = [

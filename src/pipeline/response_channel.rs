@@ -206,7 +206,6 @@ mod tests {
     async fn test_clear() {
         let channel = ResponseChannel::new();
 
-        // 注册多个响应
         for i in 0..10 {
             channel.register(format!("test-{}", i)).await;
         }

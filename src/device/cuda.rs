@@ -132,7 +132,7 @@ impl CudaDeviceManager {
             return Ok(());
         }
 
-        // detect 失败时返回空设备列表(Ok),与 is_supported() = (count > 0) 语义一致:
+        // detect 失败时返回空设备列表(Ok),与 is_supported = (count > 0) 语义一致:
         // 无 CUDA 硬件 / driver 不可用 / 沙箱限制均视为"无可用设备",不算错误。
         let devices = self.detect_cuda_devices().await.unwrap_or_else(|e| {
             warn!(

@@ -19,7 +19,7 @@
 //!   原因:主测试线程(调用 `block_on` 的线程)不是 worker 线程,没有 worker core,
 //!   `block_in_place` 会 panic("can call blocking only when running on the
 //!   multi-threaded runtime")。
-//! - 所有测试用 `build_detached` 而非 `builder().build()`,**不安装全局 subscriber**,
+//! - 所有测试用 `build_detached` 而非 `builder.build`,**不安装全局 subscriber**,
 //!   避免全局 subscriber 污染其他测试(后续测试的 tracing 事件会触发 inklog
 //!   ObjectPool Lazy 初始化,在非 runtime 线程上 panic)。
 //! - `log::info!` 宏需要全局 LogLogger,会污染其他测试,因此省略;
@@ -49,9 +49,7 @@ macro_rules! build_detached {
     }};
 }
 
-// ---------------------------------------------------------------------------
 // 测试 1: LoggerModule::build 返回 Arc<LoggerManager>
-// ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_logger_module_build_returns_manager() {
@@ -77,9 +75,7 @@ async fn test_logger_module_build_returns_manager() {
     manager.shutdown().expect("shutdown");
 }
 
-// ---------------------------------------------------------------------------
 // 测试 2: LoggerManager 文件 sink 写入日志
-// ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_logger_writes_to_file() {
@@ -112,7 +108,6 @@ async fn test_logger_writes_to_file() {
     });
     handle.await.expect("spawn task completed");
 
-    // 等待异步 flush
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     manager.shutdown().expect("shutdown");
@@ -127,9 +122,7 @@ async fn test_logger_writes_to_file() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // 测试 3: tracing::info! / warn! / error! 宏通过 subscriber 正常工作
-// ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_log_macro_works() {
@@ -162,9 +155,7 @@ async fn test_log_macro_works() {
     manager.shutdown().expect("shutdown");
 }
 
-// ---------------------------------------------------------------------------
 // 测试 4: console sink 启用时不 panic
-// ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_logger_console_output() {
@@ -196,9 +187,7 @@ async fn test_logger_console_output() {
     manager.shutdown().expect("shutdown");
 }
 
-// ---------------------------------------------------------------------------
 // 测试 5: 未注入 config 时 build 返回 Err
-// ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_logger_module_missing_config_fails() {
@@ -212,9 +201,7 @@ async fn test_logger_module_missing_config_fails() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // 测试 6: LoggerModule 注册后可通过 contains 查询
-// ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_logger_module_contains_after_register() {
@@ -242,9 +229,7 @@ async fn test_logger_module_contains_after_register() {
     manager.shutdown().expect("shutdown");
 }
 
-// ---------------------------------------------------------------------------
 // 测试 7: LoggerModule 与其他 Module 共存于同一 AsyncKit
-// ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_logger_module_coexists_with_other_modules() {

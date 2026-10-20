@@ -56,7 +56,7 @@ def test_r003_no_config_file_boot():
             s = spawn_server(f"cfg_nofile_{i}", 9157 + i, "#[placeholder]\n", env_extra=env, timeout=60)
         except RuntimeError:
             continue
-        st, body = http_get(s["port"], "/api/1/model/current")
+        st, body = http_get(s["port"], "/api/v1/model/current")
         stop_server(s)
         assert st == 200, f"无配置文件启动后 current 不可用: {st}"
         print(f"[info] 无配置文件启动成功，生效 env: {list(env)[0]}")
@@ -80,7 +80,7 @@ def test_r004_invalid_configs_rejected():
 def test_r005_no_gpu_fallback(nogpu_server):
     """R-config-005: 无 GPU 环境（CUDA_VISIBLE_DEVICES=""）全功能可用。"""
     port = nogpu_server["port"]
-    st, body = http_post(port, "/api/1/embed", {"text": "无 GPU 回退验证"})
+    st, body = http_post(port, "/api/v1/embed", {"text": "无 GPU 回退验证"})
     assert st == 200, f"HTTP {st}: {str(body)[:200]}"
     vec = find_vector(body)
     assert vec and len(vec) == 384, "回退后嵌入不可用"
@@ -99,7 +99,7 @@ def test_r006_device_field_reported(base_server):
     应用日志经 inklog 落盘到 CWD 相对 logs/vecboost.log（server.log 仅承载
     logger 初始化前的 stderr 横幅），故以日志文件为准。
     """
-    st, body = http_get(base_server["port"], "/api/1/model/info")
+    st, body = http_get(base_server["port"], "/api/v1/model/info")
     assert st == 200, f"info HTTP {st}: {str(body)[:150]}"
     if "device" not in str(body).lower():
         # 日志证据：应用日志含 "Using CPU"/"Using FP32"

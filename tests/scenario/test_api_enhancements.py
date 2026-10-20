@@ -5,7 +5,7 @@
 
 覆盖：
 - AE-01/02: --config 自定义路径启动 / 缺失参数拒绝
-- AE-03/04: POST /api/1/search 正常排序与空候选拒绝
+- AE-03/04: POST /api/v1/search 正常排序与空候选拒绝
 - AE-05/06: similarity metric=euclidean/manhattan/非法值
 - AE-07/08: CORS 预检与响应头 / gzip 压缩
 - AE-09: VECBOOST_LOG_LEVEL 环境变量生效（debug 级日志落盘）
@@ -129,7 +129,7 @@ def test_ae02_config_missing_value_rejected():
 
 def test_ae03_search_ranks_relevant_first(enh_server):
     """AE-03: search 相关候选排名靠前、按分数降序。"""
-    st, _, body = _post(enh_server["port"], "/api/1/search", {
+    st, _, body = _post(enh_server["port"], "/api/v1/search", {
         "query": "what is machine learning",
         "texts": ["machine learning is a branch of artificial intelligence",
                   "I had pasta for lunch today"],
@@ -142,24 +142,24 @@ def test_ae03_search_ranks_relevant_first(enh_server):
 
 def test_ae04_search_empty_texts_rejected(enh_server):
     """AE-04: search 空 texts → 4xx。"""
-    st, _, _ = _post(enh_server["port"], "/api/1/search",
+    st, _, _ = _post(enh_server["port"], "/api/v1/search",
                      {"query": "q", "texts": []})
     assert 400 <= st < 500, f"空 texts 应 4xx，实际 {st}"
 
 
 def test_ae05_similarity_metric_euclidean(enh_server):
     """AE-05: metric=euclidean 同文本 → 1/(1+0)=1.0；不同文本 ∈ (0,1)。"""
-    st, _, body = _post(enh_server["port"], "/api/1/similarity",
+    st, _, body = _post(enh_server["port"], "/api/v1/similarity",
                         {"source": "abc", "target": "abc", "metric": "euclidean"})
     assert st == 200 and abs(body["score"] - 1.0) < 1e-6, f"同文本 euclidean 应 1.0: {body}"
-    st, _, body = _post(enh_server["port"], "/api/1/similarity",
+    st, _, body = _post(enh_server["port"], "/api/v1/similarity",
                         {"source": "机器学习算法", "target": "今天天气不错", "metric": "manhattan"})
     assert st == 200 and 0.0 < body["score"] < 1.0, f"manhattan 相似度应∈(0,1): {body}"
 
 
 def test_ae06_similarity_invalid_metric_rejected(enh_server):
     """AE-06: 非法 metric → 4xx。"""
-    st, _, _ = _post(enh_server["port"], "/api/1/similarity",
+    st, _, _ = _post(enh_server["port"], "/api/v1/similarity",
                      {"source": "a", "target": "b", "metric": "bogus_metric"})
     assert 400 <= st < 500, f"非法 metric 应 4xx，实际 {st}"
 
@@ -167,7 +167,7 @@ def test_ae06_similarity_invalid_metric_rejected(enh_server):
 def test_ae07_cors_preflight_and_header(enh_server):
     """AE-07: CORS 预检 200 且响应携带 allow-origin 头。"""
     conn = http.client.HTTPConnection("127.0.0.1", enh_server["port"], timeout=15)
-    conn.request("OPTIONS", "/api/1/embed",
+    conn.request("OPTIONS", "/api/v1/embed",
                  headers={"Origin": "http://example.com",
                           "Access-Control-Request-Method": "POST"})
     resp = conn.getresponse()
@@ -181,7 +181,7 @@ def test_ae07_cors_preflight_and_header(enh_server):
 def test_ae08_gzip_compression(enh_server):
     """AE-08: Accept-Encoding: gzip → 响应 Content-Encoding: gzip。"""
     conn = http.client.HTTPConnection("127.0.0.1", enh_server["port"], timeout=15)
-    conn.request("GET", "/api/1/models", headers={"Accept-Encoding": "gzip"})
+    conn.request("GET", "/api/v1/models", headers={"Accept-Encoding": "gzip"})
     resp = conn.getresponse()
     resp.read()
     conn.close()
@@ -204,7 +204,7 @@ def test_ae09_vecboost_log_level_env(enh_server):
 def test_ae10_model_unload_unknown_model_404(enh_server):
     """AE-10: ModelManager 已接线——卸载不存在的模型返回 404 且消息指明
     Model not found（不得谎报卸载成功）。"""
-    st, _, body = _post(enh_server["port"], "/api/1/model/unload",
+    st, _, body = _post(enh_server["port"], "/api/v1/model/unload",
                         {"model_name": "never-loaded-xyz"})
     assert st == 404, f"未知模型卸载应 404（不得谎报成功），实际 {st}: {str(body)[:150]}"
     assert "not found" in str(body).lower(), f"错误应指明模型不存在: {str(body)[:200]}"

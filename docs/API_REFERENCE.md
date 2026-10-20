@@ -37,7 +37,7 @@
 | **gRPC API** | HTTP/2 | `localhost:50051` | `50051` |
 | **Prometheus** | HTTP | `http://localhost:9002/metrics` | `9002` |
 
-> **💡 提示**: 所有 REST API 端点都以 `/api/1/` 为前缀（由 sdforge `version = 1` 生成）。OpenAI 兼容端点使用 `/v1/embeddings`。
+> **💡 提示**: 所有 REST API 端点都以 `/api/v1/` 为前缀（由 sdforge `version = "v1"` 生成）。OpenAI 兼容端点使用 `/v1/embeddings`。
 
 ---
 
@@ -46,7 +46,7 @@
 启用认证时，请在 `Authorization` 头中包含 Bearer 令牌：
 
 ```bash
-curl -X POST http://localhost:9002/api/1/embed \
+curl -X POST http://localhost:9002/api/v1/embed \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-jwt-token>" \
   -d '{"text": "Hello, world!"}'
@@ -54,7 +54,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 
 ### 获取令牌
 
-**端点:** `POST /api/1/auth/login`
+**端点:** `POST /api/v1/auth/login`
 
 **请求体:**
 
@@ -85,7 +85,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 
 ### 刷新令牌
 
-**端点:** `POST /api/1/auth/refresh`
+**端点:** `POST /api/v1/auth/refresh`
 
 **请求体:**
 
@@ -99,7 +99,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 
 ### 登出
 
-**端点:** `POST /api/1/auth/logout`
+**端点:** `POST /api/v1/auth/logout`
 
 **请求头:** `Authorization: Bearer <your-jwt-token>`
 
@@ -107,7 +107,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 
 ### 获取当前用户
 
-**端点:** `GET /api/1/auth/me`
+**端点:** `GET /api/v1/auth/me`
 
 **请求头:** `Authorization: Bearer <your-jwt-token>`
 
@@ -130,7 +130,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 
 为单个文本生成向量嵌入。
 
-**端点:** `POST /api/1/embed`
+**端点:** `POST /api/v1/embed`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -140,7 +140,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/embed \
+curl -X POST http://localhost:9002/api/v1/embed \
   -H "Content-Type: application/json" \
   -d '{
     "text": "The quick brown fox jumps over the lazy dog",
@@ -170,7 +170,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 
 在单个请求中为多个文本生成嵌入向量。
 
-**端点:** `POST /api/1/embed/batch`
+**端点:** `POST /api/v1/embed/batch`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -180,7 +180,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/embed/batch \
+curl -X POST http://localhost:9002/api/v1/embed/batch \
   -H "Content-Type: application/json" \
   -d '{
     "texts": ["第一个文档", "第二个文档", "第三个文档"],
@@ -221,7 +221,7 @@ curl -X POST http://localhost:9002/api/1/embed/batch \
 
 为文件生成嵌入向量。
 
-**端点:** `POST /api/1/embed/file`
+**端点:** `POST /api/v1/embed/file`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -231,7 +231,7 @@ curl -X POST http://localhost:9002/api/1/embed/batch \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/embed/file \
+curl -X POST http://localhost:9002/api/v1/embed/file \
   -H "Content-Type: application/json" \
   -d '{
     "path": "/path/to/document.txt",
@@ -357,7 +357,7 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 - 点积与余弦相似度不再等价
 - 与原始 1024 维向量的相似度比较失真
 
-> **💡 提示**: 该归一化对所有支持 Matryoshka 的入口生效（HTTP `/v1/embeddings`、`/api/1/embed*`、gRPC `vecboost.embed*`、MCP、CLI）。若请求中显式指定 `normalize: false` 但同时传 `dimensions`，截断后仍会执行重归一化以保证语义正确。
+> **💡 提示**: 该归一化对所有支持 Matryoshka 的入口生效（HTTP `/v1/embeddings`、`/api/v1/embed*`、gRPC `vecboost.embed*`、MCP、CLI）。若请求中显式指定 `normalize: false` 但同时传 `dimensions`，截断后仍会执行重归一化以保证语义正确。
 
 **错误响应（维度超限）：**
 
@@ -378,7 +378,7 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 
 计算两段文本之间的相似度（默认余弦相似度，可通过 `metric` 切换度量）。服务端自动对文本进行嵌入后计算相似度。
 
-**端点:** `POST /api/1/similarity`
+**端点:** `POST /api/v1/similarity`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -389,7 +389,7 @@ VecBoost 在执行 Matryoshka 截断（`truncate_vector`）后会立即调用 `n
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/similarity \
+curl -X POST http://localhost:9002/api/v1/similarity \
   -H "Content-Type: application/json" \
   -d '{
     "source": "机器学习是人工智能的子领域",
@@ -415,7 +415,7 @@ curl -X POST http://localhost:9002/api/1/similarity \
 
 1对N 检索：给定查询文本，在候选文本列表中按相似度降序返回 Top-K。
 
-**端点:** `POST /api/1/search`
+**端点:** `POST /api/v1/search`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -426,7 +426,7 @@ curl -X POST http://localhost:9002/api/1/similarity \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/search \
+curl -X POST http://localhost:9002/api/v1/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "什么是机器学习",
@@ -452,7 +452,7 @@ curl -X POST http://localhost:9002/api/1/search \
 
 从模型管理缓存中卸载指定模型（不影响当前活跃引擎）。
 
-**端点:** `POST /api/1/model/unload`
+**端点:** `POST /api/v1/model/unload`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -461,7 +461,7 @@ curl -X POST http://localhost:9002/api/1/search \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/model/unload \
+curl -X POST http://localhost:9002/api/v1/model/unload \
   -H "Content-Type: application/json" \
   -d '{"model_name": "BAAI/bge-small-zh-v1.5"}'
 ```
@@ -480,7 +480,7 @@ curl -X POST http://localhost:9002/api/1/model/unload \
 
 根据与查询文本的相关性对文档列表进行重排序。
 
-**端点:** `POST /api/1/rerank`
+**端点:** `POST /api/v1/rerank`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -492,7 +492,7 @@ curl -X POST http://localhost:9002/api/1/model/unload \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/rerank \
+curl -X POST http://localhost:9002/api/v1/rerank \
   -H "Content-Type: application/json" \
   -d '{
     "query": "什么是机器学习",
@@ -532,7 +532,7 @@ curl -X POST http://localhost:9002/api/1/rerank \
 
 #### 批量重排序
 
-**端点:** `POST /api/1/rerank/batch`
+**端点:** `POST /api/v1/rerank/batch`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -557,7 +557,7 @@ curl -X POST http://localhost:9002/api/1/rerank \
 
 对给定决策上下文 `state` 回答一组 choice / score / noul 问题（Laya 决策管线，`onnx` feature）。
 
-**端点:** `POST /api/1/decisions`
+**端点:** `POST /api/v1/decisions`
 
 > **⚠️ 任务二选一**: 仅 `[model] task = "decision"` 配置下可用；`task = "embedding"`（默认）时调用返回 `400`（`UnsupportedTask`，提示切换模型/端点）。
 
@@ -575,7 +575,7 @@ curl -X POST http://localhost:9002/api/1/rerank \
 **请求示例（三题型各一）:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/decisions \
+curl -X POST http://localhost:9002/api/v1/decisions \
   -H "Content-Type: application/json" \
   -d '{
     "state": {"topic": "vacation"},
@@ -623,7 +623,7 @@ curl -X POST http://localhost:9002/api/1/decisions \
 
 将文本在已配置的语言对之间翻译（Marian/opus-mt seq2seq，`onnx` feature，贪心解码）。
 
-**端点:** `POST /api/1/translate`
+**端点:** `POST /api/v1/translate`
 
 > **⚠️ 配置语义**: 语言对来自 `[translation]` 配置段的 `[[translation.pairs]]`（启动期急切构建）；零配置时端点仍注册，任意请求返回 `400`（`translate-not-configured`）。
 >
@@ -640,7 +640,7 @@ curl -X POST http://localhost:9002/api/1/decisions \
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/translate   -H "Content-Type: application/json"   -d '{"text": "Hello, my dog is cute", "source_language": "en", "target_language": "zh"}'
+curl -X POST http://localhost:9002/api/v1/translate   -H "Content-Type: application/json"   -d '{"text": "Hello, my dog is cute", "source_language": "en", "target_language": "zh"}'
 ```
 
 **响应:**
@@ -675,7 +675,7 @@ auto 检测时 `source_language` 为 `null`、`detected_source_language` 回填�
 
 将 16kHz 单声道 f32 语音样本转录为文本（Qwen3-ASR：silero VAD 分段 → 逐段解码 → 段序拼接；`transcribe` feature，阻塞推理经 spawn_blocking 隔离）。
 
-**端点:** `POST /api/1/transcribe`
+**端点:** `POST /api/v1/transcribe`
 
 > **⚠️ 配置语义**: 引擎来自 `[transcribe]` 配置段（`enabled`/`models_dir`/`vad_threshold`，启动期急切构建）；`enabled=false` 或 `transcribe` feature 未启用时端点仍注册，任意请求返回 `400`（`transcribe-not-configured`）。
 >
@@ -692,7 +692,7 @@ auto 检测时 `source_language` 为 `null`、`detected_source_language` 回填�
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/transcribe   -H "Content-Type: application/json"   -d '{"samples": [0.01, -0.02, 0.0]}'
+curl -X POST http://localhost:9002/api/v1/transcribe   -H "Content-Type: application/json"   -d '{"samples": [0.01, -0.02, 0.0]}'
 ```
 
 **响应:**
@@ -725,7 +725,7 @@ curl -X POST http://localhost:9002/api/1/transcribe   -H "Content-Type: applicat
 
 检测文本的自然语言（whatlang n-gram 统计，µs 级纯 CPU，无模型依赖；亦是翻译 auto 检测的同一事实源）。
 
-**端点:** `POST /api/1/detect`
+**端点:** `POST /api/v1/detect`
 
 **请求字段:**
 
@@ -737,7 +737,7 @@ curl -X POST http://localhost:9002/api/1/transcribe   -H "Content-Type: applicat
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/detect   -H "Content-Type: application/json"   -d '{"text": "The quick brown fox jumps over the lazy dog near the riverbank every morning."}'
+curl -X POST http://localhost:9002/api/v1/detect   -H "Content-Type: application/json"   -d '{"text": "The quick brown fox jumps over the lazy dog near the riverbank every morning."}'
 ```
 
 **响应:**
@@ -779,7 +779,7 @@ curl -X POST http://localhost:9002/api/1/detect   -H "Content-Type: application/
 
 获取当前加载模型的信息。
 
-**端点:** `GET /api/1/model/current`
+**端点:** `GET /api/v1/model/current`
 
 **响应:**
 
@@ -803,7 +803,7 @@ curl -X POST http://localhost:9002/api/1/detect   -H "Content-Type: application/
 
 获取当前加载模型的详细元数据。
 
-**端点:** `GET /api/1/model/info`
+**端点:** `GET /api/v1/model/info`
 
 **响应:**
 
@@ -835,7 +835,7 @@ curl -X POST http://localhost:9002/api/1/detect   -H "Content-Type: application/
 
 列出所有可用模型。
 
-**端点:** `GET /api/1/models`
+**端点:** `GET /api/v1/models`
 
 **响应:**
 
@@ -864,7 +864,7 @@ curl -X POST http://localhost:9002/api/1/detect   -H "Content-Type: application/
 
 切换到不同的模型。
 
-**端点:** `POST /api/1/model/switch`
+**端点:** `POST /api/v1/model/switch`
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -882,7 +882,7 @@ curl -X POST http://localhost:9002/api/1/detect   -H "Content-Type: application/
 **请求示例:**
 
 ```bash
-curl -X POST http://localhost:9002/api/1/model/switch \
+curl -X POST http://localhost:9002/api/v1/model/switch \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
   -d '{
@@ -1098,7 +1098,7 @@ struct BatchEmbedResponse {
 }
 ```
 
-> **⚠️ 批量大小校验**: 批量请求数量受 `validate_batch_size` 限制，上限取自 `EmbeddingConfig.max_batch_size`（默认 64）。超限时返回 `400`（error_code `error-invalid-input`），错误信息形如 `batch size N exceeds max M (config embedding.max_batch_size)`。HTTP `/api/1/embed/batch` 与 OpenAI 兼容 `/v1/embeddings` 批量端点均执行此校验。
+> **⚠️ 批量大小校验**: 批量请求数量受 `validate_batch_size` 限制，上限取自 `EmbeddingConfig.max_batch_size`（默认 64）。超限时返回 `400`（error_code `error-invalid-input`），错误信息形如 `batch size N exceeds max M (config embedding.max_batch_size)`。HTTP `/api/v1/embed/batch` 与 OpenAI 兼容 `/v1/embeddings` 批量端点均执行此校验。
 
 #### 相似度请求/响应
 

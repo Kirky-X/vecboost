@@ -23,7 +23,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::TempDir::new()?;
     let log_path = temp_dir.path().join("audit.log");
 
-    // 1. 创建审计日志配置
     let config = AuditConfig {
         enabled: true,
         log_file_path: log_path.clone(),
@@ -71,8 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ✅ Token 刷新: admin");
 
     // 未授权访问
-    logger.log_unauthorized_access(Some("10.0.0.99".to_string()), "/api/1/internal");
-    println!("  ❌ 未授权访问: 10.0.0.99 → /api/1/internal");
+    logger.log_unauthorized_access(Some("10.0.0.99".to_string()), "/api/v1/internal");
+    println!("  ❌ 未授权访问: 10.0.0.99 → /api/v1/internal");
 
     // 速率限制
     logger.log_rate_limit_exceeded(Some("abuser".to_string()), Some("10.0.0.50".to_string()));
@@ -87,7 +86,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     logger.flush().await?;
     println!("  flush 完成\n");
 
-    // 4. 读取并展示日志内容
     println!("📊 审计日志内容:");
     let content = tokio::fs::read_to_string(&log_path).await?;
     for line in content.lines() {

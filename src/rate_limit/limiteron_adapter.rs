@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(feature = "distributed-redis")]
+use limiteron::CacheBanStorage;
 use limiteron::Governor;
 use limiteron::limiters::{Limiter, TokenBucketLimiter};
 use limiteron::matchers::RequestContext;
@@ -296,7 +298,7 @@ impl LimiteronAdapter {
     async fn build_memory(settings: RateLimitSettings) -> Self {
         #[cfg(feature = "distributed-redis")]
         {
-            Self::build(settings, None, Arc::new(MemoryBucketFactory)).await
+            Self::build(settings, None, Arc::new(MemoryBucketFactory), None).await
         }
         #[cfg(not(feature = "distributed-redis"))]
         {
@@ -355,7 +357,21 @@ impl LimiteronAdapter {
                         None
                     };
                     let factory = Arc::new(RedisWindowFactory { cache });
-                    Ok(Self::build(settings, global_redis, factory).await)
+                    // 封禁清单跨副本共享：独立 Redis 连接 + CacheBanStorage。
+                    let ban_backend = oxcache::backend::RedisBackend::builder()
+                        .connection_string(url)
+                        .build()
+                        .await
+                        .map_err(|e| {
+                            VecboostError::config_error(format!(
+                                "rate-limit-redis-ban-init-failed: {e}"
+                            ))
+                        })?;
+                    let ban_backend: Arc<dyn oxcache::backend::CacheBackend> =
+                        Arc::new(ban_backend);
+                    let ban_storage: Arc<dyn limiteron::storage::BanStorage> =
+                        Arc::new(CacheBanStorage::new(ban_backend));
+                    Ok(Self::build(settings, global_redis, factory, Some(ban_storage)).await)
                 }
                 #[cfg(not(feature = "distributed-redis"))]
                 {
@@ -371,9 +387,16 @@ impl LimiteronAdapter {
         settings: RateLimitSettings,
         #[cfg(feature = "distributed-redis")] global_redis: Option<Arc<RedisWindowLimiter>>,
         bucket_factory: Arc<dyn BucketFactory>,
+        #[cfg(feature = "distributed-redis")] ban_storage: Option<
+            Arc<dyn limiteron::storage::BanStorage>,
+        >,
     ) -> Self {
         let config = build_global_flow_control_config(&settings);
         let storage: Arc<dyn limiteron::storage::Storage> = MemoryStorage::create_storage();
+        #[cfg(feature = "distributed-redis")]
+        let ban_storage: Arc<dyn limiteron::storage::BanStorage> =
+            ban_storage.unwrap_or_else(MemoryBanStorage::create_ban_storage);
+        #[cfg(not(feature = "distributed-redis"))]
         let ban_storage: Arc<dyn limiteron::storage::BanStorage> =
             MemoryBanStorage::create_ban_storage();
 
@@ -522,7 +545,7 @@ impl LimiteronAdapter {
     }
 
     /// per-key 令牌桶检查：获取或创建桶，消费 1 个令牌，并读取消费后的
-    /// 非消费快照（`remaining()`）供响应头渲染。
+    /// 非消费快照（`remaining`）供响应头渲染。
     async fn check_per_key_detailed(
         &self,
         buckets: &Mutex<HashMap<String, Arc<dyn Limiter>>>,
@@ -674,7 +697,7 @@ mod tests {
         }
     }
 
-    // ==================== 全局限流测试 ====================
+    // 全局限流测试
 
     #[tokio::test]
     async fn test_global_limit_blocks_when_exceeded() {
@@ -693,7 +716,7 @@ mod tests {
         assert!(!adapter.check_rate_limit(&context).await);
     }
 
-    // ==================== per-key IP 限流测试 ====================
+    // per-key IP 限流测试
 
     #[tokio::test]
     async fn test_ip_dimension_blocks_over_limit() {
@@ -725,7 +748,7 @@ mod tests {
         assert!(adapter.check_rate_limit(&ctx2).await);
     }
 
-    // ==================== per-key User 限流测试 ====================
+    // per-key User 限流测试
 
     #[tokio::test]
     async fn test_user_dimension_independent_from_ip() {
@@ -754,7 +777,7 @@ mod tests {
         assert!(adapter.check_rate_limit(&ctx_bob).await);
     }
 
-    // ==================== 健康检查测试 ====================
+    // 健康检查测试
 
     #[tokio::test]
     async fn test_health_check_returns_true_on_init() {
@@ -770,7 +793,7 @@ mod tests {
         assert!(adapter.is_healthy());
     }
 
-    // ==================== 统计测试 ====================
+    // 统计测试
 
     #[tokio::test]
     async fn test_stats_returns_non_zero_after_requests() {
@@ -785,7 +808,7 @@ mod tests {
         );
     }
 
-    // ==================== RateLimit-* 响应头详情测试 ====================
+    // RateLimit-* 响应头详情测试
 
     #[tokio::test]
     async fn test_detailed_decision_carries_binding_snapshot() {

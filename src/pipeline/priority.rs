@@ -195,7 +195,7 @@ mod tests {
         assert!(priority_enterprise >= priority_free);
     }
 
-    // ===== Priority::as_i32 tests =====
+    // Priority::as_i32 tests
 
     #[test]
     fn test_priority_as_i32_returns_numeric_value() {
@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(Priority::Low.as_i32(), 25);
     }
 
-    // ===== Priority::from_score boundary tests =====
+    // Priority::from_score boundary tests
 
     #[test]
     fn test_priority_from_score_boundaries() {
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(Priority::from_score(-1), Priority::Low);
     }
 
-    // ===== RequestSource constructor tests =====
+    // RequestSource constructor tests
 
     #[test]
     fn test_request_source_http_constructor() {
@@ -245,7 +245,7 @@ mod tests {
         assert!(matches!(source, RequestSource::Internal));
     }
 
-    // ===== Timeout factor tests =====
+    // Timeout factor tests
 
     #[test]
     fn test_timeout_factor_under_100ms_critical_boost() {
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(priority, Priority::High);
     }
 
-    // ===== Source weight tests =====
+    // Source weight tests
 
     #[test]
     fn test_source_weight_http() {
@@ -361,7 +361,7 @@ mod tests {
         assert_eq!(priority, Priority::High);
     }
 
-    // ===== Queue length tests =====
+    // Queue length tests
 
     #[test]
     fn test_queue_length_large_boost() {

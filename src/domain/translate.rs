@@ -38,7 +38,7 @@ impl FromStr for TranslateRequest {
 }
 
 impl TranslateRequest {
-    /// 输入校验：非空/长度上限（按 `chars().count()` 计）/控制字符防线
+    /// 输入校验：非空/长度上限（按 `chars.count` 计）/控制字符防线
     /// （`\t` `\n` `\r` 豁免）/语言码格式（大小写敏感）/source ≠ target。
     /// i18n 文案语义（translate-empty-text / translate-too-long /
     /// translate-unsupported 等）在服务层表达，域层以 ValidationError

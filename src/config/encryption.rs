@@ -32,7 +32,7 @@
 //!         default,
 //!         serialize_with = "crate::config::encryption::encrypted_option::serialize",
 //!         deserialize_with = "crate::config::encryption::encrypted_option::deserialize"
-//!     )]
+//!)]
 //!     pub secret: Option<String>,
 //! }
 //! ```
@@ -47,7 +47,7 @@ const ENCRYPTION_KEY_ENV: &str = "VECBOOST_ENCRYPTION_KEY";
 
 /// Validate that the master encryption key is configured.
 ///
-/// Returns `Ok(())` when `VECBOOST_ENCRYPTION_KEY` is set to a valid 32-byte value.
+/// Returns `Ok()` when `VECBOOST_ENCRYPTION_KEY` is set to a valid 32-byte value.
 /// Returns `Err(reason)` when the key is missing or has an invalid length.
 ///
 /// # Production Deployment
@@ -61,7 +61,7 @@ const ENCRYPTION_KEY_ENV: &str = "VECBOOST_ENCRYPTION_KEY";
 /// Call during application startup to enforce encryption in production:
 ///
 /// ```rust,ignore
-/// crate::config::encryption::validate_encryption_key()?;
+/// crate::config::encryption::validate_encryption_key?;
 /// ```
 pub fn validate_encryption_key() -> Result<(), String> {
     match read_master_key() {
@@ -88,9 +88,7 @@ const FIELD_PATH: &str = "vecboost.config.sensitive";
 /// Key version for HKDF domain separation (bump on key rotation).
 const KEY_VERSION: &str = "v1";
 
-// ---------------------------------------------------------------------------
 // Internal helpers
-// ---------------------------------------------------------------------------
 
 /// Read the 32-byte master key from the environment.
 ///
@@ -166,9 +164,7 @@ fn decrypt_from_hex(encoded: &str, master: &[u8; 32]) -> Result<Vec<u8>, String>
         .map_err(|e| format!("decryption failed: {e}"))
 }
 
-// ---------------------------------------------------------------------------
 // Serde helper modules for `#[serde(serialize_with / deserialize_with)]`
-// ---------------------------------------------------------------------------
 
 /// Serde helpers for `Option<String>` fields with transparent encryption.
 ///

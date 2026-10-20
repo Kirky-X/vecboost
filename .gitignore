@@ -128,7 +128,6 @@ temp/
 # -----------------------------------------------------------------------------
 # 10. Documentation Build (Sphinx, mdBook, etc.)
 # -----------------------------------------------------------------------------
-docs/_build/
 docs/.doctrees/
 
 # -----------------------------------------------------------------------------
@@ -155,12 +154,8 @@ tests/scenario/run/
 # Local-only test/spike reports (do not commit)
 tests/scenario/report.md
 tests/integration/bf16_spike.md
-# Local-only i18n audit report (do not commit)
-docs/I18N_MISSING_AUDIT.md
-
-# 本机专有评估/台账/安全文档与基准归档（2026-10-17 owner 裁定：禁止入库，本地保留）
-docs/TRAIT-KIT-SDK-ASSESSMENT.md
-docs/translation-review-ledger.md
+# 本机专有审计/评估/台账/安全文档与基准归档（owner 裁定：禁止入库，本地保留）
+docs/reviews/
 docs/MEMORY_SAFETY.md
 docs/benchmarks/
 

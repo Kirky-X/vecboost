@@ -7,7 +7,7 @@
 
 ## 📋 目录
 
-- [Unreleased](#unreleased)
+- [0.3.0-rc.3 - 2026-10-20](#030-rc3---2026-10-20)
 - [0.3.0-rc.2 - 2026-10-15](#030-rc2---2026-10-15)
 - [0.3.0-rc.1 - 2026-09-22](#030-rc1---2026-09-22)
 - [0.2.1 - 2026-07-30](#021---2026-07-30)
@@ -18,9 +18,12 @@
 
 ---
 
-<a id="unreleased"></a>
+<a id="030-rc3---2026-10-20"></a>
 
-## [Unreleased]
+## [0.3.0-rc.3] - 2026-10-20
+
+### 新增
+- **多副本共享语义缓存与封禁清单（二期）**：`[semantic_cache] backend = "redis"`（需 `distributed-redis`）把 trigram Jaccard 模糊索引写入 Redis Hash + LRU ZSET，跨副本命中后回填本地热缓存；`limiteron/ban-sync` + `CacheBanStorage` 使封禁清单跨副本共享；启动期 fail-closed 校验 feature/URL，新增 `startup-semantic-redis-*` 文案。索引按模型清理（`SemanticCache::clear_model`）。
 
 ### 变更
 - **构建配置迁移 `.cargo/config` → `.cargo/config.toml`**：旧名使 cargo 1.97 每次调用都打 `deprecated in favor of config.toml` 警告；全仓（CI / Dockerfile / scripts）无任何引用旧名之处，本地覆盖亦走 `~/.cargo/config.toml` 用户级配置，故 `.gitignore` 中「忽略 config.toml、以旧名入库」的留白规则作废，改为反向忽略旧名防止回归。`[env] JEMALLOC_SYS_WITH_MALLOC_CONF` 语义不变——已用 build.rs 临时探针实测迁移后仍注入构建环境（`Ok("dirty_decay_ms:1000,muzzy_decay_ms:1000")`），jemalloc decay 防线无回退
@@ -47,6 +50,7 @@
 
 ### 修复
 
+- **REST 路由版本前缀错误（`/api/1/*` → `/api/v1/*`）**：全部 `#[forge]` 端点声明的 `version = 1`（数字字面量）被 sdforge 宏按 token 文本注入为 `/api/1/*`，与规格及全部文档声明的 `/api/v1/*` 长期偏离（auth 白名单曾被反向适配，掩盖了根因）。改为 `version = "v1"`（48 处）后路由回归 `/api/v1/*`；认证白名单/RBAC 前缀、metrics/audit 单测、Rust/Python 集成测试、README/docs/examples/config 与 `scripts/doc_consistency_check.py` 同步更新，并新增旧前缀回归门禁。**BREAKING**：旧 `/api/1/*` 不再提供（从未出现在文档中）；`/health` 与 OpenAI 兼容 `/v1/embeddings` 不变。
 - **candle `device="cuda"` 静默降级**：`cuda_is_available()` 为假时（构建缺 `candle-cuda` 或无可用 GPU）原先只打 INFO 后落 CPU，等于把 CPU 数字记到 GPU 档名下 → 启动期 `ConfigError` 显性拒绝（新 FTL 键 `engine-candle-cuda-unavailable`，中英齐平）+ 回归测试 `resolve_compute_device_rejects_cuda_without_candle_cuda`
 - **转录无损（fp32/fp16）bundle 无入口 + 精度按文件名误报**：`asr.rs` 的 encoder/decoder 候选名写死 `.int8.onnx`、加载处又按字面量二次拼路径 → 候选链（int8 优先、纯名兜底）+ `resolve_graph_paths()` 单一事实源；`session::detect_onnx_weight_precision` 改按**图内容**（QuantizeLinear/DequantizeLinear 算子标记）判定精度、不回退文件名；新增启动 INFO 日志 `log-engine-transcribe-graphs`；5 个回归测试（含跨 1 MiB 读块边界与“改名不误报”）
 - **onnx embedding 真机路径三处兼容缺陷**（此前无真实资产测试，基准真机首跑暴露）：单条输入 rank-1→`[1, seq]` 二维（标准 BERT ONNX 图规格）；三输入图（optimum/transformers.js 导出）按 `session.inputs()` 探测补喂全零 `token_type_ids`；rank-2 输入对应 rank-3 输出索引口径对齐

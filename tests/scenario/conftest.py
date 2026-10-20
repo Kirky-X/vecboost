@@ -411,7 +411,7 @@ def l2_norm(vec) -> float:
 
 
 def login_token(port: int, username: str = ADMIN_USER, password: str = ADMIN_PASS) -> str:
-    st, body = http_post(port, "/api/1/auth/login", {"username": username, "password": password})
+    st, body = http_post(port, "/api/v1/auth/login", {"username": username, "password": password})
     assert st == 200, f"login 失败 {st}: {str(body)[:200]}"
     return body["token"]
 

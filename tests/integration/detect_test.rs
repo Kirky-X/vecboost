@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! Detect 端点 HTTP 集成测试 — /api/1/detect（R-language-detection-*）
+//! Detect 端点 HTTP 集成测试 — /api/v1/detect（R-language-detection-*）
 //!
 //! 沿用 grpc_e2e 的真实服务器子进程模式（`CARGO_BIN_EXE_vecboost` + 本地
 //! M1 模型路径，CPU，离线可跑）；本地模型缺席时打印 SKIP 后返回（同
@@ -39,9 +39,7 @@ fn skip_without_model(test_name: &str) -> bool {
     true
 }
 
-// ---------------------------------------------------------------------------
 // 服务器进程管理（复用 crate::common::{TestServer, free_port, model_ready}）
-// ---------------------------------------------------------------------------
 
 #[derive(Default)]
 struct ServerOpts {
@@ -216,7 +214,7 @@ async fn detect_wire_shape_and_undetectable_semantics() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/detect",
+        "/api/v1/detect",
         Some(&detect_body(
             "The quick brown fox jumps over the lazy dog near the riverbank every morning.",
         )),
@@ -249,7 +247,7 @@ async fn detect_wire_shape_and_undetectable_semantics() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/detect",
+        "/api/v1/detect",
         Some(&detect_body("1234567890")),
         None,
         None,
@@ -276,7 +274,7 @@ async fn detect_empty_text_400_with_accept_language_zh_en() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/detect",
+        "/api/v1/detect",
         Some(&detect_body("")),
         None,
         Some("zh"),
@@ -291,7 +289,7 @@ async fn detect_empty_text_400_with_accept_language_zh_en() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/detect",
+        "/api/v1/detect",
         Some(&detect_body("")),
         None,
         Some("en"),
@@ -316,7 +314,7 @@ async fn detect_rejects_oversize_and_control_chars() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/detect",
+        "/api/v1/detect",
         Some(&detect_body(&oversized)),
         None,
         None,
@@ -339,7 +337,7 @@ async fn detect_rejects_oversize_and_control_chars() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/detect",
+        "/api/v1/detect",
         Some(r#"{"text":"line1\u0001line2"}"#),
         None,
         None,
@@ -373,7 +371,7 @@ async fn detect_rate_limit_returns_429_with_headers() {
         let (status, headers, _body) = http_request_full(
             server.http_port,
             "POST",
-            "/api/1/detect",
+            "/api/v1/detect",
             Some(&detect_body("hello world")),
             None,
             None,
@@ -392,7 +390,7 @@ async fn detect_rate_limit_returns_429_with_headers() {
     }
     assert!(
         hit,
-        "超过 ip_requests_per_minute=2 后 /api/1/detect 必须 429"
+        "超过 ip_requests_per_minute=2 后 /api/v1/detect 必须 429"
     );
 }
 
@@ -422,7 +420,7 @@ async fn detect_unauthenticated_returns_401() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/detect",
+        "/api/v1/detect",
         Some(&detect_body("hello world")),
         None,
         None,
@@ -434,7 +432,7 @@ async fn detect_unauthenticated_returns_401() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/detect",
+        "/api/v1/detect",
         Some(&detect_body("hello world")),
         Some("not-a-real-token"),
         None,
@@ -446,7 +444,7 @@ async fn detect_unauthenticated_returns_401() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/auth/login",
+        "/api/v1/auth/login",
         Some(&json!({"username": "admin", "password": ADMIN_PASS}).to_string()),
         None,
         None,
@@ -458,7 +456,7 @@ async fn detect_unauthenticated_returns_401() {
     let (status, _, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/detect",
+        "/api/v1/detect",
         Some(&detect_body("hello world")),
         Some(&token),
         None,

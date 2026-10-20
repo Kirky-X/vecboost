@@ -88,7 +88,7 @@ def test_hm_o05_openai_empty_input_rejected(base_server):
 
 def test_hm_s01_similarity_same_text_is_one(base_server):
     """HM-S01: 同文本 similarity = 1.0。"""
-    st, body = http_post(base_server["port"], "/api/1/similarity",
+    st, body = http_post(base_server["port"], "/api/v1/similarity",
                          {"source": "machine learning pipeline", "target": "machine learning pipeline"})
     assert st == 200, f"{st}: {str(body)[:200]}"
     assert abs(body["score"] - 1.0) < 1e-3, f"同文本应为 1.0: {body['score']}"
@@ -96,7 +96,7 @@ def test_hm_s01_similarity_same_text_is_one(base_server):
 
 def test_hm_s02_similarity_unrelated_not_one(base_server):
     """HM-S02: 无关文本对不得返回 1.0。"""
-    st, body = http_post(base_server["port"], "/api/1/similarity",
+    st, body = http_post(base_server["port"], "/api/v1/similarity",
                          {"source": "机器学习模型训练", "target": "今天的午餐是面条"})
     assert st == 200, f"{st}: {str(body)[:200]}"
     assert body["score"] < 0.99, f"语义回归：无关文本 score={body['score']}"
@@ -107,7 +107,7 @@ def test_hm_s02_similarity_unrelated_not_one(base_server):
 def test_hm_f01_file_embed_txt(base_server):
     """HM-F01: 正常 txt 文件嵌入返回向量。"""
     p = write_file("base", "e2e-doc.txt", "第一段落内容\n\n第二段落内容 for file embed")
-    st, body = http_post(base_server["port"], "/api/1/embed/file", {"path": p})
+    st, body = http_post(base_server["port"], "/api/v1/embed/file", {"path": p})
     assert st == 200, f"{st}: {str(body)[:200]}"
     ok = (body.get("embedding") or body.get("paragraphs")) is not None
     assert ok, f"应含 embedding 或 paragraphs: {str(body)[:200]}"
@@ -115,14 +115,14 @@ def test_hm_f01_file_embed_txt(base_server):
 
 def test_hm_f02_file_embed_path_traversal_rejected(base_server):
     """HM-F02: 路径遍历输入被拒绝且为 4xx。"""
-    st, body = http_post(base_server["port"], "/api/1/embed/file",
+    st, body = http_post(base_server["port"], "/api/v1/embed/file",
                          {"path": "../../etc/passwd"})
     assert 400 <= st < 500, f"路径遍历应 4xx，实际 {st}: {str(body)[:150]}"
 
 
 def test_hm_f03_file_embed_sensitive_dir_rejected(base_server):
     """HM-F03: 敏感目录文件被拒绝且为 4xx。"""
-    st, body = http_post(base_server["port"], "/api/1/embed/file", {"path": "/etc/hostname"})
+    st, body = http_post(base_server["port"], "/api/v1/embed/file", {"path": "/etc/hostname"})
     assert 400 <= st < 500, f"敏感目录应 4xx，实际 {st}: {str(body)[:150]}"
 
 
@@ -130,15 +130,15 @@ def test_hm_f03_file_embed_sensitive_dir_rejected(base_server):
 
 def test_hm_m01_model_current_and_info(base_server):
     """HM-M01: /model/current 与 /model/info 返回结构完整。"""
-    st, cur = http_get(base_server["port"], "/api/1/model/current")
+    st, cur = http_get(base_server["port"], "/api/v1/model/current")
     assert st == 200 and "name" in cur, f"current: {st} {str(cur)[:150]}"
-    st, info = http_get(base_server["port"], "/api/1/model/info")
+    st, info = http_get(base_server["port"], "/api/v1/model/info")
     assert st == 200 and "name" in info, f"info: {st} {str(info)[:150]}"
 
 
 def test_hm_m02_models_list(base_server):
     """HM-M02: /models 列表含当前模型。"""
-    st, body = http_get(base_server["port"], "/api/1/models")
+    st, body = http_get(base_server["port"], "/api/v1/models")
     assert st == 200, f"{st}: {str(body)[:150]}"
     assert body["total_count"] >= 1 and len(body["models"]) >= 1, "应至少列出 1 个模型"
 
@@ -146,27 +146,27 @@ def test_hm_m02_models_list(base_server):
 def test_hm_m03_switch_roundtrip_local_paths(base_server):
     """HM-M03: 本地路径热切换 M1→M2（MiniLM）→M1 往返，切换后 embed 维度保持。"""
     port = base_server["port"]
-    st, body = http_post(port, "/api/1/model/switch",
+    st, body = http_post(port, "/api/v1/model/switch",
                          {"model_name": "minilm-hm", "model_path": M2_MINILM_PATH,
                           "expected_dimension": 384})
     assert st == 200, f"切换 M2 失败 {st}: {str(body)[:200]}"
-    st, emb = http_post(port, "/api/1/embed", {"text": "after switch"})
+    st, emb = http_post(port, "/api/v1/embed", {"text": "after switch"})
     assert st == 200 and len(find_vector(emb)) == 384, "切换后 embed 应正常"
     # 切回 M1
-    st, body = http_post(port, "/api/1/model/switch",
+    st, body = http_post(port, "/api/v1/model/switch",
                          {"model_name": "bge-small-hm", "model_path": M1_PATH,
                           "expected_dimension": 384})
     assert st == 200, f"切回 M1 失败 {st}: {str(body)[:200]}"
-    st, emb = http_post(port, "/api/1/embed", {"text": "restored"})
+    st, emb = http_post(port, "/api/v1/embed", {"text": "restored"})
     assert st == 200 and find_vector(emb) is not None, "切回后 embed 应正常"
 
 
 def test_hm_m04_switch_nonexistent_model_4xx(base_server):
     """HM-M04/HM-M05: 切换不存在模型 → 4xx 且原模型可用。"""
-    st, body = http_post(base_server["port"], "/api/1/model/switch",
+    st, body = http_post(base_server["port"], "/api/v1/model/switch",
                          {"model_name": "definitely-not-a-model-xyz"})
     assert 400 <= st < 500, f"切换回归：应 4xx，实际 {st}: {str(body)[:150]}"
-    st, emb = http_post(base_server["port"], "/api/1/embed", {"text": "still alive"})
+    st, emb = http_post(base_server["port"], "/api/v1/embed", {"text": "still alive"})
     assert st == 200 and find_vector(emb) is not None, "切换失败后原模型应继续可用"
 
 
@@ -174,33 +174,33 @@ def test_hm_m04_switch_nonexistent_model_4xx(base_server):
 
 def test_hm_a01_malformed_json(base_server):
     """HM-A01: 非法 JSON → 4xx。"""
-    st, body = http_post(base_server["port"], "/api/1/embed", raw_body="{not json")
+    st, body = http_post(base_server["port"], "/api/v1/embed", raw_body="{not json")
     assert 400 <= st < 500, f"非法 JSON 应 4xx，实际 {st}"
 
 
 def test_hm_a02_wrong_type_text(base_server):
     """HM-A02: text 类型错误（数字）→ 4xx。"""
-    st, body = http_post(base_server["port"], "/api/1/embed", {"text": 12345})
+    st, body = http_post(base_server["port"], "/api/v1/embed", {"text": 12345})
     assert 400 <= st < 500, f"类型错误应 4xx，实际 {st}: {str(body)[:150]}"
 
 
 def test_hm_a03_rerank_top_k_zero(base_server):
     """HM-A03: rerank top_k=0 → 4xx。"""
-    st, body = http_post(base_server["port"], "/api/1/rerank",
+    st, body = http_post(base_server["port"], "/api/v1/rerank",
                          {"query": "q", "documents": ["d1"], "top_k": 0})
     assert 400 <= st < 500, f"top_k=0 应 4xx，实际 {st}: {str(body)[:150]}"
 
 
 def test_hm_a04_rerank_empty_documents(base_server):
     """HM-A04: rerank documents 空数组 → 4xx。"""
-    st, body = http_post(base_server["port"], "/api/1/rerank",
+    st, body = http_post(base_server["port"], "/api/v1/rerank",
                          {"query": "q", "documents": []})
     assert 400 <= st < 500, f"空 documents 应 4xx，实际 {st}: {str(body)[:150]}"
 
 
 def test_hm_a05_rerank_overlong_query(base_server):
     """HM-A05: rerank query 超长（>8192）→ 4xx。"""
-    st, body = http_post(base_server["port"], "/api/1/rerank",
+    st, body = http_post(base_server["port"], "/api/v1/rerank",
                          {"query": "x" * 9000, "documents": ["d1", "d2"]})
     assert 400 <= st < 500, f"超长 query 应 4xx，实际 {st}: {str(body)[:150]}"
 
@@ -209,7 +209,7 @@ def test_hm_a05_rerank_overlong_query(base_server):
 
 def test_hm_i01_error_message_locale_en(base_server):
     """HM-I01: 默认（en locale）错误响应为英文。"""
-    st, body = http_post(base_server["port"], "/api/1/embed", {"text": ""})
+    st, body = http_post(base_server["port"], "/api/v1/embed", {"text": ""})
     assert st >= 400
     text = json.dumps(body, ensure_ascii=False) if isinstance(body, dict) else str(body)
     assert not any("\u4e00" <= ch <= "\u9fff" for ch in text), f"默认 locale 应为英文: {text[:150]}"
@@ -218,14 +218,14 @@ def test_hm_i01_error_message_locale_en(base_server):
 def test_hm_i02_error_message_locale_zh(base_server):
     """HM-I02: Accept-Language: zh → 错误响应为中文。"""
     conn_ok = True
-    st, body = http_post(base_server["port"], "/api/1/embed", {"text": ""})
+    st, body = http_post(base_server["port"], "/api/v1/embed", {"text": ""})
     # http_post 不支持自定义 header，这里用 GET /health + zh 头无法触发错误体；
     # 改用带 zh 头的原始请求由 conftest 扩展 —— 此处校验 ZH 错误文案端点行为：
     import http.client
     conn = http.client.HTTPConnection("127.0.0.1", base_server["port"], timeout=30)
     try:
         payload = json.dumps({"text": ""}).encode()
-        conn.request("POST", "/api/1/embed", body=payload,
+        conn.request("POST", "/api/v1/embed", body=payload,
                      headers={"Content-Type": "application/json", "Accept-Language": "zh"})
         resp = conn.getresponse()
         raw = resp.read().decode("utf-8", errors="replace")

@@ -37,12 +37,12 @@ async fn doctor_legal_config_has_no_failures() {
 #[tokio::test]
 async fn doctor_detects_invalid_config_as_fail() {
     // 构造必然校验失败的配置：空 model_repo 且无本地路径 → tokenizer/config 链路异常。
-    // validate() 的具体失败面随版本演进，这里锁定"报告能反映 FAIL"这一契约。
+    // validate 的具体失败面随版本演进，这里锁定"报告能反映 FAIL"这一契约。
     let mut config = vecboost::VecboostConfig::default();
     config.model.model_repo = String::new();
     config.model.model_path = None;
     let report = vecboost::doctor::DoctorReport::run(&config).await;
-    // 无论 validate() 是否放行空 repo，诊断报告必须结构完整且可判定
+    // 无论 validate 是否放行空 repo，诊断报告必须结构完整且可判定
     assert!(!report.results.is_empty());
     assert!(report.results.iter().all(|r| !r.detail.is_empty()));
 }

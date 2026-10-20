@@ -160,7 +160,7 @@ impl WeightPagingManager {
 
     /// 将层从 CPU 换入 GPU。
     ///
-    /// 若层处于 `InTransfer` 状态（由 `prefetch()` 标记），则完成传输：
+    /// 若层处于 `InTransfer` 状态（由 `prefetch` 标记），则完成传输：
     /// 更新 GPU 用量并转换到 `OnGpu`。
     pub fn page_in(&mut self, name: &str) -> Result<(), PagingError> {
         // 先只读检查层状态（借用在此块结束时释放）
@@ -301,7 +301,6 @@ impl WeightPagingManager {
             if meta.location != LayerLocation::OnGpu {
                 continue;
             }
-            // 获取第 K 次最近的访问时间
             let kth_access = if meta.access_history.len() >= self.lru_k {
                 meta.access_history[meta.access_history.len() - self.lru_k]
             } else if !meta.access_history.is_empty() {
@@ -712,10 +711,8 @@ mod tests {
         assert_eq!(mgr.gpu_usage(), 250);
     }
 
-    // =========================================================================
     // 补缺口：普通 page_in 的 OOM 显性失败、两条 page_in 路径的 LRU-K 历史
     // 裁剪、prefetch/get_prefetch_list 对非 OnCpu 层的跳过
-    // =========================================================================
 
     /// 层尺寸大于整个预算且无可驱逐层 → 显性 OOM 错误（含 need/available），
     /// 不得 panic 或静默假成功。

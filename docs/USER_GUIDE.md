@@ -183,7 +183,7 @@ cp config/config.toml config/config_custom.toml
 | `[database]` | 数据库连接（`[database] url = "sqlite:vecboost.db"`） | dbnexus（`db`） |
 | `[logging]` | 日志级别、控制台、文件轮转 | inklog |
 | `[pipeline.worker]` | 时间窗拼批 `batch_wait_ms` / `max_batch_size` / 停机排空 `drain_timeout_secs` | - |
-| `[semantic_cache]` | 语义缓存 `comparison_mode`（已废弃，配置保留但不生效）、`fuzzy_threshold` | oxcache |
+| `[semantic_cache]` | 语义缓存 `comparison_mode`（已废弃，配置保留但不生效）、`fuzzy_threshold`、`backend`（memory/redis）、`redis_url` | oxcache / Redis |
 | `[device]` | 硬件感知规划 `auto_plan` | - |
 | `[translation]` | 翻译多语言对 `[[translation.pairs]]`（路由、bundle 路径、token 预算） | -（需 `onnx` feature） |
 | `[transcribe]` | 转录服务开关、Qwen3-ASR bundle 目录、VAD 阈值、会话旋钮（端点恒注册；未启用 400 `transcribe-not-configured`） | -（需 `transcribe` feature） |
@@ -772,8 +772,12 @@ global_requests_per_minute = 2000
 batch_wait_ms = 5
 max_batch_size = 8
 
-[semantic_cache]      # 向量输出量化比较
-comparison_mode = "exact"   # exact | i8 | binary（已废弃：仅校验合法性，不生效）
+[semantic_cache]      # 语义缓存
+enabled = true
+comparison_mode = "exact"   # exact | i8 | binary（已废弃：仅校验合法性，不生效 ）
+fuzzy_threshold = 0.85
+backend = "memory"          # memory | redis（redis 需 distributed-redis）
+# redis_url = "redis://127.0.0.1:6379"   # backend = "redis" 时必填
 ```
 
 ---
@@ -1309,8 +1313,8 @@ redis_url = "redis://127.0.0.1:6379"
 |--------|----------------|-------|
 | 限流（全局 / IP / User / ApiKey） | 进程内 | 共享（Lua 原子固定窗口；per-key 固定 60s 窗口） |
 | 精确向量缓存 | 进程内（可选 WAL） | 共享（无 WAL，bloom 禁用，键绑定权重指纹） |
-| 语义缓存模糊命中 | 进程内 | 进程内（仅精确层共享） |
-| 封禁清单 | 进程内 | 进程内 |
+| 语义缓存模糊命中 | 进程内 | Redis 共享（`distributed-redis`；trigram 索引，无需 RediSearch） |
+| 封禁清单 | 进程内 | Redis 共享（`distributed-redis` + `ban-sync`） |
 
 构建：`cargo build --features "db,sqlite,distributed-redis"`（或 `db,postgres`）。`cache_backend = "redis"` 与 `[embedding] persist_path` 互斥；Redis 初始化失败时服务拒绝启动（不静默回落内存）。
 

@@ -36,7 +36,7 @@ fn state_has_control_chars(value: &serde_json::Value) -> bool {
 pub const MAX_QUESTIONS: usize = 32;
 pub const MAX_OPTIONS_PER_QUESTION: usize = 64;
 /// 单条 name/instructions/option 的字符长度上限（口径与 embed 校验一致，
-/// 按 `chars().count()` 计而非字节数；默认值同源 `constants::MAX_TEXT_LENGTH`）
+/// 按 `chars.count` 计而非字节数；默认值同源 `constants::MAX_TEXT_LENGTH`）
 pub const MAX_DECISION_FIELD_LENGTH: usize = crate::utils::constants::MAX_TEXT_LENGTH;
 /// state JSON 序列化字节上限
 pub const MAX_STATE_BYTES: usize = 64 * 1024;

@@ -437,7 +437,7 @@ mod tests {
         let cuda_stats = stats.cuda_pool_stats.unwrap();
         assert_eq!(cuda_stats.used_memory_mb, 0);
         // cuda feature 下 CudaMemoryPool 使用 config.max_memory_mb(1024);
-        // 非 cuda feature 下走 no-op 分支,get_memory_usage() 返回 (0, 0)。
+        // 非 cuda feature 下走 no-op 分支,get_memory_usage 返回 (0, 0)。
         #[cfg(feature = "cuda")]
         assert_eq!(cuda_stats.total_memory_mb, 1024);
         #[cfg(not(feature = "cuda"))]
@@ -498,9 +498,7 @@ mod tests {
         assert_eq!(buffer_stats.current_vector_pool_size, 0);
     }
 
-    // =========================================================================
     // 补缺口：initialize_all 装配 buffer/model 池（CUDA 关闭）的全量成功路径
-    // =========================================================================
 
     /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
     /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。

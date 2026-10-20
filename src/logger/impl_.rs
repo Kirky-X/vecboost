@@ -15,7 +15,7 @@ use trait_kit::prelude::*;
 /// 日志模块 — 提供 `Arc<inklog::LoggerManager>` 能力
 ///
 /// 采用"预构建能力注入"模式:`main.rs` 中预构建 `LoggerManager` 后,
-/// 通过 `kit.set_config(Arc::new(manager))` 注入,模块的 `build()` 从 config 检索。
+/// 通过 `kit.set_config(Arc::new(manager))` 注入,模块的 `build` 从 config 检索。
 pub struct LoggerModule;
 
 impl ModuleMeta for LoggerModule {

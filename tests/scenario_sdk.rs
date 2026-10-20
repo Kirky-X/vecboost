@@ -30,9 +30,7 @@ use vecboost::{LibraryConfig, VecBoostLibrary, VecboostError};
 const M1_DIR: &str = "BAAI-bge-small-en-v1.5";
 const M1_DIM: usize = 384;
 
-// ---------------------------------------------------------------------------
 // Fixtures
-// ---------------------------------------------------------------------------
 
 fn model_dir(dirname: &str) -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -83,9 +81,7 @@ fn assert_valid_embedding(vec: &[f32], dim: usize) {
     assert_unit_norm(vec);
 }
 
-// ---------------------------------------------------------------------------
 // M0 模型矩阵（SM-M1…SM-M4）
-// ---------------------------------------------------------------------------
 
 async fn model_matrix_case(label: &str, dirname: &str, dim: usize) {
     let Some(lib) = make_library(dirname, dim).await else {
@@ -229,9 +225,7 @@ async fn sdk_matrix_m4_e5_small_xlmroberta() {
     assert_eq!(ranked.results.len(), 2);
 }
 
-// ---------------------------------------------------------------------------
 // 正常场景（M1；SM-N01…）
-// ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sdk_normal_determinism_and_batch_boundaries() {
@@ -450,9 +444,7 @@ async fn sdk_batch_matches_single_across_lengths() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // 异常场景（SM-A01…；库层统一返回校验类错误，不得 panic / 500 语义）
-// ---------------------------------------------------------------------------
 
 fn assert_rejected(res: Result<impl Sized, VecboostError>, what: &str) {
     let Err(e) = res else {

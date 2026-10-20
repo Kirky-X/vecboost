@@ -3,7 +3,7 @@
 
 //! registry 单元测试
 //!
-//! 基于 trait-kit 0.3 的 `AsyncKit`（`Send + Sync`）。`build()` 是异步的，
+//! 基于 trait-kit 0.3 的 `AsyncKit`（`Send + Sync`）。`build` 是异步的，
 //! 测试使用 `#[tokio::test]`。`require` / `config` / `register` 均为同步方法。
 
 use std::future::Future;
@@ -23,9 +23,7 @@ use crate::pipeline::{PriorityConfig, WorkerConfig};
 use crate::rate_limit::LimiteronAdapter;
 use crate::service::embedding::EmbeddingService;
 
-// ---------------------------------------------------------------------------
 // Mock Engine — 用于测试 EmbeddingService 构造
-// ---------------------------------------------------------------------------
 
 struct MockEngine;
 
@@ -52,9 +50,7 @@ impl InferenceEngine for MockEngine {
     }
 }
 
-// ---------------------------------------------------------------------------
 // 循环依赖测试模块
-// ---------------------------------------------------------------------------
 
 struct CycleA;
 impl ModuleMeta for CycleA {
@@ -92,9 +88,7 @@ impl AsyncAutoBuilder for CycleB {
     }
 }
 
-// ---------------------------------------------------------------------------
 // 辅助函数
-// ---------------------------------------------------------------------------
 
 fn make_service() -> Arc<RwLock<EmbeddingService>> {
     let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> = Arc::new(RwLock::new(MockEngine));
@@ -105,9 +99,7 @@ async fn make_rate_limiter() -> Arc<LimiteronAdapter> {
     Arc::new(LimiteronAdapter::with_defaults().await)
 }
 
-// ---------------------------------------------------------------------------
 // 测试：注册、构建、require（基于 AsyncKit）
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_embedding_module_register_and_build() {
@@ -257,9 +249,7 @@ async fn test_duplicate_registration_fails() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // 测试：循环依赖检测
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_circular_dependency_detected() {
@@ -306,9 +296,7 @@ async fn test_missing_dependency_detected() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // AsyncKit Send + Sync 验证（编译期断言）
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_async_kit_is_send_sync() {
@@ -485,19 +473,15 @@ async fn test_all_modules_build_together_with_auth() {
     assert!(db_enabled);
 }
 
-// ===========================================================================
 // 13 个新 Module 测试
 //
 // 测试覆盖矩阵：
-//   - 严格类型（Arc<T>、Option<Arc<T>>、Vec<String>）：注册→构建→require 返回原对象
-//   - 严格类型 missing config：build 失败
-//   - bool 类型（newtype 派生）：注册→构建→require 返回 bool 值
-//   - bool 类型 missing config：默认 false（与 CacheModule/DbModule 一致）
-// ===========================================================================
+// - 严格类型（Arc<T>、Option<Arc<T>>、Vec<String>）：注册→构建→require 返回原对象
+// - 严格类型 missing config：build 失败
+// - bool 类型（newtype 派生）：注册→构建→require 返回 bool 值
+// - bool 类型 missing config：默认 false（与 CacheModule/DbModule 一致）
 
-// ---------------------------------------------------------------------------
 // 辅助函数 — 新 Module 所需
-// ---------------------------------------------------------------------------
 
 fn make_metrics_collector() -> Option<Arc<crate::metrics::InferenceCollector>> {
     Some(Arc::new(crate::metrics::InferenceCollector::new()))
@@ -535,9 +519,7 @@ fn make_worker_manager() -> Arc<crate::pipeline::WorkerManager> {
     ))
 }
 
-// ---------------------------------------------------------------------------
 // MetricsCollectorModule (Option<Arc<InferenceCollector>>)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_metrics_collector_module_with_some() {
@@ -578,9 +560,7 @@ async fn test_metrics_collector_module_missing_config_fails() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // PrometheusCollectorModule (Option<Arc<PrometheusCollector>>)
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "http")]
 #[tokio::test]
@@ -621,9 +601,7 @@ async fn test_prometheus_collector_module_missing_config_fails() {
     assert!(result.is_err());
 }
 
-// ---------------------------------------------------------------------------
 // IpWhitelistModule (Vec<String>)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_ip_whitelist_module_with_list() {
@@ -657,9 +635,7 @@ async fn test_ip_whitelist_module_missing_config_fails() {
     assert!(result.is_err());
 }
 
-// ---------------------------------------------------------------------------
 // PipelineQueueModule (Arc<PriorityRequestQueue>)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_pipeline_queue_module_register_and_build() {
@@ -682,9 +658,7 @@ async fn test_pipeline_queue_module_missing_config_fails() {
     assert!(result.is_err());
 }
 
-// ---------------------------------------------------------------------------
 // ResponseChannelModule (Arc<ResponseChannel>)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_response_channel_module_register_and_build() {
@@ -707,9 +681,7 @@ async fn test_response_channel_module_missing_config_fails() {
     assert!(result.is_err());
 }
 
-// ---------------------------------------------------------------------------
 // PriorityCalculatorModule (Arc<PriorityCalculator>)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_priority_calculator_module_register_and_build() {
@@ -732,9 +704,7 @@ async fn test_priority_calculator_module_missing_config_fails() {
     assert!(result.is_err());
 }
 
-// ---------------------------------------------------------------------------
 // WorkerManagerModule (Arc<WorkerManager>)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_worker_manager_module_register_and_build() {
@@ -757,9 +727,7 @@ async fn test_worker_manager_module_missing_config_fails() {
     assert!(result.is_err());
 }
 
-// ---------------------------------------------------------------------------
 // Auth-gated modules (CsrfConfigModule)
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "auth")]
 #[tokio::test]
@@ -788,9 +756,7 @@ async fn test_csrf_config_module_with_none() {
     assert!(capability.is_none());
 }
 
-// ---------------------------------------------------------------------------
 // 集成测试：所有 15 个 Module 联合构建（验证无 TypeId 冲突）
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_all_fifteen_modules_build_together() {

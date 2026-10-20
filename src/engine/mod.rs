@@ -589,7 +589,7 @@ mod tests {
         assert!(engine.try_fallback_to_cpu(&config).await.is_ok());
     }
 
-    // -- Direct embed() call --
+    // -- Direct embed call --
     #[test]
     fn test_mock_embed_returns_deterministic_vector() {
         let engine = MockEngine { dimension: 8 };
@@ -598,7 +598,7 @@ mod tests {
         assert!(vec.iter().all(|&v| v == 1.0));
     }
 
-    // -- Direct embed_batch() call --
+    // -- Direct embed_batch call --
     #[test]
     fn test_mock_embed_batch_returns_vectors() {
         let engine = MockEngine { dimension: 4 };
@@ -608,14 +608,14 @@ mod tests {
         assert_eq!(vecs[0].len(), 4);
     }
 
-    // -- precision() accessor --
+    // -- precision accessor --
     #[test]
     fn test_mock_precision_is_fp32() {
         let engine = MockEngine { dimension: 4 };
         assert_eq!(*engine.precision(), Precision::Fp32);
     }
 
-    // -- supports_mixed_precision() --
+    // -- supports_mixed_precision --
     #[test]
     fn test_mock_supports_mixed_precision_false() {
         let engine = MockEngine { dimension: 4 };

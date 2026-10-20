@@ -132,6 +132,9 @@ pub struct SemanticCache {
     semantic_hits: AtomicU64,
     misses: AtomicU64,
     total_entries: AtomicUsize,
+    /// 跨副本 trigram 索引（`distributed-redis`）；命中后回填本地热缓存。
+    #[cfg(feature = "distributed-redis")]
+    redis_index: Option<Arc<super::redis_semantic_index::RedisSemanticIndex>>,
 }
 
 impl SemanticCache {
@@ -160,6 +163,8 @@ impl SemanticCache {
             semantic_hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             total_entries: AtomicUsize::new(0),
+            #[cfg(feature = "distributed-redis")]
+            redis_index: None,
         }
     }
 
@@ -177,7 +182,40 @@ impl SemanticCache {
                 "{}",
                 crate::i18n::tr_with_args(
                     "log-service-cache-clear-failed",
-                    crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                    crate::i18n::tr_args(&[("detail", &e.to_string())])
+                )
+            );
+        }
+        #[cfg(feature = "distributed-redis")]
+        if let Some(redis) = &self.redis_index
+            && let Err(e) = redis.clear_all().await
+        {
+            log::warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-semantic-redis-clear-all-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())])
+                )
+            );
+        }
+    }
+
+    /// 清空指定模型的本地与共享索引（模型卸载的生命周期入口）。
+    pub async fn clear_model(&self, model_id: &str) {
+        {
+            let mut index = self.semantic_index.write().await;
+            index.retain(|entry| entry.model_id != model_id);
+            self.total_entries.store(index.len(), Ordering::Relaxed);
+        }
+        #[cfg(feature = "distributed-redis")]
+        if let Some(redis) = &self.redis_index
+            && let Err(e) = redis.clear(model_id).await
+        {
+            log::warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-semantic-redis-clear-model-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())])
                 )
             );
         }
@@ -198,6 +236,8 @@ impl SemanticCache {
             semantic_hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             total_entries: AtomicUsize::new(0),
+            #[cfg(feature = "distributed-redis")]
+            redis_index: None,
         }
     }
 
@@ -211,6 +251,17 @@ impl SemanticCache {
     pub fn with_fuzzy_threshold(mut self, threshold: f32) -> Self {
         self.fuzzy_threshold = threshold;
         self
+    }
+
+    /// 接入跨副本 trigram 索引（`distributed-redis`）：连接失败即启动失败。
+    #[cfg(feature = "distributed-redis")]
+    pub async fn with_redis_index_url(
+        mut self,
+        url: &str,
+    ) -> Result<Self, crate::error::VecboostError> {
+        let index = super::redis_semantic_index::RedisSemanticIndex::connect(url).await?;
+        self.redis_index = Some(Arc::new(index));
+        Ok(self)
     }
 
     /// 注册 single-flight 锁并获取许可：同 key 并发调用串行化，
@@ -340,11 +391,55 @@ impl SemanticCache {
                 _ => None,
             };
         }
+
+        // 本地未命中：先释放读锁，再查跨副本 trigram 索引；命中后回填
+        // 本地热缓存（insert_to_local_index 需要写锁，持读锁会自锁）。
+        drop(index);
+        #[cfg(feature = "distributed-redis")]
+        if let Some(redis) = &self.redis_index {
+            match redis
+                .find_similar(model_id, query, self.fuzzy_threshold)
+                .await
+            {
+                Ok(Some(embedding)) => {
+                    self.insert_to_local_index(model_id, query, embedding.clone())
+                        .await;
+                    return Some(embedding);
+                }
+                Ok(None) => {}
+                Err(e) => log::warn!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-semantic-redis-find-failed",
+                        crate::i18n::tr_args(&[("detail", &e.to_string())])
+                    )
+                ),
+            }
+        }
         None
     }
 
     /// 插入新条目到语义索引，必要时执行 LRU 驱逐。
     async fn insert_to_index(&self, model_id: &str, text: &str, embedding: Vec<f32>) {
+        #[cfg(feature = "distributed-redis")]
+        if let Some(redis) = &self.redis_index
+            && let Err(e) = redis
+                .insert(model_id, text, &embedding, self.capacity)
+                .await
+        {
+            log::warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-semantic-redis-insert-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())])
+                )
+            );
+        }
+        self.insert_to_local_index(model_id, text, embedding).await;
+    }
+
+    /// 仅写本地热缓存（Redis 命中回填时避免重复写共享索引）。
+    async fn insert_to_local_index(&self, model_id: &str, text: &str, embedding: Vec<f32>) {
         let mut index = self.semantic_index.write().await;
 
         // LRU 驱逐：达到容量时移除最久未访问的条目
@@ -481,7 +576,7 @@ impl SemanticCache {
 /// 尾部不足 3 字节时以零填充补齐最后一个窗口(与 `windows(3)` 语义一致:
 /// 字节数 < 3 的文本没有完整窗口,返回空集)。
 #[inline]
-fn pack_trigrams(bytes: &[u8]) -> HashSet<u32> {
+pub(crate) fn pack_trigrams(bytes: &[u8]) -> HashSet<u32> {
     if bytes.len() < 3 {
         return HashSet::new();
     }
@@ -496,7 +591,10 @@ fn pack_trigrams(bytes: &[u8]) -> HashSet<u32> {
 /// 使用预计算的 trigram 集合计算 Jaccard 相似度。
 ///
 /// 避免在批量比较中重复构建 HashSet。
-fn trigram_jaccard_with_set(a_trigrams: &HashSet<u32>, b_trigrams: &HashSet<u32>) -> f32 {
+pub(crate) fn trigram_jaccard_with_set(
+    a_trigrams: &HashSet<u32>,
+    b_trigrams: &HashSet<u32>,
+) -> f32 {
     if a_trigrams.is_empty() || b_trigrams.is_empty() {
         return 0.0;
     }

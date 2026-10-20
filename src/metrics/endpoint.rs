@@ -136,7 +136,6 @@ async fn enforce_metrics_rate_limit(
             ));
         }
     };
-    // 记录限流决策指标
     if let Some(prom) = collector {
         if allowed {
             prom.record_rate_limit_allowed("metrics_ip");
@@ -180,7 +179,7 @@ fn encode_metrics_body(
     let encoder = prometheus::TextEncoder::new();
     #[allow(unused_mut)] // extend 仅在 metrics 聚合 feature 下发生
     let mut metric_families = collector.registry().gather();
-    // garrison metrics-prometheus（auth feature）：GarrisonMetrics::new() 的 OnceLock
+    // garrison metrics-prometheus（auth feature）：GarrisonMetrics::new 的 OnceLock
     // 单例把 garrison_* auth 域指标注册在 prometheus default_registry，与上方
     // collector 自有 registry 是两个注册表，此处合并导出（garrison_ 前缀无重名冲突）
     #[cfg(feature = "auth")]

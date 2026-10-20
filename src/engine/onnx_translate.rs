@@ -99,7 +99,7 @@ static PAST_TENSOR_NAMES: &[(&str, &str, &str)] = &[
     ("past_key_values.5.encoder.value", "", ""),
 ];
 
-/// logits 图契约校验（评审 SEC-2）：batch=1、[1, dec_len, V] 形状、数据长度
+/// logits 图契约校验（评审）：batch=1、[1, dec_len, V] 形状、数据长度
 /// 一致。不符返回含实际形状的消息（换导出仓库/量化变体时快速定位）。
 fn validate_logits_shape(shape: &[i64], dec_len: i64, data_len: usize) -> Result<(), String> {
     if shape.len() != 3 {

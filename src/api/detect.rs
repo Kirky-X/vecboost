@@ -29,9 +29,7 @@ use sdforge::prelude::*;
 #[cfg(all(feature = "openapi", feature = "http"))]
 use ::utoipa;
 
-// =============================================================================
 // Public SDK functions
-// =============================================================================
 
 pub async fn detect(
     svc: &DetectService,
@@ -40,9 +38,7 @@ pub async fn detect(
     svc.process_detect(req).await
 }
 
-// =============================================================================
 // Protocol-agnostic handlers
-// =============================================================================
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 async fn detect_handler(req: DetectRequest) -> Result<DetectResponse, ApiError> {
@@ -54,9 +50,7 @@ async fn detect_handler(req: DetectRequest) -> Result<DetectResponse, ApiError> 
     detect(&svc, req).await.map_err(to_api_error)
 }
 
-// =============================================================================
 // HTTP forge handlers
-// =============================================================================
 
 #[cfg(feature = "http")]
 #[forge(
@@ -71,9 +65,7 @@ pub async fn forge_detect(req: DetectRequest) -> Result<DetectResponse, ApiError
     detect_handler(req).await
 }
 
-// =============================================================================
 // CLI forge handlers
-// =============================================================================
 
 #[cfg(feature = "cli")]
 #[forge(
@@ -87,9 +79,7 @@ pub async fn cli_detect(req: DetectRequest) -> Result<DetectResponse, ApiError> 
     detect_handler(req).await
 }
 
-// =============================================================================
 // gRPC forge handlers
-// =============================================================================
 
 #[cfg(feature = "grpc")]
 #[forge(

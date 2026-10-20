@@ -7,7 +7,7 @@
 
 ## 📋 目录
 
-- [Unreleased](#unreleased)
+- [0.3.0-rc.3 - 2026-10-20](#030-rc3---2026-10-20)
 - [0.3.0-rc.2 - 2026-10-15](#030-rc2---2026-10-15)
 - [0.3.0-rc.1 - 2026-09-22](#030-rc1---2026-09-22)
 - [0.2.1 - 2026-07-30](#021---2026-07-30)
@@ -18,9 +18,12 @@
 
 ---
 
-<a id="unreleased"></a>
+<a id="030-rc3---2026-10-20"></a>
 
-## [Unreleased]
+## [0.3.0-rc.3] - 2026-10-20
+
+### 新增
+- **多副本共享语义缓存与封禁清单（二期）**：`[semantic_cache] backend = "redis"`（需 `distributed-redis`）把 trigram Jaccard 模糊索引写入 Redis Hash + LRU ZSET，跨副本命中后回填本地热缓存；`limiteron/ban-sync` + `CacheBanStorage` 使封禁清单跨副本共享；启动期 fail-closed 校验 feature/URL，新增 `startup-semantic-redis-*` 文案。索引按模型清理（`SemanticCache::clear_model`）。
 
 ### 变更
 - **构建配置迁移 `.cargo/config` → `.cargo/config.toml`**：旧名使 cargo 1.97 每次调用都打 `deprecated in favor of config.toml` 警告；全仓（CI / Dockerfile / scripts）无任何引用旧名之处，本地覆盖亦走 `~/.cargo/config.toml` 用户级配置，故 `.gitignore` 中「忽略 config.toml、以旧名入库」的留白规则作废，改为反向忽略旧名防止回归。`[env] JEMALLOC_SYS_WITH_MALLOC_CONF` 语义不变——已用 build.rs 临时探针实测迁移后仍注入构建环境（`Ok("dirty_decay_ms:1000,muzzy_decay_ms:1000")`），jemalloc decay 防线无回退

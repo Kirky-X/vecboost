@@ -422,9 +422,7 @@ async fn test_compute_similarity_empty_target_returns_error() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // to_api_error / uuid_like_id tests
-// ---------------------------------------------------------------------------
 
 #[cfg(any(feature = "http", feature = "cli"))]
 #[test]
@@ -541,9 +539,7 @@ fn test_to_api_error_other_variants_become_internal() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // forge_embed / forge_embed_batch / forge_compute_similarity tests
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "http")]
 #[tokio::test]
@@ -643,9 +639,7 @@ async fn test_forge_compute_similarity_empty_source_error() {
     assert!(result.is_err());
 }
 
-// ---------------------------------------------------------------------------
 // cli_embed / cli_compute_similarity tests
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "cli")]
 #[tokio::test]
@@ -710,15 +704,13 @@ async fn test_cli_compute_similarity_empty_source_returns_error() {
     assert!(result.is_err());
 }
 
-// ---------------------------------------------------------------------------
 // forge handler require calls bounded under 100 requests
-// ---------------------------------------------------------------------------
 
-/// Verify that forge handlers make a bounded number of `kit.require::<Module>()`
+/// Verify that forge handlers make a bounded number of `kit.require::<Module>`
 /// calls per request. acceptance criterion 2 requires total
 /// require calls ≤ 4 × request_count (≤ 400 for 100 requests).
 ///
-/// `forge_embed` (src/api/embedding.rs) calls `require::<EmbeddingModule>()`
+/// `forge_embed` (src/api/embedding.rs) calls `require::<EmbeddingModule>`
 /// exactly once per invocation. 100 requests × 1 require = 100 requires ≤ 400 ✓.
 ///
 /// `trait_kit::AsyncKit` does not expose a require-counter API, so we use an
@@ -746,9 +738,7 @@ async fn test_forge_handler_require_calls_bounded_under_100_requests() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // AuditLogger called by forge handler pattern
-// ---------------------------------------------------------------------------
 
 /// Verify that `AuditLogger` correctly records login_success and logout events
 /// when invoked using the same call pattern as `forge_login` and `forge_logout`.
@@ -779,7 +769,7 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
     let logger = AuditLogger::new(audit_config);
 
     // Mirror forge_login audit call:
-    //   logger.log_login_success(&req.username, Some(peer_ip.clone()));
+    //   logger.log_login_success(&req.username, Some(peer_ip.clone));
     let peer_ip = "192.168.1.100".to_string();
     let username = "testuser";
     logger.log_login_success(username, Some(peer_ip.clone()));
@@ -810,9 +800,7 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // forge_decisions —— /api/1/decisions 端点（DecisionModule kit 装配链）
-// ---------------------------------------------------------------------------
 
 fn decision_mixed_request() -> DecisionRequest {
     use crate::domain::{DecisionQuestion, QuestionType};
@@ -899,9 +887,7 @@ async fn test_forge_decisions_empty_questions_returns_400() {
     }
 }
 
-// =============================================================================
 // forge_detect —— /api/1/detect 端点（DetectModule kit 装配链）
-// =============================================================================
 
 #[cfg(feature = "http")]
 #[tokio::test]
@@ -1032,9 +1018,7 @@ async fn test_forge_translate_unconfigured_pair_400_with_pairs_list() {
     }
 }
 
-// =============================================================================
 // forge auth handlers —— login/refresh/logout/me（auth feature，进程内直调）
-// =============================================================================
 
 /// 测试管理员用户名/口令：`test_garrison_handle` 的 Argon2 哈希与
 /// `ensure_garrison_initialized` 的 VecBoostInterface 均以此为准（单管理员模型）。
@@ -1077,7 +1061,7 @@ fn test_garrison_handle() -> crate::auth::GarrisonHandle {
 }
 
 /// garrison 全局单例装配（DAO + config + interface，与 main.rs init_auth 同构）。
-/// garrison 0.9 `build()` 允许重复调用（last-writer-wins、BUILD_LOCK 串行），
+/// garrison 0.9 `build` 允许重复调用（last-writer-wins、BUILD_LOCK 串行），
 /// OnceCell 保证进程内只构建一次；`GarrisonUtil` 静态方法依赖此单例。
 #[cfg(all(feature = "http", feature = "auth"))]
 async fn ensure_garrison_initialized() {
@@ -1426,9 +1410,7 @@ async fn test_forge_me_regular_user_permissions() {
     );
 }
 
-// =============================================================================
 // forge_rerank / forge_rerank_batch 错误分支（此前 forge 级零覆盖）
-// =============================================================================
 
 /// 空 query → 服务层校验拒绝 → 400 语义 InvalidInput。
 #[cfg(feature = "http")]
@@ -1505,9 +1487,7 @@ async fn test_forge_rerank_batch_partial_failure_statuses() {
     assert_eq!(result.statuses[1].index, 1);
 }
 
-// =============================================================================
 // forge_transcribe 错误分支（未装配/坏请求）
-// =============================================================================
 
 /// 空 samples → 域层校验先于装配门 → 400 语义 InvalidInput。
 #[cfg(feature = "http")]
@@ -1550,9 +1530,7 @@ async fn test_forge_transcribe_not_configured_returns_400() {
     }
 }
 
-// =============================================================================
 // forge_decisions 错误分支：问题数超上限
-// =============================================================================
 
 /// questions > MAX_QUESTIONS(32) → 服务层校验拒绝 → 400 语义 InvalidInput，
 /// 文案含上限数值（客户端可按此裁剪重试）。

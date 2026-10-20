@@ -4,7 +4,7 @@
 //! Process-wide `VecboostState` singleton for forge handlers.
 //!
 //! All forge handlers (HTTP/MCP/CLI) access kit capabilities via
-//! `state()?.kit.require::<Module>()`. Initialized once by `main.rs`
+//! `state?.kit.require::<Module>`. Initialized once by `main.rs`
 //! via `init_state(VecboostState { kit })`.
 
 use crate::VecboostState;

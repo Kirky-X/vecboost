@@ -24,7 +24,7 @@ enum LoggerCommand {
 }
 
 /// flush ack 等待上限：writer 存活但失联（轮转/写盘卡死、熔断退出未 ack）
-/// 时显性失败而非无限挂起。仅 `flush()` 消费，不进配置面。
+/// 时显性失败而非无限挂起。仅 `flush` 消费，不进配置面。
 const FLUSH_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Audit logger — async batched writes via background task.
@@ -669,7 +669,6 @@ mod dead_letter_tests {
         let parsed: serde_json::Value = serde_json::from_str(last_line).expect("valid JSONL");
         assert_eq!(parsed["db_error"], "simulated db outage");
         assert!(parsed["event"].is_object(), "event body must be embedded");
-        // 清理测试产生的文件
         let _ = std::fs::remove_file(path);
     }
 }
@@ -1064,7 +1063,7 @@ mod tests {
         );
     }
 
-    // ===== flush 契约：ack 超时与 writer 失联显性化 =====
+    // flush 契约：ack 超时与 writer 失联显性化
 
     /// writer 启动即退出（日志父路径是文件，目录创建必败）时，flush 必须
     /// 显性 Err（禁止 `let _ = rx.await` 吞成 Ok），且不挂起。
@@ -1125,10 +1124,10 @@ mod tests {
         }
     }
 
-    // ===== 熔断退出回归：writer 死亡后 flush 快速失败 + 事件留存 =====
+    // 熔断退出回归：writer 死亡后 flush 快速失败 + 事件留存
 
     /// 文件 writer 连续写失败达 `ERROR_THRESHOLD=10` 熔断退出后：
-    /// (a) 后续 `flush()` 在超时内返回 Err（不挂起、不误报 Ok）；
+    /// (a) 后续 `flush` 在超时内返回 Err（不挂起、不误报 Ok）；
     /// (b) break 前成功写入的事件留存于审计文件（轮转件）。
     #[cfg(unix)]
     #[tokio::test]
@@ -1147,7 +1146,7 @@ mod tests {
         };
         let logger = AuditLogger::new(config);
 
-        // Phase A：两次「事件 + flush」制造一次成功轮转，
+        // 两次「事件 + flush」制造一次成功轮转，
         // 首条事件落 audit.log.1（供熔断后断言留存），次条落 audit.log
         logger.log_login_success("pre-break-rotated", None);
         logger.flush().await.unwrap();

@@ -232,7 +232,7 @@ pub fn ensure_finite_embedding(v: &[f32]) -> Result<(), VecboostError> {
 /// Truncate a vector to the specified dimension.
 ///
 /// - `target_dimension == 0` → 返回空向量（语义：截断到零维）
-/// - `target_dimension >= vector.len()` → 返回原向量副本
+/// - `target_dimension >= vector.len` → 返回原向量副本
 ///
 /// 注意：Matryoshka 场景下截断会破坏单位向量语义（子向量范数 < 原范数），
 /// 调用方必须在截断后调用 [`normalize_l2`] 重新归一化，以保证余弦相似度正确。
@@ -568,9 +568,7 @@ mod similarity_tests {
         );
     }
 
-    // ========================================================================
     // Matryoshka: information retention rate
-    // ========================================================================
 
     #[test]
     fn test_information_retention_rate_full_dim() {
@@ -635,9 +633,7 @@ mod similarity_tests {
         );
     }
 
-    // ========================================================================
     // Matryoshka: TaskType and recommended_dimension
-    // ========================================================================
 
     #[test]
     fn test_task_type_from_str() {

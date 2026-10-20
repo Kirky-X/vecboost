@@ -39,7 +39,7 @@ fn next_request_id() -> String {
     )
 }
 
-// ─── 跨批/跨 worker 同文 in-flight 去重（FT-03） ───────────────────────────
+// 跨批/跨 worker 同文 in-flight 去重（FT-03）
 //
 // 批内去重（service::embed_batch_texts 的 xxh3 scatter）只能合并同一批内
 // 的重复文本；min_workers>1 与批触发时序下，并发同文请求会落在不同批/
@@ -1735,7 +1735,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_abort_sets_cancel_flag() {
         // 本测试按名排序先于 queue_full 等断言 i18n 文案的既有测试执行，
-        // 首语句初始化 i18n，消除 tr() 未初始化回退裸键名的排序竞争
+        // 首语句初始化 i18n，消除 tr 未初始化回退裸键名的排序竞争
         ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));

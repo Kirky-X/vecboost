@@ -416,7 +416,7 @@ mod tests {
         buf.truncate(d_start + d_written - 9);
 
         // 破坏 B 记录的第一个 payload 字节：B 起始 + 1(type) + 4(key_len)
-        // + key.len() + 4(dim) 指向 vec 数据首字节
+        // + key.len + 4(dim) 指向 vec 数据首字节
         let b_start = offsets[1];
         let payload_off = b_start + 1 + 4 + 3 + 4;
         buf[payload_off] ^= 0xFF;

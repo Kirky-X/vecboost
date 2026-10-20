@@ -351,8 +351,6 @@ Per-key options and defaults for every config section (server / model / embeddin
 | [📋 Changelog](docs/CHANGELOG.md) | Release-by-release change log |
 | [🤝 Contributing](docs/CONTRIBUTING.md) | How to contribute |
 | [🧹 Maintenance Norms](docs/MAINTENANCE.md) | Cross-change standing constraints: transcribe consumption surface, CLI contract, retired-switch discipline, deprecation-doc governance |
-| [�� Benchmark archive](docs/benchmarks/) | Historical benchmark data (similarity / batch scheduling / semantic cache / GPU pipeline) |
-| [🌍 I18N missing-key audit](docs/I18N_MISSING_AUDIT.md) | Internationalization audit record |
 
 </details>
 

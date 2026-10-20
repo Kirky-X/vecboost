@@ -40,7 +40,7 @@ struct PersistInner {
 /// `get_or_insert`/`clear`/`warm_up`（`remove`/`len`/`is_empty` 仅测试消费）。
 ///
 /// 内部集成:
-/// - **Bloom filter**: 负查询过滤,FPR=0.01,`get()` 时先查 bloom,
+/// - **Bloom filter**: 负查询过滤,FPR=0.01,`get` 时先查 bloom,
 ///   miss 则跳过底层缓存查询。
 /// - **Bloom 上限重建**: 插入计数达到 [`BLOOM_REBUILD_THRESHOLD`]
 ///   时重建 bloom filter,防止无界增长导致负过滤失效与内存泄漏。
@@ -159,7 +159,7 @@ impl OxCacheBackend {
     ///
     /// `model_tag` 为模型指纹（回放时不匹配的记录被弃用）；`max_bytes`
     /// 为紧凑化阈值。构造时回放已有文件计数 nrec；内存重建需调用方在
-    /// 启动时显式 `load_persisted().await`（顺序回放重建缓存）。
+    /// 启动时显式 `load_persisted.await`（顺序回放重建缓存）。
     pub fn with_persist(
         capacity: usize,
         path: std::path::PathBuf,
@@ -771,13 +771,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_remove_returns_false_for_missing() {
         let cache = OxCacheBackend::new(16);
-        // oxcache delete 对不存在的 key 返回 Ok(()),因此这里仅验证不 panic
         let _ = cache.remove("missing").await;
     }
 
-    // ========================================================================
     // Bloom filter integration tests
-    // ========================================================================
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bloom_filter_miss_skips_backend_lookup() {
@@ -806,7 +803,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_bloom_filter_cleared_with_cache() {
-        // 验证 clear() 同时重置 bloom filter
+        // 验证 clear 同时重置 bloom filter
         let cache = OxCacheBackend::new(100);
         cache.put("a", vec![1.0]).await;
         cache.put("b", vec![2.0]).await;
@@ -818,13 +815,11 @@ mod tests {
         assert!(!bloom.contains("b"));
     }
 
-    // ========================================================================
     // Compression roundtrip tests
-    // ========================================================================
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_compression_roundtrip_preserves_values() {
-        // 历史上的 flate2 压缩路径已移除（净负收益，见 get() 处注释），现直接存取
+        // 历史上的 flate2 压缩路径已移除（净负收益，见 get 处注释），现直接存取
         // 原始 Vec<f32>；本测试验证大向量往返后逐位一致。
         let cache = OxCacheBackend::new(16);
         let original: Vec<f32> = (0..100).map(|i| (i as f32) * 0.01).collect();
@@ -857,9 +852,7 @@ mod tests {
         assert_eq!(got, Some(small));
     }
 
-    // ========================================================================
     // Baseline: exact-match cache hit rate under semantic similarity
-    // ========================================================================
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_cache_hit_rate_under_semantic_similarity() {
@@ -930,9 +923,7 @@ mod tests {
         // 注意：原始文本的命中依赖 moka 异步索引，这里仅验证改写文本全部 miss
     }
 
-    // ========================================================================
     // WAL 持久层测试
-    // ========================================================================
 
     fn persist_backend(
         dir: &std::path::Path,

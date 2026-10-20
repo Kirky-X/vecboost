@@ -119,10 +119,8 @@ pub fn parse_accept_language(header_value: &str) -> Option<String> {
         }
     }
 
-    // Sort by quality descending
     candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Return first supported locale
     let supported = ["en", "zh"];
     for (_, locale) in &candidates {
         if supported.contains(&locale.as_str()) {
@@ -407,7 +405,7 @@ mod tests {
         assert_eq!(parse_accept_language("en;0.5"), Some("en".to_string()));
     }
 
-    // ---- 默认语言守卫（纯函数链路，不依赖进程环境变量）----
+    // 默认语言守卫（纯函数链路，不依赖进程环境变量）
 
     /// 全链无信号（四级变量缺席 + 无系统 locale）时默认必须落 `"en"`。
     #[test]

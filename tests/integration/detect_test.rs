@@ -39,9 +39,7 @@ fn skip_without_model(test_name: &str) -> bool {
     true
 }
 
-// ---------------------------------------------------------------------------
 // 服务器进程管理（复用 crate::common::{TestServer, free_port, model_ready}）
-// ---------------------------------------------------------------------------
 
 #[derive(Default)]
 struct ServerOpts {

@@ -8,8 +8,8 @@
 //! 跨线程，也可存入 `VecboostState`。
 //!
 //! 模块采用"预构建能力注入"模式：需要异步构造的复杂对象（如 EmbeddingService）
-//! 在 main.rs 中预构建后通过 `kit.set_config()` 注入，模块的 `build()` 从 config 检索。
-//! `AsyncKit::build().await` 按拓扑序异步调用各模块的 `AsyncAutoBuilder::build`。
+//! 在 main.rs 中预构建后通过 `kit.set_config` 注入，模块的 `build` 从 config 检索。
+//! `AsyncKit::build.await` 按拓扑序异步调用各模块的 `AsyncAutoBuilder::build`。
 
 mod impl_;
 #[cfg(test)]
@@ -58,14 +58,12 @@ pub struct DbModule;
 /// 审计模块 — 提供 `Option<Arc<AuditLogger>>` 能力
 pub struct AuditModule;
 
-// ---------------------------------------------------------------------------
 // 覆盖 VecboostState 剩余字段的 13 个 Module
 //
 // 设计原则（与现有 EmbeddingModule/AuthModule 等保持一致）：
-//   - 模块 Capability 类型 = 字段类型（1:1 映射，无派生逻辑）
-//   - 复杂对象通过 `kit.set_config(capability)` 预构建后注入，build() 从 config 检索
-//   - bool 字段用 newtype 包装以避免 TypeMap 中 bool TypeId 冲突
-// ---------------------------------------------------------------------------
+// - 模块 Capability 类型 = 字段类型（1:1 映射，无派生逻辑）
+// - 复杂对象通过 `kit.set_config(capability)` 预构建后注入，build 从 config 检索
+// - bool 字段用 newtype 包装以避免 TypeMap 中 bool TypeId 冲突
 
 /// CSRF 配置模块（auth）— 提供 `Option<Arc<GarrisonCsrfConfig>>` 能力
 #[cfg(feature = "auth")]
@@ -77,7 +75,7 @@ pub struct MetricsCollectorModule;
 /// Prometheus 收集器模块 — 提供 `Option<Arc<PrometheusCollector>>` 能力
 ///
 /// 仅在 http feature 下可用（依赖 prometheus crate）。
-/// library 模式下不注册此模块，`kit.require::<PrometheusCollectorModule>()` 会失败。
+/// library 模式下不注册此模块，`kit.require::<PrometheusCollectorModule>` 会失败。
 #[cfg(feature = "http")]
 pub struct PrometheusCollectorModule;
 
@@ -99,12 +97,10 @@ pub struct WorkerManagerModule;
 /// 配置监视器模块 — 提供 `confers::watcher::WatcherGuard` 能力
 ///
 /// 监视配置文件变化并触发重载。Capability 为 `WatcherGuard`，
-/// 通过 `on_ready()` 启动监视，`on_shutdown()` 优雅关闭。
+/// 通过 `on_ready` 启动监视，`on_shutdown` 优雅关闭。
 pub struct ConfigWatcherModule;
 
-// ---------------------------------------------------------------------------
 // 配置类型（通过 `Kit::set_config` 注入）
-// ---------------------------------------------------------------------------
 
 /// 缓存配置
 #[derive(Clone, Debug)]

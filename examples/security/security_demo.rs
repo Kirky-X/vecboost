@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔒 安全模块示例");
     println!("================\n");
 
-    // ─── SecretKey 与掩码显示 ──────────────────────────────────────────
+    // SecretKey 与掩码显示
     println!("📝 SecretKey 密钥管理:");
 
     let jwt_key = SecretKey::jwt_secret("my_super_secret_jwt_key_2024");
@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         model_key.mask_value()
     );
 
-    // ─── EnvironmentKeyStore（只读安全设计） ───────────────────────────
+    // EnvironmentKeyStore（只读安全设计）
     println!("📝 EnvironmentKeyStore 操作（只读）:");
 
     let store =
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => println!("  delete 拒绝(预期): {}\n", e.error_detail()),
     }
 
-    // ─── SaltStore ──────────────────────────────────────────────────────
+    // SaltStore
     println!("📝 SaltStore 盐值管理:");
 
     let salt = SaltStore::generate();
@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(salt.as_bytes(), restored.as_bytes());
     println!("  hex 往返验证: ✅ 一致\n");
 
-    // ─── 敏感数据脱敏 ──────────────────────────────────────────────────
+    // 敏感数据脱敏
     println!("📝 敏感数据脱敏:");
 
     let secret = "my_super_secret_key_12345";

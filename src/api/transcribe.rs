@@ -51,9 +51,7 @@ use sdforge::prelude::*;
 ))]
 use ::utoipa;
 
-// =============================================================================
 // Public SDK functions
-// =============================================================================
 
 pub async fn transcribe(
     svc: &TranscribeService,
@@ -62,9 +60,7 @@ pub async fn transcribe(
     svc.process_transcribe(req).await
 }
 
-// =============================================================================
 // Protocol-agnostic handlers
-// =============================================================================
 
 #[cfg(any(feature = "http", feature = "grpc"))]
 async fn transcribe_handler(req: TranscribeRequest) -> Result<TranscribeResponse, ApiError> {
@@ -76,9 +72,7 @@ async fn transcribe_handler(req: TranscribeRequest) -> Result<TranscribeResponse
     transcribe(&svc, req).await.map_err(to_api_error)
 }
 
-// =============================================================================
 // HTTP forge handlers
-// =============================================================================
 
 #[cfg(feature = "http")]
 #[forge(
@@ -93,9 +87,7 @@ pub async fn forge_transcribe(req: TranscribeRequest) -> Result<TranscribeRespon
     transcribe_handler(req).await
 }
 
-// =============================================================================
 // gRPC forge handlers
-// =============================================================================
 
 #[cfg(feature = "grpc")]
 #[forge(
@@ -108,9 +100,7 @@ pub async fn grpc_transcribe(req: TranscribeRequest) -> Result<TranscribeRespons
     transcribe_handler(req).await
 }
 
-// =============================================================================
 // CLI forge handler（音频文件入参）
-// =============================================================================
 
 /// CLI 入参：WAV 文件路径（域契图为 samples 数组，CLI 逐样本传参无实用形态，
 /// 故 CLI 面收敛为单文件路径——读 wav → samples → 域请求）。

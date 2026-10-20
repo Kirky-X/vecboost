@@ -1,0 +1,201 @@
+# CI 质量门禁：fmt / clippy / check / test / coverage / deny
+#
+# 特性约束：sqlite 与 postgres 由 dbnexus compile_error! 强制互斥，
+# 禁止 --all-features（会同时打开两组驱动）；cuda/metal 无对应硬件。
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # 与 health-check.yml 同口径的“全功能”组合（不含互斥驱动与硬件后端）。
+  FEATURES: "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: clippy
+      - name: Run clippy
+        run: cargo clippy --features "${{ env.FEATURES }}" --all-targets -- -D warnings -W clippy::unwrap_used
+
+  check:
+    name: Check (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["", "grpc", "auth,db,sqlite,onnx", "postgres"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: check-${{ matrix.features }}
+      - name: Check
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo check --no-default-features
+          else
+            cargo check --features "${{ matrix.features }}"
+          fi
+
+  test:
+    name: Test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+          - name: grpc
+            features: "grpc"
+          - name: ecosystem
+            features: "auth,db,sqlite,onnx"
+          - name: shared-state
+            features: "http,auth,db,sqlite,distributed-redis"
+    services:
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: test-${{ matrix.name }}
+      - name: Run tests
+        env:
+          VECBOOST_TEST_REDIS_URL: redis://127.0.0.1:6379
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo test
+          else
+            cargo test --features "${{ matrix.features }}"
+          fi
+
+  coverage:
+    name: Coverage (lines >= 95%)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: coverage
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-llvm-cov
+      - name: Generate coverage
+        env:
+          VECBOOST_TEST_REDIS_URL: redis://127.0.0.1:6379
+        # 多腿合并：全功能组合 + 默认构建。禁止 --lib 窄口径：
+        # 集成测试与 examples 的错误分支同样计入分母。
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --no-report --features "${{ env.FEATURES }}" --tests
+          cargo llvm-cov --no-report --tests
+          cargo llvm-cov report --lcov --output-path coverage/lcov.info
+      - name: Enforce line coverage
+        # llvm-cov 0.9.1 的 --fail-under-lines 在该版本为空操作，按 lcov 计数硬判。
+        run: |
+          total=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if (lf==0) {print "0.00"} else {printf "%.2f", 100*lh/lf}}' coverage/lcov.info)
+          echo "Coverage: ${total}% (lines)"
+          awk -v t="$total" 'BEGIN{exit !(t+0 >= 95)}' || {
+            echo "::error::行覆盖率 ${total}% < 95%"
+            exit 1
+          }
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45 # v5
+        with:
+          files: coverage/lcov.info
+          fail_ci_if_error: false
+
+  deny:
+    name: Deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # 1.97.1
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-deny
+      - name: cargo deny
+        run: cargo deny check

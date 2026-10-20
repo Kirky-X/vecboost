@@ -3,7 +3,7 @@
 
 //! Auth forge handlers — HTTP protocol-agnostic.
 //!
-//! All handlers access kit capabilities via `state()?.kit.require::<Module>()`:
+//! All handlers access kit capabilities via `state?.kit.require::<Module>`:
 //! - `AuthModule` → `Option<Arc<GarrisonHandle>>`
 //! - `AuditModule` → `Option<Arc<AuditLogger>>`
 //!

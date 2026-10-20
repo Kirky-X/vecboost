@@ -6,14 +6,14 @@
 // 背景：onnx embedding 此前无真实资产测试（探测类测试不触发 Session），
 // 二〇二六年十月基准真机首跑暴露三处兼容缺陷（均已修复，本文件钉住）：
 // 1) forward_pass 单条输入曾为 rank-1 [seq]，标准 BERT ONNX 图要求
-//    [batch, seq]（rank 2），被图拒绝；
+// [batch, seq]（rank 2），被图拒绝；
 // 2) 三输入图（optimum/transformers.js 导出）要求 token_type_ids，
-//    引擎需按 session.inputs() 探测后补喂全零（segment 0）；
+// 引擎需按 session.inputs 探测后补喂全零（segment 0）；
 // 3) rank-2 输入对应 rank-3 输出 [1, seq, hidden]，单条路径索引口径。
 //
 // 先决条件（缺任一整文件 SKIP，与 translate_e2e 同款离线红线）：
 // - 本地 bundle models/Xenova-bge-small-en-v1.5（model.onnx + tokenizer.json，
-//   获取：cargo run -p vecboost-examples --bin download_model -- --onnx Xenova/bge-small-en-v1.5）；
+// 获取：cargo run -p vecboost-examples --bin download_model -- --onnx Xenova/bge-small-en-v1.5）；
 // - onnxruntime 动态库 3rdparty/onnxruntime/libonnxruntime.so（ort/load-dynamic）。
 //
 // ```text

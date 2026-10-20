@@ -29,9 +29,7 @@ use sdforge::prelude::*;
 #[cfg(all(feature = "openapi", feature = "http"))]
 use ::utoipa;
 
-// =============================================================================
 // Public SDK functions
-// =============================================================================
 
 pub async fn rerank(
     svc: &RerankService,
@@ -85,9 +83,7 @@ pub async fn rerank_batch(
     })
 }
 
-// =============================================================================
 // Protocol-agnostic handlers
-// =============================================================================
 
 /// Load rerank service and limits from the global kit.
 ///
@@ -130,9 +126,7 @@ async fn rerank_batch_handler(req: BatchRerankRequest) -> Result<BatchRerankResp
         .map_err(to_api_error)
 }
 
-// =============================================================================
 // HTTP forge handlers
-// =============================================================================
 
 #[cfg(feature = "http")]
 #[forge(
@@ -160,9 +154,7 @@ pub async fn forge_rerank_batch(req: BatchRerankRequest) -> Result<BatchRerankRe
     rerank_batch_handler(req).await
 }
 
-// =============================================================================
 // CLI forge handlers
-// =============================================================================
 
 #[cfg(feature = "cli")]
 #[forge(
@@ -176,9 +168,7 @@ pub async fn cli_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError> 
     rerank_handler(req).await
 }
 
-// =============================================================================
 // gRPC forge handlers
-// =============================================================================
 
 #[cfg(feature = "grpc")]
 #[forge(

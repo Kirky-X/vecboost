@@ -254,9 +254,7 @@ pub struct UnloadModelResponse {
     pub unloaded: bool,
 }
 
-// =============================================================================
 // Rerank 领域类型
-// =============================================================================
 
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(ToSchema))]

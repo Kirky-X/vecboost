@@ -3,7 +3,7 @@
 
 //! 硬件感知启动规划（port 自 colibri `resource_plan.py`）。
 //!
-//! 纯函数设计：探测层结果以 [`Probes`] 注入，`plan()` 输出 [`HardwarePlan`]。
+//! 纯函数设计：探测层结果以 [`Probes`] 注入，`plan` 输出 [`HardwarePlan`]。
 //! 规则保守默认；探测值为 None 的项不参与规则（不猜测）；全部探测失败时
 //! 返回保守默认值，绝不阻塞启动。
 

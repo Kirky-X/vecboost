@@ -168,7 +168,7 @@ impl MemoryLimitController {
 /// Run a synchronous closure within the current tokio runtime context (if any).
 ///
 /// Does **not** block on the runtime — merely enters its guard so that
-/// `Handle::current()` and similar APIs work inside `f`.
+/// `Handle::current` and similar APIs work inside `f`.
 pub fn block_on_sync<F: FnOnce() -> T, T>(f: F) -> T {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         let _guard = handle.enter();
@@ -573,10 +573,8 @@ mod tests {
         assert!(result.is_none());
     }
 
-    // =========================================================================
     // 补缺口：日志支路（warn!/info! 参数行）、config 写锁下的 try_read 回退、
     // Default impl
-    // =========================================================================
 
     /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
     /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。

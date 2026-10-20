@@ -29,9 +29,7 @@ use sdforge::prelude::*;
 #[cfg(all(feature = "openapi", feature = "http"))]
 use ::utoipa;
 
-// =============================================================================
 // Public SDK functions
-// =============================================================================
 
 pub async fn decide(
     svc: &DecisionService,
@@ -41,9 +39,7 @@ pub async fn decide(
     svc.process_decision(req, max_questions).await
 }
 
-// =============================================================================
 // Protocol-agnostic handlers
-// =============================================================================
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 async fn decisions_handler(req: DecisionRequest) -> Result<DecisionResponse, ApiError> {
@@ -75,9 +71,7 @@ async fn decisions_handler(req: DecisionRequest) -> Result<DecisionResponse, Api
         .map_err(to_api_error)
 }
 
-// =============================================================================
 // HTTP forge handlers
-// =============================================================================
 
 #[cfg(feature = "http")]
 #[forge(
@@ -92,9 +86,7 @@ pub async fn forge_decisions(req: DecisionRequest) -> Result<DecisionResponse, A
     decisions_handler(req).await
 }
 
-// =============================================================================
 // CLI forge handlers
-// =============================================================================
 
 #[cfg(feature = "cli")]
 #[forge(
@@ -108,9 +100,7 @@ pub async fn cli_decisions(req: DecisionRequest) -> Result<DecisionResponse, Api
     decisions_handler(req).await
 }
 
-// =============================================================================
 // gRPC forge handlers
-// =============================================================================
 
 #[cfg(feature = "grpc")]
 #[forge(

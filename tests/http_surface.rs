@@ -118,6 +118,8 @@ fn http_surface_success_and_error_paths() {
     let log = std::fs::File::create(dir.join("server.log")).expect("create log");
     let mut child = Command::new(env!("CARGO_BIN_EXE_vecboost"))
         .current_dir(&dir)
+        .arg("--warmup")
+        .arg("1")
         .env(
             "ORT_DYLIB_PATH",
             concat!(

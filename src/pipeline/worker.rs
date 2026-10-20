@@ -1018,7 +1018,7 @@ impl WorkerManager {
                         "Scaling down: removing {} workers (queue size: {})",
                         to_remove, queue_size
                     );
-                    // 从最新加入的 worker 开始发送关闭信号(保留 min_workers 个最早的)
+                    // 从最新加入的 worker 开始发送关闭信号(保留 min_workers 个最早)
                     for sender in senders.iter().rev().take(to_remove) {
                         let _ = sender.send(WorkerTask::Shutdown { immediate: false }).await;
                     }
@@ -1413,7 +1413,6 @@ mod tests {
             "spawn_single_worker (used by scaling monitor) must increment counter"
         );
 
-        // 清理
         running.store(false, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

@@ -168,19 +168,24 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
-      # crates.io 版本硬校验:防止任何形式的静默漏发
+      # crates.io 版本硬校验:防止任何形式的静默漏发。
+      # 索引可见性有延迟：403（未就绪）/ 404（索引未刷新）都必须继续轮询，
+      # 只有 200 才算成功；其他非预期状态码立即失败。
       - name: Verify on crates.io
         if: always()
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           ok=""
-          for i in 1 2 3 4 5; do
-            sleep 20
+          for i in $(seq 1 40); do
+            sleep 30
             CODE=$(curl -s -o /dev/null -w "%{http_code}" -H 'User-Agent: kirky-x-release-verify' \
               "https://crates.io/api/v1/crates/vecboost/${VERSION}")
             echo "try$i: HTTP ${CODE}"
             if [ "$CODE" = "200" ]; then ok=1; break; fi
-            if [ "$CODE" != "403" ]; then break; fi
+            case "$CODE" in
+              403|404) continue ;;
+              *) break ;;
+            esac
           done
           if [ -z "$ok" ]; then
             echo "::error::vecboost ${VERSION} 未出现在 crates.io"

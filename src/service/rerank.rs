@@ -69,10 +69,8 @@ impl RerankService {
         max_documents: usize,
         max_query_length: usize,
     ) -> Result<(), VecboostError> {
-        // 验证 query 非空
         self.validator.validate_text(&req.query)?;
 
-        // 验证 query 长度
         if req.query.len() > max_query_length {
             return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
                 "rerank-query-too-long",
@@ -227,7 +225,6 @@ impl RerankService {
 
         let scores = self.compute_rerank_scores(&req.query, documents).await?;
 
-        // 构建结果并排序
         let return_documents = req.return_documents.unwrap_or(false);
         let mut results: Vec<RerankResult> = documents
             .iter()

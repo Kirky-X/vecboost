@@ -29,7 +29,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  🔧 [模型推理] 计算 \"{}\" 的嵌入向量...", text);
             // 模拟推理延迟
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-            // 返回模拟向量
             Ok(vec![1.0, 2.0, 3.0])
         }
     };

@@ -54,7 +54,7 @@ impl Default for ValidationConfig {
 
 impl ValidationConfig {
     /// NonZero 上限常量在编译期求值：若上游常量被误配为 0 将直接编译失败，
-    /// 运行时零 panic 面（替代 NonZeroUsize::new(..).unwrap()）。
+    /// 运行时零 panic 面（替代 NonZeroUsize::new(..).unwrap）。
     const NZ_MAX_TEXT_LENGTH: NonZeroUsize = match NonZeroUsize::new(MAX_TEXT_LENGTH) {
         Some(n) => n,
         None => panic!("MAX_TEXT_LENGTH must be non-zero"),
@@ -174,7 +174,7 @@ pub fn validate_text_basic(text: &str) -> Result<(), VecboostError> {
 
 /// 控制字符检查：NUL/C0 可用于注入或触发下游 tokenizer 异常；
 /// `\t` `\n` `\r` 属正常文本格式化字符豁免。
-/// U+2028/U+2029（LINE/PARAGRAPH SEPARATOR）不属 Cc 类、`is_control()` 为
+/// U+2028/U+2029（LINE/PARAGRAPH SEPARATOR）不属 Cc 类、`is_control` 为
 /// false，但部分日志查看器/终端按其分行渲染——渲染级日志混淆面与 `\n`
 /// 同罪，一并拒绝（`\u{85}` NEL 属 C1，已被 `is_control` 覆盖）。
 /// embed（`validate_text_content`）与 decision（`domain::decision`）共用同一规则，
@@ -1006,10 +1006,8 @@ mod validator_tests {
         assert!(result.is_ok(), "text file should be accepted: {:?}", result);
     }
 
-    // =========================================================================
     // 补缺口：echo 的 \t \n \r 字面量化臂、validate_file_path 对合法扩展名
     // 超大文件的 size 拒绝支路、全链通过支路
-    // =========================================================================
 
     /// 豁免集三字符（\t \n \r）必须全部字面量化——原样回显可伪造日志行。
     #[test]
@@ -1116,7 +1114,7 @@ mod control_char_tests {
         assert!(validator.validate_text("bad\u{01}ctrl").is_err());
         assert!(validator.validate_text("bad\u{1f}unit-sep").is_err());
 
-        // U+2028/U+2029 非 Cc 类（is_control() 为 false），但部分终端/日志
+        // U+2028/U+2029 非 Cc 类（is_control 为 false），但部分终端/日志
         // 查看器按其分行渲染——渲染级日志混淆面，与 \n 同等拒绝
         assert!(validator.validate_text("bad\u{2028}line-sep").is_err());
         assert!(validator.validate_text("bad\u{2029}para-sep").is_err());

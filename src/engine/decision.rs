@@ -203,7 +203,7 @@ impl DecisionPipeline {
     /// 校验 → 逐题预处理 → collate → 5 张量推理 → 形状校验 → 逐行有效
     /// marker 前缀的**未校准** logits（温度施加前，后处理共享上游）。决策
     /// 主链路（[`Self::decision`]）与对齐闸门（`decide_logits` trait 出口）
-    /// 的共享实现；决策埋点仅在 decision()，诊断直调不污染指标。
+    /// 的共享实现；决策埋点仅在 decision，诊断直调不污染指标。
     pub(crate) fn decision_logits(
         &self,
         req: &DecisionRequest,
@@ -326,9 +326,9 @@ impl DecisionPipeline {
 #[async_trait::async_trait]
 impl InferenceEngine for DecisionPipeline {
     /// 决策主链路唯一 trait 入口：委托固有方法 [`DecisionPipeline::decision`]。
-    /// 漏覆盖则继承 trait 默认 `Err(UnsupportedTask)`——`/api/1/decisions`
+    /// 漏覆盖则继承 trait 默认 `Err(UnsupportedTask)`——`/api/v1/decisions`
     /// 恒 400 且服务层经 trait 调用走不到管线（全部离线测试盲区）。
-    /// 固有方法名为 `decision()`，与 trait 方法无同名遮蔽，方法解析自然进管线。
+    /// 固有方法名为 `decision`，与 trait 方法无同名遮蔽，方法解析自然进管线。
     fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {
         self.decision(req)
     }
@@ -417,9 +417,7 @@ impl InferenceEngine for DecisionPipeline {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // 测试：管线加载/分发面（协议层测试在 decision_protocol.rs）。
-// ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

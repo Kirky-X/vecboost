@@ -47,7 +47,7 @@ cargo build --release
 ./target/release/vecboost
 
 # 3. 测试 API（在新终端中）
-curl -X POST http://localhost:9002/api/1/embed \
+curl -X POST http://localhost:9002/api/v1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, VecBoost!"}'
 ```
@@ -183,7 +183,7 @@ cp config/config.toml config/config_custom.toml
 | `[database]` | 数据库连接（`[database] url = "sqlite:vecboost.db"`） | dbnexus（`db`） |
 | `[logging]` | 日志级别、控制台、文件轮转 | inklog |
 | `[pipeline.worker]` | 时间窗拼批 `batch_wait_ms` / `max_batch_size` / 停机排空 `drain_timeout_secs` | - |
-| `[semantic_cache]` | 语义缓存 `comparison_mode`（已废弃，配置保留但不生效）、`fuzzy_threshold` | oxcache |
+| `[semantic_cache]` | 语义缓存 `comparison_mode`（已废弃，配置保留但不生效）、`fuzzy_threshold`、`backend`（memory/redis）、`redis_url` | oxcache / Redis |
 | `[device]` | 硬件感知规划 `auto_plan` | - |
 | `[translation]` | 翻译多语言对 `[[translation.pairs]]`（路由、bundle 路径、token 预算） | -（需 `onnx` feature） |
 | `[transcribe]` | 转录服务开关、Qwen3-ASR bundle 目录、VAD 阈值、会话旋钮（端点恒注册；未启用 400 `transcribe-not-configured`） | -（需 `transcribe` feature） |
@@ -269,11 +269,11 @@ max_sequence_length = 8192  # 每请求最大令牌数
 > `embedding` / `decision` / `translate` / `transcribe`。`[model]` 段已支持 `task` 配置；非法值（如
 > `"rerank"`)在配置解析时显性报错。配置 `task = "decision"` 时经
 > `EngineFactory` 的 task 分派臂加载 Laya 决策管线（bundle 就绪时成功；
-> bundle 缺失/不完整时报 `ModelLoadError`），`/api/1/decisions` 决策端点
+> bundle 缺失/不完整时报 `ModelLoadError`），`/api/v1/decisions` 决策端点
 > 可用，`/embed` 等向量端点以 `UnsupportedTask`（400）显性拒绝——见
 > `config/config.toml` `[model]` 段 bundle 布局说明。
 > 配置 `task = "translate"` 时经分派臂加载 ONNX seq2seq 翻译引擎（仅
-> `engine_type = "onnx"`，candle 显性拒绝），`/api/1/translate` 端点可用；
+> `engine_type = "onnx"`，candle 显性拒绝），`/api/v1/translate` 端点可用；
 > 翻译语言对不消费 `[model]` 段——走 `[translation]` 配置段（见下文
 > 「翻译多语言对配置」节）。
 > `#[serde(default)]` 保证旧配置文件零破坏。
@@ -432,7 +432,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 翻译由 `[translation]` 段的 `[[translation.pairs]]` 数组表驱动（与
 `[model]` 任务段正交）：每对启动期急切构建（`EngineFactory` task=translate
 分派臂，`onnx` feature），任一 bundle 缺失**启动期 fail-fast**（错误含语言
-对标识）；零配置时服务仍无条件预构建，`/api/1/translate` 端点注册、请求
+对标识）；零配置时服务仍无条件预构建，`/api/v1/translate` 端点注册、请求
 以 `400`（`translate-not-configured`）显性拒绝。
 
 ```toml
@@ -462,7 +462,7 @@ model_path = "models/opus-mt-en-es"
 pair 数上限 16（每对一个驻留 bundle，内存预算防线）。请求按
 `(source_language, target_language)` 精确路由：未命中返回 `400`
 `translate-unsupported-pair`（消息含请求对与已配置 pairs 全集）；`source_language`
-缺省时经 whatlang auto 检测（与 `/api/1/detect` 同一实现），不可靠（纯数字/
+缺省时经 whatlang auto 检测（与 `/api/v1/detect` 同一实现），不可靠（纯数字/
 过短文本）返回 `400` `translate-detect-failed`，可靠则回填
 `detected_source_language`。
 
@@ -579,7 +579,7 @@ decoder_model_merged 的 fp32 与 quantized 变体），与上游实际文件的
 #### 多 checkpoint 配置与切换
 
 `[model.checkpoints.<name>]` 预设表为多 checkpoint 部署提供命名配置：每个
-条目是一个可被 `POST /api/1/model/switch` 按名切换的 checkpoint 预设
+条目是一个可被 `POST /api/v1/model/switch` 按名切换的 checkpoint 预设
 （三 checkpoint 生态：laya / laya-multilingual / laya-typed-decisions）：
 
 ```toml
@@ -692,7 +692,7 @@ max_files = 10                  # 保留的日志文件数量
 ### 转录服务配置
 
 `[transcribe]` 段装配 Qwen3-ASR 转录服务（`transcribe` feature；端点
-`POST /api/1/transcribe` 与 gRPC `vecboost.transcribe` 恒注册）：
+`POST /api/v1/transcribe` 与 gRPC `vecboost.transcribe` 恒注册）：
 
 ```toml
 [transcribe]
@@ -772,8 +772,12 @@ global_requests_per_minute = 2000
 batch_wait_ms = 5
 max_batch_size = 8
 
-[semantic_cache]      # 向量输出量化比较
-comparison_mode = "exact"   # exact | i8 | binary（已废弃：仅校验合法性，不生效）
+[semantic_cache]      # 语义缓存
+enabled = true
+comparison_mode = "exact"   # exact | i8 | binary（已废弃：仅校验合法性，不生效 ）
+fuzzy_threshold = 0.85
+backend = "memory"          # memory | redis（redis 需 distributed-redis）
+# redis_url = "redis://127.0.0.1:6379"   # backend = "redis" 时必填
 ```
 
 ---
@@ -855,7 +859,7 @@ curl http://localhost:9002/health
 #### 单个文本
 
 ```bash
-curl -X POST http://localhost:9002/api/1/embed \
+curl -X POST http://localhost:9002/api/v1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!"}'
 ```
@@ -875,7 +879,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 #### 批量嵌入
 
 ```bash
-curl -X POST http://localhost:9002/api/1/embed/batch \
+curl -X POST http://localhost:9002/api/v1/embed/batch \
   -H "Content-Type: application/json" \
   -d '{
     "texts": [
@@ -894,7 +898,7 @@ curl -X POST http://localhost:9002/api/1/embed/batch \
 `normalize` 选项返回单位长度嵌入向量（用于余弦相似度）：
 
 ```bash
-curl -X POST http://localhost:9002/api/1/embed \
+curl -X POST http://localhost:9002/api/v1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": "要嵌入的文本", "normalize": true}'
 ```
@@ -928,7 +932,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 ### 📊 计算相似度
 
 ```bash
-curl -X POST http://localhost:9002/api/1/similarity \
+curl -X POST http://localhost:9002/api/v1/similarity \
   -H "Content-Type: application/json" \
   -d '{
     "source": "机器学习是人工智能的一个分支",
@@ -951,7 +955,7 @@ curl -X POST http://localhost:9002/api/1/similarity \
 ### 🔍 重排序（Rerank）
 
 ```bash
-curl -X POST http://localhost:9002/api/1/rerank \
+curl -X POST http://localhost:9002/api/v1/rerank \
   -H "Content-Type: application/json" \
   -d '{
     "query": "什么是机器学习？",
@@ -971,25 +975,25 @@ curl -X POST http://localhost:9002/api/1/rerank \
 #### 获取当前模型
 
 ```bash
-curl http://localhost:9002/api/1/model/current
+curl http://localhost:9002/api/v1/model/current
 ```
 
 #### 获取模型详细信息
 
 ```bash
-curl http://localhost:9002/api/1/model/info
+curl http://localhost:9002/api/v1/model/info
 ```
 
 #### 列出可用模型
 
 ```bash
-curl http://localhost:9002/api/1/models
+curl http://localhost:9002/api/v1/models
 ```
 
 #### 运行时切换模型
 
 ```bash
-curl -X POST http://localhost:9002/api/1/model/switch \
+curl -X POST http://localhost:9002/api/v1/model/switch \
   -H "Content-Type: application/json" \
   -d '{"model_name": "bge-m3-st"}'
 ```
@@ -1002,7 +1006,7 @@ curl -X POST http://localhost:9002/api/1/model/switch \
 [翻译多语言对配置](#翻译多语言对配置)）：
 
 ```bash
-curl -X POST http://localhost:9002/api/1/translate \
+curl -X POST http://localhost:9002/api/v1/translate \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, my dog is cute", "source_language": "en", "target_language": "zh"}'
 ```
@@ -1029,7 +1033,7 @@ curl -X POST http://localhost:9002/api/1/translate \
 语言检测（无模型依赖，任何构建均可用；亦是翻译 auto 检测的同一实现）：
 
 ```bash
-curl -X POST http://localhost:9002/api/1/detect \
+curl -X POST http://localhost:9002/api/v1/detect \
   -H "Content-Type: application/json" \
   -d '{"text": "The quick brown fox jumps over the lazy dog."}'
 ```
@@ -1086,7 +1090,7 @@ default_admin_username = "admin"
 ### 获取令牌
 
 ```bash
-curl -X POST http://localhost:9002/api/1/auth/login \
+curl -X POST http://localhost:9002/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "username": "admin",
@@ -1113,7 +1117,7 @@ curl -X POST http://localhost:9002/api/1/auth/login \
 在 API 请求中包含令牌：
 
 ```bash
-curl -X POST http://localhost:9002/api/1/embed \
+curl -X POST http://localhost:9002/api/v1/embed \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..." \
   -d '{"text": "Hello, world!"}'
@@ -1269,7 +1273,7 @@ VecBoost 支持中英双语错误响应，通过 `Accept-Language` 请求头自�
 
 ```bash
 # 中文错误响应
-curl -X POST http://localhost:9002/api/1/embed \
+curl -X POST http://localhost:9002/api/v1/embed \
   -H "Content-Type: application/json" \
   -H "Accept-Language: zh-CN" \
   -d '{"text": ""}'
@@ -1278,7 +1282,7 @@ curl -X POST http://localhost:9002/api/1/embed \
 {"error": "文本不能为空", "code": 400, "error_code": "error-invalid-input"}
 
 # 英文错误响应（默认）
-curl -X POST http://localhost:9002/api/1/embed \
+curl -X POST http://localhost:9002/api/v1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": ""}'
 
@@ -1309,8 +1313,8 @@ redis_url = "redis://127.0.0.1:6379"
 |--------|----------------|-------|
 | 限流（全局 / IP / User / ApiKey） | 进程内 | 共享（Lua 原子固定窗口；per-key 固定 60s 窗口） |
 | 精确向量缓存 | 进程内（可选 WAL） | 共享（无 WAL，bloom 禁用，键绑定权重指纹） |
-| 语义缓存模糊命中 | 进程内 | 进程内（仅精确层共享） |
-| 封禁清单 | 进程内 | 进程内 |
+| 语义缓存模糊命中 | 进程内 | Redis 共享（`distributed-redis`；trigram 索引，无需 RediSearch） |
+| 封禁清单 | 进程内 | Redis 共享（`distributed-redis` + `ban-sync`） |
 
 构建：`cargo build --features "db,sqlite,distributed-redis"`（或 `db,postgres`）。`cache_backend = "redis"` 与 `[embedding] persist_path` 互斥；Redis 初始化失败时服务拒绝启动（不静默回落内存）。
 
@@ -1339,7 +1343,7 @@ redis_url = "redis://127.0.0.1:6379"
 ```
 # HELP vecboost_requests_total 总请求数
 # TYPE vecboost_requests_total counter
-vecboost_requests_total{method="POST",endpoint="/api/1/embed"} 1234
+vecboost_requests_total{method="POST",endpoint="/api/v1/embed"} 1234
 
 # HELP vecboost_embedding_latency_seconds 嵌入生成延迟
 # TYPE vecboost_embedding_latency_seconds histogram
@@ -1440,7 +1444,7 @@ grep -i cuda target/release/vecboost.log
 
 ```bash
 # 检查令牌是否有效（通过 /auth/me 端点验证当前用户信息）
-curl http://localhost:9002/api/1/auth/me \
+curl http://localhost:9002/api/v1/auth/me \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."
 ```
 
@@ -1542,7 +1546,7 @@ free -h     # 内存
 
 **问: 如何在运行时更改模型？**
 
-答: 使用 `POST /api/1/model/switch` 端点。
+答: 使用 `POST /api/v1/model/switch` 端点。
 
 ---
 

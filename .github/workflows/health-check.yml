@@ -165,9 +165,9 @@ jobs:
 
       - name: Run tests with coverage
         # tarpaulin 与新 stable 工具链不兼容（pulp 0.22.3 const 断言 E0080
-        # 插桩构建必炸，2026-10-15 实录），按发布流水线生态表切换 llvm-cov；
-        # --lib 与本地实测 90.89% 同口径。llvm-cov 不自建输出目录，须先 mkdir
-        run: mkdir -p coverage/ && cargo llvm-cov --quiet --features "${{ env.FEATURES }}" --lib --lcov --output-path coverage/lcov.info
+        # 插桩构建必炸，2026-10-15 实录），按发布流水线生态表切换 llvm-cov。
+        # 口径：lib + 集成测试（禁止 --lib 窄口径）；llvm-cov 不自建输出目录，须先 mkdir
+        run: mkdir -p coverage/ && cargo llvm-cov --quiet --features "${{ env.FEATURES }}" --tests --lcov --output-path coverage/lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45 # v5
@@ -177,16 +177,16 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Check coverage threshold
-        # 硬门禁：llvm-cov 运行失败（无 lcov 产出）或行覆盖率 < 80% 都将使本 job 失败
+        # 硬门禁：llvm-cov 运行失败（无 lcov 产出）或行覆盖率 < 95% 都将使本 job 失败
         run: |
           total=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{printf "%.2f", 100*lh/lf}' coverage/lcov.info)
-          threshold=80
+          threshold=95
           echo "Coverage: ${total}% (lines, llvm-cov)"
           echo "Threshold: ${threshold}%"
           if (( $(echo "$total >= $threshold" | bc -l) )); then
-            echo "Coverage requirement met (>= 80%)"
+            echo "Coverage requirement met (>= 95%)"
           else
-            echo "Coverage requirement NOT met (>= 80%)"
+            echo "Coverage requirement NOT met (>= 95%)"
             exit 1
           fi
 

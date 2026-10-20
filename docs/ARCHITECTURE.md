@@ -273,7 +273,7 @@ pub enum ModelArchitecture {
 
 #### ONNX seq2seq 翻译引擎
 
-`OnnxTranslationEngine`（`src/engine/onnx_translate.rs`，`onnx` feature）是仓库首个非单次前向推理路径：encoder 单次前向 + `decoder_model_merged` 逐步贪心解码（EOS 停止 / `max_new_tokens` 硬顶，响应不含停止符），`past_key_values` 簿记以实测图 inspection 为准。诚实语义与其他引擎一致：`supports_task(Translate)=true` 且 `supports_task(Embedding)=false`，`count_tokens` 为 tokenizer 精确计数。服务侧 `TranslateService`（`src/service/translate.rs`）持 `(source, target)` 多引擎路由表（每 pair 启动期急切构建、`permits=1` 信号量同 pair 串行背压、超 `max_source_tokens` 显性 400），`source_language` 缺省时与 `/api/1/detect` 共用 `src/text/langdetect.rs` 检测核心（whatlang，单一事实源）路由到对应 pair；语言检测本身为 µs 级纯 CPU 统计，无引擎字段、不经 pipeline（`DetectService` 直连返回）。翻译 pair 引擎不参与 switch_model 引擎传播（传播会破坏 (src,tgt) 路由语义，见 design D6）。
+`OnnxTranslationEngine`（`src/engine/onnx_translate.rs`，`onnx` feature）是仓库首个非单次前向推理路径：encoder 单次前向 + `decoder_model_merged` 逐步贪心解码（EOS 停止 / `max_new_tokens` 硬顶，响应不含停止符），`past_key_values` 簿记以实测图 inspection 为准。诚实语义与其他引擎一致：`supports_task(Translate)=true` 且 `supports_task(Embedding)=false`，`count_tokens` 为 tokenizer 精确计数。服务侧 `TranslateService`（`src/service/translate.rs`）持 `(source, target)` 多引擎路由表（每 pair 启动期急切构建、`permits=1` 信号量同 pair 串行背压、超 `max_source_tokens` 显性 400），`source_language` 缺省时与 `/api/v1/detect` 共用 `src/text/langdetect.rs` 检测核心（whatlang，单一事实源）路由到对应 pair；语言检测本身为 µs 级纯 CPU 统计，无引擎字段、不经 pipeline（`DetectService` 直连返回）。翻译 pair 引擎不参与 switch_model 引擎传播（传播会破坏 (src,tgt) 路由语义，见 design D6）。
 
 ---
 
@@ -462,7 +462,7 @@ graph TB
 | **7. 缓存更新** | Cache Layer | 存储新结果 | ✅ |
 | **8. 返回响应** | Response Builder | 格式化并返回 | ❌ |
 
-> **ℹ️ 直连分支**: 上表为 embed/rerank 主线（pipeline 队列 + 缓存）。`/api/1/decisions`、`/api/1/translate`、`/api/1/detect` 为**直连处理**（与 `pipeline_enabled` 配置无关）：decisions/translate 是阻塞模型推理，服务层经 `spawn_blocking` 隔离后直调引擎（翻译另经 pair 级信号量背压）；detect 为 µs 级纯 CPU 统计（whatlang n-gram），亚毫秒同步返回——三者入队调度收益为负（`src/api/decisions.rs`、`src/api/translate.rs`、`src/api/detect.rs` 模块注释）。
+> **ℹ️ 直连分支**: 上表为 embed/rerank 主线（pipeline 队列 + 缓存）。`/api/v1/decisions`、`/api/v1/translate`、`/api/v1/detect` 为**直连处理**（与 `pipeline_enabled` 配置无关）：decisions/translate 是阻塞模型推理，服务层经 `spawn_blocking` 隔离后直调引擎（翻译另经 pair 级信号量背压）；detect 为 µs 级纯 CPU 统计（whatlang n-gram），亚毫秒同步返回——三者入队调度收益为负（`src/api/decisions.rs`、`src/api/translate.rs`、`src/api/detect.rs` 模块注释）。
 
 ---
 

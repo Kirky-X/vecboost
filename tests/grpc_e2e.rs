@@ -698,7 +698,7 @@ async fn grpc_embed_matches_http() {
     let (status, body) = http_request(
         server.http_port,
         "POST",
-        "/api/1/embed",
+        "/api/v1/embed",
         Some(&json!({"text": text}).to_string()),
         None,
     )
@@ -728,7 +728,7 @@ async fn grpc_embed_matches_http() {
     let (http_status, http_body) = http_request(
         server.http_port,
         "POST",
-        "/api/1/embed",
+        "/api/v1/embed",
         Some(&json!({"text": ""}).to_string()),
         None,
     )
@@ -969,7 +969,7 @@ async fn grpc_auth_matrix_unauthenticated_vs_valid() {
     let (status, body) = http_request(
         server.http_port,
         "POST",
-        "/api/1/auth/login",
+        "/api/v1/auth/login",
         Some(&json!({"username": "admin", "password": ADMIN_PASS}).to_string()),
         None,
     )
@@ -1019,7 +1019,7 @@ async fn grpc_token_revoked_on_http_logout_rejected_on_grpc() {
     let (status, body) = http_request(
         server.http_port,
         "POST",
-        "/api/1/auth/login",
+        "/api/v1/auth/login",
         Some(&json!({"username": "admin", "password": ADMIN_PASS}).to_string()),
         None,
     )
@@ -1043,7 +1043,7 @@ async fn grpc_token_revoked_on_http_logout_rejected_on_grpc() {
     let (status, body) = http_request(
         server.http_port,
         "POST",
-        "/api/1/auth/logout",
+        "/api/v1/auth/logout",
         None,
         Some(&token),
     )
@@ -1112,7 +1112,7 @@ async fn decision_auth_rate_limit_hit_returns_429_with_headers() {
         let (status, headers, _resp_body) = http_request_full(
             server.http_port,
             "POST",
-            "/api/1/decisions",
+            "/api/v1/decisions",
             Some(&body),
             None,
         )
@@ -1133,7 +1133,7 @@ async fn decision_auth_rate_limit_hit_returns_429_with_headers() {
     }
     assert!(
         hit,
-        "exceeding ip_requests_per_minute=2 on /api/1/decisions must yield 429"
+        "exceeding ip_requests_per_minute=2 on /api/v1/decisions must yield 429"
     );
 }
 
@@ -1156,7 +1156,7 @@ async fn decision_backpressure_queue_full_returns_503_overloaded() {
     let (status, headers, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/decisions",
+        "/api/v1/decisions",
         Some(&decision_noul_body()),
         None,
     )
@@ -1208,7 +1208,7 @@ async fn decision_normal_200_without_rate_limit_headers_and_metrics_visible() {
     let (status, headers, body) = http_request_full(
         server.http_port,
         "POST",
-        "/api/1/decisions",
+        "/api/v1/decisions",
         Some(&decision_noul_body()),
         None,
     )
@@ -1251,7 +1251,7 @@ async fn decision_normal_200_without_rate_limit_headers_and_metrics_visible() {
 }
 
 /// 决策 gRPC 方法（`vecboost.decide`，sdforge 统一 Call 协议）：与 HTTP
-/// `/api/1/decisions` 同管线（DecisionService 单源，协议差异不得改变语义）。
+/// `/api/v1/decisions` 同管线（DecisionService 单源，协议差异不得改变语义）。
 /// noul 题型真机推理 → status_code 200 + answers 结构与 HTTP 面同形；
 /// 钉住决策双协议面（HTTP 由上一测试覆盖）。
 #[cfg(feature = "onnx")]
@@ -1327,7 +1327,7 @@ fn read_wav_f32(path: &std::path::Path) -> Option<Vec<f32>> {
 }
 
 /// 转录 gRPC 方法（`vecboost.transcribe`，sdforge 统一 Call 协议）：与 HTTP
-/// `/api/1/transcribe` 同管线。**3s 切片**（JSON ≈0.83MB < sdforge Call 层
+/// `/api/v1/transcribe` 同管线。**3s 切片**（JSON ≈0.83MB < sdforge Call 层
 /// 1MB 应用上限（`arguments payload size exceeds maximum allowed size`，
 /// 实测先例）——请求体量受协议约束）；更大体量（48s ≈14MB）由 HTTP 面
 /// 覆盖（场景 test_transcribe TR-04，body_limit_mb 配置路径）。

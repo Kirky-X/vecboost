@@ -35,7 +35,7 @@ fn tok_infer_err(e: impl std::fmt::Display) -> VecboostError {
 }
 
 /// 特殊 token 与固定 id（实测 assets/models/tokenizer/tokenizer_config.json
-/// added_tokens_decoder；仅收录管线用到的 7 个，new() 逐一锚定校验）
+/// added_tokens_decoder；仅收录管线用到的 7 个，new 逐一锚定校验）
 pub const SPECIAL_TOKENS: [(&str, i64); 7] = [
     ("<|endoftext|>", 151643),
     ("<|im_start|>", 151644),
@@ -95,7 +95,7 @@ impl AsrTokenizer {
         )
         .map_err(tok_load_err)?;
         // HF Qwen2/Qwen3 配置：add_prefix_space=false, trim_offsets=false,
-        // use_regex=true（ByteLevel::default() 是 add_prefix_space=true，会把
+        // use_regex=true（ByteLevel::default 是 add_prefix_space=true，会把
         // 首个普通段变成 "Ġ…" 形式，id 漂移）
         let pre = PreTokenizerWrapper::Sequence(Sequence::new(vec![
             PreTokenizerWrapper::Split(split),

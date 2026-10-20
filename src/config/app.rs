@@ -594,6 +594,11 @@ pub struct SemanticCacheConfig {
     /// trigram 模糊命中阈值（与 similarity_threshold 语义无关；
     /// 模糊命中为有损近似，独立收紧默认 0.85，设 1.0 即只精确命中）
     pub fuzzy_threshold: f32,
+    /// 模糊层索引后端：`memory`（默认，进程内）或 `redis`（跨副本共享，
+    /// 需 `distributed-redis` feature）。
+    pub backend: CacheBackendKind,
+    /// Redis 连接 URL（`backend = "redis"` 时必填）。
+    pub redis_url: Option<String>,
 }
 
 impl Default for SemanticCacheConfig {
@@ -604,7 +609,35 @@ impl Default for SemanticCacheConfig {
             capacity: DEFAULT_SEMANTIC_CACHE_CAPACITY,
             comparison_mode: default_comparison_mode(),
             fuzzy_threshold: 0.85,
+            backend: CacheBackendKind::Memory,
+            redis_url: None,
         }
+    }
+}
+
+impl SemanticCacheConfig {
+    /// 校验模糊层后端依赖：redis 需要 feature 与 URL，缺失即启动失败。
+    pub fn validate_backend(&self) -> Result<(), crate::error::VecboostError> {
+        if self.backend != CacheBackendKind::Redis {
+            return Ok(());
+        }
+        if !cfg!(feature = "distributed-redis") {
+            return Err(crate::error::VecboostError::config_error(crate::i18n::tr(
+                "startup-semantic-redis-feature-missing",
+            )));
+        }
+        if self
+            .redis_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .is_none()
+        {
+            return Err(crate::error::VecboostError::config_error(crate::i18n::tr(
+                "startup-semantic-redis-url-missing",
+            )));
+        }
+        Ok(())
     }
 }
 

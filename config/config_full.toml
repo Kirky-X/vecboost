@@ -58,7 +58,7 @@ max_sequence_length = 8192
 
 # 任务维度 (可选，默认 embedding)
 # 可选值: embedding / decision —— 二选一语义：
-# ⚠️ task=decision 时模型加载为 Laya 决策管线，仅 /api/1/decisions 可用，
+# ⚠️ task=decision 时模型加载为 Laya 决策管线，仅 /api/v1/decisions 可用，
 #    embed/rerank 端点调用返回 400 Unsupported task；task=embedding 时反之。
 # decision bundle 目录布局（model_path 指向 bundle 根）: laya.onnx +
 # laya_config.json + tokenizer/tokenizer.json；Windows 下 .data 与主图同目录
@@ -321,7 +321,7 @@ recovery_timeout = 30
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 翻译多语言对配置（可选；默认无 [translation] 段 = 未配置，
-# /api/1/translate 端点仍注册、请求以 400 translate-not-configured 显性拒绝）
+# /api/v1/translate 端点仍注册、请求以 400 translate-not-configured 显性拒绝）
 #
 # 每对 [[translation.pairs]] 启动期急切构建（EngineFactory task=translate 分派，
 # 需 onnx feature；任一 bundle 缺失启动期 fail-fast）；请求按

@@ -38,7 +38,7 @@ pub const GGUF_MAGIC: u32 = 0x46554747;
 /// tokenizer 上下文窗口上限（与 fp32 路径 forward_pass 的 512 一致）。
 const MAX_LEN: usize = 512;
 
-/// 校验 GGUF 文件头魔数。返回 `Ok(())` 表示文件存在且魔数合法。
+/// 校验 GGUF 文件头魔数。返回 `Ok()` 表示文件存在且魔数合法。
 pub fn validate_gguf_magic(path: &Path) -> Result<(), VecboostError> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).map_err(|e| {

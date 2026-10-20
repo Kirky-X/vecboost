@@ -6,13 +6,13 @@
 // 互补：本文件聚焦 embedding 数值一致性 + 决策性能观测。
 //
 // 1) `embedding_precision_parity`：同源模型（bge-small-en-v1.5）两格式导出
-//    （BAAI safetensors vs Xenova onnx）逐文本余弦。两侧 pooling 经构造期
-//    同一 `infer_pooling_mode` 解析（bge→Cls）——历史缺陷（onnx 硬编码
-//    mean）已修复；阈值 0.999 严于任何 pooling/结构错配（mean vs cls 错配
-//    实测掉至 0.7~0.95 区间），宽于框架层浮点实现差异（典型 1e-5~1e-3）。
+// （BAAI safetensors vs Xenova onnx）逐文本余弦。两侧 pooling 经构造期
+// 同一 `infer_pooling_mode` 解析（bge→Cls）——历史缺陷（onnx 硬编码
+// mean）已修复；阈值 0.999 严于任何 pooling/结构错配（mean vs cls 错配
+// 实测掉至 0.7~0.95 区间），宽于框架层浮点实现差异（典型 1e-5~1e-3）。
 // 2) `decision_engine_latency_informational`：同 laya 模型双实现（candle
-//    原生决策头 vs onnx DecisionPipeline）单题 decide 耗时观测——仅打印
-//    中位耗时不断言倍数（CI 环境噪声下性能断言不稳定）。
+// 原生决策头 vs onnx DecisionPipeline）单题 decide 耗时观测——仅打印
+// 中位耗时不断言倍数（CI 环境噪声下性能断言不稳定）。
 //
 // 先决条件（缺失即 SKIP）：models/BAAI-bge-small-en-v1.5、
 // models/Xenova-bge-small-en-v1.5、models/laya、models/laya-pytorch、

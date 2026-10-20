@@ -15,7 +15,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔄 Token 刷新流程示例（garrison）");
     println!("==================================\n");
 
-    // 1. 初始化 garrison
     let auth_config = AuthConfig {
         enabled: true,
         jwt_secret: Some("demo-secret-at-least-32-characters-long!!".to_string()),
@@ -67,7 +66,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     GarrisonUtil::revoke_token(&original_token).await?;
     println!("\n🚪 旧 Token 已撤销");
 
-    // 5. 验证新旧 token 状态
     let old_valid = GarrisonUtil::get_login_id_by_token(&original_token).await?;
     let new_valid = GarrisonUtil::get_login_id_by_token(&new_token).await?;
     println!("\n📊 Token 状态:");

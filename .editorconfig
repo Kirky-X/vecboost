@@ -1,0 +1,32 @@
+# EditorConfig — 跨编辑器/IDE 的基础格式约定。https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# 语言缩进覆盖(按社区惯例)
+[*.{rs,go}]
+indent_size = 4
+
+[*.{py,java,kt,scala}]
+indent_size = 4
+
+[*.{c,cc,cpp,cxx,h,hh,hpp,hxx}]
+indent_size = 4
+
+[*.{cs}]
+indent_size = 4
+
+[*.{php}]
+indent_size = 4
+
+[Makefile]
+indent_style = tab
+
+[*.{md,markdown}]
+trim_trailing_whitespace = false   # Markdown 行尾两空格 = 换行

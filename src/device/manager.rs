@@ -1043,10 +1043,8 @@ mod tests {
         assert_eq!(status, MemoryLimitStatus::Warning);
     }
 
-    // =========================================================================
     // 补缺口：auto_fallback 关闭时的 trigger_fallback 短路、fallback_to_cpu、
     // require_gpu 选择契约、非 CUDA 设备的批量建议下界
-    // =========================================================================
 
     /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
     /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。

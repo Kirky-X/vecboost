@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! Detect 服务实现：`/api/1/detect` 端点与翻译 auto 检测共用的服务编排层。
+//! Detect 服务实现：`/api/v1/detect` 端点与翻译 auto 检测共用的服务编排层。
 
 use crate::domain::{DetectRequest, DetectResponse};
 use crate::error::VecboostError;
@@ -11,7 +11,7 @@ use std::time::Instant;
 ///
 /// 检测为 whatlang n-gram 统计（µs 级纯 CPU），无模型推理无 Session 锁：
 /// 不进 ModelManager、不设 ModelTask 变体（rerank「能力而非任务」同款
-/// 先例）；与 `/api/1/translate` 的 auto 检测共用底层
+/// 先例）；与 `/api/v1/translate` 的 auto 检测共用底层
 /// [`crate::text::langdetect::detect_language`]（单一事实源，禁止第二份实现）。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DetectService;

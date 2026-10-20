@@ -2,7 +2,7 @@ name: Docker
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     paths:
       - 'Dockerfile'
       - '.github/workflows/docker.yml'
@@ -10,7 +10,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
   pull_request:
-    branches: [main, develop]
+    branches: [main]
     paths:
       - 'Dockerfile'
       - '.github/workflows/docker.yml'

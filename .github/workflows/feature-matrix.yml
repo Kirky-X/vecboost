@@ -2,14 +2,14 @@ name: Feature Matrix
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     paths-ignore:
       - "**.md"
       - "docs/**"
       - ".gitignore"
       - "LICENSE*"
   pull_request:
-    branches: [main, develop]
+    branches: [main]
     paths-ignore:
       - "**.md"
       - "docs/**"

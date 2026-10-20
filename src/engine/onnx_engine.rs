@@ -841,6 +841,104 @@ mod tests {
         assert_eq!(out, vec![5.0, 7.0]);
     }
 
+    // ── 显存预算门面：状态上报与 OOM 回退幂等 ────────────────────────────
+
+    fn real_bundle_engine() -> Option<(OnnxEngine, ModelConfig)> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let model = root.join("models/Xenova-bge-small-en-v1.5");
+        let dylib = root.join("3rdparty/onnxruntime/libonnxruntime.so");
+        if !model.join("model.onnx").is_file() || !dylib.is_file() {
+            eprintln!("SKIP: 本地 ONNX 模型或 ORT dylib 缺失");
+            return None;
+        }
+        // SAFETY: 单测进程内设置 ORT dylib 路径，无并发写。
+        unsafe { std::env::set_var("ORT_DYLIB_PATH", &dylib) };
+        let mut config = test_config();
+        config.model_path = model;
+        config.expected_dimension = Some(384);
+        let engine = OnnxEngine::new(&config, Precision::Fp32)
+            .expect("资产在位时 ONNX 引擎必须可加载（不得静默跳过断言）");
+        Some((engine, config))
+    }
+
+    fn controller_with_limit(bytes: u64) -> std::sync::Arc<MemoryLimitController> {
+        std::sync::Arc::new(MemoryLimitController::with_config(
+            crate::device::memory_limit::MemoryLimitConfig {
+                limit_bytes: bytes,
+                warning_threshold_percent: 80,
+                critical_threshold_percent: 90,
+            },
+        ))
+    }
+
+    #[tokio::test]
+    async fn memory_budget_statuses_are_reported_via_engine_facade() {
+        let Some((mut engine, config)) = real_bundle_engine() else {
+            return;
+        };
+        assert!(
+            engine.get_memory_status().await.is_none(),
+            "未挂控制器时应报 None"
+        );
+        assert_eq!(engine.device_type(), DeviceType::Cpu);
+        assert!(!engine.get_model_name().is_empty());
+        assert!(!engine.check_memory_pressure(90), "无显存监控不得虚报压力");
+
+        let controller = controller_with_limit(100);
+        engine.set_memory_limit_controller(controller);
+        engine.update_memory_limit(50).await;
+        assert_eq!(
+            engine.get_memory_status().await,
+            Some(MemoryLimitStatus::Ok)
+        );
+        engine.update_memory_limit(85).await;
+        assert_eq!(
+            engine.get_memory_status().await,
+            Some(MemoryLimitStatus::Warning)
+        );
+        engine.update_memory_limit(95).await;
+        assert_eq!(
+            engine.get_memory_status().await,
+            Some(MemoryLimitStatus::Critical)
+        );
+        // Critical 且无显存监控：不回退（check_memory_pressure 为 false）
+        assert!(
+            !engine
+                .check_memory_limit_and_fallback(&config)
+                .await
+                .unwrap(),
+            "无监控时 Critical 不应触发降级"
+        );
+        assert!(!engine.is_fallback_triggered());
+    }
+
+    #[tokio::test]
+    async fn exceeded_budget_drives_cpu_fallback_once() {
+        let Some((mut engine, config)) = real_bundle_engine() else {
+            return;
+        };
+        let controller = controller_with_limit(10);
+        controller.update_usage(1000).await;
+        engine.set_memory_limit_controller(controller);
+        // 本地 bundle 路径不是合法 HF repo id：降级尝试必须显性失败，但回退标记已置位
+        assert!(
+            engine
+                .check_memory_limit_and_fallback(&config)
+                .await
+                .is_err(),
+            "本地 bundle 走 HF 降级路径必须显性失败"
+        );
+        assert!(engine.is_fallback_triggered(), "回退标记应在尝试时置位");
+        assert!(
+            !engine
+                .check_memory_limit_and_fallback(&config)
+                .await
+                .unwrap(),
+            "已降级后再查必须幂等返回 false"
+        );
+        engine.update_gpu_memory().await;
+    }
+
     fn test_config() -> ModelConfig {
         ModelConfig {
             name: "test-onnx".to_string(),

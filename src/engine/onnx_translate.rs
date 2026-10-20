@@ -1993,6 +1993,105 @@ mod tests {
         assert!(hit.ends_with("onnx/encoder_model.onnx"));
     }
 
+    // ── 加载期 fail-fast：目录/完整性/tokenizer/config 契约 ───────────────
+
+    fn translate_config(bundle: PathBuf) -> ModelConfig {
+        ModelConfig {
+            name: "test/opus-mt".to_string(),
+            engine_type: crate::config::model::EngineType::Onnx,
+            model_path: bundle,
+            task: ModelTask::Translate,
+            translation_params: Some(TranslationParams::default()),
+            ..ModelConfig::default()
+        }
+    }
+
+    fn fake_bundle(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir.join("onnx")).expect("mkdir onnx");
+        std::fs::write(dir.join("onnx/encoder_model.onnx"), b"fake-encoder").expect("enc");
+        std::fs::write(dir.join("onnx/decoder_model_merged.onnx"), b"fake-decoder").expect("dec");
+        dir.to_path_buf()
+    }
+
+    fn load_err(config: &ModelConfig) -> VecboostError {
+        match OnnxTranslationEngine::load(config) {
+            Ok(_) => panic!("期望加载期 fail-fast，却成功返回"),
+            Err(e) => e,
+        }
+    }
+
+    const MINIMAL_TOKENIZER: &str = r#"{"version":"1.0","truncation":null,"padding":null,"added_tokens":[],"normalizer":null,"pre_tokenizer":{"type":"Whitespace"},"post_processor":null,"decoder":null,"model":{"type":"WordLevel","vocab":{"[UNK]":0,"hello":1},"unk_token":"[UNK]"}}"#;
+
+    #[test]
+    fn load_rejects_non_directory_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("not-a-dir");
+        std::fs::write(&file, b"x").unwrap();
+        let err = load_err(&translate_config(file));
+        assert!(
+            err.error_detail().contains("not a directory"),
+            "err={}",
+            err.error_detail()
+        );
+    }
+
+    #[test]
+    fn load_rejects_sha256_mismatch_before_tokenizer() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = fake_bundle(dir.path());
+        let mut config = translate_config(bundle);
+        config.model_sha256 = Some("0".repeat(64));
+        let err = load_err(&config);
+        assert!(
+            err.error_detail().contains("SHA256"),
+            "err={}",
+            err.error_detail()
+        );
+    }
+
+    #[test]
+    fn load_rejects_missing_and_corrupt_tokenizer() {
+        // 缺 tokenizer.json
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = fake_bundle(dir.path());
+        let err = load_err(&translate_config(bundle));
+        assert!(!err.error_detail().is_empty(), "缺 tokenizer 必须报错");
+
+        // tokenizer.json 非法 JSON
+        let dir2 = tempfile::tempdir().unwrap();
+        let bundle2 = fake_bundle(dir2.path());
+        std::fs::write(dir2.path().join("tokenizer.json"), b"{not json").unwrap();
+        let err2 = load_err(&translate_config(bundle2));
+        assert!(
+            err2.error_detail().contains("not valid JSON"),
+            "err={}",
+            err2.error_detail()
+        );
+    }
+
+    #[test]
+    fn load_rejects_missing_or_invalid_bundle_config() {
+        // 合法 tokenizer，但 bundle 无 config.json
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = fake_bundle(dir.path());
+        std::fs::write(dir.path().join("tokenizer.json"), MINIMAL_TOKENIZER).unwrap();
+        let err = load_err(&translate_config(bundle));
+        let detail = err.error_detail();
+        assert!(
+            detail.contains("config") || detail.contains("tokenizer"),
+            "无 config.json 应启动期拒绝: {detail}"
+        );
+
+        // config.json 非法 JSON
+        let dir2 = tempfile::tempdir().unwrap();
+        let bundle2 = fake_bundle(dir2.path());
+        std::fs::write(dir2.path().join("tokenizer.json"), MINIMAL_TOKENIZER).unwrap();
+        std::fs::write(dir2.path().join("config.json"), b"{also not json").unwrap();
+        let err2 = load_err(&translate_config(bundle2));
+        let detail2 = err2.error_detail();
+        assert!(!detail2.is_empty(), "非法 config.json 必须启动期拒绝");
+    }
+
     // ── tokenizer shim：null normalizer 移除（真 bundle 在位时） ────────
 
     // 评审 NEW-3：图契约校验纯函数六分支单测（漂移场景无真机覆盖，校验

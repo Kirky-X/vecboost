@@ -1109,6 +1109,7 @@ mod tests {
 
     /// Redis 探测：环境变量已设但服务不可达时同样 SKIP（避免本地环境启停
     /// Redis 导致覆盖率作业硬失败；CI 的 redis service 可达，断言仍会执行）。
+    #[cfg(feature = "distributed-redis")]
     fn redis_reachable(url: &str) -> bool {
         let host_port = url
             .trim_start_matches("redis://")

@@ -168,7 +168,7 @@ async fn service_batch_modes_and_file_surface() {
             .process_batch(
                 BatchEmbedRequest {
                     texts: texts.clone(),
-                    mode: Some(mode.clone()),
+                    mode: Some(mode),
                     normalize: Some(true),
                 },
                 None,
@@ -201,7 +201,7 @@ async fn service_batch_modes_and_file_surface() {
         AggregationMode::Average,
     ] {
         let out = svc
-            .embed_file(&file, mode.clone())
+            .embed_file(&file, mode)
             .await
             .unwrap_or_else(|e| panic!("embed_file {mode:?} 失败: {e}"));
         match mode {

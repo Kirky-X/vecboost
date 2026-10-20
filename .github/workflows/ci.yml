@@ -170,7 +170,8 @@ jobs:
             ~/.cache/vecboost-ci
             models/Xenova-bge-small-en-v1.5
             models/opus-mt-en-zh
-          key: vecboost-onnx-assets-ort1.28.2-bge-small-opus-en-zh-v1
+            models/Xenova-all-MiniLM-L6-v2
+          key: vecboost-onnx-assets-ort1.28.2-bge-small-opus-en-zh-minilm-v2
       - name: Provision ONNX Runtime 1.28.2
         run: |
           set -euo pipefail
@@ -193,6 +194,12 @@ jobs:
           if [ ! -f models/opus-mt-en-zh/onnx/encoder_model.onnx ]; then
             hf download Xenova/opus-mt-en-zh --local-dir models/opus-mt-en-zh \
               --include "config.json" "generation_config.json" "tokenizer.json" "tokenizer_config.json" "special_tokens_map.json" "onnx/encoder_model.onnx" "onnx/decoder_model_merged.onnx"
+          fi
+          # server_variants 的第二模型（模型切换/卸载生命周期）
+          if [ ! -f models/Xenova-all-MiniLM-L6-v2/model.onnx ]; then
+            hf download Xenova/all-MiniLM-L6-v2 --local-dir models/Xenova-all-MiniLM-L6-v2 \
+              --include "config.json" "tokenizer.json" "onnx/model.onnx"
+            cp models/Xenova-all-MiniLM-L6-v2/onnx/model.onnx models/Xenova-all-MiniLM-L6-v2/model.onnx
           fi
       - name: Generate coverage
         env:

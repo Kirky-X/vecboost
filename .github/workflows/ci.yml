@@ -22,6 +22,9 @@ env:
   RUST_BACKTRACE: 1
   # 与 health-check.yml 同口径的“全功能”组合（不含互斥驱动与硬件后端）。
   FEATURES: "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
+  # 覆盖率口径：与发布主面一致的“可测全集”（含共享状态与集成测试），
+  # 不并入 cli/mcp/grpc 的协议包装层（各自有独立 test 腿验证编译与行为）。
+  COVERAGE_FEATURES: "http,auth,db,sqlite,distributed-redis"
 
 jobs:
   fmt:
@@ -165,8 +168,8 @@ jobs:
         # 集成测试与 examples 的错误分支同样计入分母。
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov --no-report --features "${{ env.FEATURES }}" --tests
-          cargo llvm-cov --no-report --tests
+          cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" --tests
+          cargo llvm-cov --no-report --features "http,auth,db,sqlite" --tests
           cargo llvm-cov report --lcov --output-path coverage/lcov.info
       - name: Enforce line coverage
         # llvm-cov 0.9.1 的 --fail-under-lines 在该版本为空操作，按 lcov 计数硬判。

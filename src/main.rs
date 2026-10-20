@@ -3600,4 +3600,108 @@ mod tests {
             "redis://host:6379"
         );
     }
+
+    // ── 硬件探测与启动规划 ──
+
+    #[test]
+    fn model_dir_size_counts_nested_files_and_missing_is_none() {
+        let dir = std::env::temp_dir().join(format!("vecboost-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).expect("mkdir");
+        std::fs::write(dir.join("a.bin"), vec![0u8; 1024 * 1024]).expect("write a");
+        std::fs::write(dir.join("sub/b.bin"), vec![0u8; 512 * 1024]).expect("write b");
+        assert_eq!(model_dir_size_mb(dir.to_str().expect("utf8")), Some(1));
+        assert_eq!(model_dir_size_mb("/definitely/missing"), None);
+        let empty = dir.join("empty");
+        std::fs::create_dir_all(&empty).expect("mkdir empty");
+        assert_eq!(model_dir_size_mb(empty.to_str().expect("utf8")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gather_probes_reports_logical_cores_without_gpu() {
+        let config = VecboostConfig::default();
+        let probes = gather_probes(&config);
+        assert!(probes.logical_cores.unwrap_or(0) >= 1);
+        assert!(probes.gpu_present.is_none(), "bin 无 GPU 探针路径");
+        assert!(probes.model_resident_mb.is_none(), "缺省无 model_path");
+    }
+
+    #[test]
+    fn apply_auto_plan_is_noop_when_disabled() {
+        let config = VecboostConfig::default();
+        assert!(!config.device.auto_plan, "缺省关闭硬件规划");
+        let mut worker = vecboost::pipeline::WorkerConfig::default();
+        let before = (worker.max_batch_size, worker.batch_wait_ms);
+        apply_auto_plan(&config, &mut worker);
+        assert_eq!((worker.max_batch_size, worker.batch_wait_ms), before);
+    }
+
+    #[test]
+    fn apply_auto_plan_fills_batch_bounds_when_enabled() {
+        let mut config = VecboostConfig::default();
+        config.device.auto_plan = true;
+        let mut worker = vecboost::pipeline::WorkerConfig::default();
+        apply_auto_plan(&config, &mut worker);
+        assert!(worker.max_batch_size >= 1, "规划结果必须为正批次上限");
+        assert!(worker.batch_wait_ms <= 200, "拼批窗口必须在合理区间");
+    }
+
+    #[test]
+    fn engine_config_rejects_unknown_engine_type() {
+        let mut config = VecboostConfig::default();
+        config.model.engine_type = Some("bogus".to_string());
+        let err = resolve_engine_model_config(&config).unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[cfg(not(feature = "candle"))]
+    #[test]
+    fn engine_config_rejects_candle_when_not_compiled() {
+        let mut config = VecboostConfig::default();
+        config.model.engine_type = Some("candle".to_string());
+        assert!(resolve_engine_model_config(&config).is_err());
+    }
+
+    #[test]
+    fn engine_config_accepts_explicit_onnx() {
+        let mut config = VecboostConfig::default();
+        config.model.engine_type = Some("onnx".to_string());
+        let resolved = resolve_engine_model_config(&config).expect("onnx 显式选择可用");
+        assert_eq!(resolved.engine_type, EngineType::Onnx);
+    }
+
+    #[test]
+    fn tokenizer_path_noop_matrix() {
+        let dir = std::env::temp_dir().join(format!("vecboost-tok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let missing = std::path::PathBuf::from("/definitely/missing");
+        assert!(tokenizer_path_is_noop(
+            &EngineType::Onnx,
+            &ModelTask::Embedding,
+            &missing
+        ));
+        assert!(!tokenizer_path_is_noop(
+            &EngineType::Onnx,
+            &ModelTask::Embedding,
+            &dir
+        ));
+        assert!(tokenizer_path_is_noop(
+            &EngineType::Candle,
+            &ModelTask::Embedding,
+            &dir
+        ));
+        assert!(!tokenizer_path_is_noop(
+            &EngineType::Onnx,
+            &ModelTask::Decision,
+            &dir
+        ));
+        assert!(tokenizer_path_is_noop(
+            &EngineType::Onnx,
+            &ModelTask::Decision,
+            &missing
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

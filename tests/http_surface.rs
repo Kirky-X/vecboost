@@ -21,6 +21,7 @@ const MODEL_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/models/Xenova-bge-small-en-v1.5"
 );
+const TRANSLATE_MODEL_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/models/opus-mt-en-zh");
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn model_ready() -> bool {
@@ -82,9 +83,12 @@ batch_size = 8
          [embedding]\ncache_enabled = true\n\n\
          [rate_limit]\nenabled = false\n\n\
          [database]\nurl = \"sqlite::memory:\"\n\n\
-         [auth]\nenabled = false\n",
+         [auth]\nenabled = false\n\n\
+         [[translation.pairs]]\nsource_language = \"en\"\ntarget_language = \"zh\"\n\
+         model_path = \"{translate_model}\"\n",
         root = read_root.display(),
         model = MODEL_PATH,
+        translate_model = TRANSLATE_MODEL_PATH,
     )
 }
 
@@ -298,12 +302,55 @@ fn http_surface_success_and_error_paths() {
         "非法 input 应拒绝"
     );
 
+    // ── 翻译：成功 / 未配置语言对 / 空文本 ──
+    assert_eq!(
+        body(
+            "/api/v1/translate",
+            r#"{"text":"Hello world","source_language":"en","target_language":"zh"}"#
+        )
+        .0,
+        200
+    );
+    assert!(
+        (400..500).contains(
+            &body(
+                "/api/v1/translate",
+                r#"{"text":"Hello","source_language":"en","target_language":"fr"}"#
+            )
+            .0
+        ),
+        "未配置语言对必须拒绝"
+    );
+    assert!(
+        (400..500).contains(
+            &body(
+                "/api/v1/translate",
+                r#"{"text":"","source_language":"en","target_language":"zh"}"#
+            )
+            .0
+        ),
+        "空文本必须拒绝"
+    );
+
     // ── 坏 JSON ──
     assert!(
         (400..500).contains(&body("/api/v1/embed", r#"{"text":"#).0),
         "坏 JSON 应 4xx"
     );
 
+    // 优雅终止（SIGTERM）：子进程需正常退出以便覆盖率/日志正常 flush；
+    // SIGKILL 会丢失子进程的 profile 计数器与 shutdown 路径。
+    let _ = Command::new("kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if child.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);

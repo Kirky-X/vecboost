@@ -12,4 +12,14 @@ ignore = [
     # 时序侧信道,不涉及本项目攻击面;上游无补丁,跟踪
     # https://github.com/RustCrypto/RSA/issues/626,发布后撤销本豁免。
     "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0367 / -0368 / -0369(zip 解包保留 SUID/SGID、符号链接逃逸):
+    # zip 只由 candle-core 0.11.0(optional,candle feature)在锁文件中持有
+    # (Cargo 按全 feature 并集解析,optional 依赖解析层始终存在);utoipa-swagger-ui
+    # 侧来源已随 sdforge 0.5.0-rc.9 移除。CI 无 job 启用 candle,且未调用受害 API
+    # (ZipArchive::extract / ZipStreamReader::extract;candle 走 ZipArchive::new
+    # 读取),上游 candle-core 最新版仍要求 zip ^8.6 无 9.x 补丁可选,故豁免;
+    # candle 升级或移除时撤销本豁免。
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]

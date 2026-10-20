@@ -161,6 +161,39 @@ jobs:
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-llvm-cov
+      # 覆盖率同口径前提：模型/ORT 依赖的测试（HTTP/翻译/引擎 E2E）在缺
+      # 资产时会跳过，使 CI 覆盖率低于本地实测。此处缓存并预置最小资产集。
+      - name: Cache ONNX runtime and models
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cache/vecboost-ci
+            models/Xenova-bge-small-en-v1.5
+            models/opus-mt-en-zh
+          key: vecboost-onnx-assets-ort1.28.2-bge-small-opus-en-zh-v1
+      - name: Provision ONNX Runtime 1.28.2
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.cache/vecboost-ci"
+          ORT_DIR="$HOME/.cache/vecboost-ci/onnxruntime-linux-x64-1.28.2"
+          if [ ! -f "$ORT_DIR/lib/libonnxruntime.so" ]; then
+            curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v1.28.2/onnxruntime-linux-x64-1.28.2.tgz" -o /tmp/ort.tgz
+            tar -xzf /tmp/ort.tgz -C "$HOME/.cache/vecboost-ci"
+          fi
+          echo "ORT_DYLIB_PATH=$ORT_DIR/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+      - name: Provision ONNX models
+        run: |
+          set -euo pipefail
+          python -m pip install -q "huggingface_hub[cli]"
+          if [ ! -f models/Xenova-bge-small-en-v1.5/model.onnx ]; then
+            hf download Xenova/bge-small-en-v1.5 --local-dir models/Xenova-bge-small-en-v1.5 \
+              --include "config.json" "tokenizer.json" "tokenizer_config.json" "special_tokens_map.json" "onnx/model.onnx"
+            cp models/Xenova-bge-small-en-v1.5/onnx/model.onnx models/Xenova-bge-small-en-v1.5/model.onnx
+          fi
+          if [ ! -f models/opus-mt-en-zh/onnx/encoder_model.onnx ]; then
+            hf download Xenova/opus-mt-en-zh --local-dir models/opus-mt-en-zh \
+              --include "config.json" "generation_config.json" "tokenizer.json" "tokenizer_config.json" "special_tokens_map.json" "onnx/encoder_model.onnx" "onnx/decoder_model_merged.onnx"
+          fi
       - name: Generate coverage
         env:
           VECBOOST_TEST_REDIS_URL: redis://127.0.0.1:6379

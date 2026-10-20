@@ -1,6 +1,9 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+//! VecBoost：多任务推理服务库（嵌入 / 重排 / 决策 / 翻译 / 语种识别），
+//! 同时提供 HTTP、MCP、CLI 协议面与嵌入式 SDK。
+
 #[cfg(feature = "http")]
 use axum::extract::FromRef;
 use std::sync::Arc;

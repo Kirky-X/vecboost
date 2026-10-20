@@ -85,9 +85,9 @@ axum-extra = { version = "0.12", optional = true, default-features = false, feat
 tower-http = { version = "0.7", optional = true, default-features = false, features = ["trace", "cors", "add-extension", "validate-request", "set-header", "timeout", "compression-gzip"] }
 
 # OpenAPI：macros 为 utoipa::ToSchema 派生必需（单独 schema 也可用）
-utoipa = { version = "5.5", optional = true, default-features = false, features = ["macros", "axum_extras", "chrono", "uuid"] }
-# Swagger UI 交互页面（vendored：v5.17.14 随 crate 打包，build script 免联网下载）
-utoipa-swagger-ui = { version = "9.0", optional = true, default-features = false, features = ["axum", "url", "vendored"] }
+utoipa = { version = "6.0", optional = true, default-features = false, features = ["macros", "axum_extras", "chrono", "uuid"] }
+# Swagger UI 交互页面（vendored：资源随 crate 打包，build script 免联网下载）
+utoipa-swagger-ui = { version = "10.0", optional = true, default-features = false, features = ["axum", "url", "vendored"] }
 uuid = { version = "1.26", optional = true, default-features = false, features = ["v4", "serde"] }
 # OpenAI 兼容端点 encoding_format=base64 编码（http feature）
 base64 = { version = "0.23", optional = true, default-features = false, features = ["std"] }

@@ -62,7 +62,11 @@ fn try_request(
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(0);
-    let resp_body = raw.splitn(2, "\r\n\r\n").nth(1).unwrap_or("").to_string();
+    let resp_body = raw
+        .split_once("\r\n\r\n")
+        .map(|x| x.1)
+        .unwrap_or("")
+        .to_string();
     Ok((status, resp_body))
 }
 

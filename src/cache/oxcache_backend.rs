@@ -1095,6 +1095,7 @@ mod tests {
 
     /// oxcache 拒绝一切非 TLS（`redis://`）连接，防生产误用；本地测试
     /// Redis 无 TLS，显式走开发逃生阀（单次写入，`Once` 跨测试线程同步）。
+    #[cfg(feature = "distributed-redis")]
     fn allow_insecure_redis() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {

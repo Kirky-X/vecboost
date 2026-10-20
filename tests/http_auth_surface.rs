@@ -66,7 +66,10 @@ fn try_request(
         .unwrap_or(0);
     Ok((
         status,
-        raw.splitn(2, "\r\n\r\n").nth(1).unwrap_or("").to_string(),
+        raw.split_once("\r\n\r\n")
+            .map(|x| x.1)
+            .unwrap_or("")
+            .to_string(),
     ))
 }
 

@@ -24,15 +24,16 @@ fn model_ready() -> bool {
 }
 
 fn model_config() -> ModelConfig {
-    let mut cfg = ModelConfig::default();
-    cfg.name = "Xenova/bge-small-en-v1.5".to_string();
-    cfg.engine_type = EngineType::Onnx;
-    cfg.model_path = MODEL_PATH.into();
-    cfg.device = DeviceType::Cpu;
-    cfg.max_batch_size = 8;
-    cfg.expected_dimension = Some(384);
-    cfg.task = ModelTask::Embedding;
-    cfg
+    ModelConfig {
+        name: "Xenova/bge-small-en-v1.5".to_string(),
+        engine_type: EngineType::Onnx,
+        model_path: MODEL_PATH.into(),
+        device: DeviceType::Cpu,
+        max_batch_size: 8,
+        expected_dimension: Some(384),
+        task: ModelTask::Embedding,
+        ..ModelConfig::default()
+    }
 }
 
 #[tokio::test]

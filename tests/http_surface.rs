@@ -338,6 +338,48 @@ fn http_surface_success_and_error_paths() {
         "空文本必须拒绝"
     );
 
+    // ── 参数上限：超长文本 / 超大批次 / 超大文件 ──
+    let long_text = "a".repeat(9000);
+    assert!(
+        (400..500).contains(&body("/api/v1/embed", &format!(r#"{{"text":"{long_text}"}}"#)).0),
+        "超长文本必须拒绝"
+    );
+    let many: Vec<String> = (0..600).map(|i| format!("\"t{i}\"")).collect();
+    assert!(
+        (400..500).contains(
+            &body(
+                "/api/v1/embed/batch",
+                &format!(r#"{{"texts":[{}]}}"#, many.join(","))
+            )
+            .0
+        ),
+        "超大批次必须拒绝"
+    );
+    let oversized = dir.join("oversized.txt");
+    std::fs::write(&oversized, vec![b'x'; 11 * 1024 * 1024]).expect("write oversized");
+    assert!(
+        (400..500).contains(
+            &body(
+                "/api/v1/embed/file",
+                &format!(r#"{{"path":"{}"}}"#, oversized.display())
+            )
+            .0
+        ),
+        "超大文件必须拒绝"
+    );
+
+    // ── 翻译：自动检测源语言（短句/不可靠检测显性拒绝，不静默猜测） ──
+    assert!(
+        (400..500).contains(
+            &body(
+                "/api/v1/translate",
+                r#"{"text":"Auto detect this sentence.","target_language":"zh"}"#
+            )
+            .0
+        ),
+        "自动检测不可靠时必须显性拒绝"
+    );
+
     // ── 坏 JSON ──
     assert!(
         (400..500).contains(&body("/api/v1/embed", r#"{"text":"#).0),

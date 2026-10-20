@@ -86,8 +86,6 @@ tower-http = { version = "0.7", optional = true, default-features = false, featu
 
 # OpenAPI：macros 为 utoipa::ToSchema 派生必需（单独 schema 也可用）
 utoipa = { version = "5.5", optional = true, default-features = false, features = ["macros", "axum_extras", "chrono", "uuid"] }
-# Swagger UI 交互页面（vendored：v5.17.14 随 crate 打包，build script 免联网下载）
-utoipa-swagger-ui = { version = "9.0", optional = true, default-features = false, features = ["axum", "url", "vendored"] }
 uuid = { version = "1.26", optional = true, default-features = false, features = ["v4", "serde"] }
 # OpenAI 兼容端点 encoding_format=base64 编码（http feature）
 base64 = { version = "0.23", optional = true, default-features = false, features = ["std"] }
@@ -148,8 +146,9 @@ http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:uuid", "d
 grpc = ["sdforge/grpc", "sdforge/ratelimit", "sdforge/security", "dep:tonic"]
 cli = ["sdforge/cli", "dep:clap"]
 openapi = ["schema", "sdforge/openapi"]
-# Swagger UI 交互页 + /api-docs/openapi.json（opt-in，默认不编译）
-swagger-ui = ["dep:utoipa-swagger-ui", "openapi", "sdforge/docs"]
+# Swagger UI 交互页 + /api-docs/openapi.json（opt-in，默认不编译）；
+# 页面与资产由 sdforge/docs 内置 docgen 提供（0.5.0-rc.9 起不再经 utoipa-swagger-ui）
+swagger-ui = ["openapi", "sdforge/docs"]
 
 # schema 派生：由 http/openapi 自动启用；单独启用仅供 library 类型导出
 schema = ["dep:utoipa"]

@@ -967,7 +967,7 @@ vecboost_cache_hit_ratio
 
 ### 📚 OpenAPI 文档
 
-VecBoost 内置 Swagger UI 与 OpenAPI 规范端点（由 `utoipa` + `utoipa-swagger-ui` 生成，需以 `--features swagger-ui` 构建——默认构建不编译；单二进制、一次 `cargo build` 完成）：
+VecBoost 内置 Swagger UI 与 OpenAPI 规范端点（规范由 `utoipa` 派生，交互页面与静态资产由 `sdforge::docs` 内置 docgen 提供，需以 `--features swagger-ui` 构建——默认构建不编译；单二进制、一次 `cargo build` 完成）：
 
 | 端点 | 说明 |
 |------|------|

@@ -1,4 +1,4 @@
-name: CI
+name: Health Check
 
 on:
   push:
@@ -26,7 +26,7 @@ env:
   FEATURES: "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: health-check-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

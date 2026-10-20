@@ -393,7 +393,7 @@ The test stack has six layers: inline unit tests in `src/`, integration tests in
 
 ### ⚡ Commands (identical to CI)
 
-The commands below are extracted from `.github/workflows/health-check.yml` (CI), `feature-matrix.yml`, `scenario-tests.yml`, and `docs/CONTRIBUTING.md`. Path-dependency note: the `../base/*` ecosystem libraries are living path dependencies, so local gate commands must be scoped with `-p vecboost -p vecboost-examples`.
+The commands below are extracted from `.github/workflows/health-check.yml` (Health Check), `feature-matrix.yml`, `scenario-tests.yml`, and `docs/CONTRIBUTING.md`. Path-dependency note: the `../base/*` ecosystem libraries are living path dependencies, so local gate commands must be scoped with `-p vecboost -p vecboost-examples`.
 
 <details>
 <summary>📄 Code · bash</summary>

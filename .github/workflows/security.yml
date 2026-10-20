@@ -2,7 +2,7 @@
 # 只包含本仓现有 CI 尚未覆盖的检查，不改动既有 workflow，避免与已有 job 重复。
 # 依赖来源审计由 ci.yml 的 Deny 作业（cargo-deny + deny.toml）承担，
 # 故此处不引入 cargo-vet：cargo-vet 需要 supply-chain 配置，本仓未提供。
-name: security
+name: Security
 on:
   push:
     branches: [main]

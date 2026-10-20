@@ -433,7 +433,7 @@ VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中
 
 ### ⚡ 运行命令（与 CI 一致）
 
-以下命令提取自 `.github/workflows/health-check.yml`（CI）、`feature-matrix.yml`、`scenario-tests.yml` 与 `docs/CONTRIBUTING.md`。路径依赖提示：`../base/*` 生态库是路径依赖的活仓库，本地门禁命令须以 `-p vecboost -p vecboost-examples` 限定。
+以下命令提取自 `.github/workflows/health-check.yml`（Health Check）、`feature-matrix.yml`、`scenario-tests.yml` 与 `docs/CONTRIBUTING.md`。路径依赖提示：`../base/*` 生态库是路径依赖的活仓库，本地门禁命令须以 `-p vecboost -p vecboost-examples` 限定。
 
 <details>
 <summary>📄 代码 · bash</summary>

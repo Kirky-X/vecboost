@@ -16,16 +16,20 @@
 
 <div align="center">
 
-### 🎯 写一份接口，四种协议即刻可用
+### 🎯 六类推理能力，一套服务交付
 
-接口处理函数只写一份，`sdforge` 宏在编译期生成四协议绑定，剩下交给编译器。
+文本嵌入、重排序、决策问答、翻译、语言检测与语音转录，统一经 `EngineFactory` 装载模型，共享配置、缓存与限流设施。
 
 <table style="width:100%; border-collapse: collapse">
 <tr>
-<td align="center" width="25%">🌐<br><b>REST</b><br><span style="color:#64748B">Web 接入 · 默认启用</span></td>
-<td align="center" width="25%">📡<br><b>gRPC</b><br><span style="color:#64748B">微服务 · 强类型调用</span></td>
-<td align="center" width="25%">🤖<br><b>MCP</b><br><span style="color:#64748B">LLM 工具 · 标准输入输出</span></td>
-<td align="center" width="25%">💻<br><b>CLI</b><br><span style="color:#64748B">脚本调用 · 快速验证</span></td>
+<td align="center" width="33%">🧠<br><b>文本嵌入</b><br><span style="color:#64748B">批量向量 · Matryoshka 约简 · OpenAI 兼容</span></td>
+<td align="center" width="33%">🔁<br><b>重排序</b><br><span style="color:#64748B">bi-encoder 文档相关性排序</span></td>
+<td align="center" width="33%">🎲<br><b>决策问答</b><br><span style="color:#64748B">choice / score / noul 三题型</span></td>
+</tr>
+<tr>
+<td align="center" width="33%">🌐<br><b>翻译</b><br><span style="color:#64748B">Marian 多语言对 · auto 源语检测</span></td>
+<td align="center" width="33%">🔤<br><b>语言检测</b><br><span style="color:#64748B">置信度与可靠性判定</span></td>
+<td align="center" width="33%">🎙️<br><b>语音转录</b><br><span style="color:#64748B">Qwen3-ASR · VAD 切分</span></td>
 </tr>
 </table>
 

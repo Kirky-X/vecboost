@@ -16,16 +16,20 @@
 
 <div align="center">
 
-### 🎯 Write the API Once, Get Four Protocols
+### 🎯 Six Inference Capabilities, One Service
 
-Interface handlers are written just once; `sdforge` macros generate all four protocol bindings at compile time — the compiler does the rest.
+Text embedding, reranking, decision answering, translation, language detection, and speech transcription all load models through a single `EngineFactory`, sharing configuration, caching, and rate-limiting infrastructure.
 
 <table style="width:100%; border-collapse: collapse">
 <tr>
-<td align="center" width="25%">🌐<br><b>REST</b><br><span style="color:#64748B">Web clients · On by default</span></td>
-<td align="center" width="25%">📡<br><b>gRPC</b><br><span style="color:#64748B">Microservices · Type-safe</span></td>
-<td align="center" width="25%">🤖<br><b>MCP</b><br><span style="color:#64748B">LLM tools · stdio transport</span></td>
-<td align="center" width="25%">💻<br><b>CLI</b><br><span style="color:#64748B">Scripting · Quick checks</span></td>
+<td align="center" width="33%">🧠<br><b>Text Embedding</b><br><span style="color:#64748B">Batch vectors · Matryoshka · OpenAI-compatible</span></td>
+<td align="center" width="33%">🔁<br><b>Reranking</b><br><span style="color:#64748B">Bi-encoder document relevance</span></td>
+<td align="center" width="33%">🎲<br><b>Decision Answering</b><br><span style="color:#64748B">choice / score / noul tasks</span></td>
+</tr>
+<tr>
+<td align="center" width="33%">🌐<br><b>Translation</b><br><span style="color:#64748B">Marian language pairs · auto source detection</span></td>
+<td align="center" width="33%">🔤<br><b>Language Detection</b><br><span style="color:#64748B">Confidence and reliability flags</span></td>
+<td align="center" width="33%">🎙️<br><b>Speech Transcription</b><br><span style="color:#64748B">Qwen3-ASR with VAD segmentation</span></td>
 </tr>
 </table>
 
@@ -347,7 +351,7 @@ Per-key options and defaults for every config section (server / model / embeddin
 | [📋 Changelog](docs/CHANGELOG.md) | Release-by-release change log |
 | [🤝 Contributing](docs/CONTRIBUTING.md) | How to contribute |
 | [🧹 Maintenance Norms](docs/MAINTENANCE.md) | Cross-change standing constraints: transcribe consumption surface, CLI contract, retired-switch discipline, deprecation-doc governance |
-| [📈 Benchmark archive](docs/benchmarks/) | Historical benchmark data (similarity / batch scheduling / semantic cache / GPU pipeline) |
+| [�� Benchmark archive](docs/benchmarks/) | Historical benchmark data (similarity / batch scheduling / semantic cache / GPU pipeline) |
 | [🌍 I18N missing-key audit](docs/I18N_MISSING_AUDIT.md) | Internationalization audit record |
 
 </details>

@@ -2031,12 +2031,22 @@ mod tests {
 
     /// 进程级环境变量串行锁（仅测试侧）。
     ///
-    /// 为何需要：`prefer_int8_translate()` 在 load 路径上读 `TRANSLATION_PREFER_INT8`
-    /// 来决定候选模型顺序，而 int8 质量门用例在 set/remove 窗口内还要跑真实翻译（秒级），
-    /// 同时 `load_rejects_*` 一组用例断言的正是 load 失败的错误消息。并行跑全量 lib 测试时
-    /// 二者会交叉（实测：2305 用例并行下 `load_rejects_missing_or_invalid_bundle_config`
-    /// 稳定拿到 generation_config/eos 锚点分支的另一条错误而失败；串行或只跑本模块 56 个用例则通过）。
-    /// 因此：任何改写该旋钮的用例、以及依赖 load 错误消息的用例，都必须持本锁。
+    /// 实测现象（未加锁前）：不带 `--test-threads=1` 跑全量 lib 测试时
+    /// `load_rejects_missing_or_invalid_bundle_config` 稳定失败，它拿到的是另一条错误
+    /// （"no generation_config.json anchors and tokenizer exposes no </s>/<eos> special token"）
+    /// 而不是预期的 "bundle config …"；同一条命令串行跑、或只跑本模块 56 个用例、
+    /// 或只跑 `load_rejects*` 四个用例均通过。加锁后全量并行连跑 2 轮
+    /// （2298 passed / 0 failed）。
+    ///
+    /// 机制：load 路径上有多处读进程环境来决定分支——`prefer_int8_translate()`
+    /// 读 `TRANSLATION_PREFER_INT8`定候选模型顺序，dylib 定位读 `ORT_DYLIB_PATH`。
+    /// 只要同批有用例在 set/remove 窗口内（本文件 int8 质量门、以及其他模块的
+    /// `ORT_DYLIB_PATH`/`HF_ENDPOINT` 类用例），依赖 load 错误消息的断言就不确定。
+    /// 已证实的是“并行交叉”这一类，而非某个具体旋钮：本机的 int8 bundle 缺失，
+    /// int8 质量门实际走 SKIP 分支，所以不能把原因归给它一个。
+    ///
+    /// 约定：改写进程环境的用例、以及断言 load 错误消息的用例都必须持本锁
+    /// （`load_err` 已在内部持锁，跨过整个 load）。
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// 取 env 串行锁；中毒也继续用（上一个持锁用例 panic 不应连锁堵死其余用例）。
@@ -3180,8 +3190,8 @@ mod tests {
         for text in cases {
             let fp32 = translate_once(&dir, text, "en", "zh").expect("ORT dylib 就绪");
             // 持锁覆盖 set → load → remove 全窗口：load 路径会读该旋钮定候选顺序，
-            // 不持锁时同批并行的 `load_rejects_*`（断言 load 错误消息）会拿到 int8 分支的
-            // 另一条错误，参见 `ENV_LOCK` 注释里的实测复现。
+            // 不持锁时同批并行的 `load_rejects_*`（断言 load 错误消息）会拿到另一分支的错误，
+            // 详见 `ENV_LOCK` 注释。
             let _env = env_guard();
             // SAFETY: pair 加载期读一次旋钮；本测试为进程内单点 set/remove
             // （既有 ORT_DYLIB_PATH 同款先例）。int8 引擎加载后立即恢复默认

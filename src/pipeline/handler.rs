@@ -367,30 +367,15 @@ async fn enqueue_and_await_response(
 
 #[cfg(test)]
 mod tests {
-    /// 进程级 registry 串行锁（配合 create_test_state 用例使用）。
+    /// 进程级 registry 串行锁：pipeline 用例共享同一 registry，需串行执行。
     static REGISTRY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     use super::*;
 
-    fn ensure_i18n_init() {
-        i18n::init();
-    }
     use crate::config::model::{ModelConfig, ModelTask, Precision};
-    use crate::domain::{
-        DecisionAnswer, DecisionAnswerBody, DecisionQuestion, DecisionRequest, DecisionResponse,
-        EmbedRequest, QuestionType, ServiceResponse,
-    };
+    use crate::domain::{DecisionAnswer, DecisionAnswerBody, DecisionRequest, DecisionResponse};
     use crate::engine::InferenceEngine;
-    use crate::pipeline::{
-        PriorityCalculator, PriorityConfig, PriorityInput, PriorityRequestQueue, ResponseChannel,
-        WorkerConfig, WorkerManager,
-    };
-    use crate::rate_limit::LimiteronAdapter;
-    use crate::service::decision::DecisionService;
-    use crate::service::embedding::EmbeddingService;
     use async_trait::async_trait;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
 
     /// 固定作答的 mock 决策引擎（noul 0.7 / choice 0 / score 3），供决策
     /// pipeline 测试的 DecisionService 装配；与 embed 的 TestEngine 互不影响。
@@ -438,18 +423,6 @@ mod tests {
             _config: &ModelConfig,
         ) -> Result<(), VecboostError> {
             Ok(())
-        }
-    }
-
-    fn decision_noul_request() -> DecisionRequest {
-        DecisionRequest {
-            state: serde_json::json!({"topic": "vacation"}),
-            questions: vec![DecisionQuestion {
-                name: "confident".to_string(),
-                qtype: QuestionType::Noul,
-                instructions: "state your p(true)".to_string(),
-                options: vec![],
-            }],
         }
     }
 
@@ -511,87 +484,6 @@ mod tests {
         ) -> Result<(), VecboostError> {
             Ok(())
         }
-    }
-
-    async fn create_test_state(
-        queue_capacity: usize,
-        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
-    ) -> VecboostState {
-        let service = Arc::new(RwLock::new(EmbeddingService::new(engine.clone(), None)));
-        let rerank_service = Arc::new(RwLock::new(crate::service::rerank::RerankService::new(
-            engine, None,
-        )));
-        let decision_engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
-            Arc::new(RwLock::new(DecisionTestEngine));
-        let decision_service = Arc::new(RwLock::new(DecisionService::new(decision_engine)));
-        let queue = Arc::new(PriorityRequestQueue::new(queue_capacity));
-        let response_channel = Arc::new(ResponseChannel::new());
-        let priority_calculator = Arc::new(PriorityCalculator::new(PriorityConfig::default()));
-        let worker_manager = Arc::new(WorkerManager::new(
-            Arc::clone(&queue),
-            Arc::clone(&response_channel),
-            WorkerConfig::default(),
-            Arc::clone(&service),
-        ));
-        let rate_limiter = Arc::new(LimiteronAdapter::with_defaults().await);
-
-        let mut kit = trait_kit::AsyncKit::new();
-        kit.set_config(service.clone());
-        kit.set_config(rerank_service);
-        kit.set_config(decision_service);
-        kit.set_config(rate_limiter.clone());
-        kit.set_config(queue.clone());
-        kit.set_config(response_channel.clone());
-        kit.set_config(priority_calculator.clone());
-        kit.set_config(worker_manager.clone());
-        kit.set_config(Vec::<String>::new());
-        kit.set_config(crate::registry::AuthEnabled(false));
-        kit.set_config(crate::registry::RateLimitEnabled(false));
-        kit.set_config(crate::registry::PipelineEnabled(true));
-        kit.set_config(crate::registry::CacheConfig {
-            enabled: false,
-            size: 0,
-        });
-        kit.set_config(crate::registry::DbConfig { enabled: false });
-        kit.set_config(None::<Arc<crate::audit::AuditLogger>>);
-        kit.set_config(None::<Arc<crate::metrics::InferenceCollector>>);
-        kit.set_config(None::<Arc<crate::metrics::PrometheusCollector>>);
-        kit.set_config(crate::RerankConfig::default());
-        #[cfg(feature = "auth")]
-        {
-            kit.set_config(Option::<Arc<crate::auth::GarrisonHandle>>::None);
-            kit.set_config(Option::<Arc<crate::auth::GarrisonCsrfConfig>>::None);
-        }
-
-        kit.register::<crate::registry::EmbeddingModule>().unwrap();
-        kit.register::<crate::registry::RerankModule>().unwrap();
-        kit.register::<crate::registry::DecisionModule>().unwrap();
-        kit.register::<crate::registry::RateLimitModule>().unwrap();
-        kit.register::<crate::registry::CacheModule>().unwrap();
-        kit.register::<crate::registry::DbModule>().unwrap();
-        kit.register::<crate::registry::AuditModule>().unwrap();
-        kit.register::<crate::registry::MetricsCollectorModule>()
-            .unwrap();
-        kit.register::<crate::registry::PrometheusCollectorModule>()
-            .unwrap();
-        kit.register::<crate::registry::IpWhitelistModule>()
-            .unwrap();
-        kit.register::<crate::registry::PipelineQueueModule>()
-            .unwrap();
-        kit.register::<crate::registry::ResponseChannelModule>()
-            .unwrap();
-        kit.register::<crate::registry::PriorityCalculatorModule>()
-            .unwrap();
-        kit.register::<crate::registry::WorkerManagerModule>()
-            .unwrap();
-        #[cfg(feature = "auth")]
-        {
-            kit.register::<crate::registry::AuthModule>().unwrap();
-            kit.register::<crate::registry::CsrfConfigModule>().unwrap();
-        }
-
-        let kit = kit.build().await.expect("Failed to build AsyncKit");
-        VecboostState { kit: Arc::new(kit) }
     }
 
     /// 验证 handle_pipeline_request 成功路径——入队、worker 处理、返回 EmbedResponse。

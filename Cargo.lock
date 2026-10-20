@@ -7645,7 +7645,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -8645,9 +8645,7 @@ checksum = "6ba0b99ee52df3028635d93840c797102da61f8a7bb3cf751032455895b52ef8"
 dependencies = [
  "proc-macro2",
  "quote",
- "regex",
  "syn 2.0.119",
- "uuid",
 ]
 
 [[package]]
@@ -8658,7 +8656,9 @@ checksum = "d935f1c83fdf8b88f09bbe050d0cea78ea4afee6d7b0317403228c1200b2c8ab"
 dependencies = [
  "proc-macro2",
  "quote",
+ "regex",
  "syn 3.0.9",
+ "uuid",
 ]
 
 [[package]]
@@ -8803,7 +8803,7 @@ dependencies = [
  "tracing-subscriber",
  "trait-kit",
  "unic-langid",
- "utoipa 5.5.0",
+ "utoipa 6.0.0",
  "utoipa-swagger-ui",
  "uuid",
  "whatlang",

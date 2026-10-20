@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! HTTP 业务面集成测试：一个真实 onnx 服务进程覆盖 `/api/1/*` 与 `/v1/embeddings`。
+//! HTTP 业务面集成测试：一个真实 onnx 服务进程覆盖 `/api/v1/*` 与 `/v1/embeddings`。
 //!
 //! 与 detect/translate 的 candle 专属用例不同，本目标用 ONNX bundle
 //! （`models/Xenova-bge-small-en-v1.5`）启动默认 onnx 引擎，因此在
@@ -170,37 +170,37 @@ fn http_surface_success_and_error_paths() {
     assert_eq!(request(http_port, "GET", "/metrics", None).0, 200);
 
     // ── 模型元数据 ──
-    assert_eq!(request(http_port, "GET", "/api/1/models", None).0, 200);
+    assert_eq!(request(http_port, "GET", "/api/v1/models", None).0, 200);
     assert_eq!(
-        request(http_port, "GET", "/api/1/model/current", None).0,
+        request(http_port, "GET", "/api/v1/model/current", None).0,
         200
     );
-    assert_eq!(request(http_port, "GET", "/api/1/model/info", None).0, 200);
+    assert_eq!(request(http_port, "GET", "/api/v1/model/info", None).0, 200);
 
     // ── embed ──
-    let (s, b) = body("/api/1/embed", r#"{"text":"hello vecboost"}"#);
+    let (s, b) = body("/api/v1/embed", r#"{"text":"hello vecboost"}"#);
     assert_eq!(s, 200, "embed 应成功: {b}");
     assert!(b.contains("embedding"));
     assert!(
-        (400..500).contains(&body("/api/1/embed", r#"{"text":""}"#).0),
+        (400..500).contains(&body("/api/v1/embed", r#"{"text":""}"#).0),
         "空文本应拒绝"
     );
     assert!(
-        (400..500).contains(&body("/api/1/embed", r#"{"text":123}"#).0),
+        (400..500).contains(&body("/api/v1/embed", r#"{"text":123}"#).0),
         "字段类型错误应拒绝"
     );
 
     // ── embed/batch ──
-    assert_eq!(body("/api/1/embed/batch", r#"{"texts":["a","b"]}"#).0, 200);
+    assert_eq!(body("/api/v1/embed/batch", r#"{"texts":["a","b"]}"#).0, 200);
     assert!(
-        (400..500).contains(&body("/api/1/embed/batch", r#"{"texts":[]}"#).0),
+        (400..500).contains(&body("/api/v1/embed/batch", r#"{"texts":[]}"#).0),
         "空批次应拒绝"
     );
 
     // ── similarity ──
     assert_eq!(
         body(
-            "/api/1/similarity",
+            "/api/v1/similarity",
             r#"{"source":"a","target":"b","metric":"cosine"}"#
         )
         .0,
@@ -209,7 +209,7 @@ fn http_surface_success_and_error_paths() {
     assert!(
         (400..500).contains(
             &body(
-                "/api/1/similarity",
+                "/api/v1/similarity",
                 r#"{"source":"a","target":"b","metric":"bogus"}"#
             )
             .0
@@ -220,32 +220,32 @@ fn http_surface_success_and_error_paths() {
     // ── search ──
     assert_eq!(
         body(
-            "/api/1/search",
+            "/api/v1/search",
             r#"{"query":"vecboost","texts":["vecboost","other"],"top_k":1}"#
         )
         .0,
         200
     );
     assert!(
-        (400..500).contains(&body("/api/1/search", r#"{"query":"x","texts":[]}"#).0),
+        (400..500).contains(&body("/api/v1/search", r#"{"query":"x","texts":[]}"#).0),
         "空候选集应拒绝"
     );
 
     // ── embed/file：允许根内成功、缺失与越界拒绝 ──
     assert_eq!(
         body(
-            "/api/1/embed/file",
+            "/api/v1/embed/file",
             &format!(r#"{{"path":"{}"}}"#, document.display())
         )
         .0,
         200
     );
     assert!(
-        (400..500).contains(&body("/api/1/embed/file", r#"{"path":"/etc/passwd"}"#).0),
+        (400..500).contains(&body("/api/v1/embed/file", r#"{"path":"/etc/passwd"}"#).0),
         "根外路径应拒绝"
     );
     assert!(
-        (400..500).contains(&body("/api/1/embed/file", r#"{"path":"missing.txt"}"#).0),
+        (400..500).contains(&body("/api/v1/embed/file", r#"{"path":"missing.txt"}"#).0),
         "缺失文件应拒绝"
     );
 
@@ -253,14 +253,14 @@ fn http_surface_success_and_error_paths() {
     assert!(
         (400..500).contains(
             &body(
-                "/api/1/model/switch",
+                "/api/v1/model/switch",
                 r#"{"model_name":"nope","model_path":"/definitely/missing"}"#
             )
             .0
         ),
         "不存在的切换路径应拒绝"
     );
-    let (s, _) = body("/api/1/model/unload", r#"{"model_name":"never-loaded"}"#);
+    let (s, _) = body("/api/v1/model/unload", r#"{"model_name":"never-loaded"}"#);
     assert!(
         (200..300).contains(&s) || s == 404,
         "卸载未加载模型：就绪态 2xx，无 ModelManager 的主路径 404；got {s}"
@@ -300,7 +300,7 @@ fn http_surface_success_and_error_paths() {
 
     // ── 坏 JSON ──
     assert!(
-        (400..500).contains(&body("/api/1/embed", r#"{"text":"#).0),
+        (400..500).contains(&body("/api/v1/embed", r#"{"text":"#).0),
         "坏 JSON 应 4xx"
     );
 

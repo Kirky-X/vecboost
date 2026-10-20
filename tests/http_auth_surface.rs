@@ -159,7 +159,7 @@ fn auth_login_authorize_refresh_logout() {
     let (status, body) = request(
         port,
         "POST",
-        "/api/1/auth/login",
+        "/api/v1/auth/login",
         Some(&format!(
             r#"{{"username":"admin","password":"{ADMIN_PASSWORD}"}}"#
         )),
@@ -178,7 +178,7 @@ fn auth_login_authorize_refresh_logout() {
             &request(
                 port,
                 "POST",
-                "/api/1/auth/login",
+                "/api/v1/auth/login",
                 Some(r#"{"username":"admin","password":"wrong-password"}"#),
                 None
             )
@@ -191,7 +191,7 @@ fn auth_login_authorize_refresh_logout() {
             &request(
                 port,
                 "POST",
-                "/api/1/auth/login",
+                "/api/v1/auth/login",
                 Some(r#"{"username":"bad user!","password":"x"}"#),
                 None
             )
@@ -202,17 +202,17 @@ fn auth_login_authorize_refresh_logout() {
 
     // 受保护端点：无 token 401，有 token 200
     assert_eq!(
-        request(port, "GET", "/api/1/models", None, None).0,
+        request(port, "GET", "/api/v1/models", None, None).0,
         401,
         "受保护端点无 token 必须 401"
     );
     assert_eq!(
-        request(port, "GET", "/api/1/models", None, Some(&token)).0,
+        request(port, "GET", "/api/v1/models", None, Some(&token)).0,
         200,
         "合法 token 必须放行"
     );
     assert_eq!(
-        request(port, "GET", "/api/1/auth/me", None, Some(&token)).0,
+        request(port, "GET", "/api/v1/auth/me", None, Some(&token)).0,
         200
     );
 
@@ -222,7 +222,7 @@ fn auth_login_authorize_refresh_logout() {
             &request(
                 port,
                 "POST",
-                "/api/1/auth/refresh",
+                "/api/v1/auth/refresh",
                 Some(r#"{"refresh_token":"not-a-token"}"#),
                 None
             )
@@ -233,11 +233,11 @@ fn auth_login_authorize_refresh_logout() {
 
     // 登出后 token 立即失效
     assert!(
-        (200..300).contains(&request(port, "POST", "/api/1/auth/logout", None, Some(&token)).0),
+        (200..300).contains(&request(port, "POST", "/api/v1/auth/logout", None, Some(&token)).0),
         "登出应成功"
     );
     assert_eq!(
-        request(port, "GET", "/api/1/models", None, Some(&token)).0,
+        request(port, "GET", "/api/v1/models", None, Some(&token)).0,
         401,
         "登出后的 token 必须失效"
     );

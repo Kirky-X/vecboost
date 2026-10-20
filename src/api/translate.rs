@@ -56,7 +56,7 @@ async fn translate_handler(req: TranslateRequest) -> Result<TranslateResponse, A
 #[cfg(feature = "http")]
 #[forge(
     name = "translate",
-    version = 1,
+    version = "v1",
     path = "/translate",
     method = "POST",
     tool_name = "translate",
@@ -71,7 +71,7 @@ pub async fn forge_translate(req: TranslateRequest) -> Result<TranslateResponse,
 #[cfg(feature = "cli")]
 #[forge(
     name = "translate",
-    version = 1,
+    version = "v1",
     cli = true,
     description = "Translate text between configured language pairs (seq2seq)",
     i18n_key = "forge-cli-translate"
@@ -85,7 +85,7 @@ pub async fn cli_translate(req: TranslateRequest) -> Result<TranslateResponse, A
 #[cfg(feature = "grpc")]
 #[forge(
     name = "translate",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.translate",
     description = "Translate text between configured language pairs (seq2seq)"
 )]

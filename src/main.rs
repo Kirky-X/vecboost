@@ -2464,7 +2464,7 @@ fn apply_request_middlewares(app: axum::Router, app_state: crate::VecboostState)
 }
 
 /// auth 中间件栈：全局限流（内部按 RateLimitEnabled 配置决定生效）→
-/// 认证（路径白名单放行 /health、/api/1/auth/login、/api/1/auth/refresh）→
+/// 认证（路径白名单放行 /health、/api/v1/auth/login、/api/v1/auth/refresh）→
 /// CSRF（auth+csrf 双启用时，garrison Origin+Token 双重校验）。
 #[cfg(feature = "auth")]
 fn apply_auth_middlewares(
@@ -2483,7 +2483,7 @@ fn apply_auth_middlewares(
     ));
 
     // auth_middleware：应用到所有路由，内部用路径白名单放行公开端点
-    // (/health, /api/1/auth/login, /api/1/auth/refresh)
+    // (/health, /api/v1/auth/login, /api/v1/auth/refresh)
     let app = if config.auth.enabled {
         app.layer(from_fn_with_state(
             app_state.clone(),
@@ -2632,9 +2632,9 @@ fn apply_transport_layers(app: axum::Router, config: &VecboostConfig) -> axum::R
 async fn build_http_router(config: &VecboostConfig) -> anyhow::Result<axum::Router> {
     // app_state 由调用方保证已 init_state(所有能力经 kit.require 获取)
     let app_state = vecboost::api::state().map_err(|e| anyhow::anyhow!("{e}"))?;
-    // 版本前缀:路由注册为 /api/1/*(forge version=1)。
-    // 实施期决策:不启用 build_with_redirect —— 它会把 /api/1/* 重定向到
-    // 不存在的 /api/v1/*,破坏全部 API 路由(实测 301)。
+    // 版本前缀：路由由 `#[forge(version = "v1")]` 统一注入 `/api/v1/*`。
+    // 不启用 build_with_redirect：版本化路径已是实际注册路径，未版本化的
+    // `/api/*` 无兜底需求，避免额外 301 与中间件开销。
     let app = sdforge::http::build();
 
     // Swagger UI(/api-docs/openapi.json + /swagger-ui/) 与 ReDoc(/redoc)：

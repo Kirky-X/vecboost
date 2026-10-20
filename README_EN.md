@@ -188,7 +188,7 @@ The following example is adapted from [`examples/http/embed_api.rs`](examples/ht
 <summary>📄 Code · bash</summary>
 
 ```bash
-curl -X POST http://localhost:9002/api/1/embed \
+curl -X POST http://localhost:9002/api/v1/embed \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!"}'
 ```
@@ -236,7 +236,7 @@ cargo run --features cli -- embed --req '{"text":"Hello, world!"}'
 
 VecBoost generates its four protocol interfaces from single-source handlers via `sdforge` (one source per domain under `src/api/`: embedding / rerank / decisions / translate / detect). All endpoints, parameters, request/response examples, the gRPC method table, and message types are documented in the [📘 API Reference](docs/API_REFERENCE.md); summary:
 
-- **HTTP/REST**: `/api/1/*` provides embedding (single / batch / file), similarity, semantic search, rerank, decision answering (choice/score/noul), translation (multi-pair + auto detection), transcription (16kHz speech samples to text, `transcribe` feature), language detection, model management, and health endpoints;
+- **HTTP/REST**: `/api/v1/*` provides embedding (single / batch / file), similarity, semantic search, rerank, decision answering (choice/score/noul), translation (multi-pair + auto detection), transcription (16kHz speech samples to text, `transcribe` feature), language detection, model management, and health endpoints;
 - **OpenAI-compatible**: `POST /v1/embeddings`, responding in the OpenAI format (`object` / `data` / `usage`) with `encoding_format=base64` support;
 - **Matryoshka dimensionality reduction**: pass `dimensions` (256/512/1024, etc.) to `/v1/embeddings` for smaller, faster vectors; truncated vectors are automatically L2 re-normalized to keep cosine similarity correct;
 - **gRPC**: with the `grpc` feature, 17 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — including `vecboost.translate` / `vecboost.detect`, with JWT auth, rate limiting, max connections, and timeouts all configurable;
@@ -251,11 +251,11 @@ Translation and language detection request examples (fields match the [API Refer
 <summary>📄 Code · bash</summary>
 
 ```bash
-curl -X POST http://localhost:9002/api/1/translate \
+curl -X POST http://localhost:9002/api/v1/translate \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, my dog is cute", "source_language": "en", "target_language": "zh"}'
 
-curl -X POST http://localhost:9002/api/1/detect \
+curl -X POST http://localhost:9002/api/v1/detect \
   -H "Content-Type: application/json" \
   -d '{"text": "The quick brown fox jumps over the lazy dog near the riverbank every morning."}'
 ```
@@ -310,7 +310,7 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 | `metal` | - | Apple Silicon Metal GPU (candle backend, implies `candle`) |
 | `onnx` | - | ONNX Runtime engine (**enabled by default**, part of default features) |
 | `candle` | - | candle fallback backend (opt-in: CandleEngine embedding / candle decision head / GGUF quantization bridge; `engine_type="candle"` is explicitly rejected at startup when not enabled) |
-| `transcribe` | - | Qwen3-ASR transcription engine (three-graph + silero VAD + fbank), library-level `InferenceEngine::transcribe` entry; HTTP/gRPC endpoints wired (`POST /api/1/transcribe`, configured under `[transcribe]`) |
+| `transcribe` | - | Qwen3-ASR transcription engine (three-graph + silero VAD + fbank), library-level `InferenceEngine::transcribe` entry; HTTP/gRPC endpoints wired (`POST /api/v1/transcribe`, configured under `[transcribe]`) |
 | `mkl` | - | x86_64 CPU MKL acceleration backend (candle-path opt-in, implies `candle`; requires a toolchain that links cleanly) |
 | `accelerate` | - | aarch64 macOS Accelerate backend (candle-path opt-in, implies `candle`) |
 | `quantized-gguf` | - | GGUF quantization engine switch (load-time dequantization bridge on the candle path, runtime-equivalent to fp32) |

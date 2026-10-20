@@ -83,7 +83,7 @@ def test_mm_embed_dim_and_norm(matrix_servers, name, dirname, dim, port):
     s, expected_dim = matrix_servers[name]
     if s is None:
         pytest.skip(f"模型目录缺失: {dirname}")
-    st, body = http_post(s["port"], "/api/1/embed", {"text": "model matrix probe"})
+    st, body = http_post(s["port"], "/api/v1/embed", {"text": "model matrix probe"})
     assert st == 200, f"[{name}] {st}: {str(body)[:150]}"
     vec = body["embedding"]
     assert len(vec) == expected_dim, f"[{name}] 维度应 {expected_dim}，实际 {len(vec)}"
@@ -96,7 +96,7 @@ def test_mm_embed_batch(matrix_servers, name, dirname, dim, port):
     s, expected_dim = matrix_servers[name]
     if s is None:
         pytest.skip(f"模型目录缺失: {dirname}")
-    st, body = http_post(s["port"], "/api/1/embed/batch",
+    st, body = http_post(s["port"], "/api/v1/embed/batch",
                          {"texts": ["alpha", "beta", "gamma"]})
     assert st == 200, f"[{name}] {st}: {str(body)[:150]}"
     assert len(body["embeddings"]) == 3, f"[{name}] 批量应 3 条"
@@ -115,7 +115,7 @@ def test_mm_rerank_relevance(matrix_servers, name, dirname, dim, port):
     s, _dim = matrix_servers[name]
     if s is None:
         pytest.skip(f"模型目录缺失: {dirname}")
-    st, body = http_post(s["port"], "/api/1/rerank",
+    st, body = http_post(s["port"], "/api/v1/rerank",
                          {"query": "machine learning algorithms",
                           "documents": [
                               "The chef prepares fresh Italian pasta every morning",

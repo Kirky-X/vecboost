@@ -76,7 +76,7 @@ def sc_server():
 
 
 def _embed(port, text):
-    st, body = http_post(port, "/api/1/embed", {"text": text})
+    st, body = http_post(port, "/api/v1/embed", {"text": text})
     assert st == 200, f"HTTP {st}: {str(body)[:200]}"
     return find_vector(body)
 

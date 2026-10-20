@@ -31,9 +31,9 @@ def test_health():
     print("Health check passed.")
 
 def test_embed():
-    print("Testing /api/1/embed...")
+    print("Testing /api/v1/embed...")
     payload = {"text": "Hello, world!"}
-    response = requests.post(f"{BASE_URL}/api/1/embed", json=payload, timeout=30)
+    response = requests.post(f"{BASE_URL}/api/v1/embed", json=payload, timeout=30)
     if response.status_code != 200:
         print(f"Embed failed: {response.text}")
     assert response.status_code == 200
@@ -44,12 +44,12 @@ def test_embed():
     print(f"Embed check passed. Dimension: {data['dimension']}")
 
 def test_similarity():
-    print("Testing /api/1/similarity...")
+    print("Testing /api/v1/similarity...")
     payload = {
         "source": "Hello world",
         "target": "Hi world"
     }
-    response = requests.post(f"{BASE_URL}/api/1/similarity", json=payload, timeout=30)
+    response = requests.post(f"{BASE_URL}/api/v1/similarity", json=payload, timeout=30)
     if response.status_code != 200:
         print(f"Similarity failed: {response.text}")
     assert response.status_code == 200
@@ -58,9 +58,9 @@ def test_similarity():
     print(f"Similarity check passed. Score: {data['score']}")
 
 def test_batch_embed():
-    print("Testing /api/1/embed/batch...")
+    print("Testing /api/v1/embed/batch...")
     payload = {"texts": ["Hello", "World"]}
-    response = requests.post(f"{BASE_URL}/api/1/embed/batch", json=payload, timeout=30)
+    response = requests.post(f"{BASE_URL}/api/v1/embed/batch", json=payload, timeout=30)
     if response.status_code != 200:
         print(f"Batch embed failed: {response.text}")
     assert response.status_code == 200

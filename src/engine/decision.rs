@@ -326,7 +326,7 @@ impl DecisionPipeline {
 #[async_trait::async_trait]
 impl InferenceEngine for DecisionPipeline {
     /// 决策主链路唯一 trait 入口：委托固有方法 [`DecisionPipeline::decision`]。
-    /// 漏覆盖则继承 trait 默认 `Err(UnsupportedTask)`——`/api/1/decisions`
+    /// 漏覆盖则继承 trait 默认 `Err(UnsupportedTask)`——`/api/v1/decisions`
     /// 恒 400 且服务层经 trait 调用走不到管线（全部离线测试盲区）。
     /// 固有方法名为 `decision`，与 trait 方法无同名遮蔽，方法解析自然进管线。
     fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, VecboostError> {

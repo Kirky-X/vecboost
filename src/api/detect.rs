@@ -55,7 +55,7 @@ async fn detect_handler(req: DetectRequest) -> Result<DetectResponse, ApiError> 
 #[cfg(feature = "http")]
 #[forge(
     name = "detect",
-    version = 1,
+    version = "v1",
     path = "/detect",
     method = "POST",
     tool_name = "detect",
@@ -70,7 +70,7 @@ pub async fn forge_detect(req: DetectRequest) -> Result<DetectResponse, ApiError
 #[cfg(feature = "cli")]
 #[forge(
     name = "detect",
-    version = 1,
+    version = "v1",
     cli = true,
     description = "Detect the natural language of a text (ISO 639-1 code with 639-3 fallback)",
     i18n_key = "forge-cli-detect"
@@ -84,7 +84,7 @@ pub async fn cli_detect(req: DetectRequest) -> Result<DetectResponse, ApiError> 
 #[cfg(feature = "grpc")]
 #[forge(
     name = "detect",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.detect",
     description = "Detect the natural language of a text (ISO 639-1 code with 639-3 fallback)"
 )]

@@ -91,7 +91,7 @@ impl TranslateService {
     ) -> Result<TranslateResponse, VecboostError> {
         Self::validate_request(&req)?;
 
-        // auto 检测：与 /api/1/detect 共用同一检测核心（单一事实源）
+        // auto 检测：与 /api/v1/detect 共用同一检测核心（单一事实源）
         // 零配置显性语义（spec R-translation-routing-003）：空表 = 未配置，
         // 任意请求 400 translate-not-configured（端点已注册，非 panic 非 500）
         if self.pairs.is_empty() {

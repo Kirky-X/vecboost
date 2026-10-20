@@ -826,7 +826,7 @@ mod tests {
         );
     }
 
-    /// 决策请求队列满背压：/api/1/decisions 在队列容量置零时收到
+    /// 决策请求队列满背压：/api/v1/decisions 在队列容量置零时收到
     /// Overloaded（503 语义，spec R-decision-throughput-002 可构造断言），
     /// 与 auth 限流的 RateLimitExceeded 互斥。
     #[tokio::test(flavor = "multi_thread")]

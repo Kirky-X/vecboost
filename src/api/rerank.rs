@@ -131,7 +131,7 @@ async fn rerank_batch_handler(req: BatchRerankRequest) -> Result<BatchRerankResp
 #[cfg(feature = "http")]
 #[forge(
     name = "rerank",
-    version = 1,
+    version = "v1",
     path = "/rerank",
     method = "POST",
     tool_name = "rerank",
@@ -144,7 +144,7 @@ pub async fn forge_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError
 #[cfg(feature = "http")]
 #[forge(
     name = "rerank_batch",
-    version = 1,
+    version = "v1",
     path = "/rerank/batch",
     method = "POST",
     tool_name = "rerank_batch",
@@ -159,7 +159,7 @@ pub async fn forge_rerank_batch(req: BatchRerankRequest) -> Result<BatchRerankRe
 #[cfg(feature = "cli")]
 #[forge(
     name = "rerank",
-    version = 1,
+    version = "v1",
     cli = true,
     description = "Rerank documents by relevance to a query",
     i18n_key = "forge-cli-rerank"
@@ -173,7 +173,7 @@ pub async fn cli_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError> 
 #[cfg(feature = "grpc")]
 #[forge(
     name = "rerank",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.rerank",
     description = "Rerank documents by relevance to a query"
 )]
@@ -184,7 +184,7 @@ pub async fn grpc_rerank(req: RerankRequest) -> Result<RerankResponse, ApiError>
 #[cfg(feature = "grpc")]
 #[forge(
     name = "rerank_batch",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.rerank_batch",
     description = "Batch rerank multiple queries against document sets"
 )]

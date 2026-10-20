@@ -29,7 +29,7 @@ use ::utoipa;
 #[cfg(feature = "http")]
 #[forge(
     name = "login",
-    version = 1,
+    version = "v1",
     path = "/auth/login",
     method = "POST",
     tool_name = "login",
@@ -126,7 +126,7 @@ pub async fn forge_login(
 #[cfg(feature = "http")]
 #[forge(
     name = "refresh",
-    version = 1,
+    version = "v1",
     path = "/auth/refresh",
     method = "POST",
     tool_name = "refresh_token",
@@ -201,7 +201,7 @@ pub async fn forge_refresh(
 #[cfg(feature = "http")]
 #[forge(
     name = "logout",
-    version = 1,
+    version = "v1",
     path = "/auth/logout",
     method = "POST",
     tool_name = "logout",
@@ -244,7 +244,7 @@ pub async fn forge_logout(
 #[cfg(feature = "http")]
 #[forge(
     name = "me",
-    version = 1,
+    version = "v1",
     path = "/auth/me",
     method = "GET",
     tool_name = "get_current_user",

@@ -53,14 +53,14 @@ def _scores(body):
 def test_r001_en_rerank_relevance_top1(base_server):
     """R-rerank-001: M1 英文重排——相关文档第 1、分数∈[0,1]、top_k 截断降序。"""
     port = base_server["port"]
-    st, body = http_post(port, "/api/1/rerank",
+    st, body = http_post(port, "/api/v1/rerank",
                          {"query": EN_QUERY, "documents": EN_DOCS, "top_k": 8})
     assert st == 200, f"HTTP {st}: {str(body)[:200]}"
     scores = _scores(body)
     assert scores, f"未找到分数: {str(body)[:200]}"
     assert all(0.0 <= s <= 1.0 for s in scores), f"分数越界: {scores}"
     assert scores == sorted(scores, reverse=True), f"未按降序: {scores}"
-    st3, body3 = http_post(port, "/api/1/rerank",
+    st3, body3 = http_post(port, "/api/v1/rerank",
                            {"query": EN_QUERY, "documents": EN_DOCS, "top_k": 3})
     assert st3 == 200
     s3 = _scores(body3)
@@ -70,7 +70,7 @@ def test_r001_en_rerank_relevance_top1(base_server):
 def test_r002_zh_rerank_relevance(zh_server):
     """R-rerank-002: M2 中文重排——密码相关文档排位高于无关文档。"""
     port = zh_server["port"]
-    st, body = http_post(port, "/api/1/rerank",
+    st, body = http_post(port, "/api/v1/rerank",
                          {"query": ZH_QUERY, "documents": ZH_DOCS, "top_k": 5})
     assert st == 200, f"HTTP {st}: {str(body)[:200]}"
     scores = _scores(body)
@@ -81,7 +81,7 @@ def test_r002_zh_rerank_relevance(zh_server):
 def test_r003_batch_rerank(zh_server):
     """R-rerank-003: 批量重排——两个 query 各自完整结果。"""
     port = zh_server["port"]
-    st, body = http_post(port, "/api/1/rerank/batch", {"queries": [
+    st, body = http_post(port, "/api/v1/rerank/batch", {"queries": [
         {"query": ZH_QUERY, "documents": ZH_DOCS[:3], "top_k": 3},
         {"query": "推荐一部好看的科幻电影", "documents": ZH_DOCS[3:], "top_k": 2},
     ]})
@@ -92,9 +92,9 @@ def test_r003_batch_rerank(zh_server):
 
 def test_r004_dual_model_rerank_capability(base_server, zh_server):
     """R-rerank-004: 双模型重排能力覆盖——M1/M2 都能完成重排且分数有区分度。"""
-    st1, b1 = http_post(base_server["port"], "/api/1/rerank",
+    st1, b1 = http_post(base_server["port"], "/api/v1/rerank",
                         {"query": EN_QUERY, "documents": EN_DOCS})
-    st2, b2 = http_post(zh_server["port"], "/api/1/rerank",
+    st2, b2 = http_post(zh_server["port"], "/api/v1/rerank",
                         {"query": ZH_QUERY, "documents": ZH_DOCS})
     assert st1 == st2 == 200, f"M1={st1} M2={st2}"
     s1, s2 = _scores(b1), _scores(b2)
@@ -116,7 +116,7 @@ def test_r005_rerank_invalid_inputs(base_server):
         ("top_k=-1", {"query": EN_QUERY, "documents": EN_DOCS, "top_k": -1}),
     ]
     for label, payload in cases:
-        st, body = http_post(port, "/api/1/rerank", payload)
+        st, body = http_post(port, "/api/v1/rerank", payload)
         assert st in (400, 422), f"{label}: 预期 400/422，实际 {st}: {str(body)[:150]}"
 
 
@@ -124,7 +124,7 @@ def test_r006_topk_boundaries(base_server):
     """R-rerank-006: top_k=docs 数与 top_k>docs 数均应可用并返回 min(top_k,docs)。"""
     port = base_server["port"]
     for tk in (8, 20):
-        st, body = http_post(port, "/api/1/rerank",
+        st, body = http_post(port, "/api/v1/rerank",
                              {"query": EN_QUERY, "documents": EN_DOCS, "top_k": tk})
         assert st == 200, f"top_k={tk}: HTTP {st}"
         s = _scores(body)

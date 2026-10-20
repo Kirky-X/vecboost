@@ -800,7 +800,7 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
     );
 }
 
-// forge_decisions —— /api/1/decisions 端点（DecisionModule kit 装配链）
+// forge_decisions —— /api/v1/decisions 端点（DecisionModule kit 装配链）
 
 fn decision_mixed_request() -> DecisionRequest {
     use crate::domain::{DecisionQuestion, QuestionType};
@@ -887,7 +887,7 @@ async fn test_forge_decisions_empty_questions_returns_400() {
     }
 }
 
-// forge_detect —— /api/1/detect 端点（DetectModule kit 装配链）
+// forge_detect —— /api/v1/detect 端点（DetectModule kit 装配链）
 
 #[cfg(feature = "http")]
 #[tokio::test]

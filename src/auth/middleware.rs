@@ -24,16 +24,16 @@ pub struct AuthContext {
     pub token: String,
 }
 
-const PUBLIC_PATHS: &[&str] = &["/health", "/api/1/auth/login", "/api/1/auth/refresh"];
+const PUBLIC_PATHS: &[&str] = &["/health", "/api/v1/auth/login", "/api/v1/auth/refresh"];
 
-/// 需要 admin 角色的路径(前缀匹配)。覆盖带 `/api/1` 前缀与 `no_prefix` 两种注册形态。
+/// 需要 admin 角色的路径(前缀匹配)。覆盖带 `/api/v1` 前缀与 `no_prefix` 两种注册形态。
 ///
-/// - `/api/1/model/*`(switch/unload/current/info):模型管理属高危操作,可造成
+/// - `/api/v1/model/*`(switch/unload/current/info):模型管理属高危操作,可造成
 ///   服务不可用或加载任意本地目录,必须限 admin;
-/// - `/api/1/embed/file`:服务端文件读取原语,text_preview 会回传文件内容。
+/// - `/api/v1/embed/file`:服务端文件读取原语,text_preview 会回传文件内容。
 const ADMIN_PATH_PREFIXES: &[&str] = &[
-    "/api/1/model/",
-    "/api/1/embed/file",
+    "/api/v1/model/",
+    "/api/v1/embed/file",
     "/model/",
     "/embed/file",
 ];
@@ -525,16 +525,16 @@ mod tests {
 
     #[test]
     fn requires_admin_matches_model_and_file_paths() {
-        assert!(requires_admin("/api/1/model/switch"));
-        assert!(requires_admin("/api/1/model/unload"));
-        assert!(requires_admin("/api/1/embed/file"));
+        assert!(requires_admin("/api/v1/model/switch"));
+        assert!(requires_admin("/api/v1/model/unload"));
+        assert!(requires_admin("/api/v1/embed/file"));
         // no_prefix 注册形态兜底
         assert!(requires_admin("/model/switch"));
         assert!(requires_admin("/embed/file"));
         // 普通端点不受限
-        assert!(!requires_admin("/api/1/embed"));
-        assert!(!requires_admin("/api/1/embed/batch"));
-        assert!(!requires_admin("/api/1/auth/login"));
+        assert!(!requires_admin("/api/v1/embed"));
+        assert!(!requires_admin("/api/v1/embed/batch"));
+        assert!(!requires_admin("/api/v1/auth/login"));
         assert!(!requires_admin("/health"));
     }
 
@@ -655,12 +655,12 @@ mod tests {
     #[test]
     fn admin_path_prefixes_cover_all_dangerous_endpoints() {
         // 模型管理
-        assert!(requires_admin("/api/1/model/switch"));
-        assert!(requires_admin("/api/1/model/unload"));
-        assert!(requires_admin("/api/1/model/current"));
-        assert!(requires_admin("/api/1/model/info"));
+        assert!(requires_admin("/api/v1/model/switch"));
+        assert!(requires_admin("/api/v1/model/unload"));
+        assert!(requires_admin("/api/v1/model/current"));
+        assert!(requires_admin("/api/v1/model/info"));
         // 文件嵌入(text_preview 回传文件内容)
-        assert!(requires_admin("/api/1/embed/file"));
+        assert!(requires_admin("/api/v1/embed/file"));
         // no_prefix 形态
         assert!(requires_admin("/model/switch"));
         assert!(requires_admin("/embed/file"));
@@ -670,13 +670,13 @@ mod tests {
     #[test]
     fn normal_endpoints_not_blocked_by_admin_check() {
         let safe_paths = [
-            "/api/1/embed",
-            "/api/1/embed/batch",
-            "/api/1/similarity",
-            "/api/1/rerank",
-            "/api/1/auth/login",
-            "/api/1/auth/refresh",
-            "/api/1/auth/logout",
+            "/api/v1/embed",
+            "/api/v1/embed/batch",
+            "/api/v1/similarity",
+            "/api/v1/rerank",
+            "/api/v1/auth/login",
+            "/api/v1/auth/refresh",
+            "/api/v1/auth/logout",
             "/health",
             "/metrics",
             "/api-docs",

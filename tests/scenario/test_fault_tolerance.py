@@ -93,7 +93,7 @@ def test_ft01_batch_boundary_64_exact(base_server):
     响应 dimension 字段一致。"""
     port = base_server["port"]
     batch = [f"边界测试 {i}: fault tolerance batch boundary probe" for i in range(64)]
-    st, body = http_post(port, "/api/1/embed/batch", {"texts": batch})
+    st, body = http_post(port, "/api/v1/embed/batch", {"texts": batch})
     assert st == 200, f"恰在界的 64 条批量应 200: HTTP {st}: {str(body)[:200]}"
     items = body["embeddings"]
     assert len(items) == 64, f"应返回 64 条，实际 {len(items)}"
@@ -109,7 +109,7 @@ def test_ft02_batch_duplicates_order_and_scatter(base_server):
     a = "duplicate scatter probe alpha sentence for vecboost"
     b = "duplicate scatter probe beta sentence with different words"
     batch = [a, b, a, a, b]
-    st, body = http_post(port, "/api/1/embed/batch", {"texts": batch})
+    st, body = http_post(port, "/api/v1/embed/batch", {"texts": batch})
     assert st == 200, f"HTTP {st}: {str(body)[:200]}"
     embs = [it["embedding"] for it in body["embeddings"]]
     assert len(embs) == 5, "去重 scatter 不得丢失条目"
@@ -118,7 +118,7 @@ def test_ft02_batch_duplicates_order_and_scatter(base_server):
     assert embs[0] == embs[2] == embs[3], "同文本批内向量应逐位一致（去重回填）"
     assert embs[1] == embs[4], "同文本批内向量应逐位一致（去重回填）"
     assert embs[0] != embs[1], "不同文本向量不应相同"
-    st2, single = http_post(port, "/api/1/embed", {"text": a})
+    st2, single = http_post(port, "/api/v1/embed", {"text": a})
     assert st2 == 200
     v_single = find_vector(single)
     dot = sum(x * y for x, y in zip(v_single, embs[0]))
@@ -132,7 +132,7 @@ def test_ft03_concurrent_identical_embeds_consistent(base_server):
     text = "concurrent consistency probe: pipeline drain window and dedup scatter"
 
     def hit(_):
-        return http_post(port, "/api/1/embed", {"text": text})
+        return http_post(port, "/api/v1/embed", {"text": text})
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(hit, range(8)))
@@ -160,7 +160,7 @@ def test_ft04_rerank_strict_contract(base_server):
     """FT-04: rerank 严格契约——降序、index 指回原文档位置、return_documents
     回显正确、top_k 截断等于全量结果最优前缀。"""
     port = base_server["port"]
-    st, full = http_post(port, "/api/1/rerank",
+    st, full = http_post(port, "/api/v1/rerank",
                          {"query": EN_QUERY, "documents": EN_DOCS, "return_documents": True})
     assert st == 200, f"HTTP {st}: {str(full)[:200]}"
     results = full["results"]
@@ -170,7 +170,7 @@ def test_ft04_rerank_strict_contract(base_server):
     for r in results:
         assert 0 <= r["index"] < len(EN_DOCS), f"index 越界: {r['index']}"
         assert r["document"] == EN_DOCS[r["index"]], "return_documents 未回显原文档"
-    st2, top3 = http_post(port, "/api/1/rerank",
+    st2, top3 = http_post(port, "/api/v1/rerank",
                           {"query": EN_QUERY, "documents": EN_DOCS, "top_k": 3})
     assert st2 == 200
     r3 = top3["results"]
@@ -183,7 +183,7 @@ def test_ft05_rerank_batch_partial_failure_tolerance(base_server):
     """FT-05: rerank/batch 容错语义——单个 query 失败（空文本）不产生响应，
     但在 statuses 状态位中可见（index 对位 + ok=false + error 原因）。"""
     port = base_server["port"]
-    st, body = http_post(port, "/api/1/rerank/batch", {"queries": [
+    st, body = http_post(port, "/api/v1/rerank/batch", {"queries": [
         {"query": EN_QUERY, "documents": EN_DOCS[:4], "top_k": 4},
         {"query": "", "documents": EN_DOCS[:2]},
         {"query": "database systems and query processing",
@@ -207,7 +207,7 @@ def test_ft06_rerank_batch_all_invalid_no_5xx(base_server):
     """FT-06: rerank/batch 全部 query 无效——仍 200 + 空响应 + 全失败状态位
     （不得 5xx/崩溃）。"""
     port = base_server["port"]
-    st, body = http_post(port, "/api/1/rerank/batch", {"queries": [
+    st, body = http_post(port, "/api/v1/rerank/batch", {"queries": [
         {"query": "", "documents": EN_DOCS[:2]},
         {"query": "   ", "documents": EN_DOCS[:2]},
     ]})
@@ -224,7 +224,7 @@ def test_ft07_search_contract_topk_and_order(base_server):
     """FT-07: search 契约——top_k>n 收敛到 n、按分数降序、index 在候选范围内、
     分数在余弦值域内。"""
     port = base_server["port"]
-    st, body = http_post(port, "/api/1/search", {
+    st, body = http_post(port, "/api/v1/search", {
         "query": "machine learning",
         "texts": [
             "machine learning models learn from data",
@@ -265,11 +265,11 @@ def test_ft08_metrics_prometheus_format(base_server):
 def test_ft09_embed_response_dimension_self_consistent(base_server):
     """FT-09: 响应自洽——单条与批量的 dimension 字段必须等于实际向量长度。"""
     port = base_server["port"]
-    st, single = http_post(port, "/api/1/embed", {"text": "dimension self consistency"})
+    st, single = http_post(port, "/api/v1/embed", {"text": "dimension self consistency"})
     assert st == 200
     assert single["dimension"] == len(single["embedding"]) == DIM, \
         f"单条 dimension 字段与向量长度不自洽: {single['dimension']}"
-    st2, batch = http_post(port, "/api/1/embed/batch",
+    st2, batch = http_post(port, "/api/v1/embed/batch",
                            {"texts": ["alpha consistency", "beta consistency"]})
     assert st2 == 200
     assert batch["dimension"] == DIM
@@ -312,7 +312,7 @@ def test_ft11_rate_limit_headers_on_success_and_429(rl_headers_server):
     remainings = []
     retry_after = None
     for _ in range(10):
-        st, headers, _body = _post_raw(port, "/api/1/embed",
+        st, headers, _body = _post_raw(port, "/api/v1/embed",
                                        {"text": "rate limit header contract probe"})
         statuses.append(st)
         if st == 200:
@@ -333,7 +333,7 @@ def test_ft11_rate_limit_headers_on_success_and_429(rl_headers_server):
 def test_ft12_rate_limit_429_body_json_and_server_alive(rl_headers_server):
     """FT-12: 429 响应体为合法 JSON 错误结构（非空信息）；服务仍然存活。"""
     port = rl_headers_server["port"]
-    st, _headers, body = _post_raw(port, "/api/1/embed",
+    st, _headers, body = _post_raw(port, "/api/v1/embed",
                                    {"text": "429 body shape probe"})
     if st != 429:
         pytest.skip("窗口已滚动未触发 429（前一用例已覆盖触发路径）")

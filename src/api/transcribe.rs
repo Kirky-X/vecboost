@@ -77,7 +77,7 @@ async fn transcribe_handler(req: TranscribeRequest) -> Result<TranscribeResponse
 #[cfg(feature = "http")]
 #[forge(
     name = "transcribe",
-    version = 1,
+    version = "v1",
     path = "/transcribe",
     method = "POST",
     tool_name = "transcribe",
@@ -92,7 +92,7 @@ pub async fn forge_transcribe(req: TranscribeRequest) -> Result<TranscribeRespon
 #[cfg(feature = "grpc")]
 #[forge(
     name = "transcribe",
-    version = 1,
+    version = "v1",
     grpc_method = "vecboost.transcribe",
     description = "Transcribe 16kHz mono f32 speech samples (Qwen3-ASR)"
 )]
@@ -125,7 +125,7 @@ impl std::str::FromStr for TranscribeWavRequest {
 #[cfg(all(feature = "cli", feature = "transcribe"))]
 #[forge(
     name = "transcribe",
-    version = 1,
+    version = "v1",
     cli = true,
     description = "Transcribe a 16kHz mono WAV file to text (Qwen3-ASR; requires [transcribe] enabled)",
     i18n_key = "forge-cli-transcribe"

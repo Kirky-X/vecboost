@@ -86,7 +86,7 @@ cargo deny check
 ### 认证与授权（auth feature，garrison）
 
 - JWT 认证（`protocol-jwt`）+ CSRF 保护（跟随 `auth.enabled`）+ Web CORS/防火墙系列（bruteforce / ratelimit / ddos / anomalous）。
-- RBAC：`/api/1/model/*` 与 `/embed/file` 要求 **admin 角色**。
+- RBAC：`/api/v1/model/*` 与 `/embed/file` 要求 **admin 角色**。
 - 登录收敛：仅 `default_admin_username`（默认 admin）可登录；启用认证时必须配置 `VECBOOST_ADMIN_PASSWORD`（≥12 位，缺失拒绝启动）。
 - Token 生命周期：`token_expiration_hours` 缺省 24 小时；支持 TOTP（`secure-totp`）、账号锁定（`account-lockout`）、凭证清零（`account-credential-zeroize`）、异常检测（`anomalous-detector-dual`）与安全告警。
 - 会话存储：`[auth] session_backend` 可选 `memory`（默认，进程内存 oxcache，**仅限单副本**）或 `database`（部署库 `garrison_kv` 表，garrison `DbnexusKvDao`，auth 开启时可多副本共享）；`database` 需以 `--features "db,sqlite"` 或 `"db,postgres"` 构建并配置 `[database]`，未编译 db 或 auth 关闭时启动期显性拒绝。

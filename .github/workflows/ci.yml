@@ -204,18 +204,20 @@ jobs:
       - name: Generate coverage
         env:
           VECBOOST_TEST_REDIS_URL: redis://127.0.0.1:6379
-        # 多腿合并：全功能组合 + 默认构建。禁止 --lib 窄口径：
-        # 集成测试与 examples 的错误分支同样计入分母。
+        # 多腿合并：共享状态腿 + 默认构建。禁止 --lib 窄口径：
+        # 集成测试与引擎 E2E 的错误分支同样计入分母。
+        # --test-threads=1：插桩会放大时序问题（实测：pipeline registry 共享用例
+        # 在全量并行下会因队列容量串扰而 Overloaded），覆盖率作业必须串行。
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" --tests
-          cargo llvm-cov --no-report --features "http,auth,db,sqlite" --tests
+          cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" --tests -- --test-threads=1
+          cargo llvm-cov --no-report --features "http,auth,db,sqlite" --tests -- --test-threads=1
           cargo llvm-cov report --lcov --output-path coverage/lcov.info
       - name: Enforce line coverage
-        # llvm-cov 0.9.1 的 --fail-under-lines 在该版本为空操作，按 lcov 计数硬判。
+        # llvm-cov 0.9.1 的 --fail-under-lines 可用，但仍保留显式 lcov 判定以便审计数值。
         run: |
           total=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if (lf==0) {print "0.00"} else {printf "%.2f", 100*lh/lf}}' coverage/lcov.info)
-          echo "Coverage: ${total}% (lines)"
+          echo "实测行覆盖率: ${total}%（分母 $(awk -F: '/^LF:/{s+=$2} END{print s}' coverage/lcov.info) 行）"
           awk -v t="$total" 'BEGIN{exit !(t+0 >= 95)}' || {
             echo "::error::行覆盖率 ${total}% < 95%"
             exit 1

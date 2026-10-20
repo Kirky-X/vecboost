@@ -1107,6 +1107,23 @@ mod tests {
         });
     }
 
+    /// Redis 探测：环境变量已设但服务不可达时同样 SKIP（避免本地环境启停
+    /// Redis 导致覆盖率作业硬失败；CI 的 redis service 可达，断言仍会执行）。
+    fn redis_reachable(url: &str) -> bool {
+        let host_port = url
+            .trim_start_matches("redis://")
+            .split('/')
+            .next()
+            .unwrap_or("127.0.0.1:6379");
+        std::net::TcpStream::connect_timeout(
+            &host_port
+                .parse::<std::net::SocketAddr>()
+                .unwrap_or(std::net::SocketAddr::from(([127, 0, 0, 1], 6379))),
+            std::time::Duration::from_secs(2),
+        )
+        .is_ok()
+    }
+
     /// Redis 精确缓存跨副本共享（`VECBOOST_TEST_REDIS_URL` 缺失即 SKIP）。
     #[cfg(feature = "distributed-redis")]
     #[tokio::test]
@@ -1115,6 +1132,10 @@ mod tests {
             eprintln!("SKIP: VECBOOST_TEST_REDIS_URL not set");
             return;
         };
+        if !redis_reachable(&url) {
+            eprintln!("SKIP: Redis 不可达（{url}）");
+            return;
+        }
         allow_insecure_redis();
         let key = format!(
             "redis-shared:{}",

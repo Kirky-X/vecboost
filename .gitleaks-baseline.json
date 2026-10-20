@@ -1,0 +1,23 @@
+[
+ {
+  "RuleID": "generic-api-key",
+  "Description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+  "StartLine": 439,
+  "EndLine": 439,
+  "StartColumn": 10,
+  "EndColumn": 60,
+  "Match": "secret = \"REDACTED\"",
+  "Secret": "REDACTED",
+  "File": "src/module_registry/tests.rs",
+  "SymlinkFile": "",
+  "Commit": "1db3040d4018b56429ef90e1b2ec41a2dec59953",
+  "Link": "https://github.com/Kirky-X/vecboost/blob/1db3040d4018b56429ef90e1b2ec41a2dec59953/src/module_registry/tests.rs#L439",
+  "Entropy": 3.9709506,
+  "Author": "Kirky-X",
+  "Email": "kirky-x@outlook.com",
+  "Date": "2026-07-14T22:42:00Z",
+  "Message": "test: round 3 coverage push - 500+ tests across all modules\n\nRound 3 subagent work covering low-coverage modules:\n- device/memory_pool: 48 new tests (pool_manager/model_pool/tensor_pool/cuda_pool/buffer_pool)\n- model/recovery + engine/impl_: 19 new tests\n- handler/routes/utils/error/scheduler/grpc/module_registry: 400+ tests\n\nBug fixes discovered via testing:\n- pipeline/scheduler: normalize_l2 called unconditionally (test reflects actual behavior)\n- routes/embedding: is_ip_whitelisted shift overflow on prefix_len=0 (test marked should_panic)\n- utils/hash: SHA256 expected value corrected\n\nTotal: 1311 passed; 0 failed; 4 ignored",
+  "Tags": [],
+  "Fingerprint": "1db3040d4018b56429ef90e1b2ec41a2dec59953:src/module_registry/tests.rs:generic-api-key:439"
+ }
+]

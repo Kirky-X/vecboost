@@ -1111,18 +1111,23 @@ mod tests {
     /// Redis 导致覆盖率作业硬失败；CI 的 redis service 可达，断言仍会执行）。
     #[cfg(feature = "distributed-redis")]
     fn redis_reachable(url: &str) -> bool {
-        let host_port = url
-            .trim_start_matches("redis://")
-            .split('/')
-            .next()
-            .unwrap_or("127.0.0.1:6379");
-        std::net::TcpStream::connect_timeout(
-            &host_port
-                .parse::<std::net::SocketAddr>()
-                .unwrap_or(std::net::SocketAddr::from(([127, 0, 0, 1], 6379))),
-            std::time::Duration::from_secs(2),
-        )
-        .is_ok()
+        use std::net::ToSocketAddrs;
+
+        // 复用 redis crate 的 URL 解析：手写 trim_start_matches("redis://") 在
+        // `redis://user:pass@host:6379` 形态下切出 "user:pass@host:6379"，
+        // SocketAddr 解析失败后落到 127.0.0.1 兜底——服务可达也被判为不可达而 SKIP。
+        let Some(parsed) = redis::parse_redis_url(url) else {
+            return false;
+        };
+        let host = parsed.host_str().unwrap_or("127.0.0.1");
+        let port = parsed.port().unwrap_or(6379);
+        let Ok(mut addrs) = format!("{host}:{port}").to_socket_addrs() else {
+            return false;
+        };
+        let Some(addr) = addrs.next() else {
+            return false;
+        };
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)).is_ok()
     }
 
     /// Redis 精确缓存跨副本共享（`VECBOOST_TEST_REDIS_URL` 缺失即 SKIP）。

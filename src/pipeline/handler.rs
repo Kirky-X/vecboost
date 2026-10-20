@@ -372,13 +372,10 @@ mod tests {
 
     use super::*;
 
-    fn ensure_i18n_init() {
-        i18n::init();
-    }
     use crate::config::model::{ModelConfig, ModelTask, Precision};
     use crate::domain::{
         DecisionAnswer, DecisionAnswerBody, DecisionQuestion, DecisionRequest, DecisionResponse,
-        EmbedRequest, QuestionType, ServiceResponse,
+        QuestionType,
     };
     use crate::engine::InferenceEngine;
     use crate::pipeline::{
@@ -391,6 +388,53 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::Arc;
     use tokio::sync::RwLock;
+
+    fn ensure_i18n_init() {
+        i18n::init();
+    }
+
+    /// 出队一条 embed 请求 → 经 EmbeddingService 处理 → 回填响应通道的消费者协程。
+    ///
+    /// 与真实 worker 同走「出队 → 处理 → 回达」链路；worker 的批量推理路径
+    /// 由 `src/pipeline/scheduler.rs` 的用例覆盖，这里只驱动单条请求。
+    fn spawn_embed_consumer(state: &VecboostState) -> tokio::task::JoinHandle<()> {
+        let queue = state
+            .kit
+            .require::<crate::registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+        let response_channel = state
+            .kit
+            .require::<crate::registry::ResponseChannelModule>()
+            .expect("ResponseChannelModule not registered");
+        let service = state
+            .kit
+            .require::<crate::registry::EmbeddingModule>()
+            .expect("EmbeddingModule not registered");
+        tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(req) = queue.dequeue().await {
+                    let request_id = req.request_id.clone();
+                    let service_guard = service.read().await;
+                    let result = service_guard
+                        .process_text(
+                            req.request.into_embed().expect("expected embed request"),
+                            None,
+                        )
+                        .await;
+                    drop(service_guard);
+                    response_channel
+                        .complete(request_id, result.map(ServiceResponse::Embed))
+                        .await;
+                    return;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+    }
 
     /// 固定作答的 mock 决策引擎（noul 0.7 / choice 0 / score 3），供决策
     /// pipeline 测试的 DecisionService 装配；与 embed 的 TestEngine 互不影响。
@@ -597,48 +641,13 @@ mod tests {
     /// 验证 handle_pipeline_request 成功路径——入队、worker 处理、返回 EmbedResponse。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_success() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(100, engine).await;
-        let queue = state
-            .kit
-            .require::<crate::registry::PipelineQueueModule>()
-            .expect("PipelineQueueModule not registered");
-        let response_channel = state
-            .kit
-            .require::<crate::registry::ResponseChannelModule>()
-            .expect("ResponseChannelModule not registered");
-        let service = state
-            .kit
-            .require::<crate::registry::EmbeddingModule>()
-            .expect("EmbeddingModule not registered");
-
-        let consumer = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                if let Some(req) = queue.dequeue().await {
-                    let request_id = req.request_id.clone();
-                    let service_guard = service.read().await;
-                    let result = service_guard
-                        .process_text(
-                            req.request.into_embed().expect("expected embed request"),
-                            None,
-                        )
-                        .await;
-                    drop(service_guard);
-                    response_channel
-                        .complete(request_id, result.map(ServiceResponse::Embed))
-                        .await;
-                    return;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        });
+        let consumer = spawn_embed_consumer(&state);
 
         let req = EmbedRequest {
             text: "hello world".to_string(),
@@ -659,7 +668,8 @@ mod tests {
     /// 必须同步移除，否则持续过载下无界增长。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_queue_full() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -678,7 +688,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             VecboostError::Overloaded(msg) => {
-                assert!(msg.contains("Queue is full"));
+                assert!(msg.contains(&i18n::tr("queue-full-rejected")), "got: {msg}");
             }
             other => panic!("expected Overloaded, got {:?}", other),
         }
@@ -694,7 +704,8 @@ mod tests {
     /// 同结果）、出队由持有方以 DecisionService 消费并 complete 回达。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_decision_pipeline_request_success() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -775,7 +786,8 @@ mod tests {
     /// 请求会得到 503 Overloaded，把永久性客户端错误伪装成可重试背压。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_decision_pipeline_request_rejects_invalid_before_enqueue() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -792,7 +804,7 @@ mod tests {
         match result {
             Err(VecboostError::InvalidInput(msg)) => {
                 assert!(
-                    msg.to_lowercase().contains("question"),
+                    msg.contains(&i18n::tr("decision-empty-questions")),
                     "400 copy must locate the invalid field, got: {msg}"
                 );
             }
@@ -810,7 +822,8 @@ mod tests {
     /// 整批 Err，错误扩散给批内其他合法请求）。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_rejects_invalid_text_before_enqueue() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -844,7 +857,8 @@ mod tests {
     /// 与 auth 限流的 RateLimitExceeded 互斥。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_decision_pipeline_request_queue_full_overloaded() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -858,7 +872,7 @@ mod tests {
         let result = handle_decision_pipeline_request(state, decision_noul_request()).await;
         match result {
             Err(VecboostError::Overloaded(msg)) => {
-                assert!(msg.contains("Queue is full"), "got: {msg}");
+                assert!(msg.contains(&i18n::tr("queue-full-rejected")), "got: {msg}");
             }
             other => panic!("expected Overloaded, got {other:?}"),
         }
@@ -872,48 +886,13 @@ mod tests {
     /// 验证 handle_pipeline_request 在引擎出错时传播 InferenceError。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_engine_error() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(ErrorEngine));
         let state = create_test_state(100, engine).await;
-        let queue = state
-            .kit
-            .require::<crate::registry::PipelineQueueModule>()
-            .expect("PipelineQueueModule not registered");
-        let response_channel = state
-            .kit
-            .require::<crate::registry::ResponseChannelModule>()
-            .expect("ResponseChannelModule not registered");
-        let service = state
-            .kit
-            .require::<crate::registry::EmbeddingModule>()
-            .expect("EmbeddingModule not registered");
-
-        let consumer = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                if let Some(req) = queue.dequeue().await {
-                    let request_id = req.request_id.clone();
-                    let service_guard = service.read().await;
-                    let result = service_guard
-                        .process_text(
-                            req.request.into_embed().expect("expected embed request"),
-                            None,
-                        )
-                        .await;
-                    drop(service_guard);
-                    response_channel
-                        .complete(request_id, result.map(ServiceResponse::Embed))
-                        .await;
-                    return;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        });
+        let consumer = spawn_embed_consumer(&state);
 
         let req = EmbedRequest {
             text: "hello".to_string(),
@@ -934,7 +913,8 @@ mod tests {
     /// 验证 handle_pipeline_request 在 response channel sender 被 drop 时返回 InternalError。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_response_channel_error() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -971,7 +951,10 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             VecboostError::InternalError(msg) => {
-                assert!(msg.contains("Response channel error"));
+                assert!(
+                    msg.contains(&i18n::tr("pipeline-channel-error")),
+                    "got: {msg}"
+                );
             }
             other => panic!("expected InternalError, got {:?}", other),
         }
@@ -983,7 +966,8 @@ mod tests {
     /// 使用 start_paused 模拟时间流逝,不启动 consumer 让 response 永远 pending。
     #[tokio::test(start_paused = true)]
     async fn test_handle_pipeline_request_timeout() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -998,57 +982,27 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             VecboostError::RequestTimeout(msg) => {
-                assert!(msg.contains("timeout"), "got: {}", msg);
+                assert!(msg.contains(&i18n::tr("pipeline-timeout")), "got: {msg}");
             }
             other => panic!("expected RequestTimeout, got {:?}", other),
         }
     }
 
-    /// 验证 handle_pipeline_request 在 normalize=false 时不做归一化。
+    /// embed 响应的归一化契约：本路径经 `EmbeddingService::process_text` 出向量，
+    /// 该方法恒定施加 L2 归一，与 `EmbedRequest.normalize` 取值无关——normalize
+    /// 标志由 worker 层消费，flag 级语义见 `src/pipeline/scheduler.rs` 的
+    /// `normalize_true` / `normalize_false` 用例。此处钉住「响应向量恒为单位向量」。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_normalize_false() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
+        // 维度取 8：mock 引擎返回 vec![0.5; 8]，原始范数为 √2 ≈ 1.414，
+        // 归一后才是 1.0——维度取 4 时原始范数恰为 1.0，断言不具区分力。
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
-            Arc::new(RwLock::new(TestEngine::new(4)));
+            Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(100, engine).await;
-        let queue = state
-            .kit
-            .require::<crate::registry::PipelineQueueModule>()
-            .expect("PipelineQueueModule not registered");
-        let response_channel = state
-            .kit
-            .require::<crate::registry::ResponseChannelModule>()
-            .expect("ResponseChannelModule not registered");
-        let service = state
-            .kit
-            .require::<crate::registry::EmbeddingModule>()
-            .expect("EmbeddingModule not registered");
-
-        let consumer = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                if let Some(req) = queue.dequeue().await {
-                    let request_id = req.request_id.clone();
-                    let service_guard = service.read().await;
-                    let result = service_guard
-                        .process_text(
-                            req.request.into_embed().expect("expected embed request"),
-                            None,
-                        )
-                        .await;
-                    drop(service_guard);
-                    response_channel
-                        .complete(request_id, result.map(ServiceResponse::Embed))
-                        .await;
-                    return;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        });
+        let consumer = spawn_embed_consumer(&state);
 
         let req = EmbedRequest {
             text: "hello world".to_string(),
@@ -1057,7 +1011,18 @@ mod tests {
         let result = handle_pipeline_request(state, req, "127.0.0.1".to_string()).await;
         assert!(result.is_ok());
         let response = result.unwrap();
-        assert_eq!(response.0.dimension, 4);
+        assert_eq!(response.0.dimension, 8);
+        let norm = response
+            .0
+            .embedding
+            .iter()
+            .map(|v| v * v)
+            .sum::<f32>()
+            .sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "响应向量必须是单位向量（与 normalize 取值无关），got norm {norm}"
+        );
 
         consumer.await.unwrap();
     }
@@ -1065,49 +1030,14 @@ mod tests {
     /// 验证 handle_pipeline_request 支持不同维度的引擎。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_different_dimensions() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         for dim in &[1usize, 2, 16, 128] {
             let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
                 Arc::new(RwLock::new(TestEngine::new(*dim)));
             let state = create_test_state(100, engine).await;
-            let queue = state
-                .kit
-                .require::<crate::registry::PipelineQueueModule>()
-                .expect("PipelineQueueModule not registered");
-            let response_channel = state
-                .kit
-                .require::<crate::registry::ResponseChannelModule>()
-                .expect("ResponseChannelModule not registered");
-            let service = state
-                .kit
-                .require::<crate::registry::EmbeddingModule>()
-                .expect("EmbeddingModule not registered");
-
-            let consumer = tokio::spawn(async move {
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-                loop {
-                    if let Some(req) = queue.dequeue().await {
-                        let request_id = req.request_id.clone();
-                        let service_guard = service.read().await;
-                        let result = service_guard
-                            .process_text(
-                                req.request.into_embed().expect("expected embed request"),
-                                None,
-                            )
-                            .await;
-                        drop(service_guard);
-                        response_channel
-                            .complete(request_id, result.map(ServiceResponse::Embed))
-                            .await;
-                        return;
-                    }
-                    if tokio::time::Instant::now() >= deadline {
-                        return;
-                    }
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
-            });
+            let consumer = spawn_embed_consumer(&state);
 
             let req = EmbedRequest {
                 text: format!("test dim {}", dim),
@@ -1126,48 +1056,14 @@ mod tests {
     /// 验证 handle_pipeline_request 空文本返回 ValidationError。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_empty_text() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(100, engine).await;
-        let queue = state
-            .kit
-            .require::<crate::registry::PipelineQueueModule>()
-            .expect("PipelineQueueModule not registered");
-        let response_channel = state
-            .kit
-            .require::<crate::registry::ResponseChannelModule>()
-            .expect("ResponseChannelModule not registered");
-        let service = state
-            .kit
-            .require::<crate::registry::EmbeddingModule>()
-            .expect("EmbeddingModule not registered");
-
-        let consumer = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                if let Some(req) = queue.dequeue().await {
-                    let request_id = req.request_id.clone();
-                    let service_guard = service.read().await;
-                    let result = service_guard
-                        .process_text(
-                            req.request.into_embed().expect("expected embed request"),
-                            None,
-                        )
-                        .await;
-                    drop(service_guard);
-                    response_channel
-                        .complete(request_id, result.map(ServiceResponse::Embed))
-                        .await;
-                    return;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        });
+        // 非法文本在入队前即被拒，队列里不会有请求——不起消费者协程，
+        // 否则只能靠 10s 死线收场（两个用例白等 20s）。
 
         let req = EmbedRequest {
             text: "".to_string(),
@@ -1179,55 +1075,19 @@ mod tests {
             VecboostError::InvalidInput(_) => {}
             other => panic!("expected InvalidInput for empty text, got {:?}", other),
         }
-
-        consumer.await.unwrap();
     }
 
     /// 验证 handle_pipeline_request 空白文本返回 ValidationError。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_whitespace_text() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(100, engine).await;
-        let queue = state
-            .kit
-            .require::<crate::registry::PipelineQueueModule>()
-            .expect("PipelineQueueModule not registered");
-        let response_channel = state
-            .kit
-            .require::<crate::registry::ResponseChannelModule>()
-            .expect("ResponseChannelModule not registered");
-        let service = state
-            .kit
-            .require::<crate::registry::EmbeddingModule>()
-            .expect("EmbeddingModule not registered");
-
-        let consumer = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                if let Some(req) = queue.dequeue().await {
-                    let request_id = req.request_id.clone();
-                    let service_guard = service.read().await;
-                    let result = service_guard
-                        .process_text(
-                            req.request.into_embed().expect("expected embed request"),
-                            None,
-                        )
-                        .await;
-                    drop(service_guard);
-                    response_channel
-                        .complete(request_id, result.map(ServiceResponse::Embed))
-                        .await;
-                    return;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        });
+        // 非法文本在入队前即被拒，队列里不会有请求——不起消费者协程，
+        // 否则只能靠 10s 死线收场（两个用例白等 20s）。
 
         let req = EmbedRequest {
             text: "   ".to_string(),
@@ -1239,8 +1099,6 @@ mod tests {
             VecboostError::InvalidInput(_) => {}
             other => panic!("expected InvalidInput for whitespace text, got {:?}", other),
         }
-
-        consumer.await.unwrap();
     }
 
     /// Verify TestEngine::embed returns the expected dimension.
@@ -1353,48 +1211,13 @@ mod tests {
     /// Verify handle_pipeline_request with a longer text succeeds.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_long_text() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(100, engine).await;
-        let queue = state
-            .kit
-            .require::<crate::registry::PipelineQueueModule>()
-            .expect("PipelineQueueModule not registered");
-        let response_channel = state
-            .kit
-            .require::<crate::registry::ResponseChannelModule>()
-            .expect("ResponseChannelModule not registered");
-        let service = state
-            .kit
-            .require::<crate::registry::EmbeddingModule>()
-            .expect("EmbeddingModule not registered");
-
-        let consumer = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                if let Some(req) = queue.dequeue().await {
-                    let request_id = req.request_id.clone();
-                    let service_guard = service.read().await;
-                    let result = service_guard
-                        .process_text(
-                            req.request.into_embed().expect("expected embed request"),
-                            None,
-                        )
-                        .await;
-                    drop(service_guard);
-                    response_channel
-                        .complete(request_id, result.map(ServiceResponse::Embed))
-                        .await;
-                    return;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        });
+        let consumer = spawn_embed_consumer(&state);
 
         let req = EmbedRequest {
             text: "a".repeat(1000),
@@ -1408,51 +1231,19 @@ mod tests {
         consumer.await.unwrap();
     }
 
-    /// Verify handle_pipeline_request with normalize=None uses default (true).
+    /// Same contract as the `normalize=false` case: the flag has no effect on
+    /// this path — `EmbeddingService::process_text` always applies L2
+    /// normalization, so the returned embedding is a unit vector either way.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_normalize_none() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
+        // 维度取 8：原始范数 √2 与归一后 1.0 可区分（见 normalize_false 用例）。
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
-            Arc::new(RwLock::new(TestEngine::new(4)));
+            Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(100, engine).await;
-        let queue = state
-            .kit
-            .require::<crate::registry::PipelineQueueModule>()
-            .expect("PipelineQueueModule not registered");
-        let response_channel = state
-            .kit
-            .require::<crate::registry::ResponseChannelModule>()
-            .expect("ResponseChannelModule not registered");
-        let service = state
-            .kit
-            .require::<crate::registry::EmbeddingModule>()
-            .expect("EmbeddingModule not registered");
-
-        let consumer = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                if let Some(req) = queue.dequeue().await {
-                    let request_id = req.request_id.clone();
-                    let service_guard = service.read().await;
-                    let result = service_guard
-                        .process_text(
-                            req.request.into_embed().expect("expected embed request"),
-                            None,
-                        )
-                        .await;
-                    drop(service_guard);
-                    response_channel
-                        .complete(request_id, result.map(ServiceResponse::Embed))
-                        .await;
-                    return;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        });
+        let consumer = spawn_embed_consumer(&state);
 
         let req = EmbedRequest {
             text: "hello".to_string(),
@@ -1461,7 +1252,18 @@ mod tests {
         let result = handle_pipeline_request(state, req, "10.0.0.1".to_string()).await;
         assert!(result.is_ok());
         let response = result.unwrap();
-        assert_eq!(response.0.dimension, 4);
+        assert_eq!(response.0.dimension, 8);
+        let norm = response
+            .0
+            .embedding
+            .iter()
+            .map(|v| v * v)
+            .sum::<f32>()
+            .sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "响应向量必须是单位向量（与 normalize 取值无关），got norm {norm}"
+        );
 
         consumer.await.unwrap();
     }
@@ -1469,49 +1271,14 @@ mod tests {
     /// Verify handle_pipeline_request with different IP addresses works.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_different_ips() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         for ip in &["127.0.0.1", "192.168.0.1", "10.0.0.1", "172.16.0.1"] {
             let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
                 Arc::new(RwLock::new(TestEngine::new(4)));
             let state = create_test_state(100, engine).await;
-            let queue = state
-                .kit
-                .require::<crate::registry::PipelineQueueModule>()
-                .expect("PipelineQueueModule not registered");
-            let response_channel = state
-                .kit
-                .require::<crate::registry::ResponseChannelModule>()
-                .expect("ResponseChannelModule not registered");
-            let service = state
-                .kit
-                .require::<crate::registry::EmbeddingModule>()
-                .expect("EmbeddingModule not registered");
-
-            let consumer = tokio::spawn(async move {
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-                loop {
-                    if let Some(req) = queue.dequeue().await {
-                        let request_id = req.request_id.clone();
-                        let service_guard = service.read().await;
-                        let result = service_guard
-                            .process_text(
-                                req.request.into_embed().expect("expected embed request"),
-                                None,
-                            )
-                            .await;
-                        drop(service_guard);
-                        response_channel
-                            .complete(request_id, result.map(ServiceResponse::Embed))
-                            .await;
-                        return;
-                    }
-                    if tokio::time::Instant::now() >= deadline {
-                        return;
-                    }
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
-            });
+            let consumer = spawn_embed_consumer(&state);
 
             let req = EmbedRequest {
                 text: format!("test from {}", ip),
@@ -1527,7 +1294,8 @@ mod tests {
     /// Verify handle_pipeline_request generates unique request IDs.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_unique_request_ids() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(4)));
@@ -1603,48 +1371,13 @@ mod tests {
     /// Verify handle_pipeline_request with unicode text succeeds.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_unicode_text() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));
         let state = create_test_state(100, engine).await;
-        let queue = state
-            .kit
-            .require::<crate::registry::PipelineQueueModule>()
-            .expect("PipelineQueueModule not registered");
-        let response_channel = state
-            .kit
-            .require::<crate::registry::ResponseChannelModule>()
-            .expect("ResponseChannelModule not registered");
-        let service = state
-            .kit
-            .require::<crate::registry::EmbeddingModule>()
-            .expect("EmbeddingModule not registered");
-
-        let consumer = tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                if let Some(req) = queue.dequeue().await {
-                    let request_id = req.request_id.clone();
-                    let service_guard = service.read().await;
-                    let result = service_guard
-                        .process_text(
-                            req.request.into_embed().expect("expected embed request"),
-                            None,
-                        )
-                        .await;
-                    drop(service_guard);
-                    response_channel
-                        .complete(request_id, result.map(ServiceResponse::Embed))
-                        .await;
-                    return;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        });
+        let consumer = spawn_embed_consumer(&state);
 
         let req = EmbedRequest {
             text: "你好世界 🌍 Привет мир".to_string(),
@@ -1664,7 +1397,8 @@ mod tests {
     /// InternalError 显性报错，不得误投递。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_response_type_mismatch() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1709,7 +1443,7 @@ mod tests {
         match result {
             Err(VecboostError::InternalError(msg)) => {
                 assert!(
-                    msg.contains("response type") || !msg.is_empty(),
+                    msg.contains(&i18n::tr("pipeline-response-type-mismatch")),
                     "类型不匹配必须 InternalError，got: {msg}"
                 );
             }
@@ -1723,7 +1457,8 @@ mod tests {
     /// InternalError 显性报错。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_decision_pipeline_request_response_type_mismatch() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
         ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -1777,10 +1512,10 @@ mod tests {
     /// 注：IN_FLIGHT_REQUESTS 为进程级计数，并行测试共享，不作精确断言。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_abort_sets_cancel_flag() {
-        // registry 为进程级共享：串行化，避免并发用例互相覆盖队列容量。
+        // 进程级 in-flight 去重表（embed_in_flight_map）共享：同文同 normalize 的
+        // 并发用例会互相串扰，须串行化。
         let _registry_guard = REGISTRY_LOCK.lock().await;
-        // 本测试按名排序先于 queue_full 等断言 i18n 文案的既有测试执行，
-        // 首语句初始化 i18n，消除 tr 未初始化回退裸键名的排序竞争
+        // 断言 i18n 文案的用例各自首句初始化 i18n，消除 tr 未初始化回退裸键名
         ensure_i18n_init();
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
             Arc::new(RwLock::new(TestEngine::new(8)));

@@ -2029,7 +2029,26 @@ mod tests {
         dir.to_path_buf()
     }
 
+    /// 进程级环境变量串行锁（仅测试侧）。
+    ///
+    /// 为何需要：`prefer_int8_translate()` 在 load 路径上读 `TRANSLATION_PREFER_INT8`
+    /// 来决定候选模型顺序，而 int8 质量门用例在 set/remove 窗口内还要跑真实翻译（秒级），
+    /// 同时 `load_rejects_*` 一组用例断言的正是 load 失败的错误消息。并行跑全量 lib 测试时
+    /// 二者会交叉（实测：2305 用例并行下 `load_rejects_missing_or_invalid_bundle_config`
+    /// 稳定拿到 generation_config/eos 锚点分支的另一条错误而失败；串行或只跑本模块 56 个用例则通过）。
+    /// 因此：任何改写该旋钮的用例、以及依赖 load 错误消息的用例，都必须持本锁。
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 取 env 串行锁；中毒也继续用（上一个持锁用例 panic 不应连锁堵死其余用例）。
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn load_err(config: &ModelConfig) -> VecboostError {
+        // 持锁跨过整个 load：保证候选顺序的判定窗口内无人改环境旋钮。
+        let _env = env_guard();
         match OnnxTranslationEngine::load(config) {
             Ok(_) => panic!("期望加载期 fail-fast，却成功返回"),
             Err(e) => e,
@@ -2071,7 +2090,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bundle = fake_bundle(dir.path());
         let err = load_err(&translate_config(bundle));
-        assert!(!err.error_detail().is_empty(), "缺 tokenizer 必须报错");
+        assert!(
+            err.error_detail().contains("Tokenizer not found"),
+            "缺 tokenizer 必须报错并指名 Tokenizer not found，got: {}",
+            err.error_detail()
+        );
 
         // tokenizer.json 非法 JSON
         let dir2 = tempfile::tempdir().unwrap();
@@ -2079,7 +2102,8 @@ mod tests {
         std::fs::write(dir2.path().join("tokenizer.json"), b"{not json").unwrap();
         let err2 = load_err(&translate_config(bundle2));
         assert!(
-            err2.error_detail().contains("not valid JSON"),
+            err2.error_detail().contains("tokenizer")
+                && err2.error_detail().contains("not valid JSON"),
             "err={}",
             err2.error_detail()
         );
@@ -2087,25 +2111,41 @@ mod tests {
 
     #[test]
     fn load_rejects_missing_or_invalid_bundle_config() {
-        // 合法 tokenizer，但 bundle 无 config.json
+        // 合法 tokenizer，但 bundle 无 config.json。
+        // generation_config.json 必须一并给出 eos 锚点：加载顺序是
+        // generation_config → config.json，缺了锚点会在 eos 检查处先失败，
+        // 根本走不到 config.json 读取——那条路径就测不到它声称的东西。
         let dir = tempfile::tempdir().unwrap();
         let bundle = fake_bundle(dir.path());
         std::fs::write(dir.path().join("tokenizer.json"), MINIMAL_TOKENIZER).unwrap();
+        std::fs::write(
+            dir.path().join("generation_config.json"),
+            br#"{"decoder_start_token_id": 0, "eos_token_id": 1}"#,
+        )
+        .unwrap();
         let err = load_err(&translate_config(bundle));
         let detail = err.error_detail();
         assert!(
-            detail.contains("config") || detail.contains("tokenizer"),
-            "无 config.json 应启动期拒绝: {detail}"
+            detail.contains("bundle config"),
+            "无 config.json 应启动期拒绝并指名 bundle config，got: {detail}"
         );
 
         // config.json 非法 JSON
         let dir2 = tempfile::tempdir().unwrap();
         let bundle2 = fake_bundle(dir2.path());
         std::fs::write(dir2.path().join("tokenizer.json"), MINIMAL_TOKENIZER).unwrap();
+        std::fs::write(
+            dir2.path().join("generation_config.json"),
+            br#"{"decoder_start_token_id": 0, "eos_token_id": 1}"#,
+        )
+        .unwrap();
         std::fs::write(dir2.path().join("config.json"), b"{also not json").unwrap();
         let err2 = load_err(&translate_config(bundle2));
         let detail2 = err2.error_detail();
-        assert!(!detail2.is_empty(), "非法 config.json 必须启动期拒绝");
+        assert!(
+            detail2.contains("bundle config") && detail2.contains("not valid JSON"),
+            "非法 config.json 必须启动期拒绝并指名 bundle config + not valid JSON，got: {detail2}"
+        );
     }
 
     // ── tokenizer shim：null normalizer 移除（真 bundle 在位时） ────────
@@ -3139,6 +3179,10 @@ mod tests {
         ];
         for text in cases {
             let fp32 = translate_once(&dir, text, "en", "zh").expect("ORT dylib 就绪");
+            // 持锁覆盖 set → load → remove 全窗口：load 路径会读该旋钮定候选顺序，
+            // 不持锁时同批并行的 `load_rejects_*`（断言 load 错误消息）会拿到 int8 分支的
+            // 另一条错误，参见 `ENV_LOCK` 注释里的实测复现。
+            let _env = env_guard();
             // SAFETY: pair 加载期读一次旋钮；本测试为进程内单点 set/remove
             // （既有 ORT_DYLIB_PATH 同款先例）。int8 引擎加载后立即恢复默认
             unsafe {

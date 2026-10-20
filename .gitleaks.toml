@@ -1,26 +1,25 @@
-# gitleaks configuration
-# See https://github.com/gitleaks/gitleaks#configuration
-
 title = "VecBoost gitleaks config"
 
-# Exclude documentation and build artifacts from scanning.
-# docs/ contains example JWT tokens and API keys in code snippets.
-# target/ contains compiled binaries that may trigger false positives.
-[allowlist]
-description = "Exclude docs and build artifacts"
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exclude docs and build artifacts from scanning."
 paths = [
-    '''docs\/''',
-    '''target\/''',
-    '''security-results\/''',
-    '''specmark\/''',
-    '''\.corrupted_backup\/''',
+    '''docs/''',
+    '''target/''',
+    '''security-results/''',
+    '''specmark/''',
+    '''\.corrupted_backup/''',
 ]
 
-# Exclude test-only secret patterns (test_ prefix keys, placeholder values).
-[[allowlist.rules]]
-description = "Test secrets with test_ prefix"
-regex = '''test_?(?:secret|key|token|password|api_key)'''
+[[allowlists]]
+# 匹配对象是密钥「取值」而非键名（gitleaks 8.30 的 allowlist regexTarget 默认为空时如此）
+description = "Test secret values carrying a test_ prefix"
+regexes = ['''test[-_]?(?:jwt[-_]?)?(?:secret|key|token|password|api_key)''']
 
-[[allowlist.rules]]
+[[allowlists]]
 description = "Placeholder JWT tokens in documentation and tests"
-regex = '''eyJ(?:0eXAiOiJIUzI1NiJ9|hbGciOiJIUzI1NiJ9)'''
+condition = "and"
+regexes = ['''eyJ(?:0eXAiOiJIUzI1NiJ9|hbGciOiJIUzI1NiJ9)''']
+paths = ['''(^|/)docs/''', '''(^|/)tests/''', '''(^|/)examples/''', '''(^|/)src/security/''']

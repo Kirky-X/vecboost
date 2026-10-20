@@ -9,6 +9,9 @@
 use crate::error::VecboostError;
 use dbnexus::{DbConfig, DbPool as NexusDbPool, Session};
 
+mod pool_bounds;
+pub use pool_bounds::apply_pool_bounds;
+
 /// VecBoost 数据库连接池 wrapper
 ///
 /// 包装 `dbnexus::DbPool`,提供与 VecBoost 错误类型集成的接口。
@@ -28,10 +31,11 @@ impl DbPool {
     ///
     /// 如果连接失败,返回 `VecboostError::InternalError`
     pub async fn new(url: &str) -> Result<Self, VecboostError> {
-        let pool = NexusDbPool::new(url)
-            .await
-            .map_err(|e| VecboostError::InternalError(format!("Failed to create db pool: {e}")))?;
-        Ok(Self { inner: pool })
+        Self::with_config(DbConfig {
+            url: url.to_string(),
+            ..Default::default()
+        })
+        .await
     }
 
     /// 使用 `DbConfig` 创建连接池（支持 retry policy、pool-health-check 等高级配置）
@@ -43,7 +47,10 @@ impl DbPool {
     /// # Errors
     ///
     /// 如果连接失败,返回 `VecboostError::InternalError`
-    pub async fn with_config(config: DbConfig) -> Result<Self, VecboostError> {
+    pub async fn with_config(mut config: DbConfig) -> Result<Self, VecboostError> {
+        // 唯一的连接池构造收口点：库 API 与二进制启动路径都经此施加池边界
+        // （内存 SQLite 单连接、上下限合法区间）。
+        apply_pool_bounds(&mut config);
         let pool = NexusDbPool::with_config(config)
             .await
             .map_err(|e| VecboostError::InternalError(format!("Failed to create db pool: {e}")))?;
@@ -319,9 +326,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_pool_clone_shares_connections() {
-        // 本测试验证 clone 后连接共享,需要 ≥2 连接(与建表类测试的单连接要求相反)
+        // 本测试验证 clone 后连接共享,需要 ≥2 连接(与建表类测试的单连接要求相反)。
+        // 用临时文件库而非 sqlite::memory:——内存库的每条连接是彼此独立的库,
+        // 两条连接根本不在同一个库上;且内存库按 pool_bounds 规则强制单连接。
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("clone_share.db");
         let pool = DbPool::with_config(DbConfig {
-            url: "sqlite::memory:".to_string(),
+            url: format!("sqlite:{}?mode=rwc", path.display()),
             pool_config: dbnexus::PoolConfig {
                 max_connections: 2,
                 min_connections: 2,
@@ -343,5 +354,12 @@ mod tests {
             .await
             .expect("Failed to get session from clone");
         assert_eq!(session1.role(), session2.role());
+        // 共享同一底层池的判据：两条会话都记在同一个池的活跃连接里。
+        // 若 clone 另建池，原池只会看到自己那条（active == 1）。
+        assert!(
+            pool.inner().status().active >= 2,
+            "clone 必须共享同一连接池，原池活跃连接数 {} < 2",
+            pool.inner().status().active
+        );
     }
 }

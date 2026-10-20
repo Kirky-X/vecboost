@@ -846,13 +846,22 @@ mod tests {
     fn real_bundle_engine() -> Option<(OnnxEngine, ModelConfig)> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let model = root.join("models/Xenova-bge-small-en-v1.5");
-        let dylib = root.join("3rdparty/onnxruntime/libonnxruntime.so");
-        if !model.join("model.onnx").is_file() || !dylib.is_file() {
+        // 与 decision.rs / onnx_translate.rs 同口径：环境变量优先，仓库默认落位兜底。
+        let dylib = std::env::var("ORT_DYLIB_PATH")
+            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+        if !model.join("model.onnx").is_file() || !std::path::Path::new(&dylib).is_file() {
             eprintln!("SKIP: 本地 ONNX 模型或 ORT dylib 缺失");
             return None;
         }
-        // SAFETY: 单测进程内设置 ORT dylib 路径，无并发写。
-        unsafe { std::env::set_var("ORT_DYLIB_PATH", &dylib) };
+        // Once 包裹：两个 tokio::test 并行调用本函数，无锁的 set_var 是并发写。
+        static ORT_ENV: std::sync::Once = std::sync::Once::new();
+        ORT_ENV.call_once(|| {
+            if std::env::var_os("ORT_DYLIB_PATH").is_none() {
+                // SAFETY: Once 保证本模块内只写一次；本进程其它模块的
+                // set_var 调用不受此保护（Rust 2024 的 unsafe 正因并发读写）。
+                unsafe { std::env::set_var("ORT_DYLIB_PATH", &dylib) };
+            }
+        });
         let mut config = test_config();
         config.model_path = model;
         config.expected_dimension = Some(384);

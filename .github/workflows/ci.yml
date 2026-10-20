@@ -224,14 +224,22 @@ jobs:
       - name: Generate coverage
         env:
           VECBOOST_TEST_REDIS_URL: redis://127.0.0.1:6379
-        # 多腿合并：共享状态腿 + 默认构建。禁止 --lib 窄口径：
+        # 多腿合并：共享状态腿 + db/sqlite 腿。禁止 --lib 窄口径：
         # 集成测试与引擎 E2E 的错误分支同样计入分母。
-        # --test-threads=1：插桩会放大时序问题（实测：pipeline registry 共享用例
-        # 在全量并行下会因队列容量串扰而 Overloaded），覆盖率作业必须串行。
+        # 共享 pipeline registry 的用例由 src/pipeline/handler.rs 内的
+        # REGISTRY_LOCK 在模块级串行化——那 21 个触碰 registry/队列的用例全部持锁，
+        # 其余 13 个只测 mock 引擎、不涉共享状态。新增触碰该 registry 的用例必须
+        # 持同一把锁，否则并行下会间歇失败。
+        # 不在此加 --test-threads=1：当前树实测并行 58.45s vs 串行 211.57s（3.62 倍）。
+        # 两个被引的历史 run 不构成受控 A/B——它们的 coverage 作业都在到达覆盖率
+        # 门禁前就红了（同一条 auth_session_backend_database_login_and_revoke
+        # 401/200），且用例体一为回填前、一为回填后；作业级墙钟比值仅 1.12 倍
+        # （14m45s vs 16m29s，其中 13 分钟是编译）。共享的 embed_in_flight_map 由
+        # REGISTRY_LOCK 串行化，串行 flag 换不到额外保证。
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" --tests -- --test-threads=1
-          cargo llvm-cov --no-report --features "http,auth,db,sqlite" --tests -- --test-threads=1
+          cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" --tests
+          cargo llvm-cov --no-report --features "http,auth,db,sqlite" --tests
           cargo llvm-cov report --lcov --output-path coverage/lcov.info
       - name: Enforce line coverage
         # llvm-cov 0.9.1 的 --fail-under-lines 可用，但仍保留显式 lcov 判定以便审计数值。

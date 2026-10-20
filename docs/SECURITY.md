@@ -44,6 +44,9 @@ cargo deny check
 
 - `cargo audit`：RustSec 安全公告扫描，豁免配置在 `.cargo/audit.toml`（须附理由，与 `deny.toml` 处置策略一致）。
 - `cargo deny check`：漏洞必须修复；unmaintained/yanked/unsound 为信息性警告，不阻断 CI，发布前人工复核并记录处置结论。
+- `gitleaks` 规则集：`.gitleaks.toml` 以 `[extend] useDefault = true` 加载 gitleaks 默认检测规则——**不写这一行则规则集为空、扫描静默空转**（`[[allowlist.rules]]` 单数写法在 8.19 后已废弃，现行为 `[[allowlists]]` + `regexes` + `condition`）。
+- `gitleaks` 豁免范围：占位 JWT 形态的豁免按路径收窄到 `docs/` / `tests/` / `examples/` / `src/security/`，`src/` 内的真实签名令牌不再被全局豁免吞掉；`test_` 前缀的测试值豁免保持全局（取值自述即测试值）。
+- `gitleaks` 历史基线：`.gitleaks-baseline.json` 记录 1 条已定位的历史测试凭证（`src/module_registry/tests.rs`，该文件已从仓库删除，仅存于历史提交），使每周全量扫描不被它阻断；新增泄漏仍会失败。
 - 新增依赖须经审批：优先活跃维护、特性门控按需启用（Cargo.toml 中各依赖均 `default-features = false` 并显式列出 feature）。
 
 ---
@@ -127,8 +130,12 @@ cargo deny check
 | 静态安全分析 | CodeQL（Rust，push/PR/每周） | `.github/workflows/codeql.yml` |
 | 镜像漏洞扫描 | Trivy（CRITICAL 即失败） | `.github/workflows/docker.yml` |
 | Dockerfile 扫描 | Checkov | `.github/workflows/health-check.yml` |
-| 私密信息扫描 | gitleaks | `.gitleaks.toml`（docs/target 等排除项） |
-| 提交前检查 | pre-commit（fmt/clippy/check/build + Apache-2.0 版权头） | `.pre-commit-config.yaml` → `scripts/pre-commit.sh` |
+| 私密信息扫描 | gitleaks（增量：本次推送/PR 提交区间） | `.github/workflows/security.yml` → `gitleaks/gitleaks-action`；版本经 `GITLEAKS_VERSION` 与 pre-commit 钩子对齐。该步骤只在 push/PR 上跑（schedule/workflow_dispatch 由全量扫描作业承担） |
+| 私密信息扫描（历史） | gitleaks（每周全量 `--log-opts=--all`） | `.github/workflows/security.yml` → `gitleaks-history` job（每周一 03:17 + 手动） |
+| Actions 静态审计 | zizmor（首轮非阻断基线，backlog 清零后转阻断） | `.github/workflows/security.yml` → `zizmor-action`（注解模式） |
+| Workflow 语法门禁 | actionlint（shellcheck 降到 error 级） | `.github/workflows/security.yml` → `rhysd/actionlint`（镜像钉 digest） |
+| 提交前检查 | pre-commit（fmt/clippy/check/build + Apache-2.0 版权头 + gitleaks 密钥拦截） | `.pre-commit-config.yaml` → `scripts/pre-commit.sh` |
+| 提交前密钥全量扫描 | gitleaks（全历史 + 基线，仓库本地钩子） | `.pre-commit-config.yaml` → `gitleaks-full-history`；上游钩子只扫暂存区（`--staged`），手动跑 `--all-files` 实为空过，本地钩子补上全量 |
 | panic 面门禁 | `clippy::unwrap_used` + `RUSTFLAGS="-D warnings"` | CI env；测试经 `clippy.toml` 豁免 |
 | Python 脚本扫描 | bandit（生产代码 src/、scripts/ 全量；tests/ 惯用 assert 误报排除） | `pyproject.toml` |
 

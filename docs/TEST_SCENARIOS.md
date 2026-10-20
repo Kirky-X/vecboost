@@ -151,10 +151,12 @@ CI 工作流与测试的对应关系：
 
 | 工作流 | 触发 | 测试内容 |
 |--------|------|----------|
-| `health-check.yml`（Health Check） | push/PR（main） | fmt、clippy（含 unwrap_used 门禁）、构建矩阵（default/onnx/grpc）、`--lib` + `--tests`、llvm-cov 覆盖率 ≥80% 硬门禁（2026-10-15 起，替代表现已与新 stable 工具链不兼容的 tarpaulin）、Windows 测试（continue-on-error）、`cargo doc` 死链、`cargo audit`、main 分支 push 跑 benchmark |
+| `ci.yml`（CI） | push/PR（main） | fmt、clippy（含 unwrap_used 门禁）、check 四档（空/grpc/auth,db,sqlite,onnx/postgres）、test 四档（default/grpc/ecosystem/shared-state）、llvm-cov 覆盖率 ≥95% 硬门禁（lib + 集成测试同口径分母，禁止 `--lib` 窄口径）、`cargo deny` 依赖审计 |
+| `health-check.yml`（Health Check） | push/PR（main） | 构建矩阵（default/onnx/grpc）、`--lib` + `--tests`、llvm-cov 覆盖率 ≥95% 硬门禁（2026-10-15 起，替代表现已与新 stable 工具链不兼容的 tarpaulin）、Windows 测试（continue-on-error）、`cargo doc` 死链、`cargo audit`、main 分支 push 跑 benchmark、依赖更新检查 |
 | `feature-matrix.yml` | push/PR | default/grpc/ecosystem（auth,db,sqlite,onnx）/postgres-driver 四档 fmt + check + clippy + build + `--lib` 测试（postgres-driver 腿免跑 `--lib`） |
 | `scenario-tests.yml` | 每夜 UTC 03:00 + 手动 | 构建 http 二进制后 `pytest tests/scenario`（无模型环境自动 SKIP 推理类用例） |
 | `codeql.yml` / `docker.yml` | push/PR/每周 | CodeQL 静态分析；Docker 构建 + Trivy 扫描（CRITICAL 即失败） |
+| `security.yml`（Security） | push/PR（main）+ 每周一 03:17 + 手动 | actionlint（YAML 语法/表达式硬门禁）、zizmor（GitHub Actions 安全审计，首轮非阻断基线）、gitleaks 增量扫描（本次推送/PR 提交区间）+ 每周全量历史扫描（`--log-opts=--all`） |
 
 ---
 

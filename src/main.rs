@@ -248,6 +248,15 @@ async fn init_db_pool(
         )
     );
     db_config.pool_config.min_connections = DB_MIN_CONNECTIONS;
+    // 此前这两个配置项被解析却从未下传连接池，池大小一直是 dbnexus 的默认值 20、
+    // 取连接超时也一直是 5000ms。内存 SQLite 强制单连接的规则由 vecboost::db
+    // 统一施加（见 db::pool_bounds），二进制与库路径共用同一份判定。
+    db_config.pool_config.max_connections = config.database.max_connections;
+    // connect_timeout_secs 单位为秒，dbnexus 的 acquire_timeout 单位为毫秒。
+    db_config.pool_config.acquire_timeout = config.database.connect_timeout_secs * 1000;
+    // 先夹紧再记日志：让运维看到的是生效值而非配置值（内存 SQLite 的下限
+    // 实际是 1 而非 5）。with_config 会再夹一次，幂等。
+    vecboost::db::apply_pool_bounds(&mut db_config);
     db_config.warmup_timeout = DB_WARMUP_TIMEOUT_SECS;
     db_config.warmup_retries = DB_WARMUP_RETRIES;
     log::info!(

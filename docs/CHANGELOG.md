@@ -26,7 +26,21 @@
 - **多副本共享语义缓存与封禁清单（二期）**：`[semantic_cache] backend = "redis"`（需 `distributed-redis`）把 trigram Jaccard 模糊索引写入 Redis Hash + LRU ZSET，跨副本命中后回填本地热缓存；`limiteron/ban-sync` + `CacheBanStorage` 使封禁清单跨副本共享；启动期 fail-closed 校验 feature/URL，新增 `startup-semantic-redis-*` 文案。索引按模型清理（`SemanticCache::clear_model`）。
 
 ### 变更
+- **`[database] max_connections` 真正生效 + 内存 SQLite 强制单连接**：此前该配置项被解析却从未传给连接池，池大小一直是 dbnexus 的默认值 20，仓库自带的 `config/config.toml`（10）、`config_full.toml`（20）、`config_minimal.toml`（5）写的值全部无效；现按配置取用（缺省 10）。`sqlite::memory:` 例外——SQLite 内存库每个连接是彼此独立的库，连接池把「登录写会话」与「鉴权读会话」分派到不同连接时读侧看不到刚写入的会话行，表现为合法 token 被 401 拒绝（`tests/http_auth_surface.rs` 认证面用例偶发失败，本地复现约 1/8），内存库因此强制单连接。文件库与 Postgres 不受此约束。生效后的有效并发上限取配置值（缺省 10，仓库自带
+配置分别为 10 / 20 / 5）。同结构的 `[database] connect_timeout_secs` 此前同样
+是死旋钮（解析后从未下传），现映射到 dbnexus 的 `pool_config.acquire_timeout`
+（单位由秒转毫秒）：取连接许可的等待上限从固定的 5000ms 变为可配（仓库自带配置
+5s / 5s / 10s）。该上限直接决定拿不到连接许可时是排队还是直接 500，配置值不宜
+低于实际 DB 并发。
 - **构建配置迁移 `.cargo/config` → `.cargo/config.toml`**：旧名使 cargo 1.97 每次调用都打 `deprecated in favor of config.toml` 警告；全仓（CI / Dockerfile / scripts）无任何引用旧名之处，本地覆盖亦走 `~/.cargo/config.toml` 用户级配置，故 `.gitignore` 中「忽略 config.toml、以旧名入库」的留白规则作废，改为反向忽略旧名防止回归。`[env] JEMALLOC_SYS_WITH_MALLOC_CONF` 语义不变——已用 build.rs 临时探针实测迁移后仍注入构建环境（`Ok("dirty_decay_ms:1000,muzzy_decay_ms:1000")`），jemalloc decay 防线无回退
+
+- **`utoipa` 5.5 → 6.0 大版本跃迁**：`Cargo.toml` 的版本约束由 `5.5` 改为 `6.0`，特性集（`macros` / `axum_extras` / `chrono` / `uuid`）与 `default-features = false` 均不变。升版前锁文件同时存在 utoipa 5.5.0（直接依赖）与 6.0.0（经 sdforge 传递），升版后收敛为单一 6.0.0。`ToSchema` 派生与 `openapi!` 宏的用法在本仓无源码改动，check/clippy/test 三档门禁均通过。
+
+- **修掉两个 workflow 抢同一 concurrency 组、互相取消的缺陷**：`ci.yml` 与 `health-check.yml` 的 workflow 名都叫 `CI`，concurrency 组分别展开为 `CI-<ref>` 与 `ci-<ref>`——GitHub 的组名大小写不敏感，两者落进同一组，配合 `cancel-in-progress: true` 导致每次 push 两份 workflow 互相取消，必有一份从未跑完：Windows 测试、覆盖率、`cargo doc` 死链、`cargo audit`、benchmark 长期处于「被取消」而非「通过」状态。`health-check.yml` 改名 `Health Check`、组名改为 `health-check-<ref>`，两份门禁各自跑完。
+
+- **新增安全检查 workflow 与提交前密钥扫描**：新增 `.github/workflows/security.yml`——actionlint（YAML 语法/表达式硬门禁）、zizmor（GitHub Actions 安全审计，首轮非阻断基线）、gitleaks 增量扫描（本次推送/PR 的提交区间）＋每周一次全量历史扫描（`--log-opts=--all`）；`.pre-commit-config.yaml` 接入 gitleaks 提交前拦截。action 按仓库惯例钉到 commit SHA，容器镜像钉到 digest。仓库自带的 `.gitleaks.toml` 的两条正则豁免同时收窄到 `docs/` / `tests/` / `examples/`（JWT 规则另含 `src/security/`），避免真实凭证在 `src/` 内被全局豁免吞掉。
+
+- **分支收敛为单条 `main`**：仓库只有 `main` 一个长期分支，五个 workflow 触发器里的 `develop` 从未在远端存在过，属死配置，已移除并同步 `docs/TEST_SCENARIOS.md` 的触发描述。
 
 
 - **认证会话支持外置（多副本）**：`[auth] session_backend = "memory" | "database"`（缺省 memory，行为不变）；`database` 经 garrison `DbnexusKvDao` 写入部署库 `garrison_kv` 表（`ensure_table` 幂等建表），需以 `db,sqlite|postgres` 构建并配置 `[database]`；`database` + `auth.enabled=false` 或未编译 `db` 时启动期显性拒绝。~~限流与语义缓存仍为进程内语义，锁定计数经 `incr` 读-改-写、多副本下为尽力而为~~（同发布内已被下方「多副本共享状态」「锁定计数原子化」条目收敛，保留删除线存档）。收敛补强：无 `auth` feature 构建下 `session_backend="database"` 亦启动期显性拒绝（`startup-auth-session-backend-auth-feature-missing`，对齐 `engine_type="candle"` 无 candle 即拒的纪律）；会话后端校验提前到数据库池初始化之前（矛盾配置不再对部署库产生连接/DDL 副作用）；`set_if_absent` 过期键清理路径两步非原子与部署库备份等同会话凭据库等边界写入 `docs/SECURITY.md`

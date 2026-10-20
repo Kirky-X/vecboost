@@ -220,11 +220,11 @@ fn metrics_endpoint_is_rate_limited_while_health_stays_public() {
 
     let mut seen_429 = false;
     for _ in 0..12 {
-        if let Ok((status, _)) = get(port, "/metrics") {
-            if status == 429 {
-                seen_429 = true;
-                break;
-            }
+        if let Ok((status, _)) = get(port, "/metrics")
+            && status == 429
+        {
+            seen_429 = true;
+            break;
         }
     }
     assert!(

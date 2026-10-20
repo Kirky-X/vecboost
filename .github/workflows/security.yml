@@ -1,19 +1,29 @@
 # 安全检查补充 workflow
 # 只包含本仓现有 CI 尚未覆盖的检查，不改动既有 workflow，避免与已有 job 重复。
 # 依赖来源审计由 ci.yml 的 Deny 作业（cargo-deny + deny.toml）承担，
-# 故此处不引入 cargo-vet：cargo-vet 需要 supply-chain 配置，本仓未提供。
+# 故此处不引入 cargo-vet：cargo-vet 需要本仓未提供的 supply-chain 配置。
 name: Security
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # 每周一次全量历史扫描。gitleaks-action 只扫本次推送/PR 的提交区间，
+    # 历史上泄过的密钥（以及直接合入 main、不经 PR 的分支提交）只有全量
+    # 扫描能发现——实测一次全量扫描不到 1 秒，预算充裕。
+    - cron: "17 3 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   security:
+    name: security-scan
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -21,8 +31,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          # checkout 默认把 token 写进 .git/config，而后续步骤会把工作区
+          # （含 .git）挂进容器镜像——不给容器留凭证。
+          persist-credentials: false
       - name: actionlint
-        uses: docker://rhysd/actionlint:1.7.12
+        uses: docker://rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
         with:
           # shellcheck 子检查降到 error 级：YAML 语法/表达式错误仍阻断，
           # 风格级（SC2086/SC2034 等）不阻断，避免打断既有流水线。
@@ -31,9 +44,49 @@ jobs:
         # 首轮为非阻断基线：既有 workflow 存在一批 unpinned-uses / cache-poisoning /
         # template-injection 发现，阻断式会直接打断现有流水线。backlog 清零后
         # 把 continue-on-error 删掉即可转为阻断。
+        # advanced-security: false 走注解模式而非上传 SARIF：本 workflow 只有
+        # contents: read，SARIF 上传需要 security-events: write。注解模式下
+        # 发现才会让步骤失败，上面 continue-on-error 的基线语义才成立。
         continue-on-error: true
         uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        with:
+          advanced-security: false
+          annotations: true
       - name: gitleaks 密钥扫描
+        # 只在 push/PR 上跑：gitleaks-action 在 schedule/workflow_dispatch 事件下
+        # 不加 --log-opts，会扫全历史且不接基线（该 action 无此入参）——定时
+        # 与手动的全量扫描由 gitleaks-history 作业承担（接基线）。
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
+          # 扫描 PR 时 gitleaks-action 必须拿到 token，缺失会直接退出 1。
+          GITHUB_TOKEN: ${{ github.token }}
+          # 与 pre-commit 钩子对齐版本，避免两条扫描路径规则集不一致
+          # （action 内置默认是 8.24.3，pre-commit 钩子用 8.30.1）。
+          GITLEAKS_VERSION: "8.30.1"
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+          # 本 workflow 只有 contents: read，没有 pull-requests: write
+          GITLEAKS_ENABLE_COMMENTS: false
+
+  gitleaks-history:
+    name: gitleaks full history
+    # 全量历史扫描只在定时与手动触发时跑：增量扫描已覆盖 push/PR 的提交区间，
+    # 每次 push 再全量克隆 + 扫全历史纯属浪费（实测 648 提交 0.7s，但克隆是大头）。
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks 全量历史扫描
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/gitleaks.tgz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks git --config .gitleaks.toml \
+            --baseline-path .gitleaks-baseline.json \
+            --redact --log-opts=--all --exit-code 1 .

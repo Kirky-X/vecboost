@@ -138,8 +138,18 @@ async fn service_text_similarity_and_search_surface() {
     );
     assert!(svc.process_search_batch("q", &[], Some(1)).await.is_err());
 
-    // count_tokens 在有/无真实 tokenizer 下均不应报错（具体值随模型而定）。
-    assert!(svc.count_tokens("tokenize me").is_ok());
+    // count_tokens 不得报错，且当前恒为 0：ONNX 引擎未覆写 trait 默认实现
+    // （src/engine/mod.rs 的 count_tokens 默认返回 Ok(0)），调用方据此回退
+    // bytes/4 估算，见 src/api/embedding.rs 的 usage.prompt_tokens。
+    // 旧断言 > 0 恒假，正是 CI 覆盖率作业的失败根因；此处钉住当前契约，
+    // 一旦引擎接入真实 tokenizer，本断言会失败并提示同步更新调用方口径。
+    let count = svc
+        .count_tokens("tokenize me")
+        .expect("count_tokens 不得报错");
+    assert_eq!(
+        count, 0,
+        "ONNX 引擎未接 tokenizer，count_tokens 应回退 0（调用方按 bytes/4 估算）"
+    );
     assert!(svc.get_model_info().is_some());
     assert!(svc.get_model_metadata().is_some());
     assert!(!svc.has_model_manager());

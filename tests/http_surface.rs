@@ -357,6 +357,17 @@ fn http_surface_success_and_error_paths() {
         "非法 input 应拒绝"
     );
 
+    // OpenAI 契约批量上限 2048：超出必须在推理前拒绝
+    let too_many: Vec<String> = (0..2100).map(|i| format!("t{i}")).collect();
+    let payload = format!(
+        r#"{{"input":{},"model":"Xenova/bge-small-en-v1.5"}}"#,
+        serde_json::to_string(&too_many).expect("serialize")
+    );
+    assert!(
+        (400..500).contains(&body("/v1/embeddings", &payload).0),
+        "超过 OpenAI 2048 条上限必须拒绝"
+    );
+
     // ── 翻译：成功 / 未配置语言对 / 空文本 ──
     assert_eq!(
         body(

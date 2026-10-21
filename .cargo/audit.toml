@@ -22,4 +22,9 @@ ignore = [
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
+    # RUSTSEC-2026-0381（webpki-roots 内置根含被撤销的 emSign 中间根）：
+    # tokenizers 0.23.2 → hf-hub 0.4.3 → ureq 2.12.1 → webpki-roots 0.26.11，
+    # 而 0.26.11 已是该系列最新版（无同系列补丁）；修复在 1.x（1.0.10），
+    # 本仓那份 1.x 副本本轮已升级。理由与退出条件同 deny.toml 同 ID 条目。
+    "RUSTSEC-2026-0381",
 ]

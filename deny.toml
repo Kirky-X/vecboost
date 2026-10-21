@@ -17,6 +17,17 @@ ignore = [
   # 无法通过升级修复。豁免持续跟踪 https://github.com/RustCrypto/RSA/issues/626,
   # 一旦上游发布 constant-time 实现即撤销本豁免并升级。
   { id = "RUSTSEC-2023-0071", reason = "transitive via jsonwebtoken for JWT signing only; Marvin targets RSA decryption, not applicable; no upstream patch available" },
+  # RUSTSEC-2026-0381（webpki-roots 内置根证书含被撤销的 emSign 中间根）。
+  # 命中路径（cargo tree -i webpki-roots@0.26.11 可复现）：tokenizers 0.23.2 →
+  # hf-hub 0.4.3 → ureq 2.12.1 → webpki-roots 0.26.11。0.26.11 已是 0.26 系列最新版
+  # （crates.io 版本列表），无同系列补丁可升；修复只存在于 1.x 分支（1.0.10），
+  # 本仓另一份 webpki-roots 1.0.9 已于本轮升到 1.0.10、webpki-root-certs 同步升到 1.0.10。
+  # 影响面：webpki-roots 仅为内置根证书数据，只有当对端证书链由 emSign 根签名时才
+  # 存在误信任可能；本仓该 0.26 副本的唯一消费者是 hf-hub 的模型下载请求
+  # （目标为 huggingface.co / HF 镜像），不经 emSign 链。
+  # 退出条件：hf-hub/ureq 升代（如 ureq 3.x）使依赖图不再出现 webpki-roots 0.26
+  # 时删除本条，并重跑 cargo deny check 与 cargo audit 确认全绿。
+  { id = "RUSTSEC-2026-0381", reason = "transitive webpki-roots 0.26.11 via tokenizers -> hf-hub -> ureq; 0.26.11 is the newest 0.26.x so no in-series patch exists (fix is 1.0.10, which the 1.x copy in this lock is already updated to); data-only crate, only reachable from the HF model-download path which never validates emSign-issued chains" },
 ]
 
 [licenses]

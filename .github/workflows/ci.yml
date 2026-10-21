@@ -273,6 +273,11 @@ jobs:
           [auth]
           enabled = false
           TOML
+          # 先在计时窗口之外把 bin 编好：前两轮腿用的是 `--tests`，不产出可执行 bin，
+          # 直接 run 会在本腿里重新编译整个依赖图（实测 run 39544484498 的 boot.log 就是
+          # 一路 Compiling axum/tonic/sdforge…，120s 就绪窗口被编译吃光，服务根本没起来）。
+          cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" \
+            build --bin vecboost
           cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" \
             run --bin vecboost -- --config "$RUNNER_TEMP/vbboot/config.toml" \
             > "$RUNNER_TEMP/vbboot/boot.log" 2>&1 &
@@ -314,6 +319,10 @@ jobs:
             kill -9 "$BOOT_PID" 2>/dev/null || true
           fi
           wait "$BOOT_PID" 2>/dev/null || true
+          # 报告输出目录必须存在：cargo-llvm-cov 不会自建父目录，而 `coverage/` 既不在
+          # 仓库里也无人创建（同一 run 报 "failed to create file `coverage/lcov.info`: No such
+          # file or directory"，此前因为测试腿先红才没暴露）。
+          mkdir -p coverage
           cargo llvm-cov report --lcov --output-path coverage/lcov.info
       - name: Enforce line coverage
         # llvm-cov 0.9.1 的 --fail-under-lines 可用，但仍保留显式 lcov 判定以便审计数值。

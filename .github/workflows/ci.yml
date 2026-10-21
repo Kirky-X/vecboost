@@ -273,19 +273,21 @@ jobs:
           [auth]
           enabled = false
           TOML
-          # 先在计时窗口之外把 bin 编好：前两轮腿用的是 `--tests`，不产出可执行 bin，
-          # 直接 run 会在本腿里重新编译整个依赖图（实测 run 39544484498 的 boot.log 就是
-          # 一路 Compiling axum/tonic/sdforge…，120s 就绪窗口被编译吃光，服务根本没起来）。
-          cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" \
-            build --bin vecboost
+          # 就绪窗口必须含编译时间：前两轮腿用 `--tests`，不产出可执行 bin，所以本腿首次
+          # run 会把整个依赖图重编一遍（实测 run 39544484498 的 boot.log 全是
+          # Compiling axum/tonic/sdforge…，当时 120s 预算全被编译吃掉，服务根本没起）。
+          # 本想先 `cargo llvm-cov build --bin vecboost` 预编译，但装的 cargo-llvm-cov
+          # 版本无 build 子命令（run 39551151436 报 "error: unrecognized subcommand build"），
+          # 因此改成把轮询预算抬到 900s（含编译）；下方"进程提前退出即中止"负责区分
+          # "还在编译"与"真启动失败"（编译期父进程存活，不会被误判）。
           cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" \
             run --bin vecboost -- --config "$RUNNER_TEMP/vbboot/config.toml" \
             > "$RUNNER_TEMP/vbboot/boot.log" 2>&1 &
           BOOT_PID=$!
           healthy=0
-          # 轮询就绪，同时监控进程存活：本地实测服务约 2s 内可健，而 CI 上进程会立刻
-          # 退出（启动失败）——不能白烧 120s 再报“未就绪”且看不到原因。
-          for i in $(seq 1 60); do
+          # 轮询就绪同时监控父进程存活：启动失败（如模型缺失/配置非法）时进程会立即退出，
+          # 此时不再白等预算、直接把 boot.log 打印出来定位真因；编译阶段父进程存活，不会误判。
+          for i in $(seq 1 450); do
             if curl -sf http://127.0.0.1:9099/health >/dev/null 2>&1; then healthy=1; break; fi
             if ! kill -0 "$BOOT_PID" 2>/dev/null; then
               echo "::warning::vecboost 启动腿进程提前退出，启动日志见下方（本轮覆盖率将不含 main.rs 组合根，数字偏低但不致丢数）"
@@ -295,7 +297,7 @@ jobs:
             sleep 2
           done
           if [ "$healthy" != "1" ]; then
-            echo "::warning::vecboost 未在 120s 内就绪，启动日志："
+            echo "::warning::vecboost 未在 900s 内就绪，启动日志："
             cat "$RUNNER_TEMP/vbboot/boot.log" || true
             kill -TERM "$BOOT_PID" 2>/dev/null || true
           fi

@@ -224,6 +224,9 @@ jobs:
       - name: Generate coverage
         env:
           VECBOOST_TEST_REDIS_URL: redis://127.0.0.1:6379
+          # 启动腿的富配置用明文 redis 作 embedding/semantic cache 与分布式限流后端；
+          # oxcache 对明文连接要求显式承担风险，否则 attach 阶段直接失败退出。
+          OXCACHE_ALLOW_INSECURE_REDIS: I_UNDERSTAND_THE_RISKS
         # 多腿合并：共享状态腿 + db/sqlite 腿。禁止 --lib 窄口径：
         # 集成测试与引擎 E2E 的错误分支同样计入分母。
         # 共享 pipeline registry 的用例由 src/pipeline/handler.rs 内的
@@ -261,17 +264,34 @@ jobs:
           engine_type = "onnx"
           expected_dimension = 384
 
+          # 富配置：最小配置只走 embedding 主干，组合根的装配臂全部不可达
+          # （本地 DA 行核对：build_translate_pairs/register_all_modules/run_startup_warmup/
+          # apply_auto_plan/init_pipeline/init_logger/init_auth/attach_semantic_cache 的
+          # 命中数只能在真有翻译对 + redis 后端 + warmup 时才 >0）。
           [embedding]
           cache_enabled = true
+          cache_backend = "redis"
+          redis_url = "redis://127.0.0.1:6379"
+
+          [semantic_cache]
+          enabled = true
+          backend = "redis"
+          redis_url = "redis://127.0.0.1:6379"
 
           [rate_limit]
-          enabled = false
+          enabled = true
+          ip_requests_per_minute = 5000
 
           [database]
           url = "sqlite::memory:"
 
           [auth]
           enabled = false
+
+          [[translation.pairs]]
+          source_language = "en"
+          target_language = "zh"
+          model_path = "${{ github.workspace }}/models/opus-mt-en-zh"
           TOML
           # 就绪窗口必须含编译时间：前两轮腿用 `--tests`，不产出可执行 bin，所以本腿首次
           # run 会把整个依赖图重编一遍（实测 run 39544484498 的 boot.log 全是
@@ -281,7 +301,7 @@ jobs:
           # 因此改成把轮询预算抬到 900s（含编译）；下方"进程提前退出即中止"负责区分
           # "还在编译"与"真启动失败"（编译期父进程存活，不会被误判）。
           cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" \
-            run --bin vecboost -- --config "$RUNNER_TEMP/vbboot/config.toml" \
+            run --bin vecboost -- --config "$RUNNER_TEMP/vbboot/config.toml" --warmup 2 \
             > "$RUNNER_TEMP/vbboot/boot.log" 2>&1 &
           BOOT_PID=$!
           healthy=0
@@ -301,13 +321,24 @@ jobs:
             cat "$RUNNER_TEMP/vbboot/boot.log" || true
             kill -TERM "$BOOT_PID" 2>/dev/null || true
           fi
-          # 两发真实请求：覆盖 handler → pipeline → response 主干与缓存写入臂
-          curl -sf -X POST http://127.0.0.1:9099/api/v1/embed \
-            -H 'content-type: application/json' -d '{"text":"coverage boot probe"}' >/dev/null \
-            || echo "::warning::embed 探针未返回 2xx"
-          curl -sf -X POST http://127.0.0.1:9099/api/v1/search \
-            -H 'content-type: application/json' -d '{"query":"q","texts":["a","b"],"top_k":1}' >/dev/null \
-            || echo "::warning::search 探针未返回 2xx"
+          # 四发真实请求：embed/search 覆盖 handler → pipeline → response 主干与缓存写入臂；
+          # translate 走刚装配的 en-zh 翻译对（onnx_translate 的执行面）；metrics 走
+          # 指标出口。本地实测这四处全部 200（translate 200 即证明翻译引擎真被装配并执行）。
+          for probe in \
+            'POST /api/v1/embed {"text":"coverage boot probe"}' \
+            'POST /api/v1/search {"query":"q","texts":["a","b"],"top_k":1}' \
+            'POST /api/v1/translate {"text":"hello world","source_language":"en","target_language":"zh"}' \
+            'GET /metrics'; do
+            method="${probe%% *}"; rest="${probe#* }"
+            path="${rest%% *}"; body="${rest#* }"
+            if [ "$method" = "GET" ]; then
+              code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:9099${path}")
+            else
+              code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:9099${path}" \
+                -H 'content-type: application/json' -d "$body")
+            fi
+            case "$code" in 2??) ;; *) echo "::warning::${path} 探针返回 ${code}" ;; esac
+          done
           kill -TERM "$BOOT_PID" 2>/dev/null || true
           # 本地实测优雅退出约 6s；给 60s 预算。本腿未成功只警告不阻断：
           # 目的是先拿到可审计的百分比（缺本腿时 main.rs 不计入，总覆盖率反而偏低，

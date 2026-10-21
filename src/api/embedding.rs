@@ -547,7 +547,8 @@ async fn engine_probe_ok(st: &crate::VecboostState) -> bool {
 /// - db:连接池真实往返(cfg db);
 /// - engine:tokenizer/服务链路可用性(带 500ms 缓存);
 /// - rate_limit:limiteron 周期健康检查。
-async fn run_deep_health_checks(st: &crate::VecboostState) -> Vec<serde_json::Value> {
+#[cfg(any(feature = "http", feature = "grpc"))]
+pub(crate) async fn run_deep_health_checks(st: &crate::VecboostState) -> Vec<serde_json::Value> {
     let mut failures = Vec::new();
 
     #[cfg(feature = "db")]
@@ -759,7 +760,7 @@ async fn list_models_handler() -> Result<ModelListResponse, ApiError> {
 /// Returns `{"status": "OK"}` when all modules are healthy, or
 /// `ApiError::ServiceUnavailable` when any module reports unhealthy.
 #[cfg(any(feature = "http", feature = "grpc"))]
-async fn health_handler(depth: Option<String>) -> Result<serde_json::Value, ApiError> {
+pub(crate) async fn health_handler(depth: Option<String>) -> Result<serde_json::Value, ApiError> {
     let st = state().map_err(to_api_error)?;
     let mut unhealthy_modules = Vec::new();
 

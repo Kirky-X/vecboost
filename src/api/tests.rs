@@ -1563,3 +1563,114 @@ async fn test_forge_decisions_over_max_questions_returns_400() {
         other => panic!("Expected InvalidInput(400), got {:?}", other),
     }
 }
+
+// ---------------------------------------------------------------------------
+// /health 面（health_handler / run_deep_health_checks / kit_internal_error）
+//
+// DA 行核对：health_handler 单函数 60 行未覆盖，此前只靠真实启动腿命中。
+// 进程级 STATE 是 OnceLock 首写者胜（`api::init_state`），本二进制内唯一写者
+// 就是 `ensure_state_initialized`，它只注册 Embedding/Rerank/Decision/Detect/
+// Translate/Audit/Transcribe（auth 下再加 Auth），**不注册 Cache / RateLimit**
+// —— 所以轻量模式必为 503，本文件按这个确定形状断言，不写“两种结果之一”的弱断言。
+// `run_deep_health_checks` 的 engine 探测带 500ms 进程级缓存
+// （ENGINE_PROBE_CACHE），并行用例会互相污染读数，因此借用仓内已有的
+// 异步串行锁 `utils::test_env_lock::env_lock_async`（src/security/mod.rs 已有
+// 同型先例：std Mutex guard 跨 await 会吃 clippy::await_holding_lock），
+// 并在空 kit 复测前后各等过 TTL。
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "http")]
+use crate::utils::test_env_lock::env_lock_async;
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn health_handler_light_mode_503s_on_modules_absent_from_test_kit() {
+    let _guard = env_lock_async().await;
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let err = crate::api::embedding::health_handler(None)
+        .await
+        .expect_err("test kit 未注册 Cache/RateLimit 模块，轻量 /health 必 503");
+    match err {
+        ApiError::ServiceUnavailable {
+            service,
+            retry_after,
+            ..
+        } => {
+            // 未注册模块走 health_check 的 Err 臂，模块名进 service 文案
+            assert_eq!(retry_after, Some(5));
+            assert!(
+                service.contains("cache") && service.contains("rate_limit"),
+                "service 应列出未就绪模块，got: {service}"
+            );
+        }
+        other => panic!("Expected ServiceUnavailable(503), got {:?}", other),
+    }
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn health_handler_full_depth_either_ready_or_json_component_list() {
+    let _guard = env_lock_async().await;
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    match crate::api::embedding::health_handler(Some("full".to_string())).await {
+        Ok(v) => {
+            // 空失败清单 → {"status": ok, "depth": "full"}
+            assert_eq!(v["depth"], "full", "wire={}", v);
+        }
+        Err(ApiError::ServiceUnavailable { service, .. }) => {
+            // depth=full 的 service 槽是失败清单的 JSON 序列化（与轻量模式的
+            // 逗号分隔文案不同形），必须能反解且 component 在已知集合内
+            let parsed: serde_json::Value =
+                serde_json::from_str(&service).unwrap_or_else(|e| panic!("{e}: {service}"));
+            let items = parsed.as_array().expect("失败清单应为 JSON 数组");
+            assert!(!items.is_empty());
+            for item in items {
+                assert!(
+                    matches!(
+                        item["component"].as_str(),
+                        Some("db") | Some("engine") | Some("rate_limit")
+                    ),
+                    "未知组件：{item}"
+                );
+            }
+        }
+        Err(other) => panic!("depth=full 只允许 200 或 ServiceUnavailable，got {other:?}"),
+    }
+}
+
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn run_deep_health_checks_without_engine_lists_engine_component() {
+    let _guard = env_lock_async().await;
+    crate::i18n::init();
+    // 上面用例的探测可能留下 500ms 内的缓存值，等过期后再断言
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let kit = trait_kit::AsyncKit::new()
+        .build()
+        .await
+        .expect("空 kit 应能 build");
+    let st = VecboostState { kit: Arc::new(kit) };
+    let failures = crate::api::embedding::run_deep_health_checks(&st).await;
+    assert!(
+        failures
+            .iter()
+            .any(|f| f["component"] == serde_json::json!("engine")),
+        "缺 EmbeddingModule 注册时 engine 臂必须计入失败：{failures:?}"
+    );
+    // 本用例写入的 false 不进 TTL 窗口内给他人在用，推高下一次探测的起点
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+}
+
+/// 500 类构造器的输入面：任意 Display 错误一律退 500，且 wire 不泄露原文以外字段
+#[cfg(feature = "http")]
+#[test]
+fn kit_internal_error_maps_to_500_for_display_inputs() {
+    crate::i18n::init();
+    for input in ["kit down", "boom"] {
+        let wire = crate::api::embedding::kit_internal_error(input).to_service_error();
+        let value = serde_json::to_value(&wire).unwrap();
+        assert_eq!(value["http_status"], 500, "input={input} wire={value}");
+    }
+}

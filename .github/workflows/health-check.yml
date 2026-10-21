@@ -141,6 +141,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     timeout-minutes: 40
+    services:
+      # 与 ci.yml 覆盖率作业同前提：distributed-redis 系列用例（oxcache_backend /
+      # limiteron_adapter / redis_semantic_index）无 redis 时整块 SKIP，
+      # SKIP 不是覆盖——这是本作业比 ci.yml 低的执行宇宙差异之一。
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -167,7 +179,12 @@ jobs:
         # tarpaulin 与新 stable 工具链不兼容（pulp 0.22.3 const 断言 E0080
         # 插桩构建必炸，2026-10-15 实录），按发布流水线生态表切换 llvm-cov。
         # 口径：lib + 集成测试（禁止 --lib 窄口径）；llvm-cov 不自建输出目录，须先 mkdir
-        run: mkdir -p coverage/ && cargo llvm-cov --quiet --features "${{ env.FEATURES }}" --tests --lcov --output-path coverage/lcov.info
+        # 本腿特征比 FEATURES 多一个 distributed-redis（本地 cargo check 已验证该
+        # 组合合法，exit 0），否则 redis 系模块全部 SKIP，分母同、分子偏低。
+        env:
+          VECBOOST_TEST_REDIS_URL: redis://127.0.0.1:6379
+          OXCACHE_ALLOW_INSECURE_REDIS: I_UNDERSTAND_THE_RISKS
+        run: mkdir -p coverage/ && cargo llvm-cov --quiet --features "${{ env.FEATURES }},distributed-redis" --tests --lcov --output-path coverage/lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45 # v5

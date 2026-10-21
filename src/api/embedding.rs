@@ -607,6 +607,9 @@ fn switch_error_to_api_error(e: VecboostError) -> ApiError {
         // UnsupportedTask 直传：客户端可换任务/端点纠正，不得与加载失败
         // 混同为 404（EngineFactory 分派注释钉死的契约）
         VecboostError::UnsupportedTask(_) => to_api_error(e),
+        // 输入类错误同样直传：switch 参数非法（如 expected_dimension=0）是
+        // 调用方可纠正的 4xx 语义错误，不得被下面的“加载失败”catch-all 洗成 404。
+        VecboostError::InvalidInput(_) | VecboostError::ValidationError(_) => to_api_error(e),
         e => {
             log::error!(
                 "{}",

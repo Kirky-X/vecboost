@@ -1410,6 +1410,15 @@ impl EmbeddingService {
         &mut self,
         req: ModelSwitchRequest,
     ) -> Result<ModelSwitchResponse, VecboostError> {
+        // expected_dimension = 0 是客户端输入错误，必须在装配前拒绝：
+        // 该字段是维度守卫的基准值，0 会让每一次请求都拿引擎真实维度与 0 比对
+        // （要么全程误报、要么守卫退化为恒不成立），两者都比明确拒绝更糟。
+        // HTTP / gRPC / CLI 共用本入口，因此只在这里拦一处。
+        if req.expected_dimension == Some(0) {
+            return Err(VecboostError::invalid_input(
+                "expected_dimension must be greater than zero".to_string(),
+            ));
+        }
         let previous_model = self.model_config.as_ref().map(|c| c.name.clone());
 
         log::info!(

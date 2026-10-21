@@ -874,4 +874,141 @@ mod tests {
         }
         assert_eq!(bool_results, detailed_results);
     }
+
+    // ===== 以下用例靠“造假应答”驱动，集成测试结构性跑不到它们 =====
+
+    fn hdr(limit: u64, remaining: u64, policy: &str) -> RateLimitHeaderValues {
+        RateLimitHeaderValues {
+            limit,
+            remaining,
+            reset_at: 1_800_000_000,
+            retry_after: None,
+            policy: policy.to_string(),
+        }
+    }
+
+    /// 响应头必须取“剩余额度最紧”的那个维度，且不能因传入顺序而飘。
+    #[test]
+    fn tighter_covers_all_four_arms_and_is_order_independent() {
+        assert!(tighter(None, None).is_none(), "双 None 必须返回 None");
+        assert_eq!(
+            tighter(None, Some(hdr(10, 7, "user")))
+                .expect("(None, b) 必须取 b")
+                .remaining,
+            7
+        );
+        assert_eq!(
+            tighter(Some(hdr(10, 3, "ip")), None)
+                .expect("(a, None) 必须取 a")
+                .remaining,
+            3
+        );
+        // 两侧 Some：取 remaining 更小者，且左右顺序不得影响结果
+        assert_eq!(
+            tighter(Some(hdr(10, 3, "ip")), Some(hdr(10, 7, "user")))
+                .expect("ab")
+                .policy,
+            "ip"
+        );
+        assert_eq!(
+            tighter(Some(hdr(10, 7, "user")), Some(hdr(10, 3, "ip")))
+                .expect("ba")
+                .policy,
+            "ip",
+            "维度选择不得随传入顺序变化，否则同一请求重试会拿到不同策略名"
+        );
+        // 并列时保留左侧（稳定选择）
+        assert_eq!(
+            tighter(Some(hdr(10, 3, "ip")), Some(hdr(10, 3, "api-key")))
+                .expect("tie")
+                .policy,
+            "ip"
+        );
+    }
+
+    #[cfg(feature = "distributed-redis")]
+    fn rints(values: &[i64]) -> oxcache::redis::Value {
+        oxcache::redis::Value::Array(
+            values
+                .iter()
+                .map(|v| oxcache::redis::Value::Int(*v))
+                .collect(),
+        )
+    }
+
+    /// 正常应答：(count, ttl) 原值透传。
+    #[cfg(feature = "distributed-redis")]
+    #[test]
+    fn parse_count_ttl_accepts_int_pair() {
+        let (count, ttl) =
+            RedisWindowLimiter::parse_count_ttl(rints(&[3, 60_000])).expect("合法应答不得报错");
+        assert_eq!((count, ttl), (3, 60_000));
+    }
+
+    /// 负计数必须被夹到 0：count 会被后续 `saturating_add` 参与额度判定，
+    /// 若直接 `as u64` 回绕成巨值，该维度会永久拒绝所有请求。
+    #[cfg(feature = "distributed-redis")]
+    #[test]
+    fn parse_count_ttl_clamps_negative_count_without_wraparound() {
+        let (count, ttl) = RedisWindowLimiter::parse_count_ttl(rints(&[-7, 100]))
+            .expect("负 count 应被夹住而非报错");
+        assert_eq!(count, 0, "负计数不得回绕成 u64 巨值");
+        assert_eq!(ttl, 100, "ttl 保留原值供上层诊断");
+    }
+
+    /// 非数组应答（如误接 REDIS_ERR / Nil）必须报错，不能当“未超限”放行。
+    #[cfg(feature = "distributed-redis")]
+    #[test]
+    fn parse_count_ttl_rejects_non_array_reply() {
+        let err = RedisWindowLimiter::parse_count_ttl(oxcache::redis::Value::Nil)
+            .expect_err("非数组应答必须显性失败");
+        assert!(
+            err.to_string().contains("redis-window-parse"),
+            "错误必须点名解析阶段：{err}"
+        );
+    }
+
+    /// count 位不是整数（或整个缺失）时必须报 count 阶段错误。
+    #[cfg(feature = "distributed-redis")]
+    #[test]
+    fn parse_count_ttl_rejects_non_integer_count() {
+        let err = RedisWindowLimiter::parse_count_ttl(oxcache::redis::Value::Array(vec![
+            oxcache::redis::Value::BulkString(b"nan".to_vec()),
+            oxcache::redis::Value::Int(1),
+        ]))
+        .expect_err("非整数 count 必须拒绝");
+        assert!(
+            err.to_string().contains("redis-window-count"),
+            "错误必须点名 count 阶段：{err}"
+        );
+
+        let err2 = RedisWindowLimiter::parse_count_ttl(oxcache::redis::Value::Array(vec![]))
+            .expect_err("空数组必须拒绝");
+        assert!(
+            err2.to_string().contains("redis-window-count"),
+            "空应答也应归为 count 阶段：{err2}"
+        );
+    }
+
+    /// ttl 位缺失或非整数时报 ttl 阶段错误（与 count 阶段分开，运维能定位脚本返回形状）。
+    #[cfg(feature = "distributed-redis")]
+    #[test]
+    fn parse_count_ttl_rejects_missing_or_non_integer_ttl() {
+        let err = RedisWindowLimiter::parse_count_ttl(rints(&[1]))
+            .expect_err("只带 count 的应答必须拒绝");
+        assert!(
+            err.to_string().contains("redis-window-ttl"),
+            "错误必须点名 ttl 阶段：{err}"
+        );
+
+        let err2 = RedisWindowLimiter::parse_count_ttl(oxcache::redis::Value::Array(vec![
+            oxcache::redis::Value::Int(1),
+            oxcache::redis::Value::Nil,
+        ]))
+        .expect_err("非整数 ttl 必须拒绝");
+        assert!(
+            err2.to_string().contains("redis-window-ttl"),
+            "实际：{err2}"
+        );
+    }
 }

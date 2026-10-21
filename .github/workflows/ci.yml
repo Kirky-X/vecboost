@@ -240,6 +240,67 @@ jobs:
           cargo llvm-cov clean --workspace
           cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" --tests
           cargo llvm-cov --no-report --features "http,auth,db,sqlite" --tests
+          # 真实启动腿：main.rs 的组合根（init_*/run_servers/优雅停机）只有跑真实二进制才会
+          # 命中，cargo test 结构上执行不到（main.rs 429 行未覆盖几乎全在此）。同样
+          # 必须 SIGTERM 并等到进程真退出：profraw 只在退出时 flush，SIGKILL 会静默丢
+          # 本腿数据（NebulaId 同口径改造时实测差 2.7pp）。
+          mkdir -p "$RUNNER_TEMP/vbboot"
+          cat > "$RUNNER_TEMP/vbboot/config.toml" <<'TOML'
+          [server]
+          host = "127.0.0.1"
+          port = 9099
+          grpc_enabled = false
+
+          [model]
+          model_path = "models/Xenova-bge-small-en-v1.5"
+          model_repo = "Xenova/bge-small-en-v1.5"
+          engine_type = "onnx"
+          expected_dimension = 384
+
+          [embedding]
+          cache_enabled = true
+
+          [rate_limit]
+          enabled = false
+
+          [database]
+          url = "sqlite::memory:"
+
+          [auth]
+          enabled = false
+          TOML
+          cargo llvm-cov --no-report --features "${{ env.COVERAGE_FEATURES }}" \
+            run --bin vecboost -- --config "$RUNNER_TEMP/vbboot/config.toml" &
+          BOOT_PID=$!
+          healthy=0
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:9099/health >/dev/null 2>&1; then healthy=1; break; fi
+            sleep 2
+          done
+          if [ "$healthy" != "1" ]; then
+            echo "::error::vecboost 未在 120s 内就绪，无法采集组合根覆盖率"
+            kill -TERM "$BOOT_PID" 2>/dev/null || true
+            exit 1
+          fi
+          # 两发真实请求：覆盖 handler → pipeline → response 主干与缓存写入臂
+          curl -sf -X POST http://127.0.0.1:9099/api/v1/embed \
+            -H 'content-type: application/json' -d '{"text":"coverage boot probe"}' >/dev/null \
+            || echo "::warning::embed 探针未返回 2xx"
+          curl -sf -X POST http://127.0.0.1:9099/api/v1/search \
+            -H 'content-type: application/json' -d '{"query":"q","texts":["a","b"],"top_k":1}' >/dev/null \
+            || echo "::warning::search 探针未返回 2xx"
+          kill -TERM "$BOOT_PID" 2>/dev/null || true
+          # 本地实测优雅退出约 6s；给 60s 预算，超时即显性失败而不是默默缺覆盖率
+          for i in $(seq 1 30); do
+            if ! kill -0 "$BOOT_PID" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          if kill -0 "$BOOT_PID" 2>/dev/null; then
+            echo "::error::vecboost 未在 60s 内优雅退出，profraw 未刷新"
+            kill -9 "$BOOT_PID" 2>/dev/null || true
+            exit 1
+          fi
+          wait "$BOOT_PID" 2>/dev/null || true
           cargo llvm-cov report --lcov --output-path coverage/lcov.info
       - name: Enforce line coverage
         # llvm-cov 0.9.1 的 --fail-under-lines 可用，但仍保留显式 lcov 判定以便审计数值。

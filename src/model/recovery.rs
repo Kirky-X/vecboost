@@ -1472,4 +1472,125 @@ mod tests {
         assert_eq!(result.failed_files, vec!["".to_string()]);
         assert!(result.backup_paths.is_empty());
     }
+
+    // ===== 以下四个用例把 recover_corrupted_files 的编排主体从真实文件角度钉住 =====
+    // （已有用例只传 `[""]`，备份/失败/unknown 名字等分枝实际未被执行）
+
+    #[test]
+    fn recover_corrupted_files_with_empty_list_is_immediate_success() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let recovery = ModelRecovery::with_default_config();
+        let result = recovery
+            .recover_corrupted_files("m", dir.path(), None, &[])
+            .expect("空清单不得报错");
+        assert!(result.success, "无待恢复文件即成功");
+        assert!(result.recovered_files.is_empty());
+        assert!(result.failed_files.is_empty());
+        assert!(result.backup_paths.is_empty());
+        assert_eq!(result.attempts, 0, "空循环不得计入尝试次数");
+    }
+
+    #[test]
+    fn recover_corrupted_files_backs_up_real_file_and_reports_failure() {
+        // 契约：`corrupted_files` 的元素按**完整路径**处理（实现里直接
+        // `Path::new(corrupted_file)` 判存在性并取 file_name），而传给恢复子流程的
+        // 是它的 file_name。用裸文件名传参会默默归到"不存在→无备份"，这里把这个
+        // 语义钉住而不是迁就误用。
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backup = tempfile::tempdir().expect("backup dir");
+        let model_dir = dir.path().join("bundle");
+        std::fs::create_dir_all(&model_dir).expect("mkdir bundle");
+        let corrupt = model_dir.join("model.onnx");
+        std::fs::write(&corrupt, b"garbage-not-a-model").expect("write corrupt");
+        let corrupt_str = corrupt.to_string_lossy().into_owned();
+
+        let recovery = ModelRecovery::new(RecoveryConfig {
+            max_retries: 1,
+            backup_corrupted_files: true,
+            backup_dir: Some(backup.path().to_path_buf()),
+            // 本用例走不到校验步（recovered 为空），置 true 以证明"空 recovered 不会误触校验"
+            verify_after_recovery: true,
+        });
+
+        let result = recovery
+            .recover_corrupted_files("m", &model_dir, None, std::slice::from_ref(&corrupt_str))
+            .expect("本地目录无 repo_id 应返回结果而非报错");
+
+        assert!(!result.success, "未能恢复时必须报失败");
+        assert!(result.recovered_files.is_empty());
+        assert_eq!(
+            result.failed_files,
+            vec![corrupt_str.clone()],
+            "失败清单必须原样回传调用方给的路径"
+        );
+        assert_eq!(
+            result.backup_paths.len(),
+            1,
+            "真实存在的损坏文件必须被备份（备份路径：{:?}）",
+            result.backup_paths
+        );
+        let backed = Path::new(result.backup_paths.first().expect("上面已断言长度 1"));
+        assert!(backed.is_file(), "备份文件必须落盘：{}", backed.display());
+        assert_eq!(
+            backed
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .split('.')
+                .next()
+                .unwrap_or(""),
+            "model",
+            "备份名必须以原文件名开头，否则多文件同时间戳会互相覆盖"
+        );
+        assert!(
+            corrupt.is_file(),
+            "备份不得移走原文件（恢复链路仍需它作为错源）"
+        );
+    }
+
+    #[test]
+    fn recover_corrupted_files_skips_backup_when_disabled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let corrupt = dir.path().join("tokenizer.json");
+        std::fs::write(&corrupt, b"{broken").expect("write");
+        let corrupt_str = corrupt.to_string_lossy().into_owned();
+        let recovery = ModelRecovery::new(RecoveryConfig {
+            max_retries: 1,
+            backup_corrupted_files: false,
+            backup_dir: None,
+            verify_after_recovery: false,
+        });
+
+        let result = recovery
+            .recover_corrupted_files("m", dir.path(), None, std::slice::from_ref(&corrupt_str))
+            .expect("本地目录应返回结果");
+        assert!(
+            result.backup_paths.is_empty(),
+            "关闭开关后不得产生备份：{:?}",
+            result.backup_paths
+        );
+        assert!(corrupt.is_file(), "关闭备份时原文件必须原地不动");
+    }
+
+    #[test]
+    fn recover_corrupted_files_invalid_repo_like_path_reports_error_not_panic() {
+        // model_path 不是已存在的目录时，恢复路径会把它当 HF repo id 重建；
+        // 含非法字符的字符串必须在 build_hf_repo 处报错上抛（而不是默默成功或 panic），
+        // 并且不得因报错而遗留半成品备份。
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bogus = dir.path().join("not a valid repo id!!");
+        let recovery = ModelRecovery::with_default_config();
+        let err = recovery
+            .recover_corrupted_files(
+                "m",
+                &bogus,
+                None,
+                std::slice::from_ref(&"model.onnx".to_string()),
+            )
+            .expect_err("非法 repo id 必须显性失败");
+        assert!(
+            !err.error_detail().is_empty(),
+            "错误必须携带可读详情，不得退成空字符串 panic"
+        );
+    }
 }

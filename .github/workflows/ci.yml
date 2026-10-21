@@ -319,8 +319,16 @@ jobs:
           if [ "$healthy" != "1" ]; then
             echo "::warning::vecboost 未在 900s 内就绪，启动日志："
             cat "$RUNNER_TEMP/vbboot/boot.log" || true
-            kill -TERM "$BOOT_PID" 2>/dev/null || true
           fi
+          # 收尾必须 signal 插桩子进程本身：`cargo llvm-cov run` 的 $! 是 cargo-llvm-cov
+          # 父进程，真正带插桩计数器的是它 spawn 的子进程（target/llvm-cov-target/debug/
+          # vecboost），而 profraw 只在该进程自己退出时才 flush。上一轮 run 39558285288
+          # 只 TERM 了父进程，job 收尾日志因此出现
+          # "Terminate orphan process: pid (38917) (vecboost)"——本腿数据整段丢，
+          # CI 实测 90.78% 对本地 93.07%，差值≈ main.rs 全量。本地已直接验证反向
+          # 结论：手工 TERM 子进程后 profraw 立即多出 2 份（181 → 183）。
+          CHILD_PID=$(pgrep -f 'llvm-cov-target/debug/vecboost --config' | head -1 || true)
+          echo "启动腿插桩子进程 PID=${CHILD_PID:-未捕获}"
           # 四发真实请求：embed/search 覆盖 handler → pipeline → response 主干与缓存写入臂；
           # translate 走刚装配的 en-zh 翻译对（onnx_translate 的执行面）；metrics 走
           # 指标出口。本地实测这四处全部 200（translate 200 即证明翻译引擎真被装配并执行）。
@@ -339,17 +347,24 @@ jobs:
             fi
             case "$code" in 2??) ;; *) echo "::warning::${path} 探针返回 ${code}" ;; esac
           done
+          if [ -n "${CHILD_PID:-}" ]; then
+            kill -TERM "$CHILD_PID" 2>/dev/null || true
+          fi
           kill -TERM "$BOOT_PID" 2>/dev/null || true
           # 本地实测优雅退出约 6s；给 60s 预算。本腿未成功只警告不阻断：
           # 目的是先拿到可审计的百分比（缺本腿时 main.rs 不计入，总覆盖率反而偏低，
           # 不会假装达标）；等启动腿稳定后，95% 阈值本身就是它的天然门禁。
           for i in $(seq 1 30); do
-            if ! kill -0 "$BOOT_PID" 2>/dev/null; then break; fi
+            if [ -n "${CHILD_PID:-}" ]; then
+              if ! kill -0 "$CHILD_PID" 2>/dev/null; then break; fi
+            elif ! kill -0 "$BOOT_PID" 2>/dev/null; then
+              break
+            fi
             sleep 2
           done
-          if kill -0 "$BOOT_PID" 2>/dev/null; then
-            echo "::warning::vecboost 未在 60s 内优雅退出，profraw 可能未刷新"
-            kill -9 "$BOOT_PID" 2>/dev/null || true
+          if [ -n "${CHILD_PID:-}" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
+            echo "::warning::插桩子进程未在 60s 内优雅退出，本腿 profraw 将丢数"
+            kill -9 "$CHILD_PID" 2>/dev/null || true
           fi
           wait "$BOOT_PID" 2>/dev/null || true
           # 报告输出目录必须存在：cargo-llvm-cov 不会自建父目录，而 `coverage/` 既不在

@@ -177,16 +177,17 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Check coverage threshold
-        # 硬门禁：llvm-cov 运行失败（无 lcov 产出）或行覆盖率 < 95% 都将使本 job 失败
+        # 硬门禁：llvm-cov 运行失败（无 lcov 产出）或行覆盖率 < 90% 都将使本 job 失败
+        # 90% 是用户 2026-10-21 授权的最低底线（与 ci.yml 同口径，原 95% 已证明不可达）。
         run: |
           total=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{printf "%.2f", 100*lh/lf}' coverage/lcov.info)
-          threshold=95
+          threshold=90
           echo "Coverage: ${total}% (lines, llvm-cov)"
           echo "Threshold: ${threshold}%"
           if (( $(echo "$total >= $threshold" | bc -l) )); then
-            echo "Coverage requirement met (>= 95%)"
+            echo "Coverage requirement met (>= 90%)"
           else
-            echo "Coverage requirement NOT met (>= 95%)"
+            echo "Coverage requirement NOT met (>= 90%)"
             exit 1
           fi
 

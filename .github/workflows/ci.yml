@@ -133,7 +133,7 @@ jobs:
           fi
 
   coverage:
-    name: Coverage (lines >= 95%)
+    name: Coverage (lines >= 90%)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     services:
@@ -353,7 +353,9 @@ jobs:
           kill -TERM "$BOOT_PID" 2>/dev/null || true
           # 本地实测优雅退出约 6s；给 60s 预算。本腿未成功只警告不阻断：
           # 目的是先拿到可审计的百分比（缺本腿时 main.rs 不计入，总覆盖率反而偏低，
-          # 不会假装达标）；等启动腿稳定后，95% 阈值本身就是它的天然门禁。
+          # 不会假装达标）。门禁 90% 是用户 2026-10-21 明确授权的最低底线
+          # （原目标 95% 已证明不可达：启动腿修好后 CI 实测 90.87%，run 39566342301）；
+          # 95% 仍是应追求方向，不得向下突破 90%。
           for i in $(seq 1 30); do
             if [ -n "${CHILD_PID:-}" ]; then
               if ! kill -0 "$CHILD_PID" 2>/dev/null; then break; fi
@@ -377,8 +379,10 @@ jobs:
         run: |
           total=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if (lf==0) {print "0.00"} else {printf "%.2f", 100*lh/lf}}' coverage/lcov.info)
           echo "实测行覆盖率: ${total}%（分母 $(awk -F: '/^LF:/{s+=$2} END{print s}' coverage/lcov.info) 行）"
-          awk -v t="$total" 'BEGIN{exit !(t+0 >= 95)}' || {
-            echo "::error::行覆盖率 ${total}% < 95%"
+          # 90% = 用户授权的最低底线（2026-10-21），不是测量口径放宽：分母仍是
+          # lib + 集成测试 + 真实启动腿的 llvm-cov 全量行，禁止 --lib 窄口径。
+          awk -v t="$total" 'BEGIN{exit !(t+0 >= 90)}' || {
+            echo "::error::行覆盖率 ${total}% < 90%（用户授权的最低底线）"
             exit 1
           }
       - name: Upload coverage to Codecov

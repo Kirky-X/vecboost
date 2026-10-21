@@ -151,8 +151,8 @@ CI 工作流与测试的对应关系：
 
 | 工作流 | 触发 | 测试内容 |
 |--------|------|----------|
-| `ci.yml`（CI） | push/PR（main） | fmt、clippy（含 unwrap_used 门禁）、check 四档（空/grpc/auth,db,sqlite,onnx/postgres）、test 四档（default/grpc/ecosystem/shared-state）、llvm-cov 覆盖率 ≥95% 硬门禁（lib + 集成测试同口径分母，禁止 `--lib` 窄口径）、`cargo deny` 依赖审计 |
-| `health-check.yml`（Health Check） | push/PR（main） | 构建矩阵（default/onnx/grpc）、`--lib` + `--tests`、llvm-cov 覆盖率 ≥95% 硬门禁（2026-10-15 起，替代表现已与新 stable 工具链不兼容的 tarpaulin）、Windows 测试（continue-on-error）、`cargo doc` 死链、`cargo audit`、main 分支 push 跑 benchmark、依赖更新检查 |
+| `ci.yml`（CI） | push/PR（main） | fmt、clippy（含 unwrap_used 门禁）、check 四档（空/grpc/auth,db,sqlite,onnx/postgres）、test 四档（default/grpc/ecosystem/shared-state）、llvm-cov 覆盖率 ≥90% 硬门禁（lib + 集成测试同口径分母，禁止 `--lib` 窄口径；90% 为用户 2026-10-21 授权的最低底线，原 95% 已证明不可达）、`cargo deny` 依赖审计 |
+| `health-check.yml`（Health Check） | push/PR（main） | 构建矩阵（default/onnx/grpc）、`--lib` + `--tests`、llvm-cov 覆盖率 ≥90% 硬门禁（2026-10-15 起，替代表现已与新 stable 工具链不兼容的 tarpaulin；2026-10-21 起与 ci.yml 同为 90% 底线）、Windows 测试（continue-on-error）、`cargo doc` 死链、`cargo audit`、main 分支 push 跑 benchmark、依赖更新检查 |
 | `feature-matrix.yml` | push/PR | default/grpc/ecosystem（auth,db,sqlite,onnx）/postgres-driver 四档 fmt + check + clippy + build + `--lib` 测试（postgres-driver 腿免跑 `--lib`） |
 | `scenario-tests.yml` | 每夜 UTC 03:00 + 手动 | 构建 http 二进制后 `pytest tests/scenario`（无模型环境自动 SKIP 推理类用例） |
 | `codeql.yml` / `docker.yml` | push/PR/每周 | CodeQL 静态分析；Docker 构建 + Trivy 扫描（CRITICAL 即失败） |

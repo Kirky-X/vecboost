@@ -1139,7 +1139,15 @@ mod tests {
             return;
         };
         if !redis_reachable(&url) {
-            eprintln!("SKIP: Redis 不可达（{url}）");
+            // 只打 host:port：URL 可能带 user:password，CI 日志不落凭据。
+            let endpoint = url
+                .split("://")
+                .nth(1)
+                .unwrap_or("")
+                .rsplit('@')
+                .next()
+                .unwrap_or("");
+            eprintln!("SKIP: Redis 不可达（{endpoint}）");
             return;
         }
         allow_insecure_redis();

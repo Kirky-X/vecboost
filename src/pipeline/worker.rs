@@ -1010,7 +1010,11 @@ impl WorkerManager {
                         );
                     }
 
-                    let to_remove = current - config.min_workers;
+                    // current 是原子计数（worker 退出即 decrement），但与 senders
+                    // 长度存在失同步窗口（fetch_add 后、push 前崩溃）。clamp 保证
+                    // 缩容不会把存活 worker 数压到 min_workers 以下。
+                    let to_remove = (current - config.min_workers)
+                        .min(senders.len().saturating_sub(config.min_workers));
                     if to_remove == 0 || senders.is_empty() {
                         continue;
                     }

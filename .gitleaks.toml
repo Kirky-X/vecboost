@@ -15,8 +15,11 @@ paths = [
 
 [[allowlists]]
 # 匹配对象是密钥「取值」而非键名（gitleaks 8.30 的 allowlist regexTarget 默认为空时如此）
+# 限定到测试/示例/文档路径：同名模式出现在生产源码中仍应被检出，
+# 否则 `api_key = "testsecret"` 这类真实泄漏会被无条件放行。
 description = "Test secret values carrying a test_ prefix"
 regexes = ['''test[-_]?(?:jwt[-_]?)?(?:secret|key|token|password|api_key)''']
+paths = ['''(^|/)tests/''', '''(^|/)examples/''', '''(^|/)docs/''', '''(^|/)benches/''']
 
 [[allowlists]]
 description = "Placeholder JWT tokens in documentation and tests"

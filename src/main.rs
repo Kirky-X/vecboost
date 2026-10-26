@@ -1545,20 +1545,29 @@ async fn init_pipeline(
 }
 
 /// 设备解析 —— 请求 GPU 但对应 feature 未编译时 WARN 并回退 CPU。
+///
+/// `cuda` 只提供设备探测（cudarc/nvml），CUDA 计算后端是独立的
+/// `candle-cuda`；只装探测不装计算时若仍返回 `DeviceType::Cuda`，
+/// ONNX/CPU 执行器会被标成 CUDA 设备，误导调度与观测。
 fn resolve_device_config(use_gpu: bool) -> vecboost::config::model::DeviceType {
     use vecboost::config::model::DeviceType;
     if !use_gpu {
         return DeviceType::Cpu;
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "candle-cuda")]
     {
         DeviceType::Cuda
     }
-    #[cfg(all(not(feature = "cuda"), feature = "metal"))]
+    #[cfg(all(not(feature = "candle-cuda"), feature = "cuda"))]
+    {
+        log::warn!("{}", vecboost::i18n::tr("log-main-cuda-probe-only"));
+        DeviceType::Cpu
+    }
+    #[cfg(all(not(feature = "candle-cuda"), not(feature = "cuda"), feature = "metal"))]
     {
         DeviceType::Metal
     }
-    #[cfg(not(any(feature = "cuda", feature = "metal")))]
+    #[cfg(not(any(feature = "candle-cuda", feature = "cuda", feature = "metal")))]
     {
         log::warn!("{}", vecboost::i18n::tr("log-main-gpu-no-backend"));
         DeviceType::Cpu

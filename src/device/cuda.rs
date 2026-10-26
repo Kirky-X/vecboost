@@ -264,7 +264,9 @@ impl CudaDeviceManager {
         }
     }
 
-    #[cfg(not(feature = "cuda"))]
+    // 与 detect_cuda_devices 的调用条件互补：cuda 但缺 candle 时也要走
+    // nvidia-smi 兼容链，原 `not(cuda)` 会让该组合调用到不存在的函数。
+    #[cfg(not(all(feature = "cuda", feature = "candle")))]
     async fn detect_compatible(&self) -> Vec<CudaDevice> {
         let mut devices = Vec::new();
 

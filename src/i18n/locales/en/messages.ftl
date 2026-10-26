@@ -363,6 +363,9 @@ log-main-worker-start-failed = WorkerManager start failed: { $detail }
 log-main-pipeline-ready = Pipeline components initialized successfully
 log-main-pipeline-disabled = Request pipeline disabled
 log-main-gpu-no-backend = use_gpu=true but no GPU backend is compiled in (missing 'cuda' feature, or 'metal' on macOS) — falling back to CPU. Rebuild with --features cuda for GPU.
+log-main-cuda-probe-only = 'cuda' feature is enabled but the CUDA compute backend ('candle-cuda') is not compiled in — falling back to CPU. Rebuild with --features cuda,candle-cuda for GPU compute.
+log-audit-file-writer-open-failed = audit file writer exited at startup: cannot open { $path } — file mirror disconnected (DB mirroring continues).
+log-audit-file-mirror-disconnected = audit file mirror disconnected; flush ack lost (file writer exited).
 log-main-insecure-warning = SECURITY RISK: authentication is disabled while binding to non-loopback address '{ $host }' (VECBOOST_ALLOW_INSECURE=1). Anyone reachable on this interface can read files via /embed/file and manage models. Enable auth or bind to 127.0.0.1.
 log-main-insecure-refusal = Refusing to start: authentication is disabled (auth.enabled=false) while binding to non-loopback address '{ $host }'. Fix one of: (1) set host to 127.0.0.1 in the config, (2) enable [auth] with VECBOOST_JWT_SECRET and VECBOOST_ADMIN_PASSWORD, or (3) set VECBOOST_ALLOW_INSECURE=1 to accept the risk explicitly.
 log-main-jemalloc-decay = jemalloc decay: dirty={ $dirty }ms muzzy={ $muzzy }ms (boot conf)

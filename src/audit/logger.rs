@@ -99,7 +99,6 @@ impl AuditLogger {
         tokio::spawn(async move {
             Self::run_file_writer(file_rx, log_file_path, max_file_size, max_files).await;
         });
-
         Self {
             config,
             sender: Some(sender),
@@ -115,6 +114,17 @@ impl AuditLogger {
         max_files: usize,
     ) {
         let Some((mut file, current_size)) = Self::open_audit_log_file(&log_file_path).await else {
+            // 提前退出会让 file_mirror 通道永久断开，后续所有镜像发送静默失败、
+            // flush 只会表现为超时。此处必须留痕，运维才能定位到文件 writer。
+            log::error!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-audit-file-writer-open-failed",
+                    crate::i18n::tr_args(&[("path", &format!("{log_file_path:?}"))])
+                )
+            );
+            // 持续排空通道，避免发送方在无界通道上无限堆积。
+            while receiver.recv().await.is_some() {}
             return;
         };
 
@@ -277,7 +287,11 @@ impl AuditLogger {
                     for event in drained {
                         let _ = file_mirror.send(LoggerCommand::Event(event));
                     }
-                    let _ = file_mirror.send(LoggerCommand::Flush(ack));
+                    // 发送失败即文件 writer 已退出：不告警的话 flush() 只会超时，
+                    // 根因（文件 writer 死亡）在日志里不可见。
+                    if file_mirror.send(LoggerCommand::Flush(ack)).is_err() {
+                        log::warn!("{}", crate::i18n::tr("log-audit-file-mirror-disconnected"));
+                    }
                 }
             }
         }

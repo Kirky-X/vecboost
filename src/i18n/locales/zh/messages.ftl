@@ -362,6 +362,9 @@ log-main-worker-start-failed = WorkerManager 启动失败：{ $detail }
 log-main-pipeline-ready = 流水线组件初始化完成
 log-main-pipeline-disabled = 请求流水线已禁用
 log-main-gpu-no-backend = use_gpu=true 但本次构建未编译任何 GPU 后端（缺 'cuda' feature，或 macOS 上缺 'metal'）—— 回退到 CPU。如需 GPU 请以 --features cuda 重新构建。
+log-main-cuda-probe-only = 已启用 'cuda' feature 但未编译 CUDA 计算后端（'candle-cuda'）—— 回退到 CPU。如需 GPU 计算请以 --features cuda,candle-cuda 重新构建。
+log-audit-file-writer-open-failed = 审计文件 writer 启动即退出：无法打开 { $path } —— 文件镜像已断开（DB 镜像继续工作）。
+log-audit-file-mirror-disconnected = 审计文件镜像已断开，flush 确认丢失（文件 writer 已退出）。
 log-main-insecure-warning = 安全风险：认证已关闭却绑定到非回环地址“{ $host }”（VECBOOST_ALLOW_INSECURE=1）。该网段上任何可达者都能通过 /embed/file 读取文件并管理模型。请启用认证或改绑 127.0.0.1。
 log-main-insecure-refusal = 拒绝启动：认证已关闭（auth.enabled=false）却绑定到非回环地址“{ $host }”。请任选其一：(1) 将配置中的 host 设为 127.0.0.1；(2) 启用 [auth] 并设置 VECBOOST_JWT_SECRET 与 VECBOOST_ADMIN_PASSWORD；(3) 设置 VECBOOST_ALLOW_INSECURE=1 显式接受该风险。
 log-main-jemalloc-decay = jemalloc decay：dirty={ $dirty }ms muzzy={ $muzzy }ms（boot conf）

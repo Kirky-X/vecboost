@@ -164,7 +164,7 @@ jobs:
       # 覆盖率同口径前提：模型/ORT 依赖的测试（HTTP/翻译/引擎 E2E）在缺
       # 资产时会跳过，使 CI 覆盖率低于本地实测。此处缓存并预置最小资产集。
       - name: Cache ONNX runtime and models
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/vecboost-ci

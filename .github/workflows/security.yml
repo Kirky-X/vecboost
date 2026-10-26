@@ -57,7 +57,7 @@ jobs:
         # 不加 --log-opts，会扫全历史且不接基线（该 action 无此入参）——定时
         # 与手动的全量扫描由 gitleaks-history 作业承担（接基线）。
         if: github.event_name == 'push' || github.event_name == 'pull_request'
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           # 扫描 PR 时 gitleaks-action 必须拿到 token，缺失会直接退出 1。
           GITHUB_TOKEN: ${{ github.token }}

@@ -7,6 +7,7 @@
 
 ## 📋 目录
 
+- [未发布](#未发布)
 - [0.3.0-rc.3 - 2026-10-20](#030-rc3---2026-10-20)
 - [0.3.0-rc.2 - 2026-10-15](#030-rc2---2026-10-15)
 - [0.3.0-rc.1 - 2026-09-22](#030-rc1---2026-09-22)
@@ -15,6 +16,24 @@
 - [0.1.2 - 2026-01-16](#012---2026-01-16)
 - [0.1.1 - 2026-01-15](#011---2026-01-15)
 - [0.1.0 - 2026-01-10](#010---2026-01-10)
+
+---
+
+<a id="未发布"></a>
+
+## [未发布]
+
+### 变更
+- **依赖升级**：`icu` 2.3 → 2.4、`redis` 1.7 → 1.8（`distributed-redis` 特性）、`uuid` 1.26 → 1.29（http 特性）、`tonic` 0.14.6 → 0.14.8（lock 刷新）、`ort` 2.0.0-rc.14 → rc.15（同 2.0.0 基线 crates.io 最新 rc，版本要求同步）、`character_converter` 版本要求规范化 2.1.5 → 2.1（解析版本不变 2.1.5）。
+- **tokio 1.53 → 1.54 且特性由 `full` 裁剪为显式 8 项**（`rt-multi-thread`/`macros`/`time`/`sync`/`signal`/`fs`/`net`/`io-util`）：全仓 grep 证实 `process`/`io-std`/`parking` 零使用，编译产物不再含无关模块。
+- **examples 的 reqwest 由 `default-tls` 改为 `rustls`**：与主 crate TLS 单栈统一，workspace 构建图不再引入 native-tls。
+- **显式特性去冗余**：移除被同集合其他特性隐含的项——confers `toml`（⊂`modules`）、trait-kit `confers`（⊂`reload`）、dbnexus `cache`（⊂`permission`）与 `pool-health-check`（⊂`failover`）、garrison `web-axum`/`secure-ct-eq`/`cache-memory`/`account-credential`/`listener`/`firewall`/`firewall-ddos`（均被保留特性传递启用，隐含定义已逐条对照 garrison/confers/trait-kit/dbnexus 源码核实）。
+- **CI actions 全量升版并统一 SHA pin**：checkout 统一 v7.0.1、codeql-action v4.39.1、cache v6.1.0、upload-artifact v7.0.2、setup-python v7.1.0、codecov v7.1.1、login-action v4.7.0、gitleaks v3.0.0、zizmor v0.8.0、install-action v2.88.0、crates-io-auth v1.0.6；trivy-action 与 checkov-action 两处浮动 `master` 引用钉到 release tag。
+
+### 修复
+- **ort load-dynamic 默认 dylib 路径按目标平台选择**（新增 `src/engine/session.rs` 的 `ort_dylib_default`：Linux `.so` / macOS `.dylib` / Windows `.dll`）：此前 8 处测试侧硬编码 `libonnxruntime.so`，在 macOS 上指向 ELF 文件 dlopen 失败。`3rdparty/onnxruntime/README.md` 增补 macOS arm64 dylib 放置说明。
+- **`uuid_like_id` 追加进程内单调序号**（3 位数字后缀，`err-<u128>` 格式契约不变）：macOS 实时钟 μs 级粒度下同一 tick 连续调用不再生成重复 error id。
+- **clippy::collapsible_if ×2**（`src/device/thread_tune.rs`）按 clippy 1.99 建议折叠为 let-chains；symlink 越界测试改为自建根外目标（原 `/etc/hostname` 为 Linux 特有路径，macOS 上 canonicalize 先报 ENOENT）。
 
 ---
 
@@ -175,7 +194,7 @@
 - **翻译接口（add-translation-and-langdetect）**:`[translation]` 段 `[[translation.pairs]]` 多语言对配置（启动期急切构建、pair 上限 16、任一 bundle 缺失启动期 fail-fast），`/api/1/translate` 端点按 `(source_language, target_language)` 精确路由（未配置对 400 并回显已配置 pairs 全集），`source_language` 缺省经 whatlang auto 检测（不可靠 400 `translate-detect-failed`，检测语言回填 `detected_source_language`）；Marian/opus-mt seq2seq 引擎（`src/engine/onnx_translate.rs`，encoder+decoder_model_merged 双 Session 贪心解码，缓存分支禁用——Xenova merged 图导出缺陷实测，无缓存全量重算 O(L²) 有界）；token 预算双层校验（服务层预判 + 引擎 encode 后复检，超限显性拒绝）；E2E 黄金闸门 `tests/translate_e2e.rs`（20 句 golden 完全相等 + 贪心确定性 + 质量输出 `out/translate-quality.json`）；四协议面（HTTP/gRPC `vecboost.translate`/MCP `translate`/CLI）、驻留记账 Translate 臂（磁盘 × 2.0 保守系数，int8 无标定声明）与 USER_GUIDE/API_REFERENCE 文档同步
 - **语言检测接口（add-translation-and-langdetect）**:`/api/1/detect` 端点与 `src/text/langdetect.rs` 检测核心（whatlang 0.18，70 变体 ISO 639-3→639-1 穷举映射、无等价回退 639-3 码）；`DetectService` µs 级纯 CPU 不走 spawn_blocking；不可判定返回 200 + `language: null` + `is_reliable: false`（显性表达）；`allow` 白名单收窄（非法码显性 400）；翻译 auto 检测与该端点共用同一函数（单一事实源）
 - **项目定位变更**：从嵌入向量服务改为多功能推理服务（嵌入/重排/决策/翻译/语言检测）——Cargo `description`/`keywords`、双语 README 定位标语与特性列表、API_REFERENCE（翻译/检测小节 + gRPC 方法表）、USER_GUIDE（翻译配置/bundle 契约/限制节）同步改写
-- **翻译覆盖闭环（可行性研究未覆盖项）**：中/日/韩码族（zh/zho/cmn/yue、ja/jpn、ko/kor）目标语译文 CJK 半角标点归一（`src/engine/onnx_translate.rs` 引擎层后处理，TemperatureCalibration 同层先例；`,;:?!` → 全角，数字两侧夹数字的千分位/时间上下文与句号不转换；金标经程序化差异核对恰好 4 句 zh 变化且仅标点，语义与 en-es 零变化）；`benches/translate_bench.rs` 基准（langdetect 短/10k 上限、en→zh 短/中/长、en→es 短、count_tokens；基线 `docs/benchmarks/translate_baseline_results.md`）；`cuda` feature 编译链真机验证（RTX 5080 + CUDA 13.0 nvcc，candle-kernels 实编译）与 cuda 门控单测实跑；三路评审 30 条意见处置台账入库 `docs/translation-review-ledger.md`（29 修复 1 显性保留，含逐条证据位置）
+- **翻译覆盖闭环（可行性研究未覆盖项）**：中/日/韩码族（zh/zho/cmn/yue、ja/jpn、ko/kor）目标语译文 CJK 半角标点归一（`src/engine/onnx_translate.rs` 引擎层后处理，TemperatureCalibration 同层先例；`,;:?!` → 全角，数字两侧夹数字的千分位/时间上下文与句号不转换；金标经程序化差异核对恰好 4 句 zh 变化且仅标点，语义与 en-es 零变化）；`benches/translate_bench.rs` 基准（langdetect 短/10k 上限、en→zh 短/中/长、en→es 短、count_tokens；基线 `docs/benchmarks/translate_baseline_results.md`）；`cuda` feature 编译链真机验证（RTX 5080 + CUDA 13.0 nvcc，candle-kernels 实编译）与 cuda 门控单测实跑；三路评审 30 条意见处置台账入库 `docs/reviews/TRANSLATION_REVIEW_LEDGER.md`（29 修复 1 显性保留，含逐条证据位置；`docs/reviews/` 为仅本机保留目录，不入 git）
 
 - **多 checkpoint 配置面（laya-p2p3-coverage P2-2）**:`[model.checkpoints.<name>]` 预设表——`switch_model` 按名命中即应用该 checkpoint 的决策序列预算（`head_max_len`/`max_len`，参数化 `DecisionParams` 替代编译期常量直传）与 model_path/task/engine_type/tokenizer_path（请求显式值优先、预设为缺省层，engine_type 未配置继承当前加载模型）；内置 `laya-multilingual` 预设（head_max_len 256 / max_len 256，文档 §2.1 多语言口径）零配置可切换，同名显式条目按字段级覆盖内置（未写的可选字段逐字段继承内置值，只定制 model_path 不丢多语言预算）；预设表经启动 fail-fast 校验（未知字段/缺失必填/参数为 0 或超硬上限——单字段 8192 或 head+state+4 固定特殊 token 组合超窗/表键与 name 漂移均拒绝启动，拒绝静默钳制）并注入 EmbeddingService 供 switch 查表；未配置时行为与现状完全等价
 - **Candle 原生决策头（laya-p2p3-coverage P3）**:`task = "decision" + engine_type = "candle"` 走纯 Rust 前向（`src/engine/candle_decision.rs`，无 onnxruntime 依赖）——ModernBERT-large 骨干（candle-transformers，`encoder.`→`model.` 键重映射，transformers 5.0 无 bias/layer0 融合 attn_norm 权重实测兼容）+ 决策头（type_emb 按题广播 → 2 层 norm_first TransformerEncoderLayer（fused `in_proj_weight`，FFN ReLU）→ marker gather → option scorer → act/escalate 头）；预处理/后处理/温度校准与 onnx 管线同源（协议层拆分 `decision_protocol.rs` 共享，序列构造/collate/softmax/三类后处理单一实现）；官方 `convaiinnovations/laya` checkpoint 键映射以 safetensors header 实测 206 张量为准（缺键显性报错列全清单）；对齐闸门 `tests/candle_decision_parity.rs` 同题对照 `|Δlogit| ≤ 1e-4`（choice/score/noul 各一题，真 checkpoint + 真 bundle 实测通过；资产缺失整文件 SKIP）；`EngineFactory` 决策臂按 engine_type 分派后端（candle/onnx），`AnyEngine` 补 `supports_rerank` 变体转发（此前决策引擎的 false 覆盖经 AnyEngine 不可达）；checkpoint 获取步骤与限制见 USER_GUIDE「Candle 原生决策路径」。**迁移提示（对既有 task=decision 部署为行为变更）**：旧版决策任务不分派 engine_type、一律消费 ONNX bundle；升级后 `[model].engine_type` 缺省（candle）要求 `models/laya-pytorch/` 布局的 PyTorch checkpoint（启动期显性加载失败即命中此变更）——放置 checkpoint，或显式配置 `engine_type = "onnx"` 沿用既有 ONNX bundle。`memory_limit` 记账对 decision + candle 组合按 2× 磁盘放大（F16 checkpoint → F32 物化驻留口径，switch 投影执法与启动期记账同源），部署侧不再需要按 2× 磁盘预留余量

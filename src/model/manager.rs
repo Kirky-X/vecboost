@@ -1064,7 +1064,7 @@ mod tests {
     }
 
     /// reload 必须从 LoadedModel 透传 task：task=decision 的模型 reload 后
-    /// 不得被静默降级回 Embedding（评审 R5/R16）
+    /// 不得被静默降级回 Embedding
     #[tokio::test]
     async fn test_reload_preserves_model_task() {
         use std::sync::Mutex;
@@ -1138,7 +1138,7 @@ mod tests {
     }
 
     /// reload 必须从 LoadedModel 透传 quantized：.gguf 量化模型 reload 后
-    /// 标志不得静默丢失（评审 R4，与 task 同款有损重建问题）
+    /// 标志不得静默丢失（与 task 同款有损重建问题）
     #[tokio::test]
     async fn test_reload_preserves_quantized_flag() {
         use std::sync::Mutex;

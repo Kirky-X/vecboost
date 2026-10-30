@@ -140,8 +140,9 @@ impl OxCacheBackend {
         // capacity 保留形参（与内存后端同构；Redis 由服务端淘汰，无本地容量）
         let _ = capacity;
         let cache = Cache::<String, Vec<f32>>::redis(url).await.map_err(|e| {
-            crate::error::VecboostError::config_error(format!(
-                "embedding-cache-redis-init-failed: {e}"
+            crate::error::VecboostError::config_error(crate::i18n::tr_with_args(
+                "cache-embedding-redis-init-failed",
+                crate::i18n::tr_args(&[("detail", &e.to_string())]),
             ))
         })?;
         Ok(Self {
@@ -188,7 +189,7 @@ impl OxCacheBackend {
         let approx_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
         let is_new = approx_bytes == 0;
         let (_, committed) = persist::replay(&path, &model_tag);
-        // 新文件构造时一次性写头（追加路径不再逐插入 stat， 审查）。
+        // 新文件构造时一次性写头（追加路径不再逐插入 stat）。
         let mut writer = std::io::BufWriter::new(file);
         if is_new && let Err(e) = persist::write_header(&mut writer) {
             log::warn!(
@@ -469,7 +470,10 @@ impl OxCacheBackend {
     pub async fn clear(&self) -> Result<(), crate::error::VecboostError> {
         if let Some(cache) = &self.cache {
             cache.clear().await.map_err(|e| {
-                crate::error::VecboostError::InternalError(format!("cache-clear-failed::{e}"))
+                crate::error::VecboostError::InternalError(crate::i18n::tr_with_args(
+                    "cache-clear-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                ))
             })?;
         }
         if let Some(bloom) = &self.bloom {
@@ -1187,12 +1191,17 @@ mod tests {
     #[cfg(feature = "distributed-redis")]
     #[tokio::test]
     async fn redis_init_failure_surfaces_startup_error() {
+        crate::i18n::init();
         allow_insecure_redis();
         let Err(err) = OxCacheBackend::with_redis("redis://127.0.0.1:1", 16, None).await else {
             panic!("unreachable redis must fail init");
         };
+        let expected = crate::i18n::tr_with_args(
+            "cache-embedding-redis-init-failed",
+            crate::i18n::tr_args(&[("detail", "")]),
+        );
         assert!(
-            format!("{err:?}").contains("embedding-cache-redis-init-failed"),
+            format!("{err:?}").contains(&expected),
             "unexpected error: {err:?}"
         );
     }

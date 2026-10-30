@@ -13,7 +13,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 
 /// 单个语言对的路由项：pair 引擎句柄 + 该 pair 生效的翻译参数 + 并发背压
-/// 信号量（评审 RES-1/PERF-1：同 pair 引擎被 Mutex 串行化，无背压时 N 个
+/// 信号量（同 pair 引擎被 Mutex 串行化，无背压时 N 个
 /// 并发请求占 N-1 个 blocking 线程空等；permits=1 使排队显性化——
 /// try_acquire 失败即 503 Overloaded，与队列满口径统一）。
 /// Clone 仅为路由表查询处 `get.cloned` 的句柄语义（Arc 克隆非引擎克隆）。
@@ -137,7 +137,7 @@ impl TranslateService {
             )));
         };
 
-        // 并发背压（评审 RES-1/PERF-1）：try_acquire 失败即 503 Overloaded
+        // 并发背压：try_acquire 失败即 503 Overloaded
         // 显性拒绝（非无限排队占 blocking 线程）；acquire 后经 spawn_blocking
         // 全程持有，drop 自动释放
         let _permit = route.semaphore.clone().try_acquire_owned().map_err(|_| {
@@ -557,7 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pair_busy_returns_503_overloaded() {
-        // 评审 RES-1/PERF-1：permits=1 背压——许可被占时新请求 503 显性拒绝
+        // permits=1 背压——许可被占时新请求 503 显性拒绝
         //（非无限排队占 blocking 线程）
         crate::i18n::init();
         let svc = make_service();

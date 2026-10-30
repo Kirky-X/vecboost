@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
 import wave
 
 import pytest
@@ -110,16 +111,17 @@ def _wav_samples(path: pathlib.Path) -> list[float]:
 def transcribe_server():
     if not _assets_ready():
         pytest.skip("转录资产缺失（assets/models 或 assets/smoke10s.wav），SKIP")
-    # ORT load-dynamic 定位：服务器进程显式指向仓内 3rdparty 动态库
-    # （ort 默认找系统 libonnxruntime.so，不在搜索路径时启动 panic）
+    # ORT load-dynamic 定位：服务器进程显式指向仓内 3rdparty 动态库，
+    # 库名按目标平台选择（与 src/engine/session.rs ort_dylib_default 同口径）
+    ort_lib = "onnxruntime.dll" if sys.platform == "win32" else (
+        "libonnxruntime.dylib" if sys.platform == "darwin" else "libonnxruntime.so"
+    )
     s = spawn_server(
         "transcribe",
         TRANSCRIBE_PORT,
         _config(),
         env_extra={
-            "ORT_DYLIB_PATH": str(
-                PROJECT_ROOT / "3rdparty" / "onnxruntime" / "libonnxruntime.so"
-            )
+            "ORT_DYLIB_PATH": str(PROJECT_ROOT / "3rdparty" / "onnxruntime" / ort_lib)
         },
     )
     yield s

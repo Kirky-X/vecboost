@@ -20,13 +20,52 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use limiteron::CacheBanStorage;
 use limiteron::Governor;
 use limiteron::limiters::{Limiter, TokenBucketLimiter};
-use limiteron::matchers::RequestContext;
+use limiteron::matchers::{
+    ApiKeyExtractor, CompositeExtractor, Identifier, IdentifierExtractor, IpExtractor,
+    RequestContext, UserIdExtractor,
+};
 use limiteron::middleware::RateLimitHeaderValues;
 use limiteron::storage::{MemoryBanStorage, MemoryStorage};
 use tokio::sync::Mutex;
 
 use crate::config::app::RateLimitBackend;
 use crate::error::VecboostError;
+
+/// 把 `RequestContext.user_id` 字段纳入 Governor 标识提取链。
+///
+/// limiteron 默认提取链为 UserIdExtractor(X-User-Id header/query/默认值) →
+/// IP → ApiKey，不读 `user_id` 字段：仅带 `user_id` 的已认证上下文（无 IP、
+/// 无头）在全局检查期提取失败，被 adapter 兜底为静默拒绝（无快照），
+/// user 维度桶永远不可达。本提取器置于链首位，使已认证上下文可被全局
+/// 维度归因；`user_id` 来自服务端认证态，其权威性高于可伪造的请求头，
+/// 故优先于 header 提取。
+struct ContextUserIdExtractor;
+
+impl IdentifierExtractor for ContextUserIdExtractor {
+    fn extract(&self, context: &RequestContext) -> Option<Identifier> {
+        context
+            .user_id
+            .as_ref()
+            .map(|u| Identifier::UserId(u.clone()))
+    }
+
+    fn name(&self) -> &str {
+        "vecboost-context-user-id"
+    }
+}
+
+/// 复刻 limiteron 默认提取链，并在链首加入 [`ContextUserIdExtractor`]：
+/// `context.user_id` → X-User-Id header/query → IP → X-API-Key。
+fn build_identifier_extractor() -> Arc<dyn IdentifierExtractor> {
+    Arc::new(
+        CompositeExtractor::builder()
+            .add_extractor(Box::new(ContextUserIdExtractor))
+            .add_extractor(Box::new(UserIdExtractor::from_header("X-User-Id")))
+            .add_extractor(Box::new(IpExtractor::builder().build()))
+            .add_extractor(Box::new(ApiKeyExtractor::from_header("X-API-Key")))
+            .build(),
+    )
+}
 
 /// 限流决策详情：布尔结果 + 绑定维度快照。
 ///
@@ -188,7 +227,10 @@ impl RedisWindowLimiter {
     }
 
     fn script_error(op: &str, detail: impl std::fmt::Display) -> limiteron::error::LimiteronError {
-        limiteron::error::LimiteronError::Other(format!("redis-window-{op}: {detail}"))
+        limiteron::error::LimiteronError::Other(crate::i18n::tr_with_args(
+            "rate-limit-redis-window-op-failed",
+            crate::i18n::tr_args(&[("op", op), ("detail", &detail.to_string())]),
+        ))
     }
 
     fn parse_count_ttl(
@@ -199,7 +241,10 @@ impl RedisWindowLimiter {
             other => {
                 return Err(Self::script_error(
                     "parse",
-                    format!("unexpected reply {other:?}"),
+                    crate::i18n::tr_with_args(
+                        "rate-limit-redis-unexpected-reply",
+                        crate::i18n::tr_args(&[("detail", &format!("{other:?}"))]),
+                    ),
                 ));
             }
         };
@@ -208,7 +253,10 @@ impl RedisWindowLimiter {
             other => {
                 return Err(Self::script_error(
                     "count",
-                    format!("unexpected value {other:?}"),
+                    crate::i18n::tr_with_args(
+                        "rate-limit-redis-unexpected-value",
+                        crate::i18n::tr_args(&[("detail", &format!("{other:?}"))]),
+                    ),
                 ));
             }
         };
@@ -217,7 +265,10 @@ impl RedisWindowLimiter {
             other => {
                 return Err(Self::script_error(
                     "ttl",
-                    format!("unexpected value {other:?}"),
+                    crate::i18n::tr_with_args(
+                        "rate-limit-redis-unexpected-value",
+                        crate::i18n::tr_args(&[("detail", &format!("{other:?}"))]),
+                    ),
                 ));
             }
         };
@@ -245,7 +296,10 @@ impl Limiter for RedisWindowLimiter {
             Err(_) => {
                 return Err(RedisWindowLimiter::script_error(
                     "eval",
-                    format!("timeout after {EVAL_TIMEOUT:?}: redis unresponsive (fail-closed)"),
+                    crate::i18n::tr_with_args(
+                        "rate-limit-redis-eval-timeout",
+                        crate::i18n::tr_args(&[("timeout", &format!("{EVAL_TIMEOUT:?}"))]),
+                    ),
                 ));
             }
         };
@@ -328,8 +382,9 @@ impl LimiteronAdapter {
                         .build()
                         .await
                         .map_err(|e| {
-                            VecboostError::config_error(format!(
-                                "rate-limit-redis-init-failed: {e}"
+                            VecboostError::config_error(crate::i18n::tr_with_args(
+                                "startup-rate-limit-redis-init-failed",
+                                crate::i18n::tr_args(&[("detail", &e.to_string())]),
                             ))
                         })?;
                     let cache = Arc::new(oxcache::Cache::<String, String>::with_dependencies(
@@ -363,8 +418,9 @@ impl LimiteronAdapter {
                         .build()
                         .await
                         .map_err(|e| {
-                            VecboostError::config_error(format!(
-                                "rate-limit-redis-ban-init-failed: {e}"
+                            VecboostError::config_error(crate::i18n::tr_with_args(
+                                "startup-rate-limit-redis-ban-init-failed",
+                                crate::i18n::tr_args(&[("detail", &e.to_string())]),
                             ))
                         })?;
                     let ban_backend: Arc<dyn oxcache::backend::CacheBackend> =
@@ -405,6 +461,7 @@ impl LimiteronAdapter {
             .with_storage(storage)
             .with_ban_storage(ban_storage)
             .with_l1_cache_enabled(false)
+            .with_identifier_extractor(build_identifier_extractor())
             .build()
             .await
             .expect("Governor build with valid config should succeed");
@@ -777,6 +834,89 @@ mod tests {
         assert!(adapter.check_rate_limit(&ctx_bob).await);
     }
 
+    #[tokio::test]
+    async fn test_user_only_context_without_ip_is_allowed() {
+        // 回归：limiteron 默认提取链不读 user_id 字段，user-only 上下文在
+        // Governor 全局检查期提取失败被兜底静默拒绝——ContextUserIdExtractor
+        // 修复后应命中 user 维度桶（文档口径：无 IP 亦可按用户独立计数）。
+        // 桶耗尽语义由 test_user_dimension_independent_from_ip 覆盖（带 IP
+        // 路径同构）；此处不断言耗尽——refill_rate=max(rpm/60,1)=1 token/s，
+        // 跨秒边界的耗尽断言会竞态。首调快照紧跟消费取值，remaining 确定。
+        let settings = RateLimitSettings {
+            global_requests_per_minute: 100,
+            ip_requests_per_minute: 5,
+            user_requests_per_minute: 3,
+            api_key_requests_per_minute: 0,
+            ..RateLimitSettings::default()
+        };
+        let adapter = LimiteronAdapter::new(settings).await;
+        let ctx = RequestContext {
+            user_id: Some("alice".to_string()),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            ..Default::default()
+        };
+
+        let first = adapter.check_rate_limit_detailed(&ctx).await;
+        assert!(first.allowed, "user-only 上下文不应被全局检查拒绝");
+        let headers = first.headers.expect("allowed 决策应携带绑定维度快照");
+        assert_eq!(headers.policy, "user-token-bucket", "绑定维度应为 user 桶");
+        assert_eq!(headers.limit, 3, "绑定维度应为 user 配额");
+        assert_eq!(headers.remaining, 2, "消费 1 个令牌后剩余 2");
+
+        // 同键后续请求仍放行（桶按 user 持久化，不逐请求重建）
+        assert!(adapter.check_rate_limit(&ctx).await);
+
+        // 其他 user-only 用户有独立配额
+        let bob = RequestContext {
+            user_id: Some("bob".to_string()),
+            ..ctx.clone()
+        };
+        let bob_first = adapter.check_rate_limit_detailed(&bob).await;
+        assert!(bob_first.allowed, "bob 应有独立 user 桶");
+        assert_eq!(
+            bob_first.headers.expect("bob 快照").policy,
+            "user-token-bucket"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_user_id_field_takes_precedence_over_header() {
+        // context.user_id 来自服务端认证态，权威性高于可伪造的 X-User-Id 头：
+        // 两者并存时应归因到认证态用户，而非头中声明值
+        let settings = RateLimitSettings {
+            global_requests_per_minute: 100,
+            ip_requests_per_minute: 0,
+            user_requests_per_minute: 2,
+            api_key_requests_per_minute: 0,
+            ..RateLimitSettings::default()
+        };
+        let adapter = LimiteronAdapter::new(settings).await;
+        let mut ctx = RequestContext {
+            user_id: Some("alice".to_string()),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            ..Default::default()
+        };
+        ctx.headers
+            .insert("X-User-Id".to_string(), "mallory".to_string());
+
+        // alice 桶限额 2：两次后耗尽——若归因到头值 mallory，alice 不会耗尽
+        assert!(adapter.check_rate_limit(&ctx).await);
+        assert!(adapter.check_rate_limit(&ctx).await);
+        assert!(
+            !adapter.check_rate_limit(&ctx).await,
+            "认证态 user_id 应主导归因（alice 桶耗尽即拒绝）"
+        );
+
+        // mallory 有独立配额
+        let mallory_ctx = RequestContext {
+            user_id: Some("mallory".to_string()),
+            ..ctx.clone()
+        };
+        assert!(adapter.check_rate_limit(&mallory_ctx).await);
+    }
+
     // 健康检查测试
 
     #[tokio::test]
@@ -960,10 +1100,15 @@ mod tests {
     #[cfg(feature = "distributed-redis")]
     #[test]
     fn parse_count_ttl_rejects_non_array_reply() {
+        crate::i18n::init();
         let err = RedisWindowLimiter::parse_count_ttl(oxcache::redis::Value::Nil)
             .expect_err("非数组应答必须显性失败");
+        let expected = crate::i18n::tr_with_args(
+            "rate-limit-redis-window-op-failed",
+            crate::i18n::tr_args(&[("op", "parse"), ("detail", "")]),
+        );
         assert!(
-            err.to_string().contains("redis-window-parse"),
+            err.to_string().contains(&expected),
             "错误必须点名解析阶段：{err}"
         );
     }
@@ -972,20 +1117,25 @@ mod tests {
     #[cfg(feature = "distributed-redis")]
     #[test]
     fn parse_count_ttl_rejects_non_integer_count() {
+        crate::i18n::init();
         let err = RedisWindowLimiter::parse_count_ttl(oxcache::redis::Value::Array(vec![
             oxcache::redis::Value::BulkString(b"nan".to_vec()),
             oxcache::redis::Value::Int(1),
         ]))
         .expect_err("非整数 count 必须拒绝");
+        let expected = crate::i18n::tr_with_args(
+            "rate-limit-redis-window-op-failed",
+            crate::i18n::tr_args(&[("op", "count"), ("detail", "")]),
+        );
         assert!(
-            err.to_string().contains("redis-window-count"),
+            err.to_string().contains(&expected),
             "错误必须点名 count 阶段：{err}"
         );
 
         let err2 = RedisWindowLimiter::parse_count_ttl(oxcache::redis::Value::Array(vec![]))
             .expect_err("空数组必须拒绝");
         assert!(
-            err2.to_string().contains("redis-window-count"),
+            err2.to_string().contains(&expected),
             "空应答也应归为 count 阶段：{err2}"
         );
     }
@@ -994,10 +1144,15 @@ mod tests {
     #[cfg(feature = "distributed-redis")]
     #[test]
     fn parse_count_ttl_rejects_missing_or_non_integer_ttl() {
+        crate::i18n::init();
         let err = RedisWindowLimiter::parse_count_ttl(rints(&[1]))
             .expect_err("只带 count 的应答必须拒绝");
+        let expected = crate::i18n::tr_with_args(
+            "rate-limit-redis-window-op-failed",
+            crate::i18n::tr_args(&[("op", "ttl"), ("detail", "")]),
+        );
         assert!(
-            err.to_string().contains("redis-window-ttl"),
+            err.to_string().contains(&expected),
             "错误必须点名 ttl 阶段：{err}"
         );
 
@@ -1006,9 +1161,6 @@ mod tests {
             oxcache::redis::Value::Nil,
         ]))
         .expect_err("非整数 ttl 必须拒绝");
-        assert!(
-            err2.to_string().contains("redis-window-ttl"),
-            "实际：{err2}"
-        );
+        assert!(err2.to_string().contains(&expected), "实际：{err2}");
     }
 }

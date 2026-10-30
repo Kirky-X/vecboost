@@ -219,7 +219,19 @@ struct RateLimitOpts {
 /// server 侧 engine_type="onnx" 需 onnx feature 构建，故随测试一并 cfg 门。
 #[cfg(feature = "onnx")]
 const LAYA_BUNDLE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/models/laya");
-#[cfg(feature = "onnx")]
+// ort/load-dynamic 默认 dylib 按目标平台选扩展名（与 src/engine/session.rs
+// ort_dylib_default 同口径；集成测试独立 crate，cfg 门控声明）。
+#[cfg(all(feature = "onnx", target_os = "macos"))]
+const ORT_DYLIB_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/libonnxruntime.dylib"
+);
+#[cfg(all(feature = "onnx", target_os = "windows"))]
+const ORT_DYLIB_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/onnxruntime.dll"
+);
+#[cfg(all(feature = "onnx", not(any(target_os = "macos", target_os = "windows"))))]
 const ORT_DYLIB_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/3rdparty/onnxruntime/libonnxruntime.so"

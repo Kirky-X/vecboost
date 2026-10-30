@@ -36,6 +36,21 @@ pub(crate) struct SessionOpts<'a> {
     pub extra_config: &'a [(&'a str, &'a str)],
 }
 
+/// ort/load-dynamic 默认 dylib 路径（`ORT_DYLIB_PATH` 未设置时的仓库落位兜底）：
+/// 目录固定 `3rdparty/onnxruntime/`，文件扩展名按目标平台选择——
+/// Linux `.so` / macOS `.dylib` / Windows `.dll`，禁止硬编码单一平台路径。
+/// 仅测试侧使用（生产由运行环境注入 `ORT_DYLIB_PATH`，见 3rdparty/onnxruntime/README.md）。
+#[cfg(test)]
+pub(crate) fn ort_dylib_default() -> String {
+    if cfg!(target_os = "macos") {
+        "3rdparty/onnxruntime/libonnxruntime.dylib".to_string()
+    } else if cfg!(target_os = "windows") {
+        "3rdparty/onnxruntime/onnxruntime.dll".to_string()
+    } else {
+        "3rdparty/onnxruntime/libonnxruntime.so".to_string()
+    }
+}
+
 /// intra 线程数解析（纯函数，离线可测）：`0` → `available_parallelism`（兜底 4），
 /// 非 `0` → 原值透传。与 `onnx_engine.rs`/`decision.rs` 收编前语义逐字一致。
 fn resolve_intra_threads(intra_threads: usize) -> usize {
@@ -199,9 +214,12 @@ const PRECISION_SCAN_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
 #[cfg(feature = "transcribe")]
 pub(crate) fn detect_onnx_weight_precision(onnx_file: &Path) -> Result<Precision, VecboostError> {
     let mut file = std::fs::File::open(onnx_file).map_err(|e| {
-        VecboostError::ModelLoadError(format!(
-            "open onnx for precision probe {}: {e}",
-            onnx_file.display()
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "model-onnx-probe-open-failed",
+            crate::i18n::tr_args(&[
+                ("path", &onnx_file.display().to_string()),
+                ("detail", &e.to_string()),
+            ]),
         ))
     })?;
     let overlap = QUANT_OP_MARKERS.iter().map(|m| m.len()).max().unwrap_or(1) - 1;
@@ -210,9 +228,12 @@ pub(crate) fn detect_onnx_weight_precision(onnx_file: &Path) -> Result<Precision
     let mut scanned: u64 = 0;
     loop {
         let n = file.read(&mut buf).map_err(|e| {
-            VecboostError::ModelLoadError(format!(
-                "read onnx for precision probe {}: {e}",
-                onnx_file.display()
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "model-onnx-probe-read-failed",
+                crate::i18n::tr_args(&[
+                    ("path", &onnx_file.display().to_string()),
+                    ("detail", &e.to_string()),
+                ]),
             ))
         })?;
         if n == 0 {
@@ -239,7 +260,13 @@ pub(crate) fn detect_onnx_weight_precision(onnx_file: &Path) -> Result<Precision
     Ok(Precision::Fp32)
 }
 
+// 以下门禁纯函数（常量/解析/探测/判定）的运行时消费者只存在于
+// `ensure_memory_available` 的 `target_os = "linux"` 块内；非 Linux 构建下
+// 仅 `#[cfg(test)] mod tests` 引用，故按平台条件豁免 dead_code
+// （同仓先例：`cfg_attr(feature = ..., allow(dead_code))` 特性隔离）。
+
 /// 内存地板缺省值（字节）：`SESSION_MEMORY_FLOOR_MB` 未设/非法时的可用量下限。
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const DEFAULT_MEMORY_FLOOR_MB: u64 = 2048;
 
 /// 门禁开关（纯函数）：`SESSION_MEMORY_GUARD` 读出值等于 `off` 才关停，其余（含未设）恒开。
@@ -248,6 +275,7 @@ fn guard_switch(raw: Option<&str>) -> bool {
 }
 
 /// 地板解析（纯函数）：未设 → 默认；非数字 → 默认（warn）；合法 → MB 转字节。
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn parse_floor_mb(raw: Option<&str>) -> u64 {
     let mb = match raw {
         Some(v) => v.trim().parse::<u64>().unwrap_or_else(|_| {
@@ -272,6 +300,7 @@ fn parse_floor_mb(raw: Option<&str>) -> u64 {
 }
 
 /// /proc/meminfo 文本 → MemAvailable 字节数；行缺失或数值非法返回 None。
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn mem_available_bytes(meminfo: &str) -> Option<u64> {
     for line in meminfo.lines() {
         if let Some(rest) = line.strip_prefix("MemAvailable:") {
@@ -283,6 +312,7 @@ fn mem_available_bytes(meminfo: &str) -> Option<u64> {
 }
 
 /// 门禁判定（纯函数）：`available < need + floor` 拒绝，消息含三个数字与处置建议。
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn memory_gate_decision(available: u64, need: u64, floor: u64) -> Result<(), String> {
     let required = need.saturating_add(floor);
     if available >= required {
@@ -299,6 +329,7 @@ fn memory_gate_decision(available: u64, need: u64, floor: u64) -> Result<(), Str
 /// （ORT 加载峰值≈2×文件、驻留≈1.1×文件，取中并留余量）。Linux 读
 /// /proc/meminfo 的 MemAvailable；其他平台 no-op（尽力而为语义）。
 /// 拒绝即 ModelLoadError fail-fast，杜绝静默加载到系统级 OOM。
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
 pub(crate) fn ensure_memory_available(model_file: &Path) -> Result<(), VecboostError> {
     if !guard_switch(std::env::var("SESSION_MEMORY_GUARD").ok().as_deref()) {
         return Ok(());

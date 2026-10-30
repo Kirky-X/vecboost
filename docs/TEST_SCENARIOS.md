@@ -1,8 +1,8 @@
 # 🧪 VecBoost 测试场景矩阵
 
-> 适用版本：VecBoost **0.2.1**（workspace，Rust edition 2024 / `rust-version = 1.91`）。
+> 适用版本：VecBoost **0.3.0-rc.3**（workspace，Rust edition 2024 / `rust-version = 1.91`）。
 > 用途：穷举 vecboost 的测试栈职责划分与全部验收场景，回答"该把测试写在哪里"。
-> 编写依据（只读核对）：`tests/scenario/*.py`（15 个套件及 docstring 中的 R-* 场景 ID）、`tests/*.rs`、`tests/perf/`、`benches/`、`.github/workflows/`（health-check / feature-matrix / scenario-tests）、`scripts/run-scenario-tests.sh`、`tests/scenario/conftest.py`。
+> 编写依据（只读核对）：`tests/scenario/*.py`（16 个套件及 docstring 中的 R-* 场景 ID）、`tests/*.rs`、`tests/perf/`、`benches/`、`.github/workflows/`（health-check / feature-matrix / scenario-tests）、`scripts/run-scenario-tests.sh`、`tests/scenario/conftest.py`。
 > 所有套件名与场景 ID 均经 `grep` 核实存在。
 
 ## 📋 目录
@@ -30,7 +30,7 @@ vecboost 的性能/质量验证分三层，职责边界如下：
 
 | 层 | 位置 | 引擎 | 职责 | 运行方式 |
 |---|---|---|---|---|
-| **微基准** | `benches/`（criterion） | Mock/真实均可 | 度量原子操作的绝对性能并防回归（相似度 SIMD、批调度、语义缓存索引、吞吐基线） | `cargo bench -p vecboost` |
+| **微基准** | `benches/`（criterion） | Mock/真实均可 | 度量原子操作的绝对性能并防回归（相似度 SIMD、批调度、语义缓存索引、嵌入/重排/翻译吞吐基线），共 6 组 | `cargo bench -p vecboost` |
 | **回归阈值** | `tests/perf/performance_test.rs` | MockEngine | 断言吞吐/延迟不劣化（相对阈值），CI 可跑、不依赖真实模型 | `cargo test -p vecboost --test perf` |
 | **真实服务 E2E** | `tests/scenario/*.py`（pytest） | 真实二进制 + `models/` 本地模型 | 端到端行为契约：HTTP 矩阵/CLI/MCP/生命周期/安全；P99 延迟与真实吞吐 | `pytest tests/scenario -q`（conftest 自动拉起服务器，端口 9101-9143） |
 
@@ -57,8 +57,9 @@ vecboost 的性能/质量验证分三层，职责边界如下：
 | `test_api_enhancements.py` | AE-*（api-config-enhancements） | 10 | API/配置增强（语义检索、模型卸载、similarity metric 等） |
 | `test_fault_tolerance.py` | FT-*（fault-tolerance-contract，端口 9165） | 12 | 容错与 API 逻辑契约：批上界 64/去重 scatter/并发拼批一致性/rerank 严格契约与部分失败容错/search 契约/metrics 格式/dimension 自洽/Matryoshka 前缀/限流 IETF 头与 429 |
 | `test_semantic_cache.py` | SC-*（semantic-cache-e2e，端口 9166-9167） | 5 | 语义缓存：精确命中/trigram 语义命中（黑盒信号=缓存向量逐位相等）/对照组（无缓存服务器同文本对向量必异）/非法 comparison_mode 拒启 |
+| `test_transcribe.py` | R-transcribe 域 TR-01 ~ TR-04 | 4 | 转录端点（`POST /api/v1/transcribe`）：真机 ASR 线上契约、空样本 400、非有限值样本 400、48s 全量样本验证 `body_limit_mb` 真实生效；`transcribe` feature 或转录资产缺失时 SKIP |
 
-合计 15 个套件、119 个场景用例（另有 `tests/perf` 的 27 个 pytest 用例，见下节）。pytest 配置 `filterwarnings = ["error"]`（根 pyproject.toml）——**零告警门禁**：任何运行期 warning 直接判失败。CI 中该层为每夜定时任务（`scenario-tests.yml`，UTC 03:00），不阻塞 PR；本地用 `scripts/run-scenario-tests.sh` 一键运行。
+合计 16 个套件、123 个场景用例（另有 `tests/perf` 的 27 个 pytest 用例，见下节）。pytest 配置 `filterwarnings = ["error"]`（根 pyproject.toml）——**零告警门禁**：任何运行期 warning 直接判失败。CI 中该层为每夜定时任务（`scenario-tests.yml`，UTC 03:00），不阻塞 PR；本地用 `scripts/run-scenario-tests.sh` 一键运行。
 
 ---
 
@@ -66,7 +67,7 @@ vecboost 的性能/质量验证分三层，职责边界如下：
 
 | 文件 | 形态 | 覆盖内容 |
 |------|------|----------|
-| `tests/integration.rs` → `tests/integration/` | Rust 集成 | `api_test.rs`（API 面）与 `real_engine.rs`（RealTestEngine + TestMode mock/light/full） |
+| `tests/integration.rs` → `tests/integration/` | Rust 集成 | `api_test.rs`（API 面）与 `detect_test.rs` / `translate_test.rs`（candle feature 门控）；RealTestEngine + TestMode mock/light/full 已合并进 `tests/common/mod.rs` |
 | `tests/grpc_e2e.rs` | 专项 E2E | gRPC 全方法矩阵：拉起真实二进制（`http,grpc` feature），tonic 客户端经 `vecboost::sdforge` 再导出访问 |
 | `tests/scenario_sdk.rs` | SDK 矩阵 | Library SDK（非 HTTP）模式下的引擎/模型矩阵，按 `models/<目录>` 存在性自动 SKIP |
 | `tests/doctor.rs` | 专项 | `vecboost doctor` 只读诊断（config/tokenizer/缓存持久层/线程/GPU/模型完整性，FAIL 退出码 1） |
@@ -74,7 +75,7 @@ vecboost 的性能/质量验证分三层，职责边界如下：
 | `tests/model_snapshot_regression.rs` | 回归 | 模型快照回归（向量输出与快照比对） |
 | `tests/common/mod.rs` | 共享夹具 | `MockEngine`（FNV-1a + LCG 确定性向量）、`create_test_engine()` |
 
-> 已知偏离（D8）：`tests/integration.rs` / `tests/perf.rs` 与同名子目录并存——入口文件以 `#[path = "..."] mod ...;` 显式声明模块，`cargo test --tests` 构建零模块系统警告（原 v0.2 计划的"合并"不再必要）。
+> 已知偏离（D8）：`tests/integration.rs` / `tests/perf.rs` 与同名子目录并存——入口文件以 `#[path = "..."] mod ...;` 显式声明模块，`cargo test --tests` 构建零模块系统警告，按当前形态保留（原 v0.2 计划的"合并"不再必要）。
 
 ---
 
@@ -106,15 +107,16 @@ pytest tests/perf -m sim          # 只跑模拟器用例
 | `batch_scheduling_bench` | 批调度（稳定/突发负载 × 等待窗口，`assemble_batch` 时间窗路径） |
 | `semantic_cache_bench` | 语义缓存（精确命中/未命中、trigram 搜索规模扩展） |
 | `embed_throughput_bench` | 吞吐基线（单文本 embed 与 32 文本 embed_batch；模型经 `VECBOOST_BENCH_MODEL` 指定，未设置时 skip） |
+| `rerank_bench` | 重排吞吐基线（单对 `rerank` 与 1 query × 32 documents 的 `rerank_batch`；模型经 `VECBOOST_BENCH_MODEL`，引擎/设备经 `VECBOOST_BENCH_ENGINE`/`VECBOOST_BENCH_DEVICE`） |
 | `translate_bench` | 翻译吞吐/时延基线（seq2seq 多语言对；基线见 `docs/benchmarks/translate_baseline_results.md`） |
 
-基线数字记录在 `docs/benchmarks/`（标注环境与噪声区间），调优开关注册表见 [⚡ 性能指南](PERFORMANCE.md)。
+基线数字记录在 `docs/benchmarks/`（标注环境与噪声区间；该目录为**仅本机保留**，`.gitignore` 排除），调优开关注册表见 [⚡ 性能指南](PERFORMANCE.md)。
 
 ---
 
 ## 🧱 单元测试
 
-`src/` 各模块内联 `#[cfg(test)]` 模块（grep 统计 `#[test]` / `#[tokio::test]` 共 2277 个），随 `cargo test --lib` 执行。测试代码允许 `unwrap`（`clippy.toml` 开启 `allow-unwrap-in-tests`），生产代码禁止。共享环境变量竞态经 `ENV_LOCK` 串行化（安全默认值测试组）。
+`src/` 各模块内联 `#[cfg(test)]` 模块（grep 统计 `#[test]` / `#[tokio::test]` 共 2370 个），随 `cargo test --lib` 执行。测试代码允许 `unwrap`（`clippy.toml` 开启 `allow-unwrap-in-tests`），生产代码禁止。共享环境变量竞态经 `ENV_LOCK` 串行化（安全默认值测试组）。
 
 ---
 
@@ -122,10 +124,10 @@ pytest tests/perf -m sim          # 只跑模拟器用例
 
 ```bash
 # 单元 + 集成（CI：health-check.yml test job 分 --lib 与 --tests 两步）
-cargo test --features "grpc,cli,auth,onnx,db,openapi,mcp" --lib
-cargo test --features "grpc,cli,auth,onnx,db,openapi,mcp" --tests
+cargo test --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --lib
+cargo test --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --tests
 
-# 本地门禁（../base/* 为路径依赖活仓库，须以 -p 限定）
+# 本地门禁（以 -p 限定 workspace 成员，避免卷入其他成员中间态；7 库取自 crates.io registry）
 cargo test -p vecboost -p vecboost-examples
 
 # gRPC E2E
@@ -143,8 +145,8 @@ cargo test -p vecboost --test perf
 # 微基准
 cargo bench -p vecboost
 
-# 覆盖率（CI 硬门禁：行覆盖率 ≥ 80%，llvm-cov）
-cargo llvm-cov --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --lib --lcov --output-path coverage/lcov.info
+# 覆盖率（CI 硬门禁：行覆盖率 ≥ 90%，llvm-cov；分母含 lib + 集成测试 + 真实启动腿，禁止 --lib 窄口径）
+cargo llvm-cov --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp,distributed-redis" --tests --lcov --output-path coverage/lcov.info
 ```
 
 CI 工作流与测试的对应关系：
@@ -154,7 +156,7 @@ CI 工作流与测试的对应关系：
 | `ci.yml`（CI） | push/PR（main） | fmt、clippy（含 unwrap_used 门禁）、check 四档（空/grpc/auth,db,sqlite,onnx/postgres）、test 四档（default/grpc/ecosystem/shared-state）、llvm-cov 覆盖率 ≥90% 硬门禁（lib + 集成测试同口径分母，禁止 `--lib` 窄口径；90% 为用户 2026-10-21 授权的最低底线，原 95% 已证明不可达）、`cargo deny` 依赖审计 |
 | `health-check.yml`（Health Check） | push/PR（main） | 构建矩阵（default/onnx/grpc）、`--lib` + `--tests`、llvm-cov 覆盖率 ≥90% 硬门禁（2026-10-15 起，替代表现已与新 stable 工具链不兼容的 tarpaulin；2026-10-21 起与 ci.yml 同为 90% 底线）、Windows 测试（continue-on-error）、`cargo doc` 死链、`cargo audit`、main 分支 push 跑 benchmark、依赖更新检查 |
 | `feature-matrix.yml` | push/PR | default/grpc/ecosystem（auth,db,sqlite,onnx）/postgres-driver 四档 fmt + check + clippy + build + `--lib` 测试（postgres-driver 腿免跑 `--lib`） |
-| `scenario-tests.yml` | 每夜 UTC 03:00 + 手动 | 构建 http 二进制后 `pytest tests/scenario`（无模型环境自动 SKIP 推理类用例） |
+| `scenario-tests.yml` | 每夜 UTC 03:00 + 手动 | `cargo build -p vecboost --features http,auth,cli,mcp,grpc`（套件覆盖 auth/CLI/MCP/gRPC）后 `pytest tests/scenario`（无模型环境自动 SKIP 推理类用例） |
 | `codeql.yml` / `docker.yml` | push/PR/每周 | CodeQL 静态分析；Docker 构建 + Trivy 扫描（CRITICAL 即失败） |
 | `security.yml`（Security） | push/PR（main）+ 每周一 03:17 + 手动 | actionlint（YAML 语法/表达式硬门禁）、zizmor（GitHub Actions 安全审计，首轮非阻断基线）、gitleaks 增量扫描（本次推送/PR 提交区间）+ 每周全量历史扫描（`--log-opts=--all`） |
 

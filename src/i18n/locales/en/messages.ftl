@@ -661,3 +661,48 @@ cli-poc-transcribe-own-unknown-argument = unknown argument: { $a1 }
 cli-poc-transcribe-own-env-not-valid-integer = { $key }={ $value } is not a valid integer
 cli-poc-transcribe-own-env-out-of-range = { $key }={ $value } out of range [{ $min },{ $max }]
 cli-poc-transcribe-own-ep-invalid = TRANSCRIBE_EP={ $a1 } invalid (cpu|cuda)
+
+# ── Hardcoded-string remediation: additions after v0.3.0-rc.2 ──
+
+# Startup: garrison session DAO assembly
+startup-garrison-dao-create-failed = Failed to create GarrisonDaoOxcache: { $detail }
+startup-garrison-atomic-dao-failed = Failed to build atomic garrison dao: { $detail }
+
+# Engine: ONNX weight-precision probe
+model-onnx-probe-open-failed = failed to open ONNX file for precision probe { $path }: { $detail }
+model-onnx-probe-read-failed = failed to read ONNX file for precision probe { $path }: { $detail }
+
+# Cache: shared semantic index (Redis) and embedding cache Redis backend
+cache-semantic-redis-op-failed = shared semantic cache Redis operation failed ({ $op }): { $detail }
+cache-semantic-redis-url-invalid = invalid semantic cache Redis URL: { $detail }
+cache-semantic-redis-connect-failed = failed to connect to semantic cache Redis: { $detail }
+cache-semantic-redis-ping-failed = semantic cache Redis PING failed: { $detail }
+cache-embedding-redis-init-failed = failed to initialize embedding cache Redis backend: { $detail }
+cache-clear-failed = failed to clear cache: { $detail }
+
+# Rate limit: Redis window limiter and its startup wiring
+rate-limit-redis-window-op-failed = rate limit Redis window operation failed ({ $op }): { $detail }
+rate-limit-redis-unexpected-reply = unexpected reply { $detail }
+rate-limit-redis-unexpected-value = unexpected value { $detail }
+rate-limit-redis-eval-timeout = timeout after { $timeout }: Redis unresponsive (fail-closed)
+startup-rate-limit-redis-init-failed = failed to initialize rate limit Redis backend: { $detail }
+startup-rate-limit-redis-ban-init-failed = failed to initialize rate limit Redis ban storage: { $detail }
+
+# Auth: atomic garrison KV DAO
+auth-atomic-incr-session-failed = atomic counter increment: failed to acquire database session: { $detail }
+auth-atomic-incr-connection-failed = atomic counter increment: failed to acquire database connection: { $detail }
+auth-atomic-incr-execute-failed = atomic counter increment: statement execution failed: { $detail }
+auth-atomic-incr-no-row = atomic counter increment: no row returned
+auth-atomic-incr-read-failed = atomic counter increment: failed to read the incremented value: { $detail }
+auth-atomic-incr-parse-failed = atomic counter increment: value is not a valid integer (key { $key } = { $value }): { $detail }
+auth-atomic-wal-session-failed = SQLite WAL enable: failed to acquire database session: { $detail }
+auth-atomic-wal-connection-failed = SQLite WAL enable: failed to acquire database connection: { $detail }
+auth-atomic-wal-enable-failed = SQLite WAL enable: PRAGMA journal_mode=WAL failed: { $detail }
+auth-atomic-incr-unsupported-backend = atomic counter increment: unsupported database backend: { $detail }
+
+# Engine: unreachable-branch invariant messages
+engine-no-variants-compiled = no inference engine variants are compiled in this build
+engine-auto-pooling-not-resolved = Auto pooling should have been resolved at construction time
+
+# API docs: ReDoc page
+api-redoc-title = VecBoost API — ReDoc

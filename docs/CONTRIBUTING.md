@@ -29,23 +29,23 @@
 ## 🧱 构建
 
 ```bash
-# 库 + 二进制（默认 http feature）
+# 库 + 二进制（默认 http + onnx feature）
 cargo check -p vecboost -p vecboost-examples --all-targets
 
 # 常用特性组合
-cargo check -p vecboost --features http,grpc,cli,auth,db,onnx
+cargo check -p vecboost --features http,grpc,cli,auth,db,sqlite,onnx
 cargo check -p vecboost --features mcp
 ```
 
-> **路径依赖提示**：`../base/*` 7 个生态库是路径依赖的活仓库，会独立演进。
-> fmt/clippy/测试命令必须以 `-p vecboost -p vecboost-examples` 限定，
-> 否则会把外部仓库的中间态卷进门禁。
+> **依赖来源提示**：7 个生态库（trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge）当前全部取自 crates.io registry（`Cargo.toml` 无 `path =` 依赖、无 `[patch]`；`Cargo.lock` 记录 `source = "registry+https://github.com/rust-lang/crates.io-index"`）。
+> fmt/clippy/测试命令仍建议以 `-p vecboost -p vecboost-examples` 限定，
+> 避免把 workspace 内其他成员的中间态卷进门禁。
 
 ## 🧪 测试
 
 | 层 | 命令 | 说明 |
 |---|---|---|
-| 单元 + 集成(Rust) | `cargo test -p vecboost -p vecboost-examples` | 2237 内联测试 + tests/（63 个集成/专项测试函数） |
+| 单元 + 集成(Rust) | `cargo test -p vecboost -p vecboost-examples` | 2370 内联测试属性 + tests/（129 个测试属性，同法计数） |
 | gRPC E2E | `cargo test -p vecboost --features http,grpc --test grpc_e2e` | 拉起真实二进制 |
 | 场景(Python) | `pytest tests/scenario -q` | conftest 拉起真实服务器；models/ 缺席时推理用例自动 SKIP |
 | 微基准 | `cargo bench -p vecboost` | criterion |

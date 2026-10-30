@@ -30,10 +30,6 @@
       "count": 4,
       "reason": "基准/压力测试仪表输出（供 criterion 与脚本 grep），非产品 UI 文案"
     },
-    "src/metrics/inference.rs": {
-      "count": 1,
-      "reason": "基准/压力测试仪表输出（供 criterion 与脚本 grep），非产品 UI 文案"
-    },
     "src/i18n/mod.rs": {
       "count": 2,
       "reason": "i18n 引导自身的日志：此站点执行于 I18N OnceLock 初始化过程中，tr() 尚未可用（会回退裸键名）"

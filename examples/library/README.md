@@ -14,8 +14,8 @@
 # 需要先下载模型
 cargo run -p vecboost-examples --bin download_model -- --small
 
-# 运行 library 示例
-cargo run -p vecboost-examples --bin library_usage
+# 运行 library 示例（该 bin 在 examples/Cargo.toml 声明 required-features = ["candle"]）
+cargo run -p vecboost-examples --bin library_usage --features candle
 ```
 
 ## 说明

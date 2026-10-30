@@ -221,23 +221,32 @@ mod tests {
     fn test_validate_path_symlink_outside_allowed_roots_rejected() {
         ensure_i18n_init();
         // vuln-0004 加固测试:symlink 指向 allowed_roots 外应被拒绝
-        // 攻击场景:在 allowed_dir 内创建 symlink → /etc,尝试读取 /etc/passwd
+        // 攻击场景:在 allowed_dir 内创建 symlink → 根外真实目录,尝试读取其中文件
+        // 攻击目标自建(temp 下),不假设 /etc/hostname 等平台特定路径存在
         use std::os::unix::fs::symlink;
+
+        let outside = std::env::temp_dir().join(format!(
+            "vecboost_symlink_outside_target_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&outside).unwrap();
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, b"outside").unwrap();
 
         let base = std::path::PathBuf::from("./test_path_symlink_outside_temp");
         std::fs::create_dir_all(&base).unwrap();
-        let link_path = base.join("link_to_etc");
-        // 创建 symlink → /etc(allowed_roots 外)
-        let _ = symlink("/etc", &link_path);
-        // 尝试通过 symlink 访问 /etc/hostname
-        let attack_path = link_path.join("hostname");
+        let link_path = base.join("link_outside");
+        // 创建 symlink → allowed_roots 外的真实目录
+        symlink(&outside, &link_path).unwrap();
+        let attack_path = link_path.join("secret.txt");
 
         let validator = PathValidator::new().add_allowed_root(&base);
         let result = validator.validate_path(&attack_path);
 
         std::fs::remove_dir_all(&base).ok();
+        std::fs::remove_dir_all(&outside).ok();
 
-        // 攻击应被拒绝:canonicalize 解析 symlink 得到 /etc/hostname,
+        // 攻击应被拒绝:canonicalize 解析 symlink 得到根外真实路径,
         // 不在 allowed_root(./test_path_symlink_outside_temp)内
         assert!(result.is_err(), "symlink attack should be rejected");
         match result.unwrap_err() {

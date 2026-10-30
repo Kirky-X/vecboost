@@ -61,7 +61,7 @@ async fn ensure_state_initialized() {
     )));
     let decision_svc = Arc::new(RwLock::new(DecisionService::new(make_mock_engine_arc())));
     let detect_svc = DetectService::new();
-    // 翻译服务注入含 en-zh mock 路由（评审 ARC-4：forge_translate 装配链
+    // 翻译服务注入含 en-zh mock 路由（forge_translate 装配链
     // 单测面——漏 register/set_config 的回归由本测试兜住，不再只依赖需
     // onnx+真机 bundle 的集成测试）；mock 译文带 marker 供路由断言
     let mut translate_pairs = std::collections::HashMap::new();
@@ -198,7 +198,7 @@ impl InferenceEngine for MockDecisionEngine {
         &self,
         req: &TranslateRequest,
     ) -> Result<crate::domain::TranslateResponse, VecboostError> {
-        // 评审 ARC-4：可辨识 marker 译文，forge_translate 路由/能力门链路断言用
+        // 可辨识 marker 译文，forge_translate 路由/能力门链路断言用
         Ok(crate::domain::TranslateResponse {
             translation: format!("[mock-en-zh] {}", req.text),
             source_language: req.source_language.clone(),
@@ -1010,7 +1010,7 @@ async fn test_forge_translate_unconfigured_pair_400_with_pairs_list() {
     assert!(result.is_err());
     match result.unwrap_err() {
         ApiError::InvalidInput { message, .. } => {
-            // 未配置对 400 含请求对与清单（评审 ARC-4 第二例）
+            // 未配置对 400 含请求对与清单
             assert!(message.contains("en-fr"), "msg={message}");
             assert!(message.contains("en-zh"), "msg={message}");
         }

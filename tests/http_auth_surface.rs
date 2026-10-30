@@ -19,6 +19,23 @@ const MODEL_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/models/Xenova-bge-small-en-v1.5"
 );
+// ort/load-dynamic 默认 dylib 按目标平台选扩展名（与 src/engine/session.rs
+// ort_dylib_default 同口径；集成测试独立 crate，cfg 门控声明）。
+#[cfg(target_os = "macos")]
+const ORT_DYLIB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/libonnxruntime.dylib"
+);
+#[cfg(target_os = "windows")]
+const ORT_DYLIB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/onnxruntime.dll"
+);
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const ORT_DYLIB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/libonnxruntime.so"
+);
 const ADMIN_PASSWORD: &str = "AuthSurface#2026Pass";
 const JWT_SECRET: &str = "auth-surface-jwt-secret-0123456789ABCDEF";
 
@@ -121,13 +138,7 @@ fn auth_flow(session_backend: &str) {
     let log = std::fs::File::create(dir.join("server.log")).expect("create log");
     let mut child = Command::new(env!("CARGO_BIN_EXE_vecboost"))
         .current_dir(&dir)
-        .env(
-            "ORT_DYLIB_PATH",
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/3rdparty/onnxruntime/libonnxruntime.so"
-            ),
-        )
+        .env("ORT_DYLIB_PATH", ORT_DYLIB)
         .stdout(Stdio::from(log.try_clone().expect("dup log")))
         .stderr(Stdio::from(log))
         .spawn()

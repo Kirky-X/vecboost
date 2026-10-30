@@ -270,8 +270,8 @@ impl PriorityRequestQueue {
         }
 
         // CAS 已预留槽位——此后到 push_back 之间隔着 queues.write.await
-        // 取消点（tokio future 在锁等待上被 drop 即泄漏 +1，容量渐近假满，
-        // 三路评审 M）。槽位守卫保证任何取消/panic 路径都回滚计数，push
+        // 取消点（tokio future 在锁等待上被 drop 即泄漏 +1，容量渐近假满）。
+        // 槽位守卫保证任何取消/panic 路径都回滚计数，push
         // 成功后 disarm；push_back 自身 panic 时守卫尚未 disarm 同样覆盖
         let mut guard = SlotGuard {
             counter: &self.current_size,
@@ -479,7 +479,7 @@ impl PriorityRequestQueue {
         }
 
         // 兜底:未凑到任何请求时,弹出最高优先级 aged 队首,避免滞留
-        // (已取消请求照常丢弃，与 dequeue 主路径语义一致——回归审查 INFO)
+        // (已取消请求照常丢弃，与 dequeue 主路径语义一致)
         if result.is_empty()
             && let Some(priority) = aged_front
             && let Some(queue) = queues.get_mut(&priority)
@@ -1187,7 +1187,7 @@ mod tests {
         assert!(batch.is_empty());
     }
 
-    /// 槽位守卫取消回滚钉（三路评审 M）：确定性构造——持写锁逼使 enqueue
+    /// 槽位守卫取消回滚钉：确定性构造——持写锁逼使 enqueue
     /// 停在 queues.write.await（CAS 已预留槽位），abort 该 future。旧实现
     /// 计数永久泄漏 +1（容量渐近假满）；守卫实现必须回滚为 0，且容量未被
     /// 侵蚀（10 容量仍可入满）。

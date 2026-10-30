@@ -18,6 +18,24 @@ const MODEL_PATH: &str = concat!(
     "/models/Xenova-bge-small-en-v1.5"
 );
 
+// ort/load-dynamic 默认 dylib 按目标平台选扩展名（与 src/engine/session.rs
+// ort_dylib_default 同口径；集成测试独立 crate，cfg 门控声明）。
+#[cfg(target_os = "macos")]
+const ORT_DYLIB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/libonnxruntime.dylib"
+);
+#[cfg(target_os = "windows")]
+const ORT_DYLIB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/onnxruntime.dll"
+);
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const ORT_DYLIB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/libonnxruntime.so"
+);
+
 fn model_ready() -> bool {
     Path::new(MODEL_PATH).join("model.onnx").exists()
         && Path::new(MODEL_PATH).join("tokenizer.json").exists()
@@ -44,13 +62,7 @@ async fn library_async_and_sync_surface() {
     }
     // SAFETY: 单测进程内独占设置 ORT dylib 路径，无并发读写该变量。
     unsafe {
-        std::env::set_var(
-            "ORT_DYLIB_PATH",
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/3rdparty/onnxruntime/libonnxruntime.so"
-            ),
-        );
+        std::env::set_var("ORT_DYLIB_PATH", ORT_DYLIB);
     }
 
     let lib = VecBoostLibrary::new(LibraryConfig::from_model_config(model_config()))
@@ -92,13 +104,7 @@ fn library_sync_api_outside_runtime() {
         return;
     }
     unsafe {
-        std::env::set_var(
-            "ORT_DYLIB_PATH",
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/3rdparty/onnxruntime/libonnxruntime.so"
-            ),
-        );
+        std::env::set_var("ORT_DYLIB_PATH", ORT_DYLIB);
     }
     let lib = {
         let rt = tokio::runtime::Runtime::new().expect("runtime");

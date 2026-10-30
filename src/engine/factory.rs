@@ -141,7 +141,7 @@ impl EngineFactory {
         }
         let precision = Precision::Fp32;
         let engine = AnyEngine::new(config, engine_type, precision)?;
-        // fail-fast（评审 R5）：配置任务维度超出引擎能力时创建即失败，
+        // fail-fast：配置任务维度超出引擎能力时创建即失败，
         // 而非延迟到 decide 调用才以 4xx 暴露
         ensure_supports_task(&engine, config)?;
         Ok(engine)
@@ -227,7 +227,7 @@ mod tests {
     /// task=decision + engine_type=onnx 走 ort 决策管线分派臂：空 bundle 时
     /// 报 ModelLoadError（bundle 探测失败）而非 UnsupportedTask——证明分派
     /// 到达 DecisionPipeline::load，而非落进 embedding 引擎的 fail-fast
-    /// （评审：AnyEngine::Decision 曾全库零构造点，全链在线闸门不可达）。
+    /// （AnyEngine::Decision 曾全库零构造点，全链在线闸门不可达）。
     /// 探测失败发生在 Session 构建之前，本测试不触发 ort。
     #[cfg(feature = "onnx")]
     #[test]

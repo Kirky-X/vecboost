@@ -343,7 +343,7 @@ pub enum AnyEngine {
 }
 
 impl AnyEngine {
-    /// 最近一次成功翻译解码的生成 token 数（评审：质量观测
+    /// 最近一次成功翻译解码的生成 token 数（质量观测
     /// 通道——仅 OnnxTranslate 变体有真实值，其余变体恒 0；wire 五键契约
     /// 不扩，e2e 质量输出经本方法读取）
     pub fn translate_output_tokens(&self) -> u64 {

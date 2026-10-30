@@ -2,7 +2,7 @@
 
 **安装、配置和使用的完整说明**
 
-[![Version 0.3.0-rc.1](https://img.shields.io/badge/Version-0.3.0--rc.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002)
+[![release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge&label=Version)](https://github.com/Kirky-X/vecboost/releases) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002)
 
 *安装、配置和使用 VecBoost 的完整说明。*
 
@@ -130,11 +130,11 @@ cargo build --release --features metal
 # 全协议（HTTP/gRPC/MCP/CLI）
 cargo build --release --features http,grpc,mcp,cli
 
-# 全协议 + 全可选功能（GPU/ONNX/认证/数据库；无 redis feature，见 FAQ）
-cargo build --release --features http,grpc,mcp,cli,cuda,onnx,auth,db
+# 全协议 + 全可选功能（GPU/ONNX/认证/数据库；db 须搭配 sqlite 或 postgres 驱动，Redis 走 distributed-redis 见 FAQ）
+cargo build --release --features http,grpc,mcp,cli,cuda,onnx,auth,db,sqlite
 ```
 
-> **💡 提示**: `default = ["http"]`，默认构建仅启用 HTTP 协议。gRPC/MCP/CLI 协议需通过 `--features` 显式开启。confers（配置）、inklog（日志）、oxcache（缓存）、limiteron（限流）、trait-kit（模块注册）为必选依赖，无需 feature 开启。
+> **💡 提示**: `default = ["http", "onnx"]`——默认构建含 HTTP 协议与 ONNX Runtime 主引擎。gRPC/MCP/CLI 协议需通过 `--features` 显式开启。confers（配置）、inklog（日志）、oxcache（缓存）、limiteron（限流）、trait-kit（模块注册）为必选依赖，无需 feature 开启；`redis` 不是独立 feature（多副本共享状态由 `distributed-redis` 提供，见 FAQ）。
 
 ---
 
@@ -162,7 +162,7 @@ ls -lh target/release/vecboost
 cp config/config.toml config/config_custom.toml
 ```
 
-通过全局参数 `--config <path>`（或 `--config=<path>`）指定配置文件，服务器与 CLI 模式均生效。CLI 子命令模式下该参数须写在子命令之前，例如 `vecboost --config config_custom.toml embed --req '{"text":"Hello"}'`。显式路径不存在时 fail-fast 报错退出（码 2）。预置三份配置：`config/config.toml`（默认，安全默认：回环绑定、GPU 关闭）、`config/config_full.toml`（键位较全的示例，注意含历史遗留**不解析**段 `[flow_control]` / `[cache]`（backend="redis"）/ `[advanced]`，且非穷尽已解析段）、`config/config_minimal.toml`（最小示例）。
+通过全局参数 `--config <path>`（或 `--config=<path>`）指定配置文件，服务器与 CLI 模式均生效。该参数在 clap 解析前由 `strip_config_args()` 从全部参数中剥离，写在子命令之前或之后均可（如 `vecboost --config config_custom.toml embed --req '{"text":"Hello"}'` 与 `vecboost embed --req '...' --config config_custom.toml` 等价）；`--config` 后未跟路径时退出码 2。显式路径不存在时 fail-fast 报错退出（码 2）。预置三份配置：`config/config.toml`（默认，安全默认：回环绑定、GPU 关闭）、`config/config_full.toml`（键位较全的示例，注意含历史遗留**不解析**段 `[flow_control]` / `[cache]`（backend="redis"）/ `[advanced]`，且非穷尽已解析段）、`config/config_minimal.toml`（最小示例）。
 
 ---
 
@@ -227,7 +227,7 @@ grpc_port = 50051                 # gRPC 端口
 grpc_max_connections = 1000       # 最大并发连接数
 grpc_timeout_seconds = 30         # gRPC 请求超时（秒）
 grpc_require_auth = true          # 是否强制 JWT 认证
-grpc_allowed_roots = ["/data"]    # 路径校验根目录列表（可选）
+grpc_allowed_roots = ["/data"]    # 文件嵌入允许根目录（/embed/file 必填，未配置即 400）
 ```
 
 | 参数 | 默认值 | 说明 |
@@ -238,9 +238,9 @@ grpc_allowed_roots = ["/data"]    # 路径校验根目录列表（可选）
 | `grpc_max_connections` | `1000` | 最大并发连接数 |
 | `grpc_timeout_seconds` | `30` | gRPC 请求超时（秒） |
 | `grpc_require_auth` | `true` | 是否强制 JWT 认证（默认强制） |
-| `grpc_allowed_roots` | - | 路径校验根目录列表（可选，用于限定可访问路径） |
+| `grpc_allowed_roots` | -（无缺省） | 文件嵌入允许根目录列表；`/embed/file` 必须显式配置，未配置或为空时返回 400（不回退 cwd） |
 
-> **⚠️ 安全提示**: `grpc_require_auth` 默认为 `true`，调用方需通过配置 `grpc_require_auth = false` 显式关闭认证。生产环境建议保持开启，并配置 `grpc_allowed_roots` 限定可访问路径。
+> **⚠️ 安全提示**: `grpc_require_auth` 默认为 `true`，调用方需通过配置 `grpc_require_auth = false` 显式关闭认证。生产环境建议保持开启，并配置 `grpc_allowed_roots` 限定可访问路径——该配置项不是可选项：`/embed/file` 在缺失时一律 400。`/model/switch` 的本地路径校验另有一套缺省（未配置时回落到 `models/`）。
 
 ---
 
@@ -717,7 +717,7 @@ cuda = false                     # CUDA EP（需带 CUDA 的 onnxruntime 动态�
 | 环境变量 | 对应配置 | 示例值 |
 |----------|----------|--------|
 | `VECBOOST_SERVER_PORT` | `server.port` | `9002` |
-| `VECBOOST_MODEL_REPO` | 无法映射（当前版本未实现该环境变量覆盖） | `BAAI/bge-m3` |
+| `VECBOOST_MODEL_REPO` | 无法映射（confers 把下划线一律替换为 `.`，`model_repo` 会被拆成 `model.repo`；请写配置文件 `[model] model_repo`） | `BAAI/bge-m3` |
 | `VECBOOST_JWT_SECRET` | `auth.jwt_secret` | `your-secret-key`（≥32 字符） |
 | `VECBOOST_ADMIN_PASSWORD` | `auth.default_admin_password` | `your-admin-password`（≥12 字符） |
 | `VECBOOST_ALLOW_INSECURE` | - | `1` = 允许非回环绑定 + 无认证（打 ERROR 告警，仅供受信网络容器） |
@@ -793,8 +793,9 @@ cargo run
 # 使用自定义配置运行
 cargo run -- --config config_custom.toml
 
-# 使用调试日志运行
-RUST_LOG=debug cargo run
+# 使用调试日志运行（日志级别取自 VECBOOST_LOG_LEVEL 或 [logging] level；
+# RUST_LOG 无效果——服务日志走 inklog，不读 RUST_LOG）
+VECBOOST_LOG_LEVEL=debug cargo run
 ```
 
 ---
@@ -1341,15 +1342,17 @@ redis_url = "redis://127.0.0.1:6379"
 在 `/metrics` 访问指标:
 
 ```
-# HELP vecboost_requests_total 总请求数
-# TYPE vecboost_requests_total counter
-vecboost_requests_total{method="POST",endpoint="/api/v1/embed"} 1234
+# HELP http_requests_total Total number of HTTP requests
+# TYPE http_requests_total counter
+http_requests_total{method="POST",endpoint="/api/v1/embed",status="200"} 1234
 
-# HELP vecboost_embedding_latency_seconds 嵌入生成延迟
-# TYPE vecboost_embedding_latency_seconds histogram
-vecboost_embedding_latency_seconds_bucket{le="0.005"} 100
-vecboost_embedding_latency_seconds_bucket{le="0.01"} 500
+# HELP http_request_duration_seconds HTTP request duration in seconds
+# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_bucket{method="POST",endpoint="/api/v1/embed",le="0.005"} 100
+http_request_duration_seconds_bucket{method="POST",endpoint="/api/v1/embed",le="0.01"} 500
 ```
+
+完整指标清单（含拼批/队列/阶段耗时/语义缓存/决策/检测/翻译等 `vecboost_*` 指标）见 [📘 API 参考 · Prometheus 指标](API_REFERENCE.md#prometheus-指标) 与 [⚡ 性能指南 · 新增指标](PERFORMANCE.md#-新增指标)。
 
 ---
 
@@ -1476,8 +1479,8 @@ ip_whitelist = ["127.0.0.1", "10.0.0.0/8"]
 ### 收集调试信息
 
 ```bash
-# 启用调试日志
-export RUST_LOG=debug
+# 启用调试日志（读取 VECBOOST_LOG_LEVEL，不读 RUST_LOG）
+export VECBOOST_LOG_LEVEL=debug
 
 # 使用详细输出运行
 ./target/release/vecboost --config config_custom.toml 2>&1 | tee debug.log
@@ -1592,4 +1595,4 @@ free -h     # 内存
 
 ---
 
-> **📝 最后更新**: 2026-09-06 | **版本**: 0.3.0-rc.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-10-29 | **版本**: 0.3.0-rc.3 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

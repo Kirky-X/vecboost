@@ -45,6 +45,11 @@
       "file": "src/metrics/performance/mod.rs",
       "match": "向量化",
       "reason": "generate_test_text 的中文语料夹具（基准/测试数据），非 UI 文案"
+    },
+    {
+      "file": "src/utils/test_env_lock.rs",
+      "match": "测试进程内对自己 malloc zone 的只读压力回收",
+      "reason": "#[allow(unsafe_code)] 的 lint reason，说明 unsafe 豁免理由的开发者注释；文件整体 #![cfg(test)]（macOS 专用），非用户可见文案"
     }
   ],
   "r5_untranslated": []

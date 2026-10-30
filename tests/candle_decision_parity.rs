@@ -28,7 +28,7 @@
 #[cfg(target_os = "macos")]
 const ORT_DEFAULT_DYLIB: &str = "3rdparty/onnxruntime/libonnxruntime.dylib";
 #[cfg(target_os = "windows")]
-const ORT_DEFAULT_DYLIB: &str = "3rdparty/onnxruntime/libonnxruntime.dll";
+const ORT_DEFAULT_DYLIB: &str = "3rdparty/onnxruntime/onnxruntime.dll";
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 const ORT_DEFAULT_DYLIB: &str = "3rdparty/onnxruntime/libonnxruntime.so";
 

@@ -15,7 +15,7 @@ use std::str::FromStr;
 use utoipa::ToSchema;
 
 /// 递归检查 state 所有字符串叶子与**对象键**的控制字符。serde_json 只拒绝
-/// 裸控制字节，`\uXXXX` 转义形式可解析并还原为真实控制字符（评审 R1），
+/// 裸控制字节，`\uXXXX` 转义形式可解析并还原为真实控制字符，
 /// 故 state 与自由文本字段适用同一防线。键位检查不可省：DEL/C1（含
 /// U+0085 NEL）/U+2028 经紧凑序列化原样透传并随 state 文本进入 tokenizer。
 fn state_has_control_chars(value: &serde_json::Value) -> bool {
@@ -184,7 +184,7 @@ impl DecisionRequest {
             )));
         }
         if has_disallowed_control_chars(&q.name) {
-            // 不回显原文：控制字符直入 wire/日志即日志注入面（评审 R2）
+            // 不回显原文：控制字符直入 wire/日志即日志注入面
             return Err(VecboostError::validation_error(format!(
                 "question at index {question_index} name contains control characters"
             )));
@@ -278,7 +278,7 @@ impl DecisionRequest {
 }
 
 /// 封顶计数 writer：累计字节数超过 cap 即返回错误，
-/// 使 state 大小校验在命中上限时停止而非完整序列化（评审 R10）
+/// 使 state 大小校验在命中上限时停止而非完整序列化
 struct CappedWriter {
     written: usize,
     cap: usize,
@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_total_prompt_over_budget() {
-        // 乘积防线（评审 R1）：每个问题单独看均合法（noul 无 options、
+        // 乘积防线：每个问题单独看均合法（noul 无 options、
         // instructions 远小于单字段上限），但 questions×字段总量超预算必须拒绝
         let mut req = valid_request();
         req.questions.clear();
@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn test_validate_char_count_not_bytes() {
-        // 口径与 embed 校验一致按字符数计（评审 R2/R8）：多字节字符
+        // 口径与 embed 校验一致按字符数计：多字节字符
         // 不因字节数提前触发上限（10000 个 3 字节字符 = 30000 字节）
         let mut req = valid_request();
         req.questions[0].instructions = "水".repeat(MAX_DECISION_FIELD_LENGTH);
@@ -533,7 +533,7 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_control_chars() {
-        // 与 embed 侧 validate_text_content 同款防线（评审 R3）：
+        // 与 embed 侧 validate_text_content 同款防线：
         // NUL/C0 拒绝，\t \n \r 豁免
         let mut req = valid_request();
         req.questions[0].name.push('\u{0}');
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_blank_name() {
-        // answer 按 question 名回显，空/纯空白 name 使消费方无法对应问题（评审 R9）
+        // answer 按 question 名回显，空/纯空白 name 使消费方无法对应问题
         let mut req = valid_request();
         req.questions[0].name = "   ".to_string();
         assert!(req.validate().is_err(), "纯空白 name 必须拒绝");
@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_duplicate_names() {
-        // 重复 name 产生两个同名 answer，按名索引有歧义（评审 R9）
+        // 重复 name 产生两个同名 answer，按名索引有歧义
         let mut req = valid_request();
         req.questions.push(choice_question());
         let err = req.validate().unwrap_err();
@@ -582,8 +582,8 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_state_control_chars_via_escape() {
-        // serde_json 只拒裸控制字节：\u0000 转义可解析并还原真实控制字符
-        // （评审 R1），state 字符串叶子必须同样过控制字符防线
+        // serde_json 只拒裸控制字节：\u0000 转义可解析并还原真实控制字符，
+        // state 字符串叶子必须同样过控制字符防线
         let mut req = valid_request();
         req.state = serde_json::from_str(r#"{"note":"line1\u0000line2"}"#).unwrap();
         assert!(
@@ -635,7 +635,7 @@ mod tests {
     #[test]
     fn test_validate_error_echo_single_line() {
         // echo 必须字面量化豁免集字符（\t\n\r）：换行 name 不得把伪造日志行
-        // 带入错误 detail（日志注入面，评审 R1 四轮）
+        // 带入错误 detail（日志注入面）
         let mut req = valid_request();
         let evil_name = "evil\nFAKE LOG LINE".to_string();
         req.questions[0].name = evil_name.clone();
@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn test_validate_error_echo_truncated() {
-        // 错误 detail 回显截断（评审 R2）：10K 字符 name 不得被完整回显
+        // 错误 detail 回显截断：10K 字符 name 不得被完整回显
         let long_name = "n".repeat(MAX_DECISION_FIELD_LENGTH);
         let mut req = valid_request();
         req.questions[0].name = long_name.clone();
@@ -681,7 +681,7 @@ mod tests {
 
     #[test]
     fn test_validate_control_char_error_does_not_echo_raw() {
-        // 控制字符臂不得回显原文（控制字符直入日志 = 日志注入面，评审 R2）：
+        // 控制字符臂不得回显原文（控制字符直入日志 = 日志注入面）：
         // detail 必须不含任何控制字符（含构造输入里的 NUL）
         let mut req = valid_request();
         req.questions[0].name = "ab_cd".repeat(100).replace('_', "\u{0}");

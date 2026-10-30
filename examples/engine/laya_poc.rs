@@ -10,12 +10,21 @@
 //! cargo run -p vecboost-examples --bin laya_poc --features onnx
 //! ```
 //!
+//! 前置条件：`onnx` feature 经 `ort/load-dynamic` 运行期加载 ONNX Runtime
+//! 动态库。`ORT_DYLIB_PATH` 未设时本示例自动回退仓库自带的
+//! `3rdparty/onnxruntime/libonnxruntime.dylib`（macOS）/ `libonnxruntime.so`
+//! （Linux）/ `onnxruntime.dll`（Windows）；兜底也缺失时显性报错退出（不落到
+//! ort 的 dlopen panic）。使用自装 onnxruntime 时设 `ORT_DYLIB_PATH` 覆盖，
+//! 版本与落位说明见 `3rdparty/onnxruntime/README.md`。
+//!
 //! 环境变量：
-//! - `LAYA_BUNDLE`：bundle 目录（默认 `models/laya`）。模型文件按
+//! - `LAYA_BUNDLE`：bundle 目录（默认 `models/laya`，相对运行目录）。模型文件按
 //!   `model.onnx → model_quantized.onnx → laya.onnx → laya_int8.onnx` 探测；
 //!   tokenizer 按根目录 `tokenizer.json` → `tokenizer/tokenizer.json` 探测；
-//!   可选 `laya_config.json`（per-cardinality 温度校准，缺失时 warn 并回退 1.2）。
-//! - `LAYA_GOLDEN_JSON`：golden 文件路径（缺省仅打印管线输出供人工对照）。
+//!   可选 `laya_config.json`（per-cardinality 温度校准，缺失时库经 log warn
+//!   显性提示并回退 1.2——本示例已内置 stderr logger 使该 warn 可见）。
+//! - `LAYA_GOLDEN_JSON`：golden 文件路径（缺省仅打印管线输出供人工对照；
+//!   本仓不附带 golden 文件，需经 Python onnxruntime 管线导出后以本变量指向）。
 //!   格式（Python onnxruntime 复现「预处理→推理→温度校准→softmax」全管线后导出）：
 //!   ```json
 //!   {"answers": [{"question": "churn_risk", "probabilities": {"false": 0.1, "true": 0.9}}]}
@@ -32,6 +41,30 @@ use vecboost::engine::{EngineFactory, InferenceEngine};
 
 /// golden 概率断言阈值（文档 §六 P0 验收口径）
 const GOLDEN_TOLERANCE: f32 = 1e-4;
+
+/// stderr 极简 logger：`log` 门面无实现时库内 warn 全部静默（如校准回退
+/// 提示），示例装一个 Warn 级转发使其可见。幂等：已占用实现则跳过。
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{}] {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn init_stderr_logger() {
+    if log::set_boxed_logger(Box::new(StderrLogger)).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
+}
 
 fn default_request() -> Result<DecisionRequest, serde_json::Error> {
     // 三题型各一条：choice / score / noul 全覆盖
@@ -74,6 +107,10 @@ fn probability_map(body: &DecisionAnswerBody) -> BTreeMap<String, f32> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_stderr_logger();
+    // 库内 warn 文案经 i18n 门面产出；未初始化时只显示原始 key
+    vecboost::i18n::init();
+
     println!("🚀 Laya 决策管线 P0 数值对照示例");
     println!("==================================\n");
 
@@ -96,6 +133,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "   ⚠️ 禁用注记：Mattepiu/laya-onnx 为 marker 维静态 [.,2] 坏产物，禁止作为下载目标。"
         );
         return Ok(());
+    }
+
+    // ort/load-dynamic 前置：ORT_DYLIB_PATH 未设时回退仓库自带 dylib（文件名
+    // 按平台选择，目录口径同 3rdparty/onnxruntime/README.md），兜底也缺时显性
+    // 报错——不落到 ort 首次建 Session 时的裸 dlopen panic（exit 101 无指引）。
+    if std::env::var_os("ORT_DYLIB_PATH").is_none() {
+        let name = if cfg!(target_os = "macos") {
+            "libonnxruntime.dylib"
+        } else if cfg!(target_os = "windows") {
+            "onnxruntime.dll"
+        } else {
+            "libonnxruntime.so"
+        };
+        let fallback = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("CARGO_MANIFEST_DIR 必有父目录")
+            .join("3rdparty/onnxruntime")
+            .join(name);
+        if fallback.is_file() {
+            // 安全性：仅 main 起点单线程调用、早于任何 ort 初始化，无并发读者
+            unsafe { std::env::set_var("ORT_DYLIB_PATH", &fallback) };
+            println!(
+                "ℹ️ ORT_DYLIB_PATH 未设，回退仓库自带 dylib：{}",
+                fallback.display()
+            );
+        } else {
+            return Err(format!(
+                "ONNX Runtime 动态库缺失：ORT_DYLIB_PATH 未设，仓库兜底亦不存在：{}\n\
+                 按平台放置官方预编译库到该路径，或设 ORT_DYLIB_PATH 指向已装库；\n\
+                 见 3rdparty/onnxruntime/README.md",
+                fallback.display()
+            )
+            .into());
+        }
     }
 
     let req = default_request()?;
@@ -149,6 +220,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // golden 对照：LAYA_GOLDEN_JSON 未设时仅打印供人工对照
     let Ok(golden_path) = std::env::var("LAYA_GOLDEN_JSON") else {
         println!("\n✅ 未设 LAYA_GOLDEN_JSON，跳过逐值断言（人工对照上方输出）");
+        println!(
+            "   需逐值对照时：经 Python onnxruntime 管线导出 golden 后设 LAYA_GOLDEN_JSON（格式见本文件头注释）"
+        );
         return Ok(());
     };
 

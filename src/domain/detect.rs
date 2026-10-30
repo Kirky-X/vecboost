@@ -64,7 +64,7 @@ impl DetectRequest {
         if let Some(allow) = &self.allow {
             for code in allow {
                 // 双重校验：格式（^[a-z]{2,3}$）+ 发布集合成员（"sw"/"xx" 等
-                // 格式合法码不在 whatlang 发布集，穿透会收窄失效——评审）
+                // 格式合法码不在 whatlang 发布集，穿透会收窄失效）
                 if !is_valid_language_code(code) || !is_published_language_code(code) {
                     return Err(VecboostError::validation_error(format!(
                         "invalid language code in allow: {}",
@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_valid_format_unpublished_code() {
-        // 评审 回归钉："xx" 格式合法但未发布，必须 ValidationError
+        // 回归钉："xx" 格式合法但未发布，必须 ValidationError
         // 而非穿透到检测核心 panic
         let req = DetectRequest {
             allow: Some(vec!["xx".to_string(), "sw".to_string()]),

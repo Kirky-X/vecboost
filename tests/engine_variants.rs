@@ -17,6 +17,19 @@ const MODEL_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/models/Xenova-bge-small-en-v1.5"
 );
+// ort/load-dynamic 默认 dylib 按目标平台选扩展名（与 src/engine/session.rs
+// ort_dylib_default 同口径；集成测试独立 crate，cfg 门控声明）。
+#[cfg(target_os = "macos")]
+const ORT_DYLIB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/libonnxruntime.dylib"
+);
+#[cfg(target_os = "windows")]
+const ORT_DYLIB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/onnxruntime.dll"
+);
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 const ORT_DYLIB: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/3rdparty/onnxruntime/libonnxruntime.so"

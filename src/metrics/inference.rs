@@ -68,10 +68,8 @@ impl InferenceCollector {
         }
     }
 
-    #[allow(
-        dead_code,
-        reason = "Test helper / trait dispatch / inventory, not directly called"
-    )]
+    /// 注入内存监控的测试专用构造：唯一消费者是 `test_with_memory_monitor`。
+    #[cfg(test)]
     pub(crate) fn with_memory_monitor(memory_monitor: Arc<MemoryMonitor>) -> Self {
         let mut collector = Self::new();
         collector.memory_monitor = memory_monitor;

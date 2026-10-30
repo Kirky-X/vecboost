@@ -73,7 +73,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -99,7 +99,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -125,7 +125,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -151,7 +151,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -178,7 +178,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -206,7 +206,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -237,7 +237,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -263,7 +263,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -293,7 +293,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -321,7 +321,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -364,7 +364,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -390,7 +390,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -419,7 +419,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 
@@ -467,7 +467,7 @@ impl InferenceEngine for AnyEngine {
                 feature = "transcribe",
                 feature = "quantized-gguf"
             )))]
-            _ => unreachable!("no inference engine variants are compiled in this build"),
+            _ => unreachable!("{}", crate::i18n::tr("engine-no-variants-compiled")),
         }
     }
 }

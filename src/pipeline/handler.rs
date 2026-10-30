@@ -169,7 +169,7 @@ pub async fn handle_pipeline_request(
 ) -> Result<axum::Json<crate::domain::EmbedResponse>, VecboostError> {
     // 入队前内容三查（与决策侧 validate_request 同构）：批内一条非法文本
     // 会让整批 embed 在服务层校验处整批失败、错误扩散给批内其他合法请求——
-    // O(1) 在此 400 拒绝，不占队列槽位与 worker 出队周期（三路评审 M）。
+    // O(1) 在此 400 拒绝，不占队列槽位与 worker 出队周期。
     // 长度维度由调用侧 validate_text_length 按 kit 配置口径先行
     crate::utils::validator::input::validate_text_basic(&req.text)?;
 
@@ -230,7 +230,7 @@ pub async fn handle_decision_pipeline_request(
 ) -> Result<crate::domain::DecisionResponse, VecboostError> {
     // 入队前 O(1) 校验：非法请求在此 400 拒绝，不占队列槽位与 worker 出队
     // 周期；否则队列满时 503 Overloaded 会把永久性客户端错误伪装成可重试
-    // 背压（三路评审 M）。与 service 直连路径共用同一校验实现
+    // 背压。与 service 直连路径共用同一校验实现
     crate::service::decision::DecisionService::validate_request(
         &req,
         crate::domain::decision::MAX_QUESTIONS,
@@ -257,13 +257,12 @@ pub async fn handle_decision_pipeline_request(
 
 /// 请求 SLA：排队+执行的预算上界。time_until_timeout（优先级输入）、
 /// QueuedRequest.timeout（SLA 收割依据）与 enqueue_and_await_response 的
-/// 服务端等待超时三处共用同一常量，杜绝多处硬编码漂移（三路评审 L）。
+/// 服务端等待超时三处共用同一常量，杜绝多处硬编码漂移。
 const REQUEST_SLA: Duration = Duration::from_secs(30);
 
 /// embed/decision handler 共用的 pipeline 来源标识与 QueuedRequest 构造——
 /// 优先级计算与 SLA 只此一份，两侧调用点（api/embedding.rs 传
 /// [`API_SOURCE_ID`]）无法各自漂移，「同口径优先级」成为结构性事实
-/// （三路评审 L）
 pub const API_SOURCE_ID: &str = "api";
 
 fn build_queued_request(
@@ -336,7 +335,7 @@ async fn enqueue_and_await_response(
     if let Err(e) = queue_handle.enqueue(request).await {
         // 队列满早退：取消标志与响应通道条目随即释放——请求从未入队即无
         // worker 会 complete，channel 条目不清将永久滞留（持续过载下无界
-        // 增长，三路评审 M；「注册表不留孤儿」此处补全到两侧）
+        // 增长；「注册表不留孤儿」此处补全到两侧）
         cancel_guard.0.take();
         queue_handle.cancellations().release(&request_id);
         state
@@ -664,7 +663,7 @@ mod tests {
 
     /// 验证 handle_pipeline_request 在队列满时返回 Overloaded（背压语义
     /// 独立变体，禁止复用 RateLimitExceeded——spec R-decision-throughput-002）。
-    /// 并钉通道条目清理（三路评审 M）：请求从未入队，response channel 条目
+    /// 并钉通道条目清理：请求从未入队，response channel 条目
     /// 必须同步移除，否则持续过载下无界增长。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_pipeline_request_queue_full() {
@@ -781,7 +780,7 @@ mod tests {
         consumer.await.unwrap();
     }
 
-    /// 入队前校验钉（三路评审 M）：非法 DecisionRequest 在 pipeline 分支
+    /// 入队前校验钉：非法 DecisionRequest 在 pipeline 分支
     /// 入队前 400 拒绝（InvalidInput），不占队列槽位——否则队列满时同一
     /// 请求会得到 503 Overloaded，把永久性客户端错误伪装成可重试背压。
     #[tokio::test(flavor = "multi_thread")]
@@ -817,7 +816,7 @@ mod tests {
         );
     }
 
-    /// 入队内容门钉（三路评审 M）：非法文本（控制字符）在入队前 400 拒绝
+    /// 入队内容门钉：非法文本（控制字符）在入队前 400 拒绝
     /// 且不占队列槽位——旧缺陷：非法文本入队后毒化整批 embed（服务层批校验
     /// 整批 Err，错误扩散给批内其他合法请求）。
     #[tokio::test(flavor = "multi_thread")]

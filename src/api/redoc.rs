@@ -29,10 +29,15 @@ pub fn redoc_router() -> Router {
 }
 
 async fn redoc_page() -> Html<String> {
+    // 页面 lang 与标题随请求 locale 走 i18n（Accept-Language 中间件设置），
+    // 与 Swagger UI 之外的这一份 HTML 保持「默认英文、zh 可切换」。
+    let locale = crate::i18n::request_locale().unwrap_or_else(crate::i18n::current_locale);
     Html(
         include_str!("redoc.html")
             .replace("__REDOC_SCRIPT_URL__", REDOC_SCRIPT_URL)
-            .replace("__REDOC_SCRIPT_INTEGRITY__", REDOC_SCRIPT_INTEGRITY),
+            .replace("__REDOC_SCRIPT_INTEGRITY__", REDOC_SCRIPT_INTEGRITY)
+            .replace("__REDOC_LANG__", &locale)
+            .replace("__REDOC_TITLE__", &crate::i18n::tr("api-redoc-title")),
     )
 }
 
@@ -45,6 +50,7 @@ mod tests {
 
     #[tokio::test]
     async fn redoc_route_serves_html_with_spec_url() {
+        crate::i18n::init();
         let resp = redoc_router()
             .oneshot(
                 Request::builder()
@@ -82,8 +88,15 @@ mod tests {
             "crossorigin attribute must be present for SRI"
         );
         assert!(
-            !html.contains("__REDOC_SCRIPT_URL__") && !html.contains("__REDOC_SCRIPT_INTEGRITY__"),
+            !html.contains("__REDOC_SCRIPT_URL__")
+                && !html.contains("__REDOC_SCRIPT_INTEGRITY__")
+                && !html.contains("__REDOC_LANG__")
+                && !html.contains("__REDOC_TITLE__"),
             "placeholders must be replaced"
+        );
+        assert!(
+            html.contains(&crate::i18n::tr("api-redoc-title")),
+            "title must come from the i18n catalog"
         );
     }
 }

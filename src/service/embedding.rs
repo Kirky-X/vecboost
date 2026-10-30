@@ -577,7 +577,7 @@ impl EmbeddingService {
         &self,
         texts: &[String],
     ) -> Result<Vec<Vec<f32>>, VecboostError> {
-        // 逐条复用文本校验（含控制字符检查，审查：批路径此前绕过防线）
+        // 逐条复用文本校验（含控制字符检查，批路径此前绕过防线）
         for t in texts {
             self.validator.validate_text(t)?;
         }
@@ -1465,7 +1465,7 @@ impl EmbeddingService {
 
         // 统一经 EngineFactory 创建（GGUF 量化路由单一入口）。
         // create 先于 manager.load/unload 执行：失败时 manager 状态未被扰动，
-        // 消除"新模型条目残留+旧模型已卸载+服务未切换"的失败次序窗口（评审 R7 四轮）。
+        // 消除"新模型条目残留+旧模型已卸载+服务未切换"的失败次序窗口。
         // 权衡：此后 manager.load 失败经 `?` 返回时，create 已完成的权重加载被
         // 整体 drop——可接受（manager.load 现仅走元数据构造，几乎不失败）；
         // 若未来 load 变重（真实权重加载）应改为 create 延后或 load 结果预检。
@@ -1687,7 +1687,7 @@ impl EmbeddingService {
     /// candle 决策臂的 sha256 校验与 F16→F32 权重物化是秒级同步负载，
     /// 内联会阻塞 runtime worker。UnsupportedTask 直传：fail-fast 错误须走
     /// to_api_error 的 400 臂（调用方可换任务/端点），不得与权重缺失混同
-    /// 为 404（评审 R3 四轮）；其余映射 model-load-failed NotFound。
+    /// 为 404；其余映射 model-load-failed NotFound。
     async fn create_engine_via_factory(
         &self,
         model_config: &ModelConfig,
@@ -1937,7 +1937,7 @@ fn estimate_resident_bytes(
     } else {
         // Translate/Onnx 臂（cfg 门：EngineType::Onnx 变体仅在 onnx feature
         // 下存在）：翻译 bundle（Marian fp32/int8）驻留系数无实测标定
-        // （报告 R8）——int8 权重驻留 ≈ 磁盘，但 fp32 变体 + tokenizer +
+        // ——int8 权重驻留 ≈ 磁盘，但 fp32 变体 + tokenizer +
         // logits 工作区高于磁盘；取保守系数 2.0（同 Decision/Candle upcast
         // 口径量级），高估方向安全（更早拒绝超限）。实测标定后修正。
         #[cfg(feature = "onnx")]
@@ -1969,7 +1969,7 @@ fn estimate_model_bytes(path: &std::path::Path) -> u64 {
             }
         }
         Err(e) => {
-            // 目录不可读时粗估为 0——执法被无声绕过，必须显性化（回归审查 LOW）
+            // 目录不可读时粗估为 0——执法被无声绕过，必须显性化
             log::warn!(
                 "{}",
                 crate::i18n::tr_with_args(
@@ -2184,7 +2184,7 @@ mod tests {
             vec![0u8; 500],
         )
         .unwrap();
-        // 非 onnx 构建面本测试仅验证磁盘求和口径不进 Translate 臂（评审）
+        // 非 onnx 构建面本测试仅验证磁盘求和口径不进 Translate 臂
         #[cfg_attr(not(feature = "onnx"), allow(unused_variables))]
         let disk = 300 + 400 + 500;
 
@@ -4627,7 +4627,7 @@ mod tests {
         }
     }
 
-    // ===== 批处理 OOM 回退：真实配置消费契约（T001） =====
+    // ===== 批处理 OOM 回退：真实配置消费契约 =====
 
     #[tokio::test]
     async fn test_embed_single_chunk_oom_fallback_uses_real_model_config() {
@@ -5331,7 +5331,7 @@ mod tests {
     /// engine::factory::test_create_decision_task_dispatches_to_decision_pipeline。
     /// switch_model 内的 UnsupportedTask 直传分支保留为防御性错误映射：
     /// 未来工厂再产生 UnsupportedTask（新 task 变体）时仍走 to_api_error 400 臂
-    /// 而非误包装 404（评审 R3 四轮）。）
+    /// 而非误包装 404。）
 
     #[tokio::test]
     async fn test_switch_model_preserves_previous_config_fields() {
@@ -5384,7 +5384,11 @@ mod tests {
 
         let req = ModelSwitchRequest {
             model_name: "first-model".to_string(),
-            model_path: None,
+            // 显式给 3 段路径：is_valid_hf_repo_id 段数上限 2 → 工厂在 repo-id
+            // 校验臂瞬时拒绝。缺省回落 model_name 单段名会进 hf-hub 下载链，
+            // 网络（含 DNS 污染黑洞）下实测单个解析最长阻塞 300s 总超时，
+            // 单测不得依赖外网可达性与失败时延。
+            model_path: Some(std::path::PathBuf::from("factory/rejects/this")),
             tokenizer_path: None,
             device: None,
             max_batch_size: None,

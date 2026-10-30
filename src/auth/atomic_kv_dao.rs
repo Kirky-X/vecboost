@@ -48,14 +48,18 @@ impl AtomicKvDao {
     }
 
     async fn incr_sql(&self, key: &str, ttl_seconds: u64) -> GarrisonResult<u64> {
-        let session = self
-            .pool
-            .get_session("admin")
-            .await
-            .map_err(|e| GarrisonError::Dao(format!("atomic-incr-session::{e}")))?;
-        let conn = session
-            .connection()
-            .map_err(|e| GarrisonError::Dao(format!("atomic-incr-connection::{e}")))?;
+        let session = self.pool.get_session("admin").await.map_err(|e| {
+            GarrisonError::Dao(crate::i18n::tr_with_args(
+                "auth-atomic-incr-session-failed",
+                crate::i18n::tr_args(&[("detail", &e.to_string())]),
+            ))
+        })?;
+        let conn = session.connection().map_err(|e| {
+            GarrisonError::Dao(crate::i18n::tr_with_args(
+                "auth-atomic-incr-connection-failed",
+                crate::i18n::tr_args(&[("detail", &e.to_string())]),
+            ))
+        })?;
         let backend = conn.get_database_backend();
         let now = Self::now_secs();
         let expire_at = Self::expire_at_from_ttl(ttl_seconds);
@@ -68,17 +72,30 @@ impl AtomicKvDao {
             Value::BigInt(Some(now)),
         ];
         let stmt = Statement::from_sql_and_values(backend, sql, values);
-        let row = conn
-            .query_one_raw(stmt)
-            .await
-            .map_err(|e| GarrisonError::Dao(format!("atomic-incr-execute::{e}")))?;
-        let row = row.ok_or_else(|| GarrisonError::Dao("atomic-incr-no-row".to_string()))?;
-        let value: String = row
-            .try_get("", "v")
-            .map_err(|e| GarrisonError::Dao(format!("atomic-incr-read::{e}")))?;
-        value
-            .parse::<u64>()
-            .map_err(|e| GarrisonError::Dao(format!("atomic-incr-parse::{key}::{value}::{e}")))
+        let row = conn.query_one_raw(stmt).await.map_err(|e| {
+            GarrisonError::Dao(crate::i18n::tr_with_args(
+                "auth-atomic-incr-execute-failed",
+                crate::i18n::tr_args(&[("detail", &e.to_string())]),
+            ))
+        })?;
+        let row =
+            row.ok_or_else(|| GarrisonError::Dao(crate::i18n::tr("auth-atomic-incr-no-row")))?;
+        let value: String = row.try_get("", "v").map_err(|e| {
+            GarrisonError::Dao(crate::i18n::tr_with_args(
+                "auth-atomic-incr-read-failed",
+                crate::i18n::tr_args(&[("detail", &e.to_string())]),
+            ))
+        })?;
+        value.parse::<u64>().map_err(|e| {
+            GarrisonError::Dao(crate::i18n::tr_with_args(
+                "auth-atomic-incr-parse-failed",
+                crate::i18n::tr_args(&[
+                    ("key", key),
+                    ("value", &value),
+                    ("detail", &e.to_string()),
+                ]),
+            ))
+        })
     }
 
     /// SQLite 写-写并发返回 `database is locked`（code 5，SQLITE_BUSY）；
@@ -111,14 +128,20 @@ impl AtomicKvDao {
     /// SQLite 文件库启用 WAL（库级持久属性，一次设置对全部连接生效）：
     /// 多副本下读不再阻塞写，缩小写锁窗口。非 sqlite 后端跳过。
     async fn enable_sqlite_wal(&self) -> GarrisonResult<()> {
-        let session = self
-            .pool
-            .get_session("admin")
-            .await
-            .map_err(|e| GarrisonError::Dao(format!("atomic-wal-session::{e}")))?;
+        let session = self.pool.get_session("admin").await.map_err(|e| {
+            GarrisonError::Dao(crate::i18n::tr_with_args(
+                "auth-atomic-wal-session-failed",
+                crate::i18n::tr_args(&[("detail", &e.to_string())]),
+            ))
+        })?;
         if session
             .connection()
-            .map_err(|e| GarrisonError::Dao(format!("atomic-wal-connection::{e}")))?
+            .map_err(|e| {
+                GarrisonError::Dao(crate::i18n::tr_with_args(
+                    "auth-atomic-wal-connection-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                ))
+            })?
             .get_database_backend()
             != DbBackend::Sqlite
         {
@@ -127,7 +150,12 @@ impl AtomicKvDao {
         session
             .execute_raw("PRAGMA journal_mode=WAL")
             .await
-            .map_err(|e| GarrisonError::Dao(format!("atomic-wal-enable::{e}")))?;
+            .map_err(|e| {
+                GarrisonError::Dao(crate::i18n::tr_with_args(
+                    "auth-atomic-wal-enable-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                ))
+            })?;
         Ok(())
     }
 }
@@ -234,8 +262,9 @@ fn incr_sql_for_backend(backend: DbBackend) -> GarrisonResult<&'static str> {
                                 THEN excluded.expire_at ELSE garrison_kv.expire_at END \
              RETURNING v",
         ),
-        other => Err(GarrisonError::Dao(format!(
-            "atomic-incr-unsupported-backend::{other:?}"
+        other => Err(GarrisonError::Dao(crate::i18n::tr_with_args(
+            "auth-atomic-incr-unsupported-backend",
+            crate::i18n::tr_args(&[("detail", &format!("{other:?}"))]),
         ))),
     }
 }
@@ -269,7 +298,12 @@ mod tests {
 
     #[test]
     fn incr_sql_rejects_unsupported_dialect() {
+        crate::i18n::init();
         let err = incr_sql_for_backend(DbBackend::MySql).expect_err("mysql must be rejected");
-        assert!(err.to_string().contains("atomic-incr-unsupported-backend"));
+        let expected = crate::i18n::tr_with_args(
+            "auth-atomic-incr-unsupported-backend",
+            crate::i18n::tr_args(&[("detail", "")]),
+        );
+        assert!(err.to_string().contains(&expected));
     }
 }

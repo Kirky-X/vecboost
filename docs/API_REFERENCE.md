@@ -2,7 +2,7 @@
 
 **完整的 REST HTTP 端点和 gRPC 服务方法文档**
 
-[![Version 0.3.0-rc.1](https://img.shields.io/badge/Version-0.3.0--rc.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002) [![gRPC](https://img.shields.io/badge/gRPC-50051-green.svg?style=for-the-badge)](localhost:50051)
+[![release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge&label=Version)](https://github.com/Kirky-X/vecboost/releases) [![REST API](https://img.shields.io/badge/REST-API-9002-blue.svg?style=for-the-badge)](http://localhost:9002) [![gRPC](https://img.shields.io/badge/gRPC-50051-green.svg?style=for-the-badge)](localhost:50051)
 
 *VecBoost API 的完整文档，包括 REST HTTP 端点和 gRPC 服务方法。*
 
@@ -941,26 +941,29 @@ Prometheus 指标端点。
 
 | 指标名称 | 类型 | 说明 |
 |----------|------|------|
-| `vecboost_requests_total` | counter | 总请求数 |
-| `vecboost_embedding_latency_seconds` | histogram | 嵌入延迟分布 |
-| `vecboost_cache_hit_ratio` | gauge | 缓存命中率 |
-| `vecboost_batch_size` | histogram | 批处理大小分布 |
-| `vecboost_model_load_duration_seconds` | histogram | 模型加载时间 |
-| `vecboost_active_requests` | gauge | 活跃请求数 |
+| `http_requests_total` | counter | HTTP 请求数（标签 `method` / `endpoint` / `status`） |
+| `http_request_duration_seconds` | histogram | HTTP 请求延迟分布（标签 `method` / `endpoint`） |
+| `active_connections` | gauge | 活跃连接数（标签 `type`） |
+| `cache_hits_total` | counter | 缓存命中数（标签 `cache_type`） |
+| `cache_misses_total` | counter | 缓存未命中数（标签 `cache_type`） |
+| `vecboost_batch_size` | histogram | 时间窗拼批批次大小分布（标签 `operation`） |
+| `batch_size` | histogram | 批处理大小分布（标签 `operation`） |
 | `rate_limit_allowed_total` | counter | 限流放行的请求数（按维度标签） |
 | `rate_limit_denied_total` | counter | 限流拒绝的请求数（按维度标签） |
+
+> **ℹ️ 完整清单**: 指标注册的单一源为 `src/metrics/prometheus_exporter.rs`。除上表外另有拼批/队列/决策/翻译/检测等分阶段指标——`vecboost_queue_wait_seconds`、`vecboost_pipeline_queue_depth`、`vecboost_pipeline_in_flight_requests`、`vecboost_stage_seconds`、`vecboost_batch_wait_seconds`、`vecboost_inbatch_dedup_ratio`、`vecboost_semantic_cache_fuzzy_hits_total`、`vecboost_decision_seconds` / `_requests_total` / `_questions_total` / `_queue_wait_seconds`、`vecboost_detect_requests_total`、`vecboost_translate_requests_total`——逐项说明见 [⚡ 性能指南 · 新增指标](PERFORMANCE.md#-新增指标)，Grafana 仪表板（`deploy/grafana/`）使用的即这些真实指标名。
 
 **示例查询:**
 
 ```promql
 # 请求率
-rate(vecboost_requests_total[5m])
+rate(http_requests_total[5m])
 
 # p99 延迟
-histogram_quantile(0.99, rate(vecboost_embedding_latency_seconds_bucket[5m]))
+histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))
 
-# 缓存命中率
-vecboost_cache_hit_ratio
+# 缓存命中比例
+rate(cache_hits_total[5m]) / (rate(cache_hits_total[5m]) + rate(cache_misses_total[5m]))
 ```
 
 ---
@@ -1027,7 +1030,7 @@ gRPC 服务通过 `sdforge::grpc::build_server_with_config` 启动，配置项�
 | `grpc_max_connections` | `usize` | `1000` | 最大并发连接数 |
 | `grpc_timeout_seconds` | `u64` | `30` | 请求超时（秒） |
 | `grpc_require_auth` | `bool` | `true` | 是否强制 JWT 认证（BearerAuth） |
-| `grpc_allowed_roots` | `Vec<PathBuf>` | 工作目录 | gRPC 文件嵌入路径校验根目录（拒绝 `/`、`/etc`、`/root` 等敏感目录作为 fallback） |
+| `grpc_allowed_roots` | `Vec<String>` | 无（必须显式配置） | 文件嵌入路径校验根目录；未配置或为空时 `/embed/file` 一律返回 400 并提示配置该项（**无 cwd 回退**） |
 
 启用 `grpc_require_auth = true` 时，必须同时满足：
 - `[auth] enabled = true`
@@ -1143,7 +1146,7 @@ struct ParagraphEmbedding {
 }
 ```
 
-> **🔒 路径校验**: gRPC `vecboost.embed_file` 受 `grpc_allowed_roots` 配置约束；未配置时回退到当前工作目录，并拒绝 `/`、`/etc`、`/root`、`/var`、`/usr` 等敏感根目录作为 fallback，防止意外暴露整个文件系统。
+> **🔒 路径校验**: gRPC/HTTP `embed_file` 受 `[server] grpc_allowed_roots` 强制约束——**必须显式配置**，未配置或配置为空时请求直接返回 400（`build_path_validator()`，`src/api/embedding.rs:237-271`，错误信息提示补上允许根），**不存在回退到进程工作目录的行为**（旧回退会令该端点成为以 cwd 为根的任意文件读取原语，已移除）。单文件上限 10 MiB。`/model/switch` 的本地路径校验器（`model_path_validator()`）另有一套缺省：未配置时回落到进程工作目录下的 `models/`，与 `/embed/file` 无关。
 
 #### 模型管理
 
@@ -1401,13 +1404,13 @@ cargo run --features mcp -- --mcp
 # 在 MCP 客户端（如 Claude Desktop）中配置 stdio 启动命令：vecboost --mcp
 ```
 
-暴露的工具为 `#[forge(tool_name = ...)]` 注册的 MCP 工具名（**注意与 HTTP 端点名不同**）：`embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models` / `get_current_model` / `get_model_info` / `model_switch` / `model_unload` / `health` / `openai_embed`。工具由 `#[forge(tool_name = ...)]` 宏从与 REST/gRPC 相同的处理函数生成，入参/出参复用上方消息类型定义中的同名领域类型（JSON 格式）；`decisions` 工具仅在 `[model] task = "decision"` 配置下可成功调用（否则返回 400 Unsupported task）；`translate` 工具需 `[translation]` 已配置语言对（否则 400 `translate-not-configured`）；`detect` 工具无配置依赖。
+暴露的工具为 `#[forge(tool_name = ...)]` 注册的 MCP 工具名（**注意与 HTTP 端点名不同**）。默认（不含 `auth` feature）18 个：`embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models` / `get_current_model` / `get_model_info` / `model_switch` / `model_unload` / `health` / `openai_embed`。启用 `auth` feature 时另注册 4 个认证工具（`src/api/auth.rs`，受 `#[cfg(all(feature = "auth", feature = "http"))]` 门控）：`login` / `logout` / `refresh_token` / `get_current_user`。工具由 `#[forge(tool_name = ...)]` 宏从与 REST/gRPC 相同的处理函数生成，入参/出参复用上方消息类型定义中的同名领域类型（JSON 格式）；`decisions` 工具仅在 `[model] task = "decision"` 配置下可成功调用（否则返回 400 Unsupported task）；`translate` 工具需 `[translation]` 已配置语言对（否则 400 `translate-not-configured`）；`detect` 工具无配置依赖。
 
 ---
 
 ## 💻 CLI 工具
 
-`cli` feature 提供 clap 命令行工具（由 sdforge 从与 HTTP/gRPC 相同的处理函数生成）。`--config` 等全局参数须写在子命令之前：
+`cli` feature 提供 clap 命令行工具（由 sdforge 从与 HTTP/gRPC 相同的处理函数生成）。`--config <path>` / `--config=<path>` 在该模式下同样生效：`strip_config_args()` 在 clap 解析前遍历全部参数并剥离该选项，因此写在子命令之前或之后均可（悬空 `--config` 无路径时退出码 2）：
 
 ```bash
 cargo run --features cli -- embed --req '{"text":"Hello, world!"}'                # 单文本嵌入
@@ -1600,6 +1603,8 @@ ip_whitelist = ["127.0.0.1"]
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| `0.3.0-rc.3` | 2026-10-20 | 多副本共享语义缓存/封禁清单（`distributed-redis`）、`[database] max_connections` 与 `connect_timeout_secs` 真正生效、认证会话外置 `session_backend = "database"`、onnx-primary 主引擎切换、审计日志 DB/文件双写、同文并发去重 |
+| `0.3.0-rc.2` | 2026-10-15 | 转录（Qwen3-ASR）服务面、翻译与语言检测全协议接入、决策任务优先级队列 |
 | `0.3.0-rc.1` | 2026-09-22 | 转录（Qwen3-ASR）接口、翻译与语言检测全协议接入、PARQ 存储、统一 generate 接口 |
 | `0.2.1` | 2026-07-30 | 🐛 文档同步更新、代码质量改进 |
 | `0.2.0` | 2026-07-24 | ✨ 生态重构：7 库架构、trait-kit 模块注册、多协议接口；gRPC 由 sdforge `#[forge(grpc_method)]` 宏生成，移除 `proto/`、`src/grpc/`、`src/routes/`、`src/cli/` |
@@ -1619,4 +1624,4 @@ ip_whitelist = ["127.0.0.1"]
 
 ---
 
-> **📝 最后更新**: 2026-09-06 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-10-29 | **版本**: 0.3.0-rc.3 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

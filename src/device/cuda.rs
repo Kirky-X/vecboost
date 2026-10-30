@@ -1,8 +1,6 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-#![allow(unused)]
-
 use crate::config::model::DeviceType;
 use crate::device::memory_optimizer::{
     GpuMemoryConfig, ModelMemoryRequirements, SharedGpuMemoryManager,

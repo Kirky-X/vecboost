@@ -134,7 +134,7 @@ Prerequisites:
 git clone https://github.com/Kirky-X/vecboost.git
 cd vecboost
 
-# 2. Default build (http feature, includes OpenAPI docs)
+# 2. Default build (http + onnx features, includes OpenAPI docs and the default ONNX engine)
 cargo build --release
 
 # 3. Build with GPU support
@@ -149,8 +149,8 @@ cargo build --release --features grpc,cli
 # 5. Build the MCP interface (stdio mode, start with --mcp)
 cargo build --release --features mcp
 
-# 6. Build the CI full-feature combination (database + auth + ONNX + OpenAPI + all protocols)
-cargo build --release --features grpc,cli,auth,onnx,db,openapi,mcp
+# 6. Build the CI full-feature combination (database + auth + ONNX + OpenAPI + all protocols; CI's actual value is ci.yml:24)
+cargo build --release --features grpc,cli,auth,onnx,db,sqlite,openapi,mcp
 ```
 
 </details>
@@ -170,7 +170,7 @@ cp config/config.toml config/config_custom.toml
 # Run with the default config
 ./target/release/vecboost
 
-# Run with a custom config (--config; in CLI subcommand mode it must precede the subcommand)
+# Run with a custom config (--config; it is stripped before clap parsing, so position before or after the subcommand both work)
 ./target/release/vecboost --config config/config_custom.toml
 ```
 
@@ -287,7 +287,7 @@ Interactive OpenAPI docs (Swagger UI): build with `cargo build --features swagge
 
 ### 🔖 Feature Flags
 
-The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `default = ["http"]`.
+The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `default = ["http", "onnx"]`.
 
 <details>
 <summary>📋 Table</summary>
@@ -308,7 +308,7 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 | `cuda` | - | CUDA device support (cudarc driver + nvml detection, backend-agnostic; candle's CUDA compute backend goes through `candle-cuda`) |
 | `candle-cuda` | - | CUDA compute acceleration for the candle backend (implies `candle`) |
 | `metal` | - | Apple Silicon Metal GPU (candle backend, implies `candle`) |
-| `onnx` | - | ONNX Runtime engine (**enabled by default**, part of default features) |
+| `onnx` | ✅ | ONNX Runtime engine (**enabled by default**, part of default features) |
 | `candle` | - | candle fallback backend (opt-in: CandleEngine embedding / candle decision head / GGUF quantization bridge; `engine_type="candle"` is explicitly rejected at startup when not enabled) |
 | `transcribe` | - | Qwen3-ASR transcription engine (three-graph + silero VAD + fbank), library-level `InferenceEngine::transcribe` entry; HTTP/gRPC endpoints wired (`POST /api/v1/transcribe`, configured under `[transcribe]`) |
 | `mkl` | - | x86_64 CPU MKL acceleration backend (candle-path opt-in, implies `candle`; requires a toolchain that links cleanly) |
@@ -354,6 +354,8 @@ Per-key options and defaults for every config section (server / model / embeddin
 
 </details>
 
+> **ℹ️ Note**: `docs/benchmarks/` (benchmark archive), `docs/reviews/` (review ledgers, including `I18N_MISSING_AUDIT.md` and `TRANSLATION_REVIEW_LEDGER.md`) and `docs-transcribe/` are **local-only** directories (see `.gitignore`); they are not committed and do not exist in a clean clone. Key benchmark numbers are inlined in the [⚡ Performance Guide](docs/PERFORMANCE.md).
+
 ---
 
 ## 💻 Examples
@@ -366,12 +368,14 @@ All examples live in [`examples/`](examples/), an independent workspace-member c
 ```bash
 # Run a single example
 cargo run -p vecboost-examples --bin embed
-cargo run -p vecboost-examples --bin library_usage
+cargo run -p vecboost-examples --bin library_usage --features candle
 cargo run -p vecboost-examples --bin matryoshka
 
 # ONNX engine example (requires ONNX Runtime)
 cargo run -p vecboost-examples --bin onnx --features onnx
 ```
+
+> **ℹ️ Note**: `library_usage` declares `required-features = ["candle"]` in `examples/Cargo.toml`, so it must run with `--features candle`; `onnx` / `laya_poc` declare `required-features = ["onnx"]`. All other examples (cache / auth / rate-limiting / monitoring / engine, etc.) have no feature requirement — `vecboost-examples` defines only three pass-through features: `onnx` / `candle` / `metal`.
 
 </details>
 
@@ -379,7 +383,7 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 
 ## 🧱 Architecture
 
-VecBoost uses a modular ecosystem architecture: `trait-kit` wires modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`); `src/registry/` has 20 `ModuleMeta` implementations (several are feature-gated, e.g. under `auth`), `sdforge` generates the four protocol bindings from the single source `src/api/embedding.rs`, inference is abstracted behind `EngineFactory` to the Candle / ONNX engines, and requests flow through a priority queue and time-window batching into the inference pipeline.
+VecBoost uses a modular ecosystem architecture: `trait-kit` wires modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`); `src/registry/` has 20 production `ModuleMeta` implementations plus 3 test fixtures (several are feature-gated, e.g. under `auth`), `sdforge` generates the four protocol bindings from the single source `src/api/embedding.rs`, inference is abstracted behind `EngineFactory` to the Candle / ONNX engines, and requests flow through a priority queue and time-window batching into the inference pipeline.
 
 The 7-library ecosystem (trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge) versions and responsibilities, the module dependency graph, data flow, and the cache / security / deployment architecture and extension points are documented in the [🏗️ Architecture document](docs/ARCHITECTURE.md).
 
@@ -389,11 +393,11 @@ The 7-library ecosystem (trait-kit / confers / inklog / oxcache / limiteron / db
 
 ### 🎯 Testing Strategy
 
-The test stack has six layers: inline unit tests in `src/`, integration tests in `tests/integration/`, specialized integration tests (doctor / gRPC E2E / model snapshot regression / quantization quality gate / SDK matrix), real-service scenario tests in `tests/scenario/*.py` (15 pytest suites), performance regression thresholds in `tests/perf/`, and 5 Criterion microbenchmark suites in `benches/`. The `TEST_MODE` environment variable controls the test engine (`mock` default / `light` / `full`). Layer responsibilities, the exhaustive scenario matrix, and the CI workflow mapping are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
+The test stack has six layers: inline unit tests in `src/`, integration tests in `tests/integration/`, specialized integration tests (doctor / gRPC E2E / model snapshot regression / quantization quality gate / SDK matrix), real-service scenario tests in `tests/scenario/*.py` (16 pytest suites), performance regression thresholds in `tests/perf/`, and 6 Criterion microbenchmark suites in `benches/`. The `TEST_MODE` environment variable controls the test engine (`mock` default / `light` / `full`). Layer responsibilities, the exhaustive scenario matrix, and the CI workflow mapping are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
 
 ### ⚡ Commands (identical to CI)
 
-The commands below are extracted from `.github/workflows/health-check.yml` (Health Check), `feature-matrix.yml`, `scenario-tests.yml`, and `docs/CONTRIBUTING.md`. Path-dependency note: the `../base/*` ecosystem libraries are living path dependencies, so local gate commands must be scoped with `-p vecboost -p vecboost-examples`.
+The commands below are extracted from `.github/workflows/health-check.yml` (Health Check), `feature-matrix.yml`, `scenario-tests.yml`, and `docs/CONTRIBUTING.md`. Dependency-source note: the 7-library ecosystem is currently sourced entirely from the crates.io registry (`Cargo.toml` has no `path =` dependencies and no `[patch]`; `Cargo.lock` records `source = "registry+https://github.com/rust-lang/crates.io-index"`). Gate commands should still be scoped with `-p vecboost -p vecboost-examples` to avoid pulling other workspace members' intermediate states into the gauntlet.
 
 <details>
 <summary>📄 Code · bash</summary>
@@ -401,31 +405,31 @@ The commands below are extracted from `.github/workflows/health-check.yml` (Heal
 ```bash
 # Format and lint gates (CI treats clippy unwrap_used as the production panic-surface gate)
 cargo fmt --all -- --check
-cargo clippy --features "grpc,cli,auth,onnx,db,openapi,mcp" --all-targets -- -D warnings -W clippy::unwrap_used
+cargo clippy --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --all-targets -- -D warnings -W clippy::unwrap_used
 
 # Full-feature compile check (feature-matrix)
-cargo check --features "grpc,cli,auth,onnx,db,openapi,mcp"
+cargo check --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
 
 # Unit + integration tests (CI runs --lib and --tests separately)
-cargo test --features "grpc,cli,auth,onnx,db,openapi,mcp" --lib
-cargo test --features "grpc,cli,auth,onnx,db,openapi,mcp" --tests
+cargo test --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --lib
+cargo test --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --tests
 
 # gRPC E2E (spawns the real binary)
 cargo test -p vecboost --features http,grpc --test grpc_e2e
 
 # Scenario tests (pytest; conftest spawns real servers; inference cases auto-SKIP without models/)
-cargo build -p vecboost --features http
+cargo build -p vecboost --features http,auth,cli,mcp,grpc
 pytest tests/scenario -q --junitxml=scenario-results.xml
 
 # Python performance tests (sim marker separates simulator cases)
 pytest tests/perf -m "not sim"   # real-service cases only
 pytest tests/perf -m sim          # simulator cases only
 
-# Coverage (CI hard gate: line coverage >= 80%, llvm-cov; measured 90.89% locally)
-cargo llvm-cov --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --lib --lcov --output-path coverage/lcov.info
+# Coverage (CI hard gate: line coverage >= 90%, llvm-cov; denominator covers lib + integration tests + the real-boot leg, --lib narrow runs are forbidden)
+cargo llvm-cov --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp,distributed-redis" --tests --lcov --output-path coverage/lcov.info
 
 # Benchmarks (CI benchmark job)
-cargo bench --features "grpc,cli,auth,onnx,db,openapi,mcp"
+cargo bench --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
 
 # Documentation build and broken-link check
 cargo doc --workspace --no-deps
@@ -438,7 +442,7 @@ cargo audit
 
 ### 📊 Test Scale
 
-As of the v0.3.0-rc.2 workspace: 2277 inline unit tests in `src/`, 63 Rust integration/specialized test functions (`tests/*.rs`), 146 Python scenario/performance cases (119 scenario + 27 performance, 15 scenario suites), and 5 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 80% (llvm-cov), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
+As of the v0.3.0-rc.3 workspace: 2370 inline unit tests in `src/` (counted as `#[test]` / `#[tokio::test]` attributes), 129 Rust integration/specialized test attributes (`tests/`, subdirectories included, same counting method), 150 Python scenario/performance cases (123 scenario + 27 performance, 16 scenario suites), and 6 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 90% (llvm-cov), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
 
 ---
 
@@ -586,7 +590,7 @@ The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (followin
 
 | Version | Date | Highlights |
 |------|------|------|
-| Unreleased | - | onnx-primary engine switch (ort default, candle opt-in), audit-log DB/file dual write, in-flight dedup for identical requests, body-limit fix, swagger-ui/ReDoc docs surface, externalized database session backend, Grafana dashboard |
+| 0.3.0-rc.3 | 2026-10-20 | onnx-primary engine switch (ort default, candle opt-in), audit-log DB/file dual write, in-flight dedup for identical requests, body-limit fix, swagger-ui/ReDoc docs surface, externalized database session backend, Grafana dashboard, multi-replica shared semantic cache / ban list, `[database] max_connections` now effective |
 | 0.3.0-rc.2 | 2026-10-15 | Transcribe (Qwen3-ASR) service surface, translation/language-detection across all protocols, decision-task priority queue, self-maintained dependency upgrades |
 | 0.3.0-rc.1 | 2026-09-22 | Audit remediation and tuning switches (secure defaults / login convergence / XFF / RBAC / cache keys, GGUF/LFRU/WAL/hardware planning/doctor/warmup), PARQ storage replacing oxcache, unified "generate" interface |
 | 0.2.1 | 2026-07-30 | i18n, three-protocol rerank, three-stage semantic cache, BF16 precision, SIMD similarity, continuous batch scheduling, GPU memory paging, library mode |

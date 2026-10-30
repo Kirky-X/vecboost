@@ -1,7 +1,9 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-#![allow(unused)]
+// 监控面的采集分派按 feature（cuda/metal/onnx）三处 cfg 分叉：
+// 未启用的后端分支无消费者。保留模块级豁免（无子模块，不做子树传播）。
+#![allow(unused, reason = "monitor surface is feature gated: cuda/metal/onnx")]
 
 use log::warn;
 use std::sync::Arc;
@@ -81,7 +83,9 @@ impl MemoryMonitor {
             Ok(mem) => {
                 stats.total_bytes = mem.total * 1024;
                 stats.available_bytes = mem.avail * 1024;
-                stats.current_bytes = (mem.total - mem.avail) * 1024;
+                // macOS 下 sys-info 的 avail 口径（free+inactive）瞬时可能大于
+                // total，饱和减法防 debug 构建下溢 panic / release 回绕污染
+                stats.current_bytes = mem.total.saturating_sub(mem.avail) * 1024;
 
                 let current = stats.current_bytes;
                 let peak = self.inner.peak_memory.fetch_max(current, Ordering::SeqCst);

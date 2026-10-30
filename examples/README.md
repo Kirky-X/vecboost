@@ -12,8 +12,8 @@
 # 基础示例（默认 features）
 cargo run -p vecboost-examples --bin embed
 
-# Library SDK 示例
-cargo run -p vecboost-examples --bin library_usage
+# Library SDK 示例（Cargo.toml 声明 required-features = ["candle"]）
+cargo run -p vecboost-examples --bin library_usage --features candle
 
 # Matryoshka 维度约简
 cargo run -p vecboost-examples --bin matryoshka
@@ -24,14 +24,15 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 
 ## Features 透传
 
-`vecboost-examples` 通过自身 features 透传引擎特性到主 crate：
+`vecboost-examples` 通过自身 features 透传引擎特性到主 crate（`examples/Cargo.toml:31-37` 定义三项）：
 
 | Feature | 启用 | 说明 |
 |---------|------|------|
-| `onnx` | `vecboost/onnx` | ONNX Runtime 引擎 |
+| `onnx` | `vecboost/onnx` | ONNX Runtime 引擎（`onnx` / `laya_poc` 两个 bin 声明 `required-features = ["onnx"]`） |
+| `candle` | `vecboost/candle` | candle 回退后端（`library_usage` 声明 `required-features = ["candle"]`） |
 | `metal` | `vecboost/metal` | Apple Silicon GPU(macOS) |
 
-默认 features 为空(`default = []`)，绝大多数示例无需额外 feature 即可运行。
+默认 features 为空(`default = []`)。**注意**：本 crate 不透传 `vecboost` 的 `http` / `auth` / `oxcache` / `limiteron` 等 feature——这些能力由 `vecboost-examples` 自身依赖恒常可用，命令行上加 `--features http,auth,...` 会被 cargo 直接报 `does not contain these features`。除上表三个 bin 外，其余示例无需额外 feature 即可运行。
 
 ## 示例分类
 

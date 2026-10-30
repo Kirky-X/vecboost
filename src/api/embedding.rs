@@ -129,8 +129,9 @@ pub(crate) fn to_api_error(e: VecboostError) -> ApiError {
             source: None,
         },
         other => {
-            // 500 类错误经 context.extra 透传 Fluent error_code,
-            // 客户端可在 error.details.context.extra.error_code 拿到稳定键
+            // 500 类错误的 Fluent error_code 附着于 ErrorContext.extra，
+            // 供服务端日志使用；本地 sdforge 契约（api_error.rs Internal 臂）
+            // 明确 ErrorContext 只进日志、不得随 HTTP 响应体下发
             ApiError::Internal {
                 message: other.error_detail().to_string(),
                 error_id: uuid_like_id(),
@@ -161,12 +162,18 @@ fn openai_error_detail(openai_type: &str, openai_code: &str) -> Option<serde_jso
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 pub(crate) fn uuid_like_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    // 纯时间戳 id 在 macOS 实时钟（μs 级粒度）同 tick 内两次调用会撞号；
+    // 进程内单调序号兜底，同 tick ≤1000 次调用保证连续 id 互异（跨 tick
+    // 由纳秒分量区分）。后缀仍全数字，保持 err-<u128> 格式契约。
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("err-{}", nanos)
+    format!("err-{}{:03}", nanos, seq % 1000)
 }
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
@@ -1351,18 +1358,33 @@ pub async fn grpc_health_check() -> Result<serde_json::Value, ApiError> {
 
 #[cfg(test)]
 mod tests {
-    /// 500 类错误 wire JSON 透传 Fluent error_code(context.extra)
+    /// 500 类错误的 Fluent error_code 附着于 ErrorContext（服务端日志可见）；
+    /// wire JSON 不携带 context/extra——本地 sdforge 安全契约：ErrorContext
+    /// 只进服务端日志、不得随响应体下发（sdforge api_error.rs Internal 臂）
     #[test]
     fn to_api_error_carries_fluent_error_code() {
         let api = to_api_error(VecboostError::InternalError("boom".into()));
         let svc = api.to_service_error();
         let wire = serde_json::to_value(&svc).unwrap();
-        // ServiceError derive 序列化为平铺字段(code/message/details/http_status)
-        assert_eq!(wire["code"], "INTERNAL_ERROR");
-        assert_eq!(
-            wire["details"]["context"]["extra"]["error_code"],
-            "error-internal"
+        // ServiceError derive 序列化为平铺字段(code/message/details/http_status)；
+        // wire code 以本地 sdforge 源码为准（gRPC 风格短码，见 sdforge_error.rs code()）
+        assert_eq!(wire["code"], "INTERNAL");
+        assert!(wire["details"]["error_id"].is_string(), "wire={}", wire);
+        assert!(
+            wire["details"].get("context").is_none() && wire["details"].get("error_code").is_none(),
+            "ErrorContext 不得随响应体下发: wire={}",
+            wire
         );
+        // error_code 仍在 ApiError 层的 ErrorContext.extra 上（日志路径）
+        match &api {
+            ApiError::Internal {
+                context: Some(ctx), ..
+            } => assert_eq!(
+                ctx.extra.get("error_code").map(String::as_str),
+                Some("error-internal")
+            ),
+            _ => panic!("expected Internal variant with ErrorContext"),
+        }
     }
 
     /// UnsupportedTask 在 to_api_error 路径必须与 IntoResponse 直返路径同口径 400，
@@ -1372,7 +1394,7 @@ mod tests {
         let api = to_api_error(VecboostError::unsupported_task("decision".into()));
         let svc = api.to_service_error();
         let wire = serde_json::to_value(&svc).unwrap();
-        assert_eq!(wire["code"], "INVALID_INPUT", "wire={}", wire);
+        assert_eq!(wire["code"], "BAD_REQUEST", "wire={}", wire);
         assert_eq!(wire["http_status"], 400, "wire={}", wire);
     }
 
@@ -1388,7 +1410,7 @@ mod tests {
         let svc = api.to_service_error();
         let wire = serde_json::to_value(&svc).unwrap();
         assert_eq!(wire["http_status"], 503, "wire={}", wire);
-        assert_eq!(wire["code"], "SERVICE_UNAVAILABLE", "wire={}", wire);
+        assert_eq!(wire["code"], "UNAVAILABLE", "wire={}", wire);
     }
 
     /// OpenAI 错误槽位(type/code)可经 value 槽到达 wire

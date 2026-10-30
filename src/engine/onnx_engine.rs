@@ -756,7 +756,7 @@ fn onnx_pool(
             result
         }
         PoolingMode::Auto => {
-            unreachable!("Auto pooling should have been resolved at construction time")
+            unreachable!("{}", crate::i18n::tr("engine-auto-pooling-not-resolved"))
         }
     }
 }
@@ -848,7 +848,7 @@ mod tests {
         let model = root.join("models/Xenova-bge-small-en-v1.5");
         // 与 decision.rs / onnx_translate.rs 同口径：环境变量优先，仓库默认落位兜底。
         let dylib = std::env::var("ORT_DYLIB_PATH")
-            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+            .unwrap_or_else(|_| crate::engine::session::ort_dylib_default());
         if !model.join("model.onnx").is_file() || !std::path::Path::new(&dylib).is_file() {
             eprintln!("SKIP: 本地 ONNX 模型或 ORT dylib 缺失");
             return None;

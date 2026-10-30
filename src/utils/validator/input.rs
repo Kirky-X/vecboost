@@ -148,7 +148,7 @@ impl InputValidator {
 /// 文本内容三查（空串/纯空白/控制字符）——嵌入服务校验与 pipeline 入队门
 /// 共用的单一实现：pipeline 拼批下批内一条非法文本会让整批 embed 在服务层
 /// 校验处整批失败、错误扩散给批内其他合法请求，入队门用同一规则在 O(1) 内
-/// 400 拒绝、不占队列槽位；两处同源避免规则漂移重新打开毒化面（三路评审 M）。
+/// 400 拒绝、不占队列槽位；两处同源避免规则漂移重新打开毒化面。
 /// 长度维度不在此查——入队门已有 kit 配置口径的 validate_text_length，
 /// 服务层校验带独立 config，双查会引入两套长度上限冲突。
 pub fn validate_text_basic(text: &str) -> Result<(), VecboostError> {
@@ -194,15 +194,15 @@ pub fn is_valid_language_code(code: &str) -> bool {
 }
 
 /// 错误 detail 回显截断上限（字符数）：name 上限 10K 字符可被完整回显进
-/// wire/日志，64 字符足够定位（评审 R2）。
+/// wire/日志，64 字符足够定位。
 pub const MAX_ECHO_CHARS: usize = 64;
 
 /// 错误 detail 回显截断：用户输入不得原文进入错误消息。豁免集内的
 /// `\t` `\n` `\r` 与拒绝集全体成员（C0 其余/DEL/C1——含 U+0085 NEL——及
 /// U+2028/U+2029）一并字面量化，使回显物单行化——换行/行分隔符可伪造
-/// 日志行（评审 R1 四轮）；拒绝集字面量化不依赖调用方先过防线（防御纵深，
+/// 日志行；拒绝集字面量化不依赖调用方先过防线（防御纵深，
 /// 集合须与 [`has_disallowed_control_chars`] 同集）。
-/// 单次遍历：数到 MAX+1 即截断返回，不全量 count（评审 R8 四轮）。
+/// 单次遍历：数到 MAX+1 即截断返回，不全量 count。
 pub fn echo(s: &str) -> String {
     // 最坏情形一次分配：字面量化后单字符最大展开 8B（`\u{XXXX}`）
     let mut out = String::with_capacity(MAX_ECHO_CHARS * 8 + 3);

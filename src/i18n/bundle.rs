@@ -125,6 +125,12 @@ fn build_zh_bundle() -> FluentBundle<FluentResource> {
 /// (`CliBuilder` resolves them via `translate_or_fallback` when building
 /// `--help`). Deriving the list from the FTL itself keeps a single source of
 /// truth: adding a `forge-*` message registers it, no second list to update.
+/// 运行时消费者只在 `sync_sdforge_i18n` 的协议面变体内（同 `SDFORGE_SYNCED`
+/// 的 cfg 门），测试消费者在 `mod tests`。
+#[cfg_attr(
+    not(any(feature = "cli", feature = "mcp", feature = "http", feature = "grpc")),
+    allow(dead_code)
+)]
 pub(crate) fn protocol_message_keys() -> &'static [String] {
     static KEYS: OnceLock<Vec<String>> = OnceLock::new();
     KEYS.get_or_init(|| {

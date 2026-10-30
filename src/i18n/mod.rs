@@ -38,6 +38,11 @@ static I18N: OnceLock<I18nState> = OnceLock::new();
 
 /// One-shot guard for the sdforge protocol-surface sync (see
 /// [`sync_sdforge_i18n`]); `init` may be called from several entry points.
+/// 消费者只在 `sync_sdforge_i18n` 的协议面变体（见其 cfg 门）内，故同门豁免。
+#[cfg_attr(
+    not(any(feature = "cli", feature = "mcp", feature = "http", feature = "grpc")),
+    allow(dead_code)
+)]
 static SDFORGE_SYNCED: OnceLock<()> = OnceLock::new();
 
 // Per-request locale (set by HTTP middleware via Accept-Language header)

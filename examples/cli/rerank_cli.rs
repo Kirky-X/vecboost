@@ -1,9 +1,12 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! CLI rerank 子命令示例 — 通过子进程调用 `vecboost rerank`
+//! CLI rerank 子命令示例 — 通过子进程调用
+//! `vecboost --config <临时最小配置> rerank`
 //!
-//! 需要 vecboost 已编译: cargo build --release --features cli
+//! 前置条件与二进制/dylib/配置解析见 examples/cli/README.md 与本目录 common.rs。
+
+mod common;
 
 use std::io::Write;
 use std::process::Command;
@@ -30,10 +33,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input_path = temp_path.to_str().ok_or("temp path is not valid UTF-8")?;
 
     let query = "what is machine learning?";
-    println!("📝 查询: \"{}\"", query);
-    println!("📄 文档文件: {} (5 条文档)", input_path);
+    println!("📝 查询: \"{query}\"");
+    println!("📄 文档文件: {input_path} (5 条文档)");
+    let binary = common::resolve_binary();
+    common::ensure_cli_binary(&binary)?;
+    let dylib_env = common::ort_dylib_env()?;
+    let config_file = common::write_cli_config()?;
     println!(
-        "📝 调用: vecboost rerank --req '{{\"query\":\"{}\",\"documents\":[...]}}'\n",
+        "📝 调用: {} --config {} rerank --req '{{\"query\":\"{}\",\"documents\":[...]}}'\n",
+        binary,
+        config_file.path().display(),
         query
     );
 
@@ -43,27 +52,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "query": query,
         "documents": docs
     });
-    let output = Command::new("vecboost")
-        .args(["rerank", "--req", &req_json.to_string()])
-        .output();
-
-    match output {
-        Ok(output) => {
-            if output.status.success() {
-                println!("✅ 命令执行成功\n");
-                println!("📤 输出:");
-                println!("{}", String::from_utf8_lossy(&output.stdout));
-            } else {
-                println!("❌ 命令执行失败 (exit code: {:?})", output.status.code());
-                println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
-            }
-        }
-        Err(e) => {
-            println!("❌ 无法启动 vecboost 进程: {}", e);
-            println!("\n💡 请确保 vecboost 已编译并在 PATH 中:");
-            println!("   cargo build --release --features cli");
-        }
+    let mut cmd = Command::new(&binary);
+    cmd.arg("--config")
+        .arg(config_file.path())
+        .args(["rerank", "--req", &req_json.to_string()]);
+    if let Some((key, value)) = &dylib_env {
+        cmd.env(key, value);
+        println!("ℹ️ ORT_DYLIB_PATH 未设，向子进程注入仓库自带 dylib：{value}");
     }
 
-    Ok(())
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("❌ 无法启动 vecboost 进程: {e}");
+            eprintln!("💡 已尝试: {binary}");
+            eprintln!("   仓内构建: cargo build --release --features cli");
+            eprintln!("   或设 VECBOOST_BIN 指向已编译二进制（PATH 兜底）");
+            std::process::exit(127);
+        }
+    };
+
+    if output.status.success() {
+        println!("✅ 命令执行成功\n");
+        println!("📤 输出:");
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        Ok(())
+    } else {
+        println!("❌ 命令执行失败 (exit code: {:?})", output.status.code());
+        println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+        // 失败按子进程退出码终止本示例：cargo run 退出码如实反映结果
+        std::process::exit(output.status.code().unwrap_or(1));
+    }
 }

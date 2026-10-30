@@ -63,7 +63,10 @@ fn now_secs() -> f64 {
 }
 
 fn map_err(op: &str, err: impl Display) -> VecboostError {
-    VecboostError::internal_error(format!("semantic-redis-{op}: {err}"))
+    VecboostError::internal_error(crate::i18n::tr_with_args(
+        "cache-semantic-redis-op-failed",
+        crate::i18n::tr_args(&[("op", op), ("detail", &err.to_string())]),
+    ))
 }
 
 fn as_bytes(embedding: &[f32]) -> Vec<u8> {
@@ -79,8 +82,10 @@ fn from_bytes(bytes: &[u8]) -> Option<Vec<f32>> {
     }
     Some(
         bytes
-            .chunks_exact(4)
-            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| f32::from_le_bytes(*chunk))
             .collect(),
     )
 }
@@ -93,18 +98,30 @@ pub(crate) struct RedisSemanticIndex {
 impl RedisSemanticIndex {
     /// 连接 Redis 并做 PING 能力校验；失败即启动失败（fail-closed）。
     pub(crate) async fn connect(url: &str) -> Result<Self, VecboostError> {
-        let client = redis::Client::open(url)
-            .map_err(|e| VecboostError::config_error(format!("semantic-redis-url-invalid: {e}")))?;
+        let client = redis::Client::open(url).map_err(|e| {
+            VecboostError::config_error(crate::i18n::tr_with_args(
+                "cache-semantic-redis-url-invalid",
+                crate::i18n::tr_args(&[("detail", &e.to_string())]),
+            ))
+        })?;
         let mut conn = client
             .get_multiplexed_async_connection()
             .await
             .map_err(|e| {
-                VecboostError::config_error(format!("semantic-redis-connect-failed: {e}"))
+                VecboostError::config_error(crate::i18n::tr_with_args(
+                    "cache-semantic-redis-connect-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                ))
             })?;
         let _: String = redis::cmd("PING")
             .query_async(&mut conn)
             .await
-            .map_err(|e| VecboostError::config_error(format!("semantic-redis-ping-failed: {e}")))?;
+            .map_err(|e| {
+                VecboostError::config_error(crate::i18n::tr_with_args(
+                    "cache-semantic-redis-ping-failed",
+                    crate::i18n::tr_args(&[("detail", &e.to_string())]),
+                ))
+            })?;
         Ok(Self { conn })
     }
 
@@ -360,13 +377,19 @@ mod tests {
 
     #[test]
     fn now_secs_and_map_err_shape() {
+        crate::i18n::init();
         let first = now_secs();
         assert!(first > 1_700_000_000.0, "必须是真实 UNIX 秒：{first}");
         assert!(now_secs() >= first, "同一进程内不得回退");
         let err = map_err("insert", std::io::Error::other("boom"));
         let detail = err.error_detail();
-        assert!(
-            detail.contains("semantic-redis-insert") && detail.contains("boom"),
+        let expected = crate::i18n::tr_with_args(
+            "cache-semantic-redis-op-failed",
+            crate::i18n::tr_args(&[("op", "insert"), ("detail", "boom")]),
+        );
+        assert_eq!(
+            detail,
+            expected.as_str(),
             "错误需同时点名操作与原因：{detail}"
         );
     }
@@ -375,14 +398,19 @@ mod tests {
 
     #[tokio::test]
     async fn connect_rejects_invalid_url_and_unreachable_endpoint() {
+        crate::i18n::init();
         // 非法 URL：解析期即拒，不进入连接阶段。（不用 expect_err：
         // RedisSemanticIndex 持有 MultiplexedConnection 无法 derive Debug）
         let bad = match RedisSemanticIndex::connect("not-a-redis-url-at-all").await {
             Ok(_) => panic!("非法 URL 必须拒绝"),
             Err(e) => e,
         };
+        let url_invalid_prefix = crate::i18n::tr_with_args(
+            "cache-semantic-redis-url-invalid",
+            crate::i18n::tr_args(&[("detail", "")]),
+        );
         assert!(
-            bad.error_detail().contains("semantic-redis-url-invalid"),
+            bad.error_detail().contains(&url_invalid_prefix),
             "实际：{}",
             bad.error_detail()
         );
@@ -391,10 +419,12 @@ mod tests {
             Ok(_) => panic!("不可达端点必须拒绝"),
             Err(e) => e,
         };
+        let connect_failed_prefix = crate::i18n::tr_with_args(
+            "cache-semantic-redis-connect-failed",
+            crate::i18n::tr_args(&[("detail", "")]),
+        );
         assert!(
-            unreachable
-                .error_detail()
-                .contains("semantic-redis-connect-failed"),
+            unreachable.error_detail().contains(&connect_failed_prefix),
             "实际：{}",
             unreachable.error_detail()
         );

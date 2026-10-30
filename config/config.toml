@@ -422,10 +422,17 @@ recovery_timeout = 30
 # model_path = "models/opus-mt-en-es"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 翻译多语言对路由（活动配置；2026-10-09 重建——autostash 事故丢失后按本会话
-# 读取证据逐字恢复 4 对；原 5-8 对语言码无证据，显性缺失待所有者补录）
+# 翻译多语言对路由（2026-10-09 重建——autostash 事故丢失后按本会话读取证据
+# 逐字恢复 4 对；原 5-8 对语言码无证据，显性缺失待所有者补录）
 # 译文输出修复表 output_fixes：from→to 字面替换（按声明序），修复模型级
 # 高频误译（paper-translate-quality 评测实测损伤）
+#
+# ⚠️ 每对 [[translation.pairs]] 启动期急切构建，model_path 指向的 bundle
+# 不存在即启动失败（连无关的 embed/HTTP 模式也无法启动）。当前仅保留
+# bundle 已落位的 en-zh / en-es（共用 models/m2m100_418M）；bundle 缺失的
+# en-fr / en-de 以注释保留定义，落位后取消注释即可启用：
+#   models/opus-mt-en-fr   ← Xenova/opus-mt-en-fr（翻译 bundle 下载 API）
+#   models/nllb-200-distilled-600M
 [translation]
 
 [[translation.pairs]]
@@ -446,16 +453,16 @@ to = "微调的LLaMA"
 from = "回合和新药物设计"
 to = "从头药物设计"
 
-[[translation.pairs]]
-source_language = "en"
-target_language = "fr"
-model_path = "models/opus-mt-en-fr"
+# [[translation.pairs]]
+# source_language = "en"
+# target_language = "fr"
+# model_path = "models/opus-mt-en-fr"
 
-[[translation.pairs]]
-source_language = "en"
-target_language = "de"
-model_path = "models/nllb-200-distilled-600M"
-min_new_tokens = 16
+# [[translation.pairs]]
+# source_language = "en"
+# target_language = "de"
+# model_path = "models/nllb-200-distilled-600M"
+# min_new_tokens = 16
 
 [[translation.pairs]]
 source_language = "en"

@@ -1,8 +1,6 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-#![allow(unused)]
-
 use crate::engine::InferenceEngine;
 use crate::error::VecboostError;
 use crate::metrics::inference::InferenceCollector;
@@ -165,7 +163,9 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
                         .fetch_add(local_tokens, Ordering::SeqCst);
 
                     if let Ok(mem_info) = sys_info::mem_info() {
-                        let current_mem = (mem_info.total - mem_info.avail) as usize;
+                        // macOS 下 avail（free+inactive）瞬时可能大于 total，
+                        // 饱和减法防 debug 下溢 panic / release 回绕污染峰值
+                        let current_mem = mem_info.total.saturating_sub(mem_info.avail) as usize;
                         let current_peak = counters.peak_memory.load(Ordering::SeqCst);
                         if current_mem > current_peak {
                             counters.peak_memory.store(current_mem, Ordering::SeqCst);

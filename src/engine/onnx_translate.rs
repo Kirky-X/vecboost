@@ -58,7 +58,7 @@ const DECODER_CANDIDATES: [&str; 2] = [
 #[cfg(test)]
 const VOCAB_DIM_EN_ZH: usize = 65001;
 
-/// 全局 per-Session intra 线程预算（评审 PERF-4）：多 pair 路由表下每对
+/// 全局 per-Session intra 线程预算：多 pair 路由表下每对
 /// 2 个 Session 各自全核 intra 线程会过订阅 CPU（16 对 × 2 Session × 全核），
 /// 启动期按 pair 数分摊（`available_parallelism / pairs`，下限 1）；0 =
 /// 未设置（单 pair/非路由场景回退全核）。encoder/decoder 串行执行，同 pair
@@ -71,7 +71,7 @@ pub fn set_session_intra_threads(threads: usize) {
     SESSION_INTRA_THREADS.store(threads.max(1), std::sync::atomic::Ordering::Relaxed);
 }
 
-/// past 占位输入名静态表（评审 PERF-2：消除每步 24 次 format! 堆分配）
+/// past 占位输入名静态表（消除每步 24 次 format! 堆分配）
 static PAST_TENSOR_NAMES: &[(&str, &str, &str)] = &[
     ("past_key_values.0.decoder.key", "", ""),
     ("past_key_values.0.decoder.value", "", ""),
@@ -99,7 +99,7 @@ static PAST_TENSOR_NAMES: &[(&str, &str, &str)] = &[
     ("past_key_values.5.encoder.value", "", ""),
 ];
 
-/// logits 图契约校验（评审）：batch=1、[1, dec_len, V] 形状、数据长度
+/// logits 图契约校验：batch=1、[1, dec_len, V] 形状、数据长度
 /// 一致。不符返回含实际形状的消息（换导出仓库/量化变体时快速定位）。
 fn validate_logits_shape(shape: &[i64], dec_len: i64, data_len: usize) -> Result<(), String> {
     if shape.len() != 3 {
@@ -418,7 +418,7 @@ pub(crate) struct OnnxTranslationEngine {
     bundle_dir: PathBuf,
     fallback_triggered: bool,
     fallback_lock: Arc<Mutex<()>>,
-    /// 最近一次成功解码的生成 token 数（评审：质量观测通道，
+    /// 最近一次成功解码的生成 token 数（质量观测通道，
     /// wire 五键契约不扩——e2e 质量输出经引擎级查询读取）
     output_tokens_last: std::sync::atomic::AtomicU64,
 }
@@ -630,7 +630,7 @@ fn run_encoder(
             .map_err(inference_err("encoder attention_mask"))?,
         ])
         .map_err(inference_err("encoder run"))?;
-    // 显性取键（审查 SEC-2 延伸）：缺键是图契约损坏，显性 InferenceError
+    // 显性取键：缺键是图契约损坏，显性 InferenceError
     // 而非 HashMap Index panic
     let enc_output = outputs.get("last_hidden_state").ok_or_else(|| {
         VecboostError::InferenceError(
@@ -643,7 +643,7 @@ fn run_encoder(
     Ok((enc_shape.to_vec(), enc_data.to_vec()))
 }
 
-/// 末位分布 argmax（total_cmp 全序，评审 PERF-3/ARC-6 语义不变）。EOS
+/// 末位分布 argmax（total_cmp 全序，语义不变）。EOS
 /// 抑制：`exclude` 提供时该索引不参与——未达 min_new_tokens 窗口前排除
 /// EOS（HF min_new_tokens 同语义，NLLB 质量评审实测贪心提前截断丢句）。
 /// 全部被排除（vocab==1 病态图）返回 None，调用方回退含 EOS 的正常 argmax。
@@ -677,7 +677,7 @@ fn greedy_decode(
     head_shape: [i64; 4],
     eos_token_id: u32,
 ) -> Result<Vec<u32>, VecboostError> {
-    // 评审 PERF-2：循环不变输入循环外构造一次，经 TensorRef 视图借用调用方
+    // 循环不变输入循环外构造一次，经 TensorRef 视图借用调用方
     // 切片（源 512 token≈1MB）。注意：每步必须以 `&*view` 引用传入（命中
     // From<&Value> → SessionInputValue::View 零拷贝），不可 .clone()——
     // ValueRef 无 Clone，经 Deref 解析到 owned Value::clone（ort copy.rs）
@@ -715,7 +715,7 @@ fn greedy_decode(
         }
         let outputs = decoder.run(inputs).map_err(inference_err("decoder step"))?;
 
-        // 显性取键（审查 SEC-2 延伸）：缺键是图契约损坏，显性 InferenceError
+        // 显性取键：缺键是图契约损坏，显性 InferenceError
         // 而非 HashMap Index panic
         let logits_output = outputs.get("logits").ok_or_else(|| {
             VecboostError::InferenceError("decoder graph output 'logits' missing".to_string())
@@ -723,7 +723,7 @@ fn greedy_decode(
         let (logits_shape, logits_data) = logits_output
             .try_extract_tensor::<f32>()
             .map_err(inference_err("decoder logits"))?;
-        // 评审 SEC-2：图契约运行时校验（release 生效，替代仅 debug 的
+        // 图契约运行时校验（release 生效，替代仅 debug 的
         // debug_assert）——换导出仓库/量化变体时显性 InferenceError
         // 附实际形状，而非 index-out-of-bounds panic
         if let Err(msg) = validate_logits_shape(logits_shape, dec_len, logits_data.len()) {
@@ -735,7 +735,7 @@ fn greedy_decode(
         // EOS 抑制窗口内排除 EOS（vocab==1 病态图回退正常 argmax 即停止）
         let vocab = logits_shape[2] as usize;
         let last_row = &logits_data[(dec_len as usize - 1) * vocab..dec_len as usize * vocab];
-        // 评审 PERF-3/ARC-6：total_cmp 全序比较（NaN 排序确定不 panic、
+        // total_cmp 全序比较（NaN 排序确定不 panic、
         // 不中毒锁；与 candle_decision 的容忍先例同语义强度）
         let exclude = (generated.len() < min_new_tokens).then_some(eos_token_id as usize);
         let best = argmax_index(last_row, exclude)
@@ -974,7 +974,7 @@ impl OnnxTranslationEngine {
             };
             check_token_budget(source_ids.len(), self.params.max_source_tokens, "text")?;
 
-            // 第一遍整段直解。评审 PERF-3：panic 后恢复中毒锁（into_inner 取回
+            // 第一遍整段直解。panic 后恢复中毒锁（into_inner 取回
             // 内层数据）——每步解码输入独立构造、Session 无跨请求可变状态，恢复
             // 安全；否则单次 panic 即该 pair 永久 "lock poisoned" 直至重启
             let (generated, degenerate) = {
@@ -1007,7 +1007,7 @@ impl OnnxTranslationEngine {
 
             // 第二遍救援：按句切分逐句解码（run1 评审实测：长段重复循环消除；
             // 代价是句间上下文丢失，仅作退化救援路径）。救援带全局输出 token
-            // 预算与句数上限（审查 F2：无界救援按句数放大解码步数并占死 pair
+            // 预算与句数上限（无界救援按句数放大解码步数并占死 pair
             // 信号量），耗尽即截断并显性告警，禁止静默丢句
             let (generated_sets, generated_total) = if !degenerate {
                 let generated_total = generated.len();
@@ -1333,7 +1333,7 @@ impl OnnxTranslationEngine {
     }
 }
 
-/// 救援遍句数上限（审查 F2：句数无界时按句放大解码前向次数并占死 pair
+/// 救援遍句数上限（句数无界时按句放大解码前向次数并占死 pair
 /// 信号量；64 句覆盖正常段落，超出按截断显性告警）
 const MAX_RESCUE_SENTENCES: usize = 64;
 
@@ -1907,11 +1907,16 @@ mod tests {
     }
 
     fn opus_bundle() -> Option<PathBuf> {
+        // 真会话用例的公共入口：分配前先归还上一个用例滞留的自由页
+        // （Darwin malloc MADV_FREE 惰性回收，实测跨用例累积至 7.5GB，
+        // 见 release_free_pages 文档）
+        crate::utils::test_env_lock::release_free_pages();
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/opus-mt-en-zh");
         bundle_ready(&dir).then_some(dir)
     }
 
     fn m2m100_bundle() -> Option<PathBuf> {
+        crate::utils::test_env_lock::release_free_pages();
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/m2m100_418M");
         bundle_ready(&dir).then_some(dir)
     }
@@ -2160,7 +2165,7 @@ mod tests {
 
     // ── tokenizer shim：null normalizer 移除（真 bundle 在位时） ────────
 
-    // 评审 NEW-3：图契约校验纯函数六分支单测（漂移场景无真机覆盖，校验
+    // 图契约校验纯函数六分支单测（漂移场景无真机覆盖，校验
     // 逻辑自身回归必须由单测钉住）
     #[test]
     fn test_validate_logits_shape_contract() {
@@ -2274,7 +2279,7 @@ mod tests {
             return;
         };
         let dylib = std::env::var("ORT_DYLIB_PATH")
-            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+            .unwrap_or_else(|_| crate::engine::session::ort_dylib_default());
         if !std::path::Path::new(&dylib).is_file() {
             eprintln!("SKIP: onnxruntime dylib 缺失（{dylib}）");
             return;
@@ -2303,8 +2308,9 @@ mod tests {
             translation_params: None,
             transcription_params: None,
         };
+        let _heavy = crate::utils::test_env_lock::heavy_session_lock();
         let engine = OnnxTranslationEngine::load(&config).expect("bundle 就绪时必须可加载");
-        // 评审 ARC-8：supports_task 真实断言（替代已删的同义反复恒真测试）
+        // supports_task 真实断言（替代已删的同义反复恒真测试）
         assert!(engine.supports_task(ModelTask::Translate));
         assert!(!engine.supports_task(ModelTask::Embedding));
         assert!(!engine.supports_task(ModelTask::Decision));
@@ -2324,7 +2330,7 @@ mod tests {
         println!("SMOKE translate(en→zh): {:?}", resp.translation);
         assert_eq!(resp.target_language, "zh");
         assert!(resp.processing_time_ms > 0 || !resp.translation.is_empty());
-        // 评审：生成 token 数透出通道（>0 断言）
+        // 生成 token 数透出通道（>0 断言）
         assert!(
             engine.last_output_tokens() > 0,
             "成功解码后 last_output_tokens 必须 > 0"
@@ -2332,7 +2338,7 @@ mod tests {
     }
 
     // ── 域行为（真机 bundle 守卫测试内断言 supports_task；mock-free 的
-    //    形式主义测试已按评审 ARC-8 删除）────────────────────────────────
+    //    形式主义测试已删除）────────────────────────────────
 
     #[test]
     fn test_repair_symbol_damage_url_colon_and_latex_escape() {
@@ -2454,7 +2460,7 @@ mod tests {
             return;
         };
         let dylib = std::env::var("ORT_DYLIB_PATH")
-            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+            .unwrap_or_else(|_| crate::engine::session::ort_dylib_default());
         if !std::path::Path::new(&dylib).is_file() {
             eprintln!("SKIP: onnxruntime dylib 缺失（{dylib}）");
             return;
@@ -2483,6 +2489,7 @@ mod tests {
             translation_params: None,
             transcription_params: None,
         };
+        let _heavy = crate::utils::test_env_lock::heavy_session_lock();
         let engine = OnnxTranslationEngine::load(&config).expect("bundle 就绪时必须可加载");
         let req = TranslateRequest {
             text: "We benchmark drug-target interaction (DTI) prediction baselines. \
@@ -2535,7 +2542,7 @@ mod tests {
             return;
         };
         let dylib = std::env::var("ORT_DYLIB_PATH")
-            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+            .unwrap_or_else(|_| crate::engine::session::ort_dylib_default());
         if !std::path::Path::new(&dylib).is_file() {
             eprintln!("SKIP: onnxruntime dylib 缺失（{dylib}）");
             return;
@@ -2564,6 +2571,7 @@ mod tests {
             translation_params: None,
             transcription_params: None,
         };
+        let _heavy = crate::utils::test_env_lock::heavy_session_lock();
         let engine = OnnxTranslationEngine::load(&config).expect("bundle 就绪时必须可加载");
         // 首句正常但整体超 600 字符阈值触发并行；次句 3600 连续字符（无句读）
         // 单句必超 512 source token 预算 → budget 失败必须显性暴露
@@ -2943,7 +2951,7 @@ mod tests {
             return;
         };
         let dylib = std::env::var("ORT_DYLIB_PATH")
-            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+            .unwrap_or_else(|_| crate::engine::session::ort_dylib_default());
         if !std::path::Path::new(&dylib).is_file() {
             eprintln!("SKIP: onnxruntime dylib 缺失（{dylib}）");
             return;
@@ -2972,6 +2980,7 @@ mod tests {
             translation_params: None,
             transcription_params: None,
         };
+        let _heavy = crate::utils::test_env_lock::heavy_session_lock();
         let engine = OnnxTranslationEngine::load(&config).expect("m2m bundle 必须可加载");
         let req = TranslateRequest {
             text: "Hello, my dog is cute".to_string(),
@@ -3039,7 +3048,7 @@ mod tests {
             return;
         };
         let dylib = std::env::var("ORT_DYLIB_PATH")
-            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+            .unwrap_or_else(|_| crate::engine::session::ort_dylib_default());
         if !std::path::Path::new(&dylib).is_file() {
             eprintln!("SKIP: onnxruntime dylib 缺失（{dylib}）");
             return;
@@ -3068,6 +3077,7 @@ mod tests {
             translation_params: None,
             transcription_params: None,
         };
+        let _heavy = crate::utils::test_env_lock::heavy_session_lock();
         let engine = OnnxTranslationEngine::load(&config).expect("bundle 就绪时必须可加载");
         let req = TranslateRequest {
             text: "Rust is a systems programming language. It guarantees memory safety \
@@ -3103,7 +3113,7 @@ mod tests {
         target: &str,
     ) -> Option<String> {
         let dylib = std::env::var("ORT_DYLIB_PATH")
-            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+            .unwrap_or_else(|_| crate::engine::session::ort_dylib_default());
         if !std::path::Path::new(&dylib).is_file() {
             return None;
         }

@@ -656,7 +656,7 @@ fn build_transcribe_service(_config: &VecboostConfig) -> anyhow::Result<Transcri
 /// 翻译路由表：启动期消费 [translation].pairs 逐 pair 急切构建
 /// （EngineFactory task=translate 分派臂），任一 bundle 缺失 fail-fast；
 /// 空 pairs = 空表服务（端点注册、请求 400 translate-not-configured）。
-/// 评审 PERF-4：按 pair 数分摊 per-Session intra 线程预算（防多 pair
+/// 按 pair 数分摊 per-Session intra 线程预算（防多 pair
 /// Session 全核过订阅）；单 pair/空表回退全核。
 #[allow(unused_variables)]
 fn build_translate_pairs(
@@ -697,8 +697,8 @@ fn build_translate_pairs(
 
     #[cfg(feature = "onnx")]
     for (index, pair) in config.translation.pairs.iter().enumerate() {
-        // 缺省值取 TranslationParams::default 单一事实源（评审 ARC-2：
-        // 禁止 512 字面量第二处来源，default 变更时自动联动）
+        // 缺省值取 TranslationParams::default 单一事实源（禁止 512 字面量
+        // 第二处来源，default 变更时自动联动）
         let defaults = vecboost::config::model::TranslationParams::default();
         let mut translation_params = vecboost::config::model::TranslationParams::new(
             pair.max_source_tokens.unwrap_or(defaults.max_source_tokens),
@@ -1167,7 +1167,15 @@ async fn build_auth_dao(
         vecboost::config::app::SessionBackend::Memory => Ok(Arc::new(
             garrison::dao::GarrisonDaoOxcache::new()
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to create GarrisonDaoOxcache: {}", e))?,
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "{}",
+                        vecboost::i18n::tr_with_args(
+                            "startup-garrison-dao-create-failed",
+                            vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                        )
+                    )
+                })?,
         )),
         vecboost::config::app::SessionBackend::Database => {
             #[cfg(feature = "db")]
@@ -1182,7 +1190,15 @@ async fn build_auth_dao(
                 {
                     let dao = vecboost::auth::atomic_kv_dao::build_atomic_dao(pool.inner().clone())
                         .await
-                        .map_err(|e| anyhow::anyhow!("Failed to build atomic garrison dao: {e}"))?;
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "{}",
+                                vecboost::i18n::tr_with_args(
+                                    "startup-garrison-atomic-dao-failed",
+                                    vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                                )
+                            )
+                        })?;
                     Ok(Arc::new(dao))
                 }
                 #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
@@ -2109,31 +2125,39 @@ async fn init_logger(
         use inklog::sink::file::FileSink;
         use inklog::sink::sampling::{Sampler, SamplingSink};
 
-        let file_config = FileSinkConfig {
-            enabled: true,
-            path: config.logging.file_path.clone().into(),
-            max_size: format!("{}MB", config.logging.rotation_size_mb),
-            keep_files: config.logging.max_files,
-            compress: true,
-            ..Default::default()
-        };
-        let file_sink: Arc<dyn inklog::sink::AsyncSink> = if config.logging.sampling.enabled {
+        if config.logging.sampling.enabled {
+            // 采样包装需经 add_sink 注入自定义 sink——该路径触发 inklog 依赖
+            // 注入装配，其按 Config 键逐字段重建 InklogConfig 时未消费
+            // console_sink 段，CLI/MCP 模式的 console_stderr_levels 在此失效
+            // （INFO 落 stdout）。采样场景的 stderr 纯净性待 inklog 上游修复。
             let sampler = Sampler::new(
                 &config.logging.sampling.min_level,
                 config.logging.sampling.sample_every_n,
                 config.logging.sampling.keyword_whitelist.clone(),
             )
             .map_err(|e| anyhow::anyhow!("Invalid [logging.sampling] config: {}", e))?;
-            let inner = FileSink::new(file_config)
-                .map_err(|e| anyhow::anyhow!("File log sink build failed: {}", e))?;
-            Arc::new(SamplingSink::new(Arc::new(inner), Arc::new(sampler)))
+            let inner = FileSink::new(FileSinkConfig {
+                enabled: true,
+                path: config.logging.file_path.clone().into(),
+                max_size: format!("{}MB", config.logging.rotation_size_mb),
+                keep_files: config.logging.max_files,
+                compress: true,
+                ..Default::default()
+            })
+            .map_err(|e| anyhow::anyhow!("File log sink build failed: {}", e))?;
+            let file_sink: Arc<dyn inklog::sink::AsyncSink> =
+                Arc::new(SamplingSink::new(Arc::new(inner), Arc::new(sampler)));
+            logger_builder = logger_builder.add_sink(file_sink);
         } else {
-            Arc::new(
-                FileSink::new(file_config)
-                    .map_err(|e| anyhow::anyhow!("File log sink build failed: {}", e))?,
-            )
-        };
-        logger_builder = logger_builder.add_sink(file_sink);
+            // 采样关闭走 builder 原生 file 配置（纯配置装配路径）：字段与
+            // FileSinkConfig 一一对应，且保留 console_stderr_levels 的 stderr
+            // 路由——CLI/MCP 模式 stdout 只承载机器可读 JSON / JSON-RPC。
+            logger_builder = logger_builder
+                .file(config.logging.file_path.clone())
+                .file_max_size(format!("{}MB", config.logging.rotation_size_mb))
+                .file_keep_files(config.logging.max_files)
+                .file_compress(true);
+        }
     }
     let logger_manager = Arc::new(logger_builder.build().await.map_err(|e| {
         anyhow::anyhow!(

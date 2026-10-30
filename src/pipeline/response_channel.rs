@@ -80,7 +80,7 @@ impl ResponseChannel {
     /// 移除待处理条目（不发送任何结果）——入队失败早退路径使用：请求从未
     /// 入队即无 worker 会 complete，receiver 随 handler 返回 drop，条目若不
     /// 显式移除将永久滞留（cleanup_expired 无生产调用点），持续过载下成为
-    /// 无界增长面（三路评审 M）。
+    /// 无界增长面。
     pub async fn deregister(&self, request_id: &str) {
         let removed = {
             let mut pending = self.pending.write().await;

@@ -27,7 +27,7 @@ VecBoost 是一个使用 Rust 构建的**高性能嵌入向量服务**：把文�
 
 ### ❓ VecBoost 可以用于生产环境吗？
 
-可以。项目具备：默认安全（回环绑定、无认证拒绝非回环启动）、JWT/CSRF/RBAC 认证授权、审计日志、Prometheus 指标与健康检查、优雅关闭、Docker 镜像（linux/amd64，当前单架构构建，未提供 arm64）。升级到 Unreleased 版本前请阅读 [CHANGELOG](CHANGELOG.md) 的破坏性变更清单（安全默认值收敛等 13 项行为变更）。
+可以。项目具备：默认安全（回环绑定、无认证拒绝非回环启动）、JWT/CSRF/RBAC 认证授权、审计日志、Prometheus 指标与健康检查、优雅关闭、Docker 镜像（linux/amd64，当前单架构构建，未提供 arm64）。当前发布线为 0.3.0-rc.3；升级前请阅读 [CHANGELOG](CHANGELOG.md) 的破坏性变更清单（0.3.0-rc.1 起安全默认值收敛等 13 项行为变更）。
 
 ### ❓ 支持哪些平台？
 
@@ -52,7 +52,7 @@ Apache-2.0。详见 [LICENSE](../LICENSE)。
 ```bash
 git clone https://github.com/Kirky-X/vecboost.git
 cd vecboost
-cargo build --release          # 默认 http feature
+cargo build --release          # 默认 feature：http + onnx
 ./target/release/vecboost      # 服务默认 http://127.0.0.1:9002
 ```
 
@@ -67,7 +67,7 @@ cargo build --release          # 默认 http feature
 | gRPC / CLI / MCP | `--features grpc` / `--features cli` / `--features mcp` |
 | 数据库持久化 | `--features sqlite`（SQLite 驱动）/ `--features postgres`（须显式选 driver，`db` 仅基础设施） |
 | 认证 | `--features auth` |
-| CI 全特性 | `--features grpc,cli,auth,onnx,db,openapi,mcp` |
+| CI 全特性 | `--features grpc,cli,auth,onnx,db,sqlite,openapi,mcp`（与 `.github/workflows/ci.yml:24` 的 `FEATURES` 一致；`db` 须搭配 `sqlite` 或 `postgres` 驱动） |
 
 `confers`/`inklog`/`oxcache`/`limiteron`/`trait-kit` 为必选依赖始终启用，无需 feature。完整矩阵见 README [🏷️ Feature 标志](../README.md#-feature-标志)。
 
@@ -77,7 +77,7 @@ MKL 加速后端（`--features mkl`）依赖 intel-mkl-src 2020.1 静态库，�
 
 ### ❓ 为什么没有 `redis` feature？
 
-`redis` 不是当前 `Cargo.toml` 中的 feature（缓存后端为进程内 oxcache；`db` feature 提供数据库持久化）。若旧文档/脚本引用了 `redis` feature，请以 `cargo build --features ...` 的报错与 `Cargo.toml [features]` 为准。
+`redis` 自身不是可直接启用的 feature，而是 **`distributed-redis`** 的一个实现细节。`Cargo.toml` 定义 `distributed-redis = ["limiteron/cache-redis", "limiteron/distributed", "limiteron/lua-script", "limiteron/ban-sync", "oxcache/redis", "oxcache/lua", "dep:redis"]`（`Cargo.toml:185`），用于多副本场景下把限流计数与缓存/语义缓存 trigram 索引放到 Redis；默认构建零 Redis 依赖，缓存后端为进程内 oxcache。代码侧对应 `CacheBackendKind::Redis`（`src/config/app.rs`）、启动期校验（`src/config/app.rs:624-640` 的 `startup-semantic-redis-feature-missing` / `-url-missing`）与装配分支（`src/main.rs:455-480`、`src/main.rs:611-618`）——未启用 feature 即显性拒绝，绝不静默降级。纯单副本部署无需任何 Redis feature。若旧文档/脚本引用了 `redis` feature，请以 `cargo build --features ...` 的报错与 `Cargo.toml [features]` 为准。
 
 ---
 
@@ -103,7 +103,7 @@ MKL 加速后端（`--features mkl`）依赖 intel-mkl-src 2020.1 静态库，�
 
 ### ❓ 为什么升级后需要重建向量索引？
 
-Unreleased 版本将分词器统一为全平台 HuggingFace `tokenizers`（更正确），与旧自研 WordPiece 分词结果存在差异；缓存键也从 `text:{原文}` 改为 `emb:{model}:{xxh3_128}`。**存量向量与重建向量不兼容**，需重建索引；升级后首轮缓存全 miss 属一次性现象。
+0.3.0-rc.1 起分词器统一为全平台 HuggingFace `tokenizers`（更正确），与旧自研 WordPiece 分词结果存在差异；缓存键也从 `text:{原文}` 改为 `emb:{model}:{xxh3_128}`。**存量向量与重建向量不兼容**，需重建索引；升级后首轮缓存全 miss 属一次性现象。
 
 ### ❓ Matryoshka 维度约简是什么？
 
@@ -161,7 +161,7 @@ export VECBOOST_ADMIN_PASSWORD="至少 12 位的密码"
 
 ### ❓ Token 有效期多久？
 
-Unreleased 起 `token_expiration_hours` 缺省 **24 小时**（原 garrison 默认 30 天）。长会话场景请显式配置。
+0.3.0-rc.1 起 `token_expiration_hours` 缺省 **24 小时**（原 garrison 默认 30 天）。长会话场景请显式配置。
 
 ### ❓ 发现安全漏洞怎么办？
 
@@ -185,11 +185,11 @@ Unreleased 起 `token_expiration_hours` 缺省 **24 小时**（原 garrison 默�
 
 ### ❓ 为什么 embeddings 接口的 usage token 数与估算不符？
 
-`/v1/embeddings` 的 usage 为**真实 token 计数**（Unreleased 起由 HF tokenizer 统计），与按字符估算的工具可能不同，以 tokenizer 结果为准。
+`/v1/embeddings` 的 usage 为**真实 token 计数**（0.3.0-rc.1 起由 HF tokenizer 统计），与按字符估算的工具可能不同，以 tokenizer 结果为准。
 
 ### ❓ `/embed/file` 报错"未配置允许根"？
 
-Unreleased 起 `/embed/file` 必须显式配置 `[server] grpc_allowed_roots`（不再回退进程 cwd），单文件 ≤10 MiB，`text_preview` 仅 admin。请为业务目录配置允许根。
+0.3.0-rc.1 起 `/embed/file` 必须显式配置 `[server] grpc_allowed_roots`（不再回退进程 cwd；未配置时请求返回 400），单文件 ≤10 MiB，`text_preview` 仅 admin。请为业务目录配置允许根。
 
 ---
 

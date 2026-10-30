@@ -87,6 +87,8 @@ async fn two_adapters_share_per_key_quota() {
 
 #[tokio::test]
 async fn redis_init_failure_rejects_startup() {
+    // i18n 必须先初始化：错误详情在 try_new 内即渲染，未 init 时回退裸键名。
+    vecboost::i18n::init();
     allow_insecure_redis();
     let settings = RateLimitSettings {
         global_requests_per_minute: 0,
@@ -100,8 +102,12 @@ async fn redis_init_failure_rejects_startup() {
     let Err(err) = LimiteronAdapter::try_new(settings).await else {
         panic!("unreachable redis must reject startup");
     };
+    let expected = vecboost::i18n::tr_with_args(
+        "startup-rate-limit-redis-init-failed",
+        vecboost::i18n::tr_args(&[("detail", "")]),
+    );
     assert!(
-        format!("{err:?}").contains("rate-limit-redis-init-failed"),
+        format!("{err:?}").contains(&expected),
         "unexpected error: {err:?}"
     );
 }

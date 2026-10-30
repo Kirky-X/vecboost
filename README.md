@@ -134,7 +134,7 @@
 git clone https://github.com/Kirky-X/vecboost.git
 cd vecboost
 
-# 2. 默认构建（http feature，含 OpenAPI 文档）
+# 2. 默认构建（http + onnx feature，含 OpenAPI 文档与默认 ONNX 引擎）
 cargo build --release
 
 # 3. 构建 GPU 支持
@@ -149,8 +149,8 @@ cargo build --release --features grpc,cli
 # 5. 构建 MCP 接口（stdio 模式，--mcp 启动）
 cargo build --release --features mcp
 
-# 6. 构建 CI 全特性组合（数据库 + 认证 + ONNX + OpenAPI + 全协议）
-cargo build --release --features grpc,cli,auth,onnx,db,openapi,mcp
+# 6. 构建 CI 全特性组合（数据库 + 认证 + ONNX + OpenAPI + 全协议；CI 实际取值见 ci.yml:24）
+cargo build --release --features grpc,cli,auth,onnx,db,sqlite,openapi,mcp
 ```
 
 </details>
@@ -170,7 +170,7 @@ cp config/config.toml config/config_custom.toml
 # 使用默认配置运行
 ./target/release/vecboost
 
-# 使用自定义配置（--config，CLI 子命令模式下须写在子命令之前）
+# 使用自定义配置（--config；参数在 clap 解析前被剥离，写在子命令前后均可）
 ./target/release/vecboost --config config/config_custom.toml
 ```
 
@@ -325,7 +325,7 @@ curl -X POST http://localhost:9002/api/v1/detect \
 
 ### 🔖 Feature 标志
 
-下表逐项对应 `Cargo.toml` 的 `[features]` 定义，`default = ["http"]`。
+下表逐项对应 `Cargo.toml` 的 `[features]` 定义，`default = ["http", "onnx"]`。
 
 <details>
 <summary>📋 表格</summary>
@@ -346,7 +346,7 @@ curl -X POST http://localhost:9002/api/v1/detect \
 | `cuda` | - | CUDA 设备支持（cudarc driver + nvml 检测，后端正交；candle 的 CUDA 后端另经 `candle-cuda`） |
 | `candle-cuda` | - | candle 后端的 CUDA 计算加速（含 `candle`） |
 | `metal` | - | Apple Silicon Metal GPU（candle 后端，含 `candle`） |
-| `onnx` | - | ONNX Runtime 引擎（**默认启用**，随 default） |
+| `onnx` | ✅ | ONNX Runtime 引擎（**默认启用**，随 default） |
 | `candle` | - | candle 回退后端（opt-in：CandleEngine embedding / candle 决策头 / GGUF 量化桥；未启用时 `engine_type="candle"` 启动期显性拒绝） |
 | `transcribe` | - | Qwen3-ASR 转录引擎（三图 + silero VAD + fbank），库内 `InferenceEngine::transcribe` 入口；HTTP/gRPC 服务面已接线（`POST /api/v1/transcribe`，`[transcribe]` 段装配） |
 | `mkl` | - | x86_64 CPU MKL 加速后端（candle 路径 opt-in，含 `candle`；需链接正常的工具链） |
@@ -389,10 +389,10 @@ curl -X POST http://localhost:9002/api/v1/detect \
 | [📋 更新日志](docs/CHANGELOG.md) | 每个版本的变更记录 |
 | [🤝 贡献指南](docs/CONTRIBUTING.md) | 如何参与项目开发 |
 | [🧹 维护规范](docs/MAINTENANCE.md) | 跨变更的长期约束：转录消费面、CLI 契约、退役配置项纪律、废弃文档治理 |
-| [📈 基准数据归档](docs/benchmarks/) | 历史基准数据（相似度/批调度/语义缓存/GPU 管线） |
-| [🌍 I18N 缺失审计](docs/I18N_MISSING_AUDIT.md) | 国际化翻译键审计记录 |
 
 </details>
+
+> **ℹ️ 说明**：`docs/benchmarks/`（基准归档）、`docs/reviews/`（评审台账，含 `I18N_MISSING_AUDIT.md`、`TRANSLATION_REVIEW_LEDGER.md`）与 `docs-transcribe/` 均为**仅本机保留**目录（见 `.gitignore`），不入 git，干净 clone 中不存在。基准关键数字已内联于 [⚡ 性能指南](docs/PERFORMANCE.md)。
 
 ---
 
@@ -406,12 +406,14 @@ curl -X POST http://localhost:9002/api/v1/detect \
 ```bash
 # 运行单个示例
 cargo run -p vecboost-examples --bin embed
-cargo run -p vecboost-examples --bin library_usage
+cargo run -p vecboost-examples --bin library_usage --features candle
 cargo run -p vecboost-examples --bin matryoshka
 
 # ONNX 引擎示例（需要 ONNX Runtime）
 cargo run -p vecboost-examples --bin onnx --features onnx
 ```
+
+> **ℹ️ 说明**：`library_usage` 在 `examples/Cargo.toml` 声明 `required-features = ["candle"]`，须以 `--features candle` 运行；`onnx` / `laya_poc` 声明 `required-features = ["onnx"]`。其余示例（含 cache / auth / rate-limiting / monitoring / engine 等）无 feature 依赖，`vecboost-examples` 自身只定义 `onnx` / `candle` / `metal` 三个透传 feature。
 
 </details>
 
@@ -419,7 +421,7 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 
 ## 🧱 架构
 
-VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中心（`Kit<Unbuilt> → Kit<Ready>`）装配模块（`src/registry/` 共 20 个 `ModuleMeta` 实现，部分随 `auth` 等 feature 门控），`sdforge` 从 `src/api/embedding.rs` 单一源生成四协议绑定，推理经 `EngineFactory` 抽象到 Candle / ONNX 引擎，请求经优先级队列与时间窗拼批进入推理管线。
+VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中心（`Kit<Unbuilt> → Kit<Ready>`）装配模块（`src/registry/` 共 20 个生产 `ModuleMeta` 实现，另有 3 个测试夹具；部分随 `auth` 等 feature 门控），`sdforge` 从 `src/api/embedding.rs` 单一源生成四协议绑定，推理经 `EngineFactory` 抽象到 Candle / ONNX 引擎，请求经优先级队列与时间窗拼批进入推理管线。
 
 7 库生态（trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge）的版本与分工、模块依赖图、数据流、缓存/安全/部署架构与扩展点说明见 [🏗️ 架构文档](docs/ARCHITECTURE.md)。
 
@@ -429,11 +431,11 @@ VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中
 
 ### 🎯 测试策略
 
-测试栈分六层：`src/` 内联单元测试、`tests/integration/` 集成测试、专项集成（doctor / gRPC E2E / 模型快照回归 / 量化质量门 / SDK 矩阵）、`tests/scenario/*.py` 真实服务场景测试（15 个 pytest 套件）、`tests/perf/` 性能回归阈值与 `benches/` 的 5 组 Criterion 微基准。`TEST_MODE` 环境变量控制测试引擎（`mock` 默认 / `light` / `full`）。各层职责、场景穷举矩阵与 CI 工作流对应关系见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
+测试栈分六层：`src/` 内联单元测试、`tests/integration/` 集成测试、专项集成（doctor / gRPC E2E / 模型快照回归 / 量化质量门 / SDK 矩阵）、`tests/scenario/*.py` 真实服务场景测试（16 个 pytest 套件）、`tests/perf/` 性能回归阈值与 `benches/` 的 6 组 Criterion 微基准。`TEST_MODE` 环境变量控制测试引擎（`mock` 默认 / `light` / `full`）。各层职责、场景穷举矩阵与 CI 工作流对应关系见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
 
 ### ⚡ 运行命令（与 CI 一致）
 
-以下命令提取自 `.github/workflows/health-check.yml`（Health Check）、`feature-matrix.yml`、`scenario-tests.yml` 与 `docs/CONTRIBUTING.md`。路径依赖提示：`../base/*` 生态库是路径依赖的活仓库，本地门禁命令须以 `-p vecboost -p vecboost-examples` 限定。
+以下命令提取自 `.github/workflows/health-check.yml`（Health Check）、`feature-matrix.yml`、`scenario-tests.yml` 与 `docs/CONTRIBUTING.md`。依赖来源提示：7 库生态当前全部取自 crates.io registry（`Cargo.toml` 无 `path =` 依赖、无 `[patch]`，`Cargo.lock` 记录 `source = "registry+https://github.com/rust-lang/crates.io-index"`），门禁命令仍建议以 `-p vecboost -p vecboost-examples` 限定，避免把 workspace 内其他成员的中间态卷进门禁。
 
 <details>
 <summary>📄 代码 · bash</summary>
@@ -441,31 +443,31 @@ VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中
 ```bash
 # 格式与 Lint 门禁（CI：clippy unwrap_used 为生产代码 panic 面门禁）
 cargo fmt --all -- --check
-cargo clippy --features "grpc,cli,auth,onnx,db,openapi,mcp" --all-targets -- -D warnings -W clippy::unwrap_used
+cargo clippy --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --all-targets -- -D warnings -W clippy::unwrap_used
 
 # 全特性编译检查（feature-matrix）
-cargo check --features "grpc,cli,auth,onnx,db,openapi,mcp"
+cargo check --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
 
 # 单元 + 集成测试（CI 分 --lib 与 --tests 两步）
-cargo test --features "grpc,cli,auth,onnx,db,openapi,mcp" --lib
-cargo test --features "grpc,cli,auth,onnx,db,openapi,mcp" --tests
+cargo test --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --lib
+cargo test --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --tests
 
 # gRPC E2E（拉起真实二进制）
 cargo test -p vecboost --features http,grpc --test grpc_e2e
 
 # 场景测试（pytest，conftest 自动拉起真实服务器；models/ 缺席时推理用例自动 SKIP）
-cargo build -p vecboost --features http
+cargo build -p vecboost --features http,auth,cli,mcp,grpc
 pytest tests/scenario -q --junitxml=scenario-results.xml
 
 # Python 性能测试（sim 标记区分模拟器用例）
 pytest tests/perf -m "not sim"   # 只跑真实服务用例
 pytest tests/perf -m sim          # 只跑模拟器用例
 
-# 覆盖率（CI 硬门禁：行覆盖率 ≥ 80%，llvm-cov；本地实测 90.89%）
-cargo llvm-cov --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --lib --lcov --output-path coverage/lcov.info
+# 覆盖率（CI 硬门禁：行覆盖率 ≥ 90%，llvm-cov；分母含 lib + 集成测试 + 真实启动腿，禁止 --lib 窄口径）
+cargo llvm-cov --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp,distributed-redis" --tests --lcov --output-path coverage/lcov.info
 
 # 基准测试（CI benchmark job）
-cargo bench --features "grpc,cli,auth,onnx,db,openapi,mcp"
+cargo bench --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
 
 # 文档构建与死链检查
 cargo doc --workspace --no-deps
@@ -478,7 +480,7 @@ cargo audit
 
 ### 📊 测试规模
 
-截至 v0.3.0-rc.2 工作区：单元测试（`src/` 内联）2277 个、Rust 集成/专项测试（`tests/*.rs`）63 个测试函数、Python 场景/性能用例 146 个（场景 119 + 性能 27，15 个场景套件）、Criterion 微基准 5 组；CI 硬门禁为行覆盖率不低于 80%（llvm-cov），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
+截至 v0.3.0-rc.3 工作区：单元测试（`src/` 内联，`#[test]` / `#[tokio::test]` 属性计数）2370 个、Rust 集成/专项测试（`tests/` 含子目录，同法计数）129 个测试属性、Python 场景/性能用例 150 个（场景 123 + 性能 27，16 个场景套件）、Criterion 微基准 6 组；CI 硬门禁为行覆盖率不低于 90%（llvm-cov），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
 
 ---
 
@@ -631,7 +633,7 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
-| Unreleased | - | onnx-primary 引擎切换（ort 默认、candle opt-in）、审计日志 DB/文件双写、同文并发去重、body 上限修正、swagger-ui/ReDoc 文档面、会话外置 database 后端、Grafana 仪表板 |
+| 0.3.0-rc.3 | 2026-10-20 | onnx-primary 引擎切换（ort 默认、candle opt-in）、审计日志 DB/文件双写、同文并发去重、body 上限修正、swagger-ui/ReDoc 文档面、会话外置 database 后端、Grafana 仪表板、多副本共享语义缓存/封禁清单、`[database] max_connections` 生效 |
 | 0.3.0-rc.2 | 2026-10-15 | 转录（Qwen3-ASR）服务面、翻译/语言检测全协议接入、决策任务优先级队列、自研依赖升级 |
 | 0.3.0-rc.1 | 2026-09-22 | 审计修复与调优开关（安全默认值/登录收敛/XFF/RBAC/缓存键、GGUF/LFRU/WAL/硬件规划/doctor/预热）、PARQ 存储替换 oxcache、"generate" 统一接口 |
 | 0.2.1 | 2026-07-30 | i18n 国际化、Rerank 重排序三协议、语义缓存三级查询、BF16 精度、SIMD 相似度、连续批处理调度、GPU 内存分页、Library 模式 |

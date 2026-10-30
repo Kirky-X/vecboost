@@ -1,8 +1,6 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-#![allow(unused)]
-
 use crate::config::model::{EngineType, ModelConfig};
 use crate::error::VecboostError;
 use async_trait::async_trait;
@@ -42,10 +40,10 @@ struct CandleModel {
     quantized: bool,
 }
 
-#[allow(
-    dead_code,
-    reason = "Test helper / trait dispatch / inventory, not directly called"
-)]
+/// 类型须在所有构建面存在：`test_onnx_model_name_path_and_reload_without_feature_gate`
+/// 无 feature 门构造它；非测试消费者仅 `EngineType::Onnx` 臂（`feature = "onnx"`）。
+/// 故按特性条件豁免 dead_code（同仓先例：`cfg_attr(feature = ..., allow(dead_code))`）。
+#[cfg_attr(not(feature = "onnx"), allow(dead_code))]
 struct OnnxModel {
     path: PathBuf,
     name: String,

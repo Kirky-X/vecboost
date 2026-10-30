@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 15
     steps:
       # gitleaks 按 --all 扫描全量提交历史，浅克隆会让历史外的提交不可见。
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           # checkout 默认把 token 写进 .git/config，而后续步骤会把工作区
@@ -48,7 +48,7 @@ jobs:
         # contents: read，SARIF 上传需要 security-events: write。注解模式下
         # 发现才会让步骤失败，上面 continue-on-error 的基线语义才成立。
         continue-on-error: true
-        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
         with:
           advanced-security: false
           annotations: true
@@ -57,7 +57,7 @@ jobs:
         # 不加 --log-opts，会扫全历史且不接基线（该 action 无此入参）——定时
         # 与手动的全量扫描由 gitleaks-history 作业承担（接基线）。
         if: github.event_name == 'push' || github.event_name == 'pull_request'
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           # 扫描 PR 时 gitleaks-action 必须拿到 token，缺失会直接退出 1。
           GITHUB_TOKEN: ${{ github.token }}
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false

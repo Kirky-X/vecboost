@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-// 整文件 onnx feature 门（评审 NEW-1：EngineType::Onnx 为 cfg 门控变体，
+// 整文件 onnx feature 门（EngineType::Onnx 为 cfg 门控变体，
 // 非 onnx 构建下本文件无法编译——先例 tests/candle_decision_parity.rs:7）
 #![cfg(feature = "onnx")]
 
@@ -90,9 +90,17 @@ const SENTENCES: &[(&str, &str)] = &[
 
 const PAIRS: [(&str, &str); 2] = [("en", "zh"), ("en", "es")];
 
+// ort/load-dynamic 默认 dylib 按目标平台选扩展名（与 src/engine/session.rs
+// ort_dylib_default 同口径；集成测试独立 crate，cfg 门控声明）。
+#[cfg(target_os = "macos")]
+const ORT_DYLIB: &str = "3rdparty/onnxruntime/libonnxruntime.dylib";
+#[cfg(target_os = "windows")]
+const ORT_DYLIB: &str = "3rdparty/onnxruntime/onnxruntime.dll";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const ORT_DYLIB: &str = "3rdparty/onnxruntime/libonnxruntime.so";
+
 fn dylib_ready() -> Option<String> {
-    let dylib = std::env::var("ORT_DYLIB_PATH")
-        .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+    let dylib = std::env::var("ORT_DYLIB_PATH").unwrap_or_else(|_| ORT_DYLIB.to_string());
     if Path::new(&dylib).is_file() {
         Some(dylib)
     } else {
@@ -112,7 +120,7 @@ fn skip_reason() -> Option<String> {
     if dylib_ready().is_none() {
         return Some(
             "onnxruntime dylib not found（设置 ORT_DYLIB_PATH 或落位 \
-             3rdparty/onnxruntime/libonnxruntime.so）"
+             3rdparty/onnxruntime/libonnxruntime.<so|dylib>）"
                 .to_string(),
         );
     }
@@ -175,7 +183,7 @@ fn translate_e2e_golden_gate_and_quality() {
     let skipped_reason = String::new();
 
     for (src, tgt) in PAIRS {
-        // 评审：经 AnyEngine::translate_output_tokens 读生成
+        // 经 AnyEngine::translate_output_tokens 读生成
         // token 数（wire 五键契约不扩，质量观测走引擎级查询通道）
         let engine: &AnyEngine = if tgt == "zh" { &engine_zh } else { &engine_es };
         let output_tokens = |e: &AnyEngine| -> u64 { e.translate_output_tokens() };

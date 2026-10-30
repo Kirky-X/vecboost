@@ -130,14 +130,13 @@ fn detect_physical_cores_macos() -> Option<usize> {
         if let Ok(out) = std::process::Command::new("sysctl")
             .args(["-n", key])
             .output()
+            && out.status.success()
         {
-            if out.status.success() {
-                let text = String::from_utf8_lossy(&out.stdout);
-                if let Ok(n) = text.trim().parse::<usize>() {
-                    if n > 0 {
-                        return Some(n);
-                    }
-                }
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Ok(n) = text.trim().parse::<usize>()
+                && n > 0
+            {
+                return Some(n);
             }
         }
     }

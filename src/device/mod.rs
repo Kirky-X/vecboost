@@ -1,7 +1,10 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-#![allow(unused)]
+// 设备层子树（cuda/amd/rocm/memory_pool/gpu_tuning/paging/memory_optimizer）的消费者
+// 按 feature（cuda/candle-cuda）与 target_os 分叉；默认构建下多数分支无消费者，
+// 逐项 cfg_attr 成本高于收益，故保留子树级豁免（子模块不再各自重复声明）。
+#![allow(unused, reason = "device subtree is feature and target_os gated")]
 
 #[cfg(all(target_os = "linux", not(target_env = "musl")))]
 pub mod allocator_tune;

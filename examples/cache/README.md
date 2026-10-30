@@ -10,12 +10,14 @@ VecBoost 使用 oxcache 作为嵌入向量的缓存后端，避免对相同文�
 
 | 示例 | 说明 | 所需 feature |
 |------|------|--------------|
-| `cache_config` | 对比缓存启用/禁用时的引擎调用次数 | `oxcache, http` |
-| `ttl` | 验证相同文本第二次调用命中缓存（引擎不被调用） | `oxcache, http` |
+| `cache_config` | 对比缓存启用/禁用时的引擎调用次数 | 无（oxcache 为主 crate 必选依赖） |
+| `ttl` | 验证相同文本第二次调用命中缓存（引擎不被调用） | 无 |
 
 ## 运行
 
 ```bash
-cargo run -p vecboost-examples --bin cache_config --features oxcache,http
-cargo run -p vecboost-examples --bin ttl --features oxcache,http
+# 注意：vecboost-examples 不定义 oxcache/http feature，
+# 加 --features oxcache,http 会被 cargo 拒绝（does not contain these features）
+cargo run -p vecboost-examples --bin cache_config
+cargo run -p vecboost-examples --bin ttl
 ```

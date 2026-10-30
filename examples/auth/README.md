@@ -5,8 +5,9 @@ VecBoost 认证授权模块使用示例（基于 garrison 框架），涵盖 JWT
 ## 前置条件
 
 ```bash
-# 编译（需 auth + http feature）
-cargo build --features auth,http
+# 无需额外 feature：vecboost-examples 自身已依赖 vecboost 的 auth/http 能力
+# （命令行加 --features auth,http 会被 cargo 拒绝——本 crate 不定义这两个 feature）
+cargo build -p vecboost-examples --bin jwt_auth
 ```
 
 ## 示例列表
@@ -20,20 +21,19 @@ cargo build --features auth,http
 ## 运行方式
 
 ```bash
-# 方式一：通过 cargo run（需先在 Cargo.toml 注册 example）
-cargo run -p vecboost-examples --bin jwt_auth --features auth,http
-cargo run -p vecboost-examples --bin csrf --features auth,http
-cargo run -p vecboost-examples --bin refresh --features auth,http
+# 方式一：通过 cargo run
+cargo run -p vecboost-examples --bin jwt_auth
+cargo run -p vecboost-examples --bin csrf
+cargo run -p vecboost-examples --bin refresh
 
-# 方式二：编译后直接运行
-cargo build --release --features auth,http --example jwt_auth
-./target/release/examples/jwt_auth
+# 方式二：编译后直接运行（产物在 target/debug 或 target/release 下，非 examples/ 子目录）
+cargo build -p vecboost-examples --release --bin jwt_auth
+./target/release/jwt_auth
 ```
 
 ## 所需 Feature
 
-- `auth` — 启用 garrison 认证鉴权框架（JWT + CSRF + 密码哈希）
-- `http` — auth 模块内部依赖 axum/http 类型（中间件等需要）
+`vecboost-examples` 不透传 `auth` / `http`，这三个示例无需命令行 feature 即可编译运行（凭证来自 garrison 的 `backend-kit` / `web-axum` 等由主 crate 依赖恒常启用）。
 
 ## API 参考
 

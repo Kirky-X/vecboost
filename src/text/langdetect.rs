@@ -132,7 +132,7 @@ pub fn detect_language(text: &str, allow: Option<&[String]>) -> Detection {
                 .collect();
             match resolved {
                 Some(allowlist) => Detector::with_allowlist(allowlist).detect(text),
-                // 防御兜底：上游校验已拦，理论不可达（评审）
+                // 防御兜底：上游校验已拦，理论不可达
                 None => None,
             }
         }

@@ -274,7 +274,7 @@ impl TranslationConfig {
                     )));
                 }
             }
-            // source 发布码校验（评审 PERF-7，与检测核心发布集同源）：
+            // source 发布码校验（与检测核心发布集同源）：
             // auto 检测路由键恒为发布码，source 配置非发布码即死 pair
             //（仅显式指定可达，静默浪费驻留资源）；target 由 bundle 决定、
             // 显式指定可达，维持格式校验即可
@@ -284,9 +284,9 @@ impl TranslationConfig {
                     pair.source_language
                 )));
             }
-            // token 参数校验上移（评审 ARC-2）：0/超硬上限启动期显性拒绝
+            // token 参数校验上移：0/超硬上限启动期显性拒绝
             //（错误带 pairs[index] 定位），不再延迟到引擎加载期；缺省值取
-            // TranslationParams::default() 单一事实源（评审 RES-2：512 字面量
+            // TranslationParams::default() 单一事实源（512 字面量
             // 不得出现第二处来源）
             let defaults = crate::config::model::TranslationParams::default();
             crate::config::model::TranslationParams::new(
@@ -1961,7 +1961,7 @@ max_new_tokens = 384
         assert_eq!(candle.engine_type.as_deref(), Some("candle"));
     }
 
-    /// [model].task 配置面（评审 R6）：缺省回落 Embedding、decision 可解析、
+    /// [model].task 配置面：缺省回落 Embedding、decision 可解析、
     /// 非法值在反序列化边界显性报错（而非 serde 静默忽略）
     #[test]
     fn test_model_config_task_toml() {

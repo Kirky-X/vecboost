@@ -14,7 +14,7 @@
 // 先决条件（缺任一整文件 SKIP，与 translate_e2e 同款离线红线）：
 // - 本地 bundle models/Xenova-bge-small-en-v1.5（model.onnx + tokenizer.json，
 // 获取：cargo run -p vecboost-examples --bin download_model -- --onnx Xenova/bge-small-en-v1.5）；
-// - onnxruntime 动态库 3rdparty/onnxruntime/libonnxruntime.so（ort/load-dynamic）。
+// - onnxruntime 动态库 3rdparty/onnxruntime/libonnxruntime.{so,dylib}（ort/load-dynamic，按平台）。
 //
 // ```text
 // cargo test --features onnx --test onnx_embed_e2e
@@ -31,6 +31,20 @@ const BUNDLE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/models/Xenova-bge-small-en-v1.5"
 );
+// ort/load-dynamic 默认 dylib：目录固定仓库 3rdparty 落位，扩展名按目标平台
+// （与 src/engine/session.rs 的 ort_dylib_default 同口径；集成测试独立 crate，
+// 不能引用 crate 内 pub(crate) 项，故此处以 cfg 门控声明）。
+#[cfg(target_os = "macos")]
+const ORT_DYLIB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/libonnxruntime.dylib"
+);
+#[cfg(target_os = "windows")]
+const ORT_DYLIB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/3rdparty/onnxruntime/onnxruntime.dll"
+);
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 const ORT_DYLIB: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/3rdparty/onnxruntime/libonnxruntime.so"

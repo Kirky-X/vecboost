@@ -379,7 +379,7 @@ impl WorkerManager {
                     // SLA 收割——排队超过自身 timeout 的请求完成超时响应，不入推理。
                     // 与老化跳级正交：收割保证任何请求的排队滞留有上界。
                     // 时间门控 250ms：收割目标 ≥30s SLA，全表扫描频率无需随批循环
-                    // （每 5ms 一次在深队列下持写锁重排，审查 PERF-6）
+                    // （每 5ms 一次在深队列下持写锁重排）
                     if last_reap.elapsed() >= Duration::from_millis(250) {
                         last_reap = std::time::Instant::now();
                         Self::reap_expired_requests(&queue, &response_channel).await;
@@ -450,7 +450,7 @@ impl WorkerManager {
     /// 超时响应并释放取消注册；取消丢弃路径（断连/服务端超时置位取消后
     /// 出队即弃）的通道条目永远不会被 complete——worker 看不到该请求，
     /// deregister 仅覆盖入队失败分支，条目按自身 timeout 到期在此移除，
-    /// 闭合无界增长面（三路评审 M×3）；此时 handler 已返回、rx 已 drop，
+    /// 闭合无界增长面；此时 handler 已返回、rx 已 drop，
     /// 清扫零副作用。出队臂（时间门控后）与空闲超时臂共用。
     async fn reap_expired_requests(
         queue: &Arc<PriorityRequestQueue>,
@@ -479,7 +479,7 @@ impl WorkerManager {
 
     /// 批构成埋点：批次大小与窗口等待时长，按批构成选标签——决策接入
     /// 共享拼批后混批是常态，恒挂 embed 标签会把决策负载误计入
-    /// embed 容量画像（三路评审 M）。HistogramVec operation 为
+    /// embed 容量画像。HistogramVec operation 为
     /// 自由标签，无需新注册。
     fn record_batch_composition(batch: &[QueuedRequest], waited_secs: f64) {
         #[cfg(feature = "http")]
@@ -612,7 +612,7 @@ impl WorkerManager {
     /// panic 隔离：推理 panic 不再带走 worker——经 JoinHandle 捕获，
     /// 批内未完成请求统一补 InternalError。整批 mem::take move 进闭包
     /// （决策请求含递归 Value 深拷贝成本高且由用户输入定大小，热路径不做
-    /// 整批 clone，三路评审 M）；批后清理只按 request_id 释放取消注册表。
+    /// 整批 clone）；批后清理只按 request_id 释放取消注册表。
     #[allow(clippy::too_many_arguments)]
     async fn execute_batch_with_panic_isolation(
         worker_id: usize,
@@ -668,7 +668,7 @@ impl WorkerManager {
     }
 
     /// 处理请求（按值消费——text/DecisionRequest 的所有权直接下沉到推理
-    /// 调用，不做用户输入定大小的深拷贝，三路评审 M）
+    /// 调用，不做用户输入定大小的深拷贝）
     async fn process_request(
         request: super::queue::QueuedRequest,
         embedding_service: &Arc<RwLock<EmbeddingService>>,
@@ -725,7 +725,7 @@ impl WorkerManager {
     /// 决策请求不并入 embed 拼批（问题级 collate 是 DecisionPipeline 内部能力）：
     /// 先逐个 `tokio::spawn` 并发执行（decide 内部 spawn_blocking，多决策可借
     /// 引擎读写锁并发），embed 推理与批内决策并行推进——决策不 inline await，
-    /// 否则队头阻塞同批 embed 推理、拖慢 worker 出队节奏（三路评审 M）。
+    /// 否则队头阻塞同批 embed 推理、拖慢 worker 出队节奏。
     async fn process_batch_requests(
         batch: Vec<super::queue::QueuedRequest>,
         embedding_service: &Arc<RwLock<EmbeddingService>>,
@@ -784,8 +784,8 @@ impl WorkerManager {
     /// 批内请求分类分派：Embed 收集（texts/normalize 标志/收集序→id 映射）、
     /// Rerank 直答不支持、Decision spawn 并发执行（decide 内部
     /// spawn_blocking 不占 worker 面，DecisionRequest 所有权直接 move 进
-    /// 任务——state 递归 Value 深拷贝成本高且由用户输入定大小，三路评审
-    /// M）。Rerank/决策不可用即到点直答。
+    /// 任务——state 递归 Value 深拷贝成本高且由用户输入定大小）。
+    /// Rerank/决策不可用即到点直答。
     #[allow(clippy::type_complexity)]
     async fn partition_batch(
         batch: Vec<super::queue::QueuedRequest>,
@@ -1935,7 +1935,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    /// 混批并发钉（三路评审 M）：批内决策与 embed 同批时决策 spawn 并发执行、
+    /// 混批并发钉：批内决策与 embed 同批时决策 spawn 并发执行、
     /// embed 推理不被决策 inline await 阻塞（慢决策 + 快 embed 同批，embed
     /// 必须先于决策完成回达），两类请求最终都收到正确响应。
     #[tokio::test(flavor = "multi_thread")]
@@ -2043,7 +2043,7 @@ mod tests {
         );
     }
 
-    /// 纯决策批回归钉（三路评审 H×3）：批内 2 条慢决策、0 条 embed 时，
+    /// 纯决策批回归钉：批内 2 条慢决策、0 条 embed 时，
     /// process_batch_requests 返回前两条响应必须已全部 complete（旧缺陷：
     /// texts.is_empty() 早退跳过收齐循环，JoinHandle 脱离监控——响应靠
     /// detached 任务碰巧回达、panic 无映射、节流失效）。断言
@@ -2099,7 +2099,7 @@ mod tests {
         }
     }
 
-    /// 纯决策批 panic 传播钉（三路评审 H）：批内决策任务 panic 时等待方
+    /// 纯决策批 panic 传播钉：批内决策任务 panic 时等待方
     /// 必须及时收到 InferenceError（JoinError 显性映射），而非 detached
     /// 悬挂到 SLA 超时收 RequestTimeout。
     #[tokio::test(flavor = "multi_thread")]
@@ -2422,7 +2422,7 @@ mod tests {
         assert_eq!(queue.size(), 0, "queue slot must be released");
 
         // 取消丢弃不产生 complete：条目滞留至自身 timeout，由 worker 收割点的
-        // cleanup_expired 回收（无界增长面闭合钉，三路评审 M×3）
+        // cleanup_expired 回收（无界增长面闭合钉）
         assert_eq!(
             response_channel.pending_count().await,
             1,
@@ -2852,6 +2852,12 @@ mod tests {
             service,
         );
 
+        // start() 必须先于压测入队：tokio::time::interval 首次 tick 立即触发，
+        // 若带着 200 条积压 start()，monitor 首次检查会与下面的 ==0 断言竞态
+        // （并行负载下间歇失败）；空队列下首次检查扩缩容均 no-op，断言确定。
+        manager.start().await.unwrap();
+        assert_eq!(manager.current_workers(), 0, "start() spawns min_workers=0");
+
         for i in 0..200 {
             let request = QueuedRequest {
                 request_id: format!("scale-up-{}", i),
@@ -2866,9 +2872,6 @@ mod tests {
             };
             queue.enqueue(request).await.unwrap();
         }
-
-        manager.start().await.unwrap();
-        assert_eq!(manager.current_workers(), 0, "start() spawns min_workers=0");
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {

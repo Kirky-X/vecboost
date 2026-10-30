@@ -99,7 +99,7 @@ impl DecisionService {
     /// （choice/score/noul 跨字段一致性等）。直连路径（process_decision）与
     /// pipeline 入队路径（handle_decision_pipeline_request）共用，保证
     /// 400 类拒绝在入队前 O(1) 完成——非法请求不占队列槽位，也不会在
-    /// 队列满时被 503 Overloaded 伪装成可重试的瞬时背压（三路评审 M）。
+    /// 队列满时被 503 Overloaded 伪装成可重试的瞬时背压。
     pub fn validate_request(
         req: &DecisionRequest,
         max_questions: usize,

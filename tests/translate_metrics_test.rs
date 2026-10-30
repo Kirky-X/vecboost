@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! translate 热路径计数语义测试（评审）。
+//! translate 热路径计数语义测试。
 //!
 //! 独立测试二进制：进程内无其他测试共享全局 collector（lib 测试二进制中
 //! api/forge 成功路径会并发 inc 同一计数器，计数差断言有竞态），故计数差
@@ -165,13 +165,27 @@ async fn translate_counter_counts_only_successful_requests() {
     // 段内 EngineType::Onnx 由 onnx feature 门控，无 onnx 构建下整段不编译。
     #[cfg(feature = "onnx")]
     {
-        let dylib = std::env::var("ORT_DYLIB_PATH").unwrap_or_else(|_| {
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/3rdparty/onnxruntime/libonnxruntime.so"
-            )
-            .to_string()
-        });
+        // ort/load-dynamic 默认 dylib 按目标平台选扩展名（与 src/engine/session.rs
+        // ort_dylib_default 同口径；集成测试独立 crate，cfg 门控声明）。
+        #[cfg(target_os = "macos")]
+        let default_dylib = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/3rdparty/onnxruntime/libonnxruntime.dylib"
+        )
+        .to_string();
+        #[cfg(target_os = "windows")]
+        let default_dylib = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/3rdparty/onnxruntime/onnxruntime.dll"
+        )
+        .to_string();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let default_dylib = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/3rdparty/onnxruntime/libonnxruntime.so"
+        )
+        .to_string();
+        let dylib = std::env::var("ORT_DYLIB_PATH").unwrap_or(default_dylib);
         if !Path::new(&dylib).is_file() {
             println!("SKIP [success-path segment]: onnxruntime dylib 缺失（{dylib}）");
             return;

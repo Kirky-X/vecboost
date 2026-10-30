@@ -455,7 +455,7 @@ mod tests {
         // 口径同 tests/grpc_e2e 的 decision_assets_ready / tests/common 的
         // ensure_ort_env（ORT_DYLIB_PATH 显式优先，缺省回填仓库默认落位）
         let dylib = std::env::var("ORT_DYLIB_PATH")
-            .unwrap_or_else(|_| "3rdparty/onnxruntime/libonnxruntime.so".to_string());
+            .unwrap_or_else(|_| crate::engine::session::ort_dylib_default());
         if !Path::new(&dylib).is_file() {
             eprintln!(
                 "Skipping test: onnxruntime dylib not found at {dylib:?} \

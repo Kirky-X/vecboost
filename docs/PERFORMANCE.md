@@ -296,6 +296,6 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 | 文档 | 说明 |
 |:-----|:-----|
 | [🧪 测试场景矩阵](TEST_SCENARIOS.md) | 测试栈职责与场景穷举 |
-| [📈 基准数据归档](benchmarks/) | 历史基准数据明细 |
+| [📈 基准数据归档](benchmarks/) | 历史基准数据明细（**仅本机保留**，`.gitignore` 排除，干净 clone 中不存在） |
 | [🏗️ 架构文档](ARCHITECTURE.md) | 性能优化设计（批处理/内存/GPU/并发） |
 | [📋 更新日志](CHANGELOG.md) | 调优开关的版本记录 |

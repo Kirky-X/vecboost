@@ -2,7 +2,7 @@
 
 **内部架构、关键组件、数据流和设计决策详解**
 
-[![Version 0.3.0-rc.1](https://img.shields.io/badge/Version-0.3.0--rc.1-green.svg?style=for-the-badge)](https://github.com/Kirky-X/vecboost) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge)](https://www.apache.org/licenses/LICENSE-2.0)
+[![release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge&label=Version)](https://github.com/Kirky-X/vecboost/releases) [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge)](https://www.apache.org/licenses/LICENSE-2.0)
 
 *VecBoost 的内部架构，解释关键组件、数据流和设计决策。*
 
@@ -71,19 +71,19 @@ VecBoost 是一个使用 Rust 构建的**多功能推理服务**。它为文本�
 | **模块注册** | trait-kit | 模块注册与依赖注入（必选依赖） |
 | **可观测性** | Prometheus 0.14 + log | 指标和日志 |
 
-### 🧩 7 库生态（路径依赖）
+### 🧩 7 库生态（crates.io 发布版本）
 
 | 库 | 版本 | 用途 | Feature |
 |----|------|------|---------|
-| **trait-kit** | `0.5.0-rc.9` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
-| **confers** | `0.6.0-rc.10` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | 始终启用 |
-| **inklog** | `0.3.0-rc.9` | 结构化日志基础设施（控制台 + 文件轮转） | 始终启用 |
-| **oxcache** | `0.5.0-rc.8` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | 始终启用 |
-| **limiteron** | `0.3.0-rc.7` | 令牌桶限流器（多维度独立计数） | 始终启用 |
-| **dbnexus** | `0.6.0-rc.9` | 数据库持久化（SQLite/PostgreSQL + 权限角色） | `db` |
-| **sdforge** | `0.5.0-rc.8` | 多协议接口生成（HTTP/gRPC/MCP/CLI 单一源定义） | `http`/`grpc`/`cli`/`mcp` |
+| **trait-kit** | `0.5.0-rc.10` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
+| **confers** | `0.6.0-rc.11` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | 始终启用 |
+| **inklog** | `0.3.0-rc.10` | 结构化日志基础设施（控制台 + 文件轮转） | 始终启用 |
+| **oxcache** | `0.5.0-rc.10` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | 始终启用 |
+| **limiteron** | `0.3.0-rc.8` | 令牌桶限流器（多维度独立计数） | 始终启用 |
+| **dbnexus** | `0.6.0-rc.10` | 数据库持久化（SQLite/PostgreSQL + 权限角色） | `db` |
+| **sdforge** | `0.5.0-rc.9` | 多协议接口生成（HTTP/gRPC/MCP/CLI 单一源定义） | `http`/`grpc`/`cli`/`mcp` |
 
-> `../base/*` 七库为路径依赖的活仓库，版本号以根目录 `Cargo.toml` 为准。
+> 七库当前全部取自 crates.io registry（`Cargo.toml` 无 `path =` 依赖、无 `[patch]`；`Cargo.lock` 记录 `source = "registry+https://github.com/rust-lang/crates.io-index"`）。版本号以根目录 `Cargo.toml` 为权威值。
 
 ---
 
@@ -96,7 +96,7 @@ VecBoost 是一个使用 Rust 构建的**多功能推理服务**。它为文本�
 ```rust
 pub struct VecboostState {
     /// trait-kit AsyncKit — 模块能力管理中心
-    /// 能力查询入口：`src/registry/impl_.rs` 共 20 个 `ModuleMeta` 实现（部分随 `auth` 等 feature 门控）
+    /// 能力查询入口：`src/registry/impl_.rs` 共 20 个生产 `ModuleMeta` 实现（另 3 个测试夹具 Composite；部分随 `auth` 等 feature 门控）
     pub(crate) kit: Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>,
 }
 ```
@@ -749,12 +749,12 @@ src/config/
 
 ### 🔄 环境变量映射
 
-> **说明**：VecBoost 使用 confers 库的 `env_prefix = "VECBOOST_"` 机制自动映射环境变量到配置字段。字段名含下划线（如 `cache_size`、`use_gpu`）无法通过 confers 映射，只能通过配置文件设置。`VECBOOST_JWT_SECRET` 和 `VECBOOST_ADMIN_PASSWORD` 由 `apply_security_env_overrides` 函数显式处理并校验最小长度。
+> **说明**：VecBoost 使用 confers 库的 `env_prefix = "VECBOOST_"` 机制自动映射环境变量到配置字段（`src/config/app_config.rs:79-95`）。映射规则为：剥离前缀 → 全小写 → 把**所有**下划线替换为 `.`（confers `EnvSource::parse_key`，默认分隔符 `_`）。因此只有“段名 + 单层字段名”也就是恰好一个下划线的变量能命中嵌套字段（`VECBOOST_SERVER_PORT` → `server.port`，实测生效）；多词字段名（如 `model.model_repo`、`embedding.cache_size`）会被拆成错误的层级，**无法通过环境变量覆盖，只能写配置文件**。`VECBOOST_JWT_SECRET` 和 `VECBOOST_ADMIN_PASSWORD` 由 `apply_security_env_overrides` 函数显式处理并校验最小长度。
 
 | 配置键 | 环境变量 | 示例值 |
 |--------|----------|--------|
 | `server.port` | `VECBOOST_SERVER_PORT` | `9002` |
-| `model.model_repo` | `VECBOOST_MODEL_REPO` | `BAAI/bge-m3` |
+| `model.model_repo` | 无法映射（按 confers 规则，`VECBOOST_MODEL_REPO` 的下划线被一律替换为 `.`，得到 `model.repo` 而非 `model.model_repo`；实测该变量不生效，请写配置文件） | `BAAI/bge-m3` |
 | `auth.jwt_secret` | `VECBOOST_JWT_SECRET` | `your-secret-key`（≥32 字符） |
 | `server.timeout` | `VECBOOST_SERVER_TIMEOUT` | `30` |
 | `audit.enabled` | `VECBOOST_AUDIT_ENABLED` | `true` |
@@ -770,9 +770,9 @@ gRPC 服务由 sdforge 通过 `build_server_with_config` 启动，相关配置�
 | `grpc_max_connections` | `Option<usize>` | `1000` | gRPC 最大并发连接数 |
 | `grpc_timeout_seconds` | `Option<u64>` | `30` | gRPC 请求超时（秒） |
 | `grpc_require_auth` | `Option<bool>` | `true` | 是否强制 gRPC 鉴权（默认开启，需显式关闭） |
-| `grpc_allowed_roots` | `Option<Vec<String>>` | `None` | gRPC 文件操作允许的根目录白名单 |
+| `grpc_allowed_roots` | `Option<Vec<String>>` | `None` | 文件嵌入允许的根目录白名单（`/embed/file` 必须显式配置，否则 400） |
 
-> 🔒 **安全默认值**：`grpc_require_auth` 默认为 `true`，调用方必须在 `config/config.toml` 中显式设置 `grpc_require_auth = false` 才能禁用鉴权。`grpc_allowed_roots` 为 `None` 时回退到当前工作目录，但拒绝 `/`、`/etc`、`/root` 等敏感目录以防文件系统全暴露。
+> 🔒 **安全默认值**：`grpc_require_auth` 默认为 `true`，调用方必须在 `config/config.toml` 中显式设置 `grpc_require_auth = false` 才能禁用鉴权。`grpc_allowed_roots` 为 `None` 或空列表时 `/embed/file` 一律返回 400 并提示配置该项——**不回退当前工作目录**（`build_path_validator()`，`src/api/embedding.rs:237-271`）；该端点单文件上限 10 MiB。`/model/switch` 的 `model_path_validator()` 是另一条路径：未配置时回落 `models/`。
 
 ---
 
@@ -987,22 +987,24 @@ pub trait InferenceEngine: Send + Sync {
 
 ## 🧪 测试架构
 
-`tests/` 目录按职责分为共享夹具、集成测试、性能与场景四类（同时存在 `tests/integration.rs` 入口文件与 `tests/integration/` 子目录、`tests/perf.rs` 与 `tests/perf/` 子目录，为 v0.2.0 已知偏离 D8，合并修复推迟到 v0.3.0）：
+`tests/` 目录按职责分为共享夹具、集成测试、性能与场景四类。`tests/integration.rs`（入口）与 `tests/integration/`（子目录）、`tests/perf.rs`（入口）与 `tests/perf/`（子目录）并存：入口文件以 `#[path = "..."] mod ...;` 显式声明模块，`cargo test --tests` 构建零模块系统警告（v0.2.0 记录的偏离 D8 由此收敛，原计划的“合并”不再必要）：
 
 ```
 tests/
 ├── integration.rs            # 入口：cargo test --test integration
 ├── integration/
 │   ├── api_test.rs           # API 集成测试
-│   └── real_engine.rs        # RealTestEngine + TestMode (mock/light/full)
+│   ├── detect_test.rs        # 语言检测（candle feature 门控）
+│   └── translate_test.rs     # 翻译（candle feature 门控）
 ├── perf.rs                   # 入口：cargo test --test perf
 ├── perf/
 │   ├── performance_test.rs   # Rust 性能回归阈值（MockEngine）
 │   ├── conftest.py           # pytest 夹具
 │   ├── test_api.py           # Python API 测试（sim 标记区分模拟器）
+│   ├── test_server_integration.py  # Python 真实服务集成用例
 │   └── ...                   # Python 性能工具
-├── scenario/                 # Python 场景测试（15 个套件，conftest 拉起真实二进制）
-├── common/mod.rs             # 共享夹具：MockEngine、create_test_engine()
+├── scenario/                 # Python 场景测试（16 个套件，conftest 拉起真实二进制）
+├── common/mod.rs             # 共享夹具：MockEngine、create_test_engine()、RealTestEngine + TestMode(mock/light/full)
 ├── doctor.rs / grpc_e2e.rs / model_snapshot_regression.rs
 ├── quantized_parity.rs / scenario_sdk.rs
 └── fixtures/golden_corpus.txt  # 量化质量门 golden 语料
@@ -1022,7 +1024,7 @@ tests/
 
 ---
 
-> **📝 最后更新**: 2026-10-17 | **版本**: 0.3.0-rc.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-10-29 | **版本**: 0.3.0-rc.3 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
 
 ---
 

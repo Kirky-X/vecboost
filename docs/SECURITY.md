@@ -22,7 +22,8 @@ VecBoost 将安全性作为核心设计目标。本文档介绍 VecBoost 的安�
 
 | 版本 | 状态 | 说明 |
 |------|------|------|
-| Unreleased（0.3.0-rc.1 工作区） | ✅ 开发中 | 安全默认值收敛、RBAC 接线、XFF 信任反转等破坏性加固（见 [CHANGELOG](CHANGELOG.md)） |
+| 0.3.0-rc.3（当前） | ✅ 开发中 | 多副本共享语义缓存/封禁清单、`[database] max_connections` 生效、会话外置；此前 rc 系列已含安全默认值收敛、RBAC 接线、XFF 信任反转等破坏性加固（见 [CHANGELOG](CHANGELOG.md)） |
+| 0.3.0-rc.2 / rc.1 | ✅ 支持 | 转录/翻译/语言检测服务面；rc.1 为破坏性变更版本，升级前必读 [CHANGELOG](CHANGELOG.md#030-rc1---2026-09-22) |
 | 0.2.1 | ✅ 支持 | i18n、Rerank、语义缓存、AES-256-GCM 配置加密 |
 | 0.2.0 | ⚠️ 仅关键修复 | sdforge 四协议、7 库生态接线 |
 | 0.1.0 | ❌ 不再支持 | 初始发布 |
@@ -45,7 +46,7 @@ cargo deny check
 - `cargo audit`：RustSec 安全公告扫描，豁免配置在 `.cargo/audit.toml`（须附理由，与 `deny.toml` 处置策略一致）。
 - `cargo deny check`：漏洞必须修复；unmaintained/yanked/unsound 为信息性警告，不阻断 CI，发布前人工复核并记录处置结论。
 - `gitleaks` 规则集：`.gitleaks.toml` 以 `[extend] useDefault = true` 加载 gitleaks 默认检测规则——**不写这一行则规则集为空、扫描静默空转**（`[[allowlist.rules]]` 单数写法在 8.19 后已废弃，现行为 `[[allowlists]]` + `regexes` + `condition`）。
-- `gitleaks` 豁免范围：占位 JWT 形态的豁免按路径收窄到 `docs/` / `tests/` / `examples/` / `src/security/`，`src/` 内的真实签名令牌不再被全局豁免吞掉；`test_` 前缀的测试值豁免保持全局（取值自述即测试值）。
+- `gitleaks` 豁免范围：两条正则豁免均**按路径收窄**，不再有全局生效的规则——占位 JWT 形态限定 `docs/` / `tests/` / `examples/` / `src/security/`；`test_` 前缀的测试值限定 `tests/` / `examples/` / `docs/` / `benches/`（`.gitleaks.toml:21-25`）。`src/` 内同名形态的真实凭证因此仍会被检出（例如 `api_key = "testsecret"` 写进生产源码即失败）。
 - `gitleaks` 历史基线：`.gitleaks-baseline.json` 记录 1 条已定位的历史测试凭证（`src/module_registry/tests.rs`，该文件已从仓库删除，仅存于历史提交），使每周全量扫描不被它阻断；新增泄漏仍会失败。
 - 新增依赖须经审批：优先活跃维护、特性门控按需启用（Cargo.toml 中各依赖均 `default-features = false` 并显式列出 feature）。
 
@@ -148,7 +149,7 @@ cargo deny check
 | RUSTSEC-2023-0071（Marvin Attack，RSA） | 豁免并持续跟踪：rsa 仅由 garrison → jsonwebtoken 传递引入用于 JWT 签名/验证，不涉及 RSA 解密路径；上游无补丁版本，见 `deny.toml` / `.cargo/audit.toml` 条目，上游发布 constant-time 实现后撤销豁免并升级 |
 | RUSTSEC-2026-0258（h2 DoS） | 已修复：h2 0.4.15 → 0.4.19（v0.2.1） |
 | vuln-0009（HF Hub repo_id 注入） | 已修复：`is_valid_hf_repo_id` 统一校验全部远程下载入口 |
-| admin 密码缺失时任意凭据可得 admin（P0） | 已修复（Unreleased）：启用认证时缺失 `VECBOOST_ADMIN_PASSWORD` 拒绝启动 |
+| admin 密码缺失时任意凭据可得 admin（P0） | 已修复（0.3.0-rc.1 起）：启用认证时缺失 `VECBOOST_ADMIN_PASSWORD` 拒绝启动 |
 
 ---
 

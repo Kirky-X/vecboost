@@ -28,7 +28,7 @@ impl DetectService {
     /// # 不走 spawn_blocking 的差异依据（与 decide 对比）
     /// decide 是数十至数百毫秒的阻塞模型推理，须移出 tokio worker 调度面；
     /// 本方法为 whatlang n-gram 统计且无 await 点——10k 字符上限文本实测
-    /// p50=93µs / p99=201µs（评审 PERF-6 基准，release 构建、200 样本），
+    /// p50=93µs / p99=201µs（基准，release 构建、200 样本），
     /// 亚毫秒级同步完成即返回，spawn_blocking 的任务切换与 blocking 池
     /// 占用反而放大延迟。
     ///
@@ -86,7 +86,7 @@ impl DetectService {
         }
         if let Some(allow) = &req.allow {
             for code in allow {
-                // 双重校验（评审）：格式 + 发布集合成员——"sw"/"xx" 等
+                // 双重校验：格式 + 发布集合成员——"sw"/"xx" 等
                 // 格式合法码不在 whatlang 发布集，穿透会触发收窄失效
                 if !crate::utils::validator::input::is_valid_language_code(code)
                     || !crate::text::is_published_language_code(code)
@@ -183,7 +183,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_detect_rejects_unpublished_allow_code_400_not_panic() {
-        // 评审 回归钉："sw"（格式合法、未发布）必须 400
+        // 回归钉："sw"（格式合法、未发布）必须 400
         // 显性拒绝，禁止穿透到检测核心 panic（panic 在 async handler 内即
         // 连接重置）
         crate::i18n::init();

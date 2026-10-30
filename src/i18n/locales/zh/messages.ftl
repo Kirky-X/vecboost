@@ -660,3 +660,48 @@ cli-poc-transcribe-own-unknown-argument = 未知参数：{ $a1 }
 cli-poc-transcribe-own-env-not-valid-integer = { $key }={ $value } 不是合法整数
 cli-poc-transcribe-own-env-out-of-range = { $key }={ $value } 超出范围 [{ $min },{ $max }]
 cli-poc-transcribe-own-ep-invalid = TRANSCRIBE_EP={ $a1 } 无效（cpu|cuda）
+
+# ── 硬编码收口：v0.3.0-rc.2 之后新增站点 ──
+
+# 启动：garrison 会话 DAO 装配
+startup-garrison-dao-create-failed = 创建 GarrisonDaoOxcache 失败：{ $detail }
+startup-garrison-atomic-dao-failed = 构建原子 garrison DAO 失败：{ $detail }
+
+# 引擎：ONNX 权重精度探测
+model-onnx-probe-open-failed = 精度探测打开 ONNX 文件失败 { $path }：{ $detail }
+model-onnx-probe-read-failed = 精度探测读取 ONNX 文件失败 { $path }：{ $detail }
+
+# 缓存：共享语义索引（Redis）与 embedding 缓存 Redis 后端
+cache-semantic-redis-op-failed = 共享语义缓存 Redis 操作失败（{ $op }）：{ $detail }
+cache-semantic-redis-url-invalid = 语义缓存 Redis URL 无效：{ $detail }
+cache-semantic-redis-connect-failed = 连接语义缓存 Redis 失败：{ $detail }
+cache-semantic-redis-ping-failed = 语义缓存 Redis PING 失败：{ $detail }
+cache-embedding-redis-init-failed = 初始化 embedding 缓存 Redis 后端失败：{ $detail }
+cache-clear-failed = 清空缓存失败：{ $detail }
+
+# 限流：Redis 窗口限流器与启动装配
+rate-limit-redis-window-op-failed = 限流 Redis 窗口操作失败（{ $op }）：{ $detail }
+rate-limit-redis-unexpected-reply = 意外的应答 { $detail }
+rate-limit-redis-unexpected-value = 意外的值 { $detail }
+rate-limit-redis-eval-timeout = 超时 { $timeout }：Redis 无响应（fail-closed）
+startup-rate-limit-redis-init-failed = 初始化限流 Redis 后端失败：{ $detail }
+startup-rate-limit-redis-ban-init-failed = 初始化限流 Redis 封禁存储失败：{ $detail }
+
+# 认证：原子 garrison KV DAO
+auth-atomic-incr-session-failed = 原子计数自增：获取数据库会话失败：{ $detail }
+auth-atomic-incr-connection-failed = 原子计数自增：获取数据库连接失败：{ $detail }
+auth-atomic-incr-execute-failed = 原子计数自增：语句执行失败：{ $detail }
+auth-atomic-incr-no-row = 原子计数自增：未返回任何行
+auth-atomic-incr-read-failed = 原子计数自增：读取自增后的值失败：{ $detail }
+auth-atomic-incr-parse-failed = 原子计数自增：值不是合法整数（键 { $key } = { $value }）：{ $detail }
+auth-atomic-wal-session-failed = 启用 SQLite WAL：获取数据库会话失败：{ $detail }
+auth-atomic-wal-connection-failed = 启用 SQLite WAL：获取数据库连接失败：{ $detail }
+auth-atomic-wal-enable-failed = 启用 SQLite WAL：PRAGMA journal_mode=WAL 失败：{ $detail }
+auth-atomic-incr-unsupported-backend = 原子计数自增：不支持的数据库后端：{ $detail }
+
+# 引擎：不可达分支不变量文案
+engine-no-variants-compiled = 本次构建未编译任何推理引擎变体
+engine-auto-pooling-not-resolved = Auto 池化应在构造期解析完毕
+
+# API 文档：ReDoc 页面
+api-redoc-title = VecBoost API 文档 — ReDoc

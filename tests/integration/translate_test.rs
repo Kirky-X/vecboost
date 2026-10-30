@@ -110,13 +110,27 @@ fn spawn_translate_server(
     let log = std::fs::File::create(dir.join("server.log")).expect("create log");
     // ort/load-dynamic dylib：服务器 cwd 为临时目录，相对默认落位不可解析，
     // 注入绝对路径（环境变量优先口径，调用方 env_extra 显式值可覆盖）
-    let ort_dylib = std::env::var("ORT_DYLIB_PATH").unwrap_or_else(|_| {
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/3rdparty/onnxruntime/libonnxruntime.so"
-        )
-        .to_string()
-    });
+    // ort/load-dynamic 默认 dylib 按目标平台选扩展名（与 src/engine/session.rs
+    // ort_dylib_default 同口径；集成测试独立 crate，cfg 门控声明）。
+    #[cfg(target_os = "macos")]
+    let ort_dylib = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/3rdparty/onnxruntime/libonnxruntime.dylib"
+    )
+    .to_string();
+    #[cfg(target_os = "windows")]
+    let ort_dylib = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/3rdparty/onnxruntime/onnxruntime.dll"
+    )
+    .to_string();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let ort_dylib = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/3rdparty/onnxruntime/libonnxruntime.so"
+    )
+    .to_string();
+    let ort_dylib = std::env::var("ORT_DYLIB_PATH").unwrap_or(ort_dylib);
     let child = Command::new(env!("CARGO_BIN_EXE_vecboost"))
         .current_dir(&dir)
         .env("ORT_DYLIB_PATH", &ort_dylib)

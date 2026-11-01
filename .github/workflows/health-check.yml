@@ -140,80 +140,45 @@ jobs:
     name: Test (Coverage)
     runs-on: ubuntu-latest
     needs: test
-    timeout-minutes: 40
-    services:
-      # 与 ci.yml 覆盖率作业同前提：distributed-redis 系列用例（oxcache_backend /
-      # limiteron_adapter / redis_semantic_index）无 redis 时整块 SKIP，
-      # SKIP 不是覆盖——这是本作业比 ci.yml 低的执行宇宙差异之一。
-      redis:
-        image: redis:7
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
+    timeout-minutes: 100
+    # 覆盖率判定的唯一权威是 ci.yml 的 `Coverage (lines >= 90%)` 作业：它预置
+    # ONNX Runtime + 模型资产、并做三段合并（COVERAGE_FEATURES 腿 + db/sqlite 腿
+    # + 真实启动腿），口径与本地实测一致（91.94%）。本文件原有一份独立采集腿
+    # 缺 ONNX 资产预置，onnx 系 7 个用例整块 ignore，实测仅 85.05%<90 —— 那是
+    # 执行宇宙差异造成的假红，不是覆盖率真实缺口。重复腿已删除，改为查询同
+    # 提交上 ci.yml 作业的结论：绿则本腿绿，红/缺失则本腿红（不静默放行）。
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          toolchain: stable
-          components: llvm-tools-preview
-
-      - name: Install Protocol Buffers compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: "vecboost-coverage"
-          cache-targets: false
-
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
-
-      - name: Run tests with coverage
-        # tarpaulin 与新 stable 工具链不兼容（pulp 0.22.3 const 断言 E0080
-        # 插桩构建必炸，2026-10-15 实录），按发布流水线生态表切换 llvm-cov。
-        # 口径：lib + 集成测试（禁止 --lib 窄口径）；llvm-cov 不自建输出目录，须先 mkdir
-        # 本腿特征比 FEATURES 多一个 distributed-redis（本地 cargo check 已验证该
-        # 组合合法，exit 0），否则 redis 系模块全部 SKIP，分母同、分子偏低。
+      - name: Delegate to ci.yml coverage job
         env:
-          VECBOOST_TEST_REDIS_URL: redis://127.0.0.1:6379
-          OXCACHE_ALLOW_INSECURE_REDIS: I_UNDERSTAND_THE_RISKS
-        run: mkdir -p coverage/ && cargo llvm-cov --quiet --features "${{ env.FEATURES }},distributed-redis" --tests --lcov --output-path coverage/lcov.info
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          files: coverage/lcov.info
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-
-      - name: Check coverage threshold
-        # 硬门禁：llvm-cov 运行失败（无 lcov 产出）或行覆盖率 < 90% 都将使本 job 失败
-        # 90% 是用户 2026-10-21 授权的最低底线（与 ci.yml 同口径，原 95% 已证明不可达）。
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
         run: |
-          total=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if (lf==0) {print "0.00"} else {printf "%.2f", 100*lh/lf}}' coverage/lcov.info)
-          threshold=90
-          echo "Coverage: ${total}% (lines, llvm-cov)"
-          echo "Threshold: ${threshold}%"
-          if (( $(echo "$total >= $threshold" | bc -l) )); then
-            echo "Coverage requirement met (>= 90%)"
-          else
-            echo "Coverage requirement NOT met (>= 90%)"
-            exit 1
-          fi
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: coverage-report
-          path: coverage/
-          retention-days: 7
+          set -euo pipefail
+          # 轮询同提交的 ci.yml 运行（最长 95 分钟，与 ci.yml coverage 腿 60 分钟
+          # 超时留余量）；工作流仍在跑则继续等，结束后按结论判定。
+          for i in $(seq 1 190); do
+            data=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}" )
+            run=$(echo "$data" | jq -r '.workflow_runs[0] // empty')
+            if [ -n "$run" ]; then
+              status=$(echo "$run" | jq -r '.status')
+              concl=$(echo "$run" | jq -r '.conclusion // ""')
+              short=$(echo "$run" | jq -r '.head_sha[0:7]')
+              echo "poll $i: ci.yml run ${short} status=${status} conclusion=${concl}"
+              if [ "$status" = "completed" ]; then
+                if [ "$concl" = "success" ]; then
+                  echo "::notice::ci.yml（含 Coverage (lines >= 90%) 腿）在该提交上全绿，覆盖率判定通过"
+                  exit 0
+                fi
+                echo "::error::ci.yml 在该提交上结论为 ${concl}；覆盖率判定以 ci.yml 为准，本腿失败"
+                exit 1
+              fi
+            else
+              echo "poll $i: ci.yml 运行尚未创建"
+            fi
+            sleep 30
+          done
+          echo "::error::等待 ci.yml 完成超时（95 分钟）；无法确认覆盖率，按失败处理"
+          exit 1
 
   test-windows:
     name: Test (Windows)

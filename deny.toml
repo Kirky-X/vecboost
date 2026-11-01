@@ -28,6 +28,13 @@ ignore = [
   # 退出条件：hf-hub/ureq 升代（如 ureq 3.x）使依赖图不再出现 webpki-roots 0.26
   # 时删除本条，并重跑 cargo deny check 与 cargo audit 确认全绿。
   { id = "RUSTSEC-2026-0381", reason = "transitive webpki-roots 0.26.11 via tokenizers -> hf-hub -> ureq; 0.26.11 is the newest 0.26.x so no in-series patch exists (fix is 1.0.10, which the 1.x copy in this lock is already updated to); data-only crate, only reachable from the HF model-download path which never validates emSign-issued chains" },
+  # RUSTSEC-2026-0387（crypto-bigint 0.5.5 常时断言存在时序变差）。命中链：
+  # garrison → jsonwebtoken 11 → p256 0.13.2（已最新）→ elliptic-curve → crypto-bigint 0.5.5。
+  # 修复要求 crypto-bigint >= 0.7.6，但 p256/elliptic-curve 上游尚未跟进发布兼容 0.7.x
+  # 的版本，升级链断裂无法在本仓闭合。本仓无 crypto-bigint 直依赖、不实现曲线运算，
+  # JWT 消费面仅 RS256/HS256 签名验证。退出条件：p256 发布拉入 crypto-bigint >= 0.7.6
+  # 的版本后撤销本条并升级（同 .cargo/audit.toml 同 ID 条目口径）。
+  { id = "RUSTSEC-2026-0387", reason = "transitive crypto-bigint 0.5.5 via garrison -> jsonwebtoken -> p256 0.13.2 (latest) -> elliptic-curve; fix requires >=0.7.6 but p256 has not released a compatible line yet, no in-series patch exists; no direct curve arithmetic in this crate, JWT consumption is signature verification only" },
 ]
 
 [licenses]

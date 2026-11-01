@@ -1910,12 +1910,14 @@ mod tests {
         // 真会话用例的公共入口：分配前先归还上一个用例滞留的自由页
         // （Darwin malloc MADV_FREE 惰性回收，实测跨用例累积至 7.5GB，
         // 见 release_free_pages 文档）
+        #[cfg(all(test, target_os = "macos"))]
         crate::utils::test_env_lock::release_free_pages();
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/opus-mt-en-zh");
         bundle_ready(&dir).then_some(dir)
     }
 
     fn m2m100_bundle() -> Option<PathBuf> {
+        #[cfg(all(test, target_os = "macos"))]
         crate::utils::test_env_lock::release_free_pages();
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/m2m100_418M");
         bundle_ready(&dir).then_some(dir)

@@ -879,8 +879,8 @@ graph TB
 | 账号锁定计数 | 同会话后端 | 部署库（`AtomicKvDao` 单语句原子自增） |
 | 限流（全局 / IP / User / ApiKey） | `[rate_limit] backend = "redis"` | Redis（Lua 原子固定窗口） |
 | 精确向量缓存 | `[embedding] cache_backend = "redis"` | Redis（bloom 禁用） |
-| 语义缓存模糊索引 | — | 进程内（按副本） |
-| 封禁清单 | — | 进程内（limiteron `ban-sync` 未启用） |
+| 语义缓存模糊索引 | `[semantic_cache] backend = "redis"` | Redis（trigram Jaccard，Hash + LRU ZSET，无 RediSearch） |
+| 封禁清单 | `distributed-redis`（`ban-sync` 随该 feature 传递启用） | Redis（limiteron `CacheBanStorage`） |
 
 共享层初始化失败时启动期显性拒绝；运行期 Redis 故障由请求错误显性暴露，不静默回落进程内存。
 

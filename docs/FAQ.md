@@ -135,7 +135,7 @@ Docker：`docker build -t vecboost:latest .` 后挂载 `config/` 与 `models/` �
 
 ### ❓ auth 开启时能多副本部署吗？
 
-可以，但需显式外置会话。推理路径无状态，`auth.enabled=true` 时默认会话存进程内存（`session_backend = "memory"`，仅限单副本）；多副本需设置 `session_backend = "database"`（部署库 `garrison_kv` 表），并以 `--features "db,sqlite"` 或 `"db,postgres"` 构建、配置 `[database]`。账号锁定计数由 `AtomicKvDao` 原子自增，跨副本无丢失；如需跨副本限流/精确缓存，另设 `[rate_limit] backend = "redis"` 与 `[embedding] cache_backend = "redis"`（需 `distributed-redis` 构建）。注意：语义缓存**模糊命中**与**封禁清单**仍按副本生效。
+可以，但需显式外置会话。推理路径无状态，`auth.enabled=true` 时默认会话存进程内存（`session_backend = "memory"`，仅限单副本）；多副本需设置 `session_backend = "database"`（部署库 `garrison_kv` 表），并以 `--features "db,sqlite"` 或 `"db,postgres"` 构建、配置 `[database]`。账号锁定计数由 `AtomicKvDao` 原子自增，跨副本无丢失；如需跨副本限流/精确缓存，另设 `[rate_limit] backend = "redis"` 与 `[embedding] cache_backend = "redis"`（需 `distributed-redis` 构建）。语义缓存**模糊命中**另设 `[semantic_cache] backend = "redis"`；**封禁清单**随 `distributed-redis` 构建即经 limiteron `ban-sync` 共享——两者均已不再按副本生效。
 
 ---
 

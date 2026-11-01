@@ -127,7 +127,7 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 - **口径**：criterion 100 samples 中位、空闲窗口；对比 `memory` 后端的单请求 P50/P95 增量；
 - **记录**：本节补充 `Redis（同机）` 行，并注明网络 RTT；不得以估算值替代实测。
 
-> 功能语义：全局与 per-key 限流均为 Lua 原子固定窗口（per-key 固定 60s，`global_window_ms` 仅作用于全局维度）；固定窗口在窗口边界存在至多 2× 配额突发，被拒请求同样计数。精确缓存共享、模糊索引与 bloom 仍按副本。
+> 功能语义：全局与 per-key 限流均为 Lua 原子固定窗口（per-key 固定 60s，`global_window_ms` 仅作用于全局维度）；固定窗口在窗口边界存在至多 2× 配额突发，被拒请求同样计数。精确缓存、语义缓存模糊索引与封禁清单均可共享（分别经 `[embedding] cache_backend`、`[semantic_cache] backend`、`distributed-redis`）；bloom 过滤器仍按副本。
 >
 > 降级语义：Redis 限流检查 fail-closed——错误或单次 Lua 往返超过 500ms 无响应即拒绝该请求（有界超时，Redis 半死不会挂起请求线程）；Redis 不可达时启动期显性拒绝，不静默回落 memory。`redis://`（非 TLS）连接默认被 oxcache 护栏拒绝，需 `rediss://` 或开发逃生阀 `OXCACHE_ALLOW_INSECURE_REDIS=I_UNDERSTAND_THE_RISKS`。
 

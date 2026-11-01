@@ -125,6 +125,10 @@ jobs:
       - name: Run tests
         env:
           VECBOOST_TEST_REDIS_URL: redis://127.0.0.1:6379
+          # 明文 redis 用于服务矩阵的共享状态腿：oxcache 的连接护栏要求显式
+          # 承担风险，否则 ban_list_shared 等用例会静默跳过（等到「全绿」但
+          # 跨副本封禁验收根本没跑）。
+          OXCACHE_ALLOW_INSECURE_REDIS: I_UNDERSTAND_THE_RISKS
         run: |
           if [ -z "${{ matrix.features }}" ]; then
             cargo test

@@ -44,27 +44,27 @@ icu = { version = "2.4", default-features = false, features = ["compiled_data"] 
 writeable = { version = "0.6", default-features = false }
 
 # trait-kit：reload/confers 热重载 + i18n；20 个 ModuleMeta 均声明 VERSION 供版本协商
-trait-kit = { version = "0.5.0-rc.10", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "i18n", "negotiate"] }
+trait-kit = { version = "0.5.0-rc.12", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "i18n", "negotiate"] }
 
 # 配置：仅保留 toml/env 加载、校验、watch 热重载、加密、schema 导出；其余零接线项裁剪
-confers = { version = "0.6.0-rc.11", default-features = false, features = ["env", "validation", "watch", "encryption", "schema", "typescript-schema", "modules"] }
+confers = { version = "0.6.0-rc.12", default-features = false, features = ["env", "validation", "watch", "encryption", "schema", "typescript-schema", "modules"] }
 garde = { version = "0.23", default-features = false, features = ["derive"] }
 schemars = { version = "1.2", default-features = false }
 
 # Logging infrastructure — 仅核心日志面（LoggerManager/sink）
-inklog = { version = "0.3.0-rc.10", default-features = false, features = ["compression", "fast-masking"] }
+inklog = { version = "0.3.0-rc.12", default-features = false, features = ["compression", "fast-masking"] }
 log = { version = "0.4", default-features = false }
 
 # 缓存：trait-kit 生命周期集成；仅内存后端（MokaMemoryBackend），hotkey/adaptive-ttl 等零接线不启用
-oxcache = { version = "0.5.0-rc.10", default-features = false, features = ["core", "bloom", "compression", "macros", "batch", "lock", "kit"] }
+oxcache = { version = "0.5.0-rc.12", default-features = false, features = ["core", "bloom", "compression", "macros", "batch", "lock", "kit"] }
 
 # Rate limiting infrastructure feature 瘦身:仅保留实际接线能力(Governor/存储/matchers/审计事件/宏)
-limiteron = { version = "0.3.0-rc.8", default-features = false, features = ["ban-manager", "gcra", "macros", "metrics", "validation", "kit", "fallback", "audit-log", "multi-tenant", "tower-middleware"] }
+limiteron = { version = "0.3.0-rc.10", default-features = false, features = ["ban-manager", "gcra", "macros", "metrics", "validation", "kit", "fallback", "audit-log", "multi-tenant", "tower-middleware"] }
 # 语义缓存的跨副本 trigram 索引；仅 distributed-redis 启用（默认构建零 Redis 依赖）。
 redis = { version = "1.8", default-features = false, features = ["tokio-comp", "tokio-rustls-comp"], optional = true }
 
 # 数据库：kit/migration 等未接线项按需启用；sea-orm 类型统一经 dbnexus 转发
-dbnexus = { version = "0.6.0-rc.10", optional = true, default-features = false, features = ["runtime-tokio-rustls", "macros", "permission", "pool-warmup", "retry", "config-env", "observability", "failover", "replica-routing"] }
+dbnexus = { version = "0.6.0-rc.11", optional = true, default-features = false, features = ["runtime-tokio-rustls", "macros", "permission", "pool-warmup", "retry", "config-env", "observability", "failover", "replica-routing"] }
 # failover/replica-routing：inklog 无条件构造 DbConfig 两字段，缺则无法编译
 
 # AI & Math：candle 转 optional（zip 风险出树），默认主引擎 onnxruntime（ort）
@@ -99,7 +99,7 @@ reqwest = { workspace = true, optional = true, features = ["stream", "charset", 
 # gRPC is fully handled by sdforge (unified Call protocol via #[forge(grpc_method)])
 
 # 认证：firewall/TOTP/凭证清零/异常检测等；rc.3 起 i18n 无条件编译
-garrison = { version = "0.9.0-rc.4", default-features = false, features = ["protocol-jwt", "web-csrf", "cache-audit", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "firewall-bruteforce", "firewall-ratelimit", "firewall-anomalous", "secure-totp", "credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-simple-token", "web-cors", "web-security-headers", "metrics-prometheus", "grpc"], optional = true }
+garrison = { version = "0.9.0-rc.5", default-features = false, features = ["protocol-jwt", "web-csrf", "cache-audit", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "firewall-bruteforce", "firewall-ratelimit", "firewall-anomalous", "secure-totp", "credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-simple-token", "web-cors", "web-security-headers", "metrics-prometheus", "grpc"], optional = true }
 aes-gcm = { version = "0.11", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
 
 # ONNX feature
@@ -116,7 +116,7 @@ cudarc = { version = "0.19", optional = true, default-features = false, features
 nvml-wrapper = { version = "0.13", optional = true, default-features = false }
 
 # SDK：i18n + inklog；context 提供 request_id/trace_id 跨协议传播
-sdforge = { version = "0.5.0-rc.9", optional = true, default-features = false, features = ["i18n", "inklog", "context"] }
+sdforge = { version = "0.5.0-rc.10", optional = true, default-features = false, features = ["i18n", "inklog", "context"] }
 
 # gRPC：garrison GarrisonGrpcAuthLayer 需 server 级 tonic builder（sdforge 无 layer 挂载点）
 tonic = { version = "0.14", optional = true, default-features = false, features = ["transport"] }
@@ -276,13 +276,3 @@ prometheus = { version = "0.14", default-features = false, features = ["process"
 
 # 自研库本地源码接线（工作树专用，发布前必须整体移除本段与随之重写的 Cargo.lock）：
 # ci.yml / release.yml 的 runner 无兄弟目录，本段一旦入库 resolution 即硬错。
-[patch.crates-io]
-confers = { path = "../confers" }
-dbnexus = { path = "../dbnexus" }
-garrison = { path = "../garrison" }
-inklog = { path = "../inklog" }
-limiteron = { path = "../limiteron" }
-oxcache = { path = "../oxcache" }
-sdforge = { path = "../sdforge" }
-trait-kit = { path = "../trait-kit" }
-

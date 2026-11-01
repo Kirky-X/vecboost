@@ -3,8 +3,9 @@
 
 //! 双实例语义缓存共享：实例 A 写入，实例 B 模糊命中。
 //!
-//! 需要真实 Redis（`VECBOOST_TEST_REDIS_URL`，默认 redis://127.0.0.1:6379）；
-//! 不可达时显式跳过，不以 mock 替代。
+//! 需要真实 Redis（`VECBOOST_TEST_REDIS_URL`，默认 redis://127.0.0.1:6379）。
+//! 未显式设置该变量时不可达即跳过（本地无 Redis 的开发机）；一旦显式设置，
+//! 不可达即失败——CI 正是靠这条把「模糊命中跨副本」验收变成硬门禁。
 
 #![cfg(feature = "distributed-redis")]
 
@@ -15,6 +16,11 @@ use vecboost::SemanticCache;
 fn redis_url() -> String {
     std::env::var("VECBOOST_TEST_REDIS_URL")
         .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string())
+}
+
+/// `VECBOOST_TEST_REDIS_URL` 是否被显式设置（CI 设置，本地通常不设）。
+fn redis_url_is_explicit() -> bool {
+    std::env::var("VECBOOST_TEST_REDIS_URL").is_ok()
 }
 
 #[tokio::test]
@@ -28,6 +34,10 @@ async fn shared_trigram_index_hits_across_instances() {
     {
         Ok(cache) => cache,
         Err(e) => {
+            assert!(
+                !redis_url_is_explicit(),
+                "VECBOOST_TEST_REDIS_URL 已显式设置但 Redis 不可达，模糊命中跨副本验收不得跳过: {e}"
+            );
             eprintln!("skip: redis unavailable: {e}");
             return;
         }

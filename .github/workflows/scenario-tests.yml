@@ -57,7 +57,10 @@ jobs:
       - name: Install pytest dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install pytest pytest-timeout requests
+          # grpcio：test_server_modes.py 的 grpc_call 用 grpc.insecure_channel
+          # 直连 sdforge gRPC 腿（R003 两场景），缺包时 pytest 收集期即 ImportError
+          # （实跑 run 42009371703 即此原因）。
+          python3 -m pip install pytest pytest-timeout requests grpcio
 
       - name: Run scenario tests
         run: pytest tests/scenario -q --junitxml=scenario-results.xml

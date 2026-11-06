@@ -383,10 +383,12 @@ jobs:
         run: |
           total=$(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if (lf==0) {print "0.00"} else {printf "%.2f", 100*lh/lf}}' coverage/lcov.info)
           echo "实测行覆盖率: ${total}%（分母 $(awk -F: '/^LF:/{s+=$2} END{print s}' coverage/lcov.info) 行）"
-          # 90% = 用户授权的最低底线（2026-10-21），不是测量口径放宽：分母仍是
-          # lib + 集成测试 + 真实启动腿的 llvm-cov 全量行，禁止 --lib 窄口径。
+          # 门禁 90%（2026-11-06 复核）：用户策略为理想 95%、不满足时回退最低 90%。
+          # 本仓全量行口径（lib + 集成测试 + 真实启动腿，禁止 --lib 窄口径）实测
+          # 90.68%（run 41395097753），< 95，故按策略落在 90% 底线；提升到 95% 前
+          # 先补测试，不得收窄分母。
           awk -v t="$total" 'BEGIN{exit !(t+0 >= 90)}' || {
-            echo "::error::行覆盖率 ${total}% < 90%（用户授权的最低底线）"
+            echo "::error::行覆盖率 ${total}% < 90%（策略底线）"
             exit 1
           }
       - name: Upload coverage to Codecov

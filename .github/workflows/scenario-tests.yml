@@ -46,8 +46,13 @@ jobs:
 
       - name: Build server binary (protocol features required by scenario suite)
         # 套件覆盖 auth/CLI/MCP/gRPC 能力：仅 --features http 会使 auth 路由
-        # 缺失（login 404 假红）且 CLI/MCP 探针退化为 skip
-        run: cargo build -p vecboost --features http,auth,cli,mcp,grpc
+        # 缺失（login 404 假红）且 CLI/MCP 探针退化为 skip。
+        # candle/db/sqlite 与 scripts/run-scenario-tests.sh 对齐：conftest make_config
+        # 无条件钉 engine_type="candle"（场景资产为 safetensors），未编译 candle 时
+        # 启动期显性拒绝（startup-engine-candle-not-compiled），全部 server profile
+        # 起不来（run 42201785039 起 40+ 连红，90 setup 错误即此原因）；profile
+        # 配置含 [database] url="sqlite::memory:"，需 db+sqlite。
+        run: cargo build -p vecboost --features http,auth,cli,mcp,grpc,candle,db,sqlite
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0

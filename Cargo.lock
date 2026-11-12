@@ -8073,28 +8073,21 @@ dependencies = [
 
 [[package]]
 name = "trait-kit"
-version = "0.5.0-rc.12"
+version = "0.5.0-rc.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a9fa4c077e939f17a6f0bda0fc720ef1af104636f7da4ef2d5d29de9cd200ac"
+checksum = "fb67168334999a77008eae80a9fc4241e2a2c7f8bd9e05bc4d4c989fdcfe9ba5"
 dependencies = [
  "aho-corasick",
  "confers",
  "fancy-regex 0.20.0",
  "fluent-bundle",
- "icu_collator",
- "icu_datetime",
- "icu_decimal",
- "icu_locale",
- "icu_plurals",
  "log",
  "regex",
  "serde",
  "serde_json",
- "sys-locale",
  "toml 1.1.8+spec-1.1.0",
  "tracing",
  "unic-langid",
- "writeable",
 ]
 
 [[package]]
@@ -8427,7 +8420,6 @@ dependencies = [
  "criterion",
  "cudarc",
  "dbnexus",
- "fluent-bundle",
  "futures",
  "garde",
  "garrison",
@@ -8435,7 +8427,6 @@ dependencies = [
  "hex",
  "hf-hub 1.0.0",
  "hound",
- "icu",
  "inklog",
  "limiteron",
  "log",
@@ -8470,11 +8461,9 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trait-kit",
- "unic-langid",
  "utoipa",
  "uuid",
  "whatlang",
- "writeable",
  "xxhash-rust",
  "zeroize",
 ]

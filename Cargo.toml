@@ -36,15 +36,13 @@ serde_json = { workspace = true }
 # Error Handling (base)
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 
-# i18n：fluent-bundle concurrent 双束可入 static + icu 2.4 compiled_data 内置 CLDR
+# i18n：FTL 编译期嵌入 + 轻量文本解析（无 selector/term 语法，无需 fluent-bundle）；
+# sys-locale 供 locale.rs 检测链使用
 sys-locale = { version = "0.3", default-features = false }
-unic-langid = { version = "0.9", default-features = false, features = ["likelysubtags"] }
-fluent-bundle = { version = "0.16", default-features = false }
-icu = { version = "2.4", default-features = false, features = ["compiled_data"] }
-writeable = { version = "0.6", default-features = false }
 
-# trait-kit：reload/confers 热重载 + i18n；20 个 ModuleMeta 均声明 VERSION 供版本协商
-trait-kit = { version = "0.5.0-rc.12", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "i18n", "negotiate"] }
+# trait-kit：reload/confers 热重载；20 个 ModuleMeta 均声明 VERSION 供版本协商
+# （i18n feature 摘除：格式化层 I18nFormatter 在本仓零调用点——"格式化无场景"申报）
+trait-kit = { version = "0.5.0-rc.14", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "negotiate"] }
 
 # 配置：仅保留 toml/env 加载、校验、watch 热重载、加密、schema 导出；其余零接线项裁剪
 confers = { version = "0.6.0-rc.12", default-features = false, features = ["env", "validation", "watch", "encryption", "schema", "typescript-schema", "modules"] }

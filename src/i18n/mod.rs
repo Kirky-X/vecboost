@@ -1,10 +1,18 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! Internationalization (i18n) module — ICU+Fluent based bilingual support.
+//! Internationalization (i18n) module — bilingual support backed by an
+//! embedded FTL text catalog.
 //!
-//! Provides translation functions backed by Project Fluent FTL files.
-//! Supports English (`en`) and Chinese (`zh`) locales.
+//! Provides translation functions resolving against the Project Fluent FTL
+//! files under `locales/` (embedded at compile time). Supports English
+//! (`en`) and Chinese (`zh`) locales. The catalog is parsed with a
+//! lightweight `key = value` reader (fluent single-line semantics — the
+//! files carry no selector/term/function syntax); `{ $name }` placeholders
+//! are substituted from the args map at lookup time. The protocol surface
+//! (`forge-*` keys for CLI `--help` etc.) additionally registers the same
+//! catalog into `sdforge::i18n` so framework-built strings follow the app
+//! locale.
 //!
 //! # Usage
 //!
@@ -22,16 +30,13 @@
 //! let msg = i18n::tr_with_args("error-config", args);
 //! ```
 
-mod bundle;
-mod i18n_impl;
+mod catalog;
 pub mod locale;
 
-pub(crate) use bundle::I18nBundle;
-pub use i18n_impl::{I18nError, I18nFormatter};
+pub(crate) use catalog::{entries_for, protocol_message_keys};
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use unic_langid::LanguageIdentifier;
 
 /// Global i18n state — initialized once at startup.
 static I18N: OnceLock<I18nState> = OnceLock::new();
@@ -69,9 +74,11 @@ pub fn request_locale() -> Option<String> {
     REQUEST_LOCALE.try_with(|lc| lc.clone()).unwrap_or(None)
 }
 
+/// Initialized i18n state: the resolved default locale plus per-locale
+/// message catalogs (locale tag → key → value template).
 struct I18nState {
-    bundle: I18nBundle,
-    default_locale: LanguageIdentifier,
+    default_locale: String,
+    catalogs: HashMap<&'static str, HashMap<String, String>>,
 }
 
 /// Initialize the i18n system.
@@ -81,15 +88,17 @@ struct I18nState {
 pub fn init() {
     I18N.get_or_init(|| {
         let locale_str = locale::detect_locale();
-        let lang_id: LanguageIdentifier = locale_str
-            .parse()
-            .unwrap_or_else(|_| "en".parse().expect("fallback locale"));
 
         log::info!("i18n initialized: locale={}", locale_str);
 
+        let mut catalogs = HashMap::new();
+        for tag in ["en", "zh"] {
+            catalogs.insert(tag, entries_for(tag).into_iter().collect());
+        }
+
         I18nState {
-            bundle: I18nBundle::load(),
-            default_locale: lang_id,
+            default_locale: locale_str,
+            catalogs,
         }
     });
 
@@ -113,17 +122,56 @@ fn sync_sdforge_i18n() {
     if SDFORGE_SYNCED.set(()).is_err() {
         return; // 幂等：仅首次真正注册
     }
+    catalog::ensure_registered();
     sdforge::i18n::set_locale(&current_locale());
-    for key in bundle::protocol_message_keys() {
-        for locale in bundle::SUPPORTED_LOCALES {
-            let value = tr_locale(key, Some(locale));
-            sdforge::i18n::register_translation(locale, key, &value);
+    for key in protocol_message_keys() {
+        for locale in ["en", "zh"] {
+            let value = tr_locale(&key, Some(locale));
+            sdforge::i18n::register_translation(locale, &key, &value);
         }
     }
 }
 
 #[cfg(not(any(feature = "cli", feature = "mcp", feature = "http", feature = "grpc")))]
 fn sync_sdforge_i18n() {}
+
+/// Substitute `{ $name }` placeholders in a catalog template from `args`.
+///
+/// Unknown placeholders keep their original `{ $name }` text (fluent's
+/// "variable not provided" degradation is not needed here: every call site
+/// is statically paired with its template); non-placeholder braces are
+/// emitted as-is. Matches the sdforge host-template substitution shape.
+fn format_template(template: &str, args: &HashMap<String, String>) -> String {
+    if args.is_empty() || !template.contains('{') {
+        return template.to_string();
+    }
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let Some(close_rel) = rest[open..].find('}') else {
+            break;
+        };
+        let inner = rest[open + 1..open + close_rel].trim();
+        match inner.strip_prefix('$').map(str::trim) {
+            Some(name) if !name.is_empty() => {
+                out.push_str(&rest[..open]);
+                match args.get(name) {
+                    Some(value) => out.push_str(value),
+                    // Unknown placeholder: keep the original `{ $name }` text.
+                    None => out.push_str(&rest[open..open + close_rel + 1]),
+                }
+                rest = &rest[open + close_rel + 1..];
+            }
+            _ => {
+                // Not a `{ $name }` placeholder: emit the opening brace as-is.
+                out.push_str(&rest[..open + 1]);
+                rest = &rest[open + 1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
 
 /// Translate a message key.
 ///
@@ -147,12 +195,14 @@ pub fn tr_locale(key: &str, locale_str: Option<&str>) -> String {
     tr_locale_with_args(key, locale_str, None)
 }
 
-/// Core translation function — resolves locale and delegates to bundle.
+/// Core translation function — resolves locale and looks up the catalog.
 ///
 /// Locale resolution priority:
 /// 1. Explicit `locale_str` parameter (if `Some`)
 /// 2. Per-request locale from `REQUEST_LOCALE` task-local (set by HTTP middleware)
 /// 3. Global default locale (set at startup by `init`)
+///
+/// Catalog lookup then falls back `locale` → `en` → the key itself. Never panics.
 fn tr_locale_with_args(
     key: &str,
     locale_str: Option<&str>,
@@ -167,13 +217,12 @@ fn tr_locale_with_args(
     };
 
     let locale = if let Some(s) = locale_str {
-        // Explicit override — highest priority
-        s.parse().unwrap_or_else(|_| state.default_locale.clone())
+        // Explicit override — highest priority; unsupported values fall back
+        // to the default locale (normalize_locale maps unknown tags to "en")
+        locale::normalize_locale(s)
     } else if let Some(req_lc) = request_locale() {
         // Per-request locale from Accept-Language middleware
         req_lc
-            .parse()
-            .unwrap_or_else(|_| state.default_locale.clone())
     } else {
         // Global default
         state.default_locale.clone()
@@ -182,21 +231,29 @@ fn tr_locale_with_args(
     let empty_args = HashMap::new();
     let args_ref = args.as_ref().unwrap_or(&empty_args);
 
-    state.bundle.get_message(key, &locale, args_ref)
+    lookup_in(&state.catalogs, &locale, key, args_ref)
+        .or_else(|| lookup_in(&state.catalogs, "en", key, args_ref))
+        .unwrap_or_else(|| key.to_string())
+}
+
+/// Look up `key` in `locale`'s catalog and render placeholders.
+fn lookup_in(
+    catalogs: &HashMap<&'static str, HashMap<String, String>>,
+    locale: &str,
+    key: &str,
+    args: &HashMap<String, String>,
+) -> Option<String> {
+    catalogs
+        .get(locale)
+        .and_then(|cat| cat.get(key))
+        .map(|template| format_template(template, args))
 }
 
 /// Return the current default locale string.
 pub fn current_locale() -> String {
     I18N.get()
-        .map(|s| s.default_locale.to_string())
-        .unwrap_or_else(|| "en".to_string())
-}
-
-/// Return the current default locale as `LanguageIdentifier`.
-pub fn current_locale_id() -> LanguageIdentifier {
-    I18N.get()
         .map(|s| s.default_locale.clone())
-        .unwrap_or_else(|| "en".parse().expect("fallback locale"))
+        .unwrap_or_else(|| "en".to_string())
 }
 
 /// Helper to construct translation args from `(key, value)` pairs.
@@ -462,14 +519,6 @@ mod tests {
     }
 
     #[test]
-    fn test_current_locale_id_returns_valid_id() {
-        ensure_init();
-        let id = current_locale_id();
-        let s = id.to_string();
-        assert!(s == "en" || s == "zh", "unexpected locale id: {}", s);
-    }
-
-    #[test]
     fn test_tr_locale_with_invalid_locale_str_falls_back() {
         ensure_init();
         // Invalid locale string should fall back to default
@@ -484,6 +533,68 @@ mod tests {
         let args = HashMap::new();
         let result = tr_with_args("health-ok", args);
         assert!(!result.is_empty());
+    }
+
+    // format_template unit tests
+
+    #[test]
+    fn test_format_template_substitutes_known_placeholders() {
+        let mut args = HashMap::new();
+        args.insert("index".to_string(), "0".to_string());
+        args.insert("max".to_string(), "8192".to_string());
+        args.insert("got".to_string(), "9000".to_string());
+        assert_eq!(
+            format_template(
+                "Text at index { $index } exceeds max length { $max } (got { $got })",
+                &args
+            ),
+            "Text at index 0 exceeds max length 8192 (got 9000)"
+        );
+    }
+
+    #[test]
+    fn test_format_template_keeps_unknown_placeholder() {
+        let args = HashMap::new();
+        assert_eq!(
+            format_template("value { $missing } end", &args),
+            "value { $missing } end"
+        );
+    }
+
+    #[test]
+    fn test_format_template_leaves_literal_braces() {
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), "世界".to_string());
+        assert_eq!(
+            format_template("hi { $name } {literal}", &args),
+            "hi 世界 {literal}"
+        );
+        assert_eq!(
+            format_template("no placeholders here", &args),
+            "no placeholders here"
+        );
+    }
+
+    #[test]
+    fn test_format_template_empty_args_returns_template() {
+        let args = HashMap::new();
+        assert_eq!(format_template("a { $x } b", &args), "a { $x } b");
+    }
+
+    // Catalog fallback tests
+
+    #[test]
+    fn test_unsupported_language_subtag_falls_back_to_en_catalog() {
+        ensure_init();
+        // "fr" 归一落 en（normalize_locale 不支持 fr），en 目录命中 health-ok
+        assert_eq!(tr_locale("health-ok", Some("fr")), "OK");
+    }
+
+    #[test]
+    fn test_region_variant_subtag_hits_locale_catalog() {
+        ensure_init();
+        // "zh-CN" 等 region 变体归一命中 zh 目录
+        assert_eq!(tr_locale("health-ok", Some("zh-CN")), "正常");
     }
 
     #[cfg(feature = "http")]

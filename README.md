@@ -480,7 +480,7 @@ cargo audit
 
 ### 📊 测试规模
 
-截至 v0.3.0-rc.3 工作区：单元测试（`src/` 内联，`#[test]` / `#[tokio::test]` 属性计数）2370 个、Rust 集成/专项测试（`tests/` 含子目录，同法计数）129 个测试属性、Python 场景/性能用例 150 个（场景 123 + 性能 27，16 个场景套件）、Criterion 微基准 6 组；CI 硬门禁为行覆盖率不低于 90%（llvm-cov），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
+截至 v0.3.0 工作区：单元测试（`src/` 内联，`#[test]` / `#[tokio::test]` 属性计数）2370 个、Rust 集成/专项测试（`tests/` 含子目录，同法计数）129 个测试属性、Python 场景/性能用例 150 个（场景 123 + 性能 27，16 个场景套件）、Criterion 微基准 6 组；CI 硬门禁为行覆盖率不低于 90%（llvm-cov），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
 
 ---
 
@@ -633,6 +633,7 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
+| 0.3.0 | 2026-11-14 | i18n 引擎退役（自研 FluentBundle → FTL 轻量解析 + sdforge::i18n 注册面统一）、自研依赖 rc 定版稳定（8 库收敛 minor 精度）、场景套件 CI 修复、tokio 特性裁剪、依赖升级（ort rc.15 / uuid 1.29 / redis 1.8） |
 | 0.3.0-rc.3 | 2026-10-20 | onnx-primary 引擎切换（ort 默认、candle opt-in）、审计日志 DB/文件双写、同文并发去重、body 上限修正、swagger-ui/ReDoc 文档面、会话外置 database 后端、Grafana 仪表板、多副本共享语义缓存/封禁清单、`[database] max_connections` 生效 |
 | 0.3.0-rc.2 | 2026-10-15 | 转录（Qwen3-ASR）服务面、翻译/语言检测全协议接入、决策任务优先级队列、自研依赖升级 |
 | 0.3.0-rc.1 | 2026-09-22 | 审计修复与调优开关（安全默认值/登录收敛/XFF/RBAC/缓存键、GGUF/LFRU/WAL/硬件规划/doctor/预热）、PARQ 存储替换 oxcache、"generate" 统一接口 |

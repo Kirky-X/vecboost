@@ -1024,7 +1024,7 @@ tests/
 
 ---
 
-> **📝 最后更新**: 2026-10-29 | **版本**: 0.3.0-rc.3 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-11-14 | **版本**: 0.3.0 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
 
 ---
 

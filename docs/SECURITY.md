@@ -22,8 +22,8 @@ VecBoost 将安全性作为核心设计目标。本文档介绍 VecBoost 的安�
 
 | 版本 | 状态 | 说明 |
 |------|------|------|
-| 0.3.0-rc.3（当前） | ✅ 开发中 | 多副本共享语义缓存/封禁清单、`[database] max_connections` 生效、会话外置；此前 rc 系列已含安全默认值收敛、RBAC 接线、XFF 信任反转等破坏性加固（见 [CHANGELOG](CHANGELOG.md)） |
-| 0.3.0-rc.2 / rc.1 | ✅ 支持 | 转录/翻译/语言检测服务面；rc.1 为破坏性变更版本，升级前必读 [CHANGELOG](CHANGELOG.md#030-rc1---2026-09-22) |
+| 0.3.0（当前） | ✅ 支持 | i18n 引擎退役（FTL 轻量解析）、自研依赖 rc 定版稳定；含 rc 系列全部能力（多副本共享语义缓存/封禁清单、`[database] max_connections` 生效、会话外置、安全默认值收敛、RBAC 接线、XFF 信任反转，见 [CHANGELOG](CHANGELOG.md)） |
+| 0.3.0-rc.3 及更早 rc | ⛔ 已被取代 | rc.1 为破坏性变更版本，升级前必读 [CHANGELOG](CHANGELOG.md#030-rc1---2026-09-22) |
 | 0.2.1 | ✅ 支持 | i18n、Rerank、语义缓存、AES-256-GCM 配置加密 |
 | 0.2.0 | ⚠️ 仅关键修复 | sdforge 四协议、7 库生态接线 |
 | 0.1.0 | ❌ 不再支持 | 初始发布 |

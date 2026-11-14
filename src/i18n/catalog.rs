@@ -10,7 +10,6 @@
 //! 仅为防御性兼容——行解析与完整 Fluent 解析行为一致（无 selector/term
 //! /内置函数语法，`{"{"}` 类转义亦不存在，占位符统一 `{ $name }` 形态）。
 
-use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 // en（2 个，与 locales/en/*.ftl 一一对应）
@@ -152,7 +151,7 @@ pub(crate) fn entries_for(locale: &str) -> Vec<(String, String)> {
 
 /// 指定 locale 的键集合（测试守卫与存在性断言用）。
 #[cfg(test)]
-pub(crate) fn keys_for(locale: &str) -> BTreeSet<String> {
+pub(crate) fn keys_for(locale: &str) -> std::collections::BTreeSet<String> {
     entries_for(locale)
         .into_iter()
         .map(|(key, _)| key)

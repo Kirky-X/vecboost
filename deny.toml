@@ -35,6 +35,29 @@ ignore = [
   # JWT 消费面仅 RS256/HS256 签名验证。退出条件：p256 发布拉入 crypto-bigint >= 0.7.6
   # 的版本后撤销本条并升级（同 .cargo/audit.toml 同 ID 条目口径）。
   { id = "RUSTSEC-2026-0387", reason = "transitive crypto-bigint 0.5.5 via garrison -> jsonwebtoken -> p256 0.13.2 (latest) -> elliptic-curve; fix requires >=0.7.6 but p256 has not released a compatible line yet, no in-series patch exists; no direct curve arithmetic in this crate, JWT consumption is signature verification only" },
+  # RUSTSEC-2026-0450（ocipkg OCI 解包路径穿越，可写/删镜像库外文件，可升级为代码执行）。
+  # 命中链（cargo tree -i ocipkg --all-features 可复现）：candle-core 0.11（optional，
+  # candle 特性）→ intel-mkl-src 0.8.1 的 **build-dependencies** → ocipkg ^0.2.8。
+  # 受害函数 ocipkg::image::load 仅在 intel-mkl-src 构建脚本实际下载并解包 MKL OCI
+  # 归档时执行：CI 全部 job 均未启用 candle（同 RUSTSEC-2026-0367/0368/0369 先例
+  # 口径），本仓本地构建（macOS arm64）不在 MKL 支持面。上游 intel-mkl-src 0.8.1
+  # 已是最新且钉 ocipkg ^0.2.8，ocipkg 本身已 unmaintained（RUSTSEC-2026-0449），
+  # 修复链断裂无法在本仓闭合。退出条件：intel-mkl-src 发布拉入 ocipkg >=0.4.1 的
+  # 版本，或 candle 移除 mkl 路径时删除本条并重跑 cargo deny check 与 cargo audit
+  # 确认全绿。
+  { id = "RUSTSEC-2026-0450", reason = "build-time only: ocipkg 0.2.9 via candle-core (optional, candle feature) -> intel-mkl-src 0.8.1 build-dependencies (newest, pins ^0.2.8); affected fn ocipkg::image::load runs only when the build script downloads/unpacks MKL OCI archives, which never happens in CI (no job enables candle) or local macOS arm64 builds; ocipkg is unmaintained (RUSTSEC-2026-0449) so no fix line exists" },
+  # RUSTSEC-2026-0459（libsqlite3-sys bundled SQLite <3.54.0：本地攻击者以页大小
+  # 不一致的 DB+-wal 文件对诱导打开，普通查询返回未初始化内存；CVE-2026-119375，
+  # CVSS AV:L 本地向量）。命中链：dbnexus 0.6.0 → sea-orm 2.0.4 → sqlx 0.9.0 →
+  # sqlx-sqlite 0.9.0（sqlite-bundled）→ libsqlite3-sys 0.37.0 [bundled]。修复要求
+  # libsqlite3-sys >=0.39.0，但 sqlx-sqlite 0.9.0（已是最新）钉 >=0.30.1,<0.38.0，
+  # 升级链断裂无法在本仓闭合。攻击面不适用：受害条件是进程打开"较不可信方可写"的
+  # DB+wal 文件对——vecboost 的 SQLite 路径全部来自运维配置（[database] url，API
+  # 不接受任何客户端指定的 DB 路径），测试面为 sqlite::memory:（无 WAL）；能向服务
+  # 端数据目录植入 DB/wal 的本地攻击者已等价持有宿主代码执行权（同 0387 先例
+  # "攻击面不成立"口径）。退出条件：sqlx 发布拉入 libsqlite3-sys >=0.39.0 的版本后
+  # 撤销本条并升级（同 .cargo/audit.toml 同 ID 条目口径）。
+  { id = "RUSTSEC-2026-0459", reason = "bundled SQLite <3.54.0 via dbnexus -> sea-orm -> sqlx -> sqlx-sqlite 0.9.0 (newest, pins >=0.30.1,<0.38.0; fix needs >=0.39.0, upstream chain broken); exploit requires the process to open an attacker-writable DB+-wal file pair (AV:L) - vecboost only opens operator-configured database URLs (no client-supplied DB paths via API), tests use sqlite::memory: (no WAL)" },
 ]
 
 [licenses]

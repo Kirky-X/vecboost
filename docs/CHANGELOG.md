@@ -7,7 +7,7 @@
 
 ## 📋 目录
 
-- [未发布](#未发布)
+- [0.3.0 - 2026-11-14](#030---2026-11-14)
 - [0.3.0-rc.3 - 2026-10-20](#030-rc3---2026-10-20)
 - [0.3.0-rc.2 - 2026-10-15](#030-rc2---2026-10-15)
 - [0.3.0-rc.1 - 2026-09-22](#030-rc1---2026-09-22)
@@ -19,18 +19,22 @@
 
 ---
 
-<a id="未发布"></a>
+<a id="030---2026-11-14"></a>
 
-## [未发布]
+## [0.3.0] - 2026-11-14
 
 ### 变更
+- **i18n 引擎退役（refactor）**：自研 FluentBundle 引擎退役（净 -242 行），改为 FTL 轻量解析（`src/i18n/catalog.rs`）+ `sdforge::i18n` 注册面统一。**裁定登记（R-07）**：本仓无 ICU 复数/性别等格式化需求，i18n 保持纯文本翻译面——不启用 trait-kit `i18n` 格式化层（`I18nFormatter` 在本仓零调用点，"格式化无场景"申报）。
 - **依赖升级**：`icu` 2.3 → 2.4、`redis` 1.7 → 1.8（`distributed-redis` 特性）、`uuid` 1.26 → 1.29（http 特性）、`tonic` 0.14.6 → 0.14.8（lock 刷新）、`ort` 2.0.0-rc.14 → rc.15（同 2.0.0 基线 crates.io 最新 rc，版本要求同步）、`character_converter` 版本要求规范化 2.1.5 → 2.1（解析版本不变 2.1.5）。
 - **tokio 1.53 → 1.54 且特性由 `full` 裁剪为显式 8 项**（`rt-multi-thread`/`macros`/`time`/`sync`/`signal`/`fs`/`net`/`io-util`）：全仓 grep 证实 `process`/`io-std`/`parking` 零使用，编译产物不再含无关模块。
 - **examples 的 reqwest 由 `default-tls` 改为 `rustls`**：与主 crate TLS 单栈统一，workspace 构建图不再引入 native-tls。
 - **显式特性去冗余**：移除被同集合其他特性隐含的项——confers `toml`（⊂`modules`）、trait-kit `confers`（⊂`reload`）、dbnexus `cache`（⊂`permission`）与 `pool-health-check`（⊂`failover`）、garrison `web-axum`/`secure-ct-eq`/`cache-memory`/`account-credential`/`listener`/`firewall`/`firewall-ddos`（均被保留特性传递启用，隐含定义已逐条对照 garrison/confers/trait-kit/dbnexus 源码核实）。
-- **CI actions 全量升版并统一 SHA pin**：checkout 统一 v7.0.1、codeql-action v4.39.1、cache v6.1.0、upload-artifact v7.0.2、setup-python v7.1.0、codecov v7.1.1、login-action v4.7.0、gitleaks v3.0.0、zizmor v0.8.0、install-action v2.88.0、crates-io-auth v1.0.6；trivy-action 与 checkov-action 两处浮动 `master` 引用钉到 release tag。
+- **CI actions 全量升版并统一 SHA pin**：checkout 统一 v7.0.1、codeql-action v4.39.1、cache v6.1.0、upload-artifact v7.0.2、setup-python v7.1.0、codecov v7.1.1、login-action v4.7.0、gitleaks v3.0.0、zizmor v0.8.0、install-action v2.88.0、crates-io-auth v1.0.6；trivy-action 与 checkov-action 两处浮动 `master` 引用钉到 release tag。定版前跟进：install-action 2.89.1（#18）、zizmor-action 0.8.1（#17）、checkov-action 12.3139.0（#16）。
+- **场景套件 CI 修复**：scenario 套件构建补 `candle,db,sqlite` 特性（conftest 无条件钉 `engine_type=candle` 且 profile 含 `sqlite::memory:`，缺特性时 server 启动即拒，90 用例 setup 期整块红）；场景套件补装 grpcio；覆盖率门禁按 95/90 策略落 90% 底线。
+- **发布定版动作**：自研依赖全部由 rc 钉版收敛为 minor 精度稳定版——confers `0.6`、trait-kit `0.5`、oxcache `0.5`、dbnexus `0.6`、inklog `0.3`、sdforge `0.5`、limiteron `0.3`、garrison `0.9`。
 
 ### 修复
+- **安全公告处置（豁免登记）**：`RUSTSEC-2026-0450`（ocipkg OCI 解包路径穿越——仅 candle optional → intel-mkl-src **build-deps** 构建期路径，CI 无 job 启用 candle，上游 intel-mkl-src 钉 `^0.2.8` 且 ocipkg 已 unmaintained，修复链断裂）与 `RUSTSEC-2026-0459`（libsqlite3-sys bundled SQLite CVE-2026-119375——sqlx-sqlite 0.9.0 已最新钉 `<0.38`，修复需 `>=0.39` 上游断链；受害条件为打开较不可信方的 DB+wal 文件对，本仓 DB 路径全部来自运维配置且测试面 `sqlite::memory:` 无 WAL，攻击面不成立）按仓内既有判据（不可达路径/攻击面不适用可豁免）登记 deny.toml + `.cargo/audit.toml` 双文件豁免，均附退出条件。
 - **ort load-dynamic 默认 dylib 路径按目标平台选择**（新增 `src/engine/session.rs` 的 `ort_dylib_default`：Linux `.so` / macOS `.dylib` / Windows `.dll`）：此前 8 处测试侧硬编码 `libonnxruntime.so`，在 macOS 上指向 ELF 文件 dlopen 失败。`3rdparty/onnxruntime/README.md` 增补 macOS arm64 dylib 放置说明。
 - **`uuid_like_id` 追加进程内单调序号**（3 位数字后缀，`err-<u128>` 格式契约不变）：macOS 实时钟 μs 级粒度下同一 tick 连续调用不再生成重复 error id。
 - **clippy::collapsible_if ×2**（`src/device/thread_tune.rs`）按 clippy 1.99 建议折叠为 let-chains；symlink 越界测试改为自建根外目标（原 `/etc/hostname` 为 Linux 特有路径，macOS 上 canonicalize 先报 ENOENT）。

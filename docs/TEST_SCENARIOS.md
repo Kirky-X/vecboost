@@ -1,6 +1,6 @@
 # 🧪 VecBoost 测试场景矩阵
 
-> 适用版本：VecBoost **0.3.0-rc.3**（workspace，Rust edition 2024 / `rust-version = 1.91`）。
+> 适用版本：VecBoost **0.3.0**（workspace，Rust edition 2024 / `rust-version = 1.91`）。
 > 用途：穷举 vecboost 的测试栈职责划分与全部验收场景，回答"该把测试写在哪里"。
 > 编写依据（只读核对）：`tests/scenario/*.py`（16 个套件及 docstring 中的 R-* 场景 ID）、`tests/*.rs`、`tests/perf/`、`benches/`、`.github/workflows/`（health-check / feature-matrix / scenario-tests）、`scripts/run-scenario-tests.sh`、`tests/scenario/conftest.py`。
 > 所有套件名与场景 ID 均经 `grep` 核实存在。

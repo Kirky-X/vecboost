@@ -21,6 +21,7 @@ import time
 
 from conftest import (
     M1_PATH,
+    PROJECT_ROOT,
     RUN_DIR,
     http_post,
     make_config,
@@ -43,7 +44,7 @@ def test_lc02_sigint_graceful_shutdown():
     (d / "config" / "config.toml").write_text(make_config(9142, model_path=M1_PATH))
     log = open(d / "server.log", "ab")
     try:
-        proc = subprocess.Popen(["/home/kirky/projects/vecboost/target/debug/vecboost"],
+        proc = subprocess.Popen([str(PROJECT_ROOT / "target" / "debug" / "vecboost")],
                                 cwd=d, stdout=log, stderr=subprocess.STDOUT)
     finally:
         # 子进程已 dup 该 fd,关闭父副本避免 ResourceWarning(零告警门禁)
@@ -84,7 +85,7 @@ def test_lc03_graceful_shutdown_under_load():
     (d / "config" / "config.toml").write_text(make_config(9143, model_path=M1_PATH))
     log = open(d / "server.log", "ab")
     try:
-        proc = subprocess.Popen(["/home/kirky/projects/vecboost/target/debug/vecboost"],
+        proc = subprocess.Popen([str(PROJECT_ROOT / "target" / "debug" / "vecboost")],
                                 cwd=d, stdout=log, stderr=subprocess.STDOUT)
     finally:
         # 子进程已 dup 该 fd,关闭父副本避免 ResourceWarning(零告警门禁)

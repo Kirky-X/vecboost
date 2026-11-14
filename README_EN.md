@@ -442,7 +442,7 @@ cargo audit
 
 ### 📊 Test Scale
 
-As of the v0.3.0-rc.3 workspace: 2370 inline unit tests in `src/` (counted as `#[test]` / `#[tokio::test]` attributes), 129 Rust integration/specialized test attributes (`tests/`, subdirectories included, same counting method), 150 Python scenario/performance cases (123 scenario + 27 performance, 16 scenario suites), and 6 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 90% (llvm-cov), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
+As of the v0.3.0 workspace: 2370 inline unit tests in `src/` (counted as `#[test]` / `#[tokio::test]` attributes), 129 Rust integration/specialized test attributes (`tests/`, subdirectories included, same counting method), 150 Python scenario/performance cases (123 scenario + 27 performance, 16 scenario suites), and 6 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 90% (llvm-cov), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
 
 ---
 
@@ -590,6 +590,7 @@ The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (followin
 
 | Version | Date | Highlights |
 |------|------|------|
+| 0.3.0 | 2026-11-14 | i18n engine retirement (self-maintained FluentBundle → lightweight FTL parsing + unified sdforge::i18n registration), self-maintained deps stabilized from rc to minor precision, scenario-suite CI fixes, tokio feature trimming, dependency upgrades (ort rc.15 / uuid 1.29 / redis 1.8) |
 | 0.3.0-rc.3 | 2026-10-20 | onnx-primary engine switch (ort default, candle opt-in), audit-log DB/file dual write, in-flight dedup for identical requests, body-limit fix, swagger-ui/ReDoc docs surface, externalized database session backend, Grafana dashboard, multi-replica shared semantic cache / ban list, `[database] max_connections` now effective |
 | 0.3.0-rc.2 | 2026-10-15 | Transcribe (Qwen3-ASR) service surface, translation/language-detection across all protocols, decision-task priority queue, self-maintained dependency upgrades |
 | 0.3.0-rc.1 | 2026-09-22 | Audit remediation and tuning switches (secure defaults / login convergence / XFF / RBAC / cache keys, GGUF/LFRU/WAL/hardware planning/doctor/warmup), PARQ storage replacing oxcache, unified "generate" interface |

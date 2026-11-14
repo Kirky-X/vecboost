@@ -1603,6 +1603,7 @@ ip_whitelist = ["127.0.0.1"]
 
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
+| `0.3.0` | 2026-11-14 | i18n 引擎退役（自研 FluentBundle → FTL 轻量解析 + sdforge::i18n 注册面统一）、自研依赖 rc 定版稳定、tokio 特性裁剪、依赖升级（ort rc.15 / uuid 1.29 / redis 1.8） |
 | `0.3.0-rc.3` | 2026-10-20 | 多副本共享语义缓存/封禁清单（`distributed-redis`）、`[database] max_connections` 与 `connect_timeout_secs` 真正生效、认证会话外置 `session_backend = "database"`、onnx-primary 主引擎切换、审计日志 DB/文件双写、同文并发去重 |
 | `0.3.0-rc.2` | 2026-10-15 | 转录（Qwen3-ASR）服务面、翻译与语言检测全协议接入、决策任务优先级队列 |
 | `0.3.0-rc.1` | 2026-09-22 | 转录（Qwen3-ASR）接口、翻译与语言检测全协议接入、PARQ 存储、统一 generate 接口 |
@@ -1624,4 +1625,4 @@ ip_whitelist = ["127.0.0.1"]
 
 ---
 
-> **📝 最后更新**: 2026-10-29 | **版本**: 0.3.0-rc.3 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-11-14 | **版本**: 0.3.0 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

@@ -42,4 +42,17 @@ ignore = [
     # RUSTSEC-2024-0436（paste unmaintained）：proc-macro 系（gemm/前向宏）
     # 传递引入，编译期产物无运行时面。
     "RUSTSEC-2024-0436",
+    # RUSTSEC-2026-0450（ocipkg OCI 解包路径穿越）：candle（optional，CI 无 job
+    # 启用）→ intel-mkl-src 0.8.1 build-deps → ocipkg ^0.2.8；受害函数仅构建脚本
+    # 下载 MKL 归档时执行，本地 macOS arm64 不在 MKL 面；intel-mkl-src 已最新且
+    # ocipkg unmaintained（RUSTSEC-2026-0449），修复链断裂。理由与退出条件同
+    # deny.toml 同 ID 条目。
+    "RUSTSEC-2026-0450",
+    # RUSTSEC-2026-0459（libsqlite3-sys bundled SQLite CVE-2026-119375：本地
+    # DB+wal 文件对诱导查询返回未初始化内存，AV:L）：sqlx-sqlite 0.9.0（最新）
+    # 钉 >=0.30.1,<0.38.0，修复需 libsqlite3-sys >=0.39.0，上游断链；vecboost 仅
+    # 打开运维配置的 DB 路径（API 不接受客户端指定 DB 路径），测试面
+    # sqlite::memory: 无 WAL，受害条件（打开较不可信方 DB+wal 对）不成立。
+    # sqlx 发布拉入 libsqlite3-sys >=0.39.0 后撤销。
+    "RUSTSEC-2026-0459",
 ]

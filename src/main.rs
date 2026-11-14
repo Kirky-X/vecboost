@@ -2377,19 +2377,24 @@ async fn dispatch_non_server_modes(
         return Ok(true);
     }
 
+    // 块包裹：clippy 1.100 needless_bool 对裸 tail 形态（if…return Ok(true) + Ok(false)）
+    // 给出的直接化简在 cli 关闭构建下不成立（cfg 移除后函数失去尾表达式），故保留
+    // 显式分支、仅隔离 tail 形态；块内 if 不再构成 bool 尾模式，双 cfg 态编译等价。
     #[cfg(feature = "cli")]
-    if run_cli_command(
-        service.clone(),
-        rerank_service.clone(),
-        decision_service.clone(),
-        *detect_service,
-        translate_service.clone(),
-        transcribe_service.clone(),
-        _filtered_args.to_vec(),
-    )
-    .await?
     {
-        return Ok(true);
+        if run_cli_command(
+            service.clone(),
+            rerank_service.clone(),
+            decision_service.clone(),
+            *detect_service,
+            translate_service.clone(),
+            transcribe_service.clone(),
+            _filtered_args.to_vec(),
+        )
+        .await?
+        {
+            return Ok(true);
+        }
     }
 
     Ok(false)

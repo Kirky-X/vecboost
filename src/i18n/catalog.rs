@@ -163,6 +163,13 @@ pub(crate) fn keys_for(locale: &str) -> std::collections::BTreeSet<String> {
 /// 这些是交给 sdforge 运行时翻译钩子的 i18n 键（`CliBuilder` 构建
 /// `--help` 时经 `translate_or_fallback` 解析）。从 FTL 本身派生清单维持
 /// 单一事实源：新增 `forge-*` 消息即自动注册，无需第二份列表。
+///
+/// 仅协议面构建消费（mod.rs 的 sync 变体，同 cfg 门）；无协议面构建下
+/// dead_code 豁免——与 ensure_registered/REGISTERED 同口径。
+#[cfg_attr(
+    not(any(feature = "cli", feature = "mcp", feature = "http", feature = "grpc")),
+    allow(dead_code)
+)]
 pub(crate) fn protocol_message_keys() -> Vec<String> {
     parse_ftl_entries(EN_MESSAGES)
         .into_iter()
@@ -171,17 +178,26 @@ pub(crate) fn protocol_message_keys() -> Vec<String> {
         .collect()
 }
 
+/// 注册幂等守卫：仅协议面构建消费（`ensure_registered` 的 cfg 门体），
+/// 无协议面构建下随函数一并 dead_code 豁免。
+#[cfg_attr(
+    not(any(feature = "cli", feature = "mcp", feature = "http", feature = "grpc")),
+    allow(dead_code)
+)]
 static REGISTERED: OnceLock<()> = OnceLock::new();
 
 /// 把两份 FTL 的条目逐键注册进 sdforge 注册表（协议面消费），单次执行。
 ///
-/// 消费者只在 `sync_sdforge_i18n` 的协议面变体内（sdforge 为 optional
-/// 依赖，仅 cli/grpc/http/mcp feature 编译），由其 cfg 门豁免 dead_code。
+/// sdforge 为 optional 依赖（仅 cli/grpc/http/mcp feature 链接），注册体必须
+/// 同 cfg 门——无条件调用在 no-default-features 构建下 E0433（unresolved
+/// crate）；函数本身保留（消费方 `sync_sdforge_i18n` 同门），由 cfg_attr
+/// 豁免协议面未启用时的 dead_code。
 #[cfg_attr(
     not(any(feature = "cli", feature = "mcp", feature = "http", feature = "grpc")),
     allow(dead_code)
 )]
 pub(crate) fn ensure_registered() {
+    #[cfg(any(feature = "cli", feature = "mcp", feature = "http", feature = "grpc"))]
     REGISTERED.get_or_init(|| {
         for locale in ["en", "zh"] {
             for (key, value) in entries_for(locale) {

@@ -33,7 +33,11 @@
 mod catalog;
 pub mod locale;
 
-pub(crate) use catalog::{entries_for, protocol_message_keys};
+pub(crate) use catalog::entries_for;
+// protocol_message_keys 仅协议面 sync（cli/grpc/http/mcp feature）消费，
+// 无协议面构建下 re-export 不可用（unused_imports 在零告警门禁下即错误）。
+#[cfg(any(feature = "cli", feature = "mcp", feature = "http", feature = "grpc"))]
+pub(crate) use catalog::protocol_message_keys;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;

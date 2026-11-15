@@ -178,11 +178,11 @@ cp config/config.toml config/config_custom.toml
 
 > **✅ Success**: the service starts at `http://127.0.0.1:9002` by default (secure default: loopback only).
 
-> **🐳 Docker**: `docker build -t vecboost:latest .`, then run with `config/` and `models/` mounted; Docker Compose and Kubernetes deployment are covered in the [📖 User Guide · Docker deployment](docs/USER_GUIDE.md#-docker-部署).
+> **🐳 Docker**: `docker build -t vecboost:latest .`, then run with `config/` and `models/` mounted; Docker Compose and Kubernetes deployment are covered in the [📖 User Guide · Docker deployment](docs/cn/USER_GUIDE.md#-docker-部署).
 
 ### 💡 Minimal Example
 
-The following example is adapted from [`examples/http/embed_api.rs`](examples/http/embed_api.rs) and generates embeddings over HTTP (full endpoints in the [📘 API Reference](docs/API_REFERENCE.md)):
+The following example is adapted from [`examples/http/embed_api.rs`](examples/http/embed_api.rs) and generates embeddings over HTTP (full endpoints in the [📘 API Reference](docs/cn/API_REFERENCE.md)):
 
 <details>
 <summary>📄 Code · bash</summary>
@@ -234,18 +234,18 @@ cargo run --features cli -- embed --req '{"text":"Hello, world!"}'
 
 ## 🔌 API Usage
 
-VecBoost generates its four protocol interfaces from single-source handlers via `sdforge` (one source per domain under `src/api/`: embedding / rerank / decisions / translate / detect). All endpoints, parameters, request/response examples, the gRPC method table, and message types are documented in the [📘 API Reference](docs/API_REFERENCE.md); summary:
+VecBoost generates its four protocol interfaces from single-source handlers via `sdforge` (one source per domain under `src/api/`: embedding / rerank / decisions / translate / detect). All endpoints, parameters, request/response examples, the gRPC method table, and message types are documented in the [📘 API Reference](docs/cn/API_REFERENCE.md); summary:
 
 - **HTTP/REST**: `/api/v1/*` provides embedding (single / batch / file), similarity, semantic search, rerank, decision answering (choice/score/noul), translation (multi-pair + auto detection), transcription (16kHz speech samples to text, `transcribe` feature), language detection, model management, and health endpoints;
 - **OpenAI-compatible**: `POST /v1/embeddings`, responding in the OpenAI format (`object` / `data` / `usage`) with `encoding_format=base64` support;
 - **Matryoshka dimensionality reduction**: pass `dimensions` (256/512/1024, etc.) to `/v1/embeddings` for smaller, faster vectors; truncated vectors are automatically L2 re-normalized to keep cosine similarity correct;
 - **gRPC**: with the `grpc` feature, 17 `vecboost.*` methods are exposed on port 50051 (configurable) over the sdforge unified Call protocol — no hand-written proto — including `vecboost.translate` / `vecboost.detect`, with JWT auth, rate limiting, max connections, and timeouts all configurable;
-- **MCP**: the `mcp` feature exposes tools registered by `#[forge(tool_name=…)]` to LLMs over stdio (`vecboost --mcp`) — tool names are `embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models`, etc. (MCP `tool_name` is not the HTTP endpoint name; the full list is in the [📘 API Reference](docs/API_REFERENCE.md));
+- **MCP**: the `mcp` feature exposes tools registered by `#[forge(tool_name=…)]` to LLMs over stdio (`vecboost --mcp`) — tool names are `embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models`, etc. (MCP `tool_name` is not the HTTP endpoint name; the full list is in the [📘 API Reference](docs/cn/API_REFERENCE.md));
 - **CLI**: the `cli` feature provides the embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect / transcribe subcommands (see [💡 Minimal Example](#-minimal-example); the `transcribe` subcommand takes a WAV file path and reads 16kHz mono samples);
 - **Inference engines**: ONNX Runtime (default, `onnx` feature enabled via default features) and Candle (`candle` feature opt-in fallback), switched via the `EngineFactory::create` factory; the `[model]` `engine_type` / `task` configuration drives engine and task-dimension selection — `task = "embedding"` (default) / `task = "decision"` (Laya decision pipeline) / `task = "translate"` (seq2seq translation, onnx only) / `task = "transcribe"` (Qwen3-ASR transcription, `transcribe` feature); endpoints of non-current tasks respond with 400 Unsupported task (bundle layouts in [`config/config.toml`](config/config.toml) `[model]` comments, translation pairs in the `[translation]` section);
 - **Observability & operations**: `/metrics` (Prometheus), `/health` (liveness) and `/health?depth=full` (real readiness probe), `/swagger-ui/` (interactive OpenAPI docs, requires the `swagger-ui` feature; spec JSON at `/api-docs/openapi.json`); read-only diagnostics with `vecboost doctor` (config / tokenizer / cache / threads / GPU / model integrity; exit code 1 on FAIL).
 
-Translation and language detection request examples (fields match the [API Reference](docs/API_REFERENCE.md)):
+Translation and language detection request examples (fields match the [API Reference](docs/cn/API_REFERENCE.md)):
 
 <details>
 <summary>📄 Code · bash</summary>
@@ -262,7 +262,7 @@ curl -X POST http://localhost:9002/api/v1/detect \
 
 </details>
 
-Detection response (`language: null` + `is_reliable: false` means "undetectable" — digits-only / too-short text; explicitly reported, never a guessed language; full error semantics in the [API Reference](docs/API_REFERENCE.md#翻译translate)):
+Detection response (`language: null` + `is_reliable: false` means "undetectable" — digits-only / too-short text; explicitly reported, never a guessed language; full error semantics in the [API Reference](docs/cn/API_REFERENCE.md#翻译translate)):
 
 <details>
 <summary>📄 Code · json</summary>
@@ -283,7 +283,7 @@ Detection response (`language: null` + `is_reliable: false` means "undetectable"
 
 > **🔧 Output post-processing & timeout**: translation applies deterministic post-processing at the engine exit (shared by the service layer and library users) — Traditional→Simplified normalization for `target=zh`, repair of URL protocol separators and LaTeX escape symbols; model-level mistranslations are fixed by the literal replacement table `[[translation.pairs.output_fixes]]` (in declaration order), see the `[translation]` section of [`config/config.toml`](config/config.toml). The HTTP global request timeout is configured via `[server] request_timeout_seconds` (CPU seq2seq translation of paper-length abstracts takes 15-130+s; `config/config.toml` sets it to 300s explicitly).
 
-Interactive OpenAPI docs (Swagger UI): build with `cargo build --features swagger-ui` and open `http://localhost:9002/swagger-ui/`; spec JSON: `/api-docs/openapi.json` (single binary, one build; the root path `/api-docs` serves no UI). Interactive ReDoc under the same feature is served at `/redoc` (rendered via the version-pinned, SRI-checked jsdelivr CDN; unavailable when the browser is offline). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/PERFORMANCE.md#-新增指标).
+Interactive OpenAPI docs (Swagger UI): build with `cargo build --features swagger-ui` and open `http://localhost:9002/swagger-ui/`; spec JSON: `/api-docs/openapi.json` (single binary, one build; the root path `/api-docs` serves no UI). Interactive ReDoc under the same feature is served at `/redoc` (rendered via the version-pinned, SRI-checked jsdelivr CDN; unavailable when the browser is offline). Stage-level metrics (batching / dedup / per-stage latency) are in the [⚡ Performance Guide · New metrics](docs/cn/PERFORMANCE.md#-新增指标).
 
 ### 🔖 Feature Flags
 
@@ -320,7 +320,7 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 
 > **📦 Built-in dependencies**: `confers` (config), `inklog` (logging), `oxcache` (cache), `limiteron` (rate limiting), and `trait-kit` (module registry) are mandatory dependencies that are always enabled — no feature flag needed. `sdforge` is enabled by any protocol feature (`http`/`grpc`/`cli`/`mcp`).
 
-> **🧪 Experiment path**: The local transcription experiment harness (standalone crate, binary `transcribe-own`) has been converged into a thin-shell CLI — inference goes through the main-crate facade `vecboost::transcribe`, with the py-torch baseline path retained; **this directory is local-only and not tracked in git**. The productized implementation lives in `src/engine/transcribe/` — see [🧹 Maintenance Norms](docs/MAINTENANCE.md) for the CLI contract summary and consumption norms.
+> **🧪 Experiment path**: The local transcription experiment harness (standalone crate, binary `transcribe-own`) has been converged into a thin-shell CLI — inference goes through the main-crate facade `vecboost::transcribe`, with the py-torch baseline path retained; **this directory is local-only and not tracked in git**. The productized implementation lives in `src/engine/transcribe/` — see [🧹 Maintenance Norms](docs/cn/MAINTENANCE.md) for the CLI contract summary and consumption norms.
 
 ---
 
@@ -328,9 +328,9 @@ The table below maps one-to-one to the `[features]` section of `Cargo.toml`; `de
 
 The default config path is `config/config.toml` (`--config <path>` selects another; a missing explicit path fails fast with exit code 2; the repo ships `config_full.toml` / `config_minimal.toml` presets). Environment variables with the `VECBOOST_` prefix override the config file, and secrets (`VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD`) must be provided via env vars; config file changes are validated and logged, taking effect after restart.
 
-Per-key options and defaults for every config section (server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device / translation / transcribe), the full environment-variable table, and a complete example config are documented in the [📖 User Guide · Configuration](docs/USER_GUIDE.md#-配置); you can also read [`config/config.toml`](config/config.toml) directly.
+Per-key options and defaults for every config section (server / model / embedding / rerank / monitoring / auth / rate_limit / audit / database / logging / pipeline.worker / semantic_cache / device / translation / transcribe), the full environment-variable table, and a complete example config are documented in the [📖 User Guide · Configuration](docs/cn/USER_GUIDE.md#-配置); you can also read [`config/config.toml`](config/config.toml) directly.
 
-> **⚠️ Note**: the `[flow_control]` and `[cache]` TOML sections are not parsed in the current version (legacy section names); rate limiting uses `[rate_limit]`, caching uses `[embedding]` and `[semantic_cache]`. See the [❓ FAQ](docs/FAQ.md#-配置与部署).
+> **⚠️ Note**: the `[flow_control]` and `[cache]` TOML sections are not parsed in the current version (legacy section names); rate limiting uses `[rate_limit]`, caching uses `[embedding]` and `[semantic_cache]`. See the [❓ FAQ](docs/cn/FAQ.md#-配置与部署).
 
 ---
 
@@ -341,20 +341,20 @@ Per-key options and defaults for every config section (server / model / embeddin
 
 | Document | Description |
 |------|------|
-| [📖 User Guide](docs/USER_GUIDE.md) | Complete tutorial from installation to advanced usage (incl. deployment) |
-| [📘 API Reference](docs/API_REFERENCE.md) | Full REST / gRPC / OpenAI-compatible interface documentation |
-| [🏗️ Architecture](docs/ARCHITECTURE.md) | Design principles, module layout, and data flow |
-| [⚡ Performance Guide](docs/PERFORMANCE.md) | Benchmark data, tuning-switch registry, and experiment discipline |
-| [🔒 Security](docs/SECURITY.md) | Security design, supported versions, and vulnerability reporting |
-| [❓ FAQ](docs/FAQ.md) | Frequently asked questions |
-| [🧪 Test Scenarios](docs/TEST_SCENARIOS.md) | Test-stack responsibilities and the scenario matrix |
-| [📋 Changelog](docs/CHANGELOG.md) | Release-by-release change log |
-| [🤝 Contributing](docs/CONTRIBUTING.md) | How to contribute |
-| [🧹 Maintenance Norms](docs/MAINTENANCE.md) | Cross-change standing constraints: transcribe consumption surface, CLI contract, retired-switch discipline, deprecation-doc governance |
+| [📖 User Guide](docs/cn/USER_GUIDE.md) | Complete tutorial from installation to advanced usage (incl. deployment) |
+| [📘 API Reference](docs/cn/API_REFERENCE.md) | Full REST / gRPC / OpenAI-compatible interface documentation |
+| [🏗️ Architecture](docs/cn/ARCHITECTURE.md) | Design principles, module layout, and data flow |
+| [⚡ Performance Guide](docs/cn/PERFORMANCE.md) | Benchmark data, tuning-switch registry, and experiment discipline |
+| [🔒 Security](docs/cn/SECURITY.md) | Security design, supported versions, and vulnerability reporting |
+| [❓ FAQ](docs/cn/FAQ.md) | Frequently asked questions |
+| [🧪 Test Scenarios](docs/cn/TEST_SCENARIOS.md) | Test-stack responsibilities and the scenario matrix |
+| [📋 Changelog](docs/cn/CHANGELOG.md) | Release-by-release change log |
+| [🤝 Contributing](docs/cn/CONTRIBUTING.md) | How to contribute |
+| [🧹 Maintenance Norms](docs/cn/MAINTENANCE.md) | Cross-change standing constraints: transcribe consumption surface, CLI contract, retired-switch discipline, deprecation-doc governance |
 
 </details>
 
-> **ℹ️ Note**: `docs/benchmarks/` (benchmark archive), `docs/reviews/` (review ledgers, including `I18N_MISSING_AUDIT.md` and `TRANSLATION_REVIEW_LEDGER.md`) and `docs-transcribe/` are **local-only** directories (see `.gitignore`); they are not committed and do not exist in a clean clone. Key benchmark numbers are inlined in the [⚡ Performance Guide](docs/PERFORMANCE.md).
+> **ℹ️ Note**: `docs/benchmarks/` (benchmark archive), `docs/reviews/` (review ledgers, including `I18N_MISSING_AUDIT.md` and `TRANSLATION_REVIEW_LEDGER.md`) and `docs-transcribe/` are **local-only** directories (see `.gitignore`); they are not committed and do not exist in a clean clone. Key benchmark numbers are inlined in the [⚡ Performance Guide](docs/cn/PERFORMANCE.md).
 
 ---
 
@@ -385,7 +385,7 @@ cargo run -p vecboost-examples --bin onnx --features onnx
 
 VecBoost uses a modular ecosystem architecture: `trait-kit` wires modules through a typestate module registry (`Kit<Unbuilt> → Kit<Ready>`); `src/registry/` has 20 production `ModuleMeta` implementations plus 3 test fixtures (several are feature-gated, e.g. under `auth`), `sdforge` generates the four protocol bindings from the single source `src/api/embedding.rs`, inference is abstracted behind `EngineFactory` to the Candle / ONNX engines, and requests flow through a priority queue and time-window batching into the inference pipeline.
 
-The 7-library ecosystem (trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge) versions and responsibilities, the module dependency graph, data flow, and the cache / security / deployment architecture and extension points are documented in the [🏗️ Architecture document](docs/ARCHITECTURE.md).
+The 7-library ecosystem (trait-kit / confers / inklog / oxcache / limiteron / dbnexus / sdforge) versions and responsibilities, the module dependency graph, data flow, and the cache / security / deployment architecture and extension points are documented in the [🏗️ Architecture document](docs/cn/ARCHITECTURE.md).
 
 ---
 
@@ -393,11 +393,11 @@ The 7-library ecosystem (trait-kit / confers / inklog / oxcache / limiteron / db
 
 ### 🎯 Testing Strategy
 
-The test stack has six layers: inline unit tests in `src/`, integration tests in `tests/integration/`, specialized integration tests (doctor / gRPC E2E / model snapshot regression / quantization quality gate / SDK matrix), real-service scenario tests in `tests/scenario/*.py` (16 pytest suites), performance regression thresholds in `tests/perf/`, and 6 Criterion microbenchmark suites in `benches/`. The `TEST_MODE` environment variable controls the test engine (`mock` default / `light` / `full`). Layer responsibilities, the exhaustive scenario matrix, and the CI workflow mapping are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
+The test stack has six layers: inline unit tests in `src/`, integration tests in `tests/integration/`, specialized integration tests (doctor / gRPC E2E / model snapshot regression / quantization quality gate / SDK matrix), real-service scenario tests in `tests/scenario/*.py` (16 pytest suites), performance regression thresholds in `tests/perf/`, and 6 Criterion microbenchmark suites in `benches/`. The `TEST_MODE` environment variable controls the test engine (`mock` default / `light` / `full`). Layer responsibilities, the exhaustive scenario matrix, and the CI workflow mapping are in [🧪 Test Scenarios](docs/cn/TEST_SCENARIOS.md).
 
 ### ⚡ Commands (identical to CI)
 
-The commands below are extracted from `.github/workflows/health-check.yml` (Health Check), `feature-matrix.yml`, `scenario-tests.yml`, and `docs/CONTRIBUTING.md`. Dependency-source note: the 7-library ecosystem is currently sourced entirely from the crates.io registry (`Cargo.toml` has no `path =` dependencies and no `[patch]`; `Cargo.lock` records `source = "registry+https://github.com/rust-lang/crates.io-index"`). Gate commands should still be scoped with `-p vecboost -p vecboost-examples` to avoid pulling other workspace members' intermediate states into the gauntlet.
+The commands below are extracted from `.github/workflows/health-check.yml` (Health Check), `feature-matrix.yml`, `scenario-tests.yml`, and `docs/cn/CONTRIBUTING.md`. Dependency-source note: the 7-library ecosystem is currently sourced entirely from the crates.io registry (`Cargo.toml` has no `path =` dependencies and no `[patch]`; `Cargo.lock` records `source = "registry+https://github.com/rust-lang/crates.io-index"`). Gate commands should still be scoped with `-p vecboost -p vecboost-examples` to avoid pulling other workspace members' intermediate states into the gauntlet.
 
 <details>
 <summary>📄 Code · bash</summary>
@@ -442,13 +442,13 @@ cargo audit
 
 ### 📊 Test Scale
 
-As of the v0.3.0 workspace: 2370 inline unit tests in `src/` (counted as `#[test]` / `#[tokio::test]` attributes), 129 Rust integration/specialized test attributes (`tests/`, subdirectories included, same counting method), 150 Python scenario/performance cases (123 scenario + 27 performance, 16 scenario suites), and 6 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 90% (llvm-cov), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/TEST_SCENARIOS.md).
+As of the v0.3.0 workspace: 2370 inline unit tests in `src/` (counted as `#[test]` / `#[tokio::test]` attributes), 129 Rust integration/specialized test attributes (`tests/`, subdirectories included, same counting method), 150 Python scenario/performance cases (123 scenario + 27 performance, 16 scenario suites), and 6 Criterion microbenchmark suites; the CI hard gate is line coverage no lower than 90% (llvm-cov), and Python scenario tests run as a nightly scheduled job (UTC 03:00) that does not block PRs. Per-item statistics and the scenario matrix are in [🧪 Test Scenarios](docs/cn/TEST_SCENARIOS.md).
 
 ---
 
 ## 📊 Performance
 
-Benchmark data comes from the measured `docs/benchmarks/` archive (criterion; that directory is **local-only** and git-ignored, so it does not exist in a clean clone): SIMD vector similarity is up to **3.06x** faster than the scalar baseline (~341.7 ns for 1024-dim cosine), exact semantic-cache hits take ~10 ns, and candle single-text embedding is **4.0x** faster with `--features mkl`. Full benchmark tables, performance design highlights (time-window batching / in-batch dedup / SIMD / thread tuning / jemalloc), GGUF quantization and the tuning-switch registry are in the [⚡ Performance Guide](docs/PERFORMANCE.md).
+Benchmark data comes from the measured `docs/benchmarks/` archive (criterion; that directory is **local-only** and git-ignored, so it does not exist in a clean clone): SIMD vector similarity is up to **3.06x** faster than the scalar baseline (~341.7 ns for 1024-dim cosine), exact semantic-cache hits take ~10 ns, and candle single-text embedding is **4.0x** faster with `--features mkl`. Full benchmark tables, performance design highlights (time-window batching / in-batch dedup / SIMD / thread tuning / jemalloc), GGUF quantization and the tuning-switch registry are in the [⚡ Performance Guide](docs/cn/PERFORMANCE.md).
 
 ### 🧭 Engine selection: why onnxruntime is the primary engine (measured evidence)
 
@@ -503,15 +503,15 @@ Benchmark data comes from the measured `docs/benchmarks/` archive (criterion; th
 
 ### 🔒 Security Design
 
-VecBoost is secure by default: the factory config binds to loopback only, and non-loopback binding with `auth.enabled=false` refuses to start (the `VECBOOST_ALLOW_INSECURE=1` escape hatch logs an ERROR); authentication and authorization build on garrison (JWT + CSRF + RBAC admin role + TOTP + account lockout), plus XFF trust inversion, file-path allowed roots, input length limits, AES-256-GCM config encryption, audit logging, and i18n bilingual error masking. Mechanism-level details are in the [🔒 Security document](docs/SECURITY.md).
+VecBoost is secure by default: the factory config binds to loopback only, and non-loopback binding with `auth.enabled=false` refuses to start (the `VECBOOST_ALLOW_INSECURE=1` escape hatch logs an ERROR); authentication and authorization build on garrison (JWT + CSRF + RBAC admin role + TOTP + account lockout), plus XFF trust inversion, file-path allowed roots, input length limits, AES-256-GCM config encryption, audit logging, and i18n bilingual error masking. Mechanism-level details are in the [🔒 Security document](docs/cn/SECURITY.md).
 
 ### 🔗 Supply Chain & Gates
 
-`cargo audit`, `cargo deny check`, CodeQL, Trivy/Checkov image scanning, gitleaks secret scanning, and pre-commit hooks run both in CI and locally; the full list and triage policy are in the [🔒 Security document · Supply chain & gates](docs/SECURITY.md#-供应链与安全门禁).
+`cargo audit`, `cargo deny check`, CodeQL, Trivy/Checkov image scanning, gitleaks secret scanning, and pre-commit hooks run both in CI and locally; the full list and triage policy are in the [🔒 Security document · Supply chain & gates](docs/cn/SECURITY.md#-供应链与安全门禁).
 
 ### 🚨 Reporting a Vulnerability
 
-Please do not report security vulnerabilities through public issues. Use the GitHub [Security Advisories](https://github.com/Kirky-X/vecboost/security/policy) private disclosure channel as the primary route (fall back to Kirky.X at <kirky-x@outlook.com> only if that channel is unavailable). Dependency advisories are gated by CI `cargo-audit`. For the full policy and supported versions, see [SECURITY.md](docs/SECURITY.md).
+Please do not report security vulnerabilities through public issues. Use the GitHub [Security Advisories](https://github.com/Kirky-X/vecboost/security/policy) private disclosure channel as the primary route (fall back to Kirky.X at <kirky-x@outlook.com> only if that channel is unavailable). Dependency advisories are gated by CI `cargo-audit`. For the full policy and supported versions, see [SECURITY.md](docs/cn/SECURITY.md).
 
 ---
 
@@ -531,7 +531,7 @@ Please do not report security vulnerabilities through public issues. Use the Git
 <tr><td align="center">✅</td><td>Quantized inference backend</td><td>GGUF engine delivered via a load-time dequantization bridge (Q8_0/Q4_K; routing, magic validation and quality gate in place); benefit is storage/load size, runtime is fp32-equivalent (no compute speedup); the quality gate needs model assets to run</td></tr>
 <tr><td align="center">✅</td><td>Multi-replica session offload</td><td><code>[auth] session_backend = "database"</code> (deployment DB <code>garrison_kv</code>, garrison DbnexusKvDao); lockout counters are atomic via <code>AtomicKvDao</code> (next row)</td></tr>
 <tr><td align="center">✅</td><td>Multi-replica shared state</td><td>Redis backends for rate limiting and exact cache (<code>distributed-redis</code>, Lua atomic fixed window) plus atomic lockout counters (<code>AtomicKvDao</code>); fuzzy semantic index and ban list remain per replica</td></tr>
-<tr><td align="center">✅</td><td>Performance baselines (throughput + MKL)</td><td>Throughput and MKL comparison baselines measured (2026-09-16, see <a href="docs/PERFORMANCE.md">performance guide</a>)</td></tr>
+<tr><td align="center">✅</td><td>Performance baselines (throughput + MKL)</td><td>Throughput and MKL comparison baselines measured (2026-09-16, see <a href="docs/cn/PERFORMANCE.md">performance guide</a>)</td></tr>
 <tr><td align="center">📋</td><td>Performance baseline (Accelerate)</td><td>Accelerate (macOS) pending verification: no Apple hardware available; the verification protocol is documented in the performance guide</td></tr>
 <tr><td align="center">✅</td><td>Docs & observability</td><td>ReDoc (<code>/redoc</code>, <code>swagger-ui</code> feature) and pre-configured Grafana dashboard (<code>deploy/grafana/</code>)</td></tr>
 </table>
@@ -542,11 +542,11 @@ Please do not report security vulnerabilities through public issues. Use the Git
 
 ## 🤝 Contributing
 
-For the detailed workflow and code standards, see the [🤝 Contributing guide](docs/CONTRIBUTING.md).
+For the detailed workflow and code standards, see the [🤝 Contributing guide](docs/cn/CONTRIBUTING.md).
 
 ### 🔨 Development Environment
 
-The toolchain is Rust 1.91+ (`rust-version` in `Cargo.toml` is authoritative) and Python ≥ 3.10 + pytest (optional: protobuf-compiler, docker); before submitting you must pass the four quality gates — fmt / clippy (the `unwrap_used` panic-surface gate) / tests / `scripts/doc_consistency_check.py` — and Git hooks run automatically via [pre-commit](https://pre-commit.com/) (`.pre-commit-config.yaml` → `scripts/pre-commit.sh`); commit messages follow Conventional Commits, and behavioral changes must be recorded in the CHANGELOG `Unreleased` section and mirrored in both READMEs. Environment setup, feature combinations, and the quality-gate commands are in the [🤝 Contributing guide](docs/CONTRIBUTING.md).
+The toolchain is Rust 1.91+ (`rust-version` in `Cargo.toml` is authoritative) and Python ≥ 3.10 + pytest (optional: protobuf-compiler, docker); before submitting you must pass the four quality gates — fmt / clippy (the `unwrap_used` panic-surface gate) / tests / `scripts/doc_consistency_check.py` — and Git hooks run automatically via [pre-commit](https://pre-commit.com/) (`.pre-commit-config.yaml` → `scripts/pre-commit.sh`); commit messages follow Conventional Commits, and behavioral changes must be recorded in the CHANGELOG `Unreleased` section and mirrored in both READMEs. Environment setup, feature combinations, and the quality-gate commands are in the [🤝 Contributing guide](docs/cn/CONTRIBUTING.md).
 
 ### 💖 Ways to Contribute
 
@@ -583,7 +583,7 @@ Want to contribute code?<br>
 
 ## 📋 Changelog
 
-The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (following [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), semantic versioning).
+The full release history is in the [📋 Changelog](docs/cn/CHANGELOG.md) (following [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), semantic versioning).
 
 <details>
 <summary>📋 Table</summary>
@@ -602,7 +602,7 @@ The full release history is in the [📋 Changelog](docs/CHANGELOG.md) (followin
 
 </details>
 
-0.3.0-rc.1 contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · 0.3.0-rc.1](docs/CHANGELOG.md#030-rc1---2026-09-22). The multi-replica boundary (auth sessions default to process memory and can be externalized with `session_backend = "database"`; rate limiting and caches can now be externalized to Redis via `distributed-redis` — at the rc.1 point both were per-process) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/FAQ.md#-配置与部署).
+0.3.0-rc.1 contains multiple breaking behavioral changes (secure defaults hardening, login convergence, XFF trust inversion, RBAC wiring, cache-key/tokenizer changes, etc.) — **read before upgrading**: the per-item "old behavior → new behavior → migration" table is in the [📋 Changelog · 0.3.0-rc.1](docs/cn/CHANGELOG.md#030-rc1---2026-09-22). The multi-replica boundary (auth sessions default to process memory and can be externalized with `session_backend = "database"`; rate limiting and caches can now be externalized to Redis via `distributed-redis` — at the rc.1 point both were per-process) and hot-reload semantics (config changes take effect after restart) are covered in the [❓ FAQ](docs/cn/FAQ.md#-配置与部署).
 
 ---
 

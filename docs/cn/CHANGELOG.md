@@ -429,3 +429,23 @@
 ## [0.1.0] - 2026-01-10
 
 VecBoost 初始发布。
+
+---
+
+## 🧭 开发路线图
+
+<table style="width:100%; border-collapse: collapse">
+<tr><th style="text-align:center">状态</th><th style="text-align:left">方向</th><th style="text-align:left">条目</th></tr>
+<tr><td align="center">✅</td><td>核心服务</td><td>四协议单一源生成、Candle/ONNX 双引擎、Bert/XlmRoberta 双架构、优先级队列与时间窗拼批</td></tr>
+<tr><td align="center">✅</td><td>生态集成</td><td>7 库生态接线（trait-kit 注册中心、confers 配置、inklog 日志、oxcache 缓存、limiteron 限流、dbnexus 持久化、sdforge 接口）</td></tr>
+<tr><td align="center">✅</td><td>安全与 i18n</td><td>JWT/CSRF/RBAC/TOTP、安全默认值收敛、审计日志、ICU+Fluent 双语错误</td></tr>
+<tr><td align="center">✅</td><td>性能基座</td><td>SIMD 相似度、连续批处理、语义缓存、GPU 内存分页、BF16 推理、Matryoshka 降维</td></tr>
+<tr><td align="center">✅</td><td>审计修复（0.3.0-rc.1）</td><td>安全默认值/登录收敛/XFF 信任反转/RBAC 接线/缓存键模型命名空间等破坏性行为变更（见 [0.3.0-rc.1](#030-rc1---2026-09-22)）</td></tr>
+<tr><td align="center">✅</td><td>调优开关（0.3.0-rc.1）</td><td>GGUF 量化、向量输出量化、多模型 LFRU 驻留、缓存 WAL、硬件感知规划、doctor 诊断、启动预热</td></tr>
+<tr><td align="center">✅</td><td>量化推理后端</td><td>GGUF 引擎经“加载期反量化桥”交付（Q8_0/Q4_K；路由/魔数校验/质量门齐备）；收益为存储与加载体积，运行期与 fp32 等价（无算力加速），质量门需模型资产实跑</td></tr>
+<tr><td align="center">✅</td><td>多副本会话外置</td><td>`[auth] session_backend = "database"`（部署库 `garrison_kv`，garrison DbnexusKvDao）；锁定计数由 `AtomicKvDao` 原子化（见下行）</td></tr>
+<tr><td align="center">✅</td><td>多副本共享状态</td><td>限流与精确缓存 Redis 后端（`distributed-redis`，Lua 原子固定窗口）、语义缓存模糊索引（Redis Hash + LRU ZSET）、封禁清单（`ban-sync`）跨副本共享、锁定计数原子化（`AtomicKvDao`）</td></tr>
+<tr><td align="center">✅</td><td>性能基线（吞吐 + MKL）</td><td>吞吐基线与 MKL 对比基线已实测（2026-09-16，见 <a href="PERFORMANCE.md">性能指南</a>）</td></tr>
+<tr><td align="center">📋</td><td>性能基线（Accelerate）</td><td>Accelerate（macOS）待验证：无 Apple 硬件，验证协议已登记于性能指南</td></tr>
+<tr><td align="center">✅</td><td>文档与可观测性</td><td>ReDoc（`/redoc`，`swagger-ui` feature）、预配置 Grafana 仪表板（`deploy/grafana/`）</td></tr>
+</table>

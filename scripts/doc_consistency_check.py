@@ -238,7 +238,7 @@ def check_anchors(docs: list[pathlib.Path]) -> tuple[list[str], int]:
 
 # 旧版本前缀已废弃：除历史记录外，非归档文件不得再引用
 _STALE_PREFIX = "/api/" + "1"
-_STALE_PREFIX_WHITELIST = {"docs/CHANGELOG.md", "tests/scenario/report.md"}
+_STALE_PREFIX_WHITELIST = {"docs/cn/CHANGELOG.md", "tests/scenario/report.md"}
 _STALE_PREFIX_ROOTS = (
     "README.md",
     "README_EN.md",

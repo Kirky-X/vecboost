@@ -152,6 +152,43 @@ ls -lh target/release/vecboost
 
 ---
 
+### 🔖 Feature 标志
+
+下表逐项对应 `Cargo.toml` 的 `[features]` 定义，`default = ["http", "onnx"]`。
+
+<details>
+<summary>📋 表格</summary>
+
+| Feature | 默认 | 说明 |
+|---------|------|------|
+| `http` | ✅ | HTTP/REST API + OpenAPI 文档 + Prometheus 指标 |
+| `grpc` | - | gRPC 服务器（sdforge `#[forge(grpc_method)]` 生成） |
+| `cli` | - | CLI 命令行工具 |
+| `mcp` | - | MCP 协议接口（LLM 工具集成，stdio 模式） |
+| `openapi` | - | OpenAPI 规范程序化导出（sdforge/openapi，不经 swagger-ui 链） |
+| `swagger-ui` | - | Swagger UI 交互页面 + `/api-docs/openapi.json`（挂主服务端口；默认构建不编译，单二进制一次构建） |
+| `schema` | - | OpenAPI Schema 派生（`http`/`openapi` 自动启用；支持 library 模式类型导出） |
+| `db` | - | dbnexus 数据库持久化基础设施（驱动无关，须搭配 `sqlite` 或 `postgres` 驱动 feature 二选一） |
+| `sqlite` | - | SQLite 数据库驱动（含 `db` + `dbnexus/sqlite` + `inklog/sqlite`） |
+| `postgres` | - | PostgreSQL 数据库驱动（含 `db` + `dbnexus/postgres` + `inklog/postgres`） |
+| `auth` | - | JWT 认证 + CSRF + RBAC + AES-256-GCM 加密 |
+| `cuda` | - | CUDA 设备支持（cudarc driver + nvml 检测，后端正交；candle 的 CUDA 后端另经 `candle-cuda`） |
+| `candle-cuda` | - | candle 后端的 CUDA 计算加速（含 `candle`） |
+| `metal` | - | Apple Silicon Metal GPU（candle 后端，含 `candle`） |
+| `onnx` | ✅ | ONNX Runtime 引擎（**默认启用**，随 default） |
+| `candle` | - | candle 回退后端（opt-in：CandleEngine embedding / candle 决策头 / GGUF 量化桥；未启用时 `engine_type="candle"` 启动期显性拒绝） |
+| `transcribe` | - | Qwen3-ASR 转录引擎（三图 + silero VAD + fbank），库内 `InferenceEngine::transcribe` 入口；HTTP/gRPC 服务面已接线（`POST /api/v1/transcribe`，`[transcribe]` 段装配） |
+| `mkl` | - | x86_64 CPU MKL 加速后端（candle 路径 opt-in，含 `candle`；需链接正常的工具链） |
+| `accelerate` | - | aarch64 macOS Accelerate 加速后端（candle 路径 opt-in，含 `candle`） |
+| `quantized-gguf` | - | GGUF 量化引擎开关（加载期反量化桥实现于 candle 路径，运行期与 fp32 等价） |
+| `character_converter` | - | 独立启用 `character_converter` 字符转换依赖（`onnx` feature 已隐含启用） |
+
+</details>
+
+> **📦 内置依赖说明**: `confers`（配置）、`inklog`（日志）、`oxcache`（缓存）、`limiteron`（限流）、`trait-kit`（模块注册）为必选依赖，始终启用，无需通过 feature 开启。`sdforge` 在 `http`/`grpc`/`cli`/`mcp` 任一协议 feature 下启用。
+
+---
+
 ## 🔧 配置
 
 ### 📄 配置文件
@@ -481,6 +518,8 @@ Error: [translation] pairs[0] (en-zh) 加载失败: No encoder model found in
 translation bundle models/opus-mt-en-zh; tried: …/onnx/encoder_model.onnx,
 …/onnx/encoder_model_quantized.onnx
 ```
+
+**译文后处理与超时**：翻译在引擎出口做确定性后处理（服务层与库用户同享）——`target=zh` 时繁→简归一化、URL 协议分隔符与 LaTeX 转义符号修复；模型级高频误译经 `[[translation.pairs.output_fixes]]` 字面替换表（按声明序）修复，见 [`config/config.toml`](../../config/config.toml) `[translation]` 段。HTTP 全局请求超时经 `[server] request_timeout_seconds` 配置（CPU seq2seq 译论文级长摘要需 15-130+s，`config/config.toml` 已显式设 300s）。
 
 ### 翻译 bundle 契约
 
@@ -1358,12 +1397,12 @@ http_request_duration_seconds_bucket{method="POST",endpoint="/api/v1/embed",le="
 
 ### Grafana 仪表板
 
-仓库提供预配置仪表板 [`deploy/grafana/vecboost-dashboard.json`](../deploy/grafana/vecboost-dashboard.json)（Grafana 10+），覆盖 HTTP、批处理、队列、阶段耗时、语义缓存、决策、检测与翻译指标：
+仓库提供预配置仪表板 [`deploy/grafana/vecboost-dashboard.json`](../../deploy/grafana/vecboost-dashboard.json)（Grafana 10+），覆盖 HTTP、批处理、队列、阶段耗时、语义缓存、决策、检测与翻译指标：
 
 1. 打开 Grafana（已配置 Prometheus 数据源并抓取服务 `/metrics`）
 2. Dashboards → New → Import
 3. 选择 `deploy/grafana/vecboost-dashboard.json`，在 `Prometheus` 下拉选择数据源
-4. 点击 Import（面板与指标口径见 [`deploy/grafana/README.md`](../deploy/grafana/README.md)）
+4. 点击 Import（面板与指标口径见 [`deploy/grafana/README.md`](../../deploy/grafana/README.md)）
 
 ---
 
@@ -1581,7 +1620,7 @@ free -h     # 内存
 
 - [📚 API 参考](API_REFERENCE.md) - 详细 API 文档
 - [🏗️ 架构设计](ARCHITECTURE.md) - 系统设计详情
-- [💻 示例代码](../examples/) - 代码示例
+- [💻 示例代码](../../examples/) - 代码示例
 
 ---
 

@@ -29,7 +29,7 @@ VecBoost 为高吞吐、低延迟的嵌入向量服务而生。本指南汇总�
 >
 > 口径：以下数据来自 `docs/benchmarks/` 归档，criterion 测量（`cargo bench --release` / `--quick`），采集日期 2026-08（Linux x86_64，Rust stable）。微基准测量噪声约 ±5-10%；`kunpeng_tuning_after.md` 中 dot_product/768 与 manhattan_distance/1024 的波动在正常范围内。环境差异（CPU 频率、系统负载、编译器版本）可导致 ±50% 级波动（见 `gpu_pipeline_after.md` 归因分析）。
 >
-> **2026-09-16 回归扫描**：以上基准已全量复测，全部无回退（最差 +5.8%，噪声带内），详见 [regression_sweep_2026-09-16.md](benchmarks/regression_sweep_2026-09-16.md)。
+> **2026-09-16 回归扫描**：以上基准已全量复测，全部无回退（最差 +5.8%，噪声带内），详见 [regression_sweep_2026-09-16.md](../benchmarks/regression_sweep_2026-09-16.md)。
 
 ### 向量相似度（similarity_bench）
 
@@ -45,7 +45,7 @@ VecBoost 为高吞吐、低延迟的嵌入向量服务而生。本指南汇总�
 | dot_product | 1024 | 332.81 | 153.42 | 2.17x |
 | manhattan_distance | 1024 | 341.60 | 168.16 | 2.03x |
 
-全部函数在全部维度下加速超过 1.4x；零 unsafe 代码、零新依赖。完整数据见 [baseline_results.md](benchmarks/baseline_results.md)。
+全部函数在全部维度下加速超过 1.4x；零 unsafe 代码、零新依赖。完整数据见 [baseline_results.md](../benchmarks/baseline_results.md)。
 
 2026-09-16 复测：16 项中 10 项快于 `kunpeng_tuning_after` 基线（cosine/1024 356.8 ns，标量对照 2.9x），最差 +5.8% 在噪声带内，无回退。
 
@@ -61,7 +61,7 @@ DynamicBatchScheduler（固定等待窗）与 ContinuousBatchLoop（1ms tick + �
 | DynamicBatchScheduler（wait_5ms） | 1.742 s（3.6x） | 323 ms（1.4x） |
 | **ContinuousBatchLoop** | **1.110 s（5.6x）** | **157 ms（2.9x）** |
 
-完整数据见 [batch_baseline_results.md](benchmarks/batch_baseline_results.md)。
+完整数据见 [batch_baseline_results.md](../benchmarks/batch_baseline_results.md)。
 
 现行时间窗拼批基准（2026-09-16，预填队列口径——稳态耗时 ≈ 窗口时长 + ~1ms 轮询开销）：
 
@@ -80,7 +80,7 @@ DynamicBatchScheduler（固定等待窗）与 ContinuousBatchLoop（1ms tick + �
 | trigram 搜索（1,000 条目） | ~962 µs |
 | trigram 搜索（10,000 条目） | ~9.6 ms |
 
-精确匹配为纳秒级（O(1)）；trigram 暴力搜索 O(n) 线性增长，10K 条目 < 10 ms。完整数据见 [semantic_cache_baseline_results.md](benchmarks/semantic_cache_baseline_results.md) 与 [kunpeng_tuning_after.md](benchmarks/kunpeng_tuning_after.md)。
+精确匹配为纳秒级（O(1)）；trigram 暴力搜索 O(n) 线性增长，10K 条目 < 10 ms。完整数据见 [semantic_cache_baseline_results.md](../benchmarks/semantic_cache_baseline_results.md) 与 [kunpeng_tuning_after.md](../benchmarks/kunpeng_tuning_after.md)。
 
 2026-09-16 复测：hit 9.5 ns / miss 9.7 ns / trigram 90.6 µs / 912 µs / 9.14 ms，全部持平或更快，无回退。
 
@@ -101,7 +101,7 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 |------|------|--------|---------------|------|
 | AMD Ryzen 9 9950X（WSL2 可见 6C/12T），70GB RAM，Linux(WSL2) x86_64 | 默认构建 | 中位 70.3 ms | 中位 173.6 ms（≈184 texts/s） | 2026-09-15 |
 | 同上 | `--features mkl`（hgemm_ 垫片） | 中位 17.5 ms（**4.0×**） | 中位 148.4 ms（**1.17×**） | 2026-09-16；`RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"` 绕开 lld 链接 MKL 的已知问题 |
-| 同上 | 默认构建 + `--features mkl`（同晚连续复测） | 默认 81.8 ms / mkl 20.5 ms（**4.0×**） | 默认 193.7 ms / mkl 157.6 ms（**1.23×**） | 2026-09-16 晚回归扫描（[regression_sweep_2026-09-16.md](benchmarks/regression_sweep_2026-09-16.md)）；绝对值较上两行整体上浮 ~15-17% 为持续负载降频（同代码 quick 口径实测 69.7 ms 与 2026-09-15 行吻合），**加速比不变，非代码回退** |
+| 同上 | 默认构建 + `--features mkl`（同晚连续复测） | 默认 81.8 ms / mkl 20.5 ms（**4.0×**） | 默认 193.7 ms / mkl 157.6 ms（**1.23×**） | 2026-09-16 晚回归扫描（[regression_sweep_2026-09-16.md](../benchmarks/regression_sweep_2026-09-16.md)）；绝对值较上两行整体上浮 ~15-17% 为持续负载降频（同代码 quick 口径实测 69.7 ms 与 2026-09-15 行吻合），**加速比不变，非代码回退** |
 
 > **加速后端说明**：mkl 已可用。上游版本错配——candle 0.11 调用 fp16 GEMM `hgemm_`，而 intel-mkl-src 0.8.1 Linux 静态路径锁死 MKL 2020.1（ghcr.io/rust-math，无该符号）——由 `src/engine/mkl_shim.rs` 的 `hgemm_` 垫片解决（f16 入 → f32 累加 `sgemm_` → f16 出，与硬件 hgemm 数值语义一致）。两个注意点：① 本机 rust-lld 链接 MKL 存在额外问题，需 `RUSTFLAGS="-C linker=x86_64-linux-gnu-gcc"`；② `--features mkl` 保持 opt-in，默认构建不引入 MKL。accelerate（macOS）保持 opt-in，本机无法验证（验证协议见下）。单文本 4.0× 主要来自 fp32 GEMM；32 批仅 1.17×，说明批路径瓶颈已不在 matmul。
 
@@ -296,6 +296,6 @@ VECBOOST_BENCH_MODEL=models/BAAI-bge-small-en-v1.5 cargo bench --bench embed_thr
 | 文档 | 说明 |
 |:-----|:-----|
 | [🧪 测试场景矩阵](TEST_SCENARIOS.md) | 测试栈职责与场景穷举 |
-| [📈 基准数据归档](benchmarks/) | 历史基准数据明细（**仅本机保留**，`.gitignore` 排除，干净 clone 中不存在） |
+| [📈 基准数据归档](../benchmarks/) | 历史基准数据明细（**仅本机保留**，`.gitignore` 排除，干净 clone 中不存在） |
 | [🏗️ 架构文档](ARCHITECTURE.md) | 性能优化设计（批处理/内存/GPU/并发） |
 | [📋 更新日志](CHANGELOG.md) | 调优开关的版本记录 |

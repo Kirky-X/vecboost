@@ -19,6 +19,10 @@ pub(crate) mod decision;
 #[cfg(feature = "onnx")]
 pub(crate) mod onnx_translate;
 
+// zh 繁→简归一化（自研词典替换，替代 character_converter——bincode 停维迁移）
+#[cfg(feature = "onnx")]
+pub(crate) mod t2s;
+
 #[cfg(feature = "onnx")]
 pub use onnx_translate::set_session_intra_threads;
 

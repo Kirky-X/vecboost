@@ -1,6 +1,6 @@
 [package]
 name = "vecboost"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.91"
 authors = ["Kirky-X <Kirky-X@outlook.com>"]
@@ -124,7 +124,6 @@ clap = { version = "4.6", optional = true, default-features = false, features = 
 
 # Performance: parallel iterator for batch similarity
 rayon = { version = "1.12", default-features = false }
-character_converter = { version = "2.1", default-features = false, optional = true }
 
 # Performance: jemalloc global allocator for multi-threaded workloads
 [target.'cfg(all(target_os = "linux", not(target_env = "musl")))'.dependencies]
@@ -165,7 +164,7 @@ postgres = ["db", "dbnexus/postgres", "inklog/postgres", "garrison?/db-postgres"
 auth = ["dep:garrison", "dep:aes-gcm"]
 
 # 引擎特性 — onnx-primary：ort 为默认主推理引擎；candle 降级 opt-in 回退后端（显式 `--features candle` 启用）
-onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/load-dynamic", "dep:character_converter"]
+onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/load-dynamic"]
 candle = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers"]
 # CUDA 设备支持（cudarc driver + nvml 检测，后端正交）；candle 的 CUDA
 # 计算后端单独经 candle-cuda（不随 cuda 隐含，避免 ort-only 用户被动拉 candle）。
@@ -181,7 +180,9 @@ accelerate = ["candle", "candle-core/accelerate", "candle-nn/accelerate", "candl
 quantized-gguf = ["candle"]
 # Redis 多副本：限流 Lua 原子计数 + 缓存共享；启用 limiteron distributed/oxcache redis
 distributed-redis = ["limiteron/cache-redis", "limiteron/distributed", "limiteron/lua-script", "limiteron/ban-sync", "oxcache/redis", "oxcache/lua", "dep:redis"]
-character_converter = ["dep:character_converter"]
+# 已废弃的空 feature（0.3.1 起 character_converter 依赖移除，繁→简由内置
+# t2s 词典承担；保留空壳防下游 --features character_converter 断裂，0.x 内不删）
+character_converter = []
 
 # Binary target — main.rs 是 HTTP server 入口（axum::serve），
 # 需要 http feature 才能编译。schema-only 等 library 模式不会构建 bin。

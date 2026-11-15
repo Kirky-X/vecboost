@@ -668,15 +668,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bincode"
-version = "1.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1036,17 +1027,6 @@ dependencies = [
  "chacha20",
  "cipher",
  "poly1305",
-]
-
-[[package]]
-name = "character_converter"
-version = "2.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f399d4f1a0caebb329b79ea33c81afd6073e603de2589878a0770a9cef837797"
-dependencies = [
- "bincode",
- "fst",
- "once_cell",
 ]
 
 [[package]]
@@ -1805,9 +1785,9 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "dbnexus"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8132c207364f844958c844a69c872904047834082a05ef49ad8d293267a5f73"
+checksum = "f65b46213f941e84ae964a0bf140daacdbfe05f3509d871724e0b36ee19f35cf"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1839,18 +1819,18 @@ dependencies = [
 
 [[package]]
 name = "dbnexus-limiter-port"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da6f3c5fa81e3d08b71606ad0afdb8920d6fd235e741ce038fc0bad5959a774b"
+checksum = "afe5538f165fe893236917e17fdd36703be4c4aaf9294b43b8e60e5afcd753d5"
 dependencies = [
  "async-trait",
 ]
 
 [[package]]
 name = "dbnexus-macros"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9bd1f337010f097cc9473631a96a61211b219bc1206740bba539a29f8320e11"
+checksum = "1e562dd96987a8c8bc8a48849f0b69fe0dfbe8e20e74024ab9c06965233c7c42"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2459,12 +2439,6 @@ name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
-
-[[package]]
-name = "fst"
-version = "0.4.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ab85b9b05e3978cc9a9cf8fea7f01b494e1a09ed3037e16ba39edc7a29eb61a"
 
 [[package]]
 name = "futures"
@@ -3843,7 +3817,7 @@ dependencies = [
  "ipnet",
  "is-terminal",
  "log",
- "nix",
+ "nix 0.31.3",
  "owo-colors",
  "parking_lot 0.13.0",
  "pbkdf2",
@@ -4351,9 +4325,9 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "lz4_flex"
-version = "0.13.1"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
+checksum = "6a027efd2ad3c4dbb4123b5c018e3efbe7f6236da7c7612f122dad030f5d2de5"
 dependencies = [
  "twox-hash",
 ]
@@ -4364,7 +4338,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3d0581a75c45969c63afd2bb87b1d8b25cfcc556c7a918cf9bb13b0fe8d2381"
 dependencies = [
- "nix",
+ "nix 0.31.3",
  "serde",
  "windows-sys 0.61.2",
 ]
@@ -4575,6 +4549,18 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "memoffset",
+]
+
+[[package]]
+name = "nix"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77730ed34f01f4990cb2ea67fec715ecebc6fab9a6396cf83c5529b13f581bdc"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -5861,9 +5847,9 @@ dependencies = [
 
 [[package]]
 name = "redis"
-version = "1.8.1"
+version = "1.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db7f3d75b5a3301746bff39a767bf4c5c42506b08513527308b3875bfb64a031"
+checksum = "4bef8fa589dd53a8a379a7856de1365d0a1be50c6b8aebb5c01c1ec441a2c509"
 dependencies = [
  "arc-swap",
  "arcstr",
@@ -6337,9 +6323,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "sdforge"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13d1cdf6dbca2778f69b96c2eeb8f367b8f2d254d1fc19e6db04c78b00e9b6f0"
+checksum = "bb48d0845207d2f03faffc5fde72655284af3a4b30eb912968227c8ada6a92f8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6390,9 +6376,9 @@ dependencies = [
 
 [[package]]
 name = "sdforge-macros"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7df0ba593d6ed05759fc8db18c601101bba3917f11b0dcb16e4be4458d5a53e6"
+checksum = "05a04c5e1357b4e98eff1bceee7fd1355581cd0d16c078857488073be5d24633"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8385,7 +8371,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vecboost"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -8397,7 +8383,6 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "candle-transformers",
- "character_converter",
  "chrono",
  "clap",
  "confers",
@@ -9395,9 +9380,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.5.1"
+version = "9.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3476fd497ac8af5b1ec7b51acab7bef380f7e8dd8e0487595bafd839417a302"
+checksum = "80cc68510ea7553c30a69c732de5278e94183f68765af6c642dbccefd6ec777e"
 dependencies = [
  "constant_time_eq 0.6.1",
  "crc32fast",
@@ -9405,7 +9390,7 @@ dependencies = [
  "indexmap",
  "libc",
  "memchr",
- "nix",
+ "nix 0.32.0",
  "typed-path",
  "windows-sys 0.61.2",
  "zeroize",

@@ -1338,9 +1338,13 @@ impl OnnxTranslationEngine {
 const MAX_RESCUE_SENTENCES: usize = 64;
 
 /// zh 目标输出繁→简归一化（paper-translate-quality：m2m100 en→zh 实测
-/// 繁简混排——"人類可以努力製作高複雜的指示"）。
+/// 繁简混排——"人類可以努力製作高複雜的指示"）。词典等价迁移自
+/// character_converter（bincode RUSTSEC-2025-0141 停维清除），见 `t2s`。
 fn simplify_chinese_output(text: String) -> String {
-    character_converter::traditional_to_simplified(&text).into_owned()
+    match super::t2s::to_simplified(&text) {
+        std::borrow::Cow::Borrowed(_) => text,
+        std::borrow::Cow::Owned(s) => s,
+    }
 }
 
 /// 符号损伤确定性修复：seq2seq 模型对符号 token 的实测损伤（论文评测）——

@@ -95,12 +95,16 @@ repos:
         name: Check for merge conflict markers
 
   # Detect large files
+  # 例外：src/engine/t2s_table.txt 为有意入库的繁→简词典（115,571 条，
+  # ~2 MB，来源与 MIT 许可见文件头/尾；t2s 迁移替代 character_converter）。
+  # 非生成产物、不含密钥面，gitleaks/私钥扫描照常覆盖。
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
       - id: check-added-large-files
         name: Check for large files
         args: ['--maxkb=1000']
+        exclude: ^src/engine/t2s_table\.txt$
 
   # === 提交完成后清理本地编译产物（post-commit 阶段；启用: pre-commit install -t post-commit） ===
   - repo: local

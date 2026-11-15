@@ -32,10 +32,6 @@ ignore = [
     # 本仓无 crypto-bigint 直依赖且不实现曲线运算（消费 garrison JWT 面仅
     # RS256/HS256 签名验证），攻击面不成立。p256 发布兼容 0.7.x 的版本时撤销。
     "RUSTSEC-2026-0387",
-    # RUSTSEC-2025-0141（bincode 1.x unmaintained）：character_converter（中文
-    # 数字解析，fx/中文数字域）唯一传递引入，serde 序列化面未被本仓消费；
-    # 上游 character_converter 未迁 bincode 2.x。
-    "RUSTSEC-2025-0141",
     # RUSTSEC-2025-0119（number_prefix unmaintained）：indicatif（进度条，
     # benches/CLI 展示层）传递引入，无逻辑影响面。
     "RUSTSEC-2025-0119",

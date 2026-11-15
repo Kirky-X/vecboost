@@ -28,6 +28,7 @@
 - [测试架构](#-测试架构)
 - [国际化（i18n）](#-国际化i18n)
 - [错误处理](#-错误处理)
+- [核心依赖致谢](#-核心依赖致谢)
 - [相关文档](#-相关文档)
 
 </details>
@@ -1116,6 +1117,42 @@ src/error.rs
 | `RateLimitExceeded` | 速率限制 | 429 |
 | `DatabaseError` | 数据库错误 | 500 |
 | `InternalError` | 内部错误 | 500 |
+
+---
+
+## 🌟 核心依赖致谢
+
+VecBoost 站在以下优秀开源项目的肩膀上：
+
+<details>
+<summary>📋 表格</summary>
+
+| 依赖 | 用途 |
+|------|------|
+| [onnxruntime](https://github.com/microsoft/onnxruntime) | 跨平台推理运行时（默认引擎，经 [`ort`](https://crates.io/crates/ort) 绑定 + `load-dynamic` 加载 `3rdparty/` 动态库） |
+| [candle](https://github.com/huggingface/candle) | 原生 Rust ML 推理框架（opt-in 回退后端，`candle` feature） |
+| [tokenizers](https://github.com/huggingface/tokenizers) | HuggingFace 分词器（全平台统一） |
+| [hf-hub](https://crates.io/crates/hf-hub) | HuggingFace Hub 模型下载 |
+| [trait-kit](https://crates.io/crates/trait-kit) | 模块注册中心与 typestate 依赖管理 |
+| [confers](https://crates.io/crates/confers) | 配置加载（TOML + 环境变量 + 校验） |
+| [inklog](https://crates.io/crates/inklog) | 结构化日志基础设施 |
+| [oxcache](https://crates.io/crates/oxcache) | 高性能缓存后端 |
+| [limiteron](https://crates.io/crates/limiteron) | 令牌桶限流器 |
+| [dbnexus](https://crates.io/crates/dbnexus) | 数据库持久化（`db` feature） |
+| [sdforge](https://crates.io/crates/sdforge) | 多协议接口生成 |
+| [garrison](https://crates.io/crates/garrison) | 认证与安全加固（`auth` feature） |
+| [axum](https://github.com/tokio-rs/axum) | HTTP 框架（由 sdforge 生成） |
+| [tokio](https://github.com/tokio-rs/tokio) | 异步运行时 |
+| [utoipa](https://github.com/juhaku/utoipa) | OpenAPI 文档 |
+| [prometheus](https://github.com/tikv/rust-prometheus) | 指标导出 |
+| [criterion](https://github.com/bheisler/criterion.rs) | 基准测试 |
+| [tikv-jemallocator](https://github.com/tikv/jemallocator) | jemalloc 全局分配器（Linux glibc） |
+
+</details>
+
+### 💝 特别感谢
+
+感谢 Rust 社区、Hugging Face（模型与分词器生态）与所有[贡献者](https://github.com/Kirky-X/vecboost/graphs/contributors)。
 
 ---
 

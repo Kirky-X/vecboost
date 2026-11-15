@@ -179,7 +179,7 @@
 
 ### 评估归档
 
-- trait-kit 统一 SDK 封装评估：技术可行但本次不实施（defer_with_proposal；P1 元数据诚实化 → P2 健康探测统一 → P3 装配收敛 → P4 资源契约，前置条件与风险见 [TRAIT-KIT-SDK-ASSESSMENT](TRAIT-KIT-SDK-ASSESSMENT.md)）
+- trait-kit 统一 SDK 封装评估：技术可行但本次不实施（defer_with_proposal；P1 元数据诚实化 → P2 健康探测统一 → P3 装配收敛 → P4 资源契约，前置条件与风险见 [TRAIT-KIT-SDK-ASSESSMENT](../reviews/TRAIT_KIT_SDK_ASSESSMENT.md)）
 
 <a id="030-rc1---2026-09-22"></a>
 
@@ -292,7 +292,7 @@
 ### 新增（wsl2-oom-hardening：WSL2 OOM 事故六道防线）
 
 - **Session 内存门禁**：`build_session` 在创建任何 ORT 分配前检查 MemAvailable（需求按模型文件 ×3/2 估算），不足即 fail-fast 显性报错（消息含 available/need/floor 与处置建议），全引擎 6 处调用点统一生效；旋钮 `SESSION_MEMORY_GUARD`（默认开）/`SESSION_MEMORY_FLOOR_MB`（默认 2048）
-- **翻译并行 worker 惰性加载**：句级并行附加 Session 集从启动期预载改为首次长输入并行请求按需补建——idle 驻留从 4 pair×4 worker 全 FP32 的 ~30G+ 降为每 pair 一套；P7 时延契约不变（`TRANSLATION_PARALLEL_WORKERS` 语义不变）。根因与实测证据见 [MEMORY_SAFETY](MEMORY_SAFETY.md)
+- **翻译并行 worker 惰性加载**：句级并行附加 Session 集从启动期预载改为首次长输入并行请求按需补建——idle 驻留从 4 pair×4 worker 全 FP32 的 ~30G+ 降为每 pair 一套；P7 时延契约不变（`TRANSLATION_PARALLEL_WORKERS` 语义不变）。根因与实测证据见 [MEMORY_SAFETY](../MEMORY_SAFETY.md)
 - **运维防线（免 root）**：`scripts/build-memcap.sh`（systemd --user scope 构建内存上限，cgroup `memory.max` 已验证内核级生效）；`scripts/mem-guard.sh` + `mem-guard-install.sh`（用户级 earlyoom，MemAvailable 阈值杀目标进程，正反向实测通过，已随安装脚本常驻）
 
 ### 变更（废弃报告退役与维护规范沉淀）

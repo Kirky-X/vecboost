@@ -4,7 +4,7 @@
 
 [![Rust 2024](https://img.shields.io/badge/Rust-2024-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![Rustc 1.91+](https://img.shields.io/badge/Rustc-1.91+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/) [![release](https://img.shields.io/github/v/release/Kirky-X/vecboost?style=for-the-badge)](https://github.com/Kirky-X/vecboost/releases) [![CI](https://img.shields.io/github/actions/workflow/status/Kirky-X/vecboost/feature-matrix.yml?branch=main&label=CI&style=for-the-badge)](https://github.com/Kirky-X/vecboost/actions/workflows/feature-matrix.yml) [![security](https://img.shields.io/github/actions/workflow/status/Kirky-X/vecboost/codeql.yml?branch=main&label=security&style=for-the-badge)](https://github.com/Kirky-X/vecboost/actions/workflows/codeql.yml) [![coverage](https://img.shields.io/codecov/c/github/Kirky-X/vecboost?style=for-the-badge)](https://codecov.io/gh/Kirky-X/vecboost) [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=for-the-badge)](https://www.apache.org/licenses/LICENSE-2.0)
 
-**中文** | [English](README_EN.md)
+[English](README.md) | 中文
 
 **高性能、生产级多功能推理服务，使用 Rust 编写。VecBoost 提供文本嵌入、重排序、决策问答、翻译、语言检测与语音转录六类推理能力，支持多种推理引擎、GPU 加速和企业级功能。**
 
@@ -45,20 +45,19 @@
 - [✨ 功能特性](#-功能特性)
 - [🚀 快速开始](#-快速开始)
 - [🔌 API 使用](#-api-使用)
-- [⚙️ 配置](#-配置)
+- [🔧 配置](#-配置)
 - [📚 文档](#-文档)
 - [💻 示例](#-示例)
-- [🏗️ 架构](#-架构)
+- [🧱 架构](#-架构)
 - [🧪 测试](#-测试)
 - [📊 性能](#-性能)
 - [🔒 安全](#-安全)
-- [🗺️ 开发路线图](#-开发路线图)
+- [🧭 开发路线图](#-开发路线图)
 - [🤝 参与贡献](#-参与贡献)
 - [📋 更新日志](#-更新日志)
 - [📄 许可证](#-许可证)
 - [🙏 致谢](#-致谢)
 - [📞 联系与支持](#-联系与支持)
-- [⭐ Star 历史](#-star-历史)
 
 </details>
 
@@ -101,7 +100,7 @@
 </tr>
 </table>
 
-除上述核心能力外，OpenAI 兼容端点（`POST /v1/embeddings`，支持 `encoding_format=base64`）、BF16 推理与 SIMD 向量相似度、GPU 内存分页、`vecboost doctor` 只读诊断、Library SDK 集成（Library 模式）与 `config_full.toml` / `config_minimal.toml` 配置预设也已可用；端点与参数明细见 [🔌 API 使用](#-api-使用) 一节，配置项说明见 [⚙️ 配置](#-配置) 一节。
+除上述核心能力外，OpenAI 兼容端点（`POST /v1/embeddings`，支持 `encoding_format=base64`）、BF16 推理与 SIMD 向量相似度、GPU 内存分页、`vecboost doctor` 只读诊断、Library SDK 集成（Library 模式）与 `config_full.toml` / `config_minimal.toml` 配置预设也已可用；完整 Feature 标志矩阵见 [🏷️ Feature 标志](docs/cn/USER_GUIDE.md#-feature-标志)，端点与参数明细见 [🔌 API 使用](#-api-使用) 一节。
 
 ---
 
@@ -134,28 +133,16 @@
 git clone https://github.com/Kirky-X/vecboost.git
 cd vecboost
 
-# 2. 默认构建（http + onnx feature，含 OpenAPI 文档与默认 ONNX 引擎）
+# 2. 默认构建（http + onnx feature）
 cargo build --release
 
-# 3. 构建 GPU 支持
-#    Linux (CUDA):
-cargo build --release --features cuda
-#    macOS (Metal):
-cargo build --release --features metal
-
-# 4. 构建多协议接口（HTTP + gRPC + CLI）
-cargo build --release --features grpc,cli
-
-# 5. 构建 MCP 接口（stdio 模式，--mcp 启动）
-cargo build --release --features mcp
-
-# 6. 构建 CI 全特性组合（数据库 + 认证 + ONNX + OpenAPI + 全协议；CI 实际取值见 ci.yml:24）
-cargo build --release --features grpc,cli,auth,onnx,db,sqlite,openapi,mcp
+# 3. 运行（默认从 config/config.toml 读取）
+./target/release/vecboost
 ```
 
 </details>
 
-最小构建：`cargo build --no-default-features --features http`。
+最小构建：`cargo build --no-default-features --features http`。更多构建组合（GPU / 多协议 / MCP / CI 全特性）见 [📖 用户指南 · 安装](docs/cn/USER_GUIDE.md#-安装)。
 
 配置并运行：
 
@@ -166,9 +153,6 @@ cargo build --release --features grpc,cli,auth,onnx,db,sqlite,openapi,mcp
 # 复制并自定义配置（默认从 config/config.toml 读取）
 cp config/config.toml config/config_custom.toml
 # 编辑 config/config_custom.toml
-
-# 使用默认配置运行
-./target/release/vecboost
 
 # 使用自定义配置（--config；参数在 clap 解析前被剥离，写在子命令前后均可）
 ./target/release/vecboost --config config/config_custom.toml
@@ -210,155 +194,13 @@ curl -X POST http://localhost:9002/api/v1/embed \
 
 </details>
 
-决策问答（需 `[model] task = "decision"` 的 Laya 决策管线，`onnx` feature 构建；三题型 choice/score/noul 各有明确响应结构，答案按问题顺序回显）：
-
-<details>
-<summary>📄 代码 · bash</summary>
-
-```bash
-curl -X POST http://localhost:9002/api/v1/decisions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "state": {"topic": "vacation"},
-    "questions": [
-      {"name": "destination", "qtype": "choice", "instructions": "pick one", "options": ["beach", "mountain"]},
-      {"name": "budget", "qtype": "score", "instructions": "rate 1-5"},
-      {"name": "confident", "qtype": "noul", "instructions": "state your p(true)"}
-    ]
-  }'
-```
-
-</details>
-
-响应（choice=argmax+各选项概率表，score=期望等级+完整分布，noul=两选项 softmax 的 P(true)）：
-
-<details>
-<summary>📄 代码 · json</summary>
-
-```json
-{
-  "answers": [
-    {"question": "destination", "answer": {"type": "choice", "index": 1, "option": "mountain", "probabilities": {"beach": 0.25, "mountain": 0.75}}},
-    {"question": "budget", "answer": {"type": "score", "expected": 3.5, "distribution": {"3": 0.5, "4": 0.5}}},
-    {"question": "confident", "answer": {"type": "noul", "p_true": 0.9}}
-  ],
-  "processing_time_ms": 12
-}
-```
-
-</details>
-
-也可以直接使用 CLI（`cli` feature）或 library SDK（`library` 模式）：
-
-<details>
-<summary>📄 代码 · bash</summary>
-
-```bash
-# 单文本嵌入
-cargo run --features cli -- embed --req '{"text":"Hello, world!"}'
-```
-
-</details>
-
-### 🧭 核心概念
-
-- **模型与引擎**：`ModelConfig` 声明 HuggingFace 模型（默认 `BAAI/bge-m3`，1024 维），`EngineFactory::create(engine_type, config)` 创建 `ONNX`（默认，`onnx` feature 随 default 启用）或 `Candle`（`candle` feature opt-in 回退）引擎；支持 Bert / XlmRoberta 双架构与 mean/cls/max 池化。
-- **四协议单一源**：`src/api/embedding.rs` 中的处理函数经 `#[forge(...)]` 宏标注，由 `sdforge` 生成 HTTP/gRPC/MCP/CLI 绑定，禁止手写协议代码。
-- **7 库生态**：`trait-kit` 以 typestate 模块注册中心（`Kit<Unbuilt> → Kit<Ready>`）装配全部模块；`confers` 接管配置、`inklog` 日志、`oxcache` 缓存、`limiteron` 限流、`dbnexus` 持久化（`db` feature）、`sdforge` 接口生成。
-- **配置优先级**：TOML 文件 + `VECBOOST_` 前缀环境变量覆盖（敏感项 `VECBOOST_JWT_SECRET` / `VECBOOST_ADMIN_PASSWORD` 必须走环境变量）；配置文件变更校验并打日志，重启后生效。
-- **特性门控**：全部可选能力均为独立 feature（见 [🏷️ Feature 标志](#-feature-标志)），最小构建只含 HTTP 服务。
+决策问答、翻译、语言检测、转录等其余端点的请求/响应示例见 [📘 API 参考](docs/cn/API_REFERENCE.md)；也可以直接使用 CLI（`cli` feature）或 library SDK（library 模式），子命令与工具清单见 [💻 CLI 工具](docs/cn/API_REFERENCE.md#-cli-工具)。
 
 ---
 
 ## 🔌 API 使用
 
-VecBoost 由 `sdforge` 从处理函数单一源生成四种协议接口（`src/api/` 下 embedding / rerank / decisions / translate / detect 各域一份单一源）。全部端点、参数、请求/响应示例、gRPC 方法表与消息类型见 [📘 API 参考](docs/cn/API_REFERENCE.md)，概要如下：
-
-- **HTTP/REST**：`/api/v1/*` 提供嵌入（单文本/批量/文件）、相似度、语义检索、重排序、决策问答（choice/score/noul）、翻译（多语言对 + auto 检测）、转录（16kHz 语音样本 → 文本，`transcribe` feature）、语言检测、模型管理与健康检查端点；
-- **OpenAI 兼容**：`POST /v1/embeddings`，响应遵循 OpenAI 格式（`object` / `data` / `usage`），支持 `encoding_format=base64`；
-- **Matryoshka 维度约简**：`/v1/embeddings` 传 `dimensions`（256/512/1024 等）换取更小更快的向量，截断后自动 L2 重归一化保证余弦相似度正确；
-- **gRPC**：`grpc` feature 在 50051 端口（可配置）暴露 17 个 `vecboost.*` 方法（sdforge 统一 Call 协议，无需手写 proto，含 `vecboost.translate` / `vecboost.detect`），JWT 认证、限流、最大连接数与超时均可配置；
-- **MCP**：`mcp` feature 以 stdio 模式（`vecboost --mcp`）向 LLM 暴露由 `#[forge(tool_name=…)]` 注册的工具，工具名为 `embed_text` / `embed_batch` / `compute_similarity` / `search` / `file_embed` / `rerank` / `rerank_batch` / `decisions` / `translate` / `detect` / `transcribe` / `list_models` 等（注意 MCP `tool_name` 非 HTTP 端点名，完整清单见 [📘 API 参考](docs/cn/API_REFERENCE.md)）；
-- **CLI**：`cli` feature 提供 embed / embed_batch / compute_similarity / search / rerank / decisions / translate / detect / transcribe 子命令（见 [💡 最小示例](#-最小示例)；`transcribe` 子命令收 WAV 文件路径，读 16kHz 单声道样本）；
-- **推理引擎**：ONNX Runtime（默认，`onnx` feature 随 default 启用）与 Candle（`candle` feature opt-in 回退），经 `EngineFactory::create` 工厂切换；`[model]` 的 `engine_type` / `task` 配置驱动引擎与任务维度选择——`task = "embedding"`（默认）/ `task = "decision"`（Laya 决策管线）/ `task = "translate"`（seq2seq 翻译，仅 onnx）/ `task = "transcribe"`（Qwen3-ASR 转录，需 `transcribe` feature）四态，非当前任务的端点以 400 Unsupported task 显性拒绝（bundle 布局见 [`config/config.toml`](config/config.toml) `[model]` 段注释，翻译语言对见 `[translation]` 段）；
-- **可观测性与运维**：`/metrics`（Prometheus 指标）、`/health`（存活探针）与 `/health?depth=full`（真实就绪探测）、`/swagger-ui/`（交互式 OpenAPI 文档，需 `swagger-ui` feature，规范 JSON 见 `/api-docs/openapi.json`）；只读诊断 `vecboost doctor`（config / tokenizer / 缓存 / 线程 / GPU / 模型完整性，FAIL 退出码 1）。
-
-翻译与语言检测请求示例（与 [API 参考](docs/cn/API_REFERENCE.md) 字段一致）：
-
-<details>
-<summary>📄 代码 · bash</summary>
-
-```bash
-curl -X POST http://localhost:9002/api/v1/translate \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Hello, my dog is cute", "source_language": "en", "target_language": "zh"}'
-
-curl -X POST http://localhost:9002/api/v1/detect \
-  -H "Content-Type: application/json" \
-  -d '{"text": "The quick brown fox jumps over the lazy dog near the riverbank every morning."}'
-```
-
-</details>
-
-检测响应（`language: null` + `is_reliable: false` 表示不可判定——纯数字/过短文本，显性表达不虚构语言；完整错误语义见 [API 参考](docs/cn/API_REFERENCE.md#翻译translate)）：
-
-<details>
-<summary>📄 代码 · json</summary>
-
-```json
-{
-  "language": "en",
-  "script": "Latin",
-  "confidence": 1.0,
-  "is_reliable": true,
-  "processing_time_ms": 0
-}
-```
-
-</details>
-
-> **⚠️ 前置**：翻译需 `--features onnx` 构建并在 `[translation]` 段配置 `[[translation.pairs]]` 语言对（缺省请求以 400 `translate-not-configured` 显性拒绝）；语言检测无模型依赖，任何构建均可用。
-
-> **🔧 译文后处理与超时**：翻译在引擎出口做确定性后处理（服务层与库用户同享）——`target=zh` 时繁→简归一化、URL 协议分隔符与 LaTeX 转义符号修复；模型级高频误译经 `[[translation.pairs.output_fixes]]` 字面替换表（按声明序）修复，见 [`config/config.toml`](config/config.toml) `[translation]` 段。HTTP 全局请求超时经 `[server] request_timeout_seconds` 配置（CPU seq2seq 译论文级长摘要需 15-130+s，`config/config.toml` 已显式设 300s）。
-
-交互式 OpenAPI 文档（Swagger UI）：`cargo build --features swagger-ui` 后访问 `http://localhost:9002/swagger-ui/`；规范 JSON：`/api-docs/openapi.json`（单二进制、一次构建；注意根路径 `/api-docs` 不提供 UI）。同 feature 下交互式 ReDoc 见 `/redoc`（锁定版本 + SRI 校验的 jsdelivr CDN 渲染，浏览器离线时不可用）。分阶段指标（拼批/去重/分段延迟等）见 [⚡ 性能指南 · 新增指标](docs/cn/PERFORMANCE.md#-新增指标)。
-
-### 🔖 Feature 标志
-
-下表逐项对应 `Cargo.toml` 的 `[features]` 定义，`default = ["http", "onnx"]`。
-
-<details>
-<summary>📋 表格</summary>
-
-| Feature | 默认 | 说明 |
-|---------|------|------|
-| `http` | ✅ | HTTP/REST API + OpenAPI 文档 + Prometheus 指标 |
-| `grpc` | - | gRPC 服务器（sdforge `#[forge(grpc_method)]` 生成） |
-| `cli` | - | CLI 命令行工具 |
-| `mcp` | - | MCP 协议接口（LLM 工具集成，stdio 模式） |
-| `openapi` | - | OpenAPI 规范程序化导出（sdforge/openapi，不经 swagger-ui 链） |
-| `swagger-ui` | - | Swagger UI 交互页面 + `/api-docs/openapi.json`（挂主服务端口；默认构建不编译，单二进制一次构建） |
-| `schema` | - | OpenAPI Schema 派生（`http`/`openapi` 自动启用；支持 library 模式类型导出） |
-| `db` | - | dbnexus 数据库持久化基础设施（驱动无关，须搭配 `sqlite` 或 `postgres` 驱动 feature 二选一） |
-| `sqlite` | - | SQLite 数据库驱动（含 `db` + `dbnexus/sqlite` + `inklog/sqlite`） |
-| `postgres` | - | PostgreSQL 数据库驱动（含 `db` + `dbnexus/postgres` + `inklog/postgres`） |
-| `auth` | - | JWT 认证 + CSRF + RBAC + AES-256-GCM 加密 |
-| `cuda` | - | CUDA 设备支持（cudarc driver + nvml 检测，后端正交；candle 的 CUDA 后端另经 `candle-cuda`） |
-| `candle-cuda` | - | candle 后端的 CUDA 计算加速（含 `candle`） |
-| `metal` | - | Apple Silicon Metal GPU（candle 后端，含 `candle`） |
-| `onnx` | ✅ | ONNX Runtime 引擎（**默认启用**，随 default） |
-| `candle` | - | candle 回退后端（opt-in：CandleEngine embedding / candle 决策头 / GGUF 量化桥；未启用时 `engine_type="candle"` 启动期显性拒绝） |
-| `transcribe` | - | Qwen3-ASR 转录引擎（三图 + silero VAD + fbank），库内 `InferenceEngine::transcribe` 入口；HTTP/gRPC 服务面已接线（`POST /api/v1/transcribe`，`[transcribe]` 段装配） |
-| `mkl` | - | x86_64 CPU MKL 加速后端（candle 路径 opt-in，含 `candle`；需链接正常的工具链） |
-| `accelerate` | - | aarch64 macOS Accelerate 加速后端（candle 路径 opt-in，含 `candle`） |
-| `quantized-gguf` | - | GGUF 量化引擎开关（加载期反量化桥实现于 candle 路径，运行期与 fp32 等价） |
-| `character_converter` | - | 独立启用 `character_converter` 字符转换依赖（`onnx` feature 已隐含启用） |
-
-</details>
-
-> **📦 内置依赖说明**: `confers`（配置）、`inklog`（日志）、`oxcache`（缓存）、`limiteron`（限流）、`trait-kit`（模块注册）为必选依赖，始终启用，无需通过 feature 开启。`sdforge` 在 `http`/`grpc`/`cli`/`mcp` 任一协议 feature 下启用。
-
-> **🧪 实验通路**: 转录的本地实验 harness（独立 crate，二进制 `transcribe-own`）已收敛为薄壳 CLI——推理经主仓门面 `vecboost::transcribe`，py-torch 基线对拍通路保留；**该目录为本机目录，不入 git 仓库**。产品化实现见 `src/engine/transcribe/`；CLI 契约要点与消费面规范见 [🧹 维护规范](docs/cn/MAINTENANCE.md)。
+VecBoost 由 `sdforge` 从处理函数单一源生成四种协议接口（HTTP/gRPC/MCP/CLI，`src/api/` 各域一份单一源）；全部端点、参数、请求/响应示例、gRPC 方法表、MCP 工具清单与错误码见 [📘 API 参考](docs/cn/API_REFERENCE.md)，交互式 OpenAPI 文档见 [📚 OpenAPI 文档](docs/cn/API_REFERENCE.md#-openapi-文档)（`/swagger-ui/` 与 `/redoc`，需 `swagger-ui` feature）。
 
 ---
 
@@ -392,30 +234,13 @@ curl -X POST http://localhost:9002/api/v1/detect \
 
 </details>
 
-> **ℹ️ 说明**：`docs/benchmarks/`（基准归档）、`docs/reviews/`（评审台账，含 `I18N_MISSING_AUDIT.md`、`TRANSLATION_REVIEW_LEDGER.md`）与 `docs-transcribe/` 均为**仅本机保留**目录（见 `.gitignore`），不入 git，干净 clone 中不存在。基准关键数字已内联于 [⚡ 性能指南](docs/cn/PERFORMANCE.md)。
+> **ℹ️ 说明**：`docs/benchmarks/`（基准归档）、`docs/reviews/`（评审台账）与 `docs-transcribe/` 均为**仅本机保留**目录（见 `.gitignore`），不入 git，干净 clone 中不存在。基准关键数字已内联于 [⚡ 性能指南](docs/cn/PERFORMANCE.md)。
 
 ---
 
 ## 💻 示例
 
 全部示例位于 [`examples/`](examples/) 目录，作为独立 workspace member crate `vecboost-examples`（12 个分类、31 个可执行二进制），覆盖基础嵌入、HTTP/CLI 调用、引擎切换、认证、缓存、限流、监控、审计、语义缓存与 Library SDK 集成；逐分类清单见 [`examples/README.md`](examples/README.md)。
-
-<details>
-<summary>📄 代码 · bash</summary>
-
-```bash
-# 运行单个示例
-cargo run -p vecboost-examples --bin embed
-cargo run -p vecboost-examples --bin library_usage --features candle
-cargo run -p vecboost-examples --bin matryoshka
-
-# ONNX 引擎示例（需要 ONNX Runtime）
-cargo run -p vecboost-examples --bin onnx --features onnx
-```
-
-> **ℹ️ 说明**：`library_usage` 在 `examples/Cargo.toml` 声明 `required-features = ["candle"]`，须以 `--features candle` 运行；`onnx` / `laya_poc` 声明 `required-features = ["onnx"]`。其余示例（含 cache / auth / rate-limiting / monitoring / engine 等）无 feature 依赖，`vecboost-examples` 自身只定义 `onnx` / `candle` / `metal` 三个透传 feature。
-
-</details>
 
 ---
 
@@ -429,116 +254,13 @@ VecBoost 采用模块化生态架构：`trait-kit` 以 typestate 模块注册中
 
 ## 🧪 测试
 
-### 🎯 测试策略
-
-测试栈分六层：`src/` 内联单元测试、`tests/integration/` 集成测试、专项集成（doctor / gRPC E2E / 模型快照回归 / 量化质量门 / SDK 矩阵）、`tests/scenario/*.py` 真实服务场景测试（16 个 pytest 套件）、`tests/perf/` 性能回归阈值与 `benches/` 的 6 组 Criterion 微基准。`TEST_MODE` 环境变量控制测试引擎（`mock` 默认 / `light` / `full`）。各层职责、场景穷举矩阵与 CI 工作流对应关系见 [🧪 测试场景矩阵](docs/cn/TEST_SCENARIOS.md)。
-
-### ⚡ 运行命令（与 CI 一致）
-
-以下命令提取自 `.github/workflows/health-check.yml`（Health Check）、`feature-matrix.yml`、`scenario-tests.yml` 与 `docs/cn/CONTRIBUTING.md`。依赖来源提示：7 库生态当前全部取自 crates.io registry（`Cargo.toml` 无 `path =` 依赖、无 `[patch]`，`Cargo.lock` 记录 `source = "registry+https://github.com/rust-lang/crates.io-index"`），门禁命令仍建议以 `-p vecboost -p vecboost-examples` 限定，避免把 workspace 内其他成员的中间态卷进门禁。
-
-<details>
-<summary>📄 代码 · bash</summary>
-
-```bash
-# 格式与 Lint 门禁（CI：clippy unwrap_used 为生产代码 panic 面门禁）
-cargo fmt --all -- --check
-cargo clippy --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --all-targets -- -D warnings -W clippy::unwrap_used
-
-# 全特性编译检查（feature-matrix）
-cargo check --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
-
-# 单元 + 集成测试（CI 分 --lib 与 --tests 两步）
-cargo test --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --lib
-cargo test --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp" --tests
-
-# gRPC E2E（拉起真实二进制）
-cargo test -p vecboost --features http,grpc --test grpc_e2e
-
-# 场景测试（pytest，conftest 自动拉起真实服务器；models/ 缺席时推理用例自动 SKIP）
-cargo build -p vecboost --features http,auth,cli,mcp,grpc
-pytest tests/scenario -q --junitxml=scenario-results.xml
-
-# Python 性能测试（sim 标记区分模拟器用例）
-pytest tests/perf -m "not sim"   # 只跑真实服务用例
-pytest tests/perf -m sim          # 只跑模拟器用例
-
-# 覆盖率（CI 硬门禁：行覆盖率 ≥ 90%，llvm-cov；分母含 lib + 集成测试 + 真实启动腿，禁止 --lib 窄口径）
-cargo llvm-cov --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp,distributed-redis" --tests --lcov --output-path coverage/lcov.info
-
-# 基准测试（CI benchmark job）
-cargo bench --features "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
-
-# 文档构建与死链检查
-cargo doc --workspace --no-deps
-
-# 依赖安全审计
-cargo audit
-```
-
-</details>
-
-### 📊 测试规模
-
-截至 v0.3.0 工作区：单元测试（`src/` 内联，`#[test]` / `#[tokio::test]` 属性计数）2370 个、Rust 集成/专项测试（`tests/` 含子目录，同法计数）129 个测试属性、Python 场景/性能用例 150 个（场景 123 + 性能 27，16 个场景套件）、Criterion 微基准 6 组；CI 硬门禁为行覆盖率不低于 90%（llvm-cov），Python 场景测试为每夜定时任务（UTC 03:00）不阻塞 PR。逐项统计与场景矩阵见 [🧪 测试场景矩阵](docs/cn/TEST_SCENARIOS.md)。
+测试栈分六层：`src/` 内联单元测试、`tests/integration/` 集成测试、专项集成（doctor / gRPC E2E / 模型快照回归 / 量化质量门 / SDK 矩阵）、`tests/scenario/*.py` 真实服务场景测试（16 个 pytest 套件）、`tests/perf/` 性能回归阈值与 `benches/` 的 6 组 Criterion 微基准。分层职责、场景穷举矩阵与运行命令（与 CI 一致）见 [🧪 测试场景矩阵](docs/cn/TEST_SCENARIOS.md)，环境搭建与质量门禁见 [🤝 贡献指南](docs/cn/CONTRIBUTING.md)。
 
 ---
 
 ## 📊 性能
 
-基准数据来自 `docs/benchmarks/` 实测归档（criterion；该目录为**仅本机保留**，见 `.gitignore`，干净 clone 中不存在）：SIMD 向量相似度较标量最高 **3.06x**（1024 维 cosine 约 341.7 ns），语义缓存精确命中约 10 ns，candle 单文本在 `--features mkl` 下 **4.0×** 加速。完整基准表、性能设计要点（时间窗拼批/批内去重/SIMD/线程调优/jemalloc）、GGUF 量化与调优开关注册表见 [⚡ 性能指南](docs/cn/PERFORMANCE.md)。
-
-### 🧭 引擎选型：为什么主引擎是 onnxruntime（实测证据）
-
-> **采集条件**：2026-10-18，AMD Ryzen 9 9950X（16 核）/ 66 GiB / RTX 5080 16 GiB（WSL2）；
-> ORT ① 1.28.2（CPU）/ ② 1.24.3（CUDA EP）；嵌入用 bge-small-en-v1.5（同一模型的两份导出），
-> 转录用 Qwen3-ASR（0.6B / 1.7B，700 秒中文音频，CER 对比同一参照稿）；每格 2~3 遍取稳定值。
-
-**嵌入吞吐（单条 / 批量×32，越小越好）**
-
-<details>
-<summary>📋 表格</summary>
-
-| 引擎 × 设备 | 单条 | 批量×32 | 结论 |
-|---|---|---|---|
-| **onnxruntime × CPU** | **2.56 ms** | **26.35 ms** | 产品默认，CPU 最优 |
-| candle × CPU | 78.0 ms | 186.5 ms | 分别慢 **30.5× / 7.1×** |
-| onnxruntime × CUDA | 2.70 ms | **3.06 ms** | 批量最优 |
-| candle × CUDA（`candle-cuda`） | 5.05 ms | 6.70 ms | 比自家 CPU 快 15.4×/27.8×，仍比 ort GPU 慢 **1.9×/2.2×** |
-
-</details>
-
-- **切换到 ort 的直接原因**：candle 的 CPU 前向是原生实现且**不投入优化**——单条差 30 倍、批量差 7 倍；
-  即使开 `--features mkl`（单条 4×）也只降到 ~17.5 ms，**仍比 ort 慢约 6.8 倍**。
-- **GPU 不能当替代方案**：同卡同模型，ort 的 CUDA EP 仍快约 2 倍，两者显存同级（~1.95 GB）；
-  但 candle 的 GPU 相对自家 CPU 是质变（15~36 倍），它落后的是引擎实现，不是设备。
-- **嵌入量化**：`int8` 相对 fp32 单条 **−22%** / 批量 **−16%** / 内存 **−55%**，余弦中位 **0.9971**（基本无损）；
-  `q4` 更快但余弦降至 0.9849。精度闸门：`tests/engine_backend_parity.rs::onnx_quantized_vs_fp32_parity`。
-
-**转录吞吐（Qwen3-ASR，700 秒音频；4 并行档 / 服务串行档）**
-
-<details>
-<summary>📋 表格</summary>
-
-| 通路 | 耗时 | CER | 资源 |
-|---|---|---|---|
-| **ort 0.6B int8 × CPU** | **70.4 s / 137.2 s** | 7.75% | 零显存 |
-| ort 0.6B int8 × CUDA | 199.4 s | 7.36% | 显存 14.4 GiB（**GPU 负优化**） |
-| 嵌入 Python 0.6B bf16 × CUDA | 51.2 s | 22.81%（长音频塌缩） | 显存 11.7 GiB + Python 栈 |
-| ort 1.7B int8 × CPU | 135.7~142.1 s | 15.78~18.99% | 零显存 |
-| **ort 1.7B fp32（无损）× CPU** | 698.8 s | **7.24%** | 零显存 |
-| **嵌入 Python 1.7B bf16 × CUDA** | **55.9 s** | **2.49%** | 显存 14.5 GiB + Python 栈 |
-
-</details>
-
-- **转录上 GPU 对 ort 全线为负**（0.6B 慢 2.6×、1.7B int8 慢 1.6×、1.7B fp32 慢 2.3×）：显卡出力仅 ~15%，显存却吃满；
-  原因是逐段解码的 kernel 太小，被启动与主机↔显存同步支配。
-- **质量瓶颈在量化而非引擎**：混合 bundle 拆解证明 **decoder 动态量化**吃掉全部 7.9 个 CER 点，encoder 量化几乎零代价
-  → 纯 Rust 的高质量档 = **int8 encoder + fp32 decoder（7.27% / 656 s / 零显存）**。
-- 嵌入 Python 更快且（1.7B 时）最准，但**不走 VAD 分段**，长音频质量塌到 22.8%；且需 Python 运行时入进程、显存 11.7~14.5 GiB。
-
-> 完整矩阵（服务口径、HTTP 端到端、混合量化归因、fp16 守卫）见本机
-> `docs/benchmarks/transcribe_engine_baseline.md` 与 `docs/benchmarks/embed_rerank_translate_baseline.md`。
+基准数据来自 `docs/benchmarks/` 实测归档（criterion；该目录为**仅本机保留**，见 `.gitignore`，干净 clone 中不存在）：SIMD 向量相似度较标量最高 **3.06x**（1024 维 cosine 约 341.7 ns），语义缓存精确命中约 10 ns，candle 单文本在 `--features mkl` 下 **4.0×** 加速。完整基准表、引擎选型实测证据、性能设计要点（时间窗拼批/批内去重/SIMD/线程调优/jemalloc）、GGUF 量化与调优开关注册表见 [⚡ 性能指南](docs/cn/PERFORMANCE.md)。
 
 ---
 
@@ -560,67 +282,13 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 
 ## 🧭 开发路线图
 
-<details>
-<summary>📋 表格</summary>
-
-<table style="width:100%; border-collapse: collapse">
-<tr><th style="text-align:center">状态</th><th style="text-align:left">方向</th><th style="text-align:left">条目</th></tr>
-<tr><td align="center">✅</td><td>核心服务</td><td>四协议单一源生成、Candle/ONNX 双引擎、Bert/XlmRoberta 双架构、优先级队列与时间窗拼批</td></tr>
-<tr><td align="center">✅</td><td>生态集成</td><td>7 库生态接线（trait-kit 注册中心、confers 配置、inklog 日志、oxcache 缓存、limiteron 限流、dbnexus 持久化、sdforge 接口）</td></tr>
-<tr><td align="center">✅</td><td>安全与 i18n</td><td>JWT/CSRF/RBAC/TOTP、安全默认值收敛、审计日志、ICU+Fluent 双语错误</td></tr>
-<tr><td align="center">✅</td><td>性能基座</td><td>SIMD 相似度、连续批处理、语义缓存、GPU 内存分页、BF16 推理、Matryoshka 降维</td></tr>
-<tr><td align="center">✅</td><td>审计修复（0.3.0-rc.1）</td><td>安全默认值/登录收敛/XFF 信任反转/RBAC 接线/缓存键模型命名空间等破坏性行为变更（见 [更新日志](#-更新日志)）</td></tr>
-<tr><td align="center">✅</td><td>调优开关（0.3.0-rc.1）</td><td>GGUF 量化、向量输出量化、多模型 LFRU 驻留、缓存 WAL、硬件感知规划、doctor 诊断、启动预热</td></tr>
-<tr><td align="center">✅</td><td>量化推理后端</td><td>GGUF 引擎经“加载期反量化桥”交付（Q8_0/Q4_K；路由/魔数校验/质量门齐备）；收益为存储与加载体积，运行期与 fp32 等价（无算力加速），质量门需模型资产实跑</td></tr>
-<tr><td align="center">✅</td><td>多副本会话外置</td><td>`[auth] session_backend = "database"`（部署库 `garrison_kv`，garrison DbnexusKvDao）；锁定计数由 `AtomicKvDao` 原子化（见下行）</td></tr>
-<tr><td align="center">✅</td><td>多副本共享状态</td><td>限流与精确缓存 Redis 后端（`distributed-redis`，Lua 原子固定窗口）、语义缓存模糊索引（Redis Hash + LRU ZSET）、封禁清单（`ban-sync`）跨副本共享、锁定计数原子化（`AtomicKvDao`）</td></tr>
-<tr><td align="center">✅</td><td>性能基线（吞吐 + MKL）</td><td>吞吐基线与 MKL 对比基线已实测（2026-09-16，见 <a href="docs/cn/PERFORMANCE.md">性能指南</a>）</td></tr>
-<tr><td align="center">📋</td><td>性能基线（Accelerate）</td><td>Accelerate（macOS）待验证：无 Apple 硬件，验证协议已登记于性能指南</td></tr>
-<tr><td align="center">✅</td><td>文档与可观测性</td><td>ReDoc（`/redoc`，`swagger-ui` feature）、预配置 Grafana 仪表板（`deploy/grafana/`）</td></tr>
-</table>
-
-</details>
+路线图条目（核心服务 / 生态集成 / 安全与 i18n / 性能基座 / 调优开关 / 多副本共享状态等，✅ 已完成 / 📋 计划中）随版本演进维护，见 [📋 更新日志 · 开发路线图](docs/cn/CHANGELOG.md#-开发路线图)。
 
 ---
 
 ## 🤝 参与贡献
 
-详细的贡献流程与代码规范请参阅 [🤝 贡献指南](docs/cn/CONTRIBUTING.md)。
-
-### 🔨 开发环境
-
-工具链为 Rust 1.91+（`Cargo.toml` `rust-version` 为权威值）与 Python ≥ 3.10 + pytest（可选 protobuf-compiler、docker）；提交前须通过 fmt / clippy（`unwrap_used` panic 面门禁）/ 测试 / `scripts/doc_consistency_check.py` 四道质量门禁，Git 钩子经 [pre-commit](https://pre-commit.com/)（`.pre-commit-config.yaml` → `scripts/pre-commit.sh`）自动执行；提交信息遵循 Conventional Commits，行为变更须在 CHANGELOG `Unreleased` 段登记并同步双语 README。环境搭建、构建组合与质量门禁命令见 [🤝 贡献指南](docs/cn/CONTRIBUTING.md)。
-
-### 💖 贡献方式
-
-<table style="width:100%; border-collapse: collapse">
-<tr>
-<td width="33%" align="center" style="padding: 16px">
-
-### 🐛 报告 Bug
-
-发现问题？<br>
-<a href="https://github.com/Kirky-X/vecboost/issues/new">创建 Issue</a>
-
-</td>
-<td width="33%" align="center" style="padding: 16px">
-
-### 💡 功能建议
-
-有好想法？<br>
-<a href="https://github.com/Kirky-X/vecboost/issues/new">发起讨论</a>
-
-</td>
-<td width="33%" align="center" style="padding: 16px">
-
-### 🔧 提交 PR
-
-想贡献代码？<br>
-<a href="https://github.com/Kirky-X/vecboost/pulls">Fork 并提交 PR</a>
-
-</td>
-</tr>
-</table>
+详细的贡献流程与代码规范请参阅 [🤝 贡献指南](docs/cn/CONTRIBUTING.md)。发现问题请[创建 Issue](https://github.com/Kirky-X/vecboost/issues/new)，有好想法欢迎[发起讨论](https://github.com/Kirky-X/vecboost/issues/new)，欢迎 Fork 并提交 [PR](https://github.com/Kirky-X/vecboost/pulls)。
 
 ---
 
@@ -628,24 +296,7 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 
 完整版本历史见 [📋 更新日志](docs/cn/CHANGELOG.md)（遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，语义化版本）。
 
-<details>
-<summary>📋 表格</summary>
-
-| 版本 | 日期 | 要点 |
-|------|------|------|
-| 0.3.0 | 2026-11-14 | i18n 引擎退役（自研 FluentBundle → FTL 轻量解析 + sdforge::i18n 注册面统一）、自研依赖 rc 定版稳定（8 库收敛 minor 精度）、场景套件 CI 修复、tokio 特性裁剪、依赖升级（ort rc.15 / uuid 1.29 / redis 1.8） |
-| 0.3.0-rc.3 | 2026-10-20 | onnx-primary 引擎切换（ort 默认、candle opt-in）、审计日志 DB/文件双写、同文并发去重、body 上限修正、swagger-ui/ReDoc 文档面、会话外置 database 后端、Grafana 仪表板、多副本共享语义缓存/封禁清单、`[database] max_connections` 生效 |
-| 0.3.0-rc.2 | 2026-10-15 | 转录（Qwen3-ASR）服务面、翻译/语言检测全协议接入、决策任务优先级队列、自研依赖升级 |
-| 0.3.0-rc.1 | 2026-09-22 | 审计修复与调优开关（安全默认值/登录收敛/XFF/RBAC/缓存键、GGUF/LFRU/WAL/硬件规划/doctor/预热）、PARQ 存储替换 oxcache、"generate" 统一接口 |
-| 0.2.1 | 2026-07-30 | i18n 国际化、Rerank 重排序三协议、语义缓存三级查询、BF16 精度、SIMD 相似度、连续批处理调度、GPU 内存分页、Library 模式 |
-| 0.2.0 | 2026-07-24 | sdforge 四协议统一生成、7 库生态接线、Matryoshka 截断重归一化、vuln-0009 repo_id 校验 |
-| 0.1.2 | 2026-01-16 | 补丁修订 |
-| 0.1.1 | 2026-01-15 | 补丁修订 |
-| 0.1.0 | 2026-01-10 | VecBoost 初始发布 |
-
-</details>
-
-0.3.0-rc.1 含多项破坏性行为变更（安全默认值收敛、登录收敛、XFF 信任反转、RBAC 接线、缓存键/分词器变更等），**升级必读**：逐项「旧行为 → 新行为 → 迁移动作」对照表见 [📋 更新日志 · 0.3.0-rc.1](docs/cn/CHANGELOG.md#030-rc1---2026-09-22)。多副本边界（auth 会话默认进程内存，可经 `session_backend = "database"` 外置；限流/缓存现可经 `distributed-redis` 外置 Redis——rc.1 时点两者仍为进程内）与热重载语义（配置变更重启后生效）见 [❓ FAQ](docs/cn/FAQ.md#-配置与部署)。
+0.3.0-rc.1 含多项破坏性行为变更（安全默认值收敛、登录收敛、XFF 信任反转、RBAC 接线、缓存键/分词器变更等），**升级必读**：逐项「旧行为 → 新行为 → 迁移动作」对照表见 [📋 更新日志 · 0.3.0-rc.1](docs/cn/CHANGELOG.md#030-rc1---2026-09-22)。多副本边界（auth 会话默认进程内存，可经 `session_backend = "database"` 外置；限流/缓存现可经 `distributed-redis` 外置 Redis）与热重载语义（配置变更重启后生效）见 [❓ FAQ](docs/cn/FAQ.md#-配置与部署)。
 
 ---
 
@@ -657,37 +308,7 @@ VecBoost 默认安全：出厂仅回环绑定，`auth.enabled=false` 时绑定�
 
 ## 🙏 致谢
 
-### 🌟 核心依赖
-
-VecBoost 站在以下优秀开源项目的肩膀上：
-
-<details>
-<summary>📋 表格</summary>
-
-| 依赖 | 用途 |
-|------|------|
-| [onnxruntime](https://github.com/microsoft/onnxruntime) | 跨平台推理运行时（默认引擎，经 [`ort`](https://crates.io/crates/ort) 绑定 + `load-dynamic` 加载 `3rdparty/` 动态库） |
-| [candle](https://github.com/huggingface/candle) | 原生 Rust ML 推理框架（opt-in 回退后端，`candle` feature） |
-| [tokenizers](https://github.com/huggingface/tokenizers) | HuggingFace 分词器（全平台统一） |
-| [hf-hub](https://crates.io/crates/hf-hub) | HuggingFace Hub 模型下载 |
-| [trait-kit](https://crates.io/crates/trait-kit) | 模块注册中心与 typestate 依赖管理 |
-| [confers](https://crates.io/crates/confers) | 配置加载（TOML + 环境变量 + 校验） |
-| [inklog](https://crates.io/crates/inklog) | 结构化日志基础设施 |
-| [oxcache](https://crates.io/crates/oxcache) | 高性能缓存后端 |
-| [limiteron](https://crates.io/crates/limiteron) | 令牌桶限流器 |
-| [dbnexus](https://crates.io/crates/dbnexus) | 数据库持久化（`db` feature） |
-| [sdforge](https://crates.io/crates/sdforge) | 多协议接口生成 |
-| [garrison](https://crates.io/crates/garrison) | 认证与安全加固（`auth` feature） |
-| [axum](https://github.com/tokio-rs/axum) | HTTP 框架（由 sdforge 生成） |
-| [tokio](https://github.com/tokio-rs/tokio) | 异步运行时 |
-| [utoipa](https://github.com/juhaku/utoipa) | OpenAPI 文档 |
-| [prometheus](https://github.com/tikv/rust-prometheus) | 指标导出 |
-| [criterion](https://github.com/bheisler/criterion.rs) | 基准测试 |
-| [tikv-jemallocator](https://github.com/tikv/jemallocator) | jemalloc 全局分配器（Linux glibc） |
-
-</details>
-
-### 💝 特别感谢
+核心依赖清单（onnxruntime / candle / tokenizers / hf-hub / 7 库生态 / garrison / axum / tokio / utoipa / prometheus / criterion / jemallocator）见 [🏗️ 架构文档 · 核心依赖致谢](docs/cn/ARCHITECTURE.md#-核心依赖致谢)。
 
 感谢 Rust 社区、Hugging Face（模型与分词器生态）与所有[贡献者](https://github.com/Kirky-X/vecboost/graphs/contributors)。
 
@@ -711,16 +332,6 @@ VecBoost 站在以下优秀开源项目的肩膀上：
 </td>
 </tr>
 </table>
-
----
-
-## ⭐ Star 历史
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Kirky-X/vecboost&type=Date)](https://star-history.com/#Kirky-X/vecboost&Date)
-
-如果这个项目对您有帮助，请考虑给它一个 ⭐️！
-
-**由 Kirky.X 构建**
 
 ---
 

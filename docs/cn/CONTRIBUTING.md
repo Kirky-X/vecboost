@@ -95,7 +95,7 @@ python3 scripts/i18n_consistency_check.py # 修改用户可见文案/语言包�
 
 ## 📚 文档约定
 
-- `docs/` 平铺 UPPER_SNAKE 命名：`USER_GUIDE.md`、`API_REFERENCE.md`、`ARCHITECTURE.md`、`CHANGELOG.md`、`CONTRIBUTING.md`、`FAQ.md`、`PERFORMANCE.md`、`SECURITY.md`、`TEST_SCENARIOS.md`、`MAINTENANCE.md`。
+- `docs/cn/`（中文）与 `docs/en/`（英文）平铺 UPPER_SNAKE 命名，两目录文件一一对应：`USER_GUIDE.md`、`API_REFERENCE.md`、`ARCHITECTURE.md`、`CHANGELOG.md`、`CONTRIBUTING.md`、`FAQ.md`、`PERFORMANCE.md`、`SECURITY.md`、`TEST_SCENARIOS.md`、`MAINTENANCE.md`。
 - 每篇文档内部结构：`# <emoji> <标题>` → `## 📋 目录` → emoji 章节。
 - 修改 README/API 后运行 `python3 scripts/doc_consistency_check.py` 保持文档与实现一致。
 - 性能数字必须来自 `docs/benchmarks/` 实测归档或标注测量方法，禁止编造；实验结论回写 [docs/PERFORMANCE.md](PERFORMANCE.md)。

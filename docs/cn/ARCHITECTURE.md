@@ -76,13 +76,13 @@ VecBoost 是一个使用 Rust 构建的**多功能推理服务**。它为文本�
 
 | 库 | 版本 | 用途 | Feature |
 |----|------|------|---------|
-| **trait-kit** | `0.5.0-rc.10` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
-| **confers** | `0.6.0-rc.11` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | 始终启用 |
-| **inklog** | `0.3.0-rc.10` | 结构化日志基础设施（控制台 + 文件轮转） | 始终启用 |
-| **oxcache** | `0.5.0-rc.10` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | 始终启用 |
-| **limiteron** | `0.3.0-rc.8` | 令牌桶限流器（多维度独立计数） | 始终启用 |
-| **dbnexus** | `0.6.0-rc.10` | 数据库持久化（SQLite/PostgreSQL + 权限角色） | `db` |
-| **sdforge** | `0.5.0-rc.9` | 多协议接口生成（HTTP/gRPC/MCP/CLI 单一源定义） | `http`/`grpc`/`cli`/`mcp` |
+| **trait-kit** | `0.5.0` | 模块注册中心与 typestate 依赖管理（`Kit<Unbuilt> → Kit<Ready>`） | 始终启用 |
+| **confers** | `0.6.0` | 配置加载（TOML + 环境变量覆盖 + 热重载订阅） | 始终启用 |
+| **inklog** | `0.3.0` | 结构化日志基础设施（控制台 + 文件轮转） | 始终启用 |
+| **oxcache** | `0.5.0` | 高性能缓存后端（LRU/LFU/FIFO + TTL 驱逐） | 始终启用 |
+| **limiteron** | `0.3.1` | 令牌桶限流器（多维度独立计数） | 始终启用 |
+| **dbnexus** | `0.6.1` | 数据库持久化（SQLite/PostgreSQL + 权限角色） | `db` |
+| **sdforge** | `0.5.1` | 多协议接口生成（HTTP/gRPC/MCP/CLI 单一源定义） | `http`/`grpc`/`cli`/`mcp` |
 
 > 七库当前全部取自 crates.io registry（`Cargo.toml` 无 `path =` 依赖、无 `[patch]`；`Cargo.lock` 记录 `source = "registry+https://github.com/rust-lang/crates.io-index"`）。版本号以根目录 `Cargo.toml` 为权威值。
 
@@ -823,11 +823,11 @@ graph TB
 
 | 优化技术 | 说明 | 收益 |
 |----------|------|------|
-| **GPU 内存池** | 预分配 CUDA/Metal 缓冲区（`src/device/memory_pool.rs`） | 减少设备分配开销 |
+| **GPU 内存池** | 预分配 CUDA/Metal 缓冲区（`src/device/memory_pool/`） | 减少设备分配开销 |
 | **自适应缓存** | ARC 缓存策略 | 最小化内存碎片 |
 | **零拷贝** | 尽可能使用共享引用 | 减少内存复制 |
 
-> ⚠️ **注意**：`CandleEngine.tensor_pool` 字段已在 v0.2.0 移除（原张量池存在 mask 全零 bug），张量缓冲区改由 Candle 内部管理。设备级 GPU 内存池（`src/device/memory_pool.rs`）保留。
+> ⚠️ **注意**：`CandleEngine.tensor_pool` 字段已在 v0.2.0 移除（原张量池存在 mask 全零 bug），张量缓冲区改由 Candle 内部管理。设备级 GPU 内存池（`src/device/memory_pool/`）保留。
 
 ---
 
@@ -1025,7 +1025,7 @@ tests/
 
 ---
 
-> **📝 最后更新**: 2026-11-14 | **版本**: 0.3.0 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-11-16 | **版本**: 0.3.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
 
 ---
 

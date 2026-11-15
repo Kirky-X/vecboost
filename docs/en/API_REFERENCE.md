@@ -1603,6 +1603,7 @@ ip_whitelist = ["127.0.0.1"]
 
 | Version | Date | Changes |
 |------|------|----------|
+| `0.3.1` | 2026-11-15 | Transitive `bincode` removal (RUSTSEC-2025-0141, dead `character_converter` chain): traditional→simplified normalization moved to the in-tree `engine::t2s` dictionary (115,571 entries; 264,176 golden samples verified with 0 differences); `character_converter` feature kept as an empty shell to avoid downstream breakage |
 | `0.3.0` | 2026-11-14 | i18n engine retirement (in-house FluentBundle → lightweight FTL parsing + unified sdforge::i18n registration), self-maintained dependencies stabilized from rc, tokio feature trimming, dependency upgrades (ort rc.15 / uuid 1.29 / redis 1.8) |
 | `0.3.0-rc.3` | 2026-10-20 | Multi-replica shared semantic cache/ban list (`distributed-redis`), `[database] max_connections` and `connect_timeout_secs` now effective, auth session externalization via `session_backend = "database"`, onnx-primary engine switch, audit-log DB/file dual-write, in-flight dedup for identical requests |
 | `0.3.0-rc.2` | 2026-10-15 | Transcription (Qwen3-ASR) service surface, translation and language detection across all protocols, decision-task priority queue |
@@ -1625,4 +1626,4 @@ ip_whitelist = ["127.0.0.1"]
 
 ---
 
-> **📝 Last updated**: 2026-11-14 | **Version**: 0.3.0 | **Feedback**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 Last updated**: 2026-11-16 | **Version**: 0.3.1 | **Feedback**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

@@ -1330,7 +1330,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 {"error": "Text cannot be empty", "code": 400, "error_code": "error-invalid-input"}
 ```
 
-> **💡 说明**: i18n 覆盖所有用户可见消息：HTTP JSON 错误响应、CLI 帮助文本、gRPC 错误详情、启动错误日志。翻译键定义在 `src/i18n/locales/{en,zh}/messages.ftl` 和 `errors.ftl`（每种语言共 577 个键：`messages.ftl` 557 + `errors.ftl` 20）。
+> **💡 说明**: i18n 覆盖所有用户可见消息：HTTP JSON 错误响应、CLI 帮助文本、gRPC 错误详情、启动错误日志。翻译键定义在 `src/i18n/locales/{en,zh}/messages.ftl` 和 `errors.ftl`（每种语言共 632 个键：`messages.ftl` 612 + `errors.ftl` 20）。
 
 ---
 
@@ -1634,4 +1634,4 @@ free -h     # 内存
 
 ---
 
-> **📝 最后更新**: 2026-11-14 | **版本**: 0.3.0 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 最后更新**: 2026-11-16 | **版本**: 0.3.1 | **问题反馈**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

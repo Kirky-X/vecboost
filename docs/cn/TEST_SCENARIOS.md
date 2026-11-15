@@ -1,6 +1,6 @@
 # 🧪 VecBoost 测试场景矩阵
 
-> 适用版本：VecBoost **0.3.0**（workspace，Rust edition 2024 / `rust-version = 1.91`）。
+> 适用版本：VecBoost **0.3.1**（workspace，Rust edition 2024 / `rust-version = 1.91`）。
 > 用途：穷举 vecboost 的测试栈职责划分与全部验收场景，回答"该把测试写在哪里"。
 > 编写依据（只读核对）：`tests/scenario/*.py`（16 个套件及 docstring 中的 R-* 场景 ID）、`tests/*.rs`、`tests/perf/`、`benches/`、`.github/workflows/`（health-check / feature-matrix / scenario-tests）、`scripts/run-scenario-tests.sh`、`tests/scenario/conftest.py`。
 > 所有套件名与场景 ID 均经 `grep` 核实存在。
@@ -116,7 +116,7 @@ pytest tests/perf -m sim          # 只跑模拟器用例
 
 ## 🧱 单元测试
 
-`src/` 各模块内联 `#[cfg(test)]` 模块（grep 统计 `#[test]` / `#[tokio::test]` 共 2370 个），随 `cargo test --lib` 执行。测试代码允许 `unwrap`（`clippy.toml` 开启 `allow-unwrap-in-tests`），生产代码禁止。共享环境变量竞态经 `ENV_LOCK` 串行化（安全默认值测试组）。
+`src/` 各模块内联 `#[cfg(test)]` 模块（grep 统计 `#[test]` / `#[tokio::test]` 共 2363 个），随 `cargo test --lib` 执行。测试代码允许 `unwrap`（`clippy.toml` 开启 `allow-unwrap-in-tests`），生产代码禁止。共享环境变量竞态经 `ENV_LOCK` 串行化（安全默认值测试组）。
 
 ---
 

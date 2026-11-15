@@ -60,7 +60,7 @@ Authoritative text: `transcribe-poc/CONTRACT.md` (the gate's own basis, not a mi
 # transcribe-poc is a local uncommitted directory; the torch backend build needs PYO3_PYTHON pointing to cpython-3.11
 cargo check --manifest-path transcribe-poc/Cargo.toml --all-targets
 cargo clippy --manifest-path transcribe-poc/Cargo.toml --all-targets -- -D warnings
-# doc_consistency_check.py runs five classes of verification: routes / gRPC / env vars / CLI subcommands / **document anchors**
+# doc_consistency_check.py runs six classes of verification: routes / gRPC / env vars / CLI subcommands / **document anchors** / stale API-prefix regression
 # (the anchor item validates `](#frag)` and `](path#frag)` reachability against the measured-calibrated
 # GitHub slug rules, and forbids headings retaining U+FE0F variation selectors)
 python3 scripts/doc_consistency_check.py

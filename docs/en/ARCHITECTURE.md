@@ -76,13 +76,13 @@ VecBoost is a **multi-task inference service** built in Rust. It provides an ext
 
 | Library | Version | Purpose | Feature |
 |----|------|------|---------|
-| **trait-kit** | `0.5.0-rc.10` | Module registry and typestate dependency management (`Kit<Unbuilt> → Kit<Ready>`) | Always enabled |
-| **confers** | `0.6.0-rc.11` | Configuration loading (TOML + env overrides + hot-reload subscription) | Always enabled |
-| **inklog** | `0.3.0-rc.10` | Structured logging infrastructure (console + file rotation) | Always enabled |
-| **oxcache** | `0.5.0-rc.10` | High-performance cache backend (LRU/LFU/FIFO + TTL eviction) | Always enabled |
-| **limiteron** | `0.3.0-rc.8` | Token-bucket rate limiter (independent per-dimension counting) | Always enabled |
-| **dbnexus** | `0.6.0-rc.10` | Database persistence (SQLite/PostgreSQL + permission roles) | `db` |
-| **sdforge** | `0.5.0-rc.9` | Multi-protocol interface generation (HTTP/gRPC/MCP/CLI from single-source definitions) | `http`/`grpc`/`cli`/`mcp` |
+| **trait-kit** | `0.5.0` | Module registry and typestate dependency management (`Kit<Unbuilt> → Kit<Ready>`) | Always enabled |
+| **confers** | `0.6.0` | Configuration loading (TOML + env overrides + hot-reload subscription) | Always enabled |
+| **inklog** | `0.3.0` | Structured logging infrastructure (console + file rotation) | Always enabled |
+| **oxcache** | `0.5.0` | High-performance cache backend (LRU/LFU/FIFO + TTL eviction) | Always enabled |
+| **limiteron** | `0.3.1` | Token-bucket rate limiter (independent per-dimension counting) | Always enabled |
+| **dbnexus** | `0.6.1` | Database persistence (SQLite/PostgreSQL + permission roles) | `db` |
+| **sdforge** | `0.5.1` | Multi-protocol interface generation (HTTP/gRPC/MCP/CLI from single-source definitions) | `http`/`grpc`/`cli`/`mcp` |
 
 > All seven libraries currently come from the crates.io registry (`Cargo.toml` has no `path =` dependencies and no `[patch]`; `Cargo.lock` records `source = "registry+https://github.com/rust-lang/crates.io-index"`). The root `Cargo.toml` is authoritative for versions.
 
@@ -823,11 +823,11 @@ graph TB
 
 | Technique | Description | Benefit |
 |----------|------|------|
-| **GPU memory pool** | Pre-allocated CUDA/Metal buffers (`src/device/memory_pool.rs`) | Less device allocation overhead |
+| **GPU memory pool** | Pre-allocated CUDA/Metal buffers (`src/device/memory_pool/`) | Less device allocation overhead |
 | **Adaptive cache** | ARC cache policy | Minimized memory fragmentation |
 | **Zero copy** | Shared references wherever possible | Fewer memory copies |
 
-> ⚠️ **Note**: the `CandleEngine.tensor_pool` field was removed in v0.2.0 (the original tensor pool had an all-zero-mask bug); tensor buffers are now managed inside Candle. The device-level GPU memory pool (`src/device/memory_pool.rs`) is retained.
+> ⚠️ **Note**: the `CandleEngine.tensor_pool` field was removed in v0.2.0 (the original tensor pool had an all-zero-mask bug); tensor buffers are now managed inside Candle. The device-level GPU memory pool (`src/device/memory_pool/`) is retained.
 
 ---
 
@@ -1025,7 +1025,7 @@ The `TEST_MODE` environment variable controls test-engine behavior:
 
 ---
 
-> **📝 Last updated**: 2026-11-14 | **Version**: 0.3.0 | **Feedback**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 Last updated**: 2026-11-16 | **Version**: 0.3.1 | **Feedback**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
 
 ---
 

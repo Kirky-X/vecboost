@@ -45,7 +45,7 @@ cargo check -p vecboost --features mcp
 
 | Layer | Command | Notes |
 |---|---|---|
-| Unit + integration (Rust) | `cargo test -p vecboost -p vecboost-examples` | 2370 inline test attributes + tests/ (129 test attributes, same counting method) |
+| Unit + integration (Rust) | `cargo test -p vecboost -p vecboost-examples` | 2363 inline test attributes + tests/ (130 test attributes, same counting method) |
 | gRPC E2E | `cargo test -p vecboost --features http,grpc --test grpc_e2e` | Spawns the real binary |
 | Scenario (Python) | `pytest tests/scenario -q` | conftest spawns real servers; inference cases auto-SKIP when `models/` is absent |
 | Microbenchmarks | `cargo bench -p vecboost` | criterion |

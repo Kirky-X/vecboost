@@ -1321,7 +1321,7 @@ curl -X POST http://localhost:9002/api/v1/embed \
 {"error": "Text cannot be empty", "code": 400, "error_code": "error-invalid-input"}
 ```
 
-> **💡 Note**: i18n covers all user-visible messages: HTTP JSON error responses, CLI help text, gRPC error details, and startup error logs. Translation keys are defined in `src/i18n/locales/{en,zh}/messages.ftl` and `errors.ftl` (577 keys per language: `messages.ftl` 557 + `errors.ftl` 20).
+> **💡 Note**: i18n covers all user-visible messages: HTTP JSON error responses, CLI help text, gRPC error details, and startup error logs. Translation keys are defined in `src/i18n/locales/{en,zh}/messages.ftl` and `errors.ftl` (632 keys per language: `messages.ftl` 612 + `errors.ftl` 20).
 
 ---
 
@@ -1625,4 +1625,4 @@ A: Yes — configure a load balancer with session affinity to handle authenticat
 
 ---
 
-> **📝 Last updated**: 2026-11-14 | **Version**: 0.3.0 | **Feedback**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)
+> **📝 Last updated**: 2026-11-16 | **Version**: 0.3.1 | **Feedback**: [GitHub Issues](https://github.com/Kirky-X/vecboost/issues)

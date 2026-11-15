@@ -1,6 +1,6 @@
 # 🧪 VecBoost Test Scenario Matrix
 
-> Applies to VecBoost **0.3.0** (workspace, Rust edition 2024 / `rust-version = 1.91`).
+> Applies to VecBoost **0.3.1** (workspace, Rust edition 2024 / `rust-version = 1.91`).
 > Purpose: enumerate the test-stack responsibility split and every acceptance scenario, answering "where should this test live".
 > Authoring basis (read-only cross-check): `tests/scenario/*.py` (16 suites and the R-* scenario IDs in their docstrings), `tests/*.rs`, `tests/perf/`, `benches/`, `.github/workflows/` (health-check / feature-matrix / scenario-tests), `scripts/run-scenario-tests.sh`, `tests/scenario/conftest.py`.
 > All suite names and scenario IDs were verified to exist via `grep`.
@@ -116,7 +116,7 @@ Baseline numbers are recorded in `docs/benchmarks/` (annotated with environment 
 
 ## 🧱 Unit tests
 
-Inline `#[cfg(test)]` modules in each `src/` module (grep counts 2370 `#[test]` / `#[tokio::test]` attributes), run by `cargo test --lib`. Test code may `unwrap` (`clippy.toml` enables `allow-unwrap-in-tests`); production code may not. Shared environment-variable races are serialized via `ENV_LOCK` (secure-defaults test group).
+Inline `#[cfg(test)]` modules in each `src/` module (grep counts 2363 `#[test]` / `#[tokio::test]` attributes), run by `cargo test --lib`. Test code may `unwrap` (`clippy.toml` enables `allow-unwrap-in-tests`); production code may not. Shared environment-variable races are serialized via `ENV_LOCK` (secure-defaults test group).
 
 ---
 

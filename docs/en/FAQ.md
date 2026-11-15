@@ -27,7 +27,7 @@ VecBoost is a **high-performance embedding service** built in Rust: it turns tex
 
 ### ❓ Is VecBoost production-ready?
 
-Yes. The project ships with: secure defaults (loopback binding; non-loopback binding without auth refuses to start), JWT/CSRF/RBAC authentication and authorization, audit logging, Prometheus metrics and health checks, graceful shutdown, and a Docker image (linux/amd64; currently a single-architecture build, no arm64 yet). The current release line is 0.3.0; read the breaking-change list in the [CHANGELOG](CHANGELOG.md) before upgrading (13 behavioral changes since 0.3.0-rc.1, including hardened secure defaults).
+Yes. The project ships with: secure defaults (loopback binding; non-loopback binding without auth refuses to start), JWT/CSRF/RBAC authentication and authorization, audit logging, Prometheus metrics and health checks, graceful shutdown, and a Docker image (linux/amd64; currently a single-architecture build, no arm64 yet). The current release line is 0.3.1; read the breaking-change list in the [CHANGELOG](CHANGELOG.md) before upgrading (13 behavioral changes since 0.3.0-rc.1, including hardened secure defaults).
 
 ### ❓ Which platforms are supported?
 

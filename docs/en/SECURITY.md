@@ -22,7 +22,7 @@ VecBoost treats security as a core design goal. This document describes VecBoost
 
 | Version | Status | Notes |
 |------|------|------|
-| 0.3.0 (current) | ✅ Supported | i18n engine retirement (lightweight FTL parsing), self-maintained dependencies stabilized from rc; includes all rc-series capabilities (multi-replica shared semantic cache/ban list, effective `[database] max_connections`, externalized sessions, hardened secure defaults, RBAC wiring, XFF trust inversion — see [CHANGELOG](CHANGELOG.md)) |
+| 0.3.0 / 0.3.1 (current) | ✅ Supported | i18n engine retirement (lightweight FTL parsing), self-maintained dependencies stabilized from rc; includes all rc-series capabilities (multi-replica shared semantic cache/ban list, effective `[database] max_connections`, externalized sessions, hardened secure defaults, RBAC wiring, XFF trust inversion — see [CHANGELOG](CHANGELOG.md)) |
 | 0.3.0-rc.3 and earlier rc | ⛔ Superseded | rc.1 is the breaking-change release; read [CHANGELOG](CHANGELOG.md#030-rc1---2026-09-22) before upgrading |
 | 0.2.1 | ✅ Supported | i18n, Rerank, semantic cache, AES-256-GCM config encryption |
 | 0.2.0 | ⚠️ Critical fixes only | sdforge four protocols, 7-library ecosystem wiring |

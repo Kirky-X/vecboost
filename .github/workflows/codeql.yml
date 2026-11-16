@@ -1,13 +1,12 @@
 # CodeQL — static analysis for Rust
+# 2026-11-17：触发从 push/PR 改为每周日 schedule + 手动 dispatch，
+# 消除每次 push 的重复扫描开销。
 name: CodeQL
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   schedule:
     - cron: '0 0 * * 0'
+  workflow_dispatch:
 
 # 最小权限:顶层只读,analyze job 单独声明 security-events: write
 permissions:

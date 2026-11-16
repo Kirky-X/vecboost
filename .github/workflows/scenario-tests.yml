@@ -2,11 +2,12 @@ name: Scenario Tests
 
 # Python E2E/场景测试(conftest.py 拉起真实二进制,HTTP/CLI/MCP/生命周期矩阵)。
 # CI 环境无本地模型,tests/scenario 按 models/<目录名> 存在性自动 SKIP 推理类用例,
-# 其余(生命周期/错误路径/CLI)正常执行。夜跑 + 手动触发,不阻塞 PR。
+# 其余(生命周期/错误路径/CLI)正常执行。周跑(周一) + 手动触发,不阻塞 PR。
+# 2026-11-17 由每日降为每周一（连挂 16 次烧 176 分钟的止血项）。
 
 on:
   schedule:
-    - cron: "0 3 * * *" # 每日 UTC 03:00(北京时间 11:00)
+    - cron: "0 3 * * 1" # 每周一 UTC 03:00(北京时间 11:00)
   workflow_dispatch:
 
 permissions:

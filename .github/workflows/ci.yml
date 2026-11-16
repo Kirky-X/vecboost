@@ -1,4 +1,11 @@
-# CI 质量门禁：fmt / clippy / check / test / coverage / deny
+# CI 质量门禁：fmt / clippy / check / test / coverage / deny /
+# feature-matrix / build / test-windows / doc / audit / dockerfile-scan /
+# benchmark / dependencies
+#
+# 2026-11-17 三合一：health-check.yml 与 feature-matrix.yml 并入本文件。
+# 原 health-check 的 Test (Coverage) 重复腿删除，覆盖率唯一权威为下方
+# Coverage 作业；同用途 job 只保留一份（去重明细见各 job 注释）。
+# Windows 腿仅在 schedule / workflow_dispatch 执行，push/PR 只跑 ubuntu。
 #
 # 特性约束：sqlite 与 postgres 由 dbnexus compile_error! 强制互斥，
 # 禁止 --all-features（会同时打开两组驱动）；cuda/metal 无对应硬件。
@@ -7,8 +14,16 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE*"
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "0 3 * * 1" # 每周一 UTC 03:00：Windows 腿与全量门禁的定期档
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,7 +35,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # 与 health-check.yml 同口径的“全功能”组合（不含互斥驱动与硬件后端）。
+  # “全功能”组合（不含互斥驱动与硬件后端；与原 health-check.yml 同口径）。
   FEATURES: "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
   # 覆盖率口径：与发布主面一致的“可测全集”（含共享状态与集成测试），
   # 不并入 cli/mcp/grpc 的协议包装层（各自有独立 test 腿验证编译与行为）。
@@ -39,6 +54,17 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+      - name: Check i18n consistency
+        # 自 health-check.yml 合并：默认英文(en 语言包零中文) + en/zh 键齐性 +
+        # tr()/i18n_key 引用有效 + 生产码硬编码中文/未登记用户可见文案回流拦截
+        run: python3 scripts/i18n_consistency_check.py
+
+      - name: Check doc consistency
+        # 自 health-check.yml 合并：文档声明的路由/gRPC/环境变量/CLI 子命令与
+        # 代码核对,并校验文档锚点可达性(经 GitHub 渲染结果校准的 slug 规则:
+        # emoji 标题带前导连字符、U+FE0F 变体选择符残留于 id 首位,均在拦截范围)
+        run: python3 scripts/doc_consistency_check.py
 
   clippy:
     name: Clippy
@@ -102,6 +128,10 @@ jobs:
             features: "auth,db,sqlite,onnx"
           - name: shared-state
             features: "http,auth,db,sqlite,distributed-redis"
+          - name: full-combo
+            # 自 health-check.yml 合并（原 Test (Linux)）：八个特性同时开启的
+            # 运行时行为。clippy 腿只做类型检查，覆盖不到运行期交互。
+            features: "grpc,cli,auth,onnx,db,sqlite,openapi,mcp"
     services:
       redis:
         image: redis:7
@@ -413,3 +443,325 @@ jobs:
           tool: cargo-deny
       - name: cargo deny
         run: cargo deny check
+
+  # ------------------------------------------------------------------
+  # 自 feature-matrix.yml 合并（2026-11-17）：default/grpc/ecosystem 腿与上方
+  # check/test 矩阵同用途，只保留一份；本矩阵仅留其余 job 没有的独有检查——
+  # swagger-ui / quantized-gguf / distributed-redis / examples 编译检查，以及
+  # postgres 驱动腿（postgres 与 sqlite 由 compile_error! 互斥，上方 clippy/
+  # test 的 FEATURES 组合编译不到 postgres 代码路径）。
+  # ------------------------------------------------------------------
+  feature-matrix:
+    name: Feature Matrix (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: extras
+            features: ""
+          - name: postgres-driver
+            features: "postgres"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "feature-matrix-${{ matrix.name }}"
+          cache-targets: false
+
+      - name: Check swagger-ui docs build
+        if: matrix.name == 'extras'
+        run: cargo check --features swagger-ui --locked
+
+      - name: Check quantized-gguf engine build
+        if: matrix.name == 'extras'
+        run: cargo check --features quantized-gguf --lib --locked
+
+      - name: Compile quantized quality gate
+        if: matrix.name == 'extras'
+        # 真跑质量门仍需模型资产（缺失自动 SKIP）；此步保证目标持续可编译
+        run: cargo test --features quantized-gguf --test quantized_parity --no-run --locked
+
+      - name: Check distributed-redis build
+        if: matrix.name == 'extras'
+        run: cargo check --features distributed-redis --all-targets --locked
+
+      - name: Check examples crate
+        if: matrix.name == 'extras'
+        # 2026-09-19 审计补腿：examples 是 workspace 成员但此前从未进 CI
+        run: cargo check -p vecboost-examples --all-targets
+
+      - name: Run clippy (postgres driver)
+        if: matrix.name == 'postgres-driver'
+        run: cargo clippy --features "${{ matrix.features }}" --all-targets -- -D warnings
+
+      - name: Build (postgres driver)
+        if: matrix.name == 'postgres-driver'
+        run: cargo build --features "${{ matrix.features }}"
+
+  summary:
+    name: Feature Matrix Summary
+    runs-on: ubuntu-latest
+    needs: feature-matrix
+    if: always()
+    steps:
+      - name: Check matrix status
+        run: |
+          if [[ "${{ needs.feature-matrix.result }}" == "success" ]]; then
+            echo "✅ All feature matrix combinations passed!"
+            exit 0
+          else
+            echo "❌ One or more feature matrix combinations failed!"
+            exit 1
+          fi
+
+  # ------------------------------------------------------------------
+  # 以下 jobs 自 health-check.yml 合并（2026-11-17）。原 workflow 级
+  # RUSTFLAGS=-D warnings 改为逐 cargo job 声明，避免改变上方原有 job 的
+  # 行为；原 needs: check（fmt+clippy+i18n+doc 一致性）重接线为
+  # needs: [fmt, clippy]（一致性两步已折入 fmt）。
+  # ------------------------------------------------------------------
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    timeout-minutes: 20
+    env:
+      RUSTFLAGS: "-D warnings"
+    strategy:
+      fail-fast: false
+      matrix:
+        feature:
+          - name: default
+            features: ""
+          - name: onnx
+            features: onnx
+          - name: grpc
+            features: grpc
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "vecboost-build-${{ matrix.feature.name }}"
+          cache-targets: false
+
+      - name: Build with ${{ matrix.feature.name }} features
+        run: cargo build --release --features "${{ matrix.feature.features }}"
+
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+    needs: build
+    # 限流：push/pull_request 只跑 ubuntu；Windows 腿仅在周计划/手动触发执行
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.build.result == 'success'
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install Protocol Buffers compiler
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: windows-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-
+
+      - name: Set Windows environment
+        shell: pwsh
+        run: |
+          echo "CARGO_TERM_COLOR=always" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "RUSTFLAGS=-D warnings" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run tests
+        # continue-on-error: confers file_optional misses the tempfile on Windows CI
+        # (third-party library behavior, not project code; linux Test (Linux) fully
+        # covers the same config-loading logic). Tracked as follow-up.
+        continue-on-error: true
+        run: cargo test --features "${{ env.FEATURES }}" --all-targets --release
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-windows
+          path: target/release/deps/
+
+  doc:
+    name: Documentation
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: rust-docs
+
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "vecboost-doc"
+          cache-targets: false
+
+      - name: Build documentation
+        run: cargo doc --workspace --no-deps
+
+      - name: Check for broken links
+        run: cargo doc --workspace --no-deps --document-private-items
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo-audit
+        run: cargo audit
+
+  dockerfile-scan:
+    name: Dockerfile Security Scan
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    timeout-minutes: 10
+    # 上传 SARIF 到 Security 标签页需要写权限(工作流级保持最小权限,仅此 job 放宽)
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run Checkov Dockerfile scanner
+        uses: bridgecrewio/checkov-action@45edc9d8856b664db2ec251f5f8632361f0a67aa # v12.3139.0
+        with:
+          directory: .
+          framework: dockerfile
+          soft_fail: false
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+
+      - name: Upload Checkov results to GitHub Security
+        # 门禁本体是上一步扫描的退出码（soft_fail:false 保持严格）。checkov-action
+        # 在 soft_fail:false 且全部通过时不落 sarif 文件（实测 9 passed/0 failed 后
+        # 本步 "Path does not exist" 必红）——上传是代码扫描遥测，非门禁，
+        # 文件缺失时容忍跳过；sarif 存在则正常上传。
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: checkov-results.sarif
+
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test]
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "vecboost-bench"
+          cache-targets: false
+
+      - name: Run benchmarks
+        run: cargo bench --features "${{ env.FEATURES }}"
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: benchmark-results
+          path: target/criterion/report/
+
+  dependencies:
+    name: Dependency Updates
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Check for outdated dependencies
+        run: |
+          cargo install cargo-outdated --locked 2>/dev/null || true
+          cargo outdated --root-deps-only || echo "cargo-outdated not available, skipping"

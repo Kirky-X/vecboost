@@ -9,7 +9,7 @@
 //! HF_INTEGRATION=1 cargo test -p vecboost --test hf_hub_integration
 //! ```
 //!
-//! 断言顺序（spec R-model-bundle-fetch-001）：
+//! 断言顺序：
 //! 1. 内置清单常量 `LAYA_BUNDLE_FILES` 与 repo 实际文件列表一致（上游增删
 //!    文件时先行红灯，防漂移）；
 //! 2. `download_files` 逐文件落位且字节数 > 0。

@@ -21,7 +21,7 @@ impl DecisionService {
     }
 
     /// 替换底层引擎——EmbeddingService::switch_model 成功后由 API 层传播。
-    /// 不替换则切模型后 decision 仍用旧引擎作答（审计 D27 同源缺陷：
+    /// 不替换则切模型后 decision 仍用旧引擎作答（同源缺陷：
     /// rerank 侧已修，决策服务接入时即内置传播）。
     pub fn replace_engine(&mut self, new_engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>) {
         self.engine = new_engine;
@@ -447,7 +447,7 @@ mod tests {
         }
     }
 
-    // 切模型传播（D27 同源缺陷回归钉，仿 rerank.rs replace 传播钉）
+    // 切模型传播（同源缺陷回归钉，仿 rerank.rs replace 传播钉）
 
     #[tokio::test]
     async fn test_replace_engine_switches_decision_source() {

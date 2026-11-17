@@ -39,7 +39,7 @@ impl RerankService {
     }
 
     /// 替换底层引擎——EmbeddingService::switch_model 成功后由 API 层传播，
-    /// 修复切模型后 rerank 仍用旧引擎的失联（审计 D27）。
+    /// 修复切模型后 rerank 仍用旧引擎的失联。
     pub fn replace_engine(&mut self, new_engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>) {
         self.engine = new_engine;
     }
@@ -117,7 +117,7 @@ impl RerankService {
     }
 
     /// 分数计算：缓存启用时逐文档查缓存（键 = model + query/doc 各自哈希，
-    /// 裸拼接 ("a","b:c") 与 ("a:b","c") 同键互染——审计 D28），未命中批量
+    /// 裸拼接 ("a","b:c") 与 ("a:b","c") 同键互染），未命中批量
     /// 走引擎并回填；禁用时整批直通。OOM 降级经 handle_oom_fallback 包装。
     async fn compute_rerank_scores(
         &self,

@@ -283,7 +283,7 @@ impl SemanticCache {
     /// 核心查询方法：精确匹配 → trigram 搜索 → 计算回填。
     ///
     /// `model_id` 参与缓存键——不同模型对同一文本的向量不同，缺模型身份
-    /// 会导致跨模型污染（审计 D26）。
+    /// 会导致跨模型污染。
     /// `compute_fn` 是模型推理回调，仅在精确 miss 且语义 miss 时调用。
     pub async fn get_or_compute<F, Fut>(
         &self,
@@ -328,7 +328,7 @@ impl SemanticCache {
         // 第三级：模型推理
         self.misses.fetch_add(1, Ordering::Relaxed);
         let embedding = compute_fn().await?;
-        // NaN/Inf 拒绝入库（D33）：坏向量精确命中会永久返回坏数据
+        // NaN/Inf 拒绝入库：坏向量精确命中会永久返回坏数据
         crate::utils::vector::ensure_finite_embedding(&embedding)?;
 
         // 回填到精确缓存和语义索引

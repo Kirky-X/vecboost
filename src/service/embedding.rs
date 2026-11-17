@@ -1446,7 +1446,8 @@ impl EmbeddingService {
 
         // [model.checkpoints] 预设命中：查表复用 config 层单一实现（与钉测试
         // 同源），命中时预设值为缺省层、请求显式值仍优先；decision_params
-        // 请求 wire 无此维度，预设是唯一来源（R-multi-checkpoint-002）
+        // 请求 wire 无此维度，预设是唯一来源
+
         let checkpoint = match self.checkpoints.as_deref() {
             Some(table) => {
                 crate::config::model::lookup_checkpoint_override(table, &req.model_name)?
@@ -2167,7 +2168,7 @@ mod tests {
 
     /// Translate 臂（int8 bundle 驻留估算）：磁盘 × 保守系数 2.0——
     /// ≥ 磁盘字节数（保守方向），且与 Decision/Embedding 臂相异
-    ///（记账区分度：同 bundle 不同任务不得共享用同一估算线）。
+    /// （记账区分度：同 bundle 不同任务不得共享用同一估算线）。
     #[test]
     fn test_estimate_resident_bytes_translate_onnx_conservative() {
         let temp_dir = tempdir().unwrap();
@@ -3584,7 +3585,7 @@ mod tests {
         }
     }
 
-    /// [model.checkpoints] 预设命中钉（R-multi-checkpoint-002）：switch 到
+    /// [model.checkpoints] 预设命中钉：switch 到
     /// laya-multilingual（req 全缺省）→ 预设 task=Decision 作为缺省层
     /// 进决策分派臂、预设 model_path 作为缺省层进 bundle 探测（错误回显
     /// 预设路径）；req 显式 model_path 优先于预设；未命中预设名走自由切换
@@ -3700,7 +3701,7 @@ mod tests {
         }
     }
 
-    /// 同名切换的预设预算例外钉（R-multi-checkpoint-002）：主模型以预设名
+    /// 同名切换的预设预算例外钉：主模型以预设名
     /// 部署时（启动 decision_params=None 英文缺省），切换到同名预设是应用
     /// 256/256 预算的唯一途径——already-current 早退必须让位于预算差异
     /// 重载，否则 API 报成功而预算契约未兑现。重载路径断言 Err（早退必
@@ -5908,7 +5909,7 @@ mod tests {
     }
 
     /// 引擎写锁被占时 count_tokens 以 InferenceError 显性报告锁竞争
-    ///（try_read 失败分支，禁止降级为 0）。
+    /// （try_read 失败分支，禁止降级为 0）。
     #[tokio::test]
     async fn test_count_tokens_lock_contention_returns_inference_error() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
@@ -6000,7 +6001,7 @@ mod tests {
         );
     }
 
-    /// engine_handle 传播：返回的句柄与生效引擎同源（D27 传播链的锚点）。
+    /// engine_handle 传播：返回的句柄与生效引擎同源（传播链的锚点）。
     #[tokio::test]
     async fn test_engine_handle_serves_same_engine() {
         let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =

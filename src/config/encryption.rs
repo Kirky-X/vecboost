@@ -32,7 +32,7 @@
 //!         default,
 //!         serialize_with = "crate::config::encryption::encrypted_option::serialize",
 //!         deserialize_with = "crate::config::encryption::encrypted_option::deserialize"
-//!)]
+//! )]
 //!     pub secret: Option<String>,
 //! }
 //! ```

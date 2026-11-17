@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! Detect 端点 HTTP 集成测试 — /api/v1/detect（R-language-detection-*）
+//! Detect 端点 HTTP 集成测试 — /api/v1/detect
 //!
 //! 沿用 grpc_e2e 的真实服务器子进程模式（`CARGO_BIN_EXE_vecboost` + 本地
 //! M1 模型路径，CPU，离线可跑）；本地模型缺席时打印 SKIP 后返回（同
@@ -130,9 +130,7 @@ fn spawn_detect_server(name: &str, opts: &ServerOpts, env_extra: &[(&str, &str)]
     }
 }
 
-// ---------------------------------------------------------------------------
 // HTTP 辅助（grpc_e2e 同款裸 TCP，扩展 Accept-Language 头）
-// ---------------------------------------------------------------------------
 
 /// 返回 (status, 响应头键值对（键小写）, body)
 type HttpResponse = (u16, Vec<(String, String)>, String);
@@ -199,9 +197,7 @@ fn detect_body(text: &str) -> String {
     json!({"text": text}).to_string()
 }
 
-// ---------------------------------------------------------------------------
 // wire 形态钉 + 边界输入
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn detect_wire_shape_and_undetectable_semantics() {
@@ -346,11 +342,9 @@ async fn detect_rejects_oversize_and_control_chars() {
     assert_eq!(status, 400, "\\u0001 控制字符必须 400: {body}");
 }
 
-// ---------------------------------------------------------------------------
 // 限流 429 形态（auth feature：全局限流中间件 auth_rate_limit_middleware
 // 为 auth 门控，非 auth 构建无限流链路，本测试随门裁剪——grpc_e2e
 // decision_auth_rate_limit_hit_returns_429_with_headers 同款先例）
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "auth")]
 #[tokio::test]
@@ -394,9 +388,7 @@ async fn detect_rate_limit_returns_429_with_headers() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // 401 未登录形态（auth feature；http-only 下无鉴权面，cfg 门控同 grpc_e2e）
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "auth")]
 #[tokio::test]

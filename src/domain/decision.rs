@@ -345,9 +345,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    // -------------------------------------------------------------------------
     // QuestionType
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_question_type_invalid_rejected() {
@@ -398,9 +396,7 @@ mod tests {
         assert!(q.options.is_empty());
     }
 
-    // -------------------------------------------------------------------------
     // DecisionRequest::validate —— 输入上限 + qtype/options 跨字段一致性
-    // -------------------------------------------------------------------------
 
     fn choice_question() -> DecisionQuestion {
         DecisionQuestion {
@@ -771,9 +767,7 @@ mod tests {
         assert!(req.validate().is_err(), "noul 型携带 options 必须拒绝");
     }
 
-    // -------------------------------------------------------------------------
     // DecisionAnswerBody wire 形态（internally tagged 契约）
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_decision_answer_body_noul_wire_shape() {

@@ -506,7 +506,7 @@ fn query_nvml_info(nvml: &nvml_wrapper::Nvml) -> Result<NvidiaDriverInfo, String
 
     Ok(NvidiaDriverInfo {
         // NVML 官方 CUDA driver version 接口（编码 major*1000+minor*10），
-        // 取 major；此前 VRAM>0 即伪造 Some(11)（审计 D25）
+        // 取 major；此前 VRAM>0 即伪造 Some(11)
         cuda_version: nvml
             .sys_cuda_driver_version()
             .ok()

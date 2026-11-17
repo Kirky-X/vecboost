@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! jemalloc decay 调优（wsl2-oom-hardening-r2 D3，实施期修正版）。
+//! jemalloc decay 调优（实施期修正版）。
 //!
 //! 全局分配器为 tikv-jemallocator（main.rs，linux glibc）：默认 dirty/muzzy
 //! decay 10s，大请求（长翻译/批量）释放的解码缓冲滞留 RSS，放大与并发构建

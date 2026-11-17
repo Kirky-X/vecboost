@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! gRPC E2E 集成测试 — sdforge 统一 Call 协议（R-server-001 / R-api-001）
+//! gRPC E2E 集成测试 — sdforge 统一 Call 协议
 //!
 //! 覆盖场景：
 //! - 11 个 grpc_method 正常路径（GP-N01…GP-N11）
@@ -85,9 +85,7 @@ fn skip_without_models(test_name: &str) -> bool {
     true
 }
 
-// ---------------------------------------------------------------------------
 // 最小 HTTP 客户端（std 实现，避免引入额外 dev 依赖）
-// ---------------------------------------------------------------------------
 
 fn http_request(
     port: u16,
@@ -174,9 +172,7 @@ fn decode_chunked(input: &str) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
 // 服务器进程管理
-// ---------------------------------------------------------------------------
 
 struct TestServer {
     child: Child,
@@ -429,9 +425,7 @@ async fn call_raw(
     )
 }
 
-// ---------------------------------------------------------------------------
 // 正常路径：读方法 + 嵌入 + 重排 + 文件 + 热切换（GP-N01…GP-N11）
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn grpc_info_methods_return_success() {
@@ -680,9 +674,7 @@ async fn grpc_model_switch_roundtrip_and_failure_protection() {
     assert_eq!(v["grpc_success"], json!(true));
 }
 
-// ---------------------------------------------------------------------------
-// 协议等价性（GP-EQ01/02，R-api-001）
-// ---------------------------------------------------------------------------
+// 协议等价性
 
 #[tokio::test]
 async fn grpc_embed_matches_http() {
@@ -765,9 +757,7 @@ async fn grpc_embed_matches_http() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // 异常路径（GP-A01…GP-A04）
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn grpc_unknown_method_returns_not_found() {
@@ -867,9 +857,7 @@ async fn grpc_bad_json_and_empty_text_map_to_invalid_argument() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // 生命周期（GP-L01 / GP-L02）
-// ---------------------------------------------------------------------------
 
 // 「grpc_enabled=true 下服务不挂死」不设独立用例：
 // 上述各测试 spawn 时均等待 HTTP health 就绪，可达即已隐式覆盖该回归。
@@ -1078,10 +1066,8 @@ async fn grpc_token_revoked_on_http_logout_rejected_on_grpc() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 决策三口径互斥（R-decision-throughput-003）：auth 限流 429 / 队列满 503
+// 决策三口径互斥：auth 限流 429 / 队列满 503
 // Overloaded / 正常 200 无限流头，三口径各有独立断言且语义互斥
-// ---------------------------------------------------------------------------
 
 fn decision_noul_body() -> String {
     json!({
@@ -1194,7 +1180,7 @@ async fn decision_backpressure_queue_full_returns_503_overloaded() {
 
 /// 口径三：正常决策请求 → 200，wire 三题型形态正确，且（`[rate_limit]
 /// enabled = false` 下）响应不含限流头误注入；顺带断言 /metrics 输出
-/// 决策三指标（R-decision-throughput-004 的导出可见性）。
+/// 决策三指标的导出可见性。
 /// 资产守卫：models/laya bundle + ORT_DYLIB_PATH 缺一即 SKIP；
 /// engine_type="onnx" 需 onnx feature 构建的 server bin。
 #[cfg(feature = "onnx")]
@@ -1306,9 +1292,7 @@ async fn grpc_decision_method_normal() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // 转录 gRPC（feature transcribe）
-// ---------------------------------------------------------------------------
 
 /// 16-bit PCM mono WAV → f32 样本（最小解析：遍历 RIFF chunk 定位 `data`；
 /// 转录测试专用，不引入 dev 依赖）。

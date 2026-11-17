@@ -72,7 +72,7 @@ pub fn hadamard_block(x: &[f32], block_idx: u64) -> Vec<f32> {
 
 /// 全向量旋转：按 256/128/64 贪心分块，尾部不足 64 维保持原样。
 ///
-/// 尾部未旋转段没有离群值分散保护，量化质量会下降（审计 D35）；
+/// 尾部未旋转段没有离群值分散保护，量化质量会下降；
 /// 出现该情况时进程内告警一次。Matryoshka 截断出非整块维度即触发。
 pub fn rotate(v: &[f32]) -> Vec<f32> {
     static TAIL_WARN: std::sync::Once = std::sync::Once::new();
@@ -121,7 +121,7 @@ pub fn quantize_i8(v: &[f32]) -> I8Vector {
     if amax == 0.0 || !amax.is_finite() {
         if !amax.is_finite() {
             // 输入含 NaN/Inf：amax 被 f32::max 吞掉后仍有限，但坏分量会
-            // 饱和 cast 成 0——显性告警，避免静默量化失真（审计 D33）
+            // 饱和 cast 成 0——显性告警，避免静默量化失真
             log::warn!(
                 "{}",
                 crate::i18n::tr_with_args(

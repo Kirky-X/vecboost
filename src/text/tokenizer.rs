@@ -251,9 +251,7 @@ impl SyncTokenizer {
 mod tests {
     use super::*;
 
-    // ========================================================================
     // Encoding 结构体测试(平台无关)
-    // ========================================================================
 
     #[test]
     fn test_encoding_getters_return_correct_slices() {
@@ -292,9 +290,7 @@ mod tests {
         assert!(debug_str.contains("Encoding"));
     }
 
-    // ========================================================================
     // UTF-8 验证测试(平台无关)
-    // ========================================================================
 
     #[test]
     fn test_utf8_validation_result_valid_constructor() {
@@ -438,9 +434,7 @@ mod tests {
         assert_eq!(r.invalid_byte_value, Some(0x00));
     }
 
-    // ========================================================================
     // 本地 tokenizer.json 加载测试(使用 models/ 下真实模型)
-    // ========================================================================
 
     /// 辅助:获取第一个可用本地模型的 tokenizer.json 路径
     fn find_local_tokenizer_path() -> Option<String> {

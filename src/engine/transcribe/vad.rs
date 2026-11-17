@@ -6,9 +6,9 @@
 //! min_silence=0.5s、max_speech=20s 强切、neg_threshold=max(thr-0.15,0.01)）
 //! 固化于本文件，本文件即 VAD 段切分参数的入库事实源。
 //!
-//! 移植改造：`Box<dyn Error>` → [`VecboostError`]（R-transcribe-engine-004）；
+//! 移植改造：`Box<dyn Error>` → [`VecboostError`]；
 //! VAD 模型的 `Session::builder` 收编至 [`super::session::build_session`]
-//! （R-engine-inference-001，单一 builder 事实源），intra 线程固定为 1。
+//! （单一 builder 事实源），intra 线程固定为 1。
 //! 状态机在模型侧（`is_speech` = 前向 + 状态机），段只记样本索引、不拷贝音频。
 
 use std::path::Path;

@@ -23,7 +23,7 @@ use super::tokenizer::{AsrTokenizer, EOS_ID};
 
 pub(crate) type AsrResult<T> = Result<T, VecboostError>;
 
-/// 加载/IO 与运行期解码错误映射助手（R-transcribe-engine-004：无 Box<dyn Error>）。
+/// 加载/IO 与运行期解码错误映射助手（无 Box<dyn Error>）。
 fn asr_load(e: impl std::fmt::Display) -> VecboostError {
     VecboostError::ModelLoadError(format!("transcribe asr load: {e}"))
 }
@@ -131,7 +131,7 @@ const LOOP_MAX_DISTINCT: usize = 3;
 
 /// session 线程配置：intra 线程数与自旋开关（→ extra_config allow_spinning），并透
 /// 传 CUDA EP（→ device=Cuda）。env_pool（POC 跑分开关）不并入库语义——段级并行
-/// 由调用方持多引擎实例承担（design D1/Consequences）。
+/// 由调用方持多引擎实例承担。
 #[derive(Debug, Clone, Copy)]
 pub struct AsrSessionOpts {
     pub intra_threads: usize,
@@ -139,7 +139,7 @@ pub struct AsrSessionOpts {
     pub cuda: bool,
 }
 
-/// 加载一个 ort session——builder 收编至 [`build_session`]（R-engine-inference-001，
+/// 加载一个 ort session——builder 收编至 [`build_session`]（
 /// 主仓内非 session.rs 不再出现 `Session::builder()`）。
 pub(crate) fn session_from(path: &Path, opts: &AsrSessionOpts) -> AsrResult<Session> {
     let extra: &[(&str, &str)] = if opts.no_spin {
@@ -282,7 +282,7 @@ impl Qwen3Asr {
     /// session/mod.rs:118-122 官方推荐 per-thread session；权重内存 ×worker 数）。
     /// 三图先探测后构建（decision/translate 同款"探测先于 Session::builder"——
     /// ort/load-dynamic 缺动态库时 builder 触发 non-unwinding panic，缺失必须
-    /// 在此之前以 ModelLoadError 显性返回，R-transcribe-engine-004）。
+    /// 在此之前以 ModelLoadError 显性返回）。
     /// 返回实例与探测到的三图路径：上层（`Qwen3AsrEngine`）需用 decoder 实际路径做
     /// 精度判定，避免按写死文件名二次拼路径（历史缺陷，见 `DECODER_CANDIDATES`）。
     pub fn new(models_dir: &Path, opts: &AsrSessionOpts) -> AsrResult<(Self, AsrGraphPaths)> {

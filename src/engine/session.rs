@@ -1,12 +1,12 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! 公共 ONNX Runtime Session 构建层（onnx-engine-unify D1）。
+//! 公共 ONNX Runtime Session 构建层。
 //!
 //! 收编 `onnx_engine` / `decision` / `onnx_translate` 三处曾各自漂移的
 //! `Session::builder` 链，以及成对复制的 `probe_model_file` /
 //! `precision_for_model_file`，使 EP/优化档位/线程策略单点可调。主仓（非 POC）
-//! 内除本文件外不得再出现 `Session::builder`（R-engine-inference-001）。
+//! 内除本文件外不得再出现 `Session::builder`。
 //!
 //! 各调用点的**引擎专属**前置校验（如 `onnx_engine` 的 SHA256 完整性校验、
 //! AMD/ROCm warn 分支）不属 builder 链，保留在调用侧——本层只做公共核。
@@ -99,7 +99,7 @@ pub(crate) fn build_session(
     model_file: &Path,
     opts: &SessionOpts<'_>,
 ) -> Result<Session, VecboostError> {
-    // 内存可用量门禁（wsl2-oom-hardening D1）：置于 builder 构造之前，
+    // 内存可用量门禁：置于 builder 构造之前，
     // 拒绝时不产生任何 ORT 分配
     ensure_memory_available(model_file)?;
 
@@ -149,7 +149,7 @@ pub(crate) fn build_session(
 
 /// bundle 内模型文件探测：`candidates` 按序首中返回其绝对路径；全 miss 返回
 /// `ModelLoadError`，消息含 `role` 与全部尝试路径（决策/翻译两处成对复制的
-/// 收编，R-engine-inference-002）。
+/// 收编）。
 pub(crate) fn probe_model_file(
     bundle_dir: &Path,
     candidates: &[&str],
@@ -325,7 +325,7 @@ fn memory_gate_decision(available: u64, need: u64, floor: u64) -> Result<(), Str
     ))
 }
 
-/// 加载前内存可用量门禁（wsl2-oom-hardening D1）：需求按模型文件 ×3/2 估算
+/// 加载前内存可用量门禁：需求按模型文件 ×3/2 估算
 /// （ORT 加载峰值≈2×文件、驻留≈1.1×文件，取中并留余量）。Linux 读
 /// /proc/meminfo 的 MemAvailable；其他平台 no-op（尽力而为语义）。
 /// 拒绝即 ModelLoadError fail-fast，杜绝静默加载到系统级 OOM。

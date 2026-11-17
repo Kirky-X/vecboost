@@ -68,7 +68,7 @@ impl AuditLogger {
 
     /// Create a new audit logger with database backend.
     ///
-    /// DB 双写（onnx-primary 测试周期修复，R-auth-009c）：DB 是安全事件
+    /// DB 双写（onnx-primary 测试周期修复）：DB 是安全事件
     /// 查询面（audit_logs 表），文件是运维可观测面（可 tail，含轮转）——
     /// 此前 db 构建只启动 run_db_writer，文件面静默丢失（场景锚定
     /// logs/audit.log 的用例恒空）。主 channel 由 db writer 消费，Event

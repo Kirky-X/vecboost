@@ -40,7 +40,7 @@ impl TranslatePairRoute {
 
 /// 翻译服务：多语言对路由表。
 ///
-/// **不设 `replace_engine`**（proposal Non-Goal / design D6，编译期保证）：
+/// **不设 `replace_engine`**（proposal Non-Goal，编译期保证）：
 /// switch_model 传播的是主模型 `engine_handle` 克隆，注入 (src,tgt) 多引擎
 /// 路由表要么使全部语言对指向同一引擎、要么在主模型为 embedding 任务时注入
 /// `supports_task(Translate)=false` 的引擎——翻译能力被切换操作静默废掉。
@@ -76,7 +76,7 @@ impl TranslateService {
     ///
     /// # 热路径计数挂点
     /// inc_translate_requests 位于全部 400 出口之后（成功路径计数，spec
-    /// R-observability-002：仅通过校验链且通过业务判定的请求 +1）；
+    /// 仅通过校验链且通过业务判定的请求 +1）；
     /// global collector 为 None 时零开销跳过。
     ///
     /// # spawn_blocking 依据（与 detect 的差异）
@@ -92,7 +92,7 @@ impl TranslateService {
         Self::validate_request(&req)?;
 
         // auto 检测：与 /api/v1/detect 共用同一检测核心（单一事实源）
-        // 零配置显性语义（spec R-translation-routing-003）：空表 = 未配置，
+        // 零配置显性语义：空表 = 未配置，
         // 任意请求 400 translate-not-configured（端点已注册，非 panic 非 500）
         if self.pairs.is_empty() {
             return Err(VecboostError::InvalidInput(
@@ -173,7 +173,7 @@ impl TranslateService {
         }
 
         // 热路径埋点：计数点在全部 400 出口之后（成功路径计数，spec
-        // R-observability-002 口径——零配置/检测失败/路由未命中/能力门/
+        // 口径——零配置/检测失败/路由未命中/能力门/
         // 超 token 各 400 均不计；全局 collector 未设置时零开销跳过）
         #[cfg(feature = "http")]
         if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {

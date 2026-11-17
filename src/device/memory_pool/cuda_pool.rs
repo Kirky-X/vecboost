@@ -114,7 +114,7 @@ impl CudaMemoryPool {
             device_id: self.device_id,
             size,
             ptr: dev_ptr,
-            // Drop 路径归还池计数——此前 Drop 只释放显存不减计数，记账永久虚高（审计 D20）
+            // Drop 路径归还池计数——此前 Drop 只释放显存不减计数，记账永久虚高
             pool_counter: Some(Arc::clone(&self.allocated_memory)),
         })
     }
@@ -179,7 +179,7 @@ impl CudaMemoryPool {
     ///
     /// 注意：本方法不释放任何调用方仍持有的 [`CudaMemoryPtr`]（无法越过
     /// 所有权释放），因此**不重置** `allocated_memory` 记账——旧实现把计数
-    /// 清零会造成假清空，后续 allocate 低估占用、超额预订真实 VRAM（审计 D20）。
+    /// 清零会造成假清空，后续 allocate 低估占用、超额预订真实 VRAM。
     pub fn clear(&mut self) {
         info!(
             "Clearing CUDA memory pool on device {} ({} bytes still tracked as allocated;              outstanding CudaMemoryPtr must be dropped to free VRAM)",

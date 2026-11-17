@@ -31,7 +31,7 @@ fn l2_normalize_in_place(v: &mut [f32]) {
     }
 }
 
-/// 本地 bundle 探测（spec R-model-bundle-fetch-002，embedding 引擎口径）。
+/// 本地 bundle 探测（embedding 引擎口径）。
 ///
 /// onnx 文件名优先级：`model_quantized.onnx` → `model.onnx` → 目录内唯一
 /// `*.onnx`（官方 laya bundle 为 `laya.onnx`），多个候选时显性报错并列出
@@ -184,7 +184,7 @@ impl OnnxEngine {
         let supports_amd = matches!(device_type, DeviceType::Amd | DeviceType::OpenCL);
 
         // SHA256 完整性校验与 AMD warn 属引擎专属、不在 builder 链内，保留调用侧
-        // （R-engine-inference-001 只收编 `Session::builder()` 链）；SHA256 先于
+        // （只收编 `Session::builder()` 链）；SHA256 先于
         // build_session（其内部 commit）执行，与原「建 builder→校验→commit」语义等价。
         if let Some(ref expected_hash) = config.model_sha256 {
             log::info!(
@@ -1194,7 +1194,7 @@ mod tests {
     }
 
     /// 回归钉：HuggingFace cache 父目录（parent's parent）的 tokenizer.json
-    /// 不再被本地分支探测——spec R-model-bundle-fetch-002 三级顺序
+    /// 不再被本地分支探测——三级顺序
     /// （tokenizer_path → 根目录 → tokenizer/ 子目录）皆缺即显性报错。
     /// 探测失败发生在 Session 构造之前，不触发 ort 环境。
     #[test]
@@ -1496,7 +1496,6 @@ mod tests {
     }
 
     // resolve_local_bundle 本地 bundle 探测测试（离线，不经 Session 构造）
-    // =========================================================================
 
     fn write_file(dir: &std::path::Path, rel: &str, contents: &[u8]) {
         let path = dir.join(rel);

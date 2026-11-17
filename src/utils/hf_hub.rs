@@ -152,7 +152,7 @@ fn build_hf_repo_with_http(
 /// 官方 laya ONNX bundle 仓库——本仓所有 bundle 下载默认值的唯一合法目标。
 ///
 /// 红线：`Mattepiu/laya-onnx` 为 marker 维静态 `[.,2]` 坏产物，
-/// 禁止出现在任何默认值或文档推荐中（spec R-model-bundle-fetch-003）。
+/// 禁止出现在任何默认值或文档推荐中。
 pub const LAYA_BUNDLE_REPO: &str = "receptron/laya-onnx";
 
 /// 官方 bundle 内置下载清单（远端路径，与落位相对路径一致）。
@@ -425,9 +425,7 @@ mod tests {
     /// detect_mirror_risk 一处读取，三用例互斥即根治。
     static HF_ENDPOINT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    // =========================================================================
     // is_valid_hf_repo_id 单元测试(vuln-0009 修复)
-    // =========================================================================
 
     #[test]
     fn test_is_valid_hf_repo_id_valid_two_segments() {
@@ -551,9 +549,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
     // download_files 单元测试（全部离线：输入校验在发起网络请求前完成）
-    // =========================================================================
 
     fn manifest_entry(remote: &str, placement: &str) -> (String, std::path::PathBuf) {
         (remote.to_string(), std::path::PathBuf::from(placement))
@@ -706,7 +702,7 @@ mod tests {
         }
     }
 
-    /// 下载目标红线（R-model-bundle-fetch-003）：默认值只能是官方
+    /// 下载目标红线：默认值只能是官方
     /// receptron/laya-onnx，Mattepiu 静态坏产物不得出现在任何默认值中。
     #[test]
     fn test_laya_bundle_constants_red_line() {
@@ -765,10 +761,8 @@ mod tests {
         }
     }
 
-    // =========================================================================
     // 补缺口：镜像端点告警支路、空/绝对落位路径拒绝、move_into_place、
     // 聚合错误的空成功清单支路
-    // =========================================================================
 
     /// 无 logger 安装时 log 宏默认 max_level=Off 会跳过参数求值；
     /// 测试期提升级别让日志支路真实执行（幂等，无输出副作用）。

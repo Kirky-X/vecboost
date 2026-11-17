@@ -345,7 +345,8 @@ impl DeviceManager {
                 {
                     Some(v) => v,
                     None => {
-                        // 查询失败按 0 可用处理（保守），不得伪装显存充足（审计 D24）
+                        // 查询失败按 0 可用处理（保守），不得伪装显存充足
+
                         warn!(
                             "{}",
                             crate::i18n::tr_with_args(

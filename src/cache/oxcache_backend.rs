@@ -48,7 +48,7 @@ struct PersistInner {
 /// bloom 只增不减,达到阈值后整体重建,防止长运行进程的负过滤失效(误判率回弹)与内存无界增长。
 const BLOOM_REBUILD_THRESHOLD: usize = 1_000_000;
 
-/// 生产主路径默认 TTL：防"永不过期的陈旧向量"（审计 D29）
+/// 生产主路径默认 TTL：防"永不过期的陈旧向量"
 pub(crate) const DEFAULT_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// 日志用键前缀：截到 ≤32 字节的最后合法字符边界，
@@ -88,7 +88,7 @@ pub(crate) struct OxCacheBackend {
     bloom_insertions: std::sync::atomic::AtomicUsize,
     /// 可选 WAL 持久层（`persist_path` 设置时启用，默认 None = 纯内存）。
     persist: Option<Arc<PersistState>>,
-    /// per-key single-flight（审计 D31：并发同 key 只放一个 compute，
+    /// per-key single-flight（并发同 key 只放一个 compute，
     /// 后到者经内部 double-check 命中缓存；覆盖走 `get_or_insert` 的精确路径）。
     inflight: FlightMap,
 }
@@ -104,7 +104,7 @@ impl OxCacheBackend {
     /// 创建指定容量、可选 TTL 的缓存后端。
     ///
     /// `Some(ttl)` 传递给 moka per-entry 过期（生产主路径默认 3600s，
-    /// 防"永不过期的陈旧向量"——审计 D29）；`None` 行为与旧 `new` 一致（测试用）。
+    /// 防"永不过期的陈旧向量"）；`None` 行为与旧 `new` 一致（测试用）。
     pub fn with_ttl(capacity: usize, ttl: Option<std::time::Duration>) -> Self {
         let cap = capacity.max(1);
         let mut builder = MokaMemoryBackend::builder().capacity(cap as u64);
@@ -130,7 +130,7 @@ impl OxCacheBackend {
     ///
     /// **bloom 禁用**：负缓存是进程内状态，副本 A 的写入对副本 B 的
     /// bloom 不可见，若保留会直接短路掉跨副本命中。TTL 逐条写入
-    ///（Redis 后端无构造期默认）。
+    /// （Redis 后端无构造期默认）。
     #[cfg(feature = "distributed-redis")]
     pub async fn with_redis(
         url: &str,
@@ -167,7 +167,7 @@ impl OxCacheBackend {
         max_bytes: u64,
         model_tag: String,
     ) -> Self {
-        // WAL 路径同样应用生产默认 TTL，防永不过期的陈旧向量（D29）
+        // WAL 路径同样应用生产默认 TTL，防永不过期的陈旧向量
         let mut backend = Self::with_ttl(capacity, Some(DEFAULT_CACHE_TTL));
         let file = std::fs::OpenOptions::new()
             .read(true)
@@ -291,7 +291,7 @@ impl OxCacheBackend {
         if !self.enabled {
             return;
         }
-        // NaN/Inf 拒绝入库（D33）：坏向量经 bloom/WAL 扩散后难以回收
+        // NaN/Inf 拒绝入库：坏向量经 bloom/WAL 扩散后难以回收
         if value.iter().any(|x| !x.is_finite()) {
             log::warn!(
                 "{}",
@@ -433,7 +433,7 @@ impl OxCacheBackend {
         if let Some(cached) = self.get(key).await {
             return Ok(cached);
         }
-        // per-key single-flight（审计 D31）：同 key 并发只放一个 compute，
+        // per-key single-flight：同 key 并发只放一个 compute，
         // 后到者获锁后 double-check 直接命中——防缓存击穿
         let permit = self.inflight_permit(key).await;
         if let Some(cached) = self.get(key).await {
@@ -545,7 +545,7 @@ impl OxCacheBackend {
 #[cfg(test)]
 mod tests {
 
-    /// 回归钉（D31 精确缓存层）：并发同 key 只放一个 compute，
+    /// 回归钉（精确缓存层）：并发同 key 只放一个 compute，
     /// 后到者经 double-check 命中缓存——防缓存击穿。
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_get_or_insert_single_flight_one_compute() {

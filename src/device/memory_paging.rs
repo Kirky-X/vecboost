@@ -177,7 +177,8 @@ impl WeightPagingManager {
         }
 
         // InTransfer → OnGpu：完成预取传输。预算不足时先驱逐——
-        // 旧实现此路径完全绕过预算检查（审计 D22）
+        // 旧实现此路径完全绕过预算检查
+
         if location == LayerLocation::InTransfer {
             if self.current_gpu_usage + size > self.gpu_memory_budget {
                 let _ = self.evict_until_fits(size);
@@ -643,7 +644,7 @@ mod tests {
         assert!(mgr.evict_candidate().is_none());
     }
 
-    /// D22：预算不足时完成预取必须显性失败并回滚 InTransfer 标记，
+    /// 预算不足时完成预取必须显性失败并回滚 InTransfer 标记，
     /// 不得绕过预算检查直接计入用量。
     #[test]
     fn test_prefetch_completion_respects_budget() {
@@ -684,7 +685,7 @@ mod tests {
         );
     }
 
-    /// D22：单 victim 不够时继续驱逐，直至满足预算。
+    /// 单 victim 不够时继续驱逐，直至满足预算。
     #[test]
     fn test_page_in_evicts_multiple_victims_until_fit() {
         let config = PagingConfig {

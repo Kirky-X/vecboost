@@ -163,7 +163,8 @@ pub fn replay(path: &Path, expected_tag: &str) -> (Vec<(String, Vec<f32>)>, u64)
     }
     // 仅应用文件序号 ≤ committed 的记录：按序号而非过滤后列表位置对齐。
     // committed 前缀内有一条损坏记录时，位置计数会把尾部"已写未提交"
-    // 记录错位复活（审计 D30）。
+    // 记录错位复活。
+
     out.extend(
         valid
             .into_iter()

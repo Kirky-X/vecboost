@@ -709,12 +709,13 @@ async fn model_switch_handler(req: ModelSwitchRequest) -> Result<ModelSwitchResp
     drop(guard);
     let response = switch_result.map_err(switch_error_to_api_error)?;
     // 切模型传播到 rerank：RerankService 持有旧引擎克隆，不替换则
-    // 切换后 rerank 继续用旧模型打分（审计 D27）
+    // 切换后 rerank 继续用旧模型打分
+
     if let Ok(rerank) = st.kit.require::<RerankModule>() {
         rerank.write().await.replace_engine(new_engine.clone());
     }
     // 同款传播到 decision：DecisionService 持有旧引擎克隆，不替换则
-    // 切换后 decisions 端点继续用旧模型作答（D27 同源缺陷）
+    // 切换后 decisions 端点继续用旧模型作答（同源缺陷）
     if let Ok(decision) = st.kit.require::<DecisionModule>() {
         decision.write().await.replace_engine(new_engine);
     }
@@ -1399,7 +1400,7 @@ mod tests {
     }
 
     /// Overloaded（队列满背压）在 to_api_error 路径必须与 IntoResponse 直返
-    /// 路径同口径 503（双路径一致性，spec R-decision-throughput-002；对齐
+    /// 路径同口径 503（双路径一致性；对齐
     /// RateLimitExceeded 1e11e42 钉测试模式）。事件码独立性由
     /// error.rs::test_overloaded_error_code_distinct_from_rate_limit 钉死
     /// （ServiceUnavailable 臂的 wire 不携带 error_code context，与

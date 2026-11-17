@@ -7,7 +7,7 @@
 // `cargo check --features quantized-gguf --tests` 不受影响）
 #![cfg(all(feature = "onnx", feature = "candle"))]
 
-//! 对齐闸门（spec R-candle-decision-head-003）：candle 原生决策头与 onnx
+//! 对齐闸门：candle 原生决策头与 onnx
 //! `DecisionPipeline` 同题对照，choice（≥3 选项）/score/noul 各一题，断言
 //! 逐有效 marker `|Δlogit| ≤ 1e-4`（未校准 logits，温度施加前）。
 //!

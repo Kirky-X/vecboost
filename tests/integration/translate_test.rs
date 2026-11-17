@@ -261,9 +261,7 @@ fn en_zh_translation_section(extra: &str) -> Option<String> {
     ))
 }
 
-// ---------------------------------------------------------------------------
 // 真机翻译：wire 五键形态 + auto 检测回填（SKIP 守卫锚 bundle）
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn translate_wire_shape_and_real_translation() {
@@ -340,9 +338,7 @@ async fn translate_wire_shape_and_real_translation() {
     assert_eq!(resp["source_language"], json!(null), "auto 语义 null 显性");
 }
 
-// ---------------------------------------------------------------------------
 // 未配置 pair / 零配置 / 超限 / 不可靠检测
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn translate_unconfigured_pair_400_with_pairs_list() {
@@ -479,9 +475,7 @@ async fn translate_unreliable_auto_detection_400() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // 401 / 429（auth feature 门控，同 detect_test 先例）
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "auth")]
 #[tokio::test]

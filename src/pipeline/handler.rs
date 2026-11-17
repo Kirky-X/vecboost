@@ -662,7 +662,7 @@ mod tests {
     }
 
     /// 验证 handle_pipeline_request 在队列满时返回 Overloaded（背压语义
-    /// 独立变体，禁止复用 RateLimitExceeded——spec R-decision-throughput-002）。
+    /// 独立变体，禁止复用 RateLimitExceeded）。
     /// 并钉通道条目清理：请求从未入队，response channel 条目
     /// 必须同步移除，否则持续过载下无界增长。
     #[tokio::test(flavor = "multi_thread")]
@@ -852,7 +852,7 @@ mod tests {
     }
 
     /// 决策请求队列满背压：/api/v1/decisions 在队列容量置零时收到
-    /// Overloaded（503 语义，spec R-decision-throughput-002 可构造断言），
+    /// Overloaded（503 语义，可构造断言），
     /// 与 auth 限流的 RateLimitExceeded 互斥。
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_decision_pipeline_request_queue_full_overloaded() {

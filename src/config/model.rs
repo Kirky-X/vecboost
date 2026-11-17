@@ -1231,7 +1231,7 @@ mod tests {
         validate_checkpoint_map(&map).expect("空表 = 现状行为，必须通过");
     }
 
-    // ── 内置 laya-multilingual 预设与 switch 覆盖集（R-multi-checkpoint-002）──
+    // ── 内置 laya-multilingual 预设与 switch 覆盖集──
 
     #[test]
     fn test_builtin_laya_multilingual_profile() {
@@ -1571,9 +1571,7 @@ mod tests {
         assert_eq!(Precision::Int8.to_string(), "int8");
     }
 
-    // -------------------------------------------------------------------------
     // Eq trait 验证（确保 InferenceContext 可派生 Eq）
-    // -------------------------------------------------------------------------
 
     #[test]
     fn test_model_type_eq() {

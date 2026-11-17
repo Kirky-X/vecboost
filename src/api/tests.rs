@@ -488,7 +488,7 @@ fn test_to_api_error_model_load_error() {
 
 /// 限流背压（RateLimitExceeded）→ 503 + Retry-After=60（回归钉：曾因超时映射
 /// 误删分支致 500）。队列满背压走独立变体 Overloaded，见 to_api_error_overloaded
-/// 钉测试（spec R-decision-throughput-002 双变体互斥）。
+/// 钉测试（双变体互斥）。
 #[cfg(any(feature = "http", feature = "cli"))]
 #[test]
 fn test_to_api_error_rate_limit_exceeded_is_503() {
@@ -1564,7 +1564,6 @@ async fn test_forge_decisions_over_max_questions_returns_400() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // /health 面（health_handler / run_deep_health_checks / kit_internal_error）
 //
 // DA 行核对：health_handler 单函数 60 行未覆盖，此前只靠真实启动腿命中。
@@ -1577,7 +1576,6 @@ async fn test_forge_decisions_over_max_questions_returns_400() {
 // 异步串行锁 `utils::test_env_lock::env_lock_async`（src/security/mod.rs 已有
 // 同型先例：std Mutex guard 跨 await 会吃 clippy::await_holding_lock），
 // 并在空 kit 复测前后各等过 TTL。
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "http")]
 use crate::utils::test_env_lock::env_lock_async;

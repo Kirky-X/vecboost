@@ -200,7 +200,7 @@ pub trait InferenceEngine: Send + Sync {
     async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError>;
 
     /// 注入内存上限控制器（默认 no-op；支持内存感知的引擎覆写以接线执法）。
-    /// 此前控制器只能经引擎固有方法注入，服务层从未接线（审计 D21）。
+    /// 此前控制器只能经引擎固有方法注入，服务层从未接线。
     fn attach_memory_limit_controller(
         &mut self,
         _controller: std::sync::Arc<crate::device::memory_limit::MemoryLimitController>,

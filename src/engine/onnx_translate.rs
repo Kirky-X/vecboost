@@ -173,13 +173,13 @@ fn translation_parallel_workers() -> usize {
         .clamp(1, MAX_TRANSLATION_PARALLEL_WORKERS)
 }
 
-/// 惰性补建数量（wsl2-oom-hardening D2）：worker=1 并行关闭恒 0；
+/// 惰性补建数量：worker=1 并行关闭恒 0；
 /// 否则 max(0, workers-1-current)，已有超量不裁剪。
 fn missing_worker_sets(current: usize, worker_count: usize) -> usize {
     worker_count.saturating_sub(1).saturating_sub(current)
 }
 
-/// int8 选路（translation-int8-optin D2）：`TRANSLATION_PREFER_INT8=1` 时
+/// int8 选路：`TRANSLATION_PREFER_INT8=1` 时
 /// `_quantized` 候选项前移（相对位次保持），未设/其他值 fp32 优先（契约
 /// 不变；与 `TRANSLATION_PARALLEL_WORKERS` 裸 env 惯例一致）。
 fn prefer_int8_translate() -> bool {
@@ -393,7 +393,7 @@ impl Family {
 pub(crate) struct OnnxTranslationEngine {
     sessions: Arc<Mutex<TranslateSessions>>,
     /// 句级并行 worker 的附加 Session 集（workers-1 个；ort rc.13 禁并发 Run
-    /// 同一 Session，每 worker 独占一套）。惰性加载（wsl2-oom-hardening D2）：
+    /// 同一 Session，每 worker 独占一套）。惰性加载：
     /// init 期为空、idle 驻留仅主集一份，首次长输入并行请求按需补建。
     /// 空 = 并行关闭（整段直解路径）。
     parallel_sessions: Mutex<Vec<Arc<Mutex<TranslateSessions>>>>,
@@ -614,7 +614,7 @@ fn inference_err(step: &str) -> impl Fn(ort::Error) -> VecboostError + '_ {
 }
 
 /// encoder 单次前向：last_hidden_state → (shape, data) owned 返回
-///（输出名 ≠ 输入名，U2 清单实测；owned 化避免视图借用跨函数存活）
+/// （输出名 ≠ 输入名，U2 清单实测；owned 化避免视图借用跨函数存活）
 fn run_encoder(
     encoder: &mut Session,
     source_ids: &[i64],
@@ -656,14 +656,14 @@ fn argmax_index(row: &[f32], exclude: Option<usize>) -> Option<usize> {
 }
 
 /// 贪心解码循环：每步对 [初始序列 + 已生成] 全量重算、取末位 logits argmax
-///（无缓存分支，依据见模块文档「缓存分支禁用」）；EOS 停止、
+/// （无缓存分支，依据见模块文档「缓存分支禁用」）；EOS 停止、
 /// `max_new_tokens` 硬顶、`min_new_tokens` 窗口内抑制 EOS。past 输入以
 /// 零长占位张量（图输入必填，else 分支不消费值）；初始序列与 past 名表/
 /// 形状按模型家族注入。
 //
 // 9 参为贪心解码热循环「编码器输出 / past / init」的自然分组，保持扁平签名
 // 以免波及两处调用点；用 #[expect]（非 #[allow]）显式钉住，参数若降至阈值内
-// 会反向告警提示可移除（设计文档 D4）。
+// 会反向告警提示可移除。
 #[expect(clippy::too_many_arguments)]
 fn greedy_decode(
     decoder: &mut Session,
@@ -842,7 +842,7 @@ impl OnnxTranslationEngine {
         let intra_threads = SESSION_INTRA_THREADS.load(std::sync::atomic::Ordering::Relaxed);
         let sessions =
             build_translate_sessions(&encoder_file, &decoder_file, intra_threads, &config.device)?;
-        // 句级并行 worker 集：惰性加载（wsl2-oom-hardening D2）。ORT 对标准
+        // 句级并行 worker 集：惰性加载。ORT 对标准
         // .onnx 每 Session 独占一份权重堆拷贝（跨 Session 不共享），此前 init
         // 预载 4 pair × 4 worker 全 FP32 曾致 ~30G+ 常驻 idle；现 idle 驻留
         // 收敛为每 pair 一套主集，首次长输入并行请求经 ensure_parallel_sessions
@@ -1579,7 +1579,7 @@ fn check_token_budget(
     scope: &str,
 ) -> Result<(), VecboostError> {
     if source_len > max_source_tokens {
-        // InvalidInput（to_api_error 映射 400）：design D2 承诺超限冒泡为
+        // InvalidInput（to_api_error 映射 400）：承诺超限冒泡为
         // 400 语义；服务层预判为第一道，此处为引擎兜底（口径一致）
         return Err(VecboostError::InvalidInput(format!(
             "source {scope} exceeds token budget: {source_len} tokens > \
@@ -1886,9 +1886,7 @@ impl InferenceEngine for OnnxTranslationEngine {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // 测试：探测/契约面（离线可跑）。真机贪心链路由 E2E 覆盖。
-// ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -2251,7 +2249,7 @@ mod tests {
 
     #[test]
     fn test_generation_config_partial_keys_falls_back_without_panic() {
-        // D2 回归：generation_config.json 存在但缺 decoder_start_token_id →
+        // 回归：generation_config.json 存在但缺 decoder_start_token_id →
         // 穷尽 match 落 `_` 分支走 tokenizer 兜底，绝不触及旧实现里被
         // guard 保证安全的 unwrap（离线红线：不 panic、不硬失败）。
         let Some(dir) = opus_bundle() else {
@@ -2266,7 +2264,7 @@ mod tests {
         )
         .unwrap();
         // 缺 decoder_start → `_` 兜底：decoder_start 取 `<pad>` 特殊 token
-        // （Marian 口径，R-translation-decode-004），确证走兜底分支且全程无 panic/Err。
+        // （Marian 口径），确证走兜底分支且全程无 panic/Err。
         let config = GenerationConfig::from_bundle(partial.path(), &tokenizer)
             .expect("缺 decoder_start 应落 tokenizer 兜底而非 panic/Err");
         assert_eq!(
@@ -2924,7 +2922,7 @@ mod tests {
         .unwrap();
         let tokenizer = load_tokenizer(&path).expect("shim 后必须可加载");
         // 特殊/语言 token 不在 vocab 也必须存活（手写 id 与 BPE vocab id 空间
-        // 冲突会被解析器重排，故只断存在性，R-translation-decode-003）
+        // 冲突会被解析器重排，故只断存在性）
         assert!(
             tokenizer.token_to_id("</s>").is_some(),
             "`</s>` 不得被 shim 误删"
@@ -3233,7 +3231,7 @@ mod tests {
                 );
             } else {
                 // 容差档（opus 小模型实测 dynamic int8 噪声：单字替换、
-                // 尾部重复，design D3 降级条款）：
+                // 尾部重复，降级条款）：
                 // ① fp32 等长窗口前缀相似度 ≥0.85——主体语义锚点；
                 // ② 尾部外延 ≤50%——重复失控护栏。双输出留证于 CI 日志
                 let ctx = &int8.chars().take(fp32.chars().count()).collect::<String>();

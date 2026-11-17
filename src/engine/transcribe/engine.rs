@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `Qwen3AsrEngine`：把移植进来的 Qwen3-ASR 三图 + silero VAD + whisper fbank
-//! 管线封装为主仓 `InferenceEngine` 实现（R-transcribe-engine-002/004）。
+//! 管线封装为主仓 `InferenceEngine` 实现。
 //!
-//! 并发契约（design D2/R-004）：ort rc.13 禁同 Session 并发 Run → 实例内 `Mutex` 串行；
+//! 并发契约：ort rc.13 禁同 Session 并发 Run → 实例内 `Mutex` 串行；
 //! POC 的 worker/batch/gpu/env_pool 并行旋钮**不进库**（段级并行由调用方持多引擎实例承担）。
 //! VAD 每请求新建（`SileroVadModel` 持 LSTM h/c 状态、`detect_segments` 按值消费，
 //! 忠实于 POC `main.rs:182-184` 的每次检测新建）；VAD 加载/推理错误显性上报，
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn frame_count_is_mel_len_over_mel_dim() {
         // num_frames = floor(样本/FRAME_SHIFT)，compute 输出 = num_frames×MEL_DIM；
-        // 反推须回到原帧数（钉 R-transcribe-engine-002 的段→帧换算）。
+        // 反推须回到原帧数（段→帧换算）。
         let fbank = WhisperFbank::new();
         let mel = fbank.compute(&vec![0.0f32; 4000]); // 4000/160 = 25 帧
         assert_eq!(frame_count(&mel), 25);

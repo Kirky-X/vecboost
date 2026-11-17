@@ -820,7 +820,7 @@ mod tests {
         }
     }
 
-    /// 回归钉（R-engine-007）：双命名映射——自产 legacy final-LN 命名与
+    /// 回归钉：双命名映射——自产 legacy final-LN 命名与
     /// llama.cpp 惯例 final-LN 命名各自归位到正确的 candle 张量名。
     #[test]
     fn test_gguf_to_candle_dual_final_ln_naming() {

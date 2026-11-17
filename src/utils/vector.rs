@@ -199,7 +199,8 @@ pub fn calculate_similarity_batch(
 /// 若向量范数接近零（≤ 1e-12），归一化在数学上无意义，
 /// 返回 `Err` 以避免下游获得未归一化的向量。
 pub fn normalize_l2(v: &mut [f32]) -> Result<(), VecboostError> {
-    // NaN/Inf 显性拒绝：NaN 使 norm<=1e-12 判 false 直接放行（审计 D33）
+    // NaN/Inf 显性拒绝：NaN 使 norm<=1e-12 判 false 直接放行
+
     if v.iter().any(|x| !x.is_finite()) {
         return Err(VecboostError::InvalidInput(
             "cannot normalize vector with non-finite components".to_string(),
@@ -680,7 +681,7 @@ mod similarity_tests {
         assert_eq!(recommended_dimension(TaskType::SemanticSearch, 256), 256);
     }
 
-    /// NaN/Inf 向量归一化必须显性报错（审计 D33：NaN 曾穿透 norm<=1e-12 检查）
+    /// NaN/Inf 向量归一化必须显性报错（NaN 曾穿透 norm<=1e-12 检查）
     #[test]
     fn test_normalize_l2_rejects_non_finite() {
         let mut nan_vec = vec![1.0, f32::NAN];

@@ -58,6 +58,9 @@ ignore = [
   # "攻击面不成立"口径）。退出条件：sqlx 发布拉入 libsqlite3-sys >=0.39.0 的版本后
   # 撤销本条并升级（同 .cargo/audit.toml 同 ID 条目口径）。
   { id = "RUSTSEC-2026-0459", reason = "bundled SQLite <3.54.0 via dbnexus -> sea-orm -> sqlx -> sqlx-sqlite 0.9.0 (newest, pins >=0.30.1,<0.38.0; fix needs >=0.39.0, upstream chain broken); exploit requires the process to open an attacker-writable DB+-wal file pair (AV:L) - vecboost only opens operator-configured database URLs (no client-supplied DB paths via API), tests use sqlite::memory: (no WAL)" },
+    # RUSTSEC-2026-0543（2026-11-17 入库）：chrono 全版本 unmaintained（upstream chronotope/chrono#1768），
+    # patched=[] 无升级路径；依赖替换（jiff/time）归依赖治理 change。家族级豁免（confers 2026-11-17 同日先行）。
+    "RUSTSEC-2026-0543",
 ]
 
 [licenses]

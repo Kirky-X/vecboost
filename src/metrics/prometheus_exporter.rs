@@ -620,7 +620,7 @@ mod tests {
     }
 
     /// 决策三指标（P2-3）：注册可见、observe 后值/样本正确——
-    /// /metrics 导出走同一 registry（R-decision-throughput-004）
+    /// /metrics 导出走同一 registry
     #[test]
     fn test_decision_metrics_register_and_observe() {
         let collector = PrometheusCollector::new().unwrap();
@@ -660,7 +660,7 @@ mod tests {
         let hist = queue_wait.get_metric()[0].get_histogram();
         assert_eq!(hist.get_sample_count(), 1, "one queue-wait observation");
 
-        // 既有 vecboost_decision_seconds 行为不变（R-decision-throughput-004）
+        // 既有 vecboost_decision_seconds 行为不变
         let seconds = families
             .iter()
             .find(|m| m.name() == "vecboost_decision_seconds")

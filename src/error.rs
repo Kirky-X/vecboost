@@ -463,7 +463,7 @@ mod tests {
     }
 
     /// Overloaded（队列满/过载背压）IntoResponse 直返路径钉：统一 503，
-    /// 不得复用 RateLimitExceeded（spec R-decision-throughput-002）
+    /// 不得复用 RateLimitExceeded
     #[cfg(feature = "http")]
     #[test]
     fn test_into_response_overloaded() {

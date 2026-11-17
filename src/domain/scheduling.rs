@@ -250,7 +250,8 @@ impl PriorityRequestQueue {
 
             if current_size >= self.max_queue_size {
                 // 队列满背压走专属 Overloaded 变体（RateLimitExceeded 语义归
-                // auth 限流，spec R-decision-throughput-002 禁止互用）
+                // auth 限流，禁止互用）
+
                 return Err(VecboostError::Overloaded(i18n::tr("queue-full-rejected")));
             }
 
@@ -788,7 +789,7 @@ mod tests {
         );
     }
 
-    /// 回归钉（D01 老化反向）：仅剩 aged 队首时 dequeue 必须兜底弹出，
+    /// 回归钉（老化反向）：仅剩 aged 队首时 dequeue 必须兜底弹出，
     /// 而非返回 None 使该请求永久搁浅。旧行为：跳过整级且不弹队首 → None。
     #[tokio::test]
     async fn test_aged_front_served_when_no_lower_priority() {

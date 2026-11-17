@@ -1639,7 +1639,8 @@ fn main() {
     // i18n 必须先于一切用户可见输出：thread-tune 提示（numa_advice）与
     // CLI fail-fast 文案（未知子命令/--config 校验）均已接线 FTL，早于 app_main。
     vecboost::i18n::init();
-    // jemalloc decay 调优（wsl2-oom-hardening-r2 D3）：boot 期 je_malloc_conf
+    // jemalloc decay 调优：boot 期 je_malloc_conf
+
     // 强符号已于首次分配前生效，此处只做生效性观测与记录
     #[cfg(all(target_os = "linux", not(target_env = "musl")))]
     match vecboost::allocator_tune::effective_boot_conf() {
@@ -3135,7 +3136,6 @@ async fn build_module_registry(
     #[cfg(feature = "auth")] garrison_handle: Option<Arc<vecboost::auth::GarrisonHandle>>,
     #[cfg(feature = "auth")] garrison_csrf_config: Option<Arc<vecboost::auth::GarrisonCsrfConfig>>,
 ) -> anyhow::Result<Arc<trait_kit::AsyncKit<trait_kit::AsyncReady>>> {
-    // ---------------------------------------------------------------------------
     // Module Registry (trait-kit AsyncKit)
     //
     // 使用 trait-kit 0.3 的 AsyncKit 构建模块依赖图。AsyncKit 是 Send + Sync
@@ -3143,7 +3143,6 @@ async fn build_module_registry(
     //
     // 模块采用"预构建能力注入"模式：需要异步构造的复杂对象（如 EmbeddingService）
     // 在上方已预构建，此处通过 kit.set_config() 注入，模块的 build() 从 config 检索。
-    // ---------------------------------------------------------------------------
 
     let mut kit = trait_kit::AsyncKit::new();
 
@@ -3357,7 +3356,7 @@ mod tests {
     }
 
     // 装配三问①：[model].tokenizer_path 透传进引擎级 ModelConfig（spec
-    // R-model-bundle-fetch-002），注入值原样可达引擎加载分支
+    // ），注入值原样可达引擎加载分支
     #[test]
     fn engine_model_config_passes_through_tokenizer_path() {
         let mut config = VecboostConfig::default();

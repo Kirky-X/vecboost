@@ -27,19 +27,16 @@ reqwest = { workspace = true, features = ["rustls"] }
 hf-hub = { workspace = true }
 tempfile = { workspace = true }
 prometheus = { workspace = true }
-# 与主 crate 同源 log 门面（0.4，主 crate [dependencies] 同版本）；无实现时库内
-# log::warn! 全部静默，示例侧需装转发器才能看到校准回退等提示
+# 与主 crate 同源 log 门面（0.4，主 crate [dependencies] 同版本）；无实现时库内 log::warn! 全部静默，示例侧需装转发器才能看到校准回退等提示
 log = { version = "0.4", default-features = false }
 
 [features]
 default = []
-# 引擎特性透传（onnx-primary：vecboost 默认含 onnx，此处透传为显式 opt-in；
-# candle 为 vecboost opt-in 回退后端，透传后 library_usage 示例可启用）
+# 引擎特性透传（onnx-primary：vecboost 默认含 onnx，此处透传为显式 opt-in；candle 为 vecboost opt-in 回退后端，透传后 library_usage 示例可启用）
 onnx = ["vecboost/onnx"]
 candle = ["vecboost/candle"]
 metal = ["vecboost/metal"]
 
-# Binaries — 30 个示例
 
 # download_model — 模型下载工具
 [[bin]]

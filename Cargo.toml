@@ -29,19 +29,16 @@ zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 # 0.6 起 hash_password_into 被 alloc feature 门控（derive_key 依赖它）
 argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
 
-# Serialization (base)
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true }
 
-# Error Handling (base)
 anyhow = { version = "1.0", default-features = false, features = ["std"] }
 
-# i18n：FTL 编译期嵌入 + 轻量文本解析（无 selector/term 语法，无需 fluent-bundle）；
-# sys-locale 供 locale.rs 检测链使用
+# i18n：FTL 编译期嵌入 + 轻量文本解析（无 selector/term 语法，无需 fluent-bundle）；sys-locale 供 locale.rs 检测链使用
 sys-locale = { version = "0.3", default-features = false }
 
 # trait-kit：reload/confers 热重载；20 个 ModuleMeta 均声明 VERSION 供版本协商
-# （i18n feature 摘除：格式化层 I18nFormatter 在本仓零调用点——"格式化无场景"申报）
+# i18n feature 摘除：I18nFormatter 在本仓零调用（"格式化无场景"申报）
 trait-kit = { version = "0.5", default-features = false, features = ["async", "lifecycle", "health", "shutdown", "observer", "scope", "toggle", "decorator", "reload", "negotiate"] }
 
 # 配置：仅保留 toml/env 加载、校验、watch 热重载、加密、schema 导出；其余零接线项裁剪
@@ -100,10 +97,8 @@ reqwest = { workspace = true, optional = true, features = ["stream", "charset", 
 garrison = { version = "0.9", default-features = false, features = ["protocol-jwt", "web-csrf", "cache-audit", "account-policy", "account-lockout", "secure-masking", "secure-xss", "secure-sanitize", "audit-inklog", "firewall-bruteforce", "firewall-ratelimit", "firewall-anomalous", "secure-totp", "credential-zeroize", "anomalous-detector-dual", "security-alert", "protocol-apikey", "protocol-sign", "protocol-temp", "protocol-zeroize", "backend-kit", "annotation-macros", "secure-simple-token", "web-cors", "web-security-headers", "metrics-prometheus", "grpc"], optional = true }
 aes-gcm = { version = "0.11", optional = true, default-features = false, features = ["alloc", "aes", "getrandom", "rand_core"] }
 
-# ONNX feature
 ndarray = { version = "0.17", optional = true, default-features = false, features = ["std"] }
-# RC 版本保留完整 semver:ort 至今从未发布稳定版,
-# 2.0.0-rc.15 即同 2.0.0 基线 crates.io 最新 rc,"仅稳定版"规则对 ort 无稳定标的可用
+# RC 版本保留完整 semver:ort 至今从未发布稳定版, 2.0.0-rc.15 即同 2.0.0 基线 crates.io 最新 rc,"仅稳定版"规则对 ort 无稳定标的可用
 ort = { version = "2.0.0-rc.15", optional = true, default-features = false }
 # 转录引擎（onnx-engine-unify D3）：WAV 解码头 + fbank FFT；仅经 `transcribe` 引入
 hound = { version = "3.5", optional = true, default-features = false }
@@ -143,8 +138,7 @@ http = ["dep:axum", "dep:axum-extra", "dep:tower-http", "schema", "dep:uuid", "d
 grpc = ["sdforge/grpc", "sdforge/ratelimit", "sdforge/security", "dep:tonic"]
 cli = ["sdforge/cli", "dep:clap"]
 openapi = ["schema", "sdforge/openapi"]
-# Swagger UI 交互页 + /api-docs/openapi.json（opt-in，默认不编译）；
-# 页面与资产由 sdforge/docs 内置 docgen 提供（0.5.0-rc.9 起不再经 utoipa-swagger-ui）
+# Swagger UI + /api-docs/openapi.json（opt-in，默认不编译），资产由 sdforge/docs docgen 提供（0.5.0-rc.9 起不经 utoipa-swagger-ui）
 swagger-ui = ["openapi", "sdforge/docs"]
 
 # schema 派生：由 http/openapi 自动启用；单独启用仅供 library 类型导出
@@ -155,8 +149,8 @@ mcp = ["dep:sdforge", "sdforge/mcp"]
 
 # 存储：db 为驱动无关基础设施，驱动由 sqlite/postgres 二选一（compile_error 互斥）
 db = ["dep:dbnexus"]
-# garrison 的 db-* 驱动仅在启用 auth 时随 sqlite/postgres 联动（garrison? 弱
-# 可选语法）；供 [auth] session_backend = "database" 的 DbnexusKvDao 使用。
+# garrison 的 db-* 驱动仅在启用 auth 时随 sqlite/postgres 联动（garrison? 弱可选语法）
+# 供 [auth] session_backend = "database" 的 DbnexusKvDao 使用
 sqlite = ["db", "dbnexus/sqlite", "inklog/sqlite", "garrison?/db-sqlite"]
 postgres = ["db", "dbnexus/postgres", "inklog/postgres", "garrison?/db-postgres"]
 
@@ -166,8 +160,7 @@ auth = ["dep:garrison", "dep:aes-gcm"]
 # 引擎特性 — onnx-primary：ort 为默认主推理引擎；candle 降级 opt-in 回退后端（显式 `--features candle` 启用）
 onnx = ["dep:ndarray", "dep:ort", "ort/ndarray", "ort/std", "ort/load-dynamic"]
 candle = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers"]
-# CUDA 设备支持（cudarc driver + nvml 检测，后端正交）；candle 的 CUDA
-# 计算后端单独经 candle-cuda（不随 cuda 隐含，避免 ort-only 用户被动拉 candle）。
+# CUDA 设备支持（cudarc driver + nvml 检测，后端正交）；candle 的 CUDA 计算后端单独经 candle-cuda（不随 cuda 隐含，避免 ort-only 用户被动拉 candle）。
 cuda = ["dep:nvml-wrapper", "dep:cudarc"]
 candle-cuda = ["candle", "candle-core/cuda", "candle-nn/cuda"]
 metal = ["candle", "candle-core/metal", "candle-nn/metal"]
@@ -180,23 +173,19 @@ accelerate = ["candle", "candle-core/accelerate", "candle-nn/accelerate", "candl
 quantized-gguf = ["candle"]
 # Redis 多副本：限流 Lua 原子计数 + 缓存共享；启用 limiteron distributed/oxcache redis
 distributed-redis = ["limiteron/cache-redis", "limiteron/distributed", "limiteron/lua-script", "limiteron/ban-sync", "oxcache/redis", "oxcache/lua", "dep:redis"]
-# 已废弃的空 feature（0.3.1 起 character_converter 依赖移除，繁→简由内置
-# t2s 词典承担；保留空壳防下游 --features character_converter 断裂，0.x 内不删）
+# 已废弃的空 feature（0.3.1 起 character_converter 依赖移除，繁→简由内置 t2s 词典承担；保留空壳防下游 --features character_converter 断裂，0.x 内不删）
 character_converter = []
 
-# Binary target — main.rs 是 HTTP server 入口（axum::serve），
-# 需要 http feature 才能编译。schema-only 等 library 模式不会构建 bin。
+# Binary target — main.rs 是 HTTP server 入口（axum::serve），需要 http feature 才能编译。schema-only 等 library 模式不会构建 bin。
 [[bin]]
 name = "vecboost"
 required-features = ["http"]
 
-# A/B 对比 harness 构造 EngineType::Onnx / Task=Translate 引擎，须 onnx feature
-# （未启用时该 variant 不存在）；同 [[bin]] required-features 惯例
+# A/B harness 构造 EngineType::Onnx / Task=Translate，须 onnx feature（否则 variant 不存在）；同 [[bin]] required-features
 [[example]]
 name = "translate_ab"
 required-features = ["onnx"]
 
-# Platform-specific dependencies
 
 [target.'cfg(target_os = "linux")'.dependencies]
 
@@ -231,8 +220,8 @@ harness = false
 name = "embed_throughput_bench"
 harness = false
 
-# 重排吞吐基线（bi-encoder 派生成本：单对 rerank 与 1×32 rerank_batch）。
-# 与 embed_throughput_bench 共用 VECBOOST_BENCH_MODEL / _ENGINE / _DEVICE 选择器
+# 重排吞吐基线（bi-encoder 成本：单对 rerank 与 1×32 rerank_batch）
+# 与 embed_throughput_bench 共用 VECBOOST_BENCH_MODEL/_ENGINE/_DEVICE 选择器
 [[bench]]
 name = "rerank_bench"
 harness = false
@@ -273,5 +262,4 @@ hf-hub = { version = "1.0", default-features = false, features = ["blocking", "r
 tempfile = { version = "3.27", default-features = false }
 prometheus = { version = "0.14", default-features = false, features = ["process"] }
 
-# 自研库本地源码接线（工作树专用，发布前必须整体移除本段与随之重写的 Cargo.lock）：
-# ci.yml / release.yml 的 runner 无兄弟目录，本段一旦入库 resolution 即硬错。
+# 自研库本地源码接线（工作树专用，发布前必须整体移除本段与随之重写的 Cargo.lock）：ci.yml / release.yml 的 runner 无兄弟目录，本段一旦入库 resolution 即硬错。

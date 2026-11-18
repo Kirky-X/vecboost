@@ -62,7 +62,10 @@ impl MemoryPoolManager {
         info!("Initializing CUDA pool for device {}...", device_id);
 
         let pool = CudaMemoryPool::new(device_id, self.config.cuda_pool.clone()).map_err(|e| {
-            VecboostError::ConfigError(format!("Failed to initialize CUDA pool: {}", e))
+            VecboostError::ConfigError(crate::i18n::tr_with_args(
+                "detail-failed-to-initialize-cuda-pool-f468b",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
         })?;
 
         self.cuda_pool = Some(Arc::new(RwLock::new(pool)));
@@ -81,9 +84,9 @@ impl MemoryPoolManager {
         info!("Initializing all memory pools...");
 
         if self.config.cuda_pool.enabled && cuda_device_id.is_none() {
-            return Err(VecboostError::ConfigError(
-                "CUDA pool requires device_id but none provided".to_string(),
-            ));
+            return Err(VecboostError::ConfigError(crate::i18n::tr(
+                "detail-cuda-pool-requires-device-id-but-none-provided-16ab3",
+            )));
         }
 
         let mut initialized_pools = Vec::new();
@@ -119,9 +122,9 @@ impl MemoryPoolManager {
 
                     self.clear_all().await;
 
-                    return Err(VecboostError::ConfigError(format!(
-                        "Failed to initialize CUDA pool: {}. Rollback completed.",
-                        e
+                    return Err(VecboostError::ConfigError(crate::i18n::tr_with_args(
+                        "detail-failed-to-initialize-cuda-pool-rollback-completed-41bc1",
+                        crate::i18n::tr_args(&[("p1", &e.to_string())]),
                     )));
                 }
             }

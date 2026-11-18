@@ -616,10 +616,12 @@ impl EmbeddingService {
         }
         // 引擎返回向量数不足时显性报错——索引越界 panic 会拖垮 worker
         if unique_results.len() < unique_texts.len() {
-            return Err(VecboostError::InferenceError(format!(
-                "engine returned {} embeddings for {} unique inputs",
-                unique_results.len(),
-                unique_texts.len()
+            return Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-engine-returned-embeddings-for-unique-inputs-2ced5",
+                crate::i18n::tr_args(&[
+                    ("p1", &unique_results.len().to_string()),
+                    ("p2", &unique_texts.len().to_string()),
+                ]),
             )));
         }
         // 埋点：drain 引擎分阶段延迟（tokenize/inference/pool）进 prometheus。
@@ -1242,7 +1244,10 @@ impl EmbeddingService {
             tasks.push(tokio::spawn(async move {
                 // 获取信号量许可，限制并发数
                 let _permit = semaphore.acquire().await.map_err(|e| {
-                    VecboostError::InferenceError(format!("Failed to acquire semaphore: {}", e))
+                    VecboostError::InferenceError(crate::i18n::tr_with_args(
+                        "detail-failed-to-acquire-semaphore-62e60",
+                        crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                    ))
                 })?;
 
                 Self::embed_single_chunk(
@@ -1267,9 +1272,9 @@ impl EmbeddingService {
                 {
                     Ok(join_result) => join_result??,
                     Err(_) => {
-                        return Err(VecboostError::InferenceError(format!(
-                            "Batch chunk processing timed out after {}s",
-                            BATCH_CHUNK_TIMEOUT_SECS
+                        return Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+                            "detail-batch-chunk-processing-timed-out-after-s-18a49",
+                            crate::i18n::tr_args(&[("p1", &BATCH_CHUNK_TIMEOUT_SECS.to_string())]),
                         )));
                     }
                 };
@@ -1677,8 +1682,13 @@ impl EmbeddingService {
             .saturating_sub(ctrl.current_usage())
             + new_est;
         if projected > limit {
-            return Err(VecboostError::ModelLoadError(format!(
-                "memory limit exceeded: new model ~{new_est} bytes, projected {projected} > limit {limit} bytes"
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-memory-limit-exceeded-new-model-new-est-bytes-project-f6e01",
+                crate::i18n::tr_args(&[
+                    ("new_est", &new_est.to_string()),
+                    ("projected", &projected.to_string()),
+                    ("limit", &limit.to_string()),
+                ]),
             )));
         }
         Ok(())

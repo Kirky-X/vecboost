@@ -337,6 +337,11 @@ mod tests {
         let json = serde_json::to_string(&util).expect("serialize failed");
         assert!(json.contains("cpu_percent"));
         assert!(json.contains("memory_percent"));
+        // 金样本：epoch 时间戳的 serde 字节级格式钉死（RUSTSEC-2026-0543 迁移前后必须一致）
+        assert!(
+            json.contains("\"timestamp\":\"1970-01-01T00:00:00Z\""),
+            "epoch 序列化格式漂移: {json}"
+        );
     }
 
     #[test]

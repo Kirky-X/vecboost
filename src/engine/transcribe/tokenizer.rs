@@ -28,10 +28,16 @@ use tokenizers::tokenizer::normalizer::SplitDelimiterBehavior;
 pub(crate) type TokResult<T> = Result<T, VecboostError>;
 
 fn tok_load_err(e: impl std::fmt::Display) -> VecboostError {
-    VecboostError::ModelLoadError(format!("transcribe tokenizer: {e}"))
+    VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+        "detail-transcribe-tokenizer-e-12bbc",
+        crate::i18n::tr_args(&[("e", &e.to_string())]),
+    ))
 }
 fn tok_infer_err(e: impl std::fmt::Display) -> VecboostError {
-    VecboostError::InferenceError(format!("transcribe tokenizer: {e}"))
+    VecboostError::InferenceError(crate::i18n::tr_with_args(
+        "detail-transcribe-tokenizer-e-12bbc",
+        crate::i18n::tr_args(&[("e", &e.to_string())]),
+    ))
 }
 
 /// 特殊 token 与固定 id（实测 assets/models/tokenizer/tokenizer_config.json
@@ -71,18 +77,22 @@ impl AsrTokenizer {
         let merges = dir.join("merges.txt");
         for f in [&vocab, &merges] {
             if !f.exists() {
-                return Err(VecboostError::ModelLoadError(format!(
-                    "tokenizer file not found: {}",
-                    f.display()
+                return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-tokenizer-file-not-found-18590",
+                    crate::i18n::tr_args(&[("p1", &f.display().to_string())]),
                 )));
             }
         }
         let bpe = BPE::from_file(
             vocab.to_str().ok_or_else(|| {
-                VecboostError::ModelLoadError("tokenizer vocab path not utf-8".to_string())
+                VecboostError::ModelLoadError(crate::i18n::tr(
+                    "detail-tokenizer-vocab-path-not-utf-8-31035",
+                ))
             })?,
             merges.to_str().ok_or_else(|| {
-                VecboostError::ModelLoadError("tokenizer merges path not utf-8".to_string())
+                VecboostError::ModelLoadError(crate::i18n::tr(
+                    "detail-tokenizer-merges-path-not-utf-8-70347",
+                ))
             })?,
         )
         .build()

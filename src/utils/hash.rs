@@ -58,7 +58,10 @@ pub fn compute_sha256<P: AsRef<Path>>(file_path: P) -> Result<String, VecboostEr
     let path = file_path.as_ref();
 
     let mut file = File::open(path).map_err(|e| {
-        VecboostError::ModelLoadError(format!("Failed to open file {:?}: {}", path, e))
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-failed-to-open-file-b448b",
+            crate::i18n::tr_args(&[("p1", &format!("{:?}", path)), ("p2", &e.to_string())]),
+        ))
     })?;
 
     let mut hasher = Sha256::new();
@@ -66,7 +69,10 @@ pub fn compute_sha256<P: AsRef<Path>>(file_path: P) -> Result<String, VecboostEr
 
     loop {
         let bytes_read = file.read(&mut buffer).map_err(|e| {
-            VecboostError::ModelLoadError(format!("Failed to read file {:?}: {}", path, e))
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-failed-to-read-file-3a71b",
+                crate::i18n::tr_args(&[("p1", &format!("{:?}", path)), ("p2", &e.to_string())]),
+            ))
         })?;
 
         if bytes_read == 0 {
@@ -99,7 +105,10 @@ pub fn verify_file_exists<P: AsRef<Path>>(file_path: P) -> Result<bool, Vecboost
 pub fn verify_file_readable<P: AsRef<Path>>(file_path: P) -> Result<bool, VecboostError> {
     let path = file_path.as_ref();
     File::open(path).map_err(|e| {
-        VecboostError::ModelLoadError(format!("Failed to open file {:?}: {}", path, e))
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-failed-to-open-file-b448b",
+            crate::i18n::tr_args(&[("p1", &format!("{:?}", path)), ("p2", &e.to_string())]),
+        ))
     })?;
     Ok(true)
 }
@@ -110,7 +119,10 @@ pub fn verify_file_size<P: AsRef<Path>>(
 ) -> Result<bool, VecboostError> {
     let path = file_path.as_ref();
     let metadata = std::fs::metadata(path).map_err(|e| {
-        VecboostError::ModelLoadError(format!("Failed to get metadata for {:?}: {}", path, e))
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-failed-to-get-metadata-for-c0040",
+            crate::i18n::tr_args(&[("p1", &format!("{:?}", path)), ("p2", &e.to_string())]),
+        ))
     })?;
 
     Ok(metadata.len() >= min_size_bytes)

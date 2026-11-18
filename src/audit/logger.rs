@@ -415,9 +415,12 @@ impl AuditLogger {
         event: &SecurityEvent,
     ) -> Result<(), VecboostError> {
         let session = pool.get_session("admin").await?;
-        let conn = session
-            .connection()
-            .map_err(|e| VecboostError::InternalError(format!("Failed to get connection: {e}")))?;
+        let conn = session.connection().map_err(|e| {
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-get-connection-e-b2cdd",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
+        })?;
         let details_json =
             serde_json::to_string(&event.details).unwrap_or_else(|_| "{}".to_string());
         let timestamp = event.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -436,7 +439,10 @@ impl AuditLogger {
             ],
         );
         conn.execute_raw(stmt).await.map_err(|e| {
-            VecboostError::InternalError(format!("Failed to insert audit log: {e}"))
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-insert-audit-log-e-31a6c",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
         })?;
         Ok(())
     }

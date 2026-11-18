@@ -313,9 +313,12 @@ impl From<garrison::error::GarrisonError> for VecboostError {
             GE::Exception(ex) => VecboostError::AuthenticationError(ex.to_string()),
             // garrison 0.9.0-rc.3（R04 统一错误模型）新增：显式映射进限流语义，
             // 避免落 `_` 兜底被误报为 500（限流背压 wire 口径见 to_api_error）
-            GE::RateLimited { retry_after_secs } => VecboostError::RateLimitExceeded(format!(
-                "rate limited: retry after {retry_after_secs}s"
-            )),
+            GE::RateLimited { retry_after_secs } => {
+                VecboostError::RateLimitExceeded(crate::i18n::tr_with_args(
+                    "detail-rate-limited-retry-after-retry-after-secs-s-f6222",
+                    crate::i18n::tr_args(&[("retry_after_secs", &retry_after_secs.to_string())]),
+                ))
+            }
             _ => VecboostError::InternalError(e.to_string()),
         }
     }

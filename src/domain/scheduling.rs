@@ -240,9 +240,9 @@ impl PriorityRequestQueue {
         // 停机后拒绝入队（排空后窗口内到达的请求快速失败，不悬挂）
         if self.closed.load(Ordering::Relaxed) {
             self.cancellations.release(&request.request_id);
-            return Err(VecboostError::InferenceError(
-                "server is shutting down".to_string(),
-            ));
+            return Err(VecboostError::InferenceError(crate::i18n::tr(
+                "detail-server-is-shutting-down-27eb4",
+            )));
         }
         // 使用原子操作确保检查和入队的原子性
         loop {

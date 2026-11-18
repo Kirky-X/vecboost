@@ -163,10 +163,13 @@ pub(crate) fn probe_model_file(
         }
         tried.push(candidate.display().to_string());
     }
-    Err(VecboostError::ModelLoadError(format!(
-        "No {role} model found in {}; tried: {}",
-        bundle_dir.display(),
-        tried.join(", ")
+    Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+        "detail-no-role-model-found-in-tried-e6fb2",
+        crate::i18n::tr_args(&[
+            ("role", &role.to_string()),
+            ("p1", &bundle_dir.display().to_string()),
+            ("p2", &tried.join(", ").to_string()),
+        ]),
     )))
 }
 
@@ -337,12 +340,15 @@ pub(crate) fn ensure_memory_available(model_file: &Path) -> Result<(), VecboostE
     #[cfg(target_os = "linux")]
     {
         let text = std::fs::read_to_string("/proc/meminfo").map_err(|e| {
-            VecboostError::ModelLoadError(format!("memory gate: cannot read /proc/meminfo: {e}"))
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-memory-gate-cannot-read-proc-meminfo-e-297bf",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
         })?;
         let available = mem_available_bytes(&text).ok_or_else(|| {
-            VecboostError::ModelLoadError(
-                "memory gate: MemAvailable missing in /proc/meminfo".to_string(),
-            )
+            VecboostError::ModelLoadError(crate::i18n::tr(
+                "detail-memory-gate-memavailable-missing-in-proc-meminfo-111ea",
+            ))
         })?;
         let need = std::fs::metadata(model_file)
             .map(|m| m.len())

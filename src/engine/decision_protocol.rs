@@ -85,7 +85,12 @@ fn special_id(tokenizer: &Tokenizer, token: &str) -> Result<i64, VecboostError> 
     tokenizer
         .token_to_id(token)
         .map(|id| id as i64)
-        .ok_or_else(|| VecboostError::TokenizationError(format!("tokenizer vocab missing {token}")))
+        .ok_or_else(|| {
+            VecboostError::TokenizationError(crate::i18n::tr_with_args(
+                "detail-tokenizer-vocab-missing-token-dd066",
+                crate::i18n::tr_args(&[("token", &token.to_string())]),
+            ))
+        })
 }
 
 /// state 文本化：字符串原样借用（零拷贝），其余 serde_json 紧凑序列化（§4.2）

@@ -89,18 +89,17 @@ pub enum AggregationMode {
 /// 零向量返回 `Err`（数学上未定义）。
 pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
-        return Err(VecboostError::InvalidInput(format!(
-            "Vector dimensions mismatch: {} vs {}",
-            v1.len(),
-            v2.len()
+        return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+            "detail-vector-dimensions-mismatch-vs-4995d",
+            crate::i18n::tr_args(&[("p1", &v1.len().to_string()), ("p2", &v2.len().to_string())]),
         )));
     }
 
     // NaN/Inf 显性拒绝——放行会产出 NaN 分数污染排序与缓存判定
     if v1.iter().chain(v2).any(|x| !x.is_finite()) {
-        return Err(VecboostError::InvalidInput(
-            "cosine similarity is undefined for non-finite vector components".to_string(),
-        ));
+        return Err(VecboostError::InvalidInput(crate::i18n::tr(
+            "detail-cosine-similarity-is-undefined-for-non-finite-vector-40741",
+        )));
     }
 
     let dot_product = vector_simd::dot_product_chunked(v1, v2);
@@ -108,9 +107,9 @@ pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     let norm_b = vector_simd::sum_of_squares_chunked(v2).sqrt();
 
     if norm_a == 0.0 || norm_b == 0.0 {
-        return Err(VecboostError::InvalidInput(
-            "cosine similarity is undefined for zero vectors".to_string(),
-        ));
+        return Err(VecboostError::InvalidInput(crate::i18n::tr(
+            "detail-cosine-similarity-is-undefined-for-zero-vectors-2a5eb",
+        )));
     }
 
     Ok(dot_product / (norm_a * norm_b))
@@ -119,10 +118,9 @@ pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
 /// 计算两个向量的欧氏距离。
 pub fn euclidean_distance(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
-        return Err(VecboostError::InvalidInput(format!(
-            "Vector dimensions mismatch: {} vs {}",
-            v1.len(),
-            v2.len()
+        return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+            "detail-vector-dimensions-mismatch-vs-4995d",
+            crate::i18n::tr_args(&[("p1", &v1.len().to_string()), ("p2", &v2.len().to_string())]),
         )));
     }
 
@@ -134,10 +132,9 @@ pub fn euclidean_distance(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> 
 /// 计算两个向量的点积。
 pub fn dot_product(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
-        return Err(VecboostError::InvalidInput(format!(
-            "Vector dimensions mismatch: {} vs {}",
-            v1.len(),
-            v2.len()
+        return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+            "detail-vector-dimensions-mismatch-vs-4995d",
+            crate::i18n::tr_args(&[("p1", &v1.len().to_string()), ("p2", &v2.len().to_string())]),
         )));
     }
 
@@ -147,10 +144,9 @@ pub fn dot_product(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
 /// 计算两个向量的曼哈顿距离。
 pub fn manhattan_distance(v1: &[f32], v2: &[f32]) -> Result<f32, VecboostError> {
     if v1.len() != v2.len() {
-        return Err(VecboostError::InvalidInput(format!(
-            "Vector dimensions mismatch: {} vs {}",
-            v1.len(),
-            v2.len()
+        return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+            "detail-vector-dimensions-mismatch-vs-4995d",
+            crate::i18n::tr_args(&[("p1", &v1.len().to_string()), ("p2", &v2.len().to_string())]),
         )));
     }
 
@@ -202,15 +198,15 @@ pub fn normalize_l2(v: &mut [f32]) -> Result<(), VecboostError> {
     // NaN/Inf 显性拒绝：NaN 使 norm<=1e-12 判 false 直接放行
 
     if v.iter().any(|x| !x.is_finite()) {
-        return Err(VecboostError::InvalidInput(
-            "cannot normalize vector with non-finite components".to_string(),
-        ));
+        return Err(VecboostError::InvalidInput(crate::i18n::tr(
+            "detail-cannot-normalize-vector-with-non-finite-components-6ff63",
+        )));
     }
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm <= 1e-12 {
-        return Err(VecboostError::InvalidInput(format!(
-            "cannot normalize near-zero vector (L2 norm = {:.2e})",
-            norm
+        return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+            "detail-cannot-normalize-near-zero-vector-l2-norm-2e-603f6",
+            crate::i18n::tr_args(&[("p1", &format!("{:.2e}", norm))]),
         )));
     }
     for x in v.iter_mut() {
@@ -223,9 +219,9 @@ pub fn normalize_l2(v: &mut [f32]) -> Result<(), VecboostError> {
 /// 永久返回坏向量，故所有缓存写入与响应出口前必须调用。
 pub fn ensure_finite_embedding(v: &[f32]) -> Result<(), VecboostError> {
     if v.iter().any(|x| !x.is_finite()) {
-        return Err(VecboostError::InferenceError(
-            "engine produced non-finite embedding components".to_string(),
-        ));
+        return Err(VecboostError::InferenceError(crate::i18n::tr(
+            "detail-engine-produced-non-finite-embedding-components-c7384",
+        )));
     }
     Ok(())
 }

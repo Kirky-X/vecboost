@@ -88,10 +88,9 @@ fn build_hf_repo_with_http(
     >,
 ) -> Result<HFRepositorySync<RepoTypeModel>, VecboostError> {
     if !is_valid_hf_repo_id(repo_id) {
-        return Err(VecboostError::ModelLoadError(format!(
-            "Invalid HuggingFace repo ID '{}': must match 'organization/model-name' \
-             pattern with alphanumeric, dash, underscore, dot characters only",
-            repo_id
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-invalid-huggingface-repo-id-must-match-organization-m-8d092",
+            crate::i18n::tr_args(&[("p1", &repo_id.to_string())]),
         )));
     }
 
@@ -126,20 +125,20 @@ fn build_hf_repo_with_http(
             // 错误，流入既有 failures 聚合路径（可重试）。
             http_builder = http_builder.read_timeout(std::time::Duration::from_secs(60));
         }
-        let http_client = http_builder
-            .build()
-            .map_err(|e| VecboostError::ModelLoadError(format!("HF client build failed: {e}")))?;
+        let http_client = http_builder.build().map_err(|e| {
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-hf-client-build-failed-e-c3288",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
+        })?;
         builder = builder.client(http_client);
     }
     let api = builder.build_sync().map_err(|e| {
         let msg = e.to_string();
         if msg.contains("ETag") || msg.contains("missing") {
-            VecboostError::ModelLoadError(format!(
-                "HuggingFace hub initialization failed: {}. \
-                 If using HF_ENDPOINT mirror, it may be incompatible with hf-hub 1.0.0 \
-                 Workaround: pre-download the model and set \
-                 `model_path` in config.",
-                msg
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-huggingface-hub-initialization-failed-if-using-hf-end-a904c",
+                crate::i18n::tr_args(&[("p1", &msg.to_string())]),
             ))
         } else {
             VecboostError::ModelLoadError(msg)
@@ -207,17 +206,16 @@ pub async fn download_files(
     out_dir: &Path,
 ) -> Result<Vec<PathBuf>, VecboostError> {
     if !is_valid_hf_repo_id(repo_id) {
-        return Err(VecboostError::ModelLoadError(format!(
-            "Invalid HuggingFace repo ID '{repo_id}': must match \
-             'organization/model-name' pattern with alphanumeric, dash, \
-             underscore, dot characters only"
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-invalid-huggingface-repo-id-repo-id-must-match-organi-f01c8",
+            crate::i18n::tr_args(&[("repo_id", &repo_id.to_string())]),
         )));
     }
 
     if files.is_empty() {
-        return Err(VecboostError::ModelLoadError(format!(
-            "Empty download manifest for '{repo_id}': refusing to report \
-             bundle success with nothing to download"
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-empty-download-manifest-for-repo-id-refusing-to-repor-7ff84",
+            crate::i18n::tr_args(&[("repo_id", &repo_id.to_string())]),
         )));
     }
 
@@ -301,8 +299,9 @@ pub async fn download_files(
     })
     .await
     .map_err(|e| {
-        VecboostError::ModelLoadError(format!(
-            "HuggingFace batch download worker for '{repo_id}' failed: {e}"
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-huggingface-batch-download-worker-for-repo-id-failed-9da11",
+            crate::i18n::tr_args(&[("repo_id", &repo_id.to_string()), ("e", &e.to_string())]),
         ))
     })?;
 
@@ -318,9 +317,9 @@ pub async fn download_files(
 /// Unix 下绝对路径会替换整条落盘路径）。
 fn validate_remote_path(remote: &str) -> Result<(), VecboostError> {
     if remote.is_empty() {
-        return Err(VecboostError::ModelLoadError(
-            "download manifest contains an empty remote path".to_string(),
-        ));
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr(
+            "detail-download-manifest-contains-an-empty-remote-path-9fe7d",
+        )));
     }
     let path = Path::new(remote);
     if path.is_absolute()
@@ -331,9 +330,9 @@ fn validate_remote_path(remote: &str) -> Result<(), VecboostError> {
             )
         })
     {
-        return Err(VecboostError::ModelLoadError(format!(
-            "download manifest remote path '{remote}' must be a repo-relative \
-             path without '..' components or absolute prefix (path traversal)"
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-download-manifest-remote-path-remote-must-be-a-repo-r-0ecaf",
+            crate::i18n::tr_args(&[("remote", &remote.to_string())]),
         )));
     }
     Ok(())
@@ -342,9 +341,9 @@ fn validate_remote_path(remote: &str) -> Result<(), VecboostError> {
 /// 校验落位路径：必须是非空相对路径且不逃逸 out_dir。
 fn validate_placement_path(placement: &Path) -> Result<(), VecboostError> {
     if placement.as_os_str().is_empty() {
-        return Err(VecboostError::ModelLoadError(
-            "download manifest contains an empty placement path".to_string(),
-        ));
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr(
+            "detail-download-manifest-contains-an-empty-placement-path-288cf",
+        )));
     }
     let escapes_out_dir = placement.is_absolute()
         || placement.components().any(|c| {
@@ -354,10 +353,9 @@ fn validate_placement_path(placement: &Path) -> Result<(), VecboostError> {
             )
         });
     if escapes_out_dir {
-        return Err(VecboostError::ModelLoadError(format!(
-            "download manifest placement path {:?} must be a relative path \
-             inside the output directory",
-            placement
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-download-manifest-placement-path-must-be-a-relative-p-9d5bc",
+            crate::i18n::tr_args(&[("p1", &format!("{:?}", placement))]),
         )));
     }
     Ok(())

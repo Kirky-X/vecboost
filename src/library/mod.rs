@@ -127,16 +127,25 @@ impl VecBoostLibrary {
         kit.set_config(rerank_service);
         kit.set_config(config.rerank_config.unwrap_or_default());
         kit.register::<EmbeddingModule>().map_err(|e| {
-            VecboostError::InternalError(format!("Failed to register EmbeddingModule: {}", e))
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-register-embeddingmodule-bdd55",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
         })?;
         kit.register::<RerankModule>().map_err(|e| {
-            VecboostError::InternalError(format!("Failed to register RerankModule: {}", e))
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-register-rerankmodule-a244b",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
         })?;
         kit.register_lifecycle::<EmbeddingModule>();
         kit.register_lifecycle::<RerankModule>();
 
         let kit = kit.build().await.map_err(|e| {
-            VecboostError::InternalError(format!("Failed to build AsyncKit: {}", e))
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-build-asynckit-181f0",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
         })?;
 
         Ok(Self { kit: Arc::new(kit) })
@@ -147,7 +156,10 @@ impl VecBoostLibrary {
     /// 异步向量化：将单条文本转换为向量表示
     pub async fn embed(&self, text: &str) -> Result<EmbedResponse, VecboostError> {
         let service = self.kit.require::<EmbeddingModule>().map_err(|e| {
-            VecboostError::InternalError(format!("Failed to require EmbeddingModule: {}", e))
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-require-embeddingmodule-c3bff",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
         })?;
         let svc = service.read().await;
         svc.process_text(
@@ -163,7 +175,10 @@ impl VecBoostLibrary {
     /// 异步批量向量化：将多条文本转换为向量表示
     pub async fn embed_batch(&self, texts: &[String]) -> Result<BatchEmbedResponse, VecboostError> {
         let service = self.kit.require::<EmbeddingModule>().map_err(|e| {
-            VecboostError::InternalError(format!("Failed to require EmbeddingModule: {}", e))
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-require-embeddingmodule-c3bff",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
         })?;
         let svc = service.read().await;
         svc.process_batch(
@@ -185,7 +200,10 @@ impl VecBoostLibrary {
         top_k: Option<usize>,
     ) -> Result<RerankResponse, VecboostError> {
         let service = self.kit.require::<RerankModule>().map_err(|e| {
-            VecboostError::InternalError(format!("Failed to require RerankModule: {}", e))
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-require-rerankmodule-c45ca",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
         })?;
         let rerank_config = self.kit.config::<RerankConfig>().ok().unwrap_or_default();
         let svc = service.read().await;
@@ -384,7 +402,10 @@ impl VecBoostModuleBuilder {
             };
             kit.set_config(embedding_service);
             kit.register::<EmbeddingModule>().map_err(|e| {
-                VecboostError::InternalError(format!("Failed to register EmbeddingModule: {}", e))
+                VecboostError::InternalError(crate::i18n::tr_with_args(
+                    "detail-failed-to-register-embeddingmodule-bdd55",
+                    crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                ))
             })?;
             kit.register_lifecycle::<EmbeddingModule>();
         }
@@ -397,7 +418,10 @@ impl VecBoostModuleBuilder {
             kit.set_config(rerank_service);
             kit.set_config(self.rerank_config.unwrap_or_default());
             kit.register::<RerankModule>().map_err(|e| {
-                VecboostError::InternalError(format!("Failed to register RerankModule: {}", e))
+                VecboostError::InternalError(crate::i18n::tr_with_args(
+                    "detail-failed-to-register-rerankmodule-a244b",
+                    crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                ))
             })?;
             kit.register_lifecycle::<RerankModule>();
         }

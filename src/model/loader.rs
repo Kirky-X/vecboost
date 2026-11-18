@@ -138,9 +138,9 @@ impl LocalModelLoader {
 impl ModelLoader for LocalModelLoader {
     async fn load(&self, config: &ModelConfig) -> Result<Arc<dyn LoadedModel>, VecboostError> {
         if !config.model_path.exists() {
-            return Err(VecboostError::NotFound(format!(
-                "Model not found at: {}",
-                config.model_path.display()
+            return Err(VecboostError::NotFound(crate::i18n::tr_with_args(
+                "detail-model-not-found-at-03fa2",
+                crate::i18n::tr_args(&[("p1", &config.model_path.display().to_string())]),
             )));
         }
 
@@ -173,11 +173,13 @@ impl ModelLoader for LocalModelLoader {
             return Ok(local_path);
         }
 
-        Err(VecboostError::NotFound(format!(
-            "Model not found: {} (checked: {} and {})",
-            config.name,
-            config.model_path.display(),
-            local_path.display()
+        Err(VecboostError::NotFound(crate::i18n::tr_with_args(
+            "detail-model-not-found-checked-and-4d67b",
+            crate::i18n::tr_args(&[
+                ("p1", &config.name.to_string()),
+                ("p2", &config.model_path.display().to_string()),
+                ("p3", &local_path.display().to_string()),
+            ]),
         )))
     }
 

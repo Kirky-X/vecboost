@@ -8,22 +8,28 @@ use crate::error::VecboostError;
 pub async fn create_key_store(config: &SecurityConfig) -> Result<Box<dyn KeyStore>, VecboostError> {
     config.validate()?;
 
-    match (&config.storage_type, &config.key_file_path, &config.encryption_key) {
-        (StorageType::Environment, _, _) => Ok(Box::new(super::key_store::EnvironmentKeyStore::new())),
-        #[cfg(feature = "auth")]
-        (StorageType::EncryptedFile, Some(key_file_path), Some(encryption_key)) => {
-            Ok(Box::new(super::EncryptedFileKeyStore::new(key_file_path, encryption_key).await?))
+    match (
+        &config.storage_type,
+        &config.key_file_path,
+        &config.encryption_key,
+    ) {
+        (StorageType::Environment, _, _) => {
+            Ok(Box::new(super::key_store::EnvironmentKeyStore::new()))
         }
-        #[cfg(not(feature = "auth"))]
-        (StorageType::EncryptedFile, _, _) => Err(VecboostError::ConfigError(
-            "Encrypted file storage requires the 'auth' feature to be enabled".to_string(),
+        #[cfg(feature = "auth")]
+        (StorageType::EncryptedFile, Some(key_file_path), Some(encryption_key)) => Ok(Box::new(
+            super::EncryptedFileKeyStore::new(key_file_path, encryption_key).await?,
         )),
+        #[cfg(not(feature = "auth"))]
+        (StorageType::EncryptedFile, _, _) => Err(VecboostError::ConfigError(crate::i18n::tr(
+            "detail-encrypted-file-storage-requires-the-auth-feature-to-b-14272",
+        ))),
         // Reached only with auth feature enabled when validate was bypassed or
         // EncryptedFile is selected without providing both key_file_path and encryption_key.
         #[cfg(feature = "auth")]
-        _ => Err(VecboostError::ConfigError(
-            "Invalid configuration: key_file_path and encryption_key are required for encrypted file storage".to_string(),
-        )),
+        _ => Err(VecboostError::ConfigError(crate::i18n::tr(
+            "detail-invalid-configuration-key-file-path-and-encryption-ke-c54bb",
+        ))),
     }
 }
 

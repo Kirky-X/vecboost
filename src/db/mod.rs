@@ -51,9 +51,12 @@ impl DbPool {
         // 唯一的连接池构造收口点：库 API 与二进制启动路径都经此施加池边界
         // （内存 SQLite 单连接、上下限合法区间）。
         apply_pool_bounds(&mut config);
-        let pool = NexusDbPool::with_config(config)
-            .await
-            .map_err(|e| VecboostError::InternalError(format!("Failed to create db pool: {e}")))?;
+        let pool = NexusDbPool::with_config(config).await.map_err(|e| {
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-create-db-pool-e-9f7fe",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
+        })?;
         Ok(Self { inner: pool })
     }
 
@@ -67,10 +70,12 @@ impl DbPool {
     ///
     /// 如果角色未定义或获取连接失败,返回 `VecboostError::InternalError`
     pub async fn get_session(&self, role: &str) -> Result<Session, VecboostError> {
-        self.inner
-            .get_session(role)
-            .await
-            .map_err(|e| VecboostError::InternalError(format!("Failed to get session: {e}")))
+        self.inner.get_session(role).await.map_err(|e| {
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-get-session-e-fdf96",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
+        })
     }
 
     /// 获取内部 dbnexus 连接池引用(高级用法)
@@ -121,7 +126,12 @@ pub async fn init_schema(pool: &DbPool) -> Result<(), VecboostError> {
             );",
         )
         .await
-        .map_err(|e| VecboostError::InternalError(format!("Failed to create users table: {e}")))?;
+        .map_err(|e| {
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-create-users-table-e-79531",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
+        })?;
 
     session
         .execute_raw_ddl(
@@ -139,7 +149,10 @@ pub async fn init_schema(pool: &DbPool) -> Result<(), VecboostError> {
         )
         .await
         .map_err(|e| {
-            VecboostError::InternalError(format!("Failed to create audit_logs table: {e}"))
+            VecboostError::InternalError(crate::i18n::tr_with_args(
+                "detail-failed-to-create-audit-logs-table-e-296f9",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
         })?;
 
     Ok(())

@@ -77,13 +77,45 @@ def prod_files() -> list[pathlib.Path]:
     return out
 
 
+CHAR_LIT = re.compile(r"'(?:\\.|[^'\\\n])'")
+
+
+def char_lit_end(text: str, i: int) -> int:
+    """Rust 字符字面量（如 '\"' / '\\\\n'）的结束下标；非字符字面量返回 -1。"""
+    if text[i] != "'":
+        return -1
+    m = CHAR_LIT.match(text, i)
+    return m.end() if m else -1
+
+
+def is_string_start(text: str, i: int) -> bool:
+    """判定 text[i] 是否为字符串字面量起点。
+
+    原始字符串 `r"..."` / `r#"..."#` 的 `r` 必须是独立 token 起点；
+    标识符末尾的 `r`（如 `encoder"`）不可误判，否则跳过引号会级联错位，
+    把后续测试模块整段当作字符串而在 R3/R4/R5 漏检。
+    """
+    if text[i] == '"':
+        return True
+    if text[i] != "r" or i + 1 >= len(text) or text[i + 1] not in '"#':
+        return False
+    j = i - 1
+    if j >= 0 and text[j] in "bc":  # br"..." / cr"..." 前缀
+        j -= 1
+    return j < 0 or not (text[j].isalnum() or text[j] == "_")
+
+
 def mask_comments(text: str) -> str:
     """把注释与字符串字面量之外的注释部分替换成空格，保留换行以维持行号。"""
     out = list(text)
     i, n = 0, len(text)
     while i < n:
         c = text[i]
-        if c == '"' or (c == "r" and i + 1 < n and text[i + 1] in '"#'):
+        ce = char_lit_end(text, i)
+        if ce >= 0:  # 字符字面量里的引号不是字符串起点
+            i = ce
+            continue
+        if is_string_start(text, i):
             i = skip_string(text, i)  # 字符串本体不动，只保证注释判定不被误吃
             continue
         if c == "/" and i + 1 < n and text[i + 1] == "/":
@@ -153,7 +185,11 @@ def iter_literals(text: str):
         if c == "/" and i + 1 < n and text[i + 1] == "*":
             i = skip_block_comment(text, i)
             continue
-        if c == '"' or (c == "r" and i + 1 < n and text[i + 1] in '"#'):
+        ce = char_lit_end(text, i)
+        if ce >= 0:
+            i = ce
+            continue
+        if is_string_start(text, i):
             start_line = line
             end = skip_string(text, i)
             body = text[i:end]
@@ -184,10 +220,116 @@ def skip_block_comment(text: str, i: int) -> int:
     return j
 
 
+TEST_ATTR = re.compile(r"#\[cfg\(test\)\]")
+
+
+def code_positions(text: str) -> bytearray:
+    """标记每个字符是否处于字符串/注释内部（1=内部，0=代码）。"""
+    inside = bytearray(len(text))
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        ce = char_lit_end(text, i)
+        if ce >= 0:
+            for k in range(i, ce):
+                inside[k] = 1
+            i = ce
+            continue
+        if is_string_start(text, i):
+            end = skip_string(text, i)
+            for k in range(i, end):
+                inside[k] = 1
+            i = end
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                inside[i] = 1
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            end = skip_block_comment(text, i)
+            for k in range(i, end):
+                inside[k] = 1
+            i = end
+            continue
+        i += 1
+    return inside
+
+
+def brace_match(text: str, i: int, inside: bytearray) -> int:
+    """返回与 text[i]=='{' 匹配的 '}' 下标；找不到返回末位。"""
+    depth, n = 0, len(text)
+    while i < n:
+        if not inside[i]:
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+        i += 1
+    return n - 1
+
+
+def test_item_end(text: str, start: int, inside: bytearray) -> int:
+    """返回 `#[cfg(test)]` 所门控项的结束下标（含结尾符）。"""
+    n = len(text)
+    i = start + len("#[cfg(test)]")
+    # 跳过后续属性与文档注释（同属该门控项的前导）
+    while i < n:
+        while i < n and text[i] in " \t\r\n":
+            i += 1
+        if i < n and text[i] == "#" and not inside[i]:
+            j = text.find("]", i)
+            i = n if j < 0 else j + 1
+            continue
+        if i + 1 < n and text[i] == "/" and text[i + 1] == "/" and not inside[i]:
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        break
+    # 扫描到项体的 '{' 或结尾的 ';' / ','：'{' 则按大括号配对至 '}'
+    par = brk = 0
+    while i < n:
+        c = text[i]
+        if inside[i]:
+            i += 1
+            continue
+        if c == "(":
+            par += 1
+        elif c == ")":
+            par -= 1
+        elif c == "[":
+            brk += 1
+        elif c == "]":
+            brk -= 1
+        elif par == 0 and brk == 0:
+            if c == "{":
+                return brace_match(text, i, inside) + 1
+            if c in ";,":
+                return i + 1
+        i += 1
+    return n
+
+
 def production_region(text: str) -> str:
-    """截断到首个 `#[cfg(test)]` —— 之后按项目惯例属测试区。"""
-    cut = text.find("#[cfg(test)]")
-    return text if cut < 0 else text[:cut]
+    """完整生产区：把每个 `#[cfg(test)]` 门控项（测试模块与测试辅助函数/常量/字段）
+    空白化，保留换行以维持行号。返回剩余文本供 R3/R4/R5 扫描。
+
+    不用单一截断点：多个文件（如 main.rs）在两个顶层测试模块之间夹有生产码，
+    截断到首个 `#[cfg(test)]` 会漏检其后全部生产输出（历史假阴性根因）。
+    """
+    out = list(text)
+    inside = code_positions(text)
+    for m in TEST_ATTR.finditer(text):
+        s = m.start()
+        if inside[s] or out[s] != text[s]:
+            continue  # 字面文本 / 已被更大门控区覆盖
+        end = test_item_end(text, s, inside)
+        for k in range(s, end):
+            if text[k] != "\n":
+                out[k] = " "
+    return "".join(out)
 
 
 def balance_end(text: str, open_idx: int) -> int:
@@ -197,7 +339,11 @@ def balance_end(text: str, open_idx: int) -> int:
     n = len(text)
     while i < n:
         c = text[i]
-        if c == '"' or (c == "r" and i + 1 < n and text[i + 1] in '"#'):
+        ce = char_lit_end(text, i)
+        if ce >= 0:
+            i = ce
+            continue
+        if is_string_start(text, i):
             i = skip_string(text, i)
             continue
         if c == "/" and i + 1 < n and text[i + 1] == "/":

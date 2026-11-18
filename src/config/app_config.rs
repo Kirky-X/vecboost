@@ -82,7 +82,12 @@ impl VecboostConfig {
             .file_optional(path)
             .env_prefix("VECBOOST_")
             .build()
-            .map_err(|e| VecboostError::ConfigError(format!("confers: {e}")))?;
+            .map_err(|e| {
+                VecboostError::ConfigError(crate::i18n::tr_with_args(
+                    "detail-confers-e-4c063",
+                    crate::i18n::tr_args(&[("e", &e.to_string())]),
+                ))
+            })?;
         apply_security_env_overrides(&mut config)?;
         apply_priority_defaults(&mut config.pipeline.priority);
         config.validate()?;
@@ -94,8 +99,12 @@ impl VecboostConfig {
     ///
     /// Useful for generating configuration documentation or frontend type stubs.
     pub fn generate_schema() -> Result<String, VecboostError> {
-        confers::schema::TypeScriptGenerator::generate::<Self>()
-            .map_err(|e| VecboostError::ConfigError(format!("schema generation failed: {e}")))
+        confers::schema::TypeScriptGenerator::generate::<Self>().map_err(|e| {
+            VecboostError::ConfigError(crate::i18n::tr_with_args(
+                "detail-schema-generation-failed-e-17dba",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
+        })
     }
 
     /// Validate configuration fields using garde-derived validation.
@@ -126,9 +135,9 @@ impl VecboostConfig {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(VecboostError::ConfigError(format!(
-                "Configuration validation failed:\n  {}",
-                errors.join("\n  ")
+            Err(VecboostError::ConfigError(crate::i18n::tr_with_args(
+                "detail-configuration-validation-failed-n-3a3e2",
+                crate::i18n::tr_args(&[("p1", &errors.join("\n  ").to_string())]),
             )))
         }
     }

@@ -88,7 +88,7 @@ pub(crate) fn resolve_graph_paths(models_dir: &Path) -> AsrResult<AsrGraphPaths>
 
 /// 允许的 I/O 元素类型：f32（计算与 KV cache）、i64（token id / cache_position / 索引）、
 /// bool（encoder attention mask）。其余浮点宽度（f16/bf16/f64）一律拒绝。
-fn element_type_supported(ty: &TensorElementType) -> bool {
+pub(crate) fn element_type_supported(ty: &TensorElementType) -> bool {
     matches!(
         ty,
         TensorElementType::Float32 | TensorElementType::Int64 | TensorElementType::Bool
@@ -104,12 +104,19 @@ fn element_type_supported(ty: &TensorElementType) -> bool {
 /// f16 59 MiB，28 层×8 头×128 维×512），每步转换会被内存搬运支配；要支持 fp16
 /// 必须把 KV 存储与张量 I/O 一起 dtype 泛型化
 /// （见 `docs/benchmarks/transcribe_engine_baseline.md` 的 fp16 书签）。
-fn ensure_f32_io(session: &Session, role: &str) -> AsrResult<()> {
+///
+/// `load_err`：错误构造注入（asr/whisper 各用自己的 i18n key），守卫逻辑
+/// 单一事实源——whisper_asr 原为同口径复制（审查发现的双份硬守卫漂移隐患）。
+pub(crate) fn ensure_f32_io(
+    session: &Session,
+    role: &str,
+    load_err: impl Fn(String) -> VecboostError,
+) -> Result<(), VecboostError> {
     for (i, input) in session.inputs().iter().enumerate() {
         if let ValueType::Tensor { ty, .. } = input.dtype()
             && !element_type_supported(ty)
         {
-            return Err(asr_load(format!(
+            return Err(load_err(format!(
                 "{role} input[{i}] '{}' dtype {ty:?} is not supported: this build runs f32 \
                  graphs only (KV cache and tensor I/O are f32); fp16/bf16 graphs require \
                  dtype-generic KV storage",
@@ -121,7 +128,7 @@ fn ensure_f32_io(session: &Session, role: &str) -> AsrResult<()> {
         if let ValueType::Tensor { ty, .. } = output.dtype()
             && !element_type_supported(ty)
         {
-            return Err(asr_load(format!(
+            return Err(load_err(format!(
                 "{role} output[{i}] '{}' dtype {ty:?} is not supported: this build runs f32 \
                  graphs only (logits/KV are extracted as f32)",
                 output.name()
@@ -284,8 +291,9 @@ pub struct Qwen3Asr {
 }
 
 impl Qwen3Asr {
-    /// 每个 worker 独立加载一套 session（ort rc.13 禁止并发 Run 同一 Session，
-    /// session/mod.rs:118-122 官方推荐 per-thread session；权重内存 ×worker 数）。
+    /// 每个 worker 独立加载一套 session（ort rc.15 `Session::run` 为 `&mut self`
+    /// 编译期强制独占；session/mod.rs:118-122 官方推荐 per-thread session；
+    /// 权重内存 ×worker 数）。
     /// 三图先探测后构建（decision/translate 同款"探测先于 Session::builder"——
     /// ort/load-dynamic 缺动态库时 builder 触发 non-unwinding panic，缺失必须
     /// 在此之前以 ModelLoadError 显性返回）。
@@ -311,9 +319,9 @@ impl Qwen3Asr {
         }
         let decoder = session_from(&graphs.decoder, opts)?;
         // I/O dtype 守卫（f32-only，见 ensure_f32_io 文档）
-        ensure_f32_io(&conv, "conv_frontend")?;
-        ensure_f32_io(&encoder, "encoder")?;
-        ensure_f32_io(&decoder, "decoder")?;
+        ensure_f32_io(&conv, "conv_frontend", asr_load)?;
+        ensure_f32_io(&encoder, "encoder", asr_load)?;
+        ensure_f32_io(&decoder, "decoder", asr_load)?;
 
         let num_outputs = decoder.outputs().len();
         if num_outputs < 1 || (num_outputs - 1) % 2 != 0 {

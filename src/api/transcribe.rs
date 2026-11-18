@@ -62,6 +62,34 @@ pub async fn transcribe(
 
 // Protocol-agnostic handlers
 
+/// 转录错误 → wire 映射（脱敏，同 `switch_error_to_api_error` 口径）：
+/// 推理/加载期错误携带内部张量 shape/长度与 bundle 路径，`to_api_error`
+/// 的 ModelLoadError 臂会把原文整体塞进 NotFound.resource_id 直达响应体
+/// （CWE-209/497，先例见 api/embedding.rs switch 路径修复）。原文全量入
+/// 服务端日志；UnsupportedTask 与输入类错误直传——客户端可纠正的 4xx
+/// 语义，不得被 catch-all 洗成 404。
+#[cfg(any(feature = "http", feature = "grpc"))]
+fn transcribe_error_to_api_error(e: VecboostError) -> ApiError {
+    match e {
+        VecboostError::UnsupportedTask(_)
+        | VecboostError::InvalidInput(_)
+        | VecboostError::ValidationError(_) => to_api_error(e),
+        e => {
+            log::error!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-api-transcribe-failed-e",
+                    crate::i18n::tr_args(&[("e", &(e).to_string())])
+                )
+            );
+            ApiError::NotFound {
+                resource: "model".to_string(),
+                resource_id: Some(crate::i18n::tr("transcribe-model-load-failed").to_string()),
+            }
+        }
+    }
+}
+
 #[cfg(any(feature = "http", feature = "grpc"))]
 async fn transcribe_handler(req: TranscribeRequest) -> Result<TranscribeResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
@@ -69,7 +97,9 @@ async fn transcribe_handler(req: TranscribeRequest) -> Result<TranscribeResponse
         .kit
         .require::<TranscribeModule>()
         .map_err(kit_internal_error)?;
-    transcribe(&svc, req).await.map_err(to_api_error)
+    transcribe(&svc, req)
+        .await
+        .map_err(transcribe_error_to_api_error)
 }
 
 // HTTP forge handlers
@@ -81,7 +111,7 @@ async fn transcribe_handler(req: TranscribeRequest) -> Result<TranscribeResponse
     path = "/transcribe",
     method = "POST",
     tool_name = "transcribe",
-    description = "Transcribe 16kHz mono f32 speech samples (Qwen3-ASR: VAD + per-segment decode)"
+    description = "Transcribe 16kHz mono f32 speech samples (whisper/Qwen3-ASR backend dispatch: VAD + per-segment decode)"
 )]
 pub async fn forge_transcribe(req: TranscribeRequest) -> Result<TranscribeResponse, ApiError> {
     transcribe_handler(req).await
@@ -94,7 +124,7 @@ pub async fn forge_transcribe(req: TranscribeRequest) -> Result<TranscribeRespon
     name = "transcribe",
     version = "v1",
     grpc_method = "vecboost.transcribe",
-    description = "Transcribe 16kHz mono f32 speech samples (Qwen3-ASR)"
+    description = "Transcribe 16kHz mono f32 speech samples (whisper/Qwen3-ASR backend dispatch)"
 )]
 pub async fn grpc_transcribe(req: TranscribeRequest) -> Result<TranscribeResponse, ApiError> {
     transcribe_handler(req).await
@@ -127,7 +157,7 @@ impl std::str::FromStr for TranscribeWavRequest {
     name = "transcribe",
     version = "v1",
     cli = true,
-    description = "Transcribe a 16kHz mono WAV file to text (Qwen3-ASR; requires [transcribe] enabled)",
+    description = "Transcribe a 16kHz mono WAV file to text (whisper/Qwen3-ASR backend dispatch; requires [transcribe] enabled)",
     i18n_key = "forge-cli-transcribe"
 )]
 pub async fn cli_transcribe(req: TranscribeWavRequest) -> Result<TranscribeResponse, ApiError> {
@@ -140,5 +170,58 @@ pub async fn cli_transcribe(req: TranscribeWavRequest) -> Result<TranscribeRespo
         .map_err(to_api_error)?;
     transcribe(&svc, TranscribeRequest { samples })
         .await
-        .map_err(to_api_error)
+        .map_err(transcribe_error_to_api_error)
+}
+
+#[cfg(all(test, any(feature = "http", feature = "grpc")))]
+mod tests {
+    use super::*;
+
+    /// 推理/加载期错误脱敏：内部 shape/路径不得直达 wire
+    /// （CWE-209/497，switch 路径同款红线；e2e 审查发现的脱敏缺口回归钉）。
+    #[test]
+    fn inference_and_load_errors_are_desensitized_on_wire() {
+        for e in [
+            VecboostError::ModelLoadError(
+                "unexpected encoder output shape [1,1500,1280], expected [1,seq,1280]".to_string(),
+            ),
+            VecboostError::InferenceError(
+                "ort run failed: logits len 1920000 != 1*1500".to_string(),
+            ),
+        ] {
+            let api = transcribe_error_to_api_error(e);
+            let msg = match &api {
+                ApiError::NotFound {
+                    resource,
+                    resource_id: Some(m),
+                    ..
+                } => {
+                    assert_eq!(resource, "model");
+                    m.clone()
+                }
+                other => panic!("expected NotFound(model), got {other:?}"),
+            };
+            assert!(
+                msg.contains("server logs")
+                    || msg.contains("\u{670d}\u{52a1}\u{7aef}\u{65e5}\u{5fd7}"),
+                "must be generic message, got {msg}"
+            );
+            assert!(
+                !msg.contains("1500"),
+                "internal detail must not leak, got {msg}"
+            );
+        }
+    }
+
+    /// 输入类错误直传 4xx：调用方可纠正语义不得被 catch-all 洗成 404。
+    #[test]
+    fn input_errors_pass_through() {
+        let api = transcribe_error_to_api_error(VecboostError::InvalidInput(
+            "samples must not be empty".to_string(),
+        ));
+        assert!(
+            matches!(api, ApiError::InvalidInput { .. }),
+            "InvalidInput must pass through, got {api:?}"
+        );
+    }
 }

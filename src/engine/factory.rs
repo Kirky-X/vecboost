@@ -4,6 +4,8 @@
 //! 引擎工厂：根据 `EngineType` 创建对应的推理引擎实例
 
 use super::AnyEngine;
+#[cfg(feature = "transcribe")]
+use crate::config::model::TranscribeBackend;
 use crate::config::model::{EngineType, ModelConfig, ModelTask, Precision};
 use crate::error::VecboostError;
 use std::path::Path;
@@ -109,8 +111,24 @@ impl EngineFactory {
             }
             #[cfg(feature = "transcribe")]
             {
-                let engine = super::transcribe::engine::Qwen3AsrEngine::load(config)?;
-                let any = AnyEngine::Transcribe(engine);
+                // backend 缺省 qwen3-asr，既有路径逐字不动；未知值在配置反序列化期
+                // 已被 serde enum 显性拒绝（合法值见 TranscribeBackend::ALL），
+                // 这里按 enum 穷尽分发，无静默回落。Qwen3AsrEngine::load 保持原调用。
+                let any = match config
+                    .transcription_params
+                    .as_ref()
+                    .map(|p| p.backend)
+                    .unwrap_or_default()
+                {
+                    TranscribeBackend::Qwen3Asr => {
+                        let engine = super::transcribe::engine::Qwen3AsrEngine::load(config)?;
+                        AnyEngine::Transcribe(engine)
+                    }
+                    TranscribeBackend::Whisper => {
+                        let engine = super::transcribe::engine::WhisperAsrEngine::load(config)?;
+                        AnyEngine::WhisperTranscribe(engine)
+                    }
+                };
                 ensure_supports_task(&any, config)?;
                 return Ok(any);
             }

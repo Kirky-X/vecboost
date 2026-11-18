@@ -10,6 +10,7 @@
 
 #![allow(clippy::derivable_impls)]
 
+use crate::config::model::TranscribeBackend;
 use crate::error::VecboostError;
 use crate::text::is_published_language_code;
 use crate::utils::validator::input::is_valid_language_code;
@@ -209,18 +210,25 @@ impl Default for TranslationConfig {
     }
 }
 
-/// 转录服务配置（`[transcribe]` 段）：Qwen3-ASR 引擎启动装配。
+/// 转录服务配置（`[transcribe]` 段）：按 `backend` 装配 Qwen3-ASR 或 whisper 引擎。
 /// `enabled=false`（缺省）= 端点仍注册、请求以 transcribe-not-configured 400
 /// 显性拒绝（同 translate 空表口径，禁 404 禁 500）。
-#[derive(Debug, Clone, Deserialize, Serialize, garde::Validate, schemars::JsonSchema)]
+///
+/// `models_dir` 未显式配置时按 `backend` 取缺省目录（qwen3-asr → models/qwen3-asr，
+/// whisper → models/whisper）；显式配置恒优先。缺省逻辑见下方手写 `Deserialize`
+/// （serde 结构级 default 是静态的，读不到同结构已解析的 backend）。
+#[derive(Debug, Clone, Serialize, garde::Validate, schemars::JsonSchema)]
 #[serde(default)]
 pub struct TranscribeConfig {
     /// 是否启用转录服务面（false = 端点注册但不装配引擎）
     #[garde(skip)]
     pub enabled: bool,
-    /// 模型 bundle 目录（三图 + silero_vad.onnx + tokenizer/）
+    /// 模型 bundle 目录（三图 + silero_vad.onnx + tokenizer/）；缺省按 backend 区分
     #[garde(length(min = 1))]
     pub models_dir: String,
+    /// 转录后端（qwen3-asr 缺省 / whisper）；未知值反序列化期显性拒绝
+    #[garde(skip)]
+    pub backend: TranscribeBackend,
     /// silero VAD 概率阈值（引擎级缺省 0.5）
     #[garde(range(min = 0.0, max = 1.0))]
     pub vad_threshold: f32,
@@ -239,12 +247,60 @@ impl Default for TranscribeConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            models_dir: "models/qwen3-asr".to_string(),
+            models_dir: TranscribeBackend::Qwen3Asr.default_models_dir().to_string(),
+            backend: TranscribeBackend::Qwen3Asr,
             vad_threshold: 0.5,
             intra_threads: 0,
             no_spin: false,
             cuda: false,
         }
+    }
+}
+
+// models_dir 缺省须读同结构已解析的 backend，serde 结构级 default 是静态函数做不到，
+// 故手写 Deserialize：中间结构用 Option<String> 区分「未配置」与「显式空串」；
+// Default 除 models_dir=None 外逐项复用 TranscribeConfig::default()，防止 vad
+// 缺省被 Rust 的 f32::default()（0.0）静默改写（配置错误必须显性，禁止吞默认值）。
+impl<'de> Deserialize<'de> for TranscribeConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(default)]
+        struct RawTranscribeConfig {
+            enabled: bool,
+            models_dir: Option<String>,
+            backend: TranscribeBackend,
+            vad_threshold: f32,
+            intra_threads: usize,
+            no_spin: bool,
+            cuda: bool,
+        }
+        impl Default for RawTranscribeConfig {
+            fn default() -> Self {
+                let base = TranscribeConfig::default();
+                Self {
+                    enabled: base.enabled,
+                    models_dir: None,
+                    backend: base.backend,
+                    vad_threshold: base.vad_threshold,
+                    intra_threads: base.intra_threads,
+                    no_spin: base.no_spin,
+                    cuda: base.cuda,
+                }
+            }
+        }
+        let raw = RawTranscribeConfig::deserialize(d)?;
+        let models_dir = raw
+            .models_dir
+            .unwrap_or_else(|| raw.backend.default_models_dir().to_string());
+        Ok(Self {
+            enabled: raw.enabled,
+            models_dir,
+            backend: raw.backend,
+            vad_threshold: raw.vad_threshold,
+            intra_threads: raw.intra_threads,
+            no_spin: raw.no_spin,
+            cuda: raw.cuda,
+        })
     }
 }
 
@@ -2050,5 +2106,38 @@ max_new_tokens = 384
             cuda_pool: CudaPoolConfig::default(),
         };
         assert!(!config.enabled);
+    }
+
+    /// 后端缺省目录按 backend 区分；显式 models_dir 恒优先（手写 Deserialize 的核心契约）。
+    #[test]
+    fn test_transcribe_backend_drives_default_models_dir() {
+        let base: TranscribeConfig = toml::from_str("").expect("空表须可解析");
+        assert_eq!(base.backend, TranscribeBackend::Qwen3Asr);
+        assert_eq!(base.models_dir, "models/qwen3-asr");
+
+        let whisper: TranscribeConfig =
+            toml::from_str("backend = \"whisper\"").expect("whisper 后端须可解析");
+        assert_eq!(whisper.backend, TranscribeBackend::Whisper);
+        assert_eq!(
+            whisper.models_dir, "models/whisper",
+            "未显式配置时按后端取缺省目录"
+        );
+
+        let explicit: TranscribeConfig =
+            toml::from_str("backend = \"whisper\"\nmodels_dir = \"/custom/whisper\"")
+                .expect("显式目录须可解析");
+        assert_eq!(explicit.models_dir, "/custom/whisper", "显式配置恒优先");
+    }
+
+    /// 未知 backend 值须在反序列化期显性拒绝，并列出合法值。
+    #[test]
+    fn test_transcribe_backend_unknown_value_is_rejected() {
+        let err = toml::from_str::<TranscribeConfig>("backend = \"unknown-backend\"")
+            .expect_err("未知后端须显性拒绝");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("qwen3-asr") && msg.contains("whisper"),
+            "错误信息须列出合法值，got: {msg}"
+        );
     }
 }

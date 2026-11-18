@@ -47,11 +47,18 @@ pub struct TranscribeSegment {
     pub end_sec: f64,
 }
 
-/// 转录会话：models_dir 下三图 + VAD + tokenizer 就绪后的可重用句柄。
+/// 转录后端装配变体（门面内部，不对外暴露）：Qwen3 三图 / whisper 双图。
+/// 两条后端均自带实例内 Mutex 串行（ort rc.13 禁并发 Run 同一 Session）。
+pub(crate) enum AnyTranscribeEngine {
+    Qwen3(crate::engine::transcribe::engine::Qwen3AsrEngine),
+    Whisper(crate::engine::transcribe::engine::WhisperAsrEngine),
+}
+
+/// 转录会话：models_dir 下所选后端的图 + VAD + tokenizer 就绪后的可重用句柄。
 /// 线程安全（内部 asr Mutex 串行化段解码）；段级并行由调用方持多会话实现
 /// （ort rc.13 禁并发 Run 同一 Session，每会话独占一套）。
 pub struct TranscribeSession {
-    pub(crate) inner: crate::engine::transcribe::engine::Qwen3AsrEngine,
+    pub(crate) inner: AnyTranscribeEngine,
 }
 
 impl std::fmt::Debug for TranscribeSession {
@@ -62,4 +69,4 @@ impl std::fmt::Debug for TranscribeSession {
 
 mod facade;
 
-pub use facade::{open, read_wav_16k_mono};
+pub use facade::{open, open_with_backend, read_wav_16k_mono};

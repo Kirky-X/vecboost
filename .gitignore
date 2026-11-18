@@ -55,6 +55,8 @@ ehthumbs.db
 # 5. Rust Build Artifacts
 # -----------------------------------------------------------------------------
 target/
+# 本地 feature 矩阵构建的 CARGO_TARGET_DIR 输出目录，非入库物
+target-matrix/
 *.rs.bk
 *.rmeta
 # 原规则忽略 `.cargo/config.toml` 并把实体以旧名 `.cargo/config` 入库（目的是给本地

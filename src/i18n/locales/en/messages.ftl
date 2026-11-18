@@ -27,6 +27,9 @@ model-already-current = Already using this model
 model-load-failed = Failed to load model '{ $name }': { $detail }
 switch-path-rejected = path rejected: must be an existing path inside the allowed roots (model_path must be a directory, tokenizer_path must be a file); see server logs
 switch-model-load-failed = model load failed; see server logs
+transcribe-model-load-failed = transcription model failed to load or process; see server logs
+transcribe-backend-ambiguous = models_dir contains both whisper and qwen3-asr graphs; specify backend explicitly
+log-transcribe-backend-selected = transcribe backend selected: { $backend }
 
 # ── File embedding ──
 file-empty = File is empty
@@ -534,6 +537,7 @@ log-api-failed-revoke-old-refresh = Failed to revoke old refresh token during re
 log-api-login-rejected-auth-enabled = Login rejected: auth is enabled but no admin password is configured (missing VECBOOST_ADMIN_PASSWORD). This should have failed at startup.
 log-api-switch-path-validation-rejected = switch path validation rejected { $field }={ $path }: { $e }
 log-api-switch-model-failed-e = switch_model failed: { $e }
+log-api-transcribe-failed-e = transcribe failed: { $e }
 log-api-batch-rerank-individual-query = Batch rerank: individual query failed, skipping: { $a1 }
 log-auth-auth-endpoint-rate-limit = Auth endpoint rate limit exceeded for IP: { $a1 }
 log-auth-ratelimitmodule-registered = RateLimitModule not registered: { $a1 }
@@ -929,3 +933,12 @@ detail-hidden-size-must-be-1-got-0-28abe = { $p1 }: hidden_size must be >= 1, go
 detail-missing-or-invalid-field-field-for-modernbert-encoder-c4dbf = { $p1 }: missing or invalid field `{ $field }` for ModernBERT encoder config
 detail-num-attention-heads-must-be-1-got-0-90dc9 = { $p1 }: num_attention_heads must be >= 1, got 0
 detail-tokenizer-vocab-size-tokenizer-vocab-exceeds-encoder-66fcf = { $p1 }: tokenizer vocab size ({ $tokenizer_vocab }) exceeds encoder config vocab_size ({ $p2 }) — mismatched tokenizer/encoder assets (model_sha256 covers model.safetensors only)
+detail-whisper-asr-infer-e-9d1f7 = whisper asr infer: { $e }
+detail-whisper-asr-load-e-2e8b4 = whisper asr load: { $e }
+detail-whisper-tokenizer-decode-e-7a3c6 = whisper tokenizer decode: { $e }
+detail-whisper-tokenizer-file-not-found-3f7a1 = whisper tokenizer file not found: { $path }
+detail-whisper-tokenizer-id-drift-6b9e4 = whisper tokenizer special id drift: { $token } expects { $expect }, got { $actual }
+detail-whisper-tokenizer-language-missing-1d4f8 = whisper tokenizer missing language token: { $lang } ({ $token })
+detail-whisper-tokenizer-load-e-8c2d5 = load whisper tokenizer: { $e }
+log-engine-transcribe-whisper-graphs-4a7e1 = whisper graphs: encoder={ $encoder }, decoder={ $decoder }, precision={ $precision } (precision is detected from graph content, not file name)
+detail-whisper-vad-file-not-found-b7e21 = whisper VAD asset not found: { $path } (copy silero_vad.onnx from the Qwen3 bundle or download it into models_dir)

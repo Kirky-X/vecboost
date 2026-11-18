@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Whisper 风格 log-mel 特征（128 维，居中对齐 STFT），自研 rustfft 实现。
+//! `MEL_DIM=128` 与 whisper-large-v3-turbo 的 `feature_size=128` 口径一致
+//! （preprocessor_config.json 实测；whisper ONNX 后端 `whisper_asr` 直接消费本文件输出）。
 //!
 //! 由本机 `transcribe-poc/src/features.rs`（不入库目录）逐字移植，参数
 //! 固化于本文件，本文件即特征链的入库事实源（16000 Hz）。移植参考（Apache-2.0，仅参考非依赖）：

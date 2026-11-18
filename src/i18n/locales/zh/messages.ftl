@@ -27,6 +27,9 @@ model-already-current = 已在使用该模型
 model-load-failed = 加载模型 '{ $name }' 失败：{ $detail }
 switch-path-rejected = 路径被拒绝：必须是允许根目录内已存在的路径（model_path 须为目录、tokenizer_path 须为文件）；详见服务端日志
 switch-model-load-failed = 模型加载失败；详见服务端日志
+transcribe-model-load-failed = 转录模型加载或处理失败；详见服务端日志
+transcribe-backend-ambiguous = models_dir 同时包含 whisper 与 qwen3-asr 两套图，请显式指定 backend
+log-transcribe-backend-selected = 已选转录后端：{ $backend }
 
 # ── 文件嵌入 ──
 file-empty = 文件为空
@@ -533,6 +536,7 @@ log-api-failed-revoke-old-refresh = 刷新时吊销旧 refresh token 失败（lo
 log-api-login-rejected-auth-enabled = 登录被拒：认证已启用但未配置管理员密码（缺少 VECBOOST_ADMIN_PASSWORD）
 log-api-switch-path-validation-rejected = switch 路径校验拒绝 { $field }={ $path }：{ $e }
 log-api-switch-model-failed-e = switch_model 失败：{ $e }
+log-api-transcribe-failed-e = transcribe 失败：{ $e }
 log-api-batch-rerank-individual-query = 批量 rerank：单条查询失败，跳过：{ $a1 }
 log-auth-auth-endpoint-rate-limit = 认证端点触发限流（IP：{ $a1 }）
 log-auth-ratelimitmodule-registered = RateLimitModule 未注册：{ $a1 }
@@ -928,3 +932,12 @@ detail-hidden-size-must-be-1-got-0-28abe = { $p1 }：hidden_size 必须 >= 1，�
 detail-missing-or-invalid-field-field-for-modernbert-encoder-c4dbf = { $p1 }：ModernBERT 编码器配置缺少或无效字段 `{ $field }`
 detail-num-attention-heads-must-be-1-got-0-90dc9 = { $p1 }：num_attention_heads 必须 >= 1，实际为 0
 detail-tokenizer-vocab-size-tokenizer-vocab-exceeds-encoder-66fcf = { $p1 }：分词器词表大小（{ $tokenizer_vocab }）超过编码器 config vocab_size（{ $p2 }）—— 分词器/编码器资产不匹配（model_sha256 仅覆盖 model.safetensors）
+detail-whisper-asr-infer-e-9d1f7 = whisper ASR 推理：{ $e }
+detail-whisper-asr-load-e-2e8b4 = whisper ASR 加载：{ $e }
+detail-whisper-tokenizer-decode-e-7a3c6 = whisper tokenizer 解码：{ $e }
+detail-whisper-tokenizer-file-not-found-3f7a1 = whisper tokenizer 文件不存在：{ $path }
+detail-whisper-tokenizer-id-drift-6b9e4 = whisper tokenizer 特殊 token id 漂移：{ $token } 期望 { $expect }，实际 { $actual }
+detail-whisper-tokenizer-language-missing-1d4f8 = whisper tokenizer 缺少语言 token：{ $lang }（{ $token }）
+detail-whisper-tokenizer-load-e-8c2d5 = 加载 whisper tokenizer：{ $e }
+log-engine-transcribe-whisper-graphs-4a7e1 = whisper 图：encoder={ $encoder }、decoder={ $decoder }、precision={ $precision }（精度按图内容判定，非文件名）
+detail-whisper-vad-file-not-found-b7e21 = whisper VAD 资产不存在：{ $path }（请从 Qwen3 bundle 拷贝 silero_vad.onnx，或下载到 models_dir）

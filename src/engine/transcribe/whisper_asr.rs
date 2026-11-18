@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ort::session::{Session, SessionInputValue};
-use ort::value::{Tensor, TensorElementType, ValueType};
+use ort::value::{Tensor, TensorElementType, TensorRef, ValueType};
 
 use crate::error::VecboostError;
 
@@ -441,16 +441,18 @@ impl WhisperAsr {
                     let name = past_names[name_idx].as_str();
                     name_idx += 1;
                     let seq_len = kv_seq_len(data.len());
-                    let tensor = Tensor::from_array((
-                        vec![
-                            1i64,
-                            NUM_ATTENTION_HEADS as i64,
-                            seq_len as i64,
-                            HEAD_DIM as i64,
-                        ],
-                        data.to_vec(),
-                    ))
-                    .map_err(whisper_infer)?;
+                    // 借用视图：以缓存切片直接构造 TensorRef，不再每步 to_vec()
+                    // 全量复制。encoder cross-attention KV 恒定 61.44 MB/步、
+                    // decoder self-attention KV 递增，二者均因此省去所有权拷贝。
+                    // 视图生命周期只到本次 run 结束，早于下方 present 写回。
+                    let shape = vec![
+                        1i64,
+                        NUM_ATTENTION_HEADS as i64,
+                        seq_len as i64,
+                        HEAD_DIM as i64,
+                    ];
+                    let tensor =
+                        TensorRef::from_array_view((shape, data)).map_err(whisper_infer)?;
                     inputs.insert(name, SessionInputValue::from(tensor));
                 }
             }
@@ -482,6 +484,7 @@ impl WhisperAsr {
         // 更新；encoder cross-attention KV 由首步产生、之后恒定（后续步仅透传），
         // 无须每步读回重写——4 层×2×1500×1280×4B≈61 MB/步，448 步/窗将浪费数十 GB
         // 内存拷贝。故只在首步（use_cache_branch=false）写回 self.past_enc。
+        // 输入侧 past KV 已改借用视图（见上方），同样不再逐 step 全量复制。
         let mut dec_new = Vec::with_capacity(NUM_DECODER_LAYERS);
         let mut enc_new = Vec::with_capacity(NUM_DECODER_LAYERS);
         for layer in 0..NUM_DECODER_LAYERS {

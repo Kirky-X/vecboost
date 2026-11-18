@@ -81,7 +81,7 @@ async fn transcribe_handler(req: TranscribeRequest) -> Result<TranscribeResponse
     path = "/transcribe",
     method = "POST",
     tool_name = "transcribe",
-    description = "Transcribe 16kHz mono f32 speech samples (Qwen3-ASR: VAD + per-segment decode)"
+    description = "Transcribe 16kHz mono f32 speech samples (whisper/Qwen3-ASR backend dispatch: VAD + per-segment decode)"
 )]
 pub async fn forge_transcribe(req: TranscribeRequest) -> Result<TranscribeResponse, ApiError> {
     transcribe_handler(req).await
@@ -94,7 +94,7 @@ pub async fn forge_transcribe(req: TranscribeRequest) -> Result<TranscribeRespon
     name = "transcribe",
     version = "v1",
     grpc_method = "vecboost.transcribe",
-    description = "Transcribe 16kHz mono f32 speech samples (Qwen3-ASR)"
+    description = "Transcribe 16kHz mono f32 speech samples (whisper/Qwen3-ASR backend dispatch)"
 )]
 pub async fn grpc_transcribe(req: TranscribeRequest) -> Result<TranscribeResponse, ApiError> {
     transcribe_handler(req).await

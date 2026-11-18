@@ -163,10 +163,12 @@ impl CandleLayaWeights {
             .filter(|key| !vb.contains_tensor(key))
             .collect();
         if !missing.is_empty() {
-            return Err(VecboostError::ModelLoadError(format!(
-                "Laya checkpoint is missing {} required tensor(s): {}",
-                missing.len(),
-                missing.join(", ")
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-laya-checkpoint-is-missing-required-tensor-s-14e8e",
+                crate::i18n::tr_args(&[
+                    ("p1", &missing.len().to_string()),
+                    ("p2", &missing.join(", ").to_string()),
+                ]),
             )));
         }
         // rename 方向：candle 查询名 → checkpoint 名（骨干查询 model.* →
@@ -258,8 +260,9 @@ impl CandleLayaWeights {
             .map(|&p| {
                 u32::try_from(p).map_err(|_| token_range(p)).and_then(|v| {
                     if v as usize >= t {
-                        Err(VecboostError::InferenceError(format!(
-                            "marker position {p} out of range for seq_len {t}"
+                        Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+                            "detail-marker-position-p-out-of-range-for-seq-len-t-0f4cb",
+                            crate::i18n::tr_args(&[("p", &p.to_string()), ("t", &t.to_string())]),
                         )))
                     } else {
                         Ok(v)
@@ -382,7 +385,10 @@ impl CandleLayaWeights {
 
 /// 加载期 candle 错误 → 显性 ModelLoadError（点名模块）
 fn model_load(what: &str, e: candle_core::Error) -> VecboostError {
-    VecboostError::ModelLoadError(format!("Laya decision head load failed at {what}: {e}"))
+    VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+        "detail-laya-decision-head-load-failed-at-what-e-b070b",
+        crate::i18n::tr_args(&[("what", &what.to_string()), ("e", &e.to_string())]),
+    ))
 }
 
 /// 前向期 candle 错误 → 显性 InferenceError
@@ -392,8 +398,9 @@ fn fwd(e: candle_core::Error) -> VecboostError {
 
 /// i64 → u32 转换越界的显性错误（协议 id 域非负；越界即上游张量构造 bug）
 fn token_range(value: i64) -> VecboostError {
-    VecboostError::InferenceError(format!(
-        "token id / qtype {value} outside u32 protocol range"
+    VecboostError::InferenceError(crate::i18n::tr_with_args(
+        "detail-token-id-qtype-value-outside-u32-protocol-range-79062",
+        crate::i18n::tr_args(&[("value", &value.to_string())]),
     ))
 }
 
@@ -529,9 +536,9 @@ impl CandleDecisionEngine {
         };
         let bundle_dir = &config.model_path;
         if !bundle_dir.is_dir() {
-            return Err(VecboostError::ModelLoadError(format!(
-                "candle decision model path is not a directory: {}",
-                bundle_dir.display()
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-candle-decision-model-path-is-not-a-directory-683b9",
+                crate::i18n::tr_args(&[("p1", &bundle_dir.display().to_string())]),
             )));
         }
         let weights_file = bundle_dir.join(WEIGHTS_FILE);
@@ -551,12 +558,18 @@ impl CandleDecisionEngine {
             );
             let is_valid = crate::utils::hash::verify_sha256(&weights_file, expected_hash)
                 .map_err(|e| {
-                    VecboostError::ModelLoadError(format!("Failed to verify SHA256: {e}"))
+                    VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                        "detail-failed-to-verify-sha256-e-1e52f",
+                        crate::i18n::tr_args(&[("e", &e.to_string())]),
+                    ))
                 })?;
             if !is_valid {
-                return Err(VecboostError::ModelLoadError(format!(
-                    "Checkpoint SHA256 verification failed. Expected: {expected_hash}, File: {:?}",
-                    weights_file
+                return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-checkpoint-sha256-verification-failed-expected-expect-16803",
+                    crate::i18n::tr_args(&[
+                        ("expected_hash", &expected_hash.to_string()),
+                        ("p1", &format!("{:?}", weights_file)),
+                    ]),
                 )));
             }
         }
@@ -569,13 +582,19 @@ impl CandleDecisionEngine {
         // truncation/padding 配置必须清除（decision.rs 同款，防序列被静默
         // pad/截断的协议漂移）
         let mut tokenizer = Tokenizer::from_file(&tokenizer_file).map_err(|e| {
-            VecboostError::ModelLoadError(format!(
-                "Failed to load tokenizer {}: {e}",
-                tokenizer_file.display()
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-failed-to-load-tokenizer-e-3cbba",
+                crate::i18n::tr_args(&[
+                    ("p1", &tokenizer_file.display().to_string()),
+                    ("e", &e.to_string()),
+                ]),
             ))
         })?;
         tokenizer.with_truncation(None).map_err(|e| {
-            VecboostError::ModelLoadError(format!("Failed to clear truncation: {e}"))
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-failed-to-clear-truncation-e-78f81",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
         })?;
         tokenizer.with_padding(None);
 
@@ -588,12 +607,13 @@ impl CandleDecisionEngine {
         // 一致性只能在此拦（parse_encoder_config 同款加载期语义校验口径）
         let tokenizer_vocab = tokenizer.get_vocab_size(true);
         if tokenizer_vocab > encoder_config.vocab_size {
-            return Err(VecboostError::ModelLoadError(format!(
-                "{}: tokenizer vocab size ({tokenizer_vocab}) exceeds encoder \
-                 config vocab_size ({}) — mismatched tokenizer/encoder assets \
-                 (model_sha256 covers model.safetensors only)",
-                tokenizer_file.display(),
-                encoder_config.vocab_size
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-tokenizer-vocab-size-tokenizer-vocab-exceeds-encoder-66fcf",
+                crate::i18n::tr_args(&[
+                    ("p1", &tokenizer_file.display().to_string()),
+                    ("tokenizer_vocab", &tokenizer_vocab.to_string()),
+                    ("p2", &encoder_config.vocab_size.to_string()),
+                ]),
             )));
         }
         let calibration = TemperatureCalibration::from_bundle(bundle_dir)?;
@@ -604,7 +624,10 @@ impl CandleDecisionEngine {
         let vb =
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights_file], DType::F32, &device) }
                 .map_err(|e| {
-                    VecboostError::ModelLoadError(format!("Failed to mmap checkpoint: {e}"))
+                    VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                        "detail-failed-to-mmap-checkpoint-e-484c0",
+                        crate::i18n::tr_args(&[("e", &e.to_string())]),
+                    ))
                 })?;
         let weights = CandleLayaWeights::load(&vb, &encoder_config)?;
 
@@ -691,11 +714,19 @@ impl CandleDecisionEngine {
                 .first()
                 .is_some_and(|row| row.len() != batch.max_markers)
         {
-            return Err(VecboostError::InferenceError(format!(
-                "unexpected candle logits shape {:?}, expected [{}, {}]",
-                (logits.len(), logits.first().map(Vec::len).unwrap_or(0)),
-                batch.batch_size,
-                batch.max_markers
+            return Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-unexpected-candle-logits-shape-expected-aabf7",
+                crate::i18n::tr_args(&[
+                    (
+                        "p1",
+                        &format!(
+                            "{:?}",
+                            (logits.len(), logits.first().map(Vec::len).unwrap_or(0))
+                        ),
+                    ),
+                    ("p2", &batch.batch_size.to_string()),
+                    ("p3", &batch.max_markers.to_string()),
+                ]),
             )));
         }
         // 逐行有效 marker 前缀（pad 位 -1e4 为掩码填充值，非模型输出语义）
@@ -743,9 +774,12 @@ fn resolve_device(device_type: &DeviceType) -> Result<Device, VecboostError> {
 /// 皆缺显性报错（不臆测默认值）。
 fn parse_encoder_config(path: &Path) -> Result<ModernBertConfig, VecboostError> {
     let missing = |field: &str| {
-        VecboostError::ModelLoadError(format!(
-            "{}: missing or invalid field `{field}` for ModernBERT encoder config",
-            path.display()
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-missing-or-invalid-field-field-for-modernbert-encoder-c4dbf",
+            crate::i18n::tr_args(&[
+                ("p1", &path.display().to_string()),
+                ("field", &field.to_string()),
+            ]),
         ))
     };
     let raw = std::fs::read_to_string(path).map_err(|e| {
@@ -758,7 +792,10 @@ fn parse_encoder_config(path: &Path) -> Result<ModernBertConfig, VecboostError> 
         ))
     })?;
     let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-        VecboostError::ModelFileCorrupted(format!("failed to parse {}: {e}", path.display()))
+        VecboostError::ModelFileCorrupted(crate::i18n::tr_with_args(
+            "detail-failed-to-parse-e-92d1f",
+            crate::i18n::tr_args(&[("p1", &path.display().to_string()), ("e", &e.to_string())]),
+        ))
     })?;
     let usize_field = |field: &str| {
         value
@@ -785,22 +822,25 @@ fn parse_encoder_config(path: &Path) -> Result<ModernBertConfig, VecboostError> 
     let hidden_size = usize_field("hidden_size")?;
     let num_attention_heads = usize_field("num_attention_heads")?;
     if num_attention_heads == 0 {
-        return Err(VecboostError::ModelLoadError(format!(
-            "{}: num_attention_heads must be >= 1, got 0",
-            path.display()
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-num-attention-heads-must-be-1-got-0-90dc9",
+            crate::i18n::tr_args(&[("p1", &path.display().to_string())]),
         )));
     }
     if hidden_size == 0 {
-        return Err(VecboostError::ModelLoadError(format!(
-            "{}: hidden_size must be >= 1, got 0",
-            path.display()
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-hidden-size-must-be-1-got-0-28abe",
+            crate::i18n::tr_args(&[("p1", &path.display().to_string())]),
         )));
     }
     if hidden_size % num_attention_heads != 0 {
-        return Err(VecboostError::ModelLoadError(format!(
-            "{}: hidden_size ({hidden_size}) must be divisible by \
-             num_attention_heads ({num_attention_heads})",
-            path.display()
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-hidden-size-hidden-size-must-be-divisible-by-num-atte-b66a0",
+            crate::i18n::tr_args(&[
+                ("p1", &path.display().to_string()),
+                ("hidden_size", &hidden_size.to_string()),
+                ("num_attention_heads", &num_attention_heads.to_string()),
+            ]),
         )));
     }
     Ok(ModernBertConfig {

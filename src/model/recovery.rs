@@ -246,9 +246,13 @@ impl ModelRecovery {
                             )
                         );
                         if attempt == self.config.max_retries {
-                            return Err(VecboostError::ModelLoadError(format!(
-                                "Failed to recover file {} after {} attempts: {}",
-                                file_name, self.config.max_retries, e
+                            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                                "detail-failed-to-recover-file-after-attempts-a8a8e",
+                                crate::i18n::tr_args(&[
+                                    ("p1", &file_name.to_string()),
+                                    ("p2", &self.config.max_retries.to_string()),
+                                    ("p3", &e.to_string()),
+                                ]),
                             )));
                         }
                     }
@@ -305,9 +309,13 @@ impl ModelRecovery {
                         )
                     );
                     if attempt == self.config.max_retries {
-                        return Err(VecboostError::ModelLoadError(format!(
-                            "Failed to download file {} after {} attempts: {}",
-                            file_name, self.config.max_retries, e
+                        return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                            "detail-failed-to-download-file-after-attempts-43f1c",
+                            crate::i18n::tr_args(&[
+                                ("p1", &file_name.to_string()),
+                                ("p2", &self.config.max_retries.to_string()),
+                                ("p3", &e.to_string()),
+                            ]),
                         )));
                     }
                 }
@@ -347,10 +355,15 @@ impl ModelRecovery {
         let integrity_report = check_model_integrity(model_name, files_to_check, Some(min_sizes))?;
 
         if !integrity_report.overall_valid {
-            return Err(VecboostError::ModelIntegrityError(format!(
-                "Verification failed after recovery. Corrupted files: {:?}",
-                integrity_report.corrupted_files
-            )));
+            return Err(VecboostError::ModelIntegrityError(
+                crate::i18n::tr_with_args(
+                    "detail-verification-failed-after-recovery-corrupted-files-6988d",
+                    crate::i18n::tr_args(&[(
+                        "p1",
+                        &format!("{:?}", integrity_report.corrupted_files),
+                    )]),
+                ),
+            ));
         }
 
         info!(

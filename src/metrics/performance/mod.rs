@@ -34,9 +34,9 @@ impl<E: InferenceEngine + Send + Sync + 'static> PerformanceTester<E> {
         text_generator: impl Fn(usize) -> String + Send + Sync + 'static,
     ) -> Result<ThroughputResult, VecboostError> {
         if config.concurrent_requests == 0 {
-            return Err(VecboostError::ConfigError(
-                "concurrent_requests must be greater than 0".to_string(),
-            ));
+            return Err(VecboostError::ConfigError(crate::i18n::tr(
+                "detail-concurrent-requests-must-be-greater-than-0-dc1b4",
+            )));
         }
 
         let start_time = Instant::now();

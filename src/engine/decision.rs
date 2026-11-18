@@ -85,9 +85,9 @@ impl DecisionPipeline {
         };
         let bundle_dir = config.model_path.clone();
         if !bundle_dir.is_dir() {
-            return Err(VecboostError::ModelLoadError(format!(
-                "decision bundle path is not a directory: {}",
-                bundle_dir.display()
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-decision-bundle-path-is-not-a-directory-b7d78",
+                crate::i18n::tr_args(&[("p1", &bundle_dir.display().to_string())]),
             )));
         }
         let model_file = probe_model_file(&bundle_dir, &MODEL_CANDIDATES, "Laya ONNX")?;
@@ -99,12 +99,18 @@ impl DecisionPipeline {
             );
             let is_valid =
                 crate::utils::hash::verify_sha256(&model_file, expected_hash).map_err(|e| {
-                    VecboostError::ModelLoadError(format!("Failed to verify SHA256: {e}"))
+                    VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                        "detail-failed-to-verify-sha256-e-1e52f",
+                        crate::i18n::tr_args(&[("e", &e.to_string())]),
+                    ))
                 })?;
             if !is_valid {
-                return Err(VecboostError::ModelLoadError(format!(
-                    "Model file SHA256 verification failed. Expected: {expected_hash}, File: {:?}",
-                    model_file
+                return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-model-file-sha256-verification-failed-expected-expect-c362d",
+                    crate::i18n::tr_args(&[
+                        ("expected_hash", &expected_hash.to_string()),
+                        ("p1", &format!("{:?}", model_file)),
+                    ]),
                 )));
             }
         }
@@ -117,13 +123,19 @@ impl DecisionPipeline {
         // fixed-128 padding）——决策协议自管特殊 token 拼接与 collate 填充，
         // 两者必须清除，否则序列被静默 pad/截断（协议漂移）
         let mut tokenizer = Tokenizer::from_file(&tokenizer_file).map_err(|e| {
-            VecboostError::ModelLoadError(format!(
-                "Failed to load tokenizer {}: {e}",
-                tokenizer_file.display()
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-failed-to-load-tokenizer-e-3cbba",
+                crate::i18n::tr_args(&[
+                    ("p1", &tokenizer_file.display().to_string()),
+                    ("e", &e.to_string()),
+                ]),
             ))
         })?;
         tokenizer.with_truncation(None).map_err(|e| {
-            VecboostError::ModelLoadError(format!("Failed to clear truncation: {e}"))
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-failed-to-clear-truncation-e-78f81",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
         })?;
         tokenizer.with_padding(None);
 
@@ -236,16 +248,36 @@ impl DecisionPipeline {
         let batch = collate_batch(&rows, &qtype_codes)?;
 
         let input_ids = Array2::from_shape_vec((batch.batch_size, batch.seq_len), batch.input_ids)
-            .map_err(|e| VecboostError::InferenceError(format!("input_ids shape: {e}")))?;
+            .map_err(|e| {
+                VecboostError::InferenceError(crate::i18n::tr_with_args(
+                    "detail-input-ids-shape-e-dc93d",
+                    crate::i18n::tr_args(&[("e", &e.to_string())]),
+                ))
+            })?;
         let attention_mask =
             Array2::from_shape_vec((batch.batch_size, batch.seq_len), batch.attention_mask)
-                .map_err(|e| VecboostError::InferenceError(format!("attention_mask shape: {e}")))?;
+                .map_err(|e| {
+                    VecboostError::InferenceError(crate::i18n::tr_with_args(
+                        "detail-attention-mask-shape-e-3c483",
+                        crate::i18n::tr_args(&[("e", &e.to_string())]),
+                    ))
+                })?;
         let marker_pos =
             Array2::from_shape_vec((batch.batch_size, batch.max_markers), batch.marker_pos)
-                .map_err(|e| VecboostError::InferenceError(format!("marker_pos shape: {e}")))?;
+                .map_err(|e| {
+                    VecboostError::InferenceError(crate::i18n::tr_with_args(
+                        "detail-marker-pos-shape-e-fb426",
+                        crate::i18n::tr_args(&[("e", &e.to_string())]),
+                    ))
+                })?;
         let marker_mask =
             Array2::from_shape_vec((batch.batch_size, batch.max_markers), batch.marker_mask)
-                .map_err(|e| VecboostError::InferenceError(format!("marker_mask shape: {e}")))?;
+                .map_err(|e| {
+                    VecboostError::InferenceError(crate::i18n::tr_with_args(
+                        "detail-marker-mask-shape-e-800b6",
+                        crate::i18n::tr_args(&[("e", &e.to_string())]),
+                    ))
+                })?;
         let qtype = ndarray::Array1::from(batch.qtype);
 
         // marker_mask dtype 为 bool（§2.2）。若与真实导出图不符，
@@ -274,8 +306,9 @@ impl DecisionPipeline {
             // 显性报错并列出实际输出名清单
             let logits_value = outputs.get("logits").ok_or_else(|| {
                 let names: Vec<&str> = outputs.iter().map(|(k, _)| k).collect();
-                VecboostError::InferenceError(format!(
-                    "decision model has no `logits` output; actual outputs: {names:?}"
+                VecboostError::InferenceError(crate::i18n::tr_with_args(
+                    "detail-decision-model-has-no-logits-output-actual-outputs-na-b705c",
+                    crate::i18n::tr_args(&[("names", &format!("{:?}", names))]),
                 ))
             })?;
             logits_value
@@ -292,15 +325,24 @@ impl DecisionPipeline {
             || logits_shape[0] != batch.batch_size
             || logits_shape[1] != batch.max_markers
         {
-            return Err(VecboostError::InferenceError(format!(
-                "unexpected logits shape {logits_shape:?}, expected [{}, {}]",
-                batch.batch_size, batch.max_markers
+            return Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-unexpected-logits-shape-logits-shape-expected-34157",
+                crate::i18n::tr_args(&[
+                    ("logits_shape", &format!("{:?}", logits_shape)),
+                    ("p1", &batch.batch_size.to_string()),
+                    ("p2", &batch.max_markers.to_string()),
+                ]),
             )));
         }
         let logits_2d = logits
             .view()
             .into_dimensionality::<ndarray::Ix2>()
-            .map_err(|e| VecboostError::InferenceError(format!("logits dims: {e}")))?;
+            .map_err(|e| {
+                VecboostError::InferenceError(crate::i18n::tr_with_args(
+                    "detail-logits-dims-e-2b37f",
+                    crate::i18n::tr_args(&[("e", &e.to_string())]),
+                ))
+            })?;
 
         // [B,N] 行主序 C-contiguous：行前缀切片必连续，零分配借用；
         // 非连续属数组构造异常，显性报错而非 panic。pad 位（onnx 图输出值
@@ -314,7 +356,9 @@ impl DecisionPipeline {
                 let row = logits_2d.row(b);
                 let row_view = row.slice(ndarray::s![..marker_count]);
                 let row_logits = row_view.to_slice().ok_or_else(|| {
-                    VecboostError::InferenceError("logits row slice is not contiguous".to_string())
+                    VecboostError::InferenceError(crate::i18n::tr(
+                        "detail-logits-row-slice-is-not-contiguous-164ab",
+                    ))
                 })?;
                 Ok(row_logits.to_vec())
             })
@@ -377,7 +421,10 @@ impl InferenceEngine for DecisionPipeline {
     /// 同模式，无 HF 网络依赖）
     async fn try_fallback_to_cpu(&mut self, _config: &ModelConfig) -> Result<(), VecboostError> {
         let _lock = self.fallback_lock.lock().map_err(|e| {
-            VecboostError::InferenceError(format!("Failed to acquire fallback lock: {e}"))
+            VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-failed-to-acquire-fallback-lock-e-31b46",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
         })?;
         // 双重检查：获取锁后再次确认未降级
         if self.fallback_triggered {

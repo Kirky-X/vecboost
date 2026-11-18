@@ -54,9 +54,12 @@ pub struct EncryptedFileKeyStore {
 
 impl EncryptedFileKeyStore {
     pub async fn new(file_path: &str, encryption_key: &str) -> Result<Self, VecboostError> {
-        let file_exists = tokio::fs::try_exists(file_path)
-            .await
-            .map_err(|e| VecboostError::IoError(format!("Failed to check key file: {}", e)))?;
+        let file_exists = tokio::fs::try_exists(file_path).await.map_err(|e| {
+            VecboostError::IoError(crate::i18n::tr_with_args(
+                "detail-failed-to-check-key-file-2760b",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
+        })?;
 
         if file_exists {
             // load_from_file returns (data, decrypt_salt, needs_migration). For legacy
@@ -164,14 +167,22 @@ impl EncryptedFileKeyStore {
         file_path: &str,
         password: &str,
     ) -> Result<(KeyStoreData, SaltStore, bool), VecboostError> {
-        let mut file = File::open(file_path)
-            .await
-            .map_err(|e| VecboostError::IoError(format!("Failed to open key file: {}", e)))?;
+        let mut file = File::open(file_path).await.map_err(|e| {
+            VecboostError::IoError(crate::i18n::tr_with_args(
+                "detail-failed-to-open-key-file-c5b8f",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
+        })?;
 
         let mut encrypted_content = String::new();
         file.read_to_string(&mut encrypted_content)
             .await
-            .map_err(|e| VecboostError::IoError(format!("Failed to read key file: {}", e)))?;
+            .map_err(|e| {
+                VecboostError::IoError(crate::i18n::tr_with_args(
+                    "detail-failed-to-read-key-file-53af4",
+                    crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                ))
+            })?;
 
         let parts: Vec<&str> = encrypted_content.splitn(3, ':').collect();
         let (decrypt_salt, nonce_hex, ciphertext, needs_migration) = match parts.len() {

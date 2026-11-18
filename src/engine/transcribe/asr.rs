@@ -25,10 +25,16 @@ pub(crate) type AsrResult<T> = Result<T, VecboostError>;
 
 /// 加载/IO 与运行期解码错误映射助手（无 Box<dyn Error>）。
 fn asr_load(e: impl std::fmt::Display) -> VecboostError {
-    VecboostError::ModelLoadError(format!("transcribe asr load: {e}"))
+    VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+        "detail-transcribe-asr-load-e-96bc1",
+        crate::i18n::tr_args(&[("e", &e.to_string())]),
+    ))
 }
 fn asr_infer(e: impl std::fmt::Display) -> VecboostError {
-    VecboostError::InferenceError(format!("transcribe asr: {e}"))
+    VecboostError::InferenceError(crate::i18n::tr_with_args(
+        "detail-transcribe-asr-e-896db",
+        crate::i18n::tr_args(&[("e", &e.to_string())]),
+    ))
 }
 
 pub(crate) const MAX_NEW_TOKENS: usize = 128; // 解码步数上限

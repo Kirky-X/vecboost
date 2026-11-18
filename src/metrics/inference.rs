@@ -388,7 +388,7 @@ impl InferenceCollector {
 
         self.memory_monitor.reset_peak();
 
-        info!("Metrics collector reset");
+        info!("{}", crate::i18n::tr("log-metrics-collector-reset"));
     }
 
     pub fn config(&self) -> &CollectionConfig {

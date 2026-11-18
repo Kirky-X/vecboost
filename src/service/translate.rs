@@ -141,9 +141,9 @@ impl TranslateService {
         // 显性拒绝（非无限排队占 blocking 线程）；acquire 后经 spawn_blocking
         // 全程持有，drop 自动释放
         let _permit = route.semaphore.clone().try_acquire_owned().map_err(|_| {
-            VecboostError::Overloaded(
-                "translate pair is busy with another request; retry shortly".to_string(),
-            )
+            VecboostError::Overloaded(crate::i18n::tr(
+                "detail-translate-pair-is-busy-with-another-request-retry-sho-084a2",
+            ))
         })?;
 
         // 能力门（先门后调）：路由表内的引擎必须支持 Translate 任务

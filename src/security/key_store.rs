@@ -133,17 +133,15 @@ impl KeyStore for EnvironmentKeyStore {
     }
 
     async fn set(&self, _key: &SecretKey) -> Result<(), VecboostError> {
-        Err(VecboostError::InternalError(
-            "EnvironmentKeyStore is read-only: injecting secrets back into the process              environment would expose them via /proc/<pid>/environ and child processes;              provide them through the parent environment instead"
-                .into(),
-        ))
+        Err(VecboostError::InternalError(crate::i18n::tr(
+            "detail-environmentkeystore-is-read-only-injecting-secrets-ba-cb336",
+        )))
     }
 
     async fn delete(&self, _key_type: &KeyType, _name: &str) -> Result<(), VecboostError> {
-        Err(VecboostError::InternalError(
-            "EnvironmentKeyStore is read-only: environment variables are owned by the              parent process and cannot be revoked at runtime"
-                .into(),
-        ))
+        Err(VecboostError::InternalError(crate::i18n::tr(
+            "detail-environmentkeystore-is-read-only-environment-variable-2f481",
+        )))
     }
 
     async fn list(&self, key_type: &KeyType) -> Result<Vec<String>, VecboostError> {

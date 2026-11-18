@@ -24,7 +24,12 @@ pub(crate) type VadResult<T> = Result<T, VecboostError>;
 
 /// ort 调用错误 → InferenceError（wire 由上层统一脱敏）。
 fn inference_err(step: &str) -> impl Fn(ort::Error) -> VecboostError + '_ {
-    move |e: ort::Error| VecboostError::InferenceError(format!("vad {step} failed: {e}"))
+    move |e: ort::Error| {
+        VecboostError::InferenceError(crate::i18n::tr_with_args(
+            "detail-vad-step-failed-e-8ae0a",
+            crate::i18n::tr_args(&[("step", &step.to_string()), ("e", &e.to_string())]),
+        ))
+    }
 }
 
 pub const SAMPLE_RATE: i32 = 16000;
@@ -221,17 +226,20 @@ impl SileroVadModel {
         let (_, prob_data) = outputs["prob"]
             .try_extract_tensor::<f32>()
             .map_err(inference_err("extract prob"))?;
-        let prob = *prob_data
-            .first()
-            .ok_or_else(|| VecboostError::InferenceError("vad empty prob output".to_string()))?;
+        let prob = *prob_data.first().ok_or_else(|| {
+            VecboostError::InferenceError(crate::i18n::tr("detail-vad-empty-prob-output-fd65b"))
+        })?;
 
         let (_, new_h) = outputs["new_h"]
             .try_extract_tensor::<f32>()
             .map_err(inference_err("extract new_h"))?;
         if new_h.len() != LSTM_STATE_ELEMS {
-            return Err(VecboostError::InferenceError(format!(
-                "new_h has {} elems, expect {LSTM_STATE_ELEMS}",
-                new_h.len()
+            return Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-new-h-has-elems-expect-lstm-state-elems-114c8",
+                crate::i18n::tr_args(&[
+                    ("p1", &new_h.len().to_string()),
+                    ("LSTM_STATE_ELEMS", &LSTM_STATE_ELEMS.to_string()),
+                ]),
             )));
         }
         self.h.copy_from_slice(new_h);
@@ -240,9 +248,12 @@ impl SileroVadModel {
             .try_extract_tensor::<f32>()
             .map_err(inference_err("extract new_c"))?;
         if new_c.len() != LSTM_STATE_ELEMS {
-            return Err(VecboostError::InferenceError(format!(
-                "new_c has {} elems, expect {LSTM_STATE_ELEMS}",
-                new_c.len()
+            return Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-new-c-has-elems-expect-lstm-state-elems-aa008",
+                crate::i18n::tr_args(&[
+                    ("p1", &new_c.len().to_string()),
+                    ("LSTM_STATE_ELEMS", &LSTM_STATE_ELEMS.to_string()),
+                ]),
             )));
         }
         self.c.copy_from_slice(new_c);

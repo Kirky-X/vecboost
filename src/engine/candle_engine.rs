@@ -537,16 +537,22 @@ impl CandleEngine {
         // 按 pooling_mode 汇聚——将 [seq_len, hidden_dim] 展平数据 + mask 传入纯函数
         let seq_hidden: Vec<f32> = if dims.len() == 3 {
             // [batch, seq_len, hidden] → 取 batch 0 的 [seq_len, hidden]
-            let batch0 = embeddings
-                .get(0)
-                .map_err(|e| VecboostError::InferenceError(format!("get batch 0: {}", e)))?;
+            let batch0 = embeddings.get(0).map_err(|e| {
+                VecboostError::InferenceError(crate::i18n::tr_with_args(
+                    "detail-get-batch-0-5b9b3",
+                    crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                ))
+            })?;
             // cast to f32 if needed
             let cast = if batch0.dtype() == DType::F32 {
                 batch0
             } else {
-                batch0
-                    .to_dtype(DType::F32)
-                    .map_err(|e| VecboostError::InferenceError(format!("cast to f32: {}", e)))?
+                batch0.to_dtype(DType::F32).map_err(|e| {
+                    VecboostError::InferenceError(crate::i18n::tr_with_args(
+                        "detail-cast-to-f32-6c39c",
+                        crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                    ))
+                })?
             };
             cast.to_vec2::<f32>()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?
@@ -558,9 +564,12 @@ impl CandleEngine {
             let cast = if embeddings.dtype() == DType::F32 {
                 embeddings.clone()
             } else {
-                embeddings
-                    .to_dtype(DType::F32)
-                    .map_err(|e| VecboostError::InferenceError(format!("cast to f32: {}", e)))?
+                embeddings.to_dtype(DType::F32).map_err(|e| {
+                    VecboostError::InferenceError(crate::i18n::tr_with_args(
+                        "detail-cast-to-f32-6c39c",
+                        crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                    ))
+                })?
             };
             cast.to_vec2::<f32>()
                 .map_err(|e| VecboostError::InferenceError(e.to_string()))?
@@ -575,10 +584,12 @@ impl CandleEngine {
             l2_normalize_in_place(&mut vec);
             return Ok(vec);
         } else {
-            return Err(VecboostError::InferenceError(format!(
-                "Unsupported embedding dimensions: {} (shape: {:?})",
-                dims.len(),
-                embeddings.shape()
+            return Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-unsupported-embedding-dimensions-shape-fbbcb",
+                crate::i18n::tr_args(&[
+                    ("p1", &dims.len().to_string()),
+                    ("p2", &format!("{:?}", embeddings.shape())),
+                ]),
             )));
         };
 
@@ -636,10 +647,9 @@ impl CandleEngine {
             .min(self.tokenizer.max_length());
 
         if max_seq_len == 0 {
-            return Err(VecboostError::InferenceError(
-                "Empty token sequence: all inputs produced zero tokens after truncation"
-                    .to_string(),
-            ));
+            return Err(VecboostError::InferenceError(crate::i18n::tr(
+                "detail-empty-token-sequence-all-inputs-produced-zero-tokens-50ce7",
+            )));
         }
 
         let batch_size = texts.len();
@@ -663,9 +673,9 @@ impl CandleEngine {
                     )
                     .map_err(|e| VecboostError::InferenceError(e.to_string()))?,
                 _ => {
-                    return Err(VecboostError::InferenceError(format!(
-                        "Model architecture mismatch for batch processing: {:?}",
-                        self.model_architecture
+                    return Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+                        "detail-model-architecture-mismatch-for-batch-processing-51271",
+                        crate::i18n::tr_args(&[("p1", &format!("{:?}", self.model_architecture))]),
                     )));
                 }
             }
@@ -787,10 +797,12 @@ impl CandleEngine {
             return Self::flatten_batch_rows(embeddings);
         }
 
-        Err(VecboostError::InferenceError(format!(
-            "Unsupported batch embedding dimensions: {} (shape: {:?})",
-            embeddings.dims().len(),
-            embeddings.shape()
+        Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+            "detail-unsupported-batch-embedding-dimensions-shape-c6e14",
+            crate::i18n::tr_args(&[
+                ("p1", &embeddings.dims().len().to_string()),
+                ("p2", &format!("{:?}", embeddings.shape())),
+            ]),
         )))
     }
 
@@ -800,11 +812,17 @@ impl CandleEngine {
             embeddings.clone()
         } else {
             embeddings.to_dtype(DType::F32).map_err(|e| {
-                VecboostError::InferenceError(format!("Failed to cast to f32: {}", e))
+                VecboostError::InferenceError(crate::i18n::tr_with_args(
+                    "detail-failed-to-cast-to-f32-10513",
+                    crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                ))
             })?
         };
         cast.to_vec2::<f32>().map_err(|e| {
-            VecboostError::InferenceError(format!("Failed to convert batch to vec2: {}", e))
+            VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-failed-to-convert-batch-to-vec2-c63f8",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
         })
     }
 
@@ -815,21 +833,35 @@ impl CandleEngine {
     fn pool_batch_cls(embeddings: &Tensor) -> Result<Vec<Vec<f32>>, VecboostError> {
         let cls_all = embeddings
             .narrow(1, 0, 1)
-            .map_err(|e| VecboostError::InferenceError(format!("Failed to narrow CLS dim: {}", e)))?
+            .map_err(|e| {
+                VecboostError::InferenceError(crate::i18n::tr_with_args(
+                    "detail-failed-to-narrow-cls-dim-9fcf6",
+                    crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                ))
+            })?
             .squeeze(1)
             .map_err(|e| {
-                VecboostError::InferenceError(format!("Failed to squeeze CLS dim: {}", e))
+                VecboostError::InferenceError(crate::i18n::tr_with_args(
+                    "detail-failed-to-squeeze-cls-dim-8791f",
+                    crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                ))
             })?;
         // 需要根据实际 dtype 转换：模型可能输出 f16/bf16，需先 cast 到 f32
         let cls_f32 = if cls_all.dtype() == DType::F32 {
             cls_all
         } else {
             cls_all.to_dtype(DType::F32).map_err(|e| {
-                VecboostError::InferenceError(format!("Failed to cast CLS to f32: {}", e))
+                VecboostError::InferenceError(crate::i18n::tr_with_args(
+                    "detail-failed-to-cast-cls-to-f32-c2b52",
+                    crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                ))
             })?
         };
         cls_f32.to_vec2::<f32>().map_err(|e| {
-            VecboostError::InferenceError(format!("Failed to convert CLS batch to vec2: {}", e))
+            VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-failed-to-convert-cls-batch-to-vec2-2dbb1",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
         })
     }
 
@@ -848,15 +880,18 @@ impl CandleEngine {
         let mut out = Vec::with_capacity(batch_size);
         for i in 0..batch_size {
             let sample = embeddings.get(i).map_err(|e| {
-                VecboostError::InferenceError(format!("Failed to get batch {}: {}", i, e))
+                VecboostError::InferenceError(crate::i18n::tr_with_args(
+                    "detail-failed-to-get-batch-9bfbd",
+                    crate::i18n::tr_args(&[("p1", &i.to_string()), ("p2", &e.to_string())]),
+                ))
             })?;
             let cast = if sample.dtype() == DType::F32 {
                 sample
             } else {
                 sample.to_dtype(DType::F32).map_err(|e| {
-                    VecboostError::InferenceError(format!(
-                        "Failed to cast sample {} to f32: {}",
-                        i, e
+                    VecboostError::InferenceError(crate::i18n::tr_with_args(
+                        "detail-failed-to-cast-sample-to-f32-ab8b5",
+                        crate::i18n::tr_args(&[("p1", &i.to_string()), ("p2", &e.to_string())]),
                     ))
                 })?
             };
@@ -1023,9 +1058,9 @@ impl CandleEngine {
             (ModelArchitecture::Bert, Some(bert), _) => bert.max_position_embeddings,
             (ModelArchitecture::XlmRoberta, _, Some(xlm)) => xlm.max_position_embeddings,
             _ => {
-                return Err(VecboostError::ModelLoadError(format!(
-                    "Invalid configuration for architecture: {:?}",
-                    fallback_architecture
+                return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-invalid-configuration-for-architecture-eaa10",
+                    crate::i18n::tr_args(&[("p1", &format!("{:?}", fallback_architecture))]),
                 )));
             }
         };
@@ -1184,10 +1219,9 @@ fn resolve_model_files(
     if is_local_path {
         let model_path_str = model_path.to_string_lossy();
         if model_path_str.contains("..") || model_path_str.contains('~') {
-            return Err(VecboostError::ModelLoadError(format!(
-                "Rejected model path due to potential path traversal attack: {:?}. \
-                     Path must not contain '..' or '~'.",
-                model_path
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-rejected-model-path-due-to-potential-path-traversal-a-dfbd0",
+                crate::i18n::tr_args(&[("p1", &format!("{:?}", model_path))]),
             )));
         }
 
@@ -1208,9 +1242,9 @@ fn resolve_model_files(
         } else if alt_weights_path.exists() {
             alt_weights_path
         } else {
-            return Err(VecboostError::ModelLoadError(
-                "No model weights file found (model.safetensors or pytorch_model.bin)".to_string(),
-            ));
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr(
+                "detail-no-model-weights-file-found-model-safetensors-or-pyto-68546",
+            )));
         };
 
         return Ok((config_path, tokenizer_path, weights_filename));
@@ -1315,9 +1349,9 @@ fn parse_model_config(config_content: &str) -> Result<ParsedModelConfig, Vecboos
         (ModelArchitecture::Bert, Some(bert), _) => bert.max_position_embeddings,
         (ModelArchitecture::XlmRoberta, _, Some(xlm)) => xlm.max_position_embeddings,
         _ => {
-            return Err(VecboostError::ModelLoadError(format!(
-                "Invalid configuration for architecture: {:?}",
-                architecture
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-invalid-configuration-for-architecture-eaa10",
+                crate::i18n::tr_args(&[("p1", &format!("{:?}", architecture))]),
             )));
         }
     };
@@ -1366,7 +1400,10 @@ fn ensure_model_integrity(
     );
     let integrity_report = check_model_integrity(&config.name, files_to_check, Some(min_sizes))
         .map_err(|e| {
-            VecboostError::ModelIntegrityError(format!("Integrity check failed: {}", e))
+            VecboostError::ModelIntegrityError(crate::i18n::tr_with_args(
+                "detail-integrity-check-failed-58a00",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
         })?;
 
     if !integrity_report.overall_valid {
@@ -1414,7 +1451,12 @@ fn ensure_model_integrity(
                 repo_id,
                 &integrity_report.corrupted_files,
             )
-            .map_err(|e| VecboostError::ModelIntegrityError(format!("Recovery failed: {}", e)))?;
+            .map_err(|e| {
+                VecboostError::ModelIntegrityError(crate::i18n::tr_with_args(
+                    "detail-recovery-failed-122a6",
+                    crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                ))
+            })?;
 
         if recovery_result.success {
             log::info!(
@@ -1443,18 +1485,23 @@ fn ensure_model_integrity(
             let recovery_integrity_report =
                 check_model_integrity(&config.name, files_to_check, Some(min_sizes)).map_err(
                     |e| {
-                        VecboostError::ModelIntegrityError(format!(
-                            "Post-recovery integrity check failed: {}",
-                            e
+                        VecboostError::ModelIntegrityError(crate::i18n::tr_with_args(
+                            "detail-post-recovery-integrity-check-failed-89d9b",
+                            crate::i18n::tr_args(&[("p1", &e.to_string())]),
                         ))
                     },
                 )?;
 
             if !recovery_integrity_report.overall_valid {
-                return Err(VecboostError::ModelFileCorrupted(format!(
-                    "Model files still corrupted after recovery. Corrupted files: {:?}",
-                    recovery_integrity_report.corrupted_files
-                )));
+                return Err(VecboostError::ModelFileCorrupted(
+                    crate::i18n::tr_with_args(
+                        "detail-model-files-still-corrupted-after-recovery-corrupted-1e952",
+                        crate::i18n::tr_args(&[(
+                            "p1",
+                            &format!("{:?}", recovery_integrity_report.corrupted_files),
+                        )]),
+                    ),
+                ));
             }
 
             log::info!(
@@ -1462,10 +1509,15 @@ fn ensure_model_integrity(
                 crate::i18n::tr("log-engine-post-recovery-integrity-check")
             );
         } else {
-            return Err(VecboostError::ModelFileCorrupted(format!(
-                "Failed to recover corrupted files after {} attempts. Corrupted files: {:?}",
-                recovery_result.attempts, recovery_result.failed_files
-            )));
+            return Err(VecboostError::ModelFileCorrupted(
+                crate::i18n::tr_with_args(
+                    "detail-failed-to-recover-corrupted-files-after-attempts-corr-54f81",
+                    crate::i18n::tr_args(&[
+                        ("p1", &recovery_result.attempts.to_string()),
+                        ("p2", &format!("{:?}", recovery_result.failed_files)),
+                    ]),
+                ),
+            ));
         }
     }
 
@@ -1492,13 +1544,22 @@ fn verify_model_sha256(
         "{}",
         crate::i18n::tr("log-engine-verifying-model-file-sha256")
     );
-    let is_valid = verify_sha256(weights_filename, expected_hash)
-        .map_err(|e| VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e)))?;
+    let is_valid = verify_sha256(weights_filename, expected_hash).map_err(|e| {
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-failed-to-verify-sha256-d222c",
+            crate::i18n::tr_args(&[("p1", &e.to_string())]),
+        ))
+    })?;
     if !is_valid {
-        return Err(VecboostError::ModelFileCorrupted(format!(
-            "Model file SHA256 verification failed. Expected: {}, File: {:?}",
-            expected_hash, weights_filename
-        )));
+        return Err(VecboostError::ModelFileCorrupted(
+            crate::i18n::tr_with_args(
+                "detail-model-file-sha256-verification-failed-expected-file-7475e",
+                crate::i18n::tr_args(&[
+                    ("p1", &expected_hash.to_string()),
+                    ("p2", &format!("{:?}", weights_filename)),
+                ]),
+            ),
+        ));
     }
     log::info!(
         "{}",
@@ -1588,9 +1649,9 @@ fn load_weights_varbuilder<'a>(
                         )])
                     )
                 );
-                return Err(VecboostError::ModelLoadError(format!(
-                    "Failed to load PyTorch weights: {}. Please convert the model to safetensors format.",
-                    e
+                return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-failed-to-load-pytorch-weights-please-convert-the-mod-bde93",
+                    crate::i18n::tr_args(&[("p1", &e.to_string())]),
                 )));
             }
         }

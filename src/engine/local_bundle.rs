@@ -32,8 +32,9 @@ pub(crate) fn resolve_tokenizer_path(
         if explicit_path.is_file() {
             return Ok(explicit_path.to_path_buf());
         }
-        return Err(VecboostError::ModelLoadError(format!(
-            "[model].tokenizer_path is configured but not found: {explicit_path:?}"
+        return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-model-tokenizer-path-is-configured-but-not-found-expl-67e29",
+            crate::i18n::tr_args(&[("explicit_path", &format!("{:?}", explicit_path))]),
         )));
     }
 
@@ -44,8 +45,11 @@ pub(crate) fn resolve_tokenizer_path(
             return Ok(candidate.clone());
         }
     }
-    Err(VecboostError::ModelLoadError(format!(
-        "Tokenizer not found: no [model].tokenizer_path configured; checked \
-         {root:?} and {subdir:?}"
+    Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+        "detail-tokenizer-not-found-no-model-tokenizer-path-configure-99e8a",
+        crate::i18n::tr_args(&[
+            ("root", &format!("{:?}", root)),
+            ("subdir", &format!("{:?}", subdir)),
+        ]),
     )))
 }

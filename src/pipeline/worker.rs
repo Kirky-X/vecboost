@@ -199,9 +199,9 @@ impl WorkerManager {
             self.response_channel
                 .complete(
                     req.request_id.clone(),
-                    Err(VecboostError::InferenceError(
-                        "server is shutting down".to_string(),
-                    )),
+                    Err(VecboostError::InferenceError(crate::i18n::tr(
+                        "detail-server-is-shutting-down-27eb4",
+                    ))),
                 )
                 .await;
         }
@@ -700,9 +700,9 @@ impl WorkerManager {
                     }
                 }
             }
-            ServiceRequest::Rerank(_) => Err(VecboostError::InternalError(
-                "Rerank not supported by embedding worker".to_string(),
-            )),
+            ServiceRequest::Rerank(_) => Err(VecboostError::InternalError(crate::i18n::tr(
+                "detail-rerank-not-supported-by-embedding-worker-00cd6",
+            ))),
             ServiceRequest::Decision(decision_req) => {
                 // 决策执行保留 decide 契约：DecisionService::process_decision
                 // 内部以 spawn_blocking 包裹阻塞推理（0c2b164 口径不回退）
@@ -829,9 +829,9 @@ impl WorkerManager {
                     response_channel
                         .complete(
                             request_id,
-                            Err(VecboostError::InternalError(
-                                "Rerank not supported by embedding worker".to_string(),
-                            )),
+                            Err(VecboostError::InternalError(crate::i18n::tr(
+                                "detail-rerank-not-supported-by-embedding-worker-00cd6",
+                            ))),
                         )
                         .await;
                 }
@@ -914,8 +914,7 @@ impl WorkerManager {
                             .complete(
                                 request_id.clone(),
                                 Err(VecboostError::InternalError(
-                                    "Batch inference returned fewer embeddings than inputs"
-                                        .to_string(),
+                                    crate::i18n::tr("detail-batch-inference-returned-fewer-embeddings-than-inputs-0ac1a"),
                                 )),
                             )
                             .await;

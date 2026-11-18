@@ -135,7 +135,13 @@ impl ModelManager {
             let e = heat.entry(name).or_insert(0);
             *e = (*e).max(h);
         }
-        info!("Model heat warmstart loaded: {} entries", heat.len());
+        info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-model-heat-warmstart-loaded",
+                crate::i18n::tr_args(&[("count", &heat.len().to_string())]),
+            )
+        );
     }
 
     /// 热度落盘（原子写，见 heat.rs）。
@@ -154,16 +160,26 @@ impl ModelManager {
 
         if let Some(existing) = self.get(&model_name).await {
             info!(
-                "Model {} already loaded, reusing existing instance",
-                model_name
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-model-already-loaded",
+                    crate::i18n::tr_args(&[("name", &model_name)]),
+                )
             );
             self.record_hit(&model_name).await;
             return Ok(existing);
         }
 
         info!(
-            "Loading model: {} from {:?} (timeout: {:?})",
-            model_name, config.model_path, self.timeout_duration
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-model-loading",
+                crate::i18n::tr_args(&[
+                    ("name", &model_name),
+                    ("path", &format!("{:?}", config.model_path)),
+                    ("timeout", &format!("{:?}", self.timeout_duration)),
+                ]),
+            )
         );
 
         let load_future = self.loader.load(config);
@@ -187,29 +203,58 @@ impl ModelManager {
                     for v in heat.values_mut() {
                         *v /= 2;
                     }
-                    info!("Model heat decayed (decision #{})", d);
+                    info!(
+                        "{}",
+                        crate::i18n::tr_with_args(
+                            "log-model-heat-decayed",
+                            crate::i18n::tr_args(&[("decision", &d.to_string())]),
+                        )
+                    );
                 }
 
-                info!("Model {} loaded successfully", model_name);
+                info!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-model-loaded",
+                        crate::i18n::tr_args(&[("name", &model_name)]),
+                    )
+                );
                 self.enforce_residency(&model_name).await;
                 Ok(model)
             }
             Ok(Err(e)) => {
-                warn!("Model {} loading failed: {}", model_name, e);
-                Err(VecboostError::ModelLoadError(format!(
-                    "Failed to load model {}: {}",
-                    model_name, e
+                warn!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-model-load-failed",
+                        crate::i18n::tr_args(&[("name", &model_name), ("detail", &e.to_string())]),
+                    )
+                );
+                Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-failed-to-load-model-af05e",
+                    crate::i18n::tr_args(&[
+                        ("p1", &model_name.to_string()),
+                        ("p2", &e.to_string()),
+                    ]),
                 )))
             }
             Err(_) => {
                 warn!(
-                    "Model {} loading timed out after {:?}",
-                    model_name, self.timeout_duration
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-model-load-timeout",
+                        crate::i18n::tr_args(&[
+                            ("name", &model_name),
+                            ("timeout", &format!("{:?}", self.timeout_duration)),
+                        ]),
+                    )
                 );
-                Err(VecboostError::ModelLoadError(format!(
-                    "Model loading timed out after {} seconds: {}",
-                    self.timeout_duration.as_secs(),
-                    model_name
+                Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-model-loading-timed-out-after-seconds-f2bc7",
+                    crate::i18n::tr_args(&[
+                        ("p1", &self.timeout_duration.as_secs().to_string()),
+                        ("p2", &model_name.to_string()),
+                    ]),
                 )))
             }
         }
@@ -224,17 +269,29 @@ impl ModelManager {
         let mut models = self.models.write().await;
 
         if let Some(model) = models.remove(name) {
-            info!("Model {} unloaded successfully", name);
+            info!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-model-unloaded",
+                    crate::i18n::tr_args(&[("name", name)]),
+                )
+            );
             drop(model);
             drop(models);
             // heat 保留（重载恢复/warmstart 种子），recency 清除。
             self.recency.write().await.remove(name);
             Ok(())
         } else {
-            warn!("Model {} not found for unloading", name);
-            Err(VecboostError::NotFound(format!(
-                "Model not found: {}",
-                name
+            warn!(
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-model-not-found-unload",
+                    crate::i18n::tr_args(&[("name", name)]),
+                )
+            );
+            Err(VecboostError::NotFound(crate::i18n::tr_with_args(
+                "detail-model-not-found-95ab5",
+                crate::i18n::tr_args(&[("p1", &name.to_string())]),
             )))
         }
     }
@@ -268,14 +325,31 @@ impl ModelManager {
             let newcomer_heat = self.heat_of(newcomer).await;
             if !Self::hysteresis_passes(newcomer_heat, victim_heat) {
                 info!(
-                    "Residency: keep {} (heat {}) over {} (heat {}): hysteresis blocks eviction",
-                    newcomer, newcomer_heat, name, victim_heat
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-model-residency-keep",
+                        crate::i18n::tr_args(&[
+                            ("keep", newcomer),
+                            ("keep_heat", &newcomer_heat.to_string()),
+                            ("evict", &name),
+                            ("evict_heat", &victim_heat.to_string()),
+                        ]),
+                    )
                 );
                 break;
             }
             info!(
-                "Residency: evicting {} (heat {}, score {}) for {} (heat {})",
-                name, victim_heat, victim_score, newcomer, newcomer_heat
+                "{}",
+                crate::i18n::tr_with_args(
+                    "log-model-residency-evict",
+                    crate::i18n::tr_args(&[
+                        ("evict", &name),
+                        ("heat", &victim_heat.to_string()),
+                        ("score", &victim_score.to_string()),
+                        ("keep", newcomer),
+                        ("keep_heat", &newcomer_heat.to_string()),
+                    ]),
+                )
             );
             if self.unload(&name).await.is_err() {
                 break;
@@ -293,8 +367,15 @@ impl ModelManager {
                     break;
                 };
                 info!(
-                    "Residency: over memory budget, evicting {} (heat {}, score {})",
-                    name, victim_heat, victim_score
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-model-residency-budget-evict",
+                        crate::i18n::tr_args(&[
+                            ("name", &name),
+                            ("heat", &victim_heat.to_string()),
+                            ("score", &victim_score.to_string()),
+                        ]),
+                    )
                 );
                 if self.unload(&name).await.is_err() {
                     break;
@@ -366,7 +447,13 @@ impl ModelManager {
 
         for name in model_names {
             if let Some(model) = models.remove(&name) {
-                info!("Unloaded model: {}", name);
+                info!(
+                    "{}",
+                    crate::i18n::tr_with_args(
+                        "log-model-unloaded-detail",
+                        crate::i18n::tr_args(&[("name", &name)]),
+                    )
+                );
                 drop(model);
             }
         }
@@ -374,15 +461,18 @@ impl ModelManager {
         // heat 保留（warmstart 种子），recency 清除。
         self.recency.write().await.clear();
 
-        info!("All models unloaded");
+        info!("{}", crate::i18n::tr("log-model-all-unloaded"));
     }
 
     pub async fn reload(&self, name: &str) -> Result<Arc<dyn LoadedModel>, VecboostError> {
         let config = {
             let models = self.models.read().await;
-            let model = models
-                .get(name)
-                .ok_or_else(|| VecboostError::NotFound(format!("Model not found: {}", name)))?;
+            let model = models.get(name).ok_or_else(|| {
+                VecboostError::NotFound(crate::i18n::tr_with_args(
+                    "detail-model-not-found-95ab5",
+                    crate::i18n::tr_args(&[("p1", &name.to_string())]),
+                ))
+            })?;
 
             ModelConfig {
                 translation_params: None,

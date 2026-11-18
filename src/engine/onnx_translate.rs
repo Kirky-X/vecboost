@@ -248,8 +248,9 @@ impl M2mGraph {
     fn from_config(config: &serde_json::Value) -> Result<Self, VecboostError> {
         let field = |name: &str| -> Result<i64, VecboostError> {
             config.get(name).and_then(|v| v.as_i64()).ok_or_else(|| {
-                VecboostError::ModelLoadError(format!(
-                    "bundle config.json missing or invalid numeric field '{name}'"
+                VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-bundle-config-json-missing-or-invalid-numeric-field-n-559fc",
+                    crate::i18n::tr_args(&[("name", &name.to_string())]),
                 ))
             })
         };
@@ -257,9 +258,13 @@ impl M2mGraph {
         let heads = field("encoder_attention_heads")?;
         let d_model = field("d_model")?;
         if decoder_layers <= 0 || heads <= 0 || d_model <= 0 || d_model % heads != 0 {
-            return Err(VecboostError::ModelLoadError(format!(
-                "invalid m2m graph geometry: decoder_layers={decoder_layers}, \
-                 heads={heads}, d_model={d_model}"
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-invalid-m2m-graph-geometry-decoder-layers-decoder-lay-14e05",
+                crate::i18n::tr_args(&[
+                    ("decoder_layers", &decoder_layers.to_string()),
+                    ("heads", &heads.to_string()),
+                    ("d_model", &d_model.to_string()),
+                ]),
             )));
         }
         let head_dim = d_model / heads;
@@ -340,17 +345,15 @@ impl Family {
                 } else if tokenizer.token_to_id("eng_Latn").is_some() {
                     LangTokenStyle::Nllb
                 } else {
-                    return Err(VecboostError::ModelLoadError(
-                        "m2m_100 bundle tokenizer exposes no known language tokens \
-                         (neither '__en__' nor 'eng_Latn')"
-                            .to_string(),
-                    ));
+                    return Err(VecboostError::ModelLoadError(crate::i18n::tr(
+                        "detail-m2m-100-bundle-tokenizer-exposes-no-known-language-to-bac17",
+                    )));
                 };
                 Ok(Family::M2m { graph, lang_style })
             }
-            other => Err(VecboostError::ModelLoadError(format!(
-                "unsupported translation model_type '{other}'; supported: marian, \
-                 m2m_100 (M2M100 / NLLB)"
+            other => Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-unsupported-translation-model-type-other-supported-ma-f40b1",
+                crate::i18n::tr_args(&[("other", &other.to_string())]),
             ))),
         }
     }
@@ -359,9 +362,9 @@ impl Family {
     fn lang_token_id(&self, tokenizer: &Tokenizer, iso: &str) -> Result<u32, VecboostError> {
         let token: String = match self {
             Family::Marian => {
-                return Err(VecboostError::InvalidInput(
-                    "marian bundles are pair-specific and take no language token".to_string(),
-                ));
+                return Err(VecboostError::InvalidInput(crate::i18n::tr(
+                    "detail-marian-bundles-are-pair-specific-and-take-no-language-37e5a",
+                )));
             }
             Family::M2m {
                 lang_style: LangTokenStyle::M2m,
@@ -372,17 +375,17 @@ impl Family {
                 ..
             } => nllb_lang_token(iso)
                 .ok_or_else(|| {
-                    VecboostError::InvalidInput(format!(
-                        "language code '{iso}' is not supported by this NLLB bundle; \
-                         supported examples: en, zh, yue, fr, de, es, pt, it, ru, ja, ko, \
-                         ar, nl, pl, tr, vi, th, id"
+                    VecboostError::InvalidInput(crate::i18n::tr_with_args(
+                        "detail-language-code-iso-is-not-supported-by-this-nllb-bundl-305d3",
+                        crate::i18n::tr_args(&[("iso", &iso.to_string())]),
                     ))
                 })?
                 .to_string(),
         };
         tokenizer.token_to_id(&token).ok_or_else(|| {
-            VecboostError::InvalidInput(format!(
-                "language token '{token}' not present in bundle vocabulary"
+            VecboostError::InvalidInput(crate::i18n::tr_with_args(
+                "detail-language-token-token-not-present-in-bundle-vocabulary-83f78",
+                crate::i18n::tr_args(&[("token", &token.to_string())]),
             ))
         })
     }
@@ -457,15 +460,21 @@ impl DecodeGraph {
 /// vocabulary` 解析期即失败）；均不改磁盘 bundle，其余字段原样反序列化。
 fn load_tokenizer(tokenizer_file: &Path) -> Result<Tokenizer, VecboostError> {
     let raw = std::fs::read_to_string(tokenizer_file).map_err(|e| {
-        VecboostError::ModelLoadError(format!(
-            "Failed to read tokenizer {}: {e}",
-            tokenizer_file.display()
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-failed-to-read-tokenizer-e-6e0a7",
+            crate::i18n::tr_args(&[
+                ("p1", &tokenizer_file.display().to_string()),
+                ("e", &e.to_string()),
+            ]),
         ))
     })?;
     let mut value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-        VecboostError::ModelFileCorrupted(format!(
-            "tokenizer {} is not valid JSON: {e}",
-            tokenizer_file.display()
+        VecboostError::ModelFileCorrupted(crate::i18n::tr_with_args(
+            "detail-tokenizer-is-not-valid-json-e-63877",
+            crate::i18n::tr_args(&[
+                ("p1", &tokenizer_file.display().to_string()),
+                ("e", &e.to_string()),
+            ]),
         ))
     })?;
     let mut shims: Vec<&str> = Vec::new();
@@ -524,9 +533,12 @@ fn load_tokenizer(tokenizer_file: &Path) -> Result<Tokenizer, VecboostError> {
         );
     }
     Tokenizer::from_str(&value.to_string()).map_err(|e| {
-        VecboostError::ModelLoadError(format!(
-            "Failed to load tokenizer {}: {e}",
-            tokenizer_file.display()
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-failed-to-load-tokenizer-e-3cbba",
+            crate::i18n::tr_args(&[
+                ("p1", &tokenizer_file.display().to_string()),
+                ("e", &e.to_string()),
+            ]),
         ))
     })
 }
@@ -554,9 +566,12 @@ impl GenerationConfig {
             }
         };
         let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-            VecboostError::ModelFileCorrupted(format!(
-                "generation_config.json in {} is not valid JSON: {e}",
-                bundle_dir.display()
+            VecboostError::ModelFileCorrupted(crate::i18n::tr_with_args(
+                "detail-generation-config-json-in-is-not-valid-json-e-9fa48",
+                crate::i18n::tr_args(&[
+                    ("p1", &bundle_dir.display().to_string()),
+                    ("e", &e.to_string()),
+                ]),
             ))
         })?;
         match (
@@ -588,10 +603,9 @@ impl GenerationConfig {
             .token_to_id("</s>")
             .or_else(|| tokenizer.token_to_id("<eos>"))
             .ok_or_else(|| {
-                VecboostError::ModelLoadError(format!(
-                    "translation bundle {}: no generation_config.json anchors and tokenizer \
-                     exposes no </s>/<eos> special token — greedy decode cannot stop",
-                    bundle_dir.display()
+                VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-translation-bundle-no-generation-config-json-anchors-29498",
+                    crate::i18n::tr_args(&[("p1", &bundle_dir.display().to_string())]),
                 ))
             })?;
         let start = tokenizer
@@ -610,7 +624,12 @@ impl GenerationConfig {
 
 /// ort 调用错误 → InferenceError（wire 由上层 to_api_error 统一脱敏）
 fn inference_err(step: &str) -> impl Fn(ort::Error) -> VecboostError + '_ {
-    move |e: ort::Error| VecboostError::InferenceError(format!("translation {step} failed: {e}"))
+    move |e: ort::Error| {
+        VecboostError::InferenceError(crate::i18n::tr_with_args(
+            "detail-translation-step-failed-e-c34b9",
+            crate::i18n::tr_args(&[("step", &step.to_string()), ("e", &e.to_string())]),
+        ))
+    }
 }
 
 /// encoder 单次前向：last_hidden_state → (shape, data) owned 返回
@@ -633,9 +652,9 @@ fn run_encoder(
     // 显性取键：缺键是图契约损坏，显性 InferenceError
     // 而非 HashMap Index panic
     let enc_output = outputs.get("last_hidden_state").ok_or_else(|| {
-        VecboostError::InferenceError(
-            "encoder graph output 'last_hidden_state' missing".to_string(),
-        )
+        VecboostError::InferenceError(crate::i18n::tr(
+            "detail-encoder-graph-output-last-hidden-state-missing-6e03a",
+        ))
     })?;
     let (enc_shape, enc_data) = enc_output
         .try_extract_tensor::<f32>()
@@ -718,7 +737,9 @@ fn greedy_decode(
         // 显性取键：缺键是图契约损坏，显性 InferenceError
         // 而非 HashMap Index panic
         let logits_output = outputs.get("logits").ok_or_else(|| {
-            VecboostError::InferenceError("decoder graph output 'logits' missing".to_string())
+            VecboostError::InferenceError(crate::i18n::tr(
+                "detail-decoder-graph-output-logits-missing-924f1",
+            ))
         })?;
         let (logits_shape, logits_data) = logits_output
             .try_extract_tensor::<f32>()
@@ -727,8 +748,9 @@ fn greedy_decode(
         // debug_assert）——换导出仓库/量化变体时显性 InferenceError
         // 附实际形状，而非 index-out-of-bounds panic
         if let Err(msg) = validate_logits_shape(logits_shape, dec_len, logits_data.len()) {
-            return Err(VecboostError::InferenceError(format!(
-                "decoder logits contract mismatch: {msg}"
+            return Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-decoder-logits-contract-mismatch-msg-15e72",
+                crate::i18n::tr_args(&[("msg", &msg.to_string())]),
             )));
         }
         // 末位 token 的分布（logits [1, dec_len, V]，取最后一行）；
@@ -771,9 +793,9 @@ impl OnnxTranslationEngine {
         };
         let bundle_dir = config.model_path.clone();
         if !bundle_dir.is_dir() {
-            return Err(VecboostError::ModelLoadError(format!(
-                "translation bundle path is not a directory: {}",
-                bundle_dir.display()
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-translation-bundle-path-is-not-a-directory-bf45d",
+                crate::i18n::tr_args(&[("p1", &bundle_dir.display().to_string())]),
             )));
         }
         let encoder_file = probe_model_file(
@@ -793,11 +815,18 @@ impl OnnxTranslationEngine {
             for model_file in [&encoder_file, &decoder_file] {
                 let is_valid = crate::utils::hash::verify_sha256(model_file, expected_hash)
                     .map_err(|e| {
-                        VecboostError::ModelLoadError(format!("Failed to verify SHA256: {e}"))
+                        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                            "detail-failed-to-verify-sha256-e-1e52f",
+                            crate::i18n::tr_args(&[("e", &e.to_string())]),
+                        ))
                     })?;
                 if !is_valid {
-                    return Err(VecboostError::ModelLoadError(format!(
-                        "Model file SHA256 verification failed. Expected: {expected_hash}, File: {model_file:?}"
+                    return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                        "detail-model-file-sha256-verification-failed-expected-expect-e1042",
+                        crate::i18n::tr_args(&[
+                            ("expected_hash", &expected_hash.to_string()),
+                            ("model_file", &format!("{:?}", model_file)),
+                        ]),
                     )));
                 }
             }
@@ -812,7 +841,10 @@ impl OnnxTranslationEngine {
         // bundle 内 truncation/padding 配置必须清除，否则序列被静默截断/
         // 填充（decision 同款防线）
         tokenizer.with_truncation(None).map_err(|e| {
-            VecboostError::ModelLoadError(format!("Failed to clear truncation: {e}"))
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-failed-to-clear-truncation-e-78f81",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
         })?;
         tokenizer.with_padding(None);
 
@@ -822,15 +854,21 @@ impl OnnxTranslationEngine {
         let bundle_config: serde_json::Value = {
             let path = bundle_dir.join("config.json");
             let raw = std::fs::read_to_string(&path).map_err(|e| {
-                VecboostError::ModelLoadError(format!(
-                    "Failed to read bundle config {}: {e}",
-                    path.display()
+                VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-failed-to-read-bundle-config-e-cf74b",
+                    crate::i18n::tr_args(&[
+                        ("p1", &path.display().to_string()),
+                        ("e", &e.to_string()),
+                    ]),
                 ))
             })?;
             serde_json::from_str(&raw).map_err(|e| {
-                VecboostError::ModelFileCorrupted(format!(
-                    "bundle config {} is not valid JSON: {e}",
-                    path.display()
+                VecboostError::ModelFileCorrupted(crate::i18n::tr_with_args(
+                    "detail-bundle-config-is-not-valid-json-e-df953",
+                    crate::i18n::tr_args(&[
+                        ("p1", &path.display().to_string()),
+                        ("e", &e.to_string()),
+                    ]),
                 ))
             })?
         };
@@ -1299,8 +1337,9 @@ impl OnnxTranslationEngine {
             .into_inner()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
         {
-            return Err(VecboostError::InferenceError(format!(
-                "parallel translation failed: {e}"
+            return Err(VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-parallel-translation-failed-e-9fa35",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
             )));
         }
         let mut done = pieces
@@ -1547,7 +1586,10 @@ fn is_degenerate_generation(generated: &[u32], hit_budget: bool) -> bool {
 /// 退化为重复循环，add_special_tokens 恒 true）
 fn encode_source_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<i64>, VecboostError> {
     let encoding = tokenizer.encode(text, true).map_err(|e| {
-        VecboostError::InferenceError(format!("translation tokenization failed: {e}"))
+        VecboostError::InferenceError(crate::i18n::tr_with_args(
+            "detail-translation-tokenization-failed-e-5ae0c",
+            crate::i18n::tr_args(&[("e", &e.to_string())]),
+        ))
     })?;
     Ok(encoding.get_ids().iter().map(|&i| i as i64).collect())
 }
@@ -1556,7 +1598,10 @@ fn encode_source_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<i64>, Vecb
 /// post_processor 的英文硬编码模板不适用非英语源）
 fn encode_raw_ids(tokenizer: &Tokenizer, text: &str) -> Result<Vec<i64>, VecboostError> {
     let encoding = tokenizer.encode(text, false).map_err(|e| {
-        VecboostError::InferenceError(format!("translation tokenization failed: {e}"))
+        VecboostError::InferenceError(crate::i18n::tr_with_args(
+            "detail-translation-tokenization-failed-e-5ae0c",
+            crate::i18n::tr_args(&[("e", &e.to_string())]),
+        ))
     })?;
     Ok(encoding.get_ids().iter().map(|&i| i as i64).collect())
 }
@@ -1566,7 +1611,10 @@ fn decode_output_text(tokenizer: &Tokenizer, generated: &[u32]) -> Result<String
     Ok(tokenizer
         .decode(generated, true)
         .map_err(|e| {
-            VecboostError::InferenceError(format!("translation detokenization failed: {e}"))
+            VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-translation-detokenization-failed-e-9e2be",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
         })?
         .trim()
         .to_string())
@@ -1581,10 +1629,13 @@ fn check_token_budget(
     if source_len > max_source_tokens {
         // InvalidInput（to_api_error 映射 400）：承诺超限冒泡为
         // 400 语义；服务层预判为第一道，此处为引擎兜底（口径一致）
-        return Err(VecboostError::InvalidInput(format!(
-            "source {scope} exceeds token budget: {source_len} tokens > \
-             {max_source_tokens} (max_source_tokens); shorten the text or \
-             raise the pair's max_source_tokens limit"
+        return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+            "detail-source-scope-exceeds-token-budget-source-len-tokens-m-216f2",
+            crate::i18n::tr_args(&[
+                ("scope", &scope.to_string()),
+                ("source_len", &source_len.to_string()),
+                ("max_source_tokens", &max_source_tokens.to_string()),
+            ]),
         )));
     }
     Ok(())
@@ -1831,7 +1882,12 @@ impl InferenceEngine for OnnxTranslationEngine {
         Ok(self
             .tokenizer
             .encode(text, true)
-            .map_err(|e| VecboostError::TokenizationError(format!("count_tokens failed: {e}")))?
+            .map_err(|e| {
+                VecboostError::TokenizationError(crate::i18n::tr_with_args(
+                    "detail-count-tokens-failed-e-7ea29",
+                    crate::i18n::tr_args(&[("e", &e.to_string())]),
+                ))
+            })?
             .get_ids()
             .len())
     }
@@ -1840,7 +1896,10 @@ impl InferenceEngine for OnnxTranslationEngine {
     /// 无 HF 网络依赖）
     async fn try_fallback_to_cpu(&mut self, _config: &ModelConfig) -> Result<(), VecboostError> {
         let _lock = self.fallback_lock.lock().map_err(|e| {
-            VecboostError::InferenceError(format!("Failed to acquire fallback lock: {e}"))
+            VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-failed-to-acquire-fallback-lock-e-31b46",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
         })?;
         if self.fallback_triggered {
             return Ok(());

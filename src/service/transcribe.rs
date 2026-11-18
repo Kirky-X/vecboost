@@ -90,9 +90,9 @@ impl TranscribeService {
 
             // 背压：会话串行推理，排队请求显性 503（与 translate 同口径）
             let _permit = self.semaphore.clone().try_acquire_owned().map_err(|_| {
-                VecboostError::Overloaded(
-                    "transcribe session is busy with another request; retry shortly".to_string(),
-                )
+                VecboostError::Overloaded(crate::i18n::tr(
+                    "detail-transcribe-session-is-busy-with-another-request-retry-b9aff",
+                ))
             })?;
 
             let started = Instant::now();
@@ -119,7 +119,12 @@ impl TranscribeService {
                 Ok::<_, VecboostError>(TranscribeResponse::from_segments(out))
             })
             .await
-            .map_err(|e| VecboostError::InferenceError(format!("transcribe task join: {e}")))??;
+            .map_err(|e| {
+                VecboostError::InferenceError(crate::i18n::tr_with_args(
+                    "detail-transcribe-task-join-e-96565",
+                    crate::i18n::tr_args(&[("e", &e.to_string())]),
+                ))
+            })??;
 
             log::info!(
                 "{}",

@@ -109,8 +109,12 @@ impl Qwen3AsrEngine {
             )
         );
 
-        let tokenizer = AsrTokenizer::new(&models_dir.join("tokenizer"))
-            .map_err(|e| VecboostError::ModelLoadError(format!("load asr tokenizer: {e}")))?;
+        let tokenizer = AsrTokenizer::new(&models_dir.join("tokenizer")).map_err(|e| {
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-load-asr-tokenizer-e-e784d",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
+        })?;
 
         Ok(Self {
             asr: Mutex::new(asr),
@@ -174,10 +178,12 @@ impl InferenceEngine for Qwen3AsrEngine {
         let vad_model = SileroVadModel::new(&self.vad_model_path, &vad_config)?;
         let segments = detect_segments(vad_model, samples, &vad_config)?;
 
-        let mut asr = self
-            .asr
-            .lock()
-            .map_err(|e| VecboostError::InferenceError(format!("asr mutex poisoned: {e}")))?;
+        let mut asr = self.asr.lock().map_err(|e| {
+            VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-asr-mutex-poisoned-e-c380d",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
+        })?;
 
         let mut out: Vec<TranscribeSegment> = Vec::with_capacity(segments.len());
         for seg in segments {
@@ -224,10 +230,12 @@ impl Qwen3AsrEngine {
     pub(crate) fn transcribe_segment(&self, samples: &[f32]) -> Result<String, VecboostError> {
         let mel = self.fbank.compute(samples);
         let num_frames = frame_count(&mel);
-        let mut asr = self
-            .asr
-            .lock()
-            .map_err(|e| VecboostError::InferenceError(format!("asr mutex poisoned: {e}")))?;
+        let mut asr = self.asr.lock().map_err(|e| {
+            VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-asr-mutex-poisoned-e-c380d",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
+        })?;
         asr.transcribe(&mel, num_frames, &self.tokenizer)
     }
 }

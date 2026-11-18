@@ -1856,8 +1856,17 @@ async fn app_main() -> anyhow::Result<()> {
     let (logger_manager, log_level) = init_logger(&config, cli_mode, mcp_mode).await?;
 
     log::info!(
-        "Starting Rust Embedding Service... (log level: {log_level}, config: {})",
-        config_path.as_deref().unwrap_or("config/config.toml")
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-service-starting",
+            vecboost::i18n::tr_args(&[
+                ("log_level", &log_level),
+                (
+                    "config",
+                    config_path.as_deref().unwrap_or("config/config.toml")
+                ),
+            ]),
+        )
     );
 
     #[cfg(any(feature = "http", feature = "mcp", feature = "cli", feature = "grpc"))]
@@ -1866,14 +1875,22 @@ async fn app_main() -> anyhow::Result<()> {
     }
 
     log::info!(
-        "Configuration loaded: {} auth={} audit={}",
-        if config.auth.enabled {
-            "auth enabled"
-        } else {
-            "auth disabled"
-        },
-        config.auth.enabled,
-        config.audit.enabled
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-config-loaded",
+            vecboost::i18n::tr_args(&[
+                (
+                    "auth_mode",
+                    &vecboost::i18n::tr(if config.auth.enabled {
+                        "auth-mode-enabled"
+                    } else {
+                        "auth-mode-disabled"
+                    }),
+                ),
+                ("auth", &config.auth.enabled.to_string()),
+                ("audit", &config.audit.enabled.to_string()),
+            ]),
+        )
     );
 
     // 会话后端校验提前到 DB 池初始化之前：database + auth 关闭等矛盾配置
@@ -2188,7 +2205,7 @@ fn enforce_encryption_gate(config: &VecboostConfig) -> anyhow::Result<()> {
                 )
             ));
         }
-        log::info!("Encryption key validated (VECBOOST_REQUIRE_ENCRYPTION=1)");
+        log::info!("{}", vecboost::i18n::tr("log-main-encryption-validated"));
     } else {
         // 检测到敏感配置但未设加密 key → 提示明文存储风险(不强制,
         // VECBOOST_REQUIRE_ENCRYPTION=1 才拒绝启动)
@@ -2209,7 +2226,8 @@ fn enforce_encryption_gate(config: &VecboostConfig) -> anyhow::Result<()> {
             .unwrap_or(false);
         if should_warn_plaintext_secrets(has_jwt, has_pw, has_key) {
             log::warn!(
-                "Sensitive config (jwt_secret / default_admin_password) is present but                  VECBOOST_ENCRYPTION_KEY is not set — values are stored in plaintext.                  Set VECBOOST_ENCRYPTION_KEY to encrypt, or VECBOOST_REQUIRE_ENCRYPTION=1                  to enforce encryption at startup."
+                "{}",
+                vecboost::i18n::tr("log-main-plaintext-secrets-warning")
             );
         }
     }
@@ -2295,10 +2313,10 @@ fn init_audit_logger(
     #[cfg(feature = "db")] db_pool: crate::DbPool,
 ) -> Option<Arc<AuditLogger>> {
     if !config.audit.enabled {
-        log::warn!("Audit logging is DISABLED - security events will not be logged!");
+        log::warn!("{}", vecboost::i18n::tr("log-main-audit-disabled"));
         return None;
     }
-    log::info!("Audit logging enabled");
+    log::info!("{}", vecboost::i18n::tr("log-main-audit-enabled"));
     let audit_config = AuditConfig {
         enabled: true,
         log_file_path: std::path::PathBuf::from(&config.audit.log_file_path),
@@ -2324,28 +2342,40 @@ async fn install_signal_handlers() {
             match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
                 Ok(s) => s,
                 Err(e) => {
-                    log::error!("Failed to install SIGTERM handler: {}", e);
+                    log::error!(
+                        "{}",
+                        vecboost::i18n::tr_with_args(
+                            "log-main-sigterm-handler-failed",
+                            vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                        )
+                    );
                     // SIGTERM unavailable — continue with ctrl_c only
                     tokio::signal::ctrl_c().await.ok();
-                    log::info!("Received SIGINT, initiating graceful shutdown");
+                    log::info!("{}", vecboost::i18n::tr("log-main-sigint-shutdown"));
                     return;
                 }
             };
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
-                log::info!("Received SIGINT, initiating graceful shutdown");
+                log::info!("{}", vecboost::i18n::tr("log-main-sigint-shutdown"));
             }
             _ = sigterm.recv() => {
-                log::info!("Received SIGTERM, initiating graceful shutdown");
+                log::info!("{}", vecboost::i18n::tr("log-main-sigterm-shutdown"));
             }
         }
     }
     #[cfg(not(unix))]
     {
         if let Err(e) = tokio::signal::ctrl_c().await {
-            log::error!("Failed to install CTRL-C handler: {}", e);
+            log::error!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "log-main-ctrlc-handler-failed",
+                    vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
         }
-        log::info!("Received CTRL-C, initiating graceful shutdown");
+        log::info!("{}", vecboost::i18n::tr("log-main-ctrlc-shutdown"));
     }
 }
 
@@ -2451,7 +2481,7 @@ async fn assemble_and_serve_http(
         .map_err(|e| anyhow::anyhow!("Failed to set shutdown timeout: {}", e))?;
     register_shutdown_hooks(&shutdown_coordinator, &kit, &worker_manager)?;
 
-    log::info!("AsyncKit module registry built successfully");
+    log::info!("{}", vecboost::i18n::tr("log-main-registry-built"));
 
     let mut bg_tasks = tokio::task::JoinSet::<()>::new();
 
@@ -2467,7 +2497,13 @@ async fn assemble_and_serve_http(
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    log::info!("Server listening on {}", addr);
+    log::info!(
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-server-listening",
+            vecboost::i18n::tr_args(&[("addr", &addr)]),
+        )
+    );
 
     // Signal-aware graceful shutdown (SIGINT + SIGTERM)
     let signal = install_signal_handlers();
@@ -2748,14 +2784,14 @@ async fn run_server_lifecycle(
     .with_graceful_shutdown(signal)
     .await?;
 
-    log::info!("Server stopped, executing phased shutdown...");
+    log::info!("{}", vecboost::i18n::tr("log-main-server-stopped"));
 
     // gRPC drain 窗口 —— HTTP 已停止;给在途 gRPC 调用一个有界完成窗口
     // 再 abort。sdforge server API 无 shutdown 注入口,无法做 tonic 级
     // graceful drain(复制鉴权拦截器有安全漂移风险,实施期决策)。
     #[cfg(feature = "grpc")]
     if _config.server.grpc_enabled {
-        log::info!("gRPC drain window: waiting up to 30s for in-flight calls");
+        log::info!("{}", vecboost::i18n::tr("log-main-grpc-drain-window"));
         let deadline = tokio::time::sleep(std::time::Duration::from_secs(
             _config.server.grpc_timeout_seconds.unwrap_or(5).min(30),
         ));
@@ -2776,17 +2812,29 @@ async fn run_server_lifecycle(
     let shutdown_result = match shutdown_coordinator.shutdown().await {
         Ok(result) => result,
         Err(e) => {
-            log::warn!("Shutdown coordinator error: {}", e);
+            log::warn!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "log-main-shutdown-coordinator-error",
+                    vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
             return Err(anyhow::anyhow!("Phased shutdown failed: {}", e));
         }
     };
     if !shutdown_result.is_ok() {
         log::warn!(
-            "Shutdown timed out on phases: {:?}",
-            shutdown_result.timed_out_phases()
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-shutdown-timeout",
+                vecboost::i18n::tr_args(&[(
+                    "phases",
+                    &format!("{:?}", shutdown_result.timed_out_phases())
+                )]),
+            )
         );
     }
-    log::info!("VecBoost shutdown complete");
+    log::info!("{}", vecboost::i18n::tr("log-main-shutdown-complete"));
 
     Ok(())
 }
@@ -2882,20 +2930,14 @@ async fn spawn_grpc_server(
             if config.auth.jwt_secret.is_none() {
                 anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-no-secret"));
             }
-            log::info!(
-                "gRPC garrison auth layer enabled (full session validation, \
-                 revocation shared with HTTP)"
-            );
+            log::info!("{}", vecboost::i18n::tr("log-main-grpc-auth-enabled"));
         }
         #[cfg(not(feature = "auth"))]
         {
             anyhow::bail!("{}", vecboost::i18n::tr("startup-grpc-no-feature"));
         }
     } else {
-        log::warn!(
-            "gRPC server starting with require_auth=false — \
-                 this is insecure; use only for development behind network isolation"
-        );
+        log::warn!("{}", vecboost::i18n::tr("log-main-grpc-auth-insecure"));
     }
 
     // Build sdforge rate_limiter (gated by sdforge/ratelimit feature, which
@@ -2909,15 +2951,11 @@ async fn spawn_grpc_server(
         .await
         {
             Ok(limiter) => {
-                log::info!(
-                    "gRPC rate_limiter enabled (sdforge LimiteronAdapter, default config: 100 burst / 10 req/s)"
-                );
+                log::info!("{}", vecboost::i18n::tr("log-main-grpc-ratelimit-enabled"));
                 Some(std::sync::Arc::new(limiter))
             }
             Err(_) => {
-                log::warn!(
-                    "gRPC rate_limiter initialization timed out after 10s, starting without rate limiting"
-                );
+                log::warn!("{}", vecboost::i18n::tr("log-main-grpc-ratelimit-timeout"));
                 None
             }
         }
@@ -2936,13 +2974,25 @@ async fn spawn_grpc_server(
     let max_connections = config.server.grpc_max_connections.unwrap_or(1000);
     let timeout_seconds = config.server.grpc_timeout_seconds.unwrap_or(30);
 
-    log::info!("gRPC server enabled on {}", grpc_addr);
+    log::info!(
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-main-grpc-server-enabled",
+            vecboost::i18n::tr_args(&[("addr", &grpc_addr)]),
+        )
+    );
     bg_tasks.spawn(async move {
         // 地址校验沿用 build_server_with_config 的安全修复（先解析后绑定，错误仅记日志）
         let addr: std::net::SocketAddr = match grpc_addr.parse() {
             Ok(a) => a,
             Err(e) => {
-                log::error!("Invalid gRPC server address format: {}", e);
+                log::error!(
+                    "{}",
+                    vecboost::i18n::tr_with_args(
+                        "log-main-grpc-address-invalid",
+                        vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                    )
+                );
                 return;
             }
         };
@@ -2977,7 +3027,13 @@ async fn spawn_grpc_server(
             builder.add_service(forge_service).serve(addr).await
         };
         if let Err(e) = served {
-            log::error!("gRPC server error: {}", e);
+            log::error!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "log-main-grpc-server-error",
+                    vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                )
+            );
         }
     });
 
@@ -2987,38 +3043,59 @@ async fn spawn_grpc_server(
 /// 启动配置文件监视任务(热重载校验;变更后重启生效,见 README)。
 fn spawn_config_watcher(bg_tasks: &mut tokio::task::JoinSet<()>, config_path: Option<String>) {
     bg_tasks.spawn(async move {
-            // FsWatcher requires the file to exist; skip gracefully if not
-            let config_path = config_path.as_deref().unwrap_or("config/config.toml");
-            let mut fs_watcher = match confers::watcher::FsWatcher::new(config_path, 200).await {
-                Ok(w) => {
-                    log::info!("Config file watcher started for {}", config_path);
-                    w
+        // FsWatcher requires the file to exist; skip gracefully if not
+        let config_path = config_path.as_deref().unwrap_or("config/config.toml");
+        let mut fs_watcher = match confers::watcher::FsWatcher::new(config_path, 200).await {
+            Ok(w) => {
+                log::info!(
+                    "{}",
+                    vecboost::i18n::tr_with_args(
+                        "log-main-config-watcher-started",
+                        vecboost::i18n::tr_args(&[("path", config_path)]),
+                    )
+                );
+                w
+            }
+            Err(e) => {
+                log::warn!(
+                    "{}",
+                    vecboost::i18n::tr_with_args(
+                        "log-main-config-watcher-not-started",
+                        vecboost::i18n::tr_args(&[
+                            ("path", config_path),
+                            ("error", &format!("{e:?}")),
+                        ]),
+                    )
+                );
+                return;
+            }
+        };
+        // 热重载校验跟随 --config 路径（否则自定义配置的变更会被默认路径误校验）
+        let reload_path = config_path.to_string();
+        while let Some(changed_path) = fs_watcher.recv().await {
+            log::info!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "log-main-config-changed",
+                    vecboost::i18n::tr_args(&[("path", &format!("{changed_path:?}"))]),
+                )
+            );
+            match VecboostConfig::load_via_confers_with_path(&reload_path) {
+                Ok(_new_config) => {
+                    log::info!("{}", vecboost::i18n::tr("log-main-config-reloaded"));
                 }
                 Err(e) => {
-                    log::warn!(
-                        "Config file watcher not started ({} not found or error: {:?})",
-                        config_path,
-                        e
+                    log::error!(
+                        "{}",
+                        vecboost::i18n::tr_with_args(
+                            "log-main-config-reload-failed",
+                            vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+                        )
                     );
-                    return;
-                }
-            };
-            // 热重载校验跟随 --config 路径（否则自定义配置的变更会被默认路径误校验）
-            let reload_path = config_path.to_string();
-            while let Some(changed_path) = fs_watcher.recv().await {
-                log::info!("Config file changed: {:?}, reloading...", changed_path);
-                match VecboostConfig::load_via_confers_with_path(&reload_path) {
-                    Ok(_new_config) => {
-                        log::info!(
-                            "Configuration reloaded and validated successfully (hot-swap pending trait-kit AsyncKit reload)"
-                        );
-                    }
-                    Err(e) => {
-                        log::error!("Failed to reload configuration: {}", e);
-                    }
                 }
             }
-            log::info!("Config file watcher stopped");
+        }
+        log::info!("{}", vecboost::i18n::tr("log-main-config-watcher-stopped"));
     });
 }
 

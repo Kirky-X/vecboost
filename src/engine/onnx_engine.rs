@@ -53,8 +53,12 @@ fn resolve_local_bundle(
     } else {
         let mut candidates: Vec<PathBuf> = std::fs::read_dir(model_dir)
             .map_err(|e| {
-                VecboostError::ModelLoadError(format!(
-                    "No ONNX model found in {model_dir:?}: cannot read directory ({e})"
+                VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-no-onnx-model-found-in-model-dir-cannot-read-director-a0c99",
+                    crate::i18n::tr_args(&[
+                        ("model_dir", &format!("{:?}", model_dir)),
+                        ("e", &e.to_string()),
+                    ]),
                 ))
             })?
             .filter_map(|entry| entry.ok().map(|e| e.path()))
@@ -63,8 +67,9 @@ fn resolve_local_bundle(
         candidates.sort();
         match candidates.as_slice() {
             [] => {
-                return Err(VecboostError::ModelLoadError(format!(
-                    "No ONNX model found in {model_dir:?}"
+                return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-no-onnx-model-found-in-model-dir-29059",
+                    crate::i18n::tr_args(&[("model_dir", &format!("{:?}", model_dir))]),
                 )));
             }
             [only] => only.clone(),
@@ -78,11 +83,12 @@ fn resolve_local_bundle(
                             .into_owned()
                     })
                     .collect();
-                return Err(VecboostError::ModelLoadError(format!(
-                    "Multiple ONNX candidates in {model_dir:?}: {}. Set \
-                     [model].model_path to a directory containing exactly one \
-                     ONNX file",
-                    names.join(", ")
+                return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-multiple-onnx-candidates-in-model-dir-set-model-model-5c964",
+                    crate::i18n::tr_args(&[
+                        ("model_dir", &format!("{:?}", model_dir)),
+                        ("p1", &names.join(", ").to_string()),
+                    ]),
                 )));
             }
         }
@@ -192,13 +198,19 @@ impl OnnxEngine {
                 crate::i18n::tr("log-engine-verifying-model-file-sha256")
             );
             let is_valid = verify_sha256(&onnx_filename, expected_hash).map_err(|e| {
-                VecboostError::ModelLoadError(format!("Failed to verify SHA256: {}", e))
+                VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-failed-to-verify-sha256-d222c",
+                    crate::i18n::tr_args(&[("p1", &e.to_string())]),
+                ))
             })?;
 
             if !is_valid {
-                return Err(VecboostError::ModelLoadError(format!(
-                    "Model file SHA256 verification failed. Expected: {}, File: {:?}",
-                    expected_hash, onnx_filename
+                return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                    "detail-model-file-sha256-verification-failed-expected-file-7475e",
+                    crate::i18n::tr_args(&[
+                        ("p1", &expected_hash.to_string()),
+                        ("p2", &format!("{:?}", onnx_filename)),
+                    ]),
                 )));
             }
 
@@ -513,9 +525,9 @@ impl OnnxEngine {
 
         let seq_len = attention_mask.iter().filter(|&&v| v == 1).count();
         if seq_len == 0 {
-            return Err(VecboostError::InferenceError(
-                "Empty sequence after mask".to_string(),
-            ));
+            return Err(VecboostError::InferenceError(crate::i18n::tr(
+                "detail-empty-sequence-after-mask-23d94",
+            )));
         }
 
         let mut flat = Vec::with_capacity(attention_mask.len() * self.hidden_size);
@@ -533,7 +545,10 @@ impl OnnxEngine {
     pub async fn try_fallback_to_cpu(&mut self, config: &ModelConfig) -> Result<(), VecboostError> {
         // 使用互斥锁确保只有一个线程执行降级
         let _lock = self.fallback_lock.lock().map_err(|e| {
-            VecboostError::InferenceError(format!("Failed to acquire fallback lock: {}", e))
+            VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-failed-to-acquire-fallback-lock-738e4",
+                crate::i18n::tr_args(&[("p1", &e.to_string())]),
+            ))
         })?;
 
         // 双重检查：获取锁后再次检查是否已经降级

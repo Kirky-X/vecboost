@@ -7,7 +7,7 @@
       "reason": "热路径常驻面（每请求/每分配触发）：按 MAINTENANCE 的日志分层原则保留英文原文，基线为上限、禁止增长；tr() 的 locale 解析与 FluentArgs 构造不应进入该路径"
     },
     "src/device/memory_pool/cuda_pool.rs": {
-      "count": 7,
+      "count": 5,
       "reason": "热路径常驻面（每请求/每分配触发）：按 MAINTENANCE 的日志分层原则保留英文原文，基线为上限、禁止增长；tr() 的 locale 解析与 FluentArgs 构造不应进入该路径"
     },
     "src/device/memory_pool/model_pool.rs": {
@@ -19,7 +19,7 @@
       "reason": "热路径常驻面（每请求/每分配触发）：按 MAINTENANCE 的日志分层原则保留英文原文，基线为上限、禁止增长；tr() 的 locale 解析与 FluentArgs 构造不应进入该路径"
     },
     "src/pipeline/worker.rs": {
-      "count": 17,
+      "count": 15,
       "reason": "热路径常驻面（每请求/每分配触发）：按 MAINTENANCE 的日志分层原则保留英文原文，基线为上限、禁止增长；tr() 的 locale 解析与 FluentArgs 构造不应进入该路径"
     },
     "src/pipeline/response_channel.rs": {

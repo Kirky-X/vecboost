@@ -62,14 +62,14 @@ impl SecurityConfig {
         match self.storage_type {
             StorageType::EncryptedFile => {
                 if self.encryption_key.is_none() {
-                    return Err(VecboostError::ConfigError(
-                        "Encryption key is required for encrypted file storage".to_string(),
-                    ));
+                    return Err(VecboostError::ConfigError(crate::i18n::tr(
+                        "detail-encryption-key-is-required-for-encrypted-file-storage-fa47a",
+                    )));
                 }
                 if self.key_file_path.is_none() {
-                    return Err(VecboostError::ConfigError(
-                        "Key file path is required for encrypted file storage".to_string(),
-                    ));
+                    return Err(VecboostError::ConfigError(crate::i18n::tr(
+                        "detail-key-file-path-is-required-for-encrypted-file-storage-5dee0",
+                    )));
                 }
             }
             StorageType::Environment => {}

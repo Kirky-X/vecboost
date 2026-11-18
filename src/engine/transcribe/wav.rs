@@ -16,33 +16,39 @@ use crate::error::VecboostError;
 /// （非 16-bit / 非 16kHz / 非 mono）→ [`VecboostError::InvalidInput`] 且消息含实际值。
 pub(crate) fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>, VecboostError> {
     let reader = hound::WavReader::open(path).map_err(|e| {
-        VecboostError::ModelLoadError(format!("open wav {} failed: {e}", path.display()))
+        VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+            "detail-open-wav-failed-e-529f2",
+            crate::i18n::tr_args(&[("p1", &path.display().to_string()), ("e", &e.to_string())]),
+        ))
     })?;
     let spec = reader.spec();
     if spec.sample_format != hound::SampleFormat::Int || spec.bits_per_sample != 16 {
-        return Err(VecboostError::InvalidInput(format!(
-            "expected 16-bit PCM wav, got {:?} {}-bit",
-            spec.sample_format, spec.bits_per_sample
+        return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+            "detail-expected-16-bit-pcm-wav-got-bit-6bfa5",
+            crate::i18n::tr_args(&[
+                ("p1", &format!("{:?}", spec.sample_format)),
+                ("p2", &spec.bits_per_sample.to_string()),
+            ]),
         )));
     }
     if spec.sample_rate != 16000 {
-        return Err(VecboostError::InvalidInput(format!(
-            "expected 16kHz wav (no resampling), got {}Hz",
-            spec.sample_rate
+        return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+            "detail-expected-16khz-wav-no-resampling-got-hz-5635c",
+            crate::i18n::tr_args(&[("p1", &spec.sample_rate.to_string())]),
         )));
     }
     if spec.channels != 1 {
-        return Err(VecboostError::InvalidInput(format!(
-            "expected mono wav, got {} channels",
-            spec.channels
+        return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+            "detail-expected-mono-wav-got-channels-c43cf",
+            crate::i18n::tr_args(&[("p1", &spec.channels.to_string())]),
         )));
     }
     let mut out = Vec::with_capacity(reader.duration() as usize);
     for s in reader.into_samples::<i16>() {
         let s = s.map_err(|e| {
-            VecboostError::ModelLoadError(format!(
-                "decode wav {} sample failed: {e}",
-                path.display()
+            VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-decode-wav-sample-failed-e-0f5e6",
+                crate::i18n::tr_args(&[("p1", &path.display().to_string()), ("e", &e.to_string())]),
             ))
         })?;
         out.push(s as f32 / 32768.0);

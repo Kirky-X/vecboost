@@ -6,7 +6,8 @@
 //! 走 encoder + merged decoder 双图，30s 窗口贪心解码。两者由
 //! `TranscriptionParams.backend` 在工厂层分发，既有 Qwen3 路径逐字不动。
 //!
-//! 并发契约：ort rc.13 禁同 Session 并发 Run → 实例内 `Mutex` 串行；
+//! 并发契约：ort rc.15 `Session::run(&mut self)` 编译期强制独占 → 实例内 `Mutex`
+//! 串行为冗余但无害的额外保障（历史口径 rc.13，Cargo.lock:4984 实际 rc.15）；
 //! POC 的 worker/batch/gpu/env_pool 并行旋钮**不进库**（段级并行由调用方持多引擎实例承担）。
 //! VAD 每请求新建（`SileroVadModel` 持 LSTM h/c 状态、`detect_segments` 按值消费，
 //! 忠实于 POC `main.rs:182-184` 的每次检测新建）；VAD 加载/推理错误显性上报，
@@ -248,8 +249,9 @@ impl Qwen3AsrEngine {
 /// 不重复构造。标准 whisper bundle **不含** silero_vad.onnx（HF onnx-community/
 /// whisper-large-v3-turbo/onnx 目录实测），须从 Qwen3 bundle 拷贝或独立下载到
 /// models_dir；load 期显式探测，缺失即 ModelLoadError，禁止静默降级为
-/// 「跳过 VAD 整段转录」。CPU 恒定：transcribe 图恒按 CPU EP 加载，
-/// 无在线 GPU→CPU 回退（与 Qwen3 同口径）。
+/// 「跳过 VAD 整段转录」。EP 随 `config.device` 分发（device=Cuda 时 CUDA
+/// EP），与 Qwen3 同口径；无在线 GPU→CPU 回退（`try_fallback_to_cpu` 显性
+/// 拒绝），旧注释「CPU 恒定」与实际 EP 分发不符，已修正。
 pub(crate) struct WhisperAsrEngine {
     asr: Mutex<WhisperAsr>,
     tokenizer: WhisperTokenizer,

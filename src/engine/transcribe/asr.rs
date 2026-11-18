@@ -284,8 +284,9 @@ pub struct Qwen3Asr {
 }
 
 impl Qwen3Asr {
-    /// 每个 worker 独立加载一套 session（ort rc.13 禁止并发 Run 同一 Session，
-    /// session/mod.rs:118-122 官方推荐 per-thread session；权重内存 ×worker 数）。
+    /// 每个 worker 独立加载一套 session（ort rc.15 `Session::run` 为 `&mut self`
+    /// 编译期强制独占；session/mod.rs:118-122 官方推荐 per-thread session；
+    /// 权重内存 ×worker 数）。
     /// 三图先探测后构建（decision/translate 同款"探测先于 Session::builder"——
     /// ort/load-dynamic 缺动态库时 builder 触发 non-unwinding panic，缺失必须
     /// 在此之前以 ModelLoadError 显性返回）。

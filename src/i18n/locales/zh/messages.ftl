@@ -27,6 +27,7 @@ model-already-current = 已在使用该模型
 model-load-failed = 加载模型 '{ $name }' 失败：{ $detail }
 switch-path-rejected = 路径被拒绝：必须是允许根目录内已存在的路径（model_path 须为目录、tokenizer_path 须为文件）；详见服务端日志
 switch-model-load-failed = 模型加载失败；详见服务端日志
+transcribe-model-load-failed = 转录模型加载或处理失败；详见服务端日志
 
 # ── 文件嵌入 ──
 file-empty = 文件为空
@@ -533,6 +534,7 @@ log-api-failed-revoke-old-refresh = 刷新时吊销旧 refresh token 失败（lo
 log-api-login-rejected-auth-enabled = 登录被拒：认证已启用但未配置管理员密码（缺少 VECBOOST_ADMIN_PASSWORD）
 log-api-switch-path-validation-rejected = switch 路径校验拒绝 { $field }={ $path }：{ $e }
 log-api-switch-model-failed-e = switch_model 失败：{ $e }
+log-api-transcribe-failed-e = transcribe 失败：{ $e }
 log-api-batch-rerank-individual-query = 批量 rerank：单条查询失败，跳过：{ $a1 }
 log-auth-auth-endpoint-rate-limit = 认证端点触发限流（IP：{ $a1 }）
 log-auth-ratelimitmodule-registered = RateLimitModule 未注册：{ $a1 }

@@ -27,6 +27,7 @@ model-already-current = Already using this model
 model-load-failed = Failed to load model '{ $name }': { $detail }
 switch-path-rejected = path rejected: must be an existing path inside the allowed roots (model_path must be a directory, tokenizer_path must be a file); see server logs
 switch-model-load-failed = model load failed; see server logs
+transcribe-model-load-failed = transcription model failed to load or process; see server logs
 
 # ── File embedding ──
 file-empty = File is empty
@@ -534,6 +535,7 @@ log-api-failed-revoke-old-refresh = Failed to revoke old refresh token during re
 log-api-login-rejected-auth-enabled = Login rejected: auth is enabled but no admin password is configured (missing VECBOOST_ADMIN_PASSWORD). This should have failed at startup.
 log-api-switch-path-validation-rejected = switch path validation rejected { $field }={ $path }: { $e }
 log-api-switch-model-failed-e = switch_model failed: { $e }
+log-api-transcribe-failed-e = transcribe failed: { $e }
 log-api-batch-rerank-individual-query = Batch rerank: individual query failed, skipping: { $a1 }
 log-auth-auth-endpoint-rate-limit = Auth endpoint rate limit exceeded for IP: { $a1 }
 log-auth-ratelimitmodule-registered = RateLimitModule not registered: { $a1 }

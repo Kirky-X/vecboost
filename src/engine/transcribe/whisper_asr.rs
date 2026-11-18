@@ -21,9 +21,9 @@
 //! 未做 ORT 实跑：I/O 名/形来自官方 protobuf 元数据，加载时逐项 I/O 内省 + 显性校验，
 //! 量化变体 I/O 未逐一验证，命中后仍走同一守卫，不符即 `ModelLoadError`，不静默降级。
 //!
-//! 并发契约（与 `Qwen3Asr` 同口径，见 asr.rs:286-293）：ort rc.13 禁同 Session 并发
-//! Run，`Session` 同步且 `&self` 可 Run，但并发 Run 未定义；实例内串行由上层 `Mutex`
-//! 负责，本结构**不自带锁**（worker 多实例由调用方承担）。
+//! 并发契约（与 `Qwen3Asr` 同口径，见 asr.rs:286-293）：ort rc.15 `Session::run`
+//! 为 `&mut self`，编译期即强制独占；实例内串行由上层 `Mutex` 负责（冗余但无害
+//! 的双保险），本结构**不自带锁**（worker 多实例由调用方承担）。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -233,7 +233,10 @@ fn expected_io() -> (Vec<IoSpec>, Vec<IoSpec>, Vec<IoSpec>, Vec<IoSpec>) {
     let enc_out = vec![(
         OUT_LAST_HIDDEN.to_string(),
         TensorElementType::Float32,
-        vec![-1, ENCODER_SEQ_LEN as i64, ENCODER_HIDDEN as i64],
+        // 序列维通配：onnx-community 导出按 dynamic axes 导出，实图声明
+        // [-1,-1,1280]（e2e 实测）；运行期恒喂 [1,1500,1280]，通配不弱化
+        // 结构校验（rank/dtype/隐藏维仍钉死）。
+        vec![-1, -1, ENCODER_HIDDEN as i64],
     )];
 
     let mut dec_in: Vec<IoSpec> = vec![
@@ -245,7 +248,8 @@ fn expected_io() -> (Vec<IoSpec>, Vec<IoSpec>, Vec<IoSpec>, Vec<IoSpec>) {
         (
             IN_ENCODER_HIDDEN.to_string(),
             TensorElementType::Float32,
-            vec![-1, ENCODER_SEQ_LEN as i64, ENCODER_HIDDEN as i64],
+            // 序列维通配：实图声明 [-1,-1,1280]（e2e 实测），理由同上 enc_out。
+            vec![-1, -1, ENCODER_HIDDEN as i64],
         ),
     ];
     let mut dec_out: Vec<IoSpec> = vec![(
@@ -401,15 +405,17 @@ impl WhisperAsr {
                     .map_err(whisper_infer)?,
             ),
         );
+        // enc_hidden 整窗不变（每窗 encode 一次），经 TensorRef 视图借用调用方
+        // 切片，消除每步 7.68MB 的所有权拷贝（448 步/窗 ≈ 3.44GB，同 past KV
+        // 高危同源；零拷贝先例 onnx_translate.rs encoder hidden 视图）。
+        let enc_hidden_view = TensorRef::from_array_view((
+            vec![1i64, ENCODER_SEQ_LEN as i64, ENCODER_HIDDEN as i64],
+            enc_hidden,
+        ))
+        .map_err(whisper_infer)?;
         inputs.insert(
             IN_ENCODER_HIDDEN,
-            SessionInputValue::from(
-                Tensor::from_array((
-                    vec![1i64, ENCODER_SEQ_LEN as i64, ENCODER_HIDDEN as i64],
-                    enc_hidden.to_vec(),
-                ))
-                .map_err(whisper_infer)?,
-            ),
+            SessionInputValue::from(&*enc_hidden_view),
         );
         inputs.insert(
             IN_USE_CACHE_BRANCH,

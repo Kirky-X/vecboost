@@ -126,41 +126,6 @@ pub(crate) fn resolve_graph_paths(models_dir: &Path) -> WhisperResult<WhisperGra
     })
 }
 
-/// f32-only I/O 守卫（同 asr.rs:89-132 口径，本模块不导出该私有函数故同款复制）：
-/// 只允许 FLOAT32 / INT64 / BOOL，拒绝 fp16/bf16/f64——KV 与 logits 均按 f32 提取，
-/// 半精度图能加载但会在首次 Run 炸掉，这里在构建后显性拒绝（禁"加载成功、请求才失败"）。
-fn element_type_supported(ty: &TensorElementType) -> bool {
-    matches!(
-        ty,
-        TensorElementType::Float32 | TensorElementType::Int64 | TensorElementType::Bool
-    )
-}
-
-fn ensure_f32_io(session: &Session, role: &str) -> WhisperResult<()> {
-    for (i, input) in session.inputs().iter().enumerate() {
-        if let ValueType::Tensor { ty, .. } = input.dtype()
-            && !element_type_supported(ty)
-        {
-            return Err(whisper_load(format!(
-                "{role} input[{i}] '{}' dtype {ty:?} unsupported: f32-only graph required \
-                 (KV and logits extracted as f32)",
-                input.name()
-            )));
-        }
-    }
-    for (i, output) in session.outputs().iter().enumerate() {
-        if let ValueType::Tensor { ty, .. } = output.dtype()
-            && !element_type_supported(ty)
-        {
-            return Err(whisper_load(format!(
-                "{role} output[{i}] '{}' dtype {ty:?} unsupported: f32-only graph required",
-                output.name()
-            )));
-        }
-    }
-    Ok(())
-}
-
 /// I/O 期望：(名字, dtype, 形状；-1 = 动态维通配)。
 type IoSpec = (String, TensorElementType, Vec<i64>);
 
@@ -321,11 +286,37 @@ pub(crate) fn transpose_mel(mel: &[f32], frames: usize) -> Vec<f32> {
     out
 }
 
+/// 30s 切窗 + fbank + 转置的预处理段（纯 CPU、无 Session 依赖）：从
+/// `transcribe` 拆出的锁外段。>30s 按 30s 切窗（`window_ranges`），尾窗
+/// 零填充（`padded_window`），mel 长度不足即显性报错（契约不变）。
+pub(crate) fn precompute_windows(
+    samples: &[f32],
+    fbank: &WhisperFbank,
+) -> WhisperResult<Vec<Vec<f32>>> {
+    if samples.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ranges = window_ranges(samples.len());
+    let mut feats_all = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        let window = padded_window(samples, start, end);
+        let mel = fbank.compute(&window);
+        if mel.len() < WINDOW_FRAMES * MEL_DIM {
+            return Err(whisper_load(format!(
+                "mel len {} < {} (window frames)",
+                mel.len(),
+                WINDOW_FRAMES * MEL_DIM
+            )));
+        }
+        feats_all.push(transpose_mel(&mel, WINDOW_FRAMES));
+    }
+    Ok(feats_all)
+}
+
 /// whisper 推理会话：encoder + merged decoder 双图，KV 缓存驻留本结构。
 pub struct WhisperAsr {
     encoder: Session,
     decoder: Session,
-    fbank: WhisperFbank,
     /// decoder self-attention KV，每步由 present.* 更新（首步前为空 → 第三维 0）。
     past_dec: Vec<(Vec<f32>, Vec<f32>)>,
     /// encoder cross-attention KV，首步由 present.encoder.* 取得，后续步沿用。
@@ -342,8 +333,8 @@ impl WhisperAsr {
         let graphs = resolve_graph_paths(models_dir)?;
         let encoder = session_from(&graphs.encoder, opts)?;
         let decoder = session_from(&graphs.decoder, opts)?;
-        ensure_f32_io(&encoder, "whisper encoder")?;
-        ensure_f32_io(&decoder, "whisper decoder")?;
+        super::asr::ensure_f32_io(&encoder, "whisper encoder", whisper_load)?;
+        super::asr::ensure_f32_io(&decoder, "whisper decoder", whisper_load)?;
         let (enc_in, enc_out, dec_in, dec_out) = expected_io();
         check_io(&encoder, true, &enc_in, "whisper encoder")?;
         check_io(&encoder, false, &enc_out, "whisper encoder")?;
@@ -354,7 +345,6 @@ impl WhisperAsr {
             Self {
                 encoder,
                 decoder,
-                fbank: WhisperFbank::new(),
                 past_dec: Vec::with_capacity(NUM_DECODER_LAYERS),
                 past_enc: Vec::with_capacity(NUM_DECODER_LAYERS),
             },
@@ -516,30 +506,21 @@ impl WhisperAsr {
         Ok(next)
     }
 
-    /// 一段样本 → 贪心解码文本。>30s 按 30s 切窗，尾窗零填充，逐窗独立转录后拼接。
-    pub fn transcribe(
+    /// 已预计算逐窗 feats → 贪心解码文本，逐窗转录后拼接。调用方必须在
+    /// **锁外**用 [`precompute_windows`] 产出 feats（预处理纯 CPU，不持
+    /// Session 锁；审查发现的锁粒度问题：3000 帧 FFT 持锁会排空并发请求）。
+    pub fn transcribe_precomputed(
         &mut self,
-        samples: &[f32],
+        feats_all: Vec<Vec<f32>>,
         tok: &WhisperTokenizer,
         language: Option<&str>,
     ) -> WhisperResult<String> {
-        if samples.is_empty() {
+        if feats_all.is_empty() {
             return Ok(String::new());
         }
         let prompt = tok.sot_prompt(language)?;
-        let ranges = window_ranges(samples.len());
-        let mut texts = Vec::with_capacity(ranges.len());
-        for (start, end) in ranges {
-            let window = padded_window(samples, start, end);
-            let mel = self.fbank.compute(&window);
-            if mel.len() < WINDOW_FRAMES * MEL_DIM {
-                return Err(whisper_load(format!(
-                    "mel len {} < {} (window frames)",
-                    mel.len(),
-                    WINDOW_FRAMES * MEL_DIM
-                )));
-            }
-            let feats = transpose_mel(&mel, WINDOW_FRAMES);
+        let mut texts = Vec::with_capacity(feats_all.len());
+        for feats in feats_all {
             let enc_hidden = self.encode(&feats)?;
 
             // 每窗独立解码：首步必须传空 past（第三维 0），否则上一段的 KV 会被

@@ -28,6 +28,8 @@ model-load-failed = 加载模型 '{ $name }' 失败：{ $detail }
 switch-path-rejected = 路径被拒绝：必须是允许根目录内已存在的路径（model_path 须为目录、tokenizer_path 须为文件）；详见服务端日志
 switch-model-load-failed = 模型加载失败；详见服务端日志
 transcribe-model-load-failed = 转录模型加载或处理失败；详见服务端日志
+transcribe-backend-ambiguous = models_dir 同时包含 whisper 与 qwen3-asr 两套图，请显式指定 backend
+log-transcribe-backend-selected = 已选转录后端：{ $backend }
 
 # ── 文件嵌入 ──
 file-empty = 文件为空

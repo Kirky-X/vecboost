@@ -171,6 +171,32 @@ pub trait VadModel {
     fn set_threshold(&mut self, threshold: f32);
 }
 
+/// `&mut M` 的委托实现：使借用形态检测（detect_with_segments）无需移动
+/// 所有权即可驱动任意 VadModel——Session 复用（引擎持 Mutex）的关键拼图。
+impl<M: VadModel> VadModel for &mut M {
+    fn is_speech(&mut self, window: &[f32]) -> VadResult<bool> {
+        (**self).is_speech(window)
+    }
+    fn window_size(&self) -> i32 {
+        (**self).window_size()
+    }
+    fn window_shift(&self) -> i32 {
+        (**self).window_shift()
+    }
+    fn min_silence_samples(&self) -> i32 {
+        (**self).min_silence_samples()
+    }
+    fn min_speech_samples(&self) -> i32 {
+        (**self).min_speech_samples()
+    }
+    fn set_min_silence_duration(&mut self, seconds: f32) {
+        (**self).set_min_silence_duration(seconds)
+    }
+    fn set_threshold(&mut self, threshold: f32) {
+        (**self).set_threshold(threshold)
+    }
+}
+
 /// LSTM 状态零初始化并在窗间滚动（silero-vad-model.cc:247-267, 416-449）。
 pub struct SileroVadModel {
     session: Session,
@@ -196,6 +222,21 @@ impl SileroVadModel {
             h: vec![0.0; LSTM_STATE_ELEMS],
             c: vec![0.0; LSTM_STATE_ELEMS],
         })
+    }
+
+    /// 复用形态整段检测（Session 复用入口）：显性清零 LSTM h/c 后检测。
+    /// 语义与“每请求全新模型”等价——state machine 本就随
+    /// VoiceActivityDetector::new 每次全新构造，唯一跨请求残留是 h/c，
+    /// 此处显性归零；省去 Session::builder/commit 的固定加载开销
+    /// （审查发现：短音频的 VAD 加载开销可能超过推理本身）。
+    pub fn detect(&mut self, samples: &[f32], config: &VadConfig) -> VadResult<Vec<SpeechSegment>> {
+        for v in self.h.iter_mut() {
+            *v = 0.0;
+        }
+        for v in self.c.iter_mut() {
+            *v = 0.0;
+        }
+        detect_with_segments(self, samples, config)
     }
 
     fn run_window(&mut self, window: &[f32]) -> VadResult<f32> {
@@ -424,8 +465,11 @@ impl<M: VadModel> VoiceActivityDetector<M> {
 /// 尾部不足一窗时 Flush、时长 <0.1s 的段丢弃。
 /// 注意：与该参考一致，样本数为窗长整数倍时不会触发 Flush，
 /// 延续到文件尾且未闭合的语音段会被丢弃。
-pub fn detect_segments<M: VadModel>(
-    model: M,
+/// 借用形态整段检测：供复用同一 VAD Session 的引擎路径（每请求显性重置
+/// 后调用）。`&mut M` 经下方 blanket impl 获得 VadModel 能力，泛型/mock
+/// 用法不受影响。
+pub fn detect_with_segments<M: VadModel>(
+    model: &mut M,
     samples: &[f32],
     config: &VadConfig,
 ) -> VadResult<Vec<SpeechSegment>> {
@@ -497,7 +541,12 @@ mod tests {
     fn run_mock(probs: &[f32]) -> Vec<SpeechSegment> {
         let n_windows = probs.len();
         let samples = vec![0.0f32; n_windows * 512];
-        detect_segments(MockVadModel::new(probs), &samples, &VadConfig::default()).unwrap()
+        detect_with_segments(
+            &mut MockVadModel::new(probs),
+            &samples,
+            &VadConfig::default(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -565,8 +614,12 @@ mod tests {
     fn flush_captures_open_segment_on_short_tail() {
         let probs = vec![0.9f32; 70];
         let samples = vec![0.0f32; 70 * 512 + 100];
-        let segs =
-            detect_segments(MockVadModel::new(&probs), &samples, &VadConfig::default()).unwrap();
+        let segs = detect_with_segments(
+            &mut MockVadModel::new(&probs),
+            &samples,
+            &VadConfig::default(),
+        )
+        .unwrap();
         assert_eq!(
             segs,
             vec![SpeechSegment {
@@ -580,8 +633,12 @@ mod tests {
     fn window_aligned_eof_drops_open_segment_like_reference() {
         let probs = vec![0.9f32; 70];
         let samples = vec![0.0f32; 70 * 512];
-        let segs =
-            detect_segments(MockVadModel::new(&probs), &samples, &VadConfig::default()).unwrap();
+        let segs = detect_with_segments(
+            &mut MockVadModel::new(&probs),
+            &samples,
+            &VadConfig::default(),
+        )
+        .unwrap();
         assert!(segs.is_empty());
     }
 
@@ -589,8 +646,12 @@ mod tests {
     fn flush_segment_on_short_tail() {
         let probs = vec![0.9f32; 9];
         let samples = vec![0.0f32; 9 * 512 + 100];
-        let segs =
-            detect_segments(MockVadModel::new(&probs), &samples, &VadConfig::default()).unwrap();
+        let segs = detect_with_segments(
+            &mut MockVadModel::new(&probs),
+            &samples,
+            &VadConfig::default(),
+        )
+        .unwrap();
         assert_eq!(
             segs,
             vec![SpeechSegment {

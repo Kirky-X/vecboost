@@ -13,7 +13,6 @@
 //! 忠实于 POC `main.rs:182-184` 的每次检测新建）；VAD 加载/推理错误显性上报，
 //! 禁止静默降级为「跳过 VAD 整段转录」。
 
-use std::path::PathBuf;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -27,19 +26,50 @@ use crate::error::VecboostError;
 use super::asr::{AsrSessionOpts, Qwen3Asr};
 use super::features::{MEL_DIM, WhisperFbank};
 use super::tokenizer::AsrTokenizer;
-use super::vad::{SileroVadModel, VadConfig, detect_segments};
+use super::vad::{SileroVadModel, VadConfig};
 use super::{WhisperAsr, WhisperGraphPaths, WhisperTokenizer};
 
 /// 采样率（Hz）——秒换算分母，与 vad/features 一致。
 const SAMPLE_RATE_HZ: f64 = 16000.0;
 
-/// Qwen3-ASR 引擎：`asr` 实例内互斥串行，VAD 每请求重建，fbank/tokenizer 复用。
+/// Mutex poison → 显性 InferenceError（asr/vad 共用同一 i18n key）。
+/// 此前 Qwen3 内联、Whisper 抽方法两套写法并存（审查发现的不一致），提取为单一事实源。
+fn lock_poison<T>(m: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, VecboostError> {
+    m.lock().map_err(|e| {
+        VecboostError::InferenceError(crate::i18n::tr_with_args(
+            "detail-asr-mutex-poisoned-e-c380d",
+            crate::i18n::tr_args(&[("e", &e.to_string())]),
+        ))
+    })
+}
+
+/// VAD 复用段检测（两引擎共用骨架）：锁内经 `SileroVadModel::detect` 显性
+/// 重置后检测，段元组化。Session 复用免去每请求 commit 的固定加载开销
+/// （审查发现：短音频的 VAD 加载开销可能超过推理本身）；语义与「每请求
+/// 新建」等价——state machine 随 VoiceActivityDetector::new 每次全新构造，
+/// 唯一跨请求残留 LSTM h/c 由 detect() 显性清零。
+fn detect_vad_only(
+    vad: &Mutex<SileroVadModel>,
+    threshold: f32,
+    samples: &[f32],
+) -> Result<Vec<(i64, i64)>, VecboostError> {
+    let cfg = VadConfig {
+        threshold,
+        ..VadConfig::default()
+    };
+    let mut guard = lock_poison(vad)?;
+    let segments = guard.detect(samples, &cfg)?;
+    Ok(segments.into_iter().map(|s| (s.start, s.end)).collect())
+}
+
+/// Qwen3-ASR 引擎：`asr` 实例内互斥串行，VAD Session 复用（每请求显性重置），
+/// fbank/tokenizer 复用。
 pub(crate) struct Qwen3AsrEngine {
     asr: Mutex<Qwen3Asr>,
     fbank: WhisperFbank,
     tokenizer: AsrTokenizer,
-    /// silero_vad.onnx 路径（每请求据此新建带全新 LSTM 状态的模型）
-    vad_model_path: PathBuf,
+    /// VAD Session（load 期一次构建；每请求显性重置 LSTM 状态）
+    vad: Mutex<SileroVadModel>,
     vad_threshold: f32,
     precision: Precision,
 }
@@ -120,11 +150,21 @@ impl Qwen3AsrEngine {
             ))
         })?;
 
+        // VAD Session load 期一次构建：缺图/坏图在此显性失败（同 whisper 口径，
+        // 本仓纪律明确「加载成功、请求才失败」是反模式；旧路径把失败推迟到
+        // 首请求，属行为收紧而非放松，见提交说明）。
+        let vad = SileroVadModel::new(
+            &models_dir.join("silero_vad.onnx"),
+            &VadConfig {
+                threshold: vad_threshold,
+                ..VadConfig::default()
+            },
+        )?;
         Ok(Self {
             asr: Mutex::new(asr),
             fbank: WhisperFbank::new(),
             tokenizer,
-            vad_model_path: models_dir.join("silero_vad.onnx"),
+            vad: Mutex::new(vad),
             vad_threshold,
             precision,
         })
@@ -174,29 +214,33 @@ impl InferenceEngine for Qwen3AsrEngine {
         req.validate()?;
         let samples = &req.samples;
 
-        // VAD 每请求新建（带全新 LSTM h/c 状态）；加载/推理错误显性传播，禁止静默跳过。
-        let vad_config = VadConfig {
-            threshold: self.vad_threshold,
-            ..VadConfig::default()
+        // VAD：Session 复用 + 每请求显性重置（语义等价，见 detect_vad_only 文档）；
+        // 加载/推理错误显性传播，禁止静默跳过。锁仅在检测期持有。
+        let segments = {
+            let vad_config = VadConfig {
+                threshold: self.vad_threshold,
+                ..VadConfig::default()
+            };
+            let mut vad = lock_poison(&self.vad)?;
+            vad.detect(samples, &vad_config)?
         };
-        let vad_model = SileroVadModel::new(&self.vad_model_path, &vad_config)?;
-        let segments = detect_segments(vad_model, samples, &vad_config)?;
 
-        let mut asr = self.asr.lock().map_err(|e| {
-            VecboostError::InferenceError(crate::i18n::tr_with_args(
-                "detail-asr-mutex-poisoned-e-c380d",
-                crate::i18n::tr_args(&[("e", &e.to_string())]),
-            ))
-        })?;
-
-        let mut out: Vec<TranscribeSegment> = Vec::with_capacity(segments.len());
-        for seg in segments {
+        // 锁外预处理：mel 全量算好（fbank 无状态；asr 锁只护 ort Session Run，
+        // 特征提取不再串行化并发请求）。
+        let mut mels: Vec<(usize, usize, Vec<f32>)> = Vec::with_capacity(segments.len());
+        for seg in &segments {
             let start = seg.start.max(0) as usize;
             let end = (seg.end.max(0) as usize).min(samples.len());
             if end <= start {
                 continue;
             }
             let mel = self.fbank.compute(&samples[start..end]);
+            mels.push((start, end, mel));
+        }
+
+        let mut asr = lock_poison(&self.asr)?;
+        let mut out: Vec<TranscribeSegment> = Vec::with_capacity(mels.len());
+        for (start, end, mel) in mels {
             let num_frames = frame_count(&mel);
             let text = asr.transcribe(&mel, num_frames, &self.tokenizer)?;
             if text.is_empty() {
@@ -214,39 +258,28 @@ impl InferenceEngine for Qwen3AsrEngine {
 
 impl Qwen3AsrEngine {
     /// VAD-only 分段（门面消费：`transcribe-poc --vad-only` 与调用方段级
-    /// 并行调度都只要分段、不要解码）。每调用新建 VAD 模型（全新 LSTM 状态），
-    /// 与 `transcribe()` 内部分段同参同构。
+    /// 并行调度都只要分段、不要解码）。复用 VAD Session + 每请求显性重置，
+    /// 与 `transcribe()` 内部分段同参同构（共享 detect_vad_only 单一实现）。
     pub(crate) fn detect_vad_segments(
         &self,
         samples: &[f32],
     ) -> Result<Vec<(i64, i64)>, VecboostError> {
-        let vad_config = VadConfig {
-            threshold: self.vad_threshold,
-            ..VadConfig::default()
-        };
-        let model = SileroVadModel::new(&self.vad_model_path, &vad_config)?;
-        let segments = detect_segments(model, samples, &vad_config)?;
-        Ok(segments.into_iter().map(|s| (s.start, s.end)).collect())
+        detect_vad_only(&self.vad, self.vad_threshold, samples)
     }
 
     /// 段级转录（mel + 贪心解码；VAD 已由调用方完成——门面并行路径每 worker
-    /// 持本会话对分配段调用）。阻塞同步，可重入（内部 asr Mutex 串行化）。
+    /// 持本会话对分配段调用）。mel 在锁外计算，锁内仅 ort Run。
     pub(crate) fn transcribe_segment(&self, samples: &[f32]) -> Result<String, VecboostError> {
         let mel = self.fbank.compute(samples);
         let num_frames = frame_count(&mel);
-        let mut asr = self.asr.lock().map_err(|e| {
-            VecboostError::InferenceError(crate::i18n::tr_with_args(
-                "detail-asr-mutex-poisoned-e-c380d",
-                crate::i18n::tr_args(&[("e", &e.to_string())]),
-            ))
-        })?;
+        let mut asr = lock_poison(&self.asr)?;
         asr.transcribe(&mel, num_frames, &self.tokenizer)
     }
 }
 
-/// whisper ONNX 双图转录引擎：与 Qwen3 同口径（实例内 Mutex 串行、VAD 每请求
-/// 重建、精度按图内容判定）。fbank 与 30s 窗口预处理驻留 `WhisperAsr`，本结构
-/// 不重复构造。标准 whisper bundle **不含** silero_vad.onnx（HF onnx-community/
+/// whisper ONNX 双图转录引擎：与 Qwen3 同口径（实例内 Mutex 串行、VAD Session
+/// 复用每请求显性重置、精度按图内容判定）。fbank 与 30s 窗口预处理在**锁外**
+/// 执行（`precompute_windows`），本结构持独立 fbank。标准 whisper bundle **不含** silero_vad.onnx（HF onnx-community/
 /// whisper-large-v3-turbo/onnx 目录实测），须从 Qwen3 bundle 拷贝或独立下载到
 /// models_dir；load 期显式探测，缺失即 ModelLoadError，禁止静默降级为
 /// 「跳过 VAD 整段转录」。EP 随 `config.device` 分发（device=Cuda 时 CUDA
@@ -255,8 +288,10 @@ impl Qwen3AsrEngine {
 pub(crate) struct WhisperAsrEngine {
     asr: Mutex<WhisperAsr>,
     tokenizer: WhisperTokenizer,
-    /// silero_vad.onnx 路径（标准 whisper bundle 不含；load 期已探测存在）
-    vad_model_path: PathBuf,
+    /// 预处理用 fbank（纯 CPU 无状态；asr 锁只护 ort Session Run）
+    fbank: WhisperFbank,
+    /// VAD Session（load 期一次构建；每请求显性重置 LSTM 状态）
+    vad: Mutex<SileroVadModel>,
     vad_threshold: f32,
     precision: Precision,
 }
@@ -319,45 +354,44 @@ impl WhisperAsrEngine {
                 crate::i18n::tr_args(&[("path", &vad_model_path.display().to_string())]),
             )));
         }
+        let vad = SileroVadModel::new(
+            &vad_model_path,
+            &VadConfig {
+                threshold: vad_threshold,
+                ..VadConfig::default()
+            },
+        )?;
         Ok(Self {
             asr: Mutex::new(asr),
             tokenizer,
-            vad_model_path,
+            fbank: WhisperFbank::new(),
+            vad: Mutex::new(vad),
             vad_threshold,
             precision,
         })
     }
 
-    /// Mutex  Poison 显性化（与 Qwen3 同 key、同口径，禁止静默重试）。
+    /// Mutex Poison 显性化（共享 lock_poison，与 Qwen3 同 key、同口径）。
     fn lock_asr(&self) -> Result<std::sync::MutexGuard<'_, WhisperAsr>, VecboostError> {
-        self.asr.lock().map_err(|e| {
-            VecboostError::InferenceError(crate::i18n::tr_with_args(
-                "detail-asr-mutex-poisoned-e-c380d",
-                crate::i18n::tr_args(&[("e", &e.to_string())]),
-            ))
-        })
+        lock_poison(&self.asr)
     }
 
-    /// VAD-only 分段（门面消费：`--vad-only` 与段级并行调度）。每调用新建 VAD
-    /// 模型（全新 LSTM 状态），与 `transcribe()` 内部分段同参同构。
+    /// VAD-only 分段（门面消费：`--vad-only` 与段级并行调度）。复用 VAD
+    /// Session + 每请求显性重置，与 `transcribe()` 内部分段同参同构
+    /// （共享 detect_vad_only 单一实现）。
     pub(crate) fn detect_vad_segments(
         &self,
         samples: &[f32],
     ) -> Result<Vec<(i64, i64)>, VecboostError> {
-        let vad_config = VadConfig {
-            threshold: self.vad_threshold,
-            ..VadConfig::default()
-        };
-        let model = SileroVadModel::new(&self.vad_model_path, &vad_config)?;
-        let segments = detect_segments(model, samples, &vad_config)?;
-        Ok(segments.into_iter().map(|s| (s.start, s.end)).collect())
+        detect_vad_only(&self.vad, self.vad_threshold, samples)
     }
 
-    /// 段级转录：whisper 核心层自带 30s 切窗，故直接喂样本（不再经 fbank）。
-    /// 语言未配置时传 None（模型自判定），阻塞同步、可重入（Mutex 串行化）。
+    /// 段级转录：whisper 核心层自带 30s 切窗。切窗+fbank+转置在**锁外**
+    /// （`precompute_windows`），锁内仅 encode/forward 的 ort Run。
     pub(crate) fn transcribe_segment(&self, samples: &[f32]) -> Result<String, VecboostError> {
+        let feats = super::whisper_asr::precompute_windows(samples, &self.fbank)?;
         let mut asr = self.lock_asr()?;
-        asr.transcribe(samples, &self.tokenizer, None)
+        asr.transcribe_precomputed(feats, &self.tokenizer, None)
     }
 }
 
@@ -403,22 +437,33 @@ impl InferenceEngine for WhisperAsrEngine {
     fn transcribe(&self, req: &TranscribeRequest) -> Result<TranscribeResponse, VecboostError> {
         req.validate()?;
         let samples = &req.samples;
-        let vad_config = VadConfig {
-            threshold: self.vad_threshold,
-            ..VadConfig::default()
-        };
-        let vad_model = SileroVadModel::new(&self.vad_model_path, &vad_config)?;
-        let segments = detect_segments(vad_model, samples, &vad_config)?;
 
-        let mut asr = self.lock_asr()?;
-        let mut out: Vec<TranscribeSegment> = Vec::with_capacity(segments.len());
-        for seg in segments {
+        // VAD：Session 复用 + 每请求显性重置（共享骨架，语义等价）；锁仅检测期持有。
+        let segments = {
+            let vad_config = VadConfig {
+                threshold: self.vad_threshold,
+                ..VadConfig::default()
+            };
+            let mut vad = lock_poison(&self.vad)?;
+            vad.detect(samples, &vad_config)?
+        };
+
+        // 收集有效段并锁外预计算逐窗 feats（切窗/fbank/转置纯 CPU）。
+        let mut windows: Vec<(usize, usize, Vec<Vec<f32>>)> = Vec::new();
+        for seg in &segments {
             let start = seg.start.max(0) as usize;
             let end = (seg.end.max(0) as usize).min(samples.len());
             if end <= start {
                 continue;
             }
-            let text = asr.transcribe(&samples[start..end], &self.tokenizer, None)?;
+            let feats = super::whisper_asr::precompute_windows(&samples[start..end], &self.fbank)?;
+            windows.push((start, end, feats));
+        }
+
+        let mut asr = self.lock_asr()?;
+        let mut out: Vec<TranscribeSegment> = Vec::with_capacity(windows.len());
+        for (start, end, feats) in windows {
+            let text = asr.transcribe_precomputed(feats, &self.tokenizer, None)?;
             if text.is_empty() {
                 continue;
             }

@@ -19,11 +19,19 @@ use super::{
 /// 既有 Qwen3 三图路径。`open` 签名不破（main.rs 与 POC 薄壳显式构造 `TranscribeOpts`，
 /// 不可加字段），故配置面的 backend 经 models_dir 缺省目录间接生效；需要显式指定
 /// 后端时用 `open_with_backend`。探测只读文件系统，不改变加载行为。
-fn detect_backend(models_dir: &Path) -> TranscribeBackend {
-    if crate::engine::transcribe::whisper_asr::resolve_graph_paths(models_dir).is_ok() {
-        TranscribeBackend::Whisper
-    } else {
-        TranscribeBackend::Qwen3Asr
+fn detect_backend(models_dir: &Path) -> Result<TranscribeBackend, crate::error::VecboostError> {
+    let whisper = crate::engine::transcribe::whisper_asr::resolve_graph_paths(models_dir).is_ok();
+    let qwen3 = crate::engine::transcribe::asr::resolve_graph_paths(models_dir).is_ok();
+    match (whisper, qwen3) {
+        // 两套图共存时不再静默选 whisper：目录无法表达配置意图，显性失败
+        // （审查发现的混合 bundle 歧义）；open_with_backend 显式路径不受影响。
+        (true, true) => Err(crate::error::VecboostError::ConfigError(
+            crate::i18n::tr("transcribe-backend-ambiguous").to_string(),
+        )),
+        (true, false) => Ok(TranscribeBackend::Whisper),
+        // qwen3 独占或二者皆缺（皆缺由后续 Qwen3Asr::load 显性报缺图，
+        // 与旧路径失败面一致）。
+        (false, _) => Ok(TranscribeBackend::Qwen3Asr),
     }
 }
 
@@ -33,7 +41,7 @@ pub fn open(
     models_dir: &Path,
     opts: &TranscribeOpts,
 ) -> Result<TranscribeSession, crate::error::VecboostError> {
-    open_with_backend(models_dir, opts, detect_backend(models_dir))
+    open_with_backend(models_dir, opts, detect_backend(models_dir)?)
 }
 
 /// 显式指定后端打开会话（供需要精确选择 Qwen3 / whisper 的调用方）。

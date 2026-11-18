@@ -28,6 +28,8 @@ model-load-failed = Failed to load model '{ $name }': { $detail }
 switch-path-rejected = path rejected: must be an existing path inside the allowed roots (model_path must be a directory, tokenizer_path must be a file); see server logs
 switch-model-load-failed = model load failed; see server logs
 transcribe-model-load-failed = transcription model failed to load or process; see server logs
+transcribe-backend-ambiguous = models_dir contains both whisper and qwen3-asr graphs; specify backend explicitly
+log-transcribe-backend-selected = transcribe backend selected: { $backend }
 
 # ── File embedding ──
 file-empty = File is empty

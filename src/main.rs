@@ -628,6 +628,17 @@ fn build_transcribe_service(config: &VecboostConfig) -> anyhow::Result<Transcrib
     if !config.transcribe.enabled {
         return Ok(TranscribeService::unconfigured());
     }
+    // 不变量（审查项）：[transcribe].backend 驱动**服务门面**装配；
+    // 模型级 transcription_params.backend 驱动**库工厂**分派，二者属独立入口，
+    // 启动路径仅前者生效（main.rs 构造运行时 ModelConfig 时 transcription_params
+    // 恒 None）。生效后端在启动日志中显性记录，避免配置与行为背离不可观测。
+    log::info!(
+        "{}",
+        vecboost::i18n::tr_with_args(
+            "log-transcribe-backend-selected",
+            vecboost::i18n::tr_args(&[("backend", &format!("{:?}", config.transcribe.backend))]),
+        )
+    );
     let opts = vecboost::transcribe::TranscribeOpts {
         intra_threads: config.transcribe.intra_threads,
         no_spin: config.transcribe.no_spin,

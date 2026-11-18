@@ -7,6 +7,8 @@
 //! 整模块经 `engine/mod.rs` 处 `#[cfg(feature = "transcribe")]` 门控。
 //! 本 `mod.rs` 只放子模块声明与 re-export（仓库规则14），实现散在
 //! `wav`/`features`/`vad`/`tokenizer`/`asr`/`engine` 各独立文件。
+//! `whisper_asr`/`whisper_tokenizer` 为 whisper ONNX 后端核心层（路线A）：
+//! 复用本仓 ort 基建（`session.rs` / `AsrSessionOpts`），与 Qwen3-ASR 三图并存。
 
 pub(crate) mod asr;
 pub(crate) mod engine;
@@ -14,3 +16,8 @@ pub(crate) mod features;
 pub(crate) mod tokenizer;
 pub(crate) mod vad;
 pub(crate) mod wav;
+pub(crate) mod whisper_asr;
+pub(crate) mod whisper_tokenizer;
+
+pub(crate) use whisper_asr::{WhisperAsr, WhisperGraphPaths};
+pub(crate) use whisper_tokenizer::WhisperTokenizer;

@@ -466,13 +466,62 @@ impl Default for ModelConfig {
     }
 }
 
-/// 转录推理参数：`models_dir`（三图 bundle 目录，
-/// 缺省取 model_path）、`vad_threshold`（silero 概率阈值，缺省 0.5，POC 实测值显性化）。
+/// 转录后端选择（`[transcribe].backend` 与 `TranscriptionParams.backend` 共用单一事实源）。
+///
+/// 缺省 `qwen3-asr` 保持既有三图 + VAD 路径逐字不变；`whisper` 走 ONNX 双图
+/// （encoder + merged decoder）。serde 用 lowercase；`qwen3-asr` 含连字符，
+/// 故在变体上显式 rename（否则 rename_all 会生成 `qwen3asr`）。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum TranscribeBackend {
+    /// Qwen3-ASR 三图后端（缺省，既有路径零行为变化）
+    #[default]
+    #[serde(rename = "qwen3-asr")]
+    Qwen3Asr,
+    /// whisper-large-v3-turbo ONNX 双图后端
+    Whisper,
+}
+
+impl TranscribeBackend {
+    /// 稳定字面量（i18n 参数 / 错误信息用）。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Qwen3Asr => "qwen3-asr",
+            Self::Whisper => "whisper",
+        }
+    }
+
+    /// 后端缺省 bundle 目录（models_dir 未显式配置时按后端区分）。
+    /// 显式配置的 models_dir 恒优先于本值。
+    pub fn default_models_dir(&self) -> &'static str {
+        match self {
+            Self::Qwen3Asr => "models/qwen3-asr",
+            Self::Whisper => "models/whisper",
+        }
+    }
+
+    /// 全部合法取值（ConfigError 列举用，禁止在别处再写字面量分叉）。
+    pub const ALL: &'static [&'static str] = &["qwen3-asr", "whisper"];
+}
+
+impl fmt::Display for TranscribeBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// 转录推理参数：`models_dir`（bundle 目录，缺省取 model_path）、`vad_threshold`
+/// （silero 概率阈值，缺省 0.5，POC 实测值显性化）、`backend`（转录后端选择，
+/// 缺省 qwen3-asr；工厂据此分发到 Qwen3AsrEngine 或 WhisperAsrEngine）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TranscriptionParams {
     pub models_dir: Option<PathBuf>,
     pub vad_threshold: f32,
+    #[serde(default)]
+    pub backend: TranscribeBackend,
 }
 
 impl Default for TranscriptionParams {
@@ -480,6 +529,7 @@ impl Default for TranscriptionParams {
         Self {
             models_dir: None,
             vad_threshold: 0.5,
+            backend: TranscribeBackend::Qwen3Asr,
         }
     }
 }
@@ -734,6 +784,23 @@ mod tests {
             ModelTask::Embedding,
             "task 默认 Embedding（既有部署语义不变）"
         );
+    }
+
+    #[test]
+    fn test_transcribe_backend_serde_lowercase_with_hyphen() {
+        // qwen3-asr 含连字符：rename_all=lowercase 会生成 qwen3asr，须靠变体 rename 纠正。
+        assert_eq!(
+            serde_json::to_string(&super::TranscribeBackend::Qwen3Asr).unwrap(),
+            "\"qwen3-asr\""
+        );
+        assert_eq!(
+            serde_json::to_string(&super::TranscribeBackend::Whisper).unwrap(),
+            "\"whisper\""
+        );
+        let decoded: super::TranscribeBackend = serde_json::from_str("\"whisper\"").unwrap();
+        assert_eq!(decoded, super::TranscribeBackend::Whisper);
+        assert!(serde_json::from_str::<super::TranscribeBackend>("\"unknown\"").is_err());
+        assert_eq!(super::TranscribeBackend::ALL, &["qwen3-asr", "whisper"]);
     }
 
     #[test]

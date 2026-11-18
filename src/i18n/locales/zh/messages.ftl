@@ -928,3 +928,12 @@ detail-hidden-size-must-be-1-got-0-28abe = { $p1 }：hidden_size 必须 >= 1，�
 detail-missing-or-invalid-field-field-for-modernbert-encoder-c4dbf = { $p1 }：ModernBERT 编码器配置缺少或无效字段 `{ $field }`
 detail-num-attention-heads-must-be-1-got-0-90dc9 = { $p1 }：num_attention_heads 必须 >= 1，实际为 0
 detail-tokenizer-vocab-size-tokenizer-vocab-exceeds-encoder-66fcf = { $p1 }：分词器词表大小（{ $tokenizer_vocab }）超过编码器 config vocab_size（{ $p2 }）—— 分词器/编码器资产不匹配（model_sha256 仅覆盖 model.safetensors）
+detail-whisper-asr-infer-e-9d1f7 = whisper ASR 推理：{ $e }
+detail-whisper-asr-load-e-2e8b4 = whisper ASR 加载：{ $e }
+detail-whisper-tokenizer-decode-e-7a3c6 = whisper tokenizer 解码：{ $e }
+detail-whisper-tokenizer-file-not-found-3f7a1 = whisper tokenizer 文件不存在：{ $path }
+detail-whisper-tokenizer-id-drift-6b9e4 = whisper tokenizer 特殊 token id 漂移：{ $token } 期望 { $expect }，实际 { $actual }
+detail-whisper-tokenizer-language-missing-1d4f8 = whisper tokenizer 缺少语言 token：{ $lang }（{ $token }）
+detail-whisper-tokenizer-load-e-8c2d5 = 加载 whisper tokenizer：{ $e }
+log-engine-transcribe-whisper-graphs-4a7e1 = whisper 图：encoder={ $encoder }、decoder={ $decoder }、precision={ $precision }（精度按图内容判定，非文件名）
+detail-whisper-vad-file-not-found-b7e21 = whisper VAD 资产不存在：{ $path }（请从 Qwen3 bundle 拷贝 silero_vad.onnx，或下载到 models_dir）

@@ -634,17 +634,22 @@ fn build_transcribe_service(config: &VecboostConfig) -> anyhow::Result<Transcrib
         cuda: config.transcribe.cuda,
         vad_threshold: config.transcribe.vad_threshold,
     };
-    let session =
-        vecboost::transcribe::open(std::path::Path::new(&config.transcribe.models_dir), &opts)
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "{}",
-                    vecboost::i18n::tr_with_args(
-                        "startup-transcribe-session-open",
-                        vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
-                    )
-                )
-            })?;
+    // backend 必须显式透传：若退回按 models_dir 探测的 open()，显式指定
+    // Qwen3 目录时 backend=whisper 会被静默忽略（配置与行为背离）。
+    let session = vecboost::transcribe::open_with_backend(
+        std::path::Path::new(&config.transcribe.models_dir),
+        &opts,
+        config.transcribe.backend,
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "startup-transcribe-session-open",
+                vecboost::i18n::tr_args(&[("detail", &e.to_string())]),
+            )
+        )
+    })?;
     Ok(TranscribeService::new(session))
 }
 

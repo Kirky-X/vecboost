@@ -1,8 +1,10 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-//! `Qwen3AsrEngine`：把移植进来的 Qwen3-ASR 三图 + silero VAD + whisper fbank
-//! 管线封装为主仓 `InferenceEngine` 实现。
+//! `Qwen3AsrEngine` / `WhisperAsrEngine`：把移植进来的两条转录管线封装为主仓
+//! `InferenceEngine` 实现。Qwen3 走三图 + silero VAD + whisper fbank；Whisper
+//! 走 encoder + merged decoder 双图，30s 窗口贪心解码。两者由
+//! `TranscriptionParams.backend` 在工厂层分发，既有 Qwen3 路径逐字不动。
 //!
 //! 并发契约：ort rc.13 禁同 Session 并发 Run → 实例内 `Mutex` 串行；
 //! POC 的 worker/batch/gpu/env_pool 并行旋钮**不进库**（段级并行由调用方持多引擎实例承担）。
@@ -25,6 +27,7 @@ use super::asr::{AsrSessionOpts, Qwen3Asr};
 use super::features::{MEL_DIM, WhisperFbank};
 use super::tokenizer::AsrTokenizer;
 use super::vad::{SileroVadModel, VadConfig, detect_segments};
+use super::{WhisperAsr, WhisperGraphPaths, WhisperTokenizer};
 
 /// 采样率（Hz）——秒换算分母，与 vad/features 一致。
 const SAMPLE_RATE_HZ: f64 = 16000.0;
@@ -237,6 +240,193 @@ impl Qwen3AsrEngine {
             ))
         })?;
         asr.transcribe(&mel, num_frames, &self.tokenizer)
+    }
+}
+
+/// whisper ONNX 双图转录引擎：与 Qwen3 同口径（实例内 Mutex 串行、VAD 每请求
+/// 重建、精度按图内容判定）。fbank 与 30s 窗口预处理驻留 `WhisperAsr`，本结构
+/// 不重复构造。标准 whisper bundle **不含** silero_vad.onnx（HF onnx-community/
+/// whisper-large-v3-turbo/onnx 目录实测），须从 Qwen3 bundle 拷贝或独立下载到
+/// models_dir；load 期显式探测，缺失即 ModelLoadError，禁止静默降级为
+/// 「跳过 VAD 整段转录」。CPU 恒定：transcribe 图恒按 CPU EP 加载，
+/// 无在线 GPU→CPU 回退（与 Qwen3 同口径）。
+pub(crate) struct WhisperAsrEngine {
+    asr: Mutex<WhisperAsr>,
+    tokenizer: WhisperTokenizer,
+    /// silero_vad.onnx 路径（标准 whisper bundle 不含；load 期已探测存在）
+    vad_model_path: PathBuf,
+    vad_threshold: f32,
+    precision: Precision,
+}
+
+impl WhisperAsrEngine {
+    pub(crate) fn load(config: &ModelConfig) -> Result<Self, VecboostError> {
+        Self::load_with_session_opts(config, 0, false)
+    }
+
+    /// 显式会话旋钮（门面 `TranscribeOpts` 透传）；工厂路径走 `load` 缺省。
+    pub(crate) fn load_with_session_opts(
+        config: &ModelConfig,
+        intra_threads: usize,
+        no_spin: bool,
+    ) -> Result<Self, VecboostError> {
+        let models_dir = config
+            .transcription_params
+            .as_ref()
+            .and_then(|p| p.models_dir.clone())
+            .unwrap_or_else(|| config.model_path.clone());
+        let vad_threshold = config
+            .transcription_params
+            .as_ref()
+            .map(|p| p.vad_threshold)
+            .unwrap_or(0.5);
+        let opts = AsrSessionOpts {
+            intra_threads,
+            no_spin,
+            cuda: config.device == DeviceType::Cuda,
+        };
+        // 核心层先探测图路径后 builder；缺图 / 缺 ORT 动态库均显性 ModelLoadError。
+        let (asr, graphs): (WhisperAsr, WhisperGraphPaths) = WhisperAsr::new(&models_dir, &opts)?;
+        // 精度按 decoder 图**内容**判定（同 Qwen3，不看文件名——改名误报是历史缺陷）。
+        let precision = detect_onnx_weight_precision(&graphs.decoder)?;
+        let name_of = |p: &std::path::Path| -> String {
+            p.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        log::info!(
+            "{}",
+            crate::i18n::tr_with_args(
+                "log-engine-transcribe-whisper-graphs-4a7e1",
+                crate::i18n::tr_args(&[
+                    ("encoder", &name_of(&graphs.encoder)),
+                    ("decoder", &name_of(&graphs.decoder)),
+                    ("precision", &format!("{precision:?}")),
+                ])
+            )
+        );
+        // tokenizer 锚定校验 4 个特殊 id，资产错配（如误放 Qwen3 tokenizer）显性失败。
+        let tokenizer = WhisperTokenizer::new(&models_dir.join("tokenizer"))?;
+        // 标准 whisper bundle 不含 silero_vad.onnx。若只存路径不校验，会造成
+        // 「加载成功、每次请求才失败」——与 fail-fast 纪律相悖。故 load 期探测，
+        // 缺失即 ModelLoadError（含实际路径与来源说明）。
+        let vad_model_path = models_dir.join("silero_vad.onnx");
+        if !vad_model_path.is_file() {
+            return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
+                "detail-whisper-vad-file-not-found-b7e21",
+                crate::i18n::tr_args(&[("path", &vad_model_path.display().to_string())]),
+            )));
+        }
+        Ok(Self {
+            asr: Mutex::new(asr),
+            tokenizer,
+            vad_model_path,
+            vad_threshold,
+            precision,
+        })
+    }
+
+    /// Mutex  Poison 显性化（与 Qwen3 同 key、同口径，禁止静默重试）。
+    fn lock_asr(&self) -> Result<std::sync::MutexGuard<'_, WhisperAsr>, VecboostError> {
+        self.asr.lock().map_err(|e| {
+            VecboostError::InferenceError(crate::i18n::tr_with_args(
+                "detail-asr-mutex-poisoned-e-c380d",
+                crate::i18n::tr_args(&[("e", &e.to_string())]),
+            ))
+        })
+    }
+
+    /// VAD-only 分段（门面消费：`--vad-only` 与段级并行调度）。每调用新建 VAD
+    /// 模型（全新 LSTM 状态），与 `transcribe()` 内部分段同参同构。
+    pub(crate) fn detect_vad_segments(
+        &self,
+        samples: &[f32],
+    ) -> Result<Vec<(i64, i64)>, VecboostError> {
+        let vad_config = VadConfig {
+            threshold: self.vad_threshold,
+            ..VadConfig::default()
+        };
+        let model = SileroVadModel::new(&self.vad_model_path, &vad_config)?;
+        let segments = detect_segments(model, samples, &vad_config)?;
+        Ok(segments.into_iter().map(|s| (s.start, s.end)).collect())
+    }
+
+    /// 段级转录：whisper 核心层自带 30s 切窗，故直接喂样本（不再经 fbank）。
+    /// 语言未配置时传 None（模型自判定），阻塞同步、可重入（Mutex 串行化）。
+    pub(crate) fn transcribe_segment(&self, samples: &[f32]) -> Result<String, VecboostError> {
+        let mut asr = self.lock_asr()?;
+        asr.transcribe(samples, &self.tokenizer, None)
+    }
+}
+
+#[async_trait]
+impl InferenceEngine for WhisperAsrEngine {
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+        Err(VecboostError::unsupported_task(
+            "embedding is not supported by a transcription engine".to_string(),
+        ))
+    }
+
+    fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+        Err(VecboostError::unsupported_task(
+            "embedding is not supported by a transcription engine".to_string(),
+        ))
+    }
+
+    fn precision(&self) -> &Precision {
+        &self.precision
+    }
+
+    fn supports_mixed_precision(&self) -> bool {
+        false
+    }
+
+    fn supports_rerank(&self) -> bool {
+        false
+    }
+
+    fn supports_task(&self, task: ModelTask) -> bool {
+        task == ModelTask::Transcribe
+    }
+
+    async fn try_fallback_to_cpu(&mut self, _config: &ModelConfig) -> Result<(), VecboostError> {
+        // 诚实失败优于假装降级：transcribe 图恒 CPU 加载，OOM 时显性拒绝。
+        Err(VecboostError::unsupported_task(
+            "transcription engine has no GPU→CPU online fallback; lower concurrency or \
+             reload with a CPU device configuration"
+                .to_string(),
+        ))
+    }
+
+    fn transcribe(&self, req: &TranscribeRequest) -> Result<TranscribeResponse, VecboostError> {
+        req.validate()?;
+        let samples = &req.samples;
+        let vad_config = VadConfig {
+            threshold: self.vad_threshold,
+            ..VadConfig::default()
+        };
+        let vad_model = SileroVadModel::new(&self.vad_model_path, &vad_config)?;
+        let segments = detect_segments(vad_model, samples, &vad_config)?;
+
+        let mut asr = self.lock_asr()?;
+        let mut out: Vec<TranscribeSegment> = Vec::with_capacity(segments.len());
+        for seg in segments {
+            let start = seg.start.max(0) as usize;
+            let end = (seg.end.max(0) as usize).min(samples.len());
+            if end <= start {
+                continue;
+            }
+            let text = asr.transcribe(&samples[start..end], &self.tokenizer, None)?;
+            if text.is_empty() {
+                continue;
+            }
+            out.push(TranscribeSegment {
+                start_sec: start as f64 / SAMPLE_RATE_HZ,
+                end_sec: end as f64 / SAMPLE_RATE_HZ,
+                text,
+            });
+        }
+        Ok(TranscribeResponse::from_segments(out))
     }
 }
 

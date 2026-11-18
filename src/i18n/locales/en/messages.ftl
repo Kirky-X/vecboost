@@ -929,3 +929,12 @@ detail-hidden-size-must-be-1-got-0-28abe = { $p1 }: hidden_size must be >= 1, go
 detail-missing-or-invalid-field-field-for-modernbert-encoder-c4dbf = { $p1 }: missing or invalid field `{ $field }` for ModernBERT encoder config
 detail-num-attention-heads-must-be-1-got-0-90dc9 = { $p1 }: num_attention_heads must be >= 1, got 0
 detail-tokenizer-vocab-size-tokenizer-vocab-exceeds-encoder-66fcf = { $p1 }: tokenizer vocab size ({ $tokenizer_vocab }) exceeds encoder config vocab_size ({ $p2 }) — mismatched tokenizer/encoder assets (model_sha256 covers model.safetensors only)
+detail-whisper-asr-infer-e-9d1f7 = whisper asr infer: { $e }
+detail-whisper-asr-load-e-2e8b4 = whisper asr load: { $e }
+detail-whisper-tokenizer-decode-e-7a3c6 = whisper tokenizer decode: { $e }
+detail-whisper-tokenizer-file-not-found-3f7a1 = whisper tokenizer file not found: { $path }
+detail-whisper-tokenizer-id-drift-6b9e4 = whisper tokenizer special id drift: { $token } expects { $expect }, got { $actual }
+detail-whisper-tokenizer-language-missing-1d4f8 = whisper tokenizer missing language token: { $lang } ({ $token })
+detail-whisper-tokenizer-load-e-8c2d5 = load whisper tokenizer: { $e }
+log-engine-transcribe-whisper-graphs-4a7e1 = whisper graphs: encoder={ $encoder }, decoder={ $decoder }, precision={ $precision } (precision is detected from graph content, not file name)
+detail-whisper-vad-file-not-found-b7e21 = whisper VAD asset not found: { $path } (copy silero_vad.onnx from the Qwen3 bundle or download it into models_dir)

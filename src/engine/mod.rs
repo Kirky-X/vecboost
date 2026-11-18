@@ -341,6 +341,11 @@ pub enum AnyEngine {
     #[cfg(feature = "transcribe")]
     #[allow(private_interfaces)]
     Transcribe(transcribe::engine::Qwen3AsrEngine),
+    /// whisper ONNX 双图转录引擎（task=transcribe，backend=whisper；
+    /// 构造点为 EngineFactory 的 task 分派臂，feature `transcribe` 门控同上）。
+    #[cfg(feature = "transcribe")]
+    #[allow(private_interfaces)]
+    WhisperTranscribe(transcribe::engine::WhisperAsrEngine),
     /// GGUF 量化引擎（Q8_0/Q4_K 加载期反量化桥，）。
     #[cfg(feature = "quantized-gguf")]
     Quantized(quantized_engine::QuantizedCandleEngine),

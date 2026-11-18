@@ -89,7 +89,7 @@ fn transcribe_task_with_missing_bundle_rejected() {
     #[cfg(feature = "transcribe")]
     {
         let mut cfg = base_config();
-        cfg.task = ModelTask::Transcription;
+        cfg.task = ModelTask::Transcribe;
         let result = EngineFactory::create(EngineType::Onnx, &cfg);
         assert!(result.is_err(), "转录任务缺三图 bundle 必须拒绝");
     }

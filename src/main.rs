@@ -636,6 +636,30 @@ async fn attach_semantic_cache(
     Ok(service.with_semantic_cache(Arc::new(semantic)))
 }
 
+/// rerank 服务生产构造：与 attach_semantic_cache 同源消费
+/// `[semantic_cache] caller_isolation`（SECURITY.md「四层分区」承诺的
+/// rerank 缓存层）：off→Off、user→User，非法值启动报错不静默回退。
+fn build_rerank_service(
+    engine: Arc<tokio::sync::RwLock<dyn vecboost::engine::InferenceEngine + Send + Sync>>,
+    model_config: ModelConfig,
+    config: &VecboostConfig,
+) -> anyhow::Result<RerankService> {
+    let isolation: vecboost::CallerIsolation = config
+        .semantic_cache
+        .caller_isolation
+        .parse()
+        .map_err(|e: String| {
+            anyhow::anyhow!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "startup-semantic-caller-isolation-invalid",
+                    vecboost::i18n::tr_args(&[("detail", &e)]),
+                )
+            )
+        })?;
+    Ok(RerankService::new(engine, Some(model_config)).with_caller_isolation(isolation))
+}
+
 /// 转录服务装配：`[transcribe] enabled=true` 时经公开门面
 /// `vecboost::transcribe::open` 急切构建会话（bundle 缺失 fail-fast，与
 /// translation pairs 同口径）；否则未装配（端点注册、请求 400
@@ -872,10 +896,11 @@ async fn init_engine_and_services(
     // 启动回放 WAL 重建缓存（未启用持久层时为 no-op）。
     service.read().await.load_persisted_cache().await;
 
-    let rerank_service = Arc::new(RwLock::new(RerankService::new(
+    let rerank_service = Arc::new(RwLock::new(build_rerank_service(
         engine.clone(),
-        Some(model_config.clone()),
-    )));
+        model_config.clone(),
+        config,
+    )?));
 
     // 决策服务无条件预构建（零成本，三种模式签名统一）：非 decision 配置下
     // decide 经 trait 默认臂/能力门返回 UnsupportedTask（HTTP 400），端点
@@ -3409,6 +3434,87 @@ mod tests {
         assert!(
             err_msg.contains("caller_isolation"),
             "启动错误须点名 caller_isolation，got: {err_msg}"
+        );
+    }
+
+    /// 装配用最小引擎：仅满足 RerankService 构造的 trait 约束。
+    struct AssemblyMockEngine;
+
+    #[async_trait::async_trait]
+    impl vecboost::engine::InferenceEngine for AssemblyMockEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, vecboost::VecboostError> {
+            Ok(vec![0.0; 8])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, vecboost::VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+        }
+        fn precision(&self) -> &vecboost::config::model::Precision {
+            &vecboost::config::model::Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        fn rerank(&self, _query: &str, _doc: &str) -> Result<f32, vecboost::VecboostError> {
+            Ok(0.0)
+        }
+        fn rerank_batch(
+            &self,
+            _q: &str,
+            docs: &[String],
+        ) -> Result<Vec<f32>, vecboost::VecboostError> {
+            Ok(docs.iter().map(|_| 0.0).collect())
+        }
+        fn supports_rerank(&self) -> bool {
+            true
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), vecboost::VecboostError> {
+            Ok(())
+        }
+    }
+
+    // 装配钉：生产构造路径 build_rerank_service 必须按 [semantic_cache]
+    // caller_isolation 注入隔离（SECURITY.md「四层分区」承诺的 rerank 层）。
+    #[test]
+    fn rerank_production_assembly_wires_caller_isolation() {
+        vecboost::i18n::init();
+        let engine: Arc<tokio::sync::RwLock<dyn vecboost::engine::InferenceEngine + Send + Sync>> =
+            Arc::new(tokio::sync::RwLock::new(AssemblyMockEngine));
+        let model_config = ModelConfig::default();
+
+        // 默认配置：off → Off（行为不变）
+        let config = VecboostConfig::default();
+        let service = build_rerank_service(engine.clone(), model_config.clone(), &config)
+            .expect("默认配置装配必须成功");
+        assert_eq!(
+            service.caller_isolation(),
+            vecboost::CallerIsolation::Off,
+            "默认 caller_isolation=off 时隔离必须为 Off"
+        );
+
+        // caller_isolation = "user" → User
+        let mut config = VecboostConfig::default();
+        config.semantic_cache.caller_isolation = "user".to_string();
+        let service = build_rerank_service(engine.clone(), model_config.clone(), &config)
+            .expect("user 配置装配必须成功");
+        assert_eq!(
+            service.caller_isolation(),
+            vecboost::CallerIsolation::User,
+            "caller_isolation=user 时生产构造必须产出 User 隔离"
+        );
+
+        // 非法值：启动报错，不静默回退
+        let mut config = VecboostConfig::default();
+        config.semantic_cache.caller_isolation = "bogus".to_string();
+        let err = match build_rerank_service(engine, model_config, &config) {
+            Ok(_) => panic!("非法 caller_isolation 必须启动报错"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("caller_isolation"),
+            "启动错误须点名 caller_isolation，got: {err}"
         );
     }
 

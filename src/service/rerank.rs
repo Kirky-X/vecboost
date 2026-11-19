@@ -47,6 +47,12 @@ impl RerankService {
         self
     }
 
+    /// 当前调用方隔离模式（装配断言/诊断用：生产构造点必须按
+    /// `[semantic_cache] caller_isolation` 注入，见 `main.rs::build_rerank_service`）。
+    pub fn caller_isolation(&self) -> crate::cache::CallerIsolation {
+        self.isolation
+    }
+
     /// 替换底层引擎——EmbeddingService::switch_model 成功后由 API 层传播，
     /// 修复切模型后 rerank 仍用旧引擎的失联。
     pub fn replace_engine(&mut self, new_engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>) {

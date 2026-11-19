@@ -47,10 +47,33 @@ pub async fn rerank_batch(
     max_documents: usize,
     max_query_length: usize,
 ) -> Result<BatchRerankResponse, VecboostError> {
+    rerank_batch_with_caller(
+        svc,
+        req,
+        max_documents,
+        max_query_length,
+        crate::caller::ANONYMOUS_CALLER,
+    )
+    .await
+}
+
+/// 带调用方身份的批量重排序（user 隔离模式的真实入口）。
+/// caller 在循环外提取一次，逐条透传同一身份，批量内全部查询
+/// 落入同一调用方缓存分区（与单条路径 `rerank` 同链提取）。
+pub async fn rerank_batch_with_caller(
+    svc: &RerankService,
+    req: BatchRerankRequest,
+    max_documents: usize,
+    max_query_length: usize,
+    caller_id: &str,
+) -> Result<BatchRerankResponse, VecboostError> {
     let mut responses = Vec::with_capacity(req.queries.len());
     let mut statuses = Vec::with_capacity(req.queries.len());
     for (index, q) in req.queries.into_iter().enumerate() {
-        match svc.process_rerank(q, max_documents, max_query_length).await {
+        match svc
+            .process_rerank_with_caller(q, max_documents, max_query_length, caller_id)
+            .await
+        {
             Ok(resp) => {
                 responses.push(resp);
                 statuses.push(BatchRerankQueryStatus {
@@ -133,7 +156,10 @@ async fn rerank_handler(req: RerankRequest) -> Result<RerankResponse, ApiError> 
 async fn rerank_batch_handler(req: BatchRerankRequest) -> Result<BatchRerankResponse, ApiError> {
     let (svc, max_documents, max_query_length) = load_rerank_service().await?;
     let guard = svc.read().await;
-    rerank_batch(&guard, req, max_documents, max_query_length)
+    // 与单条路径 rerank_handler 同链提取调用方（current_caller_id），
+    // 批量循环外提取一次透传，避免批量请求落入 shared anonymous 桶。
+    let caller = crate::caller::current_caller_id().await;
+    rerank_batch_with_caller(&guard, req, max_documents, max_query_length, &caller)
         .await
         .map_err(to_api_error)
 }
@@ -302,6 +328,102 @@ mod tests {
         let result = rerank_batch(&svc, req, 100, 8192).await.unwrap();
         assert!(result.responses.is_empty());
         assert!(result.statuses.is_empty());
+    }
+
+    /// 计数引擎：区分批量路径的缓存命中/未命中。
+    struct CountingBatchEngine {
+        calls: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    #[async_trait]
+    impl InferenceEngine for CountingBatchEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.0; 128])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.0; 128]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        fn rerank(&self, _query: &str, _doc: &str) -> Result<f32, VecboostError> {
+            Ok(0.0)
+        }
+        fn rerank_batch(&self, _query: &str, docs: &[String]) -> Result<Vec<f32>, VecboostError> {
+            use std::sync::atomic::Ordering;
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(docs.iter().map(|_| 0.5).collect())
+        }
+        fn supports_rerank(&self) -> bool {
+            true
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    /// 批量路径隔离钉（T009 批量 handler 提取 caller 的验收缺口）：
+    /// user 模式下批量经 rerank_batch_with_caller 透传同一 caller——
+    /// alice 批量内同 (query,doc) 第二条命中 alice 自身分区，bob 同批量
+    /// 必须 miss 不得命中 alice 条目。
+    #[tokio::test]
+    async fn test_sdk_rerank_batch_caller_isolation_partitions_per_caller() {
+        use std::sync::atomic::Ordering;
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let engine: std::sync::Arc<tokio::sync::RwLock<dyn InferenceEngine + Send + Sync>> =
+            std::sync::Arc::new(tokio::sync::RwLock::new(CountingBatchEngine {
+                calls: calls.clone(),
+            }));
+        let cache = std::sync::Arc::new(crate::cache::OxCacheBackend::with_ttl(100, None));
+        let svc = RerankService::with_cache(engine, None, cache)
+            .with_caller_isolation(crate::cache::CallerIsolation::User);
+        let mk = || BatchRerankRequest {
+            queries: vec![
+                RerankRequest {
+                    query: "batch iso query".to_string(),
+                    documents: vec!["batch iso doc".to_string()],
+                    top_k: None,
+                    return_documents: Some(false),
+                },
+                RerankRequest {
+                    query: "batch iso query".to_string(),
+                    documents: vec!["batch iso doc".to_string()],
+                    top_k: None,
+                    return_documents: Some(false),
+                },
+            ],
+        };
+
+        rerank_batch_with_caller(&svc, mk(), 100, 8192, "alice")
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "alice 批量内同 (query,doc) 第二条必须命中自身分区缓存"
+        );
+        rerank_batch_with_caller(&svc, mk(), 100, 8192, "bob")
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "bob 必须 miss 并触发自身计算，不得命中 alice 分区"
+        );
+        rerank_batch_with_caller(&svc, mk(), 100, 8192, "alice")
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "alice 再次批量必须仍命中自身分区缓存"
+        );
     }
 
     #[tokio::test]

@@ -43,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         model_config,
         cache_size: 100, // 启用缓存，容量 100 条
         rerank_config: None,
+        caller_isolation: vecboost::CallerIsolation::Off, // 缺省行为不变
     };
 
     println!("📊 LibraryConfig:");

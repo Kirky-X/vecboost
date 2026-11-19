@@ -162,6 +162,12 @@ impl RedisSemanticIndex {
     }
 
     /// 带调用方分区的写入（user 隔离模式的真实入口）。
+    ///
+    /// caller 分区同样登记进 [`MODELS_KEY`]：成员为
+    /// `{model_hash}:{caller_digest}`（与 [`Self::keys_with_caller`] 的命名
+    /// 空间串一致），`clear`/`clear_all` 据此清空全部分区键——分区键无 TTL，
+    /// 不登记即随模型切换/卸载残留。off 模式（caller 空串）成员仍为基础
+    /// `model_hash`，登记与清键行为不变。
     pub(crate) async fn insert_for_caller(
         &self,
         model_id: &str,
@@ -181,7 +187,11 @@ impl RedisSemanticIndex {
         let capacity = capacity.max(1);
 
         let mut conn = self.conn.clone();
-        let model_hash = digest(model_id);
+        let member = if caller_id.is_empty() {
+            digest(model_id)
+        } else {
+            format!("{}:{}", digest(model_id), digest(caller_id))
+        };
         // 直接 EVAL（而非 EVALSHA+Script）：避免新脚本首次 NOSCRIPT 回退路径
         // 在 multiplexed connection 上留下悬挂应答；插入是低频路径，脚本体
         // 传输成本可接受。
@@ -197,7 +207,7 @@ impl RedisSemanticIndex {
             .arg(&embedding_bytes)
             .arg(capacity)
             .arg(now_secs())
-            .arg(&model_hash)
+            .arg(&member)
             .query_async(&mut conn)
             .await
             .map_err(|e| map_err("insert", e))?;
@@ -280,22 +290,47 @@ impl RedisSemanticIndex {
         }
     }
 
-    /// 清空指定模型的共享索引。
+    /// 清空指定模型的共享索引（基础命名空间 + 全部 caller 分区）。
     pub(crate) async fn clear(&self, model_id: &str) -> Result<(), VecboostError> {
         let (tri_key, emb_key, lru_key) = Self::keys(model_id);
         let mut conn = self.conn.clone();
+        let model_hash = digest(model_id);
         let _: usize = conn
             .del((tri_key, emb_key, lru_key))
             .await
             .map_err(|e| map_err("clear", e))?;
         let _: usize = conn
-            .srem(MODELS_KEY, digest(model_id))
+            .srem(MODELS_KEY, &model_hash)
             .await
             .map_err(|e| map_err("clear-model-set", e))?;
+        // caller 分区登记（"{model_hash}:{caller_digest}" 成员）一并出清：
+        // 分区键无 TTL，模型切换/卸载后不清即残留（user 隔离的清理缺口）。
+        // 成员是十六进制摘要拼接，`{model_hash}:` 前缀不可能误配其他模型。
+        let members: Vec<String> = conn
+            .smembers(MODELS_KEY)
+            .await
+            .map_err(|e| map_err("list-partitions", e))?;
+        let partition_prefix = format!("{model_hash}:");
+        for member in members.iter().filter(|m| m.starts_with(&partition_prefix)) {
+            let (tri, emb, lru) = Self::keys_for_hash(member);
+            let _: usize = conn
+                .del((tri, emb, lru))
+                .await
+                .map_err(|e| map_err("clear-partition", e))?;
+            let _: usize = conn
+                .srem(MODELS_KEY, member)
+                .await
+                .map_err(|e| map_err("clear-partition-set", e))?;
+        }
         Ok(())
     }
 
     /// 清空全部模型的共享索引（模型卸载/全局 reset）。
+    ///
+    /// 成员既含基础 `model_hash`，也含 caller 分区命名空间串
+    /// `{model_hash}:{caller_digest}`；`keys_for_hash` 对两者同构，
+    /// 逐成员清键即同时覆盖基础键与全部分区键（off 模式成员只有前者，
+    /// 行为不变）。
     pub(crate) async fn clear_all(&self) -> Result<(), VecboostError> {
         let mut conn = self.conn.clone();
         let models: Vec<String> = conn
@@ -649,6 +684,80 @@ mod tests {
         index.clear(&clamp).await.expect("clear clamp");
     }
 
+    // ── caller 分区清理（user 模式 clear/clear_all 必须清掉分区键） ──
+
+    /// clear(model) 必须同时清空该模型全部 caller 分区键与其 MODELS_KEY
+    /// 登记：分区键无 TTL，模型切换/卸载后漏清即残留。
+    #[tokio::test]
+    async fn clear_model_removes_caller_partitions_and_registrations() {
+        let Some(index) = connect_slot(SLOT_B).await else {
+            return;
+        };
+        let model = unique_model("caller-clear");
+        index
+            .insert(&model, "base partition probe", &[3.0f32; 2], 4)
+            .await
+            .expect("基础分区插入");
+        index
+            .insert_for_caller(&model, "alice", "caller partition probe", &[1.0f32; 2], 4)
+            .await
+            .expect("alice 分区插入");
+        index
+            .insert_for_caller(&model, "bob", "caller partition probe", &[2.0f32; 2], 4)
+            .await
+            .expect("bob 分区插入");
+
+        let (tri_alice, _, _) = RedisSemanticIndex::keys_with_caller(&model, "alice");
+        let (tri_bob, _, _) = RedisSemanticIndex::keys_with_caller(&model, "bob");
+        let mut raw = raw_conn(SLOT_B).await;
+        for key in [&tri_alice, &tri_bob] {
+            let exists: bool = redis::cmd("EXISTS")
+                .arg(key)
+                .query_async(&mut raw)
+                .await
+                .expect("EXISTS 前置");
+            assert!(exists, "user 分区键必须已登记写入：{key}");
+        }
+
+        index.clear(&model).await.expect("clear");
+
+        for key in [&tri_alice, &tri_bob] {
+            let exists: bool = redis::cmd("EXISTS")
+                .arg(key)
+                .query_async(&mut raw)
+                .await
+                .expect("EXISTS 后置");
+            assert!(!exists, "clear 后 caller 分区键必须清空：{key}");
+        }
+        let members: Vec<String> = raw.smembers(MODELS_KEY).await.expect("SMEMBERS");
+        let prefix = format!("{}:", digest(&model));
+        assert!(
+            members.iter().all(|m| !m.starts_with(&prefix)),
+            "clear 后不得残留分区登记成员：{members:?}"
+        );
+        assert!(
+            !members.contains(&digest(&model)),
+            "clear 后基础模型登记也必须移除"
+        );
+        // 行为验证：分区与基础索引都不可再命中
+        assert_eq!(
+            index
+                .find_similar_for_caller(&model, "alice", "caller partition probe", 0.9)
+                .await
+                .expect("clear 后分区查询不得报错"),
+            None,
+            "clear 后 caller 分区不得再命中"
+        );
+        assert_eq!(
+            index
+                .find_similar(&model, "base partition probe", 0.9)
+                .await
+                .expect("clear 后基础查询不得报错"),
+            None,
+            "clear 后基础索引不得再命中"
+        );
+    }
+
     // ── 损坏数据与清理 ────────────────────────────────────────────
 
     #[tokio::test]
@@ -733,6 +842,12 @@ mod tests {
             .insert(&second, "shared clear probe two", &[4.0f32; 2], 4)
             .await
             .expect("insert second");
+        // user 模式 caller 分区同样登记进 MODELS_KEY，clear_all 必须一并清空
+        index
+            .insert_for_caller(&first, "carol", "caller clear-all probe", &[5.0f32; 2], 4)
+            .await
+            .expect("caller 分区插入");
+        let (tri_carol, _, _) = RedisSemanticIndex::keys_with_caller(&first, "carol");
         assert!(
             index
                 .find_similar(&first, "shared clear probe one", 0.9)
@@ -747,6 +862,12 @@ mod tests {
             .await
             .expect("SCARD");
         assert!(before >= 2, "两个模型都应登记进集合，实际 {before}");
+        let carol_exists: bool = redis::cmd("EXISTS")
+            .arg(&tri_carol)
+            .query_async(&mut raw)
+            .await
+            .expect("EXISTS carol 前置");
+        assert!(carol_exists, "caller 分区键必须已登记写入");
 
         index.clear_all().await.expect("clear_all");
 
@@ -756,6 +877,12 @@ mod tests {
             .await
             .expect("SCARD after");
         assert_eq!(after, 0, "clear_all 后模型集合必须为空");
+        let carol_after: bool = redis::cmd("EXISTS")
+            .arg(&tri_carol)
+            .query_async(&mut raw)
+            .await
+            .expect("EXISTS carol 后置");
+        assert!(!carol_after, "clear_all 后 caller 分区键必须清空");
         assert_eq!(
             index
                 .find_similar(&first, "shared clear probe one", 0.9)

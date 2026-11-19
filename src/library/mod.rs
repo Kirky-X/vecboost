@@ -63,6 +63,10 @@ pub struct LibraryConfig {
     pub cache_size: usize,
     /// 重排序配置（None = 使用默认值）
     pub rerank_config: Option<RerankConfig>,
+    /// 调用方隔离模式（默认 Off = 缓存键行为不变）。与 server 模式
+    /// `[semantic_cache] caller_isolation` 同语义（SECURITY.md「四层分区」
+    /// 承诺的 rerank 缓存层），库路径无配置上下文，经本参数显式传入。
+    pub caller_isolation: crate::cache::CallerIsolation,
 }
 
 impl LibraryConfig {
@@ -115,11 +119,12 @@ impl VecBoostLibrary {
             )))
         };
 
-        // 3. 创建 RerankService
-        let rerank_service = Arc::new(RwLock::new(RerankService::new(
-            engine,
-            Some(config.model_config),
-        )));
+        // 3. 创建 RerankService（隔离模式经 LibraryConfig 显式传入，
+        // 与 server 模式 [semantic_cache] caller_isolation 同语义）
+        let rerank_service = Arc::new(RwLock::new(
+            RerankService::new(engine, Some(config.model_config))
+                .with_caller_isolation(config.caller_isolation),
+        ));
 
         // 4. 构建最小 AsyncKit（仅 EmbeddingModule + RerankModule）
         let mut kit = trait_kit::AsyncKit::new();
@@ -334,6 +339,7 @@ pub struct VecBoostModuleBuilder {
     with_embedding: bool,
     with_rerank: bool,
     rerank_config: Option<RerankConfig>,
+    caller_isolation: crate::cache::CallerIsolation,
 }
 
 impl VecBoostModuleBuilder {
@@ -345,6 +351,7 @@ impl VecBoostModuleBuilder {
             with_embedding: false,
             with_rerank: false,
             rerank_config: None,
+            caller_isolation: crate::cache::CallerIsolation::Off,
         }
     }
 
@@ -369,6 +376,13 @@ impl VecBoostModuleBuilder {
     /// 设置重排序配置（None = 使用默认值）
     pub fn rerank_config(mut self, config: RerankConfig) -> Self {
         self.rerank_config = Some(config);
+        self
+    }
+
+    /// 设置调用方隔离模式（默认 Off = 缓存键行为不变）。与 server 模式
+    /// `[semantic_cache] caller_isolation` 同语义。
+    pub fn caller_isolation(mut self, isolation: crate::cache::CallerIsolation) -> Self {
+        self.caller_isolation = isolation;
         self
     }
 
@@ -411,10 +425,10 @@ impl VecBoostModuleBuilder {
         }
 
         if self.with_rerank {
-            let rerank_service = Arc::new(RwLock::new(RerankService::new(
-                engine,
-                Some(self.model_config),
-            )));
+            let rerank_service = Arc::new(RwLock::new(
+                RerankService::new(engine, Some(self.model_config))
+                    .with_caller_isolation(self.caller_isolation),
+            ));
             kit.set_config(rerank_service);
             kit.set_config(self.rerank_config.unwrap_or_default());
             kit.register::<RerankModule>().map_err(|e| {
@@ -800,6 +814,17 @@ mod tests {
         assert_eq!(config.cache_size, 1000);
     }
 
+    // 默认 Off = 行为不变；user 由调用方经 LibraryConfig/builder 显式传入
+    #[test]
+    fn test_library_config_caller_isolation_default_off() {
+        let config = LibraryConfig::default();
+        assert_eq!(
+            config.caller_isolation,
+            crate::cache::CallerIsolation::Off,
+            "库路径缺省必须维持既有缓存键行为"
+        );
+    }
+
     #[test]
     fn test_library_config_with_rerank_config() {
         let config = LibraryConfig {
@@ -818,6 +843,7 @@ mod tests {
         assert!(!builder.with_rerank);
         assert_eq!(builder.cache_size, 0);
         assert!(builder.rerank_config.is_none());
+        assert_eq!(builder.caller_isolation, crate::cache::CallerIsolation::Off);
     }
 
     #[test]

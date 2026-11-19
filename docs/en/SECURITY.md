@@ -119,6 +119,12 @@ Please include where possible:
 - `SecretKey` zeroization; the environment-variable keystore is read-only.
 - All secret masking and text-preview functions use UTF-8 character-boundary-safe slicing (guards against multi-byte slicing panics).
 
+### Engine Trust Boundary
+
+- Two engine paths with different trust assumptions: Candle is a pure-Rust inference path, while ONNX loads the C++ `onnxruntime` through an FFI boundary (a larger native-code attack surface with its own dynamic-library loading). `[engine_security] profile` expresses the deployment's trust choice: `standard` (default, unchanged — Candle and ONNX both allowed) or `strict` (Candle only; configuring an ONNX model fails startup with the offending model name and remediation guidance).
+- Model integrity: `model.model_sha256` (when set) is verified at load time on all three engine paths — ONNX (`src/engine/onnx_engine.rs`), Candle (`src/engine/candle_engine.rs`), and decision (`src/engine/decision.rs`) — using `verify_sha256`. Unset hashes on remote downloads are the vuln-0009 gap; `vecboost doctor --security` reports each configured model lacking `model_sha256` as a WARN.
+- `vecboost doctor --security` renders only the `security-` prefixed read-only checks (auth posture, rate limiting, input limits, semantic-cache isolation, engine profile/build consistency, per-model sha256 coverage). It does not touch the network, disk (beyond existing read-only probes), or load models; any FAIL yields exit code 1, WARN does not.
+
 ### Logging and Observability
 
 - Audit logging (audit section + inklog): user, action, resource, IP, timestamp.

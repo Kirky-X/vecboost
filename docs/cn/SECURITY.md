@@ -119,6 +119,12 @@ cargo deny check
 - `SecretKey` 零化（zeroize）；环境变量 keystore 只读。
 - 所有密钥脱敏与文本预览函数使用 UTF-8 字符边界安全切片（防多字节切片 panic）。
 
+### 引擎信任边界
+
+- 两条信任假设不同的引擎路径：Candle 为纯 Rust 推理路径，ONNX 经 FFI 加载 C++ `onnxruntime`（原生代码攻击面更大，含独立动态库加载）。`[engine_security] profile` 表达部署的信任选择：`standard`（默认，现状——Candle 与 ONNX 均允许）或 `strict`（仅 Candle；配置 ONNX 模型时启动失败，错误含违规模型名与修正指引）。
+- 模型完整性：设置 `model.model_sha256` 后，三条引擎加载路径均经 `verify_sha256` 校验——ONNX（`src/engine/onnx_engine.rs`）、Candle（`src/engine/candle_engine.rs`）、decision（`src/engine/decision.rs`）。远程下载未设哈希即 vuln-0009 缺口；`vecboost doctor --security` 将每个未设 `model_sha256` 的模型报告为 WARN。
+- `vecboost doctor --security` 仅渲染 `security-` 前缀的只读检查项（认证态势、限流、输入上限、语义缓存隔离、引擎 profile/构建一致性、逐模型 sha256 覆盖）。不触网、不读盘（既有只读探针除外）、不加载模型；任一 FAIL 退出码为 1，WARN 不影响退出码。
+
 ### 日志与可观测
 
 - 审计日志（audit 段 + inklog）：用户、操作、资源、IP、时间戳。

@@ -264,6 +264,8 @@ startup-engine-candle-not-compiled = [model] engine_type="candle" 但本次构�
 engine-candle-cuda-unavailable = engine_type="candle" 配置了 device="cuda"，但本次构建/本机 CUDA 不可用：请以 `--features candle-cuda` 重新构建（CUDA 后端），并确认存在可用的 NVIDIA GPU；拒绝静默落到 CPU
 startup-semantic-mode-invalid = [semantic_cache] comparison_mode 无效：{ $detail }
 startup-semantic-caller-isolation-invalid = [semantic_cache] caller_isolation 无效：{ $detail }
+startup-engine-profile-invalid = [engine_security].profile 无效，应为 "standard" 或 "strict"：'{ $got }'
+startup-engine-profile-strict-violation = [engine_security] profile=strict 禁止 ONNX 模型 '{ $model }'：请改用 profile=standard 或将该模型的 engine_type 改为 candle
 startup-translation-no-onnx = [translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建
 startup-translate-pair-invalid = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) 参数非法：{ $detail }
 startup-translate-pair-load-failed = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) 加载失败：{ $detail }
@@ -333,6 +335,20 @@ log-metrics-json-response-build-failed = 构建 JSON 错误响应失败：{ $det
 # ── Doctor 报告外壳（标准输出；PASS/WARN/FAIL 标记保持英文 token）──
 doctor-report-title = vecboost doctor — 只读诊断
 doctor-summary = 共 { $total } 项检查：{ $pass } 通过、{ $warn } 告警、{ $fail } 失败
+doctor-security-auth-pass = 认证已启用
+doctor-security-auth-fail = 非回环绑定 { $host } 上认证被关闭；请设 [auth] enabled=true 或绑定回环地址
+doctor-security-auth-warn = 非回环 { $host } 上认证已启用；请确认未使用 VECBOOST_ALLOW_INSECURE 逃生阀
+doctor-security-ratelimit-pass = 限流已启用
+doctor-security-ratelimit-warn = 限流被关闭；请启用 [rate_limit] 以约束请求洪泛
+doctor-security-input-pass = 已配置输入文本长度上限（{ $max }）
+doctor-security-input-warn = 输入文本长度上限未设或为零；请设 [embedding] max_text_length 以约束资源占用
+doctor-security-cache-pass = 语义缓存隔离已启用（caller_isolation=user）
+doctor-security-cache-warn = 语义缓存关闭或 caller_isolation=off：条目默认跨调用方共享
+doctor-security-engine-pass = 引擎 profile 与模型及构建一致
+doctor-security-engine-warn = 引擎 profile { $profile } 与构建/feature 不一致：{ $detail }
+doctor-security-engine-strict-onnx = 声明 strict profile 但配置了 onnx 模型；请改用 standard 或 candle
+doctor-security-model-integrity-pass = 模型 '{ $model }' 已设置 model_sha256
+doctor-security-model-integrity-warn = 模型 '{ $model }'（{ $source }）未设置 model_sha256；远程下载未校验（vuln-0009）
 
 # ── 运行日志：服务启动 / 装配横幅（main.rs 标准输出+标准错误）──
 log-main-building-module = 正在构建模块：{ $module }

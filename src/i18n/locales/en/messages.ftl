@@ -264,6 +264,8 @@ startup-engine-candle-not-compiled = [model] engine_type="candle" but this build
 engine-candle-cuda-unavailable = device="cuda" with engine_type="candle" but CUDA is unavailable in this build/machine: rebuild with `--features candle-cuda` (CUDA backend) and ensure a usable NVIDIA GPU is present; refusing to run silently on CPU
 startup-semantic-mode-invalid = [semantic_cache] comparison_mode invalid: { $detail }
 startup-semantic-caller-isolation-invalid = [semantic_cache] caller_isolation invalid: { $detail }
+startup-engine-profile-invalid = invalid [engine_security].profile, expected "standard" or "strict": '{ $got }'
+startup-engine-profile-strict-violation = [engine_security] profile=strict forbids ONNX model '{ $model }': set profile=standard or change the model engine_type to candle
 startup-translation-no-onnx = [translation] pairs configured but this build did not enable the `onnx` feature; rebuild with --features onnx
 startup-translate-pair-invalid = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) invalid parameters: { $detail }
 startup-translate-pair-load-failed = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) failed to load: { $detail }
@@ -334,6 +336,20 @@ log-metrics-json-response-build-failed = Failed to build JSON error response: { 
 # ── Doctor report chrome (stdout; PASS/WARN/FAIL tokens stay untranslated) ──
 doctor-report-title = vecboost doctor — read-only diagnostics
 doctor-summary = { $total } check(s): { $pass } pass, { $warn } warn, { $fail } fail
+doctor-security-auth-pass = authentication enabled
+doctor-security-auth-fail = authentication disabled on a non-loopback bind ({ $host }); set [auth] enabled=true or bind to loopback
+doctor-security-auth-warn = authentication enabled on non-loopback { $host }; verify VECBOOST_ALLOW_INSECURE escape valve is not in use
+doctor-security-ratelimit-pass = rate limiting enabled
+doctor-security-ratelimit-warn = rate limiting disabled; enable [rate_limit] to bound request floods
+doctor-security-input-pass = input text length limit configured ({ $max })
+doctor-security-input-warn = input text length limit unset or zero; set [embedding] max_text_length to bound resource use
+doctor-security-cache-pass = semantic cache isolation enabled (caller_isolation=user)
+doctor-security-cache-warn = semantic cache is off or caller_isolation=off: entries are shared across callers by default
+doctor-security-engine-pass = engine profile consistent with models and build
+doctor-security-engine-warn = engine profile { $profile } inconsistent with build/features: { $detail }
+doctor-security-engine-strict-onnx = strict profile declared but an onnx model is configured; use standard or candle
+doctor-security-model-integrity-pass = model '{ $model }' has model_sha256 set
+doctor-security-model-integrity-warn = model '{ $model }' ({ $source }) has no model_sha256; remote downloads are unverified (vuln-0009)
 
 # ── Runtime logs: server startup / assembly banners (main.rs stdout+stderr) ──
 log-main-building-module = Building module: { $module }

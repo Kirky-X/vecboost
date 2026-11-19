@@ -87,6 +87,11 @@ pub struct ModelConfig {
     pub expected_dimension: Option<usize>,
     #[garde(skip)]
     pub max_sequence_length: Option<usize>,
+    /// 模型权重 SHA-256 期望值（可选）。设置后三条引擎加载路径均经 verify_sha256
+    /// 校验，未设时 doctor 产 WARN（远程下载未校验，vuln-0009）。默认 None = 现状。
+    #[garde(skip)]
+    #[serde(default)]
+    pub model_sha256: Option<String>,
     /// GGUF 量化模型开关：true 且 model_path 以 `.gguf` 结尾时
     /// 选用量化引擎；默认 false。对应运行时 `ModelConfig.quantized`。
     #[garde(skip)]
@@ -790,6 +795,61 @@ impl Default for InputSecurityConfig {
     }
 }
 
+/// 引擎安全 profile 配置（`[engine_security]` 段）。
+///
+/// `standard`（默认）等于现状：candle + onnx 均允许；`strict` 仅允许纯 Rust
+/// candle 路径——配 onnx 模型启动即拒（fail-fast）。
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct EngineSecurityConfig {
+    #[serde(default = "default_engine_security_profile")]
+    pub profile: String,
+}
+
+impl Default for EngineSecurityConfig {
+    fn default() -> Self {
+        Self {
+            profile: default_engine_security_profile(),
+        }
+    }
+}
+
+fn default_engine_security_profile() -> String {
+    "standard".to_string()
+}
+
+/// 引擎安全档位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EngineSecurityProfile {
+    #[default]
+    Standard,
+    Strict,
+}
+
+impl EngineSecurityProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EngineSecurityProfile::Standard => "standard",
+            EngineSecurityProfile::Strict => "strict",
+        }
+    }
+}
+
+impl std::str::FromStr for EngineSecurityProfile {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "standard" => Ok(EngineSecurityProfile::Standard),
+            "strict" => Ok(EngineSecurityProfile::Strict),
+            other => Err(crate::i18n::tr_with_args(
+                "startup-engine-profile-invalid",
+                crate::i18n::tr_args(&[("got", other)]),
+            )),
+        }
+    }
+}
+
 /// 设备与硬件感知配置（`[device]` 段）。
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]
@@ -1061,6 +1121,7 @@ impl Default for ModelConfig {
             batch_size: DEFAULT_BATCH_SIZE,
             expected_dimension: Some(DEFAULT_EXPECTED_DIMENSION),
             max_sequence_length: Some(DEFAULT_MAX_SEQUENCE_LENGTH),
+            model_sha256: None,
             quantized: false,
             engine_type: None,
             task: crate::config::model::ModelTask::Embedding,
@@ -2100,6 +2161,7 @@ max_new_tokens = 384
             batch_size: 128,
             expected_dimension: Some(384),
             max_sequence_length: Some(512),
+            model_sha256: None,
             quantized: false,
             engine_type: None,
             task: crate::config::model::ModelTask::Embedding,

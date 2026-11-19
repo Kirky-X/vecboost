@@ -67,7 +67,27 @@ impl DoctorReport {
         results.push(check_threads());
         results.push(check_gpu(config).await);
         results.extend(check_models(config));
+        // 安全 posture 六项只读检查（前缀 security-）。
+        results.push(check_security_auth(config));
+        results.push(check_security_rate_limit(config));
+        results.push(check_security_input(config));
+        results.push(check_security_cache(config));
+        results.push(check_security_engine(config));
+        results.extend(check_security_model_integrity(config));
         Self { results }
+    }
+
+    /// 仅保留 name 以 `security-` 前缀的条目（供 `doctor --security` 渲染）。
+    /// 不修改 run 逻辑，仅做结果子集投影。
+    pub fn security_only(&self) -> Self {
+        Self {
+            results: self
+                .results
+                .iter()
+                .filter(|r| r.name.starts_with("security-"))
+                .cloned()
+                .collect(),
+        }
     }
 
     /// 任一 FAIL 时进程退出码为 1（WARN 不影响退出码）。
@@ -695,10 +715,280 @@ fn verify_gguf_magic(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 是否回环绑定地址（localhost / 127.0.0.0/8 / ::1）。
+fn is_loopback_host(host: &str) -> bool {
+    let h = host.trim();
+    h.eq_ignore_ascii_case("localhost") || h.starts_with("127.") || h.eq_ignore_ascii_case("::1")
+}
+
+/// 安全自审计①：认证状态与非 loopback 绑定护栏。
+/// auth 关闭且绑定非 loopback → FAIL；auth 启用且非 loopback → WARN（提醒逃生阀）；
+/// auth 启用且 loopback → PASS；auth 关闭且 loopback → PASS（开发态）。
+pub fn check_security_auth(config: &VecboostConfig) -> CheckResult {
+    let host = config.server.host.as_str();
+    let loopback = is_loopback_host(host);
+    if !config.auth.enabled {
+        if loopback {
+            CheckResult::new(
+                "security-auth",
+                CheckStatus::Pass,
+                i18n::tr("doctor-security-auth-pass"),
+            )
+        } else {
+            CheckResult::new(
+                "security-auth",
+                CheckStatus::Fail,
+                i18n::tr_with_args(
+                    "doctor-security-auth-fail",
+                    i18n::tr_args(&[("host", host)]),
+                ),
+            )
+        }
+    } else if loopback {
+        CheckResult::new(
+            "security-auth",
+            CheckStatus::Pass,
+            i18n::tr("doctor-security-auth-pass"),
+        )
+    } else {
+        CheckResult::new(
+            "security-auth",
+            CheckStatus::Warn,
+            i18n::tr_with_args(
+                "doctor-security-auth-warn",
+                i18n::tr_args(&[("host", host)]),
+            ),
+        )
+    }
+}
+
+/// 安全自审计②：限流状态。
+pub fn check_security_rate_limit(config: &VecboostConfig) -> CheckResult {
+    if config.rate_limit.enabled {
+        CheckResult::new(
+            "security-rate-limit",
+            CheckStatus::Pass,
+            i18n::tr("doctor-security-ratelimit-pass"),
+        )
+    } else {
+        CheckResult::new(
+            "security-rate-limit",
+            CheckStatus::Warn,
+            i18n::tr("doctor-security-ratelimit-warn"),
+        )
+    }
+}
+
+/// 安全自审计③：输入长度上限。未设或零 → WARN。
+pub fn check_security_input(config: &VecboostConfig) -> CheckResult {
+    let max = config.embedding.max_text_length;
+    if max == 0 {
+        CheckResult::new(
+            "security-input",
+            CheckStatus::Warn,
+            i18n::tr("doctor-security-input-warn"),
+        )
+    } else {
+        CheckResult::new(
+            "security-input",
+            CheckStatus::Pass,
+            i18n::tr_with_args(
+                "doctor-security-input-pass",
+                i18n::tr_args(&[("max", &max.to_string())]),
+            ),
+        )
+    }
+}
+
+/// 安全自审计④：语义缓存调用方隔离模式披露。
+pub fn check_security_cache(config: &VecboostConfig) -> CheckResult {
+    if config.semantic_cache.enabled
+        && config
+            .semantic_cache
+            .caller_isolation
+            .eq_ignore_ascii_case("user")
+    {
+        CheckResult::new(
+            "security-cache",
+            CheckStatus::Pass,
+            i18n::tr("doctor-security-cache-pass"),
+        )
+    } else {
+        CheckResult::new(
+            "security-cache",
+            CheckStatus::Warn,
+            i18n::tr("doctor-security-cache-warn"),
+        )
+    }
+}
+
+/// 安全自审计⑤：引擎 profile × 模型 engine_type × 构建 feature 一致性。
+pub fn check_security_engine(config: &VecboostConfig) -> CheckResult {
+    use std::str::FromStr;
+    let profile =
+        crate::config::app::EngineSecurityProfile::from_str(&config.engine_security.profile)
+            .unwrap_or(crate::config::app::EngineSecurityProfile::Standard);
+    let onnx_declared = config
+        .model
+        .engine_type
+        .as_deref()
+        .filter(|e| e.eq_ignore_ascii_case("onnx"))
+        .is_some();
+
+    if profile == crate::config::app::EngineSecurityProfile::Strict && onnx_declared {
+        return CheckResult::new(
+            "security-engine",
+            CheckStatus::Fail,
+            i18n::tr("doctor-security-engine-strict-onnx"),
+        );
+    }
+
+    // standard profile 但未编译 onnx：声明与构建不一致 → WARN。
+    #[cfg(not(feature = "onnx"))]
+    if profile == crate::config::app::EngineSecurityProfile::Standard {
+        return CheckResult::new(
+            "security-engine",
+            CheckStatus::Warn,
+            i18n::tr_with_args(
+                "doctor-security-engine-warn",
+                i18n::tr_args(&[
+                    ("profile", profile.as_str()),
+                    (
+                        "detail",
+                        "standard profile but this build has no onnx feature",
+                    ),
+                ]),
+            ),
+        );
+    }
+    #[cfg(feature = "onnx")]
+    let _ = profile;
+
+    CheckResult::new(
+        "security-engine",
+        CheckStatus::Pass,
+        i18n::tr("doctor-security-engine-pass"),
+    )
+}
+
+/// 安全自审计⑥：逐模型 model_sha256 覆盖（只读配置，不读盘）。
+pub fn check_security_model_integrity(config: &VecboostConfig) -> Vec<CheckResult> {
+    let mut results = Vec::new();
+    let model_repo = &config.model.model_repo;
+    let source = if config.model.model_path.is_some() {
+        "local"
+    } else {
+        "remote"
+    };
+    let status = if config.model.model_sha256.is_some() {
+        CheckStatus::Pass
+    } else {
+        CheckStatus::Warn
+    };
+    let key = if status == CheckStatus::Pass {
+        "doctor-security-model-integrity-pass"
+    } else {
+        "doctor-security-model-integrity-warn"
+    };
+    results.push(CheckResult::new(
+        "security-model-integrity",
+        status,
+        i18n::tr_with_args(
+            key,
+            i18n::tr_args(&[("model", model_repo), ("source", source)]),
+        ),
+    ));
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn init() {
+        crate::i18n::init();
+    }
+
+    #[test]
+    fn test_security_checks_expectation_table() {
+        init();
+        let mut config = VecboostConfig::default();
+
+        // auth 关闭 + 默认非回环绑定（0.0.0.0）→ FAIL
+        config.auth.enabled = false;
+        config.server.host = "0.0.0.0".to_string();
+        assert_eq!(check_security_auth(&config).status, CheckStatus::Fail);
+
+        // auth 启用 + 非 loopback → WARN
+        config.auth.enabled = true;
+        assert_eq!(check_security_auth(&config).status, CheckStatus::Warn);
+
+        // 限流关闭 → WARN；开启 → PASS
+        config.rate_limit.enabled = false;
+        assert_eq!(check_security_rate_limit(&config).status, CheckStatus::Warn);
+        config.rate_limit.enabled = true;
+        assert_eq!(check_security_rate_limit(&config).status, CheckStatus::Pass);
+
+        // max_text_length 为零 → WARN；正常 → PASS
+        config.embedding.max_text_length = 0;
+        assert_eq!(check_security_input(&config).status, CheckStatus::Warn);
+        config.embedding.max_text_length = 8192;
+        assert_eq!(check_security_input(&config).status, CheckStatus::Pass);
+
+        // caller_isolation=off → WARN
+        config.semantic_cache.caller_isolation = "off".to_string();
+        assert_eq!(check_security_cache(&config).status, CheckStatus::Warn);
+        config.semantic_cache.enabled = true;
+        config.semantic_cache.caller_isolation = "user".to_string();
+        assert_eq!(check_security_cache(&config).status, CheckStatus::Pass);
+    }
+
+    #[test]
+    fn test_security_engine_and_model_integrity() {
+        init();
+        let mut config = VecboostConfig::default();
+        // strict + 全 candle → engine PASS
+        config.engine_security.profile = "strict".to_string();
+        config.model.engine_type = None;
+        assert_eq!(check_security_engine(&config).status, CheckStatus::Pass);
+
+        // 未设 sha256 → WARN 条目（逐模型一条）
+        config.model.model_sha256 = None;
+        let results = check_security_model_integrity(&config);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "security-model-integrity");
+        assert_eq!(results[0].status, CheckStatus::Warn);
+
+        // 已设 sha256 → PASS
+        config.model.model_sha256 = Some("abc123".to_string());
+        let results = check_security_model_integrity(&config);
+        assert_eq!(results[0].status, CheckStatus::Pass);
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_security_engine_strict_onnx_fails() {
+        init();
+        let mut config = VecboostConfig::default();
+        config.engine_security.profile = "strict".to_string();
+        config.model.engine_type = Some("onnx".to_string());
+        assert_eq!(check_security_engine(&config).status, CheckStatus::Fail);
+    }
+
+    #[tokio::test]
+    async fn test_security_only_filter_is_subset_of_full_run() {
+        init();
+        let config = VecboostConfig::default();
+        let full = DoctorReport::run(&config).await;
+        let only = full.security_only();
+        assert!(!only.results.is_empty(), "安全组应有条目");
+        assert!(only.results.len() <= full.results.len(), "过滤结果须为子集");
+        assert!(
+            only.results.iter().all(|r| r.name.starts_with("security-")),
+            "过滤后全部须以 security- 开头"
+        );
+    }
 
     /// `[model]` 段未知键静默回落默认值，doctor 的 config 检查项必须回显
     /// 解析后的 model.task 作为观测点（USER_GUIDE 键名拼写提示依赖此输出）。

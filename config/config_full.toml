@@ -23,6 +23,10 @@ model_repo = "BAAI/bge-m3"
 # 模型版本/分支
 model_revision = "main"
 
+# 权重 SHA-256 期望值 (可选)。设置后加载期三条引擎路径均校验，防止远程
+# 下载内容被篡改（vuln-0009）；未设时 `vecboost doctor --security` 产 WARN。
+# model_sha256 = "0123456789abcdef..."
+
 # 本地模型路径 (可选，设置后优先使用本地模型)
 model_path = ""
 
@@ -187,6 +191,13 @@ enabled = false
 #     （容量按调用方分摊），多副本 Redis 同步生效。caller 取 AuthContext.user.username，
 #     不使用可伪造的 X-User-Id 头；非法值启动报错。
 caller_isolation = "off"
+
+# ============ 引擎安全 profile ============
+[engine_security]
+# standard（默认）= 现状：candle 与 onnx 引擎均允许，零行为变更。
+# strict = 仅允许纯 Rust candle 路径；配置 onnx 模型时启动即拒（fail-fast，
+# 错误含违规模型名与修正指引）。未编译 onnx feature 时 strict 恒满足。
+profile = "standard"
 
 # ============ 审计日志配置 ============
 [audit]

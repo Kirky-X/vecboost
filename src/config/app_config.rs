@@ -20,10 +20,10 @@ use confers::Config;
 #[cfg(feature = "db")]
 use super::app::DatabaseConfig;
 use super::app::{
-    AuditConfig, AuthConfig, DeviceConfig, EmbeddingConfig, InputSecurityConfig,
-    MemoryPagingConfig, MemoryPoolConfig, ModelConfig, MonitoringConfig, RateLimitConfig,
-    RerankConfig, SemanticCacheConfig, ServerConfig, TranslationConfig, apply_priority_defaults,
-    apply_security_env_overrides,
+    AuditConfig, AuthConfig, DeviceConfig, EmbeddingConfig, EngineSecurityConfig,
+    InputSecurityConfig, MemoryPagingConfig, MemoryPoolConfig, ModelConfig, MonitoringConfig,
+    RateLimitConfig, RerankConfig, SemanticCacheConfig, ServerConfig, TranslationConfig,
+    apply_priority_defaults, apply_security_env_overrides,
 };
 use crate::pipeline::PipelineConfig;
 
@@ -56,6 +56,8 @@ pub struct VecboostConfig {
     pub semantic_cache: SemanticCacheConfig,
     /// 推理输入安全开关（`[input_security]` 段，默认全关闭）。
     pub input_security: InputSecurityConfig,
+    /// 引擎安全 profile（`[engine_security]` 段，默认 standard = 行为不变）。
+    pub engine_security: EngineSecurityConfig,
     pub memory_paging: MemoryPagingConfig,
     /// 设备与硬件感知配置（`[device]` 段，）。
     pub device: DeviceConfig,
@@ -135,6 +137,30 @@ impl VecboostConfig {
             errors.push(format!("translation: {}", e.error_detail()));
         }
 
+        // 引擎安全 profile：非法值启动报错；strict 与 onnx 模型组合显性拒绝。
+        use std::str::FromStr;
+        match crate::config::app::EngineSecurityProfile::from_str(&self.engine_security.profile) {
+            Err(detail) => errors.push(format!("engine_security.profile: {detail}")),
+            Ok(profile) => {
+                // 主模型 engine_type 为 Option<String>（"onnx" 字面量；None = candle 默认）。
+                // strict 档禁止任何声明为 onnx 的模型；未声明即视为 candle，放行。
+                let onnx_model = self
+                    .model
+                    .engine_type
+                    .as_deref()
+                    .filter(|e| e.eq_ignore_ascii_case("onnx"))
+                    .map(|_| self.model.model_repo.clone());
+                if profile == crate::config::app::EngineSecurityProfile::Strict
+                    && let Some(model_name) = onnx_model
+                {
+                    errors.push(crate::i18n::tr_with_args(
+                        "startup-engine-profile-strict-violation",
+                        crate::i18n::tr_args(&[("model", &model_name)]),
+                    ));
+                }
+            }
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -158,6 +184,61 @@ impl trait_kit::kit::Configurable for VecboostConfig {
 mod tests {
     use super::VecboostConfig;
     use crate::config::app::test_support::ENV_LOCK;
+
+    #[test]
+    fn test_engine_security_profile_defaults_standard() {
+        let config = VecboostConfig::default();
+        assert_eq!(config.engine_security.profile, "standard");
+        use std::str::FromStr;
+        assert_eq!(
+            crate::config::app::EngineSecurityProfile::from_str("standard").unwrap(),
+            crate::config::app::EngineSecurityProfile::Standard
+        );
+    }
+
+    #[test]
+    fn test_engine_security_profile_bogus_rejected() {
+        crate::i18n::init();
+        let mut config = VecboostConfig::default();
+        config.engine_security.profile = "bogus".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.error_detail().contains("profile"),
+            "错误须点名 profile: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_engine_security_strict_all_candle_passes() {
+        let mut config = VecboostConfig::default();
+        config.engine_security.profile = "strict".to_string();
+        // 默认模型为 candle，strict 校验通过。
+        assert!(
+            config.validate().is_ok(),
+            "strict + 全 candle 须通过: {:?}",
+            config.validate()
+        );
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_engine_security_strict_with_onnx_rejected() {
+        crate::i18n::init();
+        let mut config = VecboostConfig::default();
+        config.engine_security.profile = "strict".to_string();
+        config.model.engine_type = Some("onnx".to_string());
+        config.model.model_repo = "bad-onnx-model".to_string();
+        let err = config.validate().unwrap_err();
+        let detail = err.error_detail();
+        assert!(
+            detail.contains("bad-onnx-model"),
+            "违规模型名须出现在 detail: {detail}"
+        );
+        assert!(
+            detail.contains("candle") || detail.contains("standard"),
+            "detail 须含修正指引: {detail}"
+        );
+    }
 
     #[test]
     fn test_confers_app_config_compiles() {

@@ -386,7 +386,7 @@ fn resolve_engine_model_config(config: &VecboostConfig) -> anyhow::Result<ModelC
         expected_dimension: config.model.expected_dimension,
         memory_limit_bytes: None,
         oom_fallback_enabled: false,
-        model_sha256: None,
+        model_sha256: config.model.model_sha256.clone(),
         task: config.model.task,
         quantized: config.model.quantized,
         decision_params: None,
@@ -1881,9 +1881,14 @@ async fn app_main() -> anyhow::Result<()> {
     // EmbeddingService 的 run_cli_command 分发路径。
     #[cfg(feature = "cli")]
     if _filtered_args.get(1).map(|a| a.as_str()) == Some("doctor") {
-        vecboost::doctor::DoctorReport::run(&config)
-            .await
-            .print_and_exit();
+        let report = vecboost::doctor::DoctorReport::run(&config).await;
+        // `--security` 仅渲染 security- 前缀条目；run 逻辑与退出码语义不变。
+        let report = if _filtered_args.get(2).map(|a| a.as_str()) == Some("--security") {
+            report.security_only()
+        } else {
+            report
+        };
+        report.print_and_exit();
     }
 
     let (logger_manager, log_level) = init_logger(&config, cli_mode, mcp_mode).await?;

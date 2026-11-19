@@ -44,6 +44,18 @@ pub async fn decide(
 async fn decisions_handler(req: DecisionRequest) -> Result<DecisionResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
 
+    // 输入安全校验（问题文本字段），默认全关零变更。
+    for q in &req.questions {
+        crate::api::input_guard::guard_text(&st.kit, "/api/v1/decisions", None, &q.instructions)
+            .map_err(to_api_error)?;
+        crate::api::input_guard::guard_text(&st.kit, "/api/v1/decisions", None, &q.name)
+            .map_err(to_api_error)?;
+        for option in &q.options {
+            crate::api::input_guard::guard_text(&st.kit, "/api/v1/decisions", None, option)
+                .map_err(to_api_error)?;
+        }
+    }
+
     // pipeline 启用时决策请求经优先级队列入队（与 embed/rerank 同一套调度
     // 语义，P2-3）；disabled 或 CLI/gRPC-only 构建走进程内直连。
     #[cfg(feature = "http")]

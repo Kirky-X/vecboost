@@ -102,6 +102,9 @@ Please include where possible:
 - XFF trust inversion: when `trusted_proxies` is empty, `X-Forwarded-For` is ignored and the direct peer address is used (prevents header-forgery rate-limit bypass).
 - Rate limiting: limiteron token bucket with independent global / per-IP / per-user / per-API-key counters, ban management (ban-manager) and GCRA support.
 - Input limits: per-text maximum byte length (`max_text_length`, against resource exhaustion) and batch-size validation (`validate_batch_size`).
+- Input format-char rejection (`[input_security] reject_format_chars`, default false, opt-in): rejects Cf format characters — zero-width (U+200B..U+200F), bidi controls (U+202A..U+202E, U+2066..U+2069), and BOM (U+FEFF) — which are not Cc and thus bypass the default control-char check. Enable to close tokenizer / semantic-cache-key / log-rendering manipulation; legitimate corpora containing BOM or zero-width characters will be rejected when enabled.
+- Suspicious-pattern heuristic (`[input_security] detect_suspicious_patterns`, default false, opt-in): rejects input with a single character repeated more than 64 times or format characters above 1% density.
+- Input rejection audit events: `input_validation_rejected` (fields: `endpoint`, `caller`, `reason` of `format_chars`/`control_chars`, `fingerprint`) and `adversarial_input_detected` (fields: `endpoint`, `caller`, `pattern` of `char_run`/`format_density`, `fingerprint`). The raw input is never recorded — only its SHA-256 fingerprint, enabling repeat-probe correlation without a second disclosure.
 
 ### File and Path Security
 

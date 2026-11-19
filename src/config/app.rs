@@ -701,6 +701,28 @@ fn default_comparison_mode() -> String {
     "exact".to_string()
 }
 
+/// 推理输入安全配置（`[input_security]` 段）。
+///
+/// 两开关默认均关闭——行为与现状零变更，遵循项目「配置面行为不变更、
+/// opt-in 生效」风格（参照 `[semantic_cache] enabled` 默认 false）。
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct InputSecurityConfig {
+    /// 拒绝 Cf 格式字符（零宽/双向控制/BOM）。默认 false。
+    pub reject_format_chars: bool,
+    /// 启用可疑模式启发式（同字符长填充 / 格式字符密度异常）。默认 false。
+    pub detect_suspicious_patterns: bool,
+}
+
+impl Default for InputSecurityConfig {
+    fn default() -> Self {
+        Self {
+            reject_format_chars: false,
+            detect_suspicious_patterns: false,
+        }
+    }
+}
+
 /// 设备与硬件感知配置（`[device]` 段）。
 #[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
 #[serde(default)]

@@ -583,6 +583,31 @@ async fn test_forge_embed_empty_text_returns_error() {
 }
 
 #[cfg(feature = "http")]
+#[test]
+fn test_input_security_format_chars_rejection_maps_to_400_with_i18n_copy() {
+    crate::i18n::init();
+    // 构造带 [input_security] 开关的 kit（guard_text 单测同源），验证拒绝
+    // 经 to_api_error 映射为 400 InvalidInput 且错误体携带 i18n 文案。
+    let kit = trait_kit::AsyncKit::new();
+    kit.set_config(crate::config::app::InputSecurityConfig {
+        reject_format_chars: true,
+        ..Default::default()
+    });
+    let err = crate::api::input_guard::guard_text(&kit, "/api/v1/embed", None, "a\u{200b}b")
+        .expect_err("format chars must be rejected when switch on");
+    let api_err = to_api_error(err);
+    match api_err {
+        ApiError::InvalidInput { message, .. } => {
+            assert!(
+                message.contains("format") || message.contains("格式"),
+                "400 错误体须含格式字符 i18n 文案, got: {message}"
+            );
+        }
+        other => panic!("Expected InvalidInput (400), got {other:?}"),
+    }
+}
+
+#[cfg(feature = "http")]
 #[tokio::test]
 async fn test_forge_embed_batch_success() {
     ensure_state_initialized().await;

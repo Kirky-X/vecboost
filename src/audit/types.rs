@@ -21,6 +21,8 @@ impl SecurityEventType {
             SecurityEventType::UnauthorizedAccess => "unauthorized_access",
             SecurityEventType::RateLimitExceeded => "rate_limit_exceeded",
             SecurityEventType::ConfigChanged => "config_changed",
+            SecurityEventType::InputValidationRejected => "input_validation_rejected",
+            SecurityEventType::AdversarialInputDetected => "adversarial_input_detected",
         }
     }
 }

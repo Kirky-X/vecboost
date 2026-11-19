@@ -185,6 +185,17 @@ pub fn has_disallowed_control_chars(text: &str) -> bool {
     })
 }
 
+/// Cf 类格式字符拒绝集：零宽（U+200B..U+200F）、双向控制（U+202A..U+202E、
+/// U+2066..U+2069）、BOM（U+FEFF）。
+///
+/// 独立成集，不并入 [`has_disallowed_control_chars`]：Cc 集与 `echo()` 的
+/// 字面量化集有「同集」锁定，扩集会连带改动错误回显行为并破坏既有语义。
+/// 这些字符不属 Cc，`is_control()` 为 false，故当前全部放行——它们可对
+/// tokenizer 语义、语义缓存 trigram 键与下游日志渲染造成隐性操纵。
+pub fn has_disallowed_format_chars(text: &str) -> bool {
+    text.chars().any(has_disallowed_format_chars_char)
+}
+
 /// 语言码格式校验，等价 `^[a-z]{2,3}$`（大写显性拒绝，与配置面同一口径，
 /// 无大小写归一）。ASCII 小写均为单字节，字节长度即字符长度。
 /// 单一事实源：域层（detect 请求 allowlist）、服务层（detect-invalid-allowlist
@@ -434,6 +445,107 @@ impl FileValidator for InputValidator {
     fn validate_file(&self, path: &str) -> Result<(), VecboostError> {
         self.validate_file_size(path)
     }
+}
+
+/// 可疑模式类别（Stage 3 启发式命中结果）。`as_str` 供审计事件分类字段使用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuspiciousPattern {
+    /// 同一字符连续出现超过阈值（默认 64）。
+    CharRun { ch: char, len: usize },
+    /// 格式字符占比超过阈值（ppm，百万分之一）。
+    FormatCharDensity { ppm: usize },
+}
+
+impl SuspiciousPattern {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SuspiciousPattern::CharRun { .. } => "char_run",
+            SuspiciousPattern::FormatCharDensity { .. } => "format_density",
+        }
+    }
+}
+
+/// 同字符连续出现阈值：严格大于该值才命中（64 个连续字符为合法上限）。
+const SUSPICIOUS_CHAR_RUN_THRESHOLD: usize = 64;
+/// 格式字符密度阈值（ppm）：严格大于 10000ppm（1%）才命中。
+const SUSPICIOUS_FORMAT_DENSITY_PPM: usize = 10_000;
+
+/// 可疑模式启发式（两条确定性规则）：
+/// 1. 同一字符连续出现 > 64 → [`SuspiciousPattern::CharRun`]；
+/// 2. 格式字符（拒绝集同 [`has_disallowed_format_chars`]）占比 > 1% →
+///    [`SuspiciousPattern::FormatCharDensity`]。
+///
+/// 规则 1 优先返回（单遍扫描即可判定，且长填充是更强的攻击信号）。
+pub fn detect_suspicious_patterns(text: &str) -> Option<SuspiciousPattern> {
+    let mut prev: Option<char> = None;
+    let mut run_len: usize = 0;
+    let mut format_count: usize = 0;
+    let mut total: usize = 0;
+
+    for c in text.chars() {
+        total += 1;
+        if has_disallowed_format_chars_char(c) {
+            format_count += 1;
+        }
+        if prev == Some(c) {
+            run_len += 1;
+        } else {
+            prev = Some(c);
+            run_len = 1;
+        }
+        if run_len > SUSPICIOUS_CHAR_RUN_THRESHOLD {
+            return Some(SuspiciousPattern::CharRun {
+                ch: c,
+                len: run_len,
+            });
+        }
+    }
+
+    if total == 0 {
+        return None;
+    }
+    let ppm = format_count.saturating_mul(1_000_000) / total;
+    if ppm > SUSPICIOUS_FORMAT_DENSITY_PPM {
+        return Some(SuspiciousPattern::FormatCharDensity { ppm });
+    }
+    None
+}
+
+/// 单字符版 Cf 拒绝集判定（与 [`has_disallowed_format_chars`] 同集，供密度统计复用）。
+fn has_disallowed_format_chars_char(c: char) -> bool {
+    matches!(c, '\u{200b}'..='\u{200f}')
+        || matches!(c, '\u{202a}'..='\u{202e}')
+        || matches!(c, '\u{2066}'..='\u{2069}')
+        || c == '\u{feff}'
+}
+
+/// 统一文本安全校验入口：basic 三查 + （开关开启时）Cf 格式字符拒绝 +
+/// （开关开启时）可疑模式启发式。
+///
+/// 两开关均为 false 时行为与 [`validate_text_basic`] 完全一致——默认零变更。
+/// `reject_format`/`detect_patterns` 由 kit 配置注入，API 层与 pipeline 入队门
+/// 同参调用，保持单一事实源。
+pub fn validate_text_security(
+    text: &str,
+    reject_format: bool,
+    detect_patterns: bool,
+) -> Result<(), VecboostError> {
+    validate_text_basic(text)?;
+
+    if reject_format && has_disallowed_format_chars(text) {
+        return Err(VecboostError::InvalidInput(i18n::tr(
+            "validate-text-format-chars",
+        )));
+    }
+
+    if detect_patterns && let Some(pattern) = detect_suspicious_patterns(text) {
+        return Err(VecboostError::InvalidInput(i18n::tr_with_args(
+            "validate-text-suspicious-pattern",
+            i18n::tr_args(&[("kind", pattern.as_str())]),
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1094,6 +1206,115 @@ mod control_char_tests {
         let out = echo(&"\u{2028}".repeat(MAX_ECHO_CHARS + 8));
         assert_eq!(out.len(), MAX_ECHO_CHARS * 8 + 3);
         assert!(out.ends_with("..."));
+    }
+
+    #[test]
+    fn test_has_disallowed_format_chars_rejects_zero_width_and_bidi() {
+        // Cf 格式字符：零宽（U+200B..U+200F）、BOM（U+FEFF）、双向控制
+        // （U+202A..U+202E、U+2066..U+2069）必须全部命中。
+        assert!(has_disallowed_format_chars("\u{200b}abc"));
+        assert!(has_disallowed_format_chars("a\u{200c}b"));
+        assert!(has_disallowed_format_chars("a\u{200d}b"));
+        assert!(has_disallowed_format_chars("\u{feff}x"));
+        assert!(has_disallowed_format_chars("a\u{202e}b"));
+        assert!(has_disallowed_format_chars("a\u{2066}b"));
+        assert!(has_disallowed_format_chars("a\u{2069}b"));
+    }
+
+    #[test]
+    fn test_has_disallowed_format_chars_allows_normal_text() {
+        // 正常语料（含中文、tab、换行、空格）不得被格式字符拒绝集误伤。
+        assert!(!has_disallowed_format_chars("普通中文"));
+        assert!(!has_disallowed_format_chars("tab\there"));
+        assert!(!has_disallowed_format_chars("line\nbreak"));
+        assert!(!has_disallowed_format_chars("abc def"));
+    }
+
+    #[test]
+    fn test_validate_text_security_flags_off_matches_basic() {
+        crate::i18n::init();
+        // 两开关全关时，validate_text_security 与 validate_text_basic 行为一致。
+        for sample in [
+            "",
+            "   ",
+            "abc def",
+            "bad\0null",
+            "普通中文",
+            "bad\u{200b}x",
+        ] {
+            let basic = validate_text_basic(sample);
+            let secure = validate_text_security(sample, false, false);
+            assert_eq!(basic.is_ok(), secure.is_ok(), "样本 {sample:?} 行为应一致");
+        }
+    }
+
+    #[test]
+    fn test_validate_text_security_rejects_format_chars_when_enabled() {
+        crate::i18n::init();
+        // 开关关闭时放行；开启后拒绝并给出 i18n 文案。
+        assert!(validate_text_security("a\u{200b}b", false, false).is_ok());
+        let err = validate_text_security("a\u{200b}b", true, false).unwrap_err();
+        match err {
+            VecboostError::InvalidInput(msg) => assert!(
+                msg.contains("format") || msg.contains("格式"),
+                "拒绝文案须含格式字符语义: {msg}"
+            ),
+            other => panic!("Expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_detect_suspicious_patterns_char_run() {
+        // 规则 1：同一字符连续 > 64 命中 CharRun；=64 不命中。
+        assert_eq!(
+            detect_suspicious_patterns(&"a".repeat(65)),
+            Some(SuspiciousPattern::CharRun { ch: 'a', len: 65 })
+        );
+        assert_eq!(detect_suspicious_patterns(&"x".repeat(64)), None);
+    }
+
+    #[test]
+    fn test_detect_suspicious_patterns_format_density() {
+        // 规则 2：格式字符占比 > 1%（10000ppm）命中；0.5% 不命中。
+        // 普通字符交替 ab 以避免触发规则 1（同字符连续 > 64）。
+        let build = |stride: usize| -> String {
+            (0..1000)
+                .map(|i| {
+                    if i % stride == 0 {
+                        '\u{200b}'
+                    } else if i % 2 == 0 {
+                        'a'
+                    } else {
+                        'b'
+                    }
+                })
+                .collect()
+        };
+        // 1.5%：每 67 位一个 U+200B，共 15 个 / 1000 字符 = 15000ppm。
+        let high = build(67);
+        assert!(matches!(
+            detect_suspicious_patterns(&high),
+            Some(SuspiciousPattern::FormatCharDensity { ppm }) if ppm == 15_000
+        ));
+        // 0.5%：每 200 位一个 U+200B，共 5 个 / 1000 字符 = 5000ppm，不命中。
+        let low = build(200);
+        assert_eq!(detect_suspicious_patterns(&low), None);
+    }
+
+    #[test]
+    fn test_validate_text_security_detects_patterns_when_enabled() {
+        crate::i18n::init();
+        let run = "a".repeat(65);
+        // 开关关闭时放行（basic 三查不覆盖长填充）；开启后拒绝。
+        assert!(validate_text_security(&run, false, false).is_ok());
+        let err = validate_text_security(&run, false, true).unwrap_err();
+        match err {
+            VecboostError::InvalidInput(msg) => assert!(
+                msg.contains("char_run") || msg.contains("可疑") || msg.contains("模式"),
+                "拒绝文案须含可疑模式语义: {msg}"
+            ),
+            other => panic!("Expected InvalidInput, got {other:?}"),
+        }
     }
 
     /// 回归钉：NUL 与 C0 控制字符拒绝，tab/LF/CR 豁免，正常文本通过。

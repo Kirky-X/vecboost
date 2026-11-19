@@ -85,6 +85,16 @@ pub fn compute_sha256<P: AsRef<Path>>(file_path: P) -> Result<String, VecboostEr
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// 对字节串计算 SHA-256 并返回小写十六进制串。
+///
+/// 用于审计指纹：对原始输入做单向摘要，使审计日志可判定「同一输入重复试探」
+/// 而不落原文（防原文进入日志造成二次泄露）。复用本模块的 sha2 依赖。
+pub fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())
+}
+
 pub fn verify_sha256<P: AsRef<Path>>(
     file_path: P,
     expected_hash: &str,
@@ -250,6 +260,18 @@ mod tests {
 
         let hash = compute_sha256(temp_file.path()).unwrap();
         assert_eq!(hash.len(), 64);
+    }
+
+    #[test]
+    fn test_sha256_hex_known_vector() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     #[test]

@@ -23,6 +23,10 @@ pub enum SecurityEventType {
     UnauthorizedAccess,
     RateLimitExceeded,
     ConfigChanged,
+    /// 输入安全校验拒绝（Cf 格式字符 / 长度 / 控制字符）。
+    InputValidationRejected,
+    /// 可疑输入模式命中（同字符长填充 / 格式字符密度异常）。
+    AdversarialInputDetected,
 }
 
 /// Security event log entry
@@ -116,6 +120,14 @@ mod tests {
             "rate_limit_exceeded"
         );
         assert_eq!(SecurityEventType::ConfigChanged.as_str(), "config_changed");
+        assert_eq!(
+            SecurityEventType::InputValidationRejected.as_str(),
+            "input_validation_rejected"
+        );
+        assert_eq!(
+            SecurityEventType::AdversarialInputDetected.as_str(),
+            "adversarial_input_detected"
+        );
     }
 
     #[test]

@@ -4,5 +4,8 @@
 pub mod input;
 pub mod path;
 
-pub use input::{FileValidator, InputValidator, TextValidator, ValidationConfig};
+pub use input::{
+    FileValidator, InputValidator, SuspiciousPattern, TextValidator, ValidationConfig,
+    detect_suspicious_patterns, has_disallowed_format_chars, validate_text_security,
+};
 pub use path::PathValidator;

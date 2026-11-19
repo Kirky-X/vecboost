@@ -607,6 +607,56 @@ impl AuditLogger {
         self.log(event);
     }
 
+    /// Log an input validation rejection event.
+    ///
+    /// 指纹为原始输入的 sha256 十六进制串，用于判定「同一输入重复试探」；
+    /// 原文不入日志（防二次泄露）。序列化字段与 `log_permission_denied`
+    /// 同构：`SecurityEvent::new` + `details` JSON 对象。
+    pub fn log_input_rejected(
+        &self,
+        endpoint: &str,
+        caller: Option<&str>,
+        reason: &str,
+        fingerprint: &str,
+    ) {
+        let event = SecurityEvent::new(
+            SecurityEventType::InputValidationRejected,
+            caller.map(str::to_string),
+            None,
+            serde_json::json!({
+                "endpoint": endpoint,
+                "reason": reason,
+                "fingerprint": fingerprint,
+            }),
+            false,
+        );
+        self.log(event);
+    }
+
+    /// Log an adversarial input pattern detection event.
+    /// 字段口径与 `log_input_rejected` 一致，另附模式类别（`char_run` /
+    /// `format_density`）。
+    pub fn log_adversarial_input(
+        &self,
+        endpoint: &str,
+        caller: Option<&str>,
+        pattern: &crate::utils::validator::input::SuspiciousPattern,
+        fingerprint: &str,
+    ) {
+        let event = SecurityEvent::new(
+            SecurityEventType::AdversarialInputDetected,
+            caller.map(str::to_string),
+            None,
+            serde_json::json!({
+                "endpoint": endpoint,
+                "pattern": pattern.as_str(),
+                "fingerprint": fingerprint,
+            }),
+            false,
+        );
+        self.log(event);
+    }
+
     /// Rotate log files.
     #[allow(clippy::collapsible_if)]
     async fn rotate_logs(log_file_path: &PathBuf, max_files: usize) {
@@ -810,6 +860,42 @@ mod tests {
         let content = read_log_content(&log_path).await;
         assert!(content.contains("user_deleted"));
         assert!(content.contains("deleted_user"));
+    }
+
+    #[tokio::test]
+    async fn test_log_input_rejected_writes_event_without_raw_text() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "input_rejected.log");
+        let fingerprint = crate::utils::hash::sha256_hex(b"secret-raw-input");
+        logger.log_input_rejected(
+            "/api/v1/embed",
+            Some("tenant-a"),
+            "format_chars",
+            &fingerprint,
+        );
+        logger.flush().await.unwrap();
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("input_validation_rejected"));
+        assert!(content.contains("format_chars"));
+        assert!(content.contains(&fingerprint));
+        assert!(content.contains("tenant-a"));
+        // 原文不得落入审计日志。
+        assert!(!content.contains("secret-raw-input"));
+    }
+
+    #[tokio::test]
+    async fn test_log_adversarial_input_writes_pattern_class() {
+        let temp_dir = TempDir::new().unwrap();
+        let (logger, log_path) = make_logger(&temp_dir, "adversarial.log");
+        let pattern =
+            crate::utils::validator::input::SuspiciousPattern::CharRun { ch: 'a', len: 65 };
+        let fingerprint = crate::utils::hash::sha256_hex(b"aaaa...");
+        logger.log_adversarial_input("/api/v1/embed", None, &pattern, &fingerprint);
+        logger.flush().await.unwrap();
+        let content = read_log_content(&log_path).await;
+        assert!(content.contains("adversarial_input_detected"));
+        assert!(content.contains("char_run"));
+        assert!(content.contains(&fingerprint));
     }
 
     #[tokio::test]

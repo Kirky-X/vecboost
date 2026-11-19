@@ -166,6 +166,17 @@ session_backend = "memory"
 # 是否启用 CSRF 保护
 enabled = false
 
+# ============ 推理输入安全配置 ============
+# 两开关默认均 false：行为与现状完全一致（opt-in 生效，参照 [semantic_cache] enabled）。
+[input_security]
+# 拒绝 Cf 格式字符：零宽（U+200B..U+200F）、双向控制（U+202A..U+202E、
+# U+2066..U+2069）、BOM（U+FEFF）。这些字符不是 Cc，常规控制字符检查放行；
+# 开启后可对 tokenizer 语义/语义缓存键/日志渲染的隐性操纵设防。
+# 注意：合法但含 BOM/零宽字符的语料（如未清洗的爬虫数据）在开启后会被拒绝。
+reject_format_chars = false
+# 可疑模式启发式：同字符连续 >64 或格式字符占比 >1% 即拒绝并写审计事件。
+detect_suspicious_patterns = false
+
 # ============ 审计日志配置 ============
 [audit]
 # 是否启用审计日志

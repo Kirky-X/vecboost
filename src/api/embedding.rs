@@ -308,11 +308,22 @@ fn check_file_embed_size(len: u64) -> Result<(), String> {
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
-    validate_text_length(
+    if let Err(e) = validate_text_length(
         std::slice::from_ref(&req.text),
         max_text_length_from_kit(&st.kit),
-    )
-    .map_err(to_api_error)?;
+    ) {
+        crate::api::input_guard::audit_text_rejection(
+            &st.kit,
+            "/api/v1/embed",
+            None,
+            "length",
+            &req.text,
+        );
+        return Err(to_api_error(e));
+    }
+    // 输入安全校验（Cf 格式字符/可疑模式），默认全关零变更；拒绝写审计事件。
+    crate::api::input_guard::guard_text(&st.kit, "/api/v1/embed", None, &req.text)
+        .map_err(to_api_error)?;
 
     #[cfg(feature = "http")]
     {
@@ -345,7 +356,20 @@ async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
 async fn embed_batch_handler(req: BatchEmbedRequest) -> Result<BatchEmbedResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
     validate_batch_size(req.texts.len(), max_batch_size_from_kit(&st.kit)).map_err(to_api_error)?;
-    validate_text_length(&req.texts, max_text_length_from_kit(&st.kit)).map_err(to_api_error)?;
+    if let Err(e) = validate_text_length(&req.texts, max_text_length_from_kit(&st.kit)) {
+        crate::api::input_guard::audit_text_rejection(
+            &st.kit,
+            "/api/v1/embed/batch",
+            None,
+            "length",
+            &req.texts.first().map(String::as_str).unwrap_or(""),
+        );
+        return Err(to_api_error(e));
+    }
+    for text in &req.texts {
+        crate::api::input_guard::guard_text(&st.kit, "/api/v1/embed/batch", None, text)
+            .map_err(to_api_error)?;
+    }
     let svc = st
         .kit
         .require::<EmbeddingModule>()
@@ -1041,6 +1065,10 @@ pub async fn forge_openai_embed(req: OpenAIEmbedRequest) -> Result<OpenAIEmbedRe
 
     let texts = req.input.to_vec();
     validate_text_length(&texts, max_text_length_from_kit(&st.kit)).map_err(to_api_error)?;
+    for text in &texts {
+        crate::api::input_guard::guard_text(&st.kit, "/v1/embeddings", None, text)
+            .map_err(to_api_error)?;
+    }
     // 预先计算 total_chars 和 token 计数，避免后续 move texts 到 batch_req 后再访问
     let total_chars: usize = texts.iter().map(|s| s.len()).sum();
     // 使用 tokenizer 真实计数替代 bytes/4 估算

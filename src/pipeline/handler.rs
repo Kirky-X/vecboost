@@ -170,8 +170,10 @@ pub async fn handle_pipeline_request(
     // 入队前内容三查（与决策侧 validate_request 同构）：批内一条非法文本
     // 会让整批 embed 在服务层校验处整批失败、错误扩散给批内其他合法请求——
     // O(1) 在此 400 拒绝，不占队列槽位与 worker 出队周期。
-    // 长度维度由调用侧 validate_text_length 按 kit 配置口径先行
-    crate::utils::validator::input::validate_text_basic(&req.text)?;
+    // 长度维度由调用侧 validate_text_length 按 kit 配置口径先行。
+    // 输入安全校验按 [input_security] 开关升级（默认全关等价于原 basic 三查），
+    // 拒绝写审计事件（含 sha256 指纹，不落原文）。
+    crate::api::input_guard::guard_text(&state.kit, "/api/v1/embed", None, &req.text)?;
 
     // 进入 pipeline 等待即计为在途(RAII,任何退出路径自动递减)；follower
     // 同样计入（HTTP 在途语义，不随合并路径改变观测口径）
@@ -560,6 +562,19 @@ mod tests {
         queue_capacity: usize,
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
     ) -> VecboostState {
+        create_test_state_with_input_security(
+            queue_capacity,
+            engine,
+            crate::config::app::InputSecurityConfig::default(),
+        )
+        .await
+    }
+
+    async fn create_test_state_with_input_security(
+        queue_capacity: usize,
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        input_security: crate::config::app::InputSecurityConfig,
+    ) -> VecboostState {
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine.clone(), None)));
         let rerank_service = Arc::new(RwLock::new(crate::service::rerank::RerankService::new(
             engine, None,
@@ -600,6 +615,7 @@ mod tests {
         kit.set_config(None::<Arc<crate::metrics::InferenceCollector>>);
         kit.set_config(None::<Arc<crate::metrics::PrometheusCollector>>);
         kit.set_config(crate::RerankConfig::default());
+        kit.set_config(input_security);
         #[cfg(feature = "auth")]
         {
             kit.set_config(Option::<Arc<crate::auth::GarrisonHandle>>::None);
@@ -848,6 +864,44 @@ mod tests {
             queue.size(),
             0,
             "invalid text must never occupy a queue slot"
+        );
+    }
+
+    /// Cf 格式字符门钉：reject_format_chars=true 时 U+200B 输入在入队前
+    /// 400 拒绝，不占队列槽位（默认关闭时该输入放行，由 validator 单测覆盖）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handle_pipeline_request_rejects_format_chars_when_enabled() {
+        let _registry_guard = REGISTRY_LOCK.lock().await;
+        ensure_i18n_init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let state = create_test_state_with_input_security(
+            100,
+            engine,
+            crate::config::app::InputSecurityConfig {
+                reject_format_chars: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        let queue = state
+            .kit
+            .require::<crate::registry::PipelineQueueModule>()
+            .expect("PipelineQueueModule not registered");
+
+        let req = EmbedRequest {
+            text: "bad\u{200b}text".to_string(),
+            normalize: Some(true),
+        };
+        let result = handle_pipeline_request(state, req, "127.0.0.1".to_string()).await;
+        assert!(
+            matches!(result, Err(VecboostError::InvalidInput(_))),
+            "U+200B text must be rejected before enqueue when switch on, got {result:?}"
+        );
+        assert_eq!(
+            queue.size(),
+            0,
+            "rejected text must not occupy a queue slot"
         );
     }
 

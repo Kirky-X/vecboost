@@ -110,6 +110,16 @@ async fn load_rerank_service() -> Result<(Arc<RwLock<RerankService>>, usize, usi
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]
 async fn rerank_handler(req: RerankRequest) -> Result<RerankResponse, ApiError> {
+    // 输入安全校验（query + documents），默认全关零变更。
+    {
+        let st = crate::api::init::state().map_err(to_api_error)?;
+        crate::api::input_guard::guard_text(&st.kit, "/api/v1/rerank", None, &req.query)
+            .map_err(to_api_error)?;
+        for doc in &req.documents {
+            crate::api::input_guard::guard_text(&st.kit, "/api/v1/rerank", None, doc)
+                .map_err(to_api_error)?;
+        }
+    }
     let (svc, max_documents, max_query_length) = load_rerank_service().await?;
     let guard = svc.read().await;
     rerank(&guard, req, max_documents, max_query_length)

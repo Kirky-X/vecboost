@@ -102,6 +102,9 @@ cargo deny check
 - XFF 信任反转：`trusted_proxies` 为空时忽略 `X-Forwarded-For`，使用直连地址（防头伪造限流绕过）。
 - 速率限制：limiteron 令牌桶，全局 / 每 IP / 每用户 / 每 API 密钥多维独立计数，支持封禁管理（ban-manager）与 GCRA。
 - 输入限制：单文本最大字节长度（`max_text_length`，防资源耗尽）、批量大小校验（`validate_batch_size`）。
+- 输入格式字符拒绝（`[input_security] reject_format_chars`，默认 false，opt-in）：拒绝 Cf 类格式字符——零宽（U+200B..U+200F）、双向控制（U+202A..U+202E、U+2066..U+2069）与 BOM（U+FEFF）。这些字符不属 Cc，会绕过默认控制字符检查；开启可关闭 tokenizer / 语义缓存键 / 日志渲染的隐性操纵面。开启后合法但含 BOM/零宽字符的语料会被拒绝。
+- 可疑模式启发式（`[input_security] detect_suspicious_patterns`，默认 false，opt-in）：拒绝同一字符连续出现超过 64 次或格式字符占比超过 1% 的输入。
+- 输入拒绝审计事件：`input_validation_rejected`（字段 `endpoint`、`caller`、`reason` 取值 `format_chars`/`control_chars`、`fingerprint`）与 `adversarial_input_detected`（字段 `endpoint`、`caller`、`pattern` 取值 `char_run`/`format_density`、`fingerprint`）。原文永不入日志，仅记录 SHA-256 指纹——支持重复试探关联，且避免二次泄露。
 
 ### 文件与路径安全
 

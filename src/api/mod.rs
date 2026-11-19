@@ -16,6 +16,7 @@ pub mod decisions;
 pub mod detect;
 pub mod embedding;
 pub mod init;
+pub mod input_guard;
 #[cfg(feature = "swagger-ui")]
 pub mod redoc;
 #[cfg(feature = "http")]

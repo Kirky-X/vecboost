@@ -20,9 +20,10 @@ use confers::Config;
 #[cfg(feature = "db")]
 use super::app::DatabaseConfig;
 use super::app::{
-    AuditConfig, AuthConfig, DeviceConfig, EmbeddingConfig, MemoryPagingConfig, MemoryPoolConfig,
-    ModelConfig, MonitoringConfig, RateLimitConfig, RerankConfig, SemanticCacheConfig,
-    ServerConfig, TranslationConfig, apply_priority_defaults, apply_security_env_overrides,
+    AuditConfig, AuthConfig, DeviceConfig, EmbeddingConfig, InputSecurityConfig,
+    MemoryPagingConfig, MemoryPoolConfig, ModelConfig, MonitoringConfig, RateLimitConfig,
+    RerankConfig, SemanticCacheConfig, ServerConfig, TranslationConfig, apply_priority_defaults,
+    apply_security_env_overrides,
 };
 use crate::pipeline::PipelineConfig;
 
@@ -53,6 +54,8 @@ pub struct VecboostConfig {
     pub pipeline: PipelineConfig,
     pub logging: crate::config::app::LoggingConfig,
     pub semantic_cache: SemanticCacheConfig,
+    /// 推理输入安全开关（`[input_security]` 段，默认全关闭）。
+    pub input_security: InputSecurityConfig,
     pub memory_paging: MemoryPagingConfig,
     /// 设备与硬件感知配置（`[device]` 段，）。
     pub device: DeviceConfig,
@@ -170,6 +173,22 @@ mod tests {
         // 缺 [translation] 段 → 空表（未配置语义），校验通过
         assert!(config.translation.pairs.is_empty());
         VecboostConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn test_input_security_config_defaults_all_false() {
+        let config = VecboostConfig::default();
+        assert!(!config.input_security.reject_format_chars);
+        assert!(!config.input_security.detect_suspicious_patterns);
+    }
+
+    #[test]
+    fn test_input_security_config_deserialize_explicit_flag() {
+        use crate::config::app::InputSecurityConfig;
+        // 显式开启 reject_format_chars，detect 保持默认 false。
+        let parsed: InputSecurityConfig = toml::from_str("reject_format_chars = true").unwrap();
+        assert!(parsed.reject_format_chars);
+        assert!(!parsed.detect_suspicious_patterns);
     }
 
     #[test]

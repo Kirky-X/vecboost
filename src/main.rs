@@ -3283,6 +3283,9 @@ async fn build_module_registry(
         config.rate_limit.headers_enabled,
     ));
     kit.set_config(config.embedding.clone());
+    // [input_security] 注入：API 层与 pipeline 入队门的输入安全开关经
+    // kit.config::<InputSecurityConfig>() 读取（默认全关，缺失时回退 default）。
+    kit.set_config(config.input_security.clone());
     // ServerConfig 注入：/embed/file 的 PathValidator 与 model_path_validator
     // 经 kit.config::<ServerConfig>() 读取 grpc_allowed_roots；缺失时前者
     // 422(CONFIG_HINT)、后者回落相对根 "models"(拒绝绝对路径 → 500)

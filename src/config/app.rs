@@ -224,6 +224,9 @@ pub struct StreamTranscribeConfig {
     /// 上下文偏置词表路径（UTF-8，每行一个词；空 = 不启用偏置）
     #[garde(skip)]
     pub biasing_words_path: Option<String>,
+    /// 用户个性化词库持久化路径（"越用越准"；空 = 不启用学习）
+    #[garde(skip)]
+    pub lexicon_path: Option<String>,
     /// 偏置权重 λ（Gboard 论文 log P(y|x)+λ·log P_C(y)）
     #[garde(range(min = 0.0))]
     pub biasing_weight: f32,
@@ -247,6 +250,7 @@ impl Default for StreamTranscribeConfig {
             enabled: false,
             models_dir: "models/paraformer-trilingual".to_string(),
             biasing_words_path: None,
+            lexicon_path: None,
             biasing_weight: 0.3,
             lm_model_path: None,
             lm_weight: 0.5,

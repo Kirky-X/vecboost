@@ -21,6 +21,7 @@ use serde_json::json;
 
 use crate::config::app::StreamTranscribeConfig;
 use crate::engine::transcribe::correction::{ContextBiasing, Rescorer, correct_candidates};
+use crate::engine::transcribe::personalization::PersonalizationStore;
 use crate::engine::transcribe::streaming_asr::{StreamState, StreamingAsr, advance_decode};
 
 /// handler 全局状态：一套模型（Mutex 串行，与 Qwen3/Whisper 同口径）+ 多流状态表。
@@ -29,6 +30,8 @@ pub struct StreamingWsHandler {
     states: Mutex<HashMap<String, (StreamState, std::time::Instant)>>,
     biasing: ContextBiasing,
     rescorer: Rescorer,
+    /// 用户个性化词库（越用越准）
+    lexicon: Option<PersonalizationStore>,
     max_sessions: usize,
 }
 
@@ -65,11 +68,16 @@ impl StreamingWsHandler {
         };
         let biasing = ContextBiasing::from_words(words.clone(), cfg.biasing_weight);
         let rescorer = Rescorer::new(&words, cfg.lm_weight);
+        let lexicon = cfg
+            .lexicon_path
+            .as_ref()
+            .map(|p| PersonalizationStore::open(std::path::Path::new(p), true));
         Ok(Self {
             asr: Mutex::new(asr),
             states: Mutex::new(HashMap::new()),
             biasing,
             rescorer,
+            lexicon,
             max_sessions: cfg.max_sessions,
         })
     }
@@ -114,6 +122,39 @@ impl WebSocketHandler for StreamingWsHandler {
             let WebSocketMessage::Request { id, method, params } = message else {
                 return err("", "invalid_message");
             };
+            if method == "correct" {
+                // "越用越准"：客户端上报用户修正后的文本，学习混淆对。
+                // 参数校验（安全 F1/F9）：非空 + 长度上限，拒绝非法输入与滥用。
+                const MAX_CORRECT_LEN: usize = 512;
+                let asr_text = params
+                    .get("asr_text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let corrected = params
+                    .get("corrected_text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if asr_text.is_empty()
+                    || corrected.is_empty()
+                    || asr_text.len() > MAX_CORRECT_LEN
+                    || corrected.len() > MAX_CORRECT_LEN
+                {
+                    return err(&id, "invalid_correction_params");
+                }
+                let Some(store) = handler.lexicon.as_ref() else {
+                    return WebSocketMessage::Response {
+                        id,
+                        result: json!({"type": "correction_disabled"}),
+                    };
+                };
+                let status = match store.learn_correction(asr_text, corrected) {
+                    Some((wrong, right)) => {
+                        json!({"type": "correction_learned", "wrong": wrong, "right": right})
+                    }
+                    None => json!({"type": "not_a_correction"}),
+                };
+                return WebSocketMessage::Response { id, result: status };
+            }
             if method != "audio" {
                 return err(&id, "unknown_method");
             }
@@ -138,7 +179,14 @@ impl WebSocketHandler for StreamingWsHandler {
                             asr.finalize(&mut state); // flush 尾音（架构 F2）
                             let cands = asr.finish_candidates(&state);
                             drop(asr);
-                            correct_candidates(&cands, &handler.biasing, &handler.rescorer)
+                            let corrected =
+                                correct_candidates(&cands, &handler.biasing, &handler.rescorer);
+                            // 个性化文本后处理（Paraformer 不支持 hotwords，改用学到的词库纠正）
+                            handler
+                                .lexicon
+                                .as_ref()
+                                .map(|store| store.correct_text(&corrected))
+                                .unwrap_or(corrected)
                         }
                         None => String::new(),
                     }

@@ -16,6 +16,8 @@ pub(crate) mod correction;
 pub(crate) mod engine;
 pub(crate) mod features;
 #[cfg(feature = "transcribe-stream")]
+pub(crate) mod personalization;
+#[cfg(feature = "transcribe-stream")]
 pub(crate) mod streaming_asr;
 pub(crate) mod tokenizer;
 pub(crate) mod vad;

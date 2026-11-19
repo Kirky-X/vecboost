@@ -942,3 +942,7 @@ detail-whisper-tokenizer-load-e-8c2d5 = 加载 whisper tokenizer：{ $e }
 log-engine-transcribe-whisper-graphs-4a7e1 = whisper 图：encoder={ $encoder }、decoder={ $decoder }、precision={ $precision }（精度按图内容判定，非文件名）
 detail-whisper-vad-file-not-found-b7e21 = whisper VAD 资产不存在：{ $path }（请从 Qwen3 bundle 拷贝 silero_vad.onnx，或下载到 models_dir）
 log-stream-biasing-list-unavailable-a4f1 = 上下文偏置词表 { $path } 不可用（{ $e }），已禁用
+log-personalization-lexicon-corrupt-c7a3 = 个性化词库 { $path } 损坏（{ $e }），从空词库开始
+log-personalization-lexicon-io-b4e2 = 个性化词库 { $path } IO 错误（{ $e }），学习已禁用
+log-personalization-persist-failed-d5f8 = 个性化词库持久化失败（{ $e }）
+log-personalization-input-too-long-e91c = 个性化纠错输入过长，已拒绝

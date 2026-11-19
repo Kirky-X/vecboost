@@ -732,6 +732,13 @@ curl -X POST http://localhost:9002/api/v1/transcribe   -H "Content-Type: applica
 
 **约束**：音频为 16kHz 单声道 16-bit LE PCM；单帧 ≤ 768KB（sdforge 1MB 消息上限的 base64 折算）；会话 30s 空闲自动回收（无断连回调时的 TTL 清理）；并发流数受 `max_sessions` 限制（默认 4）。鉴权沿用全局 auth 中间件（启用 auth feature 时握手受保护）。
 
+**用户纠错上报（"越用越准"）**：客户端修改 final 文本后，可发送：
+```json
+{"type":"request","id":"c1","method":"correct","params":{"asr_text":"<原始识别文本>","corrected_text":"<用户修正后文本>"}}
+```
+响应：`{"type":"correction_learned","wrong":"咖啡","right":"拿铁"}` / `{"type":"not_a_correction"}` / `{"type":"correction_disabled"}`。
+服务端用编辑距离 DP 提取"ASR 错误片段 → 用户修正片段"的混淆对（微软 Interspeech 2004 三步法），按频率+时间衰减持久化到 `lexicon_path`（本地 JSON），后续会话的 final 文本对错误片段做**精确替换**（如学到"咖啡→拿铁"后，"买一杯咖啡"改为"买一杯拿铁"）。不做模糊替换，避免误改正确文本。输入硬上限 512 字节、内存上限 256 条，纯本地、不上云。
+
 **配置**（`config/config.toml`）：
 ```toml
 [transcribe.stream]

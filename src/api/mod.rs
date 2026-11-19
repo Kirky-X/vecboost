@@ -24,6 +24,8 @@ pub mod rerank;
 #[cfg(test)]
 mod tests;
 pub mod transcribe;
+#[cfg(feature = "transcribe-stream")]
+pub mod transcribe_stream;
 pub mod translate;
 
 pub use decisions::decide;

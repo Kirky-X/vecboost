@@ -941,3 +941,4 @@ detail-whisper-tokenizer-language-missing-1d4f8 = whisper tokenizer 缺少语言
 detail-whisper-tokenizer-load-e-8c2d5 = 加载 whisper tokenizer：{ $e }
 log-engine-transcribe-whisper-graphs-4a7e1 = whisper 图：encoder={ $encoder }、decoder={ $decoder }、precision={ $precision }（精度按图内容判定，非文件名）
 detail-whisper-vad-file-not-found-b7e21 = whisper VAD 资产不存在：{ $path }（请从 Qwen3 bundle 拷贝 silero_vad.onnx，或下载到 models_dir）
+log-stream-biasing-list-unavailable-a4f1 = 上下文偏置词表 { $path } 不可用（{ $e }），已禁用

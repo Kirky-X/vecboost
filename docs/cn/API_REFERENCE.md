@@ -711,6 +711,40 @@ curl -X POST http://localhost:9002/api/v1/transcribe   -H "Content-Type: applica
 }
 ```
 
+---
+
+### 流式转录（WebSocket，opt-in）
+
+**端点:** `WS /api/v1/transcribe/stream`（需 `transcribe-stream` feature + `[transcribe.stream] enabled=true`）
+
+与上方 POST 端点**完全并存**、互不替代：POST 是一次性整段转录（Qwen3/Whisper），WS 是边说边出字的流式转录（sherpa streaming zipformer 中英双语 int8 三图，约 198MB，Apache-2.0）。
+
+**消息格式**（sdforge WebSocketMessage JSON envelope）：
+
+- 客户端发音频帧（首帧不传 `session_id`，服务端生成随机 id 并在响应回传，后续帧必须带回）：
+```json
+{"type":"request","id":"1","method":"audio","params":{"audio":"<base64 16-bit LE PCM>","session_id":"<首帧省略>","end":false}}
+```
+- 客户端发结束帧：`{"type":"request","id":"end","method":"audio","params":{"session_id":"<服务端返回的id>","audio":"","end":true}}`
+- 服务端 partial：`{"type":"response","id":"1","result":{"type":"partial","text":"你好","session_id":"s-xxx","new_session":true}}`（`new_session` 仅首帧为 true）
+- 服务端 final（含纠错）：`{"type":"response","id":"end","result":{"type":"final","text":"...","session_id":"s-xxx"}}`
+- 错误：`{"type":"error","id":"1","error":"<稳定错误码>"}`（码：invalid_audio / audio_too_large / invalid_message / unknown_method / unknown_session / too_many_sessions / session_lost / infer_failed；详情仅写服务端日志）
+
+**约束**：音频为 16kHz 单声道 16-bit LE PCM；单帧 ≤ 768KB（sdforge 1MB 消息上限的 base64 折算）；会话 30s 空闲自动回收（无断连回调时的 TTL 清理）；并发流数受 `max_sessions` 限制（默认 4）。鉴权沿用全局 auth 中间件（启用 auth feature 时握手受保护）。
+
+**配置**（`config/config.toml`）：
+```toml
+[transcribe.stream]
+enabled = true                    # false = 不注册 WS 端点（缺省）
+models_dir = "models/whisper-stream"  # encoder/decoder/joiner int8 三图 + tokens.txt
+biasing_words_path = "data/user_words.txt"  # 可选：上下文偏置词表（每行一词）
+biasing_weight = 0.3              # Gboard 公式 log P(y|x)+λ·log P_C(y) 的 λ
+lm_model_path = null              # 预留（当前用内置字符 bigram 重打分，无外部 LM 资产）
+lm_weight = 0.5
+max_sessions = 4
+emit_interval_ms = 200            # 预留：partial 节流（当前每帧返回）
+```
+
 `text` 恒等于各段 `text` 按序拼接（域层不变式）；`processing_time_ms` 为服务端墙钟。
 
 **错误码 400 语义:**

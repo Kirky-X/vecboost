@@ -942,3 +942,4 @@ detail-whisper-tokenizer-language-missing-1d4f8 = whisper tokenizer missing lang
 detail-whisper-tokenizer-load-e-8c2d5 = load whisper tokenizer: { $e }
 log-engine-transcribe-whisper-graphs-4a7e1 = whisper graphs: encoder={ $encoder }, decoder={ $decoder }, precision={ $precision } (precision is detected from graph content, not file name)
 detail-whisper-vad-file-not-found-b7e21 = whisper VAD asset not found: { $path } (copy silero_vad.onnx from the Qwen3 bundle or download it into models_dir)
+log-stream-biasing-list-unavailable-a4f1 = context biasing word list { $path } unavailable ({ $e }); disabled

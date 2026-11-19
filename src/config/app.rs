@@ -210,6 +210,52 @@ impl Default for TranslationConfig {
     }
 }
 
+/// 流式转录配置（`[transcribe.stream]` 段，opt-in）：WebSocket 端点参数。
+/// `enabled=false`（缺省）= WS 端点不注册，现有 POST 转录零影响。
+#[derive(Debug, Clone, Serialize, Deserialize, garde::Validate, schemars::JsonSchema)]
+#[serde(default)]
+pub struct StreamTranscribeConfig {
+    /// 是否启用流式 WS 端点（false = 不注册，缺省）
+    #[garde(skip)]
+    pub enabled: bool,
+    /// 流式模型 bundle 目录（encoder/decoder/joiner int8 三图 + tokens.txt）
+    #[garde(length(min = 1))]
+    pub models_dir: String,
+    /// 上下文偏置词表路径（UTF-8，每行一个词；空 = 不启用偏置）
+    #[garde(skip)]
+    pub biasing_words_path: Option<String>,
+    /// 偏置权重 λ（Gboard 论文 log P(y|x)+λ·log P_C(y)）
+    #[garde(range(min = 0.0))]
+    pub biasing_weight: f32,
+    /// 二遍 LM 重打分模型路径（空 = 仅偏置，显性日志）
+    #[garde(skip)]
+    pub lm_model_path: Option<String>,
+    /// LM 重打分权重
+    #[garde(range(min = 0.0))]
+    pub lm_weight: f32,
+    /// 最大并发流数（超限 close 1013）
+    #[garde(range(min = 1, max = 256))]
+    pub max_sessions: usize,
+    /// 每隔多少毫秒输出一次 partial
+    #[garde(range(min = 10, max = 5000))]
+    pub emit_interval_ms: u64,
+}
+
+impl Default for StreamTranscribeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            models_dir: "models/whisper-stream".to_string(),
+            biasing_words_path: None,
+            biasing_weight: 0.3,
+            lm_model_path: None,
+            lm_weight: 0.5,
+            max_sessions: 4,
+            emit_interval_ms: 200,
+        }
+    }
+}
+
 /// 转录服务配置（`[transcribe]` 段）：按 `backend` 装配 Qwen3-ASR 或 whisper 引擎。
 /// `enabled=false`（缺省）= 端点仍注册、请求以 transcribe-not-configured 400
 /// 显性拒绝（同 translate 空表口径，禁 404 禁 500）。
@@ -241,6 +287,10 @@ pub struct TranscribeConfig {
     /// CUDA EP（需带 CUDA 的 onnxruntime 动态库）
     #[garde(skip)]
     pub cuda: bool,
+    /// 流式 WS 端点配置（`[transcribe.stream]`）；缺省 enabled=false
+    #[garde(skip)]
+    #[serde(default)]
+    pub stream: StreamTranscribeConfig,
 }
 
 impl Default for TranscribeConfig {
@@ -253,6 +303,7 @@ impl Default for TranscribeConfig {
             intra_threads: 0,
             no_spin: false,
             cuda: false,
+            stream: StreamTranscribeConfig::default(),
         }
     }
 }
@@ -273,6 +324,7 @@ impl<'de> Deserialize<'de> for TranscribeConfig {
             intra_threads: usize,
             no_spin: bool,
             cuda: bool,
+            stream: StreamTranscribeConfig,
         }
         impl Default for RawTranscribeConfig {
             fn default() -> Self {
@@ -285,6 +337,7 @@ impl<'de> Deserialize<'de> for TranscribeConfig {
                     intra_threads: base.intra_threads,
                     no_spin: base.no_spin,
                     cuda: base.cuda,
+                    stream: base.stream,
                 }
             }
         }
@@ -300,6 +353,7 @@ impl<'de> Deserialize<'de> for TranscribeConfig {
             intra_threads: raw.intra_threads,
             no_spin: raw.no_spin,
             cuda: raw.cuda,
+            stream: raw.stream,
         })
     }
 }

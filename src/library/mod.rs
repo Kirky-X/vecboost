@@ -63,9 +63,12 @@ pub struct LibraryConfig {
     pub cache_size: usize,
     /// 重排序配置（None = 使用默认值）
     pub rerank_config: Option<RerankConfig>,
-    /// 调用方隔离模式（默认 Off = 缓存键行为不变）。与 server 模式
-    /// `[semantic_cache] caller_isolation` 同语义（SECURITY.md「四层分区」
-    /// 承诺的 rerank 缓存层），库路径无配置上下文，经本参数显式传入。
+    /// 调用方隔离模式（默认 Off = 缓存键行为不变）。取值语义与 server 模式
+    /// `[semantic_cache] caller_isolation` 一致，但**库门面 `rerank()` /
+    /// `rerank_sync()` 不携带调用方身份**：User 模式下经门面的请求落入
+    /// 单一共享 `"anonymous"` 分区，不产生按调用方分区；需要按调用方隔离
+    /// 的嵌入方应直调 `RerankService::process_rerank_with_caller` 并显式
+    /// 传 caller。库路径无配置上下文，经本参数显式传入。
     pub caller_isolation: crate::cache::CallerIsolation,
 }
 
@@ -119,8 +122,9 @@ impl VecBoostLibrary {
             )))
         };
 
-        // 3. 创建 RerankService（隔离模式经 LibraryConfig 显式传入，
-        // 与 server 模式 [semantic_cache] caller_isolation 同语义）
+        // 3. 创建 RerankService（隔离模式经 LibraryConfig 显式传入；门面
+        // rerank() 不携带调用方身份，User 模式下经门面的请求落入单一共享
+        // "anonymous" 分区，按调用方隔离需直调 process_rerank_with_caller）
         let rerank_service = Arc::new(RwLock::new(
             RerankService::new(engine, Some(config.model_config))
                 .with_caller_isolation(config.caller_isolation),

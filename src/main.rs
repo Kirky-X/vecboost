@@ -553,12 +553,34 @@ async fn attach_model_manager(
     service.with_model_manager(Arc::new(manager))
 }
 
+/// caller_isolation 单一解析点：无条件解析 `[semantic_cache] caller_isolation`
+/// （语义缓存与 rerank 生产构造共用），非法值经 `?` 返回 Err 中止启动——
+/// 与 HEAD 现行有效行为「非法值必中止启动」一致，仅统一失败形态
+/// （此前失败形态随 enabled 开关分流：panic vs Err）。
+fn parse_caller_isolation(config: &VecboostConfig) -> anyhow::Result<vecboost::CallerIsolation> {
+    config
+        .semantic_cache
+        .caller_isolation
+        .parse()
+        .map_err(|e: String| {
+            anyhow::anyhow!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "startup-semantic-caller-isolation-invalid",
+                    vecboost::i18n::tr_args(&[("detail", &e)]),
+                )
+            )
+        })
+}
+
 /// server 模式注入语义缓存（[semantic_cache] enabled=true 时；默认 false
 /// 行为不变）。comparison_mode 非法值启动报错，不静默回退；取值本身已
-/// 废弃不消费（解析保留兼容，非法值仍启动报错）。
+/// 废弃不消费（解析保留兼容，非法值仍启动报错）。caller_isolation 已在
+/// `parse_caller_isolation` 单一解析点解析，经参数传入。
 async fn attach_semantic_cache(
     service: EmbeddingService,
     config: &VecboostConfig,
+    caller_isolation: vecboost::CallerIsolation,
 ) -> anyhow::Result<EmbeddingService> {
     if !config.semantic_cache.enabled {
         return Ok(service);
@@ -601,22 +623,6 @@ async fn attach_semantic_cache(
             ])
         )
     );
-    // caller_isolation 非法值启动报错（对齐 comparison_mode 校验先例），不静默回退。
-    let caller_isolation: vecboost::CallerIsolation = config
-        .semantic_cache
-        .caller_isolation
-        .parse()
-        .map_err(|e: String| {
-            anyhow::anyhow!(
-                "{}",
-                vecboost::i18n::tr_with_args(
-                    "startup-semantic-caller-isolation-invalid",
-                    vecboost::i18n::tr_args(&[("detail", &e)]),
-                )
-            )
-        })
-        .expect("semantic_cache.caller_isolation validated at parse");
-
     #[cfg_attr(not(feature = "distributed-redis"), allow(unused_mut))]
     let mut semantic = vecboost::SemanticCache::with_capacity(
         config.semantic_cache.similarity_threshold,
@@ -636,28 +642,15 @@ async fn attach_semantic_cache(
     Ok(service.with_semantic_cache(Arc::new(semantic)))
 }
 
-/// rerank 服务生产构造：与 attach_semantic_cache 同源消费
-/// `[semantic_cache] caller_isolation`（SECURITY.md「四层分区」承诺的
-/// rerank 缓存层）：off→Off、user→User，非法值启动报错不静默回退。
+/// rerank 服务生产构造：消费 `parse_caller_isolation` 单一解析点产出的
+/// 枚举（SECURITY.md「四层分区」承诺的 rerank 缓存层）：off→Off、
+/// user→User。非法值已在单一解析点报错，本函数无失败路径。
 fn build_rerank_service(
     engine: Arc<tokio::sync::RwLock<dyn vecboost::engine::InferenceEngine + Send + Sync>>,
     model_config: ModelConfig,
-    config: &VecboostConfig,
-) -> anyhow::Result<RerankService> {
-    let isolation: vecboost::CallerIsolation = config
-        .semantic_cache
-        .caller_isolation
-        .parse()
-        .map_err(|e: String| {
-            anyhow::anyhow!(
-                "{}",
-                vecboost::i18n::tr_with_args(
-                    "startup-semantic-caller-isolation-invalid",
-                    vecboost::i18n::tr_args(&[("detail", &e)]),
-                )
-            )
-        })?;
-    Ok(RerankService::new(engine, Some(model_config)).with_caller_isolation(isolation))
+    caller_isolation: vecboost::CallerIsolation,
+) -> RerankService {
+    RerankService::new(engine, Some(model_config)).with_caller_isolation(caller_isolation)
 }
 
 /// 转录服务装配：`[transcribe] enabled=true` 时经公开门面
@@ -837,6 +830,9 @@ async fn init_engine_and_services(
     Arc<TranscribeService>,
     ModelConfig,
 )> {
+    // caller_isolation 单一解析点：无条件解析（非法值 Err 中止启动），
+    // 语义缓存与 rerank 生产构造共用本次解析结果，不再各自解析。
+    let caller_isolation = parse_caller_isolation(config)?;
     let model_config = resolve_engine_model_config(config)?;
     let engine_type = model_config.engine_type.clone();
 
@@ -883,7 +879,7 @@ async fn init_engine_and_services(
         .await;
     let service = service.with_model_manager(Arc::new(model_manager));
 
-    let service = attach_semantic_cache(service, config).await?;
+    let service = attach_semantic_cache(service, config, caller_isolation).await?;
 
     // [model.checkpoints] 预设表注入（MCP/CLI/server 三模式共用——switch_model
     // 按名命中预设时应用参数；查表消费唯一入口为 EmbeddingService 持有的该表）
@@ -899,8 +895,8 @@ async fn init_engine_and_services(
     let rerank_service = Arc::new(RwLock::new(build_rerank_service(
         engine.clone(),
         model_config.clone(),
-        config,
-    )?));
+        caller_isolation,
+    )));
 
     // 决策服务无条件预构建（零成本，三种模式签名统一）：非 decision 配置下
     // decide 经 trait 默认臂/能力门返回 UnsupportedTask（HTTP 400），端点
@@ -3420,20 +3416,29 @@ async fn build_module_registry(
 mod tests {
     use super::*;
 
-    // caller_isolation 非法值启动失败（attach_semantic_cache 的 parse 步同款判定）
+    // caller_isolation 非法值在单一解析点 parse_caller_isolation 返回 Err
+    //（启动中止语义，不再随 enabled 开关分流 panic/Err）
     #[test]
     fn caller_isolation_bogus_fails_startup_parse() {
         vecboost::i18n::init();
-        let bogus = "bogus";
-        let parsed: Result<vecboost::CallerIsolation, String> = bogus.parse();
-        assert!(parsed.is_err(), "非法值必须在启动解析处失败");
-        let err_msg = vecboost::i18n::tr_with_args(
-            "startup-semantic-caller-isolation-invalid",
-            vecboost::i18n::tr_args(&[("detail", &parsed.unwrap_err())]),
+        // 默认值 off：单一解析点必须成功产出 Off
+        let default_config = VecboostConfig::default();
+        assert_eq!(
+            parse_caller_isolation(&default_config)
+                .expect("默认 caller_isolation=off 必须解析成功"),
+            vecboost::CallerIsolation::Off,
+            "默认配置单一解析点必须产出 Off"
         );
+        // 非法值：单一解析点 Err，错误信息点名 caller_isolation
+        let mut config = VecboostConfig::default();
+        config.semantic_cache.caller_isolation = "bogus".to_string();
+        let err = match parse_caller_isolation(&config) {
+            Ok(_) => panic!("非法 caller_isolation 必须在单一解析点报错"),
+            Err(e) => e,
+        };
         assert!(
-            err_msg.contains("caller_isolation"),
-            "启动错误须点名 caller_isolation，got: {err_msg}"
+            err.to_string().contains("caller_isolation"),
+            "启动错误须点名 caller_isolation，got: {err}"
         );
     }
 
@@ -3476,7 +3481,9 @@ mod tests {
     }
 
     // 装配钉：生产构造路径 build_rerank_service 必须按 [semantic_cache]
-    // caller_isolation 注入隔离（SECURITY.md「四层分区」承诺的 rerank 层）。
+    // caller_isolation 注入隔离（SECURITY.md「四层分区」承诺的 rerank 层）；
+    // 解析经单一解析点 parse_caller_isolation，非法值由
+    // caller_isolation_bogus_fails_startup_parse 专用覆盖。
     #[test]
     fn rerank_production_assembly_wires_caller_isolation() {
         vecboost::i18n::init();
@@ -3486,8 +3493,8 @@ mod tests {
 
         // 默认配置：off → Off（行为不变）
         let config = VecboostConfig::default();
-        let service = build_rerank_service(engine.clone(), model_config.clone(), &config)
-            .expect("默认配置装配必须成功");
+        let isolation = parse_caller_isolation(&config).expect("默认配置解析必须成功");
+        let service = build_rerank_service(engine.clone(), model_config.clone(), isolation);
         assert_eq!(
             service.caller_isolation(),
             vecboost::CallerIsolation::Off,
@@ -3497,24 +3504,12 @@ mod tests {
         // caller_isolation = "user" → User
         let mut config = VecboostConfig::default();
         config.semantic_cache.caller_isolation = "user".to_string();
-        let service = build_rerank_service(engine.clone(), model_config.clone(), &config)
-            .expect("user 配置装配必须成功");
+        let isolation = parse_caller_isolation(&config).expect("user 配置解析必须成功");
+        let service = build_rerank_service(engine.clone(), model_config.clone(), isolation);
         assert_eq!(
             service.caller_isolation(),
             vecboost::CallerIsolation::User,
             "caller_isolation=user 时生产构造必须产出 User 隔离"
-        );
-
-        // 非法值：启动报错，不静默回退
-        let mut config = VecboostConfig::default();
-        config.semantic_cache.caller_isolation = "bogus".to_string();
-        let err = match build_rerank_service(engine, model_config, &config) {
-            Ok(_) => panic!("非法 caller_isolation 必须启动报错"),
-            Err(e) => e,
-        };
-        assert!(
-            err.to_string().contains("caller_isolation"),
-            "启动错误须点名 caller_isolation，got: {err}"
         );
     }
 

@@ -512,7 +512,7 @@ impl EmbeddingService {
         req: EmbedRequest,
         target_dimension: Option<usize>,
     ) -> Result<EmbedResponse, VecboostError> {
-        self.process_text_with_caller(req, target_dimension, "anonymous")
+        self.process_text_with_caller(req, target_dimension, crate::caller::ANONYMOUS_CALLER)
             .await
     }
 

@@ -226,15 +226,21 @@ impl RerankService {
     }
 
     /// 执行重排序：对 query 和 documents 列表计算相关性分数。
-    /// 原签名保留（既有调用点零改动），caller 默认 anonymous。
+    /// 原签名保留（既有调用点零改动），caller 默认 anonymous
+    /// （归并桶字面量统一走 `crate::caller::ANONYMOUS_CALLER`）。
     pub async fn process_rerank(
         &self,
         req: RerankRequest,
         max_documents: usize,
         max_query_length: usize,
     ) -> Result<RerankResponse, VecboostError> {
-        self.process_rerank_with_caller(req, max_documents, max_query_length, "anonymous")
-            .await
+        self.process_rerank_with_caller(
+            req,
+            max_documents,
+            max_query_length,
+            crate::caller::ANONYMOUS_CALLER,
+        )
+        .await
     }
 
     /// 带调用方身份的重排序（user 隔离模式的真实入口）。

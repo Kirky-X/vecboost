@@ -52,6 +52,8 @@ pub struct EmbeddingService {
     memory_limit: Option<Arc<crate::device::memory_limit::MemoryLimitController>>,
     /// 当前记账模型字节数（控制器 update_usage 为 set 语义，本字段跟踪投影基数）
     memory_used_est: Arc<std::sync::atomic::AtomicU64>,
+    /// Matryoshka 输出维度下限（None = 质量门关闭）。
+    min_output_dimension: Option<usize>,
     /// `[model.checkpoints]` resolved 预设表（含内置 laya-multilingual，main.rs
     /// 装配注入）：switch_model 按名命中时把预设参数/任务/路径作为缺省层应用。
     /// None = 未装配（库内直连场景），switch 走自由切换、行为与无预设表等价
@@ -134,6 +136,7 @@ impl EmbeddingService {
             memory_limit,
             memory_used_est: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             checkpoints: None,
+            min_output_dimension: None,
         }
     }
 
@@ -314,6 +317,17 @@ impl EmbeddingService {
     /// 设置语义缓存
     pub fn with_semantic_cache(mut self, semantic_cache: Arc<SemanticCache>) -> Self {
         self.semantic_cache = Some(semantic_cache);
+        self
+    }
+
+    /// 已装配的语义缓存句柄（只读；explain 端点用）。
+    pub fn semantic_cache(&self) -> Option<&Arc<SemanticCache>> {
+        self.semantic_cache.as_ref()
+    }
+
+    /// 设置 Matryoshka 输出维度下限（质量门；装配期注入）。
+    pub fn with_min_output_dimension(mut self, min: Option<usize>) -> Self {
+        self.min_output_dimension = min;
         self
     }
 
@@ -565,6 +579,22 @@ impl EmbeddingService {
                 .unwrap_or(1024);
             validate_dimension(Some(target_dim), max_dim)
                 .map_err(|e| VecboostError::InvalidInput(e.to_string()))?;
+            // 质量门：低于配置下限时 400 拒绝（防不可接受的检索精度损失）。
+            if let Some(min) = self.min_output_dimension
+                && target_dim < min
+            {
+                #[cfg(feature = "http")]
+                if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
+                    collector.inc_matryoshka_gate_rejected();
+                }
+                return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+                    "validate-dimension-below-min",
+                    crate::i18n::tr_args(&[
+                        ("got", &target_dim.to_string()),
+                        ("min", &min.to_string()),
+                    ]),
+                )));
+            }
             embedding = truncate_vector(&embedding, target_dim);
             // Matryoshka 截断破坏单位向量语义，必须重归一化以保证余弦相似度正确
             normalize_l2(&mut embedding)?;
@@ -3167,6 +3197,50 @@ mod tests {
             "truncated norm should be 1.0 (renormalized), got {}",
             norm
         );
+    }
+
+    #[tokio::test]
+    async fn test_min_output_dimension_quality_gate() {
+        crate::i18n::init();
+        let model_config = make_model_config("gate-model", 384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(384)));
+        let service =
+            EmbeddingService::new(engine, Some(model_config)).with_min_output_dimension(Some(128));
+        let mk = || EmbedRequest {
+            text: "hello".to_string(),
+            normalize: Some(true),
+        };
+
+        // 低于下限 128：拒绝，detail 含 got=64 与 min=128。
+        let err = service.process_text(mk(), Some(64)).await.unwrap_err();
+        match err {
+            VecboostError::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("64") && msg.contains("128"),
+                    "detail 须含两值: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput, got {other:?}"),
+        }
+        // 等于下限：正常截断。
+        let ok = service.process_text(mk(), Some(128)).await.unwrap();
+        assert_eq!(ok.dimension, 128);
+    }
+
+    #[tokio::test]
+    async fn test_min_output_dimension_none_keeps_existing_behavior() {
+        let model_config = make_model_config("no-gate", 384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(384)));
+        // 未设下限：dimensions=64 行为与现状一致（成功截断）。
+        let service = EmbeddingService::new(engine, Some(model_config));
+        let req = EmbedRequest {
+            text: "hello".to_string(),
+            normalize: Some(true),
+        };
+        let resp = service.process_text(req, Some(64)).await.unwrap();
+        assert_eq!(resp.dimension, 64);
     }
 
     #[tokio::test]

@@ -10,6 +10,8 @@
 
 #![allow(unexpected_cfgs)]
 
+#[cfg(feature = "http")]
+pub mod admin_observability;
 #[cfg(all(feature = "auth", feature = "http"))]
 pub mod auth;
 pub mod decisions;

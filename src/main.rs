@@ -864,6 +864,8 @@ async fn init_engine_and_services(
     // [model.checkpoints] 预设表注入（MCP/CLI/server 三模式共用——switch_model
     // 按名命中预设时应用参数；查表消费唯一入口为 EmbeddingService 持有的该表）
     let service = service.with_checkpoints(Arc::new(checkpoints.clone()));
+    // Matryoshka 输出维度质量门（[embedding] min_output_dimension，None=关闭）。
+    let service = service.with_min_output_dimension(config.embedding.min_output_dimension);
 
     service.init_memory_limit().await;
     let service = Arc::new(RwLock::new(service));
@@ -2357,6 +2359,7 @@ fn init_audit_logger(
     log::info!("{}", vecboost::i18n::tr("log-main-audit-enabled"));
     let audit_config = AuditConfig {
         enabled: true,
+        task_audit_enabled: config.task_audit.enabled,
         log_file_path: std::path::PathBuf::from(&config.audit.log_file_path),
         log_level: config.audit.log_level.clone(),
         max_file_size_mb: config.audit.max_file_size_mb,
@@ -3281,7 +3284,7 @@ async fn build_module_registry(
     kit.set_config(rerank_service.clone());
     kit.set_config(decision_service.clone());
     kit.set_config(detect_service);
-    kit.set_config(translate_service);
+    kit.set_config(translate_service.clone());
     kit.set_config(transcribe_service);
     kit.set_config(rate_limiter.clone());
     kit.set_config(CacheConfig {
@@ -3292,6 +3295,25 @@ async fn build_module_registry(
         enabled: cfg!(feature = "db"),
     });
     kit.set_config(audit_logger.clone());
+    // 任务审计上下文（logger + 回放环 + 阈值），供 API 层与回放端点读取。
+    let task_audit = Arc::new(vecboost::audit::TaskAudit {
+        logger: audit_logger.clone(),
+        ring: Arc::new(vecboost::registry::TaskEventRing::new()),
+        model_id: config.model.model_repo.clone(),
+        model_sha256_prefix: config
+            .model
+            .model_sha256
+            .as_deref()
+            .map(|h| h.chars().take(12).collect()),
+        decision_low_confidence: config.task_audit.decision_low_confidence,
+    });
+    // 注入决策/翻译服务（异步写锁；装配期一次性）。
+    decision_service
+        .write()
+        .await
+        .set_task_audit(Arc::clone(&task_audit));
+    translate_service.set_task_audit(Arc::clone(&task_audit));
+    kit.set_config(task_audit);
     kit.set_config(Some(Arc::new(vecboost::metrics::InferenceCollector::new())));
     let prometheus_collector =
         Arc::new(vecboost::metrics::PrometheusCollector::new().map_err(|e| {

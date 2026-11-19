@@ -113,6 +113,9 @@ pub enum ModelTask {
     Translate,
     /// 转录推理（Qwen3-ASR 三图 + VAD，engine_type=onnx 强制；需 feature `transcribe`）
     Transcribe,
+    /// 语种识别（detect）——仅作审计事件的轻量分类值；推理引擎本身不支持该 task
+    /// （配置面不接受，构造引擎时该分支返回 unreachable 语义错误）。
+    Detect,
 }
 
 impl fmt::Display for ModelTask {
@@ -128,6 +131,7 @@ impl ModelTask {
             ModelTask::Decision => "decision",
             ModelTask::Translate => "translate",
             ModelTask::Transcribe => "transcribe",
+            ModelTask::Detect => "detect",
         }
     }
 }

@@ -15,12 +15,27 @@ use crate::error::VecboostError;
 #[cfg(feature = "db")]
 use dbnexus::sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
 
-use super::{AuditConfig, SecurityEvent, SecurityEventType};
+use super::{AuditConfig, SecurityEvent, SecurityEventType, TaskExecutionEvent};
 
 /// Writer task commands: enqueue event or request synchronous flush ack.
 enum LoggerCommand {
     Event(SecurityEvent),
+    /// 任务执行审计事件（独立类型，不混入 SecurityEventType）。行前缀 task_execution。
+    TaskEvent(TaskExecutionEvent),
     Flush(oneshot::Sender<()>),
+}
+
+/// 任务执行事件序列化为 JSON 行：注入 event_type 前缀标记，字段与
+/// [`TaskExecutionEvent`] 同构（不落原文，仅指纹）。
+fn task_event_line(event: &TaskExecutionEvent) -> Option<String> {
+    let mut value = serde_json::to_value(event).ok()?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "event_type".to_string(),
+            serde_json::json!("task_execution"),
+        );
+    }
+    serde_json::to_string(&value).ok()
 }
 
 /// flush ack 等待上限：writer 存活但失联（轮转/写盘卡死、熔断退出未 ack）
@@ -166,6 +181,15 @@ impl AuditLogger {
                                 }
                             }
                         }
+                        Some(LoggerCommand::TaskEvent(event)) => {
+                            if let Some(line) = task_event_line(&event) {
+                                current_size.fetch_add(line.len() as u64 + 1, Ordering::Relaxed);
+                                buffer.push(line);
+                                if buffer.len() >= 100 && flush_or_die!() {
+                                    break;
+                                }
+                            }
+                        }
                         Some(LoggerCommand::Flush(ack)) => {
                             // Drain pending events before flushing
                             Self::drain_pending_events(&mut receiver, &mut buffer, &current_size);
@@ -242,9 +266,12 @@ impl AuditLogger {
         current_size: &AtomicU64,
     ) {
         while let Ok(cmd) = receiver.try_recv() {
-            if let LoggerCommand::Event(event) = cmd
-                && let Ok(line) = serde_json::to_string(&event)
-            {
+            let line = match &cmd {
+                LoggerCommand::Event(event) => serde_json::to_string(event).ok(),
+                LoggerCommand::TaskEvent(event) => task_event_line(event),
+                LoggerCommand::Flush(_) => None,
+            };
+            if let Some(line) = line {
                 current_size.fetch_add(line.len() as u64 + 1, Ordering::Relaxed);
                 buffer.push(line);
             }
@@ -269,13 +296,24 @@ impl AuditLogger {
                     // 文件面反而是事件唯一留存，死信另存重放记录）
                     let _ = file_mirror.send(LoggerCommand::Event(event));
                 }
+                LoggerCommand::TaskEvent(event) => {
+                    // 任务执行事件只落文件面（诊断用，不进 DB audit_logs 表）；
+                    // 镜像至文件 writer，与本变更 file-only 契约一致。
+                    let _ = file_mirror.send(LoggerCommand::TaskEvent(event));
+                }
                 LoggerCommand::Flush(ack) => {
                     // Drain pending events
                     let mut drained: Vec<SecurityEvent> = Vec::new();
+                    let mut task_events: Vec<TaskExecutionEvent> = Vec::new();
                     while let Ok(cmd) = receiver.try_recv() {
-                        if let LoggerCommand::Event(event) = cmd {
-                            drained.push(event);
+                        match cmd {
+                            LoggerCommand::Event(event) => drained.push(event),
+                            LoggerCommand::TaskEvent(event) => task_events.push(event),
+                            LoggerCommand::Flush(_) => {}
                         }
+                    }
+                    for event in task_events {
+                        let _ = file_mirror.send(LoggerCommand::TaskEvent(event));
                     }
                     for event in &drained {
                         if let Err(e) = Self::write_to_db(&pool, event).await {
@@ -454,6 +492,19 @@ impl AuditLogger {
         }
         if let Some(sender) = &self.sender {
             let _ = sender.send(LoggerCommand::Event(event));
+        }
+    }
+
+    /// 记录一条任务执行审计事件。
+    ///
+    /// `[task_audit] enabled=false`（`config.task_audit_enabled`）时 no-op，
+    /// 不产生任何 IO；开启后经既有 async sink 写文件，行前缀 `task_execution`。
+    pub fn log_task_execution(&self, event: TaskExecutionEvent) {
+        if !self.config.enabled || !self.config.task_audit_enabled {
+            return;
+        }
+        if let Some(sender) = &self.sender {
+            let _ = sender.send(LoggerCommand::TaskEvent(event));
         }
     }
 
@@ -860,6 +911,65 @@ mod tests {
         let content = read_log_content(&log_path).await;
         assert!(content.contains("user_deleted"));
         assert!(content.contains("deleted_user"));
+    }
+
+    fn sample_task_event() -> TaskExecutionEvent {
+        TaskExecutionEvent {
+            task_type: crate::config::model::ModelTask::Decision,
+            model_id: "m1".to_string(),
+            model_sha256_prefix: Some("abcdef123456".to_string()),
+            input_fingerprint: "fingerprint-hex".to_string(),
+            output_confidence: Some(0.9),
+            low_confidence_flagged: false,
+            latency_ms: 1.5,
+            request_id: "req-42".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_log_task_execution_disabled_is_noop() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("task_disabled.log");
+        let config = AuditConfig {
+            enabled: true,
+            task_audit_enabled: false,
+            log_file_path: log_path.clone(),
+            ..Default::default()
+        };
+        let logger = AuditLogger::new(config);
+        logger.log_task_execution(sample_task_event());
+        logger.flush().await.unwrap();
+        let content = read_log_content(&log_path).await;
+        assert!(
+            !content.contains("task_execution"),
+            "关闭时不得产生任务审计 IO"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_log_task_execution_enabled_writes_full_line() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("task_enabled.log");
+        let config = AuditConfig {
+            enabled: true,
+            task_audit_enabled: true,
+            log_file_path: log_path.clone(),
+            ..Default::default()
+        };
+        let logger = AuditLogger::new(config);
+        logger.log_task_execution(sample_task_event());
+        logger.flush().await.unwrap();
+        let content = read_log_content(&log_path).await;
+        assert!(
+            content.contains("task_execution"),
+            "行须含 task_execution 前缀"
+        );
+        assert!(content.contains("m1"));
+        assert!(content.contains("fingerprint-hex"));
+        assert!(content.contains("req-42"));
+        assert!(content.contains("input_fingerprint"));
+        assert!(content.contains("output_confidence"));
     }
 
     #[tokio::test]

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
+use serde::Serialize;
 use tokio::sync::RwLock;
 
 use crate::cache::OxCacheBackend;
@@ -135,6 +136,22 @@ pub struct SemanticCacheStats {
     pub semantic_hits: u64,
     pub misses: u64,
     pub total_entries: usize,
+}
+
+/// 缓存命中过程解释（干跑结果）。
+#[derive(Debug, Clone, Serialize)]
+pub struct CacheExplain {
+    pub l1_exact_hit: bool,
+    pub l2_semantic_hit: Option<L2ExplainDetail>,
+    pub l3_would_compute: bool,
+}
+
+/// L2 模糊命中的细节。
+#[derive(Debug, Clone, Serialize)]
+pub struct L2ExplainDetail {
+    pub similarity: f32,
+    pub entry_age_secs: u64,
+    pub caller_scope: String,
 }
 
 /// 语义缓存配置
@@ -701,6 +718,67 @@ impl SemanticCache {
             .count()
     }
 
+    /// 缓存命中过程解释（只读干跑，零副作用）。
+    ///
+    /// 探测 L1 精确层（get 不回填、不计数）与 L2 trigram（只读检索）；
+    /// 两级均未命中时 `l3_would_compute=true`。不调用 compute_fn、不写入
+    /// 任何层、`stats()` 计数不变。
+    pub async fn explain(&self, model_id: &str, caller_id: &str, text: &str) -> CacheExplain {
+        if !self.enabled {
+            return CacheExplain {
+                l1_exact_hit: false,
+                l2_semantic_hit: None,
+                l3_would_compute: true,
+            };
+        }
+        let cache_key = self.cache_key(model_id, caller_id, text);
+        if self.exact_cache.get(&cache_key).await.is_some() {
+            return CacheExplain {
+                l1_exact_hit: true,
+                l2_semantic_hit: None,
+                l3_would_compute: false,
+            };
+        }
+        // L2 相似度探测：复用只读 find_similar 路径，额外计算相似度以回显。
+        // find_similar 返回命中 embedding 但不返回相似度，这里重算 trigram 相似度。
+        let l2 = self.explain_l2(model_id, caller_id, text).await;
+        let l3 = l2.is_none();
+        CacheExplain {
+            l1_exact_hit: false,
+            l2_semantic_hit: l2,
+            l3_would_compute: l3,
+        }
+    }
+
+    /// L2 只读探测：返回相似度与命中条目的 caller 维度。
+    async fn explain_l2(
+        &self,
+        model_id: &str,
+        caller_id: &str,
+        text: &str,
+    ) -> Option<L2ExplainDetail> {
+        let index = self.semantic_index.read().await;
+        let query_trigrams = pack_trigrams(text.as_bytes());
+        let mut best: Option<(f32, &SemanticEntry)> = None;
+        for entry in index.iter() {
+            if entry.model_id != model_id {
+                continue;
+            }
+            if self.isolation.is_enabled() && entry.caller != caller_id {
+                continue;
+            }
+            let sim = trigram_jaccard_with_set(&query_trigrams, &entry.trigrams);
+            if sim >= self.fuzzy_threshold && best.map(|(cur, _)| sim > cur).unwrap_or(true) {
+                best = Some((sim, entry));
+            }
+        }
+        best.map(|(similarity, entry)| L2ExplainDetail {
+            similarity,
+            entry_age_secs: entry.last_access.elapsed().as_secs(),
+            caller_scope: entry.caller.clone(),
+        })
+    }
+
     /// 返回当前统计快照。
     pub fn stats(&self) -> SemanticCacheStats {
         SemanticCacheStats {
@@ -750,6 +828,46 @@ pub(crate) fn trigram_jaccard_with_set(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_explain_l1_hit_and_zero_side_effects() {
+        let cache = SemanticCache::with_capacity(0.9, 16);
+        cache
+            .get_or_compute("m", "hello", || async { Ok(vec![1.0, 0.0]) })
+            .await
+            .unwrap();
+        let before = cache.stats();
+        let ex = cache.explain("m", "", "hello").await;
+        assert!(ex.l1_exact_hit, "预填条目须 L1 命中");
+        assert!(!ex.l3_would_compute);
+        let after = cache.stats();
+        assert_eq!(before.exact_hits, after.exact_hits, "explain 不得改统计");
+        assert_eq!(before.misses, after.misses);
+    }
+
+    #[cfg(test)]
+    #[tokio::test]
+    async fn test_explain_l2_hit_with_similarity() {
+        let cache = SemanticCache::with_capacity(0.7, 16).with_fuzzy_threshold(0.85);
+        // 仅写语义索引，不写精确层 → L1 miss、L2 命中。
+        cache
+            .insert_to_index("m", "the quick brown fox", vec![1.0, 0.0])
+            .await;
+        let ex = cache.explain("m", "", "the quick brown fox").await;
+        assert!(!ex.l1_exact_hit, "精确层未填须 miss");
+        let l2 = ex.l2_semantic_hit.expect("索引有相同文本须 L2 命中");
+        assert!(l2.similarity > 0.0, "similarity 须为正");
+        assert!(!ex.l3_would_compute);
+    }
+
+    #[tokio::test]
+    async fn test_explain_empty_cache_reports_l3_would_compute() {
+        let cache = SemanticCache::with_capacity(0.9, 16);
+        let ex = cache.explain("m", "", "brand new text").await;
+        assert!(!ex.l1_exact_hit);
+        assert!(ex.l2_semantic_hit.is_none());
+        assert!(ex.l3_would_compute, "两级未命中时须 L3 would compute");
+    }
 
     #[tokio::test]
     async fn test_caller_isolation_user_blocks_cross_caller_hit() {

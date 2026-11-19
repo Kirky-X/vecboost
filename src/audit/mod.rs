@@ -7,6 +7,10 @@ use std::path::PathBuf;
 
 pub mod logger;
 pub use logger::AuditLogger;
+pub mod task_audit;
+pub use task_audit::TaskAudit;
+pub mod task_event;
+pub use task_event::TaskExecutionEvent;
 pub mod types;
 
 /// Security event type
@@ -67,6 +71,8 @@ impl SecurityEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditConfig {
     pub enabled: bool,
+    /// 任务执行审计开关（[task_audit] enabled）；false 时 log_task_execution no-op。
+    pub task_audit_enabled: bool,
     pub log_file_path: PathBuf,
     pub log_level: String,
     pub max_file_size_mb: usize,

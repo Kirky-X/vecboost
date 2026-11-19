@@ -11,5 +11,6 @@ pub(crate) mod single_flight;
 
 pub(crate) use oxcache_backend::OxCacheBackend;
 pub use semantic_cache::{
-    CallerIsolation, ComparisonMode, SemanticCache, SemanticCacheConfig, SemanticCacheStats,
+    CacheExplain, CallerIsolation, ComparisonMode, SemanticCache, SemanticCacheConfig,
+    SemanticCacheStats,
 };

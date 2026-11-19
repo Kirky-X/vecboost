@@ -119,6 +119,12 @@ cargo deny check
 - `SecretKey` 零化（zeroize）；环境变量 keystore 只读。
 - 所有密钥脱敏与文本预览函数使用 UTF-8 字符边界安全切片（防多字节切片 panic）。
 
+### 任务审计与可观测
+
+- `[task_audit] enabled`（默认 false）：决策、翻译、语种识别每次执行向异步审计 sink 写一条 `TaskExecutionEvent`（行前缀 `task_execution`）。字段：`task_type`、`model_id`、`model_sha256_prefix`、`input_fingerprint`、`output_confidence`、`low_confidence_flagged`、`latency_ms`、`request_id`、`timestamp`（RFC3339）。**原始输入文本永不落日志——仅 sha256 指纹**（`input_fingerprint`），审计日志不成为二次泄露面。低置信决策（低于 `[task_audit] decision_low_confidence`）显式标记。
+- 两个 admin 角色可观测端点（与模型切换同级的 admin 护栏）：`GET /api/v1/admin/inference/replay/{request_id}` 从进程内环（容量 1000，FIFO——单副本近端视图）回放任务事件；`POST /api/v1/admin/cache/explain` 零副作用干跑语义缓存命中路径（L1 精确 / L2 trigram / L3 would-compute）。caller 取服务端认证用户名，不使用可伪造的 X-User-Id 头。
+- `[embedding] min_output_dimension`（默认 None = 关闭）为 Matryoshka 质量门：`dimensions` 请求低于配置下限时 400 拒绝，`/metrics` 中 `vecboost_matryoshka_gate_rejected_total` 递增。
+
 ### 引擎信任边界
 
 - 两条信任假设不同的引擎路径：Candle 为纯 Rust 推理路径，ONNX 经 FFI 加载 C++ `onnxruntime`（原生代码攻击面更大，含独立动态库加载）。`[engine_security] profile` 表达部署的信任选择：`standard`（默认，现状——Candle 与 ONNX 均允许）或 `strict`（仅 Candle；配置 ONNX 模型时启动失败，错误含违规模型名与修正指引）。

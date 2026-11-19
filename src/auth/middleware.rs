@@ -34,8 +34,10 @@ const PUBLIC_PATHS: &[&str] = &["/health", "/api/v1/auth/login", "/api/v1/auth/r
 const ADMIN_PATH_PREFIXES: &[&str] = &[
     "/api/v1/model/",
     "/api/v1/embed/file",
+    "/api/v1/admin/",
     "/model/",
     "/embed/file",
+    "/admin/",
 ];
 
 /// 该路径是否要求 admin 角色。
@@ -664,6 +666,10 @@ mod tests {
         // no_prefix 形态
         assert!(requires_admin("/model/switch"));
         assert!(requires_admin("/embed/file"));
+        // 可观测端点（回放/explain 暴露缓存归属与相似度，属运维敏感面）
+        assert!(requires_admin("/api/v1/admin/inference/replay/req-1"));
+        assert!(requires_admin("/api/v1/admin/cache/explain"));
+        assert!(requires_admin("/admin/inference/replay/req-1"));
     }
 
     /// 非 admin 路径不被误拦

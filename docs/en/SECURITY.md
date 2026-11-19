@@ -119,6 +119,12 @@ Please include where possible:
 - `SecretKey` zeroization; the environment-variable keystore is read-only.
 - All secret masking and text-preview functions use UTF-8 character-boundary-safe slicing (guards against multi-byte slicing panics).
 
+### Task Audit and Observability
+
+- `[task_audit] enabled` (default false): decision, translation and language-detection executions emit a `TaskExecutionEvent` to the async audit sink (line prefix `task_execution`). Fields: `task_type`, `model_id`, `model_sha256_prefix`, `input_fingerprint`, `output_confidence`, `low_confidence_flagged`, `latency_ms`, `request_id`, `timestamp` (RFC3339). **Raw input text is never recorded — only its SHA-256 fingerprint** (`input_fingerprint`), so the audit log cannot become a secondary disclosure surface. Low-confidence decisions (below `[task_audit] decision_low_confidence`) are flagged explicitly.
+- Two admin-only observability endpoints (guarded by the `admin` role, same tier as model switch): `GET /api/v1/admin/inference/replay/{request_id}` replays a task event from an in-process ring (capacity 1000, FIFO — single-replica near-field view), and `POST /api/v1/admin/cache/explain` dry-runs the semantic-cache hit path (L1 exact / L2 trigram / L3 would-compute) with zero side effects. Caller identity is the server-authenticated username, never the forgeable X-User-Id header.
+- `[embedding] min_output_dimension` (default None = off) is a Matryoshka quality gate: a `dimensions` request below the configured minimum is rejected with 400, and `vecboost_matryoshka_gate_rejected_total` increments in `/metrics`.
+
 ### Engine Trust Boundary
 
 - Two engine paths with different trust assumptions: Candle is a pure-Rust inference path, while ONNX loads the C++ `onnxruntime` through an FFI boundary (a larger native-code attack surface with its own dynamic-library loading). `[engine_security] profile` expresses the deployment's trust choice: `standard` (default, unchanged — Candle and ONNX both allowed) or `strict` (Candle only; configuring an ONNX model fails startup with the offending model name and remediation guidance).

@@ -22,8 +22,8 @@ use super::app::DatabaseConfig;
 use super::app::{
     AuditConfig, AuthConfig, DeviceConfig, EmbeddingConfig, EngineSecurityConfig,
     InputSecurityConfig, MemoryPagingConfig, MemoryPoolConfig, ModelConfig, MonitoringConfig,
-    RateLimitConfig, RerankConfig, SemanticCacheConfig, ServerConfig, TranslationConfig,
-    apply_priority_defaults, apply_security_env_overrides,
+    RateLimitConfig, RerankConfig, SemanticCacheConfig, ServerConfig, TaskAuditConfig,
+    TranslationConfig, apply_priority_defaults, apply_security_env_overrides,
 };
 use crate::pipeline::PipelineConfig;
 
@@ -58,6 +58,8 @@ pub struct VecboostConfig {
     pub input_security: InputSecurityConfig,
     /// 引擎安全 profile（`[engine_security]` 段，默认 standard = 行为不变）。
     pub engine_security: EngineSecurityConfig,
+    /// 任务执行审计（`[task_audit]` 段，默认关闭）。
+    pub task_audit: TaskAuditConfig,
     pub memory_paging: MemoryPagingConfig,
     /// 设备与硬件感知配置（`[device]` 段，）。
     pub device: DeviceConfig,
@@ -184,6 +186,35 @@ impl trait_kit::kit::Configurable for VecboostConfig {
 mod tests {
     use super::VecboostConfig;
     use crate::config::app::test_support::ENV_LOCK;
+
+    #[test]
+    fn test_min_output_dimension_deserialize() {
+        use crate::config::app::EmbeddingConfig;
+        let none: EmbeddingConfig = toml::from_str("").unwrap();
+        assert!(none.min_output_dimension.is_none());
+        let some: EmbeddingConfig = toml::from_str("min_output_dimension = 128").unwrap();
+        assert_eq!(some.min_output_dimension, Some(128));
+    }
+
+    #[test]
+    fn test_task_audit_config_defaults() {
+        use crate::config::app::TaskAuditConfig;
+        let cfg = TaskAuditConfig::default();
+        assert!(!cfg.enabled);
+        assert!(cfg.decision_low_confidence.is_none());
+        // 缺省解析
+        let parsed: TaskAuditConfig = toml::from_str("").unwrap();
+        assert!(!parsed.enabled);
+    }
+
+    #[test]
+    fn test_task_audit_config_explicit_values() {
+        use crate::config::app::TaskAuditConfig;
+        let parsed: TaskAuditConfig =
+            toml::from_str("enabled = true\ndecision_low_confidence = 0.5").unwrap();
+        assert!(parsed.enabled);
+        assert_eq!(parsed.decision_low_confidence, Some(0.5));
+    }
 
     #[test]
     fn test_engine_security_profile_defaults_standard() {

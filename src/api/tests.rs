@@ -785,6 +785,7 @@ async fn test_audit_logger_called_by_forge_handler_pattern() {
     let log_path = temp_dir.path().join("forge_audit.log");
     let audit_config = AuditConfig {
         enabled: true,
+        task_audit_enabled: true,
         log_file_path: log_path.clone(),
         log_level: "info".to_string(),
         max_file_size_mb: 100,

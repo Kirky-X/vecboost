@@ -47,7 +47,23 @@ async fn detect_handler(req: DetectRequest) -> Result<DetectResponse, ApiError> 
         .kit
         .require::<DetectModule>()
         .map_err(kit_internal_error)?;
-    detect(&svc, req).await.map_err(to_api_error)
+    let start = std::time::Instant::now();
+    let input = req.text.clone();
+    let resp = detect(&svc, req).await.map_err(to_api_error)?;
+    // 任务审计（无上下文时回退 req-unknown；enabled=false 时 logger no-op）。
+    if let Some(audit) = crate::audit::task_audit::from_kit(&st.kit) {
+        let request_id = sdforge::context::current()
+            .map(|c| c.request_id().to_string())
+            .unwrap_or_else(|| "req-unknown".to_string());
+        audit.record(
+            crate::config::model::ModelTask::Detect,
+            &input,
+            Some(resp.confidence),
+            start.elapsed().as_secs_f64() * 1000.0,
+            &request_id,
+        );
+    }
+    Ok(resp)
 }
 
 // HTTP forge handlers

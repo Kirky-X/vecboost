@@ -12,8 +12,10 @@
 //! `AsyncKit::build.await` 按拓扑序异步调用各模块的 `AsyncAutoBuilder::build`。
 
 mod impl_;
+pub mod task_event_ring;
 #[cfg(test)]
 mod tests;
+pub use task_event_ring::{TASK_EVENT_RING_CAPACITY, TaskEventRing};
 
 /// 嵌入服务模块 — 提供 `Arc<RwLock<EmbeddingService>>` 能力
 pub struct EmbeddingModule;

@@ -106,6 +106,10 @@ max_batch_size = 128
 # 单个文本最大字节长度 (防止资源耗尽攻击)
 max_text_length = 8192
 
+# Matryoshka 输出维度下限 (None = 质量门关闭, 默认)。设置后请求的 dimensions
+# 低于该值即 400 拒绝——防不可接受的 RAG 检索精度损失；/metrics 可见拒绝计数。
+# min_output_dimension = 128
+
 # ============ 监控配置 ============
 [monitoring]
 # 内存限制 (MB), None 表示不限制
@@ -198,6 +202,15 @@ caller_isolation = "off"
 # strict = 仅允许纯 Rust candle 路径；配置 onnx 模型时启动即拒（fail-fast，
 # 错误含违规模型名与修正指引）。未编译 onnx feature 时 strict 恒满足。
 profile = "standard"
+
+# ============ 任务执行审计 ============
+[task_audit]
+# 是否启用任务执行审计 (默认 false，零行为变更)。启用后 decision/translate/detect
+# 每次执行写一条 TaskExecutionEvent：仅落 sha256 指纹，不落原文；可通过
+# GET /api/v1/admin/inference/replay/{request_id}（admin）近端回放。
+enabled = false
+# 决策置信度低阈值：低于该值标记 low_confidence_flagged（默认 None = 不标记）
+# decision_low_confidence = 0.5
 
 # ============ 审计日志配置 ============
 [audit]

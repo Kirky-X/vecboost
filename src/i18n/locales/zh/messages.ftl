@@ -95,6 +95,7 @@ validate-batch-empty = 批处理不能为空
 validate-text-index-failed = 索引 { $index } 处文本校验失败：{ $detail }
 validate-search-empty = 搜索文本列表不能为空
 validate-top-k-exceeded = top_k { $got } 超过最大限制 { $max }
+validate-dimension-below-min = 请求维度 { $got } 低于下限 { $min }
 
 # ── 文件校验 ──
 file-too-large = 文件大小 { $size } MB 超过最大允许 { $max } MB

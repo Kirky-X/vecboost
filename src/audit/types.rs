@@ -31,6 +31,7 @@ impl Default for AuditConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            task_audit_enabled: false,
             log_file_path: PathBuf::from("logs/audit.log"),
             log_level: "info".to_string(),
             max_file_size_mb: 100,

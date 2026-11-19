@@ -54,6 +54,8 @@ pub struct PrometheusCollector {
     // 引擎分阶段延迟：tokenize/inference/pool
     vecboost_stage_seconds: HistogramVec,
     semantic_cache_fuzzy_hits: prometheus::IntCounter,
+    /// Matryoshka 质量门拒绝计数（输出维度低于配置下限）。
+    matryoshka_gate_rejected: prometheus::IntCounter,
     vecboost_queue_wait_seconds: prometheus::HistogramVec,
 
     // 缓存命中率
@@ -92,6 +94,12 @@ impl PrometheusCollector {
             register_request_counters(&registry)?;
         let (cache_hits, cache_misses, rate_limit_allowed, rate_limit_denied) =
             register_cache_and_rate_limit_metrics(&registry)?;
+        let matryoshka_gate_rejected = prometheus::register_int_counter_with_registry!(
+            "vecboost_matryoshka_gate_rejected_total",
+            "Number of embedding requests rejected by the Matryoshka output-dimension quality gate",
+            registry
+        )
+        .expect("register matryoshka_gate_rejected");
 
         Ok(Self {
             registry,
@@ -112,6 +120,7 @@ impl PrometheusCollector {
             vecboost_detect_requests_total,
             vecboost_translate_requests_total,
             semantic_cache_fuzzy_hits,
+            matryoshka_gate_rejected,
             vecboost_queue_wait_seconds,
             cache_hits,
             cache_misses,
@@ -453,6 +462,11 @@ impl PrometheusCollector {
         self.semantic_cache_fuzzy_hits.inc();
     }
 
+    /// Matryoshka 质量门拒绝计数 +1。
+    pub fn inc_matryoshka_gate_rejected(&self) {
+        self.matryoshka_gate_rejected.inc();
+    }
+
     /// 逐请求入队→出队等待时长观测（排队延迟可观测）。
     pub fn observe_queue_wait(&self, operation: &str, wait_secs: f64) {
         self.vecboost_queue_wait_seconds
@@ -569,6 +583,7 @@ mod tests {
             assert!(
                 name.starts_with("vecboost_pipeline_")
                     || name == "vecboost_semantic_cache_fuzzy_hits_total"
+                    || name == "vecboost_matryoshka_gate_rejected_total"
                     || name == "vecboost_decision_requests_total"
                     || name == "vecboost_decision_questions_total"
                     || name == "vecboost_decision_queue_wait_seconds"
@@ -581,6 +596,19 @@ mod tests {
 
     /// 检测请求计数：注册可见、inc 后值正确——/metrics 导出走同一 registry
     /// （DetectService 热路径校验受理后调用）
+    #[test]
+    fn test_matryoshka_gate_rejected_metric_register_and_inc() {
+        let collector = PrometheusCollector::new().unwrap();
+        collector.inc_matryoshka_gate_rejected();
+        let families = collector.registry().gather();
+        assert!(
+            families
+                .iter()
+                .any(|f| f.name() == "vecboost_matryoshka_gate_rejected_total"),
+            "质量门拒绝计数须注册（/metrics 可见）"
+        );
+    }
+
     #[test]
     fn test_detect_metric_register_and_observe() {
         let collector = PrometheusCollector::new().unwrap();

@@ -95,6 +95,7 @@ validate-batch-empty = Batch cannot be empty
 validate-text-index-failed = Validation failed for text at index { $index }: { $detail }
 validate-search-empty = Search texts list cannot be empty
 validate-top-k-exceeded = top_k { $got } exceeds maximum { $max }
+validate-dimension-below-min = requested dimensions { $got } is below the minimum { $min }
 
 # ── File validation ──
 file-too-large = File size { $size } MB exceeds maximum allowed size { $max } MB

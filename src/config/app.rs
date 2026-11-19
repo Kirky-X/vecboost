@@ -167,6 +167,11 @@ pub struct EmbeddingConfig {
     pub max_batch_size: usize,
     #[garde(range(min = 1))]
     pub max_text_length: usize,
+    /// Matryoshka 输出维度下限（None = 质量门关闭，默认）。设置后请求的
+    /// dimensions 低于该值即 400 拒绝（防不可接受的检索精度损失）。
+    #[garde(skip)]
+    #[serde(default)]
+    pub min_output_dimension: Option<usize>,
     /// 精确缓存后端：`memory`（默认，进程内 moka）或 `redis`
     /// （跨副本共享；需 `distributed-redis` feature；与 `persist_path` 互斥）。
     #[garde(skip)]
@@ -818,6 +823,25 @@ fn default_engine_security_profile() -> String {
     "standard".to_string()
 }
 
+/// 任务执行审计配置（`[task_audit]` 段）。默认关闭，零行为变更。
+#[derive(Debug, Deserialize, Clone, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct TaskAuditConfig {
+    /// 是否启用任务执行审计（默认 false）。
+    pub enabled: bool,
+    /// 决策置信度低阈值：低于该值标记 low_confidence_flagged（默认 None = 不标记）。
+    pub decision_low_confidence: Option<f64>,
+}
+
+impl Default for TaskAuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            decision_low_confidence: None,
+        }
+    }
+}
+
 /// 引擎安全档位。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EngineSecurityProfile {
@@ -1143,6 +1167,7 @@ impl Default for EmbeddingConfig {
             persist_max_bytes: None,
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             max_text_length: DEFAULT_MAX_TEXT_LENGTH,
+            min_output_dimension: None,
             cache_backend: CacheBackendKind::Memory,
             redis_url: None,
         }
@@ -2220,6 +2245,7 @@ max_new_tokens = 384
             persist_max_bytes: Some(1024 * 1024),
             max_batch_size: 32,
             max_text_length: 4096,
+            min_output_dimension: None,
             cache_backend: CacheBackendKind::Memory,
             redis_url: None,
         };

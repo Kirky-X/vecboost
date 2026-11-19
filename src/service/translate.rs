@@ -46,6 +46,8 @@ impl TranslatePairRoute {
 /// `supports_task(Translate)=false` 的引擎——翻译能力被切换操作静默废掉。
 /// pair 引擎不参与 checkpoint 预设表与 switch_model 换型语义。
 pub struct TranslateService {
+    /// 任务审计上下文（装配时注入；默认 None = 无审计）。
+    task_audit: std::sync::OnceLock<std::sync::Arc<crate::audit::TaskAudit>>,
     /// 路由键全小写：配置面与请求两侧均被同一谓词（`^[a-z]{2,3}$`）拦截，
     /// 大写码在域层 validate 即 ValidationError，无大小写归一路径
     pairs: HashMap<(String, String), TranslatePairRoute>,
@@ -61,9 +63,20 @@ impl TranslateService {
             pairs.keys().map(|(s, t)| format!("{s}-{t}")).collect();
         configured_pairs.sort();
         Self {
+            task_audit: std::sync::OnceLock::new(),
             pairs,
             configured_pairs,
         }
+    }
+
+    /// 注入任务审计上下文。
+    pub fn with_task_audit(self, audit: std::sync::Arc<crate::audit::TaskAudit>) -> Self {
+        self.set_task_audit(audit);
+        self
+    }
+
+    pub fn set_task_audit(&self, audit: std::sync::Arc<crate::audit::TaskAudit>) {
+        let _ = self.task_audit.set(audit);
     }
 
     /// 已配置对清单（"en-zh" 展示形态，只读视图；日志/诊断用）
@@ -181,6 +194,11 @@ impl TranslateService {
         }
 
         let start = Instant::now();
+        let audit_input = if self.task_audit.get().is_some() {
+            req.text.clone()
+        } else {
+            String::new()
+        };
         let engine = route.engine.clone();
         let mut response = tokio::task::spawn_blocking(move || {
             let guard = engine.blocking_read();
@@ -201,6 +219,18 @@ impl TranslateService {
         })??;
         response.processing_time_ms = start.elapsed().as_millis() as u64;
         response.detected_source_language = detected;
+        if let Some(audit) = self.task_audit.get() {
+            let request_id = sdforge::context::current()
+                .map(|c| c.request_id().to_string())
+                .unwrap_or_else(|| "req-unknown".to_string());
+            audit.record(
+                crate::config::model::ModelTask::Translate,
+                &audit_input,
+                None, // translate 无置信度
+                start.elapsed().as_secs_f64() * 1000.0,
+                &request_id,
+            );
+        }
         Ok(response)
     }
 

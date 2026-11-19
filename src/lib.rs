@@ -100,7 +100,8 @@ pub mod planner {
 }
 
 pub use cache::{
-    CallerIsolation, ComparisonMode, SemanticCache, SemanticCacheConfig, SemanticCacheStats,
+    CacheExplain, CallerIsolation, ComparisonMode, SemanticCache, SemanticCacheConfig,
+    SemanticCacheStats,
 };
 
 // 再导出 sdforge 多协议框架（gRPC E2E 集成测试经此使用生成的 tonic 客户端）

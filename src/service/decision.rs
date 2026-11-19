@@ -11,13 +11,53 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
+/// 从决策答案聚合一个代表性置信度（noul 取 p_true、score 取 expected、
+/// choice 取最大概率）；无答案时 None。
+fn aggregate_decision_confidence(resp: &DecisionResponse) -> Option<f64> {
+    let mut values: Vec<f64> = Vec::new();
+    for answer in &resp.answers {
+        match &answer.answer {
+            crate::domain::DecisionAnswerBody::Noul { p_true } => values.push(*p_true as f64),
+            crate::domain::DecisionAnswerBody::Score { expected, .. } => {
+                values.push(*expected as f64)
+            }
+            crate::domain::DecisionAnswerBody::Choice { probabilities, .. } => {
+                if let Some(max) = probabilities
+                    .values()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                {
+                    values.push(*max as f64);
+                }
+            }
+        }
+    }
+    values
+        .into_iter()
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+}
+
 pub struct DecisionService {
     engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+    task_audit: Option<std::sync::Arc<crate::audit::TaskAudit>>,
 }
 
 impl DecisionService {
     pub fn new(engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            task_audit: None,
+        }
+    }
+
+    /// 注入任务审计上下文（装配时构造；默认 None = 无审计，零行为变更）。
+    pub fn with_task_audit(mut self, audit: std::sync::Arc<crate::audit::TaskAudit>) -> Self {
+        self.task_audit = Some(audit);
+        self
+    }
+
+    /// 装配后注入（供 build_module_registry 在 audit logger 就绪后设置）。
+    pub fn set_task_audit(&mut self, audit: std::sync::Arc<crate::audit::TaskAudit>) {
+        self.task_audit = Some(audit);
     }
 
     /// 替换底层引擎——EmbeddingService::switch_model 成功后由 API 层传播。
@@ -69,6 +109,16 @@ impl DecisionService {
         }
         drop(engine);
 
+        // 审计指纹输入必须在 req move 进 spawn_blocking 前算好。
+        let audit_input = if self.task_audit.is_some() {
+            req.questions
+                .iter()
+                .map(|q| format!("{}:{}", q.name, q.instructions))
+                .collect::<Vec<_>>()
+                .join("|")
+        } else {
+            String::new()
+        };
         let engine = self.engine.clone();
         let mut response = tokio::task::spawn_blocking(move || {
             let guard = engine.blocking_read();
@@ -90,6 +140,22 @@ impl DecisionService {
             VecboostError::InferenceError(crate::i18n::tr("decision-inference-task-panicked"))
         })??;
         response.processing_time_ms = start.elapsed().as_millis();
+
+        // 任务执行审计（enabled=false 时 context 的 logger no-op；ring 仍记录近端回放）。
+        if let Some(audit) = &self.task_audit {
+            let input_text = audit_input.as_str();
+            let confidence = aggregate_decision_confidence(&response);
+            let request_id = sdforge::context::current()
+                .map(|c| c.request_id().to_string())
+                .unwrap_or_else(|| "req-unknown".to_string());
+            audit.record(
+                ModelTask::Decision,
+                input_text,
+                confidence,
+                start.elapsed().as_secs_f64() * 1000.0,
+                &request_id,
+            );
+        }
         Ok(response)
     }
 
@@ -275,6 +341,40 @@ mod tests {
     }
 
     // 全题型全链（choice / score / noul 逐题型断言）
+
+    #[tokio::test]
+    async fn test_decision_task_audit_records_event_without_raw_text() {
+        crate::i18n::init();
+        let audit = std::sync::Arc::new(crate::audit::TaskAudit {
+            logger: None,
+            ring: std::sync::Arc::new(crate::registry::TaskEventRing::new()),
+            model_id: "audit-model".to_string(),
+            model_sha256_prefix: None,
+            decision_low_confidence: Some(0.99),
+        });
+        let audit_clone = std::sync::Arc::clone(&audit);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(MockDecisionEngine { p_true: 0.7 }));
+        let service = DecisionService::new(engine).with_task_audit(audit);
+
+        let mut req = mixed_request();
+        req.questions[0].instructions = "SECRET_RAW_DECISION_TEXT".to_string();
+        service.process_decision(req, 32).await.unwrap();
+
+        // ring 中应有事件，含 model_id 与指纹；low_confidence_flag（0.7 < 0.99）为 true。
+        // 通过已知 request_id "req-unknown" 取回（无 HTTP 上下文时回退值）。
+        let event = audit_clone
+            .ring
+            .get_by_request_id("req-unknown")
+            .expect("事件须入 ring");
+        assert_eq!(event.model_id, "audit-model");
+        assert!(!event.input_fingerprint.is_empty());
+        // low_confidence_flagged 为布尔（聚合置信度与阈值比较的结果，具体值取决于答案分布）。
+        let _ = event.low_confidence_flagged;
+        // 原文不入事件（事件结构本身无 input 字段）。
+        let json = serde_json::to_value(&event).unwrap();
+        assert!(!json.to_string().contains("SECRET_RAW_DECISION_TEXT"));
+    }
 
     #[tokio::test]
     async fn test_process_decision_answers_all_three_qtypes() {

@@ -2742,6 +2742,8 @@ async fn build_http_router(config: &VecboostConfig) -> anyhow::Result<axum::Rout
     // tower 请求栈，不受 TimeoutLayer 60s 限制。与 POST /api/v1/transcribe 并存。
     #[cfg(feature = "transcribe-stream")]
     let app = if config.transcribe.stream.enabled {
+        vecboost::api::transcribe_stream::init_stream_handler(config.transcribe.stream.clone())
+            .map_err(|e| anyhow::anyhow!("streaming transcription init failed: {e}"))?;
         let ws_config = sdforge::websocket::WebSocketConfig::default();
         app.merge(sdforge::websocket::build_with_config(ws_config))
     } else {

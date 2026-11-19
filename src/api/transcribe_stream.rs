@@ -35,8 +35,14 @@ pub struct StreamingWsHandler {
 impl StreamingWsHandler {
     /// 从配置装配；模型加载失败返回错误（fail-fast）。
     pub fn try_new(cfg: &StreamTranscribeConfig) -> Result<Self, String> {
-        let asr = StreamingAsr::load(std::path::Path::new(&cfg.models_dir), 0)
-            .map_err(|e| format!("streaming model load failed: {e}"))?;
+        let words_path = cfg.biasing_words_path.as_deref();
+        let asr = StreamingAsr::load(
+            std::path::Path::new(&cfg.models_dir),
+            0,
+            words_path,
+            cfg.biasing_weight,
+        )
+        .map_err(|e| format!("streaming model load failed: {e}"))?;
         let words: Vec<String> = match cfg.biasing_words_path.as_deref() {
             Some(p) => match std::fs::read_to_string(p) {
                 Ok(text) => text
@@ -69,20 +75,29 @@ impl StreamingWsHandler {
     }
 }
 
-/// 进程级共享 handler（forge 工厂每次调用返回同一实例）。
-fn shared_handler() -> Arc<StreamingWsHandler> {
-    use std::sync::OnceLock;
-    static HANDLER: OnceLock<Arc<StreamingWsHandler>> = OnceLock::new();
+/// 启动期由 build_http_router 注入的流配置（forge 工厂零参，无法直接传参）。
+static STREAM_CONFIG: std::sync::OnceLock<StreamTranscribeConfig> = std::sync::OnceLock::new();
+
+/// 进程级共享 handler（启动期构造，请求路径零 panic）。
+static HANDLER: std::sync::OnceLock<Arc<StreamingWsHandler>> = std::sync::OnceLock::new();
+
+/// 启动期注入配置并预构造 handler：模型/词表加载失败时返回 Err，
+/// 由 main.rs 拒绝启动（fail-fast），避免请求路径 panic（安全审查 H1）。
+pub fn init_stream_handler(cfg: StreamTranscribeConfig) -> Result<(), String> {
+    STREAM_CONFIG
+        .set(cfg.clone())
+        .map_err(|_| "stream config already initialized".to_string())?;
+    let handler = Arc::new(StreamingWsHandler::try_new(&cfg)?);
     HANDLER
-        .get_or_init(|| {
-            let cfg = crate::config::VecboostConfig::load_via_confers()
-                .map(|c| c.transcribe.stream.clone())
-                .unwrap_or_default();
-            Arc::new(
-                StreamingWsHandler::try_new(&cfg)
-                    .expect("streaming model must load when transcribe-stream endpoint is enabled"),
-            )
-        })
+        .set(handler)
+        .map_err(|_| "stream handler already initialized".to_string())
+}
+
+/// 已初始化的 handler（启动期 init_stream_handler 保证存在）。
+fn shared_handler() -> Arc<StreamingWsHandler> {
+    HANDLER
+        .get()
+        .expect("stream handler must be initialized before WS endpoint is mounted")
         .clone()
 }
 
@@ -118,8 +133,9 @@ impl WebSocketHandler for StreamingWsHandler {
                     let mut states = handler.states.lock().unwrap();
                     let sid = client_sid.unwrap_or("");
                     match states.remove(sid) {
-                        Some((state, _)) => {
+                        Some((mut state, _)) => {
                             let asr = handler.asr.lock().unwrap();
+                            asr.finalize(&mut state); // flush 尾音（架构 F2）
                             let cands = asr.finish_candidates(&state);
                             drop(asr);
                             correct_candidates(&cands, &handler.biasing, &handler.rescorer)
@@ -176,10 +192,11 @@ impl WebSocketHandler for StreamingWsHandler {
                         if states.len() >= handler.max_sessions {
                             return err(&id, "too_many_sessions");
                         }
-                        states.insert(
-                            new.clone(),
-                            (StreamState::default(), std::time::Instant::now()),
-                        );
+                        // 官方绑定版：state 需由 recognizer 创建（OnlineStream）。
+                        // 锁顺序 states → asr，与推理/end 路径一致，无死锁环。
+                        let asr = handler.asr.lock().unwrap();
+                        states.insert(new.clone(), (asr.new_state(), std::time::Instant::now()));
+                        drop(asr);
                         (new, true)
                     }
                     None => {
@@ -187,10 +204,9 @@ impl WebSocketHandler for StreamingWsHandler {
                         if states.len() >= handler.max_sessions {
                             return err(&id, "too_many_sessions");
                         }
-                        states.insert(
-                            new.clone(),
-                            (StreamState::default(), std::time::Instant::now()),
-                        );
+                        let asr = handler.asr.lock().unwrap();
+                        states.insert(new.clone(), (asr.new_state(), std::time::Instant::now()));
+                        drop(asr);
                         (new, true)
                     }
                 }
@@ -201,7 +217,7 @@ impl WebSocketHandler for StreamingWsHandler {
                 let mut states = handler.states.lock().unwrap();
                 states.remove(&sid).map(|(s, _)| s)
             };
-            let Some(ref mut st) = st else {
+            let Some(mut st) = st else {
                 return err(&id, "session_lost");
             };
 
@@ -209,12 +225,12 @@ impl WebSocketHandler for StreamingWsHandler {
                 let mut asr = handler.asr.lock().unwrap();
                 let mut result = Ok(());
                 for chunk in pcm.chunks(320) {
-                    match asr.encode_frame(st, chunk) {
+                    match asr.encode_frame(&mut st, chunk) {
                         // PCM 未凑满一个 chunk 时返回空 logits 是正常路径（每 20ms
                         // 一帧、每 320ms 才推理一次）——不可当错误（架构复审 H1-2）
                         Ok(logits) if logits.is_empty() => {}
                         Ok(logits) => {
-                            if let Err(e) = advance_decode(st, &logits) {
+                            if let Err(e) = advance_decode(&mut st, &logits) {
                                 result = Err(e);
                                 break;
                             }
@@ -231,17 +247,17 @@ impl WebSocketHandler for StreamingWsHandler {
                 log::error!("ws streaming inference failed: {e}");
                 // 归还 state（错误时也要归还，避免会话丢失）
                 let mut states = handler.states.lock().unwrap();
-                states.insert(sid.clone(), (st.clone(), std::time::Instant::now()));
+                states.insert(sid.clone(), (st, std::time::Instant::now()));
                 return err(&id, "infer_failed");
             }
             let text = {
                 let asr = handler.asr.lock().unwrap();
-                asr.partial_text(st)
+                asr.partial_text(&st)
             };
             // 归还 state + 更新时间戳
             {
                 let mut states = handler.states.lock().unwrap();
-                states.insert(sid.clone(), (st.clone(), std::time::Instant::now()));
+                states.insert(sid.clone(), (st, std::time::Instant::now()));
             }
 
             WebSocketMessage::Response {

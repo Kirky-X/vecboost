@@ -717,7 +717,7 @@ curl -X POST http://localhost:9002/api/v1/transcribe   -H "Content-Type: applica
 
 **端点:** `WS /api/v1/transcribe/stream`（需 `transcribe-stream` feature + `[transcribe.stream] enabled=true`）
 
-与上方 POST 端点**完全并存**、互不替代：POST 是一次性整段转录（Qwen3/Whisper），WS 是边说边出字的流式转录（sherpa streaming zipformer 中英双语 int8 三图，约 198MB，Apache-2.0）。
+与上方 POST 端点**完全并存**、互不替代：POST 是一次性整段转录（Qwen3/Whisper），WS 是边说边出字的流式转录（官方 sherpa-onnx 绑定 + Paraformer 三语 int8，约 238MB，Apache-2.0；实测 CER 中文 0.05~0.19 / 英文 0.015）。
 
 **消息格式**（sdforge WebSocketMessage JSON envelope）：
 
@@ -736,7 +736,7 @@ curl -X POST http://localhost:9002/api/v1/transcribe   -H "Content-Type: applica
 ```toml
 [transcribe.stream]
 enabled = true                    # false = 不注册 WS 端点（缺省）
-models_dir = "models/whisper-stream"  # encoder/decoder/joiner int8 三图 + tokens.txt
+models_dir = "models/paraformer-trilingual"  # Paraformer 三语 int8（encoder 166MB + decoder 72MB + tokens.txt，Apache-2.0）
 biasing_words_path = "data/user_words.txt"  # 可选：上下文偏置词表（每行一词）
 biasing_weight = 0.3              # Gboard 公式 log P(y|x)+λ·log P_C(y) 的 λ
 lm_model_path = null              # 预留（当前用内置字符 bigram 重打分，无外部 LM 资产）

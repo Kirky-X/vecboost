@@ -245,7 +245,7 @@ impl Default for StreamTranscribeConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            models_dir: "models/whisper-stream".to_string(),
+            models_dir: "models/paraformer-trilingual".to_string(),
             biasing_words_path: None,
             biasing_weight: 0.3,
             lm_model_path: None,

@@ -291,7 +291,7 @@ impl ModelManager {
             );
             Err(VecboostError::NotFound(crate::i18n::tr_with_args(
                 "detail-model-not-found-95ab5",
-                crate::i18n::tr_args(&[("p1", &name.to_string())]),
+                crate::i18n::tr_args(&[("p1", name)]),
             )))
         }
     }
@@ -470,7 +470,7 @@ impl ModelManager {
             let model = models.get(name).ok_or_else(|| {
                 VecboostError::NotFound(crate::i18n::tr_with_args(
                     "detail-model-not-found-95ab5",
-                    crate::i18n::tr_args(&[("p1", &name.to_string())]),
+                    crate::i18n::tr_args(&[("p1", name)]),
                 ))
             })?;
 

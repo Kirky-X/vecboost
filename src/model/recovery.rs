@@ -249,7 +249,7 @@ impl ModelRecovery {
                             return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
                                 "detail-failed-to-recover-file-after-attempts-a8a8e",
                                 crate::i18n::tr_args(&[
-                                    ("p1", &file_name.to_string()),
+                                    ("p1", file_name),
                                     ("p2", &self.config.max_retries.to_string()),
                                     ("p3", &e.to_string()),
                                 ]),
@@ -312,7 +312,7 @@ impl ModelRecovery {
                         return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
                             "detail-failed-to-download-file-after-attempts-43f1c",
                             crate::i18n::tr_args(&[
-                                ("p1", &file_name.to_string()),
+                                ("p1", file_name),
                                 ("p2", &self.config.max_retries.to_string()),
                                 ("p3", &e.to_string()),
                             ]),

@@ -250,7 +250,7 @@ impl M2mGraph {
             config.get(name).and_then(|v| v.as_i64()).ok_or_else(|| {
                 VecboostError::ModelLoadError(crate::i18n::tr_with_args(
                     "detail-bundle-config-json-missing-or-invalid-numeric-field-n-559fc",
-                    crate::i18n::tr_args(&[("name", &name.to_string())]),
+                    crate::i18n::tr_args(&[("name", name)]),
                 ))
             })
         };
@@ -353,7 +353,7 @@ impl Family {
             }
             other => Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
                 "detail-unsupported-translation-model-type-other-supported-ma-f40b1",
-                crate::i18n::tr_args(&[("other", &other.to_string())]),
+                crate::i18n::tr_args(&[("other", other)]),
             ))),
         }
     }
@@ -377,7 +377,7 @@ impl Family {
                 .ok_or_else(|| {
                     VecboostError::InvalidInput(crate::i18n::tr_with_args(
                         "detail-language-code-iso-is-not-supported-by-this-nllb-bundl-305d3",
-                        crate::i18n::tr_args(&[("iso", &iso.to_string())]),
+                        crate::i18n::tr_args(&[("iso", iso)]),
                     ))
                 })?
                 .to_string(),
@@ -627,7 +627,7 @@ fn inference_err(step: &str) -> impl Fn(ort::Error) -> VecboostError + '_ {
     move |e: ort::Error| {
         VecboostError::InferenceError(crate::i18n::tr_with_args(
             "detail-translation-step-failed-e-c34b9",
-            crate::i18n::tr_args(&[("step", &step.to_string()), ("e", &e.to_string())]),
+            crate::i18n::tr_args(&[("step", step), ("e", &e.to_string())]),
         ))
     }
 }
@@ -1632,7 +1632,7 @@ fn check_token_budget(
         return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
             "detail-source-scope-exceeds-token-budget-source-len-tokens-m-216f2",
             crate::i18n::tr_args(&[
-                ("scope", &scope.to_string()),
+                ("scope", scope),
                 ("source_len", &source_len.to_string()),
                 ("max_source_tokens", &max_source_tokens.to_string()),
             ]),

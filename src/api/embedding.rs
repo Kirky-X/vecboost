@@ -367,7 +367,7 @@ async fn embed_batch_handler(req: BatchEmbedRequest) -> Result<BatchEmbedRespons
             "/api/v1/embed/batch",
             None,
             "length",
-            &req.texts.first().map(String::as_str).unwrap_or(""),
+            req.texts.first().map(String::as_str).unwrap_or(""),
         );
         return Err(to_api_error(e));
     }

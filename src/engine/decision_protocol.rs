@@ -88,7 +88,7 @@ fn special_id(tokenizer: &Tokenizer, token: &str) -> Result<i64, VecboostError> 
         .ok_or_else(|| {
             VecboostError::TokenizationError(crate::i18n::tr_with_args(
                 "detail-tokenizer-vocab-missing-token-dd066",
-                crate::i18n::tr_args(&[("token", &token.to_string())]),
+                crate::i18n::tr_args(&[("token", token)]),
             ))
         })
 }

@@ -166,7 +166,7 @@ pub(crate) fn probe_model_file(
     Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
         "detail-no-role-model-found-in-tried-e6fb2",
         crate::i18n::tr_args(&[
-            ("role", &role.to_string()),
+            ("role", role),
             ("p1", &bundle_dir.display().to_string()),
             ("p2", &tried.join(", ").to_string()),
         ]),

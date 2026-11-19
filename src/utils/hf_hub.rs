@@ -90,7 +90,7 @@ fn build_hf_repo_with_http(
     if !is_valid_hf_repo_id(repo_id) {
         return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
             "detail-invalid-huggingface-repo-id-must-match-organization-m-8d092",
-            crate::i18n::tr_args(&[("p1", &repo_id.to_string())]),
+            crate::i18n::tr_args(&[("p1", repo_id)]),
         )));
     }
 
@@ -208,14 +208,14 @@ pub async fn download_files(
     if !is_valid_hf_repo_id(repo_id) {
         return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
             "detail-invalid-huggingface-repo-id-repo-id-must-match-organi-f01c8",
-            crate::i18n::tr_args(&[("repo_id", &repo_id.to_string())]),
+            crate::i18n::tr_args(&[("repo_id", repo_id)]),
         )));
     }
 
     if files.is_empty() {
         return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
             "detail-empty-download-manifest-for-repo-id-refusing-to-repor-7ff84",
-            crate::i18n::tr_args(&[("repo_id", &repo_id.to_string())]),
+            crate::i18n::tr_args(&[("repo_id", repo_id)]),
         )));
     }
 
@@ -332,7 +332,7 @@ fn validate_remote_path(remote: &str) -> Result<(), VecboostError> {
     {
         return Err(VecboostError::ModelLoadError(crate::i18n::tr_with_args(
             "detail-download-manifest-remote-path-remote-must-be-a-repo-r-0ecaf",
-            crate::i18n::tr_args(&[("remote", &remote.to_string())]),
+            crate::i18n::tr_args(&[("remote", remote)]),
         )));
     }
     Ok(())

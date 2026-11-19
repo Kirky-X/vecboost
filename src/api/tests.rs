@@ -86,6 +86,16 @@ async fn ensure_state_initialized() {
     // forge_login/refresh/logout 无条件 require AuditModule；Logger 置 None——
     // 审计事件落盘路径由 test_audit_logger_called_by_forge_handler_pattern 单独覆盖。
     kit.set_config(Option::<Arc<crate::audit::AuditLogger>>::None);
+    // 任务审计上下文（logger=None 无 IO；与 main.rs 装配同构）：detect handler
+    // 经 from_kit 写入 ring，供 detect 审计断言与 /admin/inference/replay
+    // 端点用例（403/200/404 分支）取回事件。
+    kit.set_config(Arc::new(crate::audit::TaskAudit {
+        logger: None,
+        ring: Arc::new(crate::registry::TaskEventRing::new()),
+        model_id: "test-audit-model".to_string(),
+        model_sha256_prefix: None,
+        decision_low_confidence: None,
+    }));
     // auth feature 下注入 Some(handle)（与 main.rs init_auth 同构）：None 只能测到
     // auth-disabled 500，校验/登录分支全部不可达。
     #[cfg(feature = "auth")]
@@ -986,6 +996,265 @@ async fn test_forge_detect_undetectable_returns_200_null_language() {
     let response = result.unwrap();
     assert!(response.language.is_none());
     assert!(!response.is_reliable);
+}
+
+/// detect 任务审计写入断言（T007 同构；仿 decision/translate ring 用例）：
+/// handler 经 from_kit → TaskAudit.record 写入 ring——含 model_id/输入指纹/
+/// 响应 confidence，原文不入事件。用 sdforge context scope 注入唯一
+/// request_id：事件落在专属槽位，不受并行测试共享 "req-unknown" 槽覆盖。
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn test_forge_detect_writes_task_audit_event() {
+    crate::i18n::init();
+    ensure_state_initialized().await;
+    let st = crate::api::state().expect("state must be initialized");
+    let audit = crate::audit::task_audit::from_kit(&st.kit)
+        .expect("TaskAudit must be registered in test kit");
+    let request_id = "req-detect-audit-assert-1";
+
+    let resp = sdforge::context::scope(
+        sdforge::context::RequestContext::with_ids(
+            request_id.to_string(),
+            "trace-detect-audit-1".to_string(),
+        ),
+        forge_detect(DetectRequest {
+            text: "SECRET_RAW_DETECT_TEXT for audit".to_string(),
+            allow: None,
+        }),
+    )
+    .await;
+    let response = resp.expect("forge_detect should succeed");
+    assert!(
+        response.confidence.is_finite(),
+        "detect 直取响应 confidence"
+    );
+
+    let event = audit
+        .ring
+        .get_by_request_id(request_id)
+        .expect("detect 执行须按上下文 request_id 写入审计事件");
+    assert_eq!(event.task_type, ModelTask::Detect);
+    assert_eq!(event.model_id, "test-audit-model");
+    assert_eq!(
+        event.input_fingerprint,
+        crate::utils::hash::sha256_hex(b"SECRET_RAW_DETECT_TEXT for audit"),
+        "指纹必须是原文 sha256"
+    );
+    assert_eq!(event.request_id, request_id);
+    let json = serde_json::to_value(&event).unwrap();
+    assert!(
+        !json.to_string().contains("SECRET_RAW_DETECT_TEXT"),
+        "原文不入事件"
+    );
+}
+
+// admin 可观测端点（/api/v1/admin/inference/replay、/api/v1/admin/cache/explain）
+// 的 403/200/404 分支——T012 声称但此前零覆盖（验收 FAIL 修复 4）。
+//
+// 落位说明：单管理员模型下（`verify_login_decision` 仅 admin_username 可登录，
+// 其余用户名一律 401），tests/ 目录的真服务集成测试无法取得非 admin token；
+// garrison `login_simple` 可在进程内为任意 login_id 签发会话
+// （VecBoostInterface：非 admin 用户名 → "user" 角色），故 403 分支按本文件
+// 既有 forge-handler 测试惯例，以真实 auth_middleware + Router oneshot 覆盖。
+
+/// 两端点的真实护栏面：真实 auth_middleware + 全局 state（与生产装配同源）。
+///
+/// `#[forge]` 宏为 handler 自建 MethodRouter（路径参数 Path 适配 + 返回值
+/// `(StatusCode, Json)` 包装），裸 fn 不满足 axum Handler——此处按宏
+/// `(true, false)` 臂同构生成薄适配器（Ok → 200 + Json；Err → ApiError
+/// IntoResponse），护栏语义（auth_middleware + admin 前缀）保持真实。
+#[cfg(all(feature = "http", feature = "auth"))]
+async fn admin_observability_app() -> axum::Router {
+    use axum::extract::{Json, Path};
+    use axum::response::IntoResponse;
+    use axum::routing::{get, post};
+    use sdforge::prelude::ApiError;
+
+    async fn replay_route(
+        Path(request_id): Path<String>,
+    ) -> Result<axum::response::Response, ApiError> {
+        let resp = crate::api::admin_observability::forge_inference_replay(request_id).await?;
+        Ok((axum::http::StatusCode::OK, Json(resp)).into_response())
+    }
+
+    async fn explain_route(
+        Json(req): Json<crate::api::admin_observability::CacheExplainRequest>,
+    ) -> Result<axum::response::Response, ApiError> {
+        let resp = crate::api::admin_observability::forge_cache_explain(req).await?;
+        Ok((axum::http::StatusCode::OK, Json(resp)).into_response())
+    }
+
+    ensure_state_initialized().await;
+    ensure_garrison_initialized().await;
+    let st = crate::api::state().expect("state must be initialized");
+    // 与 main.rs apply_auth_middlewares 同构：from_fn_with_state 显式给 state
+    //（裸 from_fn 的 State 抽取需 Router 先知 state 类型，layer 处不可判定）。
+    axum::Router::new()
+        .route(
+            "/api/v1/admin/inference/replay/{request_id}",
+            get(replay_route),
+        )
+        .route("/api/v1/admin/cache/explain", post(explain_route))
+        .layer(axum::middleware::from_fn_with_state(
+            st.clone(),
+            crate::auth::auth_middleware,
+        ))
+        .with_state(st)
+}
+
+#[cfg(all(feature = "http", feature = "auth"))]
+async fn send_admin_request(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    token: &str,
+) -> (u16, serde_json::Value) {
+    use tower::ServiceExt;
+    let builder = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json");
+    let request = match body {
+        Some(b) => builder.body(axum::body::Body::from(b.to_string())).unwrap(),
+        None => builder.body(axum::body::Body::empty()).unwrap(),
+    };
+    let resp = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("request must succeed");
+    let status = resp.status().as_u16();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json = if bytes.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+    };
+    (status, json)
+}
+
+/// 回放端点三分支：非 admin 403（真实 auth_middleware 护栏）、admin 命中
+/// 200 + 事件 JSON、admin 未命中 404（与修复 2 的 404 语义联动）。
+/// multi_thread flavor：garrison oxcache DAO 的 sync 面需多线程 runtime。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_admin_replay_endpoint_403_200_404_branches() {
+    crate::i18n::init();
+    let app = admin_observability_app().await;
+    let admin_token = crate::auth::GarrisonUtil::login_simple(TEST_ADMIN_USERNAME)
+        .await
+        .expect("admin login_simple must succeed");
+    let user_token = crate::auth::GarrisonUtil::login_simple("alice")
+        .await
+        .expect("user login_simple must succeed");
+
+    // 事件注入与生产同源：kit 内 TaskAudit 的 ring（main.rs 装配同构）。
+    let st = crate::api::state().expect("state must be initialized");
+    let audit = crate::audit::task_audit::from_kit(&st.kit).expect("TaskAudit must be in test kit");
+    audit.ring.push(crate::audit::TaskExecutionEvent {
+        task_type: ModelTask::Translate,
+        model_id: "replay-model".to_string(),
+        model_sha256_prefix: None,
+        input_fingerprint: "replay-fp".to_string(),
+        output_confidence: None,
+        low_confidence_flagged: false,
+        latency_ms: 1.0,
+        request_id: "req-replay-hit".to_string(),
+        timestamp: "2026-01-01T00:00:00Z".to_string(),
+    });
+
+    // 非 admin（alice → user 角色）访问 admin 回放端点：403。
+    let (status, body) = send_admin_request(
+        &app,
+        "GET",
+        "/api/v1/admin/inference/replay/req-replay-hit",
+        None,
+        &user_token,
+    )
+    .await;
+    assert_eq!(status, 403, "非 admin 角色必须 403，got {status}: {body}");
+    assert_eq!(body["error"]["code"], "FORBIDDEN");
+
+    // admin 命中：200 + 事件 JSON。
+    let (status, body) = send_admin_request(
+        &app,
+        "GET",
+        "/api/v1/admin/inference/replay/req-replay-hit",
+        None,
+        &admin_token,
+    )
+    .await;
+    assert_eq!(status, 200, "admin 命中必须 200，got {status}: {body}");
+    assert_eq!(body["event"]["request_id"], "req-replay-hit");
+    assert_eq!(body["event"]["model_id"], "replay-model");
+    assert_eq!(body["event"]["task_type"], "translate"); // ModelTask serde 小写
+
+    // admin 未命中：404（found:false 的 200 已移除——修复 2 联动）。
+    let (status, body) = send_admin_request(
+        &app,
+        "GET",
+        "/api/v1/admin/inference/replay/definitely-missing-request-id",
+        None,
+        &admin_token,
+    )
+    .await;
+    assert_eq!(status, 404, "admin 未命中必须 404，got {status}: {body}");
+    // 统一错误契约：ApiError::NotFound 渲染为顶层 UnifiedError 载荷
+    // （code=NOT_FOUND，message 含 resource 名），无独立 resource 字段。
+    assert_eq!(body["code"], "NOT_FOUND");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("task execution event")),
+        "message 须含 resource 名: {body}"
+    );
+}
+
+/// explain 端点两分支：非 admin 403；admin 200 且响应含 l1/l2/l3 字段。
+/// multi_thread flavor：garrison oxcache DAO 的 sync 面需多线程 runtime。
+#[cfg(all(feature = "http", feature = "auth"))]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_admin_cache_explain_endpoint_403_and_200() {
+    crate::i18n::init();
+    let app = admin_observability_app().await;
+    let admin_token = crate::auth::GarrisonUtil::login_simple(TEST_ADMIN_USERNAME)
+        .await
+        .expect("admin login_simple must succeed");
+    let user_token = crate::auth::GarrisonUtil::login_simple("alice")
+        .await
+        .expect("user login_simple must succeed");
+    let payload = r#"{"model_id":"explain-model","text":"hello vecboost"}"#;
+
+    // 非 admin：403（explain 暴露缓存条目归属与相似度，属运维敏感面）。
+    let (status, body) = send_admin_request(
+        &app,
+        "POST",
+        "/api/v1/admin/cache/explain",
+        Some(payload),
+        &user_token,
+    )
+    .await;
+    assert_eq!(status, 403, "非 admin 角色必须 403，got {status}: {body}");
+    assert_eq!(body["error"]["code"], "FORBIDDEN");
+
+    // admin：200 且三级字段齐全（测试 kit 未装配语义缓存 → 全未命中，
+    // l3_would_compute=true——与 cache_explain_handler 的未装配分支一致）。
+    let (status, body) = send_admin_request(
+        &app,
+        "POST",
+        "/api/v1/admin/cache/explain",
+        Some(payload),
+        &admin_token,
+    )
+    .await;
+    assert_eq!(status, 200, "admin explain 必须 200，got {status}: {body}");
+    assert_eq!(body["l1_exact_hit"], false);
+    assert!(body["l2_semantic_hit"].is_null());
+    assert_eq!(body["l3_would_compute"], true);
 }
 
 #[cfg(feature = "http")]

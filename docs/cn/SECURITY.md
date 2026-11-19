@@ -122,7 +122,7 @@ cargo deny check
 ### 任务审计与可观测
 
 - `[task_audit] enabled`（默认 false）：决策、翻译、语种识别每次执行向异步审计 sink 写一条 `TaskExecutionEvent`（行前缀 `task_execution`）。字段：`task_type`、`model_id`、`model_sha256_prefix`、`input_fingerprint`、`output_confidence`、`low_confidence_flagged`、`latency_ms`、`request_id`、`timestamp`（RFC3339）。**原始输入文本永不落日志——仅 sha256 指纹**（`input_fingerprint`），审计日志不成为二次泄露面。低置信决策（低于 `[task_audit] decision_low_confidence`）显式标记。
-- 两个 admin 角色可观测端点（与模型切换同级的 admin 护栏）：`GET /api/v1/admin/inference/replay/{request_id}` 从进程内环（容量 1000，FIFO——单副本近端视图）回放任务事件；`POST /api/v1/admin/cache/explain` 零副作用干跑语义缓存命中路径（L1 精确 / L2 trigram / L3 would-compute）。caller 取服务端认证用户名，不使用可伪造的 X-User-Id 头。
+- 两个 admin 角色可观测端点（与模型切换同级的 admin 护栏）：`GET /api/v1/admin/inference/replay/{request_id}` 从进程内环（容量 1000，FIFO——单副本近端视图）回放任务事件；`POST /api/v1/admin/cache/explain` 零副作用干跑语义缓存命中路径（L1 精确 / L2 trigram / L3 would-compute）。两端的请求方都须通过服务端认证态（Bearer token 经 auth middleware 解析出 admin 角色）放行，不使用可伪造的 X-User-Id 头；两者身份语义不同——回放按 request_id 查询事件、无 caller 输入，explain 的 caller 为 admin 在请求体中指定的探测键（缺省 `anonymous`），仅用于构造缓存分区查询，非认证身份。
 - `[embedding] min_output_dimension`（默认 None = 关闭）为 Matryoshka 质量门：`dimensions` 请求低于配置下限时 400 拒绝，`/metrics` 中 `vecboost_matryoshka_gate_rejected_total` 递增。
 
 ### 引擎信任边界

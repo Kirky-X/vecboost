@@ -28,10 +28,11 @@ fn anonymous() -> String {
     "anonymous".to_string()
 }
 
+/// 回放命中响应体：200 时事件必存在（未命中以 404 表达，不再用
+/// `found:false` 的 200 伪装成功——验收 FAIL 修复 2）。
 #[derive(Debug, Serialize)]
 pub struct ReplayResponse {
-    pub found: bool,
-    pub event: Option<crate::audit::TaskExecutionEvent>,
+    pub event: crate::audit::TaskExecutionEvent,
 }
 
 #[cfg(feature = "http")]
@@ -47,7 +48,7 @@ pub async fn forge_inference_replay(
     #[param(kind = "path")] request_id: String,
 ) -> Result<ReplayResponse, ApiError> {
     let st = state().map_err(to_api_error)?;
-    Ok(replay_handler(&st, &request_id))
+    replay_handler(&st, &request_id)
 }
 
 #[cfg(feature = "http")]
@@ -66,12 +67,16 @@ pub async fn forge_cache_explain(
     cache_explain_handler(&st, req).await
 }
 
-fn replay_handler(st: &VecboostState, request_id: &str) -> ReplayResponse {
+fn replay_handler(st: &VecboostState, request_id: &str) -> Result<ReplayResponse, ApiError> {
     let audit = crate::audit::task_audit::from_kit(&st.kit);
-    let event = audit.and_then(|a| a.ring.get_by_request_id(request_id));
-    ReplayResponse {
-        found: event.is_some(),
-        event,
+    match audit.and_then(|a| a.ring.get_by_request_id(request_id)) {
+        Some(event) => Ok(ReplayResponse { event }),
+        // 未命中（含审计上下文未装配）：404 NotFound，与项目错误机制同口径
+        //（unload_model_handler 的 ApiError::NotFound 先例）。
+        None => Err(ApiError::NotFound {
+            resource: "task execution event".to_string(),
+            resource_id: Some(request_id.to_string()),
+        }),
     }
 }
 
@@ -109,14 +114,46 @@ mod tests {
         assert_eq!(req.caller, "anonymous");
     }
 
+    /// 回放命中响应形状：200 体直接携带事件（found 字段已随 404 语义移除）。
     #[test]
-    fn test_replay_response_not_found_shape() {
-        let resp = ReplayResponse {
-            found: false,
-            event: None,
+    fn test_replay_response_hit_shape() {
+        let event = crate::audit::TaskExecutionEvent {
+            task_type: crate::config::model::ModelTask::Decision,
+            model_id: "m".to_string(),
+            model_sha256_prefix: None,
+            input_fingerprint: "fp".to_string(),
+            output_confidence: None,
+            low_confidence_flagged: false,
+            latency_ms: 1.0,
+            request_id: "req-1".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
         };
-        let json = serde_json::to_value(&resp).unwrap();
-        assert_eq!(json["found"], false);
-        assert!(json["event"].is_null());
+        let json = serde_json::to_value(&ReplayResponse { event }).unwrap();
+        assert_eq!(json["event"]["request_id"], "req-1");
+        assert_eq!(json["event"]["model_id"], "m");
+        assert!(json.get("found").is_none(), "found 字段必须移除");
+    }
+
+    /// 回放未命中：404 NotFound（此前恒 200 + found:false，验收 FAIL 修复 2）。
+    /// 独立构建极简 kit（不触进程级单例 state，防与并行测试竞态）。
+    #[tokio::test]
+    async fn test_replay_handler_miss_returns_not_found() {
+        let kit = trait_kit::AsyncKit::new();
+        let kit = kit.build().await.expect("bare kit must build");
+        let st = crate::VecboostState::new(std::sync::Arc::new(kit));
+        let result = replay_handler(&st, "definitely-missing-request-id");
+        match result {
+            Err(ApiError::NotFound {
+                resource,
+                resource_id,
+            }) => {
+                assert_eq!(resource, "task execution event");
+                assert_eq!(
+                    resource_id.as_deref(),
+                    Some("definitely-missing-request-id")
+                );
+            }
+            other => panic!("Expected NotFound 404, got {other:?}"),
+        }
     }
 }

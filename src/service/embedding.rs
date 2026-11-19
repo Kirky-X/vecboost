@@ -570,31 +570,10 @@ impl EmbeddingService {
         let mut embedding = embedding;
         normalize_l2(&mut embedding)?;
 
-        // Apply Matryoshka dimension reduction if requested
-        if let Some(target_dim) = target_dimension {
-            let max_dim = self
-                .model_config
-                .as_ref()
-                .and_then(|c| c.expected_dimension)
-                .unwrap_or(1024);
-            validate_dimension(Some(target_dim), max_dim)
-                .map_err(|e| VecboostError::InvalidInput(e.to_string()))?;
-            // 质量门：低于配置下限时 400 拒绝（防不可接受的检索精度损失）。
-            if let Some(min) = self.min_output_dimension
-                && target_dim < min
-            {
-                #[cfg(feature = "http")]
-                if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
-                    collector.inc_matryoshka_gate_rejected();
-                }
-                return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
-                    "validate-dimension-below-min",
-                    crate::i18n::tr_args(&[
-                        ("got", &target_dim.to_string()),
-                        ("min", &min.to_string()),
-                    ]),
-                )));
-            }
+        // Apply Matryoshka dimension reduction if requested.
+        // 上下限与质量门校验统一走 resolve_effective_dimension 单点
+        //（与批量路径共用，防止两处校验漂移）。
+        if let Some(target_dim) = self.resolve_effective_dimension(target_dimension)? {
             embedding = truncate_vector(&embedding, target_dim);
             // Matryoshka 截断破坏单位向量语义，必须重归一化以保证余弦相似度正确
             normalize_l2(&mut embedding)?;
@@ -1368,7 +1347,13 @@ impl EmbeddingService {
         Ok(results)
     }
 
-    /// Matryoshka 目标维度校验（不得超过配置维度上限）。
+    /// Matryoshka 目标维度校验（不得超过配置维度上限，亦不得低于质量门下限）。
+    ///
+    /// 质量门收敛单点：单文本（`process_text_with_caller`）与批量
+    /// （`process_batch`，含唯一携带 dimensions 的 OpenAI 兼容端点
+    /// `/v1/embeddings`）两条路径共同的上游——`min_output_dimension`
+    /// 下限校验只写此处，不在多协议 handler 重复实现
+    /// （embed-quality-gate spec Constraints）。
     fn resolve_effective_dimension(
         &self,
         target_dimension: Option<usize>,
@@ -1383,7 +1368,24 @@ impl EmbeddingService {
             .unwrap_or(1024);
         validate_dimension(Some(target_dim), max_dim)
             .map(|_| Some(target_dim))
-            .map_err(|e| VecboostError::InvalidInput(e.to_string()))
+            .map_err(|e| VecboostError::InvalidInput(e.to_string()))?;
+        // 质量门：低于配置下限时 400 拒绝（防不可接受的检索精度损失）。
+        if let Some(min) = self.min_output_dimension
+            && target_dim < min
+        {
+            #[cfg(feature = "http")]
+            if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
+                collector.inc_matryoshka_gate_rejected();
+            }
+            return Err(VecboostError::InvalidInput(crate::i18n::tr_with_args(
+                "validate-dimension-below-min",
+                crate::i18n::tr_args(&[
+                    ("got", &target_dim.to_string()),
+                    ("min", &min.to_string()),
+                ]),
+            )));
+        }
+        Ok(Some(target_dim))
     }
 
     /// original_idx 顺序重建结果（重复文本复用其 unique 槽位的向量）。
@@ -4414,6 +4416,55 @@ mod tests {
                 norm
             );
         }
+    }
+
+    /// 批量路径质量门（OpenAI 兼容端点 /v1/embeddings 是唯一携带 dimensions
+    /// 的请求面，走 process_batch）：下限校验收敛在 resolve_effective_dimension
+    /// 后，批路径必须同样拒绝低于下限的 dimensions（此前只在单文本路径有门，
+    /// HTTP 部署上门对真实请求零效果——验收 FAIL 修复 1 的回归锚）。
+    #[tokio::test]
+    async fn test_process_batch_min_output_dimension_gate() {
+        crate::i18n::init();
+        let model_config = make_model_config("batch-gate", 384);
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(384)));
+        let service =
+            EmbeddingService::new(engine, Some(model_config)).with_min_output_dimension(Some(128));
+        let mk = |texts: Vec<String>| BatchEmbedRequest {
+            texts,
+            mode: None,
+            normalize: Some(true),
+        };
+
+        // 低于下限 128：批路径同样 400 拒绝，detail 含 got=64 与 min=128。
+        let err = service
+            .process_batch(mk(vec!["a".to_string(), "b".to_string()]), Some(64))
+            .await
+            .unwrap_err();
+        match err {
+            VecboostError::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("64") && msg.contains("128"),
+                    "detail 须含两值: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput, got {other:?}"),
+        }
+        // 等于下限：正常截断。
+        let ok = service
+            .process_batch(mk(vec!["a".to_string()]), Some(128))
+            .await
+            .unwrap();
+        assert_eq!(ok.dimension, 128);
+        // 未设下限的服务：dimensions=64 行为与现状一致（成功截断）。
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(384)));
+        let no_gate = EmbeddingService::new(engine, Some(make_model_config("batch-no-gate", 384)));
+        let resp = no_gate
+            .process_batch(mk(vec!["a".to_string()]), Some(64))
+            .await
+            .unwrap();
+        assert_eq!(resp.dimension, 64);
     }
 
     // ===== 构造器与 builder 测试 =====

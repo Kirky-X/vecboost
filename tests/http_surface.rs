@@ -636,3 +636,109 @@ fn embed_file_requires_allowed_roots() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Matryoshka 质量门的 HTTP 层回归（验收 FAIL 修复 1）：唯一携带 dimensions
+/// 的请求面 `/v1/embeddings`（OpenAI 兼容端点）走批量路径——门收敛到
+/// resolve_effective_dimension 后，min_output_dimension=128 配置下
+/// dimensions=64 必须 400（此前单文本路径的门对真实请求零效果）。
+#[test]
+fn openai_dimensions_below_min_output_dimension_rejected_400() {
+    if !model_ready() {
+        println!("SKIP: 本地 ONNX 模型缺失（models/Xenova-bge-small-en-v1.5）");
+        return;
+    }
+    let port = free_port();
+    let dir = std::env::temp_dir().join(format!("vecboost-min-dim-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("config")).expect("create run dir");
+    let config = format!(
+        "[server]\nhost = \"127.0.0.1\"\nport = {port}\n\n\
+         [model]\nmodel_path = \"{MODEL_PATH}\"\nmodel_repo = \"Xenova/bge-small-en-v1.5\"\n\
+         engine_type = \"onnx\"\nexpected_dimension = 384\n\n\
+         [embedding]\ncache_enabled = true\nmin_output_dimension = 128\n\n\
+         [rate_limit]\nenabled = false\n\n\
+         [database]\nurl = \"sqlite::memory:\"\n\n\
+         [auth]\nenabled = false\n"
+    );
+    std::fs::write(dir.join("config").join("config.toml"), config).expect("write config");
+    let log = std::fs::File::create(dir.join("server.log")).expect("create log");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_vecboost"))
+        .current_dir(&dir)
+        .env("ORT_DYLIB_PATH", ORT_DYLIB)
+        .stdout(Stdio::from(log.try_clone().expect("dup log")))
+        .stderr(Stdio::from(log))
+        .spawn()
+        .expect("spawn vecboost");
+    let deadline = Instant::now() + READY_TIMEOUT;
+    let mut ready = false;
+    while Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            break;
+        }
+        if let Ok((200, _)) = try_request(port, "GET", "/health", None) {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    if !ready {
+        let tail = std::fs::read_to_string(dir.join("server.log")).unwrap_or_default();
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("质量门服务器未就绪:\n{tail}");
+    }
+
+    let body = |path: &str, payload: &str| request(port, "POST", path, Some(payload));
+
+    // 低于下限 128：/v1/embeddings（批路径）必须 400，detail 含两值。
+    let (status, resp) = body(
+        "/v1/embeddings",
+        r#"{"input":"hello","model":"Xenova/bge-small-en-v1.5","dimensions":64}"#,
+    );
+    assert_eq!(
+        status, 400,
+        "dimensions=64 低于下限必须 400: {status} {resp}"
+    );
+    assert!(
+        resp.contains("64") && resp.contains("128"),
+        "detail 须含 got/min 两值: {resp}"
+    );
+
+    // 等于下限：正常截断返回。
+    let (status, resp) = body(
+        "/v1/embeddings",
+        r#"{"input":"hello","model":"Xenova/bge-small-en-v1.5","dimensions":128}"#,
+    );
+    assert_eq!(
+        status, 200,
+        "dimensions=128 等于下限必须放行: {status} {resp}"
+    );
+    assert!(resp.contains("\"embedding\""), "应返回 embedding: {resp}");
+
+    // 拒绝计入 Prometheus 计数器（/metrics 输出含指标且值 ≥ 1）。
+    let (status, metrics) = request(port, "GET", "/metrics", None);
+    assert_eq!(status, 200);
+    let counted = metrics
+        .lines()
+        .find(|l| l.starts_with("vecboost_matryoshka_gate_rejected_total"))
+        .and_then(|l| l.rsplit(' ').next().and_then(|v| v.parse::<u64>().ok()));
+    assert!(
+        counted.is_some_and(|v| v >= 1),
+        "拒绝必须递增 matryoshka 计数，metrics 行缺失或为 0"
+    );
+
+    let _ = Command::new("kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if child.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+}

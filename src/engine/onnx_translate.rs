@@ -2050,6 +2050,7 @@ mod tests {
 
     #[test]
     fn test_probe_missing_assets_reports_model_load_error() {
+        crate::i18n::init(); // 过滤隔离运行时兜底（同 load_err 注释）
         let dir = tempfile::tempdir().unwrap();
         let err = probe_model_file(dir.path(), &ENCODER_CANDIDATES, "encoder").unwrap_err();
         assert!(matches!(err, VecboostError::ModelLoadError(_)));
@@ -2125,6 +2126,9 @@ mod tests {
     }
 
     fn load_err(config: &ModelConfig) -> VecboostError {
+        // i18n 目录显式初始化：cargo test --lib -- <name 过滤> 隔离运行时
+        // 无人调用 init，tr() 会回落裸键名使英文文案断言失真。
+        crate::i18n::init();
         // 持锁跨过整个 load：保证候选顺序的判定窗口内无人改环境旋钮。
         let _env = env_guard();
         match OnnxTranslationEngine::load(config) {
@@ -2857,6 +2861,7 @@ mod tests {
 
     #[test]
     fn test_check_token_budget_within_and_over() {
+        crate::i18n::init(); // 过滤隔离运行时兜底（同 load_err 注释）
         // 预算内通过；超限 InvalidInput 且消息含 scope 与上限数值
         check_token_budget(511, 512, "text").unwrap();
         let err = check_token_budget(513, 512, "sentence").unwrap_err();
@@ -2942,6 +2947,7 @@ mod tests {
 
     #[test]
     fn test_family_detect_rejects_unknown_model_type() {
+        crate::i18n::init(); // 过滤隔离运行时兜底（同 load_err 注释）
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tokenizer.json");
         // 最小合法 tokenizer（tokenizers 0.23 反序列化契约）

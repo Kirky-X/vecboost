@@ -205,9 +205,13 @@ profile = "standard"
 
 # ============ 任务执行审计 ============
 [task_audit]
-# 是否启用任务执行审计 (默认 false，零行为变更)。启用后 decision/translate/detect
-# 每次执行写一条 TaskExecutionEvent：仅落 sha256 指纹，不落原文；可通过
-# GET /api/v1/admin/inference/replay/{request_id}（admin）近端回放。
+# 是否启用任务执行审计（默认 false）。启用后 decision/translate/detect
+# 每次执行额外写一条 TaskExecutionEvent 到审计文件：仅落 sha256 指纹，
+# 不落原文；可通过 GET /api/v1/admin/inference/replay/{request_id}（admin）
+# 近端回放。
+# 注意：enabled=false 并非零行为变更——回放环不受本开关控制，三类任务的
+# 每次执行仍会计算一次 sha256 指纹并在进程内环驻留最近 1000 条（单副本
+# 近端视图，重启即失，约百 KB 级常驻内存）；本开关只控制审计文件写入。
 enabled = false
 # 决策置信度低阈值：低于该值标记 low_confidence_flagged（默认 None = 不标记）
 # decision_low_confidence = 0.5

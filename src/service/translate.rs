@@ -402,6 +402,50 @@ mod tests {
         assert_eq!(resp.detected_source_language, None, "explicit 不回填检测");
     }
 
+    /// 任务审计写入断言（仿 decision.rs 同款用例）：注入 TaskAudit 后
+    /// process_translate 须向 ring 写入事件——含 model_id 与输入指纹
+    /// （translate 无置信度，output_confidence=None），原文不入事件。
+    #[tokio::test]
+    async fn test_translate_task_audit_records_event_without_raw_text() {
+        crate::i18n::init();
+        let audit = std::sync::Arc::new(crate::audit::TaskAudit {
+            logger: None,
+            ring: std::sync::Arc::new(crate::registry::TaskEventRing::new()),
+            model_id: "audit-translate-model".to_string(),
+            model_sha256_prefix: None,
+            decision_low_confidence: None,
+        });
+        let audit_clone = std::sync::Arc::clone(&audit);
+        let svc = make_service().with_task_audit(audit);
+
+        let resp = svc
+            .process_translate(req(Some("en"), "es", "SECRET_RAW_TRANSLATE_TEXT"))
+            .await
+            .unwrap();
+        assert!(
+            resp.translation.contains("SECRET_RAW_TRANSLATE_TEXT"),
+            "mock 译文回显原文（服务返回路径不受审计影响）"
+        );
+
+        // 通过已知 request_id "req-unknown" 取回（无 HTTP 上下文时回退值）。
+        let event = audit_clone
+            .ring
+            .get_by_request_id("req-unknown")
+            .expect("translate 执行须写入审计事件");
+        assert_eq!(event.task_type, ModelTask::Translate);
+        assert_eq!(event.model_id, "audit-translate-model");
+        assert_eq!(
+            event.input_fingerprint,
+            crate::utils::hash::sha256_hex(b"SECRET_RAW_TRANSLATE_TEXT"),
+            "指纹必须是原文 sha256"
+        );
+        assert_eq!(event.output_confidence, None, "translate 无置信度，恒 None");
+        assert!(!event.low_confidence_flagged);
+        // 原文不入事件（事件 JSON 全文不携带原文）。
+        let json = serde_json::to_value(&event).unwrap();
+        assert!(!json.to_string().contains("SECRET_RAW_TRANSLATE_TEXT"));
+    }
+
     #[tokio::test]
     async fn test_auto_detect_routes_and_backfills() {
         crate::i18n::init();

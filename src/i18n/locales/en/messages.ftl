@@ -344,6 +344,7 @@ doctor-security-ratelimit-pass = rate limiting enabled
 doctor-security-ratelimit-warn = rate limiting disabled; enable [rate_limit] to bound request floods
 doctor-security-input-pass = input text length limit configured ({ $max })
 doctor-security-input-warn = input text length limit unset or zero; set [embedding] max_text_length to bound resource use
+doctor-security-input-switches = ; [input_security] switch states: reject_format_chars={ $reject_format_chars }, detect_suspicious_patterns={ $detect_suspicious_patterns }
 doctor-security-cache-pass = semantic cache isolation enabled (caller_isolation=user)
 doctor-security-cache-warn = semantic cache is off or caller_isolation=off: entries are shared across callers by default
 doctor-security-engine-pass = engine profile consistent with models and build

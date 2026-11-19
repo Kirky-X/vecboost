@@ -343,6 +343,7 @@ doctor-security-ratelimit-pass = 限流已启用
 doctor-security-ratelimit-warn = 限流被关闭；请启用 [rate_limit] 以约束请求洪泛
 doctor-security-input-pass = 已配置输入文本长度上限（{ $max }）
 doctor-security-input-warn = 输入文本长度上限未设或为零；请设 [embedding] max_text_length 以约束资源占用
+doctor-security-input-switches = ；[input_security] 开关状态：reject_format_chars={ $reject_format_chars }，detect_suspicious_patterns={ $detect_suspicious_patterns }
 doctor-security-cache-pass = 语义缓存隔离已启用（caller_isolation=user）
 doctor-security-cache-warn = 语义缓存关闭或 caller_isolation=off：条目默认跨调用方共享
 doctor-security-engine-pass = 引擎 profile 与模型及构建一致

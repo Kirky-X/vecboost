@@ -780,21 +780,39 @@ pub fn check_security_rate_limit(config: &VecboostConfig) -> CheckResult {
 }
 
 /// 安全自审计③：输入长度上限。未设或零 → WARN。
+/// 同时披露 `[input_security]` 两个启发式开关的状态（仅披露，不改变本项判定）。
 pub fn check_security_input(config: &VecboostConfig) -> CheckResult {
     let max = config.embedding.max_text_length;
+    let switches = i18n::tr_with_args(
+        "doctor-security-input-switches",
+        i18n::tr_args(&[
+            (
+                "reject_format_chars",
+                &config.input_security.reject_format_chars.to_string(),
+            ),
+            (
+                "detect_suspicious_patterns",
+                &config.input_security.detect_suspicious_patterns.to_string(),
+            ),
+        ]),
+    );
     if max == 0 {
         CheckResult::new(
             "security-input",
             CheckStatus::Warn,
-            i18n::tr("doctor-security-input-warn"),
+            format!("{}{}", i18n::tr("doctor-security-input-warn"), switches),
         )
     } else {
         CheckResult::new(
             "security-input",
             CheckStatus::Pass,
-            i18n::tr_with_args(
-                "doctor-security-input-pass",
-                i18n::tr_args(&[("max", &max.to_string())]),
+            format!(
+                "{}{}",
+                i18n::tr_with_args(
+                    "doctor-security-input-pass",
+                    i18n::tr_args(&[("max", &max.to_string())]),
+                ),
+                switches
             ),
         )
     }
@@ -935,6 +953,17 @@ mod tests {
         assert_eq!(check_security_input(&config).status, CheckStatus::Warn);
         config.embedding.max_text_length = 8192;
         assert_eq!(check_security_input(&config).status, CheckStatus::Pass);
+
+        // [input_security] 两开关状态须在 detail 中披露（默认均 false，判定不变）
+        for flag in [
+            "reject_format_chars=false",
+            "detect_suspicious_patterns=false",
+        ] {
+            assert!(
+                check_security_input(&config).detail.contains(flag),
+                "security-input detail 须披露 [input_security] 开关状态: {flag}"
+            );
+        }
 
         // caller_isolation=off → WARN
         config.semantic_cache.caller_isolation = "off".to_string();

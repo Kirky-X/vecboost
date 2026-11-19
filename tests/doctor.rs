@@ -6,6 +6,11 @@
 //! 合法默认配置下：核心检查（config/cache-persist/threads/gpu）必须 PASS，
 //! 报告整体无 FAIL（tokenizer/models 依赖本地模型存在性，缺失时为 WARN，
 //! 对应"运行时回退 HF 下载"的合法状态）。
+//!
+//! security-auth 语义（54802d6 起）：auth 关闭 + 非 loopback 绑定 → FAIL，
+//! 因此仓库默认配置（auth=false + host=0.0.0.0）本身不再是"合法无 FAIL"。
+//! 本测试保持默认 0.0.0.0 绑定不变、显式启用 auth（→ WARN 而非 FAIL），
+//! 锁定"面向公网的合法部署形态无 FAIL"契约；检查语义本身不放松。
 
 #[tokio::test]
 async fn doctor_legal_config_has_no_failures() {
@@ -16,6 +21,11 @@ async fn doctor_legal_config_has_no_failures() {
         config.model.model_path = Some(local_model.to_string_lossy().to_string());
     }
     config.model.use_gpu = false; // WSL2/CI 无 GPU，CPU 模式为合法配置
+    // security-auth 语义（54802d6）：auth 关闭 + 非 loopback 绑定 → FAIL。
+    // 默认配置（auth=false + 0.0.0.0）会被判 FAIL，不属于"合法配置"；
+    // 此处显式启用 auth（非 loopback 下 → WARN），维持本测试
+    // "合法配置无 FAIL"的意图，且不放松 doctor 检查语义。
+    config.auth.enabled = true;
 
     let report = vecboost::doctor::DoctorReport::run(&config).await;
     assert!(!report.has_failures(), "合法配置不应产生 FAIL: {report:?}");

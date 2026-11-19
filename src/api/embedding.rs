@@ -349,7 +349,12 @@ async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
         .require::<EmbeddingModule>()
         .map_err(kit_internal_error)?;
     let guard = svc.read().await;
-    embed(&guard, req).await.map_err(to_api_error)
+    // caller 取服务端认证态用户名（无认证态回退 anonymous），透传至语义缓存分区。
+    let caller = crate::caller::current_caller_id().await;
+    guard
+        .process_text_with_caller(req, None, &caller)
+        .await
+        .map_err(to_api_error)
 }
 
 #[cfg(any(feature = "http", feature = "cli", feature = "grpc"))]

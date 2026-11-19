@@ -713,6 +713,10 @@ pub struct SemanticCacheConfig {
     pub backend: CacheBackendKind,
     /// Redis 连接 URL（`backend = "redis"` 时必填）。
     pub redis_url: Option<String>,
+    /// 调用方隔离：`"off"`（默认，行为不变）| `"user"`（按认证用户名分区）。
+    /// 经 `CallerIsolation::from_str` 校验，非法值启动报错。
+    #[serde(default = "default_caller_isolation")]
+    pub caller_isolation: String,
 }
 
 impl Default for SemanticCacheConfig {
@@ -725,8 +729,13 @@ impl Default for SemanticCacheConfig {
             fuzzy_threshold: 0.85,
             backend: CacheBackendKind::Memory,
             redis_url: None,
+            caller_isolation: default_caller_isolation(),
         }
     }
+}
+
+fn default_caller_isolation() -> String {
+    "off".to_string()
 }
 
 impl SemanticCacheConfig {
@@ -1236,6 +1245,30 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
+    #[test]
+    fn test_semantic_cache_caller_isolation_defaults_off() {
+        let cfg = SemanticCacheConfig::default();
+        assert_eq!(cfg.caller_isolation, "off");
+    }
+
+    #[test]
+    fn test_semantic_cache_caller_isolation_parses_user() {
+        let cfg: SemanticCacheConfig = toml::from_str("caller_isolation = \"user\"").unwrap();
+        assert_eq!(cfg.caller_isolation, "user");
+        assert!(crate::cache::CallerIsolation::from_str(&cfg.caller_isolation).is_ok());
+    }
+
+    #[test]
+    fn test_semantic_cache_caller_isolation_rejects_bogus() {
+        let cfg: SemanticCacheConfig = toml::from_str("caller_isolation = \"bogus\"").unwrap();
+        assert!(
+            crate::cache::CallerIsolation::from_str(&cfg.caller_isolation).is_err(),
+            "非法 caller_isolation 必须被拒绝"
+        );
+    }
+
     /// AuthConfig 默认 CSRF 关闭("跟随 auth"由路由挂载条件实现,而非默认开启)
     #[test]
     fn authconfig_default_csrf_disabled() {

@@ -601,12 +601,29 @@ async fn attach_semantic_cache(
             ])
         )
     );
+    // caller_isolation 非法值启动报错（对齐 comparison_mode 校验先例），不静默回退。
+    let caller_isolation: vecboost::CallerIsolation = config
+        .semantic_cache
+        .caller_isolation
+        .parse()
+        .map_err(|e: String| {
+            anyhow::anyhow!(
+                "{}",
+                vecboost::i18n::tr_with_args(
+                    "startup-semantic-caller-isolation-invalid",
+                    vecboost::i18n::tr_args(&[("detail", &e)]),
+                )
+            )
+        })
+        .expect("semantic_cache.caller_isolation validated at parse");
+
     #[cfg_attr(not(feature = "distributed-redis"), allow(unused_mut))]
     let mut semantic = vecboost::SemanticCache::with_capacity(
         config.semantic_cache.similarity_threshold,
         config.semantic_cache.capacity,
     )
-    .with_fuzzy_threshold(config.semantic_cache.fuzzy_threshold);
+    .with_fuzzy_threshold(config.semantic_cache.fuzzy_threshold)
+    .with_caller_isolation(caller_isolation);
     #[cfg(feature = "distributed-redis")]
     if config.semantic_cache.backend == vecboost::config::app::CacheBackendKind::Redis {
         let url = config
@@ -3350,6 +3367,23 @@ async fn build_module_registry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // caller_isolation 非法值启动失败（attach_semantic_cache 的 parse 步同款判定）
+    #[test]
+    fn caller_isolation_bogus_fails_startup_parse() {
+        vecboost::i18n::init();
+        let bogus = "bogus";
+        let parsed: Result<vecboost::CallerIsolation, String> = bogus.parse();
+        assert!(parsed.is_err(), "非法值必须在启动解析处失败");
+        let err_msg = vecboost::i18n::tr_with_args(
+            "startup-semantic-caller-isolation-invalid",
+            vecboost::i18n::tr_args(&[("detail", &parsed.unwrap_err())]),
+        );
+        assert!(
+            err_msg.contains("caller_isolation"),
+            "启动错误须点名 caller_isolation，got: {err_msg}"
+        );
+    }
 
     // 绑定安全闸门 —— 回环放行 / 非回环拒绝 / 逃生阀放行并告警
     #[test]

@@ -263,6 +263,7 @@ startup-engine-onnx-rebuild-hint = （engine_type="onnx" 需以 --features onnx 
 startup-engine-candle-not-compiled = [model] engine_type="candle" 但本次构建未编译 candle 后端（onnx-primary 默认主引擎为 onnx）；请以 `--features candle` 重新构建，或移除 engine_type 配置以使用默认 onnx 引擎
 engine-candle-cuda-unavailable = engine_type="candle" 配置了 device="cuda"，但本次构建/本机 CUDA 不可用：请以 `--features candle-cuda` 重新构建（CUDA 后端），并确认存在可用的 NVIDIA GPU；拒绝静默落到 CPU
 startup-semantic-mode-invalid = [semantic_cache] comparison_mode 无效：{ $detail }
+startup-semantic-caller-isolation-invalid = [semantic_cache] caller_isolation 无效：{ $detail }
 startup-translation-no-onnx = [translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建
 startup-translate-pair-invalid = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) 参数非法：{ $detail }
 startup-translate-pair-load-failed = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) 加载失败：{ $detail }
@@ -272,6 +273,7 @@ startup-thread-unknown = 未知(回退)
 startup-thread-unset = 未设置
 startup-rayon-skipped = [thread-tune] rayon 全局池已初始化，跳过：{ $detail }
 semantic-cache-mode-unknown = 未知的 comparison_mode：'{ $got }'（可选 exact|i8|binary）
+semantic-cache-caller-isolation-unknown = 未知的 caller_isolation：'{ $got }'（可选 off|user）
 
 # ── 引擎路由 / checkpoint 配置错误（用户可见错误返回） ──
 factory-translate-onnx-only = 翻译仅支持 onnx 引擎：请将 engine_type 配置为 onnx（task=translate 无 candle 实现；更改后需重启服务重新加载）

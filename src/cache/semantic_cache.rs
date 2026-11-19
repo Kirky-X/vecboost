@@ -64,6 +64,46 @@ impl std::fmt::Display for ComparisonMode {
     }
 }
 
+/// 语义缓存调用方隔离模式。
+///
+/// - `Off`（默认）：缓存键/索引不带调用方维度，行为与现状完全一致；
+/// - `User`：按认证用户名分区，不同调用方对同一文本互不可见。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CallerIsolation {
+    #[default]
+    Off,
+    User,
+}
+
+impl CallerIsolation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CallerIsolation::Off => "off",
+            CallerIsolation::User => "user",
+        }
+    }
+
+    /// 隔离开启（user 模式）时缓存键/索引是否带调用方维度。
+    pub fn is_enabled(self) -> bool {
+        matches!(self, CallerIsolation::User)
+    }
+}
+
+impl std::str::FromStr for CallerIsolation {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" => Ok(CallerIsolation::Off),
+            "user" => Ok(CallerIsolation::User),
+            other => Err(crate::i18n::tr_with_args(
+                "semantic-cache-caller-isolation-unknown",
+                crate::i18n::tr_args(&[("got", other)]),
+            )),
+        }
+    }
+}
+
 /// 语义缓存默认相似度阈值（trigram Jaccard）
 const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.7;
 /// trigram 模糊命中阈值默认值——与 `similarity_threshold` 语义无关：
@@ -76,6 +116,9 @@ const DEFAULT_CAPACITY: usize = 10000;
 struct SemanticEntry {
     /// 所属模型——fuzzy 路径同样必须按模型隔离（同文本跨模型向量不同）
     model_id: String,
+    /// 调用方标识——user 隔离模式下 fuzzy 命中只在同一 caller 分区内检索。
+    /// off 模式恒为空串（不参与分隔，行为与现状一致）。
+    caller: String,
     /// 缓存的 trigram 集合，避免重复计算
     trigrams: HashSet<u32>,
     embedding: Vec<f32>,
@@ -125,6 +168,8 @@ pub struct SemanticCache {
     capacity: usize,
     enabled: bool,
     comparison_mode: ComparisonMode,
+    /// 调用方隔离模式（默认 Off = 行为不变）。
+    isolation: CallerIsolation,
     /// per-key single-flight：并发同 key 计算去重
     inflight: FlightMap,
     // Stats counters
@@ -158,6 +203,7 @@ impl SemanticCache {
             capacity,
             enabled: true,
             comparison_mode: ComparisonMode::Exact,
+            isolation: CallerIsolation::Off,
             inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             exact_hits: AtomicU64::new(0),
             semantic_hits: AtomicU64::new(0),
@@ -231,6 +277,7 @@ impl SemanticCache {
             capacity: 0,
             enabled: false,
             comparison_mode: ComparisonMode::Exact,
+            isolation: CallerIsolation::Off,
             inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             exact_hits: AtomicU64::new(0),
             semantic_hits: AtomicU64::new(0),
@@ -245,6 +292,22 @@ impl SemanticCache {
     pub fn with_comparison_mode(mut self, mode: ComparisonMode) -> Self {
         self.comparison_mode = mode;
         self
+    }
+
+    /// 设置调用方隔离模式（builder）。默认 Off（行为不变）。
+    pub fn with_caller_isolation(mut self, isolation: CallerIsolation) -> Self {
+        self.isolation = isolation;
+        self
+    }
+
+    /// 精确层缓存键：off 维持 `text:{model_id}:{text}`，
+    /// user 模式附加 caller 维度 `text:{model_id}:{caller}:{text}`。
+    fn cache_key(&self, model_id: &str, caller_id: &str, text: &str) -> String {
+        if self.isolation.is_enabled() {
+            format!("text:{}:{}:{}", model_id, caller_id, text)
+        } else {
+            format!("text:{}:{}", model_id, text)
+        }
     }
 
     /// 设置 trigram 模糊命中阈值（builder）。默认 0.85；设 1.0 即只精确命中。
@@ -282,12 +345,31 @@ impl SemanticCache {
 
     /// 核心查询方法：精确匹配 → trigram 搜索 → 计算回填。
     ///
+    /// 保留原签名（既有调用点零改动）：调用方隔离关闭时与旧行为逐字节一致。
     /// `model_id` 参与缓存键——不同模型对同一文本的向量不同，缺模型身份
     /// 会导致跨模型污染。
-    /// `compute_fn` 是模型推理回调，仅在精确 miss 且语义 miss 时调用。
     pub async fn get_or_compute<F, Fut>(
         &self,
         model_id: &str,
+        text: &str,
+        compute_fn: F,
+    ) -> Result<Vec<f32>, crate::error::VecboostError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<f32>, crate::error::VecboostError>>,
+    {
+        self.get_or_compute_for_caller(model_id, "", text, compute_fn)
+            .await
+    }
+
+    /// 带调用方维度的核心查询方法（user 隔离模式的真实入口）。
+    ///
+    /// `caller_id` 仅在本缓存处于 [`CallerIsolation::User`] 时参与缓存键与
+    /// trigram 索引分区；off 模式忽略该参数，行为与 [`get_or_compute`] 一致。
+    pub async fn get_or_compute_for_caller<F, Fut>(
+        &self,
+        model_id: &str,
+        caller_id: &str,
         text: &str,
         compute_fn: F,
     ) -> Result<Vec<f32>, crate::error::VecboostError>
@@ -299,7 +381,7 @@ impl SemanticCache {
             return compute_fn().await;
         }
 
-        let cache_key = format!("text:{}:{}", model_id, text);
+        let cache_key = self.cache_key(model_id, caller_id, text);
 
         // 第一级：精确匹配
         if let Some(embedding) = self.exact_cache.get(&cache_key).await {
@@ -316,7 +398,10 @@ impl SemanticCache {
         }
 
         // 第二级：trigram 语义搜索（有损模糊命中，阈值独立配置）
-        if let Some(embedding) = self.find_similar(model_id, text).await {
+        if let Some(embedding) = self
+            .find_similar_for_caller(model_id, caller_id, text)
+            .await
+        {
             self.semantic_hits.fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "http")]
             if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
@@ -333,15 +418,26 @@ impl SemanticCache {
 
         // 回填到精确缓存和语义索引
         self.exact_cache.put(&cache_key, embedding.clone()).await;
-        self.insert_to_index(model_id, text, embedding.clone())
+        self.insert_to_index_for_caller(model_id, caller_id, text, embedding.clone())
             .await;
 
         Ok(embedding)
     }
 
-    /// 在语义索引中查找与 query 最相似的条目。
+    /// 在语义索引中查找与 query 最相似的条目（原签名，caller 为空）。
     /// 返回 Some(embedding) 当最大相似度 > threshold。
     pub async fn find_similar(&self, model_id: &str, query: &str) -> Option<Vec<f32>> {
+        self.find_similar_for_caller(model_id, "", query).await
+    }
+
+    /// 带调用方分区的 trigram 模糊查找（user 隔离模式的真实入口）。
+    /// off 模式忽略 caller_id，行为与 [`find_similar`] 一致。
+    pub async fn find_similar_for_caller(
+        &self,
+        model_id: &str,
+        caller_id: &str,
+        query: &str,
+    ) -> Option<Vec<f32>> {
         // 纯读操作使用 read 锁
         let index = self.semantic_index.read().await;
         let mut best_sim = 0.0f32;
@@ -354,6 +450,10 @@ impl SemanticCache {
         for (i, entry) in index.iter().enumerate() {
             // 模型隔离：非本模型的条目不参与 fuzzy 命中
             if entry.model_id != model_id {
+                continue;
+            }
+            // 调用方隔离：user 模式下不同 caller 的条目不参与 fuzzy 命中。
+            if self.isolation.is_enabled() && entry.caller != caller_id {
                 continue;
             }
             // 大小差预过滤 —— Jaccard 上限 = min/max;大小差超过阈值时
@@ -382,6 +482,7 @@ impl SemanticCache {
             return match windex.get_mut(idx) {
                 Some(entry)
                     if entry.model_id == model_id
+                        && (!self.isolation.is_enabled() || entry.caller == caller_id)
                         && trigram_jaccard_with_set(&query_trigrams, &entry.trigrams)
                             >= self.fuzzy_threshold =>
                 {
@@ -396,14 +497,25 @@ impl SemanticCache {
         // 本地热缓存（insert_to_local_index 需要写锁，持读锁会自锁）。
         drop(index);
         #[cfg(feature = "distributed-redis")]
+        let redis_caller = if self.isolation.is_enabled() {
+            caller_id
+        } else {
+            ""
+        };
+        #[cfg(feature = "distributed-redis")]
         if let Some(redis) = &self.redis_index {
             match redis
-                .find_similar(model_id, query, self.fuzzy_threshold)
+                .find_similar_for_caller(model_id, redis_caller, query, self.fuzzy_threshold)
                 .await
             {
                 Ok(Some(embedding)) => {
-                    self.insert_to_local_index(model_id, query, embedding.clone())
-                        .await;
+                    self.insert_to_local_index_for_caller(
+                        model_id,
+                        caller_id,
+                        query,
+                        embedding.clone(),
+                    )
+                    .await;
                     return Some(embedding);
                 }
                 Ok(None) => {}
@@ -419,12 +531,33 @@ impl SemanticCache {
         None
     }
 
-    /// 插入新条目到语义索引，必要时执行 LRU 驱逐。
+    /// 插入新条目到语义索引（原签名，caller 为空）。
+    /// 仅测试经既有用例调用；生产路径统一走 [`insert_to_index_for_caller`]。
+    #[cfg(test)]
     async fn insert_to_index(&self, model_id: &str, text: &str, embedding: Vec<f32>) {
+        self.insert_to_index_for_caller(model_id, "", text, embedding)
+            .await;
+    }
+
+    /// 带调用方维度的索引插入（user 隔离模式的真实入口）。
+    /// Redis 分区在 T010 实现；本地索引条目始终携带 caller 字段。
+    async fn insert_to_index_for_caller(
+        &self,
+        model_id: &str,
+        caller_id: &str,
+        text: &str,
+        embedding: Vec<f32>,
+    ) {
+        #[cfg(feature = "distributed-redis")]
+        let redis_caller = if self.isolation.is_enabled() {
+            caller_id
+        } else {
+            ""
+        };
         #[cfg(feature = "distributed-redis")]
         if let Some(redis) = &self.redis_index
             && let Err(e) = redis
-                .insert(model_id, text, &embedding, self.capacity)
+                .insert_for_caller(model_id, redis_caller, text, &embedding, self.capacity)
                 .await
         {
             log::warn!(
@@ -435,11 +568,18 @@ impl SemanticCache {
                 )
             );
         }
-        self.insert_to_local_index(model_id, text, embedding).await;
+        self.insert_to_local_index_for_caller(model_id, caller_id, text, embedding)
+            .await;
     }
 
-    /// 仅写本地热缓存（Redis 命中回填时避免重复写共享索引）。
-    async fn insert_to_local_index(&self, model_id: &str, text: &str, embedding: Vec<f32>) {
+    /// 带调用方维度的本地索引插入。
+    async fn insert_to_local_index_for_caller(
+        &self,
+        model_id: &str,
+        caller_id: &str,
+        text: &str,
+        embedding: Vec<f32>,
+    ) {
         let mut index = self.semantic_index.write().await;
 
         // LRU 驱逐：达到容量时移除最久未访问的条目
@@ -462,6 +602,7 @@ impl SemanticCache {
         };
         index.push(SemanticEntry {
             model_id: model_id.to_string(),
+            caller: caller_id.to_string(),
             trigrams: pack_trigrams(text.as_bytes()),
             embedding,
             i8code,
@@ -609,6 +750,46 @@ pub(crate) fn trigram_jaccard_with_set(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_caller_isolation_user_blocks_cross_caller_hit() {
+        let cache =
+            SemanticCache::with_capacity(0.7, 100).with_caller_isolation(CallerIsolation::User);
+        // alice 首次 miss → 计算回填。
+        let a1 = cache
+            .get_or_compute_for_caller("m", "alice", "shared text", || async { Ok(vec![1.0]) })
+            .await
+            .unwrap();
+        assert_eq!(a1, vec![1.0]);
+        // alice 再次精确命中。
+        let a2 = cache
+            .get_or_compute_for_caller("m", "alice", "shared text", || async { Ok(vec![99.0]) })
+            .await
+            .unwrap();
+        assert_eq!(a2, vec![1.0], "alice 必须命中自己回填的条目");
+        // bob 同文本必须 miss（不得命中 alice 条目），触发自身计算回填。
+        let b1 = cache
+            .get_or_compute_for_caller("m", "bob", "shared text", || async { Ok(vec![2.0]) })
+            .await
+            .unwrap();
+        assert_eq!(b1, vec![2.0], "bob 必须 miss 并回填自己的值");
+    }
+
+    #[tokio::test]
+    async fn test_caller_isolation_off_shares_across_callers() {
+        let cache =
+            SemanticCache::with_capacity(0.7, 100).with_caller_isolation(CallerIsolation::Off);
+        cache
+            .get_or_compute_for_caller("m", "alice", "shared text", || async { Ok(vec![1.0]) })
+            .await
+            .unwrap();
+        // off 模式：caller 维度被忽略，bob 命中 alice 的条目。
+        let b = cache
+            .get_or_compute_for_caller("m", "bob", "shared text", || async { Ok(vec![2.0]) })
+            .await
+            .unwrap();
+        assert_eq!(b, vec![1.0], "off 模式 caller 不参与键，bob 应命中");
+    }
 
     /// 计算两个字符串的字符级 trigram Jaccard 相似度（测试辅助函数）。
     fn trigram_jaccard(a: &str, b: &str) -> f32 {

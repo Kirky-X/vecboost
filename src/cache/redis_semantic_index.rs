@@ -137,7 +137,19 @@ impl RedisSemanticIndex {
         Self::keys_for_hash(&digest(model_id))
     }
 
-    /// 写入一条记录并执行容量裁剪（原子 Lua）。
+    /// 调用方分区键：user 隔离模式下 caller 非空，键名附加 caller 摘要，
+    /// 使不同调用方落在独立 Redis 哈希命名空间，多副本共享层不成为隔离旁路；
+    /// off 模式 caller 为空串，键与 [`Self::keys`] 完全一致（行为不变）。
+    fn keys_with_caller(model_id: &str, caller_id: &str) -> (String, String, String) {
+        if caller_id.is_empty() {
+            Self::keys(model_id)
+        } else {
+            Self::keys_for_hash(&format!("{}:{}", digest(model_id), digest(caller_id)))
+        }
+    }
+
+    /// 写入一条记录并执行容量裁剪（原子 Lua）。原签名，caller 为空分区。
+    #[cfg(test)]
     pub(crate) async fn insert(
         &self,
         model_id: &str,
@@ -145,7 +157,20 @@ impl RedisSemanticIndex {
         embedding: &[f32],
         capacity: usize,
     ) -> Result<usize, VecboostError> {
-        let (tri_key, emb_key, lru_key) = Self::keys(model_id);
+        self.insert_for_caller(model_id, "", text, embedding, capacity)
+            .await
+    }
+
+    /// 带调用方分区的写入（user 隔离模式的真实入口）。
+    pub(crate) async fn insert_for_caller(
+        &self,
+        model_id: &str,
+        caller_id: &str,
+        text: &str,
+        embedding: &[f32],
+        capacity: usize,
+    ) -> Result<usize, VecboostError> {
+        let (tri_key, emb_key, lru_key) = Self::keys_with_caller(model_id, caller_id);
         let field = digest(text);
         let mut trigrams: Vec<u32> = pack_trigrams(text.as_bytes()).into_iter().collect();
         trigrams.sort_unstable();
@@ -179,14 +204,27 @@ impl RedisSemanticIndex {
         Ok(inserted)
     }
 
-    /// 按 trigram Jaccard 查找最佳命中，返回对应 embedding。
+    /// 按 trigram Jaccard 查找最佳命中，返回对应 embedding。原签名，caller 为空分区。
+    #[cfg(test)]
     pub(crate) async fn find_similar(
         &self,
         model_id: &str,
         query: &str,
         fuzzy_threshold: f32,
     ) -> Result<Option<Vec<f32>>, VecboostError> {
-        let (tri_key, emb_key, lru_key) = Self::keys(model_id);
+        self.find_similar_for_caller(model_id, "", query, fuzzy_threshold)
+            .await
+    }
+
+    /// 带调用方分区的查找（user 隔离模式的真实入口）。
+    pub(crate) async fn find_similar_for_caller(
+        &self,
+        model_id: &str,
+        caller_id: &str,
+        query: &str,
+        fuzzy_threshold: f32,
+    ) -> Result<Option<Vec<f32>>, VecboostError> {
+        let (tri_key, emb_key, lru_key) = Self::keys_with_caller(model_id, caller_id);
         let mut conn = self.conn.clone();
         let entries: HashMap<String, String> = conn
             .hgetall(&tri_key)
@@ -282,6 +320,20 @@ impl RedisSemanticIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 隔离键分区钉：user 模式下不同 caller 命中不同 Redis 键命名空间，
+    /// off 模式（caller 空串）与原有 `keys()` 完全一致。
+    #[test]
+    fn test_keys_with_caller_partition() {
+        let (tri_off, _, _) = RedisSemanticIndex::keys_with_caller("model-a", "");
+        let (tri_base, _, _) = RedisSemanticIndex::keys("model-a");
+        assert_eq!(tri_off, tri_base, "off 模式键必须与既有实现一致");
+
+        let (tri_alice, _, _) = RedisSemanticIndex::keys_with_caller("model-a", "alice");
+        let (tri_bob, _, _) = RedisSemanticIndex::keys_with_caller("model-a", "bob");
+        assert_ne!(tri_alice, tri_bob, "不同调用方必须落在不同键分区");
+        assert_ne!(tri_alice, tri_off, "user 分区不得与 off 键空间重合");
+    }
 
     /// 每个用例占一个独立的逻辑库（DB 11..=15），避免与 `tests/*_redis.rs`
     /// （默认库）以及并发跑的自身用例互相干扰：本模块的键空间是全局

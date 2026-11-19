@@ -263,6 +263,7 @@ startup-engine-onnx-rebuild-hint = (engine_type="onnx" requires rebuilding with 
 startup-engine-candle-not-compiled = [model] engine_type="candle" but this build did not compile the candle backend (onnx-primary defaults to the onnx engine); rebuild with `--features candle`, or remove the engine_type config to use the default onnx engine
 engine-candle-cuda-unavailable = device="cuda" with engine_type="candle" but CUDA is unavailable in this build/machine: rebuild with `--features candle-cuda` (CUDA backend) and ensure a usable NVIDIA GPU is present; refusing to run silently on CPU
 startup-semantic-mode-invalid = [semantic_cache] comparison_mode invalid: { $detail }
+startup-semantic-caller-isolation-invalid = [semantic_cache] caller_isolation invalid: { $detail }
 startup-translation-no-onnx = [translation] pairs configured but this build did not enable the `onnx` feature; rebuild with --features onnx
 startup-translate-pair-invalid = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) invalid parameters: { $detail }
 startup-translate-pair-load-failed = [translation] pairs[{ $index }] ({ $src }-{ $tgt }) failed to load: { $detail }
@@ -272,6 +273,7 @@ startup-thread-unknown = unknown (fallback)
 startup-thread-unset = unset
 startup-rayon-skipped = [thread-tune] rayon global pool already initialized, skipping: { $detail }
 semantic-cache-mode-unknown = unknown comparison_mode: '{ $got }' (choose exact|i8|binary)
+semantic-cache-caller-isolation-unknown = unknown caller_isolation: '{ $got }' (choose off|user)
 
 # ── Engine routing / checkpoint config errors (user-visible error returns) ──
 factory-translate-onnx-only = Translation only supports the onnx engine: set engine_type to onnx (task=translate has no candle implementation; restart the service to reload)

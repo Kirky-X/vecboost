@@ -21,6 +21,8 @@ pub struct RerankService {
     validator: InputValidator,
     model_config: Option<ModelConfig>,
     cache: Arc<OxCacheBackend>,
+    /// 调用方隔离模式（默认 Off = 缓存键行为不变）。
+    isolation: crate::cache::CallerIsolation,
 }
 
 impl RerankService {
@@ -35,7 +37,14 @@ impl RerankService {
             validator: InputValidator::with_default(),
             model_config,
             cache,
+            isolation: crate::cache::CallerIsolation::Off,
         }
+    }
+
+    /// 设置调用方隔离模式（builder）。默认 Off。
+    pub fn with_caller_isolation(mut self, isolation: crate::cache::CallerIsolation) -> Self {
+        self.isolation = isolation;
+        self
     }
 
     /// 替换底层引擎——EmbeddingService::switch_model 成功后由 API 层传播，
@@ -123,10 +132,17 @@ impl RerankService {
         &self,
         query: &str,
         documents: &[String],
+        caller_id: &str,
     ) -> Result<Vec<f32>, VecboostError> {
         let engine = self.engine.clone();
         let query = query.to_string();
         let documents_vec = documents.to_vec();
+        // user 隔离模式：缓存键前缀 {caller}:；off 模式前缀为空（既有键格式不变）。
+        let caller_prefix = if self.isolation.is_enabled() {
+            format!("{}:", caller_id)
+        } else {
+            String::new()
+        };
 
         if !self.cache.is_enabled() {
             // 缓存禁用：直接批量调用引擎
@@ -155,7 +171,8 @@ impl RerankService {
         let query_hash = xxhash_rust::xxh3::xxh3_128(query.as_bytes());
         for (i, doc) in documents_vec.iter().enumerate() {
             let cache_key = format!(
-                "rerank:{}:{}:{:016x}",
+                "rerank:{}{}:{}:{:016x}",
+                caller_prefix,
                 model_id,
                 query_hash,
                 xxhash_rust::xxh3::xxh3_128(doc.as_bytes())
@@ -186,7 +203,8 @@ impl RerankService {
             // 存入缓存并收集结果
             for (idx, &score) in uncached_indices.iter().zip(uncached_scores.iter()) {
                 let cache_key = format!(
-                    "rerank:{}:{}:{:016x}",
+                    "rerank:{}{}:{}:{:016x}",
+                    caller_prefix,
                     model_id,
                     query_hash,
                     xxhash_rust::xxh3::xxh3_128(documents_vec[*idx].as_bytes())
@@ -201,12 +219,25 @@ impl RerankService {
         Ok(scores.into_iter().map(|(_, s)| s).collect())
     }
 
-    /// 执行重排序：对 query 和 documents 列表计算相关性分数
+    /// 执行重排序：对 query 和 documents 列表计算相关性分数。
+    /// 原签名保留（既有调用点零改动），caller 默认 anonymous。
     pub async fn process_rerank(
         &self,
         req: RerankRequest,
         max_documents: usize,
         max_query_length: usize,
+    ) -> Result<RerankResponse, VecboostError> {
+        self.process_rerank_with_caller(req, max_documents, max_query_length, "anonymous")
+            .await
+    }
+
+    /// 带调用方身份的重排序（user 隔离模式的真实入口）。
+    pub async fn process_rerank_with_caller(
+        &self,
+        req: RerankRequest,
+        max_documents: usize,
+        max_query_length: usize,
+        caller_id: &str,
     ) -> Result<RerankResponse, VecboostError> {
         self.validate_rerank_request(&req, max_documents, max_query_length)?;
 
@@ -223,7 +254,9 @@ impl RerankService {
         }
         drop(engine_read);
 
-        let scores = self.compute_rerank_scores(&req.query, documents).await?;
+        let scores = self
+            .compute_rerank_scores(&req.query, documents, caller_id)
+            .await?;
 
         let return_documents = req.return_documents.unwrap_or(false);
         let mut results: Vec<RerankResult> = documents
@@ -266,6 +299,82 @@ mod tests {
     use crate::config::model::Precision;
     use crate::engine::InferenceEngine;
     use async_trait::async_trait;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// 计数引擎：每次 rerank_batch 调用 +1，用调用次数区分缓存命中/未命中。
+    struct CountingRerankEngine {
+        calls: Arc<AtomicU64>,
+    }
+
+    #[async_trait]
+    impl InferenceEngine for CountingRerankEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.0; 128])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.0; 128]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        fn rerank(&self, _query: &str, doc: &str) -> Result<f32, VecboostError> {
+            Ok((doc.len() as f32) / 100.0)
+        }
+        fn rerank_batch(&self, query: &str, docs: &[String]) -> Result<Vec<f32>, VecboostError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            docs.iter().map(|d| self.rerank(query, d)).collect()
+        }
+        fn supports_rerank(&self) -> bool {
+            true
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rerank_caller_isolation_blocks_cross_caller_hit() {
+        let calls = Arc::new(AtomicU64::new(0));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(CountingRerankEngine {
+                calls: calls.clone(),
+            }));
+        let cache = Arc::new(OxCacheBackend::with_ttl(100, None));
+        let service = RerankService::with_cache(engine, None, cache)
+            .with_caller_isolation(crate::cache::CallerIsolation::User);
+        let mk = || RerankRequest {
+            query: "same query".to_string(),
+            documents: vec!["same doc".to_string()],
+            top_k: None,
+            return_documents: Some(false),
+        };
+
+        service
+            .process_rerank_with_caller(mk(), 10, 8192, "alice")
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "alice 首次必然计算");
+        service
+            .process_rerank_with_caller(mk(), 10, 8192, "alice")
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "alice 再次命中缓存");
+        service
+            .process_rerank_with_caller(mk(), 10, 8192, "bob")
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "bob 必须 miss 并触发自身计算"
+        );
+    }
 
     /// Mock engine that returns deterministic rerank scores based on document length
     struct MockRerankEngine;

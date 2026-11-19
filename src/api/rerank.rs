@@ -122,7 +122,9 @@ async fn rerank_handler(req: RerankRequest) -> Result<RerankResponse, ApiError> 
     }
     let (svc, max_documents, max_query_length) = load_rerank_service().await?;
     let guard = svc.read().await;
-    rerank(&guard, req, max_documents, max_query_length)
+    let caller = crate::caller::current_caller_id().await;
+    guard
+        .process_rerank_with_caller(req, max_documents, max_query_length, &caller)
         .await
         .map_err(to_api_error)
 }

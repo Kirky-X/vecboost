@@ -177,6 +177,17 @@ reject_format_chars = false
 # 可疑模式启发式：同字符连续 >64 或格式字符占比 >1% 即拒绝并写审计事件。
 detect_suspicious_patterns = false
 
+# ============ 语义缓存配置 ============
+[semantic_cache]
+# 是否启用语义缓存（默认 false，行为不变）
+enabled = false
+# 调用方隔离（默认 off）：
+#   - off：精确层/trigram 模糊层/Redis 共享索引/rerank 缓存跨调用方共享（命中率高）。
+#   - user：按服务端认证用户名分区，不同调用方对同一文本互不可见；命中率下降
+#     （容量按调用方分摊），多副本 Redis 同步生效。caller 取 AuthContext.user.username，
+#     不使用可伪造的 X-User-Id 头；非法值启动报错。
+caller_isolation = "off"
+
 # ============ 审计日志配置 ============
 [audit]
 # 是否启用审计日志

@@ -40,7 +40,7 @@ model_repo = "BAAI/bge-small-en-v1.5"
 model_revision = "main"
 
 # 本地模型路径 (可选，设置后优先使用本地模型)
-model_path = "models/BAAI-bge-small-en-v1.5"
+# model_path = "models/BAAI-bge-small-en-v1.5"  # e2e 联调临时注释：本机该目录无 onnx bundle，走 HF Hub
 
 # tokenizer 显式路径覆盖 (可选，默认不配置)
 # 消费者：onnx 本地 bundle 分支 (按 engine_type="onnx") + 决策管线

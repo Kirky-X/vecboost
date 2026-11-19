@@ -55,6 +55,8 @@ ehthumbs.db
 # 5. Rust Build Artifacts
 # -----------------------------------------------------------------------------
 target/
+# 独立验证用的临时 CARGO_TARGET_DIR（4.3GB 编译产物，非入库物）
+target-main-check/
 # 本地 feature 矩阵构建的 CARGO_TARGET_DIR 输出目录，非入库物
 target-matrix/
 *.rs.bk

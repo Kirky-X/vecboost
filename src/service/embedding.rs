@@ -498,6 +498,18 @@ impl EmbeddingService {
         req: EmbedRequest,
         target_dimension: Option<usize>,
     ) -> Result<EmbedResponse, VecboostError> {
+        self.process_text_with_caller(req, target_dimension, "anonymous")
+            .await
+    }
+
+    /// 带调用方身份的单文本向量化（user 隔离模式的真实入口）。
+    /// `caller_id` 透传至语义缓存的键与索引分区；off 模式下被缓存忽略。
+    pub async fn process_text_with_caller(
+        &self,
+        req: EmbedRequest,
+        target_dimension: Option<usize>,
+        caller_id: &str,
+    ) -> Result<EmbedResponse, VecboostError> {
         let start = std::time::Instant::now();
         self.validator.validate_text(&req.text)?;
 
@@ -513,7 +525,7 @@ impl EmbeddingService {
             // 语义缓存启用：精确匹配 → trigram 搜索 → 计算回填
             self.handle_oom_fallback(|| async {
                 semantic_cache
-                    .get_or_compute(model_id, &req.text, || async {
+                    .get_or_compute_for_caller(model_id, caller_id, &req.text, || async {
                         let embedding = self.engine.read().await.embed(&req.text)?;
                         crate::utils::vector::ensure_finite_embedding(&embedding)?;
                         Ok(embedding)
@@ -5707,6 +5719,39 @@ mod tests {
             .unwrap();
         assert_eq!(first.embedding, second.embedding, "语义缓存命中须字节等同");
         assert_eq!(first.dimension, 8);
+    }
+
+    /// 身份透传钉：user 隔离下不同 caller 同文本互不命中（服务层 stats 断言）。
+    #[tokio::test]
+    async fn test_semantic_cache_caller_isolation_via_service() {
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let cache = Arc::new(
+            SemanticCache::with_capacity(0.9, 16)
+                .with_caller_isolation(crate::cache::CallerIsolation::User),
+        );
+        let service = EmbeddingService::new(engine, None).with_semantic_cache(Arc::clone(&cache));
+        let mk = || EmbedRequest {
+            text: "shared text".to_string(),
+            normalize: Some(false),
+        };
+
+        service
+            .process_text_with_caller(mk(), None, "alice")
+            .await
+            .unwrap();
+        service
+            .process_text_with_caller(mk(), None, "alice")
+            .await
+            .unwrap();
+        service
+            .process_text_with_caller(mk(), None, "bob")
+            .await
+            .unwrap();
+        let stats = cache.stats();
+        // alice 首次 miss + alice 命中 + bob 首次 miss → misses=2, exact_hits=1
+        assert_eq!(stats.misses, 2, "alice/bob 各自首次均须 miss");
+        assert_eq!(stats.exact_hits, 1, "仅 alice 第二次命中自己的条目");
     }
 
     /// 引擎维度与 expected_dimension 不一致：validate_dimension 只告警不拒绝，

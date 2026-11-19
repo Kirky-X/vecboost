@@ -57,19 +57,44 @@ fn inverse_mel_scale_slaney(mel: f32) -> f32 {
     }
 }
 
+/// HTK mel 尺度（kaldi-native-fbank 默认，sherpa zipformer 用）：
+/// mel = 2595 * log10(1 + hz/700)
+fn mel_scale_htk(freq: f32) -> f32 {
+    2595.0 * (1.0 + freq / 700.0).log10()
+}
+fn inverse_mel_scale_htk(mel: f32) -> f32 {
+    700.0 * (10.0f32.powf(mel / 2595.0) - 1.0)
+}
+
 /// 归一化），返回每 bin 的 (首个 fft bin 索引, 权重)。
-fn build_mel_filters(num_bins: usize) -> Vec<(usize, Vec<f32>)> {
+fn build_mel_filters(num_bins: usize, htk: bool) -> Vec<(usize, Vec<f32>)> {
     let num_mel_points = NUM_FFT_BINS; // num_fft_bins + 1
     let fft_bin_width = SAMPLE_RATE as f32 / FRAME_LENGTH as f32; // 40 Hz
-    let mel_low = mel_scale_slaney(0.0);
-    let mel_high = mel_scale_slaney(0.5 * SAMPLE_RATE as f32);
+    let (mel_low, mel_high) = if htk {
+        (mel_scale_htk(0.0), mel_scale_htk(0.5 * SAMPLE_RATE as f32))
+    } else {
+        (
+            mel_scale_slaney(0.0),
+            mel_scale_slaney(0.5 * SAMPLE_RATE as f32),
+        )
+    };
     let delta = (mel_high - mel_low) / (num_bins + 1) as f32;
 
     let mut filters = Vec::with_capacity(num_bins);
     for bin in 0..num_bins {
-        let left_hz = inverse_mel_scale_slaney(mel_low + bin as f32 * delta);
-        let center_hz = inverse_mel_scale_slaney(mel_low + (bin + 1) as f32 * delta);
-        let right_hz = inverse_mel_scale_slaney(mel_low + (bin + 2) as f32 * delta);
+        let (left_hz, center_hz, right_hz) = if htk {
+            (
+                inverse_mel_scale_htk(mel_low + bin as f32 * delta),
+                inverse_mel_scale_htk(mel_low + (bin + 1) as f32 * delta),
+                inverse_mel_scale_htk(mel_low + (bin + 2) as f32 * delta),
+            )
+        } else {
+            (
+                inverse_mel_scale_slaney(mel_low + bin as f32 * delta),
+                inverse_mel_scale_slaney(mel_low + (bin + 1) as f32 * delta),
+                inverse_mel_scale_slaney(mel_low + (bin + 2) as f32 * delta),
+            )
+        };
 
         let mut first = usize::MAX;
         let mut weights = Vec::new();
@@ -81,7 +106,10 @@ fn build_mel_filters(num_bins: usize) -> Vec<(usize, Vec<f32>)> {
                 } else {
                     (right_hz - hz) / (right_hz - center_hz)
                 };
-                weight *= 2.0 / (right_hz - left_hz); // slaney norm
+                if !htk {
+                    weight *= 2.0 / (right_hz - left_hz); // slaney norm（whisper）
+                }
+                // kaldi/htk：三角滤波峰值 1，不做 slaney 带宽归一化
                 if first == usize::MAX {
                     first = i;
                 }
@@ -112,10 +140,25 @@ pub struct WhisperFbank {
     window: Vec<f32>,
     mel_filters: Vec<(usize, Vec<f32>)>,
     fft: Arc<dyn Fft<f32>>,
+    /// mel 维数：128 = whisper turbo（缺省）；80 = sherpa streaming zipformer
+    mel_dim: usize,
+    /// 归一化口径：false = whisper（log10+clamp+(v+4)/4，既有路径零影响）；
+    /// true = kaldi fbank（自然 log(1+x)，sherpa zipformer 用）
+    kaldi_norm: bool,
 }
 
 impl WhisperFbank {
     pub fn new() -> Self {
+        Self::new_with_bins(MEL_DIM)
+    }
+
+    /// 指定 mel 维数构造（80 = sherpa streaming zipformer；128 = whisper turbo）。
+    /// STFT 参数（16k/25ms/10ms）与归一化口径不变，仅滤波器组数量变化。
+    pub fn new_with_bins(mel_dim: usize) -> Self {
+        assert!(
+            mel_dim > 0 && mel_dim <= NUM_FFT_BINS,
+            "mel bins out of range"
+        );
         let mut window = vec![0.0f32; FRAME_LENGTH];
         let a = 2.0 * std::f64::consts::PI / FRAME_LENGTH as f64;
         for (i, w) in window.iter_mut().enumerate() {
@@ -125,15 +168,30 @@ impl WhisperFbank {
         let fft = planner.plan_fft_forward(FRAME_LENGTH);
         Self {
             window,
-            mel_filters: build_mel_filters(MEL_DIM),
+            mel_filters: build_mel_filters(mel_dim, false),
             fft,
+            mel_dim,
+            kaldi_norm: false,
         }
+    }
+
+    /// sherpa zipformer 用构造器：80 mel + kaldi fbank 归一化（自然 log(1+x)）。
+    pub fn new_kaldi(mel_dim: usize) -> Self {
+        let mut s = Self::new_with_bins(mel_dim);
+        s.kaldi_norm = true;
+        s.mel_filters = build_mel_filters(mel_dim, true); // HTK mel + kaldi 归一化
+        s
+    }
+
+    /// 本实例的 mel 维数（调用方据此构造模型输入形状，不写死常量）。
+    pub fn mel_dim(&self) -> usize {
+        self.mel_dim
     }
 
     /// 线性 mel → whisper 归一化特征，行主序 [num_frames, MEL_DIM]。
     pub fn compute(&self, samples: &[f32]) -> Vec<f32> {
         let num_frames = samples.len() / FRAME_SHIFT;
-        let mut feats = vec![0.0f32; num_frames * MEL_DIM];
+        let mut feats = vec![0.0f32; num_frames * self.mel_dim];
         if num_frames == 0 {
             return feats;
         }
@@ -171,7 +229,7 @@ impl WhisperFbank {
                 *p = spec[i].re * spec[i].re + spec[i].im * spec[i].im;
             }
 
-            let out = &mut feats[f * MEL_DIM..(f + 1) * MEL_DIM];
+            let out = &mut feats[f * self.mel_dim..(f + 1) * self.mel_dim];
             for (b, (offset, weights)) in self.mel_filters.iter().enumerate() {
                 let mut energy = 0.0f32;
                 for (k, w) in weights.iter().enumerate() {
@@ -181,7 +239,14 @@ impl WhisperFbank {
             }
         }
 
-        normalize_whisper(&mut feats);
+        if self.kaldi_norm {
+            // kaldi fbank：自然 log(1+energy)，无 whisper 的 clamp/(v+4)/4 重缩放
+            for v in feats.iter_mut() {
+                *v = (1.0 + *v).ln();
+            }
+        } else {
+            normalize_whisper(&mut feats);
+        }
         feats
     }
 }
@@ -244,7 +309,7 @@ mod tests {
 
     #[test]
     fn mel_filters_cover_all_bins() {
-        let filters = build_mel_filters(MEL_DIM);
+        let filters = build_mel_filters(MEL_DIM, false);
         assert_eq!(filters.len(), MEL_DIM);
         for (offset, weights) in &filters {
             assert!(*offset < NUM_FFT_BINS);

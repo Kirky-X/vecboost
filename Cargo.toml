@@ -75,7 +75,7 @@ tokenizers = { version = "0.23", default-features = false, features = ["http", "
 whatlang = { version = "0.18", default-features = false }
 
 # Web Framework (http feature)
-axum = { version = "0.8", optional = true, default-features = false, features = ["http1", "json", "tokio", "tracing", "macros", "matched-path", "original-uri", "query"] }
+axum = { version = "0.8", optional = true, default-features = false, features = ["http1", "json", "tokio", "tracing", "macros", "matched-path", "original-uri", "query", "ws"] }
 axum-extra = { version = "0.12", optional = true, default-features = false, features = ["typed-header"] }
 tower-http = { version = "0.7", optional = true, default-features = false, features = ["trace", "cors", "add-extension", "validate-request", "set-header", "timeout", "compression-gzip"] }
 
@@ -103,6 +103,10 @@ ort = { version = "2.0.0-rc.15", optional = true, default-features = false }
 # 转录引擎（onnx-engine-unify D3）：WAV 解码头 + fbank FFT；仅经 `transcribe` 引入
 hound = { version = "3.5", optional = true, default-features = false }
 rustfft = { version = "6.4", optional = true, default-features = false }
+# 官方流式 ASR 识别器（sherpa-onnx C++ FFI 绑定）：2025 CTC / Paraformer 模型
+# 精度实测 CER 0.02~0.19，远优于自研复刻的旧双语 zipformer（0.95+）。
+# 仅 transcribe-stream feature 引入；default-features=false + static 链接供移动端交叉编译。
+sherpa-onnx = { version = "2.0.1", optional = true, default-features = false, features = ["static"] }
 
 # CUDA：cudarc + nvml，与推理后端正交（ort 经 transcribe，candle 经 candle-cuda）
 cudarc = { version = "0.19", optional = true, default-features = false, features = ["std", "driver", "cuda-version-from-build-system", "dynamic-linking"] }
@@ -166,6 +170,12 @@ candle-cuda = ["candle", "candle-core/cuda", "candle-nn/cuda"]
 metal = ["candle", "candle-core/metal", "candle-nn/metal"]
 # 转录引擎（Qwen3-ASR 三图 + silero VAD）：ort/cuda 仅经此 feature 引入，不进 default
 transcribe = ["onnx", "ort/cuda", "dep:hound", "dep:rustfft"]
+# 流式转录 WS 端点（opt-in）：sdforge/websocket 提供握手鉴权/消息限制/连接清理，
+# 与现有 POST /api/v1/transcribe 并存、不改其任何行为。
+# forge 宏在宿主 crate 展开 ws_path 注册代码时以 `#[cfg(feature = "websocket")]`
+# 门控（sdforge-macros/src/lib.rs:3013）；必须在本 crate 定义同名 feature 作为开关。
+websocket = ["sdforge/websocket"]
+transcribe-stream = ["transcribe", "http", "websocket", "dep:base64", "dep:sherpa-onnx"]
 # CPU 加速后端（candle 路径 opt-in；见上方 target 表注释）。
 mkl = ["candle", "candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl", "dep:half"]
 accelerate = ["candle", "candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]

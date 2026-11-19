@@ -944,3 +944,8 @@ detail-whisper-tokenizer-language-missing-1d4f8 = whisper tokenizer missing lang
 detail-whisper-tokenizer-load-e-8c2d5 = load whisper tokenizer: { $e }
 log-engine-transcribe-whisper-graphs-4a7e1 = whisper graphs: encoder={ $encoder }, decoder={ $decoder }, precision={ $precision } (precision is detected from graph content, not file name)
 detail-whisper-vad-file-not-found-b7e21 = whisper VAD asset not found: { $path } (copy silero_vad.onnx from the Qwen3 bundle or download it into models_dir)
+log-stream-biasing-list-unavailable-a4f1 = context biasing word list { $path } unavailable ({ $e }); disabled
+log-personalization-lexicon-corrupt-c7a3 = personalization lexicon { $path } corrupt ({ $e }); starting empty
+log-personalization-lexicon-io-b4e2 = personalization lexicon { $path } IO error ({ $e }); learning disabled
+log-personalization-persist-failed-d5f8 = personalization lexicon persist failed ({ $e })
+log-personalization-input-too-long-e91c = personalization correction input too long, rejected

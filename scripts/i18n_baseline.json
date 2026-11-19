@@ -37,6 +37,10 @@
     "src/main.rs": {
       "count": 1,
       "reason": "日志 tag 前缀 [thread-tune]，机器可 grep 的稳定标识；正文已由 startup-thread-tune / startup-threads-numa 键国际化"
+    },
+    "src/api/transcribe_stream.rs": {
+      "count": 9,
+      "reason": "WS 协议稳定错误码（invalid_message/unknown_method/invalid_audio/audio_too_large/unknown_session/too_many_sessions/session_lost/infer_failed + 模型加载错误），属机器可解析的协议码而非用户可见文案；详情写服务端日志（含 i18n 文案），不回传客户端（CWE-209 脱敏）。基线为上限、禁止增长。"
     }
   }
 }

@@ -2737,6 +2737,19 @@ async fn build_http_router(config: &VecboostConfig) -> anyhow::Result<axum::Rout
     // `/api/*` 无兜底需求，避免额外 301 与中间件开销。
     let app = sdforge::http::build();
 
+    // 流式转录 WS 路由（opt-in）：forge 宏注册 + sdforge websocket build 挂载。
+    // 握手是一次性 HTTP 请求（受 auth/timeout 中间件），升级后长连接独立于
+    // tower 请求栈，不受 TimeoutLayer 60s 限制。与 POST /api/v1/transcribe 并存。
+    #[cfg(feature = "transcribe-stream")]
+    let app = if config.transcribe.stream.enabled {
+        vecboost::api::transcribe_stream::init_stream_handler(config.transcribe.stream.clone())
+            .map_err(|e| anyhow::anyhow!("streaming transcription init failed: {e}"))?;
+        let ws_config = sdforge::websocket::WebSocketConfig::default();
+        app.merge(sdforge::websocket::build_with_config(ws_config))
+    } else {
+        app
+    };
+
     // Swagger UI(/api-docs/openapi.json + /swagger-ui/) 与 ReDoc(/redoc)：
     // feature `swagger-ui` 显式 opt-in（默认构建不编译；挂主服务端口，
     // 单一二进制一次构建完成）

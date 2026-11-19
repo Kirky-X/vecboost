@@ -11,8 +11,14 @@
 //! 复用本仓 ort 基建（`session.rs` / `AsrSessionOpts`），与 Qwen3-ASR 三图并存。
 
 pub(crate) mod asr;
+#[cfg(feature = "transcribe-stream")]
+pub(crate) mod correction;
 pub(crate) mod engine;
 pub(crate) mod features;
+#[cfg(feature = "transcribe-stream")]
+pub(crate) mod personalization;
+#[cfg(feature = "transcribe-stream")]
+pub(crate) mod streaming_asr;
 pub(crate) mod tokenizer;
 pub(crate) mod vad;
 pub(crate) mod wav;

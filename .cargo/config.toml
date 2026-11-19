@@ -3,3 +3,9 @@
 # 同源文档：docs/MEMORY_SAFETY.md 防线 6
 [env]
 JEMALLOC_SYS_WITH_MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:1000"
+# 测试确定性：本仓单测硬编码英文文案断言（86 处，跨 19 个模块），
+# i18n 本地化后 zh 宿主 LANG 会让这些断言收到中文而失败。
+# 把 cargo 拉起的进程（含 test binary）固定到 en，使单测不依赖宿主 LANG；
+# 仅作用于 cargo 驱动的进程，不影响发布二进制运行期语言选择。
+# force=true 保证即便开发者 shell 里设了 VECBOOST_LANG 也不干扰测试结果。
+VECBOOST_LANG = { value = "en", force = true }

@@ -69,6 +69,8 @@ pub struct LibraryConfig {
     /// `rerank_sync()` / `embed()` 保留 anonymous 语义（单一共享分区）；
     /// 需要按调用方隔离的嵌入方经 `rerank_with_caller()` /
     /// `rerank_sync_with_caller()` / `embed_with_caller()` 显式传 caller。
+    /// 进程级提取门控仅由服务二进制装配，库模式不注入——无后缀门面恒走
+    /// anonymous，隔离必须显式使用 `*_with_caller`（架构审查 F6）。
     pub caller_isolation: crate::cache::CallerIsolation,
 }
 
@@ -129,21 +131,14 @@ impl VecBoostLibrary {
         // build_rerank_service 同口径）：true 且 cache_size>0 时构建进程内
         // 精确缓存，false（默认）disabled 零变化。
         let rerank_config = config.rerank_config.clone().unwrap_or_default();
-        let rerank_service = if rerank_config.cache_enabled && rerank_config.cache_size > 0 {
-            Arc::new(RwLock::new(
-                RerankService::with_cache_capacity(
-                    engine.clone(),
-                    Some(config.model_config.clone()),
-                    rerank_config.cache_size,
-                )
-                .with_caller_isolation(config.caller_isolation),
-            ))
-        } else {
-            Arc::new(RwLock::new(
-                RerankService::new(engine, Some(config.model_config))
-                    .with_caller_isolation(config.caller_isolation),
-            ))
-        };
+        let rerank_service = Arc::new(RwLock::new(
+            RerankService::from_rerank_config(
+                engine.clone(),
+                Some(config.model_config.clone()),
+                &rerank_config,
+            )
+            .with_caller_isolation(config.caller_isolation),
+        ));
 
         // 4. 构建最小 AsyncKit（仅 EmbeddingModule + RerankModule）
         let mut kit = trait_kit::AsyncKit::new();
@@ -216,6 +211,11 @@ impl VecBoostLibrary {
     }
 
     /// 异步批量向量化：将多条文本转换为向量表示
+    ///
+    /// 注意：batch 路径经 `EmbeddingService::process_batch` 直通引擎，**不经
+    /// 语义缓存**，因此无 caller 分区语义——caller 隔离只作用于单文本
+    /// `embed` / `embed_with_caller` 的缓存键。需要 caller 分区时请逐条调用
+    /// 单文本 API。
     pub async fn embed_batch(&self, texts: &[String]) -> Result<BatchEmbedResponse, VecboostError> {
         let service = self.kit.require::<EmbeddingModule>().map_err(|e| {
             VecboostError::InternalError(crate::i18n::tr_with_args(
@@ -296,6 +296,9 @@ impl VecBoostLibrary {
     }
 
     /// 同步批量向量化：将多条文本转换为向量表示
+    ///
+    /// 与 [`Self::embed_batch`] 同口径：batch 路径直通引擎、**不经语义缓存**，
+    /// 无 caller 分区语义；需要 caller 分区请用单文本同步 API。
     pub fn embed_batch_sync(&self, texts: &[String]) -> Result<BatchEmbedResponse, VecboostError> {
         let future = self.embed_batch(texts);
         Self::block_on_future(future)
@@ -503,21 +506,14 @@ impl VecBoostModuleBuilder {
             // server 模式 build_rerank_service 同口径）：true 且 cache_size>0
             // 时构建进程内精确缓存，false（默认）disabled 零变化。
             let rerank_config = self.rerank_config.clone().unwrap_or_default();
-            let rerank_service = if rerank_config.cache_enabled && rerank_config.cache_size > 0 {
-                Arc::new(RwLock::new(
-                    RerankService::with_cache_capacity(
-                        engine.clone(),
-                        Some(self.model_config.clone()),
-                        rerank_config.cache_size,
-                    )
-                    .with_caller_isolation(self.caller_isolation),
-                ))
-            } else {
-                Arc::new(RwLock::new(
-                    RerankService::new(engine, Some(self.model_config))
-                        .with_caller_isolation(self.caller_isolation),
-                ))
-            };
+            let rerank_service = Arc::new(RwLock::new(
+                RerankService::from_rerank_config(
+                    engine.clone(),
+                    Some(self.model_config.clone()),
+                    &rerank_config,
+                )
+                .with_caller_isolation(self.caller_isolation),
+            ));
             kit.set_config(rerank_service);
             kit.set_config(rerank_config);
             kit.register::<RerankModule>().map_err(|e| {

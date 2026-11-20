@@ -199,7 +199,8 @@ pub async fn handle_pipeline_request(
                     request_id,
                     ip,
                     crate::pipeline::ServiceRequest::Embed(req),
-                )?;
+                )
+                .await?;
 
                 let response = enqueue_and_await_response(state, queued_request).await;
                 let embed_response = match &response {
@@ -246,7 +247,8 @@ pub async fn handle_decision_pipeline_request(
         request_id,
         API_SOURCE_ID.to_string(),
         crate::pipeline::ServiceRequest::Decision(req),
-    )?;
+    )
+    .await?;
 
     let response = enqueue_and_await_response(state, queued_request).await?;
     let ServiceResponse::Decision(resp) = response else {
@@ -267,12 +269,16 @@ const REQUEST_SLA: Duration = Duration::from_secs(30);
 /// [`API_SOURCE_ID`]）无法各自漂移，「同口径优先级」成为结构性事实
 pub const API_SOURCE_ID: &str = "api";
 
-fn build_queued_request(
+async fn build_queued_request(
     state: &VecboostState,
     request_id: String,
     source_id: String,
     request: crate::pipeline::ServiceRequest,
 ) -> Result<QueuedRequest, VecboostError> {
+    // caller 必须在获取服务读锁之前提取（database 会话后端解析 token 是一次
+    // DB 往返）；off 门控下直回 anonymous，零分配零往返。
+    let caller = crate::caller::current_caller_id_gated().await;
+
     let priority = state
         .kit
         .require::<crate::registry::PriorityCalculatorModule>()
@@ -290,6 +296,7 @@ fn build_queued_request(
         });
 
     Ok(QueuedRequest {
+        caller,
         request_id,
         request,
         priority,

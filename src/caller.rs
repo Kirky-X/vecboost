@@ -21,9 +21,42 @@ pub const ANONYMOUS_CALLER: &str = "anonymous";
 static CALLER_ISOLATION_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// set-once 标记：门控只允许装配期注入一次，防止二次重置破坏进程级分区不变量。
+static CALLER_ISOLATION_SET: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// 装配期注入（`main.rs::init_engine_and_services` 在 `parse_caller_isolation`
-/// 单一解析点之后调用；进程级状态，测试改值后必须还原）。
+/// 单一解析点之后调用；进程级状态，重复注入视为装配缺陷）。
 pub fn set_caller_isolation_enabled(enabled: bool) {
+    // compare_exchange 在 release 构建下同样拦截重复注入；debug_assert 额外在
+    // 测试构建让装配缺陷显性失败（安全审查 Nit-1 的 set-once 加固）。
+    let already_set = CALLER_ISOLATION_SET
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        )
+        .is_err();
+    debug_assert!(
+        !already_set,
+        "caller isolation gate is set-once: repeated assembly must not reset it"
+    );
+    if already_set {
+        // release 构建同样显性拒绝二次注入（debug 构建前述 assert 直接失败），
+        // 避免「首次注入 off 后 user 隔离静默失效」的调试盲区（架构审查 F2）。
+        log::error!(
+            "{}",
+            crate::i18n::tr("log-caller-isolation-gate-already-set")
+        );
+        return;
+    }
+    CALLER_ISOLATION_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 测试专用写入口：绕过 set-once 标记，只由门控测试套的 Mutex 串行保护使用。
+#[cfg(test)]
+fn set_caller_isolation_enabled_for_test(enabled: bool) {
     CALLER_ISOLATION_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -91,23 +124,28 @@ mod tests {
     /// anonymous，非空不变）。进程级状态，改值后还原。
     #[tokio::test]
     async fn test_gated_extraction_off_skips_and_user_resolves() {
+        // 进程级门控状态：改值测试套必须串行（参照 doctor.rs ENV_LOCK），
+        // 否则并行测试互相覆盖会制造随机失败。本测试为 async，用 tokio Mutex
+        // 避免 std MutexGuard 跨 await（clippy::await_holding_lock）。
+        static GATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let _guard = GATE_LOCK.lock().await;
         let prev = caller_isolation_enabled();
         // 先归到 off 再测，避免与其它测试的改值互相干扰。
-        set_caller_isolation_enabled(false);
+        set_caller_isolation_enabled_for_test(false);
         assert_eq!(
             current_caller_id_gated().await,
             ANONYMOUS_CALLER,
             "off 门控必须跳过解析直回 anonymous"
         );
 
-        set_caller_isolation_enabled(true);
+        set_caller_isolation_enabled_for_test(true);
         let gated = current_caller_id_gated().await;
         assert!(
             !gated.is_empty(),
             "user 门控必须走 current_caller_id（无 token 回退 anonymous）"
         );
 
-        set_caller_isolation_enabled(prev);
+        set_caller_isolation_enabled_for_test(prev);
         assert_eq!(caller_isolation_enabled(), prev, "必须还原装配态");
     }
 }

@@ -151,6 +151,8 @@ pub struct CacheExplain {
 pub struct L2ExplainDetail {
     pub similarity: f32,
     pub entry_age_secs: u64,
+    /// 命中条目的 caller 分区：`off` 模式下条目 caller 恒为空串（不参与键与
+    /// 隔离判定），故此字段为空串；`user` 模式下为写入条目的真实 caller。
     pub caller_scope: String,
 }
 
@@ -873,7 +875,29 @@ mod tests {
         assert!(!ex.l1_exact_hit, "精确层未填须 miss");
         let l2 = ex.l2_semantic_hit.expect("索引有相同文本须 L2 命中");
         assert!(l2.similarity > 0.0, "similarity 须为正");
+        assert_eq!(l2.caller_scope, "", "off 模式 caller_scope 必须为空串");
         assert!(!ex.l3_would_compute);
+    }
+
+    /// explain 直钉：user 模式 caller_scope 回显真实 caller，且跨 caller 查询
+    /// 不得命中对方分区（与写入侧隔离判定同口径）。
+    #[tokio::test]
+    async fn test_explain_caller_scope_user_mode_pins_caller() {
+        let user = SemanticCache::with_capacity(0.7, 16)
+            .with_fuzzy_threshold(0.85)
+            .with_caller_isolation(CallerIsolation::User);
+        user.insert_to_index_for_caller("m", "alice", "beta text", vec![1.0])
+            .await;
+
+        let own = user.explain("m", "alice", "beta text").await;
+        let l2 = own.l2_semantic_hit.expect("user 分区同 caller 须 L2 命中");
+        assert_eq!(l2.caller_scope, "alice", "caller_scope 须回显真实 caller");
+
+        let cross = user.explain("m", "bob", "beta text").await;
+        assert!(
+            cross.l2_semantic_hit.is_none(),
+            "跨 caller 查询不得命中 user 分区"
+        );
     }
 
     #[tokio::test]

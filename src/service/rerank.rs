@@ -85,6 +85,22 @@ impl RerankService {
         )
     }
 
+    /// 由 `[rerank]` 配置构造生产服务：内部单点消费
+    /// `cache_enabled && cache_size > 0`，true 按容量构建进程内精确缓存、
+    /// false 保持 disabled（默认零变化）。装配侧不再重复该条件判断；
+    /// `cache_is_enabled()` 供日志与诊断查询构造结果。
+    pub fn from_rerank_config(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+        config: &crate::RerankConfig,
+    ) -> Self {
+        if config.cache_enabled && config.cache_size > 0 {
+            Self::with_cache_capacity(engine, model_config, config.cache_size)
+        } else {
+            Self::new(engine, model_config)
+        }
+    }
+
     /// rerank 精确缓存是否启用（装配断言/诊断用）。
     pub fn cache_is_enabled(&self) -> bool {
         self.cache.is_enabled()
@@ -167,17 +183,9 @@ impl RerankService {
         let engine = self.engine.clone();
         let query = query.to_string();
         let documents_vec = documents.to_vec();
-        // user 隔离模式：缓存键前缀 {caller_digest}:——caller 经 SHA-256 全长
-        // 十六进制摘要（与语义缓存 L1 键、Redis 层 digest 粒度一致，raw caller
-        // 不落键）；off 模式前缀为空（既有键格式逐字节不变）。
-        let caller_prefix = if self.isolation.is_enabled() {
-            format!("{}:", crate::utils::hash::sha256_hex(caller_id.as_bytes()))
-        } else {
-            String::new()
-        };
-
         if !self.cache.is_enabled() {
-            // 缓存禁用：直接批量调用引擎
+            // 缓存禁用：直接批量调用引擎。caller_prefix 只在缓存路径使用，
+            // 早退前不计算，避免禁用态白付 SHA-256 与 String 分配。
             return common::handle_oom_fallback(&engine, &self.model_config, &None, || {
                 let engine = engine.clone();
                 let query = query.clone();
@@ -189,6 +197,15 @@ impl RerankService {
             })
             .await;
         }
+
+        // user 隔离模式：缓存键前缀 {caller_digest}:——caller 经 SHA-256 全长
+        // 十六进制摘要（与语义缓存 L1 键、Redis 层 digest 粒度一致，raw caller
+        // 不落键）；off 模式前缀为空（既有键格式逐字节不变）。
+        let caller_prefix = if self.isolation.is_enabled() {
+            format!("{}:", crate::utils::hash::sha256_hex(caller_id.as_bytes()))
+        } else {
+            String::new()
+        };
 
         // 缓存启用：逐个检查缓存，仅对未命中的 document 调用引擎
         let mut scores: Vec<(usize, f32)> = Vec::with_capacity(documents_vec.len());

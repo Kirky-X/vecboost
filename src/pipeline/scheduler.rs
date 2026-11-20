@@ -70,10 +70,14 @@ impl PipelineScheduler {
     ) -> Result<ServiceResponse, VecboostError> {
         debug!("Processing request {}", request.request_id);
 
+        // caller 随 QueuedRequest 从 handler 一路透传，在缓存分区边界消费。
+        let caller = request.caller;
         match request.request {
             ServiceRequest::Embed(embed_req) => {
                 let service = self.service.read().await;
-                let resp = service.process_text(embed_req, None).await?;
+                let resp = service
+                    .process_text_with_caller(embed_req, None, &caller)
+                    .await?;
                 Ok(ServiceResponse::Embed(resp))
             }
             ServiceRequest::Rerank(rerank_req) => {
@@ -81,7 +85,9 @@ impl PipelineScheduler {
                     VecboostError::InternalError(i18n::tr("rerank-not-configured"))
                 })?;
                 let service = rerank_service.read().await;
-                let resp = service.process_rerank(rerank_req, 100, 8192).await?;
+                let resp = service
+                    .process_rerank_with_caller(rerank_req, 100, 8192, &caller)
+                    .await?;
                 Ok(ServiceResponse::Rerank(resp))
             }
             ServiceRequest::Decision(decision_req) => {
@@ -222,6 +228,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-001".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
@@ -279,6 +286,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-002".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "".to_string(),
@@ -363,6 +371,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-err-001".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
@@ -419,6 +428,7 @@ mod tests {
             let scheduler = Arc::clone(&scheduler);
             handles.push(tokio::spawn(async move {
                 let request = QueuedRequest {
+                    caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                     request_id: format!("test-concurrent-{:03}", i),
                     request: ServiceRequest::Embed(EmbedRequest {
                         text: format!("hello world {}", i),
@@ -513,6 +523,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-norm-true".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
@@ -563,6 +574,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-norm-false".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
@@ -613,6 +625,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-ws".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "   ".to_string(),
@@ -656,6 +669,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-critical".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "urgent request".to_string(),
@@ -698,6 +712,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-low".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "low priority request".to_string(),
@@ -742,6 +757,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-long".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "X".repeat(1000),
@@ -869,6 +885,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "embed-route-test".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello".to_string(),
@@ -889,6 +906,66 @@ mod tests {
             }
             _ => panic!("Expected ServiceResponse::Embed"),
         }
+    }
+
+    /// 管线 caller 传播钉：`QueuedRequest.caller` 经 scheduler 透传到
+    /// `process_text_with_caller`，user 隔离下不同 caller 的同文请求互不命中。
+    /// 若 caller 在管线任意一环丢失，bob 会命中 alice 的条目（misses=1）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pipeline_caller_propagation_partitions_cache() {
+        ensure_i18n_init();
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(TestEngine::new(8)));
+        let cache = Arc::new(
+            crate::cache::SemanticCache::with_capacity(0.9, 16)
+                .with_caller_isolation(crate::cache::CallerIsolation::User),
+        );
+        let service = Arc::new(RwLock::new(
+            EmbeddingService::new(engine, None).with_semantic_cache(Arc::clone(&cache)),
+        ));
+        let response_channel = Arc::new(ResponseChannel::new());
+        let worker_manager = Arc::new(WorkerManager::new(
+            Arc::new(PriorityRequestQueue::new(100)),
+            response_channel.clone(),
+            WorkerConfig::default(),
+            service.clone(),
+        ));
+        let scheduler = PipelineScheduler::new(
+            PriorityCalculator::new(PriorityConfig::default()),
+            response_channel,
+            worker_manager,
+            service,
+        );
+
+        let mk = |id: &str, caller: &str| QueuedRequest {
+            caller: caller.to_string(),
+            request_id: id.to_string(),
+            request: ServiceRequest::Embed(EmbedRequest {
+                text: "pipeline shared text".to_string(),
+                normalize: None,
+            }),
+            priority: Priority::Normal,
+            submitted_at: Instant::now(),
+            timeout: Duration::from_secs(30),
+            source: RequestSource::Internal,
+        };
+
+        scheduler
+            .process_request(mk("alice-1", "alice"))
+            .await
+            .unwrap();
+        scheduler
+            .process_request(mk("alice-2", "alice"))
+            .await
+            .unwrap();
+        scheduler.process_request(mk("bob-1", "bob")).await.unwrap();
+
+        let stats = cache.stats();
+        assert_eq!(
+            stats.misses, 2,
+            "alice/bob 各自首次须 miss（caller 已从队列透传）"
+        );
+        assert_eq!(stats.exact_hits, 1, "alice 第二次须命中自身分区");
     }
 
     /// ServiceRequest::Rerank routes to rerank service
@@ -915,6 +992,7 @@ mod tests {
         .with_rerank_service(rerank_service);
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "rerank-route-test".to_string(),
             request: ServiceRequest::Rerank(crate::domain::RerankRequest {
                 query: "what is rust?".to_string(),
@@ -965,6 +1043,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "rerank-no-service".to_string(),
             request: ServiceRequest::Rerank(crate::domain::RerankRequest {
                 query: "test".to_string(),
@@ -1079,6 +1158,7 @@ mod tests {
         .with_decision_service(decision_service);
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "decision-route-test".to_string(),
             request: ServiceRequest::Decision(decision_noul_request()),
             priority: Priority::Normal,
@@ -1128,6 +1208,7 @@ mod tests {
         );
 
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "decision-no-service".to_string(),
             request: ServiceRequest::Decision(decision_noul_request()),
             priority: Priority::Normal,
@@ -1172,6 +1253,7 @@ mod tests {
         let queue = PriorityRequestQueue::new(100);
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "decision-normal".to_string(),
                 request: ServiceRequest::Decision(decision_noul_request()),
                 priority: decision_priority,
@@ -1183,6 +1265,7 @@ mod tests {
             .unwrap();
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "embed-low".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "low".to_string(),

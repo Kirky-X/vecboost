@@ -265,6 +265,7 @@ startup-engine-candle-not-compiled = [model] engine_type="candle" but this build
 engine-candle-cuda-unavailable = device="cuda" with engine_type="candle" but CUDA is unavailable in this build/machine: rebuild with `--features candle-cuda` (CUDA backend) and ensure a usable NVIDIA GPU is present; refusing to run silently on CPU
 startup-semantic-mode-invalid = [semantic_cache] comparison_mode invalid: { $detail }
 startup-semantic-caller-isolation-invalid = [semantic_cache] caller_isolation invalid: { $detail }
+log-caller-isolation-gate-already-set = Caller isolation gate is already set; repeated assembly must not reset it
 startup-engine-profile-invalid = invalid [engine_security].profile, expected "standard" or "strict": '{ $got }'
 startup-engine-profile-strict-violation = [engine_security] profile=strict forbids ONNX model '{ $model }': set profile=standard or change the model engine_type to candle
 startup-translation-no-onnx = [translation] pairs configured but this build did not enable the `onnx` feature; rebuild with --features onnx

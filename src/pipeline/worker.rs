@@ -674,6 +674,9 @@ impl WorkerManager {
         embedding_service: &Arc<RwLock<EmbeddingService>>,
         decision_service: Option<&Arc<RwLock<DecisionService>>>,
     ) -> Result<ServiceResponse, VecboostError> {
+        // caller 随 QueuedRequest 透传；rerank 在本 worker 被显式拒绝
+        // （无服务调用），故只有 embed 路径消费 caller 分区。
+        let caller = request.caller;
         match request.request {
             ServiceRequest::Embed(embed_request) => {
                 debug!("Processing embedding request");
@@ -681,7 +684,7 @@ impl WorkerManager {
                 let service_guard = embedding_service.read().await;
 
                 let result = service_guard
-                    .process_text(embed_request, None) // metrics_collector 可选
+                    .process_text_with_caller(embed_request, None, &caller) // metrics_collector 可选
                     .await;
 
                 drop(service_guard); // 显式释放锁
@@ -1050,6 +1053,7 @@ mod tests {
 
     fn make_queued(id: &str) -> QueuedRequest {
         QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: id.to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: id.to_string(),
@@ -1116,6 +1120,7 @@ mod tests {
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
         let channel = Arc::new(ResponseChannel::new());
         let mk = |id: &str, text: &str| QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: id.to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: text.to_string(),
@@ -1666,6 +1671,7 @@ mod tests {
             Arc::new(RwLock::new(MockEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-process-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
@@ -1693,6 +1699,7 @@ mod tests {
             Arc::new(RwLock::new(ErrorEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-process-err".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello".to_string(),
@@ -1733,6 +1740,7 @@ mod tests {
 
         let rx = response_channel.register("test-loop-1".to_string()).await;
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-loop-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello world".to_string(),
@@ -1784,6 +1792,7 @@ mod tests {
 
         let rx = response_channel.register("test-loop-err".to_string()).await;
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-loop-err".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello".to_string(),
@@ -1888,6 +1897,7 @@ mod tests {
             .register("test-loop-decision".to_string())
             .await;
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-loop-decision".to_string(),
             request: ServiceRequest::Decision(DecisionRequest {
                 state: serde_json::json!({}),
@@ -1988,6 +1998,7 @@ mod tests {
         let channel = Arc::new(ResponseChannel::new());
 
         let decision_req = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "mixed-decision".to_string(),
             request: ServiceRequest::Decision(DecisionRequest {
                 state: serde_json::json!({}),
@@ -2060,6 +2071,7 @@ mod tests {
         let channel = Arc::new(ResponseChannel::new());
 
         let mk = |id: &str| QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: id.to_string(),
             request: ServiceRequest::Decision(DecisionRequest {
                 state: serde_json::json!({}),
@@ -2143,6 +2155,7 @@ mod tests {
         let channel = Arc::new(ResponseChannel::new());
 
         let mk = |id: &str| QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: id.to_string(),
             request: ServiceRequest::Decision(DecisionRequest {
                 state: serde_json::json!({}),
@@ -2323,6 +2336,7 @@ mod tests {
         // 错峰入队：两请求分属不同批（panic 只波及第一批）
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "panic-1".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "trigger".to_string(),
@@ -2338,6 +2352,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "after-panic".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "recover".to_string(),
@@ -2394,6 +2409,7 @@ mod tests {
 
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "cancelled-1".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "ghost".to_string(),
@@ -2464,6 +2480,7 @@ mod tests {
         for id in ["in-flight", "drain-me"] {
             queue
                 .enqueue(QueuedRequest {
+                    caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                     request_id: id.to_string(),
                     request: ServiceRequest::Embed(EmbedRequest {
                         text: format!("text {id}"),
@@ -2526,6 +2543,7 @@ mod tests {
         for i in 0..6 {
             queue
                 .enqueue(QueuedRequest {
+                    caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                     request_id: format!("burst-{}", i),
                     request: ServiceRequest::Embed(EmbedRequest {
                         text: format!("burst text {}", i),
@@ -2622,6 +2640,7 @@ mod tests {
 
         for i in 0..5 {
             let request = QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: format!("multi-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: format!("text-{}", i),
@@ -2735,6 +2754,7 @@ mod tests {
             Arc::new(RwLock::new(MockEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-none-norm".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "hello".to_string(),
@@ -2859,6 +2879,7 @@ mod tests {
 
         for i in 0..200 {
             let request = QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: format!("scale-up-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: format!("text-{}", i),
@@ -3088,6 +3109,7 @@ mod tests {
         let rx_busy = response_channel.register("reap-busy".to_string()).await;
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "reap-busy".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "busy".to_string(),
@@ -3106,6 +3128,7 @@ mod tests {
         let rx_expired = response_channel.register("reap-expired".to_string()).await;
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "reap-expired".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "expired".to_string(),
@@ -3121,6 +3144,7 @@ mod tests {
         let rx_fresh = response_channel.register("reap-fresh".to_string()).await;
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "reap-fresh".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "fresh".to_string(),
@@ -3189,6 +3213,7 @@ mod tests {
         let rx_short = response_channel.register("evict-short".to_string()).await;
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "evict-short".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "short sla".to_string(),
@@ -3205,6 +3230,7 @@ mod tests {
         let rx_long = response_channel.register("evict-long".to_string()).await;
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "evict-long".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "long sla".to_string(),
@@ -3263,6 +3289,7 @@ mod tests {
         let batch = vec![
             make_queued("mix-embed"),
             QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "mix-rerank".to_string(),
                 request: ServiceRequest::Rerank(crate::domain::RerankRequest {
                     query: "q".to_string(),
@@ -3314,6 +3341,7 @@ mod tests {
         let batch = vec![
             make_queued("mix-embed-2"),
             QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "mix-decision".to_string(),
                 request: ServiceRequest::Decision(DecisionRequest {
                     state: serde_json::json!({}),
@@ -3356,6 +3384,7 @@ mod tests {
             Arc::new(RwLock::new(MockEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "solo-rerank".to_string(),
             request: ServiceRequest::Rerank(crate::domain::RerankRequest {
                 query: "q".to_string(),
@@ -3385,6 +3414,7 @@ mod tests {
             Arc::new(RwLock::new(MockEngine));
         let service = Arc::new(RwLock::new(EmbeddingService::new(engine, None)));
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "solo-decision".to_string(),
             request: ServiceRequest::Decision(DecisionRequest {
                 state: serde_json::json!({}),

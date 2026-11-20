@@ -212,7 +212,7 @@ cp config/config.toml config/config_custom.toml
 | `[server]` | 绑定地址、端口、超时、CORS、gRPC 设置 | - |
 | `[model]` | 模型仓库、设备、精度、量化、多模型驻留 | - |
 | `[embedding]` | 聚合模式、相似度度量、缓存、文本长度上限、WAL 落盘 | oxcache |
-| `[rerank]` | 重排序服务配置 | - |
+| `[rerank]` | 重排序 `max_documents_per_query` / `max_query_length`、精确缓存 `cache_enabled`（默认 false）/ `cache_size` | - |
 | `[monitoring]` | 内存限制、指标收集 | prometheus |
 | `[auth]` | JWT、CSRF、管理员账号、token 有效期 | garrison（`auth`） |
 | `[rate_limit]` | 多维令牌桶限流 | limiteron |

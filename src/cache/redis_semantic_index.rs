@@ -9,6 +9,10 @@
 //! 计算 Jaccard，命中后只 HGET 最佳条目的向量。行为与单机
 //! `SemanticCache::find_similar` 完全一致，只是索引跨副本共享。
 //!
+//! **单实例语义，Cluster 不兼容**：容量裁剪 Lua 脚本与 HGETALL 依赖多个键
+//! 位于同一槽位，Redis Cluster 下会 CROSSSLOT 失败。本模块只支持单实例
+//! Redis（含主从），不得用 Cluster 端点替代。
+//!
 //! 设计取舍：
 //! - 不引入 RediSearch：现网算法是文本 trigram，不是向量 KNN；用通用
 //!   Redis Hash 即可保持行为，避免 `redis` crate 的 unstable search API。

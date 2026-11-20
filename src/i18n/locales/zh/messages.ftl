@@ -265,6 +265,7 @@ startup-engine-candle-not-compiled = [model] engine_type="candle" 但本次构�
 engine-candle-cuda-unavailable = engine_type="candle" 配置了 device="cuda"，但本次构建/本机 CUDA 不可用：请以 `--features candle-cuda` 重新构建（CUDA 后端），并确认存在可用的 NVIDIA GPU；拒绝静默落到 CPU
 startup-semantic-mode-invalid = [semantic_cache] comparison_mode 无效：{ $detail }
 startup-semantic-caller-isolation-invalid = [semantic_cache] caller_isolation 无效：{ $detail }
+log-caller-isolation-gate-already-set = 调用方隔离门控已设置；重复装配不得重置它
 startup-engine-profile-invalid = [engine_security].profile 无效，应为 "standard" 或 "strict"：'{ $got }'
 startup-engine-profile-strict-violation = [engine_security] profile=strict 禁止 ONNX 模型 '{ $model }'：请改用 profile=standard 或将该模型的 engine_type 改为 candle
 startup-translation-no-onnx = [translation] pairs 已配置但本次构建未启用 `onnx` feature；请以 --features onnx 重新构建

@@ -20,6 +20,21 @@
 
 ---
 
+<a id="unreleased"></a>
+
+## [Unreleased]
+
+### 变更
+
+- **caller_isolation 功能线**（自 `fabf8b9` 起）：新增 `[semantic_cache] caller_isolation`（`off`/`user`，默认 `off` 零行为变化）——`user` 模式下语义缓存 L1/Redis 层按认证调用方分区；rerank 精确缓存同步按调用方分区。`[rerank] cache_enabled` / `cache_size` 获得装配消费点（`build_rerank_service` 与库门面装配），构建进程内精确缓存。管线队列（`QueuedRequest` 新增 `caller` 字段）与库门面、API 层同样携带调用方身份。**破坏性变更**：`QueuedRequest` 为公开再导出类型，新增必填字段会打断外部结构体字面量构造——迁移时在字面量补 `caller: <身份字符串>`（无身份用 `"anonymous"`）；SDK 无后缀函数保持 anonymous 语义，需按调用方隔离请走 `*_with_caller`；`L2ExplainDetail.caller_scope` 为新增公开字段（off 模式为空串）。
+- **库门面新增 `*_with_caller` API**：`VecBoostLibrary::embed_with_caller` / `rerank_with_caller` / `rerank_sync_with_caller`——user 隔离模式下按调用方分区缓存；既有无参方法保留 anonymous 语义。
+- **`[rerank] cache_enabled` 默认 true→false（休眠键获得消费点时的默认修正）**：该键此前全仓无消费点（缓存恒禁用、默认值无行为含义）；接线消费后以 off 为默认——新能力默认关闭，默认部署零行为变化。
+- **user 模式 L1 键 caller 段 digest 化**：语义缓存 L1 键与 rerank 缓存键的 caller 前缀改 SHA-256 摘要（raw caller 不落键面，与 Redis 层 digest 粒度一致）。**兼容注记**：旧格式键一次性失效，不提供迁移路径——L1 为进程内缓存（重启自然重建）；Redis 层旧分区条目由下次 clear（原子脚本）回收。
+- **回放未命中契约 200→404**：`GET /api/v1/admin/inference/replay/{request_id}` 未命中改返回 404（`ApiError::NotFound` 顶层 `NOT_FOUND` 载荷）；响应体 `ReplayResponse` 移除 `found` 字段（命中即 200，未命中即 404，不再有 `found:false` 的 200）。
+- **403 错误载荷形状统一（对外契约变更，pre-1.0 允许）**：admin 端点 403 与 `/metrics` 错误由嵌套 envelope `{"success":false,"error":{"code":"FORBIDDEN",...}}` 统一为 sdforge `UnifiedError` 顶层形状 `{"code":"...","message":...}`，与 404 `NOT_FOUND` 载荷同构；i18n 消息键（`auth-admin-required`）不变。范围声明：`VecboostError` 既有响应形状（数字 code + `error_code`）不在本次统一内；`UnifiedError` 在 context feature 开启时可附可选 `trace_id` 关联字段。
+- **Matryoshka 质量门 fail-fast 时序**：`dimensions` 低于 `[embedding] min_output_dimension` 下限的请求改在缓存查询/推理之前拒绝（批路径不再白付整批推理）；错误变体、i18n key、`vecboost_matryoshka_gate_rejected_total` 递增语义不变。
+- **回放环 request_id 入环收敛至 128 字符（安全 LOW-2/LOW-1）**：`X-Request-Id` 入站优先吸收，认证调用方可轮换超长 id 挤占 1000 槽位；入环口单点收敛（`REQUEST_ID_MAX_LEN = 128`）：超长 id 取 119 字符前缀 + 全文 SHA-256 前 8 hex，防同前缀碰撞覆盖；回放查询按同规则收敛入参，原超长 id 回放命中且不会错配他人事件。
+
 <a id="031---2026-11-15"></a>
 
 ## [0.3.1] - 2026-11-15

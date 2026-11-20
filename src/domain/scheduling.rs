@@ -97,6 +97,9 @@ pub struct QueuedRequest {
     pub timeout: Duration,
     /// 请求来源
     pub source: RequestSource,
+    /// 调用方身份——管线入口经 `current_caller_id_gated()` 提取，透传至
+    /// scheduler/worker 的 `*_with_caller` 调用，决定缓存隔离分区。
+    pub caller: String,
 }
 
 // PriorityRequestQueue
@@ -605,6 +608,7 @@ mod tests {
     async fn test_enqueue_dequeue() {
         let queue = PriorityRequestQueue::new(100);
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
@@ -640,6 +644,7 @@ mod tests {
         .enumerate()
         {
             let request = QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: format!("test-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
@@ -666,6 +671,7 @@ mod tests {
     async fn test_queue_full() {
         let queue = PriorityRequestQueue::new(2);
         let request1 = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
@@ -679,6 +685,7 @@ mod tests {
             },
         };
         let request2 = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-2".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
@@ -695,6 +702,7 @@ mod tests {
         queue.enqueue(request1).await.unwrap();
         queue.enqueue(request2).await.unwrap();
         let request3 = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-3".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
@@ -718,6 +726,7 @@ mod tests {
 
         for i in 0..10 {
             let request = QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: format!("test-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
@@ -748,6 +757,7 @@ mod tests {
 
         // 入队 Critical 请求(会老化)
         let critical_req = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "critical-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
@@ -763,6 +773,7 @@ mod tests {
         queue.enqueue(critical_req).await.unwrap();
 
         let low_req = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "low-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
@@ -796,6 +807,7 @@ mod tests {
         let queue = PriorityRequestQueue::new(100).with_aging_threshold(Duration::from_millis(50));
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "critical-aged".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
@@ -831,6 +843,7 @@ mod tests {
         let queue = PriorityRequestQueue::new(100);
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "short-sla".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
@@ -847,6 +860,7 @@ mod tests {
             .unwrap();
         queue
             .enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "long-sla".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "test-2".to_string(),
@@ -888,6 +902,7 @@ mod tests {
     async fn test_peek_highest_priority_returns_critical() {
         let queue = PriorityRequestQueue::new(100);
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
@@ -909,6 +924,7 @@ mod tests {
     async fn test_peek_highest_priority_returns_low() {
         let queue = PriorityRequestQueue::new(100);
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
@@ -931,6 +947,7 @@ mod tests {
         let queue = PriorityRequestQueue::new(100);
         for priority in [Priority::High, Priority::Low] {
             let request = QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: format!("test-{:?}", priority),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
@@ -966,6 +983,7 @@ mod tests {
         let queue = PriorityRequestQueue::new(100);
         for i in 0..3 {
             let request = QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: format!("test-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
@@ -996,6 +1014,7 @@ mod tests {
         for (priority, count) in priorities_with_counts {
             for i in 0..count {
                 let request = QueuedRequest {
+                    caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                     request_id: format!("test-{:?}-{}", priority, i),
                     request: ServiceRequest::Embed(EmbedRequest {
                         text: "test".to_string(),
@@ -1029,6 +1048,7 @@ mod tests {
     async fn test_dequeue_all_then_empty() {
         let queue = PriorityRequestQueue::new(100);
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
@@ -1064,6 +1084,7 @@ mod tests {
         assert_eq!(queue.size(), 0);
         for i in 0..5 {
             let request = QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: format!("test-{}", i),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
@@ -1089,6 +1110,7 @@ mod tests {
     async fn test_enqueue_max_size_zero_always_rejects() {
         let queue = PriorityRequestQueue::new(0);
         let request = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "test-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
@@ -1109,6 +1131,7 @@ mod tests {
     async fn test_aging_does_not_skip_low_priority() {
         let queue = PriorityRequestQueue::new(100);
         let low_req = QueuedRequest {
+            caller: crate::caller::ANONYMOUS_CALLER.to_string(),
             request_id: "low-1".to_string(),
             request: ServiceRequest::Embed(EmbedRequest {
                 text: "test".to_string(),
@@ -1135,6 +1158,7 @@ mod tests {
         for i in 0..3 {
             queue
                 .enqueue(QueuedRequest {
+                    caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                     request_id: format!("req-{}", i),
                     request: ServiceRequest::Embed(EmbedRequest {
                         text: format!("text-{}", i),
@@ -1161,6 +1185,7 @@ mod tests {
         for i in 0..8 {
             queue
                 .enqueue(QueuedRequest {
+                    caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                     request_id: format!("req-{}", i),
                     request: ServiceRequest::Embed(EmbedRequest {
                         text: format!("text-{}", i),
@@ -1201,6 +1226,7 @@ mod tests {
         let q = Arc::clone(&queue);
         let handle = tokio::spawn(async move {
             q.enqueue(QueuedRequest {
+                caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                 request_id: "cancelled-at-lock".to_string(),
                 request: ServiceRequest::Embed(EmbedRequest {
                     text: "test".to_string(),
@@ -1234,6 +1260,7 @@ mod tests {
         for i in 0..10 {
             queue
                 .enqueue(QueuedRequest {
+                    caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                     request_id: format!("after-cancel-{i}"),
                     request: ServiceRequest::Embed(EmbedRequest {
                         text: "test".to_string(),
@@ -1263,6 +1290,7 @@ mod tests {
             let q = Arc::clone(&queue);
             handles.push(tokio::spawn(async move {
                 q.enqueue(QueuedRequest {
+                    caller: crate::caller::ANONYMOUS_CALLER.to_string(),
                     request_id: format!("abort-{i}"),
                     request: ServiceRequest::Embed(EmbedRequest {
                         text: "test".to_string(),

@@ -90,8 +90,9 @@ python3 scripts/i18n_consistency_check.py # 修改用户可见文案/语言包�
 ## 📝 提交规范
 
 - 格式：`type(scope): 摘要`，type ∈ feat/fix/test/docs/chore/refactor/perf
-- 每个逻辑变更一个 commit；行为变更(默认值、API 契约)必须在 CHANGELOG 的
-  `Unreleased` 段登记，并同步更新 README 双语版
+- 每个逻辑变更一个 commit；CHANGELOG 的 `Unreleased` 段按发布期批量补写
+  （不要求逐 commit 登记，消除规则与实践的二义），行为变更（默认值、API 契约）
+  不得跨发布遗漏，并同步更新 README 双语版
 
 ## 📚 文档约定
 

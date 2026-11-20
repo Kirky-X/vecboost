@@ -20,6 +20,21 @@ and versioning follows [Semantic Versioning](https://semver.org/lang/zh-CN/spec/
 
 ---
 
+<a id="unreleased"></a>
+
+## [Unreleased]
+
+### Changed
+
+- **caller_isolation feature line** (since `fabf8b9`): new `[semantic_cache] caller_isolation` setting (`off`/`user`, default `off` = zero behavior change) — in `user` mode the semantic cache L1/Redis layers partition by the authenticated caller; the rerank exact cache partitions by caller as well. `[rerank] cache_enabled` / `cache_size` gain their assembly consumers (`build_rerank_service` and library facade assembly), building the in-process exact cache. The pipeline queue (`QueuedRequest` gains a `caller` field), the library facade, and the API layer carry the caller identity the same way. **Breaking change**: `QueuedRequest` is a public re-export, so the new required field breaks external struct literals — add `caller: <identity string>` (use `"anonymous"` when no identity is available) to each literal; SDK functions without a suffix keep the anonymous semantics, use `*_with_caller` for caller isolation; `L2ExplainDetail.caller_scope` is a new public field (empty string in `off` mode).
+- **New `*_with_caller` library facade APIs**: `VecBoostLibrary::embed_with_caller` / `rerank_with_caller` / `rerank_sync_with_caller` — in `user` isolation mode caches partition by caller; existing no-suffix methods keep the anonymous semantics.
+- **`[rerank] cache_enabled` default true→false (default correction when a dormant key gains its consumer)**: this key previously had no consumer anywhere (the cache was always disabled, so the default carried no behavioral meaning); once wired up, the default is off — new capabilities stay disabled by default, default deployments see zero behavior change.
+- **`user`-mode L1 key caller segment digested**: the caller prefix in semantic-cache L1 keys and rerank cache keys is now a SHA-256 digest (raw caller never appears on the key surface, matching the Redis layer's digest granularity). **Compatibility note**: old-format keys are invalidated once, with no migration path — L1 is an in-process cache (rebuilt naturally after restart); legacy Redis partitions are reclaimed by the next clear (atomic script).
+- **Replay miss contract 200→404**: `GET /api/v1/admin/inference/replay/{request_id}` returns 404 on miss (top-level `NOT_FOUND` payload via `ApiError::NotFound`); the `ReplayResponse` body drops the `found` field (hit = 200, miss = 404 — no more `found:false` 200s).
+- **403 error payload shape unified (breaking contract change, permitted pre-1.0)**: admin-endpoint 403 responses and `/metrics` errors move from the nested envelope `{"success":false,"error":{"code":"FORBIDDEN",...}}` to the sdforge `UnifiedError` top-level shape `{"code":"...","message":...}`, isomorphic with the 404 `NOT_FOUND` payload; the i18n message key (`auth-admin-required`) is unchanged. Scope note: the existing `VecboostError` response shape (numeric code plus `error_code`) is out of scope; `UnifiedError` may carry an optional `trace_id` when the context feature is enabled.
+- **Matryoshka quality gate fail-fast ordering**: requests whose `dimensions` fall below `[embedding] min_output_dimension` are now rejected before cache lookup/inference (the batch path no longer pays for a full batch inference on rejected requests); error variant, i18n key, and the `vecboost_matryoshka_gate_rejected_total` increment semantics are unchanged.
+- **Replay ring request_id bounded to 128 chars on push (security LOW-2/LOW-1)**: `X-Request-Id` is absorbed inbound with client precedence, so an authenticated caller can rotate oversized ids to squeeze out the 1000-slot ring; push folds oversized ids into a 119-char prefix plus the first 8 hex chars of the full SHA-256 (`REQUEST_ID_MAX_LEN = 128`), preventing same-prefix collisions; replay lookups apply the same folding rule, so an original oversized id still hits its own event and cannot match another's.
+
 <a id="031---2026-11-15"></a>
 
 ## [0.3.1] - 2026-11-15

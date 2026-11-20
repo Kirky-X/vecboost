@@ -90,8 +90,9 @@ Multi-step changes go through the `specmark/` workflow: propose(proposal/design/
 ## 📝 Commit Conventions
 
 - Format: `type(scope): summary`, type ∈ feat/fix/test/docs/chore/refactor/perf
-- One commit per logical change; behavioral changes (defaults, API contracts) must be registered in the CHANGELOG
-  `Unreleased` section and mirrored in both README versions
+- One commit per logical change; the CHANGELOG `Unreleased` section is filled in as a batch at release time
+  (per-commit registration is not required, removing the rule-vs-practice ambiguity), but behavioral changes
+  (defaults, API contracts) must never slip past a release, and are mirrored in both README versions
 
 ## 📚 Documentation Conventions
 

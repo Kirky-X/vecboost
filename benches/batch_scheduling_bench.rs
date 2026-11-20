@@ -18,6 +18,7 @@ use vecboost::pipeline::{Priority, QueuedRequest, RequestSource, ServiceRequest,
 
 fn make_queued_request(id: usize) -> QueuedRequest {
     QueuedRequest {
+        caller: vecboost::caller::ANONYMOUS_CALLER.to_string(),
         request_id: format!("bench-{}", id),
         request: ServiceRequest::Embed(EmbedRequest {
             text: format!("text {}", id),

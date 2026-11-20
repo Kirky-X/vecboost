@@ -212,7 +212,7 @@ The table below corresponds to the sections actually parsed by `VecboostConfig` 
 | `[server]` | Bind address, port, timeout, CORS, gRPC settings | - |
 | `[model]` | Model repo, device, precision, quantization, multi-model residency | - |
 | `[embedding]` | Pooling, similarity metric, cache, text length caps, WAL persistence | oxcache |
-| `[rerank]` | Rerank service configuration | - |
+| `[rerank]` | Rerank `max_documents_per_query` / `max_query_length`, exact cache `cache_enabled` (default false) / `cache_size` | - |
 | `[monitoring]` | Memory limits, metric collection | prometheus |
 | `[auth]` | JWT, CSRF, admin account, token lifetime | garrison (`auth`) |
 | `[rate_limit]` | Multi-dimensional token-bucket rate limiting | limiteron |

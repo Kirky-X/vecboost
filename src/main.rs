@@ -654,8 +654,10 @@ fn build_rerank_service(
     caller_isolation: vecboost::CallerIsolation,
     rerank_config: &vecboost::RerankConfig,
 ) -> RerankService {
-    let cache_enabled = rerank_config.cache_enabled && rerank_config.cache_size > 0;
-    let service = if cache_enabled {
+    // cache_enabled && cache_size>0 由构造器内部单点消费，装配侧只按构造
+    // 结果记录诊断日志，不重复配置条件判断。
+    let service = RerankService::from_rerank_config(engine, Some(model_config), rerank_config);
+    if service.cache_is_enabled() {
         log::info!(
             "{}",
             vecboost::i18n::tr_with_args(
@@ -663,10 +665,7 @@ fn build_rerank_service(
                 vecboost::i18n::tr_args(&[("size", &rerank_config.cache_size.to_string())])
             )
         );
-        RerankService::with_cache_capacity(engine, Some(model_config), rerank_config.cache_size)
-    } else {
-        RerankService::new(engine, Some(model_config))
-    };
+    }
     service.with_caller_isolation(caller_isolation)
 }
 

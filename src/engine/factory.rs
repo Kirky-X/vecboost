@@ -250,6 +250,7 @@ mod tests {
     #[cfg(feature = "onnx")]
     #[test]
     fn test_create_decision_task_dispatches_to_onnx_pipeline() {
+        crate::i18n::init(); // 过滤隔离运行时兜底：tr() 未初始化回落裸键名
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = test_config();
         config.task = crate::config::model::ModelTask::Decision;

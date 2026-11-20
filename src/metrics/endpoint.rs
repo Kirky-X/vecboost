@@ -266,9 +266,11 @@ fn normalize_metrics_path(path: &str) -> String {
 
 /// /metrics 的 4xx/5xx 统一 JSON 错误体(原为纯文本,机器不可读)。
 pub fn json_error_response(status: u16, message: &str) -> axum::response::Response {
+    // 与 403 FORBIDDEN 契约同口径：sdforge UnifiedError 顶层形状，去掉嵌套
+    // error 信封（CHANGELOG「403 错误载荷形状统一」声明）。
     let body = serde_json::json!({
-        "success": false,
-        "error": { "code": "METRICS_ERROR", "message": message }
+        "code": "METRICS_ERROR",
+        "message": message
     });
     let mut resp = axum::response::Response::builder()
         .status(status)
@@ -282,7 +284,10 @@ pub fn json_error_response(status: u16, message: &str) -> axum::response::Respon
                     i18n::tr_args(&[("detail", &e.to_string())]),
                 )
             );
-            axum::response::Response::new(axum::body::Body::from(r#"{"success":false}"#))
+            // fallback 与主路径同形状（顶层 code/message，无嵌套 error 信封）。
+            axum::response::Response::new(axum::body::Body::from(
+                r#"{"code":"METRICS_ERROR","message":"response build failed"}"#,
+            ))
         });
     *resp.status_mut() = axum::http::StatusCode::from_u16(status)
         .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
@@ -330,5 +335,25 @@ mod tests {
     fn test_normalize_metrics_path_empty_and_root() {
         assert_eq!(normalize_metrics_path(""), "");
         assert_eq!(normalize_metrics_path("/"), "/");
+    }
+
+    /// /metrics 4xx/5xx 错误体必须是顶层形状，与 403 FORBIDDEN 契约同构：
+    /// 顶层 code + message，无嵌套 error 信封、无 success 字段。
+    #[tokio::test]
+    async fn test_json_error_response_uses_top_level_error_shape() {
+        let resp = json_error_response(403, "denied");
+        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("读取响应体必须成功");
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("响应体必须是合法 JSON");
+        assert_eq!(value["code"], "METRICS_ERROR");
+        assert_eq!(value["message"], "denied");
+        assert!(value.get("error").is_none(), "不得保留嵌套 error 信封");
+        assert!(
+            value.get("success").is_none(),
+            "顶层形状须与 403 UnifiedError 同构"
+        );
     }
 }

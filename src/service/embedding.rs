@@ -527,6 +527,12 @@ impl EmbeddingService {
         let start = std::time::Instant::now();
         self.validator.validate_text(&req.text)?;
 
+        // Matryoshka 门 fail-fast 上提（A-⑦）：resolve_effective_dimension 是
+        // 纯函数（只读 model_config/min_output_dimension），在缓存查询/引擎
+        // 推理之前完成校验——被拒请求不再白付缓存往返与整次推理，维度错误
+        // 先于引擎错误返回（错误变体/i18n key/计数器递增语义不变）。
+        let effective_dimension = self.resolve_effective_dimension(target_dimension)?;
+
         // 缓存键包含 model_id 和文本哈希，避免跨模型污染
         let model_id = self
             .model_config
@@ -572,8 +578,8 @@ impl EmbeddingService {
 
         // Apply Matryoshka dimension reduction if requested.
         // 上下限与质量门校验统一走 resolve_effective_dimension 单点
-        //（与批量路径共用，防止两处校验漂移）。
-        if let Some(target_dim) = self.resolve_effective_dimension(target_dimension)? {
+        //（与批量路径共用，防止两处校验漂移）；门校验已上提到推理前（A-⑦）。
+        if let Some(target_dim) = effective_dimension {
             embedding = truncate_vector(&embedding, target_dim);
             // Matryoshka 截断破坏单位向量语义，必须重归一化以保证余弦相似度正确
             normalize_l2(&mut embedding)?;
@@ -1152,12 +1158,15 @@ impl EmbeddingService {
             num_chunks
         );
 
+        // Matryoshka 门 fail-fast 上提（A-⑦）：纯函数校验在 embed_chunks_concurrent
+        // 之前完成——被拒请求不再白付整批推理（实测放行/被拒同成本级），维度
+        // 错误先于引擎错误返回（错误变体/i18n key/计数器递增语义不变）。
+        let effective_dimension = self.resolve_effective_dimension(target_dimension)?;
+
         let mut all_results = self
             .embed_chunks_concurrent(unique_texts, optimal_batch_size, max_concurrent_chunks)
             .await?;
         all_results.sort_by_key(|r| r.0);
-
-        let effective_dimension = self.resolve_effective_dimension(target_dimension)?;
 
         // Matryoshka 截断 + 构建 unique_idx → (embedding, preview) 查找表
         let unique_results: Vec<(Vec<f32>, String)> = all_results

@@ -551,6 +551,7 @@ mod tests {
 
     #[test]
     fn test_decision_pipeline_load_empty_dir_reports_tried_paths() {
+        crate::i18n::init(); // 过滤隔离运行时兜底：tr() 未初始化回落裸键名
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = test_config();
         config.model_path = dir.path().to_path_buf();
@@ -583,6 +584,7 @@ mod tests {
 
     #[test]
     fn test_decision_pipeline_load_model_without_tokenizer_lists_tokenizer_paths() {
+        crate::i18n::init(); // 过滤隔离运行时兜底：tr() 未初始化回落裸键名
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("model.onnx"), b"fake onnx").expect("write model");
         let mut config = test_config();
@@ -610,6 +612,7 @@ mod tests {
     // 与 onnx_engine::resolve_local_bundle 同一契约，探测先于 Session 构建）
     #[test]
     fn test_decision_pipeline_load_bad_explicit_tokenizer_errors() {
+        crate::i18n::init(); // 过滤隔离运行时兜底：tr() 未初始化回落裸键名
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("model.onnx"), b"fake onnx").expect("write model");
         std::fs::write(dir.path().join("tokenizer.json"), b"{}").expect("write root tokenizer");

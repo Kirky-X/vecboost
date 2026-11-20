@@ -1177,7 +1177,9 @@ async fn test_admin_replay_endpoint_403_200_404_branches() {
     )
     .await;
     assert_eq!(status, 403, "非 admin 角色必须 403，got {status}: {body}");
-    assert_eq!(body["error"]["code"], "FORBIDDEN");
+    // 统一错误契约（A-⑩）：403 与 404 同用 sdforge UnifiedError 顶层形状
+    // （code=FORBIDDEN），不再嵌套 error envelope。
+    assert_eq!(body["code"], "FORBIDDEN");
 
     // admin 命中：200 + 事件 JSON。
     let (status, body) = send_admin_request(
@@ -1239,7 +1241,8 @@ async fn test_admin_cache_explain_endpoint_403_and_200() {
     )
     .await;
     assert_eq!(status, 403, "非 admin 角色必须 403，got {status}: {body}");
-    assert_eq!(body["error"]["code"], "FORBIDDEN");
+    // 统一错误契约（A-⑩）：顶层 UnifiedError 形状，与 404 同构。
+    assert_eq!(body["code"], "FORBIDDEN");
 
     // admin：200 且三级字段齐全（测试 kit 未装配语义缓存 → 全未命中，
     // l3_would_compute=true——与 cache_explain_handler 的未装配分支一致）。

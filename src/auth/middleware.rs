@@ -187,23 +187,19 @@ pub async fn auth_middleware(
     }
 }
 
-/// 403 响应:统一错误 envelope 结构中携带 i18n 消息(而非裸 StatusCode)。
+/// 403 响应：sdforge `UnifiedError` 顶层形状（A-⑩ 契约统一，pre-1.0 允许）。
+///
+/// 此前为嵌套 envelope `{"success":false,"error":{...}}`，与 handler 层
+/// `ApiError` 渲染的顶层 `{code, message, ...}` 载荷并存——同一服务两种
+/// 4xx 形状。现复用 `UnifiedError` 渲染（与 404 `ApiError::NotFound` 同构，
+/// 经同一 `render_http` 出口）：i18n 消息键（`auth-admin-required`）不变，
+/// garrison 依赖行为不变（中间件返回的 Response 原样下发）。
+/// 爆炸半径核查（A-⑩）：仓内仅 `src/api/tests.rs` 两处断言嵌套形状（已
+/// 同步更新）；docs/examples/bindings 无该形状消费者，无仓外消费证据。
 fn forbidden_response() -> Response {
-    use axum::http::header;
-    let body = serde_json::json!({
-        "success": false,
-        "error": {
-            "code": "FORBIDDEN",
-            "message": crate::i18n::tr("auth-admin-required"),
-        }
-    });
-    let mut resp = Response::new(axum::body::Body::from(body.to_string()));
-    *resp.status_mut() = StatusCode::FORBIDDEN;
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    resp
+    let unified =
+        sdforge::error::UnifiedError::new("FORBIDDEN", crate::i18n::tr("auth-admin-required"));
+    sdforge::error::unified::render_http(StatusCode::FORBIDDEN, &unified)
 }
 
 /// 401 响应：结构化错误体（与 handler 层错误契约 `{type, message, field, value}` 一致）。
@@ -600,7 +596,8 @@ mod tests {
 
     // RBAC 路径→角色映射契约测试
 
-    /// 403 响应结构验证:含 i18n 消息与 FORBIDDEN 错误码
+    /// 403 响应结构验证（A-⑩ 契约统一）：顶层 UnifiedError 载荷
+    /// （code=FORBIDDEN），不再嵌套 `error` envelope。
     #[test]
     fn forbidden_response_has_correct_status_and_json_body() {
         let resp = forbidden_response();
@@ -612,6 +609,23 @@ mod tests {
                 .to_str()
                 .unwrap(),
             "application/json"
+        );
+        let bytes = tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(async {
+                axum::body::to_bytes(resp.into_body(), usize::MAX)
+                    .await
+                    .unwrap()
+            });
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+        assert_eq!(body["code"], "FORBIDDEN");
+        assert!(
+            body["message"].as_str().is_some_and(|m| !m.is_empty()),
+            "i18n 消息必须保留: {body}"
+        );
+        assert!(
+            body.get("error").is_none(),
+            "不得再携带嵌套 error envelope: {body}"
         );
     }
 

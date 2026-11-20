@@ -143,9 +143,12 @@ async fn rerank_handler(req: RerankRequest) -> Result<RerankResponse, ApiError> 
                 .map_err(to_api_error)?;
         }
     }
+    // caller 提取移到服务读锁之前（性能 LOW-1）：off（默认）由门控跳过
+    // token 解析——会话后端为 database 时持锁提取是一次锁内 DB 往返；
+    // user 模式先提取再取锁，同样不持锁等待 DB。
+    let caller = crate::caller::current_caller_id_gated().await;
     let (svc, max_documents, max_query_length) = load_rerank_service().await?;
     let guard = svc.read().await;
-    let caller = crate::caller::current_caller_id().await;
     guard
         .process_rerank_with_caller(req, max_documents, max_query_length, &caller)
         .await
@@ -154,11 +157,11 @@ async fn rerank_handler(req: RerankRequest) -> Result<RerankResponse, ApiError> 
 
 #[cfg(any(feature = "http", feature = "grpc"))]
 async fn rerank_batch_handler(req: BatchRerankRequest) -> Result<BatchRerankResponse, ApiError> {
+    // 与单条路径 rerank_handler 同口径：先于读锁提取（off 门控跳过解析），
+    // 批量循环外提取一次透传，避免批量请求落入 shared anonymous 桶。
+    let caller = crate::caller::current_caller_id_gated().await;
     let (svc, max_documents, max_query_length) = load_rerank_service().await?;
     let guard = svc.read().await;
-    // 与单条路径 rerank_handler 同链提取调用方（current_caller_id），
-    // 批量循环外提取一次透传，避免批量请求落入 shared anonymous 桶。
-    let caller = crate::caller::current_caller_id().await;
     rerank_batch_with_caller(&guard, req, max_documents, max_query_length, &caller)
         .await
         .map_err(to_api_error)

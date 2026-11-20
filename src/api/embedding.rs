@@ -348,9 +348,11 @@ async fn embed_handler(req: EmbedRequest) -> Result<EmbedResponse, ApiError> {
         .kit
         .require::<EmbeddingModule>()
         .map_err(kit_internal_error)?;
+    // caller 提取移到服务读锁之前（性能 LOW-1）：off（默认）由门控跳过
+    // token 解析——会话后端为 database 时持锁提取是一次锁内 DB 往返；
+    // user 模式先提取再取锁。off 模式 caller 不参与键与隔离判定，行为不变。
+    let caller = crate::caller::current_caller_id_gated().await;
     let guard = svc.read().await;
-    // caller 取服务端认证态用户名（无认证态回退 anonymous），透传至语义缓存分区。
-    let caller = crate::caller::current_caller_id().await;
     guard
         .process_text_with_caller(req, None, &caller)
         .await

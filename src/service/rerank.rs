@@ -143,9 +143,11 @@ impl RerankService {
         let engine = self.engine.clone();
         let query = query.to_string();
         let documents_vec = documents.to_vec();
-        // user 隔离模式：缓存键前缀 {caller}:；off 模式前缀为空（既有键格式不变）。
+        // user 隔离模式：缓存键前缀 {caller_digest}:——caller 经 SHA-256 全长
+        // 十六进制摘要（与语义缓存 L1 键、Redis 层 digest 粒度一致，raw caller
+        // 不落键）；off 模式前缀为空（既有键格式逐字节不变）。
         let caller_prefix = if self.isolation.is_enabled() {
-            format!("{}:", caller_id)
+            format!("{}:", crate::utils::hash::sha256_hex(caller_id.as_bytes()))
         } else {
             String::new()
         };
@@ -386,6 +388,129 @@ mod tests {
             2,
             "bob 必须 miss 并触发自身计算"
         );
+    }
+
+    /// 键格式钉（安全 LOW-1）：user 隔离模式下 rerank 缓存键 caller 前缀
+    /// 必须是 SHA-256 摘要，raw caller 不得出现在键面；off 模式键格式
+    /// 逐字节不变。以预填 digest 键命中（engine 零调用）正向钉住。
+    #[tokio::test]
+    async fn test_rerank_cache_key_caller_digest_in_user_mode() {
+        use crate::utils::hash::sha256_hex;
+        let calls = Arc::new(AtomicU64::new(0));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(CountingRerankEngine {
+                calls: calls.clone(),
+            }));
+        let cache = Arc::new(OxCacheBackend::with_ttl(100, None));
+        let service = RerankService::with_cache(engine, None, Arc::clone(&cache))
+            .with_caller_isolation(crate::cache::CallerIsolation::User);
+
+        // 预填 digest 键（model_config=None → model 段为 "unknown"）。
+        let digest_key = format!(
+            "rerank:{}:unknown:{}:{:016x}",
+            sha256_hex(b"alice"),
+            xxhash_rust::xxh3::xxh3_128(b"same query"),
+            xxhash_rust::xxh3::xxh3_128(b"same doc"),
+        );
+        cache.put(&digest_key, vec![0.42]).await;
+
+        let resp = service
+            .process_rerank_with_caller(
+                RerankRequest {
+                    query: "same query".to_string(),
+                    documents: vec!["same doc".to_string()],
+                    top_k: None,
+                    return_documents: Some(false),
+                },
+                10,
+                8192,
+                "alice",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "digest 键必须直接命中（键前缀为 SHA-256 摘要）"
+        );
+        assert!(
+            (resp.results[0].score - 0.42).abs() < 1e-6,
+            "命中值必须来自预填 digest 键"
+        );
+
+        // raw caller 键不得被命中：移除 digest 键后预填 raw 键，必须 miss
+        // 计算回填（若查找误用 raw 键，将命中 0.99 且零计算）。
+        cache.remove(&digest_key).await;
+        let raw_key = format!(
+            "rerank:alice:unknown:{}:{:016x}",
+            xxhash_rust::xxh3::xxh3_128(b"same query"),
+            xxhash_rust::xxh3::xxh3_128(b"same doc"),
+        );
+        cache.put(&raw_key, vec![0.99]).await;
+        let resp = service
+            .process_rerank_with_caller(
+                RerankRequest {
+                    query: "same query".to_string(),
+                    documents: vec!["same doc".to_string()],
+                    top_k: None,
+                    return_documents: Some(false),
+                },
+                10,
+                8192,
+                "alice",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "raw caller 键不得被 user 模式查找命中"
+        );
+        assert!(
+            (resp.results[0].score - 0.08).abs() < 1e-6,
+            "miss 后必须计算回填（引擎计分 8/100），got: {}",
+            resp.results[0].score
+        );
+    }
+
+    /// off 模式键格式逐字节不变钉：预填既有裸键（无 caller 前缀）必须命中。
+    #[tokio::test]
+    async fn test_rerank_cache_key_off_mode_byte_identical() {
+        let calls = Arc::new(AtomicU64::new(0));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(CountingRerankEngine {
+                calls: calls.clone(),
+            }));
+        let cache = Arc::new(OxCacheBackend::with_ttl(100, None));
+        let service = RerankService::with_cache(engine, None, Arc::clone(&cache))
+            .with_caller_isolation(crate::cache::CallerIsolation::Off);
+
+        let off_key = format!(
+            "rerank:unknown:{}:{:016x}",
+            xxhash_rust::xxh3::xxh3_128(b"same query"),
+            xxhash_rust::xxh3::xxh3_128(b"same doc"),
+        );
+        cache.put(&off_key, vec![0.77]).await;
+        let resp = service
+            .process_rerank_with_caller(
+                RerankRequest {
+                    query: "same query".to_string(),
+                    documents: vec!["same doc".to_string()],
+                    top_k: None,
+                    return_documents: Some(false),
+                },
+                10,
+                8192,
+                "alice",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "off 模式键必须与既有格式逐字节一致（caller 传入被忽略）"
+        );
+        assert!((resp.results[0].score - 0.77).abs() < 1e-6);
     }
 
     /// Mock engine that returns deterministic rerank scores based on document length

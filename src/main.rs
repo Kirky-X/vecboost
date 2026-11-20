@@ -833,6 +833,12 @@ async fn init_engine_and_services(
     // caller_isolation 单一解析点：无条件解析（非法值 Err 中止启动），
     // 语义缓存与 rerank 生产构造共用本次解析结果，不再各自解析。
     let caller_isolation = parse_caller_isolation(config)?;
+    // handler 侧 caller 提取门控（无锁 AtomicBool，性能 LOW-2）：user 模式
+    // 启用提取，off（默认）跳过——每请求不再白付 token 解析 + String 分配。
+    // MCP/CLI/server 三种 kit 装配共用本单一注入点。
+    vecboost::caller::set_caller_isolation_enabled(
+        caller_isolation == vecboost::CallerIsolation::User,
+    );
     let model_config = resolve_engine_model_config(config)?;
     let engine_type = model_config.engine_type.clone();
 

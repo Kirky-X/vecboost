@@ -317,11 +317,19 @@ impl SemanticCache {
         self
     }
 
-    /// 精确层缓存键：off 维持 `text:{model_id}:{text}`，
-    /// user 模式附加 caller 维度 `text:{model_id}:{caller}:{text}`。
+    /// 精确层缓存键：off 维持 `text:{model_id}:{text}`（逐字节不变），
+    /// user 模式附加 caller 维度 `text:{model_id}:{caller_digest}:{text}`。
+    /// caller 段经 SHA-256 全长十六进制摘要（与 Redis 层
+    /// `redis_semantic_index::digest` 粒度一致，两层键空间同构），raw caller
+    /// 不落键——键面可经诊断/共享层导出，属低敏面，不得携带原始身份。
     fn cache_key(&self, model_id: &str, caller_id: &str, text: &str) -> String {
         if self.isolation.is_enabled() {
-            format!("text:{}:{}:{}", model_id, caller_id, text)
+            format!(
+                "text:{}:{}:{}",
+                model_id,
+                crate::utils::hash::sha256_hex(caller_id.as_bytes()),
+                text
+            )
         } else {
             format!("text:{}:{}", model_id, text)
         }
@@ -617,9 +625,17 @@ impl SemanticCache {
             ComparisonMode::I8 => (Some(quantize_i8(&embedding)), None),
             ComparisonMode::Binary => (None, Some(quantize_binary(&embedding))),
         };
+        // caller 字段：off 模式恒存空串——不参与键与隔离判定（与 Redis 侧
+        // off 归一化为 "" 的既有口径一致），避免「注释称空串、实存传入值」
+        // 的歧义；user 模式存传入 caller（fuzzy 分区内检索 + explain 诊断展示）。
+        let caller = if self.isolation.is_enabled() {
+            caller_id.to_string()
+        } else {
+            String::new()
+        };
         index.push(SemanticEntry {
             model_id: model_id.to_string(),
-            caller: caller_id.to_string(),
+            caller,
             trigrams: pack_trigrams(text.as_bytes()),
             embedding,
             i8code,
@@ -907,6 +923,66 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(b, vec![1.0], "off 模式 caller 不参与键，bob 应命中");
+    }
+
+    /// 键格式钉（安全 LOW-1）：user 模式 L1 键 caller 段必须是 SHA-256 摘要，
+    /// raw caller 不得出现在键面；off 模式键与既有格式逐字节一致。
+    #[tokio::test]
+    async fn test_cache_key_caller_digest_in_user_mode_and_off_byte_identical() {
+        use crate::utils::hash::sha256_hex;
+        let user_cache =
+            SemanticCache::with_capacity(0.7, 100).with_caller_isolation(CallerIsolation::User);
+        user_cache
+            .get_or_compute_for_caller("m", "alice", "shared text", || async { Ok(vec![1.0]) })
+            .await
+            .unwrap();
+        let digest_key = format!("text:{}:{}:{}", "m", sha256_hex(b"alice"), "shared text");
+        let raw_key = "text:m:alice:shared text";
+        assert!(
+            user_cache.exact_cache.get(&digest_key).await.is_some(),
+            "user 模式键必须以 caller 摘要落键：{digest_key}"
+        );
+        assert!(
+            user_cache.exact_cache.get(raw_key).await.is_none(),
+            "raw caller 不得出现在键面：{raw_key}"
+        );
+
+        // off 模式键逐字节不变（预 1.0 键演进只发生在 user 模式）。
+        let off_cache =
+            SemanticCache::with_capacity(0.7, 100).with_caller_isolation(CallerIsolation::Off);
+        off_cache
+            .get_or_compute_for_caller("m", "alice", "shared text", || async { Ok(vec![1.0]) })
+            .await
+            .unwrap();
+        assert!(
+            off_cache
+                .exact_cache
+                .get("text:m:shared text")
+                .await
+                .is_some(),
+            "off 模式键必须与既有格式逐字节一致"
+        );
+    }
+
+    /// ⑥ 统一钉：off 模式语义索引条目 caller 恒存空串（不参与键与隔离判定），
+    /// explain 诊断的 caller_scope 同口径；user 模式存传入 caller。
+    #[tokio::test]
+    async fn test_local_index_caller_empty_in_off_mode() {
+        let off =
+            SemanticCache::with_capacity(0.7, 100).with_caller_isolation(CallerIsolation::Off);
+        off.insert_to_index_for_caller("m", "alice", "alpha text", vec![1.0])
+            .await;
+        let index = off.semantic_index.read().await;
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[0].caller, "", "off 模式条目 caller 必须为空串");
+        drop(index);
+
+        let user =
+            SemanticCache::with_capacity(0.7, 100).with_caller_isolation(CallerIsolation::User);
+        user.insert_to_index_for_caller("m", "bob", "alpha text", vec![1.0])
+            .await;
+        let index = user.semantic_index.read().await;
+        assert_eq!(index[0].caller, "bob", "user 模式条目必须携带 caller 分区");
     }
 
     /// 计算两个字符串的字符级 trigram Jaccard 相似度（测试辅助函数）。

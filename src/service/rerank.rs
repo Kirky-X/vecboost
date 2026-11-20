@@ -66,6 +66,30 @@ impl RerankService {
         Self::build(engine, model_config, Arc::new(OxCacheBackend::disabled()))
     }
 
+    /// 缓存启用的生产构造（`[rerank] cache_enabled=true` 装配消费点）。
+    ///
+    /// 进程内精确缓存，与语义缓存 L1 装配先例同构
+    /// （`SemanticCache::with_capacity` 内建 `OxCacheBackend::new`）：纯内存、
+    /// 无 WAL/Redis——RerankConfig 无持久化字段，不发明第二配置来源。
+    /// 装配侧必须以 `cache_enabled && cache_size > 0` 门控后才调用本构造
+    ///（见 `main.rs::build_rerank_service`）；`cache_is_enabled()` 供装配断言。
+    pub fn with_cache_capacity(
+        engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,
+        model_config: Option<ModelConfig>,
+        capacity: usize,
+    ) -> Self {
+        Self::build(
+            engine,
+            model_config,
+            Arc::new(OxCacheBackend::new(capacity)),
+        )
+    }
+
+    /// rerank 精确缓存是否启用（装配断言/诊断用）。
+    pub fn cache_is_enabled(&self) -> bool {
+        self.cache.is_enabled()
+    }
+
     #[allow(private_interfaces)]
     pub fn with_cache(
         engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>>,

@@ -645,12 +645,29 @@ async fn attach_semantic_cache(
 /// rerank 服务生产构造：消费 `parse_caller_isolation` 单一解析点产出的
 /// 枚举（SECURITY.md「四层分区」承诺的 rerank 缓存层）：off→Off、
 /// user→User。非法值已在单一解析点报错，本函数无失败路径。
+/// 同时消费 `[rerank] cache_enabled`（默认 false = disabled 零变化；此前
+/// 该键全仓无消费点，缓存恒禁用）：true 且 cache_size>0 时按容量构建
+/// 进程内精确缓存（与语义缓存 L1 同构，纯内存），隔离随启用即生效。
 fn build_rerank_service(
     engine: Arc<tokio::sync::RwLock<dyn vecboost::engine::InferenceEngine + Send + Sync>>,
     model_config: ModelConfig,
     caller_isolation: vecboost::CallerIsolation,
+    rerank_config: &vecboost::RerankConfig,
 ) -> RerankService {
-    RerankService::new(engine, Some(model_config)).with_caller_isolation(caller_isolation)
+    let cache_enabled = rerank_config.cache_enabled && rerank_config.cache_size > 0;
+    let service = if cache_enabled {
+        log::info!(
+            "{}",
+            vecboost::i18n::tr_with_args(
+                "log-main-rerank-cache-enabled",
+                vecboost::i18n::tr_args(&[("size", &rerank_config.cache_size.to_string())])
+            )
+        );
+        RerankService::with_cache_capacity(engine, Some(model_config), rerank_config.cache_size)
+    } else {
+        RerankService::new(engine, Some(model_config))
+    };
+    service.with_caller_isolation(caller_isolation)
 }
 
 /// 转录服务装配：`[transcribe] enabled=true` 时经公开门面
@@ -902,6 +919,7 @@ async fn init_engine_and_services(
         engine.clone(),
         model_config.clone(),
         caller_isolation,
+        &config.rerank,
     )));
 
     // 决策服务无条件预构建（零成本，三种模式签名统一）：非 decision 配置下
@@ -3500,7 +3518,12 @@ mod tests {
         // 默认配置：off → Off（行为不变）
         let config = VecboostConfig::default();
         let isolation = parse_caller_isolation(&config).expect("默认配置解析必须成功");
-        let service = build_rerank_service(engine.clone(), model_config.clone(), isolation);
+        let service = build_rerank_service(
+            engine.clone(),
+            model_config.clone(),
+            isolation,
+            &config.rerank,
+        );
         assert_eq!(
             service.caller_isolation(),
             vecboost::CallerIsolation::Off,
@@ -3511,12 +3534,76 @@ mod tests {
         let mut config = VecboostConfig::default();
         config.semantic_cache.caller_isolation = "user".to_string();
         let isolation = parse_caller_isolation(&config).expect("user 配置解析必须成功");
-        let service = build_rerank_service(engine.clone(), model_config.clone(), isolation);
+        let service = build_rerank_service(
+            engine.clone(),
+            model_config.clone(),
+            isolation,
+            &config.rerank,
+        );
         assert_eq!(
             service.caller_isolation(),
             vecboost::CallerIsolation::User,
             "caller_isolation=user 时生产构造必须产出 User 隔离"
         );
+    }
+
+    // 装配钉：[rerank] cache_enabled 消费（默认 false = disabled 零变化；
+    // true 且 cache_size>0 时构建进程内精确缓存，四层分区承诺兑现）。
+    #[test]
+    fn rerank_production_assembly_consumes_cache_enabled() {
+        vecboost::i18n::init();
+        let engine: Arc<tokio::sync::RwLock<dyn vecboost::engine::InferenceEngine + Send + Sync>> =
+            Arc::new(tokio::sync::RwLock::new(AssemblyMockEngine));
+        let model_config = ModelConfig::default();
+
+        // 默认配置：cache_enabled=false → 缓存恒禁用（行为不变）。
+        let config = VecboostConfig::default();
+        assert!(
+            !config.rerank.cache_enabled,
+            "默认 cache_enabled 必须为 false（新能力默认关闭）"
+        );
+        let service = build_rerank_service(
+            engine.clone(),
+            model_config.clone(),
+            vecboost::CallerIsolation::Off,
+            &config.rerank,
+        );
+        assert!(
+            !service.cache_is_enabled(),
+            "默认装配必须产出 disabled 缓存"
+        );
+
+        // cache_enabled=true + cache_size>0 → 缓存真实启用。
+        let mut config = VecboostConfig::default();
+        config.rerank.cache_enabled = true;
+        config.rerank.cache_size = 128;
+        let service = build_rerank_service(
+            engine.clone(),
+            model_config.clone(),
+            vecboost::CallerIsolation::User,
+            &config.rerank,
+        );
+        assert!(
+            service.cache_is_enabled(),
+            "cache_enabled=true 时生产构造必须产出可用缓存"
+        );
+        assert_eq!(
+            service.caller_isolation(),
+            vecboost::CallerIsolation::User,
+            "缓存启用后隔离仍须随装配注入"
+        );
+
+        // cache_enabled=true 但 cache_size=0 → 与 embedding 装配同口径禁用。
+        let mut config = VecboostConfig::default();
+        config.rerank.cache_enabled = true;
+        config.rerank.cache_size = 0;
+        let service = build_rerank_service(
+            engine.clone(),
+            model_config.clone(),
+            vecboost::CallerIsolation::Off,
+            &config.rerank,
+        );
+        assert!(!service.cache_is_enabled(), "cache_size=0 必须禁用");
     }
 
     // 绑定安全闸门 —— 回环放行 / 非回环拒绝 / 逃生阀放行并告警

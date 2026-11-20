@@ -188,8 +188,13 @@ pub struct RerankConfig {
     pub max_documents_per_query: usize,
     #[garde(range(min = 1))]
     pub max_query_length: usize,
+    /// rerank 精确缓存开关（默认 `false` = 恒禁用，行为不变）。`true` 时按
+    /// `cache_size` 构建进程内精确缓存（与语义缓存 L1 同构，纯内存，无
+    /// WAL/Redis——本段无持久化字段）；caller_isolation=user 时缓存按
+    /// 调用方 SHA-256 摘要分区（SECURITY.md「四层分区」）。
     #[garde(skip)]
     pub cache_enabled: bool,
+    /// rerank 精确缓存容量（条目数；`cache_enabled = true` 时生效）。
     #[garde(skip)]
     pub cache_size: usize,
 }
@@ -1210,7 +1215,10 @@ impl Default for RerankConfig {
         Self {
             max_documents_per_query: DEFAULT_MAX_DOCUMENTS_PER_QUERY,
             max_query_length: DEFAULT_MAX_QUERY_LENGTH,
-            cache_enabled: true,
+            // 默认 false = 恒禁用：装配前该键无消费点时旧默认 true 无行为
+            // 含义；接线消费后（build_rerank_service / 库门面装配）必须以
+            // off 为默认，保证「新能力默认关闭、默认部署零行为变化」。
+            cache_enabled: false,
             cache_size: DEFAULT_CACHE_SIZE,
         }
     }

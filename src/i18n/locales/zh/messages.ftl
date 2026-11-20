@@ -365,6 +365,7 @@ log-main-tokenizer-noop = [model].tokenizer_path 已配置但没有消费者匹�
 log-main-kvcache-enabled = KV Cache 已启用，容量：{ $size }
 log-main-kvcache-wal = 嵌入缓存 WAL 持久化已启用：{ $path }（压缩阈值 { $bytes } 字节）
 log-main-kvcache-disabled = KV Cache 已禁用
+log-main-rerank-cache-enabled = Rerank 精确缓存已启用，容量：{ $size }（[rerank] cache_enabled；caller_isolation = "user" 时按调用方分区）
 log-main-residency = 模型驻留：max_resident_models={ $max } budget_mb={ $budget }
 log-main-semantic-mode-deprecated = [semantic_cache] comparison_mode={ $mode } 已废弃，本版本不产生任何效果（恒为 exact）
 log-main-semantic-enabled = 语义缓存已启用：threshold={ $threshold } fuzzy_threshold={ $fuzzy } capacity={ $capacity }

@@ -61,14 +61,14 @@ pub struct LibraryConfig {
     pub model_config: ModelConfig,
     /// 嵌入缓存大小（0 = 禁用缓存）
     pub cache_size: usize,
-    /// 重排序配置（None = 使用默认值）
+    /// 重排序配置（None = 使用默认值）。`rerank_config.cache_enabled` 在
+    /// 库装配期消费（与 server 模式同口径）；None = 默认值 = 缓存禁用。
     pub rerank_config: Option<RerankConfig>,
     /// 调用方隔离模式（默认 Off = 缓存键行为不变）。取值语义与 server 模式
-    /// `[semantic_cache] caller_isolation` 一致，但**库门面 `rerank()` /
-    /// `rerank_sync()` 不携带调用方身份**：User 模式下经门面的请求落入
-    /// 单一共享 `"anonymous"` 分区，不产生按调用方分区；需要按调用方隔离
-    /// 的嵌入方应直调 `RerankService::process_rerank_with_caller` 并显式
-    /// 传 caller。库路径无配置上下文，经本参数显式传入。
+    /// `[semantic_cache] caller_isolation` 一致。库门面 `rerank()` /
+    /// `rerank_sync()` / `embed()` 保留 anonymous 语义（单一共享分区）；
+    /// 需要按调用方隔离的嵌入方经 `rerank_with_caller()` /
+    /// `rerank_sync_with_caller()` / `embed_with_caller()` 显式传 caller。
     pub caller_isolation: crate::cache::CallerIsolation,
 }
 
@@ -122,19 +122,34 @@ impl VecBoostLibrary {
             )))
         };
 
-        // 3. 创建 RerankService（隔离模式经 LibraryConfig 显式传入；门面
-        // rerank() 不携带调用方身份，User 模式下经门面的请求落入单一共享
-        // "anonymous" 分区，按调用方隔离需直调 process_rerank_with_caller）
-        let rerank_service = Arc::new(RwLock::new(
-            RerankService::new(engine, Some(config.model_config))
+        // 3. 创建 RerankService：隔离模式经 LibraryConfig 显式传入。门面
+        // rerank()/rerank_sync() 保留 anonymous 语义；携带调用方身份经
+        // rerank_with_caller()/rerank_sync_with_caller()（user 隔离模式下
+        // 各 caller 独立分区）。[rerank] cache_enabled 消费（与 server 模式
+        // build_rerank_service 同口径）：true 且 cache_size>0 时构建进程内
+        // 精确缓存，false（默认）disabled 零变化。
+        let rerank_config = config.rerank_config.clone().unwrap_or_default();
+        let rerank_service = if rerank_config.cache_enabled && rerank_config.cache_size > 0 {
+            Arc::new(RwLock::new(
+                RerankService::with_cache_capacity(
+                    engine.clone(),
+                    Some(config.model_config.clone()),
+                    rerank_config.cache_size,
+                )
                 .with_caller_isolation(config.caller_isolation),
-        ));
+            ))
+        } else {
+            Arc::new(RwLock::new(
+                RerankService::new(engine, Some(config.model_config))
+                    .with_caller_isolation(config.caller_isolation),
+            ))
+        };
 
         // 4. 构建最小 AsyncKit（仅 EmbeddingModule + RerankModule）
         let mut kit = trait_kit::AsyncKit::new();
         kit.set_config(embedding_service);
         kit.set_config(rerank_service);
-        kit.set_config(config.rerank_config.unwrap_or_default());
+        kit.set_config(rerank_config);
         kit.register::<EmbeddingModule>().map_err(|e| {
             VecboostError::InternalError(crate::i18n::tr_with_args(
                 "detail-failed-to-register-embeddingmodule-bdd55",
@@ -162,8 +177,26 @@ impl VecBoostLibrary {
 
     // 异步 API
 
-    /// 异步向量化：将单条文本转换为向量表示
+    /// 异步向量化：将单条文本转换为向量表示。
+    ///
+    /// 旧方法保留 **anonymous 语义**（与库门面既有行为一致）：caller 固定
+    /// 归并桶，不携带调用方身份。需要按调用方分区的嵌入方（user 隔离模式）
+    /// 经 [`VecBoostLibrary::embed_with_caller`] 显式传 caller。
     pub async fn embed(&self, text: &str) -> Result<EmbedResponse, VecboostError> {
+        self.embed_with_caller(text, crate::caller::ANONYMOUS_CALLER)
+            .await
+    }
+
+    /// 异步向量化（带调用方身份）：user 隔离模式下按 caller 分区语义缓存。
+    ///
+    /// 与 [`VecBoostLibrary::embed`] 同构，显式携带 `caller`——caller 语义
+    /// 与 server 模式一致：仅用于缓存分区，不做认证校验；off 模式下该参数
+    /// 被缓存忽略，行为与 anonymous 路径一致。
+    pub async fn embed_with_caller(
+        &self,
+        text: &str,
+        caller: &str,
+    ) -> Result<EmbedResponse, VecboostError> {
         let service = self.kit.require::<EmbeddingModule>().map_err(|e| {
             VecboostError::InternalError(crate::i18n::tr_with_args(
                 "detail-failed-to-require-embeddingmodule-c3bff",
@@ -171,12 +204,13 @@ impl VecBoostLibrary {
             ))
         })?;
         let svc = service.read().await;
-        svc.process_text(
+        svc.process_text_with_caller(
             EmbedRequest {
                 text: text.to_string(),
                 normalize: None,
             },
             None,
+            caller,
         )
         .await
     }
@@ -201,12 +235,32 @@ impl VecBoostLibrary {
         .await
     }
 
-    /// 异步重排序：对查询和文档列表计算相关性分数，返回按分数降序排列的结果
+    /// 异步重排序：对查询和文档列表计算相关性分数，返回按分数降序排列的结果。
+    ///
+    /// 旧方法保留 **anonymous 语义**（与库门面既有行为一致）：caller 固定
+    /// 归并桶。user 隔离模式下需要按调用方分区的嵌入方经
+    /// [`VecBoostLibrary::rerank_with_caller`] 显式传 caller。
     pub async fn rerank(
         &self,
         query: &str,
         documents: &[String],
         top_k: Option<usize>,
+    ) -> Result<RerankResponse, VecboostError> {
+        self.rerank_with_caller(query, documents, top_k, crate::caller::ANONYMOUS_CALLER)
+            .await
+    }
+
+    /// 异步重排序（带调用方身份）：user 隔离模式下按 caller 分区 rerank 缓存。
+    ///
+    /// 与 [`VecBoostLibrary::rerank`] 同构，显式携带 `caller`；caller 语义
+    /// 与 server 模式一致：仅用于缓存分区，不做认证校验；off 模式下该参数
+    /// 被忽略，行为与 anonymous 路径一致。
+    pub async fn rerank_with_caller(
+        &self,
+        query: &str,
+        documents: &[String],
+        top_k: Option<usize>,
+        caller: &str,
     ) -> Result<RerankResponse, VecboostError> {
         let service = self.kit.require::<RerankModule>().map_err(|e| {
             VecboostError::InternalError(crate::i18n::tr_with_args(
@@ -216,7 +270,7 @@ impl VecBoostLibrary {
         })?;
         let rerank_config = self.kit.config::<RerankConfig>().ok().unwrap_or_default();
         let svc = service.read().await;
-        svc.process_rerank(
+        svc.process_rerank_with_caller(
             RerankRequest {
                 query: query.to_string(),
                 documents: documents.to_vec(),
@@ -225,6 +279,7 @@ impl VecBoostLibrary {
             },
             rerank_config.max_documents_per_query,
             rerank_config.max_query_length,
+            caller,
         )
         .await
     }
@@ -254,6 +309,21 @@ impl VecBoostLibrary {
         top_k: Option<usize>,
     ) -> Result<RerankResponse, VecboostError> {
         let future = self.rerank(query, documents, top_k);
+        Self::block_on_future(future)
+    }
+
+    /// 同步重排序（带调用方身份）：user 隔离模式下按 caller 分区 rerank 缓存。
+    ///
+    /// 与 [`VecBoostLibrary::rerank_with_caller`] 同构的同步入口；在已有
+    /// tokio runtime 上下文中调用会返回错误，应使用异步变体。
+    pub fn rerank_sync_with_caller(
+        &self,
+        query: &str,
+        documents: &[String],
+        top_k: Option<usize>,
+        caller: &str,
+    ) -> Result<RerankResponse, VecboostError> {
+        let future = self.rerank_with_caller(query, documents, top_k, caller);
         Self::block_on_future(future)
     }
 
@@ -429,12 +499,27 @@ impl VecBoostModuleBuilder {
         }
 
         if self.with_rerank {
-            let rerank_service = Arc::new(RwLock::new(
-                RerankService::new(engine, Some(self.model_config))
+            // [rerank] cache_enabled 消费（与 VecBoostLibrary::new /
+            // server 模式 build_rerank_service 同口径）：true 且 cache_size>0
+            // 时构建进程内精确缓存，false（默认）disabled 零变化。
+            let rerank_config = self.rerank_config.clone().unwrap_or_default();
+            let rerank_service = if rerank_config.cache_enabled && rerank_config.cache_size > 0 {
+                Arc::new(RwLock::new(
+                    RerankService::with_cache_capacity(
+                        engine.clone(),
+                        Some(self.model_config.clone()),
+                        rerank_config.cache_size,
+                    )
                     .with_caller_isolation(self.caller_isolation),
-            ));
+                ))
+            } else {
+                Arc::new(RwLock::new(
+                    RerankService::new(engine, Some(self.model_config))
+                        .with_caller_isolation(self.caller_isolation),
+                ))
+            };
             kit.set_config(rerank_service);
-            kit.set_config(self.rerank_config.unwrap_or_default());
+            kit.set_config(rerank_config);
             kit.register::<RerankModule>().map_err(|e| {
                 VecboostError::InternalError(crate::i18n::tr_with_args(
                     "detail-failed-to-register-rerankmodule-a244b",
@@ -896,5 +981,230 @@ mod tests {
         let mut engine = MockEngine::new(64);
         let cfg = ModelConfig::default();
         let _ = engine.try_fallback_to_cpu(&cfg).await;
+    }
+
+    // ── 门面级 caller 供给 API（②）与隔离钉 ──────────────────────────
+
+    /// 计数重排引擎：rerank_batch 调用次数区分缓存命中/未命中。
+    struct CountingFacadeRerankEngine {
+        calls: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    #[async_trait]
+    impl InferenceEngine for CountingFacadeRerankEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            Ok(vec![0.0; 8])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        fn rerank(&self, _q: &str, doc: &str) -> Result<f32, VecboostError> {
+            Ok((doc.len() as f32) / 100.0)
+        }
+        fn rerank_batch(&self, query: &str, docs: &[String]) -> Result<Vec<f32>, VecboostError> {
+            use std::sync::atomic::Ordering;
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            docs.iter().map(|d| self.rerank(query, d)).collect()
+        }
+        fn supports_rerank(&self) -> bool {
+            true
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    /// 计数嵌入引擎：embed 调用次数区分语义缓存命中/未命中。
+    struct CountingFacadeEmbedEngine {
+        calls: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    #[async_trait]
+    impl InferenceEngine for CountingFacadeEmbedEngine {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>, VecboostError> {
+            use std::sync::atomic::Ordering;
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(vec![0.5; 8])
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VecboostError> {
+            Ok(texts.iter().map(|_| vec![0.5; 8]).collect())
+        }
+        fn precision(&self) -> &Precision {
+            &Precision::Fp32
+        }
+        fn supports_mixed_precision(&self) -> bool {
+            false
+        }
+        fn rerank(&self, _q: &str, _doc: &str) -> Result<f32, VecboostError> {
+            Ok(0.0)
+        }
+        fn rerank_batch(&self, _q: &str, docs: &[String]) -> Result<Vec<f32>, VecboostError> {
+            Ok(docs.iter().map(|_| 0.0).collect())
+        }
+        fn supports_rerank(&self) -> bool {
+            false
+        }
+        async fn try_fallback_to_cpu(
+            &mut self,
+            _config: &ModelConfig,
+        ) -> Result<(), VecboostError> {
+            Ok(())
+        }
+    }
+
+    /// 门面隔离钉（②）：user 隔离 + 缓存启用时，`rerank_with_caller` 两个
+    /// caller 互不可见——alice 二次命中自身分区，bob 必须 miss。
+    #[tokio::test]
+    async fn facade_rerank_with_caller_partitions_per_caller() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let calls = Arc::new(AtomicU64::new(0));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(CountingFacadeRerankEngine {
+                calls: calls.clone(),
+            }));
+        let rerank_service = Arc::new(RwLock::new(
+            RerankService::with_cache_capacity(engine, None, 100)
+                .with_caller_isolation(crate::cache::CallerIsolation::User),
+        ));
+        let mut kit = trait_kit::AsyncKit::new();
+        kit.set_config(rerank_service);
+        kit.set_config(RerankConfig::default());
+        kit.register::<RerankModule>().unwrap();
+        let kit = kit.build().await.unwrap();
+        let lib = VecBoostLibrary { kit: Arc::new(kit) };
+
+        let docs = vec!["same doc".to_string()];
+        lib.rerank_with_caller("same query", &docs, None, "alice")
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "alice 首次必然计算");
+        lib.rerank_with_caller("same query", &docs, None, "alice")
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "alice 二次必须命中自身分区"
+        );
+        lib.rerank_with_caller("same query", &docs, None, "bob")
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "bob 必须 miss，不得命中 alice 分区"
+        );
+    }
+
+    /// 门面隔离钉（②）sync 入口：`rerank_sync_with_caller` 与 async 变体
+    /// 同分区（alice 命中自身缓存），须在无活跃 runtime 的普通线程调用。
+    #[test]
+    fn facade_rerank_sync_with_caller_partitions_per_caller_outside_runtime() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let calls = Arc::new(AtomicU64::new(0));
+        let lib = {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+                    Arc::new(RwLock::new(CountingFacadeRerankEngine {
+                        calls: calls.clone(),
+                    }));
+                let rerank_service = Arc::new(RwLock::new(
+                    RerankService::with_cache_capacity(engine, None, 100)
+                        .with_caller_isolation(crate::cache::CallerIsolation::User),
+                ));
+                let mut kit = trait_kit::AsyncKit::new();
+                kit.set_config(rerank_service);
+                kit.set_config(RerankConfig::default());
+                kit.register::<RerankModule>().unwrap();
+                let kit = kit.build().await.unwrap();
+                VecBoostLibrary { kit: Arc::new(kit) }
+            })
+        };
+        let docs = vec!["same doc".to_string()];
+        lib.rerank_sync_with_caller("same query", &docs, None, "alice")
+            .unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "alice 首次必然计算");
+        lib.rerank_sync_with_caller("same query", &docs, None, "alice")
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "sync 变体必须命中 alice 自身分区"
+        );
+        lib.rerank_sync_with_caller("same query", &docs, None, "bob")
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "bob 必须 miss，不得命中 alice 分区"
+        );
+    }
+
+    /// 门面隔离钉（②）：user 隔离 + 语义缓存启用时，`embed_with_caller`
+    /// 两个 caller 互不可见。
+    #[tokio::test]
+    async fn facade_embed_with_caller_partitions_per_caller() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let calls = Arc::new(AtomicU64::new(0));
+        let engine: Arc<RwLock<dyn InferenceEngine + Send + Sync>> =
+            Arc::new(RwLock::new(CountingFacadeEmbedEngine {
+                calls: calls.clone(),
+            }));
+        let semantic = Arc::new(
+            crate::cache::SemanticCache::with_capacity(0.7, 100)
+                .with_caller_isolation(crate::cache::CallerIsolation::User),
+        );
+        let embedding_service = Arc::new(RwLock::new(
+            EmbeddingService::new(engine, None).with_semantic_cache(semantic),
+        ));
+        let mut kit = trait_kit::AsyncKit::new();
+        kit.set_config(embedding_service);
+        kit.register::<EmbeddingModule>().unwrap();
+        let kit = kit.build().await.unwrap();
+        let lib = VecBoostLibrary { kit: Arc::new(kit) };
+
+        lib.embed_with_caller("shared text", "alice").await.unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "alice 首次必然计算");
+        lib.embed_with_caller("shared text", "alice").await.unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "alice 二次必须命中自身分区"
+        );
+        lib.embed_with_caller("shared text", "bob").await.unwrap();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "bob 必须 miss，不得命中 alice 分区"
+        );
+    }
+
+    /// 旧门面方法保留 anonymous 语义：off 模式下 caller 被忽略，行为不变
+    ///（零行为变化承诺的回归钉）。
+    #[tokio::test]
+    async fn facade_legacy_methods_keep_anonymous_semantics() {
+        let lib = make_test_library().await;
+        // 旧路径可正常工作（anonymous 归并桶语义不回归）。
+        let resp = lib
+            .rerank(
+                "legacy query",
+                &["doc a".to_string(), "longer doc b".to_string()],
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.results.len(), 2);
+        let embed = lib.embed("legacy text").await.unwrap();
+        assert_eq!(embed.dimension, 128);
     }
 }

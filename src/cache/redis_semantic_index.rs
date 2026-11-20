@@ -49,6 +49,52 @@ return redis.call('HLEN', KEYS[1])
 
 const MODELS_KEY: &str = "vecboost:semantic:models";
 
+/// 键命名空间前缀（`keys_for_hash` 与 Lua 清理脚本共用的单一事实源）。
+const KEY_NAMESPACE: &str = "vecboost:semantic:";
+
+/// clear(model) 原子脚本：清理基础键 + SREM 基础登记 + 脚本内快照登记
+/// 成员、按 `{model_hash}:` 前缀过滤 caller 分区并逐分区 DEL + SREM，
+/// 一次 EVAL 完成。Redis 脚本执行原子（单线程串行），消除旧实现
+/// 「SMEMBERS 快照 → 逐成员串行 DEL+SREM（2N+3 RTT）」与并发
+/// insert_for_caller 之间的残留窗口（快照后落库的分区不被旧快照覆盖）。
+/// KEYS[1]=MODELS_KEY；KEYS[2..4]=基础 tri/emb/lru；ARGV[1]=model_hash、
+/// ARGV[2]=键命名空间（分区键在脚本内按成员拼接，与 [`keys_for_hash`]
+/// 同构）。单实例语义：成员派生键无法预declared进 KEYS（与旧实现逐成员
+/// DEL 的键空间假设一致）。
+const CLEAR_MODEL_SCRIPT: &str = r#"
+local set_key = KEYS[1]
+local model_hash = ARGV[1]
+local ns = ARGV[2]
+local prefix = model_hash .. ':'
+redis.call('DEL', KEYS[2], KEYS[3], KEYS[4])
+redis.call('SREM', set_key, model_hash)
+local members = redis.call('SMEMBERS', set_key)
+for i = 1, #members do
+  local m = members[i]
+  if string.sub(m, 1, #prefix) == prefix then
+    local base = ns .. m
+    redis.call('DEL', base .. ':tri', base .. ':emb', base .. ':lru')
+    redis.call('SREM', set_key, m)
+  end
+end
+return 1
+"#;
+
+/// clear_all 原子脚本：逐登记成员 DEL 三件键 + DEL 登记集合一次完成
+///（成员含基础 `model_hash` 与 caller 分区命名空间串，[`keys_for_hash`]
+/// 对两者同构）。旧实现逐成员串行 DEL（N+1 RTT、非原子）收敛为单 EVAL。
+const CLEAR_ALL_SCRIPT: &str = r#"
+local set_key = KEYS[1]
+local ns = ARGV[1]
+local members = redis.call('SMEMBERS', set_key)
+for i = 1, #members do
+  local base = ns .. members[i]
+  redis.call('DEL', base .. ':tri', base .. ':emb', base .. ':lru')
+end
+redis.call('DEL', set_key)
+return #members
+"#;
+
 fn digest(value: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
@@ -127,9 +173,9 @@ impl RedisSemanticIndex {
 
     fn keys_for_hash(model: &str) -> (String, String, String) {
         (
-            format!("vecboost:semantic:{model}:tri"),
-            format!("vecboost:semantic:{model}:emb"),
-            format!("vecboost:semantic:{model}:lru"),
+            format!("{KEY_NAMESPACE}{model}:tri"),
+            format!("{KEY_NAMESPACE}{model}:emb"),
+            format!("{KEY_NAMESPACE}{model}:lru"),
         )
     }
 
@@ -291,63 +337,45 @@ impl RedisSemanticIndex {
     }
 
     /// 清空指定模型的共享索引（基础命名空间 + 全部 caller 分区）。
+    ///
+    /// 单 EVAL 原子完成（架构 LOW-4）：清键集合与旧串行实现逐字节一致——
+    /// 基础 tri/emb/lru + SREM 基础登记 + 按 `{model_hash}:` 前缀过滤出的
+    /// caller 分区三件键与登记成员；差别仅在快照与删除合并进同一原子脚本，
+    /// 并发 insert_for_caller 不再产生「快照后落库、漏清残留」的窗口。
     pub(crate) async fn clear(&self, model_id: &str) -> Result<(), VecboostError> {
         let (tri_key, emb_key, lru_key) = Self::keys(model_id);
-        let mut conn = self.conn.clone();
         let model_hash = digest(model_id);
-        let _: usize = conn
-            .del((tri_key, emb_key, lru_key))
+        let mut conn = self.conn.clone();
+        let _: usize = redis::cmd("EVAL")
+            .arg(CLEAR_MODEL_SCRIPT)
+            .arg(4)
+            .arg(MODELS_KEY)
+            .arg(&tri_key)
+            .arg(&emb_key)
+            .arg(&lru_key)
+            .arg(&model_hash)
+            .arg(KEY_NAMESPACE)
+            .query_async(&mut conn)
             .await
             .map_err(|e| map_err("clear", e))?;
-        let _: usize = conn
-            .srem(MODELS_KEY, &model_hash)
-            .await
-            .map_err(|e| map_err("clear-model-set", e))?;
-        // caller 分区登记（"{model_hash}:{caller_digest}" 成员）一并出清：
-        // 分区键无 TTL，模型切换/卸载后不清即残留（user 隔离的清理缺口）。
-        // 成员是十六进制摘要拼接，`{model_hash}:` 前缀不可能误配其他模型。
-        let members: Vec<String> = conn
-            .smembers(MODELS_KEY)
-            .await
-            .map_err(|e| map_err("list-partitions", e))?;
-        let partition_prefix = format!("{model_hash}:");
-        for member in members.iter().filter(|m| m.starts_with(&partition_prefix)) {
-            let (tri, emb, lru) = Self::keys_for_hash(member);
-            let _: usize = conn
-                .del((tri, emb, lru))
-                .await
-                .map_err(|e| map_err("clear-partition", e))?;
-            let _: usize = conn
-                .srem(MODELS_KEY, member)
-                .await
-                .map_err(|e| map_err("clear-partition-set", e))?;
-        }
         Ok(())
     }
 
     /// 清空全部模型的共享索引（模型卸载/全局 reset）。
     ///
     /// 成员既含基础 `model_hash`，也含 caller 分区命名空间串
-    /// `{model_hash}:{caller_digest}`；`keys_for_hash` 对两者同构，
-    /// 逐成员清键即同时覆盖基础键与全部分区键（off 模式成员只有前者，
-    /// 行为不变）。
+    /// `{model_hash}:{caller_digest}`；脚本按成员同构清键，同时覆盖基础键
+    /// 与全部分区键（off 模式成员只有前者，清键集合与旧实现一致）。
     pub(crate) async fn clear_all(&self) -> Result<(), VecboostError> {
         let mut conn = self.conn.clone();
-        let models: Vec<String> = conn
-            .smembers(MODELS_KEY)
+        let _: usize = redis::cmd("EVAL")
+            .arg(CLEAR_ALL_SCRIPT)
+            .arg(1)
+            .arg(MODELS_KEY)
+            .arg(KEY_NAMESPACE)
+            .query_async(&mut conn)
             .await
-            .map_err(|e| map_err("list-models", e))?;
-        for model in models {
-            let (tri_key, emb_key, lru_key) = Self::keys_for_hash(&model);
-            let _: usize = conn
-                .del((tri_key, emb_key, lru_key))
-                .await
-                .map_err(|e| map_err("clear-all", e))?;
-        }
-        let _: usize = conn
-            .del(MODELS_KEY)
-            .await
-            .map_err(|e| map_err("clear-all-models", e))?;
+            .map_err(|e| map_err("clear-all", e))?;
         Ok(())
     }
 }
@@ -758,7 +786,134 @@ mod tests {
         );
     }
 
-    // ── 损坏数据与清理 ────────────────────────────────────────────
+    /// 并发窗口钉（架构 LOW-4）：clear(model) 与并发 insert_for_caller 竞争
+    /// 时，登记成员与分区键必须保持一致（原子脚本消除「SMEMBERS 快照后
+    /// 落库漏清」的残留窗口）。结束后双向核验——每个带前缀成员的三件键
+    /// 必须存在（有登记必有键），SCAN 到的本模型键必须对应登记成员（有键
+    /// 必有登记）；静默后二次 clear 必须全部清空（无残留）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn clear_model_is_atomic_against_concurrent_partition_inserts() {
+        let index = std::sync::Arc::new(match connect_slot(SLOT_A).await {
+            Some(index) => index,
+            None => return,
+        });
+        let model = unique_model("clear-race");
+        // 竞争前预置基础分区 + 若干 caller 分区，保证清理目标非空。
+        index
+            .insert(&model, "race base probe", &[0.0f32; 2], 64)
+            .await
+            .expect("基础插入");
+        for i in 0..8 {
+            index
+                .insert_for_caller(
+                    &model,
+                    &format!("pre-callers-{i}"),
+                    &format!("pre probe text {i}"),
+                    &[i as f32; 2],
+                    64,
+                )
+                .await
+                .expect("预置分区插入");
+        }
+
+        // 20 个并发 caller 插入与 clear 同时起跑。
+        let mut handles = Vec::new();
+        for i in 0..20 {
+            let index = std::sync::Arc::clone(&index);
+            let model = model.clone();
+            handles.push(tokio::spawn(async move {
+                index
+                    .insert_for_caller(
+                        &model,
+                        &format!("race-callers-{i}"),
+                        &format!("race probe text {i}"),
+                        &[i as f32; 2],
+                        64,
+                    )
+                    .await
+                    .expect("并发插入");
+            }));
+        }
+        {
+            let index = std::sync::Arc::clone(&index);
+            let model = model.clone();
+            handles.push(tokio::spawn(async move {
+                index.clear(&model).await.expect("clear");
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // 双向一致性核验（登记成员 ⇔ 分区键）。
+        let mut raw = raw_conn(SLOT_A).await;
+        let members: Vec<String> = raw.smembers(MODELS_KEY).await.expect("SMEMBERS");
+        let prefix = format!("{}:", digest(&model));
+        let mut registered = std::collections::HashSet::new();
+        for member in members.iter().filter(|m| m.starts_with(&prefix)) {
+            registered.insert(member.clone());
+            for suffix in [":tri", ":emb", ":lru"] {
+                let key = format!("{KEY_NAMESPACE}{member}{suffix}");
+                let exists: bool = redis::cmd("EXISTS")
+                    .arg(&key)
+                    .query_async(&mut raw)
+                    .await
+                    .expect("EXISTS");
+                assert!(
+                    exists,
+                    "登记成员 {member} 的键必须存在（不得残留空登记）：{key}"
+                );
+            }
+        }
+        let mut cursor: u64 = 0;
+        loop {
+            let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(format!("{KEY_NAMESPACE}{}:*", digest(&model)))
+                .arg("COUNT")
+                .arg(500)
+                .query_async(&mut raw)
+                .await
+                .expect("SCAN");
+            for key in keys {
+                let member = key
+                    .strip_prefix(KEY_NAMESPACE)
+                    .and_then(|rest| rest.rsplit_once(':'))
+                    .map(|(m, _)| m.to_string())
+                    .expect("键形如 ns{member}:{suffix}");
+                assert!(
+                    registered.contains(&member),
+                    "SCAN 到的键 {key} 必须有登记成员（不得残留孤儿键）"
+                );
+            }
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        // 静默后二次 clear：登记成员与键均不残留。
+        index.clear(&model).await.expect("二次 clear");
+        let members_after: Vec<String> = raw.smembers(MODELS_KEY).await.expect("SMEMBERS after");
+        assert!(
+            members_after.iter().all(|m| !m.starts_with(&prefix)),
+            "静默 clear 后不得残留分区登记：{members_after:?}"
+        );
+        assert!(
+            !members_after.contains(&digest(&model)),
+            "基础登记也必须移除"
+        );
+        let (tri_base, emb_base, lru_base) = RedisSemanticIndex::keys(&model);
+        for key in [&tri_base, &emb_base, &lru_base] {
+            let exists: bool = redis::cmd("EXISTS")
+                .arg(key)
+                .query_async(&mut raw)
+                .await
+                .expect("EXISTS base");
+            assert!(!exists, "基础键必须清空：{key}");
+        }
+    }
 
     #[tokio::test]
     async fn corrupt_trigram_payload_is_skipped_and_corrupt_embedding_errors() {

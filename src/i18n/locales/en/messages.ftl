@@ -366,6 +366,7 @@ log-main-tokenizer-noop = [model].tokenizer_path is configured but no consumer m
 log-main-kvcache-enabled = KV Cache enabled with size: { $size }
 log-main-kvcache-wal = Embedding cache WAL persistence enabled: { $path } (compact threshold { $bytes } bytes)
 log-main-kvcache-disabled = KV Cache disabled
+log-main-rerank-cache-enabled = Rerank exact cache enabled with size: { $size } ([rerank] cache_enabled; caller partition active when caller_isolation = "user")
 log-main-residency = model residency: max_resident_models={ $max } budget_mb={ $budget }
 log-main-semantic-mode-deprecated = [semantic_cache] comparison_mode={ $mode } is deprecated and has no effect in this version (always exact)
 log-main-semantic-enabled = semantic cache enabled: threshold={ $threshold } fuzzy_threshold={ $fuzzy } capacity={ $capacity }

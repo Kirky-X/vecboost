@@ -3,6 +3,7 @@
 
 #![allow(clippy::manual_checked_ops, clippy::identity_op)]
 use super::InferenceEngine;
+use super::normalize::l2_normalize_in_place;
 use super::{Stage, StageSnapshot, StageStats};
 use crate::config::model::{DeviceType, ModelConfig, Precision};
 use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
@@ -1682,17 +1683,6 @@ fn load_weights_varbuilder<'a>(
 /// CLS pooling:取序列第一个 token 的 hidden state。
 ///
 /// `hidden` 为 `[seq_len × hidden_dim]` 行优先展平向量。
-/// 引擎出口 L2 归一化（平台契约 normalize: Some(true) 要求所有 embed
-/// 输出为单位向量）。近零向量（退化输出）保持原样，交由上游判空。
-fn l2_normalize_in_place(vec: &mut [f32]) {
-    let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 1e-12 {
-        for x in vec.iter_mut() {
-            *x /= norm;
-        }
-    }
-}
-
 pub(crate) fn pool_cls(hidden: &[f32], _mask: &[u32], hidden_dim: usize) -> Vec<f32> {
     hidden[..hidden_dim].to_vec()
 }

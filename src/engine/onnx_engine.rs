@@ -1,6 +1,7 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
+use super::normalize::l2_normalize_in_place;
 use super::{InferenceEngine, Precision};
 use crate::config::model::{DeviceType, ModelConfig};
 use crate::device::memory_limit::{MemoryLimitController, MemoryLimitStatus};
@@ -19,17 +20,6 @@ use tokenizers::{PaddingParams, PaddingStrategy};
 
 /// ONNX 引擎序列截断上限，与 tokenizer 层 max_length=512 对齐
 pub(crate) const ONNX_MAX_INPUT_LENGTH: usize = 512;
-
-/// 原地 L2 归一化（零/近零向量静默跳过，与 candle 引擎同语义）。
-/// 引擎出口契约要求归一化输出（ONNX 两条路径此前均缺失）。
-fn l2_normalize_in_place(v: &mut [f32]) {
-    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 1e-12 {
-        for x in v.iter_mut() {
-            *x /= norm;
-        }
-    }
-}
 
 /// 本地 bundle 探测（embedding 引擎口径）。
 ///

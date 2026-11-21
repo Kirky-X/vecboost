@@ -36,6 +36,9 @@ pub(crate) mod transcribe;
 
 pub(crate) mod decision_protocol;
 
+// embedding 出口 L2 归一化共享 util（onnx 与 candle 两引擎共用）
+pub(crate) mod normalize;
+
 // 纯路径探测、无推理后端依赖：onnx（decision）与 candle（candle_decision）
 // 两条决策加载路径共用同一 tokenizer 解析契约
 pub(crate) mod local_bundle;

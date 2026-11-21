@@ -12,8 +12,11 @@
 //! 提供集成测试与性能测试共用的工具函数、`MockEngine` 与 `RealTestEngine`。
 //! 本模块合并自原 `tests/integration/real_engine.rs`。
 
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::RwLock;
@@ -37,6 +40,60 @@ pub fn free_port() -> u16 {
         .local_addr()
         .expect("local_addr")
         .port()
+}
+
+/// 裸 TCP HTTP/1.1 助手返回值：(status, 响应头键值对（键小写）, body)
+pub type HttpResponse = (u16, Vec<(String, String)>, String);
+
+/// 裸 TCP HTTP/1.1 助手（detect/translate 共享，read_timeout 由调用方绑定）。
+///
+/// grpc_e2e 目标复用本模块但保留其自带的 chunked 解码版本，故此助手在该目标下
+/// 无消费者。
+pub fn http_request_full(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    token: Option<&str>,
+    accept_language: Option<&str>,
+    read_timeout: Duration,
+) -> Result<HttpResponse, std::io::Error> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))?;
+    stream.set_read_timeout(Some(read_timeout))?;
+    let body = body.unwrap_or("");
+    let auth = token
+        .map(|t| format!("Authorization: Bearer {t}\r\n"))
+        .unwrap_or_default();
+    let lang = accept_language
+        .map(|l| format!("Accept-Language: {l}\r\n"))
+        .unwrap_or_default();
+    let req = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\
+         Connection: close\r\n{auth}{lang}\r\n{body}",
+        body.len()
+    );
+    stream.write_all(req.as_bytes())?;
+    let mut raw = String::new();
+    let _ = stream.read_to_string(&mut raw);
+    let mut parts = raw.splitn(2, "\r\n\r\n");
+    let head = parts.next().unwrap_or("");
+    let status: u16 = head
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "bad status line"))?;
+    let headers = head
+        .lines()
+        .skip(1)
+        .filter_map(|l| {
+            l.split_once(':')
+                .map(|(k, v)| (k.trim().to_lowercase(), v.trim().to_string()))
+        })
+        .collect();
+    let body = parts.next().unwrap_or("").to_string();
+    Ok((status, headers, body))
 }
 
 /// HTTP 集成测试服务器进程（kill+wait+remove_dir 生命周期）

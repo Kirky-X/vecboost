@@ -14,13 +14,11 @@
 //! translate-not-configured、超 token 400、auto 不可靠检测 400、
 //! 401 未登录（auth feature 门控）、429 限流形态（auth feature 门控）。
 
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::common::{TestServer, free_port, model_ready};
+use crate::common::{HttpResponse, TestServer, free_port, model_ready};
 
 use serde_json::{Value, json};
 
@@ -187,9 +185,7 @@ fn require_pair_server(server: Result<TestServer, String>, test: &str) -> Option
     }
 }
 
-/// 返回 (status, 响应头键值对（键小写）, body)
-type HttpResponse = (u16, Vec<(String, String)>, String);
-
+/// translate 端点 read timeout 垫片（60s，原本地实现语义不变）
 fn http_request_full(
     port: u16,
     method: &str,
@@ -198,42 +194,15 @@ fn http_request_full(
     token: Option<&str>,
     accept_language: Option<&str>,
 ) -> Result<HttpResponse, std::io::Error> {
-    let mut stream = TcpStream::connect(("127.0.0.1", port))?;
-    stream.set_read_timeout(Some(Duration::from_secs(60)))?;
-    let body = body.unwrap_or("");
-    let auth = token
-        .map(|t| format!("Authorization: Bearer {t}\r\n"))
-        .unwrap_or_default();
-    let lang = accept_language
-        .map(|l| format!("Accept-Language: {l}\r\n"))
-        .unwrap_or_default();
-    let req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
-         Content-Type: application/json\r\nContent-Length: {}\r\n\
-         Connection: close\r\n{auth}{lang}\r\n{body}",
-        body.len()
-    );
-    stream.write_all(req.as_bytes())?;
-    let mut raw = String::new();
-    let _ = stream.read_to_string(&mut raw);
-    let mut parts = raw.splitn(2, "\r\n\r\n");
-    let head = parts.next().unwrap_or("");
-    let status: u16 = head
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "bad status line"))?;
-    let headers = head
-        .lines()
-        .skip(1)
-        .filter_map(|l| {
-            l.split_once(':')
-                .map(|(k, v)| (k.trim().to_lowercase(), v.trim().to_string()))
-        })
-        .collect();
-    let body = parts.next().unwrap_or("").to_string();
-    Ok((status, headers, body))
+    crate::common::http_request_full(
+        port,
+        method,
+        path,
+        body,
+        token,
+        accept_language,
+        Duration::from_secs(60),
+    )
 }
 
 fn http_request(

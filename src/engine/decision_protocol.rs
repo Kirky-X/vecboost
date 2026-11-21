@@ -32,7 +32,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use crate::config::model::DecisionParams;
-use crate::domain::{DecisionAnswer, DecisionAnswerBody, DecisionQuestion, QuestionType};
+use crate::domain::{
+    DecisionAnswer, DecisionAnswerBody, DecisionQuestion, DecisionRequest, DecisionResponse,
+    QuestionType,
+};
 use crate::error::VecboostError;
 use crate::utils::validator::input::echo;
 use tokenizers::Tokenizer;
@@ -570,6 +573,41 @@ pub(crate) fn answer_for_question(
         QuestionType::Score => score_answer(&question.name, logits, temperature),
         QuestionType::Noul => noul_answer(&question.name, logits, temperature),
     }
+}
+
+/// 决策编排收口：逐题温度校准 + 后处理、计时、观测埋点与响应构造。
+///
+/// 决策 logits 绝不 L2 归一化——embedding 出口的归一化契约不适用于决策
+/// logits（对 logits 归一化会让 softmax 前的概率分布塌缩，校准与概率语义
+/// 全毁）。started 由调用方在 logits 提供者调用前取得，elapsed 在循环后取，
+/// 与原两引擎实现逐点一致。
+pub(crate) fn finalize_decision(
+    req: &DecisionRequest,
+    logits_rows: Vec<Vec<f32>>,
+    calibration: &TemperatureCalibration,
+    started: std::time::Instant,
+) -> Result<DecisionResponse, VecboostError> {
+    let mut answers = Vec::with_capacity(logits_rows.len());
+    for (b, question) in req.questions.iter().enumerate() {
+        // 行长度 = 该题有效 marker 数（logits 提供者已做前缀切片）
+        let temperature = calibration.temperature_for(logits_rows[b].len());
+        answers.push(answer_for_question(question, &logits_rows[b], temperature)?);
+    }
+    let elapsed = started.elapsed();
+    // 埋点：决策链路调用时延直方图（histogram _count 即调用计数）与批大小。
+    // collector 未设置时零开销跳过。
+    // Stage 三值豁免口径：Stage 枚举固定 tokenize/inference/pool（指标
+    // 标签稳定性），语义属 embedding 管线分阶段；决策管线不强行映射，
+    // take_stage_snapshot 恒 None，观测走本处独立 decision 指标。
+    #[cfg(feature = "http")]
+    if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
+        collector.observe_decision_seconds(elapsed.as_secs_f64());
+        collector.record_batch_size("decision", req.questions.len() as f64);
+    }
+    Ok(DecisionResponse {
+        answers,
+        processing_time_ms: elapsed.as_millis(),
+    })
 }
 
 // 测试：接口驱动。测试 tokenizer 资产按

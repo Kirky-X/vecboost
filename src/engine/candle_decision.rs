@@ -37,8 +37,8 @@ use tokenizers::Tokenizer;
 use crate::config::model::{DecisionParams, DeviceType, ModelConfig, ModelTask, Precision};
 use crate::domain::{DecisionRequest, DecisionResponse};
 use crate::engine::decision_protocol::{
-    BatchTensors, FixedMarkers, TemperatureCalibration, answer_for_question, build_question_row,
-    collate_batch, encode_ids, qtype_code, state_text,
+    BatchTensors, FixedMarkers, TemperatureCalibration, build_question_row, collate_batch,
+    encode_ids, finalize_decision, qtype_code, state_text,
 };
 use crate::error::VecboostError;
 
@@ -664,22 +664,7 @@ impl CandleDecisionEngine {
     ) -> Result<DecisionResponse, VecboostError> {
         let started = std::time::Instant::now();
         let logits_rows = self.candle_logits(req)?;
-        let mut answers = Vec::with_capacity(logits_rows.len());
-        for (b, question) in req.questions.iter().enumerate() {
-            // 行长度 = 该题有效 marker 数（candle_logits 已做前缀切片）
-            let temperature = self.calibration.temperature_for(logits_rows[b].len());
-            answers.push(answer_for_question(question, &logits_rows[b], temperature)?);
-        }
-        let elapsed = started.elapsed();
-        #[cfg(feature = "http")]
-        if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
-            collector.observe_decision_seconds(elapsed.as_secs_f64());
-            collector.record_batch_size("decision", req.questions.len() as f64);
-        }
-        Ok(DecisionResponse {
-            answers,
-            processing_time_ms: elapsed.as_millis(),
-        })
+        finalize_decision(req, logits_rows, &self.calibration, started)
     }
 
     /// 校验 → 逐题预处理 → collate → candle 前向 → 逐行有效 marker 前缀的

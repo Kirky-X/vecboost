@@ -23,8 +23,8 @@ use tokenizers::Tokenizer;
 
 use super::InferenceEngine;
 use super::decision_protocol::{
-    FixedMarkers, TemperatureCalibration, answer_for_question, build_question_row, collate_batch,
-    encode_ids, qtype_code, state_text,
+    FixedMarkers, TemperatureCalibration, build_question_row, collate_batch, encode_ids,
+    finalize_decision, qtype_code, state_text,
 };
 use super::session::{SessionOpts, build_session, precision_for_model_file, probe_model_file};
 
@@ -189,27 +189,7 @@ impl DecisionPipeline {
     ) -> Result<DecisionResponse, VecboostError> {
         let started = std::time::Instant::now();
         let logits_rows = self.decision_logits(req)?;
-        let mut answers = Vec::with_capacity(logits_rows.len());
-        for (b, question) in req.questions.iter().enumerate() {
-            // 行长度 = 该题有效 marker 数（decision_logits 已做前缀切片）
-            let temperature = self.calibration.temperature_for(logits_rows[b].len());
-            answers.push(answer_for_question(question, &logits_rows[b], temperature)?);
-        }
-        let elapsed = started.elapsed();
-        // 埋点：决策链路调用时延直方图（histogram _count 即调用计数）与
-        // 批大小。collector 未设置时零开销跳过。
-        // Stage 三值豁免口径：Stage 枚举固定 tokenize/inference/pool（指标
-        // 标签稳定性），语义属 embedding 管线分阶段；决策管线不强行映射，
-        // take_stage_snapshot 恒 None，观测走本处的独立 decision 指标
-        #[cfg(feature = "http")]
-        if let Some(collector) = crate::metrics::prometheus_exporter::global_collector() {
-            collector.observe_decision_seconds(elapsed.as_secs_f64());
-            collector.record_batch_size("decision", req.questions.len() as f64);
-        }
-        Ok(DecisionResponse {
-            answers,
-            processing_time_ms: elapsed.as_millis(),
-        })
+        finalize_decision(req, logits_rows, &self.calibration, started)
     }
 
     /// 校验 → 逐题预处理 → collate → 5 张量推理 → 形状校验 → 逐行有效

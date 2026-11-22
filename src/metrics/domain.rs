@@ -12,7 +12,8 @@ pub struct PerformanceMetrics {
     pub peak_memory_bytes: u64,
     pub batch_size: usize,
     pub sequence_length: usize,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub timestamp: time::OffsetDateTime,
 }
 
 impl Default for PerformanceMetrics {
@@ -24,7 +25,7 @@ impl Default for PerformanceMetrics {
             peak_memory_bytes: 0,
             batch_size: 0,
             sequence_length: 0,
-            timestamp: chrono::DateTime::from_timestamp_nanos(0),
+            timestamp: time::OffsetDateTime::UNIX_EPOCH,
         }
     }
 }
@@ -52,7 +53,7 @@ impl PerformanceMetrics {
             peak_memory_bytes,
             batch_size,
             sequence_length: seq_length,
-            timestamp: chrono::Utc::now(),
+            timestamp: time::OffsetDateTime::now_utc(),
         }
     }
 
@@ -71,7 +72,8 @@ pub struct ResourceUtilization {
     pub memory_percent: f64,
     pub gpu_utilization_percent: Option<f64>,
     pub gpu_memory_percent: Option<f64>,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub timestamp: time::OffsetDateTime,
 }
 
 impl Default for ResourceUtilization {
@@ -81,7 +83,7 @@ impl Default for ResourceUtilization {
             memory_percent: 0.0,
             gpu_utilization_percent: None,
             gpu_memory_percent: None,
-            timestamp: chrono::DateTime::from_timestamp_nanos(0),
+            timestamp: time::OffsetDateTime::UNIX_EPOCH,
         }
     }
 }
@@ -93,7 +95,8 @@ pub struct MetricsSnapshot {
     pub min: PerformanceMetrics,
     pub max: PerformanceMetrics,
     pub sample_count: usize,
-    pub collected_at: chrono::DateTime<chrono::Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub collected_at: time::OffsetDateTime,
 }
 
 impl Default for MetricsSnapshot {
@@ -104,7 +107,7 @@ impl Default for MetricsSnapshot {
             min: PerformanceMetrics::default(),
             max: PerformanceMetrics::default(),
             sample_count: 0,
-            collected_at: chrono::Utc::now(),
+            collected_at: time::OffsetDateTime::now_utc(),
         }
     }
 }
@@ -124,7 +127,8 @@ pub struct MetricValue {
     pub metric_type: MetricType,
     pub value: f64,
     pub unit: String,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub timestamp: time::OffsetDateTime,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,7 +140,8 @@ pub struct InferenceRecord {
     pub memory_bytes: u64,
     pub success: bool,
     pub error_message: Option<String>,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub timestamp: time::OffsetDateTime,
 }
 
 impl InferenceRecord {
@@ -155,7 +160,7 @@ impl InferenceRecord {
             memory_bytes,
             success: true,
             error_message: None,
-            timestamp: chrono::Utc::now(),
+            timestamp: time::OffsetDateTime::now_utc(),
         }
     }
 
@@ -168,7 +173,7 @@ impl InferenceRecord {
             memory_bytes: 0,
             success: false,
             error_message: Some(error_message),
-            timestamp: chrono::Utc::now(),
+            timestamp: time::OffsetDateTime::now_utc(),
         }
     }
 }
@@ -225,6 +230,49 @@ pub struct LatencyBenchmarkResult {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn test_timestamp_serde_exact_format_pinned_epoch() {
+        // 金样本：chrono DateTime<Utc> serde 精确字节格式（chrono→time 迁移前后必须一致）
+        let util = ResourceUtilization {
+            timestamp: time::OffsetDateTime::UNIX_EPOCH,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&util).expect("serialize failed");
+        assert_eq!(
+            json,
+            r#"{"cpu_percent":0.0,"memory_percent":0.0,"gpu_utilization_percent":null,"gpu_memory_percent":null,"timestamp":"1970-01-01T00:00:00Z"}"#
+        );
+    }
+
+    #[test]
+    fn test_timestamp_serde_exact_format_pinned_millis() {
+        // 金样本：非零小数秒同样钉死（chrono 的 AutoSi 输出毫秒 3 位）
+        let ts = time::OffsetDateTime::parse(
+            "2023-11-14T22:13:20.123Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .expect("parse failed");
+        let util = ResourceUtilization {
+            timestamp: ts,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&util).expect("serialize failed");
+        assert_eq!(
+            json,
+            r#"{"cpu_percent":0.0,"memory_percent":0.0,"gpu_utilization_percent":null,"gpu_memory_percent":null,"timestamp":"2023-11-14T22:13:20.123Z"}"#
+        );
+    }
+
+    #[test]
+    fn test_security_event_deserializes_legacy_chrono_rfc3339() {
+        // 金样本：chrono 产出的 Z 后缀 RFC3339 字符串必须能被反序列化（迁移前后一致）
+        let json = r#"{"timestamp":"1970-01-01T00:00:00Z","event_type":"login_success","user":null,"ip":null,"request_id":null,"user_agent":null,"details":{},"success":true}"#;
+        let event: crate::audit::SecurityEvent =
+            serde_json::from_str(json).expect("deserialize failed");
+        assert_eq!(event.event_type, "login_success");
+        assert!(event.success);
+    }
 
     #[test]
     fn test_performance_metrics_new() {
@@ -290,7 +338,7 @@ mod tests {
         assert_eq!(metrics.peak_memory_bytes, 0);
         assert_eq!(metrics.batch_size, 0);
         assert_eq!(metrics.sequence_length, 0);
-        assert_eq!(metrics.timestamp, chrono::DateTime::from_timestamp_nanos(0));
+        assert_eq!(metrics.timestamp, time::OffsetDateTime::UNIX_EPOCH);
     }
 
     #[test]
@@ -315,7 +363,7 @@ mod tests {
         assert_eq!(util.memory_percent, 0.0);
         assert!(util.gpu_utilization_percent.is_none());
         assert!(util.gpu_memory_percent.is_none());
-        assert_eq!(util.timestamp, chrono::DateTime::from_timestamp_nanos(0));
+        assert_eq!(util.timestamp, time::OffsetDateTime::UNIX_EPOCH);
     }
 
     #[test]
@@ -325,7 +373,7 @@ mod tests {
             memory_percent: 60.0,
             gpu_utilization_percent: Some(80.0),
             gpu_memory_percent: Some(50.0),
-            timestamp: chrono::Utc::now(),
+            timestamp: time::OffsetDateTime::now_utc(),
         };
         assert!((util.cpu_percent - 45.5).abs() < 0.001);
         assert_eq!(util.gpu_utilization_percent, Some(80.0));
@@ -383,7 +431,7 @@ mod tests {
             metric_type: MetricType::MemoryUsage,
             value: 1024.0,
             unit: "bytes".to_string(),
-            timestamp: chrono::Utc::now(),
+            timestamp: time::OffsetDateTime::now_utc(),
         };
         assert_eq!(mv.metric_type, MetricType::MemoryUsage);
         assert_eq!(mv.value, 1024.0);
@@ -396,7 +444,7 @@ mod tests {
             metric_type: MetricType::BatchSize,
             value: 32.0,
             unit: "count".to_string(),
-            timestamp: chrono::Utc::now(),
+            timestamp: time::OffsetDateTime::now_utc(),
         };
         let json = serde_json::to_string(&mv).expect("serialize");
         assert!(json.contains("BatchSize"));

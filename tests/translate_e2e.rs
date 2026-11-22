@@ -383,7 +383,9 @@ fn write_quality_json(
     skipped_reason: &str,
 ) {
     let doc = json!({
-        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "generated_at": time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("format failed"),
         "runtime": {
             "ort_dylib": ort_dylib,
             "model_pairs": ["en-zh", "en-es"],

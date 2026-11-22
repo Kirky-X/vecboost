@@ -344,12 +344,15 @@ impl AuditLogger {
         let event = serde_json::to_value(event)
             .unwrap_or_else(|_| serde_json::json!({"serialize_error": true}));
         use std::io::Write as _;
+        use time::format_description::well_known::Rfc3339;
         let path = std::path::Path::new("logs/audit_dead_letter.jsonl");
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         let record = serde_json::json!({
-            "dead_lettered_at": chrono::Utc::now().to_rfc3339(),
+            "dead_lettered_at": time::OffsetDateTime::now_utc()
+                .format(&Rfc3339)
+                .expect("RFC3339 format failed"),
             "db_error": db_error,
             "event": event,
         });
@@ -461,7 +464,12 @@ impl AuditLogger {
         })?;
         let details_json =
             serde_json::to_string(&event.details).unwrap_or_else(|_| "{}".to_string());
-        let timestamp = event.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+        let timestamp = event
+            .timestamp
+            .format(time::macros::format_description!(
+                "[year]-[month]-[day] [hour]:[minute]:[second]"
+            ))
+            .expect("format failed");
         let stmt = Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             "INSERT INTO audit_logs (event_type, user, ip, request_id, user_agent, details, success, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -774,7 +782,7 @@ mod dead_letter_tests {
         // 独立临时目录隔离(cwd 相对路径 write_dead_letter 固定写 logs/)
         use super::AuditLogger;
         let event = SecurityEvent {
-            timestamp: chrono::Utc::now(),
+            timestamp: time::OffsetDateTime::now_utc(),
             event_type: "login_failed".to_string(),
             user: Some("alice".to_string()),
             ip: None,

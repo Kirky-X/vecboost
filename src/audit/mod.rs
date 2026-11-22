@@ -1,9 +1,9 @@
 // Copyright (c) 2025-2026 Kirky.X🌠
 // SPDX-License-Identifier: Apache-2.0
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use time::OffsetDateTime;
 
 pub mod logger;
 pub use logger::AuditLogger;
@@ -36,7 +36,8 @@ pub enum SecurityEventType {
 /// Security event log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityEvent {
-    pub timestamp: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub timestamp: OffsetDateTime,
     pub event_type: String,
     pub user: Option<String>,
     pub ip: Option<String>,
@@ -55,7 +56,7 @@ impl SecurityEvent {
         success: bool,
     ) -> Self {
         Self {
-            timestamp: Utc::now(),
+            timestamp: OffsetDateTime::now_utc(),
             event_type: event_type.as_str().to_string(),
             user,
             ip,

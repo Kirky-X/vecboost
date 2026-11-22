@@ -183,9 +183,9 @@ impl InferenceCollector {
         let mut samples = self.performance_samples.write().await;
 
         // 时间过期清理:移除 timestamp 超过 max_sample_age_secs 的样本
-        let now = chrono::Utc::now();
-        let max_age = chrono::Duration::seconds(self.config.max_sample_age_secs as i64);
-        samples.retain(|s| now.signed_duration_since(s.timestamp) <= max_age);
+        let now = time::OffsetDateTime::now_utc();
+        let max_age = time::Duration::seconds(self.config.max_sample_age_secs as i64);
+        samples.retain(|s| now - s.timestamp <= max_age);
 
         // 数量淘汰:FIFO 弹出最旧样本
         while samples.len() >= self.config.max_samples {
@@ -234,7 +234,7 @@ impl InferenceCollector {
             memory_percent: memory_usage_percent,
             gpu_utilization_percent: gpu_utilization,
             gpu_memory_percent: gpu_memory,
-            timestamp: chrono::Utc::now(),
+            timestamp: time::OffsetDateTime::now_utc(),
         }
     }
 
@@ -243,7 +243,7 @@ impl InferenceCollector {
             metric_type,
             value,
             unit: unit.to_string(),
-            timestamp: chrono::Utc::now(),
+            timestamp: time::OffsetDateTime::now_utc(),
         };
 
         let mut history = self.metric_history.write().await;
@@ -300,12 +300,12 @@ impl InferenceCollector {
                 peak_memory_bytes: avg_peak_memory,
                 batch_size: avg_batch,
                 sequence_length: avg_seq,
-                timestamp: chrono::Utc::now(),
+                timestamp: time::OffsetDateTime::now_utc(),
             },
             min,
             max,
             sample_count: samples.len(),
-            collected_at: chrono::Utc::now(),
+            collected_at: time::OffsetDateTime::now_utc(),
         }
     }
 
@@ -599,7 +599,7 @@ mod tests {
 
         // 注入一个 2 分钟前的样本(已过期)
         let expired_sample = PerformanceMetrics {
-            timestamp: chrono::Utc::now() - chrono::Duration::seconds(120),
+            timestamp: time::OffsetDateTime::now_utc() - time::Duration::seconds(120),
             ..Default::default()
         };
         {
@@ -620,12 +620,12 @@ mod tests {
             "expired sample must be removed, only fresh sample kept"
         );
         // 验证剩下的是新样本(时间戳应在最近 10 秒内)
-        let now = chrono::Utc::now();
-        let age = now.signed_duration_since(samples[0].timestamp);
+        let now = time::OffsetDateTime::now_utc();
+        let age = now - samples[0].timestamp;
         assert!(
-            age.num_seconds() < 10,
+            age.whole_seconds() < 10,
             "remaining sample must be the fresh one, age={}s",
-            age.num_seconds()
+            age.whole_seconds()
         );
     }
 
@@ -640,7 +640,7 @@ mod tests {
 
         // 注入一个 1 分钟前的样本(未过期)
         let recent_sample = PerformanceMetrics {
-            timestamp: chrono::Utc::now() - chrono::Duration::seconds(60),
+            timestamp: time::OffsetDateTime::now_utc() - time::Duration::seconds(60),
             ..Default::default()
         };
         {

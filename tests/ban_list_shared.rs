@@ -12,8 +12,8 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
 use limiteron::CacheBanStorage;
+use limiteron::chrono::Utc;
 use limiteron::storage::{BanRecord, BanStorage, BanTarget};
 use oxcache::backend::{CacheBackend, RedisBackend};
 
@@ -67,7 +67,7 @@ async fn ban_list_is_shared_across_instances() {
         ban_times: 1,
         duration: std::time::Duration::from_secs(10),
         banned_at: now,
-        expires_at: now + chrono::Duration::seconds(10),
+        expires_at: now + limiteron::chrono::Duration::seconds(10),
         is_manual: true,
         reason: "shared-ban-test".to_string(),
     };

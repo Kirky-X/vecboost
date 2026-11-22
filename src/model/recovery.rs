@@ -162,7 +162,11 @@ impl ModelRecovery {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let timestamp = time::OffsetDateTime::now_utc()
+            .format(time::macros::format_description!(
+                "[year][month][day]_[hour][minute][second]"
+            ))
+            .expect("format failed");
         let backup_name = format!("{}_{}.corrupted", file_name, timestamp);
         let backup_path = backup_dir.join(&backup_name);
 

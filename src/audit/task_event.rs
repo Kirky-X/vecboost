@@ -9,6 +9,7 @@
 
 use crate::config::model::ModelTask;
 use serde::Serialize;
+use time::format_description::well_known::Rfc3339;
 
 /// 单条任务执行审计事件。
 #[derive(Debug, Clone, Serialize)]
@@ -36,7 +37,9 @@ pub struct TaskExecutionEvent {
 impl TaskExecutionEvent {
     /// 以当前 UTC 时间构造事件（RFC3339 格式）。
     pub fn with_now(mut self) -> Self {
-        self.timestamp = chrono::Utc::now().to_rfc3339();
+        self.timestamp = time::OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .expect("RFC3339 format failed");
         self
     }
 }
@@ -97,7 +100,7 @@ mod tests {
     #[test]
     fn test_timestamp_is_rfc3339_parseable() {
         let event = sample().with_now();
-        let parsed = chrono::DateTime::parse_from_rfc3339(&event.timestamp);
+        let parsed = time::OffsetDateTime::parse(&event.timestamp, &Rfc3339);
         assert!(
             parsed.is_ok(),
             "timestamp 须为 RFC3339: {}",

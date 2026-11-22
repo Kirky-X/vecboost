@@ -357,7 +357,7 @@ impl KeyStore for EncryptedFileKeyStore {
             name: key.name.clone(),
             encrypted_value: hex::encode(&ciphertext),
             nonce: hex::encode(nonce_bytes),
-            created_at: chrono::Utc::now().timestamp(),
+            created_at: time::OffsetDateTime::now_utc().unix_timestamp(),
         };
 
         let mut data = self.data.write().await;
@@ -872,7 +872,7 @@ mod tests {
             name: "jwt_secret".to_string(),
             encrypted_value: hex::encode(&ciphertext),
             nonce: hex::encode(nonce_bytes),
-            created_at: chrono::Utc::now().timestamp(),
+            created_at: time::OffsetDateTime::now_utc().unix_timestamp(),
         });
         write_legacy_file(&path, password, &legacy_data).await;
 
